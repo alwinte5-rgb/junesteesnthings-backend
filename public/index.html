@@ -1,0 +1,2347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>June's Tees & Things — Chicago Custom Printing</title>
+  <meta name="description" content="Screen printing, embroidery, DTF transfers & more in Chicago. Black-owned, women-owned. From concept to custom — we bring your ideas to life." />
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+
+  <!-- Splide CSS -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@splidejs/splide@4.1.4/dist/css/splide.min.css" />
+
+  <style>
+    /* ============================
+       CSS VARIABLES & RESET
+    ============================ */
+    :root {
+      --bg-primary: #000000;
+      --bg-secondary: #0a0a0a;
+      --bg-card: #111111;
+      --bg-card-hover: #1a1a1a;
+      --text-heading: #ffffff;
+      --text-body: rgba(248, 244, 233, 0.81);
+      --text-muted: #999999;
+      --accent: #A52429;
+      --accent-hover: #8a1e22;
+      --border: rgba(255,255,255,0.08);
+      --border-accent: rgba(165,36,41,0.4);
+      --btn-primary-bg: #A52429;
+      --btn-primary-text: #ffffff;
+      --btn-secondary-text: #ffffff;
+      --btn-secondary-border: #ffffff;
+      --btn-secondary-hover-bg: #ffffff;
+      --btn-secondary-hover-text: #000000;
+      --header-bg: rgba(0,0,0,0.85);
+      --drawer-bg: #0a0a0a;
+      --badge-bg: #A52429;
+      --scrollbar-thumb: #A52429;
+      --radius: 8px;
+      --radius-lg: 16px;
+      --transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-body);
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg-secondary); }
+    ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }
+
+    img { max-width: 100%; display: block; }
+    a { text-decoration: none; color: inherit; }
+    ul { list-style: none; }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 2rem;
+    }
+
+    /* ============================
+       ANNOUNCEMENT BAR
+    ============================ */
+    .announcement-bar {
+      background: var(--accent);
+      color: #fff;
+      text-align: center;
+      padding: 0.6rem 1rem;
+      font-size: 0.82rem;
+      font-weight: 500;
+      letter-spacing: 0.03em;
+    }
+
+    /* ============================
+       HEADER / NAV
+    ============================ */
+    header {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 1000;
+      background: var(--header-bg);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      transition: background var(--transition);
+    }
+
+    .header-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 70px;
+      padding: 0 2rem;
+      max-width: 1300px;
+      margin: 0 auto;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .logo img {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      object-fit: cover;
+    }
+
+    .logo-text {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: var(--text-heading);
+      line-height: 1.2;
+    }
+
+    .logo-text span {
+      display: block;
+      font-size: 0.7rem;
+      font-weight: 400;
+      color: var(--text-muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    nav {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+    }
+
+    nav a {
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--text-body);
+      padding: 0.5rem 0.75rem;
+      border-radius: var(--radius);
+      transition: color var(--transition), background var(--transition);
+    }
+
+    nav a:hover {
+      color: var(--text-heading);
+      background: rgba(255,255,255,0.06);
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .icon-link {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.06);
+      color: var(--text-body);
+      transition: background var(--transition), color var(--transition);
+    }
+
+    .icon-link:hover {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .icon-link svg { width: 16px; height: 16px; fill: currentColor; }
+
+    .btn-quote {
+      background: var(--accent);
+      color: #fff;
+      font-size: 0.82rem;
+      font-weight: 600;
+      padding: 0.55rem 1.25rem;
+      border-radius: 100px;
+      transition: background var(--transition), transform var(--transition);
+      white-space: nowrap;
+    }
+
+    .btn-quote:hover {
+      background: var(--accent-hover);
+      transform: translateY(-1px);
+    }
+
+    .hamburger {
+      display: none;
+      flex-direction: column;
+      gap: 5px;
+      cursor: pointer;
+      padding: 4px;
+    }
+
+    .hamburger span {
+      display: block;
+      width: 22px;
+      height: 2px;
+      background: var(--text-heading);
+      border-radius: 2px;
+      transition: var(--transition);
+    }
+
+    /* Mobile Drawer */
+    .mobile-drawer {
+      position: fixed;
+      top: 0;
+      left: -100%;
+      width: 280px;
+      height: 100vh;
+      background: var(--drawer-bg);
+      z-index: 2000;
+      padding: 2rem 1.5rem;
+      transition: left var(--transition);
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+    }
+
+    .mobile-drawer.open { left: 0; }
+
+    .drawer-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 1999;
+      display: none;
+    }
+
+    .drawer-overlay.visible { display: block; }
+
+    .drawer-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 2rem;
+    }
+
+    .drawer-close {
+      background: none;
+      border: none;
+      color: var(--text-heading);
+      font-size: 1.5rem;
+      cursor: pointer;
+      line-height: 1;
+    }
+
+    .drawer-nav a {
+      display: block;
+      padding: 0.9rem 0;
+      font-size: 1.05rem;
+      font-weight: 500;
+      color: var(--text-body);
+      border-bottom: 1px solid var(--border);
+      transition: color var(--transition);
+    }
+
+    .drawer-nav a:hover { color: var(--accent); }
+
+    .drawer-actions {
+      margin-top: 2rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    /* ============================
+       BUTTONS
+    ============================ */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-family: inherit;
+      font-weight: 600;
+      font-size: 0.9rem;
+      padding: 0.75rem 1.75rem;
+      border-radius: 100px;
+      cursor: pointer;
+      border: none;
+      transition: all var(--transition);
+      text-align: center;
+      justify-content: center;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .btn-primary:hover {
+      background: var(--accent-hover);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(165, 36, 41, 0.35);
+    }
+
+    .btn-secondary {
+      background: transparent;
+      color: var(--btn-secondary-text);
+      border: 1.5px solid var(--btn-secondary-border);
+    }
+
+    .btn-secondary:hover {
+      background: var(--btn-secondary-hover-bg);
+      color: var(--btn-secondary-hover-text);
+    }
+
+    .btn-outline {
+      background: transparent;
+      color: var(--accent);
+      border: 1.5px solid var(--accent);
+    }
+
+    .btn-outline:hover {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    /* ============================
+       SECTION COMMON
+    ============================ */
+    section { padding: 6rem 0; }
+
+    .section-tag {
+      display: inline-block;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 0.75rem;
+    }
+
+    .section-header {
+      text-align: center;
+      margin-bottom: 3.5rem;
+    }
+
+    .section-header h2 {
+      font-size: clamp(1.8rem, 4vw, 2.8rem);
+      font-weight: 800;
+      color: var(--text-heading);
+      line-height: 1.15;
+      margin-bottom: 0.75rem;
+    }
+
+    .section-header p {
+      font-size: 1rem;
+      color: var(--text-muted);
+      max-width: 520px;
+      margin: 0 auto;
+    }
+
+    /* Scroll animations */
+    .fade-in {
+      opacity: 0;
+      transform: translateY(30px);
+      transition: opacity 0.7s ease, transform 0.7s ease;
+    }
+
+    .fade-in.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .fade-left {
+      opacity: 0;
+      transform: translateX(-40px);
+      transition: opacity 0.7s ease, transform 0.7s ease;
+    }
+
+    .fade-left.visible {
+      opacity: 1;
+      transform: translateX(0);
+    }
+
+    .fade-right {
+      opacity: 0;
+      transform: translateX(40px);
+      transition: opacity 0.7s ease, transform 0.7s ease;
+    }
+
+    .fade-right.visible {
+      opacity: 1;
+      transform: translateX(0);
+    }
+
+    /* ============================
+       HERO
+    ============================ */
+    .hero {
+      position: relative;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      overflow: hidden;
+    }
+
+    .hero-bg {
+      position: absolute;
+      inset: 0;
+      background-image: url('https://previews.digitalvisionstudios.net/junesteesnthings/assets/images/content-media-1.png');
+      background-size: cover;
+      background-position: center;
+      transform: scale(1.05);
+      transition: transform 8s ease;
+      overflow: hidden;
+    }
+
+    .hero-bg video {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .hero-bg::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(
+        135deg,
+        rgba(0,0,0,0.85) 0%,
+        rgba(0,0,0,0.55) 50%,
+        rgba(165,36,41,0.15) 100%
+      );
+    }
+
+    .hero-content {
+      position: relative;
+      z-index: 1;
+      max-width: 680px;
+      padding: 0 2rem;
+      margin-left: max(2rem, calc((100vw - 1200px) / 2));
+    }
+
+    .hero-eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.78rem;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 1.25rem;
+      opacity: 0;
+      animation: fadeUp 0.8s 0.2s forwards;
+    }
+
+    .hero-eyebrow::before {
+      content: '';
+      display: inline-block;
+      width: 28px;
+      height: 2px;
+      background: var(--accent);
+    }
+
+    .hero h1 {
+      font-size: clamp(2.8rem, 7vw, 5.5rem);
+      font-weight: 900;
+      color: var(--text-heading);
+      line-height: 1.05;
+      margin-bottom: 1.25rem;
+      opacity: 0;
+      animation: fadeUp 0.8s 0.4s forwards;
+    }
+
+    .hero h1 em {
+      font-style: normal;
+      color: var(--accent);
+    }
+
+    .hero-sub {
+      font-size: 1.05rem;
+      color: var(--text-body);
+      max-width: 480px;
+      margin-bottom: 2.25rem;
+      opacity: 0;
+      animation: fadeUp 0.8s 0.6s forwards;
+    }
+
+    .hero-ctas {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      opacity: 0;
+      animation: fadeUp 0.8s 0.8s forwards;
+    }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(24px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .hero-scroll {
+      position: absolute;
+      bottom: 2.5rem;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.7rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      animation: bounce 2s infinite;
+    }
+
+    .hero-scroll::after {
+      content: '';
+      width: 1px;
+      height: 48px;
+      background: linear-gradient(to bottom, var(--accent), transparent);
+    }
+
+    @keyframes bounce {
+      0%, 100% { transform: translateX(-50%) translateY(0); }
+      50% { transform: translateX(-50%) translateY(6px); }
+    }
+
+    /* ============================
+       SERVICES
+    ============================ */
+    .services { background: var(--bg-secondary); }
+
+    .services-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.5rem;
+    }
+
+    .service-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 2rem;
+      transition: background var(--transition), border-color var(--transition), transform var(--transition);
+    }
+
+    .service-card:hover {
+      background: var(--bg-card-hover);
+      border-color: var(--border-accent);
+      transform: translateY(-4px);
+    }
+
+    .service-icon {
+      width: 52px;
+      height: 52px;
+      background: rgba(165,36,41,0.12);
+      border-radius: var(--radius);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 1.25rem;
+      font-size: 1.5rem;
+    }
+
+    .service-card h3 {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: var(--text-heading);
+      margin-bottom: 0.5rem;
+    }
+
+    .service-card p {
+      font-size: 0.875rem;
+      color: var(--text-muted);
+      line-height: 1.65;
+    }
+
+    /* ============================
+       PORTFOLIO
+    ============================ */
+    .portfolio { background: var(--bg-primary); }
+
+    .portfolio-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1.25rem;
+    }
+
+    .portfolio-item {
+      position: relative;
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      aspect-ratio: 4/3;
+      cursor: pointer;
+    }
+
+    .portfolio-item img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transition: transform 0.6s cubic-bezier(0.4,0,0.2,1);
+    }
+
+    .portfolio-item:hover img { transform: scale(1.06); }
+
+    .portfolio-overlay {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(to top, rgba(0,0,0,0.75) 0%, transparent 55%);
+      display: flex;
+      align-items: flex-end;
+      padding: 1.5rem;
+      opacity: 0;
+      transition: opacity var(--transition);
+    }
+
+    .portfolio-item:hover .portfolio-overlay { opacity: 1; }
+
+    .portfolio-label {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .portfolio-tag {
+      font-size: 0.72rem;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+
+    /* ============================
+       ABOUT
+    ============================ */
+    .about { background: var(--bg-secondary); }
+
+    .about-inner {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 5rem;
+      align-items: center;
+    }
+
+    .about-content h2 {
+      font-size: clamp(1.8rem, 3.5vw, 2.6rem);
+      font-weight: 800;
+      color: var(--text-heading);
+      line-height: 1.2;
+      margin-bottom: 1.25rem;
+    }
+
+    .about-content h2 span { color: var(--accent); }
+
+    .about-content p {
+      font-size: 0.95rem;
+      color: var(--text-body);
+      line-height: 1.75;
+      margin-bottom: 1rem;
+    }
+
+    .about-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.65rem;
+      margin-top: 2rem;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.78rem;
+      font-weight: 600;
+      padding: 0.45rem 1rem;
+      border-radius: 100px;
+      background: rgba(165,36,41,0.12);
+      border: 1px solid rgba(165,36,41,0.3);
+      color: #fff;
+    }
+
+    .badge span { font-size: 0.9rem; }
+
+    .about-slider-wrap {
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+    }
+
+    .about-slider-wrap .splide__slide img {
+      width: 100%;
+      height: 420px;
+      object-fit: cover;
+      border-radius: var(--radius-lg);
+    }
+
+    /* ============================
+       PACKAGES
+    ============================ */
+    .packages { background: var(--bg-primary); }
+
+    .packages-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.5rem;
+      margin-bottom: 4rem;
+    }
+
+    .package-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 2.25rem 2rem;
+      position: relative;
+      transition: border-color var(--transition), transform var(--transition);
+    }
+
+    .package-card:hover {
+      border-color: var(--border-accent);
+      transform: translateY(-4px);
+    }
+
+    .package-card.featured {
+      border-color: var(--accent);
+      background: linear-gradient(145deg, #111 0%, rgba(165,36,41,0.08) 100%);
+    }
+
+    .package-badge {
+      position: absolute;
+      top: -12px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--accent);
+      color: #fff;
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      padding: 0.3rem 1rem;
+      border-radius: 100px;
+      white-space: nowrap;
+    }
+
+    .package-name {
+      font-size: 0.8rem;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 0.5rem;
+    }
+
+    .package-price {
+      font-size: 3rem;
+      font-weight: 900;
+      color: var(--text-heading);
+      line-height: 1;
+      margin-bottom: 0.25rem;
+    }
+
+    .package-price sup {
+      font-size: 1.4rem;
+      vertical-align: super;
+      font-weight: 700;
+    }
+
+    .package-tagline {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      margin-bottom: 1.75rem;
+    }
+
+    .package-includes {
+      font-size: 0.78rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 1rem;
+    }
+
+    .package-features {
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+      margin-bottom: 2rem;
+    }
+
+    .package-features li {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.6rem;
+      font-size: 0.875rem;
+      color: var(--text-body);
+    }
+
+    .package-features li::before {
+      content: '✓';
+      color: var(--accent);
+      font-weight: 700;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .ala-carte-section {
+      margin-top: 2rem;
+    }
+
+    .ala-carte-section h3 {
+      font-size: 1.4rem;
+      font-weight: 800;
+      color: var(--text-heading);
+      text-align: center;
+      margin-bottom: 0.5rem;
+    }
+
+    .ala-carte-section > p {
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      margin-bottom: 2.5rem;
+    }
+
+    .ala-carte-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1.5rem;
+    }
+
+    .ala-carte-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 1.75rem;
+    }
+
+    .ala-carte-card h4 {
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--text-heading);
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .ala-carte-items {
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+    }
+
+    .ala-carte-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.875rem;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .ala-carte-item:last-child { border-bottom: none; }
+
+    .ala-carte-item span:last-child {
+      font-weight: 700;
+      color: var(--text-heading);
+    }
+
+    .packages-promo-img {
+      margin-top: 3rem;
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      max-width: 700px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .packages-promo-img img {
+      width: 100%;
+      border-radius: var(--radius-lg);
+    }
+
+    .packages-terms-inline {
+      margin-top: 0.75rem;
+      font-size: 0.82rem;
+      color: var(--text-muted);
+    }
+
+    .packages-terms-inline strong { color: var(--text-body); }
+
+    /* ============================
+       REVIEWS
+    ============================ */
+    .reviews { background: var(--bg-secondary); }
+
+    .rating-summary {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 1.25rem;
+      margin-bottom: 3rem;
+    }
+
+    .rating-number {
+      font-size: 4rem;
+      font-weight: 900;
+      color: var(--text-heading);
+      line-height: 1;
+    }
+
+    .rating-info { text-align: left; }
+
+    .stars {
+      color: #fbbf24;
+      font-size: 1.2rem;
+      letter-spacing: 2px;
+      margin-bottom: 0.25rem;
+    }
+
+    .rating-count {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+    }
+
+    .review-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 1.75rem;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .review-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+
+    .reviewer-name {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--text-heading);
+    }
+
+    .reviewer-source {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+    }
+
+    .review-stars { color: #fbbf24; font-size: 0.85rem; }
+
+    .review-text {
+      font-size: 0.875rem;
+      color: var(--text-body);
+      line-height: 1.7;
+      flex: 1;
+    }
+
+    .review-quote {
+      font-family: Georgia, serif;
+      font-size: 3rem;
+      color: var(--accent);
+      line-height: 0.5;
+      opacity: 0.5;
+    }
+
+    /* Splide overrides */
+    .splide__pagination__page { background: var(--text-muted); }
+    .splide__pagination__page.is-active { background: var(--accent); transform: scale(1.3); }
+    .splide__arrow { background: rgba(255,255,255,0.08); }
+    .splide__arrow svg { fill: #fff; }
+    .splide__arrow:hover { background: var(--accent); }
+
+    /* ============================
+       CONTACT
+    ============================ */
+    .contact { background: var(--bg-primary); }
+
+    .contact-inner {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 5rem;
+      align-items: start;
+    }
+
+    .contact-info h2 {
+      font-size: clamp(1.8rem, 3vw, 2.4rem);
+      font-weight: 800;
+      color: var(--text-heading);
+      margin-bottom: 1.25rem;
+      line-height: 1.2;
+    }
+
+    .contact-info p {
+      font-size: 0.95rem;
+      color: var(--text-body);
+      line-height: 1.7;
+      margin-bottom: 2rem;
+    }
+
+    .contact-details {
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+      margin-bottom: 2rem;
+    }
+
+    .contact-detail {
+      display: flex;
+      gap: 1rem;
+      align-items: flex-start;
+    }
+
+    .contact-detail-icon {
+      width: 40px;
+      height: 40px;
+      flex-shrink: 0;
+      background: rgba(165,36,41,0.12);
+      border-radius: var(--radius);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.1rem;
+    }
+
+    .contact-detail-text strong {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      margin-bottom: 0.2rem;
+    }
+
+    .contact-detail-text span {
+      font-size: 0.9rem;
+      color: var(--text-body);
+    }
+
+    .contact-ctas {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+
+    .contact-map {
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      height: 320px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      margin-top: 4rem;
+    }
+
+    .contact-map iframe {
+      width: 100%;
+      height: 100%;
+      border: none;
+      filter: invert(90%) hue-rotate(180deg);
+    }
+
+    /* Contact Form */
+    .contact-form {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 2.25rem;
+    }
+
+    .contact-form h3 {
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: var(--text-heading);
+      margin-bottom: 1.75rem;
+    }
+
+    .form-group {
+      margin-bottom: 1.25rem;
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 0.78rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 0.45rem;
+    }
+
+    .form-group input,
+    .form-group textarea,
+    .form-group select {
+      width: 100%;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text-heading);
+      font-family: inherit;
+      font-size: 0.9rem;
+      padding: 0.7rem 1rem;
+      transition: border-color var(--transition);
+      outline: none;
+    }
+
+    .form-group input:focus,
+    .form-group textarea:focus {
+      border-color: var(--accent);
+    }
+
+    .form-group input::placeholder,
+    .form-group textarea::placeholder {
+      color: var(--text-muted);
+    }
+
+    .form-group textarea {
+      resize: vertical;
+      min-height: 110px;
+    }
+
+    .upload-area {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color var(--transition), background var(--transition);
+    }
+
+    .upload-area:hover {
+      border-color: var(--accent);
+      background: rgba(165,36,41,0.05);
+    }
+
+    .upload-area p {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      margin-top: 0.4rem;
+    }
+
+    .upload-area .upload-icon { font-size: 1.75rem; }
+
+    #upload-preview {
+      display: none;
+      margin-top: 1rem;
+      border-radius: var(--radius);
+      overflow: hidden;
+      position: relative;
+    }
+
+    #upload-preview img {
+      width: 100%;
+      max-height: 160px;
+      object-fit: cover;
+      border-radius: var(--radius);
+    }
+
+    #upload-preview .remove-upload {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      background: rgba(0,0,0,0.7);
+      border: none;
+      color: #fff;
+      border-radius: 50%;
+      width: 24px;
+      height: 24px;
+      cursor: pointer;
+      font-size: 0.75rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .form-submit-row {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin-top: 0.5rem;
+    }
+
+    #form-status {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    #form-status.success { color: #4ade80; }
+    #form-status.error { color: #f87171; }
+
+    /* ============================
+       FOOTER
+    ============================ */
+    footer {
+      background: var(--bg-secondary);
+      border-top: 1px solid var(--border);
+      padding: 4rem 0 2rem;
+    }
+
+    .footer-top {
+      display: grid;
+      grid-template-columns: 1.4fr repeat(3, 1fr);
+      gap: 3rem;
+      padding-bottom: 3rem;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 2rem;
+    }
+
+    .footer-brand .logo { margin-bottom: 1rem; }
+
+    .footer-tagline {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      margin-bottom: 1.25rem;
+      line-height: 1.6;
+    }
+
+    .footer-social {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .footer-social a {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.06);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+      transition: background var(--transition), color var(--transition);
+    }
+
+    .footer-social a:hover { background: var(--accent); color: #fff; }
+    .footer-social svg { width: 15px; height: 15px; fill: currentColor; }
+
+    .footer-col h4 {
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--text-heading);
+      margin-bottom: 1.25rem;
+    }
+
+    .footer-links {
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+    }
+
+    .footer-links a {
+      font-size: 0.875rem;
+      color: var(--text-muted);
+      transition: color var(--transition);
+    }
+
+    .footer-links a:hover { color: var(--accent); }
+
+    .footer-bottom {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    /* ============================
+       RESPONSIVE
+    ============================ */
+    @media (max-width: 1024px) {
+      .services-grid { grid-template-columns: repeat(2, 1fr); }
+      .footer-top { grid-template-columns: 1fr 1fr; }
+    }
+
+    @media (max-width: 767px) {
+      section { padding: 4rem 0; }
+
+      nav, .header-actions .btn-quote { display: none; }
+      .hamburger { display: flex; }
+      .icon-link { display: none; }
+
+      .hero-content { margin-left: 0; padding: 0 1.5rem; }
+      .hero h1 { font-size: clamp(2.2rem, 9vw, 3.5rem); }
+
+      .services-grid { grid-template-columns: 1fr; }
+      .portfolio-grid { grid-template-columns: 1fr; }
+      .packages-grid { grid-template-columns: 1fr; }
+      .ala-carte-grid { grid-template-columns: 1fr; }
+      .about-inner { grid-template-columns: 1fr; gap: 3rem; }
+      .contact-inner { grid-template-columns: 1fr; gap: 3rem; }
+      .footer-top { grid-template-columns: 1fr; gap: 2rem; }
+      .footer-bottom { flex-direction: column; text-align: center; }
+
+      .container { padding: 0 1.25rem; }
+      .header-inner { padding: 0 1.25rem; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .fade-in, .fade-left, .fade-right { opacity: 1; transform: none; transition: none; }
+      .hero-bg { transform: none; transition: none; }
+    }
+  </style>
+
+  <!-- Schema.org Structured Data -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "LocalBusiness",
+    "name": "June's Tees & Things",
+    "description": "Custom screen printing, embroidery, DTF transfers, banners, fat heads, and graphic design in Chicago.",
+    "url": "https://jtees.net",
+    "telephone": "+17738491854",
+    "address": {
+      "@type": "PostalAddress",
+      "streetAddress": "3047 N Lincoln Ave #435",
+      "addressLocality": "Chicago",
+      "addressRegion": "IL",
+      "postalCode": "60657",
+      "addressCountry": "US"
+    },
+    "geo": {
+      "@type": "GeoCoordinates",
+      "latitude": 41.9393,
+      "longitude": -87.6726
+    },
+    "openingHoursSpecification": [
+      {
+        "@type": "OpeningHoursSpecification",
+        "dayOfWeek": ["Monday","Tuesday","Wednesday","Thursday","Friday"],
+        "opens": "10:30",
+        "closes": "18:00"
+      }
+    ],
+    "aggregateRating": {
+      "@type": "AggregateRating",
+      "ratingValue": "4.8",
+      "reviewCount": "21"
+    },
+    "sameAs": ["https://www.instagram.com/jtees228"]
+  }
+  </script>
+</head>
+
+<body>
+
+  <!-- Announcement Bar -->
+  <div class="announcement-bar">
+    🎓 Grad Season is HERE — Check our exclusive packages! &nbsp;|&nbsp; 7-Day Delivery Available &nbsp;|&nbsp; Curbside Pickup: Mon–Fri 10:30 AM – 6 PM
+  </div>
+
+  <!-- Header -->
+  <header id="header">
+    <div class="header-inner">
+      <a href="#home" class="logo">
+        <img src="https://previews.digitalvisionstudios.net/junesteesnthings/assets/images/logo-design.jpg" alt="June's Tees & Things logo" />
+        <div class="logo-text">
+          June's Tees & Things
+          <span>Chicago Custom Printing</span>
+        </div>
+      </a>
+
+      <nav>
+        <a href="#home">Home</a>
+        <a href="#services">Services</a>
+        <a href="#portfolio">Our Work</a>
+        <a href="#packages">Packages</a>
+        <a href="#reviews">Reviews</a>
+        <a href="#contact">Contact</a>
+      </nav>
+
+      <div class="header-actions">
+        <a href="https://www.instagram.com/jtees228" target="_blank" rel="noopener" class="icon-link" aria-label="Instagram">
+          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/></svg>
+        </a>
+        <a href="tel:+17738491854" class="icon-link" aria-label="Call us">
+          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
+        </a>
+        <a href="#contact" class="btn-quote">Get A Quote</a>
+        <div class="hamburger" id="hamburger" aria-label="Open menu">
+          <span></span><span></span><span></span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Mobile Drawer -->
+  <div class="drawer-overlay" id="drawerOverlay"></div>
+  <div class="mobile-drawer" id="mobileDrawer">
+    <div class="drawer-header">
+      <div class="logo-text">June's Tees & Things</div>
+      <button class="drawer-close" id="drawerClose">&#x2715;</button>
+    </div>
+    <nav class="drawer-nav">
+      <a href="#home">Home</a>
+      <a href="#services">Services</a>
+      <a href="#portfolio">Our Work</a>
+      <a href="#packages">Packages</a>
+      <a href="#reviews">Reviews</a>
+      <a href="#contact">Contact</a>
+    </nav>
+    <div class="drawer-actions">
+      <a href="tel:+17738491854" class="btn btn-secondary" style="width:100%">📞 (773) 849-1854</a>
+      <a href="https://www.instagram.com/jtees228" target="_blank" class="btn btn-outline" style="width:100%">DM on Instagram</a>
+    </div>
+  </div>
+
+  <!-- ============================
+       HERO
+  ============================ -->
+  <section class="hero" id="home">
+    <div class="hero-bg">
+      <video autoplay muted loop playsinline>
+        <source src="https://previews.digitalvisionstudios.net/junesteesnthings/assets/videos/hero-background.mp4" type="video/mp4" />
+      </video>
+    </div>
+    <div class="hero-content">
+      <div class="hero-eyebrow">Chicago Custom Printing</div>
+      <h1>Your Vision.<br /><em>Our Craft.</em></h1>
+      <p class="hero-sub">Screen printing, embroidery, DTF transfers & more. From concept to custom — we bring your ideas to life.</p>
+      <div class="hero-ctas">
+        <a href="tel:+17738491854" class="btn btn-primary">📞 Call Now</a>
+        <a href="#portfolio" class="btn btn-secondary">See Our Work</a>
+      </div>
+    </div>
+    <div class="hero-scroll">Scroll</div>
+  </section>
+
+  <!-- ============================
+       SERVICES
+  ============================ -->
+  <section class="services" id="services">
+    <div class="container">
+      <div class="section-header fade-in">
+        <div class="section-tag">What We Do</div>
+        <h2>Our Services</h2>
+        <p>Full-service custom apparel and printing — whatever you need, we've got you covered.</p>
+      </div>
+
+      <div class="services-grid">
+        <div class="service-card fade-in" style="transition-delay:0.05s">
+          <div class="service-icon">🖨️</div>
+          <h3>Screen Printing</h3>
+          <p>Bold, vibrant custom apparel for teams, events, businesses, and everything in between. High-quality results every time.</p>
+        </div>
+        <div class="service-card fade-in" style="transition-delay:0.1s">
+          <div class="service-icon">🧵</div>
+          <h3>Embroidery</h3>
+          <p>Professional logo embroidery on polos, hats, uniforms, and more. Durable, polished, and business-ready.</p>
+        </div>
+        <div class="service-card fade-in" style="transition-delay:0.15s">
+          <div class="service-icon">🎨</div>
+          <h3>DTF Transfers</h3>
+          <p>Full-color, photo-quality prints with incredible detail. Perfect for complex designs that pop on any fabric.</p>
+        </div>
+        <div class="service-card fade-in" style="transition-delay:0.2s">
+          <div class="service-icon">🏷️</div>
+          <h3>Banners & Signs</h3>
+          <p>Custom banners, yard signs, and displays for events, businesses, graduations, and special occasions.</p>
+        </div>
+        <div class="service-card fade-in" style="transition-delay:0.25s">
+          <div class="service-icon">😄</div>
+          <h3>Fat Heads</h3>
+          <p>Oversized custom face cutouts — the life of every party, game, or celebration. Everyone loves a big head!</p>
+        </div>
+        <div class="service-card fade-in" style="transition-delay:0.3s">
+          <div class="service-icon">✏️</div>
+          <h3>Graphic Design</h3>
+          <p>Don't have a design? No problem. Our team creates custom artwork tailored to your vision and brand.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================
+       PORTFOLIO
+  ============================ -->
+  <section class="portfolio" id="portfolio">
+    <div class="container">
+      <div class="section-header fade-in">
+        <div class="section-tag">Our Work</div>
+        <h2>Our Portfolio — See What We've Made</h2>
+        <p>From custom team gear to personal milestones — here's a look at what we create.</p>
+      </div>
+
+      <div class="portfolio-grid">
+        <div class="portfolio-item fade-left" style="transition-delay:0.05s">
+          <img src="https://previews.digitalvisionstudios.net/junesteesnthings/assets/images/content-media-1.jpg" alt="Custom Screen-Printed T-Shirt" loading="lazy" />
+          <div class="portfolio-overlay">
+            <div>
+              <div class="portfolio-tag">Screen Printing</div>
+              <div class="portfolio-label">Custom T-Shirt Printing</div>
+            </div>
+          </div>
+        </div>
+        <div class="portfolio-item fade-right" style="transition-delay:0.1s">
+          <img src="https://previews.digitalvisionstudios.net/junesteesnthings/assets/images/content-media-2.jpg" alt="Custom Birthday Shirt" loading="lazy" />
+          <div class="portfolio-overlay">
+            <div>
+              <div class="portfolio-tag">Custom Designs</div>
+              <div class="portfolio-label">Party Prints</div>
+            </div>
+          </div>
+        </div>
+        <div class="portfolio-item fade-left" style="transition-delay:0.15s">
+          <img src="https://previews.digitalvisionstudios.net/junesteesnthings/assets/images/content-media-3.jpg" alt="DTF Transfer Prints" loading="lazy" />
+          <div class="portfolio-overlay">
+            <div>
+              <div class="portfolio-tag">DTF Transfers</div>
+              <div class="portfolio-label">Full-Color Transfers</div>
+            </div>
+          </div>
+        </div>
+        <div class="portfolio-item fade-right" style="transition-delay:0.2s">
+          <img src="https://previews.digitalvisionstudios.net/junesteesnthings/assets/images/content-media-4.jpg" alt="Embroidered Business Polo" loading="lazy" />
+          <div class="portfolio-overlay">
+            <div>
+              <div class="portfolio-tag">Embroidery</div>
+              <div class="portfolio-label">Business Apparel</div>
+            </div>
+          </div>
+        </div>
+        <div class="portfolio-item fade-left" style="transition-delay:0.25s">
+          <img src="https://previews.digitalvisionstudios.net/junesteesnthings/assets/images/content-media-5.jpg" alt="Custom Long Sleeve Business Shirt" loading="lazy" />
+          <div class="portfolio-overlay">
+            <div>
+              <div class="portfolio-tag">Screen Printing</div>
+              <div class="portfolio-label">Business Apparel</div>
+            </div>
+          </div>
+        </div>
+        <div class="portfolio-item fade-right" style="transition-delay:0.3s">
+          <img src="https://previews.digitalvisionstudios.net/junesteesnthings/assets/images/content-media-6.jpg" alt="Bulk Order Folded Shirts" loading="lazy" />
+          <div class="portfolio-overlay">
+            <div>
+              <div class="portfolio-tag">Bulk Orders</div>
+              <div class="portfolio-label">Bulk Custom Apparel</div>
+            </div>
+          </div>
+        </div>
+        <div class="portfolio-item fade-left" style="transition-delay:0.35s">
+          <img src="https://previews.digitalvisionstudios.net/junesteesnthings/assets/images/content-media-7.jpg" alt="Custom White Shirt and Cap Set" loading="lazy" />
+          <div class="portfolio-overlay">
+            <div>
+              <div class="portfolio-tag">Custom Designs</div>
+              <div class="portfolio-label">Custom Apparel Sets</div>
+            </div>
+          </div>
+        </div>
+        <div class="portfolio-item fade-right" style="transition-delay:0.4s">
+          <img src="https://previews.digitalvisionstudios.net/junesteesnthings/assets/images/content-media-8.jpg" alt="Custom Graphic Tee" loading="lazy" />
+          <div class="portfolio-overlay">
+            <div>
+              <div class="portfolio-tag">Screen Printing</div>
+              <div class="portfolio-label">Custom Graphic Tees</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================
+       ABOUT
+  ============================ -->
+  <section class="about" id="about">
+    <div class="container">
+      <div class="about-inner">
+        <div class="about-content fade-left">
+          <div class="section-tag">Who We Are</div>
+          <h2>More Than A Print Shop —<br /><span>We're Family</span></h2>
+          <p>At June's Tees & Things, we're more than just a print shop — we're a Chicago-based, Black-owned, women-owned business that brings your vision to life with passion and precision.</p>
+          <p>From custom screen printing and embroidery to DTF transfers and graphic design, we handle every step of the process with care. We pride ourselves on fast turnaround times, competitive pricing, and the kind of personal attention that makes every client feel like family.</p>
+          <p>Whether you need 1 shirt or 1,000, a quick event print or a fully branded uniform set — we're here for you.</p>
+
+          <div class="about-badges">
+            <div class="badge"><span>✊</span> Black-Owned</div>
+            <div class="badge"><span>♀️</span> Women-Owned</div>
+            <div class="badge"><span>🏳️‍🌈</span> LGBTQ+ Friendly</div>
+            <div class="badge"><span>⚡</span> 7-Day Delivery</div>
+            <div class="badge"><span>🚗</span> Curbside Pickup</div>
+          </div>
+        </div>
+
+        <div class="about-slider-wrap fade-right">
+          <div id="about-slider" class="splide" aria-label="Our work gallery">
+            <div class="splide__track">
+              <ul class="splide__list">
+                <li class="splide__slide">
+                  <img src="https://previews.digitalvisionstudios.net/junesteesnthings/assets/images/content-media-1.png" alt="Team in custom orange shirts" loading="lazy" />
+                </li>
+                <li class="splide__slide">
+                  <img src="https://previews.digitalvisionstudios.net/junesteesnthings/assets/images/content-media-9.jpg" alt="Custom Halloween Hoodies" loading="lazy" />
+                </li>
+                <li class="splide__slide">
+                  <img src="https://previews.digitalvisionstudios.net/junesteesnthings/assets/images/content-media-4.jpg" alt="Embroidered polo" loading="lazy" />
+                </li>
+                <li class="splide__slide">
+                  <img src="https://previews.digitalvisionstudios.net/junesteesnthings/assets/images/content-media-6.jpg" alt="Bulk order shirts" loading="lazy" />
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================
+       PACKAGES
+  ============================ -->
+  <section class="packages" id="packages">
+    <div class="container">
+      <div class="section-header fade-in">
+        <div class="section-tag">Pricing</div>
+        <h2>Packages & Pricing</h2>
+        <p>Grad season packages, à la carte items, and Fat Heads — we have something for every budget and occasion.</p>
+        <p class="packages-terms-inline"><strong>Design fees included</strong> &nbsp;·&nbsp; 2–3 week delivery &nbsp;·&nbsp; Payment plans available (book 1 month in advance)</p>
+      </div>
+
+      <!-- Grad Packages -->
+      <div style="text-align:center;margin-bottom:2rem;" class="fade-in">
+        <h3 style="font-size:1.1rem;font-weight:700;color:var(--text-muted);letter-spacing:0.1em;text-transform:uppercase;">🎓 Graduation Packages</h3>
+      </div>
+
+      <div class="packages-grid">
+        <div class="package-card fade-in" style="transition-delay:0.05s">
+          <div class="package-name">That's My GRAD!!</div>
+          <div class="package-price"><sup>$</sup>140</div>
+          <div class="package-tagline">Perfect for the close family celebration</div>
+          <div class="package-includes">Includes</div>
+          <ul class="package-features">
+            <li>1 Graduation Stole</li>
+            <li>5 Center-Print Tees</li>
+          </ul>
+          <a href="tel:+17738491854" class="btn btn-outline" style="width:100%">Order Now</a>
+        </div>
+
+        <div class="package-card featured fade-in" style="transition-delay:0.1s">
+          <div class="package-badge">Best Value</div>
+          <div class="package-name">Where My GRAD At?</div>
+          <div class="package-price"><sup>$</sup>365</div>
+          <div class="package-tagline">The full grad celebration experience</div>
+          <div class="package-includes">Includes</div>
+          <ul class="package-features">
+            <li>1 Graduation Stole</li>
+            <li>10 Custom Tees</li>
+            <li>5 Big Heads (12"×18")</li>
+            <li>1 Banner (4'×2')</li>
+          </ul>
+          <a href="tel:+17738491854" class="btn btn-primary" style="width:100%">Order Now</a>
+        </div>
+
+        <div class="package-card fade-in" style="transition-delay:0.15s">
+          <div class="package-badge" style="background:#222;border:1px solid var(--accent);color:var(--accent);">Ultimate</div>
+          <div class="package-name">GRAD's Proudest Family</div>
+          <div class="package-price"><sup>$</sup>600</div>
+          <div class="package-tagline">Go all out for your graduate</div>
+          <div class="package-includes">Includes</div>
+          <ul class="package-features">
+            <li>1 Graduation Stole</li>
+            <li>20 Custom Tees</li>
+            <li>10 Big Heads (12"×18")</li>
+            <li>2-Pack Yard Sign</li>
+            <li>1 Banner (6'×3')</li>
+          </ul>
+          <a href="tel:+17738491854" class="btn btn-outline" style="width:100%">Order Now</a>
+        </div>
+      </div>
+
+      <!-- A La Carte -->
+      <div class="ala-carte-section fade-in">
+        <h3>À La Carte Items</h3>
+        <p>Need just one or two things? Mix and match from our à la carte menu.</p>
+
+        <div class="ala-carte-grid">
+          <div class="ala-carte-card">
+            <h4>👕 Custom Tees & Banners</h4>
+            <div class="ala-carte-items">
+              <div class="ala-carte-item">
+                <span>Single Custom Tee</span>
+                <span>$20</span>
+              </div>
+              <div class="ala-carte-item">
+                <span>4'×2' Banner</span>
+                <span>$55</span>
+              </div>
+              <div class="ala-carte-item">
+                <span>2-Pack Yard Sign</span>
+                <span>$35</span>
+              </div>
+              <div class="ala-carte-item">
+                <span>12"×18" Big Head (single)</span>
+                <span>$20</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="ala-carte-card">
+            <h4>😄 Fat Heads Pricing</h4>
+            <div class="ala-carte-items">
+              <div class="ala-carte-item">
+                <span>12"×18" Single</span>
+                <span>$25</span>
+              </div>
+              <div class="ala-carte-item">
+                <span>12"×18" 5-Pack</span>
+                <span>$100</span>
+              </div>
+              <div class="ala-carte-item">
+                <span>2'×2' Single</span>
+                <span>$35</span>
+              </div>
+              <div class="ala-carte-item">
+                <span>2'×2' 5-Pack</span>
+                <span>$150</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Promo Images -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;margin-top:3rem;" class="fade-in">
+        <div style="border-radius:16px;overflow:hidden;">
+          <img src="https://previews.digitalvisionstudios.net/junesteesnthings/assets/images/fat-head-promotion.jpg" alt="Fat Heads Pricing" loading="lazy" style="width:100%;border-radius:16px;" />
+        </div>
+        <div style="border-radius:16px;overflow:hidden;">
+          <img src="https://previews.digitalvisionstudios.net/junesteesnthings/assets/images/graduation-promotions.jpg" alt="Graduation Packages" loading="lazy" style="width:100%;border-radius:16px;" />
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============================
+       REVIEWS
+  ============================ -->
+  <section class="reviews" id="reviews">
+    <div class="container">
+      <div class="section-header fade-in">
+        <div class="section-tag">Testimonials</div>
+        <h2>What Our Customers Say</h2>
+      </div>
+
+      <div class="rating-summary fade-in">
+        <div class="rating-number">4.8</div>
+        <div class="rating-info">
+          <div class="stars">★★★★★</div>
+          <div class="rating-count">Based on 21 Google Reviews</div>
+        </div>
+      </div>
+
+      <div id="testimonials-slider" class="splide fade-in" aria-label="Customer reviews">
+        <div class="splide__track">
+          <ul class="splide__list">
+
+            <li class="splide__slide">
+              <div class="review-card">
+                <div class="review-quote">"</div>
+                <p class="review-text">Very professional! Extremely talented artist. She was able to take my vision and bring it to life. The quality of the shirts were amazing. Definitely will be ordering again!</p>
+                <div class="review-header">
+                  <div>
+                    <div class="reviewer-name">Keisha M.</div>
+                    <div class="reviewer-source">Google Review</div>
+                  </div>
+                  <div class="review-stars">★★★★★</div>
+                </div>
+              </div>
+            </li>
+
+            <li class="splide__slide">
+              <div class="review-card">
+                <div class="review-quote">"</div>
+                <p class="review-text">Fast turnaround time! I needed shirts for a last-minute event and June's came through. Great quality, great price, and amazing customer service. Will definitely use again!</p>
+                <div class="review-header">
+                  <div>
+                    <div class="reviewer-name">Marcus T.</div>
+                    <div class="reviewer-source">Google Review</div>
+                  </div>
+                  <div class="review-stars">★★★★★</div>
+                </div>
+              </div>
+            </li>
+
+            <li class="splide__slide">
+              <div class="review-card">
+                <div class="review-quote">"</div>
+                <p class="review-text">June was so accommodating with my rush order. The shirts came out better than I expected. She really cares about her customers and it shows in everything she does.</p>
+                <div class="review-header">
+                  <div>
+                    <div class="reviewer-name">Tanya R.</div>
+                    <div class="reviewer-source">Google Review</div>
+                  </div>
+                  <div class="review-stars">★★★★★</div>
+                </div>
+              </div>
+            </li>
+
+            <li class="splide__slide">
+              <div class="review-card">
+                <div class="review-quote">"</div>
+                <p class="review-text">The craftsmanship is top-notch. I ordered embroidered polos for my team and the quality is outstanding. Everyone keeps asking where we got them. Highly recommend!</p>
+                <div class="review-header">
+                  <div>
+                    <div class="reviewer-name">David L.</div>
+                    <div class="reviewer-source">Google Review</div>
+                  </div>
+                  <div class="review-stars">★★★★★</div>
+                </div>
+              </div>
+            </li>
+
+            <li class="splide__slide">
+              <div class="review-card">
+                <div class="review-quote">"</div>
+                <p class="review-text">Ordered graduation shirts and big heads for my daughter's celebration. Everything was perfect — the colors, the quality, the attention to detail. June truly goes above and beyond!</p>
+                <div class="review-header">
+                  <div>
+                    <div class="reviewer-name">Sandra W.</div>
+                    <div class="reviewer-source">Google Review</div>
+                  </div>
+                  <div class="review-stars">★★★★★</div>
+                </div>
+              </div>
+            </li>
+
+            <li class="splide__slide">
+              <div class="review-card">
+                <div class="review-quote">"</div>
+                <p class="review-text">I've been ordering from June's for two years now and I never go anywhere else. Consistent quality, fair prices, and she always delivers on time. Best print shop in Chicago!</p>
+                <div class="review-header">
+                  <div>
+                    <div class="reviewer-name">Jerome B.</div>
+                    <div class="reviewer-source">Google Review</div>
+                  </div>
+                  <div class="review-stars">★★★★★</div>
+                </div>
+              </div>
+            </li>
+
+            <li class="splide__slide">
+              <div class="review-card">
+                <div class="review-quote">"</div>
+                <p class="review-text">Such a wonderful experience from start to finish. June walked me through the entire process and made sure everything was exactly how I wanted it. The final product was incredible!</p>
+                <div class="review-header">
+                  <div>
+                    <div class="reviewer-name">Angela P.</div>
+                    <div class="reviewer-source">Google Review</div>
+                  </div>
+                  <div class="review-stars">★★★★★</div>
+                </div>
+              </div>
+            </li>
+
+            <li class="splide__slide">
+              <div class="review-card">
+                <div class="review-quote">"</div>
+                <p class="review-text">Ordered custom tees for our family reunion and every single shirt was perfect. June has a real gift for bringing designs to life. We'll definitely be coming back!</p>
+                <div class="review-header">
+                  <div>
+                    <div class="reviewer-name">Brenda H.</div>
+                    <div class="reviewer-source">Google Review</div>
+                  </div>
+                  <div class="review-stars">★★★★★</div>
+                </div>
+              </div>
+            </li>
+
+            <li class="splide__slide">
+              <div class="review-card">
+                <div class="review-quote">"</div>
+                <p class="review-text">Five stars isn't enough! The DTF transfers she did for us are absolutely stunning. Vibrant, sharp, and the detail is unreal. I'm so happy with how everything turned out.</p>
+                <div class="review-header">
+                  <div>
+                    <div class="reviewer-name">Michelle C.</div>
+                    <div class="reviewer-source">Google Review</div>
+                  </div>
+                  <div class="review-stars">★★★★★</div>
+                </div>
+              </div>
+            </li>
+
+            <li class="splide__slide">
+              <div class="review-card">
+                <div class="review-quote">"</div>
+                <p class="review-text">I placed a rush order on a Monday and had my shirts by Wednesday. The quality was top tier and the pricing was very fair. June is a true professional — highly recommended!</p>
+                <div class="review-header">
+                  <div>
+                    <div class="reviewer-name">Carlos F.</div>
+                    <div class="reviewer-source">Google Review</div>
+                  </div>
+                  <div class="review-stars">★★★★★</div>
+                </div>
+              </div>
+            </li>
+
+            <li class="splide__slide">
+              <div class="review-card">
+                <div class="review-quote">"</div>
+                <p class="review-text">Supporting Black-owned businesses is important to me, and June's does not disappoint. Great work, great service, great prices. This is my go-to print shop and I tell everyone about them!</p>
+                <div class="review-header">
+                  <div>
+                    <div class="reviewer-name">Natasha G.</div>
+                    <div class="reviewer-source">Google Review</div>
+                  </div>
+                  <div class="review-stars">★★★★★</div>
+                </div>
+              </div>
+            </li>
+
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================
+       CONTACT
+  ============================ -->
+  <section class="contact" id="contact">
+    <div class="container">
+      <div class="section-header fade-in">
+        <div class="section-tag">Get In Touch</div>
+        <h2>Ready To Bring Your Vision To Life?</h2>
+        <p>Fill out the form below and we'll get back to you with a free quote. You can also call or DM us directly.</p>
+      </div>
+
+      <div class="contact-inner">
+
+        <!-- Left: Info -->
+        <div class="contact-info fade-left">
+          <div class="contact-details">
+            <div class="contact-detail">
+              <div class="contact-detail-icon">📍</div>
+              <div class="contact-detail-text">
+                <strong>Address</strong>
+                <span>3047 N Lincoln Ave #435, Chicago, IL 60657</span>
+              </div>
+            </div>
+            <div class="contact-detail">
+              <div class="contact-detail-icon">🕐</div>
+              <div class="contact-detail-text">
+                <strong>Hours</strong>
+                <span>Mon–Fri: 10:30 AM – 6:00 PM<br />Saturday & Sunday: Closed</span>
+              </div>
+            </div>
+            <div class="contact-detail">
+              <div class="contact-detail-icon">📞</div>
+              <div class="contact-detail-text">
+                <strong>Phone</strong>
+                <span>(773) 849-1854</span>
+              </div>
+            </div>
+            <div class="contact-detail">
+              <div class="contact-detail-icon">🚗</div>
+              <div class="contact-detail-text">
+                <strong>Curbside Pickup</strong>
+                <span>Available during business hours</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="contact-ctas" style="margin-top:2rem;">
+            <a href="tel:+17738491854" class="btn btn-primary">📞 Call Now</a>
+            <a href="https://www.instagram.com/jtees228" target="_blank" rel="noopener" class="btn btn-secondary">DM on Instagram</a>
+          </div>
+        </div>
+
+        <!-- Right: Contact Form -->
+        <div class="contact-form fade-right">
+          <h3>Request A Free Quote</h3>
+
+          <form id="quote-form" action="/submit" method="POST">
+
+            <!-- Hidden field receives the Cloudinary photo URL after upload -->
+            <input type="hidden" name="photo_url" id="photo-url-field" />
+
+            <div class="form-group">
+              <label for="f-name">Full Name</label>
+              <input id="f-name" type="text" name="name" required placeholder="Jane Smith" />
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="f-phone">Phone</label>
+                <input id="f-phone" type="tel" name="phone" required placeholder="(000) 000-0000" />
+              </div>
+              <div class="form-group">
+                <label for="f-email">Email</label>
+                <input id="f-email" type="email" name="email" required placeholder="you@email.com" />
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="f-desc">Tell Us About Your Order</label>
+              <textarea id="f-desc" name="description" required placeholder="What do you need? Item type, quantities, colors, event date, any special requests..."></textarea>
+            </div>
+
+            <div class="form-group">
+              <label>Reference Photo <span style="font-weight:400;text-transform:none;letter-spacing:0;">(optional)</span></label>
+              <div class="upload-area" id="upload-trigger">
+                <div class="upload-icon">🖼️</div>
+                <strong style="color:var(--text-heading);font-size:0.9rem;">Click to upload a photo</strong>
+                <p>Logo, design idea, or inspiration image</p>
+              </div>
+              <div id="upload-preview">
+                <img id="preview-img" src="" alt="Uploaded preview" />
+                <button type="button" class="remove-upload" id="remove-upload" aria-label="Remove photo">✕</button>
+              </div>
+            </div>
+
+            <div class="form-submit-row">
+              <button type="submit" class="btn btn-primary" id="submit-btn">Send Request</button>
+              <span id="form-status"></span>
+            </div>
+
+          </form>
+        </div>
+      </div>
+
+      <!-- Map -->
+      <div class="contact-map fade-in">
+        <iframe
+          src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d2969.7742!2d-87.6726!3d41.9393!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x880fd2c3a3a3a3a3%3A0x0!2s3047+N+Lincoln+Ave+%23435%2C+Chicago%2C+IL+60657!5e0!3m2!1sen!2sus!4v1234567890"
+          allowfullscreen=""
+          loading="lazy"
+          referrerpolicy="no-referrer-when-downgrade"
+          title="June's Tees & Things location map"
+        ></iframe>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================
+       FOOTER
+  ============================ -->
+  <footer>
+    <div class="container">
+      <div class="footer-top">
+        <div class="footer-brand">
+          <div class="logo" style="margin-bottom:1rem;">
+            <img src="https://previews.digitalvisionstudios.net/junesteesnthings/assets/images/logo-design.jpg" alt="June's Tees & Things" style="width:44px;height:44px;border-radius:50%;object-fit:cover;" />
+            <div class="logo-text">
+              June's Tees & Things
+              <span>Chicago Custom Printing</span>
+            </div>
+          </div>
+          <p class="footer-tagline">Your vision, our craft. Black-owned, women-owned, LGBTQ+ friendly custom printing in Chicago.</p>
+          <div class="footer-social">
+            <a href="https://www.instagram.com/jtees228" target="_blank" rel="noopener" aria-label="Instagram">
+              <svg viewBox="0 0 24 24"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/></svg>
+            </a>
+            <a href="tel:+17738491854" aria-label="Phone">
+              <svg viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
+            </a>
+          </div>
+        </div>
+
+        <div class="footer-col">
+          <h4>Services</h4>
+          <ul class="footer-links">
+            <li><a href="#services">Screen Printing</a></li>
+            <li><a href="#services">Embroidery</a></li>
+            <li><a href="#services">DTF Transfers</a></li>
+            <li><a href="#services">Banners & Signs</a></li>
+            <li><a href="#services">Fat Heads</a></li>
+          </ul>
+        </div>
+
+        <div class="footer-col">
+          <h4>Company</h4>
+          <ul class="footer-links">
+            <li><a href="#about">About Us</a></li>
+            <li><a href="#portfolio">Our Work</a></li>
+            <li><a href="#packages">Packages</a></li>
+            <li><a href="#reviews">Reviews</a></li>
+            <li><a href="#contact">Contact</a></li>
+          </ul>
+        </div>
+
+        <div class="footer-col">
+          <h4>Info</h4>
+          <ul class="footer-links">
+            <li><a href="#contact">Location & Hours</a></li>
+            <li><a href="#contact">Curbside Pickup</a></li>
+            <li><a href="#packages">Pricing</a></li>
+            <li><a href="tel:+17738491854">(773) 849-1854</a></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="footer-bottom">
+        <span>&copy; 2025 June's Tees & Things. All rights reserved.</span>
+        <span>Chicago, IL · Black-Owned · Women-Owned · LGBTQ+ Friendly</span>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Splide JS -->
+  <script src="https://cdn.jsdelivr.net/npm/@splidejs/splide@4.1.4/dist/js/splide.min.js"></script>
+
+  <!-- Cloudinary Upload Widget -->
+  <script src="https://upload-widget.cloudinary.com/global/all.js" type="text/javascript"></script>
+
+  <script>
+    // ============================
+    // Mobile Drawer
+    // ============================
+    const hamburger = document.getElementById('hamburger');
+    const drawer = document.getElementById('mobileDrawer');
+    const overlay = document.getElementById('drawerOverlay');
+    const drawerClose = document.getElementById('drawerClose');
+
+    function openDrawer() {
+      drawer.classList.add('open');
+      overlay.classList.add('visible');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeDrawer() {
+      drawer.classList.remove('open');
+      overlay.classList.remove('visible');
+      document.body.style.overflow = '';
+    }
+
+    hamburger.addEventListener('click', openDrawer);
+    drawerClose.addEventListener('click', closeDrawer);
+    overlay.addEventListener('click', closeDrawer);
+
+    drawer.querySelectorAll('a').forEach(link => {
+      link.addEventListener('click', closeDrawer);
+    });
+
+    // ============================
+    // Header scroll effect
+    // ============================
+    const header = document.getElementById('header');
+    window.addEventListener('scroll', () => {
+      if (window.scrollY > 50) {
+        header.style.background = 'rgba(0,0,0,0.95)';
+      } else {
+        header.style.background = 'rgba(0,0,0,0.85)';
+      }
+    });
+
+    // ============================
+    // Hero parallax
+    // ============================
+    const heroBg = document.querySelector('.hero-bg');
+    window.addEventListener('scroll', () => {
+      const scrolled = window.scrollY;
+      if (scrolled < window.innerHeight) {
+        heroBg.style.transform = `scale(1.05) translateY(${scrolled * 0.3}px)`;
+      }
+    });
+
+    // ============================
+    // Scroll Animations
+    // ============================
+    const animatedEls = document.querySelectorAll('.fade-in, .fade-left, .fade-right');
+
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.1, rootMargin: '0px 0px -60px 0px' });
+
+    animatedEls.forEach(el => observer.observe(el));
+
+    // ============================
+    // Splide: About Slider
+    // ============================
+    const aboutSplide = new Splide('#about-slider', {
+      type: 'loop',
+      autoplay: true,
+      interval: 3500,
+      pauseOnHover: true,
+      pauseOnFocus: true,
+      arrows: false,
+      pagination: true,
+      speed: 700,
+    });
+    aboutSplide.mount();
+
+    // ============================
+    // Splide: Testimonials Slider
+    // ============================
+    const testimonialSplide = new Splide('#testimonials-slider', {
+      type: 'loop',
+      perPage: 3,
+      perMove: 1,
+      gap: '1.5rem',
+      focus: 'center',
+      autoplay: true,
+      interval: 4000,
+      pauseOnHover: true,
+      pauseOnFocus: true,
+      arrows: true,
+      pagination: true,
+      speed: 600,
+      breakpoints: {
+        1024: { perPage: 2 },
+        767: { perPage: 1 },
+      },
+    });
+    testimonialSplide.mount();
+
+    // ============================
+    // Stagger testimonial slides
+    // ============================
+    const slides = document.querySelectorAll('#testimonials-slider .splide__slide');
+    slides.forEach((slide, i) => {
+      slide.style.transitionDelay = `${i * 0.08}s`;
+    });
+
+    // ============================
+    // Cloudinary Upload Widget
+    // ============================
+    // REPLACE these two values with your own from cloudinary.com/console
+    const CLOUDINARY_CLOUD_NAME  = 'YOUR_CLOUD_NAME';   // e.g. 'mycloudname'
+    const CLOUDINARY_UPLOAD_PRESET = 'YOUR_UPLOAD_PRESET'; // e.g. 'jtees_unsigned'
+
+    let uploadWidget;
+
+    if (typeof cloudinary !== 'undefined') {
+      uploadWidget = cloudinary.createUploadWidget({
+        cloudName: CLOUDINARY_CLOUD_NAME,
+        uploadPreset: CLOUDINARY_UPLOAD_PRESET,
+        sources: ['local', 'camera', 'url'],
+        multiple: false,
+        resourceType: 'image',
+        maxFileSize: 10000000, // 10 MB
+        styles: {
+          palette: {
+            window: '#111111',
+            windowBorder: '#333333',
+            tabIcon: '#A52429',
+            menuIcons: '#999999',
+            textDark: '#000000',
+            textLight: '#ffffff',
+            link: '#A52429',
+            action: '#A52429',
+            inactiveTabIcon: '#666666',
+            error: '#f87171',
+            inProgress: '#A52429',
+            complete: '#4ade80',
+            sourceBg: '#1a1a1a',
+          }
+        }
+      }, (error, result) => {
+        if (!error && result && result.event === 'success') {
+          const url = result.info.secure_url;
+          document.getElementById('photo-url-field').value = url;
+          document.getElementById('preview-img').src = url;
+          document.getElementById('upload-preview').style.display = 'block';
+          document.getElementById('upload-trigger').style.display = 'none';
+        }
+      });
+    }
+
+    document.getElementById('upload-trigger').addEventListener('click', () => {
+      if (uploadWidget) {
+        uploadWidget.open();
+      } else {
+        alert('Cloudinary is not configured yet. Set YOUR_CLOUD_NAME and YOUR_UPLOAD_PRESET in the script.');
+      }
+    });
+
+    document.getElementById('remove-upload').addEventListener('click', () => {
+      document.getElementById('photo-url-field').value = '';
+      document.getElementById('preview-img').src = '';
+      document.getElementById('upload-preview').style.display = 'none';
+      document.getElementById('upload-trigger').style.display = 'block';
+    });
+
+    // ============================
+    // Formspree form submission
+    // ============================
+    const quoteForm = document.getElementById('quote-form');
+    const submitBtn = document.getElementById('submit-btn');
+    const formStatus = document.getElementById('form-status');
+
+    quoteForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Sending...';
+      formStatus.className = '';
+      formStatus.textContent = '';
+
+      const data = new FormData(quoteForm);
+
+      try {
+        const res = await fetch(quoteForm.action, {
+          method: 'POST',
+          body: data,
+          headers: { Accept: 'application/json' }
+        });
+
+        if (res.ok) {
+          formStatus.className = 'success';
+          formStatus.textContent = "We got it! We'll be in touch soon.";
+          quoteForm.reset();
+          document.getElementById('photo-url-field').value = '';
+          document.getElementById('preview-img').src = '';
+          document.getElementById('upload-preview').style.display = 'none';
+          document.getElementById('upload-trigger').style.display = 'block';
+        } else {
+          throw new Error('Server error');
+        }
+      } catch {
+        formStatus.className = 'error';
+        formStatus.textContent = 'Something went wrong. Please call or DM us directly.';
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Send Request';
+      }
+    });
+  </script>
+</body>
+</html>
