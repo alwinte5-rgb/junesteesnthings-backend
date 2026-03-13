@@ -47,8 +47,8 @@ async function initDB() {
 
 const mailer = nodemailer.createTransport({
   host:   process.env.SMTP_HOST,
-  port:   parseInt(process.env.SMTP_PORT || '465'),
-  secure: process.env.SMTP_PORT !== '587',
+  port:   parseInt(process.env.OUTGOING_SMTP_PORT || '465'),
+  secure: process.env.OUTGOING_SMTP_PORT !== '587',
   auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
 });
 
@@ -117,7 +117,7 @@ const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_A
 
 async function sendSMS(to, body) {
   await twilioClient.messages.create({
-    from: process.env.TWILIO_FROM_NUMBER,
+    from: process.env.TWILIO_PHONE_NUMBER,
     to,
     body,
   });
@@ -127,7 +127,7 @@ async function sendSMS(to, body) {
 
 const hubspot = axios.create({
   baseURL: 'https://api.hubapi.com',
-  headers: { Authorization: `Bearer ${process.env.HUBSPOT_TOKEN}` },
+  headers: { Authorization: `Bearer ${process.env.HUBSPOT_ACCESS_TOKEN}` },
 });
 
 async function createOrUpdateHubSpotContact(s) {
@@ -313,7 +313,7 @@ app.post('/submit', async (req, res) => {
     await Promise.allSettled([
       sendNotificationEmail(s),
       sendCustomerConfirmationEmail(s),
-      sendSMS(process.env.TWILIO_TO_NUMBER, [
+      sendSMS(process.env.TWILIO_TO_NUMBER  // add this variable in Railway, [
         `New quote from ${s.name}`,
         `📞 ${s.phone}`,
         `✉️  ${s.email}`,
@@ -429,7 +429,7 @@ app.post('/webhooks/clover', async (req, res) => {
 
     // Notify you via SMS
     sendSMS(
-      process.env.TWILIO_TO_NUMBER,
+      process.env.TWILIO_TO_NUMBER  // add this variable in Railway,
       `Payment received!\n${sub.name} paid $${(amount / 100).toFixed(2)}\n📞 ${sub.phone}`
     ).catch(err => console.error('Payment SMS failed:', err.message));
 
