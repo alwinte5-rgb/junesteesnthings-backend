@@ -399,6 +399,9 @@ app.post('/orders/create', requireAdmin, async (req, res) => {
 // In your Clover Developer Dashboard, set the webhook URL to:
 // https://www.jtees.net/webhooks/clover
 
+// GET handler for Clover URL verification
+app.get('/webhooks/clover', (_req, res) => res.sendStatus(200));
+
 app.post('/webhooks/clover', async (req, res) => {
   // Verify the request came from Clover using the app secret
   const signature = req.headers['x-clover-auth'];
