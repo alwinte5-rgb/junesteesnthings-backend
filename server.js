@@ -22,7 +22,10 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // ─── Database ─────────────────────────────────────────────────────────────────
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+});
 
 async function initDB() {
   await pool.query(`
