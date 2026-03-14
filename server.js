@@ -3,6 +3,7 @@ require('dotenv').config();
 const express    = require('express');
 const cors       = require('cors');
 const path       = require('path');
+const crypto     = require('crypto');
 const { Pool }   = require('pg');
 const nodemailer = require('nodemailer');
 const twilio     = require('twilio');
@@ -396,9 +397,22 @@ app.post('/orders/create', requireAdmin, async (req, res) => {
 
 // ── Clover payment webhook ─────────────────────────────────────────────────────
 // In your Clover Developer Dashboard, set the webhook URL to:
-// https://junesteesnthings-production.up.railway.app/webhooks/clover
+// https://www.jtees.net/webhooks/clover
 
 app.post('/webhooks/clover', async (req, res) => {
+  // Verify the request came from Clover using the app secret
+  const signature = req.headers['x-clover-auth'];
+  if (process.env.CLOVER_APP_SECRET && signature) {
+    const expected = crypto
+      .createHmac('sha256', process.env.CLOVER_APP_SECRET)
+      .update(JSON.stringify(req.body))
+      .digest('base64');
+    if (signature !== expected) {
+      console.warn('Clover webhook signature mismatch — rejected');
+      return res.sendStatus(401);
+    }
+  }
+
   res.sendStatus(200); // acknowledge immediately
 
   const { merchantId, type, id: paymentId } = req.body;
