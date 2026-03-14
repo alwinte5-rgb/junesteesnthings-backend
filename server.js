@@ -314,7 +314,7 @@ app.post('/submit', async (req, res) => {
     await Promise.allSettled([
       sendNotificationEmail(s),
       sendCustomerConfirmationEmail(s),
-      sendSMS(process.env.TWILIO_TO_NUMBER  // add this variable in Railway, [
+      sendSMS(process.env.TWILIO_TO_NUMBER, [
         `New quote from ${s.name}`,
         `📞 ${s.phone}`,
         `✉️  ${s.email}`,
@@ -446,7 +446,7 @@ app.post('/webhooks/clover', async (req, res) => {
 
     // Notify you via SMS
     sendSMS(
-      process.env.TWILIO_TO_NUMBER  // add this variable in Railway,
+      process.env.TWILIO_TO_NUMBER,
       `Payment received!\n${sub.name} paid $${(amount / 100).toFixed(2)}\n📞 ${sub.phone}`
     ).catch(err => console.error('Payment SMS failed:', err.message));
 
