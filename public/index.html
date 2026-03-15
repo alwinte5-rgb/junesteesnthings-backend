@@ -19,27 +19,31 @@
        CSS VARIABLES & RESET
     ============================ */
     :root {
-      --bg-primary: #f7f6f3;
-      --bg-secondary: #0a0a0a;
-      --bg-card: #111111;
-      --bg-card-hover: #1a1a1a;
-      --text-heading: #ffffff;
-      --text-body: rgba(248, 244, 233, 0.81);
-      --text-muted: #999999;
-      --accent: #A52429;
-      --accent-hover: #8a1e22;
-      --border: rgba(255,255,255,0.08);
-      --border-accent: rgba(165,36,41,0.4);
-      --btn-primary-bg: #A52429;
-      --btn-primary-text: #ffffff;
-      --btn-secondary-text: #ffffff;
-      --btn-secondary-border: #ffffff;
-      --btn-secondary-hover-bg: #ffffff;
-      --btn-secondary-hover-text: #000000;
-      --header-bg: rgba(0,0,0,0.85);
-      --drawer-bg: #0a0a0a;
-      --badge-bg: #A52429;
-      --scrollbar-thumb: #A52429;
+      --navy:       #0B1F4B;
+      --navy-mid:   #162a5e;
+      --gold:       #F4A623;
+      --gold-dk:    #C9861A;
+      --bg-primary:   #ffffff;
+      --bg-secondary: #f7f6f3;
+      --bg-card:      #ffffff;
+      --bg-card-hover:#f7f6f3;
+      --text-heading: #0B1F4B;
+      --text-body:    #374151;
+      --text-muted:   #6B7280;
+      --accent:       #F4A623;
+      --accent-hover: #C9861A;
+      --border:       #E5E7EB;
+      --border-accent: rgba(244,166,35,0.4);
+      --btn-primary-bg:    #0B1F4B;
+      --btn-primary-text:  #ffffff;
+      --btn-secondary-text:   #0B1F4B;
+      --btn-secondary-border: #0B1F4B;
+      --btn-secondary-hover-bg:   #0B1F4B;
+      --btn-secondary-hover-text: #ffffff;
+      --header-bg:   rgba(11,31,75,0.96);
+      --drawer-bg:   #0B1F4B;
+      --badge-bg:    #F4A623;
+      --scrollbar-thumb: #F4A623;
       --radius: 8px;
       --radius-lg: 16px;
       --transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -76,7 +80,7 @@
     ============================ */
     .announcement-bar {
       background: var(--accent);
-      color: #fff;
+      color: var(--navy);
       text-align: center;
       padding: 0.6rem 1rem;
       font-size: 0.82rem;
@@ -156,7 +160,7 @@
 
     nav a:hover {
       color: var(--text-heading);
-      background: rgba(255,255,255,0.06);
+      background: rgba(255,255,255,0.12);
     }
 
     .header-actions {
@@ -179,14 +183,14 @@
 
     .icon-link:hover {
       background: var(--accent);
-      color: #fff;
+      color: var(--navy);
     }
 
     .icon-link svg { width: 16px; height: 16px; fill: currentColor; }
 
     .btn-quote {
       background: var(--accent);
-      color: #fff;
+      color: var(--navy);
       font-size: 0.82rem;
       font-weight: 600;
       padding: 0.55rem 1.25rem;
@@ -299,14 +303,14 @@
     }
 
     .btn-primary {
-      background: var(--accent);
-      color: #fff;
+      background: var(--btn-primary-bg);
+      color: var(--btn-primary-text);
     }
 
     .btn-primary:hover {
-      background: var(--accent-hover);
+      background: var(--navy-mid);
       transform: translateY(-2px);
-      box-shadow: 0 8px 24px rgba(165, 36, 41, 0.35);
+      box-shadow: 0 8px 24px rgba(11,31,75,0.35);
     }
 
     .btn-secondary {
@@ -438,7 +442,7 @@
         135deg,
         rgba(0,0,0,0.85) 0%,
         rgba(0,0,0,0.55) 50%,
-        rgba(165,36,41,0.15) 100%
+        rgba(11,31,75,0.15) 100%
       );
     }
 
@@ -540,37 +544,46 @@
     /* ============================
        SERVICES
     ============================ */
-    /* ── Light background for all content sections ── */
+    /* ── Section backgrounds ── */
     .services  { background: #ffffff !important; }
     .portfolio { background: #f7f6f3 !important; }
-    .about     { background: #ffffff !important; }
+    .about     { background: #0B1F4B !important; }
+    .packages  { background: #ffffff !important; }
     .reviews   { background: #f7f6f3 !important; }
-    .contact   { background: #ffffff !important; }
-    .packages  { background: #f7f6f3 !important; }
+    .contact   { background: #0B1F4B !important; }
 
-    /* Section-level text — dark on light backgrounds */
-    .section-header h2   { color: #111111; }
-    .section-header p    { color: #555555; }
-    .section-tag         { background: rgba(165,36,41,0.08); color: var(--accent); border-color: rgba(165,36,41,0.2); }
+    /* Section header text — navy on light, white on dark */
+    .section-header h2 { color: var(--text-heading); }
+    .section-header p  { color: var(--text-muted); }
+    .section-tag { color: var(--gold); letter-spacing: 0.12em; }
 
-    /* About section */
-    .about-content h2    { color: #111111; }
-    .about-content p     { color: #444444; }
-    .badge               { background: rgba(0,0,0,0.06); color: #333; border-color: rgba(0,0,0,0.1); }
+    /* About section (navy bg) — white text */
+    .about .section-header h2 { color: #ffffff; }
+    .about .section-header p  { color: rgba(255,255,255,0.7); }
+    .about-content h2  { color: #ffffff; }
+    .about-content p   { color: rgba(255,255,255,0.75); }
+    .badge { background: rgba(255,255,255,0.12); color: #ffffff; border-color: rgba(255,255,255,0.2); }
 
-    /* Reviews section — text outside cards */
-    .rating-number       { color: #111111; }
-    .rating-count        { color: #777777; }
+    /* Contact section (navy bg) — white text */
+    .contact .section-header h2 { color: #ffffff; }
+    .contact .section-header p  { color: rgba(255,255,255,0.7); }
+    .contact-detail-text { color: rgba(255,255,255,0.8); }
+    .form-label { color: rgba(255,255,255,0.85); }
+    .form-group input,
+    .form-group textarea,
+    .form-group select { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.2); color: #ffffff; }
+    .form-group input::placeholder,
+    .form-group textarea::placeholder { color: rgba(255,255,255,0.4); }
 
-    /* Contact section */
-    .contact-detail-text { color: #333333; }
-    .form-label          { color: #111111; }
+    /* Reviews — on off-white bg */
+    .rating-number { color: var(--navy); }
+    .rating-count  { color: var(--text-muted); }
 
-    /* Packages section divider */
-    .pricing-section-divider h3 { color: #111111; }
-    .pricing-section-divider p  { color: #555555; }
-    .ala-carte-section h3       { color: #111111; }
-    .ala-carte-section > p      { color: #555555; }
+    /* Packages/pricing — on white bg */
+    .pricing-section-divider h3 { color: var(--navy); }
+    .pricing-section-divider p  { color: var(--text-muted); }
+    .ala-carte-section h3 { color: var(--navy); }
+    .ala-carte-section > p { color: var(--text-muted); }
 
     /* ── Dropdown nav ── */
     .nav-dropdown { position: relative; }
@@ -601,7 +614,7 @@
       white-space: nowrap;
     }
     .nav-dropdown-menu-inner {
-      background: #1a1a1a;
+      background: #0B1F4B;
       border: 1px solid rgba(255,255,255,0.12);
       border-radius: var(--radius);
       padding: 0.5rem 0;
@@ -656,7 +669,7 @@
     .service-icon {
       width: 52px;
       height: 52px;
-      background: rgba(165,36,41,0.12);
+      background: rgba(244,166,35,0.15);
       border-radius: var(--radius);
       display: flex;
       align-items: center;
@@ -735,7 +748,7 @@
     /* ============================
        ABOUT
     ============================ */
-    .about { background: #ffffff !important; }
+    .about { background: #0B1F4B !important; }
 
     .about-inner {
       display: grid;
@@ -776,9 +789,9 @@
       font-weight: 600;
       padding: 0.45rem 1rem;
       border-radius: 100px;
-      background: rgba(165,36,41,0.12);
-      border: 1px solid rgba(165,36,41,0.3);
-      color: #fff;
+      background: rgba(255,255,255,0.12);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: #ffffff;
     }
 
     .badge span { font-size: 0.9rem; }
@@ -798,7 +811,7 @@
     /* ============================
        PACKAGES
     ============================ */
-    .packages { background: #f7f6f3 !important; }
+    .packages { background: #ffffff !important; }
 
     .packages-grid {
       display: grid;
@@ -823,7 +836,8 @@
 
     .package-card.featured {
       border-color: var(--accent);
-      background: linear-gradient(145deg, #111 0%, rgba(165,36,41,0.08) 100%);
+      background: linear-gradient(145deg, var(--navy) 0%, var(--navy-mid) 100%);
+      color: #ffffff;
     }
 
     .package-badge {
@@ -1023,7 +1037,7 @@
       bottom: 0;
       left: 0;
       right: 0;
-      background: #111;
+      background: #0B1F4B;
       border-top: 1px solid var(--accent);
       padding: 0.85rem 1.5rem;
       display: flex;
@@ -1070,7 +1084,7 @@
 
     /* Design Ideas intro */
     .design-ideas-intro {
-      background: rgba(165,36,41,0.08);
+      background: rgba(244,166,35,0.08);
       border: 1px solid var(--border-accent);
       border-radius: var(--radius);
       padding: 1rem 1.25rem;
@@ -1195,7 +1209,7 @@
     }
 
     .design-note {
-      background: rgba(165,36,41,0.1);
+      background: rgba(244,166,35,0.1);
       border: 1px solid var(--border-accent);
       border-radius: var(--radius);
       padding: 0.75rem 1rem;
@@ -1425,7 +1439,7 @@
     /* ============================
        CONTACT
     ============================ */
-    .contact { background: #ffffff !important; }
+    .contact { background: #0B1F4B !important; }
 
     .contact-inner {
       display: grid;
@@ -1466,7 +1480,7 @@
       width: 40px;
       height: 40px;
       flex-shrink: 0;
-      background: rgba(165,36,41,0.12);
+      background: rgba(244,166,35,0.2);
       border-radius: var(--radius);
       display: flex;
       align-items: center;
@@ -1587,7 +1601,7 @@
 
     .upload-area:hover {
       border-color: var(--accent);
-      background: rgba(165,36,41,0.05);
+      background: rgba(244,166,35,0.05);
     }
 
     .upload-area p {
@@ -1650,8 +1664,8 @@
        FOOTER
     ============================ */
     footer {
-      background: var(--bg-secondary);
-      border-top: 1px solid var(--border);
+      background: var(--navy);
+      border-top: 1px solid rgba(255,255,255,0.1);
       padding: 4rem 0 2rem;
     }
 
@@ -1660,7 +1674,7 @@
       grid-template-columns: 1.4fr repeat(3, 1fr);
       gap: 3rem;
       padding-bottom: 3rem;
-      border-bottom: 1px solid var(--border);
+      border-bottom: 1px solid rgba(255,255,255,0.1);
       margin-bottom: 2rem;
     }
 
@@ -1668,7 +1682,7 @@
 
     .footer-tagline {
       font-size: 0.85rem;
-      color: var(--text-muted);
+      color: rgba(255,255,255,0.6);
       margin-bottom: 1.25rem;
       line-height: 1.6;
     }
@@ -1698,7 +1712,7 @@
       font-weight: 700;
       letter-spacing: 0.12em;
       text-transform: uppercase;
-      color: var(--text-heading);
+      color: rgba(255,255,255,0.9);
       margin-bottom: 1.25rem;
     }
 
@@ -1710,7 +1724,7 @@
 
     .footer-links a {
       font-size: 0.875rem;
-      color: var(--text-muted);
+      color: rgba(255,255,255,0.6);
       transition: color var(--transition);
     }
 
@@ -1721,7 +1735,7 @@
       justify-content: space-between;
       align-items: center;
       font-size: 0.8rem;
-      color: var(--text-muted);
+      color: rgba(255,255,255,0.5);
       flex-wrap: wrap;
       gap: 0.5rem;
     }
@@ -2913,9 +2927,9 @@
     const header = document.getElementById('header');
     window.addEventListener('scroll', () => {
       if (window.scrollY > 50) {
-        header.style.background = 'rgba(0,0,0,0.95)';
+        header.style.background = 'rgba(11,31,75,0.98)';
       } else {
-        header.style.background = 'rgba(0,0,0,0.85)';
+        header.style.background = 'rgba(11,31,75,0.96)';
       }
     });
 
@@ -3011,19 +3025,19 @@
         maxFileSize: 10000000, // 10 MB
         styles: {
           palette: {
-            window: '#111111',
-            windowBorder: '#333333',
-            tabIcon: '#A52429',
-            menuIcons: '#999999',
+            window: '#0B1F4B',
+            windowBorder: '#162a5e',
+            tabIcon: '#F4A623',
+            menuIcons: '#aab4c8',
             textDark: '#000000',
             textLight: '#ffffff',
-            link: '#A52429',
-            action: '#A52429',
-            inactiveTabIcon: '#666666',
+            link: '#F4A623',
+            action: '#F4A623',
+            inactiveTabIcon: '#6B7280',
             error: '#f87171',
-            inProgress: '#A52429',
+            inProgress: '#F4A623',
             complete: '#4ade80',
-            sourceBg: '#1a1a1a',
+            sourceBg: '#162a5e',
           }
         }
       }, (error, result) => {
