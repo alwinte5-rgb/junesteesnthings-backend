@@ -27,7 +27,7 @@
       --bg-secondary: #f7f6f3;
       --bg-card:      #ffffff;
       --bg-card-hover:#f7f6f3;
-      --text-heading: #0B1F4B;
+      --text-heading: #ffffff;
       --text-body:    #374151;
       --text-muted:   #6B7280;
       --accent:       #F4A623;
@@ -152,14 +152,14 @@
     nav a {
       font-size: 0.85rem;
       font-weight: 500;
-      color: var(--text-body);
+      color: rgba(255,255,255,0.8);
       padding: 0.5rem 0.75rem;
       border-radius: var(--radius);
       transition: color var(--transition), background var(--transition);
     }
 
     nav a:hover {
-      color: var(--text-heading);
+      color: #ffffff;
       background: rgba(255,255,255,0.12);
     }
 
@@ -576,13 +576,13 @@
     .form-group textarea::placeholder { color: rgba(255,255,255,0.4); }
 
     /* Reviews — on off-white bg */
-    .rating-number { color: var(--navy); }
+    .rating-number { color: #ffffff; }
     .rating-count  { color: var(--text-muted); }
 
     /* Packages/pricing — on white bg */
-    .pricing-section-divider h3 { color: var(--navy); }
+    .pricing-section-divider h3 { color: #ffffff; }
     .pricing-section-divider p  { color: var(--text-muted); }
-    .ala-carte-section h3 { color: var(--navy); }
+    .ala-carte-section h3 { color: #ffffff; }
     .ala-carte-section > p { color: var(--text-muted); }
 
     /* ── Dropdown nav ── */
@@ -1843,7 +1843,7 @@
         <a href="#packages">Packages</a>
         <a href="/grad/" style="color:var(--gold, #F4A623);font-weight:700;">Grad 2026</a>
         <div class="nav-dropdown">
-          <a href="/design-ideas.html" class="nav-dropdown-toggle">Design Ideas</a>
+          <a href="/design-ideas.html" class="nav-dropdown-toggle" style="color:var(--gold);">Design Ideas</a>
           <div class="nav-dropdown-menu">
             <div class="nav-dropdown-menu-inner">
               <a href="/design-ideas.html">✦ All Designs</a>
