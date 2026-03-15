@@ -19,7 +19,7 @@
        CSS VARIABLES & RESET
     ============================ */
     :root {
-      --bg-primary: #000000;
+      --bg-primary: #f7f6f3;
       --bg-secondary: #0a0a0a;
       --bg-card: #111111;
       --bg-card-hover: #1a1a1a;
@@ -540,13 +540,13 @@
     /* ============================
        SERVICES
     ============================ */
-    /* ── White background for all sections ── */
-    .services  { background: #ffffff; }
-    .portfolio { background: #f7f6f3; }
-    .about     { background: #ffffff; }
-    .reviews   { background: #f7f6f3; }
-    .contact   { background: #ffffff; }
-    .packages  { background: #f7f6f3; }
+    /* ── Light background for all content sections ── */
+    .services  { background: #ffffff !important; }
+    .portfolio { background: #f7f6f3 !important; }
+    .about     { background: #ffffff !important; }
+    .reviews   { background: #f7f6f3 !important; }
+    .contact   { background: #ffffff !important; }
+    .packages  { background: #f7f6f3 !important; }
 
     /* Section-level text — dark on light backgrounds */
     .section-header h2   { color: #111111; }
@@ -589,43 +589,43 @@
 
     .nav-dropdown-menu {
       position: absolute;
-      top: calc(100% + 8px);
+      top: 100%;
       left: 50%;
       transform: translateX(-50%);
-      background: #1a1a1a;
-      border: 1px solid rgba(255,255,255,0.1);
-      border-radius: var(--radius);
-      padding: 0.5rem 0;
-      min-width: 200px;
+      padding-top: 6px;
+      min-width: 210px;
       opacity: 0;
       pointer-events: none;
-      transition: opacity 0.2s, transform 0.2s;
-      transform: translateX(-50%) translateY(-4px);
+      transition: opacity 0.15s;
       z-index: 500;
       white-space: nowrap;
     }
-
-    .nav-dropdown:hover .nav-dropdown-menu,
-    .nav-dropdown:focus-within .nav-dropdown-menu {
-      opacity: 1;
-      pointer-events: auto;
-      transform: translateX(-50%) translateY(0);
+    .nav-dropdown-menu-inner {
+      background: #1a1a1a;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: var(--radius);
+      padding: 0.5rem 0;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
     }
 
-    .nav-dropdown-menu a {
+    .nav-dropdown-menu.open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .nav-dropdown-menu-inner a {
       display: block;
-      padding: 0.45rem 1rem;
+      padding: 0.45rem 1.1rem;
       font-size: 0.82rem;
       font-weight: 500;
       color: rgba(248,244,233,0.8);
-      border-radius: 0;
       transition: background 0.15s, color 0.15s;
     }
-    .nav-dropdown-menu a:hover {
+    .nav-dropdown-menu-inner a:hover {
       background: rgba(255,255,255,0.07);
       color: #fff;
     }
-    .nav-dropdown-menu .dropdown-divider {
+    .nav-dropdown-menu-inner .dropdown-divider {
       height: 1px;
       background: rgba(255,255,255,0.08);
       margin: 0.4rem 0;
@@ -681,7 +681,7 @@
     /* ============================
        PORTFOLIO
     ============================ */
-    .portfolio { background: var(--bg-primary); }
+    .portfolio { background: #f7f6f3 !important; }
 
     .portfolio-grid {
       display: grid;
@@ -735,7 +735,7 @@
     /* ============================
        ABOUT
     ============================ */
-    .about { background: var(--bg-secondary); }
+    .about { background: #ffffff !important; }
 
     .about-inner {
       display: grid;
@@ -798,7 +798,7 @@
     /* ============================
        PACKAGES
     ============================ */
-    .packages { background: var(--bg-primary); }
+    .packages { background: #f7f6f3 !important; }
 
     .packages-grid {
       display: grid;
@@ -1339,7 +1339,7 @@
     /* ============================
        REVIEWS
     ============================ */
-    .reviews { background: var(--bg-secondary); }
+    .reviews { background: #f7f6f3 !important; }
 
     .rating-summary {
       display: flex;
@@ -1425,7 +1425,7 @@
     /* ============================
        CONTACT
     ============================ */
-    .contact { background: var(--bg-primary); }
+    .contact { background: #ffffff !important; }
 
     .contact-inner {
       display: grid;
@@ -1769,7 +1769,7 @@
     "@context": "https://schema.org",
     "@type": "LocalBusiness",
     "name": "June's Tees & Things",
-    "description": "Custom screen printing, embroidery, DTF transfers, banners, fat heads, and graphic design in Chicago.",
+    "description": "Custom screen printing, embroidery, DTF transfers, banners, event decor, party favors, and graphic design in Chicago.",
     "url": "https://jtees.net",
     "telephone": "+17738491854",
     "address": {
@@ -1828,17 +1828,30 @@
         <a href="#packages">Packages</a>
         <a href="/grad/" style="color:var(--gold, #F4A623);font-weight:700;">Grad 2026</a>
         <div class="nav-dropdown">
-          <a href="/grad/design-ideas.html" class="nav-dropdown-toggle" style="color:var(--gold, #F4A623);font-weight:700;">Design Ideas</a>
+          <a href="/grad/design-ideas.html" class="nav-dropdown-toggle" style="color:var(--gold, #F4A623);font-weight:700;">Grad Designs</a>
           <div class="nav-dropdown-menu">
-            <a href="/grad/design-ideas.html">✦ All Designs</a>
-            <div class="dropdown-divider"></div>
-            <a href="/grad/design-ideas.html?category=graduation">🎓 Graduation</a>
-            <a href="/grad/design-ideas.html?category=prom">✨ Prom</a>
-            <a href="/grad/design-ideas.html?category=birthdays">🎂 Birthdays</a>
-            <a href="/grad/design-ideas.html?category=holidays">🎄 Holidays</a>
-            <a href="/grad/design-ideas.html?category=stoles">🎀 Stoles</a>
-            <a href="/grad/design-ideas.html?category=allover">🖨️ All-Over Print</a>
-            <a href="/grad/design-ideas.html?category=snacks">🍿 Snack &amp; Party</a>
+            <div class="nav-dropdown-menu-inner">
+              <a href="/grad/design-ideas.html">✦ All Grad &amp; Prom</a>
+              <div class="dropdown-divider"></div>
+              <a href="/grad/design-ideas.html?category=graduation">🎓 Graduation</a>
+              <a href="/grad/design-ideas.html?category=prom">✨ Prom</a>
+            </div>
+          </div>
+        </div>
+        <div class="nav-dropdown">
+          <a href="/design-ideas.html" class="nav-dropdown-toggle">Design Ideas</a>
+          <div class="nav-dropdown-menu">
+            <div class="nav-dropdown-menu-inner">
+              <a href="/design-ideas.html">✦ All Designs</a>
+              <div class="dropdown-divider"></div>
+              <a href="/design-ideas.html?category=graduation">🎓 Graduation</a>
+              <a href="/design-ideas.html?category=prom">✨ Prom</a>
+              <a href="/design-ideas.html?category=birthdays">🎂 Birthdays</a>
+              <a href="/design-ideas.html?category=holidays">🎄 Holidays</a>
+              <a href="/design-ideas.html?category=stoles">🎀 Stoles</a>
+              <a href="/design-ideas.html?category=allover">🖨️ All-Over Print</a>
+              <a href="/design-ideas.html?category=snacks">🍿 Snack &amp; Party</a>
+            </div>
           </div>
         </div>
         <a href="#reviews">Reviews</a>
@@ -1941,9 +1954,9 @@
           <p>Custom banners, yard signs, and displays for events, businesses, graduations, and special occasions.</p>
         </div>
         <div class="service-card fade-in" style="transition-delay:0.25s">
-          <div class="service-icon">😄</div>
-          <h3>Fat Heads</h3>
-          <p>Oversized custom face cutouts — the life of every party, game, or celebration. Everyone loves a big head!</p>
+          <div class="service-icon">🎉</div>
+          <h3>Event Decor & Party Favors</h3>
+          <p>Custom arches, cutouts, chip bags, gable boxes, goodie bags, pillow covers &amp; more — everything to make your event unforgettable.</p>
         </div>
         <div class="service-card fade-in" style="transition-delay:0.3s">
           <div class="service-icon">✏️</div>
@@ -2096,7 +2109,7 @@
       <div class="section-header fade-in">
         <div class="section-tag">Pricing</div>
         <h2>Packages & Pricing</h2>
-        <p>Grad season packages, à la carte items, and Fat Heads — we have something for every budget and occasion.</p>
+        <p>Grad season packages, à la carte items, and event decor — we have something for every budget and occasion.</p>
         <p class="packages-terms-inline"><strong>Design fees included</strong> &nbsp;·&nbsp; 2–3 week delivery &nbsp;·&nbsp; Payment plans available (book 1 month in advance)</p>
       </div>
 
@@ -2236,7 +2249,7 @@
           </div>
 
           <div class="ala-carte-card">
-            <h4>😄 Fat Heads Pricing</h4>
+            <h4>🎉 Event Decor & Party Favors</h4>
             <div class="ala-carte-items">
               <div class="ala-carte-item">
                 <span>12"×18" Single</span>
@@ -2817,7 +2830,7 @@
             <li><a href="#services">Embroidery</a></li>
             <li><a href="#services">DTF Transfers</a></li>
             <li><a href="#services">Banners & Signs</a></li>
-            <li><a href="#services">Fat Heads</a></li>
+            <li><a href="#services">Event Decor & Party Favors</a></li>
           </ul>
         </div>
 
@@ -3144,6 +3157,23 @@
         setTimeout(function () { textarea.focus(); }, 400);
       });
     })();
+
+  /* ── Nav dropdown hover with delay ── */
+  (function() {
+    document.querySelectorAll('.nav-dropdown').forEach(function(wrapper) {
+      var menu = wrapper.querySelector('.nav-dropdown-menu');
+      var timer;
+      wrapper.addEventListener('mouseenter', function() {
+        clearTimeout(timer);
+        menu.classList.add('open');
+      });
+      wrapper.addEventListener('mouseleave', function() {
+        timer = setTimeout(function() {
+          menu.classList.remove('open');
+        }, 200);
+      });
+    });
+  })();
   </script>
 </body>
 </html>

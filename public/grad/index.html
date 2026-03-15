@@ -491,26 +491,30 @@
     .grad-nav-dropdown { position: relative; }
     .grad-dropdown-menu {
       position: absolute;
-      top: calc(100% + 10px);
+      top: 100%;
       left: 50%;
-      transform: translateX(-50%) translateY(-4px);
+      transform: translateX(-50%);
+      padding-top: 8px;
+      min-width: 200px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.15s;
+      z-index: 500;
+      white-space: nowrap;
+    }
+    .grad-dropdown-menu-inner {
       background: var(--navy-mid);
       border: 1px solid rgba(244,166,35,0.2);
       border-radius: 10px;
       padding: 0.5rem 0;
-      min-width: 200px;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.2s, transform 0.2s;
-      z-index: 500;
-      white-space: nowrap;
+      box-shadow: 0 8px 28px rgba(0,0,0,0.3);
     }
-    .grad-nav-dropdown:hover .grad-dropdown-menu {
+    .grad-nav-dropdown:hover .grad-dropdown-menu,
+    .grad-dropdown-menu.open {
       opacity: 1;
       pointer-events: auto;
-      transform: translateX(-50%) translateY(0);
     }
-    .grad-dropdown-menu a {
+    .grad-dropdown-menu-inner a {
       display: block;
       padding: 0.45rem 1rem;
       font-size: 0.82rem;
@@ -519,7 +523,7 @@
       text-decoration: none;
       transition: background 0.15s, color 0.15s;
     }
-    .grad-dropdown-menu a:hover { background: rgba(244,166,35,0.1); color: var(--gold); }
+    .grad-dropdown-menu-inner a:hover { background: rgba(244,166,35,0.1); color: var(--gold); }
     .grad-dropdown-divider { height: 1px; background: rgba(255,255,255,0.08); margin: 0.4rem 0; }
 
     /* ── PACKAGES ── */
@@ -655,7 +659,7 @@
 <div id="announce">
   🎓 Pre-Orders Now Open for Class of 2026
   <span>|</span>
-  Senior Night slots are filling fast — secure yours today
+  Graduation &amp; Prom packages filling fast — order early
   <span>|</span>
   ⚡ 24-Hour Digital Proof Guarantee
 </div>
@@ -669,15 +673,17 @@
       <a href="#packages">Packages</a>
       <a href="#graduation">Graduation</a>
       <div style="position:relative;display:inline-block;" class="grad-nav-dropdown">
-        <a href="design-ideas.html" style="color:var(--gold);display:flex;align-items:center;gap:4px;cursor:pointer;">Design Ideas <span style="font-size:.7rem;opacity:.7;">▾</span></a>
+        <a href="/design-ideas.html" style="color:var(--gold);display:flex;align-items:center;gap:4px;cursor:pointer;">Design Ideas <span style="font-size:.7rem;opacity:.7;">▾</span></a>
         <div class="grad-dropdown-menu">
-          <a href="design-ideas.html">✦ All Designs</a>
-          <div class="grad-dropdown-divider"></div>
-          <a href="design-ideas.html?category=graduation">🎓 Graduation</a>
-          <a href="design-ideas.html?category=prom">✨ Prom</a>
-          <a href="design-ideas.html?category=stoles">🎀 Stoles</a>
-          <a href="design-ideas.html?category=allover">🖨️ All-Over Print</a>
-          <a href="design-ideas.html?category=snacks">🍿 Snack &amp; Party</a>
+          <div class="grad-dropdown-menu-inner">
+            <a href="/design-ideas.html">✦ All Designs</a>
+            <div class="grad-dropdown-divider"></div>
+            <a href="/design-ideas.html?category=graduation">🎓 Graduation</a>
+            <a href="/design-ideas.html?category=prom">✨ Prom</a>
+            <a href="/design-ideas.html?category=stoles">🎀 Stoles</a>
+            <a href="/design-ideas.html?category=allover">🖨️ All-Over Print</a>
+            <a href="/design-ideas.html?category=snacks">🍿 Snack &amp; Party</a>
+          </div>
         </div>
       </div>
       <a href="#prom">Prom</a>
@@ -701,9 +707,9 @@
           <div class="hero-tag-dot"></div>
           Pre-Orders Open · Class of 2026
         </div>
-        <h1>You Only Get<br><em>One</em> Senior Night.</h1>
+        <h1>You Only Get<br><em>One</em> Graduation.</h1>
         <p class="hero-sub">
-          Make it look like the professional event it deserves to be. We build large-format standees, banners, arches, and apparel that transform any gym, field, or backyard into a photo-ready venue — no design experience needed.
+          Make it look like the professional celebration it deserves to be. We build custom apparel, arches, standees, banners, and party favors that transform any backyard into a photo-ready venue — no design experience needed.
         </p>
         <div class="hero-btns">
           <a href="#final-cta" class="btn btn-gold btn-lg btn-arrow">Build My 2026 Bundle</a>
@@ -1263,7 +1269,7 @@
         </details>
         <details>
           <summary>How far in advance should I order?</summary>
-          <div class="faq-ans">We recommend ordering <strong>2–3 weeks before your event</strong>. Senior Night and graduation season book fast — the earlier you lock in, the better your timeline. Rush options may be available; contact us to ask.</div>
+          <div class="faq-ans">We recommend ordering <strong>2–3 weeks before your event</strong>. Graduation and prom season book fast — the earlier you lock in, the better your timeline. Rush options may be available; contact us to ask.</div>
         </details>
         <details>
           <summary>What photos do you need from me?</summary>
@@ -1332,7 +1338,7 @@
   <div class="container">
     <div class="eyebrow eyebrow--light center" style="justify-content:center;">📸 Ready to Order?</div>
     <h2>Let's Make the Class of 2026 Unforgettable</h2>
-    <p class="subhead subhead--light center">Senior Night slots fill up fast as the season approaches. Download the order form now and lock in your production spot before the rush.</p>
+    <p class="subhead subhead--light center">Graduation and prom slots fill up fast. Place your order now and lock in your production spot before the rush.</p>
 
     <div class="cta-cards" style="margin-bottom:48px;">
       <div class="cta-card">
@@ -1429,7 +1435,7 @@
     <!-- Products -->
     <div style="padding:28px 32px;">
 
-      <div style="font-size:.75rem; font-weight:800; text-transform:uppercase; letter-spacing:.1em; color:var(--gold-dk); margin-bottom:12px;">Senior Night</div>
+      <div style="font-size:.75rem; font-weight:800; text-transform:uppercase; letter-spacing:.1em; color:var(--gold-dk); margin-bottom:12px;">Grad &amp; Prom Décor</div>
 
       <div class="b-row">
         <div class="b-info"><div class="b-name">Life-Size Action Standee</div><div class="b-sub">5–6ft, corroplast, easel included</div></div>
@@ -1701,6 +1707,19 @@
       a.href = 'order.html';
     }
   });
+
+  // Dropdown hover with delay
+  document.querySelectorAll('.grad-nav-dropdown').forEach(function(wrapper) {
+    var menu = wrapper.querySelector('.grad-dropdown-menu');
+    var timer;
+    wrapper.addEventListener('mouseenter', function() {
+      clearTimeout(timer);
+      menu.classList.add('open');
+    });
+    wrapper.addEventListener('mouseleave', function() {
+      timer = setTimeout(function() { menu.classList.remove('open'); }, 200);
+    });
+  });
 </script>
 
 <!-- ══ FOOTER ══ -->
@@ -1708,18 +1727,18 @@
   <div class="container">
     <div class="footer-top">
       <div>
-        <div class="footer-logo">PrintCo 2026</div>
-        <p class="footer-about">Custom large-format printing and apparel for graduation and Senior Night. Serving families, schools, and athletic programs across the region.</p>
+        <div class="footer-logo">June's Tees &amp; Things</div>
+        <p class="footer-about">Custom apparel, arches, standees, and event decor for graduation and prom. Serving families, schools, and students across the Chicago region.</p>
       </div>
       <div>
         <div class="footer-col-title">Products</div>
         <ul class="footer-links">
-          <li><a href="#senior-night">Life-Size Standees</a></li>
-          <li><a href="#senior-night">Fence Banners</a></li>
-          <li><a href="#senior-night">Spirit Sticks</a></li>
           <li><a href="#graduation">Corroplast Arches</a></li>
+          <li><a href="#graduation">Life-Size Standees</a></li>
           <li><a href="#graduation">Floor Decals</a></li>
+          <li><a href="#prom">Prom Decor</a></li>
           <li><a href="#apparel">Custom Apparel</a></li>
+          <li><a href="#packages">Packages</a></li>
         </ul>
       </div>
       <div>
