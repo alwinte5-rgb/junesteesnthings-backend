@@ -888,6 +888,133 @@
       color: var(--text-heading);
     }
 
+    /* Section Divider */
+    .pricing-section-divider {
+      margin-top: 4rem;
+      margin-bottom: 3rem;
+      text-align: center;
+      position: relative;
+    }
+
+    .pricing-section-divider::before {
+      content: '';
+      display: block;
+      height: 1px;
+      background: var(--border);
+      margin-bottom: 2rem;
+    }
+
+    .pricing-section-divider .section-tag {
+      display: inline-block;
+      margin-bottom: 0.5rem;
+    }
+
+    .pricing-section-divider h3 {
+      font-size: 1.8rem;
+      font-weight: 900;
+      color: var(--text-heading);
+      margin-bottom: 0.4rem;
+    }
+
+    .pricing-section-divider p {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+
+    /* Design Ideas Section */
+    .design-ideas-section {
+      margin-top: 3.5rem;
+    }
+
+    .design-ideas-section h3 {
+      font-size: 1.4rem;
+      font-weight: 800;
+      color: var(--text-heading);
+      text-align: center;
+      margin-bottom: 0.5rem;
+    }
+
+    .design-ideas-section > p {
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      margin-bottom: 2.5rem;
+    }
+
+    .design-category {
+      margin-bottom: 2.5rem;
+    }
+
+    .design-category-title {
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 1rem;
+      padding-bottom: 0.4rem;
+      border-bottom: 1px solid var(--border-accent);
+    }
+
+    .design-gallery {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 1rem;
+    }
+
+    .design-gallery-item {
+      position: relative;
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      aspect-ratio: 1 / 1;
+    }
+
+    .design-gallery-item img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      transition: transform var(--transition);
+    }
+
+    .design-gallery-item:hover img {
+      transform: scale(1.05);
+    }
+
+    .design-gallery-item .design-badge {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: linear-gradient(transparent, rgba(0,0,0,0.85));
+      color: #fff;
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 1rem 0.6rem 0.5rem;
+      text-align: center;
+    }
+
+    .design-note {
+      background: rgba(165,36,41,0.1);
+      border: 1px solid var(--border-accent);
+      border-radius: var(--radius);
+      padding: 0.75rem 1rem;
+      font-size: 0.85rem;
+      color: var(--text-body);
+      margin-top: 0.75rem;
+      text-align: center;
+    }
+
+    .design-note strong {
+      color: var(--accent);
+    }
+
+    @media (max-width: 600px) {
+      .design-gallery { grid-template-columns: repeat(2, 1fr); }
+    }
+
     .packages-promo-img {
       margin-top: 3rem;
       border-radius: var(--radius-lg);
@@ -1810,6 +1937,271 @@
             </div>
           </div>
         </div>
+      </div>
+
+      <!-- Event Materials Divider -->
+      <div class="pricing-section-divider fade-in">
+        <div class="section-tag">Party &amp; Event</div>
+        <h3>Event Materials</h3>
+        <p>Custom arches, cutouts &amp; party favors — make the celebration unforgettable.</p>
+      </div>
+
+      <!-- Event Materials Packages -->
+      <div class="packages-grid">
+
+        <!-- SHOW OUT!! -->
+        <div class="package-card fade-in" style="transition-delay:0.05s">
+          <div class="package-name">Show OUT!!</div>
+          <div class="package-price"><sup>$</sup>85</div>
+          <div class="package-savings">You save $30</div>
+          <div class="package-tagline">Make a statement at the gate</div>
+          <div class="package-includes">Includes</div>
+          <ul class="package-features">
+            <li>1 Big Head Cutout (12"×18")</li>
+            <li>1 Printed Yard Sign (24"×18")</li>
+            <li>Custom Photo Sticker Sheet</li>
+            <li>6 Custom Photo Magnets</li>
+          </ul>
+          <a href="tel:+17738491854" class="btn btn-outline" style="width:100%">Order Now</a>
+        </div>
+
+        <!-- WE OUTSIDE!! -->
+        <div class="package-card featured fade-in" style="transition-delay:0.1s">
+          <div class="package-badge">Best Value</div>
+          <div class="package-name">We OUTSIDE!!</div>
+          <div class="package-price"><sup>$</sup>195</div>
+          <div class="package-savings">You save $55</div>
+          <div class="package-tagline">The full party spread</div>
+          <div class="package-includes">Includes</div>
+          <ul class="package-features">
+            <li>1 Life-Size Standee (up to 6ft)</li>
+            <li>1 Printed Arch Backdrop (6ft)</li>
+            <li>1 Big Head Cutout (12"×18")</li>
+            <li>Custom Photo Sticker Sheet</li>
+            <li>1 Custom Photo Tumbler</li>
+          </ul>
+          <a href="tel:+17738491854" class="btn btn-primary" style="width:100%">Order Now</a>
+        </div>
+
+        <!-- WHOLE CITY KNOWS!! -->
+        <div class="package-card fade-in" style="transition-delay:0.15s">
+          <div class="package-badge" style="background:#222;border:1px solid var(--accent);color:var(--accent);">Ultimate</div>
+          <div class="package-name">Whole City KNOWS!!</div>
+          <div class="package-price"><sup>$</sup>345</div>
+          <div class="package-savings">You save $90</div>
+          <div class="package-tagline">Go all out — the full event takeover</div>
+          <div class="package-includes">Includes</div>
+          <ul class="package-features">
+            <li>1 Life-Size Standee (up to 6ft)</li>
+            <li>2 Big Head Cutouts (12"×18")</li>
+            <li>1 Printed Arch Backdrop (6ft)</li>
+            <li>Custom Photo Sticker Sheet</li>
+            <li>6 Custom Photo Magnets</li>
+            <li>4 Custom Can Coolers</li>
+            <li>1 Custom Photo Tumbler</li>
+          </ul>
+          <a href="tel:+17738491854" class="btn btn-outline" style="width:100%">Order Now</a>
+        </div>
+
+      </div>
+
+      <!-- Event Materials À La Carte -->
+      <div class="ala-carte-section fade-in">
+        <h3>Event Materials — À La Carte</h3>
+        <p>Mix and match cutouts, backdrops &amp; party favors for any budget.</p>
+
+        <div class="ala-carte-grid">
+
+          <div class="ala-carte-card">
+            <h4>😄 Cutouts</h4>
+            <div class="ala-carte-items">
+              <div class="ala-carte-item">
+                <span>Big Head (12"×18") Single</span>
+                <span>$25</span>
+              </div>
+              <div class="ala-carte-item">
+                <span>Big Head 5-Pack</span>
+                <span>$100</span>
+              </div>
+              <div class="ala-carte-item">
+                <span>Mini Standee (24")</span>
+                <span>$35</span>
+              </div>
+              <div class="ala-carte-item">
+                <span>Life-Size Standee (up to 6ft)</span>
+                <span>$65</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="ala-carte-card">
+            <h4>🎨 Arch Backdrops</h4>
+            <div class="ala-carte-items">
+              <div class="ala-carte-item">
+                <span>Printed Arch Backdrop (6ft)</span>
+                <span>$65</span>
+              </div>
+              <div class="ala-carte-item">
+                <span>Fabric Backdrop Banner (6'×4')</span>
+                <span>$75</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="ala-carte-card">
+            <h4>🎁 Party Favors</h4>
+            <div class="ala-carte-items">
+              <div class="ala-carte-item">
+                <span>Custom Photo Magnets (set of 6)</span>
+                <span>$20</span>
+              </div>
+              <div class="ala-carte-item">
+                <span>Custom Sticker Sheet</span>
+                <span>$12</span>
+              </div>
+              <div class="ala-carte-item">
+                <span>Custom Can Cooler</span>
+                <span>$12</span>
+              </div>
+              <div class="ala-carte-item">
+                <span>Custom Goodie Bag</span>
+                <span>$10</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="ala-carte-card">
+            <h4>🍿 Snack Table</h4>
+            <div class="ala-carte-items">
+              <div class="ala-carte-item">
+                <span>Custom Chip Bags (set of 6)</span>
+                <span>$18</span>
+              </div>
+              <div class="ala-carte-item">
+                <span>Custom Chip Bags (set of 12)</span>
+                <span>$30</span>
+              </div>
+              <div class="ala-carte-item">
+                <span>Custom Snack Bags — Mixed (set of 12)</span>
+                <span>$36</span>
+              </div>
+              <div class="ala-carte-item">
+                <span>Custom Gable Boxes (set of 6)</span>
+                <span>$22</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="ala-carte-card">
+            <h4>🏆 Drinkware</h4>
+            <div class="ala-carte-items">
+              <div class="ala-carte-item">
+                <span>Custom Photo Tumbler</span>
+                <span>$28</span>
+              </div>
+              <div class="ala-carte-item">
+                <span>Custom Cup (set of 4)</span>
+                <span>$36</span>
+              </div>
+              <div class="ala-carte-item">
+                <span>Custom Can Coolers (6-Pack)</span>
+                <span>$60</span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Design Ideas -->
+      <div class="design-ideas-section fade-in">
+        <h3>Design Ideas</h3>
+        <p>Not sure what you want? Browse some of our popular styles for inspiration.</p>
+
+        <!-- Custom Stoles -->
+        <div class="design-category">
+          <div class="design-category-title">Custom Graduation Stoles</div>
+          <div class="design-gallery">
+            <!-- Replace src values with your Cloudinary image URLs -->
+            <div class="design-gallery-item">
+              <img src="https://res.cloudinary.com/YOUR_CLOUD_NAME/image/upload/stole-1.jpg" alt="Sports theme custom stole" loading="lazy" />
+              <div class="design-badge">Sports Theme</div>
+            </div>
+            <div class="design-gallery-item">
+              <img src="https://res.cloudinary.com/YOUR_CLOUD_NAME/image/upload/stole-2.jpg" alt="Money theme custom stole" loading="lazy" />
+              <div class="design-badge">Money Theme</div>
+            </div>
+            <div class="design-gallery-item">
+              <img src="https://res.cloudinary.com/YOUR_CLOUD_NAME/image/upload/stole-3.jpg" alt="Cheetah print custom stole" loading="lazy" />
+              <div class="design-badge">Cheetah Print</div>
+            </div>
+            <div class="design-gallery-item">
+              <img src="https://res.cloudinary.com/YOUR_CLOUD_NAME/image/upload/stole-4.jpg" alt="Pink roses custom stole" loading="lazy" />
+              <div class="design-badge">Pink Roses</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Senior Shirts -->
+        <div class="design-category">
+          <div class="design-category-title">Senior Shirts</div>
+          <div class="design-gallery">
+            <div class="design-gallery-item">
+              <img src="https://res.cloudinary.com/YOUR_CLOUD_NAME/image/upload/senior-1.jpg" alt="Bow EST 2026 senior shirt" loading="lazy" />
+              <div class="design-badge">EST. 2026</div>
+            </div>
+            <div class="design-gallery-item">
+              <img src="https://res.cloudinary.com/YOUR_CLOUD_NAME/image/upload/senior-2.jpg" alt="Jordan style senior shirt" loading="lazy" />
+              <div class="design-badge">Sneaker Style</div>
+            </div>
+            <div class="design-gallery-item">
+              <img src="https://res.cloudinary.com/YOUR_CLOUD_NAME/image/upload/senior-3.jpg" alt="Stacked text senior shirt" loading="lazy" />
+              <div class="design-badge">Bold Stacked</div>
+            </div>
+            <div class="design-gallery-item">
+              <img src="https://res.cloudinary.com/YOUR_CLOUD_NAME/image/upload/senior-4.jpg" alt="Class of 2026 senior shirt" loading="lazy" />
+              <div class="design-badge">Class of 2026</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Prom Send-Off Banners -->
+        <div class="design-category">
+          <div class="design-category-title">Prom Send-Off Banners & Posters</div>
+          <div class="design-gallery">
+            <div class="design-gallery-item">
+              <img src="https://res.cloudinary.com/YOUR_CLOUD_NAME/image/upload/banner-1.jpg" alt="Prom send-off banner" loading="lazy" />
+              <div class="design-badge">Prom Send-Off</div>
+            </div>
+            <div class="design-gallery-item">
+              <img src="https://res.cloudinary.com/YOUR_CLOUD_NAME/image/upload/banner-2.jpg" alt="Graduation celebration poster" loading="lazy" />
+              <div class="design-badge">Grad Celebration</div>
+            </div>
+            <div class="design-gallery-item">
+              <img src="https://res.cloudinary.com/YOUR_CLOUD_NAME/image/upload/banner-3.jpg" alt="Photo collage grad poster" loading="lazy" />
+              <div class="design-badge">Photo Collage</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- All-Over Print -->
+        <div class="design-category">
+          <div class="design-category-title">All-Over Print (3D)</div>
+          <div class="design-gallery">
+            <div class="design-gallery-item">
+              <img src="https://res.cloudinary.com/YOUR_CLOUD_NAME/image/upload/allover-1.jpg" alt="All-over print purple proud aunt shirt" loading="lazy" />
+              <div class="design-badge">Proud Aunt of the Year</div>
+            </div>
+            <div class="design-gallery-item">
+              <img src="https://res.cloudinary.com/YOUR_CLOUD_NAME/image/upload/allover-2.jpg" alt="All-over print custom design" loading="lazy" />
+              <div class="design-badge">Full Custom</div>
+            </div>
+          </div>
+          <div class="design-note">
+            <strong>Minimum order of 12 required</strong> for 3D all-over print shirts.
+          </div>
+        </div>
+
       </div>
 
 
