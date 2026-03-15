@@ -87,7 +87,7 @@
     }
     .logo { display: flex; align-items: center; gap: 0.7rem; text-decoration: none; }
     .logo-name { font-size: 1.05rem; font-weight: 700; color: var(--gold); line-height: 1.2; }
-    .logo-sub { font-size: 0.68rem; font-weight: 400; color: rgba(255,255,255,.55); letter-spacing: 0.08em; text-transform: uppercase; }
+    .logo-sub { font-size: 0.68rem; font-weight: 400; color: rgba(244,166,35,0.7); letter-spacing: 0.08em; text-transform: uppercase; }
     .nav-links { display: flex; gap: 32px; }
     .nav-links a { color: rgba(255,255,255,.75); font-weight: 600; font-size: .9rem; transition: color .2s; }
     .nav-links a:hover { color: var(--gold); }
@@ -444,15 +444,15 @@
     }
     .footer-top { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 40px; margin-bottom: 48px; }
     .footer-logo { font-size: 1.2rem; font-weight: 900; color: var(--gold); margin-bottom: 12px; }
-    .footer-about { font-size: .87rem; line-height: 1.75; opacity: .6; max-width: 260px; }
+    .footer-about { font-size: .87rem; line-height: 1.75; color: var(--gold); max-width: 260px; }
     .footer-col-title { font-size: .82rem; font-weight: 800; text-transform: uppercase; letter-spacing: .09em; color: var(--white); margin-bottom: 14px; }
     .footer-links { list-style: none; display: flex; flex-direction: column; gap: 9px; }
-    .footer-links a { font-size: .87rem; opacity: .6; transition: opacity .2s, color .2s; }
-    .footer-links a:hover { opacity: 1; color: var(--gold); }
+    .footer-links a { font-size: .87rem; color: var(--gold); transition: opacity .2s, color .2s; }
+    .footer-links a:hover { opacity: 1; color: var(--white); }
     .footer-bottom {
       border-top: 1px solid rgba(255,255,255,.07); padding-top: 24px;
       display: flex; justify-content: space-between; align-items: flex-start;
-      flex-wrap: wrap; gap: 16px; font-size: .82rem; opacity: .45;
+      flex-wrap: wrap; gap: 16px; font-size: .82rem; color: rgba(244,166,35,0.6);
     }
     .footer-policy {
       background: rgba(255,255,255,.04); border-left: 3px solid var(--gold);
@@ -677,8 +677,8 @@
       </a>
     <div class="nav-links">
       <a href="/" style="font-size:.85rem;opacity:.7;">← Back to Main Site</a>
-      <a href="#packages">Packages</a>
       <a href="#graduation">Graduation</a>
+      <a href="#packages">Packages</a>
       <div style="position:relative;display:inline-block;" class="grad-nav-dropdown">
         <a href="/design-ideas.html" style="color:var(--gold);display:flex;align-items:center;gap:4px;cursor:pointer;">Design Ideas <span style="font-size:.7rem;opacity:.7;">▾</span></a>
         <div class="grad-dropdown-menu">
