@@ -85,8 +85,9 @@
       display: flex; align-items: center; justify-content: space-between;
       height: 66px;
     }
-    .logo { font-size: 1.15rem; font-weight: 900; color: var(--gold); letter-spacing: -.01em; }
-    .logo span { color: rgba(255,255,255,.85); font-weight: 400; }
+    .logo { display: flex; align-items: center; gap: 0.7rem; text-decoration: none; }
+    .logo-name { font-size: 1.05rem; font-weight: 700; color: var(--gold); line-height: 1.2; }
+    .logo-sub { font-size: 0.68rem; font-weight: 400; color: rgba(255,255,255,.55); letter-spacing: 0.08em; text-transform: uppercase; }
     .nav-links { display: flex; gap: 32px; }
     .nav-links a { color: rgba(255,255,255,.75); font-weight: 600; font-size: .9rem; transition: color .2s; }
     .nav-links a:hover { color: var(--gold); }
@@ -667,7 +668,13 @@
 <!-- ══ NAV ══ -->
 <nav id="nav">
   <div class="container nav-wrap">
-    <div class="logo"><a href="/" style="color:inherit;text-decoration:none;">June's Tees<span> &amp; Things</span></a></div>
+    <a href="/" class="logo">
+        <img src="https://previews.digitalvisionstudios.net/junesteesnthings/assets/images/logo-design.jpg" alt="June's Tees & Things logo" style="width:40px;height:40px;border-radius:50%;object-fit:cover;flex-shrink:0;" />
+        <div class="logo-text-wrap">
+          <div class="logo-name">June's Tees <span style="color:rgba(255,255,255,.85);font-weight:400;">&amp; Things</span></div>
+          <div class="logo-sub">Chicago Custom Printing</div>
+        </div>
+      </a>
     <div class="nav-links">
       <a href="/" style="font-size:.85rem;opacity:.7;">← Back to Main Site</a>
       <a href="#packages">Packages</a>
