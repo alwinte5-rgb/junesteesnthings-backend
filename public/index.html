@@ -888,6 +888,113 @@
       color: var(--text-heading);
     }
 
+    /* Quote Builder */
+    .ala-carte-item {
+      position: relative;
+    }
+
+    .add-to-quote-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      font-size: 1rem;
+      line-height: 1;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background var(--transition), border-color var(--transition), color var(--transition);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .add-to-quote-btn:hover,
+    .add-to-quote-btn.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    .add-to-quote-btn.active::after {
+      content: '✓';
+      font-size: 0.75rem;
+    }
+
+    .add-to-quote-btn:not(.active)::after {
+      content: '+';
+    }
+
+    /* Floating Quote Bar */
+    #quote-bar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: #111;
+      border-top: 1px solid var(--accent);
+      padding: 0.85rem 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      z-index: 9999;
+      transform: translateY(100%);
+      transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    #quote-bar.visible {
+      transform: translateY(0);
+    }
+
+    #quote-bar-summary {
+      font-size: 0.85rem;
+      color: var(--text-body);
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    #quote-bar-summary strong {
+      color: #fff;
+    }
+
+    #quote-bar-actions {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+      flex-shrink: 0;
+    }
+
+    #quote-bar-clear {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 0.8rem;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+
+    /* Design Ideas intro */
+    .design-ideas-intro {
+      background: rgba(165,36,41,0.08);
+      border: 1px solid var(--border-accent);
+      border-radius: var(--radius);
+      padding: 1rem 1.25rem;
+      margin-bottom: 2rem;
+      text-align: center;
+    }
+
+    .design-ideas-intro p {
+      color: var(--text-body);
+      font-size: 0.9rem;
+      margin-bottom: 0.3rem;
+    }
+
+    .design-ideas-intro p:last-child { margin-bottom: 0; }
+
     /* Section Divider */
     .pricing-section-divider {
       margin-top: 4rem;
@@ -2116,7 +2223,10 @@
       <!-- Design Ideas -->
       <div class="design-ideas-section fade-in">
         <h3>Design Ideas</h3>
-        <p>Not sure what you want? Browse some of our popular styles for inspiration.</p>
+        <div class="design-ideas-intro">
+          <p><strong>Pick a design → choose your items → send us a quote request.</strong></p>
+          <p>All designs are universal and can be reused to keep the theme consistent across multiple items — shirts, stoles, banners, chip bags, gable boxes, and more.</p>
+        </div>
 
         <!-- Custom Stoles -->
         <div class="design-category">
@@ -2572,6 +2682,15 @@
     </div>
   </footer>
 
+  <!-- Floating Quote Bar -->
+  <div id="quote-bar" role="region" aria-label="Your quote">
+    <div id="quote-bar-summary"><strong>0 items</strong> selected</div>
+    <div id="quote-bar-actions">
+      <button id="quote-bar-clear">Clear</button>
+      <a href="#contact" class="btn btn-primary" id="quote-bar-send" style="font-size:0.85rem;padding:0.5rem 1.1rem">Request Quote →</a>
+    </div>
+  </div>
+
   <!-- Splide JS -->
   <script src="https://cdn.jsdelivr.net/npm/@splidejs/splide@4.1.4/dist/js/splide.min.js"></script>
 
@@ -2793,6 +2912,71 @@
         submitBtn.disabled = false;
         submitBtn.textContent = 'Send Request';
       }
+    });
+
+    // ============================
+    // QUOTE BUILDER
+    // ============================
+    (function () {
+      const bar      = document.getElementById('quote-bar');
+      const summary  = document.getElementById('quote-bar-summary');
+      const sendBtn  = document.getElementById('quote-bar-send');
+      const clearBtn = document.getElementById('quote-bar-clear');
+      const textarea = document.getElementById('f-desc');
+      let selected   = []; // { label, price }
+
+      // Inject "+" buttons into every ala-carte-item
+      document.querySelectorAll('.ala-carte-item').forEach(function (row) {
+        const spans = row.querySelectorAll('span');
+        if (spans.length < 2) return;
+        const label = spans[0].textContent.trim();
+        const price = spans[1].textContent.trim();
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'add-to-quote-btn';
+        btn.setAttribute('aria-label', 'Add ' + label + ' to quote');
+        row.appendChild(btn);
+
+        btn.addEventListener('click', function () {
+          const idx = selected.findIndex(function (i) { return i.label === label; });
+          if (idx === -1) {
+            selected.push({ label: label, price: price });
+            btn.classList.add('active');
+          } else {
+            selected.splice(idx, 1);
+            btn.classList.remove('active');
+          }
+          updateBar();
+        });
+      });
+
+      function updateBar() {
+        if (selected.length === 0) {
+          bar.classList.remove('visible');
+          return;
+        }
+        bar.classList.add('visible');
+        summary.innerHTML = '<strong>' + selected.length + ' item' + (selected.length !== 1 ? 's' : '') + '</strong> selected: ' +
+          selected.map(function (i) { return i.label; }).join(', ');
+      }
+
+      clearBtn.addEventListener('click', function () {
+        selected = [];
+        document.querySelectorAll('.add-to-quote-btn.active').forEach(function (b) { b.classList.remove('active'); });
+        updateBar();
+      });
+
+      sendBtn.addEventListener('click', function () {
+        if (!textarea || selected.length === 0) return;
+        const lines = selected.map(function (i) { return '• ' + i.label + ' — ' + i.price; });
+        const existing = textarea.value.trim();
+        const itemsList = 'Selected Items:\n' + lines.join('\n');
+        textarea.value = existing ? itemsList + '\n\n' + existing : itemsList + '\n\nAdditional details: ';
+        setTimeout(function () { textarea.focus(); }, 400);
+      });
+    })();
+
     });
   </script>
 </body>
