@@ -1122,6 +1122,107 @@
       .design-gallery { grid-template-columns: repeat(2, 1fr); }
     }
 
+    /* Grad Teaser */
+    .grad-teaser {
+      background: linear-gradient(135deg, #0B1F4B 0%, #162a5e 100%);
+      padding: 5rem 0;
+    }
+
+    .grad-teaser-inner {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4rem;
+      align-items: center;
+    }
+
+    .grad-teaser-content .section-tag {
+      background: rgba(244,166,35,0.15);
+      color: #F4A623;
+      border: 1px solid rgba(244,166,35,0.3);
+    }
+
+    .grad-teaser-content h2 {
+      color: #fff;
+      font-size: clamp(1.8rem, 3vw, 2.6rem);
+      margin: 0.75rem 0;
+    }
+
+    .grad-teaser-content p {
+      color: rgba(255,255,255,0.72);
+      margin-bottom: 1rem;
+      line-height: 1.7;
+    }
+
+    .grad-teaser-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-bottom: 2rem;
+    }
+
+    .grad-teaser-pill {
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 100px;
+      padding: 0.35rem 0.85rem;
+      font-size: 0.82rem;
+      color: rgba(255,255,255,0.8);
+    }
+
+    .btn-grad {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: #F4A623;
+      color: #0B1F4B;
+      font-weight: 800;
+      font-size: 0.95rem;
+      padding: 0.85rem 1.75rem;
+      border-radius: var(--radius-sm, 8px);
+      transition: filter 0.2s, transform 0.2s;
+    }
+
+    .btn-grad:hover {
+      filter: brightness(1.08);
+      transform: translateY(-2px);
+    }
+
+    .grad-teaser-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+    }
+
+    .grad-teaser-card {
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: var(--radius-lg);
+      padding: 1.25rem;
+    }
+
+    .grad-teaser-card-icon {
+      font-size: 1.6rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .grad-teaser-card h4 {
+      color: #fff;
+      font-size: 0.95rem;
+      font-weight: 700;
+      margin-bottom: 0.25rem;
+    }
+
+    .grad-teaser-card p {
+      color: rgba(255,255,255,0.55);
+      font-size: 0.8rem;
+      margin: 0;
+    }
+
+    @media (max-width: 768px) {
+      .grad-teaser-inner { grid-template-columns: 1fr; gap: 2.5rem; }
+      .grad-teaser-grid { grid-template-columns: 1fr 1fr; }
+    }
+
     .packages-promo-img {
       margin-top: 3rem;
       border-radius: var(--radius-lg);
@@ -2315,6 +2416,54 @@
       </div>
 
 
+    </div>
+  </section>
+
+  <!-- ============================
+       GRAD 2026 TEASER
+  ============================ -->
+  <section class="grad-teaser">
+    <div class="container">
+      <div class="grad-teaser-inner">
+
+        <div class="grad-teaser-content fade-left">
+          <div class="section-tag">Class of 2026</div>
+          <h2>Graduation &amp; Senior Night<br>Event Packages</h2>
+          <p>From life-size standees and custom arches to chip bags and gable boxes — we specialize in making grad season unforgettable. Explore our full graduation event catalog with detailed ordering options.</p>
+          <div class="grad-teaser-pills">
+            <span class="grad-teaser-pill">🏟️ Senior Night</span>
+            <span class="grad-teaser-pill">🎓 Graduation</span>
+            <span class="grad-teaser-pill">✨ Prom 2026</span>
+            <span class="grad-teaser-pill">👕 Grad Apparel</span>
+            <span class="grad-teaser-pill">🎉 Party Favors</span>
+          </div>
+          <a href="/grad/" class="btn-grad">View Grad Event Catalog →</a>
+        </div>
+
+        <div class="grad-teaser-grid fade-right">
+          <div class="grad-teaser-card">
+            <div class="grad-teaser-card-icon">🧍</div>
+            <h4>Life-Size Standees</h4>
+            <p>Up to 6ft, full-body custom cutout with easel stand</p>
+          </div>
+          <div class="grad-teaser-card">
+            <div class="grad-teaser-card-icon">🎨</div>
+            <h4>Custom Arches</h4>
+            <p>Printed corroplast arch backdrops in school colors</p>
+          </div>
+          <div class="grad-teaser-card">
+            <div class="grad-teaser-card-icon">😄</div>
+            <h4>Big Head Cutouts</h4>
+            <p>Oversized face cutouts for ceremony cheering sections</p>
+          </div>
+          <div class="grad-teaser-card">
+            <div class="grad-teaser-card-icon">🍿</div>
+            <h4>Snack Table Sets</h4>
+            <p>Custom chip bags, gable boxes &amp; party favor packaging</p>
+          </div>
+        </div>
+
+      </div>
     </div>
   </section>
 

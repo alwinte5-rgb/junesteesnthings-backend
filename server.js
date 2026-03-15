@@ -8,6 +8,13 @@ const { Pool }   = require('pg');
 const nodemailer = require('nodemailer');
 const twilio     = require('twilio');
 const axios      = require('axios');
+const cloudinary = require('cloudinary').v2;
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key:    process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
 const app = express();
 
@@ -42,6 +49,34 @@ async function initDB() {
       clover_order_id     TEXT,
       status              TEXT DEFAULT 'new',
       created_at          TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS grad_orders (
+      id             SERIAL PRIMARY KEY,
+      order_ref      TEXT UNIQUE NOT NULL,
+      created_at     TIMESTAMPTZ DEFAULT NOW(),
+      status         TEXT DEFAULT 'new',
+      parent_name    TEXT,
+      student_name   TEXT,
+      email          TEXT,
+      phone          TEXT,
+      school         TEXT,
+      event_date     TEXT,
+      needed_by      TEXT,
+      address        TEXT,
+      event_type     TEXT,
+      products       JSONB,
+      apparel        JSONB,
+      designs        JSONB,
+      upload_method  TEXT,
+      upload_link    TEXT,
+      payment_method TEXT,
+      notes          TEXT,
+      signature      TEXT,
+      photos         JSONB DEFAULT '[]'::jsonb,
+      admin_notes    TEXT,
+      raw_data       JSONB
     )
   `);
   console.log('Database ready.');
@@ -663,6 +698,193 @@ app.get('/admin', requireAdmin, (_req, res) => {
 app.get('/admin/data', requireAdmin, async (_req, res) => {
   const { rows } = await pool.query('SELECT * FROM submissions ORDER BY created_at DESC');
   res.json(rows);
+});
+
+// ─── Grad 2026 API ────────────────────────────────────────────────────────────
+
+// Simple in-memory rate limiter
+const gradRateLimitStore = new Map();
+function gradRateLimit(maxReqs, windowMs) {
+  return (req, res, next) => {
+    const ip    = req.ip || req.socket.remoteAddress || 'unknown';
+    const now   = Date.now();
+    const entry = gradRateLimitStore.get(ip) || { count: 0, reset: now + windowMs };
+    if (now > entry.reset) { entry.count = 0; entry.reset = now + windowMs; }
+    entry.count++;
+    gradRateLimitStore.set(ip, entry);
+    if (entry.count > maxReqs) return res.status(429).json({ error: 'Too many requests' });
+    next();
+  };
+}
+const orderRateLimit     = gradRateLimit(10, 60 * 60 * 1000);
+const signatureRateLimit = gradRateLimit(30, 60 * 60 * 1000);
+
+// Bearer-token admin auth for grad order panel
+function requireGradAdmin(req, res, next) {
+  const token = (req.headers.authorization || '').replace('Bearer ', '');
+  const adminToken = process.env.ADMIN_TOKEN || process.env.ADMIN_PASSWORD || '';
+  if (!adminToken || !token) return res.status(401).json({ error: 'Unauthorized' });
+  let valid = false;
+  try {
+    valid = token.length === adminToken.length &&
+      crypto.timingSafeEqual(Buffer.from(token), Buffer.from(adminToken));
+  } catch { valid = false; }
+  if (!valid) return res.status(401).json({ error: 'Unauthorized' });
+  next();
+}
+
+function generateGradRef() {
+  const d = new Date();
+  const yy = String(d.getFullYear()).slice(-2);
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
+  return `ORD-${yy}${mm}-${rand}`;
+}
+
+function validateGradOrder(body) {
+  const errors = [];
+  if (!body.parent_name || !String(body.parent_name).trim()) errors.push('parent_name is required');
+  if (!body.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(body.email).trim())) errors.push('valid email is required');
+  if (!body.event_type || !String(body.event_type).trim()) errors.push('event_type is required');
+  return errors;
+}
+
+async function sendGradOrderEmail(order) {
+  if (!process.env.SMTP_HOST || !process.env.SMTP_USER) return;
+  const productLines = Object.entries(order.products || {})
+    .filter(([, qty]) => qty > 0)
+    .map(([key, qty]) => `  • ${key}: ${qty}`)
+    .join('\n');
+  await mailer.sendMail({
+    from:    `"June's Tees Website" <${process.env.SMTP_USER}>`,
+    to:      process.env.NOTIFICATION_EMAIL || process.env.SMTP_USER,
+    subject: `New Grad Order ${order.order_ref} — ${order.parent_name}`,
+    html: `<h2>New Grad Order — ${order.order_ref}</h2>
+      <p><strong>Name:</strong> ${order.parent_name}<br>
+      <strong>Student:</strong> ${order.student_name || '—'}<br>
+      <strong>Email:</strong> ${order.email}<br>
+      <strong>Phone:</strong> ${order.phone || '—'}<br>
+      <strong>Event:</strong> ${order.event_type}<br>
+      <strong>Event Date:</strong> ${order.event_date || '—'}<br>
+      <strong>Needed By:</strong> ${order.needed_by || '—'}</p>
+      <h3>Products</h3><pre>${productLines || 'None selected'}</pre>
+      <h3>Payment</h3><p>${order.payment_method || '—'}</p>`,
+  });
+}
+
+// Cloudinary public config
+app.get('/api/config', (req, res) => {
+  res.json({
+    cloudinaryCloudName: process.env.CLOUDINARY_CLOUD_NAME || '',
+    cloudinaryApiKey:    process.env.CLOUDINARY_API_KEY    || '',
+  });
+});
+
+// Cloudinary signed upload
+app.post('/api/cloudinary-signature', signatureRateLimit, (req, res) => {
+  if (!process.env.CLOUDINARY_API_SECRET) return res.status(503).json({ error: 'Cloudinary not configured' });
+  const timestamp    = Math.round(Date.now() / 1000);
+  const paramsToSign = { timestamp, folder: 'grad_orders' };
+  const signature    = cloudinary.utils.api_sign_request(paramsToSign, process.env.CLOUDINARY_API_SECRET);
+  res.json({ signature, timestamp, folder: 'grad_orders' });
+});
+
+// Submit grad order
+app.post('/api/submit-order', orderRateLimit, async (req, res) => {
+  try {
+    const body = req.body;
+    const errors = validateGradOrder(body);
+    if (errors.length) return res.status(400).json({ success: false, error: errors.join('; ') });
+
+    let photos = [];
+    try {
+      const raw = Array.isArray(body.photos) ? body.photos : (body.photos_json ? JSON.parse(body.photos_json) : []);
+      photos = Array.isArray(raw) ? raw.filter(u => typeof u === 'string' && u.startsWith('https://res.cloudinary.com/')).slice(0, 20) : [];
+    } catch { photos = []; }
+
+    const orderRef = generateGradRef();
+    const products = {
+      standee: parseInt(body.qty_standee) || 0, banner: parseInt(body.qty_banner) || 0,
+      spirit: parseInt(body.qty_spirit) || 0, arch: parseInt(body.qty_arch) || 0,
+      prop: parseInt(body.qty_prop) || 0, decal: parseInt(body.qty_decal) || 0,
+      step_repeat: parseInt(body.qty_step_repeat) || 0, prom_arch: parseInt(body.qty_prom_arch) || 0,
+      photo_props: parseInt(body.qty_photo_props) || 0, prom_decal: parseInt(body.qty_prom_decal) || 0,
+      chipbag: parseInt(body.qty_chipbag) || 0, bottle: parseInt(body.qty_bottle) || 0,
+      fan: parseInt(body.qty_fan) || 0, button: parseInt(body.qty_button) || 0,
+    };
+    const apparel = {
+      shirt_qty: parseInt(body.shirt_qty) || 0, print_method: body.print_method || '',
+      sizes: {
+        youth_s: parseInt(body.size_ys) || 0, youth_m: parseInt(body.size_ym) || 0,
+        youth_l: parseInt(body.size_yl) || 0, youth_xl: parseInt(body.size_yxl) || 0,
+        adult_s: parseInt(body.size_as) || 0, adult_m: parseInt(body.size_am) || 0,
+        adult_l: parseInt(body.size_al) || 0, adult_xl: parseInt(body.size_axl) || 0,
+        '2xl': parseInt(body.size_2xl) || 0, '3xl': parseInt(body.size_3xl) || 0,
+        '4xl': parseInt(body.size_4xl) || 0, '5xl': parseInt(body.size_5xl) || 0,
+      },
+      design_notes: body.design_notes || '',
+    };
+    const designs = {
+      senior_night: body['design_senior-night'] || '',
+      graduation:   body.design_graduation || '',
+      prom:         body.design_prom || '',
+    };
+    const order = {
+      order_ref: orderRef, parent_name: String(body.parent_name).trim(),
+      student_name: (body.student_name || '').trim(), email: String(body.email).trim().toLowerCase(),
+      phone: (body.phone || '').trim(), school: (body.school || '').trim(),
+      event_date: body.event_date || '', needed_by: body.needed_by || '',
+      address: (body.address || '').trim(), event_type: String(body.event_type).trim(),
+      products, apparel, designs,
+      upload_method: body.upload_method || '', upload_link: body.upload_link || '',
+      payment_method: body.payment_method || '', notes: (body.notes || '').trim(),
+      signature: (body.signature || '').trim(), photos,
+    };
+
+    await pool.query(
+      `INSERT INTO grad_orders
+        (order_ref, parent_name, student_name, email, phone, school,
+         event_date, needed_by, address, event_type, products, apparel,
+         designs, upload_method, upload_link, payment_method, notes, signature, photos)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+      [order.order_ref, order.parent_name, order.student_name, order.email,
+       order.phone, order.school, order.event_date, order.needed_by,
+       order.address, order.event_type,
+       JSON.stringify(order.products), JSON.stringify(order.apparel), JSON.stringify(order.designs),
+       order.upload_method, order.upload_link, order.payment_method,
+       order.notes, order.signature, JSON.stringify(order.photos)]
+    );
+
+    sendGradOrderEmail(order).catch(err => console.error('Grad order email error:', err));
+    res.json({ success: true, orderRef });
+  } catch (err) {
+    console.error('Grad order error:', err);
+    res.status(500).json({ success: false, error: 'Failed to save order. Please try again.' });
+  }
+});
+
+// Grad orders admin
+app.get('/api/orders', requireGradAdmin, async (_req, res) => {
+  const { rows } = await pool.query('SELECT * FROM grad_orders ORDER BY created_at DESC LIMIT 200');
+  res.json(rows);
+});
+app.get('/api/orders/:ref', requireGradAdmin, async (req, res) => {
+  const { rows } = await pool.query('SELECT * FROM grad_orders WHERE order_ref = $1', [req.params.ref]);
+  if (!rows.length) return res.status(404).json({ error: 'Not found' });
+  res.json(rows[0]);
+});
+app.patch('/api/orders/:ref/status', requireGradAdmin, async (req, res) => {
+  const { status } = req.body;
+  const valid = ['new','in_review','proof_sent','approved','in_production','shipped','complete'];
+  if (!valid.includes(status)) return res.status(400).json({ error: 'Invalid status' });
+  await pool.query('UPDATE grad_orders SET status = $1 WHERE order_ref = $2', [status, req.params.ref]);
+  res.json({ success: true });
+});
+app.patch('/api/orders/:ref/notes', requireGradAdmin, async (req, res) => {
+  const { admin_notes } = req.body;
+  if (typeof admin_notes !== 'string' || admin_notes.length > 5000) return res.status(400).json({ error: 'Invalid notes' });
+  await pool.query('UPDATE grad_orders SET admin_notes = $1 WHERE order_ref = $2', [admin_notes, req.params.ref]);
+  res.json({ success: true });
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
