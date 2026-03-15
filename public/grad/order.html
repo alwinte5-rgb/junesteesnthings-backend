@@ -369,6 +369,58 @@
       font-size: .9rem; color: #991b1b; font-weight: 700;
       margin-top: 16px; text-align: center;
     }
+
+    /* ── PACKAGE PICKER ── */
+    .pkg-picker-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    @media (max-width: 700px) { .pkg-picker-grid { grid-template-columns: 1fr 1fr; } }
+
+    .pkg-pick {
+      border: 2px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 14px 12px;
+      cursor: pointer;
+      text-align: center;
+      background: var(--white);
+      transition: border-color .2s, background .2s;
+      position: relative;
+    }
+    .pkg-pick:hover { border-color: var(--gold); }
+    .pkg-pick.selected { border-color: var(--navy); background: #f0f4ff; }
+    .pkg-pick.selected::after {
+      content: '✓';
+      position: absolute;
+      top: 6px; right: 8px;
+      font-size: .75rem;
+      color: var(--navy);
+      font-weight: 900;
+    }
+    .pkg-pick-name { font-weight: 800; font-size: .88rem; color: var(--navy); margin-bottom: 4px; }
+    .pkg-pick-price { font-size: 1.1rem; font-weight: 900; color: var(--gold-dk); }
+    .pkg-pick-save { font-size: .72rem; color: var(--muted); }
+    .pkg-cat-label {
+      font-size: .75rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--muted);
+      margin: 16px 0 10px;
+    }
+    .pkg-note {
+      background: var(--gold-lt);
+      border: 1px solid var(--gold);
+      border-radius: var(--radius-sm);
+      padding: 10px 14px;
+      font-size: .82rem;
+      color: var(--navy);
+      margin-top: 8px;
+      display: none;
+    }
+    .pkg-note.visible { display: block; }
   </style>
   <script src="https://upload-widget.cloudinary.com/global/all.js"></script>
 </head>
@@ -393,10 +445,60 @@
 
   <form id="order-form" novalidate>
 
-    <!-- SECTION 1: CONTACT & EVENT INFO -->
+    <!-- SECTION 0: PACKAGE PICKER -->
     <div class="form-section">
       <div class="form-section-header">
         <div class="num">1</div>
+        <h2>Choose a Package <span style="font-weight:500;font-size:.85rem;opacity:.7;">(optional — or build your own below)</span></h2>
+      </div>
+      <div class="form-section-body">
+        <div class="pkg-cat-label">👕 Apparel Packages</div>
+        <div class="pkg-picker-grid">
+          <div class="pkg-pick" data-pkg="thats-my-grad" data-qty='{"qty_standee":0,"qty_banner":0,"qty_spirit":4,"qty_arch":0}'>
+            <div class="pkg-pick-name">That's My GRAD!!</div>
+            <div class="pkg-pick-price">$80</div>
+            <div class="pkg-pick-save">Stole + Tee + Yard Sign + 4 Buttons</div>
+          </div>
+          <div class="pkg-pick" data-pkg="where-my-grad" data-qty='{"qty_standee":0,"qty_banner":0,"qty_spirit":6,"qty_arch":0}'>
+            <div class="pkg-pick-name">Where My GRAD At?</div>
+            <div class="pkg-pick-price">$175</div>
+            <div class="pkg-pick-save">Stole + Hoodie + 4 Tees + Sign + 6 Buttons</div>
+          </div>
+          <div class="pkg-pick" data-pkg="proudest-family" data-qty='{"qty_standee":0,"qty_banner":1,"qty_spirit":8,"qty_arch":0}'>
+            <div class="pkg-pick-name">GRAD's Proudest Family</div>
+            <div class="pkg-pick-price">$315</div>
+            <div class="pkg-pick-save">Full apparel + Banner + Tumbler + 8 Buttons</div>
+          </div>
+        </div>
+
+        <div class="pkg-cat-label">🎉 Event Materials Packages</div>
+        <div class="pkg-picker-grid">
+          <div class="pkg-pick" data-pkg="show-out" data-qty='{"qty_standee":0,"qty_banner":0,"qty_spirit":1,"qty_arch":0,"qty_button":6}'>
+            <div class="pkg-pick-name">Show OUT!!</div>
+            <div class="pkg-pick-price">$85</div>
+            <div class="pkg-pick-save">Big Head + Yard Sign + Stickers + Magnets</div>
+          </div>
+          <div class="pkg-pick" data-pkg="we-outside" data-qty='{"qty_standee":1,"qty_banner":0,"qty_spirit":1,"qty_arch":1}'>
+            <div class="pkg-pick-name">We OUTSIDE!!</div>
+            <div class="pkg-pick-price">$195</div>
+            <div class="pkg-pick-save">Standee + 6ft Arch + Big Head + Tumbler</div>
+          </div>
+          <div class="pkg-pick" data-pkg="whole-city" data-qty='{"qty_standee":1,"qty_banner":0,"qty_spirit":2,"qty_arch":1}'>
+            <div class="pkg-pick-name">Whole City KNOWS!!</div>
+            <div class="pkg-pick-price">$345</div>
+            <div class="pkg-pick-save">Standee + 2 Big Heads + 6ft Arch + Tumbler + More</div>
+          </div>
+        </div>
+
+        <div class="pkg-note" id="pkg-selected-note"></div>
+        <input type="hidden" name="selected_package" id="selected-package-field" value="" />
+      </div>
+    </div>
+
+    <!-- SECTION 2: CONTACT & EVENT INFO -->
+    <div class="form-section">
+      <div class="form-section-header">
+        <div class="num">2</div>
         <h2>Contact & Event Info</h2>
       </div>
       <div class="form-section-body">
@@ -458,10 +560,10 @@
       </div>
     </div>
 
-    <!-- SECTION 2: PRODUCT SELECTIONS -->
+    <!-- SECTION 3: PRODUCT SELECTIONS -->
     <div class="form-section">
       <div class="form-section-header">
-        <div class="num">2</div>
+        <div class="num">3</div>
         <h2>Product Selections</h2>
       </div>
       <div class="form-section-body">
@@ -591,10 +693,10 @@
       </div>
     </div>
 
-    <!-- SECTION 3: APPAREL -->
+    <!-- SECTION 4: APPAREL -->
     <div class="form-section">
       <div class="form-section-header">
-        <div class="num">3</div>
+        <div class="num">4</div>
         <h2>Apparel — Tiered Pricing</h2>
       </div>
       <div class="form-section-body">
@@ -656,10 +758,10 @@
       </div>
     </div>
 
-    <!-- SECTION 4: PHOTO SUBMISSION -->
+    <!-- SECTION 5: PHOTO SUBMISSION -->
     <div class="form-section">
       <div class="form-section-header">
-        <div class="num">4</div>
+        <div class="num">5</div>
         <h2>Photo Submission</h2>
       </div>
       <div class="form-section-body">
@@ -690,10 +792,10 @@
       </div>
     </div>
 
-    <!-- SECTION 5: PROOF & DELIVERY AGREEMENT -->
+    <!-- SECTION 6: PROOF & DELIVERY AGREEMENT -->
     <div class="form-section">
       <div class="form-section-header">
-        <div class="num">5</div>
+        <div class="num">6</div>
         <h2>Proof &amp; Delivery Agreement</h2>
       </div>
       <div class="form-section-body">
@@ -721,10 +823,10 @@
       </div>
     </div>
 
-    <!-- SECTION 6: PAYMENT -->
+    <!-- SECTION 7: PAYMENT -->
     <div class="form-section">
       <div class="form-section-header">
-        <div class="num">6</div>
+        <div class="num">7</div>
         <h2>Payment</h2>
       </div>
       <div class="form-section-body">
@@ -1189,6 +1291,51 @@
       alert('Something went wrong: ' + err.message + '\n\nPlease try again or contact us directly.');
     }
   });
+
+  // ── Package Picker ──
+  (function () {
+    const picks = document.querySelectorAll('.pkg-pick');
+    const pkgField = document.getElementById('selected-package-field');
+    const pkgNote = document.getElementById('pkg-selected-note');
+
+    // Pre-select from URL param (?pkg=...)
+    const urlPkg = new URLSearchParams(window.location.search).get('pkg');
+
+    picks.forEach(function (card) {
+      if (urlPkg && card.dataset.pkg === urlPkg) {
+        selectPkg(card);
+      }
+      card.addEventListener('click', function () {
+        if (card.classList.contains('selected')) {
+          card.classList.remove('selected');
+          pkgField.value = '';
+          pkgNote.classList.remove('visible');
+        } else {
+          picks.forEach(function (c) { c.classList.remove('selected'); });
+          selectPkg(card);
+        }
+      });
+    });
+
+    function selectPkg(card) {
+      card.classList.add('selected');
+      pkgField.value = card.dataset.pkg;
+
+      // Pre-fill qty fields
+      try {
+        const qtys = JSON.parse(card.dataset.qty || '{}');
+        Object.entries(qtys).forEach(function ([name, val]) {
+          const input = document.querySelector('input[name="' + name + '"]');
+          if (input) input.value = val;
+        });
+      } catch (e) {}
+
+      const name = card.querySelector('.pkg-pick-name').textContent;
+      const contents = card.querySelector('.pkg-pick-save').textContent;
+      pkgNote.textContent = '✓ Package selected: ' + name + ' — ' + contents + '. Adjust quantities below or add more items.';
+      pkgNote.classList.add('visible');
+    }
+  })();
 </script>
 
 </body>

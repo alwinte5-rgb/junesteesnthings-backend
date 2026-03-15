@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Class of 2026 Custom Print Co. | Senior Night & Graduation Specialists</title>
-  <meta name="description" content="Life-size standees, custom banners, corroplast arches, and apparel for graduation and Senior Night. Professional quality. Fast turnaround. Class of 2026." />
+  <title>Graduation & Prom 2026 | June's Tees & Things — Chicago Custom Printing</title>
+  <meta name="description" content="Life-size standees, custom arches, prom décor, and grad apparel packages for Class of 2026. Professional quality. Fast turnaround. Chicago-based." />
   <style>
     /* ── TOKENS ── */
     :root {
@@ -486,6 +486,132 @@
       .nav-links { display: none; }
       h1 { font-size: 2.2rem; }
     }
+
+    /* ── PACKAGES ── */
+    .packages-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.5rem;
+      margin-top: 3rem;
+    }
+    @media (max-width: 900px) { .packages-grid { grid-template-columns: 1fr; } }
+
+    .pkg-card {
+      background: var(--white);
+      border: 2px solid var(--border);
+      border-radius: var(--radius);
+      padding: 2rem 1.5rem;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      transition: border-color .2s, transform .2s;
+    }
+    .pkg-card:hover { border-color: var(--gold); transform: translateY(-4px); }
+    .pkg-card.featured { border-color: var(--navy); background: linear-gradient(145deg, #fff 0%, #f0f4ff 100%); }
+
+    .pkg-badge {
+      position: absolute;
+      top: -14px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--navy);
+      color: var(--gold);
+      font-size: .72rem;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      padding: .3rem .9rem;
+      border-radius: 100px;
+      white-space: nowrap;
+    }
+    .pkg-badge.ultimate { background: var(--gold); color: var(--navy); }
+
+    .pkg-name {
+      font-size: 1.15rem;
+      font-weight: 900;
+      color: var(--navy);
+      text-align: center;
+      margin-bottom: .25rem;
+      letter-spacing: -.01em;
+    }
+    .pkg-price {
+      font-size: 2.6rem;
+      font-weight: 900;
+      color: var(--navy);
+      text-align: center;
+      line-height: 1;
+      margin: .5rem 0 .1rem;
+    }
+    .pkg-price sup { font-size: 1.2rem; vertical-align: super; }
+    .pkg-savings {
+      text-align: center;
+      font-size: .8rem;
+      font-weight: 700;
+      color: var(--gold-dk);
+      background: var(--gold-lt);
+      border-radius: 100px;
+      padding: .2rem .75rem;
+      display: inline-block;
+      margin: 0 auto .75rem;
+      align-self: center;
+    }
+    .pkg-tagline {
+      text-align: center;
+      font-size: .85rem;
+      color: var(--muted);
+      margin-bottom: 1rem;
+    }
+    .pkg-divider {
+      font-size: .72rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--muted);
+      margin-bottom: .6rem;
+    }
+    .pkg-features {
+      list-style: none;
+      flex: 1;
+      margin-bottom: 1.5rem;
+    }
+    .pkg-features li {
+      padding: .35rem 0;
+      font-size: .88rem;
+      color: #374151;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+    }
+    .pkg-features li::before { content: '✓'; color: var(--gold-dk); font-weight: 900; flex-shrink: 0; }
+    .pkg-features li:last-child { border-bottom: none; }
+
+    .pkg-cta {
+      display: block;
+      text-align: center;
+      padding: .75rem 1rem;
+      border-radius: var(--radius-sm);
+      font-weight: 800;
+      font-size: .9rem;
+      transition: filter .2s, transform .2s;
+    }
+    .pkg-cta:hover { transform: translateY(-2px); filter: brightness(1.05); }
+    .pkg-cta-primary { background: var(--navy); color: var(--white); }
+    .pkg-cta-gold { background: var(--gold); color: var(--navy); }
+
+    .packages-cat-label {
+      font-size: .78rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+      color: var(--gold-dk);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 3rem 0 0;
+    }
+    .packages-cat-label::before,
+    .packages-cat-label::after { content: ''; flex: 1; height: 1px; background: var(--border); }
   </style>
 </head>
 <body>
@@ -505,7 +631,7 @@
     <div class="logo"><a href="/" style="color:inherit;text-decoration:none;">June's Tees<span> &amp; Things</span></a></div>
     <div class="nav-links">
       <a href="/" style="font-size:.85rem;opacity:.7;">← Back to Main Site</a>
-      <a href="#senior-night">Senior Night</a>
+      <a href="#packages">Packages</a>
       <a href="#graduation">Graduation</a>
       <a href="#prom">Prom</a>
       <a href="#apparel">Apparel</a>
@@ -614,96 +740,6 @@
   </div>
 </div>
 
-<!-- ══ SENIOR NIGHT ══ -->
-<section id="senior-night" class="section section--off">
-  <div class="container">
-    <div class="center" style="margin-bottom:56px;">
-      <div class="eyebrow">⚡ Senior Night Spotlight</div>
-      <h2>The Gear That Makes the Bleachers Erupt</h2>
-      <p class="subhead">Game-day signage and keepsakes built for student-athletes and performers. When the announcer calls their name, make sure the moment looks as big as it feels.</p>
-    </div>
-
-    <div class="product-grid">
-
-      <!-- Standee -->
-      <div class="product-card">
-        <div class="product-card-img">
-          <img
-            src="website_images/Lifesize_standee.png"
-            alt="Life-size custom athlete standee"
-            loading="lazy"
-          />
-          <span class="badge">🏆 Best Seller</span>
-        </div>
-        <div class="product-card-body">
-          <div class="product-card-name">Life-Size Action Standees</div>
-          <p class="product-card-desc">Your athlete, 5–6 feet tall, in their signature move. Our contour-cut standees are built from rigid corroplast — weatherproof, lightweight, and built to stay standing indoors or outside without warping.</p>
-          <ul class="product-bullets">
-            <li>Custom-contoured to athlete's exact silhouette</li>
-            <li>UV-resistant, full-color print</li>
-            <li>Built-in easel stand — stable indoors & outdoors</li>
-            <li>Full-body photo required (see Photo Guide)</li>
-          </ul>
-        </div>
-        <div class="product-card-footer">
-          <a href="#final-cta" class="product-cta">Order a Standee →</a>
-        </div>
-      </div>
-
-      <!-- Fence Banner -->
-      <div class="product-card">
-        <div class="product-card-img">
-          <img
-            src="website_images/Fence_banners.png"
-            alt="Custom fence banners"
-            loading="lazy"
-          />
-          <span class="badge">🏟️ Stadium Ready</span>
-        </div>
-        <div class="product-card-body">
-          <div class="product-card-name">Fence Banners</div>
-          <p class="product-card-desc">Transform the stadium perimeter into a tribute gallery. Our banners are engineered for outdoor exposure — heavy-duty vinyl that holds up through wind, rain, and the loudest crowds.</p>
-          <ul class="product-bullets">
-            <li>2'×3' heavy-duty 13oz scrim vinyl</li>
-            <li>Reinforced brass grommets — won't tear</li>
-            <li>Wind & rain resistant, UV-printed</li>
-            <li>Name, number & school colors included</li>
-          </ul>
-        </div>
-        <div class="product-card-footer">
-          <a href="#final-cta" class="product-cta">Order Fence Banners →</a>
-        </div>
-      </div>
-
-      <!-- Spirit Sticks -->
-      <div class="product-card">
-        <div class="product-card-img">
-          <img
-            src="website_images/Grad_fan.png"
-            alt="Grad spirit fans and big heads"
-            loading="lazy"
-          />
-          <span class="badge">📣 Crowd Favorite</span>
-        </div>
-        <div class="product-card-body">
-          <div class="product-card-name">"Big Head" Spirit Sticks &amp; Fans</div>
-          <p class="product-card-desc">The ultimate fan experience item. Oversized face cutouts that get the whole section involved. Hand them to the family before the walk and watch the bleachers come alive.</p>
-          <ul class="product-bullets">
-            <li>Oversized HD face cutout on corroplast</li>
-            <li>Sport-specific designs available</li>
-            <li>Lightweight — easy to wave and hold</li>
-            <li>Works for any athlete, performer, or scholar</li>
-          </ul>
-        </div>
-        <div class="product-card-footer">
-          <a href="#final-cta" class="product-cta">Order Spirit Sticks →</a>
-        </div>
-      </div>
-
-    </div>
-  </div>
-</section>
-
 <!-- ══ GRADUATION COLLECTION ══ -->
 <section id="graduation" class="section">
   <div class="container">
@@ -768,6 +804,132 @@
           </div>
         </div>
       </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ══ PACKAGES ══ -->
+<section id="packages" class="section">
+  <div class="container">
+    <div class="center" style="margin-bottom:0;">
+      <div class="eyebrow">🎁 Bundle &amp; Save</div>
+      <h2>Packages &amp; Pricing</h2>
+      <p class="subhead">Design fees included. Mix apparel and event materials — or pick a bundle and save.</p>
+    </div>
+
+    <!-- Apparel Packages -->
+    <div class="packages-cat-label">👕 Apparel Packages</div>
+    <div class="packages-grid">
+
+      <div class="pkg-card">
+        <div class="pkg-name">That's My GRAD!!</div>
+        <div class="pkg-price"><sup>$</sup>80</div>
+        <div class="pkg-savings">You save $26</div>
+        <div class="pkg-tagline">Perfect for celebrating your grad in style</div>
+        <div class="pkg-divider">Includes</div>
+        <ul class="pkg-features">
+          <li>1 Graduation Stole</li>
+          <li>1 Custom Grad Tee</li>
+          <li>1 Yard Sign (18"×12")</li>
+          <li>4 Custom Photo Buttons</li>
+        </ul>
+        <a href="order.html?pkg=thats-my-grad" class="pkg-cta pkg-cta-primary">Order Now →</a>
+      </div>
+
+      <div class="pkg-card featured">
+        <div class="pkg-badge">Best Value</div>
+        <div class="pkg-name">Where My GRAD At?</div>
+        <div class="pkg-price"><sup>$</sup>175</div>
+        <div class="pkg-savings">You save $58</div>
+        <div class="pkg-tagline">The full family celebration experience</div>
+        <div class="pkg-divider">Includes</div>
+        <ul class="pkg-features">
+          <li>1 Graduation Stole</li>
+          <li>1 Custom Grad Hoodie</li>
+          <li>4 Family Matching Tees</li>
+          <li>1 Yard Sign (18"×12")</li>
+          <li>6 Custom Photo Buttons</li>
+        </ul>
+        <a href="order.html?pkg=where-my-grad" class="pkg-cta pkg-cta-gold">Order Now →</a>
+      </div>
+
+      <div class="pkg-card">
+        <div class="pkg-badge ultimate">Ultimate</div>
+        <div class="pkg-name">GRAD's Proudest Family</div>
+        <div class="pkg-price"><sup>$</sup>315</div>
+        <div class="pkg-savings">You save $85</div>
+        <div class="pkg-tagline">Go all out — the complete grad package</div>
+        <div class="pkg-divider">Includes</div>
+        <ul class="pkg-features">
+          <li>1 Graduation Stole</li>
+          <li>1 Custom Grad Hoodie</li>
+          <li>6 Family Matching Tees</li>
+          <li>1 Yard Sign (24"×18")</li>
+          <li>1 Banner (4'×2')</li>
+          <li>8 Custom Photo Buttons</li>
+          <li>1 Custom Photo Tumbler</li>
+        </ul>
+        <a href="order.html?pkg=proudest-family" class="pkg-cta pkg-cta-primary">Order Now →</a>
+      </div>
+
+    </div>
+
+    <!-- Event Materials Packages -->
+    <div class="packages-cat-label">🎉 Event Materials Packages</div>
+    <div class="packages-grid">
+
+      <div class="pkg-card">
+        <div class="pkg-name">Show OUT!!</div>
+        <div class="pkg-price"><sup>$</sup>85</div>
+        <div class="pkg-savings">You save $30</div>
+        <div class="pkg-tagline">Make a statement at the gate</div>
+        <div class="pkg-divider">Includes</div>
+        <ul class="pkg-features">
+          <li>1 Big Head Cutout (12"×18")</li>
+          <li>1 Printed Yard Sign (24"×18")</li>
+          <li>Custom Photo Sticker Sheet</li>
+          <li>6 Custom Photo Magnets</li>
+        </ul>
+        <a href="order.html?pkg=show-out" class="pkg-cta pkg-cta-primary">Order Now →</a>
+      </div>
+
+      <div class="pkg-card featured">
+        <div class="pkg-badge">Best Value</div>
+        <div class="pkg-name">We OUTSIDE!!</div>
+        <div class="pkg-price"><sup>$</sup>195</div>
+        <div class="pkg-savings">You save $55</div>
+        <div class="pkg-tagline">The full party spread</div>
+        <div class="pkg-divider">Includes</div>
+        <ul class="pkg-features">
+          <li>1 Life-Size Standee (up to 6ft)</li>
+          <li>1 Printed Arch Backdrop (6ft)</li>
+          <li>1 Big Head Cutout (12"×18")</li>
+          <li>Custom Photo Sticker Sheet</li>
+          <li>1 Custom Photo Tumbler</li>
+        </ul>
+        <a href="order.html?pkg=we-outside" class="pkg-cta pkg-cta-gold">Order Now →</a>
+      </div>
+
+      <div class="pkg-card">
+        <div class="pkg-badge ultimate">Ultimate</div>
+        <div class="pkg-name">Whole City KNOWS!!</div>
+        <div class="pkg-price"><sup>$</sup>345</div>
+        <div class="pkg-savings">You save $90</div>
+        <div class="pkg-tagline">Go all out — the full event takeover</div>
+        <div class="pkg-divider">Includes</div>
+        <ul class="pkg-features">
+          <li>1 Life-Size Standee (up to 6ft)</li>
+          <li>2 Big Head Cutouts (12"×18")</li>
+          <li>1 Printed Arch Backdrop (6ft)</li>
+          <li>Custom Photo Sticker Sheet</li>
+          <li>6 Custom Photo Magnets</li>
+          <li>1 Custom Pillow Cover</li>
+          <li>1 Custom Photo Tumbler</li>
+        </ul>
+        <a href="order.html?pkg=whole-city" class="pkg-cta pkg-cta-primary">Order Now →</a>
+      </div>
+
     </div>
 
   </div>
