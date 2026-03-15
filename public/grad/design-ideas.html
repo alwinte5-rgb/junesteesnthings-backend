@@ -390,35 +390,42 @@
 </footer>
 
 <script>
-  // Filter tabs
   const tabs = document.querySelectorAll('.filter-tab');
   const blocks = document.querySelectorAll('.category-block');
 
+  function applyFilter(filter) {
+    tabs.forEach(function(t) {
+      t.classList.toggle('active', t.dataset.filter === filter);
+    });
+    blocks.forEach(function(block) {
+      block.style.display = (filter === 'all' || block.dataset.category === filter) ? '' : 'none';
+    });
+  }
+
   tabs.forEach(function(tab) {
     tab.addEventListener('click', function() {
-      tabs.forEach(function(t) { t.classList.remove('active'); });
-      tab.classList.add('active');
-
-      const filter = tab.dataset.filter;
-      blocks.forEach(function(block) {
-        if (filter === 'all' || block.dataset.category === filter) {
-          block.style.display = '';
-        } else {
-          block.style.display = 'none';
-        }
-      });
-
-      // Scroll to first visible block
-      if (filter !== 'all') {
-        const visible = document.querySelector('.category-block[data-category="' + filter + '"]');
-        if (visible) {
-          setTimeout(function() {
-            visible.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          }, 50);
-        }
+      applyFilter(tab.dataset.filter);
+      // Update URL param without reload
+      const url = new URL(window.location);
+      if (tab.dataset.filter === 'all') {
+        url.searchParams.delete('category');
+      } else {
+        url.searchParams.set('category', tab.dataset.filter);
       }
+      history.replaceState(null, '', url);
     });
   });
+
+  // Auto-apply filter from URL param on load
+  const urlCategory = new URLSearchParams(window.location.search).get('category');
+  if (urlCategory) {
+    applyFilter(urlCategory);
+    // Scroll to the section after a short delay
+    setTimeout(function() {
+      const block = document.querySelector('.category-block[data-category="' + urlCategory + '"]');
+      if (block) block.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 100);
+  }
 </script>
 
 </body>

@@ -540,32 +540,98 @@
     /* ============================
        SERVICES
     ============================ */
-    /* Light section overrides */
-    :root {
-      --light-bg: #f9f8f6;
-      --light-card: #ffffff;
-      --light-text-heading: #111111;
-      --light-text-body: #444444;
-      --light-text-muted: #777777;
-      --light-border: rgba(0,0,0,0.09);
+    /* ── White background for all sections ── */
+    .services  { background: #ffffff; }
+    .portfolio { background: #f7f6f3; }
+    .about     { background: #ffffff; }
+    .reviews   { background: #f7f6f3; }
+    .contact   { background: #ffffff; }
+    .packages  { background: #f7f6f3; }
+
+    /* Section-level text — dark on light backgrounds */
+    .section-header h2   { color: #111111; }
+    .section-header p    { color: #555555; }
+    .section-tag         { background: rgba(165,36,41,0.08); color: var(--accent); border-color: rgba(165,36,41,0.2); }
+
+    /* About section */
+    .about-content h2    { color: #111111; }
+    .about-content p     { color: #444444; }
+    .badge               { background: rgba(0,0,0,0.06); color: #333; border-color: rgba(0,0,0,0.1); }
+
+    /* Reviews section — text outside cards */
+    .rating-number       { color: #111111; }
+    .rating-count        { color: #777777; }
+
+    /* Contact section */
+    .contact-detail-text { color: #333333; }
+    .form-label          { color: #111111; }
+
+    /* Packages section divider */
+    .pricing-section-divider h3 { color: #111111; }
+    .pricing-section-divider p  { color: #555555; }
+    .ala-carte-section h3       { color: #111111; }
+    .ala-carte-section > p      { color: #555555; }
+
+    /* ── Dropdown nav ── */
+    .nav-dropdown { position: relative; }
+
+    .nav-dropdown-toggle {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      cursor: pointer;
+    }
+    .nav-dropdown-toggle::after {
+      content: '▾';
+      font-size: 0.7rem;
+      opacity: 0.6;
     }
 
-    .section-light { background: var(--light-bg); }
-
-    .section-light .section-tag {
-      background: rgba(165,36,41,0.08);
-      color: var(--accent);
-      border-color: rgba(165,36,41,0.2);
+    .nav-dropdown-menu {
+      position: absolute;
+      top: calc(100% + 8px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: #1a1a1a;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: var(--radius);
+      padding: 0.5rem 0;
+      min-width: 200px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s, transform 0.2s;
+      transform: translateX(-50%) translateY(-4px);
+      z-index: 500;
+      white-space: nowrap;
     }
 
-    .section-light h2,
-    .section-light .section-header h2 { color: var(--light-text-heading); }
+    .nav-dropdown:hover .nav-dropdown-menu,
+    .nav-dropdown:focus-within .nav-dropdown-menu {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateX(-50%) translateY(0);
+    }
 
-    .section-light .section-header p,
-    .section-light > .container > p { color: var(--light-text-body); }
+    .nav-dropdown-menu a {
+      display: block;
+      padding: 0.45rem 1rem;
+      font-size: 0.82rem;
+      font-weight: 500;
+      color: rgba(248,244,233,0.8);
+      border-radius: 0;
+      transition: background 0.15s, color 0.15s;
+    }
+    .nav-dropdown-menu a:hover {
+      background: rgba(255,255,255,0.07);
+      color: #fff;
+    }
+    .nav-dropdown-menu .dropdown-divider {
+      height: 1px;
+      background: rgba(255,255,255,0.08);
+      margin: 0.4rem 0;
+    }
 
-
-    .services { background: var(--bg-secondary); }
+    .services { /* no duplicate needed */ }
 
     .services-grid {
       display: grid;
@@ -1761,6 +1827,20 @@
         <a href="#portfolio">Our Work</a>
         <a href="#packages">Packages</a>
         <a href="/grad/" style="color:var(--gold, #F4A623);font-weight:700;">Grad 2026</a>
+        <div class="nav-dropdown">
+          <a href="/grad/design-ideas.html" class="nav-dropdown-toggle" style="color:var(--gold, #F4A623);font-weight:700;">Design Ideas</a>
+          <div class="nav-dropdown-menu">
+            <a href="/grad/design-ideas.html">✦ All Designs</a>
+            <div class="dropdown-divider"></div>
+            <a href="/grad/design-ideas.html?category=graduation">🎓 Graduation</a>
+            <a href="/grad/design-ideas.html?category=prom">✨ Prom</a>
+            <a href="/grad/design-ideas.html?category=birthdays">🎂 Birthdays</a>
+            <a href="/grad/design-ideas.html?category=holidays">🎄 Holidays</a>
+            <a href="/grad/design-ideas.html?category=stoles">🎀 Stoles</a>
+            <a href="/grad/design-ideas.html?category=allover">🖨️ All-Over Print</a>
+            <a href="/grad/design-ideas.html?category=snacks">🍿 Snack &amp; Party</a>
+          </div>
+        </div>
         <a href="#reviews">Reviews</a>
         <a href="#contact">Contact</a>
       </nav>
@@ -1792,6 +1872,12 @@
       <a href="#services">Services</a>
       <a href="#portfolio">Our Work</a>
       <a href="#packages">Packages</a>
+      <a href="/grad/" style="color:var(--accent);">Grad 2026</a>
+      <a href="/grad/design-ideas.html" style="color:var(--accent);">✨ Design Ideas</a>
+      <a href="/grad/design-ideas.html?category=graduation" style="padding-left:1.5rem;font-size:.9rem;">— Graduation</a>
+      <a href="/grad/design-ideas.html?category=prom" style="padding-left:1.5rem;font-size:.9rem;">— Prom</a>
+      <a href="/grad/design-ideas.html?category=birthdays" style="padding-left:1.5rem;font-size:.9rem;">— Birthdays</a>
+      <a href="/grad/design-ideas.html?category=holidays" style="padding-left:1.5rem;font-size:.9rem;">— Holidays</a>
       <a href="#reviews">Reviews</a>
       <a href="#contact">Contact</a>
     </nav>
@@ -1825,7 +1911,7 @@
   <!-- ============================
        SERVICES
   ============================ -->
-  <section class="services section-light" id="services">
+  <section class="services" id="services">
     <div class="container">
       <div class="section-header fade-in">
         <div class="section-tag">What We Do</div>
@@ -2403,7 +2489,7 @@
   <!-- ============================
        REVIEWS
   ============================ -->
-  <section class="reviews section-light" id="reviews">
+  <section class="reviews" id="reviews">
     <div class="container">
       <div class="section-header fade-in">
         <div class="section-tag">Testimonials</div>

@@ -487,6 +487,41 @@
       h1 { font-size: 2.2rem; }
     }
 
+    /* ── NAV DROPDOWN ── */
+    .grad-nav-dropdown { position: relative; }
+    .grad-dropdown-menu {
+      position: absolute;
+      top: calc(100% + 10px);
+      left: 50%;
+      transform: translateX(-50%) translateY(-4px);
+      background: var(--navy-mid);
+      border: 1px solid rgba(244,166,35,0.2);
+      border-radius: 10px;
+      padding: 0.5rem 0;
+      min-width: 200px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s, transform 0.2s;
+      z-index: 500;
+      white-space: nowrap;
+    }
+    .grad-nav-dropdown:hover .grad-dropdown-menu {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateX(-50%) translateY(0);
+    }
+    .grad-dropdown-menu a {
+      display: block;
+      padding: 0.45rem 1rem;
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: rgba(255,255,255,0.8);
+      text-decoration: none;
+      transition: background 0.15s, color 0.15s;
+    }
+    .grad-dropdown-menu a:hover { background: rgba(244,166,35,0.1); color: var(--gold); }
+    .grad-dropdown-divider { height: 1px; background: rgba(255,255,255,0.08); margin: 0.4rem 0; }
+
     /* ── PACKAGES ── */
     .packages-grid {
       display: grid;
@@ -633,7 +668,18 @@
       <a href="/" style="font-size:.85rem;opacity:.7;">← Back to Main Site</a>
       <a href="#packages">Packages</a>
       <a href="#graduation">Graduation</a>
-      <a href="design-ideas.html" style="color:var(--gold);">Design Ideas</a>
+      <div style="position:relative;display:inline-block;" class="grad-nav-dropdown">
+        <a href="design-ideas.html" style="color:var(--gold);display:flex;align-items:center;gap:4px;cursor:pointer;">Design Ideas <span style="font-size:.7rem;opacity:.7;">▾</span></a>
+        <div class="grad-dropdown-menu">
+          <a href="design-ideas.html">✦ All Designs</a>
+          <div class="grad-dropdown-divider"></div>
+          <a href="design-ideas.html?category=graduation">🎓 Graduation</a>
+          <a href="design-ideas.html?category=prom">✨ Prom</a>
+          <a href="design-ideas.html?category=stoles">🎀 Stoles</a>
+          <a href="design-ideas.html?category=allover">🖨️ All-Over Print</a>
+          <a href="design-ideas.html?category=snacks">🍿 Snack &amp; Party</a>
+        </div>
+      </div>
       <a href="#prom">Prom</a>
       <a href="#apparel">Apparel</a>
       <a href="#why">Why Us</a>
