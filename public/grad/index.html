@@ -652,6 +652,43 @@
     }
     .packages-cat-label::before,
     .packages-cat-label::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+    /* ── À LA CARTE ── */
+    .alc-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 1.25rem;
+      margin-top: 1.5rem;
+    }
+    .alc-card {
+      background: var(--white);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.25rem 1.25rem 1rem;
+    }
+    .alc-card h4 {
+      font-size: .82rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--navy);
+      margin-bottom: .75rem;
+      padding-bottom: .5rem;
+      border-bottom: 2px solid var(--gold);
+    }
+    .alc-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: .5rem;
+      padding: .4rem 0;
+      font-size: .875rem;
+      color: #374151;
+      border-bottom: 1px solid var(--border);
+    }
+    .alc-item:last-child { border-bottom: none; }
+    .alc-item span:last-child { font-weight: 700; color: var(--navy); white-space: nowrap; }
+    @media (max-width: 600px) { .alc-grid { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -990,6 +1027,76 @@
         <a href="order.html?pkg=whole-city" class="pkg-cta pkg-cta-primary">Order Now →</a>
       </div>
 
+    </div>
+
+    <!-- À La Carte: Apparel & Accessories -->
+    <div class="packages-cat-label">🛒 À La Carte — Apparel & Accessories</div>
+    <div class="alc-grid">
+      <div class="alc-card">
+        <h4>👕 Apparel</h4>
+        <div class="alc-item"><span>Custom Grad Tee</span><span>$22</span></div>
+        <div class="alc-item"><span>Family Matching Tee</span><span>$22</span></div>
+        <div class="alc-item"><span>Custom Hoodie</span><span>$45</span></div>
+        <div class="alc-item"><span>Graduation Stole</span><span>$30</span></div>
+      </div>
+      <div class="alc-card">
+        <h4>🪧 Signage & Banners</h4>
+        <div class="alc-item"><span>Yard Sign (18"×12")</span><span>$22</span></div>
+        <div class="alc-item"><span>Yard Sign (24"×18")</span><span>$28</span></div>
+        <div class="alc-item"><span>Banner (4'×2')</span><span>$55</span></div>
+        <div class="alc-item"><span>Banner (6'×3')</span><span>$75</span></div>
+      </div>
+      <div class="alc-card">
+        <h4>🎉 Accessories</h4>
+        <div class="alc-item"><span>Photo Buttons (set of 4)</span><span>$28</span></div>
+        <div class="alc-item"><span>Photo Buttons (set of 10)</span><span>$60</span></div>
+        <div class="alc-item"><span>Custom Photo Tumbler</span><span>$28</span></div>
+        <div class="alc-item"><span>Koozies (set of 6)</span><span>$30</span></div>
+      </div>
+      <div class="alc-card">
+        <h4>🎉 Event Decor & Party Favors</h4>
+        <div class="alc-item"><span>12"×18" Single</span><span>$25</span></div>
+        <div class="alc-item"><span>12"×18" 5-Pack</span><span>$100</span></div>
+        <div class="alc-item"><span>2'×2' Single</span><span>$35</span></div>
+        <div class="alc-item"><span>2'×2' 5-Pack</span><span>$150</span></div>
+      </div>
+    </div>
+
+    <!-- À La Carte: Event Materials -->
+    <div class="packages-cat-label">🎨 À La Carte — Event Materials</div>
+    <div class="alc-grid">
+      <div class="alc-card">
+        <h4>😄 Cutouts</h4>
+        <div class="alc-item"><span>Big Head (12"×18") Single</span><span>$25</span></div>
+        <div class="alc-item"><span>Big Head 5-Pack</span><span>$100</span></div>
+        <div class="alc-item"><span>Mini Standee (24")</span><span>$35</span></div>
+        <div class="alc-item"><span>Life-Size Standee (up to 6ft)</span><span>$65</span></div>
+      </div>
+      <div class="alc-card">
+        <h4>🎨 Arch Backdrops</h4>
+        <div class="alc-item"><span>Printed Arch Backdrop (6ft)</span><span>$65</span></div>
+        <div class="alc-item"><span>Fabric Backdrop Banner (6'×4')</span><span>$75</span></div>
+      </div>
+      <div class="alc-card">
+        <h4>🎁 Party Favors</h4>
+        <div class="alc-item"><span>Custom Photo Magnets (set of 6)</span><span>$20</span></div>
+        <div class="alc-item"><span>Custom Sticker Sheet</span><span>$12</span></div>
+        <div class="alc-item"><span>Custom Can Cooler</span><span>$12</span></div>
+        <div class="alc-item"><span>Custom Goodie Bag</span><span>$10</span></div>
+      </div>
+      <div class="alc-card">
+        <h4>🍿 Snack Table</h4>
+        <div class="alc-item"><span>Custom Chip Bags (set of 6)</span><span>$18</span></div>
+        <div class="alc-item"><span>Custom Chip Bags (set of 12)</span><span>$30</span></div>
+        <div class="alc-item"><span>Custom Snack Bags — Mixed (set of 12)</span><span>$36</span></div>
+        <div class="alc-item"><span>Custom Gable Boxes (set of 6)</span><span>$22</span></div>
+      </div>
+      <div class="alc-card">
+        <h4>🏆 Drinkware</h4>
+        <div class="alc-item"><span>Custom Photo Tumbler</span><span>$28</span></div>
+        <div class="alc-item"><span>Custom Cup (set of 4)</span><span>$36</span></div>
+        <div class="alc-item"><span>Custom Can Coolers (6-Pack)</span><span>$60</span></div>
+      </div>
     </div>
 
   </div>
