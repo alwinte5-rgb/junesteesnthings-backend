@@ -545,7 +545,7 @@
        SERVICES
     ============================ */
     /* ── Section backgrounds ── */
-    .services  { background: #ffffff !important; }
+    .services  { background: #0B1F4B !important; }
     .portfolio { background: #f7f6f3 !important; }
     .about     { background: #0B1F4B !important; }
     .packages  { background: #ffffff !important; }
@@ -556,6 +556,11 @@
     .section-header h2 { color: var(--text-heading); }
     .section-header p  { color: var(--text-muted); }
     .section-tag { color: var(--gold); letter-spacing: 0.12em; }
+
+    /* Light sections — headings need to be dark (text-heading is now white) */
+    .portfolio .section-header h2,
+    .packages .section-header h2,
+    .reviews .section-header h2 { color: var(--navy); }
 
     /* About section (navy bg) — gold secondary text */
     .about .section-header h2 { color: #ffffff; }
@@ -653,16 +658,16 @@
     }
 
     .service-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.07);
+      border: 1px solid rgba(255,255,255,0.12);
       border-radius: var(--radius-lg);
       padding: 2rem;
       transition: background var(--transition), border-color var(--transition), transform var(--transition);
     }
 
     .service-card:hover {
-      background: var(--bg-card-hover);
-      border-color: var(--border-accent);
+      background: rgba(255,255,255,0.12);
+      border-color: rgba(244,166,35,0.4);
       transform: translateY(-4px);
     }
 
@@ -687,7 +692,7 @@
 
     .service-card p {
       font-size: 0.875rem;
-      color: var(--text-muted);
+      color: rgba(255,255,255,0.75);
       line-height: 1.65;
     }
 
@@ -921,6 +926,10 @@
       font-size: 0.875rem;
       color: var(--text-body);
     }
+
+    .package-card.featured .package-features li { color: #ffffff; }
+    .package-card.featured .package-tagline { color: rgba(255,255,255,0.8); }
+    .package-card.featured .package-includes { color: rgba(255,255,255,0.6); }
 
     .package-features li::before {
       content: '✓';
