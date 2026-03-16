@@ -97,6 +97,23 @@
     .faq-q::after { content: '+'; font-size: 1.25rem; color: var(--gold); font-weight: 400; flex-shrink: 0; }
     .faq-a { padding: 0 1.25rem 1.1rem; font-size: .9rem; color: var(--text); line-height: 1.7; }
 
+    /* PRICING TABLE */
+    .price-table { width: 100%; border-collapse: collapse; margin-top: 1.5rem; font-size: .9rem; }
+    .price-table thead tr { background: var(--navy); color: var(--white); }
+    .price-table thead th { padding: .75rem 1rem; text-align: left; font-size: .78rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+    .price-table tbody tr { border-bottom: 1px solid var(--border); }
+    .price-table tbody tr:last-child { border-bottom: none; }
+    .price-table tbody td { padding: .85rem 1rem; vertical-align: middle; }
+    .price-table .qty { font-weight: 800; color: var(--navy); font-size: 1rem; }
+    .price-table .per-ea { font-weight: 700; color: var(--navy); }
+    .price-table .total { color: var(--muted); }
+    .price-table .savings { display: inline-block; background: #d1fae5; color: #065f46; font-size: .75rem; font-weight: 700; padding: .2rem .55rem; border-radius: 100px; }
+    .price-table .savings-none { color: var(--muted); font-size: .82rem; }
+    .price-table .best-for { font-size: .82rem; color: var(--muted); }
+    @media (max-width: 540px) {
+      .price-table .best-for, .price-table .total { display: none; }
+    }
+
     /* CTA BAND */
     .cta-band { background: linear-gradient(135deg, var(--navy) 0%, #162a5e 100%); color: var(--white); padding: 4rem 0; text-align: center; }
     .cta-band h2 { color: var(--white); margin-bottom: .75rem; }
@@ -251,15 +268,42 @@
       <div>
         <div class="section-tag">Pricing Info</div>
         <h2>Screen Printing Pricing</h2>
-        <p style="color:var(--muted);line-height:1.75;margin-bottom:1.5rem;">Pricing is based on garment type, number of print locations, ink colors, and quantity. The more you order, the lower the per-piece cost. Here's a general starting guide:</p>
-        <ul>
-          <li>Custom Grad Tee — from $22/ea</li>
-          <li>Family Matching Tee — from $22/ea</li>
-          <li>Custom Hoodie — from $45/ea</li>
-          <li>Volume discounts for orders of 50, 100, 250+</li>
-          <li>Design fee included on all orders</li>
-          <li>Contact us for bulk and wholesale pricing</li>
-        </ul>
+        <p style="color:var(--muted);line-height:1.75;margin-bottom:1.5rem;">The more you order, the lower your per-piece cost. Design fee included on every order — no hidden charges.</p>
+        <table class="price-table">
+          <thead>
+            <tr>
+              <th>Qty</th>
+              <th>Per Shirt</th>
+              <th>Total</th>
+              <th>You Save</th>
+              <th>Great For</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="qty">10</td>
+              <td class="per-ea">$18.50</td>
+              <td class="total">$185.00</td>
+              <td class="savings-none">—</td>
+              <td class="best-for">Immediate family</td>
+            </tr>
+            <tr>
+              <td class="qty">50</td>
+              <td class="per-ea">$14.00</td>
+              <td class="total">$700.00</td>
+              <td><span class="savings">Save $225</span></td>
+              <td class="best-for">Sports teams & clubs</td>
+            </tr>
+            <tr>
+              <td class="qty">100</td>
+              <td class="per-ea">$9.75</td>
+              <td class="total">$975.00</td>
+              <td><span class="savings">Save $875</span></td>
+              <td class="best-for">Full grade levels</td>
+            </tr>
+          </tbody>
+        </table>
+        <p style="font-size:.8rem;color:var(--muted);margin-top:.75rem;">Prices shown are for standard 1-color front print on a t-shirt. Hoodies, multi-color, and oversized prints quoted separately.</p>
         <a href="tel:+17738491854" class="btn btn-gold" style="margin-top:1.5rem;display:inline-flex;">📞 Get a Custom Quote</a>
       </div>
     </div>
