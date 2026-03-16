@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Order Form | Class of 2026 Custom Print Co.</title>
+  <title>Grad Order Form | June's Tees &amp; Things</title>
   <style>
     :root {
       --navy:      #0B1F4B;
@@ -29,8 +29,10 @@
     /* ── NAV ── */
     nav { background: var(--navy); position: sticky; top: 0; z-index: 100; }
     .nav-wrap { max-width: 1160px; margin: 0 auto; padding: 0 24px; display: flex; align-items: center; justify-content: space-between; height: 64px; }
-    .logo { font-size: 1.3rem; font-weight: 900; color: var(--white); letter-spacing: -.02em; }
-    .logo span { color: var(--gold); }
+    .logo { display: flex; align-items: center; gap: 10px; text-decoration: none; }
+    .logo img { height: 38px; width: 38px; border-radius: 6px; object-fit: cover; }
+    .logo-name { font-size: 1rem; font-weight: 900; color: var(--white); line-height: 1.2; }
+    .logo-sub { font-size: 0.68rem; font-weight: 400; color: rgba(244,166,35,0.8); letter-spacing: 0.06em; text-transform: uppercase; display: block; }
     .nav-back { color: rgba(255,255,255,.7); font-size: .9rem; font-weight: 600; display: flex; align-items: center; gap: 6px; transition: color .2s; }
     .nav-back:hover { color: var(--white); }
 
@@ -428,7 +430,13 @@
 
 <nav>
   <div class="nav-wrap">
-    <div class="logo">PrintCo<span> 2026</span></div>
+    <a href="/grad/index.html" class="logo">
+      <img src="https://previews.digitalvisionstudios.net/junesteesnthings/assets/images/logo-design.jpg" alt="June's Tees & Things logo" />
+      <div>
+        <div class="logo-name">June's Tees &amp; Things</div>
+        <span class="logo-sub">Chicago Custom Printing</span>
+      </div>
+    </a>
     <div style="display:flex; align-items:center; gap:20px;">
       <a href="admin.html" style="color:rgba(255,255,255,.45); font-size:.8rem; font-weight:600;">Admin</a>
       <a href="index.html" class="nav-back">← Back to Home</a>
@@ -603,7 +611,7 @@
           <div class="product-row">
             <div class="product-row-thumb"><img src="website_images/Grad_arch.png" alt="" /></div>
             <div>
-              <div class="product-row-name">Corroplast Arch (5–7 panels)</div>
+              <div class="product-row-name">Corroplast Arch (3 panels)</div>
               <div class="product-row-sub">7ft assembled, matte UV-printed, weatherproof</div>
             </div>
             <input type="number" name="qty_arch" min="0" value="0" placeholder="0" />
@@ -711,7 +719,7 @@
               <option value="">— Select —</option>
               <option value="dtg">DTG (Direct-to-Garment) — cotton, detailed designs</option>
               <option value="sublimation">Sublimation — all-over, polyester</option>
-              <option value="unsure">Not sure — let PrintCo recommend</option>
+              <option value="unsure">Not sure — let us recommend</option>
             </select>
           </div>
         </div>
@@ -806,7 +814,7 @@
             <li>I have <strong>24 hours</strong> from the time the proof is sent to approve or request revisions.</li>
             <li>Approvals received after 24 hours may result in a rescheduled delivery date.</li>
             <li>My order will be delivered within <strong>7–14 business days of deposit payment and design approval</strong>.</li>
-            <li>Once I approve my proof, my delivery date is <strong>locked in and guaranteed</strong> by PrintCo 2026.</li>
+            <li>Once I approve my proof, my delivery date is <strong>locked in and guaranteed</strong> by June's Tees &amp; Things.</li>
             <li>Changes requested after proof approval may not be possible once production has begun.</li>
           </ul>
         </div>
@@ -877,7 +885,7 @@
 </div>
 
 <footer>
-  PrintCo 2026 &nbsp;·&nbsp; Questions? <a href="mailto:hello@printco2026.com">hello@printco2026.com</a>
+  June's Tees &amp; Things &nbsp;·&nbsp; Questions? <a href="tel:+17738491854">(773) 849-1854</a>
 </footer>
 
 <!-- Action Shot Guide Modal -->
