@@ -591,7 +591,10 @@
     .ala-carte-section > p { color: var(--text-muted); }
 
     /* ── Marquee ticker ── */
-    .marquee-strip { background: #ffffff; padding: 1.25rem 0; overflow: hidden; border-top: 1px solid #E5E7EB; border-bottom: 1px solid #E5E7EB; }
+    .marquee-strip { background: #ffffff; padding: 2rem 0; overflow: hidden; border-top: 1px solid #E5E7EB; border-bottom: 1px solid #E5E7EB; }
+    .marquee-strip.marquee-top { background: #0B1F4B; border-top: none; border-bottom: none; padding: 0.75rem 0; }
+    .marquee-strip.marquee-top .marquee-item { color: #ffffff; }
+    .marquee-strip.marquee-top .marquee-item span { color: #F4A623; }
     .marquee-track { display: flex; width: max-content; animation: marquee-scroll 30s linear infinite; }
     .marquee-track:hover { animation-play-state: paused; }
     .marquee-item { display: inline-flex; align-items: center; gap: .6rem; white-space: nowrap; padding: 0 2.5rem; font-size: .95rem; font-weight: 700; color: #0B1F4B; text-transform: uppercase; letter-spacing: .08em; }
@@ -1836,6 +1839,37 @@
 </head>
 
 <body>
+
+  <!-- Top Marquee Ticker -->
+  <div class="marquee-strip marquee-top" aria-hidden="true">
+    <div class="marquee-track">
+      <div class="marquee-item"><span>✦</span> Screen Printing</div>
+      <div class="marquee-item"><span>✦</span> Custom Embroidery</div>
+      <div class="marquee-item"><span>✦</span> DTF Transfers</div>
+      <div class="marquee-item"><span>✦</span> Banners & Signs</div>
+      <div class="marquee-item"><span>✦</span> Event Décor</div>
+      <div class="marquee-item"><span>✦</span> Graphic Design</div>
+      <div class="marquee-item"><span>✦</span> Custom Tees</div>
+      <div class="marquee-item"><span>✦</span> Graduation Packages</div>
+      <div class="marquee-item"><span>✦</span> Yard Signs</div>
+      <div class="marquee-item"><span>✦</span> Step & Repeat Backdrops</div>
+      <div class="marquee-item"><span>✦</span> Black-Owned</div>
+      <div class="marquee-item"><span>✦</span> Women-Owned</div>
+      <!-- duplicate for seamless loop -->
+      <div class="marquee-item"><span>✦</span> Screen Printing</div>
+      <div class="marquee-item"><span>✦</span> Custom Embroidery</div>
+      <div class="marquee-item"><span>✦</span> DTF Transfers</div>
+      <div class="marquee-item"><span>✦</span> Banners & Signs</div>
+      <div class="marquee-item"><span>✦</span> Event Décor</div>
+      <div class="marquee-item"><span>✦</span> Graphic Design</div>
+      <div class="marquee-item"><span>✦</span> Custom Tees</div>
+      <div class="marquee-item"><span>✦</span> Graduation Packages</div>
+      <div class="marquee-item"><span>✦</span> Yard Signs</div>
+      <div class="marquee-item"><span>✦</span> Step & Repeat Backdrops</div>
+      <div class="marquee-item"><span>✦</span> Black-Owned</div>
+      <div class="marquee-item"><span>✦</span> Women-Owned</div>
+    </div>
+  </div>
 
   <!-- Announcement Bar -->
   <div class="announcement-bar">
