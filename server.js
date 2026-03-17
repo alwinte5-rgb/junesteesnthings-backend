@@ -2,6 +2,7 @@ require('dotenv').config();
 
 const express    = require('express');
 const cors       = require('cors');
+const helmet     = require('helmet');
 const path       = require('path');
 const crypto     = require('crypto');
 const { Pool }   = require('pg');
@@ -20,9 +21,18 @@ const app = express();
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.set('trust proxy', 1);
+app.use(helmet({
+  contentSecurityPolicy: false, // site uses inline scripts and CDN resources throughout
+}));
+app.use(cors({ origin: 'https://www.jtees.net' }));
+app.use(express.json({
+  limit: '1mb',
+  verify: (req, _res, buf) => {
+    if (req.url && req.url.startsWith('/webhooks/')) req.rawBody = buf;
+  },
+}));
+app.use(express.urlencoded({ limit: '1mb', extended: true }));
 
 // Serve frontend
 app.use(express.static(path.join(__dirname, 'public')));
@@ -91,7 +101,17 @@ const mailer = nodemailer.createTransport({
   auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
 });
 
+function escEmail(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#x27;');
+}
+
 async function sendNotificationEmail(s) {
+  const photoRow = s.photo_url
+    ? `<tr><td style="padding:8px;font-weight:bold;vertical-align:top;">Photo</td><td style="padding:8px;"><a href="${escEmail(s.photo_url)}">View Photo</a><br/><img src="${escEmail(s.photo_url)}" style="max-width:300px;margin-top:8px;border-radius:6px;" /></td></tr>`
+    : '';
   await mailer.sendMail({
     from:    `"June's Tees Website" <${process.env.SMTP_USER}>`,
     to:      process.env.NOTIFICATION_EMAIL,
@@ -100,11 +120,11 @@ async function sendNotificationEmail(s) {
       <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
         <h2 style="color:#A52429;">New Quote Request</h2>
         <table style="width:100%;border-collapse:collapse;">
-          <tr><td style="padding:8px;font-weight:bold;width:120px;">Name</td><td style="padding:8px;">${s.name}</td></tr>
-          <tr style="background:#f9f9f9;"><td style="padding:8px;font-weight:bold;">Phone</td><td style="padding:8px;"><a href="tel:${s.phone}">${s.phone}</a></td></tr>
-          <tr><td style="padding:8px;font-weight:bold;">Email</td><td style="padding:8px;"><a href="mailto:${s.email}">${s.email}</a></td></tr>
-          <tr style="background:#f9f9f9;"><td style="padding:8px;font-weight:bold;vertical-align:top;">Description</td><td style="padding:8px;">${s.description || '—'}</td></tr>
-          ${s.photo_url ? `<tr><td style="padding:8px;font-weight:bold;vertical-align:top;">Photo</td><td style="padding:8px;"><a href="${s.photo_url}">View Photo</a><br/><img src="${s.photo_url}" style="max-width:300px;margin-top:8px;border-radius:6px;" /></td></tr>` : ''}
+          <tr><td style="padding:8px;font-weight:bold;width:120px;">Name</td><td style="padding:8px;">${escEmail(s.name)}</td></tr>
+          <tr style="background:#f9f9f9;"><td style="padding:8px;font-weight:bold;">Phone</td><td style="padding:8px;"><a href="tel:${escEmail(s.phone)}">${escEmail(s.phone)}</a></td></tr>
+          <tr><td style="padding:8px;font-weight:bold;">Email</td><td style="padding:8px;"><a href="mailto:${escEmail(s.email)}">${escEmail(s.email)}</a></td></tr>
+          <tr style="background:#f9f9f9;"><td style="padding:8px;font-weight:bold;vertical-align:top;">Description</td><td style="padding:8px;">${escEmail(s.description) || '—'}</td></tr>
+          ${photoRow}
         </table>
         <p style="color:#999;font-size:12px;margin-top:24px;">Submitted ${new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' })} CT</p>
       </div>
@@ -113,17 +133,18 @@ async function sendNotificationEmail(s) {
 }
 
 async function sendCustomerConfirmationEmail(s) {
+  const firstName = escEmail((s.name || '').split(' ')[0]);
   await mailer.sendMail({
     from:    `"June's Tees & Things" <${process.env.SMTP_USER}>`,
     to:      s.email,
-    subject: `We got your request, ${s.name.split(' ')[0]}!`,
+    subject: `We got your request, ${(s.name || '').split(' ')[0]}!`,
     html: `
       <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
         <h2 style="color:#A52429;">Thanks for reaching out!</h2>
-        <p>Hi ${s.name.split(' ')[0]},</p>
+        <p>Hi ${firstName},</p>
         <p>We received your quote request and will get back to you within 1 business day.</p>
         <p><strong>What you submitted:</strong></p>
-        <p style="background:#f9f9f9;padding:1rem;border-radius:8px;">${s.description || 'No description provided.'}</p>
+        <p style="background:#f9f9f9;padding:1rem;border-radius:8px;">${escEmail(s.description) || 'No description provided.'}</p>
         <p>Questions? Call or text us at <a href="tel:+17738491854">(773) 849-1854</a></p>
         <p style="color:#999;font-size:12px;margin-top:24px;">June's Tees & Things · 3047 N Lincoln Ave #435, Chicago, IL 60657</p>
       </div>
@@ -139,7 +160,7 @@ async function sendPaymentReceivedEmail(s, amount) {
     html: `
       <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
         <h2 style="color:#A52429;">Payment Received!</h2>
-        <p>Hi ${s.name.split(' ')[0]},</p>
+        <p>Hi ${escEmail((s.name || '').split(' ')[0])},</p>
         <p>We received your payment of <strong>$${(amount / 100).toFixed(2)}</strong>. Your order is now in production.</p>
         <p><strong>Estimated delivery:</strong> 2–3 weeks from today.</p>
         <p>We'll reach out when your order is ready for pickup.</p>
@@ -310,8 +331,14 @@ async function getCloverPayment(paymentId) {
 // ─── Auth (admin routes) ──────────────────────────────────────────────────────
 
 function requireAdmin(req, res, next) {
-  const expected = 'Basic ' + Buffer.from(`admin:${process.env.ADMIN_PASSWORD}`).toString('base64');
-  if (req.headers['authorization'] !== expected) {
+  const expected = 'Basic ' + Buffer.from(`admin:${process.env.ADMIN_PASSWORD || ''}`).toString('base64');
+  const provided  = req.headers['authorization'] || '';
+  let valid = false;
+  try {
+    valid = provided.length === expected.length &&
+      crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+  } catch { valid = false; }
+  if (!valid) {
     res.set('WWW-Authenticate', 'Basic realm="Admin"');
     return res.status(401).send('Unauthorized');
   }
@@ -324,11 +351,24 @@ app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
 // ── Form submission ──────────────────────────────────────────────────────────
 
-app.post('/submit', async (req, res) => {
+app.post('/submit', gradRateLimit(10, 60 * 60 * 1000), async (req, res) => {
   const { name, phone, email, description, photo_url } = req.body;
 
   if (!name || !phone || !email) {
     return res.status(400).json({ error: 'Name, phone, and email are required.' });
+  }
+
+  if (String(name).length > 200 || String(phone).length > 50 || String(email).length > 254) {
+    return res.status(400).json({ error: 'Input too long.' });
+  }
+  if (description && String(description).length > 2000) {
+    return res.status(400).json({ error: 'Description too long.' });
+  }
+  if (photo_url && (
+    typeof photo_url !== 'string' ||
+    !photo_url.startsWith('https://res.cloudinary.com/')
+  )) {
+    return res.status(400).json({ error: 'Invalid photo URL.' });
   }
 
   const s = { name: name.trim(), phone: phone.trim(), email: email.trim(), description, photo_url };
@@ -379,13 +419,17 @@ app.post('/submit', async (req, res) => {
     updates.clover_customer_id = cloverResult.value;
   }
 
-  if (Object.keys(updates).length) {
-    const cols   = Object.keys(updates).map((k, i) => `${k}=$${i + 1}`).join(', ');
-    const vals   = Object.values(updates);
+  if (updates.hubspot_contact_id !== undefined) {
     pool.query(
-      `UPDATE submissions SET ${cols} WHERE id=$${vals.length + 1}`,
-      [...vals, submissionId]
-    ).catch(err => console.error('ID update failed:', err.message));
+      'UPDATE submissions SET hubspot_contact_id=$1, hubspot_deal_id=$2 WHERE id=$3',
+      [updates.hubspot_contact_id, updates.hubspot_deal_id ?? null, submissionId]
+    ).catch(err => console.error('HubSpot ID update failed:', err.message));
+  }
+  if (updates.clover_customer_id !== undefined) {
+    pool.query(
+      'UPDATE submissions SET clover_customer_id=$1 WHERE id=$2',
+      [updates.clover_customer_id, submissionId]
+    ).catch(err => console.error('Clover ID update failed:', err.message));
   }
 
   res.json({ ok: true });
@@ -399,6 +443,17 @@ app.post('/orders/create', requireAdmin, async (req, res) => {
 
   if (!submissionId || !items?.length) {
     return res.status(400).json({ error: 'submissionId and items are required.' });
+  }
+  for (const item of items) {
+    if (!item.name || typeof item.name !== 'string' || item.name.length > 200) {
+      return res.status(400).json({ error: 'Each item must have a valid name.' });
+    }
+    if (typeof item.price !== 'number' || item.price <= 0 || item.price > 100000) {
+      return res.status(400).json({ error: 'Each item price must be a positive number up to $100,000.' });
+    }
+    if (!Number.isInteger(item.quantity) || item.quantity < 1 || item.quantity > 10000) {
+      return res.status(400).json({ error: 'Each item quantity must be a positive integer.' });
+    }
   }
 
   const { rows } = await pool.query('SELECT * FROM submissions WHERE id=$1', [submissionId]);
@@ -443,21 +498,39 @@ app.get('/webhooks/clover', (_req, res) => res.sendStatus(200));
 app.post('/webhooks/clover', async (req, res) => {
   // Verify the request came from Clover using the app secret
   const signature = req.headers['x-clover-auth'];
-  if (process.env.CLOVER_APP_SECRET && signature) {
-    const expected = crypto
-      .createHmac('sha256', process.env.CLOVER_APP_SECRET)
-      .update(JSON.stringify(req.body))
-      .digest('base64');
-    if (signature !== expected) {
-      console.warn('Clover webhook signature mismatch — rejected');
-      return res.sendStatus(401);
-    }
+  if (!process.env.CLOVER_APP_SECRET) {
+    console.warn('Clover webhook rejected — CLOVER_APP_SECRET not set');
+    return res.sendStatus(503);
+  }
+  if (!signature) {
+    console.warn('Clover webhook rejected — missing signature');
+    return res.sendStatus(401);
+  }
+  // Use raw body (not re-serialized JSON) to avoid serialization mismatch
+  const rawBody = req.rawBody || Buffer.from(JSON.stringify(req.body));
+  const expected = crypto
+    .createHmac('sha256', process.env.CLOVER_APP_SECRET)
+    .update(rawBody)
+    .digest('base64');
+  let sigValid = false;
+  try {
+    sigValid = signature.length === expected.length &&
+      crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+  } catch { sigValid = false; }
+  if (!sigValid) {
+    console.warn('Clover webhook signature mismatch — rejected');
+    return res.sendStatus(401);
   }
 
   res.sendStatus(200); // acknowledge immediately
 
   const { merchantId, type, id: paymentId } = req.body;
 
+  // Validate merchant and event type
+  if (process.env.CLOVER_MERCHANT_ID && merchantId !== process.env.CLOVER_MERCHANT_ID) {
+    console.warn('Clover webhook rejected — merchant ID mismatch');
+    return;
+  }
   if (type !== 'PAYMENT' || !paymentId) return;
 
   try {
@@ -472,6 +545,9 @@ app.post('/webhooks/clover', async (req, res) => {
 
     if (!rows.length) return;
     const sub = rows[0];
+
+    // Idempotency check — skip if already marked paid
+    if (sub.status === 'paid') return;
 
     // Update status in DB
     await pool.query('UPDATE submissions SET status=$1 WHERE id=$2', ['paid', sub.id]);
@@ -504,7 +580,8 @@ app.get('/inventory', requireAdmin, async (_req, res) => {
     const items = await getCloverInventory();
     res.json(items);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Inventory fetch failed:', err.message);
+    res.status(500).json({ error: 'Failed to fetch inventory.' });
   }
 });
 
@@ -591,9 +668,14 @@ app.get('/admin', requireAdmin, (_req, res) => {
     const authHeader = 'Basic ' + btoa('admin:' + prompt('Admin password:'));
     let allRows = [];
 
+    function esc(str) {
+      if (str == null) return '';
+      return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;');
+    }
+
     function statusBadge(s) {
       const map = { new:'badge-new', quoted:'badge-quoted', paid:'badge-paid' };
-      return \`<span class="badge \${map[s]||'badge-new'}">\${s||'new'}</span>\`;
+      return \`<span class="badge \${map[esc(s)]||'badge-new'}">\${esc(s)||'new'}</span>\`;
     }
 
     function renderRows(rows) {
@@ -602,21 +684,21 @@ app.get('/admin', requireAdmin, (_req, res) => {
       list.innerHTML = rows.map(r => \`
         <div class="card">
           <div class="card-header">
-            <div class="card-name">\${r.name}</div>
+            <div class="card-name">\${esc(r.name)}</div>
             \${statusBadge(r.status)}
           </div>
           <div class="grid">
-            <div><div class="label">Phone</div><div class="value"><a href="tel:\${r.phone}">\${r.phone}</a></div></div>
-            <div><div class="label">Email</div><div class="value"><a href="mailto:\${r.email}">\${r.email}</a></div></div>
-            <div><div class="label">HubSpot</div><div class="value">\${r.hubspot_contact_id ? '<a href="https://app.hubspot.com/contacts/0/contact/'+r.hubspot_contact_id+'" target="_blank">View</a>' : '—'}</div></div>
+            <div><div class="label">Phone</div><div class="value"><a href="tel:\${esc(r.phone)}">\${esc(r.phone)}</a></div></div>
+            <div><div class="label">Email</div><div class="value"><a href="mailto:\${esc(r.email)}">\${esc(r.email)}</a></div></div>
+            <div><div class="label">HubSpot</div><div class="value">\${r.hubspot_contact_id ? '<a href="https://app.hubspot.com/contacts/0/contact/'+encodeURIComponent(r.hubspot_contact_id)+'" target="_blank">View</a>' : '—'}</div></div>
             <div><div class="label">Clover</div><div class="value">\${r.clover_order_id ? 'Order created' : r.clover_customer_id ? 'Customer only' : '—'}</div></div>
-            <div class="desc"><div class="label">Description</div><div class="value">\${r.description||'—'}</div></div>
-            \${r.photo_url ? \`<div class="photo"><div class="label">Photo</div><a href="\${r.photo_url}" target="_blank"><img src="\${r.photo_url}" /></a></div>\` : ''}
-            <div class="date">Submitted \${new Date(r.created_at).toLocaleString('en-US',{timeZone:'America/Chicago'})} CT &nbsp;·&nbsp; ID #\${r.id}</div>
+            <div class="desc"><div class="label">Description</div><div class="value">\${esc(r.description)||'—'}</div></div>
+            \${r.photo_url && r.photo_url.startsWith('https://res.cloudinary.com/') ? \`<div class="photo"><div class="label">Photo</div><a href="\${esc(r.photo_url)}" target="_blank"><img src="\${esc(r.photo_url)}" /></a></div>\` : ''}
+            <div class="date">Submitted \${new Date(r.created_at).toLocaleString('en-US',{timeZone:'America/Chicago'})} CT &nbsp;·&nbsp; ID #\${parseInt(r.id,10)}</div>
           </div>
           <div class="actions">
-            \${!r.clover_order_id ? \`<button class="btn btn-primary" onclick="openModal(\${r.id})">Create Clover Order</button>\` : ''}
-            \${r.hubspot_contact_id ? \`<a class="btn btn-secondary" href="https://app.hubspot.com/contacts/0/contact/\${r.hubspot_contact_id}" target="_blank">HubSpot Contact</a>\` : ''}
+            \${!r.clover_order_id ? \`<button class="btn btn-primary" onclick="openModal(\${parseInt(r.id,10)})">Create Clover Order</button>\` : ''}
+            \${r.hubspot_contact_id ? \`<a class="btn btn-secondary" href="https://app.hubspot.com/contacts/0/contact/\${esc(r.hubspot_contact_id)}" target="_blank">HubSpot Contact</a>\` : ''}
           </div>
         </div>
       \`).join('');
@@ -695,9 +777,19 @@ app.get('/admin', requireAdmin, (_req, res) => {
 </html>`);
 });
 
-app.get('/admin/data', requireAdmin, async (_req, res) => {
-  const { rows } = await pool.query('SELECT * FROM submissions ORDER BY created_at DESC');
-  res.json(rows);
+app.get('/admin/data', requireAdmin, async (req, res) => {
+  try {
+    const limit  = Math.min(parseInt(req.query.limit)  || 100, 500);
+    const offset = Math.max(parseInt(req.query.offset) || 0,   0);
+    const { rows } = await pool.query(
+      'SELECT * FROM submissions ORDER BY created_at DESC LIMIT $1 OFFSET $2',
+      [limit, offset]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Admin data fetch failed:', err.message);
+    res.status(500).json({ error: 'Failed to load submissions.' });
+  }
 });
 
 // ─── Grad 2026 API ────────────────────────────────────────────────────────────
@@ -737,15 +829,32 @@ function generateGradRef() {
   const d = new Date();
   const yy = String(d.getFullYear()).slice(-2);
   const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
+  const rand = crypto.randomBytes(3).toString('hex').toUpperCase();
   return `ORD-${yy}${mm}-${rand}`;
+}
+
+function escHtml(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;');
 }
 
 function validateGradOrder(body) {
   const errors = [];
   if (!body.parent_name || !String(body.parent_name).trim()) errors.push('parent_name is required');
-  if (!body.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(body.email).trim())) errors.push('valid email is required');
+  if (String(body.parent_name || '').length > 100) errors.push('parent_name too long');
+  if (!body.email || !/^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{2,}$/.test(String(body.email).trim())) errors.push('valid email is required');
   if (!body.event_type || !String(body.event_type).trim()) errors.push('event_type is required');
+  if (String(body.student_name || '').length > 100) errors.push('student_name too long');
+  if (String(body.phone || '').length > 30) errors.push('phone too long');
+  if (String(body.school || '').length > 200) errors.push('school too long');
+  if (String(body.address || '').length > 300) errors.push('address too long');
+  if (String(body.notes || '').length > 2000) errors.push('notes too long');
+  if (String(body.upload_link || '').length > 500) errors.push('upload_link too long');
   return errors;
 }
 
@@ -759,21 +868,21 @@ async function sendGradOrderEmail(order) {
     from:    `"June's Tees Website" <${process.env.SMTP_USER}>`,
     to:      process.env.NOTIFICATION_EMAIL || process.env.SMTP_USER,
     subject: `New Grad Order ${order.order_ref} — ${order.parent_name}`,
-    html: `<h2>New Grad Order — ${order.order_ref}</h2>
-      <p><strong>Name:</strong> ${order.parent_name}<br>
-      <strong>Student:</strong> ${order.student_name || '—'}<br>
-      <strong>Email:</strong> ${order.email}<br>
-      <strong>Phone:</strong> ${order.phone || '—'}<br>
-      <strong>Event:</strong> ${order.event_type}<br>
-      <strong>Event Date:</strong> ${order.event_date || '—'}<br>
-      <strong>Needed By:</strong> ${order.needed_by || '—'}</p>
-      <h3>Products</h3><pre>${productLines || 'None selected'}</pre>
-      <h3>Payment</h3><p>${order.payment_method || '—'}</p>`,
+    html: `<h2>New Grad Order — ${escHtml(order.order_ref)}</h2>
+      <p><strong>Name:</strong> ${escHtml(order.parent_name)}<br>
+      <strong>Student:</strong> ${escHtml(order.student_name) || '—'}<br>
+      <strong>Email:</strong> ${escHtml(order.email)}<br>
+      <strong>Phone:</strong> ${escHtml(order.phone) || '—'}<br>
+      <strong>Event:</strong> ${escHtml(order.event_type)}<br>
+      <strong>Event Date:</strong> ${escHtml(order.event_date) || '—'}<br>
+      <strong>Needed By:</strong> ${escHtml(order.needed_by) || '—'}</p>
+      <h3>Products</h3><pre>${escHtml(productLines) || 'None selected'}</pre>
+      <h3>Payment</h3><p>${escHtml(order.payment_method) || '—'}</p>`,
   });
 }
 
 // Cloudinary public config
-app.get('/api/config', (req, res) => {
+app.get('/api/config', signatureRateLimit, (req, res) => {
   res.json({
     cloudinaryCloudName: process.env.CLOUDINARY_CLOUD_NAME || '',
     cloudinaryApiKey:    process.env.CLOUDINARY_API_KEY    || '',
@@ -865,29 +974,76 @@ app.post('/api/submit-order', orderRateLimit, async (req, res) => {
 
 // Grad orders admin
 app.get('/api/orders', requireGradAdmin, async (_req, res) => {
-  const { rows } = await pool.query('SELECT * FROM grad_orders ORDER BY created_at DESC LIMIT 200');
-  res.json(rows);
+  try {
+    const { rows } = await pool.query('SELECT * FROM grad_orders ORDER BY created_at DESC LIMIT 200');
+    res.json(rows);
+  } catch (err) {
+    console.error('Grad orders fetch failed:', err.message);
+    res.status(500).json({ error: 'Failed to load orders.' });
+  }
 });
-app.get('/api/orders/:ref', requireGradAdmin, async (req, res) => {
+const ORDER_REF_RE = /^ORD-\d{4}-[A-F0-9]{6}$/;
+
+function validateOrderRef(req, res, next) {
+  if (!ORDER_REF_RE.test(String(req.params.ref || ''))) {
+    return res.status(400).json({ error: 'Invalid order reference format' });
+  }
+  next();
+}
+
+app.get('/api/orders/:ref', requireGradAdmin, validateOrderRef, async (req, res) => {
   const { rows } = await pool.query('SELECT * FROM grad_orders WHERE order_ref = $1', [req.params.ref]);
   if (!rows.length) return res.status(404).json({ error: 'Not found' });
   res.json(rows[0]);
 });
-app.patch('/api/orders/:ref/status', requireGradAdmin, async (req, res) => {
-  const { status } = req.body;
-  const valid = ['new','in_review','proof_sent','approved','in_production','shipped','complete'];
-  if (!valid.includes(status)) return res.status(400).json({ error: 'Invalid status' });
-  await pool.query('UPDATE grad_orders SET status = $1 WHERE order_ref = $2', [status, req.params.ref]);
-  res.json({ success: true });
+app.patch('/api/orders/:ref/status', requireGradAdmin, validateOrderRef, async (req, res) => {
+  try {
+    const { status } = req.body;
+    const valid = ['new','in_review','proof_sent','approved','in_production','shipped','complete'];
+    if (!valid.includes(status)) return res.status(400).json({ error: 'Invalid status' });
+    await pool.query('UPDATE grad_orders SET status = $1 WHERE order_ref = $2', [status, req.params.ref]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Status update failed:', err.message);
+    res.status(500).json({ error: 'Failed to update status.' });
+  }
 });
-app.patch('/api/orders/:ref/notes', requireGradAdmin, async (req, res) => {
-  const { admin_notes } = req.body;
-  if (typeof admin_notes !== 'string' || admin_notes.length > 5000) return res.status(400).json({ error: 'Invalid notes' });
-  await pool.query('UPDATE grad_orders SET admin_notes = $1 WHERE order_ref = $2', [admin_notes, req.params.ref]);
-  res.json({ success: true });
+app.patch('/api/orders/:ref/notes', requireGradAdmin, validateOrderRef, async (req, res) => {
+  try {
+    const { admin_notes } = req.body;
+    if (typeof admin_notes !== 'string' || admin_notes.length > 5000) return res.status(400).json({ error: 'Invalid notes' });
+    await pool.query('UPDATE grad_orders SET admin_notes = $1 WHERE order_ref = $2', [admin_notes, req.params.ref]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Notes update failed:', err.message);
+    res.status(500).json({ error: 'Failed to update notes.' });
+  }
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
+
+// ─── Global error handler ─────────────────────────────────────────────────────
+
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, _next) => {
+  if (err.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'Request body too large.' });
+  }
+  console.error('Unhandled error:', err.message);
+  res.status(500).json({ error: 'Internal server error.' });
+});
+
+// ─── Start ────────────────────────────────────────────────────────────────────
+
+const REQUIRED_ENV = ['DATABASE_URL', 'SMTP_HOST', 'SMTP_USER', 'SMTP_PASS', 'NOTIFICATION_EMAIL'];
+const missingEnv = REQUIRED_ENV.filter(k => !process.env[k]?.trim());
+if (missingEnv.length) {
+  console.error('Missing required environment variables:', missingEnv.join(', '));
+  process.exit(1);
+}
+if (!process.env.ADMIN_PASSWORD?.trim()) {
+  console.warn('WARNING: ADMIN_PASSWORD is not set — admin routes will be inaccessible.');
+}
 
 const PORT = process.env.PORT || 3000;
 initDB().then(() => app.listen(PORT, () => console.log(`Listening on port ${PORT}`)));

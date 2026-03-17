@@ -448,6 +448,17 @@
     var timer;
     w.addEventListener('mouseenter',function(){clearTimeout(timer);menu.classList.add('open');});
     w.addEventListener('mouseleave',function(){timer=setTimeout(function(){menu.classList.remove('open');},150);});
+    var toggle=w.querySelector('.nav-dropdown-toggle');
+    if(toggle) toggle.addEventListener('click',function(e){
+      var isOpen=w.classList.contains('open');
+      document.querySelectorAll('.nav-dropdown').forEach(function(d){d.classList.remove('open');});
+      if(!isOpen){w.classList.add('open');e.preventDefault();}
+    });
+  });
+  document.addEventListener('click',function(e){
+    if(!e.target.closest('.nav-dropdown')){
+      document.querySelectorAll('.nav-dropdown').forEach(function(d){d.classList.remove('open');});
+    }
   });
 </script>
 

@@ -2915,53 +2915,61 @@
     // ============================
     // Cloudinary Upload Widget
     // ============================
-    // REPLACE these two values with your own from cloudinary.com/console
-    const CLOUDINARY_CLOUD_NAME  = 'YOUR_CLOUD_NAME';   // e.g. 'mycloudname'
-    const CLOUDINARY_UPLOAD_PRESET = 'YOUR_UPLOAD_PRESET'; // e.g. 'jtees_unsigned'
-
     let uploadWidget;
 
-    if (typeof cloudinary !== 'undefined') {
-      uploadWidget = cloudinary.createUploadWidget({
-        cloudName: CLOUDINARY_CLOUD_NAME,
-        uploadPreset: CLOUDINARY_UPLOAD_PRESET,
-        sources: ['local', 'camera', 'url'],
-        multiple: false,
-        resourceType: 'image',
-        maxFileSize: 10000000, // 10 MB
-        styles: {
-          palette: {
-            window: '#0B1F4B',
-            windowBorder: '#162a5e',
-            tabIcon: '#F4A623',
-            menuIcons: '#aab4c8',
-            textDark: '#000000',
-            textLight: '#ffffff',
-            link: '#F4A623',
-            action: '#F4A623',
-            inactiveTabIcon: '#6B7280',
-            error: '#f87171',
-            inProgress: '#F4A623',
-            complete: '#4ade80',
-            sourceBg: '#162a5e',
+    async function initUploadWidget() {
+      if (typeof cloudinary === 'undefined') return;
+      try {
+        const cfg = await fetch('/api/config').then(r => r.json());
+        if (!cfg.cloudinaryCloudName || !cfg.cloudinaryApiKey) return;
+
+        async function generateSignature(callback, paramsToSign) {
+          const res = await fetch('/api/cloudinary-signature', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ timestamp: paramsToSign.timestamp }),
+          });
+          const data = await res.json();
+          callback(data.signature);
+        }
+
+        uploadWidget = cloudinary.createUploadWidget({
+          cloudName:      cfg.cloudinaryCloudName,
+          apiKey:         cfg.cloudinaryApiKey,
+          uploadSignature: generateSignature,
+          folder:         'quote_requests',
+          sources: ['local', 'camera', 'url'],
+          multiple: false,
+          resourceType: 'image',
+          maxFileSize: 10000000,
+          styles: {
+            palette: {
+              window: '#0B1F4B', windowBorder: '#162a5e', tabIcon: '#F4A623',
+              menuIcons: '#aab4c8', textDark: '#000000', textLight: '#ffffff',
+              link: '#F4A623', action: '#F4A623', inactiveTabIcon: '#6B7280',
+              error: '#f87171', inProgress: '#F4A623', complete: '#4ade80', sourceBg: '#162a5e',
+            }
           }
-        }
-      }, (error, result) => {
-        if (!error && result && result.event === 'success') {
-          const url = result.info.secure_url;
-          document.getElementById('photo-url-field').value = url;
-          document.getElementById('preview-img').src = url;
-          document.getElementById('upload-preview').style.display = 'block';
-          document.getElementById('upload-trigger').style.display = 'none';
-        }
-      });
+        }, (error, result) => {
+          if (!error && result && result.event === 'success') {
+            const url = result.info.secure_url;
+            document.getElementById('photo-url-field').value = url;
+            document.getElementById('preview-img').src = url;
+            document.getElementById('upload-preview').style.display = 'block';
+            document.getElementById('upload-trigger').style.display = 'none';
+          }
+        });
+      } catch (e) {
+        console.warn('Cloudinary upload not available:', e.message);
+      }
     }
+    initUploadWidget();
 
     document.getElementById('upload-trigger').addEventListener('click', () => {
       if (uploadWidget) {
         uploadWidget.open();
       } else {
-        alert('Cloudinary is not configured yet. Set YOUR_CLOUD_NAME and YOUR_UPLOAD_PRESET in the script.');
+        alert('Photo upload is not available right now. You can describe your design in the text box.');
       }
     });
 
@@ -3092,6 +3100,20 @@
           menu.classList.remove('open');
         }, 200);
       });
+      // Mobile: tap toggle to open; tap again to navigate
+      var toggle = wrapper.querySelector('.nav-dropdown-toggle');
+      if (toggle) {
+        toggle.addEventListener('click', function(e) {
+          var isOpen = wrapper.classList.contains('open');
+          document.querySelectorAll('.nav-dropdown').forEach(function(d) { d.classList.remove('open'); });
+          if (!isOpen) { wrapper.classList.add('open'); e.preventDefault(); }
+        });
+      }
+    });
+    document.addEventListener('click', function(e) {
+      if (!e.target.closest('.nav-dropdown')) {
+        document.querySelectorAll('.nav-dropdown').forEach(function(d) { d.classList.remove('open'); });
+      }
     });
   })();
   </script>

@@ -1799,13 +1799,6 @@
     }
   });
 
-  // Wire up footer download link
-  document.querySelectorAll('a[href="#"]').forEach(a => {
-    if (a.textContent.includes('Download Order Form') || a.textContent.includes('Order Form')) {
-      a.href = 'order.html';
-    }
-  });
-
   // Dropdown hover with delay
   document.querySelectorAll('.grad-nav-dropdown').forEach(function(wrapper) {
     var menu = wrapper.querySelector('.grad-dropdown-menu');
@@ -1842,19 +1835,19 @@
       <div>
         <div class="footer-col-title">Resources</div>
         <ul class="footer-links">
-          <li><a href="#">Download Order Form</a></li>
-          <li><a href="#">Action Shot Guide</a></li>
+          <li><a href="order.html">Start Your Order</a></li>
           <li><a href="#faq">FAQ</a></li>
           <li><a href="#process">How It Works</a></li>
+          <li><a href="/">Back to Main Site</a></li>
         </ul>
       </div>
       <div>
         <div class="footer-col-title">Contact</div>
         <ul class="footer-links">
-          <li><a href="#">[Your Address]</a></li>
-          <li><a href="#">[Phone Number]</a></li>
-          <li><a href="#">[Email Address]</a></li>
-          <li><a href="#">[Business Hours]</a></li>
+          <li><a href="https://maps.google.com/?q=3047+N+Lincoln+Ave+%23435,+Chicago,+IL+60657" target="_blank" rel="noopener noreferrer">3047 N Lincoln Ave #435, Chicago, IL</a></li>
+          <li><a href="tel:+17738491854">(773) 849-1854</a></li>
+          <li><a href="/#contact">Get a Quote</a></li>
+          <li>Mon–Fri 10:30 AM – 6 PM</li>
         </ul>
       </div>
     </div>
@@ -1864,7 +1857,7 @@
     </div>
 
     <div class="footer-bottom">
-      <span>&copy; 2026 [Your Business Name]. All rights reserved. Custom printing for the next generation.</span>
+      <span>&copy; 2026 June's Tees &amp; Things. All rights reserved. Custom printing for the next generation.</span>
       <span>All orders are custom-produced to specification.</span>
     </div>
   </div>

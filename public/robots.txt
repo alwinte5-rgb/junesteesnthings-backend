@@ -1,5 +1,8 @@
 User-agent: *
 Allow: /
 Disallow: /grad/order.html
+Disallow: /admin
+Disallow: /api/
+Disallow: /webhooks/
 
 Sitemap: https://www.jtees.net/sitemap.xml
