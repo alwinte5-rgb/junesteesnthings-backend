@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>How to Prepare Your Artwork for Custom Printing: File Format Guide | June's Tees &amp; Things</title>
+  <meta name="description" content="A complete guide to preparing print-ready artwork for custom printing. Learn the difference between vector and raster files, why resolution matters, CMYK vs RGB, how to outline fonts, and when to hire a designer." />
+  <meta name="keywords" content="print ready artwork Chicago, vector vs raster printing, 300 DPI print files, CMYK vs RGB printing, outline fonts for print, graphic design for printing Chicago, print file formats" />
+  <link rel="canonical" href="https://www.jtees.net/blog/graphic-design-tips.html" />
+  <meta property="og:title" content="How to Prepare Your Artwork for Custom Printing: File Format Guide | June's Tees &amp; Things" />
+  <meta property="og:description" content="A complete guide to preparing print-ready artwork for custom printing. Learn the difference between vector and raster files, why resolution matters, CMYK vs RGB, how to outline fonts, and when to hire a designer." />
+  <meta property="og:type" content="article" />
+  <meta property="og:url" content="https://www.jtees.net/blog/graphic-design-tips.html" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --navy:#0B1F4B; --navy-mid:#162a5e; --gold:#F4A623; --gold-dk:#C9861A;
+      --white:#ffffff; --off:#f7f6f3; --muted:#6B7280; --border:#E5E7EB;
+      --radius:8px; --radius-lg:16px;
+    }
+    *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
+    html { scroll-behavior:smooth; }
+    body { font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif; background:var(--white); color:#374151; line-height:1.6; overflow-x:hidden; }
+    img { max-width:100%; display:block; }
+    a { text-decoration:none; color:inherit; }
+    ul { list-style:none; }
+    .container { max-width:1200px; margin:0 auto; padding:0 2rem; }
+
+    /* Announcement bar */
+    .announcement-bar { background:var(--gold); color:var(--navy); text-align:center; padding:.55rem 1rem; font-size:.82rem; font-weight:600; letter-spacing:.02em; }
+
+    /* Header */
+    header { background:var(--navy); position:sticky; top:0; z-index:1000; box-shadow:0 2px 20px rgba(0,0,0,.3); }
+    .header-inner { display:flex; align-items:center; justify-content:space-between; height:70px; padding:0 2rem; max-width:1300px; margin:0 auto; }
+    .logo { display:flex; align-items:center; gap:.75rem; }
+    .logo img { width:44px; height:44px; border-radius:50%; object-fit:cover; }
+    .logo-text { font-size:1.05rem; font-weight:700; color:var(--gold); line-height:1.2; }
+    .logo-text span { display:block; font-size:.7rem; font-weight:400; color:rgba(255,255,255,.7); letter-spacing:.08em; text-transform:uppercase; }
+    nav { display:flex; align-items:center; gap:.25rem; }
+    nav > a { font-size:.85rem; font-weight:500; color:#fff; padding:.5rem .75rem; border-radius:8px; transition:color .2s,background .2s; }
+    nav > a:hover { background:rgba(255,255,255,.12); }
+    .header-actions { display:flex; align-items:center; gap:1rem; }
+    .icon-link { display:flex; align-items:center; justify-content:center; width:36px; height:36px; border-radius:50%; background:rgba(255,255,255,.06); color:#fff; transition:background .2s,color .2s; }
+    .icon-link:hover { background:var(--gold); color:var(--navy); }
+    .icon-link svg { width:16px; height:16px; fill:currentColor; }
+    .btn-quote { background:var(--gold); color:var(--navy); font-size:.82rem; font-weight:700; padding:.55rem 1.25rem; border-radius:100px; transition:background .2s,transform .2s; white-space:nowrap; }
+    .btn-quote:hover { background:var(--gold-dk); transform:translateY(-1px); }
+    .hamburger { display:none; background:none; border:none; color:#fff; font-size:1.4rem; cursor:pointer; padding:4px; }
+
+    /* Nav dropdown */
+    .nav-dropdown { position:relative; }
+    .nav-dropdown-toggle { display:flex; align-items:center; gap:4px; font-size:.85rem; font-weight:500; color:#fff; padding:.5rem .75rem; border-radius:8px; transition:background .2s; cursor:pointer; }
+    .nav-dropdown-toggle::after { content:'▾'; font-size:.7rem; opacity:.6; }
+    .nav-dropdown-toggle:hover { background:rgba(255,255,255,.12); }
+    .nav-dropdown-menu { position:absolute; top:calc(100% + 6px); left:50%; transform:translateX(-50%); background:var(--navy); border:1px solid rgba(255,255,255,.12); border-radius:10px; padding:.5rem; box-shadow:0 8px 32px rgba(0,0,0,.5); min-width:180px; opacity:0; pointer-events:none; transition:opacity .15s,transform .15s; z-index:500; white-space:nowrap; }
+    .nav-dropdown.open .nav-dropdown-menu { opacity:1; pointer-events:auto; }
+    .nav-dropdown-menu a { display:block; padding:.45rem 1rem; font-size:.82rem; font-weight:500; color:rgba(255,255,255,.8); border-radius:6px; transition:background .15s,color .15s; }
+    .nav-dropdown-menu a:hover { background:rgba(255,255,255,.08); color:#fff; }
+
+    /* Mobile drawer */
+    .mobile-drawer { position:fixed; top:0; left:-100%; width:285px; height:100vh; background:var(--navy); z-index:2000; padding:1.75rem 1.5rem; transition:left .3s; overflow-y:auto; }
+    .mobile-drawer.open { left:0; }
+    .drawer-overlay { position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:1999; display:none; }
+    .drawer-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:1.75rem; }
+    .drawer-nav a { display:block; padding:.85rem 0; font-size:1rem; font-weight:500; color:#fff; border-bottom:1px solid rgba(255,255,255,.08); transition:color .2s; }
+    .drawer-nav a:hover { color:var(--gold); }
+
+    /* Marquee */
+    .marquee-strip { background:#fff; padding:1.75rem 0; overflow:hidden; border-top:1px solid var(--border); border-bottom:1px solid var(--border); }
+    .marquee-track { display:flex; width:max-content; animation:marquee-scroll 32s linear infinite; }
+    .marquee-track:hover { animation-play-state:paused; }
+    .marquee-item { display:inline-flex; align-items:center; gap:.6rem; white-space:nowrap; padding:0 2.5rem; font-size:.9rem; font-weight:700; color:var(--navy); text-transform:uppercase; letter-spacing:.08em; }
+    .marquee-item span { color:var(--gold); font-size:1rem; }
+    @keyframes marquee-scroll { from { transform:translateX(0); } to { transform:translateX(-50%); } }
+
+    /* Footer */
+    footer { background:var(--navy); color:rgba(255,255,255,.7); padding:0; }
+    .footer-top { display:grid; grid-template-columns:1.8fr 1fr 1fr 1fr; gap:3rem; padding:3.5rem 0 2.5rem; }
+    .footer-brand .footer-logo { font-size:1.15rem; font-weight:800; color:var(--gold); display:block; margin-bottom:.75rem; }
+    .footer-tagline { font-size:.875rem; color:rgba(255,255,255,.65); line-height:1.75; margin-bottom:1.25rem; }
+    .footer-social { display:flex; gap:.75rem; }
+    .footer-social a { display:flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:50%; background:rgba(255,255,255,.1); color:rgba(255,255,255,.8); transition:background .2s,color .2s; }
+    .footer-social a:hover { background:var(--gold); color:var(--navy); }
+    .footer-social svg { width:15px; height:15px; fill:currentColor; }
+    .footer-col-title { font-size:.75rem; font-weight:700; text-transform:uppercase; letter-spacing:.1em; color:var(--gold); margin-bottom:1rem; }
+    .footer-col ul { display:flex; flex-direction:column; gap:.55rem; }
+    .footer-col li { font-size:.875rem; color:rgba(255,255,255,.65); }
+    .footer-col a { color:rgba(255,255,255,.65); transition:color .2s; }
+    .footer-col a:hover { color:var(--gold); }
+    .footer-bottom { display:flex; justify-content:space-between; align-items:center; padding:1.25rem 0; border-top:1px solid rgba(255,255,255,.08); font-size:.82rem; color:rgba(255,255,255,.45); }
+
+    /* Blog-specific */
+    .blog-hero { background:linear-gradient(135deg,#061229 0%,var(--navy) 55%,var(--navy-mid) 100%); color:#fff; padding:4rem 0 3.5rem; }
+    .blog-hero .container { max-width:800px; }
+    .post-category { display:inline-block; background:var(--gold); color:var(--navy); font-size:.72rem; font-weight:800; letter-spacing:.1em; text-transform:uppercase; padding:.3rem .85rem; border-radius:100px; margin-bottom:1.25rem; }
+    .blog-hero h1 { font-size:clamp(1.7rem,4vw,2.8rem); font-weight:900; line-height:1.15; margin-bottom:1rem; }
+    .post-meta { display:flex; flex-wrap:wrap; gap:1rem; font-size:.82rem; color:rgba(255,255,255,.6); margin-bottom:1.25rem; }
+    .post-meta span { display:flex; align-items:center; gap:.3rem; }
+    .blog-hero .intro { font-size:1.05rem; color:rgba(255,255,255,.85); line-height:1.75; max-width:700px; }
+
+    /* Article body */
+    .article-wrap { max-width:760px; margin:0 auto; padding:3.5rem 2rem 4rem; }
+    .article-wrap h2 { font-size:1.55rem; font-weight:800; color:var(--navy); margin:2.5rem 0 .85rem; line-height:1.25; }
+    .article-wrap h3 { font-size:1.15rem; font-weight:700; color:var(--navy); margin:1.75rem 0 .6rem; }
+    .article-wrap p { font-size:1rem; line-height:1.8; color:#374151; margin-bottom:1.25rem; }
+    .article-wrap ul.content-list { list-style:none; margin:1rem 0 1.5rem; display:flex; flex-direction:column; gap:.65rem; }
+    .article-wrap ul.content-list li { padding-left:1.5rem; position:relative; font-size:.975rem; line-height:1.7; color:#374151; }
+    .article-wrap ul.content-list li::before { content:'✓'; position:absolute; left:0; color:var(--gold-dk); font-weight:900; }
+    .article-wrap ol.content-list { list-style:none; counter-reset:ol-counter; margin:1rem 0 1.5rem; display:flex; flex-direction:column; gap:.65rem; }
+    .article-wrap ol.content-list li { padding-left:2rem; position:relative; font-size:.975rem; line-height:1.7; counter-increment:ol-counter; }
+    .article-wrap ol.content-list li::before { content:counter(ol-counter); position:absolute; left:0; background:var(--navy); color:#fff; width:1.3rem; height:1.3rem; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:.72rem; font-weight:800; top:.2rem; }
+    .tip-box { background:#fef9ec; border-left:4px solid var(--gold); border-radius:0 var(--radius) var(--radius) 0; padding:1.25rem 1.5rem; margin:2rem 0; }
+    .tip-box strong { display:block; font-size:.8rem; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--gold-dk); margin-bottom:.4rem; }
+    .tip-box p { margin:0; font-size:.95rem; color:#374151; }
+    blockquote { border-left:4px solid var(--navy); margin:1.75rem 0; padding:.75rem 1.25rem; background:var(--off); border-radius:0 var(--radius) var(--radius) 0; }
+    blockquote p { margin:0; font-style:italic; color:var(--muted); }
+    .outbound-link { color:var(--gold-dk); font-weight:600; border-bottom:1px solid rgba(196,134,26,.35); transition:color .2s,border-color .2s; }
+    .outbound-link::after { content:' ↗'; font-size:.75em; opacity:.7; }
+    .outbound-link:hover { color:var(--gold); border-color:var(--gold); }
+
+    /* CTA Band */
+    .cta-band { background:linear-gradient(135deg,var(--navy) 0%,var(--navy-mid) 100%); color:#fff; padding:4rem 0; text-align:center; }
+    .cta-band h2 { color:#fff; font-size:1.75rem; font-weight:900; margin-bottom:.75rem; }
+    .cta-band p { color:rgba(255,255,255,.8); font-size:1rem; margin-bottom:2rem; max-width:520px; margin-left:auto; margin-right:auto; }
+    .cta-btns { display:flex; flex-wrap:wrap; gap:1rem; justify-content:center; }
+    .btn-gold { display:inline-flex; align-items:center; gap:.4rem; background:var(--gold); color:var(--navy); font-weight:800; font-size:.95rem; padding:.8rem 2rem; border-radius:100px; transition:background .2s,transform .2s; }
+    .btn-gold:hover { background:var(--gold-dk); transform:translateY(-2px); }
+    .btn-white { display:inline-flex; align-items:center; gap:.4rem; background:#fff; color:var(--navy); font-weight:800; font-size:.95rem; padding:.8rem 2rem; border-radius:100px; transition:transform .2s,filter .2s; }
+    .btn-white:hover { transform:translateY(-2px); filter:brightness(.96); }
+
+    /* Blog index cards */
+    .blog-index-hero { background:linear-gradient(135deg,#061229 0%,var(--navy) 100%); color:#fff; padding:4rem 0 3rem; text-align:center; }
+    .blog-index-hero h1 { font-size:clamp(2rem,5vw,3rem); font-weight:900; margin-bottom:.75rem; }
+    .blog-index-hero p { color:rgba(255,255,255,.8); font-size:1.05rem; max-width:560px; margin:0 auto; }
+    .blog-grid-section { padding:4rem 0 5rem; background:var(--off); }
+    .blog-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:2rem; margin-top:2.5rem; }
+    .blog-card { background:#fff; border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; transition:transform .2s,box-shadow .2s; display:flex; flex-direction:column; }
+    .blog-card:hover { transform:translateY(-4px); box-shadow:0 12px 32px rgba(11,31,75,.12); }
+    .blog-card-body { padding:1.75rem; flex:1; display:flex; flex-direction:column; }
+    .blog-card-cat { font-size:.72rem; font-weight:800; letter-spacing:.1em; text-transform:uppercase; color:var(--gold-dk); margin-bottom:.75rem; }
+    .blog-card h2 { font-size:1.1rem; font-weight:800; color:var(--navy); line-height:1.3; margin-bottom:.65rem; }
+    .blog-card p { font-size:.875rem; color:var(--muted); line-height:1.7; flex:1; margin-bottom:1.25rem; }
+    .blog-card-meta { font-size:.78rem; color:var(--muted); margin-bottom:1rem; }
+    .blog-card-link { display:inline-flex; align-items:center; gap:.35rem; font-size:.85rem; font-weight:700; color:var(--navy); transition:color .2s; margin-top:auto; }
+    .blog-card-link::after { content:'→'; }
+    .blog-card-link:hover { color:var(--gold-dk); }
+    .blog-card-accent { height:4px; background:linear-gradient(90deg,var(--navy),var(--gold)); }
+
+    /* Related posts */
+    .related-section { padding:3.5rem 0; background:var(--off); }
+    .related-section h2 { font-size:1.35rem; font-weight:800; color:var(--navy); margin-bottom:1.5rem; }
+    .related-grid { display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; }
+    .related-card { background:#fff; border:1px solid var(--border); border-radius:var(--radius-lg); padding:1.5rem; transition:border-color .2s,transform .2s; }
+    .related-card:hover { border-color:var(--gold); transform:translateY(-2px); }
+    .related-card .r-cat { font-size:.7rem; font-weight:800; letter-spacing:.1em; text-transform:uppercase; color:var(--gold-dk); margin-bottom:.5rem; }
+    .related-card h3 { font-size:1rem; font-weight:700; color:var(--navy); margin-bottom:.5rem; line-height:1.3; }
+    .related-card p { font-size:.85rem; color:var(--muted); margin-bottom:1rem; }
+    .related-card a { font-size:.82rem; font-weight:700; color:var(--navy); }
+    .related-card a:hover { color:var(--gold-dk); }
+
+    @media(max-width:768px){
+      nav,.btn-quote,.icon-link{display:none!important;}
+      .hamburger{display:block!important;}
+      .footer-top{grid-template-columns:1fr;gap:2rem;}
+      .footer-bottom{flex-direction:column;text-align:center;gap:.5rem;}
+      .related-grid{grid-template-columns:1fr;}
+      .article-wrap{padding:2.5rem 1.25rem 3rem;}
+    }
+    @media(max-width:1024px){.footer-top{grid-template-columns:1fr 1fr;}}
+  </style>
+</head>
+<body>
+  <div class="announcement-bar">
+    🎓 Grad Season is HERE — Check our exclusive packages! &nbsp;|&nbsp; 7-Day Delivery Available &nbsp;|&nbsp; Curbside Pickup: Mon–Fri 10:30 AM – 6 PM
+  </div>
+  <header>
+    <div class="header-inner">
+      <a href="/" class="logo">
+        <img src="https://previews.digitalvisionstudios.net/junesteesnthings/assets/images/logo-design.jpg" alt="June's Tees &amp; Things logo" />
+        <div class="logo-text">June's Tees &amp; Things<span>Chicago Custom Printing</span></div>
+      </a>
+      <nav>
+        <div class="nav-dropdown">
+          <a href="/#services" class="nav-dropdown-toggle">Services</a>
+          <div class="nav-dropdown-menu">
+            <a href="/services/screen-printing.html">Screen Printing</a>
+            <a href="/services/embroidery.html">Embroidery</a>
+            <a href="/services/dtf-transfers.html">DTF Transfers</a>
+            <a href="/services/banners-signs.html">Banners &amp; Signs</a>
+            <a href="/services/event-decor.html">Event Décor</a>
+            <a href="/services/graphic-design.html">Graphic Design</a>
+          </div>
+        </div>
+        <div class="nav-dropdown">
+          <a href="/design-ideas.html" class="nav-dropdown-toggle">Design Ideas</a>
+          <div class="nav-dropdown-menu">
+            <a href="/design-ideas.html?category=graduation">Graduation &amp; Stoles</a>
+            <a href="/design-ideas.html?category=sports">Sports</a>
+            <a href="/design-ideas.html?category=business">Business</a>
+            <a href="/design-ideas.html?category=events">Events</a>
+          </div>
+        </div>
+        <a href="/grad/index.html" style="color:#F4A623;font-weight:800;">🎓 Grad 2026</a>
+        <a href="/blog/">Blog</a>
+      </nav>
+      <div class="header-actions">
+        <a href="https://www.instagram.com/junesteesnthings" class="icon-link" aria-label="Instagram" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/></svg>
+        </a>
+        <a href="tel:+17738491854" class="icon-link" aria-label="Call us">
+          <svg viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
+        </a>
+        <a href="/#contact" class="btn-quote">Get A Quote</a>
+      </div>
+      <button class="hamburger" id="hamburger-btn" aria-label="Open menu">&#9776;</button>
+    </div>
+  </header>
+  <div class="drawer-overlay" id="drawer-overlay"></div>
+  <div class="mobile-drawer" id="mobile-drawer">
+    <div class="drawer-header">
+      <span style="color:#fff;font-weight:900;font-size:1rem;">Menu</span>
+      <button id="drawer-close" aria-label="Close menu" style="background:none;border:none;color:#fff;font-size:1.5rem;cursor:pointer;">✕</button>
+    </div>
+    <nav class="drawer-nav">
+      <a href="/">Home</a>
+      <a href="/#services">Services</a>
+      <a href="/services/screen-printing.html" style="padding-left:1.5rem;font-size:.9rem;opacity:.85;">Screen Printing</a>
+      <a href="/services/embroidery.html" style="padding-left:1.5rem;font-size:.9rem;opacity:.85;">Embroidery</a>
+      <a href="/services/dtf-transfers.html" style="padding-left:1.5rem;font-size:.9rem;opacity:.85;">DTF Transfers</a>
+      <a href="/services/banners-signs.html" style="padding-left:1.5rem;font-size:.9rem;opacity:.85;">Banners &amp; Signs</a>
+      <a href="/services/event-decor.html" style="padding-left:1.5rem;font-size:.9rem;opacity:.85;">Event Décor</a>
+      <a href="/services/graphic-design.html" style="padding-left:1.5rem;font-size:.9rem;opacity:.85;">Graphic Design</a>
+      <a href="/design-ideas.html">Design Ideas</a>
+      <a href="/grad/index.html" style="color:#F4A623;font-weight:800;">🎓 Grad 2026</a>
+      <a href="/blog/">Blog</a>
+    </nav>
+    <div style="margin-top:2rem;display:flex;flex-direction:column;gap:.75rem;">
+      <a href="tel:+17738491854" style="background:#F4A623;color:#0B1F4B;font-weight:800;text-align:center;padding:.85rem;border-radius:8px;">📞 Call Now</a>
+      <a href="/#contact" style="background:#fff;color:#0B1F4B;font-weight:800;text-align:center;padding:.85rem;border-radius:8px;">✉️ Email Now</a>
+    </div>
+  </div>
+  <div class="marquee-strip" aria-hidden="true">
+    <div class="marquee-track">
+      <div class="marquee-item"><span>✦</span> Screen Printing</div>
+      <div class="marquee-item"><span>✦</span> Custom Embroidery</div>
+      <div class="marquee-item"><span>✦</span> DTF Transfers</div>
+      <div class="marquee-item"><span>✦</span> Banners &amp; Signs</div>
+      <div class="marquee-item"><span>✦</span> Event Décor</div>
+      <div class="marquee-item"><span>✦</span> Graphic Design</div>
+      <div class="marquee-item"><span>✦</span> Custom Tees</div>
+      <div class="marquee-item"><span>✦</span> Graduation Packages</div>
+      <div class="marquee-item"><span>✦</span> Yard Signs</div>
+      <div class="marquee-item"><span>✦</span> Step &amp; Repeat Backdrops</div>
+      <div class="marquee-item"><span>✦</span> Black-Owned</div>
+      <div class="marquee-item"><span>✦</span> Women-Owned</div>
+      <div class="marquee-item"><span>✦</span> Screen Printing</div>
+      <div class="marquee-item"><span>✦</span> Custom Embroidery</div>
+      <div class="marquee-item"><span>✦</span> DTF Transfers</div>
+      <div class="marquee-item"><span>✦</span> Banners &amp; Signs</div>
+      <div class="marquee-item"><span>✦</span> Event Décor</div>
+      <div class="marquee-item"><span>✦</span> Graphic Design</div>
+      <div class="marquee-item"><span>✦</span> Custom Tees</div>
+      <div class="marquee-item"><span>✦</span> Graduation Packages</div>
+      <div class="marquee-item"><span>✦</span> Yard Signs</div>
+      <div class="marquee-item"><span>✦</span> Step &amp; Repeat Backdrops</div>
+      <div class="marquee-item"><span>✦</span> Black-Owned</div>
+      <div class="marquee-item"><span>✦</span> Women-Owned</div>
+    </div>
+  </div>
+
+  <div class="blog-hero">
+    <div class="container">
+      <span class="post-category">Graphic Design</span>
+      <h1>How to Prepare Your Artwork for Custom Printing: File Format Guide</h1>
+      <div class="post-meta">
+        <span>📅 March 2026</span>
+        <span>🕒 8 min read</span>
+        <span>✍️ June's Tees &amp; Things</span>
+      </div>
+      <p class="intro">The most common reason a print order gets delayed or comes out wrong is not the printing — it is the artwork file. Understanding a few key concepts about print files will save you time, money, and frustration on every order you ever place.</p>
+    </div>
+  </div>
+
+  <main>
+    <div class="article-wrap">
+      <h2>Vector vs. Raster: The Most Important Concept in Print Artwork</h2>
+      <p>Every file format you have ever worked with falls into one of two categories: vector or raster. Understanding the difference between them is the single most important thing a customer can know before submitting artwork to a print shop.</p>
+      <p><strong>Raster images</strong> are made of pixels — tiny squares of color arranged in a grid. JPG, PNG, GIF, BMP, TIFF, and PSD are all raster formats. The problem with raster is that they have a fixed resolution. When you stretch a raster image larger than its native size, you are just making the pixels bigger — which creates blurriness, jagged edges, and visible "stairstepping" on curves and diagonals. A logo saved as a 200 × 200 pixel JPG looks fine as a thumbnail on a website, but printed at 4 inches wide on a shirt it will be a blurry mess.</p>
+      <p><strong>Vector images</strong> are made of mathematical paths — lines, curves, and shapes described by coordinates and equations. AI (Adobe Illustrator), EPS, SVG, and PDF (with embedded vector data) are vector formats. Because vectors are mathematical, they can scale to any size — a postage stamp or a billboard — and always output at perfect sharpness. One vector logo file works for a business card and a semi-truck wrap.</p>
+      <p>If you have a logo designed for you, always request the vector source file (AI or EPS) in addition to any JPG or PNG previews. The vector file is the master file that every future print job should use.</p>
+      <p>Adobe's <a href="https://www.adobe.com/creativecloud/design.html" class="outbound-link" target="_blank" rel="noopener noreferrer">Creative Cloud design resource hub</a> covers vector design fundamentals, file formats, and print preparation in depth.</p>
+
+      <div class="tip-box">
+        <strong>The Golden Rule</strong>
+        <p>If you can zoom into your logo file until it fills the screen and it stays perfectly sharp with clean edges, it is a vector file. If it gets blurry or pixelated, it is a raster file that needs to be redrawn as a vector before it can be printed cleanly at large size.</p>
+      </div>
+
+      <h2>Why That Logo From the Internet Will Not Work</h2>
+      <p>We see this every week: a customer sends a logo they right-clicked off a company website or screenshot from Instagram. Web images are optimized for small file size and screen display — typically 72–96 DPI and 200–500 pixels wide. This is completely unusable for print.</p>
+      <p>The minimum resolution for high-quality print at actual print size is <strong>300 DPI</strong>. A 4-inch wide design printed at 300 DPI requires a 1200 × 1200 pixel file minimum. A 10-inch wide design requires 3000 pixels. The image you grabbed from the website is not even close.</p>
+      <p>There is no software that can turn a low-resolution raster image into a high-quality print file. AI upscalers can sharpen photos somewhat, but they cannot invent detail that was never there. The only real solution is to either locate the original high-resolution source file or have the logo redrawn as a vector by a designer.</p>
+
+      <h2>CMYK vs. RGB: Color Mode Matters</h2>
+      <p>Computer screens create color by mixing red, green, and blue light (RGB). Printers create color by layering cyan, magenta, yellow, and black ink (CMYK). These two systems have different color gamuts — the range of colors they can reproduce — and they do not map to each other perfectly.</p>
+      <p>The practical implication: if you design a logo in RGB with a vivid electric blue (#0057FF) and submit it for screen printing, the printed result will look noticeably different — typically darker and less saturated — because CMYK cannot reproduce some RGB colors.</p>
+      <p>Always design print-bound artwork in CMYK mode from the start. In Adobe Illustrator or Photoshop, set your color mode to CMYK before beginning. If you are using a tool that only supports RGB (like most web-based design tools), the conversion at submission time can be managed, but flag it to your printer so they can adjust if needed.</p>
+      <p>Canva is a popular design tool but operates entirely in RGB and has limited support for print-accurate color output. It is a useful starting point for concepts but has real limitations for production files. <a href="https://www.canva.com/learn/design-tips" class="outbound-link" target="_blank" rel="noopener noreferrer">Canva's own design tips library</a> acknowledges these print limitations and recommends working with a professional printer's specifications.</p>
+
+      <h2>The 300 DPI Rule</h2>
+      <p>300 DPI (dots per inch) is the standard minimum resolution for printed materials viewed at normal reading distance — shirts, business cards, flyers, brochures. Large format items (banners, signs, backdrops) can use 100–150 DPI because they are viewed from farther away. Magazine-quality print uses 300–400 DPI.</p>
+      <p>When setting up a file for screen printing, your artwork should be 300 DPI at actual print size. If your design will print at 12 inches wide, the file should be at least 3600 pixels wide. If it will print at 4 inches wide, 1200 pixels wide is sufficient.</p>
+
+      <h2>Outline Your Fonts</h2>
+      <p>Fonts are separate software components — your design file references a font installed on your computer, but that font may not be installed on your printer's production computer. If you send an AI file with live text and the printer does not have your font, the text will either substitute a default font (completely changing your design) or show as an error.</p>
+      <p>The solution: <strong>outline (or expand) all fonts before submitting</strong>. In Adobe Illustrator, select all text and go to Type → Create Outlines. This converts your text from live type into vector shapes — the printer's software has no font dependency, the shapes are embedded in the file, and your design looks exactly as you intended. Do this on a copy of your file and keep the original with live text for future editing.</p>
+
+      <h2>Pantone and Color Matching</h2>
+      <p>For brand-critical colors — corporate logos, school colors, team colors — Pantone matching is the professional standard. The Pantone Matching System (PMS) assigns a number to every standardized ink color. PMS 286 is a specific shade of blue. PMS 165 is a specific orange. Every professional print shop can mix ink to a Pantone number with high accuracy.</p>
+      <p>If you do not have a Pantone reference, provide a CMYK value or a hex code and we will get as close as possible. For screen printing, we can pull a physical Pantone swatch and mix ink to match. For DTF and digital printing, CMYK is the reference system.</p>
+
+      <h2>What "Print-Ready" Actually Means</h2>
+      <p>When a printer asks for a "print-ready" file, they mean a file that requires no additional preparation before it goes on press. A print-ready file:</p>
+      <ul class="content-list">
+        <li>Is vector or 300 DPI raster at actual print size</li>
+        <li>Is in CMYK color mode (or has CMYK values specified)</li>
+        <li>Has all fonts outlined or embedded</li>
+        <li>Has correct bleed and safe zone margins (for banners and signs)</li>
+        <li>Has no RGB or spot colors that have not been converted or specified</li>
+        <li>Is saved in a production format: PDF, AI, EPS, or high-resolution TIFF/PNG</li>
+      </ul>
+
+      <h2>When to DIY vs. When to Hire a Designer</h2>
+      <p>Tools like Canva, Adobe Express, and Figma have made basic design accessible to everyone, and many customers produce perfectly usable artwork for simple jobs. If you have a clear vision and time to learn the tool, DIY is a reasonable approach for text-based designs, simple layouts, and projects where exact color matching is not critical.</p>
+      <p>Hire a designer when: you have a brand that needs consistency across multiple materials, your logo does not yet exist as a vector file, you need a photorealistic or complex illustration, or the stakes are high enough that bad design would cost you more than design fees. <a href="https://99designs.com/blog" class="outbound-link" target="_blank" rel="noopener noreferrer">99designs' design blog</a> has excellent guides on when professional design is worth the investment and how to brief a designer effectively.</p>
+      <p>At June's Tees &amp; Things, we offer graphic design services in-house. Whether you need a logo vector-converted, a party backdrop laid out, or a design built from scratch, our team can handle it. Visit our <a href="/services/graphic-design.html">graphic design service page</a> to learn more or call (773) 849-1854.</p>
+    </div>
+  </main>
+
+  <div class="cta-band">
+    <div class="container">
+      <h2>Ready to Start Your Order?</h2>
+      <p>Get a fast, free quote from Chicago's Black-owned, women-owned custom print shop. We handle everything from artwork to delivery.</p>
+      <div class="cta-btns">
+        <a href="tel:+17738491854" class="btn-gold">📞 Call (773) 849-1854</a>
+        <a href="/services/graphic-design.html" class="btn-white">Learn About Graphic Design</a>
+      </div>
+    </div>
+  </div>
+  <section class="related-section">
+    <div class="container">
+      <h2>More From the Blog</h2>
+      <div class="related-grid">
+        <div class="related-card">
+          <div class="r-cat">Screen Printing</div>
+          <h3>How to Get the Best Results from Screen Printing</h3>
+          <p>Everything you need to know before placing a bulk screen printing order — artwork prep, garment choice, ink types, and common mistakes to avoid.</p>
+          <a href="/blog/screen-printing-tips.html">Read Article →</a>
+        </div>
+        <div class="related-card">
+          <div class="r-cat">DTF Transfers</div>
+          <h3>What is DTF Printing? The Complete Guide to Direct-to-Film Transfers</h3>
+          <p>DTF is the fastest-growing printing method for a reason. No minimums, full color, any fabric. Here's everything you need to know.</p>
+          <a href="/blog/dtf-transfers-tips.html">Read Article →</a>
+        </div>
+      </div>
+    </div>
+  </section>
+  <footer>
+    <div class="footer-top container">
+      <div class="footer-brand">
+        <a href="/" class="footer-logo">June's Tees &amp; Things</a>
+        <p class="footer-tagline">Chicago's custom print shop for the culture. Shirts, signs, standees, party favors — if you can dream it, we can print it. Black-owned. Women-owned. Built for the community.</p>
+        <div class="footer-social">
+          <a href="https://www.instagram.com/junesteesnthings" target="_blank" rel="noopener" aria-label="Instagram">
+            <svg viewBox="0 0 24 24"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/></svg>
+          </a>
+        </div>
+      </div>
+      <div class="footer-col">
+        <div class="footer-col-title">Services</div>
+        <ul>
+          <li><a href="/services/screen-printing.html">Screen Printing</a></li>
+          <li><a href="/services/embroidery.html">Embroidery</a></li>
+          <li><a href="/services/dtf-transfers.html">DTF Transfers</a></li>
+          <li><a href="/services/banners-signs.html">Banners &amp; Signs</a></li>
+          <li><a href="/services/event-decor.html">Event Décor</a></li>
+          <li><a href="/services/graphic-design.html">Graphic Design</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <div class="footer-col-title">Company</div>
+        <ul>
+          <li><a href="/#about">About Us</a></li>
+          <li><a href="/#portfolio">Our Work</a></li>
+          <li><a href="/#reviews">Reviews</a></li>
+          <li><a href="/blog/">Blog</a></li>
+          <li><a href="/grad/index.html">Grad 2026</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <div class="footer-col-title">Info</div>
+        <ul>
+          <li><a href="tel:+17738491854">(773) 849-1854</a></li>
+          <li><a href="/#contact">Get A Quote</a></li>
+          <li>Mon–Fri 10:30 AM – 6 PM</li>
+          <li>Chicago, IL</li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-bottom container">
+      <span>© 2026 June's Tees &amp; Things. All rights reserved.</span>
+    </div>
+  </footer>
+  <script>
+    const hamburger = document.getElementById('hamburger-btn');
+    const drawer = document.getElementById('mobile-drawer');
+    const overlay = document.getElementById('drawer-overlay');
+    const closeBtn = document.getElementById('drawer-close');
+    function openDrawer() { drawer.classList.add('open'); overlay.style.display = 'block'; document.body.style.overflow = 'hidden'; }
+    function closeDrawer() { drawer.classList.remove('open'); overlay.style.display = 'none'; document.body.style.overflow = ''; }
+    if (hamburger) hamburger.addEventListener('click', openDrawer);
+    if (closeBtn) closeBtn.addEventListener('click', closeDrawer);
+    if (overlay) overlay.addEventListener('click', closeDrawer);
+    document.querySelectorAll('.nav-dropdown').forEach(dd => {
+      let timer;
+      dd.addEventListener('mouseenter', () => { clearTimeout(timer); dd.classList.add('open'); });
+      dd.addEventListener('mouseleave', () => { timer = setTimeout(() => dd.classList.remove('open'), 200); });
+    });
+  </script>
+</body>
+</html>

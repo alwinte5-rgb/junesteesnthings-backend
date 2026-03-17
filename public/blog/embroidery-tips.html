@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Embroidery vs Screen Printing: Which is Right for Your Order? | June's Tees &amp; Things</title>
+  <meta name="description" content="Not sure whether to choose embroidery or screen printing for your Chicago custom apparel order? Learn about digitizing, stitch files, fabric compatibility, and what designs work best." />
+  <meta name="keywords" content="embroidery vs screen printing, custom embroidery Chicago, digitizing embroidery, stitch file DST PES, embroidery tips, embroidery for hats polos, Chicago embroidery shop" />
+  <link rel="canonical" href="https://www.jtees.net/blog/embroidery-tips.html" />
+  <meta property="og:title" content="Embroidery vs Screen Printing: Which is Right for Your Order? | June's Tees &amp; Things" />
+  <meta property="og:description" content="Not sure whether to choose embroidery or screen printing for your Chicago custom apparel order? Learn about digitizing, stitch files, fabric compatibility, and what designs work best." />
+  <meta property="og:type" content="article" />
+  <meta property="og:url" content="https://www.jtees.net/blog/embroidery-tips.html" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --navy:#0B1F4B; --navy-mid:#162a5e; --gold:#F4A623; --gold-dk:#C9861A;
+      --white:#ffffff; --off:#f7f6f3; --muted:#6B7280; --border:#E5E7EB;
+      --radius:8px; --radius-lg:16px;
+    }
+    *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
+    html { scroll-behavior:smooth; }
+    body { font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif; background:var(--white); color:#374151; line-height:1.6; overflow-x:hidden; }
+    img { max-width:100%; display:block; }
+    a { text-decoration:none; color:inherit; }
+    ul { list-style:none; }
+    .container { max-width:1200px; margin:0 auto; padding:0 2rem; }
+
+    /* Announcement bar */
+    .announcement-bar { background:var(--gold); color:var(--navy); text-align:center; padding:.55rem 1rem; font-size:.82rem; font-weight:600; letter-spacing:.02em; }
+
+    /* Header */
+    header { background:var(--navy); position:sticky; top:0; z-index:1000; box-shadow:0 2px 20px rgba(0,0,0,.3); }
+    .header-inner { display:flex; align-items:center; justify-content:space-between; height:70px; padding:0 2rem; max-width:1300px; margin:0 auto; }
+    .logo { display:flex; align-items:center; gap:.75rem; }
+    .logo img { width:44px; height:44px; border-radius:50%; object-fit:cover; }
+    .logo-text { font-size:1.05rem; font-weight:700; color:var(--gold); line-height:1.2; }
+    .logo-text span { display:block; font-size:.7rem; font-weight:400; color:rgba(255,255,255,.7); letter-spacing:.08em; text-transform:uppercase; }
+    nav { display:flex; align-items:center; gap:.25rem; }
+    nav > a { font-size:.85rem; font-weight:500; color:#fff; padding:.5rem .75rem; border-radius:8px; transition:color .2s,background .2s; }
+    nav > a:hover { background:rgba(255,255,255,.12); }
+    .header-actions { display:flex; align-items:center; gap:1rem; }
+    .icon-link { display:flex; align-items:center; justify-content:center; width:36px; height:36px; border-radius:50%; background:rgba(255,255,255,.06); color:#fff; transition:background .2s,color .2s; }
+    .icon-link:hover { background:var(--gold); color:var(--navy); }
+    .icon-link svg { width:16px; height:16px; fill:currentColor; }
+    .btn-quote { background:var(--gold); color:var(--navy); font-size:.82rem; font-weight:700; padding:.55rem 1.25rem; border-radius:100px; transition:background .2s,transform .2s; white-space:nowrap; }
+    .btn-quote:hover { background:var(--gold-dk); transform:translateY(-1px); }
+    .hamburger { display:none; background:none; border:none; color:#fff; font-size:1.4rem; cursor:pointer; padding:4px; }
+
+    /* Nav dropdown */
+    .nav-dropdown { position:relative; }
+    .nav-dropdown-toggle { display:flex; align-items:center; gap:4px; font-size:.85rem; font-weight:500; color:#fff; padding:.5rem .75rem; border-radius:8px; transition:background .2s; cursor:pointer; }
+    .nav-dropdown-toggle::after { content:'▾'; font-size:.7rem; opacity:.6; }
+    .nav-dropdown-toggle:hover { background:rgba(255,255,255,.12); }
+    .nav-dropdown-menu { position:absolute; top:calc(100% + 6px); left:50%; transform:translateX(-50%); background:var(--navy); border:1px solid rgba(255,255,255,.12); border-radius:10px; padding:.5rem; box-shadow:0 8px 32px rgba(0,0,0,.5); min-width:180px; opacity:0; pointer-events:none; transition:opacity .15s,transform .15s; z-index:500; white-space:nowrap; }
+    .nav-dropdown.open .nav-dropdown-menu { opacity:1; pointer-events:auto; }
+    .nav-dropdown-menu a { display:block; padding:.45rem 1rem; font-size:.82rem; font-weight:500; color:rgba(255,255,255,.8); border-radius:6px; transition:background .15s,color .15s; }
+    .nav-dropdown-menu a:hover { background:rgba(255,255,255,.08); color:#fff; }
+
+    /* Mobile drawer */
+    .mobile-drawer { position:fixed; top:0; left:-100%; width:285px; height:100vh; background:var(--navy); z-index:2000; padding:1.75rem 1.5rem; transition:left .3s; overflow-y:auto; }
+    .mobile-drawer.open { left:0; }
+    .drawer-overlay { position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:1999; display:none; }
+    .drawer-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:1.75rem; }
+    .drawer-nav a { display:block; padding:.85rem 0; font-size:1rem; font-weight:500; color:#fff; border-bottom:1px solid rgba(255,255,255,.08); transition:color .2s; }
+    .drawer-nav a:hover { color:var(--gold); }
+
+    /* Marquee */
+    .marquee-strip { background:#fff; padding:1.75rem 0; overflow:hidden; border-top:1px solid var(--border); border-bottom:1px solid var(--border); }
+    .marquee-track { display:flex; width:max-content; animation:marquee-scroll 32s linear infinite; }
+    .marquee-track:hover { animation-play-state:paused; }
+    .marquee-item { display:inline-flex; align-items:center; gap:.6rem; white-space:nowrap; padding:0 2.5rem; font-size:.9rem; font-weight:700; color:var(--navy); text-transform:uppercase; letter-spacing:.08em; }
+    .marquee-item span { color:var(--gold); font-size:1rem; }
+    @keyframes marquee-scroll { from { transform:translateX(0); } to { transform:translateX(-50%); } }
+
+    /* Footer */
+    footer { background:var(--navy); color:rgba(255,255,255,.7); padding:0; }
+    .footer-top { display:grid; grid-template-columns:1.8fr 1fr 1fr 1fr; gap:3rem; padding:3.5rem 0 2.5rem; }
+    .footer-brand .footer-logo { font-size:1.15rem; font-weight:800; color:var(--gold); display:block; margin-bottom:.75rem; }
+    .footer-tagline { font-size:.875rem; color:rgba(255,255,255,.65); line-height:1.75; margin-bottom:1.25rem; }
+    .footer-social { display:flex; gap:.75rem; }
+    .footer-social a { display:flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:50%; background:rgba(255,255,255,.1); color:rgba(255,255,255,.8); transition:background .2s,color .2s; }
+    .footer-social a:hover { background:var(--gold); color:var(--navy); }
+    .footer-social svg { width:15px; height:15px; fill:currentColor; }
+    .footer-col-title { font-size:.75rem; font-weight:700; text-transform:uppercase; letter-spacing:.1em; color:var(--gold); margin-bottom:1rem; }
+    .footer-col ul { display:flex; flex-direction:column; gap:.55rem; }
+    .footer-col li { font-size:.875rem; color:rgba(255,255,255,.65); }
+    .footer-col a { color:rgba(255,255,255,.65); transition:color .2s; }
+    .footer-col a:hover { color:var(--gold); }
+    .footer-bottom { display:flex; justify-content:space-between; align-items:center; padding:1.25rem 0; border-top:1px solid rgba(255,255,255,.08); font-size:.82rem; color:rgba(255,255,255,.45); }
+
+    /* Blog-specific */
+    .blog-hero { background:linear-gradient(135deg,#061229 0%,var(--navy) 55%,var(--navy-mid) 100%); color:#fff; padding:4rem 0 3.5rem; }
+    .blog-hero .container { max-width:800px; }
+    .post-category { display:inline-block; background:var(--gold); color:var(--navy); font-size:.72rem; font-weight:800; letter-spacing:.1em; text-transform:uppercase; padding:.3rem .85rem; border-radius:100px; margin-bottom:1.25rem; }
+    .blog-hero h1 { font-size:clamp(1.7rem,4vw,2.8rem); font-weight:900; line-height:1.15; margin-bottom:1rem; }
+    .post-meta { display:flex; flex-wrap:wrap; gap:1rem; font-size:.82rem; color:rgba(255,255,255,.6); margin-bottom:1.25rem; }
+    .post-meta span { display:flex; align-items:center; gap:.3rem; }
+    .blog-hero .intro { font-size:1.05rem; color:rgba(255,255,255,.85); line-height:1.75; max-width:700px; }
+
+    /* Article body */
+    .article-wrap { max-width:760px; margin:0 auto; padding:3.5rem 2rem 4rem; }
+    .article-wrap h2 { font-size:1.55rem; font-weight:800; color:var(--navy); margin:2.5rem 0 .85rem; line-height:1.25; }
+    .article-wrap h3 { font-size:1.15rem; font-weight:700; color:var(--navy); margin:1.75rem 0 .6rem; }
+    .article-wrap p { font-size:1rem; line-height:1.8; color:#374151; margin-bottom:1.25rem; }
+    .article-wrap ul.content-list { list-style:none; margin:1rem 0 1.5rem; display:flex; flex-direction:column; gap:.65rem; }
+    .article-wrap ul.content-list li { padding-left:1.5rem; position:relative; font-size:.975rem; line-height:1.7; color:#374151; }
+    .article-wrap ul.content-list li::before { content:'✓'; position:absolute; left:0; color:var(--gold-dk); font-weight:900; }
+    .article-wrap ol.content-list { list-style:none; counter-reset:ol-counter; margin:1rem 0 1.5rem; display:flex; flex-direction:column; gap:.65rem; }
+    .article-wrap ol.content-list li { padding-left:2rem; position:relative; font-size:.975rem; line-height:1.7; counter-increment:ol-counter; }
+    .article-wrap ol.content-list li::before { content:counter(ol-counter); position:absolute; left:0; background:var(--navy); color:#fff; width:1.3rem; height:1.3rem; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:.72rem; font-weight:800; top:.2rem; }
+    .tip-box { background:#fef9ec; border-left:4px solid var(--gold); border-radius:0 var(--radius) var(--radius) 0; padding:1.25rem 1.5rem; margin:2rem 0; }
+    .tip-box strong { display:block; font-size:.8rem; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--gold-dk); margin-bottom:.4rem; }
+    .tip-box p { margin:0; font-size:.95rem; color:#374151; }
+    blockquote { border-left:4px solid var(--navy); margin:1.75rem 0; padding:.75rem 1.25rem; background:var(--off); border-radius:0 var(--radius) var(--radius) 0; }
+    blockquote p { margin:0; font-style:italic; color:var(--muted); }
+    .outbound-link { color:var(--gold-dk); font-weight:600; border-bottom:1px solid rgba(196,134,26,.35); transition:color .2s,border-color .2s; }
+    .outbound-link::after { content:' ↗'; font-size:.75em; opacity:.7; }
+    .outbound-link:hover { color:var(--gold); border-color:var(--gold); }
+
+    /* CTA Band */
+    .cta-band { background:linear-gradient(135deg,var(--navy) 0%,var(--navy-mid) 100%); color:#fff; padding:4rem 0; text-align:center; }
+    .cta-band h2 { color:#fff; font-size:1.75rem; font-weight:900; margin-bottom:.75rem; }
+    .cta-band p { color:rgba(255,255,255,.8); font-size:1rem; margin-bottom:2rem; max-width:520px; margin-left:auto; margin-right:auto; }
+    .cta-btns { display:flex; flex-wrap:wrap; gap:1rem; justify-content:center; }
+    .btn-gold { display:inline-flex; align-items:center; gap:.4rem; background:var(--gold); color:var(--navy); font-weight:800; font-size:.95rem; padding:.8rem 2rem; border-radius:100px; transition:background .2s,transform .2s; }
+    .btn-gold:hover { background:var(--gold-dk); transform:translateY(-2px); }
+    .btn-white { display:inline-flex; align-items:center; gap:.4rem; background:#fff; color:var(--navy); font-weight:800; font-size:.95rem; padding:.8rem 2rem; border-radius:100px; transition:transform .2s,filter .2s; }
+    .btn-white:hover { transform:translateY(-2px); filter:brightness(.96); }
+
+    /* Blog index cards */
+    .blog-index-hero { background:linear-gradient(135deg,#061229 0%,var(--navy) 100%); color:#fff; padding:4rem 0 3rem; text-align:center; }
+    .blog-index-hero h1 { font-size:clamp(2rem,5vw,3rem); font-weight:900; margin-bottom:.75rem; }
+    .blog-index-hero p { color:rgba(255,255,255,.8); font-size:1.05rem; max-width:560px; margin:0 auto; }
+    .blog-grid-section { padding:4rem 0 5rem; background:var(--off); }
+    .blog-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:2rem; margin-top:2.5rem; }
+    .blog-card { background:#fff; border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; transition:transform .2s,box-shadow .2s; display:flex; flex-direction:column; }
+    .blog-card:hover { transform:translateY(-4px); box-shadow:0 12px 32px rgba(11,31,75,.12); }
+    .blog-card-body { padding:1.75rem; flex:1; display:flex; flex-direction:column; }
+    .blog-card-cat { font-size:.72rem; font-weight:800; letter-spacing:.1em; text-transform:uppercase; color:var(--gold-dk); margin-bottom:.75rem; }
+    .blog-card h2 { font-size:1.1rem; font-weight:800; color:var(--navy); line-height:1.3; margin-bottom:.65rem; }
+    .blog-card p { font-size:.875rem; color:var(--muted); line-height:1.7; flex:1; margin-bottom:1.25rem; }
+    .blog-card-meta { font-size:.78rem; color:var(--muted); margin-bottom:1rem; }
+    .blog-card-link { display:inline-flex; align-items:center; gap:.35rem; font-size:.85rem; font-weight:700; color:var(--navy); transition:color .2s; margin-top:auto; }
+    .blog-card-link::after { content:'→'; }
+    .blog-card-link:hover { color:var(--gold-dk); }
+    .blog-card-accent { height:4px; background:linear-gradient(90deg,var(--navy),var(--gold)); }
+
+    /* Related posts */
+    .related-section { padding:3.5rem 0; background:var(--off); }
+    .related-section h2 { font-size:1.35rem; font-weight:800; color:var(--navy); margin-bottom:1.5rem; }
+    .related-grid { display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; }
+    .related-card { background:#fff; border:1px solid var(--border); border-radius:var(--radius-lg); padding:1.5rem; transition:border-color .2s,transform .2s; }
+    .related-card:hover { border-color:var(--gold); transform:translateY(-2px); }
+    .related-card .r-cat { font-size:.7rem; font-weight:800; letter-spacing:.1em; text-transform:uppercase; color:var(--gold-dk); margin-bottom:.5rem; }
+    .related-card h3 { font-size:1rem; font-weight:700; color:var(--navy); margin-bottom:.5rem; line-height:1.3; }
+    .related-card p { font-size:.85rem; color:var(--muted); margin-bottom:1rem; }
+    .related-card a { font-size:.82rem; font-weight:700; color:var(--navy); }
+    .related-card a:hover { color:var(--gold-dk); }
+
+    @media(max-width:768px){
+      nav,.btn-quote,.icon-link{display:none!important;}
+      .hamburger{display:block!important;}
+      .footer-top{grid-template-columns:1fr;gap:2rem;}
+      .footer-bottom{flex-direction:column;text-align:center;gap:.5rem;}
+      .related-grid{grid-template-columns:1fr;}
+      .article-wrap{padding:2.5rem 1.25rem 3rem;}
+    }
+    @media(max-width:1024px){.footer-top{grid-template-columns:1fr 1fr;}}
+  </style>
+</head>
+<body>
+  <div class="announcement-bar">
+    🎓 Grad Season is HERE — Check our exclusive packages! &nbsp;|&nbsp; 7-Day Delivery Available &nbsp;|&nbsp; Curbside Pickup: Mon–Fri 10:30 AM – 6 PM
+  </div>
+  <header>
+    <div class="header-inner">
+      <a href="/" class="logo">
+        <img src="https://previews.digitalvisionstudios.net/junesteesnthings/assets/images/logo-design.jpg" alt="June's Tees &amp; Things logo" />
+        <div class="logo-text">June's Tees &amp; Things<span>Chicago Custom Printing</span></div>
+      </a>
+      <nav>
+        <div class="nav-dropdown">
+          <a href="/#services" class="nav-dropdown-toggle">Services</a>
+          <div class="nav-dropdown-menu">
+            <a href="/services/screen-printing.html">Screen Printing</a>
+            <a href="/services/embroidery.html">Embroidery</a>
+            <a href="/services/dtf-transfers.html">DTF Transfers</a>
+            <a href="/services/banners-signs.html">Banners &amp; Signs</a>
+            <a href="/services/event-decor.html">Event Décor</a>
+            <a href="/services/graphic-design.html">Graphic Design</a>
+          </div>
+        </div>
+        <div class="nav-dropdown">
+          <a href="/design-ideas.html" class="nav-dropdown-toggle">Design Ideas</a>
+          <div class="nav-dropdown-menu">
+            <a href="/design-ideas.html?category=graduation">Graduation &amp; Stoles</a>
+            <a href="/design-ideas.html?category=sports">Sports</a>
+            <a href="/design-ideas.html?category=business">Business</a>
+            <a href="/design-ideas.html?category=events">Events</a>
+          </div>
+        </div>
+        <a href="/grad/index.html" style="color:#F4A623;font-weight:800;">🎓 Grad 2026</a>
+        <a href="/blog/">Blog</a>
+      </nav>
+      <div class="header-actions">
+        <a href="https://www.instagram.com/junesteesnthings" class="icon-link" aria-label="Instagram" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/></svg>
+        </a>
+        <a href="tel:+17738491854" class="icon-link" aria-label="Call us">
+          <svg viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
+        </a>
+        <a href="/#contact" class="btn-quote">Get A Quote</a>
+      </div>
+      <button class="hamburger" id="hamburger-btn" aria-label="Open menu">&#9776;</button>
+    </div>
+  </header>
+  <div class="drawer-overlay" id="drawer-overlay"></div>
+  <div class="mobile-drawer" id="mobile-drawer">
+    <div class="drawer-header">
+      <span style="color:#fff;font-weight:900;font-size:1rem;">Menu</span>
+      <button id="drawer-close" aria-label="Close menu" style="background:none;border:none;color:#fff;font-size:1.5rem;cursor:pointer;">✕</button>
+    </div>
+    <nav class="drawer-nav">
+      <a href="/">Home</a>
+      <a href="/#services">Services</a>
+      <a href="/services/screen-printing.html" style="padding-left:1.5rem;font-size:.9rem;opacity:.85;">Screen Printing</a>
+      <a href="/services/embroidery.html" style="padding-left:1.5rem;font-size:.9rem;opacity:.85;">Embroidery</a>
+      <a href="/services/dtf-transfers.html" style="padding-left:1.5rem;font-size:.9rem;opacity:.85;">DTF Transfers</a>
+      <a href="/services/banners-signs.html" style="padding-left:1.5rem;font-size:.9rem;opacity:.85;">Banners &amp; Signs</a>
+      <a href="/services/event-decor.html" style="padding-left:1.5rem;font-size:.9rem;opacity:.85;">Event Décor</a>
+      <a href="/services/graphic-design.html" style="padding-left:1.5rem;font-size:.9rem;opacity:.85;">Graphic Design</a>
+      <a href="/design-ideas.html">Design Ideas</a>
+      <a href="/grad/index.html" style="color:#F4A623;font-weight:800;">🎓 Grad 2026</a>
+      <a href="/blog/">Blog</a>
+    </nav>
+    <div style="margin-top:2rem;display:flex;flex-direction:column;gap:.75rem;">
+      <a href="tel:+17738491854" style="background:#F4A623;color:#0B1F4B;font-weight:800;text-align:center;padding:.85rem;border-radius:8px;">📞 Call Now</a>
+      <a href="/#contact" style="background:#fff;color:#0B1F4B;font-weight:800;text-align:center;padding:.85rem;border-radius:8px;">✉️ Email Now</a>
+    </div>
+  </div>
+  <div class="marquee-strip" aria-hidden="true">
+    <div class="marquee-track">
+      <div class="marquee-item"><span>✦</span> Screen Printing</div>
+      <div class="marquee-item"><span>✦</span> Custom Embroidery</div>
+      <div class="marquee-item"><span>✦</span> DTF Transfers</div>
+      <div class="marquee-item"><span>✦</span> Banners &amp; Signs</div>
+      <div class="marquee-item"><span>✦</span> Event Décor</div>
+      <div class="marquee-item"><span>✦</span> Graphic Design</div>
+      <div class="marquee-item"><span>✦</span> Custom Tees</div>
+      <div class="marquee-item"><span>✦</span> Graduation Packages</div>
+      <div class="marquee-item"><span>✦</span> Yard Signs</div>
+      <div class="marquee-item"><span>✦</span> Step &amp; Repeat Backdrops</div>
+      <div class="marquee-item"><span>✦</span> Black-Owned</div>
+      <div class="marquee-item"><span>✦</span> Women-Owned</div>
+      <div class="marquee-item"><span>✦</span> Screen Printing</div>
+      <div class="marquee-item"><span>✦</span> Custom Embroidery</div>
+      <div class="marquee-item"><span>✦</span> DTF Transfers</div>
+      <div class="marquee-item"><span>✦</span> Banners &amp; Signs</div>
+      <div class="marquee-item"><span>✦</span> Event Décor</div>
+      <div class="marquee-item"><span>✦</span> Graphic Design</div>
+      <div class="marquee-item"><span>✦</span> Custom Tees</div>
+      <div class="marquee-item"><span>✦</span> Graduation Packages</div>
+      <div class="marquee-item"><span>✦</span> Yard Signs</div>
+      <div class="marquee-item"><span>✦</span> Step &amp; Repeat Backdrops</div>
+      <div class="marquee-item"><span>✦</span> Black-Owned</div>
+      <div class="marquee-item"><span>✦</span> Women-Owned</div>
+    </div>
+  </div>
+
+  <div class="blog-hero">
+    <div class="container">
+      <span class="post-category">Embroidery</span>
+      <h1>Embroidery vs Screen Printing: Which is Right for Your Order?</h1>
+      <div class="post-meta">
+        <span>📅 March 2026</span>
+        <span>🕒 6 min read</span>
+        <span>✍️ June's Tees &amp; Things</span>
+      </div>
+      <p class="intro">Both embroidery and screen printing can produce beautiful custom apparel — but they work differently, cost differently, and excel in different situations. Here is how to choose the right method for your order.</p>
+    </div>
+  </div>
+
+  <main>
+    <div class="article-wrap">
+      <h2>When Embroidery Is the Right Choice</h2>
+      <p>Embroidery is the process of stitching a design directly into the fabric using thread. The result is textured, dimensional, and perceived as premium — which is why you see embroidery on polo shirts, caps, jackets, and uniforms far more often than screen printing. If your goal is a professional, long-lasting look for corporate wear, team uniforms, or high-end gifts, embroidery is almost always the right call.</p>
+      <p>The key difference comes down to surface and purpose. Screen printing sits on top of a garment and works best on flat surfaces like the chest, back, or sleeve of a t-shirt. Embroidery works best on structured fabrics — polos, hats, jackets, bags, and towels — where the added texture enhances rather than distorts the design.</p>
+
+      <h2>What Is Digitizing — and Why Does It Cost Extra?</h2>
+      <p>You cannot simply send a logo file to an embroidery machine the way you can to a screen printing press. Before any embroidery job can run, your design must be <strong>digitized</strong> — converted from an image into a stitch file that tells the machine exactly how to move the needle, which thread colors to use, the stitch type (satin stitch, fill stitch, run stitch), and the stitch density for each element of the design.</p>
+      <p>A skilled digitizer can take a 5-color corporate logo and produce an embroidery file that looks sharp, lies flat on the fabric, and holds up through hundreds of wash cycles. A poorly digitized file produces loose threads, puckering fabric, and designs that fall apart after a few washes.</p>
+      <p>Digitizing is a one-time setup fee — once your file is created, you own it and it can be reused for future orders without paying again. Common stitch file formats include <strong>.DST</strong> (Tajima, the most universal format), <strong>.PES</strong> (Brother machines), and <strong>.EMB</strong> (Wilcom, used by professional digitizing software).</p>
+      <p><a href="https://www.impressionsmagazine.com" class="outbound-link" target="_blank" rel="noopener noreferrer">Impressions Magazine</a> and <a href="https://www.printwear.com" class="outbound-link" target="_blank" rel="noopener noreferrer">Printwear Magazine</a> are two of the most respected trade publications covering embroidery techniques, thread technology, and industry trends.</p>
+
+      <div class="tip-box">
+        <strong>Key Takeaway</strong>
+        <p>Digitizing is a one-time investment. Pay for a quality digitizing job once, keep the file, and every future reorder is just the cost of thread and labor.</p>
+      </div>
+
+      <h2>Thread Counts and Stitch Density</h2>
+      <p>Stitch count is how embroidery is priced — the more stitches in a design, the longer it takes to run and the more it costs. A small left-chest logo typically runs 5,000–10,000 stitches. A full back jacket design can exceed 50,000 stitches. Your digitizer will give you a stitch count estimate before your order runs.</p>
+      <p>Stitch density refers to how tightly packed the stitches are. Too loose and you can see the garment through the design. Too dense and the fabric puckers and the design feels stiff. A professional digitizer balances density based on the garment fabric, the design size, and the thread weight being used.</p>
+
+      <h2>Best Fabrics for Embroidery</h2>
+      <ul class="content-list">
+        <li><strong>Piqué polo shirts</strong>: The textured weave holds thread exceptionally well. Left-chest logos on polos are one of the most common embroidery applications.</li>
+        <li><strong>Structured hats (5-panel or 6-panel caps)</strong>: The stiff front panel is ideal for embroidery. Unstructured or slouch hats are harder to embroider cleanly.</li>
+        <li><strong>Jackets, fleece, and sweatshirts</strong>: Heavy fabrics support dense stitch designs beautifully.</li>
+        <li><strong>Canvas bags and totes</strong>: Flat woven canvas is one of the easiest substrates to embroider.</li>
+        <li><strong>Avoid very thin or stretchy fabrics</strong>: Jersey knit t-shirts, athletic performance fabrics, and thin cotton can pucker and distort under heavy stitch counts. Use a backing stabilizer or choose DTF transfers for stretch fabrics.</li>
+      </ul>
+
+      <h2>Designs That Work Well vs. Poorly</h2>
+      <p>Embroidery has real limitations that screen printing does not. Understanding them upfront saves headaches and money.</p>
+      <h3>Works great:</h3>
+      <ul class="content-list">
+        <li>Bold, simple logos with clear shapes and solid color areas</li>
+        <li>Text and monograms (especially in satin stitch)</li>
+        <li>Block letters and geometric shapes</li>
+        <li>Designs at 2 inches wide and larger</li>
+      </ul>
+      <h3>Does not translate well:</h3>
+      <ul class="content-list">
+        <li>Gradients and color fades — thread cannot blend like ink</li>
+        <li>Very fine details, thin lines under 1/16 inch, or tiny text under 4pt</li>
+        <li>Photorealistic images or portraits</li>
+        <li>Designs smaller than 1 inch wide</li>
+        <li>Complex halftones or watercolor effects</li>
+      </ul>
+      <p>For photorealistic designs or full-color artwork on t-shirts, <a href="/services/dtf-transfers.html">DTF transfers</a> are a better choice. For a great overview of embroidery design principles, <a href="https://www.embroidery.com" class="outbound-link" target="_blank" rel="noopener noreferrer">Embroidery.com</a> has deep resources on thread selection, design preparation, and machine settings.</p>
+
+      <h2>Embroidery vs. Screen Printing: Quick Comparison</h2>
+      <ul class="content-list">
+        <li><strong>Durability</strong>: Embroidery wins — stitched thread outlasts printed ink by years</li>
+        <li><strong>Cost on high quantities</strong>: Screen printing wins — setup cost spreads over volume</li>
+        <li><strong>Full-color designs</strong>: Screen printing or DTF wins — embroidery is limited by thread colors</li>
+        <li><strong>Professional/corporate look</strong>: Embroidery wins — perceived as higher quality</li>
+        <li><strong>Hats and structured garments</strong>: Embroidery wins — the only practical option</li>
+        <li><strong>No minimums</strong>: DTF transfers win — one piece is fine</li>
+      </ul>
+
+      <h2>Order Custom Embroidery in Chicago</h2>
+      <p>June's Tees &amp; Things offers professional embroidery on polos, hats, jackets, bags, and more. We handle digitizing in-house and offer free artwork reviews before any order runs. Get a quote for your <a href="/services/embroidery.html">custom embroidery order</a> today, or call us at (773) 849-1854.</p>
+    </div>
+  </main>
+
+  <div class="cta-band">
+    <div class="container">
+      <h2>Ready to Start Your Order?</h2>
+      <p>Get a fast, free quote from Chicago's Black-owned, women-owned custom print shop. We handle everything from artwork to delivery.</p>
+      <div class="cta-btns">
+        <a href="tel:+17738491854" class="btn-gold">📞 Call (773) 849-1854</a>
+        <a href="/services/embroidery.html" class="btn-white">Learn About Embroidery</a>
+      </div>
+    </div>
+  </div>
+  <section class="related-section">
+    <div class="container">
+      <h2>More From the Blog</h2>
+      <div class="related-grid">
+        <div class="related-card">
+          <div class="r-cat">Screen Printing</div>
+          <h3>How to Get the Best Results from Screen Printing</h3>
+          <p>Everything you need to know before placing a bulk screen printing order — artwork prep, garment choice, ink types, and common mistakes to avoid.</p>
+          <a href="/blog/screen-printing-tips.html">Read Article →</a>
+        </div>
+        <div class="related-card">
+          <div class="r-cat">DTF Transfers</div>
+          <h3>What is DTF Printing? The Complete Guide to Direct-to-Film Transfers</h3>
+          <p>DTF is the fastest-growing printing method for a reason. No minimums, full color, any fabric. Here's everything you need to know.</p>
+          <a href="/blog/dtf-transfers-tips.html">Read Article →</a>
+        </div>
+      </div>
+    </div>
+  </section>
+  <footer>
+    <div class="footer-top container">
+      <div class="footer-brand">
+        <a href="/" class="footer-logo">June's Tees &amp; Things</a>
+        <p class="footer-tagline">Chicago's custom print shop for the culture. Shirts, signs, standees, party favors — if you can dream it, we can print it. Black-owned. Women-owned. Built for the community.</p>
+        <div class="footer-social">
+          <a href="https://www.instagram.com/junesteesnthings" target="_blank" rel="noopener" aria-label="Instagram">
+            <svg viewBox="0 0 24 24"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/></svg>
+          </a>
+        </div>
+      </div>
+      <div class="footer-col">
+        <div class="footer-col-title">Services</div>
+        <ul>
+          <li><a href="/services/screen-printing.html">Screen Printing</a></li>
+          <li><a href="/services/embroidery.html">Embroidery</a></li>
+          <li><a href="/services/dtf-transfers.html">DTF Transfers</a></li>
+          <li><a href="/services/banners-signs.html">Banners &amp; Signs</a></li>
+          <li><a href="/services/event-decor.html">Event Décor</a></li>
+          <li><a href="/services/graphic-design.html">Graphic Design</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <div class="footer-col-title">Company</div>
+        <ul>
+          <li><a href="/#about">About Us</a></li>
+          <li><a href="/#portfolio">Our Work</a></li>
+          <li><a href="/#reviews">Reviews</a></li>
+          <li><a href="/blog/">Blog</a></li>
+          <li><a href="/grad/index.html">Grad 2026</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <div class="footer-col-title">Info</div>
+        <ul>
+          <li><a href="tel:+17738491854">(773) 849-1854</a></li>
+          <li><a href="/#contact">Get A Quote</a></li>
+          <li>Mon–Fri 10:30 AM – 6 PM</li>
+          <li>Chicago, IL</li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-bottom container">
+      <span>© 2026 June's Tees &amp; Things. All rights reserved.</span>
+    </div>
+  </footer>
+  <script>
+    const hamburger = document.getElementById('hamburger-btn');
+    const drawer = document.getElementById('mobile-drawer');
+    const overlay = document.getElementById('drawer-overlay');
+    const closeBtn = document.getElementById('drawer-close');
+    function openDrawer() { drawer.classList.add('open'); overlay.style.display = 'block'; document.body.style.overflow = 'hidden'; }
+    function closeDrawer() { drawer.classList.remove('open'); overlay.style.display = 'none'; document.body.style.overflow = ''; }
+    if (hamburger) hamburger.addEventListener('click', openDrawer);
+    if (closeBtn) closeBtn.addEventListener('click', closeDrawer);
+    if (overlay) overlay.addEventListener('click', closeDrawer);
+    document.querySelectorAll('.nav-dropdown').forEach(dd => {
+      let timer;
+      dd.addEventListener('mouseenter', () => { clearTimeout(timer); dd.classList.add('open'); });
+      dd.addEventListener('mouseleave', () => { timer = setTimeout(() => dd.classList.remove('open'), 200); });
+    });
+  </script>
+</body>
+</html>
