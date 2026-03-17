@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+Disallow: /grad/order.html
+
+Sitemap: https://www.jtees.net/sitemap.xml
