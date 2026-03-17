@@ -913,13 +913,43 @@ app.post('/api/submit-order', orderRateLimit, async (req, res) => {
 
     const orderRef = generateGradRef();
     const products = {
-      standee: parseInt(body.qty_standee) || 0, banner: parseInt(body.qty_banner) || 0,
-      spirit: parseInt(body.qty_spirit) || 0, arch: parseInt(body.qty_arch) || 0,
-      prop: parseInt(body.qty_prop) || 0, decal: parseInt(body.qty_decal) || 0,
-      step_repeat: parseInt(body.qty_step_repeat) || 0, prom_arch: parseInt(body.qty_prom_arch) || 0,
-      photo_props: parseInt(body.qty_photo_props) || 0, prom_decal: parseInt(body.qty_prom_decal) || 0,
-      chipbag: parseInt(body.qty_chipbag) || 0, bottle: parseInt(body.qty_bottle) || 0,
-      fan: parseInt(body.qty_fan) || 0, button: parseInt(body.qty_button) || 0,
+      // Apparel
+      tee_1to4: parseInt(body.qty_tee_1to4) || 0,
+      tee_5to9: parseInt(body.qty_tee_5to9) || 0,
+      family_1to4: parseInt(body.qty_family_1to4) || 0,
+      family_5to9: parseInt(body.qty_family_5to9) || 0,
+      hoodie: parseInt(body.qty_hoodie) || 0,
+      stole: parseInt(body.qty_stole) || 0,
+      // Signs & Banners
+      yard_sign: parseInt(body.qty_yard_sign) || 0,
+      banner_4x2: parseInt(body.qty_banner_4x2) || 0,
+      banner_6x3: parseInt(body.qty_banner_6x3) || 0,
+      // Cutouts & Standees
+      bighead_single: parseInt(body.qty_bighead_single) || 0,
+      bighead_5pk: parseInt(body.qty_bighead_5pk) || 0,
+      mini_standee: parseInt(body.qty_mini_standee) || 0,
+      standee: parseInt(body.qty_standee) || 0,
+      // Arches & Backdrops
+      arch: parseInt(body.qty_arch) || 0,
+      backdrop: parseInt(body.qty_backdrop) || 0,
+      // Party Favors
+      button_4pk: parseInt(body.qty_button_4pk) || 0,
+      button_10pk: parseInt(body.qty_button_10pk) || 0,
+      magnet: parseInt(body.qty_magnet) || 0,
+      sticker: parseInt(body.qty_sticker) || 0,
+      chipbag_6: parseInt(body.qty_chipbag_6) || 0,
+      chipbag_12: parseInt(body.qty_chipbag_12) || 0,
+      gable_box: parseInt(body.qty_gable_box) || 0,
+      // Drinkware
+      tumbler: parseInt(body.qty_tumbler) || 0,
+      cup_4pk: parseInt(body.qty_cup_4pk) || 0,
+      can_cooler: parseInt(body.qty_can_cooler) || 0,
+      koozie: parseInt(body.qty_koozie) || 0,
+      // Prom Night
+      step_repeat: parseInt(body.qty_step_repeat) || 0,
+      prom_arch: parseInt(body.qty_prom_arch) || 0,
+      photo_props: parseInt(body.qty_photo_props) || 0,
+      prom_decal: parseInt(body.qty_prom_decal) || 0,
     };
     const apparel = {
       shirt_qty: parseInt(body.shirt_qty) || 0, print_method: body.print_method || '',
