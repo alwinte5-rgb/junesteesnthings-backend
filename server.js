@@ -7,7 +7,6 @@ const path       = require('path');
 const crypto     = require('crypto');
 const { Pool }   = require('pg');
 const nodemailer = require('nodemailer');
-const twilio     = require('twilio');
 const axios      = require('axios');
 const cloudinary = require('cloudinary').v2;
 
@@ -171,15 +170,24 @@ async function sendPaymentReceivedEmail(s, amount) {
   });
 }
 
-// ─── SMS ──────────────────────────────────────────────────────────────────────
+// ─── Brevo ────────────────────────────────────────────────────────────────────
 
-const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+const brevo = axios.create({
+  baseURL: 'https://api.brevo.com/v3',
+  headers: { 'api-key': process.env.BREVO_API_KEY, 'Content-Type': 'application/json' },
+});
 
-async function sendSMS(to, body) {
-  await twilioClient.messages.create({
-    from: process.env.TWILIO_PHONE_NUMBER,
-    to,
-    body,
+async function syncToBrevo(s) {
+  const [firstname, ...rest] = (s.name || '').trim().split(' ');
+  await brevo.post('/contacts', {
+    email:      s.email,
+    attributes: {
+      FIRSTNAME: firstname || '',
+      LASTNAME:  rest.join(' ') || '',
+      SMS:       s.phone || '',
+    },
+    listIds:        process.env.BREVO_LIST_ID ? [parseInt(process.env.BREVO_LIST_ID)] : [],
+    updateEnabled:  true,
   });
 }
 
@@ -388,26 +396,20 @@ app.post('/submit', gradRateLimit(10, 60 * 60 * 1000), async (req, res) => {
   }
 
   // Fire everything in parallel
-  const [emailResult, customerEmailResult, smsResult, hubspotResult, cloverResult] =
+  const [emailResult, customerEmailResult, brevoResult, hubspotResult, cloverResult] =
     await Promise.allSettled([
       sendNotificationEmail(s),
       sendCustomerConfirmationEmail(s),
-      sendSMS(process.env.TWILIO_TO_NUMBER, [
-        `New quote from ${s.name}`,
-        `📞 ${s.phone}`,
-        `✉️  ${s.email}`,
-        s.description ? `"${s.description.slice(0, 100)}"` : null,
-        s.photo_url ? `📷 ${s.photo_url}` : null,
-      ].filter(Boolean).join('\n')),
+      syncToBrevo(s),
       syncToHubSpot(s),
       createCloverCustomer(s),
     ]);
 
-  if (emailResult.status        === 'rejected') console.error('Notification email failed:', emailResult.reason?.message);
+  if (emailResult.status         === 'rejected') console.error('Notification email failed:', emailResult.reason?.message);
   if (customerEmailResult.status === 'rejected') console.error('Confirmation email failed:', customerEmailResult.reason?.message);
-  if (smsResult.status          === 'rejected') console.error('SMS failed:',                smsResult.reason?.message);
-  if (hubspotResult.status      === 'rejected') console.error('HubSpot failed:',            hubspotResult.reason?.message);
-  if (cloverResult.status       === 'rejected') console.error('Clover failed:',             cloverResult.reason?.message);
+  if (brevoResult.status         === 'rejected') console.error('Brevo sync failed:',         brevoResult.reason?.message);
+  if (hubspotResult.status       === 'rejected') console.error('HubSpot failed:',            hubspotResult.reason?.message);
+  if (cloverResult.status        === 'rejected') console.error('Clover failed:',             cloverResult.reason?.message);
 
   // Persist IDs
   const updates = {};
@@ -557,12 +559,6 @@ app.post('/webhooks/clover', async (req, res) => {
       updateHubSpotDealStage(sub.hubspot_deal_id, 'closedwon')
         .catch(err => console.error('HubSpot deal close failed:', err.message));
     }
-
-    // Notify you via SMS
-    sendSMS(
-      process.env.TWILIO_TO_NUMBER,
-      `Payment received!\n${sub.name} paid $${(amount / 100).toFixed(2)}\n📞 ${sub.phone}`
-    ).catch(err => console.error('Payment SMS failed:', err.message));
 
     // Confirm to customer via email
     sendPaymentReceivedEmail(sub, amount)
