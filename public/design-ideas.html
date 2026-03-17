@@ -27,45 +27,49 @@
     a { text-decoration: none; color: inherit; }
     img { display: block; max-width: 100%; }
 
-    /* NAV */
-    nav {
-      background: #0B1F4B;
-      border-bottom: 1px solid rgba(255,255,255,.08);
-      position: sticky;
-      top: 0;
-      z-index: 300;
-    }
-    .nav-wrap {
-      max-width: 1200px;
-      margin: 0 auto;
-      padding: 0 2rem;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      height: 70px;
-    }
-    .logo { display: flex; align-items: center; gap: 0.75rem; text-decoration: none; }
-    .logo img { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
-    .logo-name { font-size: 1.05rem; font-weight: 700; color: #F4A623; line-height: 1.2; }
-    .logo-sub { font-size: 0.68rem; font-weight: 400; color: rgba(255,255,255,.5); letter-spacing: 0.08em; text-transform: uppercase; }
-    .nav-links { display: flex; gap: 24px; align-items: center; }
-    .nav-links a {
-      color: rgba(255,255,255,.75);
-      font-size: .88rem;
-      font-weight: 600;
-      transition: color .2s;
-    }
-    .nav-links a:hover { color: #fff; }
-    .nav-links a.active { color: #F4A623; }
-    .nav-order {
-      background: #F4A623;
-      color: #0B1F4B !important;
-      padding: 9px 22px;
-      border-radius: 6px;
-      font-weight: 800 !important;
-      transition: filter .2s;
-    }
-    .nav-order:hover { filter: brightness(1.08); }
+    /* ── Announcement bar ── */
+    .announcement-bar{background:#F4A623;color:#0B1F4B;text-align:center;padding:.6rem 1rem;font-size:.82rem;font-weight:500;letter-spacing:.03em;}
+
+    /* ── Full header ── */
+    header{background:#0B1F4B;position:sticky;top:0;z-index:1000;box-shadow:0 2px 20px rgba(0,0,0,.3);}
+    .header-inner{display:flex;align-items:center;justify-content:space-between;height:70px;padding:0 2rem;max-width:1300px;margin:0 auto;}
+    .logo{display:flex;align-items:center;gap:.75rem;}
+    .logo img{width:44px;height:44px;border-radius:50%;object-fit:cover;}
+    .logo-text{font-size:1.05rem;font-weight:700;color:#F4A623;line-height:1.2;}
+    .logo-text span{display:block;font-size:.7rem;font-weight:400;color:rgba(255,255,255,.7);letter-spacing:.08em;text-transform:uppercase;}
+    nav{display:flex;align-items:center;gap:.25rem;}
+    nav a{font-size:.85rem;font-weight:500;color:#ffffff;padding:.5rem .75rem;border-radius:8px;transition:color .2s,background .2s;}
+    nav a:hover{color:#ffffff;background:rgba(255,255,255,.12);}
+    .header-actions{display:flex;align-items:center;gap:1rem;}
+    .icon-link{display:flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.06);color:#ffffff;transition:background .2s,color .2s;}
+    .icon-link:hover{background:#F4A623;color:#0B1F4B;}
+    .icon-link svg{width:16px;height:16px;fill:currentColor;}
+    .btn-quote{background:#F4A623;color:#0B1F4B;font-size:.82rem;font-weight:600;padding:.55rem 1.25rem;border-radius:100px;transition:background .2s,transform .2s;white-space:nowrap;}
+    .btn-quote:hover{background:#C9861A;transform:translateY(-1px);}
+    .hamburger{display:none;flex-direction:column;gap:5px;cursor:pointer;padding:4px;}
+    .hamburger span{display:block;width:22px;height:2px;background:#ffffff;border-radius:2px;}
+    .mobile-drawer{position:fixed;top:0;left:-100%;width:280px;height:100vh;background:#0B1F4B;z-index:2000;padding:2rem 1.5rem;transition:left .3s;border-right:1px solid rgba(255,255,255,.1);overflow-y:auto;}
+    .mobile-drawer.open{left:0;}
+    .drawer-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1999;display:none;}
+    .drawer-overlay.visible{display:block;}
+    .drawer-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:2rem;}
+    .drawer-close{background:none;border:none;color:#ffffff;font-size:1.5rem;cursor:pointer;line-height:1;}
+    .drawer-nav a{display:block;padding:.9rem 0;font-size:1.05rem;font-weight:500;color:#ffffff;border-bottom:1px solid rgba(255,255,255,.1);transition:color .2s;}
+    .drawer-nav a:hover{color:#F4A623;}
+    .drawer-actions{margin-top:2rem;display:flex;flex-direction:column;gap:.75rem;}
+
+    /* ── Nav dropdown ── */
+    .nav-dropdown{position:relative;}
+    .nav-dropdown-toggle{display:flex;align-items:center;gap:4px;cursor:pointer;}
+    .nav-dropdown-toggle::after{content:'▾';font-size:.7rem;opacity:.6;}
+    .nav-dropdown-menu{position:absolute;top:100%;left:50%;transform:translateX(-50%) translateY(8px);opacity:0;pointer-events:none;transition:opacity .15s,transform .15s;z-index:500;white-space:nowrap;}
+    .nav-dropdown-menu-inner{background:#0B1F4B;border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:.5rem;box-shadow:0 8px 32px rgba(0,0,0,.5);}
+    .nav-dropdown-menu.open{opacity:1;pointer-events:auto;}
+    .nav-dropdown-menu-inner a{display:block;padding:.45rem 1.1rem;font-size:.82rem;font-weight:500;color:rgba(248,244,233,.8);transition:background .15s,color .15s;}
+    .nav-dropdown-menu-inner a:hover{background:rgba(255,255,255,.07);color:#fff;}
+    .nav-dropdown-menu-inner .dropdown-divider{height:1px;background:rgba(255,255,255,.08);margin:.4rem 0;}
+
+    @media(max-width:768px){nav,.btn-quote,.icon-link{display:none!important;}.hamburger{display:flex!important;}}
 
     /* HERO */
     .page-hero {
@@ -239,25 +243,101 @@
 </head>
 <body>
 
-<!-- NAV -->
-<nav>
-  <div class="nav-wrap">
-    <a href="/" class="logo">
-      <img src="/assets/images/logo-design.jpg" alt="June's Tees & Things logo" />
-      <div>
-        <div class="logo-name">June's Tees & Things</div>
-        <div class="logo-sub">Chicago Custom Printing</div>
+  <!-- Announcement Bar -->
+  <div class="announcement-bar">
+    🎓 Grad Season is HERE — Check our exclusive packages! &nbsp;|&nbsp; 7-Day Delivery Available &nbsp;|&nbsp; Curbside Pickup: Mon–Fri 10:30 AM – 6 PM
+  </div>
+
+  <header>
+    <div class="header-inner">
+      <a href="/" class="logo">
+        <img src="/assets/images/logo-design.jpg" alt="June's Tees & Things logo" />
+        <div class="logo-text">June's Tees & Things<span>Chicago Custom Printing</span></div>
+      </a>
+      <nav>
+        <a href="/">Home</a>
+        <div class="nav-dropdown">
+          <a href="/#services" class="nav-dropdown-toggle">Services</a>
+          <div class="nav-dropdown-menu">
+            <div class="nav-dropdown-menu-inner">
+              <a href="/#services">✦ All Services</a>
+              <div class="dropdown-divider"></div>
+              <a href="/services/screen-printing.html">👕 Screen Printing</a>
+              <a href="/services/embroidery.html">🧵 Embroidery</a>
+              <a href="/services/dtf-transfers.html">🖨️ DTF Transfers</a>
+              <a href="/services/banners-signs.html">🪧 Banners &amp; Signs</a>
+              <a href="/services/event-decor.html">🎉 Event Decor &amp; Party Favors</a>
+              <a href="/services/graphic-design.html">🎨 Graphic Design</a>
+            </div>
+          </div>
+        </div>
+        <a href="/#portfolio">Our Work</a>
+        <a href="/grad/" style="color:#F4A623;font-weight:700;">Grad 2026</a>
+        <div class="nav-dropdown">
+          <a href="/design-ideas.html" class="nav-dropdown-toggle" style="color:#F4A623;">Design Ideas</a>
+          <div class="nav-dropdown-menu">
+            <div class="nav-dropdown-menu-inner">
+              <a href="/design-ideas.html">✦ All Designs</a>
+              <div class="dropdown-divider"></div>
+              <a href="/design-ideas.html?category=graduation">🎓 Graduation</a>
+              <a href="/design-ideas.html?category=prom">✨ Prom</a>
+              <a href="/design-ideas.html?category=birthdays">🎂 Birthdays</a>
+              <a href="/design-ideas.html?category=holidays">🎄 Holidays</a>
+              <a href="/design-ideas.html?category=graduation">🎀 Stoles</a>
+              <a href="/design-ideas.html?category=allover">🖨️ All-Over Print</a>
+              <a href="/design-ideas.html?category=snacks">🍿 Snack &amp; Party</a>
+            </div>
+          </div>
+        </div>
+        <a href="/#reviews">Reviews</a>
+        <a href="/#contact">Contact</a>
+      </nav>
+      <div class="header-actions">
+        <a href="https://www.instagram.com/jtees228" target="_blank" rel="noopener noreferrer" class="icon-link" aria-label="Instagram">
+          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/></svg>
+        </a>
+        <a href="tel:+17738491854" class="icon-link" aria-label="Call us">
+          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
+        </a>
+        <a href="/#contact" class="btn-quote">Get A Quote</a>
+        <div class="hamburger" id="hamburger" aria-label="Open menu">
+          <span></span><span></span><span></span>
+        </div>
       </div>
-    </a>
-    <div class="nav-links">
+    </div>
+  </header>
+
+  <!-- Mobile Drawer -->
+  <div class="drawer-overlay" id="drawerOverlay"></div>
+  <div class="mobile-drawer" id="mobileDrawer">
+    <div class="drawer-header">
+      <div class="logo-text">June's Tees &amp; Things</div>
+      <button class="drawer-close" id="drawerClose">&#x2715;</button>
+    </div>
+    <nav class="drawer-nav">
       <a href="/">Home</a>
-      <a href="/#packages">Packages</a>
+      <a href="/#services">Services</a>
+      <a href="/services/screen-printing.html" style="padding-left:1.5rem;font-size:.9rem;opacity:.8;">— Screen Printing</a>
+      <a href="/services/embroidery.html" style="padding-left:1.5rem;font-size:.9rem;opacity:.8;">— Embroidery</a>
+      <a href="/services/dtf-transfers.html" style="padding-left:1.5rem;font-size:.9rem;opacity:.8;">— DTF Transfers</a>
+      <a href="/services/banners-signs.html" style="padding-left:1.5rem;font-size:.9rem;opacity:.8;">— Banners &amp; Signs</a>
+      <a href="/services/event-decor.html" style="padding-left:1.5rem;font-size:.9rem;opacity:.8;">— Event Decor &amp; Party Favors</a>
+      <a href="/services/graphic-design.html" style="padding-left:1.5rem;font-size:.9rem;opacity:.8;">— Graphic Design</a>
+      <a href="/#portfolio">Our Work</a>
       <a href="/grad/" style="color:#F4A623;">Grad 2026</a>
-      <a href="/design-ideas.html" class="active">Design Ideas</a>
-      <a href="/#contact" class="nav-order">Get a Quote →</a>
+      <a href="/design-ideas.html" style="color:#F4A623;">Design Ideas</a>
+      <a href="/design-ideas.html?category=graduation" style="padding-left:1.5rem;font-size:.9rem;opacity:.8;">— Graduation</a>
+      <a href="/design-ideas.html?category=prom" style="padding-left:1.5rem;font-size:.9rem;opacity:.8;">— Prom</a>
+      <a href="/design-ideas.html?category=birthdays" style="padding-left:1.5rem;font-size:.9rem;opacity:.8;">— Birthdays</a>
+      <a href="/design-ideas.html?category=holidays" style="padding-left:1.5rem;font-size:.9rem;opacity:.8;">— Holidays</a>
+      <a href="/#reviews">Reviews</a>
+      <a href="/#contact">Contact</a>
+    </nav>
+    <div class="drawer-actions">
+      <a href="tel:+17738491854" class="btn" style="background:#F4A623;color:#0B1F4B;font-weight:700;text-align:center;padding:.75rem;border-radius:100px;width:100%">📞 Call Now</a>
+      <a href="/#contact" class="btn" style="background:#ffffff;color:#0B1F4B;font-weight:700;text-align:center;padding:.75rem;border-radius:100px;width:100%">✉️ Email Now</a>
     </div>
   </div>
-</nav>
 
 <!-- HERO -->
 <div class="page-hero">
@@ -440,6 +520,37 @@
       if (block) block.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 100);
   }
+</script>
+
+<script>
+  // Mobile Drawer
+  const hamburger = document.getElementById('hamburger');
+  const drawer = document.getElementById('mobileDrawer');
+  const overlay = document.getElementById('drawerOverlay');
+  const drawerClose = document.getElementById('drawerClose');
+  function openDrawer(){drawer.classList.add('open');overlay.classList.add('visible');document.body.style.overflow='hidden';}
+  function closeDrawer(){drawer.classList.remove('open');overlay.classList.remove('visible');document.body.style.overflow='';}
+  if(hamburger) hamburger.addEventListener('click', openDrawer);
+  if(drawerClose) drawerClose.addEventListener('click', closeDrawer);
+  if(overlay) overlay.addEventListener('click', closeDrawer);
+  // Nav dropdowns
+  document.querySelectorAll('.nav-dropdown').forEach(function(w){
+    var menu=w.querySelector('.nav-dropdown-menu');
+    var timer;
+    w.addEventListener('mouseenter',function(){clearTimeout(timer);menu.classList.add('open');});
+    w.addEventListener('mouseleave',function(){timer=setTimeout(function(){menu.classList.remove('open');},150);});
+    var toggle=w.querySelector('.nav-dropdown-toggle');
+    if(toggle) toggle.addEventListener('click',function(e){
+      var isOpen=w.classList.contains('open');
+      document.querySelectorAll('.nav-dropdown').forEach(function(d){d.classList.remove('open');});
+      if(!isOpen){w.classList.add('open');e.preventDefault();}
+    });
+  });
+  document.addEventListener('click',function(e){
+    if(!e.target.closest('.nav-dropdown')){
+      document.querySelectorAll('.nav-dropdown').forEach(function(d){d.classList.remove('open');});
+    }
+  });
 </script>
 
 </body>
