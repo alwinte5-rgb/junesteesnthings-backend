@@ -156,22 +156,22 @@
       position: relative;
       border-radius: var(--radius);
       overflow: hidden;
-      background: var(--white);
+      background: #f0f0f0;
       border: 1px solid var(--border);
       box-shadow: var(--shadow-sm);
-      aspect-ratio: 1 / 1;
-      cursor: pointer;
+      aspect-ratio: 3 / 4;
+      cursor: zoom-in;
       transition: transform .2s, box-shadow .2s;
     }
     .design-item:hover { transform: translateY(-4px); box-shadow: var(--shadow); }
     .design-item img {
       width: 100%;
       height: 100%;
-      object-fit: cover;
+      object-fit: contain;
       display: block;
       transition: transform .4s;
     }
-    .design-item:hover img { transform: scale(1.06); }
+    .design-item:hover img { transform: scale(1.04); }
     .design-item-label {
       position: absolute;
       bottom: 0; left: 0; right: 0;
@@ -181,6 +181,47 @@
       font-weight: 700;
       padding: 1.5rem .75rem .6rem;
       text-align: center;
+    }
+
+    /* LIGHTBOX */
+    .lightbox {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.88);
+      z-index: 9000;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .lightbox.open { display: flex; }
+    .lightbox-img {
+      max-width: min(90vw, 700px);
+      max-height: 88vh;
+      object-fit: contain;
+      border-radius: var(--radius);
+      box-shadow: 0 20px 60px rgba(0,0,0,.6);
+    }
+    .lightbox-close {
+      position: absolute;
+      top: 16px; right: 20px;
+      background: none; border: none;
+      color: #fff; font-size: 2rem;
+      cursor: pointer; line-height: 1;
+      opacity: .8;
+    }
+    .lightbox-close:hover { opacity: 1; }
+    .lightbox-label {
+      position: absolute;
+      bottom: 24px;
+      left: 50%; transform: translateX(-50%);
+      color: rgba(255,255,255,.8);
+      font-size: .85rem;
+      font-weight: 600;
+      background: rgba(0,0,0,.5);
+      padding: 6px 16px;
+      border-radius: 100px;
+      white-space: nowrap;
     }
 
     /* EMPTY STATE */
@@ -324,6 +365,13 @@
     </div>
   </div>
 
+<!-- LIGHTBOX -->
+<div class="lightbox" id="lightbox">
+  <button class="lightbox-close" id="lightboxClose">&#x2715;</button>
+  <img class="lightbox-img" id="lightboxImg" src="" alt="" />
+  <div class="lightbox-label" id="lightboxLabel"></div>
+</div>
+
 <!-- HERO -->
 <div class="page-hero">
   <div class="eyebrow">🎓 Class of 2026</div>
@@ -339,6 +387,13 @@
     <div class="filter-tab" data-filter="graduation">🎓 Graduation</div>
     <div class="filter-tab" data-filter="prom">✨ Prom</div>
   </div>
+</div>
+
+<!-- CUSTOMIZATION NOTE -->
+<div style="background:#FEF3DC;border-bottom:1px solid #F4A623;padding:14px 24px;text-align:center;">
+  <p style="max-width:780px;margin:0 auto;font-size:.88rem;color:#5a3e00;line-height:1.6;">
+    <strong>Every design is fully customizable.</strong> Colors, fonts, photos, and wording can all be adjusted to match your graduate's school colors, personality, or event theme. Mix and match styles across shirts, banners, arches, chip bags, and more — we'll make it all cohesive so everything coordinates perfectly on the big day.
+  </p>
 </div>
 
 <!-- MAIN -->
@@ -415,7 +470,7 @@
       <div class="design-item"><img src="https://res.cloudinary.com/dhjtzewsx/image/upload/c_scale,w_800/Screenshot_2026-03-10_at_11.53.06_PM_imdcbe" alt="Gold Graduation Standee" loading="lazy" /><div class="design-item-label">Graduation Standee</div></div>
       <div class="design-item"><img src="https://res.cloudinary.com/dhjtzewsx/image/upload/c_scale,w_800/Screenshot_2026-03-10_at_11.46.11_PM_fl7pg2" alt="Graduation Backdrop" loading="lazy" /><div class="design-item-label">Graduation Backdrop</div></div>
       <div class="design-item"><img src="https://res.cloudinary.com/dhjtzewsx/image/upload/c_scale,w_800/Screenshot_2026-03-08_at_3.40.20_AM_g1x6bz" alt="Full Graduation Package Template" loading="lazy" /><div class="design-item-label">Full Package Template</div></div>
-      <div class="design-item"><img src="https://res.cloudinary.com/dhjtzewsx/image/upload/c_scale,w_800/Screenshot_2026-03-08_at_3.04.47_AM_nxpckp" alt="Graduation Package Template" loading="lazy" /><div class="design-item-label">Package Template</div></div>
+
       <div class="design-item"><img src="https://res.cloudinary.com/dhjtzewsx/image/upload/c_scale,w_800/Screenshot_2026-03-10_at_11.29.34_PM_hfavet" alt="Graduation Chip Bag" loading="lazy" /><div class="design-item-label">Grad Chip Bag</div></div>
       <div class="design-item"><img src="https://res.cloudinary.com/dhjtzewsx/image/upload/c_scale,w_800/Screenshot_2026-03-10_at_11.30.38_PM_iyr6l0" alt="Graduation Chip Bag" loading="lazy" /><div class="design-item-label">Grad Chip Bag</div></div>
     </div>
@@ -436,7 +491,7 @@
       <div class="design-item"><img src="https://res.cloudinary.com/dhjtzewsx/image/upload/c_scale,w_800/Screenshot_2026-03-10_at_11.57.42_PM_xbzatv" alt="Prom Send-Off Arch Black Gold" loading="lazy" /><div class="design-item-label">Prom Send-Off Arch</div></div>
       <div class="design-item"><img src="https://res.cloudinary.com/dhjtzewsx/image/upload/c_scale,w_800/Screenshot_2026-03-10_at_11.58.02_PM_henuni" alt="Prom Send-Off Arch Black" loading="lazy" /><div class="design-item-label">Prom Send-Off Arch</div></div>
       <div class="design-item"><img src="https://res.cloudinary.com/dhjtzewsx/image/upload/c_scale,w_800/Screenshot_2026-03-11_at_12.18.07_AM_fjsppk" alt="Prom Send-Off Arch Purple" loading="lazy" /><div class="design-item-label">Prom Send-Off Arch</div></div>
-      <div class="design-item"><img src="https://res.cloudinary.com/dhjtzewsx/image/upload/c_scale,w_800/Screenshot_2026-03-11_at_12.18.42_AM_zntt2o" alt="Prom Send-Off Arch Full View" loading="lazy" /><div class="design-item-label">Prom Send-Off Arch</div></div>
+
       <div class="design-item"><img src="https://res.cloudinary.com/dhjtzewsx/image/upload/c_scale,w_800/Screenshot_2026-03-11_at_12.19.13_AM_cbdcf8" alt="Prom Queen Send-Off Arch" loading="lazy" /><div class="design-item-label">Prom Queen Arch</div></div>
       <div class="design-item"><img src="https://res.cloudinary.com/dhjtzewsx/image/upload/c_scale,w_800/Screenshot_2026-03-10_at_11.46.51_PM_jndzp1" alt="Prom Send-Off Banner" loading="lazy" /><div class="design-item-label">Prom Send-Off Banner</div></div>
       <div class="design-item"><img src="https://res.cloudinary.com/dhjtzewsx/image/upload/c_scale,w_800/Screenshot_2026-03-11_at_12.05.13_AM_c88voz" alt="Prom Send-Off Poster" loading="lazy" /><div class="design-item-label">Prom Send-Off Poster</div></div>
@@ -459,6 +514,39 @@
 <footer>
   <p>© 2026 June's Tees &amp; Things · <a href="/">jtees.net</a> · Chicago, IL</p>
 </footer>
+
+<script>
+  // Lightbox
+  var lightbox = document.getElementById('lightbox');
+  var lightboxImg = document.getElementById('lightboxImg');
+  var lightboxLabel = document.getElementById('lightboxLabel');
+  var lightboxClose = document.getElementById('lightboxClose');
+
+  document.querySelectorAll('.design-item').forEach(function(item) {
+    item.addEventListener('click', function() {
+      var img = item.querySelector('img');
+      var label = item.querySelector('.design-item-label');
+      lightboxImg.src = img.src.replace('c_scale,w_800', 'c_scale,w_1400');
+      lightboxImg.alt = img.alt;
+      lightboxLabel.textContent = label ? label.textContent : '';
+      lightbox.classList.add('open');
+      document.body.style.overflow = 'hidden';
+    });
+  });
+
+  function closeLightbox() {
+    lightbox.classList.remove('open');
+    lightboxImg.src = '';
+    document.body.style.overflow = '';
+  }
+  lightboxClose.addEventListener('click', closeLightbox);
+  lightbox.addEventListener('click', function(e) {
+    if (e.target === lightbox) closeLightbox();
+  });
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeLightbox();
+  });
+</script>
 
 <script>
   var tabs = document.querySelectorAll('.filter-tab');
