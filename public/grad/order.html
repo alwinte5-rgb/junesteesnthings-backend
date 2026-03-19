@@ -188,20 +188,6 @@
       display: none;
     }
 
-    /* ── SIZE BREAKDOWN ── */
-    .size-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 16px; }
-    .size-field { display: flex; flex-direction: column; gap: 4px; }
-    .size-field label { font-size: .75rem; font-weight: 700; color: var(--muted); text-align: center; }
-    .size-field input {
-      border: 1.5px solid var(--border);
-      border-radius: var(--radius-sm);
-      padding: 7px 4px;
-      font-size: .9rem;
-      text-align: center;
-      width: 100%;
-    }
-    .size-section-label { font-size: .78rem; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; color: var(--navy); margin-top: 18px; margin-bottom: 6px; }
-
     /* ── CHECKBOXES ── */
     .check-list { display: flex; flex-direction: column; gap: 12px; }
     .check-item { display: flex; align-items: flex-start; gap: 12px; cursor: pointer; }
@@ -313,12 +299,22 @@
     .design-name { font-size: .88rem; font-weight: 800; color: var(--navy); }
     .design-tag { font-size: .75rem; color: var(--muted); margin-top: 2px; }
 
+    .gallery-link-row {
+      margin-top: 16px;
+      padding: 12px 16px;
+      background: var(--gold-lt);
+      border: 1px solid var(--gold);
+      border-radius: var(--radius-sm);
+      font-size: .88rem;
+      color: var(--navy);
+    }
+    .gallery-link-row a { font-weight: 800; color: var(--gold-dk); text-decoration: underline; }
+
     @media (max-width: 640px) {
       .field-grid { grid-template-columns: 1fr; }
       .field-grid.cols-3 { grid-template-columns: 1fr 1fr; }
       .product-row { grid-template-columns: 40px 1fr 80px; }
       .product-row-price { display: none; }
-      .size-grid { grid-template-columns: repeat(4, 1fr); }
       .design-grid { grid-template-columns: repeat(2, 1fr); }
     }
 
@@ -366,14 +362,6 @@
       font-size: .82rem; color: var(--muted);
       background: rgba(0,0,0,.05); border-radius: 4px; padding: 3px 8px;
     }
-    /* ── SIZE FAILSAFE ── */
-    .size-failsafe-banner {
-      display: none;
-      background: #FEE2E2; border: 1.5px solid #FCA5A5;
-      border-radius: var(--radius-sm); padding: 12px 16px;
-      font-size: .9rem; color: #991b1b; font-weight: 700;
-      margin-top: 16px; text-align: center;
-    }
 
     /* ── PACKAGE PICKER ── */
     .pkg-picker-grid {
@@ -406,7 +394,7 @@
     }
     .pkg-pick-name { font-weight: 800; font-size: .88rem; color: var(--navy); margin-bottom: 4px; }
     .pkg-pick-price { font-size: 1.1rem; font-weight: 900; color: var(--gold-dk); }
-    .pkg-pick-save { font-size: .72rem; color: var(--muted); }
+    .pkg-pick-save { font-size: .72rem; color: var(--muted); margin-top: 4px; line-height: 1.4; }
     .pkg-cat-label {
       font-size: .75rem;
       font-weight: 800;
@@ -426,6 +414,19 @@
       display: none;
     }
     .pkg-note.visible { display: block; }
+
+    /* ── APPAREL SIZES NOTE ── */
+    .sizes-later-note {
+      background: #EFF6FF;
+      border: 1.5px solid #BFDBFE;
+      border-radius: var(--radius-sm);
+      padding: 14px 18px;
+      margin-top: 16px;
+      font-size: .88rem;
+      color: #1E40AF;
+      line-height: 1.5;
+    }
+    .sizes-later-note strong { color: #1E3A8A; }
   </style>
   <script src="https://upload-widget.cloudinary.com/global/all.js"></script>
 </head>
@@ -461,61 +462,63 @@
 
   <form id="order-form" novalidate>
 
-    <!-- SECTION 0: PACKAGE PICKER -->
+    <!-- ══════════════════════════════════════════════
+         SECTION 1: SELECT A DESIGN
+    ══════════════════════════════════════════════ -->
     <div class="form-section">
       <div class="form-section-header">
         <div class="num">1</div>
-        <h2>Choose a Package <span style="font-weight:500;font-size:.85rem;opacity:.7;">(optional — or build your own below)</span></h2>
+        <h2>Select a Design</h2>
       </div>
       <div class="form-section-body">
-        <div class="pkg-cat-label">👕 Apparel Packages</div>
-        <div class="pkg-picker-grid">
-          <div class="pkg-pick" data-pkg="thats-my-grad" data-qty='{"qty_standee":0,"qty_banner":0,"qty_spirit":4,"qty_arch":0}'>
-            <div class="pkg-pick-name">That's My GRAD!!</div>
-            <div class="pkg-pick-price">$80</div>
-            <div class="pkg-pick-save">Stole + Tee + Yard Sign + 4 Buttons</div>
+
+        <div class="field" style="margin-bottom:20px;">
+          <label>Event Type <span class="req">*</span> <span style="font-weight:500; color:var(--muted); font-size:.82rem;">— select all that apply</span></label>
+          <div class="toggle-group" id="event-type-group">
+            <div class="toggle-btn" data-value="senior-night">Senior Night</div>
+            <div class="toggle-btn" data-value="graduation">Graduation</div>
+            <div class="toggle-btn" data-value="prom">Prom</div>
           </div>
-          <div class="pkg-pick" data-pkg="where-my-grad" data-qty='{"qty_standee":0,"qty_banner":0,"qty_spirit":6,"qty_arch":0}'>
-            <div class="pkg-pick-name">Where My GRAD At?</div>
-            <div class="pkg-pick-price">$175</div>
-            <div class="pkg-pick-save">Stole + Hoodie + 4 Tees + Sign + 6 Buttons</div>
-          </div>
-          <div class="pkg-pick" data-pkg="proudest-family" data-qty='{"qty_standee":0,"qty_banner":1,"qty_spirit":8,"qty_arch":0}'>
-            <div class="pkg-pick-name">GRAD's Proudest Family</div>
-            <div class="pkg-pick-price">$315</div>
-            <div class="pkg-pick-save">Full apparel + Banner + Tumbler + 8 Buttons</div>
-          </div>
+          <input type="hidden" name="event_type" value="" />
+          <div id="event-type-error" style="display:none; color:var(--red); font-size:.82rem; margin-top:6px;">Please select at least one event type.</div>
         </div>
 
-        <div class="pkg-cat-label">🎉 Event Materials Packages</div>
-        <div class="pkg-picker-grid">
-          <div class="pkg-pick" data-pkg="show-out" data-qty='{"qty_standee":0,"qty_banner":0,"qty_spirit":1,"qty_arch":0,"qty_button":6}'>
-            <div class="pkg-pick-name">Show OUT!!</div>
-            <div class="pkg-pick-price">$85</div>
-            <div class="pkg-pick-save">Big Head + Yard Sign + Stickers + Magnets</div>
-          </div>
-          <div class="pkg-pick" data-pkg="we-outside" data-qty='{"qty_standee":1,"qty_banner":0,"qty_spirit":1,"qty_arch":1}'>
-            <div class="pkg-pick-name">We OUTSIDE!!</div>
-            <div class="pkg-pick-price">$195</div>
-            <div class="pkg-pick-save">Standee + 6ft Arch + Big Head + Tumbler</div>
-          </div>
-          <div class="pkg-pick" data-pkg="whole-city" data-qty='{"qty_standee":1,"qty_banner":0,"qty_spirit":2,"qty_arch":1}'>
-            <div class="pkg-pick-name">Whole City KNOWS!!</div>
-            <div class="pkg-pick-price">$345</div>
-            <div class="pkg-pick-save">Standee + 2 Big Heads + 6ft Arch + Tumbler + More</div>
-          </div>
+        <!-- Design cards appear per selected event type -->
+        <div id="design-picker-section" style="display:none;">
+          <div style="font-size:.85rem; font-weight:700; color:var(--navy); margin-bottom:10px;">Choose a Design Style <span style="font-weight:500; color:var(--muted);">(optional — helps us prep your proof faster)</span></div>
+          <div id="design-sections"></div>
         </div>
 
-        <div class="pkg-note" id="pkg-selected-note"></div>
-        <input type="hidden" name="selected_package" id="selected-package-field" value="" />
+        <div class="gallery-link-row">
+          📸 Want to browse real design examples first? <a href="/grad/design-ideas.html" target="_blank">View our full Design Gallery →</a>
+        </div>
+
       </div>
     </div>
 
-    <!-- SECTION 2: CONTACT & EVENT INFO -->
+    <!-- ══════════════════════════════════════════════
+         SECTION 2: DESIGN NOTES / PERSONALIZATION
+    ══════════════════════════════════════════════ -->
     <div class="form-section">
       <div class="form-section-header">
         <div class="num">2</div>
-        <h2>Contact & Event Info</h2>
+        <h2>Design Notes &amp; Personalization</h2>
+      </div>
+      <div class="form-section-body">
+        <div class="field">
+          <label>Design Details / Personalization</label>
+          <textarea name="design_notes" rows="5" placeholder="Describe your vision: colors, text to include, student's name, graduation year, school name, any specific design references or inspo links. The more detail, the better your proof!"></textarea>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════
+         SECTION 3: CONTACT & EVENT INFO
+    ══════════════════════════════════════════════ -->
+    <div class="form-section">
+      <div class="form-section-header">
+        <div class="num">3</div>
+        <h2>Contact &amp; Event Info</h2>
       </div>
       <div class="form-section-body">
         <div class="field-grid">
@@ -541,7 +544,7 @@
           </div>
           <div class="field">
             <label>School Colors (hex or Pantone if known)</label>
-            <input type="text" name="school_colors" placeholder="e.g. #0B1F4B & #F4A623" />
+            <input type="text" name="school_colors" placeholder="e.g. #0B1F4B &amp; #F4A623" />
           </div>
           <div class="field">
             <label>Event Date <span class="req">*</span></label>
@@ -555,31 +558,69 @@
             <label>Delivery Address <span class="req">*</span></label>
             <input type="text" name="address" required placeholder="123 Main St, City, State, ZIP" />
           </div>
-          <div class="field field-full">
-            <label>Event Type <span class="req">*</span> <span style="font-weight:500; color:var(--muted); font-size:.82rem;">— select all that apply</span></label>
-            <div class="toggle-group" id="event-type-group">
-              <div class="toggle-btn" data-value="senior-night">Senior Night</div>
-              <div class="toggle-btn" data-value="graduation">Graduation</div>
-              <div class="toggle-btn" data-value="prom">Prom</div>
-            </div>
-            <input type="hidden" name="event_type" value="" />
-            <div id="event-type-error" style="display:none; color:var(--red); font-size:.82rem; margin-top:6px;">Please select at least one event type.</div>
-          </div>
-
-          <!-- Design Pickers — one per selected event type -->
-          <div class="field field-full" id="design-picker-section" style="display:none;">
-            <label>Select a Design Style Per Event <span style="font-weight:500; color:var(--muted);">(optional — helps us prep your proof faster)</span></label>
-            <div id="design-sections"></div>
-          </div>
-
         </div>
       </div>
     </div>
 
-    <!-- SECTION 3: PRODUCT SELECTIONS -->
+    <!-- ══════════════════════════════════════════════
+         SECTION 4: SELECT A PACKAGE
+    ══════════════════════════════════════════════ -->
     <div class="form-section">
       <div class="form-section-header">
-        <div class="num">3</div>
+        <div class="num">4</div>
+        <h2>Choose a Package <span style="font-weight:500;font-size:.85rem;opacity:.7;">(optional — or build your own below)</span></h2>
+      </div>
+      <div class="form-section-body">
+
+        <div class="pkg-cat-label">👕 Apparel Packages</div>
+        <div class="pkg-picker-grid">
+          <div class="pkg-pick" data-pkg="thats-my-grad" data-qty='{"qty_stole":1,"qty_tee_1to4":1,"qty_yard_sign":1,"qty_button_4pk":1}'>
+            <div class="pkg-pick-name">That's My GRAD!!</div>
+            <div class="pkg-pick-price">$100</div>
+            <div class="pkg-pick-save">Stole + Tee + Yard Sign + 4 Buttons</div>
+          </div>
+          <div class="pkg-pick" data-pkg="where-my-grad" data-qty='{"qty_stole":1,"qty_hoodie":1,"qty_tee_1to4":4,"qty_yard_sign":1}'>
+            <div class="pkg-pick-name">Where My GRAD At?</div>
+            <div class="pkg-pick-price">$220</div>
+            <div class="pkg-pick-save">Stole + Hoodie + 4 Tees + Sign + 6 Buttons</div>
+          </div>
+          <div class="pkg-pick" data-pkg="proudest-family" data-qty='{"qty_stole":1,"qty_hoodie":1,"qty_tee_5to9":6,"qty_banner_4x2":1,"qty_tumbler":1,"qty_button_10pk":1}'>
+            <div class="pkg-pick-name">GRAD's Proudest Family</div>
+            <div class="pkg-pick-price">$315</div>
+            <div class="pkg-pick-save">Stole + Hoodie + 6 Tees + 4×2 Banner + Tumbler + 10 Buttons</div>
+          </div>
+        </div>
+
+        <div class="pkg-cat-label">🎉 Event Materials Packages</div>
+        <div class="pkg-picker-grid">
+          <div class="pkg-pick" data-pkg="show-out" data-qty='{"qty_bighead_single":1,"qty_yard_sign":1,"qty_sticker":1,"qty_magnet":1}'>
+            <div class="pkg-pick-name">Show OUT!!</div>
+            <div class="pkg-pick-price">$85</div>
+            <div class="pkg-pick-save">Big Head + Yard Sign + Sticker Sheet + Magnets</div>
+          </div>
+          <div class="pkg-pick" data-pkg="we-outside" data-qty='{"qty_standee":1,"qty_bighead_5pk":1,"qty_banner_6x3":1}'>
+            <div class="pkg-pick-name">We OUTSIDE!!</div>
+            <div class="pkg-pick-price">$275</div>
+            <div class="pkg-pick-save">Standee + 5 Big Heads + 6×3 Banner</div>
+          </div>
+          <div class="pkg-pick" data-pkg="whole-city" data-qty='{"qty_standee":1,"qty_bighead_5pk":1,"qty_banner_6x3":1,"qty_arch":1}'>
+            <div class="pkg-pick-name">Whole City KNOWS!!</div>
+            <div class="pkg-pick-price">$515</div>
+            <div class="pkg-pick-save">Standee + 4 Big Heads + 6×3 Banner + 6ft Arch</div>
+          </div>
+        </div>
+
+        <div class="pkg-note" id="pkg-selected-note"></div>
+        <input type="hidden" name="selected_package" id="selected-package-field" value="" />
+      </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════
+         SECTION 5: À LA CARTE
+    ══════════════════════════════════════════════ -->
+    <div class="form-section">
+      <div class="form-section-header">
+        <div class="num">5</div>
         <h2>À La Carte — Add Items</h2>
       </div>
       <div class="form-section-body">
@@ -638,7 +679,7 @@
               <div class="product-row-sub">Personalized with name &amp; year</div>
             </div>
             <input type="number" name="qty_stole" min="0" value="0" placeholder="0" />
-            <div class="product-row-price">$35/ea.</div>
+            <div class="product-row-price">$45/ea.</div>
           </div>
         </div>
 
@@ -660,7 +701,7 @@
               <div class="product-row-sub">Heavy-duty 13oz vinyl, brass grommets</div>
             </div>
             <input type="number" name="qty_banner_4x2" min="0" value="0" placeholder="0" />
-            <div class="product-row-price">$55/ea.</div>
+            <div class="product-row-price">$45/ea.</div>
           </div>
           <div class="product-row">
             <div class="product-row-thumb"><img src="website_images/Fence_banners.png" alt="" /></div>
@@ -669,7 +710,7 @@
               <div class="product-row-sub">Heavy-duty 13oz vinyl, brass grommets</div>
             </div>
             <input type="number" name="qty_banner_6x3" min="0" value="0" placeholder="0" />
-            <div class="product-row-price">$75/ea.</div>
+            <div class="product-row-price">$80/ea.</div>
           </div>
         </div>
 
@@ -709,7 +750,7 @@
               <div class="product-row-sub">Contour-cut corroplast, built-in easel</div>
             </div>
             <input type="number" name="qty_standee" min="0" value="0" placeholder="0" />
-            <div class="product-row-price">$100/ea.</div>
+            <div class="product-row-price">$125/ea.</div>
           </div>
         </div>
 
@@ -719,10 +760,10 @@
             <div class="product-row-thumb"><img src="website_images/Grad_arch.png" alt="" /></div>
             <div>
               <div class="product-row-name">Corroplast Arch (3 panels)</div>
-              <div class="product-row-sub">7ft assembled, matte UV-printed, weatherproof</div>
+              <div class="product-row-sub">7ft assembled, matte UV-printed, weatherproof · Stand not included · Stand rental $35/each (2 needed)</div>
             </div>
             <input type="number" name="qty_arch" min="0" value="0" placeholder="0" />
-            <div class="product-row-price">From $199/ea.</div>
+            <div class="product-row-price">$250/ea.</div>
           </div>
           <div class="product-row">
             <div class="product-row-thumb"><img src="website_images/Grad_banner_stand.png" alt="" /></div>
@@ -731,7 +772,7 @@
               <div class="product-row-sub">Heavy-duty vinyl, grommets included</div>
             </div>
             <input type="number" name="qty_backdrop" min="0" value="0" placeholder="0" />
-            <div class="product-row-price">$100/ea.</div>
+            <div class="product-row-price">$150/ea.</div>
           </div>
         </div>
 
@@ -756,28 +797,28 @@
             <div class="product-row-price">$60/set</div>
           </div>
           <div class="product-row">
-            <div class="product-row-thumb"><img src="website_images/Chip_bag.png" alt="" /></div>
+            <div class="product-row-thumb"><img src="website_images/Grad_button.png" alt="" /></div>
             <div>
               <div class="product-row-name">Custom Photo Magnets (set of 6)</div>
               <div class="product-row-sub">Full-color, refrigerator magnets</div>
             </div>
             <input type="number" name="qty_magnet" min="0" value="0" placeholder="0" />
-            <div class="product-row-price">$20/set</div>
+            <div class="product-row-price">$25/set</div>
           </div>
           <div class="product-row">
-            <div class="product-row-thumb"><img src="website_images/Chip_bag.png" alt="" /></div>
+            <div class="product-row-thumb"><img src="website_images/Grad_button.png" alt="" /></div>
             <div>
-              <div class="product-row-name">Custom Sticker Sheet</div>
+              <div class="product-row-name">Custom Sticker Sheet (10-pack)</div>
               <div class="product-row-sub">Full-color, die-cut stickers</div>
             </div>
             <input type="number" name="qty_sticker" min="0" value="0" placeholder="0" />
-            <div class="product-row-price">$15/ea.</div>
+            <div class="product-row-price">$20/ea.</div>
           </div>
           <div class="product-row">
             <div class="product-row-thumb"><img src="website_images/Chip_bag.png" alt="" /></div>
             <div>
               <div class="product-row-name">Custom Chip Bags (set of 6)</div>
-              <div class="product-row-sub">Full-color, custom printed</div>
+              <div class="product-row-sub">Full-color, custom printed · Snacks not included</div>
             </div>
             <input type="number" name="qty_chipbag_6" min="0" value="0" placeholder="0" />
             <div class="product-row-price">$18/set</div>
@@ -786,16 +827,16 @@
             <div class="product-row-thumb"><img src="website_images/Chip_bag.png" alt="" /></div>
             <div>
               <div class="product-row-name">Custom Chip Bags (set of 12)</div>
-              <div class="product-row-sub">Full-color, custom printed</div>
+              <div class="product-row-sub">Full-color, custom printed · Snacks not included</div>
             </div>
             <input type="number" name="qty_chipbag_12" min="0" value="0" placeholder="0" />
-            <div class="product-row-price">$30/set</div>
+            <div class="product-row-price">$35/set</div>
           </div>
           <div class="product-row">
             <div class="product-row-thumb"><img src="website_images/Chip_bag.png" alt="" /></div>
             <div>
               <div class="product-row-name">Custom Gable Boxes (set of 6)</div>
-              <div class="product-row-sub">Full-color, custom printed gift boxes</div>
+              <div class="product-row-sub">Full-color, custom printed gift boxes · Snacks not included</div>
             </div>
             <input type="number" name="qty_gable_box" min="0" value="0" placeholder="0" />
             <div class="product-row-price">$22/set</div>
@@ -838,29 +879,29 @@
               <div class="product-row-sub">Foam, full-color print</div>
             </div>
             <input type="number" name="qty_koozie" min="0" value="0" placeholder="0" />
-            <div class="product-row-price">$30/set</div>
+            <div class="product-row-price">$35/set</div>
           </div>
         </div>
 
-        <div class="product-section-label" style="margin-top:24px;">🎉 Prom Night (quoted)</div>
+        <div class="product-section-label" style="margin-top:24px;">🎉 Prom Night</div>
         <div class="product-rows">
           <div class="product-row">
             <div class="product-row-thumb"><img src="website_images/Grad_banner_stand.png" alt="" /></div>
             <div>
               <div class="product-row-name">Step-and-Repeat Banner (8'×8')</div>
-              <div class="product-row-sub">Heavy-duty vinyl, grommets included</div>
+              <div class="product-row-sub">Heavy-duty vinyl, grommets included · Stand not included · Stand rental available for $45</div>
             </div>
             <input type="number" name="qty_step_repeat" min="0" value="0" placeholder="0" />
-            <div class="product-row-price">From $299</div>
+            <div class="product-row-price">$200</div>
           </div>
           <div class="product-row">
             <div class="product-row-thumb"><img src="website_images/Grad_arch.png" alt="" /></div>
             <div>
               <div class="product-row-name">Prom Entrance Arch</div>
-              <div class="product-row-sub">7ft corroplast panels, matte UV-printed</div>
+              <div class="product-row-sub">7ft corroplast panels, matte UV-printed · Stand rental $35/each (2 needed)</div>
             </div>
             <input type="number" name="qty_prom_arch" min="0" value="0" placeholder="0" />
-            <div class="product-row-price">From $215</div>
+            <div class="product-row-price">$250</div>
           </div>
           <div class="product-row">
             <div class="product-row-thumb"><img src="website_images/Grad_Event_Props.png" alt="" /></div>
@@ -878,23 +919,34 @@
               <div class="product-row-sub">Slip-resistant, removable vinyl</div>
             </div>
             <input type="number" name="qty_prom_decal" min="0" value="0" placeholder="0" />
-            <div class="product-row-price">From $75</div>
+            <div class="product-row-price">$80</div>
+          </div>
+        </div>
+
+        <!-- Inquiry items -->
+        <div style="margin-top:24px; padding:16px; background:var(--off); border-radius:var(--radius-sm); border:1px solid var(--border);">
+          <div style="font-size:.78rem; font-weight:800; text-transform:uppercase; letter-spacing:.08em; color:var(--gold-dk); margin-bottom:8px;">Available Upon Request</div>
+          <div style="font-size:.88rem; color:#374151; display:flex; flex-direction:column; gap:6px;">
+            <div>📸 <strong>360 Photo Booth</strong> — Contact us for a custom quote</div>
+            <div>🎪 <strong>Full Custom Event Setup</strong> — Chicagoland area only · Contact us for pricing</div>
           </div>
         </div>
 
       </div>
     </div>
 
-    <!-- SECTION 4: APPAREL -->
+    <!-- ══════════════════════════════════════════════
+         SECTION 6: APPAREL
+    ══════════════════════════════════════════════ -->
     <div class="form-section">
       <div class="form-section-header">
-        <div class="num">4</div>
-        <h2>Apparel — Tiered Pricing</h2>
+        <div class="num">6</div>
+        <h2>Apparel — Quantities</h2>
       </div>
       <div class="form-section-body">
         <div class="field-grid">
           <div class="field">
-            <label>Total Shirt Quantity <span class="req">*</span></label>
+            <label>Total Shirt Quantity</label>
             <input type="number" name="shirt_qty" id="shirt-qty" min="0" value="0" placeholder="0" />
           </div>
           <div class="field">
@@ -917,43 +969,18 @@
         </div>
         <div class="tier-alert" id="tier-alert"></div>
 
-        <div class="size-section-label">Youth Sizes</div>
-        <div class="size-grid">
-          <div class="size-field"><label>Youth S</label><input type="number" name="size_ys" min="0" value="0" /></div>
-          <div class="size-field"><label>Youth M</label><input type="number" name="size_ym" min="0" value="0" /></div>
-          <div class="size-field"><label>Youth L</label><input type="number" name="size_yl" min="0" value="0" /></div>
-          <div class="size-field"><label>Youth XL</label><input type="number" name="size_yxl" min="0" value="0" /></div>
-        </div>
-
-        <div class="size-section-label">Adult Sizes</div>
-        <div class="size-grid">
-          <div class="size-field"><label>Adult S</label><input type="number" name="size_as" min="0" value="0" /></div>
-          <div class="size-field"><label>Adult M</label><input type="number" name="size_am" min="0" value="0" /></div>
-          <div class="size-field"><label>Adult L</label><input type="number" name="size_al" min="0" value="0" /></div>
-          <div class="size-field"><label>Adult XL</label><input type="number" name="size_axl" min="0" value="0" /></div>
-          <div class="size-field"><label>2XL</label><input type="number" name="size_2xl" min="0" value="0" /></div>
-          <div class="size-field"><label>3XL</label><input type="number" name="size_3xl" min="0" value="0" /></div>
-          <div class="size-field"><label>4XL</label><input type="number" name="size_4xl" min="0" value="0" /></div>
-          <div class="size-field"><label>5XL</label><input type="number" name="size_5xl" min="0" value="0" /></div>
-        </div>
-
-        <!-- Size vs Qty counter -->
-        <div id="size-counter" style="margin-top:16px; padding:12px 16px; border-radius:8px; background:var(--off); border:1.5px solid var(--border); font-size:.88rem; display:flex; align-items:center; justify-content:space-between; gap:12px;">
-          <span>Sizes entered: <strong id="size-sum">0</strong> &nbsp;/&nbsp; Qty ordered: <strong id="size-qty-ref">0</strong></span>
-          <span id="size-counter-msg" style="font-weight:700;"></span>
-        </div>
-
-        <div class="field" style="margin-top:20px;">
-          <label>Design Notes / Personalization</label>
-          <textarea name="design_notes" placeholder="Describe your design, colors, any text to include, or link to a reference image..."></textarea>
+        <div class="sizes-later-note">
+          <strong>No size breakdown needed right now.</strong> Exact sizes (Youth S/M/L/XL, Adult S through 5XL) will be collected after your order is confirmed and proof is approved. Just enter the total quantity you need above.
         </div>
       </div>
     </div>
 
-    <!-- SECTION 5: PHOTO SUBMISSION -->
+    <!-- ══════════════════════════════════════════════
+         SECTION 7: PHOTO SUBMISSION
+    ══════════════════════════════════════════════ -->
     <div class="form-section">
       <div class="form-section-header">
-        <div class="num">5</div>
+        <div class="num">7</div>
         <h2>Photo Submission</h2>
       </div>
       <div class="form-section-body">
@@ -984,14 +1011,17 @@
       </div>
     </div>
 
-    <!-- SECTION 6: PROOF & DELIVERY AGREEMENT -->
+    <!-- ══════════════════════════════════════════════
+         SECTION 8: PAYMENT
+    ══════════════════════════════════════════════ -->
     <div class="form-section">
       <div class="form-section-header">
-        <div class="num">6</div>
-        <h2>Proof &amp; Delivery Agreement</h2>
+        <div class="num">8</div>
+        <h2>Proof &amp; Payment</h2>
       </div>
       <div class="form-section-body">
-        <div class="agreement-box">
+
+        <div class="agreement-box" style="margin-bottom:24px;">
           <ul>
             <li>I will receive a digital proof via email before printing begins.</li>
             <li>My proof will be ready within <strong>2 business days (Mon–Fri, weekends not included)</strong> of submitting my order and photos.</li>
@@ -1002,7 +1032,8 @@
             <li>Changes requested after proof approval may not be possible once production has begun.</li>
           </ul>
         </div>
-        <div class="field-grid">
+
+        <div class="field-grid" style="margin-bottom:24px;">
           <div class="field">
             <label>Signature / Typed Full Name <span class="req">*</span></label>
             <input type="text" name="signature" required placeholder="Type your full name" />
@@ -1012,23 +1043,14 @@
             <input type="date" name="sign_date" required />
           </div>
         </div>
-      </div>
-    </div>
 
-    <!-- SECTION 7: PAYMENT -->
-    <div class="form-section">
-      <div class="form-section-header">
-        <div class="num">7</div>
-        <h2>Payment</h2>
-      </div>
-      <div class="form-section-body">
         <div class="payment-info-box">
           <h4>No payment required right now</h4>
           <p>After we review your order and photos, we'll send your digital proof and a <strong>50% deposit invoice via Clover</strong> within 2 business days. The remaining balance is due upon proof approval before production begins.</p>
           <span class="card-note">⚠️ Card payments processed through Clover will include applicable taxes and processing fees.</span>
         </div>
 
-        <div class="field">
+        <div class="field" style="margin-bottom:20px;">
           <label>Preferred Payment Method <span style="font-size:.8rem; font-weight:500; color:var(--muted);">(optional — we'll confirm when we send your invoice)</span></label>
           <div class="payment-options" id="payment-options">
             <div class="pay-btn" data-value="clover_card">Card via Clover</div>
@@ -1044,11 +1066,8 @@
           <label>Special Instructions or Notes</label>
           <textarea name="notes" placeholder="Anything else we should know about your order..."></textarea>
         </div>
-      </div>
-    </div>
 
-    <div id="size-failsafe-banner" class="size-failsafe-banner">
-      ⚠️ Shirt size quantities don't add up to your total shirt quantity. Please fix before submitting.
+      </div>
     </div>
 
     <div class="form-submit">
@@ -1107,9 +1126,9 @@
       <div>
         <div style="font-size:.78rem; font-weight:800; text-transform:uppercase; letter-spacing:.08em; color:var(--gold-dk); margin-bottom:8px;">How to Submit</div>
         <ul style="list-style:none; display:flex; flex-direction:column; gap:7px;">
-          <li style="display:flex; gap:9px; font-size:.88rem; color:#374151;"><span style="color:var(--gold-dk); font-weight:900; flex-shrink:0;">1.</span> Upload to Google Drive or Dropbox, set sharing to "Anyone with the link"</li>
-          <li style="display:flex; gap:9px; font-size:.88rem; color:#374151;"><span style="color:var(--gold-dk); font-weight:900; flex-shrink:0;">2.</span> Paste the link in the Photo Submission section below</li>
-          <li style="display:flex; gap:9px; font-size:.88rem; color:#374151;"><span style="color:var(--gold-dk); font-weight:900; flex-shrink:0;">3.</span> WeTransfer: select that option and we'll send you a receive link within 2 hours</li>
+          <li style="display:flex; gap:9px; font-size:.88rem; color:#374151;"><span style="color:var(--gold-dk); font-weight:900; flex-shrink:0;">1.</span> Use the upload button in <strong>Section 7</strong> of this form to upload directly</li>
+          <li style="display:flex; gap:9px; font-size:.88rem; color:#374151;"><span style="color:var(--gold-dk); font-weight:900; flex-shrink:0;">2.</span> JPG, PNG, or PDF — up to 20MB per file, up to 10 files</li>
+          <li style="display:flex; gap:9px; font-size:.88rem; color:#374151;"><span style="color:var(--gold-dk); font-weight:900; flex-shrink:0;">3.</span> If you have trouble uploading, note it in the Special Instructions field and we'll follow up within 2 hours</li>
         </ul>
       </div>
       <button onclick="document.getElementById('order-guide-overlay').style.display='none'" style="align-self:flex-end; background:var(--navy); color:#fff; border:none; border-radius:8px; padding:10px 24px; font-size:.92rem; font-weight:700; cursor:pointer;">Got It →</button>
@@ -1137,12 +1156,12 @@
       { id: 'gr-custom',   icon: '✏️', name: 'Custom / Describe',      tag: 'Design from scratch' },
     ],
     'prom': [
-      { id: 'pr-redcarpet', icon: '🎬', name: 'Red Carpet Night',       tag: 'Step-and-Repeat / Arch' },
-      { id: 'pr-masquerade',icon: '🎭', name: 'Masquerade',             tag: 'Any Product' },
-      { id: 'pr-galaxy',    icon: '🌌', name: 'Galaxy / Starry Night',  tag: 'Backdrop / Floor Decal' },
-      { id: 'pr-enchanted', icon: '✨', name: 'Enchanted Garden',        tag: 'Arch / Props' },
-      { id: 'pr-oldholly',  icon: '🎞️', name: 'Old Hollywood Glam',    tag: 'Step-and-Repeat' },
-      { id: 'pr-custom',    icon: '✏️', name: 'Custom / Describe',      tag: 'Design from scratch' },
+      { id: 'pr-redcarpet',  icon: '🎬', name: 'Red Carpet Night',       tag: 'Step-and-Repeat / Arch' },
+      { id: 'pr-masquerade', icon: '🎭', name: 'Masquerade',             tag: 'Any Product' },
+      { id: 'pr-galaxy',     icon: '🌌', name: 'Galaxy / Starry Night',  tag: 'Backdrop / Floor Decal' },
+      { id: 'pr-enchanted',  icon: '✨', name: 'Enchanted Garden',        tag: 'Arch / Props' },
+      { id: 'pr-oldholly',   icon: '🎞️', name: 'Old Hollywood Glam',    tag: 'Step-and-Repeat' },
+      { id: 'pr-custom',     icon: '✏️', name: 'Custom / Describe',      tag: 'Design from scratch' },
     ],
   };
 
@@ -1152,7 +1171,6 @@
     'prom':         'Prom',
   };
 
-  // Track selected event types and chosen designs per type
   const selectedEvents = new Set();
   const selectedDesigns = {};
 
@@ -1191,7 +1209,6 @@
   }
 
   function selectDesign(card, evtType, id) {
-    // Deselect all cards in this event type's grid only
     document.querySelectorAll(`#design-grid-${evtType} .design-card`).forEach(c => c.classList.remove('selected'));
     card.classList.add('selected');
     selectedDesigns[evtType] = id;
@@ -1234,12 +1251,11 @@
     try {
       const cfg = await fetch('/api/config').then(r => r.json());
       if (!cfg.cloudinaryCloudName || !cfg.cloudinaryApiKey) {
-        document.getElementById('upload-trigger').textContent = 'Upload not configured — share a Google Drive link in Notes';
+        document.getElementById('upload-trigger').textContent = 'Upload not configured — add a note in Special Instructions';
         document.getElementById('upload-trigger').style.opacity = '.5';
         return;
       }
 
-      // Signed upload: server signs with whitelisted params only (timestamp + folder)
       async function generateSignature(callback, paramsToSign) {
         const res = await fetch('/api/cloudinary-signature', {
           method:  'POST',
@@ -1251,31 +1267,31 @@
       }
 
       cloudinaryWidget = cloudinary.createUploadWidget({
-        cloudName:                cfg.cloudinaryCloudName,
-        apiKey:                   cfg.cloudinaryApiKey,
-        uploadSignature:          generateSignature,
-        folder:                   'printco_orders',
-        multiple:                 true,
-        maxFiles:                 10,
-        maxFileSize:              20971520, // 20 MB
-        resourceType:             'auto',
-        sources:                  ['local', 'camera'],
-        showAdvancedOptions:      false,
-        cropping:                 false,
+        cloudName:           cfg.cloudinaryCloudName,
+        apiKey:              cfg.cloudinaryApiKey,
+        uploadSignature:     generateSignature,
+        folder:              'printco_orders',
+        multiple:            true,
+        maxFiles:            10,
+        maxFileSize:         20971520,
+        resourceType:        'auto',
+        sources:             ['local', 'camera'],
+        showAdvancedOptions: false,
+        cropping:            false,
         styles: {
           palette: {
-            window:      '#FFFFFF',
-            windowBorder:'#0B1F4B',
-            tabIcon:     '#F4A623',
-            menuIcons:   '#0B1F4B',
-            textDark:    '#1C1C2E',
-            textLight:   '#FFFFFF',
-            link:        '#F4A623',
-            action:      '#0B1F4B',
-            inactiveTabIcon: '#6B7280',
-            error:       '#D93025',
-            inProgress:  '#F4A623',
-            complete:    '#16a34a',
+            window:         '#FFFFFF',
+            windowBorder:   '#0B1F4B',
+            tabIcon:        '#F4A623',
+            menuIcons:      '#0B1F4B',
+            textDark:       '#1C1C2E',
+            textLight:      '#FFFFFF',
+            link:           '#F4A623',
+            action:         '#0B1F4B',
+            inactiveTabIcon:'#6B7280',
+            error:          '#D93025',
+            inProgress:     '#F4A623',
+            complete:       '#16a34a',
           },
         },
       }, (error, result) => {
@@ -1299,7 +1315,7 @@
     const countEl = document.getElementById('upload-count');
     thumbsEl.innerHTML = uploadedPhotos
       .filter(url => typeof url === 'string' && url.startsWith('https://res.cloudinary.com/'))
-      .map(url => '<img class="photo-thumb" src="' + url.replace(/"/g,'&quot;') + '" alt="uploaded photo" />')
+      .map(url => '<img class="photo-thumb" src="' + url.replace(/"/g, '&quot;') + '" alt="uploaded photo" />')
       .join('');
     if (uploadedPhotos.length > 0) {
       zone.classList.add('has-files');
@@ -1337,59 +1353,22 @@
     }
   }
 
-  document.getElementById('shirt-qty').addEventListener('input', function() {
+  document.getElementById('shirt-qty').addEventListener('input', function () {
     updateTierDisplay(parseInt(this.value) || 0);
-    updateSizeCounter();
-  });
-
-  // ── Size vs Qty counter ──
-  const SIZE_FIELDS = ['size_ys','size_ym','size_yl','size_yxl','size_as','size_am','size_al','size_axl','size_2xl','size_3xl','size_4xl','size_5xl'];
-
-  function updateSizeCounter() {
-    const total = parseInt(document.getElementById('shirt-qty').value) || 0;
-    const entered = SIZE_FIELDS.reduce((sum, name) => {
-      return sum + (parseInt(document.querySelector(`[name="${name}"]`)?.value) || 0);
-    }, 0);
-
-    document.getElementById('size-sum').textContent = entered;
-    document.getElementById('size-qty-ref').textContent = total;
-
-    const msg = document.getElementById('size-counter-msg');
-    const counter = document.getElementById('size-counter');
-    if (total === 0) {
-      counter.style.borderColor = 'var(--border)';
-      msg.textContent = '';
-    } else if (entered === total) {
-      counter.style.borderColor = '#16a34a';
-      msg.style.color = '#16a34a';
-      msg.textContent = '✓ Sizes match';
-    } else if (entered > total) {
-      counter.style.borderColor = 'var(--red)';
-      msg.style.color = 'var(--red)';
-      msg.textContent = `${entered - total} over qty`;
-    } else {
-      counter.style.borderColor = '#ca8a04';
-      msg.style.color = '#ca8a04';
-      msg.textContent = `${total - entered} unassigned`;
-    }
-  }
-
-  document.querySelectorAll(SIZE_FIELDS.map(n => `[name="${n}"]`).join(',')).forEach(el => {
-    el.addEventListener('input', updateSizeCounter);
   });
 
   // ── Pre-fill from bundle builder (localStorage) ──
   const FIELD_MAP = {
     standee:     'qty_standee',
-    banner:      'qty_banner',
-    spirit:      'qty_spirit',
+    banner:      'qty_banner_4x2',
+    spirit:      'qty_tee_1to4',
     arch:        'qty_arch',
-    prop:        'qty_prop',
+    prop:        'qty_photo_props',
     step_repeat: 'qty_step_repeat',
     prom_arch:   'qty_prom_arch',
     photo_props: 'qty_photo_props',
     prom_decal:  'qty_prom_decal',
-    button:      'qty_button',
+    button:      'qty_button_4pk',
     shirts:      'shirt_qty',
   };
 
@@ -1404,15 +1383,14 @@
           el.value = bundle[key];
           if (fieldName === 'shirt_qty') {
             updateTierDisplay(bundle[key]);
-            updateSizeCounter();
           }
         }
       });
-    } catch(e) {}
+    } catch (e) {}
   });
 
   // ── Form submit ──
-  document.getElementById('order-form').addEventListener('submit', async function(e) {
+  document.getElementById('order-form').addEventListener('submit', async function (e) {
     e.preventDefault();
     let valid = true;
 
@@ -1428,37 +1406,14 @@
       valid = false;
     }
 
-    // Shirt size validation
-    const shirtQty = parseInt(document.getElementById('shirt-qty').value) || 0;
-    let sizeMismatch = false;
-    if (shirtQty > 0) {
-      const sizeSum = SIZE_FIELDS.reduce((sum, name) => sum + (parseInt(document.querySelector(`[name="${name}"]`)?.value) || 0), 0);
-      if (sizeSum !== shirtQty) {
-        document.getElementById('size-counter').style.borderColor = 'var(--red)';
-        document.getElementById('size-counter-msg').textContent = sizeSum > shirtQty ? `${sizeSum - shirtQty} over qty — please fix` : `${shirtQty - sizeSum} unassigned — please fix`;
-        document.getElementById('size-counter-msg').style.color = 'var(--red)';
-        const banner = document.getElementById('size-failsafe-banner');
-        banner.style.display = 'block';
-        sizeMismatch = true;
-        valid = false;
-      } else {
-        document.getElementById('size-failsafe-banner').style.display = 'none';
-      }
-    }
-
     if (!valid) {
-      if (sizeMismatch) {
-        document.getElementById('size-failsafe-banner').scrollIntoView({ behavior: 'smooth', block: 'center' });
-      } else {
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      }
+      window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
 
     // Serialize form
     const data = Object.fromEntries(new FormData(this).entries());
 
-    // Submit button feedback
     const btn = this.querySelector('.btn-submit');
     btn.textContent = 'Submitting…';
     btn.disabled = true;
@@ -1490,13 +1445,13 @@
     const pkgField = document.getElementById('selected-package-field');
     const pkgNote = document.getElementById('pkg-selected-note');
 
-    // Pre-select from URL param (?pkg=...)
     const urlPkg = new URLSearchParams(window.location.search).get('pkg');
 
     picks.forEach(function (card) {
       if (urlPkg && card.dataset.pkg === urlPkg) {
         selectPkg(card);
       }
+
       card.addEventListener('click', function () {
         if (card.classList.contains('selected')) {
           card.classList.remove('selected');
@@ -1513,7 +1468,6 @@
       card.classList.add('selected');
       pkgField.value = card.dataset.pkg;
 
-      // Pre-fill qty fields
       try {
         const qtys = JSON.parse(card.dataset.qty || '{}');
         Object.entries(qtys).forEach(function ([name, val]) {
