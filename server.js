@@ -877,6 +877,30 @@ async function sendGradOrderEmail(order) {
   });
 }
 
+async function sendGradOrderConfirmationEmail(order) {
+  if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !order.email) return;
+  const productLines = Object.entries(order.products || {})
+    .filter(([, qty]) => qty > 0)
+    .map(([key, qty]) => `  • ${key}: ${qty}`)
+    .join('\n');
+  await mailer.sendMail({
+    from:    `"June's Tees & Things" <${process.env.SMTP_USER}>`,
+    to:      order.email,
+    subject: `Your Grad Order is Confirmed — ${order.order_ref}`,
+    html: `<h2>Thanks for your order, ${escHtml(order.parent_name)}!</h2>
+      <p>We've received your grad order and will be in touch soon to confirm details and next steps.</p>
+      <p><strong>Order Reference:</strong> ${escHtml(order.order_ref)}<br>
+      <strong>Student:</strong> ${escHtml(order.student_name) || '—'}<br>
+      <strong>Event:</strong> ${escHtml(order.event_type)}<br>
+      <strong>Event Date:</strong> ${escHtml(order.event_date) || '—'}<br>
+      <strong>Needed By:</strong> ${escHtml(order.needed_by) || '—'}</p>
+      <h3>Items Ordered</h3><pre>${escHtml(productLines) || 'None selected'}</pre>
+      <p><strong>Payment Method:</strong> ${escHtml(order.payment_method) || '—'}</p>
+      <p>Questions? Reply to this email or reach us at jtees.net.</p>
+      <p>— June's Tees &amp; Things</p>`,
+  });
+}
+
 // Cloudinary public config
 app.get('/api/config', signatureRateLimit, (req, res) => {
   res.json({
@@ -973,24 +997,32 @@ app.post('/api/submit-order', orderRateLimit, async (req, res) => {
       products, apparel, designs,
       upload_method: body.upload_method || '', upload_link: body.upload_link || '',
       payment_method: body.payment_method || '', notes: (body.notes || '').trim(),
-      signature: (body.signature || '').trim(), photos,
+      signature: (body.signature || '').trim(), sign_date: (body.sign_date || '').trim(),
+      school_colors: (body.school_colors || '').trim(), photos,
+    };
+
+    const rawData = {
+      school_colors: order.school_colors,
+      sign_date: order.sign_date,
+      design_selection: designs,
     };
 
     await pool.query(
       `INSERT INTO grad_orders
         (order_ref, parent_name, student_name, email, phone, school,
          event_date, needed_by, address, event_type, products, apparel,
-         designs, upload_method, upload_link, payment_method, notes, signature, photos)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+         designs, upload_method, upload_link, payment_method, notes, signature, photos, raw_data)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
       [order.order_ref, order.parent_name, order.student_name, order.email,
        order.phone, order.school, order.event_date, order.needed_by,
        order.address, order.event_type,
        JSON.stringify(order.products), JSON.stringify(order.apparel), JSON.stringify(order.designs),
        order.upload_method, order.upload_link, order.payment_method,
-       order.notes, order.signature, JSON.stringify(order.photos)]
+       order.notes, order.signature, JSON.stringify(order.photos), JSON.stringify(rawData)]
     );
 
     sendGradOrderEmail(order).catch(err => console.error('Grad order email error:', err));
+    sendGradOrderConfirmationEmail(order).catch(err => console.error('Grad order confirmation email error:', err));
     res.json({ success: true, orderRef });
   } catch (err) {
     console.error('Grad order error:', err);
