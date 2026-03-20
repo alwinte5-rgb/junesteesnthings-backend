@@ -6,7 +6,7 @@ const helmet     = require('helmet');
 const path       = require('path');
 const crypto     = require('crypto');
 const { Pool }   = require('pg');
-const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
 const axios      = require('axios');
 const cloudinary = require('cloudinary').v2;
 
@@ -93,16 +93,7 @@ async function initDB() {
 
 // ─── Email ────────────────────────────────────────────────────────────────────
 
-const mailer = nodemailer.createTransport({
-  host:             process.env.SMTP_HOST,
-  port:             parseInt(process.env.OUTGOING_SMTP_PORT || '465'),
-  secure:           process.env.OUTGOING_SMTP_PORT !== '587',
-  auth:             { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-  connectionTimeout: 15000,
-  greetingTimeout:   10000,
-  socketTimeout:     15000,
-  tls:              { rejectUnauthorized: false },
-});
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 function escEmail(str) {
   if (str == null) return '';
@@ -115,11 +106,11 @@ async function sendNotificationEmail(s) {
   const photoRow = s.photo_url
     ? `<tr><td style="padding:8px;font-weight:bold;vertical-align:top;">Photo</td><td style="padding:8px;"><a href="${escEmail(s.photo_url)}">View Photo</a><br/><img src="${escEmail(s.photo_url)}" style="max-width:300px;margin-top:8px;border-radius:6px;" /></td></tr>`
     : '';
-  await mailer.sendMail({
-    from:    `"June's Tees & Things" <${process.env.SMTP_USER}>`,
-    replyTo: 'info@jtees.net',
-    to:      process.env.NOTIFICATION_EMAIL || 'info@jtees.net',
-    subject: `New Quote Request — ${s.name}`,
+  await resend.emails.send({
+    from:     "June's Tees & Things <info@jtees.net>",
+    reply_to: 'info@jtees.net',
+    to:       process.env.NOTIFICATION_EMAIL || 'info@jtees.net',
+    subject:  `New Quote Request — ${s.name}`,
     html: `
       <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
         <h2 style="color:#A52429;">New Quote Request</h2>
@@ -138,11 +129,11 @@ async function sendNotificationEmail(s) {
 
 async function sendCustomerConfirmationEmail(s) {
   const firstName = escEmail((s.name || '').split(' ')[0]);
-  await mailer.sendMail({
-    from:    `"June's Tees & Things" <${process.env.SMTP_USER}>`,
-    replyTo: 'info@jtees.net',
-    to:      s.email,
-    subject: `We got your request, ${(s.name || '').split(' ')[0]}!`,
+  await resend.emails.send({
+    from:     "June's Tees & Things <info@jtees.net>",
+    reply_to: 'info@jtees.net',
+    to:       s.email,
+    subject:  `We got your request, ${(s.name || '').split(' ')[0]}!`,
     html: `
       <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
         <h2 style="color:#A52429;">Thanks for reaching out!</h2>
@@ -158,11 +149,11 @@ async function sendCustomerConfirmationEmail(s) {
 }
 
 async function sendPaymentReceivedEmail(s, amount) {
-  await mailer.sendMail({
-    from:    `"June's Tees & Things" <${process.env.SMTP_USER}>`,
-    replyTo: 'info@jtees.net',
-    to:      s.email,
-    subject: `Payment confirmed — your order is in production!`,
+  await resend.emails.send({
+    from:     "June's Tees & Things <info@jtees.net>",
+    reply_to: 'info@jtees.net',
+    to:       s.email,
+    subject:  `Payment confirmed — your order is in production!`,
     html: `
       <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
         <h2 style="color:#A52429;">Payment Received!</h2>
@@ -862,16 +853,16 @@ function validateGradOrder(body) {
 }
 
 async function sendGradOrderEmail(order) {
-  if (!process.env.SMTP_HOST || !process.env.SMTP_USER) return;
+  if (!process.env.RESEND_API_KEY) return;
   const productLines = Object.entries(order.products || {})
     .filter(([, qty]) => qty > 0)
     .map(([key, qty]) => `  • ${key}: ${qty}`)
     .join('\n');
-  await mailer.sendMail({
-    from:    `"June's Tees & Things" <${process.env.SMTP_USER}>`,
-    replyTo: 'info@jtees.net',
-    to:      process.env.NOTIFICATION_EMAIL || 'info@jtees.net',
-    subject: `New Grad Order ${order.order_ref} — ${order.parent_name}`,
+  await resend.emails.send({
+    from:     "June's Tees & Things <info@jtees.net>",
+    reply_to: 'info@jtees.net',
+    to:       process.env.NOTIFICATION_EMAIL || 'info@jtees.net',
+    subject:  `New Grad Order ${order.order_ref} — ${order.parent_name}`,
     html: `<h2>New Grad Order — ${escHtml(order.order_ref)}</h2>
       <p><strong>Name:</strong> ${escHtml(order.parent_name)}<br>
       <strong>Student:</strong> ${escHtml(order.student_name) || '—'}<br>
@@ -886,16 +877,16 @@ async function sendGradOrderEmail(order) {
 }
 
 async function sendGradOrderConfirmationEmail(order) {
-  if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !order.email) return;
+  if (!process.env.RESEND_API_KEY || !order.email) return;
   const productLines = Object.entries(order.products || {})
     .filter(([, qty]) => qty > 0)
     .map(([key, qty]) => `  • ${key}: ${qty}`)
     .join('\n');
-  await mailer.sendMail({
-    from:    `"June's Tees & Things" <${process.env.SMTP_USER}>`,
-    replyTo: 'info@jtees.net',
-    to:      order.email,
-    subject: `Your Grad Order is Confirmed — ${order.order_ref}`,
+  await resend.emails.send({
+    from:     "June's Tees & Things <info@jtees.net>",
+    reply_to: 'info@jtees.net',
+    to:       order.email,
+    subject:  `Your Grad Order is Confirmed — ${order.order_ref}`,
     html: `<h2>Thanks for your order, ${escHtml(order.parent_name)}!</h2>
       <p>We've received your grad order and will be in touch soon to confirm details and next steps.</p>
       <p><strong>Order Reference:</strong> ${escHtml(order.order_ref)}<br>
@@ -1092,23 +1083,20 @@ app.patch('/api/orders/:ref/notes', requireGradAdmin, validateOrderRef, async (r
 
 // ─── Global error handler ─────────────────────────────────────────────────────
 
-// SMTP test — remove after debugging
+// Email test
 app.get('/api/test-email', requireAdmin, async (_req, res) => {
-  const host = process.env.SMTP_HOST;
-  const port = parseInt(process.env.OUTGOING_SMTP_PORT || '465');
-  const user = process.env.SMTP_USER;
   try {
-    await mailer.verify();
-    await mailer.sendMail({
-      from:    `"June's Tees & Things" <${process.env.SMTP_USER}>`,
-      replyTo: 'info@jtees.net',
-      to:      'info@jtees.net',
-      subject: 'SMTP Test — June\'s Tees',
-      text:    'SMTP is working correctly.',
+    const { error } = await resend.emails.send({
+      from:     "June's Tees & Things <info@jtees.net>",
+      reply_to: 'info@jtees.net',
+      to:       'info@jtees.net',
+      subject:  'Email Test — June\'s Tees',
+      text:     'Resend is working correctly.',
     });
-    res.json({ success: true, message: 'Test email sent to info@jtees.net', host, port, user });
+    if (error) return res.status(500).json({ success: false, error: error.message });
+    res.json({ success: true, message: 'Test email sent to info@jtees.net' });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message, code: err.code, host, port, user });
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
