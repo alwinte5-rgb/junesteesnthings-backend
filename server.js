@@ -112,7 +112,8 @@ async function sendNotificationEmail(s) {
     ? `<tr><td style="padding:8px;font-weight:bold;vertical-align:top;">Photo</td><td style="padding:8px;"><a href="${escEmail(s.photo_url)}">View Photo</a><br/><img src="${escEmail(s.photo_url)}" style="max-width:300px;margin-top:8px;border-radius:6px;" /></td></tr>`
     : '';
   await mailer.sendMail({
-    from:    `"June's Tees Website" <${process.env.SMTP_USER}>`,
+    from:    `"June's Tees & Things" <${process.env.SMTP_USER}>`,
+    replyTo: 'info@jtees.net',
     to:      process.env.NOTIFICATION_EMAIL || 'info@jtees.net',
     subject: `New Quote Request — ${s.name}`,
     html: `
@@ -135,6 +136,7 @@ async function sendCustomerConfirmationEmail(s) {
   const firstName = escEmail((s.name || '').split(' ')[0]);
   await mailer.sendMail({
     from:    `"June's Tees & Things" <${process.env.SMTP_USER}>`,
+    replyTo: 'info@jtees.net',
     to:      s.email,
     subject: `We got your request, ${(s.name || '').split(' ')[0]}!`,
     html: `
@@ -154,6 +156,7 @@ async function sendCustomerConfirmationEmail(s) {
 async function sendPaymentReceivedEmail(s, amount) {
   await mailer.sendMail({
     from:    `"June's Tees & Things" <${process.env.SMTP_USER}>`,
+    replyTo: 'info@jtees.net',
     to:      s.email,
     subject: `Payment confirmed — your order is in production!`,
     html: `
@@ -861,7 +864,8 @@ async function sendGradOrderEmail(order) {
     .map(([key, qty]) => `  • ${key}: ${qty}`)
     .join('\n');
   await mailer.sendMail({
-    from:    `"June's Tees Website" <${process.env.SMTP_USER}>`,
+    from:    `"June's Tees & Things" <${process.env.SMTP_USER}>`,
+    replyTo: 'info@jtees.net',
     to:      process.env.NOTIFICATION_EMAIL || 'info@jtees.net',
     subject: `New Grad Order ${order.order_ref} — ${order.parent_name}`,
     html: `<h2>New Grad Order — ${escHtml(order.order_ref)}</h2>
@@ -885,6 +889,7 @@ async function sendGradOrderConfirmationEmail(order) {
     .join('\n');
   await mailer.sendMail({
     from:    `"June's Tees & Things" <${process.env.SMTP_USER}>`,
+    replyTo: 'info@jtees.net',
     to:      order.email,
     subject: `Your Grad Order is Confirmed — ${order.order_ref}`,
     html: `<h2>Thanks for your order, ${escHtml(order.parent_name)}!</h2>
