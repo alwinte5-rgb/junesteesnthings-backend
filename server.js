@@ -1090,6 +1090,9 @@ app.patch('/api/orders/:ref/notes', requireGradAdmin, validateOrderRef, async (r
 
 // SMTP test — remove after debugging
 app.get('/api/test-email', async (_req, res) => {
+  const host = process.env.SMTP_HOST;
+  const port = parseInt(process.env.OUTGOING_SMTP_PORT || '465');
+  const user = process.env.SMTP_USER;
   try {
     await mailer.verify();
     await mailer.sendMail({
@@ -1099,9 +1102,9 @@ app.get('/api/test-email', async (_req, res) => {
       subject: 'SMTP Test — June\'s Tees',
       text:    'SMTP is working correctly.',
     });
-    res.json({ success: true, message: 'Test email sent to info@jtees.net' });
+    res.json({ success: true, message: 'Test email sent to info@jtees.net', host, port, user });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message, code: err.code });
+    res.status(500).json({ success: false, error: err.message, code: err.code, host, port, user });
   }
 });
 
