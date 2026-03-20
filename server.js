@@ -1088,6 +1088,23 @@ app.patch('/api/orders/:ref/notes', requireGradAdmin, validateOrderRef, async (r
 
 // ─── Global error handler ─────────────────────────────────────────────────────
 
+// SMTP test — remove after debugging
+app.get('/api/test-email', requireAdmin, async (_req, res) => {
+  try {
+    await mailer.verify();
+    await mailer.sendMail({
+      from:    `"June's Tees & Things" <${process.env.SMTP_USER}>`,
+      replyTo: 'info@jtees.net',
+      to:      'info@jtees.net',
+      subject: 'SMTP Test — June\'s Tees',
+      text:    'SMTP is working correctly.',
+    });
+    res.json({ success: true, message: 'Test email sent to info@jtees.net' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message, code: err.code });
+  }
+});
+
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, _next) => {
   if (err.type === 'entity.too.large') {
