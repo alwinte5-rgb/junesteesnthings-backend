@@ -113,7 +113,7 @@ async function sendNotificationEmail(s) {
     : '';
   await mailer.sendMail({
     from:    `"June's Tees Website" <${process.env.SMTP_USER}>`,
-    to:      process.env.NOTIFICATION_EMAIL,
+    to:      process.env.NOTIFICATION_EMAIL || 'info@jtees.net',
     subject: `New Quote Request — ${s.name}`,
     html: `
       <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
@@ -862,7 +862,7 @@ async function sendGradOrderEmail(order) {
     .join('\n');
   await mailer.sendMail({
     from:    `"June's Tees Website" <${process.env.SMTP_USER}>`,
-    to:      process.env.NOTIFICATION_EMAIL || process.env.SMTP_USER,
+    to:      process.env.NOTIFICATION_EMAIL || 'info@jtees.net',
     subject: `New Grad Order ${order.order_ref} — ${order.parent_name}`,
     html: `<h2>New Grad Order — ${escHtml(order.order_ref)}</h2>
       <p><strong>Name:</strong> ${escHtml(order.parent_name)}<br>
