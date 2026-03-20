@@ -1089,7 +1089,7 @@ app.patch('/api/orders/:ref/notes', requireGradAdmin, validateOrderRef, async (r
 // ─── Global error handler ─────────────────────────────────────────────────────
 
 // SMTP test — remove after debugging
-app.get('/api/test-email', requireAdmin, async (_req, res) => {
+app.get('/api/test-email', async (_req, res) => {
   try {
     await mailer.verify();
     await mailer.sendMail({
