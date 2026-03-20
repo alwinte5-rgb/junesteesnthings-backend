@@ -1089,7 +1089,7 @@ app.patch('/api/orders/:ref/notes', requireGradAdmin, validateOrderRef, async (r
 // ─── Global error handler ─────────────────────────────────────────────────────
 
 // SMTP test — remove after debugging
-app.get('/api/test-email', async (_req, res) => {
+app.get('/api/test-email', requireAdmin, async (_req, res) => {
   const host = process.env.SMTP_HOST;
   const port = parseInt(process.env.OUTGOING_SMTP_PORT || '465');
   const user = process.env.SMTP_USER;
