@@ -11,9 +11,9 @@ const axios      = require('axios');
 const cloudinary = require('cloudinary').v2;
 
 cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_NAME,
   api_key:    process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
+  api_secret: process.env.CLOUDINARY_API_SECRET || process.env.CLUDINARY_API_SECRET,
 });
 
 const app = express();
@@ -904,17 +904,18 @@ async function sendGradOrderConfirmationEmail(order) {
 // Cloudinary public config
 app.get('/api/config', signatureRateLimit, (req, res) => {
   res.json({
-    cloudinaryCloudName: process.env.CLOUDINARY_CLOUD_NAME || '',
+    cloudinaryCloudName: process.env.CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_NAME || '',
     cloudinaryApiKey:    process.env.CLOUDINARY_API_KEY    || '',
   });
 });
 
 // Cloudinary signed upload
 app.post('/api/cloudinary-signature', signatureRateLimit, (req, res) => {
-  if (!process.env.CLOUDINARY_API_SECRET) return res.status(503).json({ error: 'Cloudinary not configured' });
+  const apiSecret = process.env.CLOUDINARY_API_SECRET || process.env.CLUDINARY_API_SECRET;
+  if (!apiSecret) return res.status(503).json({ error: 'Cloudinary not configured' });
   const timestamp    = Math.round(Date.now() / 1000);
   const paramsToSign = { timestamp, folder: 'grad_orders' };
-  const signature    = cloudinary.utils.api_sign_request(paramsToSign, process.env.CLOUDINARY_API_SECRET);
+  const signature    = cloudinary.utils.api_sign_request(paramsToSign, apiSecret);
   res.json({ signature, timestamp, folder: 'grad_orders' });
 });
 
