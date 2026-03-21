@@ -489,15 +489,15 @@ async function syncGradToHubSpot(order) {
       .catch(err => { console.error('HubSpot task failed:', JSON.stringify(err.response?.data || err.message)); return null; }),
   ]);
 
-  // Link note to contact and deal
+  // Link note to contact and deal using default association types
   if (noteRes?.data?.id) {
     const noteId = noteRes.data.id;
-    const [nc, nd] = await Promise.all([
-      hubspot.post('/crm/v4/associations/notes/contacts/batch/create', {
+    await Promise.all([
+      hubspot.put('/crm/v4/associations/notes/contacts/batch/associate/default', {
         inputs: [{ from: { id: noteId }, to: { id: contactId } }],
       }).then(() => console.log('Note→contact assoc OK'))
         .catch(err => console.error('Note→contact assoc failed:', JSON.stringify(err.response?.data || err.message))),
-      hubspot.post('/crm/v4/associations/notes/deals/batch/create', {
+      hubspot.put('/crm/v4/associations/notes/deals/batch/associate/default', {
         inputs: [{ from: { id: noteId }, to: { id: dealId } }],
       }).then(() => console.log('Note→deal assoc OK'))
         .catch(err => console.error('Note→deal assoc failed:', JSON.stringify(err.response?.data || err.message))),
@@ -507,7 +507,7 @@ async function syncGradToHubSpot(order) {
   // Link task to contact
   if (taskRes?.data?.id) {
     const taskId = taskRes.data.id;
-    await hubspot.post('/crm/v4/associations/tasks/contacts/batch/create', {
+    await hubspot.put('/crm/v4/associations/tasks/contacts/batch/associate/default', {
       inputs: [{ from: { id: taskId }, to: { id: contactId } }],
     }).then(() => console.log('Task→contact assoc OK'))
       .catch(err => console.error('Task→contact assoc failed:', JSON.stringify(err.response?.data || err.message)));
