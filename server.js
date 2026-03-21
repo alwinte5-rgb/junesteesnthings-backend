@@ -413,14 +413,33 @@ async function syncGradToHubSpot(order) {
       throw err;
     }
   }
+  const lineItems = buildGradLineItems(order);
+  const estimatedTotal = lineItems.reduce((sum, i) => sum + i.price * i.quantity, 0);
+  const itemSummary = lineItems.map(i => `• ${i.name} × ${i.quantity} @ $${i.price.toFixed(2)} = $${(i.price * i.quantity).toFixed(2)}`).join('\n');
+  const closeDateMs = order.needed_by ? new Date(order.needed_by).getTime() : null;
+
   let dealId;
   try {
+    const dealProps = {
+      dealname:    `Grad Order — ${order.parent_name} (${order.order_ref})`,
+      dealstage:   '3348333265',
+      pipeline:    'default',
+      amount:      estimatedTotal.toFixed(2),
+      description: [
+        `Order Ref: ${order.order_ref}`,
+        `Student: ${order.student_name || '—'}`,
+        `School: ${order.school || '—'} | Colors: ${order.school_colors || '—'}`,
+        `Event: ${order.event_type} on ${order.event_date || '—'}`,
+        `Needed By: ${order.needed_by || '—'}`,
+        `Payment: ${order.payment_method || '—'}`,
+        `\nItems:\n${itemSummary || 'None'}`,
+        `\nEst. Total: $${estimatedTotal.toFixed(2)}`,
+        order.notes ? `\nCustomer Notes: ${order.notes}` : null,
+      ].filter(Boolean).join('\n'),
+    };
+    if (closeDateMs) dealProps.closedate = closeDateMs.toString();
     const dealRes = await hubspot.post('/crm/v3/objects/deals', {
-      properties: {
-        dealname:  `Grad Order — ${order.parent_name} (${order.order_ref})`,
-        dealstage: '3348333265',
-        pipeline:  'default',
-      },
+      properties: dealProps,
       associations: [{ to: { id: contactId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 3 }] }],
     });
     dealId = dealRes.data.id;
@@ -428,20 +447,24 @@ async function syncGradToHubSpot(order) {
     console.error('HubSpot deal creation failed:', JSON.stringify(err.response?.data || err.message));
     throw err;
   }
-  const lineItems = buildGradLineItems(order);
-  const itemSummary = lineItems.map(i => `${i.name} × ${i.quantity} @ $${i.price}`).join('\n');
+
   const noteBody = [
-    `Order Ref: ${order.order_ref}`,
+    `📋 GRAD ORDER — ${order.order_ref}`,
+    ``,
+    `Parent: ${order.parent_name}`,
     `Student: ${order.student_name || '—'}`,
-    `School: ${order.school || '—'}`,
+    `School: ${order.school || '—'} | Colors: ${order.school_colors || '—'}`,
     `Event: ${order.event_type} on ${order.event_date || '—'}`,
     `Needed By: ${order.needed_by || '—'}`,
-    `School Colors: ${order.school_colors || '—'}`,
+    `Address: ${order.address || '—'}`,
     `Payment: ${order.payment_method || '—'}`,
-    `\nItems Ordered:\n${itemSummary || 'None'}`,
-    order.notes ? `\nNotes: ${order.notes}` : null,
-  ].filter(Boolean).join('\n');
-  console.log('HubSpot grad: contactId=', contactId, 'dealId=', dealId);
+    ``,
+    `ITEMS ORDERED:`,
+    itemSummary || 'None',
+    ``,
+    `ESTIMATED TOTAL: $${estimatedTotal.toFixed(2)}`,
+    order.notes ? `\nCUSTOMER NOTES:\n${order.notes}` : null,
+  ].filter(l => l !== null).join('\n');
   await Promise.allSettled([
     hubspot.post('/crm/v3/objects/notes', {
       properties: { hs_note_body: noteBody, hs_timestamp: Date.now().toString() },
