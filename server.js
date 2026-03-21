@@ -400,13 +400,18 @@ async function syncGradToHubSpot(order) {
       properties: { firstname: first, lastname: rest.join(' ') || '', email: order.email, phone: order.phone, hs_lead_status: 'NEW' },
     });
     contactId = res.data.id;
+    console.log('HubSpot grad contact created:', contactId);
   } catch (err) {
     if (err.response?.status === 409) {
       const search = await hubspot.post('/crm/v3/objects/contacts/search', {
         filterGroups: [{ filters: [{ propertyName: 'email', operator: 'EQ', value: order.email }] }],
       });
       contactId = search.data.results[0]?.id;
-    } else throw err;
+      console.log('HubSpot grad contact found (existing):', contactId);
+    } else {
+      console.error('HubSpot contact creation failed:', JSON.stringify(err.response?.data || err.message));
+      throw err;
+    }
   }
   let dealId;
   try {
