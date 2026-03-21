@@ -437,23 +437,40 @@ async function syncGradToHubSpot(order) {
     throw err;
   }
 
+  const photoLines = (order.photos || []).length
+    ? `\nUPLOADED PHOTOS (${order.photos.length}):\n${order.photos.map((u, i) => `  Photo ${i + 1}: ${u}`).join('\n')}`
+    : '';
+
   const noteBody = [
-    `📋 GRAD ORDER — ${order.order_ref}`,
+    `============================`,
+    `GRAD ORDER — ${order.order_ref}`,
+    `============================`,
     ``,
-    `Parent: ${order.parent_name}`,
-    `Student: ${order.student_name || '—'}`,
-    `School: ${order.school || '—'} | Colors: ${order.school_colors || '—'}`,
-    `Event: ${order.event_type} on ${order.event_date || '—'}`,
-    `Needed By: ${order.needed_by || '—'}`,
-    `Address: ${order.address || '—'}`,
-    `Payment: ${order.payment_method || '—'}`,
+    `CUSTOMER`,
+    `  Name:    ${order.parent_name}`,
+    `  Student: ${order.student_name || '—'}`,
+    `  Email:   ${order.email}`,
+    `  Phone:   ${order.phone || '—'}`,
+    `  Address: ${order.address || '—'}`,
     ``,
-    `ITEMS ORDERED:`,
-    itemSummary || 'None',
+    `EVENT`,
+    `  Type:     ${order.event_type}`,
+    `  Date:     ${order.event_date || '—'}`,
+    `  School:   ${order.school || '—'}`,
+    `  Colors:   ${order.school_colors || '—'}`,
+    `  Needed By: ${order.needed_by || '—'}`,
     ``,
-    `ESTIMATED TOTAL: $${estimatedTotal.toFixed(2)}`,
-    order.notes ? `\nCUSTOMER NOTES:\n${order.notes}` : null,
+    `ORDER ITEMS`,
+    `  ${itemSummary.replace(/\n/g, '\n  ') || 'None'}`,
+    ``,
+    `  ESTIMATED TOTAL: $${estimatedTotal.toFixed(2)}`,
+    `  * Final price confirmed after design review`,
+    ``,
+    `PAYMENT METHOD: ${order.payment_method || '—'}`,
+    order.notes ? `\nCUSTOMER NOTES:\n  ${order.notes}` : null,
+    photoLines || null,
   ].filter(l => l !== null).join('\n');
+
   // Create note and task without inline associations, then link via v4 API
   const [noteRes, taskRes] = await Promise.all([
     hubspot.post('/crm/v3/objects/notes', {
@@ -475,13 +492,15 @@ async function syncGradToHubSpot(order) {
   // Link note to contact and deal
   if (noteRes?.data?.id) {
     const noteId = noteRes.data.id;
-    await Promise.all([
+    const [nc, nd] = await Promise.all([
       hubspot.post('/crm/v4/associations/notes/contacts/batch/create', {
         inputs: [{ from: { id: noteId }, to: { id: contactId } }],
-      }).catch(err => console.error('Note→contact assoc failed:', JSON.stringify(err.response?.data || err.message))),
+      }).then(() => console.log('Note→contact assoc OK'))
+        .catch(err => console.error('Note→contact assoc failed:', JSON.stringify(err.response?.data || err.message))),
       hubspot.post('/crm/v4/associations/notes/deals/batch/create', {
         inputs: [{ from: { id: noteId }, to: { id: dealId } }],
-      }).catch(err => console.error('Note→deal assoc failed:', JSON.stringify(err.response?.data || err.message))),
+      }).then(() => console.log('Note→deal assoc OK'))
+        .catch(err => console.error('Note→deal assoc failed:', JSON.stringify(err.response?.data || err.message))),
     ]);
   }
 
@@ -490,7 +509,8 @@ async function syncGradToHubSpot(order) {
     const taskId = taskRes.data.id;
     await hubspot.post('/crm/v4/associations/tasks/contacts/batch/create', {
       inputs: [{ from: { id: taskId }, to: { id: contactId } }],
-    }).catch(err => console.error('Task→contact assoc failed:', JSON.stringify(err.response?.data || err.message)));
+    }).then(() => console.log('Task→contact assoc OK'))
+      .catch(err => console.error('Task→contact assoc failed:', JSON.stringify(err.response?.data || err.message)));
   }
   return { contactId, dealId };
 }
