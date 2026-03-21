@@ -84,10 +84,19 @@ async function initDB() {
       notes          TEXT,
       signature      TEXT,
       photos         JSONB DEFAULT '[]'::jsonb,
-      admin_notes    TEXT,
-      raw_data       JSONB
+      admin_notes         TEXT,
+      raw_data            JSONB,
+      hubspot_contact_id  TEXT,
+      hubspot_deal_id     TEXT,
+      clover_customer_id  TEXT,
+      clover_order_id     TEXT
     )
   `);
+  // Add columns if they were added after initial deploy
+  await pool.query(`ALTER TABLE grad_orders ADD COLUMN IF NOT EXISTS hubspot_contact_id TEXT`);
+  await pool.query(`ALTER TABLE grad_orders ADD COLUMN IF NOT EXISTS hubspot_deal_id TEXT`);
+  await pool.query(`ALTER TABLE grad_orders ADD COLUMN IF NOT EXISTS clover_customer_id TEXT`);
+  await pool.query(`ALTER TABLE grad_orders ADD COLUMN IF NOT EXISTS clover_order_id TEXT`);
   console.log('Database ready.');
 }
 
@@ -187,6 +196,55 @@ async function syncToBrevo(s) {
     listIds:        process.env.BREVO_LIST_ID ? [parseInt(process.env.BREVO_LIST_ID)] : [],
     updateEnabled:  true,
   });
+}
+
+// ─── Grad order pricing ───────────────────────────────────────────────────────
+
+const GRAD_PRICES = {
+  tee_1to4:      { name: 'Custom Grad Tee (1–4)',            price: 25  },
+  tee_5to9:      { name: 'Custom Grad Tee (5–9)',            price: 20  },
+  family_1to4:   { name: 'Family Matching Tee (1–4)',        price: 25  },
+  family_5to9:   { name: 'Family Matching Tee (5–9)',        price: 20  },
+  hoodie:        { name: 'Custom Hoodie',                    price: 45  },
+  stole:         { name: 'Graduation Stole',                 price: 45  },
+  yard_sign:     { name: 'Yard Sign (18"×12")',              price: 25  },
+  banner_4x2:    { name: "Banner (4'×2')",                   price: 45  },
+  banner_6x3:    { name: "Banner (6'×3')",                   price: 80  },
+  bighead_single:{ name: 'Big Head Cutout — Single',         price: 25  },
+  bighead_5pk:   { name: 'Big Head 5-Pack',                  price: 100 },
+  mini_standee:  { name: 'Mini Standee (24")',               price: 35  },
+  standee:       { name: 'Life-Size Standee (up to 6ft)',    price: 125 },
+  arch:          { name: 'Corroplast Arch',                  price: 250 },
+  backdrop:      { name: "Vinyl Backdrop Banner (6'×6')",    price: 150 },
+  button_4pk:    { name: 'Photo Buttons (set of 4)',         price: 28  },
+  button_10pk:   { name: 'Photo Buttons (set of 10)',        price: 60  },
+  magnet:        { name: 'Custom Photo Magnets (set of 6)',  price: 25  },
+  sticker:       { name: 'Custom Sticker Sheet (10-pack)',   price: 20  },
+  chipbag_6:     { name: 'Custom Chip Bags (set of 6)',      price: 18  },
+  chipbag_12:    { name: 'Custom Chip Bags (set of 12)',     price: 35  },
+  gable_box:     { name: 'Custom Gable Boxes (set of 6)',    price: 22  },
+  tumbler:       { name: 'Custom Photo Tumbler',             price: 28  },
+  cup_4pk:       { name: 'Custom Cup (set of 4)',            price: 36  },
+  can_cooler:    { name: 'Custom Can Coolers (6-Pack)',       price: 60  },
+  koozie:        { name: 'Koozies (set of 6)',               price: 35  },
+  step_repeat:   { name: "Step-and-Repeat Banner (8'×8')",  price: 200 },
+  prom_arch:     { name: 'Prom Arch',                        price: 250 },
+  photo_props:   { name: 'Photo Props',                      price: 89  },
+  prom_decal:    { name: 'Prom Decal',                       price: 80  },
+};
+
+function buildGradLineItems(order) {
+  const items = [];
+  for (const [key, { name, price }] of Object.entries(GRAD_PRICES)) {
+    const qty = order.products[key] || 0;
+    if (qty > 0) items.push({ name, price, quantity: qty });
+  }
+  const shirtQty = order.apparel?.shirt_qty || 0;
+  if (shirtQty > 0) {
+    const shirtPrice = shirtQty >= 100 ? 9.75 : shirtQty >= 50 ? 14.00 : 18.50;
+    items.push({ name: `Custom Shirts (qty: ${shirtQty})`, price: shirtPrice, quantity: shirtQty });
+  }
+  return items;
 }
 
 // ─── HubSpot ──────────────────────────────────────────────────────────────────
@@ -332,6 +390,90 @@ async function getCloverInventory() {
 async function getCloverPayment(paymentId) {
   const res = await clover.get(`/v3/merchants/${MID()}/payments/${paymentId}`);
   return res.data;
+}
+
+async function syncGradToHubSpot(order) {
+  const [first, ...rest] = (order.parent_name || '').trim().split(' ');
+  let contactId;
+  try {
+    const res = await hubspot.post('/crm/v3/objects/contacts', {
+      properties: { firstname: first, lastname: rest.join(' ') || '', email: order.email, phone: order.phone, hs_lead_status: 'NEW' },
+    });
+    contactId = res.data.id;
+  } catch (err) {
+    if (err.response?.status === 409) {
+      const search = await hubspot.post('/crm/v3/objects/contacts/search', {
+        filterGroups: [{ filters: [{ propertyName: 'email', operator: 'EQ', value: order.email }] }],
+      });
+      contactId = search.data.results[0]?.id;
+    } else throw err;
+  }
+  const dealRes = await hubspot.post('/crm/v3/objects/deals', {
+    properties: {
+      dealname:  `Grad Order — ${order.parent_name} (${order.order_ref})`,
+      dealstage: 'appointmentscheduled',
+      pipeline:  'default',
+    },
+    associations: [{ to: { id: contactId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 3 }] }],
+  });
+  const dealId = dealRes.data.id;
+  const lineItems = buildGradLineItems(order);
+  const itemSummary = lineItems.map(i => `${i.name} × ${i.quantity} @ $${i.price}`).join('\n');
+  const noteBody = [
+    `Order Ref: ${order.order_ref}`,
+    `Student: ${order.student_name || '—'}`,
+    `School: ${order.school || '—'}`,
+    `Event: ${order.event_type} on ${order.event_date || '—'}`,
+    `Needed By: ${order.needed_by || '—'}`,
+    `School Colors: ${order.school_colors || '—'}`,
+    `Payment: ${order.payment_method || '—'}`,
+    `\nItems Ordered:\n${itemSummary || 'None'}`,
+    order.notes ? `\nNotes: ${order.notes}` : null,
+  ].filter(Boolean).join('\n');
+  await Promise.all([
+    hubspot.post('/crm/v3/objects/notes', {
+      properties: { hs_note_body: noteBody, hs_timestamp: Date.now().toString() },
+      associations: [
+        { to: { id: contactId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 1   }] },
+        { to: { id: dealId    }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 214 }] },
+      ],
+    }),
+    hubspot.post('/crm/v3/objects/tasks', {
+      properties: {
+        hs_task_subject: `Follow up — Grad Order ${order.order_ref}`,
+        hs_task_body:    `Phone: ${order.phone} | Email: ${order.email} | Event: ${order.event_type} ${order.event_date || ''}`,
+        hs_timestamp:    (Date.now() + 86_400_000).toString(),
+        hs_task_status:  'NOT_STARTED',
+        hs_task_type:    'TODO',
+      },
+      associations: [{ to: { id: contactId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 1 }] }],
+    }),
+  ]);
+  return { contactId, dealId };
+}
+
+async function createGradCloverCustomerAndOrder(order) {
+  const customerRes = await clover.post(`/v3/merchants/${MID()}/customers`, {
+    firstName:      (order.parent_name || '').split(' ')[0],
+    lastName:       (order.parent_name || '').split(' ').slice(1).join(' ') || '',
+    emailAddresses: [{ emailAddress: order.email }],
+    phoneNumbers:   [{ phoneNumber: order.phone }],
+  });
+  const cloverCustomerId = customerRes.data.id;
+  const orderRes = await clover.post(`/v3/merchants/${MID()}/orders`, {
+    title:     `Grad Order ${order.order_ref}`,
+    customers: [{ id: cloverCustomerId }],
+  });
+  const cloverOrderId = orderRes.data.id;
+  const lineItems = buildGradLineItems(order);
+  await Promise.all(lineItems.map(item =>
+    clover.post(`/v3/merchants/${MID()}/orders/${cloverOrderId}/line_items`, {
+      name:    item.name,
+      price:   Math.round(item.price * 100),
+      unitQty: item.quantity,
+    })
+  ));
+  return { cloverCustomerId, cloverOrderId };
 }
 
 // ─── Auth (admin routes) ──────────────────────────────────────────────────────
@@ -852,52 +994,90 @@ function validateGradOrder(body) {
   return errors;
 }
 
+function buildOrderEmailTable(order) {
+  const lineItems = buildGradLineItems(order);
+  if (!lineItems.length) return '<p>No items selected.</p>';
+  let total = 0;
+  const rows = lineItems.map(({ name, price, quantity }) => {
+    const subtotal = price * quantity;
+    total += subtotal;
+    return `<tr>
+      <td style="padding:8px 12px;border-bottom:1px solid #eee;">${escHtml(name)}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #eee;text-align:center;">${quantity}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #eee;text-align:right;">$${price.toFixed(2)}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #eee;text-align:right;">$${subtotal.toFixed(2)}</td>
+    </tr>`;
+  }).join('');
+  return `<table style="width:100%;border-collapse:collapse;font-size:14px;">
+    <thead>
+      <tr style="background:#0B1F4B;color:#fff;">
+        <th style="padding:8px 12px;text-align:left;">Item</th>
+        <th style="padding:8px 12px;text-align:center;">Qty</th>
+        <th style="padding:8px 12px;text-align:right;">Unit Price</th>
+        <th style="padding:8px 12px;text-align:right;">Subtotal</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+    <tfoot>
+      <tr style="background:#f9f9f9;font-weight:bold;">
+        <td colspan="3" style="padding:10px 12px;text-align:right;">Estimated Total</td>
+        <td style="padding:10px 12px;text-align:right;color:#0B1F4B;">$${total.toFixed(2)}</td>
+      </tr>
+    </tfoot>
+  </table>
+  <p style="font-size:12px;color:#999;margin-top:6px;">* Final price confirmed after design review. Does not include applicable taxes or rush fees.</p>`;
+}
+
 async function sendGradOrderEmail(order) {
   if (!process.env.RESEND_API_KEY) return;
-  const productLines = Object.entries(order.products || {})
-    .filter(([, qty]) => qty > 0)
-    .map(([key, qty]) => `  • ${key}: ${qty}`)
-    .join('\n');
   await resend.emails.send({
     from:     "June's Tees & Things <info@jtees.net>",
     reply_to: 'info@jtees.net',
     to:       process.env.NOTIFICATION_EMAIL || 'info@jtees.net',
     subject:  `New Grad Order ${order.order_ref} — ${order.parent_name}`,
-    html: `<h2>New Grad Order — ${escHtml(order.order_ref)}</h2>
-      <p><strong>Name:</strong> ${escHtml(order.parent_name)}<br>
-      <strong>Student:</strong> ${escHtml(order.student_name) || '—'}<br>
-      <strong>Email:</strong> ${escHtml(order.email)}<br>
-      <strong>Phone:</strong> ${escHtml(order.phone) || '—'}<br>
-      <strong>Event:</strong> ${escHtml(order.event_type)}<br>
-      <strong>Event Date:</strong> ${escHtml(order.event_date) || '—'}<br>
-      <strong>Needed By:</strong> ${escHtml(order.needed_by) || '—'}</p>
-      <h3>Products</h3><pre>${escHtml(productLines) || 'None selected'}</pre>
-      <h3>Payment</h3><p>${escHtml(order.payment_method) || '—'}</p>`,
+    html: `<div style="font-family:sans-serif;max-width:680px;margin:0 auto;">
+      <h2 style="color:#0B1F4B;">New Grad Order — ${escHtml(order.order_ref)}</h2>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+        <tr><td style="padding:6px 0;font-weight:bold;width:140px;">Name</td><td>${escHtml(order.parent_name)}</td></tr>
+        <tr><td style="padding:6px 0;font-weight:bold;">Student</td><td>${escHtml(order.student_name) || '—'}</td></tr>
+        <tr><td style="padding:6px 0;font-weight:bold;">Email</td><td><a href="mailto:${escHtml(order.email)}">${escHtml(order.email)}</a></td></tr>
+        <tr><td style="padding:6px 0;font-weight:bold;">Phone</td><td><a href="tel:${escHtml(order.phone)}">${escHtml(order.phone) || '—'}</a></td></tr>
+        <tr><td style="padding:6px 0;font-weight:bold;">School</td><td>${escHtml(order.school) || '—'}</td></tr>
+        <tr><td style="padding:6px 0;font-weight:bold;">School Colors</td><td>${escHtml(order.school_colors) || '—'}</td></tr>
+        <tr><td style="padding:6px 0;font-weight:bold;">Event</td><td>${escHtml(order.event_type)} — ${escHtml(order.event_date) || '—'}</td></tr>
+        <tr><td style="padding:6px 0;font-weight:bold;">Needed By</td><td>${escHtml(order.needed_by) || '—'}</td></tr>
+        <tr><td style="padding:6px 0;font-weight:bold;">Address</td><td>${escHtml(order.address) || '—'}</td></tr>
+        <tr><td style="padding:6px 0;font-weight:bold;">Payment</td><td>${escHtml(order.payment_method) || '—'}</td></tr>
+      </table>
+      <h3 style="color:#0B1F4B;">Items Ordered</h3>
+      ${buildOrderEmailTable(order)}
+      ${order.notes ? `<h3 style="color:#0B1F4B;">Notes</h3><p style="background:#f9f9f9;padding:12px;border-radius:6px;">${escHtml(order.notes)}</p>` : ''}
+    </div>`,
   });
 }
 
 async function sendGradOrderConfirmationEmail(order) {
   if (!process.env.RESEND_API_KEY || !order.email) return;
-  const productLines = Object.entries(order.products || {})
-    .filter(([, qty]) => qty > 0)
-    .map(([key, qty]) => `  • ${key}: ${qty}`)
-    .join('\n');
   await resend.emails.send({
     from:     "June's Tees & Things <info@jtees.net>",
     reply_to: 'info@jtees.net',
     to:       order.email,
     subject:  `Your Grad Order is Confirmed — ${order.order_ref}`,
-    html: `<h2>Thanks for your order, ${escHtml(order.parent_name)}!</h2>
-      <p>We've received your grad order and will be in touch soon to confirm details and next steps.</p>
-      <p><strong>Order Reference:</strong> ${escHtml(order.order_ref)}<br>
-      <strong>Student:</strong> ${escHtml(order.student_name) || '—'}<br>
-      <strong>Event:</strong> ${escHtml(order.event_type)}<br>
-      <strong>Event Date:</strong> ${escHtml(order.event_date) || '—'}<br>
-      <strong>Needed By:</strong> ${escHtml(order.needed_by) || '—'}</p>
-      <h3>Items Ordered</h3><pre>${escHtml(productLines) || 'None selected'}</pre>
-      <p><strong>Payment Method:</strong> ${escHtml(order.payment_method) || '—'}</p>
-      <p>Questions? Reply to this email or reach us at jtees.net.</p>
-      <p>— June's Tees &amp; Things</p>`,
+    html: `<div style="font-family:sans-serif;max-width:680px;margin:0 auto;">
+      <h2 style="color:#0B1F4B;">Thanks, ${escHtml(order.parent_name.split(' ')[0])}! 🎓</h2>
+      <p>We've received your grad order and will be in touch soon to confirm your design and next steps.</p>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+        <tr><td style="padding:6px 0;font-weight:bold;width:140px;">Order Ref</td><td>${escHtml(order.order_ref)}</td></tr>
+        <tr><td style="padding:6px 0;font-weight:bold;">Student</td><td>${escHtml(order.student_name) || '—'}</td></tr>
+        <tr><td style="padding:6px 0;font-weight:bold;">Event</td><td>${escHtml(order.event_type)} — ${escHtml(order.event_date) || '—'}</td></tr>
+        <tr><td style="padding:6px 0;font-weight:bold;">Needed By</td><td>${escHtml(order.needed_by) || '—'}</td></tr>
+        <tr><td style="padding:6px 0;font-weight:bold;">Payment</td><td>${escHtml(order.payment_method) || '—'}</td></tr>
+      </table>
+      <h3 style="color:#0B1F4B;">Your Order Summary</h3>
+      ${buildOrderEmailTable(order)}
+      <p style="margin-top:24px;">Questions? Reply to this email or call/text us at <a href="tel:+17738491854">(773) 849-1854</a></p>
+      <p style="color:#999;font-size:12px;">June's Tees &amp; Things · 3047 N Lincoln Ave #435, Chicago, IL 60657</p>
+    </div>`,
   });
 }
 
@@ -1022,8 +1202,36 @@ app.post('/api/submit-order', orderRateLimit, async (req, res) => {
        order.notes, order.signature, JSON.stringify(order.photos), JSON.stringify(rawData)]
     );
 
-    sendGradOrderEmail(order).catch(err => console.error('Grad order email error:', err));
-    sendGradOrderConfirmationEmail(order).catch(err => console.error('Grad order confirmation email error:', err));
+    const [emailResult, confirmResult, hubspotResult, cloverResult] = await Promise.allSettled([
+      sendGradOrderEmail(order),
+      sendGradOrderConfirmationEmail(order),
+      syncGradToHubSpot(order),
+      createGradCloverCustomerAndOrder(order),
+    ]);
+    if (emailResult.status   === 'rejected') console.error('Grad notification email failed:', emailResult.reason?.message);
+    if (confirmResult.status === 'rejected') console.error('Grad confirmation email failed:',  confirmResult.reason?.message);
+    if (hubspotResult.status === 'rejected') console.error('Grad HubSpot sync failed:',        hubspotResult.reason?.message);
+    if (cloverResult.status  === 'rejected') console.error('Grad Clover sync failed:',         cloverResult.reason?.message);
+
+    const idUpdates = [];
+    const idValues  = [];
+    let   idx       = 1;
+    if (hubspotResult.status === 'fulfilled') {
+      idUpdates.push(`hubspot_contact_id=$${idx++}`, `hubspot_deal_id=$${idx++}`);
+      idValues.push(hubspotResult.value.contactId, hubspotResult.value.dealId);
+    }
+    if (cloverResult.status === 'fulfilled') {
+      idUpdates.push(`clover_customer_id=$${idx++}`, `clover_order_id=$${idx++}`);
+      idValues.push(cloverResult.value.cloverCustomerId, cloverResult.value.cloverOrderId);
+    }
+    if (idUpdates.length) {
+      idValues.push(orderRef);
+      pool.query(
+        `UPDATE grad_orders SET ${idUpdates.join(', ')} WHERE order_ref=$${idx}`,
+        idValues
+      ).catch(err => console.error('Grad ID update failed:', err.message));
+    }
+
     res.json({ success: true, orderRef });
   } catch (err) {
     console.error('Grad order error:', err);
