@@ -408,15 +408,21 @@ async function syncGradToHubSpot(order) {
       contactId = search.data.results[0]?.id;
     } else throw err;
   }
-  const dealRes = await hubspot.post('/crm/v3/objects/deals', {
-    properties: {
-      dealname:  `Grad Order — ${order.parent_name} (${order.order_ref})`,
-      dealstage: 'appointmentscheduled',
-      pipeline:  'default',
-    },
-    associations: [{ to: { id: contactId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 3 }] }],
-  });
-  const dealId = dealRes.data.id;
+  let dealId;
+  try {
+    const dealRes = await hubspot.post('/crm/v3/objects/deals', {
+      properties: {
+        dealname:  `Grad Order — ${order.parent_name} (${order.order_ref})`,
+        dealstage: 'appointmentscheduled',
+        pipeline:  'default',
+      },
+      associations: [{ to: { id: contactId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 3 }] }],
+    });
+    dealId = dealRes.data.id;
+  } catch (err) {
+    console.error('HubSpot deal creation failed:', JSON.stringify(err.response?.data || err.message));
+    throw err;
+  }
   const lineItems = buildGradLineItems(order);
   const itemSummary = lineItems.map(i => `${i.name} × ${i.quantity} @ $${i.price}`).join('\n');
   const noteBody = [
