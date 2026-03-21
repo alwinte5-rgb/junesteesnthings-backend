@@ -421,21 +421,10 @@ async function syncGradToHubSpot(order) {
   let dealId;
   try {
     const dealProps = {
-      dealname:    `Grad Order — ${order.parent_name} (${order.order_ref})`,
-      dealstage:   '3348333265',
-      pipeline:    'default',
-      amount:      estimatedTotal.toFixed(2),
-      description: [
-        `Order Ref: ${order.order_ref}`,
-        `Student: ${order.student_name || '—'}`,
-        `School: ${order.school || '—'} | Colors: ${order.school_colors || '—'}`,
-        `Event: ${order.event_type} on ${order.event_date || '—'}`,
-        `Needed By: ${order.needed_by || '—'}`,
-        `Payment: ${order.payment_method || '—'}`,
-        `\nItems:\n${itemSummary || 'None'}`,
-        `\nEst. Total: $${estimatedTotal.toFixed(2)}`,
-        order.notes ? `\nCustomer Notes: ${order.notes}` : null,
-      ].filter(Boolean).join('\n'),
+      dealname:  `Grad Order — ${order.parent_name} (${order.order_ref})`,
+      dealstage: '3348333265',
+      pipeline:  'default',
+      amount:    estimatedTotal.toFixed(2),
     };
     if (closeDateMs) dealProps.closedate = closeDateMs.toString();
     const dealRes = await hubspot.post('/crm/v3/objects/deals', {
@@ -465,14 +454,15 @@ async function syncGradToHubSpot(order) {
     `ESTIMATED TOTAL: $${estimatedTotal.toFixed(2)}`,
     order.notes ? `\nCUSTOMER NOTES:\n${order.notes}` : null,
   ].filter(l => l !== null).join('\n');
-  await Promise.allSettled([
+  await Promise.all([
     hubspot.post('/crm/v3/objects/notes', {
       properties: { hs_note_body: noteBody, hs_timestamp: Date.now().toString() },
       associations: [
         { to: { id: contactId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 1   }] },
         { to: { id: dealId    }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 214 }] },
       ],
-    }).catch(err => console.error('HubSpot note failed:', JSON.stringify(err.response?.data || err.message))),
+    }).then(() => console.log('HubSpot note created OK'))
+      .catch(err => console.error('HubSpot note failed:', JSON.stringify(err.response?.data || err.message))),
     hubspot.post('/crm/v3/objects/tasks', {
       properties: {
         hs_task_subject: `Follow up — Grad Order ${order.order_ref}`,
@@ -482,7 +472,8 @@ async function syncGradToHubSpot(order) {
         hs_task_type:    'TODO',
       },
       associations: [{ to: { id: contactId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 1 }] }],
-    }).catch(err => console.error('HubSpot task failed:', JSON.stringify(err.response?.data || err.message))),
+    }).then(() => console.log('HubSpot task created OK'))
+      .catch(err => console.error('HubSpot task failed:', JSON.stringify(err.response?.data || err.message))),
   ]);
   return { contactId, dealId };
 }
