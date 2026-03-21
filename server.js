@@ -476,11 +476,11 @@ async function syncGradToHubSpot(order) {
   if (noteRes?.data?.id) {
     const noteId = noteRes.data.id;
     await Promise.all([
-      hubspot.post(`/crm/v4/associations/notes/${noteId}/contacts/batch/create`, {
-        inputs: [{ from: { id: noteId }, to: { id: contactId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 202 }] }],
+      hubspot.post('/crm/v4/associations/notes/contacts/batch/create', {
+        inputs: [{ from: { id: noteId }, to: { id: contactId } }],
       }).catch(err => console.error('Note→contact assoc failed:', JSON.stringify(err.response?.data || err.message))),
-      hubspot.post(`/crm/v4/associations/notes/${noteId}/deals/batch/create`, {
-        inputs: [{ from: { id: noteId }, to: { id: dealId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 214 }] }],
+      hubspot.post('/crm/v4/associations/notes/deals/batch/create', {
+        inputs: [{ from: { id: noteId }, to: { id: dealId } }],
       }).catch(err => console.error('Note→deal assoc failed:', JSON.stringify(err.response?.data || err.message))),
     ]);
   }
@@ -488,14 +488,15 @@ async function syncGradToHubSpot(order) {
   // Link task to contact
   if (taskRes?.data?.id) {
     const taskId = taskRes.data.id;
-    await hubspot.post(`/crm/v4/associations/tasks/${taskId}/contacts/batch/create`, {
-      inputs: [{ from: { id: taskId }, to: { id: contactId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 204 }] }],
+    await hubspot.post('/crm/v4/associations/tasks/contacts/batch/create', {
+      inputs: [{ from: { id: taskId }, to: { id: contactId } }],
     }).catch(err => console.error('Task→contact assoc failed:', JSON.stringify(err.response?.data || err.message)));
   }
   return { contactId, dealId };
 }
 
 async function createGradCloverCustomerAndOrder(order) {
+  console.log('Clover MID:', MID(), 'Token set:', !!process.env.CLOVER_API_TOKEN);
   const customerRes = await clover.post(`/v3/merchants/${MID()}/customers`, {
     firstName:      (order.parent_name || '').split(' ')[0],
     lastName:       (order.parent_name || '').split(' ').slice(1).join(' ') || '',
