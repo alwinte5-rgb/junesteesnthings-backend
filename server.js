@@ -497,27 +497,32 @@ async function syncGradToHubSpot(order) {
 
 async function createGradCloverCustomerAndOrder(order) {
   console.log('Clover MID:', MID(), 'Token set:', !!process.env.CLOVER_API_TOKEN);
-  const customerRes = await clover.post(`/v3/merchants/${MID()}/customers`, {
-    firstName:      (order.parent_name || '').split(' ')[0],
-    lastName:       (order.parent_name || '').split(' ').slice(1).join(' ') || '',
-    emailAddresses: [{ emailAddress: order.email }],
-    phoneNumbers:   [{ phoneNumber: order.phone }],
-  });
-  const cloverCustomerId = customerRes.data.id;
-  const orderRes = await clover.post(`/v3/merchants/${MID()}/orders`, {
-    title:     `Grad Order ${order.order_ref}`,
-    customers: [{ id: cloverCustomerId }],
-  });
-  const cloverOrderId = orderRes.data.id;
-  const lineItems = buildGradLineItems(order);
-  await Promise.all(lineItems.map(item =>
-    clover.post(`/v3/merchants/${MID()}/orders/${cloverOrderId}/line_items`, {
-      name:    item.name,
-      price:   Math.round(item.price * 100),
-      unitQty: item.quantity,
-    })
-  ));
-  return { cloverCustomerId, cloverOrderId };
+  try {
+    const customerRes = await clover.post(`/v3/merchants/${MID()}/customers`, {
+      firstName:      (order.parent_name || '').split(' ')[0],
+      lastName:       (order.parent_name || '').split(' ').slice(1).join(' ') || '',
+      emailAddresses: [{ emailAddress: order.email }],
+      phoneNumbers:   [{ phoneNumber: order.phone }],
+    });
+    const cloverCustomerId = customerRes.data.id;
+    const orderRes = await clover.post(`/v3/merchants/${MID()}/orders`, {
+      title:     `Grad Order ${order.order_ref}`,
+      customers: [{ id: cloverCustomerId }],
+    });
+    const cloverOrderId = orderRes.data.id;
+    const lineItems = buildGradLineItems(order);
+    await Promise.all(lineItems.map(item =>
+      clover.post(`/v3/merchants/${MID()}/orders/${cloverOrderId}/line_items`, {
+        name:    item.name,
+        price:   Math.round(item.price * 100),
+        unitQty: item.quantity,
+      })
+    ));
+    return { cloverCustomerId, cloverOrderId };
+  } catch (err) {
+    console.error('Clover error:', err.response?.status, JSON.stringify(err.response?.data || err.message));
+    throw err;
+  }
 }
 
 // ─── Auth (admin routes) ──────────────────────────────────────────────────────
