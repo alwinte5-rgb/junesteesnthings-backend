@@ -281,7 +281,7 @@ async function createHubSpotDeal(s, contactId) {
   const res = await hubspot.post('/crm/v3/objects/deals', {
     properties: {
       dealname:  `Quote — ${s.name}`,
-      dealstage: 'appointmentscheduled',
+      dealstage: '3348333265',
       pipeline:  'default',
     },
     associations: [{
@@ -413,7 +413,7 @@ async function syncGradToHubSpot(order) {
     const dealRes = await hubspot.post('/crm/v3/objects/deals', {
       properties: {
         dealname:  `Grad Order — ${order.parent_name} (${order.order_ref})`,
-        dealstage: 'appointmentscheduled',
+        dealstage: '3348333265',
         pipeline:  'default',
       },
       associations: [{ to: { id: contactId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 3 }] }],
