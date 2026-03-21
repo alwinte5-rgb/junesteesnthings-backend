@@ -436,14 +436,15 @@ async function syncGradToHubSpot(order) {
     `\nItems Ordered:\n${itemSummary || 'None'}`,
     order.notes ? `\nNotes: ${order.notes}` : null,
   ].filter(Boolean).join('\n');
-  await Promise.all([
+  console.log('HubSpot grad: contactId=', contactId, 'dealId=', dealId);
+  await Promise.allSettled([
     hubspot.post('/crm/v3/objects/notes', {
       properties: { hs_note_body: noteBody, hs_timestamp: Date.now().toString() },
       associations: [
         { to: { id: contactId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 1   }] },
         { to: { id: dealId    }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 214 }] },
       ],
-    }),
+    }).catch(err => console.error('HubSpot note failed:', JSON.stringify(err.response?.data || err.message))),
     hubspot.post('/crm/v3/objects/tasks', {
       properties: {
         hs_task_subject: `Follow up — Grad Order ${order.order_ref}`,
@@ -453,7 +454,7 @@ async function syncGradToHubSpot(order) {
         hs_task_type:    'TODO',
       },
       associations: [{ to: { id: contactId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 1 }] }],
-    }),
+    }).catch(err => console.error('HubSpot task failed:', JSON.stringify(err.response?.data || err.message))),
   ]);
   return { contactId, dealId };
 }
