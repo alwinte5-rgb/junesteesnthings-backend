@@ -454,15 +454,12 @@ async function syncGradToHubSpot(order) {
     `ESTIMATED TOTAL: $${estimatedTotal.toFixed(2)}`,
     order.notes ? `\nCUSTOMER NOTES:\n${order.notes}` : null,
   ].filter(l => l !== null).join('\n');
-  await Promise.all([
+  // Create note and task without inline associations, then link via v4 API
+  const [noteRes, taskRes] = await Promise.all([
     hubspot.post('/crm/v3/objects/notes', {
       properties: { hs_note_body: noteBody, hs_timestamp: Date.now().toString() },
-      associations: [
-        { to: { id: contactId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 1   }] },
-        { to: { id: dealId    }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 214 }] },
-      ],
-    }).then(() => console.log('HubSpot note created OK'))
-      .catch(err => console.error('HubSpot note failed:', JSON.stringify(err.response?.data || err.message))),
+    }).then(r => { console.log('HubSpot note created OK:', r.data.id); return r; })
+      .catch(err => { console.error('HubSpot note failed:', JSON.stringify(err.response?.data || err.message)); return null; }),
     hubspot.post('/crm/v3/objects/tasks', {
       properties: {
         hs_task_subject: `Follow up — Grad Order ${order.order_ref}`,
@@ -471,10 +468,30 @@ async function syncGradToHubSpot(order) {
         hs_task_status:  'NOT_STARTED',
         hs_task_type:    'TODO',
       },
-      associations: [{ to: { id: contactId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 1 }] }],
-    }).then(() => console.log('HubSpot task created OK'))
-      .catch(err => console.error('HubSpot task failed:', JSON.stringify(err.response?.data || err.message))),
+    }).then(r => { console.log('HubSpot task created OK:', r.data.id); return r; })
+      .catch(err => { console.error('HubSpot task failed:', JSON.stringify(err.response?.data || err.message)); return null; }),
   ]);
+
+  // Link note to contact and deal
+  if (noteRes?.data?.id) {
+    const noteId = noteRes.data.id;
+    await Promise.all([
+      hubspot.post(`/crm/v4/associations/notes/${noteId}/contacts/batch/create`, {
+        inputs: [{ from: { id: noteId }, to: { id: contactId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 202 }] }],
+      }).catch(err => console.error('Note→contact assoc failed:', JSON.stringify(err.response?.data || err.message))),
+      hubspot.post(`/crm/v4/associations/notes/${noteId}/deals/batch/create`, {
+        inputs: [{ from: { id: noteId }, to: { id: dealId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 214 }] }],
+      }).catch(err => console.error('Note→deal assoc failed:', JSON.stringify(err.response?.data || err.message))),
+    ]);
+  }
+
+  // Link task to contact
+  if (taskRes?.data?.id) {
+    const taskId = taskRes.data.id;
+    await hubspot.post(`/crm/v4/associations/tasks/${taskId}/contacts/batch/create`, {
+      inputs: [{ from: { id: taskId }, to: { id: contactId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 204 }] }],
+    }).catch(err => console.error('Task→contact assoc failed:', JSON.stringify(err.response?.data || err.message)));
+  }
   return { contactId, dealId };
 }
 
