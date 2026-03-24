@@ -1005,10 +1005,12 @@ app.get('/admin/data', requireAdmin, async (req, res) => {
 // ─── Grad 2026 API ────────────────────────────────────────────────────────────
 
 // Simple in-memory rate limiter
+// Prefers CF-Connecting-IP (set by Cloudflare) so the real visitor IP is used,
+// not Cloudflare's proxy IP. Falls back to req.ip for non-Cloudflare traffic.
 const gradRateLimitStore = new Map();
 function gradRateLimit(maxReqs, windowMs) {
   return (req, res, next) => {
-    const ip    = req.ip || req.socket.remoteAddress || 'unknown';
+    const ip    = req.headers['cf-connecting-ip'] || req.ip || req.socket.remoteAddress || 'unknown';
     const now   = Date.now();
     const entry = gradRateLimitStore.get(ip) || { count: 0, reset: now + windowMs };
     if (now > entry.reset) { entry.count = 0; entry.reset = now + windowMs; }
@@ -1037,6 +1039,10 @@ const BOT_UA_PATTERNS = [
 ];
 
 function rejectBots(req, res, next) {
+  // Reject requests that bypassed Cloudflare and hit the origin directly
+  if (!req.headers['cf-ray']) {
+    return res.status(400).json({ error: 'Bad request' });
+  }
   const ua = req.headers['user-agent'] || '';
   if (!ua || BOT_UA_PATTERNS.some(p => p.test(ua))) {
     return res.status(400).json({ error: 'Bad request' });
