@@ -472,7 +472,8 @@ async function syncGradToHubSpot(order) {
     `  * Final price confirmed after design review`,
     ``,
     `PAYMENT METHOD: ${order.payment_method || '—'}`,
-    order.notes ? `\nCUSTOMER NOTES:\n  ${order.notes}` : null,
+    order.apparel?.design_notes ? `\nDESIGN NOTES:\n  ${order.apparel.design_notes}` : null,
+    order.notes ? `\nSPECIAL INSTRUCTIONS:\n  ${order.notes}` : null,
     photoLines || null,
   ].filter(l => l !== null).join('\n');
 
@@ -1020,7 +1021,7 @@ function gradRateLimit(maxReqs, windowMs) {
     next();
   };
 }
-const orderRateLimit     = gradRateLimit(4, 60 * 60 * 1000);
+const orderRateLimit     = gradRateLimit(10, 60 * 60 * 1000);
 const signatureRateLimit = gradRateLimit(30, 60 * 60 * 1000);
 
 // ── Bot rejection middleware ───────────────────────────────────────────────────
@@ -1165,7 +1166,8 @@ async function sendGradOrderEmail(order) {
       </table>
       <h3 style="color:#0B1F4B;">Items Ordered</h3>
       ${buildOrderEmailTable(order)}
-      ${order.notes ? `<h3 style="color:#0B1F4B;">Notes</h3><p style="background:#f9f9f9;padding:12px;border-radius:6px;">${escHtml(order.notes)}</p>` : ''}
+      ${order.apparel?.design_notes ? `<h3 style="color:#0B1F4B;">Design Notes</h3><p style="background:#f9f9f9;padding:12px;border-radius:6px;">${escHtml(order.apparel.design_notes)}</p>` : ''}
+      ${order.notes ? `<h3 style="color:#0B1F4B;">Special Instructions</h3><p style="background:#f9f9f9;padding:12px;border-radius:6px;">${escHtml(order.notes)}</p>` : ''}
     </div>`,
   });
 }
@@ -1189,6 +1191,8 @@ async function sendGradOrderConfirmationEmail(order) {
       </table>
       <h3 style="color:#0B1F4B;">Your Order Summary</h3>
       ${buildOrderEmailTable(order)}
+      ${order.apparel?.design_notes ? `<h3 style="color:#0B1F4B;">Your Design Notes</h3><p style="background:#f9f9f9;padding:12px;border-radius:6px;">${escHtml(order.apparel.design_notes)}</p>` : ''}
+      ${order.notes ? `<p><strong>Special Instructions:</strong> ${escHtml(order.notes)}</p>` : ''}
       <p style="margin-top:24px;">Questions? Reply to this email or call/text us at <a href="tel:+17738491854">(773) 849-1854</a></p>
       <p style="color:#999;font-size:12px;">June's Tees &amp; Things · 3047 N Lincoln Ave #435, Chicago, IL 60657</p>
     </div>`,
