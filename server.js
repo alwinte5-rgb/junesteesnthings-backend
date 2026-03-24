@@ -298,17 +298,22 @@ async function addHubSpotNote(s, contactId, dealId) {
     s.photo_url ? `Reference photo: ${s.photo_url}` : null,
   ].filter(Boolean);
 
-  await hubspot.post('/crm/v3/objects/notes', {
+  const noteRes = await hubspot.post('/crm/v3/objects/notes', {
     properties: { hs_note_body: noteLines.join('\n'), hs_timestamp: Date.now().toString() },
-    associations: [
-      { to: { id: contactId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 1   }] },
-      { to: { id: dealId    }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 214 }] },
-    ],
   });
+  const noteId = noteRes.data.id;
+  await Promise.all([
+    hubspot.put('/crm/v4/associations/notes/contacts/batch/associate/default', {
+      inputs: [{ from: { id: noteId }, to: { id: contactId } }],
+    }),
+    hubspot.put('/crm/v4/associations/notes/deals/batch/associate/default', {
+      inputs: [{ from: { id: noteId }, to: { id: dealId } }],
+    }),
+  ]);
 }
 
 async function createHubSpotTask(s, contactId) {
-  await hubspot.post('/crm/v3/objects/tasks', {
+  const taskRes = await hubspot.post('/crm/v3/objects/tasks', {
     properties: {
       hs_task_subject: `Follow up with ${s.name} about quote`,
       hs_task_body:    `Phone: ${s.phone} | Email: ${s.email}`,
@@ -316,10 +321,10 @@ async function createHubSpotTask(s, contactId) {
       hs_task_status:  'NOT_STARTED',
       hs_task_type:    'TODO',
     },
-    associations: [{
-      to:    { id: contactId },
-      types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 1 }],
-    }],
+  });
+  const taskId = taskRes.data.id;
+  await hubspot.put('/crm/v4/associations/tasks/contacts/batch/associate/default', {
+    inputs: [{ from: { id: taskId }, to: { id: contactId } }],
   });
 }
 
