@@ -1145,29 +1145,90 @@ function buildOrderEmailTable(order) {
 
 async function sendGradOrderEmail(order) {
   if (!process.env.RESEND_API_KEY) return;
+
+  const sec = (title, content) =>
+    `<div style="margin-bottom:28px;">
+      <div style="background:#0B1F4B;color:#fff;padding:8px 16px;border-radius:6px 6px 0 0;font-weight:800;font-size:.9rem;letter-spacing:.04em;text-transform:uppercase;">${title}</div>
+      <div style="border:1px solid #E5E7EB;border-top:none;border-radius:0 0 6px 6px;padding:16px;">${content}</div>
+    </div>`;
+
+  const row = (label, value) =>
+    `<tr><td style="padding:5px 8px 5px 0;font-weight:700;white-space:nowrap;vertical-align:top;width:160px;color:#374151;">${label}</td><td style="padding:5px 0;">${value || '—'}</td></tr>`;
+
+  // Design selections
+  const eventTypes = (order.event_type || '').split(',').map(s => s.trim()).filter(Boolean);
+  const designMap = { 'senior-night': 'senior_night', 'graduation': 'graduation', 'prom': 'prom' };
+  const designSection = eventTypes.map(evt => {
+    const key = designMap[evt] || evt.replace('-', '_');
+    const name = order.designs?.[`${key}_name`];
+    const img  = order.designs?.[`${key}_img`];
+    const label = evt.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    return `<div style="margin-bottom:12px;">
+      <strong>${label}:</strong> ${escHtml(name || order.designs?.[key] || '—')}
+      ${img ? `<br/><img src="${escHtml(img)}" alt="${escHtml(name || '')}" style="max-width:220px;margin-top:8px;border-radius:6px;border:1px solid #E5E7EB;" />` : ''}
+    </div>`;
+  }).join('');
+
+  // Uploaded photos
+  const photoHtml = (order.photos || []).length
+    ? (order.photos.map((url, i) =>
+        `<div style="margin-bottom:10px;">
+          <div style="font-size:.82rem;color:#6B7280;margin-bottom:4px;">Photo ${i + 1}: <a href="${escHtml(url)}">${escHtml(url)}</a></div>
+          <img src="${escHtml(url)}" alt="Uploaded photo ${i + 1}" style="max-width:300px;border-radius:6px;border:1px solid #E5E7EB;display:block;" />
+        </div>`
+      ).join(''))
+    : '<p style="color:#6B7280;">No photos uploaded.</p>';
+
   await resend.emails.send({
     from:     "June's Tees & Things <info@jtees.net>",
-    reply_to: 'info@jtees.net',
+    reply_to: order.email || 'info@jtees.net',
     to:       process.env.NOTIFICATION_EMAIL || 'info@jtees.net',
     subject:  `New Grad Order ${order.order_ref} — ${order.parent_name}`,
-    html: `<div style="font-family:sans-serif;max-width:680px;margin:0 auto;">
-      <h2 style="color:#0B1F4B;">New Grad Order — ${escHtml(order.order_ref)}</h2>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
-        <tr><td style="padding:6px 0;font-weight:bold;width:140px;">Name</td><td>${escHtml(order.parent_name)}</td></tr>
-        <tr><td style="padding:6px 0;font-weight:bold;">Student</td><td>${escHtml(order.student_name) || '—'}</td></tr>
-        <tr><td style="padding:6px 0;font-weight:bold;">Email</td><td><a href="mailto:${escHtml(order.email)}">${escHtml(order.email)}</a></td></tr>
-        <tr><td style="padding:6px 0;font-weight:bold;">Phone</td><td><a href="tel:${escHtml(order.phone)}">${escHtml(order.phone) || '—'}</a></td></tr>
-        <tr><td style="padding:6px 0;font-weight:bold;">School</td><td>${escHtml(order.school) || '—'}</td></tr>
-        <tr><td style="padding:6px 0;font-weight:bold;">School Colors</td><td>${escHtml(order.school_colors) || '—'}</td></tr>
-        <tr><td style="padding:6px 0;font-weight:bold;">Event</td><td>${escHtml(order.event_type)} — ${escHtml(order.event_date) || '—'}</td></tr>
-        <tr><td style="padding:6px 0;font-weight:bold;">Needed By</td><td>${escHtml(order.needed_by) || '—'}</td></tr>
-        <tr><td style="padding:6px 0;font-weight:bold;">Address</td><td>${escHtml(order.address) || '—'}</td></tr>
-        <tr><td style="padding:6px 0;font-weight:bold;">Payment</td><td>${escHtml(order.payment_method) || '—'}</td></tr>
+    html: `<div style="font-family:sans-serif;max-width:700px;margin:0 auto;color:#1C1C2E;">
+      <div style="background:#0B1F4B;padding:20px 24px;border-radius:10px 10px 0 0;margin-bottom:24px;">
+        <div style="color:#F4A623;font-size:.8rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;">New Grad Order</div>
+        <h1 style="color:#fff;font-size:1.4rem;margin:4px 0 0;">${escHtml(order.order_ref)} &mdash; ${escHtml(order.parent_name)}</h1>
+      </div>
+
+      ${sec('Customer Info', `<table style="width:100%;border-collapse:collapse;">
+        ${row('Parent / Guardian', escHtml(order.parent_name))}
+        ${row('Student', escHtml(order.student_name))}
+        ${row('Email', `<a href="mailto:${escHtml(order.email)}">${escHtml(order.email)}</a>`)}
+        ${row('Phone', `<a href="tel:${escHtml(order.phone)}">${escHtml(order.phone)}</a>`)}
+        ${row('Delivery Address', escHtml(order.address))}
+      </table>`)}
+
+      ${sec('Event Info', `<table style="width:100%;border-collapse:collapse;">
+        ${row('Event Type', escHtml(order.event_type))}
+        ${row('Event Date', escHtml(order.event_date))}
+        ${row('Order Needed By', escHtml(order.needed_by))}
+        ${row('School', escHtml(order.school))}
+        ${row('School Colors', escHtml(order.school_colors))}
+      </table>`)}
+
+      ${sec('Design Selected', designSection || '<p style="color:#6B7280;">No design selected.</p>')}
+
+      ${sec('Design Notes & Personalization', order.apparel?.design_notes
+        ? `<p style="white-space:pre-wrap;margin:0;">${escHtml(order.apparel.design_notes)}</p>`
+        : '<p style="color:#6B7280;">None provided.</p>')}
+
+      ${sec('Items Ordered', buildOrderEmailTable(order))}
+
+      ${order.apparel?.shirt_qty > 0 ? sec('Apparel', `<table style="width:100%;border-collapse:collapse;">
+        ${row('Total Shirt Qty', String(order.apparel.shirt_qty))}
+      </table>`) : ''}
+
+      ${sec('Payment & Proof Agreement', `<table style="width:100%;border-collapse:collapse;">
+        ${row('Payment Method', escHtml(order.payment_method))}
+        ${row('Signed By', escHtml(order.signature))}
+        ${row('Date Signed', escHtml(order.sign_date))}
       </table>
-      <h3 style="color:#0B1F4B;">Items Ordered</h3>
-      ${buildOrderEmailTable(order)}
-      ${order.apparel?.design_notes ? `<h3 style="color:#0B1F4B;">Design Notes</h3><p style="background:#f9f9f9;padding:12px;border-radius:6px;">${escHtml(order.apparel.design_notes)}</p>` : ''}
-      ${order.notes ? `<h3 style="color:#0B1F4B;">Special Instructions</h3><p style="background:#f9f9f9;padding:12px;border-radius:6px;">${escHtml(order.notes)}</p>` : ''}
+      <p style="margin-top:12px;font-size:.85rem;color:#6B7280;">Customer agreed to: digital proof within 2 business days, 24-hour approval window, 50% deposit invoice via Clover, 7–14 business day production after deposit.</p>`)}
+
+      ${order.notes ? sec('Special Instructions', `<p style="white-space:pre-wrap;margin:0;">${escHtml(order.notes)}</p>`) : ''}
+
+      ${sec(`Uploaded Photos (${(order.photos || []).length})`, photoHtml)}
+
     </div>`,
   });
 }
@@ -1288,6 +1349,12 @@ app.post('/api/submit-order', orderRateLimit, rejectBots, async (req, res) => {
       senior_night: body['design_senior-night'] || '',
       graduation:   body.design_graduation || '',
       prom:         body.design_prom || '',
+      senior_night_name: body['design_name_senior-night'] || '',
+      graduation_name:   body.design_name_graduation || '',
+      prom_name:         body.design_name_prom || '',
+      senior_night_img:  body['design_img_senior-night'] || '',
+      graduation_img:    body.design_img_graduation || '',
+      prom_img:          body.design_img_prom || '',
     };
     const order = {
       order_ref: orderRef, parent_name: String(body.parent_name).trim(),

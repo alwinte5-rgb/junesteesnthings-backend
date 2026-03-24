@@ -1208,6 +1208,8 @@
           `).join('')}
         </div>
         <input type="hidden" name="design_${evtType}" id="design-input-${evtType}" value="${selectedDesigns[evtType] || ''}" />
+        <input type="hidden" name="design_name_${evtType}" id="design-name-${evtType}" value="" />
+        <input type="hidden" name="design_img_${evtType}" id="design-img-${evtType}" value="" />
       </div>
     `).join('');
   }
@@ -1216,8 +1218,13 @@
     document.querySelectorAll(`#design-grid-${evtType} .design-card`).forEach(c => c.classList.remove('selected'));
     card.classList.add('selected');
     selectedDesigns[evtType] = id;
+    const d = DESIGNS[evtType].find(x => x.id === id);
     const input = document.getElementById(`design-input-${evtType}`);
     if (input) input.value = id;
+    const nameInput = document.getElementById(`design-name-${evtType}`);
+    if (nameInput) nameInput.value = d ? d.name : '';
+    const imgInput = document.getElementById(`design-img-${evtType}`);
+    if (imgInput) imgInput.value = d?.img || '';
     document.getElementById('design-error').style.display = 'none';
   }
 
