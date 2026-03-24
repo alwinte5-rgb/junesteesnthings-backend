@@ -621,9 +621,9 @@ app.post('/submit', gradRateLimit(4, 60 * 60 * 1000), rejectBots, async (req, re
 
   if (emailResult.status         === 'rejected') console.error('Notification email failed:', emailResult.reason?.message);
   if (customerEmailResult.status === 'rejected') console.error('Confirmation email failed:', customerEmailResult.reason?.message);
-  if (brevoResult.status         === 'rejected') console.error('Brevo sync failed:',         brevoResult.reason?.message);
-  if (hubspotResult.status       === 'rejected') console.error('HubSpot failed:',            hubspotResult.reason?.message);
-  if (cloverResult.status        === 'rejected') console.error('Clover failed:',             cloverResult.reason?.message);
+  if (brevoResult.status         === 'rejected') console.error('Brevo sync failed:',         brevoResult.reason?.message, JSON.stringify(brevoResult.reason?.response?.data));
+  if (hubspotResult.status       === 'rejected') console.error('HubSpot failed:',            hubspotResult.reason?.message, JSON.stringify(hubspotResult.reason?.response?.data));
+  if (cloverResult.status        === 'rejected') console.error('Clover failed:',             cloverResult.reason?.message, JSON.stringify(cloverResult.reason?.response?.data));
 
   // Persist IDs
   const updates = {};
@@ -1039,9 +1039,9 @@ const BOT_UA_PATTERNS = [
 ];
 
 function rejectBots(req, res, next) {
-  // Reject requests that bypassed Cloudflare and hit the origin directly
+  // Log (but don't block) requests missing CF-Ray so we can confirm Cloudflare is proxying
   if (!req.headers['cf-ray']) {
-    return res.status(400).json({ error: 'Bad request' });
+    console.warn('Non-Cloudflare request to form endpoint:', req.method, req.path, req.headers['user-agent']);
   }
   const ua = req.headers['user-agent'] || '';
   if (!ua || BOT_UA_PATTERNS.some(p => p.test(ua))) {
@@ -1316,8 +1316,8 @@ app.post('/api/submit-order', orderRateLimit, rejectBots, async (req, res) => {
     ]);
     if (emailResult.status   === 'rejected') console.error('Grad notification email failed:', emailResult.reason?.message);
     if (confirmResult.status === 'rejected') console.error('Grad confirmation email failed:',  confirmResult.reason?.message);
-    if (hubspotResult.status === 'rejected') console.error('Grad HubSpot sync failed:',        hubspotResult.reason?.message);
-    if (cloverResult.status  === 'rejected') console.error('Grad Clover sync failed:',         cloverResult.reason?.message);
+    if (hubspotResult.status === 'rejected') console.error('Grad HubSpot sync failed:',        hubspotResult.reason?.message, JSON.stringify(hubspotResult.reason?.response?.data));
+    if (cloverResult.status  === 'rejected') console.error('Grad Clover sync failed:',         cloverResult.reason?.message, JSON.stringify(cloverResult.reason?.response?.data));
 
     const idUpdates = [];
     const idValues  = [];
