@@ -619,8 +619,8 @@ app.post('/submit', gradRateLimit(4, 60 * 60 * 1000), rejectBots, async (req, re
       createCloverCustomer(s),
     ]);
 
-  if (emailResult.status         === 'rejected') console.error('Notification email failed:', emailResult.reason?.message);
-  if (customerEmailResult.status === 'rejected') console.error('Confirmation email failed:', customerEmailResult.reason?.message);
+  if (emailResult.status         === 'rejected') console.error('Notification email failed:', emailResult.reason?.message, JSON.stringify(emailResult.reason?.response?.data ?? emailResult.reason?.response ?? null));
+  if (customerEmailResult.status === 'rejected') console.error('Confirmation email failed:', customerEmailResult.reason?.message, JSON.stringify(customerEmailResult.reason?.response?.data ?? customerEmailResult.reason?.response ?? null));
   if (brevoResult.status         === 'rejected') console.error('Brevo sync failed:',         brevoResult.reason?.message, JSON.stringify(brevoResult.reason?.response?.data));
   if (hubspotResult.status       === 'rejected') console.error('HubSpot failed:',            hubspotResult.reason?.message, JSON.stringify(hubspotResult.reason?.response?.data));
   if (cloverResult.status        === 'rejected') console.error('Clover failed:',             cloverResult.reason?.message, JSON.stringify(cloverResult.reason?.response?.data));
@@ -1038,6 +1038,8 @@ const BOT_UA_PATTERNS = [
   /okhttp/i,
 ];
 
+const BLOCKED_NAMES = ['robertwex', 'robert wex'];
+
 function rejectBots(req, res, next) {
   // Log (but don't block) requests missing CF-Ray so we can confirm Cloudflare is proxying
   if (!req.headers['cf-ray']) {
@@ -1050,6 +1052,12 @@ function rejectBots(req, res, next) {
   // Honeypot: any submission with this field filled in is a bot
   const hp = req.body?.website || req.body?.url || req.body?.company || '';
   if (hp) return res.status(400).json({ error: 'Bad request' });
+  // Block known spam names
+  const submittedName = (req.body?.name || req.body?.parent_name || '').toLowerCase().trim();
+  if (BLOCKED_NAMES.some(n => submittedName.includes(n))) {
+    console.warn('Blocked known spam name:', submittedName);
+    return res.status(400).json({ error: 'Bad request' });
+  }
   next();
 }
 
