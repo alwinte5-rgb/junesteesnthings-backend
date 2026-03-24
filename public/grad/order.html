@@ -1362,6 +1362,36 @@
     updateTierDisplay(parseInt(this.value) || 0);
   });
 
+  // ── Event date → needed-by logic ──
+  const eventDateEl  = document.querySelector('[name="event_date"]');
+  const neededByEl   = document.querySelector('[name="needed_by"]');
+
+  function syncNeededBy() {
+    const eventVal = eventDateEl.value;
+    if (!eventVal) return;
+
+    // Cap needed_by at event date
+    neededByEl.max = eventVal;
+
+    // Default to 2 days before event if not set or currently after event date
+    const eventMs  = new Date(eventVal).getTime();
+    const defaultMs = eventMs - 2 * 24 * 60 * 60 * 1000;
+    const defaultDate = new Date(defaultMs).toISOString().split('T')[0];
+
+    if (!neededByEl.value || neededByEl.value > eventVal) {
+      neededByEl.value = defaultDate;
+    }
+  }
+
+  eventDateEl.addEventListener('change', syncNeededBy);
+
+  // If needed_by is manually changed past event date, clamp it
+  neededByEl.addEventListener('change', function () {
+    if (eventDateEl.value && this.value > eventDateEl.value) {
+      this.value = eventDateEl.value;
+    }
+  });
+
   // ── Pre-fill from bundle builder (localStorage) ──
   const FIELD_MAP = {
     standee:     'qty_standee',
