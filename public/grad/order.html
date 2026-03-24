@@ -1132,30 +1132,40 @@
 
 <script>
   // ── Designs data (one pick allowed per event type) ──
+  const CDN = 'https://res.cloudinary.com/dhjtzewsx/image/upload/c_scale,w_400/';
   const DESIGNS = {
     'senior-night': [
-      { id: 'sn-action',  icon: '⚡', name: 'Action Pose Spotlight', tag: 'Standee / Banner' },
-      { id: 'sn-namenum', icon: '🏆', name: 'Name & Number',          tag: 'Banner / Spirit Stick' },
-      { id: 'sn-mascot',  icon: '🐾', name: 'School Mascot',          tag: 'Any Product' },
-      { id: 'sn-team',    icon: '🏅', name: 'Team Unity',             tag: 'Spirit Sticks / Apparel' },
-      { id: 'sn-quote',   icon: '💬', name: 'Senior Quote',            tag: 'Banner / Standee' },
-      { id: 'sn-custom',  icon: '✏️', name: 'Custom / Describe',      tag: 'Design from scratch' },
+      { id: 'sn-1',  img: CDN + 'Screenshot_2026-03-10_at_11.32.03_PM_kkeo4o', name: 'All-Over Grad Shirt',    tag: 'Shirt / Apparel' },
+      { id: 'sn-2',  img: CDN + 'Screenshot_2026-03-11_at_12.13.16_AM_bwoj6o', name: 'Senior 2026',            tag: 'Shirt / Any Product' },
+      { id: 'sn-3',  img: CDN + 'Screenshot_2026-03-11_at_12.14.19_AM_bqz9uf', name: 'Senior Est. 2026',       tag: 'Shirt / Any Product' },
+      { id: 'sn-4',  img: CDN + 'Screenshot_2026-03-10_at_11.52.31_PM_bvx8hp', name: 'Senior Column Banners',  tag: 'Banners' },
+      { id: 'sn-5',  img: CDN + 'Screenshot_2026-03-10_at_11.35.29_PM_hqjxgw', name: 'Last Lap Banner',        tag: 'Banner / Sign' },
+      { id: 'sn-6',  img: CDN + 'Screenshot_2026-03-11_at_12.17.01_AM_ht1pdl', name: 'Proud Family',           tag: 'Shirt / Any Product' },
+      { id: 'sn-custom', icon: '✏️', name: 'Custom / Describe', tag: 'Design from scratch' },
     ],
     'graduation': [
-      { id: 'gr-arch',     icon: '🎓', name: 'Class of 2026 Arch',    tag: 'Foam Arch' },
-      { id: 'gr-photo',    icon: '📸', name: 'Photo Wall Backdrop',    tag: 'Arch / Standing Prop' },
-      { id: 'gr-diploma',  icon: '📜', name: 'Diploma Frame',          tag: 'Floor Decal / Prop' },
-      { id: 'gr-cap',      icon: '🎩', name: 'Cap & Tassel',           tag: 'Any Product' },
-      { id: 'gr-confetti', icon: '🎊', name: 'Celebration Confetti',   tag: 'Floor Decal / Favors' },
-      { id: 'gr-custom',   icon: '✏️', name: 'Custom / Describe',      tag: 'Design from scratch' },
+      { id: 'gr-1',  img: CDN + 'Screenshot_2026-03-10_at_11.32.03_PM_kkeo4o', name: 'All-Over Grad Shirt',    tag: 'Shirt / Apparel' },
+      { id: 'gr-2',  img: CDN + 'Screenshot_2026-03-10_at_11.32.26_PM_qwdmxp', name: 'Graduate 2026 Shirt',    tag: 'Shirt / Apparel' },
+      { id: 'gr-3',  img: CDN + 'Screenshot_2026-03-11_at_12.03.22_AM_hmp64i', name: 'Senior Crewneck',        tag: 'Shirt / Apparel' },
+      { id: 'gr-4',  img: CDN + 'Screenshot_2026-03-10_at_11.43.20_PM_siwrpb', name: 'Class of 2026',          tag: 'Any Product' },
+      { id: 'gr-5',  img: CDN + 'Screenshot_2026-03-10_at_11.44.51_PM_py4lvs', name: 'Graduation Arch',        tag: 'Arch' },
+      { id: 'gr-6',  img: CDN + 'Screenshot_2026-03-10_at_11.48.17_PM_mlxoxv', name: 'Grad Arch Package',      tag: 'Arch / Bundle' },
+      { id: 'gr-7',  img: CDN + 'Screenshot_2026-03-10_at_11.45.13_PM_dtc6xp', name: 'Graduation Standee',     tag: 'Standee' },
+      { id: 'gr-8',  img: CDN + 'Screenshot_2026-03-10_at_11.35.29_PM_hqjxgw', name: 'Last Lap Banner',        tag: 'Banner' },
+      { id: 'gr-9',  img: CDN + 'Screenshot_2026-03-10_at_11.29.34_PM_hfavet', name: 'Grad Chip Bag',          tag: 'Party Favors' },
+      { id: 'gr-10', img: CDN + 'Screenshot_2026-03-11_at_12.17.01_AM_ht1pdl', name: 'Proud Mom',              tag: 'Shirt / Any Product' },
+      { id: 'gr-custom', icon: '✏️', name: 'Custom / Describe', tag: 'Design from scratch' },
     ],
     'prom': [
-      { id: 'pr-redcarpet',  icon: '🎬', name: 'Red Carpet Night',       tag: 'Step-and-Repeat / Arch' },
-      { id: 'pr-masquerade', icon: '🎭', name: 'Masquerade',             tag: 'Any Product' },
-      { id: 'pr-galaxy',     icon: '🌌', name: 'Galaxy / Starry Night',  tag: 'Backdrop / Floor Decal' },
-      { id: 'pr-enchanted',  icon: '✨', name: 'Enchanted Garden',        tag: 'Arch / Props' },
-      { id: 'pr-oldholly',   icon: '🎞️', name: 'Old Hollywood Glam',    tag: 'Step-and-Repeat' },
-      { id: 'pr-custom',     icon: '✏️', name: 'Custom / Describe',      tag: 'Design from scratch' },
+      { id: 'pr-1',  img: CDN + 'Screenshot_2026-03-10_at_11.57.12_PM_cjwfs1', name: 'Prom Arch (Pink)',       tag: 'Arch' },
+      { id: 'pr-2',  img: CDN + 'Screenshot_2026-03-10_at_11.56.13_PM_yu466v', name: 'Prom Arch (Gold)',       tag: 'Arch' },
+      { id: 'pr-3',  img: CDN + 'Screenshot_2026-03-10_at_11.57.42_PM_xbzatv', name: 'Prom Arch (Black/Gold)', tag: 'Arch' },
+      { id: 'pr-4',  img: CDN + 'Screenshot_2026-03-11_at_12.18.07_AM_fjsppk', name: 'Prom Arch (Purple)',     tag: 'Arch' },
+      { id: 'pr-5',  img: CDN + 'Screenshot_2026-03-11_at_12.19.13_AM_cbdcf8', name: 'Prom Queen Arch',        tag: 'Arch' },
+      { id: 'pr-6',  img: CDN + 'Screenshot_2026-03-10_at_11.46.51_PM_jndzp1', name: 'Prom Send-Off Banner',   tag: 'Banner' },
+      { id: 'pr-7',  img: CDN + 'Screenshot_2026-03-11_at_12.01.15_AM_firif2', name: 'Prom Night Banners',     tag: 'Banners' },
+      { id: 'pr-8',  img: CDN + 'Screenshot_2026-03-11_at_12.05.13_AM_c88voz', name: 'Prom Send-Off Poster',   tag: 'Poster / Sign' },
+      { id: 'pr-custom', icon: '✏️', name: 'Custom / Describe', tag: 'Design from scratch' },
     ],
   };
 
@@ -1187,7 +1197,7 @@
                  data-type="${evtType}" data-id="${d.id}"
                  onclick="selectDesign(this, '${evtType}', '${d.id}')">
               <div class="design-thumb">
-                <span>${d.icon}</span>
+                ${d.img ? `<img src="${d.img}" alt="${d.name}" loading="lazy" />` : `<span>${d.icon}</span>`}
                 <div class="design-check">✓</div>
               </div>
               <div class="design-info">
