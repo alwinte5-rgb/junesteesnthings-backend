@@ -1207,8 +1207,9 @@ app.get('/api/config', signatureRateLimit, (req, res) => {
 app.post('/api/cloudinary-signature', signatureRateLimit, (req, res) => {
   const apiSecret = process.env.CLOUDINARY_API_SECRET || process.env.CLUDINARY_API_SECRET;
   if (!apiSecret) return res.status(503).json({ error: 'Cloudinary not configured' });
-  const timestamp    = Math.round(Date.now() / 1000);
-  const paramsToSign = { timestamp, folder: 'grad_orders' };
+  const timestamp = Math.round(Date.now() / 1000);
+  // Sign exactly what the widget sends (may include source, upload_preset, etc.)
+  const paramsToSign = { ...req.body, timestamp, folder: 'grad_orders' };
   const signature    = cloudinary.utils.api_sign_request(paramsToSign, apiSecret);
   res.json({ signature, timestamp, folder: 'grad_orders' });
 });

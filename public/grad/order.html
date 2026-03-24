@@ -487,8 +487,9 @@
 
         <!-- Design cards appear per selected event type -->
         <div id="design-picker-section" style="display:none;">
-          <div style="font-size:.85rem; font-weight:700; color:var(--navy); margin-bottom:10px;">Choose a Design Style <span style="font-weight:500; color:var(--muted);">(optional — helps us prep your proof faster)</span></div>
+          <div style="font-size:.85rem; font-weight:700; color:var(--navy); margin-bottom:10px;">Choose a Design Style <span class="req">*</span></div>
           <div id="design-sections"></div>
+          <div id="design-error" style="display:none; color:var(--red); font-size:.82rem; margin-top:6px;">Please select a design style for each event type.</div>
         </div>
 
         <div class="gallery-link-row">
@@ -946,20 +947,9 @@
         <h2>Apparel — Quantities</h2>
       </div>
       <div class="form-section-body">
-        <div class="field-grid">
-          <div class="field">
-            <label>Total Shirt Quantity</label>
-            <input type="number" name="shirt_qty" id="shirt-qty" min="0" value="0" placeholder="0" />
-          </div>
-          <div class="field">
-            <label>Print Method</label>
-            <select name="print_method">
-              <option value="">— Select —</option>
-              <option value="dtg">DTG (Direct-to-Garment) — cotton, detailed designs</option>
-              <option value="sublimation">Sublimation — all-over, polyester</option>
-              <option value="unsure">Not sure — let us recommend</option>
-            </select>
-          </div>
+        <div class="field" style="max-width:320px;">
+          <label>Total Shirt Quantity</label>
+          <input type="number" name="shirt_qty" id="shirt-qty" min="0" value="0" placeholder="0" />
         </div>
 
         <div class="tier-indicator" id="tier-indicator">
@@ -1216,6 +1206,7 @@
     selectedDesigns[evtType] = id;
     const input = document.getElementById(`design-input-${evtType}`);
     if (input) input.value = id;
+    document.getElementById('design-error').style.display = 'none';
   }
 
   // ── Event Type Multi-Select Toggle ──
@@ -1262,7 +1253,7 @@
         const res = await fetch('/api/cloudinary-signature', {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ timestamp: paramsToSign.timestamp }),
+          body:    JSON.stringify(paramsToSign),
         });
         const data = await res.json();
         callback(data.signature, data.timestamp);
@@ -1406,6 +1397,15 @@
     if (selectedEvents.size === 0) {
       document.getElementById('event-type-error').style.display = 'block';
       valid = false;
+    }
+
+    // Design must be selected for every chosen event type
+    const missingDesign = [...selectedEvents].some(evt => !selectedDesigns[evt]);
+    if (selectedEvents.size > 0 && missingDesign) {
+      document.getElementById('design-error').style.display = 'block';
+      valid = false;
+    } else {
+      document.getElementById('design-error').style.display = 'none';
     }
 
     if (!valid) {
