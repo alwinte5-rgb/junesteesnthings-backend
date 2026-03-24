@@ -573,7 +573,7 @@ app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
 // ── Form submission ──────────────────────────────────────────────────────────
 
-app.post('/submit', gradRateLimit(10, 60 * 60 * 1000), async (req, res) => {
+app.post('/submit', gradRateLimit(4, 60 * 60 * 1000), rejectBots, async (req, res) => {
   const { name, phone, email, description, photo_url } = req.body;
 
   if (!name || !phone || !email) {
@@ -1018,8 +1018,34 @@ function gradRateLimit(maxReqs, windowMs) {
     next();
   };
 }
-const orderRateLimit     = gradRateLimit(10, 60 * 60 * 1000);
+const orderRateLimit     = gradRateLimit(4, 60 * 60 * 1000);
 const signatureRateLimit = gradRateLimit(30, 60 * 60 * 1000);
+
+// ── Bot rejection middleware ───────────────────────────────────────────────────
+const BOT_UA_PATTERNS = [
+  /^$/,                        // empty user-agent
+  /curl\//i,
+  /python-requests/i,
+  /go-http-client/i,
+  /java\//i,
+  /libwww-perl/i,
+  /wget/i,
+  /scrapy/i,
+  /axios\/[0-9]/i,             // raw axios (not a browser)
+  /node-fetch/i,
+  /okhttp/i,
+];
+
+function rejectBots(req, res, next) {
+  const ua = req.headers['user-agent'] || '';
+  if (!ua || BOT_UA_PATTERNS.some(p => p.test(ua))) {
+    return res.status(400).json({ error: 'Bad request' });
+  }
+  // Honeypot: any submission with this field filled in is a bot
+  const hp = req.body?.website || req.body?.url || req.body?.company || '';
+  if (hp) return res.status(400).json({ error: 'Bad request' });
+  next();
+}
 
 // Bearer-token admin auth for grad order panel
 function requireGradAdmin(req, res, next) {
@@ -1174,7 +1200,7 @@ app.post('/api/cloudinary-signature', signatureRateLimit, (req, res) => {
 });
 
 // Submit grad order
-app.post('/api/submit-order', orderRateLimit, async (req, res) => {
+app.post('/api/submit-order', orderRateLimit, rejectBots, async (req, res) => {
   try {
     const body = req.body;
     const errors = validateGradOrder(body);

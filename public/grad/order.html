@@ -461,6 +461,8 @@
   </div>
 
   <form id="order-form" novalidate>
+    <!-- Honeypot: hidden from humans, bots fill it in -->
+    <input type="text" name="website" value="" autocomplete="off" tabindex="-1" aria-hidden="true" style="display:none !important;" />
 
     <!-- ══════════════════════════════════════════════
          SECTION 1: SELECT A DESIGN

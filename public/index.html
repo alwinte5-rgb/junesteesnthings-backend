@@ -2650,6 +2650,8 @@
 
             <!-- Hidden field receives the Cloudinary photo URL after upload -->
             <input type="hidden" name="photo_url" id="photo-url-field" />
+            <!-- Honeypot: hidden from humans, bots fill it in -->
+            <input type="text" name="website" value="" autocomplete="off" tabindex="-1" aria-hidden="true" style="display:none !important;" />
 
             <div class="form-group">
               <label for="f-name">Full Name</label>
