@@ -346,9 +346,11 @@ async function syncToHubSpot(s) {
 
 // ─── Clover ───────────────────────────────────────────────────────────────────
 
-const clover = axios.create({
-  baseURL: 'https://api.clover.com',
-  headers: { Authorization: `Bearer ${process.env.CLOVER_API_TOKEN}` },
+const clover = axios.create({ baseURL: 'https://api.clover.com' });
+// Read token dynamically on every request so Railway env changes take effect without redeploy
+clover.interceptors.request.use(cfg => {
+  cfg.headers['Authorization'] = `Bearer ${process.env.CLOVER_API_TOKEN}`;
+  return cfg;
 });
 
 const MID = () => process.env.CLOVER_MERCHANT_ID;
@@ -397,56 +399,44 @@ async function getCloverPayment(paymentId) {
   return res.data;
 }
 
-async function syncGradToHubSpot(order) {
+async function syncGradToBrevo(order) {
   const [first, ...rest] = (order.parent_name || '').trim().split(' ');
-  let contactId;
-  try {
-    const res = await hubspot.post('/crm/v3/objects/contacts', {
-      properties: { firstname: first, lastname: rest.join(' ') || '', email: order.email, phone: order.phone, hs_lead_status: 'NEW' },
-    });
-    contactId = res.data.id;
-    console.log('HubSpot grad contact created:', contactId);
-  } catch (err) {
-    if (err.response?.status === 409) {
-      const search = await hubspot.post('/crm/v3/objects/contacts/search', {
-        filterGroups: [{ filters: [{ propertyName: 'email', operator: 'EQ', value: order.email }] }],
-      });
-      contactId = search.data.results[0]?.id;
-      console.log('HubSpot grad contact found (existing):', contactId);
-    } else {
-      console.error('HubSpot contact creation failed:', JSON.stringify(err.response?.data || err.message));
-      throw err;
-    }
-  }
-  const lineItems = buildGradLineItems(order);
+
+  // 1. Create / update contact
+  await brevo.post('/contacts', {
+    email:          order.email,
+    attributes:     { FIRSTNAME: first || '', LASTNAME: rest.join(' ') || '', SMS: order.phone || '' },
+    listIds:        process.env.BREVO_LIST_ID ? [parseInt(process.env.BREVO_LIST_ID)] : [],
+    updateEnabled:  true,
+  });
+
+  // 2. Get the contact's numeric ID for deal linking
+  const contactRes = await brevo.get(`/contacts/${encodeURIComponent(order.email)}`);
+  const contactId  = contactRes.data.id;
+
+  // 3. Build order summary
+  const lineItems      = buildGradLineItems(order);
   const estimatedTotal = lineItems.reduce((sum, i) => sum + i.price * i.quantity, 0);
-  const itemSummary = lineItems.map(i => `• ${i.name} × ${i.quantity} @ $${i.price.toFixed(2)} = $${(i.price * i.quantity).toFixed(2)}`).join('\n');
-  const closeDateMs = order.needed_by ? new Date(order.needed_by).getTime() : null;
+  const itemSummary    = lineItems.map(i =>
+    `• ${i.name} × ${i.quantity} @ $${i.price.toFixed(2)} = $${(i.price * i.quantity).toFixed(2)}`
+  ).join('\n');
 
-  let dealId;
-  try {
-    const dealProps = {
-      dealname:  `Grad Order — ${order.parent_name} (${order.order_ref})`,
-      dealstage: '3348333265',
-      pipeline:  'default',
-      amount:    estimatedTotal.toFixed(2),
-    };
-    if (closeDateMs) dealProps.closedate = closeDateMs.toString();
-    const dealRes = await hubspot.post('/crm/v3/objects/deals', {
-      properties: dealProps,
-      associations: [{ to: { id: contactId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 3 }] }],
-    });
-    dealId = dealRes.data.id;
-  } catch (err) {
-    console.error('HubSpot deal creation failed:', JSON.stringify(err.response?.data || err.message));
-    throw err;
-  }
+  // 4. Design selections
+  const eventTypes  = (order.event_type || '').split(',').map(s => s.trim()).filter(Boolean);
+  const designMap   = { 'senior-night': 'senior_night', graduation: 'graduation', prom: 'prom' };
+  const designLines = eventTypes.map(evt => {
+    const key  = designMap[evt] || evt;
+    const name = order.designs?.[`${key}_name`] || order.designs?.[key] || '—';
+    const img  = order.designs?.[`${key}_img`]  || '';
+    return `  ${evt.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}: ${name}${img ? `\n  Image: ${img}` : ''}`;
+  }).join('\n');
 
+  // 5. Build full note
   const photoLines = (order.photos || []).length
     ? `\nUPLOADED PHOTOS (${order.photos.length}):\n${order.photos.map((u, i) => `  Photo ${i + 1}: ${u}`).join('\n')}`
-    : '';
+    : '\n  No photos uploaded.';
 
-  const noteBody = [
+  const noteText = [
     `============================`,
     `GRAD ORDER — ${order.order_ref}`,
     `============================`,
@@ -459,11 +449,14 @@ async function syncGradToHubSpot(order) {
     `  Address: ${order.address || '—'}`,
     ``,
     `EVENT`,
-    `  Type:     ${order.event_type}`,
-    `  Date:     ${order.event_date || '—'}`,
-    `  School:   ${order.school || '—'}`,
-    `  Colors:   ${order.school_colors || '—'}`,
+    `  Type:      ${order.event_type}`,
+    `  Date:      ${order.event_date || '—'}`,
     `  Needed By: ${order.needed_by || '—'}`,
+    `  School:    ${order.school || '—'}`,
+    `  Colors:    ${order.school_colors || '—'}`,
+    ``,
+    `DESIGN SELECTED`,
+    designLines || '  —',
     ``,
     `ORDER ITEMS`,
     `  ${itemSummary.replace(/\n/g, '\n  ') || 'None'}`,
@@ -472,52 +465,38 @@ async function syncGradToHubSpot(order) {
     `  * Final price confirmed after design review`,
     ``,
     `PAYMENT METHOD: ${order.payment_method || '—'}`,
+    ``,
+    `PROOF AGREEMENT`,
+    `  Signed By: ${order.signature || '—'}`,
+    `  Date:      ${order.sign_date || '—'}`,
     order.apparel?.design_notes ? `\nDESIGN NOTES:\n  ${order.apparel.design_notes}` : null,
     order.notes ? `\nSPECIAL INSTRUCTIONS:\n  ${order.notes}` : null,
-    photoLines || null,
+    photoLines,
   ].filter(l => l !== null).join('\n');
 
-  // Create note and task without inline associations, then link via v4 API
-  const [noteRes, taskRes] = await Promise.all([
-    hubspot.post('/crm/v3/objects/notes', {
-      properties: { hs_note_body: noteBody, hs_timestamp: Date.now().toString() },
-    }).then(r => { console.log('HubSpot note created OK:', r.data.id); return r; })
-      .catch(err => { console.error('HubSpot note failed:', JSON.stringify(err.response?.data || err.message)); return null; }),
-    hubspot.post('/crm/v3/objects/tasks', {
-      properties: {
-        hs_task_subject: `Follow up — Grad Order ${order.order_ref}`,
-        hs_task_body:    `Phone: ${order.phone} | Email: ${order.email} | Event: ${order.event_type} ${order.event_date || ''}`,
-        hs_timestamp:    (Date.now() + 86_400_000).toString(),
-        hs_task_status:  'NOT_STARTED',
-        hs_task_type:    'TODO',
-      },
-    }).then(r => { console.log('HubSpot task created OK:', r.data.id); return r; })
-      .catch(err => { console.error('HubSpot task failed:', JSON.stringify(err.response?.data || err.message)); return null; }),
-  ]);
+  // 6. Create deal
+  const dealRes = await brevo.post('/crm/deals', {
+    name:       `Grad Order — ${order.parent_name} (${order.order_ref})`,
+    attributes: {
+      amount:     parseFloat(estimatedTotal.toFixed(2)),
+      close_date: order.needed_by ? new Date(order.needed_by).toISOString() : new Date().toISOString(),
+    },
+  });
+  const dealId = dealRes.data.id;
+  console.log('Brevo deal created:', dealId);
 
-  // Link note to contact and deal using default association types
-  if (noteRes?.data?.id) {
-    const noteId = noteRes.data.id;
-    await Promise.all([
-      hubspot.put('/crm/v4/associations/notes/contacts/batch/associate/default', {
-        inputs: [{ from: { id: noteId }, to: { id: contactId } }],
-      }).then(() => console.log('Note→contact assoc OK'))
-        .catch(err => console.error('Note→contact assoc failed:', JSON.stringify(err.response?.data || err.message))),
-      hubspot.put('/crm/v4/associations/notes/deals/batch/associate/default', {
-        inputs: [{ from: { id: noteId }, to: { id: dealId } }],
-      }).then(() => console.log('Note→deal assoc OK'))
-        .catch(err => console.error('Note→deal assoc failed:', JSON.stringify(err.response?.data || err.message))),
-    ]);
-  }
+  // 7. Link contact to deal
+  await brevo.patch(`/crm/deals/${dealId}`, { linkedContactsIds: [contactId] })
+    .catch(err => console.error('Brevo contact→deal link failed:', JSON.stringify(err.response?.data || err.message)));
 
-  // Link task to contact
-  if (taskRes?.data?.id) {
-    const taskId = taskRes.data.id;
-    await hubspot.put('/crm/v4/associations/tasks/contacts/batch/associate/default', {
-      inputs: [{ from: { id: taskId }, to: { id: contactId } }],
-    }).then(() => console.log('Task→contact assoc OK'))
-      .catch(err => console.error('Task→contact assoc failed:', JSON.stringify(err.response?.data || err.message)));
-  }
+  // 8. Create note linked to contact + deal
+  await brevo.post('/crm/notes', {
+    text:       noteText,
+    contactIds: [contactId],
+    dealIds:    [dealId],
+  }).then(() => console.log('Brevo note created OK'))
+    .catch(err => console.error('Brevo note failed:', JSON.stringify(err.response?.data || err.message)));
+
   return { contactId, dealId };
 }
 
@@ -539,9 +518,9 @@ async function createGradCloverCustomerAndOrder(order) {
     const lineItems = buildGradLineItems(order);
     await Promise.all(lineItems.map(item =>
       clover.post(`/v3/merchants/${MID()}/orders/${cloverOrderId}/line_items`, {
-        name:    item.name,
-        price:   Math.round(item.price * 100),
-        unitQty: item.quantity,
+        name:    `${item.name}${item.quantity > 1 ? ` (×${item.quantity})` : ''}`,
+        price:   Math.round(item.price * item.quantity * 100), // total in cents
+        unitQty: 1000, // 1 unit in Clover milliUnits
       })
     ));
     return { cloverCustomerId, cloverOrderId };
@@ -1392,12 +1371,12 @@ app.post('/api/submit-order', orderRateLimit, rejectBots, async (req, res) => {
     const [emailResult, confirmResult, hubspotResult, cloverResult] = await Promise.allSettled([
       sendGradOrderEmail(order),
       sendGradOrderConfirmationEmail(order),
-      syncGradToHubSpot(order),
+      syncGradToBrevo(order),
       createGradCloverCustomerAndOrder(order),
     ]);
     if (emailResult.status   === 'rejected') console.error('Grad notification email failed:', emailResult.reason?.message);
     if (confirmResult.status === 'rejected') console.error('Grad confirmation email failed:',  confirmResult.reason?.message);
-    if (hubspotResult.status === 'rejected') console.error('Grad HubSpot sync failed:',        hubspotResult.reason?.message, JSON.stringify(hubspotResult.reason?.response?.data));
+    if (hubspotResult.status === 'rejected') console.error('Grad Brevo sync failed:',          hubspotResult.reason?.message, JSON.stringify(hubspotResult.reason?.response?.data));
     if (cloverResult.status  === 'rejected') console.error('Grad Clover sync failed:',         cloverResult.reason?.message, JSON.stringify(cloverResult.reason?.response?.data));
 
     const idUpdates = [];
