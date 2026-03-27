@@ -104,6 +104,9 @@ async function initDB() {
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
+const NOTIFY_EMAIL = process.env.NOTIFICATION_EMAIL;
+const FROM_ADDRESS = `June's Tees & Things <${NOTIFY_EMAIL}>`;
+
 function escEmail(str) {
   if (str == null) return '';
   return String(str)
@@ -116,9 +119,9 @@ async function sendNotificationEmail(s) {
     ? `<tr><td style="padding:8px;font-weight:bold;vertical-align:top;">Photo</td><td style="padding:8px;"><a href="${escEmail(s.photo_url)}">View Photo</a><br/><img src="${escEmail(s.photo_url)}" style="max-width:300px;margin-top:8px;border-radius:6px;" /></td></tr>`
     : '';
   await resend.emails.send({
-    from:     "June's Tees & Things <info@jtees.net>",
-    reply_to: 'info@jtees.net',
-    to:       process.env.NOTIFICATION_EMAIL || 'info@jtees.net',
+    from:     FROM_ADDRESS,
+    reply_to: NOTIFY_EMAIL,
+    to:       NOTIFY_EMAIL,
     subject:  `New Quote Request — ${s.name}`,
     html: `
       <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
@@ -139,8 +142,8 @@ async function sendNotificationEmail(s) {
 async function sendCustomerConfirmationEmail(s) {
   const firstName = escEmail((s.name || '').split(' ')[0]);
   await resend.emails.send({
-    from:     "June's Tees & Things <info@jtees.net>",
-    reply_to: 'info@jtees.net',
+    from:     FROM_ADDRESS,
+    reply_to: NOTIFY_EMAIL,
     to:       s.email,
     subject:  `We got your request, ${(s.name || '').split(' ')[0]}!`,
     html: `
@@ -159,8 +162,8 @@ async function sendCustomerConfirmationEmail(s) {
 
 async function sendPaymentReceivedEmail(s, amount) {
   await resend.emails.send({
-    from:     "June's Tees & Things <info@jtees.net>",
-    reply_to: 'info@jtees.net',
+    from:     FROM_ADDRESS,
+    reply_to: NOTIFY_EMAIL,
     to:       s.email,
     subject:  `Payment confirmed — your order is in production!`,
     html: `
@@ -1159,9 +1162,9 @@ async function sendGradOrderEmail(order) {
     : '<p style="color:#6B7280;">No photos uploaded.</p>';
 
   await resend.emails.send({
-    from:     "June's Tees & Things <info@jtees.net>",
-    reply_to: order.email || 'info@jtees.net',
-    to:       process.env.NOTIFICATION_EMAIL || 'info@jtees.net',
+    from:     FROM_ADDRESS,
+    reply_to: order.email || NOTIFY_EMAIL,
+    to:       NOTIFY_EMAIL,
     subject:  `New Grad Order ${order.order_ref} — ${order.parent_name}`,
     html: `<div style="font-family:sans-serif;max-width:700px;margin:0 auto;color:#1C1C2E;">
       <div style="background:#0B1F4B;padding:20px 24px;border-radius:10px 10px 0 0;margin-bottom:24px;">
@@ -1215,8 +1218,8 @@ async function sendGradOrderEmail(order) {
 async function sendGradOrderConfirmationEmail(order) {
   if (!process.env.RESEND_API_KEY || !order.email) return;
   await resend.emails.send({
-    from:     "June's Tees & Things <info@jtees.net>",
-    reply_to: 'info@jtees.net',
+    from:     FROM_ADDRESS,
+    reply_to: NOTIFY_EMAIL,
     to:       order.email,
     subject:  `Your Grad Order is Confirmed — ${order.order_ref}`,
     html: `<div style="font-family:sans-serif;max-width:680px;margin:0 auto;">
@@ -1461,14 +1464,14 @@ app.patch('/api/orders/:ref/notes', requireGradAdmin, validateOrderRef, async (r
 app.get('/api/test-email', requireAdmin, async (_req, res) => {
   try {
     const { error } = await resend.emails.send({
-      from:     "June's Tees & Things <info@jtees.net>",
-      reply_to: 'info@jtees.net',
-      to:       'info@jtees.net',
+      from:     FROM_ADDRESS,
+      reply_to: NOTIFY_EMAIL,
+      to:       NOTIFY_EMAIL,
       subject:  'Email Test — June\'s Tees',
       text:     'Resend is working correctly.',
     });
     if (error) return res.status(500).json({ success: false, error: error.message });
-    res.json({ success: true, message: 'Test email sent to info@jtees.net' });
+    res.json({ success: true, message: `Test email sent to ${NOTIFY_EMAIL}` });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
