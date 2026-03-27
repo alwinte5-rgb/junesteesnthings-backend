@@ -2996,13 +2996,13 @@
       formStatus.className = '';
       formStatus.textContent = '';
 
-      const data = new FormData(quoteForm);
+      const data = Object.fromEntries(new FormData(quoteForm).entries());
 
       try {
         const res = await fetch(quoteForm.action, {
           method: 'POST',
-          body: data,
-          headers: { Accept: 'application/json' }
+          body: JSON.stringify(data),
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' }
         });
 
         if (res.ok) {

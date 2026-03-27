@@ -1034,7 +1034,7 @@
           </div>
           <div class="field">
             <label>Date <span class="req">*</span></label>
-            <input type="date" name="sign_date" required />
+            <input type="date" name="sign_date" id="sign-date" required />
           </div>
         </div>
 
@@ -1414,7 +1414,18 @@
     shirts:      'shirt_qty',
   };
 
+  function initSignDate() {
+    const el = document.getElementById('sign-date');
+    if (!el) return;
+    const today = new Date().toISOString().split('T')[0];
+    el.value = today;
+    el.min   = today;
+    el.max   = today;
+  }
+
   document.addEventListener('DOMContentLoaded', () => {
+    initSignDate();
+
     const saved = localStorage.getItem('printco_bundle');
     if (!saved) return;
     try {
@@ -1480,6 +1491,32 @@
 
       localStorage.removeItem('printco_bundle');
       document.getElementById('order-ref-display').textContent = json.orderRef;
+
+      // Full form reset
+      this.reset();
+      // Clear JS state
+      selectedEvents.clear();
+      Object.keys(selectedDesigns).forEach(k => delete selectedDesigns[k]);
+      document.querySelector('[name="event_type"]').value = '';
+      document.querySelectorAll('#event-type-group .toggle-btn').forEach(b => b.classList.remove('active'));
+      renderDesignSections();
+      // Reset uploads
+      uploadedPhotos = [];
+      document.getElementById('photos-json').value = '[]';
+      document.getElementById('photo-thumbs').innerHTML = '';
+      document.getElementById('upload-zone').classList.remove('has-files');
+      document.getElementById('upload-count').style.display = 'none';
+      // Reset package picker
+      document.querySelectorAll('.pkg-pick').forEach(c => c.classList.remove('selected'));
+      const pkgNoteEl = document.getElementById('pkg-selected-note');
+      if (pkgNoteEl) pkgNoteEl.classList.remove('visible');
+      // Reset payment buttons
+      document.querySelectorAll('#payment-options .pay-btn').forEach(b => b.classList.remove('active'));
+      // Reset tier display
+      updateTierDisplay(0);
+      // Re-set sign date to today
+      initSignDate();
+
       this.style.display = 'none';
       document.getElementById('success-msg').style.display = 'block';
       window.scrollTo({ top: 0, behavior: 'smooth' });
