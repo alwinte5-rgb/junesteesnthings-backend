@@ -184,7 +184,7 @@ async function sendPaymentReceivedEmail(s, amount) {
 
 const brevo = axios.create({
   baseURL: 'https://api.brevo.com/v3',
-  headers: { 'api-key': process.env.BREVO_API_KEY, 'Content-Type': 'application/json' },
+  headers: { 'api-key': process.env.JTEES_BREVO_MCP_API || process.env.BREVO_API_KEY, 'Content-Type': 'application/json' },
 });
 
 async function syncToBrevo(s) {
