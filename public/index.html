@@ -2929,10 +2929,10 @@
           const res = await fetch('/api/cloudinary-signature', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ timestamp: paramsToSign.timestamp }),
+            body: JSON.stringify(paramsToSign),
           });
           const data = await res.json();
-          callback(data.signature);
+          callback(data.signature, data.timestamp);
         }
 
         uploadWidget = cloudinary.createUploadWidget({
@@ -2983,7 +2983,13 @@
     });
 
     // ============================
-    // Formspree form submission
+    // Form token — fetched on load, included with every submission
+    // ============================
+    let formToken = '';
+    fetch('/api/form-token').then(r => r.json()).then(d => { formToken = d.token || ''; }).catch(() => {});
+
+    // ============================
+    // Quote form submission
     // ============================
     const quoteForm = document.getElementById('quote-form');
     const submitBtn = document.getElementById('submit-btn');
@@ -2997,6 +3003,7 @@
       formStatus.textContent = '';
 
       const data = Object.fromEntries(new FormData(quoteForm).entries());
+      data._token = formToken;
 
       try {
         const res = await fetch(quoteForm.action, {
@@ -3013,6 +3020,9 @@
           document.getElementById('preview-img').src = '';
           document.getElementById('upload-preview').style.display = 'none';
           document.getElementById('upload-trigger').style.display = 'block';
+        } else if (res.status === 400) {
+          formStatus.className = 'error';
+          formStatus.textContent = 'Please refresh the page and try again.';
         } else {
           throw new Error('Server error');
         }

@@ -188,6 +188,10 @@ const brevo = axios.create({
 });
 
 async function syncToBrevo(s) {
+  if (isSpamName(s.name)) {
+    console.warn('syncToBrevo: skipping spam contact:', s.name);
+    return;
+  }
   const [firstname, ...rest] = (s.name || '').trim().split(' ');
   await brevo.post('/contacts', {
     email:      s.email,
@@ -251,6 +255,8 @@ function buildGradLineItems(order) {
 }
 
 // ─── HubSpot ──────────────────────────────────────────────────────────────────
+
+const HUBSPOT_PORTAL_ID = process.env.HUBSPOT_PORTAL_ID || '';
 
 const hubspot = axios.create({
   baseURL: 'https://api.hubapi.com',
@@ -554,9 +560,14 @@ function requireAdmin(req, res, next) {
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
+// ── Form token — fetched by the browser on page load ─────────────────────────
+app.get('/api/form-token', signatureRateLimit, (_req, res) => {
+  res.json({ token: generateFormToken() });
+});
+
 // ── Form submission ──────────────────────────────────────────────────────────
 
-app.post('/submit', gradRateLimit(4, 60 * 60 * 1000), rejectBots, async (req, res) => {
+app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, async (req, res) => {
   const { name, phone, email, description, photo_url } = req.body;
 
   if (!name || !phone || !email) {
@@ -883,7 +894,7 @@ app.get('/admin', requireAdmin, (_req, res) => {
           <div class="grid">
             <div><div class="label">Phone</div><div class="value"><a href="tel:\${esc(r.phone)}">\${esc(r.phone)}</a></div></div>
             <div><div class="label">Email</div><div class="value"><a href="mailto:\${esc(r.email)}">\${esc(r.email)}</a></div></div>
-            <div><div class="label">HubSpot</div><div class="value">\${r.hubspot_contact_id ? '<a href="https://app.hubspot.com/contacts/0/contact/'+encodeURIComponent(r.hubspot_contact_id)+'" target="_blank">View</a>' : '—'}</div></div>
+            <div><div class="label">HubSpot</div><div class="value">\${r.hubspot_contact_id ? '<a href="https://app.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/contact/'+encodeURIComponent(r.hubspot_contact_id)+'" target="_blank">View</a>' : '—'}</div></div>
             <div><div class="label">Clover</div><div class="value">\${r.clover_order_id ? 'Order created' : r.clover_customer_id ? 'Customer only' : '—'}</div></div>
             <div class="desc"><div class="label">Description</div><div class="value">\${esc(r.description)||'—'}</div></div>
             \${r.photo_url && r.photo_url.startsWith('https://res.cloudinary.com/') ? \`<div class="photo"><div class="label">Photo</div><a href="\${esc(r.photo_url)}" target="_blank"><img src="\${esc(r.photo_url)}" /></a></div>\` : ''}
@@ -891,7 +902,7 @@ app.get('/admin', requireAdmin, (_req, res) => {
           </div>
           <div class="actions">
             \${!r.clover_order_id ? \`<button class="btn btn-primary" onclick="openModal(\${parseInt(r.id,10)})">Create Clover Order</button>\` : ''}
-            \${r.hubspot_contact_id ? \`<a class="btn btn-secondary" href="https://app.hubspot.com/contacts/0/contact/\${esc(r.hubspot_contact_id)}" target="_blank">HubSpot Contact</a>\` : ''}
+            \${r.hubspot_contact_id ? \`<a class="btn btn-secondary" href="https://app.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/contact/\${esc(r.hubspot_contact_id)}" target="_blank">HubSpot Contact</a>\` : ''}
           </div>
         </div>
       \`).join('');
@@ -990,21 +1001,29 @@ app.get('/admin/data', requireAdmin, async (req, res) => {
 // Simple in-memory rate limiter
 // Prefers CF-Connecting-IP (set by Cloudflare) so the real visitor IP is used,
 // not Cloudflare's proxy IP. Falls back to req.ip for non-Cloudflare traffic.
-const gradRateLimitStore = new Map();
-function gradRateLimit(maxReqs, windowMs) {
+function makeRateLimit(maxReqs, windowMs) {
+  const store = new Map();
+  // Prune expired entries every 15 minutes to prevent unbounded memory growth
+  setInterval(() => {
+    const now = Date.now();
+    for (const [ip, entry] of store) {
+      if (now > entry.reset) store.delete(ip);
+    }
+  }, 15 * 60 * 1000).unref();
+
   return (req, res, next) => {
     const ip    = req.headers['cf-connecting-ip'] || req.ip || req.socket.remoteAddress || 'unknown';
     const now   = Date.now();
-    const entry = gradRateLimitStore.get(ip) || { count: 0, reset: now + windowMs };
+    const entry = store.get(ip) || { count: 0, reset: now + windowMs };
     if (now > entry.reset) { entry.count = 0; entry.reset = now + windowMs; }
     entry.count++;
-    gradRateLimitStore.set(ip, entry);
+    store.set(ip, entry);
     if (entry.count > maxReqs) return res.status(429).json({ error: 'Too many requests' });
     next();
   };
 }
-const orderRateLimit     = gradRateLimit(10, 60 * 60 * 1000);
-const signatureRateLimit = gradRateLimit(30, 60 * 60 * 1000);
+const orderRateLimit     = makeRateLimit(10, 60 * 60 * 1000);
+const signatureRateLimit = makeRateLimit(30, 60 * 60 * 1000);
 
 // ── Bot rejection middleware ───────────────────────────────────────────────────
 const BOT_UA_PATTERNS = [
@@ -1021,26 +1040,79 @@ const BOT_UA_PATTERNS = [
   /okhttp/i,
 ];
 
-const BLOCKED_NAMES = ['robertwex', 'robert wex'];
+// Known spam name patterns — catches name-rotating bots
+const SPAM_NAME_PATTERNS = [
+  /robertwex/i,
+  /robert\s*wex/i,
+  /aidend\d/i,
+  /leonel.*thymn/i,
+];
+
+function isSpamName(name) {
+  return SPAM_NAME_PATTERNS.some(p => p.test((name || '').trim()));
+}
+
+// ── Form token ────────────────────────────────────────────────────────────────
+// Short-lived HMAC token that proves the browser loaded the page before submitting.
+// Token rotates every 30 minutes; the previous window is also accepted to avoid
+// edge-case failures at the boundary.
+
+const FORM_TOKEN_WINDOW_S = 30 * 60;
+
+function generateFormToken() {
+  const secret = process.env.FORM_TOKEN_SECRET || process.env.ADMIN_PASSWORD || 'dev-insecure';
+  const window = Math.floor(Date.now() / 1000 / FORM_TOKEN_WINDOW_S);
+  return crypto.createHmac('sha256', secret).update(String(window)).digest('hex');
+}
+
+function isValidFormToken(token) {
+  if (!token || typeof token !== 'string') return false;
+  const secret = process.env.FORM_TOKEN_SECRET || process.env.ADMIN_PASSWORD || 'dev-insecure';
+  for (let offset = 0; offset <= 1; offset++) {
+    const window = Math.floor(Date.now() / 1000 / FORM_TOKEN_WINDOW_S) - offset;
+    const expected = crypto.createHmac('sha256', secret).update(String(window)).digest('hex');
+    try {
+      if (token.length === expected.length &&
+          crypto.timingSafeEqual(Buffer.from(token), Buffer.from(expected))) return true;
+    } catch { /* length mismatch or invalid input */ }
+  }
+  return false;
+}
 
 function rejectBots(req, res, next) {
-  // Log (but don't block) requests missing CF-Ray so we can confirm Cloudflare is proxying
+  // Block requests that bypass Cloudflare entirely — set REQUIRE_CLOUDFLARE=true in Railway
   if (!req.headers['cf-ray']) {
+    if (process.env.REQUIRE_CLOUDFLARE === 'true') {
+      return res.status(400).json({ error: 'Bad request' });
+    }
     console.warn('Non-Cloudflare request to form endpoint:', req.method, req.path, req.headers['user-agent']);
   }
+
   const ua = req.headers['user-agent'] || '';
   if (!ua || BOT_UA_PATTERNS.some(p => p.test(ua))) {
     return res.status(400).json({ error: 'Bad request' });
   }
+
   // Honeypot: any submission with this field filled in is a bot
   const hp = req.body?.website || req.body?.url || req.body?.company || '';
   if (hp) return res.status(400).json({ error: 'Bad request' });
-  // Block known spam names
-  const submittedName = (req.body?.name || req.body?.parent_name || '').toLowerCase().trim();
-  if (BLOCKED_NAMES.some(n => submittedName.includes(n))) {
-    console.warn('Blocked known spam name:', submittedName);
+
+  // Form token — proves the browser loaded the page. Set REQUIRE_FORM_TOKEN=true in Railway
+  if (process.env.REQUIRE_FORM_TOKEN === 'true') {
+    const token = req.body?._token || req.headers['x-form-token'] || '';
+    if (!isValidFormToken(token)) {
+      console.warn('Form token invalid or missing from', req.headers['cf-connecting-ip'] || req.ip);
+      return res.status(400).json({ error: 'Bad request' });
+    }
+  }
+
+  // Block known spam name patterns
+  const submittedName = (req.body?.name || req.body?.parent_name || '').trim();
+  if (isSpamName(submittedName)) {
+    console.warn('Blocked spam name:', submittedName);
     return res.status(400).json({ error: 'Bad request' });
   }
+
   next();
 }
 
@@ -1254,12 +1326,17 @@ app.get('/api/config', signatureRateLimit, (req, res) => {
 app.post('/api/cloudinary-signature', signatureRateLimit, (req, res) => {
   const apiSecret = process.env.CLOUDINARY_API_SECRET || process.env.CLUDINARY_API_SECRET;
   if (!apiSecret) return res.status(503).json({ error: 'Cloudinary not configured' });
+  // Allow the caller to specify the upload folder, but validate against an allowlist
+  // so the server retains control over where files can be stored.
+  const ALLOWED_FOLDERS = ['grad_orders', 'quote_requests'];
+  const requestedFolder = typeof req.body.folder === 'string' ? req.body.folder : '';
+  const folder = ALLOWED_FOLDERS.includes(requestedFolder) ? requestedFolder : 'grad_orders';
   // Use the widget's timestamp — overwriting it causes a mismatch since the widget
   // uses its own timestamp for the actual upload request, not the one we return.
-  const paramsToSign = { ...req.body, folder: 'grad_orders' };
+  const paramsToSign = { ...req.body, folder };
   if (!paramsToSign.timestamp) paramsToSign.timestamp = Math.round(Date.now() / 1000);
   const signature = cloudinary.utils.api_sign_request(paramsToSign, apiSecret);
-  res.json({ signature, timestamp: paramsToSign.timestamp, folder: 'grad_orders' });
+  res.json({ signature, timestamp: paramsToSign.timestamp, folder });
 });
 
 // Submit grad order
@@ -1488,7 +1565,7 @@ app.use((err, req, res, _next) => {
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
-const REQUIRED_ENV = ['DATABASE_URL', 'SMTP_HOST', 'SMTP_USER', 'SMTP_PASS', 'NOTIFICATION_EMAIL'];
+const REQUIRED_ENV = ['DATABASE_URL', 'RESEND_API_KEY', 'NOTIFICATION_EMAIL'];
 const missingEnv = REQUIRED_ENV.filter(k => !process.env[k]?.trim());
 if (missingEnv.length) {
   console.error('Missing required environment variables:', missingEnv.join(', '));

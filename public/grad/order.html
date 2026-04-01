@@ -1338,6 +1338,10 @@
 
   initCloudinary();
 
+  // Form token — fetched on load, included with every submission
+  let formToken = '';
+  fetch('/api/form-token').then(r => r.json()).then(d => { formToken = d.token || ''; }).catch(() => {});
+
   // ── Apparel tier calculator ──
   const TIERS = [
     { min: 100, label: 'Tier 3 — 100+ Shirts', price: '$9.75/ea.', savings: 'Best value' },
@@ -1475,6 +1479,7 @@
 
     // Serialize form
     const data = Object.fromEntries(new FormData(this).entries());
+    data._token = formToken;
 
     const btn = this.querySelector('.btn-submit');
     btn.textContent = 'Submitting…';
@@ -1486,6 +1491,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
       });
+      if (res.status === 400) throw new Error('__refresh__');
       const json = await res.json();
       if (!json.success) throw new Error(json.error || 'Unknown error');
 
@@ -1523,7 +1529,11 @@
     } catch (err) {
       btn.textContent = 'Submit My Order →';
       btn.disabled = false;
-      alert('Something went wrong: ' + err.message + '\n\nPlease try again or contact us directly.');
+      if (err.message === '__refresh__') {
+        alert('Please refresh the page and try again.');
+      } else {
+        alert('Something went wrong: ' + err.message + '\n\nPlease try again or contact us directly.');
+      }
     }
   });
 
