@@ -556,6 +556,9 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+const orderRateLimit     = makeRateLimit(10, 60 * 60 * 1000);
+const signatureRateLimit = makeRateLimit(30, 60 * 60 * 1000);
+
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
@@ -1022,9 +1025,6 @@ function makeRateLimit(maxReqs, windowMs) {
     next();
   };
 }
-const orderRateLimit     = makeRateLimit(10, 60 * 60 * 1000);
-const signatureRateLimit = makeRateLimit(30, 60 * 60 * 1000);
-
 // ── Bot rejection middleware ───────────────────────────────────────────────────
 const BOT_UA_PATTERNS = [
   /^$/,                        // empty user-agent
