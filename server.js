@@ -1563,6 +1563,11 @@ app.use((err, req, res, _next) => {
   res.status(500).json({ error: 'Internal server error.' });
 });
 
+// ─── 404 catch-all (HTML pages) ──────────────────────────────────────────────
+app.use((_req, res) => {
+  res.status(404).sendFile(path.join(__dirname, 'public', '404.html'));
+});
+
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 const REQUIRED_ENV = ['DATABASE_URL', 'RESEND_API_KEY', 'NOTIFICATION_EMAIL'];
