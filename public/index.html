@@ -1818,11 +1818,19 @@
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
-    "@type": "LocalBusiness",
+    "@type": ["LocalBusiness", "ProfessionalService"],
     "name": "June's Tees & Things",
-    "description": "Custom screen printing, embroidery, DTF transfers, banners, event decor, party favors, and graphic design in Chicago.",
-    "url": "https://jtees.net",
+    "description": "Custom screen printing, embroidery, DTF transfers, banners, event decor, party favors, and graphic design in Chicago. Black-owned, women-owned.",
+    "url": "https://www.jtees.net",
     "telephone": "+17738491854",
+    "priceRange": "$$",
+    "currenciesAccepted": "USD",
+    "paymentAccepted": "Cash, Credit Card, Debit Card",
+    "logo": "https://www.jtees.net/assets/images/logo-design.jpg",
+    "image": [
+      "https://www.jtees.net/assets/images/social-share.jpg",
+      "https://www.jtees.net/assets/images/logo-design.jpg"
+    ],
     "address": {
       "@type": "PostalAddress",
       "streetAddress": "3047 N Lincoln Ave #435",
@@ -1836,6 +1844,10 @@
       "latitude": 41.9393,
       "longitude": -87.6726
     },
+    "areaServed": [
+      {"@type": "City", "name": "Chicago"},
+      {"@type": "State", "name": "Illinois"}
+    ],
     "openingHoursSpecification": [
       {
         "@type": "OpeningHoursSpecification",
@@ -1844,6 +1856,18 @@
         "closes": "18:00"
       }
     ],
+    "hasOfferCatalog": {
+      "@type": "OfferCatalog",
+      "name": "Custom Printing Services",
+      "itemListElement": [
+        {"@type": "Offer", "itemOffered": {"@type": "Service", "name": "Screen Printing", "url": "https://www.jtees.net/services/screen-printing.html"}},
+        {"@type": "Offer", "itemOffered": {"@type": "Service", "name": "Embroidery", "url": "https://www.jtees.net/services/embroidery.html"}},
+        {"@type": "Offer", "itemOffered": {"@type": "Service", "name": "DTF Transfers", "url": "https://www.jtees.net/services/dtf-transfers.html"}},
+        {"@type": "Offer", "itemOffered": {"@type": "Service", "name": "Banners & Signs", "url": "https://www.jtees.net/services/banners-signs.html"}},
+        {"@type": "Offer", "itemOffered": {"@type": "Service", "name": "Event Decor & Party Favors", "url": "https://www.jtees.net/services/event-decor.html"}},
+        {"@type": "Offer", "itemOffered": {"@type": "Service", "name": "Graphic Design", "url": "https://www.jtees.net/services/graphic-design.html"}}
+      ]
+    },
     "aggregateRating": {
       "@type": "AggregateRating",
       "ratingValue": "4.8",
