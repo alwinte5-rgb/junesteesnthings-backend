@@ -31,8 +31,8 @@
     :root {
       --navy:       #0B1F4B;
       --navy-mid:   #162a5e;
-      --gold:       #F4A623;
-      --gold-dk:    #C9861A;
+      --gold:       #F0275A;
+      --gold-dk:    #C41E47;
       --bg-primary:   #ffffff;
       --bg-secondary: #f7f6f3;
       --bg-card:      #ffffff;
@@ -40,20 +40,20 @@
       --text-heading: #ffffff;
       --text-body:    #374151;
       --text-muted:   #6B7280;
-      --accent:       #F4A623;
-      --accent-hover: #C9861A;
+      --accent:       #F0275A;
+      --accent-hover: #C41E47;
       --border:       #E5E7EB;
-      --border-accent: rgba(244,166,35,0.4);
-      --btn-primary-bg:    #F4A623;
-      --btn-primary-text:  #0B1F4B;
+      --border-accent: rgba(240,39,90,0.4);
+      --btn-primary-bg:    #F0275A;
+      --btn-primary-text:  #ffffff;
       --btn-secondary-text:   #0B1F4B;
       --btn-secondary-border: #0B1F4B;
       --btn-secondary-hover-bg:   #0B1F4B;
       --btn-secondary-hover-text: #ffffff;
       --header-bg:   rgba(11,31,75,0.96);
       --drawer-bg:   #0B1F4B;
-      --badge-bg:    #F4A623;
-      --scrollbar-thumb: #F4A623;
+      --badge-bg:    #F0275A;
+      --scrollbar-thumb: #F0275A;
       --radius: 8px;
       --radius-lg: 16px;
       --transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -575,7 +575,7 @@
     .about .section-header p  { color: var(--gold); }
     .about-content h2  { color: #ffffff; }
     .about-content p   { color: var(--gold); }
-    .badge { background: rgba(255,255,255,0.12); color: var(--gold); border-color: rgba(244,166,35,0.3); }
+    .badge { background: rgba(255,255,255,0.12); color: var(--gold); border-color: rgba(240,39,90,0.3); }
 
     /* Contact section (navy bg) — gold secondary text */
     .contact .section-header h2 { color: #ffffff; }
@@ -602,11 +602,11 @@
     .marquee-strip { background: #ffffff; padding: 2rem 0; overflow: hidden; border-top: 1px solid #E5E7EB; border-bottom: 1px solid #E5E7EB; }
     .marquee-strip.marquee-top { background: #0B1F4B; border-top: none; border-bottom: none; padding: 0.75rem 0; }
     .marquee-strip.marquee-top .marquee-item { color: #ffffff; }
-    .marquee-strip.marquee-top .marquee-item span { color: #F4A623; }
+    .marquee-strip.marquee-top .marquee-item span { color: #F0275A; }
     .marquee-track { display: flex; width: max-content; animation: marquee-scroll 30s linear infinite; }
     .marquee-track:hover { animation-play-state: paused; }
     .marquee-item { display: inline-flex; align-items: center; gap: .6rem; white-space: nowrap; padding: 0 2.5rem; font-size: .95rem; font-weight: 700; color: #0B1F4B; text-transform: uppercase; letter-spacing: .08em; }
-    .marquee-item span { color: #F4A623; font-size: 1.1rem; }
+    .marquee-item span { color: #F0275A; font-size: 1.1rem; }
     @keyframes marquee-scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
 
     /* ── Dropdown nav ── */
@@ -686,20 +686,29 @@
 
     .service-card:hover {
       background: rgba(255,255,255,0.12);
-      border-color: rgba(244,166,35,0.4);
+      border-color: rgba(240,39,90,0.4);
       transform: translateY(-4px);
     }
 
     .service-icon {
       width: 52px;
       height: 52px;
-      background: rgba(244,166,35,0.15);
+      background: rgba(240,39,90,0.15);
       border-radius: var(--radius);
       display: flex;
       align-items: center;
       justify-content: center;
       margin-bottom: 1.25rem;
       font-size: 1.5rem;
+    }
+
+    .service-photo {
+      width: 100%;
+      height: 160px;
+      object-fit: cover;
+      border-radius: var(--radius);
+      display: block;
+      margin-bottom: 1.25rem;
     }
 
     .service-card h3 {
@@ -1113,7 +1122,7 @@
 
     /* Design Ideas intro */
     .design-ideas-intro {
-      background: rgba(244,166,35,0.08);
+      background: rgba(240,39,90,0.08);
       border: 1px solid var(--border-accent);
       border-radius: var(--radius);
       padding: 1rem 1.25rem;
@@ -1238,7 +1247,7 @@
     }
 
     .design-note {
-      background: rgba(244,166,35,0.1);
+      background: rgba(240,39,90,0.1);
       border: 1px solid var(--border-accent);
       border-radius: var(--radius);
       padding: 0.75rem 1rem;
@@ -1418,7 +1427,7 @@
       width: 40px;
       height: 40px;
       flex-shrink: 0;
-      background: rgba(244,166,35,0.2);
+      background: rgba(240,39,90,0.2);
       border-radius: var(--radius);
       display: flex;
       align-items: center;
@@ -1539,7 +1548,7 @@
 
     .upload-area:hover {
       border-color: var(--accent);
-      background: rgba(244,166,35,0.05);
+      background: rgba(240,39,90,0.05);
     }
 
     .upload-area p {
@@ -1634,7 +1643,7 @@
       width: 34px;
       height: 34px;
       border-radius: 50%;
-      background: rgba(244,166,35,0.1);
+      background: rgba(240,39,90,0.1);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -1673,7 +1682,7 @@
       justify-content: space-between;
       align-items: center;
       font-size: 0.8rem;
-      color: rgba(244,166,35,0.7);
+      color: rgba(240,39,90,0.7);
       flex-wrap: wrap;
       gap: 0.5rem;
     }
@@ -1727,10 +1736,10 @@
     "priceRange": "$$",
     "currenciesAccepted": "USD",
     "paymentAccepted": "Cash, Credit Card, Debit Card",
-    "logo": "https://www.jtees.net/assets/images/logo-design.jpg",
+    "logo": "https://www.jtees.net/assets/images/brand/logo.png",
     "image": [
       "https://www.jtees.net/assets/images/social-share.jpg",
-      "https://www.jtees.net/assets/images/logo-design.jpg"
+      "https://www.jtees.net/assets/images/brand/logo.png"
     ],
     "address": {
       "@type": "PostalAddress",
@@ -1822,7 +1831,7 @@
   <header id="header">
     <div class="header-inner">
       <a href="/" class="logo">
-        <img src="/assets/images/logo-design.jpg" alt="June's Tees & Things logo" />
+        <img src="/assets/images/brand/logo-mark.png" alt="June's Tees & Things logo" style="border-radius:0;object-fit:contain;" />
         <div class="logo-text">
           June's Tees & Things
           <span>Chicago Custom Printing</span>
@@ -1847,7 +1856,7 @@
           </div>
         </div>
         <a href="#portfolio">Our Work</a>
-        <a href="https://design.jtees.net/" style="color:var(--gold, #F4A623);font-weight:700;">Design Studio</a>
+        <a href="https://design.jtees.net/" style="color:var(--gold, #F0275A);font-weight:700;">Design Studio</a>
         <a href="#reviews">Reviews</a>
         <a href="#contact">Contact</a>
         <a href="/blog/">Blog</a>
@@ -1930,32 +1939,32 @@
 
       <div class="services-grid">
         <a href="/services/screen-printing.html" class="service-card fade-in" style="transition-delay:0.05s;text-decoration:none;">
-          <div class="service-icon">🖨️</div>
+          <img class="service-photo" src="/assets/images/work/screen-printing-press.jpg" alt="Screen printing press printing a custom shirt" loading="lazy" />
           <h3>Screen Printing</h3>
           <p>Bold, vibrant custom apparel for teams, events, businesses, and everything in between. High-quality results every time.</p>
         </a>
         <a href="/services/embroidery.html" class="service-card fade-in" style="transition-delay:0.1s;text-decoration:none;">
-          <div class="service-icon">🧵</div>
+          <img class="service-photo" src="/assets/images/work/embroidery-machine-polos.jpg" alt="Commercial embroidery machine stitching custom apparel" loading="lazy" />
           <h3>Embroidery</h3>
           <p>Professional logo embroidery on polos, hats, uniforms, and more. Durable, polished, and business-ready.</p>
         </a>
         <a href="/services/dtf-transfers.html" class="service-card fade-in" style="transition-delay:0.15s;text-decoration:none;">
-          <div class="service-icon">🎨</div>
+          <img class="service-photo" src="/assets/images/work/full-color-dtf-transfer.jpg" alt="Full-color DTF transfer print with fine detail" loading="lazy" />
           <h3>DTF Transfers</h3>
           <p>Full-color, photo-quality prints with incredible detail. Perfect for complex designs that pop on any fabric.</p>
         </a>
         <a href="/services/banners-signs.html" class="service-card fade-in" style="transition-delay:0.2s;text-decoration:none;">
-          <div class="service-icon">🏷️</div>
+          <img class="service-photo" src="/assets/images/work/custom-flyer-design.jpg" alt="Custom branded flyer and display design" loading="lazy" />
           <h3>Banners & Signs</h3>
           <p>Custom banners, yard signs, and displays for events, businesses, and special occasions.</p>
         </a>
         <a href="/services/event-decor.html" class="service-card fade-in" style="transition-delay:0.25s;text-decoration:none;">
-          <div class="service-icon">🎉</div>
+          <img class="service-photo" src="/assets/images/work/event-decor-party.jpg" alt="Custom Halloween party drink labels and decor" loading="lazy" />
           <h3>Event Decor & Party Favors</h3>
           <p>Custom arches, cutouts, chip bags, gable boxes, goodie bags, pillow covers &amp; more — everything to make your event unforgettable.</p>
         </a>
         <a href="/services/graphic-design.html" class="service-card fade-in" style="transition-delay:0.3s;text-decoration:none;">
-          <div class="service-icon">✏️</div>
+          <img class="service-photo" src="/assets/images/work/juneteenth-graphic-design.jpg" alt="Custom Juneteenth graphic design artwork" loading="lazy" />
           <h3>Graphic Design</h3>
           <p>Don't have a design? No problem. Our team creates custom artwork tailored to your vision and brand.</p>
         </a>
@@ -2123,7 +2132,7 @@
                   <img src="/assets/images/work/embroidery-in-progress.jpg" alt="Custom embroidery in progress" loading="lazy" />
                 </li>
                 <li class="splide__slide">
-                  <img src="/assets/images/work/full-color-dtf-transfer.jpg" alt="Full-color DTF transfer print detail" loading="lazy" />
+                  <img src="/assets/images/work/engraved-tumblers.jpg" alt="Custom engraved monogram tumblers" loading="lazy" />
                 </li>
               </ul>
             </div>
@@ -2607,7 +2616,7 @@
       <div class="footer-top">
         <div class="footer-brand">
           <div class="logo" style="margin-bottom:1rem;">
-            <img src="/assets/images/logo-design.jpg" alt="June's Tees & Things" style="width:44px;height:44px;border-radius:50%;object-fit:cover;" />
+            <img src="/assets/images/brand/logo-mark.png" alt="June's Tees & Things" style="width:44px;height:48px;object-fit:contain;" />
             <div class="logo-text">
               June's Tees & Things
               <span>Chicago Custom Printing</span>
@@ -2800,7 +2809,7 @@
       const initials = name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
       avatar.textContent = initials;
       // Cycle avatar background colors
-      const colors = ['#0B1F4B','#1a3a70','#C9861A','#065f46','#7c3aed','#b45309'];
+      const colors = ['#0B1F4B','#1a3a70','#C41E47','#065f46','#7c3aed','#b45309'];
       avatar.style.background = colors[name.charCodeAt(0) % colors.length];
     });
 
@@ -2836,10 +2845,10 @@
           maxFileSize: 10000000,
           styles: {
             palette: {
-              window: '#0B1F4B', windowBorder: '#162a5e', tabIcon: '#F4A623',
+              window: '#0B1F4B', windowBorder: '#162a5e', tabIcon: '#F0275A',
               menuIcons: '#aab4c8', textDark: '#000000', textLight: '#ffffff',
-              link: '#F4A623', action: '#F4A623', inactiveTabIcon: '#6B7280',
-              error: '#f87171', inProgress: '#F4A623', complete: '#4ade80', sourceBg: '#162a5e',
+              link: '#F0275A', action: '#F0275A', inactiveTabIcon: '#6B7280',
+              error: '#f87171', inProgress: '#F0275A', complete: '#4ade80', sourceBg: '#162a5e',
             }
           }
         }, (error, result) => {
