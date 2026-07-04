@@ -1367,6 +1367,12 @@
 
     .review-stars { color: #fbbf24; font-size: 0.9rem; margin-left: auto; }
 
+    .reviews-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1.2rem;}
+    @media(max-width:900px){.reviews-grid{grid-template-columns:repeat(2,1fr);}}
+    @media(max-width:600px){.reviews-grid{grid-template-columns:1fr;}}
+    .reviews-grid .review-card{height:100%;}
+    .review-hidden{display:none;}
+
     .review-photo {
       width: 100%;
       height: 170px;
@@ -1731,8 +1737,7 @@
       .fade-in, .fade-left, .fade-right { opacity: 1; transform: none; transition: none; }
       .hero-bg { transform: none; transition: none; }
     }
-  
-    /* ── White clean scheme to match design.jtees.net (2026-07) ── */
+    /* ── White clean scheme to match design.jtees.net (v2) ── */
     body{background:#fff;}
     .announcement-bar{background:#0B1F4B;color:#fff;}
     header{border-bottom:1px solid #E7E3DB;}
@@ -1748,26 +1753,29 @@
     .marquee-strip,.marquee-strip.marquee-top{background:#FFF8EF!important;border-top:1px solid #E7E3DB!important;border-bottom:1px solid #E7E3DB!important;}
     .marquee-item{color:#0B1F4B!important;}
     .marquee-item span{color:#F0275A!important;}
-    .hero{background:#FFF8EF!important;}
-    .hero-bg{display:none!important;}
-    .hero-eyebrow{color:#C41E47!important;}
-    .hero h1{color:#0B1F4B!important;}
-    .hero h1 em{color:#1848B8!important;}
-    .hero-sub{color:#374151!important;}
-    .hero-scroll{color:#6B7280!important;}
     .services,.about,.contact{background:#F7F6F3!important;}
     .portfolio,.reviews{background:#fff!important;}
     h1,h2,h3,h4{color:#0B1F4B;}
+    .hero h1{color:#fff!important;}
+    .hero-sub{color:rgba(255,255,255,.92)!important;}
     .section-header p{color:#6B7280!important;}
     .service-card{background:#fff!important;border:1px solid #E7E3DB!important;box-shadow:0 1px 3px rgba(16,35,63,.06);}
     .service-card:hover{background:#fff!important;border-color:#1848B8!important;box-shadow:0 12px 28px rgba(16,35,63,.12);}
     .service-card p{color:#6B7280!important;}
     .about p,.about li,.contact p,.contact label{color:#374151!important;}
+    .about .section-header h2,.about-content h2,.contact .section-header h2{color:#0B1F4B!important;}
+    .form-label{color:#0B1F4B!important;}
+    .form-group input,.form-group select,.form-group textarea{background:#fff!important;border:1px solid #E7E3DB!important;color:#0B1F4B!important;}
+    .form-group input::placeholder,.form-group textarea::placeholder{color:#9CA3AF!important;}
+    .pricing-section-divider h3,.ala-carte-section h3{color:#0B1F4B!important;}
     .review-card{background:#fff!important;border:1px solid #E7E3DB!important;}
     .review-text{color:#374151!important;}
     .reviewer-name{color:#0B1F4B!important;}
     .rating-number{color:#0B1F4B!important;}
     .rating-count,.reviewer-source{color:#6B7280!important;}
+    article,article p,article li{color:#374151;}
+    article h1,article h2,article h3{color:#0B1F4B;}
+
 </style>
 
   <!-- Schema.org Structured Data -->
@@ -1955,6 +1963,11 @@
        HERO
   ============================ -->
   <section class="hero" id="home">
+    <div class="hero-bg">
+      <video autoplay muted loop playsinline>
+        <source src="https://previews.digitalvisionstudios.net/junesteesnthings/assets/videos/hero-background.mp4" type="video/mp4" />
+      </video>
+    </div>
 
     <div class="hero-content">
       <div class="hero-eyebrow">Chicago Custom Printing</div>
@@ -1964,7 +1977,6 @@
         <a href="tel:+17738491854" class="btn btn-primary">📞 Call Now</a>
         <a href="#portfolio" class="btn btn-secondary">See Our Work</a>
       </div>
-      <img src="/assets/images/work/hero-banner.jpg" alt="Custom tees, hoodies and merch — transfers, screen printing and sublimation — made your way by June's Tees" style="margin-top:2.2rem;width:100%;max-width:940px;border-radius:16px;border:1px solid #E7E3DB;display:block;margin-left:auto;margin-right:auto;" />
     </div>
     <div class="hero-scroll">Scroll</div>
   </section>
@@ -2259,12 +2271,8 @@
         </div>
       </div>
 
-      <div id="testimonials-slider" class="splide fade-in" aria-label="Customer reviews">
-        <div class="splide__track">
-          <ul class="splide__list">
-
-            <li class="splide__slide">
-              <div class="review-card">
+      <div class="reviews-grid" id="reviews-grid">
+        <div class="review-cell"><div class="review-card">
                 <div class="review-quote">"</div>
                 <img class="review-photo" src="/assets/images/reviews/review-1.jpg" alt="Custom wedding welcome mirror decal by June's Tees" loading="lazy" />
                 <p class="review-text">Thank you so much June for helping me on two separate projects, especially for putting a decal on a mirror for my event. Amazing work every time!</p>
@@ -2276,11 +2284,8 @@
                   </div>
                   <div class="review-stars">★★★★★</div>
                 </div>
-              </div>
-            </li>
-
-            <li class="splide__slide">
-              <div class="review-card">
+              </div></div>
+        <div class="review-cell"><div class="review-card">
                 <div class="review-quote">"</div>
                 <img class="review-photo" src="/assets/images/reviews/review-2.jpg" alt="Matching custom family shirts printed by June's Tees" loading="lazy" />
                 <p class="review-text">June has done shirts for my mother previously & I always loved her work. I had her do some for me recently and she did an incredible job again. Consistent quality every time!</p>
@@ -2292,11 +2297,8 @@
                   </div>
                   <div class="review-stars">★★★★★</div>
                 </div>
-              </div>
-            </li>
-
-            <li class="splide__slide">
-              <div class="review-card">
+              </div></div>
+        <div class="review-cell"><div class="review-card">
                 <div class="review-quote">"</div>
                 <img class="review-photo" src="/assets/images/reviews/review-3.jpg" alt="Custom embroidered Est. 1993 hat by June's Tees" loading="lazy" />
                 <p class="review-text">Great job on the hats!! We loved them!</p>
@@ -2308,11 +2310,8 @@
                   </div>
                   <div class="review-stars">★★★★★</div>
                 </div>
-              </div>
-            </li>
-
-            <li class="splide__slide">
-              <div class="review-card">
+              </div></div>
+        <div class="review-cell"><div class="review-card">
                 <div class="review-quote">"</div>
                 <img class="review-photo" src="/assets/images/reviews/review-4.jpg" alt="Custom memorial hoodie printed by June's Tees" loading="lazy" />
                 <p class="review-text">She did a great job — reasonable pricing on a very precious memorial sweatshirt. So thoughtful and professional throughout the whole process.</p>
@@ -2324,11 +2323,8 @@
                   </div>
                   <div class="review-stars">★★★★★</div>
                 </div>
-              </div>
-            </li>
-
-            <li class="splide__slide">
-              <div class="review-card">
+              </div></div>
+        <div class="review-cell"><div class="review-card">
                 <div class="review-quote">"</div>
                 <img class="review-photo" src="/assets/images/reviews/review-5.jpg" alt="Custom orange team shirts order by June's Tees" loading="lazy" />
                 <p class="review-text">Went there for an order of 30 shirts. First thing I noticed was her friendly smile. She helped with the design and the shirts came out perfect! Highly recommended! Quality AND friendly!</p>
@@ -2340,11 +2336,8 @@
                   </div>
                   <div class="review-stars">★★★★★</div>
                 </div>
-              </div>
-            </li>
-
-            <li class="splide__slide">
-              <div class="review-card">
+              </div></div>
+        <div class="review-cell"><div class="review-card">
                 <div class="review-quote">"</div>
                 <p class="review-text">Fast turn around time. Coat turned out great! Easy to work with. Would highly recommend.</p>
                 <div class="review-header">
@@ -2355,11 +2348,8 @@
                   </div>
                   <div class="review-stars">★★★★★</div>
                 </div>
-              </div>
-            </li>
-
-            <li class="splide__slide">
-              <div class="review-card">
+              </div></div>
+        <div class="review-cell"><div class="review-card">
                 <div class="review-quote">"</div>
                 <p class="review-text">June was helpful and accommodative to a small embroidery order I had for polos and dress shirts. Quality turned out great! Much better than trying to find a corporate apparel provider online!</p>
                 <div class="review-header">
@@ -2370,11 +2360,8 @@
                   </div>
                   <div class="review-stars">★★★★★</div>
                 </div>
-              </div>
-            </li>
-
-            <li class="splide__slide">
-              <div class="review-card">
+              </div></div>
+        <div class="review-cell"><div class="review-card">
                 <div class="review-quote">"</div>
                 <p class="review-text">Very professional! Extremely talented artist and she's self taught! Whatever you need she delivers!! I absolutely love her work!</p>
                 <div class="review-header">
@@ -2385,11 +2372,8 @@
                   </div>
                   <div class="review-stars">★★★★★</div>
                 </div>
-              </div>
-            </li>
-
-            <li class="splide__slide">
-              <div class="review-card">
+              </div></div>
+        <div class="review-cell"><div class="review-card">
                 <div class="review-quote">"</div>
                 <p class="review-text">Arrived at the Career Fair wearing the company polo you made a few months ago along with the banner in hand! Both are outstanding quality — I get compliments every time!</p>
                 <div class="review-header">
@@ -2400,11 +2384,8 @@
                   </div>
                   <div class="review-stars">★★★★★</div>
                 </div>
-              </div>
-            </li>
-
-            <li class="splide__slide">
-              <div class="review-card">
+              </div></div>
+        <div class="review-cell review-hidden"><div class="review-card">
                 <div class="review-quote">"</div>
                 <p class="review-text">The owner is very nice and professional. The artwork is crazy!!! I recommend if you need any shirts or artwork on things. She's great. 10 out of 10.</p>
                 <div class="review-header">
@@ -2415,11 +2396,8 @@
                   </div>
                   <div class="review-stars">★★★★★</div>
                 </div>
-              </div>
-            </li>
-
-            <li class="splide__slide">
-              <div class="review-card">
+              </div></div>
+        <div class="review-cell review-hidden"><div class="review-card">
                 <div class="review-quote">"</div>
                 <p class="review-text">They were able to match my custom request and are super reasonably priced. Quality work, completed in a timely manner — would absolutely use them again.</p>
                 <div class="review-header">
@@ -2430,11 +2408,8 @@
                   </div>
                   <div class="review-stars">★★★★★</div>
                 </div>
-              </div>
-            </li>
-
-            <li class="splide__slide">
-              <div class="review-card">
+              </div></div>
+        <div class="review-cell review-hidden"><div class="review-card">
                 <div class="review-quote">"</div>
                 <p class="review-text">I absolutely love this place. June made shirts and custom champagne glasses for my daughter's prom send off — I had no idea the quality would be this amazing. Will definitely be back!</p>
                 <div class="review-header">
@@ -2445,11 +2420,8 @@
                   </div>
                   <div class="review-stars">★★★★★</div>
                 </div>
-              </div>
-            </li>
-
-            <li class="splide__slide">
-              <div class="review-card">
+              </div></div>
+        <div class="review-cell review-hidden"><div class="review-card">
                 <div class="review-quote">"</div>
                 <p class="review-text">We had a last minute need for a few shirts and they were super helpful and able to get the shirts made in time. Was even able to accommodate a small change we needed. Great experience!</p>
                 <div class="review-header">
@@ -2460,11 +2432,8 @@
                   </div>
                   <div class="review-stars">★★★★★</div>
                 </div>
-              </div>
-            </li>
-
-            <li class="splide__slide">
-              <div class="review-card">
+              </div></div>
+        <div class="review-cell review-hidden"><div class="review-card">
                 <div class="review-quote">"</div>
                 <p class="review-text">I highly recommend this young lady. I called her to make T-shirts for me and my family for my son's college graduation. She was professional, timely, and the quality was outstanding!</p>
                 <div class="review-header">
@@ -2475,11 +2444,8 @@
                   </div>
                   <div class="review-stars">★★★★★</div>
                 </div>
-              </div>
-            </li>
-
-            <li class="splide__slide">
-              <div class="review-card">
+              </div></div>
+        <div class="review-cell review-hidden"><div class="review-card">
                 <div class="review-quote">"</div>
                 <p class="review-text">Awesome work and service. Extremely helpful!</p>
                 <div class="review-header">
@@ -2490,11 +2456,8 @@
                   </div>
                   <div class="review-stars">★★★★★</div>
                 </div>
-              </div>
-            </li>
-
-            <li class="splide__slide">
-              <div class="review-card">
+              </div></div>
+        <div class="review-cell review-hidden"><div class="review-card">
                 <div class="review-quote">"</div>
                 <p class="review-text">I LOVE her work! Very impressed by her vast knowledge of the industry. She has an expert eye for detail and shows professionalism and friendliness at all times. HIGHLY recommended! 💗</p>
                 <div class="review-header">
@@ -2505,11 +2468,8 @@
                   </div>
                   <div class="review-stars">★★★★★</div>
                 </div>
-              </div>
-            </li>
-
-            <li class="splide__slide">
-              <div class="review-card">
+              </div></div>
+        <div class="review-cell review-hidden"><div class="review-card">
                 <div class="review-quote">"</div>
                 <p class="review-text">I highly recommend this place! I went in with a last minute order — everywhere else told me what I wanted couldn't be done in time. June made it happen. I'll never go anywhere else!</p>
                 <div class="review-header">
@@ -2520,11 +2480,8 @@
                   </div>
                   <div class="review-stars">★★★★★</div>
                 </div>
-              </div>
-            </li>
-
-            <li class="splide__slide">
-              <div class="review-card">
+              </div></div>
+        <div class="review-cell review-hidden"><div class="review-card">
                 <div class="review-quote">"</div>
                 <p class="review-text">Very Professional, Patient, Pleasant, Punctual — PERFECT!!!!! I'm a repeat customer and the printing is always on point. This is the only place I'll go for my custom printing needs!</p>
                 <div class="review-header">
@@ -2535,11 +2492,8 @@
                   </div>
                   <div class="review-stars">★★★★★</div>
                 </div>
-              </div>
-            </li>
-
-            <li class="splide__slide">
-              <div class="review-card">
+              </div></div>
+        <div class="review-cell review-hidden"><div class="review-card">
                 <div class="review-quote">"</div>
                 <p class="review-text">This place was so dope! They were able to make 15 shirts with a 2 day notice. The shirts were so fire. THANK YOU JUNE'S TEES!</p>
                 <div class="review-header">
@@ -2550,11 +2504,10 @@
                   </div>
                   <div class="review-stars">★★★★★</div>
                 </div>
-              </div>
-            </li>
-
-          </ul>
-        </div>
+              </div></div>
+      </div>
+      <div style="text-align:center;margin-top:1.6rem;">
+        <button id="reviews-more" class="btn btn-primary" type="button" onclick="document.querySelectorAll('#reviews-grid .review-hidden').forEach(function(x,i){if(i<9)x.classList.remove('review-hidden');});if(!document.querySelector('#reviews-grid .review-hidden'))this.style.display='none';">Show More Reviews</button>
       </div>
     </div>
   </section>
@@ -2842,39 +2795,17 @@
     });
     aboutSplide.mount();
 
-    // ============================
-    // Splide: Testimonials Slider
-    // ============================
-    const testimonialSplide = new Splide('#testimonials-slider', {
-      type: 'loop',
-      perPage: 3,
-      perMove: 1,
-      gap: '1.5rem',
-      focus: 'center',
-      autoplay: true,
-      interval: 4000,
-      pauseOnHover: true,
-      pauseOnFocus: true,
-      arrows: true,
-      pagination: true,
-      speed: 600,
-      breakpoints: {
-        1024: { perPage: 2 },
-        767: { perPage: 1 },
-      },
-    });
-    testimonialSplide.mount();
 
     // ============================
     // Stagger testimonial slides
     // ============================
-    const slides = document.querySelectorAll('#testimonials-slider .splide__slide');
+    const slides = document.querySelectorAll('#reviews-grid .review-cell');
     slides.forEach((slide, i) => {
       slide.style.transitionDelay = `${i * 0.08}s`;
     });
 
     // Auto-fill review avatars with reviewer initials
-    document.querySelectorAll('#testimonials-slider .review-avatar').forEach(avatar => {
+    document.querySelectorAll('#reviews-grid .review-avatar').forEach(avatar => {
       const name = avatar.closest('.review-card').querySelector('.reviewer-name')?.textContent.trim() || '?';
       const initials = name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
       avatar.textContent = initials;

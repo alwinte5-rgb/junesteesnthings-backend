@@ -107,4 +107,19 @@
     <priority>0.8</priority>
   </url>
 
+  <url>
+    <loc>https://www.jtees.net/blog/custom-hoodie-tips.html</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://www.jtees.net/blog/group-event-shirt-ideas.html</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://www.jtees.net/blog/birthday-shirt-ideas.html</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
 </urlset>
