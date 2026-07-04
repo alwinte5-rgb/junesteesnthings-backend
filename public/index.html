@@ -37,7 +37,7 @@
       --bg-secondary: #f7f6f3;
       --bg-card:      #ffffff;
       --bg-card-hover:#f7f6f3;
-      --text-heading: #ffffff;
+      --text-heading: #0B1F4B;
       --text-body:    #374151;
       --text-muted:   #6B7280;
       --accent:       #F0275A;
@@ -50,8 +50,8 @@
       --btn-secondary-border: #0B1F4B;
       --btn-secondary-hover-bg:   #0B1F4B;
       --btn-secondary-hover-text: #ffffff;
-      --header-bg:   rgba(11,31,75,0.96);
-      --drawer-bg:   #0B1F4B;
+      --header-bg:   rgba(255,255,255,0.97);
+      --drawer-bg:   #ffffff;
       --badge-bg:    #F0275A;
       --scrollbar-thumb: #F0275A;
       --radius: 8px;
@@ -1367,6 +1367,15 @@
 
     .review-stars { color: #fbbf24; font-size: 0.9rem; margin-left: auto; }
 
+    .review-photo {
+      width: 100%;
+      height: 170px;
+      object-fit: cover;
+      border-radius: 10px;
+      margin: 0.4rem 0 0.9rem;
+      display: block;
+    }
+
     .review-text {
       font-size: 0.875rem;
       color: var(--text-body);
@@ -1722,7 +1731,44 @@
       .fade-in, .fade-left, .fade-right { opacity: 1; transform: none; transition: none; }
       .hero-bg { transform: none; transition: none; }
     }
-  </style>
+  
+    /* ── White clean scheme to match design.jtees.net (2026-07) ── */
+    body{background:#fff;}
+    .announcement-bar{background:#0B1F4B;color:#fff;}
+    header{border-bottom:1px solid #E7E3DB;}
+    header nav a{color:#0B1F4B!important;}
+    header nav a:hover{color:#1848B8!important;}
+    .logo-text{color:#0B1F4B!important;}
+    .logo-text span{color:#6B7280!important;}
+    .header-actions .icon-link svg{fill:#0B1F4B;}
+    .hamburger span{background:#0B1F4B!important;}
+    .drawer-nav a{color:#0B1F4B!important;}
+    .drawer-header .logo-text{color:#0B1F4B!important;}
+    .drawer-close{color:#0B1F4B!important;}
+    .marquee-strip,.marquee-strip.marquee-top{background:#FFF8EF!important;border-top:1px solid #E7E3DB!important;border-bottom:1px solid #E7E3DB!important;}
+    .marquee-item{color:#0B1F4B!important;}
+    .marquee-item span{color:#F0275A!important;}
+    .hero{background:#FFF8EF!important;}
+    .hero-bg{display:none!important;}
+    .hero-eyebrow{color:#C41E47!important;}
+    .hero h1{color:#0B1F4B!important;}
+    .hero h1 em{color:#1848B8!important;}
+    .hero-sub{color:#374151!important;}
+    .hero-scroll{color:#6B7280!important;}
+    .services,.about,.contact{background:#F7F6F3!important;}
+    .portfolio,.reviews{background:#fff!important;}
+    h1,h2,h3,h4{color:#0B1F4B;}
+    .section-header p{color:#6B7280!important;}
+    .service-card{background:#fff!important;border:1px solid #E7E3DB!important;box-shadow:0 1px 3px rgba(16,35,63,.06);}
+    .service-card:hover{background:#fff!important;border-color:#1848B8!important;box-shadow:0 12px 28px rgba(16,35,63,.12);}
+    .service-card p{color:#6B7280!important;}
+    .about p,.about li,.contact p,.contact label{color:#374151!important;}
+    .review-card{background:#fff!important;border:1px solid #E7E3DB!important;}
+    .review-text{color:#374151!important;}
+    .reviewer-name{color:#0B1F4B!important;}
+    .rating-number{color:#0B1F4B!important;}
+    .rating-count,.reviewer-source{color:#6B7280!important;}
+</style>
 
   <!-- Schema.org Structured Data -->
   <script type="application/ld+json">
@@ -1909,11 +1955,7 @@
        HERO
   ============================ -->
   <section class="hero" id="home">
-    <div class="hero-bg">
-      <video autoplay muted loop playsinline>
-        <source src="https://previews.digitalvisionstudios.net/junesteesnthings/assets/videos/hero-background.mp4" type="video/mp4" />
-      </video>
-    </div>
+
     <div class="hero-content">
       <div class="hero-eyebrow">Chicago Custom Printing</div>
       <h1>Your Vision.<br /><em>Our Craft.</em></h1>
@@ -1922,6 +1964,7 @@
         <a href="tel:+17738491854" class="btn btn-primary">📞 Call Now</a>
         <a href="#portfolio" class="btn btn-secondary">See Our Work</a>
       </div>
+      <img src="/assets/images/work/hero-banner.jpg" alt="Custom tees, hoodies and merch — transfers, screen printing and sublimation — made your way by June's Tees" style="margin-top:2.2rem;width:100%;max-width:940px;border-radius:16px;border:1px solid #E7E3DB;display:block;margin-left:auto;margin-right:auto;" />
     </div>
     <div class="hero-scroll">Scroll</div>
   </section>
@@ -1939,12 +1982,12 @@
 
       <div class="services-grid">
         <a href="/services/screen-printing.html" class="service-card fade-in" style="transition-delay:0.05s;text-decoration:none;">
-          <img class="service-photo" src="/assets/images/work/screen-printing-press.jpg" alt="Screen printing press printing a custom shirt" loading="lazy" />
+          <img class="service-photo" src="/assets/images/work/screen-printing-silkscreen.jpg" alt="Checking a silkscreen before printing a custom shirt" loading="lazy" />
           <h3>Screen Printing</h3>
           <p>Bold, vibrant custom apparel for teams, events, businesses, and everything in between. High-quality results every time.</p>
         </a>
         <a href="/services/embroidery.html" class="service-card fade-in" style="transition-delay:0.1s;text-decoration:none;">
-          <img class="service-photo" src="/assets/images/work/embroidery-machine-polos.jpg" alt="Commercial embroidery machine stitching custom apparel" loading="lazy" />
+          <img class="service-photo" src="/assets/images/work/embroidered-business-apparel.jpg" alt="Embroidered business logo apparel set" loading="lazy" />
           <h3>Embroidery</h3>
           <p>Professional logo embroidery on polos, hats, uniforms, and more. Durable, polished, and business-ready.</p>
         </a>
@@ -1954,12 +1997,12 @@
           <p>Full-color, photo-quality prints with incredible detail. Perfect for complex designs that pop on any fabric.</p>
         </a>
         <a href="/services/banners-signs.html" class="service-card fade-in" style="transition-delay:0.2s;text-decoration:none;">
-          <img class="service-photo" src="/assets/images/work/custom-flyer-design.jpg" alt="Custom branded flyer and display design" loading="lazy" />
+          <img class="service-photo" src="/assets/images/work/custom-printed-banner.jpg" alt="Custom printed 8x8 event banner" loading="lazy" />
           <h3>Banners & Signs</h3>
           <p>Custom banners, yard signs, and displays for events, businesses, and special occasions.</p>
         </a>
         <a href="/services/event-decor.html" class="service-card fade-in" style="transition-delay:0.25s;text-decoration:none;">
-          <img class="service-photo" src="/assets/images/work/event-decor-party.jpg" alt="Custom Halloween party drink labels and decor" loading="lazy" />
+          <img class="service-photo" src="/assets/images/work/promo-products.jpg" alt="Personalized promo products — mugs, cases, keychains, and gifts" loading="lazy" />
           <h3>Event Decor & Party Favors</h3>
           <p>Custom arches, cutouts, chip bags, gable boxes, goodie bags, pillow covers &amp; more — everything to make your event unforgettable.</p>
         </a>
@@ -2122,19 +2165,24 @@
           <div id="about-slider" class="splide" aria-label="Our work gallery">
             <div class="splide__track">
               <ul class="splide__list">
-                <li class="splide__slide">
+
+            <li class="splide__slide">
                   <img src="https://previews.digitalvisionstudios.net/junesteesnthings/assets/images/content-media-1.png" alt="Team in custom orange shirts" loading="lazy" />
                 </li>
-                <li class="splide__slide">
+
+            <li class="splide__slide">
                   <img src="https://previews.digitalvisionstudios.net/junesteesnthings/assets/images/content-media-9.jpg" alt="Custom Halloween Hoodies" loading="lazy" />
                 </li>
-                <li class="splide__slide">
+
+            <li class="splide__slide">
                   <img src="/assets/images/work/embroidery-in-progress.jpg" alt="Custom embroidery in progress" loading="lazy" />
                 </li>
-                <li class="splide__slide">
+
+            <li class="splide__slide">
                   <img src="/assets/images/work/engraved-tumblers.jpg" alt="Custom engraved monogram tumblers" loading="lazy" />
                 </li>
-              </ul>
+
+          </ul>
             </div>
           </div>
         </div>
@@ -2176,6 +2224,23 @@
   </div>
 
   <!-- ============================
+       GIFT CARDS
+  ============================ -->
+  <section style="background:#fff;padding:3.5rem 0;">
+    <div class="container">
+      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:2.2rem;background:#FFF8EF;border:1px solid #E7E3DB;border-radius:18px;padding:2rem;">
+        <img src="/assets/images/work/gift-cards.jpg" alt="June's Tees &amp; Things gift cards — give the gift of custom made" loading="lazy" style="flex:1 1 300px;max-width:380px;width:100%;border-radius:12px;" />
+        <div style="flex:1 1 300px;">
+          <div class="section-tag">Gift Cards</div>
+          <h2 style="color:#0B1F4B;margin:0.4rem 0 0.6rem;">Give the Gift of Custom Made</h2>
+          <p style="color:#374151;margin-bottom:1.2rem;">Not sure what they'd design? A June's Tees &amp; Things gift card lets them create exactly what they want — shirts, hoodies, tumblers, and more.</p>
+          <a href="#contact" class="btn btn-primary">Ask About Gift Cards</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================
        REVIEWS
   ============================ -->
   <section class="reviews" id="reviews">
@@ -2201,6 +2266,86 @@
             <li class="splide__slide">
               <div class="review-card">
                 <div class="review-quote">"</div>
+                <img class="review-photo" src="/assets/images/reviews/review-1.jpg" alt="Custom wedding welcome mirror decal by June's Tees" loading="lazy" />
+                <p class="review-text">Thank you so much June for helping me on two separate projects, especially for putting a decal on a mirror for my event. Amazing work every time!</p>
+                <div class="review-header">
+                  <div class="review-avatar"></div>
+                  <div class="review-header-text">
+                    <div class="reviewer-name">Nyla Pruitt</div>
+                    <div class="reviewer-source">⭐ Google Review · Jul 2024</div>
+                  </div>
+                  <div class="review-stars">★★★★★</div>
+                </div>
+              </div>
+            </li>
+
+            <li class="splide__slide">
+              <div class="review-card">
+                <div class="review-quote">"</div>
+                <img class="review-photo" src="/assets/images/reviews/review-2.jpg" alt="Matching custom family shirts printed by June's Tees" loading="lazy" />
+                <p class="review-text">June has done shirts for my mother previously & I always loved her work. I had her do some for me recently and she did an incredible job again. Consistent quality every time!</p>
+                <div class="review-header">
+                  <div class="review-avatar"></div>
+                  <div class="review-header-text">
+                    <div class="reviewer-name">A Allen</div>
+                    <div class="reviewer-source">⭐ Google Review · Oct 2023</div>
+                  </div>
+                  <div class="review-stars">★★★★★</div>
+                </div>
+              </div>
+            </li>
+
+            <li class="splide__slide">
+              <div class="review-card">
+                <div class="review-quote">"</div>
+                <img class="review-photo" src="/assets/images/reviews/review-3.jpg" alt="Custom embroidered Est. 1993 hat by June's Tees" loading="lazy" />
+                <p class="review-text">Great job on the hats!! We loved them!</p>
+                <div class="review-header">
+                  <div class="review-avatar"></div>
+                  <div class="review-header-text">
+                    <div class="reviewer-name">Diane Alarcon</div>
+                    <div class="reviewer-source">⭐ Google Review · Mar 2023</div>
+                  </div>
+                  <div class="review-stars">★★★★★</div>
+                </div>
+              </div>
+            </li>
+
+            <li class="splide__slide">
+              <div class="review-card">
+                <div class="review-quote">"</div>
+                <img class="review-photo" src="/assets/images/reviews/review-4.jpg" alt="Custom memorial hoodie printed by June's Tees" loading="lazy" />
+                <p class="review-text">She did a great job — reasonable pricing on a very precious memorial sweatshirt. So thoughtful and professional throughout the whole process.</p>
+                <div class="review-header">
+                  <div class="review-avatar"></div>
+                  <div class="review-header-text">
+                    <div class="reviewer-name">Dawn Nash</div>
+                    <div class="reviewer-source">⭐ Google Review · Jan 2023</div>
+                  </div>
+                  <div class="review-stars">★★★★★</div>
+                </div>
+              </div>
+            </li>
+
+            <li class="splide__slide">
+              <div class="review-card">
+                <div class="review-quote">"</div>
+                <img class="review-photo" src="/assets/images/reviews/review-5.jpg" alt="Custom orange team shirts order by June's Tees" loading="lazy" />
+                <p class="review-text">Went there for an order of 30 shirts. First thing I noticed was her friendly smile. She helped with the design and the shirts came out perfect! Highly recommended! Quality AND friendly!</p>
+                <div class="review-header">
+                  <div class="review-avatar"></div>
+                  <div class="review-header-text">
+                    <div class="reviewer-name">Rob Simpson</div>
+                    <div class="reviewer-source">⭐ Google Review · Nov 2022</div>
+                  </div>
+                  <div class="review-stars">★★★★★</div>
+                </div>
+              </div>
+            </li>
+
+            <li class="splide__slide">
+              <div class="review-card">
+                <div class="review-quote">"</div>
                 <p class="review-text">Fast turn around time. Coat turned out great! Easy to work with. Would highly recommend.</p>
                 <div class="review-header">
                   <div class="review-avatar"></div>
@@ -2222,36 +2367,6 @@
                   <div class="review-header-text">
                     <div class="reviewer-name">Anthony Krcik</div>
                     <div class="reviewer-source">⭐ Google Review · 15 weeks ago</div>
-                  </div>
-                  <div class="review-stars">★★★★★</div>
-                </div>
-              </div>
-            </li>
-
-            <li class="splide__slide">
-              <div class="review-card">
-                <div class="review-quote">"</div>
-                <p class="review-text">Thank you so much June for helping me on two separate projects, especially for putting a decal on a mirror for my event. Amazing work every time!</p>
-                <div class="review-header">
-                  <div class="review-avatar"></div>
-                  <div class="review-header-text">
-                    <div class="reviewer-name">Nyla Pruitt</div>
-                    <div class="reviewer-source">⭐ Google Review · Jul 2024</div>
-                  </div>
-                  <div class="review-stars">★★★★★</div>
-                </div>
-              </div>
-            </li>
-
-            <li class="splide__slide">
-              <div class="review-card">
-                <div class="review-quote">"</div>
-                <p class="review-text">June has done shirts for my mother previously & I always loved her work. I had her do some for me recently and she did an incredible job again. Consistent quality every time!</p>
-                <div class="review-header">
-                  <div class="review-avatar"></div>
-                  <div class="review-header-text">
-                    <div class="reviewer-name">A Allen</div>
-                    <div class="reviewer-source">⭐ Google Review · Oct 2023</div>
                   </div>
                   <div class="review-stars">★★★★★</div>
                 </div>
@@ -2291,57 +2406,12 @@
             <li class="splide__slide">
               <div class="review-card">
                 <div class="review-quote">"</div>
-                <p class="review-text">Great job on the hats!! We loved them!</p>
-                <div class="review-header">
-                  <div class="review-avatar"></div>
-                  <div class="review-header-text">
-                    <div class="reviewer-name">Diane Alarcon</div>
-                    <div class="reviewer-source">⭐ Google Review · Mar 2023</div>
-                  </div>
-                  <div class="review-stars">★★★★★</div>
-                </div>
-              </div>
-            </li>
-
-            <li class="splide__slide">
-              <div class="review-card">
-                <div class="review-quote">"</div>
                 <p class="review-text">The owner is very nice and professional. The artwork is crazy!!! I recommend if you need any shirts or artwork on things. She's great. 10 out of 10.</p>
                 <div class="review-header">
                   <div class="review-avatar"></div>
                   <div class="review-header-text">
                     <div class="reviewer-name">Anthony Banks</div>
                     <div class="reviewer-source">⭐ Google Review · Feb 2023</div>
-                  </div>
-                  <div class="review-stars">★★★★★</div>
-                </div>
-              </div>
-            </li>
-
-            <li class="splide__slide">
-              <div class="review-card">
-                <div class="review-quote">"</div>
-                <p class="review-text">She did a great job — reasonable pricing on a very precious memorial sweatshirt. So thoughtful and professional throughout the whole process.</p>
-                <div class="review-header">
-                  <div class="review-avatar"></div>
-                  <div class="review-header-text">
-                    <div class="reviewer-name">Dawn Nash</div>
-                    <div class="reviewer-source">⭐ Google Review · Jan 2023</div>
-                  </div>
-                  <div class="review-stars">★★★★★</div>
-                </div>
-              </div>
-            </li>
-
-            <li class="splide__slide">
-              <div class="review-card">
-                <div class="review-quote">"</div>
-                <p class="review-text">Went there for an order of 30 shirts. First thing I noticed was her friendly smile. She helped with the design and the shirts came out perfect! Highly recommended! Quality AND friendly!</p>
-                <div class="review-header">
-                  <div class="review-avatar"></div>
-                  <div class="review-header-text">
-                    <div class="reviewer-name">Rob Simpson</div>
-                    <div class="reviewer-source">⭐ Google Review · Nov 2022</div>
                   </div>
                   <div class="review-stars">★★★★★</div>
                 </div>
