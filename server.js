@@ -33,6 +33,11 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ limit: '1mb', extended: true }));
 
+// Grad season pages are retired for now (files kept for next year) — temporary redirect home.
+app.get(['/grad', '/grad/', '/grad/*'], (_req, res) => res.redirect(302, '/'));
+// Design Ideas is replaced by the online Design Studio — permanent redirect.
+app.get('/design-ideas.html', (_req, res) => res.redirect(301, 'https://design.jtees.net/'));
+
 // Serve frontend
 app.use(express.static(path.join(__dirname, 'public')));
 
