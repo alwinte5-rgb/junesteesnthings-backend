@@ -1417,6 +1417,84 @@ app.post('/api/embroidery-quote', orderRateLimit, async (req, res) => {
   }
 });
 
+
+// ─── Internal APIs for design.jtees.net (shared-secret) ──────────────────────
+
+function requireInternalKey(req, res, next) {
+  const k = process.env.JT_INTERNAL_KEY;
+  if (!k || req.get('X-JT-Key') !== k) return res.status(403).json({ error: 'forbidden' });
+  next();
+}
+
+// Passwordless login code for customer accounts on the designer site
+app.post('/api/send-login-code', requireInternalKey, async (req, res) => {
+  try {
+    const email = String(req.body.email || '').trim();
+    const code = String(req.body.code || '').replace(/\D/g, '').slice(0, 6);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || code.length !== 6) {
+      return res.status(400).json({ error: 'bad input' });
+    }
+    await resend.emails.send({
+      from: FROM_ADDRESS,
+      to: email,
+      subject: `${code} is your June's Tees sign-in code`,
+      html: `
+        <div style="font-family:sans-serif;max-width:480px;margin:0 auto;text-align:center;">
+          <h2 style="color:#1848B8;">Your sign-in code</h2>
+          <div style="font-size:38px;font-weight:900;letter-spacing:10px;color:#0B1F4B;background:#F7F6F3;border-radius:12px;padding:18px 0;margin:14px 0;">${code}</div>
+          <p style="color:#374151;">Enter this code on design.jtees.net to sign in. It expires in 15 minutes.</p>
+          <p style="color:#999;font-size:12px;">Didn't request this? You can ignore this email.</p>
+        </div>`,
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('send-login-code error:', err.message);
+    res.status(500).json({ error: 'send failed' });
+  }
+});
+
+// Abandoned-cart recovery email (triggered by the designer's hourly sweep)
+app.post('/api/abandoned-cart-email', requireInternalKey, async (req, res) => {
+  try {
+    const email = String(req.body.email || '').trim();
+    const count = parseInt(req.body.item_count, 10) || 0;
+    const total = Number(req.body.total || 0);
+    const url = String(req.body.restore_url || '');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !url.startsWith('https://design.jtees.net/')) {
+      return res.status(400).json({ error: 'bad input' });
+    }
+    await resend.emails.send({
+      from: FROM_ADDRESS,
+      reply_to: NOTIFY_EMAIL,
+      to: email,
+      subject: `Your custom design is waiting for you 🎨`,
+      html: `
+        <div style="font-family:sans-serif;max-width:520px;margin:0 auto;">
+          <h2 style="color:#1848B8;">You left something great behind!</h2>
+          <p style="color:#374151;">Your cart at June's Tees &amp; Things still has <strong>${count} item${count === 1 ? '' : 's'}</strong>${total ? ` (about $${total.toFixed(2)})` : ''} — including your custom design work. It's saved and ready whenever you are.</p>
+          <p style="text-align:center;margin:26px 0;">
+            <a href="${escEmail(url)}" style="background:#1848B8;color:#fff;font-weight:800;text-decoration:none;padding:14px 30px;border-radius:100px;display:inline-block;">Pick Up Where I Left Off →</a>
+          </p>
+          <p style="color:#374151;">Questions or want a hand finishing it? Just reply, or call/text <a href="tel:+17738491854">(773) 849-1854</a>.</p>
+          <p style="color:#999;font-size:12px;margin-top:24px;">June's Tees &amp; Things · Chicago, IL</p>
+        </div>`,
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('abandoned-cart-email error:', err.message);
+    res.status(500).json({ error: 'send failed' });
+  }
+});
+
+// Hourly abandoned-cart sweep trigger (the designer PHP does the real work)
+if (process.env.JT_INTERNAL_KEY) {
+  setInterval(() => {
+    fetch(`https://design.jtees.net/jt-cron.php?key=${encodeURIComponent(process.env.JT_INTERNAL_KEY)}`)
+      .then(r => r.text()).then(t => console.log('abandoned-cart sweep:', t.trim()))
+      .catch(e => console.error('abandoned-cart sweep failed:', e.message));
+  }, 60 * 60 * 1000);
+}
+
 // Submit grad order
 app.post('/api/submit-order', orderRateLimit, rejectBots, async (req, res) => {
   try {
