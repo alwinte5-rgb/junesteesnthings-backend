@@ -24,7 +24,7 @@ app.set('trust proxy', 1);
 app.use(helmet({
   contentSecurityPolicy: false, // site uses inline scripts and CDN resources throughout
 }));
-app.use(cors({ origin: 'https://www.jtees.net' }));
+app.use(cors({ origin: ['https://www.jtees.net', 'https://jtees.net', 'https://design.jtees.net'] }));
 app.use(express.json({
   limit: '1mb',
   verify: (req, _res, buf) => {
@@ -1333,7 +1333,7 @@ app.post('/api/cloudinary-signature', signatureRateLimit, (req, res) => {
   if (!apiSecret) return res.status(503).json({ error: 'Cloudinary not configured' });
   // Allow the caller to specify the upload folder, but validate against an allowlist
   // so the server retains control over where files can be stored.
-  const ALLOWED_FOLDERS = ['grad_orders', 'quote_requests'];
+  const ALLOWED_FOLDERS = ['grad_orders', 'quote_requests', 'embroidery_quotes'];
   const requestedFolder = typeof req.body.folder === 'string' ? req.body.folder : '';
   const folder = ALLOWED_FOLDERS.includes(requestedFolder) ? requestedFolder : 'grad_orders';
   // Use the widget's timestamp — overwriting it causes a mismatch since the widget
@@ -1342,6 +1342,79 @@ app.post('/api/cloudinary-signature', signatureRateLimit, (req, res) => {
   if (!paramsToSign.timestamp) paramsToSign.timestamp = Math.round(Date.now() / 1000);
   const signature = cloudinary.utils.api_sign_request(paramsToSign, apiSecret);
   res.json({ signature, timestamp: paramsToSign.timestamp, folder });
+});
+
+
+// Embroidery order request from design.jtees.net product pages.
+// Embroidery files (DST/PES/...) can't render in the online designer, so this
+// flow collects the file + size + contact info and June follows up directly.
+app.post('/api/embroidery-quote', orderRateLimit, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const name  = String(b.name || '').trim().slice(0, 120);
+    const email = String(b.email || '').trim().slice(0, 200);
+    const phone = String(b.phone || '').trim().slice(0, 40);
+    const size  = String(b.size || '').trim().slice(0, 60);
+    const qty   = String(b.qty || '').trim().slice(0, 12);
+    const product = String(b.product || '').trim().slice(0, 200);
+    const hasFile = b.has_file === true || b.has_file === 'yes';
+    const fileUrl = String(b.file_url || '').trim().slice(0, 500);
+    const notes = String(b.notes || '').trim().slice(0, 2000);
+    if (!name || !size || (!email && !phone)) {
+      return res.status(400).json({ error: 'Name, embroidery size, and an email or phone number are required.' });
+    }
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'That email address does not look valid.' });
+    }
+    if (fileUrl && !fileUrl.startsWith('https://res.cloudinary.com/')) {
+      return res.status(400).json({ error: 'Invalid file reference.' });
+    }
+    const fileRow = fileUrl
+      ? `<tr><td style="padding:8px;font-weight:bold;">File</td><td style="padding:8px;"><a href="${escEmail(fileUrl)}">Download uploaded file</a></td></tr>`
+      : `<tr><td style="padding:8px;font-weight:bold;">File</td><td style="padding:8px;">None uploaded — digitizing needed</td></tr>`;
+    await resend.emails.send({
+      from: FROM_ADDRESS,
+      reply_to: email || NOTIFY_EMAIL,
+      to: NOTIFY_EMAIL,
+      subject: `New EMBROIDERY request — ${name} (${size})`,
+      html: `
+        <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
+          <h2 style="color:#1848B8;">New Embroidery Request</h2>
+          <table style="width:100%;border-collapse:collapse;">
+            <tr><td style="padding:8px;font-weight:bold;width:140px;">Name</td><td style="padding:8px;">${escEmail(name)}</td></tr>
+            <tr style="background:#f9f9f9;"><td style="padding:8px;font-weight:bold;">Phone</td><td style="padding:8px;">${escEmail(phone) || '—'}</td></tr>
+            <tr><td style="padding:8px;font-weight:bold;">Email</td><td style="padding:8px;">${escEmail(email) || '—'}</td></tr>
+            <tr style="background:#f9f9f9;"><td style="padding:8px;font-weight:bold;">Product</td><td style="padding:8px;">${escEmail(product) || '—'}</td></tr>
+            <tr><td style="padding:8px;font-weight:bold;">Embroidery size</td><td style="padding:8px;">${escEmail(size)}</td></tr>
+            <tr style="background:#f9f9f9;"><td style="padding:8px;font-weight:bold;">Quantity</td><td style="padding:8px;">${escEmail(qty) || '—'}</td></tr>
+            <tr><td style="padding:8px;font-weight:bold;">Has stitch file</td><td style="padding:8px;">${hasFile ? 'Yes' : 'No (digitizing fee applies)'}</td></tr>
+            ${fileRow}
+            <tr style="background:#f9f9f9;"><td style="padding:8px;font-weight:bold;vertical-align:top;">Notes</td><td style="padding:8px;">${escEmail(notes) || '—'}</td></tr>
+          </table>
+          <p style="color:#999;font-size:12px;margin-top:24px;">Submitted from design.jtees.net · ${new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' })} CT</p>
+        </div>`,
+    });
+    if (email) {
+      await resend.emails.send({
+        from: FROM_ADDRESS,
+        reply_to: NOTIFY_EMAIL,
+        to: email,
+        subject: 'We got your embroidery request!',
+        html: `
+          <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
+            <h2 style="color:#1848B8;">Thanks, ${escEmail(name.split(' ')[0])}!</h2>
+            <p>We received your embroidery request (${escEmail(size)}${qty ? ', qty ' + escEmail(qty) : ''}) and will confirm pricing and timing within 1 business day.</p>
+            ${hasFile ? '' : '<p>Since you don\'t have a stitch file yet, we\'ll digitize your artwork — the one-time digitizing fee will be included in your quote.</p>'}
+            <p>Questions? Call or text <a href="tel:+17738491854">(773) 849-1854</a>.</p>
+            <p style="color:#999;font-size:12px;margin-top:24px;">June's Tees &amp; Things · Chicago, IL</p>
+          </div>`,
+      }).catch(() => {});
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('embroidery-quote error:', err.message);
+    res.status(500).json({ error: 'Something went wrong — please call or text (773) 849-1854.' });
+  }
 });
 
 // Submit grad order
