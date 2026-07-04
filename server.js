@@ -112,6 +112,31 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 const NOTIFY_EMAIL = process.env.NOTIFICATION_EMAIL;
 const FROM_ADDRESS = `June's Tees & Things <${NOTIFY_EMAIL}>`;
 
+
+// ─── Brevo email (preferred for customer messages; Resend is the fallback) ───
+async function sendEmail({ to, subject, html, replyTo }) {
+  const brevoKey = process.env.BREVO_API_KEY;
+  if (brevoKey) {
+    const r = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: { 'api-key': brevoKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sender: { name: "June's Tees & Things", email: NOTIFY_EMAIL },
+        to: [{ email: to }],
+        replyTo: { email: replyTo || NOTIFY_EMAIL },
+        subject,
+        htmlContent: html,
+      }),
+    });
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error(`Brevo ${r.status}: ${t.slice(0, 200)}`);
+    }
+    return;
+  }
+  await resend.emails.send({ from: FROM_ADDRESS, reply_to: replyTo || NOTIFY_EMAIL, to, subject, html });
+}
+
 function escEmail(str) {
   if (str == null) return '';
   return String(str)
@@ -207,6 +232,23 @@ async function syncToBrevo(s) {
     },
     listIds:        process.env.BREVO_LIST_ID ? [parseInt(process.env.BREVO_LIST_ID)] : [],
     updateEnabled:  true,
+  });
+}
+
+// Upsert a tawk.to chat/ticket contact. Chat leads go to their own list when
+// BREVO_TAWK_LIST_ID is set, otherwise they fall back to the main list.
+async function syncTawkContactToBrevo({ name, email }) {
+  if (isSpamName(name)) {
+    console.warn('syncTawkContactToBrevo: skipping spam contact:', name);
+    return;
+  }
+  const [firstname, ...rest] = (name || '').trim().split(' ');
+  const listId = process.env.BREVO_TAWK_LIST_ID || process.env.BREVO_LIST_ID;
+  await brevo.post('/contacts', {
+    email,
+    attributes:    { FIRSTNAME: firstname || '', LASTNAME: rest.join(' ') || '' },
+    listIds:       listId ? [parseInt(listId)] : [],
+    updateEnabled: true,
   });
 }
 
@@ -782,6 +824,53 @@ app.post('/webhooks/clover', async (req, res) => {
 
   } catch (err) {
     console.error('Webhook processing failed:', err.message);
+  }
+});
+
+// ── tawk.to chat webhook ───────────────────────────────────────────────────────
+// In the tawk.to dashboard (Administration → Settings → Webhooks), set the URL to:
+// https://www.jtees.net/webhooks/tawk
+// Enable the "Chat Start" and "Ticket Create" events, and copy the secret key
+// it generates into the TAWK_WEBHOOK_SECRET env var on Railway.
+
+app.post('/webhooks/tawk', async (req, res) => {
+  const signature = req.headers['x-tawk-signature'];
+  if (!process.env.TAWK_WEBHOOK_SECRET) {
+    console.warn('tawk webhook rejected — TAWK_WEBHOOK_SECRET not set');
+    return res.sendStatus(503);
+  }
+  if (!signature) {
+    console.warn('tawk webhook rejected — missing signature');
+    return res.sendStatus(401);
+  }
+  // Use raw body (not re-serialized JSON) to avoid serialization mismatch
+  const rawBody = req.rawBody || Buffer.from(JSON.stringify(req.body));
+  const expected = crypto
+    .createHmac('sha1', process.env.TAWK_WEBHOOK_SECRET)
+    .update(rawBody)
+    .digest('hex');
+  let sigValid = false;
+  try {
+    sigValid = signature.length === expected.length &&
+      crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+  } catch { sigValid = false; }
+  if (!sigValid) {
+    console.warn('tawk webhook signature mismatch — rejected');
+    return res.sendStatus(401);
+  }
+
+  res.sendStatus(200); // acknowledge immediately; tawk retries non-2XX for 12 hours
+
+  // chat:* events carry `visitor`; ticket:create carries `requester`
+  const { event, visitor, requester } = req.body;
+  const contact = visitor || requester;
+  if (!contact?.email) return; // anonymous visitor (no pre-chat form) — nothing to sync
+
+  try {
+    await syncTawkContactToBrevo(contact);
+    console.log(`tawk webhook: synced ${contact.email} to Brevo (${event})`);
+  } catch (err) {
+    console.error('tawk → Brevo sync failed:', err.response?.data?.message || err.message);
   }
 });
 
@@ -1372,10 +1461,9 @@ app.post('/api/embroidery-quote', orderRateLimit, async (req, res) => {
     const fileRow = fileUrl
       ? `<tr><td style="padding:8px;font-weight:bold;">File</td><td style="padding:8px;"><a href="${escEmail(fileUrl)}">Download uploaded file</a></td></tr>`
       : `<tr><td style="padding:8px;font-weight:bold;">File</td><td style="padding:8px;">None uploaded — digitizing needed</td></tr>`;
-    await resend.emails.send({
-      from: FROM_ADDRESS,
-      reply_to: email || NOTIFY_EMAIL,
+    await sendEmail({
       to: NOTIFY_EMAIL,
+      replyTo: email || NOTIFY_EMAIL,
       subject: `New EMBROIDERY request — ${name} (${size})`,
       html: `
         <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
@@ -1395,9 +1483,7 @@ app.post('/api/embroidery-quote', orderRateLimit, async (req, res) => {
         </div>`,
     });
     if (email) {
-      await resend.emails.send({
-        from: FROM_ADDRESS,
-        reply_to: NOTIFY_EMAIL,
+      await sendEmail({
         to: email,
         subject: 'We got your embroidery request!',
         html: `
@@ -1434,8 +1520,7 @@ app.post('/api/send-login-code', requireInternalKey, async (req, res) => {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || code.length !== 6) {
       return res.status(400).json({ error: 'bad input' });
     }
-    await resend.emails.send({
-      from: FROM_ADDRESS,
+    await sendEmail({
       to: email,
       subject: `${code} is your June's Tees sign-in code`,
       html: `
@@ -1463,9 +1548,7 @@ app.post('/api/abandoned-cart-email', requireInternalKey, async (req, res) => {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !url.startsWith('https://design.jtees.net/')) {
       return res.status(400).json({ error: 'bad input' });
     }
-    await resend.emails.send({
-      from: FROM_ADDRESS,
-      reply_to: NOTIFY_EMAIL,
+    await sendEmail({
       to: email,
       subject: `Your custom design is waiting for you 🎨`,
       html: `
