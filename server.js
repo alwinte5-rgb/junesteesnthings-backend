@@ -23,6 +23,9 @@ const app = express();
 app.set('trust proxy', 1);
 app.use(helmet({
   contentSecurityPolicy: false, // site uses inline scripts and CDN resources throughout
+  // Public images are embedded in emails and on design.jtees.net — the default
+  // same-origin policy makes browsers/webmail refuse to render them.
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
 }));
 app.use(cors({ origin: ['https://www.jtees.net', 'https://jtees.net', 'https://design.jtees.net'] }));
 app.use(express.json({
