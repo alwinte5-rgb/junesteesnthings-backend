@@ -163,9 +163,9 @@ function designerPromoBlock() {
       <h3 style="color:#0B1F4B;margin:0 0 6px;">Try our new online Design Studio 🎨</h3>
       <p style="color:#374151;margin:0 0 14px;">Put your own design on tees, hoodies and more — create it online and see it instantly.</p>
       <table role="presentation" style="width:100%;border-collapse:collapse;"><tr>
-        ${img('designer-tee.jpg', 'Custom printed t-shirt')}
-        ${img('designer-hoodie.jpg', 'Custom hoodie')}
-        ${img('designer-print.jpg', 'Full-color custom print')}
+        ${img('work-meaq.jpg', 'Custom brand hoodie and hat we printed')}
+        ${img('work-ghost.jpg', 'Custom Halloween tee we printed')}
+        ${img('work-kennedy.jpg', 'Custom contractor hoodies we printed')}
       </tr></table>
       <p style="text-align:center;margin:18px 0 6px;">
         <a href="https://design.jtees.net/" style="background:#1848B8;color:#fff;font-weight:800;text-decoration:none;padding:13px 28px;border-radius:100px;display:inline-block;">Start Designing &rarr;</a>
@@ -657,6 +657,14 @@ app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, async (req, re
 
   if (String(name).length > 200 || String(phone).length > 50 || String(email).length > 254) {
     return res.status(400).json({ error: 'Input too long.' });
+  }
+  // US phone: 10 digits, or 11 with leading 1 (formatting characters allowed)
+  const phoneDigits = String(phone).replace(/\D/g, '');
+  if (phoneDigits.length !== 10 && !(phoneDigits.length === 11 && phoneDigits.startsWith('1'))) {
+    return res.status(400).json({ error: 'Please enter a valid 10-digit phone number.' });
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email).trim())) {
+    return res.status(400).json({ error: 'Please enter a valid email address.' });
   }
   if (description && String(description).length > 2000) {
     return res.status(400).json({ error: 'Description too long.' });

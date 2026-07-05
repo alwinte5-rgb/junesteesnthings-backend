@@ -2635,7 +2635,7 @@
             <div class="form-row">
               <div class="form-group">
                 <label for="f-phone">Phone</label>
-                <input id="f-phone" type="tel" name="phone" required placeholder="(000) 000-0000" />
+                <input id="f-phone" type="tel" name="phone" required placeholder="(000) 000-0000" inputmode="tel" maxlength="14" autocomplete="tel" />
               </div>
               <div class="form-group">
                 <label for="f-email">Email</label>
@@ -2947,8 +2947,35 @@
     const submitBtn = document.getElementById('submit-btn');
     const formStatus = document.getElementById('form-status');
 
+    // Live phone formatting: keep it to 10 digits as (xxx) xxx-xxxx
+    const phoneField = document.getElementById('f-phone');
+    phoneField.addEventListener('input', () => {
+      let d = phoneField.value.replace(/\D/g, '');
+      if (d.length === 11 && d.startsWith('1')) d = d.slice(1);
+      d = d.slice(0, 10);
+      if (d.length > 6)      phoneField.value = `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`;
+      else if (d.length > 3) phoneField.value = `(${d.slice(0,3)}) ${d.slice(3)}`;
+      else                   phoneField.value = d;
+    });
+
     quoteForm.addEventListener('submit', async (e) => {
       e.preventDefault();
+
+      const phoneDigits = phoneField.value.replace(/\D/g, '');
+      if (phoneDigits.length !== 10) {
+        formStatus.className = 'error';
+        formStatus.textContent = 'Please enter a valid 10-digit phone number.';
+        phoneField.focus();
+        return;
+      }
+      const emailField = document.getElementById('f-email');
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailField.value.trim())) {
+        formStatus.className = 'error';
+        formStatus.textContent = 'Please enter a valid email address.';
+        emailField.focus();
+        return;
+      }
+
       submitBtn.disabled = true;
       submitBtn.textContent = 'Sending...';
       formStatus.className = '';
@@ -2973,8 +3000,9 @@
           document.getElementById('upload-preview').style.display = 'none';
           document.getElementById('upload-trigger').style.display = 'block';
         } else if (res.status === 400) {
+          const body = await res.json().catch(() => ({}));
           formStatus.className = 'error';
-          formStatus.textContent = 'Please refresh the page and try again.';
+          formStatus.textContent = body.error || 'Please refresh the page and try again.';
         } else {
           throw new Error('Server error');
         }
