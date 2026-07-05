@@ -1543,6 +1543,26 @@ app.post('/api/send-login-code', requireInternalKey, async (req, res) => {
   }
 });
 
+// Upsert any designer-captured email into the Brevo CRM (exit popup, saved
+// cart, login, order). Fire-and-forget from the designer's jt_crm_contact().
+app.post('/api/crm-contact', requireInternalKey, async (req, res) => {
+  try {
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const source = String(req.body.source || 'designer').slice(0, 40);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'bad input' });
+    await brevo.post('/contacts', {
+      email,
+      attributes:    { SOURCE: source },
+      listIds:       process.env.BREVO_LIST_ID ? [parseInt(process.env.BREVO_LIST_ID)] : [],
+      updateEnabled: true,
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('crm-contact error:', err.response?.data?.message || err.message);
+    res.status(500).json({ error: 'sync failed' });
+  }
+});
+
 // Abandoned-cart recovery email (triggered by the designer's hourly sweep)
 app.post('/api/abandoned-cart-email', requireInternalKey, async (req, res) => {
   try {
@@ -1563,6 +1583,7 @@ app.post('/api/abandoned-cart-email', requireInternalKey, async (req, res) => {
           <p style="text-align:center;margin:26px 0;">
             <a href="${escEmail(url)}" style="background:#1848B8;color:#fff;font-weight:800;text-decoration:none;padding:14px 30px;border-radius:100px;display:inline-block;">Pick Up Where I Left Off →</a>
           </p>
+          <p style="text-align:center;color:#374151;">Sweeten the deal: use code <strong style="color:#F0275A;">${process.env.JT_PROMO_CODE || 'SAVE10'}</strong> at checkout for ${parseInt(process.env.JT_PROMO_PCT, 10) || 10}% off.</p>
           <p style="color:#374151;">Questions or want a hand finishing it? Just reply, or call/text <a href="tel:+17738491854">(773) 849-1854</a>.</p>
           <p style="color:#999;font-size:12px;margin-top:24px;">June's Tees &amp; Things · Chicago, IL</p>
         </div>`,

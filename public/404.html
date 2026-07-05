@@ -60,6 +60,13 @@
     .logo-text{color:#0B1F4B!important;}
     .logo-text span{color:#6B7280!important;}
     .header-actions .icon-link svg{fill:#0B1F4B;}
+    .hcontact{display:flex;align-items:center;gap:.55rem;text-decoration:none;white-space:nowrap;}
+    .hcontact svg{width:22px;height:22px;fill:#F0275A;flex:0 0 auto;}
+    .hcontact:hover svg{fill:#C41E47;}
+    .hcontact .hl{line-height:1.15;}
+    .hcontact .hl b{display:block;font-size:.8rem;font-weight:800;color:#0B1F4B;}
+    .hcontact .hl span{display:block;font-size:.72rem;color:#F0275A;font-weight:700;}
+    @media (max-width:1200px){.hcontact .hl{display:none;}}
     .hamburger span{background:#0B1F4B!important;}
     .drawer-nav a{color:#0B1F4B!important;}
     .drawer-header .logo-text{color:#0B1F4B!important;}
@@ -126,6 +133,18 @@
     <a href="/services/banners-signs.html">Banners & Signs</a>
     <a href="/services/event-decor.html">Event Decor</a>
   </div>
+<script>
+/* On desktop, "Talk/Text" opens the live chat; phones keep tel:/sms: */
+document.addEventListener('click', function(e){
+  var a = e.target.closest && e.target.closest('a.hcontact');
+  if (!a) return;
+  var mobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+  if (!mobile && window.Tawk_API && typeof Tawk_API.maximize === 'function') {
+    e.preventDefault();
+    Tawk_API.maximize();
+  }
+});
+</script>
 <!--Start of Tawk.to Script-->
 <script type="text/javascript">
 var Tawk_API=Tawk_API||{}, Tawk_LoadStart=new Date();
