@@ -149,6 +149,27 @@ function escEmail(str) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#x27;');
 }
 
+// Shared "design it online" promo appended to customer-facing emails.
+// Images live in public/assets/images/email/ and are served from the live site,
+// so they only render once the site is deployed.
+function designerPromoBlock() {
+  const img = (file, alt) =>
+    `<td style="padding:0 4px;"><a href="https://design.jtees.net/"><img src="https://www.jtees.net/assets/images/email/${file}" alt="${alt}" width="170" style="width:100%;max-width:170px;border-radius:8px;display:block;" /></a></td>`;
+  return `
+    <div style="margin-top:28px;padding-top:22px;border-top:1px solid #E5E7EB;">
+      <h3 style="color:#0B1F4B;margin:0 0 6px;">Try our new online Design Studio 🎨</h3>
+      <p style="color:#374151;margin:0 0 14px;">Put your own design on tees, hoodies and more — create it online and see it instantly.</p>
+      <table role="presentation" style="width:100%;border-collapse:collapse;"><tr>
+        ${img('designer-tee.jpg', 'Custom printed t-shirt')}
+        ${img('designer-hoodie.jpg', 'Custom hoodie')}
+        ${img('designer-print.jpg', 'Full-color custom print')}
+      </tr></table>
+      <p style="text-align:center;margin:18px 0 6px;">
+        <a href="https://design.jtees.net/" style="background:#1848B8;color:#fff;font-weight:800;text-decoration:none;padding:13px 28px;border-radius:100px;display:inline-block;">Start Designing &rarr;</a>
+      </p>
+    </div>`;
+}
+
 async function sendNotificationEmail(s) {
   const photoRow = s.photo_url
     ? `<tr><td style="padding:8px;font-weight:bold;vertical-align:top;">Photo</td><td style="padding:8px;"><a href="${escEmail(s.photo_url)}">View Photo</a><br/><img src="${escEmail(s.photo_url)}" style="max-width:300px;margin-top:8px;border-radius:6px;" /></td></tr>`
@@ -189,6 +210,7 @@ async function sendCustomerConfirmationEmail(s) {
         <p><strong>What you submitted:</strong></p>
         <p style="background:#f9f9f9;padding:1rem;border-radius:8px;">${escEmail(s.description) || 'No description provided.'}</p>
         <p>Questions? Call or text us at <a href="tel:+17738491854">(773) 849-1854</a></p>
+        ${designerPromoBlock()}
         <p style="color:#999;font-size:12px;margin-top:24px;">June's Tees & Things · 3047 N Lincoln Ave #435, Chicago, IL 60657</p>
       </div>
     `,
@@ -209,6 +231,7 @@ async function sendPaymentReceivedEmail(s, amount) {
         <p><strong>Estimated delivery:</strong> 2–3 weeks from today.</p>
         <p>We'll reach out when your order is ready for pickup.</p>
         <p>Questions? Call or text us at <a href="tel:+17738491854">(773) 849-1854</a></p>
+        ${designerPromoBlock()}
         <p style="color:#999;font-size:12px;margin-top:24px;">June's Tees & Things · 3047 N Lincoln Ave #435, Chicago, IL 60657</p>
       </div>
     `,
@@ -1408,6 +1431,7 @@ async function sendGradOrderConfirmationEmail(order) {
       ${order.apparel?.design_notes ? `<h3 style="color:#0B1F4B;">Your Design Notes</h3><p style="background:#f9f9f9;padding:12px;border-radius:6px;">${escHtml(order.apparel.design_notes)}</p>` : ''}
       ${order.notes ? `<p><strong>Special Instructions:</strong> ${escHtml(order.notes)}</p>` : ''}
       <p style="margin-top:24px;">Questions? Reply to this email or call/text us at <a href="tel:+17738491854">(773) 849-1854</a></p>
+      ${designerPromoBlock()}
       <p style="color:#999;font-size:12px;">June's Tees &amp; Things · 3047 N Lincoln Ave #435, Chicago, IL 60657</p>
     </div>`,
   });
@@ -1497,6 +1521,7 @@ app.post('/api/embroidery-quote', orderRateLimit, async (req, res) => {
             <p>We received your embroidery request (${escEmail(size)}${qty ? ', qty ' + escEmail(qty) : ''}) and will confirm pricing and timing within 1 business day.</p>
             ${hasFile ? '' : '<p>Since you don\'t have a stitch file yet, we\'ll digitize your artwork — the one-time digitizing fee will be included in your quote.</p>'}
             <p>Questions? Call or text <a href="tel:+17738491854">(773) 849-1854</a>.</p>
+            ${designerPromoBlock()}
             <p style="color:#999;font-size:12px;margin-top:24px;">June's Tees &amp; Things · Chicago, IL</p>
           </div>`,
       }).catch(() => {});
@@ -1563,28 +1588,76 @@ app.post('/api/crm-contact', requireInternalKey, async (req, res) => {
   }
 });
 
-// Abandoned-cart recovery email (triggered by the designer's hourly sweep)
+// Forward a designer event (cart_updated / order_completed) into Brevo so
+// Brevo Automations can trigger workflows off it. Fired by jt-auth.php.
+app.post('/api/brevo-event', requireInternalKey, async (req, res) => {
+  try {
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const eventName = String(req.body.event || '');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !/^[a-z_]{3,40}$/.test(eventName)) {
+      return res.status(400).json({ error: 'bad input' });
+    }
+    const props = {};
+    if (req.body.item_count !== undefined) props.item_count = parseInt(req.body.item_count, 10) || 0;
+    if (req.body.total !== undefined) props.total = Number(req.body.total) || 0;
+    if (req.body.restore_url !== undefined) {
+      const url = String(req.body.restore_url);
+      if (!url.startsWith('https://design.jtees.net/')) return res.status(400).json({ error: 'bad input' });
+      props.restore_url = url;
+    }
+    await brevo.post('/events', {
+      event_name: eventName,
+      identifiers: { email_id: email },
+      event_properties: props,
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('brevo-event error:', err.response?.data?.message || err.message);
+    res.status(500).json({ error: 'event failed' });
+  }
+});
+
+// Cart-recovery sequence email (stage 1-5: immediate/4h/24h/3d/7d), triggered
+// by the designer at capture time and by its hourly sweep. Empty carts
+// (exit-popup leads with no items) get the welcome/discount variant.
 app.post('/api/abandoned-cart-email', requireInternalKey, async (req, res) => {
   try {
     const email = String(req.body.email || '').trim();
     const count = parseInt(req.body.item_count, 10) || 0;
     const total = Number(req.body.total || 0);
     const url = String(req.body.restore_url || '');
+    const stage = Math.min(5, Math.max(1, parseInt(req.body.stage, 10) || 2));
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !url.startsWith('https://design.jtees.net/')) {
       return res.status(400).json({ error: 'bad input' });
     }
+    const promoCode = process.env.JT_PROMO_CODE || 'SAVE10';
+    const promoPct = parseInt(process.env.JT_PROMO_PCT, 10) || 10;
+    const cartLine = `Your cart at June's Tees &amp; Things has <strong>${count} item${count === 1 ? '' : 's'}</strong>${total ? ` (about $${total.toFixed(2)})` : ''} — including your custom design work. It's saved and ready whenever you are.`;
+    const copy = count > 0 ? {
+      1: { subject: `Your cart is saved — pick up anytime ✅`, heading: `We saved your cart!`, body: `${cartLine} This link works on any device, whenever you're ready.`, cta: `Pick Up Where I Left Off →` },
+      2: { subject: `Your custom design is waiting for you 🎨`, heading: `You left something great behind!`, body: cartLine, cta: `Pick Up Where I Left Off →` },
+      3: { subject: `Take ${promoPct}% off and finish your order 🎉`, heading: `Here's a little something to help`, body: `${cartLine} Use code <strong style="color:#F0275A;">${promoCode}</strong> at checkout for ${promoPct}% off.`, cta: `Finish My Order →` },
+      4: { subject: `Still thinking it over? Your design is safe`, heading: `No rush — it's all saved`, body: `${cartLine} Want a hand with sizing, colors, or bulk pricing? Just reply to this email or text us.`, cta: `See My Saved Cart →` },
+      5: { subject: `Last call — your saved cart expires soon ⏳`, heading: `Don't lose your design`, body: `${cartLine} Saved carts are cleared after a while, so grab it before it's gone — code <strong style="color:#F0275A;">${promoCode}</strong> still gets you ${promoPct}% off.`, cta: `Rescue My Cart →` },
+    } : {
+      1: { subject: `Welcome to June's Tees — here's ${promoPct}% off 🎁`, heading: `Thanks for stopping by!`, body: `Ready when you are: design custom tees, hoodies, hats and more in minutes. Use code <strong style="color:#F0275A;">${promoCode}</strong> for ${promoPct}% off your order.`, cta: `Start Designing →` },
+      2: { subject: `Ready to create something custom?`, heading: `Your ideas, printed`, body: `Custom apparel for teams, events, businesses and birthdays — designed by you, printed with love in Chicago. Your ${promoPct}% off code <strong style="color:#F0275A;">${promoCode}</strong> is waiting.`, cta: `Start Designing →` },
+      3: { subject: `Your ${promoPct}% off code is still waiting 🎉`, heading: `Don't forget your discount`, body: `Code <strong style="color:#F0275A;">${promoCode}</strong> takes ${promoPct}% off anything you design — tees, hoodies, hats, tote bags and more.`, cta: `Browse Products →` },
+      4: { subject: `Need ideas? Custom apparel made easy`, heading: `From idea to printed in days`, body: `Family reunions, team uniforms, memorials, birthdays, business merch — tell us what you're planning and we'll help you design it. Reply to this email or text us anytime.`, cta: `Get Started →` },
+      5: { subject: `Last call for your ${promoPct}% off ⏳`, heading: `Your discount is about to expire`, body: `This is the last reminder for code <strong style="color:#F0275A;">${promoCode}</strong> — ${promoPct}% off your custom order. We'd love to make something great with you.`, cta: `Use My Discount →` },
+    };
+    const c = copy[stage];
     await sendEmail({
       to: email,
-      subject: `Your custom design is waiting for you 🎨`,
+      subject: c.subject,
       html: `
         <div style="font-family:sans-serif;max-width:520px;margin:0 auto;">
-          <h2 style="color:#1848B8;">You left something great behind!</h2>
-          <p style="color:#374151;">Your cart at June's Tees &amp; Things still has <strong>${count} item${count === 1 ? '' : 's'}</strong>${total ? ` (about $${total.toFixed(2)})` : ''} — including your custom design work. It's saved and ready whenever you are.</p>
+          <h2 style="color:#1848B8;">${c.heading}</h2>
+          <p style="color:#374151;">${c.body}</p>
           <p style="text-align:center;margin:26px 0;">
-            <a href="${escEmail(url)}" style="background:#1848B8;color:#fff;font-weight:800;text-decoration:none;padding:14px 30px;border-radius:100px;display:inline-block;">Pick Up Where I Left Off →</a>
+            <a href="${escEmail(url)}" style="background:#1848B8;color:#fff;font-weight:800;text-decoration:none;padding:14px 30px;border-radius:100px;display:inline-block;">${c.cta}</a>
           </p>
-          <p style="text-align:center;color:#374151;">Sweeten the deal: use code <strong style="color:#F0275A;">${process.env.JT_PROMO_CODE || 'SAVE10'}</strong> at checkout for ${parseInt(process.env.JT_PROMO_PCT, 10) || 10}% off.</p>
-          <p style="color:#374151;">Questions or want a hand finishing it? Just reply, or call/text <a href="tel:+17738491854">(773) 849-1854</a>.</p>
+          <p style="color:#374151;">Questions or want a hand? Just reply, or call/text <a href="tel:+17738491854">(773) 849-1854</a>.</p>
           <p style="color:#999;font-size:12px;margin-top:24px;">June's Tees &amp; Things · Chicago, IL</p>
         </div>`,
     });
