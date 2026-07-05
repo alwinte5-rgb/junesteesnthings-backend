@@ -117,24 +117,29 @@ const FROM_ADDRESS = `June's Tees & Things <${NOTIFY_EMAIL}>`;
 async function sendEmail({ to, subject, html, replyTo }) {
   const brevoKey = process.env.BREVO_API_KEY;
   if (brevoKey) {
-    const r = await fetch('https://api.brevo.com/v3/smtp/email', {
-      method: 'POST',
-      headers: { 'api-key': brevoKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sender: { name: "June's Tees & Things", email: NOTIFY_EMAIL },
-        to: [{ email: to }],
-        replyTo: { email: replyTo || NOTIFY_EMAIL },
-        subject,
-        htmlContent: html,
-      }),
-    });
-    if (!r.ok) {
-      const t = await r.text().catch(() => '');
-      throw new Error(`Brevo ${r.status}: ${t.slice(0, 200)}`);
+    try {
+      const r = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: { 'api-key': brevoKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sender: { name: "June's Tees & Things", email: NOTIFY_EMAIL },
+          to: [{ email: to }],
+          replyTo: { email: replyTo || NOTIFY_EMAIL },
+          subject,
+          htmlContent: html,
+        }),
+      });
+      if (!r.ok) {
+        const t = await r.text().catch(() => '');
+        throw new Error(`Brevo ${r.status}: ${t.slice(0, 200)}`);
+      }
+      return;
+    } catch (err) {
+      console.error('sendEmail: Brevo failed, falling back to Resend:', err.message);
     }
-    return;
   }
-  await resend.emails.send({ from: FROM_ADDRESS, reply_to: replyTo || NOTIFY_EMAIL, to, subject, html });
+  const { error } = await resend.emails.send({ from: FROM_ADDRESS, reply_to: replyTo || NOTIFY_EMAIL, to, subject, html });
+  if (error) throw new Error(`Resend: ${error.message || JSON.stringify(error)}`);
 }
 
 function escEmail(str) {
