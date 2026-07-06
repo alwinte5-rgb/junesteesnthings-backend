@@ -1641,11 +1641,17 @@ app.post('/api/abandoned-cart-email', requireInternalKey, async (req, res) => {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !url.startsWith('https://design.jtees.net/')) {
       return res.status(400).json({ error: 'bad input' });
     }
-    const promoCode = process.env.JT_PROMO_CODE || 'SAVE10';
+    // Rotating promo code — MUST match the designer's jt_promo_config():
+    // pool from JT_PROMO_CODES (comma list), index = floor(now/1week) % len.
+    // Codes are emailed only, never displayed on-page, and rotate weekly so a
+    // shared/guessed code goes stale (the designer also accepts last week's).
+    const promoPool = (process.env.JT_PROMO_CODES || process.env.JT_PROMO_CODE || 'SAVE10')
+      .split(',').map(c => c.trim().toUpperCase()).filter(Boolean);
+    const promoCode = promoPool[Math.floor(Date.now() / 1000 / 604800) % promoPool.length];
     const promoPct = parseInt(process.env.JT_PROMO_PCT, 10) || 10;
     const cartLine = `Your cart at June's Tees &amp; Things has <strong>${count} item${count === 1 ? '' : 's'}</strong>${total ? ` (about $${total.toFixed(2)})` : ''} — including your custom design work. It's saved and ready whenever you are.`;
     const copy = count > 0 ? {
-      1: { subject: `Your cart is saved — pick up anytime ✅`, heading: `We saved your cart!`, body: `${cartLine} This link works on any device, whenever you're ready.`, cta: `Pick Up Where I Left Off →` },
+      1: { subject: `Your cart is saved + here's ${promoPct}% off ✅`, heading: `We saved your cart!`, body: `${cartLine} This link works on any device, whenever you're ready — and code <strong style="color:#F0275A;">${promoCode}</strong> takes ${promoPct}% off at checkout.`, cta: `Pick Up Where I Left Off →` },
       2: { subject: `Your custom design is waiting for you 🎨`, heading: `You left something great behind!`, body: cartLine, cta: `Pick Up Where I Left Off →` },
       3: { subject: `Take ${promoPct}% off and finish your order 🎉`, heading: `Here's a little something to help`, body: `${cartLine} Use code <strong style="color:#F0275A;">${promoCode}</strong> at checkout for ${promoPct}% off.`, cta: `Finish My Order →` },
       4: { subject: `Still thinking it over? Your design is safe`, heading: `No rush — it's all saved`, body: `${cartLine} Want a hand with sizing, colors, or bulk pricing? Just reply to this email or text us.`, cta: `See My Saved Cart →` },
