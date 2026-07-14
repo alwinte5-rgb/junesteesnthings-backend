@@ -36,7 +36,7 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ limit: '1mb', extended: true }));
 
-// Grad season pages are retired for now (files kept for next year) — temporary redirect home.
+// Grad season pages are retired — redirect old links home.
 app.get(['/grad', '/grad/', '/grad/*'], (_req, res) => res.redirect(302, '/'));
 // Design Ideas is replaced by the online Design Studio — permanent redirect.
 app.get('/design-ideas.html', (_req, res) => res.redirect(301, 'https://design.jtees.net/'));
@@ -1721,6 +1721,11 @@ if (process.env.JT_INTERNAL_KEY) {
 
 // Submit grad order
 app.post('/api/submit-order', orderRateLimit, rejectBots, async (req, res) => {
+  // Grad ordering is retired — delete this early return to reactivate the
+  // handler below, which is kept intact in case the program returns.
+  if (!process.env.GRAD_ORDERS_ENABLED) {
+    return res.status(410).json({ success: false, error: 'Grad ordering has ended. Visit https://design.jtees.net/ to place a custom order.' });
+  }
   try {
     const body = req.body;
     const errors = validateGradOrder(body);
