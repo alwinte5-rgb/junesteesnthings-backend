@@ -110,7 +110,7 @@ async function initDB() {
 
 // ─── Email ────────────────────────────────────────────────────────────────────
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
 const NOTIFY_EMAIL = process.env.NOTIFICATION_EMAIL;
 const FROM_ADDRESS = `June's Tees & Things <${NOTIFY_EMAIL}>`;
@@ -141,9 +141,27 @@ async function sendEmail({ to, subject, html, replyTo }) {
       console.error('sendEmail: Brevo failed, falling back to Resend:', err.message);
     }
   }
+  if (!resend) throw new Error('Email send failed: Brevo errored and no RESEND_API_KEY fallback is configured');
   const { error } = await resend.emails.send({ from: FROM_ADDRESS, reply_to: replyTo || NOTIFY_EMAIL, to, subject, html });
   if (error) throw new Error(`Resend: ${error.message || JSON.stringify(error)}`);
 }
+
+// Single source of truth for email validation across all endpoints
+function isValidEmail(str) {
+  return /^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{2,}$/.test(String(str || '').trim());
+}
+
+// Rotating promo code — MUST match the designer's jt_promo_config() on
+// design.jtees.net: pool from JT_PROMO_CODES (comma list), index =
+// floor(now/1week) % len. Codes are emailed only, never displayed on-page,
+// and rotate weekly (the designer also accepts last week's).
+function activePromoCode() {
+  const pool = (process.env.JT_PROMO_CODES || process.env.JT_PROMO_CODE || 'SAVE10')
+    .split(',').map(c => c.trim().toUpperCase()).filter(Boolean);
+  if (!pool.length) pool.push('SAVE10');
+  return pool[Math.floor(Date.now() / 1000 / 604800) % pool.length];
+}
+console.log(`Active recovery promo code this week: ${activePromoCode()}`);
 
 function escEmail(str) {
   if (str == null) return '';
@@ -177,11 +195,9 @@ async function sendNotificationEmail(s) {
   const photoRow = s.photo_url
     ? `<tr><td style="padding:8px;font-weight:bold;vertical-align:top;">Photo</td><td style="padding:8px;"><a href="${escEmail(s.photo_url)}">View Photo</a><br/><img src="${escEmail(s.photo_url)}" style="max-width:300px;margin-top:8px;border-radius:6px;" /></td></tr>`
     : '';
-  await resend.emails.send({
-    from:     FROM_ADDRESS,
-    reply_to: NOTIFY_EMAIL,
-    to:       NOTIFY_EMAIL,
-    subject:  `New Quote Request — ${s.name}`,
+  await sendEmail({
+    to:      NOTIFY_EMAIL,
+    subject: `New Quote Request — ${s.name}`,
     html: `
       <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
         <h2 style="color:#A52429;">New Quote Request</h2>
@@ -200,11 +216,9 @@ async function sendNotificationEmail(s) {
 
 async function sendCustomerConfirmationEmail(s) {
   const firstName = escEmail((s.name || '').split(' ')[0]);
-  await resend.emails.send({
-    from:     FROM_ADDRESS,
-    reply_to: NOTIFY_EMAIL,
-    to:       s.email,
-    subject:  `We got your request, ${(s.name || '').split(' ')[0]}!`,
+  await sendEmail({
+    to:      s.email,
+    subject: `We got your request, ${(s.name || '').split(' ')[0]}!`,
     html: `
       <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
         <h2 style="color:#A52429;">Thanks for reaching out!</h2>
@@ -221,11 +235,9 @@ async function sendCustomerConfirmationEmail(s) {
 }
 
 async function sendPaymentReceivedEmail(s, amount) {
-  await resend.emails.send({
-    from:     FROM_ADDRESS,
-    reply_to: NOTIFY_EMAIL,
-    to:       s.email,
-    subject:  `Payment confirmed — your order is in production!`,
+  await sendEmail({
+    to:      s.email,
+    subject: `Payment confirmed — your order is in production!`,
     html: `
       <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
         <h2 style="color:#A52429;">Payment Received!</h2>
@@ -663,7 +675,7 @@ app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, async (req, re
   if (phoneDigits.length !== 10 && !(phoneDigits.length === 11 && phoneDigits.startsWith('1'))) {
     return res.status(400).json({ error: 'Please enter a valid 10-digit phone number.' });
   }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email).trim())) {
+  if (!isValidEmail(email)) {
     return res.status(400).json({ error: 'Please enter a valid email address.' });
   }
   if (description && String(description).length > 2000) {
@@ -676,7 +688,7 @@ app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, async (req, re
     return res.status(400).json({ error: 'Invalid photo URL.' });
   }
 
-  const s = { name: name.trim(), phone: phone.trim(), email: email.trim(), description, photo_url };
+  const s = { name: name.trim(), phone: phone.trim(), email: email.trim().toLowerCase(), description, photo_url };
 
   // Save to DB first
   let submissionId;
@@ -755,12 +767,12 @@ app.post('/orders/create', requireAdmin, async (req, res) => {
     }
   }
 
-  const { rows } = await pool.query('SELECT * FROM submissions WHERE id=$1', [submissionId]);
-  if (!rows.length) return res.status(404).json({ error: 'Submission not found.' });
-
-  const sub = rows[0];
-
   try {
+    const { rows } = await pool.query('SELECT * FROM submissions WHERE id=$1', [submissionId]);
+    if (!rows.length) return res.status(404).json({ error: 'Submission not found.' });
+
+    const sub = rows[0];
+
     const cloverItems = items.map(i => ({
       name:     i.name,
       price:    Math.round(i.price * 100), // convert dollars to cents
@@ -1285,7 +1297,7 @@ function validateGradOrder(body) {
   const errors = [];
   if (!body.parent_name || !String(body.parent_name).trim()) errors.push('parent_name is required');
   if (String(body.parent_name || '').length > 100) errors.push('parent_name too long');
-  if (!body.email || !/^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{2,}$/.test(String(body.email).trim())) errors.push('valid email is required');
+  if (!isValidEmail(body.email)) errors.push('valid email is required');
   if (!body.event_type || !String(body.event_type).trim()) errors.push('event_type is required');
   if (String(body.student_name || '').length > 100) errors.push('student_name too long');
   if (String(body.phone || '').length > 30) errors.push('phone too long');
@@ -1331,7 +1343,7 @@ function buildOrderEmailTable(order) {
 }
 
 async function sendGradOrderEmail(order) {
-  if (!process.env.RESEND_API_KEY) return;
+  if (!process.env.BREVO_API_KEY && !process.env.RESEND_API_KEY) return;
 
   const sec = (title, content) =>
     `<div style="margin-bottom:28px;">
@@ -1366,11 +1378,10 @@ async function sendGradOrderEmail(order) {
       ).join(''))
     : '<p style="color:#6B7280;">No photos uploaded.</p>';
 
-  await resend.emails.send({
-    from:     FROM_ADDRESS,
-    reply_to: order.email || NOTIFY_EMAIL,
-    to:       NOTIFY_EMAIL,
-    subject:  `New Grad Order ${order.order_ref} — ${order.parent_name}`,
+  await sendEmail({
+    to:      NOTIFY_EMAIL,
+    replyTo: order.email || NOTIFY_EMAIL,
+    subject: `New Grad Order ${order.order_ref} — ${order.parent_name}`,
     html: `<div style="font-family:sans-serif;max-width:700px;margin:0 auto;color:#1C1C2E;">
       <div style="background:#0B1F4B;padding:20px 24px;border-radius:10px 10px 0 0;margin-bottom:24px;">
         <div style="color:#F4A623;font-size:.8rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;">New Grad Order</div>
@@ -1421,12 +1432,10 @@ async function sendGradOrderEmail(order) {
 }
 
 async function sendGradOrderConfirmationEmail(order) {
-  if (!process.env.RESEND_API_KEY || !order.email) return;
-  await resend.emails.send({
-    from:     FROM_ADDRESS,
-    reply_to: NOTIFY_EMAIL,
-    to:       order.email,
-    subject:  `Your Grad Order is Confirmed — ${order.order_ref}`,
+  if ((!process.env.BREVO_API_KEY && !process.env.RESEND_API_KEY) || !order.email) return;
+  await sendEmail({
+    to:      order.email,
+    subject: `Your Grad Order is Confirmed — ${order.order_ref}`,
     html: `<div style="font-family:sans-serif;max-width:680px;margin:0 auto;">
       <h2 style="color:#0B1F4B;">Thanks, ${escHtml(order.parent_name.split(' ')[0])}! 🎓</h2>
       <p>We've received your grad order and will be in touch soon to confirm your design and next steps.</p>
@@ -1492,7 +1501,7 @@ app.post('/api/embroidery-quote', orderRateLimit, async (req, res) => {
     if (!name || !size || (!email && !phone)) {
       return res.status(400).json({ error: 'Name, embroidery size, and an email or phone number are required.' });
     }
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    if (email && !isValidEmail(email)) {
       return res.status(400).json({ error: 'That email address does not look valid.' });
     }
     if (fileUrl && !fileUrl.startsWith('https://res.cloudinary.com/')) {
@@ -1558,7 +1567,7 @@ app.post('/api/send-login-code', requireInternalKey, async (req, res) => {
   try {
     const email = String(req.body.email || '').trim();
     const code = String(req.body.code || '').replace(/\D/g, '').slice(0, 6);
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || code.length !== 6) {
+    if (!isValidEmail(email) || code.length !== 6) {
       return res.status(400).json({ error: 'bad input' });
     }
     await sendEmail({
@@ -1585,7 +1594,7 @@ app.post('/api/crm-contact', requireInternalKey, async (req, res) => {
   try {
     const email = String(req.body.email || '').trim().toLowerCase();
     const source = String(req.body.source || 'designer').slice(0, 40);
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'bad input' });
+    if (!isValidEmail(email)) return res.status(400).json({ error: 'bad input' });
     await brevo.post('/contacts', {
       email,
       attributes:    { SOURCE: source },
@@ -1605,7 +1614,7 @@ app.post('/api/brevo-event', requireInternalKey, async (req, res) => {
   try {
     const email = String(req.body.email || '').trim().toLowerCase();
     const eventName = String(req.body.event || '');
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !/^[a-z_]{3,40}$/.test(eventName)) {
+    if (!isValidEmail(email) || !/^[a-z_]{3,40}$/.test(eventName)) {
       return res.status(400).json({ error: 'bad input' });
     }
     const props = {};
@@ -1631,6 +1640,10 @@ app.post('/api/brevo-event', requireInternalKey, async (req, res) => {
 // Cart-recovery sequence email (stage 1-5: immediate/4h/24h/3d/7d), triggered
 // by the designer at capture time and by its hourly sweep. Empty carts
 // (exit-popup leads with no items) get the welcome/discount variant.
+// Dedup guard: the PHP sweep is supposed to send each stage once, but overlapping
+// sweeps or retries must not double-email a customer.
+const recentCartEmails = new Map(); // "email|stage" -> timestamp
+const CART_EMAIL_DEDUP_MS = 6 * 60 * 60 * 1000;
 app.post('/api/abandoned-cart-email', requireInternalKey, async (req, res) => {
   try {
     const email = String(req.body.email || '').trim();
@@ -1638,16 +1651,18 @@ app.post('/api/abandoned-cart-email', requireInternalKey, async (req, res) => {
     const total = Number(req.body.total || 0);
     const url = String(req.body.restore_url || '');
     const stage = Math.min(5, Math.max(1, parseInt(req.body.stage, 10) || 2));
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !url.startsWith('https://design.jtees.net/')) {
+    if (!isValidEmail(email) || !url.startsWith('https://design.jtees.net/')) {
       return res.status(400).json({ error: 'bad input' });
     }
-    // Rotating promo code — MUST match the designer's jt_promo_config():
-    // pool from JT_PROMO_CODES (comma list), index = floor(now/1week) % len.
-    // Codes are emailed only, never displayed on-page, and rotate weekly so a
-    // shared/guessed code goes stale (the designer also accepts last week's).
-    const promoPool = (process.env.JT_PROMO_CODES || process.env.JT_PROMO_CODE || 'SAVE10')
-      .split(',').map(c => c.trim().toUpperCase()).filter(Boolean);
-    const promoCode = promoPool[Math.floor(Date.now() / 1000 / 604800) % promoPool.length];
+    const dedupKey = `${email.toLowerCase()}|${stage}`;
+    const lastSent = recentCartEmails.get(dedupKey);
+    if (lastSent && Date.now() - lastSent < CART_EMAIL_DEDUP_MS) {
+      return res.json({ ok: true, deduped: true });
+    }
+    if (recentCartEmails.size > 5000) {
+      for (const [k, t] of recentCartEmails) if (Date.now() - t > CART_EMAIL_DEDUP_MS) recentCartEmails.delete(k);
+    }
+    const promoCode = activePromoCode();
     const promoPct = parseInt(process.env.JT_PROMO_PCT, 10) || 10;
     const cartLine = `Your cart at June's Tees &amp; Things has <strong>${count} item${count === 1 ? '' : 's'}</strong>${total ? ` (about $${total.toFixed(2)})` : ''} — including your custom design work. It's saved and ready whenever you are.`;
     const copy = count > 0 ? {
@@ -1664,6 +1679,7 @@ app.post('/api/abandoned-cart-email', requireInternalKey, async (req, res) => {
       5: { subject: `Last call for your ${promoPct}% off ⏳`, heading: `Your discount is about to expire`, body: `This is the last reminder for code <strong style="color:#F0275A;">${promoCode}</strong> — ${promoPct}% off your custom order. We'd love to make something great with you.`, cta: `Use My Discount →` },
     };
     const c = copy[stage];
+    recentCartEmails.set(dedupKey, Date.now());
     await sendEmail({
       to: email,
       subject: c.subject,
@@ -1685,13 +1701,22 @@ app.post('/api/abandoned-cart-email', requireInternalKey, async (req, res) => {
   }
 });
 
-// Hourly abandoned-cart sweep trigger (the designer PHP does the real work)
+// Hourly abandoned-cart sweep trigger (the designer PHP does the real work).
+// Self-rescheduling with a timeout so a slow sweep can never overlap the next one.
 if (process.env.JT_INTERNAL_KEY) {
-  setInterval(() => {
-    fetch(`https://design.jtees.net/jt-cron.php?key=${encodeURIComponent(process.env.JT_INTERNAL_KEY)}`)
-      .then(r => r.text()).then(t => console.log('abandoned-cart sweep:', t.trim()))
-      .catch(e => console.error('abandoned-cart sweep failed:', e.message));
-  }, 60 * 60 * 1000);
+  const runSweep = async () => {
+    try {
+      const r = await fetch(
+        `https://design.jtees.net/jt-cron.php?key=${encodeURIComponent(process.env.JT_INTERNAL_KEY)}`,
+        { signal: AbortSignal.timeout(120000) }
+      );
+      console.log('abandoned-cart sweep:', (await r.text()).trim());
+    } catch (e) {
+      console.error('abandoned-cart sweep failed:', e.message);
+    }
+    setTimeout(runSweep, 60 * 60 * 1000);
+  };
+  setTimeout(runSweep, 60 * 60 * 1000);
 }
 
 // Submit grad order
@@ -1708,47 +1733,53 @@ app.post('/api/submit-order', orderRateLimit, rejectBots, async (req, res) => {
     } catch { photos = []; }
 
     const orderRef = generateGradRef();
+    // Clamp quantities to a sane range so junk input can't produce
+    // negative or absurd totals in emails and CRM records.
+    const gradQty = (v) => {
+      const n = parseInt(v, 10);
+      return Number.isInteger(n) && n > 0 ? Math.min(n, 10000) : 0;
+    };
     const products = {
       // Apparel
-      tee_1to4: parseInt(body.qty_tee_1to4) || 0,
-      tee_5to9: parseInt(body.qty_tee_5to9) || 0,
-      family_1to4: parseInt(body.qty_family_1to4) || 0,
-      family_5to9: parseInt(body.qty_family_5to9) || 0,
-      hoodie: parseInt(body.qty_hoodie) || 0,
-      stole: parseInt(body.qty_stole) || 0,
+      tee_1to4: gradQty(body.qty_tee_1to4),
+      tee_5to9: gradQty(body.qty_tee_5to9),
+      family_1to4: gradQty(body.qty_family_1to4),
+      family_5to9: gradQty(body.qty_family_5to9),
+      hoodie: gradQty(body.qty_hoodie),
+      stole: gradQty(body.qty_stole),
       // Signs & Banners
-      yard_sign: parseInt(body.qty_yard_sign) || 0,
-      banner_4x2: parseInt(body.qty_banner_4x2) || 0,
-      banner_6x3: parseInt(body.qty_banner_6x3) || 0,
+      yard_sign: gradQty(body.qty_yard_sign),
+      banner_4x2: gradQty(body.qty_banner_4x2),
+      banner_6x3: gradQty(body.qty_banner_6x3),
       // Cutouts & Standees
-      bighead_single: parseInt(body.qty_bighead_single) || 0,
-      bighead_5pk: parseInt(body.qty_bighead_5pk) || 0,
-      mini_standee: parseInt(body.qty_mini_standee) || 0,
-      standee: parseInt(body.qty_standee) || 0,
+      bighead_single: gradQty(body.qty_bighead_single),
+      bighead_5pk: gradQty(body.qty_bighead_5pk),
+      mini_standee: gradQty(body.qty_mini_standee),
+      standee: gradQty(body.qty_standee),
       // Arches & Backdrops
-      arch: parseInt(body.qty_arch) || 0,
-      backdrop: parseInt(body.qty_backdrop) || 0,
+      arch: gradQty(body.qty_arch),
+      backdrop: gradQty(body.qty_backdrop),
       // Party Favors
-      button_4pk: parseInt(body.qty_button_4pk) || 0,
-      button_10pk: parseInt(body.qty_button_10pk) || 0,
-      magnet: parseInt(body.qty_magnet) || 0,
-      sticker: parseInt(body.qty_sticker) || 0,
-      chipbag_6: parseInt(body.qty_chipbag_6) || 0,
-      chipbag_12: parseInt(body.qty_chipbag_12) || 0,
-      gable_box: parseInt(body.qty_gable_box) || 0,
+      button_4pk: gradQty(body.qty_button_4pk),
+      button_10pk: gradQty(body.qty_button_10pk),
+      magnet: gradQty(body.qty_magnet),
+      sticker: gradQty(body.qty_sticker),
+      chipbag_6: gradQty(body.qty_chipbag_6),
+      chipbag_12: gradQty(body.qty_chipbag_12),
+      gable_box: gradQty(body.qty_gable_box),
       // Drinkware
-      tumbler: parseInt(body.qty_tumbler) || 0,
-      cup_4pk: parseInt(body.qty_cup_4pk) || 0,
-      can_cooler: parseInt(body.qty_can_cooler) || 0,
-      koozie: parseInt(body.qty_koozie) || 0,
+      tumbler: gradQty(body.qty_tumbler),
+      cup_4pk: gradQty(body.qty_cup_4pk),
+      can_cooler: gradQty(body.qty_can_cooler),
+      koozie: gradQty(body.qty_koozie),
       // Prom Night
-      step_repeat: parseInt(body.qty_step_repeat) || 0,
-      prom_arch: parseInt(body.qty_prom_arch) || 0,
-      photo_props: parseInt(body.qty_photo_props) || 0,
-      prom_decal: parseInt(body.qty_prom_decal) || 0,
+      step_repeat: gradQty(body.qty_step_repeat),
+      prom_arch: gradQty(body.qty_prom_arch),
+      photo_props: gradQty(body.qty_photo_props),
+      prom_decal: gradQty(body.qty_prom_decal),
     };
     const apparel = {
-      shirt_qty: parseInt(body.shirt_qty) || 0, print_method: body.print_method || '',
+      shirt_qty: gradQty(body.shirt_qty), print_method: body.print_method || '',
       sizes: {
         youth_s: parseInt(body.size_ys) || 0, youth_m: parseInt(body.size_ym) || 0,
         youth_l: parseInt(body.size_yl) || 0, youth_xl: parseInt(body.size_yxl) || 0,
@@ -1860,9 +1891,14 @@ function validateOrderRef(req, res, next) {
 }
 
 app.get('/api/orders/:ref', requireGradAdmin, validateOrderRef, async (req, res) => {
-  const { rows } = await pool.query('SELECT * FROM grad_orders WHERE order_ref = $1', [req.params.ref]);
-  if (!rows.length) return res.status(404).json({ error: 'Not found' });
-  res.json(rows[0]);
+  try {
+    const { rows } = await pool.query('SELECT * FROM grad_orders WHERE order_ref = $1', [req.params.ref]);
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('Grad order fetch failed:', err.message);
+    res.status(500).json({ error: 'Failed to load order.' });
+  }
 });
 app.patch('/api/orders/:ref/status', requireGradAdmin, validateOrderRef, async (req, res) => {
   try {
@@ -1892,17 +1928,14 @@ app.patch('/api/orders/:ref/notes', requireGradAdmin, validateOrderRef, async (r
 
 // ─── Global error handler ─────────────────────────────────────────────────────
 
-// Email test
+// Email test — exercises the same Brevo-first path production emails use
 app.get('/api/test-email', requireAdmin, async (_req, res) => {
   try {
-    const { error } = await resend.emails.send({
-      from:     FROM_ADDRESS,
-      reply_to: NOTIFY_EMAIL,
-      to:       NOTIFY_EMAIL,
-      subject:  'Email Test — June\'s Tees',
-      text:     'Resend is working correctly.',
+    await sendEmail({
+      to:      NOTIFY_EMAIL,
+      subject: 'Email Test — June\'s Tees',
+      html:    '<p>Email sending is working correctly.</p>',
     });
-    if (error) return res.status(500).json({ success: false, error: error.message });
     res.json({ success: true, message: `Test email sent to ${NOTIFY_EMAIL}` });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -1925,15 +1958,27 @@ app.use((_req, res) => {
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
-const REQUIRED_ENV = ['DATABASE_URL', 'RESEND_API_KEY', 'NOTIFICATION_EMAIL'];
+const REQUIRED_ENV = ['DATABASE_URL', 'BREVO_API_KEY', 'NOTIFICATION_EMAIL'];
 const missingEnv = REQUIRED_ENV.filter(k => !process.env[k]?.trim());
 if (missingEnv.length) {
   console.error('Missing required environment variables:', missingEnv.join(', '));
   process.exit(1);
 }
+if (!process.env.RESEND_API_KEY?.trim()) {
+  console.warn('WARNING: RESEND_API_KEY is not set — no fallback if Brevo sending fails.');
+}
 if (!process.env.ADMIN_PASSWORD?.trim()) {
   console.warn('WARNING: ADMIN_PASSWORD is not set — admin routes will be inaccessible.');
 }
 
+process.on('unhandledRejection', (err) => {
+  console.error('UNHANDLED REJECTION:', err);
+});
+
 const PORT = process.env.PORT || 3000;
-initDB().then(() => app.listen(PORT, () => console.log(`Listening on port ${PORT}`)));
+initDB()
+  .then(() => app.listen(PORT, () => console.log(`Listening on port ${PORT}`)))
+  .catch(err => {
+    console.error('DB init failed, exiting:', err.message);
+    process.exit(1);
+  });
