@@ -1,29 +1,29 @@
 /**
- * Email Clipart Matcher — Smart clipart suggestions for email campaigns
- * Works with Brevo, Mailchimp, SendGrid, or any email platform
+ * Universal Email Clipart Matcher
+ * Platform-agnostic — works with any email service (Brevo, Mailchimp, SendGrid, etc.)
  *
  * Usage:
- *   const matcher = new EmailClipartMatcher('/path/to/cliparts');
- *   const suggestions = matcher.matchEmail({
- *     subject: "Summer Sale - 50% Off!",
- *     content: "Get ready for graduation season...",
- *     maxImages: 3
- *   });
+ *   import { EmailClipartMatcher } from './email-clipart-matcher.js';
+ *   const matcher = new EmailClipartMatcher('./lumise/assets/clipart-seeds/png');
+ *   const suggestions = await matcher.match({ subject, content });
  */
 
-class EmailClipartMatcher {
+import { readdirSync, statSync } from 'fs';
+import { join, basename } from 'path';
+
+export class EmailClipartMatcher {
   constructor(clipartBasePath) {
     this.basePath = clipartBasePath;
 
-    // Category keywords for smart matching
+    // Category → keywords mapping
     this.categoryKeywords = {
       'alphabets-monograms': ['letter', 'initial', 'monogram', 'alphabet', 'name', 'personalized'],
       'adult-humor': ['funny', 'sarcastic', 'humor', 'joke', 'laugh', 'wtf', 'sassy'],
       'animals': ['pet', 'dog', 'cat', 'bird', 'animal', 'wildlife', 'zoo', 'paw'],
       'backgrounds': ['texture', 'pattern', 'background', 'glitter', 'sparkle', 'design'],
-      'birthday': ['birthday', 'bday', 'party', 'celebrate', 'age', 'turning', 'sonic'],
+      'birthday': ['birthday', 'bday', 'party', 'celebrate', 'age', 'turning'],
       'black-culture': ['black', 'african american', 'culture', 'heritage', 'pride'],
-      'black-history': ['mlk', 'history', 'civil rights', 'heritage month', 'julian'],
+      'black-history': ['mlk', 'history', 'civil rights', 'heritage month'],
       'christmas': ['christmas', 'xmas', 'holiday', 'santa', 'winter', 'snow'],
       'faith-inspiration': ['faith', 'pray', 'god', 'church', 'blessed', 'cross', 'spiritual'],
       'family': ['family', 'mom', 'dad', 'cousin', 'reunion', 'gender reveal', 'aunt'],
@@ -35,197 +35,180 @@ class EmailClipartMatcher {
       'peekaboo-kids': ['kid', 'children', 'baby', 'toddler', 'child', 'bunny', 'easter'],
       'people': ['person', 'people', 'human', 'man', 'woman', 'hand'],
       'sarcastic-funny': ['sarcasm', 'sarcastic', 'funny', 'humor', 'overthink', 'mood'],
-      'shapes': ['star', 'shape', 'frame', 'border', 'icon', 'symbol', 'crown'],
+      'shapes': ['star', 'shape', 'frame', 'border', 'icon', 'symbol'],
       'sports': ['sports', 'soccer', 'basketball', 'football', 'racing', 'volleyball'],
       'vehicles': ['car', 'truck', 'vehicle', 'ship', 'cruise', 'road'],
       'wine-drinks': ['wine', 'drink', 'alcohol', 'beer', 'cocktail', 'party', 'shots']
     };
-
-    // Season/timing keywords
-    this.seasonalKeywords = {
-      spring: ['spring', 'easter', 'april', 'may'],
-      summer: ['summer', 'june', 'july', 'august', 'vacation'],
-      fall: ['fall', 'autumn', 'september', 'october', 'thanksgiving'],
-      winter: ['winter', 'december', 'january', 'february', 'christmas', 'snow'],
-      graduation: ['may', 'june', 'graduation', 'senior'],
-      halloween: ['october', 'halloween'],
-      christmas: ['november', 'december', 'christmas', 'holiday']
-    };
   }
 
   /**
-   * Match email content to relevant clipart categories
+   * Match cliparts to email content
    * @param {Object} options
    * @param {string} options.subject - Email subject line
-   * @param {string} options.content - Email HTML or plain text content
-   * @param {number} options.maxImages - Maximum number of images to suggest
+   * @param {string} options.content - Email body (HTML or plain text)
+   * @param {number} options.maxResults - Max cliparts to return
    * @param {number} options.minScore - Minimum relevance score (0-1)
-   * @returns {Array} Suggested cliparts with scores
+   * @returns {Promise<Array>} Matched cliparts with file paths
    */
-  matchEmail({ subject = '', content = '', maxImages = 3, minScore = 0.3 }) {
-    const text = `${subject} ${content}`.toLowerCase();
-    const scores = {};
+  async match({ subject = '', content = '', maxResults = 3, minScore = 0.3 }) {
+    const text = `${subject} ${content.replace(/<[^>]*>/g, '')}`.toLowerCase();
+    const scores = new Map();
 
     // Score each category
     for (const [category, keywords] of Object.entries(this.categoryKeywords)) {
       let score = 0;
-      let matchedKeywords = [];
+      const matched = new Set();
 
       for (const keyword of keywords) {
         const regex = new RegExp(`\\b${keyword}\\w*\\b`, 'gi');
         const matches = text.match(regex);
         if (matches) {
-          score += matches.length * (keyword.length > 6 ? 1.5 : 1); // Longer keywords = more specific
-          matchedKeywords.push(keyword);
+          score += matches.length * (keyword.length > 6 ? 1.5 : 1);
+          matched.add(keyword);
         }
       }
 
       if (score > 0) {
-        scores[category] = {
+        scores.set(category, {
+          category,
           score,
-          matchedKeywords,
-          category
-        };
+          normalizedScore: Math.min(1, score / 10),
+          keywords: Array.from(matched)
+        });
       }
     }
 
     // Seasonal boost
-    const month = new Date().getMonth() + 1; // 1-12
-    for (const [season, keywords] of Object.entries(this.seasonalKeywords)) {
-      for (const keyword of keywords) {
-        if (text.includes(keyword)) {
-          // Boost related categories
-          if (season === 'christmas' && scores['christmas']) scores['christmas'].score *= 2;
-          if (season === 'halloween' && scores['halloween']) scores['halloween'].score *= 2;
-          if (season === 'graduation' && scores['graduation']) scores['graduation'].score *= 2;
-        }
-      }
+    const month = new Date().getMonth() + 1;
+    if ((month === 11 || month === 12) && scores.has('christmas')) {
+      const entry = scores.get('christmas');
+      entry.score *= 2;
+      entry.normalizedScore = Math.min(1, entry.score / 10);
+    }
+    if (month === 10 && scores.has('halloween')) {
+      const entry = scores.get('halloween');
+      entry.score *= 2;
+      entry.normalizedScore = Math.min(1, entry.score / 10);
+    }
+    if ((month === 5 || month === 6) && scores.has('graduation')) {
+      const entry = scores.get('graduation');
+      entry.score *= 2;
+      entry.normalizedScore = Math.min(1, entry.score / 10);
     }
 
-    // Sort by score and filter
-    const suggestions = Object.values(scores)
-      .map(s => ({ ...s, normalizedScore: Math.min(1, s.score / 10) }))
+    // Filter, sort, and add file paths
+    const suggestions = Array.from(scores.values())
       .filter(s => s.normalizedScore >= minScore)
       .sort((a, b) => b.score - a.score)
-      .slice(0, maxImages);
+      .slice(0, maxResults);
+
+    // Add random file from each category
+    for (const suggestion of suggestions) {
+      const files = this.getCategoryFiles(suggestion.category);
+      if (files.length > 0) {
+        suggestion.file = files[Math.floor(Math.random() * files.length)];
+        suggestion.fileName = basename(suggestion.file);
+      }
+    }
 
     return suggestions;
   }
 
   /**
-   * Get random clipart from a category
-   * @param {string} category - Category name
-   * @param {number} count - Number of random cliparts to get
-   * @returns {Array} File paths
+   * Get all PNG files in a category
    */
-  getRandomFromCategory(category, count = 1) {
-    // This would need filesystem access in Node.js
-    // For now, return placeholder paths
-    return Array(count).fill(null).map((_, i) =>
-      `${this.basePath}/${category}/random-${i}.png`
-    );
+  getCategoryFiles(category) {
+    const dir = join(this.basePath, category);
+    try {
+      return readdirSync(dir)
+        .filter(f => f.endsWith('.png'))
+        .map(f => join(dir, f));
+    } catch {
+      return [];
+    }
   }
 
   /**
-   * Build email template with clipart
-   * @param {Object} options
-   * @param {string} options.subject - Email subject
-   * @param {string} options.content - Email content
-   * @param {string} options.headerCategory - Force specific category for header image
-   * @param {boolean} options.autoInsert - Auto-insert images into content
-   * @returns {Object} Template with image suggestions
+   * Get all available categories with file counts
    */
-  buildTemplate({ subject, content, headerCategory = null, autoInsert = false }) {
-    const suggestions = this.matchEmail({ subject, content, maxImages: 3 });
-
-    let template = {
-      subject,
-      suggestions,
-      headerImage: null,
-      inlineImages: [],
-      html: content
-    };
-
-    // Add header image if strong match
-    if (suggestions.length > 0) {
-      const topMatch = suggestions[0];
-      if (topMatch.normalizedScore > 0.6 || headerCategory) {
-        const cat = headerCategory || topMatch.category;
-        template.headerImage = {
-          category: cat,
-          path: this.getRandomFromCategory(cat, 1)[0],
-          alt: `${cat} clipart`,
-          matchScore: topMatch.normalizedScore
-        };
-      }
+  getCategories() {
+    try {
+      return readdirSync(this.basePath)
+        .map(cat => {
+          const path = join(this.basePath, cat);
+          if (statSync(path).isDirectory()) {
+            const files = this.getCategoryFiles(cat);
+            return { category: cat, count: files.length };
+          }
+          return null;
+        })
+        .filter(Boolean);
+    } catch {
+      return [];
     }
-
-    // Auto-insert inline images
-    if (autoInsert && suggestions.length > 1) {
-      for (let i = 1; i < suggestions.length && i < 3; i++) {
-        const match = suggestions[i];
-        template.inlineImages.push({
-          category: match.category,
-          path: this.getRandomFromCategory(match.category, 1)[0],
-          alt: `${match.category} clipart`,
-          matchScore: match.normalizedScore
-        });
-      }
-    }
-
-    return template;
   }
 
   /**
-   * Export for Brevo HTML
-   * @param {Object} template - Output from buildTemplate()
-   * @param {string} uploadedHeaderUrl - Uploaded header image URL
-   * @param {Array} uploadedInlineUrls - Uploaded inline image URLs
+   * Build email HTML with matched images
+   * @param {string} html - Base email HTML
+   * @param {Array} suggestions - Results from match()
+   * @param {Array} cdnUrls - Uploaded CDN URLs (optional)
    * @returns {string} HTML with images inserted
    */
-  toBrevoHTML(template, uploadedHeaderUrl = null, uploadedInlineUrls = []) {
-    let html = template.html;
+  buildHTML(html, suggestions, cdnUrls = []) {
+    if (!suggestions.length) return html;
 
-    // Insert header
-    if (uploadedHeaderUrl && template.headerImage) {
-      const headerHTML = `
-        <div style="text-align:center; margin-bottom:20px;">
-          <img src="${uploadedHeaderUrl}" alt="${template.headerImage.alt}"
-               style="max-width:600px; height:auto; display:block; margin:0 auto;">
-        </div>
-      `;
-      html = headerHTML + html;
+    let result = html;
+
+    // Add header image if strong match
+    if (suggestions[0].normalizedScore > 0.6) {
+      const url = cdnUrls[0] || suggestions[0].file;
+      const header = `
+<div style="text-align:center; margin-bottom:20px;">
+  <img src="${url}" alt="${suggestions[0].category}"
+       style="max-width:600px; height:auto; display:block; margin:0 auto;">
+</div>`;
+      result = header + result;
     }
 
-    // Insert inline images
-    uploadedInlineUrls.forEach((url, i) => {
-      if (template.inlineImages[i]) {
-        const inlineHTML = `
-          <div style="text-align:center; margin:15px 0;">
-            <img src="${url}" alt="${template.inlineImages[i].alt}"
-                 style="max-width:400px; height:auto; display:block; margin:0 auto;">
-          </div>
-        `;
-        // Insert after first paragraph if possible
-        const firstP = html.indexOf('</p>');
-        if (firstP > -1) {
-          html = html.slice(0, firstP + 4) + inlineHTML + html.slice(firstP + 4);
-        } else {
-          html += inlineHTML;
-        }
-      }
-    });
+    // Add inline images
+    for (let i = 1; i < Math.min(suggestions.length, 3); i++) {
+      const url = cdnUrls[i] || suggestions[i].file;
+      const inline = `
+<div style="text-align:center; margin:15px 0;">
+  <img src="${url}" alt="${suggestions[i].category}"
+       style="max-width:400px; height:auto; display:block; margin:0 auto;">
+</div>`;
 
-    return html;
+      // Insert after first </p> or append
+      const firstP = result.indexOf('</p>');
+      if (firstP > -1) {
+        result = result.slice(0, firstP + 4) + inline + result.slice(firstP + 4);
+      } else {
+        result += inline;
+      }
+    }
+
+    return result;
   }
 }
 
-// Export for Node.js
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = EmailClipartMatcher;
-}
+// Example usage
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const matcher = new EmailClipartMatcher('./lumise/assets/clipart-seeds/png');
 
-// Export for browser
-if (typeof window !== 'undefined') {
-  window.EmailClipartMatcher = EmailClipartMatcher;
+  const test = await matcher.match({
+    subject: 'Graduation Sale — Class of 2026!',
+    content: '<p>Custom graduation caps, gowns, and personalized senior gifts...</p>',
+    maxResults: 3
+  });
+
+  console.log('=== EMAIL CLIPART MATCHER TEST ===\n');
+  console.log('Matched:', test.length, 'cliparts\n');
+  test.forEach(s => {
+    console.log(`${s.category} (score: ${s.normalizedScore.toFixed(2)})`);
+    console.log(`  Keywords: ${s.keywords.join(', ')}`);
+    console.log(`  File: ${s.fileName}\n`);
+  });
 }
