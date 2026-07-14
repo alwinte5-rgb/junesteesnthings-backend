@@ -30,12 +30,29 @@
     "serviceType": "Screen Printing",
     "provider": {
       "@type": "LocalBusiness",
+      "@id": "https://www.jtees.net/#business",
       "name": "June's Tees & Things",
-      "address": { "@type": "PostalAddress", "addressLocality": "Chicago", "addressRegion": "IL" },
+      "address": {
+        "@type": "PostalAddress",
+        "streetAddress": "3047 N Lincoln Ave #435",
+        "addressLocality": "Chicago",
+        "addressRegion": "IL",
+        "postalCode": "60657",
+        "addressCountry": "US"
+      },
+      "geo": {"@type": "GeoCoordinates", "latitude": 41.9393, "longitude": -87.6726},
       "telephone": "+17738491854",
-      "url": "https://www.jtees.net"
+      "url": "https://www.jtees.net",
+      "sameAs": ["https://www.instagram.com/jtees228", "https://www.facebook.com/Jtees228", "https://www.yelp.com/biz/junes-tees-and-things-oak-lawn"]
     },
-    "areaServed": "Chicago, IL",
+    "areaServed": [
+      {"@type": "City", "name": "Chicago"},
+      {"@type": "Place", "name": "Lakeview"},
+      {"@type": "Place", "name": "Lincoln Park"},
+      {"@type": "Place", "name": "North Center"},
+      {"@type": "Place", "name": "Logan Square"},
+      {"@type": "AdministrativeArea", "name": "Cook County"}
+    ],
     "description": "Custom screen printing for t-shirts, hoodies, uniforms, and apparel in Chicago. Bulk orders, events, teams, and businesses."
   }
   </script>
