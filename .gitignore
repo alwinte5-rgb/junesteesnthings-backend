@@ -1,2 +1,18 @@
 node_modules/
 .env
+
+# OS junk
+.DS_Store
+
+# Large local asset libraries — source material, NOT part of the deployed site.
+# Kept on disk for design work (e.g. seeding the Design Studio template gallery)
+# but must never be committed (tens of GB).
+Lumise/
+Lumise Designer Assets/
+shopify_files/
+_clipart_svg/
+_SORTED/
+*.zip
+
+# Local notes / credentials scratch
+Cloudinary.rtf
