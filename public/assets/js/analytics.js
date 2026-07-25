@@ -23,8 +23,8 @@
 (function () {
   'use strict';
 
-  var GA4_ID = 'G-XXXXXXXXXX';           // <-- replace to activate GA4
-  var META_PIXEL_ID = 'XXXXXXXXXXXXXXX'; // <-- replace to activate Meta Pixel
+  var GA4_ID = 'G-6ZQ6HF23G1';           // June's Tees — one GA4 property across both domains (cross-domain funnel)
+  var META_PIXEL_ID = '348199180594218'; // June's Tees Meta Pixel (same on both domains)
 
   var gaOn = GA4_ID && GA4_ID.indexOf('XXXX') === -1;
   var fbOn = META_PIXEL_ID && META_PIXEL_ID.indexOf('XXXX') === -1;
