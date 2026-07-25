@@ -58,6 +58,16 @@
     window.fbq('track', 'PageView');
   }
 
+  // ── Microsoft Clarity (heatmaps + session recordings) ─────────────────
+  var CLARITY_ID = 'xs2ulr5z6y';
+  if (CLARITY_ID && CLARITY_ID.indexOf('XXXX') === -1) {
+    (function (c, l, a, r, i, t, y) {
+      c[a] = c[a] || function () { (c[a].q = c[a].q || []).push(arguments); };
+      t = l.createElement(r); t.async = 1; t.src = 'https://www.clarity.ms/tag/' + i;
+      y = l.getElementsByTagName(r)[0]; y.parentNode.insertBefore(t, y);
+    })(window, document, 'clarity', 'script', CLARITY_ID);
+  }
+
   // ── Unified event helper ──────────────────────────────────────────────
   // Usage anywhere:  window.jtTrack('lead_captured', { source: 'quote-form' });
   window.jtTrack = function (name, params) {
