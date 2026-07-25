@@ -66,16 +66,26 @@
     if (fbOn && window.fbq) window.fbq('trackCustom', name, params);
   };
 
-  // ── Auto-instrument Design Studio discovery ───────────────────────────
-  // Fires `designer_open` on any click of a link to design.jtees.net, on
-  // every page, with zero per-link markup — this is the metric that answers
-  // "how many visitors actually reach the Design Studio."
+  // ── Auto-instrument clicks (zero per-link markup, covers every page) ───
+  //   design.jtees.net links -> designer_open   (designer discovery)
+  //   tel: links             -> phone_click + Meta 'Contact'
+  //   sms: links             -> text_click  + Meta 'Contact'
   document.addEventListener('DOMContentLoaded', function () {
-    var links = document.querySelectorAll('a[href*="design.jtees.net"]');
-    Array.prototype.forEach.call(links, function (a) {
-      a.addEventListener('click', function () {
-        window.jtTrack('designer_open', { href: a.getAttribute('href') });
+    function bind(sel, handler) {
+      Array.prototype.forEach.call(document.querySelectorAll(sel), function (a) {
+        a.addEventListener('click', function () { handler(a); });
       });
+    }
+    bind('a[href*="design.jtees.net"]', function (a) {
+      window.jtTrack('designer_open', { href: a.getAttribute('href') });
+    });
+    bind('a[href^="tel:"]', function (a) {
+      window.jtTrack('phone_click', { number: a.getAttribute('href').replace('tel:', '') });
+      if (fbOn && window.fbq) window.fbq('track', 'Contact');
+    });
+    bind('a[href^="sms:"]', function () {
+      window.jtTrack('text_click', {});
+      if (fbOn && window.fbq) window.fbq('track', 'Contact');
     });
   });
 })();
