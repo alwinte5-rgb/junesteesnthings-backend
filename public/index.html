@@ -3018,6 +3018,11 @@
         if (res.ok) {
           formStatus.className = 'success';
           formStatus.textContent = "We got it! We'll be in touch soon.";
+          // Conversion tracking — fires only on a confirmed save. Guarded so it
+          // is a no-op until GA4/Pixel IDs are set in /assets/js/analytics.js.
+          if (window.fbq) fbq('track', 'Lead');
+          if (window.gtag) gtag('event', 'generate_lead');
+          if (window.jtTrack) jtTrack('quote_submitted');
           quoteForm.reset();
           document.getElementById('photo-url-field').value = '';
           document.getElementById('preview-img').src = '';
