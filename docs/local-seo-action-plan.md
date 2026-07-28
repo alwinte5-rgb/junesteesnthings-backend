@@ -27,7 +27,7 @@ and old phone `(708) 581-5972`. Every one of these actively drags down your Chic
 - [ ] **Instagram bio** (@jtees228) — update address/contact.
 - [ ] **Yahoo Local / Yelp-syndicated** listings — update.
 - [ ] **Buzzfile** — update or request correction.
-- [ ] **Duplicate Facebook page** `facebook.com/JTeesOakLawn` — **merge into or unpublish**; keep only `facebook.com/Jtees228`.
+- [x] **Facebook** — only one page exists (`facebook.com/Jtees228`); just confirm its About/contact shows the current NAP. (No duplicate page to merge.)
 - [ ] Search Google for `"June's Tees" 5565 OR "Oak Lawn"` and fix any other listing that appears.
 
 ---
@@ -52,10 +52,18 @@ The local "map pack" (the 3 businesses shown on Google Maps for local searches) 
 
 You have 21 reviews at 4.8 — great base. Volume + recency + responses all rank.
 
-- [ ] Text every customer a **direct Google review link** after pickup/delivery (get the short link from your GBP → "Ask for reviews").
+- [ ] Text every customer a **direct Google review link** after pickup/delivery (get the short link from your GBP → "Ask for reviews", looks like `g.page/r/xxxx/review`).
 - [ ] Aim for a few new reviews **every week**, not bursts.
 - [ ] **Respond to every review** (positive and negative) — Google rewards engagement, and it builds trust.
 - [ ] Ask happy customers to mention **what they ordered + their neighborhood** ("team hoodies for our Lakeview league") — that's local keyword gold.
+
+**Ready-to-send text (paste your Google review link in place of `[LINK]`, add their name):**
+
+> Hi [Name]! Thank you for letting June's Tees & Things make your order 💙 If you're happy with it, would you mind leaving us a quick Google review? It genuinely helps a small, Black-owned & women-owned Chicago shop like ours. Takes 30 seconds: [LINK] — and a line about what you ordered means a lot. Thank you! 🧵
+
+Shorter version:
+
+> Thanks for choosing June's Tees! 🎉 A quick Google review would mean the world to our small Chicago shop — 30 seconds here: [LINK]. Thank you! 💙
 
 ---
 
