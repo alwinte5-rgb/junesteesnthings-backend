@@ -98,9 +98,61 @@ Create/claim these with the exact NAP block above. Prioritized:
 
 ---
 
-## What's already done on the website (no action needed)
-- Blog posts now have Article schema + publish dates; service pages have Service + Breadcrumb schema + internal blog links; homepage FAQ + schema; sitemap dates fixed; share image fixed.
-- GA4 + Meta Pixel + Microsoft Clarity are live (watch Clarity recordings to see how visitors behave).
+---
 
-## Still needs YOU to unblock the last on-site item
-- **Google Search Console:** create a property for `jtees.net`, choose the **HTML tag** verification method, and send me the `<meta>` token — I'll add it and submit the sitemap so we can see exactly what people search for.
+# Ready-to-use assets
+
+## A. Review-request texts (paste your Google review link for `[LINK]`)
+
+**Warm (recommended):**
+> Hi [Name]! Thank you for letting June's Tees & Things make your order 💙 If you're happy with it, would you mind leaving us a quick Google review? It genuinely helps a small, Black-owned & women-owned Chicago shop like ours. Takes 30 seconds: [LINK] — and a line about what you ordered means a lot. Thank you! 🧵
+
+**Short:**
+> Thanks for choosing June's Tees! 🎉 A quick Google review would mean the world to our small Chicago shop — 30 seconds here: [LINK]. Thank you! 💙
+
+**Get your [LINK]:** Google Business Profile → "Ask for reviews" → copy the short link (looks like `g.page/r/xxxx/review`). Send within a few hours of pickup/delivery; personalize the name + what they ordered.
+
+## B. Citation submission checklist (use the exact NAP block above)
+
+- [ ] **Bing Places** — bingplaces.com (import from Google to autofill)
+- [ ] **Apple Business Connect** — businessconnect.apple.com (shows in Apple Maps)
+- [ ] **Nextdoor Business** — business.nextdoor.com
+- [ ] **Yelp for Business** — biz.yelp.com (fix the OLD address here first)
+- [ ] **Facebook** — confirm About/contact NAP on facebook.com/Jtees228
+- [ ] **YellowPages** — yellowpages.com
+- [ ] **Manta** — manta.com
+- [ ] **Chamber** — Lakeview Chamber of Commerce (lakeviewchamber.com) + ChiBizHub
+- [ ] **Black-owned / women-owned:** Official Black Wall Street, Support Black Owned, EatOkra-style local lists, WeBuyBlack directory, WBENC/women-owned directories, local "Black-owned Chicago business" roundups
+> Consistency rule: identical Name / Address / Phone on every one. Screenshot each after submitting.
+
+## C. Backlink outreach — copy/paste email
+
+> **Subject:** Custom shirts for [Org/Team/Event] — from a local Black-owned shop
+>
+> Hi [Name], I run June's Tees & Things, a Black-owned, women-owned custom print shop in Lakeview. I'd love to make shirts/apparel for [team/school/church/event] — and I'm happy to offer [X% off / free setup] for [org]. If it's a fit, a link to jtees.net from your site or sponsor page would mean a lot. Either way, happy to help! — [Name], (773) 849-1854, jtees.net
+
+Targets: local sports leagues, PTAs, churches, 5K/charity events, neighborhood festivals, and Block Club Chicago / local blogs (pitch the "Black-owned, women-owned Chicago print shop" story).
+
+## D. Reels / short-video ideas (post 2–3/week, geotag Chicago + local hashtags)
+
+1. Press pulling a fresh print — satisfying reveal
+2. "Designed online in 60 seconds" screen-record of the Design Studio → finished shirt
+3. Before/after: customer photo → memorial/graduation shirt
+4. Embroidery machine stitching a logo, close-up
+5. Bulk order unboxing/folding for a team or church
+6. "3 shirt ideas for a family reunion / birthday / grad party"
+7. Customer pickup reaction (with permission)
+8. "Why DTF has no minimums" quick explainer
+9. Neighborhood shout-out series: "Made for Lakeview / Lincoln Park / Logan Square…"
+10. Time-lapse of a full order start-to-finish
+> Caption each with a CTA ("Design yours at design.jtees.net") and 3–5 local hashtags: #ChicagoCustomShirts #Lakeview #ChicagoSmallBusiness #BlackOwnedChicago #WomenOwned.
+
+---
+
+## What's already done on the website (no action needed)
+- Blog: Article schema + dates on all posts, plus new **local posts** (graduation, memorial, church, sports).
+- **Local landing pages:** Custom T-Shirts Chicago hub + neighborhood pages (Lakeview, Lincoln Park, North Center, Logan Square, Ravenswood).
+- Service pages: Service + Breadcrumb schema + internal blog links; homepage FAQ + schema.
+- design.jtees.net: 9 collection pages + dynamic sitemap, all interlinked.
+- Two sitemaps submitted to Search Console; GA4 + Meta Pixel + Microsoft Clarity live on both domains.
+- Google Search Console: Domain property verified; both sitemaps submitted; key pages index-requested.
