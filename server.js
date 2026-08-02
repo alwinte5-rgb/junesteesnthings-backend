@@ -68,6 +68,16 @@ async function initDB() {
       created_at          TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  // Marketing opt-outs. Required to honour the one-click unsubscribe that
+  // Gmail/Yahoo mandate of bulk senders — an unsubscribe link that does not
+  // actually suppress mail is worse than none (it earns spam complaints).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS email_optouts (
+      email       TEXT PRIMARY KEY,
+      source      TEXT,
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS grad_orders (
       id             SERIAL PRIMARY KEY,
@@ -114,10 +124,78 @@ const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KE
 
 const NOTIFY_EMAIL = process.env.NOTIFICATION_EMAIL;
 const FROM_ADDRESS = `June's Tees & Things <${NOTIFY_EMAIL}>`;
+const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || 'https://www.jtees.net').replace(/\/+$/, '');
+const SHOP_EMAIL = process.env.JT_SHOP_EMAIL || NOTIFY_EMAIL;
 
+
+// Plain-text alternative. Mail with no text/plain part scores measurably worse
+// with spam filters, and every message here was HTML-only.
+function htmlToText(html) {
+  return String(html || '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi,
+             (_m, href, label) => `${label.replace(/<[^>]+>/g, '').trim()} (${href})`)
+    .replace(/<\/td>\s*<td[^>]*>/gi, '  ')   // keep table cells apart
+    .replace(/<\/(p|div|tr|h[1-6]|li)>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&middot;/g, '\u00b7').replace(/&mdash;/g, '\u2014').replace(/&ndash;/g, '\u2013')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&#39;|&rsquo;|&lsquo;/g, "'").replace(/&quot;|&ldquo;|&rdquo;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/\n{3,}/g, '\n\n')
+    .split('\n').map(l => l.trim()).join('\n')
+    .trim();
+}
+
+// One-click unsubscribe. Gmail and Yahoo have REQUIRED this of bulk senders
+// since Feb 2024 (RFC 8058) — marketing mail without it gets spam-foldered,
+// which is why the shop's abandoned-cart mail was landing in junk.
+// Transactional mail (order receipts) is exempt and passes marketing:false.
+function unsubHeaders(to) {
+  const token = unsubToken(to);
+  const url = `${PUBLIC_BASE_URL}/api/unsubscribe?e=${encodeURIComponent(to)}&t=${token}`;
+  return {
+    'List-Unsubscribe': `<${url}>, <mailto:${NOTIFY_EMAIL}?subject=unsubscribe>`,
+    'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+  };
+}
+
+function unsubToken(email) {
+  return crypto.createHmac('sha256', process.env.JT_INTERNAL_KEY || 'jtees')
+    .update(String(email).toLowerCase()).digest('hex').slice(0, 32);
+}
+
+function unsubFooter(to) {
+  const token = unsubToken(to);
+  const url = `${PUBLIC_BASE_URL}/api/unsubscribe?e=${encodeURIComponent(to)}&t=${token}`;
+  return `<p style="color:#9ca3af;font-size:11px;margin-top:18px;line-height:1.5;">
+    June&rsquo;s Tees &amp; Things &middot; 3047 N Lincoln Ave #435, Chicago, IL 60657<br>
+    Don't want these emails? <a href="${url}" style="color:#9ca3af;">Unsubscribe</a>.</p>`;
+}
+
+/** Has this address opted out of marketing mail? */
+async function isUnsubscribed(email) {
+  try {
+    const { rows } = await pool.query(
+      'SELECT 1 FROM email_optouts WHERE email = $1 LIMIT 1', [String(email).toLowerCase()]);
+    return rows.length > 0;
+  } catch { return false; }   // never block a send because the table is unreachable
+}
 
 // ─── Brevo email (preferred for customer messages; Resend is the fallback) ───
-async function sendEmail({ to, subject, html, replyTo }) {
+// marketing:true adds the unsubscribe headers/footer and honours opt-outs.
+// Order receipts and shipping notices are transactional and stay exempt.
+async function sendEmail({ to, subject, html, replyTo, marketing = false, text }) {
+  if (marketing && await isUnsubscribed(to)) {
+    console.log(`sendEmail: skipped ${to} (unsubscribed)`);
+    return;
+  }
+  if (marketing) html = html + unsubFooter(to);
+  const textContent = text || htmlToText(html);
+  const extraHeaders = marketing ? unsubHeaders(to) : {};
+
   const brevoKey = process.env.BREVO_API_KEY;
   if (brevoKey) {
     try {
@@ -130,6 +208,8 @@ async function sendEmail({ to, subject, html, replyTo }) {
           replyTo: { email: replyTo || NOTIFY_EMAIL },
           subject,
           htmlContent: html,
+          textContent,
+          ...(Object.keys(extraHeaders).length ? { headers: extraHeaders } : {}),
         }),
       });
       if (!r.ok) {
@@ -142,7 +222,11 @@ async function sendEmail({ to, subject, html, replyTo }) {
     }
   }
   if (!resend) throw new Error('Email send failed: Brevo errored and no RESEND_API_KEY fallback is configured');
-  const { error } = await resend.emails.send({ from: FROM_ADDRESS, reply_to: replyTo || NOTIFY_EMAIL, to, subject, html });
+  const { error } = await resend.emails.send({
+    from: FROM_ADDRESS, reply_to: replyTo || NOTIFY_EMAIL, to, subject, html,
+    text: textContent,
+    ...(Object.keys(extraHeaders).length ? { headers: extraHeaders } : {}),
+  });
   if (error) throw new Error(`Resend: ${error.message || JSON.stringify(error)}`);
 }
 
@@ -1682,6 +1766,7 @@ app.post('/api/abandoned-cart-email', requireInternalKey, async (req, res) => {
     recentCartEmails.set(dedupKey, Date.now());
     await sendEmail({
       to: email,
+      marketing: true,
       subject: c.subject,
       html: `
         <div style="font-family:sans-serif;max-width:520px;margin:0 auto;">
@@ -1697,6 +1782,180 @@ app.post('/api/abandoned-cart-email', requireInternalKey, async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('abandoned-cart-email error:', err.message);
+    res.status(500).json({ error: 'send failed' });
+  }
+});
+
+/* ── One-click unsubscribe (RFC 8058) ──────────────────────────────────────
+   Gmail/Yahoo require BOTH a GET landing page (for the link in the footer)
+   and a POST that unsubscribes without any further interaction (for the
+   header button). The token is an HMAC of the address, so an unsubscribe
+   link cannot be used to opt out somebody else. */
+async function doUnsubscribe(email, source) {
+  await pool.query(
+    `INSERT INTO email_optouts (email, source) VALUES ($1, $2)
+     ON CONFLICT (email) DO NOTHING`,
+    [String(email).toLowerCase(), source || 'one-click']);
+}
+
+app.post('/api/unsubscribe', async (req, res) => {
+  const email = String(req.query.e || req.body.e || '').trim().toLowerCase();
+  const token = String(req.query.t || req.body.t || '');
+  if (!isValidEmail(email) || token !== unsubToken(email)) {
+    return res.status(400).json({ error: 'bad token' });
+  }
+  try {
+    await doUnsubscribe(email, 'one-click-post');
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('unsubscribe error:', err.message);
+    res.status(500).json({ error: 'failed' });
+  }
+});
+
+app.get('/api/unsubscribe', async (req, res) => {
+  const email = String(req.query.e || '').trim().toLowerCase();
+  const token = String(req.query.t || '');
+  const page = (title, body) => `<!doctype html><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>${title}</title>
+    <div style="font-family:system-ui,sans-serif;max-width:480px;margin:12vh auto;padding:0 20px;text-align:center;">
+      <h1 style="color:#1848B8;font-size:22px;">${title}</h1>
+      <p style="color:#374151;line-height:1.6;">${body}</p>
+      <p style="margin-top:26px;"><a href="https://www.jtees.net" style="color:#1848B8;">Back to jtees.net</a></p>
+      <p style="color:#9ca3af;font-size:12px;margin-top:30px;">June&rsquo;s Tees &amp; Things &middot; Chicago, IL</p>
+    </div>`;
+  if (!isValidEmail(email) || token !== unsubToken(email)) {
+    return res.status(400).send(page('That link is not valid',
+      'Please use the unsubscribe link from a recent email, or reply to any of our emails and we will remove you.'));
+  }
+  try {
+    await doUnsubscribe(email, 'one-click-get');
+    res.send(page('You are unsubscribed',
+      `We won't send <strong>${escEmail(email)}</strong> any more promotional email. Order receipts for purchases you make will still come through.`));
+  } catch (err) {
+    console.error('unsubscribe error:', err.message);
+    res.status(500).send(page('Something went wrong', 'Please reply to any of our emails and we will remove you by hand.'));
+  }
+});
+
+/* ── Order emails (transactional — no unsubscribe suppression) ──────────────
+   Called by the Lumise designer's save_order() / update_order_status() over
+   the shared internal key. Before these existed the shop emailed people who
+   ABANDONED a cart but said nothing to people who actually paid. */
+
+const money = (n) => `$${Number(n || 0).toFixed(2)}`;
+
+function orderItemsTable(items) {
+  if (!Array.isArray(items) || !items.length) return '';
+  const rows = items.map(i => `
+    <tr>
+      <td style="padding:9px 6px;border-bottom:1px solid #eee;">${escEmail(i.name || 'Custom item')}</td>
+      <td style="padding:9px 6px;border-bottom:1px solid #eee;text-align:right;white-space:nowrap;">${money(i.total)}</td>
+    </tr>`).join('');
+  return `<table style="width:100%;border-collapse:collapse;margin:14px 0;font-size:14px;">${rows}</table>`;
+}
+
+function orderShell({ heading, intro, orderId, items, total, shipping, tax, address, footer }) {
+  const lines = [];
+  if (Number(shipping) > 0) lines.push(`<tr><td style="padding:3px 6px;text-align:right;color:#6b7280;">Shipping</td><td style="padding:3px 6px;text-align:right;white-space:nowrap;">${money(shipping)}</td></tr>`);
+  if (Number(tax) > 0) lines.push(`<tr><td style="padding:3px 6px;text-align:right;color:#6b7280;">Sales tax</td><td style="padding:3px 6px;text-align:right;white-space:nowrap;">${money(tax)}</td></tr>`);
+  return `
+  <div style="font-family:system-ui,-apple-system,'Segoe UI',sans-serif;max-width:560px;margin:0 auto;padding:8px;">
+    <h2 style="color:#1848B8;margin:0 0 4px;">${heading}</h2>
+    <p style="color:#6b7280;margin:0 0 18px;font-size:14px;">Order #${escEmail(String(orderId))}</p>
+    <p style="color:#374151;line-height:1.6;">${intro}</p>
+    ${orderItemsTable(items)}
+    <table style="width:100%;border-collapse:collapse;font-size:14px;">
+      ${lines.join('')}
+      <tr><td style="padding:8px 6px;text-align:right;font-weight:700;border-top:2px solid #111;">Total</td>
+          <td style="padding:8px 6px;text-align:right;font-weight:700;border-top:2px solid #111;white-space:nowrap;">${money(total)}</td></tr>
+    </table>
+    ${address ? `<p style="color:#6b7280;font-size:13px;margin-top:16px;"><strong style="color:#374151;">Ship to</strong><br>${escEmail(address)}</p>` : ''}
+    ${footer}
+    <p style="color:#9ca3af;font-size:12px;margin-top:26px;border-top:1px solid #eee;padding-top:12px;">
+      June&rsquo;s Tees &amp; Things &middot; 3047 N Lincoln Ave #435, Chicago, IL 60657<br>
+      Questions? Reply to this email or text (773) 849-1854.</p>
+  </div>`;
+}
+
+// Customer receipt
+app.post('/api/order-confirmation', requireInternalKey, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const email = String(b.email || '').trim();
+    if (!isValidEmail(email)) return res.status(400).json({ error: 'bad email' });
+    const name = String(b.name || '').trim();
+    await sendEmail({
+      to: email,
+      subject: `Thanks${name ? ', ' + name.split(' ')[0] : ''}! Order #${b.order_id} is in 🎉`,
+      html: orderShell({
+        heading: 'Thank you for your order!',
+        intro: `We&rsquo;ve got it and we&rsquo;re on it. You&rsquo;ll hear from us again as soon as it ships &mdash; most orders print and go out within 7&ndash;10 business days. Need it sooner? Just reply, rush is often possible.`,
+        orderId: b.order_id, items: b.items, total: b.total,
+        shipping: b.shipping, tax: b.tax, address: b.address,
+        footer: `<p style="color:#374151;line-height:1.6;">We print every order ourselves right here in Chicago &mdash; thanks for supporting a small shop.</p>`,
+      }),
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('order-confirmation error:', err.message);
+    res.status(500).json({ error: 'send failed' });
+  }
+});
+
+// Shop's own new-order alert
+app.post('/api/order-notification', requireInternalKey, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const to = String(b.to || SHOP_EMAIL || '').trim();
+    if (!isValidEmail(to)) return res.status(400).json({ error: 'bad recipient' });
+    await sendEmail({
+      to,
+      replyTo: isValidEmail(String(b.email || '')) ? String(b.email) : undefined,
+      subject: `🧾 New order #${b.order_id} — ${money(b.total)}`,
+      html: orderShell({
+        heading: 'New order received',
+        intro: `<strong>${escEmail(b.name || 'A customer')}</strong>${b.email ? ` (${escEmail(b.email)})` : ''} just checked out${b.payment ? ` via ${escEmail(b.payment)}` : ''}.`,
+        orderId: b.order_id, items: b.items, total: b.total,
+        shipping: b.shipping, tax: b.tax, address: b.address,
+        footer: `<p style="margin:18px 0;"><a href="https://design.jtees.net/admin.php?lumise-page=order&order_id=${encodeURIComponent(b.order_id)}" style="background:#1848B8;color:#fff;font-weight:700;text-decoration:none;padding:12px 26px;border-radius:100px;display:inline-block;">Open in admin →</a></p>`,
+      }),
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('order-notification error:', err.message);
+    res.status(500).json({ error: 'send failed' });
+  }
+});
+
+// "Your order shipped"
+app.post('/api/order-shipped', requireInternalKey, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const email = String(b.email || '').trim();
+    if (!isValidEmail(email)) return res.status(400).json({ error: 'bad email' });
+    const name = String(b.name || '').trim();
+    const tracking = String(b.tracking || '').trim();
+    await sendEmail({
+      to: email,
+      subject: `Your order #${b.order_id} is on the way 📦`,
+      html: orderShell({
+        heading: 'It&rsquo;s on the way!',
+        intro: `${name ? escEmail(name.split(' ')[0]) + ', y' : 'Y'}our order just left our shop.`
+          + (tracking
+              ? ` Tracking number: <strong>${escEmail(tracking)}</strong>.`
+              : ` We&rsquo;ll follow up with tracking as soon as it&rsquo;s available.`),
+        orderId: b.order_id, items: b.items, total: b.total,
+        shipping: b.shipping, tax: b.tax, address: b.address,
+        footer: tracking
+          ? `<p style="margin:18px 0;"><a href="https://www.google.com/search?q=${encodeURIComponent(tracking)}" style="background:#1848B8;color:#fff;font-weight:700;text-decoration:none;padding:12px 26px;border-radius:100px;display:inline-block;">Track my package →</a></p>`
+          : '',
+      }),
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('order-shipped error:', err.message);
     res.status(500).json({ error: 'send failed' });
   }
 });
