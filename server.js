@@ -3242,6 +3242,24 @@ app.get('/quotes', requireAdmin, async (req, res) => {
          state. */
       const paid = Number(q.paid_amount || 0) > 0;
       const st = paid ? 'paid' : (expired ? 'expired' : q.status);
+
+      /* Nudges are email-only, so a phone-only quote can never be chased
+         automatically — and a quote already chased without reply needs a person
+         too. Surface both, with the message ready to copy. */
+      const ageDays = (Date.now() - new Date(q.created_at)) / 86400000;
+      const noEmail = !q.email;
+      const needsText = !paid && !expired && q.phone && (
+        (noEmail && ageDays >= 2 && !q.accepted_at) ||
+        (q.followed_up_at && !q.accepted_at) ||
+        (q.accepted_at && q.deposit_nudged_at)
+      );
+      const textReason = !needsText ? '' :
+        (q.accepted_at ? 'accepted but deposit unpaid'
+         : noEmail ? 'no email on file — we cannot chase this one'
+         : 'emailed once, no reply');
+      const textMsg = needsText ? (q.accepted_at
+        ? quoteMessages(q).accepted.replace(/^Got it[^—]*—\s*/, '')
+        : quoteMessages(q).followup) : '';
       const [bg, fg] = (colour[st] || colour.sent).split('|');
       return `<div class="card">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
@@ -3257,13 +3275,37 @@ app.get('/quotes', requireAdmin, async (req, res) => {
         ${paid && Number(q.total) > Number(q.paid_amount)
           ? `<div class="muted" style="margin-top:6px;color:#b45309">balance due ${money(round2(Number(q.total) - Number(q.paid_amount)))}</div>`
           : ''}
+        ${needsText ? `
+          <div style="margin-top:10px;background:#fff8e6;border:1px solid #f3dfa8;border-radius:10px;padding:10px 12px">
+            <div style="font-weight:700;color:#8a5a00;font-size:13px">📱 Needs a text</div>
+            <div class="muted" style="font-size:12.5px;margin-top:2px">${escEmail(textReason)}</div>
+            <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+              <a class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
+                 href="sms:${escEmail(String(q.phone).replace(/[^0-9+]/g, ''))}${/iPhone|iPad|Mac/.test(req.get('user-agent') || '') ? '&' : '?'}body=${encodeURIComponent(textMsg)}">Text ${escEmail(String(q.name || '').split(' ')[0] || 'them')}</a>
+              <button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
+                 onclick="cpq(this)" data-msg="${escEmail(textMsg)}">Copy message</button>
+            </div>
+          </div>` : ''}
         <div style="margin-top:10px"><a class="muted" href="/q/${q.code}">/q/${q.code}</a>
         ${q.phone ? ` &middot; <a class="muted" href="tel:${escEmail(q.phone)}">${escEmail(q.phone)}</a>` : ''}</div>
       </div>`;
     }).join('');
-    res.send(quotePage('Quotes', `<h1>Quotes</h1><div class="sub">${rows.length} total</div>
+    const needCount = (body.match(/Needs a text/g) || []).length;
+    res.send(quotePage('Quotes', `<h1>Quotes</h1>
+      <div class="sub">${rows.length} total${needCount ? ` &middot; <b style="color:#8a5a00">${needCount} need a text</b>` : ''}</div>
       <p style="margin-bottom:14px"><a class="btn" href="/quote/new">New quote</a></p>
-      ${body || '<div class="card"><p class="muted">No quotes yet.</p></div>'}`));
+      ${body || '<div class="card"><p class="muted">No quotes yet.</p></div>'}
+      <script>
+        function cpq(btn){
+          var t = btn.getAttribute('data-msg');
+          (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject())
+            .then(function(){ btn.textContent = 'Copied ✓'; })
+            .catch(function(){
+              var a=document.createElement('textarea');a.value=t;document.body.appendChild(a);
+              a.select();document.execCommand('copy');a.remove();btn.textContent='Copied ✓';
+            });
+        }
+      </script>`));
   } catch (err) {
     console.error('quotes list failed:', err.message);
     res.status(500).send(quotePage('Error', '<div class="card"><div class="warn">Could not load quotes.</div></div>'));
