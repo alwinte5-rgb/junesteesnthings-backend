@@ -68,6 +68,31 @@ async function initDB() {
       created_at          TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  // Quotes texted from June's phone. The row is the source of truth — Brevo is
+  // mirrored best-effort, so a CRM outage can never lose a quote.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS quotes (
+      id                SERIAL PRIMARY KEY,
+      code              TEXT UNIQUE NOT NULL,
+      name              TEXT,
+      phone             TEXT,
+      email             TEXT,
+      items             JSONB NOT NULL DEFAULT '[]',
+      subtotal          NUMERIC(10,2) NOT NULL DEFAULT 0,
+      notes             TEXT,
+      status            TEXT NOT NULL DEFAULT 'sent',
+      valid_until       DATE,
+      viewed_at         TIMESTAMPTZ,
+      accepted_at       TIMESTAMPTZ,
+      followed_up_at    TIMESTAMPTZ,
+      brevo_contact_id  TEXT,
+      brevo_deal_id     TEXT,
+      created_at        TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS quotes_phone_idx ON quotes (phone)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS quotes_email_idx ON quotes (email)`);
+
   // Marketing opt-outs. Required to honour the one-click unsubscribe that
   // Gmail/Yahoo mandate of bulk senders — an unsubscribe link that does not
   // actually suppress mail is worse than none (it earns spam complaints).
@@ -125,6 +150,11 @@ const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KE
 const NOTIFY_EMAIL = process.env.NOTIFICATION_EMAIL;
 const FROM_ADDRESS = `June's Tees & Things <${NOTIFY_EMAIL}>`;
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || 'https://www.jtees.net').replace(/\/+$/, '');
+// Every customer-facing message is signed as June. Single constant so the SMS
+// templates, quote page and order emails can never drift apart.
+const SHOP_NAME = "June's Tees & Things";
+const SHOP_SIGNER = 'June';
+const SHOP_PHONE = '(773) 849-1854';
 const SHOP_EMAIL = process.env.JT_SHOP_EMAIL || NOTIFY_EMAIL;
 
 
@@ -1783,6 +1813,597 @@ app.post('/api/abandoned-cart-email', requireInternalKey, async (req, res) => {
   } catch (err) {
     console.error('abandoned-cart-email error:', err.message);
     res.status(500).json({ error: 'send failed' });
+  }
+});
+
+/* ══ Quotes ═══════════════════════════════════════════════════════════════
+   June texts a short link instead of typing prices into a message. The system
+   writes the wording, keeps the record, syncs the contact and chases it up —
+   she still sends the text herself from her own number, which keeps it personal
+   and avoids US A2P 10DLC carrier registration entirely. */
+
+const QUOTE_CODE_RE = /^[A-Z0-9]{6}$/;
+
+function newQuoteCode() {
+  return crypto.randomBytes(3).toString('hex').toUpperCase();
+}
+
+/** "24 tees + 12 hoodies" — the {summary} in the text message. */
+function quoteSummary(items) {
+  const parts = (items || [])
+    .filter(i => i && i.description)
+    .map(i => `${i.qty > 0 ? i.qty + ' ' : ''}${i.description}`);
+  if (!parts.length) return 'your order';
+  if (parts.length <= 2) return parts.join(' + ');
+  return `${parts[0]} + ${parts.length - 1} more`;
+}
+
+function quoteLink(code) { return `${PUBLIC_BASE_URL}/q/${code}`; }
+
+function fmtDate(d) {
+  if (!d) return '';
+  return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/Chicago' });
+}
+
+/** The three message templates. Kept together so the voice stays consistent. */
+function quoteMessages(q) {
+  const first = String(q.name || '').trim().split(/\s+/)[0] || 'there';
+  const link = quoteLink(q.code);
+  const until = fmtDate(q.valid_until);
+  return {
+    initial: `Hi ${first} — ${SHOP_SIGNER} from ${SHOP_NAME}. Your quote for ${quoteSummary(q.items)} is ready:\n${link}\n` +
+             (until ? `Good through ${until}. ` : '') + `Tap Accept when you're ready, or text me any changes.`,
+    followup: `Hi ${first} — just checking in on your quote: ${link}\n` +
+              (until ? `Still good through ${until}. ` : '') + `Happy to adjust quantities or colors — just text back.`,
+    accepted: `Got it, ${first} — thank you! You're on the schedule. I'll follow up with an artwork proof and timeline. — ${SHOP_SIGNER}, ${SHOP_PHONE}`,
+  };
+}
+
+/** Mirror a quote into Brevo: contact -> deal -> note, same shape as
+ *  syncGradToBrevo(). Every call is guarded; the Postgres row already holds the
+ *  truth, so a Brevo outage must never surface as a failed quote. */
+async function syncQuoteToBrevo(q) {
+  const out = { contactId: null, dealId: null };
+  const email = String(q.email || '').trim();
+  const phone = String(q.phone || '').trim();
+  if (!email && !phone) return out;
+
+  const [first, ...rest] = String(q.name || '').trim().split(/\s+/);
+
+  try {
+    // Brevo keys contacts on email; fall back to a phone-only contact.
+    const attrs = { FIRSTNAME: first || '', LASTNAME: rest.join(' ') || '' };
+    if (phone) attrs.SMS = phone;
+    const body = {
+      attributes: attrs,
+      listIds: process.env.BREVO_LIST_ID ? [parseInt(process.env.BREVO_LIST_ID)] : [],
+      updateEnabled: true,
+    };
+    if (email) body.email = email; else body.attributes.EXT_ID = phone;
+    if (!email && phone) { body.email = undefined; body.SMS = phone; }
+    await brevo.post('/contacts', email ? body : { ...body, email: undefined, SMS: phone });
+
+    if (email) {
+      const c = await brevo.get(`/contacts/${encodeURIComponent(email)}`);
+      out.contactId = c.data && c.data.id ? String(c.data.id) : null;
+    }
+  } catch (err) {
+    console.error('quote->brevo contact failed:', err.response?.data?.message || err.message);
+  }
+
+  try {
+    const lines = (q.items || []).map(i =>
+      `  ${i.qty} x ${i.description}` +
+      (i.unit_price != null ? ` @ ${money(i.unit_price)}` : '') +
+      (i.line_total != null ? ` = ${money(i.line_total)}` : '') +
+      (i.manual ? '   [manual price]' : '')
+    ).join('\n');
+    const noteText =
+      `QUOTE ${q.code} — ${money(q.subtotal)}\n` +
+      `${lines}\n` +
+      (q.notes ? `\nNOTES:\n  ${q.notes}\n` : '') +
+      `\nLink: ${quoteLink(q.code)}` +
+      (q.valid_until ? `\nValid until: ${fmtDate(q.valid_until)}` : '');
+
+    const deal = await brevo.post('/crm/deals', {
+      name: `Quote — ${q.name || phone || email} (${q.code})`,
+      attributes: {
+        amount: parseFloat(Number(q.subtotal || 0).toFixed(2)),
+        close_date: q.valid_until ? new Date(q.valid_until).toISOString() : new Date().toISOString(),
+      },
+    });
+    out.dealId = deal.data && deal.data.id ? String(deal.data.id) : null;
+
+    if (out.dealId && out.contactId) {
+      await brevo.patch(`/crm/deals/${out.dealId}`, { linkedContactsIds: [parseInt(out.contactId)] })
+        .catch(e => console.error('quote deal link failed:', e.response?.data?.message || e.message));
+    }
+    if (out.dealId) {
+      await brevo.post('/crm/notes', {
+        text: noteText,
+        ...(out.contactId ? { contactIds: [parseInt(out.contactId)] } : {}),
+        dealIds: [out.dealId],
+      }).catch(e => console.error('quote note failed:', e.response?.data?.message || e.message));
+    }
+  } catch (err) {
+    console.error('quote->brevo deal failed:', err.response?.data?.message || err.message);
+  }
+
+  return out;
+}
+
+/** Push the lead into the Lumise Customers page (separate database, reached
+ *  over the shared internal key). Fire-and-forget by design. */
+async function syncQuoteToLumise(q) {
+  const key = process.env.JT_INTERNAL_KEY;
+  if (!key) return;
+  try {
+    const url = `https://design.jtees.net/jt-contact.php?key=${encodeURIComponent(key)}`;
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: q.name || '', email: q.email || '', phone: q.phone || '',
+        note: `Quote ${q.code} — ${money(q.subtotal)} (${quoteSummary(q.items)})`,
+        source: 'quote',
+      }),
+      signal: AbortSignal.timeout(8000),
+    });
+  } catch (err) {
+    console.error('quote->lumise failed:', err.message);
+  }
+}
+
+/* ── Quote routes ────────────────────────────────────────────────────────── */
+
+const QUOTE_CSS = `
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:16px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:#f4f6fb;color:#12203c;padding:16px}
+.wrap{max-width:640px;margin:0 auto}
+h1{font-size:21px;margin-bottom:2px;color:#0B1F4B}
+.sub{color:#6b7280;font-size:13px;margin-bottom:16px}
+.card{background:#fff;border:1px solid #e3e8f2;border-radius:14px;padding:18px;margin-bottom:14px;box-shadow:0 1px 3px rgba(12,28,60,.05)}
+label{display:block;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#6b7280;margin:12px 0 5px}
+input,select,textarea{width:100%;padding:12px;border:1px solid #cfd8e8;border-radius:9px;font-size:16px;font-family:inherit;background:#fff}
+input:focus,select:focus,textarea:focus{outline:2px solid #1848B8;outline-offset:-1px;border-color:#1848B8}
+.row{display:flex;gap:10px}.row>*{flex:1}
+button,.btn{display:inline-block;text-align:center;background:#1848B8;color:#fff;border:0;border-radius:100px;padding:14px 26px;font-size:16px;font-weight:700;cursor:pointer;text-decoration:none;font-family:inherit}
+button:active{transform:translateY(1px)}
+.btn-ghost{background:#eef1f8;color:#33415c}
+.items th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#8b95a5;padding:6px 4px;border-bottom:1px solid #e3e8f2}
+.items td{padding:9px 4px;border-bottom:1px solid #f0f3f9;vertical-align:top}
+.items{width:100%;border-collapse:collapse}
+.num{text-align:right;white-space:nowrap}
+.tot{font-size:19px;font-weight:800;color:#0B1F4B}
+.msg{background:#0B1F4B;color:#e8eefc;border-radius:12px;padding:14px;white-space:pre-wrap;font-size:14px;line-height:1.55;margin:12px 0}
+.ok{background:#e7f6ec;border:1px solid #b7e0c4;color:#166534;padding:12px 14px;border-radius:10px;margin-bottom:12px}
+.warn{background:#fdecea;border:1px solid #f5c6cb;color:#b71c1c;padding:12px 14px;border-radius:10px;margin-bottom:12px}
+.chip{display:inline-block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:3px 10px;border-radius:20px}
+.muted{color:#6b7280;font-size:13px}
+@media(max-width:560px){.row{flex-direction:column;gap:0}}
+`;
+
+function quotePage(title, body) {
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>${escEmail(title)}</title><style>${QUOTE_CSS}</style></head><body><div class="wrap">${body}</div></body></html>`;
+}
+
+/* The form June opens on her phone. */
+app.get('/quote/new', requireAdmin, async (req, res) => {
+  let catalog = { products: [], methods: [] };
+  try { catalog = await getCatalog(); } catch (e) { /* form still works manually */ }
+
+  const prodOpts = catalog.products.map(p =>
+    `<option value="${escEmail(String(p.id))}" data-price="${p.price}">${escEmail(p.name)} — ${money(p.price)}</option>`
+  ).join('');
+  const methodOpts = catalog.methods
+    .filter(m => m.use_for_quoting && Object.keys(m.positions || {}).length)
+    .map(m => `<option value="${m.id}">${escEmail(m.title)}</option>`).join('');
+
+  res.send(quotePage('New quote', `
+    <h1>New quote</h1>
+    <div class="sub">Fills in the message for you — you still send it from your phone.</div>
+    <form method="POST" action="/api/quotes">
+      <div class="card">
+        <label>Customer name</label><input name="name" placeholder="First and last" autocomplete="off">
+        <div class="row">
+          <div><label>Mobile</label><input name="phone" type="tel" inputmode="tel" placeholder="(773) 555-0100"></div>
+          <div><label>Email <span style="text-transform:none;font-weight:400">(optional)</span></label><input name="email" type="email" autocomplete="off"></div>
+        </div>
+        <div id="prior"></div>
+      </div>
+      <div class="card">
+        <label>What are they ordering?</label>
+        <div class="row">
+          <div style="flex:2"><select name="product"><option value="">— pick a product —</option>${prodOpts}</select></div>
+          <div style="flex:0 0 92px"><input name="qty" type="number" inputmode="numeric" min="1" placeholder="Qty"></div>
+        </div>
+        <label>Decoration</label>
+        <select name="method"><option value="">— none / manual —</option>${methodOpts}</select>
+        <label>Or describe it yourself</label>
+        <input name="description" placeholder="e.g. 24 navy tees, 1-colour front">
+        <div class="row">
+          <div><label>Unit price</label><input name="unit_price" type="number" step="0.01" inputmode="decimal" placeholder="auto"></div>
+          <div><label>Good for (days)</label><input name="valid_days" type="number" value="14" inputmode="numeric"></div>
+        </div>
+        <label>Notes for the customer</label><textarea name="notes" rows="2" placeholder="Optional"></textarea>
+      </div>
+      <button type="submit">Create quote &amp; get the message</button>
+    </form>
+    <p style="margin-top:14px"><a class="muted" href="/quotes">View all quotes →</a></p>
+    <script>
+      // Live per-unit price from the real catalogue, so a quote and an online
+      // order for the same thing land on the same number.
+      var CAT = ${JSON.stringify(catalog)};
+      var f = document.forms[0];
+      function tierFor(m, qty){
+        var pos = m && m.positions ? (m.positions.front || m.positions[Object.keys(m.positions)[0]]) : null;
+        if (!pos || !pos.length) return 0;
+        var price = pos[0].price;
+        for (var i=0;i<pos.length;i++) if (qty >= pos[i].min_qty) price = pos[i].price;
+        return price;
+      }
+      function recalc(){
+        var p = CAT.products.find(function(x){return String(x.id)===f.product.value;});
+        var m = CAT.methods.find(function(x){return String(x.id)===f.method.value;});
+        var qty = parseInt(f.qty.value,10)||0;
+        if(!p || !qty) return;
+        var unit = p.price + tierFor(m, qty);
+        f.unit_price.placeholder = unit.toFixed(2);
+        if(!f.description.value) f.description.value = qty+' '+p.name+(m?' — '+m.title:'');
+      }
+      ['product','method','qty'].forEach(function(n){ f[n].addEventListener('change', recalc); });
+      f.qty.addEventListener('input', recalc);
+      // Prior pricing for a returning customer
+      var t;
+      function lookup(){
+        clearTimeout(t); t = setTimeout(function(){
+          var q = (f.phone.value||f.email.value||'').trim();
+          if(q.length < 5){ document.getElementById('prior').innerHTML=''; return; }
+          fetch('/api/quotes/prior?q='+encodeURIComponent(q))
+            .then(function(r){return r.json();})
+            .then(function(d){
+              if(!d.found){ document.getElementById('prior').innerHTML=''; return; }
+              document.getElementById('prior').innerHTML =
+                '<div class="ok" style="margin-top:12px">Last quoted <b>'+d.summary+'</b> at <b>'+d.unit+'</b> on '+d.when+
+                ' &middot; lifetime quoted '+d.lifetime_quoted+', spent '+d.lifetime_spent+'</div>';
+            }).catch(function(){});
+        }, 400);
+      }
+      f.phone.addEventListener('input', lookup); f.email.addEventListener('input', lookup);
+    </script>
+  `));
+});
+
+
+/* Catalogue from the designer, cached. Falls back to the last good copy so a
+   slow designer never blocks quoting. */
+let _catCache = { at: 0, data: null };
+async function getCatalog() {
+  if (_catCache.data && Date.now() - _catCache.at < 10 * 60 * 1000) return _catCache.data;
+  const key = process.env.JT_INTERNAL_KEY;
+  if (!key) return _catCache.data || { products: [], methods: [] };
+  try {
+    const r = await fetch(`https://design.jtees.net/jt-catalog.php?key=${encodeURIComponent(key)}`,
+      { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    if (d && d.ok) { _catCache = { at: Date.now(), data: d }; return d; }
+    throw new Error('bad payload');
+  } catch (err) {
+    console.error('catalog fetch failed:', err.message);
+    return _catCache.data || { products: [], methods: [] };
+  }
+}
+
+/* Prior pricing for a returning customer — what keeps a repeat quote consistent. */
+app.get('/api/quotes/prior', requireAdmin, async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (q.length < 5) return res.json({ found: false });
+  const digits = q.replace(/\D/g, '');
+  try {
+    const { rows } = await pool.query(
+      `SELECT * FROM quotes
+        WHERE (email <> '' AND lower(email) = lower($1))
+           OR ($2 <> '' AND regexp_replace(coalesce(phone,''), '\\D', '', 'g') LIKE '%' || $2)
+        ORDER BY created_at DESC LIMIT 25`, [q, digits.slice(-10)]);
+    if (!rows.length) return res.json({ found: false });
+    const last = rows[0];
+    const item = (last.items || [])[0] || {};
+    const quoted = rows.reduce((a, r) => a + Number(r.subtotal || 0), 0);
+    const spent = rows.filter(r => r.status === 'accepted').reduce((a, r) => a + Number(r.subtotal || 0), 0);
+    res.json({
+      found: true,
+      summary: quoteSummary(last.items),
+      unit: item.unit_price != null ? money(item.unit_price) + ' ea' : money(last.subtotal),
+      when: fmtDate(last.created_at),
+      lifetime_quoted: money(quoted),
+      lifetime_spent: money(spent),
+    });
+  } catch (err) {
+    console.error('prior lookup failed:', err.message);
+    res.json({ found: false });
+  }
+});
+
+/* Create a quote, then show the ready-to-send message. */
+app.post('/api/quotes', requireAdmin, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const name = String(b.name || '').trim().slice(0, 120);
+    const phone = String(b.phone || '').trim().slice(0, 40);
+    const email = String(b.email || '').trim().toLowerCase().slice(0, 200);
+    if (!phone && !email) {
+      return res.status(400).send(quotePage('Missing contact',
+        `<div class="card"><div class="warn">A mobile number or an email is needed so the quote can reach them.</div>
+         <a class="btn btn-ghost" href="/quote/new">Back</a></div>`));
+    }
+
+    const qty = parseInt(b.qty, 10) || 0;
+    const catalog = await getCatalog();
+    const prod = catalog.products.find(p => String(p.id) === String(b.product));
+    const method = catalog.methods.find(m => String(m.id) === String(b.method));
+
+    let unit = b.unit_price !== '' && b.unit_price != null ? Number(b.unit_price) : null;
+    const manual = unit != null;
+    if (unit == null && prod) {
+      let tier = 0;
+      const pos = method && method.positions
+        ? (method.positions.front || method.positions[Object.keys(method.positions)[0]])
+        : null;
+      if (pos && pos.length) { tier = pos[0].price; for (const t of pos) if (qty >= t.min_qty) tier = t.price; }
+      unit = Number(prod.price) + Number(tier);
+    }
+    if (unit == null) unit = 0;
+
+    const description = String(b.description || '').trim()
+      || (prod ? `${qty || ''} ${prod.name}${method ? ' — ' + method.title : ''}`.trim() : 'Custom order');
+
+    const items = [{
+      description,
+      qty: qty || 1,
+      unit_price: Number(unit.toFixed(2)),
+      line_total: Number((unit * (qty || 1)).toFixed(2)),
+      manual,
+      product_id: prod ? prod.id : null,
+      method_id: method ? method.id : null,
+    }];
+    const subtotal = items.reduce((a, i) => a + i.line_total, 0);
+
+    const days = Math.max(1, parseInt(b.valid_days, 10) || 14);
+    const validUntil = new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
+
+    let code = newQuoteCode();
+    for (let i = 0; i < 5; i++) {
+      const { rows } = await pool.query('SELECT 1 FROM quotes WHERE code=$1', [code]);
+      if (!rows.length) break;
+      code = newQuoteCode();
+    }
+
+    const { rows } = await pool.query(
+      `INSERT INTO quotes (code,name,phone,email,items,subtotal,notes,status,valid_until)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'sent',$8) RETURNING *`,
+      [code, name, phone, email, JSON.stringify(items), subtotal,
+       String(b.notes || '').trim().slice(0, 2000), validUntil]);
+    const q = rows[0];
+
+    // CRM mirrors, both best-effort — the row above is already safe.
+    syncQuoteToBrevo(q).then(ids => {
+      if (ids.contactId || ids.dealId) {
+        pool.query('UPDATE quotes SET brevo_contact_id=$1, brevo_deal_id=$2 WHERE id=$3',
+          [ids.contactId, ids.dealId, q.id]).catch(() => {});
+      }
+    }).catch(() => {});
+    syncQuoteToLumise(q).catch(() => {});
+
+    const msgs = quoteMessages(q);
+    const smsHref = `sms:${phone.replace(/[^0-9+]/g, '')}${/iPhone|iPad|Mac/.test(req.get('user-agent') || '') ? '&' : '?'}body=${encodeURIComponent(msgs.initial)}`;
+
+    res.send(quotePage('Quote ready', `
+      <h1>Quote ${escEmail(code)}</h1>
+      <div class="sub">${escEmail(name || phone)} &middot; ${money(subtotal)} &middot; good through ${fmtDate(validUntil)}</div>
+      <div class="card">
+        <div class="msg" id="m">${escEmail(msgs.initial)}</div>
+        <div class="row">
+          <button type="button" onclick="cp()">Copy message</button>
+          ${phone ? `<a class="btn btn-ghost" href="${escEmail(smsHref)}">Open in Messages</a>` : ''}
+        </div>
+        <p class="muted" style="margin-top:10px">They see: <a href="${quoteLink(code)}">${quoteLink(code)}</a></p>
+      </div>
+      <div class="card">
+        <a class="btn btn-ghost" href="/q/${code}/vcard">Save to contacts</a>
+        <a class="btn btn-ghost" href="/quote/new">Another quote</a>
+        <a class="btn btn-ghost" href="/quotes">All quotes</a>
+      </div>
+      <script>
+        function cp(){
+          var t=document.getElementById('m').innerText;
+          (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject())
+            .then(function(){alert('Message copied — paste it into a text.');})
+            .catch(function(){
+              var a=document.createElement('textarea');a.value=t;document.body.appendChild(a);
+              a.select();document.execCommand('copy');a.remove();alert('Message copied.');
+            });
+        }
+      </script>
+    `));
+  } catch (err) {
+    console.error('create quote failed:', err.message);
+    res.status(500).send(quotePage('Something went wrong',
+      `<div class="card"><div class="warn">The quote could not be saved. Please try again.</div>
+       <a class="btn btn-ghost" href="/quote/new">Back</a></div>`));
+  }
+});
+
+/* What the customer opens. Public, no login. */
+app.get('/q/:code', async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  const friendly = (msg) => res.status(404).send(quotePage('Quote not found', `
+    <div class="card"><h1>We couldn't find that quote</h1>
+    <p class="muted" style="margin-top:8px">${msg}</p>
+    <p style="margin-top:14px"><a class="btn" href="tel:+17738491854">Call ${SHOP_SIGNER}</a></p></div>`));
+  if (!QUOTE_CODE_RE.test(code)) return friendly('That link looks incomplete — please check the text message.');
+
+  try {
+    const { rows } = await pool.query('SELECT * FROM quotes WHERE code=$1', [code]);
+    if (!rows.length) return friendly('It may have been removed. Text or call and we will resend it.');
+    const q = rows[0];
+
+    if (!q.viewed_at) {
+      pool.query('UPDATE quotes SET viewed_at=NOW(), status=CASE WHEN status=$2 THEN $3 ELSE status END WHERE id=$1',
+        [q.id, 'sent', 'viewed']).catch(() => {});
+    }
+
+    const expired = q.valid_until && new Date(q.valid_until) < new Date(new Date().toDateString());
+    const accepted = !!q.accepted_at;
+    const rowsHtml = (q.items || []).map(i => `
+      <tr><td>${escEmail(i.description)}</td>
+      <td class="num">${i.qty}</td>
+      <td class="num">${money(i.unit_price)}</td>
+      <td class="num">${money(i.line_total)}</td></tr>`).join('');
+
+    res.send(quotePage(`Your quote from ${SHOP_NAME}`, `
+      <div class="card">
+        <h1>${SHOP_NAME}</h1>
+        <div class="sub">Quote ${escEmail(q.code)} &middot; ${fmtDate(q.created_at)}</div>
+        ${accepted ? `<div class="ok">Accepted — thank you! ${SHOP_SIGNER} will follow up with a proof and timeline.</div>` : ''}
+        ${(!accepted && expired) ? `<div class="warn">This quote has expired, but prices usually still stand — just text and we'll refresh it.</div>` : ''}
+        <table class="items"><thead><tr>
+          <th>Item</th><th class="num">Qty</th><th class="num">Each</th><th class="num">Total</th>
+        </tr></thead><tbody>${rowsHtml}
+          <tr><td colspan="3" class="num tot">Total</td><td class="num tot">${money(q.subtotal)}</td></tr>
+        </tbody></table>
+        ${q.notes ? `<p class="muted" style="margin-top:12px">${escEmail(q.notes)}</p>` : ''}
+        ${q.valid_until ? `<p class="muted" style="margin-top:10px">Good through ${fmtDate(q.valid_until)}.</p>` : ''}
+      </div>
+      ${accepted ? '' : `
+      <div class="card">
+        <form method="POST" action="/q/${q.code}/accept">
+          <button type="submit" style="width:100%">Accept this quote</button>
+        </form>
+        <p class="muted" style="margin-top:10px;text-align:center">Nothing is charged now — ${SHOP_SIGNER} will confirm details first.</p>
+      </div>`}
+      <div class="card" style="text-align:center">
+        <p class="muted">Questions? <a href="tel:+17738491854">${SHOP_PHONE}</a></p>
+      </div>
+    `));
+  } catch (err) {
+    console.error('view quote failed:', err.message);
+    friendly('Something went wrong on our end. Please text us.');
+  }
+});
+
+/* Customer accepts. Idempotent. */
+app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/q/' + encodeURIComponent(code));
+  try {
+    const { rows } = await pool.query(
+      `UPDATE quotes SET accepted_at=NOW(), status='accepted'
+        WHERE code=$1 AND accepted_at IS NULL RETURNING *`, [code]);
+
+    if (rows.length) {                       // first acceptance only
+      const q = rows[0];
+      const msgs = quoteMessages(q);
+      const lines = (q.items || []).map(i =>
+        `<tr><td style="padding:8px 4px">${escEmail(i.description)}</td>
+             <td style="padding:8px 4px;text-align:right">${i.qty}</td>
+             <td style="padding:8px 4px;text-align:right">${money(i.line_total)}</td></tr>`).join('');
+      const table = `<table style="width:100%;border-collapse:collapse;margin:12px 0">${lines}
+        <tr><td colspan="2" style="padding:8px 4px;text-align:right;font-weight:700;border-top:2px solid #111">Total</td>
+        <td style="padding:8px 4px;text-align:right;font-weight:700;border-top:2px solid #111">${money(q.subtotal)}</td></tr></table>`;
+
+      if (q.email) {
+        sendEmail({
+          to: q.email,
+          subject: `Thanks — quote ${q.code} accepted`,
+          html: `<div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto">
+            <h2 style="color:#1848B8">Thank you!</h2>
+            <p style="color:#374151;line-height:1.6">${escEmail(msgs.accepted)}</p>${table}
+            <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_NAME} &middot; 3047 N Lincoln Ave #435, Chicago, IL 60657</p></div>`,
+        }).catch(e => console.error('accept email failed:', e.message));
+      }
+      sendEmail({
+        to: SHOP_EMAIL,
+        replyTo: q.email || undefined,
+        subject: `✅ Quote ${q.code} accepted — ${escEmail(q.name || q.phone)} ${money(q.subtotal)}`,
+        html: `<div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto">
+          <h2 style="color:#1848B8">Quote accepted</h2>
+          <p style="color:#374151"><b>${escEmail(q.name || '')}</b><br>${escEmail(q.phone || '')}<br>${escEmail(q.email || '')}</p>
+          ${table}${q.notes ? `<p style="color:#6b7280">${escEmail(q.notes)}</p>` : ''}</div>`,
+      }).catch(e => console.error('accept alert failed:', e.message));
+
+      if (q.brevo_deal_id) {
+        brevo.post('/crm/notes', {
+          text: `QUOTE ${q.code} ACCEPTED ${new Date().toISOString()} — ${money(q.subtotal)}`,
+          dealIds: [q.brevo_deal_id],
+        }).catch(() => {});
+      }
+    }
+    res.redirect('/q/' + code);
+  } catch (err) {
+    console.error('accept failed:', err.message);
+    res.redirect('/q/' + code);
+  }
+});
+
+/* One tap to add them to the iPhone address book. */
+app.get('/q/:code/vcard', async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.status(400).send('bad code');
+  try {
+    const { rows } = await pool.query('SELECT * FROM quotes WHERE code=$1', [code]);
+    if (!rows.length) return res.status(404).send('not found');
+    const q = rows[0];
+    const [first, ...rest] = String(q.name || '').trim().split(/\s+/);
+    const vcf = [
+      'BEGIN:VCARD', 'VERSION:3.0',
+      `N:${rest.join(' ')};${first || ''};;;`,
+      `FN:${q.name || q.phone || q.email}`,
+      q.phone ? `TEL;TYPE=CELL:${q.phone}` : '',
+      q.email ? `EMAIL;TYPE=INTERNET:${q.email}` : '',
+      `NOTE:${SHOP_NAME} quote ${q.code} — ${quoteSummary(q.items).replace(/[\r\n]+/g, ' ')} — ${money(q.subtotal)}`,
+      'END:VCARD',
+    ].filter(Boolean).join('\r\n');
+    res.setHeader('Content-Type', 'text/vcard; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${(q.name || q.code).replace(/[^a-z0-9]+/gi, '-')}.vcf"`);
+    res.send(vcf);
+  } catch (err) {
+    res.status(500).send('error');
+  }
+});
+
+/* The tracking list. */
+app.get('/quotes', requireAdmin, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM quotes ORDER BY created_at DESC LIMIT 200');
+    const colour = { sent: '#eef1f8|#33415c', viewed: '#fff4e0|#8a5a00', accepted: '#e7f6ec|#166534', expired: '#f3f4f6|#6b7280' };
+    const body = rows.map(q => {
+      const expired = q.status !== 'accepted' && q.valid_until && new Date(q.valid_until) < new Date(new Date().toDateString());
+      const st = expired ? 'expired' : q.status;
+      const [bg, fg] = (colour[st] || colour.sent).split('|');
+      return `<div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+          <div>
+            <b>${escEmail(q.name || q.phone || q.email || '—')}</b>
+            <div class="muted">${escEmail(quoteSummary(q.items))} &middot; ${fmtDate(q.created_at)}</div>
+          </div>
+          <div style="text-align:right;white-space:nowrap">
+            <div class="tot" style="font-size:16px">${money(q.subtotal)}</div>
+            <span class="chip" style="background:${bg};color:${fg}">${st}</span>
+          </div>
+        </div>
+        <div style="margin-top:10px"><a class="muted" href="/q/${q.code}">/q/${q.code}</a>
+        ${q.phone ? ` &middot; <a class="muted" href="tel:${escEmail(q.phone)}">${escEmail(q.phone)}</a>` : ''}</div>
+      </div>`;
+    }).join('');
+    res.send(quotePage('Quotes', `<h1>Quotes</h1><div class="sub">${rows.length} total</div>
+      <p style="margin-bottom:14px"><a class="btn" href="/quote/new">New quote</a></p>
+      ${body || '<div class="card"><p class="muted">No quotes yet.</p></div>'}`));
+  } catch (err) {
+    console.error('quotes list failed:', err.message);
+    res.status(500).send(quotePage('Error', '<div class="card"><div class="warn">Could not load quotes.</div></div>'));
   }
 });
 
