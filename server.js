@@ -2148,12 +2148,19 @@ app.get('/quote/new', requireAdmin, async (req, res) => {
     <div class="sub">Fills in the message for you — you still send it from your phone.</div>
     <form method="POST" action="/api/quotes" id="qf">
       <div class="card">
-        <label>Customer name</label><input name="name" placeholder="First and last" autocomplete="off">
+        <div class="row">
+          <div><label>First name <span style="text-transform:none;font-weight:400">(optional)</span></label>
+               <input name="first_name" autocomplete="off"></div>
+          <div><label>Last name <span style="text-transform:none;font-weight:400">(optional)</span></label>
+               <input name="last_name" autocomplete="off"></div>
+        </div>
         <div class="row">
           <div><label>Mobile <span style="text-transform:none;font-weight:400">(optional)</span></label><input name="phone" type="tel" inputmode="tel" autocomplete="off"></div>
           <div><label>Email <span style="text-transform:none;font-weight:400">(optional)</span></label><input name="email" type="email" autocomplete="off"></div>
         </div>
-        <p class="muted" style="margin-top:8px">Either one is enough — with neither, you'll get a link you can show or print.</p>
+        <p class="muted" style="margin-top:8px">All optional. Leave the name blank for an online or walk-up enquiry and
+          the customer is asked for it when they open the quote. Phone or email — either one is enough;
+          with neither you still get a link you can show or print.</p>
         <div id="prior"></div>
       </div>
 
@@ -2399,7 +2406,9 @@ app.get('/api/quotes/prior', requireAdmin, async (req, res) => {
 app.post('/api/quotes', requireAdmin, async (req, res) => {
   try {
     const b = req.body || {};
-    const name = String(b.name || '').trim().slice(0, 120);
+    const name = [String(b.first_name || '').trim(), String(b.last_name || '').trim()]
+      .filter(Boolean).join(' ').slice(0, 120)
+      || String(b.name || '').trim().slice(0, 120);
     const phone = String(b.phone || '').trim().slice(0, 40);
     const email = String(b.email || '').trim().toLowerCase().slice(0, 200);
 
@@ -2679,6 +2688,15 @@ app.get('/q/:code', async (req, res) => {
       </div>` : `
       <div class="card">
         <form method="POST" action="/q/${q.code}/accept">
+          ${!q.name ? `
+          <div class="row">
+            <div><label>First name</label><input name="first_name" required autocomplete="given-name"></div>
+            <div><label>Last name</label><input name="last_name" autocomplete="family-name"></div>
+          </div>` : ''}
+          ${!q.email ? `<label>Email <span style="text-transform:none;font-weight:400">(optional — for your receipt)</span></label>
+            <input type="email" name="email" autocomplete="email">` : ''}
+          ${!q.phone ? `<label>Mobile <span style="text-transform:none;font-weight:400">(optional)</span></label>
+            <input type="tel" name="phone" autocomplete="tel">` : ''}
           <label>When do you need it? <span style="text-transform:none;font-weight:400">(optional)</span></label>
           <input type="date" name="needed_by" value="${q.needed_by ? String(q.needed_by).slice(0,10) : ''}">
           <button type="submit" style="width:100%;margin-top:14px">Accept &amp; choose payment</button>
@@ -2823,11 +2841,24 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/q/' + encodeURIComponent(code));
   try {
-    const nb = String((req.body && req.body.needed_by) || '').trim() || null;
+    const rb = req.body || {};
+    const nb = String(rb.needed_by || '').trim() || null;
+    /* Details the customer fills in themselves when the quote went out without
+       them — common for online and walk-up enquiries. NULLIF keeps existing
+       values intact rather than overwriting them with a blank. */
+    const cname = [String(rb.first_name || '').trim(), String(rb.last_name || '').trim()]
+      .filter(Boolean).join(' ').slice(0, 120) || null;
+    const cemail = String(rb.email || '').trim().toLowerCase().slice(0, 200) || null;
+    const cphone = String(rb.phone || '').trim().slice(0, 40) || null;
+
     const { rows } = await pool.query(
       `UPDATE quotes SET accepted_at=NOW(), status='accepted',
-              needed_by = COALESCE($2::date, needed_by)
-        WHERE code=$1 AND accepted_at IS NULL RETURNING *`, [code, nb]);
+              needed_by = COALESCE($2::date, needed_by),
+              name  = COALESCE(NULLIF(name,''),  $3),
+              email = COALESCE(NULLIF(email,''), $4),
+              phone = COALESCE(NULLIF(phone,''), $5)
+        WHERE code=$1 AND accepted_at IS NULL RETURNING *`,
+      [code, nb, cname, cemail, cphone]);
 
     if (rows.length) {                       // first acceptance only
       const q = rows[0];
@@ -2875,6 +2906,14 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
           text: `QUOTE ${q.code} ACCEPTED ${new Date().toISOString()} — ${money(q.subtotal)}`,
           dealIds: [q.brevo_deal_id],
         }).catch(() => {});
+      }
+
+      /* The customer may have just given us their name, email or number for the
+         first time (common on online and walk-up enquiries), so push the record
+         again — otherwise the CRM keeps the blank version forever. */
+      if (cname || cemail || cphone) {
+        syncQuoteToBrevo(q).catch(() => {});
+        syncQuoteToLumise(q).catch(() => {});
       }
     }
     res.redirect('/q/' + code);
