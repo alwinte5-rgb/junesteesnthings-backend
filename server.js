@@ -3177,10 +3177,17 @@ app.get('/q/:code/vcard', async (req, res) => {
 app.get('/quotes', requireAdmin, async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM quotes ORDER BY created_at DESC LIMIT 200');
-    const colour = { sent: '#eef1f8|#33415c', viewed: '#fff4e0|#8a5a00', accepted: '#e7f6ec|#166534', expired: '#f3f4f6|#6b7280' };
+    const colour = {
+      sent: '#eef1f8|#33415c', viewed: '#fff4e0|#8a5a00', changes: '#fdecea|#b45309',
+      accepted: '#e7f6ec|#166534', paid: '#1848B8|#ffffff', expired: '#f3f4f6|#6b7280',
+    };
     const body = rows.map(q => {
       const expired = q.status !== 'accepted' && q.valid_until && new Date(q.valid_until) < new Date(new Date().toDateString());
-      const st = expired ? 'expired' : q.status;
+      /* "accepted" and "paid" looked identical, so there was no way to see at a
+         glance who had actually handed over money. Paid wins over every other
+         state. */
+      const paid = Number(q.paid_amount || 0) > 0;
+      const st = paid ? 'paid' : (expired ? 'expired' : q.status);
       const [bg, fg] = (colour[st] || colour.sent).split('|');
       return `<div class="card">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
@@ -3189,10 +3196,13 @@ app.get('/quotes', requireAdmin, async (req, res) => {
             <div class="muted">${escEmail(quoteSummary(q.items))} &middot; ${fmtDate(q.created_at)}</div>
           </div>
           <div style="text-align:right;white-space:nowrap">
-            <div class="tot" style="font-size:16px">${money(q.subtotal)}</div>
-            <span class="chip" style="background:${bg};color:${fg}">${st}</span>
+            <div class="tot" style="font-size:16px">${money(q.total || q.subtotal)}</div>
+            <span class="chip" style="background:${bg};color:${fg}">${paid ? 'paid ' + money(q.paid_amount) : st}</span>
           </div>
         </div>
+        ${paid && Number(q.total) > Number(q.paid_amount)
+          ? `<div class="muted" style="margin-top:6px;color:#b45309">balance due ${money(round2(Number(q.total) - Number(q.paid_amount)))}</div>`
+          : ''}
         <div style="margin-top:10px"><a class="muted" href="/q/${q.code}">/q/${q.code}</a>
         ${q.phone ? ` &middot; <a class="muted" href="tel:${escEmail(q.phone)}">${escEmail(q.phone)}</a>` : ''}</div>
       </div>`;
