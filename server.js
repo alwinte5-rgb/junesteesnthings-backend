@@ -90,6 +90,19 @@ async function initDB() {
       created_at        TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  // Added after the first release; ALTERs are idempotent so this is safe to re-run.
+  for (const col of [
+    'needed_by DATE',                 // when the customer needs it
+    'tax NUMERIC(10,2) DEFAULT 0',
+    'total NUMERIC(10,2) DEFAULT 0',  // subtotal + tax (card fee is added at payment)
+    'deposit NUMERIC(10,2) DEFAULT 0',
+    'paid_amount NUMERIC(10,2) DEFAULT 0',
+    'paid_method TEXT',
+    'paid_at TIMESTAMPTZ',
+    'stripe_session TEXT',
+  ]) {
+    await pool.query(`ALTER TABLE quotes ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  }
   await pool.query(`CREATE INDEX IF NOT EXISTS quotes_phone_idx ON quotes (phone)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS quotes_email_idx ON quotes (email)`);
 
@@ -1835,6 +1848,72 @@ app.post('/api/abandoned-cart-email', requireInternalKey, async (req, res) => {
 
 const QUOTE_CODE_RE = /^[A-Z0-9]{6}$/;
 
+/* ── Quote money rules ────────────────────────────────────────────────────
+   All in one place so the quote page, the payment page and the emails can
+   never disagree about what someone owes. */
+
+const TAX_RATE   = Number(process.env.JT_TAX_RATE || 0.1025);   // Chicago combined
+const CARD_FEE   = Number(process.env.JT_CARD_FEE || 0.04);     // 4% card surcharge
+const DEPOSIT_PC = Number(process.env.JT_DEPOSIT_PCT || 0.5);   // 50% deposit
+const DEPOSIT_FULL_UNDER = Number(process.env.JT_DEPOSIT_FULL_UNDER || 100); // pay in full below this
+const ZELLE_HANDLE = process.env.JT_ZELLE || '(773) 849-1854';
+
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+/** Tax applies to Illinois work. Toggle per quote; rate is env-configurable so
+ *  it can be corrected without a deploy. */
+function quoteTax(subtotal, taxable) {
+  return taxable ? round2(Number(subtotal) * TAX_RATE) : 0;
+}
+
+/** Deposit: half, unless the job is small enough that it is simpler to take it
+ *  all up front. Never more than the total. */
+function depositFor(total) {
+  const t = round2(total);
+  if (t <= 0) return 0;
+  if (t < DEPOSIT_FULL_UNDER) return t;
+  return Math.min(t, round2(t * DEPOSIT_PC));
+}
+
+/** Card surcharge — only applied when they actually choose to pay by card. */
+function cardFee(amount) { return round2(Number(amount) * CARD_FEE); }
+
+/** Business-day arithmetic in the shop's timezone, mirroring the designer's
+ *  jt_business_days() so the two never quote different lead times. */
+function addBusinessDays(from, days) {
+  const d = new Date(from);
+  let left = days;
+  while (left > 0) {
+    d.setDate(d.getDate() + 1);
+    const dow = d.getDay();
+    if (dow !== 0 && dow !== 6) left--;
+  }
+  return d;
+}
+
+/** Estimated ready/delivery window, same env knobs the designer uses. */
+function deliveryEstimate(from = new Date()) {
+  const pmin = parseInt(process.env.JT_PROD_MIN || '7', 10);
+  const pmax = parseInt(process.env.JT_PROD_MAX || '10', 10);
+  const smin = parseInt(process.env.JT_SHIP_MIN || '2', 10);
+  const smax = parseInt(process.env.JT_SHIP_MAX || '5', 10);
+  return {
+    ready: addBusinessDays(from, pmin),
+    deliver_from: addBusinessDays(from, pmin + smin),
+    deliver_to: addBusinessDays(from, pmax + smax),
+  };
+}
+
+/** Recompute every figure from the stored lines. Single source of truth. */
+function quoteTotals(q) {
+  const subtotal = round2((q.items || []).reduce((a, i) => a + Number(i.line_total || 0), 0));
+  const tax = Number(q.tax != null ? q.tax : 0);
+  const total = round2(subtotal + tax);
+  return { subtotal, tax, total, deposit: depositFor(total) };
+}
+
+
+
 function newQuoteCode() {
   return crypto.randomBytes(3).toString('hex').toUpperCase();
 }
@@ -2026,48 +2105,72 @@ app.get('/quote/new', requireAdmin, async (req, res) => {
   try { catalog = await getCatalog(); } catch (e) { /* form still works manually */ }
 
   const prodOpts = catalog.products.map(p =>
-    `<option value="${escEmail(String(p.id))}" data-price="${p.price}">${escEmail(p.name)} — ${money(p.price)}</option>`
+    `<option value="${escEmail(String(p.id))}">${escEmail(p.name)} — ${money(p.price)}</option>`
   ).join('');
   const methodOpts = catalog.methods
     .filter(m => m.use_for_quoting && Object.keys(m.positions || {}).length)
     .map(m => `<option value="${m.id}">${escEmail(m.title)}</option>`).join('');
 
+  const lineHtml = (n) => `
+    <div class="line" data-n="${n}">
+      <div class="row">
+        <div style="flex:2"><select name="product${n}" class="p"><option value="">— product (or type below) —</option>${prodOpts}</select></div>
+      </div>
+      <div class="row">
+        <div style="flex:2"><select name="method${n}" class="m"><option value="">— decoration —</option>${methodOpts}</select></div>
+      </div>
+      <input name="description${n}" class="d" placeholder="Description (type anything for a custom line)">
+      <div class="row">
+        <div><input name="qty${n}" class="q" type="number" inputmode="numeric" min="1" placeholder="Qty"></div>
+        <div><input name="unit_price${n}" class="u" type="number" step="0.01" inputmode="decimal" placeholder="Each $"></div>
+        <div style="flex:0 0 84px;display:flex;align-items:center;justify-content:flex-end"><b class="lt muted">—</b></div>
+      </div>
+    </div>`;
+
   res.send(quotePage('New quote', `
     <h1>New quote</h1>
     <div class="sub">Fills in the message for you — you still send it from your phone.</div>
-    <form method="POST" action="/api/quotes">
+    <form method="POST" action="/api/quotes" id="qf">
       <div class="card">
         <label>Customer name</label><input name="name" placeholder="First and last" autocomplete="off">
         <div class="row">
-          <div><label>Mobile</label><input name="phone" type="tel" inputmode="tel" placeholder="(773) 555-0100"></div>
+          <div><label>Mobile <span style="text-transform:none;font-weight:400">(optional)</span></label><input name="phone" type="tel" inputmode="tel" autocomplete="off"></div>
           <div><label>Email <span style="text-transform:none;font-weight:400">(optional)</span></label><input name="email" type="email" autocomplete="off"></div>
         </div>
+        <p class="muted" style="margin-top:8px">Either one is enough — with neither, you'll get a link you can show or print.</p>
         <div id="prior"></div>
       </div>
+
       <div class="card">
-        <label>What are they ordering?</label>
-        <div class="row">
-          <div style="flex:2"><select name="product"><option value="">— pick a product —</option>${prodOpts}</select></div>
-          <div style="flex:0 0 92px"><input name="qty" type="number" inputmode="numeric" min="1" placeholder="Qty"></div>
-        </div>
-        <label>Decoration</label>
-        <select name="method"><option value="">— none / manual —</option>${methodOpts}</select>
-        <label>Or describe it yourself</label>
-        <input name="description" placeholder="e.g. 24 navy tees, 1-colour front">
-        <div class="row">
-          <div><label>Unit price</label><input name="unit_price" type="number" step="0.01" inputmode="decimal" placeholder="auto"></div>
-          <div><label>Good for (days)</label><input name="valid_days" type="number" value="14" inputmode="numeric"></div>
-        </div>
+        <label style="margin-top:0">Items</label>
+        <div id="lines">${lineHtml(0)}</div>
+        <button type="button" class="btn btn-ghost" style="padding:9px 18px;font-size:14px" onclick="addLine()">+ Add another item</button>
+        <table style="width:100%;margin-top:14px;border-top:1px solid #e3e8f2;padding-top:10px">
+          <tr><td class="muted">Subtotal</td><td class="num" id="sub">$0.00</td></tr>
+          <tr><td class="muted"><label style="display:inline;margin:0;text-transform:none;letter-spacing:0;font-size:14px;font-weight:400">
+            <input type="checkbox" name="taxable" value="1" checked style="width:auto;margin-right:6px" onchange="calc()"> Illinois sales tax</label></td>
+            <td class="num" id="tax">$0.00</td></tr>
+          <tr><td class="tot">Total</td><td class="num tot" id="tot">$0.00</td></tr>
+          <tr><td class="muted" style="padding-top:6px">Deposit to start</td><td class="num" id="dep" style="padding-top:6px">$0.00</td></tr>
+        </table>
+      </div>
+
+      <div class="card">
+        <label>Needed by <span style="text-transform:none;font-weight:400">(optional)</span></label>
+        <input name="needed_by" type="date">
+        <p class="muted" id="eta" style="margin-top:8px"></p>
+        <label>Quote good for (days)</label>
+        <input name="valid_days" type="number" value="14" inputmode="numeric">
         <label>Notes for the customer</label><textarea name="notes" rows="2" placeholder="Optional"></textarea>
       </div>
+
       <button type="submit">Create quote &amp; get the message</button>
     </form>
     <p style="margin-top:14px"><a class="muted" href="/quotes">View all quotes →</a></p>
     <script>
-      // Live per-unit price from the real catalogue, so a quote and an online
-      // order for the same thing land on the same number.
       var CAT = ${JSON.stringify(catalog)};
-      var f = document.forms[0];
+      var TAX = ${TAX_RATE}, DEP = ${DEPOSIT_PC}, FULL_UNDER = ${DEPOSIT_FULL_UNDER};
+      var n = 1;
       function tierFor(m, qty){
         var pos = m && m.positions ? (m.positions.front || m.positions[Object.keys(m.positions)[0]]) : null;
         if (!pos || !pos.length) return 0;
@@ -2075,21 +2178,57 @@ app.get('/quote/new', requireAdmin, async (req, res) => {
         for (var i=0;i<pos.length;i++) if (qty >= pos[i].min_qty) price = pos[i].price;
         return price;
       }
-      function recalc(){
-        var p = CAT.products.find(function(x){return String(x.id)===f.product.value;});
-        var m = CAT.methods.find(function(x){return String(x.id)===f.method.value;});
-        var qty = parseInt(f.qty.value,10)||0;
-        if(!p || !qty) return;
-        var unit = p.price + tierFor(m, qty);
-        f.unit_price.placeholder = unit.toFixed(2);
-        if(!f.description.value) f.description.value = qty+' '+p.name+(m?' — '+m.title:'');
+      function m2(v){ return '$' + (Math.round(v*100)/100).toFixed(2); }
+      function calc(){
+        var sub = 0;
+        document.querySelectorAll('.line').forEach(function(L){
+          var prod = CAT.products.find(function(x){return String(x.id)===L.querySelector('.p').value;});
+          var meth = CAT.methods.find(function(x){return String(x.id)===L.querySelector('.m').value;});
+          var qty  = parseInt(L.querySelector('.q').value,10)||0;
+          var u    = L.querySelector('.u');
+          var auto = prod ? prod.price + tierFor(meth, qty) : 0;
+          if (prod) u.placeholder = auto.toFixed(2);
+          var unit = u.value !== '' ? parseFloat(u.value) : auto;
+          var lt = (unit||0) * qty;
+          L.querySelector('.lt').textContent = lt ? m2(lt) : '—';
+          sub += lt;
+          var d = L.querySelector('.d');
+          if (!d.value && prod) d.value = prod.name + (meth ? ' — ' + meth.title : '');
+        });
+        var tax = document.querySelector('[name=taxable]').checked ? sub*TAX : 0;
+        var tot = sub + tax;
+        var dep = tot <= 0 ? 0 : (tot < FULL_UNDER ? tot : tot*DEP);
+        document.getElementById('sub').textContent = m2(sub);
+        document.getElementById('tax').textContent = m2(tax);
+        document.getElementById('tot').textContent = m2(tot);
+        document.getElementById('dep').textContent = m2(dep) + (tot>0 && tot<FULL_UNDER ? ' (paid in full)' : ' (50%)');
       }
-      ['product','method','qty'].forEach(function(n){ f[n].addEventListener('change', recalc); });
-      f.qty.addEventListener('input', recalc);
+      function addLine(){
+        var tpl = document.getElementById('lines').firstElementChild.cloneNode(true);
+        tpl.querySelectorAll('input,select').forEach(function(el){
+          el.name = el.name.replace(/\d+$/, n); el.value='';
+        });
+        tpl.querySelector('.lt').textContent = '—';
+        document.getElementById('lines').appendChild(tpl); n++;
+        bind();
+      }
+      function bind(){
+        document.querySelectorAll('#qf input, #qf select').forEach(function(el){
+          el.oninput = calc; el.onchange = calc;
+        });
+      }
+      bind(); calc();
+      // Delivery estimate hint
+      var eta = ${JSON.stringify(deliveryEstimate())};
+      document.getElementById('eta').textContent =
+        'Typical turnaround: ready about ' + new Date(eta.ready).toLocaleDateString('en-US',{month:'short',day:'numeric'}) +
+        ', delivered ' + new Date(eta.deliver_from).toLocaleDateString('en-US',{month:'short',day:'numeric'}) +
+        '–' + new Date(eta.deliver_to).toLocaleDateString('en-US',{month:'short',day:'numeric'}) + '.';
       // Prior pricing for a returning customer
       var t;
       function lookup(){
         clearTimeout(t); t = setTimeout(function(){
+          var f = document.forms[0];
           var q = (f.phone.value||f.email.value||'').trim();
           if(q.length < 5){ document.getElementById('prior').innerHTML=''; return; }
           fetch('/api/quotes/prior?q='+encodeURIComponent(q))
@@ -2102,11 +2241,11 @@ app.get('/quote/new', requireAdmin, async (req, res) => {
             }).catch(function(){});
         }, 400);
       }
-      f.phone.addEventListener('input', lookup); f.email.addEventListener('input', lookup);
+      document.forms[0].phone.addEventListener('input', lookup);
+      document.forms[0].email.addEventListener('input', lookup);
     </script>
   `));
 });
-
 
 /* Catalogue from the designer, cached. Falls back to the last good copy so a
    slow designer never blocks quoting. */
@@ -2165,46 +2304,59 @@ app.post('/api/quotes', requireAdmin, async (req, res) => {
     const name = String(b.name || '').trim().slice(0, 120);
     const phone = String(b.phone || '').trim().slice(0, 40);
     const email = String(b.email || '').trim().toLowerCase().slice(0, 200);
-    if (!phone && !email) {
-      return res.status(400).send(quotePage('Missing contact',
-        `<div class="card"><div class="warn">A mobile number or an email is needed so the quote can reach them.</div>
+
+    const catalog = await getCatalog();
+
+    /* Collect however many item rows the form posted. Any row with a
+       description or a quantity counts; a product is optional so a purely
+       manual line ("banner, 3ft x 8ft") works exactly as well. */
+    const items = [];
+    for (let i = 0; i < 40; i++) {
+      const desc = String(b['description' + i] || '').trim();
+      const qty = parseInt(b['qty' + i], 10) || 0;
+      const prod = catalog.products.find(p => String(p.id) === String(b['product' + i]));
+      const method = catalog.methods.find(m => String(m.id) === String(b['method' + i]));
+      if (!desc && !qty && !prod) continue;
+
+      let unit = (b['unit_price' + i] !== '' && b['unit_price' + i] != null)
+        ? Number(b['unit_price' + i]) : null;
+      const manual = unit != null;
+      if (unit == null && prod) {
+        let tier = 0;
+        const pos = method && method.positions
+          ? (method.positions.front || method.positions[Object.keys(method.positions)[0]]) : null;
+        if (pos && pos.length) { tier = pos[0].price; for (const t of pos) if (qty >= t.min_qty) tier = t.price; }
+        unit = Number(prod.price) + Number(tier);
+      }
+      if (unit == null) unit = 0;
+
+      const q = qty || 1;
+      items.push({
+        description: desc || (prod ? `${prod.name}${method ? ' — ' + method.title : ''}` : 'Custom item'),
+        qty: q,
+        unit_price: round2(unit),
+        line_total: round2(unit * q),
+        manual,
+        product_id: prod ? prod.id : null,
+        method_id: method ? method.id : null,
+      });
+    }
+
+    if (!items.length) {
+      return res.status(400).send(quotePage('Nothing to quote',
+        `<div class="card"><div class="warn">Add at least one item before creating the quote.</div>
          <a class="btn btn-ghost" href="/quote/new">Back</a></div>`));
     }
 
-    const qty = parseInt(b.qty, 10) || 0;
-    const catalog = await getCatalog();
-    const prod = catalog.products.find(p => String(p.id) === String(b.product));
-    const method = catalog.methods.find(m => String(m.id) === String(b.method));
-
-    let unit = b.unit_price !== '' && b.unit_price != null ? Number(b.unit_price) : null;
-    const manual = unit != null;
-    if (unit == null && prod) {
-      let tier = 0;
-      const pos = method && method.positions
-        ? (method.positions.front || method.positions[Object.keys(method.positions)[0]])
-        : null;
-      if (pos && pos.length) { tier = pos[0].price; for (const t of pos) if (qty >= t.min_qty) tier = t.price; }
-      unit = Number(prod.price) + Number(tier);
-    }
-    if (unit == null) unit = 0;
-
-    // No qty here — quoteSummary() adds it, and having both produced "24 24 …".
-    const description = String(b.description || '').trim()
-      || (prod ? `${prod.name}${method ? ' — ' + method.title : ''}`.trim() : 'Custom order');
-
-    const items = [{
-      description,
-      qty: qty || 1,
-      unit_price: Number(unit.toFixed(2)),
-      line_total: Number((unit * (qty || 1)).toFixed(2)),
-      manual,
-      product_id: prod ? prod.id : null,
-      method_id: method ? method.id : null,
-    }];
-    const subtotal = items.reduce((a, i) => a + i.line_total, 0);
+    const subtotal = round2(items.reduce((a, i) => a + i.line_total, 0));
+    const taxable = b.taxable === '1' || b.taxable === 'on' || b.taxable === true;
+    const tax = quoteTax(subtotal, taxable);
+    const total = round2(subtotal + tax);
+    const deposit = depositFor(total);
 
     const days = Math.max(1, parseInt(b.valid_days, 10) || 14);
     const validUntil = new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
+    const neededBy = String(b.needed_by || '').trim() || null;
 
     let code = newQuoteCode();
     for (let i = 0; i < 5; i++) {
@@ -2214,13 +2366,12 @@ app.post('/api/quotes', requireAdmin, async (req, res) => {
     }
 
     const { rows } = await pool.query(
-      `INSERT INTO quotes (code,name,phone,email,items,subtotal,notes,status,valid_until)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'sent',$8) RETURNING *`,
-      [code, name, phone, email, JSON.stringify(items), subtotal,
-       String(b.notes || '').trim().slice(0, 2000), validUntil]);
+      `INSERT INTO quotes (code,name,phone,email,items,subtotal,tax,total,deposit,notes,status,valid_until,needed_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'sent',$11,$12) RETURNING *`,
+      [code, name, phone, email, JSON.stringify(items), subtotal, tax, total, deposit,
+       String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy]);
     const q = rows[0];
 
-    // CRM mirrors, both best-effort — the row above is already safe.
     syncQuoteToBrevo(q).then(ids => {
       if (ids.contactId || ids.dealId) {
         pool.query('UPDATE quotes SET brevo_contact_id=$1, brevo_deal_id=$2 WHERE id=$3',
@@ -2230,21 +2381,25 @@ app.post('/api/quotes', requireAdmin, async (req, res) => {
     syncQuoteToLumise(q).catch(() => {});
 
     const msgs = quoteMessages(q);
-    const smsHref = `sms:${phone.replace(/[^0-9+]/g, '')}${/iPhone|iPad|Mac/.test(req.get('user-agent') || '') ? '&' : '?'}body=${encodeURIComponent(msgs.initial)}`;
+    const digits = phone.replace(/[^0-9+]/g, '');
+    const smsHref = digits
+      ? `sms:${digits}${/iPhone|iPad|Mac/.test(req.get('user-agent') || '') ? '&' : '?'}body=${encodeURIComponent(msgs.initial)}`
+      : '';
 
     res.send(quotePage('Quote ready', `
       <h1>Quote ${escEmail(code)}</h1>
-      <div class="sub">${escEmail(name || phone)} &middot; ${money(subtotal)} &middot; good through ${fmtDate(validUntil)}</div>
+      <div class="sub">${escEmail(name || phone || email || 'No contact on file')} &middot; ${money(total)}
+        &middot; deposit ${money(deposit)} &middot; good through ${fmtDate(validUntil)}</div>
       <div class="card">
         <div class="msg" id="m">${escEmail(msgs.initial)}</div>
         <div class="row">
           <button type="button" onclick="cp()">Copy message</button>
-          ${phone ? `<a class="btn btn-ghost" href="${escEmail(smsHref)}">Open in Messages</a>` : ''}
+          ${smsHref ? `<a class="btn btn-ghost" href="${escEmail(smsHref)}">Open in Messages</a>` : ''}
         </div>
         <p class="muted" style="margin-top:10px">They see: <a href="${quoteLink(code)}">${quoteLink(code)}</a></p>
       </div>
       <div class="card">
-        <a class="btn btn-ghost" href="/q/${code}/vcard">Save to contacts</a>
+        ${(phone || email) ? `<a class="btn btn-ghost" href="/q/${code}/vcard">Save to contacts</a>` : ''}
         <a class="btn btn-ghost" href="/quote/new">Another quote</a>
         <a class="btn btn-ghost" href="/quotes">All quotes</a>
       </div>
@@ -2268,7 +2423,7 @@ app.post('/api/quotes', requireAdmin, async (req, res) => {
   }
 });
 
-/* What the customer opens. Public, no login. */
+/* What the customer opens. Public, no login. Reads like an invoice. */
 app.get('/q/:code', async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   const friendly = (msg) => res.status(404).send(quotePage('Quote not found', `
@@ -2283,41 +2438,87 @@ app.get('/q/:code', async (req, res) => {
     const q = rows[0];
 
     if (!q.viewed_at) {
-      pool.query('UPDATE quotes SET viewed_at=NOW(), status=CASE WHEN status=$2 THEN $3 ELSE status END WHERE id=$1',
-        [q.id, 'sent', 'viewed']).catch(() => {});
+      pool.query(`UPDATE quotes SET viewed_at=NOW(),
+                  status=CASE WHEN status='sent' THEN 'viewed' ELSE status END WHERE id=$1`, [q.id]).catch(() => {});
     }
 
+    const t = quoteTotals(q);
     const expired = q.valid_until && new Date(q.valid_until) < new Date(new Date().toDateString());
     const accepted = !!q.accepted_at;
-    const rowsHtml = (q.items || []).map(i => `
-      <tr><td>${escEmail(i.description)}</td>
-      <td class="num">${i.qty}</td>
-      <td class="num">${money(i.unit_price)}</td>
-      <td class="num">${money(i.line_total)}</td></tr>`).join('');
+    const paid = Number(q.paid_amount || 0) > 0;
+    const eta = deliveryEstimate(q.accepted_at ? new Date(q.accepted_at) : new Date());
+    const dayFmt = (d) => new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/Chicago' });
+
+    const lines = (q.items || []).map(i => `
+      <tr>
+        <td>${escEmail(i.description)}</td>
+        <td class="num">${i.qty}</td>
+        <td class="num">${money(i.unit_price)}</td>
+        <td class="num">${money(i.line_total)}</td>
+      </tr>`).join('');
 
     res.send(quotePage(`Your quote from ${SHOP_NAME}`, `
       <div class="card">
         <h1>${SHOP_NAME}</h1>
-        <div class="sub">Quote ${escEmail(q.code)} &middot; ${fmtDate(q.created_at)}</div>
-        ${accepted ? `<div class="ok">Accepted — thank you! ${SHOP_SIGNER} will follow up with a proof and timeline.</div>` : ''}
+        <div class="sub">Quote ${escEmail(q.code)} &middot; ${fmtDate(q.created_at)}${q.name ? ' &middot; for ' + escEmail(q.name) : ''}</div>
+
+        ${paid ? `<div class="ok"><b>Payment received — ${money(q.paid_amount)}.</b> You're on the schedule. ${SHOP_SIGNER} will follow up with a proof.</div>`
+          : accepted ? `<div class="ok"><b>Accepted — thank you!</b> Choose how you'd like to pay the deposit below.</div>` : ''}
         ${(!accepted && expired) ? `<div class="warn">This quote has expired, but prices usually still stand — just text and we'll refresh it.</div>` : ''}
+
         <table class="items"><thead><tr>
-          <th>Item</th><th class="num">Qty</th><th class="num">Each</th><th class="num">Total</th>
-        </tr></thead><tbody>${rowsHtml}
-          <tr><td colspan="3" class="num tot">Total</td><td class="num tot">${money(q.subtotal)}</td></tr>
+          <th>Item</th><th class="num">Qty</th><th class="num">Each</th><th class="num">Amount</th>
+        </tr></thead><tbody>
+          ${lines}
+          <tr><td colspan="3" class="num muted" style="padding-top:12px">Subtotal</td>
+              <td class="num" style="padding-top:12px">${money(t.subtotal)}</td></tr>
+          ${t.tax > 0 ? `<tr><td colspan="3" class="num muted">Sales tax</td><td class="num">${money(t.tax)}</td></tr>` : ''}
+          <tr><td colspan="3" class="num tot">Total</td><td class="num tot">${money(t.total)}</td></tr>
+          ${!paid ? `<tr><td colspan="3" class="num" style="color:#1848B8;font-weight:700">
+              ${t.deposit >= t.total ? 'Due now (paid in full)' : 'Deposit to start (50%)'}</td>
+              <td class="num" style="color:#1848B8;font-weight:700">${money(t.deposit)}</td></tr>` : ''}
         </tbody></table>
+
         ${q.notes ? `<p class="muted" style="margin-top:12px">${escEmail(q.notes)}</p>` : ''}
-        ${q.valid_until ? `<p class="muted" style="margin-top:10px">Good through ${fmtDate(q.valid_until)}.</p>` : ''}
+
+        <div style="margin-top:16px;border-top:1px solid #eef1f8;padding-top:12px">
+          ${q.needed_by ? `<p class="muted"><b>You need it by:</b> ${dayFmt(q.needed_by)}</p>` : ''}
+          <p class="muted"><b>Estimated:</b> ready ${dayFmt(eta.ready)}, delivered ${dayFmt(eta.deliver_from)}–${dayFmt(eta.deliver_to)}
+            ${accepted ? '' : ' once the deposit is in'}.</p>
+          ${q.valid_until ? `<p class="muted">Quote good through ${fmtDate(q.valid_until)}.</p>` : ''}
+        </div>
       </div>
-      ${accepted ? '' : `
+
+      ${paid ? '' : accepted ? `
+      <div class="card">
+        <h1 style="font-size:18px">Pay your ${t.deposit >= t.total ? 'balance' : 'deposit'} — ${money(t.deposit)}</h1>
+        <p class="muted" style="margin:6px 0 14px">Whichever is easiest. Nothing else is due until pickup or delivery.</p>
+
+        <a class="btn" style="width:100%;margin-bottom:10px" href="/q/${q.code}/pay/card">
+          Card or Apple&nbsp;Pay — ${money(round2(t.deposit + cardFee(t.deposit)))}
+        </a>
+        <p class="muted" style="margin:-4px 0 14px;font-size:12px">Includes the ${Math.round(CARD_FEE*100)}% card processing fee (${money(cardFee(t.deposit))}).</p>
+
+        <div style="border:1px solid #e3e8f2;border-radius:10px;padding:12px;margin-bottom:10px">
+          <b>Zelle — ${money(t.deposit)}</b> <span class="muted">(no fee)</span>
+          <p class="muted" style="margin-top:4px">Send to <b>${escEmail(ZELLE_HANDLE)}</b> and put <b>${escEmail(q.code)}</b> in the memo.</p>
+        </div>
+        <div style="border:1px solid #e3e8f2;border-radius:10px;padding:12px">
+          <b>Cash in person — ${money(t.deposit)}</b> <span class="muted">(no fee)</span>
+          <p class="muted" style="margin-top:4px">Text ${SHOP_SIGNER} at ${SHOP_PHONE} to arrange.</p>
+        </div>
+      </div>` : `
       <div class="card">
         <form method="POST" action="/q/${q.code}/accept">
-          <button type="submit" style="width:100%">Accept this quote</button>
+          <label>When do you need it? <span style="text-transform:none;font-weight:400">(optional)</span></label>
+          <input type="date" name="needed_by" value="${q.needed_by ? String(q.needed_by).slice(0,10) : ''}">
+          <button type="submit" style="width:100%;margin-top:14px">Accept &amp; choose payment</button>
         </form>
-        <p class="muted" style="margin-top:10px;text-align:center">Nothing is charged now — ${SHOP_SIGNER} will confirm details first.</p>
+        <p class="muted" style="margin-top:10px;text-align:center">Nothing is charged yet — you'll pick how to pay next.</p>
       </div>`}
+
       <div class="card" style="text-align:center">
-        <p class="muted">Questions? <a href="tel:+17738491854">${SHOP_PHONE}</a></p>
+        <p class="muted">Questions? <a href="tel:+17738491854">${SHOP_PHONE}</a> &middot; ${SHOP_SIGNER}</p>
       </div>
     `));
   } catch (err) {
@@ -2326,14 +2527,130 @@ app.get('/q/:code', async (req, res) => {
   }
 });
 
+/* Card / Apple Pay via Stripe Checkout.
+   Uses the REST API directly rather than adding the stripe package — one
+   form-encoded POST is all a Checkout Session needs, and Apple Pay + Google Pay
+   appear automatically on supported devices with no extra work.
+   The card fee is added as its own visible line so nobody feels surprised. */
+app.get('/q/:code/pay/card', async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/q/' + encodeURIComponent(code));
+  const secret = process.env.STRIPE_SECRET_KEY;
+
+  try {
+    const { rows } = await pool.query('SELECT * FROM quotes WHERE code=$1', [code]);
+    if (!rows.length) return res.redirect('/q/' + code);
+    const q = rows[0];
+    const t = quoteTotals(q);
+    const fee = cardFee(t.deposit);
+
+    if (!secret || Number(q.paid_amount || 0) > 0 || t.deposit <= 0) {
+      return res.redirect('/q/' + code);
+    }
+
+    const label = t.deposit >= t.total
+      ? `Payment in full — quote ${q.code}`
+      : `50% deposit — quote ${q.code}`;
+
+    const form = new URLSearchParams();
+    form.set('mode', 'payment');
+    form.set('success_url', `${PUBLIC_BASE_URL}/q/${q.code}/paid?s={CHECKOUT_SESSION_ID}`);
+    form.set('cancel_url', `${PUBLIC_BASE_URL}/q/${q.code}`);
+    form.set('client_reference_id', q.code);
+    if (q.email) form.set('customer_email', q.email);
+    form.set('line_items[0][quantity]', '1');
+    form.set('line_items[0][price_data][currency]', 'usd');
+    form.set('line_items[0][price_data][unit_amount]', String(Math.round(t.deposit * 100)));
+    form.set('line_items[0][price_data][product_data][name]', label);
+    form.set('line_items[1][quantity]', '1');
+    form.set('line_items[1][price_data][currency]', 'usd');
+    form.set('line_items[1][price_data][unit_amount]', String(Math.round(fee * 100)));
+    form.set('line_items[1][price_data][product_data][name]',
+             `Card processing fee (${Math.round(CARD_FEE * 100)}%)`);
+    form.set('metadata[quote_code]', q.code);
+
+    const r = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + secret,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: form.toString(),
+      signal: AbortSignal.timeout(15000),
+    });
+    const d = await r.json();
+    if (!r.ok || !d.url) {
+      console.error('stripe session failed:', d.error ? d.error.message : r.status);
+      return res.status(502).send(quotePage('Card payment unavailable', `
+        <div class="card"><div class="warn">Card payment isn't available right now.</div>
+        <p class="muted">Zelle to <b>${escEmail(ZELLE_HANDLE)}</b> works, or text ${SHOP_SIGNER} at ${SHOP_PHONE}.</p>
+        <p style="margin-top:12px"><a class="btn btn-ghost" href="/q/${q.code}">Back to the quote</a></p></div>`));
+    }
+
+    await pool.query('UPDATE quotes SET stripe_session=$1 WHERE id=$2', [d.id, q.id]).catch(() => {});
+    res.redirect(303, d.url);
+  } catch (err) {
+    console.error('card pay failed:', err.message);
+    res.redirect('/q/' + code);
+  }
+});
+
+/* Stripe sends them back here. Confirm against the API rather than trusting
+   the redirect — anyone can visit this URL. */
+app.get('/q/:code/paid', async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  const sid = String(req.query.s || '');
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/');
+  try {
+    const secret = process.env.STRIPE_SECRET_KEY;
+    if (secret && sid.startsWith('cs_')) {
+      const r = await fetch(`https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(sid)}`,
+        { headers: { 'Authorization': 'Bearer ' + secret }, signal: AbortSignal.timeout(15000) });
+      const d = await r.json();
+      if (r.ok && d.payment_status === 'paid' && d.client_reference_id === code) {
+        const amount = round2((d.amount_total || 0) / 100);
+        const { rows } = await pool.query(
+          `UPDATE quotes SET paid_amount=$1, paid_method='card', paid_at=NOW(), status='accepted'
+            WHERE code=$2 AND (paid_amount IS NULL OR paid_amount = 0) RETURNING *`, [amount, code]);
+        if (rows.length) {
+          const q = rows[0];
+          sendEmail({
+            to: SHOP_EMAIL,
+            subject: `💳 Deposit paid — quote ${q.code}, ${money(amount)}`,
+            html: `<div style="font-family:system-ui,sans-serif"><h2 style="color:#1848B8">Deposit received</h2>
+              <p>${escEmail(q.name || '')} paid <b>${money(amount)}</b> by card for quote ${q.code}.</p>
+              <p><a href="${quoteLink(q.code)}">${quoteLink(q.code)}</a></p></div>`,
+          }).catch(() => {});
+          if (q.email) {
+            sendEmail({
+              to: q.email,
+              subject: `Payment received — quote ${q.code}`,
+              html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
+                <h2 style="color:#1848B8">Thank you!</h2>
+                <p style="color:#374151;line-height:1.6">We've received ${money(amount)} for quote ${q.code}. You're on the schedule —
+                ${SHOP_SIGNER} will follow up with an artwork proof and timeline.</p>
+                <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_NAME} &middot; ${SHOP_PHONE}</p></div>`,
+            }).catch(() => {});
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('payment confirm failed:', err.message);
+  }
+  res.redirect('/q/' + code);
+});
+
 /* Customer accepts. Idempotent. */
 app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/q/' + encodeURIComponent(code));
   try {
+    const nb = String((req.body && req.body.needed_by) || '').trim() || null;
     const { rows } = await pool.query(
-      `UPDATE quotes SET accepted_at=NOW(), status='accepted'
-        WHERE code=$1 AND accepted_at IS NULL RETURNING *`, [code]);
+      `UPDATE quotes SET accepted_at=NOW(), status='accepted',
+              needed_by = COALESCE($2::date, needed_by)
+        WHERE code=$1 AND accepted_at IS NULL RETURNING *`, [code, nb]);
 
     if (rows.length) {                       // first acceptance only
       const q = rows[0];
@@ -2346,13 +2663,23 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
         <tr><td colspan="2" style="padding:8px 4px;text-align:right;font-weight:700;border-top:2px solid #111">Total</td>
         <td style="padding:8px 4px;text-align:right;font-weight:700;border-top:2px solid #111">${money(q.subtotal)}</td></tr></table>`;
 
+      const tt = quoteTotals(q);
+      const payBlock = `
+        <div style="border:1px solid #e3e8f2;border-radius:10px;padding:14px;margin:14px 0">
+          <p style="margin:0 0 6px"><b>${tt.deposit >= tt.total ? 'Payment due' : 'Deposit to start (50%)'}: ${money(tt.deposit)}</b></p>
+          <p style="margin:0;color:#6b7280;font-size:14px">
+            Card or Apple Pay: <a href="${quoteLink(q.code)}">${quoteLink(q.code)}</a> (adds ${Math.round(CARD_FEE*100)}% processing)<br>
+            Zelle to <b>${escEmail(ZELLE_HANDLE)}</b>, memo <b>${q.code}</b> — no fee<br>
+            Cash in person — no fee
+          </p>
+        </div>`;
       if (q.email) {
         sendEmail({
           to: q.email,
           subject: `Thanks — quote ${q.code} accepted`,
           html: `<div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto">
             <h2 style="color:#1848B8">Thank you!</h2>
-            <p style="color:#374151;line-height:1.6">${escEmail(msgs.accepted)}</p>${table}
+            <p style="color:#374151;line-height:1.6">${escEmail(msgs.accepted)}</p>${table}${payBlock}
             <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_NAME} &middot; 3047 N Lincoln Ave #435, Chicago, IL 60657</p></div>`,
         }).catch(e => console.error('accept email failed:', e.message));
       }
