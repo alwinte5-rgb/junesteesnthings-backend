@@ -1970,6 +1970,8 @@ const CARD_FEE   = Number(process.env.JT_CARD_FEE || 0.04);     // 4% card surch
 const DEPOSIT_PC = Number(process.env.JT_DEPOSIT_PCT || 0.5);   // 50% deposit
 const DEPOSIT_FULL_UNDER = Number(process.env.JT_DEPOSIT_FULL_UNDER || 100); // pay in full below this
 const ZELLE_HANDLE = process.env.JT_ZELLE || '(773) 849-1854';
+// When the remaining balance is expected. Wording only — nothing enforces it.
+const BALANCE_WHEN = process.env.JT_BALANCE_WHEN || 'on pickup or before delivery';
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -2758,6 +2760,7 @@ app.get('/q/:code', async (req, res) => {
     const expired = q.valid_until && new Date(q.valid_until) < new Date(new Date().toDateString());
     const accepted = !!q.accepted_at;
     const paid = Number(q.paid_amount || 0) > 0;
+    const balanceDue = round2(Math.max(0, Number(t.total) - Number(q.paid_amount || 0)));
     const eta = deliveryEstimate(q.accepted_at ? new Date(q.accepted_at) : new Date());
     /* A DATE column has no time, so converting it through a timezone shifts it
        a day backwards (2026-08-20 rendered as Aug 19). Format the calendar date
@@ -2797,7 +2800,8 @@ app.get('/q/:code', async (req, res) => {
         <h1>${SHOP_NAME}</h1>
         <div class="sub">Quote ${escEmail(q.code)} &middot; ${fmtDate(q.created_at)}${q.name ? ' &middot; for ' + escEmail(q.name) : ''}</div>
 
-        ${paid ? `<div class="ok"><b>Payment received — ${money(q.paid_amount)}.</b> You're on the schedule. ${SHOP_SIGNER} will follow up with a proof.</div>`
+        ${paid ? `<div class="ok"><b>Payment received — ${money(q.paid_amount)}.</b> You're on the schedule. ${SHOP_SIGNER} will follow up with a proof.${
+            balanceDue > 0 ? ` A balance of <b>${money(balanceDue)}</b> is due ${BALANCE_WHEN}.` : ' Paid in full — nothing further to pay.'}</div>`
           : accepted ? `<div class="ok"><b>Accepted — thank you!</b> Choose how you'd like to pay the deposit below.</div>` : ''}
         ${(!accepted && expired) ? `<div class="warn">This quote has expired, but prices usually still stand — just text and we'll refresh it.</div>` : ''}
 
@@ -2811,7 +2815,11 @@ app.get('/q/:code', async (req, res) => {
           <tr><td colspan="3" class="num tot">Total</td><td class="num tot">${money(t.total)}</td></tr>
           ${!paid ? `<tr><td colspan="3" class="num" style="color:#1848B8;font-weight:700">
               ${t.deposit >= t.total ? 'Due now (paid in full)' : 'Deposit to start (50%)'}</td>
-              <td class="num" style="color:#1848B8;font-weight:700">${money(t.deposit)}</td></tr>` : ''}
+              <td class="num" style="color:#1848B8;font-weight:700">${money(t.deposit)}</td></tr>` : `
+            <tr><td colspan="3" class="num muted">Paid ${q.paid_at ? fmtDate(q.paid_at) : ''}</td>
+                <td class="num" style="color:#166534">&minus;${money(q.paid_amount)}</td></tr>
+            ${balanceDue > 0 ? `<tr><td colspan="3" class="num" style="color:#1848B8;font-weight:700">Balance due</td>
+                <td class="num" style="color:#1848B8;font-weight:700">${money(balanceDue)}</td></tr>` : ''}`}
         </tbody></table>
 
         ${q.notes ? `<p class="muted" style="margin-top:12px">${escEmail(q.notes)}</p>` : ''}
@@ -2823,6 +2831,26 @@ app.get('/q/:code', async (req, res) => {
           ${q.valid_until ? `<p class="muted">Quote good through ${fmtDate(q.valid_until)}.</p>` : ''}
         </div>
       </div>
+
+      ${(paid && balanceDue > 0) ? `
+      <div class="card">
+        <h1 style="font-size:18px">Balance due — ${money(balanceDue)}</h1>
+        <p class="muted" style="margin:6px 0 14px">${money(q.paid_amount)} received, thank you. The rest is due
+          ${BALANCE_WHEN}.</p>
+
+        <a class="btn" style="width:100%;margin-bottom:10px" href="/q/${q.code}/pay/balance">
+          Card or Apple&nbsp;Pay — ${money(round2(balanceDue + cardFee(balanceDue)))}
+        </a>
+        <p class="muted" style="margin:-4px 0 14px;font-size:12px">Includes the ${Math.round(CARD_FEE*100)}% card processing fee (${money(cardFee(balanceDue))}).</p>
+
+        <div style="border:1px solid #e3e8f2;border-radius:10px;padding:12px;margin-bottom:10px">
+          <b>Zelle — ${money(balanceDue)}</b> <span class="muted">(no fee)</span>
+          <p class="muted" style="margin-top:4px">Send to <b>${escEmail(ZELLE_HANDLE)}</b>, memo <b>${escEmail(q.code)}</b>.</p>
+        </div>
+        <div style="border:1px solid #e3e8f2;border-radius:10px;padding:12px">
+          <b>Cash on pickup — ${money(balanceDue)}</b> <span class="muted">(no fee)</span>
+        </div>
+      </div>` : ''}
 
       ${paid ? '' : accepted ? `
       <div class="card">
@@ -2896,7 +2924,7 @@ app.get('/q/:code', async (req, res) => {
    form-encoded POST is all a Checkout Session needs, and Apple Pay + Google Pay
    appear automatically on supported devices with no extra work.
    The card fee is added as its own visible line so nobody feels surprised. */
-app.get('/q/:code/pay/card', async (req, res) => {
+app.get(['/q/:code/pay/card', '/q/:code/pay/balance'], async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/q/' + encodeURIComponent(code));
   const secret = process.env.STRIPE_SECRET_KEY;
@@ -2906,17 +2934,25 @@ app.get('/q/:code/pay/card', async (req, res) => {
     if (!rows.length) return res.redirect('/q/' + code);
     const q = rows[0];
     const t = quoteTotals(q);
-    const fee = cardFee(t.deposit);
+    const alreadyPaid = Number(q.paid_amount || 0);
+    /* Same route serves the deposit and the balance: charging the deposit when
+       it is already paid, or a balance when nothing is owed, would both be
+       wrong, so the amount is derived rather than passed in. */
+    const wantsBalance = req.path.endsWith('/balance');
+    const amount = wantsBalance
+      ? round2(Math.max(0, Number(t.total) - alreadyPaid))
+      : t.deposit;
+    const fee = cardFee(amount);
 
-    if (!secret || Number(q.paid_amount || 0) > 0) {
-      return res.redirect('/q/' + code);
-    }
+    if (!secret) return res.redirect('/q/' + code);
+    if (!wantsBalance && alreadyPaid > 0) return res.redirect('/q/' + code);
+    if (amount <= 0) return res.redirect('/q/' + code);
 
     /* Stripe refuses anything under $0.50, and the error it returns is opaque
        ("total amount due must add up to at least $0.50 USD") — which surfaced
        to the customer as a bare "card payment unavailable". Catch it here and
        say what is actually wrong. */
-    const chargeable = round2(t.deposit + cardFee(t.deposit));
+    const chargeable = round2(amount + cardFee(amount));
     if (chargeable < 0.5) {
       return res.status(200).send(quotePage('Too small to charge', `
         <div class="card">
@@ -2928,19 +2964,20 @@ app.get('/q/:code/pay/card', async (req, res) => {
         </div>`));
     }
 
-    const label = t.deposit >= t.total
-      ? `Payment in full — quote ${q.code}`
-      : `50% deposit — quote ${q.code}`;
+    const label = wantsBalance
+      ? `Remaining balance — quote ${q.code}`
+      : (t.deposit >= t.total ? `Payment in full — quote ${q.code}` : `50% deposit — quote ${q.code}`);
 
     const form = new URLSearchParams();
     form.set('mode', 'payment');
     form.set('success_url', `${PUBLIC_BASE_URL}/q/${q.code}/paid?s={CHECKOUT_SESSION_ID}`);
+    form.set('metadata[kind]', wantsBalance ? 'balance' : 'deposit');
     form.set('cancel_url', `${PUBLIC_BASE_URL}/q/${q.code}`);
     form.set('client_reference_id', q.code);
     if (q.email) form.set('customer_email', q.email);
     form.set('line_items[0][quantity]', '1');
     form.set('line_items[0][price_data][currency]', 'usd');
-    form.set('line_items[0][price_data][unit_amount]', String(Math.round(t.deposit * 100)));
+    form.set('line_items[0][price_data][unit_amount]', String(Math.round(amount * 100)));
     form.set('line_items[0][price_data][product_data][name]', label);
     form.set('line_items[1][quantity]', '1');
     form.set('line_items[1][price_data][currency]', 'usd');
@@ -2997,16 +3034,32 @@ app.get('/q/:code/paid', async (req, res) => {
       const d = await r.json();
       if (r.ok && d.payment_status === 'paid' && d.client_reference_id === code) {
         const amount = round2((d.amount_total || 0) / 100);
+        const isBalance = (d.metadata || {}).kind === 'balance';
+        /* A balance payment ADDS to what has already been received — overwriting
+           would erase the deposit and make it look like the customer paid less
+           than they did. The session id guard makes this idempotent, so a
+           refreshed success page cannot double-count. */
         const { rows } = await pool.query(
-          `UPDATE quotes SET paid_amount=$1, paid_method='card', paid_at=NOW(), status='accepted'
-            WHERE code=$2 AND (paid_amount IS NULL OR paid_amount = 0) RETURNING *`, [amount, code]);
+          isBalance
+            ? `UPDATE quotes SET paid_amount = COALESCE(paid_amount,0) + $1,
+                      paid_method='card', paid_at=NOW(), status='accepted'
+                WHERE code=$2 AND (stripe_session IS DISTINCT FROM $3) RETURNING *`
+            : `UPDATE quotes SET paid_amount=$1, paid_method='card', paid_at=NOW(), status='accepted'
+                WHERE code=$2 AND (paid_amount IS NULL OR paid_amount = 0) AND $3 IS NOT NULL RETURNING *`,
+          [amount, code, sid]);
+        if (rows.length) {
+          // Record which session was banked so it cannot be applied twice.
+          await pool.query('UPDATE quotes SET stripe_session=$2 WHERE code=$1', [code, sid]).catch(() => {});
+        }
         if (rows.length) {
           const q = rows[0];
           sendEmail({
             to: SHOP_EMAIL,
-            subject: `💳 Deposit paid — quote ${q.code}, ${money(amount)}`,
+            subject: `💳 ${isBalance ? 'Balance' : 'Deposit'} paid — quote ${q.code}, ${money(amount)}`,
             html: `<div style="font-family:system-ui,sans-serif"><h2 style="color:#1848B8">Deposit received</h2>
-              <p>${escEmail(q.name || '')} paid <b>${money(amount)}</b> by card for quote ${q.code}.</p>
+              <p>${escEmail(q.name || '')} paid <b>${money(amount)}</b> by card for quote ${q.code}
+                 (${isBalance ? 'remaining balance' : 'deposit'}).</p>
+              <p style="color:#6b7280">Total received: ${money(q.paid_amount)} of ${money(q.total)}.</p>
               <p><a href="${quoteLink(q.code)}">${quoteLink(q.code)}</a></p></div>`,
           }).catch(() => {});
           if (q.email) {
