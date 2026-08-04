@@ -1971,6 +1971,10 @@ const CARD_FEE   = Number(process.env.JT_CARD_FEE || 0.04);     // 4% card surch
 const DEPOSIT_PC = Number(process.env.JT_DEPOSIT_PCT || 0.5);   // 50% deposit
 const DEPOSIT_FULL_UNDER = Number(process.env.JT_DEPOSIT_FULL_UNDER || 100); // pay in full below this
 const ZELLE_HANDLE = process.env.JT_ZELLE || '(773) 849-1854';
+/* Zelle shows the ACCOUNT HOLDER's name at confirmation, which is the legal
+   name, not the shop name. Saying so up front stops customers stalling when
+   "Andrea Winters" appears instead of "June" or "June's Tees". */
+const ZELLE_NAME = process.env.JT_ZELLE_NAME || 'Andrea Winters';
 // When the remaining balance is expected. Wording only — nothing enforces it.
 const BALANCE_WHEN = process.env.JT_BALANCE_WHEN || 'on pickup or before delivery';
 
@@ -2846,7 +2850,8 @@ app.get('/q/:code', async (req, res) => {
 
         <div style="border:1px solid #e3e8f2;border-radius:10px;padding:12px;margin-bottom:10px">
           <b>Zelle — ${money(balanceDue)}</b> <span class="muted">(no fee)</span>
-          <p class="muted" style="margin-top:4px">Send to <b>${escEmail(ZELLE_HANDLE)}</b>, memo <b>${escEmail(q.code)}</b>.</p>
+          <p class="muted" style="margin-top:4px">Send to <b>${escEmail(ZELLE_HANDLE)}</b>, memo <b>${escEmail(q.code)}</b>.<br>
+            It will show as <b>${escEmail(ZELLE_NAME)}</b> — that's us.</p>
         </div>
         <div style="border:1px solid #e3e8f2;border-radius:10px;padding:12px">
           <b>Cash on pickup — ${money(balanceDue)}</b> <span class="muted">(no fee)</span>
@@ -2865,7 +2870,8 @@ app.get('/q/:code', async (req, res) => {
 
         <div style="border:1px solid #e3e8f2;border-radius:10px;padding:12px;margin-bottom:10px">
           <b>Zelle — ${money(t.deposit)}</b> <span class="muted">(no fee)</span>
-          <p class="muted" style="margin-top:4px">Send to <b>${escEmail(ZELLE_HANDLE)}</b> and put <b>${escEmail(q.code)}</b> in the memo.</p>
+          <p class="muted" style="margin-top:4px">Send to <b>${escEmail(ZELLE_HANDLE)}</b> and put <b>${escEmail(q.code)}</b> in the memo.<br>
+            It will show as <b>${escEmail(ZELLE_NAME)}</b> — that's us.</p>
         </div>
         <div style="border:1px solid #e3e8f2;border-radius:10px;padding:12px">
           <b>Cash in person — ${money(t.deposit)}</b> <span class="muted">(no fee)</span>
@@ -3124,7 +3130,8 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
           <p style="margin:0 0 6px"><b>${tt.deposit >= tt.total ? 'Payment due' : 'Deposit to start (50%)'}: ${money(tt.deposit)}</b></p>
           <p style="margin:0;color:#6b7280;font-size:14px">
             Card or Apple Pay: <a href="${quoteLink(q.code)}">${quoteLink(q.code)}</a> (adds ${Math.round(CARD_FEE*100)}% processing)<br>
-            Zelle to <b>${escEmail(ZELLE_HANDLE)}</b>, memo <b>${q.code}</b> — no fee<br>
+            Zelle to <b>${escEmail(ZELLE_HANDLE)}</b>, memo <b>${q.code}</b> — no fee
+              <span style="color:#9ca3af">(shows as ${escEmail(ZELLE_NAME)})</span><br>
             Cash in person — no fee
           </p>
         </div>`;
@@ -3828,8 +3835,8 @@ async function sendDepositReminders() {
             <p style="text-align:center;margin:22px 0">
               <a href="${quoteLink(q.code)}" style="background:#1848B8;color:#fff;padding:13px 28px;
                  border-radius:100px;text-decoration:none;font-weight:700">Pay ${money(t.deposit)} deposit</a></p>
-            <p style="color:#374151;line-height:1.6">Card, Apple Pay, Zelle to <b>${escEmail(ZELLE_HANDLE)}</b>,
-               or cash — whichever suits. Questions? Just reply or text ${SHOP_PHONE}.</p>
+            <p style="color:#374151;line-height:1.6">Card, Apple Pay, Zelle to <b>${escEmail(ZELLE_HANDLE)}</b>
+               (shows as ${escEmail(ZELLE_NAME)}), or cash — whichever suits. Questions? Just reply or text ${SHOP_PHONE}.</p>
             <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_NAME} &middot; ${SHOP_SIGNER}</p>
           </div>`,
         });
