@@ -108,6 +108,31 @@ async function initDB() {
   await pool.query(`CREATE INDEX IF NOT EXISTS quotes_phone_idx ON quotes (phone)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS quotes_email_idx ON quotes (email)`);
 
+  // Customer reviews. Collected after delivery, shown on the storefront, and
+  // fed into aggregateRating schema so search results can show stars.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS reviews (
+      id           SERIAL PRIMARY KEY,
+      token        TEXT UNIQUE NOT NULL,
+      name         TEXT,
+      email        TEXT,
+      phone        TEXT,
+      rating       INT,
+      title        TEXT,
+      body         TEXT,
+      product      TEXT,
+      source       TEXT DEFAULT 'site',
+      order_ref    TEXT,
+      quote_code   TEXT,
+      approved     BOOLEAN DEFAULT FALSE,
+      requested_at TIMESTAMPTZ,
+      submitted_at TIMESTAMPTZ,
+      created_at   TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS reviews_approved_idx ON reviews (approved, submitted_at DESC)`);
+  await pool.query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ`).catch(() => {});
+
   // Marketing opt-outs. Required to honour the one-click unsubscribe that
   // Gmail/Yahoo mandate of bulk senders — an unsubscribe link that does not
   // actually suppress mail is worse than none (it earns spam complaints).
@@ -3181,6 +3206,249 @@ app.get('/quotes', requireAdmin, async (req, res) => {
   }
 });
 
+
+/* ══ Reviews ══════════════════════════════════════════════════════════════
+   A review request goes out after delivery with a one-tap star link. Happy
+   customers (4-5) are then pointed at Google, which is where reviews actually
+   help the shop get found; anything lower stays private and comes straight to
+   June so a problem can be fixed instead of published. Everything collected is
+   held for approval before it appears anywhere. */
+
+const GOOGLE_REVIEW_URL = process.env.JT_GOOGLE_REVIEW_URL || '';
+
+function reviewToken() { return crypto.randomBytes(9).toString('base64url'); }
+
+const STAR = (n) => '★★★★★'.slice(0, n) + '☆☆☆☆☆'.slice(0, 5 - n);
+
+/** Approved reviews, newest first. Cached briefly — the storefront asks often. */
+let _revCache = { at: 0, rows: [] };
+async function approvedReviews(limit = 50) {
+  if (Date.now() - _revCache.at < 300000) return _revCache.rows.slice(0, limit);
+  try {
+    const { rows } = await pool.query(
+      `SELECT name, rating, title, body, product, submitted_at
+         FROM reviews WHERE approved = TRUE AND rating IS NOT NULL
+        ORDER BY submitted_at DESC LIMIT 200`);
+    _revCache = { at: Date.now(), rows };
+    return rows.slice(0, limit);
+  } catch { return _revCache.rows.slice(0, limit); }
+}
+
+/* The page a customer lands on from the request email. */
+app.get('/review/:token', async (req, res) => {
+  const token = String(req.params.token || '');
+  const pre = Math.max(0, Math.min(5, parseInt(req.query.r, 10) || 0));
+  try {
+    const { rows } = await pool.query('SELECT * FROM reviews WHERE token=$1', [token]);
+    if (!rows.length) {
+      return res.status(404).send(quotePage('Link not found', `
+        <div class="card"><h1>That link has expired</h1>
+        <p class="muted" style="margin-top:8px">We'd still love your feedback — just reply to our email or
+        text ${SHOP_PHONE}.</p></div>`));
+    }
+    const r = rows[0];
+    if (r.submitted_at) {
+      return res.send(quotePage('Thank you', `
+        <div class="card"><h1>Thanks — we have your review</h1>
+        <p class="muted" style="margin-top:8px">You rated us ${STAR(r.rating || 0)}. We appreciate you taking the time.</p>
+        ${(r.rating >= 4 && GOOGLE_REVIEW_URL) ? `<p style="margin-top:14px">
+          <a class="btn" href="${escEmail(GOOGLE_REVIEW_URL)}" target="_blank" rel="noopener">Share it on Google →</a></p>` : ''}
+        </div>`));
+    }
+
+    res.send(quotePage('How did we do?', `
+      <div class="card">
+        <h1>How did we do?</h1>
+        <div class="sub">${r.name ? escEmail(String(r.name).split(' ')[0]) + ', your' : 'Your'} feedback helps a small Chicago shop.</div>
+        <form method="POST" action="/review/${escEmail(token)}">
+          <label>Your rating</label>
+          <div class="stars-pick" style="display:flex;gap:6px;margin-bottom:6px">
+            ${[1,2,3,4,5].map(n => `
+              <label style="flex:1;text-align:center;margin:0;cursor:pointer">
+                <input type="radio" name="rating" value="${n}" ${pre === n ? 'checked' : ''} required
+                       style="position:absolute;opacity:0;width:0" onchange="pick(${n})">
+                <span class="st" data-n="${n}"
+                      style="display:block;font-size:30px;line-height:1.1;color:#d6dae5">★</span>
+              </label>`).join('')}
+          </div>
+          <label>A short headline</label>
+          <input name="title" maxlength="80" placeholder="e.g. Great job on the hats">
+          <label>What stood out?</label>
+          <textarea name="body" rows="4" maxlength="1200" placeholder="Anything you'd tell a friend"></textarea>
+          <label>Name to show <span style="text-transform:none;font-weight:400">(first name and initial is fine)</span></label>
+          <input name="name" value="${escEmail(r.name || '')}" maxlength="60">
+          <button type="submit" style="width:100%;margin-top:14px">Send my review</button>
+        </form>
+        <p class="muted" style="margin-top:10px;text-align:center">We read every one. Nothing is published without your name as you enter it here.</p>
+      </div>
+      <script>
+        function pick(n){
+          document.querySelectorAll('.st').forEach(function(s){
+            s.style.color = Number(s.dataset.n) <= n ? '#F4A623' : '#d6dae5';
+          });
+        }
+        ${pre ? `pick(${pre});` : ''}
+      </script>
+    `));
+  } catch (err) {
+    console.error('review page failed:', err.message);
+    res.status(500).send(quotePage('Something went wrong',
+      `<div class="card"><div class="warn">Please try again shortly.</div></div>`));
+  }
+});
+
+/* Submission. 4-5 stars are invited to Google; 1-3 stay private and alert June. */
+app.post('/review/:token', orderRateLimit, async (req, res) => {
+  const token = String(req.params.token || '');
+  const b = req.body || {};
+  const rating = Math.max(1, Math.min(5, parseInt(b.rating, 10) || 0));
+  try {
+    const { rows } = await pool.query(
+      `UPDATE reviews SET rating=$2, title=$3, body=$4, name=COALESCE(NULLIF($5,''), name),
+              submitted_at=NOW()
+        WHERE token=$1 AND submitted_at IS NULL RETURNING *`,
+      [token, rating,
+       String(b.title || '').trim().slice(0, 80),
+       String(b.body || '').trim().slice(0, 1200),
+       String(b.name || '').trim().slice(0, 60)]);
+
+    if (rows.length) {
+      const r = rows[0];
+      _revCache = { at: 0, rows: [] };          // force a refresh
+      sendEmail({
+        to: SHOP_EMAIL,
+        replyTo: r.email || undefined,
+        subject: `${rating >= 4 ? '⭐' : '⚠️'} ${rating}-star review — ${r.name || 'customer'}`,
+        html: `<div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto">
+          <h2 style="color:${rating >= 4 ? '#166534' : '#b45309'}">${STAR(rating)} ${rating}/5</h2>
+          <p><b>${escEmail(r.title || '')}</b></p>
+          <p style="color:#374151;line-height:1.6">${escEmail(r.body || '')}</p>
+          <p style="color:#6b7280;font-size:13px">${escEmail(r.name || '')} ${escEmail(r.email || '')} ${escEmail(r.phone || '')}</p>
+          ${rating <= 3 ? `<p style="background:#fdecea;padding:12px;border-radius:8px;color:#b71c1c">
+            Not published. Worth reaching out before this becomes a public review elsewhere.</p>` : `
+            <p><a href="${PUBLIC_BASE_URL}/admin/reviews">Approve it for the website →</a></p>`}
+        </div>`,
+      }).catch(e => console.error('review alert failed:', e.message));
+    }
+
+    const thanks = (extra) => quotePage('Thank you', `
+      <div class="card">
+        <h1>Thank you${rows.length && rows[0].name ? ', ' + escEmail(String(rows[0].name).split(' ')[0]) : ''}!</h1>
+        <p class="muted" style="margin-top:8px">${extra}</p>
+      </div>`);
+
+    if (rating >= 4 && GOOGLE_REVIEW_URL) {
+      return res.send(quotePage('Thank you', `
+        <div class="card" style="text-align:center">
+          <div style="font-size:34px;color:#F4A623">${STAR(rating)}</div>
+          <h1 style="margin-top:8px">Thank you!</h1>
+          <p class="muted" style="margin:8px 0 16px">Would you mind sharing that on Google? It genuinely helps
+            people find a small shop like ours.</p>
+          <a class="btn" href="${escEmail(GOOGLE_REVIEW_URL)}" target="_blank" rel="noopener"
+             style="width:100%">Post it on Google →</a>
+          <p class="muted" style="margin-top:12px;font-size:12px">Takes about 20 seconds.</p>
+        </div>`));
+    }
+    res.send(thanks(rating >= 4
+      ? 'We really appreciate it.'
+      : `Sorry we fell short — ${SHOP_SIGNER} will be in touch personally to put it right.`));
+  } catch (err) {
+    console.error('review submit failed:', err.message);
+    res.status(500).send(quotePage('Something went wrong',
+      `<div class="card"><div class="warn">Please try again shortly.</div></div>`));
+  }
+});
+
+/* Ask a customer for a review. Called after delivery. */
+async function requestReview({ token, name, email, phone, product, order_ref, quote_code }) {
+  if (!isValidEmail(String(email || ''))) return null;
+  if (!token) {
+    token = reviewToken();
+    await pool.query(
+      `INSERT INTO reviews (token,name,email,phone,product,order_ref,quote_code,requested_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())`,
+      [token, name || '', email, phone || '', product || '', order_ref || null, quote_code || null]);
+  }
+
+  const link = `${PUBLIC_BASE_URL}/review/${token}`;
+  const stars = [1,2,3,4,5].map(n =>
+    `<a href="${link}?r=${n}" style="text-decoration:none;font-size:30px;color:#F4A623">★</a>`).join(' ');
+
+  await sendEmail({
+    to: email,
+    subject: `How did we do${name ? ', ' + String(name).split(' ')[0] : ''}?`,
+    html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
+      <h2 style="color:#1848B8">How did we do?</h2>
+      <p style="color:#374151;line-height:1.6">
+        ${name ? escEmail(String(name).split(' ')[0]) + ', thanks' : 'Thanks'} again for your order${product ? ' — ' + escEmail(product) : ''}.
+        If you have a moment, tap a star. It takes seconds and it genuinely helps a small Chicago shop.</p>
+      <p style="text-align:center;margin:22px 0">${stars}</p>
+      <p style="text-align:center"><a href="${link}"
+         style="background:#1848B8;color:#fff;padding:12px 26px;border-radius:100px;text-decoration:none;font-weight:700">Leave a review</a></p>
+      <p style="color:#6b7280;font-size:13px;line-height:1.6;margin-top:18px">
+        Something not right? Reply to this email or text ${SHOP_PHONE} — ${SHOP_SIGNER} would much rather fix it.</p>
+      <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_NAME} &middot; 3047 N Lincoln Ave #435, Chicago, IL 60657</p>
+    </div>`,
+  });
+  return token;
+}
+
+/* Public feed for the storefront + schema. */
+app.get('/api/reviews', async (req, res) => {
+  const rows = await approvedReviews(parseInt(req.query.limit, 10) || 20);
+  const count = rows.length;
+  const avg = count ? Math.round((rows.reduce((a, r) => a + r.rating, 0) / count) * 10) / 10 : null;
+  res.set('Cache-Control', 'public, max-age=600');
+  res.json({
+    count, average: avg,
+    reviews: rows.map(r => ({
+      name: r.name, rating: r.rating, title: r.title, body: r.body,
+      product: r.product, date: r.submitted_at,
+    })),
+  });
+});
+
+/* June approves what appears publicly. */
+app.get('/admin/reviews', requireAdmin, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT * FROM reviews WHERE submitted_at IS NOT NULL ORDER BY submitted_at DESC LIMIT 200`);
+    const body = rows.map(r => `
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;gap:10px">
+          <div><b>${escEmail(r.title || '(no headline)')}</b>
+            <div class="muted">${escEmail(r.name || 'anonymous')} &middot; ${fmtDate(r.submitted_at)}
+              ${r.product ? '&middot; ' + escEmail(r.product) : ''}</div></div>
+          <div style="color:#F4A623;white-space:nowrap">${STAR(r.rating || 0)}</div>
+        </div>
+        <p style="margin-top:8px;color:#46505f">${escEmail(r.body || '')}</p>
+        <form method="POST" action="/admin/reviews/${r.id}" style="margin-top:10px;display:flex;gap:8px">
+          <button name="action" value="${r.approved ? 'hide' : 'approve'}"
+            class="${r.approved ? 'btn-ghost' : ''}" style="padding:8px 18px;font-size:14px">
+            ${r.approved ? 'Hide from site' : 'Approve for site'}</button>
+          <span class="chip" style="align-self:center;background:${r.approved ? '#e7f6ec' : '#eef1f8'};color:${r.approved ? '#166534' : '#6b7280'}">
+            ${r.approved ? 'live' : 'not shown'}</span>
+        </form>
+      </div>`).join('');
+    const live = rows.filter(r => r.approved).length;
+    const avg = rows.length ? (rows.reduce((a, r) => a + (r.rating || 0), 0) / rows.length).toFixed(1) : '—';
+    res.send(quotePage('Reviews', `<h1>Reviews</h1>
+      <div class="sub">${rows.length} received &middot; ${live} live on the site &middot; average ${avg}</div>
+      ${body || '<div class="card"><p class="muted">No reviews yet.</p></div>'}`));
+  } catch (err) {
+    console.error('reviews admin failed:', err.message);
+    res.status(500).send(quotePage('Error', '<div class="card"><div class="warn">Could not load reviews.</div></div>'));
+  }
+});
+
+app.post('/admin/reviews/:id', requireAdmin, async (req, res) => {
+  const approve = (req.body || {}).action === 'approve';
+  await pool.query('UPDATE reviews SET approved=$2 WHERE id=$1', [parseInt(req.params.id, 10) || 0, approve])
+    .catch(e => console.error('review approve failed:', e.message));
+  _revCache = { at: 0, rows: [] };
+  res.redirect('/admin/reviews');
+});
+
 /* ── One-click unsubscribe (RFC 8058) ──────────────────────────────────────
    Gmail/Yahoo require BOTH a GET landing page (for the link in the footer)
    and a POST that unsubscribes without any further interaction (for the
@@ -3325,6 +3593,9 @@ app.post('/api/order-notification', requireInternalKey, async (req, res) => {
 });
 
 // "Your order shipped"
+/* Review requests ride on the shipped notice: the designer calls this when June
+   marks an order shipped, so the ask lands a sensible number of days later
+   rather than needing its own trigger. */
 app.post('/api/order-shipped', requireInternalKey, async (req, res) => {
   try {
     const b = req.body || {};
@@ -3348,12 +3619,61 @@ app.post('/api/order-shipped', requireInternalKey, async (req, res) => {
           : '',
       }),
     });
+    /* Record the ask as DUE rather than holding a timer — a setTimeout would be
+       lost on the next deploy, and this service redeploys often. The hourly
+       sweep sends it when the date arrives. */
+    if (isValidEmail(String(b.email || ''))) {
+      const days = Math.max(0, parseInt(process.env.JT_REVIEW_DELAY_DAYS || '7', 10));
+      await pool.query(
+        `INSERT INTO reviews (token, name, email, phone, product, order_ref, requested_at)
+         VALUES ($1,$2,$3,$4,$5,$6, NOW() + ($7 || ' days')::interval)
+         ON CONFLICT (token) DO NOTHING`,
+        [reviewToken(), b.name || '', String(b.email), b.phone || '',
+         Array.isArray(b.items) && b.items[0] ? b.items[0].name : '',
+         String(b.order_id || ''), String(days)]
+      ).catch(e => console.error('review queue failed:', e.message));
+    }
+
     res.json({ ok: true });
   } catch (err) {
     console.error('order-shipped error:', err.message);
     res.status(500).json({ error: 'send failed' });
   }
 });
+
+/* Send review requests that have come due. Runs inside the existing hourly
+   sweep — no new scheduler, and it survives deploys because the due date lives
+   in the database rather than in a timer. */
+async function sendDueReviewRequests() {
+  try {
+    const { rows } = await pool.query(
+      `SELECT * FROM reviews
+        WHERE sent_at IS NULL AND submitted_at IS NULL
+          AND requested_at IS NOT NULL AND requested_at <= NOW()
+          AND email <> '' LIMIT 25`);
+    for (const r of rows) {
+      // Never mail someone who has opted out.
+      if (await isUnsubscribed(r.email)) {
+        await pool.query('UPDATE reviews SET sent_at=NOW() WHERE id=$1', [r.id]);
+        continue;
+      }
+      try {
+        await requestReview({
+          token: r.token, name: r.name, email: r.email, phone: r.phone,
+          product: r.product, order_ref: r.order_ref, quote_code: r.quote_code,
+        });
+        await pool.query('UPDATE reviews SET sent_at=NOW() WHERE id=$1', [r.id]);
+        console.log('review request sent:', r.email);
+      } catch (e) {
+        console.error('review request failed for', r.email, e.message);
+        // Mark it anyway so one bad address cannot block the queue forever.
+        await pool.query('UPDATE reviews SET sent_at=NOW() WHERE id=$1', [r.id]);
+      }
+    }
+  } catch (e) {
+    console.error('review sweep failed:', e.message);
+  }
+}
 
 // Hourly abandoned-cart sweep trigger (the designer PHP does the real work).
 // Self-rescheduling with a timeout so a slow sweep can never overlap the next one.
@@ -3365,6 +3685,7 @@ if (process.env.JT_INTERNAL_KEY) {
         { signal: AbortSignal.timeout(120000) }
       );
       console.log('abandoned-cart sweep:', (await r.text()).trim());
+      await sendDueReviewRequests();
     } catch (e) {
       console.error('abandoned-cart sweep failed:', e.message);
     }
