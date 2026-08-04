@@ -746,16 +746,27 @@ async function createGradCloverCustomerAndOrder(order) {
 // ─── Auth (admin routes) ──────────────────────────────────────────────────────
 
 function requireAdmin(req, res, next) {
-  const expected = 'Basic ' + Buffer.from(`admin:${process.env.ADMIN_PASSWORD || ''}`).toString('base64');
-  const provided  = req.headers['authorization'] || '';
+  const secret = process.env.ADMIN_PASSWORD || '';
   let valid = false;
+
+  /* The PASSWORD is the secret; the username is not checked.
+     Phone keyboards autocapitalise the first letter, so "Admin" was failing and
+     the browser re-prompted forever — an unguessable password is what actually
+     protects this, and a case-sensitive username only ever locked out the owner. */
   try {
-    valid = provided.length === expected.length &&
-      crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+    const provided = req.headers['authorization'] || '';
+    if (secret && provided.startsWith('Basic ')) {
+      const decoded = Buffer.from(provided.slice(6), 'base64').toString('utf8');
+      const pass = decoded.slice(decoded.indexOf(':') + 1);
+      const a = Buffer.from(pass);
+      const b = Buffer.from(secret);
+      valid = a.length === b.length && crypto.timingSafeEqual(a, b);
+    }
   } catch { valid = false; }
+
   if (!valid) {
     res.set('WWW-Authenticate', 'Basic realm="Admin"');
-    return res.status(401).send('Unauthorized');
+    return res.status(401).send('Unauthorized — any username, the password is what matters.');
   }
   next();
 }
