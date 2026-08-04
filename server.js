@@ -100,6 +100,8 @@ async function initDB() {
     'paid_method TEXT',
     'paid_at TIMESTAMPTZ',
     'stripe_session TEXT',
+    'change_request TEXT',            // what the customer asked to change
+    'revision INT DEFAULT 1',         // bumped each time June edits it
   ]) {
     await pool.query(`ALTER TABLE quotes ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
@@ -2106,10 +2108,27 @@ function quotePage(title, body) {
 <title>${escEmail(title)}</title><style>${QUOTE_CSS}</style></head><body><div class="wrap">${body}</div></body></html>`;
 }
 
-/* The form June opens on her phone. */
-app.get('/quote/new', requireAdmin, async (req, res) => {
+/* The form June opens on her phone. Also serves /quote/:code/edit, pre-filled,
+   so editing is the same screen rather than a second thing to maintain. */
+app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
   let catalog = { products: [], methods: [] };
   try { catalog = await getCatalog(); } catch (e) { /* form still works manually */ }
+
+  let existing = null;
+  const editCode = String(req.params.code || '').toUpperCase();
+  if (QUOTE_CODE_RE.test(editCode)) {
+    const { rows } = await pool.query('SELECT * FROM quotes WHERE code=$1', [editCode]);
+    if (!rows.length) {
+      return res.status(404).send(quotePage('Not found',
+        `<div class="card"><div class="warn">No quote with that code.</div>
+         <a class="btn btn-ghost" href="/quotes">All quotes</a></div>`));
+    }
+    existing = rows[0];
+  }
+  const E = existing || {};
+  const eItems = (E.items && E.items.length) ? E.items : [null];
+  const val = (v) => v == null ? '' : escEmail(String(v));
+  const [eFirst, ...eRest] = String(E.name || '').trim().split(/\s+/);
 
   const prodOpts = catalog.products.map(p =>
     `<option value="${escEmail(String(p.id))}">${escEmail(p.name)} — ${money(p.price)}</option>`
@@ -2118,7 +2137,7 @@ app.get('/quote/new', requireAdmin, async (req, res) => {
     .filter(m => m.use_for_quoting && Object.keys(m.positions || {}).length)
     .map(m => `<option value="${m.id}">${escEmail(m.title)}</option>`).join('');
 
-  const lineHtml = (n) => `
+  const lineHtml = (n, it) => `
     <div class="line" data-n="${n}">
       <div class="row">
         <div style="flex:2"><select name="product${n}" class="p"><option value="">— product (or type below) —</option>${prodOpts}</select></div>
@@ -2126,37 +2145,41 @@ app.get('/quote/new', requireAdmin, async (req, res) => {
       <div class="row">
         <div style="flex:2"><select name="method${n}" class="m"><option value="">— decoration —</option>${methodOpts}</select></div>
       </div>
-      <input name="description${n}" class="d" placeholder="Description (type anything for a custom line)">
-      <input name="details${n}" class="dt" placeholder="Details the customer should see (colour, ink, placement…)" style="margin-top:6px">
+      <input name="description${n}" class="d" value="${it ? val(it.description) : ''}" placeholder="Description (type anything for a custom line)">
+      <input name="details${n}" class="dt" value="${it ? val(it.details) : ''}" placeholder="Details the customer should see (colour, ink, placement…)" style="margin-top:6px">
       <div class="shots" style="margin-top:8px">
         <label style="margin:0 0 6px">Photos / mockups</label>
         <input type="file" class="fi" accept="image/*" multiple style="padding:8px;font-size:14px">
-        <input type="hidden" name="images${n}" class="im" value="">
+        <input type="hidden" name="images${n}" class="im" value="${it && it.images ? escEmail(JSON.stringify(it.images)) : ''}">
         <div class="thumbs" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px"></div>
       </div>
       <div class="sizes" style="display:none;margin-top:8px"></div>
       <input type="hidden" name="sizemix${n}" class="sm" value="">
       <div class="row" style="margin-top:8px">
-        <div><input name="qty${n}" class="q" type="number" inputmode="numeric" min="1" placeholder="Qty"></div>
-        <div><input name="unit_price${n}" class="u" type="number" step="0.01" inputmode="decimal" placeholder="Each $"></div>
+        <div><input name="qty${n}" class="q" type="number" inputmode="numeric" min="1" value="${it ? val(it.qty) : ''}" placeholder="Qty"></div>
+        <div><input name="unit_price${n}" class="u" type="number" step="0.01" inputmode="decimal" value="${it && it.manual ? val(it.unit_price) : ''}" placeholder="Each $"></div>
         <div style="flex:0 0 84px;display:flex;align-items:center;justify-content:flex-end"><b class="lt muted">—</b></div>
       </div>
     </div>`;
 
   res.send(quotePage('New quote', `
-    <h1>New quote</h1>
-    <div class="sub">Fills in the message for you — you still send it from your phone.</div>
-    <form method="POST" action="/api/quotes" id="qf">
+    <h1>${existing ? 'Edit quote ' + escEmail(existing.code) : 'New quote'}</h1>
+    <div class="sub">${existing
+      ? 'Their link stays the same — it updates the moment you save.'
+      : 'Fills in the message for you — you still send it from your phone.'}</div>
+    ${existing && existing.change_request ? `<div class="card"><b>They asked for:</b>
+      <div class="muted" style="margin-top:6px">"${escEmail(existing.change_request)}"</div></div>` : ''}
+    <form method="POST" action="${existing ? '/api/quotes/' + existing.code : '/api/quotes'}" id="qf">
       <div class="card">
         <div class="row">
           <div><label>First name <span style="text-transform:none;font-weight:400">(optional)</span></label>
-               <input name="first_name" autocomplete="off"></div>
+               <input name="first_name" value="${val(eFirst)}" autocomplete="off"></div>
           <div><label>Last name <span style="text-transform:none;font-weight:400">(optional)</span></label>
-               <input name="last_name" autocomplete="off"></div>
+               <input name="last_name" value="${val(eRest.join(' '))}" autocomplete="off"></div>
         </div>
         <div class="row">
-          <div><label>Mobile <span style="text-transform:none;font-weight:400">(optional)</span></label><input name="phone" type="tel" inputmode="tel" autocomplete="off"></div>
-          <div><label>Email <span style="text-transform:none;font-weight:400">(optional)</span></label><input name="email" type="email" autocomplete="off"></div>
+          <div><label>Mobile <span style="text-transform:none;font-weight:400">(optional)</span></label><input name="phone" type="tel" inputmode="tel" value="${val(E.phone)}" autocomplete="off"></div>
+          <div><label>Email <span style="text-transform:none;font-weight:400">(optional)</span></label><input name="email" type="email" value="${val(E.email)}" autocomplete="off"></div>
         </div>
         <p class="muted" style="margin-top:8px">All optional. Leave the name blank for an online or walk-up enquiry and
           the customer is asked for it when they open the quote. Phone or email — either one is enough;
@@ -2166,12 +2189,12 @@ app.get('/quote/new', requireAdmin, async (req, res) => {
 
       <div class="card">
         <label style="margin-top:0">Items</label>
-        <div id="lines">${lineHtml(0)}</div>
+        <div id="lines">${eItems.map((it, ix) => lineHtml(ix, it)).join('')}</div>
         <button type="button" class="btn btn-ghost" style="padding:9px 18px;font-size:14px" onclick="addLine()">+ Add another item</button>
         <table style="width:100%;margin-top:14px;border-top:1px solid #e3e8f2;padding-top:10px">
           <tr><td class="muted">Subtotal</td><td class="num" id="sub">$0.00</td></tr>
           <tr><td class="muted"><label style="display:inline;margin:0;text-transform:none;letter-spacing:0;font-size:14px;font-weight:400">
-            <input type="checkbox" name="taxable" value="1" checked style="width:auto;margin-right:6px" onchange="calc()"> Illinois sales tax</label></td>
+            <input type="checkbox" name="taxable" value="1" ${!existing || Number(E.tax) > 0 ? 'checked' : ''} style="width:auto;margin-right:6px" onchange="calc()"> Illinois sales tax</label></td>
             <td class="num" id="tax">$0.00</td></tr>
           <tr><td class="tot">Total</td><td class="num tot" id="tot">$0.00</td></tr>
           <tr><td class="muted" style="padding-top:6px">Deposit to start</td><td class="num" id="dep" style="padding-top:6px">$0.00</td></tr>
@@ -2180,20 +2203,20 @@ app.get('/quote/new', requireAdmin, async (req, res) => {
 
       <div class="card">
         <label>Needed by <span style="text-transform:none;font-weight:400">(optional)</span></label>
-        <input name="needed_by" type="date">
+        <input name="needed_by" type="date" value="${E.needed_by ? String(E.needed_by).slice(0,10) : ''}">
         <p class="muted" id="eta" style="margin-top:8px"></p>
         <label>Quote good for (days)</label>
         <input name="valid_days" type="number" value="14" inputmode="numeric">
-        <label>Notes for the customer</label><textarea name="notes" rows="2" placeholder="Optional"></textarea>
+        <label>Notes for the customer</label><textarea name="notes" rows="2" placeholder="Optional">${val(E.notes)}</textarea>
       </div>
 
-      <button type="submit">Create quote &amp; get the message</button>
+      <button type="submit">${existing ? 'Save changes' : 'Create quote &amp; get the message'}</button>
     </form>
     <p style="margin-top:14px"><a class="muted" href="/quotes">View all quotes →</a></p>
     <script>
       var CAT = ${JSON.stringify(catalog)};
       var TAX = ${TAX_RATE}, DEP = ${DEPOSIT_PC}, FULL_UNDER = ${DEPOSIT_FULL_UNDER};
-      var n = 1;
+      var n = ${eItems.length};
       function tierFor(m, qty){
         var pos = m && m.positions ? (m.positions.front || m.positions[Object.keys(m.positions)[0]]) : null;
         if (!pos || !pos.length) return 0;
@@ -2403,7 +2426,7 @@ app.get('/api/quotes/prior', requireAdmin, async (req, res) => {
 });
 
 /* Create a quote, then show the ready-to-send message. */
-app.post('/api/quotes', requireAdmin, async (req, res) => {
+app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) => {
   try {
     const b = req.body || {};
     const name = [String(b.first_name || '').trim(), String(b.last_name || '').trim()]
@@ -2513,19 +2536,42 @@ app.post('/api/quotes', requireAdmin, async (req, res) => {
     const validUntil = new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
     const neededBy = String(b.needed_by || '').trim() || null;
 
-    let code = newQuoteCode();
-    for (let i = 0; i < 5; i++) {
-      const { rows } = await pool.query('SELECT 1 FROM quotes WHERE code=$1', [code]);
-      if (!rows.length) break;
-      code = newQuoteCode();
+    const editing = String(req.params.code || '').toUpperCase();
+    let rows;
+
+    if (QUOTE_CODE_RE.test(editing)) {
+      /* Edit in place. The code never changes, so the link the customer already
+         has updates itself — no need to re-send unless June wants to. Clearing
+         change_request marks the request as handled. */
+      ({ rows } = await pool.query(
+        `UPDATE quotes SET name=$2, phone=$3, email=$4, items=$5, subtotal=$6, tax=$7,
+                total=$8, deposit=$9, notes=$10, valid_until=$11, needed_by=$12,
+                change_request=NULL, revision=COALESCE(revision,1)+1,
+                status = CASE WHEN accepted_at IS NULL THEN 'sent' ELSE status END
+          WHERE code=$1 RETURNING *`,
+        [editing, name, phone, email, JSON.stringify(items), subtotal, tax, total, deposit,
+         String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy]));
+      if (!rows.length) {
+        return res.status(404).send(quotePage('Not found',
+          `<div class="card"><div class="warn">That quote no longer exists.</div>
+           <a class="btn btn-ghost" href="/quotes">All quotes</a></div>`));
+      }
+    } else {
+      let code = newQuoteCode();
+      for (let i = 0; i < 5; i++) {
+        const { rows: dup } = await pool.query('SELECT 1 FROM quotes WHERE code=$1', [code]);
+        if (!dup.length) break;
+        code = newQuoteCode();
+      }
+      ({ rows } = await pool.query(
+        `INSERT INTO quotes (code,name,phone,email,items,subtotal,tax,total,deposit,notes,status,valid_until,needed_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'sent',$11,$12) RETURNING *`,
+        [code, name, phone, email, JSON.stringify(items), subtotal, tax, total, deposit,
+         String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy]));
     }
 
-    const { rows } = await pool.query(
-      `INSERT INTO quotes (code,name,phone,email,items,subtotal,tax,total,deposit,notes,status,valid_until,needed_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'sent',$11,$12) RETURNING *`,
-      [code, name, phone, email, JSON.stringify(items), subtotal, tax, total, deposit,
-       String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy]);
     const q = rows[0];
+    const code = q.code;
 
     syncQuoteToBrevo(q).then(ids => {
       if (ids.contactId || ids.dealId) {
@@ -2542,7 +2588,7 @@ app.post('/api/quotes', requireAdmin, async (req, res) => {
       : '';
 
     res.send(quotePage('Quote ready', `
-      <h1>Quote ${escEmail(code)}</h1>
+      <h1>Quote ${escEmail(code)}${q.revision > 1 ? ` <span class="muted" style="font-size:14px">rev ${q.revision}</span>` : ''}</h1>
       <div class="sub">${escEmail(name || phone || email || 'No contact on file')} &middot; ${money(total)}
         &middot; deposit ${money(deposit)} &middot; good through ${fmtDate(validUntil)}</div>
       <div class="card">
@@ -2703,6 +2749,24 @@ app.get('/q/:code', async (req, res) => {
         </form>
         <p class="muted" style="margin-top:10px;text-align:center">Nothing is charged yet — you'll pick how to pay next.</p>
       </div>`}
+
+      ${(paid || accepted) ? '' : `
+      <div class="card">
+        <details>
+          <summary style="cursor:pointer;font-weight:700;color:#33415c">Not quite right? Ask for a change</summary>
+          <form method="POST" action="/q/${q.code}/changes" style="margin-top:12px">
+            <label>What would you like different?</label>
+            <textarea name="message" rows="3" required
+              placeholder="e.g. make it 36 instead of 24, or navy rather than black"></textarea>
+            <button type="submit" class="btn-ghost" style="width:100%;margin-top:10px">Send to ${SHOP_SIGNER}</button>
+          </form>
+          <p class="muted" style="margin-top:8px">${SHOP_SIGNER} will adjust the quote and this same link will update — nothing to re-open.</p>
+        </details>
+      </div>`}
+
+      ${q.change_request && !accepted ? `
+      <div class="card"><div class="ok">Change requested — ${SHOP_SIGNER} is updating this quote.
+        <div class="muted" style="margin-top:6px">"${escEmail(q.change_request)}"</div></div></div>` : ''}
 
       <div class="card" style="text-align:center">
         <p class="muted">Questions? <a href="tel:+17738491854">${SHOP_PHONE}</a> &middot; ${SHOP_SIGNER}</p>
@@ -2921,6 +2985,37 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
     console.error('accept failed:', err.message);
     res.redirect('/q/' + code);
   }
+});
+
+/* Customer asks for a change rather than accepting. Keeps the same code so the
+   link they already have keeps working once June edits it. */
+app.post('/q/:code/changes', orderRateLimit, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/');
+  const msg = String((req.body && req.body.message) || '').trim().slice(0, 1000);
+  try {
+    const { rows } = await pool.query(
+      `UPDATE quotes SET change_request=$2, status='changes'
+        WHERE code=$1 AND accepted_at IS NULL RETURNING *`, [code, msg]);
+    if (rows.length && msg) {
+      const q = rows[0];
+      sendEmail({
+        to: SHOP_EMAIL,
+        replyTo: q.email || undefined,
+        subject: `✏️ Change requested — quote ${q.code} (${q.name || q.phone || 'customer'})`,
+        html: `<div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto">
+          <h2 style="color:#1848B8">They'd like a change</h2>
+          <p style="color:#374151"><b>${escEmail(q.name || '')}</b> ${escEmail(q.phone || '')} ${escEmail(q.email || '')}</p>
+          <blockquote style="border-left:3px solid #1848B8;padding-left:12px;color:#374151">${escEmail(msg)}</blockquote>
+          <p style="margin-top:16px"><a href="${PUBLIC_BASE_URL}/quote/${q.code}/edit"
+             style="background:#1848B8;color:#fff;padding:12px 24px;border-radius:100px;text-decoration:none;font-weight:700">Edit this quote →</a></p>
+          <p style="color:#6b7280;font-size:13px">Their link stays the same — it updates when you save.</p></div>`,
+      }).catch(e => console.error('change alert failed:', e.message));
+    }
+  } catch (err) {
+    console.error('change request failed:', err.message);
+  }
+  res.redirect('/q/' + code);
 });
 
 /* One tap to add them to the iPhone address book. */
