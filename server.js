@@ -102,6 +102,7 @@ async function initDB() {
     'stripe_session TEXT',
     'change_request TEXT',            // what the customer asked to change
     'revision INT DEFAULT 1',         // bumped each time June edits it
+    'deposit_nudged_at TIMESTAMPTZ',  // accepted but deposit unpaid reminder
   ]) {
     await pool.query(`ALTER TABLE quotes ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
@@ -3704,6 +3705,116 @@ app.post('/api/order-shipped', requireInternalKey, async (req, res) => {
   }
 });
 
+/* Quote nudges. A quote that is sent and then goes quiet is the most common way
+   work is lost, so this chases it — but only in ways that respect the customer:
+   ONE follow-up, only if they have not accepted, only while the quote is still
+   valid, and never to someone who has opted out. June still texts personally;
+   this is the safety net for the ones she does not get back to. */
+async function sendQuoteFollowUps() {
+  const days = Math.max(1, parseInt(process.env.JT_QUOTE_FOLLOWUP_DAYS || '3', 10));
+  try {
+    const { rows } = await pool.query(
+      `SELECT * FROM quotes
+        WHERE accepted_at IS NULL
+          AND followed_up_at IS NULL
+          AND status IN ('sent','viewed')
+          AND created_at <= NOW() - ($1 || ' days')::interval
+          AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)
+          AND email <> ''
+        LIMIT 20`, [String(days)]);
+
+    for (const q of rows) {
+      // Mark first: a send that throws must not re-fire every hour.
+      await pool.query('UPDATE quotes SET followed_up_at=NOW() WHERE id=$1', [q.id]);
+      if (await isUnsubscribed(q.email)) continue;
+
+      const msgs = quoteMessages(q);
+      const t = quoteTotals(q);
+      try {
+        await sendEmail({
+          to: q.email,
+          subject: `Still thinking it over? Quote ${q.code}`,
+          html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
+            <h2 style="color:#1848B8">Just checking in</h2>
+            <p style="color:#374151;line-height:1.6">${escEmail(msgs.followup.split('\n')[0])}</p>
+            <p style="text-align:center;margin:22px 0">
+              <a href="${quoteLink(q.code)}" style="background:#1848B8;color:#fff;padding:13px 28px;
+                 border-radius:100px;text-decoration:none;font-weight:700">View your quote — ${money(t.total)}</a></p>
+            <p style="color:#374151;line-height:1.6">Happy to adjust quantities, colours or sizes — just reply
+               or text ${SHOP_PHONE}. If the timing is wrong, no problem at all.</p>
+            <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_NAME} &middot; ${SHOP_SIGNER} &middot; ${SHOP_PHONE}</p>
+          </div>`,
+        });
+        console.log('quote follow-up sent:', q.code, q.email);
+      } catch (e) {
+        console.error('quote follow-up failed', q.code, e.message);
+      }
+    }
+  } catch (e) {
+    console.error('quote follow-up sweep failed:', e.message);
+  }
+}
+
+/* Accepted but never paid. This is the expensive one — the customer has said
+   yes and is waiting on June, while June is waiting on the deposit and nothing
+   moves. One reminder, two days after acceptance. */
+async function sendDepositReminders() {
+  const days = Math.max(1, parseInt(process.env.JT_DEPOSIT_NUDGE_DAYS || '2', 10));
+  try {
+    const { rows } = await pool.query(
+      `SELECT * FROM quotes
+        WHERE accepted_at IS NOT NULL
+          AND COALESCE(paid_amount,0) = 0
+          AND deposit_nudged_at IS NULL
+          AND accepted_at <= NOW() - ($1 || ' days')::interval
+          AND email <> ''
+        LIMIT 20`, [String(days)]);
+
+    for (const q of rows) {
+      await pool.query('UPDATE quotes SET deposit_nudged_at=NOW() WHERE id=$1', [q.id]);
+      const t = quoteTotals(q);
+      try {
+        await sendEmail({
+          to: q.email,
+          subject: `Ready when you are — deposit for quote ${q.code}`,
+          html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
+            <h2 style="color:#1848B8">We're ready to start</h2>
+            <p style="color:#374151;line-height:1.6">
+              ${q.name ? escEmail(String(q.name).split(' ')[0]) + ', thanks' : 'Thanks'} for approving your quote.
+              We'll get straight on it as soon as the deposit is in — that's what reserves your spot in the
+              print schedule.</p>
+            <p style="text-align:center;margin:22px 0">
+              <a href="${quoteLink(q.code)}" style="background:#1848B8;color:#fff;padding:13px 28px;
+                 border-radius:100px;text-decoration:none;font-weight:700">Pay ${money(t.deposit)} deposit</a></p>
+            <p style="color:#374151;line-height:1.6">Card, Apple Pay, Zelle to <b>${escEmail(ZELLE_HANDLE)}</b>,
+               or cash — whichever suits. Questions? Just reply or text ${SHOP_PHONE}.</p>
+            <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_NAME} &middot; ${SHOP_SIGNER}</p>
+          </div>`,
+        });
+        console.log('deposit reminder sent:', q.code);
+      } catch (e) {
+        console.error('deposit reminder failed', q.code, e.message);
+      }
+    }
+  } catch (e) {
+    console.error('deposit reminder sweep failed:', e.message);
+  }
+}
+
+/* Expire quotes whose validity has passed, so the list reflects reality
+   instead of showing stale "sent" rows forever. */
+async function expireOldQuotes() {
+  try {
+    const r = await pool.query(
+      `UPDATE quotes SET status='expired'
+        WHERE accepted_at IS NULL AND status IN ('sent','viewed','changes')
+          AND valid_until IS NOT NULL AND valid_until < CURRENT_DATE`);
+    if (r.rowCount) console.log('quotes expired:', r.rowCount);
+  } catch (e) {
+    console.error('quote expiry failed:', e.message);
+  }
+}
+
 /* Send review requests that have come due. Runs inside the existing hourly
    sweep — no new scheduler, and it survives deploys because the due date lives
    in the database rather than in a timer. */
@@ -3749,6 +3860,9 @@ if (process.env.JT_INTERNAL_KEY) {
       );
       console.log('abandoned-cart sweep:', (await r.text()).trim());
       await sendDueReviewRequests();
+      await sendQuoteFollowUps();
+      await sendDepositReminders();
+      await expireOldQuotes();
     } catch (e) {
       console.error('abandoned-cart sweep failed:', e.message);
     }
