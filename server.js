@@ -2120,6 +2120,7 @@ app.get('/quote/new', requireAdmin, async (req, res) => {
         <div style="flex:2"><select name="method${n}" class="m"><option value="">— decoration —</option>${methodOpts}</select></div>
       </div>
       <input name="description${n}" class="d" placeholder="Description (type anything for a custom line)">
+      <p class="muted up" style="margin:4px 0 0;font-size:12px"></p>
       <div class="row">
         <div><input name="qty${n}" class="q" type="number" inputmode="numeric" min="1" placeholder="Qty"></div>
         <div><input name="unit_price${n}" class="u" type="number" step="0.01" inputmode="decimal" placeholder="Each $"></div>
@@ -2194,6 +2195,15 @@ app.get('/quote/new', requireAdmin, async (req, res) => {
           sub += lt;
           var d = L.querySelector('.d');
           if (!d.value && prod) d.value = prod.name + (meth ? ' — ' + meth.title : '');
+          // Extended sizes cost more and are NOT in the unit price above.
+          var up = L.querySelector('.up');
+          if (prod && prod.sizes) {
+            var extra = prod.sizes.filter(function(x){ return x.upcharge > 0; });
+            up.textContent = extra.length
+              ? 'Extended sizes cost more — add a line if any: ' +
+                extra.map(function(x){ return x.size + ' +$' + x.upcharge.toFixed(2); }).join(' · ')
+              : '';
+          } else if (up) { up.textContent = ''; }
         });
         var tax = document.querySelector('[name=taxable]').checked ? sub*TAX : 0;
         var tot = sub + tax;
@@ -2568,6 +2578,11 @@ app.get('/q/:code/pay/card', async (req, res) => {
     form.set('line_items[1][price_data][product_data][name]',
              `Card processing fee (${Math.round(CARD_FEE * 100)}%)`);
     form.set('metadata[quote_code]', q.code);
+    /* payment_method_types is deliberately NOT set. Omitting it lets Stripe
+       show whatever is enabled under Dashboard > Payment methods — Apple Pay and
+       Google Pay appear automatically on supported devices, and PayPal, Link,
+       Cash App Pay or Klarna can be switched on there without touching code. */
+    form.set('automatic_tax[enabled]', 'false');
 
     const r = await fetch('https://api.stripe.com/v1/checkout/sessions', {
       method: 'POST',
