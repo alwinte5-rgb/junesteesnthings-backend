@@ -2343,6 +2343,15 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
         return price;
       }
       function m2(v){ return '$' + (Math.round(v*100)/100).toFixed(2); }
+      /* One tap to charge a returning customer what they paid last time — this
+         is what actually stops prices drifting between jobs. */
+      function usePrice(v){
+        var line = document.querySelector('.line');
+        if (!line) return;
+        line.querySelector('.u').value = v.toFixed(2);
+        calc();
+        line.querySelector('.u').scrollIntoView({block:'center', behavior:'smooth'});
+      }
       /* Draw a size row for the chosen product so extended-size upcharges are
          applied automatically instead of being forgotten. */
       function buildSizes(L, prod){
@@ -2481,9 +2490,19 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
             .then(function(r){return r.json();})
             .then(function(d){
               if(!d.found){ document.getElementById('prior').innerHTML=''; return; }
+              var lines = (d.lines||[]).map(function(l,ix){
+                return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:5px">'+
+                  '<span style="font-size:12.5px">'+l.desc+'</span>'+
+                  '<button type="button" class="btn btn-ghost" style="padding:4px 10px;font-size:12px;white-space:nowrap"'+
+                  ' onclick="usePrice('+l.unit+')">$'+l.unit.toFixed(2)+' ea — use</button></div>';
+              }).join('');
               document.getElementById('prior').innerHTML =
-                '<div class="ok" style="margin-top:12px">Last quoted <b>'+d.summary+'</b> at <b>'+d.unit+'</b> on '+d.when+
-                ' &middot; lifetime quoted '+d.lifetime_quoted+', spent '+d.lifetime_spent+'</div>';
+                '<div class="ok" style="margin-top:12px">'+
+                '<b>Returning customer</b> — '+d.count+' quote'+(d.count===1?'':'s')+
+                ', quoted '+d.lifetime_quoted+', paid '+d.lifetime_spent+
+                ' &middot; <a href="'+d.link+'" target="_blank">full history</a>'+
+                '<div class="muted" style="margin-top:6px;font-size:12px">Last quoted '+d.when+':</div>'+
+                lines+'</div>';
             }).catch(function(){});
         }, 400);
       }
@@ -2513,6 +2532,52 @@ async function getCatalog() {
   }
 }
 
+/** Everything known about one customer, matched across phone and email so a
+ *  person quoted by text and one who ordered online resolve to the same record.
+ *  Phone matching uses the last 10 digits, since formatting varies wildly. */
+async function customerHistory(q) {
+  const email = String(q || '').includes('@') ? String(q).trim().toLowerCase() : '';
+  const digits = String(q || '').replace(/\D/g, '').slice(-10);
+  if (!email && digits.length < 10) return null;
+
+  const { rows } = await pool.query(
+    `SELECT * FROM quotes
+      WHERE ($1 <> '' AND lower(email) = $1)
+         OR ($2 <> '' AND regexp_replace(coalesce(phone,''), '\\D', '', 'g') LIKE '%' || $2)
+      ORDER BY created_at DESC`, [email, digits]);
+  if (!rows.length) return null;
+
+  const paidRows = rows.filter(r => Number(r.paid_amount || 0) > 0);
+  const quoted = rows.reduce((a, r) => a + Number(r.total || r.subtotal || 0), 0);
+  const spent = paidRows.reduce((a, r) => a + Number(r.paid_amount || 0), 0);
+  const accepted = rows.filter(r => r.accepted_at).length;
+
+  // Per-year, so a glance shows whether they are a repeat buyer or a repeat asker.
+  const byYear = {};
+  for (const r of rows) {
+    const y = new Date(r.created_at).getFullYear();
+    byYear[y] = byYear[y] || { quoted: 0, spent: 0, count: 0 };
+    byYear[y].quoted += Number(r.total || r.subtotal || 0);
+    byYear[y].spent += Number(r.paid_amount || 0);
+    byYear[y].count++;
+  }
+
+  const name = (rows.find(r => r.name) || {}).name || '';
+  return {
+    name,
+    email: (rows.find(r => r.email) || {}).email || '',
+    phone: (rows.find(r => r.phone) || {}).phone || '',
+    quotes: rows,
+    count: rows.length,
+    accepted,
+    quoted: round2(quoted),
+    spent: round2(spent),
+    first: rows[rows.length - 1].created_at,
+    last: rows[0].created_at,
+    byYear,
+  };
+}
+
 /* Prior pricing for a returning customer — what keeps a repeat quote consistent. */
 app.get('/api/quotes/prior', requireAdmin, async (req, res) => {
   const q = String(req.query.q || '').trim();
@@ -2527,15 +2592,23 @@ app.get('/api/quotes/prior', requireAdmin, async (req, res) => {
     if (!rows.length) return res.json({ found: false });
     const last = rows[0];
     const item = (last.items || [])[0] || {};
-    const quoted = rows.reduce((a, r) => a + Number(r.subtotal || 0), 0);
-    const spent = rows.filter(r => r.status === 'accepted').reduce((a, r) => a + Number(r.subtotal || 0), 0);
+    const quoted = rows.reduce((a, r) => a + Number(r.total || r.subtotal || 0), 0);
+    // Spent means money actually received, not merely accepted.
+    const spent = rows.reduce((a, r) => a + Number(r.paid_amount || 0), 0);
     res.json({
       found: true,
+      name: last.name || '',
       summary: quoteSummary(last.items),
-      unit: item.unit_price != null ? money(item.unit_price) + ' ea' : money(last.subtotal),
+      unit: item.unit_price != null ? money(item.unit_price) + ' ea' : money(last.total || last.subtotal),
       when: fmtDate(last.created_at),
+      count: rows.length,
       lifetime_quoted: money(quoted),
       lifetime_spent: money(spent),
+      link: `/customer?q=${encodeURIComponent(last.email || last.phone || '')}`,
+      // The exact lines they were charged before, so a repeat quote can match.
+      lines: (last.items || []).slice(0, 4).map(i => ({
+        desc: i.description, qty: i.qty, unit: Number(i.unit_price || 0),
+      })),
     });
   } catch (err) {
     console.error('prior lookup failed:', err.message);
@@ -3234,6 +3307,128 @@ app.get('/q/:code/vcard', async (req, res) => {
   }
 });
 
+
+/* One customer, everything about them. Reached from the quotes list. */
+app.get('/customer', requireAdmin, async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (!q) return res.redirect('/quotes');
+  try {
+    const h = await customerHistory(q);
+    if (!h) {
+      return res.send(quotePage('Not found', `
+        <div class="card"><h1>No history for that customer</h1>
+        <p class="muted" style="margin-top:8px">${escEmail(q)}</p>
+        <p style="margin-top:12px"><a class="btn btn-ghost" href="/quotes">All quotes</a></p></div>`));
+    }
+
+    const years = Object.keys(h.byYear).sort().reverse();
+    const maxY = Math.max(...years.map(y => h.byYear[y].quoted), 1);
+
+    const rows = h.quotes.map(r => {
+      const paid = Number(r.paid_amount || 0);
+      const total = Number(r.total || r.subtotal || 0);
+      const bal = round2(Math.max(0, total - paid));
+      const state = paid > 0
+        ? (bal > 0 ? `paid ${money(paid)}, ${money(bal)} due` : `paid in full`)
+        : (r.accepted_at ? 'accepted, unpaid' : r.status);
+      return `
+        <tr>
+          <td><a href="/q/${r.code}">${escEmail(r.code)}</a>
+            <div class="muted" style="font-size:12px">${escEmail(quoteSummary(r.items))}</div></td>
+          <td class="num">${fmtDate(r.created_at)}</td>
+          <td class="num">${money(total)}</td>
+          <td class="num" style="font-size:12.5px;color:${paid > 0 ? '#166534' : '#6b7280'}">${state}</td>
+        </tr>`;
+    }).join('');
+
+    /* Per-line price history — what this person has actually been charged, so a
+       repeat quote can match it instead of relying on memory. */
+    const lineHistory = [];
+    for (const r of h.quotes) {
+      for (const i of (r.items || [])) {
+        lineHistory.push({
+          desc: i.description, unit: Number(i.unit_price || 0),
+          qty: i.qty, when: r.created_at, code: r.code,
+        });
+      }
+    }
+    const priceRows = lineHistory.slice(0, 12).map(l => `
+      <tr><td>${escEmail(l.desc)}</td>
+          <td class="num">${l.qty}</td>
+          <td class="num"><b>${money(l.unit)}</b> ea</td>
+          <td class="num muted" style="font-size:12px">${fmtDate(l.when)}</td></tr>`).join('');
+
+    res.send(quotePage(h.name || 'Customer', `
+      <h1>${escEmail(h.name || h.phone || h.email)}</h1>
+      <div class="sub">
+        ${h.email ? `<a href="mailto:${escEmail(h.email)}">${escEmail(h.email)}</a> &middot; ` : ''}
+        ${h.phone ? `<a href="tel:${escEmail(String(h.phone).replace(/[^0-9+]/g,''))}">${escEmail(h.phone)}</a>` : ''}
+      </div>
+
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin:14px 0">
+        <div class="card" style="flex:1 1 150px;margin:0;text-align:center">
+          <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em">Quotes</div>
+          <div class="tot" style="font-size:22px">${h.count}</div>
+          <div class="muted" style="font-size:12px">${h.accepted} accepted</div>
+        </div>
+        <div class="card" style="flex:1 1 150px;margin:0;text-align:center">
+          <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em">Quoted</div>
+          <div class="tot" style="font-size:22px">${money(h.quoted)}</div>
+          <div class="muted" style="font-size:12px">lifetime</div>
+        </div>
+        <div class="card" style="flex:1 1 150px;margin:0;text-align:center;border-color:#b7e0c4;background:#f6fbf7">
+          <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em">Spent</div>
+          <div class="tot" style="font-size:22px;color:#166534">${money(h.spent)}</div>
+          <div class="muted" style="font-size:12px">${h.quoted > 0 ? Math.round(h.spent / h.quoted * 100) : 0}% of quoted</div>
+        </div>
+      </div>
+
+      ${years.length > 1 ? `
+      <div class="card">
+        <b style="color:#0B1F4B">By year</b>
+        <table style="width:100%;margin-top:10px">
+          ${years.map(y => {
+            const v = h.byYear[y];
+            return `<tr>
+              <td style="width:52px;font-weight:700;color:#0B1F4B">${y}</td>
+              <td style="padding:6px 0">
+                <div style="background:#eef1f8;border-radius:4px;height:9px;position:relative">
+                  <div style="background:#c3cbd8;height:9px;border-radius:4px;width:${Math.round(v.quoted / maxY * 100)}%"></div>
+                  <div style="background:#166534;height:9px;border-radius:4px;width:${Math.round(v.spent / maxY * 100)}%;position:absolute;top:0;left:0"></div>
+                </div>
+              </td>
+              <td class="num muted" style="font-size:12px;white-space:nowrap;padding-left:10px">
+                ${money(v.spent)} of ${money(v.quoted)}</td>
+            </tr>`;
+          }).join('')}
+        </table>
+        <div class="muted" style="font-size:11px;margin-top:6px">green = paid &middot; grey = quoted</div>
+      </div>` : ''}
+
+      ${priceRows ? `
+      <div class="card">
+        <b style="color:#0B1F4B">What they've been charged</b>
+        <div class="muted" style="font-size:12px;margin-bottom:6px">Quote the same price again so it never drifts.</div>
+        <table class="items">${priceRows}</table>
+      </div>` : ''}
+
+      <div class="card">
+        <b style="color:#0B1F4B">Quote history</b>
+        <table class="items" style="margin-top:8px">
+          <thead><tr><th>Quote</th><th class="num">Date</th><th class="num">Total</th><th class="num">Status</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+
+      <p><a class="btn btn-ghost" href="/quotes">← All quotes</a>
+         <a class="btn btn-ghost" href="/quote/new">New quote</a></p>
+    `));
+  } catch (err) {
+    console.error('customer page failed:', err.message);
+    res.status(500).send(quotePage('Error', '<div class="card"><div class="warn">Could not load that customer.</div></div>'));
+  }
+});
+
 /* The tracking list. */
 app.get('/quotes', requireAdmin, async (req, res) => {
   try {
@@ -3271,7 +3466,8 @@ app.get('/quotes', requireAdmin, async (req, res) => {
       return `<div class="card">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
           <div>
-            <b>${escEmail(q.name || q.phone || q.email || '—')}</b>
+            <a href="/customer?q=${encodeURIComponent(q.email || q.phone || '')}"
+               style="color:#0B1F4B;text-decoration:none"><b>${escEmail(q.name || q.phone || q.email || '—')}</b></a>
             <div class="muted">${escEmail(quoteSummary(q.items))} &middot; ${fmtDate(q.created_at)}</div>
           </div>
           <div style="text-align:right;white-space:nowrap">
