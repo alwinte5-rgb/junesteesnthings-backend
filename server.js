@@ -2127,8 +2127,9 @@ app.get('/quote/new', requireAdmin, async (req, res) => {
         <div style="flex:2"><select name="method${n}" class="m"><option value="">— decoration —</option>${methodOpts}</select></div>
       </div>
       <input name="description${n}" class="d" placeholder="Description (type anything for a custom line)">
-      <p class="muted up" style="margin:4px 0 0;font-size:12px"></p>
-      <div class="row">
+      <div class="sizes" style="display:none;margin-top:8px"></div>
+      <input type="hidden" name="sizemix${n}" class="sm" value="">
+      <div class="row" style="margin-top:8px">
         <div><input name="qty${n}" class="q" type="number" inputmode="numeric" min="1" placeholder="Qty"></div>
         <div><input name="unit_price${n}" class="u" type="number" step="0.01" inputmode="decimal" placeholder="Each $"></div>
         <div style="flex:0 0 84px;display:flex;align-items:center;justify-content:flex-end"><b class="lt muted">—</b></div>
@@ -2187,30 +2188,58 @@ app.get('/quote/new', requireAdmin, async (req, res) => {
         return price;
       }
       function m2(v){ return '$' + (Math.round(v*100)/100).toFixed(2); }
+      /* Draw a size row for the chosen product so extended-size upcharges are
+         applied automatically instead of being forgotten. */
+      function buildSizes(L, prod){
+        var box = L.querySelector('.sizes');
+        var key = prod ? String(prod.id) : '';
+        if (box.dataset.for === key) return;
+        box.dataset.for = key;
+        if (!prod || !prod.sizes || !prod.sizes.length) { box.style.display='none'; box.innerHTML=''; return; }
+        box.style.display = 'block';
+        box.innerHTML = '<div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">How many of each size</div>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:6px">' +
+          prod.sizes.map(function(sz){
+            return '<label style="flex:0 0 62px;text-align:center;margin:0">' +
+              '<span style="display:block;font-size:11px;color:#6b7280">' + sz.size +
+              (sz.upcharge>0 ? '<br><span style="color:#b45309">+$'+sz.upcharge.toFixed(2)+'</span>' : '<br>&nbsp;') + '</span>' +
+              '<input type="number" min="0" inputmode="numeric" class="sz" data-size="'+sz.size+'" data-up="'+sz.upcharge+
+              '" style="padding:7px;text-align:center" placeholder="0"></label>';
+          }).join('') + '</div>';
+        box.querySelectorAll('.sz').forEach(function(el){ el.oninput = calc; });
+      }
+
       function calc(){
         var sub = 0;
         document.querySelectorAll('.line').forEach(function(L){
           var prod = CAT.products.find(function(x){return String(x.id)===L.querySelector('.p').value;});
           var meth = CAT.methods.find(function(x){return String(x.id)===L.querySelector('.m').value;});
-          var qty  = parseInt(L.querySelector('.q').value,10)||0;
           var u    = L.querySelector('.u');
-          var auto = prod ? prod.price + tierFor(meth, qty) : 0;
-          if (prod) u.placeholder = auto.toFixed(2);
-          var unit = u.value !== '' ? parseFloat(u.value) : auto;
-          var lt = (unit||0) * qty;
+          var qEl  = L.querySelector('.q');
+          buildSizes(L, prod);
+
+          var boxes = L.querySelectorAll('.sz');
+          var mix = {}, sizeQty = 0, upTotal = 0;
+          boxes.forEach(function(el){
+            var v = parseInt(el.value,10)||0;
+            if (v>0){ mix[el.dataset.size]=v; sizeQty+=v; upTotal += v * parseFloat(el.dataset.up||0); }
+          });
+          L.querySelector('.sm').value = sizeQty ? JSON.stringify(mix) : '';
+
+          // Sizes drive the quantity when a product is chosen.
+          var qty = sizeQty > 0 ? sizeQty : (parseInt(qEl.value,10)||0);
+          if (sizeQty > 0) { qEl.value = sizeQty; qEl.readOnly = true; } else { qEl.readOnly = false; }
+
+          var base = prod ? prod.price + tierFor(meth, qty) : 0;
+          if (prod) u.placeholder = base.toFixed(2);
+          var unit = u.value !== '' ? parseFloat(u.value) : base;
+          // Upcharges apply only to the pieces in those sizes.
+          var lt = (unit||0) * qty + (u.value !== '' ? 0 : upTotal);
           L.querySelector('.lt').textContent = lt ? m2(lt) : '—';
           sub += lt;
+
           var d = L.querySelector('.d');
           if (!d.value && prod) d.value = prod.name + (meth ? ' — ' + meth.title : '');
-          // Extended sizes cost more and are NOT in the unit price above.
-          var up = L.querySelector('.up');
-          if (prod && prod.sizes) {
-            var extra = prod.sizes.filter(function(x){ return x.upcharge > 0; });
-            up.textContent = extra.length
-              ? 'Extended sizes cost more — add a line if any: ' +
-                extra.map(function(x){ return x.size + ' +$' + x.upcharge.toFixed(2); }).join(' · ')
-              : '';
-          } else if (up) { up.textContent = ''; }
         });
         var tax = document.querySelector('[name=taxable]').checked ? sub*TAX : 0;
         var tot = sub + tax;
@@ -2335,6 +2364,29 @@ app.post('/api/quotes', requireAdmin, async (req, res) => {
       const method = catalog.methods.find(m => String(m.id) === String(b['method' + i]));
       if (!desc && !qty && !prod) continue;
 
+      /* Size mix, when the product has sizes. Extended sizes carry an upcharge
+         that applies only to those pieces — quoting 24 shirts of which 4 are
+         2XL is NOT the same price as 24 mediums, and forgetting that silently
+         eats the difference on every order. */
+      let mix = null, sizeQty = 0, upTotal = 0;
+      try {
+        const parsed = JSON.parse(b['sizemix' + i] || 'null');
+        if (parsed && typeof parsed === 'object') {
+          mix = {};
+          for (const [sz, n] of Object.entries(parsed)) {
+            const c = parseInt(n, 10) || 0;
+            if (c <= 0) continue;
+            mix[sz] = c;
+            sizeQty += c;
+            const row = prod && prod.sizes ? prod.sizes.find(x => x.size === sz) : null;
+            upTotal += c * Number(row ? row.upcharge : 0);
+          }
+          if (!sizeQty) mix = null;
+        }
+      } catch { mix = null; }
+
+      const q = sizeQty > 0 ? sizeQty : (qty || 1);
+
       let unit = (b['unit_price' + i] !== '' && b['unit_price' + i] != null)
         ? Number(b['unit_price' + i]) : null;
       const manual = unit != null;
@@ -2342,17 +2394,24 @@ app.post('/api/quotes', requireAdmin, async (req, res) => {
         let tier = 0;
         const pos = method && method.positions
           ? (method.positions.front || method.positions[Object.keys(method.positions)[0]]) : null;
-        if (pos && pos.length) { tier = pos[0].price; for (const t of pos) if (qty >= t.min_qty) tier = t.price; }
+        if (pos && pos.length) { tier = pos[0].price; for (const t of pos) if (q >= t.min_qty) tier = t.price; }
         unit = Number(prod.price) + Number(tier);
       }
       if (unit == null) unit = 0;
 
-      const q = qty || 1;
+      // A manually typed unit price is taken as final — no upcharges layered on.
+      const lineTotal = round2(unit * q + (manual ? 0 : upTotal));
+
+      let description = desc || (prod ? `${prod.name}${method ? ' — ' + method.title : ''}` : 'Custom item');
+      if (mix) description += ` (${Object.entries(mix).map(([sz, n]) => `${n} ${sz}`).join(', ')})`;
+
       items.push({
-        description: desc || (prod ? `${prod.name}${method ? ' — ' + method.title : ''}` : 'Custom item'),
+        description,
         qty: q,
-        unit_price: round2(unit),
-        line_total: round2(unit * q),
+        unit_price: round2(lineTotal / q),      // blended, so qty x each = total
+        line_total: lineTotal,
+        size_mix: mix,
+        size_upcharge: round2(manual ? 0 : upTotal),
         manual,
         product_id: prod ? prod.id : null,
         method_id: method ? method.id : null,
