@@ -2613,7 +2613,10 @@ app.get('/q/:code/pay/card', async (req, res) => {
     const d = await r.json();
     if (!r.ok || !d.url) {
       console.error('stripe session failed:', d.error ? d.error.message : r.status);
-      return res.status(502).send(quotePage('Card payment unavailable', `
+      /* 200, not 502 — Cloudflare swaps any 5xx for its own error page, so a
+         customer clicking "Pay by card" would see a raw gateway error instead
+         of being pointed at Zelle. */
+      return res.status(200).send(quotePage('Card payment unavailable', `
         <div class="card"><div class="warn">Card payment isn't available right now.</div>
         <p class="muted">Zelle to <b>${escEmail(ZELLE_HANDLE)}</b> works, or text ${SHOP_SIGNER} at ${SHOP_PHONE}.</p>
         <p style="margin-top:12px"><a class="btn btn-ghost" href="/q/${q.code}">Back to the quote</a></p></div>`));
