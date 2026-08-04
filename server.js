@@ -1832,7 +1832,12 @@ function newQuoteCode() {
 function quoteSummary(items) {
   const parts = (items || [])
     .filter(i => i && i.description)
-    .map(i => `${i.qty > 0 ? i.qty + ' ' : ''}${i.description}`);
+    .map(i => {
+      const d = String(i.description).trim();
+      // A hand-typed description may already start with the quantity.
+      const startsWithQty = new RegExp('^' + i.qty + '\\b').test(d);
+      return (i.qty > 0 && !startsWithQty) ? `${i.qty} ${d}` : d;
+    });
   if (!parts.length) return 'your order';
   if (parts.length <= 2) return parts.join(' + ');
   return `${parts[0]} + ${parts.length - 1} more`;
@@ -2157,8 +2162,9 @@ app.post('/api/quotes', requireAdmin, async (req, res) => {
     }
     if (unit == null) unit = 0;
 
+    // No qty here — quoteSummary() adds it, and having both produced "24 24 …".
     const description = String(b.description || '').trim()
-      || (prod ? `${qty || ''} ${prod.name}${method ? ' — ' + method.title : ''}`.trim() : 'Custom order');
+      || (prod ? `${prod.name}${method ? ' — ' + method.title : ''}`.trim() : 'Custom order');
 
     const items = [{
       description,
