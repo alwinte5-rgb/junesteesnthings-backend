@@ -1848,6 +1848,92 @@ app.post('/api/abandoned-cart-email', requireInternalKey, async (req, res) => {
    she still sends the text herself from her own number, which keeps it personal
    and avoids US A2P 10DLC carrier registration entirely. */
 
+/* Real Google reviews, mirrored from the storefront. Shown on the quote page
+   because someone deciding whether to hand money to a small shop they found
+   online is exactly who needs the reassurance. */
+const SHOP_REVIEWS = [
+  {
+    "title": "Quality AND friendly",
+    "text": "Went there for an order of 30 shirts. First thing I noticed was her friendly smile. She helped with the design and the shirts came out perfect! Highly recommended!",
+    "who": "Rob Simpson · Google Review"
+  },
+  {
+    "title": "Decal on a mirror for my event",
+    "text": "Thank you so much June for helping me on two separate projects, especially for putting a decal on a mirror for my event. Amazing work every time!",
+    "who": "Nyla Pruitt · Google Review"
+  },
+  {
+    "title": "Great job on the hats",
+    "text": "Great job on the hats!! We loved them!",
+    "who": "Diane Alarcon · Google Review"
+  },
+  {
+    "title": "A very precious memorial sweatshirt",
+    "text": "She did a great job — reasonable pricing on a very precious memorial sweatshirt. So thoughtful and professional throughout the whole process.",
+    "who": "Dawn Nash · Google Review"
+  },
+  {
+    "title": "Better than ordering online",
+    "text": "June was helpful and accommodative to a small embroidery order I had for polos and dress shirts. Quality turned out great! Much better than trying to find a corporate apparel provider online!",
+    "who": "Anthony Krcik · Google Review"
+  },
+  {
+    "title": "Fast turnaround",
+    "text": "Fast turn around time. Coat turned out great! Easy to work with. Would highly recommend.",
+    "who": "Kim Miniscalco · Google Review"
+  },
+  {
+    "title": "Matched my custom request",
+    "text": "They were able to match my custom request and are super reasonably priced. Quality work, completed in a timely manner — would absolutely use them again.",
+    "who": "Adrianne Hall · Google Review"
+  },
+  {
+    "title": "Family graduation shirts",
+    "text": "I called her to make T-shirts for me and my family for my son's college graduation. She was professional, timely, and the quality was outstanding!",
+    "who": "Gloria Silmon · Google Review"
+  },
+  {
+    "title": "Extremely talented",
+    "text": "Very professional! Extremely talented artist and she's self taught! Whatever you need she delivers!! I absolutely love her work!",
+    "who": "Corvina Hollingsworth · Google Review"
+  }
+];
+
+/** Auto-scrolling review strip. Pauses on hover/touch so it can be read, and
+ *  degrades to a plain scrollable row if the animation is unsupported. */
+function reviewStrip() {
+  const cards = SHOP_REVIEWS.map(r => `
+    <div class="rv">
+      <div class="stars">★★★★★</div>
+      <div class="rv-t">${escEmail(r.title)}</div>
+      <div class="rv-x">${escEmail(r.text)}</div>
+      <div class="rv-w">${escEmail(r.who)}</div>
+    </div>`).join('');
+  // Duplicated once so the marquee loops without a visible jump.
+  return `
+    <div class="card" style="overflow:hidden">
+      <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:10px">
+        <b style="color:#0B1F4B">What customers say</b>
+        <span class="muted" style="font-size:12px">${SHOP_REVIEWS.length} Google reviews</span>
+      </div>
+      <div class="rv-wrap"><div class="rv-track">${cards}${cards}</div></div>
+    </div>`;
+}
+
+const REVIEW_CSS = `
+.rv-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.rv-wrap::-webkit-scrollbar{display:none}
+.rv-track{display:flex;gap:10px;width:max-content;animation:rvscroll 60s linear infinite}
+.rv-wrap:hover .rv-track,.rv-wrap:active .rv-track{animation-play-state:paused}
+.rv{flex:0 0 250px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:12px;padding:12px 14px}
+.rv .stars{color:#F4A623;font-size:13px;letter-spacing:1px}
+.rv-t{font-weight:700;font-size:13.5px;color:#0B1F4B;margin:4px 0 3px}
+.rv-x{font-size:12.5px;line-height:1.5;color:#46505f;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+.rv-w{font-size:11px;color:#8b95a5;margin-top:7px}
+@keyframes rvscroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+@media (prefers-reduced-motion:reduce){.rv-track{animation:none}}
+`;
+
 const QUOTE_CODE_RE = /^[A-Z0-9]{6}$/;
 
 /* ── Quote money rules ────────────────────────────────────────────────────
@@ -2105,7 +2191,7 @@ button:active{transform:translateY(1px)}
 function quotePage(title, body) {
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>${escEmail(title)}</title><style>${QUOTE_CSS}</style></head><body><div class="wrap">${body}</div></body></html>`;
+<title>${escEmail(title)}</title><style>${QUOTE_CSS}${REVIEW_CSS}</style></head><body><div class="wrap">${body}</div></body></html>`;
 }
 
 /* The form June opens on her phone. Also serves /quote/:code/edit, pre-filled,
@@ -2767,6 +2853,8 @@ app.get('/q/:code', async (req, res) => {
       ${q.change_request && !accepted ? `
       <div class="card"><div class="ok">Change requested — ${SHOP_SIGNER} is updating this quote.
         <div class="muted" style="margin-top:6px">"${escEmail(q.change_request)}"</div></div></div>` : ''}
+
+      ${paid ? '' : reviewStrip()}
 
       <div class="card" style="text-align:center">
         <p class="muted">Questions? <a href="tel:+17738491854">${SHOP_PHONE}</a> &middot; ${SHOP_SIGNER}</p>
