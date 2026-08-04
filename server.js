@@ -2127,6 +2127,13 @@ app.get('/quote/new', requireAdmin, async (req, res) => {
         <div style="flex:2"><select name="method${n}" class="m"><option value="">— decoration —</option>${methodOpts}</select></div>
       </div>
       <input name="description${n}" class="d" placeholder="Description (type anything for a custom line)">
+      <input name="details${n}" class="dt" placeholder="Details the customer should see (colour, ink, placement…)" style="margin-top:6px">
+      <div class="shots" style="margin-top:8px">
+        <label style="margin:0 0 6px">Photos / mockups</label>
+        <input type="file" class="fi" accept="image/*" multiple style="padding:8px;font-size:14px">
+        <input type="hidden" name="images${n}" class="im" value="">
+        <div class="thumbs" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px"></div>
+      </div>
       <div class="sizes" style="display:none;margin-top:8px"></div>
       <input type="hidden" name="sizemix${n}" class="sm" value="">
       <div class="row" style="margin-top:8px">
@@ -2258,9 +2265,54 @@ app.get('/quote/new', requireAdmin, async (req, res) => {
         document.getElementById('lines').appendChild(tpl); n++;
         bind();
       }
+      var CLOUD = ${JSON.stringify(process.env.CLOUDINARY_NAME || '')};
+      var CKEY  = ${JSON.stringify(process.env.CLOUDINARY_API_KEY || '')};
+
+      /* Upload through the existing signed-upload endpoint so the API secret
+         never reaches the browser. Files go to the allow-listed
+         "quote_requests" folder. */
+      function uploadFiles(L, files){
+        if (!CLOUD || !CKEY || !files.length) return;
+        var hidden = L.querySelector('.im');
+        var thumbs = L.querySelector('.thumbs');
+        Array.prototype.forEach.call(files, function(file){
+          var ph = document.createElement('div');
+          ph.style.cssText = 'width:58px;height:58px;border-radius:8px;background:#eef1f8;display:flex;align-items:center;justify-content:center;font-size:10px;color:#6b7280';
+          ph.textContent = '…';
+          thumbs.appendChild(ph);
+          var ts = Math.round(Date.now()/1000);
+          fetch('/api/cloudinary-signature', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ folder:'quote_requests', timestamp: ts })
+          }).then(function(r){return r.json();}).then(function(sig){
+            var fd = new FormData();
+            fd.append('file', file);
+            fd.append('api_key', CKEY);
+            fd.append('timestamp', sig.timestamp);
+            fd.append('folder', sig.folder);
+            fd.append('signature', sig.signature);
+            return fetch('https://api.cloudinary.com/v1_1/'+CLOUD+'/image/upload', {method:'POST', body:fd});
+          }).then(function(r){return r.json();}).then(function(d){
+            if(!d.secure_url) throw new Error(d.error ? d.error.message : 'upload failed');
+            var list = hidden.value ? JSON.parse(hidden.value) : [];
+            list.push(d.secure_url);
+            hidden.value = JSON.stringify(list);
+            ph.style.background = 'url('+d.secure_url+') center/cover';
+            ph.textContent = '';
+          }).catch(function(e){
+            ph.textContent = '✕'; ph.style.color = '#b71c1c';
+            console.error('upload failed', e);
+          });
+        });
+      }
+
       function bind(){
         document.querySelectorAll('#qf input, #qf select').forEach(function(el){
+          if (el.type === 'file') return;
           el.oninput = calc; el.onchange = calc;
+        });
+        document.querySelectorAll('.fi').forEach(function(fi){
+          fi.onchange = function(){ uploadFiles(fi.closest('.line'), fi.files); };
         });
       }
       bind(); calc();
@@ -2405,8 +2457,26 @@ app.post('/api/quotes', requireAdmin, async (req, res) => {
       let description = desc || (prod ? `${prod.name}${method ? ' — ' + method.title : ''}` : 'Custom item');
       if (mix) description += ` (${Object.entries(mix).map(([sz, n]) => `${n} ${sz}`).join(', ')})`;
 
+      /* Only accept our own Cloudinary URLs — these are rendered straight into
+         the customer's page, so an arbitrary URL would let anything be embedded. */
+      let images = [];
+      try {
+        const parsed = JSON.parse(b['images' + i] || '[]');
+        if (Array.isArray(parsed)) {
+          images = parsed
+            .filter(u => typeof u === 'string' && /^https:\/\/res\.cloudinary\.com\//.test(u))
+            .slice(0, 6);
+        }
+      } catch { images = []; }
+      // Fall back to the catalogue photo so a line is never imageless.
+      if (!images.length && prod && prod.thumbnail && /^https?:\/\//.test(prod.thumbnail)) {
+        images = [prod.thumbnail];
+      }
+
       items.push({
         description,
+        details: String(b['details' + i] || '').trim().slice(0, 300),
+        images,
         qty: q,
         unit_price: round2(lineTotal / q),      // blended, so qty x each = total
         line_total: lineTotal,
@@ -2535,13 +2605,26 @@ app.get('/q/:code', async (req, res) => {
         .toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     };
 
-    const lines = (q.items || []).map(i => `
+    const lines = (q.items || []).map(i => {
+      const imgs = (i.images || []).filter(u => /^https:\/\//.test(u));
+      const gallery = imgs.length ? `
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+          ${imgs.map(u => `<a href="${escEmail(u)}" target="_blank" rel="noopener">
+            <img src="${escEmail(u)}" alt="" loading="lazy"
+                 style="width:74px;height:74px;object-fit:cover;border-radius:8px;border:1px solid #e3e8f2;background:#fff"></a>`).join('')}
+        </div>` : '';
+      return `
       <tr>
-        <td>${escEmail(i.description)}</td>
+        <td>
+          ${escEmail(i.description)}
+          ${i.details ? `<div class="muted" style="font-size:13px;margin-top:3px">${escEmail(i.details)}</div>` : ''}
+          ${gallery}
+        </td>
         <td class="num">${i.qty}</td>
         <td class="num">${money(i.unit_price)}</td>
         <td class="num">${money(i.line_total)}</td>
-      </tr>`).join('');
+      </tr>`;
+    }).join('');
 
     res.send(quotePage(`Your quote from ${SHOP_NAME}`, `
       <div class="card">
