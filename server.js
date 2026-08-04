@@ -1937,6 +1937,13 @@ function quoteLink(code) { return `${PUBLIC_BASE_URL}/q/${code}`; }
 
 function fmtDate(d) {
   if (!d) return '';
+  // DATE columns carry no time; timezone-converting them shifts the day back.
+  const iso = (d instanceof Date) ? d.toISOString().slice(0, 10) : String(d).slice(0, 10);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (m && !(String(d).includes('T') && !(d instanceof Date))) {
+    return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+      .toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
   return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/Chicago' });
 }
 
@@ -2457,7 +2464,17 @@ app.get('/q/:code', async (req, res) => {
     const accepted = !!q.accepted_at;
     const paid = Number(q.paid_amount || 0) > 0;
     const eta = deliveryEstimate(q.accepted_at ? new Date(q.accepted_at) : new Date());
-    const dayFmt = (d) => new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/Chicago' });
+    /* A DATE column has no time, so converting it through a timezone shifts it
+       a day backwards (2026-08-20 rendered as Aug 19). Format the calendar date
+       literally; only real timestamps get timezone treatment. */
+    const dayFmt = (d) => {
+      if (!d) return '';
+      const iso = (d instanceof Date) ? d.toISOString().slice(0, 10) : String(d).slice(0, 10);
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+      if (!m) return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/Chicago' });
+      return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+        .toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    };
 
     const lines = (q.items || []).map(i => `
       <tr>
