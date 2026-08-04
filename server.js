@@ -1864,6 +1864,18 @@ function quoteMessages(q) {
   };
 }
 
+/** Brevo's SMS attribute must be E.164 (+1XXXXXXXXXX) — a bare 10-digit
+ *  number is rejected outright with "Invalid phone number", which silently
+ *  cost the whole contact sync. Returns '' when it cannot be made valid. */
+function toE164(phone) {
+  const d = String(phone || '').replace(/\D/g, '');
+  if (!d) return '';
+  if (d.length === 10) return '+1' + d;
+  if (d.length === 11 && d[0] === '1') return '+' + d;
+  if (d.length > 11) return '+' + d;      // already international
+  return '';                               // too short to be real
+}
+
 /** Mirror a quote into Brevo: contact -> deal -> note, same shape as
  *  syncGradToBrevo(). Every call is guarded; the Postgres row already holds the
  *  truth, so a Brevo outage must never surface as a failed quote. */
@@ -1878,15 +1890,18 @@ async function syncQuoteToBrevo(q) {
   try {
     // Brevo keys contacts on email; fall back to a phone-only contact.
     const attrs = { FIRSTNAME: first || '', LASTNAME: rest.join(' ') || '' };
-    if (phone) attrs.SMS = phone;
+    const e164 = toE164(phone);
+    if (e164) attrs.SMS = e164;
     const body = {
       attributes: attrs,
       listIds: process.env.BREVO_LIST_ID ? [parseInt(process.env.BREVO_LIST_ID)] : [],
       updateEnabled: true,
     };
-    if (email) body.email = email; else body.attributes.EXT_ID = phone;
-    if (!email && phone) { body.email = undefined; body.SMS = phone; }
-    await brevo.post('/contacts', email ? body : { ...body, email: undefined, SMS: phone });
+    // Brevo identifies a contact by email, or by SMS when there is no email.
+    if (email) body.email = email;
+    else if (e164) body.SMS = e164;
+    else return out;                       // nothing to key on
+    await brevo.post('/contacts', body);
 
     if (email) {
       const c = await brevo.get(`/contacts/${encodeURIComponent(email)}`);
