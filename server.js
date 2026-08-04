@@ -2795,8 +2795,24 @@ app.get('/q/:code/pay/card', async (req, res) => {
     const t = quoteTotals(q);
     const fee = cardFee(t.deposit);
 
-    if (!secret || Number(q.paid_amount || 0) > 0 || t.deposit <= 0) {
+    if (!secret || Number(q.paid_amount || 0) > 0) {
       return res.redirect('/q/' + code);
+    }
+
+    /* Stripe refuses anything under $0.50, and the error it returns is opaque
+       ("total amount due must add up to at least $0.50 USD") — which surfaced
+       to the customer as a bare "card payment unavailable". Catch it here and
+       say what is actually wrong. */
+    const chargeable = round2(t.deposit + cardFee(t.deposit));
+    if (chargeable < 0.5) {
+      return res.status(200).send(quotePage('Too small to charge', `
+        <div class="card">
+          <div class="warn">This quote totals ${money(t.total)}, which is below the ${money(0.5)} minimum
+            a card payment can process.</div>
+          <p class="muted">Zelle to <b>${escEmail(ZELLE_HANDLE)}</b> or cash works for an amount this small,
+             or ask ${SHOP_SIGNER} to update the quote.</p>
+          <p style="margin-top:12px"><a class="btn btn-ghost" href="/q/${q.code}">Back to the quote</a></p>
+        </div>`));
     }
 
     const label = t.deposit >= t.total
