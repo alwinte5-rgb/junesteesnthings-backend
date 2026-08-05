@@ -2637,7 +2637,13 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
       const qty = parseInt(b['qty' + i], 10) || 0;
       const prod = catalog.products.find(p => String(p.id) === String(b['product' + i]));
       const method = catalog.methods.find(m => String(m.id) === String(b['method' + i]));
-      if (!desc && !qty && !prod) continue;
+      /* Count a row as real if ANY field was filled in. Previously a line with
+         only a price (or only a size mix) was silently dropped, which for a
+         single-line quote produced "Add at least one item" and lost the work. */
+      const priceTyped = String(b['unit_price' + i] || '').trim() !== '';
+      const sizeTyped = String(b['sizemix' + i] || '').trim() !== '';
+      const detailTyped = String(b['details' + i] || '').trim() !== '';
+      if (!desc && !qty && !prod && !priceTyped && !sizeTyped && !detailTyped) continue;
 
       /* Size mix, when the product has sizes. Extended sizes carry an upcharge
          that applies only to those pieces — quoting 24 shirts of which 4 are
@@ -2712,9 +2718,15 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
     }
 
     if (!items.length) {
-      return res.status(400).send(quotePage('Nothing to quote',
-        `<div class="card"><div class="warn">Add at least one item before creating the quote.</div>
-         <a class="btn btn-ghost" href="/quote/new">Back</a></div>`));
+      const backTo = QUOTE_CODE_RE.test(String(req.params.code || '').toUpperCase())
+        ? `/quote/${String(req.params.code).toUpperCase()}/edit` : '/quote/new';
+      return res.status(400).send(quotePage('Nothing to quote', `
+        <div class="card">
+          <div class="warn">Nothing was saved — the quote needs at least one item.</div>
+          <p class="muted" style="margin-top:8px">Fill in a description, or pick a product and a quantity.
+             A price on its own is enough too.</p>
+          <p style="margin-top:12px"><a class="btn" href="${backTo}">Go back</a></p>
+        </div>`));
     }
 
     const subtotal = round2(items.reduce((a, i) => a + i.line_total, 0));
@@ -2791,6 +2803,7 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
         <p class="muted" style="margin-top:10px">They see: <a href="${quoteLink(code)}">${quoteLink(code)}</a></p>
       </div>
       <div class="card">
+        <a class="btn btn-ghost" href="/quote/${code}/edit">Edit this quote</a>
         ${(phone || email) ? `<a class="btn btn-ghost" href="/q/${code}/vcard">Save to contacts</a>` : ''}
         <a class="btn btn-ghost" href="/quote/new">Another quote</a>
         <a class="btn btn-ghost" href="/quotes">All quotes</a>
@@ -3489,7 +3502,11 @@ app.get('/quotes', requireAdmin, async (req, res) => {
                  onclick="cpq(this)" data-msg="${escEmail(textMsg)}">Copy message</button>
             </div>
           </div>` : ''}
-        <div style="margin-top:10px"><a class="muted" href="/q/${q.code}">/q/${q.code}</a>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+          <a class="btn btn-ghost" style="padding:8px 16px;font-size:13px" href="/quote/${q.code}/edit">Edit</a>
+          <a class="btn btn-ghost" style="padding:8px 16px;font-size:13px" href="/q/${q.code}" target="_blank" rel="noopener">View as customer</a>
+        </div>
+        <div class="muted" style="margin-top:8px;font-size:12px">/q/${q.code}
         ${q.phone ? ` &middot; <a class="muted" href="tel:${escEmail(q.phone)}">${escEmail(q.phone)}</a>` : ''}</div>
       </div>`;
     }).join('');
