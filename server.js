@@ -3302,6 +3302,71 @@ app.post('/q/:code/changes', orderRateLimit, async (req, res) => {
   res.redirect('/q/' + code);
 });
 
+/* Record a payment that arrived outside Stripe — Zelle, cash, a bank transfer.
+   Without this a customer who pays by Zelle stays "unpaid" forever, the deposit
+   reminder keeps chasing them, and the balance never reflects reality. */
+app.post('/quote/:code/mark-paid', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/quotes');
+  const b = req.body || {};
+  const method = ['zelle', 'cash', 'transfer', 'other'].includes(String(b.method))
+    ? String(b.method) : 'other';
+
+  try {
+    const { rows } = await pool.query('SELECT * FROM quotes WHERE code=$1', [code]);
+    if (!rows.length) return res.redirect('/quotes');
+    const q = rows[0];
+    const t = quoteTotals(q);
+
+    // Blank amount means "they paid what was due" — deposit, or the balance if
+    // a deposit is already in.
+    const outstanding = round2(Math.max(0, Number(t.total) - Number(q.paid_amount || 0)));
+    const suggested = Number(q.paid_amount || 0) > 0 ? outstanding : t.deposit;
+    let amount = String(b.amount || '').trim() === '' ? suggested : round2(Number(b.amount));
+    if (!(amount > 0)) return res.redirect('/quotes');
+    // Never let a typo record more than is owed.
+    amount = Math.min(amount, outstanding || amount);
+
+    const { rows: upd } = await pool.query(
+      `UPDATE quotes SET paid_amount = COALESCE(paid_amount,0) + $2,
+              paid_method = $3, paid_at = NOW(),
+              status = 'accepted',
+              accepted_at = COALESCE(accepted_at, NOW())
+        WHERE code = $1 RETURNING *`, [code, amount, method]);
+
+    const nq = upd[0];
+    const stillDue = round2(Math.max(0, Number(nq.total) - Number(nq.paid_amount)));
+
+    if (nq.email) {
+      sendEmail({
+        to: nq.email,
+        subject: `Payment received — quote ${nq.code}`,
+        html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
+          <h2 style="color:#1848B8">Thank you!</h2>
+          <p style="color:#374151;line-height:1.6">We've received <b>${money(amount)}</b> by
+            ${escEmail(method)} for quote ${nq.code}.
+            ${stillDue > 0 ? `A balance of <b>${money(stillDue)}</b> remains, due ${BALANCE_WHEN}.`
+                           : 'That settles it in full — nothing further to pay.'}</p>
+          <p style="color:#374151;line-height:1.6">You're on the schedule. ${SHOP_SIGNER} will follow up
+            with an artwork proof and timeline.</p>
+          <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_NAME} &middot; ${SHOP_PHONE}</p>
+        </div>`,
+      }).catch(e => console.error('manual payment receipt failed:', e.message));
+    }
+
+    if (nq.brevo_deal_id) {
+      brevo.post('/crm/notes', {
+        text: `PAYMENT ${money(amount)} via ${method} on quote ${nq.code}. ` +
+              (stillDue > 0 ? `Balance ${money(stillDue)}.` : 'Paid in full.'),
+        dealIds: [nq.brevo_deal_id],
+      }).catch(() => {});
+    }
+  } catch (err) {
+    console.error('mark-paid failed:', err.message);
+  }
+  res.redirect('/quotes');
+});
+
 /* One tap to add them to the iPhone address book. */
 app.get('/q/:code/vcard', async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
@@ -3471,6 +3536,7 @@ app.get('/quotes', requireAdmin, async (req, res) => {
          too. Surface both, with the message ready to copy. */
       const ageDays = (Date.now() - new Date(q.created_at)) / 86400000;
       const noEmail = !q.email;
+      const outstanding = round2(Math.max(0, Number(q.total || q.subtotal || 0) - Number(q.paid_amount || 0)));
       const wantsChange = !paid && !!q.change_request;
       const needsText = !paid && !expired && q.phone && (
         (noEmail && ageDays >= 2 && !q.accepted_at) ||
@@ -3521,7 +3587,30 @@ app.get('/quotes', requireAdmin, async (req, res) => {
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
           <a class="btn btn-ghost" style="padding:8px 16px;font-size:13px" href="/quote/${q.code}/edit">Edit</a>
           <a class="btn btn-ghost" style="padding:8px 16px;font-size:13px" href="/q/${q.code}" target="_blank" rel="noopener">View as customer</a>
+          ${outstanding > 0 ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
+             onclick="document.getElementById('mp-${q.code}').style.display='block';this.style.display='none'">Record a payment</button>` : ''}
         </div>
+        ${outstanding > 0 ? `
+        <form id="mp-${q.code}" method="POST" action="/quote/${q.code}/mark-paid"
+              style="display:none;margin-top:10px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px">
+          <div class="muted" style="font-size:12.5px;margin-bottom:8px">
+            Money received outside the card checkout — Zelle, cash, bank transfer.</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <select name="method" style="flex:0 0 130px;padding:9px">
+              <option value="zelle">Zelle</option>
+              <option value="cash">Cash</option>
+              <option value="transfer">Bank transfer</option>
+              <option value="other">Other</option>
+            </select>
+            <input name="amount" type="number" step="0.01" inputmode="decimal"
+                   placeholder="${money(paid ? outstanding : Number(q.deposit || 0)).replace('$','')}"
+                   style="flex:0 0 120px;padding:9px">
+            <button type="submit" style="padding:9px 20px;font-size:14px">Record</button>
+          </div>
+          <div class="muted" style="font-size:12px;margin-top:6px">
+            Leave the amount blank for ${money(paid ? outstanding : Number(q.deposit || 0))}
+            (${paid ? 'the remaining balance' : 'the deposit'}). Outstanding: ${money(outstanding)}.</div>
+        </form>` : ''}
         <div class="muted" style="margin-top:8px;font-size:12px">/q/${q.code}
         ${q.phone ? ` &middot; <a class="muted" href="tel:${escEmail(q.phone)}">${escEmail(q.phone)}</a>` : ''}</div>
       </div>`;
