@@ -3008,7 +3008,7 @@ app.get('/q/:code', async (req, res) => {
       <div class="card"><div class="ok">Change requested — ${SHOP_SIGNER} is updating this quote.
         <div class="muted" style="margin-top:6px">"${escEmail(q.change_request)}"</div></div></div>` : ''}
 
-      ${paid ? '' : reviewStrip()}
+      ${(paid && balanceDue <= 0) ? '' : reviewStrip()}
 
       <div class="card" style="text-align:center">
         <p class="muted">Questions? <a href="tel:+17738491854">${SHOP_PHONE}</a> &middot; ${SHOP_SIGNER}</p>
