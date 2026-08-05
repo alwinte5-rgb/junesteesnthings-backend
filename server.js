@@ -2984,19 +2984,27 @@ app.get('/q/:code', async (req, res) => {
 
       ${(paid || accepted) ? '' : `
       <div class="card">
-        <details>
-          <summary style="cursor:pointer;font-weight:700;color:#33415c">Not quite right? Ask for a change</summary>
-          <form method="POST" action="/q/${q.code}/changes" style="margin-top:12px">
-            <label>What would you like different?</label>
-            <textarea name="message" rows="3" required
-              placeholder="e.g. make it 36 instead of 24, or navy rather than black"></textarea>
-            <button type="submit" class="btn-ghost" style="width:100%;margin-top:10px">Send to ${SHOP_SIGNER}</button>
-          </form>
-          <p class="muted" style="margin-top:8px">${SHOP_SIGNER} will adjust the quote and this same link will update — nothing to re-open.</p>
-        </details>
+        <b style="color:#0B1F4B">Need something changed?</b>
+        <p class="muted" style="margin:4px 0 10px">Quantities, sizes, colours, artwork — just say the word.
+          ${SHOP_SIGNER} updates the quote and <b>this same link refreshes</b>, so there is nothing new to open.</p>
+        <form method="POST" action="/q/${q.code}/changes">
+          <textarea name="message" rows="3" required
+            placeholder="e.g. make it 36 instead of 24, or navy rather than black"></textarea>
+          <button type="submit" class="btn-ghost" style="width:100%;margin-top:10px">Send to ${SHOP_SIGNER}</button>
+        </form>
       </div>`}
 
-      ${q.change_request && !accepted ? `
+      ${(paid || !accepted) ? '' : `
+      <div class="card">
+        <b style="color:#0B1F4B">Need a change before we start?</b>
+        <p class="muted" style="margin:4px 0 10px">Nothing has been printed yet — tell ${SHOP_SIGNER} and the quote is updated.</p>
+        <form method="POST" action="/q/${q.code}/changes">
+          <textarea name="message" rows="2" required placeholder="What would you like different?"></textarea>
+          <button type="submit" class="btn-ghost" style="width:100%;margin-top:10px">Send to ${SHOP_SIGNER}</button>
+        </form>
+      </div>`}
+
+      ${q.change_request && !paid ? `
       <div class="card"><div class="ok">Change requested — ${SHOP_SIGNER} is updating this quote.
         <div class="muted" style="margin-top:6px">"${escEmail(q.change_request)}"</div></div></div>` : ''}
 
@@ -3463,6 +3471,7 @@ app.get('/quotes', requireAdmin, async (req, res) => {
          too. Surface both, with the message ready to copy. */
       const ageDays = (Date.now() - new Date(q.created_at)) / 86400000;
       const noEmail = !q.email;
+      const wantsChange = !paid && !!q.change_request;
       const needsText = !paid && !expired && q.phone && (
         (noEmail && ageDays >= 2 && !q.accepted_at) ||
         (q.followed_up_at && !q.accepted_at) ||
@@ -3491,6 +3500,13 @@ app.get('/quotes', requireAdmin, async (req, res) => {
         ${paid && Number(q.total) > Number(q.paid_amount)
           ? `<div class="muted" style="margin-top:6px;color:#b45309">balance due ${money(round2(Number(q.total) - Number(q.paid_amount)))}</div>`
           : ''}
+        ${wantsChange ? `
+          <div style="margin-top:10px;background:#eef4ff;border:1px solid #c3d4f8;border-radius:10px;padding:10px 12px">
+            <div style="font-weight:700;color:#1848B8;font-size:13px">✏️ Change requested</div>
+            <div class="muted" style="font-size:12.5px;margin-top:3px">"${escEmail(q.change_request)}"</div>
+            <a class="btn" style="padding:8px 18px;font-size:13px;margin-top:8px;display:inline-block"
+               href="/quote/${q.code}/edit">Edit the quote →</a>
+          </div>` : ''}
         ${needsText ? `
           <div style="margin-top:10px;background:#fff8e6;border:1px solid #f3dfa8;border-radius:10px;padding:10px 12px">
             <div style="font-weight:700;color:#8a5a00;font-size:13px">📱 Needs a text</div>
@@ -3511,8 +3527,11 @@ app.get('/quotes', requireAdmin, async (req, res) => {
       </div>`;
     }).join('');
     const needCount = (body.match(/Needs a text/g) || []).length;
+    const changeCount = (body.match(/Change requested/g) || []).length;
     res.send(quotePage('Quotes', `<h1>Quotes</h1>
-      <div class="sub">${rows.length} total${needCount ? ` &middot; <b style="color:#8a5a00">${needCount} need a text</b>` : ''}</div>
+      <div class="sub">${rows.length} total${
+        changeCount ? ` &middot; <b style="color:#1848B8">${changeCount} awaiting your edit</b>` : ''}${
+        needCount ? ` &middot; <b style="color:#8a5a00">${needCount} need a text</b>` : ''}</div>
       <p style="margin-bottom:14px"><a class="btn" href="/quote/new">New quote</a></p>
       ${body || '<div class="card"><p class="muted">No quotes yet.</p></div>'}
       <script>
