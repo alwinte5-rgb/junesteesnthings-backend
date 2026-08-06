@@ -2416,7 +2416,11 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
       function addLine(){
         var tpl = document.getElementById('lines').firstElementChild.cloneNode(true);
         tpl.querySelectorAll('input,select').forEach(function(el){
-          el.name = el.name.replace(/\d+$/, n); el.value='';
+          /* \\d, not \d — this whole script lives inside a template literal, so a
+             single backslash is eaten before the browser ever sees it. It was,
+             and /d+$/ matched nothing: every added line kept the first line's
+             name, so five items posted as one and the price arrived as NaN. */
+          el.name = el.name.replace(/\\d+$/, n); el.value='';
         });
         tpl.querySelector('.lt').textContent = '—';
         document.getElementById('lines').appendChild(tpl); n++;
@@ -2632,17 +2636,21 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
        description or a quantity counts; a product is optional so a purely
        manual line ("banner, 3ft x 8ft") works exactly as well. */
     const items = [];
+    /* Two fields sharing a name arrive as an array. Stringifying one silently
+       merges every value into a single field and turns a price into NaN, which
+       renders as $0.00 — so read only the first value. */
+    const one = (v) => (Array.isArray(v) ? v[0] : v);
     for (let i = 0; i < 40; i++) {
-      const desc = String(b['description' + i] || '').trim();
-      const qty = parseInt(b['qty' + i], 10) || 0;
-      const prod = catalog.products.find(p => String(p.id) === String(b['product' + i]));
-      const method = catalog.methods.find(m => String(m.id) === String(b['method' + i]));
+      const desc = String(one(b['description' + i]) || '').trim();
+      const qty = parseInt(one(b['qty' + i]), 10) || 0;
+      const prod = catalog.products.find(p => String(p.id) === String(one(b['product' + i])));
+      const method = catalog.methods.find(m => String(m.id) === String(one(b['method' + i])));
       /* Count a row as real if ANY field was filled in. Previously a line with
          only a price (or only a size mix) was silently dropped, which for a
          single-line quote produced "Add at least one item" and lost the work. */
-      const priceTyped = String(b['unit_price' + i] || '').trim() !== '';
-      const sizeTyped = String(b['sizemix' + i] || '').trim() !== '';
-      const detailTyped = String(b['details' + i] || '').trim() !== '';
+      const priceTyped = String(one(b['unit_price' + i]) || '').trim() !== '';
+      const sizeTyped = String(one(b['sizemix' + i]) || '').trim() !== '';
+      const detailTyped = String(one(b['details' + i]) || '').trim() !== '';
       if (!desc && !qty && !prod && !priceTyped && !sizeTyped && !detailTyped) continue;
 
       /* Size mix, when the product has sizes. Extended sizes carry an upcharge
@@ -2651,7 +2659,7 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
          eats the difference on every order. */
       let mix = null, sizeQty = 0, upTotal = 0;
       try {
-        const parsed = JSON.parse(b['sizemix' + i] || 'null');
+        const parsed = JSON.parse(one(b['sizemix' + i]) || 'null');
         if (parsed && typeof parsed === 'object') {
           mix = {};
           for (const [sz, n] of Object.entries(parsed)) {
@@ -2668,8 +2676,10 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
 
       const q = sizeQty > 0 ? sizeQty : (qty || 1);
 
-      let unit = (b['unit_price' + i] !== '' && b['unit_price' + i] != null)
-        ? Number(b['unit_price' + i]) : null;
+      const rawUnit = one(b['unit_price' + i]);
+      let unit = (rawUnit !== '' && rawUnit != null) ? Number(rawUnit) : null;
+      // A price that will not parse must never become NaN and show as $0.00.
+      if (unit != null && !Number.isFinite(unit)) unit = null;
       const manual = unit != null;
       if (unit == null && prod) {
         let tier = 0;
@@ -2690,7 +2700,7 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
          the customer's page, so an arbitrary URL would let anything be embedded. */
       let images = [];
       try {
-        const parsed = JSON.parse(b['images' + i] || '[]');
+        const parsed = JSON.parse(one(b['images' + i]) || '[]');
         if (Array.isArray(parsed)) {
           images = parsed
             .filter(u => typeof u === 'string' && /^https:\/\/res\.cloudinary\.com\//.test(u))
@@ -2704,7 +2714,7 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
 
       items.push({
         description,
-        details: String(b['details' + i] || '').trim().slice(0, 300),
+        details: String(one(b['details' + i]) || '').trim().slice(0, 300),
         images,
         qty: q,
         unit_price: round2(lineTotal / q),      // blended, so qty x each = total
