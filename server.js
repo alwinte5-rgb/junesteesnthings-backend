@@ -902,7 +902,7 @@ app.get('/api/form-token', signatureRateLimit, (_req, res) => {
 
 // ── Form submission ──────────────────────────────────────────────────────────
 
-app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, async (req, res) => {
+app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, verifyTurnstile, async (req, res) => {
   const { name, phone, email, description, photo_url } = req.body;
 
   if (!name || !phone || !email) {
@@ -1466,6 +1466,56 @@ function isValidFormToken(token) {
   return false;
 }
 
+/* Turnstile — Cloudflare's CAPTCHA replacement, usually invisible to real
+   users. rejectBots() catches crude bots (bad UA, honeypot, no cf-ray) but a
+   scripted POST with a plausible user agent walks straight through it; order #3
+   in this database was a `<script>alert(1)</script>` submission. Turnstile
+   verifies the request actually came from a browser that solved a challenge.
+
+   Fails OPEN when TURNSTILE_SECRET_KEY is unset, so the forms keep working
+   until the keys are added — a validator that blocks real customers costs more
+   than the spam it stops. */
+async function verifyTurnstile(req, res, next) {
+  const secret = process.env.TURNSTILE_SECRET_KEY;
+  if (!secret) return next();                      // not configured yet
+
+  const token = req.body?.['cf-turnstile-response'] || '';
+  if (!token) {
+    return res.status(400).json({ error: 'Please complete the human check and try again.' });
+  }
+  try {
+    const form = new URLSearchParams({ secret, response: token });
+    // The visitor IP helps Cloudflare score the request; behind the proxy the
+    // real one is in cf-connecting-ip.
+    const ip = req.headers['cf-connecting-ip'] || req.ip || '';
+    if (ip) form.set('remoteip', ip);
+
+    const r = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+      method: 'POST',
+      body: form,
+      signal: AbortSignal.timeout(8000),
+    });
+    const d = await r.json();
+    if (d.success) return next();
+    console.warn('turnstile rejected:', (d['error-codes'] || []).join(','));
+    return res.status(400).json({ error: 'That human check did not pass. Please try again.' });
+  } catch (err) {
+    // Cloudflare unreachable or slow: let the submission through rather than
+    // lose a real order to an outage. rejectBots() and the rate limit still apply.
+    console.error('turnstile check failed, allowing through:', err.message);
+    return next();
+  }
+}
+
+/** The widget, or nothing at all when Turnstile is not configured. */
+function turnstileWidget() {
+  const key = process.env.TURNSTILE_SITE_KEY;
+  if (!key) return '';
+  return `<div class="cf-turnstile" data-sitekey="${escEmail(key)}" data-appearance="interaction-only"
+    style="margin-top:12px"></div>
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>`;
+}
+
 function rejectBots(req, res, next) {
   // Block requests that bypass Cloudflare entirely — set REQUIRE_CLOUDFLARE=true in Railway
   if (!req.headers['cf-ray']) {
@@ -1728,7 +1778,7 @@ app.post('/api/cloudinary-signature', signatureRateLimit, (req, res) => {
 // Embroidery order request from design.jtees.net product pages.
 // Embroidery files (DST/PES/...) can't render in the online designer, so this
 // flow collects the file + size + contact info and June follows up directly.
-app.post('/api/embroidery-quote', orderRateLimit, async (req, res) => {
+app.post('/api/embroidery-quote', orderRateLimit, rejectBots, verifyTurnstile, async (req, res) => {
   try {
     const b = req.body || {};
     const name  = String(b.name || '').trim().slice(0, 120);
@@ -3929,6 +3979,7 @@ app.get('/review/:token', async (req, res) => {
           <div id="rvthumbs" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px"></div>
           <p class="muted" id="rvstat" style="margin-top:6px;font-size:12.5px"></p>
 
+          ${turnstileWidget()}
           <button type="submit" id="rvgo" style="width:100%;margin-top:14px">Send my review</button>
         </form>
         <p class="muted" style="margin-top:10px;text-align:center">We read every one. Nothing is published without your name as you enter it here.</p>
@@ -4006,7 +4057,7 @@ app.get('/review/:token', async (req, res) => {
 });
 
 /* Submission. 4-5 stars are invited to Google; 1-3 stay private and alert June. */
-app.post('/review/:token', orderRateLimit, async (req, res) => {
+app.post('/review/:token', orderRateLimit, verifyTurnstile, async (req, res) => {
   const token = String(req.params.token || '');
   const b = req.body || {};
   const rating = Math.max(1, Math.min(5, parseInt(b.rating, 10) || 0));
@@ -4541,7 +4592,7 @@ if (process.env.JT_INTERNAL_KEY) {
 }
 
 // Submit grad order
-app.post('/api/submit-order', orderRateLimit, rejectBots, async (req, res) => {
+app.post('/api/submit-order', orderRateLimit, rejectBots, verifyTurnstile, async (req, res) => {
   // Grad ordering is retired — delete this early return to reactivate the
   // handler below, which is kept intact in case the program returns.
   if (!process.env.GRAD_ORDERS_ENABLED) {
