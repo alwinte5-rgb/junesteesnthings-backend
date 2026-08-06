@@ -2291,6 +2291,33 @@ button:active{transform:translateY(1px)}
 .chip{display:inline-block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:3px 10px;border-radius:20px}
 .muted{color:#6b7280;font-size:13px}
 @media(max-width:560px){.row{flex-direction:column;gap:0}}
+
+/* ── Item lines ──────────────────────────────────────────────────────────
+   Each item is a quiet block, not a competing card. Only the essentials show;
+   the rest is one tap away, so ten items still read as a list. */
+.line{border:1px solid #e6eaf3;border-radius:12px;padding:12px;margin-bottom:10px;background:#fcfdff}
+.line-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.line-no{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#8b96ad}
+.line-x{background:none;border:0;color:#b6bfd0;font-size:22px;line-height:1;padding:0 4px;
+  width:auto;cursor:pointer;border-radius:6px}
+.line-x:hover{color:#c0392b;background:#fdf0ee}
+.line input,.line select{margin:0}
+.row-2{gap:8px}
+/* Qty / each / total must stay on one line even on a phone — they are short,
+   and stacking them is what made the form feel endless. */
+.row-tight{display:flex;gap:8px;align-items:center}
+.row-tight .q{flex:0 0 78px}
+.row-tight .u{flex:1 1 auto;min-width:0}
+.row-tight .lt{flex:0 0 88px;text-align:right;font-size:15px;color:#0B1F4B;white-space:nowrap}
+.more{background:none;border:0;color:#5a6a86;font-size:13px;padding:8px 0 0;width:auto;
+  cursor:pointer;font-weight:600}
+.more:hover{color:#1848B8}
+.more .caret{font-size:10px;display:inline-block;width:12px}
+.extra{padding-top:8px}
+@media (max-width:520px){
+  .row-2{flex-direction:row}
+  .row-2>*{min-width:0}
+}
 `;
 
 function quotePage(title, body) {
@@ -2328,30 +2355,48 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
     .filter(m => m.use_for_quoting && Object.keys(m.positions || {}).length)
     .map(m => `<option value="${m.id}">${escEmail(m.title)}</option>`).join('');
 
-  const lineHtml = (n, it) => `
+  /* One item. Only the three things every line needs are on show — what it is,
+     how many, what each costs. Colour notes, photos and the size grid are real
+     but occasional, so they sit behind a disclosure rather than stacking seven
+     blocks per item down the page. */
+  const lineHtml = (n, it) => {
+    const hasExtras = it && ((it.details && it.details.length) ||
+                             (it.images && it.images.length) || it.size_mix);
+    return `
     <div class="line" data-n="${n}">
-      <div class="row">
-        <div style="flex:2"><select name="product${n}" class="p"><option value="">— product (or type below) —</option>${prodOpts}</select></div>
+      <div class="line-head">
+        <span class="line-no">Item <b class="ix">${n + 1}</b></span>
+        <button type="button" class="line-x" onclick="removeLine(this)" title="Remove this item">&times;</button>
       </div>
-      <div class="row">
-        <div style="flex:2"><select name="method${n}" class="m"><option value="">— decoration —</option>${methodOpts}</select></div>
+      <input name="description${n}" class="d" value="${it ? val(it.description) : ''}"
+             placeholder="What is it? e.g. 24 tees, 1 colour front">
+      <div class="row row-2" style="margin-top:8px">
+        <select name="product${n}" class="p"><option value="">Product (optional)</option>${prodOpts}</select>
+        <select name="method${n}" class="m"><option value="">Decoration (optional)</option>${methodOpts}</select>
       </div>
-      <input name="description${n}" class="d" value="${it ? val(it.description) : ''}" placeholder="Description (type anything for a custom line)">
-      <input name="details${n}" class="dt" value="${it ? val(it.details) : ''}" placeholder="Details the customer should see (colour, ink, placement…)" style="margin-top:6px">
-      <div class="shots" style="margin-top:8px">
-        <label style="margin:0 0 6px">Photos / mockups</label>
-        <input type="file" class="fi" accept="image/*" multiple style="padding:8px;font-size:14px">
-        <input type="hidden" name="images${n}" class="im" value="${it && it.images ? escEmail(JSON.stringify(it.images)) : ''}">
-        <div class="thumbs" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px"></div>
+      <div class="row row-tight" style="margin-top:8px">
+        <input name="qty${n}" class="q" type="number" inputmode="numeric" min="1"
+               value="${it ? val(it.qty) : ''}" placeholder="Qty">
+        <input name="unit_price${n}" class="u" type="number" step="0.01" inputmode="decimal"
+               value="${it && it.manual ? val(it.unit_price) : ''}" placeholder="Each $">
+        <b class="lt">—</b>
       </div>
-      <div class="sizes" style="display:none;margin-top:8px"></div>
-      <input type="hidden" name="sizemix${n}" class="sm" value="">
-      <div class="row" style="margin-top:8px">
-        <div><input name="qty${n}" class="q" type="number" inputmode="numeric" min="1" value="${it ? val(it.qty) : ''}" placeholder="Qty"></div>
-        <div><input name="unit_price${n}" class="u" type="number" step="0.01" inputmode="decimal" value="${it && it.manual ? val(it.unit_price) : ''}" placeholder="Each $"></div>
-        <div style="flex:0 0 84px;display:flex;align-items:center;justify-content:flex-end"><b class="lt muted">—</b></div>
+      <button type="button" class="more" onclick="toggleMore(this)"
+        aria-expanded="${hasExtras ? 'true' : 'false'}">
+        <span class="caret">${hasExtras ? '&#9662;' : '&#9656;'}</span> Details, photos &amp; sizes</button>
+      <div class="extra" style="display:${hasExtras ? 'block' : 'none'}">
+        <input name="details${n}" class="dt" value="${it ? val(it.details) : ''}"
+               placeholder="Colour, ink, placement — the customer sees this">
+        <div class="sizes" style="display:none;margin-top:8px"></div>
+        <input type="hidden" name="sizemix${n}" class="sm" value="">
+        <div style="margin-top:8px">
+          <input type="file" class="fi" accept="image/*" multiple style="padding:8px;font-size:13px">
+          <input type="hidden" name="images${n}" class="im" value="${it && it.images ? escEmail(JSON.stringify(it.images)) : ''}">
+          <div class="thumbs" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px"></div>
+        </div>
       </div>
     </div>`;
+  };
 
   res.send(quotePage('New quote', `
     <h1>${existing ? 'Edit quote ' + escEmail(existing.code) : 'New quote'}</h1>
@@ -2416,6 +2461,44 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
         return price;
       }
       function m2(v){ return '$' + (Math.round(v*100)/100).toFixed(2); }
+
+      /* Optional fields stay out of the way until asked for. */
+      function toggleMore(btn){
+        var box = btn.nextElementSibling;
+        var open = box.style.display !== 'none';
+        box.style.display = open ? 'none' : 'block';
+        btn.setAttribute('aria-expanded', open ? 'false' : 'true');
+        btn.querySelector('.caret').innerHTML = open ? '&#9656;' : '&#9662;';
+      }
+
+      /* Adding an item by mistake used to be permanent. */
+      function removeLine(btn){
+        var lines = document.querySelectorAll('.line');
+        if (lines.length <= 1) {          // never leave the form with no item
+          var only = lines[0];
+          only.querySelectorAll('input,select').forEach(function(el){ el.value = ''; });
+          only.querySelector('.thumbs').innerHTML = '';
+          calc();
+          return;
+        }
+        btn.closest('.line').remove();
+        reindex();
+        calc();
+      }
+
+      /* Keep the name suffixes 0..n-1 with no gaps, whatever was removed —
+         a gap would make the server stop reading at the missing index. */
+      function reindex(){
+        var lines = document.querySelectorAll('.line');
+        lines.forEach(function(L, i){
+          L.dataset.n = i;
+          L.querySelector('.ix').textContent = i + 1;
+          L.querySelectorAll('input,select').forEach(function(el){
+            if (el.name) el.name = el.name.replace(/\\d+$/, i);
+          });
+        });
+        n = lines.length;
+      }
       /* One tap to charge a returning customer what they paid last time — this
          is what actually stops prices drifting between jobs. */
       function usePrice(v){
@@ -2434,6 +2517,13 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
         box.dataset.for = key;
         if (!prod || !prod.sizes || !prod.sizes.length) { box.style.display='none'; box.innerHTML=''; return; }
         box.style.display = 'block';
+        /* The grid lives in the collapsed section, so open it — otherwise
+           picking a sized product would silently hide the size boxes. */
+        var ex = L.querySelector('.extra');
+        if (ex && ex.style.display === 'none') {
+          var mb = L.querySelector('.more');
+          if (mb) toggleMore(mb);
+        }
         box.innerHTML = '<div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">How many of each size</div>' +
           '<div style="display:flex;flex-wrap:wrap;gap:6px">' +
           prod.sizes.map(function(sz){
@@ -2496,8 +2586,19 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
           el.name = el.name.replace(/\\d+$/, n); el.value='';
         });
         tpl.querySelector('.lt').textContent = '—';
+        tpl.querySelector('.ix').textContent = n + 1;
+        tpl.querySelector('.thumbs').innerHTML = '';
+        // A new item starts tidy: sizes hidden, extras closed.
+        var sz = tpl.querySelector('.sizes');
+        if (sz) { sz.style.display = 'none'; sz.innerHTML = ''; }
+        var ex = tpl.querySelector('.extra');
+        if (ex) ex.style.display = 'none';
+        var mb = tpl.querySelector('.more');
+        if (mb) { mb.setAttribute('aria-expanded', 'false');
+                  mb.querySelector('.caret').innerHTML = '&#9656;'; }
         document.getElementById('lines').appendChild(tpl); n++;
         bind();
+        tpl.querySelector('.d').focus();
       }
       var CLOUD = ${JSON.stringify(process.env.CLOUDINARY_NAME || '')};
       var CKEY  = ${JSON.stringify(process.env.CLOUDINARY_API_KEY || '')};
