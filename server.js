@@ -902,7 +902,7 @@ app.get('/api/form-token', signatureRateLimit, (_req, res) => {
 
 // ── Form submission ──────────────────────────────────────────────────────────
 
-app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, verifyTurnstile, async (req, res) => {
+app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, async (req, res) => {
   const { name, phone, email, description, photo_url } = req.body;
 
   if (!name || !phone || !email) {
@@ -1778,7 +1778,7 @@ app.post('/api/cloudinary-signature', signatureRateLimit, (req, res) => {
 // Embroidery order request from design.jtees.net product pages.
 // Embroidery files (DST/PES/...) can't render in the online designer, so this
 // flow collects the file + size + contact info and June follows up directly.
-app.post('/api/embroidery-quote', orderRateLimit, rejectBots, verifyTurnstile, async (req, res) => {
+app.post('/api/embroidery-quote', orderRateLimit, async (req, res) => {
   try {
     const b = req.body || {};
     const name  = String(b.name || '').trim().slice(0, 120);
@@ -4592,7 +4592,7 @@ if (process.env.JT_INTERNAL_KEY) {
 }
 
 // Submit grad order
-app.post('/api/submit-order', orderRateLimit, rejectBots, verifyTurnstile, async (req, res) => {
+app.post('/api/submit-order', orderRateLimit, rejectBots, async (req, res) => {
   // Grad ordering is retired — delete this early return to reactivate the
   // handler below, which is kept intact in case the program returns.
   if (!process.env.GRAD_ORDERS_ENABLED) {

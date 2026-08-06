@@ -80,13 +80,21 @@ async function targetZones() {
    designer. Auto Minify is retired by Cloudflare and used to break inline
    scripts. Polish/Mirage are paid. */
 const PERF = [
-  ['browser_cache_ttl', 0, 'Respect our own Cache-Control instead of forcing 4 hours on everything'],
   ['early_hints', 'on', 'Browser preloads assets before the HTML finishes'],
-  ['zero_rtt', 'on', 'Faster repeat connections'],
+  ['0rtt', 'on', 'Faster repeat connections (0-RTT resumption)'],
   ['always_use_https', 'on', 'No insecure first hop'],
   ['brotli', 'on', 'Better compression than gzip on JS/CSS'],
   ['http3', 'on', 'Faster on mobile'],
 ];
+
+/* Held back behind --cache-ttl, deliberately.
+   "Respect existing headers" is right ONLY when the origin actually sends
+   Cache-Control. Where it does (jtees.net since the .htaccess fix, and any
+   Next.js app, which emits immutable headers for hashed assets) this is
+   strictly better than Cloudflare's blanket 4 hours. Where the origin is
+   silent, switching it on hands browsers nothing to go on. So it is opt-in per
+   zone after checking, not swept across the account. */
+const CACHE_TTL = ['browser_cache_ttl', 0, 'Respect the origin Cache-Control instead of forcing 4 hours'];
 
 const fmtVal = (v) => (v === 0 ? 'respect-origin' : String(v));
 
@@ -98,7 +106,7 @@ async function doCheck(z) {
   }
   const have = Object.fromEntries((s.body.result || []).map(x => [x.id, x.value]));
   console.log(`\n  ${z.name}  (${z.plan?.name || '?'})`);
-  for (const [key, want, why] of PERF) {
+  for (const [key, want, why] of [...PERF, CACHE_TTL]) {
     const cur = have[key];
     const good = String(cur) === String(want);
     console.log(`   ${good ? '\x1b[32m✓\x1b[0m' : '\x1b[33m•\x1b[0m'} ${key.padEnd(19)}${fmtVal(cur ?? '?').padEnd(16)}${good ? '' : '-> ' + fmtVal(want)}`);
@@ -119,13 +127,17 @@ async function doCheck(z) {
 
 async function doPerf(z, apply) {
   console.log(`\n  ${z.name}`);
-  for (const [key, want, why] of PERF) {
+  const list = flag('cache-ttl') ? [...PERF, CACHE_TTL] : PERF;
+  for (const [key, want, why] of list) {
     if (!apply) { note(`${key} -> ${fmtVal(want)}   (${why})`); continue; }
     const r = await cf(`/zones/${z.id}/settings/${key}`, {
       method: 'PATCH', body: JSON.stringify({ value: want }),
     });
     if (r.body.success) ok(`${key} = ${fmtVal(want)}`);
     else bad(`${key}: ${((r.body.errors || [])[0] || {}).message || 'failed'}`);
+  }
+  if (!flag('cache-ttl')) {
+    note('browser_cache_ttl left alone — pass --cache-ttl once the origin sends real Cache-Control');
   }
   if (apply) {
     const r = await cf(`/zones/${z.id}/argo/tiered_caching`, {
