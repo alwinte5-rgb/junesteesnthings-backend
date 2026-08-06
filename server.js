@@ -3173,6 +3173,19 @@ app.get('/q/:code', async (req, res) => {
           <button type="submit" style="width:100%;margin-top:14px">Accept &amp; choose payment</button>
         </form>
         <p class="muted" style="margin-top:10px;text-align:center">Nothing is charged yet — you'll pick how to pay next.</p>
+
+        <!-- Shown BEFORE accepting: how they pay changes what they pay, so
+             hiding this until afterwards meant the cheaper option arrived too
+             late to be useful. -->
+        <div style="border-top:1px solid #e3e8f2;margin-top:14px;padding-top:12px">
+          <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">How you can pay</div>
+          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap">
+            <span><b>Zelle or cash</b> — ${money(t.deposit)}</span>
+            <span style="background:#1a9c6b;color:#fff;border-radius:20px;padding:2px 10px;font-size:11px;font-weight:700;letter-spacing:.04em">SAVE ${money(cardFee(t.deposit))}</span>
+          </div>
+          <div class="muted" style="margin-top:6px">Card or Apple&nbsp;Pay — ${money(round2(t.deposit + cardFee(t.deposit)))}
+            <span style="font-size:12.5px">(includes the ${Math.round(CARD_FEE*100)}% card fee)</span></div>
+        </div>
       </div>`}
 
       ${(paid || accepted) ? '' : `
