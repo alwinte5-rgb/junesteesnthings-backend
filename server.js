@@ -2015,14 +2015,16 @@ function reviewStrip() {
         <b style="color:#0B1F4B">What customers say</b>
         <span class="muted" style="font-size:12px">${SHOP_REVIEWS.length} Google reviews</span>
       </div>
-      <div class="rv-wrap"><div class="rv-track">${cards}${cards}</div></div>
+      <div class="rv-wrap"><div class="rv-track"><div class="rv-set">${cards}</div><div class="rv-set">${cards}</div></div></div>
     </div>`;
 }
 
 const REVIEW_CSS = `
-.rv-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.rv-wrap{overflow:hidden}
 .rv-wrap::-webkit-scrollbar{display:none}
-.rv-track{display:flex;gap:10px;width:max-content;animation:rvscroll 60s linear infinite}
+.rv-track{display:flex;width:max-content;animation:rvscroll 60s linear infinite}
+.rv-set{display:flex;gap:10px;padding-right:10px}
+.rv-wrap:hover .rv-track{animation-play-state:paused}
 .rv-wrap:hover .rv-track,.rv-wrap:active .rv-track{animation-play-state:paused}
 .rv{flex:0 0 250px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:12px;padding:12px 14px}
 .rv .stars{color:#F4A623;font-size:13px;letter-spacing:1px}
@@ -3119,7 +3121,9 @@ app.get('/q/:code', async (req, res) => {
         <p class="muted" style="margin:-4px 0 14px;font-size:12px">Includes the ${Math.round(CARD_FEE*100)}% card processing fee (${money(cardFee(balanceDue))}).</p>
 
         <div style="border:1px solid #e3e8f2;border-radius:10px;padding:12px;margin-bottom:10px">
-          <b>Zelle — ${money(balanceDue)}</b> <span class="muted">(no fee)</span>
+          <b>Zelle — ${money(balanceDue)}</b>
+            <span style="background:#1a9c6b;color:#fff;border-radius:20px;padding:2px 10px;font-size:11px;font-weight:700;letter-spacing:.04em">SAVE ${money(cardFee(balanceDue))}</span>
+            <span class="muted" style="display:block;margin-top:4px;font-size:12.5px">No ${Math.round(CARD_FEE*100)}% card fee.</span>
           <p class="muted" style="margin-top:4px">Send to <b>${escEmail(ZELLE_HANDLE)}</b>, memo <b>${escEmail(q.code)}</b>.<br>
             It will show as <b>${escEmail(ZELLE_NAME)}</b> — that's us.</p>
         </div>
@@ -3138,9 +3142,14 @@ app.get('/q/:code', async (req, res) => {
         </a>
         <p class="muted" style="margin:-4px 0 14px;font-size:12px">Includes the ${Math.round(CARD_FEE*100)}% card processing fee (${money(cardFee(t.deposit))}).</p>
 
-        <div style="border:1px solid #e3e8f2;border-radius:10px;padding:12px;margin-bottom:10px">
-          <b>Zelle — ${money(t.deposit)}</b> <span class="muted">(no fee)</span>
-          <p class="muted" style="margin-top:4px">Send to <b>${escEmail(ZELLE_HANDLE)}</b> and put <b>${escEmail(q.code)}</b> in the memo.<br>
+        <div style="border:2px solid #1a9c6b;border-radius:10px;padding:12px;margin-bottom:10px;background:#f2fbf7">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap">
+            <b>Zelle — ${money(t.deposit)}</b>
+            <span style="background:#1a9c6b;color:#fff;border-radius:20px;padding:2px 10px;font-size:11px;font-weight:700;letter-spacing:.04em">SAVE ${money(cardFee(t.deposit))}</span>
+          </div>
+          <p class="muted" style="margin-top:5px">No ${Math.round(CARD_FEE*100)}% card fee — you pay the quoted
+            ${money(t.deposit)} instead of ${money(round2(t.deposit + cardFee(t.deposit)))}.</p>
+          <p class="muted" style="margin-top:6px">Send to <b>${escEmail(ZELLE_HANDLE)}</b> and put <b>${escEmail(q.code)}</b> in the memo.<br>
             It will show as <b>${escEmail(ZELLE_NAME)}</b> — that's us.</p>
         </div>
         <div style="border:1px solid #e3e8f2;border-radius:10px;padding:12px">
