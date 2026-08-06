@@ -2001,13 +2001,21 @@ const SHOP_REVIEWS = [
 /** Auto-scrolling review strip. Pauses on hover/touch so it can be read, and
  *  degrades to a plain scrollable row if the animation is unsupported. */
 function reviewStrip() {
-  const cards = SHOP_REVIEWS.map(r => `
-    <div class="rv">
+  /* A photo the reviewer took of their own order is the most persuasive thing
+     on the page, so show it when there is one. Only our own Cloudinary URLs are
+     rendered — these cards go out to customers. */
+  const cards = SHOP_REVIEWS.map(r => {
+    const img = typeof r.image === 'string' && /^https:\/\/res\.cloudinary\.com\//.test(r.image)
+      ? r.image : '';
+    return `
+    <div class="rv${img ? ' rv-has-img' : ''}">
+      ${img ? `<img class="rv-img" src="${escEmail(img)}" alt="" loading="lazy">` : ''}
       <div class="stars">★★★★★</div>
       <div class="rv-t">${escEmail(r.title)}</div>
       <div class="rv-x">${escEmail(r.text)}</div>
       <div class="rv-w">${escEmail(r.who)}</div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
   // Duplicated once so the marquee loops without a visible jump.
   return `
     <div class="card" style="overflow:hidden">
@@ -2033,6 +2041,10 @@ const REVIEW_CSS = `
 .rv-w{font-size:11px;color:#8b95a5;margin-top:7px}
 @keyframes rvscroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
 @media (prefers-reduced-motion:reduce){.rv-track{animation:none}}
+
+.rv-img{width:100%;height:118px;object-fit:cover;border-radius:8px;margin-bottom:8px;
+  background:#eef1f7;display:block}
+.rv-has-img .rv-x{-webkit-line-clamp:3}
 `;
 
 const QUOTE_CODE_RE = /^[A-Z0-9]{6}$/;
