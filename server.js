@@ -133,6 +133,9 @@ async function initDB() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS reviews_approved_idx ON reviews (approved, submitted_at DESC)`);
   await pool.query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ`).catch(() => {});
+  /* Photos the customer attaches to their review — a picture of the actual
+     order is worth more than anything we could write about it. */
+  await pool.query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS images JSONB DEFAULT '[]'::jsonb`).catch(() => {});
 
   // Marketing opt-outs. Required to honour the one-click unsubscribe that
   // Gmail/Yahoo mandate of bulk senders — an unsubscribe link that does not
@@ -1710,7 +1713,7 @@ app.post('/api/cloudinary-signature', signatureRateLimit, (req, res) => {
   if (!apiSecret) return res.status(503).json({ error: 'Cloudinary not configured' });
   // Allow the caller to specify the upload folder, but validate against an allowlist
   // so the server retains control over where files can be stored.
-  const ALLOWED_FOLDERS = ['grad_orders', 'quote_requests', 'embroidery_quotes'];
+  const ALLOWED_FOLDERS = ['grad_orders', 'quote_requests', 'embroidery_quotes', 'review_photos'];
   const requestedFolder = typeof req.body.folder === 'string' ? req.body.folder : '';
   const folder = ALLOWED_FOLDERS.includes(requestedFolder) ? requestedFolder : 'grad_orders';
   // Use the widget's timestamp — overwriting it causes a mismatch since the widget
@@ -2001,21 +2004,13 @@ const SHOP_REVIEWS = [
 /** Auto-scrolling review strip. Pauses on hover/touch so it can be read, and
  *  degrades to a plain scrollable row if the animation is unsupported. */
 function reviewStrip() {
-  /* A photo the reviewer took of their own order is the most persuasive thing
-     on the page, so show it when there is one. Only our own Cloudinary URLs are
-     rendered — these cards go out to customers. */
-  const cards = SHOP_REVIEWS.map(r => {
-    const img = typeof r.image === 'string' && /^https:\/\/res\.cloudinary\.com\//.test(r.image)
-      ? r.image : '';
-    return `
-    <div class="rv${img ? ' rv-has-img' : ''}">
-      ${img ? `<img class="rv-img" src="${escEmail(img)}" alt="" loading="lazy">` : ''}
+  const cards = SHOP_REVIEWS.map(r => `
+    <div class="rv">
       <div class="stars">★★★★★</div>
       <div class="rv-t">${escEmail(r.title)}</div>
       <div class="rv-x">${escEmail(r.text)}</div>
       <div class="rv-w">${escEmail(r.who)}</div>
-    </div>`;
-  }).join('');
+    </div>`).join('');
   // Duplicated once so the marquee loops without a visible jump.
   return `
     <div class="card" style="overflow:hidden">
@@ -2042,9 +2037,6 @@ const REVIEW_CSS = `
 @keyframes rvscroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
 @media (prefers-reduced-motion:reduce){.rv-track{animation:none}}
 
-.rv-img{width:100%;height:118px;object-fit:cover;border-radius:8px;margin-bottom:8px;
-  background:#eef1f7;display:block}
-.rv-has-img .rv-x{-webkit-line-clamp:3}
 `;
 
 const QUOTE_CODE_RE = /^[A-Z0-9]{6}$/;
@@ -3929,7 +3921,15 @@ app.get('/review/:token', async (req, res) => {
           <textarea name="body" rows="4" maxlength="1200" placeholder="Anything you'd tell a friend"></textarea>
           <label>Name to show <span style="text-transform:none;font-weight:400">(first name and initial is fine)</span></label>
           <input name="name" value="${escEmail(r.name || '')}" maxlength="60">
-          <button type="submit" style="width:100%;margin-top:14px">Send my review</button>
+
+          <label style="margin-top:14px">Add a photo <span style="text-transform:none;font-weight:400">(optional)</span></label>
+          <p class="muted" style="margin:-2px 0 6px;font-size:13px">A picture of your order says more than we ever could.</p>
+          <input type="file" id="rvfi" accept="image/*" multiple style="padding:8px;font-size:13px">
+          <input type="hidden" name="images" id="rvim" value="">
+          <div id="rvthumbs" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px"></div>
+          <p class="muted" id="rvstat" style="margin-top:6px;font-size:12.5px"></p>
+
+          <button type="submit" id="rvgo" style="width:100%;margin-top:14px">Send my review</button>
         </form>
         <p class="muted" style="margin-top:10px;text-align:center">We read every one. Nothing is published without your name as you enter it here.</p>
       </div>
@@ -3940,6 +3940,62 @@ app.get('/review/:token', async (req, res) => {
           });
         }
         ${pre ? `pick(${pre});` : ''}
+
+        /* Photo upload. Signed server-side so the API secret never reaches the
+           browser, and the submit button is held while uploads are in flight so
+           a review cannot be sent with half its photos missing. */
+        var CLOUD = ${JSON.stringify(process.env.CLOUDINARY_NAME || '')};
+        var CKEY  = ${JSON.stringify(process.env.CLOUDINARY_API_KEY || '')};
+        var shots = [], pending = 0;
+        var fi = document.getElementById('rvfi');
+        var go = document.getElementById('rvgo');
+        var stat = document.getElementById('rvstat');
+
+        if (!CLOUD || !CKEY) { fi.parentNode.style.display = 'none'; }
+
+        function say(){
+          stat.textContent = pending ? 'Uploading ' + pending + ' photo' + (pending>1?'s':'') + '…'
+                          : (shots.length ? shots.length + ' photo' + (shots.length>1?'s':'') + ' attached' : '');
+          go.disabled = pending > 0;
+          go.style.opacity = pending > 0 ? '.6' : '';
+          document.getElementById('rvim').value = JSON.stringify(shots);
+        }
+
+        fi.onchange = function(){
+          Array.prototype.forEach.call(fi.files, function(file){
+            if (!/^image\\//.test(file.type)) return;
+            if (file.size > 10 * 1024 * 1024) {            // 10MB is plenty for a phone photo
+              stat.textContent = file.name + ' is too large (10MB max)';
+              return;
+            }
+            pending++; say();
+            var ts = Math.round(Date.now()/1000);
+            fetch('/api/cloudinary-signature', {
+              method: 'POST', headers: {'Content-Type':'application/json'},
+              body: JSON.stringify({ folder: 'review_photos', timestamp: ts })
+            }).then(function(r){ return r.json(); }).then(function(sig){
+              var fd = new FormData();
+              fd.append('file', file);
+              fd.append('api_key', CKEY);
+              fd.append('timestamp', sig.timestamp);
+              fd.append('folder', sig.folder);
+              fd.append('signature', sig.signature);
+              return fetch('https://api.cloudinary.com/v1_1/'+CLOUD+'/image/upload',
+                { method:'POST', body: fd });
+            }).then(function(r){ return r.json(); }).then(function(d){
+              if (d.secure_url) {
+                shots.push(d.secure_url);
+                var im = document.createElement('img');
+                im.src = d.secure_url.replace('/upload/','/upload/c_fill,w_150,h_150,q_auto,f_auto/');
+                im.style.cssText = 'width:64px;height:64px;object-fit:cover;border-radius:8px';
+                document.getElementById('rvthumbs').appendChild(im);
+              }
+            }).catch(function(){
+              stat.textContent = 'That photo would not upload — you can still send the review.';
+            }).then(function(){ pending--; say(); });
+          });
+          fi.value = '';
+        };
       </script>
     `));
   } catch (err) {
@@ -3954,15 +4010,29 @@ app.post('/review/:token', orderRateLimit, async (req, res) => {
   const token = String(req.params.token || '');
   const b = req.body || {};
   const rating = Math.max(1, Math.min(5, parseInt(b.rating, 10) || 0));
+
+  /* Accept only our own Cloudinary URLs. The browser posts this field, so an
+     arbitrary URL would otherwise be stored and later rendered. */
+  let shots = [];
+  try {
+    const parsed = JSON.parse(b.images || '[]');
+    if (Array.isArray(parsed)) {
+      shots = parsed
+        .filter(u => typeof u === 'string' && /^https:\/\/res\.cloudinary\.com\//.test(u))
+        .slice(0, 6);
+    }
+  } catch { shots = []; }
+
   try {
     const { rows } = await pool.query(
       `UPDATE reviews SET rating=$2, title=$3, body=$4, name=COALESCE(NULLIF($5,''), name),
-              submitted_at=NOW()
+              images=$6::jsonb, submitted_at=NOW()
         WHERE token=$1 AND submitted_at IS NULL RETURNING *`,
       [token, rating,
        String(b.title || '').trim().slice(0, 80),
        String(b.body || '').trim().slice(0, 1200),
-       String(b.name || '').trim().slice(0, 60)]);
+       String(b.name || '').trim().slice(0, 60),
+       JSON.stringify(shots)]);
 
     if (rows.length) {
       const r = rows[0];
@@ -3976,6 +4046,9 @@ app.post('/review/:token', orderRateLimit, async (req, res) => {
           <p><b>${escEmail(r.title || '')}</b></p>
           <p style="color:#374151;line-height:1.6">${escEmail(r.body || '')}</p>
           <p style="color:#6b7280;font-size:13px">${escEmail(r.name || '')} ${escEmail(r.email || '')} ${escEmail(r.phone || '')}</p>
+          ${shots.length ? `<p style="margin:10px 0">${shots.map(u =>
+            `<img src="${escEmail(u.replace('/upload/', '/upload/c_fill,w_260,h_260,q_auto,f_auto/'))}"
+                  width="130" style="border-radius:8px;margin:0 6px 6px 0">`).join('')}</p>` : ''}
           ${rating <= 3 ? `<p style="background:#fdecea;padding:12px;border-radius:8px;color:#b71c1c">
             Not published. Worth reaching out before this becomes a public review elsewhere.</p>` : `
             <p><a href="${PUBLIC_BASE_URL}/admin/reviews">Approve it for the website →</a></p>`}
@@ -4074,6 +4147,14 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
           <div style="color:#F4A623;white-space:nowrap">${STAR(r.rating || 0)}</div>
         </div>
         <p style="margin-top:8px;color:#46505f">${escEmail(r.body || '')}</p>
+      ${(Array.isArray(r.images) && r.images.length) ? `
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
+          ${r.images.filter(u => typeof u === 'string' && /^https:\/\/res\.cloudinary\.com\//.test(u))
+            .map(u => `<a href="${escEmail(u)}" target="_blank" rel="noopener">
+              <img src="${escEmail(u.replace('/upload/', '/upload/c_fill,w_220,h_220,q_auto,f_auto/'))}"
+                   style="width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid #e3e8f2"
+                   loading="lazy"></a>`).join('')}
+        </div>` : ''}
         <form method="POST" action="/admin/reviews/${r.id}" style="margin-top:10px;display:flex;gap:8px">
           <button name="action" value="${r.approved ? 'hide' : 'approve'}"
             class="${r.approved ? 'btn-ghost' : ''}" style="padding:8px 18px;font-size:14px">
