@@ -786,9 +786,80 @@ async function createGradCloverCustomerAndOrder(order) {
 
 // ─── Auth (admin routes) ──────────────────────────────────────────────────────
 
+/* ── Staying signed in ───────────────────────────────────────────────────────
+   The designer lives on design.jtees.net and these pages on jtees.net. Browsers
+   scope a login to one site, so clicking "Quotes" in the designer sidebar used to
+   demand a second login. A short-lived token signed with the key both services
+   already share (JT_INTERNAL_KEY) carries that session across, and a signed
+   cookie then keeps it for 30 days so there is no repeat prompt. */
+const ADMIN_COOKIE = 'jt_admin';
+const ADMIN_SESSION_DAYS = 30;
+
+const signPayload = (payload, key) =>
+  crypto.createHmac('sha256', key).update(String(payload)).digest('hex');
+
+/** Constant-time compare of two hex strings of any length. */
+function hexEqual(a, b) {
+  const x = Buffer.from(String(a));
+  const y = Buffer.from(String(b));
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+
+/** "<expiry>.<hmac>" — valid only until the expiry it carries. */
+function makeStamp(ttlMs, key) {
+  const exp = Date.now() + ttlMs;
+  return `${exp}.${signPayload(exp, key)}`;
+}
+function checkStamp(stamp, key) {
+  const [exp, sig] = String(stamp || '').split('.');
+  if (!exp || !sig || !/^\d+$/.test(exp)) return false;
+  if (Number(exp) < Date.now()) return false;
+  return hexEqual(sig, signPayload(exp, key));
+}
+
+function adminCookieValue(req) {
+  const raw = req.headers.cookie || '';
+  for (const part of raw.split(';')) {
+    const [k, ...v] = part.trim().split('=');
+    if (k === ADMIN_COOKIE) return decodeURIComponent(v.join('='));
+  }
+  return '';
+}
+
+function setAdminCookie(res) {
+  const secret = process.env.ADMIN_PASSWORD || '';
+  if (!secret) return;
+  const stamp = makeStamp(ADMIN_SESSION_DAYS * 86400 * 1000, secret);
+  res.append('Set-Cookie',
+    `${ADMIN_COOKIE}=${encodeURIComponent(stamp)}; Path=/; Max-Age=${ADMIN_SESSION_DAYS * 86400}` +
+    '; HttpOnly; Secure; SameSite=Lax');
+}
+
+/* One-click in from the designer sidebar. The token proves the request came
+   from our own admin; the cookie it sets is what actually keeps you signed in. */
+app.get('/admin/sso', (req, res) => {
+  const shared = process.env.JT_INTERNAL_KEY || '';
+  // Only ever redirect within this site — never to an address in the query.
+  const raw = String(req.query.to || '/quotes');
+  const to = /^\/[A-Za-z0-9/_\-?=&.]*$/.test(raw) && !raw.startsWith('//') ? raw : '/quotes';
+  if (!shared || !checkStamp(req.query.t, shared)) {
+    return res.status(401).send(quotePage('Link expired', `
+      <div class="card">
+        <div class="warn">That link has expired.</div>
+        <p class="muted" style="margin-top:8px">Open it again from the designer, or sign in directly.</p>
+        <p style="margin-top:12px"><a class="btn" href="${to}">Go to the page</a></p>
+      </div>`));
+  }
+  setAdminCookie(res);
+  res.redirect(to);
+});
+
 function requireAdmin(req, res, next) {
   const secret = process.env.ADMIN_PASSWORD || '';
   let valid = false;
+
+  // An unexpired signed cookie counts as signed in.
+  if (secret && checkStamp(adminCookieValue(req), secret)) return next();
 
   /* The PASSWORD is the secret; the username is not checked.
      Phone keyboards autocapitalise the first letter, so "Admin" was failing and
@@ -809,6 +880,8 @@ function requireAdmin(req, res, next) {
     res.set('WWW-Authenticate', 'Basic realm="Admin"');
     return res.status(401).send('Unauthorized — any username, the password is what matters.');
   }
+  // Signed in by password: remember it so this is the last prompt for a month.
+  setAdminCookie(res);
   next();
 }
 
