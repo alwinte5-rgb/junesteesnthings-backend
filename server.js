@@ -2749,13 +2749,22 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
 /* Catalogue from the designer, cached. Falls back to the last good copy so a
    slow designer never blocks quoting. */
 let _catCache = { at: 0, data: null };
+/* One user agent for every server-to-server call between our own hosts. */
+const JT_SERVER_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) jtees-server/1.0';
+
 async function getCatalog() {
   if (_catCache.data && Date.now() - _catCache.at < 10 * 60 * 1000) return _catCache.data;
   const key = process.env.JT_INTERNAL_KEY;
   if (!key) return _catCache.data || { products: [], methods: [] };
   try {
+    /* Identify as a browser. Cloudflare's bot heuristics 403 unfamiliar user
+       agents — that silently killed every Lumise sync earlier in this project —
+       and Bot Fight Mode makes it stricter still. Node's default UA is exactly
+       what gets challenged, and losing this call means the quote form loses its
+       catalogue pricing. */
     const r = await fetch(`https://design.jtees.net/jt-catalog.php?key=${encodeURIComponent(key)}`,
-      { signal: AbortSignal.timeout(8000) });
+      { headers: { 'User-Agent': JT_SERVER_UA }, signal: AbortSignal.timeout(8000) });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
     if (d && d.ok) { _catCache = { at: Date.now(), data: d }; return d; }
