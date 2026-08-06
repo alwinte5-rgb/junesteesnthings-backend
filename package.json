@@ -6,7 +6,7 @@
     "node": ">=18"
   },
   "scripts": {
-    "start": "node server.js",
+    "start": "node tools/cf.js purge 2>/dev/null || true; node server.js",
     "dev": "nodemon server.js"
   },
   "dependencies": {
