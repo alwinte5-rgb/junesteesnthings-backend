@@ -2198,6 +2198,58 @@ const ZELLE_NAME = process.env.JT_ZELLE_NAME || 'Andrea Winters';
 // When the remaining balance is expected. Wording only — nothing enforces it.
 const BALANCE_WHEN = process.env.JT_BALANCE_WHEN || 'on pickup or before delivery';
 
+/* ── Brevo pipeline ───────────────────────────────────────────────────────────
+   Deals were created and then never touched again, so every quote sat in "New"
+   forever — the pipeline showed 17 open deals when only 2 were actually live,
+   and paid jobs were indistinguishable from cold enquiries.
+
+   Stage ids come from the "Form" pipeline. They are ids, not names, so they are
+   env-overridable rather than hardcoded strings that break silently if the
+   pipeline is edited in the Brevo UI. */
+const BREVO_PIPELINE = process.env.BREVO_PIPELINE_ID || '69b8f83d72c7290e2e2ad69e';
+const BREVO_STAGE = {
+  new:       process.env.BREVO_STAGE_NEW       || '240f1684-650d-4582-9e1e-ceb23ea48a63',
+  qualifying:process.env.BREVO_STAGE_QUALIFYING|| '1f196442-c903-4941-9c87-ac0b714e6174',
+  pending:   process.env.BREVO_STAGE_PENDING   || '593308b5-3572-4a92-8b57-7944c4bb4fa4',
+  won:       process.env.BREVO_STAGE_WON       || 'b7065ee8-ec98-40af-bc07-724bef3e7255',
+  lost:      process.env.BREVO_STAGE_LOST      || '14d45488-d0a4-4434-8bdf-0efcfae7120e',
+};
+
+/** Which stage a quote belongs in, from its own state. Single source of truth
+ *  so the pipeline cannot drift from the database again. */
+function quoteStage(q) {
+  const total = Number(q.total || 0);
+  const paid = Number(q.paid_amount || 0);
+  if (q.status === 'expired') return 'lost';
+  if (total > 0 && paid >= total - 0.005) return 'won';      // paid in full
+  if (paid > 0) return 'pending';                             // deposit down
+  if (q.accepted_at || q.status === 'accepted') return 'qualifying';
+  return 'new';
+}
+
+/**
+ * Push a quote's current state onto its Brevo deal: stage, amount, name.
+ * Fire-and-forget — the CRM must never be able to fail a payment.
+ *
+ * `amount` is the quote TOTAL. It used to be written as `subtotal`, so every
+ * deal understated the job by the tax.
+ */
+async function syncDealStage(q) {
+  if (!q || !q.brevo_deal_id) return;
+  const stage = quoteStage(q);
+  try {
+    await brevo.patch(`/crm/deals/${q.brevo_deal_id}`, {
+      attributes: {
+        pipeline: BREVO_PIPELINE,
+        deal_stage: BREVO_STAGE[stage],
+        amount: parseFloat(Number(q.total || 0).toFixed(2)),
+      },
+    });
+  } catch (e) {
+    console.error(`brevo stage sync failed for ${q.code}:`, e.response?.data?.message || e.message);
+  }
+}
+
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 /** Tax applies to Illinois work. Toggle per quote; rate is env-configurable so
@@ -2365,7 +2417,11 @@ async function syncQuoteToBrevo(q) {
     const deal = await brevo.post('/crm/deals', {
       name: `Quote — ${q.name || phone || email} (${q.code})`,
       attributes: {
-        amount: parseFloat(Number(q.subtotal || 0).toFixed(2)),
+        // The TOTAL, not the subtotal — every deal used to understate the job
+        // by the tax, so pipeline value never matched the books.
+        amount: parseFloat(Number(q.total || q.subtotal || 0).toFixed(2)),
+        pipeline: BREVO_PIPELINE,
+        deal_stage: BREVO_STAGE[quoteStage(q)],
         close_date: q.valid_until ? new Date(q.valid_until).toISOString() : new Date().toISOString(),
       },
     });
@@ -3575,6 +3631,8 @@ async function bankStripeSession(session) {
             (stillDue > 0 ? `Balance ${money(stillDue)}.` : 'Paid in full.'),
       dealIds: [q.brevo_deal_id],
     }).catch(() => {});
+    // Moves the deal to Won on full payment, Pending on a deposit.
+    syncDealStage(q).catch(() => {});
   }
 
   return { ok: true, duplicate: false, paid: res.paid };
@@ -3840,9 +3898,10 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
 
       if (q.brevo_deal_id) {
         brevo.post('/crm/notes', {
-          text: `QUOTE ${q.code} ACCEPTED ${new Date().toISOString()} — ${money(q.subtotal)}`,
+          text: `QUOTE ${q.code} ACCEPTED ${new Date().toISOString()} — ${money(q.total)}`,
           dealIds: [q.brevo_deal_id],
         }).catch(() => {});
+        syncDealStage(q).catch(() => {});
       }
 
       /* The customer may have just given us their name, email or number for the
@@ -3955,6 +4014,7 @@ app.post('/quote/:code/mark-paid', requireAdmin, async (req, res) => {
               (stillDue > 0 ? `Balance ${money(stillDue)}.` : 'Paid in full.'),
         dealIds: [nq.brevo_deal_id],
       }).catch(() => {});
+      syncDealStage(nq).catch(() => {});
     }
   } catch (err) {
     console.error('mark-paid failed:', err.message);
@@ -4025,6 +4085,8 @@ app.post('/quote/:code/correct-payment', requireAdmin, async (req, res) => {
               `Now ${money(total)} of ${money(qr[0].total)}. ${sourceNote}`,
         dealIds: [qr[0].brevo_deal_id],
       }).catch(() => {});
+      // A correction can move a deal back out of Won as well as into it.
+      syncDealStage({ ...qr[0], paid_amount: total }).catch(() => {});
     }
   } catch (err) {
     console.error('correct-payment failed:', err.message);
