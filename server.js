@@ -184,7 +184,93 @@ async function initDB() {
   await pool.query(`ALTER TABLE grad_orders ADD COLUMN IF NOT EXISTS hubspot_deal_id TEXT`);
   await pool.query(`ALTER TABLE grad_orders ADD COLUMN IF NOT EXISTS clover_customer_id TEXT`);
   await pool.query(`ALTER TABLE grad_orders ADD COLUMN IF NOT EXISTS clover_order_id TEXT`);
+
+  /* ── Payment ledger ───────────────────────────────────────────────────────
+     quotes.paid_amount was a single mutable number, so a payment could only
+     ever be ADDED — a mistyped or duplicated entry could not be corrected, and
+     there was no record of what made up the total. One real quote was recorded
+     at twice its deposit with no way to walk it back.
+
+     Payments are now append-only rows. Corrections are negative rows, so the
+     history survives the fix. quotes.paid_amount is kept as a cached rollup of
+     SUM(amount) because a lot of existing code reads it. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS quote_payments (
+      id             BIGSERIAL PRIMARY KEY,
+      quote_code     TEXT NOT NULL,
+      amount         NUMERIC(10,2) NOT NULL,   -- signed; negative = correction
+      fee            NUMERIC(10,2) DEFAULT 0,  -- card surcharge included in amount
+      method         TEXT NOT NULL,            -- card | zelle | cash | transfer | other
+      kind           TEXT NOT NULL DEFAULT 'payment',  -- payment | correction | refund
+      source         TEXT NOT NULL DEFAULT 'manual',   -- manual | stripe_redirect | stripe_webhook | backfill
+      stripe_session TEXT,
+      stripe_pi      TEXT,
+      ext_ref        TEXT,             -- Stripe object that makes this row unique
+      note           TEXT,
+      created_at     TIMESTAMPTZ DEFAULT NOW()
+    )`);
+  await pool.query(`ALTER TABLE quote_payments ADD COLUMN IF NOT EXISTS ext_ref TEXT`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS quote_payments_code_idx ON quote_payments (quote_code)`);
+  /* The idempotency guarantee, and the reason a webhook can be retried safely.
+     ext_ref holds whichever Stripe object the row came from — checkout session,
+     refund, or dispute. The redirect handler and the webhook race each other on
+     every card payment; whichever arrives second hits this and is discarded, so
+     money is never counted twice. Stripe also retries webhooks on any non-2xx,
+     which without this would duplicate every retried payment. */
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS quote_payments_extref_uniq
+                      ON quote_payments (ext_ref) WHERE ext_ref IS NOT NULL`);
+
+  /* One-time backfill so history does not start empty and the rollup below
+     cannot zero out money that was recorded before the ledger existed. */
+  await pool.query(`
+    INSERT INTO quote_payments (quote_code, amount, method, kind, source, stripe_session, note, created_at)
+    SELECT q.code, q.paid_amount, COALESCE(q.paid_method,'other'), 'payment', 'backfill',
+           q.stripe_session, 'Backfilled from quotes.paid_amount', COALESCE(q.paid_at, q.created_at)
+      FROM quotes q
+     WHERE COALESCE(q.paid_amount,0) <> 0
+       AND NOT EXISTS (SELECT 1 FROM quote_payments p WHERE p.quote_code = q.code)`);
+
   console.log('Database ready.');
+}
+
+/** Recompute quotes.paid_amount from the ledger. The ledger is the truth. */
+async function syncPaidAmount(code) {
+  const { rows } = await pool.query(
+    `SELECT COALESCE(SUM(amount),0) AS paid,
+            MAX(created_at) FILTER (WHERE amount > 0) AS last_at,
+            (ARRAY_AGG(method ORDER BY created_at DESC) FILTER (WHERE amount > 0))[1] AS last_method
+       FROM quote_payments WHERE quote_code = $1`, [code]);
+  const paid = round2(Number(rows[0]?.paid || 0));
+  await pool.query(
+    `UPDATE quotes SET paid_amount = $2,
+            paid_at = COALESCE($3, paid_at),
+            paid_method = COALESCE($4, paid_method)
+      WHERE code = $1`,
+    [code, paid, rows[0]?.last_at || null, rows[0]?.last_method || null]);
+  return paid;
+}
+
+/**
+ * Append a payment to the ledger and refresh the rollup.
+ * Returns { ok, duplicate, paid }. A duplicate stripe_session is not an error —
+ * it means the other handler got there first, which is the desired outcome.
+ */
+async function recordPayment({ code, amount, fee = 0, method, kind = 'payment',
+                               source = 'manual', session = null, pi = null,
+                               extRef = null, note = null }) {
+  try {
+    await pool.query(
+      `INSERT INTO quote_payments (quote_code, amount, fee, method, kind, source, stripe_session, stripe_pi, ext_ref, note)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [code, round2(amount), round2(fee), method, kind, source, session, pi,
+       extRef || session, note]);
+  } catch (err) {
+    // 23505 = unique_violation on the ext_ref index.
+    if (err.code === '23505') return { ok: false, duplicate: true, paid: null };
+    throw err;
+  }
+  const paid = await syncPaidAmount(code);
+  return { ok: true, duplicate: false, paid };
 }
 
 // ─── Email ────────────────────────────────────────────────────────────────────
@@ -3395,6 +3481,272 @@ app.get(['/q/:code/pay/card', '/q/:code/pay/balance'], async (req, res) => {
   }
 });
 
+/**
+ * Bank a completed Stripe Checkout session, and notify exactly once.
+ *
+ * Called from TWO places that race each other: the browser redirect to
+ * /q/:code/paid, and the /webhooks/stripe handler. The unique index on
+ * quote_payments.stripe_session decides the winner — the loser gets
+ * `duplicate` and sends nothing, so the customer never gets two receipts and
+ * the money is never counted twice.
+ *
+ * Before this existed there was no webhook at all, so a customer who closed
+ * the tab after paying was never recorded: one real $34.40 payment sat in
+ * Stripe with 0.00 against the quote and nobody was told.
+ *
+ * `session` is a Stripe Checkout Session object.
+ */
+/** Operational alert to the shop. Never throws — an alert must not be able to
+ *  fail a webhook and cause Stripe to retry a payment that already banked. */
+async function alertShop(subject, innerHtml) {
+  return sendEmail({
+    to: SHOP_EMAIL,
+    subject,
+    html: `<div style="font-family:system-ui,sans-serif;max-width:560px">${innerHtml}</div>`,
+  }).catch((e) => console.error('shop alert failed:', e.message));
+}
+
+async function bankStripeSession(session) {
+  const code = String(session.client_reference_id || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return { ok: false, reason: 'no quote code' };
+  if (session.payment_status !== 'paid') return { ok: false, reason: 'not paid' };
+
+  const gross = round2((session.amount_total || 0) / 100);
+  const isBalance = (session.metadata || {}).kind === 'balance';
+
+  /* What the customer owes on the quote is the gross MINUS the card surcharge:
+     the quote total never included the fee, so banking the gross would leave
+     every card-paid quote looking overpaid. The fee is kept on the row so the
+     Stripe payout still reconciles. */
+  const net = round2(gross / (1 + CARD_FEE));
+  const fee = round2(gross - net);
+
+  const { rows } = await pool.query('SELECT * FROM quotes WHERE code=$1', [code]);
+  if (!rows.length) return { ok: false, reason: 'unknown quote' };
+
+  const res = await recordPayment({
+    code, amount: net, fee, method: 'card', source: 'stripe',
+    session: session.id,
+    pi: typeof session.payment_intent === 'string' ? session.payment_intent : null,
+    note: `${isBalance ? 'Balance' : 'Deposit'} via Stripe Checkout` +
+          (fee > 0 ? ` (customer paid ${money(gross)} incl. ${money(fee)} card fee)` : ''),
+  });
+
+  if (res.duplicate) return { ok: true, duplicate: true };
+
+  await pool.query(
+    `UPDATE quotes SET status='accepted', accepted_at=COALESCE(accepted_at,NOW()),
+            stripe_session=$2 WHERE code=$1`, [code, session.id]).catch(() => {});
+
+  const q = { ...rows[0], paid_amount: res.paid };
+  const stillDue = round2(Math.max(0, Number(q.total) - Number(res.paid)));
+
+  sendEmail({
+    to: SHOP_EMAIL,
+    subject: `💳 ${isBalance ? 'Balance' : 'Deposit'} paid — quote ${code}, ${money(gross)}`,
+    html: `<div style="font-family:system-ui,sans-serif"><h2 style="color:#1848B8">Payment received</h2>
+      <p>${escEmail(q.name || '')} paid <b>${money(gross)}</b> by card for quote ${code}
+         (${isBalance ? 'remaining balance' : 'deposit'}).</p>
+      <p style="color:#6b7280">Applied to quote: ${money(res.paid)} of ${money(q.total)}.
+         ${fee > 0 ? `Card fee ${money(fee)}.` : ''}
+         ${stillDue > 0 ? `Balance outstanding ${money(stillDue)}.` : 'Paid in full.'}</p>
+      <p><a href="${quoteLink(code)}">${quoteLink(code)}</a></p></div>`,
+  }).catch(() => {});
+
+  const to = q.email || session.customer_details?.email;
+  if (to) {
+    sendEmail({
+      to,
+      subject: `Payment received — quote ${code}`,
+      html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
+        <h2 style="color:#1848B8">Thank you!</h2>
+        <p style="color:#374151;line-height:1.6">We've received <b>${money(gross)}</b> for quote ${code}.
+          ${stillDue > 0 ? `A balance of <b>${money(stillDue)}</b> remains, due ${BALANCE_WHEN}.`
+                         : 'That settles it in full — nothing further to pay.'}</p>
+        <p style="color:#374151;line-height:1.6">You're on the schedule — ${SHOP_SIGNER} will follow up
+          with an artwork proof and timeline.</p>
+        <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_NAME} &middot; ${SHOP_PHONE}</p></div>`,
+    }).catch(() => {});
+  }
+
+  if (q.brevo_deal_id) {
+    brevo.post('/crm/notes', {
+      text: `PAYMENT ${money(gross)} by card on quote ${code}. ` +
+            (stillDue > 0 ? `Balance ${money(stillDue)}.` : 'Paid in full.'),
+      dealIds: [q.brevo_deal_id],
+    }).catch(() => {});
+  }
+
+  return { ok: true, duplicate: false, paid: res.paid };
+}
+
+/* ── Stripe payment webhook ───────────────────────────────────────────────────
+   Set the endpoint in the Stripe Dashboard to
+   https://www.jtees.net/webhooks/stripe  (event: checkout.session.completed)
+   and put the signing secret in STRIPE_WEBHOOK_SECRET.
+
+   Verified manually with crypto rather than the stripe SDK, to avoid adding a
+   runtime dependency. Stripe's scheme: the Stripe-Signature header carries
+   `t=<unix>,v1=<hex hmac>`, where the HMAC is over `<t>.<raw body>`. */
+app.post('/webhooks/stripe', async (req, res) => {
+  const secret = process.env.STRIPE_WEBHOOK_SECRET;
+  if (!secret) {
+    console.warn('Stripe webhook rejected — STRIPE_WEBHOOK_SECRET not set');
+    return res.sendStatus(503);
+  }
+  const header = req.headers['stripe-signature'];
+  if (!header) return res.sendStatus(401);
+
+  const parts = String(header).split(',').reduce((acc, kv) => {
+    const [k, v] = kv.split('=');
+    if (k === 't') acc.t = v;
+    if (k === 'v1') acc.v1.push(v);
+    return acc;
+  }, { t: null, v1: [] });
+
+  if (!parts.t || !parts.v1.length) return res.sendStatus(401);
+
+  // Reject anything older than 5 minutes — a captured request cannot be replayed.
+  if (Math.abs(Math.floor(Date.now() / 1000) - Number(parts.t)) > 300) {
+    console.warn('Stripe webhook rejected — timestamp outside tolerance');
+    return res.sendStatus(401);
+  }
+
+  const raw = req.rawBody || Buffer.from(JSON.stringify(req.body));
+  const expected = crypto.createHmac('sha256', secret)
+    .update(Buffer.concat([Buffer.from(parts.t + '.'), raw]))
+    .digest('hex');
+
+  const valid = parts.v1.some((sig) => {
+    try {
+      return sig.length === expected.length &&
+        crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+    } catch { return false; }
+  });
+  if (!valid) {
+    console.warn('Stripe webhook signature mismatch — rejected');
+    return res.sendStatus(401);
+  }
+
+  // Acknowledge immediately; Stripe retries on any non-2xx, and the work below
+  // is idempotent anyway.
+  res.sendStatus(200);
+
+  try {
+    const event = req.body;
+    const obj = event.data?.object;
+    if (!obj) return;
+
+    switch (event.type) {
+
+      /* Money in. async_payment_succeeded covers the delayed methods (ACH,
+         bank debits) where the session completes before the funds clear. */
+      case 'checkout.session.completed':
+      case 'checkout.session.async_payment_succeeded': {
+        const out = await bankStripeSession(obj);
+        console.log(`Stripe ${event.type} for ${obj.client_reference_id}: ` +
+          (out.duplicate ? 'already banked (redirect won the race)' :
+           out.ok ? `banked ${money(out.paid)}` : `skipped — ${out.reason}`));
+        break;
+      }
+
+      /* A delayed payment that later FAILED. Without this the quote would sit
+         marked paid on money that never arrived. */
+      case 'checkout.session.async_payment_failed': {
+        const code = String(obj.client_reference_id || '').toUpperCase();
+        console.warn(`Stripe async payment FAILED for quote ${code}`);
+        await alertShop(`⚠️ Payment failed — quote ${code}`,
+          `<p>A delayed (bank) payment for quote <b>${escEmail(code)}</b> failed after checkout.</p>
+           <p>Nothing has been banked. If the quote shows as paid, check it.</p>
+           <p><a href="${quoteLink(code)}">${quoteLink(code)}</a></p>`);
+        break;
+      }
+
+      /* Money back out. A refund is a negative ledger row, which is only
+         possible because payments are now history rather than one number. */
+      case 'charge.refunded': {
+        const refunded = round2((obj.amount_refunded || 0) / 100);
+        if (!(refunded > 0)) break;
+        const pi = typeof obj.payment_intent === 'string' ? obj.payment_intent : null;
+        const { rows } = await pool.query(
+          `SELECT quote_code, SUM(amount) AS applied, SUM(fee) AS fee
+             FROM quote_payments WHERE stripe_pi = $1 AND amount > 0
+            GROUP BY quote_code`, [pi]);
+        if (!rows.length) {
+          console.warn(`Stripe refund ${obj.id} — no matching quote for PI ${pi}`);
+          break;
+        }
+        const code = rows[0].quote_code;
+        /* Reverse the same net/fee split the payment used, so a full refund
+           returns the quote to exactly zero paid rather than leaving the fee
+           behind. */
+        const net = round2(refunded / (1 + CARD_FEE));
+        const fee = round2(refunded - net);
+        const out = await recordPayment({
+          code, amount: -net, fee: -fee, method: 'card', kind: 'refund',
+          source: 'stripe', pi, extRef: obj.id + ':' + obj.amount_refunded,
+          note: `Refund of ${money(refunded)} via Stripe`,
+        });
+        if (!out.duplicate) {
+          console.log(`Stripe refund for ${code}: -${money(net)} (now ${money(out.paid)})`);
+          await alertShop(`↩️ Refund — quote ${code}, ${money(refunded)}`,
+            `<p>A refund of <b>${money(refunded)}</b> was issued on quote ${escEmail(code)}.</p>
+             <p>Applied to quote: −${money(net)}. Now paid: ${money(out.paid)}.</p>
+             <p><a href="${quoteLink(code)}">${quoteLink(code)}</a></p>`);
+        }
+        break;
+      }
+
+      /* Chargeback. Deliberately does NOT move money — a dispute is not a
+         refund and may be won. It needs a human, fast: Stripe's response
+         window is short and missing it forfeits the money automatically. */
+      case 'charge.dispute.created': {
+        const amt = round2((obj.amount || 0) / 100);
+        const pi = typeof obj.payment_intent === 'string' ? obj.payment_intent : null;
+        const { rows } = await pool.query(
+          `SELECT quote_code FROM quote_payments WHERE stripe_pi = $1 LIMIT 1`, [pi]);
+        const code = rows[0]?.quote_code || 'unknown';
+        console.warn(`Stripe DISPUTE opened on ${code} for ${money(amt)}`);
+        await alertShop(`🚨 Chargeback opened — ${money(amt)} (quote ${code})`,
+          `<p>A customer disputed <b>${money(amt)}</b> on quote <b>${escEmail(code)}</b>.</p>
+           <p><b>Respond in the Stripe Dashboard before the deadline</b> — an unanswered
+              dispute is lost by default, and the amount is already withheld.</p>
+           <p>Reason given: ${escEmail(obj.reason || 'not stated')}.</p>
+           <p>No money has been changed on the quote; a dispute is not a refund.</p>`);
+        break;
+      }
+
+      /* The customer opened checkout and never finished. Not an error — it is
+         the single best follow-up signal the shop gets. */
+      case 'checkout.session.expired': {
+        const code = String(obj.client_reference_id || '').toUpperCase();
+        if (!QUOTE_CODE_RE.test(code)) break;
+        const { rows } = await pool.query(
+          `SELECT code,name,total,paid_amount FROM quotes WHERE code=$1`, [code]);
+        const q = rows[0];
+        // Only worth a nudge if they still owe — an expired session on a
+        // fully paid quote is just an abandoned second tab.
+        if (!q || round2(Number(q.total) - Number(q.paid_amount || 0)) <= 0) break;
+        console.log(`Stripe checkout expired for ${code} — customer did not finish paying`);
+        await alertShop(`🛒 Checkout abandoned — quote ${code}`,
+          `<p>${escEmail(q.name || 'A customer')} opened the payment page for quote
+              <b>${escEmail(code)}</b> and did not finish.</p>
+           <p>Still outstanding: <b>${money(round2(Number(q.total) - Number(q.paid_amount || 0)))}</b>.</p>
+           <p>Worth a follow-up — they were one click from paying.</p>
+           <p><a href="${quoteLink(code)}">${quoteLink(code)}</a></p>`);
+        break;
+      }
+
+      default:
+        // Everything else is subscribed-but-unhandled; log once so an
+        // unexpected event type is visible rather than silently dropped.
+        console.log(`Stripe webhook ignored: ${event.type}`);
+    }
+  } catch (err) {
+    console.error('Stripe webhook processing failed:', err.message);
+  }
+});
+
 /* Stripe sends them back here. Confirm against the API rather than trusting
    the redirect — anyone can visit this URL. */
 app.get('/q/:code/paid', async (req, res) => {
@@ -3407,48 +3759,11 @@ app.get('/q/:code/paid', async (req, res) => {
       const r = await fetch(`https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(sid)}`,
         { headers: { 'Authorization': 'Bearer ' + secret }, signal: AbortSignal.timeout(15000) });
       const d = await r.json();
-      if (r.ok && d.payment_status === 'paid' && d.client_reference_id === code) {
-        const amount = round2((d.amount_total || 0) / 100);
-        const isBalance = (d.metadata || {}).kind === 'balance';
-        /* A balance payment ADDS to what has already been received — overwriting
-           would erase the deposit and make it look like the customer paid less
-           than they did. The session id guard makes this idempotent, so a
-           refreshed success page cannot double-count. */
-        const { rows } = await pool.query(
-          isBalance
-            ? `UPDATE quotes SET paid_amount = COALESCE(paid_amount,0) + $1,
-                      paid_method='card', paid_at=NOW(), status='accepted'
-                WHERE code=$2 AND (stripe_session IS DISTINCT FROM $3) RETURNING *`
-            : `UPDATE quotes SET paid_amount=$1, paid_method='card', paid_at=NOW(), status='accepted'
-                WHERE code=$2 AND (paid_amount IS NULL OR paid_amount = 0) AND $3 IS NOT NULL RETURNING *`,
-          [amount, code, sid]);
-        if (rows.length) {
-          // Record which session was banked so it cannot be applied twice.
-          await pool.query('UPDATE quotes SET stripe_session=$2 WHERE code=$1', [code, sid]).catch(() => {});
-        }
-        if (rows.length) {
-          const q = rows[0];
-          sendEmail({
-            to: SHOP_EMAIL,
-            subject: `💳 ${isBalance ? 'Balance' : 'Deposit'} paid — quote ${q.code}, ${money(amount)}`,
-            html: `<div style="font-family:system-ui,sans-serif"><h2 style="color:#1848B8">Deposit received</h2>
-              <p>${escEmail(q.name || '')} paid <b>${money(amount)}</b> by card for quote ${q.code}
-                 (${isBalance ? 'remaining balance' : 'deposit'}).</p>
-              <p style="color:#6b7280">Total received: ${money(q.paid_amount)} of ${money(q.total)}.</p>
-              <p><a href="${quoteLink(q.code)}">${quoteLink(q.code)}</a></p></div>`,
-          }).catch(() => {});
-          if (q.email) {
-            sendEmail({
-              to: q.email,
-              subject: `Payment received — quote ${q.code}`,
-              html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
-                <h2 style="color:#1848B8">Thank you!</h2>
-                <p style="color:#374151;line-height:1.6">We've received ${money(amount)} for quote ${q.code}. You're on the schedule —
-                ${SHOP_SIGNER} will follow up with an artwork proof and timeline.</p>
-                <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_NAME} &middot; ${SHOP_PHONE}</p></div>`,
-            }).catch(() => {});
-          }
-        }
+      if (r.ok && d.client_reference_id === code) {
+        /* Same code path as the webhook, so the two cannot disagree about the
+           amount, the fee split, or who gets emailed. Whichever arrives first
+           banks it; the other is discarded by the ext_ref unique index. */
+        await bankStripeSession(d);
       }
     }
   } catch (err) {
@@ -3601,12 +3916,18 @@ app.post('/quote/:code/mark-paid', requireAdmin, async (req, res) => {
     // Never let a typo record more than is owed.
     amount = Math.min(amount, outstanding || amount);
 
+    /* Through the ledger, so a manual payment appears in history and can be
+       corrected later. It used to add straight onto quotes.paid_amount, which
+       is why a double-click could not be walked back. */
+    await recordPayment({
+      code, amount, method, source: 'manual',
+      note: String(b.note || '').trim().slice(0, 200) || null,
+    });
+
     const { rows: upd } = await pool.query(
-      `UPDATE quotes SET paid_amount = COALESCE(paid_amount,0) + $2,
-              paid_method = $3, paid_at = NOW(),
-              status = 'accepted',
+      `UPDATE quotes SET status = 'accepted',
               accepted_at = COALESCE(accepted_at, NOW())
-        WHERE code = $1 RETURNING *`, [code, amount, method]);
+        WHERE code = $1 RETURNING *`, [code]);
 
     const nq = upd[0];
     const stillDue = round2(Math.max(0, Number(nq.total) - Number(nq.paid_amount)));
@@ -3637,6 +3958,76 @@ app.post('/quote/:code/mark-paid', requireAdmin, async (req, res) => {
     }
   } catch (err) {
     console.error('mark-paid failed:', err.message);
+  }
+  res.redirect('/quotes');
+});
+
+/**
+ * Correct a payment. The missing half of mark-paid.
+ *
+ * Nothing is ever edited or deleted — a correction is a negative row, so the
+ * original entry and the reason for the fix both survive. That matters for a
+ * payment record: an amount that can be quietly rewritten is not evidence of
+ * anything.
+ *
+ * Modes:
+ *   void=<payment id>   reverse exactly that ledger row
+ *   amount=<n>          adjust by a signed amount (negative to reduce)
+ *   set=<n>             make the running total equal n (writes the difference)
+ */
+app.post('/quote/:code/correct-payment', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/quotes');
+  const b = req.body || {};
+  const note = String(b.note || '').trim().slice(0, 200) || 'Manual correction';
+
+  try {
+    const { rows: qr } = await pool.query('SELECT * FROM quotes WHERE code=$1', [code]);
+    if (!qr.length) return res.redirect('/quotes');
+
+    const { rows: cur } = await pool.query(
+      `SELECT COALESCE(SUM(amount),0) AS paid FROM quote_payments WHERE quote_code=$1`, [code]);
+    const paid = round2(Number(cur[0].paid));
+
+    let delta = 0;
+    let sourceNote = note;
+
+    if (b.void) {
+      const { rows: p } = await pool.query(
+        `SELECT * FROM quote_payments WHERE id=$1 AND quote_code=$2`,
+        [Number(b.void) || 0, code]);
+      if (!p.length) return res.redirect('/quotes');
+      delta = -round2(Number(p[0].amount));
+      sourceNote = `Voided payment #${p[0].id} (${money(p[0].amount)} ${p[0].method}) — ${note}`;
+    } else if (String(b.set || '').trim() !== '') {
+      const target = round2(Number(b.set));
+      if (!Number.isFinite(target) || target < 0) return res.redirect('/quotes');
+      delta = round2(target - paid);
+      sourceNote = `Corrected total to ${money(target)} — ${note}`;
+    } else {
+      delta = round2(Number(b.amount));
+      if (!Number.isFinite(delta)) return res.redirect('/quotes');
+    }
+
+    if (delta === 0) return res.redirect('/quotes');
+
+    await recordPayment({
+      code, amount: delta, method: String(b.method || 'other'),
+      kind: 'correction', source: 'manual', note: sourceNote,
+    });
+
+    const total = await syncPaidAmount(code);
+    console.log(`Payment corrected on ${code}: ${delta > 0 ? '+' : ''}${money(delta)} → ${money(total)}`);
+
+    if (qr[0].brevo_deal_id) {
+      brevo.post('/crm/notes', {
+        text: `PAYMENT CORRECTION ${delta > 0 ? '+' : ''}${money(delta)} on quote ${code}. ` +
+              `Now ${money(total)} of ${money(qr[0].total)}. ${sourceNote}`,
+        dealIds: [qr[0].brevo_deal_id],
+      }).catch(() => {});
+    }
+  } catch (err) {
+    console.error('correct-payment failed:', err.message);
   }
   res.redirect('/quotes');
 });
