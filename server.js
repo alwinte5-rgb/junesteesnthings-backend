@@ -902,7 +902,7 @@ app.get('/api/form-token', signatureRateLimit, (_req, res) => {
 
 // ── Form submission ──────────────────────────────────────────────────────────
 
-app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, async (req, res) => {
+app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, verifyTurnstile, async (req, res) => {
   const { name, phone, email, description, photo_url } = req.body;
 
   if (!name || !phone || !email) {
@@ -1754,6 +1754,11 @@ app.get('/api/config', signatureRateLimit, (req, res) => {
   res.json({
     cloudinaryCloudName: process.env.CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_NAME || '',
     cloudinaryApiKey:    process.env.CLOUDINARY_API_KEY    || '',
+    /* The Turnstile SITE key is public by design — it is rendered into the
+       widget in the page. The secret key stays server-side and is what actually
+       verifies the token. Served here so static pages and the PHP designer can
+       pick it up without the key being hard-coded in two more places. */
+    turnstileSiteKey:    process.env.TURNSTILE_SITE_KEY    || '',
   });
 });
 
@@ -1778,7 +1783,7 @@ app.post('/api/cloudinary-signature', signatureRateLimit, (req, res) => {
 // Embroidery order request from design.jtees.net product pages.
 // Embroidery files (DST/PES/...) can't render in the online designer, so this
 // flow collects the file + size + contact info and June follows up directly.
-app.post('/api/embroidery-quote', orderRateLimit, async (req, res) => {
+app.post('/api/embroidery-quote', orderRateLimit, verifyTurnstile, async (req, res) => {
   try {
     const b = req.body || {};
     const name  = String(b.name || '').trim().slice(0, 120);

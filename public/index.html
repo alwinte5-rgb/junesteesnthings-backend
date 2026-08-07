@@ -2738,6 +2738,10 @@
               </div>
             </div>
 
+            <!-- Turnstile mounts here once /api/config supplies the site key.
+                 Stays empty when unconfigured, so the form still works. -->
+            <div id="cf-turnstile-mount" style="margin:12px 0"></div>
+
             <div class="form-submit-row">
               <button type="submit" class="btn btn-primary" id="submit-btn">Send Request</button>
               <span id="form-status"></span>
@@ -3030,6 +3034,25 @@
     // ============================
     let formToken = '';
     fetch('/api/form-token').then(r => r.json()).then(d => { formToken = d.token || ''; }).catch(() => {});
+
+    // ============================
+    // Turnstile — the site key comes from /api/config rather than being
+    // hard-coded here too. If it is missing the widget never mounts and the
+    // form keeps working; the server only enforces it when configured.
+    // ============================
+    fetch('/api/config').then(r => r.json()).then(cfg => {
+      if (!cfg.turnstileSiteKey) return;
+      const mount = document.getElementById('cf-turnstile-mount');
+      if (!mount) return;
+      mount.className = 'cf-turnstile';
+      mount.setAttribute('data-sitekey', cfg.turnstileSiteKey);
+      // interaction-only: invisible to real visitors, challenges only when suspicious
+      mount.setAttribute('data-appearance', 'interaction-only');
+      const s = document.createElement('script');
+      s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js';
+      s.async = true; s.defer = true;
+      document.head.appendChild(s);
+    }).catch(() => {});
 
     // ============================
     // Quote form submission
