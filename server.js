@@ -4473,6 +4473,145 @@ app.post('/quote/:code/correct-payment', requireAdmin, async (req, res) => {
   res.redirect('/quotes');
 });
 
+/**
+ * The books: one screen answering "what did this business actually do".
+ *
+ * Deliberately separate from the quotes board. That page is for running today's
+ * work; this one is for the questions an accountant, a lender or a tax return
+ * asks — and mixing the two makes both worse.
+ *
+ * Everything is derived from the payment ledger, so it reconciles with the bank
+ * rather than with what was invoiced.
+ */
+app.get('/books', requireAdmin, async (req, res) => {
+  try {
+    const year = /^\d{4}$/.test(String(req.query.year || ''))
+      ? Number(req.query.year) : new Date().getFullYear();
+
+    const { rows: months } = await pool.query(
+      `WITH pay AS (
+         SELECT to_char(date_trunc('month', created_at), 'YYYY-MM') AS period,
+                SUM(amount) AS collected, SUM(tax_portion) AS tax, SUM(fee) AS fees
+           FROM quote_payments
+          WHERE EXTRACT(YEAR FROM created_at) = $1
+          GROUP BY 1),
+       job AS (
+         SELECT to_char(date_trunc('month', created_at), 'YYYY-MM') AS period,
+                COUNT(*) AS jobs,
+                SUM(subtotal) AS sales,
+                SUM(cost_blanks + cost_supplies + cost_outsourced) AS costs,
+                COUNT(*) FILTER (WHERE (cost_blanks + cost_supplies + cost_outsourced) > 0) AS costed
+           FROM quotes
+          WHERE status <> 'expired' AND EXTRACT(YEAR FROM created_at) = $1
+          GROUP BY 1)
+       SELECT COALESCE(pay.period, job.period) AS period,
+              COALESCE(pay.collected,0) AS collected, COALESCE(pay.tax,0) AS tax,
+              COALESCE(pay.fees,0) AS fees, COALESCE(job.jobs,0) AS jobs,
+              COALESCE(job.sales,0) AS sales, COALESCE(job.costs,0) AS costs,
+              COALESCE(job.costed,0) AS costed
+         FROM pay FULL OUTER JOIN job ON pay.period = job.period
+        ORDER BY 1`, [year]);
+
+    const T = months.reduce((a, m) => ({
+      collected: a.collected + Number(m.collected), tax: a.tax + Number(m.tax),
+      fees: a.fees + Number(m.fees), sales: a.sales + Number(m.sales),
+      costs: a.costs + Number(m.costs), jobs: a.jobs + Number(m.jobs),
+      costed: a.costed + Number(m.costed),
+    }), { collected: 0, tax: 0, fees: 0, sales: 0, costs: 0, jobs: 0, costed: 0 });
+
+    const { rows: remitted } = await pool.query(
+      `SELECT COALESCE(SUM(amount),0) AS total FROM tax_remittances
+        WHERE EXTRACT(YEAR FROM paid_at) = $1`, [year]);
+    const pos = await taxPositionByMonth(60);
+
+    const profit = round2(T.sales - T.costs);
+    const pct = T.sales > 0 && T.costs > 0 ? Math.round((profit / T.sales) * 100) : null;
+    const gap = T.jobs - T.costed;
+
+    const { rows: years } = await pool.query(
+      `SELECT DISTINCT EXTRACT(YEAR FROM created_at)::int AS y FROM quotes ORDER BY y DESC`);
+
+    const tile = (label, value, colour, sub) => `
+      <div style="flex:1 1 150px;background:#fff;border:1px solid #e3e8f2;border-radius:10px;padding:12px">
+        <div class="muted" style="font-size:11px;letter-spacing:.06em;text-transform:uppercase">${label}</div>
+        <div style="font-size:22px;font-weight:700;color:${colour || '#111827'};margin-top:2px">${value}</div>
+        ${sub ? `<div class="muted" style="font-size:11.5px;margin-top:2px">${sub}</div>` : ''}</div>`;
+
+    res.send(quotePage('Books', `<h1>Books — ${year}</h1>
+      <div class="sub">${years.map(y => y.y === year
+        ? `<b>${y.y}</b>` : `<a href="/books?year=${y.y}" style="color:#1848B8">${y.y}</a>`).join(' &middot; ')}
+        &middot; <a href="/quotes" style="color:#1848B8">back to jobs</a></div>
+
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin:14px 0">
+        ${tile('Money collected', money(T.collected), '#111827', `${T.jobs} job${T.jobs === 1 ? '' : 's'}`)}
+        ${tile('Sales (ex tax)', money(T.sales), '#111827', 'what the work was worth')}
+        ${tile('Costs', T.costs > 0 ? money(T.costs) : '—', '#111827', gap > 0 ? `${gap} job${gap === 1 ? '' : 's'} not costed` : 'all jobs costed')}
+        ${tile('Profit', pct === null ? '—' : money(profit),
+               pct === null ? '#9ca3af' : pct < 30 ? '#b91c1c' : '#047857',
+               pct === null ? 'enter costs to see this' : `${pct}% margin${gap > 0 ? ' · incomplete' : ''}`)}
+      </div>
+
+      <div class="card">
+        <h2 style="margin:0 0 8px;font-size:16px">Month by month</h2>
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <tr style="color:#6b7280;font-size:11px;letter-spacing:.05em;text-transform:uppercase">
+            <td style="padding:5px 0;border-bottom:1px solid #e5e7eb">Month</td>
+            <td style="padding:5px 0;border-bottom:1px solid #e5e7eb;text-align:right">Collected</td>
+            <td style="padding:5px 0;border-bottom:1px solid #e5e7eb;text-align:right">Sales</td>
+            <td style="padding:5px 0;border-bottom:1px solid #e5e7eb;text-align:right">Costs</td>
+            <td style="padding:5px 0;border-bottom:1px solid #e5e7eb;text-align:right">Profit</td>
+            <td style="padding:5px 0;border-bottom:1px solid #e5e7eb;text-align:right">Sales tax</td>
+            <td style="padding:5px 0;border-bottom:1px solid #e5e7eb;text-align:right">Card fees</td>
+          </tr>
+          ${months.map(m => {
+            const p = round2(Number(m.sales) - Number(m.costs));
+            const pc = Number(m.sales) > 0 && Number(m.costs) > 0
+              ? Math.round((p / Number(m.sales)) * 100) : null;
+            return `<tr>
+              <td style="padding:6px 0">${periodLabel(m.period)}</td>
+              <td style="padding:6px 0;text-align:right;font-variant-numeric:tabular-nums">${money(m.collected)}</td>
+              <td style="padding:6px 0;text-align:right;color:#6b7280;font-variant-numeric:tabular-nums">${money(m.sales)}</td>
+              <td style="padding:6px 0;text-align:right;color:#6b7280;font-variant-numeric:tabular-nums">${Number(m.costs) > 0 ? money(m.costs) : '—'}</td>
+              <td style="padding:6px 0;text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:${pc === null ? '#9ca3af' : pc < 30 ? '#b91c1c' : '#047857'}">${pc === null ? '—' : money(p)}${Number(m.costed) < Number(m.jobs) && Number(m.costs) > 0 ? '<span style="color:#b45309">*</span>' : ''}</td>
+              <td style="padding:6px 0;text-align:right;color:#8a5a00;font-variant-numeric:tabular-nums">${money(m.tax)}</td>
+              <td style="padding:6px 0;text-align:right;color:#9ca3af;font-variant-numeric:tabular-nums">${money(m.fees)}</td>
+            </tr>`; }).join('') || '<tr><td colspan="7" style="padding:10px 0;color:#9ca3af">Nothing recorded for this year.</td></tr>'}
+          <tr style="font-weight:700">
+            <td style="padding:8px 0;border-top:2px solid #111827">Total</td>
+            <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums">${money(T.collected)}</td>
+            <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums">${money(T.sales)}</td>
+            <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums">${T.costs > 0 ? money(T.costs) : '—'}</td>
+            <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums">${pct === null ? '—' : money(profit)}</td>
+            <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums">${money(T.tax)}</td>
+            <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums">${money(T.fees)}</td>
+          </tr>
+        </table>
+        <div class="muted" style="font-size:11px;margin-top:10px">
+          Collected is money that actually arrived, from the payment ledger — it reconciles with the bank.
+          Sales is the work priced before tax. Sales tax is the part of what arrived that belongs to the
+          state. Card fees are what the processor took. ${gap > 0 ? `<b style="color:#b45309">${gap} job${gap === 1 ? ' has' : 's have'} no costs entered, so profit is overstated.</b>` : ''}
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:14px">
+        <h2 style="margin:0 0 8px;font-size:16px">Sales tax position</h2>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          ${tile('Collected in ' + year, money(T.tax), '#8a5a00')}
+          ${tile('Remitted in ' + year, money(remitted[0].total), '#047857')}
+          ${tile('Held right now', money(pos.setAside),
+                 pos.setAside > 0 ? '#b45309' : '#047857', 'across all periods')}
+        </div>
+        <div class="muted" style="font-size:11px;margin-top:10px">
+          Held right now spans every period, not just ${year} — it is what should be in the bank today.
+          <a href="/tax.csv" style="color:#1848B8">Download the payment-level detail</a>.
+        </div>
+      </div>`));
+  } catch (err) {
+    console.error('books failed:', err.message);
+    res.status(500).send('error');
+  }
+});
+
 /* Sales tax detail as CSV, for the ST-1 filing or the bookkeeper. One row per
    payment, because that is the level a state will ask you to substantiate. */
 app.get('/tax.csv', requireAdmin, async (req, res) => {
@@ -4934,8 +5073,21 @@ app.get('/quotes', requireAdmin, async (req, res) => {
             <details style="margin-top:6px">
               <summary style="cursor:pointer;color:#1848B8;font-size:12.5px">Checklist</summary>
               <div style="margin-top:6px;font-size:12.5px">${rows}</div>
+              <form method="POST" action="/quote/${q.code}/shipping"
+                    style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px;border-top:1px solid #e3e8f2;padding-top:8px">
+                <select name="ship_method" style="flex:0 0 118px;padding:6px;font-size:12px">
+                  ${['', 'pickup', 'ground', 'expedited'].map(v =>
+                    `<option value="${v}" ${String(q.ship_method || '') === v ? 'selected' : ''}>${
+                      v === '' ? 'how it goes…' : v === 'pickup' ? 'Pickup' : v === 'ground' ? 'Ground' : 'Expedited'}</option>`).join('')}
+                </select>
+                <input name="tracking" value="${escEmail(q.tracking || '')}" placeholder="tracking number"
+                       style="flex:1 1 150px;padding:6px;font-size:12px">
+                <input type="hidden" name="prev_tracking" value="${escEmail(q.tracking || '')}">
+                <button type="submit" class="btn btn-ghost" style="padding:6px 12px;font-size:12px">Save</button>
+              </form>
               <div class="muted" style="font-size:11px;margin-top:6px">
-                Ticked boxes are set from the data. Open boxes are yours to tap — tap again to undo.</div>
+                Ticked boxes are set from the data. Open boxes are yours to tap — tap again to undo.
+                Pickup removes transit time from the schedule; a new tracking number emails the customer.</div>
             </details></div>`;
         })()}
         ${(() => {
@@ -5020,7 +5172,8 @@ app.get('/quotes', requireAdmin, async (req, res) => {
       <div class="sub">${rows.length} total${
         changeCount ? ` &middot; <b style="color:#1848B8">${changeCount} awaiting your edit</b>` : ''}${
         needCount ? ` &middot; <b style="color:#8a5a00">${needCount} need a text</b>` : ''}</div>
-      <p style="margin-bottom:14px"><a class="btn" href="/quote/new">New quote</a></p>
+      <p style="margin-bottom:14px"><a class="btn" href="/quote/new">New quote</a>
+        <a class="btn btn-ghost" href="/books" style="margin-left:8px">Books</a></p>
 
       <div class="card" style="margin-bottom:16px">
         <div style="display:flex;gap:26px;flex-wrap:wrap;align-items:baseline;margin-bottom:4px">
@@ -5946,6 +6099,41 @@ async function taxMonthlyCheck() {
     console.error('tax monthly check failed:', e.message);
   }
 }
+
+/* Shipping method and tracking. Method matters beyond record-keeping: a pickup
+   has no transit time, so the backwards schedule gives you the extra days back
+   instead of chasing you for a ship date that does not exist. */
+app.post('/quote/:code/shipping', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/quotes');
+  const b = req.body || {};
+  const method = ['pickup', 'ground', 'expedited'].includes(String(b.ship_method))
+    ? String(b.ship_method) : null;
+  const tracking = String(b.tracking || '').trim().slice(0, 120);
+  try {
+    const { rows } = await pool.query(
+      `UPDATE quotes SET ship_method = COALESCE($2, ship_method),
+                         tracking    = COALESCE(NULLIF($3,''), tracking)
+        WHERE code = $1 RETURNING *`, [code, method, tracking]);
+
+    /* A tracking number is worth nothing sitting in a database — send it. */
+    const q = rows[0];
+    if (q && tracking && q.email && tracking !== String(b.prev_tracking || '')) {
+      sendEmail({
+        to: q.email,
+        subject: `Your order has shipped — ${q.code}`,
+        html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
+          <h2 style="color:#1848B8">On its way</h2>
+          <p style="color:#374151;line-height:1.6">Your order for quote ${escEmail(q.code)} has shipped.</p>
+          <p style="color:#374151;line-height:1.6">Tracking: <b>${escEmail(tracking)}</b></p>
+          <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_NAME} &middot; ${SHOP_PHONE}</p></div>`,
+      }).catch((e) => console.error('tracking email failed:', e.message));
+    }
+  } catch (err) {
+    console.error('shipping update failed:', err.message);
+  }
+  res.redirect('/quotes');
+});
 
 /* Enter what a job cost. Blank fields are left alone rather than zeroed, so
    filling in the blanks invoice later does not wipe the supplies figure. */
