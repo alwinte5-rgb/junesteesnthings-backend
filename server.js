@@ -2215,6 +2215,67 @@ const BREVO_STAGE = {
   lost:      process.env.BREVO_STAGE_LOST      || '14d45488-d0a4-4434-8bdf-0efcfae7120e',
 };
 
+/**
+ * Push a quote's state onto the Brevo CONTACT, and fire a lifecycle event.
+ *
+ * Brevo Automation workflows cannot be created over the API (that endpoint
+ * 404s — they are built in the UI), so what makes automation possible is the
+ * data underneath it: an event to trigger on, and attributes to branch and
+ * personalise on. Without these a workflow can only send one mail to everyone.
+ *
+ * `event` is one of the jt_* names the workflows listen for. Fire-and-forget:
+ * marketing plumbing must never be able to fail a payment.
+ */
+async function syncQuoteContact(q, event = null) {
+  if (!q || !q.email) return;
+  const email = String(q.email).trim().toLowerCase();
+  const total = Number(q.total || 0);
+  const paid = Number(q.paid_amount || 0);
+  const due = round2(Math.max(0, total - paid));
+
+  try {
+    // Lifetime value across every quote this address has paid on — the basis
+    // for segmenting repeat customers from one-off jobs.
+    const { rows: lv } = await pool.query(
+      `SELECT COALESCE(SUM(p.amount),0) AS ltv, COUNT(DISTINCT p.quote_code) AS orders
+         FROM quote_payments p JOIN quotes q2 ON q2.code = p.quote_code
+        WHERE LOWER(q2.email) = $1`, [email]);
+
+    await brevo.post('/contacts', {
+      email,
+      updateEnabled: true,
+      attributes: {
+        QUOTE_CODE: q.code,
+        QUOTE_TOTAL: round2(total),
+        BALANCE_DUE: due,
+        QUOTE_STATUS: quoteStage(q),
+        QUOTE_URL: quoteLink(q.code),
+        LAST_QUOTE_AT: new Date(q.created_at || Date.now()).toISOString().slice(0, 10),
+        ...(paid > 0 ? { LAST_PAID_AT: new Date().toISOString().slice(0, 10) } : {}),
+        LIFETIME_VALUE: round2(Number(lv[0]?.ltv || 0)),
+        ORDERS_COUNT: Number(lv[0]?.orders || 0),
+        JOB_SUMMARY: String(quoteSummary(q.items) || '').slice(0, 200),
+      },
+    });
+  } catch (e) {
+    console.error(`brevo contact sync failed for ${q.code}:`, e.response?.data?.message || e.message);
+  }
+
+  if (!event) return;
+  try {
+    await brevo.post('/events', {
+      event_name: event,
+      identifiers: { email_id: email },
+      event_properties: {
+        quote_code: q.code, total: round2(total), balance_due: due,
+        quote_url: quoteLink(q.code),
+      },
+    });
+  } catch (e) {
+    console.error(`brevo event ${event} failed for ${q.code}:`, e.response?.data?.message || e.message);
+  }
+}
+
 /** Which stage a quote belongs in, from its own state. Single source of truth
  *  so the pipeline cannot drift from the database again. */
 function quoteStage(q) {
@@ -3177,6 +3238,8 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
         pool.query('UPDATE quotes SET brevo_contact_id=$1, brevo_deal_id=$2 WHERE id=$3',
           [ids.contactId, ids.dealId, q.id]).catch(() => {});
       }
+      // After the contact exists, so the attributes land on a real record.
+      syncQuoteContact(q, 'jt_quote_sent').catch(() => {});
     }).catch(() => {});
     syncQuoteToLumise(q).catch(() => {});
 
@@ -3634,6 +3697,9 @@ async function bankStripeSession(session) {
     // Moves the deal to Won on full payment, Pending on a deposit.
     syncDealStage(q).catch(() => {});
   }
+  // Fires whether or not a deal exists — the contact is what workflows key on.
+  syncQuoteContact({ ...q, paid_amount: res.paid },
+    stillDue > 0 ? 'jt_deposit_paid' : 'jt_paid_in_full').catch(() => {});
 
   return { ok: true, duplicate: false, paid: res.paid };
 }
@@ -3903,6 +3969,7 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
         }).catch(() => {});
         syncDealStage(q).catch(() => {});
       }
+      syncQuoteContact(q, 'jt_quote_accepted').catch(() => {});
 
       /* The customer may have just given us their name, email or number for the
          first time (common on online and walk-up enquiries), so push the record
@@ -4016,6 +4083,7 @@ app.post('/quote/:code/mark-paid', requireAdmin, async (req, res) => {
       }).catch(() => {});
       syncDealStage(nq).catch(() => {});
     }
+    syncQuoteContact(nq, stillDue > 0 ? 'jt_deposit_paid' : 'jt_paid_in_full').catch(() => {});
   } catch (err) {
     console.error('mark-paid failed:', err.message);
   }
@@ -4088,6 +4156,7 @@ app.post('/quote/:code/correct-payment', requireAdmin, async (req, res) => {
       // A correction can move a deal back out of Won as well as into it.
       syncDealStage({ ...qr[0], paid_amount: total }).catch(() => {});
     }
+    syncQuoteContact({ ...qr[0], paid_amount: total }).catch(() => {});
   } catch (err) {
     console.error('correct-payment failed:', err.message);
   }
