@@ -4343,6 +4343,36 @@ app.get('/customer', requireAdmin, async (req, res) => {
 app.get('/quotes', requireAdmin, async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM quotes ORDER BY created_at DESC LIMIT 200');
+
+    /* Payment history per quote, so the card can show how a total was reached
+       and offer a correction. Loaded in ONE query, not one per quote. */
+    const { rows: payRows } = await pool.query(
+      `SELECT * FROM quote_payments ORDER BY quote_code, created_at, id`);
+    const payByCode = payRows.reduce((m, p) => { (m[p.quote_code] ||= []).push(p); return m; }, {});
+
+    /* Running totals. Money is counted from the LEDGER, never from the quote
+       rows — a quote's total is what was asked for, the ledger is what actually
+       arrived, and only the second one belongs in a revenue figure. */
+    const { rows: monthly } = await pool.query(
+      `SELECT to_char(date_trunc('month', created_at), 'Mon YYYY') AS label,
+              date_trunc('month', created_at) AS m,
+              SUM(amount) AS collected,
+              SUM(fee) AS fees,
+              COUNT(DISTINCT quote_code) AS jobs
+         FROM quote_payments
+        GROUP BY 1,2 ORDER BY m DESC LIMIT 12`);
+
+    const { rows: openAgg } = await pool.query(
+      `SELECT COUNT(*) AS n, COALESCE(SUM(total - COALESCE(paid_amount,0)),0) AS due
+         FROM quotes
+        WHERE status <> 'expired' AND COALESCE(paid_amount,0) < total`);
+
+    const { rows: quotedAgg } = await pool.query(
+      `SELECT to_char(date_trunc('month', created_at), 'Mon YYYY') AS label,
+              date_trunc('month', created_at) AS m,
+              COUNT(*) AS n, COALESCE(SUM(total),0) AS quoted
+         FROM quotes GROUP BY 1,2 ORDER BY m DESC LIMIT 12`);
+    const quotedByLabel = Object.fromEntries(quotedAgg.map(r => [r.label, r]));
     const colour = {
       sent: '#eef1f8|#33415c', viewed: '#fff4e0|#8a5a00', changes: '#fdecea|#b45309',
       accepted: '#e7f6ec|#166534', paid: '#1848B8|#ffffff', expired: '#f3f4f6|#6b7280',
@@ -4431,12 +4461,43 @@ app.get('/quotes', requireAdmin, async (req, res) => {
                    style="flex:0 0 120px;padding:9px">
             <button type="submit" style="padding:9px 20px;font-size:14px">Record</button>
           </div>
+          <input name="note" maxlength="200" placeholder="Zelle confirmation / reference (optional but worth it)"
+                 style="width:100%;margin-top:8px;padding:9px">
           <div class="muted" style="font-size:12px;margin-top:6px">
             Leave the amount blank for ${money(paid ? outstanding : Number(q.deposit || 0))}
-            (${paid ? 'the remaining balance' : 'the deposit'}). Outstanding: ${money(outstanding)}.</div>
+            (${paid ? 'the remaining balance' : 'the deposit'}). Outstanding: ${money(outstanding)}.
+            The reference is what lets you match this to your Zelle statement later.</div>
         </form>` : ''}
+        ${(() => {
+          const ps = payByCode[q.code] || [];
+          if (!ps.length) return '';
+          const lines = ps.map(p => {
+            const when = new Date(p.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            const neg = Number(p.amount) < 0;
+            return `<div style="display:flex;justify-content:space-between;gap:10px;padding:3px 0">
+              <span style="color:#6b7280">${when} &middot; ${escEmail(p.method)}${p.kind !== 'payment' ? ` &middot; <i>${escEmail(p.kind)}</i>` : ''}${Number(p.fee) > 0 ? ` &middot; fee ${money(p.fee)}` : ''}</span>
+              <span style="font-variant-numeric:tabular-nums;color:${neg ? '#b91c1c' : '#111827'}">${money(p.amount)}</span>
+            </div>${p.note ? `<div style="color:#9ca3af;font-size:11px;margin:-2px 0 4px">${escEmail(String(p.note).slice(0, 90))}</div>` : ''}`;
+          }).join('');
+          return `<details style="margin-top:10px">
+            <summary style="cursor:pointer;color:#1848B8;font-size:12.5px">Payment history (${ps.length})</summary>
+            <div style="background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:10px;margin-top:6px;font-size:12.5px">
+              ${lines}
+              <form method="POST" action="/quote/${q.code}/correct-payment"
+                    style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:10px;border-top:1px solid #e3e8f2;padding-top:10px">
+                <span class="muted" style="font-size:12px">Correct the total to</span>
+                <input name="set" type="number" step="0.01" inputmode="decimal"
+                       placeholder="${Number(q.paid_amount || 0).toFixed(2)}" style="flex:0 0 100px;padding:7px">
+                <input name="note" maxlength="200" placeholder="why" style="flex:1 1 140px;padding:7px">
+                <button type="submit" class="btn btn-ghost" style="padding:7px 14px;font-size:12.5px">Correct</button>
+              </form>
+              <div class="muted" style="font-size:11px;margin-top:6px">
+                Nothing is deleted — a correction is recorded as its own entry.</div>
+            </div></details>`;
+        })()}
         <div class="muted" style="margin-top:8px;font-size:12px">/q/${q.code}
-        ${q.phone ? ` &middot; <a class="muted" href="tel:${escEmail(q.phone)}">${escEmail(q.phone)}</a>` : ''}</div>
+        ${q.phone ? ` &middot; <a class="muted" href="tel:${escEmail(q.phone)}">${escEmail(q.phone)}</a>` : ''}
+        ${q.email ? ` &middot; <a class="muted" href="#" onclick="if(confirm('Email a receipt to ${escEmail(q.email)}?')){var f=document.createElement('form');f.method='POST';f.action='/quote/${q.code}/receipt';document.body.appendChild(f);f.submit();}return false;">email receipt</a>` : ''}</div>
       </div>`;
     }).join('');
     const needCount = (body.match(/Needs a text/g) || []).length;
@@ -4446,6 +4507,47 @@ app.get('/quotes', requireAdmin, async (req, res) => {
         changeCount ? ` &middot; <b style="color:#1848B8">${changeCount} awaiting your edit</b>` : ''}${
         needCount ? ` &middot; <b style="color:#8a5a00">${needCount} need a text</b>` : ''}</div>
       <p style="margin-bottom:14px"><a class="btn" href="/quote/new">New quote</a></p>
+
+      <div class="card" style="margin-bottom:16px">
+        <div style="display:flex;gap:26px;flex-wrap:wrap;align-items:baseline;margin-bottom:4px">
+          <div>
+            <div class="muted" style="font-size:11px;letter-spacing:.06em;text-transform:uppercase">Open orders</div>
+            <div style="font-size:24px;font-weight:700">${openAgg[0].n}</div>
+          </div>
+          <div>
+            <div class="muted" style="font-size:11px;letter-spacing:.06em;text-transform:uppercase">Outstanding</div>
+            <div style="font-size:24px;font-weight:700;color:${Number(openAgg[0].due) > 0 ? '#b45309' : '#047857'}">${money(openAgg[0].due)}</div>
+          </div>
+          <div>
+            <div class="muted" style="font-size:11px;letter-spacing:.06em;text-transform:uppercase">Collected this month</div>
+            <div style="font-size:24px;font-weight:700;color:#047857">${money(monthly[0] ? monthly[0].collected : 0)}</div>
+          </div>
+        </div>
+        <details style="margin-top:10px">
+          <summary style="cursor:pointer;color:#1848B8;font-size:13px">Monthly totals</summary>
+          <table style="width:100%;border-collapse:collapse;margin-top:8px;font-size:13px">
+            <tr style="color:#6b7280;font-size:11px;letter-spacing:.05em;text-transform:uppercase">
+              <td style="padding:4px 0;border-bottom:1px solid #e5e7eb">Month</td>
+              <td style="padding:4px 0;border-bottom:1px solid #e5e7eb;text-align:right">Quoted</td>
+              <td style="padding:4px 0;border-bottom:1px solid #e5e7eb;text-align:right">Collected</td>
+              <td style="padding:4px 0;border-bottom:1px solid #e5e7eb;text-align:right">Card fees</td>
+              <td style="padding:4px 0;border-bottom:1px solid #e5e7eb;text-align:right">Jobs</td>
+            </tr>
+            ${monthly.map(m => `<tr>
+              <td style="padding:6px 0">${m.label}</td>
+              <td style="padding:6px 0;text-align:right;color:#6b7280;font-variant-numeric:tabular-nums">${money(quotedByLabel[m.label] ? quotedByLabel[m.label].quoted : 0)}</td>
+              <td style="padding:6px 0;text-align:right;font-weight:600;font-variant-numeric:tabular-nums">${money(m.collected)}</td>
+              <td style="padding:6px 0;text-align:right;color:#9ca3af;font-variant-numeric:tabular-nums">${money(m.fees)}</td>
+              <td style="padding:6px 0;text-align:right;color:#6b7280">${m.jobs}</td>
+            </tr>`).join('') || '<tr><td colspan="5" style="padding:8px 0;color:#9ca3af">No payments recorded yet.</td></tr>'}
+          </table>
+          <div class="muted" style="font-size:11px;margin-top:8px">
+            Collected comes from the payment ledger — what actually arrived, net of corrections
+            and refunds. Quoted is what was asked for in that month, so the two will not match.
+            Card fees are shown separately and are not part of either figure.</div>
+        </details>
+      </div>
+
       ${body || '<div class="card"><p class="muted">No quotes yet.</p></div>'}
       <script>
         function cpq(btn){
