@@ -117,6 +117,14 @@ async function initDB() {
     'shipped_at TIMESTAMPTZ',         // handed to the carrier / ready for pickup
     'delivered_at TIMESTAMPTZ',       // picked up or shipped
     'ship_by DATE',                   // must leave here by this date
+    /* Job costs. Revenue without cost tells you a job was busy, not whether it
+       was worth doing — and for a print shop the blanks are most of the cost.
+       Kept per quote rather than per line so entering it stays a ten-second
+       job; a shop that has to itemise will simply stop entering it. */
+    'cost_blanks NUMERIC(10,2) DEFAULT 0',
+    'cost_supplies NUMERIC(10,2) DEFAULT 0',   // ink, transfers, thread, packaging
+    'cost_outsourced NUMERIC(10,2) DEFAULT 0', // anything sent out
+    'cost_note TEXT',
     'blanks_supplier TEXT',           // who the blanks came from
     'blanks_tracking TEXT',           // inbound tracking for the blanks
     'tracking TEXT',                  // outbound tracking to the customer
@@ -2403,6 +2411,26 @@ async function syncQuoteContact(q, event = null) {
  *   JT_LT_PROOF    customer sitting on a proof (2)
  *   JT_SHIP_MIN    transit to the customer (2)
  */
+/**
+ * What a job actually made.
+ *
+ * Margin is computed against the SUBTOTAL, not the total: sales tax was never
+ * yours and the card fee is passed through, so counting either as revenue
+ * would flatter every job. Costs are what you paid out to deliver it.
+ */
+function quoteMargin(q) {
+  const revenue = round2(Number(q.subtotal || 0));
+  const cost = round2(Number(q.cost_blanks || 0) +
+                      Number(q.cost_supplies || 0) +
+                      Number(q.cost_outsourced || 0));
+  const profit = round2(revenue - cost);
+  return {
+    revenue, cost, profit,
+    pct: revenue > 0 ? Math.round((profit / revenue) * 100) : null,
+    entered: cost > 0,
+  };
+}
+
 /** Short date for operational copy. Module-level so the checklist, the digest
  *  and the quotes page all format a date the same way. */
 function dayShort(d) {
@@ -2514,6 +2542,11 @@ function quoteChecklist(q) {
       hint: sched ? `must leave by ${dayShort(sched.ship_by)}` : 'handed to the carrier' },
     { key: 'delivered', label: 'Delivered',         done: !!q.delivered_at, manual: true,
       hint: 'in the customer\'s hands' },
+    /* Last, because it is the step that gets dropped once the job is out of the
+       door — and it is the one that tells you whether the price was right. */
+    { key: 'costed',   label: 'Costs entered',
+      done: (Number(q.cost_blanks || 0) + Number(q.cost_supplies || 0) + Number(q.cost_outsourced || 0)) > 0,
+      hint: 'what you paid out — otherwise you never learn what this job made' },
   ];
 
   const next = steps.find((s) => !s.done) || null;
@@ -4767,8 +4800,11 @@ app.get('/quotes', requireAdmin, async (req, res) => {
     const { rows: quotedAgg } = await pool.query(
       `SELECT to_char(date_trunc('month', created_at), 'Mon YYYY') AS label,
               date_trunc('month', created_at) AS m,
-              COUNT(*) AS n, COALESCE(SUM(total),0) AS quoted
-         FROM quotes GROUP BY 1,2 ORDER BY m DESC LIMIT 12`);
+              COUNT(*) AS n, COALESCE(SUM(total),0) AS quoted,
+              COALESCE(SUM(subtotal),0) AS sales,
+              COALESCE(SUM(cost_blanks + cost_supplies + cost_outsourced),0) AS costs,
+              COUNT(*) FILTER (WHERE (cost_blanks + cost_supplies + cost_outsourced) > 0) AS costed
+         FROM quotes WHERE status <> 'expired' GROUP BY 1,2 ORDER BY m DESC LIMIT 12`);
     const quotedByLabel = Object.fromEntries(quotedAgg.map(r => [r.label, r]));
     const colour = {
       sent: '#eef1f8|#33415c', viewed: '#fff4e0|#8a5a00', changes: '#fdecea|#b45309',
@@ -4903,6 +4939,50 @@ app.get('/quotes', requireAdmin, async (req, res) => {
             </details></div>`;
         })()}
         ${(() => {
+          const mg = quoteMargin(q);
+          const good = mg.pct !== null && mg.pct >= 50;
+          const thin = mg.pct !== null && mg.pct < 30;
+          return `<details style="margin-top:8px">
+            <summary style="cursor:pointer;color:#1848B8;font-size:12.5px">
+              ${mg.entered
+                ? `Margin <b style="color:${thin ? '#b91c1c' : good ? '#047857' : '#b45309'}">${money(mg.profit)} (${mg.pct}%)</b>`
+                : '<span style="color:#b45309">Costs not entered</span>'}
+            </summary>
+            <form method="POST" action="/quote/${q.code}/costs"
+                  style="background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:10px;margin-top:6px">
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <label style="flex:1 1 110px;font-size:12px;color:#6b7280">Blanks
+                  <input name="cost_blanks" type="number" step="0.01" inputmode="decimal"
+                         value="${Number(q.cost_blanks || 0) > 0 ? Number(q.cost_blanks).toFixed(2) : ''}"
+                         placeholder="0.00" style="width:100%;padding:7px"></label>
+                <label style="flex:1 1 110px;font-size:12px;color:#6b7280">Supplies
+                  <input name="cost_supplies" type="number" step="0.01" inputmode="decimal"
+                         value="${Number(q.cost_supplies || 0) > 0 ? Number(q.cost_supplies).toFixed(2) : ''}"
+                         placeholder="0.00" style="width:100%;padding:7px"></label>
+                <label style="flex:1 1 110px;font-size:12px;color:#6b7280">Outsourced
+                  <input name="cost_outsourced" type="number" step="0.01" inputmode="decimal"
+                         value="${Number(q.cost_outsourced || 0) > 0 ? Number(q.cost_outsourced).toFixed(2) : ''}"
+                         placeholder="0.00" style="width:100%;padding:7px"></label>
+                <label style="flex:1 1 130px;font-size:12px;color:#6b7280">Supplier
+                  <input name="blanks_supplier" value="${escEmail(q.blanks_supplier || '')}"
+                         placeholder="SanMar…" style="width:100%;padding:7px"></label>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+                <input name="cost_note" maxlength="200" value="${escEmail(q.cost_note || '')}"
+                       placeholder="note (optional)" style="flex:1;padding:7px">
+                <button type="submit" style="padding:7px 16px;font-size:13px">Save</button>
+              </div>
+              <div class="muted" style="font-size:11.5px;margin-top:8px">
+                ${mg.entered
+                  ? `Sales ${money(mg.revenue)} − costs ${money(mg.cost)} = <b>${money(mg.profit)}</b>
+                     (${mg.pct}%). ${thin ? '<b style="color:#b91c1c">Thin — check the pricing on the next one like this.</b>'
+                       : good ? '<b style="color:#047857">Healthy.</b>' : ''}`
+                  : 'Enter what you paid out and this job tells you whether the price was right.'}
+                Measured against the sale before tax — tax was never yours, and the card fee is passed through.
+              </div>
+            </form></details>`;
+        })()}
+        ${(() => {
           const ps = payByCode[q.code] || [];
           if (!ps.length) return '';
           const lines = ps.map(p => {
@@ -4964,21 +5044,33 @@ app.get('/quotes', requireAdmin, async (req, res) => {
               <td style="padding:4px 0;border-bottom:1px solid #e5e7eb">Month</td>
               <td style="padding:4px 0;border-bottom:1px solid #e5e7eb;text-align:right">Quoted</td>
               <td style="padding:4px 0;border-bottom:1px solid #e5e7eb;text-align:right">Collected</td>
-              <td style="padding:4px 0;border-bottom:1px solid #e5e7eb;text-align:right">Card fees</td>
+              <td style="padding:4px 0;border-bottom:1px solid #e5e7eb;text-align:right">Costs</td>
+              <td style="padding:4px 0;border-bottom:1px solid #e5e7eb;text-align:right">Profit</td>
               <td style="padding:4px 0;border-bottom:1px solid #e5e7eb;text-align:right">Jobs</td>
             </tr>
-            ${monthly.map(m => `<tr>
+            ${monthly.map(m => {
+              const qa = quotedByLabel[m.label];
+              const sales = Number(qa ? qa.sales : 0);
+              const costs = Number(qa ? qa.costs : 0);
+              const profit = round2(sales - costs);
+              const pct = sales > 0 && costs > 0 ? Math.round((profit / sales) * 100) : null;
+              const partial = qa && Number(qa.costed) < Number(qa.n);
+              return `<tr>
               <td style="padding:6px 0">${m.label}</td>
-              <td style="padding:6px 0;text-align:right;color:#6b7280;font-variant-numeric:tabular-nums">${money(quotedByLabel[m.label] ? quotedByLabel[m.label].quoted : 0)}</td>
+              <td style="padding:6px 0;text-align:right;color:#6b7280;font-variant-numeric:tabular-nums">${money(qa ? qa.quoted : 0)}</td>
               <td style="padding:6px 0;text-align:right;font-weight:600;font-variant-numeric:tabular-nums">${money(m.collected)}</td>
-              <td style="padding:6px 0;text-align:right;color:#9ca3af;font-variant-numeric:tabular-nums">${money(m.fees)}</td>
+              <td style="padding:6px 0;text-align:right;color:#9ca3af;font-variant-numeric:tabular-nums">${costs > 0 ? money(costs) : '—'}</td>
+              <td style="padding:6px 0;text-align:right;font-weight:700;font-variant-numeric:tabular-nums;color:${pct === null ? '#9ca3af' : pct < 30 ? '#b91c1c' : '#047857'}">
+                ${pct === null ? '—' : `${money(profit)}<span style="font-weight:400;color:#9ca3af"> ${pct}%</span>`}
+                ${partial && costs > 0 ? '<span title="some jobs have no costs entered" style="color:#b45309">*</span>' : ''}</td>
               <td style="padding:6px 0;text-align:right;color:#6b7280">${m.jobs}</td>
-            </tr>`).join('') || '<tr><td colspan="5" style="padding:8px 0;color:#9ca3af">No payments recorded yet.</td></tr>'}
+            </tr>`; }).join('') || '<tr><td colspan="6" style="padding:8px 0;color:#9ca3af">No payments recorded yet.</td></tr>'}
           </table>
           <div class="muted" style="font-size:11px;margin-top:8px">
             Collected comes from the payment ledger — what actually arrived, net of corrections
             and refunds. Quoted is what was asked for in that month, so the two will not match.
-            Card fees are shown separately and are not part of either figure.</div>
+            Profit is sales before tax minus what you paid out; a <b>*</b> means some jobs that
+            month have no costs entered yet, so the real figure is lower.</div>
         </details>
 
         <details style="margin-top:8px" ${taxPos.setAside > 0 ? 'open' : ''}>
@@ -5021,7 +5113,7 @@ app.get('/quotes', requireAdmin, async (req, res) => {
             <b>arrived</b>, not the month the quote was written — tax is owed on receipts.
             Corrections and refunds take their tax back out automatically.
             You are emailed on the 1st, and again on the 15th and 19th if a period is still open.
-            Covers the quoting system only; Clover and in-person sales are not in here.
+            Every sale runs through this system, so this is the complete figure for the period.
             <a href="/tax.csv" style="color:#1848B8">Download CSV</a>.</div>
         </details>
       </div>
@@ -5847,13 +5939,42 @@ async function taxMonthlyCheck() {
          <a href="${PUBLIC_BASE_URL}/tax.csv" style="color:#1848B8;margin-left:14px">Download the detail</a></p>
        <p style="color:#9ca3af;font-size:11.5px;margin-top:14px">
          Once you have filed, record it on the quotes page so this stops chasing you
-         and the running balance stays right. Figures cover the quoting system only.</p>`);
+         and the running balance stays right.</p>`);
 
     console.log(`tax reminder sent: ${period} ${kind} ${money(outstanding)}`);
   } catch (e) {
     console.error('tax monthly check failed:', e.message);
   }
 }
+
+/* Enter what a job cost. Blank fields are left alone rather than zeroed, so
+   filling in the blanks invoice later does not wipe the supplies figure. */
+app.post('/quote/:code/costs', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/quotes');
+  const b = req.body || {};
+  const num = (v) => {
+    const s = String(v == null ? '' : v).trim();
+    if (s === '') return null;
+    const n = Number(s);
+    return Number.isFinite(n) && n >= 0 ? round2(n) : null;
+  };
+  try {
+    await pool.query(
+      `UPDATE quotes SET cost_blanks     = COALESCE($2, cost_blanks),
+                         cost_supplies   = COALESCE($3, cost_supplies),
+                         cost_outsourced = COALESCE($4, cost_outsourced),
+                         blanks_supplier = COALESCE(NULLIF($5,''), blanks_supplier),
+                         cost_note       = COALESCE(NULLIF($6,''), cost_note)
+        WHERE code = $1`,
+      [code, num(b.cost_blanks), num(b.cost_supplies), num(b.cost_outsourced),
+       String(b.blanks_supplier || '').trim().slice(0, 80),
+       String(b.cost_note || '').trim().slice(0, 200)]);
+  } catch (err) {
+    console.error('cost update failed:', err.message);
+  }
+  res.redirect('/quotes');
+});
 
 /* Record a remittance to the state. Closes the period and stops the chasing. */
 app.post('/tax/remit', requireAdmin, async (req, res) => {
