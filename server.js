@@ -4881,6 +4881,58 @@ app.get('/books', requireAdmin, async (req, res) => {
         </div>
       </div>
 
+      ${(() => {
+        /* The point of a books page is a decision, not a number. Everything
+           here is derived from what is already recorded — no new input. */
+        const monthsWithSales = months.filter(m => Number(m.sales) > 0).length || 1;
+        const avgSales = round2(T.sales / monthsWithSales);
+        const recurring = round2(expList.filter(e => e.recurs)
+          .reduce((a, e) => a + Number(e.amount), 0));
+        const marginPct = (T.sales > 0 && T.costs > 0) ? (T.sales - T.costs) / T.sales : null;
+        // Sales needed to cover fixed costs at the margin actually achieved.
+        const breakEven = marginPct && marginPct > 0 ? round2(recurring / marginPct) : null;
+        const coverage = breakEven ? Math.round(avgSales / breakEven * 100) : null;
+        const bestM = months.reduce((b, m) => (!b || Number(m.sales) > Number(b.sales)) ? m : b, null);
+
+        return `<div class="card" style="margin-top:14px">
+          <h2 style="margin:0 0 4px;font-size:16px">What this tells you</h2>
+          <div class="muted" style="font-size:12px;margin-bottom:10px">
+            Worked out from what is already recorded — nothing extra to type.</div>
+
+          ${recurring > 0 ? `<div style="padding:9px 0;border-bottom:1px solid #f1f4f9">
+            <b>Fixed costs are ${money(recurring)} a month.</b>
+            ${breakEven
+              ? ` At a ${Math.round(marginPct * 100)}% margin you need <b>${money(breakEven)}</b> of sales a month
+                  just to cover them.` + (coverage !== null ? `
+                  <span style="color:${coverage >= 100 ? '#047857' : '#b91c1c'}">
+                  You are averaging ${money(avgSales)} — ${coverage >= 100 ? `${coverage}% of break-even, covered` : `${coverage}% of break-even, short by ${money(round2(breakEven - avgSales))}`}.</span>` : '')
+              : ' Enter job costs on a few jobs and this becomes a break-even figure.'}
+          </div>` : ''}
+
+          ${marginPct !== null ? `<div style="padding:9px 0;border-bottom:1px solid #f1f4f9">
+            <b>You keep ${Math.round(marginPct * 100)}c of every dollar</b> before overheads.
+            ${marginPct < 0.35
+              ? '<span style="color:#b91c1c">That is thin for print — worth checking whether the blanks price or the quoted price is the problem.</span>'
+              : marginPct > 0.6 ? '<span style="color:#047857">Healthy. Room to absorb a rush or a reprint.</span>'
+              : 'A normal range for this trade.'}
+            ${gap > 0 ? `<span class="muted"> Based on ${T.jobs - gap} of ${T.jobs} jobs — the rest have no costs entered, so the real figure is lower.</span>` : ''}
+          </div>` : `<div style="padding:9px 0;border-bottom:1px solid #f1f4f9">
+            <b>No job costs entered yet.</b> Until they are, this page can show what came in but not what you kept.
+            <a href="/quotes" style="color:#1848B8">Add costs to a job</a> and every figure here fills in.</div>`}
+
+          ${T.tax > 0 ? `<div style="padding:9px 0;border-bottom:1px solid #f1f4f9">
+            <b>${money(pos.setAside)} of your balance is not yours.</b>
+            It is sales tax held for the state. Treat the bank balance as
+            ${money(pos.setAside)} lighter than it reads.
+          </div>` : ''}
+
+          ${bestM && Number(bestM.sales) > 0 ? `<div style="padding:9px 0">
+            <b>Best month so far: ${periodLabel(bestM.period)}</b> at ${money(bestM.sales)}.
+            ${monthsWithSales > 1 ? `Average is ${money(avgSales)}.` : 'One month of trading — the averages get useful from about three.'}
+          </div>` : ''}
+        </div>`;
+      })()}
+
       <div class="card" style="margin-top:14px">
         <h2 style="margin:0 0 4px;font-size:16px">Overheads</h2>
         <div class="muted" style="font-size:12px;margin-bottom:10px">
@@ -5804,6 +5856,7 @@ async function renderBoard(VIEW, req, res) {
         <a class="btn btn-ghost" href="/production" style="margin-left:6px${VIEW==='work'?';font-weight:800':''}">Production</a>
         <a class="btn btn-ghost" href="/books" style="margin-left:6px">Books</a></p>
 
+      ${VIEW !== 'money' ? '' : `
       <div class="card" style="margin-bottom:16px">
         <div style="display:flex;gap:26px;flex-wrap:wrap;align-items:baseline;margin-bottom:4px">
           <div>
@@ -5898,7 +5951,7 @@ async function renderBoard(VIEW, req, res) {
             Every sale runs through this system, so this is the complete figure for the period.
             <a href="/tax.csv" style="color:#1848B8">Download CSV</a>.</div>
         </details>
-      </div>
+      </div>`}
 
       ${VIEW === 'work' ? (() => {
         /* Kanban: columns are stages, cards are jobs. A job's column comes from
