@@ -6050,7 +6050,10 @@ async function renderBoard(VIEW, req, res) {
         /* Accepted work only. An unaccepted quote is a sales problem and belongs
            on the Money board; putting it here is what made To start misleading. */
         const live = rows.filter(q => !q.delivered_at && q.accepted_at);
-        const cols = JOB_STAGES.map((st, i) => ({
+        /* Delivered is a destination, not a column — a job that reaches it leaves
+           the board, so rendering it produced an always-empty sixth column that
+           wrapped onto a second row. The move buttons still target it by index. */
+        const cols = JOB_STAGES.slice(0, -1).map((st, i) => ({
           ...st, i, jobs: live.filter(q => jobStageIndex(q) === i),
         }));
         return `<div class="kanban">${cols.map(c => `
