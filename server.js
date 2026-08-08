@@ -2685,8 +2685,14 @@ app.post('/quote/:code/step', requireAdmin, async (req, res) => {
   const clear = String((req.body && req.body.clear) || '') === '1';
   /* Answer JSON to fetch so the page does not reload. A full reload collapsed
      the <details> the row lives in, which made a successful save look like the
-     checklist had simply shut itself. */
-  const wantsJson = String(req.get('accept') || '').includes('application/json');
+     checklist had simply shut itself.
+
+     Keyed on ?json=1, not the Accept header: Cloudflare Access sits in front of
+     this route and the header did not survive the trip, so the server fell
+     through to the redirect and the page reloaded anyway. A query parameter
+     goes through untouched. */
+  const wantsJson = String(req.query.json || '') === '1' ||
+                    String(req.get('accept') || '').includes('application/json');
   try {
     const { rows } = await pool.query(
       `UPDATE quotes SET ${col} = ${clear ? 'NULL' : 'NOW()'} WHERE code = $1 RETURNING *`, [code]);
@@ -5773,12 +5779,19 @@ app.get('/quotes', requireAdmin, async (req, res) => {
             btn.dataset.busy = '1';
             btn.style.opacity = '.5';
 
-            fetch(form.action, {
+            fetch(form.action + '?json=1', {
               method: 'POST',
               headers: { 'Accept': 'application/json' },
               body: new FormData(form),
             })
-            .then(function(r){ return r.json(); })
+            .then(function(r){
+              // A redirect back to the board means the JSON branch was missed;
+              // treating that as success would leave a stale row on screen.
+              if (r.redirected || !(r.headers.get('content-type')||'').includes('json')) {
+                throw new Error('not json');
+              }
+              return r.json();
+            })
             .then(function(d){
               if (!d || !d.ok) throw new Error('failed');
               var done = d.done;
