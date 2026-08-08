@@ -2683,12 +2683,25 @@ app.post('/quote/:code/step', requireAdmin, async (req, res) => {
   const col = COLS[String((req.body && req.body.step) || '')];
   if (!QUOTE_CODE_RE.test(code) || !col) return res.redirect('/quotes');
   const clear = String((req.body && req.body.clear) || '') === '1';
+  /* Answer JSON to fetch so the page does not reload. A full reload collapsed
+     the <details> the row lives in, which made a successful save look like the
+     checklist had simply shut itself. */
+  const wantsJson = String(req.get('accept') || '').includes('application/json');
   try {
-    await pool.query(
-      `UPDATE quotes SET ${col} = ${clear ? 'NULL' : 'NOW()'} WHERE code = $1`, [code]);
+    const { rows } = await pool.query(
+      `UPDATE quotes SET ${col} = ${clear ? 'NULL' : 'NOW()'} WHERE code = $1 RETURNING *`, [code]);
     console.log(`quote ${code}: ${col} ${clear ? 'cleared' : 'set'}`);
+    if (wantsJson) {
+      const cl = rows.length ? quoteChecklist(rows[0]) : null;
+      return res.json({
+        ok: true, done: !clear,
+        progress: cl ? { done: cl.done, of: cl.of } : null,
+        next: cl && cl.next ? { label: cl.next.label, hint: cl.next.hint } : null,
+      });
+    }
   } catch (err) {
     console.error('step update failed:', err.message);
+    if (wantsJson) return res.status(500).json({ ok: false });
   }
   res.redirect('/quotes');
 });
@@ -3031,14 +3044,24 @@ form:has(>.step-row){display:block}
    with everything stacked inside it. The column stays put on a phone; on a
    desktop it widens and the detail panels sit side by side instead of in one
    long vertical queue. */
-@media (min-width:900px){
+/* The job board is a grid of cards, not one long column. Each card stays a
+   whole job — its panels stack inside it — so a card can be read without
+   scanning across, and the screen carries three of them side by side. */
+.quote-grid{display:grid;gap:14px;align-items:start}
+@media (min-width:820px){
   .wrap{max-width:1120px}
-  .panels{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}
-  .panels>.panel-wide{grid-column:1 / -1}
+  .quote-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
-@media (min-width:1400px){
-  .wrap{max-width:1300px}
+@media (min-width:1320px){
+  .wrap{max-width:1560px}
+  .quote-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
 }
+@media (min-width:1900px){
+  .wrap{max-width:1840px}
+}
+/* Tables inside a narrower card must scroll rather than force the card wide. */
+.quote-grid .card table{max-width:100%}
+.quote-grid .card details table{display:block;overflow-x:auto}
 `;
 
 function quotePage(title, body) {
@@ -5460,25 +5483,26 @@ app.get('/quotes', requireAdmin, async (req, res) => {
                <span class="step-label" style="color:${s.done ? '#6b7280' : '#111827'};${s.done ? 'text-decoration:line-through' : 'font-weight:600'}">${s.label}</span>
                <span class="step-hint">${escEmail(s.hint)}</span>`;
             return s.manual
-              ? `<form method="POST" action="/quote/${q.code}/step" style="margin:0">
+              ? `<form method="POST" action="/quote/${q.code}/step" style="margin:0" data-stepform>
                    <input type="hidden" name="step" value="${s.key}">
-                   ${s.done ? '<input type="hidden" name="clear" value="1">' : ''}
-                   <button type="submit" class="step-row" title="${s.done ? 'Tap to undo' : 'Tap to mark done'}">${inner}</button>
+                   <input type="hidden" name="clear" value="${s.done ? '1' : ''}">
+                   <button type="submit" class="step-row${s.done ? ' is-done' : ''}"
+                           title="${s.done ? 'Tap to undo' : 'Tap to mark done'}">${inner}</button>
                  </form>`
-              : `<div class="step-row step-auto" title="set automatically">${inner}</div>`;
+              : `<div class="step-row step-auto${s.done ? ' is-done' : ''}" title="set automatically">${inner}</div>`;
           }).join('');
           return `<div style="margin-top:10px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:10px">
             <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px">
-              <div style="font-size:13px">
+              <div style="font-size:13px" data-next>
                 ${cl.next
                   ? `<b style="color:#1848B8">Next: ${escEmail(cl.next.label)}</b>
                      <span class="muted" style="font-size:12px"> — ${escEmail(cl.next.hint)}</span>`
                   : '<b style="color:#047857">Complete — nothing outstanding</b>'}
               </div>
-              <span class="muted" style="font-size:11.5px;white-space:nowrap">${cl.done}/${cl.of}</span>
+              <span class="muted" style="font-size:11.5px;white-space:nowrap" data-progress>${cl.done}/${cl.of}</span>
             </div>
             <div style="height:4px;background:#e3e8f2;border-radius:3px;margin:7px 0 2px;overflow:hidden">
-              <div style="height:100%;width:${pct}%;background:${pct === 100 ? '#047857' : '#1848B8'}"></div>
+              <div data-bar style="height:100%;width:${pct}%;background:${pct === 100 ? '#047857' : '#1848B8'};transition:width .2s"></div>
             </div>
             <details style="margin-top:6px">
               <summary style="cursor:pointer;color:#1848B8;font-size:12.5px">Checklist</summary>
@@ -5734,8 +5758,68 @@ app.get('/quotes', requireAdmin, async (req, res) => {
         </details>
       </div>
 
-      ${body || '<div class="card"><p class="muted">No quotes yet.</p></div>'}
+      ${body ? `<div class="quote-grid">${body}</div>` : '<div class="card"><p class="muted">No quotes yet.</p></div>'}
       <script>
+        /* Ticking a step posts in the background. Submitting the form normally
+           reloaded the page, which collapsed the <details> the row lives in —
+           so a save that worked looked exactly like the checklist shutting
+           itself. Without JS the form still submits the old way. */
+        document.querySelectorAll('form[data-stepform]').forEach(function(form){
+          form.addEventListener('submit', function(e){
+            e.preventDefault();
+            var btn = form.querySelector('.step-row');
+            var clear = form.querySelector('input[name="clear"]');
+            if (btn.dataset.busy) return;
+            btn.dataset.busy = '1';
+            btn.style.opacity = '.5';
+
+            fetch(form.action, {
+              method: 'POST',
+              headers: { 'Accept': 'application/json' },
+              body: new FormData(form),
+            })
+            .then(function(r){ return r.json(); })
+            .then(function(d){
+              if (!d || !d.ok) throw new Error('failed');
+              var done = d.done;
+              btn.classList.toggle('is-done', done);
+              clear.value = done ? '1' : '';
+              btn.title = done ? 'Tap to undo' : 'Tap to mark done';
+              var tick = btn.querySelector('.step-tick');
+              if (tick) { tick.textContent = done ? '☑' : '☐'; tick.style.color = done ? '#047857' : '#9ca3af'; }
+              var label = btn.querySelector('.step-label');
+              if (label) {
+                label.style.textDecoration = done ? 'line-through' : 'none';
+                label.style.color = done ? '#6b7280' : '#111827';
+                label.style.fontWeight = done ? '400' : '600';
+              }
+              // The card's own progress and next action, from the server's
+              // recomputed checklist rather than guessed at here.
+              var card = form.closest('.card');
+              if (card && d.progress) {
+                var p = card.querySelector('[data-progress]');
+                if (p) p.textContent = d.progress.done + '/' + d.progress.of;
+                var bar = card.querySelector('[data-bar]');
+                if (bar) {
+                  var pctv = Math.round(d.progress.done / d.progress.of * 100);
+                  bar.style.width = pctv + '%';
+                  bar.style.background = pctv === 100 ? '#047857' : '#1848B8';
+                }
+                var nx = card.querySelector('[data-next]');
+                if (nx) nx.innerHTML = d.next
+                  ? '<b style="color:#1848B8">Next: ' + d.next.label + '</b>' +
+                    '<span class="muted" style="font-size:12px"> — ' + d.next.hint + '</span>'
+                  : '<b style="color:#047857">Complete — nothing outstanding</b>';
+              }
+            })
+            .catch(function(){ form.submit(); })   // fall back to a real POST
+            .finally(function(){
+              delete btn.dataset.busy;
+              btn.style.opacity = '';
+            });
+          });
+        });
+
         /* Line costs multiply themselves. The whole point of itemising is not
            having to work out qty × cost on paper for every line. */
         (function(){
