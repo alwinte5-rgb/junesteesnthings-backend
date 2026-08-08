@@ -117,6 +117,12 @@ async function initDB() {
     'shipped_at TIMESTAMPTZ',         // handed to the carrier / ready for pickup
     'delivered_at TIMESTAMPTZ',       // picked up or shipped
     'ship_by DATE',                   // must leave here by this date
+    /* A customer who will not name a date is the normal case, not an error.
+       The shop still needs a working date to schedule blanks against, so the
+       target is ours and needed_by stays theirs — and 'no fixed date' is a
+       real answer that stops the checklist asking forever. */
+    'target_date DATE',
+    'deadline_flexible BOOLEAN DEFAULT FALSE',
     /* Job costs. Revenue without cost tells you a job was busy, not whether it
        was worth doing — and for a print shop the blanks are most of the cost.
        Kept per quote rather than per line so entering it stays a ten-second
@@ -2559,7 +2565,10 @@ function dayShort(d) {
 }
 
 function quoteSchedule(q) {
-  if (!q.needed_by) return null;
+  /* Their date if they gave one, otherwise the target we set ourselves. Blanks
+     have to be ordered on a real date either way. */
+  const by = q.needed_by || q.target_date;
+  if (!by) return null;
 
   const lt = {
     blanks: parseInt(process.env.JT_LT_BLANKS || '5', 10),
@@ -2569,7 +2578,7 @@ function quoteSchedule(q) {
     ship:   parseInt(process.env.JT_SHIP_MIN  || '2', 10),
   };
 
-  const needed = new Date(q.needed_by);
+  const needed = new Date(by);
   const isPickup = String(q.ship_method || '').toLowerCase() === 'pickup';
   const back = (from, days) => addBusinessDays(from, -days);
 
@@ -2637,8 +2646,12 @@ function quoteChecklist(q) {
      model of a job rather than two. */
   const steps = [
     { key: 'quote',    label: 'Quote ready',
-      done: !!(q.name && (q.email || q.phone)) && hasItems && total > 0,
-      hint: !q.needed_by ? 'no deadline set — the schedule needs one'
+      done: !!(q.name && (q.email || q.phone)) && hasItems && total > 0
+            && (!!q.needed_by || !!q.target_date || !!q.deadline_flexible),
+      hint: (!q.needed_by && !q.target_date && !q.deadline_flexible)
+              ? 'no date yet — set a working date so blanks get ordered in time'
+            : (!q.needed_by && q.target_date) ? `working date ${dayShort(q.target_date)} (they did not give one)`
+            : (!q.needed_by && q.deadline_flexible) ? 'no fixed date — they are flexible'
             : !q.email && q.phone ? 'phone only — cannot be chased by email'
             : 'details, items and deadline captured' },
     { key: 'accepted', label: 'Accepted + deposit',
@@ -5540,8 +5553,9 @@ async function renderBoard(VIEW, req, res) {
       const sched = quoteSchedule(q);
       const cl = quoteChecklist(q);
       const done = !!q.delivered_at || !cl.next;
-      const days = q.needed_by
-        ? Math.round((new Date(q.needed_by) - new Date(new Date().toDateString())) / 86400000)
+      const byDate = q.needed_by || q.target_date;
+      const days = byDate
+        ? Math.round((new Date(byDate) - new Date(new Date().toDateString())) / 86400000)
         : null;
       const rank = done ? 4
         : (sched && sched.risks.length) ? 0
@@ -6252,6 +6266,26 @@ async function renderBoard(VIEW, req, res) {
   }
 }
 
+/* Set the working date when the customer would not give one — or record that
+   there genuinely is not a deadline, which is a real answer and should stop the
+   checklist asking. */
+app.post('/quote/:code/target', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/production');
+  const b = req.body || {};
+  const flexible = String(b.flexible || '') === '1';
+  const date = String(b.target_date || '').trim() || null;
+  try {
+    await pool.query(
+      `UPDATE quotes SET target_date = $2::date, deadline_flexible = $3 WHERE code = $1`,
+      [code, flexible ? null : date, flexible]);
+    console.log(`quote ${code}: ${flexible ? 'marked flexible' : 'target date ' + date}`);
+  } catch (err) {
+    console.error('target date failed:', err.message);
+  }
+  res.redirect('/production/' + code);
+});
+
 /* One job in full: the checklist detail behind a kanban card. The board is for
    moving work along; this is for the specifics of a single job. */
 app.get('/production/:code', requireAdmin, async (req, res) => {
@@ -6294,8 +6328,21 @@ app.get('/production/:code', requireAdmin, async (req, res) => {
                       title="${escEmail(st.hint)}">${st.label}</button>
             </form>`).join('')}
         </div>
+        ${!q.needed_by ? `
+        <form method="POST" action="/quote/${q.code}/target"
+              style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;background:#fff8ed;
+                     border:1px solid #fde3c0;border-radius:10px;padding:9px 11px;margin-bottom:10px">
+          <span style="font-size:12.5px;color:#8a5a00;flex:1 1 100%">
+            ${q.deadline_flexible ? 'No fixed date — they are flexible.'
+              : q.target_date ? `They gave no date. Working to <b>${dayShort(q.target_date)}</b>.`
+              : 'They did not give a date. Set one to work to, so blanks get ordered in time.'}</span>
+          <input name="target_date" type="date" value="${q.target_date ? new Date(q.target_date).toISOString().slice(0,10) : ''}"
+                 style="flex:0 0 152px;padding:6px;font-size:12px">
+          <button type="submit" class="kbtn kbtn-go" style="font-size:12px">Set</button>
+          <button type="submit" name="flexible" value="1" class="kbtn" style="font-size:12px">No fixed date</button>
+        </form>` : ''}
         ${sched ? `<div class="muted" style="font-size:12px;margin-bottom:10px">
-          Needed ${dayShort(q.needed_by)} · ${sched.isPickup ? 'ready by' : 'ship by'} ${dayShort(sched.ship_by)}
+          ${q.needed_by ? `Needed ${dayShort(q.needed_by)}` : `Working to ${dayShort(q.target_date)}`} · ${sched.isPickup ? 'ready by' : 'ship by'} ${dayShort(sched.ship_by)}
           · order blanks by ${dayShort(sched.blanks_order_by)}
           ${sched.risks.length ? `<span style="color:#b91c1c"> · behind on ${sched.risks.map(r=>escEmail(r.label)).join(', ')}</span>` : ''}</div>` : ''}
         <div data-next style="font-size:13px;margin-bottom:6px">
@@ -7014,15 +7061,15 @@ async function sendDailyDigest() {
     const { rows } = await pool.query(
       `SELECT * FROM quotes
         WHERE status <> 'expired' AND delivered_at IS NULL
-        ORDER BY needed_by NULLS LAST, created_at`);
+        ORDER BY COALESCE(needed_by, target_date) NULLS LAST, created_at`);
     if (!rows.length) return;
 
     const today = new Date(new Date().toDateString());
     const live = rows.map((q) => {
       const cl = quoteChecklist(q);
       const sched = quoteSchedule(q);
-      const days = q.needed_by
-        ? Math.round((new Date(q.needed_by) - today) / 86400000) : null;
+      const days = (q.needed_by || q.target_date)
+        ? Math.round((new Date(q.needed_by || q.target_date) - today) / 86400000) : null;
       return { q, cl, sched, days };
     }).filter((x) => x.cl.next);           // nothing to do = not in the digest
 
