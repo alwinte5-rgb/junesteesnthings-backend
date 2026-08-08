@@ -27,6 +27,15 @@ Never trust a client-submitted total, including discounts.
 ### Verify the write before reporting success
 A success toast that isn't backed by a persisted row is a lie you'll find out about from a customer.
 
+### Never let a payment depend on the customer's browser coming back
+A redirect is a courtesy, not a delivery guarantee: the tab closes, the phone sleeps, the network drops. **Every gateway needs a signature-verified webhook**, and the webhook and the redirect must call the same banking function so they cannot disagree. Make it idempotent with a unique index on the gateway object id, and let whichever arrives second be discarded. Verify it: unsigned request → 401, correctly signed → 200.
+
+### Money is a ledger, never a column
+Payments are append-only rows; a correction is a negative row, so the original entry and the reason both survive. Keep the rolled-up total on the order if other code reads it, but derive it from the ledger. This is also what makes refunds, disputes and part-payments expressible at all.
+
+### Split pass-through fees off the order total
+A card surcharge is not revenue against the order. Bank the net so the order closes at exactly zero, and keep the fee on the same row so the payout still reconciles. Banking the gross leaves every card-paid order looking overpaid and never closing.
+
 ### Guard duplicate submissions
 Disable the button on submit, add a short server-side duplicate-order window, and make the success page work without a session (fall back to gateway metadata).
 
@@ -35,6 +44,12 @@ Overpayments and payments against cancelled orders must be **flagged**, never si
 
 ### Validation should fail open, not block sales
 A false-positive validator costs real revenue.
+
+### A process that has to be opened is a process that won't be
+Encode the checklist instead of writing it. Derive every step the data can already answer, store only the few it cannot, show the ONE next action on the record, and push a daily digest so the list arrives rather than waiting to be read. Documentation is for humans deciding; automation is for humans doing.
+
+### A CRM stage nobody writes is a CRM stage nobody trusts
+Derive the stage from the record's own state and push it on every transition. If the integration also drives automation, the attributes it writes are the automation — without them a workflow can only send one identical message to everyone.
 
 ### SEO is the whole channel here
 Sitemap.xml, robots.txt, og:image, product schema.
