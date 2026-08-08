@@ -236,6 +236,26 @@ async function initDB() {
       created_at     TIMESTAMPTZ DEFAULT NOW()
     )`);
   await pool.query(`ALTER TABLE quote_payments ADD COLUMN IF NOT EXISTS ext_ref TEXT`).catch(() => {});
+  /* ── Overheads ────────────────────────────────────────────────────────────
+     Job costs answer "was that job worth doing". They cannot answer "did the
+     business make money", because rent is owed whether or not anybody ordered.
+     These are the costs that are not attached to a job.
+
+     `recurs` marks a fixed monthly cost (rent, insurance) so it can be rolled
+     forward instead of retyped every month and quietly forgotten. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS expenses (
+      id          BIGSERIAL PRIMARY KEY,
+      spent_on    DATE NOT NULL DEFAULT CURRENT_DATE,
+      category    TEXT NOT NULL,
+      amount      NUMERIC(10,2) NOT NULL,
+      vendor      TEXT,
+      note        TEXT,
+      recurs      BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS expenses_date_idx ON expenses (spent_on)`);
+
   /* Remembered blank costs, keyed on the normalised garment description —
      quote lines are typed by hand, so there is no product id to key on. */
   await pool.query(`
@@ -3355,11 +3375,24 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
                   '<button type="button" class="btn btn-ghost" style="padding:4px 10px;font-size:12px;white-space:nowrap"'+
                   ' onclick="usePrice('+l.unit+')">$'+l.unit.toFixed(2)+' ea — use</button></div>';
               }).join('');
+              // What the last job made, shown while the next price is being set.
+              var mg = '';
+              if (d.margin) {
+                mg = '<div style="margin-top:6px;font-size:12.5px;color:'+(d.margin.thin?'#b91c1c':'#047857')+'">'+
+                     'Last job made <b>'+d.margin.profit+'</b> ('+d.margin.pct+'%)'+
+                     (d.margin.thin?' — thin, price this one higher':'')+
+                     (d.avg_pct!==null&&d.count>1?' <span style="color:#6b7280">· '+d.avg_pct+'% average</span>':'')+
+                     '</div>';
+              } else {
+                mg = '<div class="muted" style="margin-top:6px;font-size:12px">'+
+                     'No costs entered on their last job, so there is no margin to check this price against.</div>';
+              }
               document.getElementById('prior').innerHTML =
                 '<div class="ok" style="margin-top:12px">'+
                 '<b>Returning customer</b> — '+d.count+' quote'+(d.count===1?'':'s')+
                 ', quoted '+d.lifetime_quoted+', paid '+d.lifetime_spent+
                 ' &middot; <a href="'+d.link+'" target="_blank">full history</a>'+
+                mg+
                 '<div class="muted" style="margin-top:6px;font-size:12px">Last quoted '+d.when+':</div>'+
                 lines+'</div>';
             }).catch(function(){});
@@ -3463,6 +3496,17 @@ app.get('/api/quotes/prior', requireAdmin, async (req, res) => {
     const quoted = rows.reduce((a, r) => a + Number(r.total || r.subtotal || 0), 0);
     // Spent means money actually received, not merely accepted.
     const spent = rows.reduce((a, r) => a + Number(r.paid_amount || 0), 0);
+
+    /* What the last job actually MADE. Repeating a price you lost money on is
+       the expensive way to keep a customer, and the margin is only knowable
+       here — at the moment the next price is being set. */
+    const lastMg = quoteMargin(last);
+    const costedRows = rows.filter(r =>
+      (Number(r.cost_blanks || 0) + Number(r.cost_supplies || 0) + Number(r.cost_outsourced || 0)) > 0);
+    const avgPct = costedRows.length
+      ? Math.round(costedRows.reduce((a, r) => a + (quoteMargin(r).pct || 0), 0) / costedRows.length)
+      : null;
+
     res.json({
       found: true,
       name: last.name || '',
@@ -3472,6 +3516,10 @@ app.get('/api/quotes/prior', requireAdmin, async (req, res) => {
       count: rows.length,
       lifetime_quoted: money(quoted),
       lifetime_spent: money(spent),
+      margin: lastMg.entered
+        ? { profit: money(lastMg.profit), pct: lastMg.pct, thin: lastMg.pct < 30 }
+        : null,
+      avg_pct: avgPct,
       link: `/customer?q=${encodeURIComponent(last.email || last.phone || '')}`,
       // The exact lines they were charged before, so a repeat quote can match.
       lines: (last.items || []).slice(0, 4).map(i => ({
@@ -4640,8 +4688,28 @@ app.get('/books', requireAdmin, async (req, res) => {
         WHERE EXTRACT(YEAR FROM paid_at) = $1`, [year]);
     const pos = await taxPositionByMonth(60);
 
-    const profit = round2(T.sales - T.costs);
-    const pct = T.sales > 0 && T.costs > 0 ? Math.round((profit / T.sales) * 100) : null;
+    /* Overheads by month, and the recent list for the register below. */
+    const { rows: expMonths } = await pool.query(
+      `SELECT to_char(date_trunc('month', spent_on), 'YYYY-MM') AS period,
+              COALESCE(SUM(amount),0) AS total
+         FROM expenses WHERE EXTRACT(YEAR FROM spent_on) = $1
+        GROUP BY 1`, [year]);
+    const expByPeriod = Object.fromEntries(expMonths.map(r => [r.period, Number(r.total)]));
+    const { rows: expByCat } = await pool.query(
+      `SELECT category, COALESCE(SUM(amount),0) AS total
+         FROM expenses WHERE EXTRACT(YEAR FROM spent_on) = $1
+        GROUP BY 1 ORDER BY 2 DESC`, [year]);
+    const { rows: expList } = await pool.query(
+      `SELECT * FROM expenses WHERE EXTRACT(YEAR FROM spent_on) = $1
+        ORDER BY spent_on DESC, id DESC LIMIT 40`, [year]);
+    const expTotal = round2(expByCat.reduce((s, r) => s + Number(r.total), 0));
+
+    /* Gross profit is what the jobs made. Net is what the business made —
+       rent is owed whether or not anybody ordered. */
+    const gross = round2(T.sales - T.costs);
+    const net = round2(gross - expTotal);
+    const pct = T.sales > 0 && T.costs > 0 ? Math.round((gross / T.sales) * 100) : null;
+    const netPct = T.sales > 0 ? Math.round((net / T.sales) * 100) : null;
     const gap = T.jobs - T.costed;
 
     const { rows: years } = await pool.query(
@@ -4659,12 +4727,13 @@ app.get('/books', requireAdmin, async (req, res) => {
         &middot; <a href="/quotes" style="color:#1848B8">back to jobs</a></div>
 
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin:14px 0">
-        ${tile('Money collected', money(T.collected), '#111827', `${T.jobs} job${T.jobs === 1 ? '' : 's'}`)}
-        ${tile('Sales (ex tax)', money(T.sales), '#111827', 'what the work was worth')}
-        ${tile('Costs', T.costs > 0 ? money(T.costs) : '—', '#111827', gap > 0 ? `${gap} job${gap === 1 ? '' : 's'} not costed` : 'all jobs costed')}
-        ${tile('Profit', pct === null ? '—' : money(profit),
-               pct === null ? '#9ca3af' : pct < 30 ? '#b91c1c' : '#047857',
-               pct === null ? 'enter costs to see this' : `${pct}% margin${gap > 0 ? ' · incomplete' : ''}`)}
+        ${tile('Sales (ex tax)', money(T.sales), '#111827', `${T.jobs} job${T.jobs === 1 ? '' : 's'} · collected ${money(T.collected)}`)}
+        ${tile('Job costs', T.costs > 0 ? money(T.costs) : '—', '#111827', gap > 0 ? `${gap} job${gap === 1 ? '' : 's'} not costed` : 'all jobs costed')}
+        ${tile('Overheads', expTotal > 0 ? money(expTotal) : '—', '#111827', 'rent, materials, everything else')}
+        ${tile('Net profit', (pct === null && expTotal === 0) ? '—' : money(net),
+               (pct === null && expTotal === 0) ? '#9ca3af' : net < 0 ? '#b91c1c' : '#047857',
+               (pct === null && expTotal === 0) ? 'enter costs to see this'
+                 : `gross ${money(gross)} − overheads${netPct !== null ? ` · ${netPct}%` : ''}`)}
       </div>
 
       <div class="card">
@@ -4674,30 +4743,42 @@ app.get('/books', requireAdmin, async (req, res) => {
             <td style="padding:5px 0;border-bottom:1px solid #e5e7eb">Month</td>
             <td style="padding:5px 0;border-bottom:1px solid #e5e7eb;text-align:right">Collected</td>
             <td style="padding:5px 0;border-bottom:1px solid #e5e7eb;text-align:right">Sales</td>
-            <td style="padding:5px 0;border-bottom:1px solid #e5e7eb;text-align:right">Costs</td>
-            <td style="padding:5px 0;border-bottom:1px solid #e5e7eb;text-align:right">Profit</td>
+            <td style="padding:5px 0;border-bottom:1px solid #e5e7eb;text-align:right">Job costs</td>
+            <td style="padding:5px 0;border-bottom:1px solid #e5e7eb;text-align:right">Overheads</td>
+            <td style="padding:5px 0;border-bottom:1px solid #e5e7eb;text-align:right">Net</td>
             <td style="padding:5px 0;border-bottom:1px solid #e5e7eb;text-align:right">Sales tax</td>
             <td style="padding:5px 0;border-bottom:1px solid #e5e7eb;text-align:right">Card fees</td>
           </tr>
-          ${months.map(m => {
-            const p = round2(Number(m.sales) - Number(m.costs));
-            const pc = Number(m.sales) > 0 && Number(m.costs) > 0
-              ? Math.round((p / Number(m.sales)) * 100) : null;
-            return `<tr>
-              <td style="padding:6px 0">${periodLabel(m.period)}</td>
-              <td style="padding:6px 0;text-align:right;font-variant-numeric:tabular-nums">${money(m.collected)}</td>
-              <td style="padding:6px 0;text-align:right;color:#6b7280;font-variant-numeric:tabular-nums">${money(m.sales)}</td>
-              <td style="padding:6px 0;text-align:right;color:#6b7280;font-variant-numeric:tabular-nums">${Number(m.costs) > 0 ? money(m.costs) : '—'}</td>
-              <td style="padding:6px 0;text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:${pc === null ? '#9ca3af' : pc < 30 ? '#b91c1c' : '#047857'}">${pc === null ? '—' : money(p)}${Number(m.costed) < Number(m.jobs) && Number(m.costs) > 0 ? '<span style="color:#b45309">*</span>' : ''}</td>
-              <td style="padding:6px 0;text-align:right;color:#8a5a00;font-variant-numeric:tabular-nums">${money(m.tax)}</td>
-              <td style="padding:6px 0;text-align:right;color:#9ca3af;font-variant-numeric:tabular-nums">${money(m.fees)}</td>
-            </tr>`; }).join('') || '<tr><td colspan="7" style="padding:10px 0;color:#9ca3af">Nothing recorded for this year.</td></tr>'}
+          ${(() => {
+            /* Months with overheads but no jobs still have to appear — a month
+               where rent went out and nothing came in is exactly the month you
+               need to see. */
+            const periods = [...new Set([...months.map(m => m.period), ...Object.keys(expByPeriod)])].sort();
+            const byPeriod = Object.fromEntries(months.map(m => [m.period, m]));
+            return periods.map(period => {
+              const m = byPeriod[period] || { period, collected: 0, sales: 0, costs: 0, tax: 0, fees: 0, jobs: 0, costed: 0 };
+              const ov = expByPeriod[period] || 0;
+              const g = round2(Number(m.sales) - Number(m.costs));
+              const n = round2(g - ov);
+              const known = Number(m.costs) > 0 || ov > 0;
+              return `<tr>
+                <td style="padding:6px 0">${periodLabel(period)}</td>
+                <td style="padding:6px 0;text-align:right;font-variant-numeric:tabular-nums">${money(m.collected)}</td>
+                <td style="padding:6px 0;text-align:right;color:#6b7280;font-variant-numeric:tabular-nums">${money(m.sales)}</td>
+                <td style="padding:6px 0;text-align:right;color:#6b7280;font-variant-numeric:tabular-nums">${Number(m.costs) > 0 ? money(m.costs) : '—'}</td>
+                <td style="padding:6px 0;text-align:right;color:#6b7280;font-variant-numeric:tabular-nums">${ov > 0 ? money(ov) : '—'}</td>
+                <td style="padding:6px 0;text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:${!known ? '#9ca3af' : n < 0 ? '#b91c1c' : '#047857'}">${!known ? '—' : money(n)}${Number(m.costed) < Number(m.jobs) && Number(m.costs) > 0 ? '<span style="color:#b45309">*</span>' : ''}</td>
+                <td style="padding:6px 0;text-align:right;color:#8a5a00;font-variant-numeric:tabular-nums">${money(m.tax)}</td>
+                <td style="padding:6px 0;text-align:right;color:#9ca3af;font-variant-numeric:tabular-nums">${money(m.fees)}</td>
+              </tr>`; }).join('');
+          })() || '<tr><td colspan="8" style="padding:10px 0;color:#9ca3af">Nothing recorded for this year.</td></tr>'}
           <tr style="font-weight:700">
             <td style="padding:8px 0;border-top:2px solid #111827">Total</td>
             <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums">${money(T.collected)}</td>
             <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums">${money(T.sales)}</td>
             <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums">${T.costs > 0 ? money(T.costs) : '—'}</td>
-            <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums">${pct === null ? '—' : money(profit)}</td>
+            <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums">${expTotal > 0 ? money(expTotal) : '—'}</td>
+            <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums;color:${net < 0 ? '#b91c1c' : '#047857'}">${(pct === null && expTotal === 0) ? '—' : money(net)}</td>
             <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums">${money(T.tax)}</td>
             <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums">${money(T.fees)}</td>
           </tr>
@@ -4707,6 +4788,56 @@ app.get('/books', requireAdmin, async (req, res) => {
           Sales is the work priced before tax. Sales tax is the part of what arrived that belongs to the
           state. Card fees are what the processor took. ${gap > 0 ? `<b style="color:#b45309">${gap} job${gap === 1 ? ' has' : 's have'} no costs entered, so profit is overstated.</b>` : ''}
         </div>
+      </div>
+
+      <div class="card" style="margin-top:14px">
+        <h2 style="margin:0 0 4px;font-size:16px">Overheads</h2>
+        <div class="muted" style="font-size:12px;margin-bottom:10px">
+          Costs not attached to a job — rent, utilities, materials that are not garments.
+          These are what turn "the jobs made money" into "the business made money".</div>
+
+        <form method="POST" action="/expenses" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;
+              background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:10px">
+          <input type="hidden" name="year" value="${year}">
+          <input name="spent_on" type="date" value="${new Date().toISOString().slice(0,10)}" style="flex:0 0 145px;padding:7px">
+          <select name="category" style="flex:0 0 130px;padding:7px">
+            ${EXPENSE_CATEGORIES.map(c => `<option value="${c}">${c}</option>`).join('')}
+          </select>
+          <input name="amount" type="number" step="0.01" inputmode="decimal" placeholder="0.00" required style="flex:0 0 100px;padding:7px">
+          <input name="vendor" placeholder="who" style="flex:1 1 120px;padding:7px">
+          <input name="note" placeholder="note" style="flex:1 1 130px;padding:7px">
+          <label style="font-size:12px;color:#6b7280;display:flex;align-items:center;gap:4px;white-space:nowrap">
+            <input type="checkbox" name="recurs" value="1" style="width:auto"> monthly</label>
+          <button type="submit" style="padding:7px 18px;font-size:14px">Add</button>
+        </form>
+
+        ${expByCat.length ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+          ${expByCat.map(c => `<div style="background:#f7f9fc;border:1px solid #e3e8f2;border-radius:8px;padding:6px 12px;font-size:12.5px">
+            <span style="color:#6b7280">${escEmail(c.category)}</span>
+            <b style="margin-left:6px;font-variant-numeric:tabular-nums">${money(c.total)}</b></div>`).join('')}
+        </div>` : ''}
+
+        ${expList.length ? `<details style="margin-top:12px" ${expList.length <= 8 ? 'open' : ''}>
+          <summary style="cursor:pointer;color:#1848B8;font-size:13px">${expList.length} entr${expList.length === 1 ? 'y' : 'ies'}</summary>
+          <table style="width:100%;border-collapse:collapse;margin-top:8px;font-size:13px">
+            ${expList.map(e => `<tr>
+              <td style="padding:5px 0;color:#6b7280;white-space:nowrap">${dayShort(e.spent_on)}</td>
+              <td style="padding:5px 0">${escEmail(e.category)}${e.recurs ? ' <span class="muted" style="font-size:11px">monthly</span>' : ''}</td>
+              <td style="padding:5px 0;color:#6b7280;font-size:12px">${escEmail(e.vendor || '')}${e.note ? ` — ${escEmail(String(e.note).slice(0,50))}` : ''}</td>
+              <td style="padding:5px 0;text-align:right;font-variant-numeric:tabular-nums">${money(e.amount)}</td>
+              <td style="padding:5px 0;text-align:right;width:28px">
+                <form method="POST" action="/expenses/${e.id}/delete" style="display:inline"
+                      onsubmit="return confirm('Delete this ${money(e.amount)} ${escEmail(e.category)} entry?')">
+                  <button type="submit" title="delete" style="border:0;background:none;color:#9ca3af;cursor:pointer;font-size:14px">×</button>
+                </form></td>
+            </tr>`).join('')}
+          </table>
+        </details>` : '<div class="muted" style="font-size:12.5px;margin-top:10px">Nothing recorded yet.</div>'}
+
+        ${expList.some(e => e.recurs) ? `<form method="POST" action="/expenses/roll" style="margin-top:10px">
+          <button type="submit" class="btn btn-ghost" style="padding:6px 14px;font-size:12.5px">Roll monthly costs into this month</button>
+          <span class="muted" style="font-size:11px;margin-left:8px">Copies last month's recurring entries. Skips any category already present.</span>
+        </form>` : ''}
       </div>
 
       <div class="card" style="margin-top:14px">
@@ -4726,6 +4857,64 @@ app.get('/books', requireAdmin, async (req, res) => {
     console.error('books failed:', err.message);
     res.status(500).send('error');
   }
+});
+
+/* The categories a print shop actually spends on. A fixed list beats free text:
+   a category typed three different ways cannot be totalled. */
+const EXPENSE_CATEGORIES = ['Rent', 'Utilities', 'Materials', 'Equipment',
+  'Software', 'Insurance', 'Marketing', 'Vehicle', 'Fees', 'Other'];
+
+/* Record an overhead. */
+app.post('/expenses', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const amount = round2(Number(b.amount));
+  const category = EXPENSE_CATEGORIES.includes(String(b.category)) ? String(b.category) : 'Other';
+  if (!(amount > 0)) return res.redirect('/books');
+  try {
+    await pool.query(
+      `INSERT INTO expenses (spent_on, category, amount, vendor, note, recurs)
+       VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6)`,
+      [String(b.spent_on || '').trim() || null, category, amount,
+       String(b.vendor || '').trim().slice(0, 80) || null,
+       String(b.note || '').trim().slice(0, 200) || null,
+       String(b.recurs || '') === '1']);
+  } catch (err) {
+    console.error('expense insert failed:', err.message);
+  }
+  res.redirect('/books' + (b.year ? `?year=${encodeURIComponent(b.year)}` : ''));
+});
+
+/* Delete one. Overheads are typed by hand, so a typo needs an undo — unlike
+   payments, where history is evidence and a correction must be a new row. */
+app.post('/expenses/:id/delete', requireAdmin, async (req, res) => {
+  const id = Number(req.params.id) || 0;
+  try { await pool.query('DELETE FROM expenses WHERE id = $1', [id]); }
+  catch (err) { console.error('expense delete failed:', err.message); }
+  res.redirect('/books');
+});
+
+/* Roll last month's recurring costs into this month. Rent does not stop being
+   owed because nobody typed it in, and a monthly cost retyped by hand is a
+   monthly cost eventually forgotten. Idempotent: it will not duplicate a
+   category already present this month. */
+app.post('/expenses/roll', requireAdmin, async (req, res) => {
+  try {
+    const { rowCount } = await pool.query(
+      `INSERT INTO expenses (spent_on, category, amount, vendor, note, recurs)
+       SELECT date_trunc('month', CURRENT_DATE)::date, e.category, e.amount, e.vendor,
+              COALESCE(e.note,'') , TRUE
+         FROM expenses e
+        WHERE e.recurs
+          AND date_trunc('month', e.spent_on) = date_trunc('month', CURRENT_DATE - INTERVAL '1 month')
+          AND NOT EXISTS (
+            SELECT 1 FROM expenses x
+             WHERE x.category = e.category
+               AND date_trunc('month', x.spent_on) = date_trunc('month', CURRENT_DATE))`);
+    console.log(`recurring expenses rolled forward: ${rowCount}`);
+  } catch (err) {
+    console.error('expense roll failed:', err.message);
+  }
+  res.redirect('/books');
 });
 
 /* Sales tax detail as CSV, for the ST-1 filing or the bookkeeper. One row per
@@ -5006,7 +5195,36 @@ app.get('/customer', requireAdmin, async (req, res) => {
 /* The tracking list. */
 app.get('/quotes', requireAdmin, async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM quotes ORDER BY created_at DESC LIMIT 200');
+    const { rows: allRows } = await pool.query('SELECT * FROM quotes ORDER BY created_at DESC LIMIT 200');
+
+    /* Order by what needs attention, not by what arrived last. A board sorted
+       by date buries the job that is about to miss its deadline under three
+       quotes that came in this morning.
+       Rank: behind schedule → deadline soonest → live work → everything else. */
+    const rows = allRows.map((q) => {
+      const sched = quoteSchedule(q);
+      const cl = quoteChecklist(q);
+      const done = !!q.delivered_at || !cl.next;
+      const days = q.needed_by
+        ? Math.round((new Date(q.needed_by) - new Date(new Date().toDateString())) / 86400000)
+        : null;
+      const rank = done ? 4
+        : (sched && sched.risks.length) ? 0
+        : (days !== null && days <= 7) ? 1
+        : (q.accepted_at || Number(q.paid_amount || 0) > 0) ? 2
+        : 3;
+      return { ...q, _sched: sched, _rank: rank, _days: days };
+    }).sort((a, b) => {
+      if (a._rank !== b._rank) return a._rank - b._rank;
+      if (a._days !== b._days) {
+        if (a._days === null) return 1;
+        if (b._days === null) return -1;
+        return a._days - b._days;
+      }
+      return new Date(b.created_at) - new Date(a.created_at);
+    });
+
+    const atRiskCount = rows.filter(q => q._rank === 0).length;
 
     /* Payment history per quote, so the card can show how a total was reached
        and offer a correction. Loaded in ONE query, not one per quote. */
@@ -5179,6 +5397,17 @@ app.get('/quotes', requireAdmin, async (req, res) => {
             The reference is what lets you match this to your Zelle statement later.</div>
         </form>` : ''}
         ${(() => {
+          const s = q._sched;
+          if (!s || !s.risks.length) return '';
+          return `<div style="margin-top:8px;background:#fdecea;border:1px solid #f5c6c0;border-radius:10px;padding:9px 12px">
+            <b style="color:#b91c1c;font-size:13px">⚠ Behind schedule</b>
+            <div style="color:#b91c1c;font-size:12.5px;margin-top:3px">
+              ${s.risks.map(r => `${escEmail(r.label)} was due ${dayShort(r.by)}`).join(' &middot; ')}</div>
+            <div class="muted" style="font-size:11.5px;margin-top:3px">
+              ${s.isPickup ? 'Ready for pickup' : 'Must ship'} by ${dayShort(s.ship_by)} to hit the deadline.</div>
+          </div>`;
+        })()}
+        ${(() => {
           const cl = quoteChecklist(q);
           const pct = Math.round((cl.done / cl.of) * 100);
           const rows = cl.steps.map((s) => {
@@ -5320,8 +5549,10 @@ app.get('/quotes', requireAdmin, async (req, res) => {
     const changeCount = (body.match(/Change requested/g) || []).length;
     res.send(quotePage('Quotes', `<h1>Quotes</h1>
       <div class="sub">${rows.length} total${
+        atRiskCount ? ` &middot; <b style="color:#b91c1c">${atRiskCount} behind schedule</b>` : ''}${
         changeCount ? ` &middot; <b style="color:#1848B8">${changeCount} awaiting your edit</b>` : ''}${
-        needCount ? ` &middot; <b style="color:#8a5a00">${needCount} need a text</b>` : ''}</div>
+        needCount ? ` &middot; <b style="color:#8a5a00">${needCount} need a text</b>` : ''}
+        &middot; <span class="muted" style="font-size:12px">sorted by what needs attention</span></div>
       <p style="margin-bottom:14px"><a class="btn" href="/quote/new">New quote</a>
         <a class="btn btn-ghost" href="/books" style="margin-left:8px">Books</a></p>
 
