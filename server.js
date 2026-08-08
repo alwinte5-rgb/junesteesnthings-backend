@@ -4095,6 +4095,103 @@ app.post('/quote/:code/correct-payment', requireAdmin, async (req, res) => {
 });
 
 /* One tap to add them to the iPhone address book. */
+/**
+ * Build a receipt from the payment ledger.
+ *
+ * Every payment is its own line — deposit, balance, card fee, correction — so
+ * the customer can see how the total was reached rather than a single number
+ * they have to trust. The card surcharge shows as its own line and is NOT part
+ * of the quote total, matching how it is banked.
+ */
+function receiptHtml(q, payments) {
+  const rows = payments.filter(p => Number(p.amount) !== 0).map((p) => {
+    const when = new Date(p.created_at).toLocaleDateString('en-US',
+      { month: 'short', day: 'numeric', year: 'numeric' });
+    const label = p.kind === 'refund' ? 'Refund'
+                : p.kind === 'correction' ? 'Adjustment'
+                : Number(p.amount) < 0 ? 'Adjustment'
+                : 'Payment';
+    const how = p.method === 'card' ? 'Card' : p.method === 'zelle' ? 'Zelle'
+              : p.method === 'cash' ? 'Cash' : p.method === 'transfer' ? 'Bank transfer' : '';
+    return `<tr>
+      <td style="padding:7px 0;color:#6b7280;font-size:13px">${when}</td>
+      <td style="padding:7px 0;color:#374151;font-size:13px">${label}${how ? ` &middot; ${how}` : ''}</td>
+      <td style="padding:7px 0;text-align:right;font-variant-numeric:tabular-nums;color:${Number(p.amount) < 0 ? '#b91c1c' : '#111827'}">${money(p.amount)}</td>
+    </tr>` + (Number(p.fee) > 0 ? `<tr>
+      <td></td>
+      <td style="padding:0 0 7px;color:#9ca3af;font-size:12px">Card processing fee (not part of the quote)</td>
+      <td style="padding:0 0 7px;text-align:right;color:#9ca3af;font-size:12px;font-variant-numeric:tabular-nums">${money(p.fee)}</td>
+    </tr>` : '');
+  }).join('');
+
+  const paid = round2(payments.reduce((s, p) => s + Number(p.amount), 0));
+  const due = round2(Math.max(0, Number(q.total) - paid));
+  const fees = round2(payments.reduce((s, p) => s + Number(p.fee || 0), 0));
+
+  return `<div style="font-family:system-ui,-apple-system,sans-serif;max-width:560px;margin:0 auto;color:#111827">
+    <h2 style="color:#1848B8;margin:0 0 4px">Receipt</h2>
+    <p style="margin:0 0 18px;color:#6b7280;font-size:13px">Quote ${escEmail(q.code)}${q.name ? ` &middot; ${escEmail(q.name)}` : ''}</p>
+
+    <table style="width:100%;border-collapse:collapse;margin-bottom:6px">
+      <tr><td colspan="3" style="border-bottom:1px solid #e5e7eb;padding-bottom:6px;
+        color:#6b7280;font-size:11px;letter-spacing:.06em;text-transform:uppercase">Payments received</td></tr>
+      ${rows || '<tr><td colspan="3" style="padding:10px 0;color:#9ca3af">No payments recorded.</td></tr>'}
+    </table>
+
+    <table style="width:100%;border-collapse:collapse;border-top:1px solid #e5e7eb;margin-top:4px">
+      <tr><td style="padding:9px 0;color:#6b7280;font-size:13px">Order total</td>
+          <td style="padding:9px 0;text-align:right;font-variant-numeric:tabular-nums">${money(q.total)}</td></tr>
+      <tr><td style="padding:0 0 9px;color:#6b7280;font-size:13px">Applied to this order</td>
+          <td style="padding:0 0 9px;text-align:right;font-variant-numeric:tabular-nums">${money(paid)}</td></tr>
+      ${due > 0
+        ? `<tr><td style="padding:9px 0;border-top:1px solid #e5e7eb;font-weight:700">Balance due</td>
+               <td style="padding:9px 0;border-top:1px solid #e5e7eb;text-align:right;font-weight:700;font-variant-numeric:tabular-nums">${money(due)}</td></tr>`
+        : `<tr><td style="padding:9px 0;border-top:1px solid #e5e7eb;font-weight:700;color:#047857">Paid in full</td>
+               <td style="padding:9px 0;border-top:1px solid #e5e7eb;text-align:right;font-weight:700;color:#047857">${money(0)} due</td></tr>`}
+    </table>
+
+    ${fees > 0 ? `<p style="color:#9ca3af;font-size:11.5px;margin:12px 0 0">
+      Card processing fees of ${money(fees)} are shown separately above and are not part of the order total.</p>` : ''}
+
+    <p style="color:#374151;line-height:1.6;margin:18px 0 0;font-size:14px">
+      Thank you — ${SHOP_SIGNER}</p>
+    <p style="color:#9ca3af;font-size:12px;margin-top:18px">${SHOP_NAME} &middot; ${SHOP_PHONE}<br>
+      <a href="${quoteLink(q.code)}" style="color:#1848B8">${quoteLink(q.code)}</a></p>
+  </div>`;
+}
+
+/** Send a receipt for a quote. `to` overrides the address on the quote. */
+async function sendReceipt(code, to = null) {
+  const { rows } = await pool.query('SELECT * FROM quotes WHERE code=$1', [code]);
+  if (!rows.length) return { ok: false, error: 'no such quote' };
+  const q = rows[0];
+  const { rows: payments } = await pool.query(
+    'SELECT * FROM quote_payments WHERE quote_code=$1 ORDER BY created_at, id', [code]);
+  const addr = to || q.email;
+  if (!addr) return { ok: false, error: 'no email address on this quote' };
+  await sendEmail({
+    to: addr,
+    subject: `Receipt — quote ${q.code}`,
+    html: receiptHtml(q, payments),
+  });
+  return { ok: true, to: addr, lines: payments.length };
+}
+
+/* Admin: send (or re-send) a receipt. ?to= overrides the stored address, for a
+   quote taken over the counter where the email arrived only via Stripe. */
+app.post('/quote/:code/receipt', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/quotes');
+  const to = String((req.body && req.body.to) || req.query.to || '').trim() || null;
+  try {
+    const out = await sendReceipt(code, to);
+    console.log(`receipt for ${code}:`, out.ok ? `sent to ${out.to}` : out.error);
+  } catch (err) {
+    console.error('receipt failed:', err.message);
+  }
+  res.redirect('/quotes');
+});
+
 app.get('/q/:code/vcard', async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   if (!QUOTE_CODE_RE.test(code)) return res.status(400).send('bad code');
