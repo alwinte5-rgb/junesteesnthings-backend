@@ -3003,6 +3003,42 @@ button:active{transform:translateY(1px)}
   .row-2{flex-direction:row}
   .row-2>*{min-width:0}
 }
+
+/* ── Checklist rows ──────────────────────────────────────────────────────────
+   A whole row is the tap target. The global button rule below turns every
+   button into a fat blue pill, which is right for actions and wrong for a
+   list, so this resets it back to a flush row. */
+.step-row{display:flex;align-items:baseline;gap:9px;width:100%;
+  background:none;border:0;border-radius:8px;padding:9px 8px;margin:0;
+  text-align:left;font:inherit;font-weight:400;color:inherit;cursor:pointer;
+  min-height:38px}
+form:has(>.step-row){display:block}
+.step-row:hover{background:#eef4ff}
+.step-row:active{transform:none;background:#e2ecfd}
+.step-auto{cursor:default;opacity:.85}
+.step-auto:hover{background:none}
+.step-tick{font-size:15px;line-height:1;flex:0 0 auto}
+.step-label{font-size:13px}
+.step-hint{color:#6b7280;font-size:11.5px;flex:1 1 auto;min-width:0}
+@media (max-width:640px){
+  /* The hint is useful context, not worth wrapping a row for on a phone. */
+  .step-hint{display:none}
+  .step-row{min-height:44px}
+}
+
+/* ── Wide screens ────────────────────────────────────────────────────────────
+   Built phone-first, which left a 640px ribbon down the middle of a monitor
+   with everything stacked inside it. The column stays put on a phone; on a
+   desktop it widens and the detail panels sit side by side instead of in one
+   long vertical queue. */
+@media (min-width:900px){
+  .wrap{max-width:1120px}
+  .panels{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}
+  .panels>.panel-wide{grid-column:1 / -1}
+}
+@media (min-width:1400px){
+  .wrap{max-width:1300px}
+}
 `;
 
 function quotePage(title, body) {
@@ -5400,10 +5436,11 @@ app.get('/quotes', requireAdmin, async (req, res) => {
             (${paid ? 'the remaining balance' : 'the deposit'}). Outstanding: ${money(outstanding)}.
             The reference is what lets you match this to your Zelle statement later.</div>
         </form>` : ''}
+        <div class="panels">
         ${(() => {
           const s = q._sched;
           if (!s || !s.risks.length) return '';
-          return `<div style="margin-top:8px;background:#fdecea;border:1px solid #f5c6c0;border-radius:10px;padding:9px 12px">
+          return `<div class="panel-wide" style="margin-top:8px;background:#fdecea;border:1px solid #f5c6c0;border-radius:10px;padding:9px 12px">
             <b style="color:#b91c1c;font-size:13px">⚠ Behind schedule</b>
             <div style="color:#b91c1c;font-size:12.5px;margin-top:3px">
               ${s.risks.map(r => `${escEmail(r.label)} was due ${dayShort(r.by)}`).join(' &middot; ')}</div>
@@ -5414,19 +5451,21 @@ app.get('/quotes', requireAdmin, async (req, res) => {
         ${(() => {
           const cl = quoteChecklist(q);
           const pct = Math.round((cl.done / cl.of) * 100);
+          /* The whole row is the target, not the tick. A 13px glyph with no
+             padding is about a 10×13px hit area — unmissable on a mouse if you
+             aim, impossible on the phone this is mostly used on. */
           const rows = cl.steps.map((s) => {
-            const ctrl = s.manual
-              ? `<form method="POST" action="/quote/${q.code}/step" style="display:inline">
+            const inner =
+              `<span class="step-tick" style="color:${s.done ? '#047857' : '#9ca3af'}">${s.done ? '☑' : '☐'}</span>
+               <span class="step-label" style="color:${s.done ? '#6b7280' : '#111827'};${s.done ? 'text-decoration:line-through' : 'font-weight:600'}">${s.label}</span>
+               <span class="step-hint">${escEmail(s.hint)}</span>`;
+            return s.manual
+              ? `<form method="POST" action="/quote/${q.code}/step" style="margin:0">
                    <input type="hidden" name="step" value="${s.key}">
                    ${s.done ? '<input type="hidden" name="clear" value="1">' : ''}
-                   <button type="submit" title="${s.done ? 'Undo' : 'Mark done'}"
-                     style="border:0;background:none;cursor:pointer;padding:0;font-size:13px;color:${s.done ? '#047857' : '#9ca3af'}">
-                     ${s.done ? '☑' : '☐'}</button></form>`
-              : `<span style="font-size:13px;color:${s.done ? '#047857' : '#d1d5db'}">${s.done ? '☑' : '☐'}</span>`;
-            return `<div style="display:flex;gap:8px;align-items:baseline;padding:2px 0">
-              ${ctrl}
-              <span style="color:${s.done ? '#6b7280' : '#111827'};${s.done ? 'text-decoration:line-through' : 'font-weight:600'}">${s.label}</span>
-              <span class="muted" style="font-size:11.5px">${escEmail(s.hint)}</span></div>`;
+                   <button type="submit" class="step-row" title="${s.done ? 'Tap to undo' : 'Tap to mark done'}">${inner}</button>
+                 </form>`
+              : `<div class="step-row step-auto" title="set automatically">${inner}</div>`;
           }).join('');
           return `<div style="margin-top:10px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:10px">
             <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px">
@@ -5582,6 +5621,7 @@ app.get('/quotes', requireAdmin, async (req, res) => {
                 Nothing is deleted — a correction is recorded as its own entry.</div>
             </div></details>`;
         })()}
+        </div>
         <div class="muted" style="margin-top:8px;font-size:12px">/q/${q.code}
         ${q.phone ? ` &middot; <a class="muted" href="tel:${escEmail(q.phone)}">${escEmail(q.phone)}</a>` : ''}
         ${q.email ? ` &middot; <a class="muted" href="#" onclick="if(confirm('Email a receipt to ${escEmail(q.email)}?')){var f=document.createElement('form');f.method='POST';f.action='/quote/${q.code}/receipt';document.body.appendChild(f);f.submit();}return false;">email receipt</a>` : ''}</div>
