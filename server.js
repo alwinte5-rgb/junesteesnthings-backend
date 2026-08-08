@@ -5809,6 +5809,9 @@ async function renderBoard(VIEW, req, res) {
             </form></details>`;
         })()}
         ${(() => {
+          /* The full history lives on the customer profile. What belongs on a
+             money board is the correction control and a one-line summary —
+             enough to act on, not a ledger to read past. */
           const ps = payByCode[q.code] || [];
           if (VIEW !== 'money' || !ps.length) return '';
           const lines = ps.map(p => {
@@ -5819,8 +5822,9 @@ async function renderBoard(VIEW, req, res) {
               <span style="font-variant-numeric:tabular-nums;color:${neg ? '#b91c1c' : '#111827'}">${money(p.amount)}</span>
             </div>${p.note ? `<div style="color:#9ca3af;font-size:11px;margin:-2px 0 4px">${escEmail(String(p.note).slice(0, 90))}</div>` : ''}`;
           }).join('');
+          const corrections = ps.filter(p => p.kind !== 'payment').length;
           return `<details style="margin-top:10px">
-            <summary style="cursor:pointer;color:#1848B8;font-size:12.5px">Payment history (${ps.length})</summary>
+            <summary style="cursor:pointer;color:#1848B8;font-size:12.5px">${ps.length} payment${ps.length===1?'':'s'}${corrections?` · ${corrections} correction${corrections===1?'':'s'}`:''} · <a href="/customer?q=${encodeURIComponent(q.email || q.phone || '')}" style="color:#1848B8">full history</a></summary>
             <div style="background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:10px;margin-top:6px;font-size:12.5px">
               ${lines}
               <form method="POST" action="/quote/${q.code}/correct-payment"
