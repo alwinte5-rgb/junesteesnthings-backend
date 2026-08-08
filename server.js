@@ -238,6 +238,34 @@ async function initDB() {
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS quote_payments_extref_uniq
                       ON quote_payments (ext_ref) WHERE ext_ref IS NOT NULL`);
 
+  /* ── Sales tax set-aside ──────────────────────────────────────────────────
+     Tax collected is not income — it is money held on behalf of the state that
+     happens to be sitting in the same bank account. The failure mode is not
+     miscalculating it, it is spending it. So each payment carries its own tax
+     portion, and remittances are recorded against it; what is left is what
+     still has to be set aside. */
+  await pool.query(`ALTER TABLE quote_payments ADD COLUMN IF NOT EXISTS tax_portion NUMERIC(10,2) DEFAULT 0`).catch(() => {});
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tax_remittances (
+      id          BIGSERIAL PRIMARY KEY,
+      period      TEXT NOT NULL,           -- '2026-08', the period being paid
+      amount      NUMERIC(10,2) NOT NULL,
+      paid_at     DATE NOT NULL DEFAULT CURRENT_DATE,
+      reference   TEXT,                    -- confirmation number from the state
+      note        TEXT,
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    )`);
+
+  /* Backfill the tax portion for payments recorded before this column existed,
+     apportioned by how much of the job that payment covered. */
+  await pool.query(`
+    UPDATE quote_payments p
+       SET tax_portion = round(q.tax * (p.amount / NULLIF(q.total,0)), 2)
+      FROM quotes q
+     WHERE q.code = p.quote_code
+       AND COALESCE(p.tax_portion,0) = 0
+       AND q.tax > 0 AND q.total > 0`).catch(() => {});
+
   /* One-time backfill so history does not start empty and the rollup below
      cannot zero out money that was recorded before the ledger existed. */
   await pool.query(`
@@ -250,6 +278,58 @@ async function initDB() {
 
   console.log('Database ready.');
 }
+
+/**
+ * Sales tax position, by month — collected, remitted, and what is still held.
+ *
+ * The period is the month the MONEY ARRIVED, not the month the quote was
+ * written: tax is owed on receipts, so a July quote paid in August belongs to
+ * August. Corrections and refunds carry their tax back out automatically
+ * because they are negative rows in the same ledger.
+ */
+async function taxPositionByMonth(limit = 24) {
+  const { rows: collected } = await pool.query(
+    `SELECT to_char(date_trunc('month', created_at), 'YYYY-MM') AS period,
+            COALESCE(SUM(tax_portion),0) AS collected,
+            COALESCE(SUM(amount),0)      AS gross,
+            COUNT(*)                     AS payments
+       FROM quote_payments
+      GROUP BY 1`);
+  const { rows: remitted } = await pool.query(
+    `SELECT period, COALESCE(SUM(amount),0) AS remitted, MAX(paid_at) AS last_paid
+       FROM tax_remittances GROUP BY 1`);
+
+  const byPeriod = {};
+  for (const r of collected) {
+    byPeriod[r.period] = {
+      period: r.period, collected: round2(Number(r.collected)),
+      gross: round2(Number(r.gross)), payments: Number(r.payments),
+      remitted: 0, last_paid: null,
+    };
+  }
+  for (const r of remitted) {
+    byPeriod[r.period] ||= { period: r.period, collected: 0, gross: 0, payments: 0, remitted: 0, last_paid: null };
+    byPeriod[r.period].remitted = round2(Number(r.remitted));
+    byPeriod[r.period].last_paid = r.last_paid;
+  }
+
+  const list = Object.values(byPeriod)
+    .map((p) => ({ ...p, outstanding: round2(p.collected - p.remitted) }))
+    .sort((a, b) => (a.period < b.period ? 1 : -1))
+    .slice(0, limit);
+
+  return {
+    months: list,
+    // What must be sitting in the bank right now, across every unpaid period.
+    setAside: round2(list.reduce((s, p) => s + p.outstanding, 0)),
+  };
+}
+
+const periodLabel = (p) => {
+  const [y, m] = String(p).split('-');
+  return new Date(Number(y), Number(m) - 1, 1)
+    .toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+};
 
 /** Recompute quotes.paid_amount from the ledger. The ledger is the truth. */
 async function syncPaidAmount(code) {
@@ -276,12 +356,25 @@ async function syncPaidAmount(code) {
 async function recordPayment({ code, amount, fee = 0, method, kind = 'payment',
                                source = 'manual', session = null, pi = null,
                                extRef = null, note = null }) {
+  /* The tax inside this payment, apportioned by how much of the job it covers.
+     Computed at write time so the set-aside figure never has to re-derive
+     itself from a quote total that may since have been edited. A correction or
+     refund carries its tax back out the same way. */
+  let taxPortion = 0;
+  try {
+    const { rows: tq } = await pool.query(
+      'SELECT tax, total FROM quotes WHERE code = $1', [code]);
+    if (tq.length && Number(tq[0].total) > 0 && Number(tq[0].tax) > 0) {
+      taxPortion = round2(Number(tq[0].tax) * (round2(amount) / Number(tq[0].total)));
+    }
+  } catch { /* a missing quote is handled by the insert below */ }
+
   try {
     await pool.query(
-      `INSERT INTO quote_payments (quote_code, amount, fee, method, kind, source, stripe_session, stripe_pi, ext_ref, note)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      `INSERT INTO quote_payments (quote_code, amount, fee, method, kind, source, stripe_session, stripe_pi, ext_ref, note, tax_portion)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
       [code, round2(amount), round2(fee), method, kind, source, session, pi,
-       extRef || session, note]);
+       extRef || session, note, taxPortion]);
   } catch (err) {
     // 23505 = unique_violation on the ext_ref index.
     if (err.code === '23505') return { ok: false, duplicate: true, paid: null };
@@ -3835,15 +3928,24 @@ async function bankStripeSession(session) {
   const q = { ...rows[0], paid_amount: res.paid };
   const stillDue = round2(Math.max(0, Number(q.total) - Number(res.paid)));
 
+  /* The tax inside this payment, said at the moment the money lands. Setting
+     it aside is a habit, and a habit needs the prompt at the point of action —
+     not a report you have to remember to open. */
+  const taxIn = (Number(q.total) > 0 && Number(q.tax) > 0)
+    ? round2(Number(q.tax) * (net / Number(q.total))) : 0;
+
   sendEmail({
     to: SHOP_EMAIL,
-    subject: `💳 ${isBalance ? 'Balance' : 'Deposit'} paid — quote ${code}, ${money(gross)}`,
+    subject: `💳 ${isBalance ? 'Balance' : 'Deposit'} paid — quote ${code}, ${money(gross)}` +
+             (taxIn > 0 ? ` (set aside ${money(taxIn)})` : ''),
     html: `<div style="font-family:system-ui,sans-serif"><h2 style="color:#1848B8">Payment received</h2>
       <p>${escEmail(q.name || '')} paid <b>${money(gross)}</b> by card for quote ${code}
          (${isBalance ? 'remaining balance' : 'deposit'}).</p>
       <p style="color:#6b7280">Applied to quote: ${money(res.paid)} of ${money(q.total)}.
          ${fee > 0 ? `Card fee ${money(fee)}.` : ''}
          ${stillDue > 0 ? `Balance outstanding ${money(stillDue)}.` : 'Paid in full.'}</p>
+      ${taxIn > 0 ? `<p style="background:#fff8ed;border:1px solid #fde3c0;border-radius:8px;padding:9px 12px;color:#8a5a00;font-size:13px">
+         <b>${money(taxIn)}</b> of this is sales tax — set it aside, it is not income.</p>` : ''}
       <p><a href="${quoteLink(code)}">${quoteLink(code)}</a></p></div>`,
   }).catch(() => {});
 
@@ -4655,6 +4757,7 @@ app.get('/quotes', requireAdmin, async (req, res) => {
         WHERE q.status <> 'expired'
         GROUP BY 1,2 ORDER BY m DESC LIMIT 12`);
     const taxTotal = taxRows.reduce((s, r) => s + Number(r.tax_collected), 0);
+    const taxPos = await taxPositionByMonth(24);
 
     const { rows: openAgg } = await pool.query(
       `SELECT COUNT(*) AS n, COALESCE(SUM(total - COALESCE(paid_amount,0)),0) AS due
@@ -4878,34 +4981,48 @@ app.get('/quotes', requireAdmin, async (req, res) => {
             Card fees are shown separately and are not part of either figure.</div>
         </details>
 
-        <details style="margin-top:8px">
+        <details style="margin-top:8px" ${taxPos.setAside > 0 ? 'open' : ''}>
           <summary style="cursor:pointer;color:#1848B8;font-size:13px">
-            Sales tax collected &middot; <b>${money(taxTotal)}</b> to remit</summary>
-          <table style="width:100%;border-collapse:collapse;margin-top:8px;font-size:13px">
+            Sales tax &middot; <b style="color:${taxPos.setAside > 0 ? '#b45309' : '#047857'}">${money(taxPos.setAside)}</b> to set aside</summary>
+
+          <div style="background:#fff8ed;border:1px solid #fde3c0;border-radius:10px;padding:12px;margin-top:8px">
+            <div style="font-size:12px;color:#8a5a00;letter-spacing:.05em;text-transform:uppercase">Hold in the bank right now</div>
+            <div style="font-size:28px;font-weight:700;color:#8a5a00;margin:2px 0">${money(taxPos.setAside)}</div>
+            <div style="font-size:12px;color:#8a5a00">This is the state's money, not income. ST-1 is due the 20th of the following month.</div>
+          </div>
+
+          <table style="width:100%;border-collapse:collapse;margin-top:10px;font-size:13px">
             <tr style="color:#6b7280;font-size:11px;letter-spacing:.05em;text-transform:uppercase">
-              <td style="padding:4px 0;border-bottom:1px solid #e5e7eb">Month</td>
-              <td style="padding:4px 0;border-bottom:1px solid #e5e7eb;text-align:right">Taxable sales</td>
-              <td style="padding:4px 0;border-bottom:1px solid #e5e7eb;text-align:right">Tax charged</td>
-              <td style="padding:4px 0;border-bottom:1px solid #e5e7eb;text-align:right">Tax collected</td>
-              <td style="padding:4px 0;border-bottom:1px solid #e5e7eb;text-align:right">Jobs</td>
+              <td style="padding:4px 0;border-bottom:1px solid #e5e7eb">Period</td>
+              <td style="padding:4px 0;border-bottom:1px solid #e5e7eb;text-align:right">Collected</td>
+              <td style="padding:4px 0;border-bottom:1px solid #e5e7eb;text-align:right">Remitted</td>
+              <td style="padding:4px 0;border-bottom:1px solid #e5e7eb;text-align:right">Outstanding</td>
+              <td style="padding:4px 0;border-bottom:1px solid #e5e7eb"></td>
             </tr>
-            ${taxRows.map(r => `<tr>
-              <td style="padding:6px 0">${r.label}</td>
-              <td style="padding:6px 0;text-align:right;color:#6b7280;font-variant-numeric:tabular-nums">${money(r.subtotal)}</td>
-              <td style="padding:6px 0;text-align:right;color:#6b7280;font-variant-numeric:tabular-nums">${money(r.tax_charged)}</td>
-              <td style="padding:6px 0;text-align:right;font-weight:700;font-variant-numeric:tabular-nums">${money(r.tax_collected)}</td>
-              <td style="padding:6px 0;text-align:right;color:#6b7280">${r.taxable_jobs}</td>
+            ${taxPos.months.map(m => `<tr>
+              <td style="padding:7px 0">${periodLabel(m.period)}</td>
+              <td style="padding:7px 0;text-align:right;font-variant-numeric:tabular-nums">${money(m.collected)}</td>
+              <td style="padding:7px 0;text-align:right;color:#6b7280;font-variant-numeric:tabular-nums">${m.remitted > 0 ? money(m.remitted) : '—'}</td>
+              <td style="padding:7px 0;text-align:right;font-weight:700;font-variant-numeric:tabular-nums;color:${m.outstanding > 0 ? '#b45309' : '#047857'}">${m.outstanding > 0 ? money(m.outstanding) : 'clear'}</td>
+              <td style="padding:7px 0;text-align:right">
+                ${m.outstanding > 0 ? `<form method="POST" action="/tax/remit" style="display:inline-flex;gap:4px;align-items:center"
+                     onsubmit="return confirm('Record ${money(m.outstanding)} remitted for ${periodLabel(m.period)}?')">
+                  <input type="hidden" name="period" value="${m.period}">
+                  <input type="hidden" name="amount" value="${Number(m.outstanding).toFixed(2)}">
+                  <input name="reference" placeholder="confirmation #" style="width:110px;padding:5px;font-size:12px">
+                  <button type="submit" class="btn btn-ghost" style="padding:5px 10px;font-size:12px">Filed</button>
+                </form>` : `<span class="muted" style="font-size:11.5px">${m.last_paid ? 'filed ' + dayShort(m.last_paid) : ''}</span>`}
+              </td>
             </tr>`).join('') || '<tr><td colspan="5" style="padding:8px 0;color:#9ca3af">No taxable sales yet.</td></tr>'}
-            <tr><td style="padding:8px 0;border-top:2px solid #111827;font-weight:700">Total to remit</td>
-                <td colspan="3" style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-weight:700;font-variant-numeric:tabular-nums">${money(taxTotal)}</td>
-                <td style="border-top:2px solid #111827"></td></tr>
           </table>
+
           <div class="muted" style="font-size:11px;margin-top:8px">
-            Charged at ${(TAX_RATE * 100).toFixed(2)}%. <b>Tax collected</b> counts only the portion
-            of each job actually paid — tax is remitted on money received, not money invoiced, so a
-            part-paid job contributes its part. Covers the quoting system only; anything sold
-            through Clover or in person is not in here.
-            <a href="/tax.csv" style="color:#1848B8">Download CSV</a> for your filing.</div>
+            Charged at ${(TAX_RATE * 100).toFixed(2)}%. A period counts the month the money
+            <b>arrived</b>, not the month the quote was written — tax is owed on receipts.
+            Corrections and refunds take their tax back out automatically.
+            You are emailed on the 1st, and again on the 15th and 19th if a period is still open.
+            Covers the quoting system only; Clover and in-person sales are not in here.
+            <a href="/tax.csv" style="color:#1848B8">Download CSV</a>.</div>
         </details>
       </div>
 
@@ -5659,6 +5776,105 @@ async function sendDailyDigest() {
   }
 }
 
+/**
+ * Monthly sales tax check.
+ *
+ * Fires on the 1st: the month just closed, here is what you collected and must
+ * remit. Illinois ST-1 is due the 20th, so it also nags on the 15th and the
+ * 19th if the period has not been marked paid.
+ *
+ * The guard is a row keyed on period+kind rather than a timer, so a redeploy
+ * or a second worker cannot double-send, and the reminder survives a restart.
+ */
+async function taxMonthlyCheck() {
+  try {
+    const tz = process.env.JT_TIMEZONE || 'America/Chicago';
+    const now = new Date(new Date().toLocaleString('en-US', { timeZone: tz }));
+    const hour = now.getHours();
+    const dom = now.getDate();
+    if (hour !== Number(process.env.JT_DIGEST_HOUR || 7)) return;
+
+    const kind = dom === 1 ? 'close' : dom === 15 ? 'due-soon' : dom === 19 ? 'due-tomorrow' : null;
+    if (!kind) return;
+
+    // The period being reported: the previous month.
+    const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const period = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
+
+    const pos = await taxPositionByMonth(36);
+    const row = pos.months.find((m) => m.period === period);
+    const outstanding = row ? row.outstanding : 0;
+    if (outstanding <= 0) return;    // nothing collected, or already remitted
+
+    await pool.query(`CREATE TABLE IF NOT EXISTS jt_tax_reminders (
+      period TEXT NOT NULL, kind TEXT NOT NULL, sent_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (period, kind))`);
+    const claim = await pool.query(
+      `INSERT INTO jt_tax_reminders (period, kind) VALUES ($1,$2)
+       ON CONFLICT DO NOTHING RETURNING period`, [period, kind]);
+    if (!claim.rowCount) return;
+
+    const subject = kind === 'close'
+      ? `🧾 ${periodLabel(period)} closed — set aside ${money(outstanding)} sales tax`
+      : kind === 'due-soon'
+        ? `🧾 ${money(outstanding)} sales tax due the 20th (${periodLabel(period)})`
+        : `⏰ Sales tax due TOMORROW — ${money(outstanding)} for ${periodLabel(period)}`;
+
+    const others = pos.months.filter((m) => m.period !== period && m.outstanding > 0);
+
+    await alertShop(subject,
+      `<h2 style="color:#1848B8;margin:0 0 4px">${periodLabel(period)} sales tax</h2>
+       <p style="color:#6b7280;font-size:13px;margin:0 0 16px">
+         ${kind === 'close' ? 'The month just closed. This is not income — it is the state\'s money sitting in your account.'
+           : kind === 'due-soon' ? 'The Illinois ST-1 is due on the 20th.'
+           : '<b style="color:#b91c1c">Due tomorrow.</b> A late ST-1 costs a penalty plus interest.'}</p>
+
+       <table style="width:100%;border-collapse:collapse;font-size:14px">
+         <tr><td style="padding:8px 0;color:#6b7280">Collected in ${periodLabel(period)}</td>
+             <td style="padding:8px 0;text-align:right;font-variant-numeric:tabular-nums">${money(row.collected)}</td></tr>
+         ${row.remitted > 0 ? `<tr><td style="padding:0 0 8px;color:#6b7280">Already remitted</td>
+             <td style="padding:0 0 8px;text-align:right;font-variant-numeric:tabular-nums">−${money(row.remitted)}</td></tr>` : ''}
+         <tr><td style="padding:10px 0;border-top:2px solid #111827;font-weight:700">To remit</td>
+             <td style="padding:10px 0;border-top:2px solid #111827;text-align:right;font-weight:700;font-size:20px;font-variant-numeric:tabular-nums">${money(outstanding)}</td></tr>
+       </table>
+
+       ${others.length ? `<p style="color:#b45309;font-size:13px;margin-top:14px">
+         <b>Also unpaid:</b> ${others.map((m) => `${periodLabel(m.period)} ${money(m.outstanding)}`).join(' · ')}<br>
+         <b>Total to have on hand: ${money(pos.setAside)}</b></p>` : ''}
+
+       <p style="margin-top:18px">
+         <a href="https://mytax.illinois.gov" style="background:#1848B8;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;display:inline-block">File on MyTax Illinois</a>
+         <a href="${PUBLIC_BASE_URL}/tax.csv" style="color:#1848B8;margin-left:14px">Download the detail</a></p>
+       <p style="color:#9ca3af;font-size:11.5px;margin-top:14px">
+         Once you have filed, record it on the quotes page so this stops chasing you
+         and the running balance stays right. Figures cover the quoting system only.</p>`);
+
+    console.log(`tax reminder sent: ${period} ${kind} ${money(outstanding)}`);
+  } catch (e) {
+    console.error('tax monthly check failed:', e.message);
+  }
+}
+
+/* Record a remittance to the state. Closes the period and stops the chasing. */
+app.post('/tax/remit', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const period = String(b.period || '').trim();
+  const amount = round2(Number(b.amount));
+  if (!/^\d{4}-\d{2}$/.test(period) || !(amount > 0)) return res.redirect('/quotes');
+  try {
+    await pool.query(
+      `INSERT INTO tax_remittances (period, amount, paid_at, reference, note)
+       VALUES ($1,$2,COALESCE($3::date, CURRENT_DATE),$4,$5)`,
+      [period, amount, String(b.paid_at || '').trim() || null,
+       String(b.reference || '').trim().slice(0, 120) || null,
+       String(b.note || '').trim().slice(0, 200) || null]);
+    console.log(`tax remittance recorded: ${period} ${money(amount)}`);
+  } catch (err) {
+    console.error('tax remit failed:', err.message);
+  }
+  res.redirect('/quotes');
+});
+
 /* Send review requests that have come due. Runs inside the existing hourly
    sweep — no new scheduler, and it survives deploys because the due date lives
    in the database rather than in a timer. */
@@ -5708,6 +5924,7 @@ if (process.env.JT_INTERNAL_KEY) {
       await sendDepositReminders();
       await expireOldQuotes();
       await sendDailyDigest();
+      await taxMonthlyCheck();
     } catch (e) {
       console.error('abandoned-cart sweep failed:', e.message);
     }
