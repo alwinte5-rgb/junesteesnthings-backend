@@ -2678,21 +2678,33 @@ function quoteChecklist(q) {
    unticked — a mis-tap must not need a database client to undo. */
 app.post('/quote/:code/step', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
-  const COLS = { artwork: 'artwork_at', proof: 'proof_sent_at', proofok: 'proof_ok_at',
-                 production: 'production_at', delivered: 'delivered_at' };
+  /* Every manual step in quoteChecklist() must appear here. Blanks, QC and
+     shipping were added to the checklist later and never added to this map, so
+     tapping them fell through to the redirect below: the page reloaded, the
+     <details> collapsed, and nothing saved. Artwork worked, which is what made
+     it look like the checklist half-worked at random. */
+  const COLS = { artwork: 'artwork_at', blanks_order: 'blanks_ordered_at',
+                 blanks_in: 'blanks_in_at', proof: 'proof_sent_at',
+                 proofok: 'proof_ok_at', production: 'production_at',
+                 qc: 'qc_at', shipped: 'shipped_at', delivered: 'delivered_at' };
   const col = COLS[String((req.body && req.body.step) || '')];
-  if (!QUOTE_CODE_RE.test(code) || !col) return res.redirect('/quotes');
   const clear = String((req.body && req.body.clear) || '') === '1';
+  /* Read from the body, not the query string or a header: the body is the only
+     part of the request proven to survive the proxy in front of this route. */
+  const asJson = String((req.body && req.body.json) || '') === '1';
+  if (!QUOTE_CODE_RE.test(code) || !col) {
+    return asJson ? res.status(400).json({ ok: false, error: 'unknown step' })
+                  : res.redirect('/quotes');
+  }
   /* Answer JSON to fetch so the page does not reload. A full reload collapsed
      the <details> the row lives in, which made a successful save look like the
      checklist had simply shut itself.
 
-     Keyed on ?json=1, not the Accept header: Cloudflare Access sits in front of
-     this route and the header did not survive the trip, so the server fell
-     through to the redirect and the page reloaded anyway. A query parameter
-     goes through untouched. */
-  const wantsJson = String(req.query.json || '') === '1' ||
-                    String(req.get('accept') || '').includes('application/json');
+     Signalled by a form field rather than the Accept header or a query
+     parameter — neither survived the proxy in front of this route, so the
+     handler kept falling through to the redirect and the page reloaded
+     anyway. */
+  const wantsJson = asJson;
   try {
     const { rows } = await pool.query(
       `UPDATE quotes SET ${col} = ${clear ? 'NULL' : 'NOW()'} WHERE code = $1 RETURNING *`, [code]);
@@ -5492,6 +5504,7 @@ app.get('/quotes', requireAdmin, async (req, res) => {
               ? `<form method="POST" action="/quote/${q.code}/step" style="margin:0" data-stepform>
                    <input type="hidden" name="step" value="${s.key}">
                    <input type="hidden" name="clear" value="${s.done ? '1' : ''}">
+                   <input type="hidden" name="json" value="" data-jsonflag>
                    <button type="submit" class="step-row${s.done ? ' is-done' : ''}"
                            title="${s.done ? 'Tap to undo' : 'Tap to mark done'}">${inner}</button>
                  </form>`
@@ -5779,7 +5792,9 @@ app.get('/quotes', requireAdmin, async (req, res) => {
             btn.dataset.busy = '1';
             btn.style.opacity = '.5';
 
-            fetch(form.action + '?json=1', {
+            var jf = form.querySelector('[data-jsonflag]');
+            if (jf) jf.value = '1';
+            fetch(form.action, {
               method: 'POST',
               headers: { 'Accept': 'application/json' },
               body: new FormData(form),
