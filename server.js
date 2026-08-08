@@ -2627,43 +2627,42 @@ function quoteChecklist(q) {
           return Array.isArray(it) ? it.length > 0 : !!it; } catch { return false; }
   })();
 
+  /* Eleven steps, not seventeen. The old list had a row for every field the
+     system could check, so eight of them were derived and did nothing when
+     tapped — which read as "the checklist is broken" rather than "that one is
+     automatic". Related steps are now merged: proof sent and proof approved
+     became one (approval is what matters), blanks ordered folded into blanks
+     received with the order-by date as its warning, and the seven tappable
+     steps line up one-for-one with the kanban columns so there is a single
+     model of a job rather than two. */
   const steps = [
-    { key: 'contact',  label: 'Contact details',   done: !!(q.name && (q.email || q.phone)),
-      hint: !q.email && q.phone ? 'phone only — cannot be chased by email' : 'name plus a way to reach them' },
-    { key: 'job',      label: 'Job defined',        done: hasItems && total > 0,
-      hint: 'items, quantities, sizes, print method' },
-    { key: 'deadline', label: 'Deadline captured',  done: !!q.needed_by,
-      hint: 'when they need it — drives everything downstream' },
+    { key: 'quote',    label: 'Quote ready',
+      done: !!(q.name && (q.email || q.phone)) && hasItems && total > 0,
+      hint: !q.needed_by ? 'no deadline set — the schedule needs one'
+            : !q.email && q.phone ? 'phone only — cannot be chased by email'
+            : 'details, items and deadline captured' },
+    { key: 'accepted', label: 'Accepted + deposit',
+      done: !!q.accepted_at && (paid > 0 || (total > 0 && due <= 0)),
+      hint: !q.accepted_at ? 'waiting on their yes'
+            : paid > 0 ? 'money down' : `${money(deposit)} to start` },
     { key: 'artwork',  label: 'Artwork in hand',    done: !!q.artwork_at, manual: true,
       hint: 'print-ready file received and checked' },
-    { key: 'sent',     label: 'Quote sent',         done: !!q.created_at,
-      hint: 'customer has the link' },
-    { key: 'accepted', label: 'Accepted',           done: !!q.accepted_at,
-      hint: 'they said yes' },
-    { key: 'deposit',  label: 'Deposit paid',       done: paid > 0 || (total > 0 && due <= 0),
-      hint: deposit > 0 ? `${money(deposit)} to start` : 'money down before production' },
-    { key: 'blanks_order', label: 'Blanks ordered', done: !!q.blanks_ordered_at, manual: true,
-      hint: sched ? `order by ${dayShort(sched.blanks_order_by)} — the step that quietly kills deadlines`
-                  : 'garments ordered from the supplier' },
     { key: 'blanks_in', label: 'Blanks received',   done: !!q.blanks_in_at, manual: true,
-      hint: 'counted against the order — shortages surface here, not at the press' },
-    { key: 'proof',    label: 'Proof sent',         done: !!q.proof_sent_at, manual: true,
-      hint: 'mock-up for approval before the press' },
+      hint: sched && !q.blanks_ordered_at ? `order by ${dayShort(sched.blanks_order_by)} — the step that quietly kills deadlines`
+            : 'counted against the order — shortages surface here, not at the press' },
     { key: 'proofok',  label: 'Proof approved',     done: !!q.proof_ok_at, manual: true,
       hint: 'in writing — this is what protects you on a reprint' },
-    { key: 'production', label: 'In production',    done: !!q.production_at, manual: true,
+    { key: 'production', label: 'Printed',          done: !!q.production_at, manual: true,
       hint: sched ? `on the press by ${dayShort(sched.press_by)}` : 'on the press' },
     { key: 'qc',       label: 'Counted & checked',  done: !!q.qc_at, manual: true,
-      hint: 'right count, right sizes, no misprints — before it leaves' },
-    { key: 'balance',  label: 'Paid in full',       done: total > 0 && due <= 0,
-      hint: due > 0 ? `${money(due)} outstanding — collect before it goes` : 'settled' },
+      hint: 'right count, right sizes, no misprints' },
     { key: 'shipped',  label: sched && sched.isPickup ? 'Ready for pickup' : 'Shipped',
       done: !!q.shipped_at, manual: true,
       hint: sched ? `must leave by ${dayShort(sched.ship_by)}` : 'handed to the carrier' },
     { key: 'delivered', label: 'Delivered',         done: !!q.delivered_at, manual: true,
       hint: 'in the customer\'s hands' },
-    /* Last, because it is the step that gets dropped once the job is out of the
-       door — and it is the one that tells you whether the price was right. */
+    { key: 'balance',  label: 'Paid in full',       done: total > 0 && due <= 0,
+      hint: due > 0 ? `${money(due)} outstanding — collect before it goes` : 'settled' },
     { key: 'costed',   label: 'Costs entered',
       done: (Number(q.cost_blanks || 0) + Number(q.cost_supplies || 0) + Number(q.cost_outsourced || 0) + Number(q.cost_shipping || 0)) > 0,
       hint: 'what you paid out — otherwise you never learn what this job made' },
@@ -3046,7 +3045,9 @@ button:active{transform:translateY(1px)}
 form:has(>.step-row){display:block}
 .step-row:hover{background:#eef4ff}
 .step-row:active{transform:none;background:#e2ecfd}
-.step-auto{cursor:default;opacity:.85}
+.step-auto{cursor:default;opacity:.72}
+.step-auto-tag{font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:#a8b3c6;
+  border:1px solid #dfe5ef;border-radius:4px;padding:1px 4px;margin-left:auto;flex:0 0 auto}
 .step-auto:hover{background:none}
 .step-tick{font-size:15px;line-height:1;flex:0 0 auto}
 .step-label{font-size:13px}
@@ -3089,6 +3090,10 @@ form:has(>.step-row){display:block}
 .kbtn-go:hover{background:#123a95}
 .kbtn-link{font-size:11px;font-weight:600;text-decoration:none;color:#5a6a86;background:none;padding:5px 4px}
 .kbtn-link:hover{color:#1848B8;background:none}
+.knext{margin:8px 0 0}
+.kbtn-next{width:100%;justify-content:center;background:#1848B8;color:#fff;font-size:12.5px;padding:8px 10px}
+.kbtn-next:hover{background:#123a95}
+.kbtn-sm{padding:4px 9px;font-size:12px;min-height:26px}
 .kempty{color:#c2cbdb;text-align:center;font-size:13px;padding:8px 0}
 @media (max-width:640px){ .kcol{flex:0 0 200px} }
 
@@ -4882,6 +4887,69 @@ app.get('/books', requireAdmin, async (req, res) => {
       </div>
 
       ${(() => {
+        /* Sales by month against break-even. The job is "am I above or below the
+           line", which is a baseline comparison, so the bars are a diverging
+           pair (blue above, red below) with the break-even line as the neutral
+           midpoint — NOT red/green, which fails colorblind separation outright
+           (deutan dE 4.1; blue-red scores 22.4). Colour is never the only cue:
+           every bar is direct-labelled and the axis carries the figure. */
+        const monthsWithSales = months.filter(m => Number(m.sales) > 0).length || 1;
+        const recurring = round2(expList.filter(e => e.recurs).reduce((a, e) => a + Number(e.amount), 0));
+        const marginPct = (T.sales > 0 && T.costs > 0) ? (T.sales - T.costs) / T.sales : null;
+        const be = marginPct && marginPct > 0 ? round2(recurring / marginPct) : null;
+
+        const series = months.map(m => ({ period: m.period, sales: Number(m.sales) }));
+        if (!series.length) return '';
+
+        const W = 720, H = 210, PL = 58, PR = 16, PT = 14, PB = 30;
+        const iw = W - PL - PR, ih = H - PT - PB;
+        const peak = Math.max(...series.map(d => d.sales), be || 0, 1);
+        const top = Math.ceil(peak * 1.15 / 100) * 100 || 100;
+        const y = v => PT + ih - (v / top) * ih;
+        const bw = Math.min(56, iw / series.length * 0.6);
+        const step = iw / series.length;
+        const beY = be ? y(be) : null;
+
+        // Gridlines at round numbers, recessive so the data stays forward.
+        const ticks = [0, top / 2, top];
+
+        return `<div class="card" style="margin-top:14px">
+          <h2 style="margin:0 0 2px;font-size:16px">Sales against break-even</h2>
+          <div class="muted" style="font-size:12px;margin-bottom:10px">
+            ${be ? `Break-even is <b>${money(be)}</b> a month — fixed costs of ${money(recurring)} at your ${Math.round(marginPct*100)}% margin.`
+                 : 'Enter job costs and monthly overheads to see the break-even line.'}</div>
+          <div style="overflow-x:auto">
+          <svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px;display:block"
+               role="img" aria-label="Monthly sales compared with break-even">
+            ${ticks.map(t => `
+              <line x1="${PL}" x2="${W-PR}" y1="${y(t)}" y2="${y(t)}" stroke="#e9edf4" stroke-width="1"/>
+              <text x="${PL-8}" y="${y(t)+4}" text-anchor="end" font-size="10.5" fill="#8a97ad">${money(t).replace('.00','')}</text>`).join('')}
+            ${series.map((d, i) => {
+              const x = PL + step * i + (step - bw) / 2;
+              const below = be !== null && d.sales < be;
+              const h = Math.max(0, ih + PT - y(d.sales));
+              return `
+              <rect x="${x}" y="${y(d.sales)}" width="${bw}" height="${h}" rx="4"
+                    fill="${below ? '#d03b3b' : '#1848B8'}">
+                <title>${periodLabel(d.period)}: ${money(d.sales)}${be ? (below ? ` — ${money(round2(be-d.sales))} below break-even` : ` — ${money(round2(d.sales-be))} above`) : ''}</title>
+              </rect>
+              <text x="${x + bw/2}" y="${y(d.sales) - 6}" text-anchor="middle" font-size="11" font-weight="700"
+                    fill="${below ? '#a32f2f' : '#123a95'}">${money(d.sales).replace('.00','')}</text>
+              <text x="${x + bw/2}" y="${H-10}" text-anchor="middle" font-size="10.5" fill="#8a97ad">${periodLabel(d.period).replace(' 20', " '")}</text>`;
+            }).join('')}
+            ${beY !== null ? `
+              <line x1="${PL}" x2="${W-PR}" y1="${beY}" y2="${beY}" stroke="#5a6a86" stroke-width="2" stroke-dasharray="5 4"/>
+              <text x="${W-PR}" y="${beY-6}" text-anchor="end" font-size="10.5" font-weight="700" fill="#5a6a86">break-even ${money(be).replace('.00','')}</text>` : ''}
+          </svg></div>
+          <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;font-size:11.5px;color:#5a6a86">
+            <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#1848B8;margin-right:5px"></span>covers fixed costs</span>
+            <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#d03b3b;margin-right:5px"></span>short of break-even</span>
+            <span>${monthsWithSales < 3 ? 'One or two months of trading — the shape gets meaningful from about three.' : ''}</span>
+          </div>
+        </div>`;
+      })()}
+
+      ${(() => {
         /* The point of a books page is a decision, not a number. Everything
            here is derived from what is already recorded — no new input. */
         const monthsWithSales = months.filter(m => Number(m.sales) > 0).length || 1;
@@ -5678,7 +5746,7 @@ async function renderBoard(VIEW, req, res) {
                    <button type="submit" class="step-row${s.done ? ' is-done' : ''}"
                            title="${s.done ? 'Tap to undo' : 'Tap to mark done'}">${inner}</button>
                  </form>`
-              : `<div class="step-row step-auto${s.done ? ' is-done' : ''}" title="set automatically">${inner}</div>`;
+              : `<div class="step-row step-auto${s.done ? ' is-done' : ''}" title="set automatically from your data — nothing to tap">${inner}<span class="step-auto-tag">auto</span></div>`;
           }).join('');
           return `<div style="margin-top:10px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:10px">
             <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px">
@@ -5988,16 +6056,19 @@ async function renderBoard(VIEW, req, res) {
                 <div class="kcard-sub">${escEmail(q.code)} · ${money(q.total)}${
                   Number(q.paid_amount||0) < Number(q.total||0) ? ` · <span style="color:#b45309">${money(round2(q.total - (q.paid_amount||0)))} due</span>` : ''}</div>
                 ${risk ? `<div class="kcard-risk-note">⚠ ${escEmail(q._sched.risks[0].label)} was due ${dayShort(q._sched.risks[0].by)}</div>` : ''}
+                ${c.i < JOB_STAGES.length - 1 ? `
+                <form method="POST" action="/quote/${q.code}/stage" data-stageform class="knext">
+                  <input type="hidden" name="stage" value="${JOB_STAGES[c.i+1].key}">
+                  <input type="hidden" name="json" value="" data-jsonflag>
+                  <button type="submit" class="kbtn kbtn-next" title="${escEmail(JOB_STAGES[c.i+1].hint)}">
+                    ✓ ${escEmail(JOB_STAGES[c.i+1].label)}</button>
+                </form>` : ''}
                 <div class="kmove">
                   ${c.i > 0 ? `<form method="POST" action="/quote/${q.code}/stage" data-stageform>
                     <input type="hidden" name="stage" value="${JOB_STAGES[c.i-1].key}">
                     <input type="hidden" name="json" value="" data-jsonflag>
-                    <button type="submit" class="kbtn" title="Back to ${JOB_STAGES[c.i-1].label}">←</button></form>` : '<span></span>'}
-                  <a class="kbtn kbtn-link" href="/production/${q.code}" title="Open the full checklist">details</a>
-                  ${c.i < JOB_STAGES.length - 1 ? `<form method="POST" action="/quote/${q.code}/stage" data-stageform>
-                    <input type="hidden" name="stage" value="${JOB_STAGES[c.i+1].key}">
-                    <input type="hidden" name="json" value="" data-jsonflag>
-                    <button type="submit" class="kbtn kbtn-go" title="Move to ${JOB_STAGES[c.i+1].label}">→</button></form>` : '<span></span>'}
+                    <button type="submit" class="kbtn kbtn-sm" title="Back to ${JOB_STAGES[c.i-1].label}">←</button></form>` : '<span></span>'}
+                  <a class="kbtn kbtn-link" href="/production/${q.code}">details</a>
                 </div>
               </article>`;
             }).join('') || '<div class="kempty">—</div>'}
@@ -6205,7 +6276,7 @@ app.get('/production/:code', requireAdmin, async (req, res) => {
              <input type="hidden" name="json" value="" data-jsonflag>
              <button type="submit" class="step-row${st.done ? ' is-done' : ''}">${inner}</button>
            </form>`
-        : `<div class="step-row step-auto">${inner}</div>`;
+        : `<div class="step-row step-auto" title="set automatically from your data — nothing to tap">${inner}<span class="step-auto-tag">auto</span></div>`;
     }).join('');
 
     res.send(quotePage(`${q.code} — production`, `
