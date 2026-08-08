@@ -236,6 +236,18 @@ async function initDB() {
       created_at     TIMESTAMPTZ DEFAULT NOW()
     )`);
   await pool.query(`ALTER TABLE quote_payments ADD COLUMN IF NOT EXISTS ext_ref TEXT`).catch(() => {});
+  /* Remembered blank costs, keyed on the normalised garment description —
+     quote lines are typed by hand, so there is no product id to key on. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS blank_costs (
+      cost_key    TEXT PRIMARY KEY,
+      label       TEXT,
+      unit_cost   NUMERIC(10,2) NOT NULL,
+      samples     INT NOT NULL DEFAULT 1,
+      last_quote  TEXT,
+      updated_at  TIMESTAMPTZ DEFAULT NOW()
+    )`);
+
   await pool.query(`CREATE INDEX IF NOT EXISTS quote_payments_code_idx ON quote_payments (quote_code)`);
   /* The idempotency guarantee, and the reason a webhook can be retried safely.
      ext_ref holds whichever Stripe object the row came from — checkout session,
@@ -2411,6 +2423,110 @@ async function syncQuoteContact(q, event = null) {
  *   JT_LT_PROOF    customer sitting on a proof (2)
  *   JT_SHIP_MIN    transit to the customer (2)
  */
+/**
+ * Cost memory.
+ *
+ * Quote lines are typed by hand — `product_id` is null on every line in real
+ * data — so there is no id to key a remembered cost on. What there is, is the
+ * description: "Men's Polo - Small - Black", "Trucker hat - Black on black".
+ * Normalising that down to its garment ("mens polo", "trucker hat") gives a
+ * stable key across sizes, colours and typing habits.
+ *
+ * Sizes, colours and separators are stripped, not just lowercased, because the
+ * same garment must not learn a different cost for every size.
+ */
+/* Trailing \w* matters: "digitizing" and "stitching" are the forms that
+   actually get typed, and a trailing \b would fail on both — which silently
+   taught blank costs to service lines that have no blanks behind them. */
+const COST_SERVICE_WORDS = /\b(digitiz\w*|stitch\w*|setup|set\s*up|design\w*|artwork|fees?|rush|shipping|delivery|labou?r|vector\w*|proof\w*)\b/i;
+
+function costKey(description) {
+  let s = String(description || '').toLowerCase();
+  s = s.replace(/[’']/g, '');
+  s = s.split(/[-–—,(]/)[0];                                  // drop "- Small - Black"
+  s = s.replace(/\b(xxs|xs|s|m|l|xl|2xl|3xl|4xl|5xl|xxl|xxxl|small|medium|large|x-?large)\b/g, ' ');
+  s = s.replace(/\b(black|white|red|blue|green|navy|grey|gray|pink|purple|yellow|orange|brown|maroon|teal|gold|silver|cream|tan|charcoal|heather|royal)\b/g, ' ');
+  s = s.replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  return s.slice(0, 60);
+}
+
+/** Garment lines only — a digitising fee has no blank behind it. */
+function garmentLines(items) {
+  const list = (() => {
+    try { return typeof items === 'string' ? JSON.parse(items) : (items || []); }
+    catch { return []; }
+  })();
+  return (Array.isArray(list) ? list : [])
+    .filter((i) => Number(i.qty) > 0 && !COST_SERVICE_WORDS.test(String(i.description || '')))
+    .map((i) => ({ key: costKey(i.description), qty: Number(i.qty),
+                   description: String(i.description || '') }))
+    .filter((i) => i.key);
+}
+
+/**
+ * Learn per-unit blank costs from a job's total.
+ *
+ * Costs are entered once per job, not per line, because a shop asked to itemise
+ * stops entering anything at all. So the total is apportioned across the
+ * garment lines by quantity, which gives a per-unit figure good enough to
+ * suggest next time — and the suggestion is editable, so an approximation that
+ * saves a lookup is worth more than an exact figure nobody enters.
+ */
+async function learnBlankCosts(q, totalBlanks) {
+  const lines = garmentLines(q.items);
+  const units = lines.reduce((s, l) => s + l.qty, 0);
+  if (!(totalBlanks > 0) || units <= 0) return;
+  const perUnit = round2(Number(totalBlanks) / units);
+
+  for (const l of lines) {
+    try {
+      await pool.query(
+        `INSERT INTO blank_costs (cost_key, label, unit_cost, samples, last_quote, updated_at)
+         VALUES ($1,$2,$3,1,$4,NOW())
+         ON CONFLICT (cost_key) DO UPDATE SET
+           /* Rolling average, so one odd invoice does not overwrite what the
+              last five jobs agreed on. */
+           unit_cost  = round(((blank_costs.unit_cost * blank_costs.samples) + $3) / (blank_costs.samples + 1), 2),
+           samples    = blank_costs.samples + 1,
+           label      = EXCLUDED.label,
+           last_quote = EXCLUDED.last_quote,
+           updated_at = NOW()`,
+        [l.key, l.description.slice(0, 80), perUnit, q.code]);
+    } catch (e) {
+      console.error('blank cost learn failed:', e.message);
+    }
+  }
+}
+
+/** What this job's blanks should cost, from memory. Null when nothing known. */
+async function suggestBlankCost(q) {
+  const lines = garmentLines(q.items);
+  if (!lines.length) return null;
+  const { rows } = await pool.query(
+    `SELECT cost_key, unit_cost, samples FROM blank_costs WHERE cost_key = ANY($1)`,
+    [lines.map((l) => l.key)]);
+  if (!rows.length) return null;
+  const known = Object.fromEntries(rows.map((r) => [r.cost_key, r]));
+
+  let total = 0, covered = 0, units = 0, weakest = Infinity;
+  const parts = [];
+  for (const l of lines) {
+    units += l.qty;
+    const k = known[l.key];
+    if (!k) continue;
+    covered += l.qty;
+    total += Number(k.unit_cost) * l.qty;
+    weakest = Math.min(weakest, Number(k.samples));
+    parts.push(`${l.qty} × ${money(k.unit_cost)}`);
+  }
+  if (!covered) return null;
+  return {
+    total: round2(total), covered, units, parts,
+    partial: covered < units,
+    samples: weakest === Infinity ? 0 : weakest,
+  };
+}
+
 /**
  * What a job actually made.
  *
@@ -4931,6 +5047,28 @@ app.get('/quotes', requireAdmin, async (req, res) => {
     const taxTotal = taxRows.reduce((s, r) => s + Number(r.tax_collected), 0);
     const taxPos = await taxPositionByMonth(24);
 
+    /* Suggested blank costs for jobs that have none entered. One lookup table
+       for the whole page rather than a query per card. */
+    const { rows: knownCosts } = await pool.query(
+      `SELECT cost_key, unit_cost, samples FROM blank_costs`);
+    const costBook = Object.fromEntries(knownCosts.map(r => [r.cost_key, r]));
+    const suggestFor = (q) => {
+      const lines = garmentLines(q.items);
+      if (!lines.length) return null;
+      let total = 0, covered = 0, units = 0, weakest = Infinity;
+      for (const l of lines) {
+        units += l.qty;
+        const k = costBook[l.key];
+        if (!k) continue;
+        covered += l.qty;
+        total += Number(k.unit_cost) * l.qty;
+        weakest = Math.min(weakest, Number(k.samples));
+      }
+      if (!covered) return null;
+      return { total: round2(total), partial: covered < units,
+               samples: weakest === Infinity ? 0 : weakest };
+    };
+
     const { rows: openAgg } = await pool.query(
       `SELECT COUNT(*) AS n, COALESCE(SUM(total - COALESCE(paid_amount,0)),0) AS due
          FROM quotes
@@ -5104,9 +5242,10 @@ app.get('/quotes', requireAdmin, async (req, res) => {
                   style="background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:10px;margin-top:6px">
               <div style="display:flex;gap:8px;flex-wrap:wrap">
                 <label style="flex:1 1 110px;font-size:12px;color:#6b7280">Blanks
-                  <input name="cost_blanks" type="number" step="0.01" inputmode="decimal"
+                  <input id="cb-${q.code}" name="cost_blanks" type="number" step="0.01" inputmode="decimal"
                          value="${Number(q.cost_blanks || 0) > 0 ? Number(q.cost_blanks).toFixed(2) : ''}"
-                         placeholder="0.00" style="width:100%;padding:7px"></label>
+                         placeholder="${(() => { const s = suggestFor(q); return s ? Number(s.total).toFixed(2) : '0.00'; })()}"
+                         style="width:100%;padding:7px"></label>
                 <label style="flex:1 1 110px;font-size:12px;color:#6b7280">Supplies
                   <input name="cost_supplies" type="number" step="0.01" inputmode="decimal"
                          value="${Number(q.cost_supplies || 0) > 0 ? Number(q.cost_supplies).toFixed(2) : ''}"
@@ -5124,6 +5263,17 @@ app.get('/quotes', requireAdmin, async (req, res) => {
                        placeholder="note (optional)" style="flex:1;padding:7px">
                 <button type="submit" style="padding:7px 16px;font-size:13px">Save</button>
               </div>
+              ${(() => {
+                const s = suggestFor(q);
+                if (!s || Number(q.cost_blanks || 0) > 0) return '';
+                return `<div style="margin-top:8px;background:#eef4ff;border:1px solid #d3e0fb;border-radius:8px;padding:8px 10px;font-size:12.5px;color:#1848B8">
+                  Last time these blanks cost <b>${money(s.total)}</b>${s.partial ? ' (for the lines I recognise)' : ''}
+                  <button type="button" onclick="document.getElementById('cb-${q.code}').value='${Number(s.total).toFixed(2)}'"
+                          style="margin-left:8px;border:1px solid #1848B8;background:#fff;color:#1848B8;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer">Use it</button>
+                  <span class="muted" style="font-size:11px;display:block;margin-top:3px">
+                    Averaged over ${s.samples} previous job${s.samples === 1 ? '' : 's'} — check it against the invoice.</span>
+                </div>`;
+              })()}
               <div class="muted" style="font-size:11.5px;margin-top:8px">
                 ${mg.entered
                   ? `Sales ${money(mg.revenue)} − costs ${money(mg.cost)} = <b>${money(mg.profit)}</b>
@@ -6148,16 +6298,22 @@ app.post('/quote/:code/costs', requireAdmin, async (req, res) => {
     return Number.isFinite(n) && n >= 0 ? round2(n) : null;
   };
   try {
-    await pool.query(
+    const { rows } = await pool.query(
       `UPDATE quotes SET cost_blanks     = COALESCE($2, cost_blanks),
                          cost_supplies   = COALESCE($3, cost_supplies),
                          cost_outsourced = COALESCE($4, cost_outsourced),
                          blanks_supplier = COALESCE(NULLIF($5,''), blanks_supplier),
                          cost_note       = COALESCE(NULLIF($6,''), cost_note)
-        WHERE code = $1`,
+        WHERE code = $1 RETURNING *`,
       [code, num(b.cost_blanks), num(b.cost_supplies), num(b.cost_outsourced),
        String(b.blanks_supplier || '').trim().slice(0, 80),
        String(b.cost_note || '').trim().slice(0, 200)]);
+
+    /* Learn from what was just entered, so the next job of the same kind
+       arrives pre-filled instead of needing the invoice looked up again. */
+    if (rows.length && Number(rows[0].cost_blanks) > 0) {
+      await learnBlankCosts(rows[0], Number(rows[0].cost_blanks));
+    }
   } catch (err) {
     console.error('cost update failed:', err.message);
   }
