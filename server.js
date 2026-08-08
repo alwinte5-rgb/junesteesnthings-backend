@@ -103,6 +103,8 @@ async function initDB() {
     'change_request TEXT',            // what the customer asked to change
     'revision INT DEFAULT 1',         // bumped each time June edits it
     'deposit_nudged_at TIMESTAMPTZ',  // accepted but deposit unpaid reminder
+    'balance_nudged_at TIMESTAMPTZ',  // deposit in, balance still outstanding
+    'reorder_nudged_at TIMESTAMPTZ',  // paid in full months ago, worth asking again
     /* Job milestones. These exist so the intake checklist can be DERIVED rather
        than written down somewhere nobody opens — the steps the database can
        already answer (contact, job, deadline, quote, deposit, balance) are
@@ -7050,6 +7052,104 @@ async function sendDepositReminders() {
   }
 }
 
+/* Deposit is in, the balance is not, and the job is moving. One reminder so the
+   balance is not a surprise on pickup day — and so it is not still outstanding
+   after the goods have gone, which is the hardest money to collect. */
+async function sendBalanceReminders() {
+  const days = Math.max(1, parseInt(process.env.JT_BALANCE_NUDGE_DAYS || '7', 10));
+  try {
+    const { rows } = await pool.query(
+      `SELECT * FROM quotes
+        WHERE COALESCE(paid_amount,0) > 0
+          AND COALESCE(paid_amount,0) < total
+          AND balance_nudged_at IS NULL
+          AND paid_at <= NOW() - ($1 || ' days')::interval
+          AND status <> 'expired'
+          AND email <> ''
+        LIMIT 20`, [String(days)]);
+
+    for (const q of rows) {
+      // Stamp first: a send that throws must not re-fire every hour.
+      await pool.query('UPDATE quotes SET balance_nudged_at=NOW() WHERE id=$1', [q.id]);
+      if (await isUnsubscribed(q.email)) continue;
+
+      const due = round2(Math.max(0, Number(q.total) - Number(q.paid_amount || 0)));
+      try {
+        await sendEmail({
+          to: q.email,
+          subject: `Balance on quote ${q.code} — ${money(due)}`,
+          html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
+            <h2 style="color:#1848B8">Nearly there</h2>
+            <p style="color:#374151;line-height:1.6">Hi ${escEmail(String(q.name || '').split(' ')[0] || 'there')} —
+               your order is moving along. The remaining balance is
+               <b>${money(due)}</b>, due ${BALANCE_WHEN}.</p>
+            <p style="text-align:center;margin:22px 0">
+              <a href="${quoteLink(q.code)}" style="background:#1848B8;color:#fff;padding:13px 28px;
+                 border-radius:100px;text-decoration:none;font-weight:700">Pay the balance</a></p>
+            <p style="color:#374151;line-height:1.6">Prefer Zelle? Send to ${SHOP_PHONE} and reply to let me know.</p>
+            <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_NAME} &middot; ${SHOP_SIGNER} &middot; ${SHOP_PHONE}</p>
+          </div>`,
+        });
+        console.log('balance reminder sent:', q.code, money(due));
+      } catch (e) {
+        console.error('balance reminder failed', q.code, e.message);
+      }
+    }
+  } catch (e) {
+    console.error('balance reminder sweep failed:', e.message);
+  }
+}
+
+/* A past customer with artwork already on file is the cheapest revenue there is
+   — no setup to redo, no price to rediscover. One nudge, months later, and only
+   to somebody who actually paid. Marketing, so it honours the opt-out list. */
+async function sendReorderNudges() {
+  const days = Math.max(30, parseInt(process.env.JT_REORDER_NUDGE_DAYS || '90', 10));
+  try {
+    const { rows } = await pool.query(
+      `SELECT q.* FROM quotes q
+        WHERE COALESCE(q.paid_amount,0) >= q.total
+          AND q.total > 0
+          AND q.reorder_nudged_at IS NULL
+          AND q.paid_at <= NOW() - ($1 || ' days')::interval
+          AND q.email <> ''
+          /* Nothing newer from this customer — a live job means they do not
+             need asking, and it would read as though we had not noticed. */
+          AND NOT EXISTS (
+            SELECT 1 FROM quotes n
+             WHERE lower(n.email) = lower(q.email)
+               AND n.created_at > q.paid_at)
+        LIMIT 20`, [String(days)]);
+
+    for (const q of rows) {
+      await pool.query('UPDATE quotes SET reorder_nudged_at=NOW() WHERE id=$1', [q.id]);
+      if (await isUnsubscribed(q.email)) continue;
+
+      try {
+        await sendEmail({
+          to: q.email,
+          marketing: true,   // adds the unsubscribe footer and List-Unsubscribe
+          subject: `Need another run, ${String(q.name || '').split(' ')[0] || 'there'}?`,
+          html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
+            <h2 style="color:#1848B8">Still have your artwork</h2>
+            <p style="color:#374151;line-height:1.6">It has been a while since
+               ${escEmail(quoteSummary(q.items) || 'your last order')}. Your artwork is still on
+               file, so a reorder is quick and there is no setup to redo.</p>
+            <p style="color:#374151;line-height:1.6">Just reply with the sizes and quantities you
+               need and I will send a quote back.</p>
+            <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_NAME} &middot; ${SHOP_SIGNER} &middot; ${SHOP_PHONE}</p>
+          </div>`,
+        });
+        console.log('reorder nudge sent:', q.code, q.email);
+      } catch (e) {
+        console.error('reorder nudge failed', q.code, e.message);
+      }
+    }
+  } catch (e) {
+    console.error('reorder nudge sweep failed:', e.message);
+  }
+}
+
 /* Expire quotes whose validity has passed, so the list reflects reality
    instead of showing stale "sent" rows forever. */
 async function expireOldQuotes() {
@@ -7397,6 +7497,8 @@ if (process.env.JT_INTERNAL_KEY) {
       await sendDueReviewRequests();
       await sendQuoteFollowUps();
       await sendDepositReminders();
+      await sendBalanceReminders();
+      await sendReorderNudges();
       await expireOldQuotes();
       await sendDailyDigest();
       await taxMonthlyCheck();
