@@ -3062,6 +3062,36 @@ form:has(>.step-row){display:block}
    with everything stacked inside it. The column stays put on a phone; on a
    desktop it widens and the detail panels sit side by side instead of in one
    long vertical queue. */
+/* ── Kanban ──────────────────────────────────────────────────────────────────
+   Columns are production stages, cards are jobs. It scrolls sideways rather
+   than wrapping: a stage that moves to the next line stops reading as a
+   pipeline, which is the only thing this view is for. */
+.kanban{display:flex;gap:10px;overflow-x:auto;padding-bottom:10px;-webkit-overflow-scrolling:touch}
+.kcol{flex:0 0 232px;background:#f4f7fc;border:1px solid #e3e8f2;border-radius:12px;padding:9px;min-height:120px}
+.kcol-head{display:flex;justify-content:space-between;align-items:center;font-weight:700;font-size:13px;color:#0B1F4B}
+.kcount{background:#e3e8f2;border-radius:100px;padding:1px 8px;font-size:11.5px;color:#5a6a86}
+.kcol-hint{color:#8a97ad;font-size:10.5px;margin:2px 0 8px}
+.kcard{background:#fff;border:1px solid #e3e8f2;border-radius:10px;padding:9px;margin-bottom:8px;
+  box-shadow:0 1px 2px rgba(12,28,60,.05)}
+.kcard-risk{border-color:#f5c6c0;background:#fffaf9}
+.kcard-top{display:flex;justify-content:space-between;gap:6px;align-items:baseline}
+.kcard-name{font-weight:700;font-size:13px;color:#0B1F4B;text-decoration:none}
+.kcard-name:hover{color:#1848B8;text-decoration:underline}
+.kcard-due{font-size:11px;color:#6b7280;white-space:nowrap}
+.kcard-sub{font-size:11.5px;color:#6b7280;margin-top:2px}
+.kcard-risk-note{font-size:11px;color:#b91c1c;margin-top:4px}
+.kmove{display:flex;justify-content:space-between;align-items:center;gap:4px;margin-top:8px}
+.kmove form{margin:0}
+.kbtn{background:#eef2f9;color:#33415c;border:0;border-radius:8px;padding:5px 11px;font-size:13px;
+  font-weight:700;cursor:pointer;line-height:1.2;min-height:30px;display:inline-flex;align-items:center}
+.kbtn:hover{background:#dde5f3}
+.kbtn-go{background:#1848B8;color:#fff}
+.kbtn-go:hover{background:#123a95}
+.kbtn-link{font-size:11px;font-weight:600;text-decoration:none;color:#5a6a86;background:none;padding:5px 4px}
+.kbtn-link:hover{color:#1848B8;background:none}
+.kempty{color:#c2cbdb;text-align:center;font-size:13px;padding:8px 0}
+@media (max-width:640px){ .kcol{flex:0 0 200px} }
+
 /* The job board is a grid of cards, not one long column. Each card stays a
    whole job — its panels stack inside it — so a card can be read without
    scanning across, and the screen carries three of them side by side. */
@@ -5185,6 +5215,15 @@ app.get('/customer', requireAdmin, async (req, res) => {
     const years = Object.keys(h.byYear).sort().reverse();
     const maxY = Math.max(...years.map(y => h.byYear[y].quoted), 1);
 
+    /* Every payment this customer has made, across all their jobs. It lived on
+       the quotes board, where it competed with the money you were trying to
+       read; it belongs with the person it describes. */
+    const { rows: payHistory } = await pool.query(
+      `SELECT p.*, q.name FROM quote_payments p JOIN quotes q ON q.code = p.quote_code
+        WHERE p.quote_code = ANY($1) ORDER BY p.created_at DESC`,
+      [h.quotes.map(r => r.code)]);
+    const payTotal = round2(payHistory.reduce((a, r) => a + Number(r.amount), 0));
+
     const rows = h.quotes.map(r => {
       const paid = Number(r.paid_amount || 0);
       const total = Number(r.total || r.subtotal || 0);
@@ -5273,6 +5312,24 @@ app.get('/customer', requireAdmin, async (req, res) => {
         <table class="items">${priceRows}</table>
       </div>` : ''}
 
+      ${payHistory.length ? `
+      <div class="card">
+        <b style="color:#0B1F4B">Payment history</b>
+        <div class="muted" style="font-size:12px;margin-bottom:8px">
+          Every payment across all their jobs — ${money(payTotal)} received in ${payHistory.length} entr${payHistory.length === 1 ? 'y' : 'ies'}.
+          Corrections and refunds stay on the record rather than being edited away.</div>
+        <table class="items">
+          <thead><tr><th>Date</th><th>Quote</th><th>How</th><th class="num">Amount</th></tr></thead>
+          <tbody>${payHistory.map(pmt => `<tr>
+            <td class="muted" style="white-space:nowrap">${dayShort(pmt.created_at)}</td>
+            <td><a href="/production/${escEmail(pmt.quote_code)}" style="color:#1848B8">${escEmail(pmt.quote_code)}</a></td>
+            <td class="muted">${escEmail(pmt.method)}${pmt.kind !== 'payment' ? ` · <i>${escEmail(pmt.kind)}</i>` : ''}${
+              Number(pmt.fee) > 0 ? ` · fee ${money(pmt.fee)}` : ''}</td>
+            <td class="num" style="color:${Number(pmt.amount) < 0 ? '#b91c1c' : '#111827'}">${money(pmt.amount)}</td>
+          </tr>${pmt.note ? `<tr><td></td><td colspan="3" class="muted" style="font-size:11px;padding-top:0">${escEmail(String(pmt.note).slice(0,90))}</td></tr>` : ''}`).join('')}</tbody>
+        </table>
+      </div>` : ''}
+
       <div class="card">
         <b style="color:#0B1F4B">Quote history</b>
         <table class="items" style="margin-top:8px">
@@ -5291,7 +5348,67 @@ app.get('/customer', requireAdmin, async (req, res) => {
 });
 
 /* The tracking list. */
-app.get('/quotes', requireAdmin, async (req, res) => {
+/**
+ * The production stages, in order. A job sits in the first stage it has not
+ * finished, so its column is derived from the same milestone dates the
+ * checklist uses — there is no separate "status" field to drift out of step.
+ * The checklist is still the detail; this is the shape of the shop floor.
+ */
+const JOB_STAGES = [
+  { key: 'intake',  label: 'To start',  col: null,            hint: 'nothing done yet' },
+  { key: 'artwork', label: 'Artwork',   col: 'artwork_at',    hint: 'print-ready file in hand' },
+  { key: 'blanks',  label: 'Blanks',    col: 'blanks_in_at',  hint: 'ordered and counted in' },
+  { key: 'proof',   label: 'Proof',     col: 'proof_ok_at',   hint: 'approved in writing' },
+  { key: 'press',   label: 'Press',     col: 'production_at', hint: 'printing or stitching' },
+  { key: 'qc',      label: 'Check',     col: 'qc_at',         hint: 'counted against the order' },
+  { key: 'ship',    label: 'Ship',      col: 'shipped_at',    hint: 'gone or ready for pickup' },
+  { key: 'done',    label: 'Delivered', col: 'delivered_at',  hint: 'in their hands' },
+];
+
+/** The stage a job is sitting in: the last one it has completed. */
+function jobStageIndex(q) {
+  let i = 0;
+  for (let n = 1; n < JOB_STAGES.length; n++) {
+    if (q[JOB_STAGES[n].col]) i = n; else break;
+  }
+  return i;
+}
+
+/**
+ * Move a job to a stage: everything up to and including it is marked done,
+ * everything after is cleared. That is what makes moving a card backwards mean
+ * what it looks like it means.
+ */
+app.post('/quote/:code/stage', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  const target = JOB_STAGES.findIndex(s => s.key === String((req.body && req.body.stage) || ''));
+  const asJson = String((req.body && req.body.json) || '') === '1';
+  if (!QUOTE_CODE_RE.test(code) || target < 0) {
+    return asJson ? res.status(400).json({ ok: false }) : res.redirect('/production');
+  }
+  try {
+    const sets = JOB_STAGES.slice(1).map((st, i) =>
+      `${st.col} = ${i + 1 <= target ? `COALESCE(${st.col}, NOW())` : 'NULL'}`).join(', ');
+    const { rows } = await pool.query(
+      `UPDATE quotes SET ${sets} WHERE code = $1 RETURNING *`, [code]);
+    console.log(`quote ${code}: moved to ${JOB_STAGES[target].label}`);
+    if (asJson) {
+      const cl = rows.length ? quoteChecklist(rows[0]) : null;
+      return res.json({ ok: true, stage: JOB_STAGES[target].key,
+                        progress: cl ? { done: cl.done, of: cl.of } : null });
+    }
+  } catch (err) {
+    console.error('stage move failed:', err.message);
+    if (asJson) return res.status(500).json({ ok: false });
+  }
+  res.redirect('/production');
+});
+
+/* /quotes is the money board and /production is the work board — the same
+   query and sort, different panels. One card carrying money, production,
+   costing and history at once was unreadable; splitting the surfaces is what
+   makes each one scannable. */
+async function renderBoard(VIEW, req, res) {
   try {
     const { rows: allRows } = await pool.query('SELECT * FROM quotes ORDER BY created_at DESC LIMIT 200');
 
@@ -5480,7 +5597,7 @@ app.get('/quotes', requireAdmin, async (req, res) => {
         <div class="panels">
         ${(() => {
           const s = q._sched;
-          if (!s || !s.risks.length) return '';
+          if (VIEW !== 'work' || !s || !s.risks.length) return '';
           return `<div class="panel-wide" style="margin-top:8px;background:#fdecea;border:1px solid #f5c6c0;border-radius:10px;padding:9px 12px">
             <b style="color:#b91c1c;font-size:13px">⚠ Behind schedule</b>
             <div style="color:#b91c1c;font-size:12.5px;margin-top:3px">
@@ -5490,6 +5607,7 @@ app.get('/quotes', requireAdmin, async (req, res) => {
           </div>`;
         })()}
         ${(() => {
+          if (VIEW !== 'work') return '';
           const cl = quoteChecklist(q);
           const pct = Math.round((cl.done / cl.of) * 100);
           /* The whole row is the target, not the tick. A 13px glyph with no
@@ -5544,6 +5662,7 @@ app.get('/quotes', requireAdmin, async (req, res) => {
             </details></div>`;
         })()}
         ${(() => {
+          if (VIEW !== 'work') return '';
           const mg = quoteMargin(q);
           const good = mg.pct !== null && mg.pct >= 50;
           const thin = mg.pct !== null && mg.pct < 30;
@@ -5639,7 +5758,7 @@ app.get('/quotes', requireAdmin, async (req, res) => {
         })()}
         ${(() => {
           const ps = payByCode[q.code] || [];
-          if (!ps.length) return '';
+          if (VIEW !== 'money' || !ps.length) return '';
           const lines = ps.map(p => {
             const when = new Date(p.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
             const neg = Number(p.amount) < 0;
@@ -5672,14 +5791,18 @@ app.get('/quotes', requireAdmin, async (req, res) => {
     }).join('');
     const needCount = (body.match(/Needs a text/g) || []).length;
     const changeCount = (body.match(/Change requested/g) || []).length;
-    res.send(quotePage('Quotes', `<h1>Quotes</h1>
+    res.send(quotePage(VIEW === 'work' ? 'Production' : 'Quotes',
+      `<h1>${VIEW === 'work' ? 'Production' : 'Quotes'}</h1>
       <div class="sub">${rows.length} total${
         atRiskCount ? ` &middot; <b style="color:#b91c1c">${atRiskCount} behind schedule</b>` : ''}${
         changeCount ? ` &middot; <b style="color:#1848B8">${changeCount} awaiting your edit</b>` : ''}${
         needCount ? ` &middot; <b style="color:#8a5a00">${needCount} need a text</b>` : ''}
         &middot; <span class="muted" style="font-size:12px">sorted by what needs attention</span></div>
-      <p style="margin-bottom:14px"><a class="btn" href="/quote/new">New quote</a>
-        <a class="btn btn-ghost" href="/books" style="margin-left:8px">Books</a></p>
+      <p style="margin-bottom:14px">
+        <a class="btn" href="/quote/new">New quote</a>
+        <a class="btn btn-ghost" href="/quotes" style="margin-left:8px${VIEW==='money'?';font-weight:800':''}">Money</a>
+        <a class="btn btn-ghost" href="/production" style="margin-left:6px${VIEW==='work'?';font-weight:800':''}">Production</a>
+        <a class="btn btn-ghost" href="/books" style="margin-left:6px">Books</a></p>
 
       <div class="card" style="margin-bottom:16px">
         <div style="display:flex;gap:26px;flex-wrap:wrap;align-items:baseline;margin-bottom:4px">
@@ -5777,8 +5900,85 @@ app.get('/quotes', requireAdmin, async (req, res) => {
         </details>
       </div>
 
-      ${body ? `<div class="quote-grid">${body}</div>` : '<div class="card"><p class="muted">No quotes yet.</p></div>'}
+      ${VIEW === 'work' ? (() => {
+        /* Kanban: columns are stages, cards are jobs. A job's column comes from
+           its milestone dates, so the board and the checklist can never
+           disagree. Moving a card is one tap — the arrows, not drag, because
+           drag is unreliable on the phone this is used on. */
+        const live = rows.filter(q => !q.delivered_at);
+        const cols = JOB_STAGES.map((st, i) => ({
+          ...st, i, jobs: live.filter(q => jobStageIndex(q) === i),
+        }));
+        return `<div class="kanban">${cols.map(c => `
+          <section class="kcol">
+            <header class="kcol-head">
+              <span>${c.label}</span>
+              <span class="kcount">${c.jobs.length}</span>
+            </header>
+            <div class="kcol-hint">${c.hint}</div>
+            ${c.jobs.map(q => {
+              const days = q._days;
+              const risk = q._sched && q._sched.risks.length;
+              const due = days === null ? '' :
+                days < 0 ? `<b style="color:#b91c1c">${-days}d late</b>` :
+                days === 0 ? '<b style="color:#b45309">today</b>' :
+                days <= 3 ? `<b style="color:#b45309">${days}d</b>` : `${days}d`;
+              return `<article class="kcard${risk ? ' kcard-risk' : ''}">
+                <div class="kcard-top">
+                  <a href="/customer?q=${encodeURIComponent(q.email || q.phone || '')}" class="kcard-name">${escEmail(q.name || q.code)}</a>
+                  ${due ? `<span class="kcard-due">${due}</span>` : ''}
+                </div>
+                <div class="kcard-sub">${escEmail(q.code)} · ${money(q.total)}${
+                  Number(q.paid_amount||0) < Number(q.total||0) ? ` · <span style="color:#b45309">${money(round2(q.total - (q.paid_amount||0)))} due</span>` : ''}</div>
+                ${risk ? `<div class="kcard-risk-note">⚠ ${escEmail(q._sched.risks[0].label)} was due ${dayShort(q._sched.risks[0].by)}</div>` : ''}
+                <div class="kmove">
+                  ${c.i > 0 ? `<form method="POST" action="/quote/${q.code}/stage" data-stageform>
+                    <input type="hidden" name="stage" value="${JOB_STAGES[c.i-1].key}">
+                    <input type="hidden" name="json" value="" data-jsonflag>
+                    <button type="submit" class="kbtn" title="Back to ${JOB_STAGES[c.i-1].label}">←</button></form>` : '<span></span>'}
+                  <a class="kbtn kbtn-link" href="/production/${q.code}" title="Open the full checklist">details</a>
+                  ${c.i < JOB_STAGES.length - 1 ? `<form method="POST" action="/quote/${q.code}/stage" data-stageform>
+                    <input type="hidden" name="stage" value="${JOB_STAGES[c.i+1].key}">
+                    <input type="hidden" name="json" value="" data-jsonflag>
+                    <button type="submit" class="kbtn kbtn-go" title="Move to ${JOB_STAGES[c.i+1].label}">→</button></form>` : '<span></span>'}
+                </div>
+              </article>`;
+            }).join('') || '<div class="kempty">—</div>'}
+          </section>`).join('')}</div>
+          ${live.length === 0 ? '<div class="card"><p class="muted">Nothing in production. Delivered jobs drop off this board.</p></div>' : ''}`;
+      })() : (body ? `<div class="quote-grid">${body}</div>` : '<div class="card"><p class="muted">No quotes yet.</p></div>')}
       <script>
+        /* Moving a kanban card posts in the background and re-renders just
+           that card into its new column, so the board does not jump back to
+           the top on every move. */
+        document.querySelectorAll('form[data-stageform]').forEach(function(form){
+          form.addEventListener('submit', function(e){
+            e.preventDefault();
+            var card = form.closest('.kcard');
+            if (card.dataset.busy) return;
+            card.dataset.busy = '1';
+            card.style.opacity = '.45';
+            var jf = form.querySelector('[data-jsonflag]');
+            if (jf) jf.value = '1';
+            fetch(form.action, {
+              method: 'POST',
+              headers: { 'Accept':'application/json', 'Content-Type':'application/x-www-form-urlencoded' },
+              body: new URLSearchParams(new FormData(form)).toString(),
+            })
+            .then(function(r){
+              if (r.redirected || !(r.headers.get('content-type')||'').includes('json')) throw new Error('not json');
+              return r.json();
+            })
+            .then(function(d){
+              if (!d || !d.ok) throw new Error('failed');
+              // The column layout is server-derived; reload to land it in the
+              // right place rather than guessing the new position here.
+              location.reload();
+            })
+            .catch(function(){ form.submit(); });
+          });
+        });
+
         /* Ticking a step posts in the background. Submitting the form normally
            reloaded the page, which collapsed the <details> the row lives in —
            so a save that worked looked exactly like the checklist shutting
@@ -5919,10 +6119,111 @@ app.get('/quotes', requireAdmin, async (req, res) => {
         }
       </script>`));
   } catch (err) {
-    console.error('quotes list failed:', err.message);
-    res.status(500).send(quotePage('Error', '<div class="card"><div class="warn">Could not load quotes.</div></div>'));
+    console.error('board render failed:', err.message);
+    res.status(500).send(quotePage('Error', '<div class="card"><div class="warn">Could not load the board.</div></div>'));
+  }
+}
+
+/* One job in full: the checklist detail behind a kanban card. The board is for
+   moving work along; this is for the specifics of a single job. */
+app.get('/production/:code', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/production');
+  try {
+    const { rows } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
+    if (!rows.length) return res.redirect('/production');
+    const q = rows[0];
+    const cl = quoteChecklist(q);
+    const sched = quoteSchedule(q);
+    const si = jobStageIndex(q);
+
+    const stepRows = cl.steps.map((st) => {
+      const inner = `<span class="step-tick" style="color:${st.done ? '#047857' : '#9ca3af'}">${st.done ? '☑' : '☐'}</span>
+        <span class="step-label" style="color:${st.done ? '#6b7280' : '#111827'};${st.done ? 'text-decoration:line-through' : 'font-weight:600'}">${st.label}</span>
+        <span class="step-hint">${escEmail(st.hint)}</span>`;
+      return st.manual
+        ? `<form method="POST" action="/quote/${q.code}/step" style="margin:0" data-stepform>
+             <input type="hidden" name="step" value="${st.key}">
+             <input type="hidden" name="clear" value="${st.done ? '1' : ''}">
+             <input type="hidden" name="json" value="" data-jsonflag>
+             <button type="submit" class="step-row${st.done ? ' is-done' : ''}">${inner}</button>
+           </form>`
+        : `<div class="step-row step-auto">${inner}</div>`;
+    }).join('');
+
+    res.send(quotePage(`${q.code} — production`, `
+      <h1>${escEmail(q.name || q.code)}</h1>
+      <div class="sub">${escEmail(q.code)} · ${money(q.total)} ·
+        <a href="/production" style="color:#1848B8">back to the board</a> ·
+        <a href="/customer?q=${encodeURIComponent(q.email || q.phone || '')}" style="color:#1848B8">customer</a></div>
+
+      <div class="card" style="margin-top:12px">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+          ${JOB_STAGES.map((st, i) => `
+            <form method="POST" action="/quote/${q.code}/stage" style="margin:0">
+              <input type="hidden" name="stage" value="${st.key}">
+              <button type="submit" class="kbtn${i === si ? ' kbtn-go' : ''}"
+                      title="${escEmail(st.hint)}">${st.label}</button>
+            </form>`).join('')}
+        </div>
+        ${sched ? `<div class="muted" style="font-size:12px;margin-bottom:10px">
+          Needed ${dayShort(q.needed_by)} · ${sched.isPickup ? 'ready by' : 'ship by'} ${dayShort(sched.ship_by)}
+          · order blanks by ${dayShort(sched.blanks_order_by)}
+          ${sched.risks.length ? `<span style="color:#b91c1c"> · behind on ${sched.risks.map(r=>escEmail(r.label)).join(', ')}</span>` : ''}</div>` : ''}
+        <div data-next style="font-size:13px;margin-bottom:6px">
+          ${cl.next ? `<b style="color:#1848B8">Next: ${escEmail(cl.next.label)}</b>
+            <span class="muted" style="font-size:12px"> — ${escEmail(cl.next.hint)}</span>`
+            : '<b style="color:#047857">Complete</b>'}
+        </div>
+        <div style="height:4px;background:#e3e8f2;border-radius:3px;margin:6px 0 10px;overflow:hidden">
+          <div data-bar style="height:100%;width:${Math.round(cl.done/cl.of*100)}%;background:#1848B8;transition:width .2s"></div></div>
+        <span class="muted" style="font-size:11.5px" data-progress>${cl.done}/${cl.of}</span>
+        <div style="margin-top:8px">${stepRows}</div>
+      </div>
+
+      <script>
+        document.querySelectorAll('form[data-stepform]').forEach(function(form){
+          form.addEventListener('submit', function(e){
+            e.preventDefault();
+            var btn = form.querySelector('.step-row');
+            var clear = form.querySelector('input[name="clear"]');
+            var jf = form.querySelector('[data-jsonflag]');
+            if (jf) jf.value = '1';
+            fetch(form.action, { method:'POST',
+              headers:{'Accept':'application/json','Content-Type':'application/x-www-form-urlencoded'},
+              body:new URLSearchParams(new FormData(form)).toString() })
+            .then(function(r){
+              if (r.redirected || !(r.headers.get('content-type')||'').includes('json')) throw new Error('x');
+              return r.json(); })
+            .then(function(d){
+              if(!d||!d.ok) throw new Error('x');
+              btn.classList.toggle('is-done', d.done);
+              clear.value = d.done ? '1' : '';
+              var t=btn.querySelector('.step-tick');
+              if(t){t.textContent=d.done?'☑':'☐';t.style.color=d.done?'#047857':'#9ca3af';}
+              var l=btn.querySelector('.step-label');
+              if(l){l.style.textDecoration=d.done?'line-through':'none';l.style.fontWeight=d.done?'400':'600';}
+              if(d.progress){
+                var p=document.querySelector('[data-progress]'); if(p)p.textContent=d.progress.done+'/'+d.progress.of;
+                var b=document.querySelector('[data-bar]'); if(b)b.style.width=Math.round(d.progress.done/d.progress.of*100)+'%';
+              }
+              var nx=document.querySelector('[data-next]');
+              if(nx) nx.innerHTML = d.next
+                ? '<b style="color:#1848B8">Next: '+d.next.label+'</b><span class="muted" style="font-size:12px"> — '+d.next.hint+'</span>'
+                : '<b style="color:#047857">Complete</b>';
+            })
+            .catch(function(){ form.submit(); });
+          });
+        });
+      </script>`));
+  } catch (err) {
+    console.error('job detail failed:', err.message);
+    res.redirect('/production');
   }
 });
+
+app.get('/quotes',     requireAdmin, (req, res) => renderBoard('money', req, res));
+app.get('/production', requireAdmin, (req, res) => renderBoard('work',  req, res));
 
 
 /* ══ Reviews ══════════════════════════════════════════════════════════════
