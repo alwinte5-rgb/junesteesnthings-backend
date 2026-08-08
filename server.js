@@ -2484,67 +2484,46 @@ function garmentLines(items) {
 }
 
 /**
- * Learn per-unit blank costs from a job's total.
+ * Learn per-unit costs from the itemised entry.
  *
- * Costs are entered once per job, not per line, because a shop asked to itemise
- * stops entering anything at all. So the total is apportioned across the
- * garment lines by quantity, which gives a per-unit figure good enough to
- * suggest next time — and the suggestion is editable, so an approximation that
- * saves a lookup is worth more than an exact figure nobody enters.
+ * Each line carries its own unit cost, so nothing is apportioned or averaged
+ * across a job — a polo and a hoodie on the same order teach their own figures.
+ * A rolling average across JOBS still applies, so one odd invoice cannot
+ * overwrite what the last five agreed on.
  */
-async function learnBlankCosts(q, totalBlanks) {
-  const lines = garmentLines(q.items);
-  const units = lines.reduce((s, l) => s + l.qty, 0);
-  if (!(totalBlanks > 0) || units <= 0) return;
-  const perUnit = round2(Number(totalBlanks) / units);
-
-  for (const l of lines) {
+async function learnBlankCosts(items) {
+  const list = (() => {
+    try { return typeof items === 'string' ? JSON.parse(items) : (items || []); }
+    catch { return []; }
+  })();
+  for (const i of (Array.isArray(list) ? list : [])) {
+    const unit = Number(i.unit_cost || 0);
+    const key = costKey(i.description);
+    if (!(unit > 0) || !key || COST_SERVICE_WORDS.test(String(i.description || ''))) continue;
     try {
       await pool.query(
-        `INSERT INTO blank_costs (cost_key, label, unit_cost, samples, last_quote, updated_at)
-         VALUES ($1,$2,$3,1,$4,NOW())
+        `INSERT INTO blank_costs (cost_key, label, unit_cost, samples, updated_at)
+         VALUES ($1,$2,$3,1,NOW())
          ON CONFLICT (cost_key) DO UPDATE SET
-           /* Rolling average, so one odd invoice does not overwrite what the
-              last five jobs agreed on. */
            unit_cost  = round(((blank_costs.unit_cost * blank_costs.samples) + $3) / (blank_costs.samples + 1), 2),
            samples    = blank_costs.samples + 1,
            label      = EXCLUDED.label,
-           last_quote = EXCLUDED.last_quote,
            updated_at = NOW()`,
-        [l.key, l.description.slice(0, 80), perUnit, q.code]);
+        [key, String(i.description || '').slice(0, 80), round2(unit)]);
     } catch (e) {
       console.error('blank cost learn failed:', e.message);
     }
   }
 }
 
-/** What this job's blanks should cost, from memory. Null when nothing known. */
-async function suggestBlankCost(q) {
-  const lines = garmentLines(q.items);
-  if (!lines.length) return null;
-  const { rows } = await pool.query(
-    `SELECT cost_key, unit_cost, samples FROM blank_costs WHERE cost_key = ANY($1)`,
-    [lines.map((l) => l.key)]);
-  if (!rows.length) return null;
-  const known = Object.fromEntries(rows.map((r) => [r.cost_key, r]));
-
-  let total = 0, covered = 0, units = 0, weakest = Infinity;
-  const parts = [];
-  for (const l of lines) {
-    units += l.qty;
-    const k = known[l.key];
-    if (!k) continue;
-    covered += l.qty;
-    total += Number(k.unit_cost) * l.qty;
-    weakest = Math.min(weakest, Number(k.samples));
-    parts.push(`${l.qty} × ${money(k.unit_cost)}`);
-  }
-  if (!covered) return null;
-  return {
-    total: round2(total), covered, units, parts,
-    partial: covered < units,
-    samples: weakest === Infinity ? 0 : weakest,
-  };
+/** Sum the itemised line costs. This is what cost_blanks holds. */
+function itemisedCost(items) {
+  const list = (() => {
+    try { return typeof items === 'string' ? JSON.parse(items) : (items || []); }
+    catch { return []; }
+  })();
+  return round2((Array.isArray(list) ? list : [])
+    .reduce((s, i) => s + (Number(i.unit_cost || 0) * Number(i.qty || 0)), 0));
 }
 
 /**
@@ -4819,19 +4798,30 @@ app.get('/books', requireAdmin, async (req, res) => {
 
         ${expList.length ? `<details style="margin-top:12px" ${expList.length <= 8 ? 'open' : ''}>
           <summary style="cursor:pointer;color:#1848B8;font-size:13px">${expList.length} entr${expList.length === 1 ? 'y' : 'ies'}</summary>
-          <table style="width:100%;border-collapse:collapse;margin-top:8px;font-size:13px">
-            ${expList.map(e => `<tr>
-              <td style="padding:5px 0;color:#6b7280;white-space:nowrap">${dayShort(e.spent_on)}</td>
-              <td style="padding:5px 0">${escEmail(e.category)}${e.recurs ? ' <span class="muted" style="font-size:11px">monthly</span>' : ''}</td>
-              <td style="padding:5px 0;color:#6b7280;font-size:12px">${escEmail(e.vendor || '')}${e.note ? ` — ${escEmail(String(e.note).slice(0,50))}` : ''}</td>
-              <td style="padding:5px 0;text-align:right;font-variant-numeric:tabular-nums">${money(e.amount)}</td>
-              <td style="padding:5px 0;text-align:right;width:28px">
-                <form method="POST" action="/expenses/${e.id}/delete" style="display:inline"
-                      onsubmit="return confirm('Delete this ${money(e.amount)} ${escEmail(e.category)} entry?')">
-                  <button type="submit" title="delete" style="border:0;background:none;color:#9ca3af;cursor:pointer;font-size:14px">×</button>
-                </form></td>
-            </tr>`).join('')}
-          </table>
+          <div style="margin-top:8px">
+            ${expList.map(e => `
+            <form method="POST" action="/expenses/${e.id}"
+                  style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;padding:5px 0;border-bottom:1px solid #f1f4f9;font-size:12.5px">
+              <input type="hidden" name="year" value="${year}">
+              <input name="spent_on" type="date" value="${new Date(e.spent_on).toISOString().slice(0,10)}"
+                     style="flex:0 0 132px;padding:5px;font-size:12px">
+              <select name="category" style="flex:0 0 118px;padding:5px;font-size:12px">
+                ${EXPENSE_CATEGORIES.map(c => `<option value="${c}" ${c === e.category ? 'selected' : ''}>${c}</option>`).join('')}
+              </select>
+              <input name="amount" type="number" step="0.01" inputmode="decimal" value="${Number(e.amount).toFixed(2)}"
+                     style="flex:0 0 88px;padding:5px;font-size:12px;text-align:right">
+              <input name="vendor" value="${escEmail(e.vendor || '')}" placeholder="who"
+                     style="flex:1 1 110px;padding:5px;font-size:12px">
+              <input name="note" value="${escEmail(e.note || '')}" placeholder="note"
+                     style="flex:1 1 110px;padding:5px;font-size:12px">
+              <label style="font-size:11.5px;color:#6b7280;display:flex;align-items:center;gap:3px;white-space:nowrap">
+                <input type="checkbox" name="recurs" value="1" ${e.recurs ? 'checked' : ''} style="width:auto"> monthly</label>
+              <button type="submit" class="btn btn-ghost" style="padding:5px 11px;font-size:12px">Save</button>
+              <button type="submit" formaction="/expenses/${e.id}/delete" title="delete"
+                      onclick="return confirm('Delete this ${money(e.amount)} ${escEmail(e.category)} entry?')"
+                      style="border:0;background:none;color:#9ca3af;cursor:pointer;font-size:15px;padding:0 4px">×</button>
+            </form>`).join('')}
+          </div>
         </details>` : '<div class="muted" style="font-size:12.5px;margin-top:10px">Nothing recorded yet.</div>'}
 
         ${expList.some(e => e.recurs) ? `<form method="POST" action="/expenses/roll" style="margin-top:10px">
@@ -4884,8 +4874,34 @@ app.post('/expenses', requireAdmin, async (req, res) => {
   res.redirect('/books' + (b.year ? `?year=${encodeURIComponent(b.year)}` : ''));
 });
 
-/* Delete one. Overheads are typed by hand, so a typo needs an undo — unlike
-   payments, where history is evidence and a correction must be a new row. */
+/* Edit one in place. Overheads are typed by hand, so a wrong figure should be
+   correctable where it is shown — unlike payments, where history is evidence
+   and a correction has to be a new row. */
+app.post('/expenses/:id', requireAdmin, async (req, res) => {
+  const id = Number(req.params.id) || 0;
+  const b = req.body || {};
+  const amount = round2(Number(b.amount));
+  const category = EXPENSE_CATEGORIES.includes(String(b.category)) ? String(b.category) : null;
+  if (!id || !(amount > 0)) return res.redirect('/books');
+  try {
+    await pool.query(
+      `UPDATE expenses SET spent_on = COALESCE($2::date, spent_on),
+                           category = COALESCE($3, category),
+                           amount   = $4,
+                           vendor   = $5,
+                           note     = $6,
+                           recurs   = $7
+        WHERE id = $1`,
+      [id, String(b.spent_on || '').trim() || null, category, amount,
+       String(b.vendor || '').trim().slice(0, 80) || null,
+       String(b.note || '').trim().slice(0, 200) || null,
+       String(b.recurs || '') === '1']);
+  } catch (err) {
+    console.error('expense update failed:', err.message);
+  }
+  res.redirect('/books' + (b.year ? `?year=${encodeURIComponent(b.year)}` : ''));
+});
+
 app.post('/expenses/:id/delete', requireAdmin, async (req, res) => {
   const id = Number(req.params.id) || 0;
   try { await pool.query('DELETE FROM expenses WHERE id = $1', [id]); }
@@ -5265,28 +5281,11 @@ app.get('/quotes', requireAdmin, async (req, res) => {
     const taxTotal = taxRows.reduce((s, r) => s + Number(r.tax_collected), 0);
     const taxPos = await taxPositionByMonth(24);
 
-    /* Suggested blank costs for jobs that have none entered. One lookup table
-       for the whole page rather than a query per card. */
+    /* Remembered per-unit costs, one lookup for the whole page rather than
+       a query per card. */
     const { rows: knownCosts } = await pool.query(
       `SELECT cost_key, unit_cost, samples FROM blank_costs`);
     const costBook = Object.fromEntries(knownCosts.map(r => [r.cost_key, r]));
-    const suggestFor = (q) => {
-      const lines = garmentLines(q.items);
-      if (!lines.length) return null;
-      let total = 0, covered = 0, units = 0, weakest = Infinity;
-      for (const l of lines) {
-        units += l.qty;
-        const k = costBook[l.key];
-        if (!k) continue;
-        covered += l.qty;
-        total += Number(k.unit_cost) * l.qty;
-        weakest = Math.min(weakest, Number(k.samples));
-      }
-      if (!covered) return null;
-      return { total: round2(total), partial: covered < units,
-               samples: weakest === Infinity ? 0 : weakest };
-    };
-
     const { rows: openAgg } = await pool.query(
       `SELECT COUNT(*) AS n, COALESCE(SUM(total - COALESCE(paid_amount,0)),0) AS due
          FROM quotes
@@ -5467,15 +5466,58 @@ app.get('/quotes', requireAdmin, async (req, res) => {
                 ? `Margin <b style="color:${thin ? '#b91c1c' : good ? '#047857' : '#b45309'}">${money(mg.profit)} (${mg.pct}%)</b>`
                 : '<span style="color:#b45309">Costs not entered</span>'}
             </summary>
-            <form method="POST" action="/quote/${q.code}/costs"
+            <form method="POST" action="/quote/${q.code}/costs" data-costform="${q.code}"
                   style="background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:10px;margin-top:6px">
-              <div style="display:flex;gap:8px;flex-wrap:wrap">
-                <label style="flex:1 1 110px;font-size:12px;color:#6b7280">Blanks
-                  <input id="cb-${q.code}" name="cost_blanks" type="number" step="0.01" inputmode="decimal"
-                         value="${Number(q.cost_blanks || 0) > 0 ? Number(q.cost_blanks).toFixed(2) : ''}"
-                         placeholder="${(() => { const s = suggestFor(q); return s ? Number(s.total).toFixed(2) : '0.00'; })()}"
-                         style="width:100%;padding:7px"></label>
-                <label style="flex:1 1 110px;font-size:12px;color:#6b7280">Supplies
+              ${(() => {
+                const list = (() => {
+                  try { return typeof q.items === 'string' ? JSON.parse(q.items) : (q.items || []); }
+                  catch { return []; }
+                })();
+                if (!Array.isArray(list) || !list.length) return '<div class="muted" style="font-size:12px">No lines on this quote.</div>';
+                return `<table style="width:100%;border-collapse:collapse;font-size:12.5px">
+                  <tr style="color:#6b7280;font-size:11px;letter-spacing:.05em;text-transform:uppercase">
+                    <td style="padding:3px 0;border-bottom:1px solid #e3e8f2">Line</td>
+                    <td style="padding:3px 6px;border-bottom:1px solid #e3e8f2;text-align:right;width:44px">Qty</td>
+                    <td style="padding:3px 6px;border-bottom:1px solid #e3e8f2;text-align:right;width:92px">Cost each</td>
+                    <td style="padding:3px 0;border-bottom:1px solid #e3e8f2;text-align:right;width:76px">Line cost</td>
+                  </tr>
+                  ${list.map((it, ix) => {
+                    const known = costBook[costKey(it.description)];
+                    const isService = COST_SERVICE_WORDS.test(String(it.description || ''));
+                    const val = Number(it.unit_cost || 0);
+                    return `<tr>
+                      <td style="padding:5px 0">${escEmail(String(it.description || '').slice(0, 46))}
+                        ${isService ? '<span class="muted" style="font-size:10.5px">service</span>' : ''}</td>
+                      <td style="padding:5px 6px;text-align:right;color:#6b7280"
+                          data-qty="${Number(it.qty || 0)}">${Number(it.qty || 0)}</td>
+                      <td style="padding:5px 6px;text-align:right">
+                        <input name="unit_cost" type="number" step="0.01" inputmode="decimal"
+                               value="${val > 0 ? val.toFixed(2) : ''}"
+                               placeholder="${known ? Number(known.unit_cost).toFixed(2) : '0.00'}"
+                               title="${known ? `last time: ${money(known.unit_cost)} each, from ${known.samples} job(s)` : 'not seen before'}"
+                               style="width:100%;padding:5px;text-align:right;${known && val <= 0 ? 'background:#eef4ff;border-color:#d3e0fb' : ''}"></td>
+                      <td style="padding:5px 0;text-align:right;font-variant-numeric:tabular-nums;color:#6b7280"
+                          data-linecost>${val > 0 ? money(val * Number(it.qty || 0)) : '—'}</td>
+                    </tr>`;
+                  }).join('')}
+                  <tr>
+                    <td colspan="3" style="padding:6px 0;border-top:1px solid #e3e8f2;text-align:right;font-weight:600">Materials total</td>
+                    <td style="padding:6px 0;border-top:1px solid #e3e8f2;text-align:right;font-weight:700;font-variant-numeric:tabular-nums"
+                        data-costtotal>${money(itemisedCost(q.items))}</td>
+                  </tr>
+                </table>
+                ${(() => {
+                  const unseen = list.filter(it => !costBook[costKey(it.description)] &&
+                                                   !COST_SERVICE_WORDS.test(String(it.description || '')));
+                  const seen = list.length - unseen.length;
+                  return seen > 0 ? `<div style="margin-top:6px;font-size:11.5px;color:#1848B8">
+                    Greyed-in figures are what these cost last time — type over anything that changed.
+                    <button type="button" data-fillsuggested style="margin-left:6px;border:1px solid #1848B8;background:#fff;color:#1848B8;border-radius:6px;padding:2px 9px;font-size:11.5px;cursor:pointer">Use all</button>
+                  </div>` : '';
+                })()}`;
+              })()}
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+                <label style="flex:1 1 110px;font-size:12px;color:#6b7280">Other supplies
                   <input name="cost_supplies" type="number" step="0.01" inputmode="decimal"
                          value="${Number(q.cost_supplies || 0) > 0 ? Number(q.cost_supplies).toFixed(2) : ''}"
                          placeholder="0.00" style="width:100%;padding:7px"></label>
@@ -5492,17 +5534,6 @@ app.get('/quotes', requireAdmin, async (req, res) => {
                        placeholder="note (optional)" style="flex:1;padding:7px">
                 <button type="submit" style="padding:7px 16px;font-size:13px">Save</button>
               </div>
-              ${(() => {
-                const s = suggestFor(q);
-                if (!s || Number(q.cost_blanks || 0) > 0) return '';
-                return `<div style="margin-top:8px;background:#eef4ff;border:1px solid #d3e0fb;border-radius:8px;padding:8px 10px;font-size:12.5px;color:#1848B8">
-                  Last time these blanks cost <b>${money(s.total)}</b>${s.partial ? ' (for the lines I recognise)' : ''}
-                  <button type="button" onclick="document.getElementById('cb-${q.code}').value='${Number(s.total).toFixed(2)}'"
-                          style="margin-left:8px;border:1px solid #1848B8;background:#fff;color:#1848B8;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer">Use it</button>
-                  <span class="muted" style="font-size:11px;display:block;margin-top:3px">
-                    Averaged over ${s.samples} previous job${s.samples === 1 ? '' : 's'} — check it against the invoice.</span>
-                </div>`;
-              })()}
               <div class="muted" style="font-size:11.5px;margin-top:8px">
                 ${mg.entered
                   ? `Sales ${money(mg.revenue)} − costs ${money(mg.cost)} = <b>${money(mg.profit)}</b>
@@ -5654,6 +5685,45 @@ app.get('/quotes', requireAdmin, async (req, res) => {
 
       ${body || '<div class="card"><p class="muted">No quotes yet.</p></div>'}
       <script>
+        /* Line costs multiply themselves. The whole point of itemising is not
+           having to work out qty × cost on paper for every line. */
+        (function(){
+          function money(n){ return '$' + (Math.round(n*100)/100).toFixed(2); }
+          function recalc(form){
+            var total = 0;
+            form.querySelectorAll('tr').forEach(function(tr){
+              var qtyCell = tr.querySelector('[data-qty]');
+              var input   = tr.querySelector('input[name="unit_cost"]');
+              var out     = tr.querySelector('[data-linecost]');
+              if(!qtyCell || !input || !out) return;
+              var qty  = Number(qtyCell.getAttribute('data-qty')) || 0;
+              /* An empty box uses the remembered figure shown in the
+                 placeholder, so the total reflects what will actually be
+                 saved once "Use all" is pressed. */
+              var unit = input.value !== '' ? Number(input.value)
+                                            : Number(input.placeholder) || 0;
+              var line = qty * unit;
+              out.textContent = line > 0 ? money(line) : '—';
+              total += line;
+            });
+            var t = form.querySelector('[data-costtotal]');
+            if(t) t.textContent = money(total);
+          }
+          document.querySelectorAll('form[data-costform]').forEach(function(form){
+            form.addEventListener('input', function(e){
+              if(e.target.name === 'unit_cost') recalc(form);
+            });
+            var fill = form.querySelector('[data-fillsuggested]');
+            if(fill) fill.addEventListener('click', function(){
+              form.querySelectorAll('input[name="unit_cost"]').forEach(function(i){
+                if(i.value === '' && Number(i.placeholder) > 0) i.value = Number(i.placeholder).toFixed(2);
+              });
+              recalc(form);
+            });
+            recalc(form);
+          });
+        })();
+
         function cpq(btn){
           var t = btn.getAttribute('data-msg');
           (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject())
@@ -6529,22 +6599,41 @@ app.post('/quote/:code/costs', requireAdmin, async (req, res) => {
     return Number.isFinite(n) && n >= 0 ? round2(n) : null;
   };
   try {
+    const { rows: cur } = await pool.query('SELECT items FROM quotes WHERE code = $1', [code]);
+    if (!cur.length) return res.redirect('/quotes');
+
+    /* Per-line unit costs. Entering a total and apportioning it was wrong:
+       a polo and a hoodie on the same order do not cost the same, and asking
+       for one number meant doing the multiplication by hand every time.
+       The line cost is qty × unit, computed here so nothing has to be worked
+       out on paper. */
+    const items = (() => {
+      try { return typeof cur[0].items === 'string' ? JSON.parse(cur[0].items) : (cur[0].items || []); }
+      catch { return []; }
+    })();
+    const posted = [].concat(b.unit_cost || []);
+    const updated = (Array.isArray(items) ? items : []).map((it, ix) => {
+      const v = num(posted[ix]);
+      return v === null ? it : { ...it, unit_cost: v };
+    });
+    const blanks = itemisedCost(updated);
+
     const { rows } = await pool.query(
-      `UPDATE quotes SET cost_blanks     = COALESCE($2, cost_blanks),
-                         cost_supplies   = COALESCE($3, cost_supplies),
-                         cost_outsourced = COALESCE($4, cost_outsourced),
-                         blanks_supplier = COALESCE(NULLIF($5,''), blanks_supplier),
-                         cost_note       = COALESCE(NULLIF($6,''), cost_note)
+      `UPDATE quotes SET items           = $2::jsonb,
+                         cost_blanks     = $3,
+                         cost_supplies   = COALESCE($4, cost_supplies),
+                         cost_outsourced = COALESCE($5, cost_outsourced),
+                         blanks_supplier = COALESCE(NULLIF($6,''), blanks_supplier),
+                         cost_note       = COALESCE(NULLIF($7,''), cost_note)
         WHERE code = $1 RETURNING *`,
-      [code, num(b.cost_blanks), num(b.cost_supplies), num(b.cost_outsourced),
+      [code, JSON.stringify(updated), blanks,
+       num(b.cost_supplies), num(b.cost_outsourced),
        String(b.blanks_supplier || '').trim().slice(0, 80),
        String(b.cost_note || '').trim().slice(0, 200)]);
 
     /* Learn from what was just entered, so the next job of the same kind
        arrives pre-filled instead of needing the invoice looked up again. */
-    if (rows.length && Number(rows[0].cost_blanks) > 0) {
-      await learnBlankCosts(rows[0], Number(rows[0].cost_blanks));
-    }
+    if (rows.length) await learnBlankCosts(updated);
   } catch (err) {
     console.error('cost update failed:', err.message);
   }
