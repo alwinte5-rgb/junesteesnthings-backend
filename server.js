@@ -124,6 +124,10 @@ async function initDB() {
     'cost_blanks NUMERIC(10,2) DEFAULT 0',
     'cost_supplies NUMERIC(10,2) DEFAULT 0',   // ink, transfers, thread, packaging
     'cost_outsourced NUMERIC(10,2) DEFAULT 0', // anything sent out
+    /* Freight, in or out. Its own line because it belongs to the job but not to
+       any garment on it, and on a small order it is often the difference
+       between a healthy margin and a thin one. */
+    'cost_shipping NUMERIC(10,2) DEFAULT 0',
     'cost_note TEXT',
     'blanks_supplier TEXT',           // who the blanks came from
     'blanks_tracking TEXT',           // inbound tracking for the blanks
@@ -2537,7 +2541,8 @@ function quoteMargin(q) {
   const revenue = round2(Number(q.subtotal || 0));
   const cost = round2(Number(q.cost_blanks || 0) +
                       Number(q.cost_supplies || 0) +
-                      Number(q.cost_outsourced || 0));
+                      Number(q.cost_outsourced || 0) +
+                      Number(q.cost_shipping || 0));
   const profit = round2(revenue - cost);
   return {
     revenue, cost, profit,
@@ -2660,7 +2665,7 @@ function quoteChecklist(q) {
     /* Last, because it is the step that gets dropped once the job is out of the
        door — and it is the one that tells you whether the price was right. */
     { key: 'costed',   label: 'Costs entered',
-      done: (Number(q.cost_blanks || 0) + Number(q.cost_supplies || 0) + Number(q.cost_outsourced || 0)) > 0,
+      done: (Number(q.cost_blanks || 0) + Number(q.cost_supplies || 0) + Number(q.cost_outsourced || 0) + Number(q.cost_shipping || 0)) > 0,
       hint: 'what you paid out — otherwise you never learn what this job made' },
   ];
 
@@ -3481,7 +3486,7 @@ app.get('/api/quotes/prior', requireAdmin, async (req, res) => {
        here — at the moment the next price is being set. */
     const lastMg = quoteMargin(last);
     const costedRows = rows.filter(r =>
-      (Number(r.cost_blanks || 0) + Number(r.cost_supplies || 0) + Number(r.cost_outsourced || 0)) > 0);
+      (Number(r.cost_blanks || 0) + Number(r.cost_supplies || 0) + Number(r.cost_outsourced || 0) + Number(r.cost_shipping || 0)) > 0);
     const avgPct = costedRows.length
       ? Math.round(costedRows.reduce((a, r) => a + (quoteMargin(r).pct || 0), 0) / costedRows.length)
       : null;
@@ -4642,8 +4647,8 @@ app.get('/books', requireAdmin, async (req, res) => {
          SELECT to_char(date_trunc('month', created_at), 'YYYY-MM') AS period,
                 COUNT(*) AS jobs,
                 SUM(subtotal) AS sales,
-                SUM(cost_blanks + cost_supplies + cost_outsourced) AS costs,
-                COUNT(*) FILTER (WHERE (cost_blanks + cost_supplies + cost_outsourced) > 0) AS costed
+                SUM(cost_blanks + cost_supplies + cost_outsourced + cost_shipping) AS costs,
+                COUNT(*) FILTER (WHERE (cost_blanks + cost_supplies + cost_outsourced + cost_shipping) > 0) AS costed
            FROM quotes
           WHERE status <> 'expired' AND EXTRACT(YEAR FROM created_at) = $1
           GROUP BY 1)
@@ -5296,8 +5301,8 @@ app.get('/quotes', requireAdmin, async (req, res) => {
               date_trunc('month', created_at) AS m,
               COUNT(*) AS n, COALESCE(SUM(total),0) AS quoted,
               COALESCE(SUM(subtotal),0) AS sales,
-              COALESCE(SUM(cost_blanks + cost_supplies + cost_outsourced),0) AS costs,
-              COUNT(*) FILTER (WHERE (cost_blanks + cost_supplies + cost_outsourced) > 0) AS costed
+              COALESCE(SUM(cost_blanks + cost_supplies + cost_outsourced + cost_shipping),0) AS costs,
+              COUNT(*) FILTER (WHERE (cost_blanks + cost_supplies + cost_outsourced + cost_shipping) > 0) AS costed
          FROM quotes WHERE status <> 'expired' GROUP BY 1,2 ORDER BY m DESC LIMIT 12`);
     const quotedByLabel = Object.fromEntries(quotedAgg.map(r => [r.label, r]));
     const colour = {
@@ -5501,9 +5506,26 @@ app.get('/quotes', requireAdmin, async (req, res) => {
                     </tr>`;
                   }).join('')}
                   <tr>
-                    <td colspan="3" style="padding:6px 0;border-top:1px solid #e3e8f2;text-align:right;font-weight:600">Materials total</td>
-                    <td style="padding:6px 0;border-top:1px solid #e3e8f2;text-align:right;font-weight:700;font-variant-numeric:tabular-nums"
-                        data-costtotal>${money(itemisedCost(q.items))}</td>
+                    <td colspan="3" style="padding:6px 0;border-top:1px solid #e3e8f2;text-align:right;color:#6b7280">Materials</td>
+                    <td style="padding:6px 0;border-top:1px solid #e3e8f2;text-align:right;font-variant-numeric:tabular-nums"
+                        data-materials>${money(itemisedCost(q.items))}</td>
+                  </tr>
+                  ${[['cost_shipping', 'Shipping / freight', q.cost_shipping],
+                     ['cost_supplies', 'Other supplies', q.cost_supplies],
+                     ['cost_outsourced', 'Outsourced', q.cost_outsourced]].map(([name, label, val]) => `
+                  <tr>
+                    <td colspan="2" style="padding:4px 0;color:#6b7280">${label}</td>
+                    <td style="padding:4px 6px;text-align:right">
+                      <input name="${name}" type="number" step="0.01" inputmode="decimal" data-extra
+                             value="${Number(val || 0) > 0 ? Number(val).toFixed(2) : ''}"
+                             placeholder="0.00" style="width:100%;padding:5px;text-align:right"></td>
+                    <td style="padding:4px 0;text-align:right;color:#6b7280;font-variant-numeric:tabular-nums"
+                        data-extraout>${Number(val || 0) > 0 ? money(val) : '—'}</td>
+                  </tr>`).join('')}
+                  <tr>
+                    <td colspan="3" style="padding:6px 0;border-top:1px solid #111827;text-align:right;font-weight:600">Job cost</td>
+                    <td style="padding:6px 0;border-top:1px solid #111827;text-align:right;font-weight:700;font-variant-numeric:tabular-nums"
+                        data-costtotal>${money(quoteMargin(q).cost)}</td>
                   </tr>
                 </table>
                 ${(() => {
@@ -5516,20 +5538,9 @@ app.get('/quotes', requireAdmin, async (req, res) => {
                   </div>` : '';
                 })()}`;
               })()}
-              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
-                <label style="flex:1 1 110px;font-size:12px;color:#6b7280">Other supplies
-                  <input name="cost_supplies" type="number" step="0.01" inputmode="decimal"
-                         value="${Number(q.cost_supplies || 0) > 0 ? Number(q.cost_supplies).toFixed(2) : ''}"
-                         placeholder="0.00" style="width:100%;padding:7px"></label>
-                <label style="flex:1 1 110px;font-size:12px;color:#6b7280">Outsourced
-                  <input name="cost_outsourced" type="number" step="0.01" inputmode="decimal"
-                         value="${Number(q.cost_outsourced || 0) > 0 ? Number(q.cost_outsourced).toFixed(2) : ''}"
-                         placeholder="0.00" style="width:100%;padding:7px"></label>
-                <label style="flex:1 1 130px;font-size:12px;color:#6b7280">Supplier
-                  <input name="blanks_supplier" value="${escEmail(q.blanks_supplier || '')}"
-                         placeholder="SanMar…" style="width:100%;padding:7px"></label>
-              </div>
               <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+                <input name="blanks_supplier" value="${escEmail(q.blanks_supplier || '')}"
+                       placeholder="supplier" style="flex:0 0 130px;padding:7px">
                 <input name="cost_note" maxlength="200" value="${escEmail(q.cost_note || '')}"
                        placeholder="note (optional)" style="flex:1;padding:7px">
                 <button type="submit" style="padding:7px 16px;font-size:13px">Save</button>
@@ -5690,7 +5701,7 @@ app.get('/quotes', requireAdmin, async (req, res) => {
         (function(){
           function money(n){ return '$' + (Math.round(n*100)/100).toFixed(2); }
           function recalc(form){
-            var total = 0;
+            var materials = 0;
             form.querySelectorAll('tr').forEach(function(tr){
               var qtyCell = tr.querySelector('[data-qty]');
               var input   = tr.querySelector('input[name="unit_cost"]');
@@ -5704,14 +5715,26 @@ app.get('/quotes', requireAdmin, async (req, res) => {
                                             : Number(input.placeholder) || 0;
               var line = qty * unit;
               out.textContent = line > 0 ? money(line) : '—';
-              total += line;
+              materials += line;
             });
+            var m = form.querySelector('[data-materials]');
+            if(m) m.textContent = money(materials);
+
+            // Shipping, supplies and outsourced sit under the same total.
+            var extras = 0;
+            form.querySelectorAll('input[data-extra]').forEach(function(i){
+              var v = Number(i.value) || 0;
+              extras += v;
+              var out = i.closest('tr') && i.closest('tr').querySelector('[data-extraout]');
+              if(out) out.textContent = v > 0 ? money(v) : '—';
+            });
+
             var t = form.querySelector('[data-costtotal]');
-            if(t) t.textContent = money(total);
+            if(t) t.textContent = money(materials + extras);
           }
           document.querySelectorAll('form[data-costform]').forEach(function(form){
             form.addEventListener('input', function(e){
-              if(e.target.name === 'unit_cost') recalc(form);
+              if(e.target.name === 'unit_cost' || e.target.hasAttribute('data-extra')) recalc(form);
             });
             var fill = form.querySelector('[data-fillsuggested]');
             if(fill) fill.addEventListener('click', function(){
@@ -6623,11 +6646,12 @@ app.post('/quote/:code/costs', requireAdmin, async (req, res) => {
                          cost_blanks     = $3,
                          cost_supplies   = COALESCE($4, cost_supplies),
                          cost_outsourced = COALESCE($5, cost_outsourced),
-                         blanks_supplier = COALESCE(NULLIF($6,''), blanks_supplier),
-                         cost_note       = COALESCE(NULLIF($7,''), cost_note)
+                         cost_shipping   = COALESCE($6, cost_shipping),
+                         blanks_supplier = COALESCE(NULLIF($7,''), blanks_supplier),
+                         cost_note       = COALESCE(NULLIF($8,''), cost_note)
         WHERE code = $1 RETURNING *`,
       [code, JSON.stringify(updated), blanks,
-       num(b.cost_supplies), num(b.cost_outsourced),
+       num(b.cost_supplies), num(b.cost_outsourced), num(b.cost_shipping),
        String(b.blanks_supplier || '').trim().slice(0, 80),
        String(b.cost_note || '').trim().slice(0, 200)]);
 
