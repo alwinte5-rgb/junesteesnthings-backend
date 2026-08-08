@@ -2644,27 +2644,19 @@ function quoteChecklist(q) {
      received with the order-by date as its warning, and the seven tappable
      steps line up one-for-one with the kanban columns so there is a single
      model of a job rather than two. */
+  /* Production only. The list does not begin until a quote is accepted, so the
+     pre-acceptance gates and the post-delivery money are not tasks — they are
+     context, and they now show as a status strip on the job page. Every step
+     here is tappable, which is what removes the "why won't this click"
+     confusion the derived rows caused. Order matches the board columns. */
   const steps = [
-    { key: 'quote',    label: 'Quote ready',
-      done: !!(q.name && (q.email || q.phone)) && hasItems && total > 0
-            && (!!q.needed_by || !!q.target_date || !!q.deadline_flexible),
-      hint: (!q.needed_by && !q.target_date && !q.deadline_flexible)
-              ? 'no date yet — set a working date so blanks get ordered in time'
-            : (!q.needed_by && q.target_date) ? `working date ${dayShort(q.target_date)} (they did not give one)`
-            : (!q.needed_by && q.deadline_flexible) ? 'no fixed date — they are flexible'
-            : !q.email && q.phone ? 'phone only — cannot be chased by email'
-            : 'details, items and deadline captured' },
-    { key: 'accepted', label: 'Accepted + deposit',
-      done: !!q.accepted_at && (paid > 0 || (total > 0 && due <= 0)),
-      hint: !q.accepted_at ? 'waiting on their yes'
-            : paid > 0 ? 'money down' : `${money(deposit)} to start` },
     { key: 'artwork',  label: 'Artwork in hand',    done: !!q.artwork_at, manual: true,
       hint: 'print-ready file received and checked' },
-    { key: 'blanks_in', label: 'Blanks received',   done: !!q.blanks_in_at, manual: true,
-      hint: sched && !q.blanks_ordered_at ? `order by ${dayShort(sched.blanks_order_by)} — the step that quietly kills deadlines`
-            : 'counted against the order — shortages surface here, not at the press' },
     { key: 'proofok',  label: 'Proof approved',     done: !!q.proof_ok_at, manual: true,
       hint: 'in writing — this is what protects you on a reprint' },
+    { key: 'blanks_in', label: 'Blanks received',   done: !!q.blanks_in_at, manual: true,
+      hint: sched && !q.blanks_in_at ? `order by ${dayShort(sched.blanks_order_by)} — the step that quietly kills deadlines`
+            : 'counted against the order — shortages surface here, not at the press' },
     { key: 'production', label: 'Printed',          done: !!q.production_at, manual: true,
       hint: sched ? `on the press by ${dayShort(sched.press_by)}` : 'on the press' },
     { key: 'qc',       label: 'Counted & checked',  done: !!q.qc_at, manual: true,
@@ -2674,11 +2666,6 @@ function quoteChecklist(q) {
       hint: sched ? `must leave by ${dayShort(sched.ship_by)}` : 'handed to the carrier' },
     { key: 'delivered', label: 'Delivered',         done: !!q.delivered_at, manual: true,
       hint: 'in the customer\'s hands' },
-    { key: 'balance',  label: 'Paid in full',       done: total > 0 && due <= 0,
-      hint: due > 0 ? `${money(due)} outstanding — collect before it goes` : 'settled' },
-    { key: 'costed',   label: 'Costs entered',
-      done: (Number(q.cost_blanks || 0) + Number(q.cost_supplies || 0) + Number(q.cost_outsourced || 0) + Number(q.cost_shipping || 0)) > 0,
-      hint: 'what you paid out — otherwise you never learn what this job made' },
   ];
 
   const next = steps.find((s) => !s.done) || null;
@@ -3080,8 +3067,15 @@ form:has(>.step-row){display:block}
    Columns are production stages, cards are jobs. It scrolls sideways rather
    than wrapping: a stage that moves to the next line stops reading as a
    pipeline, which is the only thing this view is for. */
-.kanban{display:flex;gap:10px;overflow-x:auto;padding-bottom:10px;-webkit-overflow-scrolling:touch}
-.kcol{flex:0 0 232px;background:#f4f7fc;border:1px solid #e3e8f2;border-radius:12px;padding:9px;min-height:120px}
+/* Five columns fit a laptop, so the board reads as a pipeline instead of
+   scrolling sideways. Below 900px it falls back to horizontal scroll, which is
+   the right behaviour on a phone. */
+.kanban{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;padding-bottom:6px}
+.kcol{background:#f4f7fc;border:1px solid #e3e8f2;border-radius:12px;padding:9px;min-height:110px;min-width:0}
+@media (max-width:900px){
+  .kanban{display:flex;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:10px}
+  .kcol{flex:0 0 210px}
+}
 .kcol-head{display:flex;justify-content:space-between;align-items:center;font-weight:700;font-size:13px;color:#0B1F4B}
 .kcount{background:#e3e8f2;border-radius:100px;padding:1px 8px;font-size:11.5px;color:#5a6a86}
 .kcol-hint{color:#8a97ad;font-size:10.5px;margin:2px 0 8px}
@@ -3108,7 +3102,6 @@ form:has(>.step-row){display:block}
 .kbtn-next:hover{background:#123a95}
 .kbtn-sm{padding:4px 9px;font-size:12px;min-height:26px}
 .kempty{color:#c2cbdb;text-align:center;font-size:13px;padding:8px 0}
-@media (max-width:640px){ .kcol{flex:0 0 200px} }
 
 /* The job board is a grid of cards, not one long column. Each card stays a
    whole job — its panels stack inside it — so a card can be read without
@@ -5488,23 +5481,30 @@ app.get('/customer', requireAdmin, async (req, res) => {
  * The checklist is still the detail; this is the shape of the shop floor.
  */
 const JOB_STAGES = [
-  { key: 'intake',  label: 'To start',  col: null,            hint: 'nothing done yet' },
-  { key: 'artwork', label: 'Artwork',   col: 'artwork_at',    hint: 'print-ready file in hand' },
-  { key: 'blanks',  label: 'Blanks',    col: 'blanks_in_at',  hint: 'ordered and counted in' },
-  { key: 'proof',   label: 'Proof',     col: 'proof_ok_at',   hint: 'approved in writing' },
-  { key: 'press',   label: 'Press',     col: 'production_at', hint: 'printing or stitching' },
-  { key: 'qc',      label: 'Check',     col: 'qc_at',         hint: 'counted against the order' },
-  { key: 'ship',    label: 'Ship',      col: 'shipped_at',    hint: 'gone or ready for pickup' },
-  { key: 'done',    label: 'Delivered', col: 'delivered_at',  hint: 'in their hands' },
+  { key: 'start',  label: 'To start',        cols: [],                            hint: 'accepted, nothing done yet' },
+  { key: 'design', label: 'Artwork & proof', cols: ['artwork_at', 'proof_ok_at'], hint: 'file in hand and approved in writing' },
+  { key: 'blanks', label: 'Blanks',          cols: ['blanks_in_at'],              hint: 'garments arrived and counted' },
+  { key: 'press',  label: 'Press',           cols: ['production_at'],             hint: 'printing or stitching' },
+  { key: 'out',    label: 'Out',             cols: ['qc_at', 'shipped_at'],       hint: 'checked and gone' },
+  { key: 'done',   label: 'Delivered',       cols: ['delivered_at'],              hint: 'in their hands' },
 ];
 
 /** The stage a job is sitting in: the last one it has completed. */
 function jobStageIndex(q) {
-  let i = 0;
+  /* A kanban column means "the work in hand", not "the last thing finished" —
+     a job with artwork done and the proof still out belongs in Artwork & proof,
+     not back in To start. So the column is the first stage still unfinished,
+     with two edges: nothing started at all sits in To start, and everything
+     short of delivery is held in the last working column so a shipped job does
+     not jump into Delivered (which leaves the board) before it has arrived. */
+  if (q.delivered_at) return JOB_STAGES.length - 1;
+  const lastWorking = JOB_STAGES.length - 2;
+  const started = JOB_STAGES.slice(1).some(st => st.cols.some(c => q[c]));
+  if (!started) return 0;
   for (let n = 1; n < JOB_STAGES.length; n++) {
-    if (q[JOB_STAGES[n].col]) i = n; else break;
+    if (!JOB_STAGES[n].cols.every(c => q[c])) return Math.min(n, lastWorking);
   }
-  return i;
+  return lastWorking;
 }
 
 /**
@@ -5520,8 +5520,11 @@ app.post('/quote/:code/stage', requireAdmin, async (req, res) => {
     return asJson ? res.status(400).json({ ok: false }) : res.redirect('/production');
   }
   try {
-    const sets = JOB_STAGES.slice(1).map((st, i) =>
-      `${st.col} = ${i + 1 <= target ? `COALESCE(${st.col}, NOW())` : 'NULL'}`).join(', ');
+    /* Everything up to and including the target is stamped, everything after is
+       cleared — which is what makes moving a card backwards mean what it looks
+       like it means. Columns owning several milestones set them together. */
+    const sets = JOB_STAGES.slice(1).flatMap((st, i) =>
+      st.cols.map(c => `${c} = ${i + 1 <= target ? `COALESCE(${c}, NOW())` : 'NULL'}`)).join(', ');
     const { rows } = await pool.query(
       `UPDATE quotes SET ${sets} WHERE code = $1 RETURNING *`, [code]);
     console.log(`quote ${code}: moved to ${JOB_STAGES[target].label}`);
@@ -6044,7 +6047,9 @@ async function renderBoard(VIEW, req, res) {
            its milestone dates, so the board and the checklist can never
            disagree. Moving a card is one tap — the arrows, not drag, because
            drag is unreliable on the phone this is used on. */
-        const live = rows.filter(q => !q.delivered_at);
+        /* Accepted work only. An unaccepted quote is a sales problem and belongs
+           on the Money board; putting it here is what made To start misleading. */
+        const live = rows.filter(q => !q.delivered_at && q.accepted_at);
         const cols = JOB_STAGES.map((st, i) => ({
           ...st, i, jobs: live.filter(q => jobStageIndex(q) === i),
         }));
@@ -6320,6 +6325,27 @@ app.get('/production/:code', requireAdmin, async (req, res) => {
         <a href="/customer?q=${encodeURIComponent(q.email || q.phone || '')}" style="color:#1848B8">customer</a></div>
 
       <div class="card" style="margin-top:12px">
+        ${(() => {
+          /* The pre-acceptance and money facts that used to be checklist rows.
+             Still visible, no longer something you tick. */
+          const paid = Number(q.paid_amount || 0);
+          const total = Number(q.total || 0);
+          const due = round2(Math.max(0, total - paid));
+          const costed = (Number(q.cost_blanks || 0) + Number(q.cost_supplies || 0) +
+                          Number(q.cost_outsourced || 0) + Number(q.cost_shipping || 0)) > 0;
+          const bit = (ok, yes, no, warn) =>
+            `<span style="color:${ok ? '#047857' : (warn ? '#b45309' : '#8a97ad')}">${ok ? '✓ ' : ''}${ok ? yes : no}</span>`;
+          return `<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;font-size:12.5px;
+                       background:#f7f9fc;border:1px solid #e3e8f2;border-radius:9px;padding:8px 11px;margin-bottom:10px">
+            ${bit(!!q.accepted_at, 'Accepted', 'Not accepted yet', true)}
+            <span style="color:#dfe5ef">·</span>
+            ${due > 0 ? `<span style="color:#b45309"><b>${money(due)}</b> due</span>`
+                      : bit(total > 0, 'Paid in full', 'Nothing invoiced', false)}
+            <span style="color:#dfe5ef">·</span>
+            ${costed ? bit(true, 'Costs in', '', false)
+                     : `<a href="/quotes" style="color:#b45309">Costs not entered</a>`}
+          </div>`;
+        })()}
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
           ${JOB_STAGES.map((st, i) => `
             <form method="POST" action="/quote/${q.code}/stage" style="margin:0">
