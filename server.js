@@ -5794,10 +5794,19 @@ app.get('/quotes', requireAdmin, async (req, res) => {
 
             var jf = form.querySelector('[data-jsonflag]');
             if (jf) jf.value = '1';
+            /* URL-encoded, not FormData. FormData posts multipart/form-data,
+               which express.urlencoded() does not parse — req.body arrived
+               empty, so the step name never reached the handler and it
+               redirected. The native form fallback worked precisely because
+               browsers send url-encoded, which is what made this look like the
+               server was at fault. */
             fetch(form.action, {
               method: 'POST',
-              headers: { 'Accept': 'application/json' },
-              body: new FormData(form),
+              headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/x-www-form-urlencoded',
+              },
+              body: new URLSearchParams(new FormData(form)).toString(),
             })
             .then(function(r){
               // A redirect back to the board means the JSON branch was missed;
