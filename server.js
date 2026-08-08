@@ -103,6 +103,15 @@ async function initDB() {
     'change_request TEXT',            // what the customer asked to change
     'revision INT DEFAULT 1',         // bumped each time June edits it
     'deposit_nudged_at TIMESTAMPTZ',  // accepted but deposit unpaid reminder
+    /* Job milestones. These exist so the intake checklist can be DERIVED rather
+       than written down somewhere nobody opens — the steps the database can
+       already answer (contact, job, deadline, quote, deposit, balance) are
+       computed, and these cover the few it cannot see. */
+    'artwork_at TIMESTAMPTZ',         // usable artwork in hand
+    'proof_sent_at TIMESTAMPTZ',      // proof sent to the customer
+    'proof_ok_at TIMESTAMPTZ',        // customer approved the proof
+    'production_at TIMESTAMPTZ',      // on the press
+    'delivered_at TIMESTAMPTZ',       // picked up or shipped
   ]) {
     await pool.query(`ALTER TABLE quotes ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
@@ -2275,6 +2284,79 @@ async function syncQuoteContact(q, event = null) {
     console.error(`brevo event ${event} failed for ${q.code}:`, e.response?.data?.message || e.message);
   }
 }
+
+/**
+ * The order intake checklist, derived rather than documented.
+ *
+ * A written guide is only as good as the odds somebody opens it, which for a
+ * one-person shop mid-job is roughly zero. So the steps live here: most are
+ * ANSWERED from data the system already has, and only the handful it genuinely
+ * cannot see (artwork in hand, proof approved, on the press, delivered) are
+ * stored flags with a one-tap control on the quote card.
+ *
+ * Returns the steps in order plus the single next action, so the quote card can
+ * say what to do rather than what to read.
+ */
+function quoteChecklist(q) {
+  const total = Number(q.total || 0);
+  const paid = Number(q.paid_amount || 0);
+  const due = round2(Math.max(0, total - paid));
+  const deposit = Number(q.deposit || 0);
+  const hasItems = (() => {
+    try { const it = typeof q.items === 'string' ? JSON.parse(q.items) : q.items;
+          return Array.isArray(it) ? it.length > 0 : !!it; } catch { return false; }
+  })();
+
+  const steps = [
+    { key: 'contact',  label: 'Contact details',   done: !!(q.name && (q.email || q.phone)),
+      hint: !q.email && q.phone ? 'phone only — cannot be chased by email' : 'name plus a way to reach them' },
+    { key: 'job',      label: 'Job defined',        done: hasItems && total > 0,
+      hint: 'items, quantities, sizes, print method' },
+    { key: 'deadline', label: 'Deadline captured',  done: !!q.needed_by,
+      hint: 'when they need it — drives everything downstream' },
+    { key: 'artwork',  label: 'Artwork in hand',    done: !!q.artwork_at, manual: true,
+      hint: 'print-ready file received and checked' },
+    { key: 'sent',     label: 'Quote sent',         done: !!q.created_at,
+      hint: 'customer has the link' },
+    { key: 'accepted', label: 'Accepted',           done: !!q.accepted_at,
+      hint: 'they said yes' },
+    { key: 'deposit',  label: 'Deposit paid',       done: paid > 0 || (total > 0 && due <= 0),
+      hint: deposit > 0 ? `${money(deposit)} to start` : 'money down before production' },
+    { key: 'proof',    label: 'Proof sent',         done: !!q.proof_sent_at, manual: true,
+      hint: 'mock-up for approval before the press' },
+    { key: 'proofok',  label: 'Proof approved',     done: !!q.proof_ok_at, manual: true,
+      hint: 'in writing — this is what protects you on a reprint' },
+    { key: 'production', label: 'In production',    done: !!q.production_at, manual: true,
+      hint: 'on the press' },
+    { key: 'balance',  label: 'Paid in full',       done: total > 0 && due <= 0,
+      hint: due > 0 ? `${money(due)} outstanding` : 'settled' },
+    { key: 'delivered', label: 'Delivered',         done: !!q.delivered_at, manual: true,
+      hint: 'picked up or shipped' },
+  ];
+
+  const next = steps.find((s) => !s.done) || null;
+  const done = steps.filter((s) => s.done).length;
+  return { steps, next, done, of: steps.length };
+}
+
+/* One tap per milestone the database cannot infer. Idempotent, and it can be
+   unticked — a mis-tap must not need a database client to undo. */
+app.post('/quote/:code/step', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  const COLS = { artwork: 'artwork_at', proof: 'proof_sent_at', proofok: 'proof_ok_at',
+                 production: 'production_at', delivered: 'delivered_at' };
+  const col = COLS[String((req.body && req.body.step) || '')];
+  if (!QUOTE_CODE_RE.test(code) || !col) return res.redirect('/quotes');
+  const clear = String((req.body && req.body.clear) || '') === '1';
+  try {
+    await pool.query(
+      `UPDATE quotes SET ${col} = ${clear ? 'NULL' : 'NOW()'} WHERE code = $1`, [code]);
+    console.log(`quote ${code}: ${col} ${clear ? 'cleared' : 'set'}`);
+  } catch (err) {
+    console.error('step update failed:', err.message);
+  }
+  res.redirect('/quotes');
+});
 
 /** Which stage a quote belongs in, from its own state. Single source of truth
  *  so the pipeline cannot drift from the database again. */
@@ -4538,6 +4620,43 @@ app.get('/quotes', requireAdmin, async (req, res) => {
             The reference is what lets you match this to your Zelle statement later.</div>
         </form>` : ''}
         ${(() => {
+          const cl = quoteChecklist(q);
+          const pct = Math.round((cl.done / cl.of) * 100);
+          const rows = cl.steps.map((s) => {
+            const ctrl = s.manual
+              ? `<form method="POST" action="/quote/${q.code}/step" style="display:inline">
+                   <input type="hidden" name="step" value="${s.key}">
+                   ${s.done ? '<input type="hidden" name="clear" value="1">' : ''}
+                   <button type="submit" title="${s.done ? 'Undo' : 'Mark done'}"
+                     style="border:0;background:none;cursor:pointer;padding:0;font-size:13px;color:${s.done ? '#047857' : '#9ca3af'}">
+                     ${s.done ? '☑' : '☐'}</button></form>`
+              : `<span style="font-size:13px;color:${s.done ? '#047857' : '#d1d5db'}">${s.done ? '☑' : '☐'}</span>`;
+            return `<div style="display:flex;gap:8px;align-items:baseline;padding:2px 0">
+              ${ctrl}
+              <span style="color:${s.done ? '#6b7280' : '#111827'};${s.done ? 'text-decoration:line-through' : 'font-weight:600'}">${s.label}</span>
+              <span class="muted" style="font-size:11.5px">${escEmail(s.hint)}</span></div>`;
+          }).join('');
+          return `<div style="margin-top:10px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:10px">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px">
+              <div style="font-size:13px">
+                ${cl.next
+                  ? `<b style="color:#1848B8">Next: ${escEmail(cl.next.label)}</b>
+                     <span class="muted" style="font-size:12px"> — ${escEmail(cl.next.hint)}</span>`
+                  : '<b style="color:#047857">Complete — nothing outstanding</b>'}
+              </div>
+              <span class="muted" style="font-size:11.5px;white-space:nowrap">${cl.done}/${cl.of}</span>
+            </div>
+            <div style="height:4px;background:#e3e8f2;border-radius:3px;margin:7px 0 2px;overflow:hidden">
+              <div style="height:100%;width:${pct}%;background:${pct === 100 ? '#047857' : '#1848B8'}"></div>
+            </div>
+            <details style="margin-top:6px">
+              <summary style="cursor:pointer;color:#1848B8;font-size:12.5px">Checklist</summary>
+              <div style="margin-top:6px;font-size:12.5px">${rows}</div>
+              <div class="muted" style="font-size:11px;margin-top:6px">
+                Ticked boxes are set from the data. Open boxes are yours to tap — tap again to undo.</div>
+            </details></div>`;
+        })()}
+        ${(() => {
           const ps = payByCode[q.code] || [];
           if (!ps.length) return '';
           const lines = ps.map(p => {
@@ -5270,6 +5389,86 @@ async function expireOldQuotes() {
   }
 }
 
+/**
+ * Daily digest: every live job and the one thing each needs next.
+ *
+ * This is the intake checklist doing its job without anybody opening it. A
+ * written guide only works if you go and read it; this arrives, sorted by
+ * deadline, and says what to do. Nothing here is new information — it is the
+ * same derived checklist the quotes page shows, pushed instead of pulled.
+ *
+ * Sends once a day. The guard is a row in the database rather than a timer, so
+ * a redeploy cannot cause a second send.
+ */
+async function sendDailyDigest() {
+  try {
+    const hour = Number(new Date().toLocaleString('en-US',
+      { timeZone: process.env.JT_TIMEZONE || 'America/Chicago', hour: '2-digit', hour12: false }));
+    if (hour !== Number(process.env.JT_DIGEST_HOUR || 7)) return;
+
+    await pool.query(`CREATE TABLE IF NOT EXISTS jt_digest_log (
+      day DATE PRIMARY KEY, sent_at TIMESTAMPTZ DEFAULT NOW())`);
+    const claim = await pool.query(
+      `INSERT INTO jt_digest_log (day) VALUES (CURRENT_DATE) ON CONFLICT DO NOTHING RETURNING day`);
+    if (!claim.rowCount) return;   // already sent today
+
+    const { rows } = await pool.query(
+      `SELECT * FROM quotes
+        WHERE status <> 'expired' AND delivered_at IS NULL
+        ORDER BY needed_by NULLS LAST, created_at`);
+    if (!rows.length) return;
+
+    const today = new Date(new Date().toDateString());
+    const live = rows.map((q) => {
+      const cl = quoteChecklist(q);
+      const days = q.needed_by
+        ? Math.round((new Date(q.needed_by) - today) / 86400000) : null;
+      return { q, cl, days };
+    }).filter((x) => x.cl.next);           // nothing to do = not in the digest
+
+    if (!live.length) return;
+
+    const overdue = live.filter((x) => x.days !== null && x.days < 0);
+    const soon    = live.filter((x) => x.days !== null && x.days >= 0 && x.days <= 3);
+
+    const row = ({ q, cl, days }) => {
+      const when = days === null ? 'no deadline set'
+        : days < 0 ? `<b style="color:#b91c1c">${-days}d overdue</b>`
+        : days === 0 ? '<b style="color:#b45309">due today</b>'
+        : `due in ${days}d`;
+      return `<tr>
+        <td style="padding:8px 0;border-bottom:1px solid #eef1f6">
+          <a href="${quoteLink(q.code)}" style="color:#1848B8;font-weight:600;text-decoration:none">${escEmail(q.code)}</a>
+          <span style="color:#6b7280"> ${escEmail(q.name || '')}</span><br>
+          <span style="color:#111827;font-size:13px">${escEmail(cl.next.label)}</span>
+          <span style="color:#9ca3af;font-size:12px"> — ${escEmail(cl.next.hint)}</span>
+        </td>
+        <td style="padding:8px 0;border-bottom:1px solid #eef1f6;text-align:right;white-space:nowrap;font-size:12.5px;color:#6b7280">
+          ${when}<br><span style="font-size:11.5px">${cl.done}/${cl.of}</span>
+        </td></tr>`;
+    };
+
+    await alertShop(
+      `☕ ${live.length} job${live.length === 1 ? '' : 's'} need${live.length === 1 ? 's' : ''} you today` +
+        (overdue.length ? ` — ${overdue.length} overdue` : ''),
+      `<h2 style="color:#1848B8;margin:0 0 2px">Today's jobs</h2>
+       <p style="color:#6b7280;font-size:13px;margin:0 0 14px">
+         ${overdue.length ? `<b style="color:#b91c1c">${overdue.length} overdue</b> &middot; ` : ''}
+         ${soon.length ? `${soon.length} due within 3 days &middot; ` : ''}
+         ${live.length} open</p>
+       <table style="width:100%;border-collapse:collapse">${live.map(row).join('')}</table>
+       <p style="margin-top:16px"><a href="${PUBLIC_BASE_URL}/quotes"
+         style="background:#1848B8;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;display:inline-block">Open the board</a></p>
+       <p style="color:#9ca3af;font-size:11.5px;margin-top:14px">
+         Each line is the next step for that job. Steps the system can answer are
+         ticked automatically; the rest you tap on the quotes page.</p>`);
+
+    console.log(`daily digest sent: ${live.length} jobs, ${overdue.length} overdue`);
+  } catch (e) {
+    console.error('daily digest failed:', e.message);
+  }
+}
+
 /* Send review requests that have come due. Runs inside the existing hourly
    sweep — no new scheduler, and it survives deploys because the due date lives
    in the database rather than in a timer. */
@@ -5318,6 +5517,7 @@ if (process.env.JT_INTERNAL_KEY) {
       await sendQuoteFollowUps();
       await sendDepositReminders();
       await expireOldQuotes();
+      await sendDailyDigest();
     } catch (e) {
       console.error('abandoned-cart sweep failed:', e.message);
     }
