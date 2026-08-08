@@ -108,10 +108,19 @@ async function initDB() {
        already answer (contact, job, deadline, quote, deposit, balance) are
        computed, and these cover the few it cannot see. */
     'artwork_at TIMESTAMPTZ',         // usable artwork in hand
+    'blanks_ordered_at TIMESTAMPTZ',  // blanks ordered from the supplier
+    'blanks_in_at TIMESTAMPTZ',       // blanks received and counted
     'proof_sent_at TIMESTAMPTZ',      // proof sent to the customer
     'proof_ok_at TIMESTAMPTZ',        // customer approved the proof
     'production_at TIMESTAMPTZ',      // on the press
+    'qc_at TIMESTAMPTZ',              // counted and checked against the order
+    'shipped_at TIMESTAMPTZ',         // handed to the carrier / ready for pickup
     'delivered_at TIMESTAMPTZ',       // picked up or shipped
+    'ship_by DATE',                   // must leave here by this date
+    'blanks_supplier TEXT',           // who the blanks came from
+    'blanks_tracking TEXT',           // inbound tracking for the blanks
+    'tracking TEXT',                  // outbound tracking to the customer
+    'ship_method TEXT',               // pickup | ground | expedited
   ]) {
     await pool.query(`ALTER TABLE quotes ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
@@ -2286,6 +2295,75 @@ async function syncQuoteContact(q, event = null) {
 }
 
 /**
+ * Work backwards from the customer's deadline to the date each step must START.
+ *
+ * A deadline on its own tells you nothing useful — "needed by the 20th" does not
+ * tell you that blanks had to be ordered on the 8th. Missing a ship date is
+ * almost never a surprise on the day; it is a blanks order that slipped a week
+ * earlier and nobody noticed. This computes the latest safe date for each step
+ * so a slip is visible while there is still time to fix it.
+ *
+ * All durations are business days and env-tunable — every shop's are different:
+ *   JT_LT_BLANKS   blanks delivery from the supplier (default 5)
+ *   JT_LT_PRESS    time on the press (3)
+ *   JT_LT_QC       counting and checking (1)
+ *   JT_LT_PROOF    customer sitting on a proof (2)
+ *   JT_SHIP_MIN    transit to the customer (2)
+ */
+/** Short date for operational copy. Module-level so the checklist, the digest
+ *  and the quotes page all format a date the same way. */
+function dayShort(d) {
+  if (!d) return '';
+  return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function quoteSchedule(q) {
+  if (!q.needed_by) return null;
+
+  const lt = {
+    blanks: parseInt(process.env.JT_LT_BLANKS || '5', 10),
+    press:  parseInt(process.env.JT_LT_PRESS  || '3', 10),
+    qc:     parseInt(process.env.JT_LT_QC     || '1', 10),
+    proof:  parseInt(process.env.JT_LT_PROOF  || '2', 10),
+    ship:   parseInt(process.env.JT_SHIP_MIN  || '2', 10),
+  };
+
+  const needed = new Date(q.needed_by);
+  const isPickup = String(q.ship_method || '').toLowerCase() === 'pickup';
+  const back = (from, days) => addBusinessDays(from, -days);
+
+  // Each date is the LATEST it can happen and still hit the deadline.
+  const shipBy   = isPickup ? needed : back(needed, lt.ship);
+  const qcBy     = back(shipBy, lt.qc);
+  const pressBy  = back(qcBy, lt.press);
+  const blanksBy = back(pressBy, 0);          // blanks must be in to press
+  const orderBy  = back(blanksBy, lt.blanks); // so ordered this far ahead
+  const proofBy  = back(pressBy, lt.proof);   // approval before the press
+  const artBy    = back(proofBy, 1);
+
+  const today = new Date(new Date().toDateString());
+  const late = (d, done) => !done && d < today;
+
+  return {
+    ship_by: shipBy, qc_by: qcBy, press_by: pressBy,
+    blanks_in_by: blanksBy, blanks_order_by: orderBy,
+    proof_by: proofBy, artwork_by: artBy,
+    isPickup,
+    /* A step is "at risk" when its latest safe date has passed and it has not
+       happened. Reported per step so the digest can name the actual slip. */
+    risks: [
+      { key: 'artwork', label: 'artwork',        by: artBy,    late: late(artBy, q.artwork_at) },
+      { key: 'blanks_order', label: 'blanks order', by: orderBy, late: late(orderBy, q.blanks_ordered_at) },
+      { key: 'blanks_in', label: 'blanks arrival', by: blanksBy, late: late(blanksBy, q.blanks_in_at) },
+      { key: 'proof',   label: 'proof approval',  by: proofBy,  late: late(proofBy, q.proof_ok_at) },
+      { key: 'press',   label: 'press',           by: pressBy,  late: late(pressBy, q.production_at) },
+      { key: 'ship',    label: isPickup ? 'ready for pickup' : 'ship',
+        by: shipBy, late: late(shipBy, q.shipped_at) },
+    ].filter((r) => r.late),
+  };
+}
+
+/**
  * The order intake checklist, derived rather than documented.
  *
  * A written guide is only as good as the odds somebody opens it, which for a
@@ -2298,6 +2376,7 @@ async function syncQuoteContact(q, event = null) {
  * say what to do rather than what to read.
  */
 function quoteChecklist(q) {
+  const sched = quoteSchedule(q);
   const total = Number(q.total || 0);
   const paid = Number(q.paid_amount || 0);
   const due = round2(Math.max(0, total - paid));
@@ -2322,16 +2401,26 @@ function quoteChecklist(q) {
       hint: 'they said yes' },
     { key: 'deposit',  label: 'Deposit paid',       done: paid > 0 || (total > 0 && due <= 0),
       hint: deposit > 0 ? `${money(deposit)} to start` : 'money down before production' },
+    { key: 'blanks_order', label: 'Blanks ordered', done: !!q.blanks_ordered_at, manual: true,
+      hint: sched ? `order by ${dayShort(sched.blanks_order_by)} — the step that quietly kills deadlines`
+                  : 'garments ordered from the supplier' },
+    { key: 'blanks_in', label: 'Blanks received',   done: !!q.blanks_in_at, manual: true,
+      hint: 'counted against the order — shortages surface here, not at the press' },
     { key: 'proof',    label: 'Proof sent',         done: !!q.proof_sent_at, manual: true,
       hint: 'mock-up for approval before the press' },
     { key: 'proofok',  label: 'Proof approved',     done: !!q.proof_ok_at, manual: true,
       hint: 'in writing — this is what protects you on a reprint' },
     { key: 'production', label: 'In production',    done: !!q.production_at, manual: true,
-      hint: 'on the press' },
+      hint: sched ? `on the press by ${dayShort(sched.press_by)}` : 'on the press' },
+    { key: 'qc',       label: 'Counted & checked',  done: !!q.qc_at, manual: true,
+      hint: 'right count, right sizes, no misprints — before it leaves' },
     { key: 'balance',  label: 'Paid in full',       done: total > 0 && due <= 0,
-      hint: due > 0 ? `${money(due)} outstanding` : 'settled' },
+      hint: due > 0 ? `${money(due)} outstanding — collect before it goes` : 'settled' },
+    { key: 'shipped',  label: sched && sched.isPickup ? 'Ready for pickup' : 'Shipped',
+      done: !!q.shipped_at, manual: true,
+      hint: sched ? `must leave by ${dayShort(sched.ship_by)}` : 'handed to the carrier' },
     { key: 'delivered', label: 'Delivered',         done: !!q.delivered_at, manual: true,
-      hint: 'picked up or shipped' },
+      hint: 'in the customer\'s hands' },
   ];
 
   const next = steps.find((s) => !s.done) || null;
@@ -2415,11 +2504,15 @@ function cardFee(amount) { return round2(Number(amount) * CARD_FEE); }
 
 /** Business-day arithmetic in the shop's timezone, mirroring the designer's
  *  jt_business_days() so the two never quote different lead times. */
+/* Negative days walk BACKWARDS, which is what backwards-scheduling a deadline
+   needs. Without this the loop simply never ran and every computed "start by"
+   date silently equalled the deadline itself. */
 function addBusinessDays(from, days) {
   const d = new Date(from);
-  let left = days;
+  const step = days < 0 ? -1 : 1;
+  let left = Math.abs(days);
   while (left > 0) {
-    d.setDate(d.getDate() + 1);
+    d.setDate(d.getDate() + step);
     const dow = d.getDay();
     if (dow !== 0 && dow !== 6) left--;
   }
@@ -4245,6 +4338,36 @@ app.post('/quote/:code/correct-payment', requireAdmin, async (req, res) => {
   res.redirect('/quotes');
 });
 
+/* Sales tax detail as CSV, for the ST-1 filing or the bookkeeper. One row per
+   payment, because that is the level a state will ask you to substantiate. */
+app.get('/tax.csv', requireAdmin, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT p.created_at, p.quote_code, q.name, q.subtotal, q.tax, q.total,
+              p.amount, p.method, p.kind,
+              CASE WHEN q.total > 0 THEN round(q.tax * (p.amount / q.total), 2) ELSE 0 END AS tax_portion
+         FROM quote_payments p JOIN quotes q ON q.code = p.quote_code
+        ORDER BY p.created_at`);
+    const esc = (v) => {
+      const s = String(v == null ? '' : v);
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    const head = ['date','quote','customer','job_subtotal','job_tax','job_total',
+                  'payment','method','kind','tax_portion_of_payment'];
+    const body = rows.map(r => [
+      new Date(r.created_at).toISOString().slice(0, 10), r.quote_code, r.name,
+      r.subtotal, r.tax, r.total, r.amount, r.method, r.kind, r.tax_portion,
+    ].map(esc).join(','));
+    res.set('Content-Type', 'text/csv; charset=utf-8');
+    res.set('Content-Disposition', `attachment; filename="jtees-sales-tax-${new Date().toISOString().slice(0,10)}.csv"`);
+    res.set('Cache-Control', 'no-store');
+    res.send([head.join(','), ...body].join('\n'));
+  } catch (err) {
+    console.error('tax csv failed:', err.message);
+    res.status(500).send('error');
+  }
+});
+
 /* One tap to add them to the iPhone address book. */
 /**
  * Build a receipt from the payment ledger.
@@ -4513,6 +4636,26 @@ app.get('/quotes', requireAdmin, async (req, res) => {
          FROM quote_payments
         GROUP BY 1,2 ORDER BY m DESC LIMIT 12`);
 
+    /* Sales tax, by month, on jobs that have actually been PAID.
+       Tax is remitted on money received, not on money invoiced, so an unpaid
+       quote must not inflate what you think you owe. The tax portion is
+       apportioned by how much of the job has been collected, which is what
+       makes part-paid jobs come out right. */
+    const { rows: taxRows } = await pool.query(
+      `SELECT to_char(date_trunc('month', q.created_at), 'Mon YYYY') AS label,
+              date_trunc('month', q.created_at) AS m,
+              COUNT(*) FILTER (WHERE q.tax > 0) AS taxable_jobs,
+              COALESCE(SUM(q.subtotal),0) AS subtotal,
+              COALESCE(SUM(q.tax),0) AS tax_charged,
+              COALESCE(SUM(
+                CASE WHEN q.total > 0
+                     THEN q.tax * LEAST(COALESCE(q.paid_amount,0) / q.total, 1)
+                     ELSE 0 END),0) AS tax_collected
+         FROM quotes q
+        WHERE q.status <> 'expired'
+        GROUP BY 1,2 ORDER BY m DESC LIMIT 12`);
+    const taxTotal = taxRows.reduce((s, r) => s + Number(r.tax_collected), 0);
+
     const { rows: openAgg } = await pool.query(
       `SELECT COUNT(*) AS n, COALESCE(SUM(total - COALESCE(paid_amount,0)),0) AS due
          FROM quotes
@@ -4733,6 +4876,36 @@ app.get('/quotes', requireAdmin, async (req, res) => {
             Collected comes from the payment ledger — what actually arrived, net of corrections
             and refunds. Quoted is what was asked for in that month, so the two will not match.
             Card fees are shown separately and are not part of either figure.</div>
+        </details>
+
+        <details style="margin-top:8px">
+          <summary style="cursor:pointer;color:#1848B8;font-size:13px">
+            Sales tax collected &middot; <b>${money(taxTotal)}</b> to remit</summary>
+          <table style="width:100%;border-collapse:collapse;margin-top:8px;font-size:13px">
+            <tr style="color:#6b7280;font-size:11px;letter-spacing:.05em;text-transform:uppercase">
+              <td style="padding:4px 0;border-bottom:1px solid #e5e7eb">Month</td>
+              <td style="padding:4px 0;border-bottom:1px solid #e5e7eb;text-align:right">Taxable sales</td>
+              <td style="padding:4px 0;border-bottom:1px solid #e5e7eb;text-align:right">Tax charged</td>
+              <td style="padding:4px 0;border-bottom:1px solid #e5e7eb;text-align:right">Tax collected</td>
+              <td style="padding:4px 0;border-bottom:1px solid #e5e7eb;text-align:right">Jobs</td>
+            </tr>
+            ${taxRows.map(r => `<tr>
+              <td style="padding:6px 0">${r.label}</td>
+              <td style="padding:6px 0;text-align:right;color:#6b7280;font-variant-numeric:tabular-nums">${money(r.subtotal)}</td>
+              <td style="padding:6px 0;text-align:right;color:#6b7280;font-variant-numeric:tabular-nums">${money(r.tax_charged)}</td>
+              <td style="padding:6px 0;text-align:right;font-weight:700;font-variant-numeric:tabular-nums">${money(r.tax_collected)}</td>
+              <td style="padding:6px 0;text-align:right;color:#6b7280">${r.taxable_jobs}</td>
+            </tr>`).join('') || '<tr><td colspan="5" style="padding:8px 0;color:#9ca3af">No taxable sales yet.</td></tr>'}
+            <tr><td style="padding:8px 0;border-top:2px solid #111827;font-weight:700">Total to remit</td>
+                <td colspan="3" style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-weight:700;font-variant-numeric:tabular-nums">${money(taxTotal)}</td>
+                <td style="border-top:2px solid #111827"></td></tr>
+          </table>
+          <div class="muted" style="font-size:11px;margin-top:8px">
+            Charged at ${(TAX_RATE * 100).toFixed(2)}%. <b>Tax collected</b> counts only the portion
+            of each job actually paid — tax is remitted on money received, not money invoiced, so a
+            part-paid job contributes its part. Covers the quoting system only; anything sold
+            through Clover or in person is not in here.
+            <a href="/tax.csv" style="color:#1848B8">Download CSV</a> for your filing.</div>
         </details>
       </div>
 
@@ -5421,9 +5594,10 @@ async function sendDailyDigest() {
     const today = new Date(new Date().toDateString());
     const live = rows.map((q) => {
       const cl = quoteChecklist(q);
+      const sched = quoteSchedule(q);
       const days = q.needed_by
         ? Math.round((new Date(q.needed_by) - today) / 86400000) : null;
-      return { q, cl, days };
+      return { q, cl, sched, days };
     }).filter((x) => x.cl.next);           // nothing to do = not in the digest
 
     if (!live.length) return;
@@ -5431,28 +5605,44 @@ async function sendDailyDigest() {
     const overdue = live.filter((x) => x.days !== null && x.days < 0);
     const soon    = live.filter((x) => x.days !== null && x.days >= 0 && x.days <= 3);
 
-    const row = ({ q, cl, days }) => {
+    const row = ({ q, cl, sched, days }) => {
       const when = days === null ? 'no deadline set'
         : days < 0 ? `<b style="color:#b91c1c">${-days}d overdue</b>`
         : days === 0 ? '<b style="color:#b45309">due today</b>'
         : `due in ${days}d`;
+      /* The slipped step, named. "Late" on the day is useless; "blanks should
+         have been ordered 3 days ago" is still actionable. */
+      const risk = sched && sched.risks.length
+        ? `<div style="color:#b91c1c;font-size:12px;margin-top:3px">⚠ ${
+            sched.risks.map(r => `${escEmail(r.label)} was due ${dayShort(r.by)}`).join(' · ')}</div>`
+        : '';
+      const shipLine = sched && !sched.risks.length && !q.shipped_at
+        ? `<div style="color:#6b7280;font-size:11.5px;margin-top:3px">${
+            sched.isPickup ? 'ready for pickup by' : 'must ship by'} ${dayShort(sched.ship_by)}${
+            q.blanks_ordered_at ? '' : ` · order blanks by ${dayShort(sched.blanks_order_by)}`}</div>`
+        : '';
       return `<tr>
         <td style="padding:8px 0;border-bottom:1px solid #eef1f6">
           <a href="${quoteLink(q.code)}" style="color:#1848B8;font-weight:600;text-decoration:none">${escEmail(q.code)}</a>
           <span style="color:#6b7280"> ${escEmail(q.name || '')}</span><br>
           <span style="color:#111827;font-size:13px">${escEmail(cl.next.label)}</span>
           <span style="color:#9ca3af;font-size:12px"> — ${escEmail(cl.next.hint)}</span>
+          ${risk}${shipLine}
         </td>
         <td style="padding:8px 0;border-bottom:1px solid #eef1f6;text-align:right;white-space:nowrap;font-size:12.5px;color:#6b7280">
           ${when}<br><span style="font-size:11.5px">${cl.done}/${cl.of}</span>
         </td></tr>`;
     };
 
+    const atRisk = live.filter((x) => x.sched && x.sched.risks.length);
+
     await alertShop(
-      `☕ ${live.length} job${live.length === 1 ? '' : 's'} need${live.length === 1 ? 's' : ''} you today` +
+      (atRisk.length ? `⚠️ ${atRisk.length} job${atRisk.length === 1 ? '' : 's'} at risk · ` : '☕ ') +
+        `${live.length} job${live.length === 1 ? '' : 's'} need${live.length === 1 ? 's' : ''} you today` +
         (overdue.length ? ` — ${overdue.length} overdue` : ''),
       `<h2 style="color:#1848B8;margin:0 0 2px">Today's jobs</h2>
        <p style="color:#6b7280;font-size:13px;margin:0 0 14px">
+         ${atRisk.length ? `<b style="color:#b91c1c">${atRisk.length} behind schedule</b> &middot; ` : ''}
          ${overdue.length ? `<b style="color:#b91c1c">${overdue.length} overdue</b> &middot; ` : ''}
          ${soon.length ? `${soon.length} due within 3 days &middot; ` : ''}
          ${live.length} open</p>
