@@ -13,7 +13,7 @@ const cloudinary = require('cloudinary').v2;
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_NAME,
   api_key:    process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET || process.env.CLUDINARY_API_SECRET,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
 const app = express();
@@ -2013,7 +2013,7 @@ app.get('/api/config', signatureRateLimit, (req, res) => {
 
 // Cloudinary signed upload
 app.post('/api/cloudinary-signature', signatureRateLimit, (req, res) => {
-  const apiSecret = process.env.CLOUDINARY_API_SECRET || process.env.CLUDINARY_API_SECRET;
+  const apiSecret = process.env.CLOUDINARY_API_SECRET;
   if (!apiSecret) return res.status(503).json({ error: 'Cloudinary not configured' });
   // Allow the caller to specify the upload folder, but validate against an allowlist
   // so the server retains control over where files can be stored.
@@ -5487,7 +5487,7 @@ const JOB_STAGES = [
   { key: 'design', label: 'Artwork & proof', cols: ['artwork_at', 'proof_ok_at'], hint: 'file in hand and approved in writing' },
   { key: 'blanks', label: 'Blanks',          cols: ['blanks_in_at'],              hint: 'garments arrived and counted' },
   { key: 'press',  label: 'Press',           cols: ['production_at'],             hint: 'printing or stitching' },
-  { key: 'out',    label: 'Out',             cols: ['qc_at', 'shipped_at'],       hint: 'checked and gone' },
+  { key: 'out',    label: 'Check & ship',    cols: ['qc_at', 'shipped_at'],       hint: 'checked and gone' },
   { key: 'done',   label: 'Delivered',       cols: ['delivered_at'],              hint: 'in their hands' },
 ];
 
@@ -6072,6 +6072,16 @@ async function renderBoard(VIEW, req, res) {
                 days < 0 ? `<b style="color:#b91c1c">${-days}d late</b>` :
                 days === 0 ? '<b style="color:#b45309">today</b>' :
                 days <= 3 ? `<b style="color:#b45309">${days}d</b>` : `${days}d`;
+              /* The next action finishes the column the card is sitting in, it
+                 does not jump to the one after it. Targeting c.i+1 meant a card
+                 in Check & ship offered only "✓ Delivered": checked-and-shipped
+                 could never be recorded, and one tap stamped delivered_at and
+                 dropped the job off the board. A column whose milestones are
+                 already set is the one case where the action really is to
+                 advance — To start owns none (vacuously done), and Check & ship
+                 holds a finished job until it actually arrives. */
+              const act = JOB_STAGES[c.i].cols.every(col => q[col])
+                ? JOB_STAGES[c.i + 1] : JOB_STAGES[c.i];
               return `<article class="kcard${risk ? ' kcard-risk' : ''}">
                 <div class="kcard-top">
                   <a href="/customer?q=${encodeURIComponent(q.email || q.phone || '')}" class="kcard-name">${escEmail(q.name || q.code)}</a>
@@ -6080,12 +6090,12 @@ async function renderBoard(VIEW, req, res) {
                 <div class="kcard-sub">${escEmail(q.code)} · ${money(q.total)}${
                   Number(q.paid_amount||0) < Number(q.total||0) ? ` · <span style="color:#b45309">${money(round2(q.total - (q.paid_amount||0)))} due</span>` : ''}</div>
                 ${risk ? `<div class="kcard-risk-note">⚠ ${escEmail(q._sched.risks[0].label)} was due ${dayShort(q._sched.risks[0].by)}</div>` : ''}
-                ${c.i < JOB_STAGES.length - 1 ? `
+                ${act ? `
                 <form method="POST" action="/quote/${q.code}/stage" data-stageform class="knext">
-                  <input type="hidden" name="stage" value="${JOB_STAGES[c.i+1].key}">
+                  <input type="hidden" name="stage" value="${act.key}">
                   <input type="hidden" name="json" value="" data-jsonflag>
-                  <button type="submit" class="kbtn kbtn-next" title="${escEmail(JOB_STAGES[c.i+1].hint)}">
-                    ✓ ${escEmail(JOB_STAGES[c.i+1].label)}</button>
+                  <button type="submit" class="kbtn kbtn-next" title="${escEmail(act.hint)}">
+                    ✓ ${escEmail(act.label)}</button>
                 </form>` : ''}
                 <div class="kmove">
                   ${c.i > 0 ? `<form method="POST" action="/quote/${q.code}/stage" data-stageform>
