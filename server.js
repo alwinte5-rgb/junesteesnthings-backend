@@ -1,23 +1,5 @@
 require('dotenv').config();
 
-// ─── Environment ────────────────────────────────────────────────────────────
-// Third-party integrations (Stripe, Cloudinary, Turnstile, Brevo/Resend, HubSpot,
-// Clover) already fail open per-request when unconfigured — see the /q/:code/pay
-// and /api/cloudinary-signature routes — because a validator that blocks a sale
-// costs more than the feature it guards. DATABASE_URL and ADMIN_PASSWORD have no
-// such fallback: without a database nothing can be read or written, and without
-// the admin password the guarded admin surface (orders, quotes, books) can never
-// be signed into. A deploy missing either should refuse to boot, not serve
-// requests that fail in whatever order customers happen to hit them.
-function validateEnv() {
-  const required = ['DATABASE_URL', 'ADMIN_PASSWORD'];
-  const missing = required.filter((key) => !process.env[key]);
-  if (missing.length) {
-    throw new Error(`Missing required environment variable(s): ${missing.join(', ')}`);
-  }
-}
-validateEnv();
-
 const express    = require('express');
 const cors       = require('cors');
 const helmet     = require('helmet');
@@ -7772,18 +7754,26 @@ app.use((_req, res) => {
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
-const REQUIRED_ENV = ['DATABASE_URL', 'BREVO_API_KEY', 'NOTIFICATION_EMAIL'];
-const missingEnv = REQUIRED_ENV.filter(k => !process.env[k]?.trim());
-if (missingEnv.length) {
-  console.error('Missing required environment variables:', missingEnv.join(', '));
-  process.exit(1);
+// Hard-required vars crash the boot; ADMIN_PASSWORD and RESEND_API_KEY stay
+// warn-only because a missing one degrades a single feature (admin sign-in,
+// the Resend fallback) rather than the storefront itself — crashing the whole
+// process over an admin-only misconfiguration would turn that into a customer
+// facing outage, which is the opposite of what this check is for.
+function validateEnv() {
+  const REQUIRED_ENV = ['DATABASE_URL', 'BREVO_API_KEY', 'NOTIFICATION_EMAIL'];
+  const missingEnv = REQUIRED_ENV.filter(k => !process.env[k]?.trim());
+  if (missingEnv.length) {
+    console.error('Missing required environment variables:', missingEnv.join(', '));
+    process.exit(1);
+  }
+  if (!process.env.RESEND_API_KEY?.trim()) {
+    console.warn('WARNING: RESEND_API_KEY is not set — no fallback if Brevo sending fails.');
+  }
+  if (!process.env.ADMIN_PASSWORD?.trim()) {
+    console.warn('WARNING: ADMIN_PASSWORD is not set — admin routes will be inaccessible.');
+  }
 }
-if (!process.env.RESEND_API_KEY?.trim()) {
-  console.warn('WARNING: RESEND_API_KEY is not set — no fallback if Brevo sending fails.');
-}
-if (!process.env.ADMIN_PASSWORD?.trim()) {
-  console.warn('WARNING: ADMIN_PASSWORD is not set — admin routes will be inaccessible.');
-}
+validateEnv();
 
 process.on('unhandledRejection', (err) => {
   console.error('UNHANDLED REJECTION:', err);
