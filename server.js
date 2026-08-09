@@ -1,5 +1,23 @@
 require('dotenv').config();
 
+// ─── Environment ────────────────────────────────────────────────────────────
+// Third-party integrations (Stripe, Cloudinary, Turnstile, Brevo/Resend, HubSpot,
+// Clover) already fail open per-request when unconfigured — see the /q/:code/pay
+// and /api/cloudinary-signature routes — because a validator that blocks a sale
+// costs more than the feature it guards. DATABASE_URL and ADMIN_PASSWORD have no
+// such fallback: without a database nothing can be read or written, and without
+// the admin password the guarded admin surface (orders, quotes, books) can never
+// be signed into. A deploy missing either should refuse to boot, not serve
+// requests that fail in whatever order customers happen to hit them.
+function validateEnv() {
+  const required = ['DATABASE_URL', 'ADMIN_PASSWORD'];
+  const missing = required.filter((key) => !process.env[key]);
+  if (missing.length) {
+    throw new Error(`Missing required environment variable(s): ${missing.join(', ')}`);
+  }
+}
+validateEnv();
+
 const express    = require('express');
 const cors       = require('cors');
 const helmet     = require('helmet');
