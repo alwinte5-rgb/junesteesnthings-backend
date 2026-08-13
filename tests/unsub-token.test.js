@@ -40,38 +40,64 @@ function extract(name) {
 function load(env) {
   const sandbox = { crypto, process: { env }, Buffer, module: {}, exports: {} };
   vm.createContext(sandbox);
-  const code = ['hexEqual', 'unsubSecret', 'unsubToken', 'unsubTokenValid']
-    .map(extract).join('\n\n');
+  const code = ['hexEqual', 'unsubSecret', 'unsubSecrets', 'signUnsub',
+                'unsubToken', 'unsubTokenValid'].map(extract).join('\n\n');
   vm.runInContext(
-    `${code}\nmodule.exports = { unsubSecret, unsubToken, unsubTokenValid };`,
+    `${code}\nmodule.exports = { unsubSecret, unsubSecrets, unsubToken, unsubTokenValid };`,
     sandbox);
   return sandbox.module.exports;
 }
 
 const EMAIL = 'customer@example.com';
 const SHARED = 'the-current-shared-internal-key';
+const DEDICATED = 'a-fresh-dedicated-unsubscribe-secret';
 
-test('a link signed with JT_INTERNAL_KEY still verifies once UNSUB_TOKEN_SECRET ' +
-     'is seeded with the same value', () => {
-  // This is the whole migration guarantee. If it ever fails, setting the new
-  // variable silently breaks every unsubscribe link already delivered, which
-  // is the RFC 8058 breakage that gets bulk mail spam-foldered.
+test('a link delivered before the migration still verifies afterwards', () => {
+  // The whole migration guarantee, in the shape production actually has:
+  // UNSUB_TOKEN_SECRET is a NEW random value, not a copy of JT_INTERNAL_KEY.
+  // If this fails, every unsubscribe link already in an inbox dies on deploy,
+  // which is the RFC 8058 breakage that gets bulk mail spam-foldered.
   const before = load({ JT_INTERNAL_KEY: SHARED });
-  const after = load({ UNSUB_TOKEN_SECRET: SHARED, JT_INTERNAL_KEY: SHARED });
+  const after = load({ UNSUB_TOKEN_SECRET: DEDICATED, JT_INTERNAL_KEY: SHARED });
 
   const delivered = before.unsubToken(EMAIL);
   assert.ok(delivered, 'expected a token to be issued');
-  assert.strictEqual(after.unsubToken(EMAIL), delivered);
-  assert.ok(after.unsubTokenValid(EMAIL, delivered));
+  assert.ok(after.unsubTokenValid(EMAIL, delivered),
+    'a link sent before the migration must still unsubscribe');
 });
 
-test('rotating JT_INTERNAL_KEY does not affect links once UNSUB_TOKEN_SECRET is set', () => {
-  const before = load({ UNSUB_TOKEN_SECRET: SHARED, JT_INTERNAL_KEY: SHARED });
-  const rotated = load({ UNSUB_TOKEN_SECRET: SHARED, JT_INTERNAL_KEY: 'rotated-shared-key' });
+test('new mail is signed with the dedicated secret, not the shared key', () => {
+  const { unsubToken, unsubTokenValid } = load({
+    UNSUB_TOKEN_SECRET: DEDICATED, JT_INTERNAL_KEY: SHARED });
+  const issued = unsubToken(EMAIL);
+  const sharedSigned = crypto.createHmac('sha256', SHARED)
+    .update(EMAIL).digest('hex').slice(0, 32);
+  assert.notStrictEqual(issued, sharedSigned);
+  assert.ok(unsubTokenValid(EMAIL, issued));
+});
 
-  const delivered = before.unsubToken(EMAIL);
-  assert.ok(rotated.unsubTokenValid(EMAIL, delivered),
-    'a delivered link must survive rotation of the shared inter-service key');
+test('seeding the new secret with the old value also works', () => {
+  // The alternative migration, kept working so either choice is safe.
+  const before = load({ JT_INTERNAL_KEY: SHARED });
+  const after = load({ UNSUB_TOKEN_SECRET: SHARED, JT_INTERNAL_KEY: SHARED });
+  assert.ok(after.unsubTokenValid(EMAIL, before.unsubToken(EMAIL)));
+  // Spread into this realm's Array — the sandbox returns a foreign one.
+  assert.deepStrictEqual([...after.unsubSecrets()], [SHARED],
+    'an identical value must not be checked twice');
+});
+
+test('closing the grace window stops honouring old links', () => {
+  // What removing the JT_INTERNAL_KEY fallback is supposed to do.
+  const legacy = load({ JT_INTERNAL_KEY: SHARED }).unsubToken(EMAIL);
+  const closed = load({ UNSUB_TOKEN_SECRET: DEDICATED });
+  assert.strictEqual(closed.unsubTokenValid(EMAIL, legacy), false);
+});
+
+test('rotating JT_INTERNAL_KEY does not affect links signed with the dedicated secret', () => {
+  const before = load({ UNSUB_TOKEN_SECRET: DEDICATED, JT_INTERNAL_KEY: SHARED });
+  const rotated = load({ UNSUB_TOKEN_SECRET: DEDICATED, JT_INTERNAL_KEY: 'rotated-key' });
+  assert.ok(rotated.unsubTokenValid(EMAIL, before.unsubToken(EMAIL)),
+    'current-generation links must survive rotation of the shared key');
 });
 
 test('UNSUB_TOKEN_SECRET takes precedence over JT_INTERNAL_KEY', () => {
