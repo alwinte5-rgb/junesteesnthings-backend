@@ -1833,6 +1833,36 @@ function turnstileWidget() {
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>`;
 }
 
+/**
+ * The status line shared by every photo-upload widget, as client-side source.
+ *
+ * Defined once and interpolated into both the quote builder and the review
+ * form so the two cannot drift, and kept pure — counts in, string out, no DOM —
+ * because that is what makes it testable without a browser. See
+ * `tests/upload-status.test.js`.
+ *
+ * The bug it exists to prevent: the review form set an error message in its
+ * `.catch()` and then immediately called its redraw, which overwrote the
+ * message with the attached-photo count. With nothing attached that count is
+ * the empty string, so a failed upload left the status line BLANK. The photo
+ * vanished, the form still submitted, and the customer was told nothing. A
+ * failure has to be part of what the redraw renders, not something written
+ * beside it and lost on the next paint.
+ */
+function uploadStatusScript() {
+  return `
+      /* pending: in flight. done: attached. failed: gave up. reason: the most
+         recent human-readable cause, or '' if there is nothing to add. */
+      function uploadStatus(pending, done, failed, reason){
+        var parts = [];
+        if (pending) parts.push('Uploading ' + pending + ' photo' + (pending > 1 ? 's' : '') + '\\u2026');
+        if (done)    parts.push(done + ' photo' + (done > 1 ? 's' : '') + ' attached');
+        if (failed)  parts.push(failed + ' photo' + (failed > 1 ? 's' : '') +
+                                ' would not upload' + (reason ? ' \\u2014 ' + reason : ''));
+        return parts.join(' \\u00b7 ');
+      }`;
+}
+
 function rejectBots(req, res, next) {
   // Block requests that bypass Cloudflare entirely — set REQUIRE_CLOUDFLARE=true in Railway
   if (!req.headers['cf-ray']) {
@@ -3320,7 +3350,8 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
         <label>Notes for the customer</label><textarea name="notes" rows="2" placeholder="Optional">${val(E.notes)}</textarea>
       </div>
 
-      <button type="submit">${existing ? 'Save changes' : 'Create quote &amp; get the message'}</button>
+      <p class="muted" id="qfstat" style="margin-top:10px;font-size:12.5px"></p>
+      <button type="submit" id="qfgo">${existing ? 'Save changes' : 'Create quote &amp; get the message'}</button>
     </form>
     <p style="margin-top:14px"><a class="muted" href="/quotes">View all quotes →</a></p>
     <script>
@@ -3477,11 +3508,49 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
       var CLOUD = ${JSON.stringify(process.env.CLOUDINARY_NAME || '')};
       var CKEY  = ${JSON.stringify(process.env.CLOUDINARY_API_KEY || '')};
 
+${uploadStatusScript()}
+
       /* Upload through the existing signed-upload endpoint so the API secret
          never reaches the browser. Files go to the allow-listed
-         "quote_requests" folder. */
+         "quote_requests" folder.
+
+         Every failure path here has to end up in upFailed and go through
+         saySoon(). This form had no in-flight tracking at all: the save button
+         stayed live while uploads were still running, so saving quickly meant
+         the hidden field had not been written yet and the photos were dropped
+         with nothing said. A ✕ in a 58px thumbnail was the only sign, and it
+         did not stop the save. */
+      var upPending = 0, upFailed = 0, upReason = '';
+      var qfstat = document.getElementById('qfstat');
+      var qfgo   = document.getElementById('qfgo');
+
+      function saySoon(){
+        var attached = 0;
+        document.querySelectorAll('.im').forEach(function(h){
+          try { attached += h.value ? JSON.parse(h.value).length : 0; } catch (e) {}
+        });
+        qfstat.textContent = uploadStatus(upPending, attached, upFailed, upReason);
+        qfstat.style.color = upFailed ? '#b45309' : '#6b7280';
+        qfgo.disabled = upPending > 0;
+        qfgo.style.opacity = upPending > 0 ? '.6' : '';
+        /* The button says what it is about to do. Saving with photos missing
+           is allowed — a quote is worth more than its reference shots — but it
+           must not look like the photos went with it. */
+        qfgo.textContent = (!upPending && upFailed)
+          ? ${JSON.stringify(existing ? 'Save changes' : 'Create quote')} + ' without the missing photo' + (upFailed > 1 ? 's' : '')
+          : ${JSON.stringify(existing ? 'Save changes' : 'Create quote & get the message')};
+      }
+
       function uploadFiles(L, files){
-        if (!CLOUD || !CKEY || !files.length) return;
+        if (!files.length) return;
+        if (!CLOUD || !CKEY) {
+          /* Silently returning is how this hid: the admin picked files and
+             absolutely nothing happened, on a form that otherwise works. */
+          upFailed += files.length;
+          upReason = 'photo uploads are not configured on this server';
+          saySoon();
+          return;
+        }
         var hidden = L.querySelector('.im');
         var thumbs = L.querySelector('.thumbs');
         Array.prototype.forEach.call(files, function(file){
@@ -3489,11 +3558,20 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
           ph.style.cssText = 'width:58px;height:58px;border-radius:8px;background:#eef1f8;display:flex;align-items:center;justify-content:center;font-size:10px;color:#6b7280';
           ph.textContent = '…';
           thumbs.appendChild(ph);
+          upPending++; saySoon();
           var ts = Math.round(Date.now()/1000);
           fetch('/api/cloudinary-signature', {
             method:'POST', headers:{'Content-Type':'application/json'},
             body: JSON.stringify({ folder:'quote_requests', timestamp: ts })
-          }).then(function(r){return r.json();}).then(function(sig){
+          }).then(function(r){
+            /* A 503 from this endpoint is still JSON — {error:'Cloudinary not
+               configured'} — so parsing alone never throws, and the missing
+               signature was only noticed two steps later when Cloudinary
+               rejected the upload. Check the status here. */
+            if (!r.ok) throw new Error('signature unavailable');
+            return r.json();
+          }).then(function(sig){
+            if (!sig.signature) throw new Error('signature unavailable');
             var fd = new FormData();
             fd.append('file', file);
             fd.append('api_key', CKEY);
@@ -3510,8 +3588,11 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
             ph.textContent = '';
           }).catch(function(e){
             ph.textContent = '✕'; ph.style.color = '#b71c1c';
+            upFailed++;
+            upReason = /signature/.test(e && e.message || '')
+              ? 'the server would not sign the upload' : 'the upload was rejected';
             console.error('upload failed', e);
-          });
+          }).then(function(){ upPending--; saySoon(); });
         });
       }
 
@@ -6582,12 +6663,14 @@ app.get('/review/:token', async (req, res) => {
           <label>Name to show <span style="text-transform:none;font-weight:400">(first name and initial is fine)</span></label>
           <input name="name" value="${escEmail(r.name || '')}" maxlength="60">
 
-          <label style="margin-top:14px">Add a photo <span style="text-transform:none;font-weight:400">(optional)</span></label>
-          <p class="muted" style="margin:-2px 0 6px;font-size:13px">A picture of your order says more than we ever could.</p>
-          <input type="file" id="rvfi" accept="image/*" multiple style="padding:8px;font-size:13px">
+          <div id="rvphoto">
+            <label style="margin-top:14px">Add a photo <span style="text-transform:none;font-weight:400">(optional)</span></label>
+            <p class="muted" style="margin:-2px 0 6px;font-size:13px">A picture of your order says more than we ever could.</p>
+            <input type="file" id="rvfi" accept="image/*" multiple style="padding:8px;font-size:13px">
+            <div id="rvthumbs" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px"></div>
+            <p class="muted" id="rvstat" style="margin-top:6px;font-size:12.5px"></p>
+          </div>
           <input type="hidden" name="images" id="rvim" value="">
-          <div id="rvthumbs" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px"></div>
-          <p class="muted" id="rvstat" style="margin-top:6px;font-size:12.5px"></p>
 
           ${turnstileWidget()}
           <button type="submit" id="rvgo" style="width:100%;margin-top:14px">Send my review</button>
@@ -6605,36 +6688,61 @@ app.get('/review/:token', async (req, res) => {
         /* Photo upload. Signed server-side so the API secret never reaches the
            browser, and the submit button is held while uploads are in flight so
            a review cannot be sent with half its photos missing. */
+${uploadStatusScript()}
+
         var CLOUD = ${JSON.stringify(process.env.CLOUDINARY_NAME || '')};
         var CKEY  = ${JSON.stringify(process.env.CLOUDINARY_API_KEY || '')};
-        var shots = [], pending = 0;
+        var shots = [], pending = 0, failed = 0, reason = '';
         var fi = document.getElementById('rvfi');
         var go = document.getElementById('rvgo');
         var stat = document.getElementById('rvstat');
 
-        if (!CLOUD || !CKEY) { fi.parentNode.style.display = 'none'; }
+        /* Hide the photo field, NOT fi.parentNode — the file input sits
+           directly inside <form>, so hiding its parent hid the rating, the
+           text boxes and the send button along with it. An unset
+           CLOUDINARY_NAME would have taken the entire review page down and
+           left customers looking at a heading with no form under it. */
+        if (!CLOUD || !CKEY) { document.getElementById('rvphoto').style.display = 'none'; }
 
         function say(){
-          stat.textContent = pending ? 'Uploading ' + pending + ' photo' + (pending>1?'s':'') + '…'
-                          : (shots.length ? shots.length + ' photo' + (shots.length>1?'s':'') + ' attached' : '');
+          stat.textContent = uploadStatus(pending, shots.length, failed, reason);
+          stat.style.color = failed ? '#b45309' : '';
           go.disabled = pending > 0;
           go.style.opacity = pending > 0 ? '.6' : '';
+          /* Say what the button will actually do. A review is worth more than
+             its photo, so a failure never blocks sending — but it must not be
+             sent believing the photo went too. */
+          go.textContent = (!pending && failed)
+            ? 'Send my review without the photo' + (failed > 1 ? 's' : '')
+            : 'Send my review';
           document.getElementById('rvim').value = JSON.stringify(shots);
         }
 
         fi.onchange = function(){
           Array.prototype.forEach.call(fi.files, function(file){
-            if (!/^image\\//.test(file.type)) return;
+            /* Both of these used to drop the file on the floor — the type
+               check said nothing at all, and the size message was written
+               straight to the status line, where the next say() erased it. */
+            if (!/^image\\//.test(file.type)) {
+              failed++; reason = 'only image files can be attached'; say(); return;
+            }
             if (file.size > 10 * 1024 * 1024) {            // 10MB is plenty for a phone photo
-              stat.textContent = file.name + ' is too large (10MB max)';
-              return;
+              failed++; reason = 'photos must be under 10MB'; say(); return;
             }
             pending++; say();
             var ts = Math.round(Date.now()/1000);
             fetch('/api/cloudinary-signature', {
               method: 'POST', headers: {'Content-Type':'application/json'},
               body: JSON.stringify({ folder: 'review_photos', timestamp: ts })
-            }).then(function(r){ return r.json(); }).then(function(sig){
+            }).then(function(r){
+              /* A 503 here is JSON too — {error:'Cloudinary not configured'} —
+                 so parsing alone never throws and the missing signature was
+                 only noticed when Cloudinary rejected the upload two steps
+                 later. Check the status. */
+              if (!r.ok) throw new Error('signature unavailable');
+              return r.json();
+            }).then(function(sig){
+              if (!sig.signature) throw new Error('signature unavailable');
               var fd = new FormData();
               fd.append('file', file);
               fd.append('api_key', CKEY);
@@ -6644,15 +6752,20 @@ app.get('/review/:token', async (req, res) => {
               return fetch('https://api.cloudinary.com/v1_1/'+CLOUD+'/image/upload',
                 { method:'POST', body: fd });
             }).then(function(r){ return r.json(); }).then(function(d){
-              if (d.secure_url) {
-                shots.push(d.secure_url);
-                var im = document.createElement('img');
-                im.src = d.secure_url.replace('/upload/','/upload/c_fill,w_150,h_150,q_auto,f_auto/');
-                im.style.cssText = 'width:64px;height:64px;object-fit:cover;border-radius:8px';
-                document.getElementById('rvthumbs').appendChild(im);
-              }
-            }).catch(function(){
-              stat.textContent = 'That photo would not upload — you can still send the review.';
+              /* No else meant a rejection that still came back 200 vanished
+                 without even reaching the catch. */
+              if (!d.secure_url) throw new Error('upload rejected');
+              shots.push(d.secure_url);
+              var im = document.createElement('img');
+              im.src = d.secure_url.replace('/upload/','/upload/c_fill,w_150,h_150,q_auto,f_auto/');
+              im.style.cssText = 'width:64px;height:64px;object-fit:cover;border-radius:8px';
+              document.getElementById('rvthumbs').appendChild(im);
+            }).catch(function(e){
+              /* Counted, not written to the status line — say() renders it, so
+                 it survives the next repaint instead of being wiped by it. */
+              failed++;
+              reason = /signature/.test(e && e.message || '')
+                ? 'our photo service is down right now' : 'the upload was rejected';
             }).then(function(){ pending--; say(); });
           });
           fi.value = '';
