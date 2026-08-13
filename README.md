@@ -1,7 +1,7 @@
 # June's Tees — backend
 
 The server behind [jtees.net](https://www.jtees.net): a custom apparel and
-print shop in Phoenix, AZ. One Express app does all of it — it serves the
+print shop in Chicago, IL. One Express app does all of it — it serves the
 public marketing site out of `public/`, takes quote and contact submissions,
 syncs customers into Brevo, records payments, and renders the admin boards the
 shop actually runs the day on.
@@ -73,7 +73,7 @@ design — the server warns about this at boot.
 | Route | What it is |
 |---|---|
 | `/quotes` | the money board — quotes, what is owed |
-| `/production` | the work board — kanban, one tap per stage |
+| `/production` | the work board — kanban, one tap per milestone |
 | `/production/:code` | one job: full checklist and milestones |
 | `/books` | takings, expenses, tax set aside |
 | `/customer` | one customer's history |
@@ -84,6 +84,30 @@ dates on the quote rather than a separate status field — To start → Artwork 
 proof → Blanks → Press → Check & ship. Delivered is a destination, not a
 column: a delivered job leaves the board.
 
+The button on a card **finishes the column the card is in**, it does not jump
+to the next one — a card in Press offers "✓ Press". The exception is To start,
+which owns no milestone of its own, so its button advances. This means Check &
+ship takes **two** taps to clear: the first records checked-and-shipped and the
+card stays put, the second stamps delivered and drops it off the board. That
+second tap is deliberate — shipped is the last state where a problem is still
+recoverable, so nothing but an explicit tap may call a job arrived.
+
+## Tests
+
+```bash
+node --test tests/*.test.js
+```
+
+Built-in `node:test`, no test dependency. The suites lift the real functions
+out of `server.js` and run those, rather than restating the logic, so a test
+cannot quietly drift from the code it guards.
+
+Pass the files, not the directory: on current Node a positional argument is a
+glob rather than a directory to walk, so `node --test tests/` fails with
+`Cannot find module`. Bare `node --test` works but recurses into the
+gitignored local asset trees, so it is slower and picks up tests that are not
+this project's.
+
 ## The rest of `.env`
 
 `.env.example` is the full list and says where each value comes from. Nothing
@@ -92,9 +116,18 @@ below is needed to get the app running locally.
 - **Bot protection** — `REQUIRE_CLOUDFLARE`, `REQUIRE_FORM_TOKEN`,
   `FORM_TOKEN_SECRET`. Set the first two to `true` in production only; leaving
   them off locally is what lets you submit the forms by hand.
-- **Cloudinary** — `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`,
-  `CLOUDINARY_API_SECRET`. Uploads are signed server-side via
-  `/api/cloudinary-signature`; the secret never reaches the browser.
+- **Cloudinary** — `CLOUDINARY_CLOUD_NAME` *or* `CLOUDINARY_NAME`,
+  `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`. Uploads are signed
+  server-side via `/api/cloudinary-signature`; the secret never reaches the
+  browser.
+
+  The cloud name has two accepted spellings and they are **not**
+  interchangeable everywhere: `cloudinary.config()` and `/api/config` read
+  `CLOUDINARY_CLOUD_NAME || CLOUDINARY_NAME`, but the two inline upload
+  widgets read `CLOUDINARY_NAME` only and disable themselves when it is
+  empty. Production sets `CLOUDINARY_NAME`, so setting only
+  `CLOUDINARY_CLOUD_NAME` would leave the widgets dead while every config
+  endpoint still looked correct. Set `CLOUDINARY_NAME`, or set both.
 
   **The secret is stored on Railway under a misspelt name,
   `CLUDINARY_API_SECRET`, and the server deliberately reads both spellings.**
