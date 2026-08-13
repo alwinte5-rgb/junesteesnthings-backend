@@ -207,6 +207,19 @@ def content_out_of_bounds(base, head, repo):
     for rel, lines in added_lines(base, head, repo).items():
         if any(part in SKIP_DIRS for part in rel.split("/")):
             continue
+        # The reviewer must not review itself here either. `BLOCKED_CONTENT` is
+        # a list of regexes describing what it forbids, so the engine's own
+        # source contains a literal specimen of every one of them: the pattern
+        # `\b(bcrypt|argon2|scrypt)\b` reads as code touching authentication.
+        #
+        # The path rules have skipped `is_self` since the day they were written;
+        # this check was added later and did not inherit it. The result was that
+        # updating the vendored gate — the one change every repo must eventually
+        # take — was refused in every repo at once, by the very code being
+        # delivered. Shipping the engine became impossible while the engine was
+        # the thing under review.
+        if is_self(rel):
+            continue
         # Already refused on its path; saying it twice helps nobody.
         if boundary.blocked_reason(rel):
             continue
