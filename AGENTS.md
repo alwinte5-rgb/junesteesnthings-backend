@@ -87,6 +87,27 @@ and open the PR against the default branch. Do not push to the default
 branch, do not merge your own PR, and do not force-push a branch
 somebody has reviewed.
 
+**A commit is not delivery. Push the branch and open the pull
+request.** If you run in a temporary container, everything you did
+is destroyed when the task ends — the commit, the files, the work.
+Nobody can see it and no later session can find it. Only what reaches
+the remote exists.
+
+Before you finish, confirm it: `git push -u origin <branch>` and then
+open the PR. If the push fails, say so in your final message and say
+what it would have contained — a failure you report is recoverable, a
+commit that silently died with the container is not.
+
+**Check what this repo calls its remote** — `git remote` — rather than
+assuming `origin`. Not every repo here uses that name, and a push to a
+remote that does not exist fails in a way that reads like having no
+remote at all. That misreading has already caused a repo to be skipped
+as unreachable while it was reachable the whole time.
+
+If the task produced a file a person needs to look at — an image, an
+icon, a document — the PR is where they will look for it. Committing
+it and describing it is not the same as delivering it.
+
 If you are working from a radar issue, put `Closes #<number>` in the
 PR description. Do not write it on a PR that only partly does the
 task — GitHub closes the issue on merge either way, and the radar will
@@ -103,6 +124,122 @@ If a task genuinely cannot be done inside the boundary, stop and say
 so in the PR description instead of reaching outside it. That is a
 real answer and a useful one; a PR that quietly rewrites an API route
 is neither.
+
+### Say what you changed, and why
+
+The pull request description is the only account of your reasoning
+that survives. A reviewer can read the diff; they cannot read why you
+chose it. Write:
+
+- **What changed**, grouped by area, not a file list — the diff
+  already lists files.
+- **Why this approach**, especially anything you considered and
+  rejected. If you followed an existing pattern, name it.
+- **What you did NOT do**, and why: anything skipped, unfinished, or
+  that you are unsure works.
+- **What to check by hand**, if a person needs to verify something you
+  could not.
+
+"Fixed the issue" is not a description. Somebody has to decide
+whether to merge this, and they are deciding from what you wrote.
+
+**Match the length to the work.** A logo, an icon, a favicon, a 404
+page — a few lines is the right size. Say what it looks like, which
+version you would pick, and anything worth checking by hand. Nobody
+needs four paragraphs of rationale about an SVG, and a long report on
+a small change buries the one sentence that mattered.
+
+Save the full treatment for changes with consequences: anything
+touching data, money, access, or a flow a person depends on.
+
+### Check nobody else is already on it
+
+Before starting a radar issue, look at it. If it carries a
+`<!-- radar:dispatched -->` comment with no reply yet, or an open
+pull request already says `Closes #<number>`, **somebody is working
+it. Leave it alone.**
+
+Two workers on one task is not twice the work — it is a merge
+conflict on the same file, and whichever arrives first wins on
+timing rather than on quality. The reviewer then compares one
+attempt against nothing, instead of against the alternative.
+
+If you believe the in-flight attempt is wrong, say so on the issue
+and stop. Do not open a competing pull request.
+
+### If it is not your decision, stop and ask
+
+Some choices are not yours to make. A visual direction, a name, a
+tone, the shape of a flow, what happens in a case nobody described —
+anything with more than one defensible answer and no instruction
+covering it belongs to the person who owns the product.
+
+**Stop and ask. Do not pick one and keep going.** Post a comment on
+the issue containing this marker on its own line:
+
+    <!-- radar:question -->
+
+Then, in plain words: what you need decided, the options you can see,
+which you would choose and why. Leave the work unfinished and stop.
+
+You may be running with nobody watching and no way to be asked
+anything mid-run. That is exactly why this matters: the question is
+the deliverable when the answer is not yours to invent. It is raised
+at the top of the board and answered there, and the answer restarts
+you.
+
+An unanswered question is a finished job. A guess that has to be
+undone is worse than no work at all, because somebody has to notice
+it first.
+
+This does not mean stopping at every fork. Ordinary judgement inside
+the task — which file, which helper, how to name a variable — is
+yours. The test is whether a reasonable person could look at the
+result and say "that is not what I wanted" without you having done
+anything wrong.
+
+### End with where everything is
+
+Your last message must say, explicitly:
+
+- the **branch name** you pushed
+- the **pull request URL**
+- every **file you created**, by full path
+- for anything visual — an icon, an image, a rendered page — say what
+  it looks like and where in the PR to view it
+
+Do not answer with a commit SHA and nothing else. A SHA in a container
+that no longer exists is not a location, and the person reading your
+message cannot open it. Point at something that will still be there
+tomorrow.
+
+If you could not push, say that first, in plain words, before
+describing what you built. Work that exists only in your sandbox is
+work nobody will ever see.
+
+**And then write the files into your report**, so the work survives
+anyway. One fenced block per file, with the path in the info string:
+
+    ```file:apps/web/public/logo.svg
+    <svg …></svg>
+    ```
+
+That comment is reachable even when your sandbox is not, and there is
+a Publish button that turns those blocks into a real branch and pull
+**For anything that is not plain text, declare its size** on the
+fence line so a truncated payload is refused rather than shipped:
+
+    ```file:base64:apps/web/public/icon.png bytes=2004
+
+A base64 favicon was once cut off in transit. It decoded to a valid
+file header pointing at image data that was not there, committed
+cleanly, and rendered as nothing at all. Silent corruption is worse
+than a failed delivery: a failure gets fixed, a blank icon ships.
+Prefer a format that stays small — an SVG is usually under 3 KB and
+the problem does not arise.
+
+request. Complete contents only — an excerpt or a description cannot
+be published, and the file dies with your container.
 
 ### Match what is already there
 
@@ -210,5 +347,63 @@ should each be tested to fail correctly.
 If part of the task is unfinished, blocked, or you are unsure it works, write
 that in the pull request description. An honest gap is useful. A confident
 claim that turns out to be false costs far more than the work it saved.
+
+## Report what you find
+
+You will notice things this task did not ask about: a bug nearby, a pattern
+that will bite later, a rule that would have saved you an hour. Those are worth
+more than the task itself, and they are lost the moment this session ends.
+
+The board lives at `~/project-radar` and can be written to from anywhere.
+
+**Found a problem that is not yours to fix now:**
+
+```bash
+~/project-radar/radar task add <project-id> "what is wrong" \
+  --why "why it matters" --owner claude --effort low
+```
+
+Filing the same finding twice updates one task rather than making two, so file
+it even if you are not certain it is new.
+
+**Learned something a future project should not have to learn again:**
+
+```bash
+~/project-radar/radar lesson add <archetype> "the rule" \
+  --why "why it holds" --scar "what it cost"
+```
+
+That writes into the playbook for that archetype, and the next
+`radar sync-agents --write` puts it in every repo's AGENTS.md — including this
+one. The scar is stripped before it travels, so name what it cost honestly.
+
+A rule is worth writing when it would have changed what you did. "Be careful
+with dates" is not a rule; "compose dates from parts, because
+`Intl.DateTimeFormat` picks its separator from the runtime's ICU version" is.
+
+**Hit a wall? Hand it on rather than abandoning it:**
+
+```bash
+~/project-radar/radar task handoff <task-id> --to chatgpt \
+  --why "what stopped you" --tried "what you already attempted"
+```
+
+Owners are `chatgpt` (design, copy, presentational work), `claude` (trust
+boundaries, anything needing code that runs), `cowork` (a browser, research,
+drafting) and `you` (identity, payment, consent — no agent).
+
+The reason is required, and it is the point. "Reassigned" tells the next owner
+nothing; "the sandbox has no origin remote so it cannot push" tells them
+exactly what to do differently. Whoever picks it up sees who tried, what
+stopped them, and what was already attempted — printed in the issue before the
+task itself.
+
+A task abandoned in silence costs the next session the whole attempt over
+again. A task handed on with a reason costs them nothing.
+
+**Do not** file a task for the thing you were asked to do, or for something the
+scanner already checks — the board tracks those already. File what it cannot
+see.
+
 
 <!-- END:radar-rules -->

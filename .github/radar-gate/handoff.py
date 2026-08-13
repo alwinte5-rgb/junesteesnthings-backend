@@ -118,6 +118,26 @@ def git_out(args, repo):
     return out.stdout
 
 
+def github_remote(repo):
+    """The remote to fetch a pull request's base from.
+
+    `origin` when it exists, otherwise whatever this repo actually calls its
+    remote. CartBook's two projects share one repository behind a remote named
+    `home`, and hardcoding `origin` here fetched nothing and then diffed against
+    a ref that did not exist — the review failed on the one project where two
+    worktrees make review worth the most.
+
+    `checks.py:github_repo` resolves the remote the same way and for the same
+    reason; this follows it rather than inventing a second convention.
+    """
+    out = subprocess.run(["git", "-C", repo, "remote"],
+                         capture_output=True, text=True)
+    names = [n.strip() for n in out.stdout.splitlines() if n.strip()]
+    if not names:
+        return "origin"          # nothing to pick; the caller's error is clearer
+    return "origin" if "origin" in names else sorted(names)[0]
+
+
 def changed_files(base, head, repo):
     """Paths this branch adds or changes, as git sees them.
 
@@ -219,6 +239,14 @@ def content_out_of_bounds(base, head, repo):
         # delivered. Shipping the engine became impossible while the engine was
         # the thing under review.
         if is_self(rel):
+            continue
+        # Prose and data are not code, and every file-based rule already skips
+        # them for exactly this reason. AGENTS.md documents the correct way to
+        # hold a credential — "`api_secret: process.env.CLOUDINARY_API_SECRET`
+        # is the right way" — and the content check read that sentence as a
+        # credential read, refusing the rules file in every repo it was
+        # delivered to. A rule quoted in its own documentation is not a breach.
+        if is_data(rel):
             continue
         # Already refused on its path; saying it twice helps nobody.
         if boundary.blocked_reason(rel):
@@ -889,8 +917,9 @@ def main(argv):
             print((out.stderr or out.stdout).strip())
             return 1
         meta = json.loads(out.stdout)
-        base = "origin/%s" % meta["baseRefName"]
-        subprocess.run(["git", "-C", repo, "fetch", "--quiet", "origin",
+        remote = github_remote(repo)
+        base = "%s/%s" % (remote, meta["baseRefName"])
+        subprocess.run(["git", "-C", repo, "fetch", "--quiet", remote,
                         meta["baseRefName"]], capture_output=True)
         return review_diff(base, meta["headRefOid"], repo)
 
@@ -899,7 +928,10 @@ def main(argv):
     target = HERE
     if "--into" in argv:
         pid = argv[argv.index("--into") + 1]
-        import json
+        # `json` is imported at module level. Importing it again *here* made it
+        # a local of main(), so the `json.loads` in --pr mode above — earlier in
+        # the same function — raised UnboundLocalError before it ever ran.
+        # `radar review --pr` crashed in every repo, whatever its remote.
         with open(os.path.join(HERE, "state.json")) as fh:
             state = json.load(fh)
         p = next((x for x in state["projects"] if x["id"] == pid), None)
