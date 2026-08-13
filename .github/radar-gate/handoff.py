@@ -240,6 +240,14 @@ def content_out_of_bounds(base, head, repo):
         # the thing under review.
         if is_self(rel):
             continue
+        # Prose and data are not code, and every file-based rule already skips
+        # them for exactly this reason. AGENTS.md documents the correct way to
+        # hold a credential — "`api_secret: process.env.CLOUDINARY_API_SECRET`
+        # is the right way" — and the content check read that sentence as a
+        # credential read, refusing the rules file in every repo it was
+        # delivered to. A rule quoted in its own documentation is not a breach.
+        if is_data(rel):
+            continue
         # Already refused on its path; saying it twice helps nobody.
         if boundary.blocked_reason(rel):
             continue
