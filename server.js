@@ -485,9 +485,41 @@ function unsubHeaders(to) {
   };
 }
 
+/* The secret unsubscribe links are signed with, or '' when none is configured.
+   This used to be JT_INTERNAL_KEY with a hardcoded 'jtees' fallback. Two
+   problems with that, and the fallback was the smaller one:
+
+   JT_INTERNAL_KEY is the shared secret for design.jtees.net and travels in
+   query strings to that host (jt-cron.php?key=, jt-catalog.php?key=), so it
+   lands in its access logs — it is the secret most likely to be rotated here.
+   But an unsubscribe token has to stay valid for as long as the email sits in
+   somebody's inbox, so rotating the shared key would silently invalidate every
+   unsubscribe link already delivered. A dead one-click unsubscribe is exactly
+   what gets bulk mail spam-foldered (RFC 8058, see above), and nothing would
+   surface it until deliverability fell off weeks later.
+
+   UNSUB_TOKEN_SECRET is seeded with the current JT_INTERNAL_KEY value, so
+   every link already in an inbox stays valid and the shared key can then be
+   rotated freely. The JT_INTERNAL_KEY read below is the migration path: it
+   keeps signing working on a deploy that lands before the variable is set, and
+   can be dropped once UNSUB_TOKEN_SECRET is set everywhere. */
+function unsubSecret() {
+  return process.env.UNSUB_TOKEN_SECRET?.trim() || process.env.JT_INTERNAL_KEY?.trim() || '';
+}
+
 function unsubToken(email) {
-  return crypto.createHmac('sha256', process.env.JT_INTERNAL_KEY || 'jtees')
+  const secret = unsubSecret();
+  // No secret means no signable token. Never fall back to a guessable
+  // constant — that makes a valid token forgeable for any address on the list.
+  if (!secret) return '';
+  return crypto.createHmac('sha256', secret)
     .update(String(email).toLowerCase()).digest('hex').slice(0, 32);
+}
+
+/** Constant-time check of an unsubscribe token. Never true without a secret. */
+function unsubTokenValid(email, token) {
+  const expected = unsubToken(email);
+  return expected !== '' && hexEqual(token, expected);
 }
 
 function unsubFooter(to) {
@@ -6789,7 +6821,7 @@ async function doUnsubscribe(email, source) {
 app.post('/api/unsubscribe', async (req, res) => {
   const email = String(req.query.e || req.body.e || '').trim().toLowerCase();
   const token = String(req.query.t || req.body.t || '');
-  if (!isValidEmail(email) || token !== unsubToken(email)) {
+  if (!isValidEmail(email) || !unsubTokenValid(email, token)) {
     return res.status(400).json({ error: 'bad token' });
   }
   try {
@@ -6813,7 +6845,7 @@ app.get('/api/unsubscribe', async (req, res) => {
       <p style="margin-top:26px;"><a href="https://www.jtees.net" style="color:#1848B8;">Back to jtees.net</a></p>
       <p style="color:#9ca3af;font-size:12px;margin-top:30px;">June&rsquo;s Tees &amp; Things &middot; Chicago, IL</p>
     </div>`;
-  if (!isValidEmail(email) || token !== unsubToken(email)) {
+  if (!isValidEmail(email) || !unsubTokenValid(email, token)) {
     return res.status(400).send(page('That link is not valid',
       'Please use the unsubscribe link from a recent email, or reply to any of our emails and we will remove you.'));
   }
@@ -7781,6 +7813,18 @@ function validateEnv() {
   }
   if (!process.env.ADMIN_PASSWORD?.trim()) {
     console.warn('WARNING: ADMIN_PASSWORD is not set — admin routes will be inaccessible.');
+  }
+  // Warn-only for the same reason as the two above: unsubscribe signing
+  // degrades marketing email, not the storefront or order receipts, which are
+  // transactional and never carry an unsubscribe token.
+  if (!unsubSecret()) {
+    console.warn('WARNING: neither UNSUB_TOKEN_SECRET nor JT_INTERNAL_KEY is set — ' +
+      'marketing email will ship unsubscribe links that cannot be honoured.');
+  } else if (!process.env.UNSUB_TOKEN_SECRET?.trim()) {
+    console.warn('WARNING: UNSUB_TOKEN_SECRET is not set — unsubscribe links are still ' +
+      'signed with JT_INTERNAL_KEY, so rotating that shared key would invalidate every ' +
+      'unsubscribe link already delivered. Set UNSUB_TOKEN_SECRET to the current ' +
+      'JT_INTERNAL_KEY value to decouple them without breaking existing links.');
   }
 }
 validateEnv();
