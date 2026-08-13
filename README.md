@@ -116,15 +116,31 @@ below is needed to get the app running locally.
 - **Bot protection** — `REQUIRE_CLOUDFLARE`, `REQUIRE_FORM_TOKEN`,
   `FORM_TOKEN_SECRET`. Set the first two to `true` in production only; leaving
   them off locally is what lets you submit the forms by hand.
-- **Cloudinary** — `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`,
-  `CLOUDINARY_API_SECRET`. Uploads are signed server-side via
-  `/api/cloudinary-signature`; the secret never reaches the browser.
-  Spelling matters and there is no longer a safety net: the server used to
-  fall back to a misspelt `CLUDINARY_API_SECRET`, and that fallback was
-  removed, so the name has to be exact. If `/api/cloudinary-signature`
-  answers **503 `Cloudinary not configured`**, the secret is missing or
-  misspelt in the environment — every photo upload silently fails to attach
-  while the form still submits. Check it with:
+- **Cloudinary** — `CLOUDINARY_CLOUD_NAME` *or* `CLOUDINARY_NAME`,
+  `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`. Uploads are signed
+  server-side via `/api/cloudinary-signature`; the secret never reaches the
+  browser.
+
+  The cloud name has two accepted spellings and they are **not**
+  interchangeable everywhere: `cloudinary.config()` and `/api/config` read
+  `CLOUDINARY_CLOUD_NAME || CLOUDINARY_NAME`, but the two inline upload
+  widgets read `CLOUDINARY_NAME` only and disable themselves when it is
+  empty. Production sets `CLOUDINARY_NAME`, so setting only
+  `CLOUDINARY_CLOUD_NAME` would leave the widgets dead while every config
+  endpoint still looked correct. Set `CLOUDINARY_NAME`, or set both.
+
+  **The secret is stored on Railway under a misspelt name,
+  `CLUDINARY_API_SECRET`, and the server deliberately reads both spellings.**
+  Do not tidy that fallback away. PR #7 did, and it took signed uploads down:
+  the correctly-spelled variable had never been set, so
+  `/api/cloudinary-signature` started answering **503 `Cloudinary not
+  configured`** and every photo upload silently stopped attaching, while the
+  quote and review forms carried on submitting and reporting success.
+  `tests/cloudinary-secret.test.js` now fails if the fallback is removed.
+
+  To retire the typo safely: add `CLOUDINARY_API_SECRET` on Railway with the
+  same value, redeploy, confirm the check below returns `200`, then delete
+  `CLUDINARY_API_SECRET` and the fallback together.
 
   ```bash
   curl -s -o /dev/null -w '%{http_code}\n' -X POST \
@@ -132,9 +148,10 @@ below is needed to get the app running locally.
     -H 'Content-Type: application/json' -d '{"folder":"quote_requests"}'
   ```
 
-  `200` is healthy, `503` means the variable is not set on the host. Note the
-  cloud name and API key come from a separate public endpoint (`/api/config`)
-  and can look perfectly correct while the secret is absent.
+  `200` is healthy, `503` means neither spelling is set. Note the cloud name
+  and API key come from a separate public endpoint (`/api/config`) and can
+  look perfectly correct while the secret is absent — which is why this failure
+  is easy to look straight at and call fine.
 - **Resend** — `RESEND_API_KEY`, the fallback when Brevo sending fails.
 - **Clover** — `CLOVER_*`, card payments and the payment webhook.
 - **HubSpot** — `HUBSPOT_*`, legacy contact sync.
