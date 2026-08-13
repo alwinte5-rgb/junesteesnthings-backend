@@ -1,7 +1,7 @@
 # June's Tees — backend
 
 The server behind [jtees.net](https://www.jtees.net): a custom apparel and
-print shop in Phoenix, AZ. One Express app does all of it — it serves the
+print shop in Chicago, IL. One Express app does all of it — it serves the
 public marketing site out of `public/`, takes quote and contact submissions,
 syncs customers into Brevo, records payments, and renders the admin boards the
 shop actually runs the day on.
@@ -73,7 +73,7 @@ design — the server warns about this at boot.
 | Route | What it is |
 |---|---|
 | `/quotes` | the money board — quotes, what is owed |
-| `/production` | the work board — kanban, one tap per stage |
+| `/production` | the work board — kanban, one tap per milestone |
 | `/production/:code` | one job: full checklist and milestones |
 | `/books` | takings, expenses, tax set aside |
 | `/customer` | one customer's history |
@@ -83,6 +83,30 @@ A job moves across `/production` through five columns, derived from milestone
 dates on the quote rather than a separate status field — To start → Artwork &
 proof → Blanks → Press → Check & ship. Delivered is a destination, not a
 column: a delivered job leaves the board.
+
+The button on a card **finishes the column the card is in**, it does not jump
+to the next one — a card in Press offers "✓ Press". The exception is To start,
+which owns no milestone of its own, so its button advances. This means Check &
+ship takes **two** taps to clear: the first records checked-and-shipped and the
+card stays put, the second stamps delivered and drops it off the board. That
+second tap is deliberate — shipped is the last state where a problem is still
+recoverable, so nothing but an explicit tap may call a job arrived.
+
+## Tests
+
+```bash
+node --test tests/*.test.js
+```
+
+Built-in `node:test`, no test dependency. The suites lift the real functions
+out of `server.js` and run those, rather than restating the logic, so a test
+cannot quietly drift from the code it guards.
+
+Pass the files, not the directory: on current Node a positional argument is a
+glob rather than a directory to walk, so `node --test tests/` fails with
+`Cannot find module`. Bare `node --test` works but recurses into the
+gitignored local asset trees, so it is slower and picks up tests that are not
+this project's.
 
 ## The rest of `.env`
 
@@ -95,6 +119,22 @@ below is needed to get the app running locally.
 - **Cloudinary** — `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`,
   `CLOUDINARY_API_SECRET`. Uploads are signed server-side via
   `/api/cloudinary-signature`; the secret never reaches the browser.
+  Spelling matters and there is no longer a safety net: the server used to
+  fall back to a misspelt `CLUDINARY_API_SECRET`, and that fallback was
+  removed, so the name has to be exact. If `/api/cloudinary-signature`
+  answers **503 `Cloudinary not configured`**, the secret is missing or
+  misspelt in the environment — every photo upload silently fails to attach
+  while the form still submits. Check it with:
+
+  ```bash
+  curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+    https://jtees.net/api/cloudinary-signature \
+    -H 'Content-Type: application/json' -d '{"folder":"quote_requests"}'
+  ```
+
+  `200` is healthy, `503` means the variable is not set on the host. Note the
+  cloud name and API key come from a separate public endpoint (`/api/config`)
+  and can look perfectly correct while the secret is absent.
 - **Resend** — `RESEND_API_KEY`, the fallback when Brevo sending fails.
 - **Clover** — `CLOVER_*`, card payments and the payment webhook.
 - **HubSpot** — `HUBSPOT_*`, legacy contact sync.

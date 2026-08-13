@@ -1,6 +1,7 @@
 /* Regression tests for unsubscribe-link signing (server.js).
  *
- * Run: node --test tests/
+ * Run: node --test tests/*.test.js   (the files, not the directory — on
+ * current Node a positional argument is a glob, so `tests/` fails)
  * Uses only the built-in node:test runner, so this adds no dependency.
  *
  * The bug these cover: unsubToken() used to fall back to a hardcoded 'jtees'
