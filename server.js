@@ -10,10 +10,16 @@ const { Resend } = require('resend');
 const axios      = require('axios');
 const cloudinary = require('cloudinary').v2;
 
+/* CLUDINARY_API_SECRET is a typo, and it is the name the secret is actually
+   stored under on Railway. #7 removed this fallback as a tidy-up and took
+   signed uploads down with it: the correctly-spelled variable has never been
+   set, so `/api/cloudinary-signature` began answering 503 and every photo
+   upload silently stopped attaching. Keep both spellings until the Railway
+   variable is renamed — see README, "Cloudinary". */
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_NAME,
   api_key:    process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
+  api_secret: process.env.CLOUDINARY_API_SECRET || process.env.CLUDINARY_API_SECRET,
 });
 
 const app = express();
@@ -2075,7 +2081,8 @@ app.get('/api/config', signatureRateLimit, (req, res) => {
 
 // Cloudinary signed upload
 app.post('/api/cloudinary-signature', signatureRateLimit, (req, res) => {
-  const apiSecret = process.env.CLOUDINARY_API_SECRET;
+  // Both spellings, for the reason given at cloudinary.config() above.
+  const apiSecret = process.env.CLOUDINARY_API_SECRET || process.env.CLUDINARY_API_SECRET;
   if (!apiSecret) return res.status(503).json({ error: 'Cloudinary not configured' });
   // Allow the caller to specify the upload folder, but validate against an allowlist
   // so the server retains control over where files can be stored.

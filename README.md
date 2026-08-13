@@ -95,6 +95,30 @@ below is needed to get the app running locally.
 - **Cloudinary** — `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`,
   `CLOUDINARY_API_SECRET`. Uploads are signed server-side via
   `/api/cloudinary-signature`; the secret never reaches the browser.
+
+  **The secret is stored on Railway under a misspelt name,
+  `CLUDINARY_API_SECRET`, and the server deliberately reads both spellings.**
+  Do not tidy that fallback away. PR #7 did, and it took signed uploads down:
+  the correctly-spelled variable had never been set, so
+  `/api/cloudinary-signature` started answering **503 `Cloudinary not
+  configured`** and every photo upload silently stopped attaching, while the
+  quote and review forms carried on submitting and reporting success.
+  `tests/cloudinary-secret.test.js` now fails if the fallback is removed.
+
+  To retire the typo safely: add `CLOUDINARY_API_SECRET` on Railway with the
+  same value, redeploy, confirm the check below returns `200`, then delete
+  `CLUDINARY_API_SECRET` and the fallback together.
+
+  ```bash
+  curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+    https://jtees.net/api/cloudinary-signature \
+    -H 'Content-Type: application/json' -d '{"folder":"quote_requests"}'
+  ```
+
+  `200` is healthy, `503` means neither spelling is set. Note the cloud name
+  and API key come from a separate public endpoint (`/api/config`) and can
+  look perfectly correct while the secret is absent — which is why this failure
+  is easy to look straight at and call fine.
 - **Resend** — `RESEND_API_KEY`, the fallback when Brevo sending fails.
 - **Clover** — `CLOVER_*`, card payments and the payment webhook.
 - **HubSpot** — `HUBSPOT_*`, legacy contact sync.
