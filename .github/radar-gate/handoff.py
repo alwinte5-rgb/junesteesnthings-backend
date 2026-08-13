@@ -72,7 +72,15 @@ DATA_GLOBS = ["*.json", "package-lock.json", "*.lock", "*.md"]
 # This matters more once the engine is vendored into every repo as
 # `.github/radar-gate/`, because then *any* repo updating its copy trips the
 # same wall. A pattern inside the pattern engine is a definition, not a defect.
-SELF = {"handoff.py", "boundary.py"}
+#
+# The engine's own tests are the same category and were missed. They must
+# contain a specimen of every rule to prove it fires — a fake `api_secret`, a
+# `sk_live_` literal — so the secret scanner reports its own fixtures as
+# CRITICAL and blocks the branch. That made the gate's tests the one file
+# nobody could change without the gate refusing the change, which is how a
+# suite stops being maintained. A fixture inside the pattern engine's tests is
+# a specimen, not a leak.
+SELF = {"handoff.py", "boundary.py", "test_gate.py"}
 SELF_DIRS = {".github/radar-gate"}
 
 
@@ -154,9 +162,56 @@ def forbidden_in_diff(base, head, repo):
     """
     out = []
     for rel in changed_files(base, head, repo):
-        what = boundary.forbidden_reason(rel)
+        # Read it where we can. An `.env.example` is allowed to be committed —
+        # that is where a variable gets documented — but only while it holds
+        # names and no values, and the name alone cannot tell you which it is.
+        try:
+            text = git_out(["show", "%s:%s" % (head, rel)], repo)
+        except RuntimeError:
+            text = None
+        what = boundary.forbidden_reason(rel, text)
         if what:
             out.append((rel, what))
+    return out
+
+
+def added_lines(base, head, repo):
+    """{path: [lines this branch adds]} — the `+` side only.
+
+    The gate's path patterns assume a layout. A repository that keeps every
+    route, payment and query in one `server.js` matches none of them, so the
+    boundary has to be read from what a change *adds* as well as where it
+    lands. Existing code is not the agent's doing, which is why this is the
+    added side rather than the whole file.
+    """
+    raw = git_out(["diff", "--unified=0", "--no-color",
+                   "%s...%s" % (base, head)], repo)
+    out, current = {}, None
+    for line in raw.splitlines():
+        if line.startswith("+++ b/"):
+            current = line[6:].strip()
+            out.setdefault(current, [])
+        elif line.startswith("+") and not line.startswith("+++") and current:
+            out[current].append(line[1:])
+    return out
+
+
+def content_out_of_bounds(base, head, repo):
+    """Boundary breaches the file path did not admit to.
+
+    Returns [(path, what, sample)]. A sample line is included deliberately: a
+    gate that says "billing logic" without showing which line said so is a gate
+    people argue with instead of obeying.
+    """
+    out = []
+    for rel, lines in added_lines(base, head, repo).items():
+        if any(part in SKIP_DIRS for part in rel.split("/")):
+            continue
+        # Already refused on its path; saying it twice helps nobody.
+        if boundary.blocked_reason(rel):
+            continue
+        for what, sample in boundary.content_reason(lines):
+            out.append((rel, what, sample))
     return out
 
 
@@ -451,12 +506,25 @@ def _deps(text, rel):
             if l.strip() and not l.strip().startswith("#")}
 
 
+def _read_or_none(path):
+    """The file's text, or None when it cannot be read as text.
+
+    A binary blob or an unreadable file is not evidence of anything; the caller
+    falls back to deciding on the filename alone.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
 def forbidden(delivery_root):
     """Files whose presence stops the review outright."""
     out = []
     for path in walk(delivery_root):
         rel = os.path.relpath(path, delivery_root)
-        what = boundary.forbidden_reason(rel)
+        what = boundary.forbidden_reason(rel, _read_or_none(path))
         if what:
             out.append((rel, what))
     # walk() filters by extension, so .env and .pem never reach it -- sweep
@@ -464,8 +532,9 @@ def forbidden(delivery_root):
     for dirpath, dirnames, filenames in os.walk(delivery_root):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
         for name in filenames:
-            rel = os.path.relpath(os.path.join(dirpath, name), delivery_root)
-            what = boundary.forbidden_reason(rel)
+            full = os.path.join(dirpath, name)
+            rel = os.path.relpath(full, delivery_root)
+            what = boundary.forbidden_reason(rel, _read_or_none(full))
             if what and (rel, what) not in out:
                 out.append((rel, what))
     return out
@@ -628,6 +697,86 @@ def report(findings, header, counted, extra=""):
     print("  accepted. Nothing here has been merged.\n")
 
 
+
+def change_summary(base, head, repo):
+    """What this pull request actually does, in plain language.
+
+    An agent working from a GitHub issue produces a branch and a diff, and the
+    only account of it is whatever the agent chose to write. That is a black
+    box: you learn what changed by reading the diff yourself, which is the work
+    the board exists to save you.
+
+    This is derived from the diff, not from anything the agent claims, so it is
+    accurate even when the description is thin or absent.
+    """
+    try:
+        stat = git_out(["diff", "--numstat", "%s...%s" % (base, head)], repo)
+        subjects = git_out(["log", "--format=%s", "%s..%s" % (base, head)], repo)
+    except RuntimeError:
+        return []
+
+    files, added, removed = [], 0, 0
+    for line in stat.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        a, r, path = parts
+        a = int(a) if a.isdigit() else 0
+        r = int(r) if r.isdigit() else 0
+        added += a
+        removed += r
+        files.append((path, a, r))
+
+    if not files:
+        return []
+
+    # Group by what kind of thing it is, because "12 files changed" says
+    # nothing and "3 API routes, 1 schema, 8 components" says everything.
+    KINDS = [
+        (r"(^|/)app/api/|(^|/)pages/api/|route\.(ts|js)$", "API route"),
+        (r"(^|/)lib/(auth|permissions|validate|session)", "auth / validation"),
+        (r"schema\.(ts|js|py|prisma)$|(^|/)(migrations|drizzle)/", "database"),
+        (r"(billing|checkout|stripe|subscription|pricing)", "billing"),
+        (r"\.(css|scss)$|(^|/)(components|ui)/", "UI / styling"),
+        (r"\.(test|spec)\.|(^|/)tests?/", "tests"),
+        (r"(^|/)\.github/", "CI / workflows"),
+        (r"\.(md|txt)$", "docs"),
+        (r"package(-lock)?\.json$|requirements\.txt$", "dependencies"),
+    ]
+    kinds = {}
+    for path, a, r in files:
+        label = "other"
+        for pattern, name in KINDS:
+            if re.search(pattern, path, re.I):
+                label = name
+                break
+        kinds.setdefault(label, []).append(path)
+
+    lines = ["%d file(s), +%d / -%d" % (len(files), added, removed), ""]
+    for label in sorted(kinds, key=lambda k: -len(kinds[k])):
+        paths = kinds[label]
+        lines.append("  %-18s %d: %s%s"
+                     % (label, len(paths), ", ".join(p.split("/")[-1]
+                                                     for p in paths[:4]),
+                        " ..." if len(paths) > 4 else ""))
+
+    if subjects.strip():
+        lines.append("")
+        lines.append("  commits:")
+        for s in subjects.strip().splitlines()[:6]:
+            lines.append("    - %s" % s[:72])
+
+    # The lines worth a human's eye, whether or not a rule fired on them.
+    watch = [p for p, _, _ in files
+             if re.search(r"(^|/)app/api/|auth|billing|schema|migration|"
+                          r"\.env|workflow", p, re.I)]
+    if watch:
+        lines.append("")
+        lines.append("  worth reading yourself: %s" % ", ".join(watch[:5]))
+
+    return lines
+
+
 def review_diff(base, head, repo):
     """The gate as a pull-request check. Exit code is the verdict."""
     try:
@@ -637,6 +786,26 @@ def review_diff(base, head, repo):
         print("  The workflow needs full history: actions/checkout with")
         print("  `fetch-depth: 0`, or the base commit is simply not present.\n")
         return 3
+
+    # What the path did not admit to. A repo with one big server.js matches no
+    # path pattern, so without this the boundary is decoration there — and that
+    # is the repo actually taking money.
+    try:
+        sneaky = content_out_of_bounds(base, head, repo)
+    except RuntimeError:
+        sneaky = []
+    if sneaky:
+        print("\nREFUSED -- these lines are outside the boundary, whatever "
+              "file they were put in:\n")
+        for rel, what, sample in sneaky:
+            print("  %s" % rel)
+            print("      %s" % what)
+            print("      %s" % sample)
+        print("\n  The boundary is about what the change does, not where it "
+              "lives. If")
+        print("  this is genuinely needed, say so in the PR description and "
+              "leave it out.\n")
+        return 1
 
     if blocked:
         print("\nREFUSED -- this branch contains files that must never be "
@@ -653,10 +822,17 @@ def review_diff(base, head, repo):
 
     counted = "%d changed file(s) in %s...%s" % (
         len(files), base[:12], head[:12])
+    summary = change_summary(base, head, repo)
     if skipped:
         counted += "\n  not reviewed (this is the gate's own source): %s" % (
             ", ".join(sorted(skipped)))
     report(findings, "RADAR GATE", counted)
+
+    if summary:
+        print("  WHAT THIS CHANGES\n")
+        for line in summary:
+            print("  %s" % line)
+        print()
 
     blocking = [f for f in findings if f[0] == CRITICAL]
     if blocking:
