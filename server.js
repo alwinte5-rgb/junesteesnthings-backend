@@ -527,10 +527,23 @@ function unsubSecret() {
      this entry deliberately before rotating, rather than discovering it. */
 function unsubSecrets() {
   const dedicated = process.env.UNSUB_TOKEN_SECRET?.trim();
+  /* The secret this one replaced. Rotating UNSUB_TOKEN_SECRET used to kill
+     every link already delivered under it in the same instant — there was
+     nowhere to keep the outgoing value, so a rotation done for good reasons
+     (the secret had leaked into another service's environment) silently broke
+     one-click unsubscribe for everything sent since the variable was
+     introduced. Gmail and Yahoo require that link to work for bulk senders,
+     and the failure does not surface as an error: it surfaces as deliverability
+     falling off weeks later, which is exactly the scar the block above records.
+
+     Verification only — never signing. Set it to the outgoing value when you
+     rotate, then delete it once mail signed with it has aged out. */
+  const previous = process.env.UNSUB_TOKEN_SECRET_PREVIOUS?.trim();
   const legacy = process.env.JT_INTERNAL_KEY?.trim();
   const secrets = [];
-  if (dedicated) secrets.push(dedicated);
-  if (legacy && legacy !== dedicated) secrets.push(legacy);
+  for (const s of [dedicated, previous, legacy]) {
+    if (s && !secrets.includes(s)) secrets.push(s);
+  }
   return secrets;
 }
 
@@ -7896,6 +7909,17 @@ function validateEnv() {
     console.log('unsubscribe: signing with UNSUB_TOKEN_SECRET; still honouring older ' +
       'JT_INTERNAL_KEY links. Remove that fallback once pre-migration mail has aged ' +
       'out, and before rotating JT_INTERNAL_KEY.');
+  }
+  /* Both of these are states that must END, and nothing but this line will
+     ever mention them again. */
+  if (process.env.UNSUB_TOKEN_SECRET_PREVIOUS?.trim()) {
+    console.log('unsubscribe: also honouring UNSUB_TOKEN_SECRET_PREVIOUS. Delete it ' +
+      'once mail signed with the old secret has aged out of inboxes — until then ' +
+      'the rotated-away secret still verifies.');
+  } else if (process.env.UNSUB_TOKEN_SECRET?.trim()) {
+    console.log('unsubscribe: no UNSUB_TOKEN_SECRET_PREVIOUS set. If you rotate ' +
+      'UNSUB_TOKEN_SECRET, put the outgoing value there in the same change or every ' +
+      'unsubscribe link already delivered stops working the moment it deploys.');
   }
 }
 validateEnv();
