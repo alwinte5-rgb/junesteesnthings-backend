@@ -155,3 +155,99 @@ test('malformed tokens are rejected rather than throwing', () => {
     assert.strictEqual(unsubTokenValid(EMAIL, bad), false, `rejected: ${JSON.stringify(bad)}`);
   }
 });
+
+/* ── Rotating UNSUB_TOKEN_SECRET ─────────────────────────────────────────────
+ *
+ * The secret was rotated in production on 2026-08-14, because the outgoing
+ * value had been pasted into another service's JT_INTERNAL_KEY slot and was
+ * sitting in an environment it had no business being in. Rotating was right.
+ *
+ * But at that moment there was nowhere to keep the outgoing value, so every
+ * unsubscribe link signed with it died the instant the new one deployed —
+ * silently, because a dead unsubscribe link raises nothing. Gmail and Yahoo
+ * require that link to work for bulk senders, so the bill arrives later as
+ * deliverability, which is the same scar the migration to a dedicated secret
+ * was written to avoid.
+ *
+ * UNSUB_TOKEN_SECRET_PREVIOUS is the grace window: verified, never signed with.
+ */
+
+const PREVIOUS = 'the-secret-that-was-just-rotated-away';
+
+test('a link signed with the rotated-away secret still verifies', () => {
+  // The whole point. Mail sent last week must keep working this week.
+  const before = load({ UNSUB_TOKEN_SECRET: PREVIOUS });
+  const token = before.unsubToken(EMAIL);
+
+  const after = load({ UNSUB_TOKEN_SECRET: DEDICATED, UNSUB_TOKEN_SECRET_PREVIOUS: PREVIOUS });
+  assert.ok(after.unsubTokenValid(EMAIL, token),
+    'rotating with the outgoing value in _PREVIOUS must not break delivered links');
+});
+
+test('without _PREVIOUS a rotation breaks every delivered link', () => {
+  // Stated as a test so the cost of omitting it is visible, not folklore.
+  const before = load({ UNSUB_TOKEN_SECRET: PREVIOUS });
+  const token = before.unsubToken(EMAIL);
+
+  const after = load({ UNSUB_TOKEN_SECRET: DEDICATED });
+  assert.strictEqual(after.unsubTokenValid(EMAIL, token), false);
+});
+
+test('new mail is signed with the current secret, never the previous one', () => {
+  const env = { UNSUB_TOKEN_SECRET: DEDICATED, UNSUB_TOKEN_SECRET_PREVIOUS: PREVIOUS };
+  const { unsubToken } = load(env);
+  const current = load({ UNSUB_TOKEN_SECRET: DEDICATED });
+  const old = load({ UNSUB_TOKEN_SECRET: PREVIOUS });
+  assert.strictEqual(unsubToken(EMAIL), current.unsubToken(EMAIL),
+    'signing must use the current secret');
+  assert.notStrictEqual(unsubToken(EMAIL), old.unsubToken(EMAIL));
+});
+
+test('dropping _PREVIOUS closes the window', () => {
+  const before = load({ UNSUB_TOKEN_SECRET: PREVIOUS });
+  const token = before.unsubToken(EMAIL);
+  const after = load({ UNSUB_TOKEN_SECRET: DEDICATED, UNSUB_TOKEN_SECRET_PREVIOUS: '' });
+  assert.strictEqual(after.unsubTokenValid(EMAIL, token), false,
+    'a blank _PREVIOUS must not be treated as a secret');
+});
+
+test('all three eras verify at once during a rotation', () => {
+  // Pre-migration mail (JT_INTERNAL_KEY), last week's (previous) and this
+  // week's (current) can all be in inboxes simultaneously.
+  const legacy = load({ JT_INTERNAL_KEY: SHARED }).unsubToken(EMAIL);
+  const older = load({ UNSUB_TOKEN_SECRET: PREVIOUS }).unsubToken(EMAIL);
+  const now = load({ UNSUB_TOKEN_SECRET: DEDICATED }).unsubToken(EMAIL);
+
+  const live = load({ UNSUB_TOKEN_SECRET: DEDICATED,
+                      UNSUB_TOKEN_SECRET_PREVIOUS: PREVIOUS,
+                      JT_INTERNAL_KEY: SHARED });
+  for (const [label, t] of [['pre-migration', legacy], ['pre-rotation', older], ['current', now]]) {
+    assert.ok(live.unsubTokenValid(EMAIL, t), `${label} link must still verify`);
+  }
+});
+
+test('the accepted list is deduplicated and ordered newest first', () => {
+  /* Array.from before comparing: load() has to build a sandbox because these
+     functions read a fabricated process.env, and an array created in a vm
+     context carries THAT context's Array.prototype. deepStrictEqual compares
+     prototypes, so without this it fails while printing two identical arrays. */
+  const { unsubSecrets } = load({ UNSUB_TOKEN_SECRET: DEDICATED,
+                                  UNSUB_TOKEN_SECRET_PREVIOUS: DEDICATED,
+                                  JT_INTERNAL_KEY: DEDICATED });
+  assert.deepStrictEqual(Array.from(unsubSecrets()), [DEDICATED],
+    'the same value set in three places is still one secret');
+
+  const { unsubSecrets: three } = load({ UNSUB_TOKEN_SECRET: DEDICATED,
+                                         UNSUB_TOKEN_SECRET_PREVIOUS: PREVIOUS,
+                                         JT_INTERNAL_KEY: SHARED });
+  assert.deepStrictEqual(Array.from(three()), [DEDICATED, PREVIOUS, SHARED]);
+});
+
+test('_PREVIOUS alone never signs', () => {
+  // A misconfiguration that sets only the previous slot must not quietly start
+  // signing new mail with a secret meant to be retired.
+  const { unsubSecret, unsubToken } = load({ UNSUB_TOKEN_SECRET_PREVIOUS: PREVIOUS });
+  assert.notStrictEqual(unsubSecret(), PREVIOUS,
+    'the retiring secret must never become the signing secret');
+  assert.strictEqual(unsubToken(EMAIL), '', 'no signing secret means no token');
+});
