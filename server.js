@@ -3225,9 +3225,37 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
   const prodOpts = catalog.products.map(p =>
     `<option value="${escEmail(String(p.id))}">${escEmail(p.name)} — ${money(p.price)}</option>`
   ).join('');
-  const methodOpts = catalog.methods
-    .filter(m => m.use_for_quoting && Object.keys(m.positions || {}).length)
+  /* A decoration can only be offered here if it can be PRICED here: the line
+     total is (blank + size upcharge + decoration tier for qty) x qty, so a
+     method with no tiers would quote as if decoration were free. The filter is
+     therefore right — but it used to drop those methods silently, which is why
+     "the printing type we added is missing from the quote page" reads as a bug
+     in this page rather than as unfinished setup in the designer. Say what was
+     left out and why, so it is fixable without reading this file. */
+  const quotable = catalog.methods.filter(m =>
+    m.use_for_quoting && Object.keys(m.positions || {}).length);
+  const methodOpts = quotable
     .map(m => `<option value="${m.id}">${escEmail(m.title)}</option>`).join('');
+
+  /* Embroidery run rates are excluded on purpose (the shop prices embroidery
+     another way and only its digitizing fees are authoritative), so those are
+     not reported as a problem — only methods that COULD be offered and cannot,
+     because nobody has priced them yet. */
+  const untiered = catalog.methods.filter(m =>
+    m.use_for_quoting && !Object.keys(m.positions || {}).length);
+
+  const catalogNote = !catalog.methods.length
+    ? `<div class="warn" style="margin-bottom:10px">The product catalogue could not be
+       loaded from the designer, so the dropdowns are empty. Every line can still be
+       priced by hand. If this persists, check <code>JT_INTERNAL_KEY</code>.</div>`
+    : untiered.length
+    ? `<p class="muted" style="margin:-4px 0 10px;font-size:12.5px">
+       ${untiered.length} decoration ${untiered.length === 1 ? 'method is' : 'methods are'}
+       not listed — ${escEmail(untiered.map(m => m.title).join(', '))} —
+       because ${untiered.length === 1 ? 'it has' : 'they have'} no quantity price tiers set.
+       Add tiers in the designer admin under Printings and ${untiered.length === 1 ? 'it' : 'they'}
+       will appear here. Products need to be <b>Active</b> in the designer to be listed at all.</p>`
+    : '';
 
   /* One item. Only the three things every line needs are on show — what it is,
      how many, what each costs. Colour notes, photos and the size grid are real
@@ -3299,6 +3327,7 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
 
       <div class="card">
         <label style="margin-top:0">Items</label>
+        ${catalogNote}
         <div id="lines">${eItems.map((it, ix) => lineHtml(ix, it)).join('')}</div>
         <button type="button" class="btn btn-ghost" style="padding:9px 18px;font-size:14px" onclick="addLine()">+ Add another item</button>
         <table style="width:100%;margin-top:14px;border-top:1px solid #e3e8f2;padding-top:10px">
