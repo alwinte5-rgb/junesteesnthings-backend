@@ -687,6 +687,130 @@ async function sendEmail({ to, subject, html, replyTo, marketing = false, text }
   if (error) throw new Error(`Resend: ${error.message || JSON.stringify(error)}`);
 }
 
+/* ── Brevo breach monitor ─────────────────────────────────────────────────────
+   What this exists to catch, because it already happened once and nothing saw
+   it: on 2026-08-16 the shared Brevo account sent 7,896 emails in a day — a
+   French "Prime Video" phishing run to addresses the shop has never had — and
+   burned the whole monthly send limit. Normal traffic here is under 20 a day.
+   Nobody noticed for three days, and the way it surfaced was a customer
+   payment going unannounced, which is a terrible smoke alarm.
+
+   Two rules make this monitor worth having:
+
+   1. It alerts through Resend DIRECTLY, never through sendEmail(). If Brevo is
+      the thing being abused, or is out of credits, routing the warning about
+      Brevo through Brevo is how you get silence at exactly the wrong moment.
+   2. It alerts on volume, not just on credits hitting zero. Zero credits is
+      the aftermath; a spike is the event. By the time the balance is empty the
+      damage — reputation, blocklisting, spent limit — is already done. */
+
+const BREVO_ALERT_DAILY_REQUESTS = Number(process.env.JT_BREVO_ALERT_REQUESTS || 250);
+const BREVO_ALERT_HARD_BOUNCES   = Number(process.env.JT_BREVO_ALERT_BOUNCES  || 25);
+const BREVO_ALERT_SPAM_REPORTS   = Number(process.env.JT_BREVO_ALERT_SPAM     || 8);
+
+/* One alert per condition per day. A breach that trips three thresholds should
+   send one email, and an hourly sweep must not turn it into 24. */
+const brevoAlertsSent = new Map();
+function alertOncePerDay(kind) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (brevoAlertsSent.get(kind) === today) return false;
+  brevoAlertsSent.set(kind, today);
+  return true;
+}
+
+/** Send without touching Brevo. Returns false rather than throwing. */
+async function alertViaResend(subject, innerHtml) {
+  if (!resend) {
+    console.error('BREACH ALERT could not be sent — no RESEND_API_KEY:', subject);
+    return false;
+  }
+  try {
+    const { error } = await resend.emails.send({
+      from: FROM_ADDRESS, to: SHOP_EMAIL, reply_to: NOTIFY_EMAIL, subject,
+      html: `<div style="font-family:system-ui,sans-serif;max-width:600px">${innerHtml}</div>`,
+      text: htmlToText(innerHtml),
+    });
+    if (error) throw new Error(error.message || JSON.stringify(error));
+    return true;
+  } catch (e) {
+    console.error('BREACH ALERT send failed:', e.message);
+    return false;
+  }
+}
+
+async function brevoBreachCheck() {
+  const key = process.env.BREVO_API_KEY;
+  if (!key) return;
+  const H = { 'api-key': key, 'Content-Type': 'application/json' };
+  const today = new Date().toISOString().slice(0, 10);
+
+  try {
+    const [acctRes, statRes] = await Promise.all([
+      fetch('https://api.brevo.com/v3/account', { headers: H, signal: AbortSignal.timeout(10000) }),
+      fetch(`https://api.brevo.com/v3/smtp/statistics/aggregatedReport?startDate=${today}&endDate=${today}`,
+            { headers: H, signal: AbortSignal.timeout(10000) }),
+    ]);
+
+    /* A key that stopped working is itself worth saying out loud — it is what a
+       revocation by Brevo, or a rotation applied to only half the variables,
+       looks like from in here. */
+    if (acctRes.status === 401 || statRes.status === 401) {
+      if (alertOncePerDay('unauthorized')) {
+        await alertViaResend('🚨 Brevo key rejected — jtees.net',
+          `<h2 style="color:#b91c1c">Brevo is answering 401</h2>
+           <p>The key in <code>BREVO_API_KEY</code> is no longer accepted. Mail is falling back to
+              Resend, but CRM contact and deal sync is failing.</p>
+           <p>If you just rotated keys, update the Railway variable. If you did not,
+              treat the key as revoked and check the Brevo audit log.</p>`);
+      }
+      return;
+    }
+
+    const alerts = [];
+    if (statRes.ok) {
+      const st = await statRes.json();
+      const reqs = Number(st.requests || 0);
+      const hb   = Number(st.hardBounces || 0);
+      const spam = Number(st.spamReports || 0);
+
+      if (reqs >= BREVO_ALERT_DAILY_REQUESTS)
+        alerts.push([`volume`, `<b>${reqs}</b> emails sent today (alert threshold ${BREVO_ALERT_DAILY_REQUESTS};
+                      this shop normally sends fewer than 20).`]);
+      if (hb >= BREVO_ALERT_HARD_BOUNCES)
+        alerts.push([`bounces`, `<b>${hb}</b> hard bounces today — a sign of mail to addresses that were never yours.`]);
+      if (spam >= BREVO_ALERT_SPAM_REPORTS)
+        alerts.push([`spam`, `<b>${spam}</b> spam complaints today — this damages delivery for real customer mail.`]);
+    }
+
+    if (acctRes.ok) {
+      const acct = await acctRes.json();
+      const limit = (acct.plan || []).find((pl) => pl.creditsType === 'sendLimit');
+      if (limit && Number(limit.credits) <= 0)
+        alerts.push([`credits`, `Send credits are <b>exhausted</b>. Brevo will accept mail with a 201 and
+                     silently discard it — the app is routing around it to Resend.`]);
+    }
+
+    for (const [kind, line] of alerts) {
+      if (!alertOncePerDay(kind)) continue;
+      await alertViaResend(`🚨 Brevo anomaly (${kind}) — jtees.net`,
+        `<h2 style="color:#b91c1c">Something is wrong with the Brevo account</h2>
+         <p>${line}</p>
+         <p style="margin-top:14px"><b>Check now:</b></p>
+         <ul style="line-height:1.7">
+           <li>Brevo → Statistics → who the recent sends went to</li>
+           <li>Brevo → Settings → API Keys → "last used" per key</li>
+           <li>Brevo → Security / audit log → unfamiliar logins</li>
+         </ul>
+         <p style="color:#6b7280;font-size:13px">If this is an intrusion, revoke every API key. Sending
+            continues on Resend; set <code>JT_DISABLE_BREVO=1</code> to stop using Brevo entirely.</p>`);
+      console.error(`BREVO BREACH ALERT (${kind}): ${line.replace(/<[^>]+>/g, '')}`);
+    }
+  } catch (e) {
+    // Never throws: a monitor that can break the hourly sweep is a liability.
+    console.error('brevoBreachCheck failed:', e.message);
+  }
+}
+
 // Single source of truth for email validation across all endpoints
 function isValidEmail(str) {
   return /^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{2,}$/.test(String(str || '').trim());
@@ -796,9 +920,15 @@ async function sendPaymentReceivedEmail(s, amount) {
 
 // ─── Brevo ────────────────────────────────────────────────────────────────────
 
+/* One variable holds the Brevo key, deliberately. This used to prefer
+   JTEES_BREVO_MCP_API and fall back to BREVO_API_KEY, which meant the same
+   secret lived in two places — and on 2026-08-19 the key was rotated in one of
+   them and not the other, so every CRM call authenticated with a dead key
+   while sending looked fine. Two homes for one secret is two chances to rotate
+   half of it. */
 const brevo = axios.create({
   baseURL: 'https://api.brevo.com/v3',
-  headers: { 'api-key': process.env.JTEES_BREVO_MCP_API || process.env.BREVO_API_KEY, 'Content-Type': 'application/json' },
+  headers: { 'api-key': process.env.BREVO_API_KEY, 'Content-Type': 'application/json' },
 });
 
 async function syncToBrevo(s) {
@@ -7789,6 +7919,7 @@ if (process.env.JT_INTERNAL_KEY) {
       await expireOldQuotes();
       await sendDailyDigest();
       await taxMonthlyCheck();
+      await brevoBreachCheck();
     } catch (e) {
       console.error('abandoned-cart sweep failed:', e.message);
     }
@@ -8047,11 +8178,26 @@ app.use((_req, res) => {
 // process over an admin-only misconfiguration would turn that into a customer
 // facing outage, which is the opposite of what this check is for.
 function validateEnv() {
-  const REQUIRED_ENV = ['DATABASE_URL', 'BREVO_API_KEY', 'NOTIFICATION_EMAIL'];
+  /* BREVO_API_KEY is deliberately NOT here. It was, and that made pulling a
+     suspect key a choice between leaking and a total outage: unsetting it
+     crashed the boot and took the storefront down with it. The app sends fine
+     on Resend alone, so a missing Brevo key is a degraded mode, not a fatal
+     one — which is what makes "revoke it now, think later" a safe move. */
+  const REQUIRED_ENV = ['DATABASE_URL', 'NOTIFICATION_EMAIL'];
   const missingEnv = REQUIRED_ENV.filter(k => !process.env[k]?.trim());
   if (missingEnv.length) {
     console.error('Missing required environment variables:', missingEnv.join(', '));
     process.exit(1);
+  }
+  /* What actually has to hold is that SOME provider can send. Neither one
+     configured is fatal, because silent no-mail is the failure this whole
+     area exists to prevent. */
+  if (!process.env.BREVO_API_KEY?.trim() && !process.env.RESEND_API_KEY?.trim()) {
+    console.error('Missing email provider: set BREVO_API_KEY or RESEND_API_KEY (both absent = no mail can be sent)');
+    process.exit(1);
+  }
+  if (!process.env.BREVO_API_KEY?.trim()) {
+    console.warn('WARNING: BREVO_API_KEY is not set — sending via Resend only, and CRM sync is disabled.');
   }
   if (!process.env.RESEND_API_KEY?.trim()) {
     console.warn('WARNING: RESEND_API_KEY is not set — no fallback if Brevo sending fails.');
