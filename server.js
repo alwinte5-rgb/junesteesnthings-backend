@@ -588,6 +588,59 @@ async function isUnsubscribed(email) {
   } catch { return false; }   // never block a send because the table is unreachable
 }
 
+/* Brevo answers a send with `201 Created` and a real messageId even when the
+   account has zero send credits left, and then quietly discards the message.
+   Nothing throws, so the Resend fallback below never fires and every caller
+   believes the mail went out.
+
+   That is not hypothetical. On 2026-08-16 the shared Brevo account burned its
+   whole monthly send limit in one day; from then until it was found on 08-19
+   every notification the shop sends was accepted and destroyed — including the
+   "Deposit paid" alert for quote 731EAC, $141.12 that had banked correctly.
+   The money was never at risk; the shop simply was never told, and no log line
+   anywhere said so.
+
+   So the balance is polled and Brevo is skipped while it is empty, which is
+   what lets Resend actually take over. Any failure to read the balance leaves
+   Brevo enabled — an unreachable status endpoint must not stop mail. */
+const BREVO_CREDIT_TTL = 5 * 60 * 1000;
+let brevoCreditCheckedAt = 0;
+/* Starts optimistic: before anything is known, Brevo is tried. After a reading
+   lands this holds the last thing the balance actually said. */
+let brevoHasCredits = true;
+
+async function brevoCanSend(apiKey) {
+  /* The operator's override, for when the balance is not the problem — a
+   compromised key being the case it was written for. Costs one env var and
+   needs no deploy to undo. */
+  if (/^(1|true|yes|on)$/i.test(process.env.JT_DISABLE_BREVO || '')) return false;
+
+  if (Date.now() - brevoCreditCheckedAt < BREVO_CREDIT_TTL) return brevoHasCredits;
+  brevoCreditCheckedAt = Date.now();
+  try {
+    const r = await fetch('https://api.brevo.com/v3/account', {
+      headers: { 'api-key': apiKey },
+      signal: AbortSignal.timeout(8000),
+    });
+    /* An unreadable balance is not news, so it keeps whatever the last real
+       reading said rather than flipping back to optimism. Resetting to true
+       here would walk straight back into the silent drop every time Brevo's
+       status endpoint hiccupped, since sending is exactly what does not fail
+       when there are no credits. Staying on Resend costs nothing by comparison. */
+    if (!r.ok) return brevoHasCredits;
+    const d = await r.json();
+    const limit = (d.plan || []).find((p) => p.creditsType === 'sendLimit');
+    const ok = !limit || Number(limit.credits) > 0;
+    // Said on every re-check while empty: this is the one warning that explains
+    // an otherwise silent absence of mail.
+    if (!ok) console.error('sendEmail: Brevo send credits exhausted — routing to Resend');
+    else if (!brevoHasCredits) console.log('sendEmail: Brevo credits restored — resuming Brevo');
+    return (brevoHasCredits = ok);
+  } catch {
+    return brevoHasCredits;
+  }
+}
+
 // ─── Brevo email (preferred for customer messages; Resend is the fallback) ───
 // marketing:true adds the unsubscribe headers/footer and honours opt-outs.
 // Order receipts and shipping notices are transactional and stay exempt.
@@ -601,7 +654,7 @@ async function sendEmail({ to, subject, html, replyTo, marketing = false, text }
   const extraHeaders = marketing ? unsubHeaders(to) : {};
 
   const brevoKey = process.env.BREVO_API_KEY;
-  if (brevoKey) {
+  if (brevoKey && await brevoCanSend(brevoKey)) {
     try {
       const r = await fetch('https://api.brevo.com/v3/smtp/email', {
         method: 'POST',
@@ -625,7 +678,7 @@ async function sendEmail({ to, subject, html, replyTo, marketing = false, text }
       console.error('sendEmail: Brevo failed, falling back to Resend:', err.message);
     }
   }
-  if (!resend) throw new Error('Email send failed: Brevo errored and no RESEND_API_KEY fallback is configured');
+  if (!resend) throw new Error('Email send failed: Brevo unavailable and no RESEND_API_KEY fallback is configured');
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS, reply_to: replyTo || NOTIFY_EMAIL, to, subject, html,
     text: textContent,
@@ -4440,7 +4493,7 @@ async function bankStripeSession(session) {
       ${taxIn > 0 ? `<p style="background:#fff8ed;border:1px solid #fde3c0;border-radius:8px;padding:9px 12px;color:#8a5a00;font-size:13px">
          <b>${money(taxIn)}</b> of this is sales tax — set it aside, it is not income.</p>` : ''}
       <p><a href="${quoteLink(code)}">${quoteLink(code)}</a></p></div>`,
-  }).catch(() => {});
+  }).catch((e) => console.error(`payment alert to shop FAILED for quote ${code}:`, e.message));
 
   const to = q.email || session.customer_details?.email;
   if (to) {
@@ -4455,7 +4508,7 @@ async function bankStripeSession(session) {
         <p style="color:#374151;line-height:1.6">You're on the schedule — ${SHOP_SIGNER} will follow up
           with an artwork proof and timeline.</p>
         <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_NAME} &middot; ${SHOP_PHONE}</p></div>`,
-    }).catch(() => {});
+    }).catch((e) => console.error(`payment receipt to customer FAILED for quote ${code}:`, e.message));
   }
 
   if (q.brevo_deal_id) {
