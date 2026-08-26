@@ -4316,6 +4316,18 @@ app.get(['/q/:code/pay/card', '/q/:code/pay/balance'], async (req, res) => {
     form.set('cancel_url', `${PUBLIC_BASE_URL}/q/${q.code}`);
     form.set('client_reference_id', q.code);
     if (q.email) form.set('customer_email', q.email);
+    /* Makes Stripe email its own receipt. Worth having even though the app
+       sends a "Payment received" note of its own: the Stripe receipt is the
+       one with the card's last four and a permanent receipt URL, it is what a
+       customer means when they ask for "a receipt", and it does not depend on
+       this app being up — which mattered on 2026-08-16, when every email the
+       app sent was accepted and silently discarded for three days.
+
+       In live mode receipt_email sends regardless of the Dashboard's
+       "Successful payments" toggle, so this is not waiting on a setting. Where
+       the address is only collected at Checkout there is nothing to set here,
+       and that toggle is what covers those. */
+    if (q.email) form.set('payment_intent_data[receipt_email]', q.email);
     form.set('line_items[0][quantity]', '1');
     form.set('line_items[0][price_data][currency]', 'usd');
     form.set('line_items[0][price_data][unit_amount]', String(Math.round(amount * 100)));
@@ -4384,6 +4396,42 @@ async function alertShop(subject, innerHtml) {
     subject,
     html: `<div style="font-family:system-ui,sans-serif;max-width:560px">${innerHtml}</div>`,
   }).catch((e) => console.error('shop alert failed:', e.message));
+}
+
+/* A payment Stripe took that the quote ledger did not claim. Never throws —
+   an alert must not fail a webhook and make Stripe retry a settled payment. */
+async function alertUnbankedPayment(session, reason) {
+  try {
+    const gross = round2((session.amount_total || 0) / 100);
+    const ref   = String(session.client_reference_id || '').trim();
+    const email = session.customer_details?.email || '';
+    const name  = session.customer_details?.name || '';
+
+    /* The charge carries the receipt URL, not the session, so it costs one
+       lookup. Best-effort: a missing receipt link must not cost the alert. */
+    let receiptUrl = '';
+    const pi = typeof session.payment_intent === 'string' ? session.payment_intent : null;
+    if (pi && process.env.STRIPE_SECRET_KEY) {
+      try {
+        const r = await fetch(
+          `https://api.stripe.com/v1/payment_intents/${encodeURIComponent(pi)}?expand[]=latest_charge`,
+          { headers: { Authorization: 'Bearer ' + process.env.STRIPE_SECRET_KEY },
+            signal: AbortSignal.timeout(8000) });
+        if (r.ok) receiptUrl = (await r.json())?.latest_charge?.receipt_url || '';
+      } catch { /* leave it blank */ }
+    }
+
+    const dash = pi ? `https://dashboard.stripe.com/payments/${encodeURIComponent(pi)}` : '';
+    await alertShop(`💳 Stripe payment received — ${money(gross)}${ref ? ` (ref ${ref})` : ''}`,
+      `<h2 style="color:#1848B8">A payment came in outside the quote flow</h2>
+       <p><b>${money(gross)}</b>${name ? ` from ${escEmail(name)}` : ''}${email ? ` &lt;${escEmail(email)}&gt;` : ''}.</p>
+       <p style="color:#6b7280">Reference: <b>${escEmail(ref || '(none)')}</b> — not banked against a quote
+          (${escEmail(reason)}). If this is a design-studio order, it is tracked there, not on a quote.</p>
+       ${receiptUrl ? `<p><a href="${receiptUrl}">Customer receipt</a> — forward this if they ask for one.</p>` : ''}
+       ${dash ? `<p><a href="${dash}">Open in Stripe →</a></p>` : ''}`);
+  } catch (e) {
+    console.error('unbanked payment alert failed:', e.message);
+  }
 }
 
 async function bankStripeSession(session) {
@@ -4541,6 +4589,19 @@ app.post('/webhooks/stripe', async (req, res) => {
         console.log(`Stripe ${event.type} for ${obj.client_reference_id}: ` +
           (out.duplicate ? 'already banked (redirect won the race)' :
            out.ok ? `banked ${money(out.paid)}` : `skipped — ${out.reason}`));
+
+        /* A completed session that did NOT bank to a quote is still money that
+           arrived, and it used to end here as one log line nobody reads.
+           That is how the $35.75 payment for order #10 on 2026-08-11 was only
+           ever visible by opening the Stripe dashboard: the design studio sends
+           client_reference_id as the order number ("10"), QUOTE_CODE_RE wants
+           six characters, so it failed the test and fell out of the flow.
+
+           Not banking it is correct — an order is not a quote and has its own
+           ledger. Saying nothing is not. Tell the shop, and hand over the
+           Stripe receipt URL so a customer asking "where is my receipt" can be
+           answered from the email rather than from the dashboard. */
+        if (!out.ok && !out.duplicate) await alertUnbankedPayment(obj, out.reason);
         break;
       }
 
