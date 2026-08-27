@@ -4403,9 +4403,20 @@ async function alertShop(subject, innerHtml) {
 async function alertUnbankedPayment(session, reason) {
   try {
     const gross = round2((session.amount_total || 0) / 100);
-    const ref   = String(session.client_reference_id || '').trim();
     const email = session.customer_details?.email || '';
     const name  = session.customer_details?.name || '';
+
+    /* What this money belongs to, in the order the sources are trustworthy.
+       The design studio stamps metadata.order_id on both its checkout sessions
+       AND its balance Payment Links — and a Payment Link carries no
+       client_reference_id at all, so on a balance payment the metadata is the
+       only thing that identifies the order. Without reading it the alert would
+       say "reference (none)" for exactly the payments hardest to place. */
+    const orderId = String(session.metadata?.order_id || '').trim();
+    const ref = String(session.client_reference_id || '').trim();
+    const label = orderId ? `design studio order #${orderId}`
+                : ref     ? `reference ${ref}`
+                          : 'no reference';
 
     /* The charge carries the receipt URL, not the session, so it costs one
        lookup. Best-effort: a missing receipt link must not cost the alert. */
@@ -4422,11 +4433,12 @@ async function alertUnbankedPayment(session, reason) {
     }
 
     const dash = pi ? `https://dashboard.stripe.com/payments/${encodeURIComponent(pi)}` : '';
-    await alertShop(`💳 Stripe payment received — ${money(gross)}${ref ? ` (ref ${ref})` : ''}`,
+    await alertShop(`💳 Stripe payment received — ${money(gross)}${orderId ? ` (order #${orderId})` : ref ? ` (ref ${ref})` : ''}`,
       `<h2 style="color:#1848B8">A payment came in outside the quote flow</h2>
        <p><b>${money(gross)}</b>${name ? ` from ${escEmail(name)}` : ''}${email ? ` &lt;${escEmail(email)}&gt;` : ''}.</p>
-       <p style="color:#6b7280">Reference: <b>${escEmail(ref || '(none)')}</b> — not banked against a quote
-          (${escEmail(reason)}). If this is a design-studio order, it is tracked there, not on a quote.</p>
+       <p style="color:#6b7280">This is <b>${escEmail(label)}</b> — not banked against a quote
+          (${escEmail(reason)}). Design studio orders keep their own ledger on design.jtees.net;
+          this note exists so the money is never only visible in Stripe.</p>
        ${receiptUrl ? `<p><a href="${receiptUrl}">Customer receipt</a> — forward this if they ask for one.</p>` : ''}
        ${dash ? `<p><a href="${dash}">Open in Stripe →</a></p>` : ''}`);
   } catch (e) {

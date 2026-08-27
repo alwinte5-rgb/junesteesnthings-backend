@@ -107,3 +107,23 @@ test('the receipt address is only set when one is actually known', () => {
   assert.match(src, /if \(q\.email\) form\.set\('payment_intent_data\[receipt_email\]', q\.email\);/,
     'sending an empty receipt_email would error the session and take card payment down');
 });
+
+/* Balance payments arrive through a Stripe Payment Link, which carries no
+   client_reference_id at all — metadata.order_id is the only identifier on
+   them. An alert that reads only client_reference_id would say "no reference"
+   for precisely the payments hardest to place by hand. */
+test('the alert identifies a design-studio order from metadata', () => {
+  assert.match(ALERT_SRC, /session\.metadata\?\.order_id/,
+    'metadata.order_id is the only identifier on a Payment Link balance payment');
+});
+
+test('the subject line names the order when there is one', () => {
+  assert.match(ALERT_SRC, /order #\$\{orderId\}/,
+    'the shop should be able to place the payment from the subject line alone');
+});
+
+test('it still falls back to client_reference_id, then to saying so plainly', () => {
+  assert.match(ALERT_SRC, /ref\s*\?/);
+  assert.match(ALERT_SRC, /'no reference'/,
+    'an unidentifiable payment must still be announced, not dropped');
+});
