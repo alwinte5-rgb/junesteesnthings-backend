@@ -57,24 +57,27 @@ test('status is compared lowercased', () => {
 });
 
 test('the review is queued regardless of which milestone arrived', () => {
-  const queueAt = HANDLER.indexOf('INSERT INTO reviews');
+  const queueAt = HANDLER.indexOf('rescheduleReviewRequest');
   const notifyAt = HANDLER.indexOf("if (status === 'shipped')");
   assert.notStrictEqual(queueAt, -1, 'the review queue must still be here');
   assert.ok(queueAt > notifyAt, 'sanity: the queue follows the notice');
   const tail = HANDLER.slice(notifyAt);
   const queueBlock = tail.slice(tail.indexOf("if (isValidEmail(String(b.email"));
-  assert.doesNotMatch(queueBlock.slice(0, queueBlock.indexOf('INSERT INTO reviews')), /status === 'shipped'/,
+  assert.doesNotMatch(queueBlock.slice(0, queueBlock.indexOf('rescheduleReviewRequest')), /status === 'shipped'/,
     'the review queue must not be nested inside the shipped-only branch');
 });
 
+/* The dedupe moved out of this handler and into the shared helper, so both
+   payment and delivery are guarded by one rule instead of two that can drift.
+   These assert the rule where it now lives. */
 test('one ask per order, however many milestones it passes', () => {
-  assert.match(HANDLER, /WHERE NOT EXISTS \(\s*SELECT 1 FROM reviews/,
+  assert.match(src, /const PENDING_REVIEW_WHERE = `[\s\S]*?order_ref\s*=\s*\$1/,
     'complete-then-shipped calls this twice; the random token cannot deduplicate it');
-  assert.match(HANDLER, /order_ref = \$6 AND sent_at IS NULL AND submitted_at IS NULL/,
-    'the guard must key on the order, and must not block a genuine repeat order later');
+  assert.match(src, /WHERE NOT EXISTS \(SELECT 1 FROM reviews WHERE \$\{PENDING_REVIEW_WHERE\}\)/,
+    'queueReviewRequest must refuse to add a second ask for the same order or quote');
 });
 
 test('an already-sent ask does not block a future one', () => {
-  assert.match(HANDLER, /sent_at IS NULL/,
+  assert.match(src, /const PENDING_REVIEW_WHERE = `[\s\S]*?sent_at IS NULL AND submitted_at IS NULL/,
     'excluding sent rows is what lets a returning customer be asked again');
 });
