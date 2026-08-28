@@ -7397,10 +7397,21 @@ app.post('/api/order-notification', requireInternalKey, async (req, res) => {
   }
 });
 
-// "Your order shipped"
-/* Review requests ride on the shipped notice: the designer calls this when June
-   marks an order shipped, so the ask lands a sensible number of days later
-   rather than needing its own trigger. */
+// "Your order shipped" — and the review ask that rides on it.
+/* The designer calls this when an order reaches a milestone the customer would
+   recognise. `status` says which one:
+
+     shipped   → the customer gets the "on the way" notice, and a review is queued
+     complete  → review only, no notice
+
+   Both queue the ask because `shipped` alone never fires in practice: as of
+   2026-08-27 no order had ever carried that status — the statuses on file were
+   cancel x3 and complete x1 — so the review queue had stayed empty since the
+   day it was written. An ask that depends on a status nobody sets is an ask
+   that never happens.
+
+   `status` is optional and defaults to 'shipped', so a designer build that
+   predates this keeps its old behaviour exactly. */
 app.post('/api/order-shipped', requireInternalKey, async (req, res) => {
   try {
     const b = req.body || {};
@@ -7408,7 +7419,11 @@ app.post('/api/order-shipped', requireInternalKey, async (req, res) => {
     if (!isValidEmail(email)) return res.status(400).json({ error: 'bad email' });
     const name = String(b.name || '').trim();
     const tracking = String(b.tracking || '').trim();
-    await sendEmail({
+    const status = String(b.status || 'shipped').trim().toLowerCase();
+    /* Only a real shipment gets the shipping notice. Telling someone their
+       order "just left our shop" because it was marked complete is a message
+       they will read as a mistake, and rightly. */
+    if (status === 'shipped') await sendEmail({
       to: email,
       subject: `Your order #${b.order_id} is on the way 📦`,
       html: orderShell({
@@ -7429,10 +7444,17 @@ app.post('/api/order-shipped', requireInternalKey, async (req, res) => {
        sweep sends it when the date arrives. */
     if (isValidEmail(String(b.email || ''))) {
       const days = Math.max(0, parseInt(process.env.JT_REVIEW_DELAY_DAYS || '7', 10));
+      /* One ask per order, however many milestones it passes. An order that
+         goes complete and then shipped calls this twice, and the token is
+         random so ON CONFLICT (token) cannot stop the second — the guard has
+         to be the order itself. Rows already sent are excluded so a genuine
+         repeat order can still be asked later. */
       await pool.query(
         `INSERT INTO reviews (token, name, email, phone, product, order_ref, requested_at)
-         VALUES ($1,$2,$3,$4,$5,$6, NOW() + ($7 || ' days')::interval)
-         ON CONFLICT (token) DO NOTHING`,
+         SELECT $1,$2,$3,$4,$5,$6, NOW() + ($7 || ' days')::interval
+          WHERE NOT EXISTS (
+            SELECT 1 FROM reviews
+             WHERE order_ref = $6 AND sent_at IS NULL AND submitted_at IS NULL)`,
         [reviewToken(), b.name || '', String(b.email), b.phone || '',
          Array.isArray(b.items) && b.items[0] ? b.items[0].name : '',
          String(b.order_id || ''), String(days)]
