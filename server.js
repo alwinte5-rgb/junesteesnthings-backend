@@ -7537,6 +7537,42 @@ async function rescheduleReviewRequest({ name, email, phone, product, order_ref,
   }
 }
 
+/* Turn a line-item description into something sayable in a sentence.
+   The real values range from "Embroidery Chest Logo", which reads fine, to
+   "Valucap Bio-Washed Classic Dad Hat - VC300A", which does not — a SKU in a
+   subject line is the tell that a human did not write it. Strip the code,
+   drop quantity noise, and give up entirely if what is left is too long to
+   sit inside a sentence, rather than shipping a mangled half-name. */
+function reviewItemLabel(product) {
+  const raw = String(product || '').trim();
+  if (!raw) return '';
+
+  /* Take the most human-readable segment, not simply the first. Splitting
+     blindly turns "Bella+Canvas 3001T — Toddler Jersey Tee" into
+     "Bella+Canvas 3001T", which is the half a catalogue cares about and the
+     half a customer does not. Score each piece down for digits and SKU-shaped
+     tokens, up for actual words, and keep the winner. */
+  /* Whitespace on at least one side is required, or the split lands inside
+     hyphenated words: "T-shirt" became "T" and "Bio-Washed" became "Washed". */
+  const pieces = raw.split(/\s+[-—|]+\s*|\s*[-—|]+\s+/).map(x => x.trim()).filter(Boolean);
+  const score = (x) => {
+    const words = x.split(/\s+/).filter(w => /^[A-Za-z][A-Za-z']*$/.test(w)).length;
+    const skuish = /\b[A-Za-z]{0,4}\d{2,5}[A-Za-z]?\b/.test(x) ? 1 : 0;
+    const digits = (x.match(/\d/g) || []).length;
+    return words * 2 - skuish * 3 - digits;
+  };
+  let t = pieces.sort((a, b) => score(b) - score(a))[0] || raw;
+
+  t = t.replace(/\s*\b[A-Za-z]{0,4}\d{2,5}[A-Za-z]?\b\s*$/, '');      // trailing SKU
+  t = t.replace(/\s*\b\d+\s*(pair|pairs|pcs?|pieces?|qty|ct)\b\s*/gi, ' ');
+  t = t.replace(/[\s,;:+&-]+$/, '').replace(/\s{2,}/g, ' ').trim();
+
+  // Too long to sit inside a sentence, or nothing readable survived: say
+  // nothing rather than ship a mangled half-name.
+  if (!t || t.length > 42 || !/[A-Za-z]{3}/.test(t)) return '';
+  return escEmail(t);
+}
+
 /* Ask a customer for a review. Called after delivery. */
 async function requestReview({ token, name, email, phone, product, order_ref, quote_code }) {
   if (!isValidEmail(String(email || ''))) return null;
@@ -7552,20 +7588,51 @@ async function requestReview({ token, name, email, phone, product, order_ref, qu
   const stars = [1,2,3,4,5].map(n =>
     `<a href="${link}?r=${n}" style="text-decoration:none;font-size:30px;color:#F4A623">★</a>`).join(' ');
 
+  const first = name ? escEmail(String(name).split(' ')[0]) : '';
+  const item = reviewItemLabel(product);
+
+  /* The subject carries the THING, not the survey. "How did we do?" reads as an
+     automated NPS ping and gets treated like one; "How did the embroidery turn
+     out?" is a question only someone who knows the order could ask, and it is
+     the single biggest lever on whether this is opened at all. */
+  const subject = item
+    ? `How did the ${item} turn out${first ? ', ' + String(name).split(' ')[0] : ''}?`
+    : `How did we do${first ? ', ' + String(name).split(' ')[0] : ''}?`;
+
   await sendEmail({
     to: email,
-    subject: `How did we do${name ? ', ' + String(name).split(' ')[0] : ''}?`,
-    html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
-      <h2 style="color:#1848B8">How did we do?</h2>
-      <p style="color:#374151;line-height:1.6">
-        ${name ? escEmail(String(name).split(' ')[0]) + ', thanks' : 'Thanks'} again for your order${product ? ' — ' + escEmail(product) : ''}.
-        If you have a moment, tap a star. It takes seconds and it genuinely helps a small Chicago shop.</p>
-      <p style="text-align:center;margin:22px 0">${stars}</p>
-      <p style="text-align:center"><a href="${link}"
-         style="background:#1848B8;color:#fff;padding:12px 26px;border-radius:100px;text-decoration:none;font-weight:700">Leave a review</a></p>
-      <p style="color:#6b7280;font-size:13px;line-height:1.6;margin-top:18px">
-        Something not right? Reply to this email or text ${SHOP_PHONE} — ${SHOP_SIGNER} would much rather fix it.</p>
-      <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_NAME} &middot; 3047 N Lincoln Ave #435, Chicago, IL 60657</p>
+    subject,
+    html: `<div style="font-family:system-ui,-apple-system,'Segoe UI',sans-serif;max-width:520px;margin:0 auto;padding:8px">
+      <!-- Preview text: what the inbox shows beside the subject. Hidden in the
+           body so it never renders twice. -->
+      <div style="display:none;max-height:0;overflow:hidden;opacity:0">One tap, no form, no account.</div>
+
+      <p style="color:#374151;line-height:1.7;margin:0 0 14px">${first ? 'Hi ' + first + ',' : 'Hi,'}</p>
+
+      <p style="color:#374151;line-height:1.7;margin:0 0 14px">${
+        item ? `Your <strong>${item}</strong> went out a little while ago` : 'Your order went out a little while ago'} —
+        I hope it has had some use by now.</p>
+
+      <p style="color:#374151;line-height:1.7;margin:0 0 6px">If it turned out well, would you tap a star?
+        One click, no form, no account.</p>
+
+      <p style="text-align:center;margin:20px 0 6px;line-height:1">${stars}</p>
+      <p style="text-align:center;margin:0 0 22px"><a href="${link}"
+         style="color:#6b7280;font-size:13px;text-decoration:underline">or write a few words &rarr;</a></p>
+
+      <p style="color:#374151;line-height:1.7;margin:0 0 18px">Reviews are genuinely how a small Chicago shop
+        gets found instead of a big online printer. It takes about ten seconds and it helps more than you would think.</p>
+
+      <p style="color:#374151;line-height:1.7;margin:0 0 4px">Thank you,</p>
+      <p style="color:#111827;line-height:1.7;margin:0 0 22px;font-weight:600">${SHOP_SIGNER}</p>
+
+      <!-- The safety valve stays, but as a P.S. — the second most-read line in
+           any email, and the place an unhappy customer will actually see it. -->
+      <p style="color:#6b7280;font-size:13px;line-height:1.6;margin:0 0 18px;padding-top:14px;border-top:1px solid #eef1f8">
+        <strong>P.S.</strong> If anything was not right, just reply here or text me at ${SHOP_PHONE} —
+        I would far rather fix it than leave you unhappy.</p>
+
+      <p style="color:#9ca3af;font-size:12px;margin:0">${SHOP_NAME} &middot; 3047 N Lincoln Ave #435, Chicago, IL 60657</p>
     </div>`,
   });
   return token;
