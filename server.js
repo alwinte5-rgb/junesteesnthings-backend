@@ -751,17 +751,41 @@ async function brevoBreachCheck() {
             { headers: H, signal: AbortSignal.timeout(10000) }),
     ]);
 
-    /* A key that stopped working is itself worth saying out loud — it is what a
-       revocation by Brevo, or a rotation applied to only half the variables,
-       looks like from in here. */
+    /* A key that stopped working is worth saying out loud — it is what a
+       revocation, or a rotation applied to only half the variables, looks like
+       from in here.
+
+       But only if it is real. This alerted on 2026-08-27 and the key was fine
+       minutes later: both endpoints answered 200, the key was valid, credits
+       were simply 0. One transient 401 had been read as revocation. A monitor
+       that cries wolf gets muted, and a muted monitor is worse than none — so a
+       single failure now buys a retry, and only two in a row raise the alarm. */
     if (acctRes.status === 401 || statRes.status === 401) {
+      await new Promise((r) => setTimeout(r, 3000));
+      let stillDead = true;
+      try {
+        const retry = await fetch('https://api.brevo.com/v3/account',
+          { headers: H, signal: AbortSignal.timeout(10000) });
+        stillDead = retry.status === 401;
+      } catch {
+        // Unreachable is not the same as rejected; say nothing.
+        stillDead = false;
+      }
+      if (!stillDead) {
+        console.warn('brevoBreachCheck: transient 401 from Brevo, key still valid on retry');
+        return;
+      }
       if (alertOncePerDay('unauthorized')) {
         await alertViaResend('🚨 Brevo key rejected — jtees.net',
-          `<h2 style="color:#b91c1c">Brevo is answering 401</h2>
-           <p>The key in <code>BREVO_API_KEY</code> is no longer accepted. Mail is falling back to
-              Resend, but CRM contact and deal sync is failing.</p>
+          `<h2 style="color:#b91c1c">Brevo is answering 401 twice over</h2>
+           <p>The key in <code>BREVO_API_KEY</code> was rejected, retried, and rejected again.
+              Mail is falling back to Resend, but CRM contact and deal sync is failing.</p>
            <p>If you just rotated keys, update the Railway variable. If you did not,
-              treat the key as revoked and check the Brevo audit log.</p>`);
+              treat the key as revoked and check the Brevo audit log.</p>
+           <p style="color:#6b7280;font-size:13px">Worth knowing: a 401 is an authentication
+              failure, <b>not</b> an out-of-credits condition. With no credits Brevo returns
+              <code>201</code> and a messageId and then silently discards the mail — which is
+              why this app checks the balance separately.</p>`);
       }
       return;
     }
@@ -3005,6 +3029,26 @@ app.post('/quote/:code/step', requireAdmin, async (req, res) => {
     const { rows } = await pool.query(
       `UPDATE quotes SET ${col} = ${clear ? 'NULL' : 'NOW()'} WHERE code = $1 RETURNING *`, [code]);
     console.log(`quote ${code}: ${col} ${clear ? 'cleared' : 'set'}`);
+
+    /* Delivery is the honest moment to ask. The payment-time ask already sitting
+       against this quote was dated on a guess made before the job existed; this
+       moves it to a few days after the customer actually had the thing.
+
+       `delivered` is preferred over `shipped` deliberately — on this board
+       delivered_at is what "in their hands" means, and asking three days after
+       handing a box to a carrier is asking before it arrives. Shipped is
+       accepted too, because for local pickup work it is the last step anyone
+       records.
+
+       Clearing a step is a correction, not a milestone, so it does nothing. */
+    if (!clear && (col === 'delivered_at' || col === 'shipped_at') && rows.length) {
+      const q = rows[0];
+      rescheduleReviewRequest({
+        name: q.name, email: q.email, phone: q.phone,
+        product: (Array.isArray(q.items) && q.items[0] && q.items[0].description) || '',
+        quote_code: code, days: REVIEW_DAYS_AFTER_DELIVERY(),
+      }).catch(() => {});
+    }
     if (wantsJson) {
       const cl = rows.length ? quoteChecklist(rows[0]) : null;
       return res.json({
@@ -3419,6 +3463,49 @@ form:has(>.step-row){display:block}
 .quote-grid .card table{max-width:100%}
 .quote-grid .card details table{display:block;overflow-x:auto}
 `;
+
+/* ── The admin shell ─────────────────────────────────────────────────────────
+   Every operator page hangs off one nav, because until this existed there were
+   eight of them on inconsistent paths with no way between: /quotes, /production,
+   /books, /tax.csv, /customer, /admin/reviews, /inventory and /admin. Reviews
+   and Inventory were reachable only by typing the URL, and Books only via a
+   single "back to jobs" link buried in a table.
+
+   Deliberately NOT added to quotePage(): that shell also renders the public
+   quote at /q/:code, and putting Books and the submissions inbox in front of a
+   customer is a different kind of bug.
+
+   The routes themselves are not renamed. /production/:code and /admin/reviews
+   are already sitting in sent email — the daily digest links to job pages and
+   the review alert links to the approval screen — so moving them would break
+   links in mail already in June's inbox for no gain. */
+const ADMIN_NAV = [
+  { key: 'jobs',      href: '/quotes',         label: 'Jobs' },
+  { key: 'orders',    href: '/orders',         label: 'Orders' },
+  { key: 'money',     href: '/books',          label: 'Money' },
+  { key: 'customers', href: '/customer',       label: 'Customers' },
+  { key: 'reviews',   href: '/admin/reviews',  label: 'Reviews' },
+  { key: 'inbox',     href: '/admin',          label: 'Inbox' },
+];
+/* /inventory is deliberately absent: it answers JSON, not a page, so a nav
+   entry would drop June onto a wall of raw Clover data. /admin is here because
+   it IS a page she needs to reach — it just carries its own dark styling, so it
+   gets a plain link back rather than this nav. */
+
+function adminNav(active) {
+  return `<nav style="display:flex;flex-wrap:wrap;gap:4px;margin:0 0 18px;padding-bottom:10px;border-bottom:1px solid #e3e8f2">
+    ${ADMIN_NAV.map(n => `<a href="${n.href}" style="
+        text-decoration:none;padding:7px 14px;border-radius:100px;font-size:14px;
+        ${n.key === active
+          ? 'background:#1848B8;color:#fff;font-weight:700'
+          : 'color:#46505f;font-weight:600'}">${n.label}</a>`).join('')}
+  </nav>`;
+}
+
+/** Admin pages: the quote shell plus the nav. `active` is an ADMIN_NAV key. */
+function adminPage(title, body, active) {
+  return quotePage(title, adminNav(active) + body);
+}
 
 function quotePage(title, body) {
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
@@ -4615,6 +4702,18 @@ async function alertUnbankedPayment(session, reason) {
       } catch { /* leave it blank */ }
     }
 
+    /* Same floor as a quote payment. These orders live in the designer's own
+       database, so this is the only place on this side that ever learns the
+       customer's address — and until 2026-08-27 an order could be paid,
+       fulfilled and never asked, because the ask depended on a status nobody
+       set. */
+    if (orderId) {
+      queueReviewRequest({
+        name, email, product: '', order_ref: orderId,
+        days: REVIEW_DAYS_AFTER_PAYMENT(),
+      }).catch(() => {});
+    }
+
     const dash = pi ? `https://dashboard.stripe.com/payments/${encodeURIComponent(pi)}` : '';
     await alertShop(`💳 Stripe payment received — ${money(gross)}${orderId ? ` (order #${orderId})` : ref ? ` (ref ${ref})` : ''}`,
       `<h2 style="color:#1848B8">A payment came in outside the quote flow</h2>
@@ -4713,6 +4812,20 @@ async function bankStripeSession(session) {
   // Fires whether or not a deal exists — the contact is what workflows key on.
   syncQuoteContact({ ...q, paid_amount: res.paid },
     stillDue > 0 ? 'jt_deposit_paid' : 'jt_paid_in_full').catch(() => {});
+
+  /* Ask for a review eventually, whatever else happens to this job. Queued on
+     a deposit as well as a balance — the dedupe means the second payment on a
+     quote does not add a second ask, and marking the job delivered later moves
+     this date rather than creating another. */
+  queueReviewRequest({
+    name: q.name, email: q.email || session.customer_details?.email,
+    phone: q.phone,
+    /* Quote line items are JSONB with a `description`, not the `name` the
+       designer's order payload uses. Naming the thing they bought is what makes
+       the ask read as personal rather than automated. */
+    product: (Array.isArray(q.items) && q.items[0] && q.items[0].description) || '',
+    quote_code: code, days: REVIEW_DAYS_AFTER_PAYMENT(),
+  }).catch(() => {});
 
   return { ok: true, duplicate: false, paid: res.paid };
 }
@@ -5273,7 +5386,7 @@ app.get('/books', requireAdmin, async (req, res) => {
         <div style="font-size:22px;font-weight:700;color:${colour || '#111827'};margin-top:2px">${value}</div>
         ${sub ? `<div class="muted" style="font-size:11.5px;margin-top:2px">${sub}</div>` : ''}</div>`;
 
-    res.send(quotePage('Books', `<h1>Books — ${year}</h1>
+    res.send(adminPage('Books', `<h1>Books — ${year}</h1>
       <div class="sub">${years.map(y => y.y === year
         ? `<b>${y.y}</b>` : `<a href="/books?year=${y.y}" style="color:#1848B8">${y.y}</a>`).join(' &middot; ')}
         &middot; <a href="/quotes" style="color:#1848B8">back to jobs</a></div>
@@ -5530,7 +5643,7 @@ app.get('/books', requireAdmin, async (req, res) => {
           Held right now spans every period, not just ${year} — it is what should be in the bank today.
           <a href="/tax.csv" style="color:#1848B8">Download the payment-level detail</a>.
         </div>
-      </div>`));
+      </div>`, 'money'));
   } catch (err) {
     console.error('books failed:', err.message);
     res.status(500).send('error');
@@ -5834,7 +5947,7 @@ app.get('/customer', requireAdmin, async (req, res) => {
           <td class="num"><b>${money(l.unit)}</b> ea</td>
           <td class="num muted" style="font-size:12px">${fmtDate(l.when)}</td></tr>`).join('');
 
-    res.send(quotePage(h.name || 'Customer', `
+    res.send(adminPage(h.name || 'Customer', `
       <h1>${escEmail(h.name || h.phone || h.email)}</h1>
       <div class="sub">
         ${h.email ? `<a href="mailto:${escEmail(h.email)}">${escEmail(h.email)}</a> &middot; ` : ''}
@@ -5916,7 +6029,7 @@ app.get('/customer', requireAdmin, async (req, res) => {
 
       <p><a class="btn btn-ghost" href="/quotes">← All quotes</a>
          <a class="btn btn-ghost" href="/quote/new">New quote</a></p>
-    `));
+    `, 'customers'));
   } catch (err) {
     console.error('customer page failed:', err.message);
     res.status(500).send(quotePage('Error', '<div class="card"><div class="warn">Could not load that customer.</div></div>'));
@@ -5994,9 +6107,90 @@ app.post('/quote/:code/stage', requireAdmin, async (req, res) => {
    query and sort, different panels. One card carrying money, production,
    costing and history at once was unreadable; splitting the surfaces is what
    makes each one scannable. */
+/* ── Design-studio orders on the job board ──────────────────────────────────
+   Orders live in the designer's own MySQL, behind its own admin, on its own
+   domain. Rather than give this app a second database client — a new runtime
+   dependency, and a second writer to the same rows — it reads a JSON feed the
+   designer publishes and treats orders as READ-ONLY here. Editing an order
+   still happens in one place, which is the only way the two stay honest.
+
+   Cached and short-timeout on purpose: the board is the page June lives in, and
+   it must never hang or blank out because the designer is slow. A failed fetch
+   shows a visible note, never an empty lane — an empty lane reads as "no
+   orders", which is a lie the old setup already told for weeks. */
+const STUDIO_BASE = (process.env.JT_DESIGNER_URL || 'https://design.jtees.net').replace(/\/+$/, '');
+let _studioCache = { at: 0, orders: [], error: null };
+
+async function fetchStudioOrders() {
+  if (Date.now() - _studioCache.at < 60000) return _studioCache;
+  const key = process.env.JT_INTERNAL_KEY;
+  if (!key) return (_studioCache = { at: Date.now(), orders: [], error: 'JT_INTERNAL_KEY not set' });
+  try {
+    const r = await fetch(`${STUDIO_BASE}/orders_feed.php?key=${encodeURIComponent(key)}`,
+      { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw new Error(`feed answered ${r.status}`);
+    const d = await r.json();
+    return (_studioCache = { at: Date.now(), orders: Array.isArray(d.orders) ? d.orders : [], error: null });
+  } catch (e) {
+    console.error('studio orders feed failed:', e.message);
+    /* Keep whatever was last known good — a stale order list beats no list, as
+       long as the page says which it is. */
+    return (_studioCache = { at: Date.now(), orders: _studioCache.orders, error: e.message });
+  }
+}
+
+/** Map an order's single status onto the board's vocabulary. Deliberately
+ *  coarse: the designer has no per-step checklist, so pretending it does would
+ *  invent progress nobody recorded. */
+function studioStage(status) {
+  const st = String(status || '').toLowerCase();
+  if (st === 'complete') return { label: 'Delivered', color: '#166534', bg: '#e7f6ec' };
+  if (st === 'shipped')  return { label: 'Check & ship', color: '#8a5a00', bg: '#fff8ed' };
+  return { label: 'Press', color: '#1848B8', bg: '#eef2fd' };
+}
+
+function studioOrdersSection(feed, { heading = true } = {}) {
+  const rows = feed.orders.map((o) => {
+    const stage = studioStage(o.status);
+    const owed = round2(Math.max(0, Number(o.total || 0) - Number(o.paid || 0)));
+    return `<div class="card" style="padding:12px 14px">
+      <div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap">
+        <span class="chip" style="background:#eef1f8;color:#46505f">Studio</span>
+        <b>Order #${escEmail(String(o.id))}</b>
+        <span class="muted">${escEmail(o.name || 'no name')}${o.email ? ' &middot; ' + escEmail(o.email) : ''}</span>
+        <span style="margin-left:auto;white-space:nowrap">${money(o.total)}${
+          owed > 0 ? ` <span style="color:#b91c1c">&middot; ${money(owed)} due</span>` : ''}</span>
+      </div>
+      <div style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span class="chip" style="background:${stage.bg};color:${stage.color}">${stage.label}</span>
+        ${o.tracking ? `<span class="muted" style="font-size:12.5px">tracking ${escEmail(o.tracking)}</span>` : ''}
+        <a class="muted" style="font-size:12.5px;margin-left:auto"
+           href="${STUDIO_BASE}/admin.php?lumise-page=order&order_id=${encodeURIComponent(o.id)}"
+           target="_blank" rel="noopener">Open in studio &rarr;</a>
+      </div>
+    </div>`;
+  }).join('');
+
+  const warn = feed.error
+    ? `<div class="warn" style="margin-bottom:10px">Studio orders unavailable right now${
+        feed.orders.length ? ' — showing the last known list' : ''}. (${escEmail(feed.error)})</div>`
+    : '';
+
+  const empty = (!feed.orders.length && !feed.error)
+    ? '<div class="card"><p class="muted">No open studio orders.</p></div>' : '';
+
+  return `${heading ? `<h2 style="margin:22px 0 6px;font-size:19px">Studio orders</h2>
+    <div class="sub" style="margin-bottom:10px">Placed online at design.jtees.net &middot; read-only here</div>` : ''}
+    ${warn}${rows}${empty}`;
+}
+
 async function renderBoard(VIEW, req, res) {
   try {
     const { rows: allRows } = await pool.query('SELECT * FROM quotes ORDER BY created_at DESC LIMIT 200');
+    /* Fetched alongside the quotes so both halves of the shop appear on one
+       page. Never awaited in a way that can fail the board — fetchStudioOrders
+       resolves to a stale list plus an error rather than throwing. */
+    const studio = await fetchStudioOrders();
 
     /* Order by what needs attention, not by what arrived last. A board sorted
        by date buries the job that is about to miss its deadline under three
@@ -6382,7 +6576,7 @@ async function renderBoard(VIEW, req, res) {
     }).join('');
     const needCount = (body.match(/Needs a text/g) || []).length;
     const changeCount = (body.match(/Change requested/g) || []).length;
-    res.send(quotePage(VIEW === 'work' ? 'Production' : 'Quotes',
+    res.send(adminPage(VIEW === 'work' ? 'Production' : 'Quotes',
       `<h1>${VIEW === 'work' ? 'Production' : 'Quotes'}</h1>
       <div class="sub">${rows.length} total${
         atRiskCount ? ` &middot; <b style="color:#b91c1c">${atRiskCount} behind schedule</b>` : ''}${
@@ -6392,8 +6586,9 @@ async function renderBoard(VIEW, req, res) {
       <p style="margin-bottom:14px">
         <a class="btn" href="/quote/new">New quote</a>
         <a class="btn btn-ghost" href="/quotes" style="margin-left:8px${VIEW==='money'?';font-weight:800':''}">Money</a>
-        <a class="btn btn-ghost" href="/production" style="margin-left:6px${VIEW==='work'?';font-weight:800':''}">Production</a>
-        <a class="btn btn-ghost" href="/books" style="margin-left:6px">Books</a></p>
+        <a class="btn btn-ghost" href="/production" style="margin-left:6px${VIEW==='work'?';font-weight:800':''}">Production</a></p>
+      <!-- Books moved to the main nav; these two stay because they are the two
+           views of THIS board, not separate destinations. -->
 
       ${VIEW !== 'money' ? '' : `
       <div class="card" style="margin-bottom:16px">
@@ -6557,6 +6752,8 @@ async function renderBoard(VIEW, req, res) {
           </section>`).join('')}</div>
           ${live.length === 0 ? '<div class="card"><p class="muted">Nothing in production. Delivered jobs drop off this board.</p></div>' : ''}`;
       })() : (body ? `<div class="quote-grid">${body}</div>` : '<div class="card"><p class="muted">No quotes yet.</p></div>')}
+
+      ${studioOrdersSection(studio)}
       <script>
         /* Moving a kanban card posts in the background and re-renders just
            that card into its new column, so the board does not jump back to
@@ -6727,7 +6924,7 @@ async function renderBoard(VIEW, req, res) {
               a.select();document.execCommand('copy');a.remove();btn.textContent='Copied ✓';
             });
         }
-      </script>`));
+      </script>`, 'jobs'));
   } catch (err) {
     console.error('board render failed:', err.message);
     res.status(500).send(quotePage('Error', '<div class="card"><div class="warn">Could not load the board.</div></div>'));
@@ -6781,7 +6978,7 @@ app.get('/production/:code', requireAdmin, async (req, res) => {
         : `<div class="step-row step-auto" title="set automatically from your data — nothing to tap">${inner}<span class="step-auto-tag">auto</span></div>`;
     }).join('');
 
-    res.send(quotePage(`${q.code} — production`, `
+    res.send(adminPage(`${q.code} — production`, `
       <h1>${escEmail(q.name || q.code)}</h1>
       <div class="sub">${escEmail(q.code)} · ${money(q.total)} ·
         <a href="/production" style="color:#1848B8">back to the board</a> ·
@@ -6879,7 +7076,7 @@ app.get('/production/:code', requireAdmin, async (req, res) => {
             .catch(function(){ form.submit(); });
           });
         });
-      </script>`));
+      </script>`, 'jobs'));
   } catch (err) {
     console.error('job detail failed:', err.message);
     res.redirect('/production');
@@ -6888,6 +7085,21 @@ app.get('/production/:code', requireAdmin, async (req, res) => {
 
 app.get('/quotes',     requireAdmin, (req, res) => renderBoard('money', req, res));
 app.get('/production', requireAdmin, (req, res) => renderBoard('work',  req, res));
+
+/* Studio orders on their own, for when that is the question being asked. The
+   same list also sits at the foot of the job board — this is a view, not a
+   second source. */
+app.get('/orders', requireAdmin, async (_req, res) => {
+  const studio = await fetchStudioOrders();
+  const open = studio.orders.filter(o => String(o.status).toLowerCase() !== 'complete').length;
+  res.send(adminPage('Studio orders', `<h1>Studio orders</h1>
+    <div class="sub">${studio.orders.length} on file${
+      open ? ` &middot; <b>${open}</b> still open` : ''} &middot; placed online at design.jtees.net</div>
+    <p style="margin-bottom:14px">
+      <a class="btn btn-ghost" href="${STUDIO_BASE}/admin.php?lumise-page=orders" target="_blank" rel="noopener">
+        Open the studio admin &rarr;</a></p>
+    ${studioOrdersSection(studio, { heading: false })}`, 'orders'));
+});
 
 
 /* ══ Reviews ══════════════════════════════════════════════════════════════
@@ -7156,6 +7368,76 @@ app.post('/review/:token', orderRateLimit, verifyTurnstile, async (req, res) => 
   }
 });
 
+/* ── Queuing a review ask ────────────────────────────────────────────────────
+   Two delays, because there are two moments worth asking from and only one of
+   them is guaranteed to happen.
+
+   PAYMENT is the floor. It always occurs and always carries an email address,
+   so every paying customer gets asked eventually. It is also the less accurate
+   moment: the goods do not exist yet.
+
+   DELIVERY is the accurate trigger, and it is optional in practice — the whole
+   review system sat at zero rows for its entire life because its only trigger
+   was an order status nobody ever set. So delivery does not CREATE the ask, it
+   RESCHEDULES the one payment already queued, to a few days after the customer
+   actually had the thing in their hands. */
+const REVIEW_DAYS_AFTER_PAYMENT  = () =>
+  Math.max(0, parseInt(process.env.JT_REVIEW_AFTER_PAYMENT_DAYS || '14', 10));
+const REVIEW_DAYS_AFTER_DELIVERY = () =>
+  Math.max(0, parseInt(process.env.JT_REVIEW_DELAY_DAYS || '3', 10));
+
+/** The row this order or quote already has waiting, if any. Sent rows are
+ *  deliberately excluded: a returning customer should be askable again. */
+const PENDING_REVIEW_WHERE = `
+  (($1::text IS NOT NULL AND order_ref  = $1)
+    OR ($2::text IS NOT NULL AND quote_code = $2))
+  AND sent_at IS NULL AND submitted_at IS NULL`;
+
+/** Queue an ask, unless one is already waiting for this order or quote.
+ *  Never throws — a review is never worth failing a payment over. */
+async function queueReviewRequest({ name, email, phone, product, order_ref, quote_code, days }) {
+  if (!isValidEmail(String(email || ''))) return false;
+  if (!order_ref && !quote_code) return false;
+  try {
+    const { rowCount } = await pool.query(
+      `INSERT INTO reviews (token,name,email,phone,product,order_ref,quote_code,requested_at)
+       SELECT $3,$4,$5,$6,$7,$1,$2, NOW() + ($8 || ' days')::interval
+        WHERE NOT EXISTS (SELECT 1 FROM reviews WHERE ${PENDING_REVIEW_WHERE})`,
+      [order_ref || null, quote_code || null, reviewToken(), name || '',
+       String(email), phone || '', product || '', String(Math.max(0, Number(days) || 0))]);
+    if (rowCount) {
+      console.log(`review queued for ${order_ref ? 'order ' + order_ref : 'quote ' + quote_code}`
+        + ` in ${days} day(s)`);
+    }
+    return rowCount > 0;
+  } catch (e) {
+    console.error('review queue failed:', e.message);
+    return false;
+  }
+}
+
+/** Move a waiting ask to `days` from now. Used when delivery is recorded: the
+ *  payment-time date was a guess, this one is not. Falls back to queuing if
+ *  nothing is waiting — an order paid before this code shipped still gets asked.
+ *  A row already sent is left alone; the customer has had their email. */
+async function rescheduleReviewRequest({ name, email, phone, product, order_ref, quote_code, days }) {
+  try {
+    const { rowCount } = await pool.query(
+      `UPDATE reviews SET requested_at = NOW() + ($3 || ' days')::interval
+        WHERE ${PENDING_REVIEW_WHERE}`,
+      [order_ref || null, quote_code || null, String(Math.max(0, Number(days) || 0))]);
+    if (rowCount) {
+      console.log(`review rescheduled for ${order_ref ? 'order ' + order_ref : 'quote ' + quote_code}`
+        + ` to ${days} day(s) out`);
+      return true;
+    }
+    return queueReviewRequest({ name, email, phone, product, order_ref, quote_code, days });
+  } catch (e) {
+    console.error('review reschedule failed:', e.message);
+    return false;
+  }
+}
+
 /* Ask a customer for a review. Called after delivery. */
 async function requestReview({ token, name, email, phone, product, order_ref, quote_code }) {
   if (!isValidEmail(String(email || ''))) return null;
@@ -7237,13 +7519,74 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
       </div>`).join('');
     const live = rows.filter(r => r.approved).length;
     const avg = rows.length ? (rows.reduce((a, r) => a + (r.rating || 0), 0) / rows.length).toFixed(1) : '—';
-    res.send(quotePage('Reviews', `<h1>Reviews</h1>
+
+    /* Customers who paid before any of this was wired up, and were never asked.
+       Paid in full only: asking somebody who has put a deposit down is asking
+       before the work exists. Nothing sends from rendering this — the ask is
+       queued only when June ticks a box and submits, which is the point of
+       showing the list at all. */
+    const { rows: never } = await pool.query(
+      `SELECT q.code, q.name, q.email, q.total, q.paid_amount
+         FROM quotes q
+        WHERE q.email IS NOT NULL AND q.email <> ''
+          AND q.total > 0 AND q.paid_amount >= q.total - 0.005
+          AND NOT EXISTS (SELECT 1 FROM reviews r WHERE r.quote_code = q.code)
+        ORDER BY q.paid_at DESC NULLS LAST, q.id DESC LIMIT 100`);
+
+    const backfill = !never.length ? '' : `
+      <div class="card">
+        <h2 style="margin:0 0 4px;font-size:18px">Past customers who have never been asked</h2>
+        <p class="muted" style="margin:0 0 12px">Paid in full, no review request on file.
+           Ticking a box queues the ask on the next hourly sweep — nothing sends from this page.</p>
+        <form method="POST" action="/admin/reviews/backfill">
+          ${never.map(q => `
+            <label style="display:flex;gap:10px;align-items:center;padding:8px 0;border-top:1px solid #eef1f8;margin:0;cursor:pointer">
+              <input type="checkbox" name="code" value="${escEmail(q.code)}" style="width:auto;margin:0">
+              <span style="flex:1"><b>${escEmail(q.code)}</b>
+                <span class="muted">&middot; ${escEmail(q.name || 'no name')} &middot; ${escEmail(q.email)}</span></span>
+              <span class="muted" style="white-space:nowrap">${money(q.total)}</span>
+            </label>`).join('')}
+          <button style="margin-top:12px;padding:10px 22px">Queue selected</button>
+        </form>
+      </div>`;
+
+    res.send(adminPage('Reviews', `<h1>Reviews</h1>
       <div class="sub">${rows.length} received &middot; ${live} live on the site &middot; average ${avg}</div>
-      ${body || '<div class="card"><p class="muted">No reviews yet.</p></div>'}`));
+      ${backfill}
+      ${body || '<div class="card"><p class="muted">No reviews yet.</p></div>'}`, 'reviews'));
   } catch (err) {
     console.error('reviews admin failed:', err.message);
     res.status(500).send(quotePage('Error', '<div class="card"><div class="warn">Could not load reviews.</div></div>'));
   }
+});
+
+/* Queue asks for customers who paid before the review flow was wired to
+   anything. Registered BEFORE /admin/reviews/:id so 'backfill' is not swallowed
+   by the :id route and parsed as NaN. */
+app.post('/admin/reviews/backfill', requireAdmin, async (req, res) => {
+  const raw = (req.body || {}).code;
+  const codes = (Array.isArray(raw) ? raw : [raw])
+    .map(c => String(c || '').toUpperCase())
+    .filter(c => QUOTE_CODE_RE.test(c));
+  let queued = 0;
+  for (const code of codes) {
+    try {
+      const { rows } = await pool.query('SELECT * FROM quotes WHERE code=$1', [code]);
+      if (!rows.length) continue;
+      const q = rows[0];
+      /* days: 0 — these jobs are already weeks old, so the ask goes out on the
+         next sweep rather than waiting out a delay meant for fresh payments. */
+      if (await queueReviewRequest({
+        name: q.name, email: q.email, phone: q.phone,
+        product: (Array.isArray(q.items) && q.items[0] && q.items[0].description) || '',
+        quote_code: code, days: 0,
+      })) queued++;
+    } catch (e) {
+      console.error(`backfill failed for ${code}:`, e.message);
+    }
+  }
+  console.log(`review backfill: queued ${queued} of ${codes.length} selected`);
+  res.redirect('/admin/reviews');
 });
 
 app.post('/admin/reviews/:id', requireAdmin, async (req, res) => {
@@ -7443,22 +7786,16 @@ app.post('/api/order-shipped', requireInternalKey, async (req, res) => {
        lost on the next deploy, and this service redeploys often. The hourly
        sweep sends it when the date arrives. */
     if (isValidEmail(String(b.email || ''))) {
-      const days = Math.max(0, parseInt(process.env.JT_REVIEW_DELAY_DAYS || '7', 10));
-      /* One ask per order, however many milestones it passes. An order that
-         goes complete and then shipped calls this twice, and the token is
-         random so ON CONFLICT (token) cannot stop the second — the guard has
-         to be the order itself. Rows already sent are excluded so a genuine
-         repeat order can still be asked later. */
-      await pool.query(
-        `INSERT INTO reviews (token, name, email, phone, product, order_ref, requested_at)
-         SELECT $1,$2,$3,$4,$5,$6, NOW() + ($7 || ' days')::interval
-          WHERE NOT EXISTS (
-            SELECT 1 FROM reviews
-             WHERE order_ref = $6 AND sent_at IS NULL AND submitted_at IS NULL)`,
-        [reviewToken(), b.name || '', String(b.email), b.phone || '',
-         Array.isArray(b.items) && b.items[0] ? b.items[0].name : '',
-         String(b.order_id || ''), String(days)]
-      ).catch(e => console.error('review queue failed:', e.message));
+      const days = REVIEW_DAYS_AFTER_DELIVERY();
+      /* The payment already queued an ask against this order; this moves it to
+         the delivery delay rather than adding a second. rescheduleReviewRequest
+         falls back to queuing when nothing is waiting, which covers orders paid
+         before any of this existed. */
+      await rescheduleReviewRequest({
+        name: b.name || '', email: String(b.email), phone: b.phone || '',
+        product: Array.isArray(b.items) && b.items[0] ? b.items[0].name : '',
+        order_ref: String(b.order_id || ''), days,
+      });
     }
 
     res.json({ ok: true });
