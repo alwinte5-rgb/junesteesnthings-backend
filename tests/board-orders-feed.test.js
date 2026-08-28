@@ -164,3 +164,45 @@ test('each admin page tells the nav which section it is', () => {
       `no page passes the "${key}" key, so that entry never highlights`);
   }
 });
+
+/* ── the nav must not point at a page that bounces ───────────────────────── */
+
+test('Customers points at the list, not the single-customer lookup', () => {
+  assert.doesNotMatch(NAV_BLOCK, /href:\s*'\/customer'/,
+    '/customer requires ?q= and redirects to /quotes without one — as a nav entry it was a loop straight back to the board');
+  assert.match(NAV_BLOCK, /href:\s*'\/customers'/);
+});
+
+test('the customers list is admin-gated and reachable', () => {
+  assert.match(src, /app\.get\('\/customers', requireAdmin/);
+});
+
+test('the customers list merges both halves of the shop', () => {
+  const page = extractFn("app.get('/customers'");
+  assert.match(page, /FROM quotes/, 'quote customers live in Postgres');
+  assert.match(page, /fetchStudioOrders\(\)/, 'studio customers arrive on the orders feed');
+  assert.match(page, /byEmail/,
+    'the same person can appear in both and must not be listed twice');
+  assert.match(page, /String\(o\.email \|\| ''\)\.toLowerCase\(\)/,
+    'merging on a case-sensitive email would split one person into two rows');
+});
+
+test('a broken studio feed degrades the customer list rather than emptying it', () => {
+  const page = extractFn("app.get('/customers'");
+  assert.match(page, /studio\.error \?/,
+    'quote customers must still list, and the page must say the studio half is missing');
+});
+
+/* ── the return leg ──────────────────────────────────────────────────────── */
+
+test('there is a way back to the studio from every admin page', () => {
+  const nav = extractFn('function adminNav(');
+  assert.match(nav, /STUDIO_ADMIN/,
+    'Lumise links here with SSO; without this you land on the board and have no way back');
+  assert.match(nav, /target="_blank"/);
+});
+
+test('the studio URL follows the same override as the feed', () => {
+  assert.match(src, /const STUDIO_ADMIN = \(process\.env\.JT_DESIGNER_URL/,
+    'two hardcoded designer hostnames would drift the first time one moves');
+});

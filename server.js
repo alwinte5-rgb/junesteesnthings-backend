@@ -3480,25 +3480,38 @@ form:has(>.step-row){display:block}
    the review alert links to the approval screen — so moving them would break
    links in mail already in June's inbox for no gain. */
 const ADMIN_NAV = [
-  { key: 'jobs',      href: '/quotes',         label: 'Jobs' },
-  { key: 'orders',    href: '/orders',         label: 'Orders' },
-  { key: 'money',     href: '/books',          label: 'Money' },
-  { key: 'customers', href: '/customer',       label: 'Customers' },
-  { key: 'reviews',   href: '/admin/reviews',  label: 'Reviews' },
-  { key: 'inbox',     href: '/admin',          label: 'Inbox' },
+  { key: 'jobs',      href: '/quotes',        label: 'Jobs' },
+  { key: 'orders',    href: '/orders',        label: 'Orders' },
+  { key: 'customers', href: '/customers',     label: 'Customers' },
+  { key: 'leads',     href: '/admin',         label: 'Leads' },
+  { key: 'money',     href: '/books',         label: 'Finances' },
+  { key: 'reviews',   href: '/admin/reviews', label: 'Reviews' },
 ];
-/* /inventory is deliberately absent: it answers JSON, not a page, so a nav
-   entry would drop June onto a wall of raw Clover data. /admin is here because
-   it IS a page she needs to reach — it just carries its own dark styling, so it
-   gets a plain link back rather than this nav. */
+/* Ordered the way a shop is actually worked, not the way the routes grew:
+   work in hand, then money that arrived, then the people it came from, then
+   the leads that have not become either yet, then the books, then reputation.
+
+   /inventory is deliberately absent — it answers JSON, not a page, so a nav
+   entry would drop June onto a wall of raw Clover data.
+
+   The studio sits outside this list because it is a different application on a
+   different domain. It already links here (Quotes, New Quote, Reviews, Sales
+   Stats, all SSO'd); this is the return leg, which did not exist — you could
+   get from Lumise to the job board and then had no way back except the browser
+   history or a bookmark. */
+const STUDIO_ADMIN = (process.env.JT_DESIGNER_URL || 'https://design.jtees.net')
+  .replace(/\/+$/, '') + '/admin.php';
 
 function adminNav(active) {
-  return `<nav style="display:flex;flex-wrap:wrap;gap:4px;margin:0 0 18px;padding-bottom:10px;border-bottom:1px solid #e3e8f2">
+  return `<nav style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin:0 0 18px;padding-bottom:10px;border-bottom:1px solid #e3e8f2">
     ${ADMIN_NAV.map(n => `<a href="${n.href}" style="
         text-decoration:none;padding:7px 14px;border-radius:100px;font-size:14px;
         ${n.key === active
           ? 'background:#1848B8;color:#fff;font-weight:700'
           : 'color:#46505f;font-weight:600'}">${n.label}</a>`).join('')}
+    <a href="${STUDIO_ADMIN}" target="_blank" rel="noopener" style="
+       margin-left:auto;text-decoration:none;padding:7px 14px;border-radius:100px;
+       font-size:14px;color:#46505f;font-weight:600;border:1px solid #e3e8f2">Studio &#8599;</a>
   </nav>`;
 }
 
@@ -5889,6 +5902,92 @@ app.get('/q/:code/vcard', async (req, res) => {
 
 
 /* One customer, everything about them. Reached from the quotes list. */
+/* The customer LIST. /customer (singular) is the history for one person and
+   needs a ?q= — linking the nav at it sent you straight back to the board,
+   which is the bug this replaces.
+
+   Both halves of the shop appear here, merged on email: people who bought
+   through a quote live in Postgres, people who ordered through the studio live
+   in the designer's MySQL and arrive on the orders feed. Neither list on its
+   own is "your customers", and until now neither page pretended to be. */
+app.get('/customers', requireAdmin, async (_req, res) => {
+  try {
+    const { rows: quoteCustomers } = await pool.query(
+      `SELECT lower(email) AS email, max(name) AS name,
+              count(*) AS jobs, coalesce(sum(paid_amount), 0) AS paid,
+              max(created_at) AS last_seen
+         FROM quotes
+        WHERE email IS NOT NULL AND email <> ''
+        GROUP BY lower(email)`);
+
+    const studio = await fetchStudioOrders();
+    const byEmail = new Map();
+
+    for (const c of quoteCustomers) {
+      byEmail.set(c.email, {
+        email: c.email, name: c.name || '', quotes: Number(c.jobs),
+        orders: 0, spent: Number(c.paid || 0), last: c.last_seen, source: 'quotes',
+      });
+    }
+    for (const o of studio.orders) {
+      const key = String(o.email || '').toLowerCase();
+      if (!key) continue;
+      const cur = byEmail.get(key);
+      if (cur) {
+        cur.orders += 1;
+        cur.spent += Number(o.paid || 0);
+        cur.source = 'both';
+        if (!cur.name) cur.name = o.name || '';
+        if (o.created && new Date(o.created) > new Date(cur.last)) cur.last = o.created;
+      } else {
+        byEmail.set(key, {
+          email: key, name: o.name || '', quotes: 0, orders: 1,
+          spent: Number(o.paid || 0), last: o.created, source: 'studio',
+        });
+      }
+    }
+
+    const people = [...byEmail.values()].sort((a, b) => Number(b.spent) - Number(a.spent));
+    const chip = { quotes: ['Quotes', '#eef2fd', '#1848B8'],
+                   studio: ['Studio', '#eef1f8', '#46505f'],
+                   both:   ['Both',   '#e7f6ec', '#166534'] };
+
+    const rows = people.map((c) => {
+      const [label, bg, fg] = chip[c.source];
+      return `<tr>
+        <td style="padding:9px 6px;border-bottom:1px solid #eef1f8">
+          <a href="/customer?q=${encodeURIComponent(c.email)}" style="color:#1848B8;font-weight:600;text-decoration:none">${
+            escEmail(c.name || c.email)}</a>
+          <div class="muted" style="font-size:12.5px">${escEmail(c.email)}</div></td>
+        <td style="padding:9px 6px;border-bottom:1px solid #eef1f8">
+          <span class="chip" style="background:${bg};color:${fg}">${label}</span></td>
+        <td style="padding:9px 6px;border-bottom:1px solid #eef1f8;text-align:right;white-space:nowrap">${
+          c.quotes || '—'}</td>
+        <td style="padding:9px 6px;border-bottom:1px solid #eef1f8;text-align:right;white-space:nowrap">${
+          c.orders || '—'}</td>
+        <td style="padding:9px 6px;border-bottom:1px solid #eef1f8;text-align:right;white-space:nowrap;font-weight:600">${
+          money(c.spent)}</td>
+      </tr>`;
+    }).join('');
+
+    res.send(adminPage('Customers', `<h1>Customers</h1>
+      <div class="sub">${people.length} in total &middot; quote customers and studio customers, merged on email${
+        studio.error ? ' &middot; <b style="color:#b91c1c">studio list unavailable, showing quotes only</b>' : ''}</div>
+      ${people.length ? `<div class="card" style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:14px">
+        <thead><tr style="text-align:left">
+          <th style="padding:6px">Customer</th><th style="padding:6px">Seen in</th>
+          <th style="padding:6px;text-align:right">Quotes</th>
+          <th style="padding:6px;text-align:right">Orders</th>
+          <th style="padding:6px;text-align:right">Paid</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>`
+        : '<div class="card"><p class="muted">No customers yet.</p></div>'}`, 'customers'));
+  } catch (err) {
+    console.error('customers list failed:', err.message);
+    res.status(500).send(adminPage('Error',
+      '<div class="card"><div class="warn">Could not load customers.</div></div>', 'customers'));
+  }
+});
+
 app.get('/customer', requireAdmin, async (req, res) => {
   const q = String(req.query.q || '').trim();
   if (!q) return res.redirect('/quotes');
