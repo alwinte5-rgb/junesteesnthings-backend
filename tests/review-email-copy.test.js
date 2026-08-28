@@ -4,31 +4,31 @@
  *
  * The first version went out to six real customers with the subject
  * "How did we do, <Name>?" — which reads as an automated NPS ping and gets
- * treated like one. The rewrite puts the actual thing they bought in the
- * subject, because a question only someone who knows the order could ask is
- * the single biggest lever on whether the mail is opened at all.
+ * treated like one.
  *
- * That only works if the product string is sayable inside a sentence, and the
- * real ones are not uniformly friendly. These are the six live values:
+ * The rewrite asks about the order in the owner's own voice. An earlier draft
+ * named the PRODUCT in the subject, and that was reverted after reading what
+ * the real values actually are:
  *
- *   Embroidery Chest Logo                          already fine
- *   Shirt with photo                               already fine
- *   Comfort Colors T-shirt - Navy Blue             colour suffix to drop
- *   Custom Print on Jeans - 2 pair- Princess & Frog quantity noise
- *   Valucap Bio-Washed Classic Dad Hat - VC300A    trailing SKU
- *   Bella+Canvas 3001T — Toddler Jersey Tee        SKU FIRST, name second
+ *   Valucap Bio-Washed Classic Dad Hat - VC300A
+ *   Comfort Colors T-shirt - Navy Blue
+ *   Bella+Canvas 3001T — Toddler Jersey Tee
+ *   Shirt with photo
  *
- * The last one is why the picker scores segments instead of taking the first:
- * "How did the Bella+Canvas 3001T turn out?" is worse than the generic line it
- * replaced. And the separator needs whitespace around it, or the split lands
- * inside "T-shirt" and "Bio-Washed".
+ * Those are supplier catalogue names. No customer thinks of their order that
+ * way, and dropping one into a sentence made it read like a picking list —
+ * worse than the generic line it was meant to improve. The lesson worth
+ * keeping: personalising with a field is only an improvement when the field
+ * contains something a person would actually say.
+ *
+ * These tests hold the parts that carry the mail: the voice, the single ask,
+ * the preview line, and the route out for an unhappy customer.
  */
 
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const vm = require('node:vm');
 
 const SERVER = path.join(__dirname, '..', 'server.js');
 const src = fs.readFileSync(SERVER, 'utf8');
@@ -51,71 +51,15 @@ function extractFn(anchor) {
   throw new Error(`unterminated function reading \`${anchor}\``);
 }
 
-/* Run the real function, not a restatement of it. */
-const label = (() => {
-  const sandbox = { escEmail: (s) => String(s) };
-  vm.createContext(sandbox);
-  vm.runInContext(extractFn('function reviewItemLabel('), sandbox);
-  return sandbox.reviewItemLabel;
-})();
-
-/* ── the six values actually in the reviews table ────────────────────────── */
-
-test('a readable name is left alone', () => {
-  assert.strictEqual(label('Embroidery Chest Logo'), 'Embroidery Chest Logo');
-  assert.strictEqual(label('Shirt with photo'), 'Shirt with photo');
-});
-
-test('a colour suffix is dropped', () => {
-  assert.strictEqual(label('Comfort Colors T-shirt - Navy Blue'), 'Comfort Colors T-shirt');
-});
-
-test('quantity noise is dropped', () => {
-  assert.strictEqual(label('Custom Print on Jeans - 2 pair- Princess & Frog'), 'Custom Print on Jeans');
-});
-
-test('a trailing SKU is dropped', () => {
-  assert.strictEqual(label('Valucap Bio-Washed Classic Dad Hat - VC300A'),
-    'Valucap Bio-Washed Classic Dad Hat');
-});
-
-test('the human half wins when the SKU comes first', () => {
-  assert.strictEqual(label('Bella+Canvas 3001T — Toddler Jersey Tee'), 'Toddler Jersey Tee',
-    'taking the first segment would put a SKU in the subject line');
-});
-
-/* ── hyphens inside words are not separators ─────────────────────────────── */
-
-test('hyphenated words survive the split', () => {
-  assert.match(label('Comfort Colors T-shirt - Navy Blue'), /T-shirt/,
-    'an unspaced hyphen is part of the word, not a separator');
-  assert.match(label('Valucap Bio-Washed Classic Dad Hat - VC300A'), /Bio-Washed/);
-});
-
-/* ── give up rather than ship something mangled ──────────────────────────── */
-
-test('a bare SKU produces nothing, not a broken subject', () => {
-  assert.strictEqual(label('VC300A'), '');
-});
-
-test('empty and missing input produce nothing', () => {
-  for (const v of ['', null, undefined, '   ']) assert.strictEqual(label(v), '');
-});
-
-test('something too long for a sentence produces nothing', () => {
-  assert.strictEqual(
-    label('A ludicrously long product description nobody would want in a subject line'), '');
-});
-
 /* ── the email itself ────────────────────────────────────────────────────── */
 
 const REQUEST = extractFn('async function requestReview(');
 
-test('the subject names the item when there is one, and degrades when there is not', () => {
-  assert.match(REQUEST, /How did the \$\{item\} turn out/,
-    'the item is the whole reason this is opened rather than deleted');
-  assert.match(REQUEST, /How did we do\$\{first/,
-    'with no usable item name it must still send, not send a broken subject');
+test('the subject asks about the order, in a person\'s voice', () => {
+  assert.match(REQUEST, /How did your order turn out/,
+    '"How did we do?" is a survey; this is someone asking about a thing they made');
+  assert.match(REQUEST, /\$\{first \? ', ' \+ String\(name\)\.split\(' '\)\[0\] : ''\}/,
+    'the first name is the only personalisation, and it must survive a missing name');
 });
 
 test('the mail carries preview text', () => {
@@ -136,4 +80,21 @@ test('it is signed by a person', () => {
 test('the star links still carry the rating', () => {
   assert.match(REQUEST, /\$\{link\}\?r=\$\{n\}|r=\$\{n\}/,
     'one-tap rating is the entire mechanism');
+});
+
+test('the subject does not name the product', () => {
+  assert.doesNotMatch(REQUEST, /reviewItemLabel/,
+    'supplier catalogue names read as a picking list, not as a person asking');
+  assert.match(REQUEST, /How did your order turn out/);
+});
+
+test('the product is gone from the body too', () => {
+  assert.doesNotMatch(REQUEST, /\$\{item\}/,
+    'half-removing it would leave an empty <strong> in the sentence');
+  assert.match(REQUEST, /Your order went out a little while ago/);
+});
+
+test('the helper it used was deleted, not left behind', () => {
+  assert.doesNotMatch(src, /function reviewItemLabel/,
+    'dead code that formats nothing invites someone to wire it back up');
 });

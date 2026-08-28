@@ -7537,42 +7537,6 @@ async function rescheduleReviewRequest({ name, email, phone, product, order_ref,
   }
 }
 
-/* Turn a line-item description into something sayable in a sentence.
-   The real values range from "Embroidery Chest Logo", which reads fine, to
-   "Valucap Bio-Washed Classic Dad Hat - VC300A", which does not — a SKU in a
-   subject line is the tell that a human did not write it. Strip the code,
-   drop quantity noise, and give up entirely if what is left is too long to
-   sit inside a sentence, rather than shipping a mangled half-name. */
-function reviewItemLabel(product) {
-  const raw = String(product || '').trim();
-  if (!raw) return '';
-
-  /* Take the most human-readable segment, not simply the first. Splitting
-     blindly turns "Bella+Canvas 3001T — Toddler Jersey Tee" into
-     "Bella+Canvas 3001T", which is the half a catalogue cares about and the
-     half a customer does not. Score each piece down for digits and SKU-shaped
-     tokens, up for actual words, and keep the winner. */
-  /* Whitespace on at least one side is required, or the split lands inside
-     hyphenated words: "T-shirt" became "T" and "Bio-Washed" became "Washed". */
-  const pieces = raw.split(/\s+[-—|]+\s*|\s*[-—|]+\s+/).map(x => x.trim()).filter(Boolean);
-  const score = (x) => {
-    const words = x.split(/\s+/).filter(w => /^[A-Za-z][A-Za-z']*$/.test(w)).length;
-    const skuish = /\b[A-Za-z]{0,4}\d{2,5}[A-Za-z]?\b/.test(x) ? 1 : 0;
-    const digits = (x.match(/\d/g) || []).length;
-    return words * 2 - skuish * 3 - digits;
-  };
-  let t = pieces.sort((a, b) => score(b) - score(a))[0] || raw;
-
-  t = t.replace(/\s*\b[A-Za-z]{0,4}\d{2,5}[A-Za-z]?\b\s*$/, '');      // trailing SKU
-  t = t.replace(/\s*\b\d+\s*(pair|pairs|pcs?|pieces?|qty|ct)\b\s*/gi, ' ');
-  t = t.replace(/[\s,;:+&-]+$/, '').replace(/\s{2,}/g, ' ').trim();
-
-  // Too long to sit inside a sentence, or nothing readable survived: say
-  // nothing rather than ship a mangled half-name.
-  if (!t || t.length > 42 || !/[A-Za-z]{3}/.test(t)) return '';
-  return escEmail(t);
-}
-
 /* Ask a customer for a review. Called after delivery. */
 async function requestReview({ token, name, email, phone, product, order_ref, quote_code }) {
   if (!isValidEmail(String(email || ''))) return null;
@@ -7589,15 +7553,16 @@ async function requestReview({ token, name, email, phone, product, order_ref, qu
     `<a href="${link}?r=${n}" style="text-decoration:none;font-size:30px;color:#F4A623">★</a>`).join(' ');
 
   const first = name ? escEmail(String(name).split(' ')[0]) : '';
-  const item = reviewItemLabel(product);
 
-  /* The subject carries the THING, not the survey. "How did we do?" reads as an
-     automated NPS ping and gets treated like one; "How did the embroidery turn
-     out?" is a question only someone who knows the order could ask, and it is
-     the single biggest lever on whether this is opened at all. */
-  const subject = item
-    ? `How did the ${item} turn out${first ? ', ' + String(name).split(' ')[0] : ''}?`
-    : `How did we do${first ? ', ' + String(name).split(' ')[0] : ''}?`;
+  /* "How did we do?" reads as an automated survey; "How did your order turn
+     out?" is a person asking about a specific thing they made.
+
+     The product name is deliberately NOT here. The stored values are supplier
+     catalogue names — "Valucap Bio-Washed Classic Dad Hat - VC300A",
+     "Comfort Colors T-shirt - Navy Blue", "Shirt with photo" — and no customer
+     thinks of their order that way. Naming it made the sentence read like a
+     picking list, which is worse than not naming it at all. */
+  const subject = `How did your order turn out${first ? ', ' + String(name).split(' ')[0] : ''}?`;
 
   await sendEmail({
     to: email,
@@ -7609,8 +7574,7 @@ async function requestReview({ token, name, email, phone, product, order_ref, qu
 
       <p style="color:#374151;line-height:1.7;margin:0 0 14px">${first ? 'Hi ' + first + ',' : 'Hi,'}</p>
 
-      <p style="color:#374151;line-height:1.7;margin:0 0 14px">${
-        item ? `Your <strong>${item}</strong> went out a little while ago` : 'Your order went out a little while ago'} —
+      <p style="color:#374151;line-height:1.7;margin:0 0 14px">Your order went out a little while ago —
         I hope it has had some use by now.</p>
 
       <p style="color:#374151;line-height:1.7;margin:0 0 6px">If it turned out well, would you tap a star?
