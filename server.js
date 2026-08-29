@@ -7552,20 +7552,51 @@ async function requestReview({ token, name, email, phone, product, order_ref, qu
   const stars = [1,2,3,4,5].map(n =>
     `<a href="${link}?r=${n}" style="text-decoration:none;font-size:30px;color:#F4A623">★</a>`).join(' ');
 
+  const first = name ? escEmail(String(name).split(' ')[0]) : '';
+
+  /* "How did we do?" reads as an automated survey; "How did your order turn
+     out?" is a person asking about a specific thing they made.
+
+     The product name is deliberately NOT here. The stored values are supplier
+     catalogue names — "Valucap Bio-Washed Classic Dad Hat - VC300A",
+     "Comfort Colors T-shirt - Navy Blue", "Shirt with photo" — and no customer
+     thinks of their order that way. Naming it made the sentence read like a
+     picking list, which is worse than not naming it at all. */
+  const subject = `How did your order turn out${first ? ', ' + String(name).split(' ')[0] : ''}?`;
+
   await sendEmail({
     to: email,
-    subject: `How did we do${name ? ', ' + String(name).split(' ')[0] : ''}?`,
-    html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
-      <h2 style="color:#1848B8">How did we do?</h2>
-      <p style="color:#374151;line-height:1.6">
-        ${name ? escEmail(String(name).split(' ')[0]) + ', thanks' : 'Thanks'} again for your order${product ? ' — ' + escEmail(product) : ''}.
-        If you have a moment, tap a star. It takes seconds and it genuinely helps a small Chicago shop.</p>
-      <p style="text-align:center;margin:22px 0">${stars}</p>
-      <p style="text-align:center"><a href="${link}"
-         style="background:#1848B8;color:#fff;padding:12px 26px;border-radius:100px;text-decoration:none;font-weight:700">Leave a review</a></p>
-      <p style="color:#6b7280;font-size:13px;line-height:1.6;margin-top:18px">
-        Something not right? Reply to this email or text ${SHOP_PHONE} — ${SHOP_SIGNER} would much rather fix it.</p>
-      <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_NAME} &middot; 3047 N Lincoln Ave #435, Chicago, IL 60657</p>
+    subject,
+    html: `<div style="font-family:system-ui,-apple-system,'Segoe UI',sans-serif;max-width:520px;margin:0 auto;padding:8px">
+      <!-- Preview text: what the inbox shows beside the subject. Hidden in the
+           body so it never renders twice. -->
+      <div style="display:none;max-height:0;overflow:hidden;opacity:0">One tap, no form, no account.</div>
+
+      <p style="color:#374151;line-height:1.7;margin:0 0 14px">${first ? 'Hi ' + first + ',' : 'Hi,'}</p>
+
+      <p style="color:#374151;line-height:1.7;margin:0 0 14px">Your order went out a little while ago —
+        I hope it has had some use by now.</p>
+
+      <p style="color:#374151;line-height:1.7;margin:0 0 6px">If it turned out well, would you tap a star?
+        One click, no form, no account.</p>
+
+      <p style="text-align:center;margin:20px 0 6px;line-height:1">${stars}</p>
+      <p style="text-align:center;margin:0 0 22px"><a href="${link}"
+         style="color:#6b7280;font-size:13px;text-decoration:underline">or write a few words &rarr;</a></p>
+
+      <p style="color:#374151;line-height:1.7;margin:0 0 18px">Reviews are genuinely how a small Chicago shop
+        gets found instead of a big online printer. It takes about ten seconds and it helps more than you would think.</p>
+
+      <p style="color:#374151;line-height:1.7;margin:0 0 4px">Thank you,</p>
+      <p style="color:#111827;line-height:1.7;margin:0 0 22px;font-weight:600">${SHOP_SIGNER}</p>
+
+      <!-- The safety valve stays, but as a P.S. — the second most-read line in
+           any email, and the place an unhappy customer will actually see it. -->
+      <p style="color:#6b7280;font-size:13px;line-height:1.6;margin:0 0 18px;padding-top:14px;border-top:1px solid #eef1f8">
+        <strong>P.S.</strong> If anything was not right, just reply here or text me at ${SHOP_PHONE} —
+        I would far rather fix it than leave you unhappy.</p>
+
+      <p style="color:#9ca3af;font-size:12px;margin:0">${SHOP_NAME} &middot; 3047 N Lincoln Ave #435, Chicago, IL 60657</p>
     </div>`,
   });
   return token;
