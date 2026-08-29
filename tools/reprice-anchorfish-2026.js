@@ -98,31 +98,60 @@ const DTF = {
  * — which per-thousand pricing could not do.) Because that step is uniform, the
  * fit lands on round $11 increments: 20, 31, 42, 53, 64, 75.
  *
- * Prices are FLAT across quantity. "$20 minimum" means the chest logo does not
- * go below $20, and the anchors sit on the 1-24 row where cost is highest, so
- * any volume taper would fall through that floor. Change EMB_TAPER to give
- * embroidery a volume break and the anchors become the top-quantity price.
+ * The anchors are the 100+ price, NOT a flat rate. EMB_TAPER below lifts the
+ * smaller runs above them; "$20 minimum" is honoured because nothing ever
+ * prices under the anchor.
  */
 const EMB_PRICE = { chest: 20.00, fullBack: 75.00 };
-const EMB_TAPER = false;
+
+/* Embroidery tapers DOWN to those anchors rather than sitting flat on them.
+ *
+ * Flat pricing made embroidery the CHEAPER click below 50 pieces: a chest logo
+ * was $20 against DTF's $22.55 at 12 pieces and $28.15 at one. That is exactly
+ * backwards — a 12-piece embroidery run is the most labour-intensive job in the
+ * shop per piece, and it was the bargain button. DTF starts high at low volume
+ * and falls steeply, so the two curves crossed at 50.
+ *
+ * The uplift is a flat DOLLAR ADDITION, not a multiple. A multiple compounds up
+ * the size ladder — 1.5x turns the $75 full back into $112.50 while the chest
+ * only moves $10 — which prices the big pieces off the table at exactly the
+ * quantities they are most often ordered in. Adding a fixed amount lifts every
+ * size by the small-run premium and keeps the $11 step between sizes intact.
+ *
+ * $20 chest / $75 full back remain the 100+ price exactly as agreed; this only
+ * lifts the small runs, where embroidery was cheaper than DTF.
+ */
+const EMB_TAPER = [   // band ceiling, dollars added to the anchor price
+  [  11, 10 ],        // chest $30.00, full back $85.00
+  [  24,  8 ],        // $28.00 / $83.00
+  [  49,  5 ],        // $25.00 / $80.00
+  [  74,  2 ],        // $22.00 / $77.00
+  [  99,  1 ],        // $21.00 / $76.00
+  [1000,  0 ],        // $20.00 / $75.00 — the agreed floor
+];
 
 /* Names and text are priced on their own, not fitted from the logo line.
  *
  * A logo is one design sewn N times; names are N different designs, each typed,
  * checked against a list and hooped on its own. The work barely falls with
- * quantity, so the taper is shallow and stops at 75% — deep volume pricing here
+ * quantity, so the taper is shallow and stops at 60% — deep volume pricing here
  * would sell an hour of setup for the price of a run. Bands start at 1-5
  * because that is the size most name jobs actually are.
+ *
+ * Raised from $10 to $20 on 2026-08-29. At $10 a name undercut DTF at every
+ * quantity up to 250 — and a name is the most labour-heavy embroidery there is,
+ * because each one is a separate design, a separate hooping and a separate
+ * thread change. It was the cheapest button on the page for the slowest work.
  */
-const NAME_BASE = { chest: 10.00, upperBack: 25.00 };
+const NAME_BASE = { chest: 20.00, upperBack: 50.00 };
 const NAME_TAPER = [   // band ceiling, share of the 1-5 price
-  [   5, 1.000 ],
-  [  11, 0.950 ],
-  [  24, 0.900 ],
-  [  49, 0.850 ],
-  [  74, 0.800 ],
-  [  99, 0.775 ],
-  [1000, 0.750 ],
+  [   5, 1.000 ],      // $20.00 chest
+  [  11, 0.900 ],      // $18.00
+  [  24, 0.800 ],      // $16.00
+  [  49, 0.700 ],      // $14.00
+  [  74, 0.650 ],      // $13.00
+  [  99, 0.625 ],      // $12.50
+  [1000, 0.600 ],      // $12.00
 ];
 
 // Embroidery: qty floor -> [0-8k, 8k-10k, 10k-14k, 14k-18k, 20k-22k, 22k-25k, puff, smName, lgName]
@@ -178,7 +207,11 @@ const EMB_INSERTS = [
 function tiersFor(m) {
   if (m.flat) return FL.map((f) => [EMB_CEIL[f], m.flat]);
   if (m.name) return NAME_TAPER.map(([ceil, f]) => [ceil, up05(NAME_BASE[m.name] * f)]);
-  return FL.map((f) => [EMB_CEIL[f], embPrice(EMB[EMB_TAPER ? f : 1][m.col])]);
+  /* Logo prices are fitted from the vendor's stitch-band cost at the 1-24 row —
+     the anchors describe that shape — then multiplied by the quantity taper, so
+     the fitted relativity between sizes survives at every band. */
+  return EMB_TAPER.map(([ceil, add]) =>
+    [ceil, up05(embPrice(EMB[1][m.col]) + add)]);
 }
 
 /* Digitizing is charged at the vendor rate, with no multiple on top — unlike
@@ -211,15 +244,25 @@ const up05 = (n) => Math.ceil(n * 20 - 1e-9) / 20;
 const enjson = (o) => Buffer.from(encodeURIComponent(JSON.stringify(o)), 'utf8').toString('base64');
 const sq = (s) => "'" + String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'";
 
-/* Insert a method only if the title is not already there, so the whole script
-   stays safe to run twice — the only way to check it worked is to run it.
-   `active` is 0 to match every other decoration method; the quote form filters
-   on use_for_quoting, not on active, so it still appears there. */
+/* Create the method if it is missing, and REPRICE it if it is already there.
+ *
+ * This was insert-only, guarded on the title not existing. That made the script
+ * safe to re-run but also inert: once a method had been created, every later
+ * price change silently skipped it. The upper-back name stayed at its original
+ * $25 through a repricing that moved every other row, and the run reported
+ * success — the guard was doing exactly what it said while quietly meaning
+ * "never update this again".
+ *
+ * `active` is only set on insert, so a method the shop has switched on or off
+ * by hand keeps that state through a reprice.
+ */
 function insertMethod(title, tiers) {
   return 'INSERT INTO lumise_printings (title, active, calculate, thumbnail, upload, description, author, created, updated)\n' +
     '  SELECT ' + sq(title) + ', 0, ' + sq(fixedCalc(tiers)) + ", '', '', '', '', NOW(), NOW()\n" +
     '  FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM (SELECT id FROM lumise_printings WHERE title=' +
-    sq(title) + ') AS t);';
+    sq(title) + ') AS t);\n' +
+    'UPDATE lumise_printings SET calculate=' + sq(fixedCalc(tiers)) +
+    ', updated=NOW() WHERE title=' + sq(title) + ';';
 }
 
 function fixedCalc(tiers) {
@@ -246,8 +289,8 @@ console.log('\n  ' + DIG_NOTE);
 console.log('\n\nEMBROIDERY RUN RATES — sewn in house.');
 console.log('Chest logo $' + EMB_PRICE.chest.toFixed(2) + ', full back $' + EMB_PRICE.fullBack.toFixed(2) +
   ', sizes between fitted on the vendor sheet.');
-console.log(EMB_TAPER ? 'Volume taper ON.\n' : 'Flat across quantity — $' +
-  EMB_PRICE.chest.toFixed(2) + ' is a minimum, so there is no volume break.\n');
+console.log('Tapers to the anchors at 100+, lifted below that so embroidery is never\n' +
+  'cheaper than DTF on a small run.\n');
 const FL = Object.keys(EMB).map(Number).sort((a, b) => a - b);
 
 /* Logos and names are shown as two tables because they band differently —
