@@ -7245,8 +7245,9 @@ app.get('/review/:token', async (req, res) => {
       return res.send(quotePage('Thank you', `
         <div class="card"><h1>Thanks — we have your review</h1>
         <p class="muted" style="margin-top:8px">You rated us ${STAR(r.rating || 0)}. We appreciate you taking the time.</p>
-        ${(r.rating >= 4 && GOOGLE_REVIEW_URL) ? `<p style="margin-top:14px">
-          <a class="btn" href="${escEmail(GOOGLE_REVIEW_URL)}" target="_blank" rel="noopener">Share it on Google →</a></p>` : ''}
+        ${GOOGLE_REVIEW_URL ? `<p style="margin-top:14px">
+          <a class="btn${r.rating >= 4 ? '' : ' btn-ghost'}" href="${escEmail(GOOGLE_REVIEW_URL)}"
+             target="_blank" rel="noopener">Share it on Google →</a></p>` : ''}
         </div>`));
     }
 
@@ -7433,7 +7434,9 @@ app.post('/review/:token', orderRateLimit, verifyTurnstile, async (req, res) => 
             `<img src="${escEmail(u.replace('/upload/', '/upload/c_fill,w_260,h_260,q_auto,f_auto/'))}"
                   width="130" style="border-radius:8px;margin:0 6px 6px 0">`).join('')}</p>` : ''}
           ${rating <= 3 ? `<p style="background:#fdecea;padding:12px;border-radius:8px;color:#b71c1c">
-            Not published. Worth reaching out before this becomes a public review elsewhere.</p>` : `
+            <b>Reach out today.</b> Nothing is published on jtees.net without your approval, but they were
+            offered the Google link like everyone else — so this may go public. You have heard it first,
+            which is the whole point of getting this email.</p>` : `
             <p><a href="${PUBLIC_BASE_URL}/admin/reviews">Approve it for the website →</a></p>`}
         </div>`,
       }).catch(e => console.error('review alert failed:', e.message));
@@ -7445,16 +7448,34 @@ app.post('/review/:token', orderRateLimit, verifyTurnstile, async (req, res) => 
         <p class="muted" style="margin-top:8px">${extra}</p>
       </div>`);
 
-    if (rating >= 4 && GOOGLE_REVIEW_URL) {
+    /* Everyone is offered Google, whatever they rated.
+       This used to appear only at 4+, which is review gating: Google's review
+       policy forbids selectively soliciting positive reviews, and the FTC
+       Consumer Reviews Rule (in force 2024-10-21) treats it as a deceptive
+       practice. It also did not work as intended — an unhappy customer who
+       wants to post publicly simply goes to Google directly, so the gate
+       suppressed nothing and only cost the shop the chance to respond first.
+
+       What DOES help is already happening above: the alert lands with June the
+       moment the rating is submitted, before anything is posted anywhere. The
+       warmth of the wording differs by rating, which is honest; the path is
+       offered either way, which is the part that matters. */
+    if (GOOGLE_REVIEW_URL) {
+      const happy = rating >= 4;
       return res.send(quotePage('Thank you', `
         <div class="card" style="text-align:center">
           <div style="font-size:34px;color:#F4A623">${STAR(rating)}</div>
-          <h1 style="margin-top:8px">Thank you!</h1>
-          <p class="muted" style="margin:8px 0 16px">Would you mind sharing that on Google? It genuinely helps
-            people find a small shop like ours.</p>
-          <a class="btn" href="${escEmail(GOOGLE_REVIEW_URL)}" target="_blank" rel="noopener"
-             style="width:100%">Post it on Google →</a>
-          <p class="muted" style="margin-top:12px;font-size:12px">Takes about 20 seconds.</p>
+          <h1 style="margin-top:8px">${happy ? 'Thank you!' : 'Thank you for telling us'}</h1>
+          <p class="muted" style="margin:8px 0 16px">${happy
+            ? 'Would you mind sharing that on Google? It genuinely helps people find a small shop like ours.'
+            : `${SHOP_SIGNER} will be in touch personally to put this right — and if you would like to post
+               publicly as well, the link is here.`}</p>
+          <a class="btn${happy ? '' : ' btn-ghost'}" href="${escEmail(GOOGLE_REVIEW_URL)}"
+             target="_blank" rel="noopener" style="width:100%">${
+            happy ? 'Post it on Google →' : 'Post a review on Google →'}</a>
+          <p class="muted" style="margin-top:12px;font-size:12px">${happy
+            ? 'Takes about 20 seconds.'
+            : `Or reply to our email, or text ${SHOP_PHONE}.`}</p>
         </div>`));
     }
     res.send(thanks(rating >= 4
