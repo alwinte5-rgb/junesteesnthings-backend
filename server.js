@@ -3175,13 +3175,18 @@ function deliveryEstimate(from = new Date()) {
  * the reason this comment exists.
  */
 const BLANK_TIERS = [
-  { min: 3000, pct: 20 },
-  { min: 1000, pct: 15 },
-  { min:  800, pct: 10 },
-  { min:  500, pct:  8 },
-  { min:  250, pct:  5 },
-  { min:  100, pct:  3 },
+  { min: 3000, pct: 8 },
+  { min: 1000, pct: 5 },
+  { min:  500, pct: 3 },
+  { min:  125, pct: 2 },
 ];
+
+/* Below this the garment is flat cost x2 with no volume break at all — the
+   shop's stated rule, and honest arithmetic: there is no supplier discount
+   behind any of this, so a garment break is margin given away rather than a
+   saving passed on. It buys competitiveness on the bids where the garment is
+   most of the price, which is why anything survives above 125. */
+const BLANK_DISCOUNT_MIN_QTY = 125;
 
 /** Percent off the garment for a given piece count. Highest matching floor wins. */
 function blankDiscountPct(qty) {
@@ -3373,7 +3378,20 @@ function quotePricingSource() {
       function priceLine(o) {
         var qty = parseInt(o.qty, 10) || 0;
         var colours = parseInt(o.colours, 10) || 1;
-        var blank = o.product ? blankPriceAt(o.product.price, qty, o.blankTiers || []) : 0;
+
+        /* The garment price. \`blankOverride\` replaces the catalogue price for
+           this line — supplier prices move between the day a cost was recorded
+           and the day a quote is written, and the alternative to typing the
+           real one here is quoting from a stale figure. Volume tiers still
+           apply to it, because a typed price is a cost correction, not a
+           decision to abandon the pricing rule. */
+        var blankBase = o.product ? o.product.price : 0;
+        if (o.blankOverride !== null && o.blankOverride !== undefined &&
+            o.blankOverride !== '' && isFinite(parseFloat(o.blankOverride)) &&
+            parseFloat(o.blankOverride) > 0) {
+          blankBase = parseFloat(o.blankOverride);
+        }
+        var blank = blankBase ? blankPriceAt(blankBase, qty, o.blankTiers || []) : 0;
         var decoration = o.method ? Number(tierAt(o.method.positions, qty, o.stage)) : 0;
 
         /* Extended sizes carry an upcharge that applies only to the pieces in
@@ -3935,6 +3953,12 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
           <option value="mr8a5dlx"${it && it.stage ? ' selected' : ''}>Second location</option>
         </select>
       </div>
+      <div style="margin-top:6px">
+        <input name="blank_price${n}" class="bp" type="number" step="0.01" min="0" inputmode="decimal"
+               value="${it && it.blank_price ? val(it.blank_price) : ''}"
+               style="font-size:13px;padding:6px 7px" placeholder="Garment price each — leave blank for catalogue">
+        <p class="muted bpnote" style="margin:3px 0 0;font-size:11.5px"></p>
+      </div>
       <div class="addons" style="margin-top:6px;display:none"></div>
       <div class="digi" style="display:none;margin-top:8px;padding:8px 10px;background:#f6f8fd;border:1px solid #e3e8f2;border-radius:8px">
         <label style="margin:0 0 4px;font-size:11px">Digitizing — one time, not per piece</label>
@@ -4214,12 +4238,29 @@ ${quotePricingSource()}
           }
 
           var stage = L.querySelector('.loc') ? L.querySelector('.loc').value : '';
+          var bpEl = L.querySelector('.bp');
           var r = priceLine({
             product: prod, method: meth, qty: qty, sizeMix: sizeQty ? mix : null,
             colours: meth ? (String(meth.title).match(/(\\d+)\\s*Colou?r/i) || [0,1])[1] : 1,
             stage: stage, addons: addons, blankTiers: BLANK_TIERS,
+            blankOverride: bpEl ? bpEl.value : '',
             unitOverride: u.value
           });
+
+          /* Say what the catalogue holds, so a typed garment price is an
+             informed correction rather than a guess. */
+          var bpNote = L.querySelector('.bpnote');
+          if (bpNote) {
+            if (!prod) { bpNote.textContent = ''; }
+            else if (bpEl && bpEl.value !== '') {
+              bpNote.textContent = 'Catalogue has ' + m2(prod.price) + ' — using your ' + m2(parseFloat(bpEl.value) || 0);
+              bpNote.style.color = '#b45309';
+            } else {
+              bpNote.textContent = 'Catalogue: ' + m2(prod.price) + ' each' +
+                (r.blank !== prod.price ? ' → ' + m2(r.blank) + ' at this quantity' : '');
+              bpNote.style.color = '#6b7280';
+            }
+          }
 
           if (prod) u.placeholder = r.listUnit.toFixed(2);
           var lt = r.lineTotal;
@@ -4678,10 +4719,18 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
 
       const colours = Number((methodTitle.match(/(\d+)\s*Colou?r/i) || [0, 1])[1]) || 1;
 
+      /* A typed garment price. Supplier costs move between the day a cost was
+         recorded and the day a quote is written, so this is a correction, not
+         a discount — the volume tiers still apply on top of it. Clamped
+         positive so a stray minus cannot invert a line. */
+      let blankOverride = Number(one(b['blank_price' + i]));
+      if (!Number.isFinite(blankOverride) || blankOverride <= 0) blankOverride = null;
+
       /* THE price calculation — the same source the browser ran. */
       const priced = priceLine({
         product: prod, method, qty: q, sizeMix: mix, colours,
-        stage, addons: lineAddons, blankTiers: BLANK_TIERS, unitOverride: rawUnit,
+        stage, addons: lineAddons, blankTiers: BLANK_TIERS,
+        blankOverride, unitOverride: rawUnit,
       });
 
       const manual = priced.manual;
@@ -4732,6 +4781,10 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
         addons: priced.addonLines,
         garment_dark: garmentDark || null,
         stage: stage || null,
+        /* The typed garment price, kept so re-editing shows what was used
+           rather than silently reverting to a catalogue figure known to be
+           stale. */
+        blank_price: blankOverride,
         /* Kept for the quotes already saved with these fields — the customer
            page and the edit form still read them when `addons` is absent. */
         setup_fee: setupFee || 0,

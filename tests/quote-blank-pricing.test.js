@@ -79,7 +79,12 @@ test('the tier table is sorted descending, which is what makes the loop correct'
 });
 
 test('the agreed curve is the one in the code', () => {
-  for (const [qty, pct] of [[100, 3], [250, 5], [500, 8], [800, 10], [1000, 15], [3000, 20]]) {
+  /* Cut back on 2026-08-29. There is no supplier volume break behind any of
+     this — the garment costs the same at 50 as at 5,000 — so every point given
+     away here is margin, not a saving passed on. The shallow curve keeps a real
+     gesture on the bids where the garment is most of the price, and nothing
+     below 125 pieces, where the shop's flat cost x2 rule stands unmodified. */
+  for (const [qty, pct] of [[125, 2], [500, 3], [1000, 5], [3000, 8]]) {
     assert.strictEqual(blankDiscountPct(qty), pct, `${qty} pieces should be ${pct}% off`);
   }
 });
@@ -87,22 +92,30 @@ test('the agreed curve is the one in the code', () => {
 /* ── Floors, not ceilings ───────────────────────────────────────────────── */
 
 test('a floor applies AT its quantity, not one piece later', () => {
-  assert.strictEqual(blankDiscountPct(100), 3);
-  assert.strictEqual(blankDiscountPct(99), 0);
+  assert.strictEqual(blankDiscountPct(125), 2);
+  assert.strictEqual(blankDiscountPct(124), 0);
+});
+
+test('below the minimum the garment is flat cost x2, with no break at all', () => {
+  /* The shop's stated rule. A break here would be pure give-away on the
+     smallest orders, which are also the ones that carry the most setup. */
+  for (const q of [1, 12, 50, 99, 100, 124]) {
+    assert.strictEqual(blankDiscountPct(q), 0, `${q} pieces must not be discounted`);
+  }
 });
 
 test('the band holds until the next floor', () => {
-  assert.strictEqual(blankDiscountPct(249), 3);
-  assert.strictEqual(blankDiscountPct(250), 5);
-  assert.strictEqual(blankDiscountPct(799), 8);
-  assert.strictEqual(blankDiscountPct(800), 10);
+  assert.strictEqual(blankDiscountPct(499), 2);
+  assert.strictEqual(blankDiscountPct(500), 3);
+  assert.strictEqual(blankDiscountPct(999), 3);
+  assert.strictEqual(blankDiscountPct(1000), 5);
 });
 
 test('the largest applicable discount wins, not the smallest', () => {
   /* 5000 clears every floor in the table. Returning 3% here is the missing
      -break bug, and it is invisible in the output. */
-  assert.strictEqual(blankDiscountPct(5000), 20);
-  assert.strictEqual(blankDiscountPct(1000), 15);
+  assert.strictEqual(blankDiscountPct(5000), 8);
+  assert.strictEqual(blankDiscountPct(1000), 5);
 });
 
 test('below the first floor there is no discount at all', () => {
@@ -121,9 +134,21 @@ test('a nonsense quantity is not a discount', () => {
 
 test('the garment price drops by exactly the tier', () => {
   assert.strictEqual(blankPriceFor(5.64, 50), 5.64);    // Gildan 5000, no break
-  assert.strictEqual(blankPriceFor(5.64, 100), 5.47);   // 3%
-  assert.strictEqual(blankPriceFor(5.64, 1000), 4.79);  // 15%
-  assert.strictEqual(blankPriceFor(5.64, 3000), 4.51);  // 20%
+  assert.strictEqual(blankPriceFor(5.64, 124), 5.64);   // still none
+  assert.strictEqual(blankPriceFor(5.64, 125), 5.53);   // 2%
+  assert.strictEqual(blankPriceFor(5.64, 1000), 5.36);  // 5%
+  assert.strictEqual(blankPriceFor(5.64, 3000), 5.19);  // 8%
+});
+
+test('the garment never sells below cost x1.8 on this curve', () => {
+  /* The guard the curve exists inside. Cost is flat, so a deep discount walks
+     the multiple down with nothing recovering it; 8% at the top keeps the
+     garment at 1.84x rather than the 1.60x the previous curve reached. */
+  const cost = 2.82, retail = 5.64;   // Gildan 5000, the shop's volume seller
+  for (const q of [1, 125, 500, 1000, 3000, 99999]) {
+    assert.ok(blankPriceFor(retail, q) / cost >= 1.8,
+      `${q} pieces sells the garment at ${(blankPriceFor(retail, q) / cost).toFixed(2)}x`);
+  }
 });
 
 test('the price is always a whole number of cents', () => {

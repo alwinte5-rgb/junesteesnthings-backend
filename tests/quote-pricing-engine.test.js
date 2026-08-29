@@ -226,3 +226,43 @@ test('quantity times each, plus the extras, equals the line total', () => {
     addons: [{ code: 'u', kind: 'once', rate: 25 }, { code: 'b', kind: 'per_piece', rate: 0.5 }] });
   assert.strictEqual(r.lineTotal, round2(r.unit * 24 + r.sizeUpcharge + r.addonTotal));
 });
+
+/* ── The typed garment price ────────────────────────────────────────────── */
+
+test('a typed garment price replaces the catalogue one', () => {
+  /* Supplier costs move between the day a cost is recorded and the day a quote
+     is written. Without this the shop quotes from a figure it knows is stale. */
+  const r = priceLine({ product: GILDAN, method: SCREEN1, qty: 50,
+    blankOverride: 7.20, blankTiers: TIERS });
+  assert.strictEqual(r.blank, 7.20);
+  assert.strictEqual(r.lineTotal, round2((7.20 + 8.45) * 50));
+});
+
+test('volume tiers still apply to a typed garment price', () => {
+  /* A typed price is a cost correction, not a decision to abandon the pricing
+     rule — so the quantity break still comes off it. Derived from the fixture
+     rather than hard-coded, so tuning the live curve does not fail this test
+     for a reason that has nothing to do with what it is checking. */
+  const pct = TIERS.find((t) => 1000 >= t.min).pct;
+  const r = priceLine({ product: GILDAN, method: SCREEN1, qty: 1000,
+    blankOverride: 7.20, blankTiers: TIERS });
+  assert.strictEqual(r.blank, round2(7.20 * (1 - pct / 100)));
+  assert.ok(r.blank < 7.20, 'the tier must actually come off');
+});
+
+test('a blank, zero or negative garment price falls back to the catalogue', () => {
+  /* A stray minus must not invert a line, and an empty box means "use the
+     catalogue", not "the garment is free". */
+  for (const bad of ['', null, undefined, 0, -5, 'free']) {
+    const r = priceLine({ product: GILDAN, method: SCREEN1, qty: 50,
+      blankOverride: bad, blankTiers: TIERS });
+    assert.strictEqual(r.blank, 5.64, `${String(bad)} should fall back to the catalogue`);
+  }
+});
+
+test('a typed garment price works on a line with no catalogue product', () => {
+  /* A hand-entered garment the catalogue does not carry. */
+  const r = priceLine({ method: SCREEN1, qty: 50, blankOverride: 9.00, blankTiers: TIERS });
+  assert.strictEqual(r.blank, 9.00);
+  assert.strictEqual(r.lineTotal, round2((9.00 + 8.45) * 50));
+});
