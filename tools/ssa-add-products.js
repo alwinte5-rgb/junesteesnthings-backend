@@ -77,8 +77,11 @@ const TYPES = {
 };
 
 /* The styles to add, each with the garment type that decides its print area.
-   Every one was verified to have real Illinois stock — freight on blanks comes
-   straight off margin and cannot be passed on. */
+   Stock is checked but no longer gates the choice: limiting the catalogue to
+   what sits in Lockport was leaving whole categories unserved — not one classic
+   corporate dress shirt is stocked in Illinois — so freight is accepted where
+   the product is worth carrying, and local stock is reported instead.
+   No single brand is banned; the mix is managed by choosing across brands. */
 const WANTED = [
   ['112',      'cap',     'Richardson',  'Richardson 112 Snapback Trucker Cap'],
   ['6606',     'cap',     'YP',          'YP Classics 6606 Retro Trucker Cap'],
@@ -120,6 +123,44 @@ const WANTED = [
   ['88183',    'jacket',  'CORE365',     "CORE365 88183 Men's Techno Lite Jacket"],
   ['CE700',    'jacket',  'CORE365',     "CORE365 CE700 Men's Prevail Packable Puffer Jacket"],
   ['M750',     'jacket',  'Harriton',    "Harriton M750 Men's Packable Hooded Nylon Jacket"],
+
+  /* Round two, freight accepted. Deliberately spread across brands: the
+     corporate categories all have a CORE365 answer, and taking it every time is
+     how it reached 15% of the catalogue. */
+
+  // Button-downs — the gap local-only stock could not fill at all.
+  ['D620',     'premium', 'Devon',       "Devon & Jones D620 Men's Crown Broadcloth Shirt"],
+  ['M500',     'premium', 'Harriton',    "Harriton M500 Men's Easy Blend Twill Shirt"],
+  ['RP144',    'premium', 'Artisan',     'Artisan Collection RP144 Annex Oxford Shirt'],
+  ['BU7401',   'premium', 'Boxercraft',  "Boxercraft BU7401 Men's Flannel Button Down"],
+
+  // Vests — Adidas and Independent rather than another CORE365.
+  ['A572',     'vest',    'Adidas',      "Adidas A572 Men's Puffer Full-Zip Vest"],
+  ['EXP120PFV','vest',    'Independent', "Independent Trading EXP120PFV Men's Puffer Vest"],
+  ['88191',    'vest',    'CORE365',     "CORE365 88191 Men's Journey Fleece Vest"],
+
+  // Quarter-zips at three price points, three different brands.
+  ['18810',    'hoodie',  'Gildan',      'Gildan 18810 Heavy Blend Quarter-Zip'],
+  ['9643',     'hoodie',  'Next Level',  'Next Level 9643 Fleece Quarter-Zip Pullover'],
+  ['EXP15WPQ', 'hoodie',  'Independent', "Independent Trading EXP15WPQ Women's Quarter-Zip"],
+  ['M421',     'hoodie',  'Harriton',    'Harriton M421 Pilbloc Quarter-Zip Pullover'],
+
+  // Soft shell / tech.
+  ['EXP35SSZ', 'jacket',  'Independent', "Independent Trading EXP35SSZ Poly-Tech Soft Shell"],
+  ['M740',     'jacket',  'Harriton',    'Harriton M740 Fleece Lined Nylon Jacket'],
+
+  // Headwear — a beanie for winter, and cheaper cap options.
+  ['1500KC',   'cap',     'YP',          'YP Classics 1500KC Cuffed Beanie'],
+  ['8804H',    'cap',     'Valucap',     'Valucap 8804H Five-Panel Trucker Cap'],
+  ['2260',     'cap',     'Valucap',     'Valucap 2260 Cotton Twill Cap'],
+
+  // Bags — a duffel and a backpack, neither of which the catalogue has.
+  ['INDDUFBAG','bag',     'Independent', 'Independent Trading 29L Day Tripper Duffel'],
+  ['1240539',  'bag',     'Under Armour','Under Armour Ozsee Sackpack'],
+
+  // Workwear — trades and industrial, a customer type not served at all.
+  ['2574',     'premium', 'Dickies',     "Dickies 2574 Men's Short Sleeve Work Shirt"],
+  ['M585',     'premium', 'Harriton',    "Harriton M585 Advantage Short Sleeve Work Shirt"],
 ];
 
 /* Sublimation (#14) needs a poly garment, so it is added only where the fabric
