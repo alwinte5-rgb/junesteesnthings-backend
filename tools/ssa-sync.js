@@ -42,26 +42,59 @@ const PRICE_JUMP_GUARD = 0.40;
 
 const CORE_SIZES = ['S', 'M', 'L', 'XL'];
 
+/* The shop is in Chicago 60657, so S&S's Lockport IL warehouse is ~35 miles
+   away. Freight on blanks comes straight off margin and cannot be passed on,
+   so a product stocked only in Nevada or Georgia is a worse product to sell
+   than an equivalent one sitting in Illinois — regardless of its piece price.
+   DS is dropship (ships from the manufacturer) and CN is Canada; neither is a
+   local option, so neither counts as stock. */
+const HOME_WAREHOUSE = 'IL';
+const NON_STOCK = ['DS', 'CN'];
+/* Below this many core-size pieces locally, an order is likely to be split or
+   shipped long-haul. Reported, never acted on automatically — it is a buying
+   signal for a person, not a reason to hide a product a customer wants. */
+const LOCAL_STOCK_WARN = 500;
+
 /* ── S&S API ─────────────────────────────────────────────────────────────── */
+
+/* S&S throttles a sustained bulk sweep: 60 back-to-back calls measured 10x 503.
+   Pace the requests rather than relying on retries to absorb it. */
+const CALL_SPACING_MS = 350;
+let lastCall = 0;
 
 function makeClient(acct, key) {
   const auth = 'Basic ' + Buffer.from(acct + ':' + key).toString('base64');
-  return async function ssa(path, tries = 3) {
+
+  /* Returns the parsed body, or THROWS when the API could not be reached.
+   *
+   * The distinction is the whole point. An empty array means S&S answered and
+   * has nothing; a throw means S&S never answered. Collapsing both to null —
+   * which is what this did first — makes a throttled request look exactly like
+   * a discontinued product, and with a deactivation rule attached that quietly
+   * removes healthy products from the storefront. The catalogue's own
+   * pricing-health.php carries the same warning about 429s.
+   */
+  return async function ssa(path, tries = 5) {
+    let lastStatus = 0;
     for (let i = 0; i < tries; i++) {
-      if (i) await new Promise((r) => setTimeout(r, 600 * i));   // 0.6s, 1.2s
+      const wait = Math.max(0, lastCall + CALL_SPACING_MS - Date.now()) + (i ? 800 * i * i : 0);
+      if (wait) await new Promise((r) => setTimeout(r, wait));   // 0, 0.8s, 3.2s, 7.2s, 12.8s
+      lastCall = Date.now();
       try {
         const r = await fetch('https://api.ssactivewear.com/v2/' + path, {
           headers: { Authorization: auth }, signal: AbortSignal.timeout(25000),
         });
-        /* Throttling and 5xx are retryable; anything else is a real answer.
-           Without this a 429 reads exactly like "style not found", and a bulk
-           sweep would quietly report good products as gone. */
-        if (r.status === 429 || r.status >= 500) continue;
-        if (!r.ok) return null;
+        lastStatus = r.status;
+        if (r.status === 429 || r.status >= 500) continue;       // throttled — retry
+        if (r.status === 404) return null;                       // answered: not there
+        if (!r.ok) throw new Error('S&S returned ' + r.status + ' for ' + path);
         return await r.json();
-      } catch { /* timeout or network — retry */ }
+      } catch (e) {
+        if (e.message && e.message.startsWith('S&S returned')) throw e;
+        lastStatus = lastStatus || 'network';                    // timeout — retry
+      }
     }
-    return null;
+    throw new Error('S&S unreachable after ' + tries + ' tries (last ' + lastStatus + '): ' + path);
   };
 }
 
@@ -90,18 +123,32 @@ async function resolveStyle(ssa, p) {
   return null;
 }
 
-/** Cheapest piece cost per size for a style, or null when nothing is stocked. */
+/** Cheapest piece cost per size, plus local stock, or null if S&S has nothing. */
 async function sizeCosts(ssa, styleId) {
-  const rows = await ssa('products/?styleid=' + styleId + '&fields=sizeName,piecePrice,casePrice');
+  /* No `fields=` filter. Asking for `warehouses` through it returns the array
+     with warehouseAbbr and qty STRIPPED OUT, which reads as "nothing in stock
+     anywhere" rather than as a malformed response — every product looked
+     locally unstocked. The full record is bigger but it is the only shape that
+     carries the stock levels. */
+  const rows = await ssa('products/?styleid=' + styleId);
   if (!Array.isArray(rows) || !rows.length) return null;
   const bySize = {};
+  let homeQty = 0, farQty = 0;
   for (const r of rows) {
     const size = r.sizeName;
     const cost = Number(r.piecePrice || r.casePrice || 0);
     if (!size || !cost) continue;
     if (!bySize[size] || cost < bySize[size]) bySize[size] = cost;
+    /* Stock is judged on CORE sizes only: a style with nothing but 4XL in
+       Illinois is not locally stocked for any order a customer will place. */
+    if (!CORE_SIZES.includes(size)) continue;
+    for (const w of r.warehouses || []) {
+      if (w.warehouseAbbr === HOME_WAREHOUSE) homeQty += w.qty;
+      else if (!NON_STOCK.includes(w.warehouseAbbr)) farQty += w.qty;
+    }
   }
-  return Object.keys(bySize).length ? bySize : null;
+  if (!Object.keys(bySize).length) return null;
+  return { bySize, homeQty, farQty };
 }
 
 /** The base cost the x2 rule applies to: cheapest CORE size, not cheapest size. */
@@ -149,18 +196,22 @@ process.stdin.on('end', async () => {
      distinguishable from a discontinuation. Added by hand rather than with
      ADD COLUMN IF NOT EXISTS, which MySQL (unlike MariaDB) does not support —
      this has to stay safe to run every hour. */
-  const hasSeen = mysql(dbUrl,
-    "SHOW COLUMNS FROM lumise_products LIKE 'ssa_seen_at';", { rows: true }).length > 0;
-  if (!hasSeen) {
+  const cols = mysql(dbUrl, "SHOW COLUMNS FROM lumise_products;", { rows: true })
+    .map((c) => c.Field);
+  const need = [];
+  if (!cols.includes('ssa_seen_at')) need.push('ADD COLUMN ssa_seen_at DATETIME NULL');
+  /* Marks a deactivation as THIS TOOL's, so reactivation can never resurrect a
+     product a person switched off on purpose. */
+  if (!cols.includes('ssa_auto_off')) need.push('ADD COLUMN ssa_auto_off DATETIME NULL');
+  if (need.length) {
     /* `created` carries a legacy '0000-00-00' default that strict mode refuses
        to revalidate during an ALTER. Relaxing the mode for this one statement
        adds the column without rewriting a default the rest of the app relies
        on — the alternative is changing a column this tool has no business
        touching. */
-    mysql(dbUrl,
-      "SET SESSION sql_mode='';\n" +
-      'ALTER TABLE lumise_products ADD COLUMN ssa_seen_at DATETIME NULL;');
-    console.log('added lumise_products.ssa_seen_at\n');
+    mysql(dbUrl, "SET SESSION sql_mode='';\n" +
+      'ALTER TABLE lumise_products ' + need.join(', ') + ';');
+    console.log('schema: ' + need.join(', ') + '\n');
   }
 
   const products = mysql(dbUrl,
@@ -172,15 +223,30 @@ process.stdin.on('end', async () => {
 
   const stmts = [];
   const repriced = [], unchanged = [], suspicious = [], missing = [], unresolved = [];
+  /* Products the API could not be reached for. Kept strictly apart from
+     `missing`: one means S&S says there is nothing, the other means S&S did not
+     answer, and only the first is evidence about the product. */
+  const unreachable = [];
+  /* Stocked far from Chicago. Reported so buying decisions can favour what
+     ships cheaply, never used to change a price or hide a product. */
+  const lowLocal = [];
 
   for (const p of products) {
-    const style = await resolveStyle(ssa, p);
-    if (!style) { unresolved.push(p); continue; }
-
-    const bySize = await sizeCosts(ssa, style.id);
+    let style, bySize;
+    try {
+      style = await resolveStyle(ssa, p);
+      if (!style) { unresolved.push(p); continue; }
+      bySize = await sizeCosts(ssa, style.id);
+    } catch (e) {
+      unreachable.push({ p, why: e.message });
+      continue;
+    }
     if (!bySize) { missing.push(p); continue; }
 
-    const cost = money(baseCost(bySize));
+    if (bySize.homeQty < LOCAL_STOCK_WARN) {
+      lowLocal.push({ p, home: bySize.homeQty, far: bySize.farQty });
+    }
+    const cost = money(baseCost(bySize.bySize));
     const price = money(cost * 2);
     const was = Number(p.cost);
     const move = was > 0 ? Math.abs(cost - was) / was : 0;
@@ -211,21 +277,35 @@ process.stdin.on('end', async () => {
     const days = (Date.now() - Date.parse(p.seen)) / 86400000;
     return days >= STALE_DAYS;
   });
-  for (const p of stale) stmts.push(`UPDATE lumise_products SET active=0 WHERE id=${p.id};`);
+  for (const p of stale) {
+    stmts.push(`UPDATE lumise_products SET active=0, ssa_auto_off=NOW() WHERE id=${p.id};`);
+  }
 
-  /* And bring back anything that has returned. */
+  /* Bring back only what THIS TOOL switched off.
+   *
+   * Not everything inactive is inactive by accident. The catalogue holds
+   * deliberately disabled duplicates — a second Richardson 112 with the same
+   * name as the live one, an older Bella 3001, an older Next Level 3600 — and
+   * an earlier version of this reactivated all three, because they are real
+   * S&S styles that are perfectly in stock. Being purchasable is not evidence
+   * that a person wants it on the storefront. Only rows carrying this tool's
+   * own deactivation marker are eligible. */
   const returned = mysql(dbUrl,
-    "SELECT id, name FROM lumise_products WHERE active=0 AND supplier='ssa';", { rows: true });
+    "SELECT id, name, IFNULL(thumbnail_url,'') thumb FROM lumise_products " +
+    "WHERE active=0 AND supplier='ssa' AND ssa_auto_off IS NOT NULL;", { rows: true });
   const revived = [];
   for (const p of returned) {
-    const style = await resolveStyle(ssa, p);
-    if (!style) continue;
-    const bySize = await sizeCosts(ssa, style.id);
-    if (!bySize) continue;
-    const cost = money(baseCost(bySize));
-    revived.push({ p, cost });
-    stmts.push(`UPDATE lumise_products SET active=1, supplier_cost=${cost}, ` +
-      `price=${money(cost * 2)}, ssa_seen_at=NOW(), cost_updated=NOW() WHERE id=${p.id};`);
+    try {
+      const style = await resolveStyle(ssa, p);
+      if (!style) continue;
+      const bySize = await sizeCosts(ssa, style.id);
+      if (!bySize) continue;
+      const cost = money(baseCost(bySize.bySize));
+      revived.push({ p, cost });
+      stmts.push(`UPDATE lumise_products SET active=1, ssa_auto_off=NULL, ` +
+        `supplier_cost=${cost}, price=${money(cost * 2)}, ssa_seen_at=NOW(), ` +
+        `cost_updated=NOW() WHERE id=${p.id};`);
+    } catch { /* unreachable: leave it deactivated, try again tomorrow */ }
   }
 
   /* ── Report ─────────────────────────────────────────────────────────────── */
@@ -263,6 +343,26 @@ process.stdin.on('end', async () => {
   if (unresolved.length) {
     console.log('NOT ON S&S (' + unresolved.length + ') — never matched a style');
     for (const p of unresolved) console.log('  #' + String(p.id).padStart(3) + '  ' + p.name);
+    console.log();
+  }
+  if (unreachable.length) {
+    /* Reported loudly and counted nowhere. These products are NOT evidence of
+       anything — S&S simply did not answer for them this run. */
+    console.log('COULD NOT REACH S&S (' + unreachable.length + ') — left untouched, retried next run');
+    for (const u of unreachable) {
+      console.log('  #' + String(u.p.id).padStart(3) + '  ' + u.p.name.slice(0, 44).padEnd(46) +
+        u.why.slice(0, 40));
+    }
+    console.log();
+  }
+  if (lowLocal.length) {
+    console.log('STOCKED AWAY FROM ' + HOME_WAREHOUSE + ' (' + lowLocal.length +
+      ') — freight the shop cannot pass on');
+    for (const l of lowLocal.sort((a, b) => a.home - b.home)) {
+      console.log('  #' + String(l.p.id).padStart(3) + '  ' + l.p.name.slice(0, 44).padEnd(46) +
+        String(l.home).padStart(7) + ' local ' + String(l.far).padStart(8) + ' elsewhere' +
+        (l.home === 0 ? '   NONE LOCAL' : ''));
+    }
     console.log();
   }
   if (revived.length) {
