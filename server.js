@@ -3202,6 +3202,28 @@ function blankPriceFor(base, qty) {
 const SCREEN_MIN_QTY = 50;
 const SCREEN_METHOD_RE = /screen\s*print/i;
 
+/* Digitizing is billed ONCE PER DESIGN, but a decoration method in this system
+   is a per-piece rate multiplied by the line quantity — pick it as the method
+   on a 50-piece line and it bills the fee fifty times. So it is not offered as
+   a method at all: when an embroidery method is chosen the form asks for it
+   separately and it is added to the line once.
+   It is also waived whenever the customer supplies a usable file, which is a
+   judgement only a person can make, so "no digitizing" stays the default. */
+const EMBROIDERY_METHOD_RE = /embroider/i;
+const DIGITIZING_METHOD_RE = /digitiz/i;
+
+/** The digitizing fees the catalogue offers, cheapest first. */
+function digitizingOptions(catalog) {
+  return (catalog.methods || [])
+    .filter((m) => DIGITIZING_METHOD_RE.test(m.title || ''))
+    .map((m) => {
+      const pos = m.positions && (m.positions.front || m.positions[Object.keys(m.positions)[0]]);
+      return { id: m.id, title: m.title, price: pos && pos.length ? Number(pos[0].price) : 0 };
+    })
+    .filter((d) => d.price > 0)
+    .sort((a, b) => a.price - b.price);
+}
+
 /** The whole-job discount as a positive dollar figure.
  *
  *  Clamped to the subtotal and to zero on purpose. A discount bigger than the
@@ -3634,8 +3656,12 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
      "the printing type we added is missing from the quote page" reads as a bug
      in this page rather than as unfinished setup in the designer. Say what was
      left out and why, so it is fixable without reading this file. */
+  /* Digitizing is excluded here on purpose — it has its own control below.
+     Left in this list it reads as a decoration you apply to every piece, which
+     is exactly how it would then be billed. */
   const quotable = catalog.methods.filter(m =>
-    m.use_for_quoting && Object.keys(m.positions || {}).length);
+    m.use_for_quoting && Object.keys(m.positions || {}).length &&
+    !DIGITIZING_METHOD_RE.test(m.title || ''));
   const methodOpts = quotable
     .map(m => `<option value="${m.id}">${escEmail(m.title)}</option>`).join('');
 
@@ -3645,6 +3671,12 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
      because nobody has priced them yet. */
   const untiered = catalog.methods.filter(m =>
     m.use_for_quoting && !Object.keys(m.positions || {}).length);
+
+  /* Digitizing is offered on its own control rather than in the method list,
+     because it is a one-off per design and the method list is priced per piece. */
+  const digiList = digitizingOptions(catalog);
+  const digiOpts = digiList.map(d =>
+    `<option value="${d.id}">${escEmail(d.title)} — ${money(d.price)}</option>`).join('');
 
   const catalogNote = !catalog.methods.length
     ? `<div class="warn" style="margin-bottom:10px">The product catalogue could not be
@@ -3686,6 +3718,16 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
         <b class="lt">—</b>
       </div>
       <p class="minwarn" style="display:none;margin:6px 0 0;font-size:12.5px;color:#b45309"></p>
+      <div class="digi" style="display:none;margin-top:8px;padding:8px 10px;background:#f6f8fd;border:1px solid #e3e8f2;border-radius:8px">
+        <label style="margin:0 0 4px;font-size:11px">Digitizing — one time, not per piece</label>
+        <select name="setup${n}" class="su" style="font-size:13px;padding:6px 7px">
+          <option value="">No digitizing — they supplied a usable file</option>
+          ${digiList.map(d => `<option value="${d.id}"${
+            it && String(it.setup_method_id) === String(d.id) ? ' selected' : ''
+          }>${escEmail(d.title)} — ${money(d.price)}</option>`).join('')}
+        </select>
+        <p class="muted" style="margin:4px 0 0;font-size:11.5px">Charged once for the design. Leave as-is to waive it.</p>
+      </div>
       <button type="button" class="more" onclick="toggleMore(this)"
         aria-expanded="${hasExtras ? 'true' : 'false'}">
         <span class="caret">${hasExtras ? '&#9662;' : '&#9656;'}</span> Details, photos &amp; sizes</button>
@@ -3788,6 +3830,9 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
          disagreeing means the form shows one price and the customer is charged
          another, so the tiers are injected from the server rather than retyped. */
       var BLANK_TIERS = ${JSON.stringify(BLANK_TIERS)};
+      /* Digitizing fees, from the same catalogue the server prices against, so
+         the figure on screen and the figure charged cannot drift. */
+      var DIGI = ${JSON.stringify(digiList)};
       function blankPrice(base, qty){
         var b = parseFloat(base);
         if (!isFinite(b) || b <= 0) return 0;
@@ -3895,12 +3940,29 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
           var base = prod ? blankPrice(prod.price, qty) + tierFor(meth, qty) : 0;
           if (prod) u.placeholder = base.toFixed(2);
           var unit = u.value !== '' ? parseFloat(u.value) : base;
+
+          /* Digitizing: shown only for embroidery, and added ONCE — never
+             multiplied by the quantity, which is the whole reason it is not a
+             decoration method. */
+          var digiBox = L.querySelector('.digi');
+          var su = L.querySelector('.su');
+          var isEmb = meth && /embroider/i.test(meth.title);
+          if (digiBox) {
+            digiBox.style.display = isEmb ? 'block' : 'none';
+            if (!isEmb && su) su.value = '';
+          }
+          var setup = 0;
+          if (isEmb && su && su.value) {
+            var dm = DIGI.find(function(d){ return String(d.id) === su.value; });
+            if (dm) setup = dm.price;
+          }
+
           // Upcharges apply only to the pieces in those sizes.
-          var lt = (unit||0) * qty + (u.value !== '' ? 0 : upTotal);
+          var lt = (unit||0) * qty + (u.value !== '' ? 0 : upTotal) + setup;
           /* Show the override the way the customer will see it: struck-through
              list, then what they actually pay. Only for a genuine reduction —
              a price ABOVE list is a surcharge, not a deal. */
-          var listTotal = prod ? base * qty + upTotal : 0;
+          var listTotal = prod ? base * qty + upTotal + setup : 0;
           var cut = (u.value !== '' && prod && listTotal > lt);
           L.querySelector('.lt').innerHTML = lt
             ? (cut ? '<span style="color:#9aa3b2;text-decoration:line-through;font-weight:400">' +
@@ -4326,12 +4388,24 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
       }
       if (unit == null) unit = listUnit != null ? listUnit : 0;
 
+      /* One-time digitizing. The posted value is a method id, never a price —
+         the amount is looked up in the catalogue here, so a tampered form
+         cannot set its own fee. Added once, not multiplied by the quantity.
+         Only valid alongside an embroidery method: without that check a
+         digitizing fee could be attached to a screen-print line. */
+      let setupFee = 0, setupLabel = null;
+      const setupId = String(one(b['setup' + i]) || '').trim();
+      if (setupId && method && EMBROIDERY_METHOD_RE.test(method.title || '')) {
+        const d = digitizingOptions(catalog).find((x) => String(x.id) === setupId);
+        if (d) { setupFee = round2(d.price); setupLabel = d.title; }
+      }
+
       // A manually typed unit price is taken as final — no upcharges layered on.
-      const lineTotal = round2(unit * q + (manual ? 0 : upTotal));
+      const lineTotal = round2(unit * q + (manual ? 0 : upTotal) + setupFee);
       /* Only a genuine reduction is struck through. A manual price ABOVE list is
          a legitimate quote too (rush, awkward artwork), and showing it crossed
          out would advertise a discount that is really a surcharge. */
-      const listTotal = listUnit != null ? round2(listUnit * q + upTotal) : null;
+      const listTotal = listUnit != null ? round2(listUnit * q + upTotal + setupFee) : null;
       const struck = (manual && listTotal != null && listTotal > lineTotal) ? listTotal : null;
 
       let description = desc || (prod ? `${prod.name}${method ? ' — ' + method.title : ''}` : 'Custom item');
@@ -4358,10 +4432,18 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
         details: String(one(b['details' + i]) || '').trim().slice(0, 300),
         images,
         qty: q,
-        unit_price: round2(lineTotal / q),      // blended, so qty x each = total
+        // Blended per-piece rate, EXCLUDING the one-off setup, so qty x each
+        // plus the setup equals the line total and each part reads honestly.
+        unit_price: round2((lineTotal - setupFee) / q),
         line_total: lineTotal,
         size_mix: mix,
         size_upcharge: round2(manual ? 0 : upTotal),
+        /* Kept separate from unit_price so the customer sees a one-off fee as a
+           one-off fee. Blended into the per-piece rate it would look like the
+           embroidery itself costs more than it does. */
+        setup_fee: setupFee || 0,
+        setup_label: setupLabel,
+        setup_method_id: setupFee ? Number(setupId) : null,
         manual,
         /* What it would have been at catalogue price. Rendered struck through on
            the customer's page when it is higher than what they are being asked
@@ -4552,6 +4634,8 @@ app.get('/q/:code', async (req, res) => {
         <td>
           ${escEmail(i.description)}
           ${i.details ? `<div class="muted" style="font-size:13px;margin-top:3px">${escEmail(i.details)}</div>` : ''}
+          ${Number(i.setup_fee) > 0 ? `<div class="muted" style="font-size:13px;margin-top:3px">
+             + ${escEmail(i.setup_label || 'Digitizing')} — ${money(i.setup_fee)} one time</div>` : ''}
           ${gallery}
         </td>
         <td class="num">${i.qty}</td>
