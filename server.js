@@ -102,6 +102,14 @@ async function initDB() {
     'tax NUMERIC(10,2) DEFAULT 0',
     'total NUMERIC(10,2) DEFAULT 0',  // subtotal + tax (card fee is added at payment)
     'deposit NUMERIC(10,2) DEFAULT 0',
+    /* An off-the-top discount on the whole job — the "I'll do it for X" that
+       actually gets given at the counter. What was ENTERED is stored (percent
+       or dollars), not just the resulting figure, so editing the lines later
+       re-applies "10% off" instead of silently freezing yesterday's dollars.
+       The dollar amount is always derived, in quoteTotals(). */
+    "discount_kind TEXT NOT NULL DEFAULT 'amt'",   // 'pct' | 'amt'
+    'discount_value NUMERIC(10,2) NOT NULL DEFAULT 0',
+    'discount_note TEXT',                          // the reason, shown to them
     'paid_amount NUMERIC(10,2) DEFAULT 0',
     'paid_method TEXT',
     'paid_at TIMESTAMPTZ',
@@ -3149,12 +3157,80 @@ function deliveryEstimate(from = new Date()) {
   };
 }
 
-/** Recompute every figure from the stored lines. Single source of truth. */
+/* ── Blank (garment) volume pricing ───────────────────────────────────────
+ *
+ * Blanks cost the same per piece whatever the order size — there is no supplier
+ * break behind this — so every point given away here comes straight off margin.
+ * The curve is therefore deliberately shallow at the bottom and only opens up
+ * where a flat 2x would put the shop above market on a bid it wants to win.
+ *
+ * These are FLOORS (>= qty), unlike the decoration tiers in the designer, whose
+ * keys are band CEILINGS. The two conventions are opposite and that is a real
+ * trap: read one as the other and every band lands one step out. Neither can be
+ * changed unilaterally — the ceilings mirror the storefront's own pricing code —
+ * so the rule is that this table is the only place floors are used, and it is
+ * the reason this comment exists.
+ */
+const BLANK_TIERS = [
+  { min: 3000, pct: 20 },
+  { min: 1000, pct: 15 },
+  { min:  800, pct: 10 },
+  { min:  500, pct:  8 },
+  { min:  250, pct:  5 },
+  { min:  100, pct:  3 },
+];
+
+/** Percent off the garment for a given piece count. Highest matching floor wins. */
+function blankDiscountPct(qty) {
+  const q = Number(qty);
+  if (!Number.isFinite(q) || q <= 0) return 0;
+  for (const t of BLANK_TIERS) if (q >= t.min) return t.pct;
+  return 0;
+}
+
+/** The garment's price at this quantity, after volume pricing. */
+function blankPriceFor(base, qty) {
+  const b = Number(base);
+  if (!Number.isFinite(b) || b <= 0) return 0;
+  return round2(b * (1 - blankDiscountPct(qty) / 100));
+}
+
+/* Screen printing is not offered below this. Under it the job goes to DTF or
+   heat-transfer vinyl, both of which are already priced in the designer. The
+   quote form must say so rather than silently pricing a screen job at the
+   50-71 rate, which is what a ceiling-keyed table would otherwise do. */
+const SCREEN_MIN_QTY = 50;
+const SCREEN_METHOD_RE = /screen\s*print/i;
+
+/** The whole-job discount as a positive dollar figure.
+ *
+ *  Clamped to the subtotal and to zero on purpose. A discount bigger than the
+ *  work would otherwise invert the total, and because the deposit and the
+ *  Stripe charge are both derived from that total, a fat-fingered "500" on a
+ *  $400 job would have produced a negative amount to collect rather than a
+ *  free one. Percent is also capped at 100 for the same reason. */
+function quoteDiscount(subtotal, kind, value) {
+  const sub = round2(subtotal);
+  let v = Number(value);
+  if (!Number.isFinite(v) || v <= 0 || sub <= 0) return 0;
+  if (kind === 'pct') v = Math.min(v, 100);
+  const raw = kind === 'pct' ? sub * (v / 100) : v;
+  return round2(Math.min(Math.max(raw, 0), sub));
+}
+
+/** Recompute every figure from the stored lines. Single source of truth.
+ *
+ *  Order matters and is not arbitrary: the discount comes off BEFORE tax,
+ *  because sales tax is owed on what the customer is actually charged, not on
+ *  what the job would have cost undiscounted. Taxing the full subtotal would
+ *  have the shop remitting tax on money it never collected. */
 function quoteTotals(q) {
   const subtotal = round2((q.items || []).reduce((a, i) => a + Number(i.line_total || 0), 0));
+  const discount = quoteDiscount(subtotal, q.discount_kind, q.discount_value);
+  const net = round2(subtotal - discount);
   const tax = Number(q.tax != null ? q.tax : 0);
-  const total = round2(subtotal + tax);
-  return { subtotal, tax, total, deposit: depositFor(total) };
+  const total = round2(net + tax);
+  return { subtotal, discount, net, tax, total, deposit: depositFor(total) };
 }
 
 
@@ -3261,7 +3337,7 @@ async function syncQuoteToBrevo(q) {
       (i.manual ? '   [manual price]' : '')
     ).join('\n');
     const noteText =
-      `QUOTE ${q.code} — ${money(q.subtotal)}\n` +
+      `QUOTE ${q.code} — ${money(q.total || q.subtotal)}\n` +
       `${lines}\n` +
       (q.notes ? `\nNOTES:\n  ${q.notes}\n` : '') +
       `\nLink: ${quoteLink(q.code)}` +
@@ -3310,7 +3386,7 @@ async function syncQuoteToLumise(q) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         name: q.name || '', email: q.email || '', phone: q.phone || '',
-        note: `Quote ${q.code} — ${money(q.subtotal)} (${quoteSummary(q.items)})`,
+        note: `Quote ${q.code} — ${money(q.total || q.subtotal)} (${quoteSummary(q.items)})`,
         source: 'quote',
       }),
       signal: AbortSignal.timeout(8000),
@@ -3609,6 +3685,7 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
                value="${it && it.manual ? val(it.unit_price) : ''}" placeholder="Each $">
         <b class="lt">—</b>
       </div>
+      <p class="minwarn" style="display:none;margin:6px 0 0;font-size:12.5px;color:#b45309"></p>
       <button type="button" class="more" onclick="toggleMore(this)"
         aria-expanded="${hasExtras ? 'true' : 'false'}">
         <span class="caret">${hasExtras ? '&#9662;' : '&#9656;'}</span> Details, photos &amp; sizes</button>
@@ -3658,6 +3735,21 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
         <button type="button" class="btn btn-ghost" style="padding:9px 18px;font-size:14px" onclick="addLine()">+ Add another item</button>
         <table style="width:100%;margin-top:14px;border-top:1px solid #e3e8f2;padding-top:10px">
           <tr><td class="muted">Subtotal</td><td class="num" id="sub">$0.00</td></tr>
+          <tr><td class="muted">
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+              <span>Discount</span>
+              <select name="discount_kind" style="width:auto;padding:5px 6px;font-size:13px">
+                <option value="amt" ${E.discount_kind === 'pct' ? '' : 'selected'}>$ off</option>
+                <option value="pct" ${E.discount_kind === 'pct' ? 'selected' : ''}>% off</option>
+              </select>
+              <input name="discount_value" type="number" step="0.01" min="0" inputmode="decimal"
+                     value="${Number(E.discount_value) > 0 ? val(E.discount_value) : ''}"
+                     placeholder="0" style="width:78px;padding:5px 7px;font-size:13px">
+              <input name="discount_note" value="${val(E.discount_note)}" maxlength="120"
+                     placeholder="Reason — they see this"
+                     style="flex:1 1 130px;min-width:110px;padding:5px 7px;font-size:13px">
+            </div></td>
+            <td class="num" id="disc" style="color:#166534">—</td></tr>
           <tr><td class="muted"><label style="display:inline;margin:0;text-transform:none;letter-spacing:0;font-size:14px;font-weight:400">
             <input type="checkbox" name="taxable" value="1" ${!existing || Number(E.tax) > 0 ? 'checked' : ''} style="width:auto;margin-right:6px" onchange="calc()"> Illinois sales tax</label></td>
             <td class="num" id="tax">$0.00</td></tr>
@@ -3691,6 +3783,19 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
         return price;
       }
       function m2(v){ return '$' + (Math.round(v*100)/100).toFixed(2); }
+
+      /* Blank volume pricing. Mirrors blankPriceFor() on the server — these two
+         disagreeing means the form shows one price and the customer is charged
+         another, so the tiers are injected from the server rather than retyped. */
+      var BLANK_TIERS = ${JSON.stringify(BLANK_TIERS)};
+      function blankPrice(base, qty){
+        var b = parseFloat(base);
+        if (!isFinite(b) || b <= 0) return 0;
+        var pct = 0;
+        for (var i=0;i<BLANK_TIERS.length;i++)
+          if (qty >= BLANK_TIERS[i].min) { pct = BLANK_TIERS[i].pct; break; }
+        return Math.round(b * (1 - pct/100) * 100) / 100;
+      }
 
       /* Optional fields stay out of the way until asked for. */
       function toggleMore(btn){
@@ -3787,21 +3892,55 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
           var qty = sizeQty > 0 ? sizeQty : (parseInt(qEl.value,10)||0);
           if (sizeQty > 0) { qEl.value = sizeQty; qEl.readOnly = true; } else { qEl.readOnly = false; }
 
-          var base = prod ? prod.price + tierFor(meth, qty) : 0;
+          var base = prod ? blankPrice(prod.price, qty) + tierFor(meth, qty) : 0;
           if (prod) u.placeholder = base.toFixed(2);
           var unit = u.value !== '' ? parseFloat(u.value) : base;
           // Upcharges apply only to the pieces in those sizes.
           var lt = (unit||0) * qty + (u.value !== '' ? 0 : upTotal);
-          L.querySelector('.lt').textContent = lt ? m2(lt) : '—';
+          /* Show the override the way the customer will see it: struck-through
+             list, then what they actually pay. Only for a genuine reduction —
+             a price ABOVE list is a surcharge, not a deal. */
+          var listTotal = prod ? base * qty + upTotal : 0;
+          var cut = (u.value !== '' && prod && listTotal > lt);
+          L.querySelector('.lt').innerHTML = lt
+            ? (cut ? '<span style="color:#9aa3b2;text-decoration:line-through;font-weight:400">' +
+                     m2(listTotal) + '</span> <span style="color:#166534">' + m2(lt) + '</span>'
+                   : m2(lt))
+            : '—';
           sub += lt;
+
+          /* Screen printing has a floor. The tier keys are band ceilings, so a
+             20-piece screen job would otherwise quote at the 50-71 rate and look
+             perfectly normal — say so instead, and point at what does run. */
+          var warn = L.querySelector('.minwarn');
+          var tooFew = meth && /screen\\s*print/i.test(meth.title) && qty > 0 && qty < ${SCREEN_MIN_QTY};
+          if (warn) {
+            warn.style.display = tooFew ? 'block' : 'none';
+            warn.textContent = tooFew
+              ? 'Screen printing starts at ${SCREEN_MIN_QTY} pieces. For ' + qty +
+                ', quote DTF or heat-transfer vinyl instead.' : '';
+          }
 
           var d = L.querySelector('.d');
           if (!d.value && prod) d.value = prod.name + (meth ? ' — ' + meth.title : '');
         });
-        var tax = document.querySelector('[name=taxable]').checked ? sub*TAX : 0;
-        var tot = sub + tax;
+        /* Mirrors quoteDiscount() on the server, clamps included. If these two
+           ever disagree the form shows one number and the customer is charged
+           another, so keep them in step. */
+        var dk = document.querySelector('[name=discount_kind]').value;
+        var dv = parseFloat(document.querySelector('[name=discount_value]').value);
+        if (!isFinite(dv) || dv <= 0) dv = 0;
+        if (dk === 'pct' && dv > 100) dv = 100;
+        var disc = (sub <= 0 || dv <= 0) ? 0 : Math.min(dk === 'pct' ? sub*dv/100 : dv, sub);
+        disc = Math.round(disc*100)/100;
+        var net = sub - disc;
+
+        var tax = document.querySelector('[name=taxable]').checked ? net*TAX : 0;
+        var tot = net + tax;
         var dep = tot <= 0 ? 0 : (tot < FULL_UNDER ? tot : tot*DEP);
         document.getElementById('sub').textContent = m2(sub);
+        document.getElementById('disc').textContent = disc > 0
+          ? '−' + m2(disc) + (dk === 'pct' ? ' (' + dv + '%)' : '') : '—';
         document.getElementById('tax').textContent = m2(tax);
         document.getElementById('tot').textContent = m2(tot);
         document.getElementById('dep').textContent = m2(dep) + (tot>0 && tot<FULL_UNDER ? ' (paid in full)' : ' (50%)');
@@ -4172,17 +4311,28 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
       // A price that will not parse must never become NaN and show as $0.00.
       if (unit != null && !Number.isFinite(unit)) unit = null;
       const manual = unit != null;
-      if (unit == null && prod) {
+
+      /* The catalogue price for this line, whether or not it is the price being
+         charged. Computed even when a manual price was typed, because that is
+         what the customer's page strikes through — without it an override is
+         invisible and the shop gets no credit for the deal it just gave. */
+      let listUnit = null;
+      if (prod) {
         let tier = 0;
         const pos = method && method.positions
           ? (method.positions.front || method.positions[Object.keys(method.positions)[0]]) : null;
         if (pos && pos.length) { tier = pos[0].price; for (const t of pos) if (q >= t.min_qty) tier = t.price; }
-        unit = Number(prod.price) + Number(tier);
+        listUnit = round2(blankPriceFor(prod.price, q) + Number(tier));
       }
-      if (unit == null) unit = 0;
+      if (unit == null) unit = listUnit != null ? listUnit : 0;
 
       // A manually typed unit price is taken as final — no upcharges layered on.
       const lineTotal = round2(unit * q + (manual ? 0 : upTotal));
+      /* Only a genuine reduction is struck through. A manual price ABOVE list is
+         a legitimate quote too (rush, awkward artwork), and showing it crossed
+         out would advertise a discount that is really a surcharge. */
+      const listTotal = listUnit != null ? round2(listUnit * q + upTotal) : null;
+      const struck = (manual && listTotal != null && listTotal > lineTotal) ? listTotal : null;
 
       let description = desc || (prod ? `${prod.name}${method ? ' — ' + method.title : ''}` : 'Custom item');
       if (mix) description += ` (${Object.entries(mix).map(([sz, n]) => `${n} ${sz}`).join(', ')})`;
@@ -4213,6 +4363,10 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
         size_mix: mix,
         size_upcharge: round2(manual ? 0 : upTotal),
         manual,
+        /* What it would have been at catalogue price. Rendered struck through on
+           the customer's page when it is higher than what they are being asked
+           to pay, so an override reads as the discount it is. */
+        list_total: struck,
         product_id: prod ? prod.id : null,
         method_id: method ? method.id : null,
       });
@@ -4231,9 +4385,22 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
     }
 
     const subtotal = round2(items.reduce((a, i) => a + i.line_total, 0));
+
+    /* Discount off the top of the job. Stored as entered so that editing the
+       lines later re-applies the same deal; the dollar figure is derived here
+       and again in quoteTotals(), which is what the customer page, the deposit
+       and the Stripe charge all read. */
+    const discountKind = one(b.discount_kind) === 'pct' ? 'pct' : 'amt';
+    let discountValue = Number(one(b.discount_value));
+    if (!Number.isFinite(discountValue) || discountValue < 0) discountValue = 0;
+    if (discountKind === 'pct') discountValue = Math.min(discountValue, 100);
+    const discountNote = String(one(b.discount_note) || '').trim().slice(0, 120);
+    const discount = quoteDiscount(subtotal, discountKind, discountValue);
+    const net = round2(subtotal - discount);
+
     const taxable = b.taxable === '1' || b.taxable === 'on' || b.taxable === true;
-    const tax = quoteTax(subtotal, taxable);
-    const total = round2(subtotal + tax);
+    const tax = quoteTax(net, taxable);
+    const total = round2(net + tax);
     const deposit = depositFor(total);
 
     const days = Math.max(1, parseInt(b.valid_days, 10) || 14);
@@ -4250,11 +4417,13 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
       ({ rows } = await pool.query(
         `UPDATE quotes SET name=$2, phone=$3, email=$4, items=$5, subtotal=$6, tax=$7,
                 total=$8, deposit=$9, notes=$10, valid_until=$11, needed_by=$12,
+                discount_kind=$13, discount_value=$14, discount_note=$15,
                 change_request=NULL, revision=COALESCE(revision,1)+1,
                 status = CASE WHEN accepted_at IS NULL THEN 'sent' ELSE status END
           WHERE code=$1 RETURNING *`,
         [editing, name, phone, email, JSON.stringify(items), subtotal, tax, total, deposit,
-         String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy]));
+         String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy,
+         discountKind, discountValue, discountNote || null]));
       if (!rows.length) {
         return res.status(404).send(quotePage('Not found',
           `<div class="card"><div class="warn">That quote no longer exists.</div>
@@ -4268,10 +4437,12 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
         code = newQuoteCode();
       }
       ({ rows } = await pool.query(
-        `INSERT INTO quotes (code,name,phone,email,items,subtotal,tax,total,deposit,notes,status,valid_until,needed_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'sent',$11,$12) RETURNING *`,
+        `INSERT INTO quotes (code,name,phone,email,items,subtotal,tax,total,deposit,notes,status,valid_until,needed_by,
+                             discount_kind,discount_value,discount_note)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'sent',$11,$12,$13,$14,$15) RETURNING *`,
         [code, name, phone, email, JSON.stringify(items), subtotal, tax, total, deposit,
-         String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy]));
+         String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy,
+         discountKind, discountValue, discountNote || null]));
     }
 
     const q = rows[0];
@@ -4384,8 +4555,13 @@ app.get('/q/:code', async (req, res) => {
           ${gallery}
         </td>
         <td class="num">${i.qty}</td>
-        <td class="num">${money(i.unit_price)}</td>
-        <td class="num">${money(i.line_total)}</td>
+        <td class="num">${Number(i.list_total) > Number(i.line_total)
+          ? `<span style="color:#9aa3b2;text-decoration:line-through">${money(Number(i.list_total) / i.qty)}</span><br>${money(i.unit_price)}`
+          : money(i.unit_price)}</td>
+        <td class="num">${Number(i.list_total) > Number(i.line_total)
+          ? `<span style="color:#9aa3b2;text-decoration:line-through">${money(i.list_total)}</span><br>
+             <b style="color:#166534">${money(i.line_total)}</b>`
+          : money(i.line_total)}</td>
       </tr>`;
     }).join('');
 
@@ -4405,6 +4581,10 @@ app.get('/q/:code', async (req, res) => {
           ${lines}
           <tr><td colspan="3" class="num muted" style="padding-top:12px">Subtotal</td>
               <td class="num" style="padding-top:12px">${money(t.subtotal)}</td></tr>
+          ${t.discount > 0 ? `<tr><td colspan="3" class="num" style="color:#166534">
+              ${q.discount_note ? escEmail(q.discount_note) : 'Discount'}${
+                q.discount_kind === 'pct' ? ` (${Number(q.discount_value)}% off)` : ''}</td>
+              <td class="num" style="color:#166534">&minus;${money(t.discount)}</td></tr>` : ''}
           ${t.tax > 0 ? `<tr><td colspan="3" class="num muted">Sales tax</td><td class="num">${money(t.tax)}</td></tr>` : ''}
           <tr><td colspan="3" class="num tot">Total</td><td class="num tot">${money(t.total)}</td></tr>
           ${!paid ? `<tr><td colspan="3" class="num" style="color:#1848B8;font-weight:700">
@@ -5079,11 +5259,16 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
         `<tr><td style="padding:8px 4px">${escEmail(i.description)}</td>
              <td style="padding:8px 4px;text-align:right">${i.qty}</td>
              <td style="padding:8px 4px;text-align:right">${money(i.line_total)}</td></tr>`).join('');
-      const table = `<table style="width:100%;border-collapse:collapse;margin:12px 0">${lines}
-        <tr><td colspan="2" style="padding:8px 4px;text-align:right;font-weight:700;border-top:2px solid #111">Total</td>
-        <td style="padding:8px 4px;text-align:right;font-weight:700;border-top:2px solid #111">${money(q.subtotal)}</td></tr></table>`;
-
       const tt = quoteTotals(q);
+      /* This row is labelled "Total", so it has to BE the total. It showed the
+         subtotal, which merely looked right while tax was the only thing above
+         it; a discounted job would state more than the customer is charged. */
+      const table = `<table style="width:100%;border-collapse:collapse;margin:12px 0">${lines}
+        ${tt.discount > 0 ? `<tr><td colspan="2" style="padding:8px 4px;text-align:right;color:#166534">
+          ${q.discount_note ? escEmail(q.discount_note) : 'Discount'}</td>
+          <td style="padding:8px 4px;text-align:right;color:#166534">&minus;${money(tt.discount)}</td></tr>` : ''}
+        <tr><td colspan="2" style="padding:8px 4px;text-align:right;font-weight:700;border-top:2px solid #111">Total</td>
+        <td style="padding:8px 4px;text-align:right;font-weight:700;border-top:2px solid #111">${money(tt.total)}</td></tr></table>`;
       const payBlock = `
         <div style="border:1px solid #e3e8f2;border-radius:10px;padding:14px;margin:14px 0">
           <p style="margin:0 0 6px"><b>${tt.deposit >= tt.total ? 'Payment due' : 'Deposit to start (50%)'}: ${money(tt.deposit)}</b></p>
@@ -5107,7 +5292,7 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
       sendEmail({
         to: SHOP_EMAIL,
         replyTo: q.email || undefined,
-        subject: `✅ Quote ${q.code} accepted — ${escEmail(q.name || q.phone)} ${money(q.subtotal)}`,
+        subject: `✅ Quote ${q.code} accepted — ${escEmail(q.name || q.phone)} ${money(tt.total)}`,
         html: `<div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto">
           <h2 style="color:#1848B8">Quote accepted</h2>
           <p style="color:#374151"><b>${escEmail(q.name || '')}</b><br>${escEmail(q.phone || '')}<br>${escEmail(q.email || '')}</p>
@@ -5889,7 +6074,7 @@ app.get('/q/:code/vcard', async (req, res) => {
       `FN:${q.name || q.phone || q.email}`,
       q.phone ? `TEL;TYPE=CELL:${q.phone}` : '',
       q.email ? `EMAIL;TYPE=INTERNET:${q.email}` : '',
-      `NOTE:${SHOP_NAME} quote ${q.code} — ${quoteSummary(q.items).replace(/[\r\n]+/g, ' ')} — ${money(q.subtotal)}`,
+      `NOTE:${SHOP_NAME} quote ${q.code} — ${quoteSummary(q.items).replace(/[\r\n]+/g, ' ')} — ${money(q.total || q.subtotal)}`,
       'END:VCARD',
     ].filter(Boolean).join('\r\n');
     res.setHeader('Content-Type', 'text/vcard; charset=utf-8');
