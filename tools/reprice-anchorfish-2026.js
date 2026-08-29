@@ -30,6 +30,7 @@
  */
 
 const { spawnSync } = require('child_process');
+const { colorTable } = require('./lib/screenprint');
 const APPLY = process.argv.includes('--apply');
 
 /* ── Screen print (contracted to Anchorfish) ────────────────────────────── */
@@ -381,6 +382,29 @@ for (const m of SP_INSERTS) {
   const tiers = spTiers(m.colors);
   emit('NEW', { title: m.colors + ' colour' }, tiers);
   stmts.push(insertMethod(m.title, tiers));
+}
+
+/* The seven rows above are also sold as ONE `color`-type method, so the editor
+ * can price from the colours in the finished design instead of asking for a
+ * count first (tools/decorations-2026.js creates it; tools/lib/screenprint.js
+ * does the pivot). It has to be repriced HERE, from the same numbers, or a
+ * price change lands on the per-colour rows the quote form reads and never on
+ * the combined row the store sells from — and the two answers to "what does a
+ * 4-colour shirt cost" would drift apart with nothing reporting it.
+ *
+ * UPDATE only, matched by title: this does not create the method. If it has not
+ * been built yet the statement changes nothing, so the two tools can be run in
+ * either order.
+ */
+{
+  const all = [...Object.values(SP_METHODS), ...SP_INSERTS]
+    .map((m) => ({ colors: m.colors, tiers: spTiers(m.colors) }));
+  const combined = enjson(colorTable(all));
+  console.log('\n  The same prices are also written to the combined "Screen Printing" method,');
+  console.log('  as columns 1-color..7-color plus a full-color backstop, so the editor can');
+  console.log('  price from the design\'s own colour count.');
+  stmts.push('UPDATE lumise_printings SET calculate=' + sq(combined) +
+    ", updated=NOW() WHERE title='Screen Printing';");
 }
 
 /* ── DTF ────────────────────────────────────────────────────────────────── */

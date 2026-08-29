@@ -24,6 +24,7 @@
  * Read-only. Prints a verdict per product; writes nothing. */
 const { spawnSync } = require('child_process');
 const MYSQL = '/usr/local/opt/mysql-client/bin/mysql';
+const { CLASSIFY } = require('./lib/garments');
 
 function mysql(url, sql) {
   const u = new URL(url);
@@ -43,24 +44,9 @@ function mysql(url, sql) {
 const dec = (b) => { try { return JSON.parse(decodeURIComponent(Buffer.from(b, 'base64').toString('utf8'))); }
   catch { return null; } };
 
-/* What the product NAME says the garment is, in the order the tests must run —
-   the specific before the general, so "Youth Heavy Blend Hoodie" is a hoodie
-   rather than a youth tee, and "Quarter-Zip Sweatshirt" is not a plain tee. */
-const CLASSIFY = [
-  ['cap',     /\b(cap|hat|beanie|visor|snapback|trucker)\b/i],
-  ['bag',     /\b(tote|bag|backpack|duffel|sackpack|drawstring|pack)\b/i],
-  ['vest',    /\bvest\b/i],
-  ['jacket',  /\b(jacket|anorak|windbreak|soft ?shell|shell)\b/i],
-  ['qzip',    /\b(quarter.?zip|1\/4.?zip|half.?zip)\b/i],
-  ['hoodie',  /\b(hoodie|hooded|sweatshirt|crewneck|fleece|pullover)\b/i],
-  ['polo',    /\bpolo\b/i],
-  ['woven',   /\b(twill|oxford|broadcloth|flannel|button|dress shirt|work shirt|scrub|utility)\b/i],
-  ['onesie',  /\b(bodysuit|onesie|infant)\b/i],
-  ['kids',    /\b(youth|toddler|baby)\b/i],
-  ['tank',    /\btank\b/i],
-  ['longslv', /\blong.?sleeve\b/i],
-  ['tee',     /\b(tee|t-shirt|shirt)\b/i],
-];
+/* Which garment a product is comes from tools/lib/garments.js — the same list
+   the decoration tool classifies with, so a product cannot be a hoodie to one
+   and a tee to the other. */
 
 /* Which base-art files are ACCEPTABLE for each garment class. A tee drawn on
    the women's tee art is fine; a cap drawn on a tee is not. */
