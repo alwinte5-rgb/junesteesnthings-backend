@@ -9099,28 +9099,96 @@ async function sendDueReviewRequests() {
   }
 }
 
+/* Supplier catalogue sync — costs, prices and availability from S&S.
+ *
+ * Runs once a day rather than hourly: supplier costs move in pennies over
+ * weeks, and every run is a few hundred API calls against someone else's rate
+ * limit. The day is claimed in the database, not held in memory, so a redeploy
+ * mid-afternoon cannot make it run a second time.
+ *
+ * The work is in tools/ssa-sync.js and is run as a child process on purpose:
+ * it is the same command that gets run by hand, so the scheduled path and the
+ * manual path cannot drift into behaving differently. It also means a crash
+ * there cannot take the web server down with it.
+ */
+async function runSupplierSync() {
+  if (!process.env.SSA_ACCOUNT || !process.env.SSA_API_KEY) return;
+  if (String(process.env.JT_SUPPLIER_SYNC || '1') !== '1') return;
+
+  /* Its own table rather than jt_digest_log, whose `day` is a DATE primary key
+     — a prefixed string key would not cast, and widening that column to share
+     it would change a table the digest depends on. */
+  await pool.query(`CREATE TABLE IF NOT EXISTS jt_supplier_sync_log (
+    day DATE PRIMARY KEY, ran_at TIMESTAMPTZ DEFAULT NOW())`);
+  const claim = await pool.query(
+    `INSERT INTO jt_supplier_sync_log (day) VALUES (CURRENT_DATE)
+     ON CONFLICT DO NOTHING RETURNING day`);
+  if (!claim.rowCount) return;                    // already run today
+
+  const vars = JSON.stringify({
+    SSA_ACCOUNT: process.env.SSA_ACCOUNT,
+    SSA_API_KEY: process.env.SSA_API_KEY,
+    MYSQL_PUBLIC_URL: process.env.MYSQL_PUBLIC_URL || process.env.MYSQL_URL,
+  });
+
+  return await new Promise((resolve) => {
+    const child = require('child_process').spawn(
+      process.execPath, [path.join(__dirname, 'tools', 'ssa-sync.js'), '--apply'],
+      { stdio: ['pipe', 'pipe', 'pipe'] });
+    let out = '', err = '';
+    child.stdout.on('data', (d) => (out += d));
+    child.stderr.on('data', (d) => (err += d));
+    child.on('close', async (code) => {
+      const summary = (out.split('\n').filter((l) => /·/.test(l)).pop() || '').trim();
+      console.log('supplier sync:', code === 0 ? (summary || 'ok') : 'exit ' + code);
+
+      /* Tell the shop only when something needs a person: a price the guard
+         refused to write, a product deactivated, or a failed run. A quiet
+         "nothing changed" email every day trains you to ignore the alert. */
+      const notable = out.split('\n').filter((l) =>
+        /SKIPPED|DEACTIVATING|NOT ON S&S|BACK IN STOCK/.test(l));
+      if (code !== 0 || notable.length) {
+        await alertShop(
+          code !== 0 ? '⚠️ Supplier sync failed' : '📦 Supplier sync needs a look',
+          `<pre style="font-size:13px;white-space:pre-wrap">${escEmail(
+            (code !== 0 ? err || out : out).slice(0, 4000))}</pre>`);
+      }
+      resolve(summary);
+    });
+    child.stdin.end(vars);
+  });
+}
+
 // Hourly abandoned-cart sweep trigger (the designer PHP does the real work).
 // Self-rescheduling with a timeout so a slow sweep can never overlap the next one.
 if (process.env.JT_INTERNAL_KEY) {
+  /* Each task is isolated. They used to share one try block, so a slow
+     designer — the very first call, over the network — swallowed every task
+     after it and the digest, the reminders and the review asks silently did
+     not run for that hour. A task that throws should cost only itself. */
+  const step = async (name, fn) => {
+    try { const out = await fn(); if (out) console.log(name + ':', String(out).trim()); }
+    catch (e) { console.error(name + ' failed:', e.message); }
+  };
+
   const runSweep = async () => {
-    try {
+    await step('abandoned-cart sweep', async () => {
       const r = await fetch(
         `https://design.jtees.net/jt-cron.php?key=${encodeURIComponent(process.env.JT_INTERNAL_KEY)}`,
         { signal: AbortSignal.timeout(120000) }
       );
-      console.log('abandoned-cart sweep:', (await r.text()).trim());
-      await sendDueReviewRequests();
-      await sendQuoteFollowUps();
-      await sendDepositReminders();
-      await sendBalanceReminders();
-      await sendReorderNudges();
-      await expireOldQuotes();
-      await sendDailyDigest();
-      await taxMonthlyCheck();
-      await brevoBreachCheck();
-    } catch (e) {
-      console.error('abandoned-cart sweep failed:', e.message);
-    }
+      return r.text();
+    });
+    await step('review asks', sendDueReviewRequests);
+    await step('quote follow-ups', sendQuoteFollowUps);
+    await step('deposit reminders', sendDepositReminders);
+    await step('balance reminders', sendBalanceReminders);
+    await step('reorder nudges', sendReorderNudges);
+    await step('expire quotes', expireOldQuotes);
+    await step('daily digest', sendDailyDigest);
+    await step('tax check', taxMonthlyCheck);
+    await step('brevo breach check', brevoBreachCheck);
+    await step('supplier sync', runSupplierSync);
     setTimeout(runSweep, 60 * 60 * 1000);
   };
   setTimeout(runSweep, 60 * 60 * 1000);
