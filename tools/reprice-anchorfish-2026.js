@@ -32,6 +32,58 @@
 const { spawnSync } = require('child_process');
 const APPLY = process.argv.includes('--apply');
 
+/* ── Screen print (contracted to Anchorfish) ────────────────────────────── */
+
+/* Their sheet, per piece, by colour count. Rows are quantity FLOORS; `ceil` is
+   the band ceiling Lumise keys on. Minimum is 50 — the bands that used to start
+   at 12 were the previous vendor's and contradicted the shop's own minimum.
+   The markup falls with quantity because Anchorfish's cost curve is much
+   flatter than the old vendor's while market price still drops steeply, so one
+   multiple would either starve the small runs or lose the big bids. */
+const SP = {
+   50: { ceil:  99, mk: 4.40, p: [1.80, 2.25, 2.72, 3.19, 3.66, 4.13, 4.60] },
+  100: { ceil: 249, mk: 3.65, p: [1.65, 2.06, 2.53, 3.00, 3.47, 3.94, 4.41] },
+  250: { ceil: 499, mk: 2.75, p: [1.47, 1.84, 2.31, 2.78, 3.25, 3.72, 4.19] },
+  500: { ceil: 999, mk: 2.55, p: [1.32, 1.65, 2.12, 2.59, 3.06, 3.53, 4.00] },
+ 1000: { ceil:2499, mk: 2.10, p: [1.17, 1.46, 1.93, 2.40, 2.87, 3.34, 3.81] },
+ 2500: { ceil:7000, mk: 1.95, p: [0.99, 1.24, 1.71, 2.18, 2.65, 3.12, 3.59] },
+};
+const SCREEN_CHARGE = 25;   // yours, per colour, amortised at the band floor
+
+/* Anchorfish prices 5, 6 and 7 colours separately; the designer had one
+   combined "5-6 Colors" method, which had to quote one of them wrong. */
+const SP_METHODS = {
+  2: { colors: 1, title: 'Screen Printing — 1 Color' },
+  3: { colors: 2, title: 'Screen Printing — 2 Colors' },
+  4: { colors: 3, title: 'Screen Printing — 3 Colors' },
+  5: { colors: 4, title: 'Screen Printing — 4 Colors' },
+  6: { colors: 5, title: 'Screen Printing — 5 Colors' },
+};
+const SP_INSERTS = [
+  { colors: 6, title: 'Screen Printing — 6 Colors' },
+  { colors: 7, title: 'Screen Printing — 7 Colors' },
+];
+
+/* ── DTF (contracted to Anchorfish) ─────────────────────────────────────── */
+
+/* Method #1 "Printing" is the only ACTIVE decoration, so this is what the
+   storefront actually sells. It is `multi`, with a second stage for a second
+   location — which maps onto Anchorfish's "Additional Loc" column.
+   Columns used: [0]=16sq [1]=132sq (the standard print) [2]=252sq [3]=addl loc.
+   Live bands stopped at 175 pieces, so every larger order was quoting at the
+   175 rate; these run to 2,500. */
+const DTF = {
+    1: { ceil:  11, mk: 4.0, v: [5.00, 7.03, 9.38, 1.80] },
+   12: { ceil:  24, mk: 4.0, v: [3.23, 5.63, 7.50, 1.80] },
+   25: { ceil:  49, mk: 4.0, v: [2.58, 4.50, 6.00, 1.50] },
+   50: { ceil:  99, mk: 3.6, v: [2.73, 3.60, 4.80, 1.50] },
+  100: { ceil: 249, mk: 3.6, v: [1.65, 3.06, 4.08, 1.35] },
+  250: { ceil: 499, mk: 3.0, v: [1.47, 2.60, 3.47, 1.20] },
+  500: { ceil: 999, mk: 2.8, v: [1.32, 2.21, 2.95, 1.11] },
+ 1000: { ceil:2499, mk: 2.4, v: [1.17, 1.88, 2.51, 1.05] },
+ 2500: { ceil:7000, mk: 2.2, v: [0.99, 1.60, 2.13, 1.02] },
+};
+
 /* ── Anchorfish cost sheets ─────────────────────────────────────────────── */
 
 /* Embroidery prices come from what the shop actually charges, not from a
@@ -159,6 +211,17 @@ const up05 = (n) => Math.ceil(n * 20 - 1e-9) / 20;
 const enjson = (o) => Buffer.from(encodeURIComponent(JSON.stringify(o)), 'utf8').toString('base64');
 const sq = (s) => "'" + String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'";
 
+/* Insert a method only if the title is not already there, so the whole script
+   stays safe to run twice — the only way to check it worked is to run it.
+   `active` is 0 to match every other decoration method; the quote form filters
+   on use_for_quoting, not on active, so it still appears there. */
+function insertMethod(title, tiers) {
+  return 'INSERT INTO lumise_printings (title, active, calculate, thumbnail, upload, description, author, created, updated)\n' +
+    '  SELECT ' + sq(title) + ', 0, ' + sq(fixedCalc(tiers)) + ", '', '', '', '', NOW(), NOW()\n" +
+    '  FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM (SELECT id FROM lumise_printings WHERE title=' +
+    sq(title) + ') AS t);';
+}
+
 function fixedCalc(tiers) {
   const values = {};
   for (const [qty, price] of tiers) values[String(qty)] = { price: price.toFixed(2) };
@@ -242,11 +305,7 @@ for (const [id, m] of nameIds) {
 for (const m of EMB_INSERTS) {
   const tiers = tiersFor(m);
   emit('NEW', m, tiers);
-  stmts.push(
-    'INSERT INTO lumise_printings (title, active, calculate, thumbnail, upload, description, author, created, updated)\n' +
-    '  SELECT ' + sq(m.title) + ', 0, ' + sq(fixedCalc(tiers)) + ", '', '', '', '', NOW(), NOW()\n" +
-    '  FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM (SELECT id FROM lumise_printings WHERE title=' +
-    sq(m.title) + ') AS t);');
+  stmts.push(insertMethod(m.title, tiers));
 }
 
 console.log('\n  Fitted from your two prices: $' + EMB_PRICE.chest.toFixed(2) + ' chest -> $' +
@@ -257,6 +316,67 @@ console.log('\n  Fitted from your two prices: $' + EMB_PRICE.chest.toFixed(2) + 
   for (let i = 0; i < 6; i++) r += (bands[i] + ' $' + embPrice(EMB[1][i]).toFixed(0)).padStart(16);
   console.log(r);
 }
+/* ── Screen print ───────────────────────────────────────────────────────── */
+
+const SPF = Object.keys(SP).map(Number).sort((a, b) => a - b);
+const spPrice = (f, c) => up05(SP[f].p[c - 1] * SP[f].mk + (SCREEN_CHARGE * c) / f);
+const spTiers = (c) => SPF.map((f) => [SP[f].ceil, spPrice(f, c)]);
+
+console.log('\n\nSCREEN PRINT — Anchorfish 2026, $' + SCREEN_CHARGE + '/colour screen charge baked in.');
+console.log('50-piece minimum: the old bands started at 12, which contradicted it.\n');
+let sh = '  id   colours   ';
+for (const f of SPF) sh += (f + '-' + SP[f].ceil).padStart(11);
+console.log(sh);
+console.log('  ' + '-'.repeat(sh.length));
+for (const [id, m] of Object.entries(SP_METHODS)) {
+  const tiers = spTiers(m.colors);
+  emit(id, { title: m.colors + ' colour' }, tiers);
+  stmts.push('UPDATE lumise_printings SET title=' + sq(m.title) +
+    ', calculate=' + sq(fixedCalc(tiers)) + ' WHERE id=' + id + ';');
+}
+for (const m of SP_INSERTS) {
+  const tiers = spTiers(m.colors);
+  emit('NEW', { title: m.colors + ' colour' }, tiers);
+  stmts.push(insertMethod(m.title, tiers));
+}
+
+/* ── DTF ────────────────────────────────────────────────────────────────── */
+
+const DF = Object.keys(DTF).map(Number).sort((a, b) => a - b);
+const dtfSide = (col) => DF.map((f) => [DTF[f].ceil, up05(DTF[f].v[col] * DTF[f].mk)]);
+
+console.log('\n\nDTF — method #1 "Printing", the only ACTIVE method, so this is live on the store.');
+console.log('Stage 1 is the main print (132 sq in), stage 2 an additional location.');
+console.log('Live bands stopped at 175, so every larger order quoted at the 175 rate.\n');
+let dh = '  stage           ';
+for (const f of DF) dh += (f + '-' + DTF[f].ceil).padStart(11);
+console.log(dh);
+console.log('  ' + '-'.repeat(dh.length));
+{
+  const main = dtfSide(1), add = dtfSide(3);
+  for (const [label, t] of [['main print', main], ['add. location', add]]) {
+    let r = '  ' + label.padEnd(16);
+    for (const [, p] of t) r += ('$' + p.toFixed(2)).padStart(11);
+    console.log(r);
+    for (let i = 1; i < t.length; i++) {
+      if (t[i][1] > t[i - 1][1]) {
+        console.error('  !! DTF ' + label + ' price RISES at ' + t[i][0] + ' — refusing');
+        process.exit(3);
+      }
+    }
+  }
+  /* #1 keeps its two existing stage names — the storefront's saved designs
+     reference them, so renaming the stages would orphan those. */
+  const calc = enjson({
+    multi: true, type: 'fixed', show_detail: '1',
+    values: {
+      id: Object.fromEntries(main.map(([q, p]) => [String(q), { price: p.toFixed(2) }])),
+      mr8a5dlx: Object.fromEntries(add.map(([q, p]) => [String(q), { price: p.toFixed(2) }])),
+    },
+  });
+  stmts.push('UPDATE lumise_printings SET calculate=' + sq(calc) + ' WHERE id=1;');
+}
+
 console.log('\n  Every stitch count from 0 to 25k now has a price. The 14k-22k band is flat $60,');
 console.log('  which also covers the 18k-20k gap Anchorfish leaves unpriced on their own sheet.');
 console.log('  Above 25k stitches there is still no rate — Anchorfish quotes those separately.');
