@@ -65,6 +65,15 @@ const TYPES = {
               back: { height: 200, width: 140, left: 0, top: 0 }, methods: [1, 2, 3, 4, 5, 6] },
   premium:  { raws: 'premium',            front: { height: 260, width: 170, left: 0, top: 0 },
               back: { height: 300, width: 170, left: 0, top: 0 }, methods: [1, 8] },
+  /* Vests and jackets are decorated left-chest and centre-back, and are almost
+     always embroidered rather than printed — a puffer will not take a screen.
+     NOTE: the designer has no vest or jacket base artwork, so these borrow the
+     sweatshirt silhouette. The catalogue thumbnail is the real garment; only
+     the design canvas shows the wrong shape until proper art is uploaded. */
+  vest:     { raws: 'hoodies_sweatshirt', front: { height: 200, width: 150, left: 0, top: 20 },
+              back: { height: 280, width: 170, left: 0, top: 0 }, methods: [8], borrowedArt: true },
+  jacket:   { raws: 'hoodies_sweatshirt', front: { height: 210, width: 160, left: 0, top: 15 },
+              back: { height: 300, width: 175, left: 0, top: -5 }, methods: [1, 8], borrowedArt: true },
 };
 
 /* The styles to add, each with the garment type that decides its print area.
@@ -95,6 +104,22 @@ const WANTED = [
   ['1910',     'tee',     'SubliVie',    "SubliVie 1910 Men's Polyester Sublimation Tee"],
   ['1210',     'kids',    'SubliVie',    'SubliVie 1210 Youth Polyester Sublimation Tee'],
   ['1310',     'kids',    'SubliVie',    'SubliVie 1310 Toddler Polyester Sublimation Tee'],
+
+  /* Fall 2026. Corporate and team orders move to layers from September, and
+     every one of these was checked for Illinois stock first. Classic corporate
+     dress shirts are deliberately absent: not one from Devon & Jones, Harriton,
+     Van Heusen or North End is stocked locally, so they would carry freight on
+     every order. */
+  ['RP021',    'premium', 'Artisan',     'Artisan Collection RP021 Utility Shirt'],
+  ['CE702',    'vest',    'CORE365',     "CORE365 CE702 Men's Prevail Packable Puffer Vest"],
+  ['CE702W',   'vest',    'CORE365',     "CORE365 CE702W Women's Prevail Packable Puffer Vest"],
+  ['CE703',    'vest',    'CORE365',     "CORE365 CE703 Men's Techno Lite Unlined Vest"],
+  ['1580',     'hoodie',  'Comfort',     'Comfort Colors 1580 Garment-Dyed Quarter-Zip'],
+  ['5102',     'hoodie',  'C2',          "C2 Sport 5102 Men's Quarter-Zip Pullover"],
+  ['S450',     'hoodie',  'Champion',    'Champion S450 Powerblend Quarter-Zip'],
+  ['88183',    'jacket',  'CORE365',     "CORE365 88183 Men's Techno Lite Jacket"],
+  ['CE700',    'jacket',  'CORE365',     "CORE365 CE700 Men's Prevail Packable Puffer Jacket"],
+  ['M750',     'jacket',  'Harriton',    "Harriton M750 Men's Packable Hooded Nylon Jacket"],
 ];
 
 /* Sublimation (#14) needs a poly garment, so it is added only where the fabric
@@ -295,7 +320,8 @@ process.stdin.on('end', async () => {
     console.log('  ' + token.padEnd(11) + name.slice(0, 44).padEnd(46) +
       ('$' + price.toFixed(2)).padStart(7) + String(seenSizes.size).padStart(6) +
       String(seenCols.size).padStart(5) + String(il).padStart(8) + '  ' + type +
-      (isPoly ? '  +sublimation' : ''));
+      (isPoly ? '  +sublimation' : '') +
+      (TYPES[type].borrowedArt ? '  [borrowed canvas art]' : ''));
 
     stmts.push(
       'INSERT INTO lumise_products (name, price, product, thumbnail, thumbnail_url, template, ' +
