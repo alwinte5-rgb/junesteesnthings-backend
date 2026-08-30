@@ -58,8 +58,9 @@ test('every reason the redirect can carry is rendered', () => {
 test('accept and pay are both hidden while a change is pending', () => {
   /* One expression gates both, so they cannot drift apart: the pay block is its
      `accepted` branch and the accept form is its `else`. */
-  assert.match(page, /\$\{paid \|\| q\.requested_items \? '' : accepted \?/,
-    'a pending request must suppress both the pay options and the accept form');
+  assert.match(page, /\$\{paid \|\| q\.requested_items \|\| q\.cancelled_at \? '' : accepted \?/,
+    'a pending request — or a cancellation — must suppress both the pay options ' +
+    'and the accept form, through the one expression that gates them together');
 });
 
 test('the pending state is explained where the buttons used to be', () => {

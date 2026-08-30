@@ -117,3 +117,69 @@ test('revenue is not touched by a write-off', () => {
   assert.doesNotMatch(route, /INSERT INTO quote_payments/,
     'a write-off is not a payment and must not enter the ledger');
 });
+
+/* ── Cancellation ────────────────────────────────────────────────────────── */
+
+test('cancelling never deletes the row', () => {
+  /* A quote records what was agreed, and once money has moved it is what the
+     payment rows point at. Deleting it destroys the customer's history and
+     orphans the ledger — and it cannot be undone, which is how the last gap got
+     papered over with a fake "delivered". */
+  const route = src.slice(src.indexOf("app.post('/quote/:code/cancel'"),
+                          src.indexOf("app.post('/quote/:code/uncancel'"));
+  assert.doesNotMatch(route, /DELETE FROM/, 'cancelling must not delete anything');
+  assert.match(route, /SET cancelled_at = NOW\(\), cancel_reason = \$2/);
+});
+
+test('cancelling clears the delivered stamp', () => {
+  /* A cancelled job did not ship. Leaving the stamp on keeps it counted as
+     delivered work — and marking things delivered is exactly the workaround
+     this replaces, so those rows carry a stamp that is not true. */
+  const route = src.slice(src.indexOf("app.post('/quote/:code/cancel'"),
+                          src.indexOf("app.post('/quote/:code/uncancel'"));
+  assert.match(route, /delivered_at = NULL/);
+});
+
+test('a cancellation can be undone', () => {
+  /* An action too final to trust is an action people work around. */
+  assert.match(src, /app\.post\('\/quote\/:code\/uncancel', requireAdmin/);
+  const route = src.slice(src.indexOf("app.post('/quote/:code/uncancel'"));
+  assert.match(route, /cancelled_at = NULL, cancel_reason = NULL/);
+  assert.match(route, /CASE WHEN accepted_at IS NOT NULL THEN 'accepted' ELSE 'sent' END/,
+    'restoring must not invent a status that was never recorded');
+});
+
+test('cancelling is admin-only, both ways', () => {
+  assert.match(src, /app\.post\('\/quote\/:code\/cancel', requireAdmin/);
+  assert.match(src, /app\.post\('\/quote\/:code\/uncancel', requireAdmin/);
+});
+
+test('a cancelled quote cannot be accepted or paid', () => {
+  /* The buttons are hidden, but a stale tab or a typed URL must still be
+     refused — the guard is the rule, the UI is a courtesy. */
+  const accept = src.slice(src.indexOf("app.post('/q/:code/accept'"));
+  assert.match(accept.slice(0, accept.indexOf('RETURNING')), /AND cancelled_at IS NULL/);
+  const pay = src.slice(src.indexOf("app.get(['/q/:code/pay/card'"));
+  assert.match(pay.slice(0, pay.indexOf('const t = quoteTotals')),
+    /if \(q\.cancelled_at\) return res\.redirect/);
+});
+
+test('every automated chase skips a cancelled quote', () => {
+  /* Three crons email the customer. A cancelled order that still sends "your
+     deposit is due" is the shop asking for money on a job it has called off. */
+  for (const col of ['deposit_nudged_at', 'balance_nudged_at']) {
+    const i = src.indexOf(`AND ${col} IS NULL`);
+    assert.notStrictEqual(i, -1, `${col} chase not found`);
+    assert.match(src.slice(i, i + 120), /AND cancelled_at IS NULL/,
+      `the ${col} chase must skip cancelled quotes`);
+  }
+  const r = src.indexOf('AND q.reorder_nudged_at IS NULL');
+  assert.match(src.slice(r, r + 120), /AND q\.cancelled_at IS NULL/);
+});
+
+test('a cancelled quote with money on it flags the refund', () => {
+  /* Cancelling does not move money. If a deposit was taken, somebody has to
+     send it back, and the board is where that is noticed. */
+  assert.match(src, /refund owed/,
+    'the card must say a refund is owed when a cancelled job carries a payment');
+});

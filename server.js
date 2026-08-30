@@ -127,6 +127,13 @@ async function initDB() {
 
        The amount is STORED rather than derived, so editing the quote afterwards
        cannot silently change a figure that has already been written off. */
+    /* Cancelled, not deleted. A quote is a record of what was agreed and — once
+       money has moved — what it was agreed against, so destroying the row
+       destroys the customer's history and orphans any payment that references
+       it. Cancelling takes it off the board and stops every chase, while the
+       record survives; it is also reversible, which deleting is not. */
+    'cancelled_at TIMESTAMPTZ',
+    'cancel_reason TEXT',
     'written_off NUMERIC(10,2) NOT NULL DEFAULT 0',
     'settled_at TIMESTAMPTZ',
     'settled_note TEXT',
@@ -5657,10 +5664,16 @@ app.get('/q/:code', async (req, res) => {
           if (e === 'pending') return `<div class="warn"><b>Your changes are with ${SHOP_SIGNER} first.</b>
             Accepting is on hold until the quote is updated with the new price — usually the same day.</div>`;
           if (e === 'already') return `<div class="ok">This quote is already accepted — nothing more to do here.</div>`;
+          if (e === 'cancelled') return `<div class="warn">This order has been cancelled, so it cannot be accepted.
+            If that is not right, please text ${SHOP_PHONE}.</div>`;
           if (e === 'gone') return `<div class="warn">We could not find that quote. Please text us and we will resend it.</div>`;
           if (e === 'err') return `<div class="warn">Something went wrong on our end. Please text us — nothing was charged.</div>`;
           return '';
         })()}
+        ${q.cancelled_at ? `<div class="warn"><b>This order has been cancelled.</b>
+          ${Number(q.paid_amount || 0) > 0
+            ? `Any payment already made is being refunded — ${SHOP_SIGNER} will be in touch.`
+            : `Nothing is owed.`} If that is not right, please text ${SHOP_PHONE}.</div>` : ''}
         ${q.requested_items ? `<div class="warn" id="changes"><b>Change requested — with ${SHOP_SIGNER}.</b>
           The new sizes are below. ${SHOP_SIGNER} confirms the price and this same link updates,
           so there is nothing new to open. Accepting and paying are on hold until then, so nobody
@@ -5723,7 +5736,7 @@ app.get('/q/:code', async (req, res) => {
         </div>
       </div>` : ''}
 
-      ${paid || q.requested_items ? '' : accepted ? `
+      ${paid || q.requested_items || q.cancelled_at ? '' : accepted ? `
       <div class="card">
         <h1 style="font-size:18px">Pay your ${t.deposit >= t.total ? 'balance' : 'deposit'} — ${money(t.deposit)}</h1>
         <p class="muted" style="margin:6px 0 14px">Whichever is easiest. Nothing else is due until pickup or delivery.</p>
@@ -5931,6 +5944,9 @@ app.get(['/q/:code/pay/card', '/q/:code/pay/balance', '/q/:code/pay/full'], asyn
        the shop has not re-priced is the one failure here that costs a refund
        and an apology, so the door is shut until the request is cleared. */
     if (q.requested_items) return res.redirect('/q/' + code + '#changes');
+    /* A cancelled order must not take money, whatever page the customer still
+       has open. The buttons are gone; this is what actually enforces it. */
+    if (q.cancelled_at) return res.redirect('/q/' + code);
 
     const t = quoteTotals(q);
     const alreadyPaid = Number(q.paid_amount || 0);
@@ -6458,7 +6474,7 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
               name  = COALESCE(NULLIF(name,''),  $3),
               email = COALESCE(NULLIF(email,''), $4),
               phone = COALESCE(NULLIF(phone,''), $5)
-        WHERE code=$1 AND accepted_at IS NULL AND requested_items IS NULL RETURNING *`,
+        WHERE code=$1 AND accepted_at IS NULL AND requested_items IS NULL AND cancelled_at IS NULL RETURNING *`,
       [code, nb, cname, cemail, cphone]);
 
     if (rows.length) {                       // first acceptance only
@@ -6535,9 +6551,11 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
        There are exactly two reasons it can match nothing, and the customer is
        told which. */
     const { rows: why } = await pool.query(
-      'SELECT accepted_at IS NOT NULL AS already, requested_items IS NOT NULL AS pending FROM quotes WHERE code=$1',
+      `SELECT accepted_at IS NOT NULL AS already, requested_items IS NOT NULL AS pending,
+              cancelled_at IS NOT NULL AS cancelled FROM quotes WHERE code=$1`,
       [code]);
     const reason = !why.length ? 'gone'
+      : why[0].cancelled ? 'cancelled'
       : why[0].pending ? 'pending'
       : why[0].already ? 'already' : 'gone';
     return res.redirect('/q/' + code + '?e=' + reason);
@@ -7402,6 +7420,53 @@ async function sendReceipt(code, to = null) {
  *   - the reason is recorded, because "why is this $372.50 short" is a question
  *     somebody will ask months later
  */
+/* Cancel a quote, and put it back.
+ *
+ * CANCEL, not delete. A quote records what was agreed, and once money has moved
+ * it is what the payment rows point at — deleting the row destroys the
+ * customer's history and orphans the ledger. It is also unrecoverable, and the
+ * last gap like this was papered over by marking jobs delivered, which is
+ * exactly what happens when the only available action is too final to trust.
+ *
+ * So: it leaves the board, every chase stops, the record survives, and it can be
+ * put back.
+ */
+app.post('/quote/:code/cancel', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/quotes');
+  const reason = String((req.body && req.body.reason) || '').trim().slice(0, 200);
+  try {
+    /* delivered_at is cleared: a cancelled job did not ship, and leaving the
+       stamp on would keep it counted as delivered work in the schedule. It is
+       also how these were being hidden before cancelling existed. */
+    await pool.query(
+      `UPDATE quotes SET cancelled_at = NOW(), cancel_reason = $2,
+              status = 'cancelled', delivered_at = NULL
+        WHERE code = $1 AND cancelled_at IS NULL`,
+      [code, reason || null]);
+  } catch (err) {
+    console.error('cancel failed:', err.message);
+  }
+  res.redirect('/quotes');
+});
+
+app.post('/quote/:code/uncancel', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/quotes');
+  try {
+    /* Back to accepted or sent depending on whether they had accepted — not to
+       whatever the status was before, which is not recorded and would be a guess
+       dressed up as a fact. */
+    await pool.query(
+      `UPDATE quotes SET cancelled_at = NULL, cancel_reason = NULL,
+              status = CASE WHEN accepted_at IS NOT NULL THEN 'accepted' ELSE 'sent' END
+        WHERE code = $1`, [code]);
+  } catch (err) {
+    console.error('uncancel failed:', err.message);
+  }
+  res.redirect('/quotes');
+});
+
 app.post('/quote/:code/settle', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/quotes');
@@ -7989,7 +8054,11 @@ async function renderBoard(VIEW, req, res) {
             <span class="chip" style="background:${bg};color:${fg}">${paid ? 'paid ' + money(q.paid_amount) : st}</span>
           </div>
         </div>
-        ${balanceOf(q) > 0
+        ${q.cancelled_at
+          ? `<div class="muted" style="margin-top:6px;color:#b91c1c">cancelled${
+              q.cancel_reason ? ' — ' + escEmail(q.cancel_reason) : ''}${
+              Number(q.paid_amount || 0) > 0 ? ` &middot; <b>${money(q.paid_amount)} paid — refund owed</b>` : ''}</div>`
+          : balanceOf(q) > 0
           ? `<div class="muted" style="margin-top:6px;color:#b45309">balance due ${money(balanceOf(q))}</div>`
           : Number(q.written_off || 0) > 0
           ? `<div class="muted" style="margin-top:6px">settled &middot; ${money(q.written_off)} written off${
@@ -8020,7 +8089,26 @@ async function renderBoard(VIEW, req, res) {
              onclick="document.getElementById('mp-${q.code}').style.display='block';this.style.display='none'">Record a payment</button>` : ''}
           ${outstanding > 0 ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
              onclick="document.getElementById('st-${q.code}').style.display='block';this.style.display='none'">Settle &mdash; no more owed</button>` : ''}
+          ${q.cancelled_at ? `
+          <form method="POST" action="/quote/${q.code}/uncancel" style="display:inline"
+                onsubmit="return confirm('Put ${q.code} back on the board?')">
+            <button type="submit" class="btn btn-ghost" style="padding:8px 16px;font-size:13px">Restore</button>
+          </form>` : `
+          <button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px;color:#b91c1c"
+             onclick="document.getElementById('cx-${q.code}').style.display='block';this.style.display='none'">Cancel order</button>`}
         </div>
+        ${q.cancelled_at ? '' : `
+        <form id="cx-${q.code}" method="POST" action="/quote/${q.code}/cancel"
+              style="display:none;margin-top:10px;background:#fef4f4;border:1px solid #f3c8c8;border-radius:10px;padding:12px"
+              onsubmit="return confirm('Cancel ${q.code}? It leaves the board and all reminders stop. You can restore it later.')">
+          <div style="font-weight:700;color:#b91c1c;margin-bottom:4px">Cancel this order</div>
+          <p class="muted" style="margin:0 0 8px;font-size:12.5px">It comes off the board and every reminder stops.
+            Nothing is deleted &mdash; the record and any payments stay, and you can restore it.${
+            Number(q.paid_amount || 0) > 0 ? ` <b style="color:#b45309">${money(q.paid_amount)} has been paid on this job — refund it separately.</b>` : ''}</p>
+          <input name="reason" maxlength="200" placeholder="Why — e.g. customer cancelled"
+                 style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">
+          <button type="submit" class="btn" style="padding:7px 16px;font-size:13px;background:#b91c1c">Cancel the order</button>
+        </form>`}
         ${outstanding > 0 ? `
         <form id="st-${q.code}" method="POST" action="/quote/${q.code}/settle"
               style="display:none;margin-top:10px;background:#fffbf2;border:1px solid #f0d9a8;border-radius:10px;padding:12px"
@@ -8269,12 +8357,19 @@ async function renderBoard(VIEW, req, res) {
 
        The existing sort — behind schedule, then soonest deadline — is preserved
        inside each group, because urgency still matters within the work in hand. */
-    const isDelivered = (q) => !!q.delivered_at;
+    const isCancelled = (q) => !!q.cancelled_at;
+    const isDelivered = (q) => !!q.delivered_at && !isCancelled(q);
     const isPaid = (q) => Number(q.paid_amount || 0) > 0;
 
-    const gOrders = rows.filter((q) => isPaid(q) && !isDelivered(q));
-    const gQuotes = rows.filter((q) => !isPaid(q) && !isDelivered(q));
+    /* Cancelled work is not work. It leaves the three live groups completely
+       rather than sitting greyed out among them, because the board's job is to
+       show what still needs doing. It keeps a group of its own so a cancellation
+       can be found and undone — the previous fix failed precisely because the
+       only available action could not be reversed. */
+    const gOrders = rows.filter((q) => !isCancelled(q) && isPaid(q) && !isDelivered(q));
+    const gQuotes = rows.filter((q) => !isCancelled(q) && !isPaid(q) && !isDelivered(q));
     const gDone   = rows.filter(isDelivered);
+    const gCancelled = rows.filter(isCancelled);
 
     const group = (title, note, list) => !list.length ? '' : `
       <div class="quote-grid-head">
@@ -8285,7 +8380,8 @@ async function renderBoard(VIEW, req, res) {
     const body =
       group('Orders', 'deposit in — work in hand', gOrders) +
       group('Open quotes', 'sent, nothing paid yet', gQuotes) +
-      group('Delivered', 'done', gDone);
+      group('Delivered', 'done', gDone) +
+      group('Cancelled', 'not going ahead', gCancelled);
 
     const needCount = (body.match(/Needs a text/g) || []).length;
     const changeCount = (body.match(/Change requested/g) || []).length;
@@ -9632,6 +9728,7 @@ async function sendDepositReminders() {
         WHERE accepted_at IS NOT NULL
           AND COALESCE(paid_amount,0) = 0
           AND deposit_nudged_at IS NULL
+          AND cancelled_at IS NULL
           AND accepted_at <= NOW() - ($1 || ' days')::interval
           AND email <> ''
         LIMIT 20`, [String(days)]);
@@ -9678,6 +9775,7 @@ async function sendBalanceReminders() {
         WHERE COALESCE(paid_amount,0) > 0
           AND COALESCE(paid_amount,0) + COALESCE(written_off,0) < total
           AND balance_nudged_at IS NULL
+          AND cancelled_at IS NULL
           AND paid_at <= NOW() - ($1 || ' days')::interval
           AND status <> 'expired'
           AND email <> ''
@@ -9729,6 +9827,7 @@ async function sendReorderNudges() {
         WHERE COALESCE(q.paid_amount,0) >= q.total
           AND q.total > 0
           AND q.reorder_nudged_at IS NULL
+          AND q.cancelled_at IS NULL
           AND q.paid_at <= NOW() - ($1 || ' days')::interval
           AND q.email <> ''
           /* Nothing newer from this customer — a live job means they do not
