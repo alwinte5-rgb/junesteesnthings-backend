@@ -118,6 +118,13 @@ async function initDB() {
     'paid_at TIMESTAMPTZ',
     'stripe_session TEXT',
     'change_request TEXT',            // what the customer asked to change
+    /* What the customer asked for, structurally: an array aligned by index with
+       `items`, each entry {qty, size_mix} for a line they edited. Kept SEPARATE
+       from `items` on purpose — `items` is the quote as priced, and a customer
+       must never be able to move it. Changing a quantity changes the band it
+       prices in, so an edit is a REQUEST that the shop re-prices and approves,
+       never a live recalculation. Cleared when the quote is saved. */
+    'requested_items JSONB',
     'revision INT DEFAULT 1',         // bumped each time June edits it
     'deposit_nudged_at TIMESTAMPTZ',  // accepted but deposit unpaid reminder
     'balance_nudged_at TIMESTAMPTZ',  // deposit in, balance still outstanding
@@ -3112,6 +3119,13 @@ async function syncDealStage(q) {
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
+/* Express gives a repeated field as an array, so every read of req.body has to
+   collapse it or a duplicated input arrives as ['10','10'] and parseInt reads
+   the first by luck rather than by rule. Module level because more than one
+   handler needs it: it lived inside the quote-save handler, and the customer
+   change-request endpoint referenced it from a scope that could not see it. */
+const one = (v) => (Array.isArray(v) ? v[0] : v);
+
 /** Tax applies to Illinois work. Toggle per quote; rate is env-configurable so
  *  it can be corrected without a deploy. */
 function quoteTax(subtotal, taxable) {
@@ -4258,8 +4272,42 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
     <div class="sub">${existing
       ? 'Their link stays the same — it updates the moment you save.'
       : 'Fills in the message for you — you still send it from your phone.'}</div>
-    ${existing && existing.change_request ? `<div class="card"><b>They asked for:</b>
-      <div class="muted" style="margin-top:6px">"${escEmail(existing.change_request)}"</div></div>` : ''}
+    ${(() => {
+      /* What the customer asked for, if anything — the note they typed and the
+         numbers they moved, shown before the form so it is read before the
+         quote is edited rather than after.
+
+         The numbers are a REQUEST, never applied automatically: a different
+         quantity prices in a different band, so applying it silently would
+         change what the shop charges without anyone agreeing to it. The button
+         fills the form and re-runs calc(); saving is still a deliberate act. */
+      if (!existing) return '';
+      const edits = describeRequestedEdits(existing.items || [], existing.requested_items || []);
+      if (!existing.change_request && !edits.length) return '';
+      const rows = edits.map((e) => `
+        <div style="padding:8px 0;border-top:1px solid #f0d9a8">
+          <div style="font-weight:600;color:#0B1F4B">${escEmail(e.description)}</div>
+          <div style="margin-top:4px;font-size:13.5px;color:#374151">
+            ${e.sizes.map((s) => `<span style="display:inline-block;margin-right:12px">
+                ${escEmail(s.size)}
+                <span style="color:#9aa3b2;text-decoration:line-through">${s.was}</span>
+                <b style="color:#b45309">${s.now}</b></span>`).join('')}
+            <span style="display:inline-block;margin-right:12px">total
+              <span style="color:#9aa3b2;text-decoration:line-through">${e.wasQty}</span>
+              <b style="color:#b45309">${e.nowQty}</b></span>
+          </div>
+        </div>`).join('');
+      return `<div class="card" style="border-left:4px solid #b45309;background:#fffbf2">
+        <b style="color:#b45309">They asked for a change</b>
+        ${existing.change_request ? `<div class="muted" style="margin-top:6px">"${escEmail(existing.change_request)}"</div>` : ''}
+        ${rows}
+        ${edits.length ? `
+        <p class="muted" style="margin:10px 0 8px;font-size:13px">Nothing is re-priced yet — a new
+          quantity can fall in a different band. Apply them, check the total, then save.</p>
+        <button type="button" class="btn-ghost" style="padding:8px 16px;font-size:14px"
+                onclick="applyRequested()">Apply their numbers</button>` : ''}
+      </div>`;
+    })()}
     <form method="POST" action="${existing ? '/api/quotes/' + existing.code : '/api/quotes'}" id="qf">
       <div class="card">
         <div class="row">
@@ -4395,6 +4443,30 @@ ${quotePricingSource()}
         });
         n = lines.length;
       }
+      /* The sizes and quantities the customer asked for, and the one button that
+         puts them into the form. Deliberately NOT applied on load: a different
+         quantity prices in a different band, so filling it in automatically
+         would move the total with nobody having agreed to it. Applying is a
+         click, and saving is another. */
+      var REQUESTED = ${JSON.stringify((existing && existing.requested_items) || [])};
+      function applyRequested(){
+        document.querySelectorAll('.line').forEach(function(L, ix){
+          var r = REQUESTED[ix];
+          if (!r) return;
+          if (r.size_mix) {
+            L.querySelectorAll('.sz').forEach(function(el){
+              if (Object.prototype.hasOwnProperty.call(r.size_mix, el.dataset.size)) {
+                el.value = r.size_mix[el.dataset.size] || 0;
+              }
+            });
+          } else {
+            var qEl = L.querySelector('.q');
+            if (qEl) { qEl.readOnly = false; qEl.value = r.qty; }
+          }
+        });
+        calc();
+      }
+
       /* One tap to charge a returning customer what they paid last time — this
          is what actually stops prices drifting between jobs. */
       function usePrice(v){
@@ -5019,7 +5091,6 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
     /* Two fields sharing a name arrive as an array. Stringifying one silently
        merges every value into a single field and turns a price into NaN, which
        renders as $0.00 — so read only the first value. */
-    const one = (v) => (Array.isArray(v) ? v[0] : v);
     for (let i = 0; i < 40; i++) {
       const desc = String(one(b['description' + i]) || '').trim();
       const qty = parseInt(one(b['qty' + i]), 10) || 0;
@@ -5238,7 +5309,7 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
         `UPDATE quotes SET name=$2, phone=$3, email=$4, items=$5, subtotal=$6, tax=$7,
                 total=$8, deposit=$9, notes=$10, valid_until=$11, needed_by=$12,
                 discount_kind=$13, discount_value=$14, discount_note=$15,
-                change_request=NULL, revision=COALESCE(revision,1)+1,
+                change_request=NULL, requested_items=NULL, revision=COALESCE(revision,1)+1,
                 status = CASE WHEN accepted_at IS NULL THEN 'sent' ELSE status END
           WHERE code=$1 RETURNING *`,
         [editing, name, phone, email, JSON.stringify(items), subtotal, tax, total, deposit,
@@ -5359,7 +5430,27 @@ app.get('/q/:code', async (req, res) => {
         .toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     };
 
-    const lines = (q.items || []).map(i => {
+    /* Sizes and quantities are editable until the quote is accepted or paid.
+       The inputs carry form="changeform" so they post with the existing change
+       request rather than needing the items table wrapped in its own form — one
+       submit, one message to the shop, and the note and the numbers arrive
+       together.
+
+       Nothing is re-priced here, and the page says so. A quantity change moves
+       the line into a different volume band, so a total recalculated in the
+       browser would be a number the shop never agreed to, shown to the customer
+       as if it had. */
+    const canEditQty = !accepted && !paid;
+
+    const sizeInputs = (i, ix) => Object.entries(i.size_mix)
+      .map(([sz, n]) => `<label style="display:inline-flex;flex-direction:column;align-items:center;gap:2px;font-size:11px;color:#6b7280">
+          ${escEmail(sz)}
+          <input form="changeform" type="number" min="0" max="10000" step="1"
+                 name="sz_${ix}_${escEmail(sz)}" value="${parseInt(n, 10) || 0}"
+                 style="width:52px;padding:4px;font-size:13px;text-align:center"></label>`)
+      .join(' ');
+
+    const lines = (q.items || []).map((i, ix) => {
       const imgs = (i.images || []).filter(u => /^https:\/\//.test(u));
       const gallery = imgs.length ? `
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
@@ -5375,7 +5466,13 @@ app.get('/q/:code', async (req, res) => {
           ${addonNotes(i)}
           ${gallery}
         </td>
-        <td class="num">${i.qty}</td>
+        <td class="num">${!canEditQty ? i.qty
+          : i.size_mix && Object.keys(i.size_mix).length
+            ? `<div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end">${sizeInputs(i, ix)}</div>
+               <div class="muted" style="font-size:11px;margin-top:4px">now ${i.qty}</div>`
+            : `<input form="changeform" type="number" min="0" max="10000" step="1"
+                      name="qty_${ix}" value="${parseInt(i.qty, 10) || 0}"
+                      style="width:64px;padding:5px;font-size:14px;text-align:right">`}</td>
         <td class="num">${Number(i.list_total) > Number(i.line_total)
           ? `<span style="color:#9aa3b2;text-decoration:line-through">${money(Number(i.list_total) / i.qty)}</span><br>${money(i.unit_price)}`
           : money(i.unit_price)}</td>
@@ -5509,12 +5606,15 @@ app.get('/q/:code', async (req, res) => {
       ${(paid || accepted) ? '' : `
       <div class="card">
         <b style="color:#0B1F4B">Need something changed?</b>
-        <p class="muted" style="margin:4px 0 10px">Quantities, sizes, colours, artwork — just say the word.
-          ${SHOP_SIGNER} updates the quote and <b>this same link refreshes</b>, so there is nothing new to open.</p>
-        <form method="POST" action="/q/${q.code}/changes">
-          <textarea name="message" rows="3" required
-            placeholder="e.g. make it 36 instead of 24, or navy rather than black"></textarea>
-          <button type="submit" class="btn-ghost" style="width:100%;margin-top:10px">Send to ${SHOP_SIGNER}</button>
+        <p class="muted" style="margin:4px 0 10px">Change the sizes and quantities in the table above,
+          and say anything else here — colours, artwork, dates.
+          ${SHOP_SIGNER} confirms the new price and <b>this same link refreshes</b>, so there is nothing new to open.</p>
+        <p class="muted" style="margin:0 0 10px;font-size:13px">The total above does not change until
+          ${SHOP_SIGNER} has confirmed it — a different quantity can land at a different price per piece.</p>
+        <form method="POST" action="/q/${q.code}/changes" id="changeform">
+          <textarea name="message" rows="3"
+            placeholder="e.g. navy rather than black, or needed a week earlier"></textarea>
+          <button type="submit" class="btn-ghost" style="width:100%;margin-top:10px">Send changes to ${SHOP_SIGNER}</button>
         </form>
       </div>`}
 
@@ -6146,29 +6246,125 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
 
 /* Customer asks for a change rather than accepting. Keeps the same code so the
    link they already have keeps working once June edits it. */
+/* What the customer asked to change, line by line, as something both the alert
+   email and the edit form can render. Returns [] when nothing actually differs,
+   which is what makes "they edited but changed nothing" a no-op rather than a
+   notification.
+
+   Compares against the quote as PRICED, so a stale request left over from an
+   earlier revision naturally reads as "no change" once the shop has applied it. */
+function describeRequestedEdits(items, requested) {
+  const out = [];
+  (requested || []).forEach((r, ix) => {
+    const it = (items || [])[ix];
+    if (!it || !r) return;
+    const sizes = [];
+    if (r.size_mix && it.size_mix) {
+      for (const sz of Object.keys(it.size_mix)) {
+        const was = parseInt(it.size_mix[sz], 10) || 0;
+        const now = parseInt(r.size_mix[sz], 10) || 0;
+        if (was !== now) sizes.push({ size: sz, was, now });
+      }
+    }
+    const wasQty = parseInt(it.qty, 10) || 0;
+    const nowQty = parseInt(r.qty, 10) || 0;
+    if (!sizes.length && wasQty === nowQty) return;
+    out.push({ index: ix, description: it.description || ('Item ' + (ix + 1)),
+               sizes, wasQty, nowQty });
+  });
+  return out;
+}
+
+/** The same edits as plain lines of text, for the email and for logs. */
+const requestedEditLines = (edits) => edits.map((e) => {
+  const bits = e.sizes.map((s) => s.size + ' ' + s.was + ' → ' + s.now);
+  const total = 'total ' + e.wasQty + ' → ' + e.nowQty;
+  return e.description + ' — ' + (bits.length ? bits.join(', ') + ' (' + total + ')' : total);
+});
+
 app.post('/q/:code/changes', orderRateLimit, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/');
-  const msg = String((req.body && req.body.message) || '').trim().slice(0, 1000);
+  const b = req.body || {};
+  const msg = String(b.message || '').trim().slice(0, 1000);
   try {
-    const { rows } = await pool.query(
-      `UPDATE quotes SET change_request=$2, status='changes'
-        WHERE code=$1 AND accepted_at IS NULL RETURNING *`, [code, msg]);
-    if (rows.length && msg) {
-      const q = rows[0];
-      sendEmail({
-        to: SHOP_EMAIL,
-        replyTo: q.email || undefined,
-        subject: `✏️ Change requested — quote ${q.code} (${q.name || q.phone || 'customer'})`,
-        html: `<div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto">
-          <h2 style="color:#1848B8">They'd like a change</h2>
-          <p style="color:#374151"><b>${escEmail(q.name || '')}</b> ${escEmail(q.phone || '')} ${escEmail(q.email || '')}</p>
-          <blockquote style="border-left:3px solid #1848B8;padding-left:12px;color:#374151">${escEmail(msg)}</blockquote>
-          <p style="margin-top:16px"><a href="${PUBLIC_BASE_URL}/quote/${q.code}/edit"
-             style="background:#1848B8;color:#fff;padding:12px 24px;border-radius:100px;text-decoration:none;font-weight:700">Edit this quote →</a></p>
-          <p style="color:#6b7280;font-size:13px">Their link stays the same — it updates when you save.</p></div>`,
-      }).catch(e => console.error('change alert failed:', e.message));
+    const { rows: found } = await pool.query('SELECT * FROM quotes WHERE code=$1', [code]);
+    if (!found.length) return res.redirect('/q/' + code);
+    const q = found[0];
+
+    /* Paid means printed or scheduled — past the point where a quote is a
+       proposal. Everything else can still be asked about. */
+    if (Number(q.paid_amount || 0) > 0) return res.redirect('/q/' + code);
+
+    /* Structured edits only while the quote is still an offer. Once accepted,
+       the numbers are what was agreed to, so a change goes back through the
+       shop as a conversation rather than as a silent edit of the agreement. */
+    const items = Array.isArray(q.items) ? q.items : [];
+    const editable = !q.accepted_at;
+    let requested = null;
+
+    if (editable) {
+      const draft = items.map((it, ix) => {
+        /* Sizes are read from the LINE, never from what was posted, so a
+           fabricated size key cannot enter the quote — the form is public and
+           the only thing standing in front of it is a six-character code. */
+        if (it.size_mix && Object.keys(it.size_mix).length) {
+          const mix = {}; let total = 0;
+          for (const sz of Object.keys(it.size_mix)) {
+            const raw = one(b['sz_' + ix + '_' + sz]);
+            const n = raw === undefined || String(raw).trim() === ''
+              ? (parseInt(it.size_mix[sz], 10) || 0)
+              : Math.max(0, Math.min(10000, parseInt(raw, 10) || 0));
+            mix[sz] = n; total += n;
+          }
+          return { qty: total, size_mix: mix };
+        }
+        const raw = one(b['qty' + '_' + ix]);
+        const n = raw === undefined || String(raw).trim() === ''
+          ? (parseInt(it.qty, 10) || 0)
+          : Math.max(0, Math.min(10000, parseInt(raw, 10) || 0));
+        return { qty: n, size_mix: null };
+      });
+
+      /* Store only if something moved. An untouched form posts every current
+         value back verbatim, and saving that would light up the shop's board
+         with a change request that asks for nothing. */
+      if (describeRequestedEdits(items, draft).length) requested = draft;
     }
+
+    /* Nothing typed and nothing moved is not a request. Sending it would train
+       the shop to ignore the alert. */
+    if (!msg && !requested) return res.redirect('/q/' + code);
+
+    const { rows } = await pool.query(
+      `UPDATE quotes SET change_request=$2, requested_items=$3, status='changes'
+        WHERE code=$1 RETURNING *`,
+      [code, msg || null, requested ? JSON.stringify(requested) : null]);
+    if (!rows.length) return res.redirect('/q/' + code);
+
+    const saved = rows[0];
+    const edits = describeRequestedEdits(items, requested);
+    const editHtml = edits.length ? `
+      <p style="color:#374151;margin:14px 0 4px"><b>They changed the numbers:</b></p>
+      <ul style="color:#374151;padding-left:18px;margin:0">
+        ${requestedEditLines(edits).map((l) => `<li>${escEmail(l)}</li>`).join('')}
+      </ul>
+      <p style="color:#b45309;font-size:13px;margin-top:10px">Nothing is re-priced yet — a new
+        quantity can fall in a different band. Open the quote, apply the changes and save.</p>` : '';
+
+    sendEmail({
+      to: SHOP_EMAIL,
+      replyTo: saved.email || undefined,
+      subject: `✏️ Change requested — quote ${saved.code} (${saved.name || saved.phone || 'customer'})`,
+      html: `<div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto">
+        <h2 style="color:#1848B8">They'd like a change</h2>
+        <p style="color:#374151"><b>${escEmail(saved.name || '')}</b> ${escEmail(saved.phone || '')} ${escEmail(saved.email || '')}</p>
+        ${msg ? `<blockquote style="border-left:3px solid #1848B8;padding-left:12px;color:#374151">${escEmail(msg)}</blockquote>` : ''}
+        ${editHtml}
+        <p style="margin-top:16px"><a href="${PUBLIC_BASE_URL}/quote/${saved.code}/edit"
+           style="background:#1848B8;color:#fff;padding:12px 24px;border-radius:100px;text-decoration:none;font-weight:700">Edit this quote →</a></p>
+        <p style="color:#6b7280;font-size:13px">Their link stays the same — it updates when you save.</p></div>`,
+    }).catch(e => console.error('change alert failed:', e.message));
   } catch (err) {
     console.error('change request failed:', err.message);
   }
