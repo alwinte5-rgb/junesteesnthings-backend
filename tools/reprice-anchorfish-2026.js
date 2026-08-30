@@ -4,6 +4,10 @@
  *   railway variables --service MySQL --json | node tools/reprice-anchorfish-2026.js
  *   railway variables --service MySQL --json | node tools/reprice-anchorfish-2026.js --apply
  *
+ * Dry run by default: prints every price and every statement, writes nothing.
+ * `--apply` snapshots lumise_printings to ~/jtees-backups/ first and aborts if
+ * that snapshot fails — the backup is the only undo for live pricing.
+ *
  * Two changes:
  *
  * 1. DIGITIZING (#12,#15,#16,#17) goes up $5 across the board. Digitizing is a
@@ -29,9 +33,32 @@
  * storefront's pricing code (app.js ~16137), NOT floors.
  */
 
-const { spawnSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 const { colorTable } = require('./lib/screenprint');
+const { urlFromStdinJson, mysql, enjson, sq } = require('./lib/db');
 const APPLY = process.argv.includes('--apply');
+const BACKUP_DIR = path.join(os.homedir(), 'jtees-backups');
+
+/** Snapshot lumise_printings before writing. This is live pricing; there is no
+ *  undo without it. Every other tool in this directory does this; this one only
+ *  claimed to, in a comment, while writing 20 UPDATEs to live prices. */
+function backup(url, tag) {
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  const d = new Date();
+  const p2 = (n) => String(n).padStart(2, '0');
+  const stamp = d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) + '-' +
+    p2(d.getHours()) + p2(d.getMinutes()) + p2(d.getSeconds());
+  const rows = mysql(url, 'SELECT id, title, active, calculate FROM lumise_printings ORDER BY id;', { rows: true });
+  if (!rows.length) throw new Error('lumise_printings read returned no rows — refusing to write');
+  const head = Object.keys(rows[0]);
+  const file = path.join(BACKUP_DIR, 'printings-backup-' + stamp + '-' + tag + '.tsv');
+  fs.writeFileSync(file, [head.join('\t'),
+    ...rows.map((r) => head.map((h) => r[h]).join('\t'))].join('\n') + '\n');
+  console.log('  backed up ' + rows.length + ' printings rows to ' + file);
+  return file;
+}
 
 /* ── Screen print (contracted to Anchorfish) ────────────────────────────── */
 
@@ -282,8 +309,8 @@ const DIGITIZING = {
 /* ── Encoding ───────────────────────────────────────────────────────────── */
 
 const up05 = (n) => Math.ceil(n * 20 - 1e-9) / 20;
-const enjson = (o) => Buffer.from(encodeURIComponent(JSON.stringify(o)), 'utf8').toString('base64');
-const sq = (s) => "'" + String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'";
+/* `enjson` and `sq` come from ./lib/db — this file used to carry its own
+   identical copies, which is the drift lib/db exists to prevent. */
 
 /* Create the method if it is missing, and REPRICE it if it is already there.
  *
@@ -498,19 +525,20 @@ if (!APPLY) { console.log('\n' + stmts.join('\n')); process.exit(0); }
 let buf = '';
 process.stdin.on('data', (d) => (buf += d));
 process.stdin.on('end', () => {
-  const vars = JSON.parse(buf);
-  const raw = vars.MYSQL_PUBLIC_URL || vars.MYSQL_URL;
-  if (!raw) { console.error('no MySQL URL'); process.exit(2); }
-  const u = new URL(raw);
-  // Snapshot first: this is live pricing and there is no undo without it.
+  let url;
+  try { url = urlFromStdinJson(buf); }
+  catch (e) { console.error(e.message); process.exit(2); }
+
+  /* Snapshot BEFORE the transaction, and let a failure here stop the run. The
+     backup is the only undo; writing prices we cannot roll back is worse than
+     not repricing today. */
+  try { backup(url, 'pre-reprice'); }
+  catch (e) { console.error('  backup FAILED, refusing to write: ' + e.message); process.exit(2); }
+
   const sql = 'START TRANSACTION;\n' + stmts.join('\n') + '\nCOMMIT;\n' +
     'SELECT id, title FROM lumise_printings WHERE id IN (7,8,9,10,11,12,15,16,17) ORDER BY id;';
-  const r = spawnSync('/usr/local/opt/mysql-client/bin/mysql', [
-    '-h', u.hostname, '-P', u.port || '3306', '-u', decodeURIComponent(u.username),
-    '--protocol=TCP', '--default-character-set=utf8mb4', '-e', sql,
-    u.pathname.replace(/^\//, '') || 'railway',
-  ], { env: Object.assign({}, process.env, { MYSQL_PWD: decodeURIComponent(u.password) }),
-       stdio: ['ignore', 'inherit', 'inherit'] });
-  process.exit(r.status == null ? 1 : r.status);
+  try { mysql(url, sql); }
+  catch (e) { console.error(e.message); process.exit(1); }
+  console.log('\n  TO UNDO: restore `calculate` from the backup named above.');
 });
 if (!process.stdin.isTTY) process.stdin.resume();
