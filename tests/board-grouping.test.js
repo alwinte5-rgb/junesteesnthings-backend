@@ -138,12 +138,23 @@ test('a section heading spans every grid column', () => {
     'an inline-styled heading with no column span reintroduces the bug');
 });
 
-test('the headings live inside the same grid as the cards', () => {
-  /* They have to: a heading in its own container outside the grid would break
-     the masonry flow between sections and leave ragged gaps. Spanning the row
-     is what keeps one grid and still reads as sections. */
-  const render = src.slice(src.indexOf('const body =\n'), src.indexOf('const needCount'));
-  assert.match(render, /group\('Orders'/);
-  assert.match(src, /<div class="quote-grid">\$\{body\}<\/div>/,
-    'body — headings and cards together — is rendered inside one .quote-grid');
+test('each lane keeps its headings with its own cards', () => {
+  /* The board is two lanes now — opportunities left, work in hand right — so a
+     long enquiry list can no longer push the open quotes off the bottom.
+     Each lane wraps its own .quote-grid, and the heading still has to sit with
+     the cards it labels rather than in a container of its own. */
+  assert.match(board, /<div class="board-lane"><div class="quote-grid">\$\{laneLeft/);
+  assert.match(board, /<div class="board-lane"><div class="quote-grid">\$\{laneRight/);
+  assert.match(src, /\.board-lane \.quote-grid\{display:block\}/,
+    'inside a lane the cards stack single-file — a grid within a lane would ' +
+    'reintroduce the narrow two-column squeeze the lanes exist to avoid');
+});
+
+test('one empty lane still renders, so the columns do not jump', () => {
+  /* If an empty lane collapsed, the surviving lane would jump full-width and
+     back as work moved between them. */
+  assert.ok(board.includes('${laneLeft ||'), 'the left lane needs an empty fallback');
+  assert.ok(board.includes('${laneRight ||'), 'and so does the right');
+  assert.ok(board.includes('No new enquiries or unfinished carts.'));
+  assert.ok(board.includes('No open work.'));
 });
