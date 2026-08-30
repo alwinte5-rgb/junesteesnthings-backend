@@ -28,30 +28,40 @@ test('the board groups on money arriving, not on status text', () => {
      the paid work while no money had moved. */
   assert.match(board, /const isPaid = \(q\) => Number\(q\.paid_amount \|\| 0\) > 0/,
     'the split must be on the amount actually paid');
-  assert.match(board, /const gOrders = rows\.filter\(\(q\) => isPaid\(q\) && !isDelivered\(q\)\)/);
-  assert.match(board, /const gQuotes = rows\.filter\(\(q\) => !isPaid\(q\) && !isDelivered\(q\)\)/);
+  assert.match(board, /const gOrders = rows\.filter\(\(q\) => !isCancelled\(q\) && isPaid\(q\) && !isDelivered\(q\)\)/);
+  assert.match(board, /const gQuotes = rows\.filter\(\(q\) => !isCancelled\(q\) && !isPaid\(q\) && !isDelivered\(q\)\)/);
 });
 
 test('every job lands in exactly one group', () => {
   /* A job appearing twice would double the board; one appearing nowhere would
      be invisible, which is worse. */
   const rows = [
-    { code: 'A', paid_amount: 0,   delivered_at: null },        // open quote
-    { code: 'B', paid_amount: 500, delivered_at: null },        // order
-    { code: 'C', paid_amount: 500, delivered_at: '2026-08-01' },// delivered
-    { code: 'D', paid_amount: 0,   delivered_at: '2026-08-01' },// delivered unpaid
-    { code: 'E', paid_amount: null, delivered_at: null },       // never touched
+    { code: 'A', paid_amount: 0,   delivered_at: null, cancelled_at: null },        // open quote
+    { code: 'B', paid_amount: 500, delivered_at: null, cancelled_at: null },        // order
+    { code: 'C', paid_amount: 500, delivered_at: '2026-08-01', cancelled_at: null },// delivered
+    { code: 'D', paid_amount: 0,   delivered_at: '2026-08-01', cancelled_at: null },// delivered unpaid
+    { code: 'E', paid_amount: null, delivered_at: null, cancelled_at: null },       // never touched
+    { code: 'F', paid_amount: 0,   delivered_at: null, cancelled_at: '2026-08-30' },// cancelled
+    /* Cancelled AFTER being hidden as delivered — the exact state the old
+       workaround left behind. It must read as cancelled, not as delivered. */
+    { code: 'G', paid_amount: 0,   delivered_at: '2026-08-01', cancelled_at: '2026-08-30' },
   ];
-  const isDelivered = (q) => !!q.delivered_at;
+  const isCancelled = (q) => !!q.cancelled_at;
+  const isDelivered = (q) => !!q.delivered_at && !isCancelled(q);
   const isPaid = (q) => Number(q.paid_amount || 0) > 0;
   const groups = {
-    orders: rows.filter((q) => isPaid(q) && !isDelivered(q)),
-    quotes: rows.filter((q) => !isPaid(q) && !isDelivered(q)),
+    orders: rows.filter((q) => !isCancelled(q) && isPaid(q) && !isDelivered(q)),
+    quotes: rows.filter((q) => !isCancelled(q) && !isPaid(q) && !isDelivered(q)),
     done:   rows.filter(isDelivered),
+    cancelled: rows.filter(isCancelled),
   };
-  const seen = [].concat(groups.orders, groups.quotes, groups.done).map((q) => q.code).sort();
-  assert.deepStrictEqual(seen, ['A', 'B', 'C', 'D', 'E'],
-    'every row must appear exactly once across the three groups');
+  const seen = [].concat(groups.orders, groups.quotes, groups.done, groups.cancelled)
+    .map((q) => q.code).sort();
+  assert.deepStrictEqual(seen, ['A', 'B', 'C', 'D', 'E', 'F', 'G'],
+    'every row must appear exactly once across the four groups');
+  assert.deepStrictEqual(groups.cancelled.map((q) => q.code), ['F', 'G']);
+  assert.deepStrictEqual(groups.done.map((q) => q.code), ['C', 'D'],
+    'a cancelled job is not delivered work, even if it carries a delivered stamp');
   assert.deepStrictEqual(groups.quotes.map((q) => q.code), ['A', 'E'],
     'a null paid_amount is unpaid, not paid');
   assert.deepStrictEqual(groups.orders.map((q) => q.code), ['B']);
@@ -69,15 +79,17 @@ test('the three groups are rendered in working order', () => {
   const i = board.indexOf("group('Orders'");
   const j = board.indexOf("group('Open quotes'");
   const k = board.indexOf("group('Delivered'");
-  assert.ok(i > -1 && j > -1 && k > -1, 'all three groups must be rendered');
-  assert.ok(i < j && j < k, 'order must be Orders, then Open quotes, then Delivered');
+  const l = board.indexOf("group('Cancelled'");
+  assert.ok(i > -1 && j > -1 && k > -1 && l > -1, 'all four groups must be rendered');
+  assert.ok(i < j && j < k && k < l,
+    'order must be Orders, Open quotes, Delivered, then Cancelled last');
 });
 
 test('the sort inside each group is preserved', () => {
   /* The groups filter the already-sorted `rows`, so behind-schedule and
      soonest-deadline still float within the work in hand. Building them from
      the raw query would silently drop that. */
-  assert.match(board, /rows\.filter\(\(q\) => isPaid/,
+  assert.match(board, /rows\.filter\(\(q\) => !isCancelled\(q\) && isPaid/,
     'groups must filter the sorted rows, not re-query');
 });
 
