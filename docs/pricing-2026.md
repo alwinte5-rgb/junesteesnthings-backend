@@ -208,7 +208,7 @@ Volume breaks come off that list price, in `BLANK_TIERS` in `server.js`:
 
 | from | off |
 | --- | --- |
-| 100 | 2% |
+| 35 | 2% |
 | 500 | 3% |
 | 1,000 | 5% |
 | 3,000 | 8% |
@@ -217,12 +217,17 @@ Volume breaks come off that list price, in `BLANK_TIERS` in `server.js`:
 tables above, whose keys are band CEILINGS. Read one as the other and every band
 lands one step out.
 
-**The first floor moved 125 → 100 on 2026-08-30.** 100 is the commonest order
-size in the shop and it sat one step under the old floor, so the most-quoted job
-in the building got no break at all — and the way round it was to type a garment
-price over the catalogue by hand on every quote. An override works once; it is
-not a price list, it never reaches a margin report, and the next person quoting
-the same job invents a different number.
+**The first floor moved 125 → 100 → 35 on 2026-08-30.** 100 is the commonest
+order size in the shop and it sat one step under the old floor, so the
+most-quoted job in the building got no break at all — and the way round it was to
+type a garment price over the catalogue by hand on every quote. An override works
+once; it is not a price list, it never reaches a margin report, and the next
+person quoting the same job invents a different number.
+
+It then went to **35** so the break reaches the small runs. Screen print is not
+sold below 50, so 35–49 is DTF, embroidery and HTV — the jobs where the
+decoration is dearest per piece and the quote is most likely to be up against a
+shop that does not mind a thin garment margin.
 
 Worth being honest about what this is: **there is no supplier break behind any of
 it.** The garment costs the same at 50 as at 5,000. Every point here is margin

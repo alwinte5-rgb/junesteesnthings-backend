@@ -3178,7 +3178,7 @@ const BLANK_TIERS = [
   { min: 3000, pct: 8 },
   { min: 1000, pct: 5 },
   { min:  500, pct: 3 },
-  { min:  100, pct: 2 },
+  { min:   35, pct: 2 },
 ];
 
 /* Below this the garment is flat cost x2 with no volume break at all — honest
@@ -3186,12 +3186,16 @@ const BLANK_TIERS = [
    break is margin given away rather than a saving passed on. It buys
    competitiveness on the bids where the garment is most of the price.
 
-   Lowered from 125 to 100 on 2026-08-30. 100 is one of the commonest order
-   sizes there is, and it sat just under the old floor — so the most-quoted job
-   in the shop got no break at all, and the way round it was to type a garment
-   price over the catalogue by hand on each quote. An override works once; it is
-   not a price list, it never reaches a margin report, and the next person
-   quoting the same job invents a different number.
+   Lowered 125 -> 100 -> 35 on 2026-08-30. 100 sat just under the old floor, so
+   the commonest order size in the shop got no break at all, and the way round it
+   was to type a garment price over the catalogue by hand on each quote. An
+   override works once; it is not a price list, it never reaches a margin report,
+   and the next person quoting the same job invents a different number.
+
+   35 rather than 100 so the break reaches the small runs too. Screen print is
+   not sold below 50, so 35-49 is DTF, embroidery and HTV — the jobs where the
+   decoration is dearest per piece and the quote is most likely to be compared
+   against a shop that does not mind a thin garment margin.
 
    DERIVED from the table, never written twice. This was a hand-kept 125 while
    the table said 125 in its own row — two copies of one threshold, and nothing
