@@ -2596,6 +2596,25 @@ app.post('/api/brevo-event', requireInternalKey, async (req, res) => {
 // sweeps or retries must not double-email a customer.
 const recentCartEmails = new Map(); // "email|stage" -> timestamp
 const CART_EMAIL_DEDUP_MS = 6 * 60 * 60 * 1000;
+/* The pricing rules the designer needs to charge what a quote would.
+ *
+ * The garment volume curve lived only in server.js, so the same 250 shirts cost
+ * $97.50 more ordered online than quoted by the shop — identical goods, two
+ * prices, and whichever the customer saw second felt like the real one.
+ *
+ * Published rather than duplicated. BLANK_TIERS stays defined here, in the file
+ * the shop actually edits, and the designer reads it. A copy in the designer
+ * would be correct on the day it was written and wrong at the next change,
+ * which is exactly how the two drifted in the first place. */
+app.get('/api/pricing-rules', requireInternalKey, (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    blank_tiers: BLANK_TIERS,
+    blank_discount_min_qty: BLANK_DISCOUNT_MIN_QTY,
+    generated: new Date().toISOString(),
+  });
+});
+
 app.post('/api/abandoned-cart-email', requireInternalKey, async (req, res) => {
   try {
     const email = String(req.body.email || '').trim();
@@ -3279,11 +3298,11 @@ function deliveryEstimate(from = new Date()) {
  * the reason this comment exists.
  */
 const BLANK_TIERS = [
-  { min: 3000, pct: 10 },
-  { min: 1000, pct:  9 },
-  { min:  500, pct:  8 },
-  { min:  250, pct:  7 },
-  { min:  100, pct:  5 },
+  { min: 3000, pct: 18 },
+  { min: 1000, pct: 15 },
+  { min:  500, pct: 12 },
+  { min:  250, pct:  9 },
+  { min:  100, pct:  6 },
   { min:   35, pct:  3 },
 ];
 
@@ -3310,14 +3329,20 @@ const BLANK_TIERS = [
    a worse fault than a shallow rate, because it is the orders you quote most
    often that it fails to move on.
 
-   10% at the top is the ceiling, not a round number: it puts the garment at
-   1.80x cost, which is the floor the guard in quote-blank-pricing.test.js
-   enforces. Going deeper means lowering that floor deliberately, and it was
-   tightened to 1.8x on 2026-08-29 away from the 1.60x an earlier curve reached.
-   Do not walk it back as a side effect of "be more competitive" — the garment is
-   about 40% of a decorated job, so the whole 2%-to-10% move is worth about 17
-   cents a piece at 100. The print table and the screen fee are where a visible
-   price change actually lives.
+   STEEPENED 2026-08-30 to 3/6/9/12/15/18. The old curve barely moved as
+   quantity rose — 3% at 35 pieces against 10% at three thousand — so a genuine
+   bulk order was priced almost like a small one, which is not what a customer
+   ordering 1,000 shirts expects to see.
+
+   18% at the top puts the garment at 1.64x cost, and the margin floor in
+   quote-blank-pricing.test.js was lowered from 1.80x to 1.60x to allow it. That
+   is a DELIBERATE reversal of the tightening made on 2026-08-29, taken with the
+   numbers in view: it costs about $338 on a 1,000-piece order and $1,354 on
+   three thousand. Do not loosen it further without doing that arithmetic again.
+
+   The garment is roughly 40% of a decorated job, so this moves a total less than
+   it looks. The print table and the screen fee are still where a large price
+   change actually lives.
 
    DERIVED from the table, never written twice. This was a hand-kept 125 while
    the table said 125 in its own row — two copies of one threshold, and nothing

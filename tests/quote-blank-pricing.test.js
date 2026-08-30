@@ -89,7 +89,7 @@ test('the agreed curve is the one in the code', () => {
      break and was being hand-overridden on each quote instead; 35 then extends
      it to the small runs, which are DTF/embroidery/HTV since screen print is
      not sold below 50. */
-  for (const [qty, pct] of [[35, 3], [100, 5], [250, 7], [500, 8], [1000, 9], [3000, 10]]) {
+  for (const [qty, pct] of [[35, 3], [100, 6], [250, 9], [500, 12], [1000, 15], [3000, 18]]) {
     assert.strictEqual(blankDiscountPct(qty), pct, `${qty} pieces should be ${pct}% off`);
   }
 });
@@ -99,10 +99,10 @@ test('the agreed curve is the one in the code', () => {
 test('a floor applies AT its quantity, not one piece later', () => {
   assert.strictEqual(blankDiscountPct(35), 3);
   assert.strictEqual(blankDiscountPct(34), 0);
-  assert.strictEqual(blankDiscountPct(100), 5);
+  assert.strictEqual(blankDiscountPct(100), 6);
   assert.strictEqual(blankDiscountPct(99), 3);
-  assert.strictEqual(blankDiscountPct(250), 7);
-  assert.strictEqual(blankDiscountPct(249), 5);
+  assert.strictEqual(blankDiscountPct(250), 9);
+  assert.strictEqual(blankDiscountPct(249), 6);
 });
 
 test('below the minimum the garment is flat cost x2, with no break at all', () => {
@@ -114,17 +114,17 @@ test('below the minimum the garment is flat cost x2, with no break at all', () =
 });
 
 test('the band holds until the next floor', () => {
-  assert.strictEqual(blankDiscountPct(499), 7);
-  assert.strictEqual(blankDiscountPct(500), 8);
-  assert.strictEqual(blankDiscountPct(999), 8);
-  assert.strictEqual(blankDiscountPct(1000), 9);
+  assert.strictEqual(blankDiscountPct(499), 9);
+  assert.strictEqual(blankDiscountPct(500), 12);
+  assert.strictEqual(blankDiscountPct(999), 12);
+  assert.strictEqual(blankDiscountPct(1000), 15);
 });
 
 test('the largest applicable discount wins, not the smallest', () => {
   /* 5000 clears every floor in the table. Returning 3% here is the missing
      -break bug, and it is invisible in the output. */
-  assert.strictEqual(blankDiscountPct(5000), 10);
-  assert.strictEqual(blankDiscountPct(1000), 9);
+  assert.strictEqual(blankDiscountPct(5000), 18);
+  assert.strictEqual(blankDiscountPct(1000), 15);
 });
 
 test('below the first floor there is no discount at all', () => {
@@ -145,23 +145,27 @@ test('the garment price drops by exactly the tier', () => {
   assert.strictEqual(blankPriceFor(5.64, 12), 5.64);    // Gildan 5000, no break
   assert.strictEqual(blankPriceFor(5.64, 34), 5.64);    // still none, one under the floor
   assert.strictEqual(blankPriceFor(5.64, 35), 5.47);    // 3%, at the floor
-  assert.strictEqual(blankPriceFor(5.64, 100), 5.36);   // 5%
-  assert.strictEqual(blankPriceFor(5.64, 250), 5.25);   // 7%
-  assert.strictEqual(blankPriceFor(5.64, 1000), 5.13);  // 9%
-  assert.strictEqual(blankPriceFor(5.64, 3000), 5.08);  // 10%, the 1.80x floor
+  assert.strictEqual(blankPriceFor(5.64, 100), 5.30);   // 6%
+  assert.strictEqual(blankPriceFor(5.64, 250), 5.13);   // 9%
+  assert.strictEqual(blankPriceFor(5.64, 1000), 4.79);  // 15%
+  assert.strictEqual(blankPriceFor(5.64, 3000), 4.62);  // 18%, the 1.64x floor
 });
 
-test('the garment never sells below cost x1.8 on this curve', () => {
+test('the garment never sells below cost x1.6 on this curve', () => {
   /* The guard the curve exists inside. Cost is flat, so a deep discount walks
      the multiple down with nothing recovering it.
-     The curve now sits exactly ON this floor: 10% at the top puts the garment at
-     1.80x, so the deepest tier and the guard are the same number by design and
-     the next deepening has to move BOTH, deliberately. It was tightened to 1.8x
-     on 2026-08-29 away from the 1.60x an earlier curve reached — do not walk
-     that back as a side effect of making a quote look cheaper. */
+     Lowered 1.80x -> 1.60x on 2026-08-30, deliberately, so the curve could
+     actually reward volume: the old one moved from 3% to 10% across a
+     hundred-fold increase in quantity, which is not a bulk price. 18% at the top
+     is 1.64x, leaving a little room above the floor.
+
+     This is the SECOND time this number has moved. It was tightened to 1.8x on
+     2026-08-29 away from 1.60x. Moving it costs roughly $338 on a 1,000-piece
+     order and $1,354 on three thousand — do that arithmetic again before
+     touching it, rather than treating it as a slider. */
   const cost = 2.82, retail = 5.64;   // Gildan 5000, the shop's volume seller
   for (const q of [1, 35, 500, 1000, 3000, 99999]) {
-    assert.ok(blankPriceFor(retail, q) / cost >= 1.8,
+    assert.ok(blankPriceFor(retail, q) / cost >= 1.6,
       `${q} pieces sells the garment at ${(blankPriceFor(retail, q) / cost).toFixed(2)}x`);
   }
 });
