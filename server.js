@@ -3252,9 +3252,17 @@ function digitizingOptions(catalog) {
  * embroidery capacity constraint, no digitizing on DTF.
  */
 const ADDONS = [
-  { code: 'underbase', label: 'Underbase (dark garments)', appliesTo: SCREEN_METHOD_RE,
-    kind: 'once', rate: 25, auto: 'dark',
-    note: 'A 1-colour print on a dark garment needs two screens: the white underbase, then the colour.' },
+  /* Screens. Not optional and not a tick box — every screen-print job burns
+     them, so this is attached by the METHOD, not by someone remembering.
+
+     It replaces an `underbase` add-on that charged a flat $25 once however many
+     colours or locations the job had. Invoice #16899 (62 shirts, white on
+     black, two locations) is four screens: that add-on recovered $25 against
+     $80 of screens actually bought. The count now comes from screenCount() in
+     quotePricingSource(), so the fee and the screens ordered are one number. */
+  { code: 'screens', label: 'Screens', appliesTo: SCREEN_METHOD_RE,
+    kind: 'per_screen', rate: 35, auto: 'method',
+    note: 'A screen is burned once and then runs the whole job, so it is billed once — not per shirt. (Colours + 1 on a dark garment) x locations, at $35 each.' },
   { code: 'specialty_ink', label: 'Specialty ink (metallic, glitter, waterbase, discharge)',
     appliesTo: SCREEN_METHOD_RE, kind: 'per_piece', rate: 1.50 },
   { code: 'unbagging', label: 'Unbagging', appliesTo: SCREEN_METHOD_RE,
@@ -3284,6 +3292,15 @@ const RUSH_CAVEAT = 'Rush is subject to availability and is confirmed before you
    March and quoting every job three days slow. */
 const HOLIDAY_MODE = String(process.env.JT_HOLIDAY_MODE || '') === '1';
 const HOLIDAY_EXTRA_DAYS = 3;
+
+/* Screens bill separately ONLY once the per-piece tables have had the amortised
+   screen charge taken out of them — `tools/reprice-anchorfish-2026.js --apply`.
+   Until that has run, the live `printings` tables still carry screens inside the
+   per-piece rate, and charging the fee as well bills every screen twice.
+   The two changes cannot be made atomic: one is a deploy, the other is a write
+   to the Lumise database. So this is the switch that joins them, and it stays
+   off until the tables are repriced. Read once, used by both surfaces. */
+const SCREEN_FEES_LIVE = String(process.env.JT_SCREEN_FEES || '') === '1';
 
 /** The add-ons available for a method, in the order they should be offered. */
 function addonsFor(methodTitle) {
@@ -3405,17 +3422,42 @@ function quotePricingSource() {
         return parseInt((String(method.title || '').match(/(\\d+)\\s*Colou?r/i) || [0, 1])[1], 10) || 1;
       }
 
+      /* How many screens a job actually burns.
+
+         Written once, here, for the same reason colourCount() is: this number
+         is both what the customer is charged for and what the shop orders from
+         Anchorfish. Two copies of it is two chances for the fee on screen to
+         differ from the screens bought.
+
+         A screen is per COLOUR and per LOCATION — invoice #16899 is 4 screens
+         for a 2-colour job across 2 locations. A dark garment adds one more per
+         location for the white underbase; the same invoice's "Ink: Base, White"
+         line is what proves the underbase is its own screen rather than part of
+         the first colour. */
+      function screenCount(colours, locations, dark) {
+        var c = parseInt(colours, 10); if (!(c > 0)) c = 1;
+        var l = parseInt(locations, 10); if (!(l > 0)) l = 1;
+        return (c + (dark ? 1 : 0)) * l;
+      }
+
       /* One add-on's charge. The whole point of the table is that this
          switch exists exactly once. */
-      function addonAmount(a, qty, colours, decorationSubtotal) {
+      function addonAmount(a, qty, colours, decorationSubtotal, screens) {
         var n = parseFloat(a.rate) || 0;
         var q = parseInt(qty, 10) || 0;
         var c = parseInt(colours, 10) || 1;
+        /* Screens fall back to one per colour — one location, light garment —
+           rather than to zero. A caller that forgets to pass the count then
+           under-bills a two-sided dark job, which someone notices; a zero would
+           make the screens free and silently, which is the failure this file
+           keeps having to design against. */
+        var s = parseInt(screens, 10); if (!(s > 0)) s = c;
         switch (a.kind) {
           case 'once':                  return n;
           case 'per_order':             return n;
           case 'per_piece':             return n * q;
           case 'per_piece_per_colour':  return n * q * c;
+          case 'per_screen':            return n * s;
           case 'percent_of_decoration': return (decorationSubtotal || 0) * (n / 100);
           default:                      return 0;
         }
@@ -3513,12 +3555,24 @@ function quotePricingSource() {
         var unit = hasOverride ? parseFloat(o.unitOverride) : listUnit;
 
         var decorationSubtotal = decoration * qty;
+
+        /* Locations comes from the same \`stage\` the decoration was priced off,
+           so the screens billed and the passes charged can never disagree —
+           'both' is two locations by the same definition that doubled the
+           table above. */
+        var locations = (o.stage === 'both') ? 2 : 1;
+        var screens = screenCount(colours, locations, !!o.dark);
+
         var addonLines = [], addonTotal = 0;
         for (var k = 0; k < (o.addons || []).length; k++) {
           var a = o.addons[k];
-          var amt = Math.round(addonAmount(a, qty, colours, decorationSubtotal) * 100) / 100;
+          var amt = Math.round(addonAmount(a, qty, colours, decorationSubtotal, screens) * 100) / 100;
           if (!amt) continue;
-          addonLines.push({ code: a.code, label: a.label, kind: a.kind, rate: a.rate, total: amt });
+          /* \`count\` rides along so a surface can print "4 x $35" without
+             dividing the total back out — a division that would quietly lie the
+             moment a rate changed between quoting and rendering. */
+          addonLines.push({ code: a.code, label: a.label, kind: a.kind, rate: a.rate,
+                            count: (a.kind === 'per_screen' ? screens : null), total: amt });
           addonTotal += amt;
         }
 
@@ -3533,6 +3587,10 @@ function quotePricingSource() {
           blank: blank, decoration: decoration, sizeUpcharge: upcharge,
           addonLines: addonLines, addonTotal: Math.round(addonTotal * 100) / 100,
           unit: unit, listUnit: listUnit, manual: hasOverride,
+          /* Returned so a surface can SHOW the count it is charging for —
+             "4 screens x $35" is checkable by the customer, "$140 setup" is
+             not — without re-deriving it and drifting. */
+          colours: colours, locations: locations, screens: screens,
           lineTotal: lineTotal, listTotal: listTotal
         };
       }
@@ -3541,11 +3599,11 @@ function quotePricingSource() {
 
 /* The same source, executed here, so Node prices a line with the identical
    code the browser runs. */
-const { priceLine, addonAmount, colourCount } = (function () {
+const { priceLine, addonAmount, colourCount, screenCount } = (function () {
   const sandbox = {};
   vm.runInNewContext(quotePricingSource() +
     '\nthis.priceLine = priceLine; this.addonAmount = addonAmount;' +
-    '\nthis.colourCount = colourCount;', sandbox);
+    '\nthis.colourCount = colourCount; this.screenCount = screenCount;', sandbox);
   return sandbox;
 })();
 
@@ -3599,6 +3657,47 @@ function quoteSummary(items) {
   if (!parts.length) return 'your order';
   if (parts.length <= 2) return parts.join(' + ');
   return `${parts[0]} + ${parts.length - 1} more`;
+}
+
+/* The chargeable extras on a line, written so the customer can check them.
+ *
+ * `unit_price` is deliberately the GARMENT-AND-PRINT price with add-ons taken
+ * out (see the save route), so a line carrying any add-on does not foot from
+ * qty x unit alone. Until now only digitizing was ever printed, through its own
+ * `setup_fee` column — so specialty ink, unbagging, puff and the jumbo hoop all
+ * arrived as an unexplained difference between the unit price and the line
+ * total, and screens would have joined them at up to $140 a line.
+ *
+ * A screen fee especially has to show its working: "4 screens x $35" is
+ * something a customer can agree with, "$140 setup" is something they query.
+ */
+function addonNotes(item) {
+  const css = 'class="muted" style="font-size:13px;margin-top:3px"';
+  const rows = (Array.isArray(item.addons) ? item.addons : [])
+    .filter((a) => a && Number(a.total) > 0);
+
+  /* Quotes saved before add-ons were itemised carry digitizing in its own two
+     columns and have no `addons` array to read. */
+  if (!rows.length) {
+    return Number(item.setup_fee) > 0
+      ? `<div ${css}>+ ${escEmail(item.setup_label || 'Digitizing')} — ${money(item.setup_fee)} one time</div>`
+      : '';
+  }
+
+  return rows.map((a) => {
+    const n = Number(a.count) || 0;
+    const detail =
+      a.kind === 'per_screen' && n > 0
+        ? `${n} &times; ${money(a.rate)} = ${money(a.total)}, one time`
+      : a.kind === 'per_piece'
+        ? `${money(a.rate)} each = ${money(a.total)}`
+      : a.kind === 'per_piece_per_colour'
+        ? `${money(a.rate)} per colour each = ${money(a.total)}`
+      : a.kind === 'percent_of_decoration'
+        ? `+${Number(a.rate)}% = ${money(a.total)}`
+      : `${money(a.total)} one time`;
+    return `<div ${css}>+ ${escEmail(a.label)} — ${detail}</div>`;
+  }).join('');
 }
 
 function quoteLink(code) { return `${PUBLIC_BASE_URL}/q/${code}`; }
@@ -4201,6 +4300,7 @@ ${quotePricingSource()}
       })))};
       var RUSH = ${JSON.stringify(RUSH_OPTIONS)};
       var HOLIDAY = ${HOLIDAY_MODE ? 'true' : 'false'};
+      var SCREEN_FEES_LIVE = ${SCREEN_FEES_LIVE ? 'true' : 'false'};
 
       /** Which add-ons apply to a method, mirroring addonsFor() on the server. */
       function addonsForTitle(title){
@@ -4348,9 +4448,9 @@ ${quotePricingSource()}
           if (aoBox && aoBox.dataset.for !== mkey) {
             aoBox.dataset.for = mkey;
             var avail = addonsForTitle(meth && meth.title);
-            /* The underbase is applied by the dark-garment box, so it is never
-               offered as something to tick separately. */
-            avail = avail.filter(function(a){ return a.auto !== 'dark'; });
+            /* Anything the method carries automatically — screens — is never
+               offered as something to tick, because it is not a decision. */
+            avail = avail.filter(function(a){ return !a.auto; });
             aoBox.innerHTML = avail.length
               ? '<div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Upgrades</div>' +
                 avail.map(function(a){
@@ -4368,7 +4468,10 @@ ${quotePricingSource()}
           }
 
           /* Collect the add-ons this line has switched on, plus digitizing and
-             the automatic underbase, into one list the engine can price. */
+             anything the method carries automatically, into one list the engine
+             can price. Mirrors the save route — if these two ever disagree the
+             preview and the saved quote disagree, which is the whole reason the
+             pricing rule itself lives in one string. */
           var addons = [];
           if (isEmb && su && su.value) {
             var dm = DIGI.find(function(d){ return String(d.id) === su.value; });
@@ -4381,13 +4484,16 @@ ${quotePricingSource()}
             var a = ADDONS.find(function(x){ return x.code === cb.dataset.code; });
             if (a) addons.push(a);
           });
-          /* The underbase is not optional on a dark garment — a 1-colour print
-             needs the white base under it — so it is added by the colour, not
-             by a tick box someone has to remember. */
-          if (isDark && meth && /screen\\s*print/i.test(meth.title)) {
-            var ub = ADDONS.find(function(x){ return x.code === 'underbase'; });
-            if (ub && !addons.some(function(x){ return x.code === 'underbase'; })) addons.push(ub);
-          }
+          /* Screens are not a choice — a screen-print job burns them whether or
+             not anyone ticked anything, so they come from the method. The dark
+             garment does not add a CHARGE here, it adds a SCREEN: it is passed
+             to priceLine below and screenCount() decides how many. */
+          addonsForTitle(meth && meth.title).forEach(function(a){
+            if (a.auto !== 'method') return;
+            if (a.code === 'screens' && !SCREEN_FEES_LIVE) return;
+            if (addons.some(function(x){ return x.code === a.code; })) return;
+            addons.push(a);
+          });
 
           var stage = L.querySelector('.loc') ? L.querySelector('.loc').value : '';
           var bpEl = L.querySelector('.bp');
@@ -4395,6 +4501,7 @@ ${quotePricingSource()}
             product: prod, method: meth, qty: qty, sizeMix: sizeQty ? mix : null,
             colours: colEl ? colEl.value : '',
             stage: stage, addons: addons, blankTiers: BLANK_TIERS,
+            dark: isDark,
             blankOverride: bpEl ? bpEl.value : '',
             unitOverride: u.value
           });
@@ -4888,16 +4995,18 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
         if (d) lineAddons.push({ code: 'digitizing', label: d.title, kind: 'once', rate: d.price });
       }
       for (const a of addonsFor(methodTitle)) {
-        if (a.auto === 'dark') continue;   // applied by the garment colour, below
+        if (a.auto) continue;              // attached by the method itself, below
         if (String(one(b[`addon_${a.code}${i}`]) || '') !== '1') continue;
         lineAddons.push({ code: a.code, label: a.label, kind: a.kind, rate: a.rate });
       }
-      /* A 1-colour print on a dark garment needs two screens — the white
-         underbase, then the colour. Applied by the colour rather than by a tick
-         box, because it is not optional and it is easy to forget. */
-      if (garmentDark && isScreen) {
-        const ub = ADDONS.find((a) => a.code === 'underbase');
-        if (ub) lineAddons.push({ code: ub.code, label: ub.label, kind: ub.kind, rate: ub.rate });
+      /* Screens are not a choice — a screen-print job burns them whether or not
+         anyone ticked a box, and the garment colour decides how many. Note the
+         rate comes from ADDONS here and never from the posted body: the client
+         says only WHICH line and how dark the garment is, never what it costs. */
+      for (const a of addonsFor(methodTitle)) {
+        if (a.auto !== 'method') continue;
+        if (a.code === 'screens' && !SCREEN_FEES_LIVE) continue;
+        lineAddons.push({ code: a.code, label: a.label, kind: a.kind, rate: a.rate });
       }
 
       /* Second print location: the posted stage must be one this method really
@@ -4926,6 +5035,10 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
       const priced = priceLine({
         product: prod, method, qty: q, sizeMix: mix, colours,
         stage, addons: lineAddons, blankTiers: BLANK_TIERS,
+        /* The garment colour is a pricing INPUT, not a charge: it decides how
+           many screens screenCount() asks for. Omit it and a dark job silently
+           under-bills by one screen per location. */
+        dark: garmentDark,
         blankOverride, unitOverride: rawUnit,
       });
 
@@ -5180,8 +5293,7 @@ app.get('/q/:code', async (req, res) => {
         <td>
           ${escEmail(i.description)}
           ${i.details ? `<div class="muted" style="font-size:13px;margin-top:3px">${escEmail(i.details)}</div>` : ''}
-          ${Number(i.setup_fee) > 0 ? `<div class="muted" style="font-size:13px;margin-top:3px">
-             + ${escEmail(i.setup_label || 'Digitizing')} — ${money(i.setup_fee)} one time</div>` : ''}
+          ${addonNotes(i)}
           ${gallery}
         </td>
         <td class="num">${i.qty}</td>

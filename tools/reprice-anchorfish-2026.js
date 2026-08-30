@@ -41,15 +41,47 @@ const APPLY = process.argv.includes('--apply');
    The markup falls with quantity because Anchorfish's cost curve is much
    flatter than the old vendor's while market price still drops steeply, so one
    multiple would either starve the small runs or lose the big bids. */
+/* Markups repriced to market 2026-08-30, from a real contract invoice (#16899:
+   62 shirts, 2 colours, 2 locations — $4.50/pc print, 4 screens at $20).
+   At the old 4.40x a two-sided 2-colour job billed $27.44/pc against an $8.61
+   cost: 69% margin, well above the $15-18 that job fetches, and — because the
+   second location doubles a marked-up figure — MORE than the same job in DTF,
+   which inverts the one advantage screen printing has at volume.
+   The cut is deepest at the small end, where 4.40x was the outlier; the large
+   bands were already thin and barely move. Nothing goes below 1.80x. */
+/* Screens are NOT in this table. They are billed once per order as a separate
+   fee (SCREEN_FEE below), because a screen is bought once however many pieces
+   run through it — amortising it into a per-piece rate makes a 50-piece job
+   subsidise a 500-piece one and hides the setup cost from the customer.
+
+   So the markup IS the margin on the print itself: 1 - 1/mk. 2.34 anchors
+   1 colour / 1 location / 50-99 on $4.25 (57.3%), and the curve settles to a
+   flat 55% at volume, where competition is hardest.
+
+   An earlier draft of this file folded (SCREEN_COST * colours) / band_floor
+   into the base before applying the markup. That was written before screens
+   became a separate fee; leaving it in would bill every screen twice. */
 const SP = {
-   50: { ceil:  99, mk: 4.40, p: [1.80, 2.25, 2.72, 3.19, 3.66, 4.13, 4.60] },
-  100: { ceil: 249, mk: 3.65, p: [1.65, 2.06, 2.53, 3.00, 3.47, 3.94, 4.41] },
-  250: { ceil: 499, mk: 2.75, p: [1.47, 1.84, 2.31, 2.78, 3.25, 3.72, 4.19] },
-  500: { ceil: 999, mk: 2.55, p: [1.32, 1.65, 2.12, 2.59, 3.06, 3.53, 4.00] },
- 1000: { ceil:2499, mk: 2.10, p: [1.17, 1.46, 1.93, 2.40, 2.87, 3.34, 3.81] },
- 2500: { ceil:7000, mk: 1.95, p: [0.99, 1.24, 1.71, 2.18, 2.65, 3.12, 3.59] },
+   50: { ceil:  99, mk: 2.34, p: [1.80, 2.25, 2.72, 3.19, 3.66, 4.13, 4.60] },
+  100: { ceil: 249, mk: 2.30, p: [1.65, 2.06, 2.53, 3.00, 3.47, 3.94, 4.41] },
+  250: { ceil: 499, mk: 2.26, p: [1.47, 1.84, 2.31, 2.78, 3.25, 3.72, 4.19] },
+  500: { ceil: 999, mk: 2.24, p: [1.32, 1.65, 2.12, 2.59, 3.06, 3.53, 4.00] },
+ 1000: { ceil:2499, mk: 2.22, p: [1.17, 1.46, 1.93, 2.40, 2.87, 3.34, 3.81] },
+ 2500: { ceil:7000, mk: 2.22, p: [0.99, 1.24, 1.71, 2.18, 2.65, 3.12, 3.59] },
 };
-const SCREEN_CHARGE = 25;   // yours, per colour, amortised at the band floor
+/* Anchorfish's actual per-SCREEN charge, confirmed on invoice #16899: 4 screens
+   at $20 for a 2-colour job across 2 locations. Screens are therefore
+   colours x LOCATIONS, not colours — the old $25/colour figure counted only
+   colours, so every two-sided job under-recovered its setup. The invoice's
+   "Ink: Base, White" line also proves the white underbase is its own screen,
+   so a 1-colour design on a dark garment is a 2-screen job.
+
+   Neither constant enters the per-piece table below. They are here because
+   this tool is where the screen economics are written down, and because the
+   sell price has to be changed in the same breath as the cost that justifies
+   it. The charge itself is applied by the `screens` add-on in server.js. */
+const SCREEN_COST = 20;   // what Anchorfish charges us, per screen
+const SCREEN_FEE  = 35;   // what we bill, per screen, ONCE per order
 
 /* Anchorfish prices 5, 6 and 7 colours separately; the designer had one
    combined "5-6 Colors" method, which had to quote one of them wrong. */
@@ -73,16 +105,24 @@ const SP_INSERTS = [
    Columns used: [0]=16sq [1]=132sq (the standard print) [2]=252sq [3]=addl loc.
    Live bands stopped at 175 pieces, so every larger order was quoting at the
    175 rate; these run to 2,500. */
+/* Markups taper harder above 50 pieces (2026-08-30). At the old 3.6x, DTF at 100
+   pieces cost $11.05 against a 1-colour screen print's $6.30 — so the full-colour
+   convenience option was the DEAR one exactly where volume should make printing
+   cheap, and the product page advertises the DTF ladder by default. Under 50 the
+   markup stays at 4.0: small runs are labour-heavy per piece and screen printing
+   cannot bid for them at all (50-piece minimum), so there is nothing to undercut.
+   Above 50 DTF now lands just above a 2-colour screen job, which is the honest
+   place for it — unlimited colours, no screens, no colour-count ceiling. */
 const DTF = {
-    1: { ceil:  11, mk: 4.0, v: [5.00, 7.03, 9.38, 1.80] },
-   12: { ceil:  24, mk: 4.0, v: [3.23, 5.63, 7.50, 1.80] },
-   25: { ceil:  49, mk: 4.0, v: [2.58, 4.50, 6.00, 1.50] },
-   50: { ceil:  99, mk: 3.6, v: [2.73, 3.60, 4.80, 1.50] },
-  100: { ceil: 249, mk: 3.6, v: [1.65, 3.06, 4.08, 1.35] },
-  250: { ceil: 499, mk: 3.0, v: [1.47, 2.60, 3.47, 1.20] },
-  500: { ceil: 999, mk: 2.8, v: [1.32, 2.21, 2.95, 1.11] },
- 1000: { ceil:2499, mk: 2.4, v: [1.17, 1.88, 2.51, 1.05] },
- 2500: { ceil:7000, mk: 2.2, v: [0.99, 1.60, 2.13, 1.02] },
+    1: { ceil:  11, mk: 3.70, v: [5.00, 7.03, 9.38, 1.80] },
+   12: { ceil:  24, mk: 3.60, v: [3.23, 5.63, 7.50, 1.80] },
+   25: { ceil:  49, mk: 3.50, v: [2.58, 4.50, 6.00, 1.50] },
+   50: { ceil:  99, mk: 3.30, v: [2.73, 3.60, 4.80, 1.50] },
+  100: { ceil: 249, mk: 3.10, v: [1.65, 3.06, 4.08, 1.35] },
+  250: { ceil: 499, mk: 2.90, v: [1.47, 2.60, 3.47, 1.20] },
+  500: { ceil: 999, mk: 2.75, v: [1.32, 2.21, 2.95, 1.11] },
+ 1000: { ceil:2499, mk: 2.60, v: [1.17, 1.88, 2.51, 1.05] },
+ 2500: { ceil:7000, mk: 2.50, v: [0.99, 1.60, 2.13, 1.02] },
 };
 
 /* ── Anchorfish cost sheets ─────────────────────────────────────────────── */
@@ -363,10 +403,12 @@ console.log('\n  Fitted from your two prices: $' + EMB_PRICE.chest.toFixed(2) + 
 /* ── Screen print ───────────────────────────────────────────────────────── */
 
 const SPF = Object.keys(SP).map(Number).sort((a, b) => a - b);
-const spPrice = (f, c) => up05(SP[f].p[c - 1] * SP[f].mk + (SCREEN_CHARGE * c) / f);
+const spPrice = (f, c) => up05(SP[f].p[c - 1] * SP[f].mk);
 const spTiers = (c) => SPF.map((f) => [SP[f].ceil, spPrice(f, c)]);
 
-console.log('\n\nSCREEN PRINT — Anchorfish 2026, $' + SCREEN_CHARGE + '/colour screen charge baked in.');
+console.log('\n\nSCREEN PRINT — Anchorfish 2026, print only. Screens are NOT in these rates:');
+console.log('they bill once per order at $' + SCREEN_FEE + '/screen (cost $' + SCREEN_COST +
+            '), screens = (colours + 1 on darks) x locations.');
 console.log('50-piece minimum: the old bands started at 12, which contradicted it.\n');
 let sh = '  id   colours   ';
 for (const f of SPF) sh += (f + '-' + SP[f].ceil).padStart(11);
