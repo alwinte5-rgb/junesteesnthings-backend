@@ -66,7 +66,7 @@ const text = vm.runInThisContext(lift('quotePricingSource') + '\nquotePricingSou
 const { priceLine, addonAmount, screenCount } =
   vm.runInThisContext(text + '\n({ priceLine, addonAmount, screenCount })');
 
-const SCREEN_FEE = 35;
+const SCREEN_FEE = 25;
 const screensAddon = { code: 'screens', label: 'Screens', kind: 'per_screen', rate: SCREEN_FEE };
 
 /* Method #22 as the catalogue holds it: one `color` table, bands as CEILINGS.
@@ -105,7 +105,7 @@ test('invoice #16899: white on black, two locations, is four screens', () => {
   /* 62 shirts. Anchorfish charged 4 screens at $20 = $80 of cost. The retired
      flat-$25 underbase add-on recovered $25 of that. */
   assert.strictEqual(screenCount(1, 2, true), 4);
-  assert.strictEqual(screenCount(1, 2, true) * SCREEN_FEE, 140);
+  assert.strictEqual(screenCount(1, 2, true) * SCREEN_FEE, 100);
 });
 
 test('junk colour or location counts floor at one, never zero', () => {
@@ -121,8 +121,9 @@ test('junk colour or location counts floor at one, never zero', () => {
 /* ── addonAmount ─────────────────────────────────────────────────────────── */
 
 test('per_screen bills rate x screens, and ignores quantity', () => {
-  assert.strictEqual(addonAmount(screensAddon, 50, 3, 0, 6), 210);
-  assert.strictEqual(addonAmount(screensAddon, 5000, 3, 0, 6), 210, 'quantity must not enter it');
+  assert.strictEqual(addonAmount(screensAddon, 50, 3, 0, 6), 6 * SCREEN_FEE);
+  assert.strictEqual(addonAmount(screensAddon, 5000, 3, 0, 6), 6 * SCREEN_FEE,
+    'quantity must not enter it');
 });
 
 test('a missing screen count falls back to one per colour, not to zero', () => {
@@ -157,7 +158,7 @@ test('priceLine derives locations from the same stage it priced the print off', 
 test('a dark two-sided job bills every screen it burns', () => {
   const r = line({ qty: 62, colours: 1, stage: 'both', dark: true });
   assert.strictEqual(r.screens, 4);
-  assert.strictEqual(r.addonTotal, 140);
+  assert.strictEqual(r.addonTotal, 4 * SCREEN_FEE);
 });
 
 test('the line reports the counts it charged, so a surface can show them', () => {
@@ -227,4 +228,23 @@ test('the reprice tool prices print only — screens are not folded back in', ()
         `${c} colour at the ${f} band should be print-only $${AGREED[c][i].toFixed(2)}`);
     });
   }
+});
+
+/* This file has always defined its own SCREEN_FEE and priced against that, so
+ * every assertion above would still pass if server.js quietly billed a different
+ * number. The fee is the most-compared line on a quote and the thinnest margin
+ * in the system; it should not be possible to move it without a test saying so.
+ */
+test('the fee this file tests is the fee server.js actually charges', () => {
+  const m = src.match(/code: 'screens'[\s\S]{0,200}?rate: (\d+(?:\.\d+)?)/);
+  assert.ok(m, "could not find the screens add-on's rate in server.js");
+  assert.strictEqual(Number(m[1]), SCREEN_FEE,
+    `server.js bills $${m[1]} a screen but this file tests $${SCREEN_FEE}. ` +
+    'Change both, and docs/pricing-2026.md with them.');
+});
+
+test('the customer-facing note quotes the same fee', () => {
+  assert.ok(src.includes('at $' + SCREEN_FEE + ' each.'),
+    `the screens note must say "at $${SCREEN_FEE} each" — a note that quotes a ` +
+    'stale price is read by the customer and contradicts the number beside it');
 });

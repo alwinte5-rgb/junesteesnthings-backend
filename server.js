@@ -3293,9 +3293,18 @@ const ADDONS = [
      black, two locations) is four screens: that add-on recovered $25 against
      $80 of screens actually bought. The count now comes from screenCount() in
      quotePricingSource(), so the fee and the screens ordered are one number. */
+  /* $25 from 2026-08-30, down from $35. Anchorfish charges $20, so this is a
+     20% margin — by a distance the thinnest line in the system, and close
+     enough to cost that it is now near pass-through. That is the intent: the
+     setup charge is what a customer compares first and it is what makes a
+     small run look expensive. It costs most on many-colour work, where the
+     screen count is high: a 7-colour two-location dark job burns 16 screens,
+     so the cut is $160 on that one job and takes it to 39% margin, the lowest
+     any shape reaches. If screen-heavy work becomes common, raise this before
+     touching the print table. */
   { code: 'screens', label: 'Screens', appliesTo: SCREEN_METHOD_RE,
-    kind: 'per_screen', rate: 35, auto: 'method',
-    note: 'A screen is burned once and then runs the whole job, so it is billed once — not per shirt. (Colours + 1 on a dark garment) x locations, at $35 each.' },
+    kind: 'per_screen', rate: 25, auto: 'method',
+    note: 'A screen is burned once and then runs the whole job, so it is billed once — not per shirt. (Colours + 1 on a dark garment) x locations, at $25 each.' },
   { code: 'specialty_ink', label: 'Specialty ink (metallic, glitter, waterbase, discharge)',
     appliesTo: SCREEN_METHOD_RE, kind: 'per_piece', rate: 1.50 },
   { code: 'unbagging', label: 'Unbagging', appliesTo: SCREEN_METHOD_RE,
