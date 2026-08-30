@@ -4257,6 +4257,14 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
         <div id="lines">${eItems.map((it, ix) => lineHtml(ix, it)).join('')}</div>
         <button type="button" class="btn btn-ghost" style="padding:9px 18px;font-size:14px" onclick="addLine()">+ Add another item</button>
         <table style="width:100%;margin-top:14px;border-top:1px solid #e3e8f2;padding-top:10px">
+          <!-- Screens are a one-time setup cost, not part of the per-piece
+               price, and a customer who cannot see them reads the whole job as
+               dearer per shirt than it is. They are already inside the subtotal,
+               so these two rows SPLIT it rather than adding to it — a screens
+               row that also added would overstate the job by its own value.
+               Hidden entirely when a job burns none. -->
+          <tr class="scrsplit" style="display:none"><td class="muted">Garments &amp; printing</td><td class="num" id="goods">$0.00</td></tr>
+          <tr class="scrsplit" style="display:none"><td class="muted">Screens <span id="scrdetail" style="font-size:12px;color:#6b7280"></span></td><td class="num" id="scr">$0.00</td></tr>
           <tr><td class="muted">Subtotal</td><td class="num" id="sub">$0.00</td></tr>
           <tr><td class="muted">
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
@@ -4399,6 +4407,13 @@ ${quotePricingSource()}
 
       function calc(){
         var sub = 0;
+        /* Screens across every line, so the totals can show them on their own
+           row. Counted from the addon line's own count field rather than
+           dividing the total by a rate — the division would lie the moment the
+           rate changed between quoting and rendering.
+           No backticks in here: this comment is inside a server-side template
+           literal, and one would end it. */
+        var scrTotal = 0, scrCount = 0;
         document.querySelectorAll('.line').forEach(function(L){
           var prod = CAT.products.find(function(x){return String(x.id)===L.querySelector('.p').value;});
           var meth = CAT.methods.find(function(x){return String(x.id)===L.querySelector('.m').value;});
@@ -4583,6 +4598,12 @@ ${quotePricingSource()}
 
           sub += lt;
 
+          if (r.addonLines) r.addonLines.forEach(function(a){
+            if (a.code !== 'screens') return;
+            scrTotal += a.total;
+            scrCount += (a.count || 0);
+          });
+
           /* Screen printing has a floor. The tier keys are band ceilings, so a
              20-piece screen job would otherwise quote at the 50-71 rate and look
              perfectly normal — say so instead, and point at what does run. */
@@ -4620,6 +4641,22 @@ ${quotePricingSource()}
         var tot = net + tax;
         var dep = tot <= 0 ? 0 : (tot < FULL_UNDER ? tot : tot*DEP);
         document.getElementById('sub').textContent = m2(sub);
+
+        /* Split the subtotal only when there is something to split. On a job
+           with no screens these rows would restate the subtotal twice under two
+           different names, which reads as an error. */
+        scrTotal = Math.round(scrTotal * 100) / 100;
+        var showScr = scrTotal > 0;
+        document.querySelectorAll('.scrsplit').forEach(function(el){
+          el.style.display = showScr ? '' : 'none';
+        });
+        if (showScr) {
+          document.getElementById('goods').textContent = m2(Math.round((sub - scrTotal) * 100) / 100);
+          document.getElementById('scr').textContent = m2(scrTotal);
+          document.getElementById('scrdetail').textContent = scrCount
+            ? '— ' + scrCount + ' × ' + m2(scrTotal / scrCount) + ', one-time' : '— one-time';
+        }
+
         document.getElementById('disc').textContent = disc > 0
           ? '−' + m2(disc) + (dk === 'pct' ? ' (' + dv + '%)' : '') : '—';
         document.getElementById('tax').textContent = m2(tax);
