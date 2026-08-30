@@ -3178,15 +3178,26 @@ const BLANK_TIERS = [
   { min: 3000, pct: 8 },
   { min: 1000, pct: 5 },
   { min:  500, pct: 3 },
-  { min:  125, pct: 2 },
+  { min:  100, pct: 2 },
 ];
 
-/* Below this the garment is flat cost x2 with no volume break at all — the
-   shop's stated rule, and honest arithmetic: there is no supplier discount
-   behind any of this, so a garment break is margin given away rather than a
-   saving passed on. It buys competitiveness on the bids where the garment is
-   most of the price, which is why anything survives above 125. */
-const BLANK_DISCOUNT_MIN_QTY = 125;
+/* Below this the garment is flat cost x2 with no volume break at all — honest
+   arithmetic: there is no supplier discount behind any of this, so a garment
+   break is margin given away rather than a saving passed on. It buys
+   competitiveness on the bids where the garment is most of the price.
+
+   Lowered from 125 to 100 on 2026-08-30. 100 is one of the commonest order
+   sizes there is, and it sat just under the old floor — so the most-quoted job
+   in the shop got no break at all, and the way round it was to type a garment
+   price over the catalogue by hand on each quote. An override works once; it is
+   not a price list, it never reaches a margin report, and the next person
+   quoting the same job invents a different number.
+
+   DERIVED from the table, never written twice. This was a hand-kept 125 while
+   the table said 125 in its own row — two copies of one threshold, and nothing
+   read this one. Anyone changing it expected the discount to move and it would
+   not have. */
+const BLANK_DISCOUNT_MIN_QTY = Math.min(...BLANK_TIERS.map((t) => t.min));
 
 /** Percent off the garment for a given piece count. Highest matching floor wins. */
 function blankDiscountPct(qty) {

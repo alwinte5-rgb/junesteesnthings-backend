@@ -81,20 +81,28 @@ function backup(url, tag) {
    run through it — amortising it into a per-piece rate makes a 50-piece job
    subsidise a 500-piece one and hides the setup cost from the customer.
 
-   So the markup IS the margin on the print itself: 1 - 1/mk. 2.34 anchors
-   1 colour / 1 location / 50-99 on $4.25 (57.3%), and the curve settles to a
-   flat 55% at volume, where competition is hardest.
+   So the markup IS the margin on the print itself: 1 - 1/mk. 2.13 anchors
+   1 colour / 1 location / 50-99 on $3.85 (53.2%), and the curve settles to
+   about 50.5% at volume, where competition is hardest.
+
+   Cut from 2.34/2.30/2.26/2.24/2.22/2.22 on 2026-08-30. The old anchor put a
+   100-piece two-location job at $14.64 a piece, which is the top of what this
+   trade quotes for one colour on a Gildan 5000 — and the second location is
+   already a full-rate charge here, because Anchorfish gives no shared-setup
+   discount. Carrying a premium markup on top of that priced the shop out of
+   exactly the two-sided work it wants. Every band moved by the same factor so
+   the shape of the curve is unchanged; nothing goes below 2.00x.
 
    An earlier draft of this file folded (SCREEN_COST * colours) / band_floor
    into the base before applying the markup. That was written before screens
    became a separate fee; leaving it in would bill every screen twice. */
 const SP = {
-   50: { ceil:  99, mk: 2.34, p: [1.80, 2.25, 2.72, 3.19, 3.66, 4.13, 4.60] },
-  100: { ceil: 249, mk: 2.30, p: [1.65, 2.06, 2.53, 3.00, 3.47, 3.94, 4.41] },
-  250: { ceil: 499, mk: 2.26, p: [1.47, 1.84, 2.31, 2.78, 3.25, 3.72, 4.19] },
-  500: { ceil: 999, mk: 2.24, p: [1.32, 1.65, 2.12, 2.59, 3.06, 3.53, 4.00] },
- 1000: { ceil:2499, mk: 2.22, p: [1.17, 1.46, 1.93, 2.40, 2.87, 3.34, 3.81] },
- 2500: { ceil:7000, mk: 2.22, p: [0.99, 1.24, 1.71, 2.18, 2.65, 3.12, 3.59] },
+   50: { ceil:  99, mk: 2.13, p: [1.80, 2.25, 2.72, 3.19, 3.66, 4.13, 4.60] },
+  100: { ceil: 249, mk: 2.09, p: [1.65, 2.06, 2.53, 3.00, 3.47, 3.94, 4.41] },
+  250: { ceil: 499, mk: 2.05, p: [1.47, 1.84, 2.31, 2.78, 3.25, 3.72, 4.19] },
+  500: { ceil: 999, mk: 2.03, p: [1.32, 1.65, 2.12, 2.59, 3.06, 3.53, 4.00] },
+ 1000: { ceil:2499, mk: 2.02, p: [1.17, 1.46, 1.93, 2.40, 2.87, 3.34, 3.81] },
+ 2500: { ceil:7000, mk: 2.02, p: [0.99, 1.24, 1.71, 2.18, 2.65, 3.12, 3.59] },
 };
 /* Anchorfish's actual per-SCREEN charge, confirmed on invoice #16899: 4 screens
    at $20 for a 2-colour job across 2 locations. Screens are therefore
