@@ -157,6 +157,20 @@ function main(url) {
 
   const methodStmts = [];
   const screen = findByTitle(methods, SCREEN_TITLE);
+
+  /* The 50-piece minimum lives in this same blob (see tools/screenprint-minimum.js),
+     but colorTable() rebuilds the blob from the per-colour tables alone and knows
+     nothing about it. Without this carry-over a routine repricing would silently
+     drop min_qty and reopen the below-minimum hole — the worst kind of regression,
+     because the tool would report success. */
+  if (screen) {
+    const live = dejson(screen.calculate);
+    if (live && live.min_qty) {
+      table.min_qty = parseInt(live.min_qty, 10);
+      console.log('  carrying over min_qty=' + table.min_qty + ' from the live method');
+    }
+  }
+
   const calcSql = sq(enjson(table));
   if (screen) {
     console.log('\n  #' + screen.id + ' "' + SCREEN_TITLE + '" exists — repricing it and switching it on.');
