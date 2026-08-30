@@ -35,7 +35,7 @@ undo.
 
 **Do not set `JT_SCREEN_FEES=1` before the tables are repriced.** The old tables
 carried the screen charge amortised into the per-piece rate. Turning the fee on
-first bills every screen twice. Reprice, confirm 1 colour at 50–99 reads `$4.25`
+first bills every screen twice. Reprice, confirm 1 colour at 50–99 reads `$3.85`
 and not `$8.45`, then set the flag.
 
 The reverse window is real too and points the other way: between the reprice and
@@ -86,13 +86,13 @@ they bill once per order at $35/screen (cost $20), screens = (colours + 1 on dar
 
   id   colours         50-99    100-249    250-499    500-999  1000-2499  2500-7000
   -----------------------------------------------------------------------------------
-    2  1 colour          $4.25      $3.80      $3.35      $3.00      $2.60      $2.20
-    3  2 colour          $5.30      $4.75      $4.20      $3.70      $3.25      $2.80
-    4  3 colour          $6.40      $5.85      $5.25      $4.75      $4.30      $3.80
-    5  4 colour          $7.50      $6.90      $6.30      $5.85      $5.35      $4.85
-    6  5 colour          $8.60      $8.00      $7.35      $6.90      $6.40      $5.90
-  NEW  6 colour          $9.70      $9.10      $8.45      $7.95      $7.45      $6.95
-  NEW  7 colour         $10.80     $10.15      $9.50      $9.00      $8.50      $8.00
+    2  1 colour          $3.85      $3.45      $3.05      $2.70      $2.40      $2.00
+    3  2 colour          $4.80      $4.35      $3.80      $3.35      $2.95      $2.55
+    4  3 colour          $5.80      $5.30      $4.75      $4.35      $3.90      $3.50
+    5  4 colour          $6.80      $6.30      $5.70      $5.30      $4.85      $4.45
+    6  5 colour          $7.80      $7.30      $6.70      $6.25      $5.80      $5.40
+  NEW  6 colour          $8.80      $8.25      $7.65      $7.20      $6.75      $6.35
+  NEW  7 colour          $9.80      $9.25      $8.60      $8.15      $7.70      $7.30
 
   The same prices are also written to the combined "Screen Printing" method,
   as columns 1-color..7-color plus a full-color backstop, so the editor can
@@ -115,22 +115,29 @@ Live bands stopped at 175, so every larger order quoted at the 175 rate.
 
 ```
 
-## Is $4.25 profitable once screens are billed separately?
+## Is $3.85 profitable once screens are billed separately?
 
 Yes. The markup **is** the margin on the print itself, because screens are no
-longer inside it: `1 - 1/2.34 = 57.3%`, and the curve settles to a flat 55% at
+longer inside it: `1 - 1/2.13 = 53.2%`, and the curve settles to about 50.5% at
 volume where competition is hardest.
+
+**Repriced 2026-08-30**, from an anchor of $4.25 (markups 2.34→2.13 and down the
+curve by the same factor). The old anchor put a 100-piece two-location job at
+$14.64 a piece — the top of what this trade quotes for one colour on a Gildan
+5000 — and the second location is *already* charged at the full rate, because
+Anchorfish gives no shared-setup discount. Carrying a premium markup on top of
+that priced the shop out of exactly the two-sided work it wants.
 
 Print line, per piece, 1 colour:
 
 | band | Anchorfish cost | we sell | gross | margin |
 | --- | --- | --- | --- | --- |
-| 50–99 | $1.80 | $4.25 | $2.45 | 57.6% |
-| 100–249 | $1.65 | $3.80 | $2.15 | 56.6% |
-| 250–499 | $1.47 | $3.35 | $1.88 | 56.1% |
-| 500–999 | $1.32 | $3.00 | $1.68 | 56.0% |
-| 1000–2499 | $1.17 | $2.60 | $1.43 | 55.0% |
-| 2500–7000 | $0.99 | $2.20 | $1.21 | 55.0% |
+| 50–99 | $1.80 | $3.85 | $2.05 | 53.2% |
+| 100–249 | $1.65 | $3.45 | $1.80 | 52.2% |
+| 250–499 | $1.47 | $3.05 | $1.58 | 51.8% |
+| 500–999 | $1.32 | $2.70 | $1.38 | 51.1% |
+| 1000–2499 | $1.17 | $2.40 | $1.23 | 51.2% |
+| 2500–7000 | $0.99 | $2.00 | $1.01 | 50.5% |
 
 The screen add-on is the **thinnest margin in the system**: bill $35, cost $20,
 so $15 a screen at 42.9%. It therefore dilutes a job rather than carrying it —
@@ -141,16 +148,16 @@ Whole job, decoration only — the blank is a separate line with its own markup:
 
 | job | revenue | cost | profit | margin |
 | --- | --- | --- | --- | --- |
-| 50pc, 1 colour, 1 location, white (the minimum job) | $247.50 | $110.00 | $137.50 | 55.6% |
-| 50pc, 1 colour, 1 location, dark | $282.50 | $130.00 | $152.50 | 54.0% |
-| 50pc, 1 colour, 2 locations, dark | $565.00 | $260.00 | $305.00 | 54.0% |
-| 50pc, 7 colours, 2 locations, dark (worst case) | $1,640.00 | $780.00 | $860.00 | 52.4% |
-| 100pc, 1 colour, 2 locations, dark | $900.00 | $410.00 | $490.00 | 54.4% |
-| 500pc, 1 colour, 2 locations, dark | $3,140.00 | $1,400.00 | $1,740.00 | 55.4% |
+| 50pc, 1 colour, 1 location, white (the minimum job) | $227.50 | $110.00 | $117.50 | 51.6% |
+| 50pc, 1 colour, 1 location, dark | $262.50 | $130.00 | $132.50 | 50.5% |
+| 50pc, 1 colour, 2 locations, dark | $525.00 | $260.00 | $265.00 | 50.5% |
+| 50pc, 7 colours, 2 locations, dark (worst case) | $1,540.00 | $780.00 | $760.00 | 49.4% |
+| 100pc, 1 colour, 2 locations, dark | $830.00 | $410.00 | $420.00 | 50.6% |
+| 500pc, 1 colour, 2 locations, dark | $2,840.00 | $1,400.00 | $1,440.00 | 50.7% |
 
 **What this margin does NOT include.** It is gross margin against the Anchorfish
 invoice and nothing else. Still to come out of it: the blank, art and setup
-labour, inbound freight, and card fees (~2.9% + $0.30). Treat 52–56% as the
+labour, inbound freight, and card fees (~2.9% + $0.30). Treat 49–52% as the
 ceiling, not the take.
 
 **Worth revisiting:** $35 a screen is the weakest line here. $40 would put it at
@@ -191,3 +198,58 @@ billed as four screens at $20. That invoice's `Ink: Base, White` line is what
 proves the white underbase is its own screen, so **a 1-colour design on a dark
 garment is a 2-screen job**. The `underbase` add-on this replaced charged a flat
 $25 once, against the $80 of screens that job actually bought.
+
+## The garment
+
+Blanks sell at **cost × 2**, applied to the cheapest core size (S/M/L/XL) by
+`tools/ssa-sync.js`. A Gildan 5000 costs $2.82 from S&S and lists at $5.64.
+
+Volume breaks come off that list price, in `BLANK_TIERS` in `server.js`:
+
+| from | off |
+| --- | --- |
+| 100 | 2% |
+| 500 | 3% |
+| 1,000 | 5% |
+| 3,000 | 8% |
+
+**These are FLOORS** (`qty >= min`), the opposite convention to the decoration
+tables above, whose keys are band CEILINGS. Read one as the other and every band
+lands one step out.
+
+**The first floor moved 125 → 100 on 2026-08-30.** 100 is the commonest order
+size in the shop and it sat one step under the old floor, so the most-quoted job
+in the building got no break at all — and the way round it was to type a garment
+price over the catalogue by hand on every quote. An override works once; it is
+not a price list, it never reaches a margin report, and the next person quoting
+the same job invents a different number.
+
+Worth being honest about what this is: **there is no supplier break behind any of
+it.** The garment costs the same at 50 as at 5,000. Every point here is margin
+given away to win the bid, not a saving passed on — which is why the curve is
+shallow and why nothing is discounted below 100.
+
+`BLANK_DISCOUNT_MIN_QTY` is derived from the table with `Math.min`. It used to be
+a hand-kept `125` sitting beside a table that also said 125 — two copies of one
+threshold, and nothing read the constant. Anyone who changed it would have
+expected the discount to move, and it would not have.
+
+## Where the margin actually is
+
+Costs for the shop's most common job — 100 pieces, 1 colour, front and back, on
+a dark Gildan 5000:
+
+| | | |
+| --- | --- | --- |
+| Blanks | 100 × $2.82 | $282.00 |
+| Printing | 100 × $1.65 × 2 locations | $330.00 |
+| Screens | 4 × $20 | $80.00 |
+| | | **$692.00** ($6.92/pc) |
+
+The **second location is the constraint, not the markup.** Anchorfish charges the
+full rate again for location two — no shared-setup discount — so it adds $1.65/pc
+of real cost where a shop printing in-house pays almost nothing for the second
+pass. At 100 pieces one location sells at $9.68/pc against $4.87 of cost (49.7%);
+two sells at $13.83 against $6.92 (50.0%). On two-sided work this shop is structurally behind an in-house
+competitor, and no amount of garment discounting closes that gap: the garment is
+only $2.82 of the $6.92.

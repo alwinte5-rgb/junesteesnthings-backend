@@ -208,12 +208,17 @@ test('the reprice tool prices print only — screens are not folded back in', ()
   vm.runInContext(grab('const SP = {', '};') + '\n' + grab('const spPrice =', ';') +
     '\nthis.spPrice = spPrice;', sandbox);
 
-  /* The agreed card, print only, from the plan. If a screen charge creeps back
-     into the base every one of these rises. */
+  /* The agreed card, print only, from docs/pricing-2026.md. If a screen charge
+     creeps back into the base every one of these rises.
+     Repriced 2026-08-30: markups cut to 2.13/2.09/2.05/2.03/2.02/2.02, anchoring
+     1 colour at 50-99 on $3.85. The old anchor put a 100-piece two-location job
+     at $14.64/pc, the top of what this trade quotes for one colour on a basic
+     tee, and the second location is already billed at full rate because
+     Anchorfish gives no shared-setup discount. */
   const AGREED = {
-    1: [4.25, 3.80, 3.35, 3.00, 2.60, 2.20],
-    3: [6.40, 5.85, 5.25, 4.75, 4.30, 3.80],
-    7: [10.80, 10.15, 9.50, 9.00, 8.50, 8.00],
+    1: [3.85, 3.45, 3.05, 2.70, 2.40, 2.00],
+    3: [5.80, 5.30, 4.75, 4.35, 3.90, 3.50],
+    7: [9.80, 9.25, 8.60, 8.15, 7.70, 7.30],
   };
   const FLOORS = [50, 100, 250, 500, 1000, 2500];
   for (const c of [1, 3, 7]) {
