@@ -635,6 +635,26 @@ function unsubTokenValid(email, token) {
   return ok;
 }
 
+/* Who sent this, and from where — on EVERY email, whatever its type.
+ *
+ * CAN-SPAM only demands a postal address on commercial mail, so a receipt is
+ * exempt. It is still the right thing on all of it: an address is how a person
+ * decides a message is from a real business rather than a phishing attempt, and
+ * splitting the rule by type means every new email is a decision somebody can
+ * get wrong.
+ *
+ * Deliberately NOT an unsubscribe link. Opting out of a receipt, a sign-in code
+ * or a payment confirmation is not something a customer can be allowed to do by
+ * accident — they would stop receiving mail they actually need, and the shop
+ * would have no way to know. Unsubscribe belongs on marketing only, and
+ * sendEmail adds it there. */
+function shopFooter() {
+  return `<p style="color:#9ca3af;font-size:11px;margin-top:18px;line-height:1.5;">
+    June&rsquo;s Tees &amp; Things &middot; 3047 N Lincoln Ave #435, Chicago, IL 60657<br>
+    ${escEmail(SHOP_PHONE)} &middot; <a href="mailto:${escEmail(NOTIFY_EMAIL)}"
+      style="color:#9ca3af;">${escEmail(NOTIFY_EMAIL)}</a></p>`;
+}
+
 function unsubFooter(to) {
   const token = unsubToken(to);
   const url = `${PUBLIC_BASE_URL}/api/unsubscribe?e=${encodeURIComponent(to)}&t=${token}`;
@@ -713,7 +733,10 @@ async function sendEmail({ to, subject, html, replyTo, marketing = false, text }
     console.log(`sendEmail: skipped ${to} (unsubscribed)`);
     return;
   }
-  if (marketing) html = html + unsubFooter(to);
+  /* Applied HERE rather than at each call site, because thirty call sites is
+     thirty chances to forget — and the one that forgets is the one that gets
+     reported. A new email gets this by existing. */
+  html = marketing ? html + unsubFooter(to) : html + shopFooter();
   const textContent = text || htmlToText(html);
   const extraHeaders = marketing ? unsubHeaders(to) : {};
 
@@ -8234,15 +8257,35 @@ async function sendDiscountEmail(code, email, extra) {
   const c = codes.find((x) => String(x.code).toUpperCase() === code);
   if (!c) throw new Error(`${code} was not found`);
 
-  const worth = c.kind === 'amount' ? `${money(c.value)} off` : `${c.value}% off`;
+  /* $30, not $30.00 — trailing zeros read like a system rather than a person. */
+  const tidy = (n) => Number(n) % 1 === 0 ? `$${Number(n)}` : money(n);
+  const worth = c.kind === 'amount' ? `${tidy(c.value)} off` : `${c.value}% off`;
   const rules = [
-    c.min_order > 0 ? `on orders over ${money(c.min_order)}` : '',
+    c.min_order > 0 ? `on orders over ${tidy(c.min_order)}` : '',
     c.expires ? `until ${fmtDate(c.expires)}` : '',
+    /* Said plainly, because a dollar code is spent whole: somebody using $30 on
+       a $12 order and expecting $18 back has been misled by omission. */
+    (c.kind === 'amount' && Number(c.max_uses) === 1) ? 'good for one order' : '',
   ].filter(Boolean).join(', ');
+
+  /* Refuse BEFORE sending, rather than letting sendEmail drop it silently.
+     A promotional send to an address that has opted out is skipped inside
+     sendEmail and returns as though it worked — the page would say "sent" and
+     the customer would never receive it, which is worse than a plain refusal
+     because nobody goes looking. */
+  if (await isUnsubscribed(email)) {
+    throw new Error(`${email} has unsubscribed from emails — send this one by text or call instead`);
+  }
 
     await sendEmail({
       to: email,
       replyTo: SHOP_EMAIL,
+      /* An email whose entire content is an offer is COMMERCIAL, whatever
+         prompted it. That flag is what attaches the postal address and the
+         unsubscribe link CAN-SPAM requires, and the List-Unsubscribe headers
+         Gmail and Yahoo require of bulk senders — all of which this email was
+         missing until now. */
+      marketing: true,
       subject: `A ${worth} code from ${SHOP_NAME}`,
       html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
         <h2 style="color:#1848B8;margin:0 0 10px">Here is your ${escEmail(worth)} code</h2>
