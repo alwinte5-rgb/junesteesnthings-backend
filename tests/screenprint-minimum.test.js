@@ -83,3 +83,45 @@ test('minQty reads the number out of the method\'s own calculate blob', () => {
   assert.strictEqual(minQty(DTF), 0);
   assert.strictEqual(minQty({ id: 9 }), 0);
 });
+
+/* ── The minimum has to be IN the method row ─────────────────────────────── */
+
+test('the combined method carries min_qty, so the storefront enforces it', () => {
+  /* core/cart.php already knows how to do this: it reads `min_qty`, and when an
+     order is short it reprices the line onto DTF and tells the customer. That
+     code ran the whole time against a method with no min_qty — it read 0, and
+     `if ($min <= 0) return` skipped every check. Screen printing was orderable
+     at any quantity, below the floor the shop has with its own printer.
+
+     It belongs in the GENERATOR because colorTable replaces the method's
+     calculate blob on every reprice: a value written by hand would be silently
+     dropped the next time prices moved. */
+  const { colorTable } = require('../tools/lib/screenprint');
+  const rows = [
+    { colors: 1, tiers: [[99, 3.85], [249, 3.45]] },
+    { colors: 2, tiers: [[99, 4.80], [249, 4.35]] },
+  ];
+  assert.strictEqual(colorTable(rows, 50).min_qty, '50');
+  assert.strictEqual(colorTable(rows, 50).values.front['99']['1-color'], '3.85',
+    'and the prices are untouched by it');
+});
+
+test('no minimum means no min_qty key at all', () => {
+  /* An explicit 0 would be a value the storefront then compares against, and
+     `min_qty: "0"` reads as a deliberate "no minimum" rather than an omission.
+     Absent is the honest shape for a method that has none. */
+  const { colorTable } = require('../tools/lib/screenprint');
+  const rows = [{ colors: 1, tiers: [[99, 3.85]] }];
+  assert.ok(!('min_qty' in colorTable(rows)));
+  assert.ok(!('min_qty' in colorTable(rows, 0)));
+  assert.ok(!('min_qty' in colorTable(rows, 'nonsense')));
+});
+
+test('the reprice tool passes the contracted floor', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const tool = fs.readFileSync(path.join(__dirname, '..', 'tools', 'reprice-anchorfish-2026.js'), 'utf8');
+  assert.match(tool, /const SCREEN_MIN_QTY = 50;/);
+  assert.match(tool, /colorTable\(all, SCREEN_MIN_QTY\)/,
+    'the generator must be told the minimum, or it emits a method without one');
+});

@@ -115,6 +115,9 @@ const SP = {
    this tool is where the screen economics are written down, and because the
    sell price has to be changed in the same breath as the cost that justifies
    it. The charge itself is applied by the `screens` add-on in server.js. */
+/* The contracted floor. Under this the job goes to DTF or HTV, both of which
+   the designer already prices. */
+const SCREEN_MIN_QTY = 50;
 const SCREEN_COST = 20;   // what Anchorfish charges us, per screen
 const SCREEN_FEE  = 25;   // what we bill, per screen, ONCE per order (was 35 to 2026-08-30)
 
@@ -476,7 +479,10 @@ for (const m of SP_INSERTS) {
 {
   const all = [...Object.values(SP_METHODS), ...SP_INSERTS]
     .map((m) => ({ colors: m.colors, tiers: spTiers(m.colors) }));
-  const combined = enjson(colorTable(all));
+  /* SCREEN_MIN_QTY, written into the method so the storefront enforces it.
+     Without it core/cart.php reads 0 and lets a 12-piece screen job through at
+     the 50-99 rate — below the minimum the shop has with its own printer. */
+  const combined = enjson(colorTable(all, SCREEN_MIN_QTY));
   console.log('\n  The same prices are also written to the combined "Screen Printing" method,');
   console.log('  as columns 1-color..7-color plus a full-color backstop, so the editor can');
   console.log('  price from the design\'s own colour count.');
