@@ -83,12 +83,15 @@ test('the three groups are rendered in working order', () => {
   const e = board.indexOf("group('New enquiries'");
   const i = board.indexOf("group('Orders'");
   const j = board.indexOf("group('Open quotes'");
-  const l = board.indexOf("group('Cancelled'");
-  assert.ok(e > -1 && i > -1 && j > -1 && l > -1, 'all four live groups must be rendered');
-  assert.ok(e < i && i < j && j < l,
-    'order must be New enquiries, Orders, Open quotes, then Cancelled last');
+  assert.ok(e > -1 && i > -1 && j > -1, 'all three live groups must be rendered');
+  assert.ok(e < i && i < j, 'order must be New enquiries, Orders, then Open quotes');
+  /* Neither delivered nor cancelled work belongs on a working board. Cancelled
+     was a group here, which meant cancelling relabelled a job instead of
+     clearing it and the dashboard stayed exactly as full. Both live in Orders. */
   assert.strictEqual(board.indexOf("group('Delivered'"), -1,
     'delivered work must not be rendered on the board');
+  assert.strictEqual(board.indexOf("group('Cancelled'"), -1,
+    'cancelled work must not be rendered on the board either');
 });
 
 test('the sort inside each group is preserved', () => {
