@@ -4106,6 +4106,17 @@ form:has(>.step-row){display:block}
 .quote-grid-head{grid-column:1/-1;display:flex;align-items:baseline;gap:10px;margin:22px 0 -2px}
 .quote-grid-head:first-child{margin-top:0}
 .quote-grid-head h2{font-size:16px;margin:0;color:#0B1F4B}
+/* Two lanes: what might become money on the left, what already is on the right.
+   Stacked into one column below 1100px — side-by-side lanes on a phone give two
+   columns of nothing. The lanes are independent, so a long list of enquiries no
+   longer pushes the open quotes off the bottom of the page, which is what the
+   single stacked board did. */
+.board-lanes{display:grid;gap:18px;align-items:start}
+@media (min-width:1100px){ .board-lanes{grid-template-columns:minmax(0,1fr) minmax(0,1fr)} }
+.board-lane{min-width:0}
+.board-lane .quote-grid{display:block}
+.board-lane .quote-grid > .card{margin-bottom:14px}
+.board-lane .quote-grid-head{display:flex}
 .quote-grid .card table{max-width:100%}
 .quote-grid .card details table{display:block;overflow-x:auto}
 `;
@@ -8711,6 +8722,12 @@ async function renderBoard(VIEW, req, res) {
             : `${sent} of 5 recovery emails sent${c.last_sent ? ' — last ' + fmtDate(c.last_sent) : ''}`}
           ${sent >= 5 ? ' &middot; <b style="color:#b45309">sequence finished, no reply</b>' : ''}
         </div>
+        ${Array.isArray(c.previews) && c.previews.length ? `
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+          ${c.previews.map((u) => `<a href="${escEmail(u)}" target="_blank" rel="noopener">
+            <img src="${escEmail(u)}" alt="" loading="lazy"
+                 style="width:78px;height:78px;object-fit:contain;border-radius:8px;border:1px solid #e3e8f2;background:#fff"></a>`).join('')}
+        </div>` : ''}
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
           <a class="btn" style="padding:8px 16px;font-size:13px"
              href="/quote/new?email=${encodeURIComponent(c.email || '')}">Quote them</a>
@@ -8787,14 +8804,31 @@ async function renderBoard(VIEW, req, res) {
     const carts = (studio.carts || []).slice().sort((a, b) =>
       (Number(b.items) > 0) - (Number(a.items) > 0) || new Date(b.updated) - new Date(a.updated));
 
-    const body =
+    /* Two lanes. Left is what might become money; right is what already is.
+       Before this they were one stacked column, so a long list of enquiries
+       pushed the open quotes and orders off the bottom of the page — the exact
+       complaint that prompted the split. */
+    const laneLeft =
       group('New enquiries', 'from the website — no quote raised yet', leads, leadCard,
             { accent: '#b45309' }) +
       group('Unfinished carts', 'started a design, never checked out', carts, cartCard,
-            { accent: '#1848B8' }) +
+            { accent: '#1848B8' });
+
+    const laneRight =
       group('Orders', 'deposit in — work in hand', gOrders) +
       group('Open quotes', 'sent, nothing paid yet', gQuotes) +
       group('Cancelled', 'not going ahead', gCancelled);
+
+    /* Both lanes empty means an empty board; one empty lane is normal and still
+       renders, so the two columns do not jump around as work moves between
+       them. */
+    const body = (laneLeft || laneRight) ? `
+      <div class="board-lanes">
+        <div class="board-lane"><div class="quote-grid">${laneLeft ||
+          '<p class="muted" style="margin:0">No new enquiries or unfinished carts.</p>'}</div></div>
+        <div class="board-lane"><div class="quote-grid">${laneRight ||
+          '<p class="muted" style="margin:0">No open work.</p>'}</div></div>
+      </div>` : '';
 
     /* Folding, remembered. localStorage rather than a cookie: it is a per-browser
        display preference, it never needs to reach the server, and wrapped in
@@ -9011,7 +9045,7 @@ async function renderBoard(VIEW, req, res) {
             }).join('') || '<div class="kempty">—</div>'}
           </section>`).join('')}</div>
           ${live.length === 0 ? '<div class="card"><p class="muted">Nothing in production. Delivered jobs drop off this board.</p></div>' : ''}`;
-      })() : (body ? `<div class="quote-grid">${body}</div>${groupScript}` : '<div class="card"><p class="muted">No quotes yet.</p></div>')}
+      })() : (body ? `${body}${groupScript}` : '<div class="card"><p class="muted">No quotes yet.</p></div>')}
 
       ${studioOrdersSection(studio)}
       <script>

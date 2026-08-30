@@ -88,3 +88,20 @@ test('a cart-prefilled quote posts as new, not as an edit', () => {
   const block = src.slice(src.indexOf('const cartEmail'), src.indexOf('const leadId'));
   assert.match(block, /code: null/, 'a prefilled quote must carry no code');
 });
+
+test('a design preview is shown only when the feed says one exists', () => {
+  /* The feed checks the disk inside the app that owns the files, because a cart
+     abandoned before the design was committed leaves a `file` reference with
+     nothing behind it. Guessing the URL from the board ships broken frames and
+     teaches the operator to distrust the page — one cart on file right now has
+     exactly that dangling reference. */
+  assert.match(board, /Array\.isArray\(c\.previews\) && c\.previews\.length \?/,
+    'no previews means no image block at all');
+  assert.match(feed, /is_file\(\$dir \. str_replace/,
+    'the feed must confirm the file exists before publishing a URL');
+  assert.match(feed, /allowed_classes.*=> false/,
+    'the cart blob is unserialised without instantiating objects');
+  assert.ok(feed.includes("preg_match('#^"), 'the path shape is checked rather than trusted');
+  assert.ok(feed.includes('data/designs') || feed.includes("'designs', 'user_data', 'orders'"),
+    'and only the known design folders are searched');
+});
