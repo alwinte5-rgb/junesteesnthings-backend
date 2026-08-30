@@ -116,7 +116,7 @@ const SP = {
    sell price has to be changed in the same breath as the cost that justifies
    it. The charge itself is applied by the `screens` add-on in server.js. */
 const SCREEN_COST = 20;   // what Anchorfish charges us, per screen
-const SCREEN_FEE  = 35;   // what we bill, per screen, ONCE per order
+const SCREEN_FEE  = 25;   // what we bill, per screen, ONCE per order (was 35 to 2026-08-30)
 
 /* Anchorfish prices 5, 6 and 7 colours separately; the designer had one
    combined "5-6 Colors" method, which had to quote one of them wrong. */

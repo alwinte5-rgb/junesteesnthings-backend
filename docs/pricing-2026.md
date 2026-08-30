@@ -139,10 +139,17 @@ Print line, per piece, 1 colour:
 | 1000–2499 | $1.17 | $2.40 | $1.23 | 51.2% |
 | 2500–7000 | $0.99 | $2.00 | $1.01 | 50.5% |
 
-The screen add-on is the **thinnest margin in the system**: bill $35, cost $20,
-so $15 a screen at 42.9%. It therefore dilutes a job rather than carrying it —
-but it never drags one below break-even, and the fixed cost now lands on the
-order that caused it instead of on every piece.
+The screen add-on is the **thinnest margin in the system by a distance**: bill
+$25, cost $20, so $5 a screen at **20%**. It is close enough to cost to be near
+pass-through, and that is deliberate — the setup charge is the line a customer
+compares first, and it is what makes a small run look expensive.
+
+**Cut from $35 to $25 on 2026-08-30.** Where it costs is many-colour work, because
+the screen count scales with colours *and* locations: a 7-colour two-location dark
+job burns 16 screens, so the cut is **$160 on that one job** and takes it to 39%
+margin — the lowest any job shape reaches. On the shop's ordinary work it is $20
+to $60 a job. If screen-heavy orders become common, **raise this before touching
+the print table**: 16 screens move a total far faster than a per-piece rate does.
 
 Whole job, decoration only — the blank is a separate line with its own markup:
 
@@ -160,9 +167,11 @@ invoice and nothing else. Still to come out of it: the blank, art and setup
 labour, inbound freight, and card fees (~2.9% + $0.30). Treat 49–52% as the
 ceiling, not the take.
 
-**Worth revisiting:** $35 a screen is the weakest line here. $40 would put it at
-50% and bring it in line with everything else. That is a pricing decision, not a
-bug, so it has not been changed.
+**Where the fee could go.** $25 → 20%, $28 → 28.6%, $30 → 33.3%, $35 → 42.9%.
+The rate lives in `ADDONS` in `server.js`, is mirrored in
+`tools/reprice-anchorfish-2026.js` for the record, and both are pinned by
+`tests/screen-fees.test.js` — including the customer-facing note text, so a stale
+price cannot be left sitting next to a live one.
 
 ## Why the old table was wrong
 
