@@ -7920,6 +7920,22 @@ async function fetchPromoCodes() {
 
 app.get('/discounts', requireAdmin, async (req, res) => {
   const { codes, system, poolSize, error } = await fetchPromoCodes();
+  /* The real customer list, from the same function the Customers page uses, so
+     the two can never disagree about who exists. Typing an address by hand is
+     how a code goes to tylwur@yaho.com and nobody finds out until the customer
+     says they never got it. */
+  let people = [];
+  try { ({ people } = await allCustomers()); }
+  catch (e) { console.error('discount customer list failed:', e.message); }
+
+  /* A datalist rather than a select: it still accepts a new address — a code
+     for somebody who has never ordered is a normal thing — while offering every
+     known customer as you type. The name is in the label so you pick a person,
+     not an address you have to recognise. */
+  const customerList = `<datalist id="jt-customers">${people.map((c) =>
+    `<option value="${escEmail(c.email)}">${escEmail(
+      [c.name, c.spent > 0 ? money(c.spent) + ' spent' : 'no orders yet']
+        .filter(Boolean).join(' — '))}</option>`).join('')}</datalist>`;
   const msg = String(req.query.msg || '');
   const err = String(req.query.err || '');
 
@@ -7930,6 +7946,9 @@ app.get('/discounts', requireAdmin, async (req, res) => {
   const row = (c) => `
     <tr style="border-top:1px solid #eef1f8${live(c) ? '' : ';opacity:.55'}">
       <td style="padding:9px 6px"><b style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace">${escEmail(c.code)}</b>
+        ${c.assigned_to ? `<div style="font-size:12.5px;color:#1848B8">for ${escEmail(c.assigned_to)}${
+          c.sent_at ? ` <span class="muted">&middot; sent ${fmtDate(c.sent_at)}</span>`
+                    : ' <span class="muted">&middot; not sent yet</span>'}</div>` : ''}
         ${c.note ? `<div class="muted" style="font-size:12.5px">${escEmail(c.note)}</div>` : ''}</td>
       <td style="padding:9px 6px;white-space:nowrap"><b>${escEmail(worth(c))}</b>${
         (c.min_order > 0 || c.once_per_customer) ? `<div class="muted" style="font-size:11.5px">${
@@ -7957,7 +7976,9 @@ app.get('/discounts', requireAdmin, async (req, res) => {
         <form method="POST" action="/discounts/send" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
           <input type="hidden" name="code" value="${escEmail(c.code)}">
           <span class="muted" style="font-size:12.5px">Email <b>${escEmail(c.code)}</b> to</span>
-          <input name="email" type="email" required placeholder="them@example.com"
+          <input name="email" type="email" required list="jt-customers"
+                 value="${escEmail(c.assigned_to || '')}"
+                 placeholder="start typing a name or email"
                  style="flex:1 1 220px;padding:7px;font-size:13px">
           <input name="message" maxlength="300" placeholder="A line of your own (optional)"
                  style="flex:2 1 260px;padding:7px;font-size:13px">
@@ -7988,6 +8009,7 @@ app.get('/discounts', requireAdmin, async (req, res) => {
     </tr>`;
 
   res.send(adminPage('Discounts', `<h1>Discounts</h1>
+    ${customerList}
     <div class="sub">${liveCount} live &middot; ${codes.length} total &middot;
       <span class="muted" style="font-size:12px">codes you issue by hand, for design.jtees.net checkout</span></div>
 
@@ -8046,8 +8068,8 @@ app.get('/discounts', requireAdmin, async (req, res) => {
                  style="width:100%;padding:8px;font-size:14px">
         </div>
         <div style="margin-top:10px">
-          <label style="font-size:12px">Send it to <span class="muted">(optional — emails the code straight away)</span></label>
-          <input name="send_to" type="email" placeholder="them@example.com"
+          <label style="font-size:12px">Send it to <span class="muted">(optional — pick a customer, or type any address)</span></label>
+          <input name="send_to" type="email" list="jt-customers" placeholder="start typing a name or email"
                  style="width:100%;padding:8px;font-size:14px">
         </div>
         <button type="submit" class="btn" style="margin-top:12px;padding:9px 20px">Create code</button>
@@ -8108,6 +8130,12 @@ app.post('/discounts', requireAdmin, async (req, res) => {
   form.set('value', String(b.value || ''));
   form.set('expires', String(b.expires || '').trim());
   form.set('note', String(b.note || '').trim());
+  form.set('min_order', String(b.min_order || ''));
+  form.set('max_uses', String(b.max_uses || ''));
+  if (b.once_per_customer) form.set('once_per_customer', '1');
+  /* Assigning and sending are the same field: the code exists to reach one
+     person, so naming them is what makes it theirs. */
+  form.set('assigned_to', String(b.send_to || '').trim().toLowerCase());
   try {
     const r = await studioFetch(PROMO_ADMIN(), { method: 'POST', body: form });
     const d = await r.json().catch(() => ({}));
@@ -8195,6 +8223,13 @@ app.post('/discounts/send', requireAdmin, async (req, res) => {
   }
   try {
     await sendDiscountEmail(code, email, extra);
+    /* Record it AFTER the send succeeds. Stamping first would show a code as
+       sent that never left. */
+    try {
+      const f = new URLSearchParams();
+      f.set('code', code); f.set('sent', '1'); f.set('assigned_to', email.toLowerCase());
+      await studioFetch(PROMO_ADMIN(), { method: 'POST', body: f });
+    } catch (e) { console.error('discount send stamp failed:', e.message); }
     res.redirect('/discounts?msg=' + encodeURIComponent(`${code} sent to ${email}.`));
   } catch (e) {
     console.error('discount send failed:', e.message);
@@ -8221,44 +8256,54 @@ app.post('/discounts/off', requireAdmin, async (req, res) => {
   }
 });
 
-app.get('/customers', requireAdmin, async (_req, res) => {
-  try {
-    const { rows: quoteCustomers } = await pool.query(
-      `SELECT lower(email) AS email, max(name) AS name,
-              count(*) AS jobs, coalesce(sum(paid_amount), 0) AS paid,
-              max(created_at) AS last_seen
-         FROM quotes
-        WHERE email IS NOT NULL AND email <> ''
-        GROUP BY lower(email)`);
+/* Everyone the shop knows, from both halves of it: quotes live here, studio
+ * orders live on design.jtees.net, and a person who has done both is one
+ * customer rather than two rows.
+ *
+ * Extracted so the Customers page and the Discounts picker cannot disagree
+ * about who exists — a picker built from its own query would quietly miss the
+ * studio-only customers, which is most of the online ones. */
+async function allCustomers() {
+  const { rows: quoteCustomers } = await pool.query(
+    `SELECT lower(email) AS email, max(name) AS name,
+            count(*) AS jobs, coalesce(sum(paid_amount), 0) AS paid,
+            max(created_at) AS last_seen
+       FROM quotes
+      WHERE email IS NOT NULL AND email <> ''
+      GROUP BY lower(email)`);
 
-    const studio = await fetchStudioOrders();
-    const byEmail = new Map();
+  const studio = await fetchStudioOrders();
+  const byEmail = new Map();
 
-    for (const c of quoteCustomers) {
-      byEmail.set(c.email, {
-        email: c.email, name: c.name || '', quotes: Number(c.jobs),
-        orders: 0, spent: Number(c.paid || 0), last: c.last_seen, source: 'quotes',
+  for (const c of quoteCustomers) {
+    byEmail.set(c.email, {
+      email: c.email, name: c.name || '', quotes: Number(c.jobs),
+      orders: 0, spent: Number(c.paid || 0), last: c.last_seen, source: 'quotes',
+    });
+  }
+  for (const o of studio.orders) {
+    const key = String(o.email || '').toLowerCase();
+    if (!key) continue;
+    const cur = byEmail.get(key);
+    if (cur) {
+      cur.orders += 1;
+      cur.spent += Number(o.paid || 0);
+      cur.source = 'both';
+      if (!cur.name) cur.name = o.name || '';
+      if (o.created && new Date(o.created) > new Date(cur.last)) cur.last = o.created;
+    } else {
+      byEmail.set(key, {
+        email: key, name: o.name || '', quotes: 0, orders: 1,
+        spent: Number(o.paid || 0), last: o.created, source: 'studio',
       });
     }
-    for (const o of studio.orders) {
-      const key = String(o.email || '').toLowerCase();
-      if (!key) continue;
-      const cur = byEmail.get(key);
-      if (cur) {
-        cur.orders += 1;
-        cur.spent += Number(o.paid || 0);
-        cur.source = 'both';
-        if (!cur.name) cur.name = o.name || '';
-        if (o.created && new Date(o.created) > new Date(cur.last)) cur.last = o.created;
-      } else {
-        byEmail.set(key, {
-          email: key, name: o.name || '', quotes: 0, orders: 1,
-          spent: Number(o.paid || 0), last: o.created, source: 'studio',
-        });
-      }
-    }
+  }
+  return { people: [...byEmail.values()].sort((a, b) => Number(b.spent) - Number(a.spent)), studio };
+}
 
-    const people = [...byEmail.values()].sort((a, b) => Number(b.spent) - Number(a.spent));
+app.get('/customers', requireAdmin, async (_req, res) => {
+  try {
+    const { people, studio } = await allCustomers();
     const chip = { quotes: ['Quotes', '#eef2fd', '#1848B8'],
                    studio: ['Studio', '#eef1f8', '#46505f'],
                    both:   ['Both',   '#e7f6ec', '#166534'] };

@@ -180,13 +180,22 @@ test('the customers list is admin-gated and reachable', () => {
 });
 
 test('the customers list merges both halves of the shop', () => {
-  const page = extractFn("app.get('/customers'");
-  assert.match(page, /FROM quotes/, 'quote customers live in Postgres');
-  assert.match(page, /fetchStudioOrders\(\)/, 'studio customers arrive on the orders feed');
-  assert.match(page, /byEmail/,
+  /* The merge moved into allCustomers() so the Customers page and the Discounts
+     picker cannot disagree about who exists. A picker with its own query would
+     quietly miss the studio-only customers, which is most of the online ones. */
+  const fn = extractFn('async function allCustomers()');
+  assert.match(fn, /FROM quotes/, 'quote customers live in Postgres');
+  assert.match(fn, /fetchStudioOrders\(\)/, 'studio customers arrive on the orders feed');
+  assert.match(fn, /byEmail/,
     'the same person can appear in both and must not be listed twice');
-  assert.match(page, /String\(o\.email \|\| ''\)\.toLowerCase\(\)/,
+  assert.match(fn, /String\(o\.email \|\| ''\)\.toLowerCase\(\)/,
     'merging on a case-sensitive email would split one person into two rows');
+});
+
+test('every customer list comes from that one function', () => {
+  /* Two lists of "who our customers are" drift within a month. */
+  assert.ok((src.match(/await allCustomers\(\)/g) || []).length >= 2,
+    'the Customers page and the Discounts picker must both call it');
 });
 
 test('a broken studio feed degrades the customer list rather than emptying it', () => {
