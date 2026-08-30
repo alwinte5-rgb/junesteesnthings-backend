@@ -117,6 +117,19 @@ async function initDB() {
     'paid_method TEXT',
     'paid_at TIMESTAMPTZ',
     'stripe_session TEXT',
+    /* Money that will never arrive, and is not owed. A quote edited after the
+       customer paid leaves a balance nobody intends to collect — the price was
+       revised, not underpaid. Before this the only lever was a NEGATIVE payment
+       row, which moves what was COLLECTED rather than what is OWED, so it made
+       the gap wider; the workaround was marking the job delivered to hide it,
+       which corrupts the schedule and leaves the books claiming money that is
+       not coming.
+
+       The amount is STORED rather than derived, so editing the quote afterwards
+       cannot silently change a figure that has already been written off. */
+    'written_off NUMERIC(10,2) NOT NULL DEFAULT 0',
+    'settled_at TIMESTAMPTZ',
+    'settled_note TEXT',
     'change_request TEXT',            // what the customer asked to change
     /* What the customer asked for, structurally: an array aligned by index with
        `items`, each entry {qty, size_mix} for a line they edited. Kept SEPARATE
@@ -3717,6 +3730,15 @@ function quoteTotals(q) {
 
 
 
+/* What is still owed, everywhere. One definition so the board, the customer
+   page, the payment routes and the books cannot disagree — a balance shown in
+   one place and not another is how a customer gets chased for money the shop has
+   already written off. */
+function balanceOf(q, total) {
+  const t = Number(total != null ? total : (q && q.total) || 0);
+  return round2(Math.max(0, t - Number((q && q.paid_amount) || 0) - Number((q && q.written_off) || 0)));
+}
+
 function newQuoteCode() {
   return crypto.randomBytes(3).toString('hex').toUpperCase();
 }
@@ -5532,7 +5554,7 @@ app.get('/q/:code', async (req, res) => {
     const expired = q.valid_until && new Date(q.valid_until) < new Date(new Date().toDateString());
     const accepted = !!q.accepted_at;
     const paid = Number(q.paid_amount || 0) > 0;
-    const balanceDue = round2(Math.max(0, Number(t.total) - Number(q.paid_amount || 0)));
+    const balanceDue = balanceOf(q, t.total);
     const eta = deliveryEstimate(q.accepted_at ? new Date(q.accepted_at) : new Date());
     /* A DATE column has no time, so converting it through a timezone shifts it
        a day backwards (2026-08-20 rendered as Aug 19). Format the calendar date
@@ -6360,16 +6382,16 @@ app.post('/webhooks/stripe', async (req, res) => {
         const code = String(obj.client_reference_id || '').toUpperCase();
         if (!QUOTE_CODE_RE.test(code)) break;
         const { rows } = await pool.query(
-          `SELECT code,name,total,paid_amount FROM quotes WHERE code=$1`, [code]);
+          `SELECT code,name,total,paid_amount,written_off FROM quotes WHERE code=$1`, [code]);
         const q = rows[0];
         // Only worth a nudge if they still owe — an expired session on a
         // fully paid quote is just an abandoned second tab.
-        if (!q || round2(Number(q.total) - Number(q.paid_amount || 0)) <= 0) break;
+        if (!q || balanceOf(q) <= 0) break;
         console.log(`Stripe checkout expired for ${code} — customer did not finish paying`);
         await alertShop(`🛒 Checkout abandoned — quote ${code}`,
           `<p>${escEmail(q.name || 'A customer')} opened the payment page for quote
               <b>${escEmail(code)}</b> and did not finish.</p>
-           <p>Still outstanding: <b>${money(round2(Number(q.total) - Number(q.paid_amount || 0)))}</b>.</p>
+           <p>Still outstanding: <b>${money(balanceOf(q))}</b>.</p>
            <p>Worth a follow-up — they were one click from paying.</p>
            <p><a href="${quoteLink(code)}">${quoteLink(code)}</a></p>`);
         break;
@@ -6687,7 +6709,7 @@ app.post('/quote/:code/mark-paid', requireAdmin, async (req, res) => {
 
     // Blank amount means "they paid what was due" — deposit, or the balance if
     // a deposit is already in.
-    const outstanding = round2(Math.max(0, Number(t.total) - Number(q.paid_amount || 0)));
+    const outstanding = balanceOf(q, t.total);
     const suggested = Number(q.paid_amount || 0) > 0 ? outstanding : t.deposit;
     let amount = String(b.amount || '').trim() === '' ? suggested : round2(Number(b.amount));
     if (!(amount > 0)) return res.redirect('/quotes');
@@ -7362,6 +7384,50 @@ async function sendReceipt(code, to = null) {
 
 /* Admin: send (or re-send) a receipt. ?to= overrides the stored address, for a
    quote taken over the counter where the email arrived only via Stripe. */
+/* Settle a quote at what was actually collected.
+ *
+ * The case this exists for: a quote is edited AFTER the customer has paid, so
+ * the stored total moves and a balance appears that nobody intends to collect.
+ * The price was revised; the customer did not underpay.
+ *
+ * The only tool that existed was recording a negative PAYMENT, which moves what
+ * was collected rather than what is owed — it made the gap larger. The
+ * workaround was marking the job delivered so it dropped off the board, which
+ * corrupts the schedule and leaves the books expecting money that is not coming.
+ *
+ * This writes the remainder off explicitly:
+ *   - revenue is untouched, because it is counted from the payment ledger
+ *   - the written-off amount is stored, not derived, so a later edit to the
+ *     quote cannot silently restate a figure already written off
+ *   - the reason is recorded, because "why is this $372.50 short" is a question
+ *     somebody will ask months later
+ */
+app.post('/quote/:code/settle', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/quotes');
+  const note = String((req.body && req.body.note) || '').trim().slice(0, 200);
+  try {
+    const { rows } = await pool.query('SELECT * FROM quotes WHERE code=$1', [code]);
+    if (!rows.length) return res.redirect('/quotes');
+    const q = rows[0];
+
+    /* Derived from the ITEMS, not the stored total column — the same figure the
+       customer's page shows. Settling against a stale total would write off the
+       wrong number. */
+    const owed = balanceOf(q, quoteTotals(q).total);
+    if (owed <= 0) return res.redirect('/quotes');   // nothing to settle
+
+    await pool.query(
+      `UPDATE quotes SET written_off = COALESCE(written_off,0) + $2,
+              settled_at = NOW(), settled_note = $3
+        WHERE code=$1`,
+      [code, owed, note || null]);
+  } catch (err) {
+    console.error('settle failed:', err.message);
+  }
+  res.redirect('/quotes');
+});
+
 app.post('/quote/:code/receipt', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/quotes');
@@ -7896,7 +7962,7 @@ async function renderBoard(VIEW, req, res) {
          too. Surface both, with the message ready to copy. */
       const ageDays = (Date.now() - new Date(q.created_at)) / 86400000;
       const noEmail = !q.email;
-      const outstanding = round2(Math.max(0, Number(q.total || q.subtotal || 0) - Number(q.paid_amount || 0)));
+      const outstanding = balanceOf(q, q.total || q.subtotal || 0);
       const wantsChange = !paid && !!q.change_request;
       const needsText = !paid && !expired && q.phone && (
         (noEmail && ageDays >= 2 && !q.accepted_at) ||
@@ -7923,8 +7989,11 @@ async function renderBoard(VIEW, req, res) {
             <span class="chip" style="background:${bg};color:${fg}">${paid ? 'paid ' + money(q.paid_amount) : st}</span>
           </div>
         </div>
-        ${paid && Number(q.total) > Number(q.paid_amount)
-          ? `<div class="muted" style="margin-top:6px;color:#b45309">balance due ${money(round2(Number(q.total) - Number(q.paid_amount)))}</div>`
+        ${balanceOf(q) > 0
+          ? `<div class="muted" style="margin-top:6px;color:#b45309">balance due ${money(balanceOf(q))}</div>`
+          : Number(q.written_off || 0) > 0
+          ? `<div class="muted" style="margin-top:6px">settled &middot; ${money(q.written_off)} written off${
+              q.settled_note ? ' — ' + escEmail(q.settled_note) : ''}</div>`
           : ''}
         ${wantsChange ? `
           <div style="margin-top:10px;background:#eef4ff;border:1px solid #c3d4f8;border-radius:10px;padding:10px 12px">
@@ -7949,7 +8018,21 @@ async function renderBoard(VIEW, req, res) {
           <a class="btn btn-ghost" style="padding:8px 16px;font-size:13px" href="/q/${q.code}" target="_blank" rel="noopener">View as customer</a>
           ${outstanding > 0 ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
              onclick="document.getElementById('mp-${q.code}').style.display='block';this.style.display='none'">Record a payment</button>` : ''}
+          ${outstanding > 0 ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
+             onclick="document.getElementById('st-${q.code}').style.display='block';this.style.display='none'">Settle &mdash; no more owed</button>` : ''}
         </div>
+        ${outstanding > 0 ? `
+        <form id="st-${q.code}" method="POST" action="/quote/${q.code}/settle"
+              style="display:none;margin-top:10px;background:#fffbf2;border:1px solid #f0d9a8;border-radius:10px;padding:12px"
+              onsubmit="return confirm('Write off ${money(outstanding)} on ${q.code}? The job stays paid at ${money(q.paid_amount || 0)}.')">
+          <div style="font-weight:700;color:#b45309;margin-bottom:4px">Write off ${money(outstanding)}</div>
+          <p class="muted" style="margin:0 0 8px;font-size:12.5px">For when the price was revised after payment, or the
+            difference is being let go. Revenue stays at what was actually collected &mdash; this only stops the balance
+            being chased.</p>
+          <input name="note" maxlength="200" placeholder="Why — e.g. price revised after deposit"
+                 style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">
+          <button type="submit" class="btn" style="padding:7px 16px;font-size:13px">Settle it</button>
+        </form>` : ''}
         ${outstanding > 0 ? `
         <form id="mp-${q.code}" method="POST" action="/quote/${q.code}/mark-paid"
               style="display:none;margin-top:10px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px">
@@ -9593,7 +9676,7 @@ async function sendBalanceReminders() {
     const { rows } = await pool.query(
       `SELECT * FROM quotes
         WHERE COALESCE(paid_amount,0) > 0
-          AND COALESCE(paid_amount,0) < total
+          AND COALESCE(paid_amount,0) + COALESCE(written_off,0) < total
           AND balance_nudged_at IS NULL
           AND paid_at <= NOW() - ($1 || ' days')::interval
           AND status <> 'expired'
@@ -9605,7 +9688,10 @@ async function sendBalanceReminders() {
       await pool.query('UPDATE quotes SET balance_nudged_at=NOW() WHERE id=$1', [q.id]);
       if (await isUnsubscribed(q.email)) continue;
 
-      const due = round2(Math.max(0, Number(q.total) - Number(q.paid_amount || 0)));
+      /* Through balanceOf, so a settled quote can never be emailed a demand
+         for money the shop has already written off. */
+      const due = balanceOf(q);
+      if (due <= 0) continue;
       try {
         await sendEmail({
           to: q.email,
