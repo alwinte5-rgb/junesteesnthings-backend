@@ -194,3 +194,22 @@ test('last week grace is shown as live, not as expired', () => {
   assert.ok(admin.includes("'source' => 'recovery'"),
     'and both recovery codes are published with their source');
 });
+
+test('adding the rule columns is safe to run on every request', () => {
+  /* This broke in production and is the nastiest shape of bug: MySQL has no
+     ADD COLUMN IF NOT EXISTS, and `@` does not silence an error the database
+     driver raises. The first call added the columns and every call after it
+     failed on "duplicate column" and answered 500 — so the page worked exactly
+     ONCE, looked fine when built, and was broken by the time anyone opened it.
+
+     The columns must be asked for before they are added, not attempted and
+     suppressed. */
+  const auth = fs.readFileSync(path.join(ROOT,
+    'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/jt-auth.php'), 'utf8');
+  assert.match(auth, /SELECT COLUMN_NAME FROM information_schema\.COLUMNS/,
+    'existing columns must be read first');
+  assert.match(auth, /if \(isset\(\$have\[\$name\]\)\) continue;/,
+    'and only the missing ones added');
+  assert.doesNotMatch(auth, /@jt_db\(\)->rawQuery\("ALTER TABLE/,
+    'a suppressed ALTER is not idempotent — it still errors the request');
+});
