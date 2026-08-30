@@ -97,3 +97,31 @@ test('the studio orders route is left alone', () => {
   assert.doesNotMatch(orders.slice(0, 400), /gOrders|quoteCard/,
     'quotes must not be merged into the studio orders page');
 });
+
+/* ── The layout, which the grouping tests above did NOT catch ────────────── */
+
+test('a section heading spans every grid column', () => {
+  /* This shipped broken. `.quote-grid` is `display:grid` with 2-3 columns, so a
+     heading placed inside it is just another GRID ITEM: it takes one cell and
+     the cards flow around it. The board rendered "Open quotes" sitting beside a
+     card from a different section — worse than no headings at all, because it
+     reads as fact.
+     Every grouping test above passed the whole time, because they checked which
+     list a job lands in and never that the heading is drawn above that list. */
+  assert.match(src, /\.quote-grid-head\{grid-column:1\/-1/,
+    'the heading must span all columns, or it becomes a card-sized cell');
+  assert.match(board, /<div class="quote-grid-head">/,
+    'the group heading must use that class');
+  assert.doesNotMatch(board, /<div style="display:flex;align-items:baseline;gap:10px;margin:22px 0 10px">/,
+    'an inline-styled heading with no column span reintroduces the bug');
+});
+
+test('the headings live inside the same grid as the cards', () => {
+  /* They have to: a heading in its own container outside the grid would break
+     the masonry flow between sections and leave ragged gaps. Spanning the row
+     is what keeps one grid and still reads as sections. */
+  const render = src.slice(src.indexOf('const body =\n'), src.indexOf('const needCount'));
+  assert.match(render, /group\('Orders'/);
+  assert.match(src, /<div class="quote-grid">\$\{body\}<\/div>/,
+    'body — headings and cards together — is rendered inside one .quote-grid');
+});
