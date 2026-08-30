@@ -53,7 +53,8 @@ test('an amount code cannot take a total below zero', () => {
   const auth = fs.readFileSync(path.join(ROOT,
     'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/jt-auth.php'), 'utf8');
   assert.match(auth, /return min\(round\(\$d\['value'\], 2\), \$sub\);/);
-  assert.match(page, /never takes a total below zero/, 'and the page says so');
+  assert.match(page, /spent, not drawn down/,
+    'and the page explains it is spent, not drawn down — no leftover balance');
 });
 
 test('the studio bounds every value it stores', () => {
@@ -82,6 +83,74 @@ test('hand-issued codes are not capped like recovery codes', () => {
   assert.match(page, /it is a promise to one person/);
   const auth = fs.readFileSync(path.join(ROOT,
     'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/jt-auth.php'), 'utf8');
-  assert.match(auth, /return \$d && \$d\['source'\] === 'recovery';/,
-    'only recovery codes are capped');
+  assert.match(auth, /if \(\$d\['source'\] === 'recovery'\) return true;/,
+    'recovery codes are always capped');
+  assert.match(auth, /return !empty\(\$d\['once_per_customer'\]\);/,
+    'an admin code is capped only when the shop asked for it');
+});
+
+/* ── Use rules ───────────────────────────────────────────────────────────── */
+
+const auth = fs.readFileSync(path.join(ROOT,
+  'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/jt-auth.php'), 'utf8');
+
+test('a dollar code is spent, not drawn down', () => {
+  /* $30 off a $12 order takes $12 and the code is finished. Anything else is a
+     gift card — a balance the shop would have to track and honour, which nobody
+     agreed to when they wrote "$30 off". */
+  assert.match(admin, /if \(\$kind === 'amount' && \$maxUses === 0\) \$maxUses = 1;/,
+    'dollar codes default to a single use');
+  assert.match(admin, /\$maxUses = \(int\)/,
+    'and an explicit number is still respected — a $5 mailing-list code is real');
+});
+
+test('every rule is re-checked when the order is placed', () => {
+  /* A customer can enter a valid code and then change the cart until it no
+     longer qualifies, and a direct POST skips the checkout page entirely. */
+  const conn = fs.readFileSync(path.join(ROOT,
+    'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/php_connector.php'), 'utf8');
+  assert.match(conn, /jt_promo_block_reason\(\$jt_promo_code, \$order_total,/,
+    'the order path must re-check with the real total and email');
+  assert.match(auth, /if \(jt_promo_block_reason\(\$code, \$sub\) !== ''\) return 0\.0;/,
+    'and the discount itself refuses to compute when a rule fails');
+});
+
+test('one refusal function serves every surface', () => {
+  /* A code accepted at the entry field and refused at checkout is the worst
+     version of this — the customer has already decided to buy. */
+  assert.match(auth, /function jt_promo_block_reason\(/);
+  const promo = fs.readFileSync(path.join(ROOT,
+    'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/jt-promo.php'), 'utf8');
+  assert.match(promo, /jt_promo_block_reason\(\$match, \$sub, \$email\)/);
+});
+
+test('the customer is told which rule blocked them', () => {
+  /* "Not valid" tells someone $5 short to give up rather than add an item. */
+  assert.match(auth, /needs an order of at least/);
+  assert.match(auth, /has been fully claimed/);
+  const checkout = fs.readFileSync(path.join(ROOT,
+    'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/checkout.php'), 'utf8');
+  assert.match(checkout, /d\.reason \|\|/, 'the page shows the server reason');
+});
+
+/* ── Sending a code to a customer ────────────────────────────────────────── */
+
+test('the email states the code as stored, not as typed', () => {
+  /* Promising $30 off when the code is worth $10 is worse than not sending. */
+  const fn = src.slice(src.indexOf('async function sendDiscountEmail'));
+  assert.match(fn.slice(0, 700), /const \{ codes \} = await fetchPromoCodes\(\)/);
+  assert.match(fn.slice(0, 700), /if \(!c\) throw new Error/);
+});
+
+test('create-and-send does not re-post the form to another route', () => {
+  /* A 307 would replay the create body at the send route, where `send_to` is
+     read as `email` — the code would be created and silently never sent. */
+  assert.doesNotMatch(src, /res\.redirect\(307, '\/discounts\/send/);
+  assert.match(src, /await sendDiscountEmail\(String\(d\.code\)\.toUpperCase\(\), to, ''\)/);
+});
+
+test('a failed send does not report a failed create', () => {
+  /* The code exists. "Could not create" would have the shop make it twice. */
+  const post = src.slice(src.indexOf("app.post('/discounts'"), src.indexOf("app.post('/discounts/send'"));
+  assert.match(post, /was created, but the email did not send/);
 });
