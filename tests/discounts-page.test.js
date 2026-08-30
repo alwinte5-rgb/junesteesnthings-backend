@@ -407,3 +407,22 @@ test('every rule shows on the row', () => {
     assert.ok(page.includes(bit), `the row must show: ${bit}`);
   }
 });
+
+test('the order path re-checks BEFORE the discount is applied', () => {
+  /* This is what makes it safe to accept a locked code at the cart stage, where
+     there is no email yet. If the re-check ran after — or not at all — a
+     customer could enter someone else's code before filling in their address
+     and keep the discount.
+     The check clears both the local code AND the session, so jt_promo_discount
+     then reads an empty session and returns 0 regardless. */
+  const conn = fs.readFileSync(path.join(ROOT,
+    'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/php_connector.php'), 'utf8');
+  const check = conn.indexOf('jt_promo_block_reason($jt_promo_code');
+  const apply = conn.indexOf('$order_total - jt_promo_discount($order_total)');
+  assert.ok(check > -1 && apply > -1, 'both steps must exist');
+  assert.ok(check < apply, 'the re-check must come first');
+
+  const between = conn.slice(check, apply);
+  assert.match(between, /\$jt_promo_code = '';/, 'a failed check clears the code');
+  assert.match(between, /set_session\('jt_promo', ''\)/, 'and the session with it');
+});
