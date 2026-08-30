@@ -7887,10 +7887,20 @@ app.get('/q/:code/vcard', async (req, res) => {
  */
 const PROMO_ADMIN = () => `${STUDIO_BASE}/jt-promo-admin.php?key=${encodeURIComponent(process.env.JT_INTERNAL_KEY || '')}`;
 
+/* Cloudflare 403s Node's default user agent. This is documented one screen up
+   in getCatalog(), where it "silently killed every Lumise sync earlier in this
+   project" — and it bit again here: the page worked from a laptop and answered
+   403 from Railway, because Bot Fight Mode is harsher on datacenter IPs than on
+   a residential one. Every call to the studio needs this header. */
+const studioFetch = (url, init) => fetch(url, Object.assign({}, init, {
+  headers: Object.assign({ 'User-Agent': JT_SERVER_UA }, (init && init.headers) || {}),
+  signal: AbortSignal.timeout(8000),
+}));
+
 async function fetchPromoCodes() {
   if (!process.env.JT_INTERNAL_KEY) return { codes: [], error: 'JT_INTERNAL_KEY not set' };
   try {
-    const r = await fetch(PROMO_ADMIN(), { signal: AbortSignal.timeout(8000) });
+    const r = await studioFetch(PROMO_ADMIN());
     if (!r.ok) throw new Error(`studio answered ${r.status}`);
     const d = await r.json();
     return { codes: Array.isArray(d.codes) ? d.codes : [], error: null };
@@ -7913,20 +7923,40 @@ app.get('/discounts', requireAdmin, async (req, res) => {
     <tr style="border-top:1px solid #eef1f8${live(c) ? '' : ';opacity:.55'}">
       <td style="padding:9px 6px"><b style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace">${escEmail(c.code)}</b>
         ${c.note ? `<div class="muted" style="font-size:12.5px">${escEmail(c.note)}</div>` : ''}</td>
-      <td style="padding:9px 6px;white-space:nowrap"><b>${escEmail(worth(c))}</b></td>
+      <td style="padding:9px 6px;white-space:nowrap"><b>${escEmail(worth(c))}</b>${
+        (c.min_order > 0 || c.once_per_customer) ? `<div class="muted" style="font-size:11.5px">${
+          [c.min_order > 0 ? 'on ' + money(c.min_order) + '+' : '',
+           c.once_per_customer ? 'one per customer' : ''].filter(Boolean).join(' &middot; ')}</div>` : ''}</td>
       <td style="padding:9px 6px;white-space:nowrap;font-size:12.5px" class="muted">${
         c.expires ? 'until ' + fmtDate(c.expires) : 'no end date'}</td>
-      <td class="num" style="padding:9px 6px">${c.uses || 0}</td>
+      <td class="num" style="padding:9px 6px">${c.uses || 0}${
+        c.max_uses ? `<span class="muted"> / ${c.max_uses}</span>` : ''}</td>
       <td style="padding:9px 6px;white-space:nowrap">${live(c)
         ? '<span style="color:#166534;font-weight:600;font-size:12.5px">live</span>'
         : `<span class="muted" style="font-size:12.5px">${c.active ? 'expired' : 'switched off'}</span>`}</td>
-      <td style="padding:9px 6px;text-align:right">${live(c) ? `
+      <td style="padding:9px 6px;text-align:right;white-space:nowrap">${live(c) ? `
+        <button type="button" class="btn btn-ghost" style="padding:5px 12px;font-size:12.5px"
+          onclick="document.getElementById('snd-${escEmail(c.code)}').style.display='table-row'">Send</button>
         <form method="POST" action="/discounts/off" style="display:inline"
               onsubmit="return confirm('Switch off ${escEmail(c.code)}? Anyone who has it will stop being able to use it.')">
           <input type="hidden" name="code" value="${escEmail(c.code)}">
           <button type="submit" class="btn btn-ghost" style="padding:5px 12px;font-size:12.5px">Switch off</button>
         </form>` : ''}</td>
-    </tr>`;
+    </tr>
+    ${live(c) ? `
+    <tr id="snd-${escEmail(c.code)}" style="display:none;background:#f7f9fc">
+      <td colspan="6" style="padding:10px 6px">
+        <form method="POST" action="/discounts/send" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <input type="hidden" name="code" value="${escEmail(c.code)}">
+          <span class="muted" style="font-size:12.5px">Email <b>${escEmail(c.code)}</b> to</span>
+          <input name="email" type="email" required placeholder="them@example.com"
+                 style="flex:1 1 220px;padding:7px;font-size:13px">
+          <input name="message" maxlength="300" placeholder="A line of your own (optional)"
+                 style="flex:2 1 260px;padding:7px;font-size:13px">
+          <button type="submit" class="btn" style="padding:7px 16px;font-size:13px">Send it</button>
+        </form>
+      </td>
+    </tr>` : ''}`;
 
   const liveCount = codes.filter(live).length;
 
@@ -7967,16 +7997,39 @@ app.get('/discounts', requireAdmin, async (req, res) => {
             <input name="expires" type="date" style="width:100%;padding:8px;font-size:14px">
           </div>
         </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:10px">
+          <div style="flex:0 1 170px">
+            <label style="font-size:12px">Minimum order <span class="muted">(optional)</span></label>
+            <input name="min_order" type="number" step="0.01" min="0" placeholder="none"
+                   style="width:100%;padding:8px;font-size:14px">
+          </div>
+          <div style="flex:0 1 150px">
+            <label style="font-size:12px">Times it can be used</label>
+            <input name="max_uses" type="number" step="1" min="0" placeholder="1"
+                   style="width:100%;padding:8px;font-size:14px">
+          </div>
+          <label style="flex:1 1 200px;font-size:13px;display:flex;align-items:center;gap:6px;padding-bottom:8px">
+            <input type="checkbox" name="once_per_customer" value="1" style="width:auto">
+            One per customer
+          </label>
+        </div>
         <div style="margin-top:10px">
-          <label style="font-size:12px">What it is for <span class="muted">(only you see this)</span></label>
+          <label style="font-size:12px">Who it is for / what it is for <span class="muted">(only you see this)</span></label>
           <input name="note" maxlength="200" placeholder="e.g. Tyler W — free shirt, two-week delay on his order"
+                 style="width:100%;padding:8px;font-size:14px">
+        </div>
+        <div style="margin-top:10px">
+          <label style="font-size:12px">Send it to <span class="muted">(optional — emails the code straight away)</span></label>
+          <input name="send_to" type="email" placeholder="them@example.com"
                  style="width:100%;padding:8px;font-size:14px">
         </div>
         <button type="submit" class="btn" style="margin-top:12px;padding:9px 20px">Create code</button>
       </form>
       <p class="muted" style="margin:10px 0 0;font-size:12.5px">
-        A <b>$ off</b> code never takes a total below zero — a $30 code on a $12 order takes off $12.
-        Codes are case-insensitive. Reusing an existing code updates it.</p>
+        A <b>$ off</b> code is <b>spent, not drawn down</b>: $30 off a $12 order takes off $12 and the
+        code is finished — there is no remaining $18 to come back for. That is why dollar codes default
+        to one use; set a number if you mean otherwise.
+        Codes are case-insensitive, and reusing an existing code updates it.</p>
     </div>
 
     <div class="card" style="overflow-x:auto">
@@ -8006,9 +8059,7 @@ app.post('/discounts', requireAdmin, async (req, res) => {
   form.set('expires', String(b.expires || '').trim());
   form.set('note', String(b.note || '').trim());
   try {
-    const r = await fetch(PROMO_ADMIN(), {
-      method: 'POST', body: form, signal: AbortSignal.timeout(8000),
-    });
+    const r = await studioFetch(PROMO_ADMIN(), { method: 'POST', body: form });
     const d = await r.json().catch(() => ({}));
     /* The studio validates too — bounds on the value, the code shape, the date
        format. Its message is shown rather than a generic failure, because "a
@@ -8017,10 +8068,89 @@ app.post('/discounts', requireAdmin, async (req, res) => {
     if (!r.ok || d.error) {
       return res.redirect('/discounts?err=' + encodeURIComponent(d.error || `studio answered ${r.status}`));
     }
+    /* Made and sent in one action, because the two are one intention — the
+       code exists in order to reach somebody. */
+    const to = String(b.send_to || '').trim();
+    if (to && isValidEmail(to)) {
+      try {
+        await sendDiscountEmail(String(d.code).toUpperCase(), to, '');
+        return res.redirect('/discounts?msg=' +
+          encodeURIComponent(`${d.code} is live, and sent to ${to}.`));
+      } catch (e) {
+        /* The code EXISTS — only the email failed. Saying "could not create"
+           would send the shop to make it a second time. */
+        console.error('discount send-on-create failed:', e.message);
+        return res.redirect('/discounts?err=' + encodeURIComponent(
+          `${d.code} was created, but the email did not send: ${e.message}`));
+      }
+    }
     res.redirect('/discounts?msg=' + encodeURIComponent(`${d.code} is live.`));
   } catch (e) {
     console.error('promo save failed:', e.message);
     res.redirect('/discounts?err=' + encodeURIComponent('Could not reach the studio: ' + e.message));
+  }
+});
+
+/* Email a code to one customer.
+ *
+ * Sent through the shop's own sender rather than a marketing list: this is a
+ * transactional message to a named person about a promise already made, and
+ * routing it through the bulk path would risk it being suppressed by an
+ * unsubscribe that has nothing to do with it. */
+async function sendDiscountEmail(code, email, extra) {
+  /* Read the code back rather than trusting the form, so the email states the
+     real value and the real rules. A message promising $30 off when the code is
+     worth $10 is worse than not sending one at all. */
+  const { codes } = await fetchPromoCodes();
+  const c = codes.find((x) => String(x.code).toUpperCase() === code);
+  if (!c) throw new Error(`${code} was not found`);
+
+  const worth = c.kind === 'amount' ? `${money(c.value)} off` : `${c.value}% off`;
+  const rules = [
+    c.min_order > 0 ? `on orders over ${money(c.min_order)}` : '',
+    c.expires ? `until ${fmtDate(c.expires)}` : '',
+  ].filter(Boolean).join(', ');
+
+    await sendEmail({
+      to: email,
+      replyTo: SHOP_EMAIL,
+      subject: `A ${worth} code from ${SHOP_NAME}`,
+      html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
+        <h2 style="color:#1848B8;margin:0 0 10px">Here is your ${escEmail(worth)} code</h2>
+        ${extra ? `<p style="color:#374151;font-size:15px">${escEmail(extra)}</p>` : ''}
+        <p style="margin:18px 0"><span style="display:inline-block;border:2px dashed #1848B8;
+          border-radius:10px;padding:14px 26px;font-size:26px;font-weight:800;
+          letter-spacing:2px;color:#0B1F4B;font-family:ui-monospace,Menlo,monospace">${escEmail(c.code)}</span></p>
+        <p style="color:#374151">Enter it at checkout${rules ? ' — ' + escEmail(rules) : ''}.</p>
+        <p style="margin-top:18px"><a href="${STUDIO_BASE}"
+           style="background:#1848B8;color:#fff;padding:12px 24px;border-radius:100px;
+           text-decoration:none;font-weight:700">Start designing &rarr;</a></p>
+        <p style="color:#6b7280;font-size:13px;margin-top:18px">${escEmail(SHOP_SIGNER)} &middot;
+          ${escEmail(SHOP_PHONE)}</p>
+      </div>`,
+    });
+    return c;
+}
+
+app.post('/discounts/send', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const code = String(b.code || '').trim().toUpperCase();
+  const email = String(b.email || '').trim();
+  const extra = String(b.message || '').trim().slice(0, 300);
+  if (!/^[A-Z0-9]{3,32}$/.test(code)) {
+    return res.redirect('/discounts?err=' + encodeURIComponent('That code looks wrong.'));
+  }
+  if (!isValidEmail(email)) {
+    return res.redirect('/discounts?err=' + encodeURIComponent('That email address looks wrong.'));
+  }
+  try {
+    await sendDiscountEmail(code, email, extra);
+    res.redirect('/discounts?msg=' + encodeURIComponent(`${code} sent to ${email}.`));
+  } catch (e) {
+    console.error('discount send failed:', e.message);
+    /* Said plainly. A silent failure here means the shop believes a customer
+       has their code when they do not. */
+    res.redirect('/discounts?err=' + encodeURIComponent('Could not send that email: ' + e.message));
   }
 });
 
@@ -8029,9 +8159,7 @@ app.post('/discounts/off', requireAdmin, async (req, res) => {
   form.set('code', String((req.body || {}).code || '').trim().toUpperCase());
   form.set('delete', '1');
   try {
-    const r = await fetch(PROMO_ADMIN(), {
-      method: 'POST', body: form, signal: AbortSignal.timeout(8000),
-    });
+    const r = await studioFetch(PROMO_ADMIN(), { method: 'POST', body: form });
     const d = await r.json().catch(() => ({}));
     if (!r.ok || d.error) {
       return res.redirect('/discounts?err=' + encodeURIComponent(d.error || `studio answered ${r.status}`));
