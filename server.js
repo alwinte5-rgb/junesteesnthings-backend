@@ -7903,15 +7903,23 @@ async function fetchPromoCodes() {
     const r = await studioFetch(PROMO_ADMIN());
     if (!r.ok) throw new Error(`studio answered ${r.status}`);
     const d = await r.json();
-    return { codes: Array.isArray(d.codes) ? d.codes : [], error: null };
+    return {
+      codes: Array.isArray(d.codes) ? d.codes : [],
+      /* The weekly recovery pool and any standing env codes. Live at checkout
+         exactly like the table rows, so leaving them off would answer "what
+         discounts are out there" with half the truth. */
+      system: Array.isArray(d.system) ? d.system : [],
+      poolSize: Number(d.pool_size) || 0,
+      error: null,
+    };
   } catch (e) {
     console.error('promo codes fetch failed:', e.message);
-    return { codes: [], error: e.message };
+    return { codes: [], system: [], poolSize: 0, error: e.message };
   }
 }
 
 app.get('/discounts', requireAdmin, async (req, res) => {
-  const { codes, error } = await fetchPromoCodes();
+  const { codes, system, poolSize, error } = await fetchPromoCodes();
   const msg = String(req.query.msg || '');
   const err = String(req.query.err || '');
 
@@ -7959,6 +7967,25 @@ app.get('/discounts', requireAdmin, async (req, res) => {
     </tr>` : ''}`;
 
   const liveCount = codes.filter(live).length;
+
+  /* The automatic codes, rendered as a second table. Separate rather than mixed
+     in, because the two answer different questions: one is "what have I given
+     out", the other is "what else is currently accepted". Mixing them would put
+     a Switch off button next to a code that has no row to switch off. */
+  const sysRow = (c) => `
+    <tr style="border-top:1px solid #eef1f8">
+      <td style="padding:9px 6px"><b style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace">${escEmail(c.code)}</b>
+        <div class="muted" style="font-size:12.5px">${escEmail(c.note || '')}</div></td>
+      <td style="padding:9px 6px;white-space:nowrap"><b>${c.value}% off</b>
+        ${c.once_per_customer ? '<div class="muted" style="font-size:11.5px">one per customer</div>' : ''}</td>
+      <td style="padding:9px 6px;white-space:nowrap;font-size:12.5px" class="muted">${
+        c.rotates ? 'rotates ' + fmtDate(c.rotates) : 'until you remove it'}</td>
+      <td style="padding:9px 6px;white-space:nowrap">
+        <span style="color:#166534;font-weight:600;font-size:12.5px">live</span></td>
+      <td style="padding:9px 6px;text-align:right">
+        <span class="muted" style="font-size:12px">${
+          c.source === 'recovery' ? 'automatic' : 'JT_PROMO_STANDING'}</span></td>
+    </tr>`;
 
   res.send(adminPage('Discounts', `<h1>Discounts</h1>
     <div class="sub">${liveCount} live &middot; ${codes.length} total &middot;
@@ -8044,10 +8071,33 @@ app.get('/discounts', requireAdmin, async (req, res) => {
       </table>
     </div>
 
-    <p class="muted" style="margin-top:14px;font-size:12.5px">
-      These are separate from the weekly abandoned-cart codes, which rotate on their own and are
-      capped at one per customer. A code you make here is not capped — it is a promise to one person,
-      and it keeps working for them.</p>`, 'discounts'));
+    <div style="display:flex;align-items:baseline;gap:10px;margin:22px 0 10px">
+      <h2 style="font-size:16px;margin:0;color:#0B1F4B">Also accepted right now</h2>
+      <span class="muted" style="font-size:12.5px">${system.length} automatic${
+        poolSize ? ` &middot; a pool of ${poolSize}, one live each week` : ''}</span>
+    </div>
+
+    <div class="card" style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;min-width:560px">
+        <thead><tr style="text-align:left">
+          <th style="padding:6px">Code</th><th style="padding:6px">Worth</th>
+          <th style="padding:6px">Changes</th><th style="padding:6px">State</th>
+          <th style="padding:6px;text-align:right">Where it lives</th>
+        </tr></thead>
+        <tbody>${system.map(sysRow).join('') || `<tr><td colspan="5" class="muted" style="padding:12px 6px">${
+          error ? 'Could not load these.' : 'None.'}</td></tr>`}</tbody>
+      </table>
+      <p class="muted" style="margin:12px 0 0;font-size:12.5px">
+        These are <b>not editable here</b>. The abandoned-cart codes rotate <b>weekly</b> — the pool
+        holds ${poolSize || 'several'}, so each one comes round about every ${poolSize || 'few'} weeks,
+        and last week's stays valid as a grace period for anything already emailed. They are capped at
+        one per customer, because everyone who abandons a cart gets the same code.
+        Change them in <code>JT_PROMO_CODES</code>; standing codes live in
+        <code>JT_PROMO_STANDING</code>.</p>
+      <p class="muted" style="margin:8px 0 0;font-size:12.5px">
+        A code you make in the table above is different: it is a promise to one person, so it is not
+        capped unless you tick the box.</p>
+    </div>`, 'discounts'));
 });
 
 app.post('/discounts', requireAdmin, async (req, res) => {
