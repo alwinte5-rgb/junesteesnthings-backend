@@ -69,7 +69,25 @@ test('switching a code off never deletes it', () => {
   /* A used code is the record of what a customer was given. Deleting it loses
      the answer to "why was this order $30 light". */
   assert.match(admin, /SET active=0 WHERE code=/);
-  assert.doesNotMatch(admin, /DELETE FROM/);
+});
+
+test('a code that has been used can never be removed', () => {
+  /* Remove exists so a mistyped code does not sit on the page forever. It is
+     refused the moment the code has a use against it — and the DELETE itself
+     carries `AND uses = 0`, so even a bypassed check cannot destroy a record. */
+  assert.match(admin, /\(int\) \$r\[0\]\['uses'\] > 0/,
+    'the use count is checked before removal');
+  assert.match(admin, /so it is kept as a record\. Switch it off instead\./,
+    'and the refusal says what to do instead');
+  assert.match(admin, /DELETE FROM `" \. jt_px\(\) \. "jt_promo_codes`\s*\n\s*WHERE code='" \. jt_esc\(\$code\) \. "' AND uses = 0/,
+    'the DELETE is itself guarded, not merely preceded by a check');
+});
+
+test('a switched-off code can be turned back on', () => {
+  /* Otherwise a code switched off by mistake has to be retyped, which is how
+     its rules get lost. */
+  assert.match(admin, /SET active=1 WHERE code=/);
+  assert.match(src, /app\.post\('\/discounts\/on', requireAdmin/);
 });
 
 test('expired and switched-off codes are told apart', () => {
@@ -263,4 +281,35 @@ test('assigned but unsent is visible as such', () => {
      only one of them needs an action. */
   assert.match(page, /not sent yet/);
   assert.match(page, /sent \$\{fmtDate\(c\.sent_at\)\}/);
+});
+
+test('editing reuses the create form', () => {
+  /* A separate edit form drifts from the create form within a change or two,
+     and then a rule can be set in one place and not the other. */
+  assert.match(page, /function jtEditCode\(json\)/);
+  assert.match(page, /id="jt-code-form"/);
+  assert.match(page, /f\.min_order\.value|f\.max_uses\.value/,
+    'the rules must load back in, or editing silently clears them');
+});
+
+test('the code itself cannot be renamed by an edit', () => {
+  /* The code is the primary key. Changing it would create a SECOND code rather
+     than rename this one — and leave the original live in somebody's inbox. */
+  assert.match(page, /f\.code\.readOnly = true/);
+});
+
+test('the use count is shown as a count, with its limit', () => {
+  assert.match(page, /c\.uses \|\| 0/);
+  assert.match(page, /of \$\{c\.max_uses\}/);
+  assert.match(page, /fully claimed/,
+    'a code at its limit must say so — it looks live otherwise');
+});
+
+test('every code action reports its failure the same way', () => {
+  /* One helper, so a new action cannot forget to surface an error and leave the
+     shop believing something happened that did not. */
+  assert.match(src, /async function promoAction\(req, res, flag, said\)/);
+  for (const a of ['delete', 'reactivate', 'remove']) {
+    assert.ok(src.includes(`promoAction(req, res, '${a}'`), `${a} must go through it`);
+  }
 });

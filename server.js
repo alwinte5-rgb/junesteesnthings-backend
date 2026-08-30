@@ -7956,19 +7956,39 @@ app.get('/discounts', requireAdmin, async (req, res) => {
            c.once_per_customer ? 'one per customer' : ''].filter(Boolean).join(' &middot; ')}</div>` : ''}</td>
       <td style="padding:9px 6px;white-space:nowrap;font-size:12.5px" class="muted">${
         c.expires ? 'until ' + fmtDate(c.expires) : 'no end date'}</td>
-      <td class="num" style="padding:9px 6px">${c.uses || 0}${
-        c.max_uses ? `<span class="muted"> / ${c.max_uses}</span>` : ''}</td>
+      <td class="num" style="padding:9px 6px;white-space:nowrap">
+        <b style="font-size:15px;color:${c.uses ? '#166534' : '#8a93a5'}">${c.uses || 0}</b>${
+        c.max_uses ? `<span class="muted"> of ${c.max_uses}</span>` : ''}
+        ${c.max_uses && c.uses >= c.max_uses
+          ? '<div class="muted" style="font-size:11.5px;color:#b45309">fully claimed</div>' : ''}</td>
       <td style="padding:9px 6px;white-space:nowrap">${live(c)
         ? '<span style="color:#166534;font-weight:600;font-size:12.5px">live</span>'
         : `<span class="muted" style="font-size:12.5px">${c.active ? 'expired' : 'switched off'}</span>`}</td>
-      <td style="padding:9px 6px;text-align:right;white-space:nowrap">${live(c) ? `
-        <button type="button" class="btn btn-ghost" style="padding:5px 12px;font-size:12.5px"
+      <td style="padding:9px 6px;text-align:right;white-space:nowrap">
+        <button type="button" class="btn btn-ghost" style="padding:5px 10px;font-size:12.5px"
+          onclick="jtEditCode(${JSON.stringify(JSON.stringify({
+            code: c.code, kind: c.kind, value: c.value, expires: c.expires || '',
+            note: c.note || '', min_order: c.min_order || '', max_uses: c.max_uses || '',
+            once_per_customer: !!c.once_per_customer, assigned_to: c.assigned_to || '',
+          })).replace(/"/g, '&quot;')})">Edit</button>
+        ${live(c) ? `
+        <button type="button" class="btn btn-ghost" style="padding:5px 10px;font-size:12.5px"
           onclick="document.getElementById('snd-${escEmail(c.code)}').style.display='table-row'">Send</button>
         <form method="POST" action="/discounts/off" style="display:inline"
               onsubmit="return confirm('Switch off ${escEmail(c.code)}? Anyone who has it will stop being able to use it.')">
           <input type="hidden" name="code" value="${escEmail(c.code)}">
-          <button type="submit" class="btn btn-ghost" style="padding:5px 12px;font-size:12.5px">Switch off</button>
-        </form>` : ''}</td>
+          <button type="submit" class="btn btn-ghost" style="padding:5px 10px;font-size:12.5px">Switch off</button>
+        </form>` : `
+        <form method="POST" action="/discounts/on" style="display:inline">
+          <input type="hidden" name="code" value="${escEmail(c.code)}">
+          <button type="submit" class="btn btn-ghost" style="padding:5px 10px;font-size:12.5px">Turn back on</button>
+        </form>
+        ${!c.uses ? `
+        <form method="POST" action="/discounts/remove" style="display:inline"
+              onsubmit="return confirm('Remove ${escEmail(c.code)} completely? It has never been used, so nothing is lost.')">
+          <input type="hidden" name="code" value="${escEmail(c.code)}">
+          <button type="submit" class="btn btn-ghost" style="padding:5px 10px;font-size:12.5px;color:#b91c1c">Remove</button>
+        </form>` : ''}`}</td>
     </tr>
     ${live(c) ? `
     <tr id="snd-${escEmail(c.code)}" style="display:none;background:#f7f9fc">
@@ -8020,8 +8040,8 @@ app.get('/discounts', requireAdmin, async (req, res) => {
       <span class="muted">(${escEmail(error)})</span></div>` : ''}
 
     <div class="card" style="margin-bottom:16px">
-      <b style="color:#0B1F4B">New code</b>
-      <form method="POST" action="/discounts" style="margin-top:10px">
+      <b style="color:#0B1F4B" id="jt-code-title">New code</b>
+      <form method="POST" action="/discounts" style="margin-top:10px" id="jt-code-form">
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
           <div style="flex:1 1 150px">
             <label style="font-size:12px">Code</label>
@@ -8072,8 +8092,39 @@ app.get('/discounts', requireAdmin, async (req, res) => {
           <input name="send_to" type="email" list="jt-customers" placeholder="start typing a name or email"
                  style="width:100%;padding:8px;font-size:14px">
         </div>
-        <button type="submit" class="btn" style="margin-top:12px;padding:9px 20px">Create code</button>
+        <button type="submit" class="btn" style="margin-top:12px;padding:9px 20px" id="jt-code-save">Create code</button>
+        <button type="button" class="btn btn-ghost" style="margin-top:12px;padding:9px 16px;display:none"
+                id="jt-code-cancel" onclick="jtEditCancel()">Cancel</button>
       </form>
+      <script>
+        /* Editing loads the row back into this same form, so there is one
+           definition of what a code's fields are. A separate edit form would
+           drift from the create form within a change or two. */
+        function jtEditCode(json){
+          var c = JSON.parse(json), f = document.getElementById('jt-code-form');
+          f.code.value = c.code; f.kind.value = c.kind; f.value.value = c.value;
+          f.expires.value = c.expires ? String(c.expires).slice(0,10) : '';
+          f.note.value = c.note || ''; f.min_order.value = c.min_order || '';
+          f.max_uses.value = c.max_uses || '';
+          f.once_per_customer.checked = !!c.once_per_customer;
+          f.send_to.value = c.assigned_to || '';
+          /* The code itself is the primary key — changing it would create a
+             second code rather than rename this one, and leave the original
+             live in somebody's inbox. */
+          f.code.readOnly = true; f.code.style.background = '#f2f4f8';
+          document.getElementById('jt-code-title').textContent = 'Editing ' + c.code;
+          document.getElementById('jt-code-save').textContent = 'Save changes';
+          document.getElementById('jt-code-cancel').style.display = '';
+          f.scrollIntoView({ block:'start', behavior:'smooth' });
+        }
+        function jtEditCancel(){
+          var f = document.getElementById('jt-code-form');
+          f.reset(); f.code.readOnly = false; f.code.style.background = '';
+          document.getElementById('jt-code-title').textContent = 'New code';
+          document.getElementById('jt-code-save').textContent = 'Create code';
+          document.getElementById('jt-code-cancel').style.display = 'none';
+        }
+      </script>
       <p class="muted" style="margin:10px 0 0;font-size:12.5px">
         A <b>$ off</b> code is <b>spent, not drawn down</b>: $30 off a $12 order takes off $12 and the
         code is finished — there is no remaining $18 to come back for. That is why dollar codes default
@@ -8239,22 +8290,33 @@ app.post('/discounts/send', requireAdmin, async (req, res) => {
   }
 });
 
-app.post('/discounts/off', requireAdmin, async (req, res) => {
+/* Switch off, turn back on, remove — one shape, so a new action cannot forget
+   to report its failure. `flag` is what the studio endpoint keys on. */
+async function promoAction(req, res, flag, said) {
   const form = new URLSearchParams();
   form.set('code', String((req.body || {}).code || '').trim().toUpperCase());
-  form.set('delete', '1');
+  form.set(flag, '1');
   try {
     const r = await studioFetch(PROMO_ADMIN(), { method: 'POST', body: form });
     const d = await r.json().catch(() => ({}));
     if (!r.ok || d.error) {
       return res.redirect('/discounts?err=' + encodeURIComponent(d.error || `studio answered ${r.status}`));
     }
-    res.redirect('/discounts?msg=' + encodeURIComponent(`${d.deactivated} switched off.`));
+    res.redirect('/discounts?msg=' + encodeURIComponent(said(d)));
   } catch (e) {
-    console.error('promo deactivate failed:', e.message);
+    console.error(`promo ${flag} failed:`, e.message);
     res.redirect('/discounts?err=' + encodeURIComponent('Could not reach the studio: ' + e.message));
   }
-});
+}
+
+app.post('/discounts/off', requireAdmin, (req, res) =>
+  promoAction(req, res, 'delete', (d) => `${d.deactivated} switched off.`));
+
+app.post('/discounts/on', requireAdmin, (req, res) =>
+  promoAction(req, res, 'reactivate', (d) => `${d.reactivated} is live again.`));
+
+app.post('/discounts/remove', requireAdmin, (req, res) =>
+  promoAction(req, res, 'remove', (d) => `${d.removed} removed.`));
 
 /* Everyone the shop knows, from both halves of it: quotes live here, studio
  * orders live on design.jtees.net, and a person who has done both is one
