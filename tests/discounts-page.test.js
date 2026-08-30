@@ -154,3 +154,43 @@ test('a failed send does not report a failed create', () => {
   const post = src.slice(src.indexOf("app.post('/discounts'"), src.indexOf("app.post('/discounts/send'"));
   assert.match(post, /was created, but the email did not send/);
 });
+
+/* ── Every code that is actually accepted ────────────────────────────────── */
+
+test('the page shows the automatic codes, not only the table rows', () => {
+  /* The weekly recovery codes and any standing env codes are live at checkout
+     exactly like the rows. A page showing only the table answers "what
+     discounts are out there" with half the truth, and the shop could issue a
+     code that collides with one already in circulation. */
+  assert.match(admin, /'system' => \$system/, 'the endpoint must publish them');
+  assert.match(page, /Also accepted right now/);
+  assert.match(page, /system\.map\(sysRow\)/);
+});
+
+test('automatic codes carry no Switch off button', () => {
+  /* They have no row to switch off — they come from environment variables, so a
+     button here would need a redeploy to take effect and the page would appear
+     to have lied. */
+  const sysRow = page.slice(page.indexOf('const sysRow'), page.indexOf('res.send(adminPage'));
+  assert.doesNotMatch(sysRow, /\/discounts\/off/);
+  assert.match(page, /not editable here/);
+  assert.match(page, /JT_PROMO_CODES/, 'and it says where they actually live');
+});
+
+test('the page says weekly, because that is what the code does', () => {
+  /* floor(time()/604800) is a 7-day period. Calling it monthly on the page
+     would have the shop expect a code to last four times as long as it does. */
+  assert.match(page, /rotate <b>weekly<\/b>/);
+  const auth = fs.readFileSync(path.join(ROOT,
+    'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/jt-auth.php'), 'utf8');
+  assert.match(auth, /floor\(time\(\) \/ 604800\)/, '604800 seconds is one week');
+});
+
+test('last week grace is shown as live, not as expired', () => {
+  /* It IS accepted. Showing it as expired would have the shop tell a customer
+     their code is dead when checkout would take it. */
+  assert.ok(admin.includes('still accepted, grace period'),
+    "last week's code must be labelled as still accepted");
+  assert.ok(admin.includes("'source' => 'recovery'"),
+    'and both recovery codes are published with their source');
+});
