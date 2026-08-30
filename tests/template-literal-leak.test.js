@@ -81,3 +81,46 @@ test('the line element still carries the index the checkbox reads', () => {
     'it breaks the checkbox name silently: dataset.n becomes undefined and ' +
     'every add-on posts as "addon_codeundefined".\n  ' + l.text);
 });
+
+/* The generic scan this file's header rejects is unnecessary for one whole class
+ * of the same bug: anything that ends the template literal early makes server.js
+ * stop parsing. A stray backtick in a comment inside the quote-page template did
+ * exactly that while this feature was being written — the file failed to parse
+ * at a line 900 further down, which reads as an unrelated error.
+ *
+ * `node --check` is the tokenizer the header says would be needed. Running it
+ * here means a broken template literal fails the suite rather than the deploy.
+ */
+test('server.js parses', () => {
+  const { spawnSync } = require('node:child_process');
+  const r = spawnSync(process.execPath, ['--check', SERVER], { encoding: 'utf8' });
+  assert.strictEqual(r.status, 0,
+    'server.js does not parse. A backtick or ${...} inside the client-side ' +
+    'script of a server-side template literal will end it early, and the error ' +
+    'is reported far from the real cause:\n' + (r.stderr || ''));
+});
+
+/* ── The screens row ─────────────────────────────────────────────────────── */
+
+test('the totals SPLIT the subtotal for screens rather than adding to it', () => {
+  const src = fs.readFileSync(SERVER, 'utf8');
+
+  /* Screens are already inside every line total, so the screens row has to come
+     OUT of the subtotal. A row that also added would overstate the job by its
+     own value — $140 on a 4-screen job — and it would be the customer-facing
+     number that was wrong. */
+  assert.match(src, /getElementById\('goods'\)\.textContent = m2\(Math\.round\(\(sub - scrTotal\)/,
+    'the garments-and-printing row must be sub MINUS screens');
+
+  assert.match(src, /id="goods"/, 'the split needs a goods row');
+  assert.match(src, /id="scr"/, 'the split needs a screens row');
+  assert.match(src, /class="scrsplit"/, 'both split rows must be hideable together');
+});
+
+test('the screens count is read, never divided back out', () => {
+  const src = fs.readFileSync(SERVER, 'utf8');
+  assert.match(src, /scrCount \+= \(a\.count \|\| 0\)/,
+    'the count comes from the addon line, which carries it precisely so no ' +
+    'surface has to divide a total by a rate — that division silently lies ' +
+    'the moment the rate changes between quoting and rendering');
+});
