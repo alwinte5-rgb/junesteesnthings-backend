@@ -7194,7 +7194,8 @@ app.get('/books', requireAdmin, async (req, res) => {
         </div>
         <div class="muted" style="font-size:11px;margin-top:10px">
           Held right now spans every period, not just ${year} — it is what should be in the bank today.
-          <a href="/tax.csv" style="color:#1848B8">Download the payment-level detail</a>.
+          <a href="/tax.csv" style="color:#1848B8">Download the payment-level detail</a>,
+          or <a href="/exports" style="color:#1848B8">keep a month's records</a>.
         </div>
       </div>`, 'money'));
   } catch (err) {
@@ -7289,6 +7290,184 @@ app.post('/expenses/roll', requireAdmin, async (req, res) => {
 
 /* Sales tax detail as CSV, for the ST-1 filing or the bookkeeper. One row per
    payment, because that is the level a state will ask you to substantiate. */
+/* ── Records you can keep ─────────────────────────────────────────────────
+ *
+ * Everything here lives in one Postgres database on Railway. That is a fine
+ * place to run from and a poor place to KEEP records: it is one account, one
+ * card on file, one accidental delete away from being the only copy. Anything
+ * that matters for tax, for a dispute, or for a customer asking "what did I pay
+ * you in March" needs to exist somewhere the shop controls.
+ *
+ * So: plain CSV, one month at a time, downloadable by hand. No dependency, no
+ * account, no format that needs this app to read it back — a spreadsheet in a
+ * folder outlives whatever happens to the hosting.
+ */
+const csvEsc = (v) => {
+  const t = String(v == null ? '' : v);
+  return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+};
+
+/** Send rows as a CSV download. `Cache-Control: no-store` because these carry
+ *  customer names, phone numbers and money. */
+function sendCsv(res, filename, head, rows) {
+  res.set('Content-Type', 'text/csv; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="${filename}"`);
+  res.set('Cache-Control', 'no-store');
+  res.send([head.join(','), ...rows.map((r) => r.map(csvEsc).join(','))].join('\n'));
+}
+
+/** A month as [start, end), or the whole of time when none is given. Parsed
+ *  strictly: a bad value returns everything rather than a silently empty file
+ *  that reads as "no business that month". */
+function monthRange(v) {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(v || ''));
+  if (!m) return null;
+  const from = `${m[1]}-${m[2]}-01`;
+  const y = Number(m[1]), mo = Number(m[2]);
+  const nextY = mo === 12 ? y + 1 : y, nextM = mo === 12 ? 1 : mo + 1;
+  return { from, to: `${nextY}-${String(nextM).padStart(2, '0')}-01`, label: `${m[1]}-${m[2]}` };
+}
+
+/* Quotes and orders — one row per job. The line items are flattened into a
+   readable summary rather than raw JSON, because the point is a record a person
+   can open, not a backup this app could restore. */
+/* One page listing what can be kept, month by month. The months are DERIVED
+   from the data rather than a date picker: a picker invites a month with nothing
+   in it, and an empty CSV reads as "no business" rather than "wrong month". */
+app.get('/exports', requireAdmin, async (_req, res) => {
+  try {
+    const { rows: months } = await pool.query(
+      `SELECT to_char(m, 'YYYY-MM') AS ym, to_char(m, 'Mon YYYY') AS label,
+              SUM(quotes) AS quotes, SUM(payments) AS payments, SUM(collected) AS collected
+         FROM (
+           SELECT date_trunc('month', created_at) AS m, count(*) AS quotes,
+                  0 AS payments, 0::numeric AS collected FROM quotes GROUP BY 1
+           UNION ALL
+           SELECT date_trunc('month', created_at), 0, count(*), SUM(amount)
+             FROM quote_payments GROUP BY 1
+         ) x GROUP BY m ORDER BY m DESC`);
+
+    const rows = months.map((m) => `
+      <tr>
+        <td style="padding:8px 4px"><b>${escEmail(m.label)}</b></td>
+        <td class="num" style="padding:8px 4px">${m.quotes}</td>
+        <td class="num" style="padding:8px 4px">${m.payments}</td>
+        <td class="num" style="padding:8px 4px">${money(m.collected)}</td>
+        <td style="padding:8px 4px;text-align:right;white-space:nowrap">
+          <a href="/exports/quotes.csv?month=${m.ym}">quotes</a> &middot;
+          <a href="/exports/payments.csv?month=${m.ym}">payments</a> &middot;
+          <a href="/exports/expenses.csv?month=${m.ym}">expenses</a></td>
+      </tr>`).join('');
+
+    res.send(adminPage('Records', `<h1>Records</h1>
+      <div class="sub">Download a month, keep it somewhere that is not this app</div>
+
+      <div class="card" style="margin-bottom:14px">
+        <b style="color:#0B1F4B">Why bother downloading</b>
+        <p class="muted" style="margin:6px 0 0">Everything here lives in one database on Railway.
+          That is fine to run from and poor to keep records in — one account, one card on file, one
+          bad afternoon away from being the only copy. These are plain CSV: they open in Excel,
+          Numbers or Sheets, they import into accounting software, and they do not need this app
+          to be readable in five years.</p>
+        <p class="muted" style="margin:8px 0 0"><b>A habit worth having:</b> on the first of the month,
+          download the previous month's three files into a dated folder. Two minutes, and it is the
+          difference between an inconvenience and a catastrophe.</p>
+      </div>
+
+      <div class="card">
+        <table style="width:100%;border-collapse:collapse">
+          <thead><tr style="text-align:left;border-bottom:1px solid #e3e8f2">
+            <th style="padding:6px 4px">Month</th>
+            <th class="num" style="padding:6px 4px">Quotes</th>
+            <th class="num" style="padding:6px 4px">Payments</th>
+            <th class="num" style="padding:6px 4px">Collected</th>
+            <th style="padding:6px 4px;text-align:right">Download</th>
+          </tr></thead>
+          <tbody>${rows || '<tr><td colspan="5" class="muted" style="padding:10px 4px">Nothing recorded yet.</td></tr>'}</tbody>
+        </table>
+        <p class="muted" style="margin-top:12px;font-size:13px">Everything, all months:
+          <a href="/exports/quotes.csv">quotes</a> &middot;
+          <a href="/exports/payments.csv">payments</a> &middot;
+          <a href="/exports/expenses.csv">expenses</a> &middot;
+          <a href="/tax.csv">sales tax detail</a></p>
+      </div>`, 'money'));
+  } catch (err) {
+    console.error('exports page failed:', err.message);
+    res.status(500).send('Could not load records.');
+  }
+});
+
+app.get('/exports/quotes.csv', requireAdmin, async (req, res) => {
+  const r = monthRange(req.query.month);
+  try {
+    const { rows } = await pool.query(
+      r ? `SELECT * FROM quotes WHERE created_at >= $1 AND created_at < $2 ORDER BY created_at`
+        : `SELECT * FROM quotes ORDER BY created_at`,
+      r ? [r.from, r.to] : []);
+    const head = ['code','created','customer','email','phone','status','items',
+                  'subtotal','discount','tax','total','paid','written_off','balance',
+                  'accepted_at','paid_at','delivered_at','cancelled_at','cancel_reason','needed_by'];
+    const body = rows.map((q) => {
+      const t = quoteTotals(q);
+      const items = (q.items || [])
+        .map((i) => `${i.qty} x ${i.description} @ ${money(i.unit_price)}`).join(' | ');
+      const d = (v) => (v ? new Date(v).toISOString().slice(0, 10) : '');
+      return [q.code, d(q.created_at), q.name, q.email, q.phone, q.status, items,
+              t.subtotal, t.discount, t.tax, t.total,
+              Number(q.paid_amount || 0), Number(q.written_off || 0), balanceOf(q, t.total),
+              d(q.accepted_at), d(q.paid_at), d(q.delivered_at), d(q.cancelled_at),
+              q.cancel_reason || '', d(q.needed_by)];
+    });
+    sendCsv(res, `jtees-quotes-${r ? r.label : 'all'}.csv`, head, body);
+  } catch (err) {
+    console.error('quotes csv failed:', err.message);
+    res.status(500).send('Could not build that export.');
+  }
+});
+
+/* Money actually received, from the ledger — the figure that belongs in a
+   revenue line. A quote total is what was ASKED for. */
+app.get('/exports/payments.csv', requireAdmin, async (req, res) => {
+  const r = monthRange(req.query.month);
+  try {
+    const { rows } = await pool.query(
+      `SELECT p.created_at, p.quote_code, q.name, q.email, p.amount, p.fee, p.method,
+              p.kind, p.source, p.note, q.total AS job_total, q.tax AS job_tax
+         FROM quote_payments p LEFT JOIN quotes q ON q.code = p.quote_code
+        ${r ? 'WHERE p.created_at >= $1 AND p.created_at < $2' : ''}
+        ORDER BY p.created_at`, r ? [r.from, r.to] : []);
+    const head = ['date','quote','customer','email','amount','card_fee','net',
+                  'method','kind','source','note','job_total','job_tax'];
+    const body = rows.map((p) => [
+      new Date(p.created_at).toISOString().slice(0, 10), p.quote_code, p.name, p.email,
+      p.amount, p.fee, round2(Number(p.amount || 0) - Number(p.fee || 0)),
+      p.method, p.kind, p.source, p.note, p.job_total, p.job_tax,
+    ]);
+    sendCsv(res, `jtees-payments-${r ? r.label : 'all'}.csv`, head, body);
+  } catch (err) {
+    console.error('payments csv failed:', err.message);
+    res.status(500).send('Could not build that export.');
+  }
+});
+
+app.get('/exports/expenses.csv', requireAdmin, async (req, res) => {
+  const r = monthRange(req.query.month);
+  try {
+    const { rows } = await pool.query(
+      `SELECT * FROM expenses ${r ? 'WHERE spent_on >= $1 AND spent_on < $2' : ''}
+        ORDER BY spent_on`, r ? [r.from, r.to] : []);
+    const head = ['date','category','vendor','amount','recurring','note'];
+    const body = rows.map((e) => [
+      e.spent_on ? new Date(e.spent_on).toISOString().slice(0, 10) : '',
+      e.category, e.vendor, e.amount, e.recurs ? 'yes' : '', e.note,
+    ]);
+    sendCsv(res, `jtees-expenses-${r ? r.label : 'all'}.csv`, head, body);
+  } catch (err) {
+    console.error('expenses csv failed:', err.message);
+    res.status(500).send('Could not build that export.');
+  }
+});
+
 app.get('/tax.csv', requireAdmin, async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -7916,7 +8095,28 @@ function studioOrdersSection(feed, { heading = true } = {}) {
 
 async function renderBoard(VIEW, req, res) {
   try {
-    const { rows: allRows } = await pool.query('SELECT * FROM quotes ORDER BY created_at DESC LIMIT 200');
+    /* The board showed the 200 most recent quotes and nothing else, so once the
+       shop passes 200 an older job would drop off it silently — including one
+       still owed money. Invisible is worse than old: nobody chases what they
+       cannot see.
+
+       So the cap applies only to work that is FINISHED. Anything live — money
+       outstanding, not delivered, not cancelled, or a change waiting on a reply
+       — is always loaded, however old it is. The board can grow past 200 rows
+       only by carrying jobs that genuinely still need something. */
+    const { rows: allRows } = await pool.query(
+      `SELECT * FROM quotes
+        WHERE cancelled_at IS NULL AND delivered_at IS NULL
+           OR COALESCE(paid_amount,0) + COALESCE(written_off,0) < total
+           OR requested_items IS NOT NULL
+        UNION
+        SELECT * FROM (
+          SELECT * FROM quotes
+           WHERE (cancelled_at IS NOT NULL OR delivered_at IS NOT NULL)
+             AND COALESCE(paid_amount,0) + COALESCE(written_off,0) >= total
+             AND requested_items IS NULL
+           ORDER BY created_at DESC LIMIT 200) AS finished
+        ORDER BY created_at DESC`);
     /* Fetched alongside the quotes so both halves of the shop appear on one
        page. Never awaited in a way that can fail the board — fetchStudioOrders
        resolves to a stale list plus an error rather than throwing. */
