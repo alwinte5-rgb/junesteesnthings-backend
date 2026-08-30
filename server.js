@@ -4198,6 +4198,18 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
      form already knows how to render just works. It is never persisted here;
      saving is still the deliberate act. */
   let lead = null;
+  /* Straight from an unfinished cart: there is no enquiry row, only an address,
+     so the form opens with the customer filled in and nothing else. Without
+     this the "Quote them" button would look like it carried something across
+     and quietly carry nothing. */
+  const cartEmail = String(req.query.email || '').trim().slice(0, 200);
+  if (!existing && cartEmail && isValidEmail(cartEmail)) {
+    existing = {
+      name: '', email: cartEmail, phone: '', notes: '', items: [],
+      code: null, discount_kind: 'amt', discount_value: 0, tax: 0,
+    };
+  }
+
   const leadId = parseInt(req.query.lead, 10);
   if (!existing && Number.isFinite(leadId)) {
     const { rows: ls } = await pool.query('SELECT * FROM submissions WHERE id=$1', [leadId]);
@@ -8095,23 +8107,29 @@ app.post('/quote/:code/stage', requireAdmin, async (req, res) => {
    shows a visible note, never an empty lane — an empty lane reads as "no
    orders", which is a lie the old setup already told for weeks. */
 const STUDIO_BASE = (process.env.JT_DESIGNER_URL || 'https://design.jtees.net').replace(/\/+$/, '');
-let _studioCache = { at: 0, orders: [], error: null };
+let _studioCache = { at: 0, orders: [], carts: [], error: null };
 
 async function fetchStudioOrders() {
   if (Date.now() - _studioCache.at < 60000) return _studioCache;
   const key = process.env.JT_INTERNAL_KEY;
-  if (!key) return (_studioCache = { at: Date.now(), orders: [], error: 'JT_INTERNAL_KEY not set' });
+  if (!key) return (_studioCache = { at: Date.now(), orders: [], carts: [], error: 'JT_INTERNAL_KEY not set' });
   try {
     const r = await fetch(`${STUDIO_BASE}/orders_feed.php?key=${encodeURIComponent(key)}`,
       { signal: AbortSignal.timeout(8000) });
     if (!r.ok) throw new Error(`feed answered ${r.status}`);
     const d = await r.json();
-    return (_studioCache = { at: Date.now(), orders: Array.isArray(d.orders) ? d.orders : [], error: null });
+    return (_studioCache = { at: Date.now(),
+      orders: Array.isArray(d.orders) ? d.orders : [],
+      /* Older deploys of the feed do not send this. Defaulting to [] rather
+         than undefined keeps every caller from needing to know that. */
+      carts: Array.isArray(d.carts) ? d.carts : [],
+      error: null });
   } catch (e) {
     console.error('studio orders feed failed:', e.message);
     /* Keep whatever was last known good — a stale order list beats no list, as
        long as the page says which it is. */
-    return (_studioCache = { at: Date.now(), orders: _studioCache.orders, error: e.message });
+    return (_studioCache = { at: Date.now(), orders: _studioCache.orders,
+      carts: _studioCache.carts || [], error: e.message });
   }
 }
 
@@ -8665,6 +8683,45 @@ async function renderBoard(VIEW, req, res) {
        needs doing; finished work on it is just noise you learn to scroll past. */
     const gDone = rows.filter(isDelivered);
 
+    /* A cart somebody started and did not finish.
+       The five recovery emails already go out and already arrive; what was
+       missing is anywhere to SEE these, so a half-finished cart worth real
+       money lived only as mail in an inbox. `emails_sent` is on the card
+       because "they have not heard from us" and "they have had five and said
+       nothing" are opposite instructions to the shop. */
+    const cartCard = (c) => {
+      const mins = Math.round((Date.now() - new Date(c.updated)) / 60000);
+      const age = mins < 60 ? mins + ' min ago'
+        : mins < 1440 ? Math.round(mins / 60) + 'h ago'
+        : Math.round(mins / 1440) + ' days ago';
+      const sent = Number(c.emails_sent) || 0;
+      return `
+      <div class="card" style="border-left:4px solid #1848B8">
+        <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+          <b style="color:#0B1F4B">${escEmail(c.email || 'no email')}</b>
+          <span class="muted" style="font-size:12.5px">${escEmail(age)}</span>
+        </div>
+        <div style="margin-top:6px;font-size:13.5px">
+          ${Number(c.items) > 0
+            ? `<b>${c.items}</b> item${Number(c.items) === 1 ? '' : 's'} &middot; <b>${money(c.total)}</b>`
+            : `<span class="muted">Left an email but never added anything</span>`}
+        </div>
+        <div class="muted" style="margin-top:6px;font-size:12.5px">
+          ${sent === 0 ? 'No recovery email sent yet'
+            : `${sent} of 5 recovery emails sent${c.last_sent ? ' — last ' + fmtDate(c.last_sent) : ''}`}
+          ${sent >= 5 ? ' &middot; <b style="color:#b45309">sequence finished, no reply</b>' : ''}
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+          <a class="btn" style="padding:8px 16px;font-size:13px"
+             href="/quote/new?email=${encodeURIComponent(c.email || '')}">Quote them</a>
+          ${c.email ? `<a class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
+             href="mailto:${escEmail(c.email)}?subject=${encodeURIComponent('Your June’s Tees cart')}">Email</a>` : ''}
+          ${c.restore_url ? `<a class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
+             href="${escEmail(c.restore_url)}" target="_blank" rel="noopener">See their cart</a>` : ''}
+        </div>
+      </div>`;
+    };
+
     /* A website enquiry, as a card you can act on. The two actions are the two
        real outcomes: quote it, or let it go on the record. Anything else leaves
        it sitting there forever, which is how 21 of these went cold. */
@@ -8725,9 +8782,16 @@ async function renderBoard(VIEW, req, res) {
         : `<div class="card"><p class="muted" style="margin:0">${escEmail(o.empty || 'Nothing here.')}</p></div>`}</div>`;
     };
 
+    /* Newest first, and the ones carrying real value first among those. A cart
+       with nothing in it is an email address, not a job. */
+    const carts = (studio.carts || []).slice().sort((a, b) =>
+      (Number(b.items) > 0) - (Number(a.items) > 0) || new Date(b.updated) - new Date(a.updated));
+
     const body =
       group('New enquiries', 'from the website — no quote raised yet', leads, leadCard,
             { accent: '#b45309' }) +
+      group('Unfinished carts', 'started a design, never checked out', carts, cartCard,
+            { accent: '#1848B8' }) +
       group('Orders', 'deposit in — work in hand', gOrders) +
       group('Open quotes', 'sent, nothing paid yet', gQuotes) +
       group('Cancelled', 'not going ahead', gCancelled);
@@ -8770,6 +8834,8 @@ async function renderBoard(VIEW, req, res) {
       `<h1>${VIEW === 'work' ? 'Production' : 'Quotes'}</h1>
       <div class="sub">${leads.length ? `<b style="color:#b45309">${leads.length} new enquir${
         leads.length === 1 ? 'y' : 'ies'}</b> &middot; ` : ''}${
+        carts.length ? `<b style="color:#1848B8">${carts.length} unfinished cart${
+        carts.length === 1 ? '' : 's'}</b> &middot; ` : ''}${
         gQuotes.length} open quote${gQuotes.length === 1 ? '' : 's'} &middot; ${
         gOrders.length} order${gOrders.length === 1 ? '' : 's'} in hand${
         atRiskCount ? ` &middot; <b style="color:#b91c1c">${atRiskCount} behind schedule</b>` : ''}${
