@@ -206,12 +206,31 @@ Blanks sell at **cost × 2**, applied to the cheapest core size (S/M/L/XL) by
 
 Volume breaks come off that list price, in `BLANK_TIERS` in `server.js`:
 
-| from | off |
-| --- | --- |
-| 35 | 2% |
-| 500 | 3% |
-| 1,000 | 5% |
-| 3,000 | 8% |
+| from | off | garment multiple |
+| --- | --- | --- |
+| 35 | 3% | 1.94× |
+| 100 | 5% | 1.90× |
+| 250 | 7% | 1.86× |
+| 500 | 8% | 1.84× |
+| 1,000 | 9% | 1.82× |
+| 3,000 | 10% | 1.80× |
+
+**Deepened 2026-08-30, and the 100 and 250 steps added.** The curve previously ran
+35 → 2% and then nothing until 500, so a 100-piece and a 250-piece order — the two
+commonest sizes in the shop — were discounted the same as a 35-piece one. A flat
+stretch across the busiest part of the range is a worse fault than a shallow rate:
+it is the orders you quote most often that it fails to move on.
+
+10% at the top is a ceiling, not a round number. It puts the garment at **1.80×
+cost**, which is the floor enforced by `quote-blank-pricing.test.js`. The curve
+and the guard are now the same number by design, so going deeper means moving
+both, on purpose. That floor was tightened to 1.8× on 2026-08-29, away from the
+1.60× an earlier curve reached.
+
+**Keep the size of this lever in view.** The garment is about 40% of a decorated
+job, so the whole move from 2% to 10% is worth about **17¢ a piece at 100** —
+$13.83 → $13.66. If a quote needs to look visibly cheaper, the print table and the
+$35 screen fee are where that lives, not here.
 
 **These are FLOORS** (`qty >= min`), the opposite convention to the decoration
 tables above, whose keys are band CEILINGS. Read one as the other and every band
