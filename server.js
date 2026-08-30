@@ -4453,10 +4453,12 @@ ${quotePricingSource()}
         document.querySelectorAll('.line').forEach(function(L, ix){
           var r = REQUESTED[ix];
           if (!r) return;
-          if (r.size_mix) {
+          if (Array.isArray(r.sizes)) {
+            var want = {};
+            r.sizes.forEach(function(e){ if (e && e.size) want[e.size] = e.n || 0; });
             L.querySelectorAll('.sz').forEach(function(el){
-              if (Object.prototype.hasOwnProperty.call(r.size_mix, el.dataset.size)) {
-                el.value = r.size_mix[el.dataset.size] || 0;
+              if (Object.prototype.hasOwnProperty.call(want, el.dataset.size)) {
+                el.value = want[el.dataset.size];
               }
             });
           } else {
@@ -5394,6 +5396,42 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
 });
 
 /* What the customer opens. Public, no login. Reads like an invoice. */
+/* Sizes a line can be edited across, in the order a person expects to read them.
+ *
+ * TWO reasons this cannot come from `size_mix`:
+ *
+ *   1. **Postgres JSONB does not preserve key order.** It normalises objects by
+ *      key length then bytewise, so a mix saved as {S,M,L,XL} is read back as
+ *      {L,M,S,XL}. The customer page showed sizes shuffled for exactly this
+ *      reason. Anything that must stay ordered through JSONB has to be an ARRAY.
+ *   2. `size_mix` only ever held sizes with a count above zero, so a customer
+ *      could not add a size the original order did not have — no way to ask for
+ *      two 2XLs when the quote was all mediums.
+ *
+ * So the list comes from the catalogue product, which carries every size it is
+ * sold in, in catalogue order. The fallback matters: the catalogue is fetched
+ * over the network and can be empty, and a product can be retired out from under
+ * an old quote. Then we show what the line itself carries, sorted into a sane
+ * order rather than JSONB's.
+ */
+const SIZE_ORDER = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', '6XL'];
+
+function orderedSizeKeys(item, catalog) {
+  const prods = (catalog && catalog.products) || [];
+  const prod = prods.find((p) => String(p.id) === String(item && item.product_id));
+  if (prod && Array.isArray(prod.sizes) && prod.sizes.length) {
+    return prod.sizes.map((s) => s.size);
+  }
+  const own = Object.keys((item && item.size_mix) || {});
+  return own.slice().sort((a, b) => {
+    const ia = SIZE_ORDER.indexOf(a), ib = SIZE_ORDER.indexOf(b);
+    if (ia === -1 && ib === -1) return own.indexOf(a) - own.indexOf(b);
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  });
+}
+
 app.get('/q/:code', async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   const friendly = (msg) => res.status(404).send(quotePage('Quote not found', `
@@ -5413,6 +5451,11 @@ app.get('/q/:code', async (req, res) => {
     }
 
     const t = quoteTotals(q);
+    /* Only for the size list. It is cached and it can come back empty, so every
+       use of it falls back to what the line already carries — a public page must
+       not depend on a network fetch to render. */
+    let catalog = { products: [], methods: [] };
+    try { catalog = await getCatalog(); } catch { /* fall back to the line */ }
     const expired = q.valid_until && new Date(q.valid_until) < new Date(new Date().toDateString());
     const accepted = !!q.accepted_at;
     const paid = Number(q.paid_amount || 0) > 0;
@@ -5442,13 +5485,18 @@ app.get('/q/:code', async (req, res) => {
        as if it had. */
     const canEditQty = !accepted && !paid;
 
-    const sizeInputs = (i, ix) => Object.entries(i.size_mix)
-      .map(([sz, n]) => `<label style="display:inline-flex;flex-direction:column;align-items:center;gap:2px;font-size:11px;color:#6b7280">
+    /* Every size the garment comes in, in catalogue order — not just the ones
+       already ordered. A customer whose quote is all mediums has to be able to
+       ask for two 2XLs, and a size they did not order starts at 0. */
+    const sizeInputs = (i, ix) => orderedSizeKeys(i, catalog)
+      .map((sz) => {
+        const n = parseInt((i.size_mix || {})[sz], 10) || 0;
+        return `<label style="display:inline-flex;flex-direction:column;align-items:center;gap:2px;font-size:11px;color:${n ? '#6b7280' : '#9aa3b2'}">
           ${escEmail(sz)}
           <input form="changeform" type="number" min="0" max="10000" step="1"
-                 name="sz_${ix}_${escEmail(sz)}" value="${parseInt(n, 10) || 0}"
-                 style="width:52px;padding:4px;font-size:13px;text-align:center"></label>`)
-      .join(' ');
+                 name="sz_${ix}_${escEmail(sz)}" value="${n}"
+                 style="width:52px;padding:4px;font-size:13px;text-align:center"></label>`;
+      }).join(' ');
 
     const lines = (q.items || []).map((i, ix) => {
       const imgs = (i.images || []).filter(u => /^https:\/\//.test(u));
@@ -5467,7 +5515,7 @@ app.get('/q/:code', async (req, res) => {
           ${gallery}
         </td>
         <td class="num">${!canEditQty ? i.qty
-          : i.size_mix && Object.keys(i.size_mix).length
+          : orderedSizeKeys(i, catalog).length
             ? `<div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end">${sizeInputs(i, ix)}</div>
                <div class="muted" style="font-size:11px;margin-top:4px">now ${i.qty}</div>`
             : `<input form="changeform" type="number" min="0" max="10000" step="1"
@@ -6258,13 +6306,17 @@ function describeRequestedEdits(items, requested) {
   (requested || []).forEach((r, ix) => {
     const it = (items || [])[ix];
     if (!it || !r) return;
+    /* The requested sizes are an ordered array; the quote's own mix is an object
+       whose key order JSONB has already scrambled. So the ARRAY drives both the
+       comparison and the order it is reported in, and a size the original order
+       did not contain reads as 0 -> n rather than being skipped. */
     const sizes = [];
-    if (r.size_mix && it.size_mix) {
-      for (const sz of Object.keys(it.size_mix)) {
-        const was = parseInt(it.size_mix[sz], 10) || 0;
-        const now = parseInt(r.size_mix[sz], 10) || 0;
-        if (was !== now) sizes.push({ size: sz, was, now });
-      }
+    for (const entry of (Array.isArray(r.sizes) ? r.sizes : [])) {
+      const sz = entry && entry.size;
+      if (!sz) continue;
+      const was = parseInt((it.size_mix || {})[sz], 10) || 0;
+      const now = parseInt(entry.n, 10) || 0;
+      if (was !== now) sizes.push({ size: sz, was, now });
     }
     const wasQty = parseInt(it.qty, 10) || 0;
     const nowQty = parseInt(r.qty, 10) || 0;
@@ -6302,28 +6354,41 @@ app.post('/q/:code/changes', orderRateLimit, async (req, res) => {
     const items = Array.isArray(q.items) ? q.items : [];
     const editable = !q.accepted_at;
     let requested = null;
+    /* The same list the customer's page rendered from, derived the same way, so
+       the names posted and the names read are the same set by construction. */
+    let catalog = { products: [], methods: [] };
+    try { catalog = await getCatalog(); } catch { /* fall back to the line */ }
 
     if (editable) {
       const draft = items.map((it, ix) => {
-        /* Sizes are read from the LINE, never from what was posted, so a
-           fabricated size key cannot enter the quote — the form is public and
-           the only thing standing in front of it is a six-character code. */
-        if (it.size_mix && Object.keys(it.size_mix).length) {
-          const mix = {}; let total = 0;
-          for (const sz of Object.keys(it.size_mix)) {
+        /* Size keys are derived SERVER-side — from the catalogue product, or
+           failing that from the line — and each one is then looked up in the
+           body by name. The body is never enumerated: this endpoint is public
+           and the only thing in front of it is a six-character code, so a
+           request naming sz_0_FREE must not be able to invent a size on a
+           priced quote.
+
+           Stored as an ARRAY, not an object. Postgres JSONB normalises object
+           key order, so a mix saved {S,M,L,XL} reads back {L,M,S,XL} — which is
+           what shuffled the sizes on the customer's page. An array keeps the
+           order it was written in. */
+        const keys = orderedSizeKeys(it, catalog);
+        if (keys.length) {
+          const sizes = []; let total = 0;
+          for (const sz of keys) {
             const raw = one(b['sz_' + ix + '_' + sz]);
             const n = raw === undefined || String(raw).trim() === ''
-              ? (parseInt(it.size_mix[sz], 10) || 0)
+              ? (parseInt((it.size_mix || {})[sz], 10) || 0)
               : Math.max(0, Math.min(10000, parseInt(raw, 10) || 0));
-            mix[sz] = n; total += n;
+            sizes.push({ size: sz, n }); total += n;
           }
-          return { qty: total, size_mix: mix };
+          return { qty: total, sizes };
         }
         const raw = one(b['qty' + '_' + ix]);
         const n = raw === undefined || String(raw).trim() === ''
           ? (parseInt(it.qty, 10) || 0)
           : Math.max(0, Math.min(10000, parseInt(raw, 10) || 0));
-        return { qty: n, size_mix: null };
+        return { qty: n, sizes: null };
       });
 
       /* Store only if something moved. An untouched form posts every current
