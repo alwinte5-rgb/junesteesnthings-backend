@@ -3394,6 +3394,35 @@ function quotePricingSource() {
         var blank = blankBase ? blankPriceAt(blankBase, qty, o.blankTiers || []) : 0;
         var decoration = o.method ? Number(tierAt(o.method.positions, qty, o.stage)) : 0;
 
+        /* A decoration minimum, enforced. Tier keys are CEILINGS, so a quantity
+           below the smallest band prices at that band — a 12-piece screen job
+           quoted at the 50-99 rate while the shop pays a 50-piece contract
+           minimum plus screens. The form already WARNED about this; warning does
+           not stop the quote being saved and the money being taken, so the charge
+           itself is corrected here.
+
+           Billed as the minimum order it actually triggers, scaled per piece so
+           the line arithmetic (unit x qty) still holds. The admin keeps the last
+           word through the unit override — this sets the honest default, it does
+           not remove a human's ability to decide otherwise.
+
+           Lives in priceLine, not beside it, because this is the source both the
+           browser and the save path execute: enforcement written anywhere else
+           would apply on one surface and not the other, which is the exact class
+           of bug quotePricingSource() exists to prevent.
+
+           min_order_qty comes from the method row itself, which is also where the
+           designer reads it (core/cart.php printing_min_qty). One definition in
+           the database, read by every engine — not a constant restated in each
+           language, which is how the two drift. It is also why this function has
+           no free variables: the parity test lifts this source and executes it
+           alone, so anything it cannot see would break that guarantee. */
+        var decoMin = (o.method && o.method.min_order_qty) ? (parseInt(o.method.min_order_qty, 10) || 0) : 0;
+        var belowDecoMin = decoMin > 0 && qty > 0 && qty < decoMin;
+        if (belowDecoMin && decoration > 0) {
+          decoration = Math.round(decoration * (decoMin / qty) * 100) / 100;
+        }
+
         /* Extended sizes carry an upcharge that applies only to the pieces in
            those sizes — 24 shirts of which 4 are 2XL is not 24 mediums. */
         var sizeUpcharge = 0;
