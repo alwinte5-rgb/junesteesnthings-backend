@@ -354,3 +354,56 @@ test('not-sent-yet is called out rather than muted', () => {
      quiet metadata beside it. */
   assert.match(page, /color:#b45309">&middot; not sent yet/);
 });
+
+/* ── The controls a real discount system has ─────────────────────────────── */
+
+test('a code issued to one customer can be locked to them', () => {
+  /* assigned_to was RECORDED and never ENFORCED: a $30 single-use code meant
+     for Tyler worked for anyone he forwarded it to — and once spent, the
+     customer it was for never got it. */
+  assert.match(auth, /!empty\(\$d\['locked_to_customer'\]\) && !empty\(\$d\['assigned_to'\]\)/);
+  assert.match(auth, /That code was issued to a different customer\./);
+  assert.match(page, /name="locked_to_customer"/);
+});
+
+test('the lock is not applied before we know who is ordering', () => {
+  /* The cart does not always have an email yet. Refusing then would block the
+     person the code belongs to, at the field where they enter it. */
+  assert.match(auth, /&& \$email !== ''\s*\n?\s*&& strtolower\(trim\(\$email\)\) !== \$d\['assigned_to'\]/);
+});
+
+test('a percentage discount can be capped', () => {
+  /* "20% off" on a $2,000 order is $400 the shop never meant to give. */
+  assert.match(auth, /if \(!empty\(\$d\['max_discount'\]\) && \$off > \(float\) \$d\['max_discount'\]\)/);
+  assert.match(page, /name="max_discount"/);
+});
+
+test('a cap is not stored on a fixed-amount code', () => {
+  /* On a $30 code the value IS the cap; a second number would imply a rule that
+     does nothing and invite someone to set it. */
+  assert.match(admin, /if \(\$kind === 'amount'\) \$maxDisc = 0;/);
+});
+
+test('a code can be scheduled to start later', () => {
+  assert.match(auth, /does not start until/);
+  assert.match(page, /name="starts_at"/);
+  assert.match(admin, /That code would expire before it starts\./,
+    'and a start after the expiry is refused rather than stored');
+});
+
+test('a minimum item count is enforced with the real cart', () => {
+  /* Minimum SPEND and minimum ITEMS are different offers — "any 3 shirts" is
+     not "$60 of shirts". */
+  assert.match(auth, /needs at least ' \. \(int\) \$d\['min_items'\] \. ' items/);
+  const conn = fs.readFileSync(path.join(ROOT,
+    'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/php_connector.php'), 'utf8');
+  assert.match(conn, /count\(\(array\) \$cart_data\['items'\]\)/,
+    'the order path must pass the real item count');
+});
+
+test('every rule shows on the row', () => {
+  /* A rule that exists only in the form is one the shop cannot audit later. */
+  for (const bit of ['max ', 'on ', '+ items', 'one per customer', 'that customer only', 'from ']) {
+    assert.ok(page.includes(bit), `the row must show: ${bit}`);
+  }
+});

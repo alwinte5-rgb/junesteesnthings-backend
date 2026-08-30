@@ -7975,9 +7975,17 @@ app.get('/discounts', requireAdmin, async (req, res) => {
                     : ' <span style="color:#b45309">&middot; not sent yet</span>'}</div>` : ''}
         ${c.note ? `<div class="muted" style="font-size:12.5px">${escEmail(c.note)}</div>` : ''}</td>
       <td style="padding:9px 6px;white-space:nowrap"><b>${escEmail(worth(c))}</b>${
-        (c.min_order > 0 || c.once_per_customer) ? `<div class="muted" style="font-size:11.5px">${
-          [c.min_order > 0 ? 'on ' + money(c.min_order) + '+' : '',
-           c.once_per_customer ? 'one per customer' : ''].filter(Boolean).join(' &middot; ')}</div>` : ''}</td>
+        (() => {
+          const r = [
+            c.max_discount > 0 ? 'max ' + money(c.max_discount) : '',
+            c.min_order > 0 ? 'on ' + money(c.min_order) + '+' : '',
+            c.min_items > 0 ? c.min_items + '+ items' : '',
+            c.once_per_customer ? 'one per customer' : '',
+            c.locked_to_customer ? 'that customer only' : '',
+            c.starts_at ? 'from ' + fmtDate(c.starts_at) : '',
+          ].filter(Boolean);
+          return r.length ? `<div class="muted" style="font-size:11.5px">${r.join(' &middot; ')}</div>` : '';
+        })()}</td>
       <td style="padding:9px 6px;white-space:nowrap;font-size:12.5px" class="muted">${
         c.expires ? 'until ' + fmtDate(c.expires) : 'no end date'}</td>
       <td class="num" style="padding:9px 6px;white-space:nowrap">
@@ -7994,6 +8002,8 @@ app.get('/discounts', requireAdmin, async (req, res) => {
             code: c.code, kind: c.kind, value: c.value, expires: c.expires || '',
             note: c.note || '', min_order: c.min_order || '', max_uses: c.max_uses || '',
             once_per_customer: !!c.once_per_customer, assigned_to: c.assigned_to || '',
+            starts_at: c.starts_at || '', min_items: c.min_items || '',
+            max_discount: c.max_discount || '', locked_to_customer: !!c.locked_to_customer,
           })).replace(/"/g, '&quot;')})">Edit</button>
         ${live(c) ? `
         <button type="button" class="btn btn-ghost" style="padding:5px 10px;font-size:12.5px"
@@ -8088,9 +8098,26 @@ app.get('/discounts', requireAdmin, async (req, res) => {
             <input name="value" required type="number" step="0.01" min="0.01" placeholder="30"
                    style="width:100%;padding:8px;font-size:14px">
           </div>
+          <div style="flex:0 1 140px">
+            <label style="font-size:12px">Cap the discount <span class="muted">(% only)</span></label>
+            <input name="max_discount" type="number" step="0.01" min="0" placeholder="no cap"
+                   style="width:100%;padding:8px;font-size:14px">
+          </div>
+        </div>
+
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:10px">
+          <div style="flex:0 1 160px">
+            <label style="font-size:12px">Starts <span class="muted">(optional)</span></label>
+            <input name="starts_at" type="date" style="width:100%;padding:8px;font-size:14px">
+          </div>
           <div style="flex:0 1 160px">
             <label style="font-size:12px">Expires <span class="muted">(optional)</span></label>
             <input name="expires" type="date" style="width:100%;padding:8px;font-size:14px">
+          </div>
+          <div style="flex:0 1 150px">
+            <label style="font-size:12px">Minimum items <span class="muted">(optional)</span></label>
+            <input name="min_items" type="number" step="1" min="0" placeholder="any"
+                   style="width:100%;padding:8px;font-size:14px">
           </div>
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:10px">
@@ -8104,9 +8131,13 @@ app.get('/discounts', requireAdmin, async (req, res) => {
             <input name="max_uses" type="number" step="1" min="0" placeholder="1"
                    style="width:100%;padding:8px;font-size:14px">
           </div>
-          <label style="flex:1 1 200px;font-size:13px;display:flex;align-items:center;gap:6px;padding-bottom:8px">
+          <label style="flex:0 1 190px;font-size:13px;display:flex;align-items:center;gap:6px;padding-bottom:8px">
             <input type="checkbox" name="once_per_customer" value="1" style="width:auto">
             One per customer
+          </label>
+          <label style="flex:1 1 250px;font-size:13px;display:flex;align-items:center;gap:6px;padding-bottom:8px">
+            <input type="checkbox" name="locked_to_customer" value="1" style="width:auto">
+            Only the person it is sent to can use it
           </label>
         </div>
         <div style="margin-top:10px">
@@ -8134,6 +8165,10 @@ app.get('/discounts', requireAdmin, async (req, res) => {
           f.note.value = c.note || ''; f.min_order.value = c.min_order || '';
           f.max_uses.value = c.max_uses || '';
           f.once_per_customer.checked = !!c.once_per_customer;
+          f.locked_to_customer.checked = !!c.locked_to_customer;
+          f.starts_at.value = c.starts_at ? String(c.starts_at).slice(0,10) : '';
+          f.min_items.value = c.min_items || '';
+          f.max_discount.value = c.max_discount || '';
           f.send_to.value = c.assigned_to || '';
           /* The code itself is the primary key — changing it would create a
              second code rather than rename this one, and leave the original
@@ -8214,6 +8249,10 @@ app.post('/discounts', requireAdmin, async (req, res) => {
   /* Assigning and sending are the same field: the code exists to reach one
      person, so naming them is what makes it theirs. */
   form.set('assigned_to', String(b.send_to || '').trim().toLowerCase());
+  form.set('starts_at', String(b.starts_at || '').trim());
+  form.set('min_items', String(b.min_items || ''));
+  form.set('max_discount', String(b.max_discount || ''));
+  if (b.locked_to_customer) form.set('locked_to_customer', '1');
   try {
     const r = await studioFetch(PROMO_ADMIN(), { method: 'POST', body: form });
     const d = await r.json().catch(() => ({}));
