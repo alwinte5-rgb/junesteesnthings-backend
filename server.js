@@ -77,6 +77,13 @@ async function initDB() {
       created_at          TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  /* An enquiry that has been dealt with, and why — quoted, or deliberately let
+     go. `status` could not carry this: it defaults to 'new' and only ever moves
+     when a Clover payment lands, so every website enquiry has read 'new' since
+     the day it arrived, whether it was answered or never seen. */
+  for (const col of ['dismissed_at TIMESTAMPTZ', 'dismiss_reason TEXT']) {
+    await pool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  }
   // Quotes texted from June's phone. The row is the source of truth — Brevo is
   // mirrored best-effort, so a CRM outage can never lose a quote.
   await pool.query(`
@@ -138,6 +145,10 @@ async function initDB() {
     'settled_at TIMESTAMPTZ',
     'settled_note TEXT',
     'change_request TEXT',            // what the customer asked to change
+    /* Which website enquiry this quote answers, when it came from one. It is
+       what lets the board tell an unanswered lead from one already quoted,
+       instead of guessing by matching names. */
+    'from_submission_id INT',
     /* What the customer asked for, structurally: an array aligned by index with
        `items`, each entry {qty, size_mix} for a line they edited. Kept SEPARATE
        from `items` on purpose — `items` is the quote as priced, and a customer
@@ -4178,7 +4189,35 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
     }
     existing = rows[0];
   }
+
+  /* Starting a quote FROM a website enquiry. The contact details and what they
+     asked for are carried across, so answering a lead is one click rather than
+     a retype — the friction that left 21 of them unanswered.
+
+     Shaped like a saved quote rather than a special case, so every field the
+     form already knows how to render just works. It is never persisted here;
+     saving is still the deliberate act. */
+  let lead = null;
+  const leadId = parseInt(req.query.lead, 10);
+  if (!existing && Number.isFinite(leadId)) {
+    const { rows: ls } = await pool.query('SELECT * FROM submissions WHERE id=$1', [leadId]);
+    if (ls.length) {
+      lead = ls[0];
+      existing = {
+        name: lead.name || '', email: lead.email || '', phone: lead.phone || '',
+        notes: '', items: [], from_submission_id: lead.id,
+        /* No code: this is a NEW quote. A code here would make the form post to
+           the edit route and try to update a quote that does not exist. */
+        code: null, discount_kind: 'amt', discount_value: 0, tax: 0,
+      };
+    }
+  }
   const E = existing || {};
+  /* `existing` now covers two things: a saved quote being edited, and a blank
+     quote prefilled from a website enquiry. Only the first has a code, and only
+     the first posts to the edit route — without this the form would POST to
+     /api/quotes/null and update nothing. */
+  const isEdit = !!(existing && existing.code);
   const eItems = (E.items && E.items.length) ? E.items : [null];
   const val = (v) => v == null ? '' : escEmail(String(v));
   const [eFirst, ...eRest] = String(E.name || '').trim().split(/\s+/);
@@ -4325,7 +4364,10 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
   };
 
   res.send(quotePage('New quote', `
-    <h1>${existing ? 'Edit quote ' + escEmail(existing.code) : 'New quote'}</h1>
+    <h1>${isEdit ? 'Edit quote ' + escEmail(existing.code)
+        : lead ? 'New quote for ' + escEmail(lead.name || 'this enquiry') : 'New quote'}</h1>
+    ${lead ? `<div class="sub">From the website enquiry on ${fmtDate(lead.created_at)}${
+      lead.description ? ` — “${escEmail(String(lead.description).slice(0, 160))}”` : ''}</div>` : ''}
     <div class="sub">${existing
       ? 'Their link stays the same — it updates the moment you save.'
       : 'Fills in the message for you — you still send it from your phone.'}</div>
@@ -4338,7 +4380,7 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
          quantity prices in a different band, so applying it silently would
          change what the shop charges without anyone agreeing to it. The button
          fills the form and re-runs calc(); saving is still a deliberate act. */
-      if (!existing) return '';
+      if (!isEdit) return '';
       const edits = describeRequestedEdits(existing.items || [], existing.requested_items || []);
       if (!existing.change_request && !edits.length) return '';
       const rows = edits.map((e) => `
@@ -4365,7 +4407,8 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
                 onclick="applyRequested()">Apply their numbers</button>` : ''}
       </div>`;
     })()}
-    <form method="POST" action="${existing ? '/api/quotes/' + existing.code : '/api/quotes'}" id="qf">
+    <form method="POST" action="${isEdit ? '/api/quotes/' + existing.code : '/api/quotes'}" id="qf">
+      ${lead ? `<input type="hidden" name="from_submission_id" value="${lead.id}">` : ''}
       <div class="card">
         <div class="row">
           <div><label>First name <span style="text-transform:none;font-weight:400">(optional)</span></label>
@@ -4431,7 +4474,7 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
       </div>
 
       <p class="muted" id="qfstat" style="margin-top:10px;font-size:12.5px"></p>
-      <button type="submit" id="qfgo">${existing ? 'Save changes' : 'Create quote &amp; get the message'}</button>
+      <button type="submit" id="qfgo">${isEdit ? 'Save changes' : 'Create quote &amp; get the message'}</button>
     </form>
     <p style="margin-top:14px"><a class="muted" href="/quotes">View all quotes →</a></p>
     <script>
@@ -4882,8 +4925,8 @@ ${uploadStatusScript()}
            is allowed — a quote is worth more than its reference shots — but it
            must not look like the photos went with it. */
         qfgo.textContent = (!upPending && upFailed)
-          ? ${JSON.stringify(existing ? 'Save changes' : 'Create quote')} + ' without the missing photo' + (upFailed > 1 ? 's' : '')
-          : ${JSON.stringify(existing ? 'Save changes' : 'Create quote & get the message')};
+          ? ${JSON.stringify(isEdit ? 'Save changes' : 'Create quote')} + ' without the missing photo' + (upFailed > 1 ? 's' : '')
+          : ${JSON.stringify(isEdit ? 'Save changes' : 'Create quote & get the message')};
       }
 
       function uploadFiles(L, files){
@@ -5387,12 +5430,18 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
         code = newQuoteCode();
       }
       ({ rows } = await pool.query(
+        /* from_submission_id closes the loop: the enquiry it answers stops
+           showing as unanswered the moment this saves. Without it the lead
+           would sit on the board until the contact-matching fallback happened
+           to catch it, which it only does when the details match exactly. */
         `INSERT INTO quotes (code,name,phone,email,items,subtotal,tax,total,deposit,notes,status,valid_until,needed_by,
-                             discount_kind,discount_value,discount_note)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'sent',$11,$12,$13,$14,$15) RETURNING *`,
+                             discount_kind,discount_value,discount_note,from_submission_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'sent',$11,$12,$13,$14,$15,$16) RETURNING *`,
         [code, name, phone, email, JSON.stringify(items), subtotal, tax, total, deposit,
          String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy,
-         discountKind, discountValue, discountNote || null]));
+         discountKind, discountValue, discountNote || null,
+         (Number.isFinite(parseInt(one(b.from_submission_id), 10))
+           ? parseInt(one(b.from_submission_id), 10) : null)]));
     }
 
     const q = rows[0];
@@ -7610,6 +7659,24 @@ async function sendReceipt(code, to = null) {
  * So: it leaves the board, every chase stops, the record survives, and it can be
  * put back.
  */
+/* Let a website enquiry go, on the record. Not deleted: it is evidence of
+   demand, and the reason it was passed over is worth as much as the enquiry —
+   132 of these turned out to be a spam wave, which is only visible if the
+   dismissals say so. */
+app.post('/lead/:id/dismiss', requireAdmin, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.redirect('/quotes');
+  const reason = String((req.body && req.body.reason) || '').trim().slice(0, 200);
+  try {
+    await pool.query(
+      `UPDATE submissions SET dismissed_at = NOW(), dismiss_reason = $2 WHERE id = $1`,
+      [id, reason || null]);
+  } catch (err) {
+    console.error('lead dismiss failed:', err.message);
+  }
+  res.redirect('/quotes');
+});
+
 app.post('/quote/:code/cancel', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/quotes');
@@ -8122,6 +8189,30 @@ async function renderBoard(VIEW, req, res) {
        resolves to a stale list plus an error rather than throwing. */
     const studio = await fetchStudioOrders();
 
+    /* Website enquiries nobody has answered.
+     *
+     * These sat only in the Leads tab and depended on an email alert to be
+     * noticed at all. Months of them read 'new' — that column only moves when a
+     * Clover payment lands, so it never meant "unanswered", and an alert that
+     * does not arrive leaves no trace anywhere a person looks.
+     *
+     * Unanswered means: no quote was raised from it, the customer has no quote
+     * under the same email or phone, and it was not deliberately let go. Matching
+     * on contact as well as the explicit link catches the ones quoted before this
+     * link existed — otherwise every historical lead would resurface as new. */
+    const { rows: leads } = await pool.query(
+      `SELECT s.* FROM submissions s
+        WHERE s.dismissed_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM quotes q WHERE q.from_submission_id = s.id)
+          AND NOT EXISTS (
+            SELECT 1 FROM quotes q
+             WHERE (NULLIF(lower(trim(q.email)),'') = lower(trim(s.email))
+                 OR (length(regexp_replace(COALESCE(q.phone,''), '\D', '', 'g')) >= 10
+                     AND right(regexp_replace(COALESCE(q.phone,''), '\D', '', 'g'), 10)
+                       = right(regexp_replace(COALESCE(s.phone,''), '\D', '', 'g'), 10)))
+               AND q.created_at >= s.created_at - interval '1 day')
+        ORDER BY s.created_at DESC`);
+
     /* Order by what needs attention, not by what arrived last. A board sorted
        by date buries the job that is about to miss its deadline under three
        quotes that came in this morning.
@@ -8568,26 +8659,118 @@ async function renderBoard(VIEW, req, res) {
        only available action could not be reversed. */
     const gOrders = rows.filter((q) => !isCancelled(q) && isPaid(q) && !isDelivered(q));
     const gQuotes = rows.filter((q) => !isCancelled(q) && !isPaid(q) && !isDelivered(q));
-    const gDone   = rows.filter(isDelivered);
     const gCancelled = rows.filter(isCancelled);
+    /* Delivered work is no longer on this board at all — it lives in Orders,
+       which is where you go to look something up. A dashboard is for what still
+       needs doing; finished work on it is just noise you learn to scroll past. */
+    const gDone = rows.filter(isDelivered);
 
-    const group = (title, note, list) => !list.length ? '' : `
+    /* A website enquiry, as a card you can act on. The two actions are the two
+       real outcomes: quote it, or let it go on the record. Anything else leaves
+       it sitting there forever, which is how 21 of these went cold. */
+    const leadCard = (l) => {
+      const days = Math.round((Date.now() - new Date(l.created_at)) / 86400000);
+      const age = days <= 0 ? 'today' : days === 1 ? 'yesterday'
+        : days < 60 ? days + ' days ago'
+        : Math.round(days / 30) + ' months ago';
+      return `
+      <div class="card" style="border-left:4px solid #b45309">
+        <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+          <b style="color:#0B1F4B">${escEmail(l.name || 'No name given')}</b>
+          <span class="muted" style="font-size:12.5px">${escEmail(age)}</span>
+        </div>
+        ${l.description ? `<div class="muted" style="margin-top:6px;font-size:13.5px">${
+          escEmail(String(l.description).slice(0, 300))}</div>` : ''}
+        <div class="muted" style="margin-top:8px;font-size:12.5px">
+          ${l.email ? `<a href="mailto:${escEmail(l.email)}">${escEmail(l.email)}</a>` : ''}
+          ${l.phone ? ` &middot; <a href="tel:${escEmail(l.phone)}">${escEmail(l.phone)}</a>` : ''}
+        </div>
+        ${l.photo_url ? `<div style="margin-top:8px"><a href="${escEmail(l.photo_url)}" target="_blank" rel="noopener">
+          <img src="${escEmail(l.photo_url)}" alt="" loading="lazy"
+               style="width:88px;height:88px;object-fit:cover;border-radius:8px;border:1px solid #e3e8f2"></a></div>` : ''}
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+          <a class="btn" style="padding:8px 16px;font-size:13px" href="/quote/new?lead=${l.id}">Create quote</a>
+          <button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
+             onclick="document.getElementById('dl-${l.id}').style.display='block';this.style.display='none'">Not a job</button>
+        </div>
+        <form id="dl-${l.id}" method="POST" action="/lead/${l.id}/dismiss"
+              style="display:none;margin-top:10px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px">
+          <p class="muted" style="margin:0 0 8px;font-size:12.5px">It comes off the board. The enquiry is kept.</p>
+          <input name="reason" maxlength="200" placeholder="Why — e.g. spam, or went elsewhere"
+                 style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">
+          <button type="submit" class="btn btn-ghost" style="padding:7px 16px;font-size:13px">Dismiss</button>
+        </form>
+      </div>`;
+    };
+
+    /* Collapsible, and remembered per browser. A section folded shut has to STAY
+       shut across reloads or folding it is just a gesture you repeat all day.
+       Open by default: a section that hides itself on first visit hides work. */
+    const group = (title, note, list, render, opts) => {
+      const o = opts || {};
+      if (!list.length && !o.always) return '';
+      const key = title.toLowerCase().replace(/[^a-z]+/g, '-');
+      return `
       <div class="quote-grid-head">
-        <h2>${title}</h2>
-        <span class="muted" style="font-size:12.5px">${list.length}${note ? ' &middot; ' + note : ''}</span>
-      </div>${list.map(quoteCard).join('')}`;
+        <button type="button" class="grp-toggle" data-grp="${key}"
+                aria-expanded="true" aria-controls="grp-${key}"
+                style="background:none;border:0;padding:0;cursor:pointer;display:flex;align-items:baseline;gap:8px;font:inherit;color:inherit">
+          <span class="grp-caret" style="font-size:12px;color:#8a93a5">&#9662;</span>
+          <h2${o.accent ? ` style="color:${o.accent}"` : ''}>${title}</h2>
+          <span class="muted" style="font-size:12.5px">${list.length}${note ? ' &middot; ' + note : ''}</span>
+        </button>
+      </div>
+      <div class="grp-body" id="grp-${key}" data-grp="${key}">${
+        list.length ? list.map(render || quoteCard).join('')
+        : `<div class="card"><p class="muted" style="margin:0">${escEmail(o.empty || 'Nothing here.')}</p></div>`}</div>`;
+    };
 
     const body =
+      group('New enquiries', 'from the website — no quote raised yet', leads, leadCard,
+            { accent: '#b45309' }) +
       group('Orders', 'deposit in — work in hand', gOrders) +
       group('Open quotes', 'sent, nothing paid yet', gQuotes) +
-      group('Delivered', 'done', gDone) +
       group('Cancelled', 'not going ahead', gCancelled);
+
+    /* Folding, remembered. localStorage rather than a cookie: it is a per-browser
+       display preference, it never needs to reach the server, and wrapped in
+       try/catch because a locked-down browser throws on access rather than
+       returning null — which would take the whole board down with it. */
+    const groupScript = `<script>
+      (function(){
+        var KEY = 'jt-board-collapsed';
+        function read(){ try { return JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) { return {}; } }
+        function write(v){ try { localStorage.setItem(KEY, JSON.stringify(v)); } catch (e) {} }
+        var state = read();
+        function apply(key, collapsed){
+          document.querySelectorAll('.grp-body[data-grp="' + key + '"]').forEach(function(el){
+            el.style.display = collapsed ? 'none' : '';
+          });
+          document.querySelectorAll('.grp-toggle[data-grp="' + key + '"]').forEach(function(b){
+            b.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+            var c = b.querySelector('.grp-caret');
+            if (c) c.innerHTML = collapsed ? '&#9656;' : '&#9662;';
+          });
+        }
+        Object.keys(state).forEach(function(k){ if (state[k]) apply(k, true); });
+        document.querySelectorAll('.grp-toggle').forEach(function(b){
+          b.addEventListener('click', function(){
+            var k = b.dataset.grp;
+            state[k] = !state[k];
+            apply(k, state[k]);
+            write(state);
+          });
+        });
+      })();
+    </script>`;
 
     const needCount = (body.match(/Needs a text/g) || []).length;
     const changeCount = (body.match(/Change requested/g) || []).length;
     res.send(adminPage(VIEW === 'work' ? 'Production' : 'Quotes',
       `<h1>${VIEW === 'work' ? 'Production' : 'Quotes'}</h1>
-      <div class="sub">${gQuotes.length} open quote${gQuotes.length === 1 ? '' : 's'} &middot; ${
+      <div class="sub">${leads.length ? `<b style="color:#b45309">${leads.length} new enquir${
+        leads.length === 1 ? 'y' : 'ies'}</b> &middot; ` : ''}${
+        gQuotes.length} open quote${gQuotes.length === 1 ? '' : 's'} &middot; ${
         gOrders.length} order${gOrders.length === 1 ? '' : 's'} in hand${
         atRiskCount ? ` &middot; <b style="color:#b91c1c">${atRiskCount} behind schedule</b>` : ''}${
         changeCount ? ` &middot; <b style="color:#1848B8">${changeCount} awaiting your edit</b>` : ''}${
@@ -8596,7 +8779,8 @@ async function renderBoard(VIEW, req, res) {
       <p style="margin-bottom:14px">
         <a class="btn" href="/quote/new">New quote</a>
         <a class="btn btn-ghost" href="/quotes" style="margin-left:8px${VIEW==='money'?';font-weight:800':''}">Money</a>
-        <a class="btn btn-ghost" href="/production" style="margin-left:6px${VIEW==='work'?';font-weight:800':''}">Production</a></p>
+        <a class="btn btn-ghost" href="/production" style="margin-left:6px${VIEW==='work'?';font-weight:800':''}">Production</a>
+        <a class="btn btn-ghost" href="/orders" style="margin-left:6px">Delivered &amp; past orders &rarr;</a></p>
       <!-- Books moved to the main nav; these two stay because they are the two
            views of THIS board, not separate destinations. -->
 
@@ -8761,7 +8945,7 @@ async function renderBoard(VIEW, req, res) {
             }).join('') || '<div class="kempty">—</div>'}
           </section>`).join('')}</div>
           ${live.length === 0 ? '<div class="card"><p class="muted">Nothing in production. Delivered jobs drop off this board.</p></div>' : ''}`;
-      })() : (body ? `<div class="quote-grid">${body}</div>` : '<div class="card"><p class="muted">No quotes yet.</p></div>')}
+      })() : (body ? `<div class="quote-grid">${body}</div>${groupScript}` : '<div class="card"><p class="muted">No quotes yet.</p></div>')}
 
       ${studioOrdersSection(studio)}
       <script>
@@ -9099,16 +9283,88 @@ app.get('/production', requireAdmin, (req, res) => renderBoard('work',  req, res
 /* Studio orders on their own, for when that is the question being asked. The
    same list also sits at the foot of the job board — this is a view, not a
    second source. */
-app.get('/orders', requireAdmin, async (_req, res) => {
-  const studio = await fetchStudioOrders();
-  const open = studio.orders.filter(o => String(o.status).toLowerCase() !== 'complete').length;
-  res.send(adminPage('Studio orders', `<h1>Studio orders</h1>
-    <div class="sub">${studio.orders.length} on file${
-      open ? ` &middot; <b>${open}</b> still open` : ''} &middot; placed online at design.jtees.net</div>
-    <p style="margin-bottom:14px">
-      <a class="btn btn-ghost" href="${STUDIO_BASE}/admin.php?lumise-page=orders" target="_blank" rel="noopener">
-        Open the studio admin &rarr;</a></p>
-    ${studioOrdersSection(studio, { heading: false })}`, 'orders'));
+/* Every order, ever — the place to look something up.
+ *
+ * The board is for what still needs doing, so delivered work is not on it. This
+ * is where it went, and it carries no limit: an order from last year is exactly
+ * what somebody comes here to find. Shop orders and studio orders are both
+ * listed and LABELLED, because they come from different systems and quietly
+ * merging them would make the list mean nothing.
+ */
+app.get('/orders', requireAdmin, async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim().slice(0, 80);
+    const studio = await fetchStudioOrders();
+    const openStudio = studio.orders.filter(o => String(o.status).toLowerCase() !== 'complete').length;
+
+    /* Anything money has touched, oldest business included. A quote nobody ever
+       paid is not an order and stays on the board. */
+    const { rows } = await pool.query(
+      `SELECT * FROM quotes
+        WHERE COALESCE(paid_amount,0) > 0 OR delivered_at IS NOT NULL
+        ORDER BY COALESCE(paid_at, delivered_at, created_at) DESC`);
+
+    const needle = q.toLowerCase();
+    const hit = (o) => !needle || [o.code, o.name, o.email, o.phone,
+      ...(o.items || []).map((i) => i.description)]
+      .some((v) => String(v || '').toLowerCase().includes(needle));
+    const shown = rows.filter(hit);
+
+    const label = (o) => o.cancelled_at ? ['cancelled', '#b91c1c']
+      : o.delivered_at ? ['delivered', '#166534']
+      : balanceOf(o) > 0 ? ['balance due ' + money(balanceOf(o)), '#b45309']
+      : ['paid', '#1848B8'];
+
+    const body = shown.map((o) => {
+      const [text, colour] = label(o);
+      const d = (v) => (v ? fmtDate(v) : '');
+      return `
+      <tr style="border-top:1px solid #eef1f8">
+        <td style="padding:9px 6px"><a href="/quote/${o.code}/edit"><b>${escEmail(o.code)}</b></a>
+          <div class="muted" style="font-size:12.5px">${escEmail(o.name || 'no name')}</div></td>
+        <td style="padding:9px 6px;font-size:13px">${escEmail(quoteSummary(o.items) || '—')}</td>
+        <td class="num" style="padding:9px 6px;white-space:nowrap">${money(quoteTotals(o).total)}</td>
+        <td class="num" style="padding:9px 6px;white-space:nowrap">${money(o.paid_amount || 0)}</td>
+        <td style="padding:9px 6px;white-space:nowrap"><span style="color:${colour};font-size:12.5px;font-weight:600">${escEmail(text)}</span></td>
+        <td class="muted" style="padding:9px 6px;white-space:nowrap;font-size:12.5px">${
+          d(o.paid_at || o.delivered_at || o.created_at)}</td>
+      </tr>`;
+    }).join('');
+
+    res.send(adminPage('Orders', `<h1>Orders</h1>
+      <div class="sub">${rows.length} shop order${rows.length === 1 ? '' : 's'} &middot; ${
+        studio.orders.length} from the studio${openStudio ? ` (${openStudio} still open)` : ''}
+        &middot; <span class="muted" style="font-size:12px">everything money has touched, oldest included</span></div>
+
+      <form method="GET" style="margin-bottom:14px;display:flex;gap:8px;flex-wrap:wrap">
+        <input name="q" value="${escEmail(q)}" placeholder="Find by name, code, email or item"
+               style="flex:1 1 260px;padding:9px;font-size:14px">
+        <button type="submit" class="btn btn-ghost" style="padding:9px 18px">Search</button>
+        ${q ? `<a class="btn btn-ghost" style="padding:9px 18px" href="/orders">Clear</a>` : ''}
+      </form>
+
+      <div class="card" style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;min-width:640px">
+          <thead><tr style="text-align:left">
+            <th style="padding:6px">Order</th><th style="padding:6px">Items</th>
+            <th class="num" style="padding:6px">Total</th><th class="num" style="padding:6px">Paid</th>
+            <th style="padding:6px">State</th><th style="padding:6px">Date</th>
+          </tr></thead>
+          <tbody>${body || `<tr><td colspan="6" class="muted" style="padding:12px 6px">${
+            q ? 'Nothing matches “' + escEmail(q) + '”.' : 'No orders yet.'}</td></tr>`}</tbody>
+        </table>
+        ${q ? `<p class="muted" style="margin-top:10px;font-size:12.5px">${shown.length} of ${rows.length} shown</p>` : ''}
+      </div>
+
+      <p style="margin:16px 0 8px"><b style="color:#0B1F4B">Studio orders</b>
+        <span class="muted" style="font-size:12.5px">placed online at design.jtees.net &mdash; a separate system</span>
+        <a class="btn btn-ghost" style="padding:6px 14px;font-size:13px;margin-left:8px"
+           href="${STUDIO_BASE}/admin.php?lumise-page=orders" target="_blank" rel="noopener">Studio admin &rarr;</a></p>
+      ${studioOrdersSection(studio, { heading: false })}`, 'orders'));
+  } catch (err) {
+    console.error('orders page failed:', err.message);
+    res.status(500).send('Could not load orders.');
+  }
 });
 
 

@@ -152,7 +152,9 @@ test('the operator pages all go through adminPage', () => {
     "adminPage(`${q.code} — production`",
     "adminPage('Reviews'",
     "adminPage(VIEW === 'work' ? 'Production' : 'Quotes'",
-    "adminPage('Studio orders'",
+    /* Renamed from 'Studio orders' when the page grew to hold every shop order
+       too — the studio list is now one section of it, not the whole page. */
+    "adminPage('Orders'",
   ]) {
     assert.ok(src.includes(marker), `${marker} — a page outside the shell drops off the menu silently`);
   }
