@@ -3175,10 +3175,12 @@ function deliveryEstimate(from = new Date()) {
  * the reason this comment exists.
  */
 const BLANK_TIERS = [
-  { min: 3000, pct: 8 },
-  { min: 1000, pct: 5 },
-  { min:  500, pct: 3 },
-  { min:   35, pct: 2 },
+  { min: 3000, pct: 10 },
+  { min: 1000, pct:  9 },
+  { min:  500, pct:  8 },
+  { min:  250, pct:  7 },
+  { min:  100, pct:  5 },
+  { min:   35, pct:  3 },
 ];
 
 /* Below this the garment is flat cost x2 with no volume break at all — honest
@@ -3196,6 +3198,22 @@ const BLANK_TIERS = [
    not sold below 50, so 35-49 is DTF, embroidery and HTV — the jobs where the
    decoration is dearest per piece and the quote is most likely to be compared
    against a shop that does not mind a thin garment margin.
+
+   Deepened 2026-08-30 to 3/5/7/8/9/10, and the 100 and 250 steps ADDED. The
+   curve previously ran 35 -> 2% and then nothing until 500, so a 100-piece and a
+   250-piece order — the two commonest sizes in the shop — were discounted the
+   same as a 35-piece one. A flat stretch across the busiest part of the range is
+   a worse fault than a shallow rate, because it is the orders you quote most
+   often that it fails to move on.
+
+   10% at the top is the ceiling, not a round number: it puts the garment at
+   1.80x cost, which is the floor the guard in quote-blank-pricing.test.js
+   enforces. Going deeper means lowering that floor deliberately, and it was
+   tightened to 1.8x on 2026-08-29 away from the 1.60x an earlier curve reached.
+   Do not walk it back as a side effect of "be more competitive" — the garment is
+   about 40% of a decorated job, so the whole 2%-to-10% move is worth about 17
+   cents a piece at 100. The print table and the screen fee are where a visible
+   price change actually lives.
 
    DERIVED from the table, never written twice. This was a hand-kept 125 while
    the table said 125 in its own row — two copies of one threshold, and nothing
