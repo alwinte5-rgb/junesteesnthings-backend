@@ -213,3 +213,54 @@ test('adding the rule columns is safe to run on every request', () => {
   assert.doesNotMatch(auth, /@jt_db\(\)->rawQuery\("ALTER TABLE/,
     'a suppressed ALTER is not idempotent — it still errors the request');
 });
+
+/* ── Assigning a code to a customer ──────────────────────────────────────── */
+
+test('the picker offers the real customer list', () => {
+  /* Typing an address by hand is how a code goes to tylwur@yaho.com and nobody
+     finds out until the customer says they never got it. */
+  assert.match(page, /await allCustomers\(\)/,
+    'the same function the Customers page uses');
+  assert.match(page, /<datalist id="jt-customers">/);
+  assert.match(page, /list="jt-customers"/, 'and both send fields use it');
+  assert.strictEqual((page.match(/list="jt-customers"/g) || []).length, 2,
+    'the create form and the per-code Send row');
+});
+
+test('a datalist, so an unknown address is still allowed', () => {
+  /* A select would make a code for somebody who has never ordered impossible,
+     which is a normal thing to want. */
+  assert.doesNotMatch(page, /<select[^>]*name="send_to"/);
+  assert.match(page, /name="send_to" type="email" list="jt-customers"/);
+});
+
+test('the rule fields actually reach the studio', () => {
+  /* They were on the form and dropped by the POST handler — the shop would set
+     a minimum order, see it accepted, and get a code with no minimum. */
+  const post = src.slice(src.indexOf("app.post('/discounts'"), src.indexOf("app.post('/discounts/send'"));
+  for (const f of ['min_order', 'max_uses', 'once_per_customer', 'assigned_to']) {
+    assert.ok(post.includes(`'${f}'`), `${f} must be forwarded`);
+  }
+});
+
+test('the send is stamped only after it succeeds', () => {
+  /* Stamping first would show a code as sent that never left, and the shop
+     would never chase it. */
+  const send = src.slice(src.indexOf("app.post('/discounts/send'"));
+  const i = send.indexOf('await sendDiscountEmail');
+  const j = send.indexOf("f.set('sent', '1')");
+  assert.ok(i > -1 && j > i, 'the stamp must come after the send');
+});
+
+test('an edit that leaves the assignee blank does not erase it', () => {
+  /* Changing a value on an existing code must not quietly detach it from the
+     customer it was promised to. */
+  assert.match(admin, /assigned_to = COALESCE\(VALUES\(assigned_to\), assigned_to\)/);
+});
+
+test('assigned but unsent is visible as such', () => {
+  /* "I made Tyler a code" and "Tyler has his code" are different states, and
+     only one of them needs an action. */
+  assert.match(page, /not sent yet/);
+  assert.match(page, /sent \$\{fmtDate\(c\.sent_at\)\}/);
+});
