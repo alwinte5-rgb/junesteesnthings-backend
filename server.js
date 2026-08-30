@@ -3341,7 +3341,7 @@ function quotePricingSource() {
          table is read, looks correct and is not: at 100 pieces it returns the
          50-99 rate instead of the 100-249 one, so the customer is charged the
          higher price for ordering more. Every band lands one step out. */
-      function tierAt(positions, qty, stage) {
+      function tierAt(positions, qty, stage, colours) {
         if (!positions) return 0;
         var keys = Object.keys(positions);
         if (!keys.length) return 0;
@@ -3350,9 +3350,59 @@ function quotePricingSource() {
         if (!pos || !pos.length) return 0;
         var bands = pos.slice().sort(function (a, b) { return a.min_qty - b.min_qty; });
         for (var i = 0; i < bands.length; i++) {
-          if (qty <= bands[i].min_qty) return bands[i].price;
+          if (qty <= bands[i].min_qty) return bandPrice(bands[i], colours);
         }
-        return bands[bands.length - 1].price;
+        return bandPrice(bands[bands.length - 1], colours);
+      }
+
+      /* One band's price at a given ink-colour count.
+
+         Screen printing is ONE method with a column per colour count, not seven
+         methods — the design decides how many screens it needs, so the count
+         cannot be a question asked before anything is drawn. A colour band is
+         \`{"1-color":8.45, ... ,"full-color":23.75}\`, keyed exactly as the
+         storefront writes and reads it, so the key is built from the count the
+         same way here (app.js ~16466) instead of by a second convention.
+
+         Where the storefront falls back to 0 for a column it cannot find, this
+         falls back to the band's published \`price\` — the one-colour rate. A $0
+         decoration does not look like a failure: the line still totals, it just
+         totals to the blank, and the shop finds out after the job is printed. */
+      function bandPrice(band, colours) {
+        if (!band) return 0;
+        if (!band.colors) return band.price;
+        /* Clamped before the key is built, not after. A negative or zero count
+           is junk, but "-3-color" is simply a column that does not exist, so it
+           would fall through to the full-colour backstop and quote the DEAREST
+           rate off a malformed input. One colour is the honest floor. */
+        var c = parseInt(colours, 10);
+        if (!(c > 0)) c = 1;
+        var v = band.colors[c + '-color'];
+        if (v === undefined) v = band.colors['full-color'];
+        return v === undefined ? band.price : Number(v);
+      }
+
+      /* How many ink colours a line is printed in.
+
+         The catalogue holds two generations of screen printing at once. The
+         consolidated \`color\`-type method has a column per count and must be
+         ASKED, because at quote time only a person has seen the artwork. The
+         seven legacy per-colour methods carry the count in their own titles
+         ("Screen Printing — 2 Colors") and have no picker to read.
+
+         Written once, here, because this figure decides both the decoration
+         column and — once screens are billed as one-time fees — how many
+         screens the job needs. Two copies of it is two chances for the price on
+         screen to differ from the price charged. */
+      function colourCount(method, picked) {
+        if (!method) return 1;
+        if (method.type === 'color') return parseInt(picked, 10) > 0 ? parseInt(picked, 10) : 1;
+        /* Double backslashes below are deliberate. This source is returned from
+           a template literal, so a single one is eaten before either engine
+           compiles the regex — the digit and space classes would both collapse
+           to bare letters, match nothing, and price every legacy per-colour
+           method as a single colour. */
+        return parseInt((String(method.title || '').match(/(\\d+)\\s*Colou?r/i) || [0, 1])[1], 10) || 1;
       }
 
       /* One add-on's charge. The whole point of the table is that this
@@ -3377,7 +3427,9 @@ function quotePricingSource() {
          judgement about the work, not a decision to give away the extras. */
       function priceLine(o) {
         var qty = parseInt(o.qty, 10) || 0;
-        var colours = parseInt(o.colours, 10) || 1;
+        /* \`o.colours\` is what the admin PICKED, not a settled count — a legacy
+           per-colour method ignores it and reads its own title instead. */
+        var colours = colourCount(o.method, o.colours);
 
         /* The garment price. \`blankOverride\` replaces the catalogue price for
            this line — supplier prices move between the day a cost was recorded
@@ -3406,10 +3458,10 @@ function quotePricingSource() {
         if (o.method) {
           if (o.stage === 'both') {
             var pk = Object.keys(o.method.positions || {});
-            decoration = Number(tierAt(o.method.positions, qty, pk[0])) +
-                         Number(tierAt(o.method.positions, qty, pk[1] || pk[0]));
+            decoration = Number(tierAt(o.method.positions, qty, pk[0], colours)) +
+                         Number(tierAt(o.method.positions, qty, pk[1] || pk[0], colours));
           } else {
-            decoration = Number(tierAt(o.method.positions, qty, o.stage));
+            decoration = Number(tierAt(o.method.positions, qty, o.stage, colours));
           }
         }
 
@@ -3489,10 +3541,11 @@ function quotePricingSource() {
 
 /* The same source, executed here, so Node prices a line with the identical
    code the browser runs. */
-const { priceLine, addonAmount } = (function () {
+const { priceLine, addonAmount, colourCount } = (function () {
   const sandbox = {};
   vm.runInNewContext(quotePricingSource() +
-    '\nthis.priceLine = priceLine; this.addonAmount = addonAmount;', sandbox);
+    '\nthis.priceLine = priceLine; this.addonAmount = addonAmount;' +
+    '\nthis.colourCount = colourCount;', sandbox);
   return sandbox;
 })();
 
@@ -3941,8 +3994,14 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
      another way and only its digitizing fees are authoritative), so those are
      not reported as a problem — only methods that COULD be offered and cannot,
      because nobody has priced them yet. */
+  /* `unsupported_type` is jt-catalog.php saying it did not understand the
+     method's band shape, as opposed to nobody having priced it. The two need
+     different fixes and used to look identical from here — screen printing
+     read as "unpriced" for a week while its table was fully populated. */
   const untiered = catalog.methods.filter(m =>
     m.use_for_quoting && !Object.keys(m.positions || {}).length);
+  const untieredLabel = (m) => m.title +
+    (m.unsupported_type ? ` (its ${m.unsupported_type}-type prices could not be read)` : '');
 
   /* Digitizing is offered on its own control rather than in the method list,
      because it is a one-off per design and the method list is priced per piece. */
@@ -3957,7 +4016,7 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
     : untiered.length
     ? `<p class="muted" style="margin:-4px 0 10px;font-size:12.5px">
        ${untiered.length} decoration ${untiered.length === 1 ? 'method is' : 'methods are'}
-       not listed — ${escEmail(untiered.map(m => m.title).join(', '))} —
+       not listed — ${escEmail(untiered.map(untieredLabel).join(', '))} —
        because ${untiered.length === 1 ? 'it has' : 'they have'} no quantity price tiers set.
        Add tiers in the designer admin under Printings and ${untiered.length === 1 ? 'it' : 'they'}
        will appear here. Products need to be <b>Active</b> in the designer to be listed at all.</p>`
@@ -4012,6 +4071,18 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
                value="${it && it.blank_price ? val(it.blank_price) : ''}"
                style="font-size:13px;padding:6px 7px" placeholder="Garment price each — leave blank for catalogue">
         <p class="muted bpnote" style="margin:3px 0 0;font-size:11.5px"></p>
+      </div>
+      <!-- Ink colours. Screen printing is ONE method with a column per colour
+           count, so the count is the thing that picks the price and nothing on
+           this page can infer it — only a person who has seen the artwork
+           knows. Options are filled in by calc() from the method's own
+           colour_options, so the picker can never offer a column the shop has
+           not priced. Hidden for every other method. -->
+      <div class="inks" style="display:none;margin-top:8px;padding:8px 10px;background:#f6f8fd;border:1px solid #e3e8f2;border-radius:8px">
+        <label style="margin:0 0 4px;font-size:11px">Ink colours in the design</label>
+        <select name="colors${n}" class="cols" style="font-size:13px;padding:6px 7px"
+                data-v="${it && it.colours ? val(it.colours) : ''}"></select>
+        <p class="muted" style="margin:4px 0 0;font-size:11.5px">One screen per colour — the price is banded on this.</p>
       </div>
       <div class="addons" style="margin-top:6px;display:none"></div>
       <div class="digi" style="display:none;margin-top:8px;padding:8px 10px;background:#f6f8fd;border:1px solid #e3e8f2;border-radius:8px">
@@ -4243,6 +4314,33 @@ ${quotePricingSource()}
             if (!isEmb && su) su.value = '';
           }
 
+          /* Ink colours, asked only for a method that prices by them. The seven
+             legacy per-colour methods carry the count in their titles and get
+             no picker, so the engine reads it from there instead — one rule,
+             two data generations. Rebuilt only when the method changes, so
+             re-pricing does not reset a chosen count. */
+          var inkBox = L.querySelector('.inks');
+          var colEl  = L.querySelector('.cols');
+          var inks = (meth && meth.type === 'color' && (meth.colour_options || []).length)
+                   ? meth.colour_options : null;
+          if (inkBox && colEl) {
+            var ikey = inks ? String(meth.id) : '';
+            if (colEl.dataset.for !== ikey) {
+              colEl.dataset.for = ikey;
+              colEl.innerHTML = inks ? inks.map(function(c){
+                return '<option value="' + c + '">' + c + (c === 1 ? ' colour' : ' colours') + '</option>';
+              }).join('') : '';
+              /* Restore what this line was saved with, else start at one — never
+                 blank. A blank posts as 1 anyway, so a picker showing nothing
+                 would quote a 1-colour job while looking like it failed to load. */
+              if (inks) {
+                var was = parseInt(colEl.dataset.v, 10);
+                colEl.value = String(inks.indexOf(was) > -1 ? was : inks[0]);
+              }
+            }
+            inkBox.style.display = inks ? 'block' : 'none';
+          }
+
           /* Offer exactly the add-ons this decoration allows. Rebuilt only when
              the method changes, so ticking one does not wipe the others. */
           var aoBox = L.querySelector('.addons');
@@ -4295,7 +4393,7 @@ ${quotePricingSource()}
           var bpEl = L.querySelector('.bp');
           var r = priceLine({
             product: prod, method: meth, qty: qty, sizeMix: sizeQty ? mix : null,
-            colours: meth ? (String(meth.title).match(/(\\d+)\\s*Colou?r/i) || [0,1])[1] : 1,
+            colours: colEl ? colEl.value : '',
             stage: stage, addons: addons, blankTiers: BLANK_TIERS,
             blankOverride: bpEl ? bpEl.value : '',
             unitOverride: u.value
@@ -4418,6 +4516,11 @@ ${quotePricingSource()}
         tpl.querySelector('.lt').textContent = '—';
         tpl.querySelector('.ix').textContent = n + 1;
         tpl.querySelector('.thumbs').innerHTML = '';
+        /* Options and the restore hint are data attributes, which cloneNode
+           copies and the value-clearing loop above does not touch — left alone
+           a new item would inherit item 1's ink count. */
+        var ck = tpl.querySelector('.cols');
+        if (ck) { ck.innerHTML = ''; ck.dataset.v = ''; ck.dataset.for = ''; }
         // A new item starts tidy: sizes hidden, extras closed.
         var sz = tpl.querySelector('.sizes');
         if (sz) { sz.style.display = 'none'; sz.innerHTML = ''; }
@@ -4804,7 +4907,13 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
         ? 'both'
         : ((rawStage && method && method.positions && method.positions[rawStage]) ? rawStage : '');
 
-      const colours = Number((methodTitle.match(/(\d+)\s*Colou?r/i) || [0, 1])[1]) || 1;
+      /* Ink colours. Read through the SAME colourCount() the browser ran, so a
+         line cannot be previewed at one colour count and saved at another —
+         which is the whole reason the rule lives in quotePricingSource(). The
+         posted value is only consulted for a method that prices by colour; a
+         legacy per-colour method reads its own title and ignores it, so this
+         cannot be used to buy a 7-colour job at the 1-colour rate. */
+      const colours = colourCount(method, one(b['colors' + i]));
 
       /* A typed garment price. Supplier costs move between the day a cost was
          recorded and the day a quote is written, so this is a correction, not
@@ -4868,6 +4977,10 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
         addons: priced.addonLines,
         garment_dark: garmentDark || null,
         stage: stage || null,
+        /* The ink count this line was priced on, kept ONLY for the method that
+           has to be asked for it. A legacy per-colour method's count is its
+           title; a second copy here is one that can go stale against it. */
+        colours: (method && method.type === 'color') ? colours : null,
         /* The typed garment price, kept so re-editing shows what was used
            rather than silently reverting to a catalogue figure known to be
            stale. */
