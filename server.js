@@ -5432,6 +5432,51 @@ function orderedSizeKeys(item, catalog) {
   });
 }
 
+/* What the customer's browser needs to re-price their own lines, and NOTHING
+ * else. This is a public page: the catalogue the admin form receives carries a
+ * `cost` field on every product — the shop's supplier cost — and shipping that
+ * to a customer would hand them the margin on their own job.
+ *
+ * So each line is rebuilt from scratch with only the fields priceLine() reads:
+ * the garment's SELL price, its size upcharges, and the decoration's own tier
+ * table. Nothing is copied wholesale, so a field added to the catalogue later
+ * cannot leak by default — it has to be added here deliberately.
+ *
+ * The tier tables are the "buy more, save more" ladder the storefront already
+ * advertises, so they are not a disclosure; the cost basis behind them is, and
+ * it is not here.
+ */
+function customerLinePricing(items, catalog) {
+  const prods = (catalog && catalog.products) || [];
+  const meths = (catalog && catalog.methods) || [];
+  return (items || []).map((it) => {
+    const p = prods.find((x) => String(x.id) === String(it.product_id));
+    const m = meths.find((x) => String(x.id) === String(it.method_id));
+    return {
+      /* Sell price and upcharges only — never `cost`. */
+      product: p ? {
+        price: Number(p.price) || 0,
+        sizes: (p.sizes || []).map((z) => ({ size: z.size, upcharge: Number(z.upcharge) || 0 })),
+      } : null,
+      method: m ? {
+        id: m.id, title: m.title, type: m.type, multi: m.multi,
+        positions: m.positions, colour_options: m.colour_options || null,
+        min_order_qty: m.min_order_qty || 0,
+      } : null,
+      /* The line as it was priced, so an untouched line re-prices to exactly
+         what is already on screen rather than drifting by a rounding step. */
+      stage: it.stage || null,
+      dark: !!it.garment_dark,
+      colours: it.colours || null,
+      addons: (it.addons || []).map((a) => ({
+        code: a.code, label: a.label, kind: a.kind, rate: Number(a.rate) || 0,
+      })),
+      blankOverride: it.blank_price === undefined ? null : it.blank_price,
+      unitOverride: it.manual ? it.unit_price : null,
+    };
+  });
+}
+
 app.get('/q/:code', async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   const friendly = (msg) => res.status(404).send(quotePage('Quote not found', `
@@ -5488,14 +5533,27 @@ app.get('/q/:code', async (req, res) => {
     /* Every size the garment comes in, in catalogue order — not just the ones
        already ordered. A customer whose quote is all mediums has to be able to
        ask for two 2XLs, and a size they did not order starts at 0. */
+    const upchargeFor = (i, sz) => {
+      const p = (catalog.products || []).find((x) => String(x.id) === String(i.product_id));
+      const row = p && (p.sizes || []).find((z) => z.size === sz);
+      return row ? Number(row.upcharge) || 0 : 0;
+    };
+
     const sizeInputs = (i, ix) => orderedSizeKeys(i, catalog)
       .map((sz) => {
         const n = parseInt((i.size_mix || {})[sz], 10) || 0;
-        return `<label style="display:inline-flex;flex-direction:column;align-items:center;gap:2px;font-size:11px;color:${n ? '#6b7280' : '#9aa3b2'}">
-          ${escEmail(sz)}
+        const up = upchargeFor(i, sz);
+        /* The extended-size surcharge is shown ON the box the customer types
+           into. Printed once at the bottom of the quote it reads as a mystery
+           difference; printed here it is the answer to "why did adding a 2XL
+           cost more than a medium". */
+        return `<label style="display:inline-flex;flex-direction:column;align-items:center;gap:1px;font-size:11px;color:${n ? '#6b7280' : '#9aa3b2'}">
+          <span>${escEmail(sz)}</span>
+          <span style="font-size:10px;color:${up > 0 ? '#b45309' : 'transparent'}">${up > 0 ? '+' + money(up) : '&nbsp;'}</span>
           <input form="changeform" type="number" min="0" max="10000" step="1"
+                 class="cq" data-line="${ix}"
                  name="sz_${ix}_${escEmail(sz)}" value="${n}"
-                 style="width:52px;padding:4px;font-size:13px;text-align:center"></label>`;
+                 style="width:56px;padding:4px;font-size:13px;text-align:center"></label>`;
       }).join(' ');
 
     const lines = (q.items || []).map((i, ix) => {
@@ -5519,12 +5577,13 @@ app.get('/q/:code', async (req, res) => {
             ? `<div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end">${sizeInputs(i, ix)}</div>
                <div class="muted" style="font-size:11px;margin-top:4px">now ${i.qty}</div>`
             : `<input form="changeform" type="number" min="0" max="10000" step="1"
+                      class="cq" data-line="${ix}"
                       name="qty_${ix}" value="${parseInt(i.qty, 10) || 0}"
                       style="width:64px;padding:5px;font-size:14px;text-align:right">`}</td>
-        <td class="num">${Number(i.list_total) > Number(i.line_total)
+        <td class="num" data-each="${ix}">${Number(i.list_total) > Number(i.line_total)
           ? `<span style="color:#9aa3b2;text-decoration:line-through">${money(Number(i.list_total) / i.qty)}</span><br>${money(i.unit_price)}`
           : money(i.unit_price)}</td>
-        <td class="num">${Number(i.list_total) > Number(i.line_total)
+        <td class="num" data-amount="${ix}">${Number(i.list_total) > Number(i.line_total)
           ? `<span style="color:#9aa3b2;text-decoration:line-through">${money(i.list_total)}</span><br>
              <b style="color:#166534">${money(i.line_total)}</b>`
           : money(i.line_total)}</td>
@@ -5552,7 +5611,10 @@ app.get('/q/:code', async (req, res) => {
                 q.discount_kind === 'pct' ? ` (${Number(q.discount_value)}% off)` : ''}</td>
               <td class="num" style="color:#166534">&minus;${money(t.discount)}</td></tr>` : ''}
           ${t.tax > 0 ? `<tr><td colspan="3" class="num muted">Sales tax</td><td class="num">${money(t.tax)}</td></tr>` : ''}
-          <tr><td colspan="3" class="num tot">Total</td><td class="num tot">${money(t.total)}</td></tr>
+          <tr><td colspan="3" class="num tot">Total</td><td class="num tot" id="qtotal">${money(t.total)}</td></tr>
+          <tr id="estrow" style="display:none"><td colspan="3" class="num" style="color:#b45309;font-weight:700;padding-top:10px">
+              With your changes <span style="font-weight:400;font-size:12px">(estimate)</span></td>
+              <td class="num" style="color:#b45309;font-weight:700;padding-top:10px" id="esttotal">&mdash;</td></tr>
           ${!paid ? `<tr><td colspan="3" class="num" style="color:#1848B8;font-weight:700">
               ${t.deposit >= t.total ? 'Due now (paid in full)' : 'Deposit to start (50%)'}</td>
               <td class="num" style="color:#1848B8;font-weight:700">${money(t.deposit)}</td></tr>` : `
@@ -5685,6 +5747,86 @@ app.get('/q/:code', async (req, res) => {
       <div class="card" style="text-align:center">
         <p class="muted">Questions? <a href="tel:+17738491854">${SHOP_PHONE}</a> &middot; ${SHOP_SIGNER}</p>
       </div>
+
+      ${canEditQty ? `<script>
+      /* Re-price the customer's own edits, live, using the SAME engine the
+         server runs. Reimplementing the rule here would be the classic pricing
+         bug: two ladders that agree until the day one is changed.
+
+         It is an ESTIMATE and it is labelled as one. The quoted total stays on
+         screen untouched, because that is the figure the shop stands behind;
+         the new number appears beside it in amber. The shop still approves, and
+         Accept and Pay are refused server-side while a request is pending — so
+         a customer cannot bind the shop to a figure nobody at the shop priced. */
+${quotePricingSource()}
+
+      var LINES = ${JSON.stringify(customerLinePricing(q.items || [], catalog))};
+      var QITEMS = ${JSON.stringify((q.items || []).map((i) => ({
+        qty: Number(i.qty) || 0, line_total: Number(i.line_total) || 0,
+        unit_price: Number(i.unit_price) || 0,
+      })))};
+      var BLANK_TIERS = ${JSON.stringify(BLANK_TIERS)};
+      var TAX = ${TAX_RATE}, TAXABLE = ${Number(q.tax) > 0 ? 'true' : 'false'};
+      var DISC_KIND = ${JSON.stringify(q.discount_kind || 'amt')};
+      var DISC_VAL = ${Number(q.discount_value) || 0};
+      function m2(v){ return '$' + (Math.round(v*100)/100).toFixed(2); }
+
+      function estimate(){
+        var moved = false, sub = 0;
+        LINES.forEach(function(L, ix){
+          var boxes = document.querySelectorAll('.cq[data-line="' + ix + '"]');
+          var mix = null, qty = 0;
+          boxes.forEach(function(el){
+            var v = Math.max(0, parseInt(el.value, 10) || 0);
+            if (el.name.indexOf('sz_') === 0) {
+              /* The size is in the field name, which the server built from the
+                 catalogue — not from anything typed here. */
+              var sz = el.name.slice(('sz_' + ix + '_').length);
+              mix = mix || {};
+              if (v > 0) mix[sz] = v;
+              qty += v;
+            } else { qty = v; }
+          });
+          if (qty !== (QITEMS[ix] ? QITEMS[ix].qty : 0)) moved = true;
+
+          var r = priceLine({
+            qty: qty, product: L.product, method: L.method, stage: L.stage,
+            dark: L.dark, colours: L.colours, addons: L.addons,
+            sizeMix: mix, blankTiers: BLANK_TIERS,
+            blankOverride: L.blankOverride, unitOverride: L.unitOverride,
+          });
+          sub += r.lineTotal;
+
+          var each = document.querySelector('[data-each="' + ix + '"]');
+          var amt  = document.querySelector('[data-amount="' + ix + '"]');
+          var same = qty === (QITEMS[ix] ? QITEMS[ix].qty : 0);
+          if (each) each.innerHTML = same ? each.dataset.orig
+            : '<span style="color:#9aa3b2;text-decoration:line-through">' +
+              m2(QITEMS[ix].unit_price) + '</span><br><b style="color:#b45309">' +
+              m2(qty > 0 ? (r.lineTotal - r.addonTotal) / qty : 0) + '</b>';
+          if (amt) amt.innerHTML = same ? amt.dataset.orig
+            : '<span style="color:#9aa3b2;text-decoration:line-through">' +
+              m2(QITEMS[ix].line_total) + '</span><br><b style="color:#b45309">' +
+              m2(r.lineTotal) + '</b>';
+        });
+
+        var row = document.getElementById('estrow');
+        if (!moved) { row.style.display = 'none'; return; }
+        var disc = DISC_VAL <= 0 ? 0
+          : Math.min(DISC_KIND === 'pct' ? sub * DISC_VAL / 100 : DISC_VAL, sub);
+        var net = sub - disc;
+        var total = net + (TAXABLE ? net * TAX : 0);
+        document.getElementById('esttotal').textContent = m2(total);
+        row.style.display = '';
+      }
+
+      document.querySelectorAll('[data-each],[data-amount]').forEach(function(el){
+        el.dataset.orig = el.innerHTML;
+      });
+      document.querySelectorAll('.cq').forEach(function(el){
+        el.addEventListener('input', estimate);
+      });
+      </script>` : ''}
     `));
   } catch (err) {
     console.error('view quote failed:', err.message);
@@ -5706,6 +5848,14 @@ app.get(['/q/:code/pay/card', '/q/:code/pay/balance'], async (req, res) => {
     const { rows } = await pool.query('SELECT * FROM quotes WHERE code=$1', [code]);
     if (!rows.length) return res.redirect('/q/' + code);
     const q = rows[0];
+
+    /* No payment while a change is pending. The customer's page re-prices as
+       they edit, so the number in front of them may not be the number stored —
+       and this route charges from the STORED total. Taking money for a quote
+       the shop has not re-priced is the one failure here that costs a refund
+       and an apology, so the door is shut until the request is cleared. */
+    if (q.requested_items) return res.redirect('/q/' + code + '#changes');
+
     const t = quoteTotals(q);
     const alreadyPaid = Number(q.paid_amount || 0);
     /* Same route serves the deposit and the balance: charging the deposit when
@@ -6213,12 +6363,17 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
     const cphone = String(rb.phone || '').trim().slice(0, 40) || null;
 
     const { rows } = await pool.query(
+      /* requested_items IS NULL is the money guard. The customer's page
+         re-prices live as they edit, so without this they could change the
+         quantities, watch the total move, and accept — binding the shop to a
+         figure nobody at the shop had seen. Accepting is only ever possible
+         against a quote the shop has actually priced. */
       `UPDATE quotes SET accepted_at=NOW(), status='accepted',
               needed_by = COALESCE($2::date, needed_by),
               name  = COALESCE(NULLIF(name,''),  $3),
               email = COALESCE(NULLIF(email,''), $4),
               phone = COALESCE(NULLIF(phone,''), $5)
-        WHERE code=$1 AND accepted_at IS NULL RETURNING *`,
+        WHERE code=$1 AND accepted_at IS NULL AND requested_items IS NULL RETURNING *`,
       [code, nb, cname, cemail, cphone]);
 
     if (rows.length) {                       // first acceptance only
