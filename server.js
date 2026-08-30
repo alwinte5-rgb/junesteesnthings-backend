@@ -7729,6 +7729,27 @@ app.post('/cart/dismiss', requireAdmin, async (req, res) => {
   res.redirect('/quotes');
 });
 
+/* Clear the backlog of enquiries that have aged out.
+   Recorded as "too late" rather than "not a job", because that is what actually
+   happened and the two are different facts: one says the shop judged the work,
+   the other says the shop never got to it. Only the second is a warning. */
+app.post('/leads/dismiss-old', requireAdmin, async (req, res) => {
+  const days = 30;
+  try {
+    const { rowCount } = await pool.query(
+      `UPDATE submissions
+          SET dismissed_at = NOW(),
+              dismiss_reason = 'Too late — cleared in bulk, older than ${days} days'
+        WHERE dismissed_at IS NULL
+          AND created_at < NOW() - INTERVAL '${days} days'
+          AND NOT EXISTS (SELECT 1 FROM quotes q WHERE q.from_submission_id = submissions.id)`);
+    console.log(`cleared ${rowCount} enquiries older than ${days} days`);
+  } catch (err) {
+    console.error('bulk lead dismiss failed:', err.message);
+  }
+  res.redirect('/quotes');
+});
+
 app.post('/lead/:id/dismiss', requireAdmin, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) return res.redirect('/quotes');
@@ -8821,6 +8842,16 @@ async function renderBoard(VIEW, req, res) {
                style="width:88px;height:88px;object-fit:cover;border-radius:8px;border:1px solid #e3e8f2"></a></div>` : ''}
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
           <a class="btn" style="padding:8px 16px;font-size:13px" href="/quote/new?lead=${l.id}">Create quote</a>
+          ${/* Two different outcomes, deliberately not one button.
+                "Not a job" is a judgement about the ENQUIRY — spam, wrong fit,
+                a tyre-kicker. "Too late" is a fact about TIME: it was a real
+                job and the window closed. Filing the second under the first
+                loses the only number that says the shop is leaving money on the
+                table, and it is untrue about the customer. */ ''}
+          <form method="POST" action="/lead/${l.id}/dismiss" style="display:inline">
+            <input type="hidden" name="reason" value="Too late — past the date they needed it">
+            <button type="submit" class="btn btn-ghost" style="padding:8px 16px;font-size:13px">Too late</button>
+          </form>
           <button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
              onclick="document.getElementById('dl-${l.id}').style.display='block';this.style.display='none'">Not a job</button>
         </div>
@@ -8850,6 +8881,7 @@ async function renderBoard(VIEW, req, res) {
           <h2${o.accent ? ` style="color:${o.accent}"` : ''}>${title}</h2>
           <span class="muted" style="font-size:12.5px">${list.length}${note ? ' &middot; ' + note : ''}</span>
         </button>
+        ${o.action || ''}
       </div>
       <div class="grp-body" id="grp-${key}" data-grp="${key}">${
         list.length ? list.map(render || quoteCard).join('')
@@ -8874,9 +8906,24 @@ async function renderBoard(VIEW, req, res) {
        Before this they were one stacked column, so a long list of enquiries
        pushed the open quotes and orders off the bottom of the page — the exact
        complaint that prompted the split. */
+    /* Clearing 22 stale enquiries one at a time is the reason they sit there.
+       Offered only when there is a backlog old enough to be past acting on —
+       below that the per-card buttons are the honest way, and a bulk control
+       would invite clearing work that is still live. */
+    const staleLeads = leads.filter((l) =>
+      (Date.now() - new Date(l.created_at)) / 86400000 > 30);
+
+    const clearOld = staleLeads.length < 3 ? '' : `
+      <form method="POST" action="/leads/dismiss-old" style="margin-left:auto"
+            onsubmit="return confirm('Clear ${staleLeads.length} enquir${
+              staleLeads.length === 1 ? 'y' : 'ies'} older than 30 days? They are kept and stay searchable.')">
+        <button type="submit" class="btn btn-ghost" style="padding:5px 12px;font-size:12.5px">
+          Clear ${staleLeads.length} over 30 days old</button>
+      </form>`;
+
     const laneLeft =
       group('New enquiries', 'from the website — no quote raised yet', leads, leadCard,
-            { accent: '#b45309' }) +
+            { accent: '#b45309', action: clearOld }) +
       group('Unfinished carts', 'started a design, never checked out', carts, cartCard,
             { accent: '#1848B8' });
 

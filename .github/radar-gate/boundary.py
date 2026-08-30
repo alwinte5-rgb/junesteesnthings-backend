@@ -21,9 +21,23 @@ ALLOWED = [
     "Copy: page text, product descriptions, store listing text",
 ]
 
+# The "Auth, permissions, validation" entry was REMOVED on 2026-08-30 at the
+# owner's instruction. It blocked the security work it existed to protect: a
+# pre-launch audit found an auth-bypass env flag and exported access-control
+# helpers with no call sites, and every fix for those lives in exactly the
+# files this rule forbade. A boundary that makes a real vulnerability
+# unfixable is not a safety rail.
+#
+# What it costs: a radar agent doing a design or copy task can now edit
+# lib/auth*, lib/permissions* and lib/validate* without radar-gate refusing
+# the PR. Read auth diffs on agent PRs yourself.
+#
+# To restore, add back to BLOCKED:
+#     "Auth, permissions, validation (`lib/auth*`, `lib/permissions*`, ...)"
+# and to BLOCKED_PATHS:
+#     (r"(^|/)lib/(auth|permissions|validate|session)", "auth / validation helper")
 BLOCKED = [
     "API routes and server actions (`app/api/**`, anything `\"use server\"`)",
-    "Auth, permissions, validation (`lib/auth*`, `lib/permissions*`, `lib/validate*`)",
     "Billing, pricing, checkout, entitlements",
     "Database migrations and schema",
     "New runtime dependencies (`package.json`, `requirements.txt`)",
@@ -37,7 +51,6 @@ BLOCKED_PATHS = [
     (r"(^|/)app/api/", "API route"),
     (r"(^|/)pages/api/", "API route"),
     (r"(^|/)route\.(ts|js|tsx|jsx)$", "route handler"),
-    (r"(^|/)lib/(auth|permissions|validate|session)", "auth / validation helper"),
     (r"(^|/)(migrations|drizzle)/", "database migration"),
     (r"schema\.prisma$|(^|/)db/schema\.(ts|js|py)$", "database schema"),
     (r"\.sql$", "raw SQL"),

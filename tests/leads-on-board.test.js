@@ -110,3 +110,38 @@ test('sections start open', () => {
   assert.match(board, /Object\.keys\(state\)\.forEach\(function\(k\)\{ if \(state\[k\]\) apply\(k, true\); \}\)/,
     'only sections recorded as collapsed may start closed');
 });
+
+/* ── Clearing enquiries honestly ─────────────────────────────────────────── */
+
+test('"too late" and "not a job" are recorded as different outcomes', () => {
+  /* One is a judgement about the ENQUIRY — spam, wrong fit, a tyre-kicker. The
+     other is a fact about TIME: a real job whose window closed. Filing the
+     second under the first is untrue about the customer, and it destroys the
+     only number that says the shop is leaving money on the table. */
+  assert.match(board, /value="Too late — past the date they needed it"/,
+    'the per-card action must record what actually happened');
+  assert.match(board, /Not a job<\/button>/,
+    'and the judgement action stays separate');
+});
+
+test('the bulk clear only offers itself for a real backlog', () => {
+  /* A permanent "clear all" invites clearing work that is still live. It
+     appears only when enough enquiries are old enough to be past acting on. */
+  assert.match(board, /staleLeads\.length < 3 \? '' :/);
+  assert.match(board, /86400000 > 30/, 'and "old" means older than 30 days');
+});
+
+test('the bulk clear cannot touch an enquiry that was quoted', () => {
+  /* A quoted enquiry is already off the board by the link. Dismissing it would
+     also write a false reason onto a job that was actually won. */
+  const route = src.slice(src.indexOf("app.post('/leads/dismiss-old'"));
+  assert.match(route, /NOT EXISTS \(SELECT 1 FROM quotes q WHERE q\.from_submission_id = submissions\.id\)/);
+  assert.match(route, /dismissed_at IS NULL/, 'and it must not re-stamp one already cleared');
+});
+
+test('bulk clearing records the honest reason too', () => {
+  const route = src.slice(src.indexOf("app.post('/leads/dismiss-old'"));
+  assert.match(route, /Too late — cleared in bulk/,
+    'so the backlog is still identifiable as missed rather than rejected');
+  assert.doesNotMatch(route, /DELETE FROM/, 'nothing is destroyed');
+});

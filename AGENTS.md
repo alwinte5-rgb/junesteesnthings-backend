@@ -84,7 +84,6 @@ You may change:
 You must never change:
 
 - API routes and server actions (`app/api/**`, anything `"use server"`)
-- Auth, permissions, validation (`lib/auth*`, `lib/permissions*`, `lib/validate*`)
 - Billing, pricing, checkout, entitlements
 - Database migrations and schema
 - New runtime dependencies (`package.json`, `requirements.txt`)
