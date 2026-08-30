@@ -7876,7 +7876,7 @@ async function renderBoard(VIEW, req, res) {
       sent: '#eef1f8|#33415c', viewed: '#fff4e0|#8a5a00', changes: '#fdecea|#b45309',
       accepted: '#e7f6ec|#166534', paid: '#1848B8|#ffffff', expired: '#f3f4f6|#6b7280',
     };
-    const body = rows.map(q => {
+    const quoteCard = (q) => {
       const expired = q.status !== 'accepted' && q.valid_until && new Date(q.valid_until) < new Date(new Date().toDateString());
       /* "accepted" and "paid" looked identical, so there was no way to see at a
          glance who had actually handed over money. Paid wins over every other
@@ -8165,12 +8165,44 @@ async function renderBoard(VIEW, req, res) {
         ${q.phone ? ` &middot; <a class="muted" href="tel:${escEmail(q.phone)}">${escEmail(q.phone)}</a>` : ''}
         ${q.email ? ` &middot; <a class="muted" href="#" onclick="if(confirm('Email a receipt to ${escEmail(q.email)}?')){var f=document.createElement('form');f.method='POST';f.action='/quote/${q.code}/receipt';document.body.appendChild(f);f.submit();}return false;">email receipt</a>` : ''}</div>
       </div>`;
-    }).join('');
+    };
+
+    /* Once money has arrived the job stops being a quote and becomes work in
+       hand. They were rendered in one flat list, so a paid job sat among the
+       quotes still waiting for an answer and the open-quote list was never
+       actually a list of open quotes.
+
+       Grouped rather than moved to /orders: that route is the DESIGNER's online
+       store orders from design.jtees.net, a different thing entirely, and
+       merging the two would put shop quotes and storefront orders in one list
+       that means nothing.
+
+       The existing sort — behind schedule, then soonest deadline — is preserved
+       inside each group, because urgency still matters within the work in hand. */
+    const isDelivered = (q) => !!q.delivered_at;
+    const isPaid = (q) => Number(q.paid_amount || 0) > 0;
+
+    const gOrders = rows.filter((q) => isPaid(q) && !isDelivered(q));
+    const gQuotes = rows.filter((q) => !isPaid(q) && !isDelivered(q));
+    const gDone   = rows.filter(isDelivered);
+
+    const group = (title, note, list) => !list.length ? '' : `
+      <div style="display:flex;align-items:baseline;gap:10px;margin:22px 0 10px">
+        <h2 style="font-size:16px;margin:0;color:#0B1F4B">${title}</h2>
+        <span class="muted" style="font-size:12.5px">${list.length}${note ? ' &middot; ' + note : ''}</span>
+      </div>${list.map(quoteCard).join('')}`;
+
+    const body =
+      group('Orders', 'deposit in — work in hand', gOrders) +
+      group('Open quotes', 'sent, nothing paid yet', gQuotes) +
+      group('Delivered', 'done', gDone);
+
     const needCount = (body.match(/Needs a text/g) || []).length;
     const changeCount = (body.match(/Change requested/g) || []).length;
     res.send(adminPage(VIEW === 'work' ? 'Production' : 'Quotes',
       `<h1>${VIEW === 'work' ? 'Production' : 'Quotes'}</h1>
-      <div class="sub">${rows.length} total${
+      <div class="sub">${gQuotes.length} open quote${gQuotes.length === 1 ? '' : 's'} &middot; ${
+        gOrders.length} order${gOrders.length === 1 ? '' : 's'} in hand${
         atRiskCount ? ` &middot; <b style="color:#b91c1c">${atRiskCount} behind schedule</b>` : ''}${
         changeCount ? ` &middot; <b style="color:#1848B8">${changeCount} awaiting your edit</b>` : ''}${
         needCount ? ` &middot; <b style="color:#8a5a00">${needCount} need a text</b>` : ''}
