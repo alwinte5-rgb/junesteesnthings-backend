@@ -313,3 +313,44 @@ test('every code action reports its failure the same way', () => {
     assert.ok(src.includes(`promoAction(req, res, '${a}'`), `${a} must go through it`);
   }
 });
+
+/* ── Sending the same code twice ─────────────────────────────────────────── */
+
+test('re-sending a code warns first, naming when and to whom', () => {
+  /* The row already showed a sent date, but nothing said anything at the moment
+     of clicking — which is the only moment it can change the outcome. */
+  assert.match(page, /c\.sent_at \? ` onsubmit="return confirm\(/,
+    'a code that has been sent must confirm before going again');
+  assert.match(page, /has already been emailed/);
+  assert.match(page, /last on \$\{/, 'the warning must say WHEN');
+  assert.match(page, /' to ' \+ escEmail\(c\.assigned_to\)/, 'and to whom');
+});
+
+test('an unsent code sends without a confirmation', () => {
+  /* A prompt on the first send would train the operator to click through them,
+     and the warning would stop being read by the time it matters. */
+  assert.match(page, /c\.sent_at \? ` onsubmit/,
+    'the confirm is conditional on having been sent before');
+});
+
+test('a repeat is reported as a repeat', () => {
+  /* "TYLER30 sent to Tyler" after the third send reads as the first. */
+  const send = src.slice(src.indexOf("app.post('/discounts/send'"));
+  assert.match(send, /already \? `\$\{code\} sent to \$\{email\} again/);
+  assert.match(send, /that is \$\{already \+ 1\} times now/);
+});
+
+test('the count is read before the send, not after', () => {
+  /* Reading it afterwards would include the send just made and report every
+     first send as a second. */
+  const send = src.slice(src.indexOf("app.post('/discounts/send'"));
+  const read = send.indexOf('const already =');
+  const doSend = send.indexOf('await sendDiscountEmail');
+  assert.ok(read > -1 && read < doSend, 'the count must be taken first');
+});
+
+test('not-sent-yet is called out rather than muted', () => {
+  /* It is the state that needs an action, so it should not be styled like the
+     quiet metadata beside it. */
+  assert.match(page, /color:#b45309">&middot; not sent yet/);
+});

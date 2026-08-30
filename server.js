@@ -7970,8 +7970,9 @@ app.get('/discounts', requireAdmin, async (req, res) => {
     <tr style="border-top:1px solid #eef1f8${live(c) ? '' : ';opacity:.55'}">
       <td style="padding:9px 6px"><b style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace">${escEmail(c.code)}</b>
         ${c.assigned_to ? `<div style="font-size:12.5px;color:#1848B8">for ${escEmail(c.assigned_to)}${
-          c.sent_at ? ` <span class="muted">&middot; sent ${fmtDate(c.sent_at)}</span>`
-                    : ' <span class="muted">&middot; not sent yet</span>'}</div>` : ''}
+          c.sent_at ? ` <span class="muted">&middot; sent ${fmtDate(c.sent_at)}${
+            c.send_count > 1 ? ` (${c.send_count}&times;)` : ''}</span>`
+                    : ' <span style="color:#b45309">&middot; not sent yet</span>'}</div>` : ''}
         ${c.note ? `<div class="muted" style="font-size:12.5px">${escEmail(c.note)}</div>` : ''}</td>
       <td style="padding:9px 6px;white-space:nowrap"><b>${escEmail(worth(c))}</b>${
         (c.min_order > 0 || c.once_per_customer) ? `<div class="muted" style="font-size:11.5px">${
@@ -8016,7 +8017,10 @@ app.get('/discounts', requireAdmin, async (req, res) => {
     ${live(c) ? `
     <tr id="snd-${escEmail(c.code)}" style="display:none;background:#f7f9fc">
       <td colspan="6" style="padding:10px 6px">
-        <form method="POST" action="/discounts/send" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <form method="POST" action="/discounts/send" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"${
+          c.sent_at ? ` onsubmit="return confirm('${escEmail(c.code)} has already been emailed${
+            c.send_count > 1 ? ' ' + c.send_count + ' times' : ''} — last on ${
+            escEmail(fmtDate(c.sent_at))}${c.assigned_to ? ' to ' + escEmail(c.assigned_to) : ''}.\n\nSend it again?')"` : ''}>
           <input type="hidden" name="code" value="${escEmail(c.code)}">
           <span class="muted" style="font-size:12.5px">Email <b>${escEmail(c.code)}</b> to</span>
           <input name="email" type="email" required list="jt-customers"
@@ -8316,6 +8320,13 @@ app.post('/discounts/send', requireAdmin, async (req, res) => {
     return res.redirect('/discounts?err=' + encodeURIComponent('That email address looks wrong.'));
   }
   try {
+    /* How many times this has gone out already, read BEFORE sending so the
+       message afterwards can say "again" rather than reporting a repeat as if
+       it were the first time. */
+    const before = (await fetchPromoCodes()).codes
+      .find((x) => String(x.code).toUpperCase() === code);
+    const already = before ? Number(before.send_count) || 0 : 0;
+
     await sendDiscountEmail(code, email, extra);
     /* Record it AFTER the send succeeds. Stamping first would show a code as
        sent that never left. */
@@ -8324,7 +8335,9 @@ app.post('/discounts/send', requireAdmin, async (req, res) => {
       f.set('code', code); f.set('sent', '1'); f.set('assigned_to', email.toLowerCase());
       await studioFetch(PROMO_ADMIN(), { method: 'POST', body: f });
     } catch (e) { console.error('discount send stamp failed:', e.message); }
-    res.redirect('/discounts?msg=' + encodeURIComponent(`${code} sent to ${email}.`));
+    res.redirect('/discounts?msg=' + encodeURIComponent(
+      already ? `${code} sent to ${email} again — that is ${already + 1} times now.`
+              : `${code} sent to ${email}.`));
   } catch (e) {
     console.error('discount send failed:', e.message);
     /* Said plainly. A silent failure here means the shop believes a customer
