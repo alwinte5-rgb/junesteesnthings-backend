@@ -313,3 +313,103 @@ test('the diff is driven by the requested array, not by the stored object', () =
   assert.match(fn, /Array\.isArray\(r\.sizes\)/,
     'order comes from the array; the quote mix is only looked up in');
 });
+
+/* ── Live estimate, and the guards that make it safe ─────────────────────── */
+
+const custPage = src.slice(src.indexOf("app.get('/q/:code'"),
+                           src.indexOf("app.get(['/q/:code/pay/card'"));
+
+test('the customer payload carries no supplier cost', () => {
+  /* THE disclosure risk. jt-catalog.php returns a `cost` field on every
+     product — the shop's supplier cost — and the admin form receives the
+     catalogue wholesale. This page is public: a customer who opened dev tools
+     would read the margin on their own job.
+
+     customerLinePricing rebuilds each line field by field rather than copying,
+     so a field added to the catalogue later cannot leak by default. */
+  const fn = src.slice(src.indexOf('function customerLinePricing'));
+  /* Comments stripped first: this file's own prose explains WHY cost is
+     excluded, and matching that would make the check pass by accident on a
+     version that leaked it. The assertion is about the code. */
+  const body = fn.slice(0, fn.indexOf('\n}\n'))
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  assert.doesNotMatch(body, /\bcost\b/,
+    'customerLinePricing must never read a cost field');
+  assert.doesNotMatch(body, /\.\.\.p\b|Object\.assign\(\{\}, p\)|JSON\.parse\(JSON\.stringify\(p\)\)/,
+    'the product must be rebuilt field by field, never spread — a spread ships ' +
+    'whatever the catalogue adds next');
+  assert.match(body, /price: Number\(p\.price\)/, 'only the SELL price is sent');
+});
+
+test('the whole catalogue is never serialised into the customer page', () => {
+  /* The admin form does `var CAT = ${JSON.stringify(catalog)}`. Doing that here
+     would ship cost, every other product, and the methods table to a public
+     page. */
+  assert.doesNotMatch(custPage, /JSON\.stringify\(catalog\)/,
+    'the customer page must serialise only its own scrubbed line payload');
+});
+
+test('accepting is refused while a change is pending', () => {
+  /* Without this the customer could edit, watch the total move, and accept —
+     binding the shop to a figure nobody at the shop had priced. */
+  const accept = src.slice(src.indexOf("app.post('/q/:code/accept'"));
+  assert.match(accept.slice(0, accept.indexOf('RETURNING')),
+    /AND requested_items IS NULL/,
+    'the accept UPDATE must require that no request is outstanding');
+});
+
+test('paying is refused while a change is pending', () => {
+  /* This route charges from the STORED total, which is not what the customer is
+     looking at once they have edited. Taking that money is the one failure here
+     that costs a refund and an apology. */
+  const pay = src.slice(src.indexOf("app.get(['/q/:code/pay/card'"));
+  assert.match(pay.slice(0, pay.indexOf('const t = quoteTotals')),
+    /if \(q\.requested_items\) return res\.redirect/,
+    'the payment route must refuse a quote with an outstanding request');
+});
+
+test('the estimate runs the shared engine, not a second copy of the rule', () => {
+  /* Two ladders agree until the day one of them is changed. */
+  assert.match(custPage, /\$\{quotePricingSource\(\)\}/,
+    'the customer page must emit the shared pricing source');
+  assert.match(custPage, /priceLine\(\{/, 'and call priceLine, not its own maths');
+});
+
+test('the quoted total stays on screen beside the estimate', () => {
+  /* The stored figure is what the shop stands behind. Overwriting it would
+     leave no record on the page of what was actually quoted. */
+  assert.match(custPage, /id="qtotal"/);
+  assert.match(custPage, /id="estrow"/);
+  assert.match(custPage, /With your changes/,
+    'the recalculated figure must be labelled as an estimate');
+});
+
+test('the estimate script the browser receives actually parses', () => {
+  /* Same trap as the admin form: this script lives inside a template literal,
+     so a broken line is just a string to Node and ships silently — the page
+     then loads with no recalculation and no error. */
+  const open = custPage.indexOf('${canEditQty ? `<script>');
+  assert.notStrictEqual(open, -1, 'the estimate script block was not found');
+  let js = custPage.slice(custPage.indexOf('<script>', open) + 8,
+                          custPage.indexOf('</script>', open));
+  /* Server-side interpolations are values at render time; substitute a literal
+     so the surrounding control flow can be parsed. Brace MATCHING, not a regex:
+     `${JSON.stringify(x.map(i => ({...})))}` contains nested braces, and a
+     [^}]* stops at the first one and leaves stray parens behind — which reads
+     as a syntax error in code that is perfectly fine. */
+  js = js.replace(/\$\{quotePricingSource\(\)\}/,
+    'function priceLine(){return {lineTotal:0,addonTotal:0};}');
+  let out = '', i = 0;
+  while (i < js.length) {
+    const k = js.indexOf('${', i);
+    if (k === -1) { out += js.slice(i); break; }
+    out += js.slice(i, k);
+    let depth = 0, j = k + 1;
+    for (; j < js.length; j++) {
+      if (js[j] === '{') depth++;
+      else if (js[j] === '}' && --depth === 0) break;
+    }
+    out += '0'; i = j + 1;
+  }
+  assert.doesNotThrow(() => new Function(out));
+});
