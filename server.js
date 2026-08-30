@@ -4455,7 +4455,7 @@ ${quotePricingSource()}
               ? '<div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Upgrades</div>' +
                 avail.map(function(a){
                   return '<label style="display:flex;align-items:flex-start;gap:6px;margin:0 0 3px;font-size:13px;text-transform:none;letter-spacing:0;font-weight:400">' +
-                    '<input type="checkbox" class="ao" name="addon_' + a.code + '${n}" value="1" data-code="' +
+                    '<input type="checkbox" class="ao" name="addon_' + a.code + L.dataset.n + '" value="1" data-code="' +
                     a.code + '" style="width:auto;margin:3px 0 0"><span>' + a.label +
                     (a.kind === 'per_piece' ? ' <span class="muted">$' + a.rate.toFixed(2) + ' ea</span>'
                      : a.kind === 'percent_of_decoration' ? ' <span class="muted">+' + a.rate + '%</span>'
