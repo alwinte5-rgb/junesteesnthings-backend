@@ -120,7 +120,7 @@ test('an override suppresses size upcharges but never the add-ons', () => {
      it. An add-on is a separate cost the shop still incurs. */
   const r = priceLine({ product: GILDAN, method: SCREEN1, qty: 50, unitOverride: 12,
     sizeMix: { M: 46, '2XL': 4 }, blankTiers: TIERS,
-    addons: [{ code: 'underbase', label: 'Underbase', kind: 'once', rate: 25 }] });
+    addons: [{ code: 'unbagging', label: 'Unbagging', kind: 'per_piece', rate: 0.50 }] });
   assert.strictEqual(r.sizeUpcharge, 0);
   assert.strictEqual(r.addonTotal, 25);
   assert.strictEqual(r.lineTotal, 625);
@@ -149,13 +149,17 @@ test('a "once" add-on is charged once, whatever the quantity', () => {
 });
 
 test('each add-on kind scales the way it says it does', () => {
-  const at = (kind, rate, qty, colours) =>
-    addonAmount({ kind, rate }, qty, colours, 1000);
+  const at = (kind, rate, qty, colours, screens) =>
+    addonAmount({ kind, rate }, qty, colours, 1000, screens);
   assert.strictEqual(at('once', 25, 50, 1), 25);
   assert.strictEqual(at('per_order', 15, 50, 1), 15);
   assert.strictEqual(at('per_piece', 0.5, 50, 1), 25);
   assert.strictEqual(at('per_piece_per_colour', 0.5, 50, 4), 100);
   assert.strictEqual(at('percent_of_decoration', 50, 50, 1), 500);
+  /* Screens are per screen and per ORDER — six screens is six screens whether
+     the run is 50 shirts or 5,000. See tests/screen-fees.test.js. */
+  assert.strictEqual(at('per_screen', 35, 50, 3, 6), 210);
+  assert.strictEqual(at('per_screen', 35, 5000, 3, 6), 210);
 });
 
 test('an unknown add-on kind charges nothing rather than guessing', () => {
