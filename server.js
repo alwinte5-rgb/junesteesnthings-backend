@@ -4059,6 +4059,13 @@ form:has(>.step-row){display:block}
   .wrap{max-width:1840px}
 }
 /* Tables inside a narrower card must scroll rather than force the card wide. */
+/* A section heading inside the grid must span every column. Without this it is
+   just another grid ITEM: it takes one cell, the cards flow around it, and the
+   board renders headings sitting beside cards that belong to a different
+   section — which is worse than no headings at all, because it reads as fact. */
+.quote-grid-head{grid-column:1/-1;display:flex;align-items:baseline;gap:10px;margin:22px 0 -2px}
+.quote-grid-head:first-child{margin-top:0}
+.quote-grid-head h2{font-size:16px;margin:0;color:#0B1F4B}
 .quote-grid .card table{max-width:100%}
 .quote-grid .card details table{display:block;overflow-x:auto}
 `;
@@ -8187,8 +8194,8 @@ async function renderBoard(VIEW, req, res) {
     const gDone   = rows.filter(isDelivered);
 
     const group = (title, note, list) => !list.length ? '' : `
-      <div style="display:flex;align-items:baseline;gap:10px;margin:22px 0 10px">
-        <h2 style="font-size:16px;margin:0;color:#0B1F4B">${title}</h2>
+      <div class="quote-grid-head">
+        <h2>${title}</h2>
         <span class="muted" style="font-size:12.5px">${list.length}${note ? ' &middot; ' + note : ''}</span>
       </div>${list.map(quoteCard).join('')}`;
 
