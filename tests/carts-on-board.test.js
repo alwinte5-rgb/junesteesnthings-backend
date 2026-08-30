@@ -38,7 +38,7 @@ test('a feed without carts does not break the board', () => {
     'the no-key path must still return an array');
   assert.match(src, /carts: _studioCache\.carts \|\| \[\]/,
     'the error path must too');
-  assert.match(board, /\(studio\.carts \|\| \[\]\)\.slice\(\)/,
+  assert.match(board, /\(studio\.carts \|\| \[\]\)\.filter\(/,
     'and the board must not assume the field exists');
 });
 
@@ -66,10 +66,11 @@ test('an empty cart is described as what it is', () => {
 });
 
 test('carts carrying value sort first', () => {
-  const sortLine = board.slice(board.indexOf('const carts = (studio.carts'));
-  assert.match(sortLine.slice(0, 260), /\(Number\(b\.items\) > 0\) - \(Number\(a\.items\) > 0\)/,
+  const start = board.indexOf('const carts = (studio.carts');
+  const sortLine = board.slice(start, start + 700);
+  assert.ok(sortLine.includes('(Number(b.items) > 0) - (Number(a.items) > 0)'),
     'a cart with items outranks a bare email address');
-  assert.match(sortLine.slice(0, 260), /new Date\(b\.updated\) - new Date\(a\.updated\)/,
+  assert.ok(sortLine.includes('new Date(b.updated) - new Date(a.updated)'),
     'then newest first');
 });
 
@@ -97,11 +98,50 @@ test('a design preview is shown only when the feed says one exists', () => {
      exactly that dangling reference. */
   assert.match(board, /Array\.isArray\(c\.previews\) && c\.previews\.length \?/,
     'no previews means no image block at all');
-  assert.match(feed, /is_file\(\$dir \. str_replace/,
-    'the feed must confirm the file exists before publishing a URL');
+  assert.ok(feed.includes('if (!is_file($tmp)) continue;'),
+    'the item render must exist before its screenshots are read');
+  assert.ok(feed.includes('is_file($up . str_replace'),
+    'and each screenshot must exist on disk before its URL is published');
   assert.match(feed, /allowed_classes.*=> false/,
     'the cart blob is unserialised without instantiating objects');
   assert.ok(feed.includes("preg_match('#^"), 'the path shape is checked rather than trusted');
-  assert.ok(feed.includes('data/designs') || feed.includes("'designs', 'user_data', 'orders'"),
-    'and only the known design folders are searched');
+  assert.ok(feed.includes("^user_data/"),
+    'and only files under user_data are published — no traversal, no guessing');
+});
+
+/* ── Clearing things off the board ───────────────────────────────────────── */
+
+test('a cart can be dismissed, and the dismissal lives in the backend', () => {
+  /* The designer owns the cart; the backend owns whether the shop has dealt
+     with it. Writing back to the designer's table would make the feed
+     read-write and put that state in the app that deploys separately. */
+  assert.match(src, /app\.post\('\/cart\/dismiss', requireAdmin/);
+  assert.match(src, /CREATE TABLE IF NOT EXISTS dismissed_carts/);
+  assert.doesNotMatch(feed, /UPDATE .*saved_carts/, 'the feed stays read-only');
+});
+
+test('dismissing closes the version seen, not the customer', () => {
+  /* Keyed by the cart's `updated` at that moment: if they come back and change
+     their cart it resurfaces, because that is new information. A permanent
+     per-email block would hide a customer who returned ready to buy. */
+  const route = src.slice(src.indexOf("app.post('/cart/dismiss'"));
+  assert.match(route, /cart_updated = EXCLUDED\.cart_updated/,
+    're-dismissing must move the watermark forward');
+  assert.match(board, /return !seen \|\| new Date\(c\.updated\) > seen;/,
+    'a cart touched since its dismissal must come back');
+});
+
+test('a malformed dismissal is refused rather than stored', () => {
+  /* `updated` arrives from a hidden field. An unparseable date would store
+     Invalid Date and hide the cart forever, or never. */
+  const route = src.slice(src.indexOf("app.post('/cart/dismiss'"));
+  assert.match(route, /Number\.isNaN\(updated\.getTime\(\)\)\) return res\.redirect/);
+});
+
+test('cancelled quotes stay findable in Orders', () => {
+  /* They are off the board now. If Orders only carried paid or delivered work,
+     a cancelled quote with no payment would vanish from both places. */
+  const orders = src.slice(src.indexOf("app.get('/orders'"));
+  assert.match(orders.slice(0, 1600), /OR cancelled_at IS NOT NULL/,
+    'Orders must include cancelled work, or cancelling destroys the record');
 });

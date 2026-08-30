@@ -77,6 +77,21 @@ async function initDB() {
       created_at          TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  /* Carts the shop has finished with.
+     Kept HERE rather than in the designer's own table: the designer owns the
+     cart, the backend owns "June has dealt with this", and the feed stays
+     read-only. Keyed by the cart's `updated` at the moment it was dismissed, so
+     a customer who comes back and changes their cart resurfaces — dismissing
+     means "done with this version", not "never show this person again". */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dismissed_carts (
+      email         TEXT PRIMARY KEY,
+      cart_updated  TIMESTAMPTZ NOT NULL,
+      reason        TEXT,
+      dismissed_at  TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
   /* An enquiry that has been dealt with, and why — quoted, or deliberately let
      go. `status` could not carry this: it defaults to 'new' and only ever moves
      when a Clover payment lands, so every website enquiry has read 'new' since
@@ -7686,6 +7701,34 @@ async function sendReceipt(code, to = null) {
    demand, and the reason it was passed over is worth as much as the enquiry —
    132 of these turned out to be a spam wave, which is only visible if the
    dismissals say so. */
+/* Finished with a cart. Stored in the backend rather than written back to the
+   designer: the designer owns the cart, the backend owns whether the shop has
+   dealt with it, and the feed stays read-only in both directions.
+
+   Keyed by the cart's `updated` at this moment, so a customer who returns and
+   changes their cart resurfaces. Dismissing means "done with this version", not
+   "never show this person again" — a cart that comes back is new information. */
+app.post('/cart/dismiss', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const email = String(b.email || '').trim().toLowerCase().slice(0, 200);
+  const updated = new Date(String(b.updated || ''));
+  const reason = String(b.reason || '').trim().slice(0, 200);
+  if (!email || Number.isNaN(updated.getTime())) return res.redirect('/quotes');
+  try {
+    await pool.query(
+      `INSERT INTO dismissed_carts (email, cart_updated, reason)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (email) DO UPDATE
+         SET cart_updated = EXCLUDED.cart_updated,
+             reason = EXCLUDED.reason,
+             dismissed_at = NOW()`,
+      [email, updated.toISOString(), reason || null]);
+  } catch (err) {
+    console.error('cart dismiss failed:', err.message);
+  }
+  res.redirect('/quotes');
+});
+
 app.post('/lead/:id/dismiss', requireAdmin, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) return res.redirect('/quotes');
@@ -8688,6 +8731,8 @@ async function renderBoard(VIEW, req, res) {
        only available action could not be reversed. */
     const gOrders = rows.filter((q) => !isCancelled(q) && isPaid(q) && !isDelivered(q));
     const gQuotes = rows.filter((q) => !isCancelled(q) && !isPaid(q) && !isDelivered(q));
+    /* Not rendered on the board any more — kept for the count, so cancelled work
+       is findable rather than silently vanished. */
     const gCancelled = rows.filter(isCancelled);
     /* Delivered work is no longer on this board at all — it lives in Orders,
        which is where you go to look something up. A dashboard is for what still
@@ -8735,7 +8780,19 @@ async function renderBoard(VIEW, req, res) {
              href="mailto:${escEmail(c.email)}?subject=${encodeURIComponent('Your June’s Tees cart')}">Email</a>` : ''}
           ${c.restore_url ? `<a class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
              href="${escEmail(c.restore_url)}" target="_blank" rel="noopener">See their cart</a>` : ''}
+          <button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
+             onclick="document.getElementById('dc-${escEmail(c.email || '').replace(/[^a-z0-9]/gi, '')}').style.display='block';this.style.display='none'">Done with it</button>
         </div>
+        <form id="dc-${escEmail(c.email || '').replace(/[^a-z0-9]/gi, '')}" method="POST" action="/cart/dismiss"
+              style="display:none;margin-top:10px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px">
+          <input type="hidden" name="email" value="${escEmail(c.email || '')}">
+          <input type="hidden" name="updated" value="${escEmail(String(c.updated || ''))}">
+          <p class="muted" style="margin:0 0 8px;font-size:12.5px">It comes off the board. If they come back and
+            change their cart, it returns — this closes the version you have seen.</p>
+          <input name="reason" maxlength="200" placeholder="Why — e.g. quoted them already"
+                 style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">
+          <button type="submit" class="btn btn-ghost" style="padding:7px 16px;font-size:13px">Done with it</button>
+        </form>
       </div>`;
     };
 
@@ -8801,7 +8858,16 @@ async function renderBoard(VIEW, req, res) {
 
     /* Newest first, and the ones carrying real value first among those. A cart
        with nothing in it is an email address, not a job. */
-    const carts = (studio.carts || []).slice().sort((a, b) =>
+    /* Carts already dealt with drop off, unless the customer has touched theirs
+       since — then it is new activity and worth seeing again. */
+    const { rows: cartDismissals } = await pool.query('SELECT email, cart_updated FROM dismissed_carts');
+    const dismissedCart = new Map(cartDismissals.map((d) =>
+      [String(d.email).toLowerCase(), new Date(d.cart_updated)]));
+
+    const carts = (studio.carts || []).filter((c) => {
+      const seen = dismissedCart.get(String(c.email || '').toLowerCase());
+      return !seen || new Date(c.updated) > seen;
+    }).sort((a, b) =>
       (Number(b.items) > 0) - (Number(a.items) > 0) || new Date(b.updated) - new Date(a.updated));
 
     /* Two lanes. Left is what might become money; right is what already is.
@@ -8814,10 +8880,13 @@ async function renderBoard(VIEW, req, res) {
       group('Unfinished carts', 'started a design, never checked out', carts, cartCard,
             { accent: '#1848B8' });
 
+    /* Cancelled work is not on the working board at all. It was a group here,
+       which meant cancelling relabelled a job rather than clearing it — the
+       dashboard stayed exactly as full. It is all in Orders, which is the place
+       to look something up. */
     const laneRight =
       group('Orders', 'deposit in — work in hand', gOrders) +
-      group('Open quotes', 'sent, nothing paid yet', gQuotes) +
-      group('Cancelled', 'not going ahead', gCancelled);
+      group('Open quotes', 'sent, nothing paid yet', gQuotes);
 
     /* Both lanes empty means an empty board; one empty lane is normal and still
        renders, so the two columns do not jump around as work moves between
@@ -8880,7 +8949,8 @@ async function renderBoard(VIEW, req, res) {
         <a class="btn" href="/quote/new">New quote</a>
         <a class="btn btn-ghost" href="/quotes" style="margin-left:8px${VIEW==='money'?';font-weight:800':''}">Money</a>
         <a class="btn btn-ghost" href="/production" style="margin-left:6px${VIEW==='work'?';font-weight:800':''}">Production</a>
-        <a class="btn btn-ghost" href="/orders" style="margin-left:6px">Delivered &amp; past orders &rarr;</a></p>
+        <a class="btn btn-ghost" href="/orders" style="margin-left:6px">All orders${
+          gCancelled.length ? `, incl. ${gCancelled.length} cancelled` : ''} &rarr;</a></p>
       <!-- Books moved to the main nav; these two stay because they are the two
            views of THIS board, not separate destinations. -->
 
@@ -9400,9 +9470,14 @@ app.get('/orders', requireAdmin, async (req, res) => {
     /* Anything money has touched, oldest business included. A quote nobody ever
        paid is not an order and stays on the board. */
     const { rows } = await pool.query(
+      /* Cancelled quotes are included even when no money ever moved: the board
+         no longer shows them, so this is the only place left to find one. A
+         cancelled job that vanished from both would be unrecoverable. */
       `SELECT * FROM quotes
-        WHERE COALESCE(paid_amount,0) > 0 OR delivered_at IS NOT NULL
-        ORDER BY COALESCE(paid_at, delivered_at, created_at) DESC`);
+        WHERE COALESCE(paid_amount,0) > 0
+           OR delivered_at IS NOT NULL
+           OR cancelled_at IS NOT NULL
+        ORDER BY COALESCE(paid_at, delivered_at, cancelled_at, created_at) DESC`);
 
     const needle = q.toLowerCase();
     const hit = (o) => !needle || [o.code, o.name, o.email, o.phone,
