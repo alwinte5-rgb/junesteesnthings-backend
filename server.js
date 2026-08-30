@@ -2663,19 +2663,40 @@ function reviewStrip() {
     </div>`;
 }
 
+/* The marquee used to stop and stay stopped. Three separate causes, all here:
+ *
+ *  1. `:hover` STICKS ON TOUCH. Tapping or dragging over the strip on a phone
+ *     applies :hover and holds it until something else is tapped — so the
+ *     animation paused on first contact and never resumed. `:active` made it
+ *     worse, firing on every tap. Pause is now gated behind a real cursor.
+ *  2. On desktop the pointer simply RESTS over the strip while reading, because
+ *     the page scrolls under a stationary mouse. Pausing on hover is a nice idea
+ *     that in practice means "paused most of the time".
+ *  3. `prefers-reduced-motion` turned the animation off — correct — but the wrap
+ *     was `overflow:hidden`, so those users could see the first two reviews and
+ *     REACH NONE OF THE REST. That is the worse bug the stopping hid: for anyone
+ *     with Reduce Motion on (a default for a lot of people), seven of nine
+ *     reviews were simply unreachable.
+ *
+ * So: the strip is always manually scrollable, and the animation is decoration
+ * on top of that rather than the only way to see the content.
+ */
 const REVIEW_CSS = `
-.rv-wrap{overflow:hidden}
+.rv-wrap{overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:none}
 .rv-wrap::-webkit-scrollbar{display:none}
 .rv-track{display:flex;width:max-content;animation:rvscroll 60s linear infinite}
 .rv-set{display:flex;gap:10px;padding-right:10px}
-.rv-wrap:hover .rv-track{animation-play-state:paused}
-.rv-wrap:hover .rv-track,.rv-wrap:active .rv-track{animation-play-state:paused}
+@media (hover:hover) and (pointer:fine){
+  .rv-wrap:hover .rv-track{animation-play-state:paused}
+}
 .rv{flex:0 0 250px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:12px;padding:12px 14px}
 .rv .stars{color:#F4A623;font-size:13px;letter-spacing:1px}
 .rv-t{font-weight:700;font-size:13.5px;color:#0B1F4B;margin:4px 0 3px}
 .rv-x{font-size:12.5px;line-height:1.5;color:#46505f;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
 .rv-w{font-size:11px;color:#8b95a5;margin-top:7px}
 @keyframes rvscroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+/* No animation, but the strip still scrolls by hand — see the note above: this
+   rule used to make seven of nine reviews unreachable. */
 @media (prefers-reduced-motion:reduce){.rv-track{animation:none}}
 
 `;
@@ -5599,6 +5620,22 @@ app.get('/q/:code', async (req, res) => {
             balanceDue > 0 ? ` A balance of <b>${money(balanceDue)}</b> is due ${BALANCE_WHEN}.` : ' Paid in full — nothing further to pay.'}</div>`
           : accepted ? `<div class="ok"><b>Accepted — thank you!</b> Choose how you'd like to pay the deposit below.</div>` : ''}
         ${(!accepted && expired) ? `<div class="warn">This quote has expired, but prices usually still stand — just text and we'll refresh it.</div>` : ''}
+        ${(() => {
+          /* Why the last action did not happen. Pressing Accept and having the
+             page reload unchanged is worse than an error — the customer assumes
+             the button is broken, or that it worked. */
+          const e = String(req.query.e || '');
+          if (e === 'pending') return `<div class="warn"><b>Your changes are with ${SHOP_SIGNER} first.</b>
+            Accepting is on hold until the quote is updated with the new price — usually the same day.</div>`;
+          if (e === 'already') return `<div class="ok">This quote is already accepted — nothing more to do here.</div>`;
+          if (e === 'gone') return `<div class="warn">We could not find that quote. Please text us and we will resend it.</div>`;
+          if (e === 'err') return `<div class="warn">Something went wrong on our end. Please text us — nothing was charged.</div>`;
+          return '';
+        })()}
+        ${q.requested_items ? `<div class="warn" id="changes"><b>Change requested — with ${SHOP_SIGNER}.</b>
+          The new sizes are below. ${SHOP_SIGNER} confirms the price and this same link updates,
+          so there is nothing new to open. Accepting and paying are on hold until then, so nobody
+          pays against the old figure.</div>` : ''}
 
         <table class="items"><thead><tr>
           <th>Item</th><th class="num">Qty</th><th class="num">Each</th><th class="num">Amount</th>
@@ -5657,7 +5694,7 @@ app.get('/q/:code', async (req, res) => {
         </div>
       </div>` : ''}
 
-      ${paid ? '' : accepted ? `
+      ${paid || q.requested_items ? '' : accepted ? `
       <div class="card">
         <h1 style="font-size:18px">Pay your ${t.deposit >= t.total ? 'balance' : 'deposit'} — ${money(t.deposit)}</h1>
         <p class="muted" style="margin:6px 0 14px">Whichever is easiest. Nothing else is due until pickup or delivery.</p>
@@ -5666,6 +5703,16 @@ app.get('/q/:code', async (req, res) => {
           Card or Apple&nbsp;Pay — ${money(round2(t.deposit + cardFee(t.deposit)))}
         </a>
         <p class="muted" style="margin:-4px 0 14px;font-size:12px">Includes the ${Math.round(CARD_FEE*100)}% card processing fee (${money(cardFee(t.deposit))}).</p>
+
+        ${t.deposit < t.total ? `
+        <div style="border:1px solid #e3e8f2;border-radius:10px;padding:12px;margin-bottom:14px">
+          <b>Rather settle it all now? — ${money(t.total)}</b>
+          <p class="muted" style="margin:4px 0 8px;font-size:12.5px">Nothing left to pay at pickup.</p>
+          <a class="btn-ghost" style="display:block;text-align:center;padding:9px"
+             href="/q/${q.code}/pay/full">Pay in full by card — ${money(round2(t.total + cardFee(t.total)))}</a>
+          <p class="muted" style="margin:8px 0 0;font-size:12px">Or send the full ${money(t.total)} by Zelle
+            to <b>${escEmail(ZELLE_HANDLE)}</b>, memo <b>${escEmail(q.code)}</b> — no card fee.</p>
+        </div>` : ''}
 
         <div style="border:2px solid #1a9c6b;border-radius:10px;padding:12px;margin-bottom:10px;background:#f2fbf7">
           <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap">
@@ -5839,7 +5886,7 @@ ${quotePricingSource()}
    form-encoded POST is all a Checkout Session needs, and Apple Pay + Google Pay
    appear automatically on supported devices with no extra work.
    The card fee is added as its own visible line so nobody feels surprised. */
-app.get(['/q/:code/pay/card', '/q/:code/pay/balance'], async (req, res) => {
+app.get(['/q/:code/pay/card', '/q/:code/pay/balance', '/q/:code/pay/full'], async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/q/' + encodeURIComponent(code));
   const secret = process.env.STRIPE_SECRET_KEY;
@@ -5861,7 +5908,14 @@ app.get(['/q/:code/pay/card', '/q/:code/pay/balance'], async (req, res) => {
     /* Same route serves the deposit and the balance: charging the deposit when
        it is already paid, or a balance when nothing is owed, would both be
        wrong, so the amount is derived rather than passed in. */
-    const wantsBalance = req.path.endsWith('/balance');
+    /* `/full` is the same arithmetic as `/balance` — everything still owed —
+       but it is offered BEFORE any payment exists, where the word "balance"
+       would be meaningless. A customer who wants to settle the whole job in one
+       go was previously forced through the deposit; this is that door.
+
+       One expression, so a deposit-only flow and a pay-in-full flow can never
+       disagree about what is owed. */
+    const wantsBalance = req.path.endsWith('/balance') || req.path.endsWith('/full');
     const amount = wantsBalance
       ? round2(Math.max(0, Number(t.total) - alreadyPaid))
       : t.deposit;
@@ -5887,8 +5941,10 @@ app.get(['/q/:code/pay/card', '/q/:code/pay/balance'], async (req, res) => {
         </div>`));
     }
 
+    /* The receipt has to name what was actually bought. "Remaining balance" on a
+       first-and-only payment reads as though something was owed beforehand. */
     const label = wantsBalance
-      ? `Remaining balance — quote ${q.code}`
+      ? (alreadyPaid > 0 ? `Remaining balance — quote ${q.code}` : `Payment in full — quote ${q.code}`)
       : (t.deposit >= t.total ? `Payment in full — quote ${q.code}` : `50% deposit — quote ${q.code}`);
 
     const form = new URLSearchParams();
@@ -6439,11 +6495,26 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
         syncQuoteToBrevo(q).catch(() => {});
         syncQuoteToLumise(q).catch(() => {});
       }
+      return res.redirect('/q/' + code);
     }
-    res.redirect('/q/' + code);
+
+    /* The UPDATE matched nothing, and until now that fell through to a plain
+       redirect — the customer pressed Accept, the page reloaded unchanged, and
+       nothing anywhere said why. That is what "accept didn't work" looks like
+       from the other side, and it is worse than an error.
+
+       There are exactly two reasons it can match nothing, and the customer is
+       told which. */
+    const { rows: why } = await pool.query(
+      'SELECT accepted_at IS NOT NULL AS already, requested_items IS NOT NULL AS pending FROM quotes WHERE code=$1',
+      [code]);
+    const reason = !why.length ? 'gone'
+      : why[0].pending ? 'pending'
+      : why[0].already ? 'already' : 'gone';
+    return res.redirect('/q/' + code + '?e=' + reason);
   } catch (err) {
     console.error('accept failed:', err.message);
-    res.redirect('/q/' + code);
+    res.redirect('/q/' + code + '?e=err');
   }
 });
 
