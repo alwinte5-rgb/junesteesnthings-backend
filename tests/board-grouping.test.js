@@ -68,21 +68,27 @@ test('every job lands in exactly one group', () => {
 });
 
 test('an empty group renders nothing at all', () => {
-  /* A heading with no cards under it reads as a broken page. */
-  assert.match(board, /const group = \(title, note, list\) => !list\.length \? '' :/,
-    'an empty group must render as an empty string');
+  /* A heading with no cards under it reads as a broken page — unless the group
+     asks to stay visible, which only a section whose emptiness is itself the
+     news should do. */
+  assert.match(board, /if \(!list\.length && !o\.always\) return '';/,
+    'an empty group must render as an empty string by default');
 });
 
 test('the three groups are rendered in working order', () => {
   /* Work in hand first — it has deadlines and money attached. Quotes second,
      because they need chasing. Delivered last, because it is history. */
+  /* Delivered work is deliberately NOT here any more — it lives in Orders. A
+     dashboard is for what still needs doing. */
+  const e = board.indexOf("group('New enquiries'");
   const i = board.indexOf("group('Orders'");
   const j = board.indexOf("group('Open quotes'");
-  const k = board.indexOf("group('Delivered'");
   const l = board.indexOf("group('Cancelled'");
-  assert.ok(i > -1 && j > -1 && k > -1 && l > -1, 'all four groups must be rendered');
-  assert.ok(i < j && j < k && k < l,
-    'order must be Orders, Open quotes, Delivered, then Cancelled last');
+  assert.ok(e > -1 && i > -1 && j > -1 && l > -1, 'all four live groups must be rendered');
+  assert.ok(e < i && i < j && j < l,
+    'order must be New enquiries, Orders, Open quotes, then Cancelled last');
+  assert.strictEqual(board.indexOf("group('Delivered'"), -1,
+    'delivered work must not be rendered on the board');
 });
 
 test('the sort inside each group is preserved', () => {
@@ -96,8 +102,12 @@ test('the sort inside each group is preserved', () => {
 test('the header counts the two live groups separately', () => {
   /* "10 total" told June nothing about how many quotes were actually
      outstanding — which is the number the board exists to answer. */
-  assert.match(board, /\$\{gQuotes\.length\} open quote/);
-  assert.match(board, /gOrders\.length\} order/);
+  /* Whitespace-tolerant: the header wraps across lines, and a test that breaks
+     on reformatting teaches people to stop trusting the suite. */
+  assert.match(board, /gQuotes\.length\}\s*open quote/);
+  assert.match(board, /gOrders\.length\}\s*order/);
+  assert.match(board, /\$\{leads\.length\} new enquir/,
+    'unanswered enquiries lead the count — they are the ones that cost money');
 });
 
 test('the studio orders route is left alone', () => {
