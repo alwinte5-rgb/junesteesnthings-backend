@@ -112,8 +112,16 @@ test('the monitor can never break the hourly sweep', () => {
 });
 
 test('the monitor is actually called by the hourly sweep', () => {
-  assert.match(src, /await brevoBreachCheck\(\);/,
+  /* Anchored on the sweep REACHING the monitor, not on the exact call syntax.
+     The sweep used to run its tasks in one shared try block and now runs each
+     through a `step()` wrapper so one slow task cannot swallow the rest; an
+     assertion on `await brevoBreachCheck();` failed on that refactor and
+     reported the monitor as uncalled when it was merely called differently. */
+  assert.match(src, /brevoBreachCheck\)?;/,
     'a monitor nothing calls is not a monitor');
+  const sweep = src.slice(src.indexOf('const runSweep'));
+  assert.ok(sweep.includes('brevoBreachCheck'),
+    'brevoBreachCheck must be reached from runSweep itself');
 });
 
 /* ── the secrets-handling fixes that came out of the same incident ────────── */

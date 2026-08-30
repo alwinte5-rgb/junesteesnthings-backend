@@ -1,0 +1,56 @@
+# Products added 2026-08-29, HELD for manual review
+#
+# All are priced and sized from live S&S data. What still needs a person:
+#   1. the design area — every product's print zone, checked in the editor
+#   2. the decoration types offered on it — see the printings column
+#   3. base canvas artwork for vests and jackets, which do not have any
+#
+# Bring one back with:  UPDATE lumise_products SET active=1, ssa_auto_off=NULL WHERE id=<id>;
+#
+id	name	price	ssa_style
+115	Valucap VC300A Bio-Washed Dad Hat	7.72	494
+116	YP Classics 6245CM Classic Dad Hat	12.98	4338
+117	Liberty Bags 8881 Drawstring Pack	7.98	1918
+118	econscious EC8056 Eco Promo Tote	6.5	14745
+119	Comfort Colors CCET0 Everyday Tote	22.56	16698
+120	CORE365 78181 Women's Origin Performance Polo	18.84	13179
+121	CORE365 CE104 Men's Market Snag Protect Polo	21.62	13199
+122	C2 Sport 5900 Men's Utility Polo	19.04	7379
+123	CORE365 CE10 Unisex Capital Performance Tee	5.88	13189
+124	Champion CO200 Packable Anorak Jacket	39.78	7378
+125	Independent Trading IND5000P Legend Pullover	62.74	8799
+126	CORE365 78190 Women's Journey Fleece Jacket	37.6	13274
+127	Hanes HMB000 Men's V-Neck Scrub Top	27.04	16866
+128	CORE365 CE520 Men's Shoreline Shirt	40.16	16373
+129	SubliVie 1910 Men's Polyester Sublimation Tee	12.3	2188
+130	SubliVie 1210 Youth Polyester Sublimation Tee	9.72	2194
+131	SubliVie 1310 Toddler Polyester Sublimation Tee	9.72	2191
+132	Artisan Collection RP021 Utility Shirt	41.1	16923
+133	CORE365 CE702 Men's Prevail Packable Puffer Vest	57.68	13362
+134	CORE365 CE702W Women's Prevail Packable Puffer Vest	57.68	13330
+135	CORE365 CE703 Men's Techno Lite Unlined Vest	29.86	13204
+136	Comfort Colors 1580 Garment-Dyed Quarter-Zip	53.3	4735
+137	C2 Sport 5102 Men's Quarter-Zip Pullover	22.3	9309
+138	Champion S450 Powerblend Quarter-Zip	36.28	11682
+139	CORE365 88183 Men's Techno Lite Jacket	29.86	13212
+140	CORE365 CE700 Men's Prevail Packable Puffer Jacket	67.98	13372
+141	Harriton M750 Men's Packable Hooded Nylon Jacket	31.92	14181
+142	Devon & Jones D620 Men's Crown Broadcloth Shirt	56.64	15658
+143	Artisan Collection RP144 Annex Oxford Shirt	24.18	13030
+144	Boxercraft BU7401 Men's Flannel Button Down	37.68	16300
+145	Adidas A572 Men's Puffer Full-Zip Vest	90.64	11019
+146	Independent Trading EXP120PFV Men's Puffer Vest	55.9	7791
+147	CORE365 88191 Men's Journey Fleece Vest	35.02	13209
+148	Gildan 18810 Heavy Blend Quarter-Zip	20.5	16610
+149	Next Level 9643 Fleece Quarter-Zip Pullover	32.44	11231
+150	Independent Trading EXP15WPQ Women's Quarter-Zip	27.7	16201
+151	Harriton M421 Pilbloc Quarter-Zip Pullover	42.74	14196
+152	Independent Trading EXP35SSZ Poly-Tech Soft Shell	82.86	4841
+153	Harriton M740 Fleece Lined Nylon Jacket	58.7	14352
+154	YP Classics 1500KC Cuffed Beanie	7.42	4336
+155	Valucap 8804H Five-Panel Trucker Cap	7	1652
+156	Valucap 2260 Cotton Twill Cap	8.04	1456
+157	Independent Trading 29L Day Tripper Duffel	31.52	9908
+158	Under Armour Ozsee Sackpack	24.1	15460
+159	Dickies 2574 Men's Short Sleeve Work Shirt	42.94	9864
+160	Harriton M585 Advantage Short Sleeve Work Shirt	35.02	14200

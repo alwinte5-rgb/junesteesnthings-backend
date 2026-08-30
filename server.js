@@ -5,6 +5,9 @@ const cors       = require('cors');
 const helmet     = require('helmet');
 const path       = require('path');
 const crypto     = require('crypto');
+/* Runs the shared pricing source (quotePricingSource) so the server prices a
+   line with the same characters the browser does. See that function. */
+const vm         = require('vm');
 const { Pool }   = require('pg');
 const { Resend } = require('resend');
 const axios      = require('axios');
@@ -102,6 +105,14 @@ async function initDB() {
     'tax NUMERIC(10,2) DEFAULT 0',
     'total NUMERIC(10,2) DEFAULT 0',  // subtotal + tax (card fee is added at payment)
     'deposit NUMERIC(10,2) DEFAULT 0',
+    /* An off-the-top discount on the whole job — the "I'll do it for X" that
+       actually gets given at the counter. What was ENTERED is stored (percent
+       or dollars), not just the resulting figure, so editing the lines later
+       re-applies "10% off" instead of silently freezing yesterday's dollars.
+       The dollar amount is always derived, in quoteTotals(). */
+    "discount_kind TEXT NOT NULL DEFAULT 'amt'",   // 'pct' | 'amt'
+    'discount_value NUMERIC(10,2) NOT NULL DEFAULT 0',
+    'discount_note TEXT',                          // the reason, shown to them
     'paid_amount NUMERIC(10,2) DEFAULT 0',
     'paid_method TEXT',
     'paid_at TIMESTAMPTZ',
@@ -3149,12 +3160,424 @@ function deliveryEstimate(from = new Date()) {
   };
 }
 
-/** Recompute every figure from the stored lines. Single source of truth. */
+/* ── Blank (garment) volume pricing ───────────────────────────────────────
+ *
+ * Blanks cost the same per piece whatever the order size — there is no supplier
+ * break behind this — so every point given away here comes straight off margin.
+ * The curve is therefore deliberately shallow at the bottom and only opens up
+ * where a flat 2x would put the shop above market on a bid it wants to win.
+ *
+ * These are FLOORS (>= qty), unlike the decoration tiers in the designer, whose
+ * keys are band CEILINGS. The two conventions are opposite and that is a real
+ * trap: read one as the other and every band lands one step out. Neither can be
+ * changed unilaterally — the ceilings mirror the storefront's own pricing code —
+ * so the rule is that this table is the only place floors are used, and it is
+ * the reason this comment exists.
+ */
+const BLANK_TIERS = [
+  { min: 3000, pct: 8 },
+  { min: 1000, pct: 5 },
+  { min:  500, pct: 3 },
+  { min:  125, pct: 2 },
+];
+
+/* Below this the garment is flat cost x2 with no volume break at all — the
+   shop's stated rule, and honest arithmetic: there is no supplier discount
+   behind any of this, so a garment break is margin given away rather than a
+   saving passed on. It buys competitiveness on the bids where the garment is
+   most of the price, which is why anything survives above 125. */
+const BLANK_DISCOUNT_MIN_QTY = 125;
+
+/** Percent off the garment for a given piece count. Highest matching floor wins. */
+function blankDiscountPct(qty) {
+  const q = Number(qty);
+  if (!Number.isFinite(q) || q <= 0) return 0;
+  for (const t of BLANK_TIERS) if (q >= t.min) return t.pct;
+  return 0;
+}
+
+/** The garment's price at this quantity, after volume pricing. */
+function blankPriceFor(base, qty) {
+  const b = Number(base);
+  if (!Number.isFinite(b) || b <= 0) return 0;
+  return round2(b * (1 - blankDiscountPct(qty) / 100));
+}
+
+/* Screen printing is not offered below this. Under it the job goes to DTF or
+   heat-transfer vinyl, both of which are already priced in the designer. The
+   quote form must say so rather than silently pricing a screen job at the
+   50-71 rate, which is what a ceiling-keyed table would otherwise do. */
+const SCREEN_MIN_QTY = 50;
+const SCREEN_METHOD_RE = /screen\s*print/i;
+
+/* Digitizing is billed ONCE PER DESIGN, but a decoration method in this system
+   is a per-piece rate multiplied by the line quantity — pick it as the method
+   on a 50-piece line and it bills the fee fifty times. So it is not offered as
+   a method at all: when an embroidery method is chosen the form asks for it
+   separately and it is added to the line once.
+   It is also waived whenever the customer supplies a usable file, which is a
+   judgement only a person can make, so "no digitizing" stays the default. */
+const EMBROIDERY_METHOD_RE = /embroider/i;
+const DIGITIZING_METHOD_RE = /digitiz/i;
+
+/** The digitizing fees the catalogue offers, cheapest first. */
+function digitizingOptions(catalog) {
+  return (catalog.methods || [])
+    .filter((m) => DIGITIZING_METHOD_RE.test(m.title || ''))
+    .map((m) => {
+      const pos = m.positions && (m.positions.front || m.positions[Object.keys(m.positions)[0]]);
+      return { id: m.id, title: m.title, price: pos && pos.length ? Number(pos[0].price) : 0 };
+    })
+    .filter((d) => d.price > 0)
+    .sort((a, b) => a.price - b.price);
+}
+
+/* ── Add-ons ──────────────────────────────────────────────────────────────
+ *
+ * Everything chargeable that is not the blank and not the decoration tier.
+ * Declarative because the alternative — a branch per add-on inside the pricing
+ * code — is how the digitizing bug happened: digitizing was a decoration
+ * method, decoration methods are per-piece, so a $30 fee billed $1,500 on a
+ * 50-piece line. `kind` states how a charge scales, once, and every surface
+ * reads it the same way.
+ *
+ *   once                  flat, per design, whatever the quantity
+ *   per_order             flat, per job
+ *   per_piece             x quantity
+ *   per_piece_per_colour  x quantity x colours
+ *   percent_of_decoration x the decoration subtotal
+ *
+ * `appliesTo` matches the METHOD TITLE, so an add-on cannot be attached to work
+ * it makes no sense for — no rush on a screen-print job that has none of the
+ * embroidery capacity constraint, no digitizing on DTF.
+ */
+const ADDONS = [
+  { code: 'underbase', label: 'Underbase (dark garments)', appliesTo: SCREEN_METHOD_RE,
+    kind: 'once', rate: 25, auto: 'dark',
+    note: 'A 1-colour print on a dark garment needs two screens: the white underbase, then the colour.' },
+  { code: 'specialty_ink', label: 'Specialty ink (metallic, glitter, waterbase, discharge)',
+    appliesTo: SCREEN_METHOD_RE, kind: 'per_piece', rate: 1.50 },
+  { code: 'unbagging', label: 'Unbagging', appliesTo: SCREEN_METHOD_RE,
+    kind: 'per_piece', rate: 0.50,
+    note: 'Charged when the blanks arrive individually bagged and have to be taken out.' },
+  { code: 'puff', label: 'Puff / 3D foam', appliesTo: EMBROIDERY_METHOD_RE,
+    kind: 'per_piece', rate: 4.50 },
+  { code: 'jumbo_hoop', label: 'Jumbo hoop (design over 11")', appliesTo: EMBROIDERY_METHOD_RE,
+    kind: 'percent_of_decoration', rate: 50 },
+];
+
+/* Rush is per JOB, not per line — the shop is buying back calendar time once,
+   however many lines the quote has. Deliberately no 1-day or same-day option:
+   the shop does not offer it, and an option that has to be refused is worse
+   than no option. Holiday mode doubles the fee, because in season that time is
+   genuinely scarcer. */
+const RUSH_OPTIONS = [
+  { code: '', label: 'Standard turnaround', days: 0, fee: 0 },
+  { code: 'rush3', label: 'Rush — 3 business days', days: 3, fee: 10 },
+  { code: 'rush2', label: 'Rush — 2 business days', days: 2, fee: 15 },
+];
+const RUSH_CAVEAT = 'Rush is subject to availability and is confirmed before you pay — never guaranteed at quote time.';
+
+/* Holiday mode: rush costs double and everything takes 3 days longer. One
+   switch rather than four settings, so the busy season cannot be half on. It
+   is surfaced on the quote form because the failure mode is leaving it on in
+   March and quoting every job three days slow. */
+const HOLIDAY_MODE = String(process.env.JT_HOLIDAY_MODE || '') === '1';
+const HOLIDAY_EXTRA_DAYS = 3;
+
+/** The add-ons available for a method, in the order they should be offered. */
+function addonsFor(methodTitle) {
+  const t = String(methodTitle || '');
+  return t ? ADDONS.filter((a) => a.appliesTo.test(t)) : [];
+}
+
+/** The rush fee actually charged, holiday doubling applied. */
+function rushFeeFor(code, holiday = HOLIDAY_MODE) {
+  const r = RUSH_OPTIONS.find((x) => x.code === String(code || ''));
+  if (!r || !r.fee) return 0;
+  return round2(r.fee * (holiday ? 2 : 1));
+}
+
+/* ── The pricing engine ───────────────────────────────────────────────────
+ *
+ * ONE implementation of the line-pricing rule, shared by every surface that
+ * prices anything: the admin quote form, the save path that writes the money,
+ * the customer's edit preview, and the public estimator.
+ *
+ * Returned as source text rather than defined directly, so the browser and the
+ * server run the SAME CHARACTERS. Four copies of a pricing rule is four chances
+ * to drift, and drift here means the price on screen is not the price charged.
+ * This is the pattern `uploadStatusScript()` already uses, and it is tested the
+ * same way — lifted out of this file and executed, so the tests cannot quietly
+ * describe code that no longer exists.
+ *
+ * Pure: figures in, figures out, no DOM and no database. That is what makes it
+ * testable without a browser and safe to run in both places.
+ */
+function quotePricingSource() {
+  return `
+      /* Blank volume pricing. Tiers are FLOORS (>= qty) — the decoration tiers
+         in the designer are CEILINGS. The two conventions are opposite and
+         reading one as the other puts every band one step out. */
+      function blankPriceAt(base, qty, tiers) {
+        var b = parseFloat(base);
+        if (!isFinite(b) || b <= 0) return 0;
+        var pct = 0;
+        for (var i = 0; i < tiers.length; i++) {
+          if (qty >= tiers[i].min) { pct = tiers[i].pct; break; }
+        }
+        return Math.round(b * (1 - pct / 100) * 100) / 100;
+      }
+
+      /* The decoration rate for a quantity.
+​
+         Keys are band CEILINGS — the price applies UP TO that quantity — which
+         is what the storefront's own pricing code does. So the winning band is
+         the FIRST whose ceiling the quantity still fits inside, and above the
+         largest band the largest band's price holds.
+​
+         This is the single easiest thing in the system to get wrong. Walking
+         the list with \`if (qty >= key) price = ...\`, which is how a floor-keyed
+         table is read, looks correct and is not: at 100 pieces it returns the
+         50-99 rate instead of the 100-249 one, so the customer is charged the
+         higher price for ordering more. Every band lands one step out. */
+      function tierAt(positions, qty, stage, colours) {
+        if (!positions) return 0;
+        var keys = Object.keys(positions);
+        if (!keys.length) return 0;
+        var pos = stage && positions[stage] ? positions[stage]
+                : (positions.front || positions[keys[0]]);
+        if (!pos || !pos.length) return 0;
+        var bands = pos.slice().sort(function (a, b) { return a.min_qty - b.min_qty; });
+        for (var i = 0; i < bands.length; i++) {
+          if (qty <= bands[i].min_qty) return bandPrice(bands[i], colours);
+        }
+        return bandPrice(bands[bands.length - 1], colours);
+      }
+
+      /* One band's price at a given ink-colour count.
+
+         Screen printing is ONE method with a column per colour count, not seven
+         methods — the design decides how many screens it needs, so the count
+         cannot be a question asked before anything is drawn. A colour band is
+         \`{"1-color":8.45, ... ,"full-color":23.75}\`, keyed exactly as the
+         storefront writes and reads it, so the key is built from the count the
+         same way here (app.js ~16466) instead of by a second convention.
+
+         Where the storefront falls back to 0 for a column it cannot find, this
+         falls back to the band's published \`price\` — the one-colour rate. A $0
+         decoration does not look like a failure: the line still totals, it just
+         totals to the blank, and the shop finds out after the job is printed. */
+      function bandPrice(band, colours) {
+        if (!band) return 0;
+        if (!band.colors) return band.price;
+        /* Clamped before the key is built, not after. A negative or zero count
+           is junk, but "-3-color" is simply a column that does not exist, so it
+           would fall through to the full-colour backstop and quote the DEAREST
+           rate off a malformed input. One colour is the honest floor. */
+        var c = parseInt(colours, 10);
+        if (!(c > 0)) c = 1;
+        var v = band.colors[c + '-color'];
+        if (v === undefined) v = band.colors['full-color'];
+        return v === undefined ? band.price : Number(v);
+      }
+
+      /* How many ink colours a line is printed in.
+
+         The catalogue holds two generations of screen printing at once. The
+         consolidated \`color\`-type method has a column per count and must be
+         ASKED, because at quote time only a person has seen the artwork. The
+         seven legacy per-colour methods carry the count in their own titles
+         ("Screen Printing — 2 Colors") and have no picker to read.
+
+         Written once, here, because this figure decides both the decoration
+         column and — once screens are billed as one-time fees — how many
+         screens the job needs. Two copies of it is two chances for the price on
+         screen to differ from the price charged. */
+      function colourCount(method, picked) {
+        if (!method) return 1;
+        if (method.type === 'color') return parseInt(picked, 10) > 0 ? parseInt(picked, 10) : 1;
+        /* Double backslashes below are deliberate. This source is returned from
+           a template literal, so a single one is eaten before either engine
+           compiles the regex — the digit and space classes would both collapse
+           to bare letters, match nothing, and price every legacy per-colour
+           method as a single colour. */
+        return parseInt((String(method.title || '').match(/(\\d+)\\s*Colou?r/i) || [0, 1])[1], 10) || 1;
+      }
+
+      /* One add-on's charge. The whole point of the table is that this
+         switch exists exactly once. */
+      function addonAmount(a, qty, colours, decorationSubtotal) {
+        var n = parseFloat(a.rate) || 0;
+        var q = parseInt(qty, 10) || 0;
+        var c = parseInt(colours, 10) || 1;
+        switch (a.kind) {
+          case 'once':                  return n;
+          case 'per_order':             return n;
+          case 'per_piece':             return n * q;
+          case 'per_piece_per_colour':  return n * q * c;
+          case 'percent_of_decoration': return (decorationSubtotal || 0) * (n / 100);
+          default:                      return 0;
+        }
+      }
+
+      /* Price one line.
+         \`unitOverride\` is a hand-typed each-price: it replaces the computed
+         blank+decoration but never the add-ons, because an override is a
+         judgement about the work, not a decision to give away the extras. */
+      function priceLine(o) {
+        var qty = parseInt(o.qty, 10) || 0;
+        /* \`o.colours\` is what the admin PICKED, not a settled count — a legacy
+           per-colour method ignores it and reads its own title instead. */
+        var colours = colourCount(o.method, o.colours);
+
+        /* The garment price. \`blankOverride\` replaces the catalogue price for
+           this line — supplier prices move between the day a cost was recorded
+           and the day a quote is written, and the alternative to typing the
+           real one here is quoting from a stale figure. Volume tiers still
+           apply to it, because a typed price is a cost correction, not a
+           decision to abandon the pricing rule. */
+        var blankBase = o.product ? o.product.price : 0;
+        if (o.blankOverride !== null && o.blankOverride !== undefined &&
+            o.blankOverride !== '' && isFinite(parseFloat(o.blankOverride)) &&
+            parseFloat(o.blankOverride) > 0) {
+          blankBase = parseFloat(o.blankOverride);
+        }
+        var blank = blankBase ? blankPriceAt(blankBase, qty, o.blankTiers || []) : 0;
+        /* Both sides, when the job is printed front AND back. The picker used to
+           offer only "one location" or "second location" — either/or — so a
+           two-sided job could be quoted at one side's price while the designer
+           charged both, and the quote came in under the work.
+
+           Positions are read by ORDER, not by name: the group keys are opaque
+           ("id", "mr8a5dlx"). A method with two groups (DTF) gives front + the
+           cheaper back; a method with one (screen printing, multi:false) doubles
+           its only table — which is what the designer does too, because a second
+           screen-print location is a second set of screens, not a cheaper pass. */
+        var decoration = 0;
+        if (o.method) {
+          if (o.stage === 'both') {
+            var pk = Object.keys(o.method.positions || {});
+            decoration = Number(tierAt(o.method.positions, qty, pk[0], colours)) +
+                         Number(tierAt(o.method.positions, qty, pk[1] || pk[0], colours));
+          } else {
+            decoration = Number(tierAt(o.method.positions, qty, o.stage, colours));
+          }
+        }
+
+        /* A decoration minimum, enforced. Tier keys are CEILINGS, so a quantity
+           below the smallest band prices at that band — a 12-piece screen job
+           quoted at the 50-99 rate while the shop pays a 50-piece contract
+           minimum plus screens. The form already WARNED about this; warning does
+           not stop the quote being saved and the money being taken, so the charge
+           itself is corrected here.
+
+           Billed as the minimum order it actually triggers, scaled per piece so
+           the line arithmetic (unit x qty) still holds. The admin keeps the last
+           word through the unit override — this sets the honest default, it does
+           not remove a human's ability to decide otherwise.
+
+           Lives in priceLine, not beside it, because this is the source both the
+           browser and the save path execute: enforcement written anywhere else
+           would apply on one surface and not the other, which is the exact class
+           of bug quotePricingSource() exists to prevent.
+
+           min_order_qty comes from the method row itself, which is also where the
+           designer reads it (core/cart.php printing_min_qty). One definition in
+           the database, read by every engine — not a constant restated in each
+           language, which is how the two drift. It is also why this function has
+           no free variables: the parity test lifts this source and executes it
+           alone, so anything it cannot see would break that guarantee. */
+        var decoMin = (o.method && o.method.min_order_qty) ? (parseInt(o.method.min_order_qty, 10) || 0) : 0;
+        var belowDecoMin = decoMin > 0 && qty > 0 && qty < decoMin;
+        if (belowDecoMin && decoration > 0) {
+          decoration = Math.round(decoration * (decoMin / qty) * 100) / 100;
+        }
+
+        /* Extended sizes carry an upcharge that applies only to the pieces in
+           those sizes — 24 shirts of which 4 are 2XL is not 24 mediums. */
+        var sizeUpcharge = 0;
+        if (o.sizeMix && o.product && o.product.sizes) {
+          for (var sz in o.sizeMix) {
+            var n = parseInt(o.sizeMix[sz], 10) || 0;
+            if (n <= 0) continue;
+            for (var j = 0; j < o.product.sizes.length; j++) {
+              if (o.product.sizes[j].size === sz) { sizeUpcharge += n * Number(o.product.sizes[j].upcharge || 0); break; }
+            }
+          }
+        }
+
+        var listUnit = Math.round((blank + decoration) * 100) / 100;
+        var hasOverride = o.unitOverride !== null && o.unitOverride !== undefined &&
+                          o.unitOverride !== '' && isFinite(parseFloat(o.unitOverride));
+        var unit = hasOverride ? parseFloat(o.unitOverride) : listUnit;
+
+        var decorationSubtotal = decoration * qty;
+        var addonLines = [], addonTotal = 0;
+        for (var k = 0; k < (o.addons || []).length; k++) {
+          var a = o.addons[k];
+          var amt = Math.round(addonAmount(a, qty, colours, decorationSubtotal) * 100) / 100;
+          if (!amt) continue;
+          addonLines.push({ code: a.code, label: a.label, kind: a.kind, rate: a.rate, total: amt });
+          addonTotal += amt;
+        }
+
+        /* A hand-typed price is taken as final for the garment, so size
+           upcharges are not layered on top of it — they are already the
+           reason the price was typed. */
+        var upcharge = hasOverride ? 0 : sizeUpcharge;
+        var lineTotal = Math.round((unit * qty + upcharge + addonTotal) * 100) / 100;
+        var listTotal = Math.round((listUnit * qty + sizeUpcharge + addonTotal) * 100) / 100;
+
+        return {
+          blank: blank, decoration: decoration, sizeUpcharge: upcharge,
+          addonLines: addonLines, addonTotal: Math.round(addonTotal * 100) / 100,
+          unit: unit, listUnit: listUnit, manual: hasOverride,
+          lineTotal: lineTotal, listTotal: listTotal
+        };
+      }
+`;
+}
+
+/* The same source, executed here, so Node prices a line with the identical
+   code the browser runs. */
+const { priceLine, addonAmount, colourCount } = (function () {
+  const sandbox = {};
+  vm.runInNewContext(quotePricingSource() +
+    '\nthis.priceLine = priceLine; this.addonAmount = addonAmount;' +
+    '\nthis.colourCount = colourCount;', sandbox);
+  return sandbox;
+})();
+
+/** The whole-job discount as a positive dollar figure.
+ *
+ *  Clamped to the subtotal and to zero on purpose. A discount bigger than the
+ *  work would otherwise invert the total, and because the deposit and the
+ *  Stripe charge are both derived from that total, a fat-fingered "500" on a
+ *  $400 job would have produced a negative amount to collect rather than a
+ *  free one. Percent is also capped at 100 for the same reason. */
+function quoteDiscount(subtotal, kind, value) {
+  const sub = round2(subtotal);
+  let v = Number(value);
+  if (!Number.isFinite(v) || v <= 0 || sub <= 0) return 0;
+  if (kind === 'pct') v = Math.min(v, 100);
+  const raw = kind === 'pct' ? sub * (v / 100) : v;
+  return round2(Math.min(Math.max(raw, 0), sub));
+}
+
+/** Recompute every figure from the stored lines. Single source of truth.
+ *
+ *  Order matters and is not arbitrary: the discount comes off BEFORE tax,
+ *  because sales tax is owed on what the customer is actually charged, not on
+ *  what the job would have cost undiscounted. Taxing the full subtotal would
+ *  have the shop remitting tax on money it never collected. */
 function quoteTotals(q) {
   const subtotal = round2((q.items || []).reduce((a, i) => a + Number(i.line_total || 0), 0));
+  const discount = quoteDiscount(subtotal, q.discount_kind, q.discount_value);
+  const net = round2(subtotal - discount);
   const tax = Number(q.tax != null ? q.tax : 0);
-  const total = round2(subtotal + tax);
-  return { subtotal, tax, total, deposit: depositFor(total) };
+  const total = round2(net + tax);
+  return { subtotal, discount, net, tax, total, deposit: depositFor(total) };
 }
 
 
@@ -3261,7 +3684,7 @@ async function syncQuoteToBrevo(q) {
       (i.manual ? '   [manual price]' : '')
     ).join('\n');
     const noteText =
-      `QUOTE ${q.code} — ${money(q.subtotal)}\n` +
+      `QUOTE ${q.code} — ${money(q.total || q.subtotal)}\n` +
       `${lines}\n` +
       (q.notes ? `\nNOTES:\n  ${q.notes}\n` : '') +
       `\nLink: ${quoteLink(q.code)}` +
@@ -3310,7 +3733,7 @@ async function syncQuoteToLumise(q) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         name: q.name || '', email: q.email || '', phone: q.phone || '',
-        note: `Quote ${q.code} — ${money(q.subtotal)} (${quoteSummary(q.items)})`,
+        note: `Quote ${q.code} — ${money(q.total || q.subtotal)} (${quoteSummary(q.items)})`,
         source: 'quote',
       }),
       signal: AbortSignal.timeout(8000),
@@ -3558,8 +3981,12 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
      "the printing type we added is missing from the quote page" reads as a bug
      in this page rather than as unfinished setup in the designer. Say what was
      left out and why, so it is fixable without reading this file. */
+  /* Digitizing is excluded here on purpose — it has its own control below.
+     Left in this list it reads as a decoration you apply to every piece, which
+     is exactly how it would then be billed. */
   const quotable = catalog.methods.filter(m =>
-    m.use_for_quoting && Object.keys(m.positions || {}).length);
+    m.use_for_quoting && Object.keys(m.positions || {}).length &&
+    !DIGITIZING_METHOD_RE.test(m.title || ''));
   const methodOpts = quotable
     .map(m => `<option value="${m.id}">${escEmail(m.title)}</option>`).join('');
 
@@ -3567,8 +3994,20 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
      another way and only its digitizing fees are authoritative), so those are
      not reported as a problem — only methods that COULD be offered and cannot,
      because nobody has priced them yet. */
+  /* `unsupported_type` is jt-catalog.php saying it did not understand the
+     method's band shape, as opposed to nobody having priced it. The two need
+     different fixes and used to look identical from here — screen printing
+     read as "unpriced" for a week while its table was fully populated. */
   const untiered = catalog.methods.filter(m =>
     m.use_for_quoting && !Object.keys(m.positions || {}).length);
+  const untieredLabel = (m) => m.title +
+    (m.unsupported_type ? ` (its ${m.unsupported_type}-type prices could not be read)` : '');
+
+  /* Digitizing is offered on its own control rather than in the method list,
+     because it is a one-off per design and the method list is priced per piece. */
+  const digiList = digitizingOptions(catalog);
+  const digiOpts = digiList.map(d =>
+    `<option value="${d.id}">${escEmail(d.title)} — ${money(d.price)}</option>`).join('');
 
   const catalogNote = !catalog.methods.length
     ? `<div class="warn" style="margin-bottom:10px">The product catalogue could not be
@@ -3577,7 +4016,7 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
     : untiered.length
     ? `<p class="muted" style="margin:-4px 0 10px;font-size:12.5px">
        ${untiered.length} decoration ${untiered.length === 1 ? 'method is' : 'methods are'}
-       not listed — ${escEmail(untiered.map(m => m.title).join(', '))} —
+       not listed — ${escEmail(untiered.map(untieredLabel).join(', '))} —
        because ${untiered.length === 1 ? 'it has' : 'they have'} no quantity price tiers set.
        Add tiers in the designer admin under Printings and ${untiered.length === 1 ? 'it' : 'they'}
        will appear here. Products need to be <b>Active</b> in the designer to be listed at all.</p>`
@@ -3608,6 +4047,53 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
         <input name="unit_price${n}" class="u" type="number" step="0.01" inputmode="decimal"
                value="${it && it.manual ? val(it.unit_price) : ''}" placeholder="Each $">
         <b class="lt">—</b>
+      </div>
+      <p class="minwarn" style="display:none;margin:6px 0 0;font-size:12.5px;color:#b45309"></p>
+      <p class="aonote" style="display:none;margin:6px 0 0;font-size:12px;color:#6b7280"></p>
+      <!-- Internal cost split. This form is requireAdmin and the customer's page
+           (/q/:code) renders from the stored line total, so nothing here reaches
+           them — it is for deciding whether a line is worth taking. -->
+      <p class="costnote" style="display:none;margin:6px 0 0;font-size:12px;color:#3f4a5f;
+         background:#F6F8FC;border:1px solid #E2E8F4;border-radius:6px;padding:6px 9px"></p>
+      <div class="row row-2" style="margin-top:8px">
+        <label style="display:flex;align-items:center;gap:6px;margin:0;font-size:13px;text-transform:none;letter-spacing:0;font-weight:400">
+          <input type="checkbox" name="dark${n}" class="dark" value="1"
+                 ${it && it.garment_dark ? 'checked' : ''} style="width:auto;margin:0">
+          Dark garment</label>
+        <select name="loc${n}" class="loc" style="font-size:13px;padding:6px 7px">
+          <option value="">Front only</option>
+          <option value="mr8a5dlx"${it && it.stage === 'mr8a5dlx' ? ' selected' : ''}>Back only</option>
+          <option value="both"${it && it.stage === 'both' ? ' selected' : ''}>Front + back</option>
+        </select>
+      </div>
+      <div style="margin-top:6px">
+        <input name="blank_price${n}" class="bp" type="number" step="0.01" min="0" inputmode="decimal"
+               value="${it && it.blank_price ? val(it.blank_price) : ''}"
+               style="font-size:13px;padding:6px 7px" placeholder="Garment price each — leave blank for catalogue">
+        <p class="muted bpnote" style="margin:3px 0 0;font-size:11.5px"></p>
+      </div>
+      <!-- Ink colours. Screen printing is ONE method with a column per colour
+           count, so the count is the thing that picks the price and nothing on
+           this page can infer it — only a person who has seen the artwork
+           knows. Options are filled in by calc() from the method's own
+           colour_options, so the picker can never offer a column the shop has
+           not priced. Hidden for every other method. -->
+      <div class="inks" style="display:none;margin-top:8px;padding:8px 10px;background:#f6f8fd;border:1px solid #e3e8f2;border-radius:8px">
+        <label style="margin:0 0 4px;font-size:11px">Ink colours in the design</label>
+        <select name="colors${n}" class="cols" style="font-size:13px;padding:6px 7px"
+                data-v="${it && it.colours ? val(it.colours) : ''}"></select>
+        <p class="muted" style="margin:4px 0 0;font-size:11.5px">One screen per colour — the price is banded on this.</p>
+      </div>
+      <div class="addons" style="margin-top:6px;display:none"></div>
+      <div class="digi" style="display:none;margin-top:8px;padding:8px 10px;background:#f6f8fd;border:1px solid #e3e8f2;border-radius:8px">
+        <label style="margin:0 0 4px;font-size:11px">Digitizing — one time, not per piece</label>
+        <select name="setup${n}" class="su" style="font-size:13px;padding:6px 7px">
+          <option value="">No digitizing — they supplied a usable file</option>
+          ${digiList.map(d => `<option value="${d.id}"${
+            it && String(it.setup_method_id) === String(d.id) ? ' selected' : ''
+          }>${escEmail(d.title)} — ${money(d.price)}</option>`).join('')}
+        </select>
+        <p class="muted" style="margin:4px 0 0;font-size:11.5px">Charged once for the design. Leave as-is to waive it.</p>
       </div>
       <button type="button" class="more" onclick="toggleMore(this)"
         aria-expanded="${hasExtras ? 'true' : 'false'}">
@@ -3658,6 +4144,21 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
         <button type="button" class="btn btn-ghost" style="padding:9px 18px;font-size:14px" onclick="addLine()">+ Add another item</button>
         <table style="width:100%;margin-top:14px;border-top:1px solid #e3e8f2;padding-top:10px">
           <tr><td class="muted">Subtotal</td><td class="num" id="sub">$0.00</td></tr>
+          <tr><td class="muted">
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+              <span>Discount</span>
+              <select name="discount_kind" style="width:auto;padding:5px 6px;font-size:13px">
+                <option value="amt" ${E.discount_kind === 'pct' ? '' : 'selected'}>$ off</option>
+                <option value="pct" ${E.discount_kind === 'pct' ? 'selected' : ''}>% off</option>
+              </select>
+              <input name="discount_value" type="number" step="0.01" min="0" inputmode="decimal"
+                     value="${Number(E.discount_value) > 0 ? val(E.discount_value) : ''}"
+                     placeholder="0" style="width:78px;padding:5px 7px;font-size:13px">
+              <input name="discount_note" value="${val(E.discount_note)}" maxlength="120"
+                     placeholder="Reason — they see this"
+                     style="flex:1 1 130px;min-width:110px;padding:5px 7px;font-size:13px">
+            </div></td>
+            <td class="num" id="disc" style="color:#166534">—</td></tr>
           <tr><td class="muted"><label style="display:inline;margin:0;text-transform:none;letter-spacing:0;font-size:14px;font-weight:400">
             <input type="checkbox" name="taxable" value="1" ${!existing || Number(E.tax) > 0 ? 'checked' : ''} style="width:auto;margin-right:6px" onchange="calc()"> Illinois sales tax</label></td>
             <td class="num" id="tax">$0.00</td></tr>
@@ -3683,14 +4184,29 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
       var CAT = ${JSON.stringify(catalog)};
       var TAX = ${TAX_RATE}, DEP = ${DEPOSIT_PC}, FULL_UNDER = ${DEPOSIT_FULL_UNDER};
       var n = ${eItems.length};
-      function tierFor(m, qty){
-        var pos = m && m.positions ? (m.positions.front || m.positions[Object.keys(m.positions)[0]]) : null;
-        if (!pos || !pos.length) return 0;
-        var price = pos[0].price;
-        for (var i=0;i<pos.length;i++) if (qty >= pos[i].min_qty) price = pos[i].price;
-        return price;
-      }
       function m2(v){ return '$' + (Math.round(v*100)/100).toFixed(2); }
+
+      /* The pricing rule itself — the SAME SOURCE the server runs, so the
+         figure on screen and the figure charged cannot drift apart. Do not
+         reimplement any of this here; change it in quotePricingSource(). */
+${quotePricingSource()}
+
+      var BLANK_TIERS = ${JSON.stringify(BLANK_TIERS)};
+      /* Add-ons and digitizing fees, from the same catalogue the server prices
+         against, keyed by method id so a line only offers what applies to it. */
+      var DIGI = ${JSON.stringify(digiList)};
+      var ADDONS = ${JSON.stringify(ADDONS.map((a) => ({
+        code: a.code, label: a.label, kind: a.kind, rate: a.rate,
+        auto: a.auto || null, note: a.note || null, appliesTo: a.appliesTo.source,
+      })))};
+      var RUSH = ${JSON.stringify(RUSH_OPTIONS)};
+      var HOLIDAY = ${HOLIDAY_MODE ? 'true' : 'false'};
+
+      /** Which add-ons apply to a method, mirroring addonsFor() on the server. */
+      function addonsForTitle(title){
+        if (!title) return [];
+        return ADDONS.filter(function(a){ return new RegExp(a.appliesTo, 'i').test(title); });
+      }
 
       /* Optional fields stay out of the way until asked for. */
       function toggleMore(btn){
@@ -3787,21 +4303,203 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
           var qty = sizeQty > 0 ? sizeQty : (parseInt(qEl.value,10)||0);
           if (sizeQty > 0) { qEl.value = sizeQty; qEl.readOnly = true; } else { qEl.readOnly = false; }
 
-          var base = prod ? prod.price + tierFor(meth, qty) : 0;
-          if (prod) u.placeholder = base.toFixed(2);
-          var unit = u.value !== '' ? parseFloat(u.value) : base;
-          // Upcharges apply only to the pieces in those sizes.
-          var lt = (unit||0) * qty + (u.value !== '' ? 0 : upTotal);
-          L.querySelector('.lt').textContent = lt ? m2(lt) : '—';
+          /* Digitizing: shown only for embroidery, and added ONCE — never
+             multiplied by the quantity, which is the whole reason it is not a
+             decoration method. */
+          var digiBox = L.querySelector('.digi');
+          var su = L.querySelector('.su');
+          var isEmb = meth && /embroider/i.test(meth.title);
+          if (digiBox) {
+            digiBox.style.display = isEmb ? 'block' : 'none';
+            if (!isEmb && su) su.value = '';
+          }
+
+          /* Ink colours, asked only for a method that prices by them. The seven
+             legacy per-colour methods carry the count in their titles and get
+             no picker, so the engine reads it from there instead — one rule,
+             two data generations. Rebuilt only when the method changes, so
+             re-pricing does not reset a chosen count. */
+          var inkBox = L.querySelector('.inks');
+          var colEl  = L.querySelector('.cols');
+          var inks = (meth && meth.type === 'color' && (meth.colour_options || []).length)
+                   ? meth.colour_options : null;
+          if (inkBox && colEl) {
+            var ikey = inks ? String(meth.id) : '';
+            if (colEl.dataset.for !== ikey) {
+              colEl.dataset.for = ikey;
+              colEl.innerHTML = inks ? inks.map(function(c){
+                return '<option value="' + c + '">' + c + (c === 1 ? ' colour' : ' colours') + '</option>';
+              }).join('') : '';
+              /* Restore what this line was saved with, else start at one — never
+                 blank. A blank posts as 1 anyway, so a picker showing nothing
+                 would quote a 1-colour job while looking like it failed to load. */
+              if (inks) {
+                var was = parseInt(colEl.dataset.v, 10);
+                colEl.value = String(inks.indexOf(was) > -1 ? was : inks[0]);
+              }
+            }
+            inkBox.style.display = inks ? 'block' : 'none';
+          }
+
+          /* Offer exactly the add-ons this decoration allows. Rebuilt only when
+             the method changes, so ticking one does not wipe the others. */
+          var aoBox = L.querySelector('.addons');
+          var mkey = meth ? String(meth.id) : '';
+          if (aoBox && aoBox.dataset.for !== mkey) {
+            aoBox.dataset.for = mkey;
+            var avail = addonsForTitle(meth && meth.title);
+            /* The underbase is applied by the dark-garment box, so it is never
+               offered as something to tick separately. */
+            avail = avail.filter(function(a){ return a.auto !== 'dark'; });
+            aoBox.innerHTML = avail.length
+              ? '<div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Upgrades</div>' +
+                avail.map(function(a){
+                  return '<label style="display:flex;align-items:flex-start;gap:6px;margin:0 0 3px;font-size:13px;text-transform:none;letter-spacing:0;font-weight:400">' +
+                    '<input type="checkbox" class="ao" name="addon_' + a.code + '${n}" value="1" data-code="' +
+                    a.code + '" style="width:auto;margin:3px 0 0"><span>' + a.label +
+                    (a.kind === 'per_piece' ? ' <span class="muted">$' + a.rate.toFixed(2) + ' ea</span>'
+                     : a.kind === 'percent_of_decoration' ? ' <span class="muted">+' + a.rate + '%</span>'
+                     : ' <span class="muted">$' + a.rate.toFixed(2) + '</span>') +
+                    '</span></label>';
+                }).join('')
+              : '';
+            aoBox.style.display = avail.length ? 'block' : 'none';
+            aoBox.querySelectorAll('.ao').forEach(function(cb){ cb.onchange = calc; });
+          }
+
+          /* Collect the add-ons this line has switched on, plus digitizing and
+             the automatic underbase, into one list the engine can price. */
+          var addons = [];
+          if (isEmb && su && su.value) {
+            var dm = DIGI.find(function(d){ return String(d.id) === su.value; });
+            if (dm) addons.push({ code:'digitizing', label:dm.title, kind:'once', rate:dm.price });
+          }
+          var dark = L.querySelector('.dark');
+          var isDark = !!(dark && dark.checked);
+          L.querySelectorAll('.ao').forEach(function(cb){
+            if (!cb.checked) return;
+            var a = ADDONS.find(function(x){ return x.code === cb.dataset.code; });
+            if (a) addons.push(a);
+          });
+          /* The underbase is not optional on a dark garment — a 1-colour print
+             needs the white base under it — so it is added by the colour, not
+             by a tick box someone has to remember. */
+          if (isDark && meth && /screen\\s*print/i.test(meth.title)) {
+            var ub = ADDONS.find(function(x){ return x.code === 'underbase'; });
+            if (ub && !addons.some(function(x){ return x.code === 'underbase'; })) addons.push(ub);
+          }
+
+          var stage = L.querySelector('.loc') ? L.querySelector('.loc').value : '';
+          var bpEl = L.querySelector('.bp');
+          var r = priceLine({
+            product: prod, method: meth, qty: qty, sizeMix: sizeQty ? mix : null,
+            colours: colEl ? colEl.value : '',
+            stage: stage, addons: addons, blankTiers: BLANK_TIERS,
+            blankOverride: bpEl ? bpEl.value : '',
+            unitOverride: u.value
+          });
+
+          /* Say what the catalogue holds, so a typed garment price is an
+             informed correction rather than a guess. */
+          var bpNote = L.querySelector('.bpnote');
+          if (bpNote) {
+            if (!prod) { bpNote.textContent = ''; }
+            else if (bpEl && bpEl.value !== '') {
+              bpNote.textContent = 'Catalogue has ' + m2(prod.price) + ' — using your ' + m2(parseFloat(bpEl.value) || 0);
+              bpNote.style.color = '#b45309';
+            } else {
+              bpNote.textContent = 'Catalogue: ' + m2(prod.price) + ' each' +
+                (r.blank !== prod.price ? ' → ' + m2(r.blank) + ' at this quantity' : '');
+              bpNote.style.color = '#6b7280';
+            }
+          }
+
+          if (prod) u.placeholder = r.listUnit.toFixed(2);
+          var lt = r.lineTotal;
+          /* Show the override the way the customer will see it: struck-through
+             list, then what they actually pay. Only for a genuine reduction —
+             a price ABOVE list is a surcharge, not a deal. */
+          var cut = (r.manual && prod && r.listTotal > lt);
+          L.querySelector('.lt').innerHTML = lt
+            ? (cut ? '<span style="color:#9aa3b2;text-decoration:line-through;font-weight:400">' +
+                     m2(r.listTotal) + '</span> <span style="color:#166534">' + m2(lt) + '</span>'
+                   : m2(lt))
+            : '—';
+
+          /* Say what the extras added, so a line total is never unexplained. */
+          var aoNote = L.querySelector('.aonote');
+          if (aoNote) {
+            aoNote.innerHTML = r.addonLines.length
+              ? r.addonLines.map(function(a){ return a.label + ' ' + m2(a.total); }).join(' &middot; ')
+              : '';
+            aoNote.style.display = r.addonLines.length ? 'block' : 'none';
+          }
+
+          /* Garment vs decoration, per piece and for the line. The unit price is
+             one number, so there was no way to see whether a thin margin came
+             from the blank or the printing — which is the decision this form is
+             actually for. Shown only when a quantity makes the totals real. */
+          var costNote = L.querySelector('.costnote');
+          if (costNote) {
+            if (!prod || qty <= 0) { costNote.style.display = 'none'; }
+            else {
+              var gTot = r.blank * qty, dTot = r.decoration * qty;
+              var parts = [
+                'Garment ' + m2(r.blank) + '/pc = ' + m2(gTot),
+                'Printing ' + m2(r.decoration) + '/pc = ' + m2(dTot)
+              ];
+              if (r.sizeUpcharge) parts.push('Size upcharges ' + m2(r.sizeUpcharge));
+              if (r.addonTotal)   parts.push('Extras ' + m2(r.addonTotal));
+              /* An override replaces the per-piece price, so the split above is
+                 what the job COSTS to build, not what is being charged. Say so
+                 rather than showing two sets of numbers that do not reconcile. */
+              if (r.manual) parts.push('override in use — line bills ' + m2(lt));
+              costNote.innerHTML = '<b>Internal:</b> ' + parts.join(' &nbsp;&middot;&nbsp; ');
+              costNote.style.display = 'block';
+            }
+          }
+
           sub += lt;
 
+          /* Screen printing has a floor. The tier keys are band ceilings, so a
+             20-piece screen job would otherwise quote at the 50-71 rate and look
+             perfectly normal — say so instead, and point at what does run. */
+          var warn = L.querySelector('.minwarn');
+          var tooFew = meth && /screen\\s*print/i.test(meth.title) && qty > 0 && qty < ${SCREEN_MIN_QTY};
+          if (warn) {
+            warn.style.display = tooFew ? 'block' : 'none';
+            warn.textContent = tooFew
+              ? 'Screen printing starts at ${SCREEN_MIN_QTY} pieces. For ' + qty +
+                ', quote DTF or heat-transfer vinyl instead.' : '';
+          }
+
+          /* Name the location in the line itself. A front+back line otherwise reads
+             exactly like a front-only one and costs twice as much, so the only
+             evidence of what was quoted was a number the customer cannot check. */
           var d = L.querySelector('.d');
-          if (!d.value && prod) d.value = prod.name + (meth ? ' — ' + meth.title : '');
+          if (!d.value && prod) {
+            var where = stage === 'both' ? ' (front + back)'
+                      : (stage ? ' (back)' : '');
+            d.value = prod.name + (meth ? ' — ' + meth.title : '') + where;
+          }
         });
-        var tax = document.querySelector('[name=taxable]').checked ? sub*TAX : 0;
-        var tot = sub + tax;
+        /* Mirrors quoteDiscount() on the server, clamps included. If these two
+           ever disagree the form shows one number and the customer is charged
+           another, so keep them in step. */
+        var dk = document.querySelector('[name=discount_kind]').value;
+        var dv = parseFloat(document.querySelector('[name=discount_value]').value);
+        if (!isFinite(dv) || dv <= 0) dv = 0;
+        if (dk === 'pct' && dv > 100) dv = 100;
+        var disc = (sub <= 0 || dv <= 0) ? 0 : Math.min(dk === 'pct' ? sub*dv/100 : dv, sub);
+        disc = Math.round(disc*100)/100;
+        var net = sub - disc;
+
+        var tax = document.querySelector('[name=taxable]').checked ? net*TAX : 0;
+        var tot = net + tax;
         var dep = tot <= 0 ? 0 : (tot < FULL_UNDER ? tot : tot*DEP);
         document.getElementById('sub').textContent = m2(sub);
+        document.getElementById('disc').textContent = disc > 0
+          ? '−' + m2(disc) + (dk === 'pct' ? ' (' + dv + '%)' : '') : '—';
         document.getElementById('tax').textContent = m2(tax);
         document.getElementById('tot').textContent = m2(tot);
         document.getElementById('dep').textContent = m2(dep) + (tot>0 && tot<FULL_UNDER ? ' (paid in full)' : ' (50%)');
@@ -3818,6 +4516,11 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
         tpl.querySelector('.lt').textContent = '—';
         tpl.querySelector('.ix').textContent = n + 1;
         tpl.querySelector('.thumbs').innerHTML = '';
+        /* Options and the restore hint are data attributes, which cloneNode
+           copies and the value-clearing loop above does not touch — left alone
+           a new item would inherit item 1's ink count. */
+        var ck = tpl.querySelector('.cols');
+        if (ck) { ck.innerHTML = ''; ck.dataset.v = ''; ck.dataset.for = ''; }
         // A new item starts tidy: sizes hidden, extras closed.
         var sz = tpl.querySelector('.sizes');
         if (sz) { sz.style.display = 'none'; sz.innerHTML = ''; }
@@ -4144,11 +4847,12 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
       const detailTyped = String(one(b['details' + i]) || '').trim() !== '';
       if (!desc && !qty && !prod && !priceTyped && !sizeTyped && !detailTyped) continue;
 
-      /* Size mix, when the product has sizes. Extended sizes carry an upcharge
-         that applies only to those pieces — quoting 24 shirts of which 4 are
-         2XL is NOT the same price as 24 mediums, and forgetting that silently
-         eats the difference on every order. */
-      let mix = null, sizeQty = 0, upTotal = 0;
+      /* Size mix, when the product has sizes. The upcharge those extended sizes
+         carry is applied by the pricing engine, from this mix and the product's
+         own size table — quoting 24 shirts of which 4 are 2XL is NOT the same
+         price as 24 mediums, and forgetting that silently eats the difference
+         on every order. */
+      let mix = null, sizeQty = 0;
       try {
         const parsed = JSON.parse(one(b['sizemix' + i]) || 'null');
         if (parsed && typeof parsed === 'object') {
@@ -4158,8 +4862,6 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
             if (c <= 0) continue;
             mix[sz] = c;
             sizeQty += c;
-            const row = prod && prod.sizes ? prod.sizes.find(x => x.size === sz) : null;
-            upTotal += c * Number(row ? row.upcharge : 0);
           }
           if (!sizeQty) mix = null;
         }
@@ -4168,21 +4870,75 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
       const q = sizeQty > 0 ? sizeQty : (qty || 1);
 
       const rawUnit = one(b['unit_price' + i]);
-      let unit = (rawUnit !== '' && rawUnit != null) ? Number(rawUnit) : null;
-      // A price that will not parse must never become NaN and show as $0.00.
-      if (unit != null && !Number.isFinite(unit)) unit = null;
-      const manual = unit != null;
-      if (unit == null && prod) {
-        let tier = 0;
-        const pos = method && method.positions
-          ? (method.positions.front || method.positions[Object.keys(method.positions)[0]]) : null;
-        if (pos && pos.length) { tier = pos[0].price; for (const t of pos) if (q >= t.min_qty) tier = t.price; }
-        unit = Number(prod.price) + Number(tier);
-      }
-      if (unit == null) unit = 0;
 
-      // A manually typed unit price is taken as final — no upcharges layered on.
-      const lineTotal = round2(unit * q + (manual ? 0 : upTotal));
+      /* Every chargeable extra on this line, assembled from what was posted but
+         PRICED FROM THE SERVER'S OWN TABLE. The form posts which add-ons are on,
+         never what they cost, so a tampered request cannot name its own price.
+         Each is also checked against the method it applies to, so a digitizing
+         fee cannot be attached to a screen-print line. */
+      const lineAddons = [];
+      const methodTitle = method ? String(method.title || '') : '';
+      const isEmb = EMBROIDERY_METHOD_RE.test(methodTitle);
+      const isScreen = SCREEN_METHOD_RE.test(methodTitle);
+      const garmentDark = String(one(b['dark' + i]) || '') === '1';
+
+      const setupId = String(one(b['setup' + i]) || '').trim();
+      if (setupId && isEmb) {
+        const d = digitizingOptions(catalog).find((x) => String(x.id) === setupId);
+        if (d) lineAddons.push({ code: 'digitizing', label: d.title, kind: 'once', rate: d.price });
+      }
+      for (const a of addonsFor(methodTitle)) {
+        if (a.auto === 'dark') continue;   // applied by the garment colour, below
+        if (String(one(b[`addon_${a.code}${i}`]) || '') !== '1') continue;
+        lineAddons.push({ code: a.code, label: a.label, kind: a.kind, rate: a.rate });
+      }
+      /* A 1-colour print on a dark garment needs two screens — the white
+         underbase, then the colour. Applied by the colour rather than by a tick
+         box, because it is not optional and it is easy to forget. */
+      if (garmentDark && isScreen) {
+        const ub = ADDONS.find((a) => a.code === 'underbase');
+        if (ub) lineAddons.push({ code: ub.code, label: ub.label, kind: ub.kind, rate: ub.rate });
+      }
+
+      /* Second print location: the posted stage must be one this method really
+         has, or it silently prices from the wrong table. */
+      const rawStage = String(one(b['loc' + i]) || '').trim();
+      const stage = rawStage === 'both'
+        ? 'both'
+        : ((rawStage && method && method.positions && method.positions[rawStage]) ? rawStage : '');
+
+      /* Ink colours. Read through the SAME colourCount() the browser ran, so a
+         line cannot be previewed at one colour count and saved at another —
+         which is the whole reason the rule lives in quotePricingSource(). The
+         posted value is only consulted for a method that prices by colour; a
+         legacy per-colour method reads its own title and ignores it, so this
+         cannot be used to buy a 7-colour job at the 1-colour rate. */
+      const colours = colourCount(method, one(b['colors' + i]));
+
+      /* A typed garment price. Supplier costs move between the day a cost was
+         recorded and the day a quote is written, so this is a correction, not
+         a discount — the volume tiers still apply on top of it. Clamped
+         positive so a stray minus cannot invert a line. */
+      let blankOverride = Number(one(b['blank_price' + i]));
+      if (!Number.isFinite(blankOverride) || blankOverride <= 0) blankOverride = null;
+
+      /* THE price calculation — the same source the browser ran. */
+      const priced = priceLine({
+        product: prod, method, qty: q, sizeMix: mix, colours,
+        stage, addons: lineAddons, blankTiers: BLANK_TIERS,
+        blankOverride, unitOverride: rawUnit,
+      });
+
+      const manual = priced.manual;
+      let unit = priced.unit;
+      const lineTotal = priced.lineTotal;
+      /* Only a genuine reduction is struck through. A manual price ABOVE list is
+         a legitimate quote too (rush, awkward artwork), and showing it crossed
+         out would advertise a discount that is really a surcharge. */
+      const struck = (manual && prod && priced.listTotal > lineTotal) ? priced.listTotal : null;
+      const setupFee = round2(priced.addonLines
+        .filter((a) => a.code === 'digitizing').reduce((s, a) => s + a.total, 0));
+      const setupLabel = (priced.addonLines.find((a) => a.code === 'digitizing') || {}).label || null;
 
       let description = desc || (prod ? `${prod.name}${method ? ' — ' + method.title : ''}` : 'Custom item');
       if (mix) description += ` (${Object.entries(mix).map(([sz, n]) => `${n} ${sz}`).join(', ')})`;
@@ -4208,11 +4964,37 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
         details: String(one(b['details' + i]) || '').trim().slice(0, 300),
         images,
         qty: q,
-        unit_price: round2(lineTotal / q),      // blended, so qty x each = total
+        /* Blended per-piece rate, EXCLUDING every one-off and extra, so
+           qty x each plus the extras equals the line total and each part reads
+           honestly. Rolling the extras in would make the decoration itself look
+           more expensive than it is. */
+        unit_price: round2((lineTotal - priced.addonTotal) / q),
         line_total: lineTotal,
         size_mix: mix,
-        size_upcharge: round2(manual ? 0 : upTotal),
+        size_upcharge: priced.sizeUpcharge,
+        /* Every extra, itemised, so the customer's page can name each one
+           rather than showing an unexplained difference. */
+        addons: priced.addonLines,
+        garment_dark: garmentDark || null,
+        stage: stage || null,
+        /* The ink count this line was priced on, kept ONLY for the method that
+           has to be asked for it. A legacy per-colour method's count is its
+           title; a second copy here is one that can go stale against it. */
+        colours: (method && method.type === 'color') ? colours : null,
+        /* The typed garment price, kept so re-editing shows what was used
+           rather than silently reverting to a catalogue figure known to be
+           stale. */
+        blank_price: blankOverride,
+        /* Kept for the quotes already saved with these fields — the customer
+           page and the edit form still read them when `addons` is absent. */
+        setup_fee: setupFee || 0,
+        setup_label: setupLabel,
+        setup_method_id: setupFee ? Number(setupId) : null,
         manual,
+        /* What it would have been at catalogue price. Rendered struck through on
+           the customer's page when it is higher than what they are being asked
+           to pay, so an override reads as the discount it is. */
+        list_total: struck,
         product_id: prod ? prod.id : null,
         method_id: method ? method.id : null,
       });
@@ -4231,9 +5013,22 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
     }
 
     const subtotal = round2(items.reduce((a, i) => a + i.line_total, 0));
+
+    /* Discount off the top of the job. Stored as entered so that editing the
+       lines later re-applies the same deal; the dollar figure is derived here
+       and again in quoteTotals(), which is what the customer page, the deposit
+       and the Stripe charge all read. */
+    const discountKind = one(b.discount_kind) === 'pct' ? 'pct' : 'amt';
+    let discountValue = Number(one(b.discount_value));
+    if (!Number.isFinite(discountValue) || discountValue < 0) discountValue = 0;
+    if (discountKind === 'pct') discountValue = Math.min(discountValue, 100);
+    const discountNote = String(one(b.discount_note) || '').trim().slice(0, 120);
+    const discount = quoteDiscount(subtotal, discountKind, discountValue);
+    const net = round2(subtotal - discount);
+
     const taxable = b.taxable === '1' || b.taxable === 'on' || b.taxable === true;
-    const tax = quoteTax(subtotal, taxable);
-    const total = round2(subtotal + tax);
+    const tax = quoteTax(net, taxable);
+    const total = round2(net + tax);
     const deposit = depositFor(total);
 
     const days = Math.max(1, parseInt(b.valid_days, 10) || 14);
@@ -4250,11 +5045,13 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
       ({ rows } = await pool.query(
         `UPDATE quotes SET name=$2, phone=$3, email=$4, items=$5, subtotal=$6, tax=$7,
                 total=$8, deposit=$9, notes=$10, valid_until=$11, needed_by=$12,
+                discount_kind=$13, discount_value=$14, discount_note=$15,
                 change_request=NULL, revision=COALESCE(revision,1)+1,
                 status = CASE WHEN accepted_at IS NULL THEN 'sent' ELSE status END
           WHERE code=$1 RETURNING *`,
         [editing, name, phone, email, JSON.stringify(items), subtotal, tax, total, deposit,
-         String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy]));
+         String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy,
+         discountKind, discountValue, discountNote || null]));
       if (!rows.length) {
         return res.status(404).send(quotePage('Not found',
           `<div class="card"><div class="warn">That quote no longer exists.</div>
@@ -4268,10 +5065,12 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
         code = newQuoteCode();
       }
       ({ rows } = await pool.query(
-        `INSERT INTO quotes (code,name,phone,email,items,subtotal,tax,total,deposit,notes,status,valid_until,needed_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'sent',$11,$12) RETURNING *`,
+        `INSERT INTO quotes (code,name,phone,email,items,subtotal,tax,total,deposit,notes,status,valid_until,needed_by,
+                             discount_kind,discount_value,discount_note)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'sent',$11,$12,$13,$14,$15) RETURNING *`,
         [code, name, phone, email, JSON.stringify(items), subtotal, tax, total, deposit,
-         String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy]));
+         String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy,
+         discountKind, discountValue, discountNote || null]));
     }
 
     const q = rows[0];
@@ -4381,11 +5180,18 @@ app.get('/q/:code', async (req, res) => {
         <td>
           ${escEmail(i.description)}
           ${i.details ? `<div class="muted" style="font-size:13px;margin-top:3px">${escEmail(i.details)}</div>` : ''}
+          ${Number(i.setup_fee) > 0 ? `<div class="muted" style="font-size:13px;margin-top:3px">
+             + ${escEmail(i.setup_label || 'Digitizing')} — ${money(i.setup_fee)} one time</div>` : ''}
           ${gallery}
         </td>
         <td class="num">${i.qty}</td>
-        <td class="num">${money(i.unit_price)}</td>
-        <td class="num">${money(i.line_total)}</td>
+        <td class="num">${Number(i.list_total) > Number(i.line_total)
+          ? `<span style="color:#9aa3b2;text-decoration:line-through">${money(Number(i.list_total) / i.qty)}</span><br>${money(i.unit_price)}`
+          : money(i.unit_price)}</td>
+        <td class="num">${Number(i.list_total) > Number(i.line_total)
+          ? `<span style="color:#9aa3b2;text-decoration:line-through">${money(i.list_total)}</span><br>
+             <b style="color:#166534">${money(i.line_total)}</b>`
+          : money(i.line_total)}</td>
       </tr>`;
     }).join('');
 
@@ -4405,6 +5211,10 @@ app.get('/q/:code', async (req, res) => {
           ${lines}
           <tr><td colspan="3" class="num muted" style="padding-top:12px">Subtotal</td>
               <td class="num" style="padding-top:12px">${money(t.subtotal)}</td></tr>
+          ${t.discount > 0 ? `<tr><td colspan="3" class="num" style="color:#166534">
+              ${q.discount_note ? escEmail(q.discount_note) : 'Discount'}${
+                q.discount_kind === 'pct' ? ` (${Number(q.discount_value)}% off)` : ''}</td>
+              <td class="num" style="color:#166534">&minus;${money(t.discount)}</td></tr>` : ''}
           ${t.tax > 0 ? `<tr><td colspan="3" class="num muted">Sales tax</td><td class="num">${money(t.tax)}</td></tr>` : ''}
           <tr><td colspan="3" class="num tot">Total</td><td class="num tot">${money(t.total)}</td></tr>
           ${!paid ? `<tr><td colspan="3" class="num" style="color:#1848B8;font-weight:700">
@@ -5079,11 +5889,16 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
         `<tr><td style="padding:8px 4px">${escEmail(i.description)}</td>
              <td style="padding:8px 4px;text-align:right">${i.qty}</td>
              <td style="padding:8px 4px;text-align:right">${money(i.line_total)}</td></tr>`).join('');
-      const table = `<table style="width:100%;border-collapse:collapse;margin:12px 0">${lines}
-        <tr><td colspan="2" style="padding:8px 4px;text-align:right;font-weight:700;border-top:2px solid #111">Total</td>
-        <td style="padding:8px 4px;text-align:right;font-weight:700;border-top:2px solid #111">${money(q.subtotal)}</td></tr></table>`;
-
       const tt = quoteTotals(q);
+      /* This row is labelled "Total", so it has to BE the total. It showed the
+         subtotal, which merely looked right while tax was the only thing above
+         it; a discounted job would state more than the customer is charged. */
+      const table = `<table style="width:100%;border-collapse:collapse;margin:12px 0">${lines}
+        ${tt.discount > 0 ? `<tr><td colspan="2" style="padding:8px 4px;text-align:right;color:#166534">
+          ${q.discount_note ? escEmail(q.discount_note) : 'Discount'}</td>
+          <td style="padding:8px 4px;text-align:right;color:#166534">&minus;${money(tt.discount)}</td></tr>` : ''}
+        <tr><td colspan="2" style="padding:8px 4px;text-align:right;font-weight:700;border-top:2px solid #111">Total</td>
+        <td style="padding:8px 4px;text-align:right;font-weight:700;border-top:2px solid #111">${money(tt.total)}</td></tr></table>`;
       const payBlock = `
         <div style="border:1px solid #e3e8f2;border-radius:10px;padding:14px;margin:14px 0">
           <p style="margin:0 0 6px"><b>${tt.deposit >= tt.total ? 'Payment due' : 'Deposit to start (50%)'}: ${money(tt.deposit)}</b></p>
@@ -5107,7 +5922,7 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
       sendEmail({
         to: SHOP_EMAIL,
         replyTo: q.email || undefined,
-        subject: `✅ Quote ${q.code} accepted — ${escEmail(q.name || q.phone)} ${money(q.subtotal)}`,
+        subject: `✅ Quote ${q.code} accepted — ${escEmail(q.name || q.phone)} ${money(tt.total)}`,
         html: `<div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto">
           <h2 style="color:#1848B8">Quote accepted</h2>
           <p style="color:#374151"><b>${escEmail(q.name || '')}</b><br>${escEmail(q.phone || '')}<br>${escEmail(q.email || '')}</p>
@@ -5889,7 +6704,7 @@ app.get('/q/:code/vcard', async (req, res) => {
       `FN:${q.name || q.phone || q.email}`,
       q.phone ? `TEL;TYPE=CELL:${q.phone}` : '',
       q.email ? `EMAIL;TYPE=INTERNET:${q.email}` : '',
-      `NOTE:${SHOP_NAME} quote ${q.code} — ${quoteSummary(q.items).replace(/[\r\n]+/g, ' ')} — ${money(q.subtotal)}`,
+      `NOTE:${SHOP_NAME} quote ${q.code} — ${quoteSummary(q.items).replace(/[\r\n]+/g, ' ')} — ${money(q.total || q.subtotal)}`,
       'END:VCARD',
     ].filter(Boolean).join('\r\n');
     res.setHeader('Content-Type', 'text/vcard; charset=utf-8');
@@ -8484,28 +9299,96 @@ async function sendDueReviewRequests() {
   }
 }
 
+/* Supplier catalogue sync — costs, prices and availability from S&S.
+ *
+ * Runs once a day rather than hourly: supplier costs move in pennies over
+ * weeks, and every run is a few hundred API calls against someone else's rate
+ * limit. The day is claimed in the database, not held in memory, so a redeploy
+ * mid-afternoon cannot make it run a second time.
+ *
+ * The work is in tools/ssa-sync.js and is run as a child process on purpose:
+ * it is the same command that gets run by hand, so the scheduled path and the
+ * manual path cannot drift into behaving differently. It also means a crash
+ * there cannot take the web server down with it.
+ */
+async function runSupplierSync() {
+  if (!process.env.SSA_ACCOUNT || !process.env.SSA_API_KEY) return;
+  if (String(process.env.JT_SUPPLIER_SYNC || '1') !== '1') return;
+
+  /* Its own table rather than jt_digest_log, whose `day` is a DATE primary key
+     — a prefixed string key would not cast, and widening that column to share
+     it would change a table the digest depends on. */
+  await pool.query(`CREATE TABLE IF NOT EXISTS jt_supplier_sync_log (
+    day DATE PRIMARY KEY, ran_at TIMESTAMPTZ DEFAULT NOW())`);
+  const claim = await pool.query(
+    `INSERT INTO jt_supplier_sync_log (day) VALUES (CURRENT_DATE)
+     ON CONFLICT DO NOTHING RETURNING day`);
+  if (!claim.rowCount) return;                    // already run today
+
+  const vars = JSON.stringify({
+    SSA_ACCOUNT: process.env.SSA_ACCOUNT,
+    SSA_API_KEY: process.env.SSA_API_KEY,
+    MYSQL_PUBLIC_URL: process.env.MYSQL_PUBLIC_URL || process.env.MYSQL_URL,
+  });
+
+  return await new Promise((resolve) => {
+    const child = require('child_process').spawn(
+      process.execPath, [path.join(__dirname, 'tools', 'ssa-sync.js'), '--apply'],
+      { stdio: ['pipe', 'pipe', 'pipe'] });
+    let out = '', err = '';
+    child.stdout.on('data', (d) => (out += d));
+    child.stderr.on('data', (d) => (err += d));
+    child.on('close', async (code) => {
+      const summary = (out.split('\n').filter((l) => /·/.test(l)).pop() || '').trim();
+      console.log('supplier sync:', code === 0 ? (summary || 'ok') : 'exit ' + code);
+
+      /* Tell the shop only when something needs a person: a price the guard
+         refused to write, a product deactivated, or a failed run. A quiet
+         "nothing changed" email every day trains you to ignore the alert. */
+      const notable = out.split('\n').filter((l) =>
+        /SKIPPED|DEACTIVATING|NOT ON S&S|BACK IN STOCK/.test(l));
+      if (code !== 0 || notable.length) {
+        await alertShop(
+          code !== 0 ? '⚠️ Supplier sync failed' : '📦 Supplier sync needs a look',
+          `<pre style="font-size:13px;white-space:pre-wrap">${escEmail(
+            (code !== 0 ? err || out : out).slice(0, 4000))}</pre>`);
+      }
+      resolve(summary);
+    });
+    child.stdin.end(vars);
+  });
+}
+
 // Hourly abandoned-cart sweep trigger (the designer PHP does the real work).
 // Self-rescheduling with a timeout so a slow sweep can never overlap the next one.
 if (process.env.JT_INTERNAL_KEY) {
+  /* Each task is isolated. They used to share one try block, so a slow
+     designer — the very first call, over the network — swallowed every task
+     after it and the digest, the reminders and the review asks silently did
+     not run for that hour. A task that throws should cost only itself. */
+  const step = async (name, fn) => {
+    try { const out = await fn(); if (out) console.log(name + ':', String(out).trim()); }
+    catch (e) { console.error(name + ' failed:', e.message); }
+  };
+
   const runSweep = async () => {
-    try {
+    await step('abandoned-cart sweep', async () => {
       const r = await fetch(
         `https://design.jtees.net/jt-cron.php?key=${encodeURIComponent(process.env.JT_INTERNAL_KEY)}`,
         { signal: AbortSignal.timeout(120000) }
       );
-      console.log('abandoned-cart sweep:', (await r.text()).trim());
-      await sendDueReviewRequests();
-      await sendQuoteFollowUps();
-      await sendDepositReminders();
-      await sendBalanceReminders();
-      await sendReorderNudges();
-      await expireOldQuotes();
-      await sendDailyDigest();
-      await taxMonthlyCheck();
-      await brevoBreachCheck();
-    } catch (e) {
-      console.error('abandoned-cart sweep failed:', e.message);
-    }
+      return r.text();
+    });
+    await step('review asks', sendDueReviewRequests);
+    await step('quote follow-ups', sendQuoteFollowUps);
+    await step('deposit reminders', sendDepositReminders);
+    await step('balance reminders', sendBalanceReminders);
+    await step('reorder nudges', sendReorderNudges);
+    await step('expire quotes', expireOldQuotes);
+    await step('daily digest', sendDailyDigest);
+    await step('tax check', taxMonthlyCheck);
+    await step('brevo breach check', brevoBreachCheck);
+    await step('supplier sync', runSupplierSync);
     setTimeout(runSweep, 60 * 60 * 1000);
   };
   setTimeout(runSweep, 60 * 60 * 1000);
