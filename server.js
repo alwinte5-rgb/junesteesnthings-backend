@@ -3392,7 +3392,26 @@ function quotePricingSource() {
           blankBase = parseFloat(o.blankOverride);
         }
         var blank = blankBase ? blankPriceAt(blankBase, qty, o.blankTiers || []) : 0;
-        var decoration = o.method ? Number(tierAt(o.method.positions, qty, o.stage)) : 0;
+        /* Both sides, when the job is printed front AND back. The picker used to
+           offer only "one location" or "second location" — either/or — so a
+           two-sided job could be quoted at one side's price while the designer
+           charged both, and the quote came in under the work.
+
+           Positions are read by ORDER, not by name: the group keys are opaque
+           ("id", "mr8a5dlx"). A method with two groups (DTF) gives front + the
+           cheaper back; a method with one (screen printing, multi:false) doubles
+           its only table — which is what the designer does too, because a second
+           screen-print location is a second set of screens, not a cheaper pass. */
+        var decoration = 0;
+        if (o.method) {
+          if (o.stage === 'both') {
+            var pk = Object.keys(o.method.positions || {});
+            decoration = Number(tierAt(o.method.positions, qty, pk[0])) +
+                         Number(tierAt(o.method.positions, qty, pk[1] || pk[0]));
+          } else {
+            decoration = Number(tierAt(o.method.positions, qty, o.stage));
+          }
+        }
 
         /* A decoration minimum, enforced. Tier keys are CEILINGS, so a quantity
            below the smallest band prices at that band — a 12-piece screen job
@@ -3972,14 +3991,20 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
       </div>
       <p class="minwarn" style="display:none;margin:6px 0 0;font-size:12.5px;color:#b45309"></p>
       <p class="aonote" style="display:none;margin:6px 0 0;font-size:12px;color:#6b7280"></p>
+      <!-- Internal cost split. This form is requireAdmin and the customer's page
+           (/q/:code) renders from the stored line total, so nothing here reaches
+           them — it is for deciding whether a line is worth taking. -->
+      <p class="costnote" style="display:none;margin:6px 0 0;font-size:12px;color:#3f4a5f;
+         background:#F6F8FC;border:1px solid #E2E8F4;border-radius:6px;padding:6px 9px"></p>
       <div class="row row-2" style="margin-top:8px">
         <label style="display:flex;align-items:center;gap:6px;margin:0;font-size:13px;text-transform:none;letter-spacing:0;font-weight:400">
           <input type="checkbox" name="dark${n}" class="dark" value="1"
                  ${it && it.garment_dark ? 'checked' : ''} style="width:auto;margin:0">
           Dark garment</label>
         <select name="loc${n}" class="loc" style="font-size:13px;padding:6px 7px">
-          <option value="">One location</option>
-          <option value="mr8a5dlx"${it && it.stage ? ' selected' : ''}>Second location</option>
+          <option value="">Front only</option>
+          <option value="mr8a5dlx"${it && it.stage === 'mr8a5dlx' ? ' selected' : ''}>Back only</option>
+          <option value="both"${it && it.stage === 'both' ? ' selected' : ''}>Front + back</option>
         </select>
       </div>
       <div style="margin-top:6px">
@@ -4311,6 +4336,31 @@ ${quotePricingSource()}
               : '';
             aoNote.style.display = r.addonLines.length ? 'block' : 'none';
           }
+
+          /* Garment vs decoration, per piece and for the line. The unit price is
+             one number, so there was no way to see whether a thin margin came
+             from the blank or the printing — which is the decision this form is
+             actually for. Shown only when a quantity makes the totals real. */
+          var costNote = L.querySelector('.costnote');
+          if (costNote) {
+            if (!prod || qty <= 0) { costNote.style.display = 'none'; }
+            else {
+              var gTot = r.blank * qty, dTot = r.decoration * qty;
+              var parts = [
+                'Garment ' + m2(r.blank) + '/pc = ' + m2(gTot),
+                'Printing ' + m2(r.decoration) + '/pc = ' + m2(dTot)
+              ];
+              if (r.sizeUpcharge) parts.push('Size upcharges ' + m2(r.sizeUpcharge));
+              if (r.addonTotal)   parts.push('Extras ' + m2(r.addonTotal));
+              /* An override replaces the per-piece price, so the split above is
+                 what the job COSTS to build, not what is being charged. Say so
+                 rather than showing two sets of numbers that do not reconcile. */
+              if (r.manual) parts.push('override in use — line bills ' + m2(lt));
+              costNote.innerHTML = '<b>Internal:</b> ' + parts.join(' &nbsp;&middot;&nbsp; ');
+              costNote.style.display = 'block';
+            }
+          }
+
           sub += lt;
 
           /* Screen printing has a floor. The tier keys are band ceilings, so a
@@ -4325,8 +4375,15 @@ ${quotePricingSource()}
                 ', quote DTF or heat-transfer vinyl instead.' : '';
           }
 
+          /* Name the location in the line itself. A front+back line otherwise reads
+             exactly like a front-only one and costs twice as much, so the only
+             evidence of what was quoted was a number the customer cannot check. */
           var d = L.querySelector('.d');
-          if (!d.value && prod) d.value = prod.name + (meth ? ' — ' + meth.title : '');
+          if (!d.value && prod) {
+            var where = stage === 'both' ? ' (front + back)'
+                      : (stage ? ' (back)' : '');
+            d.value = prod.name + (meth ? ' — ' + meth.title : '') + where;
+          }
         });
         /* Mirrors quoteDiscount() on the server, clamps included. If these two
            ever disagree the form shows one number and the customer is charged
@@ -4743,8 +4800,9 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
       /* Second print location: the posted stage must be one this method really
          has, or it silently prices from the wrong table. */
       const rawStage = String(one(b['loc' + i]) || '').trim();
-      const stage = (rawStage && method && method.positions && method.positions[rawStage])
-        ? rawStage : '';
+      const stage = rawStage === 'both'
+        ? 'both'
+        : ((rawStage && method && method.positions && method.positions[rawStage]) ? rawStage : '');
 
       const colours = Number((methodTitle.match(/(\d+)\s*Colou?r/i) || [0, 1])[1]) || 1;
 
