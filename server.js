@@ -4157,6 +4157,7 @@ const ADMIN_NAV = [
   { key: 'customers', href: '/customers',     label: 'Customers' },
   { key: 'leads',     href: '/admin',         label: 'Leads' },
   { key: 'money',     href: '/books',         label: 'Finances' },
+  { key: 'discounts', href: '/discounts',     label: 'Discounts' },
   { key: 'reviews',   href: '/admin/reviews', label: 'Reviews' },
 ];
 /* Ordered the way a shop is actually worked, not the way the routes grew:
@@ -7874,6 +7875,174 @@ app.get('/q/:code/vcard', async (req, res) => {
    through a quote live in Postgres, people who ordered through the studio live
    in the designer's MySQL and arrive on the orders feed. Neither list on its
    own is "your customers", and until now neither page pretended to be. */
+/* ── Discount codes ───────────────────────────────────────────────────────
+ *
+ * The codes LIVE on design.jtees.net, because that is where checkout validates
+ * them — a code that depended on this service being up would fail at exactly
+ * the moment it matters. This page is a client: it reads and writes over the
+ * same shared-secret endpoint pattern as the orders feed.
+ *
+ * So every failure here is a network failure, and the page says so rather than
+ * showing an empty list that reads as "you have no codes".
+ */
+const PROMO_ADMIN = () => `${STUDIO_BASE}/jt-promo-admin.php?key=${encodeURIComponent(process.env.JT_INTERNAL_KEY || '')}`;
+
+async function fetchPromoCodes() {
+  if (!process.env.JT_INTERNAL_KEY) return { codes: [], error: 'JT_INTERNAL_KEY not set' };
+  try {
+    const r = await fetch(PROMO_ADMIN(), { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw new Error(`studio answered ${r.status}`);
+    const d = await r.json();
+    return { codes: Array.isArray(d.codes) ? d.codes : [], error: null };
+  } catch (e) {
+    console.error('promo codes fetch failed:', e.message);
+    return { codes: [], error: e.message };
+  }
+}
+
+app.get('/discounts', requireAdmin, async (req, res) => {
+  const { codes, error } = await fetchPromoCodes();
+  const msg = String(req.query.msg || '');
+  const err = String(req.query.err || '');
+
+  const today = new Date().toISOString().slice(0, 10);
+  const live = (c) => c.active && (!c.expires || String(c.expires).slice(0, 10) >= today);
+  const worth = (c) => c.kind === 'amount' ? money(c.value) + ' off' : c.value + '% off';
+
+  const row = (c) => `
+    <tr style="border-top:1px solid #eef1f8${live(c) ? '' : ';opacity:.55'}">
+      <td style="padding:9px 6px"><b style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace">${escEmail(c.code)}</b>
+        ${c.note ? `<div class="muted" style="font-size:12.5px">${escEmail(c.note)}</div>` : ''}</td>
+      <td style="padding:9px 6px;white-space:nowrap"><b>${escEmail(worth(c))}</b></td>
+      <td style="padding:9px 6px;white-space:nowrap;font-size:12.5px" class="muted">${
+        c.expires ? 'until ' + fmtDate(c.expires) : 'no end date'}</td>
+      <td class="num" style="padding:9px 6px">${c.uses || 0}</td>
+      <td style="padding:9px 6px;white-space:nowrap">${live(c)
+        ? '<span style="color:#166534;font-weight:600;font-size:12.5px">live</span>'
+        : `<span class="muted" style="font-size:12.5px">${c.active ? 'expired' : 'switched off'}</span>`}</td>
+      <td style="padding:9px 6px;text-align:right">${live(c) ? `
+        <form method="POST" action="/discounts/off" style="display:inline"
+              onsubmit="return confirm('Switch off ${escEmail(c.code)}? Anyone who has it will stop being able to use it.')">
+          <input type="hidden" name="code" value="${escEmail(c.code)}">
+          <button type="submit" class="btn btn-ghost" style="padding:5px 12px;font-size:12.5px">Switch off</button>
+        </form>` : ''}</td>
+    </tr>`;
+
+  const liveCount = codes.filter(live).length;
+
+  res.send(adminPage('Discounts', `<h1>Discounts</h1>
+    <div class="sub">${liveCount} live &middot; ${codes.length} total &middot;
+      <span class="muted" style="font-size:12px">codes you issue by hand, for design.jtees.net checkout</span></div>
+
+    ${err ? `<div class="warn" style="margin-bottom:12px">${escEmail(err)}</div>` : ''}
+    ${msg ? `<div class="ok" style="margin-bottom:12px">${escEmail(msg)}</div>` : ''}
+    ${error ? `<div class="warn" style="margin-bottom:12px"><b>Could not reach the studio.</b>
+      The list below may be incomplete — this is a connection problem, not an empty list.
+      <span class="muted">(${escEmail(error)})</span></div>` : ''}
+
+    <div class="card" style="margin-bottom:16px">
+      <b style="color:#0B1F4B">New code</b>
+      <form method="POST" action="/discounts" style="margin-top:10px">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+          <div style="flex:1 1 150px">
+            <label style="font-size:12px">Code</label>
+            <input name="code" required maxlength="32" placeholder="TYLER30"
+                   pattern="[A-Za-z0-9]{3,32}" title="3-32 letters or digits"
+                   style="width:100%;padding:8px;font-size:14px;text-transform:uppercase">
+          </div>
+          <div style="flex:0 1 130px">
+            <label style="font-size:12px">Type</label>
+            <select name="kind" style="width:100%;padding:8px;font-size:14px">
+              <option value="amount">$ off</option>
+              <option value="percent">% off</option>
+            </select>
+          </div>
+          <div style="flex:0 1 110px">
+            <label style="font-size:12px">Value</label>
+            <input name="value" required type="number" step="0.01" min="0.01" placeholder="30"
+                   style="width:100%;padding:8px;font-size:14px">
+          </div>
+          <div style="flex:0 1 160px">
+            <label style="font-size:12px">Expires <span class="muted">(optional)</span></label>
+            <input name="expires" type="date" style="width:100%;padding:8px;font-size:14px">
+          </div>
+        </div>
+        <div style="margin-top:10px">
+          <label style="font-size:12px">What it is for <span class="muted">(only you see this)</span></label>
+          <input name="note" maxlength="200" placeholder="e.g. Tyler W — free shirt, two-week delay on his order"
+                 style="width:100%;padding:8px;font-size:14px">
+        </div>
+        <button type="submit" class="btn" style="margin-top:12px;padding:9px 20px">Create code</button>
+      </form>
+      <p class="muted" style="margin:10px 0 0;font-size:12.5px">
+        A <b>$ off</b> code never takes a total below zero — a $30 code on a $12 order takes off $12.
+        Codes are case-insensitive. Reusing an existing code updates it.</p>
+    </div>
+
+    <div class="card" style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;min-width:620px">
+        <thead><tr style="text-align:left">
+          <th style="padding:6px">Code</th><th style="padding:6px">Worth</th>
+          <th style="padding:6px">Expires</th><th class="num" style="padding:6px">Used</th>
+          <th style="padding:6px">State</th><th></th>
+        </tr></thead>
+        <tbody>${codes.map(row).join('') || `<tr><td colspan="6" class="muted" style="padding:12px 6px">${
+          error ? 'Could not load the list.' : 'No codes yet — make one above.'}</td></tr>`}</tbody>
+      </table>
+    </div>
+
+    <p class="muted" style="margin-top:14px;font-size:12.5px">
+      These are separate from the weekly abandoned-cart codes, which rotate on their own and are
+      capped at one per customer. A code you make here is not capped — it is a promise to one person,
+      and it keeps working for them.</p>`, 'discounts'));
+});
+
+app.post('/discounts', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const form = new URLSearchParams();
+  form.set('code', String(b.code || '').trim().toUpperCase());
+  form.set('kind', b.kind === 'percent' ? 'percent' : 'amount');
+  form.set('value', String(b.value || ''));
+  form.set('expires', String(b.expires || '').trim());
+  form.set('note', String(b.note || '').trim());
+  try {
+    const r = await fetch(PROMO_ADMIN(), {
+      method: 'POST', body: form, signal: AbortSignal.timeout(8000),
+    });
+    const d = await r.json().catch(() => ({}));
+    /* The studio validates too — bounds on the value, the code shape, the date
+       format. Its message is shown rather than a generic failure, because "a
+       percentage must be between 1 and 100" is actionable and "could not save"
+       is not. */
+    if (!r.ok || d.error) {
+      return res.redirect('/discounts?err=' + encodeURIComponent(d.error || `studio answered ${r.status}`));
+    }
+    res.redirect('/discounts?msg=' + encodeURIComponent(`${d.code} is live.`));
+  } catch (e) {
+    console.error('promo save failed:', e.message);
+    res.redirect('/discounts?err=' + encodeURIComponent('Could not reach the studio: ' + e.message));
+  }
+});
+
+app.post('/discounts/off', requireAdmin, async (req, res) => {
+  const form = new URLSearchParams();
+  form.set('code', String((req.body || {}).code || '').trim().toUpperCase());
+  form.set('delete', '1');
+  try {
+    const r = await fetch(PROMO_ADMIN(), {
+      method: 'POST', body: form, signal: AbortSignal.timeout(8000),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d.error) {
+      return res.redirect('/discounts?err=' + encodeURIComponent(d.error || `studio answered ${r.status}`));
+    }
+    res.redirect('/discounts?msg=' + encodeURIComponent(`${d.deactivated} switched off.`));
+  } catch (e) {
+    console.error('promo deactivate failed:', e.message);
+    res.redirect('/discounts?err=' + encodeURIComponent('Could not reach the studio: ' + e.message));
+  }
+});
+
 app.get('/customers', requireAdmin, async (_req, res) => {
   try {
     const { rows: quoteCustomers } = await pool.query(
