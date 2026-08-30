@@ -33,7 +33,7 @@ const colorKey = (n) => n + '-color';
  *        One entry per colour count. `tiers` is [band ceiling, price per piece].
  * @returns {{multi:boolean,type:string,show_detail:string,values:object}}
  */
-function colorTable(rows) {
+function colorTable(rows, minQty) {
   if (!rows || rows.length === 0) throw new Error('no per-colour tables to combine');
 
   const sorted = [...rows].sort((a, b) => a.colors - b.colors);
@@ -89,7 +89,22 @@ function colorTable(rows) {
   /* `multi:false` — one screen-print table, applied per stage that carries
      artwork. A second print location is a second set of screens, and both
      engines already charge each decorated stage against this same table. */
-  return { multi: false, type: 'color', show_detail: '1', values: { front } };
+  /* The 50-piece minimum, IN the method row.
+   *
+   * The storefront already knows how to enforce this — core/cart.php reads
+   * `min_qty`, and when the order is short it reprices the line onto DTF and
+   * says so. That code has been running the whole time against a method with no
+   * `min_qty` set, so it read 0, and `if ($min <= 0) return` skipped every
+   * check: screen printing has been orderable at any quantity, below the
+   * minimum the shop actually has with its printer.
+   *
+   * It belongs here rather than as a one-off UPDATE because this function
+   * REPLACES the method's calculate blob on every reprice — a value written by
+   * hand would be silently dropped the next time prices moved. */
+  const out = { multi: false, type: 'color', show_detail: '1', values: { front } };
+  const m = parseInt(minQty, 10);
+  if (Number.isFinite(m) && m > 0) out.min_qty = String(m);
+  return out;
 }
 
 module.exports = { colorTable, colorKey };
