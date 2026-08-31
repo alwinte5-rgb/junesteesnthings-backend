@@ -206,3 +206,41 @@ test('an unknown garment colour does not refuse the job', () => {
      toward dark would refuse a light-garment order on a guess. */
   assert.match(cartPhp, /if \(!preg_match\('\/\^#\?\(\[0-9a-f\]\{6\}\)\$\/i', trim\(\$hex\), \$m\)\) return false;/);
 });
+
+/* ── A photograph is not a screen-print job ──────────────────────────────── */
+
+test('raster art is checked on its own, not folded into the colour count', () => {
+  /* `states_data[stage].colors` is built in app.js from o.colors, o.stroke and
+     o.fill — vector and text only. A raster image has none of the three and
+     contributes ZERO colours, so a `$colors > 0` guard skipped a photo-only
+     design entirely.
+     What that produced, verified against the real pricing logic:
+       photo only            -> no rule matched, decoration priced at $0.00
+       photo + one text word -> counted as ONE colour, sold at $3.85/pc
+     A full-colour photograph at single-colour rates, or free. */
+  assert.match(cartPhp, /\$raster = \$this->printing_has_raster\( \$item \);/);
+  assert.match(cartPhp, /if \(\$raster \|\| \(\$colors > 0 &&/,
+    'raster must short-circuit BEFORE the colour count, which reads zero for it');
+});
+
+test('any stage carrying an image is enough', () => {
+  /* A vector front with a photographed back is still a photograph. */
+  assert.match(cartPhp, /isset\(\$o\['images'\]\) && intval\(\$o\['images'\]\) > 0\) return true;/);
+});
+
+test('the note names the real reason', () => {
+  /* "7 colours" would be wrong and confusing on a design whose countable colour
+     total is zero. */
+  assert.match(cartPhp, /uses a photo or uploaded image, which has more colours than/);
+  assert.match(cartPhp, /which prints any number of colours/);
+});
+
+test('erring toward DTF is deliberate and recorded', () => {
+  /* A one-colour logo uploaded as a PNG goes to DTF too. That direction is
+     safe — DTF prints it correctly and the shop can offer screen printing by
+     hand once it has seen the art. The opposite error makes a job the press
+     cannot produce. */
+  /* Whitespace-tolerant: the comment wraps, and a test that breaks on
+     reformatting teaches people to stop trusting the suite. */
+  assert.match(cartPhp, /shop can offer screen printing by hand once it has seen the art/);
+});
