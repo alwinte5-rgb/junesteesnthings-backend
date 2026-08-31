@@ -95,7 +95,7 @@ they bill once per order at $35/screen (cost $20), screens = (colours + 1 on dar
   NEW  7 colour          $9.80      $9.25      $8.60      $8.15      $7.70      $7.30
 
   The same prices are also written to the combined "Screen Printing" method,
-  as columns 1-color..7-color plus a full-color backstop, so the editor can
+  as columns 1-color..6-color plus a full-color backstop, so the editor can
   price from the design's own colour count.
 
 
@@ -158,7 +158,7 @@ Whole job, decoration only — the blank is a separate line with its own markup:
 | 50pc, 1 colour, 1 location, white (the minimum job) | $227.50 | $110.00 | $117.50 | 51.6% |
 | 50pc, 1 colour, 1 location, dark | $262.50 | $130.00 | $132.50 | 50.5% |
 | 50pc, 1 colour, 2 locations, dark | $525.00 | $260.00 | $265.00 | 50.5% |
-| 50pc, 7 colours, 2 locations, dark (worst case) | $1,540.00 | $780.00 | $760.00 | 49.4% |
+| 50pc, 5 colours, 2 locations, dark (worst case — 12 screens) | $1,080.00 | $606.00 | $474.00 | 43.9% |
 | 100pc, 1 colour, 2 locations, dark | $830.00 | $410.00 | $420.00 | 50.6% |
 | 500pc, 1 colour, 2 locations, dark | $2,840.00 | $1,400.00 | $1,440.00 | 50.7% |
 
@@ -287,34 +287,58 @@ two sells at $13.83 against $6.92 (50.0%). On two-sided work this shop is struct
 competitor, and no amount of garment discounting closes that gap: the garment is
 only $2.82 of the $6.92.
 
+## Six screens, and the white underbase is one of them
+
+The press runs **six screens in one pass**, base included. So:
+
+| garment | most printed colours |
+| --- | --- |
+| light | **6** |
+| dark | **5** — the white underbase takes a station |
+
+The ceiling is **per pass, not per order**. A two-sided 5-colour job is two
+passes of six screens and is fine; a one-sided 6-colour job on a dark garment is
+seven on one pass and is not.
+
+Anything over that is a **DTF job**, not a more expensive screen-print job —
+there is no price for it because the shop cannot run it.
+
+**The 7-colour column was wrong and was being sold.** Its prices were a straight
++$0.47 extrapolation of the sixth column — invented, not quoted. The generator
+now refuses any row past the ceiling rather than pricing it, `full-color` is
+priced at the highest *producible* column, and `max_screens` travels in the
+method row so every surface reads one definition.
+
 ## Which method is cheaper — recomputed 2026-08-30
 
 Screen print moved twice in one day (anchor $4.25 → $3.85, screens $35 → $25), so
 every earlier crossover figure is wrong. The old note said *"DTF wins from 5
 colours below 500 pieces and 4 at 500+"*. It does not any more.
 
-**`s` = screen print cheaper · `D` = DTF cheaper**, by colour count 1–7:
+**`s` = screen print cheaper · `D` = DTF cheaper**, by colour count 1–6. There is
+no 7 — see the ceiling above; on a dark garment column 6 is unavailable too.
 
 ### One location
 
-| qty | 1 | 2 | 3 | 4 | 5 | 6 | 7 | DTF wins from |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 50 | s | s | s | s | s | s | D | 7 colours |
-| 100 | s | s | s | s | s | D | D | 6 colours |
-| 250 | s | s | s | s | s | D | D | 6 colours |
-| 500 | s | s | s | s | D | D | D | 5 colours |
-| 1,000 | s | s | s | D | D | D | D | 4 colours |
-| 2,500 | s | s | s | D | D | D | D | 4 colours |
+| qty | 1 | 2 | 3 | 4 | 5 | 6 | DTF wins from |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 50 | s | s | s | s | s | s | never — DTF only past 6 |
+| 100 | s | s | s | s | s | D | 6 colours |
+| 250 | s | s | s | s | s | D | 6 colours |
+| 500 | s | s | s | s | D | D | 5 colours |
+| 1,000 | s | s | s | D | D | D | 4 colours |
+| 2,500 | s | s | s | D | D | D | 4 colours |
 
-On a **dark** garment at 50 pieces DTF wins from 6 rather than 7 — the white
-underbase is an extra screen at every location. Everywhere else the dark and
+On a **dark** garment the top column is unavailable — six printed colours plus a
+base is seven screens. So at 50 pieces a dark garment goes to DTF at 6 colours
+where a light one could still be screen printed. Everywhere else the dark and
 light crossovers are the same.
 
 ### Two locations
 
-| qty | 1 | 2 | 3 | 4 | 5 | 6 | 7 | DTF wins from |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 50–500 | s | s | s | D | D | D | D | 4 colours |
+| qty | 1 | 2 | 3 | 4 | 5 | 6 | DTF wins from |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 50–500 | s | s | s | D | D | D | 4 colours |
 | 1,000+ | s | s | D | D | D | D | D | 3 colours |
 
 Dark and light are identical here.
@@ -324,7 +348,8 @@ Dark and light are identical here.
 DTF now wins **earlier at volume** and **later on small runs** than it used to.
 
 - Screen print got cheaper per piece, which pushes the crossover *out* on short
-  runs — a 50-piece job now stays screen print all the way to 7 colours.
+  runs — a 50-piece light garment stays screen print across every column the
+  press can run.
 - But screens are billed once per order, and at high quantity that fixed cost is
   spread thin while the per-piece gap decides everything. Cutting the screen fee
   to $25 did not save screen printing at 1,000 pieces; the per-piece rate is what

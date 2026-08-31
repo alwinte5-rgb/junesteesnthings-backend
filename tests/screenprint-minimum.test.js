@@ -122,6 +122,40 @@ test('the reprice tool passes the contracted floor', () => {
   const path = require('node:path');
   const tool = fs.readFileSync(path.join(__dirname, '..', 'tools', 'reprice-anchorfish-2026.js'), 'utf8');
   assert.match(tool, /const SCREEN_MIN_QTY = 50;/);
-  assert.match(tool, /colorTable\(all, SCREEN_MIN_QTY\)/,
-    'the generator must be told the minimum, or it emits a method without one');
+  assert.match(tool, /colorTable\(all, SCREEN_MIN_QTY, SCREEN_MAX\)/,
+    'the generator must be told the minimum AND the screen ceiling, or it emits ' +
+    'a method that sells colour counts the press cannot run');
+  assert.match(tool, /const SCREEN_MAX = 6;/,
+    'six screens including the white underbase');
+});
+
+/* ── Six screens, and the base is one of them ────────────────────────────── */
+
+test('the generator refuses a colour count the press cannot run', () => {
+  /* A price that exists is a price somebody will be quoted. The 7-colour column
+     was a +$0.47 extrapolation of the sixth — invented, published, and sold. */
+  const { colorTable } = require('../tools/lib/screenprint');
+  const rows = (n) => Array.from({ length: n }, (_, i) =>
+    ({ colors: i + 1, tiers: [[99, 3.85 + i], [249, 3.45 + i]] }));
+  assert.throws(() => colorTable(rows(7), 50, 6), /7 colours cannot be printed/);
+  assert.doesNotThrow(() => colorTable(rows(6), 50, 6));
+});
+
+test('full-color is priced at the highest PRODUCIBLE column', () => {
+  /* It is the backstop against a $0 decoration, not an offer. Pricing it above
+     the top column would quote a colour count that cannot be run. */
+  const { colorTable } = require('../tools/lib/screenprint');
+  const t = colorTable(Array.from({ length: 6 }, (_, i) =>
+    ({ colors: i + 1, tiers: [[99, 3.85 + i]] })), 50, 6);
+  const band = Object.values(t.values.front)[0];
+  assert.strictEqual(band['full-color'], band['6-color']);
+  assert.ok(!('7-color' in band), 'no column past the ceiling');
+});
+
+test('the ceiling travels in the method, like the minimum', () => {
+  /* One definition in the database, read by every surface — a constant restated
+     per engine is how the two drift. */
+  const { colorTable } = require('../tools/lib/screenprint');
+  const t = colorTable([{ colors: 1, tiers: [[99, 3.85]] }], 50, 6);
+  assert.strictEqual(t.max_screens, '6');
 });

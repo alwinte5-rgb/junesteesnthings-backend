@@ -96,13 +96,22 @@ function backup(url, tag) {
    An earlier draft of this file folded (SCREEN_COST * colours) / band_floor
    into the base before applying the markup. That was written before screens
    became a separate fee; leaving it in would bill every screen twice. */
+/* SIX SCREENS, and the white underbase is one of them.
+ *
+ * The press runs six stations. On a light garment that is six printed colours;
+ * on a dark one it is five, because the base occupies a station. There is no
+ * seventh column — the 7-colour prices this table used to carry were a straight
+ * +$0.47 extrapolation of the sixth, which is to say invented, and they were
+ * being sold. A quote at that price is a job the shop cannot produce.
+ *
+ * SCREEN_MAX below is the real constraint; these rows stop at six to match it. */
 const SP = {
-   50: { ceil:  99, mk: 2.13, p: [1.80, 2.25, 2.72, 3.19, 3.66, 4.13, 4.60] },
-  100: { ceil: 249, mk: 2.09, p: [1.65, 2.06, 2.53, 3.00, 3.47, 3.94, 4.41] },
-  250: { ceil: 499, mk: 2.05, p: [1.47, 1.84, 2.31, 2.78, 3.25, 3.72, 4.19] },
-  500: { ceil: 999, mk: 2.03, p: [1.32, 1.65, 2.12, 2.59, 3.06, 3.53, 4.00] },
- 1000: { ceil:2499, mk: 2.02, p: [1.17, 1.46, 1.93, 2.40, 2.87, 3.34, 3.81] },
- 2500: { ceil:7000, mk: 2.02, p: [0.99, 1.24, 1.71, 2.18, 2.65, 3.12, 3.59] },
+   50: { ceil:  99, mk: 2.13, p: [1.80, 2.25, 2.72, 3.19, 3.66, 4.13] },
+  100: { ceil: 249, mk: 2.09, p: [1.65, 2.06, 2.53, 3.00, 3.47, 3.94] },
+  250: { ceil: 499, mk: 2.05, p: [1.47, 1.84, 2.31, 2.78, 3.25, 3.72] },
+  500: { ceil: 999, mk: 2.03, p: [1.32, 1.65, 2.12, 2.59, 3.06, 3.53] },
+ 1000: { ceil:2499, mk: 2.02, p: [1.17, 1.46, 1.93, 2.40, 2.87, 3.34] },
+ 2500: { ceil:7000, mk: 2.02, p: [0.99, 1.24, 1.71, 2.18, 2.65, 3.12] },
 };
 /* Anchorfish's actual per-SCREEN charge, confirmed on invoice #16899: 4 screens
    at $20 for a 2-colour job across 2 locations. Screens are therefore
@@ -118,11 +127,16 @@ const SP = {
 /* The contracted floor. Under this the job goes to DTF or HTV, both of which
    the designer already prices. */
 const SCREEN_MIN_QTY = 50;
+/* Screens the press can run in one pass, INCLUDING the white underbase. A dark
+   garment therefore tops out at five printed colours, a light one at six. Over
+   that the job is not a screen-print job at all and belongs on DTF. */
+const SCREEN_MAX = 6;
 const SCREEN_COST = 20;   // what Anchorfish charges us, per screen
 const SCREEN_FEE  = 25;   // what we bill, per screen, ONCE per order (was 35 to 2026-08-30)
 
-/* Anchorfish prices 5, 6 and 7 colours separately; the designer had one
-   combined "5-6 Colors" method, which had to quote one of them wrong. */
+/* The vendor prices 5 and 6 colours separately; the designer had one combined
+   "5-6 Colors" method, which had to quote one of them wrong. Nothing above six
+   is offered — see SCREEN_MAX. */
 const SP_METHODS = {
   2: { colors: 1, title: 'Screen Printing — 1 Color' },
   3: { colors: 2, title: 'Screen Printing — 2 Colors' },
@@ -132,7 +146,6 @@ const SP_METHODS = {
 };
 const SP_INSERTS = [
   { colors: 6, title: 'Screen Printing — 6 Colors' },
-  { colors: 7, title: 'Screen Printing — 7 Colors' },
 ];
 
 /* ── DTF (contracted to Anchorfish) ─────────────────────────────────────── */
@@ -482,7 +495,7 @@ for (const m of SP_INSERTS) {
   /* SCREEN_MIN_QTY, written into the method so the storefront enforces it.
      Without it core/cart.php reads 0 and lets a 12-piece screen job through at
      the 50-99 rate — below the minimum the shop has with its own printer. */
-  const combined = enjson(colorTable(all, SCREEN_MIN_QTY));
+  const combined = enjson(colorTable(all, SCREEN_MIN_QTY, SCREEN_MAX));
   console.log('\n  The same prices are also written to the combined "Screen Printing" method,');
   console.log('  as columns 1-color..7-color plus a full-color backstop, so the editor can');
   console.log('  price from the design\'s own colour count.');

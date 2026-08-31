@@ -219,10 +219,14 @@ test('the reprice tool prices print only — screens are not folded back in', ()
   const AGREED = {
     1: [3.85, 3.45, 3.05, 2.70, 2.40, 2.00],
     3: [5.80, 5.30, 4.75, 4.35, 3.90, 3.50],
-    7: [9.80, 9.25, 8.60, 8.15, 7.70, 7.30],
+    /* SIX is the top, not seven. The press runs six screens including the white
+       underbase, so the 7-colour row this table used to assert was pricing a job
+       the shop cannot produce — and its numbers were a +$0.47 extrapolation of
+       the sixth rather than anything quoted. */
+    6: [8.80, 8.25, 7.65, 7.20, 6.75, 6.35],
   };
   const FLOORS = [50, 100, 250, 500, 1000, 2500];
-  for (const c of [1, 3, 7]) {
+  for (const c of [1, 3, 6]) {
     FLOORS.forEach((f, i) => {
       assert.strictEqual(sandbox.spPrice(f, c), AGREED[c][i],
         `${c} colour at the ${f} band should be print-only $${AGREED[c][i].toFixed(2)}`);
