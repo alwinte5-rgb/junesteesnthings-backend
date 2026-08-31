@@ -23,6 +23,13 @@
  * `full-color` MUST exist. Without it a design with more colours than any
  * column silently prices the decoration at $0 in both engines — screen printing
  * for free rather than an error anyone would see.
+ *
+ * It is priced at the HIGHEST PRODUCIBLE column, never at an invented one. The
+ * press runs six screens including the white underbase, so a design past that
+ * is not a cheaper screen-print job, it is a DTF job — and the honest thing for
+ * this backstop to do is charge the most screen printing can cost rather than
+ * quote a colour count the shop cannot run. The editor steers those designs to
+ * DTF; this only stops the fall-through from being free.
  */
 
 /** Column key for a colour count, matching what the admin UI writes (main.js:3323). */
@@ -33,8 +40,20 @@ const colorKey = (n) => n + '-color';
  *        One entry per colour count. `tiers` is [band ceiling, price per piece].
  * @returns {{multi:boolean,type:string,show_detail:string,values:object}}
  */
-function colorTable(rows, minQty) {
+function colorTable(rows, minQty, maxScreens) {
   if (!rows || rows.length === 0) throw new Error('no per-colour tables to combine');
+
+  /* Refuse a colour count the press cannot run, rather than publishing a column
+     for it. A price that exists is a price somebody will be quoted. */
+  const cap = parseInt(maxScreens, 10);
+  if (Number.isFinite(cap) && cap > 0) {
+    const over = rows.filter((r) => r.colors > cap);
+    if (over.length) {
+      throw new Error('the press runs ' + cap + ' screens, so ' +
+        over.map((r) => r.colors).join(' and ') + ' colours cannot be printed — ' +
+        'remove those rows rather than pricing them');
+    }
+  }
 
   const sorted = [...rows].sort((a, b) => a.colors - b.colors);
   const bands = sorted[0].tiers.map(([q]) => String(q));
@@ -104,6 +123,9 @@ function colorTable(rows, minQty) {
   const out = { multi: false, type: 'color', show_detail: '1', values: { front } };
   const m = parseInt(minQty, 10);
   if (Number.isFinite(m) && m > 0) out.min_qty = String(m);
+  /* Carried so every surface reads the ceiling from the method rather than
+     restating it — the same reason min_qty lives here. */
+  if (Number.isFinite(cap) && cap > 0) out.max_screens = String(cap);
   return out;
 }
 

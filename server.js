@@ -3611,6 +3611,25 @@ function quotePricingSource() {
         return (c + (dark ? 1 : 0)) * l;
       }
 
+      /* Screens the press runs in one pass, INCLUDING the white underbase.
+         Read from the method when it carries the value, so the ceiling has one
+         definition in the database like the minimum does; the fallback is the
+         press the shop actually has. */
+      function maxScreens(method) {
+        var m = method && method.max_screens ? parseInt(method.max_screens, 10) : 0;
+        return m > 0 ? m : 6;
+      }
+
+      /* Screens ONE LOCATION needs. The ceiling is per pass, not per order — a
+         two-sided 5-colour job is two passes of six screens, which is fine; a
+         one-sided 6-colour job on a dark garment is seven on one pass, which is
+         not. Multiplying by locations first would refuse work the press can do
+         and accept work it cannot. */
+      function screensPerPass(colours, dark) {
+        var c = parseInt(colours, 10); if (!(c > 0)) c = 1;
+        return c + (dark ? 1 : 0);
+      }
+
       /* One add-on's charge. The whole point of the table is that this
          switch exists exactly once. */
       function addonAmount(a, qty, colours, decorationSubtotal, screens) {
@@ -3701,6 +3720,16 @@ function quotePricingSource() {
            language, which is how the two drift. It is also why this function has
            no free variables: the parity test lifts this source and executes it
            alone, so anything it cannot see would break that guarantee. */
+        /* Over the press's screen ceiling this is not a screen-print job. Said
+           here, in the source both engines run, so the quote form and the
+           designer refuse the same designs — and said as a fact about the
+           press rather than a price, because there is no price for it. */
+        var overScreens = false, screenCeiling = 0;
+        if (o.method && /screen\s*print/i.test(String(o.method.title || ''))) {
+          screenCeiling = maxScreens(o.method);
+          overScreens = screensPerPass(colours, !!o.dark) > screenCeiling;
+        }
+
         var decoMin = (o.method && o.method.min_order_qty) ? (parseInt(o.method.min_order_qty, 10) || 0) : 0;
         var belowDecoMin = decoMin > 0 && qty > 0 && qty < decoMin;
         if (belowDecoMin && decoration > 0) {
@@ -3762,6 +3791,10 @@ function quotePricingSource() {
              "4 screens x $35" is checkable by the customer, "$140 setup" is
              not — without re-deriving it and drifting. */
           colours: colours, locations: locations, screens: screens,
+          /* Surfaced, not silently priced: a design past the press's screen
+             ceiling has no screen-print price, and a surface that shows a
+             number anyway is selling a job the shop cannot run. */
+          overScreens: overScreens, screenCeiling: screenCeiling,
           lineTotal: lineTotal, listTotal: listTotal
         };
       }
@@ -4898,10 +4931,21 @@ ${quotePricingSource()}
           var warn = L.querySelector('.minwarn');
           var tooFew = meth && /screen\\s*print/i.test(meth.title) && qty > 0 && qty < ${SCREEN_MIN_QTY};
           if (warn) {
-            warn.style.display = tooFew ? 'block' : 'none';
-            warn.textContent = tooFew
-              ? 'Screen printing starts at ${SCREEN_MIN_QTY} pieces. For ' + qty +
-                ', quote DTF or heat-transfer vinyl instead.' : '';
+            /* Two different refusals, one line. Too many colours outranks too
+               few pieces: adding pieces fixes the second, nothing fixes the
+               first except changing method. */
+            if (r.overScreens) {
+              warn.style.display = 'block';
+              warn.textContent = 'The press runs ' + r.screenCeiling + ' screens including the white ' +
+                'underbase, so this is ' + r.screens / (r.locations || 1) + ' per pass — ' +
+                (dark ? r.screenCeiling - 1 : r.screenCeiling) + ' colours is the most on a ' +
+                (dark ? 'dark' : 'light') + ' garment. Quote DTF instead.';
+            } else {
+              warn.style.display = tooFew ? 'block' : 'none';
+              warn.textContent = tooFew
+                ? 'Screen printing starts at ${SCREEN_MIN_QTY} pieces. For ' + qty +
+                  ', quote DTF or heat-transfer vinyl instead.' : '';
+            }
           }
 
           /* Name the location in the line itself. A front+back line otherwise reads
