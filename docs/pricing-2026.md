@@ -286,3 +286,55 @@ pass. At 100 pieces one location sells at $9.68/pc against $4.87 of cost (49.7%)
 two sells at $13.83 against $6.92 (50.0%). On two-sided work this shop is structurally behind an in-house
 competitor, and no amount of garment discounting closes that gap: the garment is
 only $2.82 of the $6.92.
+
+## Which method is cheaper — recomputed 2026-08-30
+
+Screen print moved twice in one day (anchor $4.25 → $3.85, screens $35 → $25), so
+every earlier crossover figure is wrong. The old note said *"DTF wins from 5
+colours below 500 pieces and 4 at 500+"*. It does not any more.
+
+**`s` = screen print cheaper · `D` = DTF cheaper**, by colour count 1–7:
+
+### One location
+
+| qty | 1 | 2 | 3 | 4 | 5 | 6 | 7 | DTF wins from |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 50 | s | s | s | s | s | s | D | 7 colours |
+| 100 | s | s | s | s | s | D | D | 6 colours |
+| 250 | s | s | s | s | s | D | D | 6 colours |
+| 500 | s | s | s | s | D | D | D | 5 colours |
+| 1,000 | s | s | s | D | D | D | D | 4 colours |
+| 2,500 | s | s | s | D | D | D | D | 4 colours |
+
+On a **dark** garment at 50 pieces DTF wins from 6 rather than 7 — the white
+underbase is an extra screen at every location. Everywhere else the dark and
+light crossovers are the same.
+
+### Two locations
+
+| qty | 1 | 2 | 3 | 4 | 5 | 6 | 7 | DTF wins from |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 50–500 | s | s | s | D | D | D | D | 4 colours |
+| 1,000+ | s | s | D | D | D | D | D | 3 colours |
+
+Dark and light are identical here.
+
+### What changed, and why
+
+DTF now wins **earlier at volume** and **later on small runs** than it used to.
+
+- Screen print got cheaper per piece, which pushes the crossover *out* on short
+  runs — a 50-piece job now stays screen print all the way to 7 colours.
+- But screens are billed once per order, and at high quantity that fixed cost is
+  spread thin while the per-piece gap decides everything. Cutting the screen fee
+  to $25 did not save screen printing at 1,000 pieces; the per-piece rate is what
+  matters there.
+- **Two locations is the sharp one.** Screen print doubles both the rate and the
+  screen count, while DTF's second location runs roughly 58% less. Anything
+  two-sided above 3 colours belongs on DTF at almost any quantity.
+
+Screens are counted as `(colours + 1 on darks) × locations` at $25 each, the same
+rule `screenCount()` uses in `server.js`.
+
+**Regenerate this table** whenever either price table moves — it is derived from
+both, so a reprice invalidates it silently.
