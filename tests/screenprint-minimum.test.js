@@ -159,3 +159,50 @@ test('the ceiling travels in the method, like the minimum', () => {
   const t = colorTable([{ colors: 1, tiers: [[99, 3.85]] }], 50, 6);
   assert.strictEqual(t.max_screens, '6');
 });
+
+/* ── Over the colour ceiling goes to DTF ─────────────────────────────────── */
+
+const cartPhp = require('node:fs').readFileSync(require('node:path').join(__dirname, '..',
+  'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/core/cart.php'), 'utf8');
+
+test('a design past the ceiling is switched to DTF, not refused', () => {
+  /* The same shape the quantity minimum already uses: the customer keeps their
+     design and still sees a price. Refusing would send them away with nothing,
+     when there is a method that can print exactly what they drew. */
+  assert.match(cartPhp, /\$out\['over_color'\] = true;/);
+  assert.match(cartPhp, /\$fallback = \$this->printing_fallback\( \$item, \$qty, \$chosen \);[\s\S]{0,80}\$out\['method'\] = \$fallback;/);
+  assert.match(cartPhp, /which has no colour limit/,
+    'and the note says why DTF, not just that it changed');
+});
+
+test('colours are counted per pass, never summed across sides', () => {
+  /* A 4-colour front with a 3-colour back is two passes of four and is fine.
+     Summing to seven would refuse work the press can do — and quietly move a
+     two-sided job to DTF, which is the more expensive method on low colour
+     counts. */
+  assert.match(cartPhp, /if \(\$n > \$most\) \$most = \$n;/);
+  assert.doesNotMatch(cartPhp, /\$most \+= \$n/);
+});
+
+test('the ceiling is read from the method, not hardcoded', () => {
+  /* max_screens travels in the row, like min_qty, so the press changing is a
+     data edit rather than a deploy in two codebases. */
+  assert.match(cartPhp, /isset\(\$calc\['max_screens'\]\)/);
+  assert.doesNotMatch(cartPhp, /\$maxScreens = 6;/, 'no constant restated here');
+});
+
+test('the colour check runs before the quantity check', () => {
+  /* Adding pieces fixes a shortfall; nothing fixes a colour count except
+     changing method. Reporting the wrong one sends the customer to do something
+     that cannot help. */
+  const fn = cartPhp.slice(cartPhp.indexOf('public function printing_resolve'));
+  const colour = fn.indexOf("$out['over_color']");
+  const qty = fn.indexOf('$min = $this->printing_min_qty');
+  assert.ok(colour > -1 && qty > -1 && colour < qty);
+});
+
+test('an unknown garment colour does not refuse the job', () => {
+  /* A product whose colour is a plain select carries a label, not a hex. Erring
+     toward dark would refuse a light-garment order on a guess. */
+  assert.match(cartPhp, /if \(!preg_match\('\/\^#\?\(\[0-9a-f\]\{6\}\)\$\/i', trim\(\$hex\), \$m\)\) return false;/);
+});
