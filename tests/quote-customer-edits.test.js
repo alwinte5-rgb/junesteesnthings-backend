@@ -164,9 +164,22 @@ test('a paid quote cannot be edited', () => {
     'once money has moved the quote is not a proposal any more');
 });
 
-test('an accepted quote takes the note but not the numbers', () => {
-  assert.match(handler, /const editable = !q\.accepted_at/,
-    'accepted means the numbers were agreed; a change goes back through the shop');
+test('the handler accepts edits on exactly the quotes the page offers them on', () => {
+  /* These two rules drifted and it cost money. The page was changed to show
+     size boxes on an accepted quote while the handler still read
+     `!q.accepted_at` — so the form took the edit, threw the numbers away, stored
+     no request, and left Accept and Pay open at the ORIGINAL price. The customer
+     saw their change accepted and then paid the old total.
+
+     A form that accepts input and discards it is worse than no form. Both rules
+     are now "not paid, not cancelled". */
+  assert.match(handler, /const editable = !q\.cancelled_at/);
+  assert.doesNotMatch(handler, /const editable = !q\.accepted_at/,
+    'gating the handler on acceptance silently discards a real edit');
+
+  const page = src.slice(src.indexOf("app.get('/q/:code'"));
+  assert.match(page, /const canEditQty = !paid && !q\.cancelled_at/,
+    'and the page must offer them on the same quotes');
 });
 
 test('the accepted-quote change request is no longer silently dropped', () => {

@@ -6762,11 +6762,18 @@ app.post('/q/:code/changes', orderRateLimit, async (req, res) => {
        proposal. Everything else can still be asked about. */
     if (Number(q.paid_amount || 0) > 0) return res.redirect('/q/' + code);
 
-    /* Structured edits only while the quote is still an offer. Once accepted,
-       the numbers are what was agreed to, so a change goes back through the
-       shop as a conversation rather than as a silent edit of the agreement. */
+    /* Editable until money has moved — the same rule the page renders by.
+     *
+     * This said `!q.accepted_at` while the page had just been changed to show
+     * the size boxes on an accepted quote. So the form offered the edit, the
+     * customer made it, and the handler silently threw the numbers away: no
+     * request was stored, nothing was on hold, and Accept and Pay stayed open
+     * at the ORIGINAL price. A form that accepts input and discards it is worse
+     * than one that is not there.
+     *
+     * The two rules must match. They are both "not paid, not cancelled". */
     const items = Array.isArray(q.items) ? q.items : [];
-    const editable = !q.accepted_at;
+    const editable = !q.cancelled_at;
     let requested = null;
     /* The same list the customer's page rendered from, derived the same way, so
        the names posted and the names read are the same set by construction. */
