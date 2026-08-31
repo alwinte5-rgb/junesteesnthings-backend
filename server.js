@@ -5721,7 +5721,18 @@ app.get('/q/:code', async (req, res) => {
        the line into a different volume band, so a total recalculated in the
        browser would be a number the shop never agreed to, shown to the customer
        as if it had. */
-    const canEditQty = !accepted && !paid;
+    /* Editable until money has moved, NOT until the quote is accepted.
+     *
+     * Gating on `accepted` made this feature invisible: every quote in the
+     * system is accepted, so no customer ever saw a size box. Worse, accepting
+     * is exactly when somebody re-reads their order and notices they need two
+     * more XLs — asking them to phone at that point is the friction this exists
+     * to remove.
+     *
+     * Accepting is not paying. Once a deposit lands the job is scheduled and
+     * blanks may be on order, so THAT is where a change becomes a conversation
+     * rather than a form. */
+    const canEditQty = !paid && !q.cancelled_at;
 
     /* Every size the garment comes in, in catalogue order — not just the ones
        already ordered. A customer whose quote is all mediums has to be able to
@@ -5938,7 +5949,7 @@ app.get('/q/:code', async (req, res) => {
         </div>
       </div>`}
 
-      ${(paid || accepted) ? '' : `
+      ${(paid || q.cancelled_at) ? '' : `
       <div class="card">
         <b style="color:#0B1F4B">Need something changed?</b>
         <p class="muted" style="margin:4px 0 10px">Change the sizes and quantities in the table above,
@@ -5953,15 +5964,9 @@ app.get('/q/:code', async (req, res) => {
         </form>
       </div>`}
 
-      ${(paid || !accepted) ? '' : `
-      <div class="card">
-        <b style="color:#0B1F4B">Need a change before we start?</b>
-        <p class="muted" style="margin:4px 0 10px">Nothing has been printed yet — tell ${SHOP_SIGNER} and the quote is updated.</p>
-        <form method="POST" action="/q/${q.code}/changes">
-          <textarea name="message" rows="2" required placeholder="What would you like different?"></textarea>
-          <button type="submit" class="btn-ghost" style="width:100%;margin-top:10px">Send to ${SHOP_SIGNER}</button>
-        </form>
-      </div>`}
+      ${/* The "before we start" form that used to appear only after accepting is
+           gone: one form now serves both states, because the change a customer
+           wants is the same question whether or not they have said yes. */ ''}
 
       ${q.change_request && !paid ? `
       <div class="card"><div class="ok">Change requested — ${SHOP_SIGNER} is updating this quote.

@@ -232,10 +232,30 @@ test('the posted field names are the ones the handler reads', () => {
   assert.match(handler, /one\(b\['qty' \+ '_' \+ ix\]\)/);
 });
 
-test('sizes are only editable while the quote is still an offer', () => {
+test('sizes stay editable until money has moved, not until acceptance', () => {
+  /* Gating on `accepted` made this feature INVISIBLE — every quote in the
+     system is accepted, so no customer ever saw a size box. It also blocked the
+     change at the exact moment people ask for one: accepting is when somebody
+     re-reads their order and notices they need two more XLs.
+
+     Accepting is not paying. Once a deposit lands the job is scheduled and
+     blanks may be on order, so that is where a change becomes a conversation
+     rather than a form. */
   const page = src.slice(src.indexOf("app.get('/q/:code'"));
-  assert.match(page, /const canEditQty = !accepted && !paid/,
-    'an accepted or paid quote shows its numbers, it does not offer them for edit');
+  assert.match(page, /const canEditQty = !paid && !q\.cancelled_at/);
+  assert.doesNotMatch(page, /const canEditQty = !accepted/,
+    'gating on acceptance hides the feature from every quote that has one');
+});
+
+test('the change form is offered on an accepted quote too', () => {
+  /* It used to be two forms — one before accepting, one after — and the second
+     was the only one an accepted customer saw. One form now serves both, since
+     the change somebody wants is the same question either way. */
+  const page = src.slice(src.indexOf("app.get('/q/:code'"));
+  assert.match(page, /\$\{\(paid \|\| q\.cancelled_at\) \? '' : `/,
+    'only payment or cancellation removes the change form');
+  assert.doesNotMatch(page, /Need a change before we start\?/,
+    'the duplicate accepted-only form should be gone, not left dead');
 });
 
 test('one() is a module-level helper, reachable from every handler that reads a body', () => {
