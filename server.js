@@ -4720,8 +4720,19 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
   const lineHtml = (n, it) => {
     const hasExtras = it && ((it.details && it.details.length) ||
                              (it.images && it.images.length) || it.size_mix);
+    /* The add-ons this line was SAVED with, so reopening a quote can tick them
+       back on. They are rebuilt client-side from the method, which means
+       without this they come back blank and re-saving silently drops the
+       charge — the customer is quoted less for the same job because someone
+       corrected a phone number. Only the codes: the rates come from ADDONS, so
+       a rate change reaches an edited quote instead of being frozen here.
+       Consumed once, by the first rebuild — see the `.addons` block in calc(). */
+    const savedAddons = (it && Array.isArray(it.addons) ? it.addons : [])
+      .filter((a) => a && a.code && Number(a.total) > 0)
+      .map((a) => String(a.code));
+
     return `
-    <div class="line" data-n="${n}">
+    <div class="line" data-n="${n}" data-saved-addons="${val(savedAddons.join(','))}">
       <div class="line-head">
         <span class="line-no">Item <b class="ix">${n + 1}</b></span>
         <button type="button" class="line-x" onclick="removeLine(this)" title="Remove this item">&times;</button>
@@ -5212,6 +5223,21 @@ ${quotePricingSource()}
                 }).join('')
               : '';
             aoBox.style.display = avail.length ? 'block' : 'none';
+
+            /* Put back what this line was saved with. ONE shot: the attribute
+               is cleared as it is read, so this restores on the first build of
+               an existing line and never again — switching method afterwards
+               must offer that method's add-ons unticked, not resurrect the
+               previous one's. */
+            var saved = L.dataset.savedAddons;
+            if (saved) {
+              delete L.dataset.savedAddons;
+              var want = saved.split(',');
+              aoBox.querySelectorAll('.ao').forEach(function(cb){
+                if (want.indexOf(cb.dataset.code) > -1) cb.checked = true;
+              });
+            }
+
             aoBox.querySelectorAll('.ao').forEach(function(cb){ cb.onchange = calc; });
           }
 
