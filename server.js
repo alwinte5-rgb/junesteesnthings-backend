@@ -565,9 +565,11 @@ function unsubHeaders(to) {
    This used to be JT_INTERNAL_KEY with a hardcoded 'jtees' fallback. Two
    problems with that, and the fallback was the smaller one:
 
-   JT_INTERNAL_KEY is the shared secret for design.jtees.net and travels in
-   query strings to that host (jt-cron.php?key=, jt-catalog.php?key=), so it
-   lands in its access logs — it is the secret most likely to be rotated here.
+   JT_INTERNAL_KEY is the shared secret for design.jtees.net. It now travels
+   as an X-JT-Key header rather than in the query string (which put it in that
+   host's access logs), but it is still the secret most likely to be rotated
+   here — and rotating it is now WORTH doing, because every key issued while
+   the query-string form was in use may be sitting in a stored log.
    But an unsubscribe token has to stay valid for as long as the email sits in
    somebody's inbox, so rotating the shared key would silently invalidate every
    unsubscribe link already delivered. A dead one-click unsubscribe is exactly
@@ -945,6 +947,11 @@ function activePromoCode() {
 }
 console.log(`Active recovery promo code this week: ${activePromoCode()}`);
 
+/* HTML escaping, used on every interpolated value in this file.
+   `escHtml` further down was a byte-identical second copy — two escapers means
+   one can be hardened and the other missed, so this is now the only body and
+   escHtml is an alias of it. The name is historical: it escapes for HTML, not
+   for email addresses specifically. */
 function escEmail(str) {
   if (str == null) return '';
   return String(str)
@@ -2021,6 +2028,22 @@ app.get('/admin/data', requireAdmin, async (req, res) => {
 // Simple in-memory rate limiter
 // Prefers CF-Connecting-IP (set by Cloudflare) so the real visitor IP is used,
 // not Cloudflare's proxy IP. Falls back to req.ip for non-Cloudflare traffic.
+/* Who to count a request against.
+   `cf-connecting-ip` is set by Cloudflare and trusted by everything below —
+   but it is just a header, so a request that reaches the Railway origin
+   directly can set it to a fresh value per request and every rate limit in
+   this file becomes a no-op. Cloudflare also always sets `cf-ray`; a request
+   carrying cf-connecting-ip WITHOUT cf-ray did not come through Cloudflare
+   and its claim about the client address is worth nothing.
+   Fall back to req.ip, which Express derives from the socket and the
+   X-Forwarded-For that `trust proxy: 1` allows. */
+function clientIp(req) {
+  const viaCloudflare = Boolean(req.headers['cf-ray']);
+  const claimed = req.headers['cf-connecting-ip'];
+  if (viaCloudflare && claimed) return String(claimed);
+  return req.ip || req.socket.remoteAddress || 'unknown';
+}
+
 function makeRateLimit(maxReqs, windowMs) {
   const store = new Map();
   // Prune expired entries every 15 minutes to prevent unbounded memory growth
@@ -2032,7 +2055,7 @@ function makeRateLimit(maxReqs, windowMs) {
   }, 15 * 60 * 1000).unref();
 
   return (req, res, next) => {
-    const ip    = req.headers['cf-connecting-ip'] || req.ip || req.socket.remoteAddress || 'unknown';
+    const ip    = clientIp(req);
     const now   = Date.now();
     const entry = store.get(ip) || { count: 0, reset: now + windowMs };
     if (now > entry.reset) { entry.count = 0; entry.reset = now + windowMs; }
@@ -2116,8 +2139,8 @@ async function verifyTurnstile(req, res, next) {
   try {
     const form = new URLSearchParams({ secret, response: token });
     // The visitor IP helps Cloudflare score the request; behind the proxy the
-    // real one is in cf-connecting-ip.
-    const ip = req.headers['cf-connecting-ip'] || req.ip || '';
+    // real one is in cf-connecting-ip — see clientIp().
+    const ip = clientIp(req);
     if (ip) form.set('remoteip', ip);
 
     const r = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
@@ -2198,7 +2221,7 @@ function rejectBots(req, res, next) {
   if (process.env.REQUIRE_FORM_TOKEN === 'true') {
     const token = req.body?._token || req.headers['x-form-token'] || '';
     if (!isValidFormToken(token)) {
-      console.warn('Form token invalid or missing from', req.headers['cf-connecting-ip'] || req.ip);
+      console.warn('Form token invalid or missing from', clientIp(req));
       return res.status(400).json({ error: 'Bad request' });
     }
   }
@@ -2423,21 +2446,70 @@ app.get('/api/config', signatureRateLimit, (req, res) => {
 });
 
 // Cloudinary signed upload
+/* This route is unauthenticated by necessity — the browser needs a signature
+   before it can upload, and the visitor has no account. That makes it a
+   SIGNING ORACLE, so what it will sign has to be a closed set.
+
+   It used to sign `{ ...req.body, folder }`: the folder was checked, and every
+   other parameter the caller sent was signed verbatim. Cloudinary's upload API
+   reads a lot of parameters — `public_id` and `overwrite` (replace an existing
+   asset), `notification_url` (make the account call an address of your
+   choosing), `eager` (run transformations you pay for) — so a signature for
+   any of them was available to anyone who asked.
+
+   Now an allowlist, not a filter list: a name that is not named here is simply
+   not signed. Adding a capability is a deliberate edit to this array. */
+const CLD_SIGNABLE = new Set([
+  'timestamp',      // required by Cloudinary
+  'folder',         // re-derived below from ALLOWED_FOLDERS, never taken raw
+  'source',         // the upload widget sends source:'uw'
+  'tags', 'context',
+  'eager', 'transformation', 'format', 'allowed_formats',
+]);
+/* Deliberately absent, and why: public_id / filename_override / use_filename /
+   asset_folder (choose where an asset lands, or land on top of one that
+   exists), overwrite / invalidate (replace it), notification_url / callback /
+   on_success / eval (make the account talk to somewhere else, or run code),
+   type / access_mode (publish a private asset), upload_preset (bring settings
+   we did not write), moderation / raw_convert / background_removal /
+   auto_tagging / detection / ocr (chargeable add-ons). */
+
 app.post('/api/cloudinary-signature', signatureRateLimit, (req, res) => {
   // Both spellings, for the reason given at cloudinary.config() above.
   const apiSecret = process.env.CLOUDINARY_API_SECRET || process.env.CLUDINARY_API_SECRET;
   if (!apiSecret) return res.status(503).json({ error: 'Cloudinary not configured' });
-  // Allow the caller to specify the upload folder, but validate against an allowlist
-  // so the server retains control over where files can be stored.
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+
+  // The folder is chosen by the server from a fixed list — never echoed back.
   const ALLOWED_FOLDERS = ['grad_orders', 'quote_requests', 'embroidery_quotes', 'review_photos'];
-  const requestedFolder = typeof req.body.folder === 'string' ? req.body.folder : '';
+  const requestedFolder = typeof body.folder === 'string' ? body.folder : '';
   const folder = ALLOWED_FOLDERS.includes(requestedFolder) ? requestedFolder : 'grad_orders';
-  // Use the widget's timestamp — overwriting it causes a mismatch since the widget
-  // uses its own timestamp for the actual upload request, not the one we return.
-  const paramsToSign = { ...req.body, folder };
-  if (!paramsToSign.timestamp) paramsToSign.timestamp = Math.round(Date.now() / 1000);
+
+  /* Use the widget's timestamp — overwriting it causes a mismatch, since the
+     widget sends its own with the actual upload. But bound it: a signature
+     stamped far in the future would stay usable for as long as that timestamp
+     allows. Anything outside a few minutes is replaced with now. */
+  const now = Math.round(Date.now() / 1000);
+  const asked = parseInt(body.timestamp, 10);
+  const timestamp = (Number.isFinite(asked) && Math.abs(asked - now) <= 300) ? asked : now;
+
+  const paramsToSign = { folder, timestamp };
+  const dropped = [];
+  for (const [k, v] of Object.entries(body)) {
+    if (k === 'folder' || k === 'timestamp') continue;      // already set, server-side
+    if (!CLD_SIGNABLE.has(k)) { dropped.push(k); continue; }
+    if (v !== undefined && v !== null && v !== '') paramsToSign[k] = v;
+  }
+  /* A dropped parameter is not silent: the widget would upload WITH it and
+     Cloudinary would answer "Invalid Signature". Name it so that failure is
+     one log line to diagnose rather than an upload that mysteriously stopped. */
+  if (dropped.length) {
+    console.warn('cloudinary-signature: refused to sign', dropped.join(','),
+      '— add it to CLD_SIGNABLE only if it is meant to be caller-controlled');
+  }
+
   const signature = cloudinary.utils.api_sign_request(paramsToSign, apiSecret);
-  res.json({ signature, timestamp: paramsToSign.timestamp, folder });
+  res.json({ signature, timestamp, folder });
 });
 
 
@@ -2516,7 +2588,10 @@ app.post('/api/embroidery-quote', orderRateLimit, verifyTurnstile, async (req, r
 
 function requireInternalKey(req, res, next) {
   const k = process.env.JT_INTERNAL_KEY;
-  if (!k || req.get('X-JT-Key') !== k) return res.status(403).json({ error: 'forbidden' });
+  // hexEqual, not !== : the five PHP endpoints checking this same secret all
+  // use hash_equals, and the two halves should not disagree about how a
+  // credential is compared.
+  if (!k || !hexEqual(req.get('X-JT-Key') || '', k)) return res.status(403).json({ error: 'forbidden' });
   next();
 }
 
@@ -2796,6 +2871,51 @@ const REVIEW_CSS = `
 `;
 
 const QUOTE_CODE_RE = /^[A-Z0-9]{6}$/;
+
+/* ── Guessing budget for quote codes ──────────────────────────────────────
+   A code is crypto.randomBytes(3): 24 bits, six hex characters. That is short
+   on purpose — a customer reads it off a text message — but it means the whole
+   space can be swept, and /q/:code shows a name, an email, a phone number, the
+   line items and the money. The pages had no limit of any kind on them.
+
+   Counting REQUESTS would be wrong: a customer refreshing their own quote, or
+   coming back to it over a week, is normal and must never be throttled. What
+   is not normal is repeatedly asking for codes that do not exist. So the
+   budget is spent on MISSES only, and a hit costs nothing.
+
+   30 misses an hour is far above anything a real customer produces (a mistyped
+   code, once or twice) and far below what a sweep needs. */
+const quoteMissBudget = (() => {
+  const store = new Map();
+  const MAX = 30, WINDOW = 60 * 60 * 1000;
+  setInterval(() => {
+    const now = Date.now();
+    for (const [ip, e] of store) if (now > e.reset) store.delete(ip);
+  }, 15 * 60 * 1000).unref();
+
+  const entry = (req) => {
+    const ip = clientIp(req);
+    const now = Date.now();
+    let e = store.get(ip);
+    if (!e || now > e.reset) { e = { count: 0, reset: now + WINDOW }; store.set(ip, e); }
+    return e;
+  };
+  return {
+    /** True when this caller has already used up its guesses. */
+    exhausted: (req) => entry(req).count >= MAX,
+    /** Record one lookup that found nothing. */
+    miss: (req) => { entry(req).count++; },
+  };
+})();
+
+/** Shared refusal for a caller that is working through the code space. */
+function tooManyQuoteLookups(res) {
+  return res.status(429).send(quotePage('Too many tries', `
+    <div class="card"><h1>Too many attempts</h1>
+    <p class="muted" style="margin-top:8px">Check the link in your text message, or call the shop
+      and we will send it again.</p>
+    <p style="margin-top:14px"><a class="btn" href="tel:+17738491854">Call ${SHOP_SIGNER}</a></p></div>`));
+}
 
 /* ── Quote money rules ────────────────────────────────────────────────────
    All in one place so the quote page, the payment page and the emails can
@@ -4268,8 +4388,8 @@ async function syncQuoteToLumise(q) {
   const key = process.env.JT_INTERNAL_KEY;
   if (!key) return;
   try {
-    const url = `https://design.jtees.net/jt-contact.php?key=${encodeURIComponent(key)}`;
-    await fetch(url, {
+    const url = 'https://design.jtees.net/jt-contact.php';
+    await studioFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -4277,7 +4397,6 @@ async function syncQuoteToLumise(q) {
         note: `Quote ${q.code} — ${money(q.total || q.subtotal)} (${quoteSummary(q.items)})`,
         source: 'quote',
       }),
-      signal: AbortSignal.timeout(8000),
     });
   } catch (err) {
     console.error('quote->lumise failed:', err.message);
@@ -5526,8 +5645,7 @@ async function getCatalog() {
        and Bot Fight Mode makes it stricter still. Node's default UA is exactly
        what gets challenged, and losing this call means the quote form loses its
        catalogue pricing. */
-    const r = await fetch(`https://design.jtees.net/jt-catalog.php?key=${encodeURIComponent(key)}`,
-      { headers: { 'User-Agent': JT_SERVER_UA }, signal: AbortSignal.timeout(8000) });
+    const r = await studioFetch('https://design.jtees.net/jt-catalog.php');
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
     if (d && d.ok) { _catCache = { at: Date.now(), data: d }; return d; }
@@ -6076,11 +6194,18 @@ app.get('/q/:code', async (req, res) => {
     <div class="card"><h1>We couldn't find that quote</h1>
     <p class="muted" style="margin-top:8px">${msg}</p>
     <p style="margin-top:14px"><a class="btn" href="tel:+17738491854">Call ${SHOP_SIGNER}</a></p></div>`));
-  if (!QUOTE_CODE_RE.test(code)) return friendly('That link looks incomplete — please check the text message.');
+  if (quoteMissBudget.exhausted(req)) return tooManyQuoteLookups(res);
+  if (!QUOTE_CODE_RE.test(code)) {
+    quoteMissBudget.miss(req);
+    return friendly('That link looks incomplete — please check the text message.');
+  }
 
   try {
     const { rows } = await pool.query('SELECT * FROM quotes WHERE code=$1', [code]);
-    if (!rows.length) return friendly('It may have been removed. Text or call and we will resend it.');
+    if (!rows.length) {
+      quoteMissBudget.miss(req);
+      return friendly('It may have been removed. Text or call and we will resend it.');
+    }
     const q = rows[0];
 
     if (!q.viewed_at) {
@@ -6490,12 +6615,16 @@ ${quotePricingSource()}
    The card fee is added as its own visible line so nobody feels surprised. */
 app.get(['/q/:code/pay/card', '/q/:code/pay/balance', '/q/:code/pay/full'], async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
-  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/q/' + encodeURIComponent(code));
+  if (quoteMissBudget.exhausted(req)) return tooManyQuoteLookups(res);
+  if (!QUOTE_CODE_RE.test(code)) {
+    quoteMissBudget.miss(req);
+    return res.redirect('/q/' + encodeURIComponent(code));
+  }
   const secret = process.env.STRIPE_SECRET_KEY;
 
   try {
     const { rows } = await pool.query('SELECT * FROM quotes WHERE code=$1', [code]);
-    if (!rows.length) return res.redirect('/q/' + code);
+    if (!rows.length) { quoteMissBudget.miss(req); return res.redirect('/q/' + code); }
     const q = rows[0];
 
     /* No payment while a change is pending. The customer's page re-prices as
@@ -7870,7 +7999,14 @@ app.post('/expenses/roll', requireAdmin, async (req, res) => {
  * folder outlives whatever happens to the hosting.
  */
 const csvEsc = (v) => {
-  const t = String(v == null ? '' : v);
+  let t = String(v == null ? '' : v);
+  /* These files carry customer-typed names and notes, and they are opened in
+     Excel, Numbers and Sheets — all of which EVALUATE a cell that begins with
+     =, +, - or @. Someone enquiring under the name `=HYPERLINK(...)` would
+     otherwise get their formula run on the shop's machine at export time.
+     A leading apostrophe makes the spreadsheet treat it as text; the value
+     still reads correctly to a person. */
+  if (/^[=+\-@\t\r]/.test(t)) t = "'" + t;
   return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
 };
 
@@ -8321,10 +8457,12 @@ app.post('/quote/:code/receipt', requireAdmin, async (req, res) => {
 
 app.get('/q/:code/vcard', async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
-  if (!QUOTE_CODE_RE.test(code)) return res.status(400).send('bad code');
+  // Same guessing budget as /q/:code — this returns the name, phone and email.
+  if (quoteMissBudget.exhausted(req)) return res.status(429).send('too many attempts');
+  if (!QUOTE_CODE_RE.test(code)) { quoteMissBudget.miss(req); return res.status(400).send('bad code'); }
   try {
     const { rows } = await pool.query('SELECT * FROM quotes WHERE code=$1', [code]);
-    if (!rows.length) return res.status(404).send('not found');
+    if (!rows.length) { quoteMissBudget.miss(req); return res.status(404).send('not found'); }
     const q = rows[0];
     const [first, ...rest] = String(q.name || '').trim().split(/\s+/);
     const vcf = [
@@ -8364,16 +8502,28 @@ app.get('/q/:code/vcard', async (req, res) => {
  * So every failure here is a network failure, and the page says so rather than
  * showing an empty list that reads as "you have no codes".
  */
-const PROMO_ADMIN = () => `${STUDIO_BASE}/jt-promo-admin.php?key=${encodeURIComponent(process.env.JT_INTERNAL_KEY || '')}`;
+const PROMO_ADMIN = () => `${STUDIO_BASE}/jt-promo-admin.php`;
 
 /* Cloudflare 403s Node's default user agent. This is documented one screen up
    in getCatalog(), where it "silently killed every Lumise sync earlier in this
    project" — and it bit again here: the page worked from a laptop and answered
    403 from Railway, because Bot Fight Mode is harsher on datacenter IPs than on
    a residential one. Every call to the studio needs this header. */
+/* Every authenticated call to the studio goes through here.
+   The shared key is sent as a HEADER, not `?key=`: a query string is written
+   to the studio's Apache access log, to Railway's request log, and to browser
+   history. That secret is not only designer access — /admin/sso above accepts
+   a stamp signed with it and answers with a 30-day admin cookie — so a key
+   sitting in a log line is full admin on this site.
+   The studio still accepts `?key=` for one deploy so nothing breaks mid-roll;
+   it logs a warning naming the caller when it has to. */
 const studioFetch = (url, init) => fetch(url, Object.assign({}, init, {
-  headers: Object.assign({ 'User-Agent': JT_SERVER_UA }, (init && init.headers) || {}),
-  signal: AbortSignal.timeout(8000),
+  headers: Object.assign(
+    { 'User-Agent': JT_SERVER_UA },
+    process.env.JT_INTERNAL_KEY ? { 'X-JT-Key': process.env.JT_INTERNAL_KEY } : {},
+    (init && init.headers) || {},
+  ),
+  signal: AbortSignal.timeout((init && init.timeoutMs) || 8000),
 }));
 
 async function fetchPromoCodes() {
@@ -9194,8 +9344,7 @@ async function fetchStudioOrders() {
   const key = process.env.JT_INTERNAL_KEY;
   if (!key) return (_studioCache = { at: Date.now(), orders: [], carts: [], error: 'JT_INTERNAL_KEY not set' });
   try {
-    const r = await fetch(`${STUDIO_BASE}/orders_feed.php?key=${encodeURIComponent(key)}`,
-      { signal: AbortSignal.timeout(8000) });
+    const r = await studioFetch(`${STUDIO_BASE}/orders_feed.php`);
     if (!r.ok) throw new Error(`feed answered ${r.status}`);
     const d = await r.json();
     return (_studioCache = { at: Date.now(),
@@ -11958,10 +12107,8 @@ if (process.env.JT_INTERNAL_KEY) {
 
   const runSweep = async () => {
     await step('abandoned-cart sweep', async () => {
-      const r = await fetch(
-        `https://design.jtees.net/jt-cron.php?key=${encodeURIComponent(process.env.JT_INTERNAL_KEY)}`,
-        { signal: AbortSignal.timeout(120000) }
-      );
+      const r = await studioFetch('https://design.jtees.net/jt-cron.php',
+        { timeoutMs: 120000 });
       return r.text();
     });
     await step('review asks', sendDueReviewRequests);
