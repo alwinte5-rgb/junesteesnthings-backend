@@ -82,11 +82,19 @@ test('the discount applies to the garment, not to the printing', () => {
   /* Decoration already has its own quantity bands. Discounting those again
      would sell printing below the rate the shop is contracted at. */
   const cart = D('core/cart.php');
-  assert.match(cart, /\$jt_gdisc = \$jt_gpct > 0 \? round\(\$sum \* \(\$jt_gpct \/ 100\), 2\) : 0\.0;/,
-    'the percentage is taken off $sum, the garment side');
+  /* The break is applied by jt_blank_price_at(), and it is handed $sum — the
+     garment — and nothing else. It used to subtract a separately-rounded
+     discount here; that form disagreed with the quote form by a cent on 274 of
+     the prices the shop sells, so the call site now shares the rule instead of
+     restating it. What this test protects is unchanged: the garment is
+     discounted, the printing is not. */
+  assert.match(cart, /jt_blank_price_at\(\$sum,\s*\$item\['qty'\]\)/,
+    'the break is applied to $sum, the garment side');
+  assert.doesNotMatch(cart, /jt_blank_price_at\([^)]*print/i,
+    'the printing must never be fed through the garment curve');
   /* Whitespace-tolerant: this file uses tabs and CRLF, and a test that breaks on
      reformatting teaches people to stop trusting the suite. */
-  assert.match(cart, /\(\$sum - \$jt_gdisc\)\s*\+\s*\$print_calc/,
+  assert.match(cart, /\(\s*\$jt_gnet\s*\+\s*\$print_calc\s*\)/,
     'and $print_calc is added after, undiscounted');
 });
 
