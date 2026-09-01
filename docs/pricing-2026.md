@@ -416,11 +416,32 @@ own garments, which no amount of machine time makes arrive sooner.
 ### What rush does not buy
 
 `prodDays` is machine time **after goods and artwork are in hand**, the same
-basis Anchorfish states its own on. `deliveryEstimate()` still adds
-`JT_LT_BLANKS` (default 5 business days) unless the job's `blanks_in_at`
-milestone is set, so "same day" on a job whose blanks have not arrived shows a
-date about a week out and says why. Quoting a rush from the order date is the
-single easiest way to miss a deadline the shop was paid extra to hit.
+basis Anchorfish states its own on. So a rush tier adds `JT_LT_BLANKS`
+(default 5 business days) unless the job's `blanks_in_at` milestone is set:
+"same day" on a job whose blanks have not arrived shows a date about a week out
+and says why. Quoting a rush from the order date is the single easiest way to
+miss a deadline the shop was paid extra to hit.
+
+**The standard window does NOT add it, and that asymmetry is deliberate.** The
+7–10 business days the site advertises is a door-to-door figure from the order
+date that has always absorbed the wait for blanks; adding the supplier lead
+time on top would move every existing quote a week later and quietly rewrite a
+promise the shop has made for years. The two numbers are measured from
+different places, which is the whole reason a rush tier has to say so.
+
+### A rush that is not sooner is refused
+
+With a 5-day blanks wait, a 4-day machine slot lands on day 9 while standard
+lands on day 7 — so the 20% tier would buy a *later* delivery. `rushImprovesDate()`
+compares the two dates and the short tiers are disabled, labelled "not sooner
+than standard on this job", in the form and refused at save. Once the garments
+are in hand every tier beats standard, which is why same-day is genuinely
+sellable on a reorder and not on a fresh job.
+
+**Which tiers are sellable therefore depends entirely on `JT_LT_BLANKS`.** At
+the default 5 only the 1-, 2- and 3-day tiers survive on a fresh job. If the
+real S&S lead time to Chicago is 2 days, set it — every tier down to 4-day
+becomes sellable and the dates get a week tighter.
 
 Holiday mode doubles the **fee** and stretches **standard** production by
 `HOLIDAY_EXTRA_DAYS`, but never stretches a rush tier that was sold — taking

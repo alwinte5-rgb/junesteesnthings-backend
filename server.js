@@ -3324,20 +3324,24 @@ const SHEET_PIECE_CEILING = parseInt(process.env.JT_SHEET_CEILING || '2400', 10)
  *                   so the date and the fee are gated by ONE decision.
  *  `opts.items`     the quote lines, for that eligibility check and the count.
  *  `opts.blanksIn`  true when the garments are already in hand (customer
- *                   supplied, or stock). Otherwise the supplier's lead time is
- *                   added, because rush buys machine time and nothing else —
- *                   a same-day embroidery slot cannot sew shirts that have not
- *                   arrived. Quoting rush from the ORDER date rather than from
- *                   goods-in is the single easiest way to miss a deadline the
- *                   shop was paid extra to hit.
- *  `opts.pickup`    collected from the shop, so no transit. */
+ *                   supplied, or stock), which removes the supplier wait a
+ *                   RUSH tier would otherwise carry. See below.
+ *  `opts.pickup`    collected from the shop, so no transit.
+ *
+ *  WHY THE BLANKS WAIT APPLIES TO RUSH AND NOT TO STANDARD, which looks
+ *  inconsistent and is not: the two numbers are measured from different
+ *  places. The 7-10 business days the shop advertises is a DOOR TO DOOR figure
+ *  from the order date, and it has always absorbed the wait for blanks —
+ *  adding the supplier lead time on top would move every quote a week later
+ *  and quietly rewrite a promise the site has made for years. Anchorfish's
+ *  rush ladder measures the opposite thing: MACHINE time, stated "from receipt
+ *  of all goods and art approvals". So a 2-day tier that did not add the
+ *  supplier wait would promise a date before the shirts exist. */
 function deliveryEstimate(from = new Date(), opts = {}) {
   const pmin = parseInt(process.env.JT_PROD_MIN || '7', 10);
   const pmax = parseInt(process.env.JT_PROD_MAX || '10', 10);
   const smin = opts.pickup ? 0 : parseInt(process.env.JT_SHIP_MIN || '2', 10);
   const smax = opts.pickup ? 0 : parseInt(process.env.JT_SHIP_MAX || '5', 10);
-  const blanks = opts.blanksIn ? 0 : parseInt(process.env.JT_LT_BLANKS || '5', 10);
-
   const holiday = opts.holiday != null ? opts.holiday : HOLIDAY_MODE;
   /* `assumeEligible` is for showing what a tier WOULD give — the quote form
      prices every tier up front so the browser never has to re-implement
@@ -3356,6 +3360,9 @@ function deliveryEstimate(from = new Date(), opts = {}) {
   const extra = holiday ? HOLIDAY_EXTRA_DAYS : 0;
   const prodMin = rushed ? rush.prodDays : pmin + extra;
   const prodMax = rushed ? rush.prodDays : pmax + extra;
+  /* Only a rush tier carries it — see the note above. */
+  const blanks = (!rushed || opts.blanksIn)
+    ? 0 : parseInt(process.env.JT_LT_BLANKS || '5', 10);
 
   const start = productionStart(from);
   const pieces = (Array.isArray(opts.items) ? opts.items : [])
@@ -3619,6 +3626,29 @@ function rushAvailable(items) {
     !COST_SERVICE_WORDS.test(String(i.description || '')));
   if (!decorated.length) return false;
   return decorated.every((i) => EMBROIDERY_METHOD_RE.test(String(i.method_title || '')));
+}
+
+/* Does this tier actually land the job sooner than standard?
+ *
+ *  It can fail to, and the arithmetic is not obvious: a 4-day machine slot on
+ *  a job still waiting 5 days for blanks lands on day 9, while standard lands
+ *  on day 7. Offering that is selling a 20% surcharge for a LATER delivery —
+ *  the kind of thing nobody notices until a customer does.
+ *
+ *  Which tiers survive depends entirely on JT_LT_BLANKS. Once the garments are
+ *  in hand (`blanksIn`) every tier beats standard, which is why the shop can
+ *  genuinely sell same-day on a reorder and cannot on a fresh job.
+ *
+ *  Checked where the sale happens — the form offers only what passes, and the
+ *  save path stores only what passes. A code already agreed is then honoured,
+ *  the same way a discount is. */
+function rushImprovesDate(code, opts = {}) {
+  if (!rushOption(code).pct) return true;               // standard is always fine
+  const at = opts.from || new Date();
+  const base = { items: opts.items, blanksIn: opts.blanksIn, holiday: opts.holiday,
+                 pickup: opts.pickup, assumeEligible: true };
+  return deliveryEstimate(at, Object.assign({}, base, { rushCode: code })).ready <
+         deliveryEstimate(at, Object.assign({}, base, { rushCode: '' })).ready;
 }
 
 /** The decoration the rush percentage is charged on.
@@ -4841,6 +4871,12 @@ ${quotePricingSource()}
         return [r.code, { ready: e.ready, deliver_from: e.deliver_from,
                           deliver_to: e.deliver_to, blanks_days: e.blanks_days }];
       })))};
+      /* The tiers that actually land sooner than standard, decided by
+         rushImprovesDate() on the server so the form cannot offer one the save
+         path will then refuse. With blanks still to arrive the short tiers do
+         not help, and saying so beats a silent absence. */
+      var RUSH_HELPS = ${JSON.stringify(Object.fromEntries(
+        RUSH_OPTIONS.map((r) => [r.code, rushImprovesDate(r.code, {})])))};
       var RUSH_UNAVAILABLE = ${JSON.stringify(RUSH_UNAVAILABLE_NOTE)};
       var RUSH_CAVEAT = ${JSON.stringify(RUSH_CAVEAT)};
       var HOLIDAY = ${HOLIDAY_MODE ? 'true' : 'false'};
@@ -5204,8 +5240,20 @@ ${quotePricingSource()}
         var rushSel  = document.getElementById('rushsel');
         var rushOk   = decorated > 0 && embOnly;
         var rushTier = RUSH.find(function(x){ return x.code === rushSel.value; }) || RUSH[0];
-        if (!rushOk && rushTier.pct) { rushSel.value = ''; rushTier = RUSH[0]; }
+        if ((!rushOk || !RUSH_HELPS[rushTier.code]) && rushTier.pct) {
+          rushSel.value = ''; rushTier = RUSH[0];
+        }
         rushSel.disabled = !rushOk;
+        /* A tier that does not beat standard is shown, struck out of use and
+           labelled, rather than removed: June needs to see that same-day
+           exists and that this job cannot have it yet. */
+        Array.prototype.forEach.call(rushSel.options, function(o){
+          var helps = RUSH_HELPS[o.value];
+          o.disabled = !helps;
+          if (!helps && o.text.indexOf('(not sooner') === -1) {
+            o.text += ' (not sooner than standard on this job)';
+          }
+        });
         decoTotal = Math.round(decoTotal * 100) / 100;
         var rushFee = (rushOk && rushTier.pct)
           ? Math.round(decoTotal * (rushTier.pct/100) * (HOLIDAY ? 2 : 1) * 100) / 100 : 0;
@@ -5810,8 +5858,10 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
        way to reach this route, and a stored code is what every later total
        re-reads. Order below mirrors quoteTotals(), which is the definition —
        rush inside the subtotal, discount off that, tax on the remainder. */
-    const rushCode = rushAvailable(items) && rushOption(one(b.rush_code)).pct
-      ? rushOption(one(b.rush_code)).code : null;
+    const wanted = rushOption(one(b.rush_code));
+    const rushCode = (rushAvailable(items) && wanted.pct &&
+                      rushImprovesDate(wanted.code, { items }))
+      ? wanted.code : null;
     const rushFee = rushFeeFor(rushCode, items);
     const subtotal = round2(items.reduce((a, i) => a + i.line_total, 0) + rushFee);
 

@@ -79,8 +79,10 @@ const W = vm.runInThisContext(`(function(){
   ${lift('shopMinutes')}
   ${lift('productionStart')}
   ${lift('deliveryEstimate')}
+  ${lift('rushImprovesDate')}
   return { RUSH_OPTIONS, rushOption, rushAvailable, decorationSubtotal,
-           rushFeeFor, addBusinessDays, productionStart, deliveryEstimate };
+           rushFeeFor, addBusinessDays, productionStart, deliveryEstimate,
+           rushImprovesDate };
 })()`);
 
 /* A decorated line, as the save path stores one. `decoration_total` is the
@@ -287,8 +289,8 @@ test('the save path validates the posted code against the job', () => {
   /* The form only offers rush when it applies, but the form is not the only
      way to reach the route, and the stored code is what every later total
      re-reads. */
-  assert.match(src, /rushAvailable\(items\) && rushOption\(one\(b\.rush_code\)\)\.pct/,
-    'an ineligible or unknown code must store as NULL');
+  assert.match(src, /rushAvailable\(items\) && wanted\.pct &&\s*\n?\s*rushImprovesDate\(wanted\.code, \{ items \}\)/,
+    'an ineligible or unknown code, or one that is no sooner than standard, must store as NULL');
   assert.match(src, /rush_code=\$16/, 'an edit must be able to clear it too');
 });
 
@@ -310,4 +312,40 @@ test('the browser prices rush the same way the server does', () => {
   assert.match(browser, /HOLIDAY \? 2 : 1/, 'and double it in season, as the server does');
   assert.match(browser, /rushOk\s+= decorated > 0 && embOnly/,
     'and gate it on the same embroidery-only rule');
+});
+
+/* ── A rush that is not sooner is not a rush ─────────────────────────────── */
+
+test('a tier that lands no sooner than standard is refused', () => {
+  /* The arithmetic that makes this necessary: a 4-day machine slot on a job
+     still waiting 5 days for blanks lands on day 9, while standard lands on
+     day 7. Selling that is a 20% surcharge for a LATER delivery. */
+  const at = { items: EMB(), from: WED_AM };
+  const four = W.deliveryEstimate(WED_AM, { items: EMB(), rushCode: 'rush4' });
+  const std  = W.deliveryEstimate(WED_AM, { items: EMB() });
+  assert.ok(four.ready > std.ready, 'the setup for this test must actually be the bad case');
+  assert.strictEqual(W.rushImprovesDate('rush4', at), false);
+});
+
+test('every tier helps once the garments are in hand', () => {
+  /* Which is why the shop can genuinely sell same-day on a reorder and cannot
+     on a fresh job — the difference is the supplier, not the machine. */
+  for (const r of W.RUSH_OPTIONS) {
+    assert.strictEqual(W.rushImprovesDate(r.code, { items: EMB(), from: WED_AM, blanksIn: true }),
+      true, `${r.code || 'standard'} must land sooner once the blanks are in`);
+  }
+});
+
+test('standard is never refused for not being sooner than itself', () => {
+  assert.strictEqual(W.rushImprovesDate('', { items: EMB(), from: WED_AM }), true);
+});
+
+test('the form offers only what the save path will accept', () => {
+  /* Otherwise June picks a tier, the quote saves without it, and the only
+     evidence is a fee that quietly did not appear. */
+  assert.match(src, /var RUSH_HELPS = /, 'the form needs the same verdict the server reached');
+  assert.match(src, /rushImprovesDate\(r\.code, \{\}\)/,
+    'and it must come from rushImprovesDate, not a second rule');
+  assert.match(src, /o\.disabled = !helps/, 'an unavailable tier is disabled, not hidden');
+  assert.match(src, /not sooner than standard/, 'and it says why');
 });
