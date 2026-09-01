@@ -53,7 +53,10 @@ test('the phone match ignores formatting', () => {
 test('a quote raised from a lead records which one', () => {
   /* Otherwise the lead only leaves the board if the contact details happen to
      match exactly — and the whole point is that they are typed fresh. */
-  assert.match(src, /from_submission_id\)\s*\n?\s*VALUES/,
+  /* Matched inside the column list rather than against the last column, so
+     adding a column after it (rush_code did) does not read as the link being
+     dropped. */
+  assert.match(src, /INSERT INTO quotes \([^)]*from_submission_id[^)]*\)\s*\n?\s*VALUES/,
     'the insert must carry the link');
   assert.match(src, /<input type="hidden" name="from_submission_id" value="\$\{lead\.id\}">/,
     'and the form must post it');

@@ -363,3 +363,80 @@ rule `screenCount()` uses in `server.js`.
 
 **Regenerate this table** whenever either price table moves — it is derived from
 both, so a reprice invalidates it silently.
+
+---
+
+## Rush turnaround — added 2026-09-01
+
+### The contract facts this is built on
+
+Read from the five Anchorfish sheets (screen print 2026, DTF 2026, embroidery,
+and the two standards documents):
+
+| Sheet | Standard turnaround | Rush offered? |
+|---|---|---|
+| Screen Printing 2026 | 7–10 business days, up to 2,400 prints | **No** |
+| DTF 2026 | 7–10 business days, up to 2,400 prints | **No** |
+| Embroidery | 7–15 business days, up to 1,000 logos | Yes — see ladder |
+
+Both print sheets add: *3:30pm CST business day cut-off*, *production time may
+vary depending on season*, *over 7,000 pieces by quote*. Turnaround is stated
+**from receipt of all goods and art approvals** — not from the order date.
+
+The embroidery sheet is the only one with rush, and it says why in its own
+heading: **"RUSH SERVICES AVAILABLE UPON APPROVAL — applies to embroidery
+only."** Its ladder:
+
+| Tier | Surcharge |
+|---|---|
+| Same day | 75% |
+| 1 day | 50% |
+| 2 day | 40% |
+| 3 day | 30% |
+| 4 day | 20% |
+
+### What the shop sells, and why it differs
+
+**Screen print and DTF cannot be rushed at any price.** They are contracted out
+and the contractor sells no rush product. This is enforced, not documented:
+`rushAvailable()` requires every decorated line to be embroidery, and the fee
+and the promised date are gated by that one call, so neither can be shown
+without the other.
+
+**Embroidery can, because it is sewn in house** — the shop owns the machine
+time. The percentages above are used as the ladder. Note what they are and are
+not: embroidery is **not** contracted to Anchorfish, so this is the market
+*shape*, not a cost the shop pays. Tune per tier with `JT_RUSH_PCT`
+(e.g. `rush2=45,rush0=90`) without editing code.
+
+The surcharge is a **percentage of the decoration subtotal**, never of the line
+total — a percentage of the line would bill a rush premium on the customer's
+own garments, which no amount of machine time makes arrive sooner.
+
+### What rush does not buy
+
+`prodDays` is machine time **after goods and artwork are in hand**, the same
+basis Anchorfish states its own on. `deliveryEstimate()` still adds
+`JT_LT_BLANKS` (default 5 business days) unless the job's `blanks_in_at`
+milestone is set, so "same day" on a job whose blanks have not arrived shows a
+date about a week out and says why. Quoting a rush from the order date is the
+single easiest way to miss a deadline the shop was paid extra to hit.
+
+Holiday mode doubles the **fee** and stretches **standard** production by
+`HOLIDAY_EXTRA_DAYS`, but never stretches a rush tier that was sold — taking
+40% for two days and then quietly making it five is charging for a date already
+decided against. In season, stop offering the tier instead.
+
+### Env knobs
+
+| Var | Default | What it does |
+|---|---|---|
+| `JT_RUSH_PCT` | — | per-tier surcharge overrides, `code=pct` comma separated |
+| `JT_CUTOFF` | `15:30` | business-day cut-off, shop local time |
+| `JT_TZ` | `America/Chicago` | the timezone that cut-off is read in |
+| `JT_LT_BLANKS` | `5` | supplier lead time for blanks, business days |
+| `JT_PROD_MIN` / `JT_PROD_MAX` | `7` / `10` | standard production window |
+| `JT_SHEET_CEILING` | `2400` | above this, dates are flagged as an estimate |
+
+Pinned by `tests/rush-turnaround.test.js` (25 tests), which lifts the real
+functions out of `server.js` rather than restating them.
