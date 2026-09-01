@@ -99,6 +99,18 @@ async function initDB() {
   for (const col of ['dismissed_at TIMESTAMPTZ', 'dismiss_reason TEXT']) {
     await pool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
+  /* Double-submit guard. The client disables its button, which covers a slow
+     double-click and nothing else — a back-button resubmit, a flaky-connection
+     retry, or a second tab all reach here as ordinary requests. The consequence
+     is not just a duplicate lead: the enquiry fans out to a customer
+     confirmation email, a Brevo contact, a HubSpot deal and a Clover customer,
+     so the person gets told twice and the shop chases one job as two.
+
+     Enforced by the DATABASE, not by a check-then-insert, because two clicks
+     arrive concurrently and a SELECT before an INSERT loses that race. */
+  await pool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS dedupe_key TEXT`).catch(() => {});
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS submissions_dedupe_uniq
+                      ON submissions (dedupe_key) WHERE dedupe_key IS NOT NULL`).catch(() => {});
   // Quotes texted from June's phone. The row is the source of truth — Brevo is
   // mirrored best-effort, so a CRM outage can never lose a quote.
   await pool.query(`
@@ -1569,18 +1581,65 @@ app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, verifyTurnstil
 
   const s = { name: name.trim(), phone: phone.trim(), email: email.trim().toLowerCase(), description, photo_url };
 
-  // Save to DB first
-  let submissionId;
+  /* One enquiry, however many times the button is pressed.
+     
+     The key is the identifying content plus a coarse time bucket, so the same
+     person really enquiring again next week lands a new row while a resubmit of
+     the same text minutes later does not. A bucket rather than a permanent
+     content hash because short descriptions repeat honestly — "need shirts" is
+     a real second enquiry a month later, not a duplicate.
+     
+     The bucket edge is covered by also claiming the PREVIOUS bucket's key: two
+     clicks either side of the boundary would otherwise both insert. */
+  const dedupeAt = (bucket) => crypto.createHash('sha256')
+    .update([s.email, s.phone, s.description || '', bucket].join('|'))
+    .digest('hex');
+  const BUCKET_MS = 10 * 60 * 1000;
+  const nowBucket = Math.floor(Date.now() / BUCKET_MS);
+
+  let submissionId, duplicate = false;
   try {
     const { rows } = await pool.query(
-      `INSERT INTO submissions (name, phone, email, description, photo_url)
-       VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-      [s.name, s.phone, s.email, s.description, s.photo_url]
+      /* ON CONFLICT DO NOTHING is the guard itself. Two concurrent clicks both
+         reach the INSERT — one wins the unique index and the other returns no
+         row, which is how a race is decided rather than hoped about. */
+      `INSERT INTO submissions (name, phone, email, description, photo_url, dedupe_key)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (dedupe_key) DO NOTHING
+       RETURNING id`,
+      [s.name, s.phone, s.email, s.description, s.photo_url, dedupeAt(nowBucket)]
     );
-    submissionId = rows[0].id;
+    if (rows.length) {
+      submissionId = rows[0].id;
+    } else {
+      duplicate = true;
+    }
+
+    /* The previous bucket, for a resubmit that crossed the boundary. Only
+       consulted when the current bucket was free, so the common path is one
+       query. */
+    if (!duplicate) {
+      const { rows: prev } = await pool.query(
+        `SELECT 1 FROM submissions
+          WHERE dedupe_key = $1 AND created_at > NOW() - INTERVAL '10 minutes' LIMIT 1`,
+        [dedupeAt(nowBucket - 1)]);
+      if (prev.length) {
+        duplicate = true;
+        await pool.query('DELETE FROM submissions WHERE id = $1', [submissionId]).catch(() => {});
+      }
+    }
   } catch (err) {
     console.error('DB insert failed:', err.message);
     return res.status(500).json({ error: 'Failed to save submission.' });
+  }
+
+  /* A duplicate is a SUCCESS to the person pressing the button — their enquiry
+     is already with the shop — so it answers the same way. What it must not do
+     is fan out again: a second confirmation email, a second HubSpot deal and a
+     second Clover customer are the actual damage. */
+  if (duplicate) {
+    console.log(`Duplicate submission suppressed for ${s.email || s.phone}`);
+    return res.json({ ok: true, duplicate: true });
   }
 
   // Fire everything in parallel
