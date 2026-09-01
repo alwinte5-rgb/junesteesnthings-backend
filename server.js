@@ -124,12 +124,6 @@ async function initDB() {
   // Added after the first release; ALTERs are idempotent so this is safe to re-run.
   for (const col of [
     'needed_by DATE',                 // when the customer needs it
-    /* Which rush tier was sold, not the dollars it came to. The fee is a
-       percentage of the decoration, so storing the amount would freeze
-       yesterday's figure against today's lines — the same reason
-       discount_value stores what was ENTERED. quoteTotals() derives it, and
-       re-derives it as ineligible if the lines stop being embroidery. */
-    'rush_code TEXT',
     'tax NUMERIC(10,2) DEFAULT 0',
     'total NUMERIC(10,2) DEFAULT 0',  // subtotal + tax (card fee is added at payment)
     'deposit NUMERIC(10,2) DEFAULT 0',
@@ -2314,7 +2308,10 @@ function buildOrderEmailTable(order) {
       </tr>
     </tfoot>
   </table>
-  <p style="font-size:12px;color:#999;margin-top:6px;">* Final price confirmed after design review. Does not include applicable taxes or rush fees.</p>`;
+  <!-- This line used to name a surcharge for faster turnaround as something
+       the total excluded. The shop sells no such thing, so the note was quietly
+       telling customers one existed to be asked for. -->
+  <p style="font-size:12px;color:#999;margin-top:6px;">* Final price confirmed after design review. Does not include applicable taxes.</p>`;
 }
 
 async function sendGradOrderEmail(order) {
@@ -3396,11 +3393,12 @@ function addBusinessDays(from, days) {
   return d;
 }
 
+/** Estimated ready/delivery window, same env knobs the designer uses. */
 /* The shop's clock, not the server's.
    Railway runs UTC. A quote saved at 21:00 UTC is 15:00 in Chicago — still
    inside the printer's 3:30pm CST cut-off — but read as a UTC hour it looks
-   like the evening and the whole job would be quoted a day late. Every
-   cut-off decision below asks America/Chicago what time it is there. */
+   like the evening and the job gets quoted a day late. Every cut-off decision
+   below asks America/Chicago what time it is there. */
 const SHOP_TZ = process.env.JT_TZ || 'America/Chicago';
 
 /** Minutes past midnight, in the shop's timezone. */
@@ -3413,18 +3411,19 @@ function shopMinutes(at) {
   return (get('hour') % 24) * 60 + get('minute');
 }
 
-/** The day the clock actually starts.
- *
- *  Anchorfish states a 3:30pm CST business-day cut-off: work handed over after
- *  it is received the next business day, so day one has not begun. A weekend
- *  is the same problem — nothing is produced on it. Counting from `from`
- *  regardless is how an order taken at 5pm Friday gets quoted as though it
- *  started Friday morning, three calendar days early. */
+/* Anchorfish states a 3:30pm CST business-day cut-off on both 2026 sheets:
+   work handed over after it is received the next business day, so day one has
+   not begun. A weekend is the same problem — nothing is produced on one. */
 const CUTOFF_MIN = (() => {
   const m = /^(\d{1,2}):(\d{2})$/.exec(String(process.env.JT_CUTOFF || '15:30'));
   return m ? Number(m[1]) * 60 + Number(m[2]) : 15 * 60 + 30;
 })();
 
+/** The day the clock actually starts.
+ *
+ *  Counting from `from` regardless is how an order taken at 5pm on a Friday
+ *  gets quoted as though it started Friday morning — three calendar days early,
+ *  on the promise the customer actually reads. */
 function productionStart(from) {
   const d = new Date(from);
   const dow = d.getDay();
@@ -3433,72 +3432,39 @@ function productionStart(from) {
 }
 
 /* Anchorfish quotes 7–10 business days on up to 2,400 prints and says over
-   7,000 pieces is by quote; their embroidery sheet states its turnaround for
-   up to 1,000 logos. Past those the sheet promises nothing, so neither can a
-   date computed from it — `beyond_sheet` says so rather than inventing one. */
+   7,000 pieces is by quote; their embroidery sheet states its turnaround for up
+   to 1,000 logos. Past those the sheet promises nothing, so a date derived from
+   it is an extrapolation and the page says so rather than asserting it. */
 const SHEET_PIECE_CEILING = parseInt(process.env.JT_SHEET_CEILING || '2400', 10);
 
 /** Estimated ready/delivery window, same env knobs the designer uses.
  *
- *  `opts.rushCode`  the tier chosen; ignored unless the job is rush-eligible,
- *                   so the date and the fee are gated by ONE decision.
- *  `opts.items`     the quote lines, for that eligibility check and the count.
- *  `opts.blanksIn`  true when the garments are already in hand (customer
- *                   supplied, or stock), which removes the supplier wait a
- *                   RUSH tier would otherwise carry. See below.
- *  `opts.pickup`    collected from the shop, so no transit.
+ *  The window is DOOR TO DOOR from the order date — it already absorbs the wait
+ *  for blanks, which is why the supplier lead time is not added on top of it.
+ *  That is what the site has always advertised and what customers have been
+ *  quoted; JT_LT_BLANKS is a separate figure used for internal scheduling, and
+ *  adding it here would move every quote a week later.
  *
- *  WHY THE BLANKS WAIT APPLIES TO RUSH AND NOT TO STANDARD, which looks
- *  inconsistent and is not: the two numbers are measured from different
- *  places. The 7-10 business days the shop advertises is a DOOR TO DOOR figure
- *  from the order date, and it has always absorbed the wait for blanks —
- *  adding the supplier lead time on top would move every quote a week later
- *  and quietly rewrite a promise the site has made for years. Anchorfish's
- *  rush ladder measures the opposite thing: MACHINE time, stated "from receipt
- *  of all goods and art approvals". So a 2-day tier that did not add the
- *  supplier wait would promise a date before the shirts exist. */
+ *  `opts.items`   the quote lines, for the piece count behind `beyond_sheet`.
+ *  `opts.pickup`  collected from the shop, so no transit. */
 function deliveryEstimate(from = new Date(), opts = {}) {
   const pmin = parseInt(process.env.JT_PROD_MIN || '7', 10);
   const pmax = parseInt(process.env.JT_PROD_MAX || '10', 10);
   const smin = opts.pickup ? 0 : parseInt(process.env.JT_SHIP_MIN || '2', 10);
   const smax = opts.pickup ? 0 : parseInt(process.env.JT_SHIP_MAX || '5', 10);
-  const holiday = opts.holiday != null ? opts.holiday : HOLIDAY_MODE;
-  /* `assumeEligible` is for showing what a tier WOULD give — the quote form
-     prices every tier up front so the browser never has to re-implement
-     business-day arithmetic and drift from this function. It says nothing
-     about whether the tier may be sold; that is rushAvailable()'s decision and
-     the fee still asks it separately. */
-  const rush = (opts.assumeEligible || rushAvailable(opts.items))
-    ? rushOption(opts.rushCode) : RUSH_OPTIONS[0];
-  const rushed = rush.prodDays != null;
 
-  /* Holiday mode stretches production, never the rush tier it sold: a job
-     bought as "2 business days" is still 2 business days of machine time, and
-     silently making it 5 would be charging 40% for a date the shop has already
-     decided not to hit. In season the honest move is to stop offering the tier,
-     which is what capacity means — not to take the money and slip the date. */
+  const holiday = opts.holiday != null ? opts.holiday : HOLIDAY_MODE;
   const extra = holiday ? HOLIDAY_EXTRA_DAYS : 0;
-  const prodMin = rushed ? rush.prodDays : pmin + extra;
-  const prodMax = rushed ? rush.prodDays : pmax + extra;
-  /* Only a rush tier carries it — see the note above. */
-  const blanks = (!rushed || opts.blanksIn)
-    ? 0 : parseInt(process.env.JT_LT_BLANKS || '5', 10);
 
   const start = productionStart(from);
   const pieces = (Array.isArray(opts.items) ? opts.items : [])
     .reduce((a, i) => a + (Number(i.qty) || 0), 0);
 
   return {
-    ready: addBusinessDays(start, blanks + prodMin),
-    deliver_from: addBusinessDays(start, blanks + prodMin + smin),
-    deliver_to: addBusinessDays(start, blanks + prodMax + smax),
-    /* What the figures above are actually made of, so a surface can explain a
-       date instead of asserting one. */
-    blanks_days: blanks,
-    production_days: rushed ? rush.prodDays : [prodMin, prodMax],
-    rush_code: rushed ? rush.code : '',
-    /* Over the contract sheet's stated ceiling this is an extrapolation, and
-       the surfaces say so rather than quoting it as a commitment. */
+    ready: addBusinessDays(start, pmin + extra),
+    deliver_from: addBusinessDays(start, pmin + extra + smin),
+    deliver_to: addBusinessDays(start, pmax + extra + smax),
+    production_days: [pmin + extra, pmax + extra],
     beyond_sheet: pieces > SHEET_PIECE_CEILING,
   };
 }
@@ -3665,128 +3631,25 @@ const ADDONS = [
     kind: 'percent_of_decoration', rate: 50 },
 ];
 
-/* ── Rush ─────────────────────────────────────────────────────────────────
- *
- * Rush is per JOB, not per line — the shop is buying back calendar time once,
- * however many lines the quote has.
- *
- * WHO DOES THE WORK decides whether rush can be sold at all, and this is the
- * whole reason the gate below exists:
- *
- *   Screen print and DTF are CONTRACTED to Anchorfish. Both their 2026 sheets
- *   state 7–10 business days and NEITHER offers a rush service at any price.
- *   So the shop cannot shorten that job by paying more — there is no product
- *   to buy. Quoting "ready in 2 days" on a screen-print job is a promise with
- *   nothing behind it, and the previous version of this list sold exactly that
- *   for $15.
- *
- *   Embroidery is sewn IN HOUSE, so the shop owns the machine time and can
- *   genuinely bump a job up the queue. That is the only work rush applies to,
- *   which is also what Anchorfish's own embroidery sheet says of theirs:
- *   "RUSH SERVICES AVAILABLE UPON APPROVAL — applies to embroidery only".
- *
- * THE LADDER is a PERCENTAGE of the decoration, not a flat fee. Anchorfish's
- * embroidery sheet prices rush at same-day 75%, 1-day 50%, 2-day 40%, 3-day
- * 30%, 4-day 20%, and that shape is right for the same reason theirs is:
- * jumping a 500-piece job costs far more machine time than jumping a 12-piece
- * one, so a flat $15 gave away the whole of a big job's rush for nothing.
- *
- * Their sheet is the SHAPE, not the cost — embroidery is in house, so these
- * are what the shop CHARGES, not what it pays. Tunable per tier with
- * JT_RUSH_PCT (e.g. "rush2=45,rush0=90") without editing code.
- *
- * `prodDays` is production time AFTER goods and artwork are in hand — the same
- * basis Anchorfish states its own on ("from receipt of all goods and art
- * approvals"). It is not a promise to deliver in that many days from the order,
- * because blanks still have to arrive; deliveryEstimate() adds that. */
-const RUSH_PCT_OVERRIDES = (() => {
-  const out = {};
-  for (const pair of String(process.env.JT_RUSH_PCT || '').split(',')) {
-    const [k, v] = pair.split('=').map((x) => String(x || '').trim());
-    const n = Number(v);
-    if (k && Number.isFinite(n) && n >= 0) out[k] = n;
-  }
-  return out;
-})();
-const rushPct = (code, dflt) =>
-  RUSH_PCT_OVERRIDES[code] != null ? RUSH_PCT_OVERRIDES[code] : dflt;
+/* NO RUSH OPTION, and this is a deliberate decision rather than a gap.
+   A tier list used to sit here — "Rush — 2 business days" for a flat $15, on
+   any job — wired to nothing. It is gone because the shop cannot honour it:
+   screen printing and DTF are contracted to Anchorfish, whose 2026 sheets both
+   state 7–10 business days and NEITHER sells a rush service at any price. The
+   only rush ladder on any of their sheets is for embroidery, and says so
+   itself ("applies to embroidery only").
+   If rush is ever offered again it has to be gated on the work being in-house
+   embroidery and priced off the decoration, not sold as a flat fee on anything
+   that asks. See docs/pricing-2026.md, which keeps the contract figures. */
 
-const RUSH_OPTIONS = [
-  { code: '',      label: 'Standard turnaround',        prodDays: null, pct: 0 },
-  { code: 'rush4', label: 'Rush — 4 business days',     prodDays: 4, pct: rushPct('rush4', 20) },
-  { code: 'rush3', label: 'Rush — 3 business days',     prodDays: 3, pct: rushPct('rush3', 30) },
-  { code: 'rush2', label: 'Rush — 2 business days',     prodDays: 2, pct: rushPct('rush2', 40) },
-  { code: 'rush1', label: 'Rush — next business day',   prodDays: 1, pct: rushPct('rush1', 50) },
-  { code: 'rush0', label: 'Rush — same day',            prodDays: 0, pct: rushPct('rush0', 75) },
-];
-const RUSH_CAVEAT = 'Rush is subject to availability and is confirmed before you pay — never guaranteed at quote time.';
-/* Said on the quote form, where the temptation to promise one lives. */
-const RUSH_UNAVAILABLE_NOTE =
-  'Rush applies to in-house embroidery only. Screen printing and DTF are contract-printed on a ' +
-  '7–10 business day schedule with no rush service, so a shorter date cannot be sold — if the ' +
-  'customer needs one, ask the printer first and quote what they confirm.';
-
-/** The rush tier for a code, or the standard (no-op) tier. */
-function rushOption(code) {
-  return RUSH_OPTIONS.find((x) => x.code === String(code || '')) || RUSH_OPTIONS[0];
-}
-
-/* Can this job be rushed at all?
-   EVERY decorated line must be embroidery. One screen-print line on the quote
-   puts the whole job on the contract printer's 7–10 day schedule, and the
-   customer receives ONE parcel — so the slowest line sets the date and there is
-   no calendar left to sell.
-
-   Fails CLOSED. A line whose method is unknown (typed by hand, or saved before
-   `method_title` was stored) is not evidence of embroidery, and guessing here
-   would sell the promise this function exists to prevent. */
-function rushAvailable(items) {
-  const list = Array.isArray(items) ? items : [];
-  const decorated = list.filter((i) => Number(i.qty) > 0 &&
-    !COST_SERVICE_WORDS.test(String(i.description || '')));
-  if (!decorated.length) return false;
-  return decorated.every((i) => EMBROIDERY_METHOD_RE.test(String(i.method_title || '')));
-}
-
-/* Does this tier actually land the job sooner than standard?
- *
- *  It can fail to, and the arithmetic is not obvious: a 4-day machine slot on
- *  a job still waiting 5 days for blanks lands on day 9, while standard lands
- *  on day 7. Offering that is selling a 20% surcharge for a LATER delivery —
- *  the kind of thing nobody notices until a customer does.
- *
- *  Which tiers survive depends entirely on JT_LT_BLANKS. Once the garments are
- *  in hand (`blanksIn`) every tier beats standard, which is why the shop can
- *  genuinely sell same-day on a reorder and cannot on a fresh job.
- *
- *  Checked where the sale happens — the form offers only what passes, and the
- *  save path stores only what passes. A code already agreed is then honoured,
- *  the same way a discount is. */
-function rushImprovesDate(code, opts = {}) {
-  if (!rushOption(code).pct) return true;               // standard is always fine
-  const at = opts.from || new Date();
-  const base = { items: opts.items, blanksIn: opts.blanksIn, holiday: opts.holiday,
-                 pickup: opts.pickup, assumeEligible: true };
-  return deliveryEstimate(at, Object.assign({}, base, { rushCode: code })).ready <
-         deliveryEstimate(at, Object.assign({}, base, { rushCode: '' })).ready;
-}
-
-/** The decoration the rush percentage is charged on.
- *
- *  Decoration only, never the blanks: rush buys machine time, and no surcharge
- *  makes a garment arrive from the supplier sooner. Charging it on the line
- *  total would bill the customer 40% of their own shirts. */
-function decorationSubtotal(items) {
-  return round2((Array.isArray(items) ? items : [])
-    .reduce((a, i) => a + Number(i.decoration_total || 0), 0));
-}
-
-/* Holiday mode: rush costs double and everything takes 3 days longer. One
-   switch rather than four settings, so the busy season cannot be half on. It
-   is surfaced on the quote form because the failure mode is leaving it on in
-   March and quoting every job three days slow. */
+/* Holiday mode: everything takes HOLIDAY_EXTRA_DAYS longer. One switch rather
+   than a setting per stage, so the busy season cannot be half on. The failure
+   mode it guards is the opposite of the obvious one — leaving it ON in March
+   and quoting every job three days slow — which is why it is a single flag
+   somebody can find. It stretches the estimate only; there is no fee attached
+   to it, and there is nothing to double. */
 const HOLIDAY_MODE = String(process.env.JT_HOLIDAY_MODE || '') === '1';
-const HOLIDAY_EXTRA_DAYS = 3;
+const HOLIDAY_EXTRA_DAYS = parseInt(process.env.JT_HOLIDAY_EXTRA_DAYS || '3', 10);
 
 /* Screens bill separately ONLY once the per-piece tables have had the amortised
    screen charge taken out of them — `tools/reprice-anchorfish-2026.js --apply`.
@@ -3801,22 +3664,6 @@ const SCREEN_FEES_LIVE = String(process.env.JT_SCREEN_FEES || '') === '1';
 function addonsFor(methodTitle) {
   const t = String(methodTitle || '');
   return t ? ADDONS.filter((a) => a.appliesTo.test(t)) : [];
-}
-
-/** The rush fee actually charged: a percentage of the decoration, holiday
- *  doubling applied.
- *
- *  Returns 0 for a job that cannot be rushed, so an ineligible `rush_code` —
- *  stored before a line changed method, or posted straight at the route —
- *  cannot bill for calendar time the shop is not able to sell. The date shown
- *  is gated by the same call, so the customer is never charged for a promise
- *  the quote does not make. */
-function rushFeeFor(code, items, holiday = HOLIDAY_MODE) {
-  const r = rushOption(code);
-  if (!r.pct || !rushAvailable(items)) return 0;
-  const base = decorationSubtotal(items);
-  if (base <= 0) return 0;
-  return round2(base * (r.pct / 100) * (holiday ? 2 : 1));
 }
 
 /* ── The pricing engine ───────────────────────────────────────────────────
@@ -4118,11 +3965,6 @@ function quotePricingSource() {
 
         return {
           blank: blank, decoration: decoration, sizeUpcharge: upcharge,
-          /* The decoration alone, x quantity. Rush is a percentage of THIS —
-             not of the line total, which would charge a rush premium on the
-             customer's blanks, and not of the per-piece rate, which loses the
-             quantity that makes jumping a big job expensive. */
-          decorationSubtotal: Math.round(decorationSubtotal * 100) / 100,
           addonLines: addonLines, addonTotal: Math.round(addonTotal * 100) / 100,
           unit: unit, listUnit: listUnit, manual: hasOverride,
           /* Returned so a surface can SHOW the count it is charging for —
@@ -4172,23 +4014,12 @@ function quoteDiscount(subtotal, kind, value) {
  *  what the job would have cost undiscounted. Taxing the full subtotal would
  *  have the shop remitting tax on money it never collected. */
 function quoteTotals(q) {
-  const lines = round2((q.items || []).reduce((a, i) => a + Number(i.line_total || 0), 0));
-  /* Rush sits INSIDE the subtotal, above the discount, for two reasons that
-     both bite if it is added later: a whole-job discount should come off the
-     rush too (it is part of what was agreed), and sales tax is owed on it —
-     it is a charge for the work, not a fee collected on somebody's behalf.
-     Adding it after tax would under-remit on every rushed job.
-
-     Recomputed here rather than trusted from the row, so a quote whose lines
-     were edited to screen print stops charging for an embroidery rush the
-     moment it is re-totalled. */
-  const rush = rushFeeFor(q.rush_code, q.items);
-  const subtotal = round2(lines + rush);
+  const subtotal = round2((q.items || []).reduce((a, i) => a + Number(i.line_total || 0), 0));
   const discount = quoteDiscount(subtotal, q.discount_kind, q.discount_value);
   const net = round2(subtotal - discount);
   const tax = Number(q.tax != null ? q.tax : 0);
   const total = round2(net + tax);
-  return { lines, rush, subtotal, discount, net, tax, total, deposit: depositFor(total) };
+  return { subtotal, discount, net, tax, total, deposit: depositFor(total) };
 }
 
 
@@ -4908,11 +4739,6 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
                Hidden entirely when a job burns none. -->
           <tr class="scrsplit" style="display:none"><td class="muted">Garments &amp; printing</td><td class="num" id="goods">$0.00</td></tr>
           <tr class="scrsplit" style="display:none"><td class="muted">Screens <span id="scrdetail" style="font-size:12px;color:#6b7280"></span></td><td class="num" id="scr">$0.00</td></tr>
-          <!-- Rush ADDS to the subtotal, unlike the two split rows above it,
-               so it sits before the subtotal line rather than after. Hidden
-               when the job is not rushed, which is most of them. -->
-          <tr class="rushrow" style="display:none"><td class="muted">Rush <span id="rushdetail" style="font-size:12px;color:#6b7280"></span></td>
-              <td class="num" id="rush">$0.00</td></tr>
           <tr><td class="muted">Subtotal</td><td class="num" id="sub">$0.00</td></tr>
           <tr><td class="muted">
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
@@ -4941,17 +4767,6 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
         <label>Needed by <span style="text-transform:none;font-weight:400">(optional)</span></label>
         <input name="needed_by" type="date" value="${E.needed_by ? String(E.needed_by).slice(0,10) : ''}">
         <p class="muted" id="eta" style="margin-top:8px"></p>
-
-        <label style="margin-top:14px">Turnaround</label>
-        <select name="rush_code" id="rushsel" onchange="calc()">
-          ${RUSH_OPTIONS.map((r) => `<option value="${r.code}"${
-            String(E.rush_code || '') === r.code ? ' selected' : ''
-          }>${escEmail(r.label)}${r.pct ? ` — +${r.pct}% of decoration` : ''}</option>`).join('')}
-        </select>
-        <!-- Why the selector can be disabled rather than simply absent: June
-             needs to see that rush EXISTS and why this job cannot have it,
-             otherwise the next step is promising one over the phone. -->
-        <p class="muted" id="rushnote" style="margin-top:6px;font-size:12.5px"></p>
         <label>Quote good for (days)</label>
         <input name="valid_days" type="number" value="14" inputmode="numeric">
         <label>Notes for the customer</label><textarea name="notes" rows="2" placeholder="Optional">${val(E.notes)}</textarea>
@@ -4980,25 +4795,6 @@ ${quotePricingSource()}
         code: a.code, label: a.label, kind: a.kind, rate: a.rate,
         auto: a.auto || null, note: a.note || null, appliesTo: a.appliesTo.source,
       })))};
-      var RUSH = ${JSON.stringify(RUSH_OPTIONS)};
-      /* Every tier's dates, computed by deliveryEstimate() on the server.
-         The browser picks from this rather than re-implementing business-day
-         arithmetic, the 3:30pm cut-off and the holiday stretch — a second
-         implementation of those is a second set of dates to disagree. */
-      var ETA = ${JSON.stringify(Object.fromEntries(RUSH_OPTIONS.map((r) => {
-        const e = deliveryEstimate(new Date(), { rushCode: r.code, assumeEligible: true });
-        return [r.code, { ready: e.ready, deliver_from: e.deliver_from,
-                          deliver_to: e.deliver_to, blanks_days: e.blanks_days }];
-      })))};
-      /* The tiers that actually land sooner than standard, decided by
-         rushImprovesDate() on the server so the form cannot offer one the save
-         path will then refuse. With blanks still to arrive the short tiers do
-         not help, and saying so beats a silent absence. */
-      var RUSH_HELPS = ${JSON.stringify(Object.fromEntries(
-        RUSH_OPTIONS.map((r) => [r.code, rushImprovesDate(r.code, {})])))};
-      var RUSH_UNAVAILABLE = ${JSON.stringify(RUSH_UNAVAILABLE_NOTE)};
-      var RUSH_CAVEAT = ${JSON.stringify(RUSH_CAVEAT)};
-      var HOLIDAY = ${HOLIDAY_MODE ? 'true' : 'false'};
       var SCREEN_FEES_LIVE = ${SCREEN_FEES_LIVE ? 'true' : 'false'};
 
       /** Which add-ons apply to a method, mirroring addonsFor() on the server. */
@@ -5116,14 +4912,6 @@ ${quotePricingSource()}
            No backticks in here: this comment is inside a server-side template
            literal, and one would end it. */
         var scrTotal = 0, scrCount = 0;
-        /* What rush is charged on, and whether it may be charged at all.
-           Mirrors decorationSubtotal() and rushAvailable() on the server.
-           embOnly starts true and any decorated non-embroidery line clears it,
-           which is the same fail-closed rule — a line with no method chosen is
-           not evidence of embroidery either.
-           No backticks in this comment: it sits inside a server-side template
-           literal, and one would end it. */
-        var decoTotal = 0, embOnly = true, decorated = 0;
         document.querySelectorAll('.line').forEach(function(L){
           var prod = CAT.products.find(function(x){return String(x.id)===L.querySelector('.p').value;});
           var meth = CAT.methods.find(function(x){return String(x.id)===L.querySelector('.m').value;});
@@ -5308,12 +5096,6 @@ ${quotePricingSource()}
 
           sub += lt;
 
-          if (qty > 0) {
-            decorated++;
-            decoTotal += r.decoration * qty;
-            if (!isEmb) embOnly = false;
-          }
-
           if (r.addonLines) r.addonLines.forEach(function(a){
             if (a.code !== 'screens') return;
             scrTotal += a.total;
@@ -5353,57 +5135,6 @@ ${quotePricingSource()}
             d.value = prod.name + (meth ? ' — ' + meth.title : '') + where;
           }
         });
-        /* Rush, before the discount and before tax — the order quoteTotals()
-           uses. Mirrors rushFeeFor(): a percentage of the DECORATION, zero
-           unless every decorated line is in-house embroidery. */
-        var rushSel  = document.getElementById('rushsel');
-        var rushOk   = decorated > 0 && embOnly;
-        var rushTier = RUSH.find(function(x){ return x.code === rushSel.value; }) || RUSH[0];
-        if ((!rushOk || !RUSH_HELPS[rushTier.code]) && rushTier.pct) {
-          rushSel.value = ''; rushTier = RUSH[0];
-        }
-        rushSel.disabled = !rushOk;
-        /* A tier that does not beat standard is shown, struck out of use and
-           labelled, rather than removed: June needs to see that same-day
-           exists and that this job cannot have it yet. */
-        Array.prototype.forEach.call(rushSel.options, function(o){
-          var helps = RUSH_HELPS[o.value];
-          o.disabled = !helps;
-          if (!helps && o.text.indexOf('(not sooner') === -1) {
-            o.text += ' (not sooner than standard on this job)';
-          }
-        });
-        decoTotal = Math.round(decoTotal * 100) / 100;
-        var rushFee = (rushOk && rushTier.pct)
-          ? Math.round(decoTotal * (rushTier.pct/100) * (HOLIDAY ? 2 : 1) * 100) / 100 : 0;
-        sub = Math.round((sub + rushFee) * 100) / 100;
-
-        document.querySelector('.rushrow').style.display = rushFee > 0 ? '' : 'none';
-        document.getElementById('rush').textContent = m2(rushFee);
-        document.getElementById('rushdetail').textContent = rushFee > 0
-          ? '— ' + rushTier.pct + '% of ' + m2(decoTotal) + ' decoration' +
-            (HOLIDAY ? ', doubled for the holiday season' : '') : '';
-
-        /* One sentence that says what the shop can actually do, and by when. */
-        var rn = document.getElementById('rushnote');
-        var pick = ETA[rushOk ? rushTier.code : ''] || ETA[''];
-        var readyOn = new Date(pick.ready).toLocaleDateString('en-US',{month:'short',day:'numeric'});
-        if (!decorated) {
-          rn.textContent = 'Add an item with a quantity to see a date.';
-        } else if (!rushOk) {
-          rn.textContent = RUSH_UNAVAILABLE;
-        } else if (!rushTier.pct) {
-          rn.textContent = 'Standard: ready about ' + readyOn + '. ' +
-            'Rush is available on this job — embroidery is sewn in house.';
-        } else {
-          rn.textContent = rushTier.label + ': ' + rushTier.prodDays + ' business day' +
-            (rushTier.prodDays === 1 ? '' : 's') + ' on the machine once artwork and garments ' +
-            'are in hand, so ready about ' + readyOn +
-            (pick.blanks_days ? ' — that includes ' + pick.blanks_days +
-              ' days for blanks to arrive, which rush cannot shorten.' : '.') +
-            ' ' + RUSH_CAVEAT;
-        }
-
         /* Mirrors quoteDiscount() on the server, clamps included. If these two
            ever disagree the form shows one number and the customer is charged
            another, so keep them in step. */
@@ -5429,12 +5160,7 @@ ${quotePricingSource()}
           el.style.display = showScr ? '' : 'none';
         });
         if (showScr) {
-          /* Less the rush too — these two rows split what the LINES came to,
-             and rush has its own row above. Without this the goods figure
-             absorbs the rush and the three rows stop adding up to the
-             subtotal they claim to explain. */
-          document.getElementById('goods').textContent =
-            m2(Math.round((sub - scrTotal - rushFee) * 100) / 100);
+          document.getElementById('goods').textContent = m2(Math.round((sub - scrTotal) * 100) / 100);
           document.getElementById('scr').textContent = m2(scrTotal);
           document.getElementById('scrdetail').textContent = scrCount
             ? '— ' + scrCount + ' × ' + m2(scrTotal / scrCount) + ', one-time' : '— one-time';
@@ -5918,18 +5644,6 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
         line_total: lineTotal,
         size_mix: mix,
         size_upcharge: priced.sizeUpcharge,
-        /* The decoration on this line, x quantity — what a rush percentage is
-           charged on. Stored rather than re-derived because quoteTotals() runs
-           on the saved row with no catalogue in reach, and re-pricing a quote
-           to total it would let a later price change silently restate money
-           the customer has already agreed to. */
-        decoration_total: priced.decorationSubtotal,
-        /* The method's NAME, not just its id, for the same reason: the rush
-           gate has to know whether this line is in-house embroidery or contract
-           screen print, and it runs where the method table is not loaded.
-           Absent on lines saved before this existed, which the gate treats as
-           "not known to be embroidery" and therefore not rushable. */
-        method_title: method ? method.title : null,
         /* Every extra, itemised, so the customer's page can name each one
            rather than showing an unexplained difference. */
         addons: priced.addonLines,
@@ -5970,18 +5684,7 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
         </div>`));
     }
 
-    /* Rush, validated against the job rather than taken on trust: an unknown
-       code, or a real one on a job with a screen-print line, stores as NULL.
-       The form only offers it when it applies, but the form is not the only
-       way to reach this route, and a stored code is what every later total
-       re-reads. Order below mirrors quoteTotals(), which is the definition —
-       rush inside the subtotal, discount off that, tax on the remainder. */
-    const wanted = rushOption(one(b.rush_code));
-    const rushCode = (rushAvailable(items) && wanted.pct &&
-                      rushImprovesDate(wanted.code, { items }))
-      ? wanted.code : null;
-    const rushFee = rushFeeFor(rushCode, items);
-    const subtotal = round2(items.reduce((a, i) => a + i.line_total, 0) + rushFee);
+    const subtotal = round2(items.reduce((a, i) => a + i.line_total, 0));
 
     /* Discount off the top of the job. Stored as entered so that editing the
        lines later re-applies the same deal; the dollar figure is derived here
@@ -6014,13 +5717,13 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
       ({ rows } = await pool.query(
         `UPDATE quotes SET name=$2, phone=$3, email=$4, items=$5, subtotal=$6, tax=$7,
                 total=$8, deposit=$9, notes=$10, valid_until=$11, needed_by=$12,
-                discount_kind=$13, discount_value=$14, discount_note=$15, rush_code=$16,
+                discount_kind=$13, discount_value=$14, discount_note=$15,
                 change_request=NULL, requested_items=NULL, revision=COALESCE(revision,1)+1,
                 status = CASE WHEN accepted_at IS NULL THEN 'sent' ELSE status END
           WHERE code=$1 RETURNING *`,
         [editing, name, phone, email, JSON.stringify(items), subtotal, tax, total, deposit,
          String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy,
-         discountKind, discountValue, discountNote || null, rushCode]));
+         discountKind, discountValue, discountNote || null]));
       if (!rows.length) {
         return res.status(404).send(quotePage('Not found',
           `<div class="card"><div class="warn">That quote no longer exists.</div>
@@ -6039,14 +5742,13 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
            would sit on the board until the contact-matching fallback happened
            to catch it, which it only does when the details match exactly. */
         `INSERT INTO quotes (code,name,phone,email,items,subtotal,tax,total,deposit,notes,status,valid_until,needed_by,
-                             discount_kind,discount_value,discount_note,from_submission_id,rush_code)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'sent',$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
+                             discount_kind,discount_value,discount_note,from_submission_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'sent',$11,$12,$13,$14,$15,$16) RETURNING *`,
         [code, name, phone, email, JSON.stringify(items), subtotal, tax, total, deposit,
          String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy,
          discountKind, discountValue, discountNote || null,
          (Number.isFinite(parseInt(one(b.from_submission_id), 10))
-           ? parseInt(one(b.from_submission_id), 10) : null),
-         rushCode]));
+           ? parseInt(one(b.from_submission_id), 10) : null)]));
     }
 
     const q = rows[0];
@@ -6223,16 +5925,10 @@ app.get('/q/:code', async (req, res) => {
     const accepted = !!q.accepted_at;
     const paid = Number(q.paid_amount || 0) > 0;
     const balanceDue = balanceOf(q, t.total);
-    /* The date the customer is shown must be the one they PAID for, so the
-       rush tier and the lines go in — the same two inputs the fee was derived
-       from, so a job that stopped being rush-eligible loses the promise at the
-       same moment it stops being charged.
-       `blanks_in_at` is a milestone the shop already records; once the garments
-       are counted in, the supplier's lead time is no longer ahead of this job
-       and the estimate stops carrying it. */
-    const eta = deliveryEstimate(q.accepted_at ? new Date(q.accepted_at) : new Date(), {
-      rushCode: q.rush_code, items: q.items, blanksIn: !!q.blanks_in_at,
-    });
+    /* Items go in for the piece count only — a run past the contract sheet's
+       stated ceiling gets a caveat rather than a date presented as a promise. */
+    const eta = deliveryEstimate(q.accepted_at ? new Date(q.accepted_at) : new Date(),
+      { items: q.items });
     /* A DATE column has no time, so converting it through a timezone shifts it
        a day backwards (2026-08-20 rendered as Aug 19). Format the calendar date
        literally; only real timestamps get timezone treatment. */
@@ -6364,11 +6060,8 @@ app.get('/q/:code', async (req, res) => {
           <th>Item</th><th class="num">Qty</th><th class="num">Each</th><th class="num">Amount</th>
         </tr></thead><tbody>
           ${lines}
-          ${t.rush > 0 ? `<tr><td colspan="3" class="num muted" style="padding-top:12px">
-              ${escEmail(rushOption(q.rush_code).label)}</td>
-              <td class="num" style="padding-top:12px">${money(t.rush)}</td></tr>` : ''}
-          <tr><td colspan="3" class="num muted" style="padding-top:${t.rush > 0 ? '0' : '12px'}">Subtotal</td>
-              <td class="num" style="padding-top:${t.rush > 0 ? '0' : '12px'}">${money(t.subtotal)}</td></tr>
+          <tr><td colspan="3" class="num muted" style="padding-top:12px">Subtotal</td>
+              <td class="num" style="padding-top:12px">${money(t.subtotal)}</td></tr>
           ${t.discount > 0 ? `<tr><td colspan="3" class="num" style="color:#166534">
               ${q.discount_note ? escEmail(q.discount_note) : 'Discount'}${
                 q.discount_kind === 'pct' ? ` (${Number(q.discount_value)}% off)` : ''}</td>
@@ -6393,11 +6086,7 @@ app.get('/q/:code', async (req, res) => {
           ${q.needed_by ? `<p class="muted"><b>You need it by:</b> ${dayFmt(q.needed_by)}</p>` : ''}
           <p class="muted"><b>Estimated:</b> ready ${dayFmt(eta.ready)}, delivered ${dayFmt(eta.deliver_from)}–${dayFmt(eta.deliver_to)}
             ${accepted ? '' : ' once the deposit is in'}.</p>
-          ${t.rush > 0 ? `<p class="muted"><b>Rush:</b> ${eta.production_days} business day${
-              eta.production_days === 1 ? '' : 's'} on the machine once we have your artwork
-            approved${eta.blanks_days ? ` and the garments in hand (about ${eta.blanks_days} days
-            for those to arrive, which a rush cannot shorten)` : ''}. ${escEmail(RUSH_CAVEAT)}</p>` : ''}
-          ${eta.beyond_sheet ? `<p class="muted">This is a large run, so the dates above are an
+          ${eta.beyond_sheet ? `<p class="muted">This is a large run, so those dates are an
             estimate rather than a commitment — we confirm the schedule with the press before
             you pay.</p>` : ''}
           ${q.valid_until ? `<p class="muted">Quote good through ${fmtDate(q.valid_until)}.</p>` : ''}

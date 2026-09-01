@@ -51,42 +51,13 @@ function lift(name) {
    restating any of it, so a change to the deposit rule is reflected here. */
 const DEPOSIT_PC = Number(process.env.JT_DEPOSIT_PCT || 0.5);
 const DEPOSIT_FULL_UNDER = Number(process.env.JT_DEPOSIT_FULL_UNDER || 100);
-/* quoteTotals now also derives the rush charge, so the little world has to
-   include the rush rule. Lifted the same way rather than restated: a change to
-   who may be rushed, or to the percentage, must show up in these totals. */
-const RUSH_OPTIONS = (() => {
-  /* From the env-override table through the end of the ladder — RUSH_OPTIONS
-     calls rushPct() per tier, so lifting the list alone leaves it undefined. */
-  const m = /const RUSH_PCT_OVERRIDES = [\s\S]*?\nconst RUSH_OPTIONS = \[[\s\S]*?\n\];/.exec(src);
-  assert.ok(m, 'RUSH_OPTIONS not found in server.js');
-  return m[0];
-})();
-const CONSTS = (() => {
-  const grab = (re, what) => {
-    const m = re.exec(src);
-    assert.ok(m, `${what} not found in server.js`);
-    return m[0];
-  };
-  return [
-    grab(/const COST_SERVICE_WORDS = .*;/, 'COST_SERVICE_WORDS'),
-    grab(/const EMBROIDERY_METHOD_RE = .*;/, 'EMBROIDERY_METHOD_RE'),
-  ].join('\n');
-})();
-
-const { quoteDiscount, quoteTotals, rushFeeFor } = vm.runInThisContext(`(function(){
+const { quoteDiscount, quoteTotals } = vm.runInThisContext(`(function(){
   const DEPOSIT_PC = ${DEPOSIT_PC}, DEPOSIT_FULL_UNDER = ${DEPOSIT_FULL_UNDER};
   const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
-  const HOLIDAY_MODE = false;
-  ${CONSTS}
-  ${RUSH_OPTIONS}
-  ${lift('rushOption')}
-  ${lift('rushAvailable')}
-  ${lift('decorationSubtotal')}
-  ${lift('rushFeeFor')}
   ${lift('depositFor')}
   ${lift('quoteDiscount')}
   ${lift('quoteTotals')}
-  return { quoteDiscount, quoteTotals, rushFeeFor };
+  return { quoteDiscount, quoteTotals };
 })()`);
 
 const lines = (...amounts) => ({ items: amounts.map((line_total) => ({ line_total })) });
