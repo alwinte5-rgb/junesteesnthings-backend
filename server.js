@@ -4051,46 +4051,76 @@ function quoteSummary(items) {
   if (parts.length <= 2) return parts.join(' + ');
   return `${parts[0]} + ${parts.length - 1} more`;
 }
-
-/* The chargeable extras on a line, written so the customer can check them.
- *
- * `unit_price` is deliberately the GARMENT-AND-PRINT price with add-ons taken
- * out (see the save route), so a line carrying any add-on does not foot from
- * qty x unit alone. Until now only digitizing was ever printed, through its own
- * `setup_fee` column — so specialty ink, unbagging, puff and the jumbo hoop all
- * arrived as an unexplained difference between the unit price and the line
- * total, and screens would have joined them at up to $140 a line.
- *
- * A screen fee especially has to show its working: "4 screens x $35" is
- * something a customer can agree with, "$140 setup" is something they query.
+/* `unit_price` is deliberately the GARMENT-AND-PRINT price with the add-ons
+ * taken out (see the save route). The customer's quote now prints each extra as
+ * its own row, so a line foots from qty x unit again and the extras stand on
+ * their own -- see addonRowsFor(). Before that they were a note under the
+ * description while the Amount column carried them silently, which is what made
+ * a screen-printed line unreadable.
  */
-function addonNotes(item) {
-  const css = 'class="muted" style="font-size:13px;margin-top:3px"';
-  const rows = (Array.isArray(item.addons) ? item.addons : [])
-    .filter((a) => a && Number(a.total) > 0);
 
-  /* Quotes saved before add-ons were itemised carry digitizing in its own two
-     columns and have no `addons` array to read. */
-  if (!rows.length) {
-    return Number(item.setup_fee) > 0
-      ? `<div ${css}>+ ${escEmail(item.setup_label || 'Digitizing')} — ${money(item.setup_fee)} one time</div>`
-      : '';
-  }
+/* The extras on a line as their OWN table rows, and what they come to.
+ *
+ * They used to be a note under the description while the Amount column carried
+ * them silently, so a screen-printed line read:
+ *
+ *     Bella 3001, 1 colour front     62    $6.85    $524.70
+ *       + Screens - 4 x $25.00 = $100.00, one time
+ *
+ * where 62 x $6.85 is $424.70. The customer is told a per-shirt price, shown an
+ * amount that is not it, and left to work out that the difference is the screens
+ * they were separately told about. The commonest reply to that quote was asking
+ * what the shirts actually cost.
+ *
+ * Now each extra is a row that foots on its own, so the shirts are priced as
+ * shirts and the screens are priced as screens. Nothing about the money changes
+ * -- goods + extras is still the same line total, and the subtotal is untouched.
+ */
+function addonRowsFor(item, ix) {
+  const rows = normalisedAddons(item);
+  if (!rows.length) return '';
+
+  const cell = 'style="padding-top:4px;padding-bottom:4px;border-top:0"';
+  const muted = 'color:#6b7280;font-size:13px';
 
   return rows.map((a) => {
     const n = Number(a.count) || 0;
-    const detail =
-      a.kind === 'per_screen' && n > 0
-        ? `${n} &times; ${money(a.rate)} = ${money(a.total)}, one time`
-      : a.kind === 'per_piece'
-        ? `${money(a.rate)} each = ${money(a.total)}`
-      : a.kind === 'per_piece_per_colour'
-        ? `${money(a.rate)} per colour each = ${money(a.total)}`
-      : a.kind === 'percent_of_decoration'
-        ? `+${Number(a.rate)}% = ${money(a.total)}`
-      : `${money(a.total)} one time`;
-    return `<div ${css}>+ ${escEmail(a.label)} — ${detail}</div>`;
+    /* A screen is burned once and runs the whole job, so the count column is
+       screens, not shirts. Showing the shirt quantity against a one-time fee is
+       what makes it read as per-shirt. */
+    const showsCount = (a.kind === 'per_screen' || a.kind === 'per_piece'
+      || a.kind === 'per_piece_per_colour') && n > 0;
+    const once = (a.kind === 'per_screen' || a.kind === 'fixed' || !a.kind)
+      ? ' <span style="' + muted + '">one time</span>' : '';
+
+    return `
+      <tr data-addon-row="${ix}">
+        <td ${cell}><span style="${muted}">&#8627; ${escEmail(a.label)}${once}</span></td>
+        <td class="num" ${cell}><span style="${muted}">${showsCount ? n : '&nbsp;'}</span></td>
+        <td class="num" ${cell}><span style="${muted}">${
+          Number(a.rate) > 0 && showsCount ? money(a.rate) : '&nbsp;'}</span></td>
+        <td class="num" ${cell} data-addon="${ix}-${escEmail(a.code || a.label)}">${money(a.total)}</td>
+      </tr>`;
   }).join('');
+}
+
+/* One shape for both eras of quote. Quotes saved before add-ons were itemised
+ * carry digitizing in its own two columns and have no `addons` array; without
+ * this they would lose their only itemised extra the moment the rows changed. */
+function normalisedAddons(item) {
+  const rows = (Array.isArray(item.addons) ? item.addons : [])
+    .filter((a) => a && Number(a.total) > 0);
+  if (rows.length) return rows;
+  return Number(item.setup_fee) > 0
+    ? [{ code: 'digitizing', label: item.setup_label || 'Digitizing',
+         kind: 'fixed', rate: 0, count: 0, total: Number(item.setup_fee) }]
+    : [];
+}
+
+/** What the extras on a line come to — the part of the line total that is not
+ *  shirts. Kept here so the row split and the live preview agree. */
+function addonTotalOf(item) {
+  return round2(normalisedAddons(item).reduce((n, a) => n + (Number(a.total) || 0), 0));
 }
 
 function quoteLink(code) { return `${PUBLIC_BASE_URL}/q/${code}`; }
@@ -5998,12 +6028,18 @@ app.get('/q/:code', async (req, res) => {
             <img src="${escEmail(u)}" alt="" loading="lazy"
                  style="width:74px;height:74px;object-fit:cover;border-radius:8px;border:1px solid #e3e8f2;background:#fff"></a>`).join('')}
         </div>` : '';
+      /* The shirts, priced as shirts. Every one-time and per-piece extra is its
+         own row below, so this line foots: qty x each = amount. */
+      const aTot  = addonTotalOf(i);
+      const goods = round2(Number(i.line_total) - aTot);
+      const goodsList = round2(Number(i.list_total) - aTot);
+      const cut = goodsList > goods;
+
       return `
       <tr>
         <td>
           ${escEmail(i.description)}
           ${i.details ? `<div class="muted" style="font-size:13px;margin-top:3px">${escEmail(i.details)}</div>` : ''}
-          ${addonNotes(i)}
           ${gallery}
         </td>
         <td class="num">${!canEditQty ? i.qty
@@ -6014,14 +6050,14 @@ app.get('/q/:code', async (req, res) => {
                       class="cq" data-line="${ix}"
                       name="qty_${ix}" value="${parseInt(i.qty, 10) || 0}"
                       style="width:64px;padding:5px;font-size:14px;text-align:right">`}</td>
-        <td class="num" data-each="${ix}">${Number(i.list_total) > Number(i.line_total)
-          ? `<span style="color:#9aa3b2;text-decoration:line-through">${money(Number(i.list_total) / i.qty)}</span><br>${money(i.unit_price)}`
+        <td class="num" data-each="${ix}">${cut
+          ? `<span style="color:#9aa3b2;text-decoration:line-through">${money(i.qty > 0 ? goodsList / i.qty : 0)}</span><br>${money(i.unit_price)}`
           : money(i.unit_price)}</td>
-        <td class="num" data-amount="${ix}">${Number(i.list_total) > Number(i.line_total)
-          ? `<span style="color:#9aa3b2;text-decoration:line-through">${money(i.list_total)}</span><br>
-             <b style="color:#166534">${money(i.line_total)}</b>`
-          : money(i.line_total)}</td>
-      </tr>`;
+        <td class="num" data-amount="${ix}">${cut
+          ? `<span style="color:#9aa3b2;text-decoration:line-through">${money(goodsList)}</span><br>
+             <b style="color:#166534">${money(goods)}</b>`
+          : money(goods)}</td>
+      </tr>${addonRowsFor(i, ix)}`;
     }).join('');
 
     res.send(quotePage(`Your quote from ${SHOP_NAME}`, `
@@ -6227,6 +6263,9 @@ ${quotePricingSource()}
       var QITEMS = ${JSON.stringify((q.items || []).map((i) => ({
         qty: Number(i.qty) || 0, line_total: Number(i.line_total) || 0,
         unit_price: Number(i.unit_price) || 0,
+        /* So the struck-through "was" amount is shirts-only too, matching the
+           live figure beside it. */
+        addon_total: addonTotalOf(i),
       })))};
       var BLANK_TIERS = ${JSON.stringify(BLANK_TIERS)};
       var TAX = ${TAX_RATE}, TAXABLE = ${Number(q.tax) > 0 ? 'true' : 'false'};
@@ -6267,10 +6306,22 @@ ${quotePricingSource()}
             : '<span style="color:#9aa3b2;text-decoration:line-through">' +
               m2(QITEMS[ix].unit_price) + '</span><br><b style="color:#b45309">' +
               m2(qty > 0 ? (r.lineTotal - r.addonTotal) / qty : 0) + '</b>';
+          /* The Amount column is the SHIRTS, matching the split rows below it —
+             the extras have their own amounts and must not be counted twice. */
+          var goodsNow  = Math.round((r.lineTotal - r.addonTotal) * 100) / 100;
+          var goodsWas  = Math.round((QITEMS[ix].line_total - QITEMS[ix].addon_total) * 100) / 100;
           if (amt) amt.innerHTML = same ? amt.dataset.orig
             : '<span style="color:#9aa3b2;text-decoration:line-through">' +
-              m2(QITEMS[ix].line_total) + '</span><br><b style="color:#b45309">' +
-              m2(r.lineTotal) + '</b>';
+              m2(goodsWas) + '</span><br><b style="color:#b45309">' +
+              m2(goodsNow) + '</b>';
+
+          /* Per-piece extras move with the quantity, so their own rows have to
+             move with it as well — a stale $31.00 next to a live shirt count is
+             exactly the arithmetic this split was meant to remove. */
+          (r.addonLines || []).forEach(function(a){
+            var cell = document.querySelector('[data-addon="' + ix + '-' + (a.code || a.label) + '"]');
+            if (cell) cell.innerHTML = same ? cell.dataset.orig : m2(a.total);
+          });
         });
 
         var row = document.getElementById('estrow');
@@ -6283,7 +6334,7 @@ ${quotePricingSource()}
         row.style.display = '';
       }
 
-      document.querySelectorAll('[data-each],[data-amount]').forEach(function(el){
+      document.querySelectorAll('[data-each],[data-amount],[data-addon]').forEach(function(el){
         el.dataset.orig = el.innerHTML;
       });
       document.querySelectorAll('.cq').forEach(function(el){
