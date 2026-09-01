@@ -168,3 +168,29 @@ test('no rush tier is offered anywhere', () => {
   assert.doesNotMatch(src, /or rush fees/,
     'and no customer-facing copy implying one can be asked for');
 });
+
+test('the designer does not promise a rush the shop cannot buy', () => {
+  /* PR #99 removed the rush option from this repo, but the storefront delivery
+     line lives in the DESIGNER repo and kept telling every customer on every
+     product page that "rush is often possible". The promise outlived the
+     product because the two halves are separate repos.
+
+     Embroidery is the exception and the reason this is gated rather than
+     deleted: it is done in house and Anchorfish's own rush ladder says it
+     applies to embroidery only. */
+  const auth = fs.readFileSync(path.join(__dirname, '..',
+    'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/jt-auth.php'), 'utf8');
+
+  assert.doesNotMatch(auth, /rush is often possible\.<\/span>/,
+    'the unconditional promise is back');
+  assert.match(auth, /function jt_can_rush/,
+    'the rule must be one named function, not a phrase repeated in copy');
+  assert.match(auth, /embroider/i,
+    'and it must gate on embroidery, the only work the shop rushes itself');
+
+  /* The gate has to actually reach the copy: a helper nothing calls is how the
+     promise survived the first time. */
+  const html = auth.slice(auth.indexOf('function jt_delivery_html'));
+  assert.match(html.slice(0, 1400), /jt_can_rush\(\$method\)/,
+    'jt_delivery_html must ask jt_can_rush before offering a rush');
+});
