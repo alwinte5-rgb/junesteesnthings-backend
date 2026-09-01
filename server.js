@@ -521,7 +521,48 @@ async function recordPayment({ code, amount, fee = 0, method, kind = 'payment',
     throw err;
   }
   const paid = await syncPaidAmount(code);
+
+  /* Money over the total is money the shop is holding on someone else's
+     behalf, and until now nothing said so: balanceOf() clamps at zero, so a
+     quote paid twice reads exactly like a quote paid once. It has to be
+     refunded or deliberately applied elsewhere, and neither can happen while
+     the only evidence is a ledger nobody opens.
+     
+     Checked after the rollup so it reads the same figure the board does, and
+     only on money going IN — a refund taking the balance back to zero is the
+     resolution, not a new alert. Never throws: an alert must not be able to
+     fail a payment that has already banked. */
+  if (round2(amount) > 0) {
+    try {
+      const { rows: oq } = await pool.query(
+        'SELECT code, name, total, paid_amount, written_off FROM quotes WHERE code = $1', [code]);
+      const over = oq.length ? overpaidBy(oq[0]) : 0;
+      if (over > 0) {
+        await alertShop(`💰 Overpaid by ${money(over)} — quote ${code}`,
+          `<p>Quote <b>${escEmail(code)}</b>${oq[0].name ? ' for ' + escEmail(oq[0].name) : ''}
+              has taken <b>${money(Number(oq[0].paid_amount || 0))}</b> against a total of
+              <b>${money(Number(oq[0].total || 0))}</b>.</p>
+           <p>Overpaid by <b>${money(over)}</b>. Refund it, or apply it to another job
+              and record that here so the books balance.</p>
+           <p><a href="${quoteLink(code)}">${quoteLink(code)}</a></p>`);
+      }
+    } catch (err) {
+      console.error('overpayment check failed:', err.message);
+    }
+  }
+
   return { ok: true, duplicate: false, paid };
+}
+
+/** Money taken above what the quote asks for. Zero when square or still owing.
+ *
+ *  The counterpart to balanceOf(), which clamps at zero so a screen never shows
+ *  a negative amount due. That clamp is right for the customer and wrong for
+ *  the shop: it is exactly what made an overpayment invisible. */
+function overpaidBy(q, total) {
+  const t = Number(total != null ? total : (q && q.total) || 0);
+  const paid = Number((q && q.paid_amount) || 0) + Number((q && q.written_off) || 0);
+  return round2(Math.max(0, paid - t));
 }
 
 // ─── Email ────────────────────────────────────────────────────────────────────
@@ -8208,7 +8249,11 @@ app.get('/exports/quotes.csv', requireAdmin, async (req, res) => {
         : `SELECT * FROM quotes ORDER BY created_at`,
       r ? [r.from, r.to] : []);
     const head = ['code','created','customer','email','phone','status','items',
-                  'subtotal','discount','tax','total','paid','written_off','balance',
+                  'subtotal','rush','discount','tax','total','paid','written_off','balance',
+                  /* Beside balance on purpose: balance clamps at zero, so without
+                     this column a quote paid twice reads exactly like one paid
+                     once, in the file the shop reconciles from. */
+                  'overpaid',
                   'accepted_at','paid_at','delivered_at','cancelled_at','cancel_reason','needed_by'];
     const body = rows.map((q) => {
       const t = quoteTotals(q);
@@ -8216,8 +8261,9 @@ app.get('/exports/quotes.csv', requireAdmin, async (req, res) => {
         .map((i) => `${i.qty} x ${i.description} @ ${money(i.unit_price)}`).join(' | ');
       const d = (v) => (v ? new Date(v).toISOString().slice(0, 10) : '');
       return [q.code, d(q.created_at), q.name, q.email, q.phone, q.status, items,
-              t.subtotal, t.discount, t.tax, t.total,
+              t.subtotal, t.rush, t.discount, t.tax, t.total,
               Number(q.paid_amount || 0), Number(q.written_off || 0), balanceOf(q, t.total),
+              overpaidBy(q, t.total),
               d(q.accepted_at), d(q.paid_at), d(q.delivered_at), d(q.cancelled_at),
               q.cancel_reason || '', d(q.needed_by)];
     });
