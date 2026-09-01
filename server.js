@@ -6997,12 +6997,38 @@ app.post('/webhooks/stripe', async (req, res) => {
     return res.sendStatus(401);
   }
 
-  // Acknowledge immediately; Stripe retries on any non-2xx, and the work below
-  // is idempotent anyway.
-  res.sendStatus(200);
-
+  /* Acknowledge AFTER the work, not before.
+     
+     This used to send 200 straight away, reasoning that the work below is
+     idempotent. Idempotency is exactly what makes it safe to answer LAST:
+     Stripe retries any non-2xx, and a retry that re-banks a payment already
+     banked is discarded by the quote_payments ext_ref unique index.
+     
+     Acknowledging first threw that away. If the write then failed — a dropped
+     connection, the database restarting mid-deploy — the catch logged one line
+     and stopped, and Stripe had been told the event was delivered, so it never
+     came back. Money sitting in Stripe, nothing against the quote, and the only
+     trace a log line nobody reads. That exact shape has already happened here
+     once: the $35.75 on order #10, visible only in the Stripe dashboard.
+     
+     The cost of answering last is a slow request; the cost of answering first
+     is a payment nobody knows about. */
   try {
-    const event = req.body;
+    await handleStripeEvent(req.body);
+    res.sendStatus(200);
+  } catch (err) {
+    /* 500 so Stripe retries. It backs off over ~3 days, which is long enough
+       for a database outage to end and the payment to land by itself. */
+    console.error('Stripe webhook processing failed — asking Stripe to retry:', err.message);
+    if (!res.headersSent) res.sendStatus(500);
+  }
+});
+
+/* The event handling itself, lifted out of the route so the route is only
+   about signature checking and the answer. Throws on failure — that is the
+   signal the caller turns into a retry. */
+async function handleStripeEvent(event) {
+  {
     const obj = event.data?.object;
     if (!obj) return;
 
@@ -7124,10 +7150,8 @@ app.post('/webhooks/stripe', async (req, res) => {
         // unexpected event type is visible rather than silently dropped.
         console.log(`Stripe webhook ignored: ${event.type}`);
     }
-  } catch (err) {
-    console.error('Stripe webhook processing failed:', err.message);
   }
-});
+}
 
 /* Stripe sends them back here. Confirm against the API rather than trusting
    the redirect — anyone can visit this URL. */
