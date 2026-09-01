@@ -109,8 +109,11 @@ test('the totals SPLIT the subtotal for screens rather than adding to it', () =>
      OUT of the subtotal. A row that also added would overstate the job by its
      own value — $140 on a 4-screen job — and it would be the customer-facing
      number that was wrong. */
-  assert.match(src, /getElementById\('goods'\)\.textContent = m2\(Math\.round\(\(sub - scrTotal\)/,
-    'the garments-and-printing row must be sub MINUS screens');
+  /* Rush is subtracted here too, for a different reason: it ADDS to the
+     subtotal from its own row, so leaving it in `goods` would double-count it
+     and the three rows would stop adding up to the subtotal they explain. */
+  assert.match(src, /getElementById\('goods'\)\.textContent =\s*\n?\s*m2\(Math\.round\(\(sub - scrTotal - rushFee\)/,
+    'the garments-and-printing row must be sub MINUS screens and MINUS rush');
 
   assert.match(src, /id="goods"/, 'the split needs a goods row');
   assert.match(src, /id="scr"/, 'the split needs a screens row');
