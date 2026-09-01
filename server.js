@@ -3956,15 +3956,27 @@ function quotePricingSource() {
           addonTotal += amt;
         }
 
-        /* A hand-typed price is taken as final for the garment, so size
-           upcharges are not layered on top of it — they are already the
-           reason the price was typed. */
-        var upcharge = hasOverride ? 0 : sizeUpcharge;
-        var lineTotal = Math.round((unit * qty + upcharge + addonTotal) * 100) / 100;
+        /* Extended-size upcharges apply whether or not the unit price was typed.
+           They used to be zeroed under an override, on the theory that a
+           hand-typed price already accounted for them. It does not survive the
+           way the form is actually used: the price is typed FIRST, as a blended
+           per-piece rate, and the size mix is entered after — so the upcharge
+           vanished silently at the moment the 2XLs were added.
+
+           The form disproves the old theory on its own screen. It prints
+           "+$3.68" over the 2XL box and "+$5.40" over the 3XL, and the customer
+           quote prints them again on the boxes they type into. Displaying a
+           surcharge and then not billing it is not a pricing policy, it is two
+           halves of the form disagreeing. Measured on a real quote: 20 x 2XL
+           and 19 x 3XL is $176.20 the shop ate.
+
+           A typed price is a judgement about ONE shirt. What it cannot be is a
+           judgement about a size mix that did not exist yet. */
+        var lineTotal = Math.round((unit * qty + sizeUpcharge + addonTotal) * 100) / 100;
         var listTotal = Math.round((listUnit * qty + sizeUpcharge + addonTotal) * 100) / 100;
 
         return {
-          blank: blank, decoration: decoration, sizeUpcharge: upcharge,
+          blank: blank, decoration: decoration, sizeUpcharge: sizeUpcharge,
           addonLines: addonLines, addonTotal: Math.round(addonTotal * 100) / 100,
           unit: unit, listUnit: listUnit, manual: hasOverride,
           /* Returned so a surface can SHOW the count it is charging for —

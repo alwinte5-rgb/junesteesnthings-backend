@@ -115,15 +115,50 @@ test('a typed unit price replaces the computed one', () => {
   assert.strictEqual(r.listTotal, 704.50, 'list price must survive for the strike-through');
 });
 
-test('an override suppresses size upcharges but never the add-ons', () => {
-  /* The typed price is a judgement about the garment, so upcharges fold into
-     it. An add-on is a separate cost the shop still incurs. */
+test('an override does NOT suppress size upcharges, or the add-ons', () => {
+  /* These used to be zeroed under an override, on the theory that a typed
+     price already accounted for them. In practice the price is typed first and
+     the size mix entered after, so the upcharge disappeared the moment the
+     2XLs were added — while the form went on printing "+$2" over the 2XL box
+     and the customer quote printed it again. On a real 100-piece quote that
+     was $176.20 the shop ate.
+
+     A typed price is a judgement about one shirt. It cannot be a judgement
+     about a size mix that did not exist when it was typed. */
   const r = priceLine({ product: GILDAN, method: SCREEN1, qty: 50, unitOverride: 12,
     sizeMix: { M: 46, '2XL': 4 }, blankTiers: TIERS,
     addons: [{ code: 'unbagging', label: 'Unbagging', kind: 'per_piece', rate: 0.50 }] });
-  assert.strictEqual(r.sizeUpcharge, 0);
+  assert.strictEqual(r.sizeUpcharge, 8, '4 x $2, charged on top of the typed price');
   assert.strictEqual(r.addonTotal, 25);
-  assert.strictEqual(r.lineTotal, 625);
+  assert.strictEqual(r.lineTotal, 633, '50 x $12 + $8 upcharge + $25 unbagging');
+});
+
+test('the size upcharge is the same figure with or without an override', () => {
+  /* The two used to be different numbers on the same mix, which is what let
+     one of them be forgotten. */
+  const mix = { M: 46, '2XL': 4 };
+  const plain = priceLine({ product: GILDAN, method: SCREEN1, qty: 50,
+    sizeMix: mix, blankTiers: TIERS });
+  const typed = priceLine({ product: GILDAN, method: SCREEN1, qty: 50,
+    unitOverride: 12, sizeMix: mix, blankTiers: TIERS });
+  assert.strictEqual(typed.sizeUpcharge, plain.sizeUpcharge);
+});
+
+test('the quote form never shows a surcharge it does not bill', () => {
+  /* The bug was not the arithmetic, it was the disagreement: the size grid
+     advertises the upcharge from product.sizes, and the engine decided
+     separately whether to charge it. Now the line total always contains
+     exactly what the grid advertised. */
+  const mix = { M: 20, '2XL': 20, '3XL': 19 };
+  const r = priceLine({ product: GILDAN, method: SCREEN1, qty: 59,
+    unitOverride: 10.98, sizeMix: mix, blankTiers: TIERS });
+  const advertised = Object.entries(mix).reduce((n, [sz, count]) => {
+    const row = GILDAN.sizes.find((x) => x.size === sz);
+    return n + count * Number((row || {}).upcharge || 0);
+  }, 0);
+  assert.strictEqual(r.sizeUpcharge, advertised,
+    'what the grid promises is what the line bills');
+  assert.strictEqual(r.lineTotal, round2(59 * 10.98 + advertised));
 });
 
 test('an unparseable override is ignored rather than becoming NaN', () => {
