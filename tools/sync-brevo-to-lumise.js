@@ -69,9 +69,10 @@ async function pushToLumise(row) {
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       const r = await fetch(
-        `https://design.jtees.net/jt-contact.php?key=${encodeURIComponent(JTKEY)}`,
-        { method: 'POST', headers: { 'Content-Type': 'application/json', 'User-Agent': UA }, body,
-          signal: AbortSignal.timeout(20000) });
+        'https://design.jtees.net/jt-contact.php',
+        { method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'User-Agent': UA, 'X-JT-Key': JTKEY },
+          body, signal: AbortSignal.timeout(20000) });
       if (r.status === 502 || r.status === 503) {   // deploy restart — worth retrying
         await new Promise(s => setTimeout(s, 1500 * attempt));
         continue;

@@ -48,6 +48,15 @@ function extractFn(anchor) {
 
 const FETCH = extractFn('async function fetchStudioOrders(');
 const SECTION = extractFn('function studioOrdersSection(');
+/* studioFetch is a const arrow, not a declaration, so extractFn's brace walk
+   does not fit it — take the statement up to its terminating `}));`. */
+const WRAPPER = (() => {
+  const start = src.indexOf('const studioFetch =');
+  assert.notStrictEqual(start, -1, '`studioFetch` not found in server.js');
+  const end = src.indexOf('}));', start);
+  assert.notStrictEqual(end, -1, '`studioFetch` is not terminated as expected');
+  return src.slice(start, end + 4);
+})();
 
 test('a failing feed resolves instead of throwing', () => {
   assert.match(FETCH, /catch \(e\) \{[\s\S]*studio orders feed failed/,
@@ -62,7 +71,16 @@ test('a failing feed resolves instead of throwing', () => {
 });
 
 test('the fetch is bounded and cached', () => {
-  assert.match(FETCH, /AbortSignal\.timeout\(/,
+  /* The bound used to sit inline in fetchStudioOrders. It now lives in
+     studioFetch, which every authenticated studio call shares — so asserting
+     on this function's own text would pass a version that called bare `fetch`
+     and lost the timeout. Assert the two halves that actually carry the
+     guarantee: the feed goes through the wrapper, and the wrapper bounds it. */
+  assert.match(FETCH, /await studioFetch\(/,
+    'the feed must go through studioFetch, which is what bounds and authenticates it');
+  assert.doesNotMatch(FETCH, /await fetch\(/,
+    'a bare fetch here would skip the timeout and the X-JT-Key header');
+  assert.match(WRAPPER, /AbortSignal\.timeout\(/,
     'an unbounded fetch to another host can hang the board indefinitely');
   assert.match(FETCH, /Date\.now\(\) - _studioCache\.at < \d+/,
     'the board is reloaded constantly; it must not hammer the designer');
