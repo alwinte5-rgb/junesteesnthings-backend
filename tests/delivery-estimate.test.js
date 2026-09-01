@@ -5,7 +5,8 @@
  * The date on a quote is a promise, and the ways it goes wrong are all quiet:
  * nobody notices a date that is three days optimistic until the week it is due.
  *
- * There is deliberately NO rush option in this system — screen printing and DTF
+ * Rush is quoted BY A PERSON on the admin form and is never self-served —
+ * screen printing and DTF
  * are contracted to Anchorfish, whose 2026 sheets state 7-10 business days and
  * neither of which sells a rush service at any price. A tier list that offered
  * one for a flat fee used to sit in server.js, wired to nothing; it is gone.
@@ -155,18 +156,39 @@ test('the quoted window does NOT add the blanks lead time', () => {
 
 /* ── No rush, and it must not creep back ─────────────────────────────────── */
 
-test('no rush tier is offered anywhere', () => {
-  /* Screen print and DTF are contracted at 7-10 business days with no rush
-     product on either sheet at any price, so a rush option is a date with
-     nothing behind it. A flat-fee tier list used to sit in server.js unwired;
-     this is what stops it being re-added without the gating that would make it
-     honest. See docs/pricing-2026.md. */
-  assert.doesNotMatch(src, /RUSH_OPTIONS/, 'no rush tier list');
-  assert.doesNotMatch(src, /function rushFeeFor/, 'no rush fee');
-  assert.doesNotMatch(src, /name="rush_code"/, 'no rush control on the quote form');
-  assert.doesNotMatch(src, /rush_code/, 'nothing stores a rush tier');
-  assert.doesNotMatch(src, /or rush fees/,
-    'and no customer-facing copy implying one can be asked for');
+test('rush is quoted by a person, never self-served', () => {
+  /* THE DECISION CHANGED, deliberately, on 2026-09-01. What PR #99 removed was
+     a flat $15 tier list wired to nothing — a date with no price behind it and
+     no one deciding whether the shop could keep it. What exists now is a
+     percentage the person quoting sets on the admin form, per job.
+
+     The distinction that still holds, and is what this test guards: screen
+     printing and DTF are contracted to Anchorfish at 7-10 business days with no
+     rush product on either sheet at any price. So rush is the shop taking on
+     the scheduling itself, and that is a judgement, not a checkbox. It must
+     never appear anywhere a customer can select it for themselves.
+
+     See docs/pricing-2026.md and RUSH_TIERS in server.js. */
+  assert.doesNotMatch(src, /RUSH_OPTIONS/, 'the old flat-fee tier list stays gone');
+  assert.doesNotMatch(src, /function rushFeeFor/, 'no flat rush fee');
+  assert.doesNotMatch(src, /rush_code/, 'nothing stores a rush TIER — the figure is a percentage');
+
+  /* It is a percentage of the job, not a flat amount. A flat fee on a
+     500-piece order is a rounding error; the cost of pulling a date in scales
+     with the job. */
+  assert.match(src, /const RUSH_TIERS_DEFAULT = \[/, 'the ladder exists');
+  assert.match(src, /function rushPctFor/, 'and is applied as a percentage');
+
+  /* The quote form is admin-only, so the control lives behind requireAdmin. A
+     rush box on the storefront would be selling a date the shop has not
+     agreed to. */
+  const form = src.slice(src.indexOf("app.get(['/quote/new'"));
+  assert.match(form.slice(0, 40000), /name="rush_pct"/,
+    'the admin form carries the control');
+  const storefront = src.slice(src.indexOf("app.get('/q/:code'"),
+                               src.indexOf("app.get(['/q/:code/pay/card'"));
+  assert.doesNotMatch(storefront, /name="rush_pct"/,
+    'the customer page shows the rush but must never offer to change it');
 });
 
 test('the designer does not promise a rush the shop cannot buy', () => {

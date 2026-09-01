@@ -135,6 +135,12 @@ async function initDB() {
     "discount_kind TEXT NOT NULL DEFAULT 'amt'",   // 'pct' | 'amt'
     'discount_value NUMERIC(10,2) NOT NULL DEFAULT 0',
     'discount_note TEXT',                          // the reason, shown to them
+    /* The rush surcharge actually agreed, as a percentage of the subtotal.
+       Stored as what was ENTERED, like the discount beside it, so editing the
+       lines later re-applies "50% rush" instead of freezing yesterday's
+       dollars. Zero means no rush, which is also what every quote written
+       before rush existed reads as. */
+    'rush_pct NUMERIC(5,2) NOT NULL DEFAULT 0',
     'paid_amount NUMERIC(10,2) DEFAULT 0',
     'paid_method TEXT',
     'paid_at TIMESTAMPTZ',
@@ -3642,6 +3648,91 @@ const ADDONS = [
    embroidery and priced off the decoration, not sold as a flat fee on anything
    that asks. See docs/pricing-2026.md, which keeps the contract figures. */
 
+/* ── Rush ─────────────────────────────────────────────────────────────────
+ *
+ * A percentage on the job for pulling a delivery date in, charged ONLY on the
+ * admin quote form. Nothing on the storefront offers it: the designer sells a
+ * date, not a speed, and jt_can_rush() there still limits any rush talk to
+ * embroidery, which is the work the shop does in house.
+ *
+ * This is deliberately a percentage rather than the flat fee that used to sit
+ * in this file unwired. A flat $15 on a 500-piece job is not a rush price, it
+ * is a rounding error; the cost of pulling a date in scales with the job, and
+ * so does the disruption to everything else in the shop that week.
+ *
+ * WHAT IT IS NOT: a promise. Screen printing and DTF are contracted to
+ * Anchorfish at 7-10 business days with no rush product on either sheet at any
+ * price, so a rush quoted on that work is the shop taking on the scheduling
+ * itself — an in-house decision made per job by the person quoting, which is
+ * exactly why this appears on the admin form and nowhere a customer can
+ * self-serve it.
+ *
+ * Bands are FLOORS in urgency: the FEWER business days between today and the
+ * requested date, the higher the percentage. The first band whose `days` the
+ * date falls at or under wins.
+ *
+ * ADJUSTING IT: set JT_RUSH_TIERS to a JSON array to add, remove or change
+ * bands without a deploy, e.g. [{"days":1,"pct":80},{"days":3,"pct":25}].
+ * An empty array turns rush off entirely. Bad JSON falls back to the table
+ * below rather than to no rush, because silently not charging is the failure
+ * that costs money. Whatever the table says, the person quoting can still
+ * override the percentage or clear it on any individual quote.
+ */
+const RUSH_TIERS_DEFAULT = [
+  { days: 1, pct: 80 },   // next business day
+  { days: 2, pct: 50 },
+  { days: 3, pct: 30 },
+  { days: 4, pct: 10 },
+];
+
+const RUSH_TIERS = (() => {
+  const raw = String(process.env.JT_RUSH_TIERS || '').trim();
+  if (!raw) return RUSH_TIERS_DEFAULT;
+  try {
+    const t = JSON.parse(raw);
+    if (!Array.isArray(t)) throw new Error('not an array');
+    const clean = t
+      .map((x) => ({ days: parseInt(x && x.days, 10), pct: Number(x && x.pct) }))
+      .filter((x) => Number.isFinite(x.days) && x.days > 0
+                  && Number.isFinite(x.pct) && x.pct >= 0);
+    /* An empty array is a real answer — "we do not sell rush" — but a table
+       that parsed to nothing because every row was malformed is not. */
+    if (!clean.length && t.length) throw new Error('no usable bands');
+    return clean.sort((a, b) => a.days - b.days);
+  } catch (err) {
+    console.error('JT_RUSH_TIERS ignored:', err.message);
+    return RUSH_TIERS_DEFAULT;
+  }
+})();
+
+/** Business days from `from` to `to`, counting neither endpoint twice. Returns
+ *  null when there is no date to measure to. Past dates count as 0 — someone
+ *  asking for yesterday is the most urgent case there is, not the least. */
+function businessDaysUntil(to, from) {
+  if (!to) return null;
+  const end = new Date(to.length <= 10 ? to + 'T12:00:00' : to);
+  if (isNaN(end.getTime())) return null;
+  const start = from ? new Date(from) : new Date();
+  start.setHours(12, 0, 0, 0);
+  if (end <= start) return 0;
+  let n = 0;
+  const d = new Date(start);
+  while (d < end) {
+    d.setDate(d.getDate() + 1);
+    const wd = d.getDay();
+    if (wd !== 0 && wd !== 6) n++;
+  }
+  return n;
+}
+
+/** The rush percentage a requested date earns, before anyone overrides it. */
+function rushPctFor(neededBy, from) {
+  const days = businessDaysUntil(neededBy, from);
+  if (days === null) return 0;
+  for (const t of RUSH_TIERS) if (days <= t.days) return t.pct;
+  return 0;
+}
+
 /* Holiday mode: everything takes HOLIDAY_EXTRA_DAYS longer. One switch rather
    than a setting per stage, so the busy season cannot be half on. The failure
    mode it guards is the opposite of the obvious one — leaving it ON in March
@@ -4027,11 +4118,19 @@ function quoteDiscount(subtotal, kind, value) {
  *  have the shop remitting tax on money it never collected. */
 function quoteTotals(q) {
   const subtotal = round2((q.items || []).reduce((a, i) => a + Number(i.line_total || 0), 0));
-  const discount = quoteDiscount(subtotal, q.discount_kind, q.discount_value);
-  const net = round2(subtotal - discount);
+  /* Rush is a surcharge on the whole job, so it lands BEFORE the discount and
+     is discountable with everything else — "10% off" means off what they are
+     actually being asked to pay, not off a figure that excludes the largest
+     line on the quote. Zero for every quote written before rush existed. */
+  const rushPct = Math.max(0, Number(q.rush_pct || 0));
+  const rush = round2(subtotal * rushPct / 100);
+  const gross = round2(subtotal + rush);
+  const discount = quoteDiscount(gross, q.discount_kind, q.discount_value);
+  const net = round2(gross - discount);
   const tax = Number(q.tax != null ? q.tax : 0);
   const total = round2(net + tax);
-  return { subtotal, discount, net, tax, total, deposit: depositFor(total) };
+  return { subtotal, rushPct, rush, gross, discount, net, tax, total,
+           deposit: depositFor(total) };
 }
 
 
@@ -4782,6 +4881,23 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
           <tr class="scrsplit" style="display:none"><td class="muted">Garments &amp; printing</td><td class="num" id="goods">$0.00</td></tr>
           <tr class="scrsplit" style="display:none"><td class="muted">Screens <span id="scrdetail" style="font-size:12px;color:#6b7280"></span></td><td class="num" id="scr">$0.00</td></tr>
           <tr><td class="muted">Subtotal</td><td class="num" id="sub">$0.00</td></tr>
+          <!-- Rush. The needed-by date SUGGESTS a percentage from the tier
+               table; what is saved is whatever is in this box, so it can be
+               overridden or cleared on any job. Hidden until there is a date,
+               because a rush box on a quote with no deadline is a question
+               nobody asked. -->
+          <tr id="rushrow" style="display:none"><td class="muted">
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+              <span>Rush</span>
+              <input name="rush_pct" id="rushpct" type="number" step="0.01" min="0" max="100"
+                     inputmode="decimal" value="${Number(E.rush_pct) > 0 ? val(E.rush_pct) : ''}"
+                     style="width:80px;padding:5px 6px;font-size:13px" placeholder="0">
+              <span style="font-size:13px;color:#6b7280">% &middot;</span>
+              <span id="rushwhy" style="font-size:12px;color:#b45309"></span>
+              <button type="button" id="rushclear" class="btn btn-ghost"
+                      style="padding:3px 10px;font-size:12px">Remove</button>
+            </div>
+          </td><td class="num" id="rushamt">&mdash;</td></tr>
           <tr><td class="muted">
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
               <span>Discount</span>
@@ -4821,6 +4937,68 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
     <script>
       var CAT = ${JSON.stringify(catalog)};
       var TAX = ${TAX_RATE}, DEP = ${DEPOSIT_PC}, FULL_UNDER = ${DEPOSIT_FULL_UNDER};
+      /* The rush ladder, handed over from the server so the form and the save
+         path read ONE table. Editable per quote: this only ever fills the box
+         in, it never overwrites a figure that was typed or deliberately
+         cleared. */
+      var RUSH_TIERS = ${JSON.stringify(RUSH_TIERS)};
+
+      /* Business days between today and the requested date, the same count
+         rushPctFor() makes on the server. A date in the past is the most
+         urgent case there is, not the least, so it counts as zero. */
+      function rushDaysUntil(v) {
+        if (!v) return null;
+        var end = new Date(v + 'T12:00:00');
+        if (isNaN(end.getTime())) return null;
+        var d = new Date(); d.setHours(12,0,0,0);
+        if (end <= d) return 0;
+        var n = 0;
+        while (d < end) {
+          d.setDate(d.getDate() + 1);
+          var wd = d.getDay();
+          if (wd !== 0 && wd !== 6) n++;
+        }
+        return n;
+      }
+
+      function rushSuggest(days) {
+        if (days === null) return 0;
+        for (var i = 0; i < RUSH_TIERS.length; i++)
+          if (days <= RUSH_TIERS[i].days) return RUSH_TIERS[i].pct;
+        return 0;
+      }
+
+      /* Show the row only when a date has been asked for, and say WHY the
+         number is what it is — "2 business days" is checkable, a bare 50% is
+         something the customer will query and nobody can answer. */
+      function rushSync(fill) {
+        var dateEl = document.querySelector('[name=needed_by]');
+        var row = document.getElementById('rushrow');
+        var box = document.getElementById('rushpct');
+        var why = document.getElementById('rushwhy');
+        if (!dateEl || !row || !box) return;
+
+        var days = rushDaysUntil(dateEl.value);
+        var pct = rushSuggest(days);
+
+        row.style.display = days === null ? 'none' : '';
+        if (days === null) { box.value = ''; if (why) why.textContent = ''; calc(); return; }
+
+        /* Only ever FILLS a blank box. Typing 25 over a suggested 50, or
+           clearing it to nothing, has to survive the next keystroke on the
+           date field or the override is not an override. */
+        if (fill && box.value.trim() === '' && pct > 0 && !box.dataset.cleared)
+          box.value = String(pct);
+
+        if (why) {
+          why.textContent = pct > 0
+            ? (days === 0 ? 'today or earlier' : days + ' business day' + (days === 1 ? '' : 's'))
+              + ' — ladder suggests ' + pct + '%'
+            : days + ' business days — no rush at this lead time';
+        }
+        calc();
+      }
+
       var n = ${eItems.length};
       function m2(v){ return '$' + (Math.round(v*100)/100).toFixed(2); }
 
@@ -5177,6 +5355,15 @@ ${quotePricingSource()}
             d.value = prod.name + (meth ? ' — ' + meth.title : '') + where;
           }
         });
+        /* Rush, mirroring quoteTotals() on the server: a percentage of the
+           subtotal, added BEFORE the discount so a percentage discount comes
+           off what is actually being charged. */
+        var rp = parseFloat(document.getElementById('rushpct').value);
+        if (!isFinite(rp) || rp < 0) rp = 0;
+        if (rp > 100) rp = 100;
+        var rush = Math.round(sub * rp / 100 * 100) / 100;
+        var gross = Math.round((sub + rush) * 100) / 100;
+
         /* Mirrors quoteDiscount() on the server, clamps included. If these two
            ever disagree the form shows one number and the customer is charged
            another, so keep them in step. */
@@ -5184,9 +5371,9 @@ ${quotePricingSource()}
         var dv = parseFloat(document.querySelector('[name=discount_value]').value);
         if (!isFinite(dv) || dv <= 0) dv = 0;
         if (dk === 'pct' && dv > 100) dv = 100;
-        var disc = (sub <= 0 || dv <= 0) ? 0 : Math.min(dk === 'pct' ? sub*dv/100 : dv, sub);
+        var disc = (gross <= 0 || dv <= 0) ? 0 : Math.min(dk === 'pct' ? gross*dv/100 : dv, gross);
         disc = Math.round(disc*100)/100;
-        var net = sub - disc;
+        var net = gross - disc;
 
         var tax = document.querySelector('[name=taxable]').checked ? net*TAX : 0;
         var tot = net + tax;
@@ -5207,6 +5394,9 @@ ${quotePricingSource()}
           document.getElementById('scrdetail').textContent = scrCount
             ? '— ' + scrCount + ' × ' + m2(scrTotal / scrCount) + ', one-time' : '— one-time';
         }
+
+        var rushAmt = document.getElementById('rushamt');
+        if (rushAmt) rushAmt.textContent = rush > 0 ? '+' + m2(rush) : '—';
 
         document.getElementById('disc').textContent = disc > 0
           ? '−' + m2(disc) + (dk === 'pct' ? ' (' + dv + '%)' : '') : '—';
@@ -5335,6 +5525,30 @@ ${uploadStatusScript()}
       }
 
       function bind(){
+        /* The needed-by date drives the rush suggestion, so it recomputes
+           through rushSync rather than straight into calc(). fill=true: it may
+           put a number in an empty box, never over one already there. */
+        var nb = document.querySelector('[name=needed_by]');
+        if (nb && !nb.dataset.rushBound) {
+          nb.dataset.rushBound = '1';
+          nb.addEventListener('input',  function(){ rushSync(true); });
+          nb.addEventListener('change', function(){ rushSync(true); });
+        }
+        /* Remove clears the fee AND remembers that it was cleared, so editing
+           the date afterwards does not quietly put it back. Typing a figure in
+           by hand lifts that. */
+        var rc = document.getElementById('rushclear');
+        var rb = document.getElementById('rushpct');
+        if (rc && rb && !rc.dataset.rushBound) {
+          rc.dataset.rushBound = '1';
+          rc.addEventListener('click', function(){
+            rb.value = ''; rb.dataset.cleared = '1'; rushSync(false);
+          });
+          rb.addEventListener('input', function(){
+            if (rb.value.trim() !== '') delete rb.dataset.cleared;
+          });
+        }
+
         document.querySelectorAll('#qf input, #qf select').forEach(function(el){
           if (el.type === 'file') return;
           el.oninput = calc; el.onchange = calc;
@@ -5343,7 +5557,10 @@ ${uploadStatusScript()}
           fi.onchange = function(){ uploadFiles(fi.closest('.line'), fi.files); };
         });
       }
-      bind(); calc();
+      /* fill=false on load: a saved quote already carries the figure that was
+         agreed, and re-suggesting over it would rewrite history every time
+         someone opened the quote to change a phone number. */
+      bind(); rushSync(false); calc();
       // Delivery estimate hint
       var eta = ${JSON.stringify(deliveryEstimate())};
       document.getElementById('eta').textContent =
@@ -5737,8 +5954,19 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
     if (!Number.isFinite(discountValue) || discountValue < 0) discountValue = 0;
     if (discountKind === 'pct') discountValue = Math.min(discountValue, 100);
     const discountNote = String(one(b.discount_note) || '').trim().slice(0, 120);
-    const discount = quoteDiscount(subtotal, discountKind, discountValue);
-    const net = round2(subtotal - discount);
+
+    /* Rush, as agreed on this quote. The tier table only SUGGESTS a figure —
+       what is stored is what the person quoting accepted, so clearing the box
+       removes the fee and typing over it keeps that number even if the tiers
+       change later. Clamped to 0-100 so a stray value cannot invert a job. */
+    let rushPct = Number(one(b.rush_pct));
+    if (!Number.isFinite(rushPct) || rushPct < 0) rushPct = 0;
+    rushPct = Math.min(rushPct, 100);
+    const rush = round2(subtotal * rushPct / 100);
+    const gross = round2(subtotal + rush);
+
+    const discount = quoteDiscount(gross, discountKind, discountValue);
+    const net = round2(gross - discount);
 
     const taxable = b.taxable === '1' || b.taxable === 'on' || b.taxable === true;
     const tax = quoteTax(net, taxable);
@@ -5759,13 +5987,13 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
       ({ rows } = await pool.query(
         `UPDATE quotes SET name=$2, phone=$3, email=$4, items=$5, subtotal=$6, tax=$7,
                 total=$8, deposit=$9, notes=$10, valid_until=$11, needed_by=$12,
-                discount_kind=$13, discount_value=$14, discount_note=$15,
+                discount_kind=$13, discount_value=$14, discount_note=$15, rush_pct=$16,
                 change_request=NULL, requested_items=NULL, revision=COALESCE(revision,1)+1,
                 status = CASE WHEN accepted_at IS NULL THEN 'sent' ELSE status END
           WHERE code=$1 RETURNING *`,
         [editing, name, phone, email, JSON.stringify(items), subtotal, tax, total, deposit,
          String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy,
-         discountKind, discountValue, discountNote || null]));
+         discountKind, discountValue, discountNote || null, rushPct]));
       if (!rows.length) {
         return res.status(404).send(quotePage('Not found',
           `<div class="card"><div class="warn">That quote no longer exists.</div>
@@ -5784,11 +6012,11 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
            would sit on the board until the contact-matching fallback happened
            to catch it, which it only does when the details match exactly. */
         `INSERT INTO quotes (code,name,phone,email,items,subtotal,tax,total,deposit,notes,status,valid_until,needed_by,
-                             discount_kind,discount_value,discount_note,from_submission_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'sent',$11,$12,$13,$14,$15,$16) RETURNING *`,
+                             discount_kind,discount_value,discount_note,rush_pct,from_submission_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'sent',$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
         [code, name, phone, email, JSON.stringify(items), subtotal, tax, total, deposit,
          String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy,
-         discountKind, discountValue, discountNote || null,
+         discountKind, discountValue, discountNote || null, rushPct,
          (Number.isFinite(parseInt(one(b.from_submission_id), 10))
            ? parseInt(one(b.from_submission_id), 10) : null)]));
     }
@@ -6110,6 +6338,10 @@ app.get('/q/:code', async (req, res) => {
           ${lines}
           <tr><td colspan="3" class="num muted" style="padding-top:12px">Subtotal</td>
               <td class="num" style="padding-top:12px">${money(t.subtotal)}</td></tr>
+          ${t.rush > 0 ? `<tr><td colspan="3" class="num muted">Rush &mdash; ${
+              Number(t.rushPct).toFixed(Number(t.rushPct) % 1 ? 2 : 0)}% for the requested date${
+              q.needed_by ? ' of ' + fmtDate(q.needed_by) : ''}</td>
+              <td class="num">${money(t.rush)}</td></tr>` : ''}
           ${t.discount > 0 ? `<tr><td colspan="3" class="num" style="color:#166534">
               ${q.discount_note ? escEmail(q.discount_note) : 'Discount'}${
                 q.discount_kind === 'pct' ? ` (${Number(q.discount_value)}% off)` : ''}</td>
@@ -6283,6 +6515,10 @@ ${quotePricingSource()}
       var TAX = ${TAX_RATE}, TAXABLE = ${Number(q.tax) > 0 ? 'true' : 'false'};
       var DISC_KIND = ${JSON.stringify(q.discount_kind || 'amt')};
       var DISC_VAL = ${Number(q.discount_value) || 0};
+      /* The agreed rush percentage rides along so this estimate matches
+         quoteTotals() exactly — a customer changing a quantity must not see a
+         figure the shop would not charge. */
+      var RUSH_PCT = ${Number(q.rush_pct) || 0};
       function m2(v){ return '$' + (Math.round(v*100)/100).toFixed(2); }
 
       function estimate(){
@@ -6338,9 +6574,12 @@ ${quotePricingSource()}
 
         var row = document.getElementById('estrow');
         if (!moved) { row.style.display = 'none'; return; }
+        /* Rush before the discount, matching quoteTotals(). */
+        var rush = Math.round(sub * RUSH_PCT / 100 * 100) / 100;
+        var gross = Math.round((sub + rush) * 100) / 100;
         var disc = DISC_VAL <= 0 ? 0
-          : Math.min(DISC_KIND === 'pct' ? sub * DISC_VAL / 100 : DISC_VAL, sub);
-        var net = sub - disc;
+          : Math.min(DISC_KIND === 'pct' ? gross * DISC_VAL / 100 : DISC_VAL, gross);
+        var net = gross - disc;
         var total = net + (TAXABLE ? net * TAX : 0);
         document.getElementById('esttotal').textContent = m2(total);
         row.style.display = '';
