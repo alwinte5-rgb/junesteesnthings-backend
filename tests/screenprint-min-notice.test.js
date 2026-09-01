@@ -93,6 +93,35 @@ test('a pass while already on the fallback does not re-arm the notice', () => {
   assert.strictEqual(h.notices.length, 1);
 });
 
+test('a changing fallback does not announce the same shortfall twice', () => {
+  /* The second popup that survived the first fix. An empty size grid counts as
+     one piece, so an early pass can qualify for a different fallback than the
+     pass after the grid fills. Keyed on the fallback, that read as a new
+     shortfall and spoke again. */
+  const EMB = { id: 7, title: 'Embroidery', calculate: { min_qty: 6 } };
+  const notices = [];
+  const lumise = {
+    data: { printings: [SCREEN, EMB, DTF] },
+    cart: { qty: 1, printing: { current: SCREEN.id, min_notice: null } },
+    fn: { notice: (m) => notices.push(m), dejson: (s) => JSON.parse(s) }
+  };
+  const $ = () => ({ prop() { return this; } });
+  const enforce_min = new Function('lumise', '$',
+    'return function () {' + BODY + '};')(lumise, $);
+
+  lumise.cart.printing.current = SCREEN.id;
+  enforce_min();                                   // qty 1 -> falls back to DTF
+  assert.strictEqual(lumise.cart.printing.current, DTF.id);
+
+  lumise.cart.qty = 12;                            // grid fills in
+  lumise.cart.printing.current = SCREEN.id;
+  enforce_min();                                   // qty 12 -> now qualifies for embroidery
+  assert.strictEqual(lumise.cart.printing.current, EMB.id, 'fallback should differ');
+
+  assert.strictEqual(notices.length, 1,
+    'same chosen method, same minimum: one message even though the fallback changed');
+});
+
 test('qualifying again re-arms, so a later drop speaks up', () => {
   const h = harness(12);
   h.pass();
