@@ -438,10 +438,19 @@ than standard on this job", in the form and refused at save. Once the garments
 are in hand every tier beats standard, which is why same-day is genuinely
 sellable on a reorder and not on a fresh job.
 
-**Which tiers are sellable therefore depends entirely on `JT_LT_BLANKS`.** At
-the default 5 only the 1-, 2- and 3-day tiers survive on a fresh job. If the
-real S&S lead time to Chicago is 2 days, set it — every tier down to 4-day
-becomes sellable and the dates get a week tighter.
+**Which tiers are sellable therefore depends entirely on `JT_LT_BLANKS`,
+which is deliberately set to 5** — confirmed 2026-09-01. That is a planning
+figure with a safety margin in it, not a stopwatch reading of how fast S&S
+delivers; the margin is the point, and it is what keeps a rush the shop has
+been paid for from depending on a supplier hitting its best case.
+
+The consequence, and it is worth knowing before quoting: on a job whose blanks
+have not arrived, **only next-day (+50%) and same-day (+75%) are sellable.**
+The 20%, 30% and 40% tiers all land on or after the standard date once five
+days of blanks sit in front of them, so `rushImprovesDate()` refuses them and
+the form shows them struck out. They become available the moment
+`blanks_in_at` is set — which is the honest answer, because a reorder against
+stock genuinely can be sewn in two days and a fresh job cannot.
 
 Holiday mode doubles the **fee** and stretches **standard** production by
 `HOLIDAY_EXTRA_DAYS`, but never stretches a rush tier that was sold — taking
