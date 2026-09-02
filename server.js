@@ -2731,13 +2731,38 @@ app.post('/api/crm-contact', requireInternalKey, async (req, res) => {
     const email = String(req.body.email || '').trim().toLowerCase();
     const source = String(req.body.source || 'designer').slice(0, 40);
     if (!isValidEmail(email)) return res.status(400).json({ error: 'bad input' });
+
+    /* A postal address, when the caller has one.
+     
+       This used to carry the email and nothing else, so the address of somebody
+       who reached checkout and then did not pay was written into a pending order
+       row and never went anywhere a person would look. The contact existed; it
+       just had no address on it. Now the address travels with the contact, so a
+       non-buyer who got as far as typing one is reachable by post.
+     
+       Only NON-EMPTY fields are sent. `updateEnabled` means Brevo overwrites
+       what it is given, so posting a blank ADDRESS would erase an address
+       already on the contact — a later, thinner call silently destroying a
+       better earlier one. Absent beats empty. */
+    const attrs = { SOURCE: source };
+    const map = {
+      first_name: ['FIRSTNAME', 60], last_name: ['LASTNAME', 60],
+      address:    ['ADDRESS', 120],  city:      ['CITY', 60],
+      state:      ['STATE', 40],     zip:       ['ZIP', 12],
+      country:    ['COUNTRY', 2],    phone:     ['SMS', 20],
+    };
+    for (const [field, [attr, max]] of Object.entries(map)) {
+      const v = String(req.body[field] ?? '').trim().slice(0, max);
+      if (v) attrs[attr] = v;
+    }
+
     await brevo.post('/contacts', {
       email,
-      attributes:    { SOURCE: source },
+      attributes:    attrs,
       listIds:       process.env.BREVO_LIST_ID ? [parseInt(process.env.BREVO_LIST_ID)] : [],
       updateEnabled: true,
     });
-    res.json({ ok: true });
+    res.json({ ok: true, address: attrs.ADDRESS ? true : false });
   } catch (err) {
     console.error('crm-contact error:', err.response?.data?.message || err.message);
     res.status(500).json({ error: 'sync failed' });
