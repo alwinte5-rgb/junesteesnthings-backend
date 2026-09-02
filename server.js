@@ -416,6 +416,28 @@ async function initDB() {
      WHERE COALESCE(q.paid_amount,0) <> 0
        AND NOT EXISTS (SELECT 1 FROM quote_payments p WHERE p.quote_code = q.code)`);
 
+  /* Errors worth waking somebody for. In the DATABASE, not a counter in
+     memory, for the same reason the review queue is: an uncaught exception
+     takes the process with it, and anything held in memory dies with it —
+     which is precisely the error you most wanted to hear about.
+
+     Grouped by fingerprint so a hot loop failing ten thousand times is one row
+     with a count, not ten thousand rows and an inbox nobody can read. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_errors (
+      id           BIGSERIAL PRIMARY KEY,
+      fingerprint  TEXT NOT NULL,
+      kind         TEXT NOT NULL,
+      message      TEXT NOT NULL,
+      context      TEXT,
+      count        INTEGER NOT NULL DEFAULT 1,
+      first_seen   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_seen    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      reported_at  TIMESTAMPTZ
+    )`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS app_errors_open_uniq
+                      ON app_errors (fingerprint) WHERE reported_at IS NULL`).catch(() => {});
+
   console.log('Database ready.');
 }
 
@@ -1671,6 +1693,9 @@ app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, verifyTurnstil
     }
   } catch (err) {
     console.error('DB insert failed:', err.message);
+    /* A lead that reached the form and was lost. The customer is told it
+       failed; the shop otherwise never hears about it at all. */
+    recordError('submission-insert', err.message, err.stack).catch(() => {});
     return res.status(500).json({ error: 'Failed to save submission.' });
   }
 
@@ -6912,6 +6937,95 @@ async function alertShop(subject, innerHtml) {
   }).catch((e) => console.error('shop alert failed:', e.message));
 }
 
+/* ── Error alerting, on what this app already writes ──────────────────────
+ *
+ * There is no error-tracking dependency here on purpose: the boundary forbids
+ * one, and the gap was never CAPTURE. Every failure path already writes a
+ * structured console.error and Railway keeps the logs. The gap is NOTICE —
+ * nobody reads logs, so a broken page is reported by a customer or not at all.
+ *
+ * So: record errors where they survive a restart, group them so a repeated
+ * failure is one line rather than a flood, and let the sweep that already runs
+ * every hour send a digest when there is something to say. Silence when nothing
+ * is wrong, because an hourly "all fine" email is one people filter away, and
+ * then they filter away the one that mattered.
+ */
+
+/** One line per distinct failure, however many times it happens. Never throws:
+ *  an error recorder that can itself fail is worse than none, because it turns
+ *  one broken thing into two and hides the first. */
+async function recordError(kind, message, context) {
+  try {
+    const msg = String(message || 'unknown').slice(0, 500);
+    /* Digits are stripped from the fingerprint so "quote AB12CD failed" and
+       "quote EF34GH failed" are recognised as the same fault rather than as
+       two, which is what turns a digest into a flood. */
+    const fp = crypto.createHash('sha256')
+      .update(String(kind) + '|' + msg.replace(/\d+/g, '#'))
+      .digest('hex').slice(0, 32);
+    await pool.query(
+      `INSERT INTO app_errors (fingerprint, kind, message, context)
+       VALUES ($1,$2,$3,$4)
+       ON CONFLICT (fingerprint) WHERE reported_at IS NULL
+       DO UPDATE SET count = app_errors.count + 1, last_seen = NOW()`,
+      [fp, String(kind).slice(0, 40), msg, context ? String(context).slice(0, 1000) : null]);
+  } catch (e) {
+    console.warn('error recorder failed (not fatal):', e.message);
+  }
+}
+
+/* The two ways a failure escapes every try/catch in this file. Without these
+   an uncaught exception is a process that vanishes and restarts with nothing
+   but a log line, which is the failure least likely to be noticed and most
+   likely to matter. */
+process.on('unhandledRejection', (reason) => {
+  const msg = reason && reason.message ? reason.message : String(reason);
+  console.error('unhandledRejection:', msg);
+  recordError('unhandledRejection', msg, reason && reason.stack).catch(() => {});
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('uncaughtException:', err && err.message);
+  /* Recorded, then rethrown by letting the process die: an uncaught exception
+     leaves the process in an unknown state, and a server that keeps serving
+     from one is worse than one Railway restarts. The write is given a moment
+     to land first — best effort, because the alternative is losing it. */
+  recordError('uncaughtException', err && err.message, err && err.stack)
+    .catch(() => {})
+    .finally(() => setTimeout(() => process.exit(1), 250));
+});
+
+/** Email what has gone wrong since the last digest, and nothing when nothing
+ *  has. Runs inside the existing hourly sweep — no new scheduler. */
+async function sendErrorDigest() {
+  const { rows } = await pool.query(
+    `SELECT * FROM app_errors WHERE reported_at IS NULL
+      ORDER BY count DESC, last_seen DESC LIMIT 20`);
+  if (!rows.length) return '';
+
+  const total = rows.reduce((n, r) => n + Number(r.count || 0), 0);
+  const body = rows.map((r) => `
+    <tr>
+      <td style="padding:6px 8px;border-bottom:1px solid #eee;white-space:nowrap">
+        <b>${escEmail(r.kind)}</b>${Number(r.count) > 1 ? ` &times;${r.count}` : ''}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #eee">${escEmail(r.message)}</td>
+    </tr>`).join('');
+
+  await alertShop(`⚠️ ${total} error${total === 1 ? '' : 's'} on jtees.net`,
+    `<p><b>${total}</b> error${total === 1 ? '' : 's'} since the last digest,
+        in ${rows.length} distinct fault${rows.length === 1 ? '' : 's'}.</p>
+     <table style="width:100%;border-collapse:collapse;font-size:13px">${body}</table>
+     <p style="color:#6b7280;font-size:12px">Grouped by fault, so a repeated failure
+        is one row with a count. Full stacks are in the Railway logs.</p>`);
+
+  /* Marked reported whether or not the email lands — alertShop swallows its own
+     failure, and re-sending the same digest every hour forever would be worse
+     than missing one. The rows stay for history. */
+  await pool.query(`UPDATE app_errors SET reported_at = NOW() WHERE id = ANY($1)`,
+    [rows.map((r) => r.id)]);
+  return `${total} error(s) reported`;
+}
+
 /* A payment Stripe took that the quote ledger did not claim. Never throws —
    an alert must not fail a webhook and make Stripe retry a settled payment. */
 async function alertUnbankedPayment(session, reason) {
@@ -7145,6 +7259,10 @@ app.post('/webhooks/stripe', async (req, res) => {
     /* 500 so Stripe retries. It backs off over ~3 days, which is long enough
        for a database outage to end and the payment to land by itself. */
     console.error('Stripe webhook processing failed — asking Stripe to retry:', err.message);
+    /* Stripe retries, so this usually resolves itself — but a webhook failing
+       repeatedly means money is not landing on quotes, and the retry window is
+       about three days. Somebody should know inside that window, not after it. */
+    recordError('stripe-webhook', err.message, err.stack).catch(() => {});
     if (!res.headersSent) res.sendStatus(500);
   }
 });
@@ -12273,7 +12391,15 @@ if (process.env.JT_INTERNAL_KEY) {
      not run for that hour. A task that throws should cost only itself. */
   const step = async (name, fn) => {
     try { const out = await fn(); if (out) console.log(name + ':', String(out).trim()); }
-    catch (e) { console.error(name + ' failed:', e.message); }
+    catch (e) {
+      console.error(name + ' failed:', e.message);
+      /* One hook covering every task in the sweep. These are the jobs nobody
+         watches — reminders, follow-ups, the supplier sync — so a task that
+         has been failing silently for a fortnight is exactly the thing an
+         hourly digest is for. The digest step itself is excluded, since a
+         failure to report errors cannot report itself. */
+      if (name !== 'error digest') recordError('sweep:' + name, e.message, e.stack).catch(() => {});
+    }
   };
 
   const runSweep = async () => {
@@ -12291,6 +12417,7 @@ if (process.env.JT_INTERNAL_KEY) {
     await step('daily digest', sendDailyDigest);
     await step('tax check', taxMonthlyCheck);
     await step('brevo breach check', brevoBreachCheck);
+    await step('error digest', sendErrorDigest);
     await step('supplier sync', runSupplierSync);
     setTimeout(runSweep, 60 * 60 * 1000);
   };
