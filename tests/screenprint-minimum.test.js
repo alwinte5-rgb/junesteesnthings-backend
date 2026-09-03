@@ -244,3 +244,81 @@ test('erring toward DTF is deliberate and recorded', () => {
      reformatting teaches people to stop trusting the suite. */
   assert.match(cartPhp, /shop can offer screen printing by hand once it has seen the art/);
 });
+
+/* ── The quote form refuses what the press cannot run ────────────────────── */
+
+/* priceLine() has returned `overScreens` since the ceiling existed, but until
+ * 2026-09-02 the only thing reading it was a warning banner in the browser. A
+ * warning does not stop a save: the line went to the database, and bandPrice()
+ * fell through the missing colour column to `full-color` — so the shop quoted
+ * a real price, off the dearest column, for a job its press cannot print in one
+ * pass. That is the same gap the 50-piece MINIMUM had before enforcement moved
+ * out of the warning and into the price, and the same asymmetry too: the
+ * designer switched these jobs to DTF while the quote form sold them.
+ */
+
+const serverSrc = require('node:fs').readFileSync(
+  require('node:path').join(__dirname, '..', 'server.js'), 'utf8');
+
+test('a line over the ceiling stops the save, not just the screen', () => {
+  const route = serverSrc.slice(serverSrc.indexOf("app.post(['/api/quotes'"));
+  const save = route.slice(0, route.indexOf('const subtotal = round2(items'));
+  assert.match(save, /if \(priced\.overScreens\) \{[\s\S]{0,200}overCeiling\.push/,
+    'the save path must collect over-ceiling lines');
+  assert.match(save, /if \(overCeiling\.length\) \{[\s\S]{0,400}return res\.status\(400\)/,
+    'and refuse the save — a banner the browser drew is not enforcement, and ' +
+    'the browser is not where the money is written');
+});
+
+test('the refusal names every offending line, not just the first', () => {
+  /* A person fixing a four-line quote should not have to save four times to
+     discover four problems. */
+  assert.match(serverSrc, /const overCeiling = \[\];/);
+  assert.match(serverSrc, /overCeiling\.map\(\(o\) =>/,
+    'the message must list them');
+});
+
+test('the refusal points at DTF, the way the designer already does', () => {
+  assert.match(serverSrc, /Quote DTF instead[\s\S]{0,160}designer already routes these jobs there/,
+    'both engines must send an over-ceiling design to the same place, or the ' +
+    'shop tells a customer one thing online and another on the phone');
+});
+
+/* ── Both engines charge the minimum, not just the one that can switch ───── */
+
+/* enforce_min() switches the customer onto a method their quantity qualifies
+ * for. When the product allows NOTHING else it cannot, and there the two
+ * engines had parted: core/cart.php charged the minimum order it triggers
+ * (`raw x min/qty`), while app.js returned early and left the table's clamped
+ * rate on screen. On a screen-only product a 12-piece order read $46.20 in the
+ * editor and would have taken $192.50 at the cart — the displayed-is-not-charged
+ * failure, four times over.
+ *
+ * No live product is screen-only today (all 19 that offer screen printing also
+ * offer DTF), so this was latent rather than costing money. It stops being
+ * latent the day somebody adds a product that only screen prints, which is a
+ * catalogue edit, not a deploy — nothing would announce it.
+ */
+
+const appJs = require('node:fs').readFileSync(require('node:path').join(__dirname, '..',
+  'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/core/assets/js/app.js'), 'utf8');
+
+test('the editor scales to the minimum when nothing else qualifies', () => {
+  assert.match(appJs, /var min = lumise\.cart\.printing\.min_qty_of\(lumise\.cart\.printing\.current_method\(\)\);\s*\n\s*if \(min > 0 && q < min\) price = price \* \(min \/ q\);/,
+    'app.js must apply the same min/qty scaling core/cart.php applies');
+});
+
+test('the two scalings are the same expression', () => {
+  /* Written the same way on both sides on purpose: `min / qty`, applied to the
+     raw table walk, before anything else is added. */
+  assert.match(cartPhp, /\$this->printing_calc_raw\( \$item, \$qty \) \* \(\$d\['min'\] \/ intval\(\$qty\)\)/);
+});
+
+test('the table walk itself is still untouched', () => {
+  /* Both engines wrap the walk rather than editing it — it has early returns
+     for non-multi methods, so a correction applied afterwards would miss paths.
+     The walk is calc_raw()/printing_calc_raw() and stays vendor code. */
+  assert.match(appJs, /calc_raw : function \(qty\) \{/,
+    'the walk must remain a separate function the wrapper calls');
+  assert.match(cartPhp, /private function printing_calc_raw\( \$item, \$qty \)\{/);
+});

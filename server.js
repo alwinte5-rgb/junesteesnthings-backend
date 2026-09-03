@@ -2845,6 +2845,18 @@ app.get('/api/pricing-rules', requireInternalKey, (_req, res) => {
   res.json({
     blank_tiers: BLANK_TIERS,
     blank_discount_min_qty: BLANK_DISCOUNT_MIN_QTY,
+    /* Screens, for the designer.
+     *
+     * It bills this money AMORTISED — folded into the per-piece decoration rate
+     * rather than shown as its own line — while the quote form itemises it. The
+     * two presentations must total the same, so they cannot each hold their own
+     * rate: the designer reads this, exactly as it already reads blank_tiers,
+     * for exactly the same reason. The tables in lumise_printings stopped
+     * carrying the screen cost when they were repriced screens-separate, and a
+     * designer that does not add it back sells every screen-print order below
+     * what the shop quotes for the same job. */
+    screen_fee_rate: SCREEN_FEE_RATE,
+    screen_fees_live: SCREEN_FEES_LIVE,
     generated: new Date().toISOString(),
   });
 });
@@ -3755,6 +3767,17 @@ function digitizingOptions(catalog) {
  * it makes no sense for — no rush on a screen-print job that has none of the
  * embroidery capacity constraint, no digitizing on DTF.
  */
+/* What one screen costs the customer.
+ *
+ * A NAMED constant rather than a literal inside ADDONS because it is no longer
+ * read only here: /api/pricing-rules publishes it, and the designer bills the
+ * same money AMORTISED into its per-piece rate. Three surfaces, one number —
+ * the same reason BLANK_TIERS is a table rather than a figure restated in each
+ * engine. tests/screen-fees.test.js and the designer's
+ * tests/screen-fee-agreement.test.cjs both read this line, so changing it here
+ * changes it everywhere or fails the build. */
+const SCREEN_FEE_RATE = 25;
+
 const ADDONS = [
   /* Screens. Not optional and not a tick box — every screen-print job burns
      them, so this is attached by the METHOD, not by someone remembering.
@@ -3774,7 +3797,7 @@ const ADDONS = [
      any shape reaches. If screen-heavy work becomes common, raise this before
      touching the print table. */
   { code: 'screens', label: 'Screens', appliesTo: SCREEN_METHOD_RE,
-    kind: 'per_screen', rate: 25, auto: 'method',
+    kind: 'per_screen', rate: SCREEN_FEE_RATE, auto: 'method',
     note: 'A screen is burned once and then runs the whole job, so it is billed once — not per shirt. (Colours + 1 on a dark garment) x locations, at $25 each.' },
   { code: 'specialty_ink', label: 'Specialty ink (metallic, glitter, waterbase, discharge)',
     appliesTo: SCREEN_METHOD_RE, kind: 'per_piece', rate: 1.50 },
@@ -4384,6 +4407,38 @@ function addonTotalOf(item) {
   return round2(normalisedAddons(item).reduce((n, a) => n + (Number(a.total) || 0), 0));
 }
 
+/** The each-price a person actually TYPED on a hand-priced line.
+ *
+ *  Not the same figure as `unit_price`, and the difference is a live bug when
+ *  they are confused. `unit_price` is the BLENDED rate — line total less the
+ *  extras, over the quantity — so on a line with extended sizes it carries the
+ *  size upcharge spread across the pieces. Feed that back in as the override
+ *  and priceLine() adds the upcharge a SECOND time, because its lineTotal is
+ *  `unit x qty + sizeUpcharge + addons`. It compounds: every re-save of the
+ *  same line adds another upcharge. Measured on a real quote — 100 shirts, 20
+ *  x 2XL and 19 x 3XL — that is $176.20 added each time the quote is opened
+ *  and saved, silently, on a total the customer has already agreed to.
+ *
+ *  So the typed price is stored as typed, in `unit_override`, and read back
+ *  from here. Quotes saved before that field existed are recovered exactly
+ *  rather than guessed: `unit_price` is `typed + sizeUpcharge/qty` by
+ *  construction, so subtracting the upcharge the line already records inverts
+ *  it. Lines saved before upcharges applied under an override carry
+ *  `size_upcharge: 0` and come back unchanged, which is correct for them too.
+ *
+ *  Returns null for a line that was never hand-priced — those re-price from
+ *  the catalogue and must not be pinned to yesterday's number. */
+function typedUnitOf(item) {
+  if (!item || !item.manual) return null;
+  if (item.unit_override !== undefined && item.unit_override !== null) {
+    return Number(item.unit_override);
+  }
+  const qty = Number(item.qty) || 0;
+  const up = Number(item.size_upcharge) || 0;
+  const unit = Number(item.unit_price) || 0;
+  return qty > 0 ? round2(unit - up / qty) : unit;
+}
+
 function quoteLink(code) { return `${PUBLIC_BASE_URL}/q/${code}`; }
 
 function fmtDate(d) {
@@ -4897,7 +4952,7 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
         <input name="qty${n}" class="q" type="number" inputmode="numeric" min="1"
                value="${it ? val(it.qty) : ''}" placeholder="Qty">
         <input name="unit_price${n}" class="u" type="number" step="0.01" inputmode="decimal"
-               value="${it && it.manual ? val(it.unit_price) : ''}" placeholder="Each $">
+               value="${it && it.manual ? val(typedUnitOf(it)) : ''}" placeholder="Each $">
         <b class="lt">—</b>
       </div>
       <p class="minwarn" style="display:none;margin:6px 0 0;font-size:12.5px;color:#b45309"></p>
@@ -5932,6 +5987,10 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
        description or a quantity counts; a product is optional so a purely
        manual line ("banner, 3ft x 8ft") works exactly as well. */
     const items = [];
+    /* Lines whose ink count is past what the press can run in one pass. Collected
+       rather than thrown at the first one, so a person fixing a multi-line quote
+       is told about all of them at once. */
+    const overCeiling = [];
     /* Two fields sharing a name arrive as an array. Stringifying one silently
        merges every value into a single field and turns a price into NaN, which
        renders as $0.00 — so read only the first value. */
@@ -6036,6 +6095,29 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
         blankOverride, unitOverride: rawUnit,
       });
 
+      /* A design past the press's screen ceiling is not a screen-print job, and
+         saving it anyway prices work the shop cannot run. The form has warned
+         about this on screen since the ceiling existed, but a warning does not
+         stop a save — the same gap the screen-print MINIMUM had before it was
+         moved into priceLine(), and the reason that one is enforced rather than
+         announced. The designer already refuses these outright, switching the
+         customer to DTF; without this the two engines disagree about what the
+         shop is able to make.
+
+         Refused rather than switched, because here a person chose the method
+         deliberately and silently re-quoting them onto another one is the
+         behaviour this whole file argues against. The message names the line
+         and what to do instead. */
+      if (priced.overScreens) {
+        overCeiling.push({
+          line: i + 1,
+          what: desc || (prod ? prod.name : `Line ${i + 1}`),
+          screens: priced.screens / (priced.locations || 1),
+          ceiling: priced.screenCeiling,
+          dark: garmentDark,
+        });
+      }
+
       const manual = priced.manual;
       let unit = priced.unit;
       const lineTotal = priced.lineTotal;
@@ -6076,6 +6158,11 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
            honestly. Rolling the extras in would make the decoration itself look
            more expensive than it is. */
         unit_price: round2((lineTotal - priced.addonTotal) / q),
+        /* The hand-typed each-price, kept as typed. `unit_price` above is the
+           BLENDED rate and carries the size upcharge spread over the pieces, so
+           it cannot be re-used as the override without charging that upcharge
+           twice — and again on the next save, and the next. See typedUnitOf(). */
+        unit_override: manual ? round2(unit) : null,
         line_total: lineTotal,
         size_mix: mix,
         size_upcharge: priced.sizeUpcharge,
@@ -6107,9 +6194,27 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
       });
     }
 
+    const backToForm = QUOTE_CODE_RE.test(String(req.params.code || '').toUpperCase())
+      ? `/quote/${String(req.params.code).toUpperCase()}/edit` : '/quote/new';
+
+    if (overCeiling.length) {
+      return res.status(400).send(quotePage('More colours than the press runs', `
+        <div class="card">
+          <div class="warn">Nothing was saved — ${overCeiling.length === 1 ? 'a line asks' : 'some lines ask'}
+            for more screens than one pass can hold.</div>
+          <ul class="muted" style="margin:8px 0 0;padding-left:18px">
+            ${overCeiling.map((o) => `<li>Line ${o.line} — ${escEmail(String(o.what))}:
+              ${o.screens} screens per pass${o.dark ? ' (the white underbase is one of them)' : ''},
+              and the press runs ${o.ceiling}.</li>`).join('')}
+          </ul>
+          <p class="muted" style="margin-top:8px">Quote DTF instead — it has no colour limit, and the
+             designer already routes these jobs there, so this keeps the two in step.</p>
+          <p style="margin-top:12px"><a class="btn" href="${backToForm}">Go back</a></p>
+        </div>`));
+    }
+
     if (!items.length) {
-      const backTo = QUOTE_CODE_RE.test(String(req.params.code || '').toUpperCase())
-        ? `/quote/${String(req.params.code).toUpperCase()}/edit` : '/quote/new';
+      const backTo = backToForm;
       return res.status(400).send(quotePage('Nothing to quote', `
         <div class="card">
           <div class="warn">Nothing was saved — the quote needs at least one item.</div>
@@ -6331,7 +6436,11 @@ function customerLinePricing(items, catalog) {
         code: a.code, label: a.label, kind: a.kind, rate: Number(a.rate) || 0,
       })),
       blankOverride: it.blank_price === undefined ? null : it.blank_price,
-      unitOverride: it.manual ? it.unit_price : null,
+      /* The price as TYPED, never the blended one — see typedUnitOf(). Feeding
+         the blended figure back through priceLine() re-added the size upcharge,
+         so a customer nudging one line's quantity saw every OTHER hand-priced
+         line silently inflate in the estimate total. */
+      unitOverride: typedUnitOf(it),
     };
   });
 }
@@ -12700,6 +12809,22 @@ function validateEnv() {
   }
   if (!process.env.ADMIN_PASSWORD?.trim()) {
     console.warn('WARNING: ADMIN_PASSWORD is not set — admin routes will be inaccessible.');
+  }
+  /* Warn-only, because the shop still takes Zelle and cash and the storefront
+     must not be held down by a payment provider. But it is said at BOOT rather
+     than left to a log line per request, because both of these fail quietly in
+     the direction that costs money and nothing else announces them.
+     Without the webhook secret in particular the route answers 503, Stripe
+     retries for about three days and then stops, and a payment that succeeded
+     is never recorded against the quote — which has happened here before,
+     $35.75 visible only in the Stripe dashboard. */
+  if (!process.env.STRIPE_SECRET_KEY?.trim()) {
+    console.warn('WARNING: STRIPE_SECRET_KEY is not set — the Pay by card buttons will ' +
+      'send customers back to the quote instead of Stripe.');
+  } else if (!process.env.STRIPE_WEBHOOK_SECRET?.trim()) {
+    console.warn('WARNING: STRIPE_WEBHOOK_SECRET is not set — card payments will be TAKEN ' +
+      'but never recorded against a quote. /webhooks/stripe answers 503, Stripe gives up ' +
+      'after about three days, and the money shows only in the Stripe dashboard.');
   }
   // Warn-only for the same reason as the two above: unsubscribe signing
   // degrades marketing email, not the storefront or order receipts, which are

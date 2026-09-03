@@ -239,12 +239,22 @@ test('the reprice tool prices print only — screens are not folded back in', ()
  * number. The fee is the most-compared line on a quote and the thinnest margin
  * in the system; it should not be possible to move it without a test saying so.
  */
+/* Anchored on the CONSTANT rather than on the add-on's `rate:` line. The rate
+ * stopped being a literal there when the designer started billing the same
+ * money amortised: three surfaces now read one number, so the number moved to
+ * `SCREEN_FEE_RATE` and the add-on refers to it. Anchoring on `rate: 25` again
+ * would pin a spelling, and the failure it produced would read "not found in
+ * server.js" — a rewrite — rather than "the price moved", which is the thing
+ * worth being told about. */
 test('the fee this file tests is the fee server.js actually charges', () => {
-  const m = src.match(/code: 'screens'[\s\S]{0,200}?rate: (\d+(?:\.\d+)?)/);
-  assert.ok(m, "could not find the screens add-on's rate in server.js");
+  const m = src.match(/const SCREEN_FEE_RATE = (\d+(?:\.\d+)?);/);
+  assert.ok(m, 'could not find SCREEN_FEE_RATE in server.js');
   assert.strictEqual(Number(m[1]), SCREEN_FEE,
     `server.js bills $${m[1]} a screen but this file tests $${SCREEN_FEE}. ` +
     'Change both, and docs/pricing-2026.md with them.');
+  assert.match(src, /code: 'screens'[\s\S]{0,200}?rate: SCREEN_FEE_RATE/,
+    'the screens add-on must bill SCREEN_FEE_RATE, not a literal of its own — ' +
+    'a second copy is what let the designer and the quote form drift apart');
 });
 
 test('the customer-facing note quotes the same fee', () => {

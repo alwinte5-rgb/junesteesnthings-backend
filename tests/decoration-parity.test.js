@@ -49,9 +49,23 @@ const { tierAt, bandPrice } = fromEngine(['tierAt', 'bandPrice']);
 
 /* ---------- 2. the storefront rule, lifted from the shipped app.js -------- */
 
+/* `calc_raw`, not `calc`.
+ *
+ * This file compares one thing: the walk over `calculate.values` that turns a
+ * quantity and an ink count into a decoration rate. That walk is `calc_raw()`,
+ * and it is what `tierAt()`/`bandPrice()` on the other side of the comparison
+ * do too.
+ *
+ * `calc()` became a wrapper around it on 2026-09-02, when the designer started
+ * amortising screen fees into the per-piece rate and applying the order minimum
+ * — both real charges, both deliberately absent from the quote engine's tierAt(),
+ * because the quote form bills screens as their own line instead. Lifting the
+ * wrapper here would compare a rate against a rate-plus-screens and fail while
+ * both engines were correct.
+ */
 function liftCalc() {
-  const start = appjs.indexOf('calc : function (qty) {');
-  assert.notStrictEqual(start, -1, 'printing.calc not found in app.js');
+  const start = appjs.indexOf('calc_raw : function (qty) {');
+  assert.notStrictEqual(start, -1, 'printing.calc_raw not found in app.js');
   let depth = 0;
   for (let i = appjs.indexOf('{', start); i < appjs.length; i++) {
     if (appjs[i] === '{') depth++;
