@@ -419,6 +419,21 @@ touches auth, billing, or a create/update/delete path, cover the failure
 cases too — an unauthenticated request, another user's id, and invalid input
 should each be tested to fail correctly.
 
+### Run the review yourself, do not wait to be asked
+
+These exist and they are yours to run. Nobody should have to type them for you.
+
+| Moment | Run |
+|---|---|
+| A batch of related work has landed | `/code-review` |
+| The diff touched auth, credentials, webhooks, uploads or billing | `/security-review` |
+| Before opening the pull request | the `pre-ship-check` skill |
+| A fix passed its tests but changes runtime behaviour | `/run` — exercise it for real |
+
+A review is reported, never applied in silence: a finding that is quietly fixed
+teaches nobody, and the pattern that produced it comes back. The gate still
+decides. This is only what reaches it already clean.
+
 ### Say what you did not do
 
 If part of the task is unfinished, blocked, or you are unsure it works, write
