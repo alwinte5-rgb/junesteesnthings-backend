@@ -396,6 +396,55 @@ async function initDB() {
       created_at  TIMESTAMPTZ DEFAULT NOW()
     )`);
 
+  /* ── Money that arrived outside the quote flow ────────────────────────────
+     The design studio at design.jtees.net runs its own Stripe Checkout against
+     this same webhook, sending its ORDER NUMBER as client_reference_id. That
+     fails QUOTE_CODE_RE, so bankStripeSession correctly declines it — an order
+     is not a quote and has its own ledger. Alerting the shop closed the
+     silence, but an email is not a record: the money still appeared in no
+     table, no export, and no tax position. Sales tax is filed on receipts, so
+     revenue that exists only in an inbox understates the ST-1.
+
+     A separate table rather than a row in quote_payments, because quote_code
+     is NOT NULL there and syncPaidAmount() rolls that ledger up onto the
+     quote. A payment belonging to no quote cannot go in it without corrupting
+     the rollup that every other reader depends on.
+
+     tax_portion is NULLABLE and defaults to NULL, which means UNKNOWN — never
+     0. The studio holds its own tax detail; this side genuinely does not know
+     it. Writing 0 would assert no tax was collected, and that assertion would
+     flow straight into a filed return. NULL says "go and find out", and
+     taxPositionByMonth reports it as undetermined rather than quietly adding
+     nothing. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS unlinked_payments (
+      id             BIGSERIAL PRIMARY KEY,
+      amount         NUMERIC(10,2) NOT NULL,   -- signed; negative = refund
+      fee            NUMERIC(10,2) DEFAULT 0,
+      currency       TEXT NOT NULL DEFAULT 'usd',
+      channel        TEXT NOT NULL DEFAULT 'unknown', -- studio | unknown
+      order_ref      TEXT,               -- design studio order id, when it sent one
+      client_ref     TEXT,               -- whatever client_reference_id arrived as
+      kind           TEXT NOT NULL DEFAULT 'payment', -- payment | refund
+      source         TEXT NOT NULL DEFAULT 'stripe_webhook',
+      stripe_session TEXT,
+      stripe_pi      TEXT,
+      ext_ref        TEXT,               -- the Stripe object that makes this row unique
+      customer_email TEXT,
+      customer_name  TEXT,
+      reason         TEXT,               -- why it did not bank against a quote
+      tax_portion    NUMERIC(10,2),      -- NULL = UNKNOWN. Never write 0 to mean "none".
+      resolved_at    TIMESTAMPTZ,        -- set once the tax portion has been established
+      note           TEXT,
+      created_at     TIMESTAMPTZ DEFAULT NOW()
+    )`);
+  /* Same idempotency guarantee the quote ledger has, and for the same reason:
+     Stripe retries any non-2xx, and a retried payment must not become two. */
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS unlinked_payments_extref_uniq
+                      ON unlinked_payments (ext_ref) WHERE ext_ref IS NOT NULL`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS unlinked_payments_date_idx
+                      ON unlinked_payments (created_at)`);
+
   /* Backfill the tax portion for payments recorded before this column existed,
      apportioned by how much of the job that payment covered. */
   await pool.query(`
@@ -461,22 +510,55 @@ async function taxPositionByMonth(limit = 24) {
     `SELECT period, COALESCE(SUM(amount),0) AS remitted, MAX(paid_at) AS last_paid
        FROM tax_remittances GROUP BY 1`);
 
+  /* Money that arrived outside the quote flow. Its tax portion is usually
+     unknown on this side, so it is reported SEPARATELY rather than folded into
+     `collected`: a period carrying undetermined receipts is a period whose
+     ST-1 figure is a floor, not a total. Adding an unknown as zero would make
+     the number look finished when it is not. */
+  const { rows: unlinked } = await pool.query(
+    `SELECT to_char(date_trunc('month', created_at), 'YYYY-MM') AS period,
+            COALESCE(SUM(amount),0)                              AS gross,
+            COUNT(*)                                             AS payments,
+            COALESCE(SUM(tax_portion),0)                         AS tax_known,
+            COUNT(*) FILTER (WHERE tax_portion IS NULL)          AS tax_unknown
+       FROM unlinked_payments
+      GROUP BY 1`).catch(() => ({ rows: [] }));
+
+  const blank = (period) => ({
+    period, collected: 0, gross: 0, payments: 0, remitted: 0, last_paid: null,
+    unlinkedGross: 0, unlinkedPayments: 0, unlinkedTaxKnown: 0, unlinkedTaxUnknown: 0,
+  });
+
   const byPeriod = {};
   for (const r of collected) {
     byPeriod[r.period] = {
-      period: r.period, collected: round2(Number(r.collected)),
+      ...blank(r.period),
+      collected: round2(Number(r.collected)),
       gross: round2(Number(r.gross)), payments: Number(r.payments),
-      remitted: 0, last_paid: null,
     };
   }
   for (const r of remitted) {
-    byPeriod[r.period] ||= { period: r.period, collected: 0, gross: 0, payments: 0, remitted: 0, last_paid: null };
+    byPeriod[r.period] ||= blank(r.period);
     byPeriod[r.period].remitted = round2(Number(r.remitted));
     byPeriod[r.period].last_paid = r.last_paid;
   }
+  for (const r of unlinked) {
+    byPeriod[r.period] ||= blank(r.period);
+    byPeriod[r.period].unlinkedGross = round2(Number(r.gross));
+    byPeriod[r.period].unlinkedPayments = Number(r.payments);
+    byPeriod[r.period].unlinkedTaxKnown = round2(Number(r.tax_known));
+    byPeriod[r.period].unlinkedTaxUnknown = Number(r.tax_unknown);
+  }
 
   const list = Object.values(byPeriod)
-    .map((p) => ({ ...p, outstanding: round2(p.collected - p.remitted) }))
+    .map((p) => ({
+      ...p,
+      /* Tax known about this period: the quote ledger, plus whatever unlinked
+         tax has since been established by hand. */
+      outstanding: round2(p.collected + p.unlinkedTaxKnown - p.remitted),
+      // True while any receipt in the period still has no tax portion decided.
+      undetermined: p.unlinkedTaxUnknown > 0,
+    }))
     .sort((a, b) => (a.period < b.period ? 1 : -1))
     .slice(0, limit);
 
@@ -484,6 +566,11 @@ async function taxPositionByMonth(limit = 24) {
     months: list,
     // What must be sitting in the bank right now, across every unpaid period.
     setAside: round2(list.reduce((s, p) => s + p.outstanding, 0)),
+    /* Loud on purpose. A caller that files a return off `setAside` while this
+       is non-zero is filing a number known to be incomplete. */
+    undeterminedPayments: list.reduce((s, p) => s + p.unlinkedTaxUnknown, 0),
+    undeterminedGross: round2(list.reduce(
+      (s, p) => s + (p.unlinkedTaxUnknown > 0 ? p.unlinkedGross : 0), 0)),
   };
 }
 
@@ -1857,6 +1944,39 @@ app.post('/webhooks/clover', async (req, res) => {
       'SELECT * FROM submissions WHERE clover_order_id=$1',
       [payment.order?.id]
     );
+
+    /* Write the money down BEFORE deciding what it belongs to. `submissions`
+       has no amount column at all, so until now a Clover payment left no
+       figure anywhere in this database — it flipped a status to 'paid' and put
+       the number in an email. Worse, both the early returns below (no matching
+       submission, already marked paid) dropped the payment entirely.
+
+       Money that arrived is a fact independent of whether this side can match
+       it to a row, and sales tax is owed on it either way. Recorded on the
+       unlinked ledger, idempotent on the Clover payment id. */
+    await recordUnlinkedPayment(
+      { id: `clover:${paymentId}`,
+        amount_total: amount,               // Clover sends cents, as Stripe does
+        currency: payment.currency || 'usd',
+        client_reference_id: payment.order?.id || null,
+        payment_intent: null,
+        metadata: {},
+        customer_details: { email: rows[0]?.email || null, name: rows[0]?.name || null } },
+      rows.length ? 'clover payment against a website enquiry' : 'clover payment with no matching enquiry',
+      { channel: 'clover', source: 'clover_webhook',
+        extRef: `clover:${paymentId}`,
+        note: payment.order?.id ? `Clover order ${payment.order.id}` : null },
+    ).catch((e) => {
+      /* Swallowed deliberately, unlike the Stripe path: this handler already
+         sent 200 at the top, so there is no retry left to earn by throwing —
+         only an unhandled rejection. But a payment that failed to record is
+         exactly the thing nobody finds out about later, so it goes in the
+         error table that gets digested to the shop rather than a log line. */
+      console.error('clover payment not recorded:', e.message);
+      recordError('clover-payment-unrecorded', e.message,
+        `payment ${paymentId}, order ${payment.order?.id || '?'}, ${money((amount || 0) / 100)}`)
+        .catch(() => {});
+    });
 
     if (!rows.length) return;
     const sub = rows[0];
@@ -7135,6 +7255,77 @@ async function sendErrorDigest() {
   return `${total} error(s) reported`;
 }
 
+/**
+ * Record a payment Stripe took that the quote ledger cannot claim.
+ *
+ * Unlike the alert below, this one DOES throw. A failed write here means money
+ * that arrived is in no table, and the only mechanism that will try again is
+ * Stripe's own retry — which only happens if the webhook returns non-2xx. An
+ * alert may be swallowed because a lost email costs a notification; a lost
+ * payment costs a wrong tax return.
+ *
+ * The gross is recorded, not a net. The 4% surcharge split in bankStripeSession
+ * is a convention of the quote checkout, and the studio's checkout is not
+ * obliged to share it — dividing by 1.04 here would invent a fee that may not
+ * exist and understate revenue. What Stripe says was charged is the one fact
+ * available, so that is what is stored.
+ */
+async function recordUnlinkedPayment(session, reason, opts = {}) {
+  const gross = round2((session.amount_total || 0) / 100);
+  if (!(gross > 0) && !opts.allowZero) return { ok: false, reason: 'no amount' };
+
+  const orderRef = String(session.metadata?.order_id || '').trim() || null;
+  const clientRef = String(session.client_reference_id || '').trim() || null;
+  const pi = typeof session.payment_intent === 'string' ? session.payment_intent : null;
+  const extRef = opts.extRef || session.id || pi;
+
+  /* The tax inside this payment, if the payer told us.
+     The design studio computes sales tax at checkout (subtotal x rate, tax on
+     the goods only, not on shipping) and used to fold it into one opaque
+     Stripe line item — so the money arrived with no way to tell revenue from
+     tax held for the state. It now stamps `jt_tax` on the session metadata,
+     which travels with the payment and needs no access to its database.
+
+     Left NULL when absent rather than 0: an older order, or a payment from
+     somewhere else entirely, genuinely has an unknown tax portion, and 0 would
+     assert there was none. A negative row (a refund) carries its tax back out
+     in proportion, the way the quote ledger does. */
+  let taxPortion = null;
+  if (opts.taxPortion !== undefined) {
+    taxPortion = opts.taxPortion;
+  } else {
+    const stamped = Number(session.metadata?.jt_tax);
+    if (Number.isFinite(stamped)) {
+      const amt = round2(opts.amount ?? gross);
+      taxPortion = round2(amt < 0 && gross > 0 ? -Math.abs(stamped) : stamped);
+    }
+  }
+
+  try {
+    await pool.query(
+      `INSERT INTO unlinked_payments
+         (amount, fee, currency, channel, order_ref, client_ref, kind, source,
+          stripe_session, stripe_pi, ext_ref, customer_email, customer_name, reason, note,
+          tax_portion, resolved_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+               $16, CASE WHEN $16::numeric IS NULL THEN NULL ELSE NOW() END)`,
+      [round2(opts.amount ?? gross), round2(opts.fee || 0),
+       String(session.currency || 'usd').toLowerCase(),
+       opts.channel || (orderRef ? 'studio' : 'unknown'),
+       orderRef, clientRef,
+       opts.kind || 'payment', opts.source || 'stripe_webhook',
+       session.id || null, pi, extRef,
+       session.customer_details?.email || null,
+       session.customer_details?.name || null,
+       reason || null, opts.note || null, taxPortion]);
+  } catch (err) {
+    // 23505 = unique_violation on ext_ref. The other handler got here first.
+    if (err.code === '23505') return { ok: true, duplicate: true };
+    throw err;
+  }
+  return { ok: true, duplicate: false, amount: round2(opts.amount ?? gross) };
+}
+
 /* A payment Stripe took that the quote ledger did not claim. Never throws —
    an alert must not fail a webhook and make Stripe retry a settled payment. */
 async function alertUnbankedPayment(session, reason) {
@@ -7406,7 +7597,18 @@ async function handleStripeEvent(event) {
            ledger. Saying nothing is not. Tell the shop, and hand over the
            Stripe receipt URL so a customer asking "where is my receipt" can be
            answered from the email rather than from the dashboard. */
-        if (!out.ok && !out.duplicate) await alertUnbankedPayment(obj, out.reason);
+        if (!out.ok && !out.duplicate) {
+          /* Record first, alert second. The alert closed the silence; it did
+             not close the hole. An email is not a record — the money still
+             reached no table, no export and no tax position, and sales tax is
+             filed on receipts. Writing the row first also means a Stripe retry
+             hits the ext_ref unique index and returns duplicate, which is now
+             what suppresses a second alert. Previously `out.duplicate` only
+             described the quote ledger, so a retried studio payment re-alerted
+             every time. */
+          const kept = await recordUnlinkedPayment(obj, out.reason);
+          if (!kept.duplicate) await alertUnbankedPayment(obj, out.reason);
+        }
         break;
       }
 
@@ -7433,7 +7635,37 @@ async function handleStripeEvent(event) {
              FROM quote_payments WHERE stripe_pi = $1 AND amount > 0
             GROUP BY quote_code`, [pi]);
         if (!rows.length) {
-          console.warn(`Stripe refund ${obj.id} — no matching quote for PI ${pi}`);
+          /* No quote claimed the original payment — so it is one of the
+             unlinked ones, and the refund has to come back out of the same
+             place or the books keep money that was returned. Recorded as a
+             negative row, matching how the quote ledger expresses a refund. */
+          const { rows: unl } = await pool.query(
+            `SELECT id, order_ref, client_ref, customer_email, customer_name
+               FROM unlinked_payments WHERE stripe_pi = $1 AND amount > 0
+              ORDER BY created_at LIMIT 1`, [pi]);
+          if (!unl.length) {
+            console.warn(`Stripe refund ${obj.id} — no matching quote or unlinked payment for PI ${pi}`);
+            break;
+          }
+          const u = unl[0];
+          const back = await recordUnlinkedPayment(
+            { id: null, payment_intent: pi, amount_total: 0,
+              currency: obj.currency,
+              client_reference_id: u.client_ref,
+              metadata: { order_id: u.order_ref },
+              customer_details: { email: u.customer_email, name: u.customer_name } },
+            'refund of an unlinked payment',
+            { amount: -refunded, kind: 'refund', allowZero: true,
+              extRef: obj.id + ':' + obj.amount_refunded,
+              note: `Refund of ${money(refunded)} via Stripe` });
+          if (!back.duplicate) {
+            console.log(`Stripe refund for unlinked payment ${u.order_ref || pi}: -${money(refunded)}`);
+            await alertShop(`↩️ Refund — ${u.order_ref ? `design studio order #${u.order_ref}` : 'unlinked payment'}, ${money(refunded)}`,
+              `<p>A refund of <b>${money(refunded)}</b> was issued on a payment that belongs to
+                  no quote${u.order_ref ? ` (design studio order #${escEmail(u.order_ref)})` : ''}.</p>
+               <p style="color:#6b7280">Recorded against the unlinked ledger so the books do not
+                  keep money that went back.</p>`);
+          }
           break;
         }
         const code = rows[0].quote_code;
@@ -8443,17 +8675,48 @@ app.get('/exports', requireAdmin, async (_req, res) => {
              FROM quote_payments GROUP BY 1
          ) x GROUP BY m ORDER BY m DESC`);
 
-    const rows = months.map((m) => `
+    /* Asked separately, and allowed to fail, so a deploy that races the
+       migration loses one column rather than the whole records page. */
+    const { rows: unl } = await pool.query(
+      `SELECT to_char(date_trunc('month', created_at), 'YYYY-MM') AS ym,
+              count(*) AS n, COALESCE(SUM(amount),0) AS amt,
+              count(*) FILTER (WHERE tax_portion IS NULL) AS unknown_tax
+         FROM unlinked_payments GROUP BY 1`).catch(() => ({ rows: [] }));
+    const unlByMonth = Object.fromEntries(unl.map((u) => [u.ym, u]));
+
+    /* A month whose only revenue came through the design studio would not
+       appear at all otherwise — the same lie as an empty export. */
+    const seen = new Set(months.map((m) => m.ym));
+    for (const u of unl) {
+      if (seen.has(u.ym)) continue;
+      const [y, mo] = u.ym.split('-');
+      months.push({
+        ym: u.ym, quotes: 0, payments: 0, collected: 0,
+        label: new Date(Number(y), Number(mo) - 1, 1)
+          .toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+      });
+    }
+    months.sort((a, b) => (a.ym < b.ym ? 1 : -1));
+
+    const rows = months.map((m) => {
+      const u = unlByMonth[m.ym];
+      return `
       <tr>
         <td style="padding:8px 4px"><b>${escEmail(m.label)}</b></td>
         <td class="num" style="padding:8px 4px">${m.quotes}</td>
         <td class="num" style="padding:8px 4px">${m.payments}</td>
         <td class="num" style="padding:8px 4px">${money(m.collected)}</td>
+        <td class="num" style="padding:8px 4px">${
+          u ? `<span title="Money that belongs to no quote — mostly design studio orders"
+                 style="color:${Number(u.unknown_tax) > 0 ? '#b45309' : '#334155'}">${money(u.amt)}${
+                 Number(u.unknown_tax) > 0 ? ' *' : ''}</span>` : '<span class="muted">—</span>'}</td>
         <td style="padding:8px 4px;text-align:right;white-space:nowrap">
           <a href="/exports/quotes.csv?month=${m.ym}">quotes</a> &middot;
           <a href="/exports/payments.csv?month=${m.ym}">payments</a> &middot;
-          <a href="/exports/expenses.csv?month=${m.ym}">expenses</a></td>
-      </tr>`).join('');
+          <a href="/exports/expenses.csv?month=${m.ym}">expenses</a>${
+          u ? ` &middot; <a href="/exports/unlinked.csv?month=${m.ym}">unlinked</a>` : ''}</td>
+      </tr>`;
+    }).join('');
 
     res.send(adminPage('Records', `<h1>Records</h1>
       <div class="sub">Download a month, keep it somewhere that is not this app</div>
@@ -8477,15 +8740,21 @@ app.get('/exports', requireAdmin, async (_req, res) => {
             <th class="num" style="padding:6px 4px">Quotes</th>
             <th class="num" style="padding:6px 4px">Payments</th>
             <th class="num" style="padding:6px 4px">Collected</th>
+            <th class="num" style="padding:6px 4px">Outside quotes</th>
             <th style="padding:6px 4px;text-align:right">Download</th>
           </tr></thead>
-          <tbody>${rows || '<tr><td colspan="5" class="muted" style="padding:10px 4px">Nothing recorded yet.</td></tr>'}</tbody>
+          <tbody>${rows || '<tr><td colspan="6" class="muted" style="padding:10px 4px">Nothing recorded yet.</td></tr>'}</tbody>
         </table>
         <p class="muted" style="margin-top:12px;font-size:13px">Everything, all months:
           <a href="/exports/quotes.csv">quotes</a> &middot;
           <a href="/exports/payments.csv">payments</a> &middot;
           <a href="/exports/expenses.csv">expenses</a> &middot;
+          <a href="/exports/unlinked.csv">outside quotes</a> &middot;
           <a href="/tax.csv">sales tax detail</a></p>
+        <p class="muted" style="margin-top:6px;font-size:12px"><b>Outside quotes</b> is money Stripe took
+          that no quote claimed — mostly design studio orders, which keep their own ledger on
+          design.jtees.net. A <b>*</b> means the sales tax inside some of it has not been worked out
+          yet, so that month's tax figure is a floor rather than a total.</p>
       </div>`, 'money'));
   } catch (err) {
     console.error('exports page failed:', err.message);
@@ -8571,28 +8840,83 @@ app.get('/exports/expenses.csv', requireAdmin, async (req, res) => {
 
 app.get('/tax.csv', requireAdmin, async (req, res) => {
   try {
+    /* The STORED tax portion, not a fresh calculation from the quote.
+       recordPayment() works it out when the money lands and writes it on the
+       row precisely so that editing the quote afterwards cannot rewrite what
+       was collected in a period already reported. Recomputing here re-derived
+       it from today's quote total, so this file could disagree with the tax
+       page — and the two are meant to be the same number filed twice. */
     const { rows } = await pool.query(
       `SELECT p.created_at, p.quote_code, q.name, q.subtotal, q.tax, q.total,
-              p.amount, p.method, p.kind,
-              CASE WHEN q.total > 0 THEN round(q.tax * (p.amount / q.total), 2) ELSE 0 END AS tax_portion
+              p.amount, p.method, p.kind, p.tax_portion
          FROM quote_payments p JOIN quotes q ON q.code = p.quote_code
         ORDER BY p.created_at`);
-    const esc = (v) => {
-      const s = String(v == null ? '' : v);
-      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-    };
-    const head = ['date','quote','customer','job_subtotal','job_tax','job_total',
-                  'payment','method','kind','tax_portion_of_payment'];
-    const body = rows.map(r => [
-      new Date(r.created_at).toISOString().slice(0, 10), r.quote_code, r.name,
-      r.subtotal, r.tax, r.total, r.amount, r.method, r.kind, r.tax_portion,
-    ].map(esc).join(','));
-    res.set('Content-Type', 'text/csv; charset=utf-8');
-    res.set('Content-Disposition', `attachment; filename="jtees-sales-tax-${new Date().toISOString().slice(0,10)}.csv"`);
-    res.set('Cache-Control', 'no-store');
-    res.send([head.join(','), ...body].join('\n'));
+
+    /* Receipts from the design studio and anything else that arrived outside
+       the quote flow. They belong in this file because the ST-1 is filed on
+       everything taken in, not on everything that happened to have a quote.
+       An unknown tax portion is left BLANK rather than written as 0 — a blank
+       cell asks the bookkeeper a question, a zero answers it wrongly. */
+    const { rows: unlinked } = await pool.query(
+      `SELECT created_at, order_ref, client_ref, stripe_pi, customer_name,
+              amount, kind, tax_portion, channel
+         FROM unlinked_payments ORDER BY created_at`).catch(() => ({ rows: [] }));
+
+    const day = (d) => new Date(d).toISOString().slice(0, 10);
+    const all = [
+      ...rows.map((r) => ({
+        at: r.created_at,
+        cells: [day(r.created_at), r.quote_code, r.name, r.subtotal, r.tax,
+                r.total, r.amount, r.method, r.kind, r.tax_portion, 'quote'],
+      })),
+      ...unlinked.map((u) => ({
+        at: u.created_at,
+        cells: [day(u.created_at),
+                u.order_ref ? `studio #${u.order_ref}` : (u.client_ref || u.stripe_pi || ''),
+                u.customer_name || '', '', '', '', u.amount, 'card', u.kind,
+                u.tax_portion == null ? '' : u.tax_portion, u.channel],
+      })),
+    ].sort((a, b) => new Date(a.at) - new Date(b.at));
+
+    sendCsv(res, `jtees-sales-tax-${new Date().toISOString().slice(0, 10)}.csv`,
+      ['date', 'quote', 'customer', 'job_subtotal', 'job_tax', 'job_total',
+       'payment', 'method', 'kind', 'tax_portion_of_payment', 'source'],
+      all.map((r) => r.cells));
   } catch (err) {
     console.error('tax csv failed:', err.message);
+    res.status(500).send('error');
+  }
+});
+
+/* Every receipt that belongs to no quote, in full. The tax file above carries
+   these too, but flattened to the columns a quote payment has; this one keeps
+   the Stripe identifiers needed to go and find the order in the studio's own
+   records and settle what tax it carried. */
+app.get('/exports/unlinked.csv', requireAdmin, async (req, res) => {
+  const r = monthRange(req.query.month);
+  try {
+    const { rows } = await pool.query(
+      `SELECT created_at, channel, order_ref, client_ref, amount, fee, currency,
+              kind, source, stripe_session, stripe_pi, customer_name,
+              customer_email, reason, tax_portion, resolved_at, note
+         FROM unlinked_payments
+        ${r ? 'WHERE created_at >= $1 AND created_at < $2' : ''}
+        ORDER BY created_at`, r ? [r.from, r.to] : []);
+    sendCsv(res, `jtees-unlinked-${r ? r.label : 'all'}.csv`,
+      ['date', 'channel', 'order_ref', 'client_ref', 'amount', 'card_fee',
+       'currency', 'kind', 'source', 'stripe_session', 'stripe_payment_intent',
+       'customer', 'email', 'why_unlinked', 'tax_portion', 'tax_settled_at', 'note'],
+      rows.map((u) => [
+        new Date(u.created_at).toISOString().slice(0, 10), u.channel,
+        u.order_ref || '', u.client_ref || '', u.amount, u.fee, u.currency,
+        u.kind, u.source, u.stripe_session || '', u.stripe_pi || '',
+        u.customer_name || '', u.customer_email || '', u.reason || '',
+        // Blank, not zero: nobody has decided this yet.
+        u.tax_portion == null ? '' : u.tax_portion,
+        u.resolved_at ? new Date(u.resolved_at).toISOString().slice(0, 10) : '',
+        u.note || '']));
+  } catch (err) {
+    console.error('unlinked csv failed:', err.message);
     res.status(500).send('error');
   }
 });

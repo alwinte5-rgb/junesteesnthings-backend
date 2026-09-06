@@ -71,8 +71,27 @@ test('a real quote code still passes', () => {
 const ALERT_SRC = extractFn('async function alertUnbankedPayment(');
 
 test('an unbanked payment raises an alert instead of only a log line', () => {
-  assert.match(src, /if \(!out\.ok && !out\.duplicate\) await alertUnbankedPayment\(obj, out\.reason\);/,
+  assert.match(src, /if \(!out\.ok && !out\.duplicate\) \{[\s\S]{0,900}?alertUnbankedPayment\(obj, out\.reason\)/,
     'the checkout.session.completed branch must alert when the payment did not bank');
+});
+
+/* The alert closed the silence. It did not close the hole: an email is not a
+   record, so the money still reached no table, no export and no tax position —
+   and sales tax is filed on receipts, so a return built from this data was
+   understated by however much the studio took. */
+test('an unbanked payment is RECORDED, not just announced', () => {
+  assert.match(src, /if \(!out\.ok && !out\.duplicate\) \{[\s\S]{0,900}?await recordUnlinkedPayment\(obj, out\.reason\)/,
+    'money that arrived must land in a table, not only in an inbox');
+});
+
+test('it is recorded before it is alerted', () => {
+  const branch = /if \(!out\.ok && !out\.duplicate\) \{([\s\S]{0,900}?)\n        \}/.exec(src);
+  assert.ok(branch, 'the unbanked branch should still be a block');
+  const record = branch[1].indexOf('recordUnlinkedPayment');
+  const alert  = branch[1].indexOf('alertUnbankedPayment');
+  assert.ok(record !== -1 && alert !== -1, 'both the record and the alert must be present');
+  assert.ok(record < alert,
+    'record first: a swallowed alert costs a notification, a lost write costs a tax return');
 });
 
 test('the alert names the amount and the reference it arrived under', () => {
