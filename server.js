@@ -7279,12 +7279,36 @@ async function recordUnlinkedPayment(session, reason, opts = {}) {
   const pi = typeof session.payment_intent === 'string' ? session.payment_intent : null;
   const extRef = opts.extRef || session.id || pi;
 
+  /* The tax inside this payment, if the payer told us.
+     The design studio computes sales tax at checkout (subtotal x rate, tax on
+     the goods only, not on shipping) and used to fold it into one opaque
+     Stripe line item — so the money arrived with no way to tell revenue from
+     tax held for the state. It now stamps `jt_tax` on the session metadata,
+     which travels with the payment and needs no access to its database.
+
+     Left NULL when absent rather than 0: an older order, or a payment from
+     somewhere else entirely, genuinely has an unknown tax portion, and 0 would
+     assert there was none. A negative row (a refund) carries its tax back out
+     in proportion, the way the quote ledger does. */
+  let taxPortion = null;
+  if (opts.taxPortion !== undefined) {
+    taxPortion = opts.taxPortion;
+  } else {
+    const stamped = Number(session.metadata?.jt_tax);
+    if (Number.isFinite(stamped)) {
+      const amt = round2(opts.amount ?? gross);
+      taxPortion = round2(amt < 0 && gross > 0 ? -Math.abs(stamped) : stamped);
+    }
+  }
+
   try {
     await pool.query(
       `INSERT INTO unlinked_payments
          (amount, fee, currency, channel, order_ref, client_ref, kind, source,
-          stripe_session, stripe_pi, ext_ref, customer_email, customer_name, reason, note)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+          stripe_session, stripe_pi, ext_ref, customer_email, customer_name, reason, note,
+          tax_portion, resolved_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+               $16, CASE WHEN $16::numeric IS NULL THEN NULL ELSE NOW() END)`,
       [round2(opts.amount ?? gross), round2(opts.fee || 0),
        String(session.currency || 'usd').toLowerCase(),
        opts.channel || (orderRef ? 'studio' : 'unknown'),
@@ -7293,7 +7317,7 @@ async function recordUnlinkedPayment(session, reason, opts = {}) {
        session.id || null, pi, extRef,
        session.customer_details?.email || null,
        session.customer_details?.name || null,
-       reason || null, opts.note || null]);
+       reason || null, opts.note || null, taxPortion]);
   } catch (err) {
     // 23505 = unique_violation on ext_ref. The other handler got here first.
     if (err.code === '23505') return { ok: true, duplicate: true };

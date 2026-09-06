@@ -115,6 +115,33 @@ test('a duplicate is reported, so it can suppress a second alert', () => {
   assert.match(RECORD_SRC, /duplicate: true/);
 });
 
+test('the tax is taken from the payment when the payer stamps it', () => {
+  /* The studio computes sales tax at checkout and used to fold it into one
+     opaque Stripe line item, so the money arrived with no way to separate
+     revenue from tax held for the state. It now stamps jt_tax on the session
+     metadata, which travels with the payment — the backend has no access to
+     the studio's database, so metadata is the only channel there is. */
+  assert.match(RECORD_SRC, /session\.metadata\?\.jt_tax/,
+    'read the tax the studio already worked out rather than guessing it');
+});
+
+test('an absent stamp stays NULL rather than becoming 0', () => {
+  assert.match(RECORD_SRC, /let taxPortion = null;/,
+    'a payment from before the stamp existed has an UNKNOWN tax portion, not a zero one');
+  assert.match(RECORD_SRC, /Number\.isFinite\(stamped\)/,
+    'a malformed stamp must fall back to unknown, never to NaN or 0');
+});
+
+test('a refund carries its tax back out', () => {
+  assert.match(RECORD_SRC, /amt < 0 && gross > 0 \? -Math\.abs\(stamped\) : stamped/,
+    'a negative row with a positive tax portion would leave tax behind on a refunded sale');
+});
+
+test('resolving the tax stamps when it was resolved', () => {
+  assert.match(src, /CASE WHEN \$16::numeric IS NULL THEN NULL ELSE NOW\(\) END/,
+    'resolved_at is what separates "settled at import" from "still to be worked out"');
+});
+
 test('the studio order number is kept when it sent one', () => {
   assert.match(RECORD_SRC, /session\.metadata\?\.order_id/,
     'order_id is the only identifier on a Payment Link balance payment');
