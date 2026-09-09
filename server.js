@@ -137,6 +137,22 @@ async function initDB() {
   for (const col of [
     'needed_by DATE',                 // when the customer needs it
     'tax NUMERIC(10,2) DEFAULT 0',
+    /* Whether tax was CHARGED, as a decision rather than something inferred
+       from the amount. The quote form inferred it — `Number(E.tax) > 0` — so a
+       taxable job that happened to price at zero read back as untaxed, and a
+       genuine exemption read back exactly like someone forgetting the box.
+
+       Deliberately nullable with no default. NULL means "written before this
+       column existed", where the amount is the only evidence there is and the
+       old inference is still the right answer; see quoteTaxable(). Backfilling
+       it to a guess would destroy the distinction this column exists to make. */
+    'taxable BOOLEAN',
+    /* The purchaser's Illinois exemption ("E") number. Illinois does not want
+       exempt sales omitted from the ST-1 — they are reported as receipts and
+       then DEDUCTED — and expects the seller to produce the number on audit.
+       So a zero with no reference here is an open question, not a settled
+       figure, and taxPositionByMonth counts those separately. */
+    'tax_exempt_ref TEXT',
     'total NUMERIC(10,2) DEFAULT 0',  // subtotal + tax (card fee is added at payment)
     'deposit NUMERIC(10,2) DEFAULT 0',
     /* An off-the-top discount on the whole job — the "I'll do it for X" that
@@ -524,9 +540,25 @@ async function taxPositionByMonth(limit = 24) {
        FROM unlinked_payments
       GROUP BY 1`).catch(() => ({ rows: [] }));
 
+  /* Receipts deliberately not taxed. Illinois files these as receipts and then
+     DEDUCTS them, so the return needs the figure — leaving an exempt sale out
+     understates gross receipts, which is its own kind of wrong answer.
+     `undocumented` is the subset with no exemption number on file: still a
+     deduction being claimed, but not one that would survive an audit. */
+  const { rows: exempt } = await pool.query(
+    `SELECT to_char(date_trunc('month', p.created_at), 'YYYY-MM') AS period,
+            COALESCE(SUM(p.amount),0) AS exempt_gross,
+            COUNT(*)                  AS exempt_payments,
+            COUNT(*) FILTER (WHERE NULLIF(btrim(q.tax_exempt_ref), '') IS NULL)
+                                      AS exempt_undocumented
+       FROM quote_payments p JOIN quotes q ON q.code = p.quote_code
+      WHERE COALESCE(q.taxable, q.tax > 0) = false
+      GROUP BY 1`).catch(() => ({ rows: [] }));
+
   const blank = (period) => ({
     period, collected: 0, gross: 0, payments: 0, remitted: 0, last_paid: null,
     unlinkedGross: 0, unlinkedPayments: 0, unlinkedTaxKnown: 0, unlinkedTaxUnknown: 0,
+    exemptGross: 0, exemptPayments: 0, exemptUndocumented: 0,
   });
 
   const byPeriod = {};
@@ -548,6 +580,12 @@ async function taxPositionByMonth(limit = 24) {
     byPeriod[r.period].unlinkedPayments = Number(r.payments);
     byPeriod[r.period].unlinkedTaxKnown = round2(Number(r.tax_known));
     byPeriod[r.period].unlinkedTaxUnknown = Number(r.tax_unknown);
+  }
+  for (const r of exempt) {
+    byPeriod[r.period] ||= blank(r.period);
+    byPeriod[r.period].exemptGross = round2(Number(r.exempt_gross));
+    byPeriod[r.period].exemptPayments = Number(r.exempt_payments);
+    byPeriod[r.period].exemptUndocumented = Number(r.exempt_undocumented);
   }
 
   const list = Object.values(byPeriod)
@@ -571,6 +609,11 @@ async function taxPositionByMonth(limit = 24) {
     undeterminedPayments: list.reduce((s, p) => s + p.unlinkedTaxUnknown, 0),
     undeterminedGross: round2(list.reduce(
       (s, p) => s + (p.unlinkedTaxUnknown > 0 ? p.unlinkedGross : 0), 0)),
+    /* The ST-1 deduction line, and how much of it has nothing behind it. An
+       exempt sale is DETERMINED — its tax really is zero — so this never feeds
+       `undetermined`; it is a separate question about evidence, not amount. */
+    exemptGross: round2(list.reduce((s, p) => s + p.exemptGross, 0)),
+    exemptUndocumented: list.reduce((s, p) => s + p.exemptUndocumented, 0),
   };
 }
 
@@ -3652,6 +3695,32 @@ function quoteTax(subtotal, taxable) {
   return taxable ? round2(Number(subtotal) * TAX_RATE) : 0;
 }
 
+/**
+ * Was this job taxed? One definition, because the answer is read by the quote
+ * form, the tax export and the ST-1 position, and those three disagreeing is
+ * how an exempt sale turns into a missing sale.
+ *
+ * `taxable` NULL means the quote predates the stored flag. There the amount is
+ * the only evidence, so fall back to the inference the form used to make —
+ * which is correct for every historical row and wrong only for the case that
+ * could not previously be expressed anyway.
+ */
+function quoteTaxable(q) {
+  if (q && q.taxable != null) return !!q.taxable;
+  return Number(q && q.tax) > 0;
+}
+
+/**
+ * An untaxed sale with nothing on file to justify it.
+ *
+ * Not the same as "not exempt": it is the sale whose zero nobody can defend on
+ * audit yet. Reported rather than corrected, because only the shop knows
+ * whether the certificate exists and simply was not typed in.
+ */
+function quoteExemptUndocumented(q) {
+  return !quoteTaxable(q) && !String((q && q.tax_exempt_ref) || '').trim();
+}
+
 /** Deposit: half, unless the job is small enough that it is simpler to take it
  *  all up front. Never more than the total. */
 function depositFor(total) {
@@ -5250,7 +5319,16 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
             </div></td>
             <td class="num" id="disc" style="color:#166534">—</td></tr>
           <tr><td class="muted"><label style="display:inline;margin:0;text-transform:none;letter-spacing:0;font-size:14px;font-weight:400">
-            <input type="checkbox" name="taxable" value="1" ${!existing || Number(E.tax) > 0 ? 'checked' : ''} style="width:auto;margin-right:6px" onchange="calc()"> Illinois sales tax</label></td>
+            <input type="checkbox" name="taxable" value="1" ${!existing || quoteTaxable(E) ? 'checked' : ''} style="width:auto;margin-right:6px" onchange="calc()"> Illinois sales tax</label>
+            <div id="exemptbox" style="display:none;margin-top:5px">
+              <input name="tax_exempt_ref" value="${val(E.tax_exempt_ref)}" maxlength="60"
+                     placeholder="Exemption E-number — who is exempt, and under what"
+                     style="width:100%;padding:5px 7px;font-size:13px">
+              <div class="muted" style="font-size:11px;margin-top:3px;text-transform:none;letter-spacing:0">
+                Illinois reports exempt sales as receipts, then deducts them. Without the
+                number this reads as untaxed rather than exempt.
+              </div>
+            </div></td>
             <td class="num" id="tax">$0.00</td></tr>
           <tr><td class="tot">Total</td><td class="num tot" id="tot">$0.00</td></tr>
           <tr><td class="muted" style="padding-top:6px">Deposit to start</td><td class="num" id="dep" style="padding-top:6px">$0.00</td></tr>
@@ -5726,7 +5804,12 @@ ${quotePricingSource()}
         disc = Math.round(disc*100)/100;
         var net = gross - disc;
 
-        var tax = document.querySelector('[name=taxable]').checked ? net*TAX : 0;
+        var taxable = document.querySelector('[name=taxable]').checked;
+        /* The reason is asked for exactly when there is a zero to explain, so an
+           exempt sale cannot be saved as a silently untaxed one. */
+        var exbox = document.getElementById('exemptbox');
+        if (exbox) exbox.style.display = taxable ? 'none' : '';
+        var tax = taxable ? net*TAX : 0;
         var tot = net + tax;
         var dep = tot <= 0 ? 0 : (tot < FULL_UNDER ? tot : tot*DEP);
         document.getElementById('sub').textContent = m2(sub);
@@ -6370,6 +6453,13 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
     const net = round2(gross - discount);
 
     const taxable = b.taxable === '1' || b.taxable === 'on' || b.taxable === true;
+    /* Kept only when the sale is actually untaxed. A reference sitting on a
+       taxable quote is a contradiction the export would have to interpret, and
+       it would survive un-ticking the box later as evidence for an exemption
+       nobody claimed. */
+    const exemptRef = taxable
+      ? null
+      : (String(one(b.tax_exempt_ref) || '').trim().slice(0, 60) || null);
     const tax = quoteTax(net, taxable);
     const total = round2(net + tax);
     const deposit = depositFor(total);
@@ -6389,12 +6479,13 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
         `UPDATE quotes SET name=$2, phone=$3, email=$4, items=$5, subtotal=$6, tax=$7,
                 total=$8, deposit=$9, notes=$10, valid_until=$11, needed_by=$12,
                 discount_kind=$13, discount_value=$14, discount_note=$15, rush_pct=$16,
+                taxable=$17, tax_exempt_ref=$18,
                 change_request=NULL, requested_items=NULL, revision=COALESCE(revision,1)+1,
                 status = CASE WHEN accepted_at IS NULL THEN 'sent' ELSE status END
           WHERE code=$1 RETURNING *`,
         [editing, name, phone, email, JSON.stringify(items), subtotal, tax, total, deposit,
          String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy,
-         discountKind, discountValue, discountNote || null, rushPct]));
+         discountKind, discountValue, discountNote || null, rushPct, taxable, exemptRef]));
       if (!rows.length) {
         return res.status(404).send(quotePage('Not found',
           `<div class="card"><div class="warn">That quote no longer exists.</div>
@@ -6413,11 +6504,11 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
            would sit on the board until the contact-matching fallback happened
            to catch it, which it only does when the details match exactly. */
         `INSERT INTO quotes (code,name,phone,email,items,subtotal,tax,total,deposit,notes,status,valid_until,needed_by,
-                             discount_kind,discount_value,discount_note,rush_pct,from_submission_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'sent',$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
+                             discount_kind,discount_value,discount_note,rush_pct,taxable,tax_exempt_ref,from_submission_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'sent',$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING *`,
         [code, name, phone, email, JSON.stringify(items), subtotal, tax, total, deposit,
          String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy,
-         discountKind, discountValue, discountNote || null, rushPct,
+         discountKind, discountValue, discountNote || null, rushPct, taxable, exemptRef,
          (Number.isFinite(parseInt(one(b.from_submission_id), 10))
            ? parseInt(one(b.from_submission_id), 10) : null)]));
     }
@@ -8928,7 +9019,8 @@ app.get('/tax.csv', requireAdmin, async (req, res) => {
        page — and the two are meant to be the same number filed twice. */
     const { rows } = await pool.query(
       `SELECT p.created_at, p.quote_code, q.name, q.subtotal, q.tax, q.total,
-              p.amount, p.method, p.kind, p.tax_portion
+              p.amount, p.method, p.kind, p.tax_portion,
+              q.taxable, q.tax_exempt_ref
          FROM quote_payments p JOIN quotes q ON q.code = p.quote_code
         ORDER BY p.created_at`);
 
@@ -8946,21 +9038,27 @@ app.get('/tax.csv', requireAdmin, async (req, res) => {
     const all = [
       ...rows.map((r) => ({
         at: r.created_at,
+        /* `exempt` is what the ST-1 deducts, so it has to be readable without
+           inferring it from a zero in the tax column — a zero says nothing
+           about whether the sale was exempt or simply not charged tax. */
         cells: [day(r.created_at), r.quote_code, r.name, r.subtotal, r.tax,
-                r.total, r.amount, r.method, r.kind, r.tax_portion, 'quote'],
+                r.total, r.amount, r.method, r.kind, r.tax_portion,
+                quoteTaxable(r) ? '' : 'exempt',
+                String(r.tax_exempt_ref || '').trim(), 'quote'],
       })),
       ...unlinked.map((u) => ({
         at: u.created_at,
         cells: [day(u.created_at),
                 u.order_ref ? `studio #${u.order_ref}` : (u.client_ref || u.stripe_pi || ''),
                 u.customer_name || '', '', '', '', u.amount, 'card', u.kind,
-                u.tax_portion == null ? '' : u.tax_portion, u.channel],
+                u.tax_portion == null ? '' : u.tax_portion, '', '', u.channel],
       })),
     ].sort((a, b) => new Date(a.at) - new Date(b.at));
 
     sendCsv(res, `jtees-sales-tax-${new Date().toISOString().slice(0, 10)}.csv`,
       ['date', 'quote', 'customer', 'job_subtotal', 'job_tax', 'job_total',
-       'payment', 'method', 'kind', 'tax_portion_of_payment', 'source'],
+       'payment', 'method', 'kind', 'tax_portion_of_payment',
+       'exempt', 'exempt_ref', 'source'],
       all.map((r) => r.cells));
   } catch (err) {
     console.error('tax csv failed:', err.message);

@@ -18,6 +18,7 @@
  *   node tools/backfill-unlinked.js                      dry run, last 2 years
  *   node tools/backfill-unlinked.js --since 2024-01-01   dry run from a date
  *   node tools/backfill-unlinked.js --since 2024-01-01 --apply    write it
+ *   node tools/backfill-unlinked.js --exclude pi_x,cs_y         skip these
  *
  * Against production:
  *   railway run --service junesteesnthings-backend \
@@ -47,6 +48,20 @@ const sinceArg = (args[args.indexOf('--since') + 1] || '').match(/^\d{4}-\d{2}-\
 const SINCE = sinceArg
   ? Math.floor(new Date(sinceArg + 'T00:00:00Z').getTime() / 1000)
   : Math.floor(Date.now() / 1000) - 60 * 60 * 24 * 730;
+
+/* Charges that are real in Stripe but are not receipts — a card test, a
+   reversal. Left in, each one lands on the ledger with an UNKNOWN tax portion
+   and the tax page reports its whole period as undetermined, so a 57-cent test
+   can hold a settled month open indefinitely.
+
+   Named explicitly rather than filtered by a minimum amount: a threshold would
+   silently swallow small REAL sales, and the whole point of this ledger is that
+   money is never dropped quietly. Excluded ids are counted in the output, so
+   the decision stays visible every run. */
+const excludeArg = args.includes('--exclude')
+  ? String(args[args.indexOf('--exclude') + 1] || '') : '';
+const EXCLUDE = new Set(excludeArg.split(',').map((x) => x.trim()).filter(Boolean));
+const excluded = (...ids) => ids.some((id) => id && EXCLUDE.has(id));
 
 const QUOTE_CODE_RE = /^[A-Z0-9]{6}$/;
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
@@ -114,11 +129,12 @@ async function* paginate(path, params) {
 
     const found = [];
     const stranded = [];
-    let sessions = 0, banked = 0, already = 0, unpaid = 0;
+    let sessions = 0, banked = 0, already = 0, unpaid = 0, skipped = 0;
 
     for await (const s of paginate('checkout/sessions', { 'created[gte]': String(SINCE) })) {
       sessions++;
       if (s.payment_status !== 'paid') { unpaid++; continue; }
+      if (excluded(s.id, s.payment_intent)) { skipped++; continue; }
 
       const code = String(s.client_reference_id || '').toUpperCase();
       // Actually on the quote ledger — the only thing that proves it banked.
@@ -147,6 +163,7 @@ async function* paginate(path, params) {
 
     console.log(`\n  ${sessions} checkout session(s): ${banked} banked to a quote, ` +
                 `${already} already recorded, ${unpaid} not paid, ` +
+                (skipped ? `${skipped} excluded, ` : '') +
                 `\x1b[1m${found.length} missing\x1b[0m`);
 
     if (stranded.length) {
@@ -227,11 +244,12 @@ async function* paginate(path, params) {
        happened to have a session. These are not written — a charge with no
        session carries no reference at all, so placing it is a human job. */
     const orphans = [];
-    let charges = 0;
+    let charges = 0, chargesSkipped = 0;
     for await (const c of paginate('charges', { 'created[gte]': String(SINCE) })) {
       charges++;
       if (c.status !== 'succeeded') continue;
       const pi = typeof c.payment_intent === 'string' ? c.payment_intent : null;
+      if (excluded(c.id, pi)) { chargesSkipped++; continue; }
       if (pi && seenPI.has(pi)) continue;
       const { rows } = await pool.query(
         `SELECT 1 FROM unlinked_payments WHERE stripe_pi = $1 LIMIT 1`, [pi]);
@@ -240,7 +258,8 @@ async function* paginate(path, params) {
       orphans.push(c);
     }
 
-    console.log(`\n  ${charges} charge(s) checked against both ledgers.`);
+    console.log(`\n  ${charges} charge(s) checked against both ledgers` +
+                (chargesSkipped ? `, ${chargesSkipped} excluded by --exclude` : '') + '.');
     if (orphans.length) {
       warn(`${orphans.length} succeeded charge(s) match NOTHING in either ledger:`);
       for (const c of orphans.slice(0, 25)) {
