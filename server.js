@@ -7297,7 +7297,11 @@ async function recordUnlinkedPayment(session, reason, opts = {}) {
     const stamped = Number(session.metadata?.jt_tax);
     if (Number.isFinite(stamped)) {
       const amt = round2(opts.amount ?? gross);
-      taxPortion = round2(amt < 0 && gross > 0 ? -Math.abs(stamped) : stamped);
+      /* `amt < 0` alone. The refund caller passes amount_total: 0 with
+         allowZero, so gross is always 0 there and the old `&& gross > 0`
+         made this unreachable — a stamped refund would have stored a
+         POSITIVE tax on a negative row. */
+      taxPortion = round2(amt < 0 ? -Math.abs(stamped) : stamped);
     }
   }
 
@@ -7597,7 +7601,19 @@ async function handleStripeEvent(event) {
            ledger. Saying nothing is not. Tell the shop, and hand over the
            Stripe receipt URL so a customer asking "where is my receipt" can be
            answered from the email rather than from the dashboard. */
-        if (!out.ok && !out.duplicate) {
+        /* Only money that belongs to NO QUOTE. `not paid` is a different
+           animal: bankStripeSession checks the quote code BEFORE the payment
+           status, so a delayed method on a real quote — Klarna, Cash App,
+           Affirm and Afterpay are all live on this account, and ACH is one
+           Dashboard toggle away — completes `unpaid`, lands here, and gets
+           written to the unlinked ledger. Moments later
+           async_payment_succeeded banks the same session to quote_payments and
+           the money is counted in both: taxPositionByMonth adds `gross` and
+           `unlinkedGross` separately, and /tax.csv emits two rows. If the
+           payment instead FAILS, the unlinked row records a receipt that never
+           arrived. Neither is money that has no quote, so neither belongs here. */
+        const noQuote = out.reason === 'no quote code' || out.reason === 'unknown quote';
+        if (!out.ok && !out.duplicate && noQuote) {
           /* Record first, alert second. The alert closed the silence; it did
              not close the hole. An email is not a record — the money still
              reached no table, no export and no tax position, and sales tax is
@@ -7640,7 +7656,8 @@ async function handleStripeEvent(event) {
              place or the books keep money that was returned. Recorded as a
              negative row, matching how the quote ledger expresses a refund. */
           const { rows: unl } = await pool.query(
-            `SELECT id, order_ref, client_ref, customer_email, customer_name
+            `SELECT id, order_ref, client_ref, customer_email, customer_name,
+                    amount, tax_portion
                FROM unlinked_payments WHERE stripe_pi = $1 AND amount > 0
               ORDER BY created_at LIMIT 1`, [pi]);
           if (!unl.length) {
@@ -7648,6 +7665,17 @@ async function handleStripeEvent(event) {
             break;
           }
           const u = unl[0];
+          /* Carry the tax back out in proportion, the way the quote ledger
+             does. Two things go wrong without it: the period keeps the
+             refunded tax as still owed, and the NULL on the negative row makes
+             COUNT(*) FILTER (tax_portion IS NULL) non-zero — so a fully
+             reconciled month flips to `undetermined` permanently the moment
+             any refund is issued. A tax that was never known stays NULL. */
+          const origAmt = round2(Number(u.amount) || 0);
+          const origTax = u.tax_portion == null ? null : round2(Number(u.tax_portion));
+          const backTax = (origTax === null || !(origAmt > 0))
+            ? null
+            : -round2(origTax * Math.min(refunded, origAmt) / origAmt);
           const back = await recordUnlinkedPayment(
             { id: null, payment_intent: pi, amount_total: 0,
               currency: obj.currency,
@@ -7656,6 +7684,7 @@ async function handleStripeEvent(event) {
               customer_details: { email: u.customer_email, name: u.customer_name } },
             'refund of an unlinked payment',
             { amount: -refunded, kind: 'refund', allowZero: true,
+              taxPortion: backTax,
               extRef: obj.id + ':' + obj.amount_refunded,
               note: `Refund of ${money(refunded)} via Stripe` });
           if (!back.duplicate) {

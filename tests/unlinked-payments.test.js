@@ -132,9 +132,14 @@ test('an absent stamp stays NULL rather than becoming 0', () => {
     'a malformed stamp must fall back to unknown, never to NaN or 0');
 });
 
-test('a refund carries its tax back out', () => {
-  assert.match(RECORD_SRC, /amt < 0 && gross > 0 \? -Math\.abs\(stamped\) : stamped/,
-    'a negative row with a positive tax portion would leave tax behind on a refunded sale');
+test('the refund sign flip does not depend on a gross it will never have', () => {
+  /* Was `amt < 0 && gross > 0`. The refund caller passes amount_total: 0 with
+     allowZero, so gross is always 0 there and the branch could not fire. The
+     assertion that used to live here matched that expression in the SOURCE, so
+     it passed while the behaviour was absent — which is why the replacement
+     below exercises the function instead. */
+  assert.doesNotMatch(RECORD_SRC, /amt < 0 && gross > 0/,
+    'the refund path never has a positive gross, so this can never be true');
 });
 
 test('resolving the tax stamps when it was resolved', () => {
@@ -145,6 +150,100 @@ test('resolving the tax stamps when it was resolved', () => {
 test('the studio order number is kept when it sent one', () => {
   assert.match(RECORD_SRC, /session\.metadata\?\.order_id/,
     'order_id is the only identifier on a Payment Link balance payment');
+});
+
+/* ── What must NOT reach the unlinked ledger ─────────────────────────────── */
+
+test('a delayed payment on a real quote is not banked twice', () => {
+  /* bankStripeSession tests the quote code BEFORE the payment status, so a
+     delayed method — Klarna, Cash App, Affirm, Afterpay are all enabled on
+     this account, ACH is one Dashboard toggle away — completes as `unpaid` and
+     returns { ok:false, reason:'not paid' }. Recording that here puts the money
+     on the unlinked ledger; async_payment_succeeded then banks the same session
+     to quote_payments, and taxPositionByMonth counts `gross` and
+     `unlinkedGross` separately. The same money, twice, on a filed return. */
+  assert.match(src,
+    /const noQuote = out\.reason === 'no quote code' \|\| out\.reason === 'unknown quote';/,
+    'only money belonging to no quote may be recorded as unlinked');
+  assert.match(src, /if \(!out\.ok && !out\.duplicate && noQuote\) \{/,
+    'the guard has to be on the recording branch itself');
+});
+
+/* ── Recording, for real ─────────────────────────────────────────────────── */
+
+/** Runs recordUnlinkedPayment against a fake pool and returns the INSERT args. */
+function captureInsert(session, reason, opts) {
+  let captured = null;
+  const sandbox = {
+    round2: (n) => Math.round((Number(n) || 0) * 100) / 100,
+    pool: {
+      query(sql, args) {
+        if (/INSERT INTO unlinked_payments/.test(sql)) { captured = args; }
+        return Promise.resolve({ rows: [] });
+      },
+    },
+  };
+  vm.createContext(sandbox);
+  const fn = vm.runInContext(
+    lift('recordUnlinkedPayment') + '\nrecordUnlinkedPayment', sandbox);
+  return fn(session, reason, opts).then(() => captured);
+}
+
+/* tax_portion is the last positional argument of the INSERT. */
+const TAX_ARG = 15;
+
+test('a refund carries its tax back out as a NEGATIVE portion', async () => {
+  /* Behavioural, not a grep. The previous version of this assertion matched
+     the expression in the source, so it passed while the branch it guarded was
+     unreachable — the refund caller passes amount_total: 0, and the old
+     condition also required gross > 0. */
+  const args = await captureInsert(
+    { id: null, payment_intent: 'pi_x', amount_total: 0, currency: 'usd',
+      metadata: { jt_tax: '2.77' } },
+    'refund of an unlinked payment',
+    { amount: -35.75, kind: 'refund', allowZero: true });
+  assert.strictEqual(args[TAX_ARG], -2.77,
+    'a refund that returns the money must return the tax with it');
+});
+
+test('a payment stamped with its tax records that tax as positive', async () => {
+  const args = await captureInsert(
+    { id: 'cs_1', payment_intent: 'pi_y', amount_total: 3575, currency: 'usd',
+      metadata: { order_id: '10', jt_tax: '2.77' } },
+    'no quote code', {});
+  assert.strictEqual(args[TAX_ARG], 2.77);
+});
+
+test('an unstamped payment stays UNKNOWN, never zero', async () => {
+  const args = await captureInsert(
+    { id: 'cs_2', payment_intent: 'pi_z', amount_total: 3575, currency: 'usd',
+      metadata: {} },
+    'no quote code', {});
+  assert.strictEqual(args[TAX_ARG], null,
+    '0 would assert no tax was collected, and that assertion gets filed');
+});
+
+test('an explicit tax portion overrides the stamp', async () => {
+  /* This is how the refund path passes a portion worked out from the ORIGINAL
+     row, which is the only place the number still exists. */
+  const args = await captureInsert(
+    { id: null, payment_intent: 'pi_w', amount_total: 0, currency: 'usd',
+      metadata: { jt_tax: '9.99' } },
+    'refund of an unlinked payment',
+    { amount: -10, kind: 'refund', allowZero: true, taxPortion: -1.25 });
+  assert.strictEqual(args[TAX_ARG], -1.25);
+});
+
+test('the refund path reads the original amount and tax to apportion from', () => {
+  /* Selecting only the identity columns left taxPortion NULL on every refund,
+     which both kept the refunded tax as owed AND marked the period
+     undetermined forever. */
+  assert.match(src, /SELECT id, order_ref, client_ref, customer_email, customer_name,\s*\n\s*amount, tax_portion/,
+    'the original row is the only place the tax portion still exists');
+  assert.match(src, /taxPortion: backTax/,
+    'the apportioned figure has to actually be passed');
+  assert.match(src, /-round2\(origTax \* Math\.min\(refunded, origAmt\) \/ origAmt\)/,
+    'a partial refund returns a proportional share, and never more than was taken');
 });
 
 /* ── The tax position ────────────────────────────────────────────────────── */

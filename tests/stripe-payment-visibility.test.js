@@ -70,8 +70,19 @@ test('a real quote code still passes', () => {
 
 const ALERT_SRC = extractFn('async function alertUnbankedPayment(');
 
+/* Anchored on the shortest stable text, not on the whole condition: the guard
+   has since gained `&& noQuote` (a delayed payment on a real quote must not be
+   recorded here, or async_payment_succeeded banks the same money twice), and an
+   anchor pinned to the old spelling reports a REWRITE as a missing branch while
+   the assertions that would name a real regression never run. */
+const UNBANKED = (() => {
+  const i = src.indexOf('!out.ok && !out.duplicate');
+  assert.notStrictEqual(i, -1, 'the unbanked branch should still exist');
+  return src.slice(i, i + 900);
+})();
+
 test('an unbanked payment raises an alert instead of only a log line', () => {
-  assert.match(src, /if \(!out\.ok && !out\.duplicate\) \{[\s\S]{0,900}?alertUnbankedPayment\(obj, out\.reason\)/,
+  assert.match(UNBANKED, /alertUnbankedPayment\(obj, out\.reason\)/,
     'the checkout.session.completed branch must alert when the payment did not bank');
 });
 
@@ -80,18 +91,24 @@ test('an unbanked payment raises an alert instead of only a log line', () => {
    and sales tax is filed on receipts, so a return built from this data was
    understated by however much the studio took. */
 test('an unbanked payment is RECORDED, not just announced', () => {
-  assert.match(src, /if \(!out\.ok && !out\.duplicate\) \{[\s\S]{0,900}?await recordUnlinkedPayment\(obj, out\.reason\)/,
+  assert.match(UNBANKED, /await recordUnlinkedPayment\(obj, out\.reason\)/,
     'money that arrived must land in a table, not only in an inbox');
 });
 
 test('it is recorded before it is alerted', () => {
-  const branch = /if \(!out\.ok && !out\.duplicate\) \{([\s\S]{0,900}?)\n        \}/.exec(src);
-  assert.ok(branch, 'the unbanked branch should still be a block');
-  const record = branch[1].indexOf('recordUnlinkedPayment');
-  const alert  = branch[1].indexOf('alertUnbankedPayment');
+  const record = UNBANKED.indexOf('recordUnlinkedPayment');
+  const alert  = UNBANKED.indexOf('alertUnbankedPayment');
   assert.ok(record !== -1 && alert !== -1, 'both the record and the alert must be present');
   assert.ok(record < alert,
     'record first: a swallowed alert costs a notification, a lost write costs a tax return');
+});
+
+test('only money with no quote reaches the unlinked ledger', () => {
+  /* `not paid` is a delayed method on a REAL quote — the session completes
+     before the funds clear, and async_payment_succeeded banks it moments later.
+     Recording it here as well counts the same money in both ledgers. */
+  assert.match(UNBANKED, /noQuote/,
+    'the guard must exclude reasons that are not "this money has no quote"');
 });
 
 test('the alert names the amount and the reference it arrived under', () => {
