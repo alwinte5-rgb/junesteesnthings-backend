@@ -238,6 +238,62 @@ test('the export says exempt rather than leaving a bare zero', () => {
     'the query has to actually select the columns the rows print');
 });
 
+/* ── Documenting a sale that has already happened ────────────────────────── */
+
+const EXEMPT_ROUTE = (() => {
+  const i = src.indexOf("app.post('/quotes/:code/exemption'");
+  assert.notStrictEqual(i, -1, 'an exemption must be recordable after the sale');
+  return src.slice(i, i + 2200);
+})();
+
+test('an exemption can be recorded without re-pricing the job', () => {
+  /* The quote form can set the reference, but only by re-saving the whole
+     quote: that re-prices from the current catalogue, bumps `revision`, and
+     resets an unaccepted quote to 'sent'. On a quote already PAID it could move
+     a total the customer has settled against — all because somebody typed in a
+     certificate number. */
+  assert.match(EXEMPT_ROUTE, /requireAdmin/);
+  assert.match(EXEMPT_ROUTE, /UPDATE quotes\s*\n\s*SET tax_exempt_ref = \$2/,
+    'it writes the reference, not the quote');
+  assert.doesNotMatch(EXEMPT_ROUTE, /subtotal|items|quoteTotals|revision/,
+    'recording evidence must not touch the money');
+});
+
+test('recording the number also records the decision', () => {
+  /* Leaving `taxable` NULL would keep the row relying on the "tax is zero so
+     it must be untaxed" inference that the column exists to replace. */
+  assert.match(EXEMPT_ROUTE,
+    /taxable = CASE WHEN \$2::text IS NULL THEN taxable ELSE false END/,
+    'an E number IS the statement that this sale was exempt');
+});
+
+test('an exemption number is refused on a sale that charged tax', () => {
+  /* Otherwise the export has to interpret a contradiction, and the reference
+     survives to look like evidence for an exemption nobody claimed. */
+  assert.match(EXEMPT_ROUTE, /if \(ref && !quoteExemptable\(rows\[0\]\)\)/,
+    'a taxed sale cannot carry an exemption');
+  assert.strictEqual(run('quoteExemptable', { taxable: true, tax: 10 }, ['quoteTaxable']), false);
+  assert.strictEqual(run('quoteExemptable', { taxable: false, tax: 0 }, ['quoteTaxable']), true);
+  assert.strictEqual(run('quoteExemptable', { tax: 0 }, ['quoteTaxable']), true,
+    'a historical untaxed quote can still be documented');
+});
+
+test('clearing the number leaves the taxable decision alone', () => {
+  /* Removing evidence is not the same as deciding the sale was taxable. That
+     is a pricing change and belongs in the quote form. */
+  assert.match(EXEMPT_ROUTE, /WHEN \$2::text IS NULL THEN taxable/,
+    'a blank must not silently re-tax the sale');
+});
+
+test('the books page lists the sales that need a number', () => {
+  assert.match(src, /COALESCE\(q\.taxable, q\.tax > 0\) = false\s*\n\s*AND COALESCE\(q\.subtotal, 0\) > 0\s*\n\s*AND NULLIF\(btrim\(q\.tax_exempt_ref\), ''\) IS NULL/,
+    'the undocumented sales are the ones worth showing');
+  assert.match(src, /AND q\.cancelled_at IS NULL/,
+    'a cancelled quote is not a deduction being claimed');
+  assert.match(src, /action="\/quotes\/\$\{escEmail\(String\(q\.code\)\)\}\/exemption"/,
+    'each row needs a way to record it, or the route is unreachable');
+});
+
 /* ── The tax position ────────────────────────────────────────────────────── */
 
 function runTaxPosition({ collected = [], remitted = [], unlinked = [], exempt = [] }) {

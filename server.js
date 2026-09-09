@@ -3725,6 +3725,11 @@ function quoteExemptUndocumented(q) {
   return !quoteTaxable(q) && !String((q && q.tax_exempt_ref) || '').trim();
 }
 
+/** Can this sale carry an exemption number? Only one that charged no tax. */
+function quoteExemptable(q) {
+  return !quoteTaxable(q);
+}
+
 /** Deposit: half, unless the job is small enough that it is simpler to take it
  *  all up front. Never more than the total. */
 function depositFor(total) {
@@ -8361,6 +8366,20 @@ app.get('/books', requireAdmin, async (req, res) => {
         WHERE tax_portion IS NULL
         ORDER BY created_at LIMIT 50`).catch(() => ({ rows: [] }));
 
+    /* Sales that charged no tax with nothing on file saying why. Illinois
+       deducts these on the return and expects the purchaser's number to be
+       producible, so each is a deduction currently claimed without evidence. */
+    const { rows: undocumented } = await pool.query(
+      `SELECT code, name, subtotal, created_at,
+              COALESCE((SELECT SUM(amount) FROM quote_payments p
+                         WHERE p.quote_code = q.code), 0) AS paid
+         FROM quotes q
+        WHERE COALESCE(q.taxable, q.tax > 0) = false
+          AND COALESCE(q.subtotal, 0) > 0
+          AND NULLIF(btrim(q.tax_exempt_ref), '') IS NULL
+          AND q.cancelled_at IS NULL
+        ORDER BY q.created_at DESC LIMIT 50`).catch(() => ({ rows: [] }));
+
     /* Overheads by month, and the recent list for the register below. */
     const { rows: expMonths } = await pool.query(
       `SELECT to_char(date_trunc('month', spent_on), 'YYYY-MM') AS period,
@@ -8657,7 +8676,7 @@ app.get('/books', requireAdmin, async (req, res) => {
           ${pos.exemptUndocumented > 0 ? `<div style="margin-top:${pos.undeterminedPayments > 0 ? '6px' : '0'}">
             <strong>${pos.exemptUndocumented} untaxed sale(s)</strong> have no exemption number on
             file${pos.exemptGross > 0 ? `, against ${money(pos.exemptGross)} of receipts being deducted` : ''}.
-            Illinois expects the purchaser's E number to be producible on audit.</div>` : ''}
+            <a href="#exemptions" style="color:#78350f">Record them below</a>.</div>` : ''}
         </div>` : ''}
         <div class="muted" style="font-size:11px;margin-top:10px">
           Held right now spans every period, not just ${year} — it is what should be in the bank today.
@@ -8701,6 +8720,45 @@ app.get('/books', requireAdmin, async (req, res) => {
                        placeholder="unknown"
                        style="width:96px;padding:5px 7px;font-size:13px">
                 <button class="btn" style="padding:5px 12px;font-size:13px">Settle</button>
+              </form>
+            </td>
+          </tr>`).join('')}
+        </table>
+      </div>` : ''}
+
+      ${undocumented.length ? `
+      <div class="card" id="exemptions" style="margin-top:14px">
+        <h2 style="margin:0 0 4px;font-size:16px">Untaxed sales with no exemption number</h2>
+        <p class="muted" style="font-size:12px;margin:0 0 10px">
+          Illinois reports these as receipts and then deducts them, and expects the purchaser's
+          exemption (&ldquo;E&rdquo;) number to be producible on audit. Without one, a sale here is
+          indistinguishable from tax somebody forgot to charge. Recording a number does not
+          re-price the job.
+        </p>
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <tr style="text-align:left;color:#6b7280;font-size:11px;text-transform:uppercase">
+            <th style="padding:6px 4px">Quote</th>
+            <th style="padding:6px 4px">Customer</th>
+            <th class="num" style="padding:6px 4px">Sale</th>
+            <th class="num" style="padding:6px 4px">Paid</th>
+            <th style="padding:6px 4px">Exemption number</th>
+          </tr>
+          ${undocumented.map((q) => `
+          <tr style="border-top:1px solid #e5e7eb">
+            <td style="padding:7px 4px;white-space:nowrap">
+              <a href="/q/${escEmail(String(q.code))}" style="color:#1848B8">${escEmail(String(q.code))}</a>
+              <div class="muted" style="font-size:11px">${new Date(q.created_at).toISOString().slice(0, 10)}</div>
+            </td>
+            <td style="padding:7px 4px">${escEmail(String(q.name || ''))}</td>
+            <td class="num" style="padding:7px 4px;font-variant-numeric:tabular-nums">${money(q.subtotal)}</td>
+            <td class="num" style="padding:7px 4px;font-variant-numeric:tabular-nums">${money(q.paid)}</td>
+            <td style="padding:7px 4px">
+              <form method="post" action="/quotes/${escEmail(String(q.code))}/exemption"
+                    style="display:flex;gap:6px;margin:0">
+                <input type="hidden" name="back" value="/books?year=${year}#exemptions">
+                <input name="tax_exempt_ref" maxlength="60" placeholder="E-number"
+                       style="width:150px;padding:5px 7px;font-size:13px">
+                <button class="btn" style="padding:5px 12px;font-size:13px">Record</button>
               </form>
             </td>
           </tr>`).join('')}
@@ -12941,6 +12999,53 @@ app.post('/tax/remit', requireAdmin, async (req, res) => {
     console.error('tax remit failed:', err.message);
   }
   res.redirect('/quotes');
+});
+
+/* Put an exemption number on a sale that was already made.
+ *
+ * The quote form can set this, but only by re-saving the whole quote — which
+ * re-prices the job from the current catalogue, bumps `revision`, and resets an
+ * unaccepted quote to 'sent'. None of that should happen because somebody typed
+ * in a certificate number, and least of all on a quote that has already been
+ * paid, where re-pricing could move a total the customer has settled against.
+ *
+ * So this writes the one column, and pins `taxable` to false while it does:
+ * recording the number IS the decision that the sale was exempt, and leaving
+ * the flag NULL would keep the row relying on the "tax is zero so it must be
+ * untaxed" inference it exists to replace.
+ */
+app.post('/quotes/:code/exemption', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  const b = req.body || {};
+  const back = String(b.back || '/books');
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/books');
+
+  const ref = String(b.tax_exempt_ref ?? '').trim().slice(0, 60) || null;
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT taxable, tax FROM quotes WHERE code = $1`, [code]);
+    if (!rows.length) return res.redirect(back);
+
+    /* An exemption number on a sale that CHARGED tax is a contradiction, and
+       one the export would then have to interpret. Refuse it rather than store
+       it — the fix is to un-tick the tax on the quote first, which is a pricing
+       decision and belongs in the quote form. */
+    if (ref && !quoteExemptable(rows[0])) {
+      console.warn(`exemption ref rejected for ${code}: the quote charged tax`);
+      return res.redirect(back);
+    }
+
+    await pool.query(
+      `UPDATE quotes
+          SET tax_exempt_ref = $2,
+              taxable = CASE WHEN $2::text IS NULL THEN taxable ELSE false END
+        WHERE code = $1`, [code, ref]);
+    console.log(`quote ${code} exemption ${ref ? 'recorded' : 'cleared'}`);
+  } catch (err) {
+    console.error('exemption update failed:', err.message);
+  }
+  res.redirect(back);
 });
 
 /* Settle the tax portion of a payment that arrived outside the quote flow.
