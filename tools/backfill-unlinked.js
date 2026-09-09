@@ -52,6 +52,11 @@ const QUOTE_CODE_RE = /^[A-Z0-9]{6}$/;
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const money = (n) => '$' + round2(n).toFixed(2);
 const day = (unix) => new Date(unix * 1000).toISOString().slice(0, 10);
+/** The sales tax the payer stamped on the session, or null for unknown. */
+const stampedTax = (s) => {
+  const n = Number(s.metadata?.jt_tax);
+  return Number.isFinite(n) ? round2(n) : null;
+};
 
 const ok = (m) => console.log('  \x1b[32m✓\x1b[0m ' + m);
 const bad = (m) => console.log('  \x1b[31m✗\x1b[0m ' + m);
@@ -108,6 +113,7 @@ async function* paginate(path, params) {
        `${seenUnlinked.size} on the unlinked ledger`);
 
     const found = [];
+    const stranded = [];
     let sessions = 0, banked = 0, already = 0, unpaid = 0;
 
     for await (const s of paginate('checkout/sessions', { 'created[gte]': String(SINCE) })) {
@@ -115,9 +121,26 @@ async function* paginate(path, params) {
       if (s.payment_status !== 'paid') { unpaid++; continue; }
 
       const code = String(s.client_reference_id || '').toUpperCase();
-      // Banked against a quote already, by code or by having been seen.
-      if (QUOTE_CODE_RE.test(code) || seenQuote.has(s.id)) { banked++; continue; }
+      // Actually on the quote ledger — the only thing that proves it banked.
+      if (seenQuote.has(s.id)) { banked++; continue; }
       if (seenUnlinked.has(s.id)) { already++; continue; }
+
+      /* A six-character reference is NOT proof of banking. bankStripeSession
+         also declines with 'unknown quote' when no row matches the code, and
+         treating the code alone as banked made those sessions invisible to
+         this pass AND to the orphan report below — the exact blind spot this
+         tool exists to close. So ask which it is. */
+      if (QUOTE_CODE_RE.test(code)) {
+        const { rows: q } = await pool.query('SELECT 1 FROM quotes WHERE code=$1', [code]);
+        if (q.length) {
+          /* The quote is real and the money is not on its ledger. That is not
+             unlinked money — it belongs to a quote — so it is reported rather
+             than written, because banking it here would bypass the fee split
+             and the paid_amount rollup that bankStripeSession does. */
+          stranded.push(s);
+          continue;
+        }
+      }
 
       found.push(s);
     }
@@ -125,6 +148,15 @@ async function* paginate(path, params) {
     console.log(`\n  ${sessions} checkout session(s): ${banked} banked to a quote, ` +
                 `${already} already recorded, ${unpaid} not paid, ` +
                 `\x1b[1m${found.length} missing\x1b[0m`);
+
+    if (stranded.length) {
+      console.log(`\n  \x1b[31m${stranded.length} session(s) name a REAL quote but are on no ` +
+                  `ledger.\x1b[0m Bank these from the quote page, not from here:`);
+      for (const s of stranded) {
+        console.log(`    ${day(s.created)}  ${money(round2((s.amount_total || 0) / 100)).padStart(10)}` +
+                    `  quote ${s.client_reference_id}  ${s.id}`);
+      }
+    }
 
     if (found.length) {
       console.log('');
@@ -155,16 +187,27 @@ async function* paginate(path, params) {
             `INSERT INTO unlinked_payments
                (amount, currency, channel, order_ref, client_ref, kind, source,
                 stripe_session, stripe_pi, ext_ref, customer_email, customer_name,
-                reason, note, created_at)
-             VALUES ($1,$2,$3,$4,$5,'payment','backfill',$6,$7,$8,$9,$10,$11,$12,$13)`,
+                reason, note, created_at, tax_portion, resolved_at)
+             VALUES ($1,$2,$3,$4,$5,'payment','backfill',$6,$7,$8,$9,$10,$11,$12,$13,
+                     $14, CASE WHEN $14::numeric IS NULL THEN NULL ELSE NOW() END)`,
             [round2((s.amount_total || 0) / 100),
              String(s.currency || 'usd').toLowerCase(),
              orderRef ? 'studio' : 'unknown', orderRef,
              String(s.client_reference_id || '').trim() || null,
              s.id, pi, s.id,
              s.customer_details?.email || null, s.customer_details?.name || null,
-             'no quote code', 'Recovered from Stripe by tools/backfill-unlinked.js',
-             new Date(s.created * 1000).toISOString()]);
+             /* Say which it actually was. 'no quote code' on a session carrying
+                a six-character reference sends whoever reads the ledger looking
+                for the wrong thing. */
+             QUOTE_CODE_RE.test(String(s.client_reference_id || '').toUpperCase())
+               ? 'unknown quote' : 'no quote code',
+             'Recovered from Stripe by tools/backfill-unlinked.js',
+             new Date(s.created * 1000).toISOString(),
+             /* The studio stamps jt_tax on the session metadata. Importing it as
+                unknown discards a figure the payer already gave us and holds the
+                period open for nothing — recordUnlinkedPayment reads it on the
+                live path, and a recovered payment is the same money. */
+             stampedTax(s)]);
           written++;
         } catch (err) {
           if (err.code === '23505') { dupes++; continue; }

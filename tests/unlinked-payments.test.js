@@ -27,6 +27,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+const backfillSrc = fs.readFileSync(
+  path.join(__dirname, '..', 'tools', 'backfill-unlinked.js'), 'utf8');
 
 /* Keeps the `async` keyword: these are database functions, and a lifted body
    full of `await` will not parse without it. */
@@ -244,6 +246,103 @@ test('the refund path reads the original amount and tax to apportion from', () =
     'the apportioned figure has to actually be passed');
   assert.match(src, /-round2\(origTax \* Math\.min\(refunded, origAmt\) \/ origAmt\)/,
     'a partial refund returns a proportional share, and never more than was taken');
+});
+
+/* ── Settling an unknown tax portion by hand ─────────────────────────────── */
+
+const SETTLE = (() => {
+  const i = src.indexOf("app.post('/unlinked/:id/tax'");
+  assert.notStrictEqual(i, -1, 'there must be a way to establish a tax portion');
+  return src.slice(i, i + 2600);
+})();
+
+test('an unknown tax portion can actually be established', () => {
+  /* Before this route, tax_portion had exactly one writer — the jt_tax stamp —
+     so anything arriving without one was unknown forever. resolved_at was
+     documented as "set once the tax portion has been established" with nothing
+     able to establish it, which made undeterminedPayments permanently non-zero.
+     A warning that is always on is a warning nobody reads. */
+  assert.match(SETTLE, /requireAdmin/, 'the books are not public');
+  assert.match(SETTLE, /UPDATE unlinked_payments[\s\S]{0,200}SET tax_portion = \$2/);
+  assert.match(SETTLE, /resolved_at = CASE WHEN \$2::numeric IS NULL THEN NULL ELSE NOW\(\) END/,
+    'settling it is what stamps when it was settled');
+});
+
+test('blank means UNKNOWN and 0 means no tax, and they are different', () => {
+  /* The whole ledger is built on that distinction. A number input that treats
+     an empty box as 0 would quietly assert "no tax was collected" on every row
+     somebody tabbed past. */
+  assert.match(SETTLE, /const raw = String\(b\.tax \?\? ''\)\.trim\(\);/);
+  assert.match(SETTLE, /let tax = null;[\s\S]{0,120}if \(raw !== ''\)/,
+    'an empty box has to put the row back to unknown, not to zero');
+});
+
+test('the tax cannot exceed the payment or contradict its sign', () => {
+  /* A tax larger than the receipt, or a positive tax on a refund, produces a
+     period whose tax exceeds its receipts — a number that survives all the way
+     onto a filed return. */
+  assert.match(SETTLE, /if \(amount < 0 && tax > 0\) tax = -tax;/,
+    'a refund carries its tax back OUT');
+  assert.match(SETTLE, /if \(Math\.abs\(tax\) > Math\.abs\(amount\)\)/,
+    'tax cannot be more than the money it came in');
+});
+
+test('the books page offers the rows that are holding a period open', () => {
+  assert.match(src, /WHERE tax_portion IS NULL\s*\n\s*ORDER BY created_at LIMIT 50/,
+    'the unsettled receipts are the ones worth showing');
+  assert.match(src, /action="\/unlinked\/\$\{u\.id\}\/tax"/,
+    'each row needs a way to settle it, or the route is unreachable');
+});
+
+/* ── The ST-1 reminder ───────────────────────────────────────────────────── */
+
+test('a period with only undetermined receipts still sends a reminder', () => {
+  /* `if (outstanding <= 0) return` skipped exactly the month that most needed
+     the email: nothing provably owed, and receipts nobody has worked the tax
+     out on. */
+  assert.match(src, /if \(outstanding <= 0 && !undetermined\) return;/,
+    'silence on an unfileable month is the worst possible answer');
+  assert.match(src, /cannot be filed yet — \$\{undetermined\} receipt\(s\)/,
+    'the subject has to say why, since there is no amount to lead with');
+});
+
+test('the reminder\'s three figures add up', () => {
+  /* `outstanding` is collected + unlinkedTaxKnown − remitted, but the table
+     printed only `collected` and `remitted`, so once any unlinked tax was
+     settled the email disagreed with itself — on the one document a return is
+     filed from. */
+  assert.match(src, /row\.unlinkedTaxKnown > 0 \? `<tr><td[^`]*Collected outside quotes/,
+    'settled unlinked tax needs its own line or the arithmetic is wrong');
+});
+
+/* ── Recovering history ──────────────────────────────────────────────────── */
+
+test('the backfill keeps tax the payer already stamped', () => {
+  assert.match(backfillSrc, /const stampedTax = \(s\) => \{/,
+    'a recovered payment is the same money as a live one');
+  assert.match(backfillSrc, /stampedTax\(s\)\]\);/,
+    'the stamped figure has to reach the INSERT');
+  assert.match(backfillSrc, /tax_portion, resolved_at\)/,
+    'importing everything as unknown holds periods open for nothing');
+});
+
+test('a six-character reference is not treated as proof of banking', () => {
+  /* bankStripeSession also declines with 'unknown quote'. Counting the code
+     alone as banked hid those sessions from this pass and from the orphan
+     report — the exact blind spot the tool exists to close. */
+  assert.doesNotMatch(backfillSrc, /QUOTE_CODE_RE\.test\(code\) \|\| seenQuote\.has\(s\.id\)/,
+    'only a row on the quote ledger proves a session banked');
+  assert.match(backfillSrc, /if \(seenQuote\.has\(s\.id\)\) \{ banked\+\+; continue; \}/);
+  assert.match(backfillSrc, /SELECT 1 FROM quotes WHERE code=\$1/,
+    'a real quote and an unknown one are different situations');
+});
+
+test('money belonging to a real quote is reported, never written as unlinked', () => {
+  /* Banking it here would bypass the net/fee split and the paid_amount rollup
+     that bankStripeSession does, so it is named for a human instead. */
+  assert.match(backfillSrc, /stranded\.push\(s\)/);
+  assert.match(backfillSrc, /name a REAL quote but are on no /,
+    'the operator has to be told, not left to notice');
 });
 
 /* ── The tax position ────────────────────────────────────────────────────── */

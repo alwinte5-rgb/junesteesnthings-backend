@@ -8256,6 +8256,16 @@ app.get('/books', requireAdmin, async (req, res) => {
         WHERE EXTRACT(YEAR FROM paid_at) = $1`, [year]);
     const pos = await taxPositionByMonth(60);
 
+    /* Receipts still carrying an unknown tax portion, oldest first — the ones
+       holding a period open. Guarded like every other read of this table so a
+       deploy racing the migration loses one card rather than the whole page. */
+    const { rows: unsettled } = await pool.query(
+      `SELECT id, created_at, amount, channel, order_ref, client_ref,
+              stripe_pi, customer_name, reason, kind
+         FROM unlinked_payments
+        WHERE tax_portion IS NULL
+        ORDER BY created_at LIMIT 50`).catch(() => ({ rows: [] }));
+
     /* Overheads by month, and the recent list for the register below. */
     const { rows: expMonths } = await pool.query(
       `SELECT to_char(date_trunc('month', spent_on), 'YYYY-MM') AS period,
@@ -8547,7 +8557,48 @@ app.get('/books', requireAdmin, async (req, res) => {
           <a href="/tax.csv" style="color:#1848B8">Download the payment-level detail</a>,
           or <a href="/exports" style="color:#1848B8">keep a month's records</a>.
         </div>
-      </div>`, 'money'));
+      </div>
+
+      ${unsettled.length ? `
+      <div class="card" style="margin-top:14px">
+        <h2 style="margin:0 0 4px;font-size:16px">Receipts with the tax still to work out</h2>
+        <p class="muted" style="font-size:12px;margin:0 0 10px">
+          Money that arrived outside a quote, so this side never learned what tax it carried.
+          Every period holding one of these reports a <b>floor, not a total</b> — the figures above
+          are incomplete until they are settled. Leave the box empty to put one back to unknown;
+          type <b>0</b> to say it genuinely carried no tax. Those are different answers.
+        </p>
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <tr style="text-align:left;color:#6b7280;font-size:11px;text-transform:uppercase">
+            <th style="padding:6px 4px">Arrived</th>
+            <th style="padding:6px 4px">What</th>
+            <th class="num" style="padding:6px 4px">Payment</th>
+            <th style="padding:6px 4px">Sales tax in it</th>
+          </tr>
+          ${unsettled.map((u) => `
+          <tr style="border-top:1px solid #e5e7eb">
+            <td style="padding:7px 4px;white-space:nowrap">${new Date(u.created_at).toISOString().slice(0, 10)}</td>
+            <td style="padding:7px 4px">
+              ${u.order_ref ? `design studio order #${escEmail(String(u.order_ref))}`
+                : u.client_ref ? escEmail(String(u.client_ref))
+                : `<span class="muted">${escEmail(String(u.stripe_pi || 'unknown'))}</span>`}
+              ${u.customer_name ? `<span class="muted"> — ${escEmail(String(u.customer_name))}</span>` : ''}
+              ${u.kind === 'refund' ? '<span style="color:#b45309"> (refund)</span>' : ''}
+              <div class="muted" style="font-size:11px">${escEmail(String(u.reason || ''))}</div>
+            </td>
+            <td class="num" style="padding:7px 4px;font-variant-numeric:tabular-nums">${money(u.amount)}</td>
+            <td style="padding:7px 4px">
+              <form method="post" action="/unlinked/${u.id}/tax" style="display:flex;gap:6px;margin:0">
+                <input type="hidden" name="back" value="/books?year=${year}">
+                <input name="tax" type="number" step="0.01" inputmode="decimal"
+                       placeholder="unknown"
+                       style="width:96px;padding:5px 7px;font-size:13px">
+                <button class="btn" style="padding:5px 12px;font-size:13px">Settle</button>
+              </form>
+            </td>
+          </tr>`).join('')}
+        </table>
+      </div>` : ''}`, 'money'));
   } catch (err) {
     console.error('books failed:', err.message);
     res.status(500).send('error');
@@ -12589,7 +12640,12 @@ async function taxMonthlyCheck() {
     const pos = await taxPositionByMonth(36);
     const row = pos.months.find((m) => m.period === period);
     const outstanding = row ? row.outstanding : 0;
-    if (outstanding <= 0) return;    // nothing collected, or already remitted
+    /* Receipts in this period whose tax nobody has worked out. A month can owe
+       nothing on paper and still be unfileable, and that is precisely the month
+       that needs the email — staying silent because `outstanding` is zero hides
+       the one case where the figure is not a total but a floor. */
+    const undetermined = row ? row.unlinkedTaxUnknown : 0;
+    if (outstanding <= 0 && !undetermined) return;  // nothing collected, or already remitted
 
     await pool.query(`CREATE TABLE IF NOT EXISTS jt_tax_reminders (
       period TEXT NOT NULL, kind TEXT NOT NULL, sent_at TIMESTAMPTZ DEFAULT NOW(),
@@ -12599,11 +12655,13 @@ async function taxMonthlyCheck() {
        ON CONFLICT DO NOTHING RETURNING period`, [period, kind]);
     if (!claim.rowCount) return;
 
-    const subject = kind === 'close'
-      ? `🧾 ${periodLabel(period)} closed — set aside ${money(outstanding)} sales tax`
-      : kind === 'due-soon'
-        ? `🧾 ${money(outstanding)} sales tax due the 20th (${periodLabel(period)})`
-        : `⏰ Sales tax due TOMORROW — ${money(outstanding)} for ${periodLabel(period)}`;
+    const subject = (outstanding <= 0 && undetermined)
+      ? `⚠️ ${periodLabel(period)} cannot be filed yet — ${undetermined} receipt(s) with tax unworked`
+      : kind === 'close'
+        ? `🧾 ${periodLabel(period)} closed — set aside ${money(outstanding)} sales tax`
+        : kind === 'due-soon'
+          ? `🧾 ${money(outstanding)} sales tax due the 20th (${periodLabel(period)})`
+          : `⏰ Sales tax due TOMORROW — ${money(outstanding)} for ${periodLabel(period)}`;
 
     const others = pos.months.filter((m) => m.period !== period && m.outstanding > 0);
 
@@ -12615,13 +12673,24 @@ async function taxMonthlyCheck() {
            : '<b style="color:#b91c1c">Due tomorrow.</b> A late ST-1 costs a penalty plus interest.'}</p>
 
        <table style="width:100%;border-collapse:collapse;font-size:14px">
-         <tr><td style="padding:8px 0;color:#6b7280">Collected in ${periodLabel(period)}</td>
+         <tr><td style="padding:8px 0;color:#6b7280">Collected on quotes</td>
              <td style="padding:8px 0;text-align:right;font-variant-numeric:tabular-nums">${money(row.collected)}</td></tr>
+         ${/* Its own line, or the three figures below do not add up: `outstanding`
+              has included settled unlinked tax since the studio ledger existed,
+              while this table only ever showed the quote ledger. */
+           row.unlinkedTaxKnown > 0 ? `<tr><td style="padding:0 0 8px;color:#6b7280">Collected outside quotes</td>
+             <td style="padding:0 0 8px;text-align:right;font-variant-numeric:tabular-nums">${money(row.unlinkedTaxKnown)}</td></tr>` : ''}
          ${row.remitted > 0 ? `<tr><td style="padding:0 0 8px;color:#6b7280">Already remitted</td>
              <td style="padding:0 0 8px;text-align:right;font-variant-numeric:tabular-nums">−${money(row.remitted)}</td></tr>` : ''}
          <tr><td style="padding:10px 0;border-top:2px solid #111827;font-weight:700">To remit</td>
              <td style="padding:10px 0;border-top:2px solid #111827;text-align:right;font-weight:700;font-size:20px;font-variant-numeric:tabular-nums">${money(outstanding)}</td></tr>
        </table>
+
+       ${undetermined ? `<p style="background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;
+            padding:10px 12px;color:#78350f;font-size:13px;margin-top:14px">
+         <b>${undetermined} receipt(s) totalling ${money(row.unlinkedGross)}</b> have no tax portion
+         worked out, so the figure above is a floor rather than a total.
+         <a href="${PUBLIC_BASE_URL}/books" style="color:#78350f">Settle them</a> before filing.</p>` : ''}
 
        ${others.length ? `<p style="color:#b45309;font-size:13px;margin-top:14px">
          <b>Also unpaid:</b> ${others.map((m) => `${periodLabel(m.period)} ${money(m.outstanding)}`).join(' · ')}<br>
@@ -12748,6 +12817,69 @@ app.post('/tax/remit', requireAdmin, async (req, res) => {
     console.error('tax remit failed:', err.message);
   }
   res.redirect('/quotes');
+});
+
+/* Settle the tax portion of a payment that arrived outside the quote flow.
+ *
+ * Until this existed, `tax_portion` had exactly one writer — the `jt_tax` stamp
+ * the studio puts on its Stripe session — so anything that arrived without one
+ * was UNKNOWN forever. `resolved_at` was documented as "set once the tax portion
+ * has been established" and exported as `tax_settled_at`, with nothing able to
+ * establish it. Every Clover payment lands with empty metadata, and every studio
+ * order placed before the stamp shipped is in the same position, so
+ * `undeterminedPayments` was permanently non-zero: a warning that is always on
+ * is a warning nobody reads, and it would have sat there next to the one figure
+ * it exists to qualify.
+ *
+ * Zero is a legitimate answer here, and a different one from unknown — a payment
+ * really can carry no tax. So an empty box clears the figure back to UNKNOWN and
+ * an explicit 0 settles it at zero, which is why this cannot be a plain number
+ * input that treats blank as nothing.
+ */
+app.post('/unlinked/:id/tax', requireAdmin, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const b = req.body || {};
+  const back = String(b.back || '/books');
+  if (!Number.isFinite(id)) return res.redirect('/books');
+
+  /* Blank means "put it back to unknown", which is not the same as 0. */
+  const raw = String(b.tax ?? '').trim();
+  let tax = null;
+  if (raw !== '') {
+    const n = round2(Number(raw));
+    if (!Number.isFinite(n)) return res.redirect(back);
+    tax = n;
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT amount FROM unlinked_payments WHERE id = $1`, [id]);
+    if (!rows.length) return res.redirect(back);
+
+    /* The tax cannot exceed the payment, and it has to share the payment's sign:
+       a refund carries its tax back OUT. Getting this wrong writes a figure that
+       makes a period's total tax larger than its receipts, which is the kind of
+       number that survives all the way onto a filed return. */
+    const amount = round2(Number(rows[0].amount) || 0);
+    if (tax !== null) {
+      if (amount < 0 && tax > 0) tax = -tax;
+      if (amount > 0 && tax < 0) tax = Math.abs(tax);
+      if (Math.abs(tax) > Math.abs(amount)) {
+        console.warn(`unlinked tax rejected: ${money(tax)} exceeds payment ${money(amount)}`);
+        return res.redirect(back);
+      }
+    }
+
+    await pool.query(
+      `UPDATE unlinked_payments
+          SET tax_portion = $2,
+              resolved_at = CASE WHEN $2::numeric IS NULL THEN NULL ELSE NOW() END
+        WHERE id = $1`, [id, tax]);
+    console.log(`unlinked payment ${id} tax ${tax === null ? 'cleared to unknown' : money(tax)}`);
+  } catch (err) {
+    console.error('unlinked tax update failed:', err.message);
+  }
+  res.redirect(back);
 });
 
 /* Send review requests that have come due. Runs inside the existing hourly
