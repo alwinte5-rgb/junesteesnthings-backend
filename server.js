@@ -8653,7 +8653,7 @@ app.get('/books', requireAdmin, async (req, res) => {
           ${pos.undeterminedPayments > 0 ? `<div><strong>${pos.undeterminedPayments} receipt(s)</strong>
             totalling ${money(pos.undeterminedGross)} have no tax portion worked out, so every figure
             above is a floor rather than a total.
-            <a href="/exports/unlinked.csv" style="color:#78350f">See which</a>.</div>` : ''}
+            <a href="#settle-tax" style="color:#78350f">Settle them below</a>.</div>` : ''}
           ${pos.exemptUndocumented > 0 ? `<div style="margin-top:${pos.undeterminedPayments > 0 ? '6px' : '0'}">
             <strong>${pos.exemptUndocumented} untaxed sale(s)</strong> have no exemption number on
             file${pos.exemptGross > 0 ? `, against ${money(pos.exemptGross)} of receipts being deducted` : ''}.
@@ -8667,7 +8667,7 @@ app.get('/books', requireAdmin, async (req, res) => {
       </div>
 
       ${unsettled.length ? `
-      <div class="card" style="margin-top:14px">
+      <div class="card" id="settle-tax" style="margin-top:14px">
         <h2 style="margin:0 0 4px;font-size:16px">Receipts with the tax still to work out</h2>
         <p class="muted" style="font-size:12px;margin:0 0 10px">
           Money that arrived outside a quote, so this side never learned what tax it carried.
