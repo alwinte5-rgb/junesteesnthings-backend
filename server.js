@@ -549,7 +549,11 @@ async function taxPositionByMonth(limit = 24) {
     `SELECT to_char(date_trunc('month', p.created_at), 'YYYY-MM') AS period,
             COALESCE(SUM(p.amount),0) AS exempt_gross,
             COUNT(*)                  AS exempt_payments,
-            COUNT(*) FILTER (WHERE NULLIF(btrim(q.tax_exempt_ref), '') IS NULL)
+            /* DISTINCT on the quote: a deposit and a balance are two payments
+               against ONE deduction, and counting both overstates how many
+               exemptions are missing evidence. */
+            COUNT(DISTINCT p.quote_code)
+              FILTER (WHERE NULLIF(btrim(q.tax_exempt_ref), '') IS NULL)
                                       AS exempt_undocumented
        FROM quote_payments p JOIN quotes q ON q.code = p.quote_code
       WHERE COALESCE(q.taxable, q.tax > 0) = false
@@ -5319,7 +5323,7 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
             </div></td>
             <td class="num" id="disc" style="color:#166534">—</td></tr>
           <tr><td class="muted"><label style="display:inline;margin:0;text-transform:none;letter-spacing:0;font-size:14px;font-weight:400">
-            <input type="checkbox" name="taxable" value="1" ${!existing || quoteTaxable(E) ? 'checked' : ''} style="width:auto;margin-right:6px" onchange="calc()"> Illinois sales tax</label>
+            <input type="checkbox" name="taxable" value="1" ${!isEdit || quoteTaxable(E) ? 'checked' : ''} style="width:auto;margin-right:6px" onchange="calc()"> Illinois sales tax</label>
             <div id="exemptbox" style="display:none;margin-top:5px">
               <input name="tax_exempt_ref" value="${val(E.tax_exempt_ref)}" maxlength="60"
                      placeholder="Exemption E-number — who is exempt, and under what"
@@ -8643,6 +8647,18 @@ app.get('/books', requireAdmin, async (req, res) => {
           ${tile('Held right now', money(pos.setAside),
                  pos.setAside > 0 ? '#b45309' : '#047857', 'across all periods')}
         </div>
+        ${(pos.undeterminedPayments > 0 || pos.exemptUndocumented > 0) ? `
+        <div style="margin-top:10px;padding:8px 10px;border-radius:6px;background:#fef3c7;
+                    border:1px solid #fcd34d;font-size:12px;color:#78350f">
+          ${pos.undeterminedPayments > 0 ? `<div><strong>${pos.undeterminedPayments} receipt(s)</strong>
+            totalling ${money(pos.undeterminedGross)} have no tax portion worked out, so every figure
+            above is a floor rather than a total.
+            <a href="/exports/unlinked.csv" style="color:#78350f">See which</a>.</div>` : ''}
+          ${pos.exemptUndocumented > 0 ? `<div style="margin-top:${pos.undeterminedPayments > 0 ? '6px' : '0'}">
+            <strong>${pos.exemptUndocumented} untaxed sale(s)</strong> have no exemption number on
+            file${pos.exemptGross > 0 ? `, against ${money(pos.exemptGross)} of receipts being deducted` : ''}.
+            Illinois expects the purchaser's E number to be producible on audit.</div>` : ''}
+        </div>` : ''}
         <div class="muted" style="font-size:11px;margin-top:10px">
           Held right now spans every period, not just ${year} — it is what should be in the bank today.
           <a href="/tax.csv" style="color:#1848B8">Download the payment-level detail</a>,
@@ -9022,7 +9038,17 @@ app.get('/tax.csv', requireAdmin, async (req, res) => {
               p.amount, p.method, p.kind, p.tax_portion,
               q.taxable, q.tax_exempt_ref
          FROM quote_payments p JOIN quotes q ON q.code = p.quote_code
-        ORDER BY p.created_at`);
+        ORDER BY p.created_at`)
+      /* A deploy that races the migration loses the exemption columns rather
+         than the whole export — the same guard the sibling queries carry.
+         Without it this route goes from working to a 500 for the deploy
+         window, on the one file the shop files a return from. */
+      .catch(() => pool.query(
+        `SELECT p.created_at, p.quote_code, q.name, q.subtotal, q.tax, q.total,
+                p.amount, p.method, p.kind, p.tax_portion,
+                NULL::boolean AS taxable, NULL::text AS tax_exempt_ref
+           FROM quote_payments p JOIN quotes q ON q.code = p.quote_code
+          ORDER BY p.created_at`));
 
     /* Receipts from the design studio and anything else that arrived outside
        the quote flow. They belong in this file because the ST-1 is filed on

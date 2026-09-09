@@ -132,8 +132,31 @@ test('the form asks for the reason exactly when there is a zero to explain', () 
   assert.match(src, /name="tax_exempt_ref"/, 'no field, no reason, no deduction');
   assert.match(src, /exbox\.style\.display = taxable \? 'none' : ''/,
     'the reason appears when tax comes off, so it cannot be quietly skipped');
-  assert.match(src, /\$\{!existing \|\| quoteTaxable\(E\) \? 'checked' : ''\}/,
+  assert.match(src, /\$\{!isEdit \|\| quoteTaxable\(E\) \? 'checked' : ''\}/,
     'the checkbox must read the stored flag, not re-derive it from the amount');
+});
+
+test('a new quote prefilled from an enquiry still defaults to taxable', () => {
+  /* `existing` is truthy for BOTH a saved quote and a blank one prefilled from
+     a lead or an abandoned cart — those carry tax: 0 and no code. Keying the
+     checkbox off `existing` therefore opened every enquiry-sourced quote with
+     tax un-ticked, which used to produce merely an untaxed row and now would
+     persist taxable=false and file it as a deliberate ST-1 deduction.
+     `isEdit` is the discriminator that already exists for this exact reason. */
+  assert.match(src, /const isEdit = !!\(existing && existing\.code\)/,
+    'isEdit is what separates an edit from a prefilled blank');
+  assert.doesNotMatch(src, /\$\{!existing \|\| quoteTaxable/,
+    'a prefilled blank is not an exemption');
+});
+
+test('the books page says when its own numbers are incomplete', () => {
+  /* A figure computed and rendered nowhere warns nobody. The whole point of
+     separating unknown tax and undocumented exemptions is that someone sees
+     them before filing. */
+  assert.match(src, /pos\.undeterminedPayments > 0 \|\| pos\.exemptUndocumented > 0/,
+    'the tax card must raise both, or the distinction never reaches a human');
+  assert.match(src, /untaxed sale\(s\)<\/strong> have no exemption number on/,
+    'an undocumented deduction has to be visible where the return is read from');
 });
 
 /* ── The export ──────────────────────────────────────────────────────────── */
@@ -187,6 +210,23 @@ test('every row has exactly as many cells as there are headers', () => {
     'quote rows must line up with the header');
   assert.strictEqual(topLevelCount(unlinkedCells.inner), headers,
     'unlinked rows must line up with the header');
+});
+
+test('/tax.csv survives a deploy that races the migration', () => {
+  /* Its sibling queries are all guarded. Unguarded, the export goes from
+     working to a 500 during the deploy window — on the one file a return is
+     filed from. */
+  assert.match(TAXCSV, /\.catch\(\(\) => pool\.query\(/,
+    'a missing column must cost the exemption columns, not the whole export');
+  assert.match(TAXCSV, /NULL::boolean AS taxable, NULL::text AS tax_exempt_ref/,
+    'the fallback has to return the same shape the rows print');
+});
+
+test('one exempt quote paid twice is one undocumented exemption', () => {
+  /* COUNT(*) over quote_payments counts a deposit and a balance separately,
+     so a single missing E number reads as two. */
+  assert.match(src, /COUNT\(DISTINCT p\.quote_code\)\s*\n?\s*FILTER \(WHERE NULLIF\(btrim\(q\.tax_exempt_ref\)/,
+    'the count is of deductions, not of payments');
 });
 
 test('the export says exempt rather than leaving a bare zero', () => {
