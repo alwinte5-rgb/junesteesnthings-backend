@@ -37,6 +37,84 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
 }));
 app.use(cors({ origin: ['https://www.jtees.net', 'https://jtees.net', 'https://design.jtees.net'] }));
+/* ── The books app, served at /books ───────────────────────────────────────────
+   `books` is a separate Railway service with NO public domain: its only address
+   is books.railway.internal, so the open internet cannot reach it at all. This
+   is the single door, and it is behind whatever protection this app already has.
+
+   Mounted BEFORE express.json on purpose. Once a body parser has consumed the
+   stream, forwarding a POST means re-serialising what was parsed — which
+   silently changes multipart bodies and anything the parser did not recognise.
+   Here `req` is still an untouched stream and is piped straight through.
+
+   Next.js is configured with basePath "/books", so the prefix is NOT stripped:
+   the app generates its own asset, route and auth-callback URLs already
+   carrying it. Rewriting /books/x to /x would serve the first page and then
+   hand the browser links to /_next/... that do not exist on this domain. */
+const BOOKS_ORIGIN = process.env.BOOKS_ORIGIN || '';
+
+app.use('/books', async (req, res) => {
+  if (!BOOKS_ORIGIN) {
+    return res.status(503).type('text/plain')
+      .send('The books app is not configured on this environment.');
+  }
+
+  const headers = {};
+  for (const [k, v] of Object.entries(req.headers)) {
+    // Hop-by-hop headers describe THIS connection and must not be relayed.
+    if (['host', 'connection', 'keep-alive', 'transfer-encoding', 'upgrade'].includes(k)) continue;
+    headers[k] = v;
+  }
+  /* Next builds absolute URLs from these. Without them it would see
+     books.railway.internal and put that in a redirect the browser cannot
+     follow — the classic "login redirects you to a hostname that does not
+     resolve" behind a proxy. */
+  headers['x-forwarded-proto'] = 'https';
+  headers['x-forwarded-host'] = req.headers.host || 'jtees.net';
+
+  const hasBody = !['GET', 'HEAD'].includes(req.method);
+
+  try {
+    const upstream = await fetch(BOOKS_ORIGIN + req.originalUrl, {
+      method: req.method,
+      headers,
+      body: hasBody ? req : undefined,
+      // Required by undici when the body is a stream rather than a buffer.
+      duplex: hasBody ? 'half' : undefined,
+      /* manual: a 302 from the books app is an instruction for the BROWSER.
+         Following it here would return the destination's body under the
+         original URL and break every login round trip. */
+      redirect: 'manual',
+      signal: AbortSignal.timeout(30000),
+    });
+
+    res.status(upstream.status);
+    for (const [k, v] of upstream.headers) {
+      // Length and encoding describe the upstream body, not what is sent on.
+      if (['content-encoding', 'content-length', 'transfer-encoding', 'connection'].includes(k)) continue;
+      if (k === 'set-cookie') continue; // handled below, as a list
+      res.setHeader(k, v);
+    }
+    /* Several Set-Cookie headers must stay several. Iterating the Headers
+       object joins them with a comma, which produces one malformed cookie and
+       silently logs the user out. getSetCookie is the only correct reader. */
+    const cookies = typeof upstream.headers.getSetCookie === 'function'
+      ? upstream.headers.getSetCookie()
+      : [];
+    if (cookies.length) res.setHeader('set-cookie', cookies);
+
+    if (!upstream.body) return res.end();
+    const { Readable } = require('stream');
+    Readable.fromWeb(upstream.body).pipe(res);
+  } catch (err) {
+    // A dead or slow books service must not read as a broken jtees.net.
+    console.error('books proxy failed:', err.message);
+    if (!res.headersSent) {
+      res.status(502).type('text/plain').send('The books app is not responding.');
+    }
+  }
+});
+
 app.use(express.json({
   limit: '1mb',
   verify: (req, _res, buf) => {
