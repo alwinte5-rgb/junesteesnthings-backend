@@ -347,11 +347,17 @@ test('money belonging to a real quote is reported, never written as unlinked', (
 
 /* ── The tax position ────────────────────────────────────────────────────── */
 
-function runTaxPosition({ collected = [], remitted = [], unlinked = [], unlinkedFails = false }) {
+function runTaxPosition({ collected = [], remitted = [], unlinked = [], exempt = [],
+                          unlinkedFails = false }) {
   const sandbox = {
     round2: (n) => Math.round((Number(n) || 0) * 100) / 100,
     pool: {
       query(sql) {
+        /* Checked BEFORE the plain quote_payments branch: the exempt query
+           reads the same table and would otherwise be handed the `collected`
+           rows, which carry none of the columns it reads — every exempt figure
+           would come back NaN and no test would notice. */
+        if (/JOIN quotes/.test(sql)) return Promise.resolve({ rows: exempt });
         if (/FROM quote_payments/.test(sql)) return Promise.resolve({ rows: collected });
         if (/FROM tax_remittances/.test(sql)) return Promise.resolve({ rows: remitted });
         if (/FROM unlinked_payments/.test(sql)) {
