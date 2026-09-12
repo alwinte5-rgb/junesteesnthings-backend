@@ -184,3 +184,42 @@ penetrations: it equals stitches + jumps + colour changes + the end record.
 That holds exactly on all five files read here. Comparing it against the stitch
 count alone flagged every single well-formed file as corrupt — an alarm that
 fires always is an alarm nobody reads.
+
+## Fitted against 217 real designs
+
+`fit_k.py` reads a DST, renders its own stitch paths back to the shape it sews,
+measures that shape, and regresses the real stitch count on it. The render
+stands in for artwork nobody kept — it is what the digitiser produced from it.
+
+451 files on this machine, 234 of them duplicate copies of the same design
+(size folders and format bundles), leaving **217 distinct designs**.
+
+| model | R² | fitted |
+|---|---|---|
+| `k(design)` | **0.923** | 1,533 − 14·complexity + 45·threads + 116·coverage, per sq in |
+| physical (fill + satin) | 0.844 | satin term came out NEGATIVE — collinear, not usable |
+| area | 0.837 | 1,783 stitches per sq in of stitched area |
+| linear (per inch of width) | 0.469 | 4,656 |
+
+**Linear scaling does not survive contact with a real library.** It held at ±3%
+across four sizes of one design and collapses to R² 0.47 across 217 — so it is
+a rule for resizing a design you already know, and nothing more.
+
+R² 0.923 also flatters it. Relative error barely improved over the plain area
+model (median 21.7% vs 21.0%): the extra terms predict LARGE designs better,
+and R² is dominated by those. Typical accuracy is ±22%, and one design in ten
+is out by 48%.
+
+### Can it price a job? Only with a loading
+
+Against the live ladder, which is the only test that matters:
+
+    right band     58%
+    UNDER-priced   33%   ← one job in three quoted too cheap
+    over-priced     8%
+    under-priced if quoted at estimate +25%:  12%
+
+So: **do not quote the raw estimate.** Quoting at estimate +25% takes the
+give-away rate from one job in three to one in eight. Use it to sanity-check a
+supplier's number and to sort jobs into bands; do not let it set a price
+unattended.
