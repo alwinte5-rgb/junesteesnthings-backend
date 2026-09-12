@@ -22,19 +22,14 @@
  */
 
 const { mysql, sq } = require('./lib/db');
+const { CORE_SIZES } = require('./lib/garments');
 
 const APPLY = process.argv.includes('--apply');
 const ONLY = (process.argv.find((a) => a.startsWith('--only=')) || '').slice(7)
   .split(',').filter(Boolean).map((s) => s.toUpperCase());
 const HOME = 'IL';
-/* Core sizes, including every spelling S&S uses for a one-size garment. Caps
-   are sized "Adjustable" and bags "One Size"; missing those made every cap look
-   like it had no cost at all and skip silently. */
-const CORE = ['S', 'M', 'L', 'XL', 'OSFA', 'One Size', 'OS', 'ADJ', 'Adjustable',
-  'One Size Fits All', 'OSFM', 'ONE SIZE',
-  /* Youth and toddler garments never carry an adult S/M/L, so without these a
-     toddler tee reads as having no cost at all and is skipped in silence. */
-  '2T', '3T', '4T', '5/6', 'XS', 'YXS', 'YS', 'YM', 'YL', '6M', '12M', '18M', '24M'];
+/* Costing and stock sizes: lib/garments' copy, shared with ssa-sync. */
+const CORE = CORE_SIZES;
 
 /* ── Garment types ────────────────────────────────────────────────────────
  *

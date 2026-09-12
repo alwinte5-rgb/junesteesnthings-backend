@@ -11,6 +11,26 @@
  * one is missing.
  */
 
+/* The sizes a product is COSTED and STOCK-CHECKED on.
+ *
+ * Two tools kept their own copy and they drifted. ssa-add-products learned the
+ * hard way that a cap is sized "Adjustable" and a tote "One Size", and that
+ * without those a cap reads as having no cost at all and is skipped in silence.
+ * ssa-sync never learned it: its copy stayed ['S','M','L','XL'], so every cap,
+ * tote and youth garment reported NONE LOCAL — freight the shop cannot pass on
+ * — while thousands of them sat in Lockport. That is a buying decision made on
+ * a wrong number, from a list that was already correct one file away.
+ *
+ * Stock is judged on these only: a style with nothing but 4XL in Illinois is
+ * not locally stocked for any order a customer will actually place. */
+const CORE_SIZES = [
+  'S', 'M', 'L', 'XL',
+  /* One-size garments — caps, visors, totes, bags. */
+  'OSFA', 'One Size', 'OS', 'ADJ', 'Adjustable', 'One Size Fits All', 'OSFM', 'ONE SIZE',
+  /* Youth, toddler and infant never carry an adult S/M/L. */
+  '2T', '3T', '4T', '5/6', 'XS', 'YXS', 'YS', 'YM', 'YL', '6M', '12M', '18M', '24M',
+];
+
 /* What the product NAME says the garment is, in the order the tests must run —
    the specific before the general, so "Youth Heavy Blend Hoodie" is a hoodie
    rather than a youth tee, and "Quarter-Zip Sweatshirt" is not a plain tee. */
@@ -148,4 +168,4 @@ const DECORATIONS = {
   onesie:  ['dtf', 'screen'],
 };
 
-module.exports = { CLASSIFY, classify, SUBTYPE, subtype, STANDIN, standin, ROLES, DECORATIONS, EMB_FULL, EMB_FRONT_ONLY, EMB_PANEL };
+module.exports = { CORE_SIZES, CLASSIFY, classify, SUBTYPE, subtype, STANDIN, standin, ROLES, DECORATIONS, EMB_FULL, EMB_FRONT_ONLY, EMB_PANEL };

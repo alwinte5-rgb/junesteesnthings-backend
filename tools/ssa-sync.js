@@ -32,6 +32,7 @@
    result, which strips leading whitespace from the first column as well as the
    trailing newline. That is the drift lib/db exists to prevent. */
 const { mysql, sq } = require('./lib/db');
+const { CORE_SIZES } = require('./lib/garments');
 
 const APPLY = process.argv.includes('--apply');
 
@@ -43,7 +44,8 @@ const STALE_DAYS = 14;
    Real supplier moves are pennies; a 40% jump is a feed problem. */
 const PRICE_JUMP_GUARD = 0.40;
 
-const CORE_SIZES = ['S', 'M', 'L', 'XL'];
+/* CORE_SIZES is lib/garments' copy. This file used to carry ['S','M','L','XL'],
+   which made every cap and tote report NONE LOCAL. */
 
 /* The shop is in Chicago 60657, so S&S's Lockport IL warehouse is ~35 miles
    away. Freight on blanks comes straight off margin and cannot be passed on,

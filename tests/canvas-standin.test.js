@@ -64,3 +64,21 @@ test('the subtype answer wins over the family answer', () => {
   assert.strictEqual(s.as, 'trucker');
   assert.match(s.looks, /mesh/i);
 });
+
+test('one size list, shared, that knows caps and totes exist', () => {
+  const { CORE_SIZES } = require('../tools/lib/garments');
+  /* ssa-sync's private copy was ['S','M','L','XL'], so a cap — sized
+     "Adjustable" — matched nothing and reported NONE LOCAL while thousands sat
+     in Lockport. ssa-add-products already knew better, one file away. */
+  for (const s of ['S', 'M', 'L', 'XL', 'OSFA', 'One Size', 'Adjustable', 'YS', '2T']) {
+    assert.ok(CORE_SIZES.includes(s), s + ' is missing from the costing sizes');
+  }
+  const fs2 = require('node:fs');
+  const p2 = require('node:path');
+  for (const f of ['ssa-sync.js', 'ssa-add-products.js']) {
+    const src = fs2.readFileSync(p2.join(__dirname, '..', 'tools', f), 'utf8');
+    assert.match(src, /CORE_SIZES\s*\}\s*=\s*require\('\.\/lib\/garments'\)/,
+      f + ' does not share the size list');
+    assert.ok(!/const CORE_SIZES\s*=\s*\[/.test(src), f + ' still has its own copy');
+  }
+});
