@@ -275,8 +275,16 @@ function buildAttributes(rows, baseCost) {
     return { title: s, price: up > 0 ? String(up) : '', default: s === 'L' ? '1' : '' };
   });
 
+  /* `id` is not decoration: the field renderers build the cart input as
+     name="'+data.id+'" (core/includes/tmpl.php render_color, and the same for
+     quantity). With it missing the input is literally name="undefined",
+     lumise.cart.calc looks up attrs['undefined'], finds nothing and returns
+     early — so no colour is recorded, the quantity never counts, and a
+     variation keyed on COL can never match. `name` is the visible label; blank
+     renders the field with a bare ": " for a caption. */
   const attrs = {
-    QTYS: { type: 'quantity', title: '', values: JSON.stringify({ multiple_options }) },
+    QTYS: { id: 'QTYS', name: 'Quantity per Size', type: 'quantity', title: '',
+      values: JSON.stringify({ multiple_options }) },
   };
   if (colours.size) {
     /* Every swatch value must be UNIQUE, because it is not only the colour
@@ -299,7 +307,7 @@ function buildAttributes(rows, baseCost) {
       }
       used.add(h); return h;                       // 256 identical shades: give up
     };
-    attrs.COL = { type: 'product_color', title: '', values: {
+    attrs.COL = { id: 'COL', name: 'Color', type: 'product_color', title: '', values: {
       options: [...colours].map(([title, value], i) => ({
         value: uniq(value), title, price: '', default: i === 0 ? '1' : '' })) } };
   }
