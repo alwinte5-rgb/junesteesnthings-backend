@@ -42,3 +42,6 @@ public/email-clipart/
 # An unused variant. The site's og:image is public/assets/images/social-share.jpg,
 # which IS tracked — do not confuse the two.
 public/assets/images/junes_tees_jtees_social-share.jpg
+
+# canvas-audit writes its findings here; regenerate rather than commit.
+canvas-bad.json

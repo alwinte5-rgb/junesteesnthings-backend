@@ -27,10 +27,13 @@
  *     stocked-out medium cannot silently reprice a product off its 4XL.
  */
 
-const { spawnSync } = require('child_process');
+/* mysql() and sq() come from ./lib/db. This file used to carry its own copies,
+   and they had already drifted: the local row parser called .trim() on the whole
+   result, which strips leading whitespace from the first column as well as the
+   trailing newline. That is the drift lib/db exists to prevent. */
+const { mysql, sq } = require('./lib/db');
 
 const APPLY = process.argv.includes('--apply');
-const MYSQL = '/usr/local/opt/mysql-client/bin/mysql';
 
 /* Days a product may go without live S&S pricing before it is deactivated.
    Two weeks covers an ordinary restock; a genuinely dead style never returns. */
@@ -159,25 +162,6 @@ function baseCost(bySize) {
 
 /* ── SQL plumbing ────────────────────────────────────────────────────────── */
 
-function mysql(url, sql, { rows = false } = {}) {
-  const u = new URL(url);
-  const args = ['-h', u.hostname, '-P', u.port || '3306', '-u', decodeURIComponent(u.username),
-    '--protocol=TCP', '--default-character-set=utf8mb4', '-e', sql,
-    u.pathname.replace(/^\//, '') || 'railway'];
-  const r = spawnSync(MYSQL, rows ? ['-B', ...args] : args, {
-    env: Object.assign({}, process.env, { MYSQL_PWD: decodeURIComponent(u.password) }),
-    encoding: 'utf8',
-    stdio: rows ? ['ignore', 'pipe', 'inherit'] : ['ignore', 'inherit', 'inherit'],
-  });
-  if (r.status !== 0) throw new Error('mysql exited ' + r.status);
-  if (!rows) return null;
-  const lines = r.stdout.trim().split('\n');
-  if (lines.length < 2) return [];
-  const head = lines[0].split('\t');
-  return lines.slice(1).map((l) => Object.fromEntries(l.split('\t').map((v, i) => [head[i], v])));
-}
-
-const sq = (s) => "'" + String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'";
 const money = (n) => Math.round(Number(n) * 100) / 100;
 
 /* ── Main ────────────────────────────────────────────────────────────────── */
@@ -203,6 +187,12 @@ process.stdin.on('end', async () => {
   /* Marks a deactivation as THIS TOOL's, so reactivation can never resurrect a
      product a person switched off on purpose. */
   if (!cols.includes('ssa_auto_off')) need.push('ADD COLUMN ssa_auto_off DATETIME NULL');
+  /* A hold placed by a PERSON, and the reason reactivation cannot be trusted to
+     ssa_auto_off alone. The August batch was held by setting ssa_auto_off, which
+     is this tool's own marker — the one column it is entitled to clear. Nothing
+     released those 46 only because the sync was never running; a working sync
+     would have put every one of them on the storefront, unreviewed. */
+  if (!cols.includes('held_for_review')) need.push('ADD COLUMN held_for_review DATETIME NULL');
   if (need.length) {
     /* `created` carries a legacy '0000-00-00' default that strict mode refuses
        to revalidate during an ALTER. Relaxing the mode for this one statement
@@ -289,10 +279,12 @@ process.stdin.on('end', async () => {
    * an earlier version of this reactivated all three, because they are real
    * S&S styles that are perfectly in stock. Being purchasable is not evidence
    * that a person wants it on the storefront. Only rows carrying this tool's
-   * own deactivation marker are eligible. */
+   * own deactivation marker are eligible, and never one a person is holding:
+   * `held_for_review` outranks the marker in both directions. */
   const returned = mysql(dbUrl,
     "SELECT id, name, IFNULL(thumbnail_url,'') thumb FROM lumise_products " +
-    "WHERE active=0 AND supplier='ssa' AND ssa_auto_off IS NOT NULL;", { rows: true });
+    "WHERE active=0 AND supplier='ssa' AND ssa_auto_off IS NOT NULL " +
+    "AND held_for_review IS NULL;", { rows: true });
   const revived = [];
   for (const p of returned) {
     try {

@@ -1,0 +1,10 @@
+# The nightly supplier sync shells out to a mysql client: the Lumise catalogue
+# is MySQL, the app's own pool is Postgres, and tools/ssa-sync.js is run as a
+# child process so the scheduled path and the by-hand path cannot drift.
+#
+# Nixpacks' Node image ships no mysql client, so that child process failed with
+# ENOENT every night from 2026-08-29 onward. Nothing else in this repo needs
+# the binary; it is here so the deployed image can run the same tool the shop
+# runs from a laptop.
+[phases.setup]
+aptPkgs = ["...", "default-mysql-client"]

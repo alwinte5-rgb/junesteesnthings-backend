@@ -13244,10 +13244,24 @@ async function runSupplierSync() {
      it would change a table the digest depends on. */
   await pool.query(`CREATE TABLE IF NOT EXISTS jt_supplier_sync_log (
     day DATE PRIMARY KEY, ran_at TIMESTAMPTZ DEFAULT NOW())`);
+  /* A run that FAILED used to burn the day just as thoroughly as one that
+     worked: the row was inserted up front and nothing ever looked at how the
+     run ended. The sync then failed every night from 2026-08-29 to 2026-09-11
+     — fourteen claimed days, fourteen rows, and not one write to the
+     catalogue — while this table showed a clean daily record.
+     `ok` is what "already run today" now means; `attempts` keeps the alert to
+     one per day while the hourly sweep keeps retrying. */
+  await pool.query(`ALTER TABLE jt_supplier_sync_log
+    ADD COLUMN IF NOT EXISTS ok BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0`);
   const claim = await pool.query(
-    `INSERT INTO jt_supplier_sync_log (day) VALUES (CURRENT_DATE)
-     ON CONFLICT DO NOTHING RETURNING day`);
-  if (!claim.rowCount) return;                    // already run today
+    `INSERT INTO jt_supplier_sync_log (day, attempts) VALUES (CURRENT_DATE, 1)
+     ON CONFLICT (day) DO UPDATE
+       SET attempts = jt_supplier_sync_log.attempts + 1, ran_at = NOW()
+       WHERE jt_supplier_sync_log.ok = FALSE
+     RETURNING attempts`);
+  if (!claim.rowCount) return;                    // already succeeded today
+  const attempt = claim.rows[0].attempts;
 
   const vars = JSON.stringify({
     SSA_ACCOUNT: process.env.SSA_ACCOUNT,
@@ -13265,13 +13279,19 @@ async function runSupplierSync() {
     child.on('close', async (code) => {
       const summary = (out.split('\n').filter((l) => /·/.test(l)).pop() || '').trim();
       console.log('supplier sync:', code === 0 ? (summary || 'ok') : 'exit ' + code);
+      if (code === 0) {
+        await pool.query('UPDATE jt_supplier_sync_log SET ok = TRUE WHERE day = CURRENT_DATE');
+      }
 
       /* Tell the shop only when something needs a person: a price the guard
          refused to write, a product deactivated, or a failed run. A quiet
          "nothing changed" email every day trains you to ignore the alert. */
       const notable = out.split('\n').filter((l) =>
         /SKIPPED|DEACTIVATING|NOT ON S&S|BACK IN STOCK/.test(l));
-      if (code !== 0 || notable.length) {
+      /* A failure now retries hourly, so alert on the first one of the day
+         only — otherwise a broken sync sends 24 identical emails and gets
+         filtered, which is how the last one went unread for a fortnight. */
+      if ((code !== 0 && attempt === 1) || (code === 0 && notable.length)) {
         await alertShop(
           code !== 0 ? '⚠️ Supplier sync failed' : '📦 Supplier sync needs a look',
           `<pre style="font-size:13px;white-space:pre-wrap">${escEmail(

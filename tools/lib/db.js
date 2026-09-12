@@ -11,8 +11,34 @@
  */
 
 const { spawnSync } = require('child_process');
+const fs = require('fs');
 
-const MYSQL = '/usr/local/opt/mysql-client/bin/mysql';
+/* Where the mysql client actually is.
+ *
+ * This used to be one hardcoded Homebrew path, and that is the whole reason the
+ * nightly supplier sync had never once succeeded in production. Railway's Node
+ * image has no /usr/local/opt, so spawnSync failed with ENOENT, `r.status` came
+ * back null, and the throw read "mysql exited null" — a message that says
+ * nothing about a missing binary. The scheduled run claimed the day, threw, and
+ * left the catalogue untouched for a fortnight while appearing to have run.
+ *
+ * Resolved once per process, in the order: an explicit override, the two
+ * Homebrew prefixes (Intel and Apple silicon), the Debian path the deployed
+ * image installs to, then whatever is on PATH. */
+function resolveMysql() {
+  if (process.env.JT_MYSQL_BIN) return process.env.JT_MYSQL_BIN;
+  const candidates = [
+    '/usr/local/opt/mysql-client/bin/mysql',    // Homebrew, Intel macOS
+    '/opt/homebrew/opt/mysql-client/bin/mysql', // Homebrew, Apple silicon
+    '/usr/bin/mysql',                           // Debian — the deployed image
+    '/usr/local/bin/mysql',
+  ];
+  for (const c of candidates) { try { if (fs.existsSync(c)) return c; } catch { /* keep looking */ } }
+  const found = spawnSync('sh', ['-c', 'command -v mysql'], { encoding: 'utf8' });
+  return (found.stdout || '').trim() || null;
+}
+
+const MYSQL = resolveMysql();
 
 /** Read the MySQL URL out of a piped `railway variables --json` payload. */
 function urlFromStdinJson(buf) {
@@ -29,12 +55,21 @@ function mysql(url, sql, { rows = false } = {}) {
     '-u', decodeURIComponent(u.username), '--protocol=TCP',
     '--default-character-set=utf8mb4', '-e', sql,
     u.pathname.replace(/^\//, '') || 'railway'];
+  /* Named loudly. A missing client is a deployment problem, and reporting it as
+     an exit code sent the last one undiagnosed for a fortnight. */
+  if (!MYSQL) {
+    throw new Error('no mysql client on this machine — install one, or set ' +
+      'JT_MYSQL_BIN to its path');
+  }
   const r = spawnSync(MYSQL, rows ? ['-B', ...args] : args, {
     env: Object.assign({}, process.env, { MYSQL_PWD: decodeURIComponent(u.password) }),
     encoding: 'utf8',
     stdio: rows ? ['ignore', 'pipe', 'inherit'] : ['ignore', 'inherit', 'inherit'],
   });
-  if (r.status !== 0) throw new Error('mysql exited ' + r.status);
+  if (r.error || r.status !== 0) {
+    throw new Error('mysql (' + MYSQL + ') failed: ' +
+      (r.error ? r.error.code || r.error.message : 'exit ' + r.status));
+  }
   if (!rows) return null;
   const lines = r.stdout.replace(/\n$/, '').split('\n');
   if (lines.length < 2) return [];
@@ -78,4 +113,4 @@ function decodePrintings(prt) {
 /** Single-quoted SQL literal. */
 const sq = (s) => "'" + String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'";
 
-module.exports = { MYSQL, urlFromStdinJson, mysql, enjson, dejson, encodePrintings, decodePrintings, sq };
+module.exports = { MYSQL, resolveMysql, urlFromStdinJson, mysql, enjson, dejson, encodePrintings, decodePrintings, sq };

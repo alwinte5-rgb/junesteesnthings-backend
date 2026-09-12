@@ -21,12 +21,11 @@
  * product that will be quoted wrong.
  */
 
-const { spawnSync } = require('child_process');
+const { mysql, sq } = require('./lib/db');
 
 const APPLY = process.argv.includes('--apply');
 const ONLY = (process.argv.find((a) => a.startsWith('--only=')) || '').slice(7)
   .split(',').filter(Boolean).map((s) => s.toUpperCase());
-const MYSQL = '/usr/local/opt/mysql-client/bin/mysql';
 const HOME = 'IL';
 /* Core sizes, including every spelling S&S uses for a one-size garment. Caps
    are sized "Adjustable" and bags "One Size"; missing those made every cap look
@@ -161,6 +160,51 @@ const WANTED = [
   // Workwear — trades and industrial, a customer type not served at all.
   ['2574',     'premium', 'Dickies',     "Dickies 2574 Men's Short Sleeve Work Shirt"],
   ['M585',     'premium', 'Harriton',    "Harriton M585 Advantage Short Sleeve Work Shirt"],
+
+  /* Sustainable line, September 2026 — asked for by a customer.
+     S&S flags 1,595 styles `sustainableStyle`; these are the subset whose own
+     title or description makes a specific claim (organic, recycled, hemp) that
+     the shop can repeat to a customer without overstating it. A blanket
+     "sustainable" flag covers a lot of ordinary polyester, so the flag alone
+     was not treated as the qualification.
+
+     Every one is a garment type already proven by a product on the storefront,
+     so none needs the canvas review that held the August batch. Spread across
+     nine brands on purpose. Deliberately absent: econscious EC8710 Grove Sling
+     Bag and the Hemp Pouch — real products, but a 200x280 both-sides tote print
+     area is not their shape, and they need their own before they can be sold. */
+
+  // Headwear — the gap the catalogue felt most, with two recycled versions of
+  // caps already selling (Richardson 112, YP 6606) so a customer can swap up.
+  ['EC7070',   'cap',     'econscious',  'econscious EC7070 Eco Trucker Cap'],
+  ['EC7090',   'cap',     'econscious',  'econscious EC7090 Hemp Structured Baseball Cap'],
+  ['EC7000',   'cap',     'econscious',  'econscious EC7000 Organic Baseball Cap'],
+  ['112RE',    'cap',     'Richardson',  'Richardson 112RE Sustainable Trucker Cap'],
+  ['110R',     'cap',     'Flexfit',     'Flexfit 110R Recycled Mesh Cap'],
+  ['FRASER',   'cap',     'Atlantis',    'Atlantis FRASER Sustainable Dad Hat'],
+  ['6606R',    'cap',     'YP',          'YP Classics 6606R Sustainable Retro Trucker Cap'],
+  ['EC7045',   'cap',     'econscious',  'econscious EC7045 Base Camp Beanie'],
+  ['NELSON',   'cap',     'Atlantis',    'Atlantis NELSON Sustainable Cuffed Beanie'],
+
+  // Totes and packs, from a $5 promo tote to a hemp market bag.
+  ['EC8000',   'bag',     'econscious',  'econscious EC8000 Everyday Organic Tote'],
+  ['EC8015',   'bag',     'econscious',  'econscious EC8015 Hemp Market Tote'],
+  ['EC8040',   'bag',     'econscious',  'econscious EC8040 Organic Market Tote'],
+  ['S800',     'bag',     'Q-Tees',      'Q-Tees S800 Sustainable Canvas Tote Bag'],
+  ['OAD113R',  'bag',     'OAD',         'OAD OAD113R Midweight Recycled Tote Bag'],
+  ['8860R',    'bag',     'Liberty',     'Liberty Bags 8860R Nicole Recycled Tote'],
+  ['8875',     'bag',     'Liberty',     'Liberty Bags 8875 Canvas Drawstring Backpack'],
+
+  // Apparel — organic cotton from econscious, recycled poly/cotton from Recover.
+  ['EC1000',   'tee',     'econscious',  'econscious EC1000 Unisex Classic Organic T-Shirt'],
+  ['EC3000',   'tee',     'econscious',  "econscious EC3000 Women's Classic Organic T-Shirt"],
+  ['EC100',    'tee',     'Recover',     "Recover EC100 Men's Eco Recycled T-Shirt"],
+  ['EY100',    'kids',    'Recover',     'Recover EY100 Youth Eco Recycled T-Shirt'],
+  ['EC1500',   'longslv', 'econscious',  'econscious EC1500 Unisex Organic Long Sleeve T-Shirt'],
+  ['EC5500',   'hoodie',  'econscious',  'econscious EC5500 Unisex Heritage Hooded Sweatshirt'],
+  ['EC950',    'hoodie',  'econscious',  'econscious EC950 Unisex Hemp Hero Hooded Sweatshirt'],
+  ['RC1093',   'hoodie',  'Recover',     'Recover RC1093 Unisex Recycled Fleece Hooded Sweatshirt'],
+  ['EC500',    'polo',    'Recover',     "Recover EC500 Men's Eco Polo"],
 ];
 
 /* Sublimation (#14) needs a poly garment, so it is added only where the fabric
@@ -197,7 +241,6 @@ function makeClient(acct, key) {
 /* ── Encoding, matching lumise's lib->enjson() ───────────────────────────── */
 
 const enjson = (o) => Buffer.from(encodeURIComponent(JSON.stringify(o)), 'utf8').toString('base64');
-const sq = (s) => "'" + String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'";
 const money = (n) => Math.round(Number(n) * 100) / 100;
 
 function buildStages(type) {
@@ -258,23 +301,6 @@ function buildPrintings(type, isPoly) {
 }
 
 /* ── SQL ─────────────────────────────────────────────────────────────────── */
-
-function mysql(url, sql, { rows = false } = {}) {
-  const u = new URL(url);
-  const args = ['-h', u.hostname, '-P', u.port || '3306', '-u', decodeURIComponent(u.username),
-    '--protocol=TCP', '--default-character-set=utf8mb4', '-e', sql,
-    u.pathname.replace(/^\//, '') || 'railway'];
-  const r = spawnSync(MYSQL, rows ? ['-B', ...args] : args, {
-    env: Object.assign({}, process.env, { MYSQL_PWD: decodeURIComponent(u.password) }),
-    encoding: 'utf8', stdio: rows ? ['ignore', 'pipe', 'inherit'] : ['ignore', 'inherit', 'inherit'],
-  });
-  if (r.status !== 0) throw new Error('mysql exited ' + r.status);
-  if (!rows) return null;
-  const lines = r.stdout.trim().split('\n');
-  if (lines.length < 2) return [];
-  const head = lines[0].split('\t');
-  return lines.slice(1).map((l) => Object.fromEntries(l.split('\t').map((v, i) => [head[i], v])));
-}
 
 /* ── Main ────────────────────────────────────────────────────────────────── */
 

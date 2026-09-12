@@ -22,24 +22,11 @@
  * wrong silhouette the moment someone opens the editor.
  *
  * Read-only. Prints a verdict per product; writes nothing. */
-const { spawnSync } = require('child_process');
-const MYSQL = '/usr/local/opt/mysql-client/bin/mysql';
 const { CLASSIFY } = require('./lib/garments');
+const { mysql: rawMysql } = require('./lib/db');
 
-function mysql(url, sql) {
-  const u = new URL(url);
-  const r = spawnSync(MYSQL, ['-B', '-h', u.hostname, '-P', u.port || '3306',
-    '-u', decodeURIComponent(u.username), '--protocol=TCP',
-    '--default-character-set=utf8mb4', '-e', sql, u.pathname.replace(/^\//, '') || 'railway'], {
-    env: Object.assign({}, process.env, { MYSQL_PWD: decodeURIComponent(u.password) }),
-    encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'],
-  });
-  if (r.status !== 0) throw new Error('mysql exited ' + r.status);
-  const lines = r.stdout.trim().split('\n');
-  if (lines.length < 2) return [];
-  const head = lines[0].split('\t');
-  return lines.slice(1).map((l) => Object.fromEntries(l.split('\t').map((v, i) => [head[i], v])));
-}
+/* This tool only ever reads rows. */
+const mysql = (url, sql) => rawMysql(url, sql, { rows: true });
 
 const dec = (b) => { try { return JSON.parse(decodeURIComponent(Buffer.from(b, 'base64').toString('utf8'))); }
   catch { return null; } };
