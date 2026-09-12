@@ -74,8 +74,17 @@ test('a failed sync does not burn the day', () => {
 });
 
 test('the deployed image installs a mysql client', () => {
-  const toml = read('nixpacks.toml');
-  assert.match(toml, /aptPkgs/, 'no package list');
-  assert.match(toml, /mysql-client/, 'the binary the sync needs is not installed');
-  assert.match(toml, /"\.\.\."/, 'the default packages must be inherited, not replaced');
+  /* Railway builds this service with Railpack. A nixpacks.toml is read by
+     nothing: the first attempt at this fix shipped one, the deploy went green,
+     the build installed only libatomic1, and the sync stayed broken. */
+  assert.ok(!fs.existsSync(path.join(root, 'nixpacks.toml')),
+    'nixpacks.toml is dead config here — Railpack will ignore it');
+  const cfg = JSON.parse(read('railpack.json'));
+  assert.ok(Array.isArray(cfg.deploy && cfg.deploy.aptPackages),
+    'deploy.aptPackages is where a runtime package goes');
+  assert.ok(cfg.deploy.aptPackages.some((p) => /mysql-client/.test(p)),
+    'the binary the sync needs is not installed in the final image');
+  /* Omitted on purpose: Railpack keeps the detected start command, and pinning
+     one here would be a second copy of package.json's start script. */
+  assert.ok(!cfg.deploy.startCommand, 'do not duplicate the start command');
 });
