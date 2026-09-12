@@ -45,11 +45,20 @@ The 35 colourways still on the silhouette are not a bug to fix:
 - **62 side-images do not exist at S&S** (`no image at S&S — skipped` in the
   logs). #143 has no photo for any of its three colours, #148 none for nine of
   fifteen. Nothing to fetch; those colourways keep the stand-in.
-- **#97 is the one title mismatch** — 15 colourways at S&S, 4 matched the
-  product's colour titles. `wire.js` keys on an exact title match
-  (`byTitle.get(c.name)`), and S&S returns names like `Black/ White/ White`
-  where the product says `Black/ White`. A normalising match would recover
-  most of these; not attempted.
+- **#97 Harriton M500 is selling the wrong colour list entirely.** Not a
+  string-matching problem — I said that first and it was wrong. The product
+  offers Ash, Sport Grey, Graphite Heather, Irish Green, Safety Green,
+  Carolina Blue, Garnet, Maroon and thirteen more: that is a **Gildan tee
+  palette on a Harriton twill work shirt**. S&S says the M500 comes in Dill,
+  French Blue, Nautical Blue, Stone, Sunray Yellow, Team Orange, Team Purple,
+  Wine and Hunter — none of which the shop lists. Only Black, Navy, Red and
+  White appear on both, by coincidence of generic names.
+
+  So the shop is taking orders for 21 colours this garment is not made in, and
+  cannot sell the 11 it is. Normalising the match would recover nothing. The
+  fix is to re-pull the colour attribute from S&S for style 13845, which is a
+  catalogue correction, not an art one — and it has to happen before the art
+  can be wired.
 
 `--list` reports these as `partial` forever, because `done` is
 `wired >= cols` and a colourway with no supplier photo can never be wired.
