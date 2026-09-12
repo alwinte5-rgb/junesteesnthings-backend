@@ -70,7 +70,14 @@ process.stdin.on('end', () => {
     for (const [side, url2] of [['front', c.front_url], ['back', c.back_url]]) {
       if (!st[side] || !url2) continue;          // a cap has no back stage; leave it alone
       st[side].source = 'uploads';
-      st[side].url = url2;
+      /* `image` is the load-bearing one: app.js only builds a path from `url`
+         when image is absent (`if (!stages[s].image)`), so with image set the
+         URL in `url` was a second copy of the same ~130 characters. Stored
+         through enjson — urlencode then base64 — each copy costs roughly 240
+         bytes, and `variations` is TEXT with a hard 65,535-byte ceiling. #25
+         at 55 colourways did not fit. `url` keeps the file name so the row is
+         still readable by eye. */
+      st[side].url = String(url2).split('/').pop();
       st[side].image = url2;
       st[side].overlay = false;
     }
@@ -88,10 +95,31 @@ process.stdin.on('end', () => {
     for (const s of skipped) console.log('    ' + s);
   }
   console.log('\n  ' + n + ' colourway variations');
-  if (!APPLY) { console.log('\n  dry run — pass --apply to write'); process.exit(0); }
 
   const blob = { default: { COL: opts[0].value }, attrs: ['COL'], variations };
-  mysql(url, 'UPDATE lumise_products SET variations=' + sq(enjson(blob)) +
+  const encoded = enjson(blob);
+
+  /* `variations` is TEXT — 65,535 bytes, and what is stored is enjson's
+     base64(urlencode(json)), which is roughly nine times the raw JSON. MySQL
+     reports going over as "Data too long for column", which says nothing about
+     how many colourways would fit. Refuse here instead, with the numbers. */
+  const LIMIT = 65535;
+  console.log('  ' + encoded.length + ' bytes of ' + LIMIT + ' (' +
+    Math.round((encoded.length / LIMIT) * 100) + '% of the column)');
+  if (encoded.length > LIMIT) {
+    console.error('  TOO LARGE — ' + n + ' colourways need ' + encoded.length +
+      ' bytes, the column holds ' + LIMIT + '.');
+    console.error('  About ' + Math.floor(LIMIT / (encoded.length / n)) +
+      ' colourways fit. Either cut what each variation stores, or widen the ' +
+      'column: ALTER TABLE lumise_products MODIFY variations MEDIUMTEXT.');
+    process.exit(1);
+  }
+
+  /* After the size report, so a dry run answers the question that actually
+     matters about a large style: will this fit. */
+  if (!APPLY) { console.log('\n  dry run — pass --apply to write'); process.exit(0); }
+
+  mysql(url, 'UPDATE lumise_products SET variations=' + sq(encoded) +
     ' WHERE id=' + Number(productId) + ';');
   console.log('  written.');
 });
