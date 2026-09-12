@@ -35,6 +35,66 @@ function classify(name) {
   return (CLASSIFY.find(([, re]) => re.test(String(name || ''))) || ['unknown'])[0];
 }
 
+/* A class is a FAMILY; inside it the cut can still be wrong.
+ *
+ * The designer has exactly one headwear image, so a cuffed beanie, a visor, a
+ * bucket hat and a mesh-back trucker are every one of them drawn as a
+ * structured six-panel cap. The catalogue photo is the real garment, so the
+ * shop page looks right and only the design canvas lies — which is the half the
+ * customer is looking at while they decide.
+ *
+ * classify() calls all of those 'cap' and is right to: they take the same print
+ * area and the same decorations. This is the second question — does the
+ * designer own a picture of THIS garment, or is it borrowing one? */
+const SUBTYPE = [
+  ['beanie',     /\b(beanie|knit cap|cuffed|skully)\b/i],
+  ['visor',      /\bvisor\b/i],
+  ['bucket',     /\b(bucket|booney)\b/i],
+  ['trucker',    /\b(trucker|mesh.?back)\b/i],
+  ['dad-hat',    /\bdad hat\b/i],
+  ['duffel',     /\bduffel\b/i],
+  ['drawstring', /\b(drawstring|sackpack|cinch|sport ?pack)\b/i],
+  ['backpack',   /\b(backpack|rucksack)\b/i],
+  ['sling',      /\b(sling|pouch|fanny)\b/i],
+];
+
+/** The narrower cut, or null when the class is as specific as it gets. */
+function subtype(name) {
+  const hit = SUBTYPE.find(([, re]) => re.test(String(name || '')));
+  return hit ? hit[0] : null;
+}
+
+/* What a garment is drawn on when the designer has no art of its own, and what
+ * that stand-in actually looks like. Keyed by subtype first, then class.
+ *
+ * Empty out an entry as soon as real art lands in core/raws/products — the
+ * audit reads this to decide what to report, so a stale entry here is the
+ * difference between "we know" and "we forgot". */
+const STANDIN = {
+  beanie:     'a structured six-panel cap',
+  visor:      'a structured six-panel cap',
+  bucket:     'a structured six-panel cap',
+  trucker:    'a solid-back cap, with no mesh',
+  'dad-hat':  'a structured cap, where this one is unstructured',
+  duffel:     'a flat tote',
+  drawstring: 'a flat tote',
+  backpack:   'a flat tote',
+  sling:      'a flat tote',
+  vest:       'a sweatshirt, sleeves and all',
+  jacket:     'a sweatshirt',
+  qzip:       'a plain sweatshirt, with no placket or zip',
+  woven:      'a knit shirt, with no collar stand or button placket',
+};
+
+/** What this product is really drawn as, or null when the art is its own. */
+function standin(name) {
+  const st = subtype(name);
+  if (st && STANDIN[st]) return { as: st, looks: STANDIN[st] };
+  const cls = classify(name);
+  if (STANDIN[cls]) return { as: cls, looks: STANDIN[cls] };
+  return null;
+}
+
 /* Decoration roles. One per thing the shop actually sells; the titles are the
    designer's own, matched case-insensitively and on a prefix so a later edit to
    the stitch band in a title does not orphan the role. */
@@ -88,4 +148,4 @@ const DECORATIONS = {
   onesie:  ['dtf', 'screen'],
 };
 
-module.exports = { CLASSIFY, classify, ROLES, DECORATIONS, EMB_FULL, EMB_FRONT_ONLY, EMB_PANEL };
+module.exports = { CLASSIFY, classify, SUBTYPE, subtype, STANDIN, standin, ROLES, DECORATIONS, EMB_FULL, EMB_FRONT_ONLY, EMB_PANEL };

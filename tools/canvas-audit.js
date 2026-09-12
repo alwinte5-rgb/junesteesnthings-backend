@@ -22,7 +22,7 @@
  * wrong silhouette the moment someone opens the editor.
  *
  * Read-only. Prints a verdict per product; writes nothing. */
-const { CLASSIFY } = require('./lib/garments');
+const { CLASSIFY, standin } = require('./lib/garments');
 const { mysql: rawMysql } = require('./lib/db');
 
 /* This tool only ever reads rows. */
@@ -61,7 +61,7 @@ process.stdin.on('end', () => {
   const rows = mysql(url,
     'SELECT id, name, stages, active FROM lumise_products WHERE active=1 ORDER BY id;');
 
-  const bad = [], noArt = [], ok = [];
+  const bad = [], noArt = [], ok = [], borrowed = [];
   for (const p of rows) {
     const st = dec(p.stages);
     if (!st || !Object.keys(st).length) { noArt.push({ p, why: 'no stages at all' }); continue; }
@@ -72,12 +72,23 @@ process.stdin.on('end', () => {
     if (cls === 'unknown') { noArt.push({ p, why: 'cannot tell what garment this is' }); continue; }
 
     const allowed = OK_ART[cls] || [];
-    if (allowed.some((re) => re.test(art))) { ok.push({ p, cls }); continue; }
+    if (allowed.some((re) => re.test(art))) {
+      /* The family is right. That is not the same as the garment being right:
+         one hat.png stands in for every beanie, visor and trucker, and a vest
+         is drawn with sleeves. Reported separately because it is not a
+         configuration mistake to fix in SQL — it is artwork that does not
+         exist yet. */
+      const sub = standin(p.name);
+      if (sub) borrowed.push({ p, cls, sub });
+      else ok.push({ p, cls });
+      continue;
+    }
     bad.push({ p, cls, art: art.replace(/products\//g, '').replace(/\.png/g, '') });
   }
 
   console.log('CANVAS AUDIT — ' + rows.length + ' active products\n');
-  console.log('  ' + ok.length + ' correct · ' + bad.length + ' mismatched · ' + noArt.length + ' unusable\n');
+  console.log('  ' + ok.length + ' correct · ' + borrowed.length + ' stand-in art · ' +
+    bad.length + ' mismatched · ' + noArt.length + ' unusable\n');
 
   if (bad.length) {
     console.log('MISMATCHED — the editor draws the wrong garment (' + bad.length + ')');
@@ -86,6 +97,20 @@ process.stdin.on('end', () => {
     for (const b of bad.sort((x, y) => x.cls.localeCompare(y.cls))) {
       console.log('  ' + String(b.p.id).padStart(3) + '  ' + b.p.name.slice(0, 44).padEnd(46) +
         b.cls.padEnd(9) + b.art.slice(0, 40));
+    }
+    console.log();
+  }
+  if (borrowed.length) {
+    console.log('STAND-IN ART — right print area, wrong garment shape (' + borrowed.length + ')');
+    console.log('  The catalogue photo is the real product; only the design canvas is');
+    console.log('  wrong, which is the half the customer designs against.\n');
+    const by = {};
+    for (const b of borrowed) (by[b.sub.as] = by[b.sub.as] || []).push(b);
+    for (const k of Object.keys(by).sort()) {
+      console.log('  ' + k + ' — drawn as ' + by[k][0].sub.looks + ' (' + by[k].length + ')');
+      for (const b of by[k]) {
+        console.log('      #' + String(b.p.id).padStart(3) + '  ' + b.p.name.slice(0, 58));
+      }
     }
     console.log();
   }
