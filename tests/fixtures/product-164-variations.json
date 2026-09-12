@@ -1,0 +1,281 @@
+{
+ "id": "164",
+ "name": "Richardson 112RE Sustainable Trucker Cap",
+ "price": 15.44,
+ "description": "",
+ "printings": [],
+ "attributes": {
+  "QTYS": {
+   "type": "quantity",
+   "title": "",
+   "values": "{\"multiple_options\":[{\"title\":\"Adjustable\",\"price\":\"\",\"default\":\"\"}]}",
+   "id": "QTYS",
+   "name": "Quantity per Size"
+  },
+  "COL": {
+   "type": "product_color",
+   "title": "",
+   "values": {
+    "options": [
+     {
+      "value": "#1b151a",
+      "title": "Black",
+      "price": "",
+      "default": "1"
+     },
+     {
+      "value": "#8a9b9e",
+      "title": "Black/ Charcoal",
+      "price": "",
+      "default": ""
+     },
+     {
+      "value": "#4d464d",
+      "title": "Charcoal/ Black",
+      "price": "",
+      "default": ""
+     },
+     {
+      "value": "#777056",
+      "title": "Loden/ Black",
+      "price": "",
+      "default": ""
+     },
+     {
+      "value": "#777057",
+      "title": "Loden/ Khaki",
+      "price": "",
+      "default": ""
+     },
+     {
+      "value": "#333e59",
+      "title": "Navy",
+      "price": "",
+      "default": ""
+     }
+    ]
+   },
+   "id": "COL",
+   "name": "Color"
+  }
+ },
+ "stages": {
+  "front": {
+   "source": "raws",
+   "overlay": true,
+   "url": "products/hat.png",
+   "label": "Front",
+   "edit_zone": {
+    "height": 100,
+    "width": 165,
+    "left": -1,
+    "top": -5,
+    "radius": "0"
+   },
+   "product_width": 400,
+   "product_height": 475
+  }
+ },
+ "variations": {
+  "default": {
+   "COL": "#1b151a"
+  },
+  "attrs": [
+   "COL"
+  ],
+  "variations": {
+   "1": {
+    "id": "1",
+    "conditions": {
+     "COL": "#1b151a"
+    },
+    "price": "",
+    "sku": "",
+    "minqty": "",
+    "maxqty": "",
+    "description": "",
+    "cfgstages": true,
+    "cfgprinting": false,
+    "stages": {
+     "front": {
+      "source": "uploads",
+      "overlay": false,
+      "url": "https://res.cloudinary.com/dhjtzewsx/image/upload/v1789191239/jtees/product-art/richardson-112re/black-front.webp",
+      "label": "Front",
+      "edit_zone": {
+       "height": 100,
+       "width": 165,
+       "left": -1,
+       "top": -5,
+       "radius": "0"
+      },
+      "product_width": 400,
+      "product_height": 475,
+      "image": "https://res.cloudinary.com/dhjtzewsx/image/upload/v1789191239/jtees/product-art/richardson-112re/black-front.webp"
+     }
+    },
+    "printings": null
+   },
+   "2": {
+    "id": "2",
+    "conditions": {
+     "COL": "#8a9b9e"
+    },
+    "price": "",
+    "sku": "",
+    "minqty": "",
+    "maxqty": "",
+    "description": "",
+    "cfgstages": true,
+    "cfgprinting": false,
+    "stages": {
+     "front": {
+      "source": "uploads",
+      "overlay": false,
+      "url": "https://res.cloudinary.com/dhjtzewsx/image/upload/v1789191241/jtees/product-art/richardson-112re/black-charcoal-front.webp",
+      "label": "Front",
+      "edit_zone": {
+       "height": 100,
+       "width": 165,
+       "left": -1,
+       "top": -5,
+       "radius": "0"
+      },
+      "product_width": 400,
+      "product_height": 475,
+      "image": "https://res.cloudinary.com/dhjtzewsx/image/upload/v1789191241/jtees/product-art/richardson-112re/black-charcoal-front.webp"
+     }
+    },
+    "printings": null
+   },
+   "3": {
+    "id": "3",
+    "conditions": {
+     "COL": "#4d464d"
+    },
+    "price": "",
+    "sku": "",
+    "minqty": "",
+    "maxqty": "",
+    "description": "",
+    "cfgstages": true,
+    "cfgprinting": false,
+    "stages": {
+     "front": {
+      "source": "uploads",
+      "overlay": false,
+      "url": "https://res.cloudinary.com/dhjtzewsx/image/upload/v1789191243/jtees/product-art/richardson-112re/charcoal-black-front.webp",
+      "label": "Front",
+      "edit_zone": {
+       "height": 100,
+       "width": 165,
+       "left": -1,
+       "top": -5,
+       "radius": "0"
+      },
+      "product_width": 400,
+      "product_height": 475,
+      "image": "https://res.cloudinary.com/dhjtzewsx/image/upload/v1789191243/jtees/product-art/richardson-112re/charcoal-black-front.webp"
+     }
+    },
+    "printings": null
+   },
+   "4": {
+    "id": "4",
+    "conditions": {
+     "COL": "#777056"
+    },
+    "price": "",
+    "sku": "",
+    "minqty": "",
+    "maxqty": "",
+    "description": "",
+    "cfgstages": true,
+    "cfgprinting": false,
+    "stages": {
+     "front": {
+      "source": "uploads",
+      "overlay": false,
+      "url": "https://res.cloudinary.com/dhjtzewsx/image/upload/v1789191245/jtees/product-art/richardson-112re/loden-black-front.webp",
+      "label": "Front",
+      "edit_zone": {
+       "height": 100,
+       "width": 165,
+       "left": -1,
+       "top": -5,
+       "radius": "0"
+      },
+      "product_width": 400,
+      "product_height": 475,
+      "image": "https://res.cloudinary.com/dhjtzewsx/image/upload/v1789191245/jtees/product-art/richardson-112re/loden-black-front.webp"
+     }
+    },
+    "printings": null
+   },
+   "5": {
+    "id": "5",
+    "conditions": {
+     "COL": "#777057"
+    },
+    "price": "",
+    "sku": "",
+    "minqty": "",
+    "maxqty": "",
+    "description": "",
+    "cfgstages": true,
+    "cfgprinting": false,
+    "stages": {
+     "front": {
+      "source": "uploads",
+      "overlay": false,
+      "url": "https://res.cloudinary.com/dhjtzewsx/image/upload/v1789191247/jtees/product-art/richardson-112re/loden-khaki-front.webp",
+      "label": "Front",
+      "edit_zone": {
+       "height": 100,
+       "width": 165,
+       "left": -1,
+       "top": -5,
+       "radius": "0"
+      },
+      "product_width": 400,
+      "product_height": 475,
+      "image": "https://res.cloudinary.com/dhjtzewsx/image/upload/v1789191247/jtees/product-art/richardson-112re/loden-khaki-front.webp"
+     }
+    },
+    "printings": null
+   },
+   "6": {
+    "id": "6",
+    "conditions": {
+     "COL": "#333e59"
+    },
+    "price": "",
+    "sku": "",
+    "minqty": "",
+    "maxqty": "",
+    "description": "",
+    "cfgstages": true,
+    "cfgprinting": false,
+    "stages": {
+     "front": {
+      "source": "uploads",
+      "overlay": false,
+      "url": "https://res.cloudinary.com/dhjtzewsx/image/upload/v1789191249/jtees/product-art/richardson-112re/navy-front.webp",
+      "label": "Front",
+      "edit_zone": {
+       "height": 100,
+       "width": 165,
+       "left": -1,
+       "top": -5,
+       "radius": "0"
+      },
+      "product_width": 400,
+      "product_height": 475,
+      "image": "https://res.cloudinary.com/dhjtzewsx/image/upload/v1789191249/jtees/product-art/richardson-112re/navy-front.webp"
+     }
+    },
+    "printings": null
+   }
+  }
+ }
+}
