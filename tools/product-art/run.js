@@ -114,43 +114,60 @@ function run(buf) {
 
   if (!want.length) { console.error('nothing to run'); process.exit(1); }
 
+  /* A step that fails throws, so the product it belongs to is abandoned and the
+     BATCH CARRIES ON. Exiting here cost the run everything after the failure —
+     across 27 products and 412 images over three quarters of an hour, one
+     style S&S happens to 500 on should not end the other twenty-six. Every
+     failure is named again at the end, and a re-run retries only those. */
   const step = (label, cmd, args, input) => {
     const r = spawnSync(cmd, args, { input, encoding: 'utf8', stdio: ['pipe', 'inherit', 'inherit'],
       maxBuffer: 1 << 26 });
     if (r.error || r.status !== 0) {
-      console.error('\n  ' + label + ' failed' + (r.error ? ': ' + r.error.message : ' (exit ' + r.status + ')'));
-      process.exit(1);
+      throw new Error(label + ' failed' + (r.error ? ': ' + r.error.message : ' (exit ' + r.status + ')'));
     }
     return r;
   };
+  const failures = [];
 
   console.log((APPLY ? 'APPLYING' : 'DRY RUN — variations will not be written') +
     '\n' + want.length + ' products · ' + want.reduce((s, x) => s + x.images, 0) + ' images\n');
 
+  let n = 0;
   for (const x of want) {
+    n++;
     console.log('─'.repeat(72));
-    console.log('#' + x.id + '  ' + x.name + '   (' + x.cols + ' colourways × ' +
-      x.sides.join('+') + ')');
-    fs.mkdirSync(x.dir, { recursive: true });
+    console.log('[' + n + '/' + want.length + '] #' + x.id + '  ' + x.name +
+      '   (' + x.cols + ' colourways × ' + x.sides.join('+') + ')');
+    try {
+      fs.mkdirSync(x.dir, { recursive: true });
 
-    const coloursJson = path.join(x.dir, 'colours.json');
-    if (!fs.existsSync(coloursJson)) {
-      const r = spawnSync('node', [path.join(HERE, 'colours.js'), String(x.sid)],
-        { input: buf, encoding: 'utf8', maxBuffer: 1 << 26 });
-      if (r.status !== 0 || !r.stdout.trim()) {
-        console.error('  colours failed for style ' + x.sid + ': ' + (r.stderr || '').slice(0, 200));
-        process.exit(1);
+      const coloursJson = path.join(x.dir, 'colours.json');
+      if (!fs.existsSync(coloursJson)) {
+        const r = spawnSync('node', [path.join(HERE, 'colours.js'), String(x.sid)],
+          { input: buf, encoding: 'utf8', maxBuffer: 1 << 26 });
+        if (r.status !== 0 || !r.stdout.trim()) {
+          throw new Error('colours failed for style ' + x.sid + ': ' + (r.stderr || '').slice(0, 200));
+        }
+        fs.writeFileSync(coloursJson, r.stdout);
       }
-      fs.writeFileSync(coloursJson, r.stdout);
-    }
-    console.log('  ' + JSON.parse(fs.readFileSync(coloursJson, 'utf8')).length + ' colourways at S&S');
+      console.log('  ' + JSON.parse(fs.readFileSync(coloursJson, 'utf8')).length + ' colourways at S&S');
 
-    step('pack', 'python3', [path.join(HERE, 'pack.py'), coloursJson, x.dir, '--sides', x.sides.join(',')]);
-    step('upload', 'node', [path.join(HERE, 'upload.js'), path.join(x.dir, 'manifest.json'),
-      x.folder, '--sides=' + x.sides.join(',')], buf);
-    step('wire', 'node', [path.join(HERE, 'wire.js'), String(x.id), path.join(x.dir, 'manifest.json')]
-      .concat(APPLY ? ['--apply'] : []), buf);
+      step('pack', 'python3', [path.join(HERE, 'pack.py'), coloursJson, x.dir, '--sides', x.sides.join(',')]);
+      step('upload', 'node', [path.join(HERE, 'upload.js'), path.join(x.dir, 'manifest.json'),
+        x.folder, '--sides=' + x.sides.join(',')], buf);
+      step('wire', 'node', [path.join(HERE, 'wire.js'), String(x.id), path.join(x.dir, 'manifest.json')]
+        .concat(APPLY ? ['--apply'] : []), buf);
+    } catch (e) {
+      failures.push('#' + x.id + '  ' + x.name + ' — ' + e.message);
+      console.error('  SKIPPED — ' + e.message);
+    }
   }
   console.log('─'.repeat(72));
-  console.log(APPLY ? 'done — variations written' : 'dry run complete — pass --apply to write variations');
+  console.log((want.length - failures.length) + '/' + want.length + ' products ' +
+    (APPLY ? 'written' : 'dry-run clean'));
+  if (failures.length) {
+    console.log('\n' + failures.length + ' FAILED — re-run the same command to retry only these:');
+    for (const f of failures) console.log('  ' + f);
+    process.exitCode = 1;
+  }
 }
