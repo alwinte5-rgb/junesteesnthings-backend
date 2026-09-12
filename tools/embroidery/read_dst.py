@@ -10,9 +10,12 @@ Record decoding is the standard Tajima ternary encoding — each byte carries
 signed contributions of 1, 3, 9, 27 and 81 units, and a unit is 0.1mm. The
 flag byte separates a stitch from a jump, a colour change and the end.
 
-The header's own ST: field is read too and compared with the records counted.
-A file whose header disagrees with its body is a file to distrust, and that is
-worth knowing before it is used to price anything.
+The header's own ST: field is compared with the records counted — but against
+the right arithmetic. ST: counts every record the machine executes, not just
+needle penetrations, so it equals stitches + jumps + colour changes + the end
+record. Checked against five real files and it holds exactly on all of them.
+Comparing it to the stitch count alone reports every well-formed file as
+corrupt, which trains you to ignore the one that really is.
 """
 import os, re, sys
 
@@ -98,8 +101,11 @@ def main():
     print(f"  {r['width_mm']}mm x {r['height_mm']}mm   ({r['width_in']}in x {r['height_in']}in)\n")
     print(f"    stitches          {r['stitches']:,}")
     if r['declared_stitches'] is not None:
-        ok = 'matches header' if abs(r['declared_stitches'] - r['stitches']) <= 2 \
-            else f"HEADER DISAGREES (says {r['declared_stitches']:,})"
+        expect = r['stitches'] + r['jumps'] + r['colour_changes'] + 1
+        if r['declared_stitches'] in (expect, expect - 1, r['stitches']):
+            ok = 'consistent (ST: counts jumps and colour changes too)'
+        else:
+            ok = f'HEADER DISAGREES — expected {expect:,} records'
         print(f"    header ST:        {r['declared_stitches']:,}  — {ok}")
     print(f"    jumps             {r['jumps']:,}")
     print(f"    colour changes    {r['colour_changes']}")

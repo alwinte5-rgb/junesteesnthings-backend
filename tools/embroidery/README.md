@@ -150,3 +150,37 @@ capital letters want 6.4mm (7-9mm on knits), and a counter below 0.9mm fills in.
 Complexity is outline length against that of a circle of equal area — a cheap
 stand-in for "how many separate things is the machine being asked to sew". A
 solid shape is about 1; a ring of hairlines is 11.5.
+
+## Three designs: what scales and what does not
+
+| design | size | threads | stitches | per sq in | per inch of width |
+|---|---|---|---|---|---|
+| Paw print heart | 2.77in | 1 | 4,478 | 629 | 1,617 |
+| Unicorn head | 2.57in | 8 | 7,340 | 1,487 | 2,856 |
+| Witches | 3.91in | 1 | 16,461 | 1,125 | 4,210 |
+| Witches | 6.91in | 1 | 30,952 | 677 | 4,479 |
+
+**Within one design, count scales linearly with size** — the witches hold
+4,210-4,479 stitches per inch of width across a 1.8x size range, ±3%, while
+density per square inch falls 40%. Size scaling is linear; use per-inch-of-
+width, not per-square-inch.
+
+**Across designs, nothing is constant.** Per inch of width runs 1,617 to 4,479
+— a 2.8x spread — and the two orderings disagree: the unicorn is denser per
+square inch than the witches but lower per inch of width, because it is small
+and 8 threads. Detail and colour count drive it, and neither metric captures
+them alone.
+
+So a usable estimate is `size x k(complexity)`, and k is what
+`digitize.py`'s complexity measure is for. Fitting it needs pairs of
+usable-resolution ARTWORK and its finished DST; only the DST half exists here,
+so k is not yet fitted and the count remains a modelled figure, not a
+calibrated one.
+
+### A false alarm worth not shipping
+
+`ST:` in the header counts every record the machine executes, not just needle
+penetrations: it equals stitches + jumps + colour changes + the end record.
+That holds exactly on all five files read here. Comparing it against the stitch
+count alone flagged every single well-formed file as corrupt — an alarm that
+fires always is an alarm nobody reads.
