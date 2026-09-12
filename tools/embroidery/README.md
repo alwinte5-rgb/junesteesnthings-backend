@@ -108,3 +108,45 @@ The open-source ground, if it is ever wanted:
 Recommended order: exact counts from supplied DSTs via pyembroidery (small,
 certain), then Ink/Stitch for simple one-colour marks, and keep sending complex
 logos to a human digitiser.
+
+## Calibrated against a real digitised file
+
+`read_dst.py` reads a Tajima DST with no dependency (512-byte header, 3-byte
+records, 0.1mm units) and reports what is actually in it. A header `ST:` that
+looks wrong usually is not — most writers count jumps in it, which is exactly
+the 47-stitch gap on the file below.
+
+The same design, professionally digitised at four sizes:
+
+| size | stitches | per sq in | **per inch of width** | avg stitch |
+|---|---|---|---|---|
+| 3.91in | 16,461 | 1,125 | 4,210 | 1.89mm |
+| 4.91in | 21,030 | 913 | 4,283 | 2.19mm |
+| 5.91in | 25,861 | 774 | 4,375 | 2.47mm |
+| 6.91in | 30,952 | 677 | 4,479 | 2.74mm |
+
+**Stitch count scales with LINEAR size, not with area.** Density per square
+inch falls by 40% across that range while stitches per inch of width barely
+moves. The reason is visible in the last column: scaling a design up keeps the
+row spacing and lengthens the stitches, so rows grow with height while stitches
+per row stay put.
+
+That matters for money in both directions. Pricing embroidery per square inch
+overcharges large designs and undercharges small ones, and the published
+"1,200-2,000 stitches per square inch" rule only holds at around 4in — which is
+roughly the size those rules were written for.
+
+## What the shop will not take
+
+Encoded in `review()`, from the published digitising minimums rather than
+invented: satin columns below 1.3mm are unreliable, thin lines want 2.5mm,
+capital letters want 6.4mm (7-9mm on knits), and a counter below 0.9mm fills in.
+
+    ACCEPT    nothing flagged
+    REVIEW    some fine detail, or complex enough to be worth eyeballing
+    DECLINE   15%+ of the design finer than 1.3mm, complexity 8x a plain
+              shape, under 25mm across, or more than 6 thread colours
+
+Complexity is outline length against that of a circle of equal area — a cheap
+stand-in for "how many separate things is the machine being asked to sew". A
+solid shape is about 1; a ring of hairlines is 11.5.

@@ -54,6 +54,23 @@ PPM = 4.0              # working resolution, pixels per mm
 
 FABRIC = (232, 228, 220)
 
+# WHAT THE SHOP WILL NOT TAKE.
+# "No fine lined projects. Nothing too small or lots of letters. Not too many
+# details." Encoded here so the answer is the same every time and is given
+# BEFORE the work is quoted, not after it sews badly.
+#
+# The numbers are the published digitising minimums, not invented:
+#   satin column      0.8mm absolute floor, 1.3mm before it is reliable
+#   thin line         1.27mm (0.05in) minimum, 2.5mm (0.1in) to be safe
+#   capital letters   6.4mm, and 7-9mm on knits and performance fabric
+#   counters          0.9mm, or the hole in an 'a' fills in
+MIN_SATIN_MM = 1.30
+MIN_LINE_SAFE_MM = 2.50
+MIN_CAP_HEIGHT_MM = 6.40
+THIN_DECLINE_PCT = 15.0      # this much unstitchable detail and it is not a job
+COMPLEXITY_DECLINE = 8.0     # edge length vs an equal-area circle
+MIN_DESIGN_MM = 25.0
+
 
 def load_mask(path):
     im = Image.open(path)
@@ -187,6 +204,53 @@ def border(m, ppm):
     return out
 
 
+def review(width_mm, height_mm, area_mm2, outline_mm, thin_pct, threads_n):
+    """Accept, review by hand, or decline — with the reason in plain words.
+
+    Complexity is the outline length against that of a circle of the same area.
+    A solid blob is 1; lots of small elements, letters and fine work push it up.
+    It is a cheap stand-in for "how many separate things is the machine asked to
+    sew", which is what actually makes a design fail and makes it expensive.
+    """
+    flags = []                      # (severity, reason)
+    equal_circle = 2.0 * math.sqrt(math.pi * max(area_mm2, 1.0))
+    complexity = outline_mm / equal_circle if equal_circle else 0.0
+
+    if min(width_mm, height_mm) < MIN_DESIGN_MM:
+        flags.append(('decline', f'smaller than {MIN_DESIGN_MM:.0f}mm across — too small to sew cleanly'))
+
+    # Graded, because "some fine detail" and "the whole thing is hairlines" are
+    # different conversations. Half the decline threshold is worth a look by a
+    # human; the threshold itself is not a job this shop takes.
+    if thin_pct >= THIN_DECLINE_PCT:
+        flags.append(('decline', f'{thin_pct:.0f}% of it is finer than {MIN_SATIN_MM}mm — '
+                      'those lines close up or disappear in thread'))
+    elif thin_pct >= THIN_DECLINE_PCT / 2:
+        flags.append(('review', f'{thin_pct:.0f}% is finer than {MIN_SATIN_MM}mm — '
+                      'check what is lost before quoting'))
+
+    if complexity >= COMPLEXITY_DECLINE:
+        flags.append(('decline', f'complexity {complexity:.1f}x a plain shape — small elements, '
+                      'lettering or fine detail; the kind of job that sews badly'))
+    elif complexity >= COMPLEXITY_DECLINE / 1.6:
+        flags.append(('review', f'complexity {complexity:.1f}x a plain shape — detailed enough '
+                      'to be worth eyeballing the preview'))
+
+    if threads_n > 6:
+        flags.append(('decline', f'{threads_n} thread colours — every change is a stop and a trim'))
+    elif threads_n > 4:
+        flags.append(('review', f'{threads_n} thread colours'))
+
+    if any(sev == 'decline' for sev, _ in flags):
+        verdict = 'DECLINE'
+    elif flags:
+        verdict = 'REVIEW'
+    else:
+        verdict = 'ACCEPT'
+    reasons = [r for _, r in flags]
+    return {'verdict': verdict, 'complexity': round(complexity, 1), 'reasons': reasons}
+
+
 def run(path, width_cm, colours, out_png):
     mask, rgba = load_mask(path)
     ph, pw = mask.shape
@@ -240,6 +304,12 @@ def run(path, width_cm, colours, out_png):
         canvas.save(out_png)
 
     area_px = int(m.sum())
+    mm_per_px = 1.0 / ppm
+    area_mm2 = area_px * mm_per_px * mm_per_px
+    edge_px = int((m & ~erode(m, 1)).sum())
+    outline_mm = edge_px * mm_per_px
+    thin_pct = round(100.0 * thin_px / max(1, area_px), 1)
+    gate = review(width_mm, width_mm * ph / pw, area_mm2, outline_mm, thin_pct, len(layers))
     return {
         'file': os.path.basename(path),
         'width_cm': round(width_cm, 1), 'height_cm': round(width_cm * ph / pw, 1),
@@ -247,7 +317,10 @@ def run(path, width_cm, colours, out_png):
         'stitches': total,
         'stitches_low': int(total * 0.85), 'stitches_high': int(total * 1.15),
         'per_thread': per,
-        'detail_at_risk_pct': round(100.0 * thin_px / max(1, area_px), 1),
+        'detail_at_risk_pct': thin_pct,
+        'complexity': gate['complexity'],
+        'verdict': gate['verdict'],
+        'reasons': gate['reasons'],
         'preview': out_png,
     }
 
@@ -270,9 +343,11 @@ def main():
         print(f"    {t['thread']}   {t['stitches']:>6,}   "
               f"(fill {t['fill']:,} · underlay {t['underlay']:,} · border {t['border']:,})")
     print(f"\n    TOTAL {r['stitches']:,} stitches   (±15%: {r['stitches_low']:,}-{r['stitches_high']:,})")
-    if r['detail_at_risk_pct'] >= 2:
-        print(f"\n    {r['detail_at_risk_pct']}% of the design is too fine to hold a fill —")
-        print(f"    it will close up or vanish in thread. Show the customer.")
+    print(f"\n    detail at risk    {r['detail_at_risk_pct']}%")
+    print(f"    complexity        {r['complexity']}x a plain shape")
+    print(f"\n    {r['verdict']}")
+    for why in r['reasons']:
+        print(f"      - {why}")
     if r['preview']:
         print(f"\n    preview: {r['preview']}")
 
