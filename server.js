@@ -1,20 +1,5 @@
 require('dotenv').config();
 
-/* Monitoring starts BEFORE anything else is required.
- *
- * The Sentry SDK instruments modules as they load — express, http, pg — so a
- * require that happens first is a module it can never wrap. dotenv is the one
- * exception above it, because the DSN it reads comes out of .env.
- *
- * No DSN set means this is inert and the app boots exactly as it did before:
- * the database digest in `recordError` below is still the reporter, so a shop
- * with no Sentry project yet is not a shop with no error reporting. */
-const {
-  initMonitoring, captureError, flushMonitoring,
-  monitoringEnabled, environmentName: monitoringEnvironment,
-} = require('./tools/lib/monitoring');
-initMonitoring();
-
 const express    = require('express');
 const cors       = require('cors');
 const helmet     = require('helmet');
@@ -1922,7 +1907,7 @@ app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, verifyTurnstil
     console.error('DB insert failed:', err.message);
     /* A lead that reached the form and was lost. The customer is told it
        failed; the shop otherwise never hears about it at all. */
-    reportError('submission-insert', err).catch(() => {});
+    recordError('submission-insert', err.message, err.stack).catch(() => {});
     return res.status(500).json({ error: 'Failed to save submission.' });
   }
 
@@ -2113,7 +2098,7 @@ app.post('/webhooks/clover', async (req, res) => {
          exactly the thing nobody finds out about later, so it goes in the
          error table that gets digested to the shop rather than a log line. */
       console.error('clover payment not recorded:', e.message);
-      reportError('clover-payment-unrecorded', e,
+      recordError('clover-payment-unrecorded', e.message,
         `payment ${paymentId}, order ${payment.order?.id || '?'}, ${money((amount || 0) / 100)}`)
         .catch(() => {});
     });
@@ -3896,7 +3881,6 @@ function productionStart(from) {
    to 1,000 logos. Past those the sheet promises nothing, so a date derived from
    it is an extrapolation and the page says so rather than asserting it. */
 const SHEET_PIECE_CEILING = parseInt(process.env.JT_SHEET_CEILING || '2400', 10);
-
 /* Days added when a logo still has to be digitised. Embroidery cannot start
    until a stitch file exists, and that work sits outside the production window
    the supplier sheet quotes — so a job needing it genuinely ships later, and a
@@ -7381,27 +7365,18 @@ async function alertShop(subject, innerHtml) {
   }).catch((e) => console.error('shop alert failed:', e.message));
 }
 
-/* ── Error alerting: one funnel, two sinks ────────────────────────
+/* ── Error alerting, on what this app already writes ──────────────────────
  *
- * Every failure path already writes a structured console.error and Railway
- * keeps the logs, so the gap was never CAPTURE — it was NOTICE. Nobody reads
- * logs, so a broken page was reported by a customer or not at all.
+ * There is no error-tracking dependency here on purpose: the boundary forbids
+ * one, and the gap was never CAPTURE. Every failure path already writes a
+ * structured console.error and Railway keeps the logs. The gap is NOTICE —
+ * nobody reads logs, so a broken page is reported by a customer or not at all.
  *
- * The first answer was the digest below: record errors where they survive a
- * restart, group them so a repeated failure is one line rather than a flood,
- * and let the sweep that already runs every hour mail them. Silence when
- * nothing is wrong, because an hourly "all fine" email is one people filter
- * away, and then they filter away the one that mattered.
- *
- * Sentry was added ON TOP of that, not in place of it. The digest needs both
- * the database and email to be working — and "the database is unreachable" is
- * the error most worth hearing about, while email here has already failed
- * silently for three days once. Two sinks that fail for different reasons is
- * the whole point of keeping both.
- *
- * They are wired as ONE funnel: callers invoke recordError/reportError and it
- * fans out. Nothing picks its own reporter, because that is the choice that
- * drifts. Config lives in tools/lib/monitoring.js, in one copy.
+ * So: record errors where they survive a restart, group them so a repeated
+ * failure is one line rather than a flood, and let the sweep that already runs
+ * every hour send a digest when there is something to say. Silence when nothing
+ * is wrong, because an hourly "all fine" email is one people filter away, and
+ * then they filter away the one that mattered.
  */
 
 /** One line per distinct failure, however many times it happens. Never throws:
@@ -7427,31 +7402,6 @@ async function recordError(kind, message, context) {
   }
 }
 
-/** The funnel: both sinks, one call.
- *
- *  Sentry goes FIRST on purpose. The database write is the half that fails when
- *  the database is the thing that is broken, and an await that rejects there
- *  must not take the sink that would still have worked down with it.
- *
- *  Never throws — both halves swallow their own failure, for the reason above
- *  recordError: a reporter that can itself fail turns one broken thing into two
- *  and hides the first. */
-function reportError(kind, err, context) {
-  captureError(kind, err, context);
-  const message = err && err.message ? err.message : String(err);
-  return recordError(kind, message, context || (err && err.stack));
-}
-
-/** A URL path with its identifiers replaced, so one broken route is one fault.
- *  `/api/quotes/AB12CD/pay` -> `/api/quotes/:id/pay`. Anything carrying a digit
- *  or long enough to be a token or hash is an identifier; a word is not. */
-function routeShape(pathname) {
-  return String(pathname || '/')
-    .split('/')
-    .map((seg) => (seg && (/\d/.test(seg) || seg.length > 20) ? ':id' : seg))
-    .join('/');
-}
-
 /* The two ways a failure escapes every try/catch in this file. Without these
    an uncaught exception is a process that vanishes and restarts with nothing
    but a log line, which is the failure least likely to be noticed and most
@@ -7459,25 +7409,18 @@ function routeShape(pathname) {
 process.on('unhandledRejection', (reason) => {
   const msg = reason && reason.message ? reason.message : String(reason);
   console.error('unhandledRejection:', msg);
-  reportError('unhandledRejection', reason).catch(() => {});
+  recordError('unhandledRejection', msg, reason && reason.stack).catch(() => {});
 });
 
 process.on('uncaughtException', (err) => {
   console.error('uncaughtException:', err && err.message);
   /* Recorded, then rethrown by letting the process die: an uncaught exception
      leaves the process in an unknown state, and a server that keeps serving
-     from one is worse than one Railway restarts.
-     Both sinks are given a moment to land first — best effort, because the
-     alternative is losing the report of the crash entirely. The Sentry flush
-     is a network round trip, so it gets its own short budget rather than the
-     250ms that was enough for a local database write; the exit is scheduled
-     either way, so a sink that hangs cannot keep a broken process alive. */
-  const exit = () => process.exit(1);
-  setTimeout(exit, 2500).unref();
-  Promise.allSettled([
-    reportError('uncaughtException', err),
-    flushMonitoring(2000),
-  ]).finally(() => setTimeout(exit, 250));
+     from one is worse than one Railway restarts. The write is given a moment
+     to land first — best effort, because the alternative is losing it. */
+  recordError('uncaughtException', err && err.message, err && err.stack)
+    .catch(() => {})
+    .finally(() => setTimeout(() => process.exit(1), 250));
 });
 
 /** Email what has gone wrong since the last digest, and nothing when nothing
@@ -7822,7 +7765,7 @@ app.post('/webhooks/stripe', async (req, res) => {
     /* Stripe retries, so this usually resolves itself — but a webhook failing
        repeatedly means money is not landing on quotes, and the retry window is
        about three days. Somebody should know inside that window, not after it. */
-    reportError('stripe-webhook', err).catch(() => {});
+    recordError('stripe-webhook', err.message, err.stack).catch(() => {});
     if (!res.headersSent) res.sendStatus(500);
   }
 });
@@ -13397,7 +13340,7 @@ if (process.env.JT_INTERNAL_KEY) {
          has been failing silently for a fortnight is exactly the thing an
          hourly digest is for. The digest step itself is excluded, since a
          failure to report errors cannot report itself. */
-      if (name !== 'error digest') reportError('sweep:' + name, e).catch(() => {});
+      if (name !== 'error digest') recordError('sweep:' + name, e.message, e.stack).catch(() => {});
     }
   };
 
@@ -13651,29 +13594,12 @@ app.get('/api/test-email', requireAdmin, async (_req, res) => {
   }
 });
 
-/* Every 500 this app has ever served went to console.error and nowhere else:
-   the digest never saw them, because nothing here called the recorder. A route
-   throwing on every request looked identical, from the outside, to a route
-   nobody visited. It is reported now.
-
-   `entity.too.large` is excluded deliberately — it is a caller sending an
-   oversized body, not this app breaking, and reporting it would fill the
-   digest with other people's mistakes. */
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, _next) => {
   if (err.type === 'entity.too.large') {
     return res.status(413).json({ error: 'Request body too large.' });
   }
   console.error('Unhandled error:', err.message);
-  /* The route PATTERN, not the path. `/quote/AB12CD` as a grouping key makes
-     one failing route look like a hundred distinct faults — a flood in the
-     digest and a hundred issues in Sentry — which is exactly what the
-     fingerprint elsewhere strips digits to avoid. Express only knows the
-     pattern when the error came from a route handler, so identifier-shaped
-     segments are collapsed by hand as the fallback.
-     Fire-and-forget: the customer's 500 must not wait on a report. */
-  const route = (req.route && req.route.path) || routeShape(req.path);
-  reportError(`http:${req.method} ${route}`, err).catch(() => {});
   res.status(500).json({ error: 'Internal server error.' });
 });
 
@@ -13716,18 +13642,6 @@ function validateEnv() {
   }
   if (!process.env.ADMIN_PASSWORD?.trim()) {
     console.warn('WARNING: ADMIN_PASSWORD is not set — admin routes will be inaccessible.');
-  }
-  /* Warn-only for the same reason as the rest: no Sentry project yet is a
-     degraded mode, not an outage — the database digest still reports. Said at
-     BOOT and with the environment named, because the failure this prevents is
-     a deploy that silently reports nothing, or reports itself as "development"
-     and never trips a production alert. */
-  if (!process.env.SENTRY_DSN?.trim()) {
-    console.warn('WARNING: SENTRY_DSN is not set — errors are recorded to app_errors and ' +
-      'mailed in the hourly digest, but nothing reaches Sentry. Set it in Railway.');
-  } else {
-    console.log(`monitoring: reporting to Sentry as environment "${monitoringEnvironment()}"` +
-      (monitoringEnabled() ? '' : ' — BUT THE SDK DID NOT START, see the warning above'));
   }
   /* Warn-only, because the shop still takes Zelle and cash and the storefront
      must not be held down by a payment provider. But it is said at BOOT rather
