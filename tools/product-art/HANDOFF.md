@@ -1,5 +1,34 @@
 # Product art — where this stopped
 
+## Latest: colours re-pulled across the whole catalogue (done)
+
+`tools/resync-colours.js` rebuilt every active product's colour list from S&S.
+**20 of 102 were wrong**; all 102 now match, verified on an independent second
+pass. Backup of the 20 previous attribute blobs:
+`~/jtees-product-art/attributes-backup-*.json`.
+
+Worst offenders: four Bella+Canvas styles carried exactly 90 colours each (a
+brand palette, not the style's — the v-neck is really 24, the tank 20), and
+#97 Harriton M500 had a Gildan tee palette on a twill work shirt.
+
+Safety properties worth keeping if this is ever rewritten: a surviving colour
+KEEPS its hex (variations key on it, and so do past orders), and a throttled
+S&S response is retried then skipped, never read as "no colours".
+
+## BLOCKED — needs a permission decision
+
+The auto-mode classifier now refuses any command touching
+`~/.jtees-art.json`, which is every remaining database and S&S task:
+
+- `ALTER TABLE lumise_products MODIFY variations MEDIUMTEXT` (authorised by the
+  owner, refused by the classifier) — #25 cannot be wired without it
+- #88's art run
+- the hat-embroidery minimum of 5, which is stored in the method's own
+  `calculate` blob, so it is a database write too
+
+Nothing is half-applied; each of these simply has not started.
+
+
 Written 2026-09-12. Read this before re-reading the pipeline; it is here so you
 do not have to.
 
