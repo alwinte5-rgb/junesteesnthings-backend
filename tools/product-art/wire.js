@@ -99,11 +99,19 @@ process.stdin.on('end', () => {
   const blob = { default: { COL: opts[0].value }, attrs: ['COL'], variations };
   const encoded = enjson(blob);
 
-  /* `variations` is TEXT — 65,535 bytes, and what is stored is enjson's
-     base64(urlencode(json)), which is roughly nine times the raw JSON. MySQL
-     reports going over as "Data too long for column", which says nothing about
-     how many colourways would fit. Refuse here instead, with the numbers. */
-  const LIMIT = 65535;
+  /* What is stored is enjson's base64(urlencode(json)), roughly nine times the
+     raw JSON, and MySQL reports going over as "Data too long for column" —
+     which says nothing about how many colourways would fit. Refuse here
+     instead, with the numbers.
+
+     The ceiling is READ from the column, never assumed: it was TEXT (65,535)
+     and is now MEDIUMTEXT (16MB), and a hardcoded limit outlived the change by
+     exactly one run — refusing a write that would have succeeded. */
+  const col = mysql(url,
+    'SELECT CHARACTER_MAXIMUM_LENGTH n FROM information_schema.COLUMNS ' +
+    "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='lumise_products' AND COLUMN_NAME='variations';",
+    { rows: true });
+  const LIMIT = Number(col[0] && col[0].n) || 65535;
   console.log('  ' + encoded.length + ' bytes of ' + LIMIT + ' (' +
     Math.round((encoded.length / LIMIT) * 100) + '% of the column)');
   if (encoded.length > LIMIT) {
@@ -111,7 +119,7 @@ process.stdin.on('end', () => {
       ' bytes, the column holds ' + LIMIT + '.');
     console.error('  About ' + Math.floor(LIMIT / (encoded.length / n)) +
       ' colourways fit. Either cut what each variation stores, or widen the ' +
-      'column: ALTER TABLE lumise_products MODIFY variations MEDIUMTEXT.');
+      'column (MEDIUMTEXT holds 16MB).');
     process.exit(1);
   }
 

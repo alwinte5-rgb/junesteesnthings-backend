@@ -127,12 +127,16 @@ async function ssaColours(styleId) {
     const uniq = (hex) => {
       let h = String(hex).toLowerCase();
       if (!used.has(h)) { used.add(h); return h; }
-      let n = parseInt(h.slice(1), 16);
+      const n = parseInt(h.slice(1), 16);
       if (!Number.isFinite(n)) { used.add(h); return h; }
-      for (let i = 0; i < 256; i++) {
-        n = (n + 1) & 0xffffff;
-        const c = '#' + n.toString(16).padStart(6, '0');
-        if (!used.has(c)) { used.add(c); return c; }
+      /* Nearest free shade, never wrapping: (n+1)&0xffffff turned #ffffff into
+         #000000, giving "White" a black swatch. */
+      for (let i = 1; i <= 512; i++) {
+        for (const cand of [n + i, n - i]) {
+          if (cand < 0 || cand > 0xffffff) continue;
+          const c = '#' + cand.toString(16).padStart(6, '0');
+          if (!used.has(c)) { used.add(c); return c; }
+        }
       }
       used.add(h); return h;
     };
