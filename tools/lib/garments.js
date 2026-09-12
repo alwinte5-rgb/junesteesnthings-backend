@@ -70,8 +70,11 @@ const SUBTYPE = [
   ['beanie',     /\b(beanie|knit cap|cuffed|skully)\b/i],
   ['visor',      /\bvisor\b/i],
   ['bucket',     /\b(bucket|booney)\b/i],
-  ['trucker',    /\b(trucker|mesh.?back)\b/i],
-  ['dad-hat',    /\bdad hat\b/i],
+  ['trucker',    /\b(trucker|mesh)\b/i],
+  /* Before 'structured', so "Unstructured Five-Panel" is read as the soft cap
+     it is rather than matching the word inside its own negation. */
+  ['dad-hat',    /\b(dad hat|unstructured)\b/i],
+  ['cap-structured', /\bstructured\b/i],
   ['duffel',     /\bduffel\b/i],
   ['drawstring', /\b(drawstring|sackpack|cinch|sport ?pack)\b/i],
   ['backpack',   /\b(backpack|rucksack)\b/i],
@@ -91,19 +94,25 @@ function subtype(name) {
  * audit reads this to decide what to report, so a stale entry here is the
  * difference between "we know" and "we forgot". */
 const STANDIN = {
-  beanie:     'a structured six-panel cap',
-  visor:      'a structured six-panel cap',
-  bucket:     'a structured six-panel cap',
-  trucker:    'a solid-back cap, with no mesh',
-  'dad-hat':  'a structured cap, where this one is unstructured',
-  duffel:     'a flat tote',
-  drawstring: 'a flat tote',
-  backpack:   'a flat tote',
-  sling:      'a flat tote',
-  vest:       'a sweatshirt, sleeves and all',
-  jacket:     'a sweatshirt',
-  qzip:       'a plain sweatshirt, with no placket or zip',
-  woven:      'a knit shirt, with no collar stand or button placket',
+  /* hat.png is an UNSTRUCTURED, curved-bill dad hat. That makes the dad hats
+     correct and everything else in headwear a borrower — the opposite of what
+     this table said when it was written from the product names alone. Checked
+     against the file, not guessed. */
+  beanie:            'a curved-bill dad hat — not a knit beanie at all',
+  visor:             'a full-crown dad hat, where this has no crown',
+  bucket:            'a curved-bill dad hat, not an all-round brim',
+  trucker:           'a solid-back dad hat, with no mesh panels',
+  'cap-structured':  'an unstructured dad hat, soft crown and curved bill',
+  duffel:            'a flat tote',
+  drawstring:        'a flat tote',
+  backpack:          'a flat tote',
+  sling:             'a flat tote',
+  vest:              'a sweatshirt, sleeves and all',
+  jacket:            'a sweatshirt',
+  qzip:              'a plain sweatshirt, with no placket or zip',
+  /* premium_front.png is a WOMEN'S CREW-NECK TEE, so every button-down, work
+     shirt and scrub top is drawn as one. */
+  woven:             "a women's crew-neck tee — no collar, placket or buttons",
 };
 
 /** What this product is really drawn as, or null when the art is its own. */

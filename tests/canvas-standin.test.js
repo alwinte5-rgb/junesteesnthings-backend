@@ -30,6 +30,7 @@ test('but the cut is reported separately', () => {
     'Valucap VC500 Bio-Washed Visor': 'visor',
     'Atlantis GEO Sustainable Bucket Hat': 'bucket',
     'Valucap VC300A Bio-Washed Dad Hat': 'dad-hat',
+    'econscious EC7090 Hemp Structured Baseball Cap': 'cap-structured',
     'Independent Trading 29L Day Tripper Duffel': 'duffel',
     'Liberty Bags 8881 Drawstring Pack': 'drawstring',
   };
@@ -39,8 +40,12 @@ test('but the cut is reported separately', () => {
 });
 
 test('a garment with art of its own is not flagged', () => {
+  /* hat.png IS an unstructured curved-bill dad hat, so a dad hat is the one
+     piece of headwear that is drawn correctly. Written from the file rather
+     than from the product name, which had this exactly backwards. */
   for (const n of ['Gildan 5000 Unisex Heavy Cotton Tee',
-    'Bella+Canvas 3001 Unisex Jersey Tee', 'Liberty Bags 8502 Cotton Tote Bag']) {
+    'Bella+Canvas 3001 Unisex Jersey Tee', 'Liberty Bags 8502 Cotton Tote Bag',
+    'Valucap VC300A Bio-Washed Dad Hat', 'Atlantis FRASER Sustainable Dad Hat']) {
     assert.strictEqual(standin(n), null, n + ' has its own art and must pass clean');
   }
 });
@@ -63,6 +68,8 @@ test('the subtype answer wins over the family answer', () => {
   const s = standin('Richardson 112RE Sustainable Trucker Cap');
   assert.strictEqual(s.as, 'trucker');
   assert.match(s.looks, /mesh/i);
+  /* A cap whose name only says "Mesh" is still a mesh-back trucker. */
+  assert.strictEqual(standin('Flexfit 110R Recycled Mesh Cap').as, 'trucker');
 });
 
 test('one size list, shared, that knows caps and totes exist', () => {
