@@ -57,6 +57,7 @@ const W = vm.runInThisContext(`(function(){
   ${liftConst(/const SHOP_TZ = .*;/, 'SHOP_TZ')}
   ${liftConst(/const CUTOFF_MIN = \(\(\) => \{[\s\S]*?\}\)\(\);/, 'CUTOFF_MIN')}
   ${liftConst(/const SHEET_PIECE_CEILING = .*;/, 'SHEET_PIECE_CEILING')}
+  ${liftConst(/const DIGITIZING_DAYS = .*;/, 'DIGITIZING_DAYS')}
   ${lift('addBusinessDays')}
   ${lift('shopMinutes')}
   ${lift('productionStart')}
@@ -215,4 +216,41 @@ test('the designer does not promise a rush the shop cannot buy', () => {
   const html = auth.slice(auth.indexOf('function jt_delivery_html'));
   assert.match(html.slice(0, 1400), /jt_can_rush\(\$method\)/,
     'jt_delivery_html must ask jt_can_rush before offering a rush');
+});
+
+/* Digitizing days.
+ *
+ * These very nearly passed by accident: DIGITIZING_DAYS sits behind a ternary
+ * that is not evaluated when no line mentions digitizing, so the whole suite
+ * stayed green with the constant missing from the sandbox entirely. A lifted
+ * function is only as complete as the paths the tests actually walk.
+ */
+test('a digitized logo pushes the whole window out, once', () => {
+  const plain = W.deliveryEstimate(WED_AM, { items: [{ qty: 24, description: 'Trucker hat - Black' }] });
+  const dig = W.deliveryEstimate(WED_AM, {
+    items: [{ qty: 24, description: 'Trucker hat - Black' },
+            { qty: 1, description: 'DST Digitizing - one-time' }] });
+
+  assert.strictEqual(plain.digitizing_days, 0, 'no digitizing line, no extra days');
+  assert.strictEqual(dig.digitizing_days, 2, 'digitizing adds two business days');
+  assert.strictEqual(dig.production_days[0] - plain.production_days[0], 2);
+  assert.strictEqual(dig.production_days[1] - plain.production_days[1], 2);
+  assert.ok(dig.ready > plain.ready, 'ready date moves out');
+  assert.ok(dig.deliver_to > plain.deliver_to, 'delivery window moves out');
+});
+
+test('two embroidery lines still only digitize once', () => {
+  const one = W.deliveryEstimate(WED_AM, {
+    items: [{ qty: 12, description: 'Digitizing' }] });
+  const two = W.deliveryEstimate(WED_AM, {
+    items: [{ qty: 12, description: 'Digitizing' }, { qty: 12, description: 'digitizing again' }] });
+  assert.strictEqual(one.digitizing_days, two.digitizing_days,
+    'the file is made once however many lines mention it');
+});
+
+test('the caller can say so directly when it already knows', () => {
+  const off = W.deliveryEstimate(WED_AM, { digitizing: false, items: [{ qty: 1, description: 'Digitizing' }] });
+  const on = W.deliveryEstimate(WED_AM, { digitizing: true, items: [{ qty: 1, description: 'plain tee' }] });
+  assert.strictEqual(off.digitizing_days, 0, 'explicit false wins over the description');
+  assert.strictEqual(on.digitizing_days, 2, 'explicit true wins too — customer supplied no file');
 });
