@@ -39,15 +39,23 @@ from collections import deque
 import numpy as np
 from PIL import Image, ImageFilter
 
-# Stitches per square inch of SOLID fill. The low end is an open/light fill,
-# the high end a dense one. A design that is mostly outline lands below both,
-# which is why the outline term is counted separately rather than folded in.
-FILL_LO, FILL_HI = 800.0, 2000.0
-# Stitches per LINEAR inch of satin border.
-SATIN_LO, SATIN_HI = 150.0, 200.0
-# Underlay stitches, as a fraction of the fill. Every fill is stitched twice:
-# once loosely to stabilise the fabric, once for the surface.
-UNDERLAY = 0.25
+# FITTED, not published. Regressed on 217 distinct digitised designs from this
+# shop's own library (tools/embroidery/fit_k.py): 1,783 stitches per square inch
+# of STITCHED AREA, R2 0.84.
+#
+# The published 800-2,000 per sq in plus a separate satin term per linear inch
+# was what this file used to carry, and on a real logo it over-estimated by
+# three to four times — 5,500-9,000 stitches where the fit and the path-based
+# digitiser both said ~2,400. Two tools in one directory disagreeing by 4x is
+# two different prices for one job.
+#
+# The satin term is gone because the fit says it is not separable: regressed
+# alongside area its coefficient came out NEGATIVE, which means outline length
+# carries no information once area is known.
+FILL_FITTED = 1783.0
+# The spread is measured error against those 217 designs, not a guess:
+# median 22%, 90th percentile 48%.
+LOW_MULT, HIGH_MULT = 0.80, 1.50
 
 
 def alpha_mask(path, white=238):
@@ -116,8 +124,8 @@ def estimate(path, width_in):
     area_in2 = filled * in_per_px * in_per_px
     outline_in = outline_pixels(mask) * in_per_px
 
-    lo = area_in2 * FILL_LO * (1 + UNDERLAY) + outline_in * SATIN_LO
-    hi = area_in2 * FILL_HI * (1 + UNDERLAY) + outline_in * SATIN_HI
+    mid = area_in2 * FILL_FITTED
+    lo, hi = mid * LOW_MULT, mid * HIGH_MULT
     return {
         'file': os.path.basename(path),
         'width_in': round(width_in, 2), 'height_in': round(height_in, 2),

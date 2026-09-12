@@ -18,14 +18,20 @@ gradients, hairlines or small type. The preview shows the customer what survives
 rules vanish — and the run reports the share of the design too fine to hold a
 fill, so that conversation happens before the machine runs rather than after.
 
-## Two counts that agree
+## Two counts, and the time they did not agree
 
 `estimate.py` (area x density) and `digitize.py` (count the actual paths) are
-independent. On the test logo they land within ~10% of each other once coverage
-is accounted for, which is the cross-check worth keeping: if they ever diverge
-badly, one of them is wrong about the artwork.
+independent, and that cross-check earned its keep: on a real logo they came out
+**3-4x apart** — 5,500-9,000 against 1,739-2,354. One of them was going to
+quote the wrong price.
 
-Quote from the higher of the two. Undercharging is the failure that costs money.
+The fit settled it. 1.43 sq in x the fitted 1,783 per sq in is ~2,550, so the
+path count was right and estimate.py's published constants were badly high.
+Those constants are now the fitted ones and the two agree.
+
+Worth keeping as a habit: two independent estimates of the same thing are how
+a wrong constant gets caught. One tool alone would have been confidently wrong
+for as long as nobody checked.
 
 ## Two defects worth remembering
 

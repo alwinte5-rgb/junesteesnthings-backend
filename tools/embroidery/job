@@ -1,0 +1,15 @@
+#!/bin/sh
+# One command: artwork in, preview + verdict + loaded price out.
+#
+#   tools/embroidery/job customer-logo.png [width_cm] [qty]
+#
+# Everything the three underlying tools need, with the defaults that are right
+# for this shop: a 9cm chest logo, 24 pieces, and the +25% loading the fit says
+# is the difference between giving away one job in three and one in eight.
+set -e
+[ -z "$1" ] && { echo "usage: job <artwork> [width_cm] [qty]"; exit 2; }
+ART="$1"; W="${2:-9}"; Q="${3:-24}"
+HERE=$(cd "$(dirname "$0")" && pwd)
+OUT="${ART%.*}-stitch-preview.png"
+python3 "$HERE/digitize.py" "$ART" --width-cm "$W" --colours 4 --out "$OUT" --json \
+  | node "$HERE/quote.js" --vars="$HOME/.jtees-art.json" --qty "$Q"

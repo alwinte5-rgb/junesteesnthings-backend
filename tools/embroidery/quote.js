@@ -17,6 +17,12 @@ const argv = process.argv.slice(2);
 const opt = (n, d) => { const a = argv.find((x) => x.startsWith('--' + n + '=')); return a ? a.split('=').slice(1).join('=') : d; };
 const qi = argv.indexOf('--qty');
 const QTY = qi > -1 ? Number(argv[qi + 1]) : 24;
+/* The estimate is loaded before it picks a band, and that is not padding.
+   Fitted against 217 real digitised designs, the raw estimate lands in the
+   right band 58% of the time and UNDER-prices 33% — one job in three given
+   away. At +25% the give-away rate falls to 12%. Pass --raw to see the
+   unloaded band, but do not quote from it. */
+const LOADING = argv.includes('--raw') ? 1.0 : 1.25;
 const varsFile = (opt('vars', '') || '').replace(/^~/, process.env.HOME);
 if (!varsFile) { console.error('usage: ... | quote.js --vars=<file> [--qty N]'); process.exit(2); }
 
@@ -56,12 +62,26 @@ process.stdin.on('end', () => {
     .filter((b) => b.ceil).sort((a, b) => a.ceil - b.ceil);
 
   const pick = (n) => bands.find((b) => n <= b.ceil) || null;
-  const lo = pick(est.stitches_low), hi = pick(est.stitches_high);
+  const loaded = Math.round((est.stitches_high || est.stitches) * LOADING);
+  const lo = pick(est.stitches_low), hi = pick(loaded);
 
-  console.log('\n  ' + est.file + '  ·  ' + est.width_cm + 'cm x ' + est.height_cm + 'cm  ·  ' +
-    est.filled_area_in2 + ' sq in  ·  ~' + est.colours + ' colours');
+  /* Both producers feed this: estimate.py reports filled_area_in2/colours,
+     digitize.py reports threads and no area. Naming them apart printed
+     "undefined sq in" on every digitize run. Take either, and omit what is
+     genuinely absent rather than print a hole. */
+  const area = est.filled_area_in2 != null ? est.filled_area_in2 + ' sq in' : null;
+  const cols = est.colours != null ? est.colours : est.threads;
+  console.log('\n  ' + est.file + '  ·  ' + est.width_cm + 'cm x ' + est.height_cm + 'cm' +
+    (area ? '  ·  ' + area : '') + (cols != null ? '  ·  ' + cols + ' threads' : ''));
   console.log('  estimated ' + est.stitches_low.toLocaleString() + ' - ' +
-    est.stitches_high.toLocaleString() + ' stitches\n');
+    est.stitches_high.toLocaleString() + ' stitches' +
+    (LOADING > 1 ? '   ->  quoting on ' + loaded.toLocaleString() +
+      ' (+' + Math.round((LOADING - 1) * 100) + '% loading)' : '   [RAW - do not quote]'));
+  if (est.verdict) {
+    console.log('\n  ' + est.verdict + (est.reasons && est.reasons.length ? '' : '  — nothing flagged'));
+    for (const r of (est.reasons || [])) console.log('    - ' + r);
+  }
+  console.log('');
   console.log('  LADDER (live, active only)');
   for (const b of bands) {
     const mark = (lo && b.id === lo.id) || (hi && b.id === hi.id) ? ' <-' : '   ';
@@ -82,5 +102,10 @@ process.stdin.on('end', () => {
   const d = dig.map((r) => ({ t: r.title, c: ceilingOf(r.title), p: priceAt(r.calculate, 1) }))
     .filter((x) => x.c).sort((a, b) => a.c - b.c).find((x) => est.stitches_high <= x.c);
   console.log('  Digitizing: ' + (d ? '$' + d.p + ' one-time — ' + String(d.t).slice(0, 44)
-    : 'over every active tier, quote by hand') + '\n');
+    : 'over every active tier, quote by hand'));
+  if (est.preview) console.log('  Preview:    ' + est.preview);
+  if (est.verdict === 'DECLINE') {
+    console.log('\n  This is a DECLINE — the price above is what it would cost, not an offer.');
+  }
+  console.log('');
 });
