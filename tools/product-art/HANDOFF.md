@@ -34,6 +34,28 @@ not repeated. Log: `~/jtees-product-art/run.log`.
 `#162` was the dry run (4 colourways, uploaded but deliberately not wired) — it
 is in the 23 only if the final run wrote it; check `--list` before assuming.
 
+## Result
+
+**25 of 27 products are wired. 184 of 219 colourways carry real per-colourway
+art (84%)**, counting neither #25 (blocked, below) nor #88 (out of scope).
+Across the whole borrowing catalogue including both, it is 184 of 389 (47%).
+
+The 35 colourways still on the silhouette are not a bug to fix:
+
+- **62 side-images do not exist at S&S** (`no image at S&S — skipped` in the
+  logs). #143 has no photo for any of its three colours, #148 none for nine of
+  fifteen. Nothing to fetch; those colourways keep the stand-in.
+- **#97 is the one title mismatch** — 15 colourways at S&S, 4 matched the
+  product's colour titles. `wire.js` keys on an exact title match
+  (`byTitle.get(c.name)`), and S&S returns names like `Black/ White/ White`
+  where the product says `Black/ White`. A normalising match would recover
+  most of these; not attempted.
+
+`--list` reports these as `partial` forever, because `done` is
+`wired >= cols` and a colourway with no supplier photo can never be wired.
+That is misleading rather than wrong — worth changing to compare against what
+is actually wireable.
+
 ## The one real blocker: #25 will not fit
 
 `wire.js` on **#25 YP Classics 6606** died with
