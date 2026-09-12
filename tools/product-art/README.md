@@ -47,8 +47,20 @@ At 800px and WebP q90 a colourway is ~120KB. A style with 20 colours, front and
 back, is ~5MB. The whole borrowing catalogue is roughly 350 colourways, ~85MB,
 which is why these live on Cloudinary and not in this repo.
 
-## Caps have no back stage
+## Caps have no back stage, and are not getting one
 
-`ssa-add-products.js` gives the cap type `back: null`. Adding one is not an art
-change — it creates a print area the shop then has to be able to decorate and
-price. The back images are uploaded and ready if that is ever wanted.
+Decided 2026-09-12: **no back decoration on hats.** `ssa-add-products.js` gives
+the cap type `back: null`, and that stays. A stage is somewhere a customer can
+put a design, so adding one is not an artwork change — it commits the shop to
+decorating and pricing a cap back.
+
+So run headwear with `--sides front`. It is a third of the work: a style with 20
+colourways drops from 40 images to 20, and across the headwear in the catalogue
+that is about 100 images not fetched, cut, encoded or stored.
+
+Everything else takes `--sides front,back`, where the product already has a back
+stage to put the art on — quarter-zips, wovens, bags, and the vests and jackets
+once they come off hold.
+
+(The six cap BACK images uploaded during the 112RE pilot are unused. Harmless,
+and already there if this is ever revisited.)

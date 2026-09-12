@@ -49,6 +49,9 @@ const TYPES = {
               back: { height: 339, width: 160, left: -4, top: -11 }, methods: [1, 2, 3, 4, 5, 6, 8] },
   polo:     { raws: 'polo_core365',       front: { height: 200, width: 170, left: 0, top: 25 },
               back: { height: 240, width: 180, left: 0, top: 0 }, methods: [1, 8] },
+  /* No back stage on headwear — decided 2026-09-12. A stage is somewhere a
+     customer can put a design, so adding one to a cap is not an artwork
+     change: it commits the shop to decorating and pricing a cap back. */
   cap:      { raws: 'hat',                front: { height: 100, width: 165, left: -1, top: -5 },
               back: null, methods: [8] },
   bag:      { raws: 'bag',                front: { height: 280, width: 200, left: 0, top: -5 },
