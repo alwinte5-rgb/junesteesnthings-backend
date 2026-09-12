@@ -22,8 +22,17 @@ command to continue: finished products are skipped (`done` is read from the
 database), cut images are kept, and uploads already recorded in a manifest are
 not repeated. Log: `~/jtees-product-art/run.log`.
 
-State at the cut: `#162` wired (dry run, 4 colourways, not applied), `#25`
-**failed**, `#97` in progress, 83 images cut. 27 products / 412 images total.
+**The batch finished: 23 of 27 products written, 361 images.** Four failed:
+
+- `#25` — `wire failed`, the variations column ceiling described below. Needs
+  the `wire.js` fix; a re-run alone will not clear it.
+- `#144`, `#151`, `#168` — `upload failed`, all three
+  `curl (56) Recv failure: Connection reset by peer` partway through Cloudinary.
+  Transient. **A re-run fixes these**: every uploaded URL was flushed to the
+  manifest as it landed, so only the missing images are fetched again.
+
+`#162` was the dry run (4 colourways, uploaded but deliberately not wired) — it
+is in the 23 only if the final run wrote it; check `--list` before assuming.
 
 ## The one real blocker: #25 will not fit
 
