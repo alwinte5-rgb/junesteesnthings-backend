@@ -279,9 +279,29 @@ function buildAttributes(rows, baseCost) {
     QTYS: { type: 'quantity', title: '', values: JSON.stringify({ multiple_options }) },
   };
   if (colours.size) {
+    /* Every swatch value must be UNIQUE, because it is not only the colour
+       drawn on the picker — it is the identity Lumise writes onto the order.
+       S&S gives one body colour per colourway, so "Loden/ Black" and
+       "Loden/ Khaki" both come back #777056, and a shop reading the order
+       cannot tell which cap was bought. The swatch can only ever show the body
+       colour, so the tie is broken by nudging one step along: invisible on a
+       screen, distinct in the record. */
+    const used = new Set();
+    const uniq = (hex) => {
+      let h = String(hex).toLowerCase();
+      if (!used.has(h)) { used.add(h); return h; }
+      let n = parseInt(h.slice(1), 16);
+      if (!Number.isFinite(n)) { used.add(h); return h; }
+      for (let i = 0; i < 256; i++) {
+        n = (n + 1) & 0xffffff;
+        const c = '#' + n.toString(16).padStart(6, '0');
+        if (!used.has(c)) { used.add(c); return c; }
+      }
+      used.add(h); return h;                       // 256 identical shades: give up
+    };
     attrs.COL = { type: 'product_color', title: '', values: {
       options: [...colours].map(([title, value], i) => ({
-        value, title, price: '', default: i === 0 ? '1' : '' })) } };
+        value: uniq(value), title, price: '', default: i === 0 ? '1' : '' })) } };
   }
   return enjson(attrs);
 }
