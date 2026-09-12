@@ -1,4 +1,44 @@
-# Stitch estimator, and the digitiser question
+# Stitch estimator and preview digitiser
+
+    # count and preview in one pass, then price it
+    python3 tools/embroidery/digitize.py logo.png --width-cm 9 --colours 3 \
+      --out preview.png --json | node tools/embroidery/quote.js --vars=~/.jtees-art.json --qty 24
+
+`digitize.py` lays down real stitch geometry — underlay, tatami fill, satin
+border, per thread colour — and counts the needle penetrations. That count is
+the point: it exists BEFORE anyone pays to digitise, which is the only way to
+price a job or sanity-check a supplier's quote.
+
+It is not a production digitiser and writes no DST. The real file still gets
+digitised properly; this decides what to charge for it.
+
+**The picture is the by-product, and it earns its keep.** Thread cannot do
+gradients, hairlines or small type. The preview shows the customer what survives
+— on the test logo the 20 pt strapline comes out illegible and most of the 2 px
+rules vanish — and the run reports the share of the design too fine to hold a
+fill, so that conversation happens before the machine runs rather than after.
+
+## Two counts that agree
+
+`estimate.py` (area x density) and `digitize.py` (count the actual paths) are
+independent. On the test logo they land within ~10% of each other once coverage
+is accounted for, which is the cross-check worth keeping: if they ever diverge
+badly, one of them is wrong about the artwork.
+
+Quote from the higher of the two. Undercharging is the failure that costs money.
+
+## Two defects worth remembering
+
+- Quantising the whole frame let the BACKGROUND claim a thread slot, so asking
+  for 3 threads returned 2 and a green bar was merged into the navy. A missing
+  thread is a missing colour change, and a colour change is money. The palette
+  is built from artwork pixels alone.
+- "Too fine to sew" was measured as `mask - erode(mask)`, which flags the
+  boundary band of every solid shape — 10% on a plain circle. It is an opening
+  now (erode, then grow back), so a solid circle reports nothing and a thin ring
+  reports 84%.
+
+
 
     python3 tools/embroidery/estimate.py logo.png --width-cm 10 --json \
       | node tools/embroidery/quote.js --vars=~/.jtees-art.json --qty 24
