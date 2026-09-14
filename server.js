@@ -5362,6 +5362,23 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
                value="${it && it.manual ? val(typedUnitOf(it)) : ''}" placeholder="Each $">
         <b class="lt">—</b>
       </div>
+      <!-- RUN NUMBER. Lines sharing a number pool their quantity for the price
+           BAND only; each keeps its own garment cost and its own total. Blank
+           means the line prices on its own.
+
+           A number rather than a tick box, because a tick can only say "one
+           run per quote". Six designs on one quote are six runs, and ticking
+           all six would pool them into a single job and under-charge every one
+           of them. The engine never cared — runGroup was always a tag — so this
+           costs nothing and removes the ceiling. -->
+      <label class="runlab" style="display:flex;align-items:center;gap:6px;margin-top:6px;
+             font-size:12.5px;color:#3f4a5f">
+        <span>Run</span>
+        <input name="run${n}" class="sr" type="number" inputmode="numeric" min="1" max="99"
+               style="width:56px" value="${it && it.run_group ? val(it.run_group) : ''}"
+               placeholder="—" title="Lines with the same run number are printed together and share a price band. Leave blank to price this line on its own.">
+        <b class="srq" style="color:#2563eb"></b>
+      </label>
       <p class="minwarn" style="display:none;margin:6px 0 0;font-size:12.5px;color:#b45309"></p>
       <p class="aonote" style="display:none;margin:6px 0 0;font-size:12px;color:#6b7280"></p>
       <!-- Internal cost split. This form is requireAdmin and the customer's page
@@ -5764,6 +5781,23 @@ ${quotePricingSource()}
            No backticks in here: this comment is inside a server-side template
            literal, and one would end it. */
         var scrTotal = 0, scrCount = 0;
+
+        /* SAME RUN. Total the ticked lines FIRST, because every one of them has
+           to be priced at the pooled figure — a line cannot know the run it is
+           part of until all of them have been read. The quantity used is the
+           size mix when one has been entered, which is the same number the line
+           itself bills, so the two can never disagree. */
+        var runTotals = {};
+        document.querySelectorAll('.line').forEach(function(L){
+          var sr = L.querySelector('.sr');
+          var g = sr ? String(sr.value || '').trim() : '';
+          if (!g) return;
+          var szTotal = 0;
+          L.querySelectorAll('.sz').forEach(function(el){ szTotal += (parseInt(el.value, 10) || 0); });
+          runTotals[g] = (runTotals[g] || 0) +
+            (szTotal || (parseInt(L.querySelector('.q').value, 10) || 0));
+        });
+
         document.querySelectorAll('.line').forEach(function(L){
           var prod = CAT.products.find(function(x){return String(x.id)===L.querySelector('.p').value;});
           var meth = CAT.methods.find(function(x){return String(x.id)===L.querySelector('.m').value;});
@@ -5892,7 +5926,16 @@ ${quotePricingSource()}
 
           var stage = L.querySelector('.loc') ? L.querySelector('.loc').value : '';
           var bpEl = L.querySelector('.bp');
+          /* Only a ticked line takes the pooled figure, and bandQtyFor's floor
+             means a lone ticked line is unaffected. */
+          var srBox = L.querySelector('.sr');
+          var runKey = srBox ? String(srBox.value || '').trim() : '';
+          var runQty = runKey ? (runTotals[runKey] || 0) : 0;
+          var srOut = L.querySelector('.srq');
+          if (srOut) srOut.textContent = (runQty > qty) ? 'run of ' + runQty : '';
+
           var r = priceLine({
+            bandQty: runQty,
             product: prod, method: meth, qty: qty, sizeMix: sizeQty ? mix : null,
             colours: colEl ? colEl.value : '',
             stage: stage, addons: addons, blankTiers: BLANK_TIERS,
@@ -6415,6 +6458,30 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
     /* Two fields sharing a name arrive as an array. Stringifying one silently
        merges every value into a single field and turns a price into NaN, which
        renders as $0.00 — so read only the first value. */
+    /* RUN TOTALS, before any line is priced.
+​
+       Lines sharing a run number pool their quantity for the price band only.
+       This has to be a pre-pass for the same reason it is one in the form: a
+       line cannot know the run it belongs to until every line has been read.
+​
+       The quantity counted is the size mix when there is one, otherwise the qty
+       box — the same rule the line itself bills on, and the same rule calc()
+       applies client-side. If these two ever disagree the preview and the saved
+       quote disagree, which is the whole reason the pricing rule lives in one
+       shared string. */
+    const runTotals = {};
+    for (let i = 0; i < 40; i++) {
+      const g = String(one(b['run' + i]) || '').trim();
+      if (!g) continue;
+      let n = 0;
+      try {
+        const parsed = JSON.parse(one(b['sizes' + i]) || '{}');
+        for (const v of Object.values(parsed)) n += parseInt(v, 10) || 0;
+      } catch { n = 0; }
+      if (!n) n = parseInt(one(b['qty' + i]), 10) || 0;
+      runTotals[g] = (runTotals[g] || 0) + n;
+    }
+
     for (let i = 0; i < 40; i++) {
       const desc = String(one(b['description' + i]) || '').trim();
       const qty = parseInt(one(b['qty' + i]), 10) || 0;
@@ -6506,7 +6573,9 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
       if (!Number.isFinite(blankOverride) || blankOverride <= 0) blankOverride = null;
 
       /* THE price calculation — the same source the browser ran. */
+      const runGroup = String(one(b['run' + i]) || '').trim();
       const priced = priceLine({
+        bandQty: runGroup ? (runTotals[runGroup] || 0) : 0,
         product: prod, method, qty: q, sizeMix: mix, colours,
         stage, addons: lineAddons, blankTiers: BLANK_TIERS,
         /* The garment colour is a pricing INPUT, not a charge: it decides how
@@ -6570,6 +6639,11 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
       }
 
       items.push({
+        /* Saved so reopening the quote restores the runs. Without it an edit
+           re-prices every line as its own job and the total quietly rises —
+           the same shape as the add-ons that had to be saved for exactly this
+           reason. */
+        run_group: runGroup || null,
         description,
         details: String(one(b['details' + i]) || '').trim().slice(0, 300),
         images,

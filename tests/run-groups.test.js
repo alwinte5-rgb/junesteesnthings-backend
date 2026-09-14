@@ -99,3 +99,38 @@ test('bandQty can never drag a line BELOW its own quantity', () => {
   const q = W.priceLine(line({ qty: 40 }));
   assert.strictEqual(p.blank, q.blank, 'a smaller bandQty must be ignored');
 });
+
+/* Six designs on one quote are SIX runs, not one.
+ *
+ * This is why the form control is a run number and not a tick box. A tick can
+ * only say "one run per quote"; ticking six different designs would pool them
+ * into a single job and under-charge every one of them.
+ */
+test('six separate runs stay separate', () => {
+  const items = [];
+  for (let d = 1; d <= 6; d++) {
+    items.push({ runGroup: String(d), qty: 6 }, { runGroup: String(d), qty: 6 });
+  }
+  const totals = W.runGroupTotals(items);
+  assert.strictEqual(Object.keys(totals).length, 6, 'six distinct runs');
+  for (let d = 1; d <= 6; d++) {
+    assert.strictEqual(totals[String(d)], 12, 'run ' + d + ' pools its own two lines only');
+  }
+  /* 72 pieces on the quote, but no line may be priced at 72. */
+  const all = items.reduce((a, i) => a + i.qty, 0);
+  assert.strictEqual(all, 72);
+  for (const it of items) {
+    assert.strictEqual(W.bandQtyFor(it, totals), 12,
+      'a line sees its own run, never the whole quote');
+  }
+});
+
+test('runs are kept apart by number, not merged by proximity', () => {
+  const totals = W.runGroupTotals([
+    { runGroup: '1', qty: 24 }, { runGroup: '2', qty: 6 }, { qty: 100 },
+  ]);
+  assert.strictEqual(totals['1'], 24);
+  assert.strictEqual(totals['2'], 6);
+  assert.strictEqual(W.bandQtyFor({ runGroup: '2', qty: 6 }, totals), 6,
+    'the big untagged line must not leak into run 2');
+});
