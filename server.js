@@ -1022,7 +1022,19 @@ async function brevoCanSend(apiKey) {
        here would walk straight back into the silent drop every time Brevo's
        status endpoint hiccupped, since sending is exactly what does not fail
        when there are no credits. Staying on Resend costs nothing by comparison. */
-    if (!r.ok) return brevoHasCredits;
+    /* Reported, not just tolerated. Keeping the last reading is right; doing it
+       SILENTLY is how a revoked key looks identical to a healthy one — 401 here
+       lands in exactly this branch, and that is the shape of the incident that
+       drained the credits and went unnoticed for three days. The recorder
+       fingerprints, so a persistent outage is one row with a count and one
+       Sentry issue, not a flood. */
+    if (!r.ok) {
+      reportError('brevo-account-unreadable',
+        new Error(`Brevo /v3/account answered ${r.status}`),
+        r.status === 401 ? 'the API key is rejected — rotated or revoked?' : null)
+        .catch(() => {});
+      return brevoHasCredits;
+    }
     const d = await r.json();
     const limit = (d.plan || []).find((p) => p.creditsType === 'sendLimit');
     const ok = !limit || Number(limit.credits) > 0;
@@ -1031,7 +1043,10 @@ async function brevoCanSend(apiKey) {
     if (!ok) console.error('sendEmail: Brevo send credits exhausted — routing to Resend');
     else if (!brevoHasCredits) console.log('sendEmail: Brevo credits restored — resuming Brevo');
     return (brevoHasCredits = ok);
-  } catch {
+  } catch (e) {
+    /* Same reasoning as the !r.ok branch above: a network failure reaching
+       Brevo must not silently pass for a healthy balance. */
+    reportError('brevo-account-unreachable', e).catch(() => {});
     return brevoHasCredits;
   }
 }

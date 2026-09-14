@@ -66,6 +66,14 @@ function makeGuard(fetchImpl, env = {}) {
     BREVO_CREDIT_TTL: 5 * 60 * 1000,
     brevoCreditCheckedAt: 0,
     brevoHasCredits: true,
+    /* The guard reports the two states it cannot read. Captured rather than
+       stubbed away, because "it failed open" and "it failed open and told
+       somebody" are different behaviours and only one of them is any use. */
+    reported: [],
+    reportError(kind, err, context) {
+      sandbox.reported.push({ kind, message: err && err.message, context });
+      return Promise.resolve();
+    },
   };
   vm.createContext(sandbox);
   vm.runInContext(FN_SRC, sandbox);
@@ -107,6 +115,51 @@ test('fails open when the status endpoint answers non-2xx', async () => {
 test('fails open when the status request throws', async () => {
   const { brevoCanSend: guard } = makeGuard(async () => { throw new Error('network down'); });
   assert.strictEqual(await guard('key'), true);
+});
+
+/* ── failing open is not the same as failing quietly ─────────────────────── */
+
+test('an unreadable balance is reported, not just tolerated', async () => {
+  /* Keeping the last reading is correct. Doing it silently is how a revoked key
+     looks exactly like a healthy one — and a silent Brevo failure is precisely
+     what cost three days and $141.12 in August. */
+  const box = makeGuard(async () => ({ ok: false, status: 500, json: async () => ({}) }));
+  assert.strictEqual(await box.brevoCanSend('key'), true, 'still fails open');
+  assert.strictEqual(box.reported.length, 1, 'and says so');
+  assert.strictEqual(box.reported[0].kind, 'brevo-account-unreadable');
+  assert.match(box.reported[0].message, /500/, 'the status is in the message');
+});
+
+test('a rejected API key is called out by name', async () => {
+  /* 401 is the revoked-or-rotated case and lands in the same branch as a
+     transient 500. They need different reactions, so they must not read alike. */
+  const box = makeGuard(async () => ({ ok: false, status: 401, json: async () => ({}) }));
+  await box.brevoCanSend('key');
+  assert.match(box.reported[0].context, /key is rejected/);
+});
+
+test('an unreachable Brevo is reported too', async () => {
+  const box = makeGuard(async () => { throw new Error('network down'); });
+  assert.strictEqual(await box.brevoCanSend('key'), true);
+  assert.deepStrictEqual(
+    box.reported.map((r) => [r.kind, r.message]),
+    [['brevo-account-unreachable', 'network down']]);
+});
+
+test('a healthy balance reports nothing at all', async () => {
+  /* The digest is only read because it is silent when nothing is wrong. */
+  const box = makeGuard(ok([{ type: 'subscription', creditsType: 'sendLimit', credits: 500 }]));
+  assert.strictEqual(await box.brevoCanSend('key'), true);
+  assert.deepStrictEqual(box.reported, []);
+});
+
+test('an empty balance reports nothing either — it is a state, not a fault', async () => {
+  /* Zero credits is already loud on its own console line and already changes
+     behaviour by routing to Resend. Reporting it as an error as well would put
+     a business condition in the fault digest every five minutes. */
+  const box = makeGuard(ok([{ type: 'subscription', creditsType: 'sendLimit', credits: 0 }]));
+  assert.strictEqual(await box.brevoCanSend('key'), false);
+  assert.deepStrictEqual(box.reported, []);
 });
 
 test('fails open when the plan array is missing entirely', async () => {
