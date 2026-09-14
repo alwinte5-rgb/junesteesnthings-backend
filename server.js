@@ -5345,7 +5345,8 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
 
     return `
     <div class="line" data-n="${n}" data-saved-addons="${val(savedAddons.join(','))}"
-         data-saved-sizes="${val(JSON.stringify((it && it.size_mix) || {}))}">
+         data-saved-sizes="${val(JSON.stringify((it && it.size_mix) || {}))}"
+         data-saved-colour="${val((it && it.colour) || '')}">
       <div class="line-head">
         <span class="line-no">Item <b class="ix">${n + 1}</b></span>
         <button type="button" class="line-x" onclick="removeLine(this)" title="Remove this item">&times;</button>
@@ -5433,6 +5434,7 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
       <div class="extra" style="display:${hasExtras ? 'block' : 'none'}">
         <input name="details${n}" class="dt" value="${it ? val(it.details) : ''}"
                placeholder="Colour, ink, placement — the customer sees this">
+        <div class="colours" style="display:none;margin-top:8px"></div>
         <div class="sizes" style="display:none;margin-top:8px"></div>
         <input type="hidden" name="sizemix${n}" class="sm" value="">
         <div style="margin-top:8px">
@@ -5747,6 +5749,61 @@ ${quotePricingSource()}
       }
       /* Draw a size row for the chosen product so extended-size upcharges are
          applied automatically instead of being forgotten. */
+      /* The garment colour.
+​
+         Nothing used to choose one. The quote fell back to the product's
+         default catalogue photo — one colourway, picked by nobody — and the
+         customer read it as the choice they were being offered.
+​
+         The value carried is the colour NAME, because that is what a customer
+         and a purchase order both read. The swatch beside it is the hex, which
+         is the same value an order records and the key the per-colourway art
+         matches on, so the two cannot drift apart. */
+      function buildColours(L, prod){
+        var box = L.querySelector('.colours');
+        if (!box) return;
+        var key = prod ? String(prod.id) : '';
+        if (box.dataset.for === key) return;
+        box.dataset.for = key;
+        if (!prod || !prod.colours || !prod.colours.length) {
+          box.style.display = 'none'; box.innerHTML = ''; return;
+        }
+        box.style.display = 'block';
+        box.innerHTML =
+          '<label style="display:flex;align-items:center;gap:8px;margin:0;font-size:13px;' +
+          'text-transform:none;letter-spacing:0;font-weight:400">' +
+          '<span style="white-space:nowrap;color:#6b7280">Colour</span>' +
+          '<span class="sw" style="width:18px;height:18px;border-radius:4px;flex:0 0 18px;' +
+          'border:1px solid rgba(0,0,0,.25);background:transparent"></span>' +
+          '<select class="cl" name="colour' + L.dataset.n + '" style="flex:1">' +
+          '<option value="">Not specified</option>' +
+          prod.colours.map(function(c){
+            return '<option value="' + c.name.replace(/"/g, '&quot;') + '" data-hex="' +
+                   String(c.value || '').replace(/"/g, '') + '">' + c.name + '</option>';
+          }).join('') + '</select></label>';
+
+        var sel = box.querySelector('.cl');
+        var sw = box.querySelector('.sw');
+        function paint(){
+          var o = sel.options[sel.selectedIndex];
+          var hex = o ? (o.dataset.hex || '') : '';
+          sw.style.background = /^#[0-9a-fA-F]{6}$/.test(hex) ? hex : 'transparent';
+        }
+
+        /* One shot, cleared as it is read — the same rule the sizes and the
+           add-ons follow, and for the same reason: switching product must offer
+           that product's colours unchosen, not carry the last one across. */
+        var savedColour = L.dataset.savedColour;
+        if (savedColour) {
+          delete L.dataset.savedColour;
+          for (var ci = 0; ci < sel.options.length; ci++) {
+            if (sel.options[ci].value === savedColour) { sel.selectedIndex = ci; break; }
+          }
+        }
+        paint();
+        sel.onchange = function(){ paint(); calc(); };
+      }
+
       function buildSizes(L, prod){
         var box = L.querySelector('.sizes');
         var key = prod ? String(prod.id) : '';
@@ -5826,6 +5883,7 @@ ${quotePricingSource()}
           var meth = CAT.methods.find(function(x){return String(x.id)===L.querySelector('.m').value;});
           var u    = L.querySelector('.u');
           var qEl  = L.querySelector('.q');
+          buildColours(L, prod);
           buildSizes(L, prod);
 
           var boxes = L.querySelectorAll('.sz');
@@ -6659,6 +6717,14 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
       if (!Number.isFinite(blankOverride) || blankOverride <= 0) blankOverride = null;
 
       /* THE price calculation — the same source the browser ran. */
+      /* The chosen colourway, resolved against the CATALOGUE rather than
+         trusted from the body: the posted value is matched to one of the
+         product's own colours, and anything else is dropped. That is where the
+         swatch hex comes from too — the body never names it. */
+      const colourPick = String(one(b['colour' + i]) || '').trim();
+      const colourRow = colourPick && prod && Array.isArray(prod.colours)
+        ? prod.colours.find((c) => String(c.name) === colourPick) : null;
+
       const runGroup = String(one(b['run' + i]) || '').trim();
       const priced = priceLine({
         bandQty: runGroup ? (runTotals[runGroup] || 0) : 0,
@@ -6730,6 +6796,13 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
            the same shape as the add-ons that had to be saved for exactly this
            reason. */
         run_group: runGroup || null,
+        /* Name for the customer to read, hex for the swatch beside it. The hex
+           is also the value an order records and the key the per-colourway art
+           matches on, so carrying both keeps the quote and the artwork from
+           drifting apart. */
+        colour: colourRow ? colourRow.name : null,
+        colour_hex: colourRow && /^#[0-9a-fA-F]{6}$/.test(String(colourRow.value || ''))
+          ? colourRow.value : null,
         description,
         details: String(one(b['details' + i]) || '').trim().slice(0, 300),
         images,
@@ -7153,6 +7226,11 @@ app.get('/q/:code', async (req, res) => {
       <tr>
         <td>
           ${escEmail(i.description)}
+          ${i.colour ? `<div style="display:flex;align-items:center;gap:6px;margin-top:4px;font-size:13px">
+              <span style="width:13px;height:13px;border-radius:3px;flex:0 0 13px;border:1px solid rgba(0,0,0,.25);
+                    background:${/^#[0-9a-fA-F]{6}$/.test(String(i.colour_hex || '')) ? i.colour_hex : 'transparent'}"></span>
+              <span>${escEmail(i.colour)}</span>
+            </div>` : ''}
           ${i.details ? `<div class="muted" style="font-size:13px;margin-top:3px">${escEmail(i.details)}</div>` : ''}
           ${gallery}
         </td>
