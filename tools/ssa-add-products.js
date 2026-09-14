@@ -22,6 +22,7 @@
  */
 
 const { mysql, sq } = require('./lib/db');
+const { sellPrice, sizeUpcharge } = require('./lib/markup');
 const { CORE_SIZES } = require('./lib/garments');
 
 const APPLY = process.argv.includes('--apply');
@@ -270,11 +271,12 @@ function buildAttributes(rows, baseCost) {
   const sizes = Object.keys(sizeCost).sort((a, b) => order[a] - order[b]);
   if (!sizes.length) return null;
 
-  /* The upcharge is the REAL cost difference doubled, not a flat guess: a 2XL
-     that costs $3.68 more must sell for $7.36 more or the shop loses on every
-     extended size it sells. */
+  /* The upcharge is the REAL cost difference carrying the same markup as the
+     base, not a flat guess: a 2XL that costs $3.68 more must sell for more than
+     $3.68 more or the shop loses on every extended size it sells. The multiple
+     lives in lib/markup.js so it cannot drift from the base price. */
   const multiple_options = sizes.map((s) => {
-    const up = money((sizeCost[s] - baseCost) * 2);
+    const up = sizeUpcharge(sizeCost[s], baseCost);
     return { title: s, price: up > 0 ? String(up) : '', default: s === 'L' ? '1' : '' };
   });
 
@@ -405,7 +407,7 @@ process.stdin.on('end', async () => {
     const attributes = buildAttributes(rows, baseCost);
     if (!attributes) { console.log('  ' + token.padEnd(11) + 'no sizes — skipped'); skipped++; continue; }
 
-    const price = money(baseCost * 2);
+    const price = sellPrice(baseCost);
     /* Sublimation is offered ONLY on blanks made for it.
        The looser test — anything "performance" or "polyester" — enabled it on
        the CORE365 polos, which come in 19 colours that are mostly dark. Dye

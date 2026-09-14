@@ -164,9 +164,25 @@ const SP_INSERTS = [
    cannot bid for them at all (50-piece minimum), so there is nothing to undercut.
    Above 50 DTF now lands just above a 2-colour screen job, which is the honest
    place for it — unlimited colours, no screens, no colour-count ceiling. */
+/* 1-3 and 4-11 are split (2026-09-14). Anchorfish charges the same for both —
+   the costs below are identical — but $26.05 a piece is what a customer sees
+   first, and it is the number that loses the small job to the shop down the
+   road. A true one-off still carries the full 3.70 because it is genuinely the
+   most labour per piece; from four up the markup comes down to 3.30, which is
+   the same margin already accepted at 50-99 pieces.
+
+   The split is what makes that possible at all: bands are CEILINGS, so cutting
+   the ≤11 band alone would have handed the discount to single-piece orders
+   too. */
 const DTF = {
-    1: { ceil:  11, mk: 3.70, v: [5.00, 7.03, 9.38, 1.80] },
-   12: { ceil:  24, mk: 3.60, v: [3.23, 5.63, 7.50, 1.80] },
+    1: { ceil:   3, mk: 3.70, v: [5.00, 7.03, 9.38, 1.80] },
+    4: { ceil:  11, mk: 3.30, v: [5.00, 7.03, 9.38, 1.80] },
+   /* 3.60 -> 3.25. With 4-11 cut to 3.30, leaving this at 3.60 made the
+      ADDITIONAL-LOCATION price climb from $5.95 to $6.50 as the order grew —
+      one markup drives every column in a band, and the tool refuses a ladder
+      that rises. Lowering it keeps every column falling and gives 12-24 a real
+      break rather than a penalty. */
+   12: { ceil:  24, mk: 3.25, v: [3.23, 5.63, 7.50, 1.80] },
    25: { ceil:  49, mk: 3.50, v: [2.58, 4.50, 6.00, 1.50] },
    50: { ceil:  99, mk: 3.30, v: [2.73, 3.60, 4.80, 1.50] },
   100: { ceil: 249, mk: 3.10, v: [1.65, 3.06, 4.08, 1.35] },

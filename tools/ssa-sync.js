@@ -32,6 +32,7 @@
    result, which strips leading whitespace from the first column as well as the
    trailing newline. That is the drift lib/db exists to prevent. */
 const { mysql, sq } = require('./lib/db');
+const { sellPrice } = require('./lib/markup');
 const { CORE_SIZES } = require('./lib/garments');
 
 const APPLY = process.argv.includes('--apply');
@@ -156,7 +157,7 @@ async function sizeCosts(ssa, styleId) {
   return { bySize, homeQty, farQty };
 }
 
-/** The base cost the x2 rule applies to: cheapest CORE size, not cheapest size. */
+/** The base cost the markup applies to: cheapest CORE size, not cheapest size. */
 function baseCost(bySize) {
   const core = CORE_SIZES.map((s) => bySize[s]).filter((n) => n > 0);
   return core.length ? Math.min(...core) : Math.min(...Object.values(bySize));
@@ -239,7 +240,7 @@ process.stdin.on('end', async () => {
       lowLocal.push({ p, home: bySize.homeQty, far: bySize.farQty });
     }
     const cost = money(baseCost(bySize.bySize));
-    const price = money(cost * 2);
+    const price = sellPrice(cost);
     const was = Number(p.cost);
     const move = was > 0 ? Math.abs(cost - was) / was : 0;
 
@@ -297,7 +298,7 @@ process.stdin.on('end', async () => {
       const cost = money(baseCost(bySize.bySize));
       revived.push({ p, cost });
       stmts.push(`UPDATE lumise_products SET active=1, ssa_auto_off=NULL, ` +
-        `supplier_cost=${cost}, price=${money(cost * 2)}, ssa_seen_at=NOW(), ` +
+        `supplier_cost=${cost}, price=${sellPrice(cost)}, ssa_seen_at=NOW(), ` +
         `cost_updated=NOW() WHERE id=${p.id};`);
     } catch { /* unreachable: leave it deactivated, try again tomorrow */ }
   }
