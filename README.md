@@ -155,6 +155,26 @@ below is needed to get the app running locally.
 - **Resend** — `RESEND_API_KEY`, the fallback when Brevo sending fails.
 - **Clover** — `CLOVER_*`, card payments and the payment webhook.
 - **HubSpot** — `HUBSPOT_*`, legacy contact sync.
+- **Sentry** — `SENTRY_DSN`, and optionally `SENTRY_ENVIRONMENT`. One shared
+  Sentry org with a *project* per app; the DSN comes from that project's
+  Settings → Client Keys. Leave it unset and nothing breaks: errors still land
+  in `app_errors` and still go out in the hourly digest, and the boot says so.
+
+  The environment label defaults to `RAILWAY_ENVIRONMENT_NAME`, then
+  `NODE_ENV`, then `development` — never `production`, so running the server
+  locally with production's DSN in your `.env` cannot raise a production
+  alert. `SENTRY_ENVIRONMENT` overrides all three.
+
+  Check it end to end, where the DSN is:
+
+  ```bash
+  node tools/sentry-test.js                       # local, reads .env
+  railway run --service <service> node tools/sentry-test.js   # production
+  ```
+
+  It sends one real event and **fails non-zero unless Sentry's ingest answers
+  2xx** — a flush alone is not proof, because the queue drains whether the
+  answer was 200 or 400. Then look for the printed event id in the dashboard.
 
 `.env` is gitignored and must stay that way. No credential belongs in a
 client-visible variable or in `public/`.
@@ -165,6 +185,8 @@ client-visible variable or in `public/`.
 server.js        the entire app — routes, admin UI, email, payments, DB init
 public/          the marketing site, served statically (also robots/sitemap)
 tools/           one-off operational scripts, run by hand with node
+tools/lib/       shared modules — note monitoring.js is required by server.js
+                 at boot, so this directory is not only for hand-run scripts
 docs/            operational notes (Brevo workflows, local SEO, Tawk macros)
 AGENTS.md        the rules an AI agent must follow in this repo — read first
 ```

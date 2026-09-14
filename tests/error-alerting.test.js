@@ -1,16 +1,21 @@
 'use strict';
 
-/* Somebody finds out when this app breaks.
+/* Somebody finds out when this app breaks — by email, from the app's own data.
  *
- * There is no error-tracking dependency, on purpose — the boundary forbids one,
- * and the gap was never CAPTURE. Every failure path already writes a structured
- * console.error and Railway keeps the logs. The gap is NOTICE: nobody reads
- * logs, so a broken page is reported by a customer or not at all.
+ * Every failure path already writes a structured console.error and Railway keeps
+ * the logs. The gap was never CAPTURE, it was NOTICE: nobody reads logs, so a
+ * broken page is reported by a customer or not at all.
  *
  * So errors are recorded where they survive a restart, grouped so a repeated
  * failure is one line rather than a flood, and the sweep that already runs every
- * hour mails a digest when there is something to say. Issue #19, built inside
- * the boundary rather than around it.
+ * hour mails a digest when there is something to say. Issue #19.
+ *
+ * Sentry was added later and does NOT replace this (see error-tracking.test.js).
+ * This half needs the database and email to be working; the other half needs the
+ * network. The error most worth hearing about is the one where the database is
+ * unreachable, so the two sinks are kept precisely because they fail for
+ * different reasons. What this file guards is that adding the second one did not
+ * quietly hollow out the first.
  */
 
 const { test } = require('node:test');
@@ -22,14 +27,19 @@ const vm = require('node:vm');
 
 const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 
-test('no error-tracking dependency was added', () => {
-  /* The whole reason this is hand-built. If a package ever appears, this
-     approach should be deleted rather than kept alongside it. */
-  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
-  const deps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
-  for (const bad of deps.filter((d) => /sentry|bugsnag|rollbar|airbrake/i.test(d))) {
-    assert.fail(`${bad} is a new runtime dependency the boundary forbids`);
-  }
+test('the database digest survived the arrival of Sentry', () => {
+  /* This test used to assert the OPPOSITE — that no error-tracking package
+     existed — and its comment said that if one ever appeared, the hand-built
+     approach "should be deleted rather than kept alongside it".
+     That was reversed deliberately, not worked around. The reasoning behind it
+     was that the repo boundary forbade a new dependency; the gate actually
+     grades one MAJOR (confirm it is wanted), not CRITICAL (refuse it), and the
+     owner asked for the SDK. The premise was wrong, so the conclusion went with
+     it — but the recommendation to then DELETE this system was not followed,
+     because a sink that needs the network and a sink that needs the database
+     fail on different days. Both are required to still exist. */
+  assert.match(src, /async function recordError/, 'the database recorder is still here');
+  assert.match(src, /async function sendErrorDigest/, 'and so is the email digest');
 });
 
 /* ── it must survive the crash it is reporting ───────────────────────────── */
@@ -80,9 +90,17 @@ test('unhandled rejections and uncaught exceptions are both caught', () => {
 test('an uncaught exception still ends the process', () => {
   /* It leaves the process in an unknown state, and a server that keeps serving
      from one is worse than one Railway restarts. Recording it must not become
-     swallowing it. */
-  const h = src.slice(src.indexOf("process.on('uncaughtException'"));
-  assert.match(h.slice(0, 600), /process\.exit\(1\)/,
+     swallowing it.
+
+     Scoped to the handler's own body rather than to a fixed number of
+     characters: the old version read the first 600, and adding a sink pushed
+     the exit past that and failed a test about behaviour for a reason that was
+     entirely about comment length. A window that moves when a comment grows is
+     not measuring what it claims to. */
+  const from = src.indexOf("process.on('uncaughtException'");
+  assert.notStrictEqual(from, -1, 'the handler must exist');
+  const h = src.slice(from, src.indexOf('\n});', from));
+  assert.match(h, /process\.exit\(1\)/,
     'the process must still die so Railway restarts it');
 });
 
@@ -110,12 +128,16 @@ test('a sweep task failing is itself recorded', () => {
   /* Reminders, follow-ups and the supplier sync are jobs nobody watches, so one
      failing silently for a fortnight is exactly what this is for. */
   const sweep = src.slice(src.indexOf('const step = async (name, fn)'));
-  assert.match(sweep.slice(0, 900), /recordError\('sweep:' \+ name/);
+  assert.match(sweep.slice(0, 900), /reportError\('sweep:' \+ name/);
   assert.match(sweep.slice(0, 900), /name !== 'error digest'/,
     'the digest is excluded — a failure to report errors cannot report itself');
 });
 
 test('the money paths report themselves', () => {
-  assert.match(src, /recordError\('stripe-webhook'/, 'a webhook that stops banking money');
-  assert.match(src, /recordError\('submission-insert'/, 'a lead lost at the form');
+  /* reportError, not recordError: these are the paths where losing the report
+     costs money, so they must reach BOTH sinks. Asserting the funnel rather
+     than the database call is what stops a later edit quietly dropping one of
+     them back to a single sink. */
+  assert.match(src, /reportError\('stripe-webhook'/, 'a webhook that stops banking money');
+  assert.match(src, /reportError\('submission-insert'/, 'a lead lost at the form');
 });

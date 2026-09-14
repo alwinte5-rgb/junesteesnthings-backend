@@ -539,7 +539,7 @@ test('a failed Clover write is escalated, not just logged', () => {
   /* This handler acks 200 at the top, so throwing earns no retry — only an
      unhandled rejection. That makes the error table the only way anyone finds
      out a payment went unrecorded. */
-  assert.match(CLOVER, /recordError\('clover-payment-unrecorded'/,
+  assert.match(CLOVER, /reportError\('clover-payment-unrecorded'/,
     'a lost payment must reach the digest the shop actually reads');
 });
 
