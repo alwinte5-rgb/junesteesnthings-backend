@@ -5344,7 +5344,8 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
       .map((a) => String(a.code));
 
     return `
-    <div class="line" data-n="${n}" data-saved-addons="${val(savedAddons.join(','))}">
+    <div class="line" data-n="${n}" data-saved-addons="${val(savedAddons.join(','))}"
+         data-saved-sizes="${val(JSON.stringify((it && it.size_mix) || {}))}">
       <div class="line-head">
         <span class="line-no">Item <b class="ix">${n + 1}</b></span>
         <button type="button" class="line-x" onclick="removeLine(this)" title="Remove this item">&times;</button>
@@ -5769,6 +5770,28 @@ ${quotePricingSource()}
               '<input type="number" min="0" inputmode="numeric" class="sz" data-size="'+sz.size+'" data-up="'+sz.upcharge+
               '" style="padding:7px;text-align:center" placeholder="0"></label>';
           }).join('') + '</div>';
+        /* Put the saved mix back. ONE shot, cleared as it is read, exactly like
+           the add-ons above it — reopening an existing line restores it, and
+           changing product afterwards must give that product's sizes empty
+           rather than resurrect the previous one's counts.
+
+           Without this the boxes came back at zero on every edit. The quantity
+           box still held its number, so the line total looked broadly right and
+           the failure hid: what actually vanished was the extended-size
+           UPCHARGES, which are computed from these counts. Correcting a phone
+           number on a quote with 2XLs in it quietly made the quote cheaper, and
+           again on the next save. */
+        var savedSizes = L.dataset.savedSizes;
+        if (savedSizes) {
+          delete L.dataset.savedSizes;
+          var mixWas = {};
+          try { mixWas = JSON.parse(savedSizes) || {}; } catch (e) { mixWas = {}; }
+          box.querySelectorAll('.sz').forEach(function(el){
+            var n = parseInt(mixWas[el.dataset.size], 10) || 0;
+            if (n > 0) el.value = n;
+          });
+        }
+
         box.querySelectorAll('.sz').forEach(function(el){ el.oninput = calc; });
       }
 
