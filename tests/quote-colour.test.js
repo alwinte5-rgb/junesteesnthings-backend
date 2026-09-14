@@ -91,3 +91,27 @@ test('both fallbacks validate the URL before using it', () => {
   assert.strictEqual(guards.length, 2,
     'each fallback checks its URL — supplier data reaching an img src');
 });
+
+/* Changing the colour has to change the picture.
+ *
+ * The images filter keeps only res.cloudinary.com URLs, which correctly throws
+ * away the S&S catalogue thumbnail so it re-derives on every save. But the
+ * per-colourway art is ALSO on Cloudinary — so it survived, `images` was never
+ * empty again, and the fallback that picks the colourway photo never ran. The
+ * line kept the FIRST colour it was ever saved with.
+ */
+test('previously auto-filled art is dropped so it can re-derive', () => {
+  const m = src.match(/images = images\.filter\([\s\S]*?\);/);
+  assert.ok(m, 'nothing strips the previous auto-filled art');
+  assert.match(m[0], /jtees\\\/product-art/,
+    'it must target the art folder, not uploads');
+});
+
+test('a real upload is NOT stripped', () => {
+  const m = src.match(/images = images\.filter\(\(u\) => (.*?)\);/);
+  const pred = new Function('u', 'return ' + m[1]);
+  assert.strictEqual(pred('https://res.cloudinary.com/dhjtzewsx/image/upload/v1/quote_requests/a.jpg'),
+    true, 'a customer upload must survive');
+  assert.strictEqual(pred('https://res.cloudinary.com/dhjtzewsx/image/upload/v1/jtees/product-art/25-x/black-front.webp'),
+    false, 'previously auto-filled art must be dropped');
+});

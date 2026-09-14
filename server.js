@@ -5274,8 +5274,17 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
   const val = (v) => v == null ? '' : escEmail(String(v));
   const [eFirst, ...eRest] = String(E.name || '').trim().split(/\s+/);
 
-  const prodOpts = catalog.products.map(p =>
-    `<option value="${escEmail(String(p.id))}">${escEmail(p.name)} — ${money(p.price)}</option>`
+  /* Options are built PER LINE so the saved choice can be marked selected.
+​
+     They used to be one string shared by every line, with no `selected`
+     anywhere and nothing setting the value afterwards — so reopening a quote
+     lost the garment and the decoration on every line. `product_id` and
+     `method_id` were being saved correctly the whole time; they were simply
+     never read back. Everything downstream then priced from a line with no
+     product and no method, which is why the totals collapsed to nothing. */
+  const prodOpts = (sel) => catalog.products.map(p =>
+    `<option value="${escEmail(String(p.id))}"${String(p.id) === String(sel) ? ' selected' : ''}>` +
+    `${escEmail(p.name)} — ${money(p.price)}</option>`
   ).join('');
   /* A decoration can only be offered here if it can be PRICED here: the line
      total is (blank + size upcharge + decoration tier for qty) x qty, so a
@@ -5290,8 +5299,9 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
   const quotable = catalog.methods.filter(m =>
     m.use_for_quoting && Object.keys(m.positions || {}).length &&
     !DIGITIZING_METHOD_RE.test(m.title || ''));
-  const methodOpts = quotable
-    .map(m => `<option value="${m.id}">${escEmail(m.title)}</option>`).join('');
+  const methodOpts = (sel) => quotable
+    .map(m => `<option value="${m.id}"${String(m.id) === String(sel) ? ' selected' : ''}>` +
+      `${escEmail(m.title)}</option>`).join('');
 
   /* Embroidery run rates are excluded on purpose (the shop prices embroidery
      another way and only its digitizing fees are authoritative), so those are
@@ -5354,8 +5364,8 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
       <input name="description${n}" class="d" value="${it ? val(it.description) : ''}"
              placeholder="What is it? e.g. 24 tees, 1 colour front">
       <div class="row row-2" style="margin-top:8px">
-        <select name="product${n}" class="p"><option value="">Product (optional)</option>${prodOpts}</select>
-        <select name="method${n}" class="m"><option value="">Decoration (optional)</option>${methodOpts}</select>
+        <select name="product${n}" class="p"><option value="">Product (optional)</option>${prodOpts(it && it.product_id)}</select>
+        <select name="method${n}" class="m"><option value="">Decoration (optional)</option>${methodOpts(it && it.method_id)}</select>
       </div>
       <!-- Directly under the product, because it is a property OF the product
            and the two are chosen together. It sat inside the collapsed "Details,
@@ -6789,6 +6799,21 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
             .slice(0, 6);
         }
       } catch { images = []; }
+
+      /* Drop art this form put there ITSELF on a previous save.
+​
+         The filter above keeps only res.cloudinary.com URLs, which correctly
+         throws away the S&S catalogue thumbnail so it re-derives every time.
+         The per-colourway art is ALSO on Cloudinary, so it survived — and once
+         a line had been saved, changing the colour never changed the picture,
+         because `images` was no longer empty and the fallback below never ran.
+​
+         Uploads from this form go to `quote_requests`; the art lives under
+         `jtees/product-art`. Anything from that folder is a previous
+         fallback, not something a person chose, so it is re-derived rather
+         than kept. */
+      images = images.filter((u) => !/\/jtees\/product-art\//.test(u));
+
       /* No photo uploaded, so fall back — but to the RIGHT one.
 ​
          The chosen colourway's own photograph first, when the art has been
