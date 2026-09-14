@@ -71,6 +71,16 @@ THIN_DECLINE_PCT = 15.0      # this much unstitchable detail and it is not a job
 COMPLEXITY_DECLINE = 8.0     # edge length vs an equal-area circle
 MIN_DESIGN_MM = 25.0
 
+# Artwork has to be sharp enough to MEASURE the thing being judged. To see
+# whether a feature is under MIN_SATIN_MM you need a few pixels across it, so
+# roughly 2.5 pixels per mm of the finished size.
+#
+# This is not theoretical. A 100x100 BMP for a 99mm design — 1 px/mm — came back
+# as 28,820 stitches with every region classified as border and none as fill. It
+# was nonsense, and nothing in the output said so. A confident wrong number is
+# worse than a refusal, because a refusal gets a human involved.
+MIN_PX_PER_MM = 2.5
+
 
 def load_mask(path):
     im = Image.open(path)
@@ -255,6 +265,21 @@ def run(path, width_cm, colours, out_png):
     mask, rgba = load_mask(path)
     ph, pw = mask.shape
     width_mm = width_cm * 10.0
+
+    # Refuse before measuring, not after. Everything downstream reads as a
+    # finished answer, so the check belongs where it can still stop one.
+    src_ppm = pw / width_mm if width_mm else 0
+    if src_ppm < MIN_PX_PER_MM:
+        need = int(math.ceil(width_mm * MIN_PX_PER_MM))
+        return {
+            'file': os.path.basename(path),
+            'width_cm': round(width_cm, 1), 'height_cm': round(width_cm * ph / pw, 1),
+            'escalate': True, 'verdict': 'ESCALATE', 'stitches': None,
+            'reasons': [f'artwork is {pw}px wide for a {width_mm:.0f}mm design '
+                        f'({src_ppm:.1f} px/mm) — too coarse to measure. '
+                        f'Need at least {need}px, or vector art.'],
+            'preview': None,
+        }
     ppm = PPM
     tw, th = int(width_mm * ppm), int(width_mm * ppm * ph / pw)
     rgba = rgba.resize((tw, th), Image.LANCZOS)

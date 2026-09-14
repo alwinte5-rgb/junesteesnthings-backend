@@ -41,6 +41,28 @@ let buf = '';
 process.stdin.on('data', (d) => (buf += d));
 process.stdin.on('end', () => {
   const est = JSON.parse(buf);
+
+  /* Escalation comes BEFORE the database is even opened. There is nothing to
+     price: the estimator has said it cannot measure this artwork, and pricing
+     it anyway is how a guess reaches a customer wearing the authority of a
+     quote. The order goes to a person instead. */
+  if (est.escalate || est.stitches_high == null) {
+    console.log('\n  ' + est.file + '  ·  ' + est.width_cm + 'cm x ' + est.height_cm + 'cm');
+    console.log('\n  CANNOT QUOTE — ESCALATED\n');
+    for (const r of (est.reasons || [])) console.log('    - ' + r);
+    console.log('\n  Say to the customer:');
+    console.log('    "We can do this, but not from the file as sent — we need');
+    console.log('     better artwork before we can price it. Sending it to');
+    console.log('     June now and she will come back to you directly."');
+    console.log('\n  ESCALATE TO OWNER');
+    console.log('    file      ' + est.file);
+    console.log('    size      ' + est.width_cm + 'cm x ' + est.height_cm + 'cm');
+    console.log('    reason    ' + (est.reasons || ['unmeasurable']).join('; '));
+    console.log('    needs     a decision and a price by hand\n');
+    process.exitCode = 3;
+    return;
+  }
+
   const rows = mysql(url,
     "SELECT id,title,calculate FROM lumise_printings WHERE active=1 AND title LIKE '%Embroidery%' ORDER BY id;",
     { rows: true });
@@ -105,7 +127,18 @@ process.stdin.on('end', () => {
     : 'over every active tier, quote by hand'));
   if (est.preview) console.log('  Preview:    ' + est.preview);
   if (est.verdict === 'DECLINE') {
-    console.log('\n  This is a DECLINE — the price above is what it would cost, not an offer.');
+    console.log('\n  DECLINE — the price above is what it would cost, not an offer.');
+    console.log('\n  Say to the customer:');
+    console.log('    "This design has detail too fine to sew cleanly — it would');
+    console.log('     not come out looking like the artwork. Sending it to June');
+    console.log('     to look at; she will suggest what would work."');
+    console.log('\n  ESCALATE TO OWNER');
+    console.log('    file      ' + est.file);
+    for (const r of (est.reasons || [])) console.log('    reason    ' + r);
+    console.log('    preview   ' + (est.preview || '(none)'));
+  }
+  if (!hi) {
+    console.log('\n  ESCALATE TO OWNER — over every active band, no price exists for this.');
   }
   console.log('');
 });
