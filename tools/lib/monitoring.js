@@ -99,7 +99,18 @@ function initMonitoring() {
       release: releaseName(),
       /* Errors only. Tracing on every request would spend the 5k/month free
          tier on successful page loads and add per-request overhead to a
-         storefront, to answer a question nobody has asked yet. */
+         storefront, to answer a question nobody has asked yet.
+
+         The default integrations are LEFT ALONE even though this means ~44 of
+         them load and their OpenTelemetry spans are then discarded unsampled.
+         That looks like obvious waste and it was measured before being kept:
+         cutting the list to the 10 that enrich an error event saved about 1MB
+         of RSS and 30ms of boot. The real cost — roughly 35MB and 290ms — is
+         `require('@sentry/node')` pulling in the OTel tree, and no integration
+         list avoids that. So a hand-maintained filter buys ~2% and takes on the
+         risk of silently dropping an integration on an SDK upgrade. Not worth
+         it; if this ever needs to shrink, the lever is the dependency, not the
+         config. */
       tracesSampleRate: 0,
       sendDefaultPii: false,
       beforeSend: scrub,

@@ -229,6 +229,17 @@ test('the crash handlers report to both sinks', () => {
   assert.match(exc.slice(0, 1200), /reportError\('uncaughtException'/);
 });
 
+test('each crash hook is registered exactly once', () => {
+  /* Node runs EVERY listener for these events, so a second one does not replace
+     the first — it runs after it. server.js carried two `unhandledRejection`
+     listeners for a while and logged every rejection twice, which is noise in
+     the place you least want it. A duplicate is also how a rejection could end
+     up reported twice and counted as two faults. */
+  const count = (needle) => src.split(needle).length - 1;
+  assert.strictEqual(count("process.on('unhandledRejection'"), 1);
+  assert.strictEqual(count("process.on('uncaughtException'"), 1);
+});
+
 test('a crash flushes Sentry before the process dies, but cannot be held up by it', () => {
   /* captureException only queues. Exiting immediately loses the queue — which
      is the report of the crash, the one you most wanted. Equally, a hung flush

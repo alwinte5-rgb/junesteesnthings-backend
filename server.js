@@ -13785,9 +13785,13 @@ function validateEnv() {
 }
 validateEnv();
 
-process.on('unhandledRejection', (err) => {
-  console.error('UNHANDLED REJECTION:', err);
-});
+/* The second `unhandledRejection` listener that used to sit here was removed.
+   Node runs EVERY registered listener, so it did not replace the one above
+   recordError — it ran after it, logging the same rejection a second time.
+   It was the older of the two and the only thing it added was dumping the
+   whole error object rather than its message; the handler above now sends the
+   error and its stack to Sentry, which is a better home for that than a
+   duplicated log line. */
 
 const PORT = process.env.PORT || 3000;
 initDB()
