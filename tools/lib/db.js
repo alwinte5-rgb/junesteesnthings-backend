@@ -65,6 +65,13 @@ function mysql(url, sql, { rows = false } = {}) {
     env: Object.assign({}, process.env, { MYSQL_PWD: decodeURIComponent(u.password) }),
     encoding: 'utf8',
     stdio: rows ? ['ignore', 'pipe', 'inherit'] : ['ignore', 'inherit', 'inherit'],
+    /* spawnSync's default is 1MB, and `variations` is MEDIUMTEXT now — one
+       product holds 128KB of per-colourway art, so selecting the column across
+       the catalogue exceeds it. The failure is ENOBUFS, which names a buffer
+       and not the column that outgrew it, and it arrives only once enough art
+       has been wired for the query to get big. Sized well past anything this
+       schema can produce in one read. */
+    maxBuffer: 256 * 1024 * 1024,
   });
   if (r.error || r.status !== 0) {
     throw new Error('mysql (' + MYSQL + ') failed: ' +

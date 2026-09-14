@@ -110,7 +110,9 @@ async function ssaColours(styleId) {
        is art (or a price) that is about to point at nothing. */
     const vars = dejson(p.variations) || {};
     const wiredValues = new Set(Object.values(vars.variations || {})
-      .filter((v) => v && v.conditions && v.conditions.COL).map((v) => v.conditions.COL));
+      .filter((v) => v && v.conditions)
+      .map((v) => v.conditions[colKey] || v.conditions.COL || v.conditions.BCOL)
+      .filter(Boolean));
     const orphans = cur.filter((o) => !ssa.has(o.title) && wiredValues.has(o.value)).map((o) => o.title);
     orphanTotal += orphans.length;
 

@@ -58,8 +58,23 @@ process.stdin.on('end', () => {
         '-F', 'file=@' + f, '-F', 'api_key=' + key, '-F', 'signature=' + sig];
       for (const k of Object.keys(p)) a.push('-F', k + '=' + p[k]);
 
-      const out = spawnSync('curl', a, { encoding: 'utf8', maxBuffer: 1 << 24 });
-      let d; try { d = JSON.parse(out.stdout); } catch { d = null; }
+      /* Retry the IMAGE, not the product.
+         Cloudinary resets a connection on roughly one upload in a hundred
+         ("curl (56) Recv failure"). Abandoning the style on the first one meant
+         a 115-image product got a little further each run and never finished —
+         two full attempts died on two different images. The manifest already
+         made a retry cheap; what was missing was retrying at all. */
+      let d = null, out = null;
+      for (let attempt = 1; attempt <= 4; attempt++) {
+        out = spawnSync('curl', a, { encoding: 'utf8', maxBuffer: 1 << 24 });
+        try { d = JSON.parse(out.stdout); } catch { d = null; }
+        if (d && d.secure_url) break;
+        if (attempt < 4) {
+          console.error('  retry ' + attempt + '/3 ' + public_id + ' — ' +
+            (out.stderr || out.stdout || '').trim().slice(0, 80));
+          spawnSync('sleep', [String(attempt * 2)]);
+        }
+      }
       if (!d || !d.secure_url) {
         console.error('FAILED ' + public_id + ' ' + (out.stdout || out.stderr || '').slice(0, 200));
         /* Write what did succeed before giving up, so a retry does not redo it. */

@@ -44,7 +44,16 @@ process.stdin.on('end', () => {
   if (!rows.length) { console.error('no product ' + productId); process.exit(1); }
   const p = rows[0];
   const stages = dejson(p.stages), attrs = dejson(p.attributes);
-  const opts = attrs && attrs.COL && attrs.COL.values && attrs.COL.values.options;
+  /* Find the colour attribute by its TYPE. 15 of 102 active products key it
+     'BCOL' rather than 'COL' — #88 among them — and reading attrs.COL reported
+     every one of them as having no colour attribute at all, after its 115
+     images had already been cut and uploaded.
+
+     The key matters twice: the variations written below key their conditions on
+     it too, so hardcoding 'COL' here and there would have produced variations
+     that look wired and match nothing. */
+  const colKey = attrs && Object.keys(attrs).find((k) => attrs[k] && attrs[k].type === 'product_color');
+  const opts = colKey && attrs[colKey].values && attrs[colKey].values.options;
   if (!Array.isArray(opts)) { console.error(p.name + ' has no colour attribute'); process.exit(1); }
 
   /* A duplicated swatch would silently give two colourways the same variation,
@@ -82,7 +91,7 @@ process.stdin.on('end', () => {
       st[side].overlay = false;
     }
     variations[String(n)] = {
-      id: String(n), conditions: { COL: value }, price: '', sku: '',
+      id: String(n), conditions: { [colKey]: value }, price: '', sku: '',
       minqty: '', maxqty: '', description: '',
       cfgstages: true, cfgprinting: false, stages: st, printings: null,
     };
@@ -96,7 +105,7 @@ process.stdin.on('end', () => {
   }
   console.log('\n  ' + n + ' colourway variations');
 
-  const blob = { default: { COL: opts[0].value }, attrs: ['COL'], variations };
+  const blob = { default: { [colKey]: opts[0].value }, attrs: [colKey], variations };
   const encoded = enjson(blob);
 
   /* What is stored is enjson's base64(urlencode(json)), roughly nine times the
