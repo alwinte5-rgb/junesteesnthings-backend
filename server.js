@@ -6786,6 +6786,23 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
       const setupLabel = (priced.addonLines.find((a) => a.code === 'digitizing') || {}).label || null;
 
       let description = desc || (prod ? `${prod.name}${method ? ' — ' + method.title : ''}` : 'Custom item');
+
+      /* Strip any size list this line already carries before adding the current
+         one. `desc` is the description POSTED BACK, which on an edit already
+         ends in the suffix written the last time — so appending unconditionally
+         added it again on every save. Three saves gave
+         "... (1 M, 3 L, 1 3XL) (1 M, 3 L, 1 3XL) (1 M, 3 L, 1 3XL)", and it
+         never stopped growing.
+
+         Same compounding shape as the blended unit price and the vanishing size
+         upcharges: each save is internally consistent, so nothing looks wrong at
+         any single point. Matched on the SHAPE of a size list — "<count>
+         <size>" groups — so a customer's own parenthetical ("(rush job)")
+         survives. */
+      const SIZE_LIST = /\s*\(\d+\s+[^,()]+(?:,\s*\d+\s+[^,()]+)*\)\s*$/;
+      while (SIZE_LIST.test(description)) description = description.replace(SIZE_LIST, '');
+      description = description.trim();
+
       if (mix) description += ` (${Object.entries(mix).map(([sz, n]) => `${n} ${sz}`).join(', ')})`;
 
       /* Only accept our own Cloudinary URLs — these are rendered straight into
