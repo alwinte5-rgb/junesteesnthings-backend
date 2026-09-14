@@ -18,7 +18,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-const m = src.match(/const SIZE_LIST = (\/.*\/);/);
+const m = src.match(/const SIZE_LIST_RE = (\/.*\/);/);
 assert.ok(m, 'the size-list strip is gone from server.js');
 const RE = new Function('return ' + m[1])();
 
@@ -57,4 +57,36 @@ test('the customer\'s own parenthetical survives', () => {
 
 test('no mix leaves a previously written list removed, not duplicated', () => {
   assert.strictEqual(apply(BASE + ' (2 L)', null), BASE);
+});
+
+/* Quotes written before the save was fixed carry the repeats in the DATABASE.
+ * A fix in the save alone leaves them wrong until somebody happens to edit each
+ * one, so the READ side normalises too and they come right on being opened.
+ */
+const om = src.match(/function oneSizeList\(desc\) \{[\s\S]*?\n\}/);
+assert.ok(om, 'oneSizeList is gone from server.js');
+const oneSizeList = new Function('SIZE_LIST_RE', 'stripSizeLists',
+  om[0] + '; return oneSizeList;')(RE, (d) => {
+    let x = String(d == null ? '' : d);
+    while (RE.test(x)) x = x.replace(RE, '');
+    return x.trim();
+  });
+
+test('an already-corrupted description displays with one size list', () => {
+  const stored = BASE + ' (1 M, 3 L, 1 3XL)'.repeat(5);
+  assert.strictEqual(oneSizeList(stored), BASE + ' (1 M, 3 L, 1 3XL)');
+});
+
+test('a clean description is left exactly as it is', () => {
+  assert.strictEqual(oneSizeList(BASE + ' (2 XL)'), BASE + ' (2 XL)');
+  assert.strictEqual(oneSizeList(BASE), BASE);
+});
+
+test('a note in brackets is not mistaken for a size list', () => {
+  assert.strictEqual(oneSizeList('Team hoodies (rush job)'), 'Team hoodies (rush job)');
+});
+
+test('null and empty do not throw', () => {
+  assert.strictEqual(oneSizeList(null), '');
+  assert.strictEqual(oneSizeList(''), '');
 });

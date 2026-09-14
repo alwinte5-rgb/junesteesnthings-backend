@@ -4052,6 +4052,30 @@ function blankPriceFor(base, qty) {
    heat-transfer vinyl, both of which are already priced in the designer. The
    quote form must say so rather than silently pricing a screen job at the
    50-71 rate, which is what a ceiling-keyed table would otherwise do. */
+/* Trailing "(1 M, 3 L, 1 3XL)" groups, however many have accumulated.
+ *
+ * The save used to append one unconditionally to a description that already
+ * ended in the last one, so every re-save added another. Quotes written before
+ * that was fixed carry the repeats in the DATABASE, and a fix in the save alone
+ * would leave them wrong until somebody happened to edit each of them.
+ *
+ * So the READ side normalises too, and existing quotes come right the moment
+ * they are opened. Matched on the SHAPE of a size list — "<count> <size>"
+ * groups — so a customer's own parenthetical ("(rush job)") is untouched. */
+const SIZE_LIST_RE = /\s*\(\d+\s+[^,()]+(?:,\s*\d+\s+[^,()]+)*\)\s*$/;
+function stripSizeLists(desc) {
+  let d = String(desc == null ? '' : desc);
+  while (SIZE_LIST_RE.test(d)) d = d.replace(SIZE_LIST_RE, '');
+  return d.trim();
+}
+
+/** One size list at most: repeats collapsed, the current one kept. */
+function oneSizeList(desc) {
+  const d = String(desc == null ? '' : desc);
+  const m = d.match(SIZE_LIST_RE);
+  return m ? stripSizeLists(d) + m[0].replace(/\s+$/, '') : d;
+}
+
 const SCREEN_MIN_QTY = 50;
 const SCREEN_METHOD_RE = /screen\s*print/i;
 
@@ -5361,7 +5385,7 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
         <span class="line-no">Item <b class="ix">${n + 1}</b></span>
         <button type="button" class="line-x" onclick="removeLine(this)" title="Remove this item">&times;</button>
       </div>
-      <input name="description${n}" class="d" value="${it ? val(it.description) : ''}"
+      <input name="description${n}" class="d" value="${it ? val(oneSizeList(it.description)) : ''}"
              placeholder="What is it? e.g. 24 tees, 1 colour front">
       <div class="row row-2" style="margin-top:8px">
         <select name="product${n}" class="p"><option value="">Product (optional)</option>${prodOpts(it && it.product_id)}</select>
@@ -6799,9 +6823,7 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
          any single point. Matched on the SHAPE of a size list — "<count>
          <size>" groups — so a customer's own parenthetical ("(rush job)")
          survives. */
-      const SIZE_LIST = /\s*\(\d+\s+[^,()]+(?:,\s*\d+\s+[^,()]+)*\)\s*$/;
-      while (SIZE_LIST.test(description)) description = description.replace(SIZE_LIST, '');
-      description = description.trim();
+      description = stripSizeLists(description);
 
       if (mix) description += ` (${Object.entries(mix).map(([sz, n]) => `${n} ${sz}`).join(', ')})`;
 
@@ -7284,7 +7306,7 @@ app.get('/q/:code', async (req, res) => {
       return `
       <tr>
         <td>
-          ${escEmail(i.description)}
+          ${escEmail(oneSizeList(i.description))}
           ${i.colour ? `<div style="display:flex;align-items:center;gap:6px;margin-top:4px;font-size:13px">
               <span style="width:13px;height:13px;border-radius:3px;flex:0 0 13px;border:1px solid rgba(0,0,0,.25);
                     background:${/^#[0-9a-fA-F]{6}$/.test(String(i.colour_hex || '')) ? i.colour_hex : 'transparent'}"></span>
