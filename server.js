@@ -4464,8 +4464,51 @@ function quotePricingSource() {
          \`unitOverride\` is a hand-typed each-price: it replaces the computed
          blank+decoration but never the add-ons, because an override is a
          judgement about the work, not a decision to give away the extras. */
+      /* SAME-RUN GROUPING.
+​
+         Twelve adult tees and twelve youth tees printed in one run are one
+         24-piece job to everything that matters — the same screens, the same
+         setup, the same trip through the press — but they have to be separate
+         quote lines because the blanks cost different amounts. Priced line by
+         line they were two 12s, and the customer paid a 12-piece rate twice for
+         a 24-piece job.
+​
+         Lines carrying the same \`runGroup\` tag pool their quantity for BAND
+         SELECTION only. Everything else stays per line: each keeps its own
+         blank price, its own per-piece add-ons, and its own line total. Only
+         the question "which rung of the ladder is this" is answered together.
+​
+         Three places take the pooled figure, and they are the three the repo
+         keeps warning about: the blank tiers (FLOORS, >= qty), the decoration
+         tiers (CEILINGS, first band the quantity fits inside) and the
+         decoration minimum. Miss the minimum and three adult plus three youth
+         still bills as two separate runs below the five-piece embroidery
+         minimum, which is the whole thing this is meant to stop. */
+      function runGroupTotals(items) {
+        var totals = {};
+        for (var i = 0; i < (items || []).length; i++) {
+          var it = items[i] || {};
+          var g = String(it.runGroup == null ? '' : it.runGroup).trim();
+          if (!g) continue;
+          totals[g] = (totals[g] || 0) + (parseInt(it.qty, 10) || 0);
+        }
+        return totals;
+      }
+
+      /* Never BELOW the line's own quantity: an untagged line, or a tag nobody
+         else shares, must price exactly as it did before this existed. */
+      function bandQtyFor(item, totals) {
+        var q = parseInt((item || {}).qty, 10) || 0;
+        var g = String((item || {}).runGroup == null ? '' : (item || {}).runGroup).trim();
+        if (!g || !totals) return q;
+        return Math.max(q, parseInt(totals[g], 10) || 0);
+      }
+
       function priceLine(o) {
         var qty = parseInt(o.qty, 10) || 0;
+        /* The quantity the LADDERS are read at. Defaults to this line's own,
+           so nothing changes for a line that is not in a run group. */
+        var bandQty = Math.max(qty, parseInt(o.bandQty, 10) || 0);
         /* \`o.colours\` is what the admin PICKED, not a settled count — a legacy
            per-colour method ignores it and reads its own title instead. */
         var colours = colourCount(o.method, o.colours);
@@ -4482,7 +4525,7 @@ function quotePricingSource() {
             parseFloat(o.blankOverride) > 0) {
           blankBase = parseFloat(o.blankOverride);
         }
-        var blank = blankBase ? blankPriceAt(blankBase, qty, o.blankTiers || []) : 0;
+        var blank = blankBase ? blankPriceAt(blankBase, bandQty, o.blankTiers || []) : 0;
         /* Both sides, when the job is printed front AND back. The picker used to
            offer only "one location" or "second location" — either/or — so a
            two-sided job could be quoted at one side's price while the designer
@@ -4497,10 +4540,10 @@ function quotePricingSource() {
         if (o.method) {
           if (o.stage === 'both') {
             var pk = Object.keys(o.method.positions || {});
-            decoration = Number(tierAt(o.method.positions, qty, pk[0], colours)) +
-                         Number(tierAt(o.method.positions, qty, pk[1] || pk[0], colours));
+            decoration = Number(tierAt(o.method.positions, bandQty, pk[0], colours)) +
+                         Number(tierAt(o.method.positions, bandQty, pk[1] || pk[0], colours));
           } else {
-            decoration = Number(tierAt(o.method.positions, qty, o.stage, colours));
+            decoration = Number(tierAt(o.method.positions, bandQty, o.stage, colours));
           }
         }
 
@@ -4538,9 +4581,9 @@ function quotePricingSource() {
         }
 
         var decoMin = (o.method && o.method.min_order_qty) ? (parseInt(o.method.min_order_qty, 10) || 0) : 0;
-        var belowDecoMin = decoMin > 0 && qty > 0 && qty < decoMin;
+        var belowDecoMin = decoMin > 0 && bandQty > 0 && bandQty < decoMin;
         if (belowDecoMin && decoration > 0) {
-          decoration = Math.round(decoration * (decoMin / qty) * 100) / 100;
+          decoration = Math.round(decoration * (decoMin / bandQty) * 100) / 100;
         }
 
         /* Extended sizes carry an upcharge that applies only to the pieces in
@@ -4622,10 +4665,11 @@ function quotePricingSource() {
 
 /* The same source, executed here, so Node prices a line with the identical
    code the browser runs. */
-const { priceLine, addonAmount, colourCount, screenCount } = (function () {
+const { priceLine, addonAmount, colourCount, screenCount, runGroupTotals, bandQtyFor } = (function () {
   const sandbox = {};
   vm.runInNewContext(quotePricingSource() +
     '\nthis.priceLine = priceLine; this.addonAmount = addonAmount;' +
+    '\nthis.runGroupTotals = runGroupTotals; this.bandQtyFor = bandQtyFor;' +
     '\nthis.colourCount = colourCount; this.screenCount = screenCount;', sandbox);
   return sandbox;
 })();
