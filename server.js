@@ -5357,6 +5357,11 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
         <select name="product${n}" class="p"><option value="">Product (optional)</option>${prodOpts}</select>
         <select name="method${n}" class="m"><option value="">Decoration (optional)</option>${methodOpts}</select>
       </div>
+      <!-- Directly under the product, because it is a property OF the product
+           and the two are chosen together. It sat inside the collapsed "Details,
+           photos & sizes" section, where choosing a colour meant opening a
+           panel first — so the common case was the hidden one. -->
+      <div class="colours" style="display:none;margin-top:8px"></div>
       <div class="row row-tight" style="margin-top:8px">
         <input name="qty${n}" class="q" type="number" inputmode="numeric" min="1"
                value="${it ? val(it.qty) : ''}" placeholder="Qty">
@@ -5434,7 +5439,6 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
       <div class="extra" style="display:${hasExtras ? 'block' : 'none'}">
         <input name="details${n}" class="dt" value="${it ? val(it.details) : ''}"
                placeholder="Colour, ink, placement — the customer sees this">
-        <div class="colours" style="display:none;margin-top:8px"></div>
         <div class="sizes" style="display:none;margin-top:8px"></div>
         <input type="hidden" name="sizemix${n}" class="sm" value="">
         <div style="margin-top:8px">
@@ -6785,7 +6789,20 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
             .slice(0, 6);
         }
       } catch { images = []; }
-      // Fall back to the catalogue photo so a line is never imageless.
+      /* No photo uploaded, so fall back — but to the RIGHT one.
+​
+         The chosen colourway's own photograph first, when the art has been
+         wired for it. That is the whole point of picking a colour: the customer
+         sees the garment they are buying rather than whichever colourway
+         happens to be the supplier's default shot.
+​
+         The catalogue thumbnail stays as the last resort, because a line must
+         never be imageless — and 14 colourways have no supplier photo behind
+         them, so this path is still reached. */
+      if (!images.length && colourRow && typeof colourRow.image === 'string' &&
+          /^https?:\/\//.test(colourRow.image)) {
+        images = [colourRow.image];
+      }
       if (!images.length && prod && prod.thumbnail && /^https?:\/\//.test(prod.thumbnail)) {
         images = [prod.thumbnail];
       }

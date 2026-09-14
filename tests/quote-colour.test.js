@@ -66,3 +66,28 @@ test('the customer page only paints a swatch for a real hex', () => {
   assert.match(cell[0], /escEmail\(i\.colour\)/,
     'the colour NAME is escaped — it is supplier text on a customer page');
 });
+
+/* The line photo follows the chosen colour.
+ *
+ * Falling back to the catalogue thumbnail put one colourway — the supplier's
+ * default shot — on every quote regardless of what was ordered. Now that a
+ * colour is chosen and the feed carries per-colourway art, the fallback should
+ * prefer the garment actually being bought.
+ */
+test('the chosen colourway photo is preferred over the catalogue default', () => {
+  const block = src.match(/No photo uploaded, so fall back[\s\S]*?prod\.thumbnail\];\n      \}/);
+  assert.ok(block, 'the image fallback block is gone from server.js');
+
+  const colourAt = block[0].indexOf('colourRow.image');
+  const thumbAt = block[0].indexOf('prod.thumbnail');
+  assert.ok(colourAt > -1, 'the colourway photo is never consulted');
+  assert.ok(colourAt < thumbAt,
+    'the catalogue thumbnail must be the LAST resort, not the first');
+});
+
+test('both fallbacks validate the URL before using it', () => {
+  const block = src.match(/No photo uploaded, so fall back[\s\S]*?prod\.thumbnail\];\n      \}/)[0];
+  const guards = block.match(/\^https\?:/g) || [];
+  assert.strictEqual(guards.length, 2,
+    'each fallback checks its URL — supplier data reaching an img src');
+});
