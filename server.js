@@ -4063,6 +4063,9 @@ const SCREEN_METHOD_RE = /screen\s*print/i;
    It is also waived whenever the customer supplies a usable file, which is a
    judgement only a person can make, so "no digitizing" stays the default. */
 const EMBROIDERY_METHOD_RE = /embroider/i;
+/* Matches any decoration method. Design work is not tied to how the thing is
+   printed — the artwork has to exist before any of them can run. */
+const ANY_METHOD_RE = /./;
 const DIGITIZING_METHOD_RE = /digitiz/i;
 
 /** The digitizing fees the catalogue offers, cheapest first. */
@@ -4137,6 +4140,37 @@ const ADDONS = [
     kind: 'per_piece', rate: 4.50 },
   { code: 'jumbo_hoop', label: 'Jumbo hoop (design over 11")', appliesTo: EMBROIDERY_METHOD_RE,
     kind: 'percent_of_decoration', rate: 50 },
+
+  /* DESIGN WORK — toggled on per quote, by a person, deliberately.
+   *
+   * None of these carry `auto`. A customer who uses the designer does their own
+   * artwork and owes nothing here; a customer who sends a photo of a napkin is
+   * buying an hour of somebody's evening. Which of those is in front of you is
+   * a judgement, and it is made once, while looking at the quote — not by a
+   * global switch that gets left in whatever state it was last in.
+   *
+   * THE REVISION ALLOWANCE IS THE POINT, not the fee. A $30 charge against five
+   * rounds of revisions is still a loss. Each tier includes a stated number of
+   * rounds and further rounds are billed, so a customer who needs five pays for
+   * five without anyone having to decide up front whether they look difficult.
+   * The allowance is in the note because the note reaches the customer's quote.
+   *
+   * Priced on time, not on sympathy: $10 is ten minutes, $30 is around
+   * forty, $60 covers two hours. Past that the commission tier is billed by
+   * the hour — a flat top tier is the lowest hourly rate in the list on the
+   * hardest work, which is backwards. */
+  { code: 'design_tweak', label: 'Design — tweak', appliesTo: ANY_METHOD_RE,
+    kind: 'once', rate: 10,
+    note: 'A small change to print-ready artwork: resize, recolour, swap a name, centre it, or convert the file. No revision rounds — it is one edit.' },
+  { code: 'design_setup', label: 'Design — setup', appliesTo: ANY_METHOD_RE,
+    kind: 'once', rate: 30,
+    note: 'Usable artwork that needs work before it can print: background removal, redrawing a low-resolution logo, laying out a name and number list, or building a simple text design from a description. Includes one round of revisions.' },
+  { code: 'design_commission', label: 'Design — commission', appliesTo: ANY_METHOD_RE,
+    kind: 'once', rate: 60,
+    note: 'Original artwork from a brief. Covers up to two hours and two rounds of revisions; further time is billed at $35/hour, agreed with you before it is spent.' },
+  { code: 'design_revision', label: 'Design — extra revision round', appliesTo: ANY_METHOD_RE,
+    kind: 'once', rate: 25,
+    note: 'One round of changes beyond those included above. Add it once per additional round.' },
 ];
 
 /* NO RUSH OPTION, and this is a deliberate decision rather than a gap.
