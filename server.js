@@ -5865,8 +5865,37 @@ ${quotePricingSource()}
             /* Anything the method carries automatically — screens — is never
                offered as something to tick, because it is not a decision. */
             avail = avail.filter(function(a){ return !a.auto; });
-            aoBox.innerHTML = avail.length
+
+            /* The design TIERS come out of the tick list and into a dropdown.
+               Two reasons, and the second is the one that matters:
+
+               They are mutually exclusive — a job is a tweak or a setup or a
+               commission, never two — and a tick box cannot say that.
+
+               And a stray click on a tick box adds $60 to a quote silently. A
+               closed select has to be opened before anything can be chosen, so
+               a mis-click costs nothing. Charges that a slip can add belong
+               behind a deliberate action. */
+            var TIERS = ['design_tweak', 'design_setup', 'design_commission'];
+            var tiers = avail.filter(function(a){ return TIERS.indexOf(a.code) > -1; });
+            avail = avail.filter(function(a){ return TIERS.indexOf(a.code) === -1; });
+
+            var tierHtml = tiers.length
+              ? '<label style="display:flex;align-items:center;gap:6px;margin:0 0 6px;font-size:13px;' +
+                'text-transform:none;letter-spacing:0;font-weight:400">' +
+                '<span style="white-space:nowrap">Design work</span>' +
+                '<select class="dtier" name="designtier' + L.dataset.n + '" style="flex:1">' +
+                '<option value="">None — customer supplied artwork</option>' +
+                tiers.map(function(a){
+                  return '<option value="' + a.code + '">' + a.label.replace(/^Design — /, '') +
+                         ' — $' + a.rate.toFixed(2) + '</option>';
+                }).join('') +
+                '</select></label>'
+              : '';
+
+            aoBox.innerHTML = (tiers.length || avail.length)
               ? '<div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Upgrades</div>' +
+                tierHtml +
                 avail.map(function(a){
                   return '<label style="display:flex;align-items:flex-start;gap:6px;margin:0 0 3px;font-size:13px;text-transform:none;letter-spacing:0;font-weight:400">' +
                     '<input type="checkbox" class="ao" name="addon_' + a.code + L.dataset.n + '" value="1" data-code="' +
@@ -5877,7 +5906,7 @@ ${quotePricingSource()}
                     '</span></label>';
                 }).join('')
               : '';
-            aoBox.style.display = avail.length ? 'block' : 'none';
+            aoBox.style.display = (tiers.length || avail.length) ? 'block' : 'none';
 
             /* Put back what this line was saved with. ONE shot: the attribute
                is cleared as it is read, so this restores on the first build of
@@ -5891,9 +5920,26 @@ ${quotePricingSource()}
               aoBox.querySelectorAll('.ao').forEach(function(cb){
                 if (want.indexOf(cb.dataset.code) > -1) cb.checked = true;
               });
+              /* The tier test is a literal here rather than the TIERS array a
+                 few lines up, so this block stands on its own: the restore
+                 logic is lifted out of server.js by
+                 tests/quote-addon-restore.test.js, and a reference to anything
+                 outside it fails as "TIERS is not defined" in the test while
+                 working perfectly in the browser. Same spelling as the server's
+                 own check in the save route. */
+              var dtSel = aoBox.querySelector('.dtier');
+              if (dtSel) {
+                for (var wi = 0; wi < want.length; wi++) {
+                  if (/^design_(tweak|setup|commission)$/.test(want[wi])) {
+                    dtSel.value = want[wi]; break;
+                  }
+                }
+              }
             }
 
             aoBox.querySelectorAll('.ao').forEach(function(cb){ cb.onchange = calc; });
+            var dtBind = aoBox.querySelector('.dtier');
+            if (dtBind) dtBind.onchange = calc;
           }
 
           /* Collect the add-ons this line has switched on, plus digitizing and
@@ -5913,6 +5959,11 @@ ${quotePricingSource()}
             var a = ADDONS.find(function(x){ return x.code === cb.dataset.code; });
             if (a) addons.push(a);
           });
+          var dtPick = L.querySelector('.dtier');
+          if (dtPick && dtPick.value) {
+            var dtA = ADDONS.find(function(x){ return x.code === dtPick.value; });
+            if (dtA) addons.push(dtA);
+          }
           /* Screens are not a choice — a screen-print job burns them whether or
              not anyone ticked anything, so they come from the method. The dark
              garment does not add a CHARGE here, it adds a SCREEN: it is passed
@@ -6535,8 +6586,20 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
         const d = digitizingOptions(catalog).find((x) => String(x.id) === setupId);
         if (d) lineAddons.push({ code: 'digitizing', label: d.title, kind: 'once', rate: d.price });
       }
+      /* The design tier arrives as a dropdown choice, not a tick. Only the CODE
+         is read; the rate still comes from ADDONS, so a posted body cannot name
+         its own price — and a code that is not a design tier, or not offered
+         for this method, is ignored rather than trusted. */
+      const tierPick = String(one(b['designtier' + i]) || '').trim();
+      if (tierPick) {
+        const t = addonsFor(methodTitle).find((a) =>
+          a.code === tierPick && /^design_(tweak|setup|commission)$/.test(a.code));
+        if (t) lineAddons.push(t);
+      }
+
       for (const a of addonsFor(methodTitle)) {
         if (a.auto) continue;              // attached by the method itself, below
+        if (/^design_(tweak|setup|commission)$/.test(a.code)) continue;  // the dropdown above
         if (String(one(b[`addon_${a.code}${i}`]) || '') !== '1') continue;
         lineAddons.push({ code: a.code, label: a.label, kind: a.kind, rate: a.rate });
       }

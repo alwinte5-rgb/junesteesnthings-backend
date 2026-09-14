@@ -76,10 +76,20 @@ const restore = (() => {
 
 function fakeLine(codes) {
   const boxes = codes.map((c) => ({ dataset: { code: c }, checked: false }));
+  const tier = { value: '' };
   return {
     L: { dataset: {} },
-    aoBox: { querySelectorAll: () => ({ forEach: (f) => boxes.forEach(f) }) },
+    /* querySelector too, and returning a real stub rather than null: restore()
+       now also puts a saved DESIGN TIER back into a <select>, and a double that
+       answers only querySelectorAll threw "not a function" the moment it did.
+       `tier` is asserted on below, so the select is exercised rather than
+       stubbed away. */
+    aoBox: {
+      querySelectorAll: () => ({ forEach: (f) => boxes.forEach(f) }),
+      querySelector: (sel) => (sel === '.dtier' ? tier : null),
+    },
     boxes,
+    tier,
   };
 }
 
@@ -118,4 +128,21 @@ test('a saved code the method no longer offers is ignored, not an error', () => 
   f.L.dataset.savedAddons = 'puff,jumbo_hoop';
   assert.doesNotThrow(() => restore(f.L, f.aoBox));
   assert.deepStrictEqual(f.boxes.map((b) => b.checked), [false]);
+});
+
+/* The design tier is a dropdown, not a tick box — a mis-click on a checkbox
+   put $60 on a quote silently. It has to restore the same way the boxes do. */
+test('a saved design tier comes back selected in the dropdown', () => {
+  const f = fakeLine(['specialty_ink', 'design_tweak', 'design_commission']);
+  f.L.dataset.savedAddons = 'specialty_ink,design_commission';
+  restore(f.L, f.aoBox);
+  assert.strictEqual(f.tier.value, 'design_commission',
+    'the saved tier is put back into the select');
+});
+
+test('no saved tier leaves the dropdown on None', () => {
+  const f = fakeLine(['specialty_ink', 'design_tweak']);
+  f.L.dataset.savedAddons = 'specialty_ink';
+  restore(f.L, f.aoBox);
+  assert.strictEqual(f.tier.value, '', 'nothing is selected by accident');
 });
