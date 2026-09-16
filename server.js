@@ -2800,7 +2800,7 @@ async function sendGradOrderEmail(order) {
         ${row('Signed By', escHtml(order.signature))}
         ${row('Date Signed', escHtml(order.sign_date))}
       </table>
-      <p style="margin-top:12px;font-size:.85rem;color:#6B7280;">Customer agreed to: digital proof within 2 business days, 24-hour approval window, 50% deposit invoice via Clover, 7–14 business day production after deposit.</p>`)}
+      <p style="margin-top:12px;font-size:.85rem;color:#6B7280;">Customer agreed to: digital proof within 2 business days, 24-hour approval window, 50% deposit invoice via Clover, 14–20 business day production after deposit.</p>`)}
 
       ${order.notes ? sec('Special Instructions', `<p style="white-space:pre-wrap;margin:0;">${escHtml(order.notes)}</p>`) : ''}
 
@@ -3931,8 +3931,17 @@ const DIGITIZING_DAYS = parseInt(process.env.JT_LT_DIGITIZING || '2', 10);
  *  `opts.items`   the quote lines, for the piece count behind `beyond_sheet`.
  *  `opts.pickup`  collected from the shop, so no transit. */
 function deliveryEstimate(from = new Date(), opts = {}) {
-  const pmin = parseInt(process.env.JT_PROD_MIN || '7', 10);
-  const pmax = parseInt(process.env.JT_PROD_MAX || '10', 10);
+  /* Doubled from 7-10 on 2026-09-16, on the owner's call.
+​
+     The old window was Anchorfish's own quoted production time, which is what
+     the CONTRACTED work takes — it never accounted for the shop's queue in
+     front of it, or for the embroidery that is sewn in house one hoop at a
+     time. A date the shop cannot hit is worse than a longer one it can: the
+     customer plans around the date, not around the reason.
+​
+     Env-tunable, as every duration here is. */
+  const pmin = parseInt(process.env.JT_PROD_MIN || '14', 10);
+  const pmax = parseInt(process.env.JT_PROD_MAX || '20', 10);
   const smin = opts.pickup ? 0 : parseInt(process.env.JT_SHIP_MIN || '2', 10);
   const smax = opts.pickup ? 0 : parseInt(process.env.JT_SHIP_MAX || '5', 10);
 
@@ -5476,8 +5485,19 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
         <div class="sizes" style="display:none;margin-top:8px"></div>
         <input type="hidden" name="sizemix${n}" class="sm" value="">
         <div style="margin-top:8px">
-          <input type="file" class="fi" accept="image/*" multiple style="padding:8px;font-size:13px">
+          <!-- Not image/* any more. A logo button, a crest or anything with type
+               wants VECTOR, and a customer physically could not attach a .ai,
+               .eps, .pdf or a stitch file — so it went to email instead and
+               lived somewhere the job could not see it. -->
+          <input type="file" class="fi" multiple style="padding:8px;font-size:13px"
+                 accept="image/*,.pdf,.ai,.eps,.svg,.psd,.dst,.emb,.exp,.pes,.zip">
           <input type="hidden" name="images${n}" class="im" value="${it && it.images ? escEmail(JSON.stringify(it.images)) : ''}">
+          <!-- Everything uploaded, WITH its original name. Cloudinary assigns
+               its own opaque public_id, so without this a file is findable only
+               by the quote that happens to reference it — "smith_logo_v3.ai"
+               becomes a random string the moment it lands. -->
+          <input type="hidden" name="files${n}" class="fl" value="${it && it.files ? escEmail(JSON.stringify(it.files)) : ''}">
+          <div class="filelist" style="margin-top:6px;font-size:12.5px"></div>
           <div class="thumbs" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px"></div>
         </div>
       </div>
@@ -6371,14 +6391,35 @@ ${uploadStatusScript()}
             fd.append('timestamp', sig.timestamp);
             fd.append('folder', sig.folder);
             fd.append('signature', sig.signature);
-            return fetch('https://api.cloudinary.com/v1_1/'+CLOUD+'/image/upload', {method:'POST', body:fd});
+            /* The auto endpoint rather than the image one: Cloudinary decides
+               image vs raw from the bytes, so a PDF or a stitch file uploads
+               instead of being rejected as not-an-image.
+               No backticks in this comment — it sits inside a server-side
+               template literal and one would end it. */
+            return fetch('https://api.cloudinary.com/v1_1/'+CLOUD+'/auto/upload', {method:'POST', body:fd});
           }).then(function(r){return r.json();}).then(function(d){
             if(!d.secure_url) throw new Error(d.error ? d.error.message : 'upload failed');
-            var list = hidden.value ? JSON.parse(hidden.value) : [];
-            list.push(d.secure_url);
-            hidden.value = JSON.stringify(list);
-            ph.style.background = 'url('+d.secure_url+') center/cover';
-            ph.textContent = '';
+
+            /* Every upload is recorded WITH the name the customer gave it. Only
+               the ones that are actually images also go in the images list,
+               which is what gets rendered as a picture on their quote — a PDF
+               in an img tag is a broken icon on a page they were sent. */
+            var isImg = d.resource_type === 'image' && !/pdf$/i.test(d.format || '');
+            var fhid = L.querySelector('.fl');
+            var flist = fhid.value ? JSON.parse(fhid.value) : [];
+            flist.push({ url: d.secure_url, name: file.name, kind: isImg ? 'image' : 'file' });
+            fhid.value = JSON.stringify(flist);
+            renderFileList(L);
+
+            if (isImg) {
+              var list = hidden.value ? JSON.parse(hidden.value) : [];
+              list.push(d.secure_url);
+              hidden.value = JSON.stringify(list);
+              ph.style.background = 'url('+d.secure_url+') center/cover';
+              ph.textContent = '';
+            } else {
+              ph.remove();
+            }
           }).catch(function(e){
             ph.textContent = '✕'; ph.style.color = '#b71c1c';
             upFailed++;
@@ -6387,6 +6428,22 @@ ${uploadStatusScript()}
             console.error('upload failed', e);
           }).then(function(){ upPending--; saySoon(); });
         });
+      }
+
+      /* The attachments on a line, by name. Without this the only evidence a
+         file exists is a thumbnail, and a stitch file has no thumbnail. */
+      function renderFileList(L){
+        var box = L.querySelector('.filelist');
+        var hid = L.querySelector('.fl');
+        if (!box || !hid) return;
+        var list = [];
+        try { list = hid.value ? JSON.parse(hid.value) : []; } catch (e) { list = []; }
+        box.innerHTML = list.map(function(f){
+          return '<div style="display:flex;align-items:center;gap:6px;margin-top:2px">' +
+            '<span>' + (f.kind === 'image' ? '\uD83D\uDDBC' : '\uD83D\uDCCE') + '</span>' +
+            '<a href="' + f.url + '" target="_blank" rel="noopener" style="color:#2563eb">' +
+            String(f.name || 'file').replace(/[<>&]/g, '') + '</a></div>';
+        }).join('');
       }
 
       function bind(){
@@ -6853,6 +6910,29 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
          than kept. */
       images = images.filter((u) => !/\/jtees\/product-art\//.test(u));
 
+      /* Everything attached, with the name the customer gave it. Same origin
+         rule as the images — these are linked from the customer's page, so an
+         arbitrary URL would let anything be handed to them under our name. The
+         name is stored because Cloudinary assigns an opaque public_id: without
+         it, "smith_logo_v3.ai" is findable only through the quote that happens
+         to reference it. */
+      let files = [];
+      try {
+        const parsed = JSON.parse(one(b['files' + i]) || '[]');
+        if (Array.isArray(parsed)) {
+          files = parsed
+            .filter((f) => f && typeof f.url === 'string' &&
+              /^https:\/\/res\.cloudinary\.com\//.test(f.url) &&
+              !/\/jtees\/product-art\//.test(f.url))
+            .slice(0, 12)
+            .map((f) => ({
+              url: f.url,
+              name: String(f.name || 'file').slice(0, 120),
+              kind: f.kind === 'image' ? 'image' : 'file',
+            }));
+        }
+      } catch { files = []; }
+
       /* No photo uploaded, so fall back — but to the RIGHT one.
 ​
          The chosen colourway's own photograph first, when the art has been
@@ -6881,6 +6961,7 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
            is also the value an order records and the key the per-colourway art
            matches on, so carrying both keeps the quote and the artwork from
            drifting apart. */
+        files,
         colour: colourRow ? colourRow.name : null,
         colour_hex: colourRow && /^#[0-9a-fA-F]{6}$/.test(String(colourRow.value || ''))
           ? colourRow.value : null,
@@ -7313,6 +7394,9 @@ app.get('/q/:code', async (req, res) => {
               <span>${escEmail(i.colour)}</span>
             </div>` : ''}
           ${i.details ? `<div class="muted" style="font-size:13px;margin-top:3px">${escEmail(i.details)}</div>` : ''}
+          ${(Array.isArray(i.files) ? i.files : []).filter((f) => f.kind !== 'image').map((f) =>
+            `<div style="font-size:12.5px;margin-top:3px">&#128206;
+               <a href="${escEmail(f.url)}" target="_blank" rel="noopener">${escEmail(f.name)}</a></div>`).join('')}
           ${gallery}
         </td>
         <td class="num">${!canEditQty ? i.qty
