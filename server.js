@@ -2800,7 +2800,7 @@ async function sendGradOrderEmail(order) {
         ${row('Signed By', escHtml(order.signature))}
         ${row('Date Signed', escHtml(order.sign_date))}
       </table>
-      <p style="margin-top:12px;font-size:.85rem;color:#6B7280;">Customer agreed to: digital proof within 2 business days, 24-hour approval window, 50% deposit invoice via Clover, 14–20 business day production after deposit.</p>`)}
+      <p style="margin-top:12px;font-size:.85rem;color:#6B7280;">Customer agreed to: digital proof within 2 business days, 24-hour approval window, 50% deposit invoice via Clover, 7–14 business day production after deposit.</p>`)}
 
       ${order.notes ? sec('Special Instructions', `<p style="white-space:pre-wrap;margin:0;">${escHtml(order.notes)}</p>`) : ''}
 
@@ -3931,17 +3931,8 @@ const DIGITIZING_DAYS = parseInt(process.env.JT_LT_DIGITIZING || '2', 10);
  *  `opts.items`   the quote lines, for the piece count behind `beyond_sheet`.
  *  `opts.pickup`  collected from the shop, so no transit. */
 function deliveryEstimate(from = new Date(), opts = {}) {
-  /* Doubled from 7-10 on 2026-09-16, on the owner's call.
-​
-     The old window was Anchorfish's own quoted production time, which is what
-     the CONTRACTED work takes — it never accounted for the shop's queue in
-     front of it, or for the embroidery that is sewn in house one hoop at a
-     time. A date the shop cannot hit is worse than a longer one it can: the
-     customer plans around the date, not around the reason.
-​
-     Env-tunable, as every duration here is. */
-  const pmin = parseInt(process.env.JT_PROD_MIN || '14', 10);
-  const pmax = parseInt(process.env.JT_PROD_MAX || '20', 10);
+  const pmin = parseInt(process.env.JT_PROD_MIN || '7', 10);
+  const pmax = parseInt(process.env.JT_PROD_MAX || '10', 10);
   const smin = opts.pickup ? 0 : parseInt(process.env.JT_SHIP_MIN || '2', 10);
   const smax = opts.pickup ? 0 : parseInt(process.env.JT_SHIP_MAX || '5', 10);
 
