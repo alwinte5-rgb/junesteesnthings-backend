@@ -12687,8 +12687,21 @@ const PENDING_REVIEW_WHERE = `
 /** Queue an ask, unless one is already waiting for this order or quote.
  *  Never throws — a review is never worth failing a payment over. */
 async function queueReviewRequest({ name, email, phone, product, order_ref, quote_code, days }) {
-  if (!isValidEmail(String(email || ''))) return false;
-  if (!order_ref && !quote_code) return false;
+  const ref = order_ref ? 'order ' + order_ref : quote_code ? 'quote ' + quote_code : 'unknown job';
+  /* SAY when an ask is declined, not only when one is made.
+​
+     A phone-only customer cannot be emailed and correctly gets no ask — but
+     this returned false in silence, so "nobody has ordered" and "everybody who
+     ordered paid by text with no email on file" produced identical logs. The
+     second is a business problem worth seeing. */
+  if (!isValidEmail(String(email || ''))) {
+    console.log('review not queued for ' + ref + ': no usable email on the job');
+    return false;
+  }
+  if (!order_ref && !quote_code) {
+    console.log('review not queued: neither an order nor a quote was named');
+    return false;
+  }
   try {
     const { rowCount } = await pool.query(
       `INSERT INTO reviews (token,name,email,phone,product,order_ref,quote_code,requested_at)
