@@ -12867,6 +12867,29 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
     const live = rows.filter(r => r.approved).length;
     const avg = rows.length ? (rows.reduce((a, r) => a + (r.rating || 0), 0) / rows.length).toFixed(1) : '—';
 
+    /* The PIPELINE, not just the results.
+​
+       This page said "0 received" and nothing else, which is the same sentence
+       whether every ask has gone out and nobody replied, or nothing has ever
+       been asked at all. Those need completely different actions — one is copy
+       and timing, the other is a broken queue — and there was no way to tell
+       them apart from here. Asked point blank whether reviews were going out, I
+       could not answer it from this screen either. */
+    const { rows: pipe } = await pool.query(
+      `SELECT COUNT(*) FILTER (WHERE sent_at IS NULL AND submitted_at IS NULL
+                                 AND requested_at > NOW())::int AS waiting,
+              COUNT(*) FILTER (WHERE sent_at IS NULL AND submitted_at IS NULL
+                                 AND requested_at <= NOW())::int AS due,
+              COUNT(*) FILTER (WHERE sent_at IS NOT NULL)::int AS sent,
+              MAX(sent_at) AS last_sent
+         FROM reviews`);
+    const pl = pipe[0] || {};
+    const when = pl.last_sent ? new Date(pl.last_sent).toLocaleDateString('en-US',
+      { month: 'short', day: 'numeric' }) : 'never';
+    const pipeline = `<div class="sub" style="margin-top:2px">` +
+      `${pl.sent || 0} asked &middot; ${pl.due || 0} due now &middot; ` +
+      `${pl.waiting || 0} waiting on a delivery date &middot; last sent ${escEmail(when)}</div>`;
+
     /* Customers who paid before any of this was wired up, and were never asked.
        Paid in full only: asking somebody who has put a deposit down is asking
        before the work exists. Nothing sends from rendering this — the ask is
@@ -12880,7 +12903,13 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
           AND NOT EXISTS (SELECT 1 FROM reviews r WHERE r.quote_code = q.code)
         ORDER BY q.paid_at DESC NULLS LAST, q.id DESC LIMIT 300`);
 
-    const backfill = !never.length ? '' : `
+    const backfill = !never.length ? `
+      <div class="card">
+        <p class="muted" style="margin:0">No past customers are waiting to be asked. A quote
+        appears here only when it is <b>paid in full</b>, has an email on file, and has no
+        review request against it yet — a deposit-only job is deliberately excluded, because
+        asking then is asking before the work exists.</p>
+      </div>` : `
       <div class="card">
         <h2 style="margin:0 0 4px;font-size:18px">Past customers who have never been asked</h2>
         <p class="muted" style="margin:0 0 12px">Paid in full, no review request on file.
@@ -12899,6 +12928,7 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
 
     res.send(adminPage('Reviews', `<h1>Reviews</h1>
       <div class="sub">${rows.length} received &middot; ${live} live on the site &middot; average ${avg}</div>
+      ${pipeline}
       ${backfill}
       ${body || '<div class="card"><p class="muted">No reviews yet.</p></div>'}`, 'reviews'));
   } catch (err) {
