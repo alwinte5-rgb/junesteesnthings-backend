@@ -98,9 +98,28 @@ test('queueing refuses to add a second ask for the same job', () => {
 });
 
 test('queueing needs a real address and something to key on', () => {
-  assert.match(QUEUE, /if \(!isValidEmail\(String\(email \|\| ''\)\)\) return false;/);
-  assert.match(QUEUE, /if \(!order_ref && !quote_code\) return false;/,
+  /* Anchored on the GUARD and its refusal, not on the one-line spelling it
+     happened to have. The previous version matched
+     "if (!isValidEmail(...)) return false;" exactly and broke the moment the
+     body grew a log line — reporting the guard as GONE when it was intact.
+     A test that fails on a rewrite it should not care about trains people to
+     ignore it, which is the whole value it had. */
+  const emailGuard = QUEUE.match(/if \(!isValidEmail\([\s\S]{0,200}?\n?\s*\}?\s*\n/);
+  assert.ok(emailGuard, 'the email guard is gone — an ask with no address can never send');
+  assert.match(QUEUE.slice(QUEUE.indexOf('isValidEmail')), /return false/,
+    'an unusable address must refuse, not queue a row the sweep will skip forever');
+
+  const keyGuard = QUEUE.indexOf('!order_ref && !quote_code');
+  assert.ok(keyGuard > -1, 'the key guard is gone');
+  assert.match(QUEUE.slice(keyGuard, keyGuard + 200), /return false/,
     'a row keyed on neither could never be found again, or deduplicated');
+});
+
+test('a refusal is reported, not silent', () => {
+  /* "Nobody has ordered" and "everybody who ordered had no email on file" are
+     different problems and used to produce identical logs. */
+  assert.match(QUEUE.slice(QUEUE.indexOf('isValidEmail')), /console\.log\([^)]*not queued/,
+    'declining to queue must say so — a silent false hides a business problem');
 });
 
 test('a failed queue can never fail the payment that triggered it', () => {
