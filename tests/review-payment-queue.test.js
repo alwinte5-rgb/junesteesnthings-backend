@@ -259,7 +259,11 @@ test('the sweep actually uses it', () => {
 test('the backfill list is not capped below the batch it feeds', () => {
   /* A list capped at 100 cannot queue a backlog of 200 however many boxes are
      ticked, so the cap has to lead the batch rather than trail it. */
-  const m = src.match(/ORDER BY q\.paid_at DESC NULLS LAST, q\.id DESC LIMIT (\d+)/);
+  /* Anchored on the NOT EXISTS clause, which only the backfill query has.
+     Matching on the ORDER BY found the phone-only list instead the moment the
+     backfill grew a sort column — a loose anchor failing against correct code,
+     for the third time in this file. */
+  const m = src.match(/NOT EXISTS \(SELECT 1 FROM reviews r[\s\S]{0,300}?LIMIT (\d+)/);
   assert.ok(m, 'the backfill query is gone');
   assert.ok(Number(m[1]) >= 200, 'the backfill list caps at ' + m[1] + ', below one sweep');
 });

@@ -12918,12 +12918,15 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
        queued only when June ticks a box and submits, which is the point of
        showing the list at all. */
     const { rows: never } = await pool.query(
-      `SELECT q.code, q.name, q.email, q.phone, q.total, q.paid_amount
+      `SELECT q.code, q.name, q.email, q.phone, q.total, q.paid_amount,
+              q.delivered_at, q.shipped_at,
+              (q.paid_amount >= q.total - 0.005) AS paid_full
          FROM quotes q
-        WHERE q.email IS NOT NULL AND q.email <> ''
-          AND q.total > 0 AND q.paid_amount >= q.total - 0.005
+        WHERE q.total > 0
+          AND (q.paid_amount > 0 OR q.delivered_at IS NOT NULL OR q.shipped_at IS NOT NULL)
           AND NOT EXISTS (SELECT 1 FROM reviews r WHERE r.quote_code = q.code)
-        ORDER BY q.paid_at DESC NULLS LAST, q.id DESC LIMIT 300`);
+        ORDER BY (q.paid_amount >= q.total - 0.005) DESC,
+                 q.paid_at DESC NULLS LAST, q.id DESC LIMIT 300`);
 
     /* PHONE-ONLY customers. They cannot be emailed and so never enter the
        queue at all — which is correct, and also means they were invisible.
@@ -12936,7 +12939,7 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
         WHERE (q.email IS NULL OR q.email = '')
           AND q.phone IS NOT NULL AND q.phone <> ''
           AND q.total > 0 AND q.paid_amount >= q.total - 0.005
-        ORDER BY q.paid_at DESC NULLS LAST, q.id DESC LIMIT 100`);
+        ORDER BY q.paid_at DESC NULLS LAST, q.id DESC LIMIT 300`);
 
     const smsFor = (n) => {
       const f = String(n || '').trim().split(/\s+/)[0];
@@ -12972,15 +12975,27 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
         asking then is asking before the work exists.</p>
       </div>` : `
       <div class="card">
-        <h2 style="margin:0 0 4px;font-size:18px">Past customers who have never been asked</h2>
-        <p class="muted" style="margin:0 0 12px">Paid in full, no review request on file.
-           Ticking a box queues the ask on the next hourly sweep — nothing sends from this page.</p>
+        <h2 style="margin:0 0 4px;font-size:18px">Customers who have never been asked</h2>
+        <p class="muted" style="margin:0 0 12px">Anyone who has paid something, or whose job is
+           marked shipped or delivered, with no review request on file. Paid in full first.
+           <b>The status is shown rather than assumed</b> — a job can be settled in cash and
+           still read as deposit-only here, and only you know which. Ticking queues the ask on
+           the next hourly sweep; nothing sends from this page.
+           A row with no email cannot be ticked — use the text list below.</p>
         <form method="POST" action="/admin/reviews/backfill">
           ${never.map(q => `
-            <label style="display:flex;gap:10px;align-items:center;padding:8px 0;border-top:1px solid #eef1f8;margin:0;cursor:pointer">
-              <input type="checkbox" name="code" value="${escEmail(q.code)}" style="width:auto;margin:0">
+            <label style="display:flex;gap:10px;align-items:center;padding:8px 0;border-top:1px solid #eef1f8;margin:0;cursor:${q.email ? 'pointer' : 'default'};opacity:${q.email ? '1' : '.65'}">
+              <input type="checkbox" name="code" value="${escEmail(q.code)}" style="width:auto;margin:0"${q.email ? '' : ' disabled'}>
+              ${q.paid_full
+                ? '<span style="background:#e7f5ec;color:#1c6b3a;border-radius:20px;padding:2px 9px;font-size:11px;white-space:nowrap">paid in full</span>'
+                : `<span style="background:#fdf1e3;color:#8a5a12;border-radius:20px;padding:2px 9px;font-size:11px;white-space:nowrap">deposit ${money(q.paid_amount)}</span>`}
+              ${(q.delivered_at || q.shipped_at)
+                ? '<span style="background:#eaf0fb;color:#24457f;border-radius:20px;padding:2px 9px;font-size:11px;white-space:nowrap">'
+                  + (q.delivered_at ? 'delivered' : 'shipped') + '</span>' : ''}
               <span style="flex:1"><b>${escEmail(q.code)}</b>
-                <span class="muted">&middot; ${escEmail(q.name || 'no name')} &middot; ${escEmail(q.email)}</span>
+                <span class="muted">&middot; ${escEmail(q.name || 'no name')}</span>
+                ${q.email ? `<span class="muted">&middot; ${escEmail(q.email)}</span>`
+                          : '<span class="muted">&middot; <i>no email</i></span>'}
                 ${q.phone ? `<span class="muted">&middot; </span><a href="tel:${
                   escEmail(String(q.phone).replace(/[^0-9+]/g, ''))}"
                   onclick="event.stopPropagation()">${escEmail(q.phone)}</a>` : ''}</span>
