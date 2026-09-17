@@ -66,15 +66,38 @@ const RESCHED = extractFn('async function rescheduleReviewRequest(');
 
 /* ── the two delays ──────────────────────────────────────────────────────── */
 
-test('payment and delivery use different delays', () => {
-  assert.match(src, /JT_REVIEW_AFTER_PAYMENT_DAYS \|\| '14'/,
-    'the payment delay is a guess made before the job exists; it must be the long one');
+test('a deposit waits, paid in full does not', () => {
+  /* This used to assert one payment delay, long, because "paid" meant a
+     deposit and the work did not exist yet. It is two numbers now, and the
+     distinction is the whole point: a balance is collected when the work is
+     handed over, so PAID IN FULL means finished and the ask goes out while the
+     box is still open. A DEPOSIT still waits — asking someone to review a job
+     that has not been made is how a shop earns two stars about nothing. */
+  assert.match(src, /JT_REVIEW_AFTER_PAYMENT_DAYS \|\| '0'/,
+    'paid in full is the finished moment; it should not wait');
+  assert.match(src, /JT_REVIEW_AFTER_DEPOSIT_DAYS \|\| '14'/,
+    'a deposit is not a finished job and must keep the long delay');
   assert.match(src, /JT_REVIEW_DELAY_DAYS \|\| '3'/,
     'delivery is the accurate moment; asking 3 days later is the point of tracking it');
 });
 
-test('both delays are overridable and never negative', () => {
-  for (const fn of ['REVIEW_DAYS_AFTER_PAYMENT', 'REVIEW_DAYS_AFTER_DELIVERY']) {
+test('the deposit case is actually wired, not just defined', () => {
+  /* A constant nobody calls is the shape this repo keeps getting caught by. */
+  assert.match(src, /stillDue > 0 \? REVIEW_DAYS_AFTER_DEPOSIT\(\) : REVIEW_DAYS_AFTER_PAYMENT\(\)/,
+    'the payment path must choose between them on the balance still owed');
+});
+
+test('one follow-up, never a second', () => {
+  const fn = src.slice(src.indexOf('async function sendReviewFollowUps'), src.indexOf('async function sendReviewFollowUps') + 1400);
+  assert.match(fn, /followup_sent_at IS NULL/, 'without this it would chase forever');
+  assert.match(fn, /submitted_at IS NULL/, 'someone who already wrote one must never be chased');
+  assert.match(fn, /sent_at IS NOT NULL/, 'a follow-up to an ask that never went out is the first ask, late');
+  assert.match(fn, /UPDATE reviews SET followup_sent_at=NOW\(\)/,
+    'the row must be marked or one bad address holds the queue forever');
+});
+
+test('all delays are overridable and never negative', () => {
+  for (const fn of ['REVIEW_DAYS_AFTER_PAYMENT', 'REVIEW_DAYS_AFTER_DEPOSIT', 'REVIEW_DAYS_AFTER_DELIVERY']) {
     const line = src.slice(src.indexOf(`const ${fn}`), src.indexOf(`const ${fn}`) + 220);
     assert.match(line, /Math\.max\(0,/, `${fn} must floor at zero — a negative interval queues in the past`);
     assert.match(line, /parseInt\(/, `${fn} must parse the env var, not use the string`);

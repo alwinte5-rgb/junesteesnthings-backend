@@ -369,6 +369,7 @@ async function initDB() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS reviews_approved_idx ON reviews (approved, submitted_at DESC)`);
   await pool.query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ`).catch(() => {});
+  await pool.query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS followup_sent_at TIMESTAMPTZ`).catch(() => {});
   /* Photos the customer attaches to their review — a picture of the actual
      order is worth more than anything we could write about it. */
   await pool.query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS images JSONB DEFAULT '[]'::jsonb`).catch(() => {});
@@ -8230,7 +8231,8 @@ async function bankStripeSession(session) {
        designer's order payload uses. Naming the thing they bought is what makes
        the ask read as personal rather than automated. */
     product: (Array.isArray(q.items) && q.items[0] && q.items[0].description) || '',
-    quote_code: code, days: REVIEW_DAYS_AFTER_PAYMENT(),
+    quote_code: code,
+    days: stillDue > 0 ? REVIEW_DAYS_AFTER_DEPOSIT() : REVIEW_DAYS_AFTER_PAYMENT(),
   }).catch(() => {});
 
   return { ok: true, duplicate: false, paid: res.paid };
@@ -12672,8 +12674,22 @@ app.post('/review/:token', orderRateLimit, verifyTurnstile, async (req, res) => 
    was an order status nobody ever set. So delivery does not CREATE the ask, it
    RESCHEDULES the one payment already queued, to a few days after the customer
    actually had the thing in their hands. */
+/* Zero on a job PAID IN FULL: the balance is collected when the work is handed
+   over, so paid in full means finished, and the ask goes out while the customer
+   still has the box open.
+ *
+   A DEPOSIT is the opposite — the work does not exist yet — so that still
+   waits. Asking someone to review a job that has not been made is how a shop
+   collects a two-star review about nothing. */
 const REVIEW_DAYS_AFTER_PAYMENT  = () =>
-  Math.max(0, parseInt(process.env.JT_REVIEW_AFTER_PAYMENT_DAYS || '14', 10));
+  Math.max(0, parseInt(process.env.JT_REVIEW_AFTER_PAYMENT_DAYS || '0', 10));
+const REVIEW_DAYS_AFTER_DEPOSIT  = () =>
+  Math.max(0, parseInt(process.env.JT_REVIEW_AFTER_DEPOSIT_DAYS || '14', 10));
+
+/* Days between the first ask and the single follow-up. One only: a review is a
+   favour, and a second chase is a nuisance. */
+const REVIEW_FOLLOWUP_DAYS = () =>
+  Math.max(1, parseInt(process.env.JT_REVIEW_FOLLOWUP_DAYS || '3', 10));
 const REVIEW_DAYS_AFTER_DELIVERY = () =>
   Math.max(0, parseInt(process.env.JT_REVIEW_DELAY_DAYS || '3', 10));
 
@@ -12755,7 +12771,7 @@ async function rescheduleReviewRequest({ name, email, phone, product, order_ref,
 }
 
 /* Ask a customer for a review. Called after delivery. */
-async function requestReview({ token, name, email, phone, product, order_ref, quote_code }) {
+async function requestReview({ token, name, email, phone, product, order_ref, quote_code, followup }) {
   if (!isValidEmail(String(email || ''))) return null;
   if (!token) {
     token = reviewToken();
@@ -12779,7 +12795,13 @@ async function requestReview({ token, name, email, phone, product, order_ref, qu
      "Comfort Colors T-shirt - Navy Blue", "Shirt with photo" — and no customer
      thinks of their order that way. Naming it made the sentence read like a
      picking list, which is worse than not naming it at all. */
-  const subject = `How did your order turn out${first ? ', ' + String(name).split(' ')[0] : ''}?`;
+  /* The follow-up cannot repeat the first subject word for word — in a thread
+     it reads as a system that has forgotten it already asked, and it is the
+     single most likely thing to get a sender marked as spam. It also says
+     plainly that it is the last one. */
+  const subject = followup
+    ? `One quick thing${first ? ', ' + String(name).split(' ')[0] : ''} — 30 seconds?`
+    : `How did your order turn out${first ? ', ' + String(name).split(' ')[0] : ''}?`;
 
   await sendEmail({
     to: email,
@@ -12903,6 +12925,45 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
           AND NOT EXISTS (SELECT 1 FROM reviews r WHERE r.quote_code = q.code)
         ORDER BY q.paid_at DESC NULLS LAST, q.id DESC LIMIT 300`);
 
+    /* PHONE-ONLY customers. They cannot be emailed and so never enter the
+       queue at all — which is correct, and also means they were invisible.
+       This lists them with the message already written, to be sent by hand.
+       Nothing here sends anything: the shop has no SMS gateway, and adding one
+       to chase reviews would be a poor first use of it. */
+    const { rows: texters } = await pool.query(
+      `SELECT q.code, q.name, q.phone, q.total
+         FROM quotes q
+        WHERE (q.email IS NULL OR q.email = '')
+          AND q.phone IS NOT NULL AND q.phone <> ''
+          AND q.total > 0 AND q.paid_amount >= q.total - 0.005
+        ORDER BY q.paid_at DESC NULLS LAST, q.id DESC LIMIT 100`);
+
+    const smsFor = (n) => {
+      const f = String(n || '').trim().split(/\s+/)[0];
+      return `Hi${f ? ' ' + f : ''}, it's June's Tees — thanks again for your order! `
+        + `If you were happy with it, would you mind leaving a quick Google review? `
+        + `It genuinely helps a small shop like ours. ${GOOGLE_REVIEW_URL}`;
+    };
+
+    const byText = !texters.length ? '' : `
+      <div class="card">
+        <h2 style="margin:0 0 4px;font-size:18px">Paid, but no email — ask by text</h2>
+        <p class="muted" style="margin:0 0 12px">These customers cannot be emailed, so they
+           never enter the queue. Copy the message and send it yourself.
+           ${GOOGLE_REVIEW_URL ? '' : '<b>No Google review link is configured, so the message has no link in it.</b>'}</p>
+        ${texters.map((q) => `
+          <div style="padding:10px 0;border-top:1px solid #eef1f8">
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+              <b>${escEmail(q.name || 'no name')}</b>
+              <a href="sms:${escEmail(String(q.phone).replace(/[^0-9+]/g, ''))}">${escEmail(q.phone)}</a>
+              <span class="muted">&middot; ${escEmail(q.code)} &middot; ${money(q.total)}</span>
+            </div>
+            <textarea readonly rows="3" onclick="this.select()"
+              style="width:100%;margin-top:6px;font-size:13px;padding:8px;border:1px solid #e2e8f4;border-radius:8px"
+            >${escEmail(smsFor(q.name))}</textarea>
+          </div>`).join('')}
+      </div>`;
+
     const backfill = !never.length ? `
       <div class="card">
         <p class="muted" style="margin:0">No past customers are waiting to be asked. A quote
@@ -12930,6 +12991,7 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
       <div class="sub">${rows.length} received &middot; ${live} live on the site &middot; average ${avg}</div>
       ${pipeline}
       ${backfill}
+      ${byText}
       ${body || '<div class="card"><p class="muted">No reviews yet.</p></div>'}`, 'reviews'));
   } catch (err) {
     console.error('reviews admin failed:', err.message);
@@ -13866,6 +13928,52 @@ async function sendDueReviewRequests() {
     (failed ? ' FAILED=' + failed : '');
 }
 
+/* One follow-up, N days after the first ask went out and only while nothing has
+ * been written. A review is a favour; a second chase is a nuisance, and a third
+ * is a reason to unsubscribe from the receipts too.
+ *
+ * Due is computed from sent_at rather than scheduled into a column, so the gap
+ * can be changed without rewriting rows that are already waiting. */
+async function sendReviewFollowUps() {
+  let due = 0, sent = 0, failed = 0;
+  try {
+    const { rows } = await pool.query(
+      `SELECT * FROM reviews
+        WHERE sent_at IS NOT NULL
+          AND followup_sent_at IS NULL
+          AND submitted_at IS NULL
+          AND email <> ''
+          AND sent_at <= NOW() - ($1 || ' days')::interval
+        LIMIT ${REVIEW_BATCH}`, [String(REVIEW_FOLLOWUP_DAYS())]);
+    due = rows.length;
+    for (const r of rows) {
+      if (await isUnsubscribed(r.email)) {
+        await pool.query('UPDATE reviews SET followup_sent_at=NOW() WHERE id=$1', [r.id]);
+        continue;
+      }
+      try {
+        await requestReview({
+          token: r.token, name: r.name, email: r.email, phone: r.phone,
+          product: r.product, order_ref: r.order_ref, quote_code: r.quote_code,
+          followup: true,
+        });
+        sent++;
+      } catch (e) {
+        console.error('review follow-up failed for', r.email, e.message);
+        failed++;
+      }
+      /* Marked either way. One bad address must not hold the queue, and a
+         follow-up that failed is not worth retrying forever — the first ask
+         already reached them or it did not. */
+      await pool.query('UPDATE reviews SET followup_sent_at=NOW() WHERE id=$1', [r.id]);
+    }
+  } catch (e) {
+    console.error('review follow-up sweep failed:', e.message);
+    throw e;
+  }
+  return 'due=' + due + ' sent=' + sent + (failed ? ' FAILED=' + failed : '');
+}
+
 /* Supplier catalogue sync — costs, prices and availability from S&S.
  *
  * Runs once a day rather than hourly: supplier costs move in pennies over
@@ -13973,6 +14081,7 @@ if (process.env.JT_INTERNAL_KEY) {
       return r.text();
     });
     await step('review asks', sendDueReviewRequests);
+    await step('review follow-ups', sendReviewFollowUps);
     await step('quote follow-ups', sendQuoteFollowUps);
     await step('deposit reminders', sendDepositReminders);
     await step('balance reminders', sendBalanceReminders);
