@@ -13758,17 +13758,31 @@ app.post('/unlinked/:id/tax', requireAdmin, async (req, res) => {
 /* Send review requests that have come due. Runs inside the existing hourly
    sweep — no new scheduler, and it survives deploys because the due date lives
    in the database rather than in a timer. */
+/* Returns a summary, like every other step in the sweep.
+ *
+ * It used to return nothing at all, and step() only logs a line when a task
+ * returns something — so this task was invisible whether it worked or not.
+ * Twelve hours of production logs carried no review line of any kind, and that
+ * was indistinguishable from the query failing every time.
+ *
+ * This shop has already paid for that once: the nightly supplier sync claimed
+ * the day, threw, and left the catalogue untouched for a fortnight while
+ * appearing to have run. A job nobody watches has to say what it did, even when
+ * what it did was nothing. */
 async function sendDueReviewRequests() {
+  let due = 0, sent = 0, failed = 0, skipped = 0;
   try {
     const { rows } = await pool.query(
       `SELECT * FROM reviews
         WHERE sent_at IS NULL AND submitted_at IS NULL
           AND requested_at IS NOT NULL AND requested_at <= NOW()
           AND email <> '' LIMIT 25`);
+    due = rows.length;
     for (const r of rows) {
       // Never mail someone who has opted out.
       if (await isUnsubscribed(r.email)) {
         await pool.query('UPDATE reviews SET sent_at=NOW() WHERE id=$1', [r.id]);
+        skipped++;
         continue;
       }
       try {
@@ -13777,16 +13791,24 @@ async function sendDueReviewRequests() {
           product: r.product, order_ref: r.order_ref, quote_code: r.quote_code,
         });
         await pool.query('UPDATE reviews SET sent_at=NOW() WHERE id=$1', [r.id]);
-        console.log('review request sent:', r.email);
+        sent++;
       } catch (e) {
         console.error('review request failed for', r.email, e.message);
+        failed++;
         // Mark it anyway so one bad address cannot block the queue forever.
         await pool.query('UPDATE reviews SET sent_at=NOW() WHERE id=$1', [r.id]);
       }
     }
   } catch (e) {
+    /* Rethrown, not swallowed. step() reports a throwing task to the error
+       digest; a caught-and-logged failure here reached nobody, so a broken
+       query looked exactly like a quiet week. */
     console.error('review sweep failed:', e.message);
+    throw e;
   }
+  return 'due=' + due + ' sent=' + sent +
+    (skipped ? ' skipped(unsubscribed)=' + skipped : '') +
+    (failed ? ' FAILED=' + failed : '');
 }
 
 /* Supplier catalogue sync — costs, prices and availability from S&S.
