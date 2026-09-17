@@ -12677,6 +12677,18 @@ const REVIEW_DAYS_AFTER_PAYMENT  = () =>
 const REVIEW_DAYS_AFTER_DELIVERY = () =>
   Math.max(0, parseInt(process.env.JT_REVIEW_DELAY_DAYS || '3', 10));
 
+/* How many asks one sweep sends. Was 25, which paced a backlog out over hours
+   — fine for a trickle, wrong for a backfill somebody is waiting on.
+ *
+ * Not unlimited, and the reason is deliverability rather than load. A sender
+ * that has been mailing a handful a week and suddenly sends hundreds in one
+ * minute looks to a mailbox provider exactly like a list that has been bought,
+ * and the reputation cost lands on every transactional email the shop sends —
+ * receipts and quote links included. 200 clears any realistic backlog in a
+ * sweep or two without that shape. */
+const REVIEW_BATCH = Math.min(500, Math.max(1,
+  parseInt(process.env.JT_REVIEW_BATCH || '200', 10)));
+
 /** The row this order or quote already has waiting, if any. Sent rows are
  *  deliberately excluded: a returning customer should be askable again. */
 const PENDING_REVIEW_WHERE = `
@@ -12866,7 +12878,7 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
         WHERE q.email IS NOT NULL AND q.email <> ''
           AND q.total > 0 AND q.paid_amount >= q.total - 0.005
           AND NOT EXISTS (SELECT 1 FROM reviews r WHERE r.quote_code = q.code)
-        ORDER BY q.paid_at DESC NULLS LAST, q.id DESC LIMIT 100`);
+        ORDER BY q.paid_at DESC NULLS LAST, q.id DESC LIMIT 300`);
 
     const backfill = !never.length ? '' : `
       <div class="card">
@@ -13789,7 +13801,7 @@ async function sendDueReviewRequests() {
       `SELECT * FROM reviews
         WHERE sent_at IS NULL AND submitted_at IS NULL
           AND requested_at IS NOT NULL AND requested_at <= NOW()
-          AND email <> '' LIMIT 25`);
+          AND email <> '' LIMIT ${REVIEW_BATCH}`);
     due = rows.length;
     for (const r of rows) {
       // Never mail someone who has opted out.

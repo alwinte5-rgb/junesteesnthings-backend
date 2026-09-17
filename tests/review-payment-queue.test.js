@@ -205,3 +205,38 @@ test('an unreachable Brevo is not reported as a rejected key', () => {
   assert.match(branch, /catch \{[\s\S]*stillDead = false;/,
     'unreachable and rejected are different problems and must not share an alert');
 });
+
+/* Batch size. Raised from 25 so a backfill clears in a sweep or two instead of
+ * trickling out over an afternoon — but bounded, and the bound is about
+ * DELIVERABILITY, not load. A sender that has been mailing a handful a week and
+ * suddenly sends hundreds in a minute looks to a mailbox provider like a bought
+ * list, and that reputation hit lands on every transactional mail the shop
+ * sends — receipts and quote links included.
+ */
+test('the send batch is bounded and interpolated as a number', () => {
+  const m = src.match(/const REVIEW_BATCH = [\s\S]*?\);/);
+  assert.ok(m, 'REVIEW_BATCH is gone');
+  assert.match(m[0], /Math\.min\(\s*500/, 'it must have an upper bound');
+  assert.match(m[0], /Math\.max\(1/, 'zero or negative would send nothing, silently');
+  assert.match(m[0], /parseInt\(/,
+    'it is interpolated straight into SQL, so it must be parsed to a number and never a raw string');
+});
+
+test('the sweep actually uses it', () => {
+  /* Anchored on the DUE clause, not on "SELECT * FROM reviews" — there is
+     another query with that same opening (the one that looks a review up by
+     token), and a loose match found it instead and failed on a file that was
+     perfectly correct. */
+  const q = src.match(/sent_at IS NULL AND submitted_at IS NULL[\s\S]{0,300}?LIMIT [^`]*/);
+  assert.ok(q, 'the due-reviews query is gone');
+  assert.match(q[0], /LIMIT \$\{REVIEW_BATCH\}/,
+    'the sweep still has a hardcoded limit, so raising the batch does nothing');
+});
+
+test('the backfill list is not capped below the batch it feeds', () => {
+  /* A list capped at 100 cannot queue a backlog of 200 however many boxes are
+     ticked, so the cap has to lead the batch rather than trail it. */
+  const m = src.match(/ORDER BY q\.paid_at DESC NULLS LAST, q\.id DESC LIMIT (\d+)/);
+  assert.ok(m, 'the backfill query is gone');
+  assert.ok(Number(m[1]) >= 200, 'the backfill list caps at ' + m[1] + ', below one sweep');
+});
