@@ -12918,7 +12918,7 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
        queued only when June ticks a box and submits, which is the point of
        showing the list at all. */
     const { rows: never } = await pool.query(
-      `SELECT q.code, q.name, q.email, q.total, q.paid_amount
+      `SELECT q.code, q.name, q.email, q.phone, q.total, q.paid_amount
          FROM quotes q
         WHERE q.email IS NOT NULL AND q.email <> ''
           AND q.total > 0 AND q.paid_amount >= q.total - 0.005
@@ -12980,7 +12980,10 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
             <label style="display:flex;gap:10px;align-items:center;padding:8px 0;border-top:1px solid #eef1f8;margin:0;cursor:pointer">
               <input type="checkbox" name="code" value="${escEmail(q.code)}" style="width:auto;margin:0">
               <span style="flex:1"><b>${escEmail(q.code)}</b>
-                <span class="muted">&middot; ${escEmail(q.name || 'no name')} &middot; ${escEmail(q.email)}</span></span>
+                <span class="muted">&middot; ${escEmail(q.name || 'no name')} &middot; ${escEmail(q.email)}</span>
+                ${q.phone ? `<span class="muted">&middot; </span><a href="tel:${
+                  escEmail(String(q.phone).replace(/[^0-9+]/g, ''))}"
+                  onclick="event.stopPropagation()">${escEmail(q.phone)}</a>` : ''}</span>
               <span class="muted" style="white-space:nowrap">${money(q.total)}</span>
             </label>`).join('')}
           <button style="margin-top:12px;padding:10px 22px">Queue selected</button>
