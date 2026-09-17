@@ -1067,7 +1067,19 @@ async function sendEmail({ to, subject, html, replyTo, marketing = false, text }
   const textContent = text || htmlToText(html);
   const extraHeaders = marketing ? unsubHeaders(to) : {};
 
-  const brevoKey = process.env.BREVO_API_KEY;
+  /* Which provider, and a way to say so out loud.
+​
+     The fallback works — Brevo fails, Resend picks it up — but nothing recorded
+     WHICH one sent, so "did that go out, and through what" was unanswerable
+     from the logs. At under twenty mails a day the line costs nothing.
+​
+     JT_EMAIL_PROVIDER=resend skips Brevo entirely rather than trying it first
+     and waiting for it to fail on every single send. */
+  const provider = String(process.env.JT_EMAIL_PROVIDER || 'auto').toLowerCase();
+  const brevoKey = provider === 'resend' ? '' : process.env.BREVO_API_KEY;
+  if (provider === 'resend' && !resend) {
+    throw new Error('JT_EMAIL_PROVIDER=resend but RESEND_API_KEY is not configured');
+  }
   if (brevoKey && await brevoCanSend(brevoKey)) {
     try {
       const r = await fetch('https://api.brevo.com/v3/smtp/email', {
@@ -1087,6 +1099,7 @@ async function sendEmail({ to, subject, html, replyTo, marketing = false, text }
         const t = await r.text().catch(() => '');
         throw new Error(`Brevo ${r.status}: ${t.slice(0, 200)}`);
       }
+      console.log(`email sent via brevo -> ${to}: ${String(subject).slice(0, 60)}`);
       return;
     } catch (err) {
       console.error('sendEmail: Brevo failed, falling back to Resend:', err.message);
@@ -1099,6 +1112,7 @@ async function sendEmail({ to, subject, html, replyTo, marketing = false, text }
     ...(Object.keys(extraHeaders).length ? { headers: extraHeaders } : {}),
   });
   if (error) throw new Error(`Resend: ${error.message || JSON.stringify(error)}`);
+  console.log(`email sent via resend -> ${to}: ${String(subject).slice(0, 60)}`);
 }
 
 /* ── Brevo breach monitor ─────────────────────────────────────────────────────
@@ -12908,6 +12922,38 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
     const pl = pipe[0] || {};
     const when = pl.last_sent ? new Date(pl.last_sent).toLocaleDateString('en-US',
       { month: 'short', day: 'numeric' }) : 'never';
+    /* Who has been asked, and when. The page showed reviews RECEIVED and the
+       queue ahead, with nothing in between — so "did it actually go to that
+       customer, and when" could not be answered from here at all. */
+    const { rows: asked } = await pool.query(
+      `SELECT name, email, phone, quote_code, order_ref, sent_at, followup_sent_at, submitted_at
+         FROM reviews WHERE sent_at IS NOT NULL
+        ORDER BY sent_at DESC LIMIT 200`);
+    const fmtWhen = (d) => !d ? '—' : new Date(d).toLocaleString('en-US', {
+      timeZone: SHOP_TZ, month: 'short', day: 'numeric',
+      hour: 'numeric', minute: '2-digit', hour12: true });
+    const askedCard = !asked.length ? '' : `
+      <div class="card">
+        <h2 style="margin:0 0 4px;font-size:18px">Already asked</h2>
+        <p class="muted" style="margin:0 0 12px">${asked.length} shown, most recent first.
+          Times are shop time.</p>
+        <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+          <tr style="text-align:left;color:#6b7280">
+            <th style="padding:6px 8px">Customer</th><th style="padding:6px 8px">Job</th>
+            <th style="padding:6px 8px">Asked</th><th style="padding:6px 8px">Follow-up</th>
+            <th style="padding:6px 8px">Replied</th></tr>
+          ${asked.map((a) => `<tr style="border-top:1px solid #eef1f8">
+            <td style="padding:6px 8px"><b>${escEmail(a.name || 'no name')}</b>
+              <div class="muted">${escEmail(a.email || a.phone || '')}</div></td>
+            <td style="padding:6px 8px" class="muted">${escEmail(a.quote_code || a.order_ref || '—')}</td>
+            <td style="padding:6px 8px;white-space:nowrap">${escEmail(fmtWhen(a.sent_at))}</td>
+            <td style="padding:6px 8px;white-space:nowrap" class="muted">${escEmail(fmtWhen(a.followup_sent_at))}</td>
+            <td style="padding:6px 8px;white-space:nowrap">${a.submitted_at
+              ? '<span style="color:#1c6b3a">' + escEmail(fmtWhen(a.submitted_at)) + '</span>' : '<span class="muted">—</span>'}</td>
+          </tr>`).join('')}
+        </table></div>
+      </div>`;
+
     const pipeline = `<div class="sub" style="margin-top:2px">` +
       `${pl.sent || 0} asked &middot; ${pl.due || 0} due now &middot; ` +
       `${pl.waiting || 0} waiting on a delivery date &middot; last sent ${escEmail(when)}</div>`;
@@ -13010,6 +13056,7 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
       ${pipeline}
       ${backfill}
       ${byText}
+      ${askedCard}
       ${body || '<div class="card"><p class="muted">No reviews yet.</p></div>'}`, 'reviews'));
   } catch (err) {
     console.error('reviews admin failed:', err.message);
