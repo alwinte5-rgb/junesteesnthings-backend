@@ -84,7 +84,10 @@ test('one size list, shared, that knows caps and totes exist', () => {
   const p2 = require('node:path');
   for (const f of ['ssa-sync.js', 'ssa-add-products.js']) {
     const src = fs2.readFileSync(p2.join(__dirname, '..', 'tools', f), 'utf8');
-    assert.match(src, /CORE_SIZES\s*\}\s*=\s*require\('\.\/lib\/garments'\)/,
+    /* Any destructuring that takes CORE_SIZES from the shared lib passes. The
+       pattern used to require CORE_SIZES to be the LAST name in the braces,
+       which quietly made "share one more thing from this lib" a failing test. */
+    assert.match(src, /const \{[^}]*\bCORE_SIZES\b[^}]*\}\s*=\s*require\('\.\/lib\/garments'\)/,
       f + ' does not share the size list');
     assert.ok(!/const CORE_SIZES\s*=\s*\[/.test(src), f + ' still has its own copy');
   }

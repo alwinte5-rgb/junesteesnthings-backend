@@ -23,7 +23,7 @@
 
 const { mysql, sq } = require('./lib/db');
 const { sellPrice, sizeUpcharge } = require('./lib/markup');
-const { CORE_SIZES } = require('./lib/garments');
+const { CORE_SIZES, classify, DECORATIONS, resolveRoles } = require('./lib/garments');
 
 const APPLY = process.argv.includes('--apply');
 const ONLY = (process.argv.find((a) => a.startsWith('--only=')) || '').slice(7)
@@ -39,39 +39,44 @@ const CORE = CORE_SIZES;
  * 200x280 both sides. These are lifted from products already configured and
  * selling, so they match what the shop actually produces.
  *
- * `printings` lists the decoration methods the garment can take. A curved cap
- * front cannot be screen printed and an infant bodysuit is not worth hooping,
- * so offering those is offering something the shop would have to refuse.
+ * `printings` — which decorations the garment can take — is NOT here any more.
+ * It used to be a list of literal printing ids per type, and those ids went
+ * stale: the seven per-colour screen rows were replaced by one combined method
+ * and the single embroidery row became seven placements, so every product added
+ * after that carried retired methods and could not be screen printed at all.
+ * 32 live products were in that state before it was spotted. The rules now come
+ * from tools/lib/garments.js and are resolved against the live printings table
+ * by title on every run, which is the same path tools/decorations-2026.js takes.
  */
 const TYPES = {
   tee:      { raws: 'basic_tshirt',       front: { height: 280, width: 175, left: -2.5, top: -7.5 },
-              back: { height: 339, width: 160, left: -4, top: -11 }, methods: [1, 2, 3, 4, 5, 6, 8] },
+              back: { height: 339, width: 160, left: -4, top: -11 } },
   longslv:  { raws: 'long_sleeve',        front: { height: 280, width: 175, left: -2.5, top: -7.5 },
-              back: { height: 339, width: 160, left: -4, top: -11 }, methods: [1, 2, 3, 4, 5, 6, 8] },
+              back: { height: 339, width: 160, left: -4, top: -11 } },
   polo:     { raws: 'polo_core365',       front: { height: 200, width: 170, left: 0, top: 25 },
-              back: { height: 240, width: 180, left: 0, top: 0 }, methods: [1, 8] },
+              back: { height: 240, width: 180, left: 0, top: 0 } },
   /* No back stage on headwear — decided 2026-09-12. A stage is somewhere a
      customer can put a design, so adding one to a cap is not an artwork
      change: it commits the shop to decorating and pricing a cap back. */
   cap:      { raws: 'hat',                front: { height: 100, width: 165, left: -1, top: -5 },
-              back: null, methods: [8] },
+              back: null },
   bag:      { raws: 'bag',                front: { height: 280, width: 200, left: 0, top: -5 },
-              back: { height: 280, width: 200, left: 0, top: -5 }, methods: [1, 2, 3, 4, 5, 6, 8] },
+              back: { height: 280, width: 200, left: 0, top: -5 } },
   hoodie:   { raws: 'hoodies_sweatshirt', front: { height: 240, width: 175, left: 0, top: 10 },
-              back: { height: 320, width: 175, left: 0, top: -5 }, methods: [1, 2, 3, 4, 5, 6, 8] },
+              back: { height: 320, width: 175, left: 0, top: -5 } },
   kids:     { raws: 'kids_babies',        front: { height: 200, width: 140, left: 0, top: 0 },
-              back: { height: 200, width: 140, left: 0, top: 0 }, methods: [1, 2, 3, 4, 5, 6] },
+              back: { height: 200, width: 140, left: 0, top: 0 } },
   premium:  { raws: 'premium',            front: { height: 260, width: 170, left: 0, top: 0 },
-              back: { height: 300, width: 170, left: 0, top: 0 }, methods: [1, 8] },
+              back: { height: 300, width: 170, left: 0, top: 0 } },
   /* Vests and jackets are decorated left-chest and centre-back, and are almost
      always embroidered rather than printed — a puffer will not take a screen.
      NOTE: the designer has no vest or jacket base artwork, so these borrow the
      sweatshirt silhouette. The catalogue thumbnail is the real garment; only
      the design canvas shows the wrong shape until proper art is uploaded. */
   vest:     { raws: 'hoodies_sweatshirt', front: { height: 200, width: 150, left: 0, top: 20 },
-              back: { height: 280, width: 170, left: 0, top: 0 }, methods: [8], borrowedArt: true },
+              back: { height: 280, width: 170, left: 0, top: 0 }, borrowedArt: true },
   jacket:   { raws: 'hoodies_sweatshirt', front: { height: 210, width: 160, left: 0, top: 15 },
-              back: { height: 300, width: 175, left: 0, top: -5 }, methods: [1, 8], borrowedArt: true },
+              back: { height: 300, width: 175, left: 0, top: -5 }, borrowedArt: true },
 };
 
 /* The styles to add, each with the garment type that decides its print area.
@@ -204,11 +209,22 @@ const WANTED = [
   ['EC950',    'hoodie',  'econscious',  'econscious EC950 Unisex Hemp Hero Hooded Sweatshirt'],
   ['RC1093',   'hoodie',  'Recover',     'Recover RC1093 Unisex Recycled Fleece Hooded Sweatshirt'],
   ['EC500',    'polo',    'Recover',     "Recover EC500 Men's Eco Polo"],
+
+  /* Asked for by name, September 2026, for a quote. The catalogue already
+     carries Gildan's cotton tee (5000), its ringspun (64000) and its all-poly
+     performance tee (42000) — 8000 is the 50/50 DryBlend between them, which is
+     the blend team and school orders ask for by number. Not flagged poly: a
+     50/50 will not take dye sublimation, so `isPoly` must stay false here or
+     the page offers a method the shop has to refuse. */
+  ['8000',     'tee',     'Gildan',      'Gildan 8000 Adult DryBlend 50/50 Tee'],
 ];
 
-/* Sublimation (#14) needs a poly garment, so it is added only where the fabric
-   supports it rather than offered everywhere and refused later. */
-const SUBLIMATION_METHOD = 14;
+/* Sublimation needs a poly garment, so it is added only where the fabric
+   supports it rather than offered everywhere and refused later. Matched by
+   TITLE, not by a literal id — it has no role in lib/garments (nothing else
+   offers it) and a bare 14 is exactly the kind of number that went stale in
+   this file once already. */
+const SUBLIMATION_RE = /^sublimation/i;
 
 /* ── S&S ─────────────────────────────────────────────────────────────────── */
 
@@ -226,9 +242,23 @@ function makeClient(acct, key) {
           { headers: { Authorization: auth }, signal: AbortSignal.timeout(30000) });
         st = r.status;
         if (r.status === 429 || r.status >= 500) continue;
-        if (!r.ok) return null;
+        if (r.status === 404) return null;                  // answered: not there
+        /* Anything else — 401 above all — is the API refusing to talk, not the
+           API saying the style is absent. Returning null here made a dead key
+           print "no such style at S&S" once per style and exit 0, which reads
+           as a catalogue problem and sends you looking at S&S's data instead of
+           at the credential. ssa-sync.js has drawn this line since it was
+           written; this is the same line, in the tool that was missing it. */
+        if (!r.ok) throw new Error('S&S returned ' + r.status + ' for ' + path);
         return await r.json();
-      } catch { /* retry */ }
+      } catch (e) {
+        /* Let our own refusal out. Without this the throw above is caught as
+           if it were a timeout and retried five times, so a dead key costs
+           five requests per style and still reports a retry exhaustion rather
+           than the 401 that caused it. Same guard as ssa-sync.js. */
+        if (e.message && e.message.startsWith('S&S returned')) throw e;
+        /* anything else — timeout, socket — is worth retrying */
+      }
     }
     /* Throwing rather than returning null: a throttled call must never be
        mistaken for "this style does not exist", which would add nothing and
@@ -323,23 +353,67 @@ function buildAttributes(rows, baseCost) {
   return enjson(attrs);
 }
 
-/** Which decorations this garment can take, as lumise stores them. */
-function buildPrintings(type, isPoly) {
-  const ids = [...TYPES[type].methods];
-  if (isPoly && !ids.includes(SUBLIMATION_METHOD)) ids.push(SUBLIMATION_METHOD);
+/** The catalogue photo: the DEFAULT colourway's garment shot.
+ *
+ * NOT `style.styleImage`. tools/product-art/README.md says this in capitals and
+ * it is worth repeating here, where the mistake was actually made:
+ * `Images/Style/<id>_fl.jpg` is the marketing photograph and for apparel that
+ * is a PERSON WEARING IT — head, hands and trousers included, in whichever
+ * colourway the supplier chose to shoot. `Images/Color/<id>_f_fm.jpg` is the
+ * garment alone, in a colour the customer can actually order.
+ *
+ * Ordered exactly as buildAttributes() orders its colour options, so the
+ * thumbnail is the colourway the product opens on rather than a different one.
+ */
+function defaultColourImage(rows) {
+  for (const r of rows) {
+    const c = Number(r.piecePrice || r.casePrice || 0);
+    if (!r.sizeName || !c || !r.colorName) continue;
+    if (r.colorFrontImage) return 'https://cdn.ssactivewear.com/' + r.colorFrontImage;
+  }
+  return '';
+}
+
+/** Which decorations this garment can take, as lumise stores them.
+ *
+ * The garment class comes from the product NAME through lib/garments' own
+ * classifier rather than from this file's `type`. The two are not the same
+ * vocabulary — `type` says which print AREA and canvas art to use, so a
+ * quarter-zip borrows 'hoodie' and a scrub top 'premium' — and decorations must
+ * be decided the way the catalogue sweep decides them, or the two disagree the
+ * moment either runs.
+ *
+ * Returns null when nothing can be resolved, so the caller skips the style
+ * instead of publishing a product with no decorations or guessed ones.
+ */
+function buildPrintings(name, roleIds, subId, isPoly) {
+  const cls = classify(name);
+  const roles = DECORATIONS[cls];
+  if (!roles) return null;
+  const ids = roles.map((r) => roleIds[r]).filter((n) => Number.isFinite(n));
+  if (!ids.length) return null;
+  if (isPoly && subId && !ids.includes(subId)) ids.push(subId);
   const o = {};
-  for (const id of ids) o['_' + id] = 'A3';
-  return encodeURIComponent(JSON.stringify(o));
+  for (const id of ids.sort((a, b) => a - b)) o['_' + id] = 'A3';
+  return { cls, ids, encoded: encodeURIComponent(JSON.stringify(o)) };
 }
 
 /* ── SQL ─────────────────────────────────────────────────────────────────── */
 
 /* ── Main ────────────────────────────────────────────────────────────────── */
 
-let buf = '';
-process.stdin.on('data', (d) => (buf += d));
-process.stdin.on('end', async () => {
-  const env = JSON.parse(buf);
+/* Credentials arrive one of two ways.
+ *
+ *   railway run --service <svc> -- node tools/ssa-add-products.js --from-env
+ *   <the lib/db.js piped-variables form, kept for compatibility>
+ *
+ * --from-env is the better of the two and the one to reach for. The piped form
+ * materialises the WHOLE credential store as text on a shell pipeline, where it
+ * lands in shell history, in any transcript of the session, and in the argv of
+ * anything that mishandles it. `railway run` hands the same values to the child
+ * process's environment and nowhere else. The piped form is kept because
+ * lib/db.js documents it and other tools still use it. */
+async function run(env) {
   const dbUrl = env.MYSQL_PUBLIC_URL || env.MYSQL_URL;
   if (!env.SSA_ACCOUNT || !env.SSA_API_KEY) { console.error('SSA credentials missing'); process.exit(2); }
   if (!dbUrl) { console.error('no MySQL URL'); process.exit(2); }
@@ -349,6 +423,22 @@ process.stdin.on('end', async () => {
     'SELECT id, name, IFNULL(supplier_style_id,0) sid FROM lumise_products;', { rows: true });
   const haveStyle = new Set(existing.map((p) => String(p.sid)));
 
+  /* Decoration ids are read from the live table every run. The sweep in
+     tools/decorations-2026.js refuses to run when a role is unresolved; this
+     refuses for the same reason, because a product created with a decoration
+     set built from a half-resolved map is a product nobody will notice is
+     wrong until a customer cannot pick screen printing on it. */
+  const methods = mysql(dbUrl, 'SELECT id, title FROM lumise_printings ORDER BY id;', { rows: true });
+  const { ids: roleIds, missing } = resolveRoles(methods);
+  if (missing.length) {
+    console.error('these decoration roles match no live method:\n    ' + missing.join('\n    ') +
+      '\n\n  lib/garments.js ROLES is keyed on method TITLES. If one was renamed,' +
+      '\n  update it there. Refusing to add products with a half-resolved set.');
+    process.exit(2);
+  }
+  const subMethod = methods.find((m) => SUBLIMATION_RE.test(String(m.title || '')));
+  const subId = subMethod ? Number(subMethod.id) : null;
+
   const list = ONLY.length ? WANTED.filter((w) => ONLY.includes(w[0].toUpperCase())) : WANTED;
   const seenIds = new Set();
   console.log((APPLY ? 'APPLYING' : 'DRY RUN') + ' — ' + list.length + ' styles\n');
@@ -356,7 +446,7 @@ process.stdin.on('end', async () => {
   console.log('  ' + '-'.repeat(96));
 
   const stmts = [];
-  let added = 0, skipped = 0;
+  let added = 0, skipped = 0, apiErrors = 0;
   for (const [token, type, brand, name] of list) {
     let s, rows;
     try {
@@ -380,7 +470,8 @@ process.stdin.on('end', async () => {
       }
       rows = await ssa('products/?styleid=' + s.styleID);
     } catch (e) {
-      console.log('  ' + token.padEnd(11) + 'API: ' + e.message.slice(0, 46)); skipped++; continue;
+      console.log('  ' + token.padEnd(11) + 'API: ' + e.message.slice(0, 46));
+      apiErrors++; skipped++; continue;
     }
     if (!Array.isArray(rows) || !rows.length) {
       console.log('  ' + token.padEnd(11) + name.slice(0, 44).padEnd(46) + 'no live pricing — skipped');
@@ -414,12 +505,22 @@ process.stdin.on('end', async () => {
        sublimation cannot print onto a dark garment at all, so that would have
        put a method on the page that has to be refused whenever it is chosen. */
     const isPoly = /^SubliVie/i.test(name);
-    const thumb = s.styleImage ? 'https://cdn.ssactivewear.com/' + s.styleImage : '';
+    const prt = buildPrintings(name, roleIds, subId, isPoly);
+    if (!prt) {
+      console.log('  ' + token.padEnd(11) + name.slice(0, 44).padEnd(46) +
+        'no decoration set for garment class "' + classify(name) + '" — skipped');
+      skipped++; continue;
+    }
+    /* Falls back to the style image only when no colourway has a photo at all,
+       because a product with no thumbnail renders as a broken image. */
+    const thumb = defaultColourImage(rows) ||
+      (s.styleImage ? 'https://cdn.ssactivewear.com/' + s.styleImage : '');
 
     console.log('  ' + token.padEnd(11) + name.slice(0, 44).padEnd(46) +
       ('$' + price.toFixed(2)).padStart(7) + String(seenSizes.size).padStart(6) +
       String(seenCols.size).padStart(5) + String(il).padStart(8) + '  ' + type +
-      (isPoly ? '  +sublimation' : '') +
+      '  deco=' + prt.ids.join(',') +
+      (isPoly && subId ? '  +sublimation' : '') +
       (TYPES[type].borrowedArt ? '  [borrowed canvas art]' : ''));
 
     stmts.push(
@@ -427,17 +528,46 @@ process.stdin.on('end', async () => {
       'description, stages, variations, attributes, printings, `order`, active, author, ' +
       'created, updated, supplier, supplier_style_id, supplier_cost, ssa_seen_at)\n' +
       "  SELECT " + sq(name) + ', ' + price + ", 0, '', " + sq(thumb) + ", '', '', " +
-      sq(buildStages(type)) + ", '', " + sq(attributes) + ', ' + sq(buildPrintings(type, isPoly)) +
+      sq(buildStages(type)) + ", '', " + sq(attributes) + ', ' + sq(prt.encoded) +
       ", 1, 1, '', NOW(), NOW(), 'ssa', " + s.styleID + ', ' + money(baseCost) + ', NOW()\n' +
       '  FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM (SELECT id FROM lumise_products ' +
       'WHERE supplier_style_id=' + s.styleID + ') AS t);');
     added++;
   }
 
-  console.log('\n  ' + added + ' to add · ' + skipped + ' skipped');
+  console.log('\n  ' + added + ' to add · ' + skipped + ' skipped' +
+    (apiErrors ? ' · ' + apiErrors + ' unreachable' : ''));
+  /* A run where nothing could be reached must not exit 0. The whole failure
+     mode this guards is a tool that adds nothing, says so calmly, and is read
+     as "S&S has none of these" when the real answer is a dead credential. */
+  if (apiErrors) {
+    console.error('\n  ' + apiErrors + ' style(s) failed AT THE API, not in the data.\n' +
+      '  A 401 here means SSA_API_KEY is wrong or expired — fix the credential\n' +
+      '  before reading anything above as "S&S does not carry this style".');
+  }
   console.log('\n' + stmts.length + ' statements' + (APPLY ? ' — APPLYING' : ' — dry run, pass --apply to write'));
-  if (!APPLY || !stmts.length) process.exit(0);
+  if (!APPLY || !stmts.length) process.exit(apiErrors ? 1 : 0);
 
   mysql(dbUrl, "SET SESSION sql_mode='';\nSTART TRANSACTION;\n" + stmts.join('\n') + '\nCOMMIT;');
   console.log('done.');
-});
+  process.exit(apiErrors ? 1 : 0);
+}
+
+const varsArg = (process.argv.find((a) => a.startsWith('--vars=')) || '')
+  .slice(7).replace(/^~/, process.env.HOME);
+
+if (process.argv.includes('--from-env') || varsArg) {
+  /* The two credentials this needs do not live on the same Railway service:
+     SSA_* is on the app service, MYSQL_* on the database's own. So a file may
+     supply one set and the live environment the other, and the environment
+     wins on conflict — it is the fresher of the two, and a local file goes
+     stale exactly when a key is rotated. */
+  const fromFile = varsArg ? JSON.parse(require('fs').readFileSync(varsArg, 'utf8')) : {};
+  run(process.argv.includes('--from-env')
+    ? Object.assign({}, fromFile, process.env)
+    : fromFile);
+} else {
+  let buf = '';
+  process.stdin.on('data', (d) => (buf += d));
+  process.stdin.on('end', () => run(JSON.parse(buf)));
+}

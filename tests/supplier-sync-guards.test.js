@@ -88,3 +88,120 @@ test('the deployed image installs a mysql client', () => {
      one here would be a second copy of package.json's start script. */
   assert.ok(!cfg.deploy.startCommand, 'do not duplicate the start command');
 });
+
+test('both S&S clients tell a missing style apart from a refused request', () => {
+  /* On 2026-09-22 SSA_API_KEY held a placeholder rather than a real key,
+     so every call came back 401. ssa-sync.js survived it — it throws on any
+     non-404 and leaves the product untouched — but ssa-add-products.js
+     returned null for ALL of them, which its caller reads as "no such style
+     at S&S", printed once per style, and exited 0. A dead credential is not
+     a catalogue fact, and a tool must not report one as the other. */
+  for (const f of ['ssa-sync.js', 'ssa-add-products.js']) {
+    const src = read(path.join('tools', f));
+    const fn = src.slice(src.indexOf('function makeClient('));
+    const body = fn.slice(0, fn.indexOf('\n}\n'));
+    assert.match(body, /r\.status === 404\) return null/,
+      f + ': 404 is the only status that means the style is absent');
+    assert.match(body, /if \(!r\.ok\) throw new Error\('S&S returned '/,
+      f + ': a non-404 failure is reported as an absent style');
+    assert.match(body, /startsWith\('S&S returned'\)\) throw e/,
+      f + ': the refusal is caught by the retry loop and retried pointlessly');
+  }
+});
+
+test('ssa-add-products cannot fail silently', () => {
+  /* Exit 0 with "0 to add" is indistinguishable from a clean no-op run. */
+  const src = read('tools/ssa-add-products.js');
+  assert.match(src, /apiErrors\+\+/, 'API failures are not counted');
+  assert.match(src, /process\.exit\(apiErrors \? 1 : 0\)/,
+    'a run that reached nothing still exits 0');
+  assert.match(src, /SSA_API_KEY is wrong or expired/,
+    'the operator is not told which credential to look at');
+});
+
+test('the Gildan 8000 is listed as a 50/50, not a sublimation blank', () => {
+  /* Dye sublimation needs high-poly white goods. 8000 is a 50/50 DryBlend, so
+     if it ever matched the isPoly test the product page would offer a method
+     the shop has to refuse after the customer has designed on it. */
+  const src = read('tools/ssa-add-products.js');
+  assert.match(src, /\['8000',\s*'tee',\s*'Gildan',/, 'Gildan 8000 is not in the list');
+  const poly = src.match(/const isPoly = ([^;]+);/);
+  assert.ok(poly, 'the sublimation test moved — recheck 8000 against it');
+  assert.ok(!new RegExp(poly[1].replace(/^\/|\/i?\.test\(name\)$/g, ''), 'i')
+    .test('Gildan 8000 Adult DryBlend 50/50 Tee'),
+    'the 8000 would be offered sublimation it cannot take');
+});
+
+test('no tool hardcodes a decoration method id', () => {
+  /* On 2026-09-22 ssa-add-products.js still carried `methods: [1,2,3,4,5,6,8]`
+     per garment type. Those were the PRE-renumbering ids: #2-#6 are the retired
+     per-colour screen rows, long since replaced by the single combined method,
+     and the one embroidery row had become seven placements. Every product the
+     tool added after that renumbering therefore offered five dead methods and
+     could not be screen printed at all — 32 live products, including tees,
+     where screen print is the commonest job the shop sells. */
+  const src = read('tools/ssa-add-products.js');
+  assert.ok(!/methods:\s*\[\s*\d/.test(src),
+    'a literal list of printing ids is back in the TYPES map');
+  assert.match(src, /require\('\.\/lib\/garments'\)/, 'it does not read the shared rules');
+  assert.match(src, /resolveRoles\(methods\)/,
+    'decoration ids must be resolved against the live table, not assumed');
+  assert.match(src, /SELECT id, title FROM lumise_printings/,
+    'nothing reads the live printings table');
+});
+
+test('the dtf role matches the title the rename tool actually sets', () => {
+  /* The break that hid all of the above. rename-dtf-method.js retitled method
+     #1 "Printing" -> "DTF Printing" on the stated grounds that only ids are
+     keyed off — but lib/garments.js ROLES is keyed off the TITLE, exactly, so
+     the role stopped resolving. decorations-2026.js refuses to run on an
+     unresolved role, so the sweep that would have repaired those 32 products
+     could not be run at all, and said so in a message nobody was reading. */
+  const rename = read('tools/rename-dtf-method.js');
+  const to = /const TO = '([^']+)';/.exec(rename);
+  assert.ok(to, 'rename-dtf-method.js no longer declares TO');
+  const garments = read('tools/lib/garments.js');
+  const dtf = /dtf:\s*\{ title: '([^']+)'/.exec(garments);
+  assert.ok(dtf, 'the dtf role moved');
+  assert.strictEqual(dtf[1], to[1],
+    'ROLES.dtf must match the title rename-dtf-method.js leaves behind');
+});
+
+test('resolveRoles has one definition, shared by both callers', () => {
+  /* It lived in decorations-2026.js, so the tool that FIXES a product's
+     decorations and the tool that CREATES one did not share a definition. */
+  const lib = read('tools/lib/garments.js');
+  assert.match(lib, /function resolveRoles\(/, 'the shared copy is gone');
+  assert.match(lib, /resolveRoles \}/, 'it is not exported');
+  for (const f of ['decorations-2026.js', 'ssa-add-products.js']) {
+    const src = read(path.join('tools', f));
+    assert.ok(!/function resolveRoles\(/.test(src), f + ' has its own copy again');
+    assert.match(src, /resolveRoles/, f + ' does not use it');
+  }
+});
+
+test('a garment class with no decoration rules is skipped, not guessed', () => {
+  const src = read('tools/ssa-add-products.js');
+  assert.match(src, /if \(!roles\) return null/, 'an unknown class falls through');
+  assert.match(src, /no decoration set for garment class/,
+    'a skipped style does not say why');
+});
+
+test('the catalogue photo is the garment, never the model shot', () => {
+  /* tools/product-art/README.md says this in capitals: Images/Style/<id>_fl.jpg
+     is the MARKETING photograph, and for apparel that is a person wearing the
+     garment — head, hands and trousers — in whichever colourway the supplier
+     chose to shoot. ssa-add-products.js used it for thumbnail_url anyway, so 78
+     of 104 active products show a model instead of the product, and a quote for
+     a Forest Green tee showed a man in a white one. */
+  const src = read('tools/ssa-add-products.js');
+  assert.match(src, /function defaultColourImage\(rows\)/,
+    'nothing picks a colourway photo');
+  assert.match(src, /r\.colorFrontImage/,
+    'the colour image field is not read');
+  /* styleImage may survive ONLY as the last-resort fallback. */
+  const thumbLine = /const thumb = ([\s\S]*?);\n/.exec(src);
+  assert.ok(thumbLine, 'the thumbnail assignment moved');
+  assert.match(thumbLine[1], /^defaultColourImage\(rows\)/,
+    'the style image is still being reached for first');
+});
