@@ -49,7 +49,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { urlFromStdinJson, mysql, enjson, dejson, encodePrintings, decodePrintings, sq } = require('./lib/db');
-const { classify, ROLES, DECORATIONS } = require('./lib/garments');
+const { classify, ROLES, DECORATIONS, resolveRoles } = require('./lib/garments');
 const { colorTable } = require('./lib/screenprint');
 
 const APPLY = process.argv.includes('--apply');
@@ -80,19 +80,8 @@ const loadMethods = (url) =>
 const findByTitle = (methods, title) =>
   methods.find((m) => String(m.title).toLowerCase() === title.toLowerCase()) || null;
 
-/** Resolve every role in tools/lib/garments.js to a live printing id. */
-function resolveRoles(methods) {
-  const ids = {}, missing = [];
-  for (const [role, spec] of Object.entries(ROLES)) {
-    const want = spec.title.toLowerCase();
-    const hit = methods.find((m) => {
-      const t = String(m.title || '').toLowerCase();
-      return spec.exact ? t === want : t.startsWith(want);
-    });
-    if (hit) ids[role] = hit.id; else missing.push(role);
-  }
-  return { ids, missing };
-}
+/* resolveRoles now lives in tools/lib/garments.js, shared with the tool that
+   CREATES products — see the note there for why it moved. */
 
 /** The per-colour screen tables, in the shape tools/lib/screenprint.js wants. */
 function perColourRows(methods) {

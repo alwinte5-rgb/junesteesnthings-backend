@@ -128,7 +128,15 @@ function standin(name) {
    designer's own, matched case-insensitively and on a prefix so a later edit to
    the stitch band in a title does not orphan the role. */
 const ROLES = {
-  dtf:                 { title: 'Printing',                              exact: true },
+  /* "DTF Printing", not "Printing". tools/rename-dtf-method.js retitled method
+     #1 on the grounds that only ids are keyed off, not titles — but THIS map is
+     keyed off the title, and an exact match on the old name stopped resolving
+     the moment that ran. Nothing failed loudly: decorations-2026.js refuses to
+     run at all when a role is unresolved, so the catalogue sweep simply stopped
+     being runnable, and every product added afterwards kept the stale hardcoded
+     decoration ids it was created with. If this method is ever retitled again,
+     change it here in the same commit. */
+  dtf:                 { title: 'DTF Printing',                          exact: true },
   screen:              { title: 'Screen Printing',                       exact: true },
   'emb:name-chest':    { title: 'Embroidery — Name/Text (chest)',        exact: true },
   'emb:name-upperback':{ title: 'Embroidery — Name/Text (upper back)',   exact: true },
@@ -177,4 +185,30 @@ const DECORATIONS = {
   onesie:  ['dtf', 'screen'],
 };
 
-module.exports = { CORE_SIZES, CLASSIFY, classify, SUBTYPE, subtype, STANDIN, standin, ROLES, DECORATIONS, EMB_FULL, EMB_FRONT_ONLY, EMB_PANEL };
+/** Resolve every role above to a live printing id.
+ *
+ * Lived in tools/decorations-2026.js, which meant the sweep that FIXES a
+ * product's decorations and the tool that CREATES one did not share a
+ * definition: ssa-add-products.js carried hardcoded ids instead, they were the
+ * pre-renumbering ones, and 32 live products were added with retired methods
+ * before anyone noticed. Both callers resolve through this now, so a role that
+ * stops matching breaks them together and loudly rather than one silently.
+ *
+ * `methods` is [{ id, title, ... }] straight from lumise_printings. Returns the
+ * resolved ids and the roles that matched nothing — the caller decides whether
+ * a given absence is fatal.
+ */
+function resolveRoles(methods) {
+  const ids = {}, missing = [];
+  for (const [role, spec] of Object.entries(ROLES)) {
+    const want = spec.title.toLowerCase();
+    const hit = (methods || []).find((m) => {
+      const t = String(m.title || '').toLowerCase();
+      return spec.exact ? t === want : t.startsWith(want);
+    });
+    if (hit) ids[role] = Number(hit.id); else missing.push(role);
+  }
+  return { ids, missing };
+}
+
+module.exports = { CORE_SIZES, CLASSIFY, classify, SUBTYPE, subtype, STANDIN, standin, ROLES, DECORATIONS, EMB_FULL, EMB_FRONT_ONLY, EMB_PANEL, resolveRoles };
