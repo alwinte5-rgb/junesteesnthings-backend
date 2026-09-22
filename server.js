@@ -4105,6 +4105,9 @@ const EMBROIDERY_METHOD_RE = /embroider/i;
 /* Matches any decoration method. Design work is not tied to how the thing is
    printed — the artwork has to exist before any of them can run. */
 const ANY_METHOD_RE = /./;
+/* Cutouts are bought in from Signs365, so a job carries that supplier's
+   freight and the shop does not absorb it. Matches the four size ladders. */
+const CUTOUT_METHOD_RE = /big head cutout/i;
 const DIGITIZING_METHOD_RE = /digitiz/i;
 
 /** The digitizing fees the catalogue offers, cheapest first. */
@@ -4210,6 +4213,22 @@ const ADDONS = [
   { code: 'design_revision', label: 'Design — extra revision round', appliesTo: ANY_METHOD_RE,
     kind: 'once', rate: 25,
     note: 'One round of changes beyond those included above. Add it once per additional round.' },
+
+  /* Cutout freight. `once`, and that is the whole point of it being here rather
+     than inside the four size ladders: Signs365 charges shipping once an ORDER,
+     not once a piece and not once a size, so a job with 12" and 24" cutouts on
+     two lines would otherwise be billed it twice. The ladders are deliberately
+     shipping-free for this reason — see tools/add-cutouts.js.
+     Exactly one of these belongs on a job. */
+  { code: 'cutout_ship', label: 'Cutout shipping — weekday', appliesTo: CUTOUT_METHOD_RE,
+    kind: 'once', rate: 10,
+    note: 'Overnight delivery of the printed cutouts from our supplier, on a weekday. Charged once for the order however many sizes are on it.' },
+  { code: 'cutout_ship_sat', label: 'Cutout shipping — Saturday rush', appliesTo: CUTOUT_METHOD_RE,
+    kind: 'once', rate: 50,
+    note: 'Saturday delivery of the printed cutouts. Charged once for the order. Use instead of the weekday rate, not as well as it.' },
+  { code: 'cutout_ship_large', label: 'Cutout shipping — large format', appliesTo: CUTOUT_METHOD_RE,
+    kind: 'once', rate: 199,
+    note: 'Oversize freight, which some full-sheet rigid orders require. Charged once for the order. Confirm with the supplier before adding it.' },
 ];
 
 /* NO RUSH OPTION, and this is a deliberate decision rather than a gap.
