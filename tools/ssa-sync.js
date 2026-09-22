@@ -106,8 +106,17 @@ function makeClient(acct, key) {
 
 /** The S&S styleID for a product, or null. */
 async function resolveStyle(ssa, p) {
-  /* The thumbnail path is authoritative: it was written by a previous sync and
-     names the style directly. */
+  /* The COLUMN first. supplier_style_id is written by ssa-add-products at
+     insert and by this sync afterwards; it is the actual record of which style
+     this is. It used to be ignored here in favour of parsing the number back
+     out of the thumbnail URL, which quietly made the catalogue PHOTO
+     load-bearing for pricing: swap a product to its colourway shot — which is
+     the correct photo, and what tools/resync-thumbnails.js now does — and the
+     style could no longer be resolved at all. */
+  if (p.sid && String(p.sid) !== '0') return { id: Number(p.sid), how: 'column' };
+
+  /* Legacy rows with no column value: the thumbnail path still names the style
+     when a previous sync wrote a Style image there. */
   const m = /\/Style\/(\d+)_/.exec(p.thumb || '');
   if (m) return { id: Number(m[1]), how: 'thumbnail' };
 
@@ -209,7 +218,8 @@ process.stdin.on('end', async () => {
 
   const products = mysql(dbUrl,
     "SELECT id, name, IFNULL(supplier,'') supplier, IFNULL(supplier_cost,0) cost, price, " +
-    "IFNULL(thumbnail_url,'') thumb, IFNULL(DATE_FORMAT(ssa_seen_at,'%Y-%m-%d'),'') seen " +
+    "IFNULL(thumbnail_url,'') thumb, IFNULL(supplier_style_id,0) sid, " +
+    "IFNULL(DATE_FORMAT(ssa_seen_at,'%Y-%m-%d'),'') seen " +
     'FROM lumise_products WHERE active=1 ORDER BY id;', { rows: true });
 
   console.log((APPLY ? 'APPLYING' : 'DRY RUN') + ' — ' + products.length + ' active products\n');
