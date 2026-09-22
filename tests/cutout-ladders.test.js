@@ -1,22 +1,24 @@
 'use strict';
 
-/* The big head cutout ladders, priced through the real engine.
+/* Big head cutouts: the pack price, the singles ladder, and the line between.
  *
- * A cutout has no blank and no separate decoration — the print IS the product
- * — so the per-piece ladder lives on the decoration METHOD, one per size, and
- * the product carries no price. Same shape as the 3in buttons.
+ * A cutout has no blank and no separate decoration — the print IS the product —
+ * so the price lives on the decoration METHOD and the product carries none.
+ * Same shape as the 3in buttons. What is different here is that there are two
+ * ways to buy, priced by different arithmetic, and the tests exist to keep them
+ * from drifting into each other.
  *
- * What makes these different from the buttons, and what these tests exist for:
- * the underlying COST is a sawtooth, because Signs365 sells a 48x96 sheet whole.
- * Ten 18" heads nest on one sheet at $7.70 each; the eleventh forces a second
- * sheet and the true cost per piece jumps back up. A ladder that rises as the
- * order grows is always wrong, so each band is the worst cost at any quantity
- * at or above it — the cheapest price that is both non-rising and never under
- * cost. That is why the 18" holds one number all the way to fifty instead of
- * dipping at ten and climbing back.
+ * A PACK IS ONE SHEET. Its cost is the sheet plus a minute of handling a head,
+ * and it does not move whether one pack is ordered or forty, because the pack
+ * is the unit the supplier actually sells and nothing is wasted. So a pack
+ * ladder is FLAT — one number at every quantity. That is the whole reason packs
+ * were introduced: per-piece pricing here cannot be stable.
  *
- * Tiers are band CEILINGS, the opposite convention to BLANK_TIERS, which are
- * floors. Reading one as the other puts every band a step out.
+ * A SINGLE is per piece, and per-piece cost is a SAWTOOTH, because a sheet is
+ * still bought whole underneath: the eleventh 18" head forces a second sheet
+ * and the cost per piece jumps back up. Every band therefore has to cover the
+ * worst quantity inside it. That is why those numbers are uneven, and why a
+ * band can never be read off the cost at its own ceiling.
  */
 
 const { test } = require('node:test');
@@ -29,55 +31,106 @@ const root = path.join(__dirname, '..');
 const src = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
 const m = src.match(/function quotePricingSource\(\) \{\s*return `([\s\S]*?)`;\s*\}/);
 const W = vm.runInThisContext('(function(){' + m[1] + ';return {priceLine:priceLine};})()');
+const CUT = require('../tools/lib/cutouts');
 
 const ladder = (bands) => ({
   positions: { front: Object.entries(bands).map(([q, p]) => ({ min_qty: Number(q), price: p })) },
 });
-
-const CUT = require('../tools/lib/cutouts');
-
-/* Built from the SAME model the tool writes from, so a change to the cost
-   inputs cannot leave the tool and this file disagreeing about the price. The
-   exact money is still pinned below, against hand-checked figures. */
-const L12 = ladder(CUT.ladderFor(12));
-const L18 = ladder(CUT.ladderFor(18));
-const L24 = ladder(CUT.ladderFor(24));
-const L36 = ladder(CUT.ladderFor(36));
-const ALL = [['12in', L12], ['18in', L18], ['24in', L24], ['36in', L36]];
-
 const each = (method, qty) => Number(W.priceLine({
   qty, method, stage: 'front', blankTiers: [], product: { price: 0 }, addons: [],
 }).decoration);
 
-const costEach = (t, n) => CUT.costEach(t, n);
+/* Exactly as tools/add-cutouts.js writes them. */
+const SINGLES = {
+  12: { 6: '24.00', 12: '18.00', 32: '12.00', 1000: '8.00' },
+  18: { 5: '31.00', 10: '28.00', 20: '25.00', 50: '20.00', 1000: '17.00' },
+};
+const S12 = ladder(SINGLES[12]);
+const S18 = ladder(SINGLES[18]);
+const PACKS = [12, 18, 24, 36].map((t) => [t, ladder({ 1000: CUT.packPrice(t).toFixed(2) })]);
 
-test('every ladder prices at every published quantity', () => {
+/* ── Packs ─────────────────────────────────────────────────────────────── */
+
+test('the production cost of a pack does not move with the order size', () => {
+  /* The property the whole pack idea rests on: a pack is a whole sheet, so
+     nothing is wasted and the per-piece cost is identical at one pack or forty.
+     If this stops holding, the flat ladder is wrong and packs need bands.
+
+     Freight is deliberately NOT part of this. It is charged once an ORDER but
+     sits inside each pack price, so a four-pack order carries it four times in
+     revenue and once in cost. That is margin on a bigger order, not a second
+     charge to the customer, and it is why this compares the production half
+     rather than packCost. */
+  for (const t of [12, 18, 24, 36]) {
+    const production = CUT.packCost(t) - CUT.SHIPPING_WEEKDAY;
+    for (const packs of [2, 3, 10, 40]) {
+      const n = CUT.packSizeFor(t) * packs;
+      assert.ok(Math.abs(CUT.costEach(t, n) * n - production * packs) < 1e-6,
+        t + 'in: ' + packs + ' packs is not ' + packs + 'x one sheet');
+    }
+  }
+  /* And the freight really is in the price exactly once per pack. */
+  assert.ok(CUT.packCost(24) > CUT.SHEET, 'the pack has stopped carrying freight');
+});
+
+test('a pack prices flat at every quantity, and clears 50%', () => {
+  for (const [t, L] of PACKS) {
+    const price = CUT.packPrice(t);
+    for (const q of [1, 2, 5, 25, 100, 999]) {
+      assert.strictEqual(each(L, q), price, t + 'in pack moved at ' + q);
+    }
+    const margin = (price - CUT.packCost(t)) / price;
+    assert.ok(margin >= 0.5, t + 'in pack margin is ' + (margin * 100).toFixed(1) + '%');
+  }
+});
+
+test('a pack is exactly one sheet, so nothing is wasted', () => {
+  for (const t of [12, 18, 24, 36]) {
+    assert.strictEqual(CUT.packSizeFor(t), CUT.PER_SHEET[t], t + 'in pack is not a whole sheet');
+  }
+  assert.deepStrictEqual([12, 18, 24, 36].map(CUT.packSizeFor), [32, 10, 8, 3]);
+  assert.deepStrictEqual([12, 18, 24, 36].map(CUT.packPrice), [212, 186, 184, 178]);
+});
+
+test('a pack always beats the same heads bought as singles', () => {
+  /* If a pack were ever the dearer way to buy a sheet's worth, the upsell the
+     flyer is built on would be a lie. */
+  for (const t of [12, 18]) {
+    const n = CUT.packSizeFor(t);
+    const asSingles = each(t === 12 ? S12 : S18, n) * n;
+    assert.ok(CUT.packPrice(t) < asSingles,
+      t + 'in: pack $' + CUT.packPrice(t) + ' vs ' + n + ' singles $' + asSingles.toFixed(2));
+  }
+});
+
+/* ── Singles ───────────────────────────────────────────────────────────── */
+
+test('singles price at every published band', () => {
   const want = {
-    '12in': { 1: 23.65, 5: 23.65, 10: 16.55, 15: 11.45, 50: 8.25, 500: 6.25 },
-    '18in': { 1: 30.35, 10: 29.15, 15: 23.15, 50: 19.30, 500: 16.85 },
-    '24in': { 1: 155.15, 3: 52.50, 5: 35.40, 25: 25.80, 500: 20.70 },
-    '36in': { 1: 155.15, 5: 67.15, 25: 56.60, 500: 52.70 },
+    12: { 1: 24, 6: 24, 7: 18, 12: 18, 13: 12, 32: 12, 33: 8 },
+    18: { 1: 31, 5: 31, 6: 28, 10: 28, 11: 25, 20: 25, 21: 20, 50: 20, 51: 17 },
   };
-  for (const [name, L] of ALL) {
-    for (const [q, p] of Object.entries(want[name])) {
-      assert.strictEqual(each(L, Number(q)), p, name + ' at ' + q);
+  for (const [t, cases] of Object.entries(want)) {
+    const L = t === '12' ? S12 : S18;
+    for (const [q, p] of Object.entries(cases)) {
+      assert.strictEqual(each(L, Number(q)), p, t + 'in at ' + q);
     }
   }
 });
 
 test('a ceiling applies UP TO its quantity, not from it', () => {
-  /* The floor/ceiling trap, pinned. 15 pays the <=15 rate; 16 has fallen into
-     the next band. Read as floors, every band would sit one step out. */
-  assert.strictEqual(each(L12, 15), 11.45);
-  assert.strictEqual(each(L12, 16), 10.50);
-  assert.strictEqual(each(L24, 5), 35.40);
-  assert.strictEqual(each(L24, 6), 31.95);
+  /* The floor/ceiling trap. 6 pays the <=6 rate; 7 has fallen into the next
+     band. Read as floors, every band would sit one step out. */
+  assert.strictEqual(each(S12, 6), 24);
+  assert.strictEqual(each(S12, 7), 18);
+  assert.strictEqual(each(S18, 5), 31);
+  assert.strictEqual(each(S18, 6), 28);
 });
 
-test('no ladder ever rises as the order grows', () => {
-  for (const [name, L] of ALL) {
+test('no singles ladder ever rises as the order grows', () => {
+  for (const [name, L] of [['12in', S12], ['18in', S18]]) {
     let prev = Infinity;
-    for (const q of [1, 2, 3, 4, 5, 9, 10, 11, 15, 16, 25, 26, 50, 51, 100, 250, 500, 1000, 5000]) {
+    for (const q of [1, 5, 6, 7, 11, 12, 13, 20, 21, 32, 33, 50, 51, 100, 500, 1000, 5000]) {
       const p = each(L, q);
       assert.ok(p <= prev, name + ' rises at ' + q + ': ' + p + ' after ' + prev);
       prev = p;
@@ -85,84 +138,36 @@ test('no ladder ever rises as the order grows', () => {
   }
 });
 
-test('no band is ever sold under what the material costs', () => {
-  /* The sawtooth is the whole danger: a band must cover the worst cost at any
-     quantity inside it, not the cost at its own ceiling. A 24" at 15 pieces
-     needs two sheets, and pricing that band off the 8-piece cost would sell it
-     under the foamcore. */
-  for (const [name, L] of ALL) {
-    const t = Number(name.replace('in', ''));
+test('no band is ever sold under what the material and labour cost', () => {
+  /* The sawtooth is the danger: a band must cover the worst cost at any
+     quantity inside it, not the cost at its own ceiling. */
+  for (const [t, L] of [[12, S12], [18, S18]]) {
     for (let n = 1; n <= 1000; n++) {
-      const sell = each(L, n);
-      assert.ok(sell >= costEach(t, n) - 1e-9,
-        name + ' at ' + n + ' sells at ' + sell.toFixed(2) + ' against cost ' + costEach(t, n).toFixed(2));
+      assert.ok(each(L, n) >= CUT.costEach(t, n) - 1e-9,
+        t + 'in at ' + n + ' sells at ' + each(L, n).toFixed(2) +
+        ' against cost ' + CUT.costEach(t, n).toFixed(2));
     }
   }
 });
 
-test('a bigger cutout is never cheaper than a smaller one', () => {
-  for (const q of [1, 5, 10, 25, 50, 100, 500]) {
-    let prev = 0;
-    for (const [name, L] of ALL) {
-      const p = each(L, q);
-      assert.ok(p >= prev, 'at ' + q + ', ' + name + ' (' + p + ') undercuts the size below (' + prev + ')');
-      prev = p;
-    }
-  }
-});
+/* ── The model ─────────────────────────────────────────────────────────── */
 
-test('the markup holds, so a reprice cannot quietly take a band under water', () => {
-  for (const [name, L] of ALL) {
-    const t = Number(name.replace('in', ''));
-    for (const q of [1, 10, 50, 500]) {
-      const margin = (each(L, q) - costEach(t, q)) / each(L, q);
-      assert.ok(margin > 0.35, name + ' margin at ' + q + ' is ' + (margin * 100).toFixed(0) + '%');
-    }
-  }
-});
-
-test('above the largest band the largest band holds', () => {
-  assert.strictEqual(each(L12, 5000), 6.10);
-  assert.strictEqual(each(L36, 5000), 52.60);
-});
-
-test('shipping is an addon billed once, never inside a ladder', () => {
-  /* Signs365 charges freight once an ORDER. Folded into four size ladders it
-     would be billed once per SIZE, so a job with 12" and 24" cutouts on two
-     lines would pay it twice. */
-  const ship = src.match(/code: 'cutout_ship'[\s\S]*?\},/);
-  assert.ok(ship, 'the weekday cutout shipping addon is gone');
-  assert.match(ship[0], /kind: 'once'/, 'cutout shipping must not scale with quantity');
-  assert.match(ship[0], /rate: 10\b/, 'the weekday rate moved');
-  for (const code of ['cutout_ship_sat', 'cutout_ship_large']) {
-    assert.ok(src.includes("code: '" + code + "'"), code + ' is missing');
-  }
-  const tool = fs.readFileSync(path.join(root, 'tools', 'add-cutouts.js'), 'utf8');
-  assert.match(tool, /const L12 = ladderFor\(12\)/,
-    'the ladders are hardcoded again rather than computed from the cost model');
-  /* Shipping must not appear in the model that builds the ladders, or it is
-     billed once per SIZE on a mixed job instead of once per order. */
-  const model = fs.readFileSync(path.join(root, 'tools', 'lib', 'cutouts.js'), 'utf8');
-  assert.ok(!/ship/i.test(model), 'shipping has leaked into the per-piece cost model');
-});
-
-test('a size with no in-house route is sold by the sheet, not withdrawn', () => {
-  /* The 24" and 36" were retired on sight because a single one priced at $155.
-     The price was right and the framing was wrong: a 24" head is 22" across, does
-     not fit a 20x30 board, and has no in-house route at any quantity — the first
-     one buys a whole sheet. Sold by the sheet it is $35.40. The minimum is the
-     fix; withdrawing the size threw away a sellable product. */
-  assert.strictEqual(CUT.fitsBoard(12), true, 'a 12in fits a 20x30 board');
-  assert.strictEqual(CUT.fitsBoard(24), false, 'a 24in is 22in across — it cannot');
-  assert.strictEqual(CUT.minimumFor(12), 1, 'a size with a board route needs no minimum');
-  assert.strictEqual(CUT.minimumFor(24), 8, 'a 24in comes eight to a sheet');
-  assert.strictEqual(CUT.minimumFor(36), 3, 'a 36in comes three to a sheet');
+test('only a size that fits a board can be sold as a single', () => {
+  /* A 24" head is 22" across. There is no in-house route at any quantity, so
+     the first one buys a whole sheet — which is how the first version of these
+     priced a single 24" at $155. Pack-only is the fix. */
+  assert.strictEqual(CUT.fitsBoard(12), true);
+  assert.strictEqual(CUT.fitsBoard(18), true);
+  assert.strictEqual(CUT.fitsBoard(24), false, 'a 24in is 22in across — it cannot fit 20x30');
+  assert.strictEqual(CUT.fitsBoard(36), false);
 
   const tool = fs.readFileSync(path.join(root, 'tools', 'add-cutouts.js'), 'utf8');
-  assert.match(tool, /min: minimumFor\(24\)/, 'the minimum is retyped rather than derived');
-  assert.match(tool, /min_qty: minQty/, 'the minimum never reaches the engine');
-  /* `offered` must still be honoured on write, so a size deliberately switched
-     off cannot be resurrected by a re-run. */
+  const singles = tool.slice(tool.indexOf('const SINGLES = {'), tool.indexOf('const packLadder'));
+  assert.ok(!/\b24:/.test(singles) && !/\b36:/.test(singles),
+    'a pack-only size has been given a singles ladder');
+  assert.match(tool, /const SINGLES = \{/, 'the singles ladders moved');
+  assert.match(tool, /packLadder\(12\)/, 'the packs are not built from the cost model');
+  /* A size deliberately switched off must survive a re-run. */
   assert.match(tool, /\(m\.offered \? ', active=1' : ''\)/, 'the update path ignores offered');
 });
 
@@ -171,9 +176,30 @@ test('labour is in the price, and one number controls it', () => {
      1% margin — $12.00 against $11.82 of board, vinyl and ten minutes. */
   assert.strictEqual(CUT.SHOP_RATE, 35, 'the shop rate moved');
   assert.ok(CUT.MINUTES_PER_HEAD > 0, 'labour has been zeroed out');
-  const withLabour = CUT.costEach(12, 1);
-  const bare = (CUT.sqftOf(12) * CUT.VINYL_SQFT * CUT.LAMINATE_AND_CUT) + CUT.BOARD;
-  assert.ok(withLabour > bare, 'a single in-house head costs no labour at all');
-  assert.ok(Math.abs(withLabour - (bare + CUT.labour(CUT.MINUTES_PER_HEAD))) < 1e-9,
-    'the in-house route is not carrying exactly one head of labour');
+  const bare = CUT.sqftOf(12) * CUT.VINYL_SQFT * CUT.LAMINATE_AND_CUT + CUT.BOARD;
+  assert.ok(Math.abs(CUT.costEach(12, 1) - (bare + CUT.labour(CUT.MINUTES_PER_HEAD))) < 1e-9,
+    'a single in-house head is not carrying exactly one head of labour');
+});
+
+test('shipping is an addon billed once, never inside a price', () => {
+  /* Signs365 charges freight once an ORDER. Folded into six methods it would be
+     billed once per METHOD, so a job with 12" singles and a 24" pack would pay
+     it twice. */
+  const ship = src.match(/code: 'cutout_ship'[\s\S]*?\},/);
+  assert.ok(ship, 'the weekday cutout shipping addon is gone');
+  assert.match(ship[0], /kind: 'once'/, 'cutout shipping must not scale with quantity');
+  assert.match(ship[0], /rate: 10\b/, 'the weekday rate moved');
+  for (const code of ['cutout_ship_sat', 'cutout_ship_large']) {
+    assert.ok(src.includes("code: '" + code + "'"), code + ' is missing');
+  }
+  /* Weekday freight IS inside the pack price on purpose — a pack carries $10
+     comfortably and it is one less thing to remember on a quote. It must never
+     reach the per-piece singles cost, where $10 on a $24 cutout is 42% and
+     belongs on the quote where the customer can see it. */
+  assert.ok(Math.abs(CUT.packCost(24) - (CUT.SHEET + 8 * CUT.labour(CUT.MINUTES_HANDLING) + CUT.SHIPPING_WEEKDAY)) < 1e-9,
+    'the pack price has stopped carrying delivery');
+  const bare12 = CUT.sqftOf(12) * CUT.VINYL_SQFT * CUT.LAMINATE_AND_CUT + CUT.BOARD
+    + CUT.labour(CUT.MINUTES_PER_HEAD);
+  assert.ok(Math.abs(CUT.costEach(12, 1) - bare12) < 1e-9,
+    'delivery has leaked into the singles cost, where it would be charged twice');
 });

@@ -92,7 +92,7 @@
  */
 const fs = require('fs');
 const { mysql, enjson, sq } = require('./lib/db');
-const { ladderFor, minimumFor, MINUTES_PER_HEAD, SHOP_RATE } = require('./lib/cutouts');
+const { ladderFor, minimumFor, packSizeFor, packPrice, MINUTES_PER_HEAD, SHOP_RATE } = require('./lib/cutouts');
 
 const argv = process.argv.slice(2);
 const APPLY = argv.includes('--apply');
@@ -103,15 +103,27 @@ const env = JSON.parse(fs.readFileSync(varsFile, 'utf8'));
 const url = env.MYSQL_PUBLIC_URL || env.MYSQL_URL;
 if (!url) { console.error('no MySQL URL'); process.exit(2); }
 
-/* The ladders are COMPUTED from the cost model in tools/lib/cutouts.js, not
-   typed here, so changing MINUTES_PER_HEAD or a supplier rate moves the prices
-   with it instead of leaving twelve stale numbers under a comment describing
-   the model they no longer match.
-
-   Keys are band CEILINGS — the price applies UP TO that quantity. The opposite
-   convention to BLANK_TIERS, which are floors; getting them the wrong way round
-   puts every band one step out. tests/cutout-ladders.test.js pins it. */
-const L12 = ladderFor(12), L18 = ladderFor(18), L24 = ladderFor(24), L36 = ladderFor(36);
+/* Two ways to buy, and they are priced by different arithmetic.
+ *
+ * A PACK is one sheet. Its cost is the sheet plus a minute of handling a head,
+ * and it is identical whether one pack is ordered or forty — no waste, because
+ * the pack is the unit the supplier actually sells. So a pack ladder is FLAT:
+ * one number at every quantity. That is what makes pack pricing stable.
+ *
+ * A SINGLE is priced per piece, and per-piece cost is a sawtooth, because a
+ * sheet is still bought whole underneath. Every band has to cover the worst
+ * quantity inside it, which is why those numbers are uneven. Singles exist for
+ * the short runs a pack would be silly for, and only in the two sizes that fit
+ * a 20x30 board — a 24" head is 22" across and has no single route at all.
+ *
+ * Keys are band CEILINGS — the price applies UP TO that quantity. The opposite
+ * convention to BLANK_TIERS, which are floors. */
+const SINGLES = {
+  12: { 6: '24.00', 12: '18.00', 32: '12.00', 1000: '8.00' },
+  18: { 5: '31.00', 10: '28.00', 20: '25.00', 50: '20.00', 1000: '17.00' },
+};
+/* Flat: one band covering everything, because cost per pack does not move. */
+const packLadder = (size) => ({ 1000: packPrice(size).toFixed(2) });
 
 /* `min_qty` is what the feed publishes as min_order_qty and what priceLine
    enforces — the same field Screen Printing carries a 50 in. Below it the line
@@ -128,21 +140,45 @@ const calc = (bands, minQty) => enjson({
  * can never switch a deliberately retired size back on. All four are offered
  * now — the big two behind a one-sheet minimum rather than withdrawn. */
 const METHODS = [
-  /* `min` is one SHEET's worth for the sizes that can only come as a sheet.
-     A 24" head is 22" across and does not fit a 20x30 board, so there is no
-     in-house route for it at any quantity — the first one costs a whole $77
-     sheet and leaves seven heads of board over. Selling it with a minimum of
-     eight is not a restriction, it is the truth about how it is made, and it
-     turns a $155 single into a $35.40 piece. The 12" and 18" have an in-house
-     route for short runs, so they carry no minimum. */
-  { title: 'Big Head Cutout — 12in', bands: L12, min: minimumFor(12), offered: true,
-    description: 'A 12 inch tall big head cutout on 3/16 inch board, printed and contour cut. Priced per cutout.' },
-  { title: 'Big Head Cutout — 18in', bands: L18, min: minimumFor(18), offered: true,
-    description: 'An 18 inch tall big head cutout on 3/16 inch board, printed and contour cut. Priced per cutout.' },
-  { title: 'Big Head Cutout — 24in', bands: L24, min: minimumFor(24), offered: true,
-    description: 'A 24 inch tall big head cutout on 3/16 inch foam board, printed and contour cut. Made eight to a sheet, so eight is the smallest run. Priced per cutout.' },
-  { title: 'Big Head Cutout — 36in', bands: L36, min: minimumFor(36), offered: true,
-    description: 'A 36 inch tall big head cutout on 3/16 inch foam board, printed and contour cut. Made three to a sheet, so three is the smallest run. Priced per cutout.' },
+  /* Packs first: they are the thing to sell, and the thing a customer should
+     see first in the decoration list. A customer ordering ten 12" heads pays
+     for a whole sheet either way — the only question is whether they go home
+     with ten or with thirty-two. */
+  { title: 'Big Head Cutout — 12in, ' + packSizeFor(12) + '-pack (full sheet)',
+    bands: packLadder(12), min: 1, offered: true, unit: 'pack',
+    description: 'A full sheet of 12 inch big head cutouts — ' + packSizeFor(12) +
+      ' of them, printed and contour cut on 3/16 inch board. Priced per pack.' },
+  { title: 'Big Head Cutout — 18in, ' + packSizeFor(18) + '-pack (full sheet)',
+    bands: packLadder(18), min: 1, offered: true, unit: 'pack',
+    description: 'A full sheet of 18 inch big head cutouts — ' + packSizeFor(18) +
+      ' of them, printed and contour cut on 3/16 inch board. Priced per pack.' },
+  { title: 'Big Head Cutout — 24in, ' + packSizeFor(24) + '-pack (full sheet)',
+    bands: packLadder(24), min: 1, offered: true, unit: 'pack',
+    description: 'A full sheet of 24 inch big head cutouts — ' + packSizeFor(24) +
+      ' of them, printed and contour cut on 3/16 inch foam board. Priced per pack.' },
+  { title: 'Big Head Cutout — 36in, ' + packSizeFor(36) + '-pack (full sheet)',
+    bands: packLadder(36), min: 1, offered: true, unit: 'pack',
+    description: 'A full sheet of 36 inch big head cutouts — ' + packSizeFor(36) +
+      ' of them, printed and contour cut on 3/16 inch foam board. Priced per pack.' },
+
+  /* Singles, for runs too short to want a sheet. Only the two sizes that fit a
+     20x30 board; 24" and 36" are pack-only because there is no other way to
+     make them. */
+  { title: 'Big Head Cutout — 12in, singles', bands: SINGLES[12], min: minimumFor(12),
+    offered: true, unit: 'piece',
+    description: 'A 12 inch tall big head cutout on 3/16 inch board, printed and contour cut. Priced per cutout — a full sheet of 32 works out far cheaper.' },
+  { title: 'Big Head Cutout — 18in, singles', bands: SINGLES[18], min: minimumFor(18),
+    offered: true, unit: 'piece',
+    description: 'An 18 inch tall big head cutout on 3/16 inch board, printed and contour cut. Priced per cutout — a full sheet of 10 works out cheaper.' },
+
+  /* Replaced by the packs above on 2026-09-22. A 24" or 36" sold by the piece
+     could only ever be a whole sheet priced as one head, which is how the first
+     version of these came out at $155 each. `offered: false` keeps the rows and
+     their history and stops a re-run switching them back on. */
+  { title: 'Big Head Cutout — 24in', bands: ladderFor(24), min: minimumFor(24), offered: false, unit: 'piece',
+    description: 'Superseded by the 8-pack.' },
+  { title: 'Big Head Cutout — 36in', bands: ladderFor(36), min: minimumFor(36), offered: false, unit: 'piece',
+    description: 'Superseded by the 3-pack.' },
 ];
 
 const NAME = 'Big Head Cutouts';
@@ -160,7 +196,7 @@ console.log((APPLY ? 'APPLYING' : 'DRY RUN') + '  —  labour at $' + SHOP_RATE 
 for (const m of METHODS) {
   const q = Object.keys(m.bands).map(Number).sort((a, b) => a - b);
   console.log('  ' + (have.has(m.title) ? 'update #' + have.get(m.title) : 'create') + '  ' + m.title +
-    (m.offered ? (m.min > 1 ? '   [minimum ' + m.min + ']' : '') : '   [NOT OFFERED]'));
+    (m.offered ? (m.unit === 'pack' ? '   [per pack]' : m.min > 1 ? '   [minimum ' + m.min + ']' : '') : '   [NOT OFFERED]'));
   console.log('      ' + q.map((k) => '<=' + k + ' $' + m.bands[k]).join('  '));
   /* A ladder that rises as the order grows is a mistake, always. */
   for (let i = 1; i < q.length; i++) {

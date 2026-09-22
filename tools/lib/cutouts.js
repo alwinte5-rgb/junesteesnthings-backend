@@ -75,8 +75,68 @@ function ladderFor(size) {
 /** Smallest run worth selling: one sheet, where there is no in-house route. */
 const minimumFor = (size) => (fitsBoard(size) ? 1 : PER_SHEET[size]);
 
+/* ── PACKS ────────────────────────────────────────────────────────────────
+ *
+ * A pack is ONE SHEET. That is the whole idea, and it is why pack pricing is
+ * stable where per-piece pricing cannot be.
+ *
+ * Per-piece cost is a sawtooth: a sheet is bought whole, so the eleventh 18"
+ * head forces a second sheet and the cost per piece jumps back up. Every band
+ * of a per-piece ladder therefore has to be priced for the WORST quantity
+ * inside it, which is why those numbers are uneven and why they move whenever
+ * a yield changes.
+ *
+ * Sold as a sheet, none of that exists. The cost of a pack is the sheet plus a
+ * minute of handling a head, and it is IDENTICAL whether one pack is ordered or
+ * forty — there is no waste, because the pack IS the unit the supplier sells.
+ * One price, flat, at every quantity:
+ *
+ *     12"  32 a pack   $192    $6.00 a head
+ *     18"  10 a pack   $166   $16.60 a head
+ *     24"   8 a pack   $164   $20.50 a head
+ *     36"   3 a pack   $158   $52.67 a head
+ *
+ * Rounded UP to an even dollar from cost x2, so every pack clears 50%.
+ *
+ * It is also the honest thing to sell. A customer ordering ten 12" heads pays
+ * for a whole sheet either way; the only question is whether they go home with
+ * ten or with thirty-two.
+ */
+const packSizeFor = (size) => PER_SHEET[size];
+
+/* DELIVERY IS INSIDE THE PACK PRICE, and this is a deliberate choice.
+ *
+ * Signs365 charges $10 weekday freight once an ORDER. Three ways to handle it:
+ *
+ *   as an addon on every quote   correct to the cent, and a decision to make
+ *                                on every job — which is how it gets forgotten
+ *   split across the ladders     wrong: billed once per METHOD, so a job with
+ *                                12" singles and a 24" pack pays it twice
+ *   inside the pack price        one number, nothing to remember, and a pack
+ *                                is big enough to carry it
+ *
+ * A pack carries it comfortably: $10 against a $78-96 sheet is under 13%, and
+ * holding the x2 keeps the margin at 50% with delivery already paid. On an
+ * order of several packs the shop is ahead, because freight is still charged
+ * once — that is margin, not a second charge to the customer.
+ *
+ * SINGLES DO NOT include it. $10 on one $24 cutout is 42% of the price and
+ * cannot be buried; it stays the `cutout_ship` addon in server.js, visible on
+ * the quote. Saturday rush ($50) and large-format freight ($199) stay addons
+ * for both, because they are exceptions a person should be choosing on purpose.
+ */
+const SHIPPING_WEEKDAY = 10.00;
+
+/** What one pack costs the shop, delivery included. Flat in the sheet, and the
+ *  freight is charged once an order however many packs are on it. */
+const packCost = (size) => SHEET + PER_SHEET[size] * labour(MINUTES_HANDLING) + SHIPPING_WEEKDAY;
+
+/** Published pack price, rounded up to an even dollar so 50% always holds. */
+const packPrice = (size) => Math.ceil((packCost(size) * MARKUP) / 2) * 2;
+
 module.exports = {
   VINYL_SQFT, LAMINATE_AND_CUT, BOARD, SHEET, SHOP_RATE, MINUTES_PER_HEAD,
   MINUTES_HANDLING, MARKUP, PER_SHEET, BANDS,
   boxOf, sqftOf, fitsBoard, labour, costEach, ladderFor, minimumFor,
+  packSizeFor, packCost, packPrice, SHIPPING_WEEKDAY,
 };
