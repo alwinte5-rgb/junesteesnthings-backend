@@ -85,7 +85,9 @@ function run(buf) {
       stages: dejson(p.stages) || {},
       attributes: dejson(p.attributes) || {},
       variations: dejson(p.variations) || {},
-    });
+    /* Only for ids typed on the command line. --all stays the borrower backlog,
+       so nothing sweeps a photograph under every tee by accident. */
+    }, { includeOwnArt: !ALL && ids.length > 0 });
     if (!x) continue;
     x.dir = path.join(OUTDIR, String(x.id) + '-' + slug(x.name));
     plan.push(x);

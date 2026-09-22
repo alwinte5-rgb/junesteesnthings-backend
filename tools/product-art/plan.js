@@ -18,10 +18,19 @@ const { classify, standin } = require('../lib/garments');
 
 const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48);
 
-/** Decide one product. `p` is a row with decoded stages/attributes/variations. */
-function planFor(p) {
+/** Decide one product. `p` is a row with decoded stages/attributes/variations.
+ *
+ * `cfg.includeOwnArt` lets a product through whose canvas art is already its
+ * own garment. That is NOT the backlog — the backlog is the borrowers, and
+ * sweeping every product into it would put a photograph under every tee in the
+ * catalogue. It exists because per-colourway art is worth having on a garment
+ * that draws correctly too: the quote shows the colour actually being bought,
+ * which the silhouette can never do. run.js sets it only for ids named on the
+ * command line, never for --all.
+ */
+function planFor(p, cfg) {
   const sub = standin(p.name);
-  if (!sub) return null;                     // the art is already its own garment
+  if (!sub && !(cfg && cfg.includeOwnArt)) return null;   // art is already its own
 
   const stages = p.stages || {};
   const attrs = p.attributes || {};
@@ -49,7 +58,7 @@ function planFor(p) {
     blocked.push('no decoration method — this product never opens the designer');
 
   return {
-    id: Number(p.id), name: p.name, sid: p.supplier_style_id, cls, as: sub.as,
+    id: Number(p.id), name: p.name, sid: p.supplier_style_id, cls, as: sub ? sub.as : null,
     sides, cols: opts.length, wired, blocked,
     done: opts.length > 0 && wired >= opts.length,
     images: opts.length * sides.length,
