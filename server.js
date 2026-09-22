@@ -5354,8 +5354,20 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
   /* Digitizing is excluded here on purpose — it has its own control below.
      Left in this list it reads as a decoration you apply to every piece, which
      is exactly how it would then be billed. */
+  /* `active` is the designer's own 'still sold' flag, and it has to be honoured
+     here or every method ever superseded stays selectable. It was not, so the
+     seven per-colour screen-print rows that were consolidated into #22, and the
+     four cutout ladders the packs replaced, were all still in this dropdown —
+     #27 quoting a single 24in cutout at $155.15, the exact price its replacement
+     exists to avoid, and #25 undercutting the live 12in singles ladder at volume.
+     Digitizing is deliberately NOT filtered on `active` (see digitizingOptions):
+     those rows are inactive in the designer on purpose, because they are sold
+     from this form's own control rather than the storefront. They never reach
+     this list anyway — DIGITIZING_METHOD_RE excludes them on the next line.
+     The POST pricing path is deliberately left unfiltered so an EXISTING quote
+     that already names a retired method still re-prices when it is edited. */
   const quotable = catalog.methods.filter(m =>
-    m.use_for_quoting && Object.keys(m.positions || {}).length &&
+    m.active && m.use_for_quoting && Object.keys(m.positions || {}).length &&
     !DIGITIZING_METHOD_RE.test(m.title || ''));
   const methodOpts = (sel) => quotable
     .map(m => `<option value="${m.id}"${String(m.id) === String(sel) ? ' selected' : ''}>` +
@@ -5370,7 +5382,7 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
      different fixes and used to look identical from here — screen printing
      read as "unpriced" for a week while its table was fully populated. */
   const untiered = catalog.methods.filter(m =>
-    m.use_for_quoting && !Object.keys(m.positions || {}).length);
+    m.active && m.use_for_quoting && !Object.keys(m.positions || {}).length);
   const untieredLabel = (m) => m.title +
     (m.unsupported_type ? ` (its ${m.unsupported_type}-type prices could not be read)` : '');
 
