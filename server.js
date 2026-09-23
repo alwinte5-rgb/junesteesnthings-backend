@@ -373,6 +373,14 @@ async function initDB() {
   /* Photos the customer attaches to their review — a picture of the actual
      order is worth more than anything we could write about it. */
   await pool.query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS images JSONB DEFAULT '[]'::jsonb`).catch(() => {});
+  /* Removing a review HIDES it, it does not drop the row, and the reason is
+     the backfill list: it finds customers with no reviews row against their
+     quote. Delete the row and that customer returns to "never asked" and can
+     be asked again — after June deliberately removed what they wrote. The row
+     also carries sent_at and followup_sent_at, which are the record of having
+     asked at all. So the review content stops being shown everywhere and the
+     asking history survives. */
+  await pool.query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`).catch(() => {});
 
   // Marketing opt-outs. Required to honour the one-click unsubscribe that
   // Gmail/Yahoo mandate of bulk senders — an unsubscribe link that does not
@@ -12606,7 +12614,7 @@ async function approvedReviews(limit = 50) {
   try {
     const { rows } = await pool.query(
       `SELECT name, rating, title, body, product, submitted_at
-         FROM reviews WHERE approved = TRUE AND rating IS NOT NULL
+         FROM reviews WHERE approved = TRUE AND rating IS NOT NULL AND deleted_at IS NULL
         ORDER BY submitted_at DESC LIMIT 200`);
     _revCache = { at: Date.now(), rows };
     return rows.slice(0, limit);
@@ -13072,7 +13080,8 @@ app.get('/api/reviews', async (req, res) => {
 app.get('/admin/reviews', requireAdmin, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT * FROM reviews WHERE submitted_at IS NOT NULL ORDER BY submitted_at DESC LIMIT 200`);
+      `SELECT * FROM reviews WHERE submitted_at IS NOT NULL AND deleted_at IS NULL
+        ORDER BY submitted_at DESC LIMIT 200`);
     const body = rows.map(r => `
       <div class="card">
         <div style="display:flex;justify-content:space-between;gap:10px">
@@ -13096,6 +13105,10 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
             ${r.approved ? 'Hide from site' : 'Approve for site'}</button>
           <span class="chip" style="align-self:center;background:${r.approved ? '#e7f6ec' : '#eef1f8'};color:${r.approved ? '#166534' : '#6b7280'}">
             ${r.approved ? 'live' : 'not shown'}</span>
+          <button name="action" value="delete" class="btn-ghost"
+            style="padding:8px 14px;font-size:14px;margin-left:auto;color:#9f1239;border-color:#f3c6cf"
+            onclick="return confirm('Remove this review from ${escEmail((r.name || 'this customer').replace(/'/g, ''))}?\n\nIt stops showing on the site and here. The record that they were asked is kept, so they will not be asked again.')"
+            >Remove</button>
         </form>
       </div>`).join('');
     const live = rows.filter(r => r.approved).length;
@@ -13116,7 +13129,7 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
                                  AND requested_at <= NOW())::int AS due,
               COUNT(*) FILTER (WHERE sent_at IS NOT NULL)::int AS sent,
               MAX(sent_at) AS last_sent
-         FROM reviews`);
+         FROM reviews WHERE deleted_at IS NULL`);
     const pl = pipe[0] || {};
     const when = pl.last_sent ? new Date(pl.last_sent).toLocaleDateString('en-US',
       { month: 'short', day: 'numeric' }) : 'never';
@@ -13309,9 +13322,18 @@ app.post('/admin/reviews/backfill', requireAdmin, async (req, res) => {
 });
 
 app.post('/admin/reviews/:id', requireAdmin, async (req, res) => {
-  const approve = (req.body || {}).action === 'approve';
-  await pool.query('UPDATE reviews SET approved=$2 WHERE id=$1', [parseInt(req.params.id, 10) || 0, approve])
-    .catch(e => console.error('review approve failed:', e.message));
+  const id = parseInt(req.params.id, 10) || 0;
+  const action = (req.body || {}).action;
+  if (action === 'delete') {
+    /* Hidden, not dropped — see the deleted_at note on the table. Also cleared
+       of approved, so a row that somehow comes back cannot return to the site
+       still live. */
+    await pool.query('UPDATE reviews SET deleted_at=NOW(), approved=FALSE WHERE id=$1', [id])
+      .catch(e => console.error('review delete failed:', e.message));
+  } else {
+    await pool.query('UPDATE reviews SET approved=$2 WHERE id=$1', [id, action === 'approve'])
+      .catch(e => console.error('review approve failed:', e.message));
+  }
   _revCache = { at: 0, rows: [] };
   res.redirect('/admin/reviews');
 });
