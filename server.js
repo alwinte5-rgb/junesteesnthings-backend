@@ -4148,6 +4148,14 @@ function digitizingOptions(catalog) {
  * The first line of a run carries them; the rest carry none. A line in no run
  * is unaffected. Declared here rather than branched on in the pricing code,
  * for the same reason `kind` is.
+ *
+ * `orderShared` is the scope above that: once for the whole QUOTE, however
+ * many lines or runs it has. Freight is the case — Signs365 charges it once an
+ * order, so a job with a 12in line and a 24in line was paying it twice. It is
+ * de-duplicated by CODE before pricing, which means picking a DIFFERENT tier
+ * on another line still charges: a weekday shipment and a Saturday one are two
+ * real shipments and both bill. Two of the SAME tier is the case June has to
+ * add deliberately, and the kept row says so.
  *   per_order             flat, per job
  *   per_piece             x quantity
  *   per_piece_per_colour  x quantity x colours
@@ -4237,13 +4245,13 @@ const ADDONS = [
      shipping-free for this reason — see tools/add-cutouts.js.
      Exactly one of these belongs on a job. */
   { code: 'cutout_ship', label: 'Cutout shipping — weekday', appliesTo: CUTOUT_METHOD_RE,
-    kind: 'once', rate: 10,
+    kind: 'once', rate: 10, orderShared: true,
     note: 'Overnight delivery of the printed cutouts from our supplier, on a weekday. Charged once for the order however many sizes are on it.' },
   { code: 'cutout_ship_sat', label: 'Cutout shipping — Saturday rush', appliesTo: CUTOUT_METHOD_RE,
-    kind: 'once', rate: 50,
+    kind: 'once', rate: 50, orderShared: true,
     note: 'Saturday delivery of the printed cutouts. Charged once for the order. Use instead of the weekday rate, not as well as it.' },
   { code: 'cutout_ship_large', label: 'Cutout shipping — large format', appliesTo: CUTOUT_METHOD_RE,
-    kind: 'once', rate: 199,
+    kind: 'once', rate: 199, orderShared: true,
     note: 'Oversize freight, which some full-sheet rigid orders require. Charged once for the order. Confirm with the supplier before adding it.' },
 ];
 
@@ -5837,7 +5845,7 @@ ${quotePricingSource()}
       var ADDONS = ${JSON.stringify(ADDONS.map((a) => ({
         code: a.code, label: a.label, kind: a.kind, rate: a.rate,
         auto: a.auto || null, note: a.note || null, appliesTo: a.appliesTo.source,
-        runShared: a.runShared || false,
+        runShared: a.runShared || false, orderShared: a.orderShared || false,
       })))};
       var SCREEN_FEES_LIVE = ${SCREEN_FEES_LIVE ? 'true' : 'false'};
 
@@ -6057,6 +6065,11 @@ ${quotePricingSource()}
             (szTotal || (parseInt(L.querySelector('.q').value, 10) || 0));
         });
 
+        /* Order-level charges, claimed by the first line that carries each code.
+           Freight is charged once an ORDER, so a quote with two cutout lines
+           must not bill it twice. Tracked across the whole pass rather than
+           inside a line, because a line cannot know it is the second one. */
+        var orderSharedSeen = {};
         document.querySelectorAll('.line').forEach(function(L){
           var prod = CAT.products.find(function(x){return String(x.id)===L.querySelector('.p').value;});
           var meth = CAT.methods.find(function(x){return String(x.id)===L.querySelector('.m').value;});
@@ -6234,6 +6247,12 @@ ${quotePricingSource()}
             var dtA = ADDONS.find(function(x){ return x.code === dtPick.value; });
             if (dtA) addons.push(dtA);
           }
+          addons = addons.filter(function(a){
+            if (!a.orderShared) return true;
+            if (orderSharedSeen[a.code]) return false;
+            orderSharedSeen[a.code] = true;
+            return true;
+          });
           /* Screens are not a choice — a screen-print job burns them whether or
              not anyone ticked anything, so they come from the method. The dark
              garment does not add a CHARGE here, it adds a SCREEN: it is passed
@@ -6841,6 +6860,8 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
     /* Which line index carries each run's screens — the first one, claimed in
        the same pass that totals the run, exactly as calc() does client-side. */
     const runPrimaryIdx = {};
+    /* Which order-level charge codes have already been billed on this quote. */
+    const orderSharedSeen = new Set();
     for (let i = 0; i < 40; i++) {
       const g = String(one(b['run' + i]) || '').trim();
       if (!g) continue;
@@ -6979,6 +7000,15 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
       const colourPick = String(one(b['colour' + i]) || '').trim();
       const colourRow = colourPick && prod && Array.isArray(prod.colours)
         ? prod.colours.find((c) => String(c.name) === colourPick) : null;
+
+      /* Order-level charges are claimed by the first line carrying each code,
+         exactly as calc() does client-side — freight is once an ORDER. */
+      for (let k = lineAddons.length - 1; k >= 0; k--) {
+        const a = lineAddons[k];
+        if (!a || !a.orderShared) continue;
+        if (orderSharedSeen.has(a.code)) lineAddons.splice(k, 1);
+        else orderSharedSeen.add(a.code);
+      }
 
       const runGroup = String(one(b['run' + i]) || '').trim();
       const stage2 = String(one(b['loc2' + i]) || '').trim();
