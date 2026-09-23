@@ -187,3 +187,80 @@ test('a line with no second decoration still sends method2 as null', () => {
   assert.strictEqual(out[0].method2, null);
   assert.strictEqual(out[0].stage2, null);
 });
+
+/* ── Screens, on a two-decoration line and across a run ────────────────────
+ *
+ * Two separate bugs lived here, in opposite directions:
+ *
+ *   The screen count read o.colours and o.stage unconditionally. That was
+ *   right while a line held one decoration. With two it read the wrong half:
+ *   a DTF front with a 4-colour screen BACK billed ONE screen instead of four,
+ *   $75 short on every such job; a DTF printed both sides with a 1-colour
+ *   screen front billed TWO instead of one.
+ *
+ *   And screens were billed per LINE. Lines pooled into one run are one press
+ *   setup — the same artwork across several garment colours — so a run of
+ *   three was paying for three sets of the same screens.
+ */
+const SCREENS_ADDON = { code: 'screens', label: 'Screens', kind: 'per_screen', rate: 25 };
+const SCREEN4 = Object.assign({}, SCREEN, {
+  positions: { front: [{ min_qty: 99, price: 3.85, colors: { '1-color': 3.85, '2-color': 4.8, '4-color': 6.8 } }] },
+});
+const scr = (r) => ((r.addonLines || []).find((a) => a.code === 'screens') || { total: 0 }).total;
+
+test('screens are counted from the screen-print half, whichever slot it is in', () => {
+  const priceLine = engine();
+  const L = (o) => priceLine(line(Object.assign({ addons: [SCREENS_ADDON] }, o)));
+
+  /* Screen print alone — the case that always worked. */
+  assert.equal(L({ method: SCREEN4, colours: '4' }).screens, 4);
+
+  /* DTF front, 4-colour screen BACK. The screens belong to the second slot. */
+  assert.equal(L({ method: DTF, stage: '', method2: SCREEN4, stage2: 'mr8a5dlx', colours2: '4' }).screens, 4,
+    'a 4-colour screen back must bill four screens, not the DTF half is one');
+
+  /* DTF BOTH sides, 1-colour screen front. The DTF placement must not inflate
+     the screen count — two locations of DTF is not two screen locations. */
+  assert.equal(L({ method: DTF, stage: 'both', method2: SCREEN4, stage2: '', colours2: '1' }).screens, 1,
+    "the DTF's two sides inflated the screen count");
+
+  /* A dark garment still adds its underbase, on the screen half. */
+  assert.equal(L({ method: DTF, method2: SCREEN4, stage2: '', colours2: '1', dark: true }).screens, 2);
+});
+
+test('a run burns its screens once, not once a line', () => {
+  const priceLine = engine();
+  const base = { method: SCREEN4, colours: '4', addons: [SCREENS_ADDON], bandQty: 300 };
+  const primary = priceLine(line(Object.assign({}, base, { runPrimary: true })));
+  const other = priceLine(line(Object.assign({}, base, { runPrimary: false })));
+
+  assert.equal(scr(primary), 100, 'the primary line carries the run\'s four screens at $25');
+  assert.equal(scr(other), 0, 'a second line in the same run must not buy the screens again');
+
+  /* The secondary line still prices its DECORATION at the pooled quantity —
+     it is only the screens it does not repeat. */
+  assert.ok(other.decoration > 0, 'the run member lost its decoration, not just its screens');
+  assert.equal(other.decoration, primary.decoration);
+});
+
+test('a line not in a run bills its own screens, exactly as before', () => {
+  const priceLine = engine();
+  const alone = priceLine(line({ method: SCREEN4, colours: '4', addons: [SCREENS_ADDON] }));
+  const explicit = priceLine(line({ method: SCREEN4, colours: '4', addons: [SCREENS_ADDON], runPrimary: true }));
+  assert.equal(scr(alone), 100);
+  assert.equal(scr(alone), scr(explicit), 'an undefined runPrimary must behave as the primary');
+});
+
+test('run pooling reaches BOTH decorations', () => {
+  const priceLine = engine();
+  /* 30 pieces on the line, 300 across the run: both halves must read the 300
+     band, not the 30 one. */
+  const pooled = priceLine(line({ qty: 30, bandQty: 300, method: DTF, method2: SCREEN4, colours2: '1' }));
+  const alone = priceLine(line({ qty: 30, method: DTF, method2: SCREEN4, colours2: '1' }));
+  assert.ok(pooled.decoration < alone.decoration, 'the run did not cheapen the first decoration');
+  assert.ok(pooled.unit < alone.unit, 'the run did not reach the line at all');
+  /* And specifically the second half moved too: at 300 the screen rate is
+     $3.45, at 30 it clamps to the 99 band at $3.85. */
+  assert.ok(Math.abs(pooled.unit - alone.unit) > 0.35,
+    'only one of the two decorations responded to the run');
+});

@@ -4692,12 +4692,34 @@ function quotePricingSource() {
            so the screens billed and the passes charged can never disagree —
            'both' is two locations by the same definition that doubled the
            table above. */
-        var locations = (o.stage === 'both') ? 2 : 1;
-        var screens = screenCount(colours, locations, !!o.dark);
+        /* SCREENS BELONG TO THE SCREEN-PRINT HALF, whichever slot it is in.
+           Reading o.stage and o.colours unconditionally was right while a line
+           held one decoration and wrong the moment it held two: a DTF front
+           with a 4-colour screen BACK billed one screen instead of four ($75
+           short), and a DTF printed both sides with a 1-colour screen front
+           billed two instead of one. The sm variable is already resolved above
+           for the ceiling check; placement and colour count come from the same
+           side of the line, so the screens billed and the passes charged still
+           cannot disagree. */
+        var screenStage = sm ? (sm === o.method2 ? o.stage2 : o.stage) : o.stage;
+        var screenColours = sm ? colourCount(sm, sm === o.method2 ? o.colours2 : o.colours) : colours;
+        var locations = (screenStage === 'both') ? 2 : 1;
+        var screens = screenCount(screenColours, locations, !!o.dark);
+
+        /* SCREENS ARE BURNED ONCE FOR A RUN, not once a line. Lines pooled into
+           the same run are one press setup — the same artwork across several
+           garment colours or sizes — so billing each line its own screens
+           charges the same screens two or three times. The caller marks one
+           line of each run as the primary; every other line in that run still
+           prices its decoration at the pooled quantity and carries no screens.
+           Undefined means "not in a run", which bills normally. */
+        var runPrimary = (o.runPrimary === undefined || o.runPrimary === null) ? true : !!o.runPrimary;
 
         var addonLines = [], addonTotal = 0;
         for (var k = 0; k < (o.addons || []).length; k++) {
           var a = o.addons[k];
+          /* A run's screens ride on its primary line only. */
+          if (a.kind === 'per_screen' && !runPrimary) continue;
           var amt = Math.round(addonAmount(a, qty, colours, decorationSubtotal, screens) * 100) / 100;
           if (!amt) continue;
           /* \`count\` rides along so a surface can print "4 x $35" without
@@ -6000,10 +6022,17 @@ ${quotePricingSource()}
            size mix when one has been entered, which is the same number the line
            itself bills, so the two can never disagree. */
         var runTotals = {};
+        /* The FIRST ticked line of each run carries that run's screens. They are
+           burned once for the setup, not once a line, so a run of three garment
+           colours off one piece of artwork must not pay for three sets. Claimed
+           in the same pass that totals the run, so the two can never disagree
+           about which line is first. */
+        var runPrimaryOf = {};
         document.querySelectorAll('.line').forEach(function(L){
           var sr = L.querySelector('.sr');
           var g = sr ? String(sr.value || '').trim() : '';
           if (!g) return;
+          if (runPrimaryOf[g] === undefined) runPrimaryOf[g] = L;
           var szTotal = 0;
           L.querySelectorAll('.sz').forEach(function(el){ szTotal += (parseInt(el.value, 10) || 0); });
           runTotals[g] = (runTotals[g] || 0) +
@@ -6211,6 +6240,8 @@ ${quotePricingSource()}
           var srBox = L.querySelector('.sr');
           var runKey = srBox ? String(srBox.value || '').trim() : '';
           var runQty = runKey ? (runTotals[runKey] || 0) : 0;
+          /* Not in a run: bills its own screens, as it always did. */
+          var isRunPrimary = !runKey || runPrimaryOf[runKey] === L;
           var srOut = L.querySelector('.srq');
           if (srOut) srOut.textContent = (runQty > qty) ? 'run of ' + runQty : '';
 
@@ -6219,6 +6250,7 @@ ${quotePricingSource()}
             product: prod, method: meth, qty: qty, sizeMix: sizeQty ? mix : null,
             colours: colEl ? colEl.value : '',
             method2: meth2, stage2: stage2, colours2: '',
+            runPrimary: isRunPrimary,
             stage: stage, addons: addons, blankTiers: BLANK_TIERS,
             dark: isDark,
             blankOverride: bpEl ? bpEl.value : '',
@@ -6788,6 +6820,9 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
        quote disagree, which is the whole reason the pricing rule lives in one
        shared string. */
     const runTotals = {};
+    /* Which line index carries each run's screens — the first one, claimed in
+       the same pass that totals the run, exactly as calc() does client-side. */
+    const runPrimaryIdx = {};
     for (let i = 0; i < 40; i++) {
       const g = String(one(b['run' + i]) || '').trim();
       if (!g) continue;
@@ -6797,6 +6832,7 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
         for (const v of Object.values(parsed)) n += parseInt(v, 10) || 0;
       } catch { n = 0; }
       if (!n) n = parseInt(one(b['qty' + i]), 10) || 0;
+      if (runPrimaryIdx[g] === undefined) runPrimaryIdx[g] = i;
       runTotals[g] = (runTotals[g] || 0) + n;
     }
 
@@ -6925,6 +6961,7 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
         bandQty: runGroup ? (runTotals[runGroup] || 0) : 0,
         product: prod, method, qty: q, sizeMix: mix, colours,
         method2, stage2, colours2: one(b['colors2' + i]) || '',
+        runPrimary: !runGroup || runPrimaryIdx[runGroup] === i,
         stage, addons: lineAddons, blankTiers: BLANK_TIERS,
         /* The garment colour is a pricing INPUT, not a charge: it decides how
            many screens screenCount() asks for. Omit it and a dark job silently
