@@ -80,11 +80,11 @@ add('Full Body Cutout — single-sided', sg.standeeLadder(),
 /* ── Banners ────────────────────────────────────────────────────────────── */
 for (const [w, h] of [[24, 48], [36, 72], [48, 96], [36, 120]]) {
   const label = `${w / 12}ft x ${h / 12}ft`;
-  add(`Vinyl Banner — ${label}, 13oz single-sided`, priced(sg.bannerCost(w, h, { oz: 13 }), 'banner', sg.BANNER_MARKUP),
+  add(`Vinyl Banner — ${label}, 13oz single-sided`, flat(sg.bannerPrice(w, h, { oz: 13 })),
     `A ${label} vinyl banner, hemmed with welded edges and grommets included. Indoor or outdoor.`);
 }
 add('Vinyl Banner — 3ft x 6ft, 18oz DOUBLE-SIDED',
-  priced(sg.bannerCost(36, 72, { oz: 18, sides: 'double' }), 'banner', sg.BANNER_MARKUP),
+  flat(sg.bannerPrice(36, 72, { oz: 18, sides: 'double' })),
   'A 3ft x 6ft banner printed both sides on heavy 18oz vinyl, for hanging where it is seen from both directions.');
 
 /* ── Banner stand ───────────────────────────────────────────────────────── */

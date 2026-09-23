@@ -303,3 +303,44 @@ test('paper carries a higher multiple than the rest', () => {
   assert.ok(s.PAPER_MARKUP > s.MARKUP,
     'cost x2 puts 500 business cards under Vistaprint, which is the wrong shelf');
 });
+
+test('banners are priced per square foot, with a floor for the small ones', () => {
+  /* $7/sqft is a little under the $8 a local shop charges. But a 2x4 is only
+     eight square feet and carries the same $35 of handling as a 4x8, so the
+     rate alone would price it at 37% — under the x2 floor. The floor wins. */
+  const small = s.bannerPrice(24, 48, { oz: 13 });
+  const smallCost = s.bannerCost(24, 48, { oz: 13 }) + s.labourCost('banner', 1);
+  assert.ok(small >= smallCost * s.MARKUP, 'the 2x4 fell under the x2 floor');
+  assert.ok(small > 8 * s.BANNER_SQFT_RATE, 'the 2x4 should be on its minimum, not the rate');
+
+  /* The big ones are on the rate and comfortably under the local standard. */
+  for (const [w, h] of [[36, 72], [48, 96], [36, 120]]) {
+    const sq = s.billableSqft(w, h);
+    const price = s.bannerPrice(w, h, { oz: 13 });
+    assert.ok(price <= sq * 8, `${w}x${h} at $${price} is over the $8/sqft local standard`);
+    assert.ok(price >= sq * 5, `${w}x${h} at $${price} is under the $5/sqft average`);
+  }
+});
+
+test('yard signs do not borrow the rigid labour category', () => {
+  /* Priced as rigid (25 job + 6 a piece), fifty yard signs came to 5.4 hours
+     of labour and $20 a sign against an $8-15 local market. They arrive
+     printed and stacked; the work is counting and bagging. */
+  assert.ok(s.LABOUR.yard_sign, 'yard signs need their own labour category');
+  assert.ok(s.labourCost('yard_sign', 50) < s.labourCost('rigid', 50) / 5,
+    'yard sign labour should be a small fraction of rigid at volume');
+  /* At ten and up they have to be inside the local market. */
+  for (const q of [10, 25, 50]) {
+    const each = (s.yardSignCost(q, { minutes: 10 }).cost + s.labourCost('yard_sign', q)) / q;
+    assert.ok(s.evenUp(each * s.MARKUP) <= 15, `${q} yard signs price above the $8-15 local market`);
+  }
+});
+
+test('doubling the labour did not leave a category behind', () => {
+  /* Every kind must carry real time; a zero would price that work at nothing. */
+  for (const k of Object.keys(s.LABOUR)) {
+    const l = s.LABOUR[k];
+    assert.ok(l.job + l.piece > 0, k + ' has no labour at all');
+    assert.ok(s.labourCost(k, 1) > 0, k + ' costs nothing for one piece');
+  }
+});

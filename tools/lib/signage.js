@@ -206,13 +206,25 @@ const STANDEE_BACKING = 24.00;
  * admission cutouts.js makes about MINUTES_PER_HEAD, and the same instruction
  * applies: time a real job and correct the table. The prices move with it. */
 const SHOP_RATE = 50;
+/* DOUBLED on 2026-09-23, June's call: the first table was written from a
+   standing start and it turned out to be about half the real time. Rigid was
+   set explicitly at 25 minutes a line rather than doubled, because mounting
+   and wrapping an acrylic or a canvas is the slowest thing on this list. */
 const LABOUR = {
-  banner:   { job: 10, piece: 5 },   // unfold, check hems and grommets, refold, bag
-  rigid:    { job: 10, piece: 3 },   // coro, acrylic, canvas, poster — inspect and wrap
-  adhesive: { job: 15, piece: 0 },   // sold by the foot; the time is in the file and the handover
-  magnet:   { job: 10, piece: 2 },
-  paper:    { job: 15, piece: 0 },   // a box of cards is one handling job, not 500
-  stand:    { job: 15, piece: 5 },   // assemble and test the mechanism
+  banner:   { job: 20, piece: 10 },  // unfold, check hems and grommets, refold, bag
+  rigid:    { job: 25, piece: 6 },   // acrylic, canvas, poster — mount, inspect, wrap
+  adhesive: { job: 30, piece: 0 },   // sold by the foot; the time is in the file and the handover
+  magnet:   { job: 20, piece: 4 },
+  paper:    { job: 30, piece: 0 },   // a box of cards is one handling job, not 500
+  stand:    { job: 30, piece: 10 },  // assemble and test the mechanism
+
+  /* Yard signs are NOT rigid work and must not borrow its 25+6. They arrive
+     printed and stacked from Signs365 and get counted and bagged: seconds
+     each, not minutes. Priced as rigid, fifty yard signs came to 5.4 hours
+     of labour and $20 a sign against an $8-15 local market — the category
+     was wrong, not the price. The in-house route carries its own sticker
+     time, passed to yardSignCost() as its minutes argument. */
+  yard_sign: { job: 15, piece: 0.5 },
 };
 
 /** Shop time on a line of `qty` `kind`, in dollars. */
@@ -255,7 +267,29 @@ const PAPER_MARKUP_LARGE = 2.0;
  * too: a 2x4 lands at $70, which is $8.75/sqft — over the $8 local standard
  * even though the big sizes stay well under it. Small banners are where this
  * markup stops being generous and starts being dear. */
-const BANNER_MARKUP = 3.0;
+/* BANNERS ARE PRICED PER SQUARE FOOT, not by a markup on cost.
+ *
+ * That is how the market quotes them and it is why a flat multiple kept
+ * misbehaving. Handling is the same $35 on a 2x4 as on a 4x8, so a multiple
+ * that is fair on the big sizes is punitive on the small ones: at x3 a 2x4
+ * came out at $8.75/sqft, above the $8 a local shop charges, while a 4x8 sat
+ * at $5.00. One number cannot fix both.
+ *
+ * $7/sqft is a little under the $8 local standard, which is what June asked
+ * for, and above the $5 US average.
+ *
+ * THE MINIMUM IS NOT OPTIONAL. At $7/sqft a 2x4 is $56 against $35 of cost —
+ * 37%, under the x2 floor — because eight square feet cannot carry a fixed
+ * handling charge. The floor price is cost x2, so small banners are sold at
+ * the minimum rather than below cost. */
+const BANNER_SQFT_RATE = 7.00;
+
+/** Published price for a banner at WxH: per billable foot, never under x2. */
+function bannerPrice(w, h, opts = {}) {
+  const cost = bannerCost(w, h, opts) + labourCost('banner', 1);
+  if (cost === null) return null;
+  return evenUp(Math.max(billableSqft(w, h) * BANNER_SQFT_RATE, cost * MARKUP));
+}
 const PAPER_YIELD_SMALL = 9;
 
 /** The multiple to use for a paper size, by how many come off one sheet. */
@@ -488,7 +522,7 @@ module.exports = {
   BLANK_BOARD, STANDEE_PRINT_SQFT, STANDEE_MINUTES, STANDEE_BACKING,
   fullBodyCutoutCost, standeeLadder, evenUp,
   SHOP_RATE, LABOUR, labourCost, PAPER_MARKUP, PAPER_MARKUP_LARGE, paperMarkupFor,
-  BANNER_MARKUP,
+  BANNER_SQFT_RATE, bannerPrice,
   perSheet, coroCost, bannerCost, posterCost, windowCost, adhesiveCost,
   magnetCost, paperCost, acrylicCost, canvasCost, retail,
 };
