@@ -212,7 +212,7 @@ const SHOP_RATE = 50;
    and wrapping an acrylic or a canvas is the slowest thing on this list. */
 const LABOUR = {
   banner:   { job: 20, piece: 10 },  // unfold, check hems and grommets, refold, bag
-  rigid:    { job: 25, piece: 6 },   // acrylic, canvas, poster — mount, inspect, wrap
+  rigid:    { job: 10, piece: 6 },   // acrylic, canvas, poster — mount, inspect, wrap
   adhesive: { job: 30, piece: 0 },   // sold by the foot; the time is in the file and the handover
   magnet:   { job: 20, piece: 4 },
   paper:    { job: 30, piece: 0 },   // a box of cards is one handling job, not 500
@@ -226,6 +226,13 @@ const LABOUR = {
      time, passed to yardSignCost() as its minutes argument. */
   yard_sign: { job: 15, piece: 0.5 },
 };
+
+/* THE YARD SIGN MINIMUM. One sign is $70 — a whole job of handling and ten
+   minutes of sticker on a single piece — against a $15-25 local market. Ten
+   is where they come inside it at $13 each, and ten is also one Signs365
+   sheet, so the minimum and the sheet agree. Below it the line is billed as
+   ten, the same way the 24in cutout carries its own sheet minimum. */
+const YARD_SIGN_MIN_QTY = 10;
 
 /** Shop time on a line of `qty` `kind`, in dollars. */
 function labourCost(kind, qty = 1) {
@@ -522,6 +529,7 @@ module.exports = {
   BLANK_BOARD, STANDEE_PRINT_SQFT, STANDEE_MINUTES, STANDEE_BACKING,
   fullBodyCutoutCost, standeeLadder, evenUp,
   SHOP_RATE, LABOUR, labourCost, PAPER_MARKUP, PAPER_MARKUP_LARGE, paperMarkupFor,
+  YARD_SIGN_MIN_QTY,
   BANNER_SQFT_RATE, bannerPrice,
   perSheet, coroCost, bannerCost, posterCost, windowCost, adhesiveCost,
   magnetCost, paperCost, acrylicCost, canvasCost, retail,
