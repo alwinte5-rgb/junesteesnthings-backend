@@ -87,6 +87,16 @@ function ranges(m) {
   return out;
 }
 
+/* What ONE cutout costs at quantity `qty`. Bands are CEILINGS, so the band
+   that applies is the first whose ceiling the quantity has not passed — NOT the
+   last band in the table. Getting this wrong is how the pack comparison first
+   shipped saying a sheet of 32 was $256 in singles: that is 32 x the 33-or-more
+   rate, a price you cannot buy 32 at. It is 32 x $12 = $384. */
+const priceAt = (m, qty) => {
+  for (const b of m.bands) if (qty <= b.upTo) return b.price;
+  return m.bands[m.bands.length - 1].price;
+};
+
 /* ── Drawings ─────────────────────────────────────────────────────────────── */
 
 /* A head is about 0.85 as wide as it is tall — the same ratio tools/lib/cutouts.js
@@ -179,9 +189,10 @@ const singleTables = singles.map((m) => `
         ${(() => {
           const p = packs.find((x) => x.size === m.size);
           if (!p) return '';
-          const lastBand = m.bands[m.bands.length - 1].price;
+          const atPack = priceAt(m, p.pack);
           return `<p class="ladder-note">A full sheet of ${p.pack} is ${money(p.bands[0].price)} &mdash;
-            ${money(lastBand * p.pack)} at the single price. Once you are near a dozen, ask about the pack.</p>`;
+            ${money(atPack * p.pack)} for the same ${p.pack} bought one at a time.
+            Once you are near a dozen, ask about the pack.</p>`;
         })()}
       </div>`).join('');
 
