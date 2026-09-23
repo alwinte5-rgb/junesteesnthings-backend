@@ -154,3 +154,48 @@ test('paper sheets are whole, so the first 72 cards cost one sheet', () => {
   /* An unknown size is refused rather than priced at zero. */
   assert.equal(s.paperCost(100, '99x99'), null);
 });
+
+test('yard signs take the cheaper of the two routes, and cross over at 4', () => {
+  /* A Signs365 sheet yields ten 24x18 signs for $44. Below four, that sheet's
+     $44 is spread over too few signs and the Amazon blank plus a sticker wins.
+     This is what stops one yard sign quoting at $88 the way one 24in cutout
+     once quoted at $155. */
+  assert.equal(s.yardSignCost(1).route, 'in-house');
+  assert.equal(s.yardSignCost(3).route, 'in-house');
+  assert.equal(s.yardSignCost(4).route, 'signs365 sheet');
+  assert.equal(s.yardSignCost(10).route, 'signs365 sheet');
+  /* One sign must never cost a whole sheet. */
+  assert.ok(s.yardSignCost(1).cost < 44.00);
+});
+
+test('raw cost per sign is a SAWTOOTH — it is the ladder that must not rise', () => {
+  /* Sheets are bought whole, so ten signs cost $44 ($4.40 each) and eleven
+     cost $88 ($8.00 each). The raw cost per piece genuinely rises there, and
+     an earlier version of this test wrongly asserted it could not — it failed
+     at exactly qty 11 and was right to.
+     cutouts.js documents the same shape: the 18in falls to $8.70 at ten and
+     jumps back to $10.02 at fifteen. */
+  assert.ok(s.yardSignCost(11).each > s.yardSignCost(10).each, 'the 11th sign forces a second sheet');
+
+  /* What must never rise is the PUBLISHED ladder, which is the envelope over
+     that sawtooth: each band priced at the worst cost at or above it. Anyone
+     building a ladder straight from yardSignCost() without this step ships a
+     price list that gets cheaper if you order less. */
+  const envelope = [];
+  let worst = 0;
+  for (let q = 200; q >= 1; q--) { worst = Math.max(worst, s.yardSignCost(q).each); envelope[q] = worst; }
+  for (let q = 2; q <= 200; q++) {
+    assert.ok(envelope[q] <= envelope[q - 1] + 1e-9, 'the ladder rose at qty ' + q);
+  }
+  /* And the envelope still covers cost everywhere. */
+  for (let q = 1; q <= 200; q++) {
+    assert.ok(envelope[q] >= s.yardSignCost(q).each - 1e-9, 'the ladder is under cost at qty ' + q);
+  }
+});
+
+test('shop time raises the in-house route and moves the crossover earlier', () => {
+  /* Labour is not in the model yet; when it is, more minutes must make the
+     supplier route win sooner, never later. */
+  assert.equal(s.yardSignCost(3, { minutes: 0 }).route, 'in-house');
+  assert.equal(s.yardSignCost(3, { minutes: 30 }).route, 'signs365 sheet');
+});

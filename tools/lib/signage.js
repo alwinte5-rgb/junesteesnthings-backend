@@ -131,6 +131,24 @@ const ACRYLIC_SQIN = 0.10;
    finish, indoor only, single-sided. */
 const CANVAS = 4.98;
 
+/* THE IN-HOUSE YARD SIGN ROUTE
+ *
+ * A blank 24x18 coro sign from Amazon, $4.50 each (June, 2026-09-22), with a
+ * GF 203OAPAE sticker applied in the shop. It is the same two-route shape
+ * cutouts.js has: buy the piece whole from the supplier, or make it here, and
+ * take whichever is cheaper AT THAT QUANTITY.
+ *
+ * The crossover is early. A Signs365 sheet yields ten 24x18 signs for $44, so
+ * once a run fills a sheet the supplier is $4.40 a sign and in-house cannot
+ * get near it. Below that the sheet's $44 is spread over very few signs and
+ * the in-house route wins easily.
+ *
+ * LABOUR IS NOT IN THIS YET. Applying a sticker to a board takes a few minutes
+ * and nobody has timed it, so yardSignCost() takes the minutes as an argument
+ * rather than inventing a number. At 0 it is materials only, which is a floor
+ * and not a price. */
+const AMAZON_CORO_BLANK = 4.50;
+
 const PAPER_SHEET = 2.00;
 const PAPER_PER_SHEET = {
   '3.5x2': 72, '3.5x2.5': 56, '5x3': 30, '6x4': 21, '9x4': 14, '7x5': 12,
@@ -210,6 +228,20 @@ function magnetCost(w, h) {
   return fixed === undefined ? custom : Math.min(fixed, custom);
 }
 
+/** Cost of `qty` 24x18 yard signs by whichever route is cheaper.
+ *  Returns { route, cost, each }. `minutes` is the shop time per sign to mount
+ *  a sticker — pass the real figure once someone times it. */
+function yardSignCost(qty, { minutes = 0, shopRate = 35 } = {}) {
+  const sheet = coroCost(qty, 24, 18, { mm: 4, sides: 'single' });
+  /* Our own vinyl, not Signs365's, so no billable-foot rounding — the sqft is
+     the sqft. +20% is the laminate and contour cut, as cutouts.js calibrates it. */
+  const sticker = (24 * 18) / 144 * GF_VINYL * 1.20;
+  const inHouse = qty * (AMAZON_CORO_BLANK + sticker + (shopRate * minutes) / 60);
+  return inHouse < sheet
+    ? { route: 'in-house', cost: inHouse, each: inHouse / qty }
+    : { route: 'signs365 sheet', cost: sheet, each: sheet / qty };
+}
+
 /** Supplier cost of one acrylic panel at WxH inches. */
 const acrylicCost = (w, h) => w * h * ACRYLIC_SQIN;
 
@@ -279,6 +311,7 @@ module.exports = {
   MARKUP, SHEET_W, SHEET_H, BANNER, CORO, STEP_STAKE, BANNER_EXTRAS, POSTER, PER_ITEM,
   ONE_WAY_WINDOW, ADHESIVE, GF_VINYL, billableSqft, FREIGHT, freightFor, freightIsBuiltIn,
   MAGNET_SQIN, MAGNET_FIXED, PAPER_SHEET, PAPER_PER_SHEET, ACRYLIC_SQIN, CANVAS,
+  AMAZON_CORO_BLANK, yardSignCost,
   perSheet, coroCost, bannerCost, posterCost, windowCost, adhesiveCost,
   magnetCost, paperCost, acrylicCost, canvasCost, retail,
 };
