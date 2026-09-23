@@ -205,7 +205,7 @@ const STANDEE_BACKING = 24.00;
  * ALL OF THESE ARE ESTIMATES. Nobody has timed them. They are the same
  * admission cutouts.js makes about MINUTES_PER_HEAD, and the same instruction
  * applies: time a real job and correct the table. The prices move with it. */
-const SHOP_RATE = 35;
+const SHOP_RATE = 50;
 const LABOUR = {
   banner:   { job: 10, piece: 5 },   // unfold, check hems and grommets, refold, bag
   rigid:    { job: 10, piece: 3 },   // coro, acrylic, canvas, poster — inspect and wrap
@@ -228,6 +228,26 @@ function labourCost(kind, qty = 1) {
  * should sit. June asked for a little under market; market here is $35 at
  * Vistaprint and $80-100 at Moo, with local shops higher again. */
 const PAPER_MARKUP = 2.5;
+
+/* BUT NOT ON THE BIG SHEETS, and the reason is which cost dominates.
+ *
+ * A sheet yields 72 business cards, so on a card order the supplier cost is
+ * trivial and almost the whole price is the shop's work — x2.5 on $14 of paper
+ * is fair and lands 500 cards at $70 against Moo's $80-100.
+ *
+ * An 11x8.5 flyer yields 5 to a sheet, so 1000 of them is $400 of paper and
+ * the same multiple lands at $1,035 against a $400-700 market. The multiple is
+ * not wrong; it is being applied to the wrong kind of cost. Where the supplier
+ * dominates, the markup has to come down or the price leaves the market.
+ *
+ * Threshold is the sheet yield: 9 or more to a sheet is a small piece where
+ * handling dominates, fewer is a large one where the paper does. */
+const PAPER_MARKUP_LARGE = 1.75;
+const PAPER_YIELD_SMALL = 9;
+
+/** The multiple to use for a paper size, by how many come off one sheet. */
+const paperMarkupFor = (size) =>
+  (PAPER_PER_SHEET[size] || 0) >= PAPER_YIELD_SMALL ? PAPER_MARKUP : PAPER_MARKUP_LARGE;
 
 /* EVENING OUT THE PRICE. A ladder built straight from cost lands on figures
    like $224.20 and $151.00, which read as arithmetic rather than as a price.
@@ -320,7 +340,7 @@ function magnetCost(w, h) {
 /** Cost of `qty` 24x18 yard signs by whichever route is cheaper.
  *  Returns { route, cost, each }. `minutes` is the shop time per sign to mount
  *  a sticker — pass the real figure once someone times it. */
-function yardSignCost(qty, { minutes = 0, shopRate = 35 } = {}) {
+function yardSignCost(qty, { minutes = 0, shopRate = SHOP_RATE } = {}) {
   const sheet = coroCost(qty, 24, 18, { mm: 4, sides: 'single' });
   /* Our own vinyl, not Signs365's, so no billable-foot rounding — the sqft is
      the sqft. +20% is the laminate and contour cut, as cutouts.js calibrates it. */
@@ -335,7 +355,7 @@ function yardSignCost(qty, { minutes = 0, shopRate = 35 } = {}) {
  *  Returns { route, cost, each, mm }. Signs365 prints the board and charges
  *  $75 freight ONCE for the order; in-house is a collected blank, our own
  *  vinyl and shop time, with no freight at all. */
-function fullBodyCutoutCost(qty, { sides = 'single', minutes = STANDEE_MINUTES, shopRate = 35 } = {}) {
+function fullBodyCutoutCost(qty, { sides = 'single', minutes = STANDEE_MINUTES, shopRate = SHOP_RATE } = {}) {
   /* In-house is 4mm only — a 10mm blank costs more than a printed one. */
   const vinyl = STANDEE_PRINT_SQFT * GF_VINYL * 1.20 * (sides === 'double' ? 2 : 1);
   const inHouse = qty * (BLANK_BOARD['4mm_white'] + vinyl + (shopRate * minutes) / 60);
@@ -454,7 +474,7 @@ module.exports = {
   AMAZON_CORO_BLANK, yardSignCost, isFullBoard, boardFreight,
   BLANK_BOARD, STANDEE_PRINT_SQFT, STANDEE_MINUTES, STANDEE_BACKING,
   fullBodyCutoutCost, standeeLadder, evenUp,
-  SHOP_RATE, LABOUR, labourCost, PAPER_MARKUP,
+  SHOP_RATE, LABOUR, labourCost, PAPER_MARKUP, PAPER_MARKUP_LARGE, paperMarkupFor,
   perSheet, coroCost, bannerCost, posterCost, windowCost, adhesiveCost,
   magnetCost, paperCost, acrylicCost, canvasCost, retail,
 };

@@ -142,7 +142,7 @@ for (const [size, label, desc] of [
   ['6x4', 'Flyers — 6in x 4in, single or double-sided', 'A 6 x 4 inch flyer or postcard on 16pt stock.'],
   ['11x8.5', 'Flyers — 11in x 8.5in, single or double-sided', 'A full-page 11 x 8.5 inch flyer on 16pt stock.'],
 ]) {
-  add(label, ladder((q) => sg.paperCost(q, size) + sg.labourCost('paper', q), PAPER_BANDS, sg.PAPER_MARKUP), desc, 25);
+  add(label, ladder((q) => sg.paperCost(q, size) + sg.labourCost('paper', q), PAPER_BANDS, sg.paperMarkupFor(size)), desc, 25);
 }
 
 /* ── Report ─────────────────────────────────────────────────────────────── */
