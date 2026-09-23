@@ -6828,7 +6828,14 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
       if (!g) continue;
       let n = 0;
       try {
-        const parsed = JSON.parse(one(b['sizes' + i]) || '{}');
+        /* sizemix, NOT 'sizes' — the form posts one hidden field per line and
+           it is called sizemix. Reading 'sizes' read a field that has never
+           existed, so this loop always fell through to the qty box while the
+           browser's calc() read the real size boxes. A run whose lines are
+           entered as a size mix therefore pooled to one quantity in the preview
+           and a different one on save: the saved quote could land on a
+           different price band than the one June was looking at. */
+        const parsed = JSON.parse(one(b['sizemix' + i]) || '{}');
         for (const v of Object.values(parsed)) n += parseInt(v, 10) || 0;
       } catch { n = 0; }
       if (!n) n = parseInt(one(b['qty' + i]), 10) || 0;
