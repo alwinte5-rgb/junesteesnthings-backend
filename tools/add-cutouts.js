@@ -92,7 +92,7 @@
  */
 const fs = require('fs');
 const { mysql, enjson, sq } = require('./lib/db');
-const { ladderFor, minimumFor, packSizeFor, packPrice, MINUTES_PER_HEAD, SHOP_RATE } = require('./lib/cutouts');
+const { ladderFor, minimumFor, packSizeFor, packPrice, MINUTES_PER_HEAD, SHOP_RATE, singlesLadder } = require('./lib/cutouts');
 
 const argv = process.argv.slice(2);
 const APPLY = argv.includes('--apply');
@@ -118,9 +118,13 @@ if (!url) { console.error('no MySQL URL'); process.exit(2); }
  *
  * Keys are band CEILINGS — the price applies UP TO that quantity. The opposite
  * convention to BLANK_TIERS, which are floors. */
+/* Band CEILINGS only — the PRICES are derived by singlesLadder() from the same
+   cost model the packs use. They used to be written out here and went stale the
+   moment the shop rate changed. */
+const SINGLE_BANDS = { 12: [6, 12, 32, 1000], 18: [5, 10, 20, 50, 1000] };
 const SINGLES = {
-  12: { 6: '24.00', 12: '18.00', 32: '12.00', 1000: '8.00' },
-  18: { 5: '31.00', 10: '28.00', 20: '25.00', 50: '20.00', 1000: '17.00' },
+  12: singlesLadder(12, SINGLE_BANDS[12]),
+  18: singlesLadder(18, SINGLE_BANDS[18]),
 };
 /* Flat: one band covering everything, because cost per pack does not move. */
 const packLadder = (size) => ({ 1000: packPrice(size).toFixed(2) });

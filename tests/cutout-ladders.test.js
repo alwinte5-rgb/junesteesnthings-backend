@@ -211,3 +211,33 @@ test('shipping is an addon billed once, never inside a price', () => {
   assert.ok(Math.abs(CUT.costEach(12, 1) - bare12) < 1e-9,
     'delivery has leaked into the singles cost, where it would be charged twice');
 });
+
+test('the singles ladder is derived, so it cannot drift from its own costs', () => {
+  /* These four and five prices used to be a literal table in add-cutouts.js.
+     When the shop rate went $35 -> $50 the packs moved and the singles did
+     not: eight of the nine bands fell under the x2 floor, the 12in bottoming
+     out at 31%. Derived now, and asserted at every band's WORST quantity —
+     which for a ceiling band is its lowest member, not its highest. */
+  for (const [size, bands] of [[12, [6, 12, 32, 1000]], [18, [5, 10, 20, 50, 1000]]]) {
+    const L = CUT.singlesLadder(size, bands);
+    let lo = 1, prev = Infinity;
+    for (const b of bands) {
+      const price = parseFloat(L[b]);
+      const cost = CUT.costEach(size, lo);
+      assert.ok(price >= cost * CUT.MARKUP,
+        `${size}in band <=${b} at $${price} is under cost x${CUT.MARKUP} ($${(cost * CUT.MARKUP).toFixed(2)}) at qty ${lo}`);
+      assert.ok(price <= prev, `${size}in ladder rose at band <=${b}`);
+      prev = price;
+      lo = b + 1;
+    }
+  }
+});
+
+test('the singles ladder moves when the shop rate does', () => {
+  /* The guard that would have caught the drift: a price derived from the cost
+     model must respond to the cost model. */
+  const cheap = CUT.singlesLadder(12, [6, 1000]);
+  assert.ok(parseFloat(cheap[6]) > 0);
+  /* And it must never be the stale literal that was there before. */
+  assert.notStrictEqual(cheap[6], '24.00', 'the 12in single is back to its hardcoded $35/hr price');
+});

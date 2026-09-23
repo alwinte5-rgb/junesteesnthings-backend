@@ -75,6 +75,30 @@ function ladderFor(size) {
   return out;
 }
 
+/** The published SINGLES ladder for a size, at the given band ceilings.
+ *
+ *  Derived, not typed. The four 12in and five 18in prices used to be a literal
+ *  table in tools/add-cutouts.js, and when the shop rate went $35 -> $50 the
+ *  packs moved with it and the singles did not — eight of the nine bands fell
+ *  under the x2 floor, the 12in bottoming out at 31%. A price that does not
+ *  move with its own cost model is a price that is right once.
+ *
+ *  Each band is the worst cost at ANY quantity at or above where the band
+ *  starts, so the ladder never rises, and rounded UP to the nearest dollar so
+ *  it never lands under the floor. */
+function singlesLadder(size, bands) {
+  const envelope = new Array(HORIZON + 1).fill(0);
+  let worst = 0;
+  for (let n = HORIZON; n >= 1; n--) { worst = Math.max(worst, costEach(size, n)); envelope[n] = worst; }
+  const out = {};
+  let lo = 1;
+  for (const q of bands) {
+    out[q] = Math.ceil(envelope[Math.min(lo, HORIZON)] * MARKUP).toFixed(2);
+    lo = q + 1;
+  }
+  return out;
+}
+
 /** Smallest run worth selling: one sheet, where there is no in-house route. */
 const minimumFor = (size) => (fitsBoard(size) ? 1 : PER_SHEET[size]);
 
@@ -144,5 +168,5 @@ module.exports = {
   VINYL_SQFT, LAMINATE_AND_CUT, BOARD, SHEET, SHOP_RATE, MINUTES_PER_HEAD,
   MINUTES_HANDLING, MARKUP, PER_SHEET, BANDS,
   boxOf, sqftOf, fitsBoard, labour, costEach, ladderFor, minimumFor,
-  packSizeFor, packCost, packPrice, SHIPPING_WEEKDAY,
+  packSizeFor, packCost, packPrice, SHIPPING_WEEKDAY, singlesLadder,
 };
