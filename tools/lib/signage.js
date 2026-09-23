@@ -40,6 +40,20 @@
  *   3M ControlTac, PER SQUARE FOOT         portal/#order/41
  *     single        $4.99                  White IJ-180c, gloss laminated
  *
+ *   Custom Magnets, PER SQUARE INCH        portal/#order/164
+ *     any size      $0.07                  NOT per foot — see MAGNET_SQIN
+ *   Vehicle Magnets, fixed sizes           confirmed by June
+ *     18x12 $11.95  24x12 $14.95  24x18 $20.95  42x12 $29.95  72x24 $89.70
+ *
+ *   Paper 16pt, PER SHEET                  portal/#order/37
+ *     one or two sides  $2.00              same price either way
+ *
+ *   Acrylic 3/16", PER SQUARE INCH         portal/#order/79
+ *     single        $0.10                  NOT per foot. Indoor, long-term.
+ *
+ *   Canvas 11oz, PER SQUARE FOOT           portal/#order/19
+ *     single        $4.98                  poly-cotton, gesso, INDOOR ONLY
+ *
  * WHY CORO IS PRICED BY THE SHEET AND BANNER BY THE FOOT
  * That is how the supplier sells them, and the shapes are genuinely different.
  * A banner is cut from a roll, so a 3x6 costs exactly half of a 3x12. A coro
@@ -81,6 +95,48 @@ const ONE_WAY_WINDOW = { laminate: 3.99, no_laminate: 2.75 };
    Low Tac Wall is indoor only; quoting it for a shopfront exterior is a
    callback, not a saving. */
 const ADHESIVE = { low_tac_wall: 3.47, controltac_3m: 4.99 };
+
+/* GF 203OAPAE adhesive vinyl, PER SQUARE FOOT. Already priced in
+   tools/lib/cutouts.js as VINYL_SQFT; restated here by reference only so the
+   two cannot drift — this file imports it rather than retyping the number. */
+const { VINYL_SQFT: GF_VINYL } = require('./cutouts');
+
+/* MAGNETS COME TWO WAYS AND THE CHEAPER ONE IS NOT ALWAYS THE CUSTOM ONE.
+ *
+ *   Custom Magnets   $0.07 per SQUARE INCH   portal/#order/164
+ *                    (their example: 24x24 = 576 sqin = $40.32, to the cent)
+ *   Vehicle Magnets  fixed sizes, flat price, confirmed by June 2026-09-22
+ *
+ * Note the unit: square INCH, not square foot. It is the only product here
+ * priced that way, and reading it as sqft would price a magnet at 144x cost.
+ *
+ * Every fixed size below beats $0.07/sqin — a 24x18 is $20.95 against $30.24
+ * custom — so magnetCost() takes the cheaper of the two and a stock size is
+ * never quoted at the custom rate by accident. */
+const MAGNET_SQIN = 0.07;
+const MAGNET_FIXED = {
+  '18x12': 11.95, '24x12': 14.95, '24x18': 20.95, '42x12': 29.95, '72x24': 89.70,
+};
+
+/* Paper, PER SHEET — $2.00 whether it is printed one side or two.
+   portal/#order/37. The sheet is the unit: a size's yield is how many come off
+   one sheet, so 72 business cards and 1 poster-sized 20x16 both cost $2. */
+/* Acrylic, PER SQUARE INCH — portal/#order/79. 3/16" rigid, printed on the
+   back with a white underbase. Indoor, long-term. The SECOND product here
+   priced by the square inch rather than the foot; read it as sqft and an
+   18x24 plaque prices at $3 instead of $43. */
+const ACRYLIC_SQIN = 0.10;
+
+/* Canvas, PER SQUARE FOOT — portal/#order/19. 11oz poly-cotton with a gesso
+   finish, indoor only, single-sided. */
+const CANVAS = 4.98;
+
+const PAPER_SHEET = 2.00;
+const PAPER_PER_SHEET = {
+  '3.5x2': 72, '3.5x2.5': 56, '5x3': 30, '6x4': 21, '9x4': 14, '7x5': 12,
+  '9x6': 9, '11x8.5': 5, '14x11': 2, '16x12': 2, '17x11': 2, '12x18': 2,
+  '20x16': 1, '18x28': 1,
+};
 
 /* HOW SIGNS365 BILLS SQUARE FEET, and it is not the area of the piece.
  *
@@ -147,6 +203,26 @@ function adhesiveCost(w, h, kind) {
   return billableSqft(w, h) * rate;
 }
 
+/** Supplier cost of one magnet at WxH, by whichever route is cheaper. */
+function magnetCost(w, h) {
+  const custom = w * h * MAGNET_SQIN;
+  const fixed = MAGNET_FIXED[w + 'x' + h] ?? MAGNET_FIXED[h + 'x' + w];
+  return fixed === undefined ? custom : Math.min(fixed, custom);
+}
+
+/** Supplier cost of one acrylic panel at WxH inches. */
+const acrylicCost = (w, h) => w * h * ACRYLIC_SQIN;
+
+/** Supplier cost of one canvas at WxH inches. */
+const canvasCost = (w, h) => billableSqft(w, h) * CANVAS;
+
+/** Supplier cost of `qty` paper pieces at a named size. Sheets are whole. */
+function paperCost(qty, size) {
+  const per = PAPER_PER_SHEET[size];
+  if (!per) return null;
+  return PAPER_SHEET * Math.ceil(qty / per);
+}
+
 /* Retail rounds UP to the nearest $0.05 so the x2 floor always holds — the
    same rounding tools/lib/cutouts.js uses on its ladders. Rounding down would
    put a line a cent under cost x2 and quietly break the margin guarantee. */
@@ -201,6 +277,8 @@ const freightIsBuiltIn = ({ oversized = false } = {}) => Boolean(oversized);
 
 module.exports = {
   MARKUP, SHEET_W, SHEET_H, BANNER, CORO, STEP_STAKE, BANNER_EXTRAS, POSTER, PER_ITEM,
-  ONE_WAY_WINDOW, ADHESIVE, billableSqft, FREIGHT, freightFor, freightIsBuiltIn,
-  perSheet, coroCost, bannerCost, posterCost, windowCost, adhesiveCost, retail,
+  ONE_WAY_WINDOW, ADHESIVE, GF_VINYL, billableSqft, FREIGHT, freightFor, freightIsBuiltIn,
+  MAGNET_SQIN, MAGNET_FIXED, PAPER_SHEET, PAPER_PER_SHEET, ACRYLIC_SQIN, CANVAS,
+  perSheet, coroCost, bannerCost, posterCost, windowCost, adhesiveCost,
+  magnetCost, paperCost, acrylicCost, canvasCost, retail,
 };

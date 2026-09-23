@@ -127,3 +127,30 @@ test('an unknown adhesive is refused, never priced at zero', () => {
   assert.equal(s.adhesiveCost(24, 24, 'nope'), null);
   assert.equal(s.adhesiveCost(24, 24, undefined), null);
 });
+
+test('acrylic and magnets price per square INCH, canvas per square foot', () => {
+  /* Two units in one file is a trap. Reading acrylic as per-sqft would put an
+     18x24 panel on the quote at $3 instead of $43. */
+  assert.equal(s.acrylicCost(18, 24), 18 * 24 * 0.10);
+  assert.equal(s.magnetCost(24, 24), 24 * 24 * 0.07);
+  /* Canvas is per billable FOOT: 24x36 is 6 sqft, not 864 of anything. */
+  assert.equal(s.canvasCost(24, 36), 6 * 4.98);
+});
+
+test('a stock magnet size never quotes at the dearer custom rate', () => {
+  for (const [key, fixed] of Object.entries(s.MAGNET_FIXED)) {
+    const [w, h] = key.split('x').map(Number);
+    assert.ok(s.magnetCost(w, h) <= fixed + 1e-9, key + ' should not exceed its fixed price');
+    assert.ok(s.magnetCost(w, h) <= w * h * s.MAGNET_SQIN + 1e-9, key + ' should not exceed the custom rate');
+  }
+  /* Orientation must not change the answer — 12x18 is the same magnet as 18x12. */
+  assert.equal(s.magnetCost(12, 18), s.magnetCost(18, 12));
+});
+
+test('paper sheets are whole, so the first 72 cards cost one sheet', () => {
+  assert.equal(s.paperCost(1, '3.5x2'), 2.00);
+  assert.equal(s.paperCost(72, '3.5x2'), 2.00);
+  assert.equal(s.paperCost(73, '3.5x2'), 4.00);
+  /* An unknown size is refused rather than priced at zero. */
+  assert.equal(s.paperCost(100, '99x99'), null);
+});
