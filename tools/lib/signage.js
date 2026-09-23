@@ -303,6 +303,13 @@ function freightFor({ oversized = false, substrate = 'coro' } = {}) {
   return substrate === 'foam' ? FREIGHT.oversized_foam : FREIGHT.oversized_coro;
 }
 
+/* A FULL 48x96 BOARD IS ALWAYS OVERSIZED. Confirmed by June 2026-09-22:
+   a single 48x96 coro board ships at $75, a full foam board at $199. So a
+   full body cutout is never the $10 rate, and the freight is built into its
+   price per her rule that oversized charges are the ones not to forget. */
+const isFullBoard = (w, h) => w >= SHEET_W && h >= SHEET_H;
+const boardFreight = (substrate) => freightFor({ oversized: true, substrate });
+
 /** True when this order's freight belongs INSIDE the price rather than on its
  *  own line. Only the oversized rates are buried; the $10 stays visible. */
 const freightIsBuiltIn = ({ oversized = false } = {}) => Boolean(oversized);
@@ -311,7 +318,7 @@ module.exports = {
   MARKUP, SHEET_W, SHEET_H, BANNER, CORO, STEP_STAKE, BANNER_EXTRAS, POSTER, PER_ITEM,
   ONE_WAY_WINDOW, ADHESIVE, GF_VINYL, billableSqft, FREIGHT, freightFor, freightIsBuiltIn,
   MAGNET_SQIN, MAGNET_FIXED, PAPER_SHEET, PAPER_PER_SHEET, ACRYLIC_SQIN, CANVAS,
-  AMAZON_CORO_BLANK, yardSignCost,
+  AMAZON_CORO_BLANK, yardSignCost, isFullBoard, boardFreight,
   perSheet, coroCost, bannerCost, posterCost, windowCost, adhesiveCost,
   magnetCost, paperCost, acrylicCost, canvasCost, retail,
 };
