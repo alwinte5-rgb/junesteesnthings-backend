@@ -89,7 +89,10 @@ test('a pack is exactly one sheet, so nothing is wasted', () => {
     assert.strictEqual(CUT.packSizeFor(t), CUT.PER_SHEET[t], t + 'in pack is not a whole sheet');
   }
   assert.deepStrictEqual([12, 18, 24, 36].map(CUT.packSizeFor), [32, 10, 8, 3]);
-  assert.deepStrictEqual([12, 18, 24, 36].map(CUT.packPrice), [212, 186, 184, 178]);
+  /* Pinned so a change to the cost model cannot move a PUBLISHED price without
+     someone noticing: these four are on jtees.net and in the PDF handout.
+     $212/$186/$184/$178 until 2026-09-23, when the shop rate went $35 -> $50. */
+  assert.deepStrictEqual([12, 18, 24, 36].map(CUT.packPrice), [228, 192, 188, 180]);
 });
 
 test('a pack always beats the same heads bought as singles', () => {
@@ -174,7 +177,12 @@ test('only a size that fits a board can be sold as a single', () => {
 test('labour is in the price, and one number controls it', () => {
   /* The first ladders were written without labour and sold a single 12" at a
      1% margin — $12.00 against $11.82 of board, vinyl and ten minutes. */
-  assert.strictEqual(CUT.SHOP_RATE, 35, 'the shop rate moved');
+  /* $50 from 2026-09-23, up from $35, and deliberately the SAME number
+     tools/lib/signage.js uses — one business, one rate. If these two ever
+     disagree again, one of them is quietly wrong. */
+  assert.strictEqual(CUT.SHOP_RATE, 50, 'the shop rate moved');
+  assert.strictEqual(CUT.SHOP_RATE, require('../tools/lib/signage').SHOP_RATE,
+    'cutouts and signage are charging different shop rates');
   assert.ok(CUT.MINUTES_PER_HEAD > 0, 'labour has been zeroed out');
   const bare = CUT.sqftOf(12) * CUT.VINYL_SQFT * CUT.LAMINATE_AND_CUT + CUT.BOARD;
   assert.ok(Math.abs(CUT.costEach(12, 1) - (bare + CUT.labour(CUT.MINUTES_PER_HEAD))) < 1e-9,

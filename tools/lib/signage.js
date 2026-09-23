@@ -242,7 +242,7 @@ const PAPER_MARKUP = 2.5;
  *
  * Threshold is the sheet yield: 9 or more to a sheet is a small piece where
  * handling dominates, fewer is a large one where the paper does. */
-const PAPER_MARKUP_LARGE = 1.75;
+const PAPER_MARKUP_LARGE = 2.0;
 const PAPER_YIELD_SMALL = 9;
 
 /** The multiple to use for a paper size, by how many come off one sheet. */

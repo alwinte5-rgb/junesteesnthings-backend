@@ -16,7 +16,10 @@
  *                                    2.75 sqft x $2.99 x 1.20 is $9.87 exactly
  *   foamcore 48x96 sheet $70.00      +10% contour cut = $77.00
  *   20x30 board           $3.00      Walmart, one whole board per head
- *   shop rate            $35/hour    server.js, the design_commission note
+ *   shop rate            $50/hour    raised from $35 on 2026-09-23: $35 was the
+ *                                    bottom of the $30-70 range sign shops charge
+ *                                    for shop time, and signage carries the same
+ *                                    rate, so one business now has one rate
  *
  * MINUTES_PER_HEAD is the one estimate in here. Time a real one and correct it;
  * everything below moves with it.
@@ -26,7 +29,7 @@ const VINYL_SQFT = 2.49;          // GF 203OAPAE
 const LAMINATE_AND_CUT = 1.20;    // +10% gloss laminate, +10% contour cut
 const BOARD = 3.00;               // one 20x30 board per head
 const SHEET = 77.00;              // 48x96 foamcore, contour cut included
-const SHOP_RATE = 35;             // $/hour
+const SHOP_RATE = 50;             // $/hour
 const MINUTES_PER_HEAD = 10;      // mount vinyl to board, hand-cut the head
 const MINUTES_HANDLING = 1;       // a sheet arrives contour cut; just unpack it
 const MARKUP = 2.0;               // the shop's x2, as tools/lib/markup.js holds it
@@ -91,12 +94,15 @@ const minimumFor = (size) => (fitsBoard(size) ? 1 : PER_SHEET[size]);
  * forty — there is no waste, because the pack IS the unit the supplier sells.
  * One price, flat, at every quantity:
  *
- *     12"  32 a pack   $192    $6.00 a head
- *     18"  10 a pack   $166   $16.60 a head
- *     24"   8 a pack   $164   $20.50 a head
- *     36"   3 a pack   $158   $52.67 a head
+ *     12"  32 a pack   $228    $7.13 a head
+ *     18"  10 a pack   $192   $19.20 a head
+ *     24"   8 a pack   $188   $23.50 a head
+ *     36"   3 a pack   $180   $60.00 a head
  *
  * Rounded UP to an even dollar from cost x2, so every pack clears 50%.
+ * These four figures are the ONLY hand-written prices in this file and they
+ * have gone stale twice — once when freight was folded in, once when the rate
+ * changed. They are documentation, not the source: packPrice() is.
  *
  * It is also the honest thing to sell. A customer ordering ten 12" heads pays
  * for a whole sheet either way; the only question is whether they go home with
