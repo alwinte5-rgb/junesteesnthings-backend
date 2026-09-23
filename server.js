@@ -7345,22 +7345,33 @@ function customerLinePricing(items, catalog) {
   return (items || []).map((it) => {
     const p = prods.find((x) => String(x.id) === String(it.product_id));
     const m = meths.find((x) => String(x.id) === String(it.method_id));
+    /* The SECOND decoration, shipped with the same care as the first. Without
+       it the customer's page re-prices a two-process line as a one-process
+       line: a DTF-front/screen-back job would quietly lose the screen half the
+       moment the customer nudged a quantity, and the estimate on their screen
+       would sit under the quote they were sent. */
+    const m2 = meths.find((x) => String(x.id) === String(it.method2_id));
+    /* Only the fields priceLine reads — never `cost`, same rule as the first. */
+    const slim = (x) => (x ? {
+      id: x.id, title: x.title, type: x.type, multi: x.multi,
+      positions: x.positions, colour_options: x.colour_options || null,
+      min_order_qty: x.min_order_qty || 0,
+    } : null);
     return {
       /* Sell price and upcharges only — never `cost`. */
       product: p ? {
         price: Number(p.price) || 0,
         sizes: (p.sizes || []).map((z) => ({ size: z.size, upcharge: Number(z.upcharge) || 0 })),
       } : null,
-      method: m ? {
-        id: m.id, title: m.title, type: m.type, multi: m.multi,
-        positions: m.positions, colour_options: m.colour_options || null,
-        min_order_qty: m.min_order_qty || 0,
-      } : null,
+      method: slim(m),
+      method2: slim(m2),
       /* The line as it was priced, so an untouched line re-prices to exactly
          what is already on screen rather than drifting by a rounding step. */
       stage: it.stage || null,
+      stage2: it.stage2 || null,
       dark: !!it.garment_dark,
       colours: it.colours || null,
+      colours2: it.colours2 || null,
       addons: (it.addons || []).map((a) => ({
         code: a.code, label: a.label, kind: a.kind, rate: Number(a.rate) || 0,
       })),

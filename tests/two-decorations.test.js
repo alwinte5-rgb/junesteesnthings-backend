@@ -23,6 +23,15 @@ const vm = require('node:vm');
 
 const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 
+/* customerLinePricing calls typedUnitOf(), so the real one is lifted with it
+   rather than stubbed — a stub would let the test pass while the shipped pair
+   disagreed, which is the whole failure mode these lifted tests exist for. */
+function lift(body) {
+  const tu = src.slice(src.indexOf('function typedUnitOf('));
+  const tuBody = tu.slice(0, tu.indexOf('\n}\n') + 2);
+  return vm.runInThisContext('(function(){' + tuBody + '\nreturn (' + body + ');})()');
+}
+
 function engine() {
   const e = src.slice(src.indexOf('function quotePricingSource()'));
   const body = e.slice(e.indexOf('return `') + 8, e.indexOf('\n`;'));
@@ -121,4 +130,60 @@ test('placement applies per decoration', () => {
   /* The extra is the DTF back rate at 100: $4.20. */
   assert.ok(Math.abs((bothSides.unit - front.unit) - 4.20) < 0.02,
     'expected the DTF back rate, got $' + (bothSides.unit - front.unit).toFixed(2));
+});
+
+/* ── The customer's own page ──────────────────────────────────────────────
+ *
+ * customerLinePricing() rebuilds each line from scratch before it is sent to
+ * the customer, deliberately: the catalogue carries the shop's COST on every
+ * product and shipping that would hand the customer the margin on their own
+ * job. Nothing is copied wholesale, so a new field has to be added there
+ * on purpose — and the first version of the two-decoration change did not.
+ *
+ * The consequence was not cosmetic. The customer's page re-prices when they
+ * nudge a quantity, so a DTF-front/screen-back line would have lost its screen
+ * half on the first nudge and shown an estimate UNDER the quote they were
+ * sent.
+ */
+test('the customer page carries the second decoration, and still no cost', () => {
+  const fn = src.slice(src.indexOf('function customerLinePricing(items, catalog)'));
+  const body = fn.slice(0, fn.indexOf('\n}\n') + 2);
+  const customerLinePricing = lift(body);
+
+  const catalog = {
+    products: [{ id: 187, price: 6.40, cost: 3.10, sizes: [], colours: [] }],
+    methods: [
+      Object.assign({ cost: 99 }, DTF),
+      Object.assign({ cost: 99 }, SCREEN),
+    ],
+  };
+  const items = [{
+    product_id: 187, method_id: 1, stage: '', method2_id: 22, stage2: 'mr8a5dlx',
+    colours: '', colours2: '1', qty: 100, addons: [],
+  }];
+  const out = customerLinePricing(items, catalog);
+  assert.equal(out.length, 1);
+
+  /* The second decoration survives the rebuild. */
+  assert.ok(out[0].method2, 'method2 was dropped on the way to the customer');
+  assert.equal(out[0].method2.id, 22);
+  assert.equal(out[0].stage2, 'mr8a5dlx');
+
+  /* And the rule the whole function exists for still holds, for BOTH methods
+     and the product: the shop's cost basis never leaves the building. */
+  const json = JSON.stringify(out[0]);
+  assert.equal(/"cost"/.test(json), false, 'a cost field reached the customer payload');
+  assert.equal(out[0].method.cost, undefined);
+  assert.equal(out[0].method2.cost, undefined);
+  assert.equal(out[0].product.cost, undefined);
+});
+
+test('a line with no second decoration still sends method2 as null', () => {
+  const fn = src.slice(src.indexOf('function customerLinePricing(items, catalog)'));
+  const body = fn.slice(0, fn.indexOf('\n}\n') + 2);
+  const customerLinePricing = lift(body);
+  const catalog = { products: [{ id: 187, price: 6.40, sizes: [], colours: [] }], methods: [DTF] };
+  const out = customerLinePricing([{ product_id: 187, method_id: 1, qty: 100, addons: [] }], catalog);
+  assert.strictEqual(out[0].method2, null);
+  assert.strictEqual(out[0].stage2, null);
 });
