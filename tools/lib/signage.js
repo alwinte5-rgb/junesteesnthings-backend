@@ -149,6 +149,37 @@ const CANVAS = 4.98;
  * and not a price. */
 const AMAZON_CORO_BLANK = 4.50;
 
+/* BLANK 48x96 COROPLAST, COLLECTED — the cheaper route for full body cutouts.
+ * Home Depot, read 2026-09-23. Collected in Chicago, so NO FREIGHT AT ALL,
+ * which is the whole point: Signs365 charges $75 to ship one 48x96 board and
+ * that is larger than the $70 board.
+ *
+ *   4mm white   $28.91   (10-pack at $289.06)
+ *   4mm black   $40.20
+ *   10mm white  $111.24  (3-pack at $333.73)
+ *
+ * NOTE THE 10mm. At $111 a blank it is dearer than Signs365's $70 PRINTED
+ * board, so there is no in-house route at 10mm at any quantity. In-house means
+ * 4mm. That is a real product difference, not just a price one, and a quote
+ * should say which it is.
+ *
+ * AND THE FREIGHT IS PER ORDER, NOT PER BOARD. One standee carries the whole
+ * $75; four share it. So this is the same sawtooth as everything else here —
+ * in-house wins on ones and twos, Signs365 wins once the order is big enough
+ * to dilute the freight. */
+const BLANK_BOARD = { '4mm_white': 28.91, '4mm_black': 40.20, '10mm_white': 111.24 };
+
+/* A life-size silhouette is not a full 48x96 rectangle of print — it is a
+   person-shaped cut, roughly 24in across and 72in tall. 12 sqft is that
+   shape's area and it is an ESTIMATE, the one number here nobody measured.
+   Every in-house figure moves with it. */
+const STANDEE_PRINT_SQFT = 12;
+
+/* Mounting vinyl to a 48x96 board and hand-cutting a 6ft silhouette. Also an
+   estimate — cutouts.js makes the same admission about MINUTES_PER_HEAD, and
+   the same instruction applies: time a real one and correct it. */
+const STANDEE_MINUTES = 40;
+
 const PAPER_SHEET = 2.00;
 const PAPER_PER_SHEET = {
   '3.5x2': 72, '3.5x2.5': 56, '5x3': 30, '6x4': 21, '9x4': 14, '7x5': 12,
@@ -242,6 +273,30 @@ function yardSignCost(qty, { minutes = 0, shopRate = 35 } = {}) {
     : { route: 'signs365 sheet', cost: sheet, each: sheet / qty };
 }
 
+/** Cost of `qty` full body cutouts by whichever route is cheaper.
+ *  Returns { route, cost, each, mm }. Signs365 prints the board and charges
+ *  $75 freight ONCE for the order; in-house is a collected blank, our own
+ *  vinyl and shop time, with no freight at all. */
+function fullBodyCutoutCost(qty, { sides = 'single', minutes = STANDEE_MINUTES, shopRate = 35 } = {}) {
+  /* In-house is 4mm only — a 10mm blank costs more than a printed one. */
+  const vinyl = STANDEE_PRINT_SQFT * GF_VINYL * 1.20 * (sides === 'double' ? 2 : 1);
+  const inHouse = qty * (BLANK_BOARD['4mm_white'] + vinyl + (shopRate * minutes) / 60);
+
+  /* Signs365, freight amortised across the order. */
+  const s365_4 = CORO[4][sides] * qty + boardFreight('coro');
+  const s365_10 = CORO[10][sides] * qty + boardFreight('coro');
+
+  const options = [
+    { route: 'in-house (collected blank)', cost: inHouse, mm: 4 },
+    { route: 'signs365 4mm', cost: s365_4, mm: 4 },
+    { route: 'signs365 10mm', cost: s365_10, mm: 10 },
+  ];
+  /* Compare like with like on 4mm; the 10mm is reported separately because it
+     is a better board, not a cheaper one. */
+  const best = options.filter((o) => o.mm === 4).reduce((a, b) => (a.cost <= b.cost ? a : b));
+  return { ...best, each: best.cost / qty, premium10mm: { cost: s365_10, each: s365_10 / qty } };
+}
+
 /** Supplier cost of one acrylic panel at WxH inches. */
 const acrylicCost = (w, h) => w * h * ACRYLIC_SQIN;
 
@@ -319,6 +374,7 @@ module.exports = {
   ONE_WAY_WINDOW, ADHESIVE, GF_VINYL, billableSqft, FREIGHT, freightFor, freightIsBuiltIn,
   MAGNET_SQIN, MAGNET_FIXED, PAPER_SHEET, PAPER_PER_SHEET, ACRYLIC_SQIN, CANVAS,
   AMAZON_CORO_BLANK, yardSignCost, isFullBoard, boardFreight,
+  BLANK_BOARD, STANDEE_PRINT_SQFT, STANDEE_MINUTES, fullBodyCutoutCost,
   perSheet, coroCost, bannerCost, posterCost, windowCost, adhesiveCost,
   magnetCost, paperCost, acrylicCost, canvasCost, retail,
 };

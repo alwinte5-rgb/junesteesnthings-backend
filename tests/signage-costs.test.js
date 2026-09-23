@@ -199,3 +199,31 @@ test('shop time raises the in-house route and moves the crossover earlier', () =
   assert.equal(s.yardSignCost(3, { minutes: 0 }).route, 'in-house');
   assert.equal(s.yardSignCost(3, { minutes: 30 }).route, 'signs365 sheet');
 });
+
+test('a single full body cutout never pays the whole $75 freight', () => {
+  /* The failure this route exists to prevent: one standee through Signs365 is
+     $70 of board and $75 of freight, and the freight is the larger number. */
+  const one = s.fullBodyCutoutCost(1);
+  assert.equal(one.route, 'in-house (collected blank)');
+  assert.ok(one.cost < s.CORO[4].single + s.boardFreight('coro'),
+    'one cutout must beat the Signs365 board-plus-freight price');
+});
+
+test('freight is per ORDER, so Signs365 wins once it is diluted', () => {
+  assert.ok(s.fullBodyCutoutCost(10).route.startsWith('signs365'));
+  /* And the per-unit cost falls as the order grows, because the $75 spreads. */
+  assert.ok(s.fullBodyCutoutCost(10).each < s.fullBodyCutoutCost(5).each);
+  assert.ok(s.fullBodyCutoutCost(5).each < s.fullBodyCutoutCost(3).each);
+});
+
+test('there is no in-house route at 10mm, because the blank costs more', () => {
+  /* A 10mm blank is $111.24 against Signs365's $70 PRINTED board. Any future
+     change that makes in-house claim 10mm is wrong. */
+  assert.ok(s.BLANK_BOARD['10mm_white'] > s.CORO[10].single,
+    'a 10mm blank is dearer than a printed 10mm board — in-house is 4mm only');
+  assert.equal(s.fullBodyCutoutCost(1).mm, 4);
+});
+
+test('more shop time never makes in-house look better', () => {
+  assert.ok(s.fullBodyCutoutCost(1, { minutes: 60 }).each > s.fullBodyCutoutCost(1, { minutes: 15 }).each);
+});
