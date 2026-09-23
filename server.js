@@ -4594,16 +4594,35 @@ function quotePricingSource() {
            cheaper back; a method with one (screen printing, multi:false) doubles
            its only table — which is what the designer does too, because a second
            screen-print location is a second set of screens, not a cheaper pass. */
-        var decoration = 0;
-        if (o.method) {
-          if (o.stage === 'both') {
-            var pk = Object.keys(o.method.positions || {});
-            decoration = Number(tierAt(o.method.positions, bandQty, pk[0], colours)) +
-                         Number(tierAt(o.method.positions, bandQty, pk[1] || pk[0], colours));
-          } else {
-            decoration = Number(tierAt(o.method.positions, bandQty, o.stage, colours));
+        /* Written as a function because a line can carry TWO decorations: a job
+           that is DTF on one side and screen printed on the other is one
+           garment and two processes, and quoting it as two lines charged the
+           shirt twice. Each decoration reads its own placement and its own
+           colour count, and each is minimum-enforced on its own method below —
+           screen printing's 50-piece floor must not be applied to the DTF half
+           and vice versa. */
+        function decoFor(method, stage, colourPick) {
+          if (!method) return 0;
+          var c = colourCount(method, colourPick);
+          if (stage === 'both') {
+            var pk = Object.keys(method.positions || {});
+            return Number(tierAt(method.positions, bandQty, pk[0], c)) +
+                   Number(tierAt(method.positions, bandQty, pk[1] || pk[0], c));
           }
+          return Number(tierAt(method.positions, bandQty, stage, c));
         }
+
+        /* A method's own minimum, scaled per piece so unit x qty still holds.
+           Applied per decoration, not to the line total. */
+        function applyMin(method, amount) {
+          if (!method || !(amount > 0)) return amount;
+          var mn = method.min_order_qty ? (parseInt(method.min_order_qty, 10) || 0) : 0;
+          if (!(mn > 0) || !(bandQty > 0) || bandQty >= mn) return amount;
+          return Math.round(amount * (mn / bandQty) * 100) / 100;
+        }
+
+        var decoration = applyMin(o.method, decoFor(o.method, o.stage, o.colours));
+        var decoration2 = applyMin(o.method2, decoFor(o.method2, o.stage2, o.colours2));
 
         /* A decoration minimum, enforced. Tier keys are CEILINGS, so a quantity
            below the smallest band prices at that band — a 12-piece screen job
@@ -4633,16 +4652,21 @@ function quotePricingSource() {
            designer refuse the same designs — and said as a fact about the
            press rather than a price, because there is no price for it. */
         var overScreens = false, screenCeiling = 0;
-        if (o.method && /screen\s*print/i.test(String(o.method.title || ''))) {
-          screenCeiling = maxScreens(o.method);
-          overScreens = screensPerPass(colours, !!o.dark) > screenCeiling;
+        var sm = (o.method && /screen\s*print/i.test(String(o.method.title || ''))) ? o.method
+               : (o.method2 && /screen\s*print/i.test(String(o.method2.title || ''))) ? o.method2 : null;
+        if (sm) {
+          var sc = colourCount(sm, sm === o.method ? o.colours : o.colours2);
+          screenCeiling = maxScreens(sm);
+          overScreens = screensPerPass(sc, !!o.dark) > screenCeiling;
         }
 
-        var decoMin = (o.method && o.method.min_order_qty) ? (parseInt(o.method.min_order_qty, 10) || 0) : 0;
+        /* The charge itself is already corrected above, per decoration. What is
+           left here is the FLAG the form reads to explain why — kept reporting
+           the strictest minimum either decoration triggers. */
+        var decoMin = 0;
+        if (o.method && o.method.min_order_qty) decoMin = parseInt(o.method.min_order_qty, 10) || 0;
+        if (o.method2 && o.method2.min_order_qty) decoMin = Math.max(decoMin, parseInt(o.method2.min_order_qty, 10) || 0);
         var belowDecoMin = decoMin > 0 && bandQty > 0 && bandQty < decoMin;
-        if (belowDecoMin && decoration > 0) {
-          decoration = Math.round(decoration * (decoMin / bandQty) * 100) / 100;
-        }
 
         /* Extended sizes carry an upcharge that applies only to the pieces in
            those sizes — 24 shirts of which 4 are 2XL is not 24 mediums. */
@@ -4657,7 +4681,7 @@ function quotePricingSource() {
           }
         }
 
-        var listUnit = Math.round((blank + decoration) * 100) / 100;
+        var listUnit = Math.round((blank + decoration + decoration2) * 100) / 100;
         var hasOverride = o.unitOverride !== null && o.unitOverride !== undefined &&
                           o.unitOverride !== '' && isFinite(parseFloat(o.unitOverride));
         var unit = hasOverride ? parseFloat(o.unitOverride) : listUnit;
@@ -5437,6 +5461,19 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
         <select name="product${n}" class="p"><option value="">Product (optional)</option>${prodOpts(it && it.product_id)}</select>
         <select name="method${n}" class="m"><option value="">Decoration (optional)</option>${methodOpts(it && it.method_id)}</select>
       </div>
+      <!-- A SECOND decoration on the SAME garment. A job that is DTF on one
+           side and screen printed on the other is one shirt and two processes;
+           quoting it as two lines charged the shirt twice, and quoting it as
+           one line charged only one process. Hidden until the first decoration
+           is chosen, because a second process without a first is not a thing. -->
+      <div class="row row-2 deco2" style="display:none;margin-top:8px">
+        <select name="method2${n}" class="m2"><option value="">+ Second decoration (optional)</option>${methodOpts(it && it.method2_id)}</select>
+        <select name="loc2${n}" class="loc2" style="font-size:13px;padding:6px 7px">
+          <option value="">Front only</option>
+          <option value="mr8a5dlx"${it && it.stage2 === 'mr8a5dlx' ? ' selected' : ''}>Back only</option>
+          <option value="both"${it && it.stage2 === 'both' ? ' selected' : ''}>Front + back</option>
+        </select>
+      </div>
       <!-- Directly under the product, because it is a property OF the product
            and the two are chosen together. It sat inside the collapsed "Details,
            photos & sizes" section, where choosing a colour meant opening a
@@ -5976,6 +6013,16 @@ ${quotePricingSource()}
         document.querySelectorAll('.line').forEach(function(L){
           var prod = CAT.products.find(function(x){return String(x.id)===L.querySelector('.p').value;});
           var meth = CAT.methods.find(function(x){return String(x.id)===L.querySelector('.m').value;});
+          var m2El = L.querySelector('.m2');
+          var meth2 = m2El ? CAT.methods.find(function(x){return String(x.id)===m2El.value;}) : null;
+          /* The second slot only appears once the first is filled, and clears
+             itself if the first is emptied — a line cannot have a back print
+             and no front one. */
+          var d2row = L.querySelector('.deco2');
+          if (d2row) {
+            d2row.style.display = meth ? '' : 'none';
+            if (!meth && m2El && m2El.value) { m2El.value = ''; meth2 = null; }
+          }
           var u    = L.querySelector('.u');
           var qEl  = L.querySelector('.q');
           buildColours(L, prod);
@@ -6144,14 +6191,20 @@ ${quotePricingSource()}
              not anyone ticked anything, so they come from the method. The dark
              garment does not add a CHARGE here, it adds a SCREEN: it is passed
              to priceLine below and screenCount() decides how many. */
-          addonsForTitle(meth && meth.title).forEach(function(a){
-            if (a.auto !== 'method') return;
-            if (a.code === 'screens' && !SCREEN_FEES_LIVE) return;
-            if (addons.some(function(x){ return x.code === a.code; })) return;
-            addons.push(a);
+          /* Both decorations, because the screens belong to whichever half is
+             the screen-print one — on a DTF-front/screen-back line that is the
+             second slot, and reading only the first would drop the screen fee. */
+          [meth && meth.title, meth2 && meth2.title].forEach(function(t){
+            addonsForTitle(t).forEach(function(a){
+              if (a.auto !== 'method') return;
+              if (a.code === 'screens' && !SCREEN_FEES_LIVE) return;
+              if (addons.some(function(x){ return x.code === a.code; })) return;
+              addons.push(a);
+            });
           });
 
           var stage = L.querySelector('.loc') ? L.querySelector('.loc').value : '';
+          var stage2 = L.querySelector('.loc2') ? L.querySelector('.loc2').value : '';
           var bpEl = L.querySelector('.bp');
           /* Only a ticked line takes the pooled figure, and bandQtyFor's floor
              means a lone ticked line is unaffected. */
@@ -6165,6 +6218,7 @@ ${quotePricingSource()}
             bandQty: runQty,
             product: prod, method: meth, qty: qty, sizeMix: sizeQty ? mix : null,
             colours: colEl ? colEl.value : '',
+            method2: meth2, stage2: stage2, colours2: '',
             stage: stage, addons: addons, blankTiers: BLANK_TIERS,
             dark: isDark,
             blankOverride: bpEl ? bpEl.value : '',
@@ -6751,6 +6805,10 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
       const qty = parseInt(one(b['qty' + i]), 10) || 0;
       const prod = catalog.products.find(p => String(p.id) === String(one(b['product' + i])));
       const method = catalog.methods.find(m => String(m.id) === String(one(b['method' + i])));
+      /* The second decoration on the same garment. Resolved against the
+         CATALOGUE like the first, so a posted id that names no real method
+         prices nothing rather than whatever the body claimed. */
+      const method2 = catalog.methods.find(m => String(m.id) === String(one(b['method2' + i])));
       /* Count a row as real if ANY field was filled in. Previously a line with
          only a price (or only a size mix) was silently dropped, which for a
          single-line quote produced "Add at least one item" and lost the work. */
@@ -6790,8 +6848,12 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
          fee cannot be attached to a screen-print line. */
       const lineAddons = [];
       const methodTitle = method ? String(method.title || '') : '';
-      const isEmb = EMBROIDERY_METHOD_RE.test(methodTitle);
-      const isScreen = SCREEN_METHOD_RE.test(methodTitle);
+      /* Both halves: on a DTF-front/screen-back line the screen print is the
+         SECOND method, and reading only the first drops its screen fee. */
+      const method2Title = catalog.methods.find(m => String(m.id) === String(one(b['method2' + i])));
+      const bothTitles = methodTitle + ' ' + (method2Title ? String(method2Title.title || '') : '');
+      const isEmb = EMBROIDERY_METHOD_RE.test(bothTitles);
+      const isScreen = SCREEN_METHOD_RE.test(bothTitles);
       const garmentDark = String(one(b['dark' + i]) || '') === '1';
 
       const setupId = String(one(b['setup' + i]) || '').trim();
@@ -6858,9 +6920,11 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
         ? prod.colours.find((c) => String(c.name) === colourPick) : null;
 
       const runGroup = String(one(b['run' + i]) || '').trim();
+      const stage2 = String(one(b['loc2' + i]) || '').trim();
       const priced = priceLine({
         bandQty: runGroup ? (runTotals[runGroup] || 0) : 0,
         product: prod, method, qty: q, sizeMix: mix, colours,
+        method2, stage2, colours2: one(b['colors2' + i]) || '',
         stage, addons: lineAddons, blankTiers: BLANK_TIERS,
         /* The garment colour is a pricing INPUT, not a charge: it decides how
            many screens screenCount() asks for. Omit it and a dark job silently
@@ -7044,6 +7108,10 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
         list_total: struck,
         product_id: prod ? prod.id : null,
         method_id: method ? method.id : null,
+        /* Saved so the edit form can restore the second slot. Null when there
+           is no second decoration, which is the ordinary case. */
+        method2_id: method2 ? method2.id : null,
+        stage2: method2 ? stage2 : null,
       });
     }
 
