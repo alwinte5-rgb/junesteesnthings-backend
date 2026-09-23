@@ -227,3 +227,48 @@ test('there is no in-house route at 10mm, because the blank costs more', () => {
 test('more shop time never makes in-house look better', () => {
   assert.ok(s.fullBodyCutoutCost(1, { minutes: 60 }).each > s.fullBodyCutoutCost(1, { minutes: 15 }).each);
 });
+
+test('evening up always rounds UP, never through the x2 floor', () => {
+  /* Rounding down would put a line under cost x2 and quietly break the margin
+     guarantee the whole file rests on. */
+  for (const n of [0.11, 1.01, 4.99, 5.01, 44.20, 49.99, 50.01, 112.10, 224.20]) {
+    assert.ok(s.evenUp(n) >= n, 'evenUp(' + n + ') went down');
+  }
+  /* Step by size: nickels under $5, dollars to $50, fives above. */
+  assert.equal(s.evenUp(4.21), 4.25);
+  assert.equal(s.evenUp(44.20), 45);
+  assert.equal(s.evenUp(224.20), 225);
+  /* A number already on its step does not jump to the next one. */
+  assert.equal(s.evenUp(45), 45);
+  assert.equal(s.evenUp(225), 225);
+});
+
+test('the standee ladder starts at $225 and never rises', () => {
+  const L = s.standeeLadder();
+  assert.equal(L[1], 225, 'June set the single at $225');
+  const qs = Object.keys(L).map(Number).sort((a, b) => a - b);
+  for (let i = 1; i < qs.length; i++) {
+    assert.ok(L[qs[i]] <= L[qs[i - 1]], 'the ladder rose at qty ' + qs[i]);
+  }
+});
+
+test('every standee band still clears cost x2 at its worst quantity', () => {
+  const L = s.standeeLadder();
+  const qs = Object.keys(L).map(Number).sort((a, b) => a - b);
+  let lo = 1;
+  for (const q of qs) {
+    /* Per piece, the dearest member of a ceiling band is its LOWEST quantity. */
+    const worst = s.fullBodyCutoutCost(lo).each;
+    assert.ok(L[q] >= worst * s.MARKUP - 1e-9,
+      'band <=' + q + ' at $' + L[q] + ' is under cost x2 ($' + (worst * s.MARKUP).toFixed(2) + ') at qty ' + lo);
+    lo = q + 1;
+  }
+});
+
+test('the backing is per piece, so it never dilutes with quantity', () => {
+  /* Freight dilutes across an order; a foot does not — every standee needs one. */
+  const one = s.fullBodyCutoutCost(1).each;
+  const fifty = s.fullBodyCutoutCost(50).each;
+  assert.ok(one - fifty < 100, 'the backing should stop the curve collapsing');
+  assert.ok(fifty > s.STANDEE_BACKING, 'even at volume a standee costs more than its backing');
+});

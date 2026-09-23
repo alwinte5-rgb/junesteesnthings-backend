@@ -180,6 +180,24 @@ const STANDEE_PRINT_SQFT = 12;
    the same instruction applies: time a real one and correct it. */
 const STANDEE_MINUTES = 40;
 
+/* THE BACKING. A standee has to stand up, and that foot does not come off the
+   sheet — it is built here, per piece, out of offcut board and time. June set
+   the finished single at $225, and working back from that at the x2 floor the
+   backing is $24 a piece: $88.10 of cutout plus $24 is $112.10, which doubles
+   to $224.20 and rounds up to $225.
+   It is per PIECE, not per order — every standee needs its own foot — so it
+   does not dilute the way the freight does. */
+const STANDEE_BACKING = 24.00;
+
+/* EVENING OUT THE PRICE. A ladder built straight from cost lands on figures
+   like $224.20 and $151.00, which read as arithmetic rather than as a price.
+   Round UP, never down — down would break the x2 floor — and by a step that
+   suits the size of the number. */
+function evenUp(price) {
+  const step = price < 5 ? 0.05 : price < 50 ? 1 : 5;
+  return Math.ceil(price / step - 1e-9) * step;
+}
+
 const PAPER_SHEET = 2.00;
 const PAPER_PER_SHEET = {
   '3.5x2': 72, '3.5x2.5': 56, '5x3': 30, '6x4': 21, '9x4': 14, '7x5': 12,
@@ -294,7 +312,27 @@ function fullBodyCutoutCost(qty, { sides = 'single', minutes = STANDEE_MINUTES, 
   /* Compare like with like on 4mm; the 10mm is reported separately because it
      is a better board, not a cheaper one. */
   const best = options.filter((o) => o.mm === 4).reduce((a, b) => (a.cost <= b.cost ? a : b));
-  return { ...best, each: best.cost / qty, premium10mm: { cost: s365_10, each: s365_10 / qty } };
+  /* The backing is per piece and applies whichever route the board came from. */
+  const backing = STANDEE_BACKING * qty;
+  const cost = best.cost + backing;
+  return {
+    ...best, cost, each: cost / qty,
+    premium10mm: { cost: s365_10 + backing, each: (s365_10 + backing) / qty },
+  };
+}
+
+/** The published full body cutout ladder: band CEILINGS -> price each.
+ *  Each band is priced at the WORST cost inside it, evened up, so the ladder
+ *  never rises and never falls under the x2 floor. */
+function standeeLadder(bands = [1, 2, 5, 10, 25, 1000], opts = {}) {
+  const out = {};
+  let worst = 0;
+  for (let i = bands.length - 1; i >= 0; i--) {
+    const lo = i === 0 ? 1 : bands[i - 1] + 1;   // cheapest band member is the dearest per piece
+    worst = Math.max(worst, fullBodyCutoutCost(lo, opts).each);
+    out[bands[i]] = evenUp(retail(worst));
+  }
+  return out;
 }
 
 /** Supplier cost of one acrylic panel at WxH inches. */
@@ -374,7 +412,8 @@ module.exports = {
   ONE_WAY_WINDOW, ADHESIVE, GF_VINYL, billableSqft, FREIGHT, freightFor, freightIsBuiltIn,
   MAGNET_SQIN, MAGNET_FIXED, PAPER_SHEET, PAPER_PER_SHEET, ACRYLIC_SQIN, CANVAS,
   AMAZON_CORO_BLANK, yardSignCost, isFullBoard, boardFreight,
-  BLANK_BOARD, STANDEE_PRINT_SQFT, STANDEE_MINUTES, fullBodyCutoutCost,
+  BLANK_BOARD, STANDEE_PRINT_SQFT, STANDEE_MINUTES, STANDEE_BACKING,
+  fullBodyCutoutCost, standeeLadder, evenUp,
   perSheet, coroCost, bannerCost, posterCost, windowCost, adhesiveCost,
   magnetCost, paperCost, acrylicCost, canvasCost, retail,
 };

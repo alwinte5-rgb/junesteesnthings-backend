@@ -37,8 +37,9 @@ const money = (n) => n.toFixed(2);
 
 /* A flat method: one price at every quantity. Correct wherever the supplier's
    own unit is the thing being sold (a sheet, a fixed-size magnet, a stand),
-   because there is no waste to recover and no volume break to pass on. */
-const flat = (price) => ({ 1000: money(price) });
+   because there is no waste to recover and no volume break to pass on.
+   Evened up, so the shelf reads $45 rather than $44.20. */
+const flat = (price) => ({ 1000: money(sg.evenUp(price)) });
 
 /* A per-piece ladder from a cost function, keyed on band CEILINGS. Each band is
    priced at the WORST cost inside it, so the ladder never rises as the order
@@ -49,7 +50,7 @@ function ladder(costOf, bands) {
   for (let i = bands.length - 1; i >= 0; i--) {
     const q = bands[i];
     worst = Math.max(worst, costOf(q) / q);
-    out[q] = money(sg.retail(worst));
+    out[q] = money(sg.evenUp(sg.retail(worst)));
   }
   return out;
 }
@@ -61,13 +62,13 @@ const add = (title, bands, description, minQty = 1) =>
   METHODS.push({ title, bands, description, min: minQty });
 
 /* ── Full body cutouts ──────────────────────────────────────────────────── */
-/* One standee per full 48x96 board, per June. Flat: a board is a board. */
-add('Full Body Cutout — 10mm coro, single-sided', flat(sg.retail(sg.CORO[10].single)),
-  'A life-size cutout on one full 48x96 inch sheet of 10mm corrugated plastic, printed and contour cut. Rigid enough to stand on its own.');
-add('Full Body Cutout — 10mm coro, double-sided', flat(sg.retail(sg.CORO[10].double)),
-  'A life-size cutout on 10mm corrugated plastic, printed both sides so it reads from either direction.');
-add('Full Body Cutout — 4mm coro, single-sided', flat(sg.retail(sg.CORO[4].single)),
-  'A lighter life-size cutout on 4mm corrugated plastic. Cheaper than the 10mm and better suited indoors.');
+/* NOT flat, unlike everything else here. A standee carries freight that is
+   charged once an ORDER, so one costs far more per piece than ten — and the
+   backing is per piece on top. The ladder is the envelope over both. */
+add('Full Body Cutout — single-sided', sg.standeeLadder(),
+  'A life-size cutout on rigid corrugated plastic, printed, contour cut and built onto a backing so it stands on its own. Send a full-length photo.');
+add('Full Body Cutout — double-sided', sg.standeeLadder(undefined, { sides: 'double' }),
+  'A life-size cutout printed both sides so it reads from either direction, built onto a backing so it stands on its own.');
 
 /* ── Banners ────────────────────────────────────────────────────────────── */
 for (const [w, h] of [[24, 48], [36, 72], [48, 96], [36, 120]]) {
