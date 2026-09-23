@@ -189,6 +189,46 @@ const STANDEE_MINUTES = 40;
    does not dilute the way the freight does. */
 const STANDEE_BACKING = 24.00;
 
+/* LABOUR. Nothing arrives finished.
+ *
+ * Every signage price in this file was supplier cost x2 and nothing else,
+ * which quietly assumed the shop does no work — it unpacks a box and hands it
+ * over. It does not: there is checking, trimming, folding, bagging, and on the
+ * adhesive work an application. cutouts.js has carried $35/hr from the start
+ * and this file should have too.
+ *
+ * Two kinds of time, because they scale differently:
+ *   job    once a line, whatever the quantity — pull the file, check the
+ *          proof, receive the delivery, hand it over
+ *   piece  every unit — inspect, trim, fold, bag
+ *
+ * ALL OF THESE ARE ESTIMATES. Nobody has timed them. They are the same
+ * admission cutouts.js makes about MINUTES_PER_HEAD, and the same instruction
+ * applies: time a real job and correct the table. The prices move with it. */
+const SHOP_RATE = 35;
+const LABOUR = {
+  banner:   { job: 10, piece: 5 },   // unfold, check hems and grommets, refold, bag
+  rigid:    { job: 10, piece: 3 },   // coro, acrylic, canvas, poster — inspect and wrap
+  adhesive: { job: 15, piece: 0 },   // sold by the foot; the time is in the file and the handover
+  magnet:   { job: 10, piece: 2 },
+  paper:    { job: 15, piece: 0 },   // a box of cards is one handling job, not 500
+  stand:    { job: 15, piece: 5 },   // assemble and test the mechanism
+};
+
+/** Shop time on a line of `qty` `kind`, in dollars. */
+function labourCost(kind, qty = 1) {
+  const l = LABOUR[kind];
+  if (!l) throw new Error('no labour defined for ' + kind);
+  return (SHOP_RATE * (l.job + l.piece * qty)) / 60;
+}
+
+/* Paper carries a higher multiple than everything else, and deliberately.
+ * A $2 sheet yields 72 business cards, so cost x2 prices 500 cards at $46 —
+ * under Vistaprint, which is not where a local shop with design included
+ * should sit. June asked for a little under market; market here is $35 at
+ * Vistaprint and $80-100 at Moo, with local shops higher again. */
+const PAPER_MARKUP = 2.5;
+
 /* EVENING OUT THE PRICE. A ladder built straight from cost lands on figures
    like $224.20 and $151.00, which read as arithmetic rather than as a price.
    Round UP, never down — down would break the x2 floor — and by a step that
@@ -414,6 +454,7 @@ module.exports = {
   AMAZON_CORO_BLANK, yardSignCost, isFullBoard, boardFreight,
   BLANK_BOARD, STANDEE_PRINT_SQFT, STANDEE_MINUTES, STANDEE_BACKING,
   fullBodyCutoutCost, standeeLadder, evenUp,
+  SHOP_RATE, LABOUR, labourCost, PAPER_MARKUP,
   perSheet, coroCost, bannerCost, posterCost, windowCost, adhesiveCost,
   magnetCost, paperCost, acrylicCost, canvasCost, retail,
 };

@@ -41,16 +41,21 @@ const money = (n) => n.toFixed(2);
    Evened up, so the shelf reads $45 rather than $44.20. */
 const flat = (price) => ({ 1000: money(sg.evenUp(price)) });
 
+/* A one-piece line: supplier cost + the shop time on it, then x2, then evened.
+   Every product here goes through this rather than flat(retail(cost)) — the
+   old path priced the shop's work at zero. */
+const priced = (cost, kind) => flat(sg.retail(cost + sg.labourCost(kind, 1)));
+
 /* A per-piece ladder from a cost function, keyed on band CEILINGS. Each band is
    priced at the WORST cost inside it, so the ladder never rises as the order
    grows — add-cutouts.js refuses to write a rising ladder and so does this. */
-function ladder(costOf, bands) {
+function ladder(costOf, bands, markup = sg.MARKUP) {
   const out = {};
   let worst = 0;
   for (let i = bands.length - 1; i >= 0; i--) {
     const q = bands[i];
     worst = Math.max(worst, costOf(q) / q);
-    out[q] = money(sg.evenUp(sg.retail(worst)));
+    out[q] = money(sg.evenUp(worst * markup));
   }
   return out;
 }
@@ -67,62 +72,65 @@ const add = (title, bands, description, minQty = 1) =>
    backing is per piece on top. The ladder is the envelope over both. */
 add('Full Body Cutout — single-sided', sg.standeeLadder(),
   'A life-size cutout on rigid corrugated plastic, printed, contour cut and built onto a backing so it stands on its own. Send a full-length photo.');
-add('Full Body Cutout — double-sided', sg.standeeLadder(undefined, { sides: 'double' }),
-  'A life-size cutout printed both sides so it reads from either direction, built onto a backing so it stands on its own.');
+/* No double-sided standee. June's call: the second side more than doubles the
+   supplier cost ($4.25/sqft against $1.25) and a standee is looked at from the
+   front. It was priced at $300 for one, which is not a thing anyone buys. */
 
 /* ── Banners ────────────────────────────────────────────────────────────── */
 for (const [w, h] of [[24, 48], [36, 72], [48, 96], [36, 120]]) {
   const label = `${w / 12}ft x ${h / 12}ft`;
-  add(`Vinyl Banner — ${label}, 13oz`, flat(sg.retail(sg.bannerCost(w, h, { oz: 13 }))),
+  add(`Vinyl Banner — ${label}, 13oz single-sided`, priced(sg.bannerCost(w, h, { oz: 13 }), 'banner'),
     `A ${label} vinyl banner, hemmed with welded edges and grommets included. Indoor or outdoor.`);
 }
-add('Vinyl Banner — 3ft x 6ft, 18oz double-sided',
-  flat(sg.retail(sg.bannerCost(36, 72, { oz: 18, sides: 'double' }))),
+add('Vinyl Banner — 3ft x 6ft, 18oz DOUBLE-SIDED',
+  priced(sg.bannerCost(36, 72, { oz: 18, sides: 'double' }), 'banner'),
   'A 3ft x 6ft banner printed both sides on heavy 18oz vinyl, for hanging where it is seen from both directions.');
 
 /* ── Banner stand ───────────────────────────────────────────────────────── */
 {
   const st = sg.PER_ITEM.econo_banner_stand_plus;
-  add(`Retractable Banner Stand — ${st.w}in x ${st.h}in`, flat(sg.retail(st.price)),
+  add(`Retractable Banner Stand — ${st.w}in x ${st.h}in`, priced(st.price, 'stand'),
     'A retractable banner and its stand together. Pulls up out of the base and rolls away into it.');
 }
 
 /* ── Posters ────────────────────────────────────────────────────────────── */
 for (const [w, h] of [[18, 24], [24, 36]]) {
-  add(`Poster — ${w}in x ${h}in`, flat(sg.retail(sg.posterCost(w, h))),
+  add(`Poster — ${w}in x ${h}in, single-sided`, priced(sg.posterCost(w, h), 'rigid'),
     `A ${w} x ${h} inch poster on 16pt poster paper.`);
 }
 
 /* ── Adhesive graphics ──────────────────────────────────────────────────── */
+const PER_SQFT_LINE = 20;   // a nominal line size, to spread the job time over
+const perSqft = (rate) => flat(sg.retail(rate + sg.labourCost('adhesive', 1) / PER_SQFT_LINE));
 add('Window Graphic — one-way vinyl, per sqft',
-  flat(sg.retail(sg.ONE_WAY_WINDOW.no_laminate)),
+  perSqft(sg.ONE_WAY_WINDOW.no_laminate),
   'Perforated window vinyl: the graphic reads from outside while you still see out. Priced per square foot — enter the square footage as the quantity.');
 add('Window Graphic — one-way vinyl, gloss laminated, per sqft',
-  flat(sg.retail(sg.ONE_WAY_WINDOW.laminate)),
+  perSqft(sg.ONE_WAY_WINDOW.laminate),
   'Perforated window vinyl with a gloss laminate for longer life. Priced per square foot.');
 add('Wall Graphic — removable fabric, per sqft',
-  flat(sg.retail(sg.ADHESIVE.low_tac_wall)),
+  perSqft(sg.ADHESIVE.low_tac_wall),
   'Removable adhesive fabric for interior walls. Repositionable and comes off cleanly. INDOOR ONLY. Priced per square foot.');
 add('Vehicle Graphic — 3M ControlTac, per sqft',
-  flat(sg.retail(sg.ADHESIVE.controltac_3m)),
+  perSqft(sg.ADHESIVE.controltac_3m),
   'Premium 3M vehicle-grade adhesive vinyl, gloss laminated. Priced per square foot.');
 
 /* ── Magnets ────────────────────────────────────────────────────────────── */
 for (const key of Object.keys(sg.MAGNET_FIXED)) {
   const [w, h] = key.split('x').map(Number);
-  add(`Vehicle Magnet — ${w}in x ${h}in`, flat(sg.retail(sg.magnetCost(w, h))),
+  add(`Vehicle Magnet — ${w}in x ${h}in, single-sided`, priced(sg.magnetCost(w, h), 'magnet'),
     `A ${w} x ${h} inch vehicle magnet. Lifts off for the car wash and goes back on.`);
 }
 
 /* ── Acrylic ────────────────────────────────────────────────────────────── */
 for (const [w, h] of [[12, 18], [18, 24], [24, 36]]) {
-  add(`Acrylic Panel — ${w}in x ${h}in`, flat(sg.retail(sg.acrylicCost(w, h))),
+  add(`Acrylic Panel — ${w}in x ${h}in, single-sided`, priced(sg.acrylicCost(w, h), 'rigid'),
     `A ${w} x ${h} inch panel on 3/16 inch acrylic, printed on the back with a white underbase so the colour reads through the gloss. Indoor.`);
 }
 
 /* ── Canvas ─────────────────────────────────────────────────────────────── */
 for (const [w, h] of [[16, 20], [24, 36]]) {
-  add(`Canvas Print — ${w}in x ${h}in`, flat(sg.retail(sg.canvasCost(w, h))),
+  add(`Canvas Print — ${w}in x ${h}in, single-sided`, priced(sg.canvasCost(w, h), 'rigid'),
     `A ${w} x ${h} inch print on 11oz poly-cotton canvas with a gesso finish. Ready to stretch or frame. Indoor.`);
 }
 
@@ -130,11 +138,11 @@ for (const [w, h] of [[16, 20], [24, 36]]) {
 /* Paper is the one product here with a real ladder: a sheet yields 72 business
    cards, so the per-piece cost falls hard across the first few hundred. */
 for (const [size, label, desc] of [
-  ['3.5x2', 'Business Cards', 'Standard 3.5 x 2 inch business cards on 16pt stock with a gloss coating.'],
-  ['6x4', 'Flyers — 6in x 4in', 'A 6 x 4 inch flyer or postcard on 16pt stock.'],
-  ['11x8.5', 'Flyers — 11in x 8.5in', 'A full-page 11 x 8.5 inch flyer on 16pt stock.'],
+  ['3.5x2', 'Business Cards — single or double-sided', 'Standard 3.5 x 2 inch business cards on 16pt stock with a gloss coating. Printing the back costs nothing extra.'],
+  ['6x4', 'Flyers — 6in x 4in, single or double-sided', 'A 6 x 4 inch flyer or postcard on 16pt stock.'],
+  ['11x8.5', 'Flyers — 11in x 8.5in, single or double-sided', 'A full-page 11 x 8.5 inch flyer on 16pt stock.'],
 ]) {
-  add(label, ladder((q) => sg.paperCost(q, size), PAPER_BANDS), desc, 25);
+  add(label, ladder((q) => sg.paperCost(q, size) + sg.labourCost('paper', q), PAPER_BANDS, sg.PAPER_MARKUP), desc, 25);
 }
 
 /* ── Report ─────────────────────────────────────────────────────────────── */

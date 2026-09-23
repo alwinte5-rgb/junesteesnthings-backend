@@ -272,3 +272,25 @@ test('the backing is per piece, so it never dilutes with quantity', () => {
   assert.ok(one - fifty < 100, 'the backing should stop the curve collapsing');
   assert.ok(fifty > s.STANDEE_BACKING, 'even at volume a standee costs more than its backing');
 });
+
+test('every signage line carries shop time, not just supplier cost', () => {
+  /* The gap this closes: every price in this file was supplier cost x2 and
+     nothing else, which priced the shop's own work at zero. */
+  assert.ok(s.labourCost('banner', 1) > 0);
+  assert.ok(s.labourCost('rigid', 1) > 0);
+  assert.ok(s.labourCost('paper', 500) > 0);
+  /* Job time is once a line; piece time scales. A box of cards is one handling
+     job, so 500 cards must not cost 500 handlings. */
+  assert.equal(s.labourCost('paper', 1), s.labourCost('paper', 500));
+  assert.ok(s.labourCost('banner', 10) > s.labourCost('banner', 1));
+});
+
+test('an unknown labour kind throws rather than costing nothing', () => {
+  /* A missing rate reading as free is the recurring failure here. */
+  assert.throws(() => s.labourCost('nope', 1), /no labour defined/);
+});
+
+test('paper carries a higher multiple than the rest', () => {
+  assert.ok(s.PAPER_MARKUP > s.MARKUP,
+    'cost x2 puts 500 business cards under Vistaprint, which is the wrong shelf');
+});
