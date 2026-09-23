@@ -243,6 +243,19 @@ const PAPER_MARKUP = 2.5;
  * Threshold is the sheet yield: 9 or more to a sheet is a small piece where
  * handling dominates, fewer is a large one where the paper does. */
 const PAPER_MARKUP_LARGE = 2.0;
+
+/* BANNERS CARRY x3, June's call 2026-09-23.
+ *
+ * The research said a local sign shop's standard is $8/sqft and the US average
+ * is $5. At x2 a 3x6 was $70, which is $3.89/sqft — under the average and half
+ * the local rate, with 50% margin. There was room and this takes it.
+ *
+ * WATCH THE SMALL ONES. The $12.50 of handling is the same on a 2x4 as on a
+ * 4x8, so on a small banner it is a big share of the cost and x3 multiplies it
+ * too: a 2x4 lands at $70, which is $8.75/sqft — over the $8 local standard
+ * even though the big sizes stay well under it. Small banners are where this
+ * markup stops being generous and starts being dear. */
+const BANNER_MARKUP = 3.0;
 const PAPER_YIELD_SMALL = 9;
 
 /** The multiple to use for a paper size, by how many come off one sheet. */
@@ -475,6 +488,7 @@ module.exports = {
   BLANK_BOARD, STANDEE_PRINT_SQFT, STANDEE_MINUTES, STANDEE_BACKING,
   fullBodyCutoutCost, standeeLadder, evenUp,
   SHOP_RATE, LABOUR, labourCost, PAPER_MARKUP, PAPER_MARKUP_LARGE, paperMarkupFor,
+  BANNER_MARKUP,
   perSheet, coroCost, bannerCost, posterCost, windowCost, adhesiveCost,
   magnetCost, paperCost, acrylicCost, canvasCost, retail,
 };

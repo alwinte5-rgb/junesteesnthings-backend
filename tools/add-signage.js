@@ -44,7 +44,8 @@ const flat = (price) => ({ 1000: money(sg.evenUp(price)) });
 /* A one-piece line: supplier cost + the shop time on it, then x2, then evened.
    Every product here goes through this rather than flat(retail(cost)) — the
    old path priced the shop's work at zero. */
-const priced = (cost, kind) => flat(sg.retail(cost + sg.labourCost(kind, 1)));
+const priced = (cost, kind, markup = sg.MARKUP) =>
+  flat((cost + sg.labourCost(kind, 1)) * markup);
 
 /* A per-piece ladder from a cost function, keyed on band CEILINGS. Each band is
    priced at the WORST cost inside it, so the ladder never rises as the order
@@ -79,11 +80,11 @@ add('Full Body Cutout — single-sided', sg.standeeLadder(),
 /* ── Banners ────────────────────────────────────────────────────────────── */
 for (const [w, h] of [[24, 48], [36, 72], [48, 96], [36, 120]]) {
   const label = `${w / 12}ft x ${h / 12}ft`;
-  add(`Vinyl Banner — ${label}, 13oz single-sided`, priced(sg.bannerCost(w, h, { oz: 13 }), 'banner'),
+  add(`Vinyl Banner — ${label}, 13oz single-sided`, priced(sg.bannerCost(w, h, { oz: 13 }), 'banner', sg.BANNER_MARKUP),
     `A ${label} vinyl banner, hemmed with welded edges and grommets included. Indoor or outdoor.`);
 }
 add('Vinyl Banner — 3ft x 6ft, 18oz DOUBLE-SIDED',
-  priced(sg.bannerCost(36, 72, { oz: 18, sides: 'double' }), 'banner'),
+  priced(sg.bannerCost(36, 72, { oz: 18, sides: 'double' }), 'banner', sg.BANNER_MARKUP),
   'A 3ft x 6ft banner printed both sides on heavy 18oz vinyl, for hanging where it is seen from both directions.');
 
 /* ── Banner stand ───────────────────────────────────────────────────────── */
