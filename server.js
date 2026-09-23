@@ -7383,6 +7383,39 @@ function orderedSizeKeys(item, catalog) {
  * advertises, so they are not a disclosure; the cost basis behind them is, and
  * it is not here.
  */
+/** What decoration a line carries, in plain words, for the customer's page.
+ *
+ * The quote used to show a garment name, a quantity and a price, and nothing
+ * about the printing — so a $18.97 tee read as an expensive blank rather than
+ * a shirt with a full-colour front and a screen-printed back on it. The work
+ * was the largest part of the price and the only part the page did not name.
+ *
+ * Placement is said the way the shop says it, from the same stage value that
+ * priced it, so the words and the money come from one source. A method with
+ * two positions ('both') really is two print locations; one with a single
+ * table is still two passes, which is why the wording does not distinguish.
+ */
+function decorationSummary(item, catalog) {
+  const meths = (catalog && catalog.methods) || [];
+  const find = (id) => (id ? meths.find((m) => String(m.id) === String(id)) : null);
+  const where = (stage) => {
+    if (stage === 'both') return 'front and back';
+    if (stage && stage !== 'front') return 'back';
+    return 'front';
+  };
+  const one = (m, stage, colours) => {
+    if (!m) return null;
+    const bits = [String(m.title || '').trim(), where(stage)];
+    const c = parseInt(colours, 10);
+    /* Only for a method whose price actually turns on the colour count —
+       saying "1 colour" about DTF would be meaningless and slightly wrong. */
+    if (m.type === 'color' && c > 0) bits.push(c === 1 ? '1 colour' : c + ' colours');
+    return bits.join(' — ');
+  };
+  return [one(find(item.method_id), item.stage, item.colours),
+          one(find(item.method2_id), item.stage2, item.colours2)].filter(Boolean);
+}
+
 function customerLinePricing(items, catalog) {
   const prods = (catalog && catalog.products) || [];
   const meths = (catalog && catalog.methods) || [];
@@ -7553,6 +7586,12 @@ app.get('/q/:code', async (req, res) => {
                     background:${/^#[0-9a-fA-F]{6}$/.test(String(i.colour_hex || '')) ? i.colour_hex : 'transparent'}"></span>
               <span>${escEmail(i.colour)}</span>
             </div>` : ''}
+          ${(() => {
+            const deco = decorationSummary(i, catalog);
+            if (!deco.length) return '';
+            return `<div style="margin-top:5px;font-size:13px;color:#24457f">${
+              deco.map((d) => '<div>&#9656; ' + escEmail(d) + '</div>').join('')}</div>`;
+          })()}
           ${i.details ? `<div class="muted" style="font-size:13px;margin-top:3px">${escEmail(i.details)}</div>` : ''}
           ${(Array.isArray(i.files) ? i.files : []).filter((f) => f.kind !== 'image').map((f) =>
             `<div style="font-size:12.5px;margin-top:3px">&#128206;
@@ -7636,6 +7675,11 @@ app.get('/q/:code', async (req, res) => {
             ${balanceDue > 0 ? `<tr><td colspan="3" class="num" style="color:#1848B8;font-weight:700">Balance due</td>
                 <td class="num" style="color:#1848B8;font-weight:700">${money(balanceDue)}</td></tr>` : ''}`}
         </tbody></table>
+
+        <p class="muted" style="margin-top:12px;font-size:12.5px">The price each covers the garment
+          and all the printing listed on that line. Anything charged once for the job — screens,
+          setup, design — is its own row above, so nothing is folded into the shirt price without
+          being named.</p>
 
         ${q.notes ? `<p class="muted" style="margin-top:12px">${escEmail(q.notes)}</p>` : ''}
 
@@ -13141,12 +13185,24 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
           AND q.total > 0 AND q.paid_amount >= q.total - 0.005
         ORDER BY q.paid_at DESC NULLS LAST, q.id DESC LIMIT 300`);
 
-    const smsFor = (n) => {
+    /* ONE wording for the review ask, wherever it is shown. It used to exist
+       only on the text-only list, so the customers June was most likely to
+       chase — the ones with an email, sitting in the backfill list — had a tick
+       box and no message to send. Asking the same question two different ways
+       depending on which list someone landed in is how a shop's voice drifts. */
+    const askFor = (n) => {
       const f = String(n || '').trim().split(/\s+/)[0];
       return `Hi${f ? ' ' + f : ''}, it's June's Tees — thanks again for your order! `
         + `If you were happy with it, would you mind leaving a quick Google review? `
         + `It genuinely helps a small shop like ours. ${GOOGLE_REVIEW_URL}`;
     };
+
+    /* A copyable block. readonly so it cannot be edited into something that
+       was never sent, and select-on-click because the whole point is getting
+       it onto the clipboard in one motion. */
+    const copyBox = (name) => `<textarea readonly rows="3" onclick="this.select()"
+        style="width:100%;margin-top:6px;font-size:13px;padding:8px;border:1px solid #e2e8f4;border-radius:8px"
+      >${escEmail(askFor(name))}</textarea>`;
 
     const byText = !texters.length ? '' : `
       <div class="card">
@@ -13161,9 +13217,7 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
               <a href="sms:${escEmail(String(q.phone).replace(/[^0-9+]/g, ''))}">${escEmail(q.phone)}</a>
               <span class="muted">&middot; ${escEmail(q.code)} &middot; ${money(q.total)}</span>
             </div>
-            <textarea readonly rows="3" onclick="this.select()"
-              style="width:100%;margin-top:6px;font-size:13px;padding:8px;border:1px solid #e2e8f4;border-radius:8px"
-            >${escEmail(smsFor(q.name))}</textarea>
+            ${copyBox(q.name)}
           </div>`).join('')}
       </div>`;
 
@@ -13181,7 +13235,9 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
            <b>The status is shown rather than assumed</b> — a job can be settled in cash and
            still read as deposit-only here, and only you know which. Ticking queues the ask on
            the next hourly sweep; nothing sends from this page.
-           A row with no email cannot be ticked — use the text list below.</p>
+           A row with no email cannot be ticked — use the text list below.
+           <b>Every row carries the message</b>: click it to select, and send it yourself by
+           text or email if you would rather not wait for the sweep.</p>
         <form method="POST" action="/admin/reviews/backfill">
           ${never.map(q => `
             <label style="display:flex;gap:10px;align-items:center;padding:8px 0;border-top:1px solid #eef1f8;margin:0;cursor:${q.email ? 'pointer' : 'default'};opacity:${q.email ? '1' : '.65'}">
@@ -13200,7 +13256,12 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
                   escEmail(String(q.phone).replace(/[^0-9+]/g, ''))}"
                   onclick="event.stopPropagation()">${escEmail(q.phone)}</a>` : ''}</span>
               <span class="muted" style="white-space:nowrap">${money(q.total)}</span>
-            </label>`).join('')}
+            </label>
+            <div style="padding:0 0 10px">
+              ${q.phone ? `<a class="muted" style="font-size:12px" href="sms:${
+                escEmail(String(q.phone).replace(/[^0-9+]/g, ''))}">text ${escEmail(q.phone)}</a>` : ''}
+              ${copyBox(q.name)}
+            </div>`).join('')}
           <button style="margin-top:12px;padding:10px 22px">Queue selected</button>
         </form>
       </div>`;
