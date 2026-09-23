@@ -202,7 +202,10 @@ test('a line with no second decoration still sends method2 as null', () => {
  *   setup — the same artwork across several garment colours — so a run of
  *   three was paying for three sets of the same screens.
  */
-const SCREENS_ADDON = { code: 'screens', label: 'Screens', kind: 'per_screen', rate: 25 };
+/* runShared mirrors the shipped ADDONS table: screens belong to the press
+   setup, not to the line. Without it here the fixture would not be the thing
+   the engine actually receives. */
+const SCREENS_ADDON = { code: 'screens', label: 'Screens', kind: 'per_screen', rate: 25, runShared: true };
 const SCREEN4 = Object.assign({}, SCREEN, {
   positions: { front: [{ min_qty: 99, price: 3.85, colors: { '1-color': 3.85, '2-color': 4.8, '4-color': 6.8 } }] },
 });
@@ -263,4 +266,73 @@ test('run pooling reaches BOTH decorations', () => {
      $3.45, at 30 it clamps to the 99 band at $3.85. */
   assert.ok(Math.abs(pooled.unit - alone.unit) > 0.35,
     'only one of the two decorations responded to the run');
+});
+
+/* ── Charges that belong to the JOB, not the line ─────────────────────────
+ *
+ * Screens are burned once for a press setup and artwork is drawn once. Lines
+ * pooled into one run are one setup and one drawing, so a run of three garment
+ * colours must not pay for three sets of either. Marked `runShared` on the
+ * ADDONS table rather than branched on in the pricing code — a branch per
+ * add-on inside priceLine is how the digitizing bug happened.
+ */
+const RUN_SHARED = [
+  { code: 'screens', label: 'Screens', kind: 'per_screen', rate: 25, runShared: true },
+  { code: 'design_setup', label: 'Design — setup', kind: 'once', rate: 30, runShared: true },
+];
+const PER_PIECE = { code: 'unbagging', label: 'Unbagging', kind: 'per_piece', rate: 0.5 };
+
+test('a run pays for its screens and its design once between them', () => {
+  const priceLine = engine();
+  const L = (rp) => priceLine(line({
+    qty: 40, bandQty: 120, method: SCREEN, colours: '1',
+    addons: RUN_SHARED.concat([PER_PIECE]), runPrimary: rp,
+  }));
+  const codes = (r) => r.addonLines.map((a) => a.code).sort();
+
+  assert.deepStrictEqual(codes(L(true)), ['design_setup', 'screens', 'unbagging']);
+  assert.deepStrictEqual(codes(L(false)), ['unbagging'], 'a run member repeated a job-level charge');
+
+  /* Three lines of 40: $25 screens + $30 design + 120 x $0.50 unbagging. */
+  const total = [true, false, false].reduce((s, rp) => s + L(rp).addonTotal, 0);
+  assert.equal(Math.round(total * 100) / 100, 115.00);
+});
+
+test('a per-piece add-on is charged on every line of a run', () => {
+  const priceLine = engine();
+  const L = (rp) => priceLine(line({ qty: 40, bandQty: 120, method: SCREEN, colours: '1',
+    addons: [PER_PIECE], runPrimary: rp }));
+  /* Unbagging is real work on every shirt, so pooling must not discount it. */
+  assert.equal(L(true).addonTotal, 20);
+  assert.equal(L(false).addonTotal, 20);
+});
+
+test('a line outside a run pays its own shared charges', () => {
+  const priceLine = engine();
+  const alone = priceLine(line({ qty: 40, method: SCREEN, colours: '1', addons: RUN_SHARED }));
+  assert.equal(alone.addonTotal, 55, 'a standalone line must carry its own screens and design');
+});
+
+test('every job-level charge is flagged, and nothing per-piece is', () => {
+  /* Read from the shipped table, so adding an add-on to it and forgetting the
+     flag shows up here rather than on a customer's quote. */
+  const tbl = src.slice(src.indexOf('const ADDONS = ['), src.indexOf('\n];', src.indexOf('const ADDONS = [')));
+  const flagged = [...tbl.matchAll(/code: '([a-z_]+)'[\s\S]{0,260}?runShared: true/g)].map((m) => m[1]).sort();
+  assert.deepStrictEqual(flagged,
+    ['design_commission', 'design_revision', 'design_setup', 'design_tweak', 'screens'],
+    'the set of job-level charges changed — confirm it is deliberate');
+
+  /* Nothing priced per piece or per colour may be run-shared: that would hand
+     back real per-garment work for free. */
+  for (const m of tbl.matchAll(/kind: '(per_piece|per_piece_per_colour)'[\s\S]{0,200}?runShared: true/g)) {
+    assert.fail('a per-piece add-on is marked runShared: ' + m[0].slice(0, 60));
+  }
+});
+
+test('the browser is told which charges are run-shared', () => {
+  /* The flag has to reach calc(), or the preview and the saved quote disagree
+     about what a run costs — which is the whole class of bug the shared
+     pricing string exists to prevent. */
+  const proj = src.slice(src.indexOf('var ADDONS = ${JSON.stringify(ADDONS.map('), src.indexOf('})))};'));
+  assert.match(proj, /runShared/, 'runShared never reaches the browser');
 });

@@ -4140,6 +4140,14 @@ function digitizingOptions(catalog) {
  * reads it the same way.
  *
  *   once                  flat, per design, whatever the quantity
+ *
+ * `runShared` marks a charge that belongs to the JOB rather than the line:
+ * screens are burned once for a press setup, and artwork is drawn once. Lines
+ * pooled into the same run are one setup and one drawing, so a run of three
+ * garment colours must not pay for three sets of screens or three designs.
+ * The first line of a run carries them; the rest carry none. A line in no run
+ * is unaffected. Declared here rather than branched on in the pricing code,
+ * for the same reason `kind` is.
  *   per_order             flat, per job
  *   per_piece             x quantity
  *   per_piece_per_colour  x quantity x colours
@@ -4179,7 +4187,7 @@ const ADDONS = [
      any shape reaches. If screen-heavy work becomes common, raise this before
      touching the print table. */
   { code: 'screens', label: 'Screens', appliesTo: SCREEN_METHOD_RE,
-    kind: 'per_screen', rate: SCREEN_FEE_RATE, auto: 'method',
+    kind: 'per_screen', rate: SCREEN_FEE_RATE, auto: 'method', runShared: true,
     note: 'A screen is burned once and then runs the whole job, so it is billed once — not per shirt. (Colours + 1 on a dark garment) x locations, at $25 each.' },
   { code: 'specialty_ink', label: 'Specialty ink (metallic, glitter, waterbase, discharge)',
     appliesTo: SCREEN_METHOD_RE, kind: 'per_piece', rate: 1.50 },
@@ -4210,16 +4218,16 @@ const ADDONS = [
    * the hour — a flat top tier is the lowest hourly rate in the list on the
    * hardest work, which is backwards. */
   { code: 'design_tweak', label: 'Design — tweak', appliesTo: ANY_METHOD_RE,
-    kind: 'once', rate: 10,
+    kind: 'once', rate: 10, runShared: true,
     note: 'A small change to print-ready artwork: resize, recolour, swap a name, centre it, or convert the file. No revision rounds — it is one edit.' },
   { code: 'design_setup', label: 'Design — setup', appliesTo: ANY_METHOD_RE,
-    kind: 'once', rate: 30,
+    kind: 'once', rate: 30, runShared: true,
     note: 'Usable artwork that needs work before it can print: background removal, redrawing a low-resolution logo, laying out a name and number list, or building a simple text design from a description. Includes one round of revisions.' },
   { code: 'design_commission', label: 'Design — commission', appliesTo: ANY_METHOD_RE,
-    kind: 'once', rate: 60,
+    kind: 'once', rate: 60, runShared: true,
     note: 'Original artwork from a brief. Covers up to two hours and two rounds of revisions; further time is billed at $35/hour, agreed with you before it is spent.' },
   { code: 'design_revision', label: 'Design — extra revision round', appliesTo: ANY_METHOD_RE,
-    kind: 'once', rate: 25,
+    kind: 'once', rate: 25, runShared: true,
     note: 'One round of changes beyond those included above. Add it once per additional round.' },
 
   /* Cutout freight. `once`, and that is the whole point of it being here rather
@@ -4726,8 +4734,9 @@ function quotePricingSource() {
         var addonLines = [], addonTotal = 0;
         for (var k = 0; k < (o.addons || []).length; k++) {
           var a = o.addons[k];
-          /* A run's screens ride on its primary line only. */
-          if (a.kind === 'per_screen' && !runPrimary) continue;
+          /* A run's shared charges ride on its primary line only — the screens
+             it burns and the artwork it is drawn from. */
+          if (a.runShared && !runPrimary) continue;
           var amt = Math.round(addonAmount(a, qty, colours, decorationSubtotal, screens) * 100) / 100;
           if (!amt) continue;
           /* \`count\` rides along so a surface can print "4 x $35" without
@@ -5828,6 +5837,7 @@ ${quotePricingSource()}
       var ADDONS = ${JSON.stringify(ADDONS.map((a) => ({
         code: a.code, label: a.label, kind: a.kind, rate: a.rate,
         auto: a.auto || null, note: a.note || null, appliesTo: a.appliesTo.source,
+        runShared: a.runShared || false,
       })))};
       var SCREEN_FEES_LIVE = ${SCREEN_FEES_LIVE ? 'true' : 'false'};
 
