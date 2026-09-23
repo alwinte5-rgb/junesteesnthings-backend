@@ -78,3 +78,29 @@ test('a piece too big for a coro sheet is refused, not priced', () => {
   assert.equal(s.perSheet(60, 120), 0);
   assert.equal(s.coroCost(1, 60, 120, { mm: 4 }), null);
 });
+
+/* Freight, confirmed by June 2026-09-22. An earlier draft of the model read
+ * the "PRICING AND SHIPPING" column heading as meaning freight was included
+ * and added nothing — it is not included, and that would have sold every
+ * signage job $10 to $199 under cost. */
+test('freight is charged once an order, at the confirmed rates', () => {
+  assert.equal(s.freightFor({}), 10.00);
+  assert.equal(s.freightFor({ oversized: true, substrate: 'coro' }), 75.00);
+  assert.equal(s.freightFor({ oversized: true, substrate: 'foam' }), 199.00);
+  /* Default substrate is coro, so an unqualified oversized order never
+     silently takes the cheaper standard rate. */
+  assert.equal(s.freightFor({ oversized: true }), 75.00);
+});
+
+test('the oversized-coro rate has no home in server.js yet', () => {
+  /* $10, $50 (Saturday) and $199 exist as addons; $75 does not. This test is
+     the reminder — when a cutout_ship_oversize_coro addon is added, assert it
+     here instead of asserting its absence. */
+  const src = require('node:fs').readFileSync(
+    require('node:path').join(__dirname, '..', 'server.js'), 'utf8');
+  const addons = src.slice(src.indexOf('const ADDONS = ['), src.indexOf('\n];', src.indexOf('const ADDONS = [')));
+  assert.ok(/rate: 10\b/.test(addons), 'the $10 standard freight addon should exist');
+  assert.ok(/rate: 199\b/.test(addons), 'the $199 oversized addon should exist');
+  assert.equal(/rate: 75\b/.test(addons), false,
+    'a $75 oversized-coro addon now exists — update this test to assert it, not its absence');
+});

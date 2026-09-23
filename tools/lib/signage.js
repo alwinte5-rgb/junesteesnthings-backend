@@ -6,9 +6,10 @@
  *
  * EVERY NUMBER, AND WHERE IT CAME FROM
  * Read off the Signs365 order screens on 2026-09-22 (portal/#order/18 for the
- * banner, portal/#order/13 for the coro). The column heading on both is
- * "PRICING AND SHIPPING", so FREIGHT IS ALREADY IN THESE NUMBERS — see the
- * SHIPPING note at the bottom, which is the one thing here still to confirm.
+ * banner, portal/#order/13 for the coro). The column heading on both reads
+ * "PRICING AND SHIPPING", which is a LABEL ON THE COLUMN AND NOT A STATEMENT
+ * THAT FREIGHT IS INCLUDED. It is not. June confirmed the rates; they are in
+ * FREIGHT below, and the numbers in this file are all ex-freight.
  *
  *   HD Banner (vinyl scrim), PER SQUARE FOOT
  *     13oz  single  $1.25        grommets and heat-welded edges INCLUDED
@@ -134,22 +135,48 @@ const retail = (cost) => Math.ceil(cost * MARKUP * 20) / 20;
 /** Supplier cost of one poster at WxH inches. */
 const posterCost = (w, h) => billableSqft(w, h) * POSTER;
 
+/* FREIGHT — CHARGED ONCE AN ORDER, NEVER ONCE A PIECE
+ *
+ * Confirmed by June, 2026-09-22. Signs365 does NOT include it in the prices
+ * above; the "PRICING AND SHIPPING" column heading misled an earlier draft of
+ * this file into assuming it did.
+ *
+ *   standard              $10     the ordinary case
+ *   oversized coro        $75     a coro order too big for standard freight
+ *   oversized foam board  $199    the same for foam board
+ *
+ * This vindicates tools/lib/cutouts.js, which already adds $10, and server.js,
+ * which bills cutout_ship. NOTE THE GAP: server.js carries $10, $50 (Saturday
+ * rush) and $199, but has NO $75 oversized-coro addon. Sell an oversized coro
+ * job today and there is no line to put that $75 on.
+ *
+ * WHERE IT GOES, AND WHY IT DEPENDS ON THE PRODUCT
+ * June's rule is that shipping is built into the price. That is honest only
+ * where the unit is big enough to carry a per-order charge without distorting
+ * it, which is exactly the split cutouts.js already documents: $10 against a
+ * $77 sheet is 13% and disappears; $10 on one $24 cutout is 42% and cannot be
+ * buried. So:
+ *
+ *   sheet and board products   freight INSIDE the price (one sheet is big
+ *                              enough to carry it, and on a multi-sheet order
+ *                              the shop is ahead because freight is still
+ *                              charged once)
+ *   small per-foot pieces      freight stays a VISIBLE addon — burying $10 in
+ *                              a $15 banner triples nothing and just makes the
+ *                              quote look wrong
+ *
+ * freightFor() returns the supplier's charge; it is the caller that decides
+ * whether to bury it or bill it, because only the caller knows the order. */
+const FREIGHT = { standard: 10.00, oversized_coro: 75.00, oversized_foam: 199.00 };
+
+/** What Signs365 charges to ship this order, once. */
+function freightFor({ oversized = false, substrate = 'coro' } = {}) {
+  if (!oversized) return FREIGHT.standard;
+  return substrate === 'foam' ? FREIGHT.oversized_foam : FREIGHT.oversized_coro;
+}
+
 module.exports = {
   MARKUP, SHEET_W, SHEET_H, BANNER, CORO, STEP_STAKE, BANNER_EXTRAS, POSTER, PER_ITEM,
-  ONE_WAY_WINDOW, billableSqft,
+  ONE_WAY_WINDOW, billableSqft, FREIGHT, freightFor,
   perSheet, coroCost, bannerCost, posterCost, windowCost, retail,
 };
-
-/* SHIPPING — THE ONE THING NOT SETTLED
- *
- * Both order screens head the price column "PRICING AND SHIPPING", which reads
- * as freight already being inside these numbers. If that is right, nothing is
- * added: "shipping in the price" is satisfied by the supplier, not by us.
- *
- * It also contradicts tools/lib/cutouts.js, which adds SHIPPING_WEEKDAY $10 on
- * top of the foamcore sheet, and server.js, which bills cutout_ship as an addon
- * on singles. Both cannot be right. Until someone confirms it against an
- * invoice this file adds NOTHING for freight, and the cutout model is left
- * exactly as it is — changing live cutout prices on an inference is not worth
- * it, and the two can be reconciled once the invoice is checked.
- */
