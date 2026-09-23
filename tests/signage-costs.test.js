@@ -104,3 +104,26 @@ test('the oversized-coro rate has no home in server.js yet', () => {
   assert.equal(/rate: 75\b/.test(addons), false,
     'a $75 oversized-coro addon now exists — update this test to assert it, not its absence');
 });
+
+test('only the oversized freight is built into the price', () => {
+  /* June's rule: the oversized charges are easy to forget and ruinous to miss,
+     so they are folded in. The $10 stays visible so the quote is honest rather
+     than quietly padded. This is the OPPOSITE of the first draft. */
+  assert.equal(s.freightIsBuiltIn({}), false);
+  assert.equal(s.freightIsBuiltIn({ oversized: false }), false);
+  assert.equal(s.freightIsBuiltIn({ oversized: true }), true);
+});
+
+test('the wall and vehicle adhesives price per billable foot', () => {
+  assert.equal(s.ADHESIVE.low_tac_wall, 3.47);
+  assert.equal(s.ADHESIVE.controltac_3m, 4.99);
+  /* 42x27 is 7.875 actual sqft, 12 billable. */
+  assert.equal(s.adhesiveCost(42, 27, 'low_tac_wall'), 12 * 3.47);
+  assert.equal(s.adhesiveCost(42, 27, 'controltac_3m'), 12 * 4.99);
+});
+
+test('an unknown adhesive is refused, never priced at zero', () => {
+  /* A missing rate reading as free is the failure this repo keeps hitting. */
+  assert.equal(s.adhesiveCost(24, 24, 'nope'), null);
+  assert.equal(s.adhesiveCost(24, 24, undefined), null);
+});

@@ -34,6 +34,12 @@
  *     no laminate   $2.75                  50/50 and 70/30 cost the same
  *     gloss lam     $3.99                  single-sided only, 8 year life
  *
+ *   Low Tac Wall, PER SQUARE FOOT          portal/#order/45
+ *     single        $3.47                  removable fabric, INDOOR ONLY
+ *
+ *   3M ControlTac, PER SQUARE FOOT         portal/#order/41
+ *     single        $4.99                  White IJ-180c, gloss laminated
+ *
  * WHY CORO IS PRICED BY THE SHEET AND BANNER BY THE FOOT
  * That is how the supplier sells them, and the shapes are genuinely different.
  * A banner is cut from a roll, so a 3x6 costs exactly half of a 3x12. A coro
@@ -68,6 +74,13 @@ const POSTER = 2.00;
    portal/#order/43. 50/50 and 70/30 perforation cost the SAME; the only thing
    that moves the price is the laminate. Single-sided only. */
 const ONE_WAY_WINDOW = { laminate: 3.99, no_laminate: 2.75 };
+
+/* Wall and vehicle adhesives, PER SQUARE FOOT, single-sided.
+     Low Tac Wall    $3.47   portal/#order/45 — removable fabric, INDOOR ONLY
+     3M ControlTac   $4.99   portal/#order/41 — White IJ-180c, gloss laminated
+   Low Tac Wall is indoor only; quoting it for a shopfront exterior is a
+   callback, not a saving. */
+const ADHESIVE = { low_tac_wall: 3.47, controltac_3m: 4.99 };
 
 /* HOW SIGNS365 BILLS SQUARE FEET, and it is not the area of the piece.
  *
@@ -127,6 +140,13 @@ function windowCost(w, h, { laminate = false } = {}) {
   return billableSqft(w, h) * ONE_WAY_WINDOW[laminate ? 'laminate' : 'no_laminate'];
 }
 
+/** Supplier cost of one adhesive graphic at WxH inches. `kind` keys ADHESIVE. */
+function adhesiveCost(w, h, kind) {
+  const rate = ADHESIVE[kind];
+  if (!rate) return null;
+  return billableSqft(w, h) * rate;
+}
+
 /* Retail rounds UP to the nearest $0.05 so the x2 floor always holds — the
    same rounding tools/lib/cutouts.js uses on its ladders. Rounding down would
    put a line a cent under cost x2 and quietly break the margin guarantee. */
@@ -150,23 +170,23 @@ const posterCost = (w, h) => billableSqft(w, h) * POSTER;
  * rush) and $199, but has NO $75 oversized-coro addon. Sell an oversized coro
  * job today and there is no line to put that $75 on.
  *
- * WHERE IT GOES, AND WHY IT DEPENDS ON THE PRODUCT
- * June's rule is that shipping is built into the price. That is honest only
- * where the unit is big enough to carry a per-order charge without distorting
- * it, which is exactly the split cutouts.js already documents: $10 against a
- * $77 sheet is 13% and disappears; $10 on one $24 cutout is 42% and cannot be
- * buried. So:
+ * WHERE IT GOES — June's rule, 2026-09-22
  *
- *   sheet and board products   freight INSIDE the price (one sheet is big
- *                              enough to carry it, and on a multi-sheet order
- *                              the shop is ahead because freight is still
- *                              charged once)
- *   small per-foot pieces      freight stays a VISIBLE addon — burying $10 in
- *                              a $15 banner triples nothing and just makes the
- *                              quote look wrong
+ *   OVERSIZED ONLY is built into the price: $75 coro, $199 foam board.
+ *   The $10 standard rate stays a SEPARATE, VISIBLE line.
  *
- * freightFor() returns the supplier's charge; it is the caller that decides
- * whether to bury it or bill it, because only the caller knows the order. */
+ * Her reasoning, and it is the right way round: the oversized charges are the
+ * ones that are easy to forget and ruinous to miss — forget $199 on a foam job
+ * and the margin is gone — so they are folded in where they cannot be
+ * forgotten. The $10 is small, it is the ordinary case, and showing it keeps
+ * the quote honest rather than quietly padding every line by ten dollars.
+ *
+ * Note this is the OPPOSITE of what a naive reading of "shipping in the price"
+ * gives you, and the opposite of an earlier draft of this file, which buried
+ * the $10 and surfaced the rest.
+ *
+ * freightFor() returns the supplier's charge. freightIsBuiltIn() answers
+ * whether it belongs inside the price or on its own line. */
 const FREIGHT = { standard: 10.00, oversized_coro: 75.00, oversized_foam: 199.00 };
 
 /** What Signs365 charges to ship this order, once. */
@@ -175,8 +195,12 @@ function freightFor({ oversized = false, substrate = 'coro' } = {}) {
   return substrate === 'foam' ? FREIGHT.oversized_foam : FREIGHT.oversized_coro;
 }
 
+/** True when this order's freight belongs INSIDE the price rather than on its
+ *  own line. Only the oversized rates are buried; the $10 stays visible. */
+const freightIsBuiltIn = ({ oversized = false } = {}) => Boolean(oversized);
+
 module.exports = {
   MARKUP, SHEET_W, SHEET_H, BANNER, CORO, STEP_STAKE, BANNER_EXTRAS, POSTER, PER_ITEM,
-  ONE_WAY_WINDOW, billableSqft, FREIGHT, freightFor,
-  perSheet, coroCost, bannerCost, posterCost, windowCost, retail,
+  ONE_WAY_WINDOW, ADHESIVE, billableSqft, FREIGHT, freightFor, freightIsBuiltIn,
+  perSheet, coroCost, bannerCost, posterCost, windowCost, adhesiveCost, retail,
 };
