@@ -18,12 +18,11 @@
  *
  * WHAT IS DELIBERATELY NOT HERE
  *
- * Saturday rush ($50) and large-format freight ($199) are internal: they are
- * exceptions June chooses per job, they live as addons in server.js, and a
- * customer-facing sheet quoting them invites an argument about a charge that
- * usually does not apply. Weekday delivery is not listed either — it is
- * already inside the pack price (tools/lib/cutouts.js, SHIPPING_WEEKDAY), and
- * singles carry it as a visible line on the quote instead.
+ * Delivery, at any of its three rates. All of it is charged once an ORDER and
+ * none of it is inside a price, so a per-size sheet is the wrong place to
+ * quote it: this page cannot know how many cutout lines the eventual order
+ * has. It is one line on the quote instead, named "Cutout delivery to our
+ * shop" so nobody reads it as a delivery to them.
  */
 const fs = require('fs');
 const path = require('path');
@@ -99,9 +98,11 @@ const priceAt = (m, qty) => {
 
 /* ── Drawings ─────────────────────────────────────────────────────────────── */
 
-/* A head is about 0.85 as wide as it is tall — the same ratio tools/lib/cutouts.js
-   nests by, so the silhouettes below are in true proportion to each other. */
-const RATIO = 0.85;
+/* A head is 0.9398 as wide as it is tall, measured off three Signs365 order
+   screens — the same HEAD_RATIO tools/lib/cutouts.js prices by, so the
+   silhouettes are in true proportion both to each other and to the real
+   thing. It was 0.85 here, which drew them narrower than they are. */
+const RATIO = 0.9398;
 const headPath = (w, h) => {
   const x = (p) => (p / 100) * w, y = (p) => (p / 117.6) * h;
   return `M${x(50)},${y(2)} C${x(74)},${y(2)} ${x(92)},${y(20)} ${x(95)},${y(44)} ` +
@@ -299,8 +300,14 @@ let top = chrome.slice(0, heroAt);
 const bottom = chrome.slice(footAt);
 
 const TITLE = 'Big Head Cutout Prices Chicago | June’s Tees & Things';
-const DESC = `Big head cutout prices in Chicago — ${SIZES.join(', ')} inch, by the single or by the full sheet. ` +
-  `Packs from ${money(Math.min(...packs.map((p) => p.bands[0].price)))}. Send a photo, we print and contour cut it. Call (773) 849-1854.`;
+/* Says what is actually sold. It promised "by the single or by the full
+   sheet" unconditionally, which became untrue the moment the singles were
+   retired — this page is generated from the live rows precisely so it cannot
+   drift, and a hardcoded sentence about them defeated that. */
+const DESC = `Big head cutout prices in Chicago — ${SIZES.join(', ')} inch` +
+  (singles.length ? ', by the single or by the full sheet' : ', sold by the full sheet') +
+  `. Packs from ${money(Math.min(...packs.map((p) => p.bands[0].price)))}. ` +
+  `Send a photo, we print and contour cut it. Call (773) 849-1854.`;
 const CANON = 'https://www.jtees.net/services/big-head-cutouts.html';
 
 /* Swap the template's own SEO for this page's. Each of these is asserted to
@@ -340,7 +347,7 @@ const BODY = `<section class="hero">
     <div class="hero-eyebrow">Big Head Cutouts &mdash; Chicago</div>
     <h1>Send us a face.<br />We&rsquo;ll make it <em>enormous</em>.</h1>
     <p>Printed and cut around the outline on rigid ${'3/16'}&Prime; board, in ${SIZES.map((s) => s + '&Prime;').join(', ')}.
-       Buy one at a time, or a full sheet &mdash; a sheet works out from ${cheapestEach.size}&Prime; at ${each(cheapestEach)} a head.
+       ${singles.length ? 'Buy one at a time, or a full sheet' : 'Sold by the full sheet'} &mdash; a sheet works out from ${cheapestEach.size}&Prime; at ${each(cheapestEach)} a head.
        Every price on this page is what we charge; nothing is added at the end.</p>
     <div class="hero-btns">
       <a href="sms:+17738491854?&amp;body=Hi%20June%27s%20Tees!%20I%27d%20like%20big%20head%20cutouts." class="btn btn-gold">Text a photo &rarr;</a>
@@ -392,17 +399,16 @@ const BODY = `<section class="hero">
   </div>
 </section>
 
-<section>
+${!singles.length ? '' : `<section>
   <div class="container">
     <div class="section-tag">By the single</div>
     <h2>Just need a few?</h2>
     <p class="lead">The ${bothWays.map((s) => s + '&Prime;').join(' and ')} are also sold one at a time, for orders
-       too small to want a whole sheet. The more you order, the less each one costs.
-       Delivery is added to your quote on single cutouts.</p>
+       too small to want a whole sheet. The more you order, the less each one costs.</p>
     <div class="ladders">${singleTables}
     </div>
   </div>
-</section>
+</section>`}
 
 <section class="alt">
   <div class="container">
