@@ -31,7 +31,13 @@ const BOARD = 3.00;               // one 20x30 board per head
 const SHEET = 77.00;              // 48x96 foamcore, contour cut included
 const SHOP_RATE = 50;             // $/hour
 const MINUTES_PER_HEAD = 10;      // mount vinyl to board, hand-cut the head
-const MINUTES_HANDLING = 1;       // a sheet arrives contour cut; just unpack it
+/* Per head, on a PACK. The sheet arrives contour cut, so none of the cutting
+   is ours — but the sticks still have to be glued on, and one minute a head is
+   almost certainly short for that. It is the number the pack price is most
+   sensitive to: a 32-pack at 3 minutes is 96 minutes of shop time, $80 against
+   the $26.67 assumed here, and the 12in pack goes $208 -> $314.
+   UNTIMED. Time one and correct it; everything above moves with it. */
+const MINUTES_HANDLING = 1;
 const MARKUP = 2.0;               // the shop's x2, as tools/lib/markup.js holds it
 const SHIPPING_WEEKDAY = 10.00;   // Signs365 weekday freight, charged once an ORDER
 

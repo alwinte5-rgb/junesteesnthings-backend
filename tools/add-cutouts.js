@@ -168,11 +168,20 @@ const METHODS = [
   /* Singles, for runs too short to want a sheet. Only the two sizes that fit a
      20x30 board; 24" and 36" are pack-only because there is no other way to
      make them. */
+  /* RETIRED 2026-09-23, June's call, and the arithmetic agrees with her.
+     A single head is hand work: mount the vinyl to a board, cut it out, glue
+     the stick. At ten minutes that is $8.33 of the $13.82 it costs — sixty per
+     cent — and she says ten minutes is optimistic. Build a Head will deliver
+     an 18x12 for $19.99 with a stick in it, which is under what the labour
+     alone comes to here.
+     The sheet route has none of that: the cutouts arrive contour cut, so the
+     pack beats the same specialist at volume. Sell the thing the shop is
+     actually good at. */
   { title: 'Big Head Cutout — 12in, singles', bands: SINGLES[12], min: minimumFor(12),
-    offered: true, unit: 'piece',
+    offered: false, unit: 'piece',
     description: 'A 12 inch tall big head cutout on 3/16 inch board, printed and contour cut. Priced per cutout — a full sheet of 32 works out far cheaper.' },
   { title: 'Big Head Cutout — 18in, singles', bands: SINGLES[18], min: minimumFor(18),
-    offered: true, unit: 'piece',
+    offered: false, unit: 'piece',
     description: 'An 18 inch tall big head cutout on 3/16 inch board, printed and contour cut. Priced per cutout — a full sheet of 10 works out cheaper.' },
 
   /* Replaced by the packs above on 2026-09-22. A 24" or 36" sold by the piece
