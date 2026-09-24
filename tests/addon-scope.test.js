@@ -25,8 +25,13 @@ const flagged = (flag) =>
     .map((m) => m[1]).sort();
 
 test('freight is charged once for the order', () => {
+  /* The ordinary weekday $10 is NOT here: it lives inside the cutout price
+     now (costEach in tools/lib/cutouts.js). It is June's inbound delivery
+     from Signs365, and a line called "shipping" on a customer's quote says we
+     are posting the goods to them. What remains are the two exceptions, which
+     someone picks deliberately for one job. */
   assert.deepStrictEqual(flagged('orderShared'),
-    ['cutout_ship', 'cutout_ship_large', 'cutout_ship_sat'],
+    ['cutout_ship_large', 'cutout_ship_sat'],
     'the set of order-level charges changed — confirm it is deliberate');
 });
 

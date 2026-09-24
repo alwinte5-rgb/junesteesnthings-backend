@@ -40,10 +40,14 @@ const each = (method, qty) => Number(W.priceLine({
   qty, method, stage: 'front', blankTiers: [], product: { price: 0 }, addons: [],
 }).decoration);
 
-/* Exactly as tools/add-cutouts.js writes them. */
+/* Derived, exactly as tools/add-cutouts.js derives them. This used to be a
+   hardcoded copy described as "exactly as add-cutouts writes them", which
+   stopped being true the day the ladder became computed — so the suite was
+   asserting against prices the shop no longer sold. */
+const SINGLE_BANDS = { 12: [6, 12, 32, 1000], 18: [5, 10, 20, 50, 1000] };
 const SINGLES = {
-  12: { 6: '24.00', 12: '18.00', 32: '12.00', 1000: '8.00' },
-  18: { 5: '31.00', 10: '28.00', 20: '25.00', 50: '20.00', 1000: '17.00' },
+  12: CUT.singlesLadder(12, SINGLE_BANDS[12]),
+  18: CUT.singlesLadder(18, SINGLE_BANDS[18]),
 };
 const S12 = ladder(SINGLES[12]);
 const S18 = ladder(SINGLES[18]);
@@ -65,7 +69,10 @@ test('the production cost of a pack does not move with the order size', () => {
     const production = CUT.packCost(t) - CUT.SHIPPING_WEEKDAY;
     for (const packs of [2, 3, 10, 40]) {
       const n = CUT.packSizeFor(t) * packs;
-      assert.ok(Math.abs(CUT.costEach(t, n) * n - production * packs) < 1e-6,
+      /* costEach carries the order's freight now, once, so take it back off
+         before comparing production against production. */
+      const made = CUT.costEach(t, n) * n - CUT.SHIPPING_WEEKDAY;
+      assert.ok(Math.abs(made - production * packs) < 1e-6,
         t + 'in: ' + packs + ' packs is not ' + packs + 'x one sheet');
     }
   }
@@ -109,14 +116,19 @@ test('a pack always beats the same heads bought as singles', () => {
 /* ── Singles ───────────────────────────────────────────────────────────── */
 
 test('singles price at every published band', () => {
-  const want = {
-    12: { 1: 24, 6: 24, 7: 18, 12: 18, 13: 12, 32: 12, 33: 8 },
-    18: { 1: 31, 5: 31, 6: 28, 10: 28, 11: 25, 20: 25, 21: 20, 50: 20, 51: 17 },
-  };
-  for (const [t, cases] of Object.entries(want)) {
+  /* Against the DERIVED ladder rather than a copy of last month's numbers.
+     What matters is that every quantity inside a band pays that band's rate
+     and the first quantity past its ceiling pays the next one — the prices
+     themselves move whenever the cost model does, and pinning them here only
+     ever meant updating two places. */
+  for (const [t, bands] of Object.entries(SINGLE_BANDS)) {
     const L = t === '12' ? S12 : S18;
-    for (const [q, p] of Object.entries(cases)) {
-      assert.strictEqual(each(L, Number(q)), p, t + 'in at ' + q);
+    let lo = 1;
+    for (const ceil of bands) {
+      const rate = parseFloat(SINGLES[t][ceil]);
+      assert.strictEqual(each(L, lo), rate, t + 'in at ' + lo + ' (band start)');
+      assert.strictEqual(each(L, ceil), rate, t + 'in at ' + ceil + ' (band ceiling)');
+      lo = ceil + 1;
     }
   }
 });
@@ -124,10 +136,12 @@ test('singles price at every published band', () => {
 test('a ceiling applies UP TO its quantity, not from it', () => {
   /* The floor/ceiling trap. 6 pays the <=6 rate; 7 has fallen into the next
      band. Read as floors, every band would sit one step out. */
-  assert.strictEqual(each(S12, 6), 24);
-  assert.strictEqual(each(S12, 7), 18);
-  assert.strictEqual(each(S18, 5), 31);
-  assert.strictEqual(each(S18, 6), 28);
+  assert.strictEqual(each(S12, 6), parseFloat(SINGLES[12][6]));
+  assert.strictEqual(each(S12, 7), parseFloat(SINGLES[12][12]));
+  assert.ok(each(S12, 7) < each(S12, 6), '7 must have fallen into a cheaper band than 6');
+  assert.strictEqual(each(S18, 5), parseFloat(SINGLES[18][5]));
+  assert.strictEqual(each(S18, 6), parseFloat(SINGLES[18][10]));
+  assert.ok(each(S18, 6) < each(S18, 5), '6 must have fallen into a cheaper band than 5');
 });
 
 test('no singles ladder ever rises as the order grows', () => {
@@ -184,32 +198,45 @@ test('labour is in the price, and one number controls it', () => {
   assert.strictEqual(CUT.SHOP_RATE, require('../tools/lib/signage').SHOP_RATE,
     'cutouts and signage are charging different shop rates');
   assert.ok(CUT.MINUTES_PER_HEAD > 0, 'labour has been zeroed out');
-  const bare = CUT.sqftOf(12) * CUT.VINYL_SQFT * CUT.LAMINATE_AND_CUT + CUT.BOARD;
-  assert.ok(Math.abs(CUT.costEach(12, 1) - (bare + CUT.labour(CUT.MINUTES_PER_HEAD))) < 1e-9,
-    'a single in-house head is not carrying exactly one head of labour');
+  /* sqftOf is BILLABLE square feet now — each dimension rounded up to the
+     next whole foot, which is how Signs365 charges — and the laminate is
+     included in the $2.49 rather than surcharged. One head of labour, and the
+     order's freight, which at n=1 is all of it. */
+  const bare = CUT.sqftOf(12) * CUT.VINYL_SQFT + CUT.BOARD;
+  assert.ok(Math.abs(CUT.costEach(12, 1) -
+      (bare + CUT.labour(CUT.MINUTES_PER_HEAD) + CUT.SHIPPING_WEEKDAY)) < 1e-9,
+    'a single in-house head is not carrying exactly one head of labour plus freight');
 });
 
-test('shipping is an addon billed once, never inside a price', () => {
-  /* Signs365 charges freight once an ORDER. Folded into six methods it would be
-     billed once per METHOD, so a job with 12" singles and a 24" pack would pay
-     it twice. */
-  const ship = src.match(/code: 'cutout_ship'[\s\S]*?\},/);
-  assert.ok(ship, 'the weekday cutout shipping addon is gone');
-  assert.match(ship[0], /kind: 'once'/, 'cutout shipping must not scale with quantity');
-  assert.match(ship[0], /rate: 10\b/, 'the weekday rate moved');
+test('weekday freight is inside the price, and the exceptions are not', () => {
+  /* REVERSED on 2026-09-23, June's call. The old rule kept weekday freight out
+     of the singles price because "$10 on a $24 cutout is 42%" — but $24 was
+     wrong: the print alone is $9.96 at 18in and a single head really costs
+     over $30. At the true price $10 is a fifth of it, and shown on a quote the
+     word "shipping" tells a customer we are posting the goods to them, which
+     we are not.
+     So the weekday rate is amortised inside costEach, and the two exceptions
+     stay as add-ons because they are a decision someone makes for one job. */
+  assert.equal(/code: 'cutout_ship'[^_]/.test(src), false,
+    'the weekday freight addon is back — it would be charged twice, once here and once in the price');
   for (const code of ['cutout_ship_sat', 'cutout_ship_large']) {
     assert.ok(src.includes("code: '" + code + "'"), code + ' is missing');
   }
-  /* Weekday freight IS inside the pack price on purpose — a pack carries $10
-     comfortably and it is one less thing to remember on a quote. It must never
-     reach the per-piece singles cost, where $10 on a $24 cutout is 42% and
-     belongs on the quote where the customer can see it. */
+  /* The pack has always carried it. */
   assert.ok(Math.abs(CUT.packCost(24) - (CUT.SHEET + 8 * CUT.labour(CUT.MINUTES_HANDLING) + CUT.SHIPPING_WEEKDAY)) < 1e-9,
     'the pack price has stopped carrying delivery');
-  const bare12 = CUT.sqftOf(12) * CUT.VINYL_SQFT * CUT.LAMINATE_AND_CUT + CUT.BOARD
-    + CUT.labour(CUT.MINUTES_PER_HEAD);
-  assert.ok(Math.abs(CUT.costEach(12, 1) - bare12) < 1e-9,
-    'delivery has leaked into the singles cost, where it would be charged twice');
+
+  /* And the singles cost carries it now too, which is the reversal: one head
+     is the material, the board, ten minutes, and the whole $10. */
+  const bare12 = CUT.sqftOf(12) * CUT.VINYL_SQFT + CUT.BOARD + CUT.labour(CUT.MINUTES_PER_HEAD);
+  assert.ok(Math.abs(CUT.costEach(12, 1) - (bare12 + CUT.SHIPPING_WEEKDAY)) < 1e-9,
+    'the singles cost is not carrying delivery');
+
+  /* One head carries the whole $10; two carry $5 each. The in-house cost per
+     head is identical either way, so the gap between them IS the amortisation. */
+  const gap = CUT.costEach(12, 1) - CUT.costEach(12, 2);
+  assert.ok(Math.abs(gap - CUT.SHIPPING_WEEKDAY / 2) < 1e-9,
+    'freight is not being amortised across the run: gap was ' + gap.toFixed(4));
 });
 
 test('the singles ladder is derived, so it cannot drift from its own costs', () => {

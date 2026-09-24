@@ -33,6 +33,7 @@ const SHOP_RATE = 50;             // $/hour
 const MINUTES_PER_HEAD = 10;      // mount vinyl to board, hand-cut the head
 const MINUTES_HANDLING = 1;       // a sheet arrives contour cut; just unpack it
 const MARKUP = 2.0;               // the shop's x2, as tools/lib/markup.js holds it
+const SHIPPING_WEEKDAY = 10.00;   // Signs365 weekday freight, charged once an ORDER
 
 /* How many nest on one 48x96 sheet, by bounding box: a head is about 0.85 as
    wide as it is tall, plus an inch for kerf and bleed. Real head artwork can
@@ -42,8 +43,35 @@ const PER_SHEET = { 12: 32, 18: 10, 24: 8, 36: 3 };
 /* A 24" head is 22" across and does not fit a 20x30 board at all, so 24" and
    36" have no in-house route at any quantity. That is the whole reason they
    carry a minimum. */
-const boxOf = (t) => ({ w: Math.ceil(t * 0.85) + 1, h: t });
-const sqftOf = (t) => { const b = boxOf(t); return (b.w * b.h) / 144; };
+/* THE PRINT, MEASURED RATHER THAN GUESSED.
+ *
+ * Three Signs365 order screens, same artwork at three sizes, 2026-09-23. The
+ * nominal size IS the print height and the width is 0.9398 of it:
+ *
+ *     12in   11.277 x 12        1 billable sqft    $2.49
+ *     18in   16.889 x 17.972    4 billable sqft    $9.96
+ *     36in   33.831 x 36        9 billable sqft   $22.41
+ *
+ * The old figure was 0.85 of the height plus an inch of kerf — narrower than
+ * the real print at every size. */
+const HEAD_RATIO = 0.9398;
+const boxOf = (t) => ({ w: t * HEAD_RATIO, h: t });
+
+/* AND SIGNS365 BILLS EACH DIMENSION ROUNDED UP TO THE NEXT WHOLE FOOT, not the
+ * area of the piece. An 18in head is 2.11 sqft of vinyl and is charged for 4.
+ * All three screens confirm it to the cent. It is the same rule
+ * tools/lib/signage.js already applies; this file never got it, and reading
+ * true area understated an 18in head by $3.61 — most of the reason two of them
+ * sold at a loss. */
+const billableSqft = (w, h) => Math.ceil(w / 12) * Math.ceil(h / 12);
+const sqftOf = (t) => { const b = boxOf(t); return billableSqft(b.w, b.h); };
+
+/* Gloss laminate is INCLUDED at $2.49/sqft: the screens show it selected and
+ * the price is exactly billable x $2.49. The old +20% came from a 3M IJ-35C
+ * cart line priced on true area — a different material under a different
+ * rule — and does not apply to this one. */
+const printCost = (t) => sqftOf(t) * VINYL_SQFT;
+
 const fitsBoard = (t) => { const b = boxOf(t); return b.w <= 20 && b.h <= 30; };
 
 const labour = (mins) => (SHOP_RATE * mins) / 60;
@@ -52,9 +80,14 @@ const labour = (mins) => (SHOP_RATE * mins) / 60;
 function costEach(size, n) {
   const sheet = SHEET * Math.ceil(n / PER_SHEET[size]) + n * labour(MINUTES_HANDLING);
   const inHouse = fitsBoard(size)
-    ? n * (sqftOf(size) * VINYL_SQFT * LAMINATE_AND_CUT + BOARD + labour(MINUTES_PER_HEAD))
+    ? n * (printCost(size) + BOARD + labour(MINUTES_PER_HEAD))
     : Infinity;
-  return Math.min(sheet, inHouse) / n;
+  /* Freight is IN the cost now, amortised across the run rather than shown to
+     the customer as a line. It is June's inbound delivery from Signs365 — a
+     cost of making the thing — and on a quote the word "shipping" reads as a
+     delivery TO the customer, which it is not. Once an order, so the whole $10
+     at one piece and a dollar at ten, exactly as packCost already treats it. */
+  return (Math.min(sheet, inHouse) + SHIPPING_WEEKDAY) / n;
 }
 
 /* Raw cost per piece is a SAWTOOTH, because sheets are bought whole: ten 18"
@@ -155,8 +188,6 @@ const packSizeFor = (size) => PER_SHEET[size];
  * the quote. Saturday rush ($50) and large-format freight ($199) stay addons
  * for both, because they are exceptions a person should be choosing on purpose.
  */
-const SHIPPING_WEEKDAY = 10.00;
-
 /** What one pack costs the shop, delivery included. Flat in the sheet, and the
  *  freight is charged once an order however many packs are on it. */
 const packCost = (size) => SHEET + PER_SHEET[size] * labour(MINUTES_HANDLING) + SHIPPING_WEEKDAY;

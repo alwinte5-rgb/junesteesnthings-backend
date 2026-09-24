@@ -4244,9 +4244,15 @@ const ADDONS = [
      two lines would otherwise be billed it twice. The ladders are deliberately
      shipping-free for this reason — see tools/add-cutouts.js.
      Exactly one of these belongs on a job. */
-  { code: 'cutout_ship', label: 'Cutout shipping — weekday', appliesTo: CUTOUT_METHOD_RE,
-    kind: 'once', rate: 10, orderShared: true,
-    note: 'Overnight delivery of the printed cutouts from our supplier, on a weekday. Charged once for the order however many sizes are on it.' },
+  /* The weekday $10 is GONE from this list on purpose. It is inside the cutout
+     price now — see costEach() in tools/lib/cutouts.js, which amortises it
+     across the run the way packCost() always did.
+     Two reasons. It is June's inbound delivery from Signs365, so a line
+     reading "shipping" on a customer's quote says we are posting the goods to
+     them, which we are not. And left here alongside a price that already
+     contains it, it would be charged twice by anyone who ticked it.
+     The two exceptions below stay: they are not the ordinary case, they are a
+     decision someone makes on purpose for one job. */
   { code: 'cutout_ship_sat', label: 'Cutout shipping — Saturday rush', appliesTo: CUTOUT_METHOD_RE,
     kind: 'once', rate: 50, orderShared: true,
     note: 'Saturday delivery of the printed cutouts. Charged once for the order. Use instead of the weekday rate, not as well as it.' },
