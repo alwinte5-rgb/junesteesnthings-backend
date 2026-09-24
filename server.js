@@ -14415,10 +14415,20 @@ async function runSupplierSync() {
   if (!claim.rowCount) return;                    // already succeeded today
   const attempt = claim.rows[0].attempts;
 
+  /* Every shape of the connection, because this service has the discrete five
+     and not the combined URL — asking only for MYSQL_PUBLIC_URL is what made
+     the scheduled run exit before it did anything, every night, while the log
+     recorded the attempt. tools/lib/db.js sorts out which one is there. */
   const vars = JSON.stringify({
     SSA_ACCOUNT: process.env.SSA_ACCOUNT,
     SSA_API_KEY: process.env.SSA_API_KEY,
-    MYSQL_PUBLIC_URL: process.env.MYSQL_PUBLIC_URL || process.env.MYSQL_URL,
+    MYSQL_PUBLIC_URL: process.env.MYSQL_PUBLIC_URL,
+    MYSQL_URL: process.env.MYSQL_URL,
+    MYSQLHOST: process.env.MYSQLHOST,
+    MYSQLPORT: process.env.MYSQLPORT,
+    MYSQLUSER: process.env.MYSQLUSER,
+    MYSQLPASSWORD: process.env.MYSQLPASSWORD,
+    MYSQLDATABASE: process.env.MYSQLDATABASE,
   });
 
   return await new Promise((resolve) => {

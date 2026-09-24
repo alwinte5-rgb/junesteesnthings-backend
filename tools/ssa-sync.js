@@ -31,7 +31,7 @@
    and they had already drifted: the local row parser called .trim() on the whole
    result, which strips leading whitespace from the first column as well as the
    trailing newline. That is the drift lib/db exists to prevent. */
-const { mysql, sq } = require('./lib/db');
+const { mysql, sq, mysqlUrlFrom } = require('./lib/db');
 const { sellPrice } = require('./lib/markup');
 const { CORE_SIZES } = require('./lib/garments');
 
@@ -147,13 +147,41 @@ async function sizeCosts(ssa, styleId) {
      carries the stock levels. */
   const rows = await ssa('products/?styleid=' + styleId);
   if (!Array.isArray(rows) || !rows.length) return null;
-  const bySize = {};
+  /* WHICH PRICE, AND WHOSE.
+   *
+   * piecePrice is S&S's LIST price. customerPrice is what this account
+   * actually pays, and on a Gildan 18600 that is $18.67 against $14.92 — the
+   * shop was marking up from a number it never pays, so every S&S garment in
+   * the catalogue sold at about 2.5x cost while the rule says 2x. A full-zip
+   * hoodie listed at $37.34 that should be $31.62.
+   *
+   * salePrice is deliberately NOT used even when it is lower. A sale ends, and
+   * a price set from one silently loses its margin the day it does.
+   */
+  const pieceCost = (r) => Number(r.customerPrice || r.piecePrice || r.casePrice || 0);
+
+  /* COLOURS ARE NOT ALL THE SAME PRICE, and the cheapest is not the typical
+   * one. On that same hoodie, White is $14.92 and the other FIFTEEN colours
+   * are $15.81 — so pricing the style off its cheapest colour prices 15 of 16
+   * garments off one the customer is not buying.
+   *
+   * The MEDIAN colour is the typical garment. White buyers pay a few cents
+   * over, everyone else is priced off what their own shirt costs, and one
+   * unusually cheap or dear colour cannot drag the whole style.
+   */
+  const median = (xs) => {
+    const a = xs.slice().sort((x, y) => x - y);
+    const m = a.length >> 1;
+    return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+  };
+
+  const perSize = {};
   let homeQty = 0, farQty = 0;
   for (const r of rows) {
     const size = r.sizeName;
-    const cost = Number(r.piecePrice || r.casePrice || 0);
+    const cost = pieceCost(r);
     if (!size || !cost) continue;
-    if (!bySize[size] || cost < bySize[size]) bySize[size] = cost;
+    (perSize[size] = perSize[size] || []).push(cost);
     /* Stock is judged on CORE sizes only: a style with nothing but 4XL in
        Illinois is not locally stocked for any order a customer will place. */
     if (!CORE_SIZES.includes(size)) continue;
@@ -162,6 +190,8 @@ async function sizeCosts(ssa, styleId) {
       else if (!NON_STOCK.includes(w.warehouseAbbr)) farQty += w.qty;
     }
   }
+  const bySize = {};
+  for (const [size, costs] of Object.entries(perSize)) bySize[size] = median(costs);
   if (!Object.keys(bySize).length) return null;
   return { bySize, homeQty, farQty };
 }
@@ -182,7 +212,7 @@ let buf = '';
 process.stdin.on('data', (d) => (buf += d));
 process.stdin.on('end', async () => {
   const env = JSON.parse(buf);
-  const dbUrl = env.MYSQL_PUBLIC_URL || env.MYSQL_URL;
+  const dbUrl = mysqlUrlFrom(env);
   const acct = env.SSA_ACCOUNT, key = env.SSA_API_KEY;
   if (!acct || !key) { console.error('SSA_ACCOUNT / SSA_API_KEY are not set'); process.exit(2); }
   if (!dbUrl) { console.error('no MySQL URL in the piped variables'); process.exit(2); }

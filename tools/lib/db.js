@@ -13,6 +13,31 @@
 const { spawnSync } = require('child_process');
 const fs = require('fs');
 
+/** The MySQL connection URL from whatever shape the environment provides.
+ *
+ *  Railway gives a service EITHER a combined MYSQL_URL / MYSQL_PUBLIC_URL or
+ *  the five discrete MYSQLHOST / MYSQLPORT / MYSQLUSER / MYSQLPASSWORD /
+ *  MYSQLDATABASE variables, depending on how it was linked. junesteesnthings-
+ *  backend has only the discrete five, and the nightly supplier sync asked for
+ *  the combined one — so every scheduled run exited "no MySQL URL in the piped
+ *  variables" before touching anything, while the log table recorded an
+ *  attempt. That is the second time this sync has failed silently for weeks
+ *  (the first was a hardcoded mysql binary path), and both times the symptom
+ *  was a catalogue quietly going stale rather than an error anyone saw.
+ *
+ *  Asking for every shape here means neither the tool nor its scheduler has to
+ *  know which one a given service happens to have. */
+function mysqlUrlFrom(env) {
+  const e = env || process.env;
+  if (e.MYSQL_PUBLIC_URL) return e.MYSQL_PUBLIC_URL;
+  if (e.MYSQL_URL) return e.MYSQL_URL;
+  const { MYSQLHOST, MYSQLPORT, MYSQLUSER, MYSQLPASSWORD, MYSQLDATABASE } = e;
+  if (!MYSQLHOST || !MYSQLUSER || !MYSQLDATABASE) return '';
+  const cred = encodeURIComponent(MYSQLUSER) +
+    (MYSQLPASSWORD ? ':' + encodeURIComponent(MYSQLPASSWORD) : '');
+  return 'mysql://' + cred + '@' + MYSQLHOST + ':' + (MYSQLPORT || 3306) + '/' + MYSQLDATABASE;
+}
+
 /* Where the mysql client actually is.
  *
  * This used to be one hardcoded Homebrew path, and that is the whole reason the
@@ -120,4 +145,5 @@ function decodePrintings(prt) {
 /** Single-quoted SQL literal. */
 const sq = (s) => "'" + String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'";
 
-module.exports = { MYSQL, resolveMysql, urlFromStdinJson, mysql, enjson, dejson, encodePrintings, decodePrintings, sq };
+module.exports = {
+  mysqlUrlFrom, MYSQL, resolveMysql, urlFromStdinJson, mysql, enjson, dejson, encodePrintings, decodePrintings, sq };
