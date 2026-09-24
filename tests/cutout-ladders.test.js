@@ -66,13 +66,10 @@ test('the production cost of a pack does not move with the order size', () => {
      charge to the customer, and it is why this compares the production half
      rather than packCost. */
   for (const t of [12, 18, 24, 36]) {
-    const production = CUT.packCost(t) - CUT.SHIPPING_WEEKDAY;
+    const production = CUT.packCost(t);
     for (const packs of [2, 3, 10, 40]) {
       const n = CUT.packSizeFor(t) * packs;
-      /* costEach carries the order's freight now, once, so take it back off
-         before comparing production against production. */
-      const made = CUT.costEach(t, n) * n - CUT.SHIPPING_WEEKDAY;
-      assert.ok(Math.abs(made - production * packs) < 1e-6,
+      assert.ok(Math.abs(CUT.costEach(t, n) * n - production * packs) < 1e-6,
         t + 'in: ' + packs + ' packs is not ' + packs + 'x one sheet');
     }
   }
@@ -99,7 +96,7 @@ test('a pack is exactly one sheet, so nothing is wasted', () => {
   /* Pinned so a change to the cost model cannot move a PUBLISHED price without
      someone noticing: these four are on jtees.net and in the PDF handout.
      $212/$186/$184/$178 until 2026-09-23, when the shop rate went $35 -> $50. */
-  assert.deepStrictEqual([12, 18, 24, 36].map(CUT.packPrice), [228, 192, 188, 180]);
+  assert.deepStrictEqual([12, 18, 24, 36].map(CUT.packPrice), [208, 172, 168, 160]);
 });
 
 test('a pack always beats the same heads bought as singles', () => {
@@ -203,40 +200,31 @@ test('labour is in the price, and one number controls it', () => {
      included in the $2.49 rather than surcharged. One head of labour, and the
      order's freight, which at n=1 is all of it. */
   const bare = CUT.sqftOf(12) * CUT.VINYL_SQFT + CUT.BOARD;
-  assert.ok(Math.abs(CUT.costEach(12, 1) -
-      (bare + CUT.labour(CUT.MINUTES_PER_HEAD) + CUT.SHIPPING_WEEKDAY)) < 1e-9,
-    'a single in-house head is not carrying exactly one head of labour plus freight');
+  assert.ok(Math.abs(CUT.costEach(12, 1) - (bare + CUT.labour(CUT.MINUTES_PER_HEAD))) < 1e-9,
+    'a single in-house head is not carrying exactly one head of labour');
 });
 
-test('weekday freight is inside the price, and the exceptions are not', () => {
-  /* REVERSED on 2026-09-23, June's call. The old rule kept weekday freight out
-     of the singles price because "$10 on a $24 cutout is 42%" — but $24 was
-     wrong: the print alone is $9.96 at 18in and a single head really costs
-     over $30. At the true price $10 is a fifth of it, and shown on a quote the
-     word "shipping" tells a customer we are posting the goods to them, which
-     we are not.
-     So the weekday rate is amortised inside costEach, and the two exceptions
-     stay as add-ons because they are a decision someone makes for one job. */
-  assert.equal(/code: 'cutout_ship'[^_]/.test(src), false,
-    'the weekday freight addon is back — it would be charged twice, once here and once in the price');
+test('freight is charged exactly once, on the order, and nowhere else', () => {
+  /* Signs365 charges it once an ORDER, so it belongs in no per-unit price at
+     all. It used to sit inside packCost, which meant three packs billed three
+     lots of freight in revenue against one in cost; and it was briefly folded
+     into costEach too, which made a pack-plus-singles order pay it twice. Both
+     are gone. One add-on, orderShared, billed once for the whole quote.
+     What it is NOT is a delivery to the customer, and the label says so. */
+  assert.equal(/SHIPPING_WEEKDAY/.test(String(CUT.costEach)), false,
+    'freight is back inside the per-piece cost');
+  const bareHead = CUT.sqftOf(12) * CUT.VINYL_SQFT + CUT.BOARD + CUT.labour(CUT.MINUTES_PER_HEAD);
+  assert.ok(Math.abs(CUT.costEach(12, 1) - bareHead) < 1e-9, 'the singles cost carries freight');
+  assert.ok(Math.abs(CUT.packCost(24) - (CUT.SHEET + 8 * CUT.labour(CUT.MINUTES_HANDLING))) < 1e-9,
+    'the pack cost carries freight');
+  const ship2 = src.match(/code: 'cutout_ship'[\s\S]*?\},/);
+  assert.ok(ship2, 'the freight addon is gone — nothing charges it at all now');
+  assert.match(ship2[0], /orderShared: true/, 'freight must be billed once an ORDER');
+  assert.equal(/label: '[^']*[Ss]hipping/.test(ship2[0]), false,
+    'the label says "shipping", which reads as a delivery to the customer');
   for (const code of ['cutout_ship_sat', 'cutout_ship_large']) {
     assert.ok(src.includes("code: '" + code + "'"), code + ' is missing');
   }
-  /* The pack has always carried it. */
-  assert.ok(Math.abs(CUT.packCost(24) - (CUT.SHEET + 8 * CUT.labour(CUT.MINUTES_HANDLING) + CUT.SHIPPING_WEEKDAY)) < 1e-9,
-    'the pack price has stopped carrying delivery');
-
-  /* And the singles cost carries it now too, which is the reversal: one head
-     is the material, the board, ten minutes, and the whole $10. */
-  const bare12 = CUT.sqftOf(12) * CUT.VINYL_SQFT + CUT.BOARD + CUT.labour(CUT.MINUTES_PER_HEAD);
-  assert.ok(Math.abs(CUT.costEach(12, 1) - (bare12 + CUT.SHIPPING_WEEKDAY)) < 1e-9,
-    'the singles cost is not carrying delivery');
-
-  /* One head carries the whole $10; two carry $5 each. The in-house cost per
-     head is identical either way, so the gap between them IS the amortisation. */
-  const gap = CUT.costEach(12, 1) - CUT.costEach(12, 2);
-  assert.ok(Math.abs(gap - CUT.SHIPPING_WEEKDAY / 2) < 1e-9,
-    'freight is not being amortised across the run: gap was ' + gap.toFixed(4));
 });
 
 test('the singles ladder is derived, so it cannot drift from its own costs', () => {

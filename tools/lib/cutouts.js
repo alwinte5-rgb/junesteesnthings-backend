@@ -82,12 +82,17 @@ function costEach(size, n) {
   const inHouse = fitsBoard(size)
     ? n * (printCost(size) + BOARD + labour(MINUTES_PER_HEAD))
     : Infinity;
-  /* Freight is IN the cost now, amortised across the run rather than shown to
-     the customer as a line. It is June's inbound delivery from Signs365 — a
-     cost of making the thing — and on a quote the word "shipping" reads as a
-     delivery TO the customer, which it is not. Once an order, so the whole $10
-     at one piece and a dollar at ten, exactly as packCost already treats it. */
-  return (Math.min(sheet, inHouse) + SHIPPING_WEEKDAY) / n;
+  /* FREIGHT IS NOT IN HERE, and an attempt to put it here was reverted on
+     2026-09-23 within the hour. It is charged once an ORDER, and a per-piece
+     cost is per METHOD: with it folded in, a job with a 12in pack and 18in
+     singles billed the customer $20 of freight against the $10 Signs365
+     charges. The note on packCost below has warned about exactly this from the
+     beginning — "split across the ladders: billed once per METHOD, so a job
+     with 12in singles and a 24in pack pays it twice."
+     It lives on the order instead, as the cutout_ship add-on in server.js,
+     which is orderShared and therefore billed once for the whole quote no
+     matter how many cutout lines it has. */
+  return Math.min(sheet, inHouse) / n;
 }
 
 /* Raw cost per piece is a SAWTOOTH, because sheets are bought whole: ten 18"
@@ -188,9 +193,17 @@ const packSizeFor = (size) => PER_SHEET[size];
  * the quote. Saturday rush ($50) and large-format freight ($199) stay addons
  * for both, because they are exceptions a person should be choosing on purpose.
  */
-/** What one pack costs the shop, delivery included. Flat in the sheet, and the
- *  freight is charged once an order however many packs are on it. */
-const packCost = (size) => SHEET + PER_SHEET[size] * labour(MINUTES_HANDLING) + SHIPPING_WEEKDAY;
+/** What one pack costs the shop. Flat in the sheet — no waste, because the
+ *  pack IS the unit the supplier sells.
+ *
+ *  DELIVERY IS NOT IN HERE ANY MORE. It used to be, on the reasoning that a
+ *  pack carries $10 comfortably and it is one less thing to remember. The flaw
+ *  is what happens on a bigger order: three packs carried three lots of
+ *  freight in revenue against one in cost, and the old note called that
+ *  "margin, not a second charge to the customer" — which it plainly is, since
+ *  the customer paid it three times. June's rule is one delivery charge an
+ *  order, so it is one line on the order and nowhere else. */
+const packCost = (size) => SHEET + PER_SHEET[size] * labour(MINUTES_HANDLING);
 
 /** Published pack price, rounded up to an even dollar so 50% always holds. */
 const packPrice = (size) => Math.ceil((packCost(size) * MARKUP) / 2) * 2;

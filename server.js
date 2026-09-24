@@ -4244,15 +4244,17 @@ const ADDONS = [
      two lines would otherwise be billed it twice. The ladders are deliberately
      shipping-free for this reason — see tools/add-cutouts.js.
      Exactly one of these belongs on a job. */
-  /* The weekday $10 is GONE from this list on purpose. It is inside the cutout
-     price now — see costEach() in tools/lib/cutouts.js, which amortises it
-     across the run the way packCost() always did.
-     Two reasons. It is June's inbound delivery from Signs365, so a line
-     reading "shipping" on a customer's quote says we are posting the goods to
-     them, which we are not. And left here alongside a price that already
-     contains it, it would be charged twice by anyone who ticked it.
-     The two exceptions below stay: they are not the ordinary case, they are a
-     decision someone makes on purpose for one job. */
+  /* RENAMED, not removed. June's objection was the word "shipping": on a
+     customer's quote it reads as us posting the goods to them, when it is our
+     own inbound delivery from Signs365. Folding it into the cutout price to
+     hide it was tried and reverted the same hour — a per-piece price is per
+     METHOD, so a job with a pack and some singles then billed the freight
+     twice, which is the failure packCost's note has warned about all along.
+     So it stays an order-level charge, said plainly. orderShared means it is
+     billed once for the whole quote however many cutout lines are on it. */
+  { code: 'cutout_ship', label: 'Cutout delivery to our shop', appliesTo: CUTOUT_METHOD_RE,
+    kind: 'once', rate: 10, orderShared: true,
+    note: 'What our supplier charges to get the printed cutouts to us, so we can mount and finish them. Charged once for your whole order, however many sizes are on it — this is not a delivery to you.' },
   { code: 'cutout_ship_sat', label: 'Cutout shipping — Saturday rush', appliesTo: CUTOUT_METHOD_RE,
     kind: 'once', rate: 50, orderShared: true,
     note: 'Saturday delivery of the printed cutouts. Charged once for the order. Use instead of the weekday rate, not as well as it.' },

@@ -396,9 +396,14 @@ function magnetCost(w, h) {
  *  a sticker — pass the real figure once someone times it. */
 function yardSignCost(qty, { minutes = 0, shopRate = SHOP_RATE } = {}) {
   const sheet = coroCost(qty, 24, 18, { mm: 4, sides: 'single' });
-  /* Our own vinyl, not Signs365's, so no billable-foot rounding — the sqft is
-     the sqft. +20% is the laminate and contour cut, as cutouts.js calibrates it. */
-  const sticker = (24 * 18) / 144 * GF_VINYL * 1.20;
+  /* The sticker is bought from Signs365 like everything else here, so it bills
+     the same way: each dimension rounded up to the next whole foot. A 24x18 is
+     3 sqft of vinyl and is charged for 4.
+     This used to compute true area and add 20% for laminate and cut. Both were
+     wrong — the three order screens that corrected cutouts.js show gloss
+     laminate included at the bare $2.49 — and the two errors nearly cancelled,
+     which is why it looked right: $8.96 against the real $9.96. */
+  const sticker = billableSqft(24, 18) * GF_VINYL;
   const inHouse = qty * (AMAZON_CORO_BLANK + sticker + (shopRate * minutes) / 60);
   return inHouse < sheet
     ? { route: 'in-house', cost: inHouse, each: inHouse / qty }

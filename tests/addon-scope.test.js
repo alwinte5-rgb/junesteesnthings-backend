@@ -31,7 +31,7 @@ test('freight is charged once for the order', () => {
      are posting the goods to them. What remains are the two exceptions, which
      someone picks deliberately for one job. */
   assert.deepStrictEqual(flagged('orderShared'),
-    ['cutout_ship_large', 'cutout_ship_sat'],
+    ['cutout_ship', 'cutout_ship_large', 'cutout_ship_sat'],
     'the set of order-level charges changed — confirm it is deliberate');
 });
 
