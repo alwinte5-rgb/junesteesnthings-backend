@@ -5419,10 +5419,61 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
      `method_id` were being saved correctly the whole time; they were simply
      never read back. Everything downstream then priced from a line with no
      product and no method, which is why the totals collapsed to nothing. */
-  const prodOpts = (sel) => catalog.products.map(p =>
-    `<option value="${escEmail(String(p.id))}"${String(p.id) === String(sel) ? ' selected' : ''}>` +
-    `${escEmail(p.name)} — ${money(p.price)}</option>`
-  ).join('');
+/* The product list is 180-odd rows and was one flat alphabetical run, so
+   finding a hoodie meant scrolling past every cap in the catalogue. Grouped
+   into <optgroup>s by what the thing IS, which the browser renders as headed
+   sections and keyboard search still walks normally.
+
+   Matched on the NAME, in order, first hit wins — so the order below is the
+   rule, not just a display preference. "Long-Sleeve Twill Shirt" has to reach
+   Woven Shirts rather than Long Sleeve, and an infant bodysuit has to reach
+   Youth before anything else claims it. The supplier's own naming is all
+   there is to go on; the catalogue carries no category field. */
+const PRODUCT_GROUPS = [
+  /* No bare "canvas" here, and no bare "sign". Both looked obvious and both
+     were wrong: "canvas" swept in the whole Bella+Canvas range and every
+     canvas tote — thirteen shirts filed under Signs — because a brand name
+     and a material share a word. Match on what only a sign is called. */
+  ['Signs, Print & Décor',    /banner|cutout|poster|magnet|acrylic|business card|flyer|window graphic|wall graphic|yard sign/i],
+  ['Youth, Toddler & Infant', /youth|toddler|infant|bodysuit|onesie/i],
+  ['Scrubs',                  /scrub/i],
+  /* Before Hoodies, because a "Quarter-Zip Pullover" is a quarter-zip and a
+     "Legend Pullover" is a sweatshirt — the zip is what decides, so it has to
+     be asked about first. */
+  ['Quarter-Zips',            /quarter[-\s]?zip|1\/4[-\s]?zip/i],
+  ['Hoodies & Sweatshirts',   /hood|sweatshirt|fleece|crewneck|pullover/i],
+  ['Polos',                   /polo/i],
+  ['Woven Shirts',            /twill|oxford|broadcloth|flannel|work shirt|button[-\s]?down|utility shirt|shoreline|dress shirt/i],
+  ['Tanks',                   /tank/i],
+  ['Long Sleeve',             /long[-\s]?sleeve/i],
+  ['T-Shirts',                /tee\b|t-shirt|tshirt/i],
+  ['Hats & Beanies',          /\bcap\b|\bhat\b|beanie|trucker|visor/i],
+  ['Bags & Totes',            /tote|bags?\b|backpack|sackpack|drawstring/i],
+];
+
+/** Which group a product belongs to. Everything lands somewhere. */
+function productGroupOf(name) {
+  for (const [label, re] of PRODUCT_GROUPS) if (re.test(String(name || ''))) return label;
+  return 'Everything else';
+}
+
+  const prodOpts = (sel) => {
+    const opt = (p) =>
+      `<option value="${escEmail(String(p.id))}"${String(p.id) === String(sel) ? ' selected' : ''}>` +
+      `${escEmail(p.name)} — ${money(p.price)}</option>`;
+
+    const bucket = new Map(PRODUCT_GROUPS.map(([label]) => [label, []]));
+    bucket.set('Everything else', []);
+    for (const p of catalog.products) bucket.get(productGroupOf(p.name)).push(p);
+
+    /* A group with nothing in it is not rendered — an empty heading is worse
+       than no heading. Within a group the catalogue's own order is kept. */
+    return [...bucket.entries()]
+      .filter(([, list]) => list.length)
+      .map(([label, list]) =>
+        `<optgroup label="${escEmail(label)}">${list.map(opt).join('')}</optgroup>`)
+      .join('');
+  };
   /* A decoration can only be offered here if it can be PRICED here: the line
      total is (blank + size upcharge + decoration tier for qty) x qty, so a
      method with no tiers would quote as if decoration were free. The filter is
