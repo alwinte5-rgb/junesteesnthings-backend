@@ -3576,6 +3576,39 @@ app.post('/api/embroidery-quote', orderRateLimit, verifyTurnstile, async (req, r
 
 // ─── Internal APIs for design.jtees.net (shared-secret) ──────────────────────
 
+/** A per-recipient cap for the routes that message someone on the designer's
+ *  behalf. They trust the internal key completely, so if that key ever leaked
+ *  they would be a free way to flood any inbox or phone under the shop's name —
+ *  and every text costs money. The designer already limits what reaches them;
+ *  this is the second wall. Generous, so a real customer never meets it, and a
+ *  hit is reported, because a hit means something is wrong. In-memory: a
+ *  restart forgives, which is fine for a backstop. tests/internal-throttle.test.js */
+function capPerRecipient(route, perHour) {
+  const hits = new Map();
+  setInterval(() => {
+    const cut = Date.now() - 3600e3;
+    for (const [k, v] of hits) {
+      const keep = v.filter((t) => t > cut);
+      if (keep.length) hits.set(k, keep); else hits.delete(k);
+    }
+  }, 15 * 60e3).unref();
+  return (req, res, next) => {
+    const b = req.body || {};
+    const who = String(b.email || b.phone || b.to || '').trim().toLowerCase();
+    if (!who) return next();
+    const cut = Date.now() - 3600e3;
+    const recent = (hits.get(who) || []).filter((t) => t > cut);
+    if (recent.length >= perHour) {
+      reportError('internal-throttle', new Error(`${route}: over ${perHour} an hour to one recipient`))
+        .catch(() => {});
+      return res.status(429).json({ error: 'too many for this recipient' });
+    }
+    recent.push(Date.now());
+    hits.set(who, recent);
+    next();
+  };
+}
+
 function requireInternalKey(req, res, next) {
   const k = process.env.JT_INTERNAL_KEY;
   // hexEqual, not !== : the five PHP endpoints checking this same secret all
@@ -3639,7 +3672,7 @@ function cartSmsAllowed(ip, now = Date.now()) {
   return true;
 }
 
-app.post('/api/sms-cart-code', requireInternalKey, async (req, res) => {
+app.post('/api/sms-cart-code', requireInternalKey, capPerRecipient('sms-cart-code', 3), async (req, res) => {
   const b = req.body || {};
   if (!cartSmsAllowed(b.ip)) {
     console.warn('sms-cart-code: rate limited');
@@ -3665,7 +3698,7 @@ app.post('/api/sms-cart-code', requireInternalKey, async (req, res) => {
    WHEN (it knows the cart and the orders); this decides WHETHER — consent is
    re-checked here, and the dedupe key allows one follow-up per number per
    month however often the cron asks. */
-app.post('/api/sms-cart-followup', requireInternalKey, async (req, res) => {
+app.post('/api/sms-cart-followup', requireInternalKey, capPerRecipient('sms-cart-followup', 2), async (req, res) => {
   const b = req.body || {};
   const phone = normalizeUsPhone(b.phone);
   const code = smsPlain(b.code, 20);
@@ -3688,7 +3721,7 @@ app.get('/sms-terms', (_req, res) => {
 });
 
 // Passwordless login code for customer accounts on the designer site
-app.post('/api/send-login-code', requireInternalKey, async (req, res) => {
+app.post('/api/send-login-code', requireInternalKey, capPerRecipient('send-login-code', 6), async (req, res) => {
   try {
     const email = String(req.body.email || '').trim();
     const code = String(req.body.code || '').replace(/\D/g, '').slice(0, 6);
@@ -3715,7 +3748,7 @@ app.post('/api/send-login-code', requireInternalKey, async (req, res) => {
 
 // Upsert any designer-captured email into the Brevo CRM (exit popup, saved
 // cart, login, order). Fire-and-forget from the designer's jt_crm_contact().
-app.post('/api/crm-contact', requireInternalKey, async (req, res) => {
+app.post('/api/crm-contact', requireInternalKey, capPerRecipient('crm-contact', 30), async (req, res) => {
   try {
     const email = String(req.body.email || '').trim().toLowerCase();
     const source = String(req.body.source || 'designer').slice(0, 40);
@@ -3760,7 +3793,7 @@ app.post('/api/crm-contact', requireInternalKey, async (req, res) => {
 
 // Forward a designer event (cart_updated / order_completed) into Brevo so
 // Brevo Automations can trigger workflows off it. Fired by jt-auth.php.
-app.post('/api/brevo-event', requireInternalKey, async (req, res) => {
+app.post('/api/brevo-event', requireInternalKey, capPerRecipient('brevo-event', 30), async (req, res) => {
   try {
     const email = String(req.body.email || '').trim().toLowerCase();
     const eventName = String(req.body.event || '');
@@ -3825,7 +3858,7 @@ app.get('/api/pricing-rules', requireInternalKey, (_req, res) => {
   });
 });
 
-app.post('/api/abandoned-cart-email', requireInternalKey, async (req, res) => {
+app.post('/api/abandoned-cart-email', requireInternalKey, capPerRecipient('abandoned-cart-email', 5), async (req, res) => {
   try {
     const email = String(req.body.email || '').trim();
     const count = parseInt(req.body.item_count, 10) || 0;
@@ -14274,7 +14307,7 @@ function orderShell({ heading, intro, orderId, items, total, shipping, tax, addr
 }
 
 // Customer receipt
-app.post('/api/order-confirmation', requireInternalKey, async (req, res) => {
+app.post('/api/order-confirmation', requireInternalKey, capPerRecipient('order-confirmation', 10), async (req, res) => {
   try {
     const b = req.body || {};
     const email = String(b.email || '').trim();
@@ -14303,7 +14336,7 @@ app.post('/api/order-confirmation', requireInternalKey, async (req, res) => {
 });
 
 // Shop's own new-order alert
-app.post('/api/order-notification', requireInternalKey, async (req, res) => {
+app.post('/api/order-notification', requireInternalKey, capPerRecipient('order-notification', 20), async (req, res) => {
   try {
     const b = req.body || {};
     const to = String(b.to || SHOP_EMAIL || '').trim();
@@ -14365,7 +14398,7 @@ function balanceEmailInput(b) {
    through here, so it had no Resend fallback and the key lived in two services.
    With Brevo's IP lock off (owner, 2026-09-26), fewer copies of the key IS the
    protection. Same wording as the designer's version. */
-app.post('/api/balance-link-email', requireInternalKey, async (req, res) => {
+app.post('/api/balance-link-email', requireInternalKey, capPerRecipient('balance-link-email', 10), async (req, res) => {
   const v = balanceEmailInput(req.body || {});
   if (v.error) return res.status(400).json({ error: v.error });
   try {
@@ -14389,7 +14422,7 @@ app.post('/api/balance-link-email', requireInternalKey, async (req, res) => {
   }
 });
 
-app.post('/api/order-shipped', requireInternalKey, async (req, res) => {
+app.post('/api/order-shipped', requireInternalKey, capPerRecipient('order-shipped', 10), async (req, res) => {
   try {
     const b = req.body || {};
     const email = String(b.email || '').trim();
