@@ -131,11 +131,20 @@ test('sendCustomerSms checks consent for the right kind before sending', () => {
   assert.match(body, /twilioCode === 21610/);
 });
 
-test('designer consent is recorded before the order confirmation that texts', () => {
-  const php = path.join(process.env.HOME || '', 'lumise-designer', 'php_connector.php');
-  if (!fs.existsSync(php)) return; // designer repo not checked out alongside
-  const src = fs.readFileSync(php, 'utf8');
-  assert.ok(src.indexOf("jt_sms_consent($_POST['phone']") < src.indexOf("jt_send_mail('order-confirmation'"));
+test('designer: consent before the held confirmation; confirmation only after payment', () => {
+  const dir = path.join(process.env.HOME || '', 'lumise-designer');
+  if (!fs.existsSync(dir)) return; // designer repo not checked out alongside
+  const conn = fs.readFileSync(path.join(dir, 'php_connector.php'), 'utf8');
+  const stripe = fs.readFileSync(path.join(dir, 'inc', 'stripe.php'), 'utf8');
+  const ipn = fs.readFileSync(path.join(dir, 'paypal_ipn.php'), 'utf8');
+  // save_order runs before the customer pays: it may HOLD, never send.
+  assert.ok(conn.indexOf("jt_sms_consent($_POST['phone']") < conn.indexOf('jt_order_mail_hold('));
+  assert.doesNotMatch(conn, /jt_send_mail\('order-confirmation'/, 'checkout must not thank an unpaid order');
+  assert.doesNotMatch(conn, /jt_send_mail\('order-notification'/, 'the shop alert waits for payment too');
+  // Every way money arrives releases it.
+  assert.match(stripe, /jt_order_mail_release\(\$order_id\)/);
+  assert.match(ipn, /jt_order_mail_release\(\$order\['id'\]\)/);
+  assert.ok(!fs.existsSync(path.join(dir, 'placeorder.php')), 'placeorder.php saved orders without payment');
 });
 
 test('Twilio signature: valid passes, tampered fails', () => {
@@ -233,7 +242,7 @@ test('designer copies of the consent wording match what the consent row records'
 });
 
 test('dynamic pages default to no-store, after static files', () => {
-  const staticAt = server.indexOf("app.use(express.static(path.join(__dirname, 'public')));");
+  const staticAt = server.indexOf("app.use(express.static(path.join(__dirname, 'public')");
   const noStoreAt = server.indexOf("app.use((_req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });");
   assert.ok(staticAt > 0 && noStoreAt > staticAt, 'no-store must be mounted after static and before routes');
   assert.ok(noStoreAt < server.indexOf("app.get('/q/:code'"));

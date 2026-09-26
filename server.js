@@ -183,7 +183,21 @@ app.get(['/grad', '/grad/', '/grad/*'], (_req, res) => res.redirect(302, '/'));
 app.get('/design-ideas.html', (_req, res) => res.redirect(301, 'https://design.jtees.net/'));
 
 // Serve frontend
-app.use(express.static(path.join(__dirname, 'public')));
+/* Browser caching for static files. Images and fonts rarely change: 30 days.
+   Scripts and styles are NOT versioned by filename (/assets/js/jt-chat.js is
+   edited in place), so a long cache would keep old code in returning visitors'
+   browsers for its whole lifetime: 1 hour. HTML keeps Express's default of
+   revalidating every load, so a page change is seen immediately. Cloudflare's
+   edge copy is purged on every deploy (npm start runs tools/cf.js purge). */
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders(res, filePath) {
+    if (/\.(?:jpe?g|png|gif|webp|avif|svg|ico|woff2?|ttf|otf|mp4)$/i.test(filePath)) {
+      res.set('Cache-Control', 'public, max-age=2592000');
+    } else if (/\.(?:js|css)$/i.test(filePath)) {
+      res.set('Cache-Control', 'public, max-age=3600');
+    }
+  },
+}));
 
 /* Everything past the static files is generated per request — customer quote
    pages, the admin boards, receipts — and carries names, phones and money. By
@@ -194,9 +208,17 @@ app.use((_req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 
 // ─── Database ─────────────────────────────────────────────────────────────────
 
+/* The shop's day is Chicago's day. Without this the session ran in the
+   server's zone (UTC), so every date_trunc('month', ...) and CURRENT_DATE in
+   the SQL — the sales-tax position, the monthly CSV exports, quote expiry —
+   put anything after ~7pm Central on the last day of a month into the NEXT
+   month, and expired quotes hours before the shop's day ended. TIMESTAMPTZ
+   values themselves are absolute and unaffected; only calendar grouping moves.
+   Same zone the app already uses for business days (JT_TIMEZONE). */
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
+  options: `-c TimeZone=${(process.env.JT_TIMEZONE || 'America/Chicago').replace(/[^A-Za-z0-9_/+-]/g, '')}`,
 });
 
 async function initDB() {
@@ -2092,6 +2114,15 @@ app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, verifyTurnstil
   if (hubspotResult.status       === 'rejected') console.error('HubSpot failed:',            hubspotResult.reason?.message, JSON.stringify(hubspotResult.reason?.response?.data));
   if (cloverResult.status        === 'rejected') console.error('Clover failed:',             cloverResult.reason?.message, JSON.stringify(cloverResult.reason?.response?.data));
 
+  /* Logged is not noticed. The enquiry is saved, but if the email that tells
+     the SHOP about it failed, nobody finds out — the exact silent failure the
+     error digest exists for. Each is reported under its own name so the digest
+     groups repeats into one line. */
+  for (const [name, r] of [['notify-shop', emailResult], ['confirm-customer', customerEmailResult],
+                           ['brevo', brevoResult], ['hubspot', hubspotResult], ['clover', cloverResult]]) {
+    if (r.status === 'rejected') reportError('submit:' + name, r.reason || new Error(name + ' failed')).catch(() => {});
+  }
+
   // Persist IDs
   const updates = {};
   if (hubspotResult.status === 'fulfilled') {
@@ -2276,7 +2307,7 @@ app.post('/webhooks/clover', async (req, res) => {
 
     // Confirm to customer via email
     sendPaymentReceivedEmail(sub, amount)
-      .catch(err => console.error('Payment email failed:', err.message));
+      .catch(err => { console.error('Payment email failed:', err.message); reportError('clover:payment-email', err).catch(() => {}); });
 
   } catch (err) {
     console.error('Webhook processing failed:', err.message);
@@ -2440,6 +2471,8 @@ app.post('/webhooks/twilio/sms', async (req, res) => {
     }
   } catch (err) {
     console.error('twilio inbound handling failed:', err.message);
+    // A customer's reply that never reached the shop is a lost conversation.
+    reportError('twilio:inbound', err).catch(() => {});
   }
 });
 
@@ -14936,9 +14969,18 @@ async function runSupplierSync() {
   });
 }
 
-// Hourly abandoned-cart sweep trigger (the designer PHP does the real work).
-// Self-rescheduling with a timeout so a slow sweep can never overlap the next one.
-if (process.env.JT_INTERNAL_KEY) {
+// Hourly sweep: the designer's abandoned-cart run plus every reminder, digest
+// and sync this app owns. Self-rescheduling with a timeout so a slow sweep can
+// never overlap the next one.
+/* It used to run only when JT_INTERNAL_KEY was set, because its first step
+   calls the designer. So a missing key silently stopped the tax reminders, the
+   payment reminders, the daily digest and the nightly price sync as well —
+   none of which need the key. Now only the designer step depends on it.
+
+   It runs where Railway runs it (RAILWAY_ENVIRONMENT_NAME is injected there),
+   or when JT_RUN_SWEEPS=1. A copy started on a laptop must never send the
+   shop's customers reminders — the key used to prevent that by accident. */
+if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || process.env.JT_RUN_SWEEPS === '1') {
   /* Each task is isolated. They used to share one try block, so a slow
      designer — the very first call, over the network — swallowed every task
      after it and the digest, the reminders and the review asks silently did
@@ -14958,6 +15000,7 @@ if (process.env.JT_INTERNAL_KEY) {
 
   const runSweep = async () => {
     await step('abandoned-cart sweep', async () => {
+      if (!process.env.JT_INTERNAL_KEY) throw new Error('JT_INTERNAL_KEY not set — designer cart sweep skipped');
       const r = await studioFetch('https://design.jtees.net/jt-cron.php',
         { timeoutMs: 120000 });
       return r.text();
@@ -15275,7 +15318,9 @@ function validateEnv() {
   }
   if (!process.env.JT_INTERNAL_KEY?.trim()) {
     console.warn('WARNING: JT_INTERNAL_KEY is not set — every call from design.jtees.net ' +
-      '(order emails, texts, consent, login codes) will be refused with 403.');
+      '(order emails, texts, consent, login codes) will be refused with 403, the admin ' +
+      'sign-in from the designer will fail, and the hourly abandoned-cart sweep is skipped ' +
+      '(reported in the error digest). Reminders, digests and the price sync still run.');
   }
   /* Warn-only for the same reason as the rest: no Sentry project yet is a
      degraded mode, not an outage — the database digest still reports. Said at
