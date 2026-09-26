@@ -164,8 +164,10 @@ test('rescheduling falls back to queuing when nothing is waiting', () => {
 });
 
 test('a delivered quote reschedules; clearing the step does not', () => {
-  const step = src.slice(src.indexOf("app.post('/quote/:code/step'"),
-                         src.indexOf("app.post('/quote/:code/step'") + 3000);
+  // The whole route, not a fixed character window: a window breaks whenever
+  // anything is added above the lines it checks.
+  const at = src.indexOf("app.post('/quote/:code/step'");
+  const step = src.slice(at, src.indexOf('\n});', at));
   assert.match(step, /if \(!clear && \(col === 'delivered_at' \|\| col === 'shipped_at'\)/,
     'un-ticking a step is a correction, and must not re-date the ask');
   assert.match(step, /rescheduleReviewRequest\(/);

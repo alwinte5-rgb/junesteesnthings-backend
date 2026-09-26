@@ -18,8 +18,10 @@ initMonitoring();
 const { describeTawkEvent, isE164 } = require('./tools/lib/chat-alert');
 const {
   CONSENT_VERSION, TRANSACTIONAL_TEXT, MARKETING_TEXT,
-  parseSmsConsent, consentCheckboxesHtml,
+  normalizeUsPhone, parseSmsConsent, consentCheckboxesHtml,
 } = require('./tools/lib/sms-consent');
+const { T: SMS, plain: smsPlain } = require('./tools/lib/sms-templates');
+const { verifyTwilioSignature, classifyInbound } = require('./tools/lib/twilio-webhook');
 
 const express    = require('express');
 const cors       = require('cors');
@@ -660,6 +662,25 @@ async function initDB() {
     )`);
   await pool.query(`CREATE INDEX IF NOT EXISTS sms_consents_phone_idx
                       ON sms_consents (phone, created_at DESC)`).catch(() => {});
+
+  /* Every customer text: what was sent, to whom, about what, and whether it
+     went. The partial unique index is the dedupe — one live copy of a given
+     update per order per number; a failed row does not block a retry. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sms_messages (
+      id          BIGSERIAL PRIMARY KEY,
+      phone       TEXT NOT NULL,
+      kind        TEXT NOT NULL,
+      ref         TEXT NOT NULL,
+      template    TEXT NOT NULL,
+      body        TEXT NOT NULL,
+      status      TEXT NOT NULL,
+      twilio_sid  TEXT,
+      error       TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS sms_messages_once
+                      ON sms_messages (phone, ref, template) WHERE status <> 'failed'`).catch(() => {});
 
   console.log('Database ready.');
 }
@@ -2240,38 +2261,98 @@ app.post('/webhooks/clover', async (req, res) => {
   }
 });
 
-// ── Owner SMS (Twilio REST; no SDK) ───────────────────────────────────────────
-// Needs TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER (the Twilio
-// sender) and TWILIO_TO_NUMBER (the owner's phone), numbers in +1XXXXXXXXXX form.
-// Unconfigured = skipped with one log line, so email alerts still go out.
+// ── SMS (Twilio REST; no SDK) ─────────────────────────────────────────────────
+// Needs TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_PHONE_NUMBER (the
+// Twilio sender, +1XXXXXXXXXX). Owner alerts also need TWILIO_TO_NUMBER.
+// Unconfigured = skipped with one log line, so every email still goes out.
 function smsConfigured() {
   return Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN &&
-    process.env.TWILIO_PHONE_NUMBER && process.env.TWILIO_TO_NUMBER);
+    process.env.TWILIO_PHONE_NUMBER);
 }
 
-async function sendOwnerSms(body) {
-  if (!smsConfigured()) {
-    console.log('sendOwnerSms: skipped — Twilio not fully configured');
-    return false;
-  }
+// One send. Resolves { sid } or throws an Error carrying Twilio's error code.
+async function twilioSend(to, body) {
   const from = process.env.TWILIO_PHONE_NUMBER.trim();
-  const to = process.env.TWILIO_TO_NUMBER.trim();
-  if (!isE164(from) || !isE164(to)) {
-    throw new Error('TWILIO_PHONE_NUMBER / TWILIO_TO_NUMBER must be +1XXXXXXXXXX form');
-  }
+  if (!isE164(from) || !isE164(to)) throw new Error('phone numbers must be +1XXXXXXXXXX form');
   const sid = process.env.TWILIO_ACCOUNT_SID.trim();
   const auth = Buffer.from(`${sid}:${process.env.TWILIO_AUTH_TOKEN.trim()}`).toString('base64');
   const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
     method: 'POST',
     headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ From: from, To: to, Body: body }).toString(),
+    signal: AbortSignal.timeout(15000),
   });
+  const d = await r.json().catch(() => ({}));
   if (!r.ok) {
-    const t = await r.text().catch(() => '');
-    throw new Error(`Twilio ${r.status}: ${t.slice(0, 200)}`);
+    const e = new Error(`Twilio ${r.status}${d.code ? ' ' + d.code : ''}: ${String(d.message || '').slice(0, 200)}`);
+    e.twilioCode = d.code;
+    throw e;
   }
+  return { sid: d.sid || null };
+}
+
+async function sendOwnerSms(body) {
+  const to = String(process.env.TWILIO_TO_NUMBER || '').trim();
+  if (!smsConfigured() || !to) {
+    console.log('sendOwnerSms: skipped — Twilio not fully configured');
+    return false;
+  }
+  await twilioSend(to, body);
   console.log('owner sms sent');
   return true;
+}
+
+// The current answer for a phone is its newest consent row.
+async function smsConsentFor(phone) {
+  const { rows } = await pool.query(
+    `SELECT transactional, marketing FROM sms_consents WHERE phone = $1
+      ORDER BY created_at DESC, id DESC LIMIT 1`, [phone]);
+  return rows[0] || { transactional: false, marketing: false };
+}
+
+/* Text a customer. Never throws — an order update must not fail the admin
+   action or webhook it rides on. Returns what happened, for logs and tests:
+   'sent' | 'no-phone' | 'no-consent' | 'duplicate' | 'unconfigured' | 'failed'.
+
+   `kind` is which consent box this needs. `ref` + msg.template is the dedupe
+   key: the same update for the same order goes to the same number once. */
+async function sendCustomerSms({ phone, kind, ref, msg }) {
+  const to = normalizeUsPhone(phone);
+  if (!to) return 'no-phone';
+  try {
+    const c = await smsConsentFor(to);
+    if (!(kind === 'marketing' ? c.marketing : c.transactional)) return 'no-consent';
+    if (!smsConfigured()) {
+      console.log(`sendCustomerSms: skipped ${msg.template} for ${ref} — Twilio not configured`);
+      return 'unconfigured';
+    }
+    const { rows } = await pool.query(
+      `INSERT INTO sms_messages (phone, kind, ref, template, body, status)
+       VALUES ($1,$2,$3,$4,$5,'sending')
+       ON CONFLICT DO NOTHING RETURNING id`,
+      [to, kind, String(ref).slice(0, 80), msg.template.slice(0, 80), msg.body]);
+    if (!rows.length) return 'duplicate';
+    const id = rows[0].id;
+    try {
+      const { sid } = await twilioSend(to, msg.body);
+      await pool.query(`UPDATE sms_messages SET status='sent', twilio_sid=$2 WHERE id=$1`, [id, sid]);
+      console.log(`customer sms sent: ${msg.template} for ${ref}`);
+      return 'sent';
+    } catch (err) {
+      await pool.query(`UPDATE sms_messages SET status='failed', error=$2 WHERE id=$1`,
+        [id, err.message.slice(0, 300)]).catch(() => {});
+      // 21610: the number texted STOP. Record it so we stop trying.
+      if (err.twilioCode === 21610) {
+        await recordSmsConsent({ phone: to, transactional: false, marketing: false },
+          { source: 'twilio:21610' });
+      }
+      console.error(`customer sms failed (${msg.template} for ${ref}):`, err.message);
+      return 'failed';
+    }
+  } catch (err) {
+    console.error('sendCustomerSms error:', err.message);
+    return 'failed';
+  }
 }
 
 function alertOwnerOfChat(body) {
@@ -2288,6 +2369,49 @@ function alertOwnerOfChat(body) {
   sendOwnerSms(a.sms)
     .catch(err => console.error('chat alert sms failed:', err.message));
 }
+
+// ── Twilio inbound texts ──────────────────────────────────────────────────────
+// In the Twilio console, set the number's "A message comes in" webhook to
+// exactly https://www.jtees.net/webhooks/twilio/sms (HTTP POST). The signature
+// covers that URL, so it is fixed here rather than read from proxy headers.
+const TWILIO_INBOUND_URL = (process.env.TWILIO_WEBHOOK_URL || 'https://www.jtees.net/webhooks/twilio/sms').trim();
+
+app.post('/webhooks/twilio/sms', async (req, res) => {
+  const token = String(process.env.TWILIO_AUTH_TOKEN || '').trim();
+  if (!token) return res.sendStatus(503);
+  if (!verifyTwilioSignature(token, TWILIO_INBOUND_URL, req.body || {}, req.get('x-twilio-signature'))) {
+    console.warn('twilio inbound rejected — bad signature');
+    return res.sendStatus(401);
+  }
+  // Empty TwiML: Twilio's own STOP/HELP/START replies are the ones customers get.
+  res.type('text/xml').send('<Response></Response>');
+
+  const from = normalizeUsPhone(req.body.From);
+  const text = String(req.body.Body || '').slice(0, 1600);
+  const kind = classifyInbound(text);
+  if (!from) return;
+  try {
+    if (kind === 'stop') {
+      await recordSmsConsent({ phone: from, transactional: false, marketing: false }, { source: 'sms-reply:stop' });
+    } else if (kind === 'start') {
+      // Rejoins order updates only; marketing needs the box ticked again.
+      await recordSmsConsent({ phone: from, transactional: true, marketing: false }, { source: 'sms-reply:start' });
+    }
+    if (kind === 'message') {
+      // A customer replying to an order text is talking to the shop. Without
+      // this their reply would land in the Twilio console and nowhere else.
+      await sendEmail({
+        to: NOTIFY_EMAIL,
+        subject: `Text from ${from}: ${text.slice(0, 60)}`,
+        html: `<p><b>${escEmail(from)}</b> replied by text:</p>
+          <blockquote style="border-left:3px solid #1848B8;margin:0;padding:6px 12px">${escEmail(text)}</blockquote>
+          <p style="color:#6b7280">Call or text them back at this number. Replies to this email do not reach them.</p>`,
+      });
+    }
+  } catch (err) {
+    console.error('twilio inbound handling failed:', err.message);
+  }
+});
 
 // ── tawk.to chat webhook ───────────────────────────────────────────────────────
 // In the tawk.to dashboard (Administration → Settings → Webhooks), set the URL to:
@@ -3862,6 +3986,26 @@ function quoteChecklist(q) {
   return { steps, next, done, of: steps.length };
 }
 
+/* Text the customer about milestones this change newly reached. `before` is
+   the row as it was, so re-stamping or moving an old card never re-announces a
+   milestone from weeks ago. Only the furthest new milestone is sent: a card
+   dragged straight to "Check & ship" gets "ready", not "in production" too. */
+function textQuoteMilestones(before, after) {
+  if (!before || !after || !after.phone) return;
+  const newly = (c) => !before[c] && after[c];
+  const ref = 'quote:' + after.code;
+  let msg = null;
+  if (newly('shipped_at')) {
+    const m = String(after.ship_method || '').toLowerCase();
+    msg = m === 'pickup' ? SMS.readyForPickup({ code: after.code })
+      : m ? SMS.shipped({ code: after.code, tracking: after.tracking })
+      : SMS.finished({ code: after.code });
+  } else if (newly('production_at')) {
+    msg = SMS.inProduction({ code: after.code });
+  }
+  if (msg) sendCustomerSms({ phone: after.phone, kind: 'transactional', ref, msg });
+}
+
 /* One tap per milestone the database cannot infer. Idempotent, and it can be
    unticked — a mis-tap must not need a database client to undo. */
 app.post('/quote/:code/step', requireAdmin, async (req, res) => {
@@ -3894,9 +4038,11 @@ app.post('/quote/:code/step', requireAdmin, async (req, res) => {
      anyway. */
   const wantsJson = asJson;
   try {
+    const { rows: prev } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
     const { rows } = await pool.query(
       `UPDATE quotes SET ${col} = ${clear ? 'NULL' : 'NOW()'} WHERE code = $1 RETURNING *`, [code]);
     console.log(`quote ${code}: ${col} ${clear ? 'cleared' : 'set'}`);
+    if (!clear) textQuoteMilestones(prev[0], rows[0]);
 
     /* Delivery is the honest moment to ask. The payment-time ask already sitting
        against this quote was dated on a guess made before the job existed; this
@@ -8684,6 +8830,12 @@ async function bankStripeSession(session) {
         <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_NAME} &middot; ${SHOP_PHONE}</p></div>`,
     }).catch((e) => console.error(`payment receipt to customer FAILED for quote ${code}:`, e.message));
   }
+  if (q.phone) {
+    // Keyed on the Stripe session: a 50% deposit and a 50% balance are the same
+    // amount, so the amount cannot tell two payments apart.
+    sendCustomerSms({ phone: q.phone, kind: 'transactional', ref: 'payment:' + session.id,
+      msg: SMS.paymentReceived({ code, amount: gross, stillDue }) });
+  }
 
   if (q.brevo_deal_id) {
     brevo.post('/crm/notes', {
@@ -9342,6 +9494,11 @@ app.post('/quote/:code/mark-paid', requireAdmin, async (req, res) => {
           <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_NAME} &middot; ${SHOP_PHONE}</p>
         </div>`,
       }).catch(e => console.error('manual payment receipt failed:', e.message));
+    }
+    if (nq.phone) {
+      sendCustomerSms({ phone: nq.phone, kind: 'transactional',
+        ref: 'payment:manual:' + nq.code + ':' + Date.now(),
+        msg: SMS.paymentReceived({ code: nq.code, amount, stillDue }) });
     }
 
     if (nq.brevo_deal_id) {
@@ -11417,9 +11574,11 @@ app.post('/quote/:code/stage', requireAdmin, async (req, res) => {
        like it means. Columns owning several milestones set them together. */
     const sets = JOB_STAGES.slice(1).flatMap((st, i) =>
       st.cols.map(c => `${c} = ${i + 1 <= target ? `COALESCE(${c}, NOW())` : 'NULL'}`)).join(', ');
+    const { rows: prev } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
     const { rows } = await pool.query(
       `UPDATE quotes SET ${sets} WHERE code = $1 RETURNING *`, [code]);
     console.log(`quote ${code}: moved to ${JOB_STAGES[target].label}`);
+    textQuoteMilestones(prev[0], rows[0]);
     if (asJson) {
       const cl = rows.length ? quoteChecklist(rows[0]) : null;
       return res.json({ ok: true, stage: JOB_STAGES[target].key,
@@ -13710,6 +13869,10 @@ app.post('/api/order-confirmation', requireInternalKey, async (req, res) => {
         footer: `<p style="color:#374151;line-height:1.6;">We print every order ourselves right here in Chicago &mdash; thanks for supporting a small shop.</p>`,
       }),
     });
+    if (b.phone) {
+      sendCustomerSms({ phone: b.phone, kind: 'transactional', ref: 'studio:' + smsPlain(b.order_id, 20),
+        msg: SMS.studioOrderPlaced({ orderId: b.order_id }) });
+    }
     res.json({ ok: true });
   } catch (err) {
     console.error('order-confirmation error:', err.message);
@@ -13784,6 +13947,10 @@ app.post('/api/order-shipped', requireInternalKey, async (req, res) => {
           : '',
       }),
     });
+    if (status === 'shipped' && b.phone) {
+      sendCustomerSms({ phone: b.phone, kind: 'transactional', ref: 'studio:' + smsPlain(b.order_id, 20),
+        msg: SMS.studioOrderShipped({ orderId: b.order_id, tracking }) });
+    }
     /* Record the ask as DUE rather than holding a timer — a setTimeout would be
        lost on the next deploy, and this service redeploys often. The hourly
        sweep sends it when the date arrives. */
@@ -14243,6 +14410,10 @@ app.post('/quote/:code/shipping', requireAdmin, async (req, res) => {
           <p style="color:#374151;line-height:1.6">Tracking: <b>${escEmail(tracking)}</b></p>
           <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_NAME} &middot; ${SHOP_PHONE}</p></div>`,
       }).catch((e) => console.error('tracking email failed:', e.message));
+    }
+    if (q && tracking && q.phone && tracking !== String(b.prev_tracking || '')) {
+      sendCustomerSms({ phone: q.phone, kind: 'transactional', ref: 'quote:' + q.code,
+        msg: SMS.shipped({ code: q.code, tracking }) });
     }
   } catch (err) {
     console.error('shipping update failed:', err.message);
