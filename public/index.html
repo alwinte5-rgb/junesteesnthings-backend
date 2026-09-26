@@ -3062,12 +3062,16 @@
     // The owner's own retry hit exactly that on 2026-09-26.
     // ============================
     let tsWidget = null;
+    let tsFailed = false;          // the check errored here; Turnstile may still recover
     window.jtTurnstileReady = () => {
       const mount = document.getElementById('cf-turnstile-mount');
       if (!mount || !window.jtTurnstileKey) return;
       // interaction-only: invisible to real visitors, challenges only when suspicious
-      tsWidget = window.turnstile.render(mount,
-        { sitekey: window.jtTurnstileKey, appearance: 'interaction-only' }) || null;
+      tsWidget = window.turnstile.render(mount, {
+        sitekey: window.jtTurnstileKey, appearance: 'interaction-only',
+        'error-callback': () => { tsFailed = true; },
+        callback: () => { tsFailed = false; },
+      }) || null;
     };
     fetch('/api/config').then(r => r.json()).then(cfg => {
       if (!cfg.turnstileSiteKey) return;
@@ -3085,16 +3089,17 @@
     const renewTurnstile = () => {
       try { if (tsWidget !== null) window.turnstile.reset(tsWidget); } catch { /* widget gone */ }
     };
-    // The invisible check can take a moment, longer on a slow phone: wait for
-    // it rather than send without a token and be refused.
+    // The invisible check can take a moment, longer on a slow phone: give it
+    // that moment. True when a token is ready; false when it did not come in
+    // time or the check errored (no point waiting on a widget that failed).
     const turnstileReady = async (ms) => {
       if (tsWidget === null) return true;            // no widget, nothing to wait for
       try { if (window.turnstile.isExpired(tsWidget)) renewTurnstile(); } catch { /* older api */ }
-      for (const end = Date.now() + ms; Date.now() < end;) {
+      for (const end = Date.now() + ms; Date.now() < end && !tsFailed;) {
         if (turnstileToken()) return true;
         await new Promise(r => setTimeout(r, 250));
       }
-      return false;
+      return !!turnstileToken();
     };
 
     // ============================
@@ -3138,21 +3143,16 @@
       formStatus.className = '';
       formStatus.textContent = '';
 
-      /* The human check first: without a token the server refuses the enquiry.
-         Usually it is long done, but a renewed one took 21s in a live check
-         (2026-09-26), so wait generously and say what is happening. If it
-         needs a tick, the widget is showing it by then — say where, rather
-         than send and have the server say it. */
-      if (!turnstileToken() && tsWidget !== null) {
+      /* The human check. Its token has usually been ready since the page
+         loaded; if not, give it a few seconds. If it still has not come — the
+         check errored, or this browser cannot run it — the enquiry is sent
+         anyway: the server keeps a token-less enquiry and flags it to the shop
+         rather than lose a customer to the check (allowMissingTurnstile in
+         server.js). Nobody is stopped here. */
+      if (!turnstileToken() && tsWidget !== null && !tsFailed) {
         formStatus.textContent = "One moment, confirming you're not a robot…";
       }
-      if (!(await turnstileReady(30000))) {
-        formStatus.className = 'error';
-        formStatus.textContent = "Please complete the quick check just above the button, then press Send again. Can't see it? Refresh the page.";
-        submitBtn.disabled = false;
-        submitBtn.textContent = 'Send Request';
-        return;
-      }
+      await turnstileReady(10000);
       formStatus.textContent = '';
 
       /* A fresh form token as well. The one fetched at page load lasts 30 to

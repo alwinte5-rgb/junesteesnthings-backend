@@ -40,7 +40,8 @@ function helpers(turnstile) {
   vm.createContext(sandbox);
   vm.runInContext(html.slice(start, end), sandbox);
   return vm.runInContext(
-    '({ turnstileReady, renewTurnstile, turnstileToken, mount: (id) => { tsWidget = id; } })', sandbox);
+    '({ turnstileReady, renewTurnstile, turnstileToken, mount: (id) => { tsWidget = id; }, '
+    + 'fail: () => { tsFailed = true; } })', sandbox);
 }
 
 function fakeWidget({ token = '', expired = false, tokenAfterReset = 'fresh' } = {}) {
@@ -80,6 +81,14 @@ test('a token that never comes is reported, not sent empty', async () => {
   assert.strictEqual(await h.turnstileReady(600), false);
 });
 
+test('a check that errored is not waited on', async () => {
+  const w = fakeWidget({ token: '' });
+  const h = helpers(w.api); h.mount('w1'); h.fail();
+  const t0 = Date.now();
+  assert.strictEqual(await h.turnstileReady(5000), false);
+  assert.ok(Date.now() - t0 < 1000, 'a failed widget must not cost the customer the full wait');
+});
+
 test('renewing asks the widget for a new token', () => {
   const w = fakeWidget({ token: 'spent' });
   const h = helpers(w.api); h.mount('w1');
@@ -100,6 +109,12 @@ test('the token is waited for before the enquiry is posted', () => {
     'posting without a token is a guaranteed refusal');
 });
 
+test('nobody is stopped by the check: the enquiry is sent whatever it says', () => {
+  const between = handler.slice(handler.indexOf('turnstileReady('), handler.indexOf('fetch(quoteForm.action'));
+  assert.doesNotMatch(between, /\breturn\b/,
+    'a browser that cannot run the check must still reach the shop (allowMissingTurnstile)');
+});
+
 test('every attempt is followed by a fresh token, failed ones included', () => {
   const fin = handler.slice(handler.lastIndexOf('finally'));
   assert.match(fin, /renewTurnstile\(\)/, 'the server spends the token on every attempt');
@@ -117,4 +132,61 @@ test('a missing token is logged, not refused in silence', () => {
   const start = src.indexOf('async function verifyTurnstile(');
   const fn = src.slice(start, src.indexOf('\n}\n', start));
   assert.match(fn, /if \(!token\) \{[\s\S]*?console\.warn\('turnstile: no token/);
+});
+
+/* The server half of "nobody is stopped": on the quote form a request with no
+   token continues, flagged; everywhere else it is still refused; and a token
+   that is sent and FAILS is refused even on the quote form. */
+function runVerify(req, cloudflareSays) {
+  const start = src.indexOf('async function verifyTurnstile(');
+  const fn = src.slice(start, src.indexOf('\n}\n', start) + 2);
+  const sandbox = {
+    process: { env: { TURNSTILE_SECRET_KEY: 'secret' } },
+    console: { warn() {}, error() {} },
+    URLSearchParams, AbortSignal, clientIp: () => '203.0.113.9',
+    fetch: async () => ({ json: async () => cloudflareSays }),
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(fn, sandbox);
+  const out = { next: false, status: null, body: null };
+  const res = { status(c) { out.status = c; return this; }, json(b) { out.body = b; return this; } };
+  return sandbox.verifyTurnstile(req, res, () => { out.next = true; }).then(() => out);
+}
+
+test('quote form: no token continues, marked missing', async () => {
+  const req = { body: {}, path: '/submit', turnstileMayBeMissing: true };
+  const out = await runVerify(req, null);
+  assert.strictEqual(out.next, true);
+  assert.strictEqual(req.humanCheck, 'missing');
+});
+
+test('any other route: no token is still refused', async () => {
+  const out = await runVerify({ body: {}, path: '/api/embroidery-quote' }, null);
+  assert.strictEqual(out.next, false);
+  assert.strictEqual(out.status, 400);
+});
+
+test('a token that is sent and fails is refused, even on the quote form', async () => {
+  const req = { body: { 'cf-turnstile-response': 'forged' }, path: '/submit', turnstileMayBeMissing: true };
+  const out = await runVerify(req, { success: false, 'error-codes': ['invalid-input-response'] });
+  assert.strictEqual(out.next, false);
+  assert.strictEqual(out.status, 400);
+});
+
+test('only the quote form, which has the form-token check in front, lets a missing token through', () => {
+  assert.match(src, /app\.post\('\/submit', [^\n]*rejectBots, allowMissingTurnstile, verifyTurnstile/);
+  const emb = src.slice(src.indexOf("app.post('/api/embroidery-quote'"));
+  assert.doesNotMatch(emb.slice(0, emb.indexOf('\n')), /allowMissingTurnstile/,
+    'the embroidery endpoint has no form-token check, so it stays strict');
+});
+
+test('an unchecked enquiry is kept and flagged, but nothing goes to the address typed in', () => {
+  const at = src.indexOf("app.post('/submit'");
+  const submit = src.slice(at, src.indexOf('\n});', at));
+  assert.match(submit, /sendNotificationEmail\(s, \{ unverified \}\)/, 'the shop still hears about it');
+  assert.match(submit, /unverified \? Promise\.resolve\(undefined\) : sendCustomerConfirmationEmail\(s\)/,
+    'no confirmation: the form must not be usable to email strangers');
+  assert.match(submit, /unverified \? Promise\.resolve\(undefined\) : syncToBrevo\(s\)/,
+    'no Brevo list: the form must not be usable to subscribe strangers');
+  assert.match(submit, /SET human_check = 'missing'/, 'and the catch-up must know to leave it out');
 });

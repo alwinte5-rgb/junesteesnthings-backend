@@ -35,7 +35,7 @@ test('an enquiry becomes a Clover customer only when CLOVER_SYNC_LEADS=1', () =>
   assert.match(submit, /process\.env\.CLOVER_SYNC_LEADS === '1'/);
   const call = submit.indexOf('createCloverCustomer(s)');
   assert.notStrictEqual(call, -1, 'the opt-in path must still exist');
-  assert.match(submit.slice(Math.max(0, call - 40), call), /syncClover \?/,
+  assert.match(submit.slice(Math.max(0, call - 60), call), /syncClover\b/,
     'the Clover call must sit behind the opt-in, not run for every lead');
 });
 

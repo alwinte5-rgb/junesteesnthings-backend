@@ -272,6 +272,14 @@ async function initDB() {
   await pool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS dedupe_key TEXT`).catch(() => {});
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS submissions_dedupe_uniq
                       ON submissions (dedupe_key) WHERE dedupe_key IS NOT NULL`).catch(() => {});
+  /* Brevo is the only CRM (HubSpot switched off 2026-09-26), so an enquiry
+     whose Brevo sync failed is retried hourly until it lands: brevoCatchUp().
+     brevo_attempts caps a row Brevo keeps refusing for its own reasons, so one
+     bad row cannot report itself every hour. human_check is 'missing' when the
+     enquiry arrived without a Turnstile token — kept, but never sent to Brevo. */
+  for (const col of ['brevo_synced_at TIMESTAMPTZ', 'brevo_attempts INT DEFAULT 0', 'human_check TEXT']) {
+    await pool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  }
   // Quotes texted from June's phone. The row is the source of truth — Brevo is
   // mirrored best-effort, so a CRM outage can never lose a quote.
   await pool.query(`
@@ -1451,16 +1459,26 @@ function designerPromoBlock() {
     </div>`;
 }
 
-async function sendNotificationEmail(s) {
+async function sendNotificationEmail(s, { unverified = false } = {}) {
   const photoRow = s.photo_url
     ? `<tr><td style="padding:8px;font-weight:bold;vertical-align:top;">Photo</td><td style="padding:8px;"><a href="${escEmail(s.photo_url)}">View Photo</a><br/><img src="${escEmail(s.photo_url)}" style="max-width:300px;margin-top:8px;border-radius:6px;" /></td></tr>`
     : '';
+  /* Arrived without the spam check (allowMissingTurnstile): usually a real
+     person whose browser could not run it, occasionally a bot. They were not
+     emailed or added to Brevo, so a reply is up to the shop. */
+  const flag = unverified
+    ? `<p style="background:#FEF3C7;border:1px solid #F59E0B;border-radius:6px;padding:10px 12px;color:#92400E;">
+         <b>Spam check did not run</b> for this one — usually a real person whose browser blocks it,
+         sometimes a bot. They were <b>not</b> sent a confirmation or added to Brevo.
+         If it looks genuine, reply to them directly.</p>`
+    : '';
   await sendEmail({
     to:      NOTIFY_EMAIL,
-    subject: `New Quote Request — ${s.name}`,
+    subject: `${unverified ? '[Unchecked] ' : ''}New Quote Request — ${s.name}`,
     html: `
       <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
         <h2 style="color:#A52429;">New Quote Request</h2>
+        ${flag}
         <table style="width:100%;border-collapse:collapse;">
           <tr><td style="padding:8px;font-weight:bold;width:120px;">Name</td><td style="padding:8px;">${escEmail(s.name)}</td></tr>
           <tr style="background:#f9f9f9;"><td style="padding:8px;font-weight:bold;">Phone</td><td style="padding:8px;"><a href="tel:${escEmail(s.phone)}">${escEmail(s.phone)}</a></td></tr>
@@ -1543,10 +1561,50 @@ function explainFailures(instance, service) {
    them and not the other, so every CRM call authenticated with a dead key
    while sending looked fine. Two homes for one secret is two chances to rotate
    half of it. */
-const brevo = explainFailures(axios.create({
+const brevo = keepContactsWhenPhoneFails(explainFailures(axios.create({
   baseURL: 'https://api.brevo.com/v3',
   headers: { 'api-key': process.env.BREVO_API_KEY, 'Content-Type': 'application/json' },
-}), 'Brevo');
+}), 'Brevo'));
+
+/** The phone rule, where every contact write passes through. Brevo's SMS
+ *  attribute must be E.164, and a phone it cannot use — typed as
+ *  "(773) 555-1234", or already on ANOTHER contact (a family's or an office's
+ *  shared number) — makes it refuse the WHOLE write, email and address
+ *  included. The quote form sent the phone as typed, and checkout has sent the
+ *  billing phone since 2026-09-01, so both lost contacts this way while the
+ *  quote builder, which converted its own, did not. On the client no call site
+ *  can forget: the phone is converted on the way out, or dropped when it cannot
+ *  be made valid, and a write still refused over the phone is retried once
+ *  without it whenever there is an email to key the contact on.
+ *  tests/brevo-contacts.test.js. */
+function keepContactsWhenPhoneFails(instance) {
+  instance.interceptors.request.use((cfg) => {
+    const d = cfg.data;
+    if (/^\/contacts/.test(cfg.url || '') && d && typeof d === 'object'
+        && d.attributes && 'SMS' in d.attributes) {
+      const attributes = { ...d.attributes };
+      const sms = toE164(attributes.SMS);
+      if (sms) attributes.SMS = sms; else delete attributes.SMS;
+      cfg.data = { ...d, attributes };
+    }
+    return cfg;
+  });
+  instance.interceptors.response.use(undefined, (err) => {
+    const cfg = err && err.config;
+    let body = cfg && cfg.data;
+    try { if (typeof body === 'string') body = JSON.parse(body); } catch { body = null; }
+    const said = String((err && err.response && err.response.data && err.response.data.message) || '');
+    const aboutPhone = err && err.response && err.response.status === 400 && /\b(SMS|phone)\b/i.test(said);
+    if (!cfg || cfg.jtWithoutPhone || !aboutPhone || !body || !body.email
+        || !body.attributes || !body.attributes.SMS) {
+      return Promise.reject(err);
+    }
+    const { SMS, ...attributes } = body.attributes;
+    console.warn('brevo: contact kept without its phone —', said.slice(0, 120));
+    return instance.request({ ...cfg, data: { ...body, attributes }, jtWithoutPhone: true });
+  });
+  return instance;
+}
 
 async function syncToBrevo(s) {
   if (isSpamName(s.name)) {
@@ -1554,16 +1612,63 @@ async function syncToBrevo(s) {
     return;
   }
   const [firstname, ...rest] = (s.name || '').trim().split(' ');
+  // Brevo keys a contact on its email, or on the phone when there is none.
+  const email = String(s.email || '').trim();
+  if (!email && !toE164(s.phone)) return;
   await brevo.post('/contacts', {
-    email:      s.email,
+    ...(email ? { email } : {}),
     attributes: {
       FIRSTNAME: firstname || '',
       LASTNAME:  rest.join(' ') || '',
-      SMS:       s.phone || '',
+      SMS:       s.phone || '',        // made E.164, or dropped: keepContactsWhenPhoneFails
     },
     listIds:        process.env.BREVO_LIST_ID ? [parseInt(process.env.BREVO_LIST_ID)] : [],
     updateEnabled:  true,
   });
+}
+
+/* Enquiries whose Brevo sync failed, retried every hour until they land.
+   Brevo is the only CRM since HubSpot was switched off (owner, 2026-09-26),
+   and that day Brevo had been refusing every call for days (its IP block), so
+   without this every lead from an outage is missing from it for good. Rows from
+   before tracking began are left alone: some may have been removed from Brevo
+   on purpose since, and re-adding them would undo that.
+
+   A 401 is Brevo refusing the server itself — the IP block, or a dead key. The
+   batch stops and says nothing, because brevoBreachCheck already alerts on that
+   once a day and an hourly repeat only teaches people to ignore both. Any other
+   refusal is about the row: it is counted, and reported once, when it is given
+   up on — never every hour. tests/brevo-contacts.test.js. */
+const BREVO_CATCH_UP_SINCE = '2026-09-26';
+const BREVO_CATCH_UP_TRIES = 5;
+async function brevoCatchUp() {
+  if (!process.env.BREVO_API_KEY) return '';
+  const { rows } = await pool.query(
+    `SELECT id, name, phone, email FROM submissions
+      WHERE brevo_synced_at IS NULL AND COALESCE(brevo_attempts, 0) < $2
+        AND human_check IS DISTINCT FROM 'missing' AND created_at >= $1
+      ORDER BY created_at LIMIT 20`, [BREVO_CATCH_UP_SINCE, BREVO_CATCH_UP_TRIES]);
+  let synced = 0;
+  for (const s of rows) {
+    try {
+      await syncToBrevo(s);
+    } catch (err) {
+      if (err.response && err.response.status === 401) {
+        return `${synced} synced; Brevo is refusing the server (401), ${rows.length - synced} waiting`;
+      }
+      const { rows: [r] } = await pool.query(
+        `UPDATE submissions SET brevo_attempts = COALESCE(brevo_attempts, 0) + 1
+          WHERE id = $1 RETURNING brevo_attempts`, [s.id]);
+      if (r && r.brevo_attempts >= BREVO_CATCH_UP_TRIES) {
+        reportError('brevo-catch-up', err, `enquiry ${s.id} given up after ${BREVO_CATCH_UP_TRIES} tries`)
+          .catch(() => {});
+      }
+      continue;
+    }
+    await pool.query('UPDATE submissions SET brevo_synced_at = NOW() WHERE id = $1', [s.id]);
+    synced++;
+  }
+  return synced ? `${synced} synced` : '';
 }
 
 // Upsert a tawk.to chat/ticket contact. Chat leads go to their own list when
@@ -2055,7 +2160,7 @@ app.get('/api/form-token', signatureRateLimit, (_req, res) => {
 
 // ── Form submission ──────────────────────────────────────────────────────────
 
-app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, verifyTurnstile, async (req, res) => {
+app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, allowMissingTurnstile, verifyTurnstile, async (req, res) => {
   const { name, phone, email, description, photo_url } = req.body;
 
   if (!name || !phone || !email) {
@@ -2165,15 +2270,30 @@ app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, verifyTurnstil
      lead for a system nobody reads is how a digest gets muted — taking the
      lines that matter with it. */
   const syncClover = process.env.CLOVER_SYNC_LEADS === '1';
+  /* HubSpot is switched off too (owner, 2026-09-26): Brevo is the CRM, and it
+     now gets every enquiry — retried hourly until it lands, brevoCatchUp().
+     HUBSPOT_SYNC_LEADS=1 sends enquiries to HubSpot again. */
+  const syncHubSpot = process.env.HUBSPOT_SYNC_LEADS === '1';
+
+  /* No Turnstile token (allowMissingTurnstile). The lead is kept and the shop
+     told, flagged — but nothing goes to the address typed in, neither the
+     confirmation email nor a Brevo list, so the form cannot be used to mail
+     or subscribe strangers. */
+  const unverified = req.humanCheck === 'missing';
+  if (unverified) {
+    // Awaited: brevoCatchUp reads this flag to leave the row out of Brevo.
+    await pool.query(`UPDATE submissions SET human_check = 'missing' WHERE id = $1`, [submissionId])
+      .catch(err => console.error('human_check mark failed:', err.message));
+  }
 
   // Fire everything in parallel
   const [emailResult, customerEmailResult, brevoResult, hubspotResult, cloverResult] =
     await Promise.allSettled([
-      sendNotificationEmail(s),
-      sendCustomerConfirmationEmail(s),
-      syncToBrevo(s),
-      syncToHubSpot(s),
-      syncClover ? createCloverCustomer(s) : Promise.resolve(undefined),
+      sendNotificationEmail(s, { unverified }),
+      unverified ? Promise.resolve(undefined) : sendCustomerConfirmationEmail(s),
+      unverified ? Promise.resolve(undefined) : syncToBrevo(s),
+      syncHubSpot && !unverified ? syncToHubSpot(s) : Promise.resolve(undefined),
+      syncClover && !unverified ? createCloverCustomer(s) : Promise.resolve(undefined),
     ]);
 
   if (emailResult.status         === 'rejected') console.error('Notification email failed:', emailResult.reason?.message, JSON.stringify(emailResult.reason?.response?.data ?? emailResult.reason?.response ?? null));
@@ -2191,9 +2311,15 @@ app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, verifyTurnstil
     if (r.status === 'rejected') reportError('submit:' + name, r.reason || new Error(name + ' failed')).catch(() => {});
   }
 
+  // Landed in Brevo — or deliberately not sent there. Otherwise brevoCatchUp retries it.
+  if (brevoResult.status === 'fulfilled' && !unverified) {
+    pool.query('UPDATE submissions SET brevo_synced_at = NOW() WHERE id = $1', [submissionId])
+      .catch(err => console.error('Brevo sync mark failed:', err.message));
+  }
+
   // Persist IDs
   const updates = {};
-  if (hubspotResult.status === 'fulfilled') {
+  if (hubspotResult.status === 'fulfilled' && hubspotResult.value) {
     updates.hubspot_contact_id = hubspotResult.value.contactId;
     updates.hubspot_deal_id    = hubspotResult.value.dealId;
   }
@@ -2936,6 +3062,7 @@ async function verifyTurnstile(req, res, next) {
        away by rejectBots — but a real page whose widget had no token yet. It
        was the one silent 400 on the form (the owner's own retry, 2026-09-26). */
     console.warn('turnstile: no token on', req.path);
+    if (req.turnstileMayBeMissing) { req.humanCheck = 'missing'; return next(); }
     return res.status(400).json({ error: 'Please complete the human check and try again.' });
   }
   try {
@@ -2960,6 +3087,23 @@ async function verifyTurnstile(req, res, next) {
     console.error('turnstile check failed, allowing through:', err.message);
     return next();
   }
+}
+
+/** Put before verifyTurnstile on a route that must never lose a real customer
+ *  to it: a request with NO token then continues, marked req.humanCheck =
+ *  'missing', instead of being refused. For the quote form only — it has
+ *  rejectBots' form token in front, so a scripted POST is still stopped there.
+ *
+ *  Why: a browser that cannot run the check — a content blocker, an old phone,
+ *  a challenge that never finishes — was told to "complete the human check"
+ *  with nothing on screen to complete, and the enquiry was lost to the
+ *  validator ("validation should fail open, not block sales"). The handler keeps
+ *  such a lead and flags it to the shop, but sends nothing to the address typed
+ *  in. A token that IS sent and fails is still refused: that is a bot or a
+ *  replay, not a browser that could not run the check. */
+function allowMissingTurnstile(req, _res, next) {
+  req.turnstileMayBeMissing = true;
+  next();
 }
 
 /** The widget, or nothing at all when Turnstile is not configured. */
@@ -3368,6 +3512,11 @@ app.post('/api/embroidery-quote', orderRateLimit, verifyTurnstile, async (req, r
           <p style="color:#999;font-size:12px;margin-top:24px;">Submitted from design.jtees.net · ${new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' })} CT</p>
         </div>`,
     });
+    /* Into Brevo too, which is the CRM (owner, 2026-09-26). Best-effort and not
+       awaited: this request is not stored anywhere but the email above, so a
+       Brevo failure is reported rather than retried. */
+    syncToBrevo({ name, email, phone })
+      .catch((err) => reportError('embroidery:brevo', err).catch(() => {}));
     if (email) {
       await sendEmail({
         to: email,
@@ -15094,6 +15243,7 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
     await step('daily digest', sendDailyDigest);
     await step('tax check', taxMonthlyCheck);
     await step('brevo breach check', brevoBreachCheck);
+    await step('brevo catch-up', brevoCatchUp);
     await step('error digest', sendErrorDigest);
     await step('supplier sync', runSupplierSync);
     setTimeout(runSweep, 60 * 60 * 1000);

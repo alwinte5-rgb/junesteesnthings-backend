@@ -160,7 +160,21 @@ test('a request that never got an answer says so', async () => {
 });
 
 test('all three integration clients are wrapped', () => {
-  assert.match(src, /const brevo = explainFailures\(/);
+  assert.match(src, /const brevo = [\w(]*explainFailures\(/);
   assert.match(src, /const hubspot = explainFailures\(/);
   assert.match(src, /explainFailures\(clover, 'Clover'\)/);
+});
+
+/* ── switched off, 2026-09-26 ─────────────────────────────────────────────── */
+
+test('enquiries go to HubSpot only when HUBSPOT_SYNC_LEADS=1 — Brevo is the CRM', () => {
+  const at = src.indexOf("app.post('/submit'");
+  const submit = src.slice(at, src.indexOf('\n});', at));
+  assert.match(submit, /process\.env\.HUBSPOT_SYNC_LEADS === '1'/);
+  const call = submit.indexOf('syncToHubSpot(s)');
+  assert.notStrictEqual(call, -1, 'the opt-in path must still exist');
+  assert.match(submit.slice(Math.max(0, call - 60), call), /syncHubSpot\b/,
+    'the HubSpot call must sit behind the switch');
+  assert.match(submit, /hubspotResult\.status === 'fulfilled' && hubspotResult\.value/,
+    'a skipped HubSpot step must not be read as a result with ids');
 });
