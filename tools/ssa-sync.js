@@ -256,6 +256,12 @@ process.stdin.on('end', async () => {
 
   const stmts = [];
   const repriced = [], unchanged = [], suspicious = [], missing = [], unresolved = [];
+  /* The shop's own products — no supplier, no S&S style (banners, buttons,
+     cutouts, cards). They will never match a style, and reporting them every
+     night as NOT ON S&S sent the "needs a look" email daily for nothing: the
+     alert that trains people to ignore the next one (9 of them, 2026-09-26).
+     Listed quietly instead, and never looked up. */
+  const ownProducts = [];
   /* Products the API could not be reached for. Kept strictly apart from
      `missing`: one means S&S says there is nothing, the other means S&S did not
      answer, and only the first is evidence about the product. */
@@ -266,6 +272,7 @@ process.stdin.on('end', async () => {
 
   for (const p of products) {
     let style, bySize;
+    if (!p.supplier && !Number(p.sid)) { ownProducts.push(p); continue; }
     try {
       style = await resolveStyle(ssa, p);
       if (!style) { unresolved.push(p); continue; }
@@ -378,6 +385,12 @@ process.stdin.on('end', async () => {
   if (unresolved.length) {
     console.log('NOT ON S&S (' + unresolved.length + ') — never matched a style');
     for (const p of unresolved) console.log('  #' + String(p.id).padStart(3) + '  ' + p.name);
+    console.log();
+  }
+  if (ownProducts.length) {
+    // Deliberately worded so the nightly run's "needs a look" filter ignores it.
+    console.log('Shop-made, priced by hand (' + ownProducts.length + ') — no supplier, not synced');
+    for (const p of ownProducts) console.log('  #' + String(p.id).padStart(3) + '  ' + p.name);
     console.log();
   }
   if (unreachable.length) {

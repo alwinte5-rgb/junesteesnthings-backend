@@ -205,3 +205,24 @@ test('the catalogue photo is the garment, never the model shot', () => {
   assert.match(thumbLine[1], /^defaultColourImage\(rows\)/,
     'the style image is still being reached for first');
 });
+
+/* The shop's own products (no supplier, no S&S style) were reported every night
+   as NOT ON S&S, so the "needs a look" email went out daily for nothing. */
+test('shop-made products are skipped before any S&S lookup', () => {
+  const src = read('tools/ssa-sync.js');
+  const skip = src.indexOf("if (!p.supplier && !Number(p.sid)) { ownProducts.push(p); continue; }");
+  assert.ok(skip !== -1, 'no-supplier products must be set aside');
+  assert.ok(skip < src.indexOf('style = await resolveStyle(ssa, p);'), 'before the lookup, not after it');
+});
+
+test('the shop-made list never trips the nightly "needs a look" email', () => {
+  const server = read('server.js');
+  const m = server.match(/(\/SKIPPED\|[^\n]*?\/)\.test\(l\)/);   // the alert filter, by its own text
+  assert.ok(m, 'the notable-line filter in runSupplierSync was not found');
+  const notable = eval(m[1]);
+  const src = read('tools/ssa-sync.js');
+  const line = src.match(/console\.log\('(Shop-made, priced by hand[^']*)'/);
+  assert.ok(line, 'the shop-made heading was not found');
+  assert.strictEqual(notable.test(line[1] + ' (9) — no supplier, not synced'), false);
+  assert.strictEqual(notable.test('NOT ON S&S (1) — never matched a style'), true, 'a real S&S miss still alerts');
+});
