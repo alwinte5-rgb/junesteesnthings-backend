@@ -63,7 +63,7 @@ const excludeArg = args.includes('--exclude')
 const EXCLUDE = new Set(excludeArg.split(',').map((x) => x.trim()).filter(Boolean));
 const excluded = (...ids) => ids.some((id) => id && EXCLUDE.has(id));
 
-const QUOTE_CODE_RE = /^[A-Z0-9]{6}$/;
+const QUOTE_CODE_RE = /^(?:[A-Z0-9]{6}|[A-Z0-9]{10})$/;   // legacy 6, new 10 (server.js newQuoteCode)
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const money = (n) => '$' + round2(n).toFixed(2);
 const day = (unix) => new Date(unix * 1000).toISOString().slice(0, 10);

@@ -3675,7 +3675,7 @@ const REVIEW_CSS = `
 
 `;
 
-const QUOTE_CODE_RE = /^[A-Z0-9]{6}$/;
+const QUOTE_CODE_RE = /^(?:[A-Z0-9]{6}|[A-Z0-9]{10})$/;   // legacy 6, new 10 — see newQuoteCode
 
 /* ── Guessing budget for quote codes ──────────────────────────────────────
    A code is crypto.randomBytes(3): 24 bits, six hex characters. That is short
@@ -5224,8 +5224,17 @@ function balanceOf(q, total) {
   return round2(Math.max(0, t - Number((q && q.paid_amount) || 0) - Number((q && q.written_off) || 0)));
 }
 
+/* A quote link is the only thing between a stranger and a customer's name,
+   phone and prices, so the code is the password. Six hex characters was 24 bits
+   — 16.7 million, sweepable from a pool of IPs despite the per-IP miss budget.
+   New codes are 10 characters from an alphabet with no look-alikes (no 0/O,
+   1/I/L), because customers type this into a Zelle memo: about 50 bits.
+   Old six-character codes stay valid; QUOTE_CODE_RE accepts both. */
+const QUOTE_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 function newQuoteCode() {
-  return crypto.randomBytes(3).toString('hex').toUpperCase();
+  let c = '';
+  for (let i = 0; i < 10; i++) c += QUOTE_CODE_ALPHABET[crypto.randomInt(QUOTE_CODE_ALPHABET.length)];
+  return c;
 }
 
 /** "24 tees + 12 hoodies" — the {summary} in the text message. */
