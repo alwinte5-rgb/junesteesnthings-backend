@@ -16,6 +16,10 @@ const {
 } = require('./tools/lib/monitoring');
 initMonitoring();
 const { describeTawkEvent, isE164 } = require('./tools/lib/chat-alert');
+const {
+  CONSENT_VERSION, TRANSACTIONAL_TEXT, MARKETING_TEXT,
+  parseSmsConsent, consentCheckboxesHtml,
+} = require('./tools/lib/sms-consent');
 
 const express    = require('express');
 const cors       = require('cors');
@@ -636,6 +640,26 @@ async function initDB() {
     )`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS app_errors_open_uniq
                       ON app_errors (fingerprint) WHERE reported_at IS NULL`).catch(() => {});
+
+  /* SMS consent — append-only. Each row is one moment someone ticked a box (or
+     texted STOP), with the exact wording they saw. The CURRENT answer for a
+     phone is its newest row; nothing is ever updated in place, so the history
+     that proves consent cannot be overwritten by a later form. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sms_consents (
+      id              BIGSERIAL PRIMARY KEY,
+      phone           TEXT NOT NULL,
+      transactional   BOOLEAN NOT NULL,
+      marketing       BOOLEAN NOT NULL,
+      source          TEXT NOT NULL,
+      consent_version TEXT NOT NULL,
+      consent_text    TEXT NOT NULL,
+      ip              TEXT,
+      user_agent      TEXT,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS sms_consents_phone_idx
+                      ON sms_consents (phone, created_at DESC)`).catch(() => {});
 
   console.log('Database ready.');
 }
@@ -2000,6 +2024,10 @@ app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, verifyTurnstil
      is already with the shop — so it answers the same way. What it must not do
      is fan out again: a second confirmation email, a second HubSpot deal and a
      second Clover customer are the actual damage. */
+  // Before the duplicate return: a resubmit may be the one where the box was ticked.
+  await recordSmsConsent(parseSmsConsent(req.body),
+    { source: 'quote-form', ip: clientIp(req), userAgent: req.get('user-agent') });
+
   if (duplicate) {
     console.log(`Duplicate submission suppressed for ${s.email || s.phone}`);
     return res.json({ ok: true, duplicate: true });
@@ -3048,6 +3076,8 @@ app.post('/api/embroidery-quote', orderRateLimit, verifyTurnstile, async (req, r
     if (fileUrl && !fileUrl.startsWith('https://res.cloudinary.com/')) {
       return res.status(400).json({ error: 'Invalid file reference.' });
     }
+    await recordSmsConsent(parseSmsConsent(b),
+      { source: 'embroidery-quote', ip: clientIp(req), userAgent: req.get('user-agent') });
     const fileRow = fileUrl
       ? `<tr><td style="padding:8px;font-weight:bold;">File</td><td style="padding:8px;"><a href="${escEmail(fileUrl)}">Download uploaded file</a></td></tr>`
       : `<tr><td style="padding:8px;font-weight:bold;">File</td><td style="padding:8px;">None uploaded — digitizing needed</td></tr>`;
@@ -3105,6 +3135,42 @@ function requireInternalKey(req, res, next) {
   if (!k || !hexEqual(req.get('X-JT-Key') || '', k)) return res.status(403).json({ error: 'forbidden' });
   next();
 }
+
+// ── SMS consent ───────────────────────────────────────────────────────────────
+// Records what the boxes said at the moment they were ticked. Never throws: a
+// consent write failing must not fail the order or enquiry it rode in on.
+async function recordSmsConsent(consent, { source, ip, userAgent }) {
+  if (!consent) return false;
+  const text = [consent.transactional && TRANSACTIONAL_TEXT, consent.marketing && MARKETING_TEXT]
+    .filter(Boolean).join('\n');
+  try {
+    await pool.query(
+      `INSERT INTO sms_consents (phone, transactional, marketing, source, consent_version, consent_text, ip, user_agent)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [consent.phone, consent.transactional, consent.marketing, String(source).slice(0, 40),
+       CONSENT_VERSION, text, ip ? String(ip).slice(0, 64) : null, userAgent ? String(userAgent).slice(0, 300) : null]);
+    return true;
+  } catch (err) {
+    console.error('recordSmsConsent failed:', err.message);
+    return false;
+  }
+}
+
+// The designer (design.jtees.net) posts its checkout / quote-form boxes here,
+// passing along the customer's own IP and user agent.
+app.post('/api/sms-consent', requireInternalKey, async (req, res) => {
+  const consent = parseSmsConsent(req.body);
+  if (!consent) return res.json({ ok: true, recorded: false });
+  const ok = await recordSmsConsent(consent, {
+    source: 'designer:' + String(req.body.source || 'unknown').replace(/[^a-z0-9_-]/gi, '').slice(0, 30),
+    ip: req.body.ip, userAgent: req.body.user_agent,
+  });
+  res.status(ok ? 200 : 500).json({ ok, recorded: ok });
+});
+
+app.get('/sms-terms', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'sms-terms.html'));
+});
 
 // Passwordless login code for customer accounts on the designer site
 app.post('/api/send-login-code', requireInternalKey, async (req, res) => {
@@ -7962,6 +8028,7 @@ app.get('/q/:code', async (req, res) => {
             <input type="email" name="email" autocomplete="email">` : ''}
           ${!q.phone ? `<label>Mobile <span style="text-transform:none;font-weight:400">(optional)</span></label>
             <input type="tel" name="phone" autocomplete="tel">` : ''}
+          ${consentCheckboxesHtml()}
           <label>When do you need it? <span style="text-transform:none;font-weight:400">(optional)</span></label>
           <input type="date" name="needed_by" value="${q.needed_by ? String(q.needed_by).slice(0,10) : ''}">
           <button type="submit" style="width:100%;margin-top:14px">Accept &amp; choose payment</button>
@@ -8979,6 +9046,9 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
 
     if (rows.length) {                       // first acceptance only
       const q = rows[0];
+      // The quote's phone, whether it was on file or typed just now.
+      await recordSmsConsent(parseSmsConsent({ ...rb, phone: q.phone }),
+        { source: 'quote-accept', ip: clientIp(req), userAgent: req.get('user-agent') });
       const msgs = quoteMessages(q);
       const lines = (q.items || []).map(i =>
         `<tr><td style="padding:8px 4px">${escEmail(i.description)}</td>

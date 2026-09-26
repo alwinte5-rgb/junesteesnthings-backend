@@ -2720,6 +2720,19 @@
               </div>
             </div>
 
+            <!-- SMS consent: both unchecked by default; wording must match tools/lib/sms-consent.js -->
+            <div class="sms-consent" style="margin:-4px 0 14px;font-size:12.5px;line-height:1.45;color:var(--text-body)">
+              <label style="display:flex;gap:8px;align-items:flex-start;font-weight:400;text-transform:none;letter-spacing:0;margin:6px 0">
+                <input type="checkbox" name="sms_transactional" value="1" style="width:auto;margin-top:3px;flex:none" />
+                <span>Text me about my order (quotes, order status, pickup and delivery updates) from June's Tees &amp; Things. Msg frequency varies. Msg &amp; data rates may apply. Reply STOP to opt out, HELP for help.</span>
+              </label>
+              <label style="display:flex;gap:8px;align-items:flex-start;font-weight:400;text-transform:none;letter-spacing:0;margin:6px 0">
+                <input type="checkbox" name="sms_marketing" value="1" style="width:auto;margin-top:3px;flex:none" />
+                <span>Also text me deals and promotions from June's Tees &amp; Things (up to 4 msgs/month). Consent is not a condition of purchase. Msg &amp; data rates may apply. Reply STOP to opt out.</span>
+              </label>
+              <p style="font-size:11.5px;margin:4px 0 0;opacity:.8">See our <a href="/sms-terms" target="_blank" rel="noopener">SMS Terms</a> and <a href="https://design.jtees.net/privacy.php" target="_blank" rel="noopener">Privacy Policy</a>.</p>
+            </div>
+
             <div class="form-group">
               <label for="f-desc">Tell Us About Your Order</label>
               <textarea id="f-desc" name="description" required placeholder="What do you need? Item type, quantities, colors, event date, any special requests..."></textarea>
