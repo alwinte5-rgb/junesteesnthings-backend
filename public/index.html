@@ -3139,15 +3139,21 @@
       formStatus.textContent = '';
 
       /* The human check first: without a token the server refuses the enquiry.
-         If it needs a tick, the widget is showing it by now — say where,
-         rather than send and have the server say it. */
-      if (!(await turnstileReady(12000))) {
+         Usually it is long done, but a renewed one took 21s in a live check
+         (2026-09-26), so wait generously and say what is happening. If it
+         needs a tick, the widget is showing it by then — say where, rather
+         than send and have the server say it. */
+      if (!turnstileToken() && tsWidget !== null) {
+        formStatus.textContent = "One moment, confirming you're not a robot…";
+      }
+      if (!(await turnstileReady(30000))) {
         formStatus.className = 'error';
         formStatus.textContent = "Please complete the quick check just above the button, then press Send again. Can't see it? Refresh the page.";
         submitBtn.disabled = false;
         submitBtn.textContent = 'Send Request';
         return;
       }
+      formStatus.textContent = '';
 
       /* A fresh form token as well. The one fetched at page load lasts 30 to
          60 minutes, so a customer who filled the form in slowly was refused
