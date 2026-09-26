@@ -67,6 +67,13 @@ const T = {
       ` ${STOP}`,
   }),
 
+  // The one follow-up, 3+ days after a popup capture with a saved cart.
+  cartFollowup: ({ code, pct, restoreUrl }) => ({
+    template: 'cart-followup',
+    body: `${BRAND}: Still thinking it over? Your design is saved: ${plain(restoreUrl, 120)}` +
+      ` Code ${plain(code, 20)} still takes ${Number(pct) || 10}% off your first order. ${STOP}`,
+  }),
+
   // Design-studio orders (design.jtees.net)
   studioOrderPlaced: ({ orderId }) => ({
     template: 'studio-order-placed',

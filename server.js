@@ -3359,6 +3359,29 @@ app.post('/api/sms-cart-code', requireInternalKey, async (req, res) => {
   res.json({ ok: status === 'sent' || status === 'duplicate', status });
 });
 
+/* The single follow-up to a popup phone capture, sent by the designer's hourly
+   cron once a saved cart has sat 3+ days with no order. The designer decides
+   WHEN (it knows the cart and the orders); this decides WHETHER — consent is
+   re-checked here, and the dedupe key allows one follow-up per number per
+   month however often the cron asks. */
+app.post('/api/sms-cart-followup', requireInternalKey, async (req, res) => {
+  const b = req.body || {};
+  const phone = normalizeUsPhone(b.phone);
+  const code = smsPlain(b.code, 20);
+  const restoreUrl = /^https:\/\/design\.jtees\.net\/capture-cart\.php\?restore=[a-f0-9]{40,64}$/.test(String(b.restore_url || ''))
+    ? String(b.restore_url) : '';
+  if (!phone || !code || !restoreUrl) return res.status(400).json({ ok: false, status: 'bad-input' });
+  const month = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' }).slice(0, 7);
+  const status = await sendCustomerSms({
+    phone, kind: 'marketing', ref: 'cart-followup:' + month,
+    msg: SMS.cartFollowup({ code, pct: b.pct, restoreUrl }),
+  });
+  // Settled outcomes answer 200 so the cron marks the cart done. Not-set-up or
+  // a failed send answers 503 so the next hourly run tries again.
+  const settled = ['sent', 'duplicate', 'no-consent', 'no-phone'].includes(status);
+  res.status(settled ? 200 : 503).json({ ok: settled, status });
+});
+
 app.get('/sms-terms', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'sms-terms.html'));
 });

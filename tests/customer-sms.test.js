@@ -245,3 +245,14 @@ test('admin password auth refuses state-changing requests from other sites', () 
   assert.match(body, /!\['GET', 'HEAD'\]\.includes\(req\.method\) && origin && !SITE_ORIGINS\.includes\(origin\)/);
   assert.ok(body.indexOf('SITE_ORIGINS.includes(origin)') < body.indexOf("provided.startsWith('Basic ')"));
 });
+
+test('the cart follow-up: one segment pair, marketing consent, once a month per number', () => {
+  const m = T.cartFollowup({ code: 'ABCDEFGHIJKLMNOPQRST', pct: 50,
+    restoreUrl: 'https://design.jtees.net/capture-cart.php?restore=' + 'f'.repeat(64) });
+  assert.ok(isGsm7(m.body) && m.body.length <= 306, `${m.body.length}`);
+  const start = server.indexOf("app.post('/api/sms-cart-followup'");
+  const body = server.slice(start, server.indexOf('\n});', start));
+  assert.match(body, /^app\.post\('\/api\/sms-cart-followup', requireInternalKey,/);
+  assert.match(body, /kind: 'marketing', ref: 'cart-followup:' \+ month/);
+  assert.doesNotMatch(body, /recordSmsConsent/, 'a follow-up must never create consent');
+});
