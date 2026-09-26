@@ -9235,6 +9235,141 @@ async function bankStripeSession(session) {
   return { ok: true, duplicate: false, paid: res.paid };
 }
 
+/* ── Refunds ──────────────────────────────────────────────────────────────────
+   charge.refunded carries the CHARGE, and a charge's amount_refunded is the
+   running total of every refund on it, not the size of the refund that just
+   happened. It used to be booked as though it were: $10 and then $5 back on
+   one charge wrote −$10 and then −$15, and the quote read $10 less paid than
+   it really was. What is new is that running total minus the most already
+   booked for the charge, and ext_ref has always carried the running total
+   (`ch_…:<cents>`), so that is where it is read back from.
+
+   Only a second refund on the same charge was ever booked wrong, and when this
+   was fixed (2026-09-26) the account had issued exactly one refund, in full,
+   so nothing already booked needs correcting. */
+
+/* Two refunds on one charge handled at the same moment would both read the
+   same "already booked" figure and book the overlap twice, so each charge's
+   refunds queue behind one another. One process serves this app (railway.json
+   sets no replicas), so a queue in memory is enough. */
+const refundQueues = new Map();
+function oneRefundAtATime(chargeId, fn) {
+  const key = String(chargeId || '');
+  const run = (refundQueues.get(key) || Promise.resolve()).then(() => fn());
+  const settled = run.then(() => {}, () => {});   // never rejects, so one failure cannot jam the queue
+  refundQueues.set(key, settled);
+  settled.then(() => { if (refundQueues.get(key) === settled) refundQueues.delete(key); });
+  return run;                                     // a failure still reaches Stripe as a 500, and it retries
+}
+
+/** The most, in cents, either ledger has already booked as refunded on one charge. */
+async function refundCentsBooked(chargeId) {
+  const { rows } = await pool.query(
+    `SELECT COALESCE(MAX(CASE WHEN split_part(ext_ref, ':', 2) ~ '^[0-9]{1,12}$'
+                              THEN split_part(ext_ref, ':', 2)::bigint END), 0) AS cents
+       FROM (SELECT ext_ref FROM quote_payments    WHERE kind = 'refund'
+             UNION ALL
+             SELECT ext_ref FROM unlinked_payments WHERE kind = 'refund') r
+      WHERE split_part(ext_ref, ':', 1) = $1`, [chargeId]);
+  return Number(rows[0]?.cents || 0);
+}
+
+async function recordStripeRefund(charge) {
+  const totalCents = Math.round(Number(charge.amount_refunded) || 0);
+  if (!(totalCents > 0) || !charge.id) return;
+  const bookedCents = await refundCentsBooked(charge.id);
+  /* Nothing new: Stripe retrying an event already booked, or an older event
+     arriving after a newer one whose running total already covered it. */
+  if (!(totalCents > bookedCents)) return;
+  const refunded = round2((totalCents - bookedCents) / 100);
+  const soFar = bookedCents > 0
+    ? ` (${money(totalCents / 100)} refunded on this payment in all)` : '';
+  const extRef = charge.id + ':' + totalCents;
+  const pi = typeof charge.payment_intent === 'string' ? charge.payment_intent : null;
+  /* `part`'s share of this refund, where `part` is some slice of a payment of
+     `whole` (its net of the card fee, or its tax). Worked out on the running
+     total, less the share the already-booked total took, instead of refund by
+     refund: $10, $5 and then $37 back on a $52 charge, each rounded alone,
+     books $50.01 of a $50.00 net, and a charge refunded in full should put
+     back exactly what it took. */
+  const shareOf = (part, whole) =>
+    round2(round2(part * Math.min(totalCents / 100, whole) / whole) -
+           round2(part * Math.min(bookedCents / 100, whole) / whole));
+
+  const { rows } = await pool.query(
+    `SELECT quote_code, SUM(amount) AS applied, SUM(fee) AS fee
+       FROM quote_payments WHERE stripe_pi = $1 AND amount > 0
+      GROUP BY quote_code`, [pi]);
+  if (!rows.length) {
+    /* No quote claimed the original payment — so it is one of the
+       unlinked ones, and the refund has to come back out of the same
+       place or the books keep money that was returned. Recorded as a
+       negative row, matching how the quote ledger expresses a refund. */
+    const { rows: unl } = await pool.query(
+      `SELECT id, order_ref, client_ref, customer_email, customer_name,
+              amount, tax_portion
+         FROM unlinked_payments WHERE stripe_pi = $1 AND amount > 0
+        ORDER BY created_at LIMIT 1`, [pi]);
+    if (!unl.length) {
+      console.warn(`Stripe refund ${charge.id} — no matching quote or unlinked payment for PI ${pi}`);
+      return;
+    }
+    const u = unl[0];
+    /* Carry the tax back out in proportion, the way the quote ledger
+       does. Two things go wrong without it: the period keeps the
+       refunded tax as still owed, and the NULL on the negative row makes
+       COUNT(*) FILTER (tax_portion IS NULL) non-zero — so a fully
+       reconciled month flips to `undetermined` permanently the moment
+       any refund is issued. A tax that was never known stays NULL. */
+    const origAmt = round2(Number(u.amount) || 0);
+    const origTax = u.tax_portion == null ? null : round2(Number(u.tax_portion));
+    const backTax = (origTax === null || !(origAmt > 0))
+      ? null
+      : -shareOf(origTax, origAmt);   // proportional, and never more than was taken
+    const back = await recordUnlinkedPayment(
+      { id: null, payment_intent: pi, amount_total: 0,
+        currency: charge.currency,
+        client_reference_id: u.client_ref,
+        metadata: { order_id: u.order_ref },
+        customer_details: { email: u.customer_email, name: u.customer_name } },
+      'refund of an unlinked payment',
+      { amount: -refunded, kind: 'refund', allowZero: true,
+        taxPortion: backTax,
+        extRef,
+        note: `Refund of ${money(refunded)} via Stripe` });
+    if (!back.duplicate) {
+      console.log(`Stripe refund for unlinked payment ${u.order_ref || pi}: -${money(refunded)}`);
+      await alertShop(`↩️ Refund — ${u.order_ref ? `design studio order #${u.order_ref}` : 'unlinked payment'}, ${money(refunded)}`,
+        `<p>A refund of <b>${money(refunded)}</b> was issued on a payment that belongs to
+            no quote${u.order_ref ? ` (design studio order #${escEmail(u.order_ref)})` : ''}${soFar}.</p>
+         <p style="color:#6b7280">Recorded against the unlinked ledger so the books do not
+            keep money that went back.</p>`);
+    }
+    return;
+  }
+  const code = rows[0].quote_code;
+  /* Reverse the split the payment itself used, so a full refund returns the
+     quote to exactly zero paid rather than leaving part of the fee behind.
+     Dividing by today's CARD_FEE only matched that split while JT_CARD_FEE
+     never changed, and was wrong outright for a payment that carried no fee. */
+  const applied = round2(Number(rows[0].applied) || 0);   // > 0: only payments are selected
+  const origFee = round2(Number(rows[0].fee) || 0);
+  const net = shareOf(applied, round2(applied + origFee));
+  const fee = round2(refunded - net);
+  const out = await recordPayment({
+    code, amount: -net, fee: -fee, method: 'card', kind: 'refund',
+    source: 'stripe', pi, extRef,
+    note: `Refund of ${money(refunded)} via Stripe`,
+  });
+  if (!out.duplicate) {
+    console.log(`Stripe refund for ${code}: -${money(net)} (now ${money(out.paid)})`);
+    await alertShop(`↩️ Refund — quote ${code}, ${money(refunded)}`,
+      `<p>A refund of <b>${money(refunded)}</b> was issued on quote ${escEmail(code)}${soFar}.</p>
+       <p>Applied to quote: −${money(net)}. Now paid: ${money(out.paid)}.</p>
+       <p><a href="${quoteLink(code)}">${quoteLink(code)}</a></p>`);
+  }
+}
+
 /* ── Stripe payment webhook ───────────────────────────────────────────────────
    Set the endpoint in the Stripe Dashboard to
    https://www.jtees.net/webhooks/stripe  (event: checkout.session.completed)
@@ -9385,81 +9520,9 @@ async function handleStripeEvent(event) {
 
       /* Money back out. A refund is a negative ledger row, which is only
          possible because payments are now history rather than one number. */
-      case 'charge.refunded': {
-        const refunded = round2((obj.amount_refunded || 0) / 100);
-        if (!(refunded > 0)) break;
-        const pi = typeof obj.payment_intent === 'string' ? obj.payment_intent : null;
-        const { rows } = await pool.query(
-          `SELECT quote_code, SUM(amount) AS applied, SUM(fee) AS fee
-             FROM quote_payments WHERE stripe_pi = $1 AND amount > 0
-            GROUP BY quote_code`, [pi]);
-        if (!rows.length) {
-          /* No quote claimed the original payment — so it is one of the
-             unlinked ones, and the refund has to come back out of the same
-             place or the books keep money that was returned. Recorded as a
-             negative row, matching how the quote ledger expresses a refund. */
-          const { rows: unl } = await pool.query(
-            `SELECT id, order_ref, client_ref, customer_email, customer_name,
-                    amount, tax_portion
-               FROM unlinked_payments WHERE stripe_pi = $1 AND amount > 0
-              ORDER BY created_at LIMIT 1`, [pi]);
-          if (!unl.length) {
-            console.warn(`Stripe refund ${obj.id} — no matching quote or unlinked payment for PI ${pi}`);
-            break;
-          }
-          const u = unl[0];
-          /* Carry the tax back out in proportion, the way the quote ledger
-             does. Two things go wrong without it: the period keeps the
-             refunded tax as still owed, and the NULL on the negative row makes
-             COUNT(*) FILTER (tax_portion IS NULL) non-zero — so a fully
-             reconciled month flips to `undetermined` permanently the moment
-             any refund is issued. A tax that was never known stays NULL. */
-          const origAmt = round2(Number(u.amount) || 0);
-          const origTax = u.tax_portion == null ? null : round2(Number(u.tax_portion));
-          const backTax = (origTax === null || !(origAmt > 0))
-            ? null
-            : -round2(origTax * Math.min(refunded, origAmt) / origAmt);
-          const back = await recordUnlinkedPayment(
-            { id: null, payment_intent: pi, amount_total: 0,
-              currency: obj.currency,
-              client_reference_id: u.client_ref,
-              metadata: { order_id: u.order_ref },
-              customer_details: { email: u.customer_email, name: u.customer_name } },
-            'refund of an unlinked payment',
-            { amount: -refunded, kind: 'refund', allowZero: true,
-              taxPortion: backTax,
-              extRef: obj.id + ':' + obj.amount_refunded,
-              note: `Refund of ${money(refunded)} via Stripe` });
-          if (!back.duplicate) {
-            console.log(`Stripe refund for unlinked payment ${u.order_ref || pi}: -${money(refunded)}`);
-            await alertShop(`↩️ Refund — ${u.order_ref ? `design studio order #${u.order_ref}` : 'unlinked payment'}, ${money(refunded)}`,
-              `<p>A refund of <b>${money(refunded)}</b> was issued on a payment that belongs to
-                  no quote${u.order_ref ? ` (design studio order #${escEmail(u.order_ref)})` : ''}.</p>
-               <p style="color:#6b7280">Recorded against the unlinked ledger so the books do not
-                  keep money that went back.</p>`);
-          }
-          break;
-        }
-        const code = rows[0].quote_code;
-        /* Reverse the same net/fee split the payment used, so a full refund
-           returns the quote to exactly zero paid rather than leaving the fee
-           behind. */
-        const net = round2(refunded / (1 + CARD_FEE));
-        const fee = round2(refunded - net);
-        const out = await recordPayment({
-          code, amount: -net, fee: -fee, method: 'card', kind: 'refund',
-          source: 'stripe', pi, extRef: obj.id + ':' + obj.amount_refunded,
-          note: `Refund of ${money(refunded)} via Stripe`,
-        });
-        if (!out.duplicate) {
-          console.log(`Stripe refund for ${code}: -${money(net)} (now ${money(out.paid)})`);
-          await alertShop(`↩️ Refund — quote ${code}, ${money(refunded)}`,
-            `<p>A refund of <b>${money(refunded)}</b> was issued on quote ${escEmail(code)}.</p>
-             <p>Applied to quote: −${money(net)}. Now paid: ${money(out.paid)}.</p>
-             <p><a href="${quoteLink(code)}">${quoteLink(code)}</a></p>`);
-        }
+      case 'charge.refunded':
+        await oneRefundAtATime(obj.id, () => recordStripeRefund(obj));
         break;
-      }
 
       /* Chargeback. Deliberately does NOT move money — a dispute is not a
          refund and may be won. It needs a human, fast: Stripe's response
@@ -14466,6 +14529,10 @@ async function sendQuoteFollowUps() {
 async function sendDepositReminders() {
   const days = Math.max(1, parseInt(process.env.JT_DEPOSIT_NUDGE_DAYS || '2', 10));
   try {
+    /* Not after a refund. Paid and then refunded in full reads as never paid,
+       and this would ask that customer for a deposit on a job the shop had
+       just given their money back for. Why a refund was issued is the shop's
+       call, so if money is still owed after one, the shop asks by hand. */
     const { rows } = await pool.query(
       `SELECT * FROM quotes
         WHERE accepted_at IS NOT NULL
@@ -14474,6 +14541,8 @@ async function sendDepositReminders() {
           AND cancelled_at IS NULL
           AND accepted_at <= NOW() - ($1 || ' days')::interval
           AND email <> ''
+          AND NOT EXISTS (SELECT 1 FROM quote_payments p
+                           WHERE p.quote_code = quotes.code AND p.kind = 'refund')
         LIMIT 20`, [String(days)]);
 
     for (const q of rows) {
@@ -14513,6 +14582,9 @@ async function sendDepositReminders() {
 async function sendBalanceReminders() {
   const days = Math.max(1, parseInt(process.env.JT_BALANCE_NUDGE_DAYS || '7', 10));
   try {
+    /* Not after a refund, for the deposit nudge's reason: a partial refund
+       leaves paid below total, and this would email the customer a
+       "remaining balance" of exactly the money just refunded to them. */
     const { rows } = await pool.query(
       `SELECT * FROM quotes
         WHERE COALESCE(paid_amount,0) > 0
@@ -14522,6 +14594,8 @@ async function sendBalanceReminders() {
           AND paid_at <= NOW() - ($1 || ' days')::interval
           AND status <> 'expired'
           AND email <> ''
+          AND NOT EXISTS (SELECT 1 FROM quote_payments p
+                           WHERE p.quote_code = quotes.code AND p.kind = 'refund')
         LIMIT 20`, [String(days)]);
 
     for (const q of rows) {
@@ -15074,8 +15148,27 @@ app.post('/unlinked/:id/tax', requireAdmin, async (req, res) => {
  * the day, threw, and left the catalogue untouched for a fortnight while
  * appearing to have run. A job nobody watches has to say what it did, even when
  * what it did was nothing. */
+/* A job whose money all went back is not one to ask about. The ask is queued
+   the moment a payment lands, days before anyone knows the job will be
+   cancelled and refunded, and "how did we do?" sent to that customer invites
+   exactly the review nobody wants. A partial refund still gets the ask: the job
+   went ahead. Studio orders are read from the unlinked ledger, which is where
+   this side books their payments and refunds. */
+async function refundedInFull({ quote_code, order_ref }) {
+  const { rows } = quote_code
+    ? await pool.query(
+        `SELECT COALESCE(SUM(amount),0) AS net, BOOL_OR(kind = 'refund') AS refunded
+           FROM quote_payments WHERE quote_code = $1`, [quote_code])
+    : order_ref
+      ? await pool.query(
+          `SELECT COALESCE(SUM(amount),0) AS net, BOOL_OR(kind = 'refund') AS refunded
+             FROM unlinked_payments WHERE order_ref = $1`, [order_ref])
+      : { rows: [] };
+  return !!rows[0]?.refunded && Number(rows[0].net) < 0.01;
+}
+
 async function sendDueReviewRequests() {
-  let due = 0, sent = 0, failed = 0, skipped = 0;
+  let due = 0, sent = 0, failed = 0, skipped = 0, refunded = 0;
   try {
     const { rows } = await pool.query(
       `SELECT * FROM reviews
@@ -15088,6 +15181,13 @@ async function sendDueReviewRequests() {
       if (await isUnsubscribed(r.email)) {
         await pool.query('UPDATE reviews SET sent_at=NOW() WHERE id=$1', [r.id]);
         skipped++;
+        continue;
+      }
+      /* Stamped the way an opt-out is, and the follow-up with it, so neither
+         ask comes round again. */
+      if (await refundedInFull(r)) {
+        await pool.query('UPDATE reviews SET sent_at=NOW(), followup_sent_at=NOW() WHERE id=$1', [r.id]);
+        refunded++;
         continue;
       }
       try {
@@ -15113,6 +15213,7 @@ async function sendDueReviewRequests() {
   }
   return 'due=' + due + ' sent=' + sent +
     (skipped ? ' skipped(unsubscribed)=' + skipped : '') +
+    (refunded ? ' skipped(refunded)=' + refunded : '') +
     (failed ? ' FAILED=' + failed : '');
 }
 
@@ -15135,7 +15236,9 @@ async function sendReviewFollowUps() {
         LIMIT ${REVIEW_BATCH}`, [String(REVIEW_FOLLOWUP_DAYS())]);
     due = rows.length;
     for (const r of rows) {
-      if (await isUnsubscribed(r.email)) {
+      /* The first ask can go out before the refund does; the follow-up must
+         still see it. */
+      if (await isUnsubscribed(r.email) || await refundedInFull(r)) {
         await pool.query('UPDATE reviews SET followup_sent_at=NOW() WHERE id=$1', [r.id]);
         continue;
       }

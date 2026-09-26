@@ -244,7 +244,10 @@ test('the refund path reads the original amount and tax to apportion from', () =
     'the original row is the only place the tax portion still exists');
   assert.match(src, /taxPortion: backTax/,
     'the apportioned figure has to actually be passed');
-  assert.match(src, /-round2\(origTax \* Math\.min\(refunded, origAmt\) \/ origAmt\)/,
+  /* Worked out on the charge's running refund total since 2026-09-26, so
+     partial refunds add up to the original tax exactly; the arithmetic is
+     exercised in stripe-refunds.test.js. */
+  assert.match(src, /-shareOf\(origTax, origAmt\)/,
     'a partial refund returns a proportional share, and never more than was taken');
 });
 
