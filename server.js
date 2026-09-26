@@ -3488,9 +3488,35 @@ app.post('/api/embroidery-quote', orderRateLimit, verifyTurnstile, async (req, r
     }
     await recordSmsConsent(parseSmsConsent(b),
       { source: 'embroidery-quote', ip: clientIp(req), userAgent: req.get('user-agent') });
+
+    /* Kept, like every quote-form enquiry: in `submissions`, so it is on the
+       admin leads page and reaches Brevo through the hourly catch-up. It used to
+       exist only as the email below — if that email failed, the request was
+       gone (2026-09-26, #117). Same double-click guard as /submit, and the WHERE
+       repeats the partial index's predicate (tests/on-conflict-targets.test.js). */
+    const description = [`EMBROIDERY REQUEST: ${size}`, qty && `qty ${qty}`, product && `on ${product}`,
+      hasFile ? 'has a stitch file' : 'needs digitizing', notes && `notes: ${notes}`]
+      .filter(Boolean).join(' · ').slice(0, 2000);
+    const dedupeKey = crypto.createHash('sha256').update(['embroidery', email.toLowerCase(), phone,
+      description, Math.floor(Date.now() / (10 * 60 * 1000))].join('|')).digest('hex');
+    let savedId = null;
+    try {
+      const { rows } = await pool.query(
+        `INSERT INTO submissions (name, phone, email, description, photo_url, dedupe_key)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
+         RETURNING id`,
+        [name, phone, email.toLowerCase(), description, fileUrl || null, dedupeKey]);
+      if (!rows.length) return res.json({ ok: true, duplicate: true });   // a second click
+      savedId = rows[0].id;
+    } catch (err) {
+      reportError('embroidery:save', err).catch(() => {});   // the emails below still go
+    }
+
     const fileRow = fileUrl
       ? `<tr><td style="padding:8px;font-weight:bold;">File</td><td style="padding:8px;"><a href="${escEmail(fileUrl)}">Download uploaded file</a></td></tr>`
       : `<tr><td style="padding:8px;font-weight:bold;">File</td><td style="padding:8px;">None uploaded — digitizing needed</td></tr>`;
+    try {
     await sendEmail({
       to: NOTIFY_EMAIL,
       replyTo: email || NOTIFY_EMAIL,
@@ -3512,11 +3538,19 @@ app.post('/api/embroidery-quote', orderRateLimit, verifyTurnstile, async (req, r
           <p style="color:#999;font-size:12px;margin-top:24px;">Submitted from design.jtees.net · ${new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' })} CT</p>
         </div>`,
     });
-    /* Into Brevo too, which is the CRM (owner, 2026-09-26). Best-effort and not
-       awaited: this request is not stored anywhere but the email above, so a
-       Brevo failure is reported rather than retried. */
+    } catch (err) {
+      /* Saved, so not lost: the shop sees it on the leads page and the digest
+         says the email failed. Not saved AND not emailed is a lost request —
+         the customer must be told (the outer catch answers 500). */
+      reportError('embroidery:notify-shop', err).catch(() => {});
+      if (!savedId) throw err;
+    }
+    /* Into Brevo too, which is the CRM (owner, 2026-09-26). Not awaited. A saved
+       request that fails here is retried by brevoCatchUp; an unsaved one can
+       only be reported. */
     syncToBrevo({ name, email, phone })
-      .catch((err) => reportError('embroidery:brevo', err).catch(() => {}));
+      .then(() => savedId && pool.query('UPDATE submissions SET brevo_synced_at = NOW() WHERE id = $1', [savedId]))
+      .catch((err) => { if (!savedId) reportError('embroidery:brevo', err).catch(() => {}); });
     if (email) {
       await sendEmail({
         to: email,
@@ -11697,14 +11731,14 @@ async function allCustomers() {
     const cur = byEmail.get(key);
     if (cur) {
       cur.orders += 1;
-      cur.spent += Number(o.paid || 0);
+      cur.spent += Number(o.paid || 0) - Number(o.refunded || 0);   // net of refunds
       cur.source = 'both';
       if (!cur.name) cur.name = o.name || '';
       if (o.created && new Date(o.created) > new Date(cur.last)) cur.last = o.created;
     } else {
       byEmail.set(key, {
         email: key, name: o.name || '', quotes: 0, orders: 1,
-        spent: Number(o.paid || 0), last: o.created, source: 'studio',
+        spent: Number(o.paid || 0) - Number(o.refunded || 0), last: o.created, source: 'studio',
       });
     }
   }
@@ -12026,6 +12060,11 @@ function studioOrdersSection(feed, { heading = true } = {}) {
   const rows = feed.orders.map((o) => {
     const stage = studioStage(o.status);
     const owed = round2(Math.max(0, Number(o.total || 0) - Number(o.paid || 0)));
+    /* Refunds (the feed's `refunded`, since 2026-09-26). Before, a refunded
+       order read as paid here and could go to press. `paid` stays what was
+       received, so a refund never shows up as money the customer owes. */
+    const refunded = round2(Number(o.refunded || 0));
+    const fullRefund = refunded > 0 && refunded >= Number(o.paid || 0) - 0.005;
     return `<div class="card" style="padding:12px 14px">
       <div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap">
         <span class="chip" style="background:#eef1f8;color:#46505f">Studio</span>
@@ -12036,6 +12075,8 @@ function studioOrdersSection(feed, { heading = true } = {}) {
       </div>
       <div style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <span class="chip" style="background:${stage.bg};color:${stage.color}">${stage.label}</span>
+        ${fullRefund ? `<span class="chip" style="background:#fef2f2;color:#b91c1c">Refunded ${money(refunded)} &mdash; don&rsquo;t produce</span>`
+          : refunded > 0 ? `<span class="chip" style="background:#fff8ed;color:#8a5a00">${money(refunded)} refunded</span>` : ''}
         ${o.tracking ? `<span class="muted" style="font-size:12.5px">tracking ${escEmail(o.tracking)}</span>` : ''}
         <a class="muted" style="font-size:12.5px;margin-left:auto"
            href="${STUDIO_BASE}/admin.php?lumise-page=order&order_id=${encodeURIComponent(o.id)}"

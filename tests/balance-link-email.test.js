@@ -24,7 +24,13 @@ const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 function extractFn(anchor) {
   const start = src.indexOf(anchor);
   assert.notStrictEqual(start, -1, `\`${anchor}\` not found in server.js`);
-  const open = src.indexOf('{', start);
+  // Past the parameter list first: a default like `{ heading = true } = {}` has braces too.
+  let p = src.indexOf('(', start);
+  for (let d = 0; p < src.length; p++) {
+    if (src[p] === '(') d++;
+    else if (src[p] === ')' && --d === 0) break;
+  }
+  const open = src.indexOf('{', p);
   let depth = 0;
   for (let i = open; i < src.length; i++) {
     if (src[i] === '{') depth++;
@@ -73,4 +79,45 @@ test('the endpoint needs the internal key, and reports a failed send', () => {
   assert.match(route, /sendEmail\(/, 'through the shared sender, so it gets the Resend fallback');
   assert.match(route, /reportError\('studio:balance-email'/);
   assert.match(route, /escEmail\(v\.link\)/, 'the link is escaped into the HTML');
+});
+
+/* ── a refunded studio order on the job board ─────────────────────────────
+   The studio webhook ignored refunds until 2026-09-26, so a refunded order
+   read as paid on this board and could go to press. The feed now carries
+   `refunded` alongside `paid` (what was received). */
+
+const board = vm.runInThisContext(`(() => {
+  const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+  const money = (n) => '$' + Number(n || 0).toFixed(2);
+  const STUDIO_BASE = 'https://design.jtees.net';
+  ${extractFn('function escEmail(')}
+  ${extractFn('function studioStage(')}
+  ${extractFn('function studioOrdersSection(')}
+  return studioOrdersSection;
+})()`);
+
+const order = (o) => ({ id: 7, status: 'processing', total: 120, paid: 120, name: 'Ada', email: 'a@b.com', ...o });
+
+test('a fully refunded studio order says do not produce, and shows nothing due', () => {
+  const html = board({ orders: [order({ refunded: 120 })], error: null }, { heading: false });
+  assert.match(html, /Refunded \$120\.00 &mdash; don&rsquo;t produce/);
+  assert.doesNotMatch(html, /due<\/span>/, 'a refund is not money the customer owes');
+});
+
+test('a partial refund is shown, and nothing becomes due', () => {
+  const html = board({ orders: [order({ refunded: 20 })], error: null }, { heading: false });
+  assert.match(html, /\$20\.00 refunded/);
+  assert.doesNotMatch(html, /don&rsquo;t produce/);
+  assert.doesNotMatch(html, /due<\/span>/);
+});
+
+test('an order with no refunds (or an older feed without the field) is unchanged', () => {
+  const html = board({ orders: [order({ paid: 60 })], error: null }, { heading: false });
+  assert.match(html, /\$60\.00 due/);
+  assert.doesNotMatch(html, /refunded|Refunded/);
+});
+
+test('customer lifetime spend is net of studio refunds', () => {
+  assert.match(src, /cur\.spent \+= Number\(o\.paid \|\| 0\) - Number\(o\.refunded \|\| 0\)/);
+  assert.match(src, /spent: Number\(o\.paid \|\| 0\) - Number\(o\.refunded \|\| 0\)/);
 });
