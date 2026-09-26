@@ -15,6 +15,7 @@ const {
   releaseName: monitoringRelease,
 } = require('./tools/lib/monitoring');
 initMonitoring();
+const { describeTawkEvent, isE164 } = require('./tools/lib/chat-alert');
 
 const express    = require('express');
 const cors       = require('cors');
@@ -2211,6 +2212,55 @@ app.post('/webhooks/clover', async (req, res) => {
   }
 });
 
+// ── Owner SMS (Twilio REST; no SDK) ───────────────────────────────────────────
+// Needs TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER (the Twilio
+// sender) and TWILIO_TO_NUMBER (the owner's phone), numbers in +1XXXXXXXXXX form.
+// Unconfigured = skipped with one log line, so email alerts still go out.
+function smsConfigured() {
+  return Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN &&
+    process.env.TWILIO_PHONE_NUMBER && process.env.TWILIO_TO_NUMBER);
+}
+
+async function sendOwnerSms(body) {
+  if (!smsConfigured()) {
+    console.log('sendOwnerSms: skipped — Twilio not fully configured');
+    return false;
+  }
+  const from = process.env.TWILIO_PHONE_NUMBER.trim();
+  const to = process.env.TWILIO_TO_NUMBER.trim();
+  if (!isE164(from) || !isE164(to)) {
+    throw new Error('TWILIO_PHONE_NUMBER / TWILIO_TO_NUMBER must be +1XXXXXXXXXX form');
+  }
+  const sid = process.env.TWILIO_ACCOUNT_SID.trim();
+  const auth = Buffer.from(`${sid}:${process.env.TWILIO_AUTH_TOKEN.trim()}`).toString('base64');
+  const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
+    method: 'POST',
+    headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ From: from, To: to, Body: body }).toString(),
+  });
+  if (!r.ok) {
+    const t = await r.text().catch(() => '');
+    throw new Error(`Twilio ${r.status}: ${t.slice(0, 200)}`);
+  }
+  console.log('owner sms sent');
+  return true;
+}
+
+function alertOwnerOfChat(body) {
+  const a = describeTawkEvent(body);
+  if (!a) return;
+  const html = `
+    <h2 style="margin:0 0 12px">New ${escEmail(a.kind)} on jtees.net</h2>
+    <p><strong>From:</strong> ${escEmail(a.name)}${a.email ? ` &lt;${escEmail(a.email)}&gt;` : ''}</p>
+    ${a.where ? `<p><strong>Location:</strong> ${escEmail(a.where)}</p>` : ''}
+    ${a.text ? `<p><strong>Message:</strong><br>${escEmail(a.text)}</p>` : ''}
+    <p><a href="https://dashboard.tawk.to/">Open tawk.to to reply</a> — or answer from the tawk app.</p>`;
+  sendEmail({ to: NOTIFY_EMAIL, subject: a.subject, html, replyTo: a.email || undefined })
+    .catch(err => console.error('chat alert email failed:', err.message));
+  sendOwnerSms(a.sms)
+    .catch(err => console.error('chat alert sms failed:', err.message));
+}
+
 // ── tawk.to chat webhook ───────────────────────────────────────────────────────
 // In the tawk.to dashboard (Administration → Settings → Webhooks), set the URL to:
 // https://www.jtees.net/webhooks/tawk
@@ -2244,6 +2294,10 @@ app.post('/webhooks/tawk', async (req, res) => {
   }
 
   res.sendStatus(200); // acknowledge immediately; tawk retries non-2XX for 12 hours
+
+  // Alert the owner FIRST, and for anonymous visitors too — a chat with no
+  // email is still a customer waiting. Failures are logged, never thrown.
+  alertOwnerOfChat(req.body);
 
   // chat:* events carry `visitor`; ticket:create carries `requester`
   const { event, visitor, requester } = req.body;
