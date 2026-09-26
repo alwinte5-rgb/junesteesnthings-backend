@@ -2021,12 +2021,18 @@ app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, verifyTurnstil
   let submissionId, duplicate = false;
   try {
     const { rows } = await pool.query(
-      /* ON CONFLICT DO NOTHING is the guard itself. Two concurrent clicks both
+      /* The WHERE must repeat the partial index's predicate
+         (submissions_dedupe_uniq ... WHERE dedupe_key IS NOT NULL). Without it
+         Postgres finds no matching constraint and REFUSES the insert — which is
+         how every quote-form enquiry failed from 2026-09-01 to 2026-09-26 with
+         "Something went wrong" on screen. tests/on-conflict-targets.test.js.
+
+         ON CONFLICT DO NOTHING is the guard itself. Two concurrent clicks both
          reach the INSERT — one wins the unique index and the other returns no
          row, which is how a race is decided rather than hoped about. */
       `INSERT INTO submissions (name, phone, email, description, photo_url, dedupe_key)
        VALUES ($1,$2,$3,$4,$5,$6)
-       ON CONFLICT (dedupe_key) DO NOTHING
+       ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
        RETURNING id`,
       [s.name, s.phone, s.email, s.description, s.photo_url, dedupeAt(nowBucket)]
     );

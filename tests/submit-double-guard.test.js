@@ -27,7 +27,7 @@ const route = src.slice(src.indexOf("app.post('/submit'"),
 test('the duplicate is rejected BY the insert, not by a lookup before it', () => {
   /* Two clicks arrive concurrently. A SELECT-then-INSERT loses that race and
      both rows land, which is the shape that reads correct and is not. */
-  assert.match(route, /ON CONFLICT \(dedupe_key\) DO NOTHING/,
+  assert.match(route, /ON CONFLICT \(dedupe_key\) WHERE dedupe_key IS NOT NULL DO NOTHING/,
     'the insert itself must decide the race');
   assert.match(route, /RETURNING id/);
   const insertAt = route.indexOf('INSERT INTO submissions');
