@@ -169,3 +169,36 @@ test('inbound webhook verifies before acting, and records STOP', () => {
   assert.match(body, /transactional: false, marketing: false \}, \{ source: 'sms-reply:stop' \}/);
   assert.match(body, /sendStatus\(401\)/);
 });
+
+test('cart-code text stays within two GSM-7 segments with the longest cart link', () => {
+  const m = T.cartCode({ code: 'ABCDEFGHIJKLMNOPQRST', pct: 50,
+    restoreUrl: 'https://design.jtees.net/capture-cart.php?restore=' + 'f'.repeat(64) });
+  assert.ok(isGsm7(m.body));
+  assert.ok(m.body.length <= 306, `${m.body.length} chars`);
+  assert.match(m.body, /Reply STOP to opt out\.$/);
+});
+
+test('popup texting: behind the key, marketing consent required, rate limited before anything', () => {
+  const start = server.indexOf("app.post('/api/sms-cart-code'");
+  const body = server.slice(start, server.indexOf('\n});', start));
+  assert.match(body, /^app\.post\('\/api\/sms-cart-code', requireInternalKey,/);
+  assert.ok(body.indexOf('cartSmsAllowed(') < body.indexOf('recordSmsConsent('));
+  assert.match(body, /!consent\.marketing\) return res\.status\(400\)/);
+  assert.match(body, /kind: 'marketing'/);
+  // Only a link back to our own designer can go in the text.
+  assert.ok(body.includes('/^https:\\/\\/design\\.jtees\\.net\\/capture-cart\\.php'), 'restore link must be pinned to the designer');
+});
+
+test('popup rate limit: 3 per IP per hour, 40 overall', () => {
+  const start = server.indexOf('const _cartSmsHits');
+  const end = server.indexOf("app.post('/api/sms-cart-code'");
+  const ctx = vm.createContext({ Map, Date, String });
+  vm.runInContext(server.slice(start, end) + ';this.f = cartSmsAllowed;', ctx);
+  const t = 1e12;
+  assert.ok(ctx.f('1.1.1.1', t) && ctx.f('1.1.1.1', t) && ctx.f('1.1.1.1', t));
+  assert.ok(!ctx.f('1.1.1.1', t), 'fourth from one IP in an hour');
+  assert.ok(ctx.f('1.1.1.1', t + 3600001), 'allowed again after an hour');
+  let ok = 0;
+  for (let i = 0; i < 60; i++) if (ctx.f('10.0.0.' + i, t + 3600002)) ok++;
+  assert.ok(ok <= 40, `${ok} allowed in one hour`);
+});

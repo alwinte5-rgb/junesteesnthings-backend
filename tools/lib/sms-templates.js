@@ -58,6 +58,15 @@ const T = {
     };
   },
 
+  // Marketing: the "your work is saved" popup. Two segments when a cart link is
+  // included — the restore link is long and cannot be shortened safely.
+  cartCode: ({ code, pct, restoreUrl }) => ({
+    template: 'cart-code',
+    body: `${BRAND}: Your ${Number(pct) || 10}% off first-order code is ${plain(code, 20)}.` +
+      (restoreUrl ? ` Pick up where you left off: ${plain(restoreUrl, 120)}` : ' Design yours at https://design.jtees.net') +
+      ` ${STOP}`,
+  }),
+
   // Design-studio orders (design.jtees.net)
   studioOrderPlaced: ({ orderId }) => ({
     template: 'studio-order-placed',

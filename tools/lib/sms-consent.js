@@ -53,6 +53,26 @@ function parseSmsConsent(body) {
   return { phone, transactional, marketing };
 }
 
+/* A phone's consent from its rows, oldest first.
+
+   A form can only GRANT: an unticked box means "not asking for this now", not
+   "stop" — otherwise ticking only the marketing box in a popup would silently
+   switch off the order updates the same person asked for at checkout. The only
+   way consent is removed is a row with BOTH false, which only STOP (or Twilio
+   reporting STOP) writes; parseSmsConsent never produces one. */
+function foldSmsConsent(rows) {
+  const state = { transactional: false, marketing: false };
+  for (const r of rows || []) {
+    if (!r.transactional && !r.marketing) {
+      state.transactional = false; state.marketing = false;
+    } else {
+      if (r.transactional) state.transactional = true;
+      if (r.marketing) state.marketing = true;
+    }
+  }
+  return state;
+}
+
 function esc(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
@@ -74,5 +94,5 @@ function consentCheckboxesHtml() {
 
 module.exports = {
   CONSENT_VERSION, TRANSACTIONAL_TEXT, MARKETING_TEXT,
-  normalizeUsPhone, parseSmsConsent, consentCheckboxesHtml,
+  normalizeUsPhone, parseSmsConsent, consentCheckboxesHtml, foldSmsConsent,
 };

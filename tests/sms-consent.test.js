@@ -106,3 +106,20 @@ test('/sms-terms carries what carriers check for', () => {
     assert.match(terms, re);
   }
 });
+
+const { foldSmsConsent } = require('../tools/lib/sms-consent');
+
+test('a later form can add consent but never removes it', () => {
+  assert.deepEqual(foldSmsConsent([
+    { transactional: true, marketing: false },   // checkout: order updates
+    { transactional: false, marketing: true },   // popup: deals only
+  ]), { transactional: true, marketing: true });
+});
+
+test('STOP (both false) removes everything; START afterwards restores order updates only', () => {
+  const stopped = [{ transactional: true, marketing: true }, { transactional: false, marketing: false }];
+  assert.deepEqual(foldSmsConsent(stopped), { transactional: false, marketing: false });
+  assert.deepEqual(foldSmsConsent([...stopped, { transactional: true, marketing: false }]),
+    { transactional: true, marketing: false });
+  assert.deepEqual(foldSmsConsent([]), { transactional: false, marketing: false });
+});

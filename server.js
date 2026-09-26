@@ -18,7 +18,7 @@ initMonitoring();
 const { describeTawkEvent, isE164 } = require('./tools/lib/chat-alert');
 const {
   CONSENT_VERSION, TRANSACTIONAL_TEXT, MARKETING_TEXT,
-  normalizeUsPhone, parseSmsConsent, consentCheckboxesHtml,
+  normalizeUsPhone, parseSmsConsent, consentCheckboxesHtml, foldSmsConsent,
 } = require('./tools/lib/sms-consent');
 const { T: SMS, plain: smsPlain } = require('./tools/lib/sms-templates');
 const { verifyTwilioSignature, classifyInbound } = require('./tools/lib/twilio-webhook');
@@ -2302,12 +2302,12 @@ async function sendOwnerSms(body) {
   return true;
 }
 
-// The current answer for a phone is its newest consent row.
+// The current answer for a phone, folded from its whole history.
 async function smsConsentFor(phone) {
   const { rows } = await pool.query(
     `SELECT transactional, marketing FROM sms_consents WHERE phone = $1
-      ORDER BY created_at DESC, id DESC LIMIT 1`, [phone]);
-  return rows[0] || { transactional: false, marketing: false };
+      ORDER BY created_at ASC, id ASC`, [phone]);
+  return foldSmsConsent(rows);
 }
 
 /* Text a customer. Never throws — an order update must not fail the admin
@@ -3290,6 +3290,49 @@ app.post('/api/sms-consent', requireInternalKey, async (req, res) => {
     ip: req.body.ip, userAgent: req.body.user_agent,
   });
   res.status(ok ? 200 : 500).json({ ok, recorded: ok });
+});
+
+/* The designer's "your work is saved" popup, phone edition. The popup's own
+   checkbox is the marketing consent, so it is recorded here, then the code (and
+   cart link, when there is a cart) is texted. At most one of these per number
+   per day. Answers with what happened so the popup never claims a text it did
+   not send — 'unconfigured' and 'failed' make it offer email instead. */
+/* Every text costs money and reaches a stranger if the number is not theirs,
+   so this endpoint — which texts whatever number the popup was given — is
+   capped per visitor IP and in total. The designer forwards the visitor's IP;
+   the key already proves the call came from the designer. */
+const _cartSmsHits = { byIp: new Map(), all: [] };
+function cartSmsAllowed(ip, now = Date.now()) {
+  const HOUR = 3600000;
+  _cartSmsHits.all = _cartSmsHits.all.filter(t => now - t < HOUR);
+  if (_cartSmsHits.all.length >= 40) return false;
+  const k = String(ip || 'unknown');
+  const mine = (_cartSmsHits.byIp.get(k) || []).filter(t => now - t < HOUR);
+  if (mine.length >= 3) { _cartSmsHits.byIp.set(k, mine); return false; }
+  mine.push(now); _cartSmsHits.byIp.set(k, mine); _cartSmsHits.all.push(now);
+  if (_cartSmsHits.byIp.size > 5000) _cartSmsHits.byIp.clear();
+  return true;
+}
+
+app.post('/api/sms-cart-code', requireInternalKey, async (req, res) => {
+  const b = req.body || {};
+  if (!cartSmsAllowed(b.ip)) {
+    console.warn('sms-cart-code: rate limited');
+    return res.status(429).json({ ok: false, status: 'rate-limited' });
+  }
+  const consent = parseSmsConsent({ phone: b.phone, sms_marketing: b.sms_marketing });
+  if (!consent || !consent.marketing) return res.status(400).json({ ok: false, status: 'bad-input' });
+  const code = smsPlain(b.code, 20);
+  if (!code) return res.status(400).json({ ok: false, status: 'bad-input' });
+  const restoreUrl = /^https:\/\/design\.jtees\.net\/capture-cart\.php\?restore=[a-f0-9]{40,64}$/.test(String(b.restore_url || ''))
+    ? String(b.restore_url) : '';
+  await recordSmsConsent(consent, { source: 'designer:save-popup', ip: b.ip, userAgent: b.user_agent });
+  const day = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+  const status = await sendCustomerSms({
+    phone: consent.phone, kind: 'marketing', ref: 'cart-code:' + day,
+    msg: SMS.cartCode({ code, pct: b.pct, restoreUrl }),
+  });
+  res.json({ ok: status === 'sent' || status === 'duplicate', status });
 });
 
 app.get('/sms-terms', (_req, res) => {
