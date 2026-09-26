@@ -3052,20 +3052,50 @@
     // Turnstile — the site key comes from /api/config rather than being
     // hard-coded here too. If it is missing the widget never mounts and the
     // form keeps working; the server only enforces it when configured.
+    //
+    // Rendered explicitly so the form keeps hold of the widget. A token is
+    // single-use and lasts five minutes, and the server spends it on every
+    // attempt, including one that then fails. Rendered implicitly, the widget
+    // was never renewed, so anyone pressing Send again on the same page (after
+    // an error, or after filling the form in slowly) was told to "complete the
+    // human check" with nothing on screen to complete, until they reloaded.
+    // The owner's own retry hit exactly that on 2026-09-26.
     // ============================
+    let tsWidget = null;
+    window.jtTurnstileReady = () => {
+      const mount = document.getElementById('cf-turnstile-mount');
+      if (!mount || !window.jtTurnstileKey) return;
+      // interaction-only: invisible to real visitors, challenges only when suspicious
+      tsWidget = window.turnstile.render(mount,
+        { sitekey: window.jtTurnstileKey, appearance: 'interaction-only' }) || null;
+    };
     fetch('/api/config').then(r => r.json()).then(cfg => {
       if (!cfg.turnstileSiteKey) return;
-      const mount = document.getElementById('cf-turnstile-mount');
-      if (!mount) return;
-      mount.className = 'cf-turnstile';
-      mount.setAttribute('data-sitekey', cfg.turnstileSiteKey);
-      // interaction-only: invisible to real visitors, challenges only when suspicious
-      mount.setAttribute('data-appearance', 'interaction-only');
+      window.jtTurnstileKey = cfg.turnstileSiteKey;
       const s = document.createElement('script');
-      s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js';
+      s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=jtTurnstileReady';
       s.async = true; s.defer = true;
       document.head.appendChild(s);
     }).catch(() => {});
+
+    const turnstileToken = () => {
+      try { return tsWidget === null ? '' : (window.turnstile.getResponse(tsWidget) || ''); } catch { return ''; }
+    };
+    // A fresh token for the next attempt — the last one is spent or stale.
+    const renewTurnstile = () => {
+      try { if (tsWidget !== null) window.turnstile.reset(tsWidget); } catch { /* widget gone */ }
+    };
+    // The invisible check can take a moment, longer on a slow phone: wait for
+    // it rather than send without a token and be refused.
+    const turnstileReady = async (ms) => {
+      if (tsWidget === null) return true;            // no widget, nothing to wait for
+      try { if (window.turnstile.isExpired(tsWidget)) renewTurnstile(); } catch { /* older api */ }
+      for (const end = Date.now() + ms; Date.now() < end;) {
+        if (turnstileToken()) return true;
+        await new Promise(r => setTimeout(r, 250));
+      }
+      return false;
+    };
 
     // ============================
     // Quote form submission
@@ -3108,8 +3138,26 @@
       formStatus.className = '';
       formStatus.textContent = '';
 
+      /* The human check first: without a token the server refuses the enquiry.
+         If it needs a tick, the widget is showing it by now — say where,
+         rather than send and have the server say it. */
+      if (!(await turnstileReady(12000))) {
+        formStatus.className = 'error';
+        formStatus.textContent = "Please complete the quick check just above the button, then press Send again. Can't see it? Refresh the page.";
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Send Request';
+        return;
+      }
+
+      /* A fresh form token as well. The one fetched at page load lasts 30 to
+         60 minutes, so a customer who filled the form in slowly was refused
+         with a bare "Bad request". */
+      formToken = await fetch('/api/form-token').then(r => r.json())
+        .then(d => d.token || formToken).catch(() => formToken);
+
       const data = Object.fromEntries(new FormData(quoteForm).entries());
       data._token = formToken;
+      if (tsWidget !== null) data['cf-turnstile-response'] = turnstileToken();
 
       try {
         const res = await fetch(quoteForm.action, {
@@ -3142,6 +3190,8 @@
         formStatus.className = 'error';
         formStatus.textContent = 'Something went wrong. Please call or DM us directly.';
       } finally {
+        // The token is spent either way: the server used it on this attempt.
+        renewTurnstile();
         submitBtn.disabled = false;
         submitBtn.textContent = 'Send Request';
       }

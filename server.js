@@ -1303,6 +1303,8 @@ async function brevoBreachCheck() {
        that cries wolf gets muted, and a muted monitor is worse than none — so a
        single failure now buys a retry, and only two in a row raise the alarm. */
     if (acctRes.status === 401 || statRes.status === 401) {
+      const said = await (acctRes.status === 401 ? acctRes : statRes).json()
+        .then((d) => String((d && d.message) || ''), () => '');
       await new Promise((r) => setTimeout(r, 3000));
       let stillDead = true;
       try {
@@ -1315,6 +1317,28 @@ async function brevoBreachCheck() {
       }
       if (!stillDead) {
         console.warn('brevoBreachCheck: transient 401 from Brevo, key still valid on retry');
+        return;
+      }
+      /* Brevo answers 401 for two different faults: a dead key, and a good key
+         used from an address missing from the account's Authorised IPs list.
+         They take opposite fixes, and the alert below told the owner to treat
+         the key as revoked — for an IP block, rotating a working key fixes
+         nothing. Railway's outbound address also changes between deploys (four
+         different ones 2026-09-23..26), so allowlisting today's will not hold. */
+      if (/unrecogni[sz]ed IP|authori[sz]ed_ips/i.test(said)) {
+        if (alertOncePerDay('ip-blocked')) {
+          await alertViaResend('🚨 Brevo is blocking this server — jtees.net',
+            `<h2 style="color:#b91c1c">Brevo is refusing this server's IP address</h2>
+             <p>The API key is fine. Brevo's <b>Authorised IPs</b> security setting is refusing
+                requests from the server. Mail is falling back to Resend, but contact and CRM deal
+                sync to Brevo is failing, and the design studio's balance-link emails, which have
+                no fallback, fail outright.</p>
+             <p><b>Fix:</b> open <a href="https://app.brevo.com/security/authorised_ips">Brevo → Security →
+                Authorised IPs</a> and turn off blocking of unknown IP addresses. Adding this one
+                address will not hold: the server's outbound address changes between deploys.</p>
+             <p><b>Do not rotate the API key</b> for this — it is not the problem.</p>
+             <p style="color:#6b7280;font-size:13px">Brevo said: ${escEmail(said.slice(0, 300))}</p>`);
+        }
         return;
       }
       if (alertOncePerDay('unauthorized')) {
@@ -1489,6 +1513,28 @@ async function sendPaymentReceivedEmail(s, amount) {
   });
 }
 
+/** Name the request in an integration's failure: the service, the call, the
+ *  status and the service's own words. Bare, an axios error reads "Request
+ *  failed with status code 405" — which is how a PUT that should have been a
+ *  POST sat in the error digest unread from March to September, and why a
+ *  Brevo IP block and a dead Clover token looked identical there. The path is
+ *  shaped (ids -> :id, version segments kept) so repeats still group as one
+ *  fault. Headers are never included: they carry the credentials. */
+function explainFailures(instance, service) {
+  instance.interceptors.response.use(undefined, (err) => {
+    const c = (err && err.config) || {};
+    const route = String(c.url || '').split('?')[0].split('/')
+      .map((seg) => (!seg || /^v\d+$/.test(seg) ? seg : routeShape(seg))).join('/');
+    const status = err && err.response ? err.response.status : (err && err.code) || 'no response';
+    const data = err && err.response ? err.response.data : null;
+    const said = data && typeof data === 'object' ? (data.message || data.error || '') : '';
+    if (err) err.message = `${service} ${String(c.method || '').toUpperCase()} ${route} -> ${status}`
+      + (said ? `: ${String(said).slice(0, 200)}` : '');
+    return Promise.reject(err);
+  });
+  return instance;
+}
+
 // ─── Brevo ────────────────────────────────────────────────────────────────────
 
 /* One variable holds the Brevo key, deliberately. This used to prefer
@@ -1497,10 +1543,10 @@ async function sendPaymentReceivedEmail(s, amount) {
    them and not the other, so every CRM call authenticated with a dead key
    while sending looked fine. Two homes for one secret is two chances to rotate
    half of it. */
-const brevo = axios.create({
+const brevo = explainFailures(axios.create({
   baseURL: 'https://api.brevo.com/v3',
   headers: { 'api-key': process.env.BREVO_API_KEY, 'Content-Type': 'application/json' },
-});
+}), 'Brevo');
 
 async function syncToBrevo(s) {
   if (isSpamName(s.name)) {
@@ -1590,10 +1636,10 @@ function buildGradLineItems(order) {
 
 const HUBSPOT_PORTAL_ID = process.env.HUBSPOT_PORTAL_ID || '';
 
-const hubspot = axios.create({
+const hubspot = explainFailures(axios.create({
   baseURL: 'https://api.hubapi.com',
   headers: { Authorization: `Bearer ${process.env.HUBSPOT_ACCESS_TOKEN}` },
-});
+}), 'HubSpot');
 
 async function createOrUpdateHubSpotContact(s) {
   try {
@@ -1643,11 +1689,17 @@ async function addHubSpotNote(s, contactId, dealId) {
     properties: { hs_note_body: noteLines.join('\n'), hs_timestamp: Date.now().toString() },
   });
   const noteId = noteRes.data.id;
+  /* POST. The BATCH default-association endpoint takes only POST; PUT is the
+     single-record form (/crm/v4/objects/{type}/{id}/associations/default/…).
+     Sent as PUT from 2026-03-21, HubSpot answered 405 with an empty body on
+     every enquiry until 2026-09-26: contact and deal were made, the note and
+     task left unattached, and the throw lost both ids — so no deal ever moved
+     stage. tests/hubspot-sync.test.js. */
   await Promise.all([
-    hubspot.put('/crm/v4/associations/notes/contacts/batch/associate/default', {
+    hubspot.post('/crm/v4/associations/notes/contacts/batch/associate/default', {
       inputs: [{ from: { id: noteId }, to: { id: contactId } }],
     }),
-    hubspot.put('/crm/v4/associations/notes/deals/batch/associate/default', {
+    hubspot.post('/crm/v4/associations/notes/deals/batch/associate/default', {
       inputs: [{ from: { id: noteId }, to: { id: dealId } }],
     }),
   ]);
@@ -1664,7 +1716,8 @@ async function createHubSpotTask(s, contactId) {
     },
   });
   const taskId = taskRes.data.id;
-  await hubspot.put('/crm/v4/associations/tasks/contacts/batch/associate/default', {
+  // POST, as for the note above.
+  await hubspot.post('/crm/v4/associations/tasks/contacts/batch/associate/default', {
     inputs: [{ from: { id: taskId }, to: { id: contactId } }],
   });
 }
@@ -1678,10 +1731,17 @@ async function updateHubSpotDealStage(dealId, stage) {
 async function syncToHubSpot(s) {
   const contactId = await createOrUpdateHubSpotContact(s);
   const dealId    = await createHubSpotDeal(s, contactId);
-  await Promise.all([
+  /* From here the contact and deal EXIST in HubSpot, so their ids are returned
+     whatever happens to the note and task. Thrown away, the deal can never be
+     moved on — the stage updates read the saved hubspot_deal_id — and the admin
+     link stays blank: one failed extra costing the two records that matter.
+     A failed extra is reported under its own name instead. */
+  const [note, task] = await Promise.allSettled([
     addHubSpotNote(s, contactId, dealId),
     createHubSpotTask(s, contactId),
   ]);
+  if (note.status === 'rejected') reportError('hubspot:note', note.reason).catch(() => {});
+  if (task.status === 'rejected') reportError('hubspot:task', task.reason).catch(() => {});
   return { contactId, dealId };
 }
 
@@ -1693,6 +1753,7 @@ clover.interceptors.request.use(cfg => {
   cfg.headers['Authorization'] = `Bearer ${process.env.CLOVER_API_TOKEN}`;
   return cfg;
 });
+explainFailures(clover, 'Clover');
 
 const MID = () => process.env.CLOVER_MERCHANT_ID;
 
@@ -2098,6 +2159,13 @@ app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, verifyTurnstil
     return res.json({ ok: true, duplicate: true });
   }
 
+  /* Clover is the in-store till and is rarely used (owner, 2026-09-26), so an
+     enquiry no longer becomes a Clover customer unless CLOVER_SYNC_LEADS=1.
+     With its token rejected it failed on every enquiry, and a digest line per
+     lead for a system nobody reads is how a digest gets muted — taking the
+     lines that matter with it. */
+  const syncClover = process.env.CLOVER_SYNC_LEADS === '1';
+
   // Fire everything in parallel
   const [emailResult, customerEmailResult, brevoResult, hubspotResult, cloverResult] =
     await Promise.allSettled([
@@ -2105,7 +2173,7 @@ app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, verifyTurnstil
       sendCustomerConfirmationEmail(s),
       syncToBrevo(s),
       syncToHubSpot(s),
-      createCloverCustomer(s),
+      syncClover ? createCloverCustomer(s) : Promise.resolve(undefined),
     ]);
 
   if (emailResult.status         === 'rejected') console.error('Notification email failed:', emailResult.reason?.message, JSON.stringify(emailResult.reason?.response?.data ?? emailResult.reason?.response ?? null));
@@ -2129,7 +2197,7 @@ app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, verifyTurnstil
     updates.hubspot_contact_id = hubspotResult.value.contactId;
     updates.hubspot_deal_id    = hubspotResult.value.dealId;
   }
-  if (cloverResult.status === 'fulfilled') {
+  if (cloverResult.status === 'fulfilled' && cloverResult.value !== undefined) {
     updates.clover_customer_id = cloverResult.value;
   }
 
@@ -2310,7 +2378,14 @@ app.post('/webhooks/clover', async (req, res) => {
       .catch(err => { console.error('Payment email failed:', err.message); reportError('clover:payment-email', err).catch(() => {}); });
 
   } catch (err) {
+    /* Clover was already answered 200 at the top of this handler, so it will
+       not resend: a payment that fails here is gone unless somebody hears of
+       it. The likeliest cause is a rejected CLOVER_API_TOKEN failing
+       getCloverPayment — BEFORE the money is written down, so not even the
+       amount is known. The payment id is, and it is all the shop needs to look
+       the sale up in Clover. Logged only, this was silent (2026-09-26). */
     console.error('Webhook processing failed:', err.message);
+    reportError('clover-webhook', err, `payment ${paymentId}`).catch(() => {});
   }
 });
 
@@ -2857,6 +2932,10 @@ async function verifyTurnstile(req, res, next) {
 
   const token = req.body?.['cf-turnstile-response'] || '';
   if (!token) {
+    /* Logged because on /submit this is rarely a bot — they are already turned
+       away by rejectBots — but a real page whose widget had no token yet. It
+       was the one silent 400 on the form (the owner's own retry, 2026-09-26). */
+    console.warn('turnstile: no token on', req.path);
     return res.status(400).json({ error: 'Please complete the human check and try again.' });
   }
   try {

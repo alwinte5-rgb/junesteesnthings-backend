@@ -106,6 +106,48 @@ test('a rejected key raises an alert rather than passing silently', () => {
     'a 401 is what revocation, or a half-applied rotation, looks like from in here');
 });
 
+/* ── which 401 it is ─────────────────────────────────────────────────────────
+   Brevo answers 401 both for a dead key and for a good key used from an IP
+   address missing from the account's Authorised IPs list. The alert used to
+   say "treat the key as revoked" for both — from 2026-09-23 it was an IP block
+   the whole time, and rotating a working key would have fixed nothing. */
+
+function runMonitorAgainst401(message) {
+  const sent = [];
+  const sandbox = {
+    process: { env: { BREVO_API_KEY: 'test-key' } },
+    fetch: async () => ({ status: 401, ok: false, json: async () => ({ message, code: 'unauthorized' }) }),
+    AbortSignal: { timeout: () => undefined },
+    setTimeout: (fn) => fn(),                  // the 3s retry pause, skipped
+    Promise, Date, String, Number,
+    console: { warn() {}, error() {}, log() {} },
+    brevoAlertsSent: new Map(),
+    alertViaResend: async (subject, html) => { sent.push({ subject, html }); return true; },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(extractFn('function alertOncePerDay('), sandbox);
+  vm.runInContext(extractFn('function escEmail('), sandbox);
+  vm.runInContext(MONITOR_SRC, sandbox);
+  return sandbox.brevoBreachCheck().then(() => sent);
+}
+
+test('an IP block is reported as an IP block, and says not to rotate the key', async () => {
+  const sent = await runMonitorAgainst401('We have detected you are using an unrecognised IP address '
+    + '152.55.180.236. If you performed this action make sure to add the new IP address in this link: '
+    + 'https://app.brevo.com/security/authorised_ips');
+  assert.strictEqual(sent.length, 1, 'one alert, not the key alert as well');
+  assert.match(sent[0].subject, /blocking this server/);
+  assert.match(sent[0].html, /Authorised IPs/);
+  assert.match(sent[0].html, /Do not rotate the API key/);
+  assert.doesNotMatch(sent[0].html, /treat the key as revoked/);
+});
+
+test('a genuinely rejected key still raises the key alert', async () => {
+  const sent = await runMonitorAgainst401('Key not found');
+  assert.strictEqual(sent.length, 1);
+  assert.match(sent[0].subject, /key rejected/);
+});
+
 test('the monitor can never break the hourly sweep', () => {
   assert.match(MONITOR_SRC, /catch \(e\) \{[\s\S]*console\.error\('brevoBreachCheck failed/,
     'brevoBreachCheck must swallow its own errors');

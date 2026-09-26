@@ -1,0 +1,120 @@
+'use strict';
+
+/* The quote form must survive a second press of Send (public/index.html).
+ *
+ * Run: node --test tests/*.test.js
+ *
+ * A Turnstile token is single-use and lasts five minutes, and the server spends
+ * it on every attempt — including one that then fails. The widget used to be
+ * rendered implicitly and never renewed, so on 2026-09-26 the owner's own retry
+ * (same page, 26 minutes after a failed first try) was refused with "Please
+ * complete the human check" and nothing on screen to complete; only a reload
+ * got it through. The form token had the same shape of problem over 30-60
+ * minutes, answered with a bare "Bad request".
+ */
+
+const { test } = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+
+const handlerAt = html.indexOf("quoteForm.addEventListener('submit'");
+assert.notStrictEqual(handlerAt, -1, 'the quote form submit handler was not found in index.html');
+const handler = html.slice(handlerAt, html.indexOf('\n    });', handlerAt));
+
+/* ── the page's own token helpers, run against a fake widget ─────────────── */
+
+function helpers(turnstile) {
+  const start = html.indexOf('let tsWidget = null;');
+  const end = html.indexOf('// Quote form submission');
+  assert.ok(start !== -1 && end > start, 'the Turnstile block was not found in index.html');
+  const sandbox = {
+    window: { turnstile }, document: { getElementById: () => null },
+    fetch: () => new Promise(() => {}),        // /api/config never answers here
+    setTimeout, Promise, Date,
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(html.slice(start, end), sandbox);
+  return vm.runInContext(
+    '({ turnstileReady, renewTurnstile, turnstileToken, mount: (id) => { tsWidget = id; } })', sandbox);
+}
+
+function fakeWidget({ token = '', expired = false, tokenAfterReset = 'fresh' } = {}) {
+  const w = { token, expired, resets: 0 };
+  w.api = {
+    getResponse: () => w.token,
+    isExpired: () => w.expired,
+    // A reset clears the token; the invisible check hands out a new one shortly.
+    reset: () => { w.resets++; w.token = ''; w.expired = false; setTimeout(() => { w.token = tokenAfterReset; }, 300); },
+  };
+  return w;
+}
+
+test('with no widget on the page there is nothing to wait for', async () => {
+  const h = helpers(fakeWidget().api);
+  assert.strictEqual(await h.turnstileReady(1000), true);
+});
+
+test('a token already there is used at once', async () => {
+  const w = fakeWidget({ token: 'tok' });
+  const h = helpers(w.api); h.mount('w1');
+  assert.strictEqual(await h.turnstileReady(1000), true);
+  assert.strictEqual(h.turnstileToken(), 'tok');
+});
+
+test('an expired token is renewed before sending, and the new one is waited for', async () => {
+  const w = fakeWidget({ token: 'stale', expired: true });
+  const h = helpers(w.api); h.mount('w1');
+  assert.strictEqual(await h.turnstileReady(3000), true);
+  assert.strictEqual(w.resets, 1);
+  assert.strictEqual(h.turnstileToken(), 'fresh');
+});
+
+test('a token that never comes is reported, not sent empty', async () => {
+  const w = fakeWidget({ token: '' });
+  const h = helpers(w.api); h.mount('w1');
+  assert.strictEqual(await h.turnstileReady(600), false);
+});
+
+test('renewing asks the widget for a new token', () => {
+  const w = fakeWidget({ token: 'spent' });
+  const h = helpers(w.api); h.mount('w1');
+  h.renewTurnstile();
+  assert.strictEqual(w.resets, 1);
+  assert.strictEqual(h.turnstileToken(), '', 'the spent token must not be offered again');
+});
+
+/* ── the submit handler uses them ─────────────────────────────────────────── */
+
+test('the widget is rendered explicitly, so the page holds its id', () => {
+  assert.match(html, /turnstile\/v0\/api\.js\?render=explicit&onload=jtTurnstileReady/);
+});
+
+test('the token is waited for before the enquiry is posted', () => {
+  const waitAt = handler.indexOf('turnstileReady(');
+  assert.ok(waitAt !== -1 && waitAt < handler.indexOf('fetch(quoteForm.action'),
+    'posting without a token is a guaranteed refusal');
+});
+
+test('every attempt is followed by a fresh token, failed ones included', () => {
+  const fin = handler.slice(handler.lastIndexOf('finally'));
+  assert.match(fin, /renewTurnstile\(\)/, 'the server spends the token on every attempt');
+});
+
+test('the form token is fetched fresh at send time, not only at page load', () => {
+  const at = handler.indexOf("fetch('/api/form-token')");
+  assert.ok(at !== -1 && at < handler.indexOf('fetch(quoteForm.action'),
+    'a token from page load is refused after 30-60 minutes');
+});
+
+/* ── and the server says when it happens ──────────────────────────────────── */
+
+test('a missing token is logged, not refused in silence', () => {
+  const start = src.indexOf('async function verifyTurnstile(');
+  const fn = src.slice(start, src.indexOf('\n}\n', start));
+  assert.match(fn, /if \(!token\) \{[\s\S]*?console\.warn\('turnstile: no token/);
+});
