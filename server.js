@@ -14301,6 +14301,53 @@ app.post('/api/order-notification', requireInternalKey, async (req, res) => {
 
    `status` is optional and defaults to 'shipped', so a designer build that
    predates this keeps its old behaviour exactly. */
+/** What /api/balance-link-email will send, or why it will not. The link must
+ *  be a Stripe payment link: this is a "pay here" email, and holding the
+ *  internal key alone should not be enough to point a customer anywhere else. */
+function balanceEmailInput(b) {
+  const email = String((b && b.email) || '').trim();
+  if (!isValidEmail(email)) return { error: 'bad email' };
+  const orderId = Number(b.order_id);
+  const balance = Number(b.balance);
+  if (!Number.isInteger(orderId) || orderId <= 0) return { error: 'bad order' };
+  if (!Number.isFinite(balance) || balance <= 0) return { error: 'bad balance' };
+  let link;
+  try { link = new URL(String(b.link || '')); } catch { return { error: 'bad link' }; }
+  if (link.protocol !== 'https:' || !['buy.stripe.com', 'checkout.stripe.com'].includes(link.hostname)) {
+    return { error: 'bad link' };
+  }
+  return { email, orderId, balance, link: link.href, name: String(b.name || '').trim().slice(0, 120) };
+}
+
+/* The studio's balance-due email. The designer used to send it itself, straight
+   to Brevo with its own copy of the Brevo key — the one studio email not routed
+   through here, so it had no Resend fallback and the key lived in two services.
+   With Brevo's IP lock off (owner, 2026-09-26), fewer copies of the key IS the
+   protection. Same wording as the designer's version. */
+app.post('/api/balance-link-email', requireInternalKey, async (req, res) => {
+  const v = balanceEmailInput(req.body || {});
+  if (v.error) return res.status(400).json({ error: v.error });
+  try {
+    await sendEmail({
+      to: v.email,
+      replyTo: NOTIFY_EMAIL,
+      subject: `Balance due on your Design Studio order #${v.orderId}`,
+      html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#222;">
+        <h2 style="color:#1a2e5a;">Your order is ready to finish up!</h2>
+        <p>Hi ${escEmail(v.name || 'there')},</p>
+        <p>Here is the remaining balance on your Design Studio order <strong>#${v.orderId}</strong>:</p>
+        <p style="font-size:1.4em;"><strong>${money(v.balance)}</strong></p>
+        <p><a href="${escEmail(v.link)}" style="display:inline-block;background:#1a2e5a;color:#fff;padding:12px 28px;border-radius:6px;text-decoration:none;font-weight:bold;">Pay balance securely</a></p>
+        <p style="color:#666;font-size:.9em;">Payment is handled by Stripe. Questions? Just reply to this email.</p>
+        <p>— June's Tees &amp; Things</p></div>`,
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    reportError('studio:balance-email', err, `order ${v.orderId}`).catch(() => {});
+    res.status(502).json({ error: 'email not sent' });
+  }
+});
+
 app.post('/api/order-shipped', requireInternalKey, async (req, res) => {
   try {
     const b = req.body || {};
