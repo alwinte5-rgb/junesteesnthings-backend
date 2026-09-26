@@ -75,7 +75,7 @@ design — the server warns about this at boot.
 | `/quotes` | the money board — quotes, what is owed |
 | `/production` | the work board — kanban, one tap per milestone |
 | `/production/:code` | one job: full checklist and milestones |
-| `/books` | takings, expenses, tax set aside |
+| `/admin/finances` | takings, expenses, tax set aside (was `/books`, which is now unused — the books app lives at books.jtees.net) |
 | `/customer` | one customer's history |
 | `/admin/reviews` | review moderation |
 

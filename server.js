@@ -91,83 +91,17 @@ app.use(helmet({
 }));
 const SITE_ORIGINS = ['https://www.jtees.net', 'https://jtees.net', 'https://design.jtees.net'];
 app.use(cors({ origin: SITE_ORIGINS }));
-/* ── The books app, served at /books ───────────────────────────────────────────
-   `books` is a separate Railway service with NO public domain: its only address
-   is books.railway.internal, so the open internet cannot reach it at all. This
-   is the single door, and it is behind whatever protection this app already has.
+/* ── /books is deliberately unused ─────────────────────────────────────────────
+   The books app was proxied here until 2026-09-26. It has its own origin now,
+   https://books.jtees.net, and at the owner's request the old /books links were
+   SHUT, not redirected: books itself refuses any request that did not address
+   books.jtees.net. Nothing on this site answers at /books. Do not bring the
+   proxy back, and do not put a page there.
 
-   Mounted BEFORE express.json on purpose. Once a body parser has consumed the
-   stream, forwarding a POST means re-serialising what was parsed — which
-   silently changes multipart bodies and anything the parser did not recognise.
-   Here `req` is still an untouched stream and is piped straight through.
-
-   Next.js is configured with basePath "/books", so the prefix is NOT stripped:
-   the app generates its own asset, route and auth-callback URLs already
-   carrying it. Rewriting /books/x to /x would serve the first page and then
-   hand the browser links to /_next/... that do not exist on this domain. */
-const BOOKS_ORIGIN = process.env.BOOKS_ORIGIN || '';
-
-app.use('/books', async (req, res) => {
-  if (!BOOKS_ORIGIN) {
-    return res.status(503).type('text/plain')
-      .send('The books app is not configured on this environment.');
-  }
-
-  const headers = {};
-  for (const [k, v] of Object.entries(req.headers)) {
-    // Hop-by-hop headers describe THIS connection and must not be relayed.
-    if (['host', 'connection', 'keep-alive', 'transfer-encoding', 'upgrade'].includes(k)) continue;
-    headers[k] = v;
-  }
-  /* Next builds absolute URLs from these. Without them it would see
-     books.railway.internal and put that in a redirect the browser cannot
-     follow — the classic "login redirects you to a hostname that does not
-     resolve" behind a proxy. */
-  headers['x-forwarded-proto'] = 'https';
-  headers['x-forwarded-host'] = req.headers.host || 'jtees.net';
-
-  const hasBody = !['GET', 'HEAD'].includes(req.method);
-
-  try {
-    const upstream = await fetch(BOOKS_ORIGIN + req.originalUrl, {
-      method: req.method,
-      headers,
-      body: hasBody ? req : undefined,
-      // Required by undici when the body is a stream rather than a buffer.
-      duplex: hasBody ? 'half' : undefined,
-      /* manual: a 302 from the books app is an instruction for the BROWSER.
-         Following it here would return the destination's body under the
-         original URL and break every login round trip. */
-      redirect: 'manual',
-      signal: AbortSignal.timeout(30000),
-    });
-
-    res.status(upstream.status);
-    for (const [k, v] of upstream.headers) {
-      // Length and encoding describe the upstream body, not what is sent on.
-      if (['content-encoding', 'content-length', 'transfer-encoding', 'connection'].includes(k)) continue;
-      if (k === 'set-cookie') continue; // handled below, as a list
-      res.setHeader(k, v);
-    }
-    /* Several Set-Cookie headers must stay several. Iterating the Headers
-       object joins them with a comma, which produces one malformed cookie and
-       silently logs the user out. getSetCookie is the only correct reader. */
-    const cookies = typeof upstream.headers.getSetCookie === 'function'
-      ? upstream.headers.getSetCookie()
-      : [];
-    if (cookies.length) res.setHeader('set-cookie', cookies);
-
-    if (!upstream.body) return res.end();
-    const { Readable } = require('stream');
-    Readable.fromWeb(upstream.body).pipe(res);
-  } catch (err) {
-    // A dead or slow books service must not read as a broken jtees.net.
-    console.error('books proxy failed:', err.message);
-    if (!res.headersSent) {
-      res.status(502).type('text/plain').send('The books app is not responding.');
-    }
-  }
-});
+   The site's own Finances page, which that proxy used to hide, lives at
+   FINANCES_PATH. One constant, because its nav link, its forms' back links and
+   the redirect after every form must all agree. */
+const FINANCES_PATH = '/admin/finances';
 
 app.use(express.json({
   limit: '1mb',
@@ -6035,7 +5969,7 @@ const ADMIN_NAV = [
   { key: 'orders',    href: '/orders',        label: 'Orders' },
   { key: 'customers', href: '/customers',     label: 'Customers' },
   { key: 'leads',     href: '/admin',         label: 'Leads' },
-  { key: 'money',     href: '/books',         label: 'Finances' },
+  { key: 'money',     href: FINANCES_PATH,    label: 'Finances' },
   { key: 'discounts', href: '/discounts',     label: 'Discounts' },
   { key: 'reviews',   href: '/admin/reviews', label: 'Reviews' },
 ];
@@ -10045,7 +9979,7 @@ app.post('/quote/:code/correct-payment', requireAdmin, async (req, res) => {
  * Everything is derived from the payment ledger, so it reconciles with the bank
  * rather than with what was invoiced.
  */
-app.get('/books', requireAdmin, async (req, res) => {
+app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
   try {
     const year = /^\d{4}$/.test(String(req.query.year || ''))
       ? Number(req.query.year) : new Date().getFullYear();
@@ -10145,7 +10079,7 @@ app.get('/books', requireAdmin, async (req, res) => {
 
     res.send(adminPage('Books', `<h1>Books — ${year}</h1>
       <div class="sub">${years.map(y => y.y === year
-        ? `<b>${y.y}</b>` : `<a href="/books?year=${y.y}" style="color:#1848B8">${y.y}</a>`).join(' &middot; ')}
+        ? `<b>${y.y}</b>` : `<a href="${FINANCES_PATH}?year=${y.y}" style="color:#1848B8">${y.y}</a>`).join(' &middot; ')}
         &middot; <a href="/quotes" style="color:#1848B8">back to jobs</a></div>
 
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin:14px 0">
@@ -10445,7 +10379,7 @@ app.get('/books', requireAdmin, async (req, res) => {
             <td class="num" style="padding:7px 4px;font-variant-numeric:tabular-nums">${money(u.amount)}</td>
             <td style="padding:7px 4px">
               <form method="post" action="/unlinked/${u.id}/tax" style="display:flex;gap:6px;margin:0">
-                <input type="hidden" name="back" value="/books?year=${year}">
+                <input type="hidden" name="back" value="${FINANCES_PATH}?year=${year}">
                 <input name="tax" type="number" step="0.01" inputmode="decimal"
                        placeholder="unknown"
                        style="width:96px;padding:5px 7px;font-size:13px">
@@ -10485,7 +10419,7 @@ app.get('/books', requireAdmin, async (req, res) => {
             <td style="padding:7px 4px">
               <form method="post" action="/quotes/${escEmail(String(q.code))}/exemption"
                     style="display:flex;gap:6px;margin:0">
-                <input type="hidden" name="back" value="/books?year=${year}#exemptions">
+                <input type="hidden" name="back" value="${FINANCES_PATH}?year=${year}#exemptions">
                 <input name="tax_exempt_ref" maxlength="60" placeholder="E-number"
                        style="width:150px;padding:5px 7px;font-size:13px">
                 <button class="btn" style="padding:5px 12px;font-size:13px">Record</button>
@@ -10510,7 +10444,7 @@ app.post('/expenses', requireAdmin, async (req, res) => {
   const b = req.body || {};
   const amount = round2(Number(b.amount));
   const category = EXPENSE_CATEGORIES.includes(String(b.category)) ? String(b.category) : 'Other';
-  if (!(amount > 0)) return res.redirect('/books');
+  if (!(amount > 0)) return res.redirect(FINANCES_PATH);
   try {
     await pool.query(
       `INSERT INTO expenses (spent_on, category, amount, vendor, note, recurs)
@@ -10522,7 +10456,7 @@ app.post('/expenses', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('expense insert failed:', err.message);
   }
-  res.redirect('/books' + (b.year ? `?year=${encodeURIComponent(b.year)}` : ''));
+  res.redirect(FINANCES_PATH + (b.year ? `?year=${encodeURIComponent(b.year)}` : ''));
 });
 
 /* Edit one in place. Overheads are typed by hand, so a wrong figure should be
@@ -10533,7 +10467,7 @@ app.post('/expenses/:id', requireAdmin, async (req, res) => {
   const b = req.body || {};
   const amount = round2(Number(b.amount));
   const category = EXPENSE_CATEGORIES.includes(String(b.category)) ? String(b.category) : null;
-  if (!id || !(amount > 0)) return res.redirect('/books');
+  if (!id || !(amount > 0)) return res.redirect(FINANCES_PATH);
   try {
     await pool.query(
       `UPDATE expenses SET spent_on = COALESCE($2::date, spent_on),
@@ -10550,14 +10484,14 @@ app.post('/expenses/:id', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('expense update failed:', err.message);
   }
-  res.redirect('/books' + (b.year ? `?year=${encodeURIComponent(b.year)}` : ''));
+  res.redirect(FINANCES_PATH + (b.year ? `?year=${encodeURIComponent(b.year)}` : ''));
 });
 
 app.post('/expenses/:id/delete', requireAdmin, async (req, res) => {
   const id = Number(req.params.id) || 0;
   try { await pool.query('DELETE FROM expenses WHERE id = $1', [id]); }
   catch (err) { console.error('expense delete failed:', err.message); }
-  res.redirect('/books');
+  res.redirect(FINANCES_PATH);
 });
 
 /* Roll last month's recurring costs into this month. Rent does not stop being
@@ -10581,7 +10515,7 @@ app.post('/expenses/roll', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('expense roll failed:', err.message);
   }
-  res.redirect('/books');
+  res.redirect(FINANCES_PATH);
 });
 
 /* Sales tax detail as CSV, for the ST-1 filing or the bookkeeper. One row per
@@ -14865,7 +14799,7 @@ async function taxMonthlyCheck() {
             padding:10px 12px;color:#78350f;font-size:13px;margin-top:14px">
          <b>${undetermined} receipt(s) totalling ${money(row.unlinkedGross)}</b> have no tax portion
          worked out, so the figure above is a floor rather than a total.
-         <a href="${PUBLIC_BASE_URL}/books" style="color:#78350f">Settle them</a> before filing.</p>` : ''}
+         <a href="${PUBLIC_BASE_URL}${FINANCES_PATH}" style="color:#78350f">Settle them</a> before filing.</p>` : ''}
 
        ${others.length ? `<p style="color:#b45309;font-size:13px;margin-top:14px">
          <b>Also unpaid:</b> ${others.map((m) => `${periodLabel(m.period)} ${money(m.outstanding)}`).join(' · ')}<br>
@@ -15032,8 +14966,8 @@ app.post('/tax/remit', requireAdmin, async (req, res) => {
 app.post('/quotes/:code/exemption', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   const b = req.body || {};
-  const back = String(b.back || '/books');
-  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/books');
+  const back = String(b.back || FINANCES_PATH);
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect(FINANCES_PATH);
 
   const ref = String(b.tax_exempt_ref ?? '').trim().slice(0, 60) || null;
 
@@ -15083,8 +15017,8 @@ app.post('/quotes/:code/exemption', requireAdmin, async (req, res) => {
 app.post('/unlinked/:id/tax', requireAdmin, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const b = req.body || {};
-  const back = String(b.back || '/books');
-  if (!Number.isFinite(id)) return res.redirect('/books');
+  const back = String(b.back || FINANCES_PATH);
+  if (!Number.isFinite(id)) return res.redirect(FINANCES_PATH);
 
   /* Blank means "put it back to unknown", which is not the same as 0. */
   const raw = String(b.tax ?? '').trim();
