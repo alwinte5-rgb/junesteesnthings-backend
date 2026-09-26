@@ -89,7 +89,8 @@ app.use(helmet({
   // same-origin policy makes browsers/webmail refuse to render them.
   crossOriginResourcePolicy: { policy: 'cross-origin' },
 }));
-app.use(cors({ origin: ['https://www.jtees.net', 'https://jtees.net', 'https://design.jtees.net'] }));
+const SITE_ORIGINS = ['https://www.jtees.net', 'https://jtees.net', 'https://design.jtees.net'];
+app.use(cors({ origin: SITE_ORIGINS }));
 /* ── The books app, served at /books ───────────────────────────────────────────
    `books` is a separate Railway service with NO public domain: its only address
    is books.railway.internal, so the open internet cannot reach it at all. This
@@ -183,6 +184,13 @@ app.get('/design-ideas.html', (_req, res) => res.redirect(301, 'https://design.j
 
 // Serve frontend
 app.use(express.static(path.join(__dirname, 'public')));
+
+/* Everything past the static files is generated per request — customer quote
+   pages, the admin boards, receipts — and carries names, phones and money. By
+   default none of it may be stored by a browser or an intermediate cache; a
+   route that is genuinely public and cacheable sets its own header, which
+   replaces this one. */
+app.use((_req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 
 // ─── Database ─────────────────────────────────────────────────────────────────
 
@@ -1924,6 +1932,14 @@ function requireAdmin(req, res, next) {
      protects this, and a case-sensitive username only ever locked out the owner. */
   try {
     const provided = req.headers['authorization'] || '';
+    /* A browser re-sends a remembered admin password to this site even when
+       another website's hidden form is what made the request — SameSite, which
+       protects the cookie path, does nothing for Basic auth. So a state-changing
+       request carrying an Origin from anywhere else is refused outright. */
+    const origin = req.headers.origin;
+    if (!['GET', 'HEAD'].includes(req.method) && origin && !SITE_ORIGINS.includes(origin)) {
+      return res.status(403).send('Forbidden');
+    }
     if (secret && provided.startsWith('Basic ')) {
       const decoded = Buffer.from(provided.slice(6), 'base64').toString('utf8');
       const pass = decoded.slice(decoded.indexOf(':') + 1);
@@ -2326,6 +2342,14 @@ async function sendCustomerSms({ phone, kind, ref, msg }) {
       console.log(`sendCustomerSms: skipped ${msg.template} for ${ref} — Twilio not configured`);
       return 'unconfigured';
     }
+    /* A row left 'sending' by a crash or deploy mid-send would block this
+       update forever (the dedupe index ignores only 'failed'). After five
+       minutes it is presumed lost and released for a retry. */
+    await pool.query(
+      `UPDATE sms_messages SET status='failed', error='stuck in sending'
+        WHERE phone=$1 AND ref=$2 AND template=$3 AND status='sending'
+          AND created_at < NOW() - INTERVAL '5 minutes'`,
+      [to, String(ref).slice(0, 80), msg.template.slice(0, 80)]);
     const { rows } = await pool.query(
       `INSERT INTO sms_messages (phone, kind, ref, template, body, status)
        VALUES ($1,$2,$3,$4,$5,'sending')
@@ -4085,7 +4109,7 @@ app.post('/quote/:code/step', requireAdmin, async (req, res) => {
     const { rows } = await pool.query(
       `UPDATE quotes SET ${col} = ${clear ? 'NULL' : 'NOW()'} WHERE code = $1 RETURNING *`, [code]);
     console.log(`quote ${code}: ${col} ${clear ? 'cleared' : 'set'}`);
-    if (!clear) textQuoteMilestones(prev[0], rows[0]);
+    if (!clear) { textQuoteMilestones(prev[0], rows[0]); emailTrackingOnShip(prev[0], rows[0]); }
 
     /* Delivery is the honest moment to ask. The payment-time ask already sitting
        against this quote was dated on a guess made before the job existed; this
@@ -9509,10 +9533,23 @@ app.post('/quote/:code/mark-paid', requireAdmin, async (req, res) => {
     /* Through the ledger, so a manual payment appears in history and can be
        corrected later. It used to add straight onto quotes.paid_amount, which
        is why a double-click could not be walked back. */
-    await recordPayment({
-      code, amount, method, source: 'manual',
+    /* A double-click (or a back-button resubmit) used to bank the same Zelle
+       twice and text the customer twice: manual rows had no ext_ref, so the
+       ledger's unique index never applied to them. The key is the payment's
+       identity to the minute; the previous minute is checked too, so two clicks
+       either side of the boundary are still one payment. A genuine second
+       payment of the same amount a minute later records normally. */
+    const minute = Math.floor(Date.now() / 60000);
+    const manualRef = (m) => 'manual:' + crypto.createHash('sha256')
+      .update([code, round2(amount).toFixed(2), method, m].join('|')).digest('hex').slice(0, 32);
+    const { rows: justNow } = await pool.query(
+      'SELECT 1 FROM quote_payments WHERE ext_ref = $1 LIMIT 1', [manualRef(minute - 1)]);
+    if (justNow.length) return res.redirect('/quotes');
+    const rec = await recordPayment({
+      code, amount, method, source: 'manual', extRef: manualRef(minute),
       note: String(b.note || '').trim().slice(0, 200) || null,
     });
+    if (rec && rec.duplicate) return res.redirect('/quotes');
 
     const { rows: upd } = await pool.query(
       `UPDATE quotes SET status = 'accepted',
@@ -9540,7 +9577,7 @@ app.post('/quote/:code/mark-paid', requireAdmin, async (req, res) => {
     }
     if (nq.phone) {
       sendCustomerSms({ phone: nq.phone, kind: 'transactional',
-        ref: 'payment:manual:' + nq.code + ':' + Date.now(),
+        ref: 'payment:' + manualRef(minute),
         msg: SMS.paymentReceived({ code: nq.code, amount, stillDue }) });
     }
 
@@ -11622,6 +11659,7 @@ app.post('/quote/:code/stage', requireAdmin, async (req, res) => {
       `UPDATE quotes SET ${sets} WHERE code = $1 RETURNING *`, [code]);
     console.log(`quote ${code}: moved to ${JOB_STAGES[target].label}`);
     textQuoteMilestones(prev[0], rows[0]);
+    emailTrackingOnShip(prev[0], rows[0]);
     if (asJson) {
       const cl = rows.length ? quoteChecklist(rows[0]) : null;
       return res.json({ ok: true, stage: JOB_STAGES[target].key,
@@ -11987,7 +12025,8 @@ async function renderBoard(VIEW, req, res) {
             <input name="amount" type="number" step="0.01" inputmode="decimal"
                    placeholder="${money(paid ? outstanding : Number(q.deposit || 0)).replace('$','')}"
                    style="flex:0 0 120px;padding:9px">
-            <button type="submit" style="padding:9px 20px;font-size:14px">Record</button>
+            <button type="submit" style="padding:9px 20px;font-size:14px"
+                    onclick="var f=this.form;setTimeout(function(){f.querySelector('button[type=submit]').disabled=true},0)">Record</button>
           </div>
           <input name="note" maxlength="200" placeholder="Zelle confirmation / reference (optional but worth it)"
                  style="width:100%;margin-top:8px;padding:9px">
@@ -13913,7 +13952,7 @@ app.post('/api/order-confirmation', requireInternalKey, async (req, res) => {
       }),
     });
     if (b.phone) {
-      sendCustomerSms({ phone: b.phone, kind: 'transactional', ref: 'studio:' + smsPlain(b.order_id, 20),
+      await sendCustomerSms({ phone: b.phone, kind: 'transactional', ref: 'studio:' + smsPlain(b.order_id, 20),
         msg: SMS.studioOrderPlaced({ orderId: b.order_id }) });
     }
     res.json({ ok: true });
@@ -13991,7 +14030,7 @@ app.post('/api/order-shipped', requireInternalKey, async (req, res) => {
       }),
     });
     if (status === 'shipped' && b.phone) {
-      sendCustomerSms({ phone: b.phone, kind: 'transactional', ref: 'studio:' + smsPlain(b.order_id, 20),
+      await sendCustomerSms({ phone: b.phone, kind: 'transactional', ref: 'studio:' + smsPlain(b.order_id, 20),
         msg: SMS.studioOrderShipped({ orderId: b.order_id, tracking }) });
     }
     /* Record the ask as DUE rather than holding a timer — a setTimeout would be
@@ -14425,6 +14464,28 @@ async function taxMonthlyCheck() {
   }
 }
 
+/* The "your order has shipped" email with its tracking number. */
+function sendTrackingEmail(q, tracking) {
+  if (!q || !q.email || !tracking) return;
+  sendEmail({
+    to: q.email,
+    subject: `Your order has shipped — ${q.code}`,
+    html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
+      <h2 style="color:#1848B8">On its way</h2>
+      <p style="color:#374151;line-height:1.6">Your order for quote ${escEmail(q.code)} has shipped.</p>
+      <p style="color:#374151;line-height:1.6">Tracking: <b>${escEmail(tracking)}</b></p>
+      <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_NAME} &middot; ${SHOP_PHONE}</p></div>`,
+  }).catch((e) => console.error('tracking email failed:', e.message));
+}
+
+// When Shipped is ticked AFTER the tracking number was typed, the email the
+// tracking form held back goes now.
+function emailTrackingOnShip(before, after) {
+  if (!before || !after || before.shipped_at || !after.shipped_at) return;
+  if (String(after.ship_method || '').toLowerCase() === 'pickup') return;
+  if (after.tracking) sendTrackingEmail(after, after.tracking);
+}
+
 /* Shipping method and tracking. Method matters beyond record-keeping: a pickup
    has no transit time, so the backwards schedule gives you the extra days back
    instead of chasing you for a ship date that does not exist. */
@@ -14441,22 +14502,18 @@ app.post('/quote/:code/shipping', requireAdmin, async (req, res) => {
                          tracking    = COALESCE(NULLIF($3,''), tracking)
         WHERE code = $1 RETURNING *`, [code, method, tracking]);
 
-    /* A tracking number is worth nothing sitting in a database — send it. */
+    /* A tracking number is worth nothing sitting in a database — send it. But
+       only once the order is marked shipped: a label printed a day early is not
+       a parcel on its way, and "it has shipped" must not arrive before it has.
+       If it is not shipped yet, the Shipped tick sends it (textQuoteMilestones
+       and emailTrackingOnShip). */
     const q = rows[0];
-    if (q && tracking && q.email && tracking !== String(b.prev_tracking || '')) {
-      sendEmail({
-        to: q.email,
-        subject: `Your order has shipped — ${q.code}`,
-        html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
-          <h2 style="color:#1848B8">On its way</h2>
-          <p style="color:#374151;line-height:1.6">Your order for quote ${escEmail(q.code)} has shipped.</p>
-          <p style="color:#374151;line-height:1.6">Tracking: <b>${escEmail(tracking)}</b></p>
-          <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_NAME} &middot; ${SHOP_PHONE}</p></div>`,
-      }).catch((e) => console.error('tracking email failed:', e.message));
-    }
-    if (q && tracking && q.phone && tracking !== String(b.prev_tracking || '')) {
-      sendCustomerSms({ phone: q.phone, kind: 'transactional', ref: 'quote:' + q.code,
-        msg: SMS.shipped({ code: q.code, tracking }) });
+    if (q && q.shipped_at && tracking && tracking !== String(b.prev_tracking || '')) {
+      sendTrackingEmail(q, tracking);
+      if (q.phone) {
+        sendCustomerSms({ phone: q.phone, kind: 'transactional', ref: 'quote:' + q.code,
+          msg: SMS.shipped({ code: q.code, tracking }) });
+      }
     }
   } catch (err) {
     console.error('shipping update failed:', err.message);
@@ -15177,6 +15234,10 @@ function validateEnv() {
   }
   if (!process.env.ADMIN_PASSWORD?.trim()) {
     console.warn('WARNING: ADMIN_PASSWORD is not set — admin routes will be inaccessible.');
+  }
+  if (!process.env.JT_INTERNAL_KEY?.trim()) {
+    console.warn('WARNING: JT_INTERNAL_KEY is not set — every call from design.jtees.net ' +
+      '(order emails, texts, consent, login codes) will be refused with 403.');
   }
   /* Warn-only for the same reason as the rest: no Sentry project yet is a
      degraded mode, not an outage — the database digest still reports. Said at

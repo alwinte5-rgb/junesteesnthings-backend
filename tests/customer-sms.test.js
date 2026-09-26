@@ -50,7 +50,11 @@ test('payment texts carry no amount in the dedupe key', () => {
   assert.equal(T.paymentReceived({ code: 'A', amount: 50 }).template,
     T.paymentReceived({ code: 'A', amount: 50 }).template);
   assert.match(server, /ref: 'payment:' \+ session\.id/);
-  assert.match(server, /ref: 'payment:manual:' \+ nq\.code \+ ':' \+ Date\.now\(\)/);
+  // Manual payments share the ledger's idempotency key, so a double-click is
+  // one payment and one text.
+  assert.match(server, /ref: 'payment:' \+ manualRef\(minute\)/);
+  assert.match(server, /extRef: manualRef\(minute\)/);
+  assert.doesNotMatch(server, /'payment:manual:' \+ nq\.code \+ ':' \+ Date\.now\(\)/);
 });
 
 function loadMilestones() {
@@ -201,4 +205,43 @@ test('popup rate limit: 3 per IP per hour, 40 overall', () => {
   let ok = 0;
   for (let i = 0; i < 60; i++) if (ctx.f('10.0.0.' + i, t + 3600002)) ok++;
   assert.ok(ok <= 40, `${ok} allowed in one hour`);
+});
+
+test('tracking typed before Shipped is ticked sends nothing until it is', () => {
+  const start = server.indexOf("app.post('/quote/:code/shipping'");
+  const body = server.slice(start, server.indexOf('\n});', start));
+  assert.match(body, /if \(q && q\.shipped_at && tracking/);
+  assert.match(server, /textQuoteMilestones\(prev\[0\], rows\[0\]\); emailTrackingOnShip\(prev\[0\], rows\[0\]\);/);
+});
+
+test('a send stuck in "sending" is released for retry', () => {
+  const start = server.indexOf('async function sendCustomerSms(');
+  const body = server.slice(start, server.indexOf('\n}\n', start));
+  assert.ok(body.indexOf("error='stuck in sending'") < body.indexOf('INSERT INTO sms_messages'));
+});
+
+test('designer copies of the consent wording match what the consent row records', () => {
+  const { TRANSACTIONAL_TEXT, MARKETING_TEXT } = require('../tools/lib/sms-consent');
+  const dir = path.join(process.env.HOME || '', 'lumise-designer');
+  if (!fs.existsSync(dir)) return; // designer repo not checked out alongside
+  const read = (f) => fs.readFileSync(path.join(dir, f), 'utf8').replace(/&amp;/g, '&');
+  for (const f of ['checkout.php', 'product.php']) {
+    assert.ok(read(f).includes(TRANSACTIONAL_TEXT), `${f}: order-update wording drifted`);
+    assert.ok(read(f).includes(MARKETING_TEXT), `${f}: marketing wording drifted`);
+  }
+  assert.ok(read('jt-save-popup.php').includes(MARKETING_TEXT), 'popup: marketing wording drifted');
+});
+
+test('dynamic pages default to no-store, after static files', () => {
+  const staticAt = server.indexOf("app.use(express.static(path.join(__dirname, 'public')));");
+  const noStoreAt = server.indexOf("app.use((_req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });");
+  assert.ok(staticAt > 0 && noStoreAt > staticAt, 'no-store must be mounted after static and before routes');
+  assert.ok(noStoreAt < server.indexOf("app.get('/q/:code'"));
+});
+
+test('admin password auth refuses state-changing requests from other sites', () => {
+  const start = server.indexOf('function requireAdmin(');
+  const body = server.slice(start, server.indexOf('\n}\n', start));
+  assert.match(body, /!\['GET', 'HEAD'\]\.includes\(req\.method\) && origin && !SITE_ORIGINS\.includes\(origin\)/);
+  assert.ok(body.indexOf('SITE_ORIGINS.includes(origin)') < body.indexOf("provided.startsWith('Basic ')"));
 });
