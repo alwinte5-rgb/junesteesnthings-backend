@@ -15528,6 +15528,22 @@ async function runSupplierSync() {
   });
 }
 
+/* The design studio's hourly job (design.jtees.net/jt-cron.php): its
+   abandoned-cart emails, the one follow-up text, and its refund check. It
+   answers 500 when a refund could not be put on its studio order, and 403
+   when the key is wrong. This step used to return the text whatever the
+   status, which only logged either where nobody reads it, so anything but a
+   2xx now fails the step and reaches the error digest in the job's own words. */
+async function runStudioHourlyJob() {
+  if (!process.env.JT_INTERNAL_KEY) {
+    throw new Error('JT_INTERNAL_KEY not set — the studio hourly job (carts, texts, refunds) was skipped');
+  }
+  const r = await studioFetch('https://design.jtees.net/jt-cron.php', { timeoutMs: 120000 });
+  const text = await r.text();
+  if (!r.ok) throw new Error(`studio answered ${r.status}: ${text.trim().slice(0, 300)}`);
+  return text;
+}
+
 // Hourly sweep: the designer's abandoned-cart run plus every reminder, digest
 // and sync this app owns. Self-rescheduling with a timeout so a slow sweep can
 // never overlap the next one.
@@ -15558,12 +15574,7 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
   };
 
   const runSweep = async () => {
-    await step('abandoned-cart sweep', async () => {
-      if (!process.env.JT_INTERNAL_KEY) throw new Error('JT_INTERNAL_KEY not set — designer cart sweep skipped');
-      const r = await studioFetch('https://design.jtees.net/jt-cron.php',
-        { timeoutMs: 120000 });
-      return r.text();
-    });
+    await step('studio hourly job', runStudioHourlyJob);
     /* Before anything that asks a customer for money or a review: a refund
        the webhook missed has to be on the books before those look at them. */
     await step('stripe refunds', reconcileRecentRefunds);
@@ -15882,7 +15893,7 @@ function validateEnv() {
   if (!process.env.JT_INTERNAL_KEY?.trim()) {
     console.warn('WARNING: JT_INTERNAL_KEY is not set — every call from design.jtees.net ' +
       '(order emails, texts, consent, login codes) will be refused with 403, the admin ' +
-      'sign-in from the designer will fail, and the hourly abandoned-cart sweep is skipped ' +
+      'sign-in from the designer will fail, and the studio hourly job (carts, texts, refunds) is skipped ' +
       '(reported in the error digest). Reminders, digests and the price sync still run.');
   }
   /* Warn-only for the same reason as the rest: no Sentry project yet is a
