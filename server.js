@@ -572,6 +572,19 @@ async function initDB() {
                       ON unlinked_payments (ext_ref) WHERE ext_ref IS NOT NULL`);
   await pool.query(`CREATE INDEX IF NOT EXISTS unlinked_payments_date_idx
                       ON unlinked_payments (created_at)`);
+  /* The $0.57 live card test from August — a test quote (E7BE52, since gone)
+     — and its refund on 2026-09-26. It sold nothing, so no tax was collected
+     on it, but it came in through tools/backfill-unlinked.js with its tax
+     UNKNOWN, and an unknown tax holds its month open as undetermined; its
+     refund copied the unknown and held September open as well. Settled here so
+     the fix ships with its reason. Only rows still unknown are touched, so a
+     figure somebody entered by hand is never overwritten. */
+  await pool.query(
+    `UPDATE unlinked_payments
+        SET tax_portion = 0, resolved_at = NOW(),
+            note = CONCAT_WS(' · ', NULLIF(note, ''), 'Card test, nothing sold: no tax (set 2026-09-26)')
+      WHERE stripe_pi = $1 AND tax_portion IS NULL`,
+    ['pi_3U0pFeGqgtaUfMW203neCYsX']).catch((e) => console.error('card-test tax fix failed:', e.message));
 
   /* Backfill the tax portion for payments recorded before this column existed,
      apportioned by how much of the job that payment covered. */
@@ -8275,6 +8288,20 @@ app.get('/q/:code', async (req, res) => {
     const accepted = !!q.accepted_at;
     const paid = Number(q.paid_amount || 0) > 0;
     const balanceDue = balanceOf(q, t.total);
+    /* What has gone back to the customer's card on this quote: its refund rows,
+       less any refund that failed and came back. Once there is any, the page
+       stops asking for money by itself. A refund leaves paid below the total,
+       which this page showed as a balance due, or, refunded in full, as a
+       deposit to pay again, for money the shop had just returned. Why a
+       refund was issued is the shop's call, so if anything is still owed after
+       one, the shop sends the payment link (those routes are unchanged). A
+       failed lookup renders the page without it rather than not at all. */
+    const { rows: rf } = await pool.query(
+      `SELECT COALESCE(-SUM(amount + COALESCE(fee, 0)), 0) AS gross
+         FROM quote_payments WHERE quote_code = $1 AND ext_ref ~ '^(ch|py)_[A-Za-z0-9_]+:'`, [q.code])
+      .catch((e) => { console.error(`quote ${q.code}: refund lookup failed:`, e.message); return { rows: [] }; });
+    const refundedToCard = round2(Number(rf[0]?.gross || 0));
+    const refunded = refundedToCard > 0;
     /* Items go in for the piece count only — a run past the contract sheet's
        stated ceiling gets a caveat rather than a date presented as a promise. */
     const eta = deliveryEstimate(q.accepted_at ? new Date(q.accepted_at) : new Date(),
@@ -8445,13 +8472,15 @@ app.get('/q/:code', async (req, res) => {
           <tr id="estrow" style="display:none"><td colspan="3" class="num" style="color:#b45309;font-weight:700;padding-top:10px">
               With your changes <span style="font-weight:400;font-size:12px">(estimate)</span></td>
               <td class="num" style="color:#b45309;font-weight:700;padding-top:10px" id="esttotal">&mdash;</td></tr>
-          ${!paid ? `<tr><td colspan="3" class="num" style="color:#1848B8;font-weight:700">
+          ${!paid ? (refunded ? '' : `<tr><td colspan="3" class="num" style="color:#1848B8;font-weight:700">
               ${t.deposit >= t.total ? 'Due now (paid in full)' : 'Deposit to start (50%)'}</td>
-              <td class="num" style="color:#1848B8;font-weight:700">${money(t.deposit)}</td></tr>` : `
+              <td class="num" style="color:#1848B8;font-weight:700">${money(t.deposit)}</td></tr>`) : `
             <tr><td colspan="3" class="num muted">Paid ${q.paid_at ? fmtDate(q.paid_at) : ''}</td>
                 <td class="num" style="color:#166534">&minus;${money(q.paid_amount)}</td></tr>
-            ${balanceDue > 0 ? `<tr><td colspan="3" class="num" style="color:#1848B8;font-weight:700">Balance due</td>
+            ${balanceDue > 0 && !refunded ? `<tr><td colspan="3" class="num" style="color:#1848B8;font-weight:700">Balance due</td>
                 <td class="num" style="color:#1848B8;font-weight:700">${money(balanceDue)}</td></tr>` : ''}`}
+          ${refunded ? `<tr><td colspan="3" class="num muted">Refunded to your card</td>
+              <td class="num">${money(refundedToCard)}</td></tr>` : ''}
         </tbody></table>
 
         <p class="muted" style="margin-top:12px;font-size:12.5px">The price each covers the garment
@@ -8472,7 +8501,15 @@ app.get('/q/:code', async (req, res) => {
         </div>
       </div>
 
-      ${(paid && balanceDue > 0) ? `
+      ${refunded ? `
+      <div class="card">
+        <h1 style="font-size:18px">Refunded — ${money(refundedToCard)}</h1>
+        <p class="muted" style="margin-top:6px">${money(refundedToCard)} has gone back to the card you paid
+          with; banks usually show it within 5–10 business days. Nothing more is due on this order unless
+          ${SHOP_SIGNER} sends you a new payment link.</p>
+      </div>` : ''}
+
+      ${(paid && balanceDue > 0 && !refunded) ? `
       <div class="card">
         <h1 style="font-size:18px">Balance due — ${money(balanceDue)}</h1>
         <p class="muted" style="margin:6px 0 14px">${money(q.paid_amount)} received, thank you. The rest is due
@@ -8495,7 +8532,7 @@ app.get('/q/:code', async (req, res) => {
         </div>
       </div>` : ''}
 
-      ${paid || q.requested_items || q.cancelled_at ? '' : accepted ? `
+      ${paid || q.requested_items || q.cancelled_at || refunded ? '' : accepted ? `
       <div class="card">
         <h1 style="font-size:18px">Pay your ${t.deposit >= t.total ? 'balance' : 'deposit'} — ${money(t.deposit)}</h1>
         <p class="muted" style="margin:6px 0 14px">Whichever is easiest. Nothing else is due until pickup or delivery.</p>
@@ -9236,70 +9273,154 @@ async function bankStripeSession(session) {
 }
 
 /* ── Refunds ──────────────────────────────────────────────────────────────────
-   charge.refunded carries the CHARGE, and a charge's amount_refunded is the
-   running total of every refund on it, not the size of the refund that just
-   happened. It used to be booked as though it were: $10 and then $5 back on
-   one charge wrote −$10 and then −$15, and the quote read $10 less paid than
-   it really was. What is new is that running total minus the most already
-   booked for the charge, and ext_ref has always carried the running total
-   (`ch_…:<cents>`), so that is where it is read back from.
+   The books follow what Stripe says is refunded on each charge now, not what
+   any one event says. charge.refunded carries the charge's amount_refunded, a
+   RUNNING total across every refund on it, and booking that figure as "the
+   refund" re-booked every earlier partial refund. Events also arrive late, out
+   of order and more than once; a refund can FAIL days after it was issued (the
+   card closed, the bank sent it back); and a webhook can be missed outright.
 
-   Only a second refund on the same charge was ever booked wrong, and when this
-   was fixed (2026-09-26) the account had issued exactly one refund, in full,
-   so nothing already booked needs correcting. */
+   So a refund event, and the hourly sweep, reconcile the charge instead: what
+   Stripe says is refunded on it (every refund that has not failed or been
+   cancelled), minus what the ledgers already hold for it, is booked as one
+   row. Money going back is a negative row; a failed refund coming back is a
+   positive one. Every such row starts its ext_ref with the charge id
+   (`ch_…:`), which is how the charge's rows are found again. */
 
-/* Two refunds on one charge handled at the same moment would both read the
-   same "already booked" figure and book the overlap twice, so each charge's
-   refunds queue behind one another. One process serves this app (railway.json
-   sets no replicas), so a queue in memory is enough. */
-const refundQueues = new Map();
-function oneRefundAtATime(chargeId, fn) {
-  const key = String(chargeId || '');
-  const run = (refundQueues.get(key) || Promise.resolve()).then(() => fn());
-  const settled = run.then(() => {}, () => {});   // never rejects, so one failure cannot jam the queue
-  refundQueues.set(key, settled);
-  settled.then(() => { if (refundQueues.get(key) === settled) refundQueues.delete(key); });
-  return run;                                     // a failure still reaches Stripe as a 500, and it retries
+/* One reconcile at a time in this process, and one per charge across every
+   process. The advisory lock is what makes it correct with a second replica;
+   the queue is what keeps it safe with one. The lock holds a pool connection
+   while the booking uses another, so a burst of refunds each holding a
+   connection and waiting on a second could exhaust the pool and hang every
+   request in the app. Queued, there is never more than one holder. Refunds
+   are rare, so waiting in line costs nothing that matters. */
+let refundChain = Promise.resolve();
+function oneRefundAtATime(fn) {
+  const run = refundChain.then(() => fn());
+  refundChain = run.then(() => {}, () => {});   // never rejects, so one failure cannot jam the line
+  return run;                                   // a failure still reaches Stripe as a 500, and it retries
 }
 
-/** The most, in cents, either ledger has already booked as refunded on one charge. */
+async function withChargeLock(chargeId, fn) {
+  const client = await pool.connect();
+  let broken = false;
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['jt-refund:' + chargeId]);
+    const out = await fn();
+    await client.query('COMMIT');
+    return out;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => { broken = true; });
+    throw err;
+  } finally {
+    // A connection that cannot roll back is dropped, and its lock goes with it.
+    client.release(broken);
+  }
+}
+
+function reconcileRefunds(charge, via) {
+  return oneRefundAtATime(() => withChargeLock(charge.id, () => reconcileChargeRefunds(charge, via)));
+}
+
+/** GET a Stripe list endpoint, every page. A failure names the call and Stripe's own message. */
+async function stripeListAll(path, params) {
+  const key = process.env.STRIPE_SECRET_KEY;
+  const all = [];
+  let after = null;
+  for (;;) {
+    const qs = new URLSearchParams({ ...params, limit: '100', ...(after ? { starting_after: after } : {}) });
+    const r = await fetch(`https://api.stripe.com/v1/${path}?${qs}`, {
+      headers: { Authorization: 'Bearer ' + key }, signal: AbortSignal.timeout(15000) });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(`Stripe GET /v1/${path} ${r.status}: ${body?.error?.message || 'no message'}`);
+    const page = Array.isArray(body.data) ? body.data : [];
+    all.push(...page);
+    if (!body.has_more || !page.length) return all;
+    after = page[page.length - 1].id;
+  }
+}
+
+/* What Stripe says is refunded on a charge right now, in cents: every refund
+   on it that has not failed or been cancelled. Asked of Stripe rather than
+   read off the event, so a late, repeated or out-of-order event can only move
+   the books to the current truth, and a refund that failed comes back off.
+   Without a key (a copy run locally) the event's own running total is the
+   best there is; an event that carries none, like a refund object, is left
+   for the sweep. */
+async function refundedOnCharge(chargeId, eventCents) {
+  if (!process.env.STRIPE_SECRET_KEY) return eventCents;
+  const refunds = await stripeListAll('refunds', { charge: chargeId });
+  return refunds
+    .filter((x) => x.status !== 'failed' && x.status !== 'canceled')
+    .reduce((cents, x) => cents + Math.round(Number(x.amount) || 0), 0);
+}
+
+/** What the ledgers already hold as refunded on one charge: cents, and how many rows. */
 async function refundCentsBooked(chargeId) {
+  /* A quote row splits the money into net and card fee, so what actually moved
+     is amount + fee; the unlinked ledger books the gross with no fee. */
   const { rows } = await pool.query(
-    `SELECT COALESCE(MAX(CASE WHEN split_part(ext_ref, ':', 2) ~ '^[0-9]{1,12}$'
-                              THEN split_part(ext_ref, ':', 2)::bigint END), 0) AS cents
-       FROM (SELECT ext_ref FROM quote_payments    WHERE kind = 'refund'
+    `SELECT COALESCE(ROUND(-SUM(amount + COALESCE(fee, 0)) * 100), 0) AS cents, COUNT(*) AS n
+       FROM (SELECT amount, fee FROM quote_payments    WHERE split_part(ext_ref, ':', 1) = $1
              UNION ALL
-             SELECT ext_ref FROM unlinked_payments WHERE kind = 'refund') r
-      WHERE split_part(ext_ref, ':', 1) = $1`, [chargeId]);
-  return Number(rows[0]?.cents || 0);
+             SELECT amount, fee FROM unlinked_payments WHERE split_part(ext_ref, ':', 1) = $1) r`,
+    [chargeId]);
+  return { cents: Number(rows[0]?.cents || 0), rows: Number(rows[0]?.n || 0) };
 }
 
-async function recordStripeRefund(charge) {
-  const totalCents = Math.round(Number(charge.amount_refunded) || 0);
-  if (!(totalCents > 0) || !charge.id) return;
-  const bookedCents = await refundCentsBooked(charge.id);
-  /* Nothing new: Stripe retrying an event already booked, or an older event
-     arriving after a newer one whose running total already covered it. */
-  if (!(totalCents > bookedCents)) return;
-  const refunded = round2((totalCents - bookedCents) / 100);
-  const soFar = bookedCents > 0
-    ? ` (${money(totalCents / 100)} refunded on this payment in all)` : '';
-  const extRef = charge.id + ':' + totalCents;
+/* Bring the ledgers into line with Stripe for one charge. `via` is 'webhook'
+   or 'sweep' — the sweep only books something when the events missed it, and
+   the shop is told so. Returns what it did, for the sweep's summary. */
+async function reconcileChargeRefunds(charge, via = 'webhook') {
+  /* Any Stripe id will do — only a colon would break the ext_ref prefix, and
+     no Stripe id has one. Checking the id's SHAPE more tightly than that
+     silently skipped every refund on an id it did not expect, which is a
+     refund the books never hear about; so a skip is always said out loud. */
+  if (!/^[A-Za-z0-9_]+$/.test(String(charge?.id || ''))) {
+    console.warn(`Stripe refund: unusable charge id ${JSON.stringify(charge?.id)} — not reconciled`);
+    return { skipped: 'not a charge' };
+  }
+  const eventCents = charge.amount_refunded == null ? null : Math.round(Number(charge.amount_refunded) || 0);
+  const wantCents = await refundedOnCharge(charge.id, eventCents);
+  if (wantCents == null) return { skipped: 'no key to ask Stripe' };
+  const booked = await refundCentsBooked(charge.id);
   const pi = typeof charge.payment_intent === 'string' ? charge.payment_intent : null;
-  /* `part`'s share of this refund, where `part` is some slice of a payment of
-     `whole` (its net of the card fee, or its tax). Worked out on the running
-     total, less the share the already-booked total took, instead of refund by
-     refund: $10, $5 and then $37 back on a $52 charge, each rounded alone,
-     books $50.01 of a $50.00 net, and a charge refunded in full should put
-     back exactly what it took. */
-  const shareOf = (part, whole) =>
-    round2(round2(part * Math.min(totalCents / 100, whole) / whole) -
-           round2(part * Math.min(bookedCents / 100, whole) / whole));
 
   const { rows } = await pool.query(
     `SELECT quote_code, SUM(amount) AS applied, SUM(fee) AS fee
        FROM quote_payments WHERE stripe_pi = $1 AND amount > 0
       GROUP BY quote_code`, [pi]);
+
+  if (wantCents === booked.cents) {
+    /* Nothing to book: a retry of an event already booked, or an older event
+       arriving after a newer one. The quote's paid figure is re-derived all
+       the same, so a retry also heals a rollup that failed after its row was
+       written the first time round. */
+    if (rows.length) await syncPaidAmount(rows[0].quote_code);
+    return { inLine: true };
+  }
+
+  const change = round2((wantCents - booked.cents) / 100);   // > 0 refunded; < 0 a refund came back
+  const failed = change < 0;
+  const moved = money(Math.abs(change));
+  const extRef = `${charge.id}:${wantCents}:${booked.rows + 1}`;
+  const note = failed ? `Refund of ${moved} failed at the bank; the money came back to Stripe`
+                      : `Refund of ${moved} via Stripe`;
+  const inAll = !failed && booked.cents > 0
+    ? ` (${money(wantCents / 100)} refunded on this payment in all)` : '';
+  const caught = via === 'sweep'
+    ? `<p style="color:#6b7280">Found by the hourly check against Stripe; no webhook for it arrived.</p>` : '';
+  /* `part`'s share of the change, where `part` is some slice of a payment of
+     `whole` (its net of the card fee, or its tax). Worked out on the running
+     total, less the share already booked, instead of refund by refund: $10, $5
+     and then $37 back on a $52 charge, each rounded alone, books $50.01 of a
+     $50.00 net, and a charge refunded in full should put back exactly what it
+     took. Negative when a refund failed. */
+  const shareOf = (part, whole) =>
+    round2(round2(part * Math.min(wantCents / 100, whole) / whole) -
+           round2(part * Math.min(booked.cents / 100, whole) / whole));
+
   if (!rows.length) {
     /* No quote claimed the original payment — so it is one of the
        unlinked ones, and the refund has to come back out of the same
@@ -9311,8 +9432,8 @@ async function recordStripeRefund(charge) {
          FROM unlinked_payments WHERE stripe_pi = $1 AND amount > 0
         ORDER BY created_at LIMIT 1`, [pi]);
     if (!unl.length) {
-      console.warn(`Stripe refund ${charge.id} — no matching quote or unlinked payment for PI ${pi}`);
-      return;
+      console.warn(`Stripe refund on ${charge.id} — no matching quote or unlinked payment for PI ${pi}`);
+      return { skipped: 'in neither ledger' };
     }
     const u = unl[0];
     /* Carry the tax back out in proportion, the way the quote ledger
@@ -9326,27 +9447,33 @@ async function recordStripeRefund(charge) {
     const backTax = (origTax === null || !(origAmt > 0))
       ? null
       : -shareOf(origTax, origAmt);   // proportional, and never more than was taken
+    const what = u.order_ref ? `design studio order #${u.order_ref}` : 'unlinked payment';
     const back = await recordUnlinkedPayment(
       { id: null, payment_intent: pi, amount_total: 0,
         currency: charge.currency,
         client_reference_id: u.client_ref,
         metadata: { order_id: u.order_ref },
         customer_details: { email: u.customer_email, name: u.customer_name } },
-      'refund of an unlinked payment',
-      { amount: -refunded, kind: 'refund', allowZero: true,
-        taxPortion: backTax,
-        extRef,
-        note: `Refund of ${money(refunded)} via Stripe` });
+      failed ? 'failed refund of an unlinked payment' : 'refund of an unlinked payment',
+      { amount: -change, kind: failed ? 'correction' : 'refund', allowZero: true,
+        taxPortion: backTax, extRef, note,
+        source: via === 'sweep' ? 'stripe_sweep' : 'stripe_webhook' });
     if (!back.duplicate) {
-      console.log(`Stripe refund for unlinked payment ${u.order_ref || pi}: -${money(refunded)}`);
-      await alertShop(`↩️ Refund — ${u.order_ref ? `design studio order #${u.order_ref}` : 'unlinked payment'}, ${money(refunded)}`,
-        `<p>A refund of <b>${money(refunded)}</b> was issued on a payment that belongs to
-            no quote${u.order_ref ? ` (design studio order #${escEmail(u.order_ref)})` : ''}${soFar}.</p>
-         <p style="color:#6b7280">Recorded against the unlinked ledger so the books do not
-            keep money that went back.</p>`);
+      console.log(`Stripe ${failed ? 'refund FAILED' : 'refund'} for ${what} (${via}): ${failed ? '+' : '-'}${moved}`);
+      await alertShop(failed ? `⚠️ Refund failed — ${what}, ${moved} came back`
+                             : `↩️ Refund — ${what}, ${moved}`,
+        failed
+          ? `<p>Stripe could not return <b>${moved}</b> to the customer's card, so it is back in the
+                shop's balance and <b>the customer has not been refunded</b>. Re-issue the refund in
+                Stripe, or get in touch with them.</p>${caught}`
+          : `<p>A refund of <b>${moved}</b> was issued on a payment that belongs to
+                no quote${u.order_ref ? ` (design studio order #${escEmail(u.order_ref)})` : ''}${inAll}.</p>
+             <p style="color:#6b7280">Recorded against the unlinked ledger so the books do not
+                keep money that went back.</p>${caught}`);
     }
-    return;
+    return { booked: change };
   }
+
   const code = rows[0].quote_code;
   /* Reverse the split the payment itself used, so a full refund returns the
      quote to exactly zero paid rather than leaving part of the fee behind.
@@ -9355,19 +9482,50 @@ async function recordStripeRefund(charge) {
   const applied = round2(Number(rows[0].applied) || 0);   // > 0: only payments are selected
   const origFee = round2(Number(rows[0].fee) || 0);
   const net = shareOf(applied, round2(applied + origFee));
-  const fee = round2(refunded - net);
+  const fee = round2(change - net);
   const out = await recordPayment({
-    code, amount: -net, fee: -fee, method: 'card', kind: 'refund',
-    source: 'stripe', pi, extRef,
-    note: `Refund of ${money(refunded)} via Stripe`,
+    code, amount: -net, fee: -fee, method: 'card', kind: failed ? 'correction' : 'refund',
+    source: 'stripe', pi, extRef, note,
   });
   if (!out.duplicate) {
-    console.log(`Stripe refund for ${code}: -${money(net)} (now ${money(out.paid)})`);
-    await alertShop(`↩️ Refund — quote ${code}, ${money(refunded)}`,
-      `<p>A refund of <b>${money(refunded)}</b> was issued on quote ${escEmail(code)}${soFar}.</p>
-       <p>Applied to quote: −${money(net)}. Now paid: ${money(out.paid)}.</p>
-       <p><a href="${quoteLink(code)}">${quoteLink(code)}</a></p>`);
+    console.log(`Stripe ${failed ? 'refund FAILED' : 'refund'} for ${code} (${via}): ${failed ? '+' : '-'}${money(Math.abs(net))} (now ${money(out.paid)})`);
+    await alertShop(failed ? `⚠️ Refund failed — quote ${code}, ${moved} came back`
+                           : `↩️ Refund — quote ${code}, ${moved}`,
+      (failed
+        ? `<p>Stripe could not return <b>${moved}</b> to the customer's card on quote ${escEmail(code)},
+              so it is back in the shop's balance and <b>the customer has not been refunded</b>.
+              Re-issue the refund in Stripe, or get in touch with them.</p>
+           <p>Applied back to the quote: +${money(-net)}. Now paid: ${money(out.paid)}.</p>`
+        : `<p>A refund of <b>${moved}</b> was issued on quote ${escEmail(code)}${inAll}.</p>
+           <p>Applied to quote: −${money(net)}. Now paid: ${money(out.paid)}.</p>`) +
+      `<p><a href="${quoteLink(code)}">${quoteLink(code)}</a></p>${caught}`);
   }
+  return { booked: change };
+}
+
+/* The hourly backstop. A webhook can be missed (the app down past Stripe's
+   three days of retries, an event the endpoint was never subscribed to), and a
+   refund can fail weeks after it was issued, which only a refund event
+   reports. Every charge with a refund created in the last 60 days is
+   reconciled against Stripe, which books whatever the events did not. */
+async function reconcileRecentRefunds() {
+  if (!process.env.STRIPE_SECRET_KEY) return 'skipped: STRIPE_SECRET_KEY is not set';
+  const since = Math.floor(Date.now() / 1000) - 60 * 24 * 60 * 60;
+  const byCharge = new Map();
+  for (const x of await stripeListAll('refunds', { 'created[gte]': String(since) })) {
+    if (typeof x.charge === 'string' && !byCharge.has(x.charge)) byCharge.set(x.charge, x);
+  }
+  let fixed = 0, orphaned = 0;
+  for (const [chargeId, x] of byCharge) {
+    const out = await reconcileRefunds(
+      { id: chargeId, payment_intent: x.payment_intent, currency: x.currency, amount_refunded: null }, 'sweep');
+    if (out && out.booked) fixed++;
+    if (out && out.skipped === 'in neither ledger') orphaned++;
+  }
+  /* Quiet when there is nothing to say: this runs every hour. */
+  if (!fixed && !orphaned) return '';
+  return `${byCharge.size} refunded charge(s) checked` + (fixed ? `, ${fixed} brought into line` : '') +
+         (orphaned ? `, ${orphaned} in neither ledger` : '');
 }
 
 /* ── Stripe payment webhook ───────────────────────────────────────────────────
@@ -9521,7 +9679,22 @@ async function handleStripeEvent(event) {
       /* Money back out. A refund is a negative ledger row, which is only
          possible because payments are now history rather than one number. */
       case 'charge.refunded':
-        await oneRefundAtATime(obj.id, () => recordStripeRefund(obj));
+        await reconcileRefunds(obj, 'webhook');
+        break;
+
+      /* A refund that changed after it was issued — most often one that FAILED
+         (card closed, the bank sent it back), which puts the money back in the
+         shop's balance and leaves the customer unrefunded. The object is the
+         refund; its charge is what gets reconciled. Whichever of these the
+         endpoint is subscribed to works, and the hourly sweep covers the rest. */
+      case 'charge.refund.updated':
+      case 'refund.created':
+      case 'refund.updated':
+      case 'refund.failed':
+        if (typeof obj.charge === 'string') {
+          await reconcileRefunds({ id: obj.charge, payment_intent: obj.payment_intent,
+                                   currency: obj.currency, amount_refunded: null }, 'webhook');
+        }
         break;
 
       /* Chargeback. Deliberately does NOT move money — a dispute is not a
@@ -15391,6 +15564,9 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
         { timeoutMs: 120000 });
       return r.text();
     });
+    /* Before anything that asks a customer for money or a review: a refund
+       the webhook missed has to be on the books before those look at them. */
+    await step('stripe refunds', reconcileRecentRefunds);
     await step('review asks', sendDueReviewRequests);
     await step('review follow-ups', sendReviewFollowUps);
     await step('quote follow-ups', sendQuoteFollowUps);
