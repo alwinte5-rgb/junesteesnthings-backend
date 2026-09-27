@@ -483,6 +483,37 @@ async function initDB() {
       created_at  TIMESTAMPTZ DEFAULT NOW()
     )`);
   await pool.query(`CREATE INDEX IF NOT EXISTS expenses_date_idx ON expenses (spent_on)`);
+  /* A Stripe fee booked by the dispute reconcile carries the Stripe object it
+     came from, so a retried event cannot book it twice. Hand-entered rows
+     leave it NULL. */
+  await pool.query(`ALTER TABLE expenses ADD COLUMN IF NOT EXISTS ext_ref TEXT`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS expenses_extref_uniq
+                      ON expenses (ext_ref) WHERE ext_ref IS NOT NULL`);
+
+  /* Chargebacks, from the day one opens to the day it is decided (see
+     reconcileDisputeNow). The ledger only moves when one is lost, so this is
+     what lets the payment and review emails, the quote page and the board see
+     a dispute that is still open. quote_code / order_ref: where the disputed
+     payment was booked, one or the other or neither. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS stripe_disputes (
+      id             TEXT PRIMARY KEY,
+      charge         TEXT,
+      payment_intent TEXT,
+      quote_code     TEXT,
+      order_ref      TEXT,
+      amount         NUMERIC(10,2) NOT NULL,
+      currency       TEXT NOT NULL DEFAULT 'usd',
+      reason         TEXT,
+      status         TEXT NOT NULL,
+      evidence_due   TIMESTAMPTZ,
+      opened_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      closed_at      TIMESTAMPTZ,
+      close_alerted  BOOLEAN NOT NULL DEFAULT FALSE
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS stripe_disputes_quote_idx ON stripe_disputes (quote_code)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS stripe_disputes_order_idx ON stripe_disputes (order_ref)`);
 
   /* Remembered blank costs, keyed on the normalised garment description —
      quote lines are typed by hand, so there is no product id to key on. */
@@ -8302,6 +8333,18 @@ app.get('/q/:code', async (req, res) => {
       .catch((e) => { console.error(`quote ${q.code}: refund lookup failed:`, e.message); return { rows: [] }; });
     const refundedToCard = round2(Number(rf[0]?.gross || 0));
     const refunded = refundedToCard > 0;
+    /* A chargeback stops the asking too, from the day it opens: the page would
+       otherwise offer the balance to someone disputing the deposit, or, once a
+       dispute is lost, the reversed money as a balance due. What the issuer
+       gave back is its own line, in its own words. */
+    const { rows: dq } = await pool.query(
+      `SELECT (SELECT COALESCE(-SUM(amount + COALESCE(fee, 0)), 0) FROM quote_payments
+                WHERE quote_code = $1 AND kind = 'dispute') AS reversed,
+              EXISTS (SELECT 1 FROM stripe_disputes WHERE quote_code = $1) AS disputed`, [q.code])
+      .catch((e) => { console.error(`quote ${q.code}: dispute lookup failed:`, e.message); return { rows: [] }; });
+    const reversedByIssuer = round2(Number(dq[0]?.reversed || 0));
+    const disputed = !!dq[0]?.disputed;
+    const stopAsking = refunded || disputed;
     /* Items go in for the piece count only — a run past the contract sheet's
        stated ceiling gets a caveat rather than a date presented as a promise. */
     const eta = deliveryEstimate(q.accepted_at ? new Date(q.accepted_at) : new Date(),
@@ -8472,15 +8515,17 @@ app.get('/q/:code', async (req, res) => {
           <tr id="estrow" style="display:none"><td colspan="3" class="num" style="color:#b45309;font-weight:700;padding-top:10px">
               With your changes <span style="font-weight:400;font-size:12px">(estimate)</span></td>
               <td class="num" style="color:#b45309;font-weight:700;padding-top:10px" id="esttotal">&mdash;</td></tr>
-          ${!paid ? (refunded ? '' : `<tr><td colspan="3" class="num" style="color:#1848B8;font-weight:700">
+          ${!paid ? (stopAsking ? '' : `<tr><td colspan="3" class="num" style="color:#1848B8;font-weight:700">
               ${t.deposit >= t.total ? 'Due now (paid in full)' : 'Deposit to start (50%)'}</td>
               <td class="num" style="color:#1848B8;font-weight:700">${money(t.deposit)}</td></tr>`) : `
             <tr><td colspan="3" class="num muted">Paid ${q.paid_at ? fmtDate(q.paid_at) : ''}</td>
                 <td class="num" style="color:#166534">&minus;${money(q.paid_amount)}</td></tr>
-            ${balanceDue > 0 && !refunded ? `<tr><td colspan="3" class="num" style="color:#1848B8;font-weight:700">Balance due</td>
+            ${balanceDue > 0 && !stopAsking ? `<tr><td colspan="3" class="num" style="color:#1848B8;font-weight:700">Balance due</td>
                 <td class="num" style="color:#1848B8;font-weight:700">${money(balanceDue)}</td></tr>` : ''}`}
           ${refunded ? `<tr><td colspan="3" class="num muted">Refunded to your card</td>
               <td class="num">${money(refundedToCard)}</td></tr>` : ''}
+          ${reversedByIssuer > 0 ? `<tr><td colspan="3" class="num muted">Reversed by your card issuer</td>
+              <td class="num">${money(reversedByIssuer)}</td></tr>` : ''}
         </tbody></table>
 
         <p class="muted" style="margin-top:12px;font-size:12.5px">The price each covers the garment
@@ -8501,6 +8546,15 @@ app.get('/q/:code', async (req, res) => {
         </div>
       </div>
 
+      ${disputed ? `
+      <div class="card">
+        <h1 style="font-size:18px">${reversedByIssuer > 0 ? `Payment reversed — ${money(reversedByIssuer)}` : 'Payment disputed'}</h1>
+        <p class="muted" style="margin-top:6px">${reversedByIssuer > 0
+          ? `Your card issuer returned ${money(reversedByIssuer)} of your payment to you after a dispute.`
+          : 'A payment on this order is being disputed with your card issuer.'}
+          Nothing more is due on this order unless ${SHOP_SIGNER} sends you a new payment link.</p>
+      </div>` : ''}
+
       ${refunded ? `
       <div class="card">
         <h1 style="font-size:18px">Refunded — ${money(refundedToCard)}</h1>
@@ -8509,7 +8563,7 @@ app.get('/q/:code', async (req, res) => {
           ${SHOP_SIGNER} sends you a new payment link.</p>
       </div>` : ''}
 
-      ${(paid && balanceDue > 0 && !refunded) ? `
+      ${(paid && balanceDue > 0 && !stopAsking) ? `
       <div class="card">
         <h1 style="font-size:18px">Balance due — ${money(balanceDue)}</h1>
         <p class="muted" style="margin:6px 0 14px">${money(q.paid_amount)} received, thank you. The rest is due
@@ -8532,7 +8586,7 @@ app.get('/q/:code', async (req, res) => {
         </div>
       </div>` : ''}
 
-      ${paid || q.requested_items || q.cancelled_at || refunded ? '' : accepted ? `
+      ${paid || q.requested_items || q.cancelled_at || stopAsking ? '' : accepted ? `
       <div class="card">
         <h1 style="font-size:18px">Pay your ${t.deposit >= t.total ? 'balance' : 'deposit'} — ${money(t.deposit)}</h1>
         <p class="muted" style="margin:6px 0 14px">Whichever is easiest. Nothing else is due until pickup or delivery.</p>
@@ -9417,9 +9471,7 @@ async function reconcileChargeRefunds(charge, via = 'webhook') {
      and then $37 back on a $52 charge, each rounded alone, books $50.01 of a
      $50.00 net, and a charge refunded in full should put back exactly what it
      took. Negative when a refund failed. */
-  const shareOf = (part, whole) =>
-    round2(round2(part * Math.min(wantCents / 100, whole) / whole) -
-           round2(part * Math.min(booked.cents / 100, whole) / whole));
+  const shareOf = (part, whole) => movedShare(part, whole, wantCents, booked.cents);
 
   if (!rows.length) {
     /* No quote claimed the original payment — so it is one of the
@@ -9503,6 +9555,17 @@ async function reconcileChargeRefunds(charge, via = 'webhook') {
   return { booked: change };
 }
 
+/* `part`'s share of what has moved on a payment of `whole`, as that goes from
+   `beforeCents` to `nowCents` in all. Worked on the running totals, less the
+   share already booked, never step by step: $10, $5 and then $37 back on a $52
+   charge, each rounded alone, books $50.01 of a $50.00 net. Shared by refunds
+   and chargebacks so both split a payment the same way. Negative when money
+   comes back. */
+function movedShare(part, whole, nowCents, beforeCents) {
+  return round2(round2(part * Math.min(nowCents / 100, whole) / whole) -
+                round2(part * Math.min(beforeCents / 100, whole) / whole));
+}
+
 /* The hourly backstop. A webhook can be missed (the app down past Stripe's
    three days of retries, an event the endpoint was never subscribed to), and a
    refund can fail weeks after it was issued, which only a refund event
@@ -9526,6 +9589,297 @@ async function reconcileRecentRefunds() {
   if (!fixed && !orphaned) return '';
   return `${byCharge.size} refunded charge(s) checked` + (fixed ? `, ${fixed} brought into line` : '') +
          (orphaned ? `, ${orphaned} in neither ledger` : '');
+}
+
+/* ── Disputes (chargebacks) ───────────────────────────────────────────────────
+   A dispute is not a refund, and it can be won, so while one is open the books
+   are left alone and the shop is told to respond, and to hold the job. The
+   books change when it is decided, and by what Stripe says happened:
+   - lost: the disputed money comes back out of the quote, or out of the
+     unlinked ledger for a studio order or any other payment, the way a refund
+     does, with its tax carried back out in proportion;
+   - won, or an inquiry that closed without a chargeback: the money stays.
+   Stripe's own dispute fee is a cost of the business, not money the customer
+   took back, so it is an expense: whatever Stripe kept, won or lost.
+
+   Until 2026-09-27 only charge.dispute.created was handled, as an email. A lost
+   dispute stayed in the books as money received, nobody was told how it ended,
+   and the payment and review emails kept going to the customer who disputed.
+
+   Every dispute event, and an hourly sweep, reconciles against Stripe the way
+   refunds do, so a retried, late, out-of-order or missing event cannot book it
+   twice or not at all. stripe_disputes exists so everything that asks a
+   customer for money or a review can see a dispute from the day it opens:
+   nothing is booked until it is decided, so the ledger alone cannot tell them. */
+
+const DISPUTE_OPEN = new Set(['warning_needs_response', 'warning_under_review',
+                              'needs_response', 'under_review']);
+
+/** GET one Stripe object. A failure names the call and Stripe's own message. */
+async function stripeGet(path) {
+  const r = await fetch(`https://api.stripe.com/v1/${path}`, {
+    headers: { Authorization: 'Bearer ' + process.env.STRIPE_SECRET_KEY },
+    signal: AbortSignal.timeout(15000) });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`Stripe GET /v1/${path} ${r.status}: ${body?.error?.message || 'no message'}`);
+  return body;
+}
+
+/** Where a disputed payment was booked: { quote } or { unlinked }, or neither. */
+async function disputedPayment(pi) {
+  if (!pi) return {};
+  const { rows } = await pool.query(
+    `SELECT quote_code, SUM(amount) AS applied, SUM(fee) AS fee
+       FROM quote_payments WHERE stripe_pi = $1 AND amount > 0
+      GROUP BY quote_code`, [pi]);
+  if (rows.length) return { quote: rows[0] };
+  const { rows: unl } = await pool.query(
+    `SELECT id, order_ref, client_ref, customer_email, customer_name,
+            amount, tax_portion
+       FROM unlinked_payments WHERE stripe_pi = $1 AND amount > 0
+      ORDER BY created_at LIMIT 1`, [pi]);
+  return unl.length ? { unlinked: unl[0] } : {};
+}
+
+/** Stripe's dispute fee already booked as an expense: cents, and how many rows. */
+async function disputeFeeBooked(disputeId) {
+  const { rows } = await pool.query(
+    `SELECT COALESCE(ROUND(SUM(amount) * 100), 0) AS cents, COUNT(*) AS n
+       FROM expenses
+      WHERE split_part(ext_ref, ':', 1) = $1 AND split_part(ext_ref, ':', 2) = 'fee'`, [disputeId]);
+  return { cents: Number(rows[0]?.cents || 0), rows: Number(rows[0]?.n || 0) };
+}
+
+/** Whether a customer has disputed a payment on this quote or studio order. */
+async function disputeOn({ quote_code, order_ref }) {
+  if (!quote_code && !order_ref) return false;
+  const { rows } = await pool.query(
+    `SELECT 1 FROM stripe_disputes
+      WHERE ($1::text IS NOT NULL AND quote_code = $1)
+         OR ($2::text IS NOT NULL AND order_ref = $2) LIMIT 1`,
+    [quote_code || null, order_ref ? String(order_ref) : null]);
+  return rows.length > 0;
+}
+
+/* Bring the books, the dispute record and the shop's inbox into line with
+   Stripe for one dispute. `via` is 'webhook' or 'sweep'; `fresh` says the
+   dispute object is Stripe's own current copy (the sweep's listing), so it
+   need not be asked for again. Returns what it did, for the sweep. */
+async function reconcileDisputeNow(dispute, via = 'webhook', { fresh = false } = {}) {
+  /* Any Stripe id will do, as for refunds: only a colon would break the
+     ext_ref prefix, and a skip is always said out loud. */
+  const id = String(dispute?.id || '');
+  if (!/^[A-Za-z0-9_]+$/.test(id)) {
+    console.warn(`Stripe dispute: unusable id ${JSON.stringify(dispute?.id)} — not reconciled`);
+    return { skipped: 'not a dispute' };
+  }
+  /* An event carries the dispute as it was when the event was made, and a
+     retried or late one can be stale. Stripe is asked for it now, unless this
+     is the sweep's own listing or there is no key (a copy run locally). */
+  const d = (!fresh && process.env.STRIPE_SECRET_KEY)
+    ? await stripeGet(`disputes/${encodeURIComponent(id)}`) : dispute;
+  const status = String(d.status || 'unknown');
+  const open = DISPUTE_OPEN.has(status);
+  const pi = typeof d.payment_intent === 'string' ? d.payment_intent : (d.payment_intent?.id || null);
+  const chargeId = typeof d.charge === 'string' ? d.charge : (d.charge?.id || null);
+  const amount = round2((Number(d.amount) || 0) / 100);
+  const due = d.evidence_details?.due_by ? new Date(d.evidence_details.due_by * 1000) : null;
+  const paid = await disputedPayment(pi);
+  const quoteCode = paid.quote?.quote_code || null;
+  const orderRef = paid.unlinked?.order_ref || null;
+  const what = quoteCode ? `quote ${quoteCode}`
+    : orderRef ? `design studio order #${orderRef}`
+    : paid.unlinked ? 'a payment outside any quote'
+    : `a payment the books do not hold (${chargeId || pi || 'no charge id'})`;
+
+  const { rows: had } = await pool.query('SELECT status FROM stripe_disputes WHERE id = $1', [id]);
+  if (had.length) {
+    await pool.query(
+      `UPDATE stripe_disputes
+          SET status = $2, evidence_due = $3, amount = $4, updated_at = NOW(),
+              closed_at = CASE WHEN $5::boolean THEN COALESCE(closed_at, NOW()) ELSE closed_at END
+        WHERE id = $1`, [id, status, due, amount, !open]);
+  } else {
+    await pool.query(
+      `INSERT INTO stripe_disputes (id, charge, payment_intent, quote_code, order_ref, amount,
+                                    currency, reason, status, evidence_due, closed_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, CASE WHEN $11::boolean THEN NOW() END)`,
+      [id, chargeId, pi, quoteCode, orderRef, amount, String(d.currency || 'usd').toLowerCase(),
+       d.reason || null, status, due, !open]);
+  }
+
+  /* The money: nothing while it is open or once it is won; the disputed
+     amount back out once it is lost. Worked out as "what should be booked
+     minus what is", keyed on the dispute's id, so a retry books nothing twice
+     (refundCentsBooked reads the same "taken back" sum for any Stripe id). */
+  const wantBack = status === 'lost' ? Math.round(Number(d.amount) || 0) : 0;
+  const booked = await refundCentsBooked(id);
+  let bookedBack = 0;
+  let ledger = null;
+  if (wantBack !== booked.cents) {
+    const change = round2((wantBack - booked.cents) / 100);   // > 0 taken back; < 0 given back
+    const extRef = `${id}:${wantBack}:${booked.rows + 1}`;
+    const note = change > 0
+      ? `Chargeback lost: ${money(change)} returned to the customer by their card issuer`
+      : `Chargeback reversed: ${money(-change)} back from the card issuer`;
+    if (paid.quote) {
+      /* The payment's own net/fee split, as for a refund, so a chargeback on
+         the whole charge takes the quote back to exactly what it was. */
+      const applied = round2(Number(paid.quote.applied) || 0);
+      const origFee = round2(Number(paid.quote.fee) || 0);
+      const net = movedShare(applied, round2(applied + origFee), wantBack, booked.cents);
+      const out = await recordPayment({
+        code: quoteCode, amount: -net, fee: -round2(change - net), method: 'card', kind: 'dispute',
+        source: 'stripe', pi, extRef, note });
+      if (!out.duplicate) { bookedBack = change; ledger = 'quote'; }
+    } else if (paid.unlinked) {
+      const u = paid.unlinked;
+      const origAmt = round2(Number(u.amount) || 0);
+      const origTax = u.tax_portion == null ? null : round2(Number(u.tax_portion));
+      const backTax = (origTax === null || !(origAmt > 0))
+        ? null : -movedShare(origTax, origAmt, wantBack, booked.cents);
+      const out = await recordUnlinkedPayment(
+        { id: null, payment_intent: pi, amount_total: 0, currency: d.currency,
+          client_reference_id: u.client_ref, metadata: { order_id: u.order_ref },
+          customer_details: { email: u.customer_email, name: u.customer_name } },
+        'chargeback on an unlinked payment',
+        { amount: -change, kind: 'dispute', allowZero: true, taxPortion: backTax, extRef, note,
+          source: via === 'sweep' ? 'stripe_sweep' : 'stripe_webhook' });
+      if (!out.duplicate) { bookedBack = change; ledger = 'unlinked'; }
+    } else {
+      console.warn(`Stripe dispute ${id} (${status}) on ${chargeId} — no matching quote or unlinked payment for PI ${pi}`);
+    }
+    if (bookedBack) console.log(`Stripe chargeback ${status} on ${what} (${via}): ${bookedBack > 0 ? '-' : '+'}${money(Math.abs(bookedBack))}`);
+  }
+
+  /* Stripe's fee for the dispute, from its own balance transactions for it:
+     what it charged, less any it gave back on a win. Booked once decided. */
+  const feeNow = open ? 0 : (Array.isArray(d.balance_transactions) ? d.balance_transactions : [])
+    .reduce((c, bt) => c + Math.round(Number(bt && bt.fee) || 0), 0);
+  const feeBooked = await disputeFeeBooked(id);
+  let bookedFee = 0;
+  if (feeNow !== feeBooked.cents) {
+    const amt = round2((feeNow - feeBooked.cents) / 100);
+    try {
+      await pool.query(
+        `INSERT INTO expenses (spent_on, category, amount, vendor, note, ext_ref)
+         VALUES (CURRENT_DATE, 'Fees', $1, 'Stripe', $2, $3)`,
+        [amt, `Dispute fee: ${what} (${id})`, `${id}:fee:${feeNow}:${feeBooked.rows + 1}`]);
+      bookedFee = amt;
+    } catch (err) {
+      if (err.code !== '23505') throw err;   // booked by a retry that got there first
+    }
+  }
+
+  /* Told once when it opens, and once when it is decided. The flag is claimed
+     before the email goes, so two reconciles at once cannot both send it. */
+  const caught = via === 'sweep'
+    ? `<p style="color:#6b7280">Found by the hourly check against Stripe; no webhook for it arrived.</p>` : '';
+  const link = quoteCode ? `<p><a href="${quoteLink(quoteCode)}">${quoteLink(quoteCode)}</a></p>` : '';
+  let opened = false, closed = false;
+  if (!had.length && open) {
+    opened = true;
+    const inquiry = status.startsWith('warning_');
+    const by = due ? due.toLocaleString('en-US', { timeZone: SHOP_TZ, month: 'short', day: 'numeric',
+                                                   hour: 'numeric', minute: '2-digit' }) + ' CT' : '';
+    await alertShop(`🚨 ${inquiry ? 'Dispute inquiry' : 'Chargeback opened'}: ${money(amount)} on ${what}`,
+      `<p>A customer disputed <b>${money(amount)}</b> on <b>${escEmail(what)}</b> with their card issuer
+          (reason given: ${escEmail(d.reason || 'not stated')}).</p>
+       <p><b>Respond in the Stripe Dashboard${by ? ` before ${escEmail(by)}` : ''}</b>: an unanswered dispute
+          is lost by default.${inquiry
+            ? ' This is an inquiry, so no money has moved yet; answering it can stop it becoming a chargeback.'
+            : ' Stripe has already taken the amount, and its dispute fee, out of the balance while it is decided.'}</p>
+       <p>If the job is not made yet, hold it. The automatic payment, review and reorder emails for this
+          job have stopped.</p>
+       <p>Nothing changes in the books unless it is lost; then the ${money(amount)} comes off by itself.</p>
+       ${link}${caught}`);
+  }
+  if (!open) {
+    const { rowCount } = await pool.query(
+      `UPDATE stripe_disputes SET close_alerted = TRUE WHERE id = $1 AND close_alerted = FALSE`, [id]);
+    if (rowCount) {
+      closed = true;
+      const feeNote = feeNow > 0 ? ` Stripe kept its ${money(feeNow / 100)} dispute fee, recorded as an expense.` : '';
+      const subject = status === 'lost' ? `❌ Chargeback lost: ${money(amount)} on ${what}`
+        : status === 'won' ? `✅ Dispute won: ${money(amount)} on ${what}`
+        : status === 'warning_closed' ? `Dispute inquiry closed: ${what}`
+        : `Dispute closed (${status}): ${what}`;
+      const body = status === 'lost'
+        ? `<p>The card issuer decided for the customer, so the <b>${money(amount)}</b> on
+              <b>${escEmail(what)}</b> is theirs again.</p>
+           <p>${ledger ? `It has come off the ${ledger === 'quote' ? 'quote' : 'unlinked ledger'}, with its tax
+              in proportion.` : paid.quote || paid.unlinked ? 'It was already off the books.'
+              : '<b>The payment is in neither ledger, so nothing came off the books</b>: check the Finances page.'}${feeNote}</p>
+           <p>Nothing automatic asks this customer for money or a review. If anything is still owed, that is
+              your call.</p>`
+        : status === 'won'
+          ? `<p>The card issuer decided for you: the ${money(amount)} on <b>${escEmail(what)}</b> stays, and
+                nothing changed in the books.${feeNote}</p>`
+          : status === 'warning_closed'
+            ? `<p>The customer's bank closed its inquiry on <b>${escEmail(what)}</b> without a chargeback.
+                  Nothing changed in the books.</p>`
+            : `<p>Stripe closed the dispute on <b>${escEmail(what)}</b> as <b>${escEmail(status)}</b>.${feeNote}</p>`;
+      await alertShop(subject, body + link + caught);
+    }
+  }
+  return { status, booked: bookedBack || null, fee: bookedFee || null, opened, closed };
+}
+
+/* One at a time, locked on the charge, the way refunds are: a dispute's events
+   arrive together (opened and funds withdrawn; closed and funds reinstated),
+   and a refund and a dispute on one charge both book against its payment. */
+function reconcileDisputes(dispute, via, opts) {
+  const key = typeof dispute?.charge === 'string' ? dispute.charge
+    : (dispute?.charge?.id || 'dispute:' + String(dispute?.id || ''));
+  return oneRefundAtATime(() => withChargeLock(key, () => reconcileDisputeNow(dispute, via, opts)));
+}
+
+/* The hourly backstop for disputes: every dispute opened in the last 180 days
+   (an issuer can take months to decide), from Stripe's own listing. A missed
+   opening is told late rather than never, and a decision the webhook never
+   delivered is booked within the hour. */
+async function reconcileRecentDisputes() {
+  if (!process.env.STRIPE_SECRET_KEY) return 'skipped: STRIPE_SECRET_KEY is not set';
+  const since = Math.floor(Date.now() / 1000) - 180 * 24 * 60 * 60;
+  let moved = 0, told = 0;
+  const all = await stripeListAll('disputes', { 'created[gte]': String(since) });
+  for (const d of all) {
+    const out = await reconcileDisputes(d, 'sweep', { fresh: true });
+    if (out && (out.booked || out.fee)) moved++;
+    if (out && (out.opened || out.closed)) told++;
+  }
+  /* Quiet when there is nothing to say: this runs every hour. */
+  if (!moved && !told) return '';
+  return `${all.length} dispute(s) checked` + (moved ? `, ${moved} booked` : '') +
+         (told ? `, ${told} reported to the shop` : '');
+}
+
+/* The board's view of disputes still in play: open ones (hold the job) and
+   lost ones. A failed lookup shows the board without them rather than not at
+   all. */
+async function boardDisputes() {
+  const out = { byQuote: new Map(), byOrder: new Map() };
+  try {
+    const { rows } = await pool.query(
+      `SELECT quote_code, order_ref, status, amount, evidence_due FROM stripe_disputes
+        WHERE status NOT IN ('won', 'warning_closed')`);
+    for (const d of rows) {
+      if (d.quote_code) out.byQuote.set(d.quote_code, d);
+      if (d.order_ref) out.byOrder.set(String(d.order_ref), d);
+    }
+  } catch (e) {
+    console.error('board: dispute lookup failed:', e.message);
+  }
+  return out;
+}
+
+/** The chip a disputed job carries on the board. */
+function disputeChip(d) {
+  if (!d) return '';
+  const lost = d.status === 'lost';
+  const due = !lost && d.evidence_due ? ` &middot; respond by ${dayShort(d.evidence_due)}` : '';
+  return `<span class="chip" style="background:#fef2f2;color:#b91c1c">${lost
+    ? `Chargeback lost ${money(d.amount)}` : `Disputed ${money(d.amount)}${due} &mdash; hold`}</span>`;
 }
 
 /* ── Stripe payment webhook ───────────────────────────────────────────────────
@@ -9697,24 +10051,17 @@ async function handleStripeEvent(event) {
         }
         break;
 
-      /* Chargeback. Deliberately does NOT move money — a dispute is not a
-         refund and may be won. It needs a human, fast: Stripe's response
-         window is short and missing it forfeits the money automatically. */
-      case 'charge.dispute.created': {
-        const amt = round2((obj.amount || 0) / 100);
-        const pi = typeof obj.payment_intent === 'string' ? obj.payment_intent : null;
-        const { rows } = await pool.query(
-          `SELECT quote_code FROM quote_payments WHERE stripe_pi = $1 LIMIT 1`, [pi]);
-        const code = rows[0]?.quote_code || 'unknown';
-        console.warn(`Stripe DISPUTE opened on ${code} for ${money(amt)}`);
-        await alertShop(`🚨 Chargeback opened — ${money(amt)} (quote ${code})`,
-          `<p>A customer disputed <b>${money(amt)}</b> on quote <b>${escEmail(code)}</b>.</p>
-           <p><b>Respond in the Stripe Dashboard before the deadline</b> — an unanswered
-              dispute is lost by default, and the amount is already withheld.</p>
-           <p>Reason given: ${escEmail(obj.reason || 'not stated')}.</p>
-           <p>No money has been changed on the quote; a dispute is not a refund.</p>`);
+      /* Chargebacks: see reconcileDisputes. Every stage reconciles against
+         Stripe, so whichever of these the endpoint is subscribed to works, and
+         the hourly sweep covers the rest. Opening one moves no money in the
+         books (it may be won); losing one does. */
+      case 'charge.dispute.created':
+      case 'charge.dispute.updated':
+      case 'charge.dispute.closed':
+      case 'charge.dispute.funds_withdrawn':
+      case 'charge.dispute.funds_reinstated':
+        await reconcileDisputes(obj, 'webhook');
         break;
-      }
 
       /* The customer opened checkout and never finished. Not an error — it is
          the single best follow-up signal the shop gets. */
@@ -10609,7 +10956,8 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
                 : u.client_ref ? escEmail(String(u.client_ref))
                 : `<span class="muted">${escEmail(String(u.stripe_pi || 'unknown'))}</span>`}
               ${u.customer_name ? `<span class="muted"> — ${escEmail(String(u.customer_name))}</span>` : ''}
-              ${u.kind === 'refund' ? '<span style="color:#b45309"> (refund)</span>' : ''}
+              ${u.kind === 'refund' ? '<span style="color:#b45309"> (refund)</span>'
+                : u.kind === 'dispute' ? '<span style="color:#b91c1c"> (chargeback)</span>' : ''}
               <div class="muted" style="font-size:11px">${escEmail(String(u.reason || ''))}</div>
             </td>
             <td class="num" style="padding:7px 4px;font-variant-numeric:tabular-nums">${money(u.amount)}</td>
@@ -11097,6 +11445,7 @@ function receiptHtml(q, payments) {
     const when = new Date(p.created_at).toLocaleDateString('en-US',
       { month: 'short', day: 'numeric', year: 'numeric' });
     const label = p.kind === 'refund' ? 'Refund'
+                : p.kind === 'dispute' ? 'Chargeback'
                 : p.kind === 'correction' ? 'Adjustment'
                 : Number(p.amount) < 0 ? 'Adjustment'
                 : 'Payment';
@@ -12259,7 +12608,7 @@ function studioStage(status) {
   return { label: 'Press', color: '#1848B8', bg: '#eef2fd' };
 }
 
-function studioOrdersSection(feed, { heading = true } = {}) {
+function studioOrdersSection(feed, { heading = true, disputes = null } = {}) {
   const rows = feed.orders.map((o) => {
     const stage = studioStage(o.status);
     const owed = round2(Math.max(0, Number(o.total || 0) - Number(o.paid || 0)));
@@ -12280,6 +12629,7 @@ function studioOrdersSection(feed, { heading = true } = {}) {
         <span class="chip" style="background:${stage.bg};color:${stage.color}">${stage.label}</span>
         ${fullRefund ? `<span class="chip" style="background:#fef2f2;color:#b91c1c">Refunded ${money(refunded)} &mdash; don&rsquo;t produce</span>`
           : refunded > 0 ? `<span class="chip" style="background:#fff8ed;color:#8a5a00">${money(refunded)} refunded</span>` : ''}
+        ${disputes ? disputeChip(disputes.byOrder.get(String(o.id))) : ''}
         ${o.tracking ? `<span class="muted" style="font-size:12.5px">tracking ${escEmail(o.tracking)}</span>` : ''}
         <a class="muted" style="font-size:12.5px;margin-left:auto"
            href="${STUDIO_BASE}/admin.php?lumise-page=order&order_id=${encodeURIComponent(o.id)}"
@@ -12329,6 +12679,7 @@ async function renderBoard(VIEW, req, res) {
        page. Never awaited in a way that can fail the board — fetchStudioOrders
        resolves to a stale list plus an error rather than throwing. */
     const studio = await fetchStudioOrders();
+    const disputes = await boardDisputes();
 
     /* Website enquiries nobody has answered.
      *
@@ -13193,6 +13544,7 @@ async function renderBoard(VIEW, req, res) {
                 <div class="kcard-sub">${escEmail(q.code)} · ${money(q.total)}${
                   Number(q.paid_amount||0) < Number(q.total||0) ? ` · <span style="color:#b45309">${money(round2(q.total - (q.paid_amount||0)))} due</span>` : ''}</div>
                 ${risk ? `<div class="kcard-risk-note">⚠ ${escEmail(q._sched.risks[0].label)} was due ${dayShort(q._sched.risks[0].by)}</div>` : ''}
+                ${disputes.byQuote.has(q.code) ? `<div style="margin-top:4px">${disputeChip(disputes.byQuote.get(q.code))}</div>` : ''}
                 ${act ? `
                 <form method="POST" action="/quote/${q.code}/stage" data-stageform class="knext">
                   <input type="hidden" name="stage" value="${act.key}">
@@ -13213,7 +13565,7 @@ async function renderBoard(VIEW, req, res) {
           ${live.length === 0 ? '<div class="card"><p class="muted">Nothing in production. Delivered jobs drop off this board.</p></div>' : ''}`;
       })() : (body ? `${body}${groupScript}` : '<div class="card"><p class="muted">No quotes yet.</p></div>')}
 
-      ${studioOrdersSection(studio)}
+      ${studioOrdersSection(studio, { disputes })}
       <script>
         /* Moving a kanban card posts in the background and re-renders just
            that card into its new column, so the board does not jump back to
@@ -13561,6 +13913,7 @@ app.get('/orders', requireAdmin, async (req, res) => {
   try {
     const q = String(req.query.q || '').trim().slice(0, 80);
     const studio = await fetchStudioOrders();
+    const disputes = await boardDisputes();
     const openStudio = studio.orders.filter(o => String(o.status).toLowerCase() !== 'complete').length;
 
     /* Anything money has touched, oldest business included. A quote nobody ever
@@ -13631,7 +13984,7 @@ app.get('/orders', requireAdmin, async (req, res) => {
         <span class="muted" style="font-size:12.5px">placed online at design.jtees.net &mdash; a separate system</span>
         <a class="btn btn-ghost" style="padding:6px 14px;font-size:13px;margin-left:8px"
            href="${STUDIO_BASE}/admin.php?lumise-page=orders" target="_blank" rel="noopener">Studio admin &rarr;</a></p>
-      ${studioOrdersSection(studio, { heading: false })}`, 'orders'));
+      ${studioOrdersSection(studio, { heading: false, disputes })}`, 'orders'));
   } catch (err) {
     console.error('orders page failed:', err.message);
     res.status(500).send('Could not load orders.');
@@ -14705,7 +15058,9 @@ async function sendDepositReminders() {
     /* Not after a refund. Paid and then refunded in full reads as never paid,
        and this would ask that customer for a deposit on a job the shop had
        just given their money back for. Why a refund was issued is the shop's
-       call, so if money is still owed after one, the shop asks by hand. */
+       call, so if money is still owed after one, the shop asks by hand. The
+       same after a dispute, open or decided: nothing automatic writes to a
+       customer who has gone to their card issuer. */
     const { rows } = await pool.query(
       `SELECT * FROM quotes
         WHERE accepted_at IS NOT NULL
@@ -14716,6 +15071,7 @@ async function sendDepositReminders() {
           AND email <> ''
           AND NOT EXISTS (SELECT 1 FROM quote_payments p
                            WHERE p.quote_code = quotes.code AND p.kind = 'refund')
+          AND NOT EXISTS (SELECT 1 FROM stripe_disputes d WHERE d.quote_code = quotes.code)
         LIMIT 20`, [String(days)]);
 
     for (const q of rows) {
@@ -14757,7 +15113,8 @@ async function sendBalanceReminders() {
   try {
     /* Not after a refund, for the deposit nudge's reason: a partial refund
        leaves paid below total, and this would email the customer a
-       "remaining balance" of exactly the money just refunded to them. */
+       "remaining balance" of exactly the money just refunded to them. Nor
+       after a dispute: a lost one does exactly the same. */
     const { rows } = await pool.query(
       `SELECT * FROM quotes
         WHERE COALESCE(paid_amount,0) > 0
@@ -14769,6 +15126,7 @@ async function sendBalanceReminders() {
           AND email <> ''
           AND NOT EXISTS (SELECT 1 FROM quote_payments p
                            WHERE p.quote_code = quotes.code AND p.kind = 'refund')
+          AND NOT EXISTS (SELECT 1 FROM stripe_disputes d WHERE d.quote_code = quotes.code)
         LIMIT 20`, [String(days)]);
 
     for (const q of rows) {
@@ -14820,6 +15178,7 @@ async function sendReorderNudges() {
           AND q.cancelled_at IS NULL
           AND q.paid_at <= NOW() - ($1 || ' days')::interval
           AND q.email <> ''
+          AND NOT EXISTS (SELECT 1 FROM stripe_disputes d WHERE d.quote_code = q.code)
           /* Nothing newer from this customer — a live job means they do not
              need asking, and it would read as though we had not noticed. */
           AND NOT EXISTS (
@@ -15357,8 +15716,9 @@ async function sendDueReviewRequests() {
         continue;
       }
       /* Stamped the way an opt-out is, and the follow-up with it, so neither
-         ask comes round again. */
-      if (await refundedInFull(r)) {
+         ask comes round again. A customer who disputed the payment is not
+         asked how we did either, whatever the dispute's outcome. */
+      if (await refundedInFull(r) || await disputeOn(r)) {
         await pool.query('UPDATE reviews SET sent_at=NOW(), followup_sent_at=NOW() WHERE id=$1', [r.id]);
         refunded++;
         continue;
@@ -15386,7 +15746,7 @@ async function sendDueReviewRequests() {
   }
   return 'due=' + due + ' sent=' + sent +
     (skipped ? ' skipped(unsubscribed)=' + skipped : '') +
-    (refunded ? ' skipped(refunded)=' + refunded : '') +
+    (refunded ? ' skipped(refunded or disputed)=' + refunded : '') +
     (failed ? ' FAILED=' + failed : '');
 }
 
@@ -15409,9 +15769,9 @@ async function sendReviewFollowUps() {
         LIMIT ${REVIEW_BATCH}`, [String(REVIEW_FOLLOWUP_DAYS())]);
     due = rows.length;
     for (const r of rows) {
-      /* The first ask can go out before the refund does; the follow-up must
-         still see it. */
-      if (await isUnsubscribed(r.email) || await refundedInFull(r)) {
+      /* The first ask can go out before the refund or the dispute does; the
+         follow-up must still see it. */
+      if (await isUnsubscribed(r.email) || await refundedInFull(r) || await disputeOn(r)) {
         await pool.query('UPDATE reviews SET followup_sent_at=NOW() WHERE id=$1', [r.id]);
         continue;
       }
@@ -15576,8 +15936,10 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
   const runSweep = async () => {
     await step('studio hourly job', runStudioHourlyJob);
     /* Before anything that asks a customer for money or a review: a refund
-       the webhook missed has to be on the books before those look at them. */
+       or a dispute the webhook missed has to be on the books before those look
+       at them. */
     await step('stripe refunds', reconcileRecentRefunds);
+    await step('stripe disputes', reconcileRecentDisputes);
     await step('review asks', sendDueReviewRequests);
     await step('review follow-ups', sendReviewFollowUps);
     await step('quote follow-ups', sendQuoteFollowUps);

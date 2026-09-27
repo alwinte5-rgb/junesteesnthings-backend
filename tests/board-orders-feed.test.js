@@ -122,7 +122,7 @@ test('order stages map onto the board vocabulary, not a second one', () => {
 });
 
 test('the studio lane appears on the board, not only on its own page', () => {
-  assert.match(src, /\$\{studioOrdersSection\(studio\)\}/,
+  assert.match(src, /\$\{studioOrdersSection\(studio, \{ disputes \}\)\}/,
     'one page showing both halves of the shop is the entire point');
   assert.match(src, /app\.get\('\/orders', requireAdmin/,
     'and the nav entry needs a real route behind it');

@@ -59,9 +59,10 @@ test('accept and pay are both hidden while a change is pending', () => {
   /* One expression gates both, so they cannot drift apart: the pay block is its
      `accepted` branch and the accept form is its `else`. */
   /* `refunded` joined it on 2026-09-26: a quote refunded in full reads as never
-     paid, and must not be offered its deposit again (stripe-refunds.test.js). */
-  assert.match(page, /\$\{paid \|\| q\.requested_items \|\| q\.cancelled_at \|\| refunded \? '' : accepted \?/,
-    'a pending request — or a cancellation, or a refund — must suppress both the pay options ' +
+     paid, and must not be offered its deposit again (stripe-refunds.test.js).
+     It became `stopAsking` on 2026-09-27, refund or dispute (stripe-disputes.test.js). */
+  assert.match(page, /\$\{paid \|\| q\.requested_items \|\| q\.cancelled_at \|\| stopAsking \? '' : accepted \?/,
+    'a pending request — or a cancellation, a refund or a dispute — must suppress both the pay options ' +
     'and the accept form, through the one expression that gates them together');
 });
 

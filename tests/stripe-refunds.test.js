@@ -137,7 +137,7 @@ function refundDesk({ quotePayments = [], unlinked = [], stripe = {}, key = 'sk_
   };
   vm.createContext(sandbox);
   vm.runInContext([ROUND2, MONEY, lift('stripeListAll'), lift('refundedOnCharge'),
-                   lift('refundCentsBooked'), lift('reconcileChargeRefunds'),
+                   lift('refundCentsBooked'), lift('movedShare'), lift('reconcileChargeRefunds'),
                    /* The sweep calls the queued, locked wrapper; the queue and
                       the lock have tests of their own below. */
                    'function reconcileRefunds(charge, via) { return reconcileChargeRefunds(charge, via); }',
@@ -486,8 +486,10 @@ test('the quote page shows a refund instead of asking for the money again', () =
   const page = src.slice(at, src.indexOf('app.get(', at + 20));
   assert.match(page, /ext_ref ~ '\^\(ch\|py\)_\[A-Za-z0-9_\]\+:'/,
     'what went back to the card is read from the refund rows, net of any that failed');
-  assert.match(page, /\$\{\(paid && balanceDue > 0 && !refunded\) \?/, 'no "Balance due" card after a refund');
-  assert.match(page, /paid \|\| q\.requested_items \|\| q\.cancelled_at \|\| refunded \? '' : accepted \?/,
+  /* The gate became stopAsking on 2026-09-27: a refund or a dispute. */
+  assert.match(page, /const stopAsking = refunded \|\| disputed;/, 'a refund still stops the asking');
+  assert.match(page, /\$\{\(paid && balanceDue > 0 && !stopAsking\) \?/, 'no "Balance due" card after a refund');
+  assert.match(page, /paid \|\| q\.requested_items \|\| q\.cancelled_at \|\| stopAsking \? '' : accepted \?/,
     'no "Pay your deposit" card after a refund in full');
   assert.match(page, /Refunded — \$\{money\(refundedToCard\)\}/, 'the refund itself is shown');
 });
@@ -548,23 +550,24 @@ test('a review ask is not sent for a job refunded in full, and cannot come back 
             ? { net: '0.00', refunded: true } : { net: '120.00', refunded: false }] });
         }
         if (/^UPDATE reviews/.test(sql)) { updates.push({ sql, id: args[0] }); return Promise.resolve({ rows: [] }); }
+        if (/FROM stripe_disputes/.test(sql)) return Promise.resolve({ rows: [] });   // no disputes here
         return Promise.reject(new Error('unexpected query: ' + sql.slice(0, 80)));
       },
     },
   };
   vm.createContext(sandbox);
-  vm.runInContext([lift('refundedInFull'), lift('sendDueReviewRequests')].join('\n'), sandbox);
+  vm.runInContext([lift('refundedInFull'), lift('disputeOn'), lift('sendDueReviewRequests')].join('\n'), sandbox);
   const summary = await sandbox.sendDueReviewRequests();
 
   assert.strictEqual(sentTo.join(','), 'happy@example.com');
   const stamp = updates.find((u) => u.id === 1);
   assert.ok(stamp, 'the refunded ask has to leave the queue, or it is reconsidered every hour');
   assert.match(stamp.sql, /followup_sent_at=NOW\(\)/, 'and the follow-up sweep must never pick it up');
-  assert.match(summary, /skipped\(refunded\)=1/, 'the sweep\'s summary says why one was not sent');
+  assert.match(summary, /skipped\(refunded or disputed\)=1/, 'the sweep\'s summary says why one was not sent');
 });
 
 test('the follow-up sweep checks for a refund too', () => {
   /* The first ask can go out before the refund does; the follow-up is days
      later and has to see it. */
-  assert.match(lift('sendReviewFollowUps'), /await isUnsubscribed\(r\.email\) \|\| await refundedInFull\(r\)/);
+  assert.match(lift('sendReviewFollowUps'), /await isUnsubscribed\(r\.email\) \|\| await refundedInFull\(r\) \|\| await disputeOn\(r\)/);
 });
