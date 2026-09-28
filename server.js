@@ -515,6 +515,21 @@ async function initDB() {
   await pool.query(`CREATE INDEX IF NOT EXISTS stripe_disputes_quote_idx ON stripe_disputes (quote_code)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS stripe_disputes_order_idx ON stripe_disputes (order_ref)`);
 
+  /* Payouts Stripe could not deliver to the bank (see reportFailedPayout).
+     A payout moves no money in these books, since a sale counts when the
+     customer pays, so this is not a ledger: one row per failed payout, written
+     before the shop is told, so the webhook, its retries and the hourly sweep
+     tell the shop once. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS stripe_payout_failures (
+      id              TEXT PRIMARY KEY,
+      amount          NUMERIC(10,2) NOT NULL,
+      currency        TEXT NOT NULL DEFAULT 'usd',
+      failure_code    TEXT,
+      failure_message TEXT,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+
   /* Remembered blank costs, keyed on the normalised garment description —
      quote lines are typed by hand, so there is no product id to key on. */
   await pool.query(`
@@ -846,7 +861,7 @@ async function syncPaidAmount(code) {
  */
 async function recordPayment({ code, amount, fee = 0, method, kind = 'payment',
                                source = 'manual', session = null, pi = null,
-                               extRef = null, note = null }) {
+                               extRef = null, note = null, createdAt = null }) {
   /* The tax inside this payment, apportioned by how much of the job it covers.
      Computed at write time so the set-aside figure never has to re-derive
      itself from a quote total that may since have been edited. A correction or
@@ -861,11 +876,14 @@ async function recordPayment({ code, amount, fee = 0, method, kind = 'payment',
   } catch { /* a missing quote is handled by the insert below */ }
 
   try {
+    /* created_at is when the money arrived, which is the month its tax is
+       owed in. Only a payment recorded after the fact (a Stripe card payment
+       applied to its quote later) passes it; everything else lands now. */
     await pool.query(
-      `INSERT INTO quote_payments (quote_code, amount, fee, method, kind, source, stripe_session, stripe_pi, ext_ref, note, tax_portion)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+      `INSERT INTO quote_payments (quote_code, amount, fee, method, kind, source, stripe_session, stripe_pi, ext_ref, note, tax_portion, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, COALESCE($12::timestamptz, NOW()))`,
       [code, round2(amount), round2(fee), method, kind, source, session, pi,
-       extRef || session, note, taxPortion]);
+       extRef || session, note, taxPortion, createdAt]);
   } catch (err) {
     // 23505 = unique_violation on the ext_ref index.
     if (err.code === '23505') return { ok: false, duplicate: true, paid: null };
@@ -2502,6 +2520,11 @@ function smsConfigured() {
     process.env.TWILIO_PHONE_NUMBER);
 }
 
+/* Where Twilio reports what happened to each text after it accepted it. Fixed
+   rather than built from request headers, because the signature on each report
+   covers this exact string (see /webhooks/twilio/status). */
+const TWILIO_STATUS_URL = (process.env.TWILIO_STATUS_URL || 'https://www.jtees.net/webhooks/twilio/status').trim();
+
 // One send. Resolves { sid } or throws an Error carrying Twilio's error code.
 async function twilioSend(to, body) {
   const from = process.env.TWILIO_PHONE_NUMBER.trim();
@@ -2511,7 +2534,10 @@ async function twilioSend(to, body) {
   const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
     method: 'POST',
     headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ From: from, To: to, Body: body }).toString(),
+    /* Twilio accepting a text is not the phone receiving it: a landline, a
+       disconnected number or carrier filtering fails it afterwards, and only
+       this callback says so. */
+    body: new URLSearchParams({ From: from, To: to, Body: body, StatusCallback: TWILIO_STATUS_URL }).toString(),
     signal: AbortSignal.timeout(15000),
   });
   const d = await r.json().catch(() => ({}));
@@ -2652,6 +2678,79 @@ app.post('/webhooks/twilio/sms', async (req, res) => {
     console.error('twilio inbound handling failed:', err.message);
     // A customer's reply that never reached the shop is a lost conversation.
     reportError('twilio:inbound', err).catch(() => {});
+  }
+});
+
+// ── Twilio delivery reports ───────────────────────────────────────────────────
+// Every text asks for one (StatusCallback in twilioSend), so nothing is set in
+// the Twilio console. Until this existed a text was 'sent' once Twilio accepted
+// it, and one a carrier then refused read the same as one that arrived.
+
+/* What the common failures mean, in the shop's words. The digest line carries
+   the code as well, so an unlisted one can still be looked up. */
+const SMS_FAILURES = {
+  30003: 'the phone is off or out of reach',
+  30004: 'the customer has blocked texts from this number',
+  30005: 'the number is unknown or no longer in service',
+  30006: 'it is a landline, or a carrier that cannot take texts',
+  30007: 'the carrier filtered it as spam',
+  30008: 'the carrier gave no reason',
+  30032: 'the toll-free number is not verified yet',
+  30034: 'the sending number is not registered for business texting',
+  21610: 'the customer had texted STOP',
+};
+
+/* Record one report on the text it is about. Only the final states are kept,
+   and only over 'sent': reports arrive out of order, and a late 'sent' must
+   not overwrite 'delivered'. A text that did not arrive goes to the error
+   digest, grouped by what went wrong, with the last four digits of the phone. */
+async function recordSmsDelivery(p) {
+  const sid = String(p.MessageSid || p.SmsSid || '');
+  const status = String(p.MessageStatus || p.SmsStatus || '').toLowerCase();
+  if (!/^[A-Za-z0-9]{10,64}$/.test(sid)) return { skipped: 'no message id' };
+  if (!['delivered', 'undelivered', 'failed'].includes(status)) return { skipped: 'not final' };
+
+  const code = String(p.ErrorCode || '').replace(/\D/g, '').slice(0, 10);
+  const why = status === 'delivered' ? null
+    : code ? `Twilio ${code}: ${SMS_FAILURES[code] || 'look the code up in Twilio'}`
+    : 'Twilio gave no error code';
+  const { rows } = await pool.query(
+    `UPDATE sms_messages SET status = $2, error = COALESCE($3, error)
+      WHERE twilio_sid = $1 AND status IN ('sending', 'sent')
+      RETURNING template, ref`, [sid, status, why]);
+  if (status === 'delivered') return { status, updated: rows.length };
+  if (!rows.length) {
+    /* A report repeated for a text already recorded is not a second failure. */
+    const { rows: had } = await pool.query('SELECT 1 FROM sms_messages WHERE twilio_sid = $1', [sid]);
+    if (had.length) return { status, updated: 0 };
+  }
+
+  /* No row at all: the text was an alert to the shop's own phone
+     (sendOwnerSms), which is not kept in sms_messages. */
+  const tail = String(p.To || '').replace(/\D/g, '').slice(-4);
+  /* 'shipped:<tracking>' is one kind of text, whatever the tracking number. */
+  const what = rows.length ? `${String(rows[0].template).split(':')[0]} text to …${tail}`
+    : `Alert text to the shop's phone …${tail}`;
+  console.warn(`sms ${status}: ${what} — ${why}`);
+  reportError('sms-undelivered', new Error(`${what} was not delivered. ${why}`),
+    rows.length ? `ref ${rows[0].ref}, message ${sid}` : `message ${sid}`).catch(() => {});
+  return { status, updated: rows.length };
+}
+
+app.post('/webhooks/twilio/status', async (req, res) => {
+  const token = String(process.env.TWILIO_AUTH_TOKEN || '').trim();
+  if (!token) return res.sendStatus(503);
+  if (!verifyTwilioSignature(token, TWILIO_STATUS_URL, req.body || {}, req.get('x-twilio-signature'))) {
+    console.warn('twilio status rejected — bad signature');
+    return res.sendStatus(401);
+  }
+  try {
+    await recordSmsDelivery(req.body || {});
+    res.sendStatus(200);
+  } catch (err) {
+    console.error('twilio status handling failed:', err.message);
+    reportError('twilio:status', err).catch(() => {});
+    res.sendStatus(500);
   }
 });
 
@@ -9854,6 +9953,494 @@ async function reconcileRecentDisputes() {
          (told ? `, ${told} reported to the shop` : '');
 }
 
+/* ── Payouts ──────────────────────────────────────────────────────────────────
+   A payout is Stripe sending the balance to the shop's bank. One that fails (a
+   closed or mistyped account, the bank refusing it) puts the money back in the
+   Stripe balance, and Stripe can hold further payouts until the bank details
+   are fixed, so a failure nobody reads is money that quietly stops arriving.
+   Nothing moves in these books: a sale counts when the customer pays, not when
+   Stripe pays out. The whole job is telling the shop, once, from the event or
+   from the hourly sweep, whichever sees it first. */
+
+/** Tell the shop about one failed payout, once. Throws when it cannot record
+ *  or send it, so a webhook answers 500 and Stripe sends the event again. */
+async function reportFailedPayout(payout, via = 'webhook') {
+  const id = String(payout?.id || '');
+  if (!/^[A-Za-z0-9_]+$/.test(id)) {
+    console.warn(`Stripe payout: unusable id ${JSON.stringify(payout?.id)} — not reported`);
+    return { skipped: 'not a payout' };
+  }
+  if (payout.status !== 'failed') return { skipped: 'not failed' };
+  const amount = round2((Number(payout.amount) || 0) / 100);
+  const code = payout.failure_code ? String(payout.failure_code) : null;
+  const why = payout.failure_message ? String(payout.failure_message) : null;
+
+  /* Claimed before the email goes, so two reconciles at once cannot both send
+     it; handed back if the email fails, so the next try sends it. */
+  const { rowCount } = await pool.query(
+    `INSERT INTO stripe_payout_failures (id, amount, currency, failure_code, failure_message)
+     VALUES ($1,$2,$3,$4,$5) ON CONFLICT (id) DO NOTHING`,
+    [id, amount, String(payout.currency || 'usd').toLowerCase(), code, why]);
+  if (!rowCount) return { told: false };
+
+  /* Which account it was going to. The event names it only by id, so this
+     costs a lookup, and a failed lookup costs only the name. */
+  let dest = payout.destination && typeof payout.destination === 'object' ? payout.destination : null;
+  if (!dest && process.env.STRIPE_SECRET_KEY) {
+    try { dest = (await stripeGet(`payouts/${encodeURIComponent(id)}?expand[]=destination`)).destination; }
+    catch { /* leave it unnamed */ }
+  }
+  const end = dest && dest.last4 ? ` ending ${dest.last4}` : '';
+  const account = !dest || typeof dest !== 'object' ? "the shop's bank account"
+    : dest.object === 'card' ? `the ${dest.brand ? dest.brand + ' ' : ''}card${end}`
+    : `${dest.bank_name || 'the bank'} account${end}`;
+  const due = payout.arrival_date
+    ? new Date(payout.arrival_date * 1000).toLocaleDateString('en-US',
+        { timeZone: SHOP_TZ, month: 'short', day: 'numeric' }) : '';
+  const caught = via === 'sweep'
+    ? `<p style="color:#6b7280">Found by the hourly check against Stripe; no webhook for it arrived.</p>` : '';
+
+  console.log(`Stripe payout FAILED (${via}): ${money(amount)} ${id}${code ? ' ' + code : ''}`);
+  try {
+    await sendEmail({
+      to: SHOP_EMAIL,
+      subject: `⚠️ Stripe payout failed: ${money(amount)} did not reach the bank`,
+      html: `<div style="font-family:system-ui,sans-serif;max-width:560px">
+        <p>Stripe tried to send <b>${money(amount)}</b> to <b>${escEmail(account)}</b>${due
+          ? ` (due ${escEmail(due)})` : ''} and it came back${why ? `: <b>${escEmail(why)}</b>` : ''}${code
+          ? ` (${escEmail(code)})` : ''}.</p>
+        <p><b>The money is not lost.</b> It is back in the Stripe balance. Stripe can hold further payouts
+           until the bank details are fixed, so check them now in
+           <a href="https://dashboard.stripe.com/settings/payouts">Stripe &rarr; Settings &rarr; Payouts</a>.
+           Once they are fixed, it goes out with the next payout.</p>
+        <p style="color:#6b7280">Nothing changes in the books: a sale counts when the customer pays, not when
+           Stripe pays out.</p>
+        <p><a href="https://dashboard.stripe.com/payouts/${id}">Open this payout in Stripe &rarr;</a></p>
+        ${caught}</div>`,
+    });
+  } catch (err) {
+    await pool.query('DELETE FROM stripe_payout_failures WHERE id = $1', [id]).catch(() => {});
+    throw new Error(`failed payout ${id} was not reported, the email did not send: ${err.message}`);
+  }
+  return { told: true };
+}
+
+/* The hourly backstop: every payout from the last 30 days that Stripe lists as
+   failed. A payout fails within days of being sent, so this finds one whose
+   webhook never came, and on its first run any from before this existed. */
+async function reconcileFailedPayouts() {
+  if (!process.env.STRIPE_SECRET_KEY) return 'skipped: STRIPE_SECRET_KEY is not set';
+  const since = Math.floor(Date.now() / 1000) - 30 * 24 * 60 * 60;
+  const failed = await stripeListAll('payouts', { status: 'failed', 'created[gte]': String(since) });
+  let told = 0;
+  for (const p of failed) {
+    const out = await reportFailedPayout(p, 'sweep');
+    if (out && out.told) told++;
+  }
+  /* Quiet when there is nothing to say: this runs every hour. */
+  if (!told) return '';
+  return `${failed.length} failed payout(s) checked, ${told} reported to the shop`;
+}
+
+/* ── Payments taken in Stripe outside checkout ────────────────────────────────
+   Checkout is not the only way money reaches this Stripe account: a card
+   charged in the Stripe Dashboard (an order taken by phone), a Stripe invoice,
+   a card reader. None of those has a Checkout Session, so until 2026-09-27
+   none of them reached either ledger: the money was in Stripe and nowhere in
+   the books or the sales tax figures.
+
+   Every successful charge is checked, from charge.succeeded / charge.captured
+   and an hourly sweep. One a Checkout Session owns is left alone, because the
+   checkout webhook books it, often a moment later. The rest are booked:
+   - onto a quote, when the charge, its payment or its invoice names exactly
+     one (the quote code in the Stripe description is enough), the way a
+     checkout payment lands;
+   - otherwise onto the unlinked ledger, tax unknown, and the shop is told.
+     The quote board then offers it in every "Record a payment" panel, because
+     that is where the shop goes to record a payment, and recording it there
+     again as Zelle or "other" would count the same money twice.
+
+   Charges from before OUTSIDE_CHECKOUT_FROM are left alone: some will have
+   been recorded by hand on their quotes, and booking them now would count
+   those twice. tools/backfill-unlinked.js lists them for a person to place. */
+const OUTSIDE_CHECKOUT_FROM = Math.floor(Date.parse('2026-09-27T00:00:00-05:00') / 1000);
+
+/** Whether a payment is in either ledger already, by its payment or its charge. */
+async function chargeInBooks(pi, extRef) {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM quote_payments    WHERE ($1::text IS NOT NULL AND stripe_pi = $1) OR ext_ref = $2
+     UNION ALL
+     SELECT 1 FROM unlinked_payments WHERE ($1::text IS NOT NULL AND stripe_pi = $1) OR ext_ref = $2
+     LIMIT 1`, [pi, extRef]);
+  return rows.length > 0;
+}
+
+/** The Stripe invoice a charge paid, or null. Older API versions say so on the
+ *  charge; newer ones only through invoice payments. Best effort either way:
+ *  the invoice only labels the payment, and may name its quote. */
+async function invoiceForCharge(charge, pi) {
+  let inv = charge.invoice || null;
+  if (!inv && pi) {
+    try {
+      const qs = new URLSearchParams({ 'payment[type]': 'payment_intent',
+                                       'payment[payment_intent]': pi, limit: '1' });
+      const found = await stripeGet(`invoice_payments?${qs}`);
+      inv = (Array.isArray(found.data) && found.data[0] && found.data[0].invoice) || null;
+    } catch { /* an API version without invoice payments */ }
+  }
+  if (!inv) return null;
+  if (typeof inv === 'object') return inv;
+  try { return await stripeGet(`invoices/${encodeURIComponent(inv)}`); }
+  catch { return { id: inv }; }
+}
+
+/* The quote a payment names, when it names exactly one real quote: metadata
+   first (quote, quote_code, quote_id, jt_quote), then any 6- or 10-character
+   word in the descriptions, so "Balance for AB12CD" is enough. A word counts
+   only if it IS a quote's code, so an ordinary word cannot move money. */
+async function quoteNamedOn(metas, texts) {
+  const keyed = new Set();
+  const loose = new Set();
+  for (const m of metas) {
+    if (!m || typeof m !== 'object') continue;
+    for (const k of ['quote', 'quote_code', 'quote_id', 'jt_quote']) {
+      const v = String(m[k] || '').trim().toUpperCase();
+      if (QUOTE_CODE_RE.test(v)) keyed.add(v);
+    }
+  }
+  for (const t of texts) {
+    for (const w of String(t || '').toUpperCase().match(/\b[A-Z0-9]{6}(?:[A-Z0-9]{4})?\b/g) || []) {
+      if (QUOTE_CODE_RE.test(w)) loose.add(w);
+    }
+  }
+  for (const words of [keyed, loose]) {
+    if (!words.size) continue;
+    const { rows } = await pool.query(
+      'SELECT code FROM quotes WHERE code = ANY($1::text[]) ORDER BY code', [[...words]]);
+    if (rows.length === 1) return { code: rows[0].code };
+    if (rows.length > 1) return { code: null, several: rows.map((r) => r.code) };
+  }
+  return { code: null };
+}
+
+/** How the money was taken, in the shop's words, and the ledger method for it. */
+function stripePaymentHow(charge, invoice) {
+  const type = String(charge?.payment_method_details?.type || '');
+  const method = ['us_bank_account', 'ach_debit', 'ach_credit_transfer'].includes(type) ? 'transfer' : 'card';
+  if (invoice) return { how: `Stripe invoice${invoice.number ? ' ' + invoice.number : ''}`, method };
+  if (type === 'card_present' || type === 'interac_present') return { how: 'card reader payment in Stripe', method };
+  return { how: method === 'transfer' ? 'bank payment taken in Stripe' : 'card charged in Stripe', method };
+}
+
+/* A payment taken in Stripe, landed on its quote the way a checkout payment
+   is: the ledger and the paid rollup, the quote accepted, the customer's
+   receipt and text, the CRM, the review ask. The card fee is split off only
+   when the charge is exactly what the quote page asks for by card (an amount
+   owed plus its fee), so the quote still closes at zero; any other amount was
+   typed by hand and is taken as it is. `via` 'apply' is the shop's own button,
+   which answers on the board, so the shop is not emailed about it as well. */
+async function landStripePaymentOnQuote(q, { gross, pi, extRef, createdAt, how, method, via, email }) {
+  const code = q.code;
+  const t = quoteTotals(q);
+  const asked = method === 'card'
+    ? [balanceOf(q, t.total), t.deposit, t.total].filter((d) => d > 0)
+        .find((d) => round2(d + cardFee(d)) === round2(gross))
+    : undefined;
+  const net = asked !== undefined ? asked : round2(gross);
+  const fee = round2(gross - net);
+  const res = await recordPayment({
+    code, amount: net, fee, method, source: 'stripe', pi, extRef, createdAt,
+    note: `${how.charAt(0).toUpperCase() + how.slice(1)}` +
+          (fee > 0 ? ` (customer paid ${money(gross)} incl. ${money(fee)} card fee)` : ''),
+  });
+  if (res.duplicate) return { duplicate: true, code };
+
+  /* A chargeback recorded while the payment was on no quote named no quote.
+     It is this quote's now, and the reminders and review asks look for it by
+     quote, so they would go on chasing a customer who has disputed. */
+  if (pi) {
+    await pool.query(
+      `UPDATE stripe_disputes SET quote_code = $2 WHERE payment_intent = $1 AND quote_code IS NULL`,
+      [pi, code]).catch((e) => console.error(`dispute not moved to quote ${code}:`, e.message));
+  }
+  await pool.query(
+    `UPDATE quotes SET status = 'accepted', accepted_at = COALESCE(accepted_at, NOW())
+      WHERE code = $1`, [code]).catch(() => {});
+  const nq = { ...q, paid_amount: res.paid };
+  const stillDue = balanceOf(nq, t.total);
+  const taxIn = (Number(q.total) > 0 && Number(q.tax) > 0)
+    ? round2(Number(q.tax) * (net / Number(q.total))) : 0;
+
+  if (via !== 'apply') {
+    sendEmail({
+      to: SHOP_EMAIL,
+      subject: `💳 Paid in Stripe — quote ${code}, ${money(gross)}` +
+               (taxIn > 0 ? ` (set aside ${money(taxIn)})` : ''),
+      html: `<div style="font-family:system-ui,sans-serif"><h2 style="color:#1848B8">Payment received</h2>
+        <p>${escEmail(q.name || 'A customer')} paid <b>${money(gross)}</b> for quote ${code}, taken in
+           Stripe (${escEmail(how)}) rather than through the quote's checkout. It named this quote, so it
+           is on the quote now: there is nothing to record by hand.</p>
+        <p style="color:#6b7280">Applied to quote: ${money(res.paid)} of ${money(q.total)}.
+           ${fee > 0 ? `Card fee ${money(fee)}.` : ''}
+           ${stillDue > 0 ? `Balance outstanding ${money(stillDue)}.` : 'Paid in full.'}</p>
+        ${taxIn > 0 ? `<p style="background:#fff8ed;border:1px solid #fde3c0;border-radius:8px;padding:9px 12px;color:#8a5a00;font-size:13px">
+           <b>${money(taxIn)}</b> of this is sales tax — set it aside, it is not income.</p>` : ''}
+        <p><a href="${quoteLink(code)}">${quoteLink(code)}</a></p></div>`,
+    }).catch((e) => console.error(`stripe payment alert to shop FAILED for quote ${code}:`, e.message));
+  }
+
+  const to = q.email || email;
+  if (to) {
+    sendEmail({
+      to,
+      subject: `Payment received — quote ${code}`,
+      html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
+        <h2 style="color:#1848B8">Thank you!</h2>
+        <p style="color:#374151;line-height:1.6">We've received <b>${money(gross)}</b> for quote ${code}.
+          ${stillDue > 0 ? `A balance of <b>${money(stillDue)}</b> remains, due ${BALANCE_WHEN}.`
+                         : 'That settles it in full — nothing further to pay.'}</p>
+        <p style="color:#374151;line-height:1.6">You're on the schedule — ${SHOP_SIGNER} will follow up
+          with an artwork proof and timeline.</p>
+        <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_NAME} &middot; ${SHOP_PHONE}</p></div>`,
+    }).catch((e) => console.error(`payment receipt to customer FAILED for quote ${code}:`, e.message));
+  }
+  if (q.phone) {
+    sendCustomerSms({ phone: q.phone, kind: 'transactional', ref: 'payment:' + extRef,
+      msg: SMS.paymentReceived({ code, amount: gross, stillDue }) });
+  }
+  if (q.brevo_deal_id) {
+    brevo.post('/crm/notes', {
+      text: `PAYMENT ${money(gross)} (${how}) on quote ${code}. ` +
+            (stillDue > 0 ? `Balance ${money(stillDue)}.` : 'Paid in full.'),
+      dealIds: [q.brevo_deal_id],
+    }).catch(() => {});
+    syncDealStage(nq).catch(() => {});
+  }
+  syncQuoteContact(nq, stillDue > 0 ? 'jt_deposit_paid' : 'jt_paid_in_full').catch(() => {});
+  queueReviewRequest({
+    name: q.name, email: to, phone: q.phone,
+    product: (Array.isArray(q.items) && q.items[0] && q.items[0].description) || '',
+    quote_code: code,
+    days: stillDue > 0 ? REVIEW_DAYS_AFTER_DEPOSIT() : REVIEW_DAYS_AFTER_PAYMENT(),
+  }).catch(() => {});
+
+  console.log(`Stripe payment outside checkout (${via}) on quote ${code}: ${money(net)}` +
+              (fee > 0 ? ` + ${money(fee)} card fee` : '') + ` (now ${money(res.paid)})`);
+  return { booked: round2(gross), ledger: 'quote', code };
+}
+
+/* Book one charge, if it is money taken outside checkout and not in the books
+   yet. Throws on a failed write, so a webhook answers 500 and Stripe retries. */
+async function bookChargeNow(charge, via = 'webhook') {
+  const id = String(charge?.id || '');
+  if (!/^[A-Za-z0-9_]+$/.test(id)) {
+    console.warn(`Stripe charge: unusable id ${JSON.stringify(charge?.id)} — not booked`);
+    return { skipped: 'not a charge' };
+  }
+  /* Money actually taken. A charge authorised for capture later succeeds
+     first with nothing taken; charge.captured brings it back when it is. */
+  const cents = Math.round(Number(charge.amount_captured != null ? charge.amount_captured : charge.amount) || 0);
+  if (charge.status !== 'succeeded' || charge.paid === false || charge.captured === false || !(cents > 0)) {
+    return { skipped: 'no money taken' };
+  }
+  if (!(Number(charge.created) >= OUTSIDE_CHECKOUT_FROM)) return { skipped: 'before booking began' };
+
+  const pi = typeof charge.payment_intent === 'string' ? charge.payment_intent
+    : (charge.payment_intent && charge.payment_intent.id) || null;
+  /* `charge:` in front, never the bare charge id: refund and dispute rows are
+     found by an ext_ref that STARTS with the charge id, and a payment keyed
+     that way would be read back as money refunded. */
+  const extRef = `charge:${id}`;
+  if (await chargeInBooks(pi, extRef)) return { skipped: 'already in the books' };
+  if (!process.env.STRIPE_SECRET_KEY) return { skipped: 'no key to ask Stripe' };
+
+  /* A checkout payment has its session from the moment the customer pays, so
+     asking Stripe cannot race the checkout webhook the way the ledger can. */
+  if (pi) {
+    const s = await stripeGet(`checkout/sessions?payment_intent=${encodeURIComponent(pi)}&limit=1`);
+    if (Array.isArray(s.data) && s.data.length) return { skipped: 'a checkout payment' };
+  }
+
+  const intent = pi ? await stripeGet(`payment_intents/${encodeURIComponent(pi)}`).catch(() => null) : null;
+  const invoice = await invoiceForCharge(charge, pi);
+  const { how, method } = stripePaymentHow(charge, invoice);
+  const gross = round2(cents / 100);
+  const email = charge.billing_details?.email || charge.receipt_email || intent?.receipt_email ||
+                invoice?.customer_email || null;
+  const name = charge.billing_details?.name || invoice?.customer_name || null;
+
+  const named = await quoteNamedOn(
+    [charge.metadata, intent?.metadata, invoice?.metadata],
+    [charge.description, intent?.description, invoice?.description,
+     ...(Array.isArray(invoice?.custom_fields) ? invoice.custom_fields.map((f) => f && f.value) : []),
+     ...(Array.isArray(invoice?.lines?.data) ? invoice.lines.data.map((l) => l && l.description) : [])]);
+  let cancelled = null;
+  if (named.code) {
+    const { rows } = await pool.query('SELECT * FROM quotes WHERE code = $1', [named.code]);
+    if (rows.length && !rows[0].cancelled_at) {
+      return landStripePaymentOnQuote(rows[0], {
+        gross, pi, extRef, how, method, via, email,
+        createdAt: new Date(Number(charge.created) * 1000).toISOString() });
+    }
+    cancelled = named.code;
+  }
+
+  /* Belongs to no quote this side can name. A payment on a cancelled job is
+     not allowed to bring it back, so it waits here too, flagged. */
+  const reason = named.several ? `names more than one quote (${named.several.join(', ')})`
+    : cancelled ? `names quote ${cancelled}, which is cancelled`
+    : `${how}, not through checkout`;
+  const kept = await recordUnlinkedPayment(
+    { id: null, amount_total: cents, currency: charge.currency,
+      client_reference_id: invoice && invoice.number ? invoice.number : null,
+      payment_intent: pi, metadata: {}, customer_details: { email, name } },
+    reason,
+    { channel: 'stripe', source: via === 'sweep' ? 'stripe_sweep' : 'stripe_webhook', extRef,
+      note: [how, charge.description].filter(Boolean).join(' · ').slice(0, 200) });
+  if (kept.duplicate) return { duplicate: true };
+  console.log(`Stripe payment outside checkout (${via}): ${money(gross)} ${pi || id} on the unlinked ledger (${reason})`);
+
+  const caught = via === 'sweep'
+    ? `<p style="color:#6b7280">Found by the hourly check against Stripe; no webhook for it arrived.</p>` : '';
+  const why = named.several
+    ? `<p>Its description names more than one quote (${escEmail(named.several.join(', '))}), so it was not put on either.</p>`
+    : cancelled
+      ? `<p>It names quote <b>${escEmail(cancelled)}</b>, which is cancelled, so it was not put on it: a payment
+            does not bring a cancelled job back. Refund it in Stripe, or restore the quote and apply it there.</p>`
+      : '';
+  await alertShop(`💳 Paid in Stripe, not on a quote yet: ${money(gross)}${name ? ` from ${name}` : ''}`,
+    `<h2 style="color:#1848B8">A payment came in through Stripe, not through a quote's checkout</h2>
+     <p><b>${money(gross)}</b>${name ? ` from ${escEmail(name)}` : ''}${email ? ` &lt;${escEmail(email)}&gt;` : ''}
+        (${escEmail(how)}${charge.description ? `: &ldquo;${escEmail(String(charge.description).slice(0, 120))}&rdquo;` : ''}).</p>
+     ${why}
+     <p>It is in the books as a payment that belongs to no quote, with its sales tax not known yet.</p>
+     <p><b>If it is for a quote:</b> open that quote on the <a href="${PUBLIC_BASE_URL}/quotes">Quotes board</a>,
+        press <b>Record a payment</b>, and apply this payment there. Do not record it again as Zelle, cash or
+        other: that counts the same money twice.</p>
+     <p><b>If it is not for a quote:</b> settle its sales tax on the
+        <a href="${PUBLIC_BASE_URL}${FINANCES_PATH}#settle-tax">Finances page</a>.</p>
+     <p style="color:#6b7280">Next time, put the quote code in the payment's description in Stripe and it goes
+        on the quote by itself.</p>
+     ${charge.receipt_url ? `<p><a href="${escEmail(charge.receipt_url)}">Customer receipt</a></p>` : ''}
+     <p><a href="https://dashboard.stripe.com/payments/${encodeURIComponent(pi || id)}">Open in Stripe &rarr;</a></p>
+     ${caught}`);
+  return { booked: gross, ledger: 'unlinked' };
+}
+
+/* Locked on the charge, and one at a time, the way refunds and disputes are:
+   a charge's refund and its payment must not be booked side by side. */
+function bookCharge(charge, via) {
+  return oneRefundAtATime(() => withChargeLock(String(charge?.id || ''), () => bookChargeNow(charge, via)));
+}
+
+/* The hourly backstop: every charge since booking began, at most the last 30
+   days, from Stripe's own listing. A charge whose webhook never came, or that
+   the endpoint is not subscribed to, is booked within the hour. A checkout
+   payment is in the books by then, so it costs a database lookup and nothing
+   at Stripe. */
+async function reconcileOutsideCheckoutPayments() {
+  if (!process.env.STRIPE_SECRET_KEY) return 'skipped: STRIPE_SECRET_KEY is not set';
+  const since = Math.max(OUTSIDE_CHECKOUT_FROM, Math.floor(Date.now() / 1000) - 30 * 24 * 60 * 60);
+  const all = await stripeListAll('charges', { 'created[gte]': String(since) });
+  let booked = 0;
+  for (const c of all) {
+    const out = await bookCharge(c, 'sweep');
+    if (out && out.booked) booked++;
+  }
+  /* Quiet when there is nothing to say: this runs every hour. */
+  if (!booked) return '';
+  return `${all.length} charge(s) checked, ${booked} taken outside checkout booked`;
+}
+
+/* Card payments taken in Stripe that are on no quote yet and still waiting on
+   a decision: not applied, not refunded or disputed, tax not settled, and from
+   the last 60 days. Settling one's tax on the Finances page is the shop saying
+   it belongs to no quote, so it stops being offered. */
+async function unappliedStripePayments() {
+  try {
+    const { rows } = await pool.query(
+      `SELECT u.id, u.amount, u.created_at, u.customer_name, u.customer_email, u.note
+         FROM unlinked_payments u
+        WHERE u.channel = 'stripe' AND u.kind = 'payment' AND u.amount > 0
+          AND u.stripe_pi IS NOT NULL AND u.ext_ref LIKE 'charge:%'
+          AND u.tax_portion IS NULL
+          AND u.created_at > NOW() - INTERVAL '60 days'
+          AND NOT EXISTS (SELECT 1 FROM unlinked_payments x
+                           WHERE x.stripe_pi = u.stripe_pi AND x.id <> u.id)
+          AND NOT EXISTS (SELECT 1 FROM quote_payments p WHERE p.stripe_pi = u.stripe_pi)
+        ORDER BY u.created_at DESC LIMIT 20`);
+    return rows;
+  } catch (e) {
+    console.error('board: unapplied Stripe payments lookup failed:', e.message);
+    return [];
+  }
+}
+
+/* Put a payment taken in Stripe, booked as belonging to no quote, onto the
+   quote it was for. The unlinked row is reversed by a negative row, so the
+   original and the reason both survive, and the payment lands on the quote
+   dated when the money arrived, the month its tax is owed in. Refunds and
+   chargebacks then find it on the quote, which they check first. Safe to
+   repeat: both writes are keyed, and a second press finishes a first one that
+   stopped half way. Returns { ok } or { error: <reason key> }. */
+async function applyStripePaymentNow(uid, code) {
+  const { rows: found } = await pool.query('SELECT * FROM unlinked_payments WHERE id = $1', [uid]);
+  const u = found[0];
+  if (!u || u.channel !== 'stripe' || u.kind !== 'payment' || !(Number(u.amount) > 0) ||
+      !u.stripe_pi || !String(u.ext_ref || '').startsWith('charge:')) return { error: 'not-stripe' };
+
+  const { rows: others } = await pool.query(
+    'SELECT ext_ref, client_ref FROM unlinked_payments WHERE stripe_pi = $1 AND id <> $2', [u.stripe_pi, uid]);
+  const reversal = others.find((o) => o.ext_ref === `moved:${uid}`);
+  if (reversal && reversal.client_ref !== code) return { error: 'applied-elsewhere' };
+  if (!reversal && others.length) return { error: 'refunded' };
+  const { rows: onQuote } = await pool.query(
+    'SELECT quote_code FROM quote_payments WHERE ext_ref = $1 OR stripe_pi = $2 LIMIT 1', [u.ext_ref, u.stripe_pi]);
+  if (onQuote.length && onQuote[0].quote_code !== code) return { error: 'applied-elsewhere' };
+
+  const { rows: qs } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
+  const q = qs[0];
+  if (!q) return { error: 'no-quote' };
+  if (q.cancelled_at) return { error: 'cancelled' };
+
+  if (!onQuote.length) {
+    /* The note starts with how it was taken (stripePaymentHow). */
+    const method = /^bank payment/i.test(String(u.note || '')) ? 'transfer' : 'card';
+    await landStripePaymentOnQuote(q, {
+      gross: round2(Number(u.amount)), pi: u.stripe_pi, extRef: u.ext_ref, createdAt: u.created_at,
+      how: 'payment taken in Stripe, applied from the unlinked ledger', method, via: 'apply',
+      email: u.customer_email });
+  }
+  if (!reversal) {
+    /* The tax: a figure already settled comes back out with it; an unknown one
+       was never the unlinked ledger's to know, because it is on the quote now,
+       so both rows are settled at zero rather than holding the month open. */
+    const tax = u.tax_portion == null ? 0 : round2(Number(u.tax_portion));
+    await pool.query(
+      `INSERT INTO unlinked_payments
+         (amount, fee, currency, channel, client_ref, kind, source, stripe_pi, ext_ref,
+          customer_email, customer_name, reason, note, tax_portion, resolved_at, created_at)
+       VALUES ($1, 0, $2, 'stripe', $3, 'correction', 'manual', $4, $5, $6, $7, $8, $9, $10, NOW(), $11)
+       ON CONFLICT DO NOTHING`,
+      [-round2(Number(u.amount)), u.currency || 'usd', code, u.stripe_pi, `moved:${uid}`,
+       u.customer_email, u.customer_name, `applied to quote ${code}`,
+       `Moved to quote ${code} on ${new Date().toISOString().slice(0, 10)}`, -tax, u.created_at]);
+  }
+  /* Outside the reversal's branch, so a press that stopped between the two
+     writes is finished by the next one. $2 is cast: CONCAT_WS takes any type,
+     so Postgres cannot work out a bare parameter's and refuses the query. */
+  await pool.query(
+    `UPDATE unlinked_payments SET tax_portion = 0, resolved_at = NOW(),
+            note = CONCAT_WS(' · ', NULLIF(note, ''), $2::text)
+      WHERE id = $1 AND tax_portion IS NULL`,
+    [uid, `Its tax is on quote ${code}`]);
+  return { ok: true };
+}
+
+function applyStripePayment(uid, chargeId, code) {
+  return oneRefundAtATime(() => withChargeLock(chargeId, () => applyStripePaymentNow(uid, code)));
+}
+
 /* The board's view of disputes still in play: open ones (hold the job) and
    lost ones. A failed lookup shows the board without them rather than not at
    all. */
@@ -9884,8 +10471,12 @@ function disputeChip(d) {
 
 /* ── Stripe payment webhook ───────────────────────────────────────────────────
    Set the endpoint in the Stripe Dashboard to
-   https://www.jtees.net/webhooks/stripe  (event: checkout.session.completed)
-   and put the signing secret in STRIPE_WEBHOOK_SECRET.
+   https://www.jtees.net/webhooks/stripe and put the signing secret in
+   STRIPE_WEBHOOK_SECRET. Events it acts on: checkout.session.* (payments),
+   charge.succeeded / charge.captured (payments outside checkout),
+   charge.refunded and refund.* (refunds), charge.dispute.* (chargebacks),
+   payout.failed. Anything else is answered 200 and logged. The hourly sweep
+   backs up every one of these, so a missing subscription delays, never loses.
 
    Verified manually with crypto rather than the stripe SDK, to avoid adding a
    runtime dependency. Stripe's scheme: the Stripe-Signature header carries
@@ -10030,6 +10621,14 @@ async function handleStripeEvent(event) {
         break;
       }
 
+      /* Money taken in Stripe without checkout: a Dashboard charge, a Stripe
+         invoice, a card reader. bookChargeNow leaves checkout's own alone, and
+         the hourly sweep covers an endpoint not subscribed to these. */
+      case 'charge.succeeded':
+      case 'charge.captured':
+        await bookCharge(obj, 'webhook');
+        break;
+
       /* Money back out. A refund is a negative ledger row, which is only
          possible because payments are now history rather than one number. */
       case 'charge.refunded':
@@ -10061,6 +10660,12 @@ async function handleStripeEvent(event) {
       case 'charge.dispute.funds_withdrawn':
       case 'charge.dispute.funds_reinstated':
         await reconcileDisputes(obj, 'webhook');
+        break;
+
+      /* Stripe could not pay the balance into the bank. See reportFailedPayout;
+         the hourly sweep covers an endpoint that is not subscribed to it. */
+      case 'payout.failed':
+        await reportFailedPayout(obj, 'webhook');
         break;
 
       /* The customer opened checkout and never finished. Not an error — it is
@@ -12680,6 +13285,9 @@ async function renderBoard(VIEW, req, res) {
        resolves to a stale list plus an error rather than throwing. */
     const studio = await fetchStudioOrders();
     const disputes = await boardDisputes();
+    /* Payments taken in Stripe that are on no quote yet, offered where the
+       shop records a payment (see bookChargeNow). */
+    const stripeUnapplied = await unappliedStripePayments();
 
     /* Website enquiries nobody has answered.
      *
@@ -12869,7 +13477,7 @@ async function renderBoard(VIEW, req, res) {
           <a class="btn btn-ghost" style="padding:8px 16px;font-size:13px" href="/quote/${q.code}/edit">Edit</a>
           <a class="btn btn-ghost" style="padding:8px 16px;font-size:13px" href="/q/${q.code}" target="_blank" rel="noopener">View as customer</a>
           ${outstanding > 0 ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
-             onclick="document.getElementById('mp-${q.code}').style.display='block';this.style.display='none'">Record a payment</button>` : ''}
+             onclick="document.getElementById('mp-${q.code}').style.display='block';var a=document.getElementById('ap-${q.code}');if(a)a.style.display='block';this.style.display='none'">Record a payment</button>` : ''}
           ${outstanding > 0 ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
              onclick="document.getElementById('st-${q.code}').style.display='block';this.style.display='none'">Settle &mdash; no more owed</button>` : ''}
           ${q.cancelled_at ? `
@@ -12904,6 +13512,24 @@ async function renderBoard(VIEW, req, res) {
                  style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">
           <button type="submit" class="btn" style="padding:7px 16px;font-size:13px">Settle it</button>
         </form>` : ''}
+        ${outstanding > 0 && !q.cancelled_at && stripeUnapplied.length ? `
+        <div id="ap-${q.code}" style="display:none;margin-top:10px;background:#fff8ed;border:1px solid #fde3c0;border-radius:10px;padding:12px">
+          <div style="font-weight:700;color:#8a5a00;font-size:13px">Paid in Stripe? Apply it here instead</div>
+          <div class="muted" style="font-size:12.5px;margin:2px 0 4px">These came in through Stripe, not through a
+            quote's checkout, and are on no quote yet. If this payment is one of them, apply it: recording it again
+            below would count the same money twice.</div>
+          ${stripeUnapplied.map((u) => `
+          <form method="POST" action="/unlinked/${u.id}/apply"
+                style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0 0"
+                onsubmit="if(!confirm('Apply this ${money(u.amount)} Stripe payment to ${q.code}?'))return false;var b=this.querySelector('button[type=submit]');setTimeout(function(){b.disabled=true},0);return true">
+            <input type="hidden" name="quote" value="${q.code}">
+            <span style="font-size:13px;flex:1 1 220px"><b>${money(u.amount)}</b>${
+              u.customer_name ? ` &middot; ${escEmail(String(u.customer_name))}` : ''}${
+              u.customer_email ? ` <span class="muted">${escEmail(String(u.customer_email))}</span>` : ''}
+              <span class="muted">&middot; ${dayShort(u.created_at)}</span></span>
+            <button type="submit" class="btn" style="padding:6px 14px;font-size:13px">Apply to ${q.code}</button>
+          </form>`).join('')}
+        </div>` : ''}
         ${outstanding > 0 ? `
         <form id="mp-${q.code}" method="POST" action="/quote/${q.code}/mark-paid"
               style="display:none;margin-top:10px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px">
@@ -13392,6 +14018,15 @@ async function renderBoard(VIEW, req, res) {
         changeCount ? ` &middot; <b style="color:#1848B8">${changeCount} awaiting your edit</b>` : ''}${
         needCount ? ` &middot; <b style="color:#8a5a00">${needCount} need a text</b>` : ''}
         &middot; <span class="muted" style="font-size:12px">sorted by what needs attention</span></div>
+      ${(() => {
+        /* What an Apply from a "Record a payment" panel did. The code is shown
+           only once it reads as one; an error is picked from a fixed list. */
+        const applied = String(req.query.applied || '').toUpperCase();
+        const failed = APPLY_ERRORS[String(req.query.apply_err || '')];
+        return (QUOTE_CODE_RE.test(applied) ? `<div class="card" style="margin-bottom:12px;background:#e7f6ec;color:#166534">
+            The Stripe payment is on quote <b>${applied}</b> now.</div>` : '') +
+          (failed ? `<div class="card" style="margin-bottom:12px;background:#fdecea;color:#b91c1c">${escEmail(failed)}</div>` : '');
+      })()}
       <p style="margin-bottom:14px">
         <a class="btn" href="/quote/new">New quote</a>
         <a class="btn btn-ghost" href="/quotes" style="margin-left:8px${VIEW==='money'?';font-weight:800':''}">Money</a>
@@ -15666,6 +16301,45 @@ app.post('/unlinked/:id/tax', requireAdmin, async (req, res) => {
   res.redirect(back);
 });
 
+/* Apply a payment taken in Stripe to the quote it was for (applyStripePaymentNow).
+   Offered in each quote's "Record a payment" panel, and answered on the board:
+   what happened, or why nothing did, from a fixed list, so nothing a request
+   carries is written back into the page. */
+const APPLY_ERRORS = {
+  'bad-request': 'That was not a payment and a quote the board can apply it to.',
+  'not-stripe': 'That payment was not taken in Stripe outside checkout, so it cannot be moved here.',
+  'applied-elsewhere': 'That payment is already on another quote.',
+  'refunded': 'That payment has had a refund or chargeback, so it was left where it is.',
+  'no-quote': 'That quote does not exist.',
+  'cancelled': 'That quote is cancelled. Restore it first if the payment is for it.',
+  'failed': 'Applying the payment did not finish. Press Apply again: it carries on from where it stopped. The error has been reported.',
+};
+
+app.post('/unlinked/:id/apply', requireAdmin, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const code = String((req.body || {}).quote || '').trim().toUpperCase();
+  const answer = (key, value) => res.redirect(`/quotes?${key}=${encodeURIComponent(value)}`);
+  if (!(id > 0) || !QUOTE_CODE_RE.test(code)) return answer('apply_err', 'bad-request');
+  try {
+    const { rows } = await pool.query('SELECT ext_ref FROM unlinked_payments WHERE id = $1', [id]);
+    const ref = String((rows[0] && rows[0].ext_ref) || '');
+    if (!ref.startsWith('charge:')) return answer('apply_err', 'not-stripe');
+    const out = await applyStripePayment(id, ref.slice('charge:'.length), code);
+    if (out.error) return answer('apply_err', out.error);
+    /* Read back rather than assumed: the board says applied only when the
+       quote holds the payment. */
+    const { rows: held } = await pool.query(
+      'SELECT 1 FROM quote_payments WHERE quote_code = $1 AND ext_ref = $2', [code, ref]);
+    if (!held.length) return answer('apply_err', 'failed');
+    console.log(`unlinked payment ${id} applied to quote ${code}`);
+    return answer('applied', code);
+  } catch (err) {
+    console.error('applying a Stripe payment failed:', err.message);
+    reportError('apply-stripe-payment', err, `unlinked payment ${id} to quote ${code}`).catch(() => {});
+    return answer('apply_err', 'failed');
+  }
+});
+
 /* Send review requests that have come due. Runs inside the existing hourly
    sweep — no new scheduler, and it survives deploys because the due date lives
    in the database rather than in a timer. */
@@ -15938,8 +16612,12 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
     /* Before anything that asks a customer for money or a review: a refund
        or a dispute the webhook missed has to be on the books before those look
        at them. */
+    /* Payments first: a refund or chargeback on a payment taken outside
+       checkout can only be booked once the payment itself is. */
+    await step('stripe payments', reconcileOutsideCheckoutPayments);
     await step('stripe refunds', reconcileRecentRefunds);
     await step('stripe disputes', reconcileRecentDisputes);
+    await step('stripe payouts', reconcileFailedPayouts);
     await step('review asks', sendDueReviewRequests);
     await step('review follow-ups', sendReviewFollowUps);
     await step('quote follow-ups', sendQuoteFollowUps);
