@@ -25,29 +25,97 @@ const path = require('node:path');
 const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 const board = src.slice(src.indexOf('async function renderBoard'));
 
-test('unanswered enquiries are found by link AND by contact', () => {
+/* The SQL as Postgres receives it, not as it is spelled in server.js. The two
+   differ: in a template string '\D' is just 'D', and the phone match below read
+   right in the source for a month while stripping capital Ds instead of the
+   formatting. A test of the source text passed the whole time. */
+const vm = require('node:vm');
+function liftFn(name) {
+  let at = src.indexOf(`function ${name}(`);
+  assert.notStrictEqual(at, -1, `${name} not found in server.js`);
+  if (src.slice(at - 6, at) === 'async ') at -= 6;
+  let i = src.indexOf('(', at);
+  for (let paren = 0; i < src.length; i++) {
+    if (src[i] === '(') paren++;
+    else if (src[i] === ')' && --paren === 0) { i++; break; }
+  }
+  let depth = 0;
+  for (i = src.indexOf('{', i); i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}' && --depth === 0) return src.slice(at, i + 1);
+  }
+  throw new Error('unbalanced braces reading ' + name);
+}
+const MATCH = (() => {
+  const at = src.indexOf('const LEAD_QUOTE_MATCH = `');
+  assert.notStrictEqual(at, -1, 'LEAD_QUOTE_MATCH not found');
+  return src.slice(at, src.indexOf('`;', at) + 2);
+})();
+function leadsDesk(rows) {
+  const seen = [];
+  const sandbox = { pool: { query: async (sql) => { seen.push(sql); return { rows: rows.map((r) => ({ ...r })) }; } } };
+  vm.createContext(sandbox);
+  vm.runInContext([MATCH, liftFn('leadsWithStatus'), liftFn('unansweredLeads')].join('\n'), sandbox);
+  return { sandbox, seen };
+}
+
+test('unanswered enquiries are found by link AND by contact', async () => {
   /* The explicit link only exists for quotes raised after it was added. Older
      leads that WERE answered must not resurface as new, so the contact match is
      the fallback — and it needs both email and phone, because a customer who
      rang in gave one and not the other. */
-  const q = board.slice(board.indexOf('FROM submissions s'), board.indexOf('ORDER BY s.created_at'));
-  assert.match(q, /NOT EXISTS \(SELECT 1 FROM quotes q WHERE q\.from_submission_id = s\.id\)/);
+  const { sandbox, seen } = leadsDesk([]);
+  await sandbox.leadsWithStatus();
+  const q = seen[0];
+  assert.match(q, /SELECT q\.code FROM quotes q WHERE q\.from_submission_id = s\.id/);
   assert.match(q, /lower\(trim\(q\.email\)\)/, 'email is one way people are matched');
   assert.match(q, /right\(regexp_replace/, 'and the last 10 digits of the phone are the other');
-  assert.match(q, /s\.dismissed_at IS NULL/, 'a lead let go on purpose stays gone');
+  assert.match(q, /q\.created_at >= s\.created_at - interval '1 day'/,
+    'only a quote raised since the enquiry answers it');
 });
 
-test('the phone match ignores formatting', () => {
+test('the phone match ignores formatting', async () => {
   /* (773) 555-1234 and 7735551234 are the same person. Comparing raw strings
      would treat every reformatted number as a different customer and leave the
      lead showing as unanswered forever. */
-  const q = board.slice(board.indexOf('FROM submissions s'), board.indexOf('ORDER BY s.created_at'));
-  assert.ok(q.includes("regexp_replace(COALESCE(q.phone,''),"),
-    'the phone must be reduced to digits before comparing');
-  assert.ok(q.includes("right(regexp_replace(COALESCE(s.phone,''),"),
+  const { sandbox, seen } = leadsDesk([]);
+  await sandbox.leadsWithStatus();
+  const q = seen[0];
+  assert.ok(q.includes("regexp_replace(COALESCE(q.phone,''), '\\D', '', 'g')"),
+    "the phone must be reduced to digits before comparing: '\\D' has to reach Postgres with its backslash");
+  assert.ok(q.includes("right(regexp_replace(COALESCE(s.phone,''), '\\D', '', 'g'), 10)"),
     'on both sides of the comparison');
+  assert.doesNotMatch(q, /'D'/, "a bare 'D' strips capital Ds instead of the formatting");
   assert.match(q, /length\(regexp_replace[\s\S]{0,80}>= 10/,
     'a short or partial number must not match everything');
+});
+
+test('a lead reads new, quoted or let go, and only new ones are waiting', async () => {
+  const { sandbox } = leadsDesk([
+    { id: 1, created_at: '2026-09-27', linked_quote: null, matched_quote: null, dismissed_at: null },
+    { id: 2, created_at: '2026-09-26', linked_quote: 'AB12CD', matched_quote: null, dismissed_at: null },
+    { id: 3, created_at: '2026-09-25', linked_quote: null, matched_quote: 'EF34GH', dismissed_at: null },
+    { id: 4, created_at: '2026-09-24', linked_quote: null, matched_quote: null, dismissed_at: '2026-09-25' },
+    /* Let go, then quoted anyway: it became work, so it reads quoted. */
+    { id: 5, created_at: '2026-09-23', linked_quote: 'GH56JK', matched_quote: null, dismissed_at: '2026-09-24' },
+  ]);
+  const all = await sandbox.leadsWithStatus();
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(all.map((l) => [l.id, l.lead_status, l.quote_code]))),
+    [[1, 'new', null], [2, 'quoted', 'AB12CD'], [3, 'quoted', 'EF34GH'], [4, 'dismissed', null], [5, 'quoted', 'GH56JK']]);
+  const waiting = await sandbox.unansweredLeads();
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(waiting.map((l) => l.id))), [1]);
+});
+
+test('the board, the Leads page, the dashboard and the menu badge share one definition', () => {
+  assert.ok(board.includes('const leads = await unansweredLeads();'), 'the board');
+  const leadsPage = src.slice(src.indexOf("app.get('/leads', requireAdmin"));
+  assert.match(leadsPage.slice(0, 1500), /await leadsWithStatus\(\)/, 'the Leads page');
+  const counts = src.slice(src.indexOf("app.get('/admin/nav-counts', requireAdmin"));
+  assert.match(counts.slice(0, 800), /unansweredLeads\(\)/, 'the menu badge');
+  const dash = src.slice(src.indexOf("app.get('/dashboard', requireAdmin"));
+  assert.match(dash.slice(0, 4000), /leadsWithStatus\(\)/, 'the dashboard');
+  assert.strictEqual((src.match(/FROM submissions s\b/g) || []).length, 1,
+    'one query decides who is waiting; a second copy drifts');
 });
 
 test('a quote raised from a lead records which one', () => {

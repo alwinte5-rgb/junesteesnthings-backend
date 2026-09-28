@@ -159,8 +159,13 @@ test('the customer-facing shell carries no admin nav', () => {
 
 test('adminPage is the only thing that adds the nav', () => {
   const adminPage = extractFn('function adminPage(');
-  assert.match(adminPage, /adminNav\(active\)/);
-  assert.match(adminPage, /quotePage\(/, 'it wraps the existing shell rather than forking it');
+  assert.match(adminPage, /adminNav\(key\)/);
+  /* Both shells build their page with htmlDocument, so the head (charset,
+     viewport, base styles) is one copy rather than two drifting apart. */
+  assert.match(adminPage, /htmlDocument\(/, 'it shares the document with the customer shell rather than forking it');
+  assert.match(extractFn('function quotePage('), /htmlDocument\(/);
+  assert.doesNotMatch(extractFn('function htmlDocument('), /adminNav|ADMIN_NAV/,
+    'the shared document must not carry the menu, or every customer page would');
 });
 
 test('the operator pages all go through adminPage', () => {
@@ -179,10 +184,13 @@ test('the operator pages all go through adminPage', () => {
 });
 
 test('each admin page tells the nav which section it is', () => {
-  for (const key of ['money', 'customers', 'jobs', 'reviews', 'orders']) {
+  for (const key of ['dashboard', 'leads', 'production', 'orders', 'customers', 'reviews', 'money', 'discounts']) {
     assert.ok(src.includes(`, '${key}'));`),
       `no page passes the "${key}" key, so that entry never highlights`);
   }
+  /* The one page behind two menu entries picks the entry by the board it is. */
+  assert.ok(src.includes(`, VIEW === 'work' ? 'production' : 'quotes'));`),
+    'the job board must highlight Quotes or Production, whichever it is showing');
 });
 
 /* ── the nav must not point at a page that bounces ───────────────────────── */

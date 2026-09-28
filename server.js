@@ -15,7 +15,7 @@ const {
   releaseName: monitoringRelease,
 } = require('./tools/lib/monitoring');
 initMonitoring();
-const { describeTawkEvent, isE164 } = require('./tools/lib/chat-alert');
+const { describeTawkEvent, tawkLead, isE164 } = require('./tools/lib/chat-alert');
 const {
   CONSENT_VERSION, TRANSACTIONAL_TEXT, MARKETING_TEXT,
   normalizeUsPhone, parseSmsConsent, consentCheckboxesHtml, foldSmsConsent,
@@ -214,6 +214,16 @@ async function initDB() {
   for (const col of ['brevo_synced_at TIMESTAMPTZ', 'brevo_attempts INT DEFAULT 0', 'human_check TEXT']) {
     await pool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
+  /* Where an enquiry came from: the website form, an embroidery request, or a
+     tawk.to chat or offline message (saveChatLead). chat_ref is the chat or
+     ticket id, so a lead can be traced back to its conversation. Embroidery
+     requests were told apart only by their description until this existed. */
+  for (const col of [`source TEXT DEFAULT 'form'`, 'chat_ref TEXT']) {
+    await pool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  }
+  await pool.query(
+    `UPDATE submissions SET source = 'embroidery'
+      WHERE source = 'form' AND description LIKE 'EMBROIDERY REQUEST:%'`).catch(() => {});
   // Quotes texted from June's phone. The row is the source of truth — Brevo is
   // mirrored best-effort, so a CRM outage can never lose a quote.
   await pool.query(`
@@ -390,6 +400,14 @@ async function initDB() {
      asked at all. So the review content stops being shown everywhere and the
      asking history survives. */
   await pool.query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`).catch(() => {});
+  /* When June last decided about a review, approve or hide. `approved` alone
+     cannot say whether a review is waiting: hiding one leaves it FALSE, exactly
+     like one nobody has read, so "waiting for approval" counted the ones already
+     turned down. Approved reviews were plainly decided; the rest stay waiting
+     until they are next approved or hidden. */
+  await pool.query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS moderated_at TIMESTAMPTZ`).catch(() => {});
+  await pool.query(`UPDATE reviews SET moderated_at = COALESCE(submitted_at, created_at)
+                     WHERE approved = TRUE AND moderated_at IS NULL`).catch(() => {});
 
   // Marketing opt-outs. Required to honour the one-click unsubscribe that
   // Gmail/Yahoo mandate of bulk senders — an unsubscribe link that does not
@@ -2089,8 +2107,8 @@ function setAdminCookie(res) {
 app.get('/admin/sso', (req, res) => {
   const shared = process.env.JT_INTERNAL_KEY || '';
   // Only ever redirect within this site — never to an address in the query.
-  const raw = String(req.query.to || '/quotes');
-  const to = /^\/[A-Za-z0-9/_\-?=&.]*$/.test(raw) && !raw.startsWith('//') ? raw : '/quotes';
+  const raw = String(req.query.to || '/dashboard');
+  const to = /^\/[A-Za-z0-9/_\-?=&.]*$/.test(raw) && !raw.startsWith('//') ? raw : '/dashboard';
   if (!shared || !checkStamp(req.query.t, shared)) {
     return res.status(401).send(quotePage('Link expired', `
       <div class="card">
@@ -2792,6 +2810,23 @@ app.post('/webhooks/tawk', async (req, res) => {
   // email is still a customer waiting. Failures are logged, never thrown.
   alertOwnerOfChat(req.body);
 
+  /* A chat that can be answered is kept as an enquiry (tawkLead), so it joins
+     the same pipeline as the website form: on the board and the Leads page,
+     quotable in one click, let go with a reason. Until 2026-09-28 a chat was
+     an email and nothing else. This handler has already answered tawk, so a
+     failed save cannot be retried by tawk: it goes to the error digest. */
+  let leadId = null;
+  const lead = tawkLead(req.body);
+  if (lead) {
+    try {
+      leadId = await saveChatLead(lead);
+      if (leadId) console.log(`tawk webhook: ${lead.source} from ${lead.email} kept as enquiry #${leadId}`);
+    } catch (err) {
+      console.error('tawk chat not kept as an enquiry:', err.message);
+      reportError('tawk-lead', err, `${lead.source} ${lead.ref}`).catch(() => {});
+    }
+  }
+
   // chat:* events carry `visitor`; ticket:create carries `requester`
   const { event, visitor, requester } = req.body;
   const contact = visitor || requester;
@@ -2800,10 +2835,34 @@ app.post('/webhooks/tawk', async (req, res) => {
   try {
     await syncTawkContactToBrevo(contact);
     console.log(`tawk webhook: synced ${contact.email} to Brevo (${event})`);
+    /* Brevo has them already, on the chat list. Without this the hourly
+       catch-up would add the same person to the enquiry list too; a sync that
+       failed leaves the row for the catch-up to retry. */
+    if (leadId) {
+      await pool.query('UPDATE submissions SET brevo_synced_at = NOW() WHERE id = $1', [leadId])
+        .catch((e) => console.error('chat lead brevo mark failed:', e.message));
+    }
   } catch (err) {
     console.error('tawk → Brevo sync failed:', err.response?.data?.message || err.message);
   }
 });
+
+/* Keep a tawk.to chat or offline message as an enquiry. Keyed on the chat or
+   ticket id (dedupe_key), so tawk's retries and a repeated event add nothing;
+   the WHERE repeats the partial index's predicate, which Postgres needs to use
+   it (tests/on-conflict-targets.test.js). A chat has no phone, and the column
+   is NOT NULL, so it is stored empty. Returns the new id, or null if it was
+   already there. */
+async function saveChatLead(lead) {
+  const { rows } = await pool.query(
+    `INSERT INTO submissions (name, phone, email, description, dedupe_key, source, chat_ref)
+     VALUES ($1, '', $2, $3, $4, $5, $6)
+     ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
+     RETURNING id`,
+    [String(lead.name).slice(0, 200), lead.email, lead.description || null,
+     lead.ref, lead.source, lead.chatRef || null]);
+  return rows.length ? rows[0].id : null;
+}
 
 // ── Inventory (for building order forms) ──────────────────────────────────────
 
@@ -2819,195 +2878,11 @@ app.get('/inventory', requireAdmin, async (_req, res) => {
 
 // ── Admin dashboard ───────────────────────────────────────────────────────────
 
-app.get('/admin', requireAdmin, (_req, res) => {
-  res.send(`<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
-  <title>Admin — June's Tees & Things</title>
-  <style>
-    *{box-sizing:border-box;margin:0;padding:0}
-    body{font-family:system-ui,sans-serif;background:#0f0f0f;color:#e5e5e5;padding:2rem}
-    h1{font-size:1.4rem;margin-bottom:1.5rem;color:#fff}
-    h1 span{color:#A52429}
-    .toolbar{display:flex;gap:1rem;margin-bottom:1.5rem;flex-wrap:wrap;align-items:center}
-    .toolbar select,.toolbar input{background:#1a1a1a;border:1px solid #333;color:#e5e5e5;padding:.5rem .75rem;border-radius:8px;font-size:.85rem}
-    .card{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:12px;padding:1.25rem;margin-bottom:1rem}
-    .card-header{display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;margin-bottom:1rem;flex-wrap:wrap}
-    .card-name{font-weight:700;font-size:1rem;color:#fff}
-    .badge{display:inline-block;font-size:.65rem;padding:3px 10px;border-radius:999px;font-weight:600;text-transform:uppercase;letter-spacing:.05em}
-    .badge-new{background:#1d4ed8;color:#fff}
-    .badge-quoted{background:#d97706;color:#fff}
-    .badge-paid{background:#16a34a;color:#fff}
-    .grid{display:grid;grid-template-columns:1fr 1fr;gap:.75rem}
-    .label{font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:#666;margin-bottom:.2rem}
-    .value{font-size:.875rem;color:#e5e5e5;word-break:break-word}
-    .value a{color:#A52429}
-    .desc{grid-column:1/-1}
-    .photo img{max-width:200px;border-radius:8px;margin-top:.4rem}
-    .photo{grid-column:1/-1}
-    .date{grid-column:1/-1;font-size:.72rem;color:#555;margin-top:.25rem}
-    .actions{display:flex;gap:.75rem;margin-top:1rem;flex-wrap:wrap}
-    .btn{padding:.5rem 1rem;border-radius:8px;border:none;font-size:.8rem;font-weight:600;cursor:pointer;text-decoration:none}
-    .btn-primary{background:#A52429;color:#fff}
-    .btn-secondary{background:#2a2a2a;color:#e5e5e5;border:1px solid #444}
-    .empty{color:#555;text-align:center;padding:4rem}
-    #order-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:100;align-items:center;justify-content:center}
-    #order-modal.open{display:flex}
-    .modal-box{background:#1a1a1a;border:1px solid #333;border-radius:16px;padding:2rem;width:100%;max-width:520px;max-height:90vh;overflow-y:auto}
-    .modal-box h2{margin-bottom:1.25rem;font-size:1.1rem}
-    .form-group{margin-bottom:1rem}
-    .form-group label{display:block;font-size:.75rem;text-transform:uppercase;letter-spacing:.06em;color:#666;margin-bottom:.3rem}
-    .form-group input{width:100%;background:#111;border:1px solid #333;color:#e5e5e5;padding:.6rem .9rem;border-radius:8px;font-size:.875rem}
-    .item-row{display:grid;grid-template-columns:1fr 100px 80px 32px;gap:.5rem;margin-bottom:.5rem;align-items:center}
-    .item-row input{margin:0}
-    .remove-item{background:#333;border:none;color:#999;border-radius:6px;cursor:pointer;font-size:.9rem;height:36px;width:32px}
-    #add-item-btn{background:none;border:1px dashed #444;color:#999;border-radius:8px;padding:.5rem 1rem;cursor:pointer;font-size:.8rem;width:100%;margin-bottom:1rem}
-    .modal-actions{display:flex;gap:.75rem;justify-content:flex-end;margin-top:1.25rem}
-  </style>
-</head>
-<body>
-  <h1>June's Tees <span>&</span> Things — Submissions</h1>
-
-  <div class="toolbar">
-    <select id="filter-status">
-      <option value="">All statuses</option>
-      <option value="new">New</option>
-      <option value="quoted">Quoted</option>
-      <option value="paid">Paid</option>
-    </select>
-    <input id="search" type="text" placeholder="Search by name or email..." />
-  </div>
-
-  <div id="list"><p class="empty">Loading...</p></div>
-
-  <!-- Create Order Modal -->
-  <div id="order-modal">
-    <div class="modal-box">
-      <h2>Create Clover Order</h2>
-      <input type="hidden" id="modal-submission-id" />
-      <div id="item-rows"></div>
-      <button id="add-item-btn" type="button">+ Add Line Item</button>
-      <div class="modal-actions">
-        <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="submitOrder()">Create Order</button>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    const authHeader = 'Basic ' + btoa('admin:' + prompt('Admin password:'));
-    let allRows = [];
-
-    function esc(str) {
-      if (str == null) return '';
-      return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;');
-    }
-
-    function statusBadge(s) {
-      const map = { new:'badge-new', quoted:'badge-quoted', paid:'badge-paid' };
-      return \`<span class="badge \${map[esc(s)]||'badge-new'}">\${esc(s)||'new'}</span>\`;
-    }
-
-    function renderRows(rows) {
-      const list = document.getElementById('list');
-      if (!rows.length) { list.innerHTML = '<p class="empty">No submissions found.</p>'; return; }
-      list.innerHTML = rows.map(r => \`
-        <div class="card">
-          <div class="card-header">
-            <div class="card-name">\${esc(r.name)}</div>
-            \${statusBadge(r.status)}
-          </div>
-          <div class="grid">
-            <div><div class="label">Phone</div><div class="value"><a href="tel:\${esc(r.phone)}">\${esc(r.phone)}</a></div></div>
-            <div><div class="label">Email</div><div class="value"><a href="mailto:\${esc(r.email)}">\${esc(r.email)}</a></div></div>
-            <div><div class="label">HubSpot</div><div class="value">\${r.hubspot_contact_id ? '<a href="https://app.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/contact/'+encodeURIComponent(r.hubspot_contact_id)+'" target="_blank">View</a>' : '—'}</div></div>
-            <div><div class="label">Clover</div><div class="value">\${r.clover_order_id ? 'Order created' : r.clover_customer_id ? 'Customer only' : '—'}</div></div>
-            <div class="desc"><div class="label">Description</div><div class="value">\${esc(r.description)||'—'}</div></div>
-            \${r.photo_url && r.photo_url.startsWith('https://res.cloudinary.com/') ? \`<div class="photo"><div class="label">Photo</div><a href="\${esc(r.photo_url)}" target="_blank"><img src="\${esc(r.photo_url)}" /></a></div>\` : ''}
-            <div class="date">Submitted \${new Date(r.created_at).toLocaleString('en-US',{timeZone:'America/Chicago'})} CT &nbsp;·&nbsp; ID #\${parseInt(r.id,10)}</div>
-          </div>
-          <div class="actions">
-            \${!r.clover_order_id ? \`<button class="btn btn-primary" onclick="openModal(\${parseInt(r.id,10)})">Create Clover Order</button>\` : ''}
-            \${r.hubspot_contact_id ? \`<a class="btn btn-secondary" href="https://app.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/contact/\${esc(r.hubspot_contact_id)}" target="_blank">HubSpot Contact</a>\` : ''}
-          </div>
-        </div>
-      \`).join('');
-    }
-
-    function applyFilters() {
-      const status = document.getElementById('filter-status').value;
-      const search = document.getElementById('search').value.toLowerCase();
-      renderRows(allRows.filter(r =>
-        (!status || r.status === status) &&
-        (!search || r.name.toLowerCase().includes(search) || r.email.toLowerCase().includes(search))
-      ));
-    }
-
-    document.getElementById('filter-status').addEventListener('change', applyFilters);
-    document.getElementById('search').addEventListener('input', applyFilters);
-
-    fetch('/admin/data', { headers: { Authorization: authHeader } })
-      .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(rows => { allRows = rows; renderRows(rows); })
-      .catch(err => { document.getElementById('list').innerHTML = '<p class="empty">Failed to load: ' + err + '</p>'; });
-
-    // Order modal
-    function openModal(submissionId) {
-      document.getElementById('modal-submission-id').value = submissionId;
-      document.getElementById('item-rows').innerHTML = '';
-      addItemRow();
-      document.getElementById('order-modal').classList.add('open');
-    }
-
-    function closeModal() {
-      document.getElementById('order-modal').classList.remove('open');
-    }
-
-    function addItemRow() {
-      const row = document.createElement('div');
-      row.className = 'item-row';
-      row.innerHTML = \`
-        <input type="text" placeholder="Item name" class="item-name" />
-        <input type="number" placeholder="Price $" step="0.01" class="item-price" />
-        <input type="number" placeholder="Qty" min="1" value="1" class="item-qty" />
-        <button type="button" class="remove-item" onclick="this.parentElement.remove()">✕</button>
-      \`;
-      document.getElementById('item-rows').appendChild(row);
-    }
-
-    document.getElementById('add-item-btn').addEventListener('click', addItemRow);
-
-    async function submitOrder() {
-      const submissionId = document.getElementById('modal-submission-id').value;
-      const rows = document.querySelectorAll('.item-row');
-      const items = [...rows].map(r => ({
-        name:     r.querySelector('.item-name').value,
-        price:    parseFloat(r.querySelector('.item-price').value),
-        quantity: parseInt(r.querySelector('.item-qty').value),
-      })).filter(i => i.name && i.price);
-
-      if (!items.length) { alert('Add at least one line item.'); return; }
-
-      const res = await fetch('/orders/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: authHeader },
-        body: JSON.stringify({ submissionId: parseInt(submissionId), items }),
-      });
-
-      if (res.ok) {
-        closeModal();
-        location.reload();
-      } else {
-        const err = await res.json();
-        alert('Error: ' + (err.error || 'Unknown error'));
-      }
-    }
-  </script>
-</body>
-</html>`);
-});
+/* The old enquiries page lived here: a separate dark page that asked for the
+   password in a pop-up on every visit and was built around Clover and HubSpot,
+   both since switched off. Its address is in old bookmarks and emails, so it
+   forwards to the Leads page. /admin/data is kept for anything still reading it. */
+app.get('/admin', requireAdmin, (_req, res) => res.redirect('/leads'));
 
 app.get('/admin/data', requireAdmin, async (req, res) => {
   try {
@@ -3579,8 +3454,8 @@ app.post('/api/embroidery-quote', orderRateLimit, verifyTurnstile, async (req, r
     let savedId = null;
     try {
       const { rows } = await pool.query(
-        `INSERT INTO submissions (name, phone, email, description, photo_url, dedupe_key)
-         VALUES ($1,$2,$3,$4,$5,$6)
+        `INSERT INTO submissions (name, phone, email, description, photo_url, dedupe_key, source)
+         VALUES ($1,$2,$3,$4,$5,$6,'embroidery')
          ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
          RETURNING id`,
         [name, phone, email.toLowerCase(), description, fileUrl || null, dedupeKey]);
@@ -6093,66 +5968,296 @@ form:has(>.step-row){display:block}
 `;
 
 /* ── The admin shell ─────────────────────────────────────────────────────────
-   Every operator page hangs off one nav, because until this existed there were
+   Every operator page hangs off one menu, because until one existed there were
    eight of them on inconsistent paths with no way between: /quotes, /production,
    /books, /tax.csv, /customer, /admin/reviews, /inventory and /admin. Reviews
    and Inventory were reachable only by typing the URL, and Books only via a
    single "back to jobs" link buried in a table.
 
+   Since 2026-09-28 it is a side menu with a dashboard at the top: the pages had
+   grown into a small back office, and a row of pills across the top of each one
+   read as an afterthought. adminPage() kept its signature, so every operator
+   page moved into the new shell at once.
+
    Deliberately NOT added to quotePage(): that shell also renders the public
-   quote at /q/:code, and putting Books and the submissions inbox in front of a
-   customer is a different kind of bug.
+   quote at /q/:code and the review form, and putting Books and the enquiries
+   inbox in front of a customer is a different kind of bug.
 
    The routes themselves are not renamed. /production/:code and /admin/reviews
    are already sitting in sent email — the daily digest links to job pages and
    the review alert links to the approval screen — so moving them would break
-   links in mail already in June's inbox for no gain. */
+   links in mail already in June's inbox for no gain. /admin, the old enquiries
+   page, forwards to /leads for the same reason. */
 const ADMIN_NAV = [
-  { key: 'jobs',      href: '/quotes',        label: 'Jobs' },
-  { key: 'orders',    href: '/orders',        label: 'Orders' },
-  { key: 'customers', href: '/customers',     label: 'Customers' },
-  { key: 'leads',     href: '/admin',         label: 'Leads' },
-  { key: 'money',     href: FINANCES_PATH,    label: 'Finances' },
-  { key: 'discounts', href: '/discounts',     label: 'Discounts' },
-  { key: 'reviews',   href: '/admin/reviews', label: 'Reviews' },
+  { key: 'dashboard',  href: '/dashboard',     label: 'Dashboard',  icon: 'grid' },
+  { key: 'leads',      href: '/leads',         label: 'Leads',      icon: 'inbox',  badge: 'leads' },
+  { key: 'quotes',     href: '/quotes',        label: 'Quotes',     icon: 'file' },
+  { key: 'production', href: '/production',    label: 'Production', icon: 'layers', badge: 'late' },
+  { key: 'orders',     href: '/orders',        label: 'Orders',     icon: 'box' },
+  { key: 'customers',  href: '/customers',     label: 'Customers',  icon: 'users' },
+  { key: 'reviews',    href: '/admin/reviews', label: 'Reviews',    icon: 'star',   badge: 'reviews' },
+  { key: 'money',      href: FINANCES_PATH,    label: 'Finances',   icon: 'dollar' },
+  { key: 'discounts',  href: '/discounts',     label: 'Discounts',  icon: 'tag' },
 ];
-/* Ordered the way a shop is actually worked, not the way the routes grew:
-   work in hand, then money that arrived, then the people it came from, then
-   the leads that have not become either yet, then the books, then reputation.
+/* Ordered the way a shop is actually worked, not the way the routes grew: what
+   needs you today, the enquiries that might become work, the work in hand, the
+   money that arrived, the people it came from, then reputation and the books.
 
-   /inventory is deliberately absent — it answers JSON, not a page, so a nav
+   /inventory is deliberately absent — it answers JSON, not a page, so a menu
    entry would drop June onto a wall of raw Clover data.
 
    The studio sits outside this list because it is a different application on a
    different domain. It already links here (Quotes, New Quote, Reviews, Sales
-   Stats, all SSO'd); this is the return leg, which did not exist — you could
-   get from Lumise to the job board and then had no way back except the browser
-   history or a bookmark. */
+   Stats, all SSO'd); the link at the foot of the menu is the return leg, which
+   did not exist — you could get from Lumise to the job board and then had no
+   way back except the browser history or a bookmark. */
 const STUDIO_ADMIN = (process.env.JT_DESIGNER_URL || 'https://design.jtees.net')
   .replace(/\/+$/, '') + '/admin.php';
 
-function adminNav(active) {
-  return `<nav style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin:0 0 18px;padding-bottom:10px;border-bottom:1px solid #e3e8f2">
-    ${ADMIN_NAV.map(n => `<a href="${n.href}" style="
-        text-decoration:none;padding:7px 14px;border-radius:100px;font-size:14px;
-        ${n.key === active
-          ? 'background:#1848B8;color:#fff;font-weight:700'
-          : 'color:#46505f;font-weight:600'}">${n.label}</a>`).join('')}
-    <a href="${STUDIO_ADMIN}" target="_blank" rel="noopener" style="
-       margin-left:auto;text-decoration:none;padding:7px 14px;border-radius:100px;
-       font-size:14px;color:#46505f;font-weight:600;border:1px solid #e3e8f2">Studio &#8599;</a>
-  </nav>`;
+/* Line icons, inline so the menu needs no icon font and no extra request.
+   Stroke-only on a 24px grid, sized by CSS. */
+const ADMIN_ICONS = {
+  grid:   '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/>',
+  inbox:  '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  file:   '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>',
+  layers: '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
+  box:    '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>',
+  users:  '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  star:   '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
+  dollar: '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
+  tag:    '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>',
+  plus:   '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+  out:    '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>',
+  menu:   '<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>',
+  chat:   '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>',
+  alert:  '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+  clock:  '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  edit:   '<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>',
+  card:   '<rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/>',
+  phone:  '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
+  mail:   '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>',
+};
+function icon(name) {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true">${ADMIN_ICONS[name] || ''}</svg>`;
 }
 
-/** Admin pages: the quote shell plus the nav. `active` is an ADMIN_NAV key. */
+const ADMIN_CSS = `
+.adm-body{padding:0;background:#f3f5fa}
+.adm-toggle{position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none}
+.adm{display:flex;min-height:100vh}
+.adm-side{position:sticky;top:0;align-self:flex-start;height:100vh;width:236px;flex:0 0 236px;
+  background:#0B1F4B;color:#c7d2e8;display:flex;flex-direction:column;padding:18px 12px 16px;overflow-y:auto;z-index:50}
+.adm-brand{display:flex;align-items:center;gap:10px;color:#fff;text-decoration:none;font-weight:800;
+  font-size:15.5px;padding:2px 8px 20px;line-height:1.15}
+.adm-brand small{display:block;font-size:10.5px;font-weight:700;color:#8e9fc5;letter-spacing:.07em;
+  text-transform:uppercase;margin-top:3px}
+.adm-mark{width:34px;height:34px;border-radius:10px;background:#A52429;color:#fff;display:grid;place-items:center;
+  font-size:13px;font-weight:800;flex:0 0 34px}
+.adm-nav{display:flex;flex-direction:column;gap:2px}
+.adm-link{display:flex;align-items:center;gap:11px;padding:9px 12px;border-radius:10px;color:#c7d2e8;
+  text-decoration:none;font-size:14px;font-weight:600}
+.adm-link svg,.adm-new svg,.adm-burger svg,.adm-top-new svg{width:18px;height:18px;flex:0 0 18px;
+  stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.adm-link:hover{background:rgba(255,255,255,.07);color:#fff}
+.adm-link.is-active{background:#1848B8;color:#fff;box-shadow:inset 3px 0 0 #F4A623}
+.adm-badge{margin-left:auto;background:#F4A623;color:#0B1F4B;border-radius:100px;font-size:11px;font-weight:800;
+  padding:0 7px;min-width:21px;text-align:center;line-height:19px}
+.adm-badge[hidden]{display:none}
+.adm-foot{margin-top:auto;padding-top:16px;display:flex;flex-direction:column;gap:4px}
+.adm-new{display:flex;align-items:center;justify-content:center;gap:8px;background:#F4A623;color:#0B1F4B;
+  border-radius:10px;padding:10px 12px;font-weight:800;font-size:14px;text-decoration:none;margin-bottom:6px}
+.adm-new:hover{background:#ffb83d}
+.adm-main{flex:1 1 auto;min-width:0}
+.adm-page{padding:26px 30px 64px}
+.adm-page .wrap{max-width:1280px;margin:0 auto}
+.adm-top,.adm-scrim{display:none}
+@media (max-width:900px){
+  .adm-side{position:fixed;left:0;top:0;bottom:0;height:auto;transform:translateX(-102%);
+    transition:transform .2s ease;box-shadow:8px 0 40px rgba(11,31,75,.3)}
+  .adm-toggle:checked ~ .adm .adm-side{transform:none}
+  .adm-toggle:checked ~ .adm .adm-scrim{display:block;position:fixed;inset:0;background:rgba(11,31,75,.35);z-index:40}
+  .adm-top{display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:30;background:#fff;
+    border-bottom:1px solid #e3e8f2;padding:10px 14px;padding-top:max(10px,env(safe-area-inset-top))}
+  .adm-burger,.adm-top-new{display:grid;place-items:center;width:38px;height:38px;border-radius:10px;
+    color:#0B1F4B;cursor:pointer;flex:0 0 38px}
+  .adm-burger{background:#eef1f8}
+  .adm-top-new{margin-left:auto;background:#F4A623;text-decoration:none}
+  .adm-top-title{font-weight:800;color:#0B1F4B;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .adm-page{padding:16px 14px 56px}
+}
+/* ── building blocks ── */
+.ph{display:flex;align-items:flex-end;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:18px}
+.ph h1{font-size:25px;margin:0;color:#0B1F4B;letter-spacing:-.01em}
+.ph-sub{color:#6b7280;font-size:13.5px;margin-top:4px}
+.ph-actions{display:flex;gap:8px;flex-wrap:wrap}
+.ph-actions .btn{padding:10px 18px;font-size:14px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-bottom:18px}
+.tile{position:relative;display:block;background:#fff;border:1px solid #e3e8f2;border-radius:14px;
+  padding:14px 16px 14px 19px;box-shadow:0 1px 3px rgba(12,28,60,.05);text-decoration:none;color:inherit;overflow:hidden}
+.tile::before{content:'';position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--tone,#1848B8)}
+a.tile:hover{border-color:#c6d3ee;box-shadow:0 4px 14px rgba(12,28,60,.08)}
+.tile-label{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#6b7280}
+.tile-value{font-size:26px;font-weight:800;color:#0B1F4B;margin-top:4px;font-variant-numeric:tabular-nums;line-height:1.15}
+.tile-sub{font-size:12.5px;color:#6b7280;margin-top:3px}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:700;padding:3px 10px;
+  border-radius:100px;white-space:nowrap;line-height:1.4}
+.pill-neutral{background:#eef1f8;color:#46505f}
+.pill-blue{background:#e8efff;color:#1848B8}
+.pill-green{background:#e7f6ec;color:#166534}
+.pill-amber{background:#fff4e0;color:#8a5a00}
+.pill-red{background:#fdecea;color:#b91c1c}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px}
+.chip-f{display:inline-flex;align-items:center;gap:7px;padding:6px 13px;border-radius:100px;background:#fff;
+  border:1px solid #dde4f0;color:#33415c;font-size:13px;font-weight:600;text-decoration:none}
+.chip-f:hover{border-color:#b9c7e3}
+.chip-f.is-on{background:#0B1F4B;border-color:#0B1F4B;color:#fff}
+.chip-f .n{font-size:11px;font-weight:700;opacity:.7}
+.empty{text-align:center;padding:26px 16px;color:#6b7280;font-size:14px}
+.panels-2{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));align-items:start}
+.card-title{font-size:15px;margin:0 0 8px;color:#0B1F4B;display:flex;align-items:center;gap:8px}
+.card-title .muted{font-weight:500;margin-left:auto}
+.card-title a{font-size:12.5px;font-weight:600;color:#1848B8;text-decoration:none;margin-left:auto}
+.rows{display:flex;flex-direction:column}
+.row-i{display:flex;align-items:center;gap:12px;padding:10px 4px;border-top:1px solid #eef1f8;
+  text-decoration:none;color:inherit;border-radius:8px}
+.row-i:first-child{border-top:0}
+a.row-i:hover{background:#f7f9ff}
+.row-main{flex:1 1 auto;min-width:0}
+.row-main b{color:#0B1F4B}
+.row-sub{color:#6b7280;font-size:12.5px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row-end{text-align:right;white-space:nowrap;font-size:13px}
+.ico{width:34px;height:34px;flex:0 0 34px;border-radius:10px;display:grid;place-items:center}
+.ico svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.ico-red{background:#fdecea;color:#b91c1c}
+.ico-amber{background:#fff4e0;color:#b45309}
+.ico-blue{background:#e8efff;color:#1848B8}
+.ico-green{background:#e7f6ec;color:#166534}
+.dt{width:100%;border-collapse:collapse;font-size:14px}
+.dt th{text-align:left;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#8b95a5;
+  padding:8px 10px;border-bottom:1px solid #e3e8f2;white-space:nowrap}
+.dt td{padding:11px 10px;border-bottom:1px solid #f0f3f9;vertical-align:middle}
+.dt tbody tr:last-child td{border-bottom:0}
+.dt tbody tr:hover td{background:#fafbff}
+.dt .num{text-align:right}
+.search{display:flex;gap:8px;margin:0 0 14px;flex-wrap:wrap}
+.search input{flex:1 1 260px;padding:10px 12px;font-size:14px}
+.search .btn{padding:10px 18px;font-size:14px}
+.grid-cards{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));align-items:start}
+.grid-cards > .card{margin:0}
+/* Phone overrides for the building blocks, last so they win over the rules above.
+   Two tiles across: stacked one per row, six figures were a screen and a half of
+   scrolling before anything that needs doing. */
+@media (max-width:900px){
+  .tiles{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .tile{padding:12px 12px 12px 15px}
+  .tile-value{font-size:21px}
+  .tile-label{font-size:10px;letter-spacing:.05em}
+  .ph h1{font-size:22px}
+  .grid-cards{grid-template-columns:minmax(0,1fr)}
+}
+`;
+
+/* The menu's counts arrive after the page has loaded, from /admin/nav-counts,
+   so a slow count never holds a page up and a failed one shows no badge rather
+   than a wrong one. */
+const ADMIN_BADGE_JS = `(function(){try{fetch('/admin/nav-counts',{credentials:'same-origin',cache:'no-store'})
+.then(function(r){return r.ok?r.json():null}).then(function(c){if(!c)return;
+document.querySelectorAll('[data-badge]').forEach(function(el){var n=Number(c[el.getAttribute('data-badge')])||0;
+if(n>0){el.textContent=n>99?'99+':String(n);el.hidden=false;}});}).catch(function(){});}catch(e){}})();`;
+
+/** The side menu. `active` is an ADMIN_NAV key. */
+function adminNav(active) {
+  return `<aside class="adm-side" aria-label="Admin menu">
+    <a class="adm-brand" href="/dashboard"><span class="adm-mark">JT</span>
+      <span>June's Tees<small>Back office</small></span></a>
+    <nav class="adm-nav">${ADMIN_NAV.map((n) => `
+      <a class="adm-link${n.key === active ? ' is-active' : ''}" href="${n.href}"${
+        n.key === active ? ' aria-current="page"' : ''}>${icon(n.icon)}<span>${n.label}</span>${
+        n.badge ? `<span class="adm-badge" data-badge="${n.badge}" hidden></span>` : ''}</a>`).join('')}
+    </nav>
+    <div class="adm-foot">
+      <a class="adm-new" href="/quote/new">${icon('plus')}<span>New quote</span></a>
+      <a class="adm-link" href="${STUDIO_ADMIN}" target="_blank" rel="noopener">${icon('out')}<span>Studio</span></a>
+    </div>
+  </aside>`;
+}
+
+/* One document for every page this app renders by hand, so the customer shell
+   and the admin shell share their head (charset, viewport, base styles) rather
+   than two copies drifting apart. */
+function htmlDocument(title, body, opts = {}) {
+  const css = opts.css || '';
+  const bodyClass = opts.bodyClass || '';
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>${escEmail(title)}</title><style>${QUOTE_CSS}${REVIEW_CSS}${css}</style></head><body${
+    bodyClass ? ` class="${bodyClass}"` : ''}>${body}</body></html>`;
+}
+
+/** Admin pages: the side menu around the page. `active` is an ADMIN_NAV key.
+ *  On a phone the menu is a drawer, opened by a checkbox, so it needs no script. */
 function adminPage(title, body, active) {
-  return quotePage(title, adminNav(active) + body);
+  /* 'jobs' was the key for both boards before Quotes and Production became two
+     entries; a page still passing it highlights Quotes. */
+  const key = active === 'jobs' ? 'quotes' : active;
+  return htmlDocument(title, `
+<input type="checkbox" id="adm-menu" class="adm-toggle" aria-label="Menu">
+<div class="adm">
+  ${adminNav(key)}
+  <label for="adm-menu" class="adm-scrim"></label>
+  <div class="adm-main">
+    <header class="adm-top">
+      <label for="adm-menu" class="adm-burger" title="Menu">${icon('menu')}</label>
+      <span class="adm-top-title">${escEmail(title)}</span>
+      <a class="adm-top-new" href="/quote/new" title="New quote">${icon('plus')}</a>
+    </header>
+    <main class="adm-page"><div class="wrap">${body}</div></main>
+  </div>
+</div>
+<script>${ADMIN_BADGE_JS}</script>`, { css: ADMIN_CSS, bodyClass: 'adm-body' });
 }
 
 function quotePage(title, body) {
-  return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>${escEmail(title)}</title><style>${QUOTE_CSS}${REVIEW_CSS}</style></head><body><div class="wrap">${body}</div></body></html>`;
+  return htmlDocument(title, `<div class="wrap">${body}</div>`);
+}
+
+/* ── Building blocks for the admin pages ────────────────────────────────────
+   Small on purpose: the pages are server-rendered strings, and a helper that
+   grew an option for every case would be harder to read than the markup.
+   Text arguments are escaped here. A tile's `value` and `sub`, and a header's
+   `sub`, are HTML because they carry money() and links, so the caller escapes
+   anything in them that came from a customer. */
+const TONE = { blue: '#1848B8', green: '#16a34a', amber: '#d97706', red: '#dc2626',
+               navy: '#0B1F4B', gray: '#94a3b8', gold: '#F4A623' };
+
+function statTiles(tiles) {
+  return `<div class="tiles">${tiles.filter(Boolean).map((t) => {
+    const tag = t.href ? 'a' : 'div';
+    return `<${tag} class="tile"${t.href ? ` href="${t.href}"` : ''} style="--tone:${TONE[t.tone] || TONE.blue}">
+      <div class="tile-label">${escEmail(t.label)}</div>
+      <div class="tile-value">${t.value}</div>${t.sub ? `
+      <div class="tile-sub">${t.sub}</div>` : ''}</${tag}>`;
+  }).join('')}</div>`;
+}
+
+function pill(text, tone = 'neutral') {
+  return `<span class="pill pill-${tone}">${escEmail(text)}</span>`;
+}
+
+/** Filters as links, [{ href, label, count, on }], so a filtered view is a URL
+ *  that survives a refresh and can be bookmarked. */
+function filterChips(items) {
+  return `<div class="chips">${items.map((c) => `<a class="chip-f${c.on ? ' is-on' : ''}" href="${c.href}">${
+    escEmail(c.label)}${c.count != null ? `<span class="n">${c.count}</span>` : ''}</a>`).join('')}</div>`;
+}
+
+function pageHeader(title, sub, actions) {
+  return `<div class="ph"><div><h1>${escEmail(title)}</h1>${sub ? `<div class="ph-sub">${sub}</div>` : ''}</div>${
+    actions ? `<div class="ph-actions">${actions}</div>` : ''}</div>`;
+}
+
+function emptyState(html, action) {
+  return `<div class="empty">${html}${action ? `<div style="margin-top:12px">${action}</div>` : ''}</div>`;
 }
 
 /* The form June opens on her phone. Also serves /quote/:code/edit, pre-filled,
@@ -12206,7 +12311,11 @@ app.post('/leads/dismiss-old', requireAdmin, async (req, res) => {
 
 app.post('/lead/:id/dismiss', requireAdmin, async (req, res) => {
   const id = parseInt(req.params.id, 10);
-  if (!Number.isFinite(id)) return res.redirect('/quotes');
+  /* Back to the page it was dismissed from: the board or the Leads page. A
+     fixed list, so the form cannot be pointed anywhere else. */
+  const back = ['/leads', '/quotes'].includes(String((req.body && req.body.back) || ''))
+    ? String(req.body.back) : '/quotes';
+  if (!Number.isFinite(id)) return res.redirect(back);
   const reason = String((req.body && req.body.reason) || '').trim().slice(0, 200);
   try {
     await pool.query(
@@ -12215,7 +12324,7 @@ app.post('/lead/:id/dismiss', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('lead dismiss failed:', err.message);
   }
-  res.redirect('/quotes');
+  res.redirect(back);
 });
 
 app.post('/quote/:code/cancel', requireAdmin, async (req, res) => {
@@ -13300,18 +13409,7 @@ async function renderBoard(VIEW, req, res) {
      * under the same email or phone, and it was not deliberately let go. Matching
      * on contact as well as the explicit link catches the ones quoted before this
      * link existed — otherwise every historical lead would resurface as new. */
-    const { rows: leads } = await pool.query(
-      `SELECT s.* FROM submissions s
-        WHERE s.dismissed_at IS NULL
-          AND NOT EXISTS (SELECT 1 FROM quotes q WHERE q.from_submission_id = s.id)
-          AND NOT EXISTS (
-            SELECT 1 FROM quotes q
-             WHERE (NULLIF(lower(trim(q.email)),'') = lower(trim(s.email))
-                 OR (length(regexp_replace(COALESCE(q.phone,''), '\D', '', 'g')) >= 10
-                     AND right(regexp_replace(COALESCE(q.phone,''), '\D', '', 'g'), 10)
-                       = right(regexp_replace(COALESCE(s.phone,''), '\D', '', 'g'), 10)))
-               AND q.created_at >= s.created_at - interval '1 day')
-        ORDER BY s.created_at DESC`);
+    const leads = await unansweredLeads();
 
     /* Order by what needs attention, not by what arrived last. A board sorted
        by date buries the job that is about to miss its deadline under three
@@ -13846,50 +13944,7 @@ async function renderBoard(VIEW, req, res) {
     /* A website enquiry, as a card you can act on. The two actions are the two
        real outcomes: quote it, or let it go on the record. Anything else leaves
        it sitting there forever, which is how 21 of these went cold. */
-    const leadCard = (l) => {
-      const days = Math.round((Date.now() - new Date(l.created_at)) / 86400000);
-      const age = days <= 0 ? 'today' : days === 1 ? 'yesterday'
-        : days < 60 ? days + ' days ago'
-        : Math.round(days / 30) + ' months ago';
-      return `
-      <div class="card" style="border-left:4px solid #b45309">
-        <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
-          <b style="color:#0B1F4B">${escEmail(l.name || 'No name given')}</b>
-          <span class="muted" style="font-size:12.5px">${escEmail(age)}</span>
-        </div>
-        ${l.description ? `<div class="muted" style="margin-top:6px;font-size:13.5px">${
-          escEmail(String(l.description).slice(0, 300))}</div>` : ''}
-        <div class="muted" style="margin-top:8px;font-size:12.5px">
-          ${l.email ? `<a href="mailto:${escEmail(l.email)}">${escEmail(l.email)}</a>` : ''}
-          ${l.phone ? ` &middot; <a href="tel:${escEmail(l.phone)}">${escEmail(l.phone)}</a>` : ''}
-        </div>
-        ${l.photo_url ? `<div style="margin-top:8px"><a href="${escEmail(l.photo_url)}" target="_blank" rel="noopener">
-          <img src="${escEmail(l.photo_url)}" alt="" loading="lazy"
-               style="width:88px;height:88px;object-fit:cover;border-radius:8px;border:1px solid #e3e8f2"></a></div>` : ''}
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
-          <a class="btn" style="padding:8px 16px;font-size:13px" href="/quote/new?lead=${l.id}">Create quote</a>
-          ${/* Two different outcomes, deliberately not one button.
-                "Not a job" is a judgement about the ENQUIRY — spam, wrong fit,
-                a tyre-kicker. "Too late" is a fact about TIME: it was a real
-                job and the window closed. Filing the second under the first
-                loses the only number that says the shop is leaving money on the
-                table, and it is untrue about the customer. */ ''}
-          <form method="POST" action="/lead/${l.id}/dismiss" style="display:inline">
-            <input type="hidden" name="reason" value="Too late — past the date they needed it">
-            <button type="submit" class="btn btn-ghost" style="padding:8px 16px;font-size:13px">Too late</button>
-          </form>
-          <button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
-             onclick="document.getElementById('dl-${l.id}').style.display='block';this.style.display='none'">Not a job</button>
-        </div>
-        <form id="dl-${l.id}" method="POST" action="/lead/${l.id}/dismiss"
-              style="display:none;margin-top:10px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px">
-          <p class="muted" style="margin:0 0 8px;font-size:12.5px">It comes off the board. The enquiry is kept.</p>
-          <input name="reason" maxlength="200" placeholder="Why — e.g. spam, or went elsewhere"
-                 style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">
-          <button type="submit" class="btn btn-ghost" style="padding:7px 16px;font-size:13px">Dismiss</button>
-        </form>
-      </div>`;
-    };
+    const leadCard = (l) => leadCardHtml(l, { back: '/quotes' });
 
     /* Collapsible, and remembered per browser. A section folded shut has to STAY
        shut across reloads or folding it is just a gesture you repeat all day.
@@ -14371,7 +14426,7 @@ async function renderBoard(VIEW, req, res) {
               a.select();document.execCommand('copy');a.remove();btn.textContent='Copied ✓';
             });
         }
-      </script>`, 'jobs'));
+      </script>`, VIEW === 'work' ? 'production' : 'quotes'));
   } catch (err) {
     console.error('board render failed:', err.message);
     res.status(500).send(quotePage('Error', '<div class="card"><div class="warn">Could not load the board.</div></div>'));
@@ -14523,7 +14578,7 @@ app.get('/production/:code', requireAdmin, async (req, res) => {
             .catch(function(){ form.submit(); });
           });
         });
-      </script>`, 'jobs'));
+      </script>`, 'production'));
   } catch (err) {
     console.error('job detail failed:', err.message);
     res.redirect('/production');
@@ -14532,6 +14587,411 @@ app.get('/production/:code', requireAdmin, async (req, res) => {
 
 app.get('/quotes',     requireAdmin, (req, res) => renderBoard('money', req, res));
 app.get('/production', requireAdmin, (req, res) => renderBoard('work',  req, res));
+
+/* ══ Leads ══════════════════════════════════════════════════════════════════
+   Every enquiry, from every door: the website form, an embroidery request, and
+   the tawk.to chats and offline messages that left an email (saveChatLead).
+   One definition of "answered" serves the board, the Leads page, the dashboard
+   and the menu badge, so they cannot disagree about who is still waiting. */
+
+/* Answered means a quote was raised from the lead, or the customer has a quote
+   under the same email or phone raised since (a day's grace for one written
+   just before midnight), which catches leads quoted before quotes recorded the
+   lead they came from.
+
+   '\\D' is doubled on purpose. In a template string '\D' is just 'D', so until
+   2026-09-28 the phone match stripped capital Ds instead of the formatting, and
+   a lead matched only by phone, "(312) 555-0123" against "3125550123", never
+   read as answered. The test checks the SQL Postgres receives, not this text. */
+const LEAD_QUOTE_MATCH = `(NULLIF(lower(trim(q.email)),'') = lower(trim(s.email))
+               OR (length(regexp_replace(COALESCE(q.phone,''), '\\D', '', 'g')) >= 10
+                   AND right(regexp_replace(COALESCE(q.phone,''), '\\D', '', 'g'), 10)
+                     = right(regexp_replace(COALESCE(s.phone,''), '\\D', '', 'g'), 10)))
+              AND q.created_at >= s.created_at - interval '1 day'`;
+
+/** Every lead, newest first, with where it stands: 'new', 'quoted' (and the
+ *  quote), or 'dismissed' (and why). A quote wins over a dismissal: a lead let
+ *  go and then quoted anyway did become work. */
+async function leadsWithStatus() {
+  const { rows } = await pool.query(
+    `SELECT s.*,
+            (SELECT q.code FROM quotes q WHERE q.from_submission_id = s.id
+              ORDER BY q.created_at LIMIT 1) AS linked_quote,
+            (SELECT q.code FROM quotes q WHERE ${LEAD_QUOTE_MATCH}
+              ORDER BY q.created_at LIMIT 1) AS matched_quote
+       FROM submissions s
+      ORDER BY s.created_at DESC`);
+  return rows.map((l) => {
+    const quote = l.linked_quote || l.matched_quote || null;
+    return { ...l, quote_code: quote,
+             lead_status: quote ? 'quoted' : l.dismissed_at ? 'dismissed' : 'new' };
+  });
+}
+
+/** The leads nobody has answered: not quoted, not let go. Newest first. */
+async function unansweredLeads() {
+  return (await leadsWithStatus()).filter((l) => l.lead_status === 'new');
+}
+
+const LEAD_SOURCES = {
+  form:       ['Website form', 'blue'],
+  embroidery: ['Embroidery', 'amber'],
+  chat:       ['Chat', 'green'],
+  offline:    ['Offline message', 'green'],
+};
+
+/** How long ago, in the words a person uses. */
+function ageInWords(d) {
+  const days = Math.round((Date.now() - new Date(d)) / 86400000);
+  return days <= 0 ? 'today' : days === 1 ? 'yesterday'
+    : days < 60 ? days + ' days ago' : Math.round(days / 30) + ' months ago';
+}
+
+/** One enquiry as a card. A new one carries the three ways to deal with it;
+ *  an answered one says how it was answered. `back` is the page the dismiss
+ *  buttons return to. */
+function leadCardHtml(l, { back = '/quotes' } = {}) {
+  const [srcLabel, srcTone] = LEAD_SOURCES[l.source] || LEAD_SOURCES.form;
+  const status = l.lead_status || 'new';
+  const chat = l.source === 'chat' || l.source === 'offline';
+  const edge = status === 'quoted' ? '#16a34a' : status === 'dismissed' ? '#b6c0d2' : '#b45309';
+  const backField = `<input type="hidden" name="back" value="${escEmail(back)}">`;
+  return `
+      <div class="card" style="border-left:4px solid ${edge}">
+        <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <b style="color:#0B1F4B">${escEmail(l.name || 'No name given')}</b>${pill(srcLabel, srcTone)}${
+              status === 'quoted' ? pill('Quoted', 'green') : status === 'dismissed' ? pill('Let go', 'neutral') : ''}
+          </div>
+          <span class="muted" style="font-size:12.5px">${escEmail(ageInWords(l.created_at))}</span>
+        </div>
+        ${l.description ? `<div class="muted" style="margin-top:6px;font-size:13.5px">${
+          escEmail(String(l.description).slice(0, 300))}</div>` : ''}
+        <div class="muted" style="margin-top:8px;font-size:12.5px">
+          ${l.email ? `<a href="mailto:${escEmail(l.email)}">${escEmail(l.email)}</a>` : ''}
+          ${l.phone ? ` &middot; <a href="tel:${escEmail(l.phone)}">${escEmail(l.phone)}</a>` : ''}
+          ${chat ? ` &middot; <a href="https://dashboard.tawk.to/" target="_blank" rel="noopener">answer in tawk.to</a>` : ''}
+        </div>
+        ${l.photo_url ? `<div style="margin-top:8px"><a href="${escEmail(l.photo_url)}" target="_blank" rel="noopener">
+          <img src="${escEmail(l.photo_url)}" alt="" loading="lazy"
+               style="width:88px;height:88px;object-fit:cover;border-radius:8px;border:1px solid #e3e8f2"></a></div>` : ''}
+        ${status === 'quoted' ? `
+        <div style="margin-top:12px"><a class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
+           href="/quote/${escEmail(l.quote_code)}/edit">Open quote ${escEmail(l.quote_code)} &rarr;</a></div>`
+        : status === 'dismissed' ? `
+        <div class="muted" style="margin-top:10px;font-size:12.5px">Let go${
+          l.dismiss_reason ? ': ' + escEmail(l.dismiss_reason) : ''} &middot;
+          <a href="/quote/new?lead=${l.id}">quote it anyway</a></div>`
+        : `
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+          <a class="btn" style="padding:8px 16px;font-size:13px" href="/quote/new?lead=${l.id}">Create quote</a>
+          ${/* Two different outcomes, deliberately not one button.
+                "Not a job" is a judgement about the ENQUIRY — spam, wrong fit,
+                a tyre-kicker. "Too late" is a fact about TIME: it was a real
+                job and the window closed. Filing the second under the first
+                loses the only number that says the shop is leaving money on the
+                table, and it is untrue about the customer. */ ''}
+          <form method="POST" action="/lead/${l.id}/dismiss" style="display:inline">
+            <input type="hidden" name="reason" value="Too late — past the date they needed it">${backField}
+            <button type="submit" class="btn btn-ghost" style="padding:8px 16px;font-size:13px">Too late</button>
+          </form>
+          <button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
+             onclick="document.getElementById('dl-${l.id}').style.display='block';this.style.display='none'">Not a job</button>
+        </div>
+        <form id="dl-${l.id}" method="POST" action="/lead/${l.id}/dismiss"
+              style="display:none;margin-top:10px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px">
+          <p class="muted" style="margin:0 0 8px;font-size:12.5px">It comes off the board. The enquiry is kept.</p>
+          <input name="reason" maxlength="200" placeholder="Why — e.g. spam, or went elsewhere"
+                 style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">${backField}
+          <button type="submit" class="btn btn-ghost" style="padding:7px 16px;font-size:13px">Dismiss</button>
+        </form>`}
+      </div>`;
+}
+
+/* The month a moment falls in, in the shop's time, as 'YYYY-MM'. */
+const shopMonth = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: SHOP_TZ }).slice(0, 7);
+
+/* Every enquiry, with where it stands. The board shows only the ones waiting;
+   this is where a quoted or let-go lead can still be found, and where a quiet
+   inbox shows up as a date rather than as nothing. */
+app.get('/leads', requireAdmin, async (req, res) => {
+  try {
+    const STATUSES = ['new', 'quoted', 'dismissed', 'all'];
+    const SOURCES = ['all', 'form', 'embroidery', 'chat'];
+    const status = STATUSES.includes(String(req.query.status)) ? String(req.query.status) : 'new';
+    const source = SOURCES.includes(String(req.query.source)) ? String(req.query.source) : 'all';
+    const q = String(req.query.q || '').trim().slice(0, 80);
+
+    const all = await leadsWithStatus();
+    const inSource = (l, src) => src === 'all' || (src === 'chat'
+      ? (l.source === 'chat' || l.source === 'offline') : (l.source || 'form') === src);
+    const needle = q.toLowerCase();
+    const found = all.filter((l) => !needle || [l.name, l.email, l.phone, l.description]
+      .some((v) => String(v || '').toLowerCase().includes(needle)));
+    const count = (st, src) => found.filter((l) =>
+      (st === 'all' || l.lead_status === st) && inSource(l, src)).length;
+    const shown = found.filter((l) => (status === 'all' || l.lead_status === status) && inSource(l, source));
+
+    /* A filter is a URL, with the defaults left out so the plain page is /leads. */
+    const link = (over) => {
+      const p = new URLSearchParams({ status, source, ...(q ? { q } : {}), ...over });
+      if (p.get('status') === 'new') p.delete('status');
+      if (p.get('source') === 'all') p.delete('source');
+      const qs = p.toString();
+      return '/leads' + (qs ? '?' + qs : '');
+    };
+
+    const waiting = all.filter((l) => l.lead_status === 'new');
+    const oldest = waiting[waiting.length - 1];
+    const last = all[0];
+    const quietDays = last ? Math.floor((Date.now() - new Date(last.created_at)) / 86400000) : null;
+    const thisMonth = all.filter((l) => shopMonth(l.created_at) === shopMonth(Date.now()));
+    const recent = all.filter((l) => Date.now() - new Date(l.created_at) < 90 * 86400000);
+    const recentQuoted = recent.filter((l) => l.lead_status === 'quoted').length;
+
+    const tiles = statTiles([
+      { label: 'Waiting for a reply', value: String(waiting.length), href: link({ status: 'new', source: 'all' }),
+        tone: waiting.length ? 'amber' : 'green',
+        sub: oldest ? `oldest ${escEmail(ageInWords(oldest.created_at))}` : 'nobody is waiting' },
+      /* The tile that would have caught Sep 1 to 26, when the form was refusing
+         every enquiry: silence reads as a date going stale, not as nothing. */
+      { label: 'Last enquiry', value: last ? escEmail(ageInWords(last.created_at)) : 'none yet',
+        tone: quietDays !== null && quietDays > 14 ? 'red' : 'blue',
+        sub: last ? `${fmtDate(last.created_at)} &middot; ${escEmail((LEAD_SOURCES[last.source] || LEAD_SOURCES.form)[0])}`
+                  : 'nothing has come in' },
+      { label: 'This month', value: String(thisMonth.length), tone: 'navy',
+        sub: `${thisMonth.filter((l) => l.lead_status === 'quoted').length} quoted` },
+      { label: 'Quote rate, 90 days', value: recent.length ? Math.round(100 * recentQuoted / recent.length) + '%' : '—',
+        tone: 'green', sub: `${recentQuoted} of ${recent.length} enquiries quoted` },
+    ]);
+
+    const statusChips = filterChips([
+      { label: 'Waiting', href: link({ status: 'new' }), count: count('new', source), on: status === 'new' },
+      { label: 'Quoted', href: link({ status: 'quoted' }), count: count('quoted', source), on: status === 'quoted' },
+      { label: 'Let go', href: link({ status: 'dismissed' }), count: count('dismissed', source), on: status === 'dismissed' },
+      { label: 'All', href: link({ status: 'all' }), count: count('all', source), on: status === 'all' },
+    ]);
+    const sourceChips = filterChips([
+      { label: 'Every source', href: link({ source: 'all' }), on: source === 'all' },
+      { label: 'Website form', href: link({ source: 'form' }), count: count(status, 'form'), on: source === 'form' },
+      { label: 'Embroidery', href: link({ source: 'embroidery' }), count: count(status, 'embroidery'), on: source === 'embroidery' },
+      { label: 'Chat', href: link({ source: 'chat' }), count: count(status, 'chat'), on: source === 'chat' },
+    ]);
+
+    const body = shown.length
+      ? `<div class="grid-cards">${shown.map((l) => leadCardHtml(l, { back: '/leads' })).join('')}</div>`
+      : `<div class="card">${emptyState(q ? `Nothing matches &ldquo;${escEmail(q)}&rdquo;.`
+          : status === 'new' ? 'Nobody is waiting for a reply.' : 'Nothing here.')}</div>`;
+
+    res.send(adminPage('Leads', `
+      ${pageHeader('Leads', 'Every enquiry: the website form, embroidery requests and tawk.to chats that left an email.',
+        '<a class="btn" href="/quote/new">New quote</a>')}
+      ${tiles}
+      ${statusChips}
+      ${sourceChips}
+      <form class="search" method="GET" action="/leads">
+        ${status !== 'new' ? `<input type="hidden" name="status" value="${escEmail(status)}">` : ''}
+        ${source !== 'all' ? `<input type="hidden" name="source" value="${escEmail(source)}">` : ''}
+        <input name="q" value="${escEmail(q)}" placeholder="Find by name, email, phone or what they asked for">
+        <button type="submit" class="btn btn-ghost">Search</button>
+        ${q ? `<a class="btn btn-ghost" href="${link({ q: '' }).replace(/[?&]q=(&|$)/, '$1').replace(/[?&]$/, '')}">Clear</a>` : ''}
+      </form>
+      ${body}`, 'leads'));
+  } catch (err) {
+    console.error('leads page failed:', err.message);
+    res.status(500).send(adminPage('Leads', '<div class="card"><div class="warn">Could not load the leads.</div></div>', 'leads'));
+  }
+});
+
+/* ══ Dashboard ══════════════════════════════════════════════════════════════ */
+
+/** Accepted work not yet delivered or cancelled: what the Production board holds. */
+async function liveJobs() {
+  const { rows } = await pool.query(
+    `SELECT * FROM quotes
+      WHERE accepted_at IS NOT NULL AND delivered_at IS NULL AND cancelled_at IS NULL`);
+  return rows;
+}
+
+const REVIEWS_WAITING_SQL = `SELECT COUNT(*)::int AS n FROM reviews
+  WHERE submitted_at IS NOT NULL AND deleted_at IS NULL AND moderated_at IS NULL AND approved IS NOT TRUE`;
+
+/* The menu's badges. Each count fails on its own, to zero, so one broken query
+   costs a badge rather than the lot. */
+app.get('/admin/nav-counts', requireAdmin, async (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const out = { leads: 0, reviews: 0, late: 0 };
+  await Promise.all([
+    unansweredLeads().then((l) => { out.leads = l.length; }).catch(() => {}),
+    pool.query(REVIEWS_WAITING_SQL).then(({ rows }) => { out.reviews = rows[0].n; }).catch(() => {}),
+    liveJobs().then((jobs) => {
+      out.late = jobs.filter((q) => { const s = quoteSchedule(q); return !!(s && s.risks.length); }).length;
+    }).catch(() => {}),
+  ]);
+  res.json(out);
+});
+
+/* What needs June today, and how the business is doing, on one screen. Every
+   figure comes from the same place its own page reads it, and each panel fails
+   on its own: a broken query shows a dash, never a blank dashboard. */
+app.get('/dashboard', requireAdmin, async (_req, res) => {
+  const safe = (p, fallback, what) => p.catch((e) => {
+    console.error(`dashboard: ${what} failed:`, e.message);
+    return fallback;
+  });
+  const one = (sql, what, args) => safe(pool.query(sql, args).then((r) => r.rows[0] || {}), {}, what);
+  const many = (sql, what, args) => safe(pool.query(sql, args).then((r) => r.rows), [], what);
+
+  const [takings, owed, out, leads, jobs, reviewsWaiting, changes, disputes, unapplied, badTexts, recent, tax] =
+    await Promise.all([
+      /* Quotes and everything else apart: the board's "Collected this month"
+         and the Finances months count the quote ledger only, so the total here
+         says what it adds on top rather than disagreeing with them. */
+      one(`SELECT
+             (SELECT COALESCE(SUM(amount),0) FROM quote_payments WHERE created_at >= date_trunc('month', NOW()))
+             AS quotes_month,
+             (SELECT COALESCE(SUM(amount),0) FROM unlinked_payments WHERE created_at >= date_trunc('month', NOW()))
+             AS other_month,
+             (SELECT COALESCE(SUM(amount),0) FROM quote_payments
+               WHERE created_at >= date_trunc('month', NOW()) - interval '1 month' AND created_at < date_trunc('month', NOW()))
+           + (SELECT COALESCE(SUM(amount),0) FROM unlinked_payments
+               WHERE created_at >= date_trunc('month', NOW()) - interval '1 month' AND created_at < date_trunc('month', NOW()))
+             AS last_month`, 'money'),
+      one(`SELECT COUNT(*)::int AS jobs,
+                  COALESCE(SUM(total - COALESCE(paid_amount,0) - COALESCE(written_off,0)),0) AS owed
+             FROM quotes
+            WHERE accepted_at IS NOT NULL AND cancelled_at IS NULL
+              AND total > COALESCE(paid_amount,0) + COALESCE(written_off,0) + 0.005`, 'owed'),
+      one(`SELECT COUNT(*)::int AS n, COALESCE(SUM(total),0) AS value FROM quotes
+            WHERE accepted_at IS NULL AND cancelled_at IS NULL AND COALESCE(paid_amount,0) = 0
+              AND status <> 'expired' AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)`, 'quotes out'),
+      safe(leadsWithStatus(), [], 'leads'),
+      safe(liveJobs(), [], 'jobs'),
+      one(REVIEWS_WAITING_SQL, 'reviews'),
+      many(`SELECT code, name, change_request FROM quotes
+             WHERE NULLIF(btrim(change_request), '') IS NOT NULL AND cancelled_at IS NULL
+               AND COALESCE(paid_amount,0) = 0
+             ORDER BY created_at DESC LIMIT 5`, 'change requests'),
+      many(`SELECT id, quote_code, order_ref, amount, evidence_due FROM stripe_disputes
+             WHERE status IN ('warning_needs_response','warning_under_review','needs_response','under_review')
+             ORDER BY evidence_due NULLS LAST`, 'disputes'),
+      safe(unappliedStripePayments(), [], 'stripe payments'),
+      one(`SELECT COUNT(*)::int AS n FROM sms_messages
+            WHERE status IN ('undelivered','failed') AND created_at > NOW() - interval '7 days'`, 'texts'),
+      many(`SELECT * FROM (
+              SELECT p.created_at, p.amount, p.quote_code, NULL::text AS order_ref, q.name, p.method AS how
+                FROM quote_payments p JOIN quotes q ON q.code = p.quote_code WHERE p.amount > 0
+              UNION ALL
+              SELECT created_at, amount, NULL, order_ref, customer_name, channel
+                FROM unlinked_payments WHERE amount > 0) x
+            ORDER BY created_at DESC LIMIT 6`, 'recent payments'),
+      safe(taxPositionByMonth(24), null, 'tax'),
+    ]);
+
+  const waiting = leads.filter((l) => l.lead_status === 'new');
+  const lastLead = leads[0];
+  const late = jobs.map((q) => ({ q, s: quoteSchedule(q) })).filter((x) => x.s && x.s.risks.length);
+
+  /* The one next thing, loudest first. */
+  const attention = [
+    ...disputes.map((d) => ({ tone: 'red', icon: 'alert',
+      title: `Chargeback: ${money(d.amount)} ${d.quote_code ? 'on quote ' + escEmail(d.quote_code)
+        : d.order_ref ? 'on studio order #' + escEmail(d.order_ref) : ''}`,
+      sub: d.evidence_due ? `respond in Stripe by ${escEmail(dayShort(d.evidence_due))}` : 'respond in Stripe',
+      href: d.quote_code ? `/production/${escEmail(d.quote_code)}` : '/orders' })),
+    ...late.map(({ q, s }) => ({ tone: 'red', icon: 'clock',
+      title: `${escEmail(q.name || q.code)} is behind`,
+      sub: `${escEmail(s.risks[0].label)} was due ${escEmail(dayShort(s.risks[0].by))} &middot; ${escEmail(q.code)}`,
+      href: `/production/${escEmail(q.code)}` })),
+    ...(waiting.length ? [{ tone: 'amber', icon: 'inbox',
+      title: `${waiting.length} enquir${waiting.length === 1 ? 'y' : 'ies'} waiting for a reply`,
+      sub: `oldest ${escEmail(ageInWords(waiting[waiting.length - 1].created_at))}`, href: '/leads' }] : []),
+    ...changes.map((c) => ({ tone: 'blue', icon: 'edit',
+      title: `${escEmail(c.name || c.code)} asked for a change`,
+      sub: `&ldquo;${escEmail(String(c.change_request).slice(0, 90))}&rdquo;`, href: `/quote/${escEmail(c.code)}/edit` })),
+    ...unapplied.map((u) => ({ tone: 'amber', icon: 'card',
+      title: `${money(u.amount)} paid in Stripe, not on a quote`,
+      sub: `${escEmail(u.customer_name || u.customer_email || 'no name')} &middot; apply it from Record a payment`,
+      href: '/quotes' })),
+    ...(Number(reviewsWaiting.n) > 0 ? [{ tone: 'blue', icon: 'star',
+      title: `${reviewsWaiting.n} review${reviewsWaiting.n === 1 ? '' : 's'} waiting for your approval`,
+      sub: 'nothing shows on the site until you approve it', href: '/admin/reviews' }] : []),
+    ...(Number(badTexts.n) > 0 ? [{ tone: 'amber', icon: 'phone',
+      title: `${badTexts.n} text${badTexts.n === 1 ? '' : 's'} not delivered this week`,
+      sub: 'the hourly error digest says which and why', href: '' }] : []),
+    ...(tax && tax.undeterminedPayments > 0 ? [{ tone: 'amber', icon: 'dollar',
+      title: `${tax.undeterminedPayments} payment${tax.undeterminedPayments === 1 ? '' : 's'} with the sales tax still to work out`,
+      sub: 'settle them so the tax figure is complete', href: `${FINANCES_PATH}#settle-tax` }] : []),
+  ];
+
+  const hour = Number(new Date().toLocaleString('en-US', { timeZone: SHOP_TZ, hour: '2-digit', hourCycle: 'h23' }));
+  const hello = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+  const today = new Date().toLocaleDateString('en-US', { timeZone: SHOP_TZ, weekday: 'long', month: 'long', day: 'numeric' });
+
+  const row = (x) => {
+    const inner = `<span class="ico ico-${x.tone}">${icon(x.icon)}</span>
+      <span class="row-main"><b>${x.title}</b><div class="row-sub">${x.sub}</div></span>`;
+    return x.href ? `<a class="row-i" href="${x.href}">${inner}</a>` : `<div class="row-i">${inner}</div>`;
+  };
+  const [lastSrc] = lastLead ? (LEAD_SOURCES[lastLead.source] || LEAD_SOURCES.form) : [''];
+
+  res.set('Cache-Control', 'no-store');
+  res.send(adminPage('Dashboard', `
+    ${pageHeader(hello + ', ' + SHOP_SIGNER, escEmail(today),
+      '<a class="btn" href="/quote/new">New quote</a><a class="btn btn-ghost" href="/production">Production</a>')}
+    ${statTiles([
+      { label: 'Money in this month', tone: 'green', href: FINANCES_PATH,
+        value: money(Number(takings.quotes_month || 0) + Number(takings.other_month || 0)),
+        sub: Number(takings.other_month || 0)
+          ? `quotes ${money(takings.quotes_month)} &middot; studio &amp; other ${money(takings.other_month)}`
+          : `last month ${money(takings.last_month)}` },
+      { label: 'Owed to you', value: money(owed.owed), tone: 'amber', href: '/orders',
+        sub: `on ${owed.jobs || 0} job${owed.jobs === 1 ? '' : 's'} in hand` },
+      { label: 'Quotes out', value: String(out.n || 0), tone: 'blue', href: '/quotes',
+        sub: `${money(out.value)} waiting on a yes` },
+      { label: 'New leads', value: String(waiting.length), href: '/leads',
+        tone: waiting.length ? 'amber' : 'green',
+        sub: lastLead ? `last one ${escEmail(ageInWords(lastLead.created_at))} (${escEmail(lastSrc)})` : 'none yet' },
+      { label: 'In production', value: String(jobs.length), href: '/production',
+        tone: late.length ? 'red' : 'navy', sub: late.length ? `${late.length} behind schedule` : 'all on schedule' },
+      { label: 'Tax to set aside', value: tax ? money(tax.setAside) : '—', tone: 'gold', href: FINANCES_PATH,
+        sub: tax && tax.undeterminedPayments ? `${tax.undeterminedPayments} still to work out` : 'sales tax held for the state' },
+    ])}
+    <div class="panels-2">
+      <div class="card">
+        <h2 class="card-title">Needs attention <span class="muted">${attention.length || ''}</span></h2>
+        ${attention.length ? `<div class="rows">${attention.slice(0, 12).map(row).join('')}</div>`
+          : emptyState('All clear. Nothing is late, waiting or disputed.')}
+      </div>
+      <div class="card">
+        <h2 class="card-title">Latest leads <a href="/leads?status=all">all leads &rarr;</a></h2>
+        ${leads.length ? `<div class="rows">${leads.slice(0, 5).map((l) => {
+          const [label, tone] = LEAD_SOURCES[l.source] || LEAD_SOURCES.form;
+          return `<a class="row-i" href="/leads?status=all&amp;q=${encodeURIComponent(l.email || l.name || '')}">
+            <span class="row-main"><b>${escEmail(l.name || 'No name given')}</b>
+              <div class="row-sub">${escEmail(String(l.description || l.email || '').slice(0, 80))}</div></span>
+            <span class="row-end">${pill(label, tone)}<div class="muted" style="font-size:12px;margin-top:3px">${
+              escEmail(ageInWords(l.created_at))} &middot; ${l.lead_status === 'quoted' ? 'quoted'
+              : l.lead_status === 'dismissed' ? 'let go' : '<b style="color:#b45309">waiting</b>'}</div></span></a>`;
+        }).join('')}</div>` : emptyState('No enquiries yet.')}
+      </div>
+      <div class="card">
+        <h2 class="card-title">Recent payments <a href="${FINANCES_PATH}">finances &rarr;</a></h2>
+        ${recent.length ? `<div class="rows">${recent.map((p) => {
+          const what = p.quote_code ? `quote ${escEmail(p.quote_code)}`
+            : p.order_ref ? `studio order #${escEmail(p.order_ref)}`
+            : escEmail(({ stripe: 'paid in Stripe, not on a quote', clover: 'Clover till',
+                          studio: 'design studio' })[p.how] || 'payment');
+          const href = p.quote_code ? `/production/${escEmail(p.quote_code)}` : '';
+          const inner = `<span class="ico ico-green">${icon('dollar')}</span>
+            <span class="row-main"><b>${money(p.amount)}</b>
+              <div class="row-sub">${escEmail(p.name || 'no name')} &middot; ${what}</div></span>
+            <span class="row-end muted">${escEmail(dayShort(p.created_at))}</span>`;
+          return href ? `<a class="row-i" href="${href}">${inner}</a>` : `<div class="row-i">${inner}</div>`;
+        }).join('')}</div>` : emptyState('No payments yet.')}
+      </div>
+    </div>`, 'dashboard'));
+});
 
 /* Studio orders on their own, for when that is the question being asked. The
    same list also sits at the foot of the job board — this is a view, not a
@@ -15364,7 +15824,7 @@ app.post('/admin/reviews/:id', requireAdmin, async (req, res) => {
     await pool.query('UPDATE reviews SET deleted_at=NOW(), approved=FALSE WHERE id=$1', [id])
       .catch(e => console.error('review delete failed:', e.message));
   } else {
-    await pool.query('UPDATE reviews SET approved=$2 WHERE id=$1', [id, action === 'approve'])
+    await pool.query('UPDATE reviews SET approved=$2, moderated_at=NOW() WHERE id=$1', [id, action === 'approve'])
       .catch(e => console.error('review approve failed:', e.message));
   }
   _revCache = { at: 0, rows: [] };

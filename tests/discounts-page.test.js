@@ -24,7 +24,7 @@ const admin = fs.readFileSync(path.join(ROOT,
   'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/jt-promo-admin.php'), 'utf8');
 
 test('the page is in the admin nav and gated', () => {
-  assert.match(src, /\{ key: 'discounts', href: '\/discounts',\s*label: 'Discounts' \}/);
+  assert.match(src, /\{ key: 'discounts',\s+href: '\/discounts',\s+label: 'Discounts'/);
   for (const r of ["'/discounts'", "'/discounts/off'"]) {
     assert.ok(src.includes(`app.get(${r}, requireAdmin`) || src.includes(`app.post(${r}, requireAdmin`),
       `${r} must require admin — these codes are money`);
