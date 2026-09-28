@@ -482,8 +482,9 @@ test('a customer who disputed is not asked for a review, on a quote or a studio 
 });
 
 test('the review follow-up checks for a dispute too', () => {
-  assert.match(lift('sendReviewFollowUps'),
-    /await isUnsubscribed\(r\.email\) \|\| await refundedInFull\(r\) \|\| await disputeOn\(r\)/);
+  /* Anchored on the call, not on the expression around it; that it stops the
+     send is proved by running the sweep in reviews-page.test.js. */
+  assert.match(lift('sendReviewFollowUps'), /await disputeOn\(r\)/);
 });
 
 test('the quote page stops asking for money from the day a dispute opens, and says what happened', () => {

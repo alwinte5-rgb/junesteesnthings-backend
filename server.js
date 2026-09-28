@@ -408,6 +408,14 @@ async function initDB() {
   await pool.query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS moderated_at TIMESTAMPTZ`).catch(() => {});
   await pool.query(`UPDATE reviews SET moderated_at = COALESCE(submitted_at, created_at)
                      WHERE approved = TRUE AND moderated_at IS NULL`).catch(() => {});
+  /* What became of an ask: 'sent', or why not ('unsubscribed', 'refunded',
+     'disputed', 'failed'). The sweep stamps sent_at on every one of those so
+     it leaves the queue, which made all of them read as asked. Rows from
+     before this have none, and read as sent. */
+  await pool.query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS ask_outcome TEXT`).catch(() => {});
+  /* The same for the one reminder, whose followup_sent_at is stamped on a
+     skip or a failure too, so its date alone read as a reminder sent. */
+  await pool.query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS followup_outcome TEXT`).catch(() => {});
 
   // Marketing opt-outs. Required to honour the one-click unsubscribe that
   // Gmail/Yahoo mandate of bulk senders — an unsubscribe link that does not
@@ -6247,6 +6255,40 @@ a.row-i:hover{background:#f7f9ff}
 .grid-cards > .card{margin:0}
 .msg-row{align-items:flex-start}
 .msg-when{display:block;font-size:11.5px;margin-top:3px}
+.sec-h{font-size:16px;font-weight:800;color:#0B1F4B;margin:24px 0 10px;display:flex;align-items:center;gap:8px}
+.sec-h .n,.fold summary .n{background:#e3e8f2;color:#5a6a86;border-radius:100px;padding:1px 9px;font-size:12px;font-weight:700}
+details.fold{background:#fff;border:1px solid #e3e8f2;border-radius:14px;margin-bottom:14px;box-shadow:0 1px 3px rgba(12,28,60,.05)}
+details.fold > summary{cursor:pointer;list-style:none;padding:15px 18px;font-weight:800;color:#0B1F4B;
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+details.fold > summary::-webkit-details-marker{display:none}
+details.fold > summary::after{content:'';margin-left:auto;width:8px;height:8px;border-right:2px solid #94a3b8;
+  border-bottom:2px solid #94a3b8;transform:rotate(45deg);transition:transform .15s}
+details.fold[open] > summary::after{transform:rotate(-135deg)}
+.fold-hint{font-weight:500;font-size:12.5px}
+.fold-body{padding:0 18px 18px}
+.rv-card{display:flex;flex-direction:column;gap:8px}
+.rv-top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.rv-stars{color:#F4A623;font-size:18px;letter-spacing:1px;line-height:1}
+.rv-title{color:#0B1F4B;font-size:15px}
+.rv-body{margin:0;color:#46505f;line-height:1.55;white-space:pre-line}
+.rv-imgs{display:flex;flex-wrap:wrap;gap:8px}
+.rv-imgs img{width:84px;height:84px;object-fit:cover;border-radius:8px;border:1px solid #e3e8f2}
+.rv-who{font-size:12.5px}
+.rv-actions{display:flex;gap:8px;flex-wrap:wrap;margin:2px 0 0}
+.rv-actions button{padding:8px 16px;font-size:13.5px}
+.rv-remove{margin-left:auto;color:#9f1239}
+.ask-msg{display:flex;gap:8px;align-items:flex-start;margin:0 0 12px}
+.ask-msg textarea{flex:1 1 auto;font-size:13px;padding:9px;min-height:74px}
+.ask-msg button{flex:0 0 auto;padding:9px 16px;font-size:13px}
+.ask-all,.ask-row{text-transform:none;letter-spacing:0;color:inherit;margin:0}
+.ask-all{display:flex;gap:8px;align-items:center;font-size:13px;font-weight:600;padding:4px 4px 8px}
+.ask-row{cursor:pointer;font-weight:400;font-size:14px}
+.ask-row input,.ask-all input{width:auto;margin:0;flex:0 0 auto}
+.ask-row.is-off{cursor:default}
+.ask-row.is-off .row-main{opacity:.7}
+.ask-pills{display:flex;gap:4px;flex-wrap:wrap}
+.ask-row .row-end{display:flex;gap:8px;align-items:center}
+[data-askform] button[type="submit"]{margin-top:12px;padding:10px 22px;font-size:14px}
 /* Phone overrides for the building blocks, last so they win over the rules above.
    Two tiles across: stacked one per row, six figures were a screen and a half of
    scrolling before anything that needs doing. */
@@ -6265,6 +6307,11 @@ a.row-i:hover{background:#f7f9ff}
   .msg-end{flex:1 0 100%;display:flex;align-items:center;gap:8px;padding-left:46px;text-align:left}
   .msg-row .row-main{flex:1 1 0}
   .msg-when{margin-top:0}
+  /* The status pills go under the name, not between it and the amount. */
+  .ask-row{flex-wrap:wrap}
+  .ask-row .row-main{flex:1 1 0}
+  .ask-pills{order:4;flex:1 0 100%;padding-left:28px}
+  .ask-msg{flex-direction:column;align-items:stretch}
 }
 `;
 
@@ -14747,7 +14794,7 @@ const MESSAGE_KINDS = {
   receipt: 'Payment receipt', accepted: 'Quote accepted', 'follow-up': 'Follow-up',
   'deposit-reminder': 'Deposit reminder', 'balance-reminder': 'Balance reminder', reorder: 'Reorder nudge',
   tracking: 'Tracking number', 'milestone:production': 'In production', 'milestone:ready': 'Ready / shipped',
-  manual: 'From you',
+  manual: 'From you', 'review-ask': 'Review ask', 'review-followup': 'Review reminder',
   /* texts, by template */
   'payment-received': 'Payment receipt', 'in-production': 'In production', ready: 'Ready',
   shipped: 'Shipped', reply: 'Their reply',
@@ -15853,7 +15900,9 @@ async function requestReview({ token, name, email, phone, product, order_ref, qu
     ? `One quick thing${first ? ', ' + String(name).split(' ')[0] : ''} — 30 seconds?`
     : `How did your order turn out${first ? ', ' + String(name).split(' ')[0] : ''}?`;
 
-  await sendEmail({
+  await sendClientEmail({
+    quote: quote_code || null, kind: followup ? 'review-followup' : 'review-ask',
+    preview: followup ? 'The one reminder to leave a review.' : 'Asked how it turned out: a star to tap, or a few words.',
     to: email,
     subject,
     html: `<div style="font-family:system-ui,-apple-system,'Segoe UI',sans-serif;max-width:520px;margin:0 auto;padding:8px">
@@ -15906,219 +15955,259 @@ app.get('/api/reviews', async (req, res) => {
   });
 });
 
-/* June approves what appears publicly. */
+/* An ask that actually went out. The sweep stamps sent_at on one it skipped
+   or could not send, so it leaves the queue; ask_outcome says which. */
+const ASK_WENT_OUT = `sent_at IS NOT NULL AND COALESCE(ask_outcome, 'sent') = 'sent'`;
+
+/* June approves what appears publicly, and asks for more.
+
+   In the order it gets used: the figures, anything waiting for her say-so,
+   what is live, then the asking, folded away. The approvals used to sit under
+   up to 300 "never asked" rows, each with its own copy of the message. */
 app.get('/admin/reviews', requireAdmin, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT * FROM reviews WHERE submitted_at IS NOT NULL AND deleted_at IS NULL
-        ORDER BY submitted_at DESC LIMIT 200`);
-    const body = rows.map(r => `
-      <div class="card">
-        <div style="display:flex;justify-content:space-between;gap:10px">
-          <div><b>${escEmail(r.title || '(no headline)')}</b>
-            <div class="muted">${escEmail(r.name || 'anonymous')} &middot; ${fmtDate(r.submitted_at)}
-              ${r.product ? '&middot; ' + escEmail(r.product) : ''}</div></div>
-          <div style="color:#F4A623;white-space:nowrap">${STAR(r.rating || 0)}</div>
-        </div>
-        <p style="margin-top:8px;color:#46505f">${escEmail(r.body || '')}</p>
-      ${(Array.isArray(r.images) && r.images.length) ? `
-        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
-          ${r.images.filter(u => typeof u === 'string' && /^https:\/\/res\.cloudinary\.com\//.test(u))
-            .map(u => `<a href="${escEmail(u)}" target="_blank" rel="noopener">
-              <img src="${escEmail(u.replace('/upload/', '/upload/c_fill,w_220,h_220,q_auto,f_auto/'))}"
-                   style="width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid #e3e8f2"
-                   loading="lazy"></a>`).join('')}
-        </div>` : ''}
-        <form method="POST" action="/admin/reviews/${r.id}" style="margin-top:10px;display:flex;gap:8px">
-          <button name="action" value="${r.approved ? 'hide' : 'approve'}"
-            class="${r.approved ? 'btn-ghost' : ''}" style="padding:8px 18px;font-size:14px">
-            ${r.approved ? 'Hide from site' : 'Approve for site'}</button>
-          <span class="chip" style="align-self:center;background:${r.approved ? '#e7f6ec' : '#eef1f8'};color:${r.approved ? '#166534' : '#6b7280'}">
-            ${r.approved ? 'live' : 'not shown'}</span>
-          <button name="action" value="delete" class="btn-ghost"
-            style="padding:8px 14px;font-size:14px;margin-left:auto;color:#9f1239;border-color:#f3c6cf"
-            onclick="return confirm('Remove this review from ${escEmail((r.name || 'this customer').replace(/'/g, ''))}?\n\nIt stops showing on the site and here. The record that they were asked is kept, so they will not be asked again.')"
-            >Remove</button>
-        </form>
-      </div>`).join('');
-    const live = rows.filter(r => r.approved).length;
-    const avg = rows.length ? (rows.reduce((a, r) => a + (r.rating || 0), 0) / rows.length).toFixed(1) : '—';
+        ORDER BY submitted_at DESC LIMIT 300`);
+    const waiting = rows.filter((r) => !r.approved && !r.moderated_at);
+    const live = rows.filter((r) => r.approved);
+    const hidden = rows.filter((r) => !r.approved && r.moderated_at);
 
-    /* The PIPELINE, not just the results.
-​
-       This page said "0 received" and nothing else, which is the same sentence
-       whether every ask has gone out and nobody replied, or nothing has ever
-       been asked at all. Those need completely different actions — one is copy
-       and timing, the other is a broken queue — and there was no way to tell
-       them apart from here. Asked point blank whether reviews were going out, I
-       could not answer it from this screen either. */
-    const { rows: pipe } = await pool.query(
-      `SELECT COUNT(*) FILTER (WHERE sent_at IS NULL AND submitted_at IS NULL
-                                 AND requested_at > NOW())::int AS waiting,
-              COUNT(*) FILTER (WHERE sent_at IS NULL AND submitted_at IS NULL
-                                 AND requested_at <= NOW())::int AS due,
-              COUNT(*) FILTER (WHERE sent_at IS NOT NULL)::int AS sent,
-              MAX(sent_at) AS last_sent
+    /* The PIPELINE, not just the results. "0 received" alone is the same
+       sentence whether every ask went out and nobody replied, or nothing was
+       ever asked, and those need different fixes. Asked and the reply rate
+       count only asks that went out. */
+    const { rows: [f = {}] } = await pool.query(
+      `SELECT COUNT(*) FILTER (WHERE submitted_at IS NOT NULL)::int AS received,
+              COUNT(*) FILTER (WHERE submitted_at IS NOT NULL AND approved)::int AS live,
+              ROUND(AVG(rating) FILTER (WHERE submitted_at IS NOT NULL AND rating BETWEEN 1 AND 5), 1)::float AS avg_all,
+              ROUND(AVG(rating) FILTER (WHERE submitted_at IS NOT NULL AND approved AND rating BETWEEN 1 AND 5), 1)::float AS avg_live,
+              COUNT(*) FILTER (WHERE ${ASK_WENT_OUT})::int AS asked,
+              COUNT(*) FILTER (WHERE ${ASK_WENT_OUT} AND submitted_at IS NOT NULL)::int AS replied,
+              COUNT(*) FILTER (WHERE sent_at IS NULL AND submitted_at IS NULL AND requested_at <= NOW())::int AS due,
+              COUNT(*) FILTER (WHERE sent_at IS NULL AND submitted_at IS NULL AND requested_at > NOW())::int AS later,
+              MAX(sent_at) FILTER (WHERE ${ASK_WENT_OUT}) AS last_sent
          FROM reviews WHERE deleted_at IS NULL`);
-    const pl = pipe[0] || {};
-    const when = pl.last_sent ? new Date(pl.last_sent).toLocaleDateString('en-US',
-      { month: 'short', day: 'numeric' }) : 'never';
-    /* Who has been asked, and when. The page showed reviews RECEIVED and the
-       queue ahead, with nothing in between — so "did it actually go to that
-       customer, and when" could not be answered from here at all. */
-    const { rows: asked } = await pool.query(
-      `SELECT name, email, phone, quote_code, order_ref, sent_at, followup_sent_at, submitted_at
-         FROM reviews WHERE sent_at IS NOT NULL
-        ORDER BY sent_at DESC LIMIT 200`);
-    const fmtWhen = (d) => !d ? '—' : new Date(d).toLocaleString('en-US', {
-      timeZone: SHOP_TZ, month: 'short', day: 'numeric',
-      hour: 'numeric', minute: '2-digit', hour12: true });
-    const askedCard = !asked.length ? '' : `
-      <div class="card">
-        <h2 style="margin:0 0 4px;font-size:18px">Already asked</h2>
-        <p class="muted" style="margin:0 0 12px">${asked.length} shown, most recent first.
-          Times are shop time.</p>
-        <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
-          <tr style="text-align:left;color:#6b7280">
-            <th style="padding:6px 8px">Customer</th><th style="padding:6px 8px">Job</th>
-            <th style="padding:6px 8px">Asked</th><th style="padding:6px 8px">Follow-up</th>
-            <th style="padding:6px 8px">Replied</th></tr>
-          ${asked.map((a) => `<tr style="border-top:1px solid #eef1f8">
-            <td style="padding:6px 8px"><b>${escEmail(a.name || 'no name')}</b>
-              <div class="muted">${escEmail(a.email || a.phone || '')}</div></td>
-            <td style="padding:6px 8px" class="muted">${escEmail(a.quote_code || a.order_ref || '—')}</td>
-            <td style="padding:6px 8px;white-space:nowrap">${escEmail(fmtWhen(a.sent_at))}</td>
-            <td style="padding:6px 8px;white-space:nowrap" class="muted">${escEmail(fmtWhen(a.followup_sent_at))}</td>
-            <td style="padding:6px 8px;white-space:nowrap">${a.submitted_at
-              ? '<span style="color:#1c6b3a">' + escEmail(fmtWhen(a.submitted_at)) + '</span>' : '<span class="muted">—</span>'}</td>
-          </tr>`).join('')}
-        </table></div>
+    const shopDay = (d) => new Date(d).toLocaleDateString('en-US', { timeZone: SHOP_TZ, month: 'short', day: 'numeric' });
+    const avg = (n) => (n == null ? '—' : `${Number(n).toFixed(1)} <span style="color:#F4A623">★</span>`);
+    const tiles = statTiles([
+      { label: 'Received', value: f.received || 0, tone: waiting.length ? 'amber' : 'blue',
+        href: waiting.length ? '#waiting' : '#live',
+        sub: waiting.length ? `<b>${waiting.length} waiting for you</b>` : 'none waiting for you' },
+      { label: 'Live on the site', value: f.live || 0, tone: 'green', href: '#live',
+        sub: hidden.length ? `${hidden.length} kept off` : 'every review you approved' },
+      { label: 'Average rating', value: avg(f.avg_all), tone: 'gold',
+        sub: f.avg_live != null && f.avg_live !== f.avg_all ? `${Number(f.avg_live).toFixed(1)} on the site`
+          : `from ${f.received || 0} review${f.received === 1 ? '' : 's'}` },
+      { label: 'Asked', value: f.asked || 0, tone: 'blue', href: '#asked',
+        sub: f.last_sent ? `last on ${escEmail(shopDay(f.last_sent))}` : 'none sent yet' },
+      { label: 'Reply rate', value: f.asked ? Math.round((100 * f.replied) / f.asked) + '%' : '—', tone: 'navy',
+        sub: `${f.replied || 0} of ${f.asked || 0} wrote one` },
+      { label: 'Due now', value: f.due || 0, tone: 'blue',
+        sub: f.later ? `${f.later} more once delivered` : 'sent on the hourly sweep' },
+    ]);
+
+    /* One card for every state. Remove confirms with the customer's name read
+       from a data attribute, never written into the script, so no name can
+       break out of it. */
+    const reviewCard = (r) => {
+      const rating = Math.max(0, Math.min(5, Number(r.rating) || 0));
+      const imgs = (Array.isArray(r.images) ? r.images : [])
+        .filter((u) => typeof u === 'string' && /^https:\/\/res\.cloudinary\.com\//.test(u));
+      const job = r.quote_code && QUOTE_CODE_RE.test(r.quote_code)
+        ? ` &middot; <a href="/production/${r.quote_code}">${r.quote_code}</a>`
+        : r.order_ref ? ` &middot; studio order ${escEmail(r.order_ref)}` : '';
+      const remove = `Remove this review from ${r.name || 'this customer'}?\n\nIt stops showing on the site and here. `
+        + 'The record that they were asked is kept, so they will not be asked again.';
+      return `
+      <div class="card rv-card" id="r${Number(r.id)}">
+        <div class="rv-top"><span class="rv-stars" title="${rating} of 5">${STAR(rating)}</span>${
+          r.approved ? pill('live', 'green') : r.moderated_at ? pill('kept off', 'neutral') : pill('new', 'amber')}</div>
+        <b class="rv-title">${escEmail(r.title || '(no headline)')}</b>
+        ${r.body ? `<p class="rv-body">${escEmail(r.body)}</p>` : ''}
+        ${imgs.length ? `<div class="rv-imgs">${imgs.map((u) => `<a href="${escEmail(u)}" target="_blank" rel="noopener"><img
+          src="${escEmail(u.replace('/upload/', '/upload/c_fill,w_220,h_220,q_auto,f_auto/'))}" alt="" loading="lazy"></a>`).join('')}</div>` : ''}
+        <div class="muted rv-who">${escEmail(r.name || 'anonymous')} &middot; ${fmtDate(r.submitted_at)}${
+          r.product ? ' &middot; ' + escEmail(r.product) : ''}${job}</div>
+        <form method="POST" action="/admin/reviews/${Number(r.id)}" class="rv-actions">
+          ${r.approved ? '<button name="action" value="hide" class="btn-ghost">Hide from site</button>'
+            : `<button name="action" value="approve">Approve for site</button>${r.moderated_at ? ''
+              : '<button name="action" value="hide" class="btn-ghost">Keep off the site</button>'}`}
+          <button name="action" value="delete" class="btn-ghost rv-remove" data-confirm="${escEmail(remove)}"
+            onclick="return confirm(this.dataset.confirm)">Remove</button>
+        </form>
       </div>`;
+    };
+    const grid = (list) => `<div class="grid-cards">${list.map(reviewCard).join('')}</div>`;
+    const count = (n) => ` <span class="n">${n}</span>`;
 
-    const pipeline = `<div class="sub" style="margin-top:2px">` +
-      `${pl.sent || 0} asked &middot; ${pl.due || 0} due now &middot; ` +
-      `${pl.waiting || 0} waiting on a delivery date &middot; last sent ${escEmail(when)}</div>`;
+    const waitingSec = !waiting.length ? '' : `
+      <h2 class="sec-h" id="waiting">Waiting for you${count(waiting.length)}</h2>${grid(waiting)}`;
+    const liveSec = `
+      <h2 class="sec-h" id="live">Live on the site${count(live.length)}</h2>${live.length ? grid(live)
+        : emptyState(rows.length ? 'Nothing approved yet. Approve one and it goes on the site.'
+          : 'No reviews yet. Asks go out on the hourly sweep once a job is delivered, and what comes back lands here first.')}`;
+    const hiddenSec = !hidden.length ? '' : `
+      <details class="fold"><summary>Kept off the site${count(hidden.length)}</summary>
+        <div class="fold-body">${grid(hidden)}</div></details>`;
 
-    /* Customers who paid before any of this was wired up, and were never asked.
-       Paid in full only: asking somebody who has put a deposit down is asking
-       before the work exists. Nothing sends from rendering this — the ask is
-       queued only when June ticks a box and submits, which is the point of
-       showing the list at all. */
+    /* Customers never asked: paid, shipped or delivered, with no ask on file.
+       Paid in full first; asking someone who has only put a deposit down is
+       asking before the work exists, and the status is shown rather than
+       assumed, because a job settled in cash can still read as deposit-only.
+       A cancelled job, one refunded in full or one disputed is not asked about
+       at all, the rule every automated ask already follows. */
     const { rows: never } = await pool.query(
       `SELECT q.code, q.name, q.email, q.phone, q.total, q.paid_amount,
               q.delivered_at, q.shipped_at,
               (q.paid_amount >= q.total - 0.005) AS paid_full
          FROM quotes q
-        WHERE q.total > 0
+        WHERE q.total > 0 AND q.cancelled_at IS NULL
           AND (q.paid_amount > 0 OR q.delivered_at IS NOT NULL OR q.shipped_at IS NOT NULL)
           AND NOT EXISTS (SELECT 1 FROM reviews r WHERE r.quote_code = q.code)
+          AND NOT EXISTS (SELECT 1 FROM stripe_disputes d WHERE d.quote_code = q.code)
+          AND NOT EXISTS (SELECT 1 FROM quote_payments p WHERE p.quote_code = q.code
+                           GROUP BY p.quote_code HAVING BOOL_OR(p.kind = 'refund') AND SUM(p.amount) < 0.01)
         ORDER BY (q.paid_amount >= q.total - 0.005) DESC,
                  q.paid_at DESC NULLS LAST, q.id DESC LIMIT 300`);
 
-    /* PHONE-ONLY customers. They cannot be emailed and so never enter the
-       queue at all — which is correct, and also means they were invisible.
-       This lists them with the message already written, to be sent by hand.
-       Nothing here sends anything: the shop has no SMS gateway, and adding one
-       to chase reviews would be a poor first use of it. */
-    const { rows: texters } = await pool.query(
-      `SELECT q.code, q.name, q.phone, q.total
-         FROM quotes q
-        WHERE (q.email IS NULL OR q.email = '')
-          AND q.phone IS NOT NULL AND q.phone <> ''
-          AND q.total > 0 AND q.paid_amount >= q.total - 0.005
-        ORDER BY q.paid_at DESC NULLS LAST, q.id DESC LIMIT 300`);
-
-    /* ONE wording for the review ask, wherever it is shown. It used to exist
-       only on the text-only list, so the customers June was most likely to
-       chase — the ones with an email, sitting in the backfill list — had a tick
-       box and no message to send. Asking the same question two different ways
-       depending on which list someone landed in is how a shop's voice drifts. */
+    /* ONE wording for the review ask, wherever it is shown. A shop that asks
+       the same question two ways depending on the list is a shop whose voice
+       drifts. */
     const askFor = (n) => {
-      const f = String(n || '').trim().split(/\s+/)[0];
-      return `Hi${f ? ' ' + f : ''}, it's June's Tees — thanks again for your order! `
+      const first = String(n || '').trim().split(/\s+/)[0];
+      return `Hi${first ? ' ' + first : ''}, it's June's Tees — thanks again for your order! `
         + `If you were happy with it, would you mind leaving a quick Google review? `
-        + `It genuinely helps a small shop like ours. ${GOOGLE_REVIEW_URL}`;
+        + `It genuinely helps a small shop like ours. ${GOOGLE_REVIEW_URL}`.trim();
     };
+    /* A customer with only a phone is asked by a text June sends herself: the
+       button opens her messages app with it already written. */
+    const askRow = (q) => {
+      const tel = String(q.phone || '').replace(/[^0-9+]/g, '');
+      const text = !q.email && tel
+        ? `<a class="kbtn kbtn-sm" href="${escEmail(`sms:${tel}?&body=${encodeURIComponent(askFor(q.name))}`)}">Text</a>` : '';
+      return `
+        <label class="row-i ask-row${q.email ? '' : ' is-off'}">
+          <input type="checkbox" name="code" value="${escEmail(q.code)}"${q.email ? '' : ' disabled'}>
+          <span class="row-main"><b>${escEmail(q.name || 'no name')}</b> <span class="muted">${escEmail(q.code)}</span>
+            <div class="row-sub">${q.email ? escEmail(q.email)
+              : tel ? 'no email &middot; ' + escEmail(q.phone) : 'no email or phone on file'}</div></span>
+          <span class="ask-pills">${q.paid_full ? pill('paid in full', 'green') : pill('deposit ' + money(q.paid_amount), 'amber')}${
+            q.delivered_at ? pill('delivered', 'blue') : q.shipped_at ? pill('shipped', 'blue') : ''}</span>
+          <span class="row-end">${money(q.total)}${text}</span>
+        </label>`;
+    };
+    const queued = req.query.queued != null ? Math.max(0, parseInt(req.query.queued, 10) || 0) : null;
+    const of = Math.max(0, parseInt(req.query.of, 10) || 0);
+    const outcome = queued == null ? ''
+      : !of ? '<div class="warn">Nothing was ticked, so nothing was queued.</div>'
+      : `<div class="ok">Queued ${queued} of ${of}. They go out on the next hourly sweep.${queued < of
+          ? ` ${of - queued} could not be: an ask was already waiting, there was no usable email, or the job was cancelled.` : ''}</div>`;
+    const anyEmail = never.some((q) => q.email);
+    const askSec = `
+      <details class="fold" id="ask"${queued != null ? ' open' : ''}>
+        <summary>Ask for reviews${count(never.length)}<span class="muted fold-hint">past customers never asked</span></summary>
+        <div class="fold-body">
+          ${outcome}
+          <p class="muted" style="margin:0 0 10px">Tick the ones to ask by email and queue them. The ask goes out on the
+            next hourly sweep; nothing sends from this page. A customer with only a phone gets a Text button with the
+            message written in. Copy it from here to send one yourself.</p>
+          <div class="ask-msg">
+            <textarea id="ask-text" readonly rows="3" onclick="this.select()">${escEmail(askFor(''))}</textarea>
+            <button type="button" class="btn-ghost" data-copy-from="ask-text">Copy</button>
+          </div>
+          ${GOOGLE_REVIEW_URL ? '' : '<div class="warn">No Google review link is set (JT_GOOGLE_REVIEW_URL), so the message has no link in it.</div>'}
+          ${never.length ? `
+          <form method="POST" action="/admin/reviews/backfill" data-askform>
+            ${anyEmail ? '<label class="ask-all"><input type="checkbox" data-ask-all> Everyone with an email</label>' : ''}
+            <div class="rows">${never.map(askRow).join('')}</div>
+            ${anyEmail ? '<button type="submit" data-ask-go>Queue selected</button>' : ''}
+          </form>` : emptyState('Everyone who has paid has been asked. A job shows here once it is paid, shipped or delivered, with no ask on file.')}
+        </div>
+      </details>`;
 
-    /* A copyable block. readonly so it cannot be edited into something that
-       was never sent, and select-on-click because the whole point is getting
-       it onto the clipboard in one motion. */
-    const copyBox = (name) => `<textarea readonly rows="3" onclick="this.select()"
-        style="width:100%;margin-top:6px;font-size:13px;padding:8px;border:1px solid #e2e8f4;border-radius:8px"
-      >${escEmail(askFor(name))}</textarea>`;
+    /* Who has been asked, and what became of it. An ask that was skipped or
+       failed says so instead of reading as sent. */
+    const { rows: asked } = await pool.query(
+      `SELECT name, email, phone, quote_code, order_ref, sent_at, followup_sent_at, submitted_at,
+              ask_outcome, followup_outcome
+         FROM reviews WHERE sent_at IS NOT NULL
+        ORDER BY sent_at DESC LIMIT 200`);
+    const fmtWhen = (d) => !d ? '—' : new Date(d).toLocaleString('en-US', {
+      timeZone: SHOP_TZ, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
+    const OUTCOME = { unsubscribed: 'not sent: unsubscribed', refunded: 'not sent: refunded',
+                      disputed: 'not sent: disputed', failed: 'failed to send' };
+    /* A send that did not happen names why, with the date it was decided. */
+    const outcomeCell = (outcome, at) => OUTCOME[outcome]
+      ? pill(OUTCOME[outcome], outcome === 'failed' ? 'red' : 'neutral') + `<div class="muted">${escEmail(fmtWhen(at))}</div>`
+      : escEmail(fmtWhen(at));
+    const askedSec = !asked.length ? '' : `
+      <details class="fold" id="asked">
+        <summary>Already asked${count(asked.length)}<span class="muted fold-hint">newest first, shop time</span></summary>
+        <div class="fold-body"><div style="overflow-x:auto"><table class="dt">
+          <thead><tr><th>Customer</th><th>Job</th><th>Asked</th><th>Reminder</th><th>Wrote one</th></tr></thead>
+          <tbody>${asked.map((a) => {
+            /* A first ask skipped for an opt-out, a refund or a dispute gets no
+               reminder. One that failed to send still does, a few days on. */
+            const noReminder = (OUTCOME[a.ask_outcome] && a.ask_outcome !== 'failed') || !a.followup_sent_at;
+            return `<tr>
+            <td><b>${escEmail(a.name || 'no name')}</b><div class="muted">${escEmail(a.email || a.phone || '')}</div></td>
+            <td>${a.quote_code && QUOTE_CODE_RE.test(a.quote_code) ? `<a href="/production/${a.quote_code}">${a.quote_code}</a>`
+              : `<span class="muted">${escEmail(a.order_ref ? 'order ' + a.order_ref : '—')}</span>`}</td>
+            <td style="white-space:nowrap">${outcomeCell(a.ask_outcome, a.sent_at)}</td>
+            <td style="white-space:nowrap" class="muted">${noReminder ? '—' : outcomeCell(a.followup_outcome, a.followup_sent_at)}</td>
+            <td style="white-space:nowrap">${a.submitted_at
+              ? `<span style="color:#166534">${escEmail(fmtWhen(a.submitted_at))}</span>` : '<span class="muted">—</span>'}</td>
+          </tr>`; }).join('')}</tbody></table></div></div>
+      </details>`;
 
-    const byText = !texters.length ? '' : `
-      <div class="card">
-        <h2 style="margin:0 0 4px;font-size:18px">Paid, but no email — ask by text</h2>
-        <p class="muted" style="margin:0 0 12px">These customers cannot be emailed, so they
-           never enter the queue. Copy the message and send it yourself.
-           ${GOOGLE_REVIEW_URL ? '' : '<b>No Google review link is configured, so the message has no link in it.</b>'}</p>
-        ${texters.map((q) => `
-          <div style="padding:10px 0;border-top:1px solid #eef1f8">
-            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-              <b>${escEmail(q.name || 'no name')}</b>
-              <a href="sms:${escEmail(String(q.phone).replace(/[^0-9+]/g, ''))}">${escEmail(q.phone)}</a>
-              <span class="muted">&middot; ${escEmail(q.code)} &middot; ${money(q.total)}</span>
-            </div>
-            ${copyBox(q.name)}
-          </div>`).join('')}
-      </div>`;
-
-    const backfill = !never.length ? `
-      <div class="card">
-        <p class="muted" style="margin:0">No past customers are waiting to be asked. A quote
-        appears here only when it is <b>paid in full</b>, has an email on file, and has no
-        review request against it yet — a deposit-only job is deliberately excluded, because
-        asking then is asking before the work exists.</p>
-      </div>` : `
-      <div class="card">
-        <h2 style="margin:0 0 4px;font-size:18px">Customers who have never been asked</h2>
-        <p class="muted" style="margin:0 0 12px">Anyone who has paid something, or whose job is
-           marked shipped or delivered, with no review request on file. Paid in full first.
-           <b>The status is shown rather than assumed</b> — a job can be settled in cash and
-           still read as deposit-only here, and only you know which. Ticking queues the ask on
-           the next hourly sweep; nothing sends from this page.
-           A row with no email cannot be ticked — use the text list below.
-           <b>Every row carries the message</b>: click it to select, and send it yourself by
-           text or email if you would rather not wait for the sweep.</p>
-        <form method="POST" action="/admin/reviews/backfill">
-          ${never.map(q => `
-            <label style="display:flex;gap:10px;align-items:center;padding:8px 0;border-top:1px solid #eef1f8;margin:0;cursor:${q.email ? 'pointer' : 'default'};opacity:${q.email ? '1' : '.65'}">
-              <input type="checkbox" name="code" value="${escEmail(q.code)}" style="width:auto;margin:0"${q.email ? '' : ' disabled'}>
-              ${q.paid_full
-                ? '<span style="background:#e7f5ec;color:#1c6b3a;border-radius:20px;padding:2px 9px;font-size:11px;white-space:nowrap">paid in full</span>'
-                : `<span style="background:#fdf1e3;color:#8a5a12;border-radius:20px;padding:2px 9px;font-size:11px;white-space:nowrap">deposit ${money(q.paid_amount)}</span>`}
-              ${(q.delivered_at || q.shipped_at)
-                ? '<span style="background:#eaf0fb;color:#24457f;border-radius:20px;padding:2px 9px;font-size:11px;white-space:nowrap">'
-                  + (q.delivered_at ? 'delivered' : 'shipped') + '</span>' : ''}
-              <span style="flex:1"><b>${escEmail(q.code)}</b>
-                <span class="muted">&middot; ${escEmail(q.name || 'no name')}</span>
-                ${q.email ? `<span class="muted">&middot; ${escEmail(q.email)}</span>`
-                          : '<span class="muted">&middot; <i>no email</i></span>'}
-                ${q.phone ? `<span class="muted">&middot; </span><a href="tel:${
-                  escEmail(String(q.phone).replace(/[^0-9+]/g, ''))}"
-                  onclick="event.stopPropagation()">${escEmail(q.phone)}</a>` : ''}</span>
-              <span class="muted" style="white-space:nowrap">${money(q.total)}</span>
-            </label>
-            <div style="padding:0 0 10px">
-              ${q.phone ? `<a class="muted" style="font-size:12px" href="sms:${
-                escEmail(String(q.phone).replace(/[^0-9+]/g, ''))}">text ${escEmail(q.phone)}</a>` : ''}
-              ${copyBox(q.name)}
-            </div>`).join('')}
-          <button style="margin-top:12px;padding:10px 22px">Queue selected</button>
-        </form>
-      </div>`;
-
-    res.send(adminPage('Reviews', `<h1>Reviews</h1>
-      <div class="sub">${rows.length} received &middot; ${live} live on the site &middot; average ${avg}</div>
-      ${pipeline}
-      ${backfill}
-      ${byText}
-      ${askedCard}
-      ${body || '<div class="card"><p class="muted">No reviews yet.</p></div>'}`, 'reviews'));
+    res.send(adminPage('Reviews', `
+      ${pageHeader('Reviews', 'What customers said, and who has been asked')}
+      ${req.query.failed ? '<div class="warn">That change did not save, so the review is as it was. Try again.</div>' : ''}
+      ${tiles}
+      ${waitingSec}
+      ${liveSec}
+      ${hiddenSec}
+      <h2 class="sec-h">Asking</h2>
+      ${askSec}
+      ${askedSec}
+      <script>
+        (function(){
+          document.querySelectorAll('[data-copy-from]').forEach(function(b){
+            b.addEventListener('click', function(){
+              var box = document.getElementById(b.getAttribute('data-copy-from')), label = b.textContent;
+              function done(){ b.textContent = 'Copied'; setTimeout(function(){ b.textContent = label; }, 1500); }
+              function old(){ try { if (document.execCommand('copy')) done(); } catch (e) {} }
+              box.select();
+              if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(box.value).then(done, old);
+              else old();
+            });
+          });
+          /* A link to a folded section, or to a card inside one, opens it:
+             the tiles link to #asked, and a failed change returns to its card. */
+          function openTarget(){
+            var t = location.hash && document.getElementById(location.hash.slice(1));
+            var d = t && t.closest('details');
+            if (d && !d.open) { d.open = true; t.scrollIntoView(); }
+          }
+          window.addEventListener('hashchange', openTarget); openTarget();
+          var f = document.querySelector('form[data-askform]'); if (!f) return;
+          var go = f.querySelector('[data-ask-go]'), all = f.querySelector('[data-ask-all]');
+          var boxes = f.querySelectorAll('input[name="code"]:not([disabled])');
+          function tally(){
+            var n = 0; boxes.forEach(function(c){ if (c.checked) n++; });
+            if (go) { go.disabled = n === 0; go.textContent = n ? 'Queue ' + n + ' selected' : 'Queue selected'; }
+            if (all) all.checked = n > 0 && n === boxes.length;
+          }
+          boxes.forEach(function(c){ c.addEventListener('change', tally); });
+          if (all) all.addEventListener('change', function(){ boxes.forEach(function(c){ c.checked = all.checked; }); tally(); });
+          f.addEventListener('submit', function(){ setTimeout(function(){ go.disabled = true; go.textContent = 'Queuing…'; }, 0); });
+          tally();
+        })();
+      </script>`, 'reviews'));
   } catch (err) {
     console.error('reviews admin failed:', err.message);
-    res.status(500).send(quotePage('Error', '<div class="card"><div class="warn">Could not load reviews.</div></div>'));
+    res.status(500).send(adminPage('Reviews', '<div class="warn">Could not load reviews. Refresh to try again.</div>', 'reviews'));
   }
 });
 
@@ -16136,6 +16225,7 @@ app.post('/admin/reviews/backfill', requireAdmin, async (req, res) => {
       const { rows } = await pool.query('SELECT * FROM quotes WHERE code=$1', [code]);
       if (!rows.length) continue;
       const q = rows[0];
+      if (q.cancelled_at) continue;
       /* days: 0 — these jobs are already weeks old, so the ask goes out on the
          next sweep rather than waiting out a delay meant for fresh payments. */
       if (await queueReviewRequest({
@@ -16148,24 +16238,27 @@ app.post('/admin/reviews/backfill', requireAdmin, async (req, res) => {
     }
   }
   console.log(`review backfill: queued ${queued} of ${codes.length} selected`);
-  res.redirect('/admin/reviews');
+  res.redirect(`/admin/reviews?queued=${queued}&of=${codes.length}#ask`);
 });
 
 app.post('/admin/reviews/:id', requireAdmin, async (req, res) => {
   const id = parseInt(req.params.id, 10) || 0;
   const action = (req.body || {}).action;
+  /* A write that fails says so. It used to be logged and the page reloaded as
+     if it had worked, leaving the review where it was with no reason given. */
+  let saved = true;
   if (action === 'delete') {
     /* Hidden, not dropped — see the deleted_at note on the table. Also cleared
        of approved, so a row that somehow comes back cannot return to the site
        still live. */
     await pool.query('UPDATE reviews SET deleted_at=NOW(), approved=FALSE WHERE id=$1', [id])
-      .catch(e => console.error('review delete failed:', e.message));
+      .catch(e => { saved = false; console.error('review delete failed:', e.message); });
   } else {
     await pool.query('UPDATE reviews SET approved=$2, moderated_at=NOW() WHERE id=$1', [id, action === 'approve'])
-      .catch(e => console.error('review approve failed:', e.message));
+      .catch(e => { saved = false; console.error('review approve failed:', e.message); });
   }
   _revCache = { at: 0, rows: [] };
-  res.redirect('/admin/reviews');
+  res.redirect(saved ? '/admin/reviews' : `/admin/reviews?failed=1#r${id}`);
 });
 
 /* ── One-click unsubscribe (RFC 8058) ──────────────────────────────────────
@@ -17176,15 +17269,16 @@ async function sendDueReviewRequests() {
     for (const r of rows) {
       // Never mail someone who has opted out.
       if (await isUnsubscribed(r.email)) {
-        await pool.query('UPDATE reviews SET sent_at=NOW() WHERE id=$1', [r.id]);
+        await pool.query(`UPDATE reviews SET sent_at=NOW(), ask_outcome='unsubscribed' WHERE id=$1`, [r.id]);
         skipped++;
         continue;
       }
       /* Stamped the way an opt-out is, and the follow-up with it, so neither
          ask comes round again. A customer who disputed the payment is not
          asked how we did either, whatever the dispute's outcome. */
-      if (await refundedInFull(r) || await disputeOn(r)) {
-        await pool.query('UPDATE reviews SET sent_at=NOW(), followup_sent_at=NOW() WHERE id=$1', [r.id]);
+      const why = await refundedInFull(r) ? 'refunded' : await disputeOn(r) ? 'disputed' : '';
+      if (why) {
+        await pool.query('UPDATE reviews SET sent_at=NOW(), followup_sent_at=NOW(), ask_outcome=$2, followup_outcome=$2 WHERE id=$1', [r.id, why]);
         refunded++;
         continue;
       }
@@ -17193,13 +17287,13 @@ async function sendDueReviewRequests() {
           token: r.token, name: r.name, email: r.email, phone: r.phone,
           product: r.product, order_ref: r.order_ref, quote_code: r.quote_code,
         });
-        await pool.query('UPDATE reviews SET sent_at=NOW() WHERE id=$1', [r.id]);
+        await pool.query(`UPDATE reviews SET sent_at=NOW(), ask_outcome='sent' WHERE id=$1`, [r.id]);
         sent++;
       } catch (e) {
         console.error('review request failed for', r.email, e.message);
         failed++;
         // Mark it anyway so one bad address cannot block the queue forever.
-        await pool.query('UPDATE reviews SET sent_at=NOW() WHERE id=$1', [r.id]);
+        await pool.query(`UPDATE reviews SET sent_at=NOW(), ask_outcome='failed' WHERE id=$1`, [r.id]);
       }
     }
   } catch (e) {
@@ -17235,11 +17329,15 @@ async function sendReviewFollowUps() {
     due = rows.length;
     for (const r of rows) {
       /* The first ask can go out before the refund or the dispute does; the
-         follow-up must still see it. */
-      if (await isUnsubscribed(r.email) || await refundedInFull(r) || await disputeOn(r)) {
-        await pool.query('UPDATE reviews SET followup_sent_at=NOW() WHERE id=$1', [r.id]);
+         follow-up must still see it. Why it was not sent is kept, as for the
+         first ask, so the reviews page does not show it as sent. */
+      const why = await isUnsubscribed(r.email) ? 'unsubscribed'
+        : await refundedInFull(r) ? 'refunded' : await disputeOn(r) ? 'disputed' : '';
+      if (why) {
+        await pool.query('UPDATE reviews SET followup_sent_at=NOW(), followup_outcome=$2 WHERE id=$1', [r.id, why]);
         continue;
       }
+      let outcome = 'sent';
       try {
         await requestReview({
           token: r.token, name: r.name, email: r.email, phone: r.phone,
@@ -17250,11 +17348,12 @@ async function sendReviewFollowUps() {
       } catch (e) {
         console.error('review follow-up failed for', r.email, e.message);
         failed++;
+        outcome = 'failed';
       }
       /* Marked either way. One bad address must not hold the queue, and a
          follow-up that failed is not worth retrying forever — the first ask
          already reached them or it did not. */
-      await pool.query('UPDATE reviews SET followup_sent_at=NOW() WHERE id=$1', [r.id]);
+      await pool.query('UPDATE reviews SET followup_sent_at=NOW(), followup_outcome=$2 WHERE id=$1', [r.id, outcome]);
     }
   } catch (e) {
     console.error('review follow-up sweep failed:', e.message);

@@ -55,17 +55,24 @@ test('there is exactly ONE wording, not one per list', () => {
   assert.equal((src.match(/const askFor = /g) || []).length, 1);
 });
 
-test('both customer lists offer the message to copy', () => {
-  /* copyBox is the one renderer; both the backfill list and the text-only list
-     must call it, or one of them is a tick box with nothing to send. */
-  assert.ok(/const copyBox = \(name\) =>/.test(src), 'copyBox not found');
-  const uses = (src.match(/\$\{copyBox\(q\.name\)\}/g) || []).length;
-  assert.ok(uses >= 2, 'expected the backfill list AND the text list to render it, found ' + uses);
+/* Since 2026-09-28 the two lists are one, and the message is shown once: a
+   copy of it under every row made the list a screen of the same paragraph. */
+const page = src.slice(src.indexOf("app.get('/admin/reviews'"), src.indexOf("app.post('/admin/reviews/backfill'"));
+
+test('every customer on the list can be sent the message', () => {
+  /* One box, with a Copy button, for the asks June sends herself. A customer
+     with only a phone cannot be queued, so their row carries the message
+     addressed to them, in a Text link that opens her messages app with it
+     written in. Without either, a row is a tick box with nothing to send. */
+  assert.match(page, /<textarea id="ask-text"[^>]*>\$\{escEmail\(askFor\(''\)\)\}<\/textarea>/,
+    'the shared message box is gone');
+  assert.match(page, /data-copy-from="ask-text"/, 'nothing copies the shared message');
+  assert.match(page, /sms:\$\{tel\}\?&body=\$\{encodeURIComponent\(askFor\(q\.name\)\)\}/,
+    'a customer with only a phone has no message to send');
 });
 
 test('the copy box cannot be edited into something that was never sent', () => {
-  const m = src.match(/const copyBox = \(name\) => \`([\s\S]*?)\`;/);
-  assert.ok(m, 'copyBox body not found');
-  assert.match(m[1], /readonly/, 'the box should be readonly');
-  assert.match(m[1], /this\.select\(\)/, 'clicking it should select the whole message');
+  const box = (page.match(/<textarea id="ask-text"[^>]*>/) || [''])[0];
+  assert.match(box, /readonly/, 'the box should be readonly');
+  assert.match(box, /onclick="this\.select\(\)"/, 'clicking it should select the whole message');
 });

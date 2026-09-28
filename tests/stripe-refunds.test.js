@@ -569,5 +569,7 @@ test('a review ask is not sent for a job refunded in full, and cannot come back 
 test('the follow-up sweep checks for a refund too', () => {
   /* The first ask can go out before the refund does; the follow-up is days
      later and has to see it. */
-  assert.match(lift('sendReviewFollowUps'), /await isUnsubscribed\(r\.email\) \|\| await refundedInFull\(r\) \|\| await disputeOn\(r\)/);
+  /* Anchored on the call, not on the expression around it; that it stops the
+     send is proved by running the sweep in reviews-page.test.js. */
+  assert.match(lift('sendReviewFollowUps'), /await refundedInFull\(r\)/);
 });

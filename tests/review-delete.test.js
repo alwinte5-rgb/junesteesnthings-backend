@@ -47,7 +47,10 @@ test('every surface that shows reviews excludes the removed ones', () => {
                            src.indexOf('SELECT * FROM reviews WHERE submitted_at IS NOT NULL') + 160);
   assert.match(adminQ, /deleted_at IS NULL/, 'a removed review still shows in the admin list');
 
-  const stats = src.slice(src.indexOf('MAX(sent_at) AS last_sent'), src.indexOf('MAX(sent_at) AS last_sent') + 120);
+  /* The rest of the counts query, to its closing backtick, however many
+     columns it grows before the FROM. */
+  const stats = (src.match(/AS last_sent[^`]*/) || [''])[0];
+  assert.match(stats, /FROM reviews/, 'the headline counts query is gone');
   assert.match(stats, /deleted_at IS NULL/, 'the headline counts still include removed reviews');
 });
 
@@ -61,8 +64,16 @@ test('the backfill list still sees the row, so nobody is asked twice', () => {
 });
 
 test('the button asks before it removes', () => {
-  const btn = src.slice(src.indexOf("<button name=\"action\" value=\"delete\""));
-  assert.match(btn.slice(0, 600), /onclick="return confirm\(/, 'removing should confirm first');
-  assert.match(btn.slice(0, 600), /will not be asked again/,
+  const btn = src.slice(src.indexOf("<button name=\"action\" value=\"delete\"")).slice(0, 600);
+  assert.match(btn, /onclick="return confirm\(this\.dataset\.confirm\)"/, 'removing should confirm first');
+  /* The wording sits in an escaped data attribute and the handler reads it
+     back, so a customer's name is never written into script: a name with a
+     quote or a backslash in it cannot break the button. */
+  const attr = btn.match(/data-confirm="\$\{escEmail\((\w+)\)\}"/);
+  assert.ok(attr, 'the confirm wording should come from an escaped data attribute');
+  const page = src.slice(src.indexOf("app.get('/admin/reviews'"), src.indexOf("app.post('/admin/reviews/backfill'"));
+  const wording = page.match(new RegExp(`const ${attr[1]} = [^;]*;`));
+  assert.ok(wording, `the confirm wording (${attr[1]}) is not defined on the reviews page`);
+  assert.match(wording[0], /will not be asked again/,
     'the confirm should say what is kept, not just what goes');
 });

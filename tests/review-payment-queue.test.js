@@ -269,8 +269,10 @@ test('the backfill list is not capped below the batch it feeds', () => {
   /* Anchored on the NOT EXISTS clause, which only the backfill query has.
      Matching on the ORDER BY found the phone-only list instead the moment the
      backfill grew a sort column — a loose anchor failing against correct code,
-     for the third time in this file. */
-  const m = src.match(/NOT EXISTS \(SELECT 1 FROM reviews r[\s\S]{0,300}?LIMIT (\d+)/);
+     for the third time in this file. The fourth: a 300-character window lost
+     the LIMIT when the list learned to skip refunded and disputed jobs. So it
+     reads on to the end of the same SQL string (no backtick), however long. */
+  const m = src.match(/NOT EXISTS \(SELECT 1 FROM reviews r WHERE r\.quote_code = q\.code\)[^`]*?LIMIT (\d+)/);
   assert.ok(m, 'the backfill query is gone');
   assert.ok(Number(m[1]) >= 200, 'the backfill list caps at ' + m[1] + ', below one sweep');
 });
