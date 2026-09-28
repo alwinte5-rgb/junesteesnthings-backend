@@ -94,4 +94,4 @@ function isGsm7(s) {
   return /^[\x20-\x7E\n]*$/.test(s) && !/[\[\]{}\\^~|`]/.test(s);
 }
 
-module.exports = { T, plain, isGsm7 };
+module.exports = { T, plain, isGsm7, PICKUP };

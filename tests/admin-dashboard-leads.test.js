@@ -115,7 +115,18 @@ test('the phone drawer needs no script: a checkbox and two labels', () => {
   assert.match(html, /<label for="adm-menu" class="adm-burger"/);
   assert.match(html, /<label for="adm-menu" class="adm-scrim">/);
   const css = grab('const ADMIN_CSS = `', '\n`;');
-  assert.match(css, /\.adm-toggle:checked ~ \.adm \.adm-side\{transform:none\}/);
+  assert.match(css, /\.adm-toggle:checked ~ \.adm \.adm-side\{transform:none;visibility:visible;/);
+});
+
+/* Parked 102% off the left edge, the closed menu's 40px shadow fell across
+   every page on a phone, as a grey band down the left side. */
+test('the closed phone menu is hidden, and only the open one casts a shadow', () => {
+  const css = grab('const ADMIN_CSS = `', '\n`;');
+  const closed = css.match(/\.adm-side\{position:fixed;[^}]*\}/);
+  assert.ok(closed, 'the phone rule for the menu');
+  assert.match(closed[0], /visibility:hidden/, 'hidden, so its links cannot be tabbed to either');
+  assert.doesNotMatch(closed[0], /box-shadow/);
+  assert.match(css, /\.adm-side\{transform:none;visibility:visible;box-shadow:8px 0 40px/);
 });
 
 /* ── The routes ─────────────────────────────────────────────────────────── */

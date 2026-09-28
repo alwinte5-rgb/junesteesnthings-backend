@@ -137,120 +137,95 @@ function cardIn(q) {
   return col ? { column: col.label, button: nextAction(q, col).label } : null;
 }
 
-/* ── The rule: finish the column you are in ─────────────────────────────── */
+/* ── Three moves (2026-09-28) ───────────────────────────────────────────── */
 
-test('every working column offers its own name, except To start', () => {
-  /* A card whose column still has an unfinished milestone is offered that
-     column — the button records the work in hand rather than skipping it.
-     To start is the one exception the code documents: it owns no milestone,
-     so there is nothing to record and the only action is to advance. */
-  const expected = [
-    [job(),                                                   'To start',        'Artwork & proof'],
-    [job({ artwork_at: 'x' }),                                'Artwork & proof', 'Artwork & proof'],
-    [job({ artwork_at: 'x', proof_ok_at: 'x' }),              'Blanks',          'Blanks'],
-    [job({ artwork_at: 'x', proof_ok_at: 'x',
-           blanks_in_at: 'x' }),                              'Press',           'Press'],
-    [job({ artwork_at: 'x', proof_ok_at: 'x',
-           blanks_in_at: 'x', production_at: 'x' }),          'Check & ship',    'Check & ship'],
-  ];
-  for (const [q, column, button] of expected) {
-    assert.deepStrictEqual(cardIn(q), { column, button },
-      `a card in ${column} should offer "${button}"`);
-  }
+/* Every date In production stands for: the press and everything before it. */
+const PRODUCTION = { artwork_at: 'x', proof_sent_at: 'x', proof_ok_at: 'x',
+                     blanks_ordered_at: 'x', blanks_in_at: 'x', production_at: 'x' };
+
+test('the board is three columns and Delivered is not one of them', () => {
+  const cols = board([]);
+  assert.deepStrictEqual(cols.map(c => c.label), ['To start', 'In production', 'Ready / Shipped']);
 });
 
-test('no working column offers the column after it', () => {
-  /* The old bug in its general form: the button must never name the column to
-     the right while the card's own milestones are still outstanding. */
-  const labels = JOB_STAGES.map(s => s.label);
-  for (const [q, column] of [
-    [job({ artwork_at: 'x' }),                                        'Artwork & proof'],
-    [job({ artwork_at: 'x', proof_ok_at: 'x' }),                      'Blanks'],
-    [job({ artwork_at: 'x', proof_ok_at: 'x', blanks_in_at: 'x' }),   'Press'],
-  ]) {
-    const { button } = cardIn(q);
-    assert.notStrictEqual(button, labels[labels.indexOf(column) + 1],
-      `a card in ${column} must not skip straight to the next column`);
-  }
-});
-
-/* ── Check & ship takes two taps to leave the board ─────────────────────── */
-
-test('Check & ship takes two taps: record, then deliver', () => {
-  let q = job({ artwork_at: 'x', proof_ok_at: 'x', blanks_in_at: 'x', production_at: 'x' });
-  assert.deepStrictEqual(cardIn(q), { column: 'Check & ship', button: 'Check & ship' });
-
-  // Tap one records the work. The job is checked and gone, but not yet arrived,
-  // so it stays on the board — this is the state that had no button at all.
+test('a new job takes three taps to leave the board', () => {
+  let q = job();
+  assert.deepStrictEqual(cardIn(q), { column: 'To start', button: 'In production' });
+  q = tap(q, 'production');
+  assert.deepStrictEqual(cardIn(q), { column: 'Ready / Shipped', button: 'Ready / Shipped' },
+    'once started, the card sits where the next thing is');
   q = tap(q, 'out');
-  assert.ok(q.qc_at && q.shipped_at, 'tap one must stamp qc_at and shipped_at');
-  assert.ok(!q.delivered_at, 'tap one must NOT stamp delivered_at');
-  assert.deepStrictEqual(cardIn(q), { column: 'Check & ship', button: 'Delivered' },
-    'after recording, the same card offers Delivered');
-
-  // Tap two is the one that ends the job and drops it off the board.
+  assert.ok(q.qc_at && q.shipped_at, 'tap two stamps checked and shipped');
+  assert.ok(!q.delivered_at, 'and not delivered');
+  assert.deepStrictEqual(cardIn(q), { column: 'Ready / Shipped', button: 'Delivered' });
   q = tap(q, 'done');
-  assert.ok(q.delivered_at, 'tap two must stamp delivered_at');
+  assert.ok(q.delivered_at);
   assert.strictEqual(cardIn(q), null, 'a delivered job leaves the board');
 });
 
-test('a shipped job does not jump to Delivered on its own', () => {
-  /* Delivered is a destination, not a column. Nothing but an explicit second
-     tap may take a job off the board, or "shipped" silently becomes "arrived"
-     and the shop loses the one state where a problem is still recoverable. */
-  const shipped = job({ artwork_at: 'x', proof_ok_at: 'x', blanks_in_at: 'x',
-                        production_at: 'x', qc_at: 'x', shipped_at: 'x' });
-  assert.strictEqual(jobStageIndex(shipped), JOB_STAGES.length - 2,
-    'a shipped-but-undelivered job is held in the last working column');
-  assert.deepStrictEqual(cardIn(shipped), { column: 'Check & ship', button: 'Delivered' });
+test('In production stamps every date it stands for', () => {
+  /* The daily digest, the schedule and the old checklist keys read these dates;
+     one move has to leave all of them looking done, or "order blanks by" nags a
+     job that is already printing. */
+  const q = tap(job(), 'production');
+  for (const col of Object.keys(PRODUCTION)) assert.ok(q[col], `${col} is stamped`);
+  assert.ok(!q.qc_at && !q.shipped_at && !q.delivered_at, 'and nothing after it');
 });
 
-/* ── The board's shape ──────────────────────────────────────────────────── */
+test('a job part-way through the old columns finishes its column, not the next', () => {
+  /* Jobs moved before the change carry some of the production dates. They sit
+     in In production and are offered In production, which stamps the rest. */
+  for (const q of [job({ artwork_at: 'x' }), job({ artwork_at: 'x', proof_ok_at: 'x', blanks_in_at: 'x' })]) {
+    assert.deepStrictEqual(cardIn(q), { column: 'In production', button: 'In production' });
+  }
+});
 
-test('the board renders five columns and Delivered is not one of them', () => {
-  const cols = board([]);
-  assert.deepStrictEqual(cols.map(c => c.label),
-    ['To start', 'Artwork & proof', 'Blanks', 'Press', 'Check & ship']);
+test('a shipped job does not jump to Delivered on its own', () => {
+  const shipped = job({ ...PRODUCTION, qc_at: 'x', shipped_at: 'x' });
+  assert.strictEqual(jobStageIndex(shipped), JOB_STAGES.length - 2,
+    'a shipped-but-undelivered job is held in the last working column');
+  assert.deepStrictEqual(cardIn(shipped), { column: 'Ready / Shipped', button: 'Delivered' });
 });
 
 test('only accepted, undelivered work reaches the board', () => {
   const unaccepted = { code: 'JT-2', artwork_at: 'x' };       // still a sales problem
-  const delivered = job({ artwork_at: 'x', proof_ok_at: 'x', blanks_in_at: 'x',
-                          production_at: 'x', qc_at: 'x', shipped_at: 'x',
-                          delivered_at: 'x' });
+  const delivered = job({ ...PRODUCTION, qc_at: 'x', shipped_at: 'x', delivered_at: 'x' });
   const shown = board([unaccepted, delivered, job()]).flatMap(c => c.jobs);
   assert.deepStrictEqual(shown.map(q => q.code), ['JT-TEST']);
 });
 
 test('every card on the board has a button', () => {
-  /* The button is rendered behind `${act ? ... : ''}`, so an undefined action
-     is a card with no way forward rather than a crash — silent, and only
-     noticed by whoever is holding the phone. */
-  for (const q of [
-    job(),
-    job({ artwork_at: 'x' }),
-    job({ artwork_at: 'x', proof_ok_at: 'x' }),
-    job({ artwork_at: 'x', proof_ok_at: 'x', blanks_in_at: 'x' }),
-    job({ artwork_at: 'x', proof_ok_at: 'x', blanks_in_at: 'x', production_at: 'x' }),
-    job({ artwork_at: 'x', proof_ok_at: 'x', blanks_in_at: 'x', production_at: 'x',
-          qc_at: 'x', shipped_at: 'x' }),
-  ]) {
+  for (const q of [job(), job({ artwork_at: 'x' }), job(PRODUCTION),
+                   job({ ...PRODUCTION, qc_at: 'x', shipped_at: 'x' })]) {
     const card = cardIn(q);
     assert.ok(card && card.button, `a card in ${card && card.column} has no button`);
   }
 });
 
-/* ── Moving a card backwards ────────────────────────────────────────────── */
-
-test('moving a card back clears the milestones after its new stage', () => {
-  /* What makes the ← button mean what it looks like it means. If the later
-     stamps survived, the card would bounce straight back to where it was. */
-  const done = job({ artwork_at: 'x', proof_ok_at: 'x', blanks_in_at: 'x',
-                     production_at: 'x', qc_at: 'x', shipped_at: 'x' });
-  const back = tap(done, 'blanks');
-  assert.ok(back.blanks_in_at, 'the target stage stays stamped');
-  assert.strictEqual(back.production_at, null, 'later milestones are cleared');
-  assert.strictEqual(back.qc_at, null);
+test('moving a card back clears the dates after its new stage', () => {
+  const done = job({ ...PRODUCTION, qc_at: 'x', shipped_at: 'x' });
+  const back = tap(done, 'production');
+  assert.ok(back.production_at, 'the target stage stays stamped');
+  assert.strictEqual(back.qc_at, null, 'later dates are cleared');
   assert.strictEqual(back.shipped_at, null);
-  assert.deepStrictEqual(cardIn(back), { column: 'Press', button: 'Press' });
+  assert.deepStrictEqual(cardIn(back), { column: 'Ready / Shipped', button: 'Ready / Shipped' });
+  const start = tap(done, 'production');
+  assert.ok(start);
+});
+
+/* Five columns scrolled sideways on a phone, which was right; three did too,
+   and hid the third column, with the job in it, off the screen. */
+test('on a phone the stages stack, so no job is off the screen', () => {
+  const at = src.indexOf('.kanban{display:grid;');
+  assert.ok(at > 0, 'the board is a grid');
+  const css = src.slice(at, src.indexOf('.kcol-head', at));
+  assert.match(css, /@media \(max-width:640px\)\{\s*\.kanban\{grid-template-columns:minmax\(0,1fr\)\}/);
+  assert.doesNotMatch(css, /overflow-x:auto/, 'no sideways scroll at any width');
+});
+
+test('a page opened before the change still moves a card', () => {
+  /* The five-column board posted design, blanks and press. */
+  assert.match(src, /const OLD_STAGE_KEYS = \{ design: 'production', blanks: 'production', press: 'production' \};/);
+  const route = src.slice(src.indexOf("app.post('/quote/:code/stage'"));
+  assert.match(route.slice(0, 600), /OLD_STAGE_KEYS\[asked\] \|\| asked/);
 });

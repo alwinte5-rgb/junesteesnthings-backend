@@ -116,9 +116,12 @@ test('the board never offers to edit an order', () => {
 
 test('order stages map onto the board vocabulary, not a second one', () => {
   const stage = extractFn('function studioStage(');
-  for (const label of ['Delivered', 'Check & ship', 'Press']) {
-    assert.ok(stage.includes(label), `"${label}" must match a JOB_STAGES label, not invent a new word`);
+  const stages = src.slice(src.indexOf('const JOB_STAGES = ['), src.indexOf('];', src.indexOf('const JOB_STAGES = [')));
+  for (const label of [...stage.matchAll(/label: '([^']+)'/g)].map((m) => m[1])) {
+    assert.ok(stages.includes(`label: '${label}'`), `"${label}" must match a JOB_STAGES label, not invent a new word`);
   }
+  assert.match(stage, /In production/);
+  assert.match(stage, /Ready \/ Shipped/);
 });
 
 test('the studio lane appears on the board, not only on its own page', () => {

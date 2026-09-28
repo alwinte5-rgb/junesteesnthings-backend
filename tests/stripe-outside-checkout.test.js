@@ -183,6 +183,8 @@ function desk({ quotes = [], quotePayments = [], unlinked = [], disputes = [], s
     quoteTotals: (q) => ({ total: Number(q.total), deposit: round2(Number(q.total) / 2) }),
     alertShop: async (subject, html) => { alerts.push({ subject, html }); },
     sendEmail: async (m) => { emails.push(m); },
+    /* Customer emails about a quote go through the recorded sender now. */
+    sendClientEmail: async (m) => { emails.push(m); },
     sendCustomerSms: (m) => { texts.push(m); return Promise.resolve('sent'); },
     SMS: { paymentReceived: ({ code, amount, stillDue }) => ({ template: 'payment-received', body: `${code} ${amount} ${stillDue}` }) },
     brevo: { post: () => Promise.resolve() },

@@ -57,66 +57,122 @@ test('payment texts carry no amount in the dedupe key', () => {
   assert.doesNotMatch(server, /'payment:manual:' \+ nq\.code \+ ':' \+ Date\.now\(\)/);
 });
 
-function loadMilestones() {
-  const start = server.indexOf('function textQuoteMilestones(');
-  assert.ok(start > 0, 'textQuoteMilestones not found');
-  const end = server.indexOf('\n}\n', start) + 2;
+/* notifyQuoteMilestone, run for real against a fake pool: `already` is the
+   client_emails kinds already sent for the quote, which is how an email is
+   sent once however often a card moves. */
+function liftFn(name) {
+  let at = server.indexOf(`function ${name}(`);
+  assert.ok(at > 0, `${name} not found`);
+  if (server.slice(at - 6, at) === 'async ') at -= 6;
+  let i = server.indexOf('(', at);
+  for (let paren = 0; i < server.length; i++) {
+    if (server[i] === '(') paren++;
+    else if (server[i] === ')' && --paren === 0) { i++; break; }
+  }
+  let depth = 0;
+  for (i = server.indexOf('{', i); i < server.length; i++) {
+    if (server[i] === '{') depth++;
+    else if (server[i] === '}' && --depth === 0) return server.slice(at, i + 1);
+  }
+  throw new Error('unbalanced ' + name);
+}
+function loadMilestones({ already = [], due = 0 } = {}) {
   const sent = [];
+  const emails = [];
   const ctx = vm.createContext({
-    SMS: T, sendCustomerSms: (a) => { sent.push(a); return Promise.resolve('sent'); },
+    SMS: T, SMS_PICKUP: '3047 N Lincoln Ave, Mon-Fri 10:30am-6pm',
+    SHOP_SIGNER: 'June', SHOP_NAME: "June's Tees & Things", SHOP_PHONE: '(773) 849-1854',
+    sendCustomerSms: (a) => { sent.push(a); return Promise.resolve('sent'); },
+    sendClientEmail: async (m) => { emails.push(m); already.push(m.kind); },
+    pool: { query: async (sql, args) => ({ rows: /FROM client_emails/.test(sql) && already.includes(args[1]) ? [{ one: 1 }] : [] }) },
+    escEmail: (x) => String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;'),
+    quoteSummary: () => '24 tees', quoteTotals: () => ({ total: 100 }), balanceOf: () => due,
+    money: (n) => '$' + Number(n).toFixed(2), quoteSchedule: () => null, dayShort: (d) => String(d),
+    quoteLink: (c) => 'https://www.jtees.net/q/' + c,
   });
-  vm.runInContext(server.slice(start, end) + ';this.f = textQuoteMilestones;', ctx);
-  return { f: ctx.f, sent };
+  vm.runInContext([liftFn('htmlToText'), liftFn('customerEmailHtml'), liftFn('notifyQuoteMilestone')].join('\n')
+    + ';this.f = notifyQuoteMilestone;', ctx);
+  return { f: ctx.f, sent, emails };
 }
 
-const base = { code: 'ABC123', phone: '7738491854', ship_method: 'pickup', production_at: null, shipped_at: null };
+const base = { code: 'ABC123', name: 'Ada Brooks', email: 'ada@example.com', phone: '7738491854',
+               ship_method: 'pickup', production_at: null, shipped_at: null, items: [] };
 
-test('a newly reached pickup texts "ready for pickup" once', () => {
-  const { f, sent } = loadMilestones();
-  f(base, { ...base, shipped_at: new Date() });
+test('a newly reached pickup is told once: a text and an email, "ready for pickup"', async () => {
+  const { f, sent, emails } = loadMilestones();
+  await f(base, { ...base, shipped_at: new Date() });
   assert.equal(sent.length, 1);
   assert.match(sent[0].msg.body, /ready for pickup/);
   assert.equal(sent[0].kind, 'transactional');
   assert.equal(sent[0].ref, 'quote:ABC123');
+  assert.equal(sent[0].quote, 'ABC123', 'the text is kept on the quote');
+  assert.equal(emails.length, 1);
+  assert.equal(emails[0].to, 'ada@example.com');
+  assert.match(emails[0].subject, /ready for pickup — ABC123/);
+  assert.match(emails[0].html, /3047 N Lincoln Ave, Mon-Fri 10:30am-6pm/, 'the same place and hours the text gives');
+  assert.equal(emails[0].kind, 'milestone:ready');
+  assert.match(emails[0].preview, /^Hi Ada,\s+Your order \(24 tees\) is ready to pick up/,
+    'the job page shows the message, not the heading and the button');
+  assert.doesNotMatch(emails[0].preview, /View your order|Ready for pickup/);
+  await f(base, { ...base, shipped_at: new Date() });   // moved back and forward again
+  assert.equal(emails.length, 1, 'an email per milestone per quote, however often the card moves');
 });
 
-test('an already-reached milestone is not re-announced', () => {
-  const { f, sent } = loadMilestones();
+test('an already-reached milestone is not re-announced', async () => {
+  const { f, sent, emails } = loadMilestones();
   const done = { ...base, production_at: new Date(), shipped_at: new Date() };
-  f(done, { ...done, delivered_at: new Date() });
+  await f(done, { ...done, delivered_at: new Date() });
   assert.equal(sent.length, 0);
+  assert.equal(emails.length, 0);
 });
 
-test('jumping straight to ship sends only the furthest milestone', () => {
-  const { f, sent } = loadMilestones();
-  f(base, { ...base, production_at: new Date(), shipped_at: new Date(), ship_method: 'ground', tracking: '1Z9' });
+test('jumping straight to ship sends only the furthest milestone', async () => {
+  const { f, sent, emails } = loadMilestones();
+  await f(base, { ...base, production_at: new Date(), shipped_at: new Date(), ship_method: 'ground', tracking: '1Z9' });
   assert.equal(sent.length, 1);
   assert.match(sent[0].msg.body, /has shipped! Tracking: 1Z9\./);
+  assert.equal(emails.length, 1);
+  assert.match(emails[0].subject, /has shipped/);
+  assert.match(emails[0].html, /Tracking: <b>1Z9<\/b>/);
 });
 
-test('no ship method yet means a neutral "finished", not a guess', () => {
-  const { f, sent } = loadMilestones();
-  f({ ...base, ship_method: null }, { ...base, ship_method: null, shipped_at: new Date() });
+test('no ship method yet means a neutral "finished", not a guess', async () => {
+  const { f, sent, emails } = loadMilestones();
+  await f({ ...base, ship_method: null }, { ...base, ship_method: null, shipped_at: new Date() });
   assert.match(sent[0].msg.body, /finished/);
+  assert.match(emails[0].subject, /Your order is ready — ABC123/);
 });
 
-test('in production texts on its own; no phone texts nothing', () => {
+test('in production is told on its own; no phone means no text but still the email', async () => {
   const a = loadMilestones();
-  a.f(base, { ...base, production_at: new Date() });
+  await a.f(base, { ...base, production_at: new Date() });
   assert.match(a.sent[0].msg.body, /in production/);
+  assert.match(a.emails[0].subject, /in production — ABC123/);
   const b = loadMilestones();
-  b.f({ ...base, phone: '' }, { ...base, phone: '', shipped_at: new Date() });
+  await b.f({ ...base, phone: '' }, { ...base, phone: '', shipped_at: new Date() });
   assert.equal(b.sent.length, 0);
+  assert.equal(b.emails.length, 1);
+  const c = loadMilestones();
+  await c.f({ ...base, email: '' }, { ...base, email: '', shipped_at: new Date() });
+  assert.equal(c.emails.length, 0, 'no address, no email');
 });
 
-test('both board routes read the row before updating it', () => {
+test('money still owed is said, with the way to pay it', async () => {
+  const { f, emails } = loadMilestones({ due: 75 });
+  await f(base, { ...base, shipped_at: new Date() });
+  assert.match(emails[0].html, /A balance of <b>\$75\.00<\/b> is due at pickup/);
+  assert.match(emails[0].html, /https:\/\/www\.jtees\.net\/q\/ABC123/);
+});
+
+test('both board routes move a job through one function that reads before it writes', () => {
+  const move = liftFn('moveJobToStage');
+  assert.ok(move.indexOf("SELECT * FROM quotes WHERE code = $1") < move.indexOf('UPDATE quotes SET'),
+    'the row is read before it is updated, so a milestone is told only when newly reached');
+  assert.match(move, /notifyQuoteMilestone\(before, after\)/);
   for (const anchor of ["app.post('/quote/:code/step'", "app.post('/quote/:code/stage'"]) {
     const start = server.indexOf(anchor);
     const body = server.slice(start, server.indexOf('\n});', start));
-    const before = body.indexOf("SELECT * FROM quotes WHERE code = $1");
-    const update = body.indexOf('UPDATE quotes SET');
-    assert.ok(before > 0 && before < update, `${anchor} must read before it writes`);
-    assert.match(body, /textQuoteMilestones\(prev\[0\], rows\[0\]\)/);
+    assert.match(body, /await moveJobToStage\(code, /, `${anchor} goes through moveJobToStage`);
   }
 });
 
@@ -216,11 +272,16 @@ test('popup rate limit: 3 per IP per hour, 40 overall', () => {
   assert.ok(ok <= 40, `${ok} allowed in one hour`);
 });
 
-test('tracking typed before Shipped is ticked sends nothing until it is', () => {
+test('tracking typed before Shipped is ticked sends nothing until it is', async () => {
   const start = server.indexOf("app.post('/quote/:code/shipping'");
   const body = server.slice(start, server.indexOf('\n});', start));
   assert.match(body, /if \(q && q\.shipped_at && tracking/);
-  assert.match(server, /textQuoteMilestones\(prev\[0\], rows\[0\]\); emailTrackingOnShip\(prev\[0\], rows\[0\]\);/);
+  /* And marking it shipped sends the number that was held back, in the one
+     "has shipped" message. */
+  const { f, emails } = loadMilestones();
+  await f({ ...base, ship_method: 'ground', tracking: '1Z77' },
+          { ...base, ship_method: 'ground', tracking: '1Z77', shipped_at: new Date() });
+  assert.match(emails[0].html, /Tracking: <b>1Z77<\/b>/);
 });
 
 test('a send stuck in "sending" is released for retry', () => {

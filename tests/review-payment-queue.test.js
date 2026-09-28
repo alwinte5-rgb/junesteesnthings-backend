@@ -164,14 +164,19 @@ test('rescheduling falls back to queuing when nothing is waiting', () => {
 });
 
 test('a delivered quote reschedules; clearing the step does not', () => {
-  // The whole route, not a fixed character window: a window breaks whenever
-  // anything is added above the lines it checks.
-  const at = src.indexOf("app.post('/quote/:code/step'");
-  const step = src.slice(at, src.indexOf('\n});', at));
-  assert.match(step, /if \(!clear && \(col === 'delivered_at' \|\| col === 'shipped_at'\)/,
+  /* In the one move the board and the checklist share (moveJobToStage), since
+     2026-09-28: the board's Delivered button used to leave the ask where it was.
+     Only a date NEWLY set counts, so un-ticking, a correction, re-dates nothing. */
+  const at = src.indexOf('async function moveJobToStage(');
+  const move = src.slice(at, src.indexOf('\n}\n', at));
+  assert.match(move, /if \(\(!before\.delivered_at && after\.delivered_at\) \|\| \(!before\.shipped_at && after\.shipped_at\)\)/,
     'un-ticking a step is a correction, and must not re-date the ask');
-  assert.match(step, /rescheduleReviewRequest\(/);
-  assert.match(step, /REVIEW_DAYS_AFTER_DELIVERY\(\)/);
+  assert.match(move, /rescheduleReviewRequest\(/);
+  assert.match(move, /REVIEW_DAYS_AFTER_DELIVERY\(\)/);
+  for (const r of ["app.post('/quote/:code/step'", "app.post('/quote/:code/stage'"]) {
+    const route = src.slice(src.indexOf(r), src.indexOf('\n});', src.indexOf(r)));
+    assert.match(route, /await moveJobToStage\(/, `${r} reschedules through it too`);
+  }
 });
 
 test('quote products come from the JSONB item description, not a name field', () => {

@@ -20,7 +20,7 @@ const {
   CONSENT_VERSION, TRANSACTIONAL_TEXT, MARKETING_TEXT,
   normalizeUsPhone, parseSmsConsent, consentCheckboxesHtml, foldSmsConsent,
 } = require('./tools/lib/sms-consent');
-const { T: SMS, plain: smsPlain } = require('./tools/lib/sms-templates');
+const { T: SMS, plain: smsPlain, PICKUP: SMS_PICKUP } = require('./tools/lib/sms-templates');
 const { verifyTwilioSignature, classifyInbound } = require('./tools/lib/twilio-webhook');
 
 const express    = require('express');
@@ -730,6 +730,33 @@ async function initDB() {
     )`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS sms_messages_once
                       ON sms_messages (phone, ref, template) WHERE status <> 'failed'`).catch(() => {});
+  /* Which quote a text was about, so the job page can list every message its
+     customer has had. Texts sent before this existed have none. Inbound
+     replies are stored here too, status 'received', matched to the customer's
+     latest quote by phone. */
+  await pool.query(`ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS quote_code TEXT`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS sms_messages_quote_idx ON sms_messages (quote_code, created_at DESC)`)
+    .catch(() => {});
+
+  /* Every email a customer has had about their quote: receipts, reminders,
+     "it's in production", "ready for pickup", and the ones June writes from
+     the job page. Written by sendClientEmail after the send, so status is what
+     happened: sent, failed, or skipped (unsubscribed from marketing). Also how
+     an automatic milestone email is sent once, however often a card moves. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS client_emails (
+      id          BIGSERIAL PRIMARY KEY,
+      quote_code  TEXT NOT NULL,
+      kind        TEXT NOT NULL,
+      to_email    TEXT NOT NULL,
+      subject     TEXT,
+      preview     TEXT,
+      status      TEXT NOT NULL,
+      error       TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS client_emails_quote_idx ON client_emails (quote_code, created_at DESC)`)
+    .catch(() => {});
 
   console.log('Database ready.');
 }
@@ -2592,7 +2619,7 @@ async function smsConsentFor(phone) {
 
    `kind` is which consent box this needs. `ref` + msg.template is the dedupe
    key: the same update for the same order goes to the same number once. */
-async function sendCustomerSms({ phone, kind, ref, msg }) {
+async function sendCustomerSms({ phone, kind, ref, msg, quote = null }) {
   const to = normalizeUsPhone(phone);
   if (!to) return 'no-phone';
   try {
@@ -2611,10 +2638,10 @@ async function sendCustomerSms({ phone, kind, ref, msg }) {
           AND created_at < NOW() - INTERVAL '5 minutes'`,
       [to, String(ref).slice(0, 80), msg.template.slice(0, 80)]);
     const { rows } = await pool.query(
-      `INSERT INTO sms_messages (phone, kind, ref, template, body, status)
-       VALUES ($1,$2,$3,$4,$5,'sending')
+      `INSERT INTO sms_messages (phone, kind, ref, template, body, status, quote_code)
+       VALUES ($1,$2,$3,$4,$5,'sending',$6)
        ON CONFLICT DO NOTHING RETURNING id`,
-      [to, kind, String(ref).slice(0, 80), msg.template.slice(0, 80), msg.body]);
+      [to, kind, String(ref).slice(0, 80), msg.template.slice(0, 80), msg.body, quote]);
     if (!rows.length) return 'duplicate';
     const id = rows[0].id;
     try {
@@ -2674,6 +2701,22 @@ app.post('/webhooks/twilio/sms', async (req, res) => {
   const text = String(req.body.Body || '').slice(0, 1600);
   const kind = classifyInbound(text);
   if (!from) return;
+  /* Kept on the customer's latest quote, matched by the last ten digits of the
+     phone, so the job page shows their replies beside what they were sent.
+     '\\D' is doubled: in a template string '\D' is just 'D'. */
+  const sid = String(req.body.MessageSid || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 64);
+  if (sid) {
+    pool.query(
+      `INSERT INTO sms_messages (phone, kind, ref, template, body, status, twilio_sid, quote_code)
+       VALUES ($1, 'inbound', $2, 'reply', $3, 'received', $4,
+               (SELECT code FROM quotes
+                 WHERE length(regexp_replace(COALESCE(phone,''), '\\D', '', 'g')) >= 10
+                   AND right(regexp_replace(COALESCE(phone,''), '\\D', '', 'g'), 10) = right($5, 10)
+                 ORDER BY created_at DESC LIMIT 1))
+       ON CONFLICT DO NOTHING`,
+      [from, 'in:' + sid, text, sid, from.replace(/\D/g, '')])
+      .catch((e) => console.error('inbound text not kept:', e.message));
+  }
   try {
     if (kind === 'stop') {
       await recordSmsConsent({ phone: from, transactional: false, marketing: false }, { source: 'sms-reply:stop' });
@@ -4290,13 +4333,12 @@ function quoteSchedule(q) {
     isPickup,
     /* A step is "at risk" when its latest safe date has passed and it has not
        happened. Reported per step so the digest can name the actual slip. */
+    /* Two warnings, one per move that has a date. Starting is due when the
+       blanks have to be ordered, the earliest date the deadline really sets;
+       the rest of production has no move of its own to be late on. */
     risks: [
-      { key: 'artwork', label: 'artwork',        by: artBy,    late: late(artBy, q.artwork_at) },
-      { key: 'blanks_order', label: 'blanks order', by: orderBy, late: late(orderBy, q.blanks_ordered_at) },
-      { key: 'blanks_in', label: 'blanks arrival', by: blanksBy, late: late(blanksBy, q.blanks_in_at) },
-      { key: 'proof',   label: 'proof approval',  by: proofBy,  late: late(proofBy, q.proof_ok_at) },
-      { key: 'press',   label: 'press',           by: pressBy,  late: late(pressBy, q.production_at) },
-      { key: 'ship',    label: isPickup ? 'ready for pickup' : 'ship',
+      { key: 'start', label: 'starting', by: orderBy, late: late(orderBy, q.production_at) },
+      { key: 'ship',  label: isPickup ? 'ready for pickup' : 'shipping',
         by: shipBy, late: late(shipBy, q.shipped_at) },
     ].filter((r) => r.late),
   };
@@ -4325,35 +4367,22 @@ function quoteChecklist(q) {
           return Array.isArray(it) ? it.length > 0 : !!it; } catch { return false; }
   })();
 
-  /* Eleven steps, not seventeen. The old list had a row for every field the
-     system could check, so eight of them were derived and did nothing when
-     tapped — which read as "the checklist is broken" rather than "that one is
-     automatic". Related steps are now merged: proof sent and proof approved
-     became one (approval is what matters), blanks ordered folded into blanks
-     received with the order-by date as its warning, and the seven tappable
-     steps line up one-for-one with the kanban columns so there is a single
-     model of a job rather than two. */
-  /* Production only. The list does not begin until a quote is accepted, so the
-     pre-acceptance gates and the post-delivery money are not tasks — they are
-     context, and they now show as a status strip on the job page. Every step
-     here is tappable, which is what removes the "why won't this click"
-     confusion the derived rows caused. Order matches the board columns. */
+  /* Three marks, one per move on the board (JOB_STAGES): In production, Ready
+     / Shipped, Delivered. It was seventeen rows, then eleven, then seven; each
+     cut came from the same place, a step the owner had to tap that told the
+     customer nothing and changed no date anyone acted on. The pre-acceptance
+     gates and the money are context, shown as a status strip on the job page,
+     not tasks. Every mark here is tappable and moves the job through
+     moveJobToStage, the same as the board. */
   const steps = [
-    { key: 'artwork',  label: 'Artwork in hand',    done: !!q.artwork_at, manual: true,
-      hint: 'print-ready file received and checked' },
-    { key: 'proofok',  label: 'Proof approved',     done: !!q.proof_ok_at, manual: true,
-      hint: 'in writing — this is what protects you on a reprint' },
-    { key: 'blanks_in', label: 'Blanks received',   done: !!q.blanks_in_at, manual: true,
-      hint: sched && !q.blanks_in_at ? `order by ${dayShort(sched.blanks_order_by)} — the step that quietly kills deadlines`
-            : 'counted against the order — shortages surface here, not at the press' },
-    { key: 'production', label: 'Printed',          done: !!q.production_at, manual: true,
-      hint: sched ? `on the press by ${dayShort(sched.press_by)}` : 'on the press' },
-    { key: 'qc',       label: 'Counted & checked',  done: !!q.qc_at, manual: true,
-      hint: 'right count, right sizes, no misprints' },
-    { key: 'shipped',  label: sched && sched.isPickup ? 'Ready for pickup' : 'Shipped',
+    { key: 'production', label: 'In production', done: !!q.production_at, manual: true,
+      hint: sched && !q.production_at
+        ? `start by ${dayShort(sched.blanks_order_by)}, when the blanks have to be ordered`
+        : 'artwork, proof, blanks and printing' },
+    { key: 'shipped', label: sched && sched.isPickup ? 'Ready for pickup' : 'Ready / Shipped',
       done: !!q.shipped_at, manual: true,
-      hint: sched ? `must leave by ${dayShort(sched.ship_by)}` : 'handed to the carrier' },
-    { key: 'delivered', label: 'Delivered',         done: !!q.delivered_at, manual: true,
+      hint: sched ? `${sched.isPickup ? 'ready' : 'out'} by ${dayShort(sched.ship_by)}` : 'checked, then picked up or sent' },
+    { key: 'delivered', label: 'Delivered', done: !!q.delivered_at, manual: true,
       hint: 'in the customer\'s hands' },
   ];
 
@@ -4362,94 +4391,166 @@ function quoteChecklist(q) {
   return { steps, next, done, of: steps.length };
 }
 
-/* Text the customer about milestones this change newly reached. `before` is
-   the row as it was, so re-stamping or moving an old card never re-announces a
-   milestone from weeks ago. Only the furthest new milestone is sent: a card
-   dragged straight to "Check & ship" gets "ready", not "in production" too. */
-function textQuoteMilestones(before, after) {
-  if (!before || !after || !after.phone) return;
-  const newly = (c) => !before[c] && after[c];
-  const ref = 'quote:' + after.code;
-  let msg = null;
-  if (newly('shipped_at')) {
-    const m = String(after.ship_method || '').toLowerCase();
-    msg = m === 'pickup' ? SMS.readyForPickup({ code: after.code })
-      : m ? SMS.shipped({ code: after.code, tracking: after.tracking })
-      : SMS.finished({ code: after.code });
-  } else if (newly('production_at')) {
-    msg = SMS.inProduction({ code: after.code });
-  }
-  if (msg) sendCustomerSms({ phone: after.phone, kind: 'transactional', ref, msg });
+/* ── Telling the customer ────────────────────────────────────────────────────
+   Every email a customer gets about their quote goes through sendClientEmail,
+   which records it against the quote (client_emails) so the job page can show
+   what they have been told, and when. */
+
+/** A plain customer email in the shop's usual dress, with a button to their
+ *  own quote page (the code in the link is what lets them in). */
+function customerEmailHtml(heading, inner, code) {
+  return `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
+    <h2 style="color:#1848B8">${heading}</h2>
+    <div style="color:#374151;line-height:1.6">${inner}</div>
+    ${code ? `<p style="margin-top:18px"><a href="${quoteLink(code)}"
+      style="background:#1848B8;color:#fff;padding:11px 22px;border-radius:100px;text-decoration:none;font-weight:700">View your order</a></p>` : ''}
+    <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_SIGNER}, ${SHOP_NAME} &middot; ${SHOP_PHONE}</p></div>`;
 }
 
-/* One tap per milestone the database cannot infer. Idempotent, and it can be
-   unticked — a mis-tap must not need a database client to undo. */
+/** Record an email on its quote. Never throws: a failed log must not turn a
+ *  sent email into an error, or the caller would send it again. The preview
+ *  is what the job page shows: the message itself when the caller says what
+ *  that is (mail.preview), else the whole email as text, heading and all. */
+async function logClientEmail(quote, kind, mail, status, error = null) {
+  if (!quote) return;
+  const preview = mail.preview != null ? String(mail.preview) : htmlToText(mail.html || '');
+  await pool.query(
+    `INSERT INTO client_emails (quote_code, kind, to_email, subject, preview, status, error)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [quote, kind, String(mail.to || '').slice(0, 254), String(mail.subject || '').slice(0, 300),
+     preview.replace(/\s+/g, ' ').trim().slice(0, 600), status, error ? String(error).slice(0, 300) : null])
+    .catch((e) => console.error('client email log failed:', e.message));
+}
+
+/** An email to a customer about their quote, recorded on the quote. The same
+ *  contract as sendEmail: resolves when sent, throws when it could not be. A
+ *  marketing email to someone who unsubscribed is not sent, and says so
+ *  ('skipped') rather than reading as sent. */
+async function sendClientEmail({ quote, kind, ...mail }) {
+  if (mail.marketing && await isUnsubscribed(mail.to)) {
+    await logClientEmail(quote, kind, mail, 'skipped', 'unsubscribed from marketing email');
+    return;
+  }
+  const { preview, ...email } = mail;   // for the record, not the customer
+  try {
+    await sendEmail(email);
+  } catch (err) {
+    await logClientEmail(quote, kind, mail, 'failed', err.message);
+    throw err;
+  }
+  await logClientEmail(quote, kind, mail, 'sent');
+}
+
+/* Tell the customer about a milestone a move newly reached: an email, and a
+   text when texting is on and they agreed to order texts. `before` is the row
+   as it was, so re-stamping or moving an old card never re-announces a
+   milestone from weeks ago, and only the furthest new one is told: a card
+   moved straight to Ready / Shipped says ready, not "in production" as well.
+   Each milestone is emailed once per quote however often the card goes back
+   and forth (client_emails), and texted once (sms_messages' dedupe).
+
+   Until 2026-09-28 these were texts only, and texting was not switched on, so
+   a customer heard nothing between paying and their order arriving; one
+   collecting in person was never told it was ready. */
+async function notifyQuoteMilestone(before, after) {
+  if (!before || !after) return;
+  const newly = (c) => !before[c] && after[c];
+  const code = after.code;
+  const method = String(after.ship_method || '').toLowerCase();
+  const first = String(after.name || '').trim().split(/\s+/)[0];
+  const hello = `<p>Hi${first ? ' ' + escEmail(first) : ''},</p>`;
+  const what = escEmail(quoteSummary(after.items));
+  const due = balanceOf(after, quoteTotals(after).total);
+  const payLine = due > 0 ? `<p>A balance of <b>${money(due)}</b> is due${method === 'pickup' ? ' at pickup' : ''}.
+      You can pay it online from your order page below.</p>` : '';
+
+  let kind, text, subject, heading, inner;
+  if (newly('shipped_at')) {
+    kind = 'milestone:ready';
+    if (method === 'pickup') {
+      text = SMS.readyForPickup({ code });
+      subject = `Your order is ready for pickup — ${code}`;
+      heading = 'Ready for pickup';
+      inner = `${hello}<p>Your order (${what}) is ready to pick up at ${escEmail(SMS_PICKUP)}.</p>
+        <p>Text or call ${SHOP_PHONE} when you're outside and we'll bring it out.</p>${payLine}`;
+    } else if (method) {
+      text = SMS.shipped({ code, tracking: after.tracking });
+      subject = `Your order has shipped — ${code}`;
+      heading = 'On its way';
+      inner = `${hello}<p>Your order (${what}) has shipped.</p>${after.tracking
+        ? `<p>Tracking: <b>${escEmail(after.tracking)}</b></p>`
+        : "<p>We'll send the tracking number as soon as we have it.</p>"}${payLine}`;
+    } else {
+      text = SMS.finished({ code });
+      subject = `Your order is ready — ${code}`;
+      heading = "It's ready";
+      inner = `${hello}<p>Your order (${what}) is finished! We'll be in touch to set up pickup or delivery.</p>${payLine}`;
+    }
+  } else if (newly('production_at')) {
+    kind = 'milestone:production';
+    text = SMS.inProduction({ code });
+    subject = `Your order is in production — ${code}`;
+    heading = "We've started on your order";
+    const sched = quoteSchedule(after);
+    inner = `${hello}<p>Good news: your order (${what}) is in production now.${sched
+      ? ` It's on track to be ${sched.isPickup ? 'ready' : 'on its way'} by ${escEmail(dayShort(sched.ship_by))}.` : ''}
+      We'll let you know the moment it's ready.</p>`;
+  } else {
+    return;
+  }
+
+  if (after.phone) {
+    sendCustomerSms({ phone: after.phone, kind: 'transactional', ref: 'quote:' + code, msg: text, quote: code });
+  }
+  if (!after.email) return;
+  const { rows } = await pool.query(
+    `SELECT 1 FROM client_emails WHERE quote_code = $1 AND kind = $2 AND status = 'sent' LIMIT 1`, [code, kind]);
+  if (rows.length) return;
+  await sendClientEmail({ quote: code, kind, to: after.email, subject,
+                          html: customerEmailHtml(heading, inner, code), preview: htmlToText(inner) });
+}
+
+/* The job page's checklist: ticking a step moves the job to that stage, and
+   unticking moves it back to the one before, through the same move as the
+   board (moveJobToStage), so the checklist, the board, the customer's messages
+   and the review ask all agree. */
+const STEP_STAGE = {
+  production: 'production', shipped: 'out', delivered: 'done',
+  /* Keys from the seven-step checklist, still in a page opened before it changed. */
+  artwork: 'production', proof: 'production', proofok: 'production',
+  blanks_order: 'production', blanks_in: 'production', qc: 'out',
+};
 app.post('/quote/:code/step', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
-  /* Every manual step in quoteChecklist() must appear here. Blanks, QC and
-     shipping were added to the checklist later and never added to this map, so
-     tapping them fell through to the redirect below: the page reloaded, the
-     <details> collapsed, and nothing saved. Artwork worked, which is what made
-     it look like the checklist half-worked at random. */
-  const COLS = { artwork: 'artwork_at', blanks_order: 'blanks_ordered_at',
-                 blanks_in: 'blanks_in_at', proof: 'proof_sent_at',
-                 proofok: 'proof_ok_at', production: 'production_at',
-                 qc: 'qc_at', shipped: 'shipped_at', delivered: 'delivered_at' };
-  const col = COLS[String((req.body && req.body.step) || '')];
+  const stage = JOB_STAGES.findIndex((st) => st.key === STEP_STAGE[String((req.body && req.body.step) || '')]);
   const clear = String((req.body && req.body.clear) || '') === '1';
   /* Read from the body, not the query string or a header: the body is the only
      part of the request proven to survive the proxy in front of this route. */
   const asJson = String((req.body && req.body.json) || '') === '1';
-  if (!QUOTE_CODE_RE.test(code) || !col) {
+  if (!QUOTE_CODE_RE.test(code) || stage < 1) {
     return asJson ? res.status(400).json({ ok: false, error: 'unknown step' })
                   : res.redirect('/quotes');
   }
-  /* Answer JSON to fetch so the page does not reload. A full reload collapsed
-     the <details> the row lives in, which made a successful save look like the
-     checklist had simply shut itself.
-
-     Signalled by a form field rather than the Accept header or a query
-     parameter — neither survived the proxy in front of this route, so the
-     handler kept falling through to the redirect and the page reloaded
-     anyway. */
-  const wantsJson = asJson;
   try {
-    const { rows: prev } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
-    const { rows } = await pool.query(
-      `UPDATE quotes SET ${col} = ${clear ? 'NULL' : 'NOW()'} WHERE code = $1 RETURNING *`, [code]);
-    console.log(`quote ${code}: ${col} ${clear ? 'cleared' : 'set'}`);
-    if (!clear) { textQuoteMilestones(prev[0], rows[0]); emailTrackingOnShip(prev[0], rows[0]); }
-
-    /* Delivery is the honest moment to ask. The payment-time ask already sitting
-       against this quote was dated on a guess made before the job existed; this
-       moves it to a few days after the customer actually had the thing.
-
-       `delivered` is preferred over `shipped` deliberately — on this board
-       delivered_at is what "in their hands" means, and asking three days after
-       handing a box to a carrier is asking before it arrives. Shipped is
-       accepted too, because for local pickup work it is the last step anyone
-       records.
-
-       Clearing a step is a correction, not a milestone, so it does nothing. */
-    if (!clear && (col === 'delivered_at' || col === 'shipped_at') && rows.length) {
-      const q = rows[0];
-      rescheduleReviewRequest({
-        name: q.name, email: q.email, phone: q.phone,
-        product: (Array.isArray(q.items) && q.items[0] && q.items[0].description) || '',
-        quote_code: code, days: REVIEW_DAYS_AFTER_DELIVERY(),
-      }).catch(() => {});
-    }
-    if (wantsJson) {
-      const cl = rows.length ? quoteChecklist(rows[0]) : null;
+    const job = await moveJobToStage(code, clear ? stage - 1 : stage);
+    /* Answer JSON to fetch so the page does not reload. A full reload collapsed
+       the <details> the row lives in, which made a successful save look like
+       the checklist had simply shut itself. */
+    if (asJson) {
+      if (!job) return res.status(404).json({ ok: false });
+      const cl = quoteChecklist(job);
       return res.json({
         ok: true, done: !clear,
-        progress: cl ? { done: cl.done, of: cl.of } : null,
-        next: cl && cl.next ? { label: cl.next.label, hint: cl.next.hint } : null,
+        progress: { done: cl.done, of: cl.of },
+        next: cl.next ? { label: cl.next.label, hint: cl.next.hint } : null,
+        /* Every step, not just the one tapped: ticking Ready also finishes In
+           production, and unticking In production clears what came after. */
+        steps: cl.steps.map((st) => ({ key: st.key, done: st.done })),
       });
     }
   } catch (err) {
     console.error('step update failed:', err.message);
-    if (wantsJson) return res.status(500).json({ ok: false });
+    if (asJson) return res.status(500).json({ ok: false });
   }
   res.redirect('/quotes');
 });
@@ -5890,17 +5991,15 @@ form:has(>.step-row){display:block}
    desktop it widens and the detail panels sit side by side instead of in one
    long vertical queue. */
 /* ── Kanban ──────────────────────────────────────────────────────────────────
-   Columns are production stages, cards are jobs. It scrolls sideways rather
-   than wrapping: a stage that moves to the next line stops reading as a
-   pipeline, which is the only thing this view is for. */
-/* Five columns fit a laptop, so the board reads as a pipeline instead of
-   scrolling sideways. Below 900px it falls back to horizontal scroll, which is
-   the right behaviour on a phone. */
-.kanban{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;padding-bottom:6px}
+   Columns are production stages, cards are jobs. Three columns fit anything
+   wider than a phone side by side, so the board reads as a pipeline. On a
+   phone they stack in order: scrolling sideways, as it did with five, hid the
+   third column, and a job in it was off the screen. */
+.kanban{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;padding-bottom:6px}
 .kcol{background:#f4f7fc;border:1px solid #e3e8f2;border-radius:12px;padding:9px;min-height:110px;min-width:0}
-@media (max-width:900px){
-  .kanban{display:flex;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:10px}
-  .kcol{flex:0 0 210px}
+@media (max-width:640px){
+  .kanban{grid-template-columns:minmax(0,1fr)}
+  .kcol{min-height:0}
 }
 .kcol-head{display:flex;justify-content:space-between;align-items:center;font-weight:700;font-size:13px;color:#0B1F4B}
 .kcount{background:#e3e8f2;border-radius:100px;padding:1px 8px;font-size:11.5px;color:#5a6a86}
@@ -6072,9 +6171,11 @@ const ADMIN_CSS = `
 .adm-page .wrap{max-width:1280px;margin:0 auto}
 .adm-top,.adm-scrim{display:none}
 @media (max-width:900px){
-  .adm-side{position:fixed;left:0;top:0;bottom:0;height:auto;transform:translateX(-102%);
-    transition:transform .2s ease;box-shadow:8px 0 40px rgba(11,31,75,.3)}
-  .adm-toggle:checked ~ .adm .adm-side{transform:none}
+  /* Closed, it is hidden as well as moved: a shadow on a menu parked just off
+     the left edge falls across the page, and its links could still be tabbed to. */
+  .adm-side{position:fixed;left:0;top:0;bottom:0;height:auto;transform:translateX(-102%);visibility:hidden;
+    transition:transform .2s ease,visibility .2s}
+  .adm-toggle:checked ~ .adm .adm-side{transform:none;visibility:visible;box-shadow:8px 0 40px rgba(11,31,75,.3)}
   .adm-toggle:checked ~ .adm .adm-scrim{display:block;position:fixed;inset:0;background:rgba(11,31,75,.35);z-index:40}
   .adm-top{display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:30;background:#fff;
     border-bottom:1px solid #e3e8f2;padding:10px 14px;padding-top:max(10px,env(safe-area-inset-top))}
@@ -6144,6 +6245,8 @@ a.row-i:hover{background:#f7f9ff}
 .search .btn{padding:10px 18px;font-size:14px}
 .grid-cards{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));align-items:start}
 .grid-cards > .card{margin:0}
+.msg-row{align-items:flex-start}
+.msg-when{display:block;font-size:11.5px;margin-top:3px}
 /* Phone overrides for the building blocks, last so they win over the rules above.
    Two tiles across: stacked one per row, six figures were a screen and a half of
    scrolling before anything that needs doing. */
@@ -6154,6 +6257,14 @@ a.row-i:hover{background:#f7f9ff}
   .tile-label{font-size:10px;letter-spacing:.05em}
   .ph h1{font-size:22px}
   .grid-cards{grid-template-columns:minmax(0,1fr)}
+}
+/* A message's status and time go under it on a phone: beside it, they left the
+   message a strip a few words wide. */
+@media (max-width:640px){
+  .msg-row{flex-wrap:wrap}
+  .msg-end{flex:1 0 100%;display:flex;align-items:center;gap:8px;padding-left:46px;text-align:left}
+  .msg-row .row-main{flex:1 1 0}
+  .msg-when{margin-top:0}
 }
 `;
 
@@ -9479,7 +9590,7 @@ async function bankStripeSession(session) {
 
   const to = q.email || session.customer_details?.email;
   if (to) {
-    sendEmail({
+    sendClientEmail({ quote: code, kind: 'receipt',
       to,
       subject: `Payment received — quote ${code}`,
       html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
@@ -9495,7 +9606,7 @@ async function bankStripeSession(session) {
   if (q.phone) {
     // Keyed on the Stripe session: a 50% deposit and a 50% balance are the same
     // amount, so the amount cannot tell two payments apart.
-    sendCustomerSms({ phone: q.phone, kind: 'transactional', ref: 'payment:' + session.id,
+    sendCustomerSms({ phone: q.phone, kind: 'transactional', ref: 'payment:' + session.id, quote: code,
       msg: SMS.paymentReceived({ code, amount: gross, stillDue }) });
   }
 
@@ -10296,7 +10407,7 @@ async function landStripePaymentOnQuote(q, { gross, pi, extRef, createdAt, how, 
 
   const to = q.email || email;
   if (to) {
-    sendEmail({
+    sendClientEmail({ quote: code, kind: 'receipt',
       to,
       subject: `Payment received — quote ${code}`,
       html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
@@ -10310,7 +10421,7 @@ async function landStripePaymentOnQuote(q, { gross, pi, extRef, createdAt, how, 
     }).catch((e) => console.error(`payment receipt to customer FAILED for quote ${code}:`, e.message));
   }
   if (q.phone) {
-    sendCustomerSms({ phone: q.phone, kind: 'transactional', ref: 'payment:' + extRef,
+    sendCustomerSms({ phone: q.phone, kind: 'transactional', ref: 'payment:' + extRef, quote: code,
       msg: SMS.paymentReceived({ code, amount: gross, stillDue }) });
   }
   if (q.brevo_deal_id) {
@@ -10887,7 +10998,7 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
           </p>
         </div>`;
       if (q.email) {
-        sendEmail({
+        sendClientEmail({ quote: q.code, kind: 'accepted',
           to: q.email,
           subject: `Thanks — quote ${q.code} accepted`,
           html: `<div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto">
@@ -11153,7 +11264,7 @@ app.post('/quote/:code/mark-paid', requireAdmin, async (req, res) => {
     const stillDue = round2(Math.max(0, Number(nq.total) - Number(nq.paid_amount)));
 
     if (nq.email) {
-      sendEmail({
+      sendClientEmail({ quote: nq.code, kind: 'receipt',
         to: nq.email,
         subject: `Payment received — quote ${nq.code}`,
         html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
@@ -11169,7 +11280,7 @@ app.post('/quote/:code/mark-paid', requireAdmin, async (req, res) => {
       }).catch(e => console.error('manual payment receipt failed:', e.message));
     }
     if (nq.phone) {
-      sendCustomerSms({ phone: nq.phone, kind: 'transactional',
+      sendCustomerSms({ phone: nq.phone, kind: 'transactional', quote: nq.code,
         ref: 'payment:' + manualRef(minute),
         msg: SMS.paymentReceived({ code: nq.code, amount, stillDue }) });
     }
@@ -12217,7 +12328,7 @@ async function sendReceipt(code, to = null) {
     'SELECT * FROM quote_payments WHERE quote_code=$1 ORDER BY created_at, id', [code]);
   const addr = to || q.email;
   if (!addr) return { ok: false, error: 'no email address on this quote' };
-  await sendEmail({
+  await sendClientEmail({ quote: q.code, kind: 'receipt',
     to: addr,
     subject: `Receipt — quote ${q.code}`,
     html: receiptHtml(q, payments),
@@ -13208,14 +13319,25 @@ app.get('/customer', requireAdmin, async (req, res) => {
  * checklist uses — there is no separate "status" field to drift out of step.
  * The checklist is still the detail; this is the shape of the shop floor.
  */
+/* Three moves since 2026-09-28: In production, Ready / Shipped, Delivered. It
+   was five columns and seven checklist marks, and a job took five taps to get
+   through a shop where one person does all of it; the owner asked for fewer.
+   In production stands for everything up to the press (artwork, proof, blanks
+   ordered and in, printing), so it stamps all of their dates at once and the
+   older readers of those dates still see a finished step. It is also the move
+   that tells the customer their order has started. */
 const JOB_STAGES = [
-  { key: 'start',  label: 'To start',        cols: [],                            hint: 'accepted, nothing done yet' },
-  { key: 'design', label: 'Artwork & proof', cols: ['artwork_at', 'proof_ok_at'], hint: 'file in hand and approved in writing' },
-  { key: 'blanks', label: 'Blanks',          cols: ['blanks_in_at'],              hint: 'garments arrived and counted' },
-  { key: 'press',  label: 'Press',           cols: ['production_at'],             hint: 'printing or stitching' },
-  { key: 'out',    label: 'Check & ship',    cols: ['qc_at', 'shipped_at'],       hint: 'checked and gone' },
-  { key: 'done',   label: 'Delivered',       cols: ['delivered_at'],              hint: 'in their hands' },
+  { key: 'start',      label: 'To start',        cols: [],
+    hint: 'accepted, not started yet' },
+  { key: 'production', label: 'In production',   hint: 'artwork, proof, blanks and printing',
+    cols: ['artwork_at', 'proof_sent_at', 'proof_ok_at', 'blanks_ordered_at', 'blanks_in_at', 'production_at'] },
+  { key: 'out',        label: 'Ready / Shipped', cols: ['qc_at', 'shipped_at'],
+    hint: 'checked, then picked up or sent' },
+  { key: 'done',       label: 'Delivered',       cols: ['delivered_at'],
+    hint: 'in their hands' },
 ];
+/* Stage keys from the five-column board, still in a page opened before it changed. */
+const OLD_STAGE_KEYS = { design: 'production', blanks: 'production', press: 'production' };
 
 /** The stage a job is sitting in: the last one it has completed. */
 function jobStageIndex(q) {
@@ -13240,35 +13362,60 @@ function jobStageIndex(q) {
  * everything after is cleared. That is what makes moving a card backwards mean
  * what it looks like it means.
  */
+/* Move a job to a stage: everything up to and including it is stamped, and
+   everything after it cleared, so moving a card backwards means what it looks
+   like. The customer hears about a milestone this move newly reached, once
+   (notifyQuoteMilestone), and a job just marked shipped or delivered has its
+   review ask moved to after it arrived. One function for the board's buttons
+   and the job page's checklist: the checklist used to stamp one date at a time
+   and never moved the review ask, so the two disagreed about what "delivered"
+   did. Returns the job as it now stands, or null if there is no such quote. */
+async function moveJobToStage(code, target) {
+  const sets = JOB_STAGES.slice(1).flatMap((st, i) =>
+    st.cols.map(c => `${c} = ${i + 1 <= target ? `COALESCE(${c}, NOW())` : 'NULL'}`)).join(', ');
+  const { rows: prev } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
+  if (!prev.length) return null;
+  const { rows } = await pool.query(`UPDATE quotes SET ${sets} WHERE code = $1 RETURNING *`, [code]);
+  const before = prev[0];
+  const after = rows[0];
+  console.log(`quote ${code}: moved to ${JOB_STAGES[target].label}`);
+  notifyQuoteMilestone(before, after)
+    .catch((e) => console.error(`milestone message for ${code} failed:`, e.message));
+  /* Delivery is the honest moment to ask. The payment-time ask was dated on a
+     guess made before the job existed; this moves it to a few days after the
+     customer actually had the thing. Shipped counts too, because for pickup
+     work it is the last step anyone records. */
+  if ((!before.delivered_at && after.delivered_at) || (!before.shipped_at && after.shipped_at)) {
+    rescheduleReviewRequest({
+      name: after.name, email: after.email, phone: after.phone,
+      product: (Array.isArray(after.items) && after.items[0] && after.items[0].description) || '',
+      quote_code: code, days: REVIEW_DAYS_AFTER_DELIVERY(),
+    }).catch(() => {});
+  }
+  return after;
+}
+
 app.post('/quote/:code/stage', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
-  const target = JOB_STAGES.findIndex(s => s.key === String((req.body && req.body.stage) || ''));
+  const asked = String((req.body && req.body.stage) || '');
+  const target = JOB_STAGES.findIndex(s => s.key === (OLD_STAGE_KEYS[asked] || asked));
   const asJson = String((req.body && req.body.json) || '') === '1';
   if (!QUOTE_CODE_RE.test(code) || target < 0) {
     return asJson ? res.status(400).json({ ok: false }) : res.redirect('/production');
   }
   try {
-    /* Everything up to and including the target is stamped, everything after is
-       cleared — which is what makes moving a card backwards mean what it looks
-       like it means. Columns owning several milestones set them together. */
-    const sets = JOB_STAGES.slice(1).flatMap((st, i) =>
-      st.cols.map(c => `${c} = ${i + 1 <= target ? `COALESCE(${c}, NOW())` : 'NULL'}`)).join(', ');
-    const { rows: prev } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
-    const { rows } = await pool.query(
-      `UPDATE quotes SET ${sets} WHERE code = $1 RETURNING *`, [code]);
-    console.log(`quote ${code}: moved to ${JOB_STAGES[target].label}`);
-    textQuoteMilestones(prev[0], rows[0]);
-    emailTrackingOnShip(prev[0], rows[0]);
+    const job = await moveJobToStage(code, target);
     if (asJson) {
-      const cl = rows.length ? quoteChecklist(rows[0]) : null;
+      if (!job) return res.status(404).json({ ok: false });
+      const cl = quoteChecklist(job);
       return res.json({ ok: true, stage: JOB_STAGES[target].key,
-                        progress: cl ? { done: cl.done, of: cl.of } : null });
+                        progress: { done: cl.done, of: cl.of } });
     }
   } catch (err) {
     console.error('stage move failed:', err.message);
     if (asJson) return res.status(500).json({ ok: false });
   }
-  res.redirect('/production');
+  res.redirect(String((req.body && req.body.back) || '') === 'job' ? `/production/${code}` : '/production');
 });
 
 /* /quotes is the money board and /production is the work board — the same
@@ -13318,8 +13465,8 @@ async function fetchStudioOrders() {
 function studioStage(status) {
   const st = String(status || '').toLowerCase();
   if (st === 'complete') return { label: 'Delivered', color: '#166534', bg: '#e7f6ec' };
-  if (st === 'shipped')  return { label: 'Check & ship', color: '#8a5a00', bg: '#fff8ed' };
-  return { label: 'Press', color: '#1848B8', bg: '#eef2fd' };
+  if (st === 'shipped')  return { label: 'Ready / Shipped', color: '#8a5a00', bg: '#fff8ed' };
+  return { label: 'In production', color: '#1848B8', bg: '#eef2fd' };
 }
 
 function studioOrdersSection(feed, { heading = true, disputes = null } = {}) {
@@ -14480,6 +14627,7 @@ app.get('/production/:code', requireAdmin, async (req, res) => {
         : `<div class="step-row step-auto" title="set automatically from your data — nothing to tap">${inner}<span class="step-auto-tag">auto</span></div>`;
     }).join('');
 
+    const messagesCard = await jobMessagesCard(q, req.query);
     res.send(adminPage(`${q.code} — production`, `
       <h1>${escEmail(q.name || q.code)}</h1>
       <div class="sub">${escEmail(q.code)} · ${money(q.total)} ·
@@ -14511,7 +14659,7 @@ app.get('/production/:code', requireAdmin, async (req, res) => {
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
           ${JOB_STAGES.map((st, i) => `
             <form method="POST" action="/quote/${q.code}/stage" style="margin:0">
-              <input type="hidden" name="stage" value="${st.key}">
+              <input type="hidden" name="stage" value="${st.key}"><input type="hidden" name="back" value="job">
               <button type="submit" class="kbtn${i === si ? ' kbtn-go' : ''}"
                       title="${escEmail(st.hint)}">${st.label}</button>
             </form>`).join('')}
@@ -14543,6 +14691,7 @@ app.get('/production/:code', requireAdmin, async (req, res) => {
         <span class="muted" style="font-size:11.5px" data-progress>${cl.done}/${cl.of}</span>
         <div style="margin-top:8px">${stepRows}</div>
       </div>
+      ${messagesCard}
 
       <script>
         document.querySelectorAll('form[data-stepform]').forEach(function(form){
@@ -14560,12 +14709,16 @@ app.get('/production/:code', requireAdmin, async (req, res) => {
               return r.json(); })
             .then(function(d){
               if(!d||!d.ok) throw new Error('x');
-              btn.classList.toggle('is-done', d.done);
-              clear.value = d.done ? '1' : '';
-              var t=btn.querySelector('.step-tick');
-              if(t){t.textContent=d.done?'☑':'☐';t.style.color=d.done?'#047857':'#9ca3af';}
-              var l=btn.querySelector('.step-label');
-              if(l){l.style.textDecoration=d.done?'line-through':'none';l.style.fontWeight=d.done?'400':'600';}
+              (d.steps||[]).forEach(function(st){
+                var f=document.querySelector('form[data-stepform] input[name="step"][value="'+st.key+'"]');
+                if(!f) return; f=f.form;
+                var b=f.querySelector('.step-row'); b.classList.toggle('is-done', st.done);
+                f.querySelector('input[name="clear"]').value = st.done ? '1' : '';
+                var t=b.querySelector('.step-tick');
+                if(t){t.textContent=st.done?'☑':'☐';t.style.color=st.done?'#047857':'#9ca3af';}
+                var l=b.querySelector('.step-label');
+                if(l){l.style.textDecoration=st.done?'line-through':'none';l.style.fontWeight=st.done?'400':'600';}
+              });
               if(d.progress){
                 var p=document.querySelector('[data-progress]'); if(p)p.textContent=d.progress.done+'/'+d.progress.of;
                 var b=document.querySelector('[data-bar]'); if(b)b.style.width=Math.round(d.progress.done/d.progress.of*100)+'%';
@@ -14582,6 +14735,190 @@ app.get('/production/:code', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('job detail failed:', err.message);
     res.redirect('/production');
+  }
+});
+
+/* ── Messages on the job page ─────────────────────────────────────────────────
+   Everything the customer has been sent about this job, and a way to write to
+   them from here: before, a note to a customer was typed on June's phone and
+   left no trace on the job. Emails come from client_emails, texts (and their
+   replies) from sms_messages, both keyed on the quote. */
+const MESSAGE_KINDS = {
+  receipt: 'Payment receipt', accepted: 'Quote accepted', 'follow-up': 'Follow-up',
+  'deposit-reminder': 'Deposit reminder', 'balance-reminder': 'Balance reminder', reorder: 'Reorder nudge',
+  tracking: 'Tracking number', 'milestone:production': 'In production', 'milestone:ready': 'Ready / shipped',
+  manual: 'From you',
+  /* texts, by template */
+  'payment-received': 'Payment receipt', 'in-production': 'In production', ready: 'Ready',
+  shipped: 'Shipped', reply: 'Their reply',
+};
+/* What a send that did not happen says, from a fixed list, so nothing a
+   request carries is written back into the page. */
+const MESSAGE_ERRORS = {
+  empty: 'Write something first.',
+  'too-long': 'That is too long to send. A text is at most 300 characters.',
+  'no-email': 'There is no email address on this quote.',
+  'no-phone': 'There is no phone number on this quote.',
+  'texting-off': 'Texting is not switched on yet, so nothing was sent. Send it by email instead.',
+  'no-consent': 'They have not agreed to texts, so nothing was sent. Send it by email instead.',
+  failed: 'It did not send, and the error has been reported. Try again, or reach them another way.',
+  duplicate: 'That message went out a moment ago, so it was not sent twice.',
+};
+
+async function jobMessagesCard(q, query) {
+  const code = q.code;
+  const { rows: history } = await pool.query(
+    `SELECT * FROM (
+       SELECT 'email' AS channel, kind, subject, preview AS body, status, error, created_at
+         FROM client_emails WHERE quote_code = $1
+       UNION ALL
+       SELECT 'text', template, NULL, body, status, error, created_at
+         FROM sms_messages WHERE quote_code = $1) m
+      ORDER BY created_at DESC LIMIT 60`, [code]).catch((e) => {
+    console.error(`messages for ${code} failed:`, e.message);
+    return { rows: [] };
+  });
+  const phone = normalizeUsPhone(q.phone);
+  let textWhyNot = !phone ? 'no phone number on this quote'
+    : !smsConfigured() ? 'texting is not switched on yet' : '';
+  if (!textWhyNot) {
+    const c = await smsConsentFor(phone).catch(() => ({ transactional: false }));
+    if (!c.transactional) textWhyNot = 'they have not agreed to texts';
+  }
+  const emailWhyNot = q.email ? '' : 'no email address on this quote';
+  const first = String(q.name || '').trim().split(/\s+/)[0];
+  const hi = `Hi${first ? ' ' + first : ''}`;
+  const due = balanceOf(q, quoteTotals(q).total);
+  const quick = [
+    ['Proof ready', `${hi}, your proof for order ${code} is ready. Take a look and reply to approve it, or tell us what to change.`],
+    ['Running late', `${hi}, a quick heads-up: order ${code} is running a day or two behind. We'll keep you posted.`],
+    ['Ready for pickup', `${hi}, order ${code} is ready for pickup at ${SMS_PICKUP}.`],
+    ...(due > 0 ? [['Balance due', `${hi}, order ${code} has a balance of ${money(due)}. You can pay it online here: ${quoteLink(code)}`]] : []),
+  ];
+  const sent = ['email', 'text'].includes(String(query.sent)) ? String(query.sent) : '';
+  const failed = MESSAGE_ERRORS[String(query.msg_err || '')];
+  const tone = (st) => ({ delivered: 'green', sent: 'blue', received: 'neutral', sending: 'neutral',
+                         skipped: 'amber', failed: 'red', undelivered: 'red' })[st] || 'neutral';
+  const when = (d) => new Date(d).toLocaleString('en-US', { timeZone: SHOP_TZ, month: 'short', day: 'numeric',
+                                                            hour: 'numeric', minute: '2-digit' });
+  const row = (m) => {
+    const label = MESSAGE_KINDS[m.kind] || MESSAGE_KINDS[String(m.kind).split(':')[0]] || m.kind;
+    const inbound = m.status === 'received';
+    const bad = ['failed', 'undelivered', 'skipped'].includes(m.status);
+    const body = String(m.body || '');
+    return `<div class="row-i msg-row">
+      <span class="ico ${inbound ? 'ico-green' : bad ? 'ico-red' : 'ico-blue'}">${icon(m.channel === 'email' ? 'mail' : 'phone')}</span>
+      <span class="row-main"><b>${escEmail(m.channel === 'email' ? (m.subject || label) : label)}</b>
+        <div class="row-sub" style="white-space:normal">${escEmail(body.length > 220 ? body.slice(0, 219).trimEnd() + '…' : body)}</div>${
+        bad && m.error ? `<div class="row-sub" style="white-space:normal;color:#b91c1c">${escEmail(m.error)}</div>` : ''}</span>
+      <span class="row-end msg-end">${pill(inbound ? 'reply' : m.status, tone(m.status))}
+        <span class="muted msg-when">${m.channel === 'email' ? 'email' : 'text'} &middot; ${
+          escEmail(when(m.created_at))}</span></span></div>`;
+  };
+  const radio = (value, text, why, checked) => `
+          <label style="display:flex;gap:6px;align-items:center;margin:0;text-transform:none;letter-spacing:0;
+                        font-weight:600;font-size:14px;color:${why ? '#9ca3af' : '#12203c'}">
+            <input type="radio" name="channel" value="${value}" style="width:auto"${why ? ' disabled' : checked ? ' checked' : ''}>
+            ${text}${why ? ` <span style="font-weight:400;font-size:12px">(${escEmail(why)})</span>` : ''}</label>`;
+  return `
+    <div class="card" id="messages" style="margin-top:14px">
+      <h2 class="card-title">Messages${first ? ' with ' + escEmail(first) : ''} <span class="muted">${history.length || ''}</span></h2>
+      ${sent ? `<div class="ok">Sent by ${sent}. It is in the list below.</div>` : ''}
+      ${failed ? `<div class="warn">${escEmail(failed)}</div>` : ''}
+      <form method="POST" action="/quote/${code}/message" data-msgform style="margin:0 0 12px">
+        <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px">
+          ${radio('email', 'Email', emailWhyNot, true)}
+          ${radio('text', 'Text', textWhyNot, !!emailWhyNot)}
+        </div>
+        <input name="subject" maxlength="150" value="About your order ${escEmail(code)}" data-subject
+               style="margin-bottom:8px;padding:10px;font-size:14px">
+        <textarea name="body" rows="4" maxlength="5000" placeholder="Write to ${escEmail(first || 'them')}…"
+                  style="font-size:14px;padding:10px"></textarea>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0">${quick.map(([label, t]) =>
+          `<button type="button" class="kbtn kbtn-sm" data-fill="${escEmail(t)}">${escEmail(label)}</button>`).join('')}</div>
+        <button type="submit" class="btn" style="padding:10px 22px;font-size:14px"${emailWhyNot && textWhyNot ? ' disabled' : ''}>Send</button>
+        <span class="muted" style="font-size:12px;margin-left:8px">Their replies come to your inbox, or your phone for a text.</span>
+      </form>
+      ${history.length ? `<div class="rows">${history.map(row).join('')}</div>`
+        : emptyState('Nothing sent yet. Receipts, reminders and updates show here as they go out.')}
+    </div>
+    <script>
+      (function(){
+        var f = document.querySelector('form[data-msgform]'); if (!f) return;
+        var body = f.querySelector('textarea[name="body"]'), subj = f.querySelector('[data-subject]');
+        f.querySelectorAll('[data-fill]').forEach(function(b){
+          b.addEventListener('click', function(){ body.value = b.getAttribute('data-fill'); body.focus(); });
+        });
+        function sync(){
+          var c = f.querySelector('input[name="channel"]:checked');
+          var text = c && c.value === 'text';
+          subj.style.display = text ? 'none' : '';
+          body.maxLength = text ? 300 : 5000;
+        }
+        f.querySelectorAll('input[name="channel"]').forEach(function(r){ r.addEventListener('change', sync); });
+        sync();
+        f.addEventListener('submit', function(){
+          var b = f.querySelector('button[type="submit"]');
+          setTimeout(function(){ b.disabled = true; b.textContent = 'Sending…'; }, 0);
+        });
+      })();
+    </script>`;
+}
+
+/* A press of Send, twice in two minutes, is one message. The button disables
+   itself, but a back-button resubmit does not go through the button. */
+const recentJobMessages = new Map();
+
+app.post('/quote/:code/message', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/production');
+  const b = req.body || {};
+  const channel = b.channel === 'text' ? 'text' : 'email';
+  const text = String(b.body || '').replace(/\r\n?/g, '\n').trim();
+  const subject = String(b.subject || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 150) || `About your order ${code}`;
+  const answer = (key, value) => res.redirect(`/production/${code}?${key}=${encodeURIComponent(value)}#messages`);
+  if (!text) return answer('msg_err', 'empty');
+  if (text.length > (channel === 'text' ? 300 : 5000)) return answer('msg_err', 'too-long');
+
+  const key = crypto.createHash('sha256').update([code, channel, text].join('|')).digest('hex');
+  const now = Date.now();
+  for (const [k, at] of recentJobMessages) if (now - at > 2 * 60 * 1000) recentJobMessages.delete(k);
+  if (recentJobMessages.has(key)) return answer('msg_err', 'duplicate');
+
+  try {
+    const { rows } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
+    const q = rows[0];
+    if (!q) return res.redirect('/production');
+    if (channel === 'email') {
+      if (!q.email) return answer('msg_err', 'no-email');
+      recentJobMessages.set(key, now);
+      await sendClientEmail({ quote: code, kind: 'manual', to: q.email, subject, replyTo: SHOP_EMAIL, preview: text,
+        html: customerEmailHtml('A note about your order',
+          `<p>${escEmail(text).replace(/\n/g, '<br>')}</p>`, code) });
+      console.log(`message to ${code} by email`);
+      return answer('sent', 'email');
+    }
+    /* The reasons in the card's order (no number, texting off, no consent),
+       so a refusal names the reason the page showed. sendCustomerSms asks
+       about consent first, which would send June after the wrong fix. */
+    if (!normalizeUsPhone(q.phone)) return answer('msg_err', 'no-phone');
+    if (!smsConfigured()) return answer('msg_err', 'texting-off');
+    /* A text keeps the shape every other customer text has: the brand first,
+       the opt-out last, plain characters only (one curly quote makes it cost
+       three times as much). */
+    recentJobMessages.set(key, now);
+    const status = await sendCustomerSms({ phone: q.phone, kind: 'transactional', quote: code,
+      ref: 'manual:' + key.slice(0, 32),
+      msg: { template: 'manual', body: `June's Tees: ${smsPlain(text, 260)} Reply STOP to opt out.` } });
+    if (status === 'sent') { console.log(`message to ${code} by text`); return answer('sent', 'text'); }
+    recentJobMessages.delete(key);
+    return answer('msg_err', { duplicate: 'duplicate', 'no-consent': 'no-consent', unconfigured: 'texting-off',
+                               'no-phone': 'no-phone' }[status] || 'failed');
+  } catch (err) {
+    recentJobMessages.delete(key);
+    console.error(`message to ${code} failed:`, err.message);
+    reportError('job-message', err, `quote ${code} by ${channel}`).catch(() => {});
+    return answer('msg_err', 'failed');
   }
 });
 
@@ -16120,7 +16457,7 @@ async function sendQuoteFollowUps() {
       const msgs = quoteMessages(q);
       const t = quoteTotals(q);
       try {
-        await sendEmail({
+        await sendClientEmail({ quote: q.code, kind: 'follow-up',
           to: q.email,
           subject: `Still thinking it over? Quote ${q.code}`,
           html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
@@ -16173,7 +16510,7 @@ async function sendDepositReminders() {
       await pool.query('UPDATE quotes SET deposit_nudged_at=NOW() WHERE id=$1', [q.id]);
       const t = quoteTotals(q);
       try {
-        await sendEmail({
+        await sendClientEmail({ quote: q.code, kind: 'deposit-reminder',
           to: q.email,
           subject: `Ready when you are — deposit for quote ${q.code}`,
           html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
@@ -16234,7 +16571,7 @@ async function sendBalanceReminders() {
       const due = balanceOf(q);
       if (due <= 0) continue;
       try {
-        await sendEmail({
+        await sendClientEmail({ quote: q.code, kind: 'balance-reminder',
           to: q.email,
           subject: `Balance on quote ${q.code} — ${money(due)}`,
           html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
@@ -16287,7 +16624,7 @@ async function sendReorderNudges() {
       if (await isUnsubscribed(q.email)) continue;
 
       try {
-        await sendEmail({
+        await sendClientEmail({ quote: q.code, kind: 'reorder',
           to: q.email,
           marketing: true,   // adds the unsubscribe footer and List-Unsubscribe
           subject: `Need another run, ${String(q.name || '').split(' ')[0] || 'there'}?`,
@@ -16522,7 +16859,8 @@ async function taxMonthlyCheck() {
 /* The "your order has shipped" email with its tracking number. */
 function sendTrackingEmail(q, tracking) {
   if (!q || !q.email || !tracking) return;
-  sendEmail({
+  sendClientEmail({
+    quote: q.code, kind: 'tracking',
     to: q.email,
     subject: `Your order has shipped — ${q.code}`,
     html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
@@ -16533,13 +16871,6 @@ function sendTrackingEmail(q, tracking) {
   }).catch((e) => console.error('tracking email failed:', e.message));
 }
 
-// When Shipped is ticked AFTER the tracking number was typed, the email the
-// tracking form held back goes now.
-function emailTrackingOnShip(before, after) {
-  if (!before || !after || before.shipped_at || !after.shipped_at) return;
-  if (String(after.ship_method || '').toLowerCase() === 'pickup') return;
-  if (after.tracking) sendTrackingEmail(after, after.tracking);
-}
 
 /* Shipping method and tracking. Method matters beyond record-keeping: a pickup
    has no transit time, so the backwards schedule gives you the extra days back
@@ -16560,13 +16891,13 @@ app.post('/quote/:code/shipping', requireAdmin, async (req, res) => {
     /* A tracking number is worth nothing sitting in a database — send it. But
        only once the order is marked shipped: a label printed a day early is not
        a parcel on its way, and "it has shipped" must not arrive before it has.
-       If it is not shipped yet, the Shipped tick sends it (textQuoteMilestones
-       and emailTrackingOnShip). */
+       If it is not shipped yet, marking it shipped sends it, in the "has
+       shipped" message (notifyQuoteMilestone). */
     const q = rows[0];
     if (q && q.shipped_at && tracking && tracking !== String(b.prev_tracking || '')) {
       sendTrackingEmail(q, tracking);
       if (q.phone) {
-        sendCustomerSms({ phone: q.phone, kind: 'transactional', ref: 'quote:' + q.code,
+        sendCustomerSms({ phone: q.phone, kind: 'transactional', ref: 'quote:' + q.code, quote: q.code,
           msg: SMS.shipped({ code: q.code, tracking }) });
       }
     }
