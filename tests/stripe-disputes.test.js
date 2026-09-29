@@ -492,7 +492,7 @@ test('the quote page stops asking for money from the day a dispute opens, and sa
   const page = src.slice(at, src.indexOf('app.get(', at + 20));
   assert.match(page, /EXISTS \(SELECT 1 FROM stripe_disputes WHERE quote_code = \$1\) AS disputed/);
   assert.match(page, /const stopAsking = refunded \|\| disputed;/);
-  assert.match(page, /\$\{\(paid && balanceDue > 0 && !stopAsking\) \?/, 'no "Balance due" card');
+  assert.match(page, /\$\{\(paid && balanceDue > 0 && !stopAsking(?: && !certLock)?\) \?/, 'no "Balance due" card');
   assert.match(page, /paid \|\| q\.requested_items \|\| q\.cancelled_at \|\| stopAsking \? '' : accepted \?/,
     'no deposit card and no accept form');
   assert.match(page, /Reversed by your card issuer/);

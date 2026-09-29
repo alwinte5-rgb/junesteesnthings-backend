@@ -488,7 +488,7 @@ test('the quote page shows a refund instead of asking for the money again', () =
     'what went back to the card is read from the refund rows, net of any that failed');
   /* The gate became stopAsking on 2026-09-27: a refund or a dispute. */
   assert.match(page, /const stopAsking = refunded \|\| disputed;/, 'a refund still stops the asking');
-  assert.match(page, /\$\{\(paid && balanceDue > 0 && !stopAsking\) \?/, 'no "Balance due" card after a refund');
+  assert.match(page, /\$\{\(paid && balanceDue > 0 && !stopAsking(?: && !certLock)?\) \?/, 'no "Balance due" card after a refund');
   assert.match(page, /paid \|\| q\.requested_items \|\| q\.cancelled_at \|\| stopAsking \? '' : accepted \?/,
     'no "Pay your deposit" card after a refund in full');
   assert.match(page, /Refunded — \$\{money\(refundedToCard\)\}/, 'the refund itself is shown');

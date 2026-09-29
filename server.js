@@ -22,6 +22,7 @@ const {
 } = require('./tools/lib/sms-consent');
 const { T: SMS, plain: smsPlain, PICKUP: SMS_PICKUP } = require('./tools/lib/sms-templates');
 const { verifyTwilioSignature, classifyInbound } = require('./tools/lib/twilio-webhook');
+const TAXCERT = require('./tools/lib/tax-certificates');
 
 const express    = require('express');
 const cors       = require('cors');
@@ -103,6 +104,12 @@ app.use(cors({ origin: SITE_ORIGINS }));
    the redirect after every form must all agree. */
 const FINANCES_PATH = '/admin/finances';
 
+/* Tax-exemption certificate uploads carry the file itself, base64 inside the
+   JSON, up to 8 MB of it (tools/lib/tax-certificates.js). These three paths
+   get a larger limit; everything else keeps 1mb. Mounted FIRST: express.json
+   marks a body as read, and the general parser below then leaves it alone. */
+app.use(['/q/:code/certificate', '/quote/:code/certificate', '/api/tax-certificates'],
+  express.json({ limit: '12mb' }));
 app.use(express.json({
   limit: '1mb',
   verify: (req, _res, buf) => {
@@ -358,6 +365,14 @@ async function initDB() {
     'blanks_tracking TEXT',           // inbound tracking for the blanks
     'tracking TEXT',                  // outbound tracking to the customer
     'ship_method TEXT',               // pickup | ground | expedited
+    /* WHY a quote charges no tax: e_number | resale | out_of_state | other
+       (tools/lib/tax-certificates.js). "Untaxed" alone cannot say which line
+       of the ST-1 the sale is deducted on, or what evidence it needs. NULL on
+       a taxed quote, and on every quote from before this column. */
+    'tax_exempt_reason TEXT',
+    /* The certificate behind an e_number or resale exemption. A quote that
+       needs one cannot be paid by card until it has one. */
+    'tax_certificate_id BIGINT',
   ]) {
     await pool.query(`ALTER TABLE quotes ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
@@ -648,6 +663,43 @@ async function initDB() {
                       ON unlinked_payments (ext_ref) WHERE ext_ref IS NOT NULL`);
   await pool.query(`CREATE INDEX IF NOT EXISTS unlinked_payments_date_idx
                       ON unlinked_payments (created_at)`);
+
+  /* Sales-tax exemption certificates: the evidence behind a sale that charged
+     no tax. Illinois reports an exempt sale as a receipt and then deducts it,
+     and the deduction only holds if the certificate can be produced for that
+     sale. One row per certificate, reused across the buyer's orders; quotes
+     point at it (quotes.tax_certificate_id) and so do studio payments
+     (unlinked_payments.tax_certificate_id, from the payment's jt_exempt_cert
+     stamp). Rules in tools/lib/tax-certificates.js.
+
+     The file lives HERE, not on the CDN the photos use: a certificate carries a
+     tax ID and a signature, and it is served only to a signed-in admin.
+
+     Unique on (file, number) so the same certificate sent twice is one row,
+     and a returning buyer's approval carries over. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tax_certificates (
+      id           BIGSERIAL PRIMARY KEY,
+      kind         TEXT NOT NULL,                  -- e_number | resale
+      number       TEXT NOT NULL,
+      holder       TEXT NOT NULL,                  -- organisation or business named on it
+      email        TEXT,                           -- who sent it; how a returning buyer's is found
+      expires_on   DATE,                           -- NULL only where the form has no expiry (CRT-61)
+      file         BYTEA NOT NULL,
+      file_type    TEXT NOT NULL,                  -- sniffed from the bytes, never the name
+      file_name    TEXT,
+      file_sha256  TEXT NOT NULL,
+      source       TEXT NOT NULL,                  -- shop | quote_page | studio
+      status       TEXT NOT NULL DEFAULT 'pending',-- pending | approved | rejected
+      review_note  TEXT,                           -- why it was refused, shown to the buyer
+      reviewed_at  TIMESTAMPTZ,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS tax_certificates_same_uniq
+                      ON tax_certificates (file_sha256, number)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS tax_certificates_email_idx
+                      ON tax_certificates (lower(email))`);
+  await pool.query(`ALTER TABLE unlinked_payments ADD COLUMN IF NOT EXISTS tax_certificate_id BIGINT`);
   /* The $0.57 live card test from August — a test quote (E7BE52, since gone)
      — and its refund on 2026-09-26. It sold nothing, so no tax was collected
      on it, but it came in through tools/backfill-unlinked.js with its tax
@@ -820,7 +872,7 @@ async function taxPositionByMonth(limit = 24) {
                against ONE deduction, and counting both overstates how many
                exemptions are missing evidence. */
             COUNT(DISTINCT p.quote_code)
-              FILTER (WHERE NULLIF(btrim(q.tax_exempt_ref), '') IS NULL)
+              FILTER (WHERE NOT ${EXEMPT_DOCUMENTED_SQL})
                                       AS exempt_undocumented
        FROM quote_payments p JOIN quotes q ON q.code = p.quote_code
       WHERE COALESCE(q.taxable, q.tax > 0) = false
@@ -4648,6 +4700,19 @@ function quoteExemptUndocumented(q) {
   return !quoteTaxable(q) && !String((q && q.tax_exempt_ref) || '').trim();
 }
 
+/* Whether an untaxed quote `q` has its evidence, in SQL: the same rule as
+   TAXCERT.exemptionDocumented(). An E-number or resale exemption needs a
+   certificate that was not refused; out of state and "other" need the note;
+   a sale from before reasons existed counts if either kind is there. Until
+   2026-09-28 the note alone counted, so a certificate could never. */
+const EXEMPT_DOCUMENTED_SQL = `(CASE
+    WHEN q.tax_exempt_reason IN ('e_number', 'resale') THEN EXISTS (
+      SELECT 1 FROM tax_certificates c WHERE c.id = q.tax_certificate_id AND c.status <> 'rejected')
+    WHEN q.tax_exempt_reason IN ('out_of_state', 'other') THEN NULLIF(btrim(q.tax_exempt_ref), '') IS NOT NULL
+    ELSE NULLIF(btrim(q.tax_exempt_ref), '') IS NOT NULL OR EXISTS (
+      SELECT 1 FROM tax_certificates c WHERE c.id = q.tax_certificate_id AND c.status <> 'rejected')
+  END)`;
+
 /** Can this sale carry an exemption number? Only one that charged no tax. */
 function quoteExemptable(q) {
   return !quoteTaxable(q);
@@ -6202,6 +6267,7 @@ const ADMIN_NAV = [
   { key: 'customers',  href: '/customers',     label: 'Customers',  icon: 'users' },
   { key: 'reviews',    href: '/admin/reviews', label: 'Reviews',    icon: 'star',   badge: 'reviews' },
   { key: 'money',      href: FINANCES_PATH,    label: 'Finances',   icon: 'dollar' },
+  { key: 'certificates', href: '/certificates', label: 'Certificates', icon: 'cert', badge: 'certificates' },
   { key: 'discounts',  href: '/discounts',     label: 'Discounts',  icon: 'tag' },
 ];
 /* Ordered the way a shop is actually worked, not the way the routes grew: what
@@ -6225,6 +6291,7 @@ const ADMIN_ICONS = {
   grid:   '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/>',
   inbox:  '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
   file:   '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>',
+  cert:   '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="8.5 14.5 11 17 15.5 12"/>',
   layers: '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
   box:    '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>',
   users:  '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
@@ -6964,12 +7031,22 @@ function productGroupOf(name) {
           <tr><td class="muted"><label style="display:inline;margin:0;text-transform:none;letter-spacing:0;font-size:14px;font-weight:400">
             <input type="checkbox" name="taxable" value="1" ${!isEdit || quoteTaxable(E) ? 'checked' : ''} style="width:auto;margin-right:6px" onchange="calc()"> Illinois sales tax</label>
             <div id="exemptbox" style="display:none;margin-top:5px">
+              ${/* Why, not just whether: the reason decides what evidence the
+                    sale needs. An E-number or resale exemption needs the
+                    certificate, and the customer cannot pay until one is on
+                    file; out of state and "other" need only the note. */ ''}
+              <select name="tax_exempt_reason" style="width:100%;padding:5px 7px;font-size:13px;margin-bottom:5px">
+                <option value="">Why no tax? (choose one)</option>
+                ${Object.entries(TAXCERT.EXEMPT_REASONS).map(([k, r]) => `<option value="${k}"${
+                  E.tax_exempt_reason === k ? ' selected' : ''}>${escEmail(r.label)}</option>`).join('')}
+              </select>
               <input name="tax_exempt_ref" value="${val(E.tax_exempt_ref)}" maxlength="60"
-                     placeholder="Exemption E-number — who is exempt, and under what"
+                     placeholder="Note — where it ships, or why (the certificate carries its own number)"
                      style="width:100%;padding:5px 7px;font-size:13px">
               <div class="muted" style="font-size:11px;margin-top:3px;text-transform:none;letter-spacing:0">
-                Illinois reports exempt sales as receipts, then deducts them. Without the
-                number this reads as untaxed rather than exempt.
+                Illinois reports exempt sales as receipts, then deducts them. For an E-number or
+                resale exemption the customer uploads the certificate on their quote page before they
+                can pay, or you attach it on the job page.
               </div>
             </div></td>
             <td class="num" id="tax">$0.00</td></tr>
@@ -8504,6 +8581,11 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
     const exemptRef = taxable
       ? null
       : (String(one(b.tax_exempt_ref) || '').trim().slice(0, 60) || null);
+    /* Why it is untaxed, which decides the evidence it needs
+       (tools/lib/tax-certificates.js). Kept on an untaxed quote only, for the
+       same reason as the note; anything not on the list is no answer. */
+    const reasonIn = String(one(b.tax_exempt_reason) || '').trim();
+    const exemptReason = taxable ? null : (TAXCERT.EXEMPT_REASONS[reasonIn] ? reasonIn : null);
     const tax = quoteTax(net, taxable);
     const total = round2(net + tax);
     const deposit = depositFor(total);
@@ -8523,13 +8605,13 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
         `UPDATE quotes SET name=$2, phone=$3, email=$4, items=$5, subtotal=$6, tax=$7,
                 total=$8, deposit=$9, notes=$10, valid_until=$11, needed_by=$12,
                 discount_kind=$13, discount_value=$14, discount_note=$15, rush_pct=$16,
-                taxable=$17, tax_exempt_ref=$18,
+                taxable=$17, tax_exempt_ref=$18, tax_exempt_reason=$19,
                 change_request=NULL, requested_items=NULL, revision=COALESCE(revision,1)+1,
                 status = CASE WHEN accepted_at IS NULL THEN 'sent' ELSE status END
           WHERE code=$1 RETURNING *`,
         [editing, name, phone, email, JSON.stringify(items), subtotal, tax, total, deposit,
          String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy,
-         discountKind, discountValue, discountNote || null, rushPct, taxable, exemptRef]));
+         discountKind, discountValue, discountNote || null, rushPct, taxable, exemptRef, exemptReason]));
       if (!rows.length) {
         return res.status(404).send(quotePage('Not found',
           `<div class="card"><div class="warn">That quote no longer exists.</div>
@@ -8548,11 +8630,12 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
            would sit on the board until the contact-matching fallback happened
            to catch it, which it only does when the details match exactly. */
         `INSERT INTO quotes (code,name,phone,email,items,subtotal,tax,total,deposit,notes,status,valid_until,needed_by,
-                             discount_kind,discount_value,discount_note,rush_pct,taxable,tax_exempt_ref,from_submission_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'sent',$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING *`,
+                             discount_kind,discount_value,discount_note,rush_pct,taxable,tax_exempt_ref,tax_exempt_reason,
+                             from_submission_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'sent',$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *`,
         [code, name, phone, email, JSON.stringify(items), subtotal, tax, total, deposit,
          String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy,
-         discountKind, discountValue, discountNote || null, rushPct, taxable, exemptRef,
+         discountKind, discountValue, discountNote || null, rushPct, taxable, exemptRef, exemptReason,
          (Number.isFinite(parseInt(one(b.from_submission_id), 10))
            ? parseInt(one(b.from_submission_id), 10) : null)]));
     }
@@ -8586,6 +8669,10 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
           ${smsHref ? `<a class="btn btn-ghost" href="${escEmail(smsHref)}">Open in Messages</a>` : ''}
         </div>
         <p class="muted" style="margin-top:10px">They see: <a href="${quoteLink(code)}">${quoteLink(code)}</a></p>
+        ${TAXCERT.quoteNeedsCertificate(q) && !q.tax_certificate_id ? `
+        <div class="warn" style="margin-top:10px">No tax on this one, so their quote page asks for the
+          exemption certificate before they can pay. Already have it?
+          <a href="/production/${escEmail(code)}#certificate">Attach it on the job page</a>.</div>` : ''}
       </div>
       <div class="card">
         <a class="btn btn-ghost" href="/quote/${code}/edit">Edit this quote</a>
@@ -8804,6 +8891,32 @@ app.get('/q/:code', async (req, res) => {
     const reversedByIssuer = round2(Number(dq[0]?.reversed || 0));
     const disputed = !!dq[0]?.disputed;
     const stopAsking = refunded || disputed;
+    /* An untaxed quote whose exemption needs a certificate shows the upload in
+       place of every way to pay (card, Zelle and cash alike) until one is on
+       file; the card route refuses on its own as well. A failed lookup reads as
+       none on file: payment waits rather than going ahead unevidenced. */
+    const needsCert = TAXCERT.quoteNeedsCertificate(q) && !q.cancelled_at;
+    const cert = needsCert ? await certificateFor(q).catch(() => null) : null;
+    const certLock = needsCert && TAXCERT.quotePayLocked(q, cert);
+    const certCard = !needsCert || stopAsking ? '' : certLock ? (() => {
+      const why = TAXCERT.lockReason(cert);
+      return `
+      <div class="card" id="certificate">
+        <h1 style="font-size:18px">Tax-exempt order — your certificate</h1>
+        <p class="muted" style="margin-top:6px">This quote has no Illinois sales tax on it. The state needs
+          us to keep your exemption certificate on file for the sale${paid && balanceDue <= 0
+            ? '. Please upload it here.'
+            : ', so payment opens as soon as it is uploaded.'}</p>
+        ${why === 'rejected' ? `<div class="warn" style="margin-top:10px">The certificate you sent could not be
+          accepted${cert.review_note ? ': <b>' + escEmail(cert.review_note) + '</b>' : ''}. Please upload the right one.</div>`
+        : why === 'expired' ? `<div class="warn" style="margin-top:10px">The certificate on file has expired.
+          Please upload the current one.</div>` : ''}
+        ${certificateFormHtml({ action: `/q/${q.code}/certificate`, holder: q.name || '',
+          kind: TAXCERT.CERT_KINDS[q.tax_exempt_reason] ? q.tax_exempt_reason : 'e_number' })}
+      </div>${CERT_UPLOAD_JS}`;
+    })() : `
+      <div class="card"><p class="muted" style="margin:0">Tax-exempt order: your certificate
+        (${escEmail(TAXCERT.certificateLabel(cert))}) is on file. Thank you.</p></div>`;
     /* Items go in for the piece count only — a run past the contract sheet's
        stated ceiling gets a caveat rather than a date presented as a promise. */
     const eta = deliveryEstimate(q.accepted_at ? new Date(q.accepted_at) : new Date(),
@@ -8930,7 +9043,9 @@ app.get('/q/:code', async (req, res) => {
 
         ${paid ? `<div class="ok"><b>Payment received — ${money(q.paid_amount)}.</b> You're on the schedule. ${SHOP_SIGNER} will follow up with a proof.${
             balanceDue > 0 ? ` A balance of <b>${money(balanceDue)}</b> is due ${BALANCE_WHEN}.` : ' Paid in full — nothing further to pay.'}</div>`
-          : accepted ? `<div class="ok"><b>Accepted — thank you!</b> Choose how you'd like to pay the deposit below.</div>` : ''}
+          : accepted ? `<div class="ok"><b>Accepted — thank you!</b> ${certLock
+            ? 'Upload your tax-exemption certificate below, then choose how to pay.'
+            : 'Choose how you\'d like to pay the deposit below.'}</div>` : ''}
         ${(!accepted && expired) ? `<div class="warn">This quote has expired, but prices usually still stand — just text and we'll refresh it.</div>` : ''}
         ${(() => {
           /* Why the last action did not happen. Pressing Accept and having the
@@ -9022,7 +9137,9 @@ app.get('/q/:code', async (req, res) => {
           ${SHOP_SIGNER} sends you a new payment link.</p>
       </div>` : ''}
 
-      ${(paid && balanceDue > 0 && !stopAsking) ? `
+      ${certCard}
+
+      ${(paid && balanceDue > 0 && !stopAsking && !certLock) ? `
       <div class="card">
         <h1 style="font-size:18px">Balance due — ${money(balanceDue)}</h1>
         <p class="muted" style="margin:6px 0 14px">${money(q.paid_amount)} received, thank you. The rest is due
@@ -9045,7 +9162,7 @@ app.get('/q/:code', async (req, res) => {
         </div>
       </div>` : ''}
 
-      ${paid || q.requested_items || q.cancelled_at || stopAsking ? '' : accepted ? `
+      ${paid || q.requested_items || q.cancelled_at || stopAsking ? '' : accepted ? certLock ? '' : `
       <div class="card">
         <h1 style="font-size:18px">Pay your ${t.deposit >= t.total ? 'balance' : 'deposit'} — ${money(t.deposit)}</h1>
         <p class="muted" style="margin:6px 0 14px">Whichever is easiest. Nothing else is due until pickup or delivery.</p>
@@ -9277,6 +9394,11 @@ app.get(['/q/:code/pay/card', '/q/:code/pay/balance', '/q/:code/pay/full'], asyn
     /* A cancelled order must not take money, whatever page the customer still
        has open. The buttons are gone; this is what actually enforces it. */
     if (q.cancelled_at) return res.redirect('/q/' + code);
+    /* Nor an untaxed quote whose exemption has no certificate behind it: no
+       card payment until one is on file, and not a refused or expired one. The
+       page shows the upload instead of the buttons; this enforces it. */
+    if (TAXCERT.quoteNeedsCertificate(q)
+        && TAXCERT.quotePayLocked(q, await certificateFor(q))) return res.redirect('/q/' + code + '#certificate');
 
     const t = quoteTotals(q);
     const alreadyPaid = Number(q.paid_amount || 0);
@@ -11584,13 +11706,13 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
        deducts these on the return and expects the purchaser's number to be
        producible, so each is a deduction currently claimed without evidence. */
     const { rows: undocumented } = await pool.query(
-      `SELECT code, name, subtotal, created_at,
+      `SELECT code, name, subtotal, created_at, tax_exempt_reason,
               COALESCE((SELECT SUM(amount) FROM quote_payments p
                          WHERE p.quote_code = q.code), 0) AS paid
          FROM quotes q
         WHERE COALESCE(q.taxable, q.tax > 0) = false
           AND COALESCE(q.subtotal, 0) > 0
-          AND NULLIF(btrim(q.tax_exempt_ref), '') IS NULL
+          AND NOT ${EXEMPT_DOCUMENTED_SQL}
           AND q.cancelled_at IS NULL
         ORDER BY q.created_at DESC LIMIT 50`).catch(() => ({ rows: [] }));
 
@@ -11948,7 +12070,8 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
           Illinois reports these as receipts and then deducts them, and expects the purchaser's
           exemption (&ldquo;E&rdquo;) number to be producible on audit. Without one, a sale here is
           indistinguishable from tax somebody forgot to charge. Recording a number does not
-          re-price the job.
+          re-price the job. An E-number or resale exemption needs the certificate itself: attach
+          it on the job page.
         </p>
         <table style="width:100%;border-collapse:collapse;font-size:13px">
           <tr style="text-align:left;color:#6b7280;font-size:11px;text-transform:uppercase">
@@ -11968,13 +12091,16 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
             <td class="num" style="padding:7px 4px;font-variant-numeric:tabular-nums">${money(q.subtotal)}</td>
             <td class="num" style="padding:7px 4px;font-variant-numeric:tabular-nums">${money(q.paid)}</td>
             <td style="padding:7px 4px">
-              <form method="post" action="/quotes/${escEmail(String(q.code))}/exemption"
+              ${TAXCERT.EXEMPT_REASONS[q.tax_exempt_reason] && TAXCERT.EXEMPT_REASONS[q.tax_exempt_reason].certificate
+                /* A note cannot document these: only the certificate does. */
+                ? `<a href="/production/${escEmail(String(q.code))}#certificate" style="color:#1848B8">Attach the certificate</a>`
+                : `<form method="post" action="/quotes/${escEmail(String(q.code))}/exemption"
                     style="display:flex;gap:6px;margin:0">
                 <input type="hidden" name="back" value="${FINANCES_PATH}?year=${year}#exemptions">
                 <input name="tax_exempt_ref" maxlength="60" placeholder="E-number"
                        style="width:150px;padding:5px 7px;font-size:13px">
                 <button class="btn" style="padding:5px 12px;font-size:13px">Record</button>
-              </form>
+              </form>`}
             </td>
           </tr>`).join('')}
         </table>
@@ -12309,8 +12435,10 @@ app.get('/tax.csv', requireAdmin, async (req, res) => {
     const { rows } = await pool.query(
       `SELECT p.created_at, p.quote_code, q.name, q.subtotal, q.tax, q.total,
               p.amount, p.method, p.kind, p.tax_portion,
-              q.taxable, q.tax_exempt_ref
+              q.taxable, q.tax_exempt_ref, q.tax_exempt_reason,
+              c.kind AS cert_kind, c.number AS cert_number, c.holder AS cert_holder, c.status AS cert_status
          FROM quote_payments p JOIN quotes q ON q.code = p.quote_code
+         LEFT JOIN tax_certificates c ON c.id = q.tax_certificate_id
         ORDER BY p.created_at`)
       /* A deploy that races the migration loses the exemption columns rather
          than the whole export — the same guard the sibling queries carry.
@@ -12319,7 +12447,9 @@ app.get('/tax.csv', requireAdmin, async (req, res) => {
       .catch(() => pool.query(
         `SELECT p.created_at, p.quote_code, q.name, q.subtotal, q.tax, q.total,
                 p.amount, p.method, p.kind, p.tax_portion,
-                NULL::boolean AS taxable, NULL::text AS tax_exempt_ref
+                NULL::boolean AS taxable, NULL::text AS tax_exempt_ref, NULL::text AS tax_exempt_reason,
+                NULL::text AS cert_kind, NULL::text AS cert_number, NULL::text AS cert_holder,
+                NULL::text AS cert_status
            FROM quote_payments p JOIN quotes q ON q.code = p.quote_code
           ORDER BY p.created_at`));
 
@@ -12340,24 +12470,30 @@ app.get('/tax.csv', requireAdmin, async (req, res) => {
         /* `exempt` is what the ST-1 deducts, so it has to be readable without
            inferring it from a zero in the tax column — a zero says nothing
            about whether the sale was exempt or simply not charged tax. */
+        /* The last three say what the deduction stands on: why the sale was
+           exempt, and the certificate behind it. Added at the END, so a
+           sheet that reads the older columns by position still lines up. */
         cells: [day(r.created_at), r.quote_code, r.name, r.subtotal, r.tax,
                 r.total, r.amount, r.method, r.kind, r.tax_portion,
                 quoteTaxable(r) ? '' : 'exempt',
-                String(r.tax_exempt_ref || '').trim(), 'quote'],
+                String(r.tax_exempt_ref || '').trim(), 'quote',
+                quoteTaxable(r) ? '' : (r.tax_exempt_reason || ''),
+                r.cert_number ? TAXCERT.certificateLabel({ kind: r.cert_kind, number: r.cert_number, holder: r.cert_holder }) : '',
+                r.cert_status || ''],
       })),
       ...unlinked.map((u) => ({
         at: u.created_at,
         cells: [day(u.created_at),
                 u.order_ref ? `studio #${u.order_ref}` : (u.client_ref || u.stripe_pi || ''),
                 u.customer_name || '', '', '', '', u.amount, 'card', u.kind,
-                u.tax_portion == null ? '' : u.tax_portion, '', '', u.channel],
+                u.tax_portion == null ? '' : u.tax_portion, '', '', u.channel, '', '', ''],
       })),
     ].sort((a, b) => new Date(a.at) - new Date(b.at));
 
     sendCsv(res, `jtees-sales-tax-${new Date().toISOString().slice(0, 10)}.csv`,
       ['date', 'quote', 'customer', 'job_subtotal', 'job_tax', 'job_total',
        'payment', 'method', 'kind', 'tax_portion_of_payment',
-       'exempt', 'exempt_ref', 'source'],
+       'exempt', 'exempt_ref', 'source', 'exempt_reason', 'certificate', 'certificate_status'],
       all.map((r) => r.cells));
   } catch (err) {
     console.error('tax csv failed:', err.message);
@@ -14778,6 +14914,7 @@ app.get('/production/:code', requireAdmin, async (req, res) => {
     }).join('');
 
     const messagesCard = await jobMessagesCard(q, req.query);
+    const certificateCard = await jobCertificateCard(q, req.query);
     res.send(adminPage(`${q.code} — production`, `
       <h1>${escEmail(q.name || q.code)}</h1>
       <div class="sub">${escEmail(q.code)} · ${money(q.total)} ·
@@ -14841,6 +14978,7 @@ app.get('/production/:code', requireAdmin, async (req, res) => {
         <span class="muted" style="font-size:11.5px" data-progress>${cl.done}/${cl.of}</span>
         <div style="margin-top:8px">${stepRows}</div>
       </div>
+      ${certificateCard}
       ${messagesCard}
 
       <script>
@@ -14887,6 +15025,41 @@ app.get('/production/:code', requireAdmin, async (req, res) => {
     res.redirect('/production');
   }
 });
+
+/* ── Tax exemption on the job page ────────────────────────────────────────────
+   For an untaxed quote: why it charges no tax, what is on file, its review,
+   and a way to attach one the shop already has. A quote taxed again later
+   needs no exemption, so it shows none. Rules in tools/lib/tax-certificates.js;
+   the routes by /certificates. */
+async function jobCertificateCard(q, query = {}) {
+  if (q.taxable !== false) return '';
+  const cert = await certificateFor(q).catch(() => null);
+  const reason = TAXCERT.exemptReasonOf(q);
+  const needs = TAXCERT.quoteNeedsCertificate(q);
+  const locked = needs && TAXCERT.quotePayLocked(q, cert);
+  const back = `/production/${q.code}`;
+  const exp = cert ? TAXCERT.isoDay(cert.expires_on) : '';
+  return `
+    <div class="card" id="certificate" style="margin-top:14px">
+      <h2 class="card-title">Tax exemption ${needs || cert ? certificatePill(cert) : ''}</h2>
+      ${query.cert === 'need-reason' ? `<div class="warn">Say why you are refusing it: the customer is shown the reason.</div>` : ''}
+      <div class="muted" style="font-size:13px">No Illinois tax on this quote: ${
+        reason ? escEmail(TAXCERT.EXEMPT_REASONS[reason].label) : 'no reason given yet'}${
+        q.tax_exempt_ref ? ` &middot; ${escEmail(q.tax_exempt_ref)}` : ''}.
+        ${!reason ? `<a href="/quote/${escEmail(q.code)}/edit">Say why</a>.` : ''}</div>
+      ${cert ? `
+      <div style="margin-top:8px;font-size:13.5px"><b>${escEmail(TAXCERT.certificateLabel(cert))}</b>${
+        exp ? ` &middot; expires ${escEmail(exp)}` : ''} &middot;
+        <a href="/certificates/${cert.id}/file" target="_blank" rel="noopener">open it</a></div>
+      ${cert.status === 'rejected' && cert.review_note ? `<div class="muted" style="font-size:12.5px;margin-top:4px">Refused: ${escEmail(cert.review_note)}</div>` : ''}
+      ${certificateReviewForms(cert, back)}` : ''}
+      ${locked ? `
+      <p class="muted" style="font-size:12.5px;margin-top:10px">Their quote page asks for ${
+        cert ? 'a new one' : 'it'} before they can pay. Already have it? Attach it here; it counts as approved.</p>
+      ${certificateFormHtml({ action: `/quote/${q.code}/certificate`, holder: q.name || '', button: 'Attach certificate',
+        kind: TAXCERT.CERT_KINDS[reason] ? reason : 'e_number' })}${CERT_UPLOAD_JS}` : ''}
+    </div>`;
+}
 
 /* ── Messages on the job page ─────────────────────────────────────────────────
    Everything the customer has been sent about this job, and a way to write to
@@ -15312,10 +15485,11 @@ const REVIEWS_WAITING_SQL = `SELECT COUNT(*)::int AS n FROM reviews
    costs a badge rather than the lot. */
 app.get('/admin/nav-counts', requireAdmin, async (_req, res) => {
   res.set('Cache-Control', 'no-store');
-  const out = { leads: 0, reviews: 0, late: 0 };
+  const out = { leads: 0, reviews: 0, late: 0, certificates: 0 };
   await Promise.all([
     unansweredLeads().then((l) => { out.leads = l.length; }).catch(() => {}),
     pool.query(REVIEWS_WAITING_SQL).then(({ rows }) => { out.reviews = rows[0].n; }).catch(() => {}),
+    pool.query(CERTS_WAITING_SQL).then(({ rows }) => { out.certificates = rows[0].n; }).catch(() => {}),
     liveJobs().then((jobs) => {
       out.late = jobs.filter((q) => { const s = quoteSchedule(q); return !!(s && s.risks.length); }).length;
     }).catch(() => {}),
@@ -15334,7 +15508,8 @@ app.get('/dashboard', requireAdmin, async (_req, res) => {
   const one = (sql, what, args) => safe(pool.query(sql, args).then((r) => r.rows[0] || {}), {}, what);
   const many = (sql, what, args) => safe(pool.query(sql, args).then((r) => r.rows), [], what);
 
-  const [takings, owed, out, leads, jobs, reviewsWaiting, changes, disputes, unapplied, badTexts, recent, tax] =
+  const [takings, owed, out, leads, jobs, reviewsWaiting, changes, disputes, unapplied, badTexts, recent, tax,
+         certsWaiting] =
     await Promise.all([
       /* Quotes and everything else apart: the board's "Collected this month"
          and the Finances months count the quote ledger only, so the total here
@@ -15378,6 +15553,7 @@ app.get('/dashboard', requireAdmin, async (_req, res) => {
                 FROM unlinked_payments WHERE amount > 0) x
             ORDER BY created_at DESC LIMIT 6`, 'recent payments'),
       safe(taxPositionByMonth(24), null, 'tax'),
+      one(CERTS_WAITING_SQL, 'certificates'),
     ]);
 
   const waiting = leads.filter((l) => l.lead_status === 'new');
@@ -15405,6 +15581,9 @@ app.get('/dashboard', requireAdmin, async (_req, res) => {
       title: `${money(u.amount)} paid in Stripe, not on a quote`,
       sub: `${escEmail(u.customer_name || u.customer_email || 'no name')} &middot; apply it from Record a payment`,
       href: '/quotes' })),
+    ...(Number(certsWaiting.n) > 0 ? [{ tone: 'amber', icon: 'cert',
+      title: `${certsWaiting.n} tax certificate${certsWaiting.n === 1 ? '' : 's'} to check`,
+      sub: 'the customer can already pay; refusing one locks payment again', href: '/certificates?status=pending' }] : []),
     ...(Number(reviewsWaiting.n) > 0 ? [{ tone: 'blue', icon: 'star',
       title: `${reviewsWaiting.n} review${reviewsWaiting.n === 1 ? '' : 's'} waiting for your approval`,
       sub: 'nothing shows on the site until you approve it', href: '/admin/reviews' }] : []),
@@ -17228,6 +17407,321 @@ app.post('/quotes/:code/exemption', requireAdmin, async (req, res) => {
     console.error('exemption update failed:', err.message);
   }
   res.redirect(back);
+});
+
+/* ── Tax-exemption certificates ──────────────────────────────────────────────
+   The evidence behind a sale that charged no tax. Illinois deducts an exempt
+   sale from gross receipts only if the buyer's certificate can be produced for
+   it, and until 2026-09-28 the only evidence was a free-text box that nothing
+   required. The rules, and what each kind of certificate is, live in
+   tools/lib/tax-certificates.js.
+
+   A quote the shop leaves untaxed for an E-number or resale exemption takes no
+   payment until a certificate is on file: the customer uploads it on their
+   quote page, or the shop attaches it on the job page. The shop checks each one
+   on /certificates, and refusing one locks payment again, with the reason shown
+   to the customer. tests/tax-certificates.test.js. */
+
+/* Everything but the file itself, which only /certificates/:id/file reads. */
+const CERT_COLUMNS = `id, kind, number, holder, email, expires_on, file_type, file_name, source,
+                      status, review_note, reviewed_at, created_at`;
+/* Waiting for the shop to check: the menu badge and the dashboard read this. */
+const CERTS_WAITING_SQL = `SELECT COUNT(*)::int AS n FROM tax_certificates WHERE status = 'pending'`;
+
+/** The certificate on file for a quote, or null. */
+async function certificateFor(q) {
+  if (!q || !q.tax_certificate_id) return null;
+  const { rows } = await pool.query(
+    `SELECT ${CERT_COLUMNS} FROM tax_certificates WHERE id = $1`, [q.tax_certificate_id]);
+  return rows[0] || null;
+}
+
+/** Keep a validated certificate and put it on the quote.
+ *
+ *  The same file with the same number is the same certificate, so it is found
+ *  rather than stored twice, and one that was refused stays refused however
+ *  often it is sent. A refused one is not attached: the caller says so. One the
+ *  SHOP attaches is approved as it lands, since the person who decides has
+ *  already looked at it. The quote's reason follows the certificate's kind,
+ *  which is the line of the ST-1 the sale is deducted on. */
+async function attachCertificate(q, cert, { source, email = null }) {
+  const { rows: [row] } = await pool.query(
+    `INSERT INTO tax_certificates (kind, number, holder, email, expires_on, file, file_type, file_name,
+                                   file_sha256, source, status, reviewed_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+             CASE WHEN $11::boolean THEN 'approved' ELSE 'pending' END,
+             CASE WHEN $11::boolean THEN NOW() END)
+     ON CONFLICT (file_sha256, number) DO UPDATE
+        SET status      = CASE WHEN $11::boolean THEN 'approved' ELSE tax_certificates.status END,
+            review_note = CASE WHEN $11::boolean THEN NULL ELSE tax_certificates.review_note END,
+            reviewed_at = CASE WHEN $11::boolean THEN NOW() ELSE tax_certificates.reviewed_at END
+     RETURNING ${CERT_COLUMNS}`,
+    [cert.kind, cert.number, cert.holder, email, cert.expires_on, cert.file, cert.file_type,
+     cert.file_name, cert.file_sha256, source, source === 'shop']);
+  if (row.status !== 'rejected') {
+    await pool.query(
+      `UPDATE quotes SET tax_certificate_id = $1, tax_exempt_reason = $2 WHERE id = $3`,
+      [row.id, row.kind, q.id]);
+  }
+  return row;
+}
+
+/** Tell the shop a certificate is waiting to be checked. */
+function notifyCertificate(q, cert) {
+  sendEmail({
+    to: NOTIFY_EMAIL,
+    replyTo: q.email || undefined,
+    subject: `Tax certificate for quote ${q.code} — please check it`,
+    html: `<div style="font-family:system-ui,sans-serif;max-width:560px">
+      <h2 style="color:#1848B8;margin:0 0 10px">A tax-exemption certificate came in</h2>
+      <p><b>${escEmail(q.name || q.code)}</b> uploaded one for quote ${escEmail(q.code)}:
+        ${escEmail(TAXCERT.certificateLabel(cert))}${cert.expires_on
+          ? `, expires ${escEmail(TAXCERT.isoDay(cert.expires_on))}` : ''}.</p>
+      <p>They can pay now. Check it matches the name on the quote and has not expired:
+        <a href="${PUBLIC_BASE_URL}/certificates">open Certificates</a>. Refusing it locks payment again
+        and shows them your reason.</p></div>`,
+  }).catch((e) => console.error('certificate alert failed:', e.message));
+}
+
+/* The upload form, the same on the customer's page and the job page. The file
+   travels as base64 inside JSON: this server has no multipart parser, and the
+   three upload paths get a larger JSON limit (top of the file). */
+function certificateFormHtml({ action, kind, holder = '', button = 'Upload certificate' }) {
+  const opt = (k) => `<option value="${k}"${k === kind ? ' selected' : ''}>${
+    escEmail(TAXCERT.CERT_KINDS[k].label)}</option>`;
+  return `
+    <form data-cert-upload action="${escEmail(action)}" style="margin-top:10px">
+      <label>Kind of certificate</label>
+      <select name="kind">${Object.keys(TAXCERT.CERT_KINDS).map(opt).join('')}</select>
+      <label>Certificate number</label>
+      <input name="number" required maxlength="30" autocomplete="off"
+             placeholder="E-number (starts with E) or resale number">
+      <label>Organisation or business named on it</label>
+      <input name="holder" required maxlength="120" value="${escEmail(holder)}">
+      <label>Expiry date <span class="muted" style="text-transform:none">(on the exemption letter; a resale certificate may have none)</span></label>
+      <input name="expires_on" type="date">
+      <label>The certificate — a PDF, or a clear photo</label>
+      <input name="file" type="file" required accept="application/pdf,image/jpeg,image/png,image/webp">
+      <button type="submit" class="btn" style="width:100%;margin-top:12px">${escEmail(button)}</button>
+      <p data-cert-msg class="warn" style="margin-top:10px" hidden></p>
+    </form>`;
+}
+
+/* Sends a [data-cert-upload] form as JSON and reloads on success. The button is
+   disabled while it is in flight, so a double tap cannot send two copies, and
+   the server's own reason is shown when it refuses. */
+const CERT_UPLOAD_JS = `<script>
+document.querySelectorAll('form[data-cert-upload]').forEach(function (form) {
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var btn = form.querySelector('button[type=submit]');
+    var msg = form.querySelector('[data-cert-msg]');
+    var file = form.querySelector('input[type=file]').files[0];
+    var say = function (t) { msg.textContent = t; msg.hidden = false; btn.disabled = false; btn.textContent = btn.dataset.label; };
+    btn.dataset.label = btn.dataset.label || btn.textContent;
+    if (!file) return say('Attach the certificate first.');
+    if (file.size > ${TAXCERT.MAX_FILE_BYTES}) return say('That file is larger than 8 MB. A photo or a PDF of the certificate is plenty.');
+    btn.disabled = true; btn.textContent = 'Uploading…'; msg.hidden = true;
+    var reader = new FileReader();
+    reader.onerror = function () { say('That file could not be read. Try attaching it again.'); };
+    reader.onload = function () {
+      var f = form.elements;
+      fetch(form.getAttribute('action'), { method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({ kind: f.kind.value, number: f.number.value, holder: f.holder.value,
+          expires_on: f.expires_on.value, file_name: file.name, file_b64: String(reader.result) }) })
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (x) { if (x.ok && x.d.ok) { location.reload(); } else { say(x.d.error || 'That did not go through. Please try again.'); } })
+      .catch(function () { say('That did not go through. Check your connection and try again.'); });
+    };
+    reader.readAsDataURL(file);
+  });
+});
+</script>`;
+
+/* The customer's upload, from their quote page. The quote code is what lets
+   them in, as it is for paying: the same budget that stops codes being guessed
+   guards it, and the order rate limit stops it being used as file storage. */
+app.post('/q/:code/certificate', orderRateLimit, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (quoteMissBudget.exhausted(req)) return res.status(429).json({ error: 'Too many tries. Please text us.' });
+  const notFound = () => { quoteMissBudget.miss(req); return res.status(404).json({ error: 'We could not find that quote.' }); };
+  if (!QUOTE_CODE_RE.test(code)) return notFound();
+  try {
+    const { rows } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
+    if (!rows.length) return notFound();
+    const q = rows[0];
+    if (q.cancelled_at) return res.status(409).json({ error: 'This order has been cancelled.' });
+    if (!TAXCERT.quoteNeedsCertificate(q)) {
+      return res.status(409).json({ error: 'This quote does not need a certificate.' });
+    }
+    const v = TAXCERT.validateCertificate(req.body);
+    if (v.error) return res.status(400).json({ error: v.error });
+    const cert = await attachCertificate(q, v.cert, { source: 'quote_page', email: q.email || null });
+    if (cert.status === 'rejected') {
+      return res.status(409).json({ error: `This certificate was not accepted${
+        cert.review_note ? ': ' + cert.review_note : ''}. Please upload a different one.` });
+    }
+    // Once per certificate on this quote: sending the same file again is not news.
+    if (cert.status === 'pending' && String(q.tax_certificate_id) !== String(cert.id)) notifyCertificate(q, cert);
+    console.log(`quote ${code}: tax certificate #${cert.id} on file (${cert.status})`);
+    res.json({ ok: true, status: cert.status });
+  } catch (err) {
+    console.error('certificate upload failed:', err.message);
+    reportError('certificate-upload', err, `quote ${code}`).catch(() => {});
+    res.status(500).json({ error: 'Something went wrong on our end. Please try again, or text us.' });
+  }
+});
+
+/* The shop attaching a certificate it already holds, from the job page. */
+app.post('/quote/:code/certificate', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.status(404).json({ error: 'No such quote.' });
+  try {
+    const { rows } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
+    if (!rows.length) return res.status(404).json({ error: 'No such quote.' });
+    const q = rows[0];
+    /* A certificate on a sale that CHARGED tax is a contradiction; taking the
+       tax off is a pricing decision, and it belongs in the quote form. */
+    if (q.taxable !== false) {
+      return res.status(409).json({ error: 'This quote charges tax. Untick the tax on the quote first, and say why.' });
+    }
+    const v = TAXCERT.validateCertificate(req.body);
+    if (v.error) return res.status(400).json({ error: v.error });
+    const cert = await attachCertificate(q, v.cert, { source: 'shop', email: q.email || null });
+    console.log(`quote ${code}: tax certificate #${cert.id} attached by the shop`);
+    res.json({ ok: true, status: cert.status });
+  } catch (err) {
+    console.error('certificate attach failed:', err.message);
+    res.status(500).json({ error: 'That did not save: ' + err.message });
+  }
+});
+
+/* The file, to a signed-in admin only. Never cached, never sniffed: it is the
+   type its own bytes said it was when it was stored. */
+app.get('/certificates/:id/file', requireAdmin, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.sendStatus(404);
+  try {
+    const { rows } = await pool.query(
+      `SELECT file, file_type, file_name FROM tax_certificates WHERE id = $1`, [id]);
+    if (!rows.length) return res.sendStatus(404);
+    const f = rows[0];
+    res.set({
+      'Content-Type': f.file_type,
+      'Content-Disposition': `inline; filename="${String(f.file_name || 'certificate').replace(/[^\w .()-]/g, '')}"`,
+      'Cache-Control': 'no-store, private',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    res.send(f.file);
+  } catch (err) {
+    console.error('certificate file failed:', err.message);
+    res.sendStatus(500);
+  }
+});
+
+/* Approve or refuse. A refusal needs a reason, because the customer is shown
+   it and it is all they have to go on. `back` returns to the page the form
+   was on, and only to one of these. */
+app.post('/certificates/:id/review', requireAdmin, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const b = req.body || {};
+  const back = /^\/(certificates|production\/[A-Z0-9]{6})$/.test(String(b.back || ''))
+    ? String(b.back) : '/certificates';
+  if (!Number.isFinite(id)) return res.redirect(back);
+  const approve = b.decision === 'approve';
+  const note = String(b.note || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+  if (!approve && b.decision !== 'reject') return res.redirect(back);
+  if (!approve && !note) return res.redirect(back + (back.includes('?') ? '&' : '?') + 'cert=need-reason');
+  try {
+    await pool.query(
+      `UPDATE tax_certificates SET status = $2, review_note = $3, reviewed_at = NOW() WHERE id = $1`,
+      [id, approve ? 'approved' : 'rejected', approve ? null : note]);
+    console.log(`tax certificate #${id} ${approve ? 'approved' : 'refused'}`);
+  } catch (err) {
+    console.error('certificate review failed:', err.message);
+  }
+  res.redirect(back);
+});
+
+/** One certificate's status, as a pill. */
+function certificatePill(cert, today = TAXCERT.shopToday()) {
+  if (!cert) return pill('None on file', 'amber');
+  const exp = TAXCERT.isoDay(cert.expires_on);
+  if (cert.status === 'rejected') return pill('Refused', 'red');
+  if (exp && exp < today) return pill('Expired', 'red');
+  return cert.status === 'approved' ? pill('Approved', 'green') : pill('Waiting for you', 'amber');
+}
+
+/** Approve and refuse, for a certificate still waiting. */
+function certificateReviewForms(cert, back) {
+  if (!cert || cert.status !== 'pending') return '';
+  return `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:flex-start">
+      <form method="POST" action="/certificates/${cert.id}/review" style="margin:0">
+        <input type="hidden" name="decision" value="approve"><input type="hidden" name="back" value="${escEmail(back)}">
+        <button class="btn" style="padding:7px 16px;font-size:13px">Approve</button></form>
+      <form method="POST" action="/certificates/${cert.id}/review" style="margin:0;display:flex;gap:6px;flex:1 1 260px">
+        <input type="hidden" name="decision" value="reject"><input type="hidden" name="back" value="${escEmail(back)}">
+        <input name="note" required maxlength="300" placeholder="Why — the customer sees this"
+               style="flex:1;padding:6px 8px;font-size:13px">
+        <button class="btn btn-ghost" style="padding:7px 14px;font-size:13px">Refuse</button></form>
+    </div>`;
+}
+
+app.get('/certificates', requireAdmin, async (req, res) => {
+  const SHOW = ['pending', 'approved', 'rejected', 'all'];
+  const show = SHOW.includes(String(req.query.status)) ? String(req.query.status) : 'all';
+  try {
+    const { rows } = await pool.query(
+      `SELECT ${CERT_COLUMNS.split(',').map((c) => 'c.' + c.trim()).join(', ')},
+              COALESCE((SELECT string_agg(q.code, ' ' ORDER BY q.created_at)
+                          FROM quotes q WHERE q.tax_certificate_id = c.id), '') AS quote_codes
+         FROM tax_certificates c
+        ORDER BY (c.status = 'pending') DESC, c.created_at DESC
+        LIMIT 500`);
+    const today = TAXCERT.shopToday();
+    const count = (s) => rows.filter((c) => s === 'all' || c.status === s).length;
+    const list = rows.filter((c) => show === 'all' || c.status === show);
+    const card = (c) => {
+      const exp = TAXCERT.isoDay(c.expires_on);
+      const codes = String(c.quote_codes || '').split(' ').filter(Boolean);
+      return `
+      <div class="card" id="cert-${c.id}" style="border-left:4px solid ${
+        c.status === 'pending' ? '#b45309' : c.status === 'approved' ? '#16a34a' : '#b91c1c'}">
+        <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <b style="color:#0B1F4B">${escEmail(c.holder)}</b>${certificatePill(c, today)}
+          </div>
+          <span class="muted" style="font-size:12.5px">${escEmail(ageInWords(c.created_at))} &middot; ${
+            escEmail({ shop: 'attached by you', quote_page: 'from their quote page', studio: 'from the studio' }[c.source] || c.source)}</span>
+        </div>
+        <div style="margin-top:6px;font-size:13.5px">${escEmail(TAXCERT.CERT_KINDS[c.kind] ? TAXCERT.CERT_KINDS[c.kind].label : c.kind)}
+          &middot; <b>${escEmail(c.number)}</b>${exp ? ` &middot; expires ${escEmail(exp)}` : ' &middot; no expiry given'}</div>
+        <div class="muted" style="margin-top:6px;font-size:12.5px">
+          <a href="/certificates/${c.id}/file" target="_blank" rel="noopener">Open the certificate</a>
+          ${codes.map((k) => ` &middot; quote <a href="/production/${escEmail(k)}">${escEmail(k)}</a>`).join('')}
+          ${c.email ? ` &middot; ${escEmail(c.email)}` : ''}
+        </div>
+        ${c.status === 'rejected' && c.review_note ? `<div class="muted" style="margin-top:6px;font-size:12.5px">Refused: ${escEmail(c.review_note)}</div>` : ''}
+        ${certificateReviewForms(c, '/certificates')}
+      </div>`;
+    };
+    res.set('Cache-Control', 'no-store');
+    res.send(adminPage('Certificates', `
+      ${pageHeader('Tax certificates', 'The evidence behind every sale that charged no Illinois tax. Check the name matches the customer and the date has not passed.')}
+      ${req.query.cert === 'need-reason' ? `<div class="warn">Say why you are refusing it: the customer is shown the reason.</div>` : ''}
+      ${filterChips(SHOW.map((s) => ({ href: `/certificates?status=${s}`, on: s === show, count: count(s),
+        label: { pending: 'Waiting', approved: 'Approved', rejected: 'Refused', all: 'All' }[s] })))}
+      ${list.length ? list.map(card).join('') : emptyState(show === 'pending'
+        ? 'Nothing waiting. A certificate a customer uploads lands here, and you are emailed.'
+        : rows.length ? 'None in this list.'
+        : 'No certificates yet. They arrive from a customer\'s quote page, or you attach one on the job page.')}`,
+      'certificates'));
+  } catch (err) {
+    console.error('certificates page failed:', err.message);
+    res.status(500).send(adminPage('Certificates', `<div class="warn">That page did not load: ${escEmail(err.message)}</div>`, 'certificates'));
+  }
 });
 
 /* Settle the tax portion of a payment that arrived outside the quote flow.

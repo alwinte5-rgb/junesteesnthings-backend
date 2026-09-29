@@ -373,7 +373,12 @@ function runTaxPosition({ collected = [], remitted = [], unlinked = [], exempt =
     },
   };
   vm.createContext(sandbox);
-  return vm.runInContext(lift('taxPositionByMonth') + '\ntaxPositionByMonth', sandbox)();
+  /* The exempt query interpolates the shared "documented" rule; the real one,
+     as server.js declares it. */
+  const at = src.indexOf('const EXEMPT_DOCUMENTED_SQL = `');
+  assert.notStrictEqual(at, -1, 'EXEMPT_DOCUMENTED_SQL not found in server.js');
+  const rule = src.slice(at, src.indexOf('`;', at) + 2);
+  return vm.runInContext(rule + '\n' + lift('taxPositionByMonth') + '\ntaxPositionByMonth', sandbox)();
 }
 
 test('quote-ledger tax still totals the way it always did', async () => {

@@ -224,8 +224,9 @@ test('/tax.csv survives a deploy that races the migration', () => {
 
 test('one exempt quote paid twice is one undocumented exemption', () => {
   /* COUNT(*) over quote_payments counts a deposit and a balance separately,
-     so a single missing E number reads as two. */
-  assert.match(src, /COUNT\(DISTINCT p\.quote_code\)\s*\n?\s*FILTER \(WHERE NULLIF\(btrim\(q\.tax_exempt_ref\)/,
+     so a single missing E number reads as two. Since 2026-09-28 "documented"
+     is the shared rule, which counts a certificate as well as a note. */
+  assert.match(src, /COUNT\(DISTINCT p\.quote_code\)\s*\n?\s*FILTER \(WHERE NOT \$\{EXEMPT_DOCUMENTED_SQL\}\)/,
     'the count is of deductions, not of payments');
 });
 
@@ -286,12 +287,14 @@ test('clearing the number leaves the taxable decision alone', () => {
 });
 
 test('the books page lists the sales that need a number', () => {
-  assert.match(src, /COALESCE\(q\.taxable, q\.tax > 0\) = false\s*\n\s*AND COALESCE\(q\.subtotal, 0\) > 0\s*\n\s*AND NULLIF\(btrim\(q\.tax_exempt_ref\), ''\) IS NULL/,
+  assert.match(src, /COALESCE\(q\.taxable, q\.tax > 0\) = false\s*\n\s*AND COALESCE\(q\.subtotal, 0\) > 0\s*\n\s*AND NOT \$\{EXEMPT_DOCUMENTED_SQL\}/,
     'the undocumented sales are the ones worth showing');
   assert.match(src, /AND q\.cancelled_at IS NULL/,
     'a cancelled quote is not a deduction being claimed');
   assert.match(src, /action="\/quotes\/\$\{escEmail\(String\(q\.code\)\)\}\/exemption"/,
     'each row needs a way to record it, or the route is unreachable');
+  assert.match(src, /\? `<a href="\/production\/\$\{escEmail\(String\(q\.code\)\)\}#certificate"[^`]*>Attach the certificate<\/a>`/,
+    'a sale that needs a certificate is sent to attach one: a note cannot document it');
 });
 
 /* ── The tax position ────────────────────────────────────────────────────── */
@@ -310,7 +313,16 @@ function runTaxPosition({ collected = [], remitted = [], unlinked = [], exempt =
     },
   };
   vm.createContext(sandbox);
-  return vm.runInContext(lift('taxPositionByMonth') + '\ntaxPositionByMonth', sandbox)();
+  return vm.runInContext(constSrc('EXEMPT_DOCUMENTED_SQL') + '\n' + lift('taxPositionByMonth')
+    + '\ntaxPositionByMonth', sandbox)();
+}
+
+/* A template-string constant as server.js declares it, so a sandbox runs the
+   real SQL rule rather than a stand-in. */
+function constSrc(name) {
+  const at = src.indexOf(`const ${name} = \``);
+  assert.notStrictEqual(at, -1, `${name} not found in server.js`);
+  return src.slice(at, src.indexOf('`;', at) + 2);
 }
 
 test('exempt receipts are reported, not silently dropped', async () => {
