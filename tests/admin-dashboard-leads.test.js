@@ -7,8 +7,8 @@
  * a separate dark page that asked for the password in a pop-up and was built
  * around Clover and HubSpot (both switched off), and a tawk.to chat was an
  * email and nothing else. Now there is one menu, a dashboard, one Leads page
- * for every door an enquiry comes in by, and a chat that left an email lands
- * there as a lead that can be quoted in one click.
+ * for every door an enquiry comes in by, and every chat lands there as a lead
+ * that can be quoted in one click (an anonymous one points to tawk.to).
  *
  * Run: node --test tests/*.test.js
  */
@@ -193,10 +193,42 @@ test('a chat that left an email becomes a lead', () => {
     email: 'dana@example.com', description: 'Hi, can you do 40 hoodies by the 12th?' });
 });
 
-test('an anonymous chat stays an alert, not a lead', () => {
-  assert.strictEqual(tawkLead({ event: 'chat:start', chatId: 'x', visitor: { name: 'V1560169545827106', email: '' } }), null);
-  assert.strictEqual(tawkLead({ event: 'chat:start', chatId: 'x', visitor: { email: 'not an email' } }), null);
+test('an anonymous chat is a lead too, with no email', () => {
+  /* The first real chat after leads went live gave no name and no email, and
+     was kept as an alert email only: the owner watched the Leads page and it
+     never came. */
+  assert.deepStrictEqual(
+    tawkLead({ event: 'chat:start', chatId: 'x', visitor: { name: 'V1560169545827106', email: '' },
+               message: { text: 'Hi! we chatted on here on Friday' } }),
+    { source: 'chat', ref: 'tawk:chat:x', chatRef: 'x', name: 'Chat visitor', email: '',
+      description: 'Hi! we chatted on here on Friday' });
+  assert.strictEqual(tawkLead({ event: 'chat:start', chatId: 'x', visitor: { email: 'not an email' } }).email, '',
+    'something that is not an address is not kept as one');
+  assert.strictEqual(tawkLead({ event: 'chat:start', chatId: 'x' }).email, '', 'no visitor block at all');
+  assert.strictEqual(tawkLead({ event: 'ticket:create', ticket: { id: 't1', message: 'hello' } }).email, '');
   assert.strictEqual(tawkLead({ event: 'chat:start', visitor: { email: 'a@b.co' } }), null, 'no chat id, no key');
+  assert.strictEqual(tawkLead({ event: 'ticket:create', requester: { email: 'a@b.co' }, ticket: {} }), null,
+    'no ticket id, no key');
+});
+
+test("an anonymous chat's card sends the owner to tawk.to, and no card opens on a separator", () => {
+  const sandbox = {};
+  vm.createContext(sandbox);
+  vm.runInContext([
+    grab('const LEAD_SOURCES = {', '};'),
+    lift('escEmail'), lift('pill'), lift('ageInWords'), lift('leadCardHtml'),
+  ].join('\n'), sandbox);
+  const contactLine = (html) => html.match(/margin-top:8px;font-size:12\.5px">([\s\S]*?)<\/div>/)[1].trim();
+  const base = { id: 7, created_at: new Date().toISOString(), description: 'hi', phone: '' };
+
+  const anon = contactLine(sandbox.leadCardHtml({ ...base, source: 'chat', name: 'Chat visitor', email: '' }));
+  assert.match(anon, /^<a href="https:\/\/dashboard\.tawk\.to\/"[^>]*>No email left — answer in tawk\.to<\/a>$/);
+
+  const named = contactLine(sandbox.leadCardHtml({ ...base, source: 'chat', name: 'Dana', email: 'dana@example.com' }));
+  assert.match(named, /^<a href="mailto:dana@example\.com">dana@example\.com<\/a> &middot; <a href="https:\/\/dashboard\.tawk\.to\/"[^>]*>answer in tawk\.to<\/a>$/);
+
+  const phoneOnly = contactLine(sandbox.leadCardHtml({ ...base, source: 'form', name: 'Lee', email: '', phone: '3125550123' }));
+  assert.strictEqual(phoneOnly, '<a href="tel:3125550123">3125550123</a>', 'a form lead with only a phone');
 });
 
 test("tawk's placeholder name is not a name", () => {

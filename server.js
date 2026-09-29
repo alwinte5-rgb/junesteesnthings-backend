@@ -363,6 +363,10 @@ async function initDB() {
   }
   await pool.query(`CREATE INDEX IF NOT EXISTS quotes_phone_idx ON quotes (phone)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS quotes_email_idx ON quotes (email)`);
+  /* A quote whose Brevo sync failed is retried hourly (brevoQuoteCatchUp);
+     this caps one that Brevo keeps refusing for reasons of its own, so it
+     cannot report itself every hour. */
+  await pool.query(`ALTER TABLE quotes ADD COLUMN IF NOT EXISTS brevo_attempts INT DEFAULT 0`).catch(() => {});
 
   // Customer reviews. Collected after delivery, shown on the storefront, and
   // fed into aggregateRating schema so search results can show stars.
@@ -2861,17 +2865,19 @@ app.post('/webhooks/tawk', async (req, res) => {
   // email is still a customer waiting. Failures are logged, never thrown.
   alertOwnerOfChat(req.body);
 
-  /* A chat that can be answered is kept as an enquiry (tawkLead), so it joins
-     the same pipeline as the website form: on the board and the Leads page,
-     quotable in one click, let go with a reason. Until 2026-09-28 a chat was
-     an email and nothing else. This handler has already answered tawk, so a
-     failed save cannot be retried by tawk: it goes to the error digest. */
+  /* Every chat and offline message is kept as an enquiry (tawkLead), so it
+     joins the same pipeline as the website form: on the board and the Leads
+     page, quotable in one click, let go with a reason. An anonymous chat is
+     kept too, with no email, and its card sends the owner to tawk.to to answer.
+     Until 2026-09-28 a chat was an email and nothing else. This handler has
+     already answered tawk, so a failed save cannot be retried by tawk: it goes
+     to the error digest. */
   let leadId = null;
   const lead = tawkLead(req.body);
   if (lead) {
     try {
       leadId = await saveChatLead(lead);
-      if (leadId) console.log(`tawk webhook: ${lead.source} from ${lead.email} kept as enquiry #${leadId}`);
+      if (leadId) console.log(`tawk webhook: ${lead.source} from ${lead.email || 'an anonymous visitor'} kept as enquiry #${leadId}`);
     } catch (err) {
       console.error('tawk chat not kept as an enquiry:', err.message);
       reportError('tawk-lead', err, `${lead.source} ${lead.ref}`).catch(() => {});
@@ -2901,9 +2907,9 @@ app.post('/webhooks/tawk', async (req, res) => {
 /* Keep a tawk.to chat or offline message as an enquiry. Keyed on the chat or
    ticket id (dedupe_key), so tawk's retries and a repeated event add nothing;
    the WHERE repeats the partial index's predicate, which Postgres needs to use
-   it (tests/on-conflict-targets.test.js). A chat has no phone, and the column
-   is NOT NULL, so it is stored empty. Returns the new id, or null if it was
-   already there. */
+   it (tests/on-conflict-targets.test.js). A chat has no phone, and an
+   anonymous one no email; both columns are NOT NULL, so they are stored empty.
+   Returns the new id, or null if it was already there. */
 async function saveChatLead(lead) {
   const { rows } = await pool.query(
     `INSERT INTO submissions (name, phone, email, description, dedupe_key, source, chat_ref)
@@ -4568,6 +4574,9 @@ app.post('/quote/:code/step', requireAdmin, async (req, res) => {
 function quoteStage(q) {
   const total = Number(q.total || 0);
   const paid = Number(q.paid_amount || 0);
+  // A cancelled job is lost whatever was paid on it; until 2026-09-28 it sat
+  // in the pipeline at whatever stage it had reached.
+  if (q.cancelled_at || q.status === 'cancelled') return 'lost';
   if (q.status === 'expired') return 'lost';
   if (total > 0 && paid >= total - 0.005) return 'won';      // paid in full
   if (paid > 0) return 'pending';                             // deposit down
@@ -5815,9 +5824,23 @@ function toE164(phone) {
 
 /** Mirror a quote into Brevo: contact -> deal -> note, same shape as
  *  syncGradToBrevo(). Every call is guarded; the Postgres row already holds the
- *  truth, so a Brevo outage must never surface as a failed quote. */
-async function syncQuoteToBrevo(q) {
-  const out = { contactId: null, dealId: null };
+ *  truth, so a Brevo outage must never surface as a failed quote.
+ *
+ *  A quote has ONE deal. Once it has one (q.brevo_deal_id), a later call updates
+ *  that deal in place: name, amount, stage, close date. Until 2026-09-28 every
+ *  call made another, and this runs on every save and again when an accepting
+ *  customer fills in their details, so a quote edited three times stood in the
+ *  pipeline three times over and the quote kept only the newest id. A deal
+ *  deleted in Brevo (404) is made again rather than left missing.
+ *
+ *  `note: false` skips the note of what was quoted, for a call that changes who
+ *  the customer is but not the job.
+ *
+ *  Returns the ids it holds, and `error`: the first thing Brevo refused, so the
+ *  hourly catch-up can tell Brevo refusing the server (401) from a refusal about
+ *  this one quote. Store the ids with keepBrevoIds(). */
+async function syncQuoteToBrevo(q, { note = true } = {}) {
+  const out = { contactId: q.brevo_contact_id || null, dealId: q.brevo_deal_id || null, error: null };
   const email = String(q.email || '').trim();
   const phone = String(q.phone || '').trim();
   if (!email && !phone) return out;
@@ -5845,6 +5868,7 @@ async function syncQuoteToBrevo(q) {
       out.contactId = c.data && c.data.id ? String(c.data.id) : null;
     }
   } catch (err) {
+    out.error = out.error || err;
     console.error('quote->brevo contact failed:', err.response?.data?.message || err.message);
   }
 
@@ -5862,24 +5886,35 @@ async function syncQuoteToBrevo(q) {
       `\nLink: ${quoteLink(q.code)}` +
       (q.valid_until ? `\nValid until: ${fmtDate(q.valid_until)}` : '');
 
-    const deal = await brevo.post('/crm/deals', {
-      name: `Quote — ${q.name || phone || email} (${q.code})`,
-      attributes: {
-        // The TOTAL, not the subtotal — every deal used to understate the job
-        // by the tax, so pipeline value never matched the books.
-        amount: parseFloat(Number(q.total || q.subtotal || 0).toFixed(2)),
-        pipeline: BREVO_PIPELINE,
-        deal_stage: BREVO_STAGE[quoteStage(q)],
-        close_date: q.valid_until ? new Date(q.valid_until).toISOString() : new Date().toISOString(),
-      },
-    });
-    out.dealId = deal.data && deal.data.id ? String(deal.data.id) : null;
+    const name = `Quote — ${q.name || phone || email} (${q.code})`;
+    const attributes = {
+      // The TOTAL, not the subtotal — every deal used to understate the job
+      // by the tax, so pipeline value never matched the books.
+      amount: parseFloat(Number(q.total || q.subtotal || 0).toFixed(2)),
+      pipeline: BREVO_PIPELINE,
+      deal_stage: BREVO_STAGE[quoteStage(q)],
+      close_date: q.valid_until ? new Date(q.valid_until).toISOString() : new Date().toISOString(),
+    };
+    let made = false;
+    if (out.dealId) {
+      try {
+        await brevo.patch(`/crm/deals/${out.dealId}`, { name, attributes });
+      } catch (err) {
+        if (!(err.response && err.response.status === 404)) throw err;
+        out.dealId = null;                 // deleted in Brevo: make it again below
+      }
+    }
+    if (!out.dealId) {
+      const deal = await brevo.post('/crm/deals', { name, attributes });
+      out.dealId = deal.data && deal.data.id ? String(deal.data.id) : null;
+      made = !!out.dealId;
+    }
 
     if (out.dealId && out.contactId) {
       await brevo.patch(`/crm/deals/${out.dealId}`, { linkedContactsIds: [parseInt(out.contactId)] })
         .catch(e => console.error('quote deal link failed:', e.response?.data?.message || e.message));
     }
-    if (out.dealId) {
+    if (out.dealId && (note || made)) {
       await brevo.post('/crm/notes', {
         text: noteText,
         ...(out.contactId ? { contactIds: [parseInt(out.contactId)] } : {}),
@@ -5887,10 +5922,73 @@ async function syncQuoteToBrevo(q) {
       }).catch(e => console.error('quote note failed:', e.response?.data?.message || e.message));
     }
   } catch (err) {
+    out.error = out.error || err;
     console.error('quote->brevo deal failed:', err.response?.data?.message || err.message);
   }
 
   return out;
+}
+
+/* Keep the ids a Brevo sync hands back. COALESCE, so a sync whose contact step
+   failed this time cannot erase an id an earlier one stored: the save handler
+   used to write both whenever either came back, a null included. */
+function keepBrevoIds(quoteId, ids) {
+  if (!ids || (!ids.contactId && !ids.dealId)) return Promise.resolve();
+  return pool.query(
+    `UPDATE quotes SET brevo_contact_id = COALESCE($1, brevo_contact_id),
+                       brevo_deal_id    = COALESCE($2, brevo_deal_id)
+      WHERE id = $3`, [ids.contactId, ids.dealId, quoteId]);
+}
+
+/* Quotes whose Brevo sync never landed, retried every hour, the way
+   brevoCatchUp() retries enquiries. A quote was synced once, when it was saved,
+   and a failure was a console line: from 2026-08-24 to 2026-09-26, while Brevo
+   refused the server, not one quote reached it and nothing tried again.
+
+   Synced means it has a deal. The retry mirrors the record (contact, deal, the
+   note of what was quoted, the contact's quote attributes) and never fires a
+   jt_* event: those start customer emails in Brevo, and a late "quote sent"
+   can land on a quote that has since been accepted or paid. Ten minutes' grace,
+   so it cannot race the sync the save itself started.
+
+   Only quotes from BREVO_QUOTE_CATCH_UP_SINCE on. The ones the outage missed
+   are the owner's call: adding a contact to a list can set off whatever
+   automation Brevo has on it. A 401 is Brevo refusing the server, not the row,
+   so it stops the batch uncounted, as in brevoCatchUp(); any other refusal is
+   counted and reported once, when the quote is given up on.
+   tests/brevo-quote-sync.test.js. */
+const BREVO_QUOTE_CATCH_UP_SINCE = '2026-09-28';
+async function brevoQuoteCatchUp() {
+  if (!process.env.BREVO_API_KEY) return '';
+  const { rows } = await pool.query(
+    `SELECT * FROM quotes
+      WHERE brevo_deal_id IS NULL AND COALESCE(brevo_attempts, 0) < $2
+        AND (NULLIF(btrim(email), '') IS NOT NULL
+             OR length(regexp_replace(COALESCE(phone, ''), '\\D', '', 'g')) >= 10)
+        AND created_at >= $1 AND created_at < NOW() - interval '10 minutes'
+      ORDER BY created_at LIMIT 20`, [BREVO_QUOTE_CATCH_UP_SINCE, BREVO_CATCH_UP_TRIES]);
+  let synced = 0;
+  for (const q of rows) {
+    const ids = await syncQuoteToBrevo(q);
+    await keepBrevoIds(q.id, ids);
+    if (ids.dealId) {
+      syncQuoteContact(q).catch(() => {});        // attributes only: no event
+      synced++;
+      continue;
+    }
+    const err = ids.error;
+    if (err && err.response && err.response.status === 401) {
+      return `${synced} synced; Brevo is refusing the server (401), ${rows.length - synced} waiting`;
+    }
+    const { rows: [r] } = await pool.query(
+      `UPDATE quotes SET brevo_attempts = COALESCE(brevo_attempts, 0) + 1
+        WHERE id = $1 RETURNING brevo_attempts`, [q.id]);
+    if (r && r.brevo_attempts >= BREVO_CATCH_UP_TRIES) {
+      reportError('brevo-quote-catch-up', err || new Error('Brevo made no deal and gave no reason'),
+        `quote ${q.code} given up after ${BREVO_CATCH_UP_TRIES} tries`).catch(() => {});
+    }
+  }
+  return synced ? `${synced} synced` : '';
 }
 
 /** Push the lead into the Lumise Customers page (separate database, reached
@@ -8462,11 +8560,10 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
     const q = rows[0];
     const code = q.code;
 
+    /* An edit updates the quote's one deal (q carries brevo_deal_id from the
+       UPDATE ... RETURNING); a failure is retried hourly, brevoQuoteCatchUp. */
     syncQuoteToBrevo(q).then(ids => {
-      if (ids.contactId || ids.dealId) {
-        pool.query('UPDATE quotes SET brevo_contact_id=$1, brevo_deal_id=$2 WHERE id=$3',
-          [ids.contactId, ids.dealId, q.id]).catch(() => {});
-      }
+      keepBrevoIds(q.id, ids).catch(() => {});
       // After the contact exists, so the attributes land on a real record.
       syncQuoteContact(q, 'jt_quote_sent').catch(() => {});
     }).catch(() => {});
@@ -11075,9 +11172,11 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
 
       /* The customer may have just given us their name, email or number for the
          first time (common on online and walk-up enquiries), so push the record
-         again — otherwise the CRM keeps the blank version forever. */
+         again — otherwise the CRM keeps the blank version forever. It updates
+         the quote's deal rather than adding one, and adds no second note of a
+         job that has not changed. */
       if (cname || cemail || cphone) {
-        syncQuoteToBrevo(q).catch(() => {});
+        syncQuoteToBrevo(q, { note: false }).then((ids) => keepBrevoIds(q.id, ids)).catch(() => {});
         syncQuoteToLumise(q).catch(() => {});
       }
       return res.redirect('/q/' + code);
@@ -12493,11 +12592,13 @@ app.post('/quote/:code/cancel', requireAdmin, async (req, res) => {
     /* delivered_at is cleared: a cancelled job did not ship, and leaving the
        stamp on would keep it counted as delivered work in the schedule. It is
        also how these were being hidden before cancelling existed. */
-    await pool.query(
+    const { rows } = await pool.query(
       `UPDATE quotes SET cancelled_at = NOW(), cancel_reason = $2,
               status = 'cancelled', delivered_at = NULL
-        WHERE code = $1 AND cancelled_at IS NULL`,
+        WHERE code = $1 AND cancelled_at IS NULL RETURNING *`,
       [code, reason || null]);
+    // Its Brevo deal moves to lost, rather than staying open in the pipeline.
+    if (rows.length) syncDealStage(rows[0]).catch(() => {});
   } catch (err) {
     console.error('cancel failed:', err.message);
   }
@@ -12511,10 +12612,12 @@ app.post('/quote/:code/uncancel', requireAdmin, async (req, res) => {
     /* Back to accepted or sent depending on whether they had accepted — not to
        whatever the status was before, which is not recorded and would be a guess
        dressed up as a fact. */
-    await pool.query(
+    const { rows } = await pool.query(
       `UPDATE quotes SET cancelled_at = NULL, cancel_reason = NULL,
               status = CASE WHEN accepted_at IS NOT NULL THEN 'accepted' ELSE 'sent' END
-        WHERE code = $1`, [code]);
+        WHERE code = $1 RETURNING *`, [code]);
+    // And back out of lost, to the stage its own state says.
+    if (rows.length) syncDealStage(rows[0]).catch(() => {});
   } catch (err) {
     console.error('uncancel failed:', err.message);
   }
@@ -14974,7 +15077,7 @@ app.get('/production', requireAdmin, (req, res) => renderBoard('work',  req, res
 
 /* ══ Leads ══════════════════════════════════════════════════════════════════
    Every enquiry, from every door: the website form, an embroidery request, and
-   the tawk.to chats and offline messages that left an email (saveChatLead).
+   every tawk.to chat and offline message, anonymous ones too (saveChatLead).
    One definition of "answered" serves the board, the Leads page, the dashboard
    and the menu badge, so they cannot disagree about who is still waiting. */
 
@@ -15052,9 +15155,14 @@ function leadCardHtml(l, { back = '/quotes' } = {}) {
         ${l.description ? `<div class="muted" style="margin-top:6px;font-size:13.5px">${
           escEmail(String(l.description).slice(0, 300))}</div>` : ''}
         <div class="muted" style="margin-top:8px;font-size:12.5px">
-          ${l.email ? `<a href="mailto:${escEmail(l.email)}">${escEmail(l.email)}</a>` : ''}
-          ${l.phone ? ` &middot; <a href="tel:${escEmail(l.phone)}">${escEmail(l.phone)}</a>` : ''}
-          ${chat ? ` &middot; <a href="https://dashboard.tawk.to/" target="_blank" rel="noopener">answer in tawk.to</a>` : ''}
+          ${/* Joined, so a lead with no email does not open on a separator. An
+                anonymous chat has neither email nor phone, and tawk.to is the
+                only way back to that person, so its card says so. */
+            [l.email ? `<a href="mailto:${escEmail(l.email)}">${escEmail(l.email)}</a>` : '',
+             l.phone ? `<a href="tel:${escEmail(l.phone)}">${escEmail(l.phone)}</a>` : '',
+             chat ? `<a href="https://dashboard.tawk.to/" target="_blank" rel="noopener">${
+               l.email || l.phone ? 'answer in tawk.to' : 'No email left — answer in tawk.to'}</a>` : '',
+            ].filter(Boolean).join(' &middot; ')}
         </div>
         ${l.photo_url ? `<div style="margin-top:8px"><a href="${escEmail(l.photo_url)}" target="_blank" rel="noopener">
           <img src="${escEmail(l.photo_url)}" alt="" loading="lazy"
@@ -17519,6 +17627,7 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
     await step('tax check', taxMonthlyCheck);
     await step('brevo breach check', brevoBreachCheck);
     await step('brevo catch-up', brevoCatchUp);
+    await step('brevo quote catch-up', brevoQuoteCatchUp);
     await step('error digest', sendErrorDigest);
     await step('supplier sync', runSupplierSync);
     setTimeout(runSweep, 60 * 60 * 1000);

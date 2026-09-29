@@ -41,12 +41,16 @@ function describeTawkEvent(body) {
 
 /* The enquiry a tawk.to event carries, or null.
 
-   Only the ones that can be answered become leads: a chat that came with an
-   email (tawk's pre-chat form), and every offline message, which tawk always
-   collects an email for. An anonymous chat can only be answered inside tawk,
-   so it stays an alert rather than a card on the board nobody can act on.
+   Every chat and every offline message becomes a lead, so the Leads page is the
+   one place a conversation can be found again. One that left an email (tawk's
+   pre-chat form, and offline messages, which tawk collects one for) can be
+   quoted and mailed from its card; an anonymous one can only be answered inside
+   tawk.to, and its card says so. Until 2026-09-28 an anonymous chat stayed an
+   alert email only, and the first real chat after leads went live, a returning
+   customer who gave no name, never reached the page the owner watches.
 
-   Keyed on the chat or ticket id, so a repeated event is the same lead. */
+   Keyed on the chat or ticket id, so a repeated event is the same lead. With no
+   id there is nothing to key on: null, and the alert still goes out. */
 const ANON_NAME = /^V\d{8,}$/;   // tawk's placeholder for a visitor who gave no name
 const looksLikeEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 
@@ -57,10 +61,11 @@ function tawkLead(body) {
     const v = b.visitor || {};
     const email = clip(v.email, 254).toLowerCase();
     const chatId = clip(b.chatId, 120);
-    if (!looksLikeEmail(email) || !chatId) return null;
+    if (!chatId) return null;
     const name = clip(v.name, 120);
     return { source: 'chat', ref: `tawk:chat:${chatId}`, chatRef: chatId,
-             name: name && !ANON_NAME.test(name) ? name : 'Chat visitor', email,
+             name: name && !ANON_NAME.test(name) ? name : 'Chat visitor',
+             email: looksLikeEmail(email) ? email : '',
              description: clip(b.message && b.message.text, 1500) };
   }
   if (event === 'ticket:create') {
@@ -68,10 +73,11 @@ function tawkLead(body) {
     const t = b.ticket || {};
     const email = clip(r.email, 254).toLowerCase();
     const id = clip(t.id || t.humanId, 120);
-    if (!looksLikeEmail(email) || !id) return null;
+    if (!id) return null;
     const name = clip(r.name, 120);
     return { source: 'offline', ref: `tawk:ticket:${id}`, chatRef: clip(t.humanId || t.id, 120),
-             name: name && !ANON_NAME.test(name) ? name : 'Chat visitor', email,
+             name: name && !ANON_NAME.test(name) ? name : 'Chat visitor',
+             email: looksLikeEmail(email) ? email : '',
              description: clip([t.subject, t.message].filter(Boolean).join(' — '), 1500) };
   }
   return null;
