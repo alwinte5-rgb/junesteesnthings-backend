@@ -186,9 +186,12 @@ test('the shop attaches one only to an untaxed quote, and it counts as approved'
   const r = route("app.post('/quote/:code/certificate', requireAdmin");
   assert.match(r, /if \(q\.taxable !== false\)/);
   assert.match(r, /source: 'shop'/);
+  const keep = route('async function keepCertificate(');
+  assert.match(keep, /CASE WHEN \$11::boolean THEN 'approved' ELSE 'pending' END/);
+  assert.match(keep, /ON CONFLICT \(file_sha256, number\) DO UPDATE/, 'the same certificate twice is one row');
+  assert.match(keep, /ELSE tax_certificates\.status END/, 'anyone but the shop leaves a decision as it was');
   const attach = src.slice(src.indexOf('async function attachCertificate('));
-  assert.match(attach, /CASE WHEN \$11::boolean THEN 'approved' ELSE 'pending' END/);
-  assert.match(attach, /ON CONFLICT \(file_sha256, number\) DO UPDATE/, 'the same certificate twice is one row');
+  assert.match(attach, /const row = await keepCertificate\(cert, opts\);/);
   assert.match(attach, /if \(row\.status !== 'rejected'\)/, 'a refused one is never attached');
 });
 
@@ -229,5 +232,120 @@ test('the tax file says what each deduction stands on, in columns added at the e
   const r = route("app.get('/tax.csv', requireAdmin");
   assert.match(r, /'exempt', 'exempt_ref', 'source', 'exempt_reason', 'certificate', 'certificate_status'\]/);
   assert.match(r, /LEFT JOIN tax_certificates c ON c\.id = q\.tax_certificate_id/);
-  assert.match(r, /u\.channel, '', '', ''\]/, 'studio rows keep the same width');
+  assert.match(r, /LEFT JOIN tax_certificates c ON c\.id = u\.tax_certificate_id/, 'studio sales name theirs too');
+  assert.match(r, /const exempt = !!u\.cert_number && u\.cert_status !== 'rejected';/,
+    'exempt while its certificate stands, taxable once refused');
+  assert.match(r, /exempt \? 'exempt' : '', '', u\.channel,\s*\n\s*exempt \? \(u\.cert_kind \|\| ''\) : '',[\s\S]*?u\.cert_status \|\| ''\],/,
+    'studio rows fill the same six columns, in the same order');
+});
+
+/* ── the design studio's exempt orders ─────────────────────────────────────── */
+
+test('what the studio is told: the decision and the certificate, never the file', () => {
+  const s = T.certificateSummary({ id: '12', status: 'approved', review_note: null, kind: 'e_number',
+    number: 'E9998-1234-07', holder: 'Lincoln High School', expires_on: '2029-06-30', file: Buffer.from('x') }, TODAY);
+  assert.deepStrictEqual(s, { id: 12, status: 'approved', review_note: '', kind: 'e_number',
+    number: 'E9998-1234-07', holder: 'Lincoln High School', expires_on: '2029-06-30',
+    label: 'E-number E9998-1234-07 · Lincoln High School', usable: true });
+  assert.strictEqual(T.certificateSummary({ id: 3, status: 'rejected', kind: 'resale', number: 'AB-1234',
+    holder: 'X', expires_on: null }, TODAY).usable, false, 'refused');
+  assert.strictEqual(T.certificateSummary({ id: 3, status: 'pending', kind: 'resale', number: 'AB-1234',
+    holder: 'X', expires_on: '2026-09-01' }, TODAY).usable, false, 'expired');
+  assert.strictEqual(T.certificateSummary(null), null);
+});
+
+test('only the studio can send, read or claim a certificate, and it never lands on a quote', () => {
+  for (const sig of ["app.post('/api/tax-certificates', requireInternalKey",
+                     "app.get('/api/tax-certificates/:id', requireInternalKey",
+                     "app.post('/api/tax-certificates/:id/orders', requireInternalKey"]) {
+    assert.ok(src.includes(sig), sig);
+  }
+  const send = route("app.post('/api/tax-certificates', requireInternalKey");
+  assert.match(send, /TAXCERT\.validateCertificate\(b\)/);
+  assert.match(send, /keepCertificate\(v\.cert, \{ source: 'studio', email \}\)/);
+  assert.doesNotMatch(send, /attachCertificate/, 'a studio certificate is on no quote');
+  assert.match(send, /if \(refusal\) return res\.status\(409\)/, 'a refused or expired one cannot take the tax off');
+  const why = route('function studioCertificateRefusal(');
+  assert.match(why, /why === 'rejected'/);
+  assert.match(why, /why === 'expired'/);
+});
+
+test('a paid studio order is recorded once, and the shop told once, only while it waits', () => {
+  const r = route("app.post('/api/tax-certificates/:id/orders', requireInternalKey");
+  assert.match(r, /\/\^\[0-9\]\{1,12\}\$\/\.test\(orderRef\)/, 'an order number, nothing else');
+  assert.match(r, /ON CONFLICT \(order_ref\) DO NOTHING\s*\n\s*RETURNING order_ref/);
+  assert.match(r, /if \(made\.length\) \{[\s\S]*if \(cert\.status === 'pending'\) \{\s*\n\s*notifyStudioCertificate/);
+  assert.match(r, /res\.json\(\{ ok: true, certificate: TAXCERT\.certificateSummary\(cert\) \}\)/,
+    'answers with the decision as it stands, so one already made reaches the order at once');
+  assert.match(src, /CREATE TABLE IF NOT EXISTS studio_exemptions \(\s*\n\s*order_ref\s+TEXT PRIMARY KEY/,
+    'the ON CONFLICT target is the table\'s primary key');
+});
+
+test('a certificate nobody paid with is never put in front of the shop', () => {
+  assert.match(src, /const CERT_IN_USE_SQL = `\(c\.source <> 'studio'/);
+  assert.match(src, /const CERTS_WAITING_SQL = `SELECT COUNT\(\*\)::int AS n FROM tax_certificates c\s*\n\s*WHERE c\.status = 'pending' AND \$\{CERT_IN_USE_SQL\}`/);
+  const page = route("app.get('/certificates', requireAdmin");
+  assert.match(page, /WHERE \$\{CERT_IN_USE_SQL\}/);
+  assert.match(page, /FROM studio_exemptions s WHERE s\.certificate_id = c\.id/, 'and the card names the studio order');
+});
+
+test('deciding a certificate tells the studio, which reads the decision back', () => {
+  const r = route("app.post('/certificates/:id/review', requireAdmin");
+  assert.match(r, /pushCertificateDecisionToStudio\(id\)\.catch\(\(\) => \{\}\)/, 'never holds up the redirect');
+  const push = route('async function pushCertificateDecisionToStudio(');
+  assert.match(push, /FROM studio_exemptions WHERE certificate_id = \$1/, 'only when a studio order is on it');
+  assert.match(push, /jt-tax-decision\.php/);
+  assert.match(push, /JSON\.stringify\(\{ certificate_id: id \}\)/, 'an id only: the studio asks what was decided');
+  assert.match(push, /if \(!r\.ok\) throw/);
+});
+
+test('an exempt studio payment names its certificate, and its refunds carry it back out', () => {
+  const rec = route('async function recordUnlinkedPayment(');
+  assert.match(rec, /session\.metadata\?\.jt_exempt_cert/);
+  assert.match(rec, /\/\^\[1-9\]\[0-9\]\{0,15\}\$\/\.test/, 'a positive integer or nothing');
+  assert.match(rec, /tax_portion, resolved_at, tax_certificate_id\)/);
+  assert.match(rec, /\$17::bigint\)/);
+  assert.strictEqual((src.match(/taxCertificateId: u\.tax_certificate_id/g) || []).length, 2, 'the refund and the chargeback');
+  assert.strictEqual((src.match(/amount, tax_portion, tax_certificate_id\n/g) || []).length, 2,
+    'both read the certificate off the payment they reverse');
+});
+
+test('the ST-1 deduction counts studio sales while their certificate stands', () => {
+  const pos = route('async function taxPositionByMonth(');
+  assert.match(pos, /FROM unlinked_payments u JOIN tax_certificates c ON c\.id = u\.tax_certificate_id\s*\n\s*WHERE c\.status <> 'rejected'/);
+  assert.match(pos, /exemptGross = round2\(byPeriod\[r\.period\]\.exemptGross \+ Number\(r\.exempt_gross\)\)/,
+    'added to the quotes\' figure, not written over it');
+});
+
+test('studio uploads that lead to no sale are capped site-wide, per day', () => {
+  const L = T.STUDIO_UNUSED_DAILY;
+  assert.strictEqual(T.studioUploadsFull({ n: 0, bytes: 0 }), false);
+  assert.strictEqual(T.studioUploadsFull({ n: L.count - 1, bytes: 1000 }), false, 'one under the count');
+  assert.strictEqual(T.studioUploadsFull({ n: L.count, bytes: 1000 }), true, 'at the count');
+  assert.strictEqual(T.studioUploadsFull({ n: 2, bytes: String(L.bytes) }), true,
+    'at the size, as node-pg returns a bigint: a string');
+  assert.strictEqual(T.studioUploadsFull(undefined), false, 'no row reads as nothing sent');
+  assert.ok(L.count >= 10 && L.bytes >= 10 * T.MAX_FILE_BYTES, 'far above what a real buyer sends');
+
+  const send = route("app.post('/api/tax-certificates', requireInternalKey");
+  const cap = send.indexOf('TAXCERT.studioUploadsFull(load)');
+  assert.ok(cap > 0 && cap < send.indexOf('keepCertificate('), 'checked before anything is stored');
+  assert.match(send, /WHERE c\.source = 'studio' AND c\.created_at > NOW\(\) - INTERVAL '24 hours'\s*\n\s*AND NOT \$\{CERT_IN_USE_SQL\}/,
+    'counts only the studio\'s, only the last day\'s, and only those on no paid order');
+  assert.match(send, /WHERE file_sha256 = \$1 AND number = \$2/, 'one already on file is never turned away');
+  assert.match(send, /return res\.status\(429\)\.json\(\{ error: /, 'refused in words the buyer sees');
+});
+
+test('the board holds an exempt studio order only once it is a sale', () => {
+  const at = src.indexOf('function studioExemptChip(');
+  const chip = new Function('money', src.slice(at, src.indexOf('\n}\n', at) + 2) + '\nreturn studioExemptChip;')(
+    (n) => '$' + Number(n).toFixed(2));
+  assert.strictEqual(chip({ tax_exempt: 'pending', paid: 0 }), '',
+    'unpaid: its certificate is not on /certificates yet, so there is nothing to check');
+  assert.match(chip({ tax_exempt: 'pending', paid: 120 }), /Tax certificate to check &mdash; don&rsquo;t produce/);
+  assert.match(chip({ tax_exempt: 'refused', paid: 120, tax_due: 12.3 }), /Exemption refused &mdash; \$12\.30 tax due/);
+  assert.match(chip({ tax_exempt: 'refused', paid: 132.3, tax_due: 0 }), /^<span[^>]*>Exemption refused<\/span>$/,
+    'once the tax is paid, nothing is due');
+  assert.match(chip({ tax_exempt: 'approved', paid: 120 }), /Tax-exempt/);
+  assert.strictEqual(chip({ tax_exempt: '', paid: 120 }), '', 'an ordinary order');
 });

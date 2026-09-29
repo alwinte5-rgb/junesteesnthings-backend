@@ -700,6 +700,23 @@ async function initDB() {
   await pool.query(`CREATE INDEX IF NOT EXISTS tax_certificates_email_idx
                       ON tax_certificates (lower(email))`);
   await pool.query(`ALTER TABLE unlinked_payments ADD COLUMN IF NOT EXISTS tax_certificate_id BIGINT`);
+  /* Which design-studio order a certificate took the tax off. The studio's
+     checkout sends the certificate BEFORE the order exists, so a wrong number
+     is fixed where it was typed, and names the order here once it is PAID:
+     that is when the shop has something to check. A certificate nobody paid
+     with is never put in front of the shop. One row per order, because an
+     order is exempted by one certificate. Routes by /api/tax-certificates. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS studio_exemptions (
+      order_ref      TEXT PRIMARY KEY,               -- design studio order id
+      certificate_id BIGINT NOT NULL,
+      tax_waived     NUMERIC(10,2),                  -- the tax its checkout took off
+      customer_name  TEXT,
+      customer_email TEXT,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS studio_exemptions_cert_idx
+                      ON studio_exemptions (certificate_id)`);
   /* The $0.57 live card test from August — a test quote (E7BE52, since gone)
      — and its refund on 2026-09-26. It sold nothing, so no tax was collected
      on it, but it came in through tools/backfill-unlinked.js with its tax
@@ -878,6 +895,20 @@ async function taxPositionByMonth(limit = 24) {
       WHERE COALESCE(q.taxable, q.tax > 0) = false
       GROUP BY 1`).catch(() => ({ rows: [] }));
 
+  /* Tax-exempt design-studio sales: payments stamped with the certificate
+     their checkout took the tax off for (recordUnlinkedPayment). Deducted while
+     that certificate stands. Once it is refused the sale was taxable after all,
+     its tax is collected with a later balance payment, and it stops counting
+     here. A refund carries its payment's certificate, so it comes back out.
+     Never undocumented: the checkout will not take the tax off without one. */
+  const { rows: exemptStudio } = await pool.query(
+    `SELECT to_char(date_trunc('month', u.created_at), 'YYYY-MM') AS period,
+            COALESCE(SUM(u.amount),0) AS exempt_gross,
+            COUNT(*)                  AS exempt_payments
+       FROM unlinked_payments u JOIN tax_certificates c ON c.id = u.tax_certificate_id
+      WHERE c.status <> 'rejected'
+      GROUP BY 1`).catch(() => ({ rows: [] }));
+
   const blank = (period) => ({
     period, collected: 0, gross: 0, payments: 0, remitted: 0, last_paid: null,
     unlinkedGross: 0, unlinkedPayments: 0, unlinkedTaxKnown: 0, unlinkedTaxUnknown: 0,
@@ -909,6 +940,11 @@ async function taxPositionByMonth(limit = 24) {
     byPeriod[r.period].exemptGross = round2(Number(r.exempt_gross));
     byPeriod[r.period].exemptPayments = Number(r.exempt_payments);
     byPeriod[r.period].exemptUndocumented = Number(r.exempt_undocumented);
+  }
+  for (const r of exemptStudio) {
+    byPeriod[r.period] ||= blank(r.period);
+    byPeriod[r.period].exemptGross = round2(byPeriod[r.period].exemptGross + Number(r.exempt_gross));
+    byPeriod[r.period].exemptPayments += Number(r.exempt_payments);
   }
 
   const list = Object.values(byPeriod)
@@ -9713,14 +9749,23 @@ async function recordUnlinkedPayment(session, reason, opts = {}) {
     }
   }
 
+  /* The certificate behind a tax-exempt studio sale: the studio stamps
+     `jt_exempt_cert` on a payment it took no tax on because of one. It is what
+     lets the ST-1 deduct the sale (taxPositionByMonth, /tax.csv) with its
+     evidence named. A refund or chargeback carries its payment's certificate
+     (opts), so the deduction comes back out with the money. */
+  const certIn = opts.taxCertificateId !== undefined ? opts.taxCertificateId : session.metadata?.jt_exempt_cert;
+  const certId = /^[1-9][0-9]{0,15}$/.test(String(certIn == null ? '' : certIn).trim())
+    ? String(certIn).trim() : null;
+
   try {
     await pool.query(
       `INSERT INTO unlinked_payments
          (amount, fee, currency, channel, order_ref, client_ref, kind, source,
           stripe_session, stripe_pi, ext_ref, customer_email, customer_name, reason, note,
-          tax_portion, resolved_at)
+          tax_portion, resolved_at, tax_certificate_id)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
-               $16, CASE WHEN $16::numeric IS NULL THEN NULL ELSE NOW() END)`,
+               $16, CASE WHEN $16::numeric IS NULL THEN NULL ELSE NOW() END, $17::bigint)`,
       [round2(opts.amount ?? gross), round2(opts.fee || 0),
        String(session.currency || 'usd').toLowerCase(),
        opts.channel || (orderRef ? 'studio' : 'unknown'),
@@ -9729,7 +9774,7 @@ async function recordUnlinkedPayment(session, reason, opts = {}) {
        session.id || null, pi, extRef,
        session.customer_details?.email || null,
        session.customer_details?.name || null,
-       reason || null, opts.note || null, taxPortion]);
+       reason || null, opts.note || null, taxPortion, certId]);
   } catch (err) {
     // 23505 = unique_violation on ext_ref. The other handler got here first.
     if (err.code === '23505') return { ok: true, duplicate: true };
@@ -10061,7 +10106,7 @@ async function reconcileChargeRefunds(charge, via = 'webhook') {
        negative row, matching how the quote ledger expresses a refund. */
     const { rows: unl } = await pool.query(
       `SELECT id, order_ref, client_ref, customer_email, customer_name,
-              amount, tax_portion
+              amount, tax_portion, tax_certificate_id
          FROM unlinked_payments WHERE stripe_pi = $1 AND amount > 0
         ORDER BY created_at LIMIT 1`, [pi]);
     if (!unl.length) {
@@ -10089,7 +10134,7 @@ async function reconcileChargeRefunds(charge, via = 'webhook') {
         customer_details: { email: u.customer_email, name: u.customer_name } },
       failed ? 'failed refund of an unlinked payment' : 'refund of an unlinked payment',
       { amount: -change, kind: failed ? 'correction' : 'refund', allowZero: true,
-        taxPortion: backTax, extRef, note,
+        taxPortion: backTax, extRef, note, taxCertificateId: u.tax_certificate_id,
         source: via === 'sweep' ? 'stripe_sweep' : 'stripe_webhook' });
     if (!back.duplicate) {
       console.log(`Stripe ${failed ? 'refund FAILED' : 'refund'} for ${what} (${via}): ${failed ? '+' : '-'}${moved}`);
@@ -10216,7 +10261,7 @@ async function disputedPayment(pi) {
   if (rows.length) return { quote: rows[0] };
   const { rows: unl } = await pool.query(
     `SELECT id, order_ref, client_ref, customer_email, customer_name,
-            amount, tax_portion
+            amount, tax_portion, tax_certificate_id
        FROM unlinked_payments WHERE stripe_pi = $1 AND amount > 0
       ORDER BY created_at LIMIT 1`, [pi]);
   return unl.length ? { unlinked: unl[0] } : {};
@@ -10325,6 +10370,7 @@ async function reconcileDisputeNow(dispute, via = 'webhook', { fresh = false } =
           customer_details: { email: u.customer_email, name: u.customer_name } },
         'chargeback on an unlinked payment',
         { amount: -change, kind: 'dispute', allowZero: true, taxPortion: backTax, extRef, note,
+          taxCertificateId: u.tax_certificate_id,
           source: via === 'sweep' ? 'stripe_sweep' : 'stripe_webhook' });
       if (!out.duplicate) { bookedBack = change; ledger = 'unlinked'; }
     } else {
@@ -12459,9 +12505,16 @@ app.get('/tax.csv', requireAdmin, async (req, res) => {
        An unknown tax portion is left BLANK rather than written as 0 — a blank
        cell asks the bookkeeper a question, a zero answers it wrongly. */
     const { rows: unlinked } = await pool.query(
-      `SELECT created_at, order_ref, client_ref, stripe_pi, customer_name,
-              amount, kind, tax_portion, channel
-         FROM unlinked_payments ORDER BY created_at`).catch(() => ({ rows: [] }));
+      `SELECT u.created_at, u.order_ref, u.client_ref, u.stripe_pi, u.customer_name,
+              u.amount, u.kind, u.tax_portion, u.channel,
+              c.kind AS cert_kind, c.number AS cert_number, c.holder AS cert_holder, c.status AS cert_status
+         FROM unlinked_payments u LEFT JOIN tax_certificates c ON c.id = u.tax_certificate_id
+        ORDER BY u.created_at`)
+      .catch(() => pool.query(
+        `SELECT created_at, order_ref, client_ref, stripe_pi, customer_name,
+                amount, kind, tax_portion, channel
+           FROM unlinked_payments ORDER BY created_at`))
+      .catch(() => ({ rows: [] }));
 
     const day = (d) => new Date(d).toISOString().slice(0, 10);
     const all = [
@@ -12481,13 +12534,22 @@ app.get('/tax.csv', requireAdmin, async (req, res) => {
                 r.cert_number ? TAXCERT.certificateLabel({ kind: r.cert_kind, number: r.cert_number, holder: r.cert_holder }) : '',
                 r.cert_status || ''],
       })),
-      ...unlinked.map((u) => ({
-        at: u.created_at,
-        cells: [day(u.created_at),
-                u.order_ref ? `studio #${u.order_ref}` : (u.client_ref || u.stripe_pi || ''),
-                u.customer_name || '', '', '', '', u.amount, 'card', u.kind,
-                u.tax_portion == null ? '' : u.tax_portion, '', '', u.channel, '', '', ''],
-      })),
+      ...unlinked.map((u) => {
+        /* A studio sale is exempt while the certificate its checkout took the
+           tax off for stands. A refused one leaves the sale taxable — its tax
+           comes in on a later balance payment — and the columns still name it. */
+        const exempt = !!u.cert_number && u.cert_status !== 'rejected';
+        return {
+          at: u.created_at,
+          cells: [day(u.created_at),
+                  u.order_ref ? `studio #${u.order_ref}` : (u.client_ref || u.stripe_pi || ''),
+                  u.customer_name || '', '', '', '', u.amount, 'card', u.kind,
+                  u.tax_portion == null ? '' : u.tax_portion, exempt ? 'exempt' : '', '', u.channel,
+                  exempt ? (u.cert_kind || '') : '',
+                  u.cert_number ? TAXCERT.certificateLabel({ kind: u.cert_kind, number: u.cert_number, holder: u.cert_holder }) : '',
+                  u.cert_status || ''],
+        };
+      }),
     ].sort((a, b) => new Date(a.at) - new Date(b.at));
 
     sendCsv(res, `jtees-sales-tax-${new Date().toISOString().slice(0, 10)}.csv`,
@@ -13755,6 +13817,27 @@ function studioStage(status) {
   return { label: 'In production', color: '#1848B8', bg: '#eef2fd' };
 }
 
+/** A tax-exempt studio order's state, from the feed's `tax_exempt` (since
+ *  2026-09-29): paid without tax and held until its certificate is approved,
+ *  or owing the tax once it was refused. */
+function studioExemptChip(o) {
+  const x = String(o.tax_exempt || '');
+  if (x === 'pending') {
+    /* Unpaid, it is not a sale yet: the certificate only reaches
+       /certificates once the order is paid, so the chip would send the shop
+       to a page with nothing on it. */
+    if (!(Number(o.paid) > 0)) return '';
+    return `<a class="chip" href="/certificates?status=pending"
+      style="background:#fef2f2;color:#b91c1c;text-decoration:none">Tax certificate to check &mdash; don&rsquo;t produce</a>`;
+  }
+  if (x === 'refused') {
+    return `<span class="chip" style="background:#fff8ed;color:#8a5a00">Exemption refused${
+      Number(o.tax_due) > 0 ? ` &mdash; ${money(o.tax_due)} tax due` : ''}</span>`;
+  }
+  if (x === 'approved') return `<span class="chip" style="background:#e7f6ec;color:#166534">Tax-exempt</span>`;
+  return '';
+}
+
 function studioOrdersSection(feed, { heading = true, disputes = null } = {}) {
   const rows = feed.orders.map((o) => {
     const stage = studioStage(o.status);
@@ -13777,6 +13860,7 @@ function studioOrdersSection(feed, { heading = true, disputes = null } = {}) {
         ${fullRefund ? `<span class="chip" style="background:#fef2f2;color:#b91c1c">Refunded ${money(refunded)} &mdash; don&rsquo;t produce</span>`
           : refunded > 0 ? `<span class="chip" style="background:#fff8ed;color:#8a5a00">${money(refunded)} refunded</span>` : ''}
         ${disputes ? disputeChip(disputes.byOrder.get(String(o.id))) : ''}
+        ${studioExemptChip(o)}
         ${o.tracking ? `<span class="muted" style="font-size:12.5px">tracking ${escEmail(o.tracking)}</span>` : ''}
         <a class="muted" style="font-size:12.5px;margin-left:auto"
            href="${STUDIO_BASE}/admin.php?lumise-page=order&order_id=${encodeURIComponent(o.id)}"
@@ -15583,7 +15667,7 @@ app.get('/dashboard', requireAdmin, async (_req, res) => {
       href: '/quotes' })),
     ...(Number(certsWaiting.n) > 0 ? [{ tone: 'amber', icon: 'cert',
       title: `${certsWaiting.n} tax certificate${certsWaiting.n === 1 ? '' : 's'} to check`,
-      sub: 'the customer can already pay; refusing one locks payment again', href: '/certificates?status=pending' }] : []),
+      sub: 'studio orders on one wait for you; a quote can already be paid', href: '/certificates?status=pending' }] : []),
     ...(Number(reviewsWaiting.n) > 0 ? [{ tone: 'blue', icon: 'star',
       title: `${reviewsWaiting.n} review${reviewsWaiting.n === 1 ? '' : 's'} waiting for your approval`,
       sub: 'nothing shows on the site until you approve it', href: '/admin/reviews' }] : []),
@@ -16618,10 +16702,20 @@ function orderItemsTable(items) {
   return `<table style="width:100%;border-collapse:collapse;margin:14px 0;font-size:14px;">${rows}</table>`;
 }
 
-function orderShell({ heading, intro, orderId, items, total, shipping, tax, address, footer }) {
+/** A studio order's tax exemption as the designer sends it with the order
+ *  emails, or null: `status` is 'pending' (the shop has still to check the
+ *  certificate) or 'approved', `label` names the certificate. */
+function orderExemption(b) {
+  const x = b && b.tax_exempt;
+  if (!x || typeof x !== 'object' || !['pending', 'approved'].includes(x.status)) return null;
+  return { status: x.status, label: String(x.label || '').replace(/\s+/g, ' ').trim().slice(0, 160) };
+}
+
+function orderShell({ heading, intro, orderId, items, total, shipping, tax, address, footer, exempt = null }) {
   const lines = [];
   if (Number(shipping) > 0) lines.push(`<tr><td style="padding:3px 6px;text-align:right;color:#6b7280;">Shipping</td><td style="padding:3px 6px;text-align:right;white-space:nowrap;">${money(shipping)}</td></tr>`);
   if (Number(tax) > 0) lines.push(`<tr><td style="padding:3px 6px;text-align:right;color:#6b7280;">Sales tax</td><td style="padding:3px 6px;text-align:right;white-space:nowrap;">${money(tax)}</td></tr>`);
+  else if (exempt) lines.push(`<tr><td style="padding:3px 6px;text-align:right;color:#6b7280;">Sales tax &mdash; exempt${exempt.label ? ` (${escEmail(exempt.label)})` : ''}</td><td style="padding:3px 6px;text-align:right;white-space:nowrap;">${money(0)}</td></tr>`);
   return `
   <div style="font-family:system-ui,-apple-system,'Segoe UI',sans-serif;max-width:560px;margin:0 auto;padding:8px;">
     <h2 style="color:#1848B8;margin:0 0 4px;">${heading}</h2>
@@ -16648,6 +16742,7 @@ app.post('/api/order-confirmation', requireInternalKey, capPerRecipient('order-c
     const email = String(b.email || '').trim();
     if (!isValidEmail(email)) return res.status(400).json({ error: 'bad email' });
     const name = String(b.name || '').trim();
+    const exempt = orderExemption(b);
     await sendEmail({
       to: email,
       subject: `Thanks${name ? ', ' + name.split(' ')[0] : ''}! Order #${b.order_id} is in 🎉`,
@@ -16655,8 +16750,11 @@ app.post('/api/order-confirmation', requireInternalKey, capPerRecipient('order-c
         heading: 'Thank you for your order!',
         intro: `We&rsquo;ve got it and we&rsquo;re on it. You&rsquo;ll hear from us again as soon as it ships &mdash; most orders print and go out within 7&ndash;10 business days. Need it sooner? Just reply, rush is often possible.`,
         orderId: b.order_id, items: b.items, total: b.total,
-        shipping: b.shipping, tax: b.tax, address: b.address,
-        footer: `<p style="color:#374151;line-height:1.6;">We print every order ourselves right here in Chicago &mdash; thanks for supporting a small shop.</p>`,
+        shipping: b.shipping, tax: b.tax, address: b.address, exempt,
+        footer: (exempt && exempt.status === 'pending'
+          ? `<p style="color:#374151;line-height:1.6;">You checked out without sales tax on your exemption certificate. We check every certificate before we print. If we can&rsquo;t accept it, we&rsquo;ll email you a link to pay the tax.</p>`
+          : '') +
+          `<p style="color:#374151;line-height:1.6;">We print every order ourselves right here in Chicago &mdash; thanks for supporting a small shop.</p>`,
       }),
     });
     if (b.phone) {
@@ -16676,16 +16774,22 @@ app.post('/api/order-notification', requireInternalKey, capPerRecipient('order-n
     const b = req.body || {};
     const to = String(b.to || SHOP_EMAIL || '').trim();
     if (!isValidEmail(to)) return res.status(400).json({ error: 'bad recipient' });
+    const exempt = orderExemption(b);
     await sendEmail({
       to,
       replyTo: isValidEmail(String(b.email || '')) ? String(b.email) : undefined,
-      subject: `🧾 New order #${b.order_id} — ${money(b.total)}`,
+      subject: `🧾 New order #${b.order_id} — ${money(b.total)}${exempt && exempt.status === 'pending' ? ' — tax-exempt, check the certificate' : ''}`,
       html: orderShell({
         heading: 'New order received',
         intro: `<strong>${escEmail(b.name || 'A customer')}</strong>${b.email ? ` (${escEmail(b.email)})` : ''} just checked out${b.payment ? ` via ${escEmail(b.payment)}` : ''}.`,
         orderId: b.order_id, items: b.items, total: b.total,
-        shipping: b.shipping, tax: b.tax, address: b.address,
-        footer: `<p style="margin:18px 0;"><a href="https://design.jtees.net/admin.php?lumise-page=order&order_id=${encodeURIComponent(b.order_id)}" style="background:#1848B8;color:#fff;font-weight:700;text-decoration:none;padding:12px 26px;border-radius:100px;display:inline-block;">Open in admin →</a></p>`,
+        shipping: b.shipping, tax: b.tax, address: b.address, exempt,
+        footer: (exempt ? `<p style="color:#374151;line-height:1.6;">${exempt.status === 'pending'
+            ? `<strong>Tax-exempt &mdash; don&rsquo;t print it yet.</strong> Check the certificate first on
+               <a href="${PUBLIC_BASE_URL}/certificates">Certificates</a>. Approving releases the order;
+               refusing puts the tax back on it, to collect with Collect balance.`
+            : 'Tax-exempt, on a certificate you have already approved.'}</p>` : '') +
+          `<p style="margin:18px 0;"><a href="https://design.jtees.net/admin.php?lumise-page=order&order_id=${encodeURIComponent(b.order_id)}" style="background:#1848B8;color:#fff;font-weight:700;text-decoration:none;padding:12px 26px;border-radius:100px;display:inline-block;">Open in admin →</a></p>`,
       }),
     });
     res.json({ ok: true });
@@ -16725,7 +16829,14 @@ function balanceEmailInput(b) {
   if (link.protocol !== 'https:' || !['buy.stripe.com', 'checkout.stripe.com'].includes(link.hostname)) {
     return { error: 'bad link' };
   }
-  return { email, orderId, balance, link: link.href, name: String(b.name || '').trim().slice(0, 120) };
+  /* A balance raised because the shop refused the order's tax-exemption
+     certificate says so, with the shop's reason: the customer checked out
+     without tax and is owed an explanation before a bill. */
+  const taxRefused = b.reason === 'tax_refused';
+  const tax = Number(b.tax);
+  return { email, orderId, balance, link: link.href, name: String(b.name || '').trim().slice(0, 120),
+           taxRefused, tax: taxRefused && Number.isFinite(tax) && tax > 0 ? round2(tax) : 0,
+           note: taxRefused ? String(b.note || '').replace(/\s+/g, ' ').trim().slice(0, 300) : '' };
 }
 
 /* The studio's balance-due email. The designer used to send it itself, straight
@@ -16736,17 +16847,33 @@ function balanceEmailInput(b) {
 app.post('/api/balance-link-email', requireInternalKey, capPerRecipient('balance-link-email', 10), async (req, res) => {
   const v = balanceEmailInput(req.body || {});
   if (v.error) return res.status(400).json({ error: v.error });
+  const button = `<p><a href="${escEmail(v.link)}" style="display:inline-block;background:#1a2e5a;color:#fff;padding:12px 28px;border-radius:6px;text-decoration:none;font-weight:bold;">Pay balance securely</a></p>`;
   try {
     await sendEmail({
       to: v.email,
       replyTo: NOTIFY_EMAIL,
-      subject: `Balance due on your Design Studio order #${v.orderId}`,
-      html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#222;">
+      subject: v.taxRefused
+        ? `Sales tax due on your Design Studio order #${v.orderId}`
+        : `Balance due on your Design Studio order #${v.orderId}`,
+      html: v.taxRefused
+        ? `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#222;">
+        <h2 style="color:#1a2e5a;">Sales tax is due on your order</h2>
+        <p>Hi ${escEmail(v.name || 'there')},</p>
+        <p>We could not accept the tax-exemption certificate for your Design Studio order
+          <strong>#${v.orderId}</strong>${v.note ? `: ${escEmail(v.note)}` : '.'}</p>
+        <p>So the order carries Illinois sales tax${v.tax > 0 ? ` of <strong>${money(v.tax)}</strong>` : ''}.
+          Here is what is due now:</p>
+        <p style="font-size:1.4em;"><strong>${money(v.balance)}</strong></p>
+        ${button}
+        <p>Have a current certificate? Reply to this email with it and we will look again.</p>
+        <p style="color:#666;font-size:.9em;">Payment is handled by Stripe. Questions? Just reply to this email.</p>
+        <p>— June's Tees &amp; Things</p></div>`
+        : `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#222;">
         <h2 style="color:#1a2e5a;">Your order is ready to finish up!</h2>
         <p>Hi ${escEmail(v.name || 'there')},</p>
         <p>Here is the remaining balance on your Design Studio order <strong>#${v.orderId}</strong>:</p>
         <p style="font-size:1.4em;"><strong>${money(v.balance)}</strong></p>
-        <p><a href="${escEmail(v.link)}" style="display:inline-block;background:#1a2e5a;color:#fff;padding:12px 28px;border-radius:6px;text-decoration:none;font-weight:bold;">Pay balance securely</a></p>
+        ${button}
         <p style="color:#666;font-size:.9em;">Payment is handled by Stripe. Questions? Just reply to this email.</p>
         <p>— June's Tees &amp; Things</p></div>`,
     });
@@ -17425,8 +17552,18 @@ app.post('/quotes/:code/exemption', requireAdmin, async (req, res) => {
 /* Everything but the file itself, which only /certificates/:id/file reads. */
 const CERT_COLUMNS = `id, kind, number, holder, email, expires_on, file_type, file_name, source,
                       status, review_note, reviewed_at, created_at`;
+/* A certificate something relies on: one on a quote, or one a PAID studio
+   order used. The studio's checkout sends a certificate before its order
+   exists, so one from a checkout that was then abandoned, or sent again with
+   the number corrected, is on file and relied on by nothing. Kept, never
+   listed: asking the shop to check it would be asking about no sale. `c` is
+   tax_certificates. */
+const CERT_IN_USE_SQL = `(c.source <> 'studio'
+    OR EXISTS (SELECT 1 FROM studio_exemptions s WHERE s.certificate_id = c.id)
+    OR EXISTS (SELECT 1 FROM quotes q WHERE q.tax_certificate_id = c.id))`;
 /* Waiting for the shop to check: the menu badge and the dashboard read this. */
-const CERTS_WAITING_SQL = `SELECT COUNT(*)::int AS n FROM tax_certificates WHERE status = 'pending'`;
+const CERTS_WAITING_SQL = `SELECT COUNT(*)::int AS n FROM tax_certificates c
+                            WHERE c.status = 'pending' AND ${CERT_IN_USE_SQL}`;
 
 /** The certificate on file for a quote, or null. */
 async function certificateFor(q) {
@@ -17436,15 +17573,15 @@ async function certificateFor(q) {
   return rows[0] || null;
 }
 
-/** Keep a validated certificate and put it on the quote.
+/** Keep a validated certificate, and return its row.
  *
  *  The same file with the same number is the same certificate, so it is found
  *  rather than stored twice, and one that was refused stays refused however
- *  often it is sent. A refused one is not attached: the caller says so. One the
- *  SHOP attaches is approved as it lands, since the person who decides has
- *  already looked at it. The quote's reason follows the certificate's kind,
- *  which is the line of the ST-1 the sale is deducted on. */
-async function attachCertificate(q, cert, { source, email = null }) {
+ *  often it is sent — as one that was approved stays approved, which is how a
+ *  returning buyer's certificate carries over. One the SHOP attaches is
+ *  approved as it lands, since the person who decides has already looked at
+ *  it. */
+async function keepCertificate(cert, { source, email = null }) {
   const { rows: [row] } = await pool.query(
     `INSERT INTO tax_certificates (kind, number, holder, email, expires_on, file, file_type, file_name,
                                    file_sha256, source, status, reviewed_at)
@@ -17458,6 +17595,14 @@ async function attachCertificate(q, cert, { source, email = null }) {
      RETURNING ${CERT_COLUMNS}`,
     [cert.kind, cert.number, cert.holder, email, cert.expires_on, cert.file, cert.file_type,
      cert.file_name, cert.file_sha256, source, source === 'shop']);
+  return row;
+}
+
+/** Keep a validated certificate and put it on the quote. A refused one is not
+ *  attached: the caller says so. The quote's reason follows the certificate's
+ *  kind, which is the line of the ST-1 the sale is deducted on. */
+async function attachCertificate(q, cert, opts) {
+  const row = await keepCertificate(cert, opts);
   if (row.status !== 'rejected') {
     await pool.query(
       `UPDATE quotes SET tax_certificate_id = $1, tax_exempt_reason = $2 WHERE id = $3`,
@@ -17597,6 +17742,161 @@ app.post('/quote/:code/certificate', requireAdmin, async (req, res) => {
   }
 });
 
+/* ── The design studio's exempt orders ───────────────────────────────────────
+   design.jtees.net takes the tax off an order as soon as an exempt buyer's
+   certificate is on file, and holds the order until the shop approves it here
+   (owner, 2026-09-28: "Remove tax, you approve"). The file and the decision
+   live in this database, beside the quotes' certificates, on one review page.
+
+     1. The studio's checkout sends the certificate (POST /api/tax-certificates)
+        before the order exists, so a mistake is fixed where it was typed.
+     2. Once the order is PAID it names the order (POST .../:id/orders). That is
+        when the shop is told, and when the certificate joins /certificates.
+     3. The decision goes to the studio as it is made (the review route pushes
+        it), and the studio asks for every one it is still waiting on each hour
+        (GET .../:id), so a push that is lost costs time and never the decision.
+
+   A refusal puts the tax back on the order; the shop collects it with the
+   order's balance link, whose email tells the customer why. All three need
+   the internal key: only the studio calls them. */
+
+/** Whether a studio certificate can take the tax off a sale today, and in the
+ *  buyer's words why not. */
+function studioCertificateRefusal(cert) {
+  const why = TAXCERT.lockReason(cert);
+  if (why === 'rejected') {
+    return `This certificate was not accepted${cert.review_note ? ': ' + cert.review_note : ''}. ` +
+      'Please use a different one, or check out without the exemption.';
+  }
+  if (why === 'expired') return 'That certificate has expired. Upload the current one.';
+  return '';
+}
+
+app.post('/api/tax-certificates', requireInternalKey, async (req, res) => {
+  const b = req.body || {};
+  const v = TAXCERT.validateCertificate(b);
+  if (v.error) return res.status(400).json({ error: v.error });
+  const email = isValidEmail(String(b.email || '').trim()) ? String(b.email).trim().toLowerCase() : null;
+  try {
+    /* The site-wide cap (TAXCERT.studioUploadsFull). One already on file —
+       the same file with the same number — adds nothing, so a buyer sending
+       theirs again is never turned away by it. */
+    const { rows: [load] } = await pool.query(
+      `SELECT COUNT(*)::int AS n, COALESCE(SUM(length(c.file)), 0)::bigint AS bytes
+         FROM tax_certificates c
+        WHERE c.source = 'studio' AND c.created_at > NOW() - INTERVAL '24 hours'
+          AND NOT ${CERT_IN_USE_SQL}`);
+    if (TAXCERT.studioUploadsFull(load)) {
+      const { rows: known } = await pool.query(
+        `SELECT 1 FROM tax_certificates WHERE file_sha256 = $1 AND number = $2`,
+        [v.cert.file_sha256, v.cert.number]);
+      if (!known.length) {
+        console.warn(`studio: tax certificate refused, ${load.n} unused in the last day (${load.bytes} bytes)`);
+        reportError('studio:tax-certificate-cap', new Error('studio certificate uploads are over the daily cap'),
+          `${load.n} certificates, ${load.bytes} bytes, none on a paid order`).catch(() => {});
+        return res.status(429).json({ error: 'Tax-exempt checkout is busy right now. '
+          + 'Please text us at (773) 849-1854 and we will sort it out.' });
+      }
+    }
+    const cert = await keepCertificate(v.cert, { source: 'studio', email });
+    const refusal = studioCertificateRefusal(cert);
+    console.log(`studio: tax certificate #${cert.id} sent at checkout (${cert.status}${refusal ? ', not usable' : ''})`);
+    if (refusal) return res.status(409).json({ error: refusal, certificate: TAXCERT.certificateSummary(cert) });
+    res.json({ ok: true, certificate: TAXCERT.certificateSummary(cert) });
+  } catch (err) {
+    console.error('studio certificate failed:', err.message);
+    reportError('studio:tax-certificate', err).catch(() => {});
+    res.status(500).json({ error: 'The certificate could not be saved just now. Please try again.' });
+  }
+});
+
+app.get('/api/tax-certificates/:id', requireInternalKey, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!(id > 0)) return res.status(404).json({ error: 'no such certificate' });
+  try {
+    const { rows } = await pool.query(`SELECT ${CERT_COLUMNS} FROM tax_certificates WHERE id = $1`, [id]);
+    if (!rows.length) return res.status(404).json({ error: 'no such certificate' });
+    res.set('Cache-Control', 'no-store');
+    res.json({ ok: true, certificate: TAXCERT.certificateSummary(rows[0]) });
+  } catch (err) {
+    console.error('studio certificate read failed:', err.message);
+    res.status(500).json({ error: 'read failed' });
+  }
+});
+
+/* A paid studio order that used a certificate. Recorded once per order, and the
+   shop is told once, when it is still waiting to be checked. Answers with the
+   certificate as it stands, so a decision already made reaches the order at
+   once. */
+app.post('/api/tax-certificates/:id/orders', requireInternalKey, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const b = req.body || {};
+  const orderRef = String(b.order_id == null ? '' : b.order_id).trim();
+  if (!(id > 0) || !/^[0-9]{1,12}$/.test(orderRef)) return res.status(400).json({ error: 'bad request' });
+  const waived = Number(b.tax_waived);
+  const name = String(b.name || '').replace(/\s+/g, ' ').trim().slice(0, 120) || null;
+  const email = isValidEmail(String(b.email || '').trim()) ? String(b.email).trim().toLowerCase() : null;
+  try {
+    const { rows: [cert] } = await pool.query(`SELECT ${CERT_COLUMNS} FROM tax_certificates WHERE id = $1`, [id]);
+    if (!cert) return res.status(404).json({ error: 'no such certificate' });
+    const { rows: made } = await pool.query(
+      `INSERT INTO studio_exemptions (order_ref, certificate_id, tax_waived, customer_name, customer_email)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (order_ref) DO NOTHING
+       RETURNING order_ref`,
+      [orderRef, id, Number.isFinite(waived) && waived >= 0 ? round2(waived) : null, name, email]);
+    if (made.length) {
+      console.log(`studio order #${orderRef}: tax certificate #${id} (${cert.status})`);
+      if (cert.status === 'pending') {
+        notifyStudioCertificate(cert, { orderRef, name, email, waived: Number.isFinite(waived) ? waived : null });
+      }
+    }
+    res.json({ ok: true, certificate: TAXCERT.certificateSummary(cert) });
+  } catch (err) {
+    console.error('studio certificate order failed:', err.message);
+    reportError('studio:tax-certificate-order', err, `order ${orderRef}`).catch(() => {});
+    res.status(500).json({ error: 'not recorded' });
+  }
+});
+
+/** Tell the shop a paid studio order is waiting on its certificate. */
+function notifyStudioCertificate(cert, { orderRef, name, email, waived }) {
+  sendEmail({
+    to: NOTIFY_EMAIL,
+    replyTo: email || undefined,
+    subject: `Tax certificate for studio order #${orderRef} — please check it`,
+    html: `<div style="font-family:system-ui,sans-serif;max-width:560px">
+      <h2 style="color:#1848B8;margin:0 0 10px">A tax-exempt studio order is waiting on you</h2>
+      <p><b>${escEmail(name || email || 'A customer')}</b> paid for design studio order
+        <b>#${escEmail(orderRef)}</b> without sales tax${waived > 0 ? ` (${money(waived)} taken off)` : ''},
+        on this certificate: ${escEmail(TAXCERT.certificateLabel(cert))}${cert.expires_on
+          ? `, expires ${escEmail(TAXCERT.isoDay(cert.expires_on))}` : ''}.</p>
+      <p><b>Don't print it yet.</b> Check the certificate matches the customer and has not expired:
+        <a href="${PUBLIC_BASE_URL}/certificates">open Certificates</a>. Approving releases the order.
+        Refusing puts the tax back on it, and you collect that with <b>Collect balance</b> on the order
+        in the studio.</p></div>`,
+  }).catch((e) => console.error('studio certificate alert failed:', e.message));
+}
+
+/* Tell the studio a certificate it holds orders on has been decided. Only a
+   nudge: the studio reads the decision back from GET /api/tax-certificates/:id,
+   the same read its hourly pass makes, so there is one way a decision reaches
+   an order and a lost push costs an hour, not the decision. */
+async function pushCertificateDecisionToStudio(id) {
+  if (!process.env.JT_INTERNAL_KEY) return;
+  const { rows } = await pool.query(
+    `SELECT 1 FROM studio_exemptions WHERE certificate_id = $1 LIMIT 1`, [id]);
+  if (!rows.length) return;
+  try {
+    const r = await studioFetch(`${STUDIO_BASE}/jt-tax-decision.php`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ certificate_id: id }) });
+    if (!r.ok) throw new Error(`studio answered ${r.status}`);
+  } catch (err) {
+    console.error(`certificate #${id}: decision not sent to the studio (its hourly pass will fetch it):`, err.message);
+  }
+}
+
 /* The file, to a signed-in admin only. Never cached, never sniffed: it is the
    type its own bytes said it was when it was stored. */
 app.get('/certificates/:id/file', requireAdmin, async (req, res) => {
@@ -17638,6 +17938,8 @@ app.post('/certificates/:id/review', requireAdmin, async (req, res) => {
       `UPDATE tax_certificates SET status = $2, review_note = $3, reviewed_at = NOW() WHERE id = $1`,
       [id, approve ? 'approved' : 'rejected', approve ? null : note]);
     console.log(`tax certificate #${id} ${approve ? 'approved' : 'refused'}`);
+    // Studio orders held on it hear now rather than at the studio's next hourly pass.
+    pushCertificateDecisionToStudio(id).catch(() => {});
   } catch (err) {
     console.error('certificate review failed:', err.message);
   }
@@ -17676,8 +17978,11 @@ app.get('/certificates', requireAdmin, async (req, res) => {
     const { rows } = await pool.query(
       `SELECT ${CERT_COLUMNS.split(',').map((c) => 'c.' + c.trim()).join(', ')},
               COALESCE((SELECT string_agg(q.code, ' ' ORDER BY q.created_at)
-                          FROM quotes q WHERE q.tax_certificate_id = c.id), '') AS quote_codes
+                          FROM quotes q WHERE q.tax_certificate_id = c.id), '') AS quote_codes,
+              COALESCE((SELECT string_agg(s.order_ref, ' ' ORDER BY s.created_at)
+                          FROM studio_exemptions s WHERE s.certificate_id = c.id), '') AS studio_orders
          FROM tax_certificates c
+        WHERE ${CERT_IN_USE_SQL}
         ORDER BY (c.status = 'pending') DESC, c.created_at DESC
         LIMIT 500`);
     const today = TAXCERT.shopToday();
@@ -17686,6 +17991,7 @@ app.get('/certificates', requireAdmin, async (req, res) => {
     const card = (c) => {
       const exp = TAXCERT.isoDay(c.expires_on);
       const codes = String(c.quote_codes || '').split(' ').filter(Boolean);
+      const orders = String(c.studio_orders || '').split(' ').filter(Boolean);
       return `
       <div class="card" id="cert-${c.id}" style="border-left:4px solid ${
         c.status === 'pending' ? '#b45309' : c.status === 'approved' ? '#16a34a' : '#b91c1c'}">
@@ -17701,9 +18007,14 @@ app.get('/certificates', requireAdmin, async (req, res) => {
         <div class="muted" style="margin-top:6px;font-size:12.5px">
           <a href="/certificates/${c.id}/file" target="_blank" rel="noopener">Open the certificate</a>
           ${codes.map((k) => ` &middot; quote <a href="/production/${escEmail(k)}">${escEmail(k)}</a>`).join('')}
+          ${orders.map((o) => ` &middot; studio order <a href="${STUDIO_BASE}/admin.php?lumise-page=order&order_id=${
+            encodeURIComponent(o)}" target="_blank" rel="noopener">#${escEmail(o)}</a>`).join('')}
           ${c.email ? ` &middot; ${escEmail(c.email)}` : ''}
         </div>
         ${c.status === 'rejected' && c.review_note ? `<div class="muted" style="margin-top:6px;font-size:12.5px">Refused: ${escEmail(c.review_note)}</div>` : ''}
+        ${orders.length && c.status === 'pending' ? `<div class="muted" style="margin-top:6px;font-size:12.5px">
+          The studio order is paid without tax and held until you decide. Approving releases it; refusing
+          puts the tax back on it, and you collect that with Collect balance on the order.</div>` : ''}
         ${certificateReviewForms(c, '/certificates')}
       </div>`;
     };
@@ -17716,7 +18027,7 @@ app.get('/certificates', requireAdmin, async (req, res) => {
       ${list.length ? list.map(card).join('') : emptyState(show === 'pending'
         ? 'Nothing waiting. A certificate a customer uploads lands here, and you are emailed.'
         : rows.length ? 'None in this list.'
-        : 'No certificates yet. They arrive from a customer\'s quote page, or you attach one on the job page.')}`,
+        : 'No certificates yet. They arrive from a customer\'s quote page, with a tax-exempt studio order, or you attach one on the job page.')}`,
       'certificates'));
   } catch (err) {
     console.error('certificates page failed:', err.message);

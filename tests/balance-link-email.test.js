@@ -40,6 +40,7 @@ function extractFn(anchor) {
 }
 
 const balanceEmailInput = vm.runInThisContext(`(() => {
+  const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
   ${extractFn('function isValidEmail(')}
   ${extractFn('function balanceEmailInput(')}
   return balanceEmailInput;
@@ -72,6 +73,29 @@ test('no balance, no order, or no address: nothing is sent', () => {
   assert.strictEqual(balanceEmailInput({ ...OK, email: 'nope' }).error, 'bad email');
 });
 
+/* A balance raised because the shop refused an exempt studio order's
+   certificate. The customer checked out without tax, so the email has to say
+   why it now asks for more, in the shop's own words. */
+test('a refused exemption says so, with the shop\'s reason and the tax', () => {
+  const v = balanceEmailInput({ ...OK, reason: 'tax_refused', note: '  The letter  expired in 2025. ', tax: 18.456 });
+  assert.strictEqual(v.error, undefined);
+  assert.strictEqual(v.taxRefused, true);
+  assert.strictEqual(v.note, 'The letter expired in 2025.');
+  assert.strictEqual(v.tax, 18.46);
+  const route = src.slice(src.indexOf("app.post('/api/balance-link-email'"));
+  assert.match(route, /v\.taxRefused\s*\?\s*`Sales tax due on your Design Studio order/);
+  assert.match(route, /We could not accept the tax-exemption certificate/);
+  assert.match(route, /escEmail\(v\.note\)/, 'the reason is escaped into the HTML');
+});
+
+test('an ordinary balance carries no reason, however the fields are sent', () => {
+  const v = balanceEmailInput({ ...OK, note: 'ignored', tax: 5 });
+  assert.strictEqual(v.taxRefused, false);
+  assert.strictEqual(v.note, '');
+  assert.strictEqual(v.tax, 0);
+  assert.strictEqual(balanceEmailInput({ ...OK, reason: 'tax_refused', tax: 'abc' }).tax, 0);
+});
+
 test('the endpoint needs the internal key, and reports a failed send', () => {
   assert.match(src, /app\.post\('\/api\/balance-link-email', requireInternalKey,/);
   const at = src.indexOf("app.post('/api/balance-link-email'");
@@ -92,6 +116,7 @@ const board = vm.runInThisContext(`(() => {
   const STUDIO_BASE = 'https://design.jtees.net';
   ${extractFn('function escEmail(')}
   ${extractFn('function studioStage(')}
+  ${extractFn('function studioExemptChip(')}
   ${extractFn('function studioOrdersSection(')}
   return studioOrdersSection;
 })()`);
@@ -115,6 +140,30 @@ test('an order with no refunds (or an older feed without the field) is unchanged
   const html = board({ orders: [order({ paid: 60 })], error: null }, { heading: false });
   assert.match(html, /\$60\.00 due/);
   assert.doesNotMatch(html, /refunded|Refunded/);
+});
+
+/* A tax-exempt studio order is paid without tax and held until the shop
+   approves its certificate (feed field `tax_exempt`, since 2026-09-29). The
+   board is where the shop decides what goes to press, so it has to say so. */
+test('an exempt order still waiting on its certificate says do not produce, and links to the check', () => {
+  const html = board({ orders: [order({ tax_exempt: 'pending' })], error: null }, { heading: false });
+  assert.match(html, /Tax certificate to check &mdash; don&rsquo;t produce/);
+  assert.match(html, /href="\/certificates\?status=pending"/);
+});
+
+test('a refused exemption shows the tax now due; an approved one reads tax-exempt', () => {
+  const refused = board({ orders: [order({ tax_exempt: 'refused', tax_due: 12.3, total: 132.3 })], error: null },
+    { heading: false });
+  assert.match(refused, /Exemption refused &mdash; \$12\.30 tax due/);
+  assert.doesNotMatch(refused, /don&rsquo;t produce/);
+  const approved = board({ orders: [order({ tax_exempt: 'approved' })], error: null }, { heading: false });
+  assert.match(approved, /Tax-exempt</);
+  assert.doesNotMatch(approved, /don&rsquo;t produce|refused/);
+});
+
+test('an order with no exemption, or an older feed, shows no tax chip', () => {
+  const html = board({ orders: [order({})], error: null }, { heading: false });
+  assert.doesNotMatch(html, /Tax-exempt|Tax certificate|Exemption refused/);
 });
 
 test('customer lifetime spend is net of studio refunds', () => {

@@ -225,9 +225,48 @@ function certificateLabel(cert) {
   return `${k ? k.short : cert.kind} ${cert.number}${cert.holder ? ' · ' + cert.holder : ''}`;
 }
 
+/**
+ * What the design studio is told about a certificate: enough to show the buyer
+ * and to decide the order, never the file. `usable` is whether it can stand
+ * behind a sale today — not refused, not expired — and is the only thing the
+ * studio's checkout needs to take the tax off.
+ */
+function certificateSummary(cert, today = shopToday()) {
+  if (!cert) return null;
+  return {
+    id: Number(cert.id),
+    status: cert.status,
+    review_note: cert.review_note || '',
+    kind: cert.kind,
+    number: cert.number,
+    holder: cert.holder,
+    expires_on: isoDay(cert.expires_on) || null,
+    label: certificateLabel(cert),
+    usable: certificateUsable(cert, today),
+  };
+}
+
+/**
+ * The most certificates the design studio may leave on file in a day without a
+ * sale behind them. Its checkout sends one before the order exists, from
+ * anyone with something in their cart, and one nobody paid with is kept but
+ * never listed. The studio limits each visitor (12 an hour); this limits the
+ * whole site, so files that lead to no sale cannot fill the database the
+ * quotes and payments live in. A real exempt buyer sends one or two.
+ */
+const STUDIO_UNUSED_DAILY = { count: 30, bytes: 120 * 1024 * 1024 };
+
+/** Whether the last day's unused studio certificates — `load` is { n, bytes }
+ *  of those not on a paid order — are at the limit. */
+function studioUploadsFull(load, limits = STUDIO_UNUSED_DAILY) {
+  const n = Number(load && load.n) || 0;
+  const bytes = Number(load && load.bytes) || 0;
+  return n >= limits.count || bytes >= limits.bytes;
+}
+
 module.exports = {
-  MAX_FILE_BYTES, CERT_KINDS, EXEMPT_REASONS, REVIEW_STATES,
+  MAX_FILE_BYTES, CERT_KINDS, EXEMPT_REASONS, REVIEW_STATES, STUDIO_UNUSED_DAILY,
   isoDay, shopToday, sniffFileType, normaliseNumber, validateCertificate,
   exemptReasonOf, quoteNeedsCertificate, certificateUsable, quotePayLocked, lockReason,
-  exemptionDocumented, certificateLabel,
+  exemptionDocumented, certificateLabel, certificateSummary, studioUploadsFull,
 };
