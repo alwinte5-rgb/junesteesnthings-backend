@@ -64,7 +64,9 @@ test('the summary is rendered on the customer line, and escaped', () => {
 });
 
 test('the page says what the each-price covers', () => {
-  assert.match(src, /The price each covers the garment/, 'the explanation line is gone');
-  assert.match(src, /screens,\s*\n?\s*setup, design — is its own row/,
+  assert.match(src, /The price each covers the item/, 'the explanation line is gone');
+  /* It no longer claims NOTHING is folded into a price: Signs365's freight is
+     shown inside the item's price by the owner's choice (2026-09-30). */
+  assert.match(src, /Screens, setup and design work are charged once\s*\n?\s*for the job, so they have their own rows/,
     'it should name the charges that are billed once rather than per piece');
 });

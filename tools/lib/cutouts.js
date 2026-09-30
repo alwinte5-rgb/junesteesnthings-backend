@@ -44,7 +44,10 @@ const SHIPPING_WEEKDAY = 10.00;   // Signs365 weekday freight, charged once an O
 /* How many nest on one 48x96 sheet, by bounding box: a head is about 0.85 as
    wide as it is tall, plus an inch for kerf and bleed. Real head artwork can
    nest tighter than its bounding box, which only ever helps. */
-const PER_SHEET = { 12: 32, 18: 10, 24: 8, 36: 3 };
+/* 36 is FIVE, from Signs365's own layout (the owner, 2026-09-30): the sheet
+   takes five 24x36 pieces, and a 36in head is cut from a 24x36 piece. The
+   head's bounding box above is wider than that, which is why this read 3. */
+const PER_SHEET = { 12: 32, 18: 10, 24: 8, 36: 5 };
 
 /* A 24" head is 22" across and does not fit a 20x30 board at all, so 24" and
    36" have no in-house route at any quantity. That is the whole reason they
@@ -162,10 +165,10 @@ const minimumFor = (size) => (fitsBoard(size) ? 1 : PER_SHEET[size]);
  * forty — there is no waste, because the pack IS the unit the supplier sells.
  * One price, flat, at every quantity:
  *
- *     12"  32 a pack   $228    $7.13 a head
- *     18"  10 a pack   $192   $19.20 a head
- *     24"   8 a pack   $188   $23.50 a head
- *     36"   3 a pack   $180   $60.00 a head
+ *     12"  32 a pack   $208    $6.50 a head
+ *     18"  10 a pack   $172   $17.20 a head
+ *     24"   8 a pack   $168   $21.00 a head
+ *     36"   5 a pack   $164   $32.80 a head
  *
  * Rounded UP to an even dollar from cost x2, so every pack clears 50%.
  * These four figures are the ONLY hand-written prices in this file and they

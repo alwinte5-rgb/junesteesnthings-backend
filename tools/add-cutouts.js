@@ -39,7 +39,7 @@
  * 10 to a sheet. In house wins while the run is short, because a sheet is $77
  * whether you use all of it or not; the sheet wins once the run fills one.
  * A 24" head is 22" across and does not fit a 20x30 board at all, so 24" and
- * 36" are always sheets, 8 and 3 to a sheet.
+ * 36" are always sheets, 8 and 5 to a sheet.
  *
  *     12"  board route up to ~13 pieces, sheet above
  *     18"  board route up to ~9 pieces, sheet above
@@ -86,7 +86,7 @@
  * a 20x30 board, and so has no in-house route at any quantity — the first one
  * buys a whole $77 sheet and leaves seven heads of board over. Sold by the
  * sheet, which is how it is actually made, the same cutout is $35.40. So the
- * minimum is the fix, not withdrawal: eight for the 24", three for the 36",
+ * minimum is the fix, not withdrawal: eight for the 24", five for the 36",
  * one sheet each. `min_qty` in the calculate blob is what the engine enforces,
  * the same field Screen Printing carries its 50 in.
  */
@@ -164,6 +164,13 @@ const METHODS = [
     bands: packLadder(36), min: 1, offered: true, unit: 'pack',
     description: 'A full sheet of 36 inch big head cutouts — ' + packSizeFor(36) +
       ' of them, printed and contour cut on 3/16 inch foam board. Priced per pack.' },
+  /* The 36in went from three a sheet to five on 2026-09-30 (PER_SHEET), which
+     renames its pack. The title is how this tool finds a row, so the old pack
+     is switched OFF here rather than left on sale beside the new one. Kept, not
+     deleted: quotes already written against it still point at it. */
+  { title: 'Big Head Cutout — 36in, 3-pack (full sheet)', bands: packLadder(36), min: 1,
+    offered: false, retire: true, unit: 'pack',
+    description: 'Superseded by the ' + packSizeFor(36) + '-pack.' },
 
   /* Singles, for runs too short to want a sheet. Only the two sizes that fit a
      20x30 board; 24" and 36" are pack-only because there is no other way to
@@ -191,14 +198,14 @@ const METHODS = [
   { title: 'Big Head Cutout — 24in', bands: ladderFor(24), min: minimumFor(24), offered: false, unit: 'piece',
     description: 'Superseded by the 8-pack.' },
   { title: 'Big Head Cutout — 36in', bands: ladderFor(36), min: minimumFor(36), offered: false, unit: 'piece',
-    description: 'Superseded by the 3-pack.' },
+    description: 'Superseded by the ' + packSizeFor(36) + '-pack.' },
 ];
 
 const NAME = 'Big Head Cutouts';
 const DESCRIPTION =
   'Custom big head cutouts, printed and contour cut on 3/16" board. Choose a ' +
   'size — 12, 18, 24 or 36 inches tall — and send the photo. The 24 and 36 ' +
-  'inch come eight and three to a sheet, so those are the smallest runs. ' +
+  'inch come ' + packSizeFor(24) + ' and ' + packSizeFor(36) + ' to a sheet, so those are the smallest runs. ' +
   'Bigger runs cost less each.';
 
 const have = new Map(mysql(url, "SELECT id,title FROM lumise_printings WHERE title LIKE 'Big Head Cutout%';", { rows: true })
@@ -208,7 +215,8 @@ const prod = mysql(url, 'SELECT id,name FROM lumise_products WHERE name=' + sq(N
 console.log((APPLY ? 'APPLYING' : 'DRY RUN') + '  —  labour at $' + SHOP_RATE + '/hr, ' + MINUTES_PER_HEAD + ' min a head in house\n');
 for (const m of METHODS) {
   const q = Object.keys(m.bands).map(Number).sort((a, b) => a - b);
-  console.log('  ' + (have.has(m.title) ? 'update #' + have.get(m.title) : 'create') + '  ' + m.title +
+  console.log('  ' + (have.has(m.title) ? (m.retire ? 'retire #' : 'update #') + have.get(m.title)
+    : (m.retire ? 'absent ' : 'create')) + '  ' + m.title +
     (m.offered ? (m.unit === 'pack' ? '   [per pack]' : m.min > 1 ? '   [minimum ' + m.min + ']' : '') : '   [NOT OFFERED]'));
   console.log('      ' + q.map((k) => '<=' + k + ' $' + m.bands[k]).join('  '));
   /* A ladder that rises as the order grows is a mistake, always. */
@@ -230,7 +238,11 @@ for (const m of METHODS) {
        whatever active it already has, so re-running cannot resurrect it. */
     mysql(url, 'UPDATE lumise_printings SET calculate=' + sq(calc(m.bands, m.min)) + ', description=' + sq(m.description) +
       (m.offered ? ', active=1' : '') + ', updated=NOW() WHERE id=' + have.get(m.title) + ';');
-  } else {
+    /* A pack whose name changed is switched off by its OLD name (retire, in
+       METHODS). The only write that ever sets active=0, and only for a title
+       listed as retired, so no offered size can be turned off by accident. */
+    if (m.retire) mysql(url, 'UPDATE lumise_printings SET active=0, updated=NOW() WHERE id=' + have.get(m.title) + ';');
+  } else if (!m.retire) {
     mysql(url, 'INSERT INTO lumise_printings (title,active,calculate,thumbnail,upload,description,author,created,updated) VALUES (' +
       sq(m.title) + ',' + (m.offered ? '1' : '0') + ',' + sq(calc(m.bands, m.min)) + ",'',''," + sq(m.description) + ',' + sq(author) + ',NOW(),NOW());');
   }
