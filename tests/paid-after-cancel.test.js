@@ -277,10 +277,10 @@ test('nothing is sent without a key, or for anything that is not a session id', 
    fails here with the reason rather than as a missing anchor. */
 const payRoute = src.slice(src.indexOf("app.get(['/q/:code/pay/card'"),
                            src.indexOf('Bank a completed Stripe Checkout session'));
-const cancelRoute = src.slice(src.indexOf("app.post('/quote/:code/cancel'"),
-                              src.indexOf("app.post('/quote/:code/uncancel'"));
-const uncancelRoute = src.slice(src.indexOf("app.post('/quote/:code/uncancel'"),
-                                src.indexOf("app.post('/quote/:code/settle'"));
+const cancelRoute = src.slice(src.indexOf("app.post('/admin/quote/:code/cancel'"),
+                              src.indexOf("app.post('/admin/quote/:code/uncancel'"));
+const uncancelRoute = src.slice(src.indexOf("app.post('/admin/quote/:code/uncancel'"),
+                                src.indexOf("app.post('/admin/quote/:code/settle'"));
 
 test('a new card page closes the quote\'s last one first', () => {
   const close = payRoute.indexOf('expireCheckoutSession(q.stripe_session)');

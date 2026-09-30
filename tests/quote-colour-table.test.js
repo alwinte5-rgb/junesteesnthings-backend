@@ -258,7 +258,7 @@ test('the shared source survives being a template literal', () => {
 
 /** The quote form's browser <script>, as the browser actually receives it. */
 function emittedFormScript() {
-  const start = src.indexOf("app.get(['/quote/new'");
+  const start = src.indexOf("app.get(['/admin/quote/new'");
   assert.notStrictEqual(start, -1, 'quote form route not found');
   const seg = src.slice(start, src.indexOf('\napp.', start + 10));
   const si = seg.indexOf('<script>'), se = seg.lastIndexOf('</script>');
@@ -292,7 +292,7 @@ test('the colour picker posts under the name the save path reads', () => {
   /* A mismatch here is invisible: the picker works, the preview prices
      correctly, and the save path reads an absent field and quotes every screen
      job at one colour. Both ends are checked against the same literal. */
-  const form = src.slice(src.indexOf("app.get(['/quote/new'"));
+  const form = src.slice(src.indexOf("app.get(['/admin/quote/new'"));
   assert.ok(/name="colors\$\{n\}"[^>]*class="cols"/.test(form.replace(/\s+/g, ' ')),
     'the line template must render <select name="colors${n}" class="cols">');
   assert.ok(/one\(b\['colors' \+ i\]\)/.test(src),

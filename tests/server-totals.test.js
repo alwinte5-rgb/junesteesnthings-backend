@@ -94,7 +94,7 @@ test('every figure is worked out from the lines, whatever total the quote carrie
 
 /* ── 2. Saving a quote ──────────────────────────────────────────────────── */
 
-const SAVE = route("app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin");
+const SAVE = route("app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin");
 
 test('saving a quote takes no money figure from the request', () => {
   for (const f of ['total', 'subtotal', 'tax', 'deposit', 'paid_amount', 'line_total', 'amount']) {

@@ -114,16 +114,16 @@ test('no preset opens Finances, the dashboard or certificate decisions', () => {
 
 test('a training helper sees the work, drafts, and needs approval to reach a customer', () => {
   const t = helper(STAFF.presetPerms('training'));
-  assert.ok(STAFF.mayUseRoute(t, 'GET', '/leads'));
-  assert.ok(STAFF.mayUseRoute(t, 'POST', '/api/quotes|/api/quotes/:code'));
-  assert.ok(STAFF.mayUseRoute(t, 'POST', '/quote/:code/message'), 'may write one; the handler holds it');
+  assert.ok(STAFF.mayUseRoute(t, 'GET', '/admin/leads'));
+  assert.ok(STAFF.mayUseRoute(t, 'POST', '/admin/api/quotes|/admin/api/quotes/:code'));
+  assert.ok(STAFF.mayUseRoute(t, 'POST', '/admin/quote/:code/message'), 'may write one; the handler holds it');
   assert.ok(!STAFF.mayUseRoute(t, 'GET', '/admin/finances'));
-  assert.ok(!STAFF.mayUseRoute(t, 'GET', '/dashboard'));
-  assert.ok(!STAFF.mayUseRoute(t, 'POST', '/quote/:code/mark-paid'));
+  assert.ok(!STAFF.mayUseRoute(t, 'GET', '/admin/dashboard'));
+  assert.ok(!STAFF.mayUseRoute(t, 'POST', '/admin/quote/:code/mark-paid'));
   assert.ok(!STAFF.mayUseRoute(t, 'GET', '/admin/staff'), 'never the staff page');
   assert.ok(!STAFF.mayUseRoute(t, 'GET', '/no/such/route'), 'deny by default');
-  assert.ok(STAFF.mayUseRoute(t, 'GET', '/my-day'));
-  assert.ok(STAFF.mayUseRoute(t, 'HEAD', '/leads'), 'HEAD is the GET route');
+  assert.ok(STAFF.mayUseRoute(t, 'GET', '/admin/my-day'));
+  assert.ok(STAFF.mayUseRoute(t, 'HEAD', '/admin/leads'), 'HEAD is the GET route');
 });
 
 test('the owner may use every route, and nobody else without a login', () => {
@@ -190,7 +190,7 @@ test('a held quote is invisible to the customer, Brevo and the studio', () => {
 });
 
 test('a helper cannot edit a quote the customer already has when the edit needs approval', () => {
-  const r = route("app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin");
+  const r = route("app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin");
   assert.match(r, /if \(existingQuote && !wasHeld && gate\.held\)/);
   assert.ok(r.indexOf('if (existingQuote && !wasHeld && gate.held)') < r.indexOf('UPDATE quotes SET name=$2'),
     'refused before anything is written');
@@ -203,7 +203,7 @@ test('approving is claimed first, so a double press cannot send twice', () => {
 });
 
 test('a helper in training writes a message; it is held, not sent', () => {
-  const r = route("app.post('/quote/:code/message', requireAdmin");
+  const r = route("app.post('/admin/quote/:code/message', requireAdmin");
   assert.ok(r.indexOf("actorLevel('customers.message') === 'approval'") < r.indexOf('sendJobMessage('));
 });
 
@@ -240,28 +240,81 @@ test('a session is signed, expires, and carries the account and its version', ()
   assert.throws(() => STAFF.makeSession(1, 1, ''), /STAFF_SESSION_SECRET/);
 });
 
-test('staff sessions need their own secret, and without it staff sign-in is off, not signed with a stand-in', () => {
-  assert.match(src, /function staffSessionKey\(\) \{\s*const k = process\.env\.STAFF_SESSION_SECRET \|\| '';\s*return k\.length >= 32 \? k : '';/);
-  const r = route("app.post('/signin', signinRateLimit");
-  assert.match(r, /if \(!staffSessionKey\(\)\)/);
-  assert.match(r, /DUMMY_STAFF_HASH/, 'an unknown email costs the same time as a known one');
+/* Signing in is Cloudflare Access (tools/lib/cf-access.js); the app keeps no
+   password. These pin down what requireAdmin will and will not accept. */
+const requireAdminSrc = src.slice(src.indexOf('async function requireAdmin('),
+  src.indexOf('\n}\n', src.indexOf('async function requireAdmin(')));
+
+test('there is no password: only a verified Cloudflare pass signs anyone in', () => {
+  assert.match(requireAdminSrc, /CF_ACCESS\.verifyAccessToken\(req\.get\('cf-access-jwt-assertion'\), cfAccess, cfKeyFor\)/);
+  for (const gone of ['Basic ', 'ADMIN_PASSWORD', 'cookie', 'checkStamp']) {
+    assert.ok(!requireAdminSrc.includes(gone), `requireAdmin must not accept ${gone}`);
+  }
+  assert.ok(!src.includes("app.post('/signin'"), 'no password form to post to');
+  assert.ok(!/app\.(get|post)\('\/admin\/account/.test(src), 'no password to change');
 });
 
-test('sign-in only ever redirects within the site', () => {
-  assert.match(src, /function safeAdminPath\(raw, fallback = '\/dashboard'\) \{[\s\S]*?!s\.startsWith\('\/\/'\)/);
-  const r = route("app.post('/signin', signinRateLimit");
-  assert.doesNotMatch(r, /res\.redirect\(b\.to\)/);
+test('without Cloudflare configured, every staff page is refused, never opened', () => {
+  assert.ok(requireAdminSrc.indexOf('if (!cfAccess) return res.status(503)') < requireAdminSrc.indexOf('verifyAccessToken'));
 });
 
-test('disabling a helper or resetting their password ends their sessions', () => {
-  const r = route("app.post('/admin/staff/:id', requireAdmin");
-  assert.match(r, /SET active = FALSE, session_version = session_version \+ 1/);
-  assert.match(r, /SET password_hash = \$2, session_version = session_version \+ 1/);
+test('the owner is named by OWNER_EMAILS, a helper by an active staff row, anyone else is refused', () => {
+  assert.ok(requireAdminSrc.indexOf('cfAccess.owners.includes(email)') < requireAdminSrc.indexOf('staffByEmail(email)'));
+  assert.match(requireAdminSrc, /if \(!staff\) return notOnTeam\(req, res, email\);/);
+  assert.match(requireAdminSrc, /if \(!STAFF\.mayUseRoute\(staff, req\.method, req\.route && req\.route\.path\)\) return refuseStaff/);
+  const lookup = src.slice(src.indexOf('async function staffByEmail('), src.indexOf('\n}\n', src.indexOf('async function staffByEmail(')));
+  assert.match(lookup, /WHERE lower\(email\) = \$1/);
+  assert.match(lookup, /if \(!s \|\| !s\.active\) return null;/);
+});
+
+test('a state-changing request from another site is refused before anything else', () => {
+  assert.ok(requireAdminSrc.indexOf('SITE_ORIGINS.includes(origin)') < requireAdminSrc.indexOf('verifyAccessToken'));
+});
+
+test('a page reached around Cloudflare is sent to the guarded address, never to one from the request', () => {
+  assert.match(requireAdminSrc, /res\.redirect\(`\$\{PUBLIC_BASE_URL\}\$\{adminPathFor\(req\.originalUrl\)\}`\)/);
+  assert.match(src, /function safeAdminPath\(raw, fallback = '\/admin\/dashboard'\) \{[\s\S]*?!s\.startsWith\('\/\/'\)/);
+});
+
+test('every staff route lives under /admin, where Cloudflare guards it', () => {
+  const re = /app\.(get|post|put|patch|delete)\(\s*(\[[^\]]+\]|'[^']+'|FINANCES_PATH)\s*,\s*requireAdmin\b/g;
+  let m, n = 0;
+  while ((m = re.exec(src))) {
+    const paths = m[2] === 'FINANCES_PATH' ? ['/admin/finances'] : m[2].replace(/[[\]']/g, '').split(',').map((x) => x.trim());
+    for (const p of paths) { n++; assert.ok(p === '/admin' || p.startsWith('/admin/'), `${m[1]} ${p} is outside /admin`); }
+  }
+  assert.ok(n > 80, `only ${n} staff routes found — the pattern stopped matching`);
+});
+
+test('old staff addresses forward into /admin, and only within the site', () => {
+  const grab = (sig) => src.slice(src.indexOf(sig), src.indexOf('\n}\n', src.indexOf(sig)) + 2);
+  const moved = src.slice(src.indexOf('const MOVED_TO_ADMIN'), src.indexOf(']);', src.indexOf('const MOVED_TO_ADMIN')) + 3);
+  // eslint-disable-next-line no-new-func
+  const adminPathFor = new Function(`${grab('function safeAdminPath(')}\n${moved}\n${grab('function adminPathFor(')}\nreturn adminPathFor;`)();
+  assert.strictEqual(adminPathFor('/quotes'), '/admin/quotes');
+  assert.strictEqual(adminPathFor('/quote/new'), '/admin/quote/new');
+  assert.strictEqual(adminPathFor('/leads?x=1'), '/admin/leads?x=1');
+  assert.strictEqual(adminPathFor('/admin/reviews'), '/admin/reviews');
+  assert.strictEqual(adminPathFor('//evil.example.com/quotes'), '/admin');
+  assert.strictEqual(adminPathFor('https://evil.example.com'), '/admin');
+  assert.strictEqual(adminPathFor('/blog'), '/admin', 'a public page is not a staff address');
+  assert.match(src, /app\.get\('\/admin\/sso', \(req, res\) => res\.redirect\(adminPathFor\(/);
+});
+
+test('helpers are added without a password, and an owner email cannot be a helper', () => {
+  const r = route("app.post('/admin/staff', requireAdmin");
+  assert.match(r, /VALUES \(\$1, \$2, '!', \$3, \$4\)/);
+  assert.match(r, /cfAccess\.owners\.includes\(email\)/);
+  assert.ok(!r.includes('generatePassword'));
+});
+
+test('disabling a helper locks them out on their next click', () => {
+  assert.match(route("app.post('/admin/staff/:id', requireAdmin"), /SET active = FALSE WHERE id = \$1/);
 });
 
 test('a helper without Finances never receives supplier costs or margins', () => {
   assert.match(src, /var CAT = \$\{JSON\.stringify\(actorLevel\('finances'\) === 'on' \? catalog : catalogWithoutCosts\(catalog\)\)\};/);
-  assert.match(route("app.get('/api/quotes/prior', requireAdmin"), /margin: lastMg\.entered && actorLevel\('finances'\) === 'on'/);
+  assert.match(route("app.get('/admin/api/quotes/prior', requireAdmin"), /margin: lastMg\.entered && actorLevel\('finances'\) === 'on'/);
 });
 
 /* ── Team numbers ─────────────────────────────────────────────────────────── */
@@ -342,8 +395,8 @@ test('playbook search takes a question in plain words: any word, as a prefix, be
   assert.match(fn, /:\*/, 'each word matches as a prefix');
   assert.match(fn, /NULLIF\(/, 'a question of only stop words is no query, not an error');
   assert.doesNotMatch(src, /websearch_to_tsquery\(/, 'no search left that needs every word');
-  assert.match(route("app.get('/api/playbook/replies'"), /kbMatch\(1\)\.rank\} DESC/);
-  assert.match(route("app.get('/playbook', requireAdmin"), /order = 'rank DESC, title'/);
+  assert.match(route("app.get('/admin/api/playbook/replies'"), /kbMatch\(1\)\.rank\} DESC/);
+  assert.match(route("app.get('/admin/playbook', requireAdmin"), /order = 'rank DESC, title'/);
 });
 
 test('team chat: a helper reaches only their own conversation', () => {
@@ -351,17 +404,17 @@ test('team chat: a helper reaches only their own conversation', () => {
   const fn = src.slice(at, src.indexOf('\n}\n', at));
   assert.match(fn, /a\.kind === 'staff'\) return a\.id;/, 'a helper\'s thread is always their own, whatever they send');
   assert.match(fn, /roster\.some\(\(r\) => r\.id === id\)/, 'the owner may only open a real helper');
-  for (const r of ['GET /team-chat', 'POST /team-chat', 'GET /api/team-chat']) {
+  for (const r of ['GET /admin/team-chat', 'POST /admin/team-chat', 'GET /admin/api/team-chat']) {
     assert.strictEqual(STAFF.ROUTES[r], 'any', r);
   }
 });
 
 test('team chat lines are text, never markup', () => {
-  const page = route("app.get('/team-chat', requireAdmin");
+  const page = route("app.get('/admin/team-chat', requireAdmin");
   assert.match(page, /escEmail\(j\.body\)/);
   assert.match(page, /el\.textContent = m\.body/);
   assert.doesNotMatch(page, /innerHTML/);
-  const send = route("app.post('/team-chat', requireAdmin");
+  const send = route("app.post('/admin/team-chat', requireAdmin");
   assert.match(send, /body\.length > TEAM_CHAT_MAX/, 'length is capped');
   assert.match(send, /interval '10 seconds'/, 'a double click does not post twice');
   assert.match(send, /who\.active/, 'the owner cannot write to a disabled helper');
@@ -374,7 +427,7 @@ test('sales credit: a helper can never take a sale credited to someone else, and
   assert.match(fn, /if \(q\.paid\) return/, 'no change once commission on it is paid');
   assert.match(fn, /credited_to IS NOT DISTINCT FROM \$3[\s\S]*NOT EXISTS \(SELECT 1 FROM commission_payouts/,
     'the same rules again in the UPDATE, against a race');
-  assert.strictEqual(STAFF.ROUTES['POST /quote/:code/credit'], 'quotes.view');
+  assert.strictEqual(STAFF.ROUTES['POST /admin/quote/:code/credit'], 'quotes.view');
 });
 
 test('commission, the scorecard and incentives follow the sales credit, not who pressed send', () => {
@@ -389,8 +442,8 @@ test('bonuses and incentives are the owner\'s; a helper sees only their own earn
                    'POST /admin/incentives/:id/end', 'POST /admin/incentives/:id/award']) {
     assert.strictEqual(STAFF.ROUTES[r], 'owner', r);
   }
-  assert.strictEqual(STAFF.ROUTES['GET /my-earnings'], 'any');
-  const page = route("app.get('/my-earnings', requireAdmin");
+  assert.strictEqual(STAFF.ROUTES['GET /admin/my-earnings'], 'any');
+  const page = route("app.get('/admin/my-earnings', requireAdmin");
   assert.match(page, /WHERE id = \$1', \[actor\.id\]/, 'the id is the signed-in helper, never the query');
   const award = route("app.post('/admin/incentives/:id/award', requireAdmin");
   assert.match(award, /incentiveProgress\(i, staffId\) < Number\(i\.target\)/, 'checked against the ledger, not the page');
@@ -421,8 +474,8 @@ test('a helper\'s discount is measured against catalogue price, not a typed garm
 });
 
 test('nothing a helper can reach moves a quote out of held, except the owner\'s Approve', () => {
-  assert.match(route("app.post('/quote/:code/uncancel'"), /WHERE code = \$1 AND status <> 'held' RETURNING/);
-  assert.match(route("app.post('/quote/:code/mark-paid'"), /if \(q\.status === 'held'\) return/);
+  assert.match(route("app.post('/admin/quote/:code/uncancel'"), /WHERE code = \$1 AND status <> 'held' RETURNING/);
+  assert.match(route("app.post('/admin/quote/:code/mark-paid'"), /if \(q\.status === 'held'\) return/);
   assert.match(src, /UPDATE quotes SET status = 'accepted', accepted_at = COALESCE\(accepted_at, NOW\(\)\)\n      WHERE code = \$1 AND status <> 'held'/);
 });
 
@@ -438,14 +491,7 @@ test('costs, margin and monthly profit on the boards need Finances', () => {
 });
 
 test('a receipt is a customer email: a helper whose messages need approval cannot send one', () => {
-  assert.match(route("app.post('/quote/:code/receipt'"), /if \(actorLevel\('customers\.message'\) !== 'on'\)/);
-});
-
-test('with a helper\'s and the owner\'s cookie in one browser, the helper\'s narrower access wins', () => {
-  const r = src.slice(src.indexOf('async function requireAdmin('), src.indexOf('\n}\n', src.indexOf('async function requireAdmin(')));
-  assert.ok(r.indexOf('cookieValue(req, STAFF_COOKIE)') < r.indexOf('checkStamp(adminCookieValue(req), secret)'));
-  assert.match(src.slice(src.indexOf('function setAdminCookie(')), /jt_staff=; Path=\/; Max-Age=0/);
-  assert.match(src.slice(src.indexOf('function setStaffCookie(')), /\$\{ADMIN_COOKIE\}=; Path=\/; Max-Age=0/);
+  assert.match(route("app.post('/admin/quote/:code/receipt'"), /if \(actorLevel\('customers\.message'\) !== 'on'\)/);
 });
 
 test('a flash message goes before the #fragment, where the page can read it', () => {

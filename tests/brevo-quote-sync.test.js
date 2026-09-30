@@ -158,7 +158,7 @@ test('ids are kept with COALESCE, so a failed step never erases an earlier id', 
 });
 
 test('the save and the accept both keep their ids that way', () => {
-  const save = route("app.post(['/api/quotes', '/api/quotes/:code']");
+  const save = route("app.post(['/admin/api/quotes', '/admin/api/quotes/:code']");
   assert.match(save, /syncQuoteToBrevo\(q\)\.then\(ids => \{\s*keepBrevoIds\(q\.id, ids\)/);
   assert.doesNotMatch(save, /SET brevo_contact_id=\$1, brevo_deal_id=\$2/, 'the old write erased ids with nulls');
   assert.match(src, /syncQuoteToBrevo\(q, \{ note: false \}\)\.then\(\(ids\) => keepBrevoIds\(q\.id, ids\)\)/,
@@ -256,7 +256,7 @@ test('a cancelled quote is lost, whatever was paid; un-cancelled it goes back', 
 });
 
 test('cancelling and un-cancelling push the stage to the deal', () => {
-  for (const sig of ["app.post('/quote/:code/cancel'", "app.post('/quote/:code/uncancel'"]) {
+  for (const sig of ["app.post('/admin/quote/:code/cancel'", "app.post('/admin/quote/:code/uncancel'"]) {
     const r = route(sig);
     assert.match(r, /RETURNING \*/, sig);
     assert.match(r, /if \(rows\.length\) syncDealStage\(rows\[0\]\)/, sig);

@@ -148,7 +148,7 @@ test('an order with no refunds (or an older feed without the field) is unchanged
 test('an exempt order still waiting on its certificate says do not produce, and links to the check', () => {
   const html = board({ orders: [order({ tax_exempt: 'pending' })], error: null }, { heading: false });
   assert.match(html, /Tax certificate to check &mdash; don&rsquo;t produce/);
-  assert.match(html, /href="\/certificates\?status=pending"/);
+  assert.match(html, /href="\/admin\/certificates\?status=pending"/);
 });
 
 test('a refused exemption shows the tax now due; an approved one reads tax-exempt', () => {

@@ -1,4 +1,4 @@
-/* Regression tests for the /production kanban board (server.js).
+/* Regression tests for the /admin/production kanban board (server.js).
  *
  * Run: node --test tests/*.test.js   (the files, not the directory — on
  * current Node a positional argument is a glob, so `tests/` fails)
@@ -226,6 +226,6 @@ test('on a phone the stages stack, so no job is off the screen', () => {
 test('a page opened before the change still moves a card', () => {
   /* The five-column board posted design, blanks and press. */
   assert.match(src, /const OLD_STAGE_KEYS = \{ design: 'production', blanks: 'production', press: 'production' \};/);
-  const route = src.slice(src.indexOf("app.post('/quote/:code/stage'"));
+  const route = src.slice(src.indexOf("app.post('/admin/quote/:code/stage'"));
   assert.match(route.slice(0, 600), /OLD_STAGE_KEYS\[asked\] \|\| asked/);
 });

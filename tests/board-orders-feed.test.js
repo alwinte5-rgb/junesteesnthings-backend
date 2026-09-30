@@ -127,13 +127,13 @@ test('order stages map onto the board vocabulary, not a second one', () => {
 test('the studio lane appears on the board, not only on its own page', () => {
   assert.match(src, /\$\{studioOrdersSection\(studio, \{ disputes \}\)\}/,
     'one page showing both halves of the shop is the entire point');
-  assert.match(src, /app\.get\('\/orders', requireAdmin/,
+  assert.match(src, /app\.get\('\/admin\/orders', requireAdmin/,
     'and the nav entry needs a real route behind it');
 });
 
 /* ── the navigation ──────────────────────────────────────────────────────── */
 
-/* The array literal only. The comment that follows it explains why /inventory
+/* The array literal only. The comment that follows it explains why /admin/inventory
    is absent, and would otherwise match a search for it. */
 const NAV_BLOCK = (() => {
   const at = src.indexOf('const ADMIN_NAV = [');
@@ -151,7 +151,7 @@ test('every nav entry points at a route that exists', () => {
 
 test('inventory is not in the nav', () => {
   assert.doesNotMatch(NAV_BLOCK, /\/inventory/,
-    '/inventory answers JSON, not a page; a nav entry would drop June onto raw Clover data');
+    '/admin/inventory answers JSON, not a page; a nav entry would drop June onto raw Clover data');
 });
 
 test('the customer-facing shell carries no admin nav', () => {
@@ -199,13 +199,13 @@ test('each admin page tells the nav which section it is', () => {
 /* ── the nav must not point at a page that bounces ───────────────────────── */
 
 test('Customers points at the list, not the single-customer lookup', () => {
-  assert.doesNotMatch(NAV_BLOCK, /href:\s*'\/customer'/,
-    '/customer requires ?q= and redirects to /quotes without one — as a nav entry it was a loop straight back to the board');
-  assert.match(NAV_BLOCK, /href:\s*'\/customers'/);
+  assert.doesNotMatch(NAV_BLOCK, /href:\s*'\/admin\/customer'/,
+    '/admin/customer requires ?q= and redirects to /admin/quotes without one — as a nav entry it was a loop straight back to the board');
+  assert.match(NAV_BLOCK, /href:\s*'\/admin\/customers'/);
 });
 
 test('the customers list is admin-gated and reachable', () => {
-  assert.match(src, /app\.get\('\/customers', requireAdmin/);
+  assert.match(src, /app\.get\('\/admin\/customers', requireAdmin/);
 });
 
 test('the customers list merges both halves of the shop', () => {
@@ -228,7 +228,7 @@ test('every customer list comes from that one function', () => {
 });
 
 test('a broken studio feed degrades the customer list rather than emptying it', () => {
-  const page = extractFn("app.get('/customers'");
+  const page = extractFn("app.get('/admin/customers'");
   assert.match(page, /studio\.error \?/,
     'quote customers must still list, and the page must say the studio half is missing');
 });

@@ -71,9 +71,9 @@ test('every admin page carries the side menu, with its own entry lit', () => {
   assert.match(html, /<aside class="adm-side"/);
   const active = html.match(/<a class="adm-link is-active" href="([^"]+)" aria-current="page">/g) || [];
   assert.strictEqual(active.length, 1, 'exactly one entry is the current page');
-  assert.match(active[0], /href="\/leads"/);
-  for (const href of ['/dashboard', '/leads', '/quotes', '/production', '/orders', '/customers',
-                      '/admin/reviews', '/admin/finances', '/discounts', '/quote/new']) {
+  assert.match(active[0], /href="\/admin\/leads"/);
+  for (const href of ['/admin/dashboard', '/admin/leads', '/admin/quotes', '/admin/production', '/admin/orders', '/admin/customers',
+                      '/admin/reviews', '/admin/finances', '/admin/discounts', '/admin/quote/new']) {
     assert.ok(html.includes(`href="${href}"`), `the menu links ${href}`);
   }
   assert.match(html, /href="https:\/\/design\.jtees\.net\/admin\.php" target="_blank" rel="noopener"/,
@@ -83,7 +83,7 @@ test('every admin page carries the side menu, with its own entry lit', () => {
 
 test('a page still passing the old "jobs" key lights Quotes', () => {
   const html = shell().adminPage('Quotes', '', 'jobs');
-  assert.match(html, /<a class="adm-link is-active" href="\/quotes"/);
+  assert.match(html, /<a class="adm-link is-active" href="\/admin\/quotes"/);
 });
 
 test('the badges start hidden and are filled in after the page loads', () => {
@@ -132,13 +132,13 @@ test('the closed phone menu is hidden, and only the open one casts a shadow', ()
 /* ── The routes ─────────────────────────────────────────────────────────── */
 
 test('the dashboard, the Leads page and the menu counts are admin only', () => {
-  for (const r of ["app.get('/dashboard', requireAdmin", "app.get('/leads', requireAdmin",
+  for (const r of ["app.get('/admin/dashboard', requireAdmin", "app.get('/admin/leads', requireAdmin",
                    "app.get('/admin/nav-counts', requireAdmin"]) {
     assert.ok(src.includes(r), r);
   }
   assert.match(route("app.get('/admin/nav-counts', requireAdmin"), /res\.set\('Cache-Control', 'no-store'\)/,
     'counts about customers are never cached');
-  assert.match(route("app.get('/dashboard', requireAdmin"), /res\.set\('Cache-Control', 'no-store'\)/);
+  assert.match(route("app.get('/admin/dashboard', requireAdmin"), /res\.set\('Cache-Control', 'no-store'\)/);
 });
 
 test('each count fails on its own, to zero', () => {
@@ -147,20 +147,19 @@ test('each count fails on its own, to zero', () => {
     'leads, reviews, late jobs, certificates, approvals waiting and unread team chat');
 });
 
-test('the old enquiries page forwards to the new one', () => {
-  assert.match(src, /app\.get\('\/admin', requireAdmin, \(_req, res\) => res\.redirect\('\/leads'\)\);/);
+test('/admin lands the owner on the dashboard and a helper on My Day', () => {
+  assert.match(src, /app\.get\('\/admin', requireAdmin, \(_req, res\) => res\.redirect\(isOwner\(\) \? '\/admin\/dashboard' : '\/admin\/my-day'\)\);/);
   assert.doesNotMatch(src, /prompt\('Admin password:'\)/, 'no password pop-up left anywhere');
 });
 
-test('signing in from the studio lands on the dashboard', () => {
+test('a link from the studio lands on the page it names, within /admin', () => {
   const r = route("app.get('/admin/sso'");
-  assert.match(r, /String\(req\.query\.to \|\| '\/dashboard'\)/);
-  assert.match(r, /: '\/dashboard';/);
+  assert.match(r, /res\.redirect\(adminPathFor\(String\(req\.query\.to \|\| '\/admin'\)\)\)/);
 });
 
 test('dismissing a lead returns to the page it came from, and nowhere else', () => {
-  const r = route("app.post('/lead/:id/dismiss', requireAdmin");
-  assert.match(r, /\['\/leads', '\/quotes'\]\.includes\(/);
+  const r = route("app.post('/admin/lead/:id/dismiss', requireAdmin");
+  assert.match(r, /\['\/admin\/leads', '\/admin\/quotes'\]\.includes\(/);
   assert.match(r, /res\.redirect\(back\)/);
   assert.doesNotMatch(r, /res\.redirect\(req\.body/, 'never to an address the form sends');
 });

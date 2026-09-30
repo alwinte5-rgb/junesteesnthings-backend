@@ -82,7 +82,7 @@ test('every balance on every surface goes through balanceOf', () => {
 test('settling records the amount, not just a flag', () => {
   /* Derived at read time it would silently restate itself the next time the
      quote is edited — which is the exact fault this feature exists to fix. */
-  const route = src.slice(src.indexOf("app.post('/quote/:code/settle'"));
+  const route = src.slice(src.indexOf("app.post('/admin/quote/:code/settle'"));
   assert.match(route, /written_off = COALESCE\(written_off,0\) \+ \$2/,
     'the written-off amount must be stored');
   assert.match(route, /settled_at = NOW\(\), settled_note = \$3/,
@@ -92,7 +92,7 @@ test('settling records the amount, not just a flag', () => {
 test('settling prices from the items, not the stored total', () => {
   /* quotes.total can lag behind an edit. Writing off against it would write off
      the wrong number, permanently. */
-  const route = src.slice(src.indexOf("app.post('/quote/:code/settle'"));
+  const route = src.slice(src.indexOf("app.post('/admin/quote/:code/settle'"));
   assert.match(route, /balanceOf\(q, quoteTotals\(q\)\.total\)/,
     'the amount must come from the same figure the customer sees');
 });
@@ -100,20 +100,20 @@ test('settling prices from the items, not the stored total', () => {
 test('a quote that owes nothing cannot be settled', () => {
   /* Otherwise a double-click writes off zero and stamps a settled date on a
      quote that was simply paid in full. */
-  const route = src.slice(src.indexOf("app.post('/quote/:code/settle'"));
+  const route = src.slice(src.indexOf("app.post('/admin/quote/:code/settle'"));
   assert.match(route, /if \(owed <= 0\) return res\.redirect/);
 });
 
 test('settling is admin-only', () => {
-  assert.match(src, /app\.post\('\/quote\/:code\/settle', requireAdmin/,
+  assert.match(src, /app\.post\('\/admin\/quote\/:code\/settle', requireAdmin/,
     'writing off money must never be reachable by a customer');
 });
 
 test('revenue is not touched by a write-off', () => {
   /* Money is counted from the payment ledger. If settling wrote a payment row
      the shop would book income it never received. */
-  const route = src.slice(src.indexOf("app.post('/quote/:code/settle'"),
-                          src.indexOf("app.post('/quote/:code/receipt'"));
+  const route = src.slice(src.indexOf("app.post('/admin/quote/:code/settle'"),
+                          src.indexOf("app.post('/admin/quote/:code/receipt'"));
   assert.doesNotMatch(route, /INSERT INTO quote_payments/,
     'a write-off is not a payment and must not enter the ledger');
 });
@@ -125,8 +125,8 @@ test('cancelling never deletes the row', () => {
      payment rows point at. Deleting it destroys the customer's history and
      orphans the ledger — and it cannot be undone, which is how the last gap got
      papered over with a fake "delivered". */
-  const route = src.slice(src.indexOf("app.post('/quote/:code/cancel'"),
-                          src.indexOf("app.post('/quote/:code/uncancel'"));
+  const route = src.slice(src.indexOf("app.post('/admin/quote/:code/cancel'"),
+                          src.indexOf("app.post('/admin/quote/:code/uncancel'"));
   assert.doesNotMatch(route, /DELETE FROM/, 'cancelling must not delete anything');
   assert.match(route, /SET cancelled_at = NOW\(\), cancel_reason = \$2/);
 });
@@ -135,15 +135,15 @@ test('cancelling clears the delivered stamp', () => {
   /* A cancelled job did not ship. Leaving the stamp on keeps it counted as
      delivered work — and marking things delivered is exactly the workaround
      this replaces, so those rows carry a stamp that is not true. */
-  const route = src.slice(src.indexOf("app.post('/quote/:code/cancel'"),
-                          src.indexOf("app.post('/quote/:code/uncancel'"));
+  const route = src.slice(src.indexOf("app.post('/admin/quote/:code/cancel'"),
+                          src.indexOf("app.post('/admin/quote/:code/uncancel'"));
   assert.match(route, /delivered_at = NULL/);
 });
 
 test('a cancellation can be undone', () => {
   /* An action too final to trust is an action people work around. */
-  assert.match(src, /app\.post\('\/quote\/:code\/uncancel', requireAdmin/);
-  const route = src.slice(src.indexOf("app.post('/quote/:code/uncancel'"));
+  assert.match(src, /app\.post\('\/admin\/quote\/:code\/uncancel', requireAdmin/);
+  const route = src.slice(src.indexOf("app.post('/admin/quote/:code/uncancel'"));
   assert.match(route, /cancelled_at = NULL, cancel_reason = NULL/);
   /* Accepted if they accepted OR paid — money on a quote counts as accepting
      wherever a payment lands, and one paid while cancelled was never marked
@@ -154,8 +154,8 @@ test('a cancellation can be undone', () => {
 });
 
 test('cancelling is admin-only, both ways', () => {
-  assert.match(src, /app\.post\('\/quote\/:code\/cancel', requireAdmin/);
-  assert.match(src, /app\.post\('\/quote\/:code\/uncancel', requireAdmin/);
+  assert.match(src, /app\.post\('\/admin\/quote\/:code\/cancel', requireAdmin/);
+  assert.match(src, /app\.post\('\/admin\/quote\/:code\/uncancel', requireAdmin/);
 });
 
 test('a cancelled quote cannot be accepted or paid', () => {

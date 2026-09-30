@@ -173,7 +173,7 @@ test('a delivered quote reschedules; clearing the step does not', () => {
     'un-ticking a step is a correction, and must not re-date the ask');
   assert.match(move, /rescheduleReviewRequest\(/);
   assert.match(move, /REVIEW_DAYS_AFTER_DELIVERY\(\)/);
-  for (const r of ["app.post('/quote/:code/step'", "app.post('/quote/:code/stage'"]) {
+  for (const r of ["app.post('/admin/quote/:code/step'", "app.post('/admin/quote/:code/stage'"]) {
     const route = src.slice(src.indexOf(r), src.indexOf('\n});', src.indexOf(r)));
     assert.match(route, /await moveJobToStage\(/, `${r} reschedules through it too`);
   }

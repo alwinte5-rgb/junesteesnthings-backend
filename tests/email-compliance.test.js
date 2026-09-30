@@ -64,7 +64,7 @@ test('a promotional email is marked as one', () => {
      to somebody who had explicitly opted out. An email whose entire content is
      an offer is commercial, whatever prompted it. */
   const fn = src.slice(src.indexOf('async function sendDiscountEmail'),
-                       src.indexOf("app.post('/discounts/send'"));
+                       src.indexOf("app.post('/admin/discounts/send'"));
   assert.match(fn, /marketing: true/);
 });
 
@@ -73,7 +73,7 @@ test('an opted-out recipient is reported, not silently skipped', () => {
      though it worked. The page would say "sent" and the customer would never
      receive it — worse than a refusal, because nobody goes looking. */
   const fn = src.slice(src.indexOf('async function sendDiscountEmail'),
-                       src.indexOf("app.post('/discounts/send'"));
+                       src.indexOf("app.post('/admin/discounts/send'"));
   assert.match(fn, /if \(await isUnsubscribed\(email\)\)/);
   assert.match(fn, /send this one by text or call instead/,
     'and it says what to do instead');
@@ -83,6 +83,6 @@ test('a single-use dollar code says so in the email', () => {
   /* Someone using $30 on a $12 order and expecting $18 back has been misled by
      omission. */
   const fn = src.slice(src.indexOf('async function sendDiscountEmail'),
-                       src.indexOf("app.post('/discounts/send'"));
+                       src.indexOf("app.post('/admin/discounts/send'"));
   assert.match(fn, /good for one order/);
 });

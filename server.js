@@ -110,7 +110,7 @@ const FINANCES_PATH = '/admin/finances';
    JSON, up to 8 MB of it (tools/lib/tax-certificates.js). These three paths
    get a larger limit; everything else keeps 1mb. Mounted FIRST: express.json
    marks a body as read, and the general parser below then leaves it alone. */
-app.use(['/q/:code/certificate', '/quote/:code/certificate', '/api/tax-certificates'],
+app.use(['/q/:code/certificate', '/admin/quote/:code/certificate', '/api/tax-certificates'],
   express.json({ limit: '12mb' }));
 app.use(express.json({
   limit: '1mb',
@@ -2358,14 +2358,22 @@ async function createGradCloverCustomerAndOrder(order) {
 
 // ─── Auth (admin routes) ──────────────────────────────────────────────────────
 
-/* ── Staying signed in ───────────────────────────────────────────────────────
-   The designer lives on design.jtees.net and these pages on jtees.net. Browsers
-   scope a login to one site, so clicking "Quotes" in the designer sidebar used to
-   demand a second login. A short-lived token signed with the key both services
-   already share (JT_INTERNAL_KEY) carries that session across, and a signed
-   cookie then keeps it for 30 days so there is no repeat prompt. */
-const ADMIN_COOKIE = 'jt_admin';
-const ADMIN_SESSION_DAYS = 30;
+/* ── Signing in: Cloudflare Access is the one login ────────────────────────────
+   Every staff page is under /admin, and Cloudflare Access guards /admin on
+   www.jtees.net: an email on the owner's list, then a one-time code sent to
+   that inbox. There is no password here. Each request carries Cloudflare's
+   signed pass, which requireAdmin verifies (tools/lib/cf-access.js) before
+   deciding who the email is: the owner (OWNER_EMAILS) or an active helper on
+   /admin/staff, with that helper's permissions. Removing someone from the
+   Cloudflare list, or switching them off on /admin/staff, locks them out on
+   their next click. */
+const CF_ACCESS = require('./tools/lib/cf-access');
+const cfAccess = CF_ACCESS.configFromEnv();
+const cfKeyFor = cfAccess ? CF_ACCESS.makeKeyStore(cfAccess.certsUrl) : null;
+if (!cfAccess) {
+  console.error('Cloudflare Access is not configured (CF_ACCESS_TEAM_DOMAIN, CF_ACCESS_AUD, OWNER_EMAILS) — every staff page is refused until it is.');
+}
+const STAFF_HOST = new URL(PUBLIC_BASE_URL).hostname;
 
 const signPayload = (payload, key) =>
   crypto.createHmac('sha256', key).update(String(payload)).digest('hex');
@@ -2377,66 +2385,49 @@ function hexEqual(a, b) {
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 }
 
-/** "<expiry>.<hmac>" — valid only until the expiry it carries. */
-function makeStamp(ttlMs, key) {
-  const exp = Date.now() + ttlMs;
-  return `${exp}.${signPayload(exp, key)}`;
-}
-function checkStamp(stamp, key) {
-  const [exp, sig] = String(stamp || '').split('.');
-  if (!exp || !sig || !/^\d+$/.test(exp)) return false;
-  if (Number(exp) < Date.now()) return false;
-  return hexEqual(sig, signPayload(exp, key));
+/* The staff pages used to sit at the top level (/leads, /quotes, ...), where
+   Cloudflare did not cover them. Old bookmarks and emails still point there,
+   so a page opened at an old address is sent to its new one. Only pages: a
+   form posted to an old address has no handler and is refused. */
+const MOVED_TO_ADMIN = new Set(['account', 'cart', 'certificates', 'customer', 'customers', 'dashboard',
+  'discounts', 'expenses', 'exports', 'inventory', 'lead', 'leads', 'my-day', 'my-earnings', 'orders',
+  'playbook', 'production', 'quote', 'quotes', 'tasks', 'tax', 'tax.csv', 'team-chat', 'unlinked']);
+
+/** Where an old staff address lives now; anything else goes to /admin. */
+function adminPathFor(p) {
+  const s = safeAdminPath(p, '/admin');
+  if (s === '/admin' || s.startsWith('/admin/') || s.startsWith('/admin?')) return s;
+  return MOVED_TO_ADMIN.has(s.split(/[/?#]/)[1]) ? `/admin${s}` : '/admin';
 }
 
-function adminCookieValue(req) {
-  const raw = req.headers.cookie || '';
-  for (const part of raw.split(';')) {
-    const [k, ...v] = part.trim().split('=');
-    if (k === ADMIN_COOKIE) return decodeURIComponent(v.join('='));
-  }
-  return '';
-}
+app.use((req, res, next) => {
+  if (!['GET', 'HEAD'].includes(req.method)) return next();
+  if (MOVED_TO_ADMIN.has(req.path.split('/')[1])) return res.redirect(302, adminPathFor(req.originalUrl));
+  next();
+});
 
-function setAdminCookie(res) {
-  const secret = process.env.ADMIN_PASSWORD || '';
-  if (!secret) return;
-  const stamp = makeStamp(ADMIN_SESSION_DAYS * 86400 * 1000, secret);
-  res.append('Set-Cookie',
-    `${ADMIN_COOKIE}=${encodeURIComponent(stamp)}; Path=/; Max-Age=${ADMIN_SESSION_DAYS * 86400}` +
-    '; HttpOnly; Secure; SameSite=Lax');
-  // One person per browser: signing in as the owner ends a helper's session here.
-  res.append('Set-Cookie', 'jt_staff=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax');
-}
+/* The designer sidebar still links through here. Cloudflare guards /admin/sso
+   like every other /admin page, so there is nothing left to sign — it only
+   forwards to the page asked for, and only within this site. */
+app.get('/admin/sso', (req, res) => res.redirect(adminPathFor(String(req.query.to || '/admin'))));
 
-/* One-click in from the designer sidebar. The token proves the request came
-   from our own admin; the cookie it sets is what actually keeps you signed in. */
-app.get('/admin/sso', (req, res) => {
-  const shared = process.env.JT_INTERNAL_KEY || '';
-  // Only ever redirect within this site — never to an address in the query.
-  const raw = String(req.query.to || '/dashboard');
-  const to = /^\/[A-Za-z0-9/_\-?=&.]*$/.test(raw) && !raw.startsWith('//') ? raw : '/dashboard';
-  if (!shared || !checkStamp(req.query.t, shared)) {
-    return res.status(401).send(quotePage('Link expired', `
-      <div class="card">
-        <div class="warn">That link has expired.</div>
-        <p class="muted" style="margin-top:8px">Open it again from the designer, or sign in directly.</p>
-        <p style="margin-top:12px"><a class="btn" href="${to}">Go to the page</a></p>
-      </div>`));
-  }
-  setAdminCookie(res);
-  res.redirect(to);
+/* No sign-in form any more: Cloudflare asks. Old links land on the back office,
+   and signing out is Cloudflare's own sign-out. */
+app.get('/signin', (_req, res) => res.redirect('/admin'));
+app.post('/signout', (req, res) => {
+  const origin = req.headers.origin;
+  if (origin && !SITE_ORIGINS.includes(origin)) return res.status(403).send('Forbidden');
+  res.redirect(cfAccess ? cfAccess.logoutUrl : '/');
 });
 
 /* ── Who is signed in ──────────────────────────────────────────────────────
-   The owner (ADMIN_PASSWORD, by cookie, SSO or Basic auth) or a helper with a
-   staff login (tools/lib/staff.js). requireAdmin decides which, checks the
-   helper may use this route, and makes the answer available to everything the
-   request runs — the menu included — through currentActor(). */
+   The owner, or a helper with a staff account (tools/lib/staff.js).
+   requireAdmin decides which, checks the helper may use this route, and makes
+   the answer available to everything the request runs — the menu included —
+   through currentActor(). */
 const { AsyncLocalStorage } = require('node:async_hooks');
 const actorStore = new AsyncLocalStorage();
 const OWNER_ACTOR = Object.freeze({ kind: 'owner', id: null, name: 'Owner', perms: null });
-const STAFF_COOKIE = 'jt_staff';
 
 /** The signed-in person for this request, or null outside an admin request. */
 function currentActor() {
@@ -2452,46 +2443,12 @@ function attributedStaffId() {
   return a.kind === 'staff' ? a.id : null;
 }
 
-/** Staff sessions are signed with their own secret. Without one, staff sign-in
- *  is refused (never signed with a stand-in key); the owner is unaffected. */
-function staffSessionKey() {
-  const k = process.env.STAFF_SESSION_SECRET || '';
-  return k.length >= 32 ? k : '';
-}
-if (!staffSessionKey()) {
-  console.warn('STAFF_SESSION_SECRET is not set (32+ characters) — staff logins are switched off.');
-}
-
-function cookieValue(req, name) {
-  const raw = req.headers.cookie || '';
-  for (const part of raw.split(';')) {
-    const [k, ...v] = part.trim().split('=');
-    if (k === name) { try { return decodeURIComponent(v.join('=')); } catch { return ''; } }
-  }
-  return '';
-}
-
-function setStaffCookie(res, staff) {
-  const key = staffSessionKey();
-  if (!key) return;
-  const value = STAFF.makeSession(staff.id, staff.session_version, key);
-  res.append('Set-Cookie',
-    `${STAFF_COOKIE}=${encodeURIComponent(value)}; Path=/; Max-Age=${STAFF.STAFF_SESSION_HOURS * 3600}` +
-    '; HttpOnly; Secure; SameSite=Lax');
-  /* A helper signing in on a computer the owner uses must not ride the
-     owner's month-long cookie, so it goes. */
-  res.append('Set-Cookie', `${ADMIN_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`);
-}
-
-/** The helper a jt_staff cookie names, if it is still good: signed, unexpired,
- *  the account active, and not signed out since (session_version). */
-async function staffFromRequest(req) {
-  const session = STAFF.readSession(cookieValue(req, STAFF_COOKIE), staffSessionKey());
-  if (!session) return null;
+/** The active helper with this email, or null. */
+async function staffByEmail(email) {
   const { rows } = await pool.query(
-    'SELECT id, name, email, perms, session_version, active FROM staff WHERE id = $1', [session.id]);
+    'SELECT id, name, email, perms, active FROM staff WHERE lower(email) = $1', [email]);
   const s = rows[0];
-  if (!s || !s.active || Number(s.session_version) !== session.version) return null;
+  if (!s || !s.active) return null;
   pool.query(`UPDATE staff SET last_seen_at = NOW()
                WHERE id = $1 AND (last_seen_at IS NULL OR last_seen_at < NOW() - interval '5 minutes')`, [s.id])
     .catch(() => {});
@@ -2510,7 +2467,7 @@ function isOwner() {
 /* Every change made in the back office, and by whom. Written when the response
    finishes, so the status and where it redirected (which is how most handlers
    report a refusal: ?msg_err=...) are recorded with it. Page views are not
-   logged; only what changed something, and signing in and out. */
+   logged; only what changed something. */
 function logActivity(actor, action, subject = {}, detail = null, ip = null) {
   return pool.query(
     `INSERT INTO staff_activity (staff_id, action, subject_type, subject_id, detail, ip)
@@ -2542,13 +2499,8 @@ function wantsHtml(req) {
   return ['GET', 'HEAD'].includes(req.method) && /text\/html/.test(String(req.headers.accept || ''));
 }
 
-function signinRedirect(req, res) {
-  const to = safeAdminPath(req.originalUrl);
-  return res.redirect(`/signin?to=${encodeURIComponent(to)}`);
-}
-
 /** Only ever a path on this site — never an address from the query. */
-function safeAdminPath(raw, fallback = '/dashboard') {
+function safeAdminPath(raw, fallback = '/admin/dashboard') {
   const s = String(raw || '');
   return /^\/[A-Za-z0-9/_\-?=&.%#]*$/.test(s) && !s.startsWith('//') && s.length < 300 ? s : fallback;
 }
@@ -2560,167 +2512,60 @@ function refuseStaff(req, res, actor) {
     ${pageHeader('Not available to your account', '')}
     <div class="card"><p>This needs ${escEmail(need && STAFF.PERMISSIONS[need]
       ? `"${STAFF.PERMISSIONS[need].label}"` : 'the owner')}. Ask the owner if you should have it.</p>
-      <p style="margin-top:12px"><a class="btn" href="/my-day">Back to My Day</a></p></div>`, '')));
+      <p style="margin-top:12px"><a class="btn" href="/admin/my-day">Back to My Day</a></p></div>`, '')));
+}
+
+function notOnTeam(req, res, email) {
+  if (!wantsHtml(req)) return res.status(403).json({ error: 'This email is not on the team' });
+  return res.status(403).send(htmlDocument('Not on the team', `<div class="wrap" style="max-width:520px;margin:40px auto;padding:0 16px">
+    <div class="card"><h1 style="font-size:22px">This email is not on the team</h1>
+    <p>You are signed in as <b>${escEmail(email)}</b>, which has no active account here. Ask the owner to add you
+      on the Staff page, or sign out and use the email they added.</p>
+    <p style="margin-top:12px"><a class="btn" href="${cfAccess ? cfAccess.logoutUrl : '/'}">Sign out</a></p></div></div>`));
 }
 
 async function requireAdmin(req, res, next) {
-  const secret = process.env.ADMIN_PASSWORD || '';
-
-  /* A browser re-sends a remembered admin password to this site even when
-     another website's hidden form is what made the request — SameSite, which
-     protects the cookie path, does nothing for Basic auth. So a state-changing
-     request carrying an Origin from anywhere else is refused outright. */
+  /* A state-changing request sent by another website's page is refused
+     outright, whatever the browser attaches to it. */
   const origin = req.headers.origin;
-  const foreign = !['GET', 'HEAD'].includes(req.method) && origin && !SITE_ORIGINS.includes(origin);
+  if (!['GET', 'HEAD'].includes(req.method) && origin && !SITE_ORIGINS.includes(origin)) {
+    return res.status(403).send('Forbidden');
+  }
+  if (!cfAccess) return res.status(503).send('Staff sign-in is not set up yet.');
 
-  const asOwner = () => {
+  let email = null;
+  try {
+    email = await CF_ACCESS.verifyAccessToken(req.get('cf-access-jwt-assertion'), cfAccess, cfKeyFor);
+  } catch (err) {
+    console.error('Cloudflare Access check failed:', err.message);
+    return res.status(503).send('Please try again in a moment.');
+  }
+  if (!email) {
+    /* Reached without passing Cloudflare — the bare jtees.net name, or straight
+       at Railway. A page is sent to the address Cloudflare guards; anything
+       else is refused. */
+    if (wantsHtml(req) && req.hostname !== STAFF_HOST) {
+      return res.redirect(`${PUBLIC_BASE_URL}${adminPathFor(req.originalUrl)}`);
+    }
+    return res.status(401).send(`Sign in at ${PUBLIC_BASE_URL}/admin`);
+  }
+
+  if (cfAccess.owners.includes(email)) {
     logMutationOnFinish(req, res, OWNER_ACTOR);
     return actorStore.run(OWNER_ACTOR, next);
-  };
-
-  /* A helper's own login is checked FIRST: with both cookies in one browser,
-     the narrower one wins, so a helper can never inherit the owner's access. */
-  if (cookieValue(req, STAFF_COOKIE)) {
-    let staff = null;
-    try { staff = await staffFromRequest(req); }
-    catch (err) {
-      console.error('staff session lookup failed:', err.message);
-      return res.status(503).send('Please try again in a moment.');
-    }
-    if (staff) {
-      if (foreign) return res.status(403).send('Forbidden');
-      if (!STAFF.mayUseRoute(staff, req.method, req.route && req.route.path)) return refuseStaff(req, res, staff);
-      logMutationOnFinish(req, res, staff);
-      return actorStore.run(staff, next);
-    }
   }
 
-  // An unexpired signed owner cookie counts as signed in.
-  if (secret && checkStamp(adminCookieValue(req), secret)) return asOwner();
-
-  /* The PASSWORD is the secret; the username is not checked.
-     Phone keyboards autocapitalise the first letter, so "Admin" was failing and
-     the browser re-prompted forever — an unguessable password is what actually
-     protects this, and a case-sensitive username only ever locked out the owner. */
-  let valid = false;
-  try {
-    const provided = req.headers['authorization'] || '';
-    if (foreign) return res.status(403).send('Forbidden');
-    if (secret && provided.startsWith('Basic ')) {
-      const decoded = Buffer.from(provided.slice(6), 'base64').toString('utf8');
-      const pass = decoded.slice(decoded.indexOf(':') + 1);
-      const a = Buffer.from(pass);
-      const b = Buffer.from(secret);
-      valid = a.length === b.length && crypto.timingSafeEqual(a, b);
-    }
-  } catch { valid = false; }
-
-  if (!valid) {
-    /* A page opened in a browser goes to the sign-in form, which takes the
-       owner's password or a helper's email and password. Anything else (a
-       fetch, a script) gets a plain 401 without a Basic prompt. */
-    if (wantsHtml(req)) return signinRedirect(req, res);
-    /* A form sent after the session ended (a helper's lasts 12 hours) must not
-       lose what was typed: a redirect would drop it. Sign in in another tab,
-       then Back here keeps the form filled in, and Save sends it again. */
-    if (!['GET', 'HEAD'].includes(req.method) && /text\/html/.test(String(req.headers.accept || ''))) {
-      return res.status(401).send(htmlDocument('Signed out', `<div class="wrap" style="max-width:520px;margin:40px auto;padding:0 16px">
-        <div class="card"><h1 style="font-size:22px">You were signed out</h1>
-        <p>Nothing was saved yet, and what you typed is still on the page you came from.</p>
-        <ol style="line-height:1.7"><li><a href="/signin" target="_blank" rel="noopener">Sign in again in a new tab</a></li>
-          <li>Come back to this tab and press your browser's <b>Back</b> button</li>
-          <li>Press Save (or Send) again</li></ol></div></div>`));
-    }
-    return res.status(401).send('Unauthorized — sign in at /signin.');
+  let staff = null;
+  try { staff = await staffByEmail(email); }
+  catch (err) {
+    console.error('staff lookup failed:', err.message);
+    return res.status(503).send('Please try again in a moment.');
   }
-  // Signed in by password: remember it so this is the last prompt for a month.
-  setAdminCookie(res);
-  return asOwner();
+  if (!staff) return notOnTeam(req, res, email);
+  if (!STAFF.mayUseRoute(staff, req.method, req.route && req.route.path)) return refuseStaff(req, res, staff);
+  logMutationOnFinish(req, res, staff);
+  return actorStore.run(staff, next);
 }
-
-/* ── Signing in and out ───────────────────────────────────────────────────── */
-const signinRateLimit = makeRateLimit(10, 15 * 60 * 1000);
-
-function signinPage(to, error) {
-  return quotePage('Sign in', `
-    <h1>Sign in</h1>
-    <div class="card" style="max-width:420px">
-      ${error ? `<div class="warn">${escEmail(error)}</div>` : ''}
-      <form method="post" action="/signin" autocomplete="on">
-        <input type="hidden" name="to" value="${escEmail(to)}">
-        <label>Email <span class="muted">(leave empty if you are the owner)</span>
-          <input type="email" name="email" autocomplete="username" maxlength="254"></label>
-        <label style="margin-top:10px;display:block">Password
-          <input type="password" name="password" autocomplete="current-password" required maxlength="200"></label>
-        <button type="submit" style="margin-top:14px">Sign in</button>
-      </form>
-    </div>`);
-}
-
-app.get('/signin', (req, res) => {
-  res.set('Cache-Control', 'no-store');
-  res.send(signinPage(safeAdminPath(req.query.to), ''));
-});
-
-app.post('/signin', signinRateLimit, async (req, res) => {
-  res.set('Cache-Control', 'no-store');
-  const origin = req.headers.origin;
-  if (origin && !SITE_ORIGINS.includes(origin)) return res.status(403).send('Forbidden');
-  const b = req.body || {};
-  const email = String(b.email || '').trim().toLowerCase().slice(0, 254);
-  const password = String(b.password || '').slice(0, 200);
-  const secret = process.env.ADMIN_PASSWORD || '';
-
-  if (!email) {
-    const a = Buffer.from(password), s = Buffer.from(secret);
-    if (secret && a.length === s.length && crypto.timingSafeEqual(a, s)) {
-      setAdminCookie(res);
-      logActivity(OWNER_ACTOR, 'signin', {}, null, clientIp(req));
-      return res.redirect(safeAdminPath(b.to));
-    }
-    return res.status(401).send(signinPage(safeAdminPath(b.to), 'That password is not right.'));
-  }
-
-  if (!staffSessionKey()) {
-    return res.status(503).send(signinPage(safeAdminPath(b.to),
-      'Staff sign-in is not switched on yet. Ask the owner.'));
-  }
-  try {
-    const { rows } = await pool.query(
-      'SELECT id, name, password_hash, active, session_version FROM staff WHERE lower(email) = $1', [email]);
-    const s = rows[0];
-    /* Hash even when there is no such account, so the time taken does not say
-       which emails have one. */
-    const ok = STAFF.verifyPassword(password, s ? s.password_hash : DUMMY_STAFF_HASH);
-    if (!s || !ok || !s.active) {
-      return res.status(401).send(signinPage(safeAdminPath(b.to), 'That email and password do not match an active account.'));
-    }
-    setStaffCookie(res, s);
-    logActivity({ kind: 'staff', id: s.id }, 'signin', {}, null, clientIp(req));
-    const to = safeAdminPath(b.to, '/my-day');
-    return res.redirect(to === '/dashboard' ? '/my-day' : to);
-  } catch (err) {
-    console.error('staff sign-in failed:', err.message);
-    return res.status(500).send(signinPage(safeAdminPath(b.to), 'Something went wrong. Please try again.'));
-  }
-});
-const DUMMY_STAFF_HASH = STAFF.hashPassword(crypto.randomBytes(18).toString('hex'));
-
-app.post('/signout', async (req, res) => {
-  const origin = req.headers.origin;
-  if (origin && !SITE_ORIGINS.includes(origin)) return res.status(403).send('Forbidden');
-  try {
-    const staff = cookieValue(req, STAFF_COOKIE) ? await staffFromRequest(req) : null;
-    if (staff) {
-      /* Signing out ends every session this helper has, not just this browser. */
-      await pool.query('UPDATE staff SET session_version = session_version + 1 WHERE id = $1', [staff.id]);
-      logActivity(staff, 'signout', {}, null, clientIp(req));
-    }
-  } catch (err) { console.error('sign-out failed:', err.message); }
-  res.append('Set-Cookie', `${STAFF_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`);
-  res.append('Set-Cookie', `${ADMIN_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`);
-  res.redirect('/signin');
-});
 
 const orderRateLimit     = makeRateLimit(10, 60 * 60 * 1000);
 const signatureRateLimit = makeRateLimit(30, 60 * 60 * 1000);
@@ -2921,7 +2766,7 @@ app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, allowMissingTu
 
 // ── Create Clover order (called when you approve a quote) ─────────────────────
 
-app.post('/orders/create', requireAdmin, async (req, res) => {
+app.post('/admin/orders/create', requireAdmin, async (req, res) => {
   const { submissionId, items } = req.body;
   // items: [{ name, price (in dollars), quantity }]
 
@@ -3446,7 +3291,7 @@ async function saveChatLead(lead) {
 
 // ── Inventory (for building order forms) ──────────────────────────────────────
 
-app.get('/inventory', requireAdmin, async (_req, res) => {
+app.get('/admin/inventory', requireAdmin, async (_req, res) => {
   try {
     const items = await getCloverInventory();
     res.json(items);
@@ -3462,7 +3307,7 @@ app.get('/inventory', requireAdmin, async (_req, res) => {
    password in a pop-up on every visit and was built around Clover and HubSpot,
    both since switched off. Its address is in old bookmarks and emails, so it
    forwards to the Leads page. /admin/data is kept for anything still reading it. */
-app.get('/admin', requireAdmin, (_req, res) => res.redirect('/leads'));
+app.get('/admin', requireAdmin, (_req, res) => res.redirect(isOwner() ? '/admin/dashboard' : '/admin/my-day'));
 
 app.get('/admin/data', requireAdmin, async (req, res) => {
   try {
@@ -5058,7 +4903,7 @@ const STEP_STAGE = {
   artwork: 'production', proof: 'production', proofok: 'production',
   blanks_order: 'production', blanks_in: 'production', qc: 'out',
 };
-app.post('/quote/:code/step', requireAdmin, async (req, res) => {
+app.post('/admin/quote/:code/step', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   const stage = JOB_STAGES.findIndex((st) => st.key === STEP_STAGE[String((req.body && req.body.step) || '')]);
   const clear = String((req.body && req.body.clear) || '') === '1';
@@ -5067,7 +4912,7 @@ app.post('/quote/:code/step', requireAdmin, async (req, res) => {
   const asJson = String((req.body && req.body.json) || '') === '1';
   if (!QUOTE_CODE_RE.test(code) || stage < 1) {
     return asJson ? res.status(400).json({ ok: false, error: 'unknown step' })
-                  : res.redirect('/quotes');
+                  : res.redirect('/admin/quotes');
   }
   try {
     const job = await moveJobToStage(code, clear ? stage - 1 : stage);
@@ -5090,7 +4935,7 @@ app.post('/quote/:code/step', requireAdmin, async (req, res) => {
     console.error('step update failed:', err.message);
     if (asJson) return res.status(500).json({ ok: false });
   }
-  res.redirect('/quotes');
+  res.redirect('/admin/quotes');
 });
 
 /** Which stage a quote belongs in, from its own state. Single source of truth
@@ -6716,8 +6561,8 @@ form:has(>.step-row){display:block}
 
 /* ── The admin shell ─────────────────────────────────────────────────────────
    Every operator page hangs off one menu, because until one existed there were
-   eight of them on inconsistent paths with no way between: /quotes, /production,
-   /books, /tax.csv, /customer, /admin/reviews, /inventory and /admin. Reviews
+   eight of them on inconsistent paths with no way between: /admin/quotes, /admin/production,
+   /books, /admin/tax.csv, /admin/customer, /admin/reviews, /admin/inventory and /admin. Reviews
    and Inventory were reachable only by typing the URL, and Books only via a
    single "back to jobs" link buried in a table.
 
@@ -6730,33 +6575,33 @@ form:has(>.step-row){display:block}
    quote at /q/:code and the review form, and putting Books and the enquiries
    inbox in front of a customer is a different kind of bug.
 
-   The routes themselves are not renamed. /production/:code and /admin/reviews
+   The routes themselves are not renamed. /admin/production/:code and /admin/reviews
    are already sitting in sent email — the daily digest links to job pages and
    the review alert links to the approval screen — so moving them would break
    links in mail already in June's inbox for no gain. /admin, the old enquiries
-   page, forwards to /leads for the same reason. */
+   page, forwards to /admin/leads for the same reason. */
 const ADMIN_NAV = [
-  { key: 'myday',      href: '/my-day',        label: 'My Day',     icon: 'check',  staffOnly: true },
-  { key: 'earnings',   href: '/my-earnings',   label: 'My earnings', icon: 'dollar', staffOnly: true },
-  { key: 'dashboard',  href: '/dashboard',     label: 'Dashboard',  icon: 'grid' },
-  { key: 'leads',      href: '/leads',         label: 'Leads',      icon: 'inbox',  badge: 'leads' },
-  { key: 'quotes',     href: '/quotes',        label: 'Quotes',     icon: 'file' },
-  { key: 'production', href: '/production',    label: 'Production', icon: 'layers', badge: 'late' },
-  { key: 'orders',     href: '/orders',        label: 'Orders',     icon: 'box' },
-  { key: 'customers',  href: '/customers',     label: 'Customers',  icon: 'users' },
+  { key: 'myday',      href: '/admin/my-day',        label: 'My Day',     icon: 'check',  staffOnly: true },
+  { key: 'earnings',   href: '/admin/my-earnings',   label: 'My earnings', icon: 'dollar', staffOnly: true },
+  { key: 'dashboard',  href: '/admin/dashboard',     label: 'Dashboard',  icon: 'grid' },
+  { key: 'leads',      href: '/admin/leads',         label: 'Leads',      icon: 'inbox',  badge: 'leads' },
+  { key: 'quotes',     href: '/admin/quotes',        label: 'Quotes',     icon: 'file' },
+  { key: 'production', href: '/admin/production',    label: 'Production', icon: 'layers', badge: 'late' },
+  { key: 'orders',     href: '/admin/orders',        label: 'Orders',     icon: 'box' },
+  { key: 'customers',  href: '/admin/customers',     label: 'Customers',  icon: 'users' },
   { key: 'reviews',    href: '/admin/reviews', label: 'Reviews',    icon: 'star',   badge: 'reviews' },
   { key: 'money',      href: FINANCES_PATH,    label: 'Finances',   icon: 'dollar' },
-  { key: 'certificates', href: '/certificates', label: 'Certificates', icon: 'cert', badge: 'certificates' },
-  { key: 'discounts',  href: '/discounts',     label: 'Discounts',  icon: 'tag' },
-  { key: 'chat',       href: '/team-chat',     label: 'Team chat',  icon: 'chat',   badge: 'chat' },
-  { key: 'playbook',   href: '/playbook',      label: 'Playbook',   icon: 'book' },
+  { key: 'certificates', href: '/admin/certificates', label: 'Certificates', icon: 'cert', badge: 'certificates' },
+  { key: 'discounts',  href: '/admin/discounts',     label: 'Discounts',  icon: 'tag' },
+  { key: 'chat',       href: '/admin/team-chat',     label: 'Team chat',  icon: 'chat',   badge: 'chat' },
+  { key: 'playbook',   href: '/admin/playbook',      label: 'Playbook',   icon: 'book' },
   { key: 'team',       href: '/admin/team',    label: 'Team',       icon: 'team',   badge: 'approvals' },
 ];
 /* Ordered the way a shop is actually worked, not the way the routes grew: what
    needs you today, the enquiries that might become work, the work in hand, the
    money that arrived, the people it came from, then reputation and the books.
 
-   /inventory is deliberately absent — it answers JSON, not a page, so a menu
+   /admin/inventory is deliberately absent — it answers JSON, not a page, so a menu
    entry would drop June onto a wall of raw Clover data.
 
    The studio sits outside this list because it is a different application on a
@@ -6984,7 +6829,7 @@ function adminNav(active) {
   const items = ADMIN_NAV.filter((n) => staff
     ? STAFF.mayUseRoute(staff, 'GET', n.href)
     : !n.staffOnly);
-  const home = staff ? '/my-day' : '/dashboard';
+  const home = staff ? '/admin/my-day' : '/admin/dashboard';
   return `<aside class="adm-side" aria-label="Admin menu">
     <a class="adm-brand" href="${home}"><span class="adm-mark">JT</span>
       <span>June's Tees<small>${staff ? escEmail(staff.name) : 'Back office'}</small></span></a>
@@ -6994,10 +6839,9 @@ function adminNav(active) {
         n.badge ? `<span class="adm-badge" data-badge="${n.badge}" hidden></span>` : ''}</a>`).join('')}
     </nav>
     <div class="adm-foot">
-      ${!staff || STAFF.mayUseRoute(staff, 'GET', '/quote/new|/quote/:code/edit')
-        ? `<a class="adm-new" href="/quote/new">${icon('plus')}<span>New quote</span></a>` : ''}
-      ${staff ? `<a class="adm-link" href="/account">${icon('users')}<span>My account</span></a>`
-        : `<a class="adm-link" href="${STUDIO_ADMIN}" target="_blank" rel="noopener">${icon('out')}<span>Studio</span></a>`}
+      ${!staff || STAFF.mayUseRoute(staff, 'GET', '/admin/quote/new|/admin/quote/:code/edit')
+        ? `<a class="adm-new" href="/admin/quote/new">${icon('plus')}<span>New quote</span></a>` : ''}
+      ${staff ? '' : `<a class="adm-link" href="${STUDIO_ADMIN}" target="_blank" rel="noopener">${icon('out')}<span>Studio</span></a>`}
       <form method="post" action="/signout" style="margin:0"><button type="submit" class="adm-link adm-signout">${
         icon('out')}<span>Sign out</span></button></form>
     </div>
@@ -7031,7 +6875,7 @@ function adminPage(title, body, active) {
     <header class="adm-top">
       <label for="adm-menu" class="adm-burger" title="Menu">${icon('menu')}</label>
       <span class="adm-top-title">${escEmail(title)}</span>
-      <a class="adm-top-new" href="/quote/new" title="New quote">${icon('plus')}</a>
+      <a class="adm-top-new" href="/admin/quote/new" title="New quote">${icon('plus')}</a>
     </header>
     <main class="adm-page"><div class="wrap">${body}</div></main>
   </div>
@@ -7090,9 +6934,9 @@ function emptyState(html, action) {
   return `<div class="empty">${html}${action ? `<div style="margin-top:12px">${action}</div>` : ''}</div>`;
 }
 
-/* The form June opens on her phone. Also serves /quote/:code/edit, pre-filled,
+/* The form June opens on her phone. Also serves /admin/quote/:code/edit, pre-filled,
    so editing is the same screen rather than a second thing to maintain. */
-app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
+app.get(['/admin/quote/new', '/admin/quote/:code/edit'], requireAdmin, async (req, res) => {
   let catalog = { products: [], methods: [] };
   try { catalog = await getCatalog(); } catch (e) { /* form still works manually */ }
   const creditRoster = await staffRoster({ activeOnly: true }).catch(() => []);
@@ -7104,7 +6948,7 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
     if (!rows.length) {
       return res.status(404).send(quotePage('Not found',
         `<div class="card"><div class="warn">No quote with that code.</div>
-         <a class="btn btn-ghost" href="/quotes">All quotes</a></div>`));
+         <a class="btn btn-ghost" href="/admin/quotes">All quotes</a></div>`));
     }
     existing = rows[0];
   }
@@ -7147,7 +6991,7 @@ app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
   /* `existing` now covers two things: a saved quote being edited, and a blank
      quote prefilled from a website enquiry. Only the first has a code, and only
      the first posts to the edit route — without this the form would POST to
-     /api/quotes/null and update nothing. */
+     /admin/api/quotes/null and update nothing. */
   const isEdit = !!(existing && existing.code);
   const eItems = (E.items && E.items.length) ? E.items : [null];
   const val = (v) => v == null ? '' : escEmail(String(v));
@@ -7470,7 +7314,7 @@ function productGroupOf(name) {
                 onclick="applyRequested()">Apply their numbers</button>` : ''}
       </div>`;
     })()}
-    <form method="POST" action="${isEdit ? '/api/quotes/' + existing.code : '/api/quotes'}" id="qf">
+    <form method="POST" action="${isEdit ? '/admin/api/quotes/' + existing.code : '/admin/api/quotes'}" id="qf">
       ${lead ? `<input type="hidden" name="from_submission_id" value="${lead.id}">` : ''}
       <div class="card">
         <div class="row">
@@ -7576,7 +7420,7 @@ function productGroupOf(name) {
       <p class="muted" id="qfstat" style="margin-top:10px;font-size:12.5px"></p>
       <button type="submit" id="qfgo">${isEdit ? 'Save changes' : 'Create quote &amp; get the message'}</button>
     </form>
-    <p style="margin-top:14px"><a class="muted" href="/quotes">View all quotes →</a></p>
+    <p style="margin-top:14px"><a class="muted" href="/admin/quotes">View all quotes →</a></p>
     <script>
       var CAT = ${JSON.stringify(actorLevel('finances') === 'on' ? catalog : catalogWithoutCosts(catalog))};
       var TAX = ${TAX_RATE}, DEP = ${DEPOSIT_PC}, FULL_UNDER = ${DEPOSIT_FULL_UNDER};
@@ -8468,7 +8312,7 @@ ${uploadStatusScript()}
           var f = document.forms[0];
           var q = (f.phone.value||f.email.value||'').trim();
           if(q.length < 5){ document.getElementById('prior').innerHTML=''; return; }
-          fetch('/api/quotes/prior?q='+encodeURIComponent(q))
+          fetch('/admin/api/quotes/prior?q='+encodeURIComponent(q))
             .then(function(r){return r.json();})
             .then(function(d){
               if(!d.found){ document.getElementById('prior').innerHTML=''; return; }
@@ -8582,7 +8426,7 @@ async function customerHistory(q) {
 }
 
 /* Prior pricing for a returning customer — what keeps a repeat quote consistent. */
-app.get('/api/quotes/prior', requireAdmin, async (req, res) => {
+app.get('/admin/api/quotes/prior', requireAdmin, async (req, res) => {
   const q = String(req.query.q || '').trim();
   if (q.length < 5) return res.json({ found: false });
   const digits = q.replace(/\D/g, '');
@@ -8624,7 +8468,7 @@ app.get('/api/quotes/prior', requireAdmin, async (req, res) => {
         : null,
       margin_hidden: actorLevel('finances') !== 'on',
       avg_pct: actorLevel('finances') === 'on' ? avgPct : null,
-      link: `/customer?q=${encodeURIComponent(last.email || last.phone || '')}`,
+      link: `/admin/customer?q=${encodeURIComponent(last.email || last.phone || '')}`,
       // The exact lines they were charged before, so a repeat quote can match.
       lines: (last.items || []).slice(0, 4).map(i => ({
         desc: i.description, qty: i.qty, unit: Number(i.unit_price || 0),
@@ -8637,7 +8481,7 @@ app.get('/api/quotes/prior', requireAdmin, async (req, res) => {
 });
 
 /* Create a quote, then show the ready-to-send message. */
-app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) => {
+app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (req, res) => {
   try {
     const b = req.body || {};
     const name = [String(b.first_name || '').trim(), String(b.last_name || '').trim()]
@@ -9048,7 +8892,7 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
     }
 
     const backToForm = QUOTE_CODE_RE.test(String(req.params.code || '').toUpperCase())
-      ? `/quote/${String(req.params.code).toUpperCase()}/edit` : '/quote/new';
+      ? `/admin/quote/${String(req.params.code).toUpperCase()}/edit` : '/admin/quote/new';
 
     if (overCeiling.length) {
       return res.status(400).send(quotePage('More colours than the press runs', `
@@ -9160,7 +9004,7 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
         <div class="card"><div class="warn">Your changes would reach them straight away, and they need the owner's OK:</div>
           <ul>${gate.reasons.map((r) => `<li>${escEmail(r)}</li>`).join('')}</ul>
           <p>Leave a note on the job saying what should change, and the owner will make the edit.</p>
-          <p style="margin-top:12px"><a class="btn" href="/production/${escEmail(editing)}#notes">Leave a note</a></p></div>`, 'quotes'));
+          <p style="margin-top:12px"><a class="btn" href="/admin/production/${escEmail(editing)}#notes">Leave a note</a></p></div>`, 'quotes'));
     }
 
     if (QUOTE_CODE_RE.test(editing)) {
@@ -9186,7 +9030,7 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
       if (!rows.length) {
         return res.status(404).send(quotePage('Not found',
           `<div class="card"><div class="warn">That quote no longer exists.</div>
-           <a class="btn btn-ghost" href="/quotes">All quotes</a></div>`));
+           <a class="btn btn-ghost" href="/admin/quotes">All quotes</a></div>`));
       }
     } else {
       let code = newQuoteCode();
@@ -9248,8 +9092,8 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
             : 'The owner will review it; you will see it move on your My Day list.'}</p>
           ${gate.reasons.length ? `<ul>${gate.reasons.map((r) => `<li>${escEmail(r)}</li>`).join('')}</ul>` : ''}
           <p style="margin-top:12px">
-            <a class="btn btn-ghost" href="/quote/${code}/edit">Edit it</a>
-            ${actor.kind === 'owner' ? '<a class="btn" href="/admin/approvals">Approvals</a>' : '<a class="btn" href="/my-day">My Day</a>'}
+            <a class="btn btn-ghost" href="/admin/quote/${code}/edit">Edit it</a>
+            ${actor.kind === 'owner' ? '<a class="btn" href="/admin/approvals">Approvals</a>' : '<a class="btn" href="/admin/my-day">My Day</a>'}
           </p>
         </div>`, 'quotes'));
     }
@@ -9290,13 +9134,13 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
         ${TAXCERT.quoteNeedsCertificate(q) && !q.tax_certificate_id ? `
         <div class="warn" style="margin-top:10px">No tax on this one, so their quote page asks for the
           exemption certificate before they can pay. Already have it?
-          <a href="/production/${escEmail(code)}#certificate">Attach it on the job page</a>.</div>` : ''}
+          <a href="/admin/production/${escEmail(code)}#certificate">Attach it on the job page</a>.</div>` : ''}
       </div>
       <div class="card">
-        <a class="btn btn-ghost" href="/quote/${code}/edit">Edit this quote</a>
+        <a class="btn btn-ghost" href="/admin/quote/${code}/edit">Edit this quote</a>
         ${(phone || email) ? `<a class="btn btn-ghost" href="/q/${code}/vcard">Save to contacts</a>` : ''}
-        <a class="btn btn-ghost" href="/quote/new">Another quote</a>
-        <a class="btn btn-ghost" href="/quotes">All quotes</a>
+        <a class="btn btn-ghost" href="/admin/quote/new">Another quote</a>
+        <a class="btn btn-ghost" href="/admin/quotes">All quotes</a>
       </div>
       <script>
         function cp(){
@@ -9314,7 +9158,7 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
     console.error('create quote failed:', err.message);
     res.status(500).send(quotePage('Something went wrong',
       `<div class="card"><div class="warn">The quote could not be saved. Please try again.</div>
-       <a class="btn btn-ghost" href="/quote/new">Back</a></div>`));
+       <a class="btn btn-ghost" href="/admin/quote/new">Back</a></div>`));
   }
 });
 
@@ -10260,7 +10104,7 @@ function reportError(kind, err, context) {
 }
 
 /** A URL path with its identifiers replaced, so one broken route is one fault.
- *  `/api/quotes/AB12CD/pay` -> `/api/quotes/:id/pay`. Anything carrying a digit
+ *  `/admin/api/quotes/AB12CD/pay` -> `/admin/api/quotes/:id/pay`. Anything carrying a digit
  *  or long enough to be a token or hash is an identifier; a word is not. */
 function routeShape(pathname) {
   return String(pathname || '/')
@@ -10380,7 +10224,7 @@ async function recordUnlinkedPayment(session, reason, opts = {}) {
 
   /* The certificate behind a tax-exempt studio sale: the studio stamps
      `jt_exempt_cert` on a payment it took no tax on because of one. It is what
-     lets the ST-1 deduct the sale (taxPositionByMonth, /tax.csv) with its
+     lets the ST-1 deduct the sale (taxPositionByMonth, /admin/tax.csv) with its
      evidence named. A refund or chargeback carries its payment's certificate
      (opts), so the deduction comes back out with the money. */
   const certIn = opts.taxCertificateId !== undefined ? opts.taxCertificateId : session.metadata?.jt_exempt_cert;
@@ -11497,7 +11341,7 @@ async function bookChargeNow(charge, via = 'webhook') {
         (${escEmail(how)}${charge.description ? `: &ldquo;${escEmail(String(charge.description).slice(0, 120))}&rdquo;` : ''}).</p>
      ${why}
      <p>It is in the books as a payment that belongs to no quote, with its sales tax not known yet.</p>
-     <p><b>If it is for a quote:</b> open that quote on the <a href="${PUBLIC_BASE_URL}/quotes">Quotes board</a>,
+     <p><b>If it is for a quote:</b> open that quote on the <a href="${PUBLIC_BASE_URL}/admin/quotes">Quotes board</a>,
         press <b>Record a payment</b>, and apply this payment there. Do not record it again as Zelle, cash or
         other: that counts the same money twice.</p>
      <p><b>If it is not for a quote:</b> settle its sales tax on the
@@ -11774,7 +11618,7 @@ async function handleStripeEvent(event) {
            written to the unlinked ledger. Moments later
            async_payment_succeeded banks the same session to quote_payments and
            the money is counted in both: taxPositionByMonth adds `gross` and
-           `unlinkedGross` separately, and /tax.csv emits two rows. If the
+           `unlinkedGross` separately, and /admin/tax.csv emits two rows. If the
            payment instead FAILS, the unlinked row records a receipt that never
            arrived. Neither is money that has no quote, so neither belongs here. */
         const noQuote = out.reason === 'no quote code' || out.reason === 'unknown quote';
@@ -12176,7 +12020,7 @@ app.post('/q/:code/changes', orderRateLimit, async (req, res) => {
         <p style="color:#374151"><b>${escEmail(saved.name || '')}</b> ${escEmail(saved.phone || '')} ${escEmail(saved.email || '')}</p>
         ${msg ? `<blockquote style="border-left:3px solid #1848B8;padding-left:12px;color:#374151">${escEmail(msg)}</blockquote>` : ''}
         ${editHtml}
-        <p style="margin-top:16px"><a href="${PUBLIC_BASE_URL}/quote/${saved.code}/edit"
+        <p style="margin-top:16px"><a href="${PUBLIC_BASE_URL}/admin/quote/${saved.code}/edit"
            style="background:#1848B8;color:#fff;padding:12px 24px;border-radius:100px;text-decoration:none;font-weight:700">Edit this quote →</a></p>
         <p style="color:#6b7280;font-size:13px">Their link stays the same — it updates when you save.</p></div>`,
     }).catch(e => console.error('change alert failed:', e.message));
@@ -12189,20 +12033,20 @@ app.post('/q/:code/changes', orderRateLimit, async (req, res) => {
 /* Record a payment that arrived outside Stripe — Zelle, cash, a bank transfer.
    Without this a customer who pays by Zelle stays "unpaid" forever, the deposit
    reminder keeps chasing them, and the balance never reflects reality. */
-app.post('/quote/:code/mark-paid', requireAdmin, async (req, res) => {
+app.post('/admin/quote/:code/mark-paid', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
-  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/quotes');
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/quotes');
   const b = req.body || {};
   const method = ['zelle', 'cash', 'transfer', 'other'].includes(String(b.method))
     ? String(b.method) : 'other';
 
   try {
     const { rows } = await pool.query('SELECT * FROM quotes WHERE code=$1', [code]);
-    if (!rows.length) return res.redirect('/quotes');
+    if (!rows.length) return res.redirect('/admin/quotes');
     const q = rows[0];
     /* A held quote has not reached the customer; recording a payment would
        make it 'accepted' and live without the owner's Approve. */
-    if (q.status === 'held') return res.redirect(`/production/${code}?err=${encodeURIComponent('This quote is waiting for approval. Approve it first.')}`);
+    if (q.status === 'held') return res.redirect(`/admin/production/${code}?err=${encodeURIComponent('This quote is waiting for approval. Approve it first.')}`);
     const t = quoteTotals(q);
 
     // Blank amount means "they paid what was due" — deposit, or the balance if
@@ -12210,7 +12054,7 @@ app.post('/quote/:code/mark-paid', requireAdmin, async (req, res) => {
     const outstanding = balanceOf(q, t.total);
     const suggested = Number(q.paid_amount || 0) > 0 ? outstanding : t.deposit;
     let amount = String(b.amount || '').trim() === '' ? suggested : round2(Number(b.amount));
-    if (!(amount > 0)) return res.redirect('/quotes');
+    if (!(amount > 0)) return res.redirect('/admin/quotes');
     // Never let a typo record more than is owed.
     amount = Math.min(amount, outstanding || amount);
 
@@ -12228,12 +12072,12 @@ app.post('/quote/:code/mark-paid', requireAdmin, async (req, res) => {
       .update([code, round2(amount).toFixed(2), method, m].join('|')).digest('hex').slice(0, 32);
     const { rows: justNow } = await pool.query(
       'SELECT 1 FROM quote_payments WHERE ext_ref = $1 LIMIT 1', [manualRef(minute - 1)]);
-    if (justNow.length) return res.redirect('/quotes');
+    if (justNow.length) return res.redirect('/admin/quotes');
     const rec = await recordPayment({
       code, amount, method, source: 'manual', extRef: manualRef(minute),
       note: String(b.note || '').trim().slice(0, 200) || null,
     });
-    if (rec && rec.duplicate) return res.redirect('/quotes');
+    if (rec && rec.duplicate) return res.redirect('/admin/quotes');
 
     const { rows: upd } = await pool.query(
       `UPDATE quotes SET status = 'accepted',
@@ -12277,7 +12121,7 @@ app.post('/quote/:code/mark-paid', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('mark-paid failed:', err.message);
   }
-  res.redirect('/quotes');
+  res.redirect('/admin/quotes');
 });
 
 /**
@@ -12293,15 +12137,15 @@ app.post('/quote/:code/mark-paid', requireAdmin, async (req, res) => {
  *   amount=<n>          adjust by a signed amount (negative to reduce)
  *   set=<n>             make the running total equal n (writes the difference)
  */
-app.post('/quote/:code/correct-payment', requireAdmin, async (req, res) => {
+app.post('/admin/quote/:code/correct-payment', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
-  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/quotes');
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/quotes');
   const b = req.body || {};
   const note = String(b.note || '').trim().slice(0, 200) || 'Manual correction';
 
   try {
     const { rows: qr } = await pool.query('SELECT * FROM quotes WHERE code=$1', [code]);
-    if (!qr.length) return res.redirect('/quotes');
+    if (!qr.length) return res.redirect('/admin/quotes');
 
     const { rows: cur } = await pool.query(
       `SELECT COALESCE(SUM(amount),0) AS paid FROM quote_payments WHERE quote_code=$1`, [code]);
@@ -12314,20 +12158,20 @@ app.post('/quote/:code/correct-payment', requireAdmin, async (req, res) => {
       const { rows: p } = await pool.query(
         `SELECT * FROM quote_payments WHERE id=$1 AND quote_code=$2`,
         [Number(b.void) || 0, code]);
-      if (!p.length) return res.redirect('/quotes');
+      if (!p.length) return res.redirect('/admin/quotes');
       delta = -round2(Number(p[0].amount));
       sourceNote = `Voided payment #${p[0].id} (${money(p[0].amount)} ${p[0].method}) — ${note}`;
     } else if (String(b.set || '').trim() !== '') {
       const target = round2(Number(b.set));
-      if (!Number.isFinite(target) || target < 0) return res.redirect('/quotes');
+      if (!Number.isFinite(target) || target < 0) return res.redirect('/admin/quotes');
       delta = round2(target - paid);
       sourceNote = `Corrected total to ${money(target)} — ${note}`;
     } else {
       delta = round2(Number(b.amount));
-      if (!Number.isFinite(delta)) return res.redirect('/quotes');
+      if (!Number.isFinite(delta)) return res.redirect('/admin/quotes');
     }
 
-    if (delta === 0) return res.redirect('/quotes');
+    if (delta === 0) return res.redirect('/admin/quotes');
 
     await recordPayment({
       code, amount: delta, method: String(b.method || 'other'),
@@ -12350,7 +12194,7 @@ app.post('/quote/:code/correct-payment', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('correct-payment failed:', err.message);
   }
-  res.redirect('/quotes');
+  res.redirect('/admin/quotes');
 });
 
 /**
@@ -12464,7 +12308,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
     res.send(adminPage('Books', `<h1>Books — ${year}</h1>
       <div class="sub">${years.map(y => y.y === year
         ? `<b>${y.y}</b>` : `<a href="${FINANCES_PATH}?year=${y.y}" style="color:#1848B8">${y.y}</a>`).join(' &middot; ')}
-        &middot; <a href="/quotes" style="color:#1848B8">back to jobs</a></div>
+        &middot; <a href="/admin/quotes" style="color:#1848B8">back to jobs</a></div>
 
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin:14px 0">
         ${tile('Sales (ex tax)', money(T.sales), '#111827', `${T.jobs} job${T.jobs === 1 ? '' : 's'} · collected ${money(T.collected)}`)}
@@ -12630,7 +12474,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
             ${gap > 0 ? `<span class="muted"> Based on ${T.jobs - gap} of ${T.jobs} jobs — the rest have no costs entered, so the real figure is lower.</span>` : ''}
           </div>` : `<div style="padding:9px 0;border-bottom:1px solid #f1f4f9">
             <b>No job costs entered yet.</b> Until they are, this page can show what came in but not what you kept.
-            <a href="/quotes" style="color:#1848B8">Add costs to a job</a> and every figure here fills in.</div>`}
+            <a href="/admin/quotes" style="color:#1848B8">Add costs to a job</a> and every figure here fills in.</div>`}
 
           ${T.tax > 0 ? `<div style="padding:9px 0;border-bottom:1px solid #f1f4f9">
             <b>${money(pos.setAside)} of your balance is not yours.</b>
@@ -12651,7 +12495,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
           Costs not attached to a job — rent, utilities, materials that are not garments.
           These are what turn "the jobs made money" into "the business made money".</div>
 
-        <form method="POST" action="/expenses" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;
+        <form method="POST" action="/admin/expenses" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;
               background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:10px">
           <input type="hidden" name="year" value="${year}">
           <input name="spent_on" type="date" value="${new Date().toISOString().slice(0,10)}" style="flex:0 0 145px;padding:7px">
@@ -12676,7 +12520,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
           <summary style="cursor:pointer;color:#1848B8;font-size:13px">${expList.length} entr${expList.length === 1 ? 'y' : 'ies'}</summary>
           <div style="margin-top:8px">
             ${expList.map(e => `
-            <form method="POST" action="/expenses/${e.id}"
+            <form method="POST" action="/admin/expenses/${e.id}"
                   style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;padding:5px 0;border-bottom:1px solid #f1f4f9;font-size:12.5px">
               <input type="hidden" name="year" value="${year}">
               <input name="spent_on" type="date" value="${new Date(e.spent_on).toISOString().slice(0,10)}"
@@ -12693,14 +12537,14 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
               <label style="font-size:11.5px;color:#6b7280;display:flex;align-items:center;gap:3px;white-space:nowrap">
                 <input type="checkbox" name="recurs" value="1" ${e.recurs ? 'checked' : ''} style="width:auto"> monthly</label>
               <button type="submit" class="btn btn-ghost" style="padding:5px 11px;font-size:12px">Save</button>
-              <button type="submit" formaction="/expenses/${e.id}/delete" title="delete"
+              <button type="submit" formaction="/admin/expenses/${e.id}/delete" title="delete"
                       onclick="return confirm('Delete this ${money(e.amount)} ${escEmail(e.category)} entry?')"
                       style="border:0;background:none;color:#9ca3af;cursor:pointer;font-size:15px;padding:0 4px">×</button>
             </form>`).join('')}
           </div>
         </details>` : '<div class="muted" style="font-size:12.5px;margin-top:10px">Nothing recorded yet.</div>'}
 
-        ${expList.some(e => e.recurs) ? `<form method="POST" action="/expenses/roll" style="margin-top:10px">
+        ${expList.some(e => e.recurs) ? `<form method="POST" action="/admin/expenses/roll" style="margin-top:10px">
           <button type="submit" class="btn btn-ghost" style="padding:6px 14px;font-size:12.5px">Roll monthly costs into this month</button>
           <span class="muted" style="font-size:11px;margin-left:8px">Copies last month's recurring entries. Skips any category already present.</span>
         </form>` : ''}
@@ -12728,8 +12572,8 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
         </div>` : ''}
         <div class="muted" style="font-size:11px;margin-top:10px">
           Held right now spans every period, not just ${year} — it is what should be in the bank today.
-          <a href="/tax.csv" style="color:#1848B8">Download the payment-level detail</a>,
-          or <a href="/exports" style="color:#1848B8">keep a month's records</a>.
+          <a href="/admin/tax.csv" style="color:#1848B8">Download the payment-level detail</a>,
+          or <a href="/admin/exports" style="color:#1848B8">keep a month's records</a>.
         </div>
       </div>
 
@@ -12763,7 +12607,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
             </td>
             <td class="num" style="padding:7px 4px;font-variant-numeric:tabular-nums">${money(u.amount)}</td>
             <td style="padding:7px 4px">
-              <form method="post" action="/unlinked/${u.id}/tax" style="display:flex;gap:6px;margin:0">
+              <form method="post" action="/admin/unlinked/${u.id}/tax" style="display:flex;gap:6px;margin:0">
                 <input type="hidden" name="back" value="${FINANCES_PATH}?year=${year}">
                 <input name="tax" type="number" step="0.01" inputmode="decimal"
                        placeholder="unknown"
@@ -12805,8 +12649,8 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
             <td style="padding:7px 4px">
               ${TAXCERT.EXEMPT_REASONS[q.tax_exempt_reason] && TAXCERT.EXEMPT_REASONS[q.tax_exempt_reason].certificate
                 /* A note cannot document these: only the certificate does. */
-                ? `<a href="/production/${escEmail(String(q.code))}#certificate" style="color:#1848B8">Attach the certificate</a>`
-                : `<form method="post" action="/quotes/${escEmail(String(q.code))}/exemption"
+                ? `<a href="/admin/production/${escEmail(String(q.code))}#certificate" style="color:#1848B8">Attach the certificate</a>`
+                : `<form method="post" action="/admin/quotes/${escEmail(String(q.code))}/exemption"
                     style="display:flex;gap:6px;margin:0">
                 <input type="hidden" name="back" value="${FINANCES_PATH}?year=${year}#exemptions">
                 <input name="tax_exempt_ref" maxlength="60" placeholder="E-number"
@@ -12829,7 +12673,7 @@ const EXPENSE_CATEGORIES = ['Rent', 'Utilities', 'Materials', 'Equipment',
   'Software', 'Insurance', 'Marketing', 'Vehicle', 'Fees', 'Contract labor', 'Other'];
 
 /* Record an overhead. */
-app.post('/expenses', requireAdmin, async (req, res) => {
+app.post('/admin/expenses', requireAdmin, async (req, res) => {
   const b = req.body || {};
   const amount = round2(Number(b.amount));
   const category = EXPENSE_CATEGORIES.includes(String(b.category)) ? String(b.category) : 'Other';
@@ -12851,7 +12695,7 @@ app.post('/expenses', requireAdmin, async (req, res) => {
 /* Edit one in place. Overheads are typed by hand, so a wrong figure should be
    correctable where it is shown — unlike payments, where history is evidence
    and a correction has to be a new row. */
-app.post('/expenses/:id', requireAdmin, async (req, res) => {
+app.post('/admin/expenses/:id', requireAdmin, async (req, res) => {
   const id = Number(req.params.id) || 0;
   const b = req.body || {};
   const amount = round2(Number(b.amount));
@@ -12876,7 +12720,7 @@ app.post('/expenses/:id', requireAdmin, async (req, res) => {
   res.redirect(FINANCES_PATH + (b.year ? `?year=${encodeURIComponent(b.year)}` : ''));
 });
 
-app.post('/expenses/:id/delete', requireAdmin, async (req, res) => {
+app.post('/admin/expenses/:id/delete', requireAdmin, async (req, res) => {
   const id = Number(req.params.id) || 0;
   try { await pool.query('DELETE FROM expenses WHERE id = $1', [id]); }
   catch (err) { console.error('expense delete failed:', err.message); }
@@ -12887,7 +12731,7 @@ app.post('/expenses/:id/delete', requireAdmin, async (req, res) => {
    owed because nobody typed it in, and a monthly cost retyped by hand is a
    monthly cost eventually forgotten. Idempotent: it will not duplicate a
    category already present this month. */
-app.post('/expenses/roll', requireAdmin, async (req, res) => {
+app.post('/admin/expenses/roll', requireAdmin, async (req, res) => {
   try {
     const { rowCount } = await pool.query(
       `INSERT INTO expenses (spent_on, category, amount, vendor, note, recurs)
@@ -12960,7 +12804,7 @@ function monthRange(v) {
 /* One page listing what can be kept, month by month. The months are DERIVED
    from the data rather than a date picker: a picker invites a month with nothing
    in it, and an empty CSV reads as "no business" rather than "wrong month". */
-app.get('/exports', requireAdmin, async (_req, res) => {
+app.get('/admin/exports', requireAdmin, async (_req, res) => {
   try {
     const { rows: months } = await pool.query(
       `SELECT to_char(m, 'YYYY-MM') AS ym, to_char(m, 'Mon YYYY') AS label,
@@ -13009,10 +12853,10 @@ app.get('/exports', requireAdmin, async (_req, res) => {
                  style="color:${Number(u.unknown_tax) > 0 ? '#b45309' : '#334155'}">${money(u.amt)}${
                  Number(u.unknown_tax) > 0 ? ' *' : ''}</span>` : '<span class="muted">—</span>'}</td>
         <td style="padding:8px 4px;text-align:right;white-space:nowrap">
-          <a href="/exports/quotes.csv?month=${m.ym}">quotes</a> &middot;
-          <a href="/exports/payments.csv?month=${m.ym}">payments</a> &middot;
-          <a href="/exports/expenses.csv?month=${m.ym}">expenses</a>${
-          u ? ` &middot; <a href="/exports/unlinked.csv?month=${m.ym}">unlinked</a>` : ''}</td>
+          <a href="/admin/exports/quotes.csv?month=${m.ym}">quotes</a> &middot;
+          <a href="/admin/exports/payments.csv?month=${m.ym}">payments</a> &middot;
+          <a href="/admin/exports/expenses.csv?month=${m.ym}">expenses</a>${
+          u ? ` &middot; <a href="/admin/exports/unlinked.csv?month=${m.ym}">unlinked</a>` : ''}</td>
       </tr>`;
     }).join('');
 
@@ -13044,11 +12888,11 @@ app.get('/exports', requireAdmin, async (_req, res) => {
           <tbody>${rows || '<tr><td colspan="6" class="muted" style="padding:10px 4px">Nothing recorded yet.</td></tr>'}</tbody>
         </table>
         <p class="muted" style="margin-top:12px;font-size:13px">Everything, all months:
-          <a href="/exports/quotes.csv">quotes</a> &middot;
-          <a href="/exports/payments.csv">payments</a> &middot;
-          <a href="/exports/expenses.csv">expenses</a> &middot;
-          <a href="/exports/unlinked.csv">outside quotes</a> &middot;
-          <a href="/tax.csv">sales tax detail</a></p>
+          <a href="/admin/exports/quotes.csv">quotes</a> &middot;
+          <a href="/admin/exports/payments.csv">payments</a> &middot;
+          <a href="/admin/exports/expenses.csv">expenses</a> &middot;
+          <a href="/admin/exports/unlinked.csv">outside quotes</a> &middot;
+          <a href="/admin/tax.csv">sales tax detail</a></p>
         <p class="muted" style="margin-top:6px;font-size:12px"><b>Outside quotes</b> is money Stripe took
           that no quote claimed — mostly design studio orders, which keep their own ledger on
           design.jtees.net. A <b>*</b> means the sales tax inside some of it has not been worked out
@@ -13060,7 +12904,7 @@ app.get('/exports', requireAdmin, async (_req, res) => {
   }
 });
 
-app.get('/exports/quotes.csv', requireAdmin, async (req, res) => {
+app.get('/admin/exports/quotes.csv', requireAdmin, async (req, res) => {
   const r = monthRange(req.query.month);
   try {
     const { rows } = await pool.query(
@@ -13095,7 +12939,7 @@ app.get('/exports/quotes.csv', requireAdmin, async (req, res) => {
 
 /* Money actually received, from the ledger — the figure that belongs in a
    revenue line. A quote total is what was ASKED for. */
-app.get('/exports/payments.csv', requireAdmin, async (req, res) => {
+app.get('/admin/exports/payments.csv', requireAdmin, async (req, res) => {
   const r = monthRange(req.query.month);
   try {
     const { rows } = await pool.query(
@@ -13118,7 +12962,7 @@ app.get('/exports/payments.csv', requireAdmin, async (req, res) => {
   }
 });
 
-app.get('/exports/expenses.csv', requireAdmin, async (req, res) => {
+app.get('/admin/exports/expenses.csv', requireAdmin, async (req, res) => {
   const r = monthRange(req.query.month);
   try {
     const { rows } = await pool.query(
@@ -13136,7 +12980,7 @@ app.get('/exports/expenses.csv', requireAdmin, async (req, res) => {
   }
 });
 
-app.get('/tax.csv', requireAdmin, async (req, res) => {
+app.get('/admin/tax.csv', requireAdmin, async (req, res) => {
   try {
     /* The STORED tax portion, not a fresh calculation from the quote.
        recordPayment() works it out when the money lands and writes it on the
@@ -13233,7 +13077,7 @@ app.get('/tax.csv', requireAdmin, async (req, res) => {
    these too, but flattened to the columns a quote payment has; this one keeps
    the Stripe identifiers needed to go and find the order in the studio's own
    records and settle what tax it carried. */
-app.get('/exports/unlinked.csv', requireAdmin, async (req, res) => {
+app.get('/admin/exports/unlinked.csv', requireAdmin, async (req, res) => {
   const r = monthRange(req.query.month);
   try {
     const { rows } = await pool.query(
@@ -13388,12 +13232,12 @@ async function sendReceipt(code, to = null) {
    Keyed by the cart's `updated` at this moment, so a customer who returns and
    changes their cart resurfaces. Dismissing means "done with this version", not
    "never show this person again" — a cart that comes back is new information. */
-app.post('/cart/dismiss', requireAdmin, async (req, res) => {
+app.post('/admin/cart/dismiss', requireAdmin, async (req, res) => {
   const b = req.body || {};
   const email = String(b.email || '').trim().toLowerCase().slice(0, 200);
   const updated = new Date(String(b.updated || ''));
   const reason = String(b.reason || '').trim().slice(0, 200);
-  if (!email || Number.isNaN(updated.getTime())) return res.redirect('/quotes');
+  if (!email || Number.isNaN(updated.getTime())) return res.redirect('/admin/quotes');
   try {
     await pool.query(
       `INSERT INTO dismissed_carts (email, cart_updated, reason)
@@ -13406,14 +13250,14 @@ app.post('/cart/dismiss', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('cart dismiss failed:', err.message);
   }
-  res.redirect('/quotes');
+  res.redirect('/admin/quotes');
 });
 
 /* Clear the backlog of enquiries that have aged out.
    Recorded as "too late" rather than "not a job", because that is what actually
    happened and the two are different facts: one says the shop judged the work,
    the other says the shop never got to it. Only the second is a warning. */
-app.post('/leads/dismiss-old', requireAdmin, async (req, res) => {
+app.post('/admin/leads/dismiss-old', requireAdmin, async (req, res) => {
   const days = 30;
   try {
     const { rowCount } = await pool.query(
@@ -13427,15 +13271,15 @@ app.post('/leads/dismiss-old', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('bulk lead dismiss failed:', err.message);
   }
-  res.redirect('/quotes');
+  res.redirect('/admin/quotes');
 });
 
-app.post('/lead/:id/dismiss', requireAdmin, async (req, res) => {
+app.post('/admin/lead/:id/dismiss', requireAdmin, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   /* Back to the page it was dismissed from: the board or the Leads page. A
      fixed list, so the form cannot be pointed anywhere else. */
-  const back = ['/leads', '/quotes'].includes(String((req.body && req.body.back) || ''))
-    ? String(req.body.back) : '/quotes';
+  const back = ['/admin/leads', '/admin/quotes'].includes(String((req.body && req.body.back) || ''))
+    ? String(req.body.back) : '/admin/quotes';
   if (!Number.isFinite(id)) return res.redirect(back);
   const reason = String((req.body && req.body.reason) || '').trim().slice(0, 200);
   try {
@@ -13448,9 +13292,9 @@ app.post('/lead/:id/dismiss', requireAdmin, async (req, res) => {
   res.redirect(back);
 });
 
-app.post('/quote/:code/cancel', requireAdmin, async (req, res) => {
+app.post('/admin/quote/:code/cancel', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
-  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/quotes');
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/quotes');
   const reason = String((req.body && req.body.reason) || '').trim().slice(0, 200);
   try {
     /* delivered_at is cleared: a cancelled job did not ship, and leaving the
@@ -13470,12 +13314,12 @@ app.post('/quote/:code/cancel', requireAdmin, async (req, res) => {
     console.error('cancel failed:', err.message);
   }
   // Back where it was cancelled from: the job page sends 'production'.
-  res.redirect(String((req.body && req.body.back) || '') === 'production' ? '/production' : '/quotes');
+  res.redirect(String((req.body && req.body.back) || '') === 'production' ? '/admin/production' : '/admin/quotes');
 });
 
-app.post('/quote/:code/uncancel', requireAdmin, async (req, res) => {
+app.post('/admin/quote/:code/uncancel', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
-  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/quotes');
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/quotes');
   try {
     /* Back to accepted or sent depending on whether they had accepted — not to
        whatever the status was before, which is not recorded and would be a guess
@@ -13499,23 +13343,23 @@ app.post('/quote/:code/uncancel', requireAdmin, async (req, res) => {
     console.error('uncancel failed:', err.message);
   }
   // Back where it was restored from: the Orders page sends 'orders'.
-  res.redirect(String((req.body && req.body.back) || '') === 'orders' ? '/orders' : '/quotes');
+  res.redirect(String((req.body && req.body.back) || '') === 'orders' ? '/admin/orders' : '/admin/quotes');
 });
 
-app.post('/quote/:code/settle', requireAdmin, async (req, res) => {
+app.post('/admin/quote/:code/settle', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
-  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/quotes');
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/quotes');
   const note = String((req.body && req.body.note) || '').trim().slice(0, 200);
   try {
     const { rows } = await pool.query('SELECT * FROM quotes WHERE code=$1', [code]);
-    if (!rows.length) return res.redirect('/quotes');
+    if (!rows.length) return res.redirect('/admin/quotes');
     const q = rows[0];
 
     /* Derived from the ITEMS, not the stored total column — the same figure the
        customer's page shows. Settling against a stale total would write off the
        wrong number. */
     const owed = balanceOf(q, quoteTotals(q).total);
-    if (owed <= 0) return res.redirect('/quotes');   // nothing to settle
+    if (owed <= 0) return res.redirect('/admin/quotes');   // nothing to settle
 
     await pool.query(
       `UPDATE quotes SET written_off = COALESCE(written_off,0) + $2,
@@ -13525,19 +13369,19 @@ app.post('/quote/:code/settle', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('settle failed:', err.message);
   }
-  res.redirect('/quotes');
+  res.redirect('/admin/quotes');
 });
 
-app.post('/quote/:code/receipt', requireAdmin, async (req, res) => {
+app.post('/admin/quote/:code/receipt', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
-  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/quotes');
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/quotes');
   const to = String((req.body && req.body.to) || req.query.to || '').trim() || null;
   /* A receipt is an email to a customer. A helper whose messages wait for the
      owner has no approval step for this one, so it is the owner's to send. */
   if (actorLevel('customers.message') !== 'on') {
     return res.status(403).send(adminPage('Needs the owner', `${pageHeader('Receipts go through the owner', '')}
       <div class="card"><p>Your customer emails wait for the owner's OK, so sending a receipt is theirs to do.</p>
-      <p style="margin-top:12px"><a class="btn" href="/production/${escEmail(code)}">Back to the job</a></p></div>`, 'quotes'));
+      <p style="margin-top:12px"><a class="btn" href="/admin/production/${escEmail(code)}">Back to the job</a></p></div>`, 'quotes'));
   }
   try {
     const out = await sendReceipt(code, to);
@@ -13545,7 +13389,7 @@ app.post('/quote/:code/receipt', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('receipt failed:', err.message);
   }
-  res.redirect('/quotes');
+  res.redirect('/admin/quotes');
 });
 
 app.get('/q/:code/vcard', async (req, res) => {
@@ -13577,7 +13421,7 @@ app.get('/q/:code/vcard', async (req, res) => {
 
 
 /* One customer, everything about them. Reached from the quotes list. */
-/* The customer LIST. /customer (singular) is the history for one person and
+/* The customer LIST. /admin/customer (singular) is the history for one person and
    needs a ?q= — linking the nav at it sent you straight back to the board,
    which is the bug this replaces.
 
@@ -13640,7 +13484,7 @@ async function fetchPromoCodes() {
   }
 }
 
-app.get('/discounts', requireAdmin, async (req, res) => {
+app.get('/admin/discounts', requireAdmin, async (req, res) => {
   const { codes, system, poolSize, error } = await fetchPromoCodes();
   /* The real customer list, from the same function the Customers page uses, so
      the two can never disagree about who exists. Typing an address by hand is
@@ -13707,17 +13551,17 @@ app.get('/discounts', requireAdmin, async (req, res) => {
         ${live(c) ? `
         <button type="button" class="btn btn-ghost" style="padding:5px 10px;font-size:12.5px"
           onclick="document.getElementById('snd-${escEmail(c.code)}').style.display='table-row'">Send</button>
-        <form method="POST" action="/discounts/off" style="display:inline"
+        <form method="POST" action="/admin/discounts/off" style="display:inline"
               onsubmit="return confirm('Switch off ${escEmail(c.code)}? Anyone who has it will stop being able to use it.')">
           <input type="hidden" name="code" value="${escEmail(c.code)}">
           <button type="submit" class="btn btn-ghost" style="padding:5px 10px;font-size:12.5px">Switch off</button>
         </form>` : `
-        <form method="POST" action="/discounts/on" style="display:inline">
+        <form method="POST" action="/admin/discounts/on" style="display:inline">
           <input type="hidden" name="code" value="${escEmail(c.code)}">
           <button type="submit" class="btn btn-ghost" style="padding:5px 10px;font-size:12.5px">Turn back on</button>
         </form>
         ${!c.uses ? `
-        <form method="POST" action="/discounts/remove" style="display:inline"
+        <form method="POST" action="/admin/discounts/remove" style="display:inline"
               onsubmit="return confirm('Remove ${escEmail(c.code)} completely? It has never been used, so nothing is lost.')">
           <input type="hidden" name="code" value="${escEmail(c.code)}">
           <button type="submit" class="btn btn-ghost" style="padding:5px 10px;font-size:12.5px;color:#b91c1c">Remove</button>
@@ -13726,7 +13570,7 @@ app.get('/discounts', requireAdmin, async (req, res) => {
     ${live(c) ? `
     <tr id="snd-${escEmail(c.code)}" style="display:none;background:#f7f9fc">
       <td colspan="6" style="padding:10px 6px">
-        <form method="POST" action="/discounts/send" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"${
+        <form method="POST" action="/admin/discounts/send" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"${
           c.sent_at ? ` onsubmit="return confirm('${escEmail(c.code)} has already been emailed${
             c.send_count > 1 ? ' ' + c.send_count + ' times' : ''} — last on ${
             escEmail(fmtDate(c.sent_at))}${c.assigned_to ? ' to ' + escEmail(c.assigned_to) : ''}.\n\nSend it again?')"` : ''}>
@@ -13777,7 +13621,7 @@ app.get('/discounts', requireAdmin, async (req, res) => {
 
     <div class="card" style="margin-bottom:16px">
       <b style="color:#0B1F4B" id="jt-code-title">New code</b>
-      <form method="POST" action="/discounts" style="margin-top:10px" id="jt-code-form">
+      <form method="POST" action="/admin/discounts" style="margin-top:10px" id="jt-code-form">
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
           <div style="flex:1 1 150px">
             <label style="font-size:12px">Code</label>
@@ -13934,7 +13778,7 @@ app.get('/discounts', requireAdmin, async (req, res) => {
     </div>`, 'discounts'));
 });
 
-app.post('/discounts', requireAdmin, async (req, res) => {
+app.post('/admin/discounts', requireAdmin, async (req, res) => {
   const b = req.body || {};
   const form = new URLSearchParams();
   form.set('code', String(b.code || '').trim().toUpperCase());
@@ -13960,7 +13804,7 @@ app.post('/discounts', requireAdmin, async (req, res) => {
        percentage must be between 1 and 100" is actionable and "could not save"
        is not. */
     if (!r.ok || d.error) {
-      return res.redirect('/discounts?err=' + encodeURIComponent(d.error || `studio answered ${r.status}`));
+      return res.redirect('/admin/discounts?err=' + encodeURIComponent(d.error || `studio answered ${r.status}`));
     }
     /* Made and sent in one action, because the two are one intention — the
        code exists in order to reach somebody. */
@@ -13968,20 +13812,20 @@ app.post('/discounts', requireAdmin, async (req, res) => {
     if (to && isValidEmail(to)) {
       try {
         await sendDiscountEmail(String(d.code).toUpperCase(), to, '');
-        return res.redirect('/discounts?msg=' +
+        return res.redirect('/admin/discounts?msg=' +
           encodeURIComponent(`${d.code} is live, and sent to ${to}.`));
       } catch (e) {
         /* The code EXISTS — only the email failed. Saying "could not create"
            would send the shop to make it a second time. */
         console.error('discount send-on-create failed:', e.message);
-        return res.redirect('/discounts?err=' + encodeURIComponent(
+        return res.redirect('/admin/discounts?err=' + encodeURIComponent(
           `${d.code} was created, but the email did not send: ${e.message}`));
       }
     }
-    res.redirect('/discounts?msg=' + encodeURIComponent(`${d.code} is live.`));
+    res.redirect('/admin/discounts?msg=' + encodeURIComponent(`${d.code} is live.`));
   } catch (e) {
     console.error('promo save failed:', e.message);
-    res.redirect('/discounts?err=' + encodeURIComponent('Could not reach the studio: ' + e.message));
+    res.redirect('/admin/discounts?err=' + encodeURIComponent('Could not reach the studio: ' + e.message));
   }
 });
 
@@ -14046,16 +13890,16 @@ async function sendDiscountEmail(code, email, extra) {
     return c;
 }
 
-app.post('/discounts/send', requireAdmin, async (req, res) => {
+app.post('/admin/discounts/send', requireAdmin, async (req, res) => {
   const b = req.body || {};
   const code = String(b.code || '').trim().toUpperCase();
   const email = String(b.email || '').trim();
   const extra = String(b.message || '').trim().slice(0, 300);
   if (!/^[A-Z0-9]{3,32}$/.test(code)) {
-    return res.redirect('/discounts?err=' + encodeURIComponent('That code looks wrong.'));
+    return res.redirect('/admin/discounts?err=' + encodeURIComponent('That code looks wrong.'));
   }
   if (!isValidEmail(email)) {
-    return res.redirect('/discounts?err=' + encodeURIComponent('That email address looks wrong.'));
+    return res.redirect('/admin/discounts?err=' + encodeURIComponent('That email address looks wrong.'));
   }
   try {
     /* How many times this has gone out already, read BEFORE sending so the
@@ -14073,14 +13917,14 @@ app.post('/discounts/send', requireAdmin, async (req, res) => {
       f.set('code', code); f.set('sent', '1'); f.set('assigned_to', email.toLowerCase());
       await studioFetch(PROMO_ADMIN(), { method: 'POST', body: f });
     } catch (e) { console.error('discount send stamp failed:', e.message); }
-    res.redirect('/discounts?msg=' + encodeURIComponent(
+    res.redirect('/admin/discounts?msg=' + encodeURIComponent(
       already ? `${code} sent to ${email} again — that is ${already + 1} times now.`
               : `${code} sent to ${email}.`));
   } catch (e) {
     console.error('discount send failed:', e.message);
     /* Said plainly. A silent failure here means the shop believes a customer
        has their code when they do not. */
-    res.redirect('/discounts?err=' + encodeURIComponent('Could not send that email: ' + e.message));
+    res.redirect('/admin/discounts?err=' + encodeURIComponent('Could not send that email: ' + e.message));
   }
 });
 
@@ -14094,22 +13938,22 @@ async function promoAction(req, res, flag, said) {
     const r = await studioFetch(PROMO_ADMIN(), { method: 'POST', body: form });
     const d = await r.json().catch(() => ({}));
     if (!r.ok || d.error) {
-      return res.redirect('/discounts?err=' + encodeURIComponent(d.error || `studio answered ${r.status}`));
+      return res.redirect('/admin/discounts?err=' + encodeURIComponent(d.error || `studio answered ${r.status}`));
     }
-    res.redirect('/discounts?msg=' + encodeURIComponent(said(d)));
+    res.redirect('/admin/discounts?msg=' + encodeURIComponent(said(d)));
   } catch (e) {
     console.error(`promo ${flag} failed:`, e.message);
-    res.redirect('/discounts?err=' + encodeURIComponent('Could not reach the studio: ' + e.message));
+    res.redirect('/admin/discounts?err=' + encodeURIComponent('Could not reach the studio: ' + e.message));
   }
 }
 
-app.post('/discounts/off', requireAdmin, (req, res) =>
+app.post('/admin/discounts/off', requireAdmin, (req, res) =>
   promoAction(req, res, 'delete', (d) => `${d.deactivated} switched off.`));
 
-app.post('/discounts/on', requireAdmin, (req, res) =>
+app.post('/admin/discounts/on', requireAdmin, (req, res) =>
   promoAction(req, res, 'reactivate', (d) => `${d.reactivated} is live again.`));
 
-app.post('/discounts/remove', requireAdmin, (req, res) =>
+app.post('/admin/discounts/remove', requireAdmin, (req, res) =>
   promoAction(req, res, 'remove', (d) => `${d.removed} removed.`));
 
 /* Everyone the shop knows, from both halves of it: quotes live here, studio
@@ -14157,7 +14001,7 @@ async function allCustomers() {
   return { people: [...byEmail.values()].sort((a, b) => Number(b.spent) - Number(a.spent)), studio };
 }
 
-app.get('/customers', requireAdmin, async (_req, res) => {
+app.get('/admin/customers', requireAdmin, async (_req, res) => {
   try {
     const { people, studio } = await allCustomers();
     const chip = { quotes: ['Quotes', '#eef2fd', '#1848B8'],
@@ -14168,7 +14012,7 @@ app.get('/customers', requireAdmin, async (_req, res) => {
       const [label, bg, fg] = chip[c.source];
       return `<tr>
         <td style="padding:9px 6px;border-bottom:1px solid #eef1f8">
-          <a href="/customer?q=${encodeURIComponent(c.email)}" style="color:#1848B8;font-weight:600;text-decoration:none">${
+          <a href="/admin/customer?q=${encodeURIComponent(c.email)}" style="color:#1848B8;font-weight:600;text-decoration:none">${
             escEmail(c.name || c.email)}</a>
           <div class="muted" style="font-size:12.5px">${escEmail(c.email)}</div></td>
         <td style="padding:9px 6px;border-bottom:1px solid #eef1f8">
@@ -14200,16 +14044,16 @@ app.get('/customers', requireAdmin, async (_req, res) => {
   }
 });
 
-app.get('/customer', requireAdmin, async (req, res) => {
+app.get('/admin/customer', requireAdmin, async (req, res) => {
   const q = String(req.query.q || '').trim();
-  if (!q) return res.redirect('/quotes');
+  if (!q) return res.redirect('/admin/quotes');
   try {
     const h = await customerHistory(q);
     if (!h) {
       return res.send(quotePage('Not found', `
         <div class="card"><h1>No history for that customer</h1>
         <p class="muted" style="margin-top:8px">${escEmail(q)}</p>
-        <p style="margin-top:12px"><a class="btn btn-ghost" href="/quotes">All quotes</a></p></div>`));
+        <p style="margin-top:12px"><a class="btn btn-ghost" href="/admin/quotes">All quotes</a></p></div>`));
     }
 
     const years = Object.keys(h.byYear).sort().reverse();
@@ -14322,7 +14166,7 @@ app.get('/customer', requireAdmin, async (req, res) => {
           <thead><tr><th>Date</th><th>Quote</th><th>How</th><th class="num">Amount</th></tr></thead>
           <tbody>${payHistory.map(pmt => `<tr>
             <td class="muted" style="white-space:nowrap">${dayShort(pmt.created_at)}</td>
-            <td><a href="/production/${escEmail(pmt.quote_code)}" style="color:#1848B8">${escEmail(pmt.quote_code)}</a></td>
+            <td><a href="/admin/production/${escEmail(pmt.quote_code)}" style="color:#1848B8">${escEmail(pmt.quote_code)}</a></td>
             <td class="muted">${escEmail(pmt.method)}${pmt.kind !== 'payment' ? ` · <i>${escEmail(pmt.kind)}</i>` : ''}${
               Number(pmt.fee) > 0 ? ` · fee ${money(pmt.fee)}` : ''}</td>
             <td class="num" style="color:${Number(pmt.amount) < 0 ? '#b91c1c' : '#111827'}">${money(pmt.amount)}</td>
@@ -14338,8 +14182,8 @@ app.get('/customer', requireAdmin, async (req, res) => {
         </table>
       </div>
 
-      <p><a class="btn btn-ghost" href="/quotes">← All quotes</a>
-         <a class="btn btn-ghost" href="/quote/new">New quote</a></p>
+      <p><a class="btn btn-ghost" href="/admin/quotes">← All quotes</a>
+         <a class="btn btn-ghost" href="/admin/quote/new">New quote</a></p>
     `, 'customers'));
   } catch (err) {
     console.error('customer page failed:', err.message);
@@ -14430,13 +14274,13 @@ async function moveJobToStage(code, target) {
   return after;
 }
 
-app.post('/quote/:code/stage', requireAdmin, async (req, res) => {
+app.post('/admin/quote/:code/stage', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   const asked = String((req.body && req.body.stage) || '');
   const target = JOB_STAGES.findIndex(s => s.key === (OLD_STAGE_KEYS[asked] || asked));
   const asJson = String((req.body && req.body.json) || '') === '1';
   if (!QUOTE_CODE_RE.test(code) || target < 0) {
-    return asJson ? res.status(400).json({ ok: false }) : res.redirect('/production');
+    return asJson ? res.status(400).json({ ok: false }) : res.redirect('/admin/production');
   }
   try {
     const job = await moveJobToStage(code, target);
@@ -14450,10 +14294,10 @@ app.post('/quote/:code/stage', requireAdmin, async (req, res) => {
     console.error('stage move failed:', err.message);
     if (asJson) return res.status(500).json({ ok: false });
   }
-  res.redirect(String((req.body && req.body.back) || '') === 'job' ? `/production/${code}` : '/production');
+  res.redirect(String((req.body && req.body.back) || '') === 'job' ? `/admin/production/${code}` : '/admin/production');
 });
 
-/* /quotes is the money board and /production is the work board — the same
+/* /admin/quotes is the money board and /admin/production is the work board — the same
    query and sort, different panels. One card carrying money, production,
    costing and history at once was unreadable; splitting the surfaces is what
    makes each one scannable. */
@@ -14511,10 +14355,10 @@ function studioExemptChip(o) {
   const x = String(o.tax_exempt || '');
   if (x === 'pending') {
     /* Unpaid, it is not a sale yet: the certificate only reaches
-       /certificates once the order is paid, so the chip would send the shop
+       /admin/certificates once the order is paid, so the chip would send the shop
        to a page with nothing on it. */
     if (!(Number(o.paid) > 0)) return '';
-    return `<a class="chip" href="/certificates?status=pending"
+    return `<a class="chip" href="/admin/certificates?status=pending"
       style="background:#fef2f2;color:#b91c1c;text-decoration:none">Tax certificate to check &mdash; don&rsquo;t produce</a>`;
   }
   if (x === 'refused') {
@@ -14575,7 +14419,7 @@ function studioOrdersSection(feed, { heading = true, disputes = null } = {}) {
    'production', and anything else returns to the money board as before. */
 function cancelOrderForm(q, back = '') {
   return `
-        <form id="cx-${q.code}" method="POST" action="/quote/${q.code}/cancel"
+        <form id="cx-${q.code}" method="POST" action="/admin/quote/${q.code}/cancel"
               style="display:none;margin-top:10px;background:#fef4f4;border:1px solid #f3c8c8;border-radius:10px;padding:12px"
               onsubmit="return confirm('Cancel ${q.code}? It leaves the board and all reminders stop. You can restore it later.')">
           ${back ? `<input type="hidden" name="back" value="${escEmail(back)}">` : ''}
@@ -14755,11 +14599,11 @@ async function renderBoard(VIEW, req, res) {
         ? quoteMessages(q).accepted.replace(/^Got it[^—]*—\s*/, '')
         : quoteMessages(q).followup) : '';
       const [bg, fg] = (colour[st] || colour.sent).split('|');
-      /* The id is what the dashboard links to (/quotes#q-CODE). */
+      /* The id is what the dashboard links to (/admin/quotes#q-CODE). */
       return `<div class="card" id="q-${q.code}">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
           <div>
-            <a href="/customer?q=${encodeURIComponent(q.email || q.phone || '')}"
+            <a href="/admin/customer?q=${encodeURIComponent(q.email || q.phone || '')}"
                style="color:#0B1F4B;text-decoration:none"><b>${escEmail(q.name || q.phone || q.email || '—')}</b></a>
             <div class="muted">${escEmail(quoteSummary(q.items))} &middot; ${fmtDate(q.created_at)}</div>
           </div>
@@ -14783,7 +14627,7 @@ async function renderBoard(VIEW, req, res) {
             <div style="font-weight:700;color:#1848B8;font-size:13px">✏️ Change requested</div>
             <div class="muted" style="font-size:12.5px;margin-top:3px">"${escEmail(q.change_request)}"</div>
             <a class="btn" style="padding:8px 18px;font-size:13px;margin-top:8px;display:inline-block"
-               href="/quote/${q.code}/edit">Edit the quote →</a>
+               href="/admin/quote/${q.code}/edit">Edit the quote →</a>
           </div>` : ''}
         ${needsText ? `
           <div style="margin-top:10px;background:#fff8e6;border:1px solid #f3dfa8;border-radius:10px;padding:10px 12px">
@@ -14797,14 +14641,14 @@ async function renderBoard(VIEW, req, res) {
             </div>
           </div>` : ''}
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
-          <a class="btn btn-ghost" style="padding:8px 16px;font-size:13px" href="/quote/${q.code}/edit">Edit</a>
+          <a class="btn btn-ghost" style="padding:8px 16px;font-size:13px" href="/admin/quote/${q.code}/edit">Edit</a>
           <a class="btn btn-ghost" style="padding:8px 16px;font-size:13px" href="/q/${q.code}" target="_blank" rel="noopener">View as customer</a>
           ${outstanding > 0 ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
              onclick="document.getElementById('mp-${q.code}').style.display='block';var a=document.getElementById('ap-${q.code}');if(a)a.style.display='block';this.style.display='none'">Record a payment</button>` : ''}
           ${outstanding > 0 ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
              onclick="document.getElementById('st-${q.code}').style.display='block';this.style.display='none'">Settle &mdash; no more owed</button>` : ''}
           ${q.cancelled_at ? `
-          <form method="POST" action="/quote/${q.code}/uncancel" style="display:inline"
+          <form method="POST" action="/admin/quote/${q.code}/uncancel" style="display:inline"
                 onsubmit="return confirm('Put ${q.code} back on the board?')">
             <button type="submit" class="btn btn-ghost" style="padding:8px 16px;font-size:13px">Restore</button>
           </form>` : `
@@ -14813,7 +14657,7 @@ async function renderBoard(VIEW, req, res) {
         </div>
         ${q.cancelled_at ? '' : cancelOrderForm(q)}
         ${outstanding > 0 ? `
-        <form id="st-${q.code}" method="POST" action="/quote/${q.code}/settle"
+        <form id="st-${q.code}" method="POST" action="/admin/quote/${q.code}/settle"
               style="display:none;margin-top:10px;background:#fffbf2;border:1px solid #f0d9a8;border-radius:10px;padding:12px"
               onsubmit="return confirm('Write off ${money(outstanding)} on ${q.code}? The job stays paid at ${money(q.paid_amount || 0)}.')">
           <div style="font-weight:700;color:#b45309;margin-bottom:4px">Write off ${money(outstanding)}</div>
@@ -14831,7 +14675,7 @@ async function renderBoard(VIEW, req, res) {
             quote's checkout, and are on no quote yet. If this payment is one of them, apply it: recording it again
             below would count the same money twice.</div>
           ${stripeUnapplied.map((u) => `
-          <form method="POST" action="/unlinked/${u.id}/apply"
+          <form method="POST" action="/admin/unlinked/${u.id}/apply"
                 style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0 0"
                 onsubmit="if(!confirm('Apply this ${money(u.amount)} Stripe payment to ${q.code}?'))return false;var b=this.querySelector('button[type=submit]');setTimeout(function(){b.disabled=true},0);return true">
             <input type="hidden" name="quote" value="${q.code}">
@@ -14843,7 +14687,7 @@ async function renderBoard(VIEW, req, res) {
           </form>`).join('')}
         </div>` : ''}
         ${outstanding > 0 ? `
-        <form id="mp-${q.code}" method="POST" action="/quote/${q.code}/mark-paid"
+        <form id="mp-${q.code}" method="POST" action="/admin/quote/${q.code}/mark-paid"
               style="display:none;margin-top:10px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px">
           <div class="muted" style="font-size:12.5px;margin-bottom:8px">
             Money received outside the card checkout — Zelle, cash, bank transfer.</div>
@@ -14892,7 +14736,7 @@ async function renderBoard(VIEW, req, res) {
                <span class="step-label" style="color:${s.done ? '#6b7280' : '#111827'};${s.done ? 'text-decoration:line-through' : 'font-weight:600'}">${s.label}</span>
                <span class="step-hint">${escEmail(s.hint)}</span>`;
             return s.manual
-              ? `<form method="POST" action="/quote/${q.code}/step" style="margin:0" data-stepform>
+              ? `<form method="POST" action="/admin/quote/${q.code}/step" style="margin:0" data-stepform>
                    <input type="hidden" name="step" value="${s.key}">
                    <input type="hidden" name="clear" value="${s.done ? '1' : ''}">
                    <input type="hidden" name="json" value="" data-jsonflag>
@@ -14917,7 +14761,7 @@ async function renderBoard(VIEW, req, res) {
             <details style="margin-top:6px">
               <summary style="cursor:pointer;color:#1848B8;font-size:12.5px">Checklist</summary>
               <div style="margin-top:6px;font-size:12.5px">${rows}</div>
-              <form method="POST" action="/quote/${q.code}/shipping"
+              <form method="POST" action="/admin/quote/${q.code}/shipping"
                     style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px;border-top:1px solid #e3e8f2;padding-top:8px">
                 <select name="ship_method" style="flex:0 0 118px;padding:6px;font-size:12px">
                   ${['', 'pickup', 'ground', 'expedited'].map(v =>
@@ -14946,7 +14790,7 @@ async function renderBoard(VIEW, req, res) {
                 ? `Margin <b style="color:${thin ? '#b91c1c' : good ? '#047857' : '#b45309'}">${money(mg.profit)} (${mg.pct}%)</b>`
                 : '<span style="color:#b45309">Costs not entered</span>'}
             </summary>
-            <form method="POST" action="/quote/${q.code}/costs" data-costform="${q.code}"
+            <form method="POST" action="/admin/quote/${q.code}/costs" data-costform="${q.code}"
                   style="background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:10px;margin-top:6px">
               ${(() => {
                 const list = (() => {
@@ -15046,10 +14890,10 @@ async function renderBoard(VIEW, req, res) {
           }).join('');
           const corrections = ps.filter(p => p.kind !== 'payment').length;
           return `<details style="margin-top:10px">
-            <summary style="cursor:pointer;color:#1848B8;font-size:12.5px">${ps.length} payment${ps.length===1?'':'s'}${corrections?` · ${corrections} correction${corrections===1?'':'s'}`:''} · <a href="/customer?q=${encodeURIComponent(q.email || q.phone || '')}" style="color:#1848B8">full history</a></summary>
+            <summary style="cursor:pointer;color:#1848B8;font-size:12.5px">${ps.length} payment${ps.length===1?'':'s'}${corrections?` · ${corrections} correction${corrections===1?'':'s'}`:''} · <a href="/admin/customer?q=${encodeURIComponent(q.email || q.phone || '')}" style="color:#1848B8">full history</a></summary>
             <div style="background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:10px;margin-top:6px;font-size:12.5px">
               ${lines}
-              <form method="POST" action="/quote/${q.code}/correct-payment"
+              <form method="POST" action="/admin/quote/${q.code}/correct-payment"
                     style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:10px;border-top:1px solid #e3e8f2;padding-top:10px">
                 <span class="muted" style="font-size:12px">Correct the total to</span>
                 <input name="set" type="number" step="0.01" inputmode="decimal"
@@ -15064,7 +14908,7 @@ async function renderBoard(VIEW, req, res) {
         </div>
         <div class="muted" style="margin-top:8px;font-size:12px">/q/${q.code}
         ${q.phone ? ` &middot; <a class="muted" href="tel:${escEmail(q.phone)}">${escEmail(q.phone)}</a>` : ''}
-        ${q.email ? ` &middot; <a class="muted" href="#" onclick="if(confirm('Email a receipt to ${escEmail(q.email)}?')){var f=document.createElement('form');f.method='POST';f.action='/quote/${q.code}/receipt';document.body.appendChild(f);f.submit();}return false;">email receipt</a>` : ''}</div>
+        ${q.email ? ` &middot; <a class="muted" href="#" onclick="if(confirm('Email a receipt to ${escEmail(q.email)}?')){var f=document.createElement('form');f.method='POST';f.action='/admin/quote/${q.code}/receipt';document.body.appendChild(f);f.submit();}return false;">email receipt</a>` : ''}</div>
       </div>`;
     };
 
@@ -15073,7 +14917,7 @@ async function renderBoard(VIEW, req, res) {
        quotes still waiting for an answer and the open-quote list was never
        actually a list of open quotes.
 
-       Grouped rather than moved to /orders: that route is the DESIGNER's online
+       Grouped rather than moved to /admin/orders: that route is the DESIGNER's online
        store orders from design.jtees.net, a different thing entirely, and
        merging the two would put shop quotes and storefront orders in one list
        that means nothing.
@@ -15142,7 +14986,7 @@ async function renderBoard(VIEW, req, res) {
         </div>` : ''}
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
           <a class="btn" style="padding:8px 16px;font-size:13px"
-             href="/quote/new?email=${encodeURIComponent(c.email || '')}">Quote them</a>
+             href="/admin/quote/new?email=${encodeURIComponent(c.email || '')}">Quote them</a>
           ${c.email ? `<a class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
              href="mailto:${escEmail(c.email)}?subject=${encodeURIComponent('Your June’s Tees cart')}">Email</a>` : ''}
           ${c.restore_url ? `<a class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
@@ -15150,7 +14994,7 @@ async function renderBoard(VIEW, req, res) {
           <button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
              onclick="document.getElementById('dc-${escEmail(c.email || '').replace(/[^a-z0-9]/gi, '')}').style.display='block';this.style.display='none'">Done with it</button>
         </div>
-        <form id="dc-${escEmail(c.email || '').replace(/[^a-z0-9]/gi, '')}" method="POST" action="/cart/dismiss"
+        <form id="dc-${escEmail(c.email || '').replace(/[^a-z0-9]/gi, '')}" method="POST" action="/admin/cart/dismiss"
               style="display:none;margin-top:10px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px">
           <input type="hidden" name="email" value="${escEmail(c.email || '')}">
           <input type="hidden" name="updated" value="${escEmail(String(c.updated || ''))}">
@@ -15166,7 +15010,7 @@ async function renderBoard(VIEW, req, res) {
     /* A website enquiry, as a card you can act on. The two actions are the two
        real outcomes: quote it, or let it go on the record. Anything else leaves
        it sitting there forever, which is how 21 of these went cold. */
-    const leadCard = (l) => leadCardHtml(l, { back: '/quotes' });
+    const leadCard = (l) => leadCardHtml(l, { back: '/admin/quotes' });
 
     /* Collapsible, and remembered per browser. A section folded shut has to STAY
        shut across reloads or folding it is just a gesture you repeat all day.
@@ -15217,7 +15061,7 @@ async function renderBoard(VIEW, req, res) {
       (Date.now() - new Date(l.created_at)) / 86400000 > 30);
 
     const clearOld = staleLeads.length < 3 ? '' : `
-      <form method="POST" action="/leads/dismiss-old" style="margin-left:auto"
+      <form method="POST" action="/admin/leads/dismiss-old" style="margin-left:auto"
             onsubmit="return confirm('Clear ${staleLeads.length} enquir${
               staleLeads.length === 1 ? 'y' : 'ies'} older than 30 days? They are kept and stay searchable.')">
         <button type="submit" class="btn btn-ghost" style="padding:5px 12px;font-size:12.5px">
@@ -15307,10 +15151,10 @@ async function renderBoard(VIEW, req, res) {
           (failed ? `<div class="card" style="margin-bottom:12px;background:#fdecea;color:#b91c1c">${escEmail(failed)}</div>` : '');
       })()}
       <p style="margin-bottom:14px">
-        <a class="btn" href="/quote/new">New quote</a>
-        <a class="btn btn-ghost" href="/quotes" style="margin-left:8px${VIEW==='money'?';font-weight:800':''}">Money</a>
-        <a class="btn btn-ghost" href="/production" style="margin-left:6px${VIEW==='work'?';font-weight:800':''}">Production</a>
-        <a class="btn btn-ghost" href="/orders" style="margin-left:6px">All orders${
+        <a class="btn" href="/admin/quote/new">New quote</a>
+        <a class="btn btn-ghost" href="/admin/quotes" style="margin-left:8px${VIEW==='money'?';font-weight:800':''}">Money</a>
+        <a class="btn btn-ghost" href="/admin/production" style="margin-left:6px${VIEW==='work'?';font-weight:800':''}">Production</a>
+        <a class="btn btn-ghost" href="/admin/orders" style="margin-left:6px">All orders${
           gCancelled.length ? `, incl. ${gCancelled.length} cancelled` : ''} &rarr;</a></p>
       <!-- Books moved to the main nav; these two stay because they are the two
            views of THIS board, not separate destinations. -->
@@ -15391,7 +15235,7 @@ async function renderBoard(VIEW, req, res) {
               <td style="padding:7px 0;text-align:right;color:#6b7280;font-variant-numeric:tabular-nums">${m.remitted > 0 ? money(m.remitted) : '—'}</td>
               <td style="padding:7px 0;text-align:right;font-weight:700;font-variant-numeric:tabular-nums;color:${m.outstanding > 0 ? '#b45309' : '#047857'}">${m.outstanding > 0 ? money(m.outstanding) : 'clear'}</td>
               <td style="padding:7px 0;text-align:right">
-                ${m.outstanding > 0 ? `<form method="POST" action="/tax/remit" style="display:inline-flex;gap:4px;align-items:center"
+                ${m.outstanding > 0 ? `<form method="POST" action="/admin/tax/remit" style="display:inline-flex;gap:4px;align-items:center"
                      onsubmit="return confirm('Record ${money(m.outstanding)} remitted for ${periodLabel(m.period)}?')">
                   <input type="hidden" name="period" value="${m.period}">
                   <input type="hidden" name="amount" value="${Number(m.outstanding).toFixed(2)}">
@@ -15408,7 +15252,7 @@ async function renderBoard(VIEW, req, res) {
             Corrections and refunds take their tax back out automatically.
             You are emailed on the 1st, and again on the 15th and 19th if a period is still open.
             Every sale runs through this system, so this is the complete figure for the period.
-            <a href="/tax.csv" style="color:#1848B8">Download CSV</a>.</div>
+            <a href="/admin/tax.csv" style="color:#1848B8">Download CSV</a>.</div>
         </details>
       </div>`}
 
@@ -15455,7 +15299,7 @@ async function renderBoard(VIEW, req, res) {
                 ? JOB_STAGES[c.i + 1] : JOB_STAGES[c.i];
               return `<article class="kcard${risk ? ' kcard-risk' : ''}">
                 <div class="kcard-top">
-                  <a href="/customer?q=${encodeURIComponent(q.email || q.phone || '')}" class="kcard-name">${escEmail(q.name || q.code)}</a>
+                  <a href="/admin/customer?q=${encodeURIComponent(q.email || q.phone || '')}" class="kcard-name">${escEmail(q.name || q.code)}</a>
                   ${due ? `<span class="kcard-due">${due}</span>` : ''}
                 </div>
                 <div class="kcard-sub">${escEmail(q.code)} · ${money(q.total)}${
@@ -15463,18 +15307,18 @@ async function renderBoard(VIEW, req, res) {
                 ${risk ? `<div class="kcard-risk-note">⚠ ${escEmail(q._sched.risks[0].label)} was due ${dayShort(q._sched.risks[0].by)}</div>` : ''}
                 ${disputes.byQuote.has(q.code) ? `<div style="margin-top:4px">${disputeChip(disputes.byQuote.get(q.code))}</div>` : ''}
                 ${act ? `
-                <form method="POST" action="/quote/${q.code}/stage" data-stageform class="knext">
+                <form method="POST" action="/admin/quote/${q.code}/stage" data-stageform class="knext">
                   <input type="hidden" name="stage" value="${act.key}">
                   <input type="hidden" name="json" value="" data-jsonflag>
                   <button type="submit" class="kbtn kbtn-next" title="${escEmail(act.hint)}">
                     ✓ ${escEmail(act.label)}</button>
                 </form>` : ''}
                 <div class="kmove">
-                  ${c.i > 0 ? `<form method="POST" action="/quote/${q.code}/stage" data-stageform>
+                  ${c.i > 0 ? `<form method="POST" action="/admin/quote/${q.code}/stage" data-stageform>
                     <input type="hidden" name="stage" value="${JOB_STAGES[c.i-1].key}">
                     <input type="hidden" name="json" value="" data-jsonflag>
                     <button type="submit" class="kbtn kbtn-sm" title="Back to ${JOB_STAGES[c.i-1].label}">←</button></form>` : '<span></span>'}
-                  <a class="kbtn kbtn-link" href="/production/${q.code}">details</a>
+                  <a class="kbtn kbtn-link" href="/admin/production/${q.code}">details</a>
                 </div>
               </article>`;
             }).join('') || '<div class="kempty">—</div>'}
@@ -15663,9 +15507,9 @@ async function renderBoard(VIEW, req, res) {
 /* Set the working date when the customer would not give one — or record that
    there genuinely is not a deadline, which is a real answer and should stop the
    checklist asking. */
-app.post('/quote/:code/target', requireAdmin, async (req, res) => {
+app.post('/admin/quote/:code/target', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
-  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/production');
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/production');
   const b = req.body || {};
   const flexible = String(b.flexible || '') === '1';
   const date = String(b.target_date || '').trim() || null;
@@ -15677,17 +15521,17 @@ app.post('/quote/:code/target', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('target date failed:', err.message);
   }
-  res.redirect('/production/' + code);
+  res.redirect('/admin/production/' + code);
 });
 
 /* One job in full: the checklist detail behind a kanban card. The board is for
    moving work along; this is for the specifics of a single job. */
-app.get('/production/:code', requireAdmin, async (req, res) => {
+app.get('/admin/production/:code', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
-  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/production');
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/production');
   try {
     const { rows } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
-    if (!rows.length) return res.redirect('/production');
+    if (!rows.length) return res.redirect('/admin/production');
     const q = rows[0];
     const cl = quoteChecklist(q);
     const sched = quoteSchedule(q);
@@ -15698,7 +15542,7 @@ app.get('/production/:code', requireAdmin, async (req, res) => {
         <span class="step-label" style="color:${st.done ? '#6b7280' : '#111827'};${st.done ? 'text-decoration:line-through' : 'font-weight:600'}">${st.label}</span>
         <span class="step-hint">${escEmail(st.hint)}</span>`;
       return st.manual
-        ? `<form method="POST" action="/quote/${q.code}/step" style="margin:0" data-stepform>
+        ? `<form method="POST" action="/admin/quote/${q.code}/step" style="margin:0" data-stepform>
              <input type="hidden" name="step" value="${st.key}">
              <input type="hidden" name="clear" value="${st.done ? '1' : ''}">
              <input type="hidden" name="json" value="" data-jsonflag>
@@ -15714,8 +15558,8 @@ app.get('/production/:code', requireAdmin, async (req, res) => {
     res.send(adminPage(`${q.code} — production`, `
       <h1>${escEmail(q.name || q.code)}</h1>
       <div class="sub">${escEmail(q.code)} · ${money(q.total)} ·
-        <a href="/production" style="color:#1848B8">back to the board</a> ·
-        <a href="/customer?q=${encodeURIComponent(q.email || q.phone || '')}" style="color:#1848B8">customer</a></div>
+        <a href="/admin/production" style="color:#1848B8">back to the board</a> ·
+        <a href="/admin/customer?q=${encodeURIComponent(q.email || q.phone || '')}" style="color:#1848B8">customer</a></div>
 
       <div class="card" style="margin-top:12px">
         ${(() => {
@@ -15736,19 +15580,19 @@ app.get('/production/:code', requireAdmin, async (req, res) => {
                       : bit(total > 0, 'Paid in full', 'Nothing invoiced', false)}
             <span style="color:#dfe5ef">·</span>
             ${costed ? bit(true, 'Costs in', '', false)
-                     : `<a href="/quotes" style="color:#b45309">Costs not entered</a>`}
+                     : `<a href="/admin/quotes" style="color:#b45309">Costs not entered</a>`}
           </div>`;
         })()}
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
           ${JOB_STAGES.map((st, i) => `
-            <form method="POST" action="/quote/${q.code}/stage" style="margin:0">
+            <form method="POST" action="/admin/quote/${q.code}/stage" style="margin:0">
               <input type="hidden" name="stage" value="${st.key}"><input type="hidden" name="back" value="job">
               <button type="submit" class="kbtn${i === si ? ' kbtn-go' : ''}"
                       title="${escEmail(st.hint)}">${st.label}</button>
             </form>`).join('')}
         </div>
         ${!q.needed_by ? `
-        <form method="POST" action="/quote/${q.code}/target"
+        <form method="POST" action="/admin/quote/${q.code}/target"
               style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;background:#fff8ed;
                      border:1px solid #fde3c0;border-radius:10px;padding:9px 11px;margin-bottom:10px">
           <span style="font-size:12.5px;color:#8a5a00;flex:1 1 100%">
@@ -15826,7 +15670,7 @@ app.get('/production/:code', requireAdmin, async (req, res) => {
       </script>`, 'production'));
   } catch (err) {
     console.error('job detail failed:', err.message);
-    res.redirect('/production');
+    res.redirect('/admin/production');
   }
 });
 
@@ -15841,7 +15685,7 @@ async function jobCertificateCard(q, query = {}) {
   const reason = TAXCERT.exemptReasonOf(q);
   const needs = TAXCERT.quoteNeedsCertificate(q);
   const locked = needs && TAXCERT.quotePayLocked(q, cert);
-  const back = `/production/${q.code}`;
+  const back = `/admin/production/${q.code}`;
   const exp = cert ? TAXCERT.isoDay(cert.expires_on) : '';
   return `
     <div class="card" id="certificate" style="margin-top:14px">
@@ -15850,17 +15694,17 @@ async function jobCertificateCard(q, query = {}) {
       <div class="muted" style="font-size:13px">No Illinois tax on this quote: ${
         reason ? escEmail(TAXCERT.EXEMPT_REASONS[reason].label) : 'no reason given yet'}${
         q.tax_exempt_ref ? ` &middot; ${escEmail(q.tax_exempt_ref)}` : ''}.
-        ${!reason ? `<a href="/quote/${escEmail(q.code)}/edit">Say why</a>.` : ''}</div>
+        ${!reason ? `<a href="/admin/quote/${escEmail(q.code)}/edit">Say why</a>.` : ''}</div>
       ${cert ? `
       <div style="margin-top:8px;font-size:13.5px"><b>${escEmail(TAXCERT.certificateLabel(cert))}</b>${
         exp ? ` &middot; expires ${escEmail(exp)}` : ''} &middot;
-        <a href="/certificates/${cert.id}/file" target="_blank" rel="noopener">open it</a></div>
+        <a href="/admin/certificates/${cert.id}/file" target="_blank" rel="noopener">open it</a></div>
       ${cert.status === 'rejected' && cert.review_note ? `<div class="muted" style="font-size:12.5px;margin-top:4px">Refused: ${escEmail(cert.review_note)}</div>` : ''}
       ${certificateReviewForms(cert, back)}` : ''}
       ${locked ? `
       <p class="muted" style="font-size:12.5px;margin-top:10px">Their quote page asks for ${
         cert ? 'a new one' : 'it'} before they can pay. Already have it? Attach it here; it counts as approved.</p>
-      ${certificateFormHtml({ action: `/quote/${q.code}/certificate`, holder: q.name || '', button: 'Attach certificate',
+      ${certificateFormHtml({ action: `/admin/quote/${q.code}/certificate`, holder: q.name || '', button: 'Attach certificate',
         kind: TAXCERT.CERT_KINDS[reason] ? reason : 'e_number' })}${CERT_UPLOAD_JS}` : ''}
     </div>`;
 }
@@ -15957,7 +15801,7 @@ async function jobMessagesCard(q, query) {
       ${sent ? `<div class="ok">Sent by ${sent}. It is in the list below.</div>` : ''}
       ${String(query.sent) === 'held' ? `<div class="ok">Saved for the owner to approve. It goes out when they send it.</div>` : ''}
       ${failed ? `<div class="warn">${escEmail(failed)}</div>` : ''}
-      <form method="POST" action="/quote/${code}/message" data-msgform style="margin:0 0 12px">
+      <form method="POST" action="/admin/quote/${code}/message" data-msgform style="margin:0 0 12px">
         <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px">
           ${radio('email', 'Email', emailWhyNot, true)}
           ${radio('text', 'Text', textWhyNot, !!emailWhyNot)}
@@ -15997,7 +15841,7 @@ async function jobMessagesCard(q, query) {
            is text the shop wrote, and it goes into a textarea as text. */
         var kq = f.querySelector('[data-kbq]'), kl = f.querySelector('[data-kblist]'), kt;
         function kbLoad(){
-          fetch('/api/playbook/replies?q=' + encodeURIComponent(kq.value || ''), { credentials: 'same-origin' })
+          fetch('/admin/api/playbook/replies?q=' + encodeURIComponent(kq.value || ''), { credentials: 'same-origin' })
             .then(function(r){ return r.ok ? r.json() : []; }).then(function(list){
               kl.textContent = '';
               if (!list.length) { kl.textContent = 'No replies match.'; return; }
@@ -16075,14 +15919,14 @@ async function sendJobMessage({ code, channel, subject, text }) {
   }
 }
 
-app.post('/quote/:code/message', requireAdmin, async (req, res) => {
+app.post('/admin/quote/:code/message', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
-  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/production');
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/production');
   const b = req.body || {};
   const channel = b.channel === 'text' ? 'text' : 'email';
   const text = String(b.body || '').replace(/\r\n?/g, '\n').trim();
   const subject = String(b.subject || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 150) || `About your order ${code}`;
-  const answer = (key, value) => res.redirect(`/production/${code}?${key}=${encodeURIComponent(value)}#messages`);
+  const answer = (key, value) => res.redirect(`/admin/production/${code}?${key}=${encodeURIComponent(value)}#messages`);
   if (!text) return answer('msg_err', 'empty');
   if (text.length > (channel === 'text' ? 300 : 5000)) return answer('msg_err', 'too-long');
 
@@ -16106,12 +15950,12 @@ app.post('/quote/:code/message', requireAdmin, async (req, res) => {
   }
 
   const out = await sendJobMessage({ code, channel, subject, text });
-  if (out === 'no-quote') return res.redirect('/production');
+  if (out === 'no-quote') return res.redirect('/admin/production');
   return out === 'sent' ? answer('sent', channel) : answer('msg_err', out);
 });
 
-app.get('/quotes',     requireAdmin, (req, res) => renderBoard('money', req, res));
-app.get('/production', requireAdmin, (req, res) => renderBoard('work',  req, res));
+app.get('/admin/quotes',     requireAdmin, (req, res) => renderBoard('money', req, res));
+app.get('/admin/production', requireAdmin, (req, res) => renderBoard('work',  req, res));
 
 /* ══ Leads ══════════════════════════════════════════════════════════════════
    Every enquiry, from every door: the website form, an embroidery request, and
@@ -16178,7 +16022,7 @@ function ageInWords(d) {
 /** One enquiry as a card. A new one carries the three ways to deal with it;
  *  an answered one says how it was answered. `back` is the page the dismiss
  *  buttons return to. */
-function leadCardHtml(l, { back = '/quotes' } = {}) {
+function leadCardHtml(l, { back = '/admin/quotes' } = {}) {
   const [srcLabel, srcTone] = LEAD_SOURCES[l.source] || LEAD_SOURCES.form;
   const status = l.lead_status || 'new';
   const chat = l.source === 'chat' || l.source === 'offline';
@@ -16210,28 +16054,28 @@ function leadCardHtml(l, { back = '/quotes' } = {}) {
                style="width:88px;height:88px;object-fit:cover;border-radius:8px;border:1px solid #e3e8f2"></a></div>` : ''}
         ${status === 'quoted' ? `
         <div style="margin-top:12px"><a class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
-           href="/quote/${escEmail(l.quote_code)}/edit">Open quote ${escEmail(l.quote_code)} &rarr;</a></div>`
+           href="/admin/quote/${escEmail(l.quote_code)}/edit">Open quote ${escEmail(l.quote_code)} &rarr;</a></div>`
         : status === 'dismissed' ? `
         <div class="muted" style="margin-top:10px;font-size:12.5px">Let go${
           l.dismiss_reason ? ': ' + escEmail(l.dismiss_reason) : ''} &middot;
-          <a href="/quote/new?lead=${l.id}">quote it anyway</a></div>`
+          <a href="/admin/quote/new?lead=${l.id}">quote it anyway</a></div>`
         : `
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
-          <a class="btn" style="padding:8px 16px;font-size:13px" href="/quote/new?lead=${l.id}">Create quote</a>
+          <a class="btn" style="padding:8px 16px;font-size:13px" href="/admin/quote/new?lead=${l.id}">Create quote</a>
           ${/* Two different outcomes, deliberately not one button.
                 "Not a job" is a judgement about the ENQUIRY — spam, wrong fit,
                 a tyre-kicker. "Too late" is a fact about TIME: it was a real
                 job and the window closed. Filing the second under the first
                 loses the only number that says the shop is leaving money on the
                 table, and it is untrue about the customer. */ ''}
-          <form method="POST" action="/lead/${l.id}/dismiss" style="display:inline">
+          <form method="POST" action="/admin/lead/${l.id}/dismiss" style="display:inline">
             <input type="hidden" name="reason" value="Too late — past the date they needed it">${backField}
             <button type="submit" class="btn btn-ghost" style="padding:8px 16px;font-size:13px">Too late</button>
           </form>
           <button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
              onclick="document.getElementById('dl-${l.id}').style.display='block';this.style.display='none'">Not a job</button>
         </div>
-        <form id="dl-${l.id}" method="POST" action="/lead/${l.id}/dismiss"
+        <form id="dl-${l.id}" method="POST" action="/admin/lead/${l.id}/dismiss"
               style="display:none;margin-top:10px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px">
           <p class="muted" style="margin:0 0 8px;font-size:12.5px">It comes off the board. The enquiry is kept.</p>
           <input name="reason" maxlength="200" placeholder="Why — e.g. spam, or went elsewhere"
@@ -16247,7 +16091,7 @@ const shopMonth = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: SHO
 /* Every enquiry, with where it stands. The board shows only the ones waiting;
    this is where a quoted or let-go lead can still be found, and where a quiet
    inbox shows up as a date rather than as nothing. */
-app.get('/leads', requireAdmin, async (req, res) => {
+app.get('/admin/leads', requireAdmin, async (req, res) => {
   try {
     const STATUSES = ['new', 'quoted', 'dismissed', 'all'];
     const SOURCES = ['all', 'form', 'embroidery', 'chat', 'social'];
@@ -16280,7 +16124,7 @@ app.get('/leads', requireAdmin, async (req, res) => {
       if (p.get('status') === 'new') p.delete('status');
       if (p.get('source') === 'all') p.delete('source');
       const qs = p.toString();
-      return '/leads' + (qs ? '?' + qs : '');
+      return '/admin/leads' + (qs ? '?' + qs : '');
     };
 
     const waiting = all.filter((l) => l.lead_status === 'new');
@@ -16322,20 +16166,20 @@ app.get('/leads', requireAdmin, async (req, res) => {
     ]);
 
     const body = shown.length
-      ? `<div class="grid-cards">${shown.map((l) => `<div id="lead-${l.id}">${leadCardHtml(l, { back: '/leads' })}${
+      ? `<div class="grid-cards">${shown.map((l) => `<div id="lead-${l.id}">${leadCardHtml(l, { back: '/admin/leads' })}${
           leadWorkPanel(l, notesBy[l.id] || [], roster, currentActor())}</div>`).join('')}</div>`
       : `<div class="card">${emptyState(q ? `Nothing matches &ldquo;${escEmail(q)}&rdquo;.`
           : status === 'new' ? 'Nobody is waiting for a reply.' : 'Nothing here.')}</div>`;
 
     res.send(adminPage('Leads', `
       ${pageHeader('Leads', 'Every enquiry: the website form, embroidery requests and tawk.to chats that left an email.',
-        '<a class="btn" href="/quote/new">New quote</a>')}
+        '<a class="btn" href="/admin/quote/new">New quote</a>')}
       ${flash(req.query)}
       ${tiles}
       ${addLeadForm()}
       ${statusChips}
       ${sourceChips}
-      <form class="search" method="GET" action="/leads">
+      <form class="search" method="GET" action="/admin/leads">
         ${status !== 'new' ? `<input type="hidden" name="status" value="${escEmail(status)}">` : ''}
         ${source !== 'all' ? `<input type="hidden" name="source" value="${escEmail(source)}">` : ''}
         <input name="q" value="${escEmail(q)}" placeholder="Find by name, email, phone or what they asked for">
@@ -16394,7 +16238,7 @@ app.get('/admin/nav-counts', requireAdmin, async (_req, res) => {
 /* What needs June today, and how the business is doing, on one screen. Every
    figure comes from the same place its own page reads it, and each panel fails
    on its own: a broken query shows a dash, never a blank dashboard. */
-app.get('/dashboard', requireAdmin, async (_req, res) => {
+app.get('/admin/dashboard', requireAdmin, async (_req, res) => {
   const safe = (p, fallback, what) => p.catch((e) => {
     console.error(`dashboard: ${what} failed:`, e.message);
     return fallback;
@@ -16466,31 +16310,31 @@ app.get('/dashboard', requireAdmin, async (_req, res) => {
       title: `Chargeback: ${money(d.amount)} ${d.quote_code ? 'on quote ' + escEmail(d.quote_code)
         : d.order_ref ? 'on studio order #' + escEmail(d.order_ref) : ''}`,
       sub: d.evidence_due ? `respond in Stripe by ${escEmail(dayShort(d.evidence_due))}` : 'respond in Stripe',
-      href: d.quote_code ? `/production/${escEmail(d.quote_code)}` : '/orders' })),
+      href: d.quote_code ? `/admin/production/${escEmail(d.quote_code)}` : '/admin/orders' })),
     ...late.map(({ q, s }) => ({ tone: 'red', icon: 'clock',
       title: `${escEmail(q.name || q.code)} is behind`,
       sub: `${escEmail(s.risks[0].label)} was due ${escEmail(dayShort(s.risks[0].by))} &middot; ${escEmail(q.code)}`,
-      href: `/production/${escEmail(q.code)}` })),
+      href: `/admin/production/${escEmail(q.code)}` })),
     ...(waiting.length ? [{ tone: 'amber', icon: 'inbox',
       title: `${waiting.length} enquir${waiting.length === 1 ? 'y' : 'ies'} waiting for a reply`,
-      sub: `oldest ${escEmail(ageInWords(waiting[waiting.length - 1].created_at))}`, href: '/leads' }] : []),
+      sub: `oldest ${escEmail(ageInWords(waiting[waiting.length - 1].created_at))}`, href: '/admin/leads' }] : []),
     ...changes.map((c) => ({ tone: 'blue', icon: 'edit',
       title: `${escEmail(c.name || c.code)} asked for a change`,
-      sub: `&ldquo;${escEmail(String(c.change_request).slice(0, 90))}&rdquo;`, href: `/quote/${escEmail(c.code)}/edit` })),
+      sub: `&ldquo;${escEmail(String(c.change_request).slice(0, 90))}&rdquo;`, href: `/admin/quote/${escEmail(c.code)}/edit` })),
     /* Delivered, and the books still say they owe. Either money to collect or
        a payment taken at pickup that was never recorded — both are fixed on
        the job's card: Record a payment, or Settle. */
     ...deliveredOwing.map((q) => ({ tone: 'amber', icon: 'dollar',
       title: `${escEmail(q.name || q.code)} still shows ${money(balanceOf(q))} owed`,
       sub: `delivered ${escEmail(dayShort(q.delivered_at))} &middot; ${escEmail(q.code)} &middot; record what they paid, or settle it`,
-      href: `/quotes#q-${escEmail(q.code)}` })),
+      href: `/admin/quotes#q-${escEmail(q.code)}` })),
     ...unapplied.map((u) => ({ tone: 'amber', icon: 'card',
       title: `${money(u.amount)} paid in Stripe, not on a quote`,
       sub: `${escEmail(u.customer_name || u.customer_email || 'no name')} &middot; apply it from Record a payment`,
-      href: '/quotes' })),
+      href: '/admin/quotes' })),
     ...(Number(certsWaiting.n) > 0 ? [{ tone: 'amber', icon: 'cert',
       title: `${certsWaiting.n} tax certificate${certsWaiting.n === 1 ? '' : 's'} to check`,
-      sub: 'studio orders on one wait for you; a quote can already be paid', href: '/certificates?status=pending' }] : []),
+      sub: 'studio orders on one wait for you; a quote can already be paid', href: '/admin/certificates?status=pending' }] : []),
     ...(Number(reviewsWaiting.n) > 0 ? [{ tone: 'blue', icon: 'star',
       title: `${reviewsWaiting.n} review${reviewsWaiting.n === 1 ? '' : 's'} waiting for your approval`,
       sub: 'nothing shows on the site until you approve it', href: '/admin/reviews' }] : []),
@@ -16516,22 +16360,22 @@ app.get('/dashboard', requireAdmin, async (_req, res) => {
   res.set('Cache-Control', 'no-store');
   res.send(adminPage('Dashboard', `
     ${pageHeader(hello + ', ' + SHOP_SIGNER, escEmail(today),
-      '<a class="btn" href="/quote/new">New quote</a><a class="btn btn-ghost" href="/production">Production</a>')}
+      '<a class="btn" href="/admin/quote/new">New quote</a><a class="btn btn-ghost" href="/admin/production">Production</a>')}
     ${statTiles([
       { label: 'Money in this month', tone: 'green', href: FINANCES_PATH,
         value: money(Number(takings.quotes_month || 0) + Number(takings.other_month || 0)),
         sub: Number(takings.other_month || 0)
           ? `quotes ${money(takings.quotes_month)} &middot; studio &amp; other ${money(takings.other_month)}`
           : `last month ${money(takings.last_month)}` },
-      { label: 'Owed to you', value: money(owed.owed), tone: 'amber', href: '/orders',
+      { label: 'Owed to you', value: money(owed.owed), tone: 'amber', href: '/admin/orders',
         sub: `on ${owed.jobs || 0} job${owed.jobs === 1 ? '' : 's'} in hand` +
              (owed.delivered ? ` and ${owed.delivered} delivered` : '') },
-      { label: 'Quotes out', value: String(out.n || 0), tone: 'blue', href: '/quotes',
+      { label: 'Quotes out', value: String(out.n || 0), tone: 'blue', href: '/admin/quotes',
         sub: `${money(out.value)} waiting on a yes` },
-      { label: 'New leads', value: String(waiting.length), href: '/leads',
+      { label: 'New leads', value: String(waiting.length), href: '/admin/leads',
         tone: waiting.length ? 'amber' : 'green',
         sub: lastLead ? `last one ${escEmail(ageInWords(lastLead.created_at))} (${escEmail(lastSrc)})` : 'none yet' },
-      { label: 'In production', value: String(jobs.length), href: '/production',
+      { label: 'In production', value: String(jobs.length), href: '/admin/production',
         tone: late.length ? 'red' : 'navy', sub: late.length ? `${late.length} behind schedule` : 'all on schedule' },
       { label: 'Tax to set aside', value: tax ? money(tax.setAside) : '—', tone: 'gold', href: FINANCES_PATH,
         sub: tax && tax.undeterminedPayments ? `${tax.undeterminedPayments} still to work out` : 'sales tax held for the state' },
@@ -16543,10 +16387,10 @@ app.get('/dashboard', requireAdmin, async (_req, res) => {
           : emptyState('All clear. Nothing is late, waiting or disputed.')}
       </div>
       <div class="card">
-        <h2 class="card-title">Latest leads <a href="/leads?status=all">all leads &rarr;</a></h2>
+        <h2 class="card-title">Latest leads <a href="/admin/leads?status=all">all leads &rarr;</a></h2>
         ${leads.length ? `<div class="rows">${leads.slice(0, 5).map((l) => {
           const [label, tone] = LEAD_SOURCES[l.source] || LEAD_SOURCES.form;
-          return `<a class="row-i" href="/leads?status=all&amp;q=${encodeURIComponent(l.email || l.name || '')}">
+          return `<a class="row-i" href="/admin/leads?status=all&amp;q=${encodeURIComponent(l.email || l.name || '')}">
             <span class="row-main"><b>${escEmail(l.name || 'No name given')}</b>
               <div class="row-sub">${escEmail(String(l.description || l.email || '').slice(0, 80))}</div></span>
             <span class="row-end">${pill(label, tone)}<div class="muted" style="font-size:12px;margin-top:3px">${
@@ -16561,7 +16405,7 @@ app.get('/dashboard', requireAdmin, async (_req, res) => {
             : p.order_ref ? `studio order #${escEmail(p.order_ref)}`
             : escEmail(({ stripe: 'paid in Stripe, not on a quote', clover: 'Clover till',
                           studio: 'design studio' })[p.how] || 'payment');
-          const href = p.quote_code ? `/production/${escEmail(p.quote_code)}` : '';
+          const href = p.quote_code ? `/admin/production/${escEmail(p.quote_code)}` : '';
           const inner = `<span class="ico ico-green">${icon('dollar')}</span>
             <span class="row-main"><b>${money(p.amount)}</b>
               <div class="row-sub">${escEmail(p.name || 'no name')} &middot; ${what}</div></span>
@@ -16583,7 +16427,7 @@ app.get('/dashboard', requireAdmin, async (_req, res) => {
  * listed and LABELLED, because they come from different systems and quietly
  * merging them would make the list mean nothing.
  */
-app.get('/orders', requireAdmin, async (req, res) => {
+app.get('/admin/orders', requireAdmin, async (req, res) => {
   try {
     const q = String(req.query.q || '').trim().slice(0, 80);
     const studio = await fetchStudioOrders();
@@ -16622,7 +16466,7 @@ app.get('/orders', requireAdmin, async (req, res) => {
       const d = (v) => (v ? fmtDate(v) : '');
       return `
       <tr style="border-top:1px solid #eef1f8">
-        <td style="padding:9px 6px"><a href="/quote/${o.code}/edit"><b>${escEmail(o.code)}</b></a>
+        <td style="padding:9px 6px"><a href="/admin/quote/${o.code}/edit"><b>${escEmail(o.code)}</b></a>
           <div class="muted" style="font-size:12.5px">${escEmail(o.name || 'no name')}</div></td>
         <td style="padding:9px 6px;font-size:13px">${escEmail(quoteSummary(o.items) || '—')}</td>
         <td class="num" style="padding:9px 6px;white-space:nowrap">${money(quoteTotals(o).total)}</td>
@@ -16633,7 +16477,7 @@ app.get('/orders', requireAdmin, async (req, res) => {
              alert both promise a Restore; the board no longer draws cancelled
              cards, so without this there was none to press. */
           o.cancelled_at ? `
-          <form method="POST" action="/quote/${o.code}/uncancel" style="display:inline;margin-left:6px"
+          <form method="POST" action="/admin/quote/${o.code}/uncancel" style="display:inline;margin-left:6px"
                 onsubmit="return confirm('Put ${o.code} back on the board?')">
             <input type="hidden" name="back" value="orders">
             <button type="submit" class="kbtn" style="font-size:11.5px;padding:2px 9px">Restore</button>
@@ -16652,7 +16496,7 @@ app.get('/orders', requireAdmin, async (req, res) => {
         <input name="q" value="${escEmail(q)}" placeholder="Find by name, code, email or item"
                style="flex:1 1 260px;padding:9px;font-size:14px">
         <button type="submit" class="btn btn-ghost" style="padding:9px 18px">Search</button>
-        ${q ? `<a class="btn btn-ghost" style="padding:9px 18px" href="/orders">Clear</a>` : ''}
+        ${q ? `<a class="btn btn-ghost" style="padding:9px 18px" href="/admin/orders">Clear</a>` : ''}
       </form>
 
       <div class="card" style="overflow-x:auto">
@@ -17224,7 +17068,7 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
       const imgs = (Array.isArray(r.images) ? r.images : [])
         .filter((u) => typeof u === 'string' && /^https:\/\/res\.cloudinary\.com\//.test(u));
       const job = r.quote_code && QUOTE_CODE_RE.test(r.quote_code)
-        ? ` &middot; <a href="/production/${r.quote_code}">${r.quote_code}</a>`
+        ? ` &middot; <a href="/admin/production/${r.quote_code}">${r.quote_code}</a>`
         : r.order_ref ? ` &middot; studio order ${escEmail(r.order_ref)}` : '';
       const remove = `Remove this review from ${r.name || 'this customer'}?\n\nIt stops showing on the site and here. `
         + 'The record that they were asked is kept, so they will not be asked again.';
@@ -17361,7 +17205,7 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
             const noReminder = (OUTCOME[a.ask_outcome] && a.ask_outcome !== 'failed') || !a.followup_sent_at;
             return `<tr>
             <td><b>${escEmail(a.name || 'no name')}</b><div class="muted">${escEmail(a.email || a.phone || '')}</div></td>
-            <td>${a.quote_code && QUOTE_CODE_RE.test(a.quote_code) ? `<a href="/production/${a.quote_code}">${a.quote_code}</a>`
+            <td>${a.quote_code && QUOTE_CODE_RE.test(a.quote_code) ? `<a href="/admin/production/${a.quote_code}">${a.quote_code}</a>`
               : `<span class="muted">${escEmail(a.order_ref ? 'order ' + a.order_ref : '—')}</span>`}</td>
             <td style="white-space:nowrap">${outcomeCell(a.ask_outcome, a.sent_at)}</td>
             <td style="white-space:nowrap" class="muted">${noReminder ? '—' : outcomeCell(a.followup_outcome, a.followup_sent_at)}</td>
@@ -17624,7 +17468,7 @@ app.post('/api/order-notification', requireInternalKey, capPerRecipient('order-n
         shipping: b.shipping, tax: b.tax, address: b.address, exempt,
         footer: (exempt ? `<p style="color:#374151;line-height:1.6;">${exempt.status === 'pending'
             ? `<strong>Tax-exempt &mdash; don&rsquo;t print it yet.</strong> Check the certificate first on
-               <a href="${PUBLIC_BASE_URL}/certificates">Certificates</a>. Approving releases the order;
+               <a href="${PUBLIC_BASE_URL}/admin/certificates">Certificates</a>. Approving releases the order;
                refusing puts the tax back on it, to collect with Collect balance.`
             : 'Tax-exempt, on a certificate you have already approved.'}</p>` : '') +
           `<p style="margin:18px 0;"><a href="https://design.jtees.net/admin.php?lumise-page=order&order_id=${encodeURIComponent(b.order_id)}" style="background:#1848B8;color:#fff;font-weight:700;text-decoration:none;padding:12px 26px;border-radius:100px;display:inline-block;">Open in admin →</a></p>`,
@@ -18094,7 +17938,7 @@ async function sendDailyDigest() {
          ${live.length} open</p>
        <table style="width:100%;border-collapse:collapse">${live.map(row).join('')}</table>
        ${teamHtml}
-       <p style="margin-top:16px"><a href="${PUBLIC_BASE_URL}/quotes"
+       <p style="margin-top:16px"><a href="${PUBLIC_BASE_URL}/admin/quotes"
          style="background:#1848B8;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;display:inline-block">Open the board</a></p>
        <p style="color:#9ca3af;font-size:11.5px;margin-top:14px">
          Each line is the next step for that job. Steps the system can answer are
@@ -18219,7 +18063,7 @@ async function taxMonthlyCheck() {
 
        <p style="margin-top:18px">
          <a href="https://mytax.illinois.gov" style="background:#1848B8;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;display:inline-block">File on MyTax Illinois</a>
-         <a href="${PUBLIC_BASE_URL}/tax.csv" style="color:#1848B8;margin-left:14px">Download the detail</a></p>
+         <a href="${PUBLIC_BASE_URL}/admin/tax.csv" style="color:#1848B8;margin-left:14px">Download the detail</a></p>
        <p style="color:#9ca3af;font-size:11.5px;margin-top:14px">
          Once you have filed, record it on the quotes page so this stops chasing you
          and the running balance stays right.</p>`);
@@ -18249,9 +18093,9 @@ function sendTrackingEmail(q, tracking) {
 /* Shipping method and tracking. Method matters beyond record-keeping: a pickup
    has no transit time, so the backwards schedule gives you the extra days back
    instead of chasing you for a ship date that does not exist. */
-app.post('/quote/:code/shipping', requireAdmin, async (req, res) => {
+app.post('/admin/quote/:code/shipping', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
-  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/quotes');
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/quotes');
   const b = req.body || {};
   const method = ['pickup', 'ground', 'expedited'].includes(String(b.ship_method))
     ? String(b.ship_method) : null;
@@ -18278,14 +18122,14 @@ app.post('/quote/:code/shipping', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('shipping update failed:', err.message);
   }
-  res.redirect('/quotes');
+  res.redirect('/admin/quotes');
 });
 
 /* Enter what a job cost. Blank fields are left alone rather than zeroed, so
    filling in the blanks invoice later does not wipe the supplies figure. */
-app.post('/quote/:code/costs', requireAdmin, async (req, res) => {
+app.post('/admin/quote/:code/costs', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
-  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/quotes');
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/quotes');
   const b = req.body || {};
   const num = (v) => {
     const s = String(v == null ? '' : v).trim();
@@ -18295,7 +18139,7 @@ app.post('/quote/:code/costs', requireAdmin, async (req, res) => {
   };
   try {
     const { rows: cur } = await pool.query('SELECT items FROM quotes WHERE code = $1', [code]);
-    if (!cur.length) return res.redirect('/quotes');
+    if (!cur.length) return res.redirect('/admin/quotes');
 
     /* Per-line unit costs. Entering a total and apportioning it was wrong:
        a polo and a hoodie on the same order do not cost the same, and asking
@@ -18333,15 +18177,15 @@ app.post('/quote/:code/costs', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('cost update failed:', err.message);
   }
-  res.redirect('/quotes');
+  res.redirect('/admin/quotes');
 });
 
 /* Record a remittance to the state. Closes the period and stops the chasing. */
-app.post('/tax/remit', requireAdmin, async (req, res) => {
+app.post('/admin/tax/remit', requireAdmin, async (req, res) => {
   const b = req.body || {};
   const period = String(b.period || '').trim();
   const amount = round2(Number(b.amount));
-  if (!/^\d{4}-\d{2}$/.test(period) || !(amount > 0)) return res.redirect('/quotes');
+  if (!/^\d{4}-\d{2}$/.test(period) || !(amount > 0)) return res.redirect('/admin/quotes');
   try {
     await pool.query(
       `INSERT INTO tax_remittances (period, amount, paid_at, reference, note)
@@ -18353,7 +18197,7 @@ app.post('/tax/remit', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('tax remit failed:', err.message);
   }
-  res.redirect('/quotes');
+  res.redirect('/admin/quotes');
 });
 
 /* Put an exemption number on a sale that was already made.
@@ -18369,7 +18213,7 @@ app.post('/tax/remit', requireAdmin, async (req, res) => {
  * the flag NULL would keep the row relying on the "tax is zero so it must be
  * untaxed" inference it exists to replace.
  */
-app.post('/quotes/:code/exemption', requireAdmin, async (req, res) => {
+app.post('/admin/quotes/:code/exemption', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   const b = req.body || {};
   const back = String(b.back || FINANCES_PATH);
@@ -18413,10 +18257,10 @@ app.post('/quotes/:code/exemption', requireAdmin, async (req, res) => {
    A quote the shop leaves untaxed for an E-number or resale exemption takes no
    payment until a certificate is on file: the customer uploads it on their
    quote page, or the shop attaches it on the job page. The shop checks each one
-   on /certificates, and refusing one locks payment again, with the reason shown
+   on /admin/certificates, and refusing one locks payment again, with the reason shown
    to the customer. tests/tax-certificates.test.js. */
 
-/* Everything but the file itself, which only /certificates/:id/file reads. */
+/* Everything but the file itself, which only /admin/certificates/:id/file reads. */
 const CERT_COLUMNS = `id, kind, number, holder, email, expires_on, file_type, file_name, source,
                       status, review_note, reviewed_at, created_at`;
 /* A certificate something relies on: one on a quote, or one a PAID studio
@@ -18490,7 +18334,7 @@ function notifyCertificate(q, cert) {
         ${escEmail(TAXCERT.certificateLabel(cert))}${cert.expires_on
           ? `, expires ${escEmail(TAXCERT.isoDay(cert.expires_on))}` : ''}.</p>
       <p>They can pay now. Check it matches the name on the quote and has not expired:
-        <a href="${PUBLIC_BASE_URL}/certificates">open Certificates</a>. Refusing it locks payment again
+        <a href="${PUBLIC_BASE_URL}/admin/certificates">open Certificates</a>. Refusing it locks payment again
         and shows them your reason.</p></div>`,
   }).catch((e) => console.error('certificate alert failed:', e.message));
 }
@@ -18586,7 +18430,7 @@ app.post('/q/:code/certificate', orderRateLimit, async (req, res) => {
 });
 
 /* The shop attaching a certificate it already holds, from the job page. */
-app.post('/quote/:code/certificate', requireAdmin, async (req, res) => {
+app.post('/admin/quote/:code/certificate', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   if (!QUOTE_CODE_RE.test(code)) return res.status(404).json({ error: 'No such quote.' });
   try {
@@ -18739,7 +18583,7 @@ function notifyStudioCertificate(cert, { orderRef, name, email, waived }) {
         on this certificate: ${escEmail(TAXCERT.certificateLabel(cert))}${cert.expires_on
           ? `, expires ${escEmail(TAXCERT.isoDay(cert.expires_on))}` : ''}.</p>
       <p><b>Don't print it yet.</b> Check the certificate matches the customer and has not expired:
-        <a href="${PUBLIC_BASE_URL}/certificates">open Certificates</a>. Approving releases the order.
+        <a href="${PUBLIC_BASE_URL}/admin/certificates">open Certificates</a>. Approving releases the order.
         Refusing puts the tax back on it, and you collect that with <b>Collect balance</b> on the order
         in the studio.</p></div>`,
   }).catch((e) => console.error('studio certificate alert failed:', e.message));
@@ -18766,7 +18610,7 @@ async function pushCertificateDecisionToStudio(id) {
 
 /* The file, to a signed-in admin only. Never cached, never sniffed: it is the
    type its own bytes said it was when it was stored. */
-app.get('/certificates/:id/file', requireAdmin, async (req, res) => {
+app.get('/admin/certificates/:id/file', requireAdmin, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) return res.sendStatus(404);
   try {
@@ -18790,11 +18634,11 @@ app.get('/certificates/:id/file', requireAdmin, async (req, res) => {
 /* Approve or refuse. A refusal needs a reason, because the customer is shown
    it and it is all they have to go on. `back` returns to the page the form
    was on, and only to one of these. */
-app.post('/certificates/:id/review', requireAdmin, async (req, res) => {
+app.post('/admin/certificates/:id/review', requireAdmin, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const b = req.body || {};
   const back = /^\/(certificates|production\/[A-Z0-9]{6})$/.test(String(b.back || ''))
-    ? String(b.back) : '/certificates';
+    ? String(b.back) : '/admin/certificates';
   if (!Number.isFinite(id)) return res.redirect(back);
   const approve = b.decision === 'approve';
   const note = String(b.note || '').replace(/\s+/g, ' ').trim().slice(0, 300);
@@ -18827,10 +18671,10 @@ function certificateReviewForms(cert, back) {
   if (!cert || cert.status !== 'pending') return '';
   return `
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:flex-start">
-      <form method="POST" action="/certificates/${cert.id}/review" style="margin:0">
+      <form method="POST" action="/admin/certificates/${cert.id}/review" style="margin:0">
         <input type="hidden" name="decision" value="approve"><input type="hidden" name="back" value="${escEmail(back)}">
         <button class="btn" style="padding:7px 16px;font-size:13px">Approve</button></form>
-      <form method="POST" action="/certificates/${cert.id}/review" style="margin:0;display:flex;gap:6px;flex:1 1 260px">
+      <form method="POST" action="/admin/certificates/${cert.id}/review" style="margin:0;display:flex;gap:6px;flex:1 1 260px">
         <input type="hidden" name="decision" value="reject"><input type="hidden" name="back" value="${escEmail(back)}">
         <input name="note" required maxlength="300" placeholder="Why — the customer sees this"
                style="flex:1;padding:6px 8px;font-size:13px">
@@ -18838,7 +18682,7 @@ function certificateReviewForms(cert, back) {
     </div>`;
 }
 
-app.get('/certificates', requireAdmin, async (req, res) => {
+app.get('/admin/certificates', requireAdmin, async (req, res) => {
   const SHOW = ['pending', 'approved', 'rejected', 'all'];
   const show = SHOW.includes(String(req.query.status)) ? String(req.query.status) : 'all';
   try {
@@ -18872,8 +18716,8 @@ app.get('/certificates', requireAdmin, async (req, res) => {
         <div style="margin-top:6px;font-size:13.5px">${escEmail(TAXCERT.CERT_KINDS[c.kind] ? TAXCERT.CERT_KINDS[c.kind].label : c.kind)}
           &middot; <b>${escEmail(c.number)}</b>${exp ? ` &middot; expires ${escEmail(exp)}` : ' &middot; no expiry given'}</div>
         <div class="muted" style="margin-top:6px;font-size:12.5px">
-          <a href="/certificates/${c.id}/file" target="_blank" rel="noopener">Open the certificate</a>
-          ${codes.map((k) => ` &middot; quote <a href="/production/${escEmail(k)}">${escEmail(k)}</a>`).join('')}
+          <a href="/admin/certificates/${c.id}/file" target="_blank" rel="noopener">Open the certificate</a>
+          ${codes.map((k) => ` &middot; quote <a href="/admin/production/${escEmail(k)}">${escEmail(k)}</a>`).join('')}
           ${orders.map((o) => ` &middot; studio order <a href="${STUDIO_BASE}/admin.php?lumise-page=order&order_id=${
             encodeURIComponent(o)}" target="_blank" rel="noopener">#${escEmail(o)}</a>`).join('')}
           ${c.email ? ` &middot; ${escEmail(c.email)}` : ''}
@@ -18882,14 +18726,14 @@ app.get('/certificates', requireAdmin, async (req, res) => {
         ${orders.length && c.status === 'pending' ? `<div class="muted" style="margin-top:6px;font-size:12.5px">
           The studio order is paid without tax and held until you decide. Approving releases it; refusing
           puts the tax back on it, and you collect that with Collect balance on the order.</div>` : ''}
-        ${certificateReviewForms(c, '/certificates')}
+        ${certificateReviewForms(c, '/admin/certificates')}
       </div>`;
     };
     res.set('Cache-Control', 'no-store');
     res.send(adminPage('Certificates', `
       ${pageHeader('Tax certificates', 'The evidence behind every sale that charged no Illinois tax. Check the name matches the customer and the date has not passed.')}
       ${req.query.cert === 'need-reason' ? `<div class="warn">Say why you are refusing it: the customer is shown the reason.</div>` : ''}
-      ${filterChips(SHOW.map((s) => ({ href: `/certificates?status=${s}`, on: s === show, count: count(s),
+      ${filterChips(SHOW.map((s) => ({ href: `/admin/certificates?status=${s}`, on: s === show, count: count(s),
         label: { pending: 'Waiting', approved: 'Approved', rejected: 'Refused', all: 'All' }[s] })))}
       ${list.length ? list.map(card).join('') : emptyState(show === 'pending'
         ? 'Nothing waiting. A certificate a customer uploads lands here, and you are emailed.'
@@ -18919,7 +18763,7 @@ app.get('/certificates', requireAdmin, async (req, res) => {
  * an explicit 0 settles it at zero, which is why this cannot be a plain number
  * input that treats blank as nothing.
  */
-app.post('/unlinked/:id/tax', requireAdmin, async (req, res) => {
+app.post('/admin/unlinked/:id/tax', requireAdmin, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const b = req.body || {};
   const back = String(b.back || FINANCES_PATH);
@@ -18979,10 +18823,10 @@ const APPLY_ERRORS = {
   'failed': 'Applying the payment did not finish. Press Apply again: it carries on from where it stopped. The error has been reported.',
 };
 
-app.post('/unlinked/:id/apply', requireAdmin, async (req, res) => {
+app.post('/admin/unlinked/:id/apply', requireAdmin, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const code = String((req.body || {}).quote || '').trim().toUpperCase();
-  const answer = (key, value) => res.redirect(`/quotes?${key}=${encodeURIComponent(value)}`);
+  const answer = (key, value) => res.redirect(`/admin/quotes?${key}=${encodeURIComponent(value)}`);
   if (!(id > 0) || !QUOTE_CODE_RE.test(code)) return answer('apply_err', 'bad-request');
   try {
     const { rows } = await pool.query('SELECT ext_ref FROM unlinked_payments WHERE id = $1', [id]);
@@ -19522,8 +19366,8 @@ app.patch('/api/orders/:ref/notes', requireGradAdmin, validateOrderRef, async (r
 /* ══ Staff workspace ═════════════════════════════════════════════════════════
    Helpers' logins and permissions (/admin/staff), what waits for the owner
    (/admin/approvals), who did what (/admin/activity), how each helper is doing
-   (/admin/team, /admin/commission), a helper's own day (/my-day), and the
-   playbook they answer customers from (/playbook). The rules live in
+   (/admin/team, /admin/commission), a helper's own day (/admin/my-day), and the
+   playbook they answer customers from (/admin/playbook). The rules live in
    tools/lib/staff.js and tools/lib/team-metrics.js. */
 
 const BUSINESSES = { jtees: "June's Tees", cos: 'COS Creator Studio', cartbook: 'CartBook', other: 'Other' };
@@ -19595,12 +19439,14 @@ function permsEditor(perms) {
     </div>`).join('');
 }
 
-function oneTimePasswordCard(name, email, password) {
+/** What the owner does in Cloudflare so a new helper can get in. */
+function cloudflareStepCard(name, email) {
   return `<div class="card" style="border:2px solid #16a34a">
-    <b>Give ${escEmail(name)} this password now — it is not shown again.</b>
-    <p style="margin-top:8px">Sign in at <b>${escEmail(PUBLIC_BASE_URL)}/signin</b> with <b>${escEmail(email)}</b> and
-      <code style="font-size:16px">${escEmail(password)}</code></p>
-    <p class="muted">Send it through your password manager, not email or chat. They can change it under My account.</p>
+    <b>One more step: let ${escEmail(email)} through Cloudflare.</b>
+    <p style="margin-top:8px">In Cloudflare, open Zero Trust &rarr; Access &rarr; Applications, edit the jtees.net
+      back-office application, and add <b>${escEmail(email)}</b> to its allow policy.</p>
+    <p class="muted">Then ${escEmail(name)} opens <b>${escEmail(PUBLIC_BASE_URL)}/admin</b>, enters that email, and types
+      the code Cloudflare sends to it. There is no password to hand over.</p>
   </div>`;
 }
 
@@ -19621,9 +19467,6 @@ async function renderStaffPage(req, res, extra = '') {
         <form method="post" action="/admin/staff/${s.id}" style="margin:0">
           <input type="hidden" name="action" value="${s.active ? 'disable' : 'enable'}">
           <button type="submit" class="btn btn-ghost">${s.active ? 'Disable now' : 'Enable'}</button></form>
-        <form method="post" action="/admin/staff/${s.id}" style="margin:0">
-          <input type="hidden" name="action" value="reset">
-          <button type="submit" class="btn btn-ghost">New password</button></form>
       </div>
       <details style="margin-top:10px"><summary>Every permission, one by one</summary>
         <form method="post" action="/admin/staff/${s.id}">
@@ -19641,15 +19484,15 @@ async function renderStaffPage(req, res, extra = '') {
     </div>`;
   }).join('');
   res.send(adminPage('Staff', `
-    ${pageHeader('Staff', 'Each helper has their own login. Switch what they can do at any time; it applies on their next click.',
+    ${pageHeader('Staff', 'Each helper signs in through Cloudflare with their own email. Switch what they can do at any time; it applies on their next click.',
       '<a class="btn btn-ghost" href="/admin/team">Team</a> <a class="btn btn-ghost" href="/admin/approvals">Approvals</a>')}
     ${flash(req.query)}${extra}
-    ${staffSessionKey() ? '' : `<div class="warn">Staff sign-in is switched off until STAFF_SESSION_SECRET (32+ random characters)
-      is set on the backend service in Railway. You can add helpers now; they can sign in once it is set.</div>`}
+    ${cfAccess ? '' : `<div class="warn">Sign-in is switched off until CF_ACCESS_TEAM_DOMAIN, CF_ACCESS_AUD and OWNER_EMAILS
+      are set on the backend service in Railway.</div>`}
     <div class="card"><b>Add a helper</b>
       <form method="post" action="/admin/staff" class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px">
         <input name="name" placeholder="Name" required maxlength="80">
-        <input name="email" type="email" placeholder="Their email (their login)" required maxlength="254">
+        <input name="email" type="email" placeholder="Their email (what they sign in with)" required maxlength="254">
         <label>Start as <select name="preset">${presetOptions}</select></label>
         <label>Commission % <input name="commission_pct" type="number" min="0" max="30" step="0.25" value="0" style="width:80px"></label>
         <button type="submit">Add</button>
@@ -19676,12 +19519,15 @@ app.post('/admin/staff', requireAdmin, async (req, res) => {
   const pct = Math.min(30, Math.max(0, Number(b.commission_pct) || 0));
   if (!name || !STAFF.EMAIL_RE.test(email)) return back(res, '/admin/staff', 'err', 'A name and a real email are needed.');
   try {
-    const password = STAFF.generatePassword();
+    if (cfAccess && cfAccess.owners.includes(email)) {
+      return back(res, '/admin/staff', 'err', 'That is an owner email. Helpers need their own.');
+    }
+    /* password_hash predates signing in through Cloudflare; '!' matches no password. */
     await pool.query(
-      `INSERT INTO staff (name, email, password_hash, perms, commission_pct) VALUES ($1, $2, $3, $4, $5)`,
-      [name, email, STAFF.hashPassword(password), JSON.stringify(STAFF.presetPerms(preset)), pct]);
+      `INSERT INTO staff (name, email, password_hash, perms, commission_pct) VALUES ($1, $2, '!', $3, $4)`,
+      [name, email, JSON.stringify(STAFF.presetPerms(preset)), pct]);
     return renderStaffPage({ query: { ok: `${name} added as ${STAFF.PRESETS[preset].label}.` } }, res,
-      oneTimePasswordCard(name, email, password));
+      cloudflareStepCard(name, email));
   } catch (err) {
     if (err.code === '23505') return back(res, '/admin/staff', 'err', 'Someone already has that email.');
     console.error('add staff failed:', err.message);
@@ -19707,19 +19553,13 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
         await pool.query('UPDATE staff SET perms = $2 WHERE id = $1', [id, JSON.stringify(STAFF.permsFromForm(b))]);
         return back(res, '/admin/staff', 'ok', `Saved ${s.name}'s permissions.`);
       case 'disable':
-        /* The version bump ends every session they have on their next click. */
-        await pool.query('UPDATE staff SET active = FALSE, session_version = session_version + 1 WHERE id = $1', [id]);
-        return back(res, '/admin/staff', 'ok', `${s.name} is disabled and signed out.`);
+        /* Every request looks the helper up, so this locks them out on their next click.
+           Remove them from the Cloudflare policy too. */
+        await pool.query('UPDATE staff SET active = FALSE WHERE id = $1', [id]);
+        return back(res, '/admin/staff', 'ok', `${s.name} is disabled. Also remove ${s.email} from the Cloudflare policy.`);
       case 'enable':
         await pool.query('UPDATE staff SET active = TRUE WHERE id = $1', [id]);
         return back(res, '/admin/staff', 'ok', `${s.name} can sign in again.`);
-      case 'reset': {
-        const password = STAFF.generatePassword();
-        await pool.query('UPDATE staff SET password_hash = $2, session_version = session_version + 1 WHERE id = $1',
-          [id, STAFF.hashPassword(password)]);
-        return renderStaffPage({ query: { ok: `${s.name} has a new password and was signed out.` } }, res,
-          oneTimePasswordCard(s.name, s.email, password));
-      }
       case 'commission': {
         const pct = Math.min(30, Math.max(0, Number(b.commission_pct) || 0));
         await pool.query('UPDATE staff SET commission_pct = $2 WHERE id = $1', [id, pct]);
@@ -19734,61 +19574,16 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
   }
 });
 
-/* ── /account: a helper's own password ────────────────────────────────────── */
-
-app.get('/account', requireAdmin, (req, res) => {
-  const a = currentActor();
-  if (!a || a.kind !== 'staff') return res.redirect('/admin/staff');
-  res.send(adminPage('My account', `
-    ${pageHeader('My account', escEmail(a.email || ''))}
-    ${flash(req.query)}
-    <div class="card" style="max-width:460px"><b>Change your password</b>
-      <form method="post" action="/account/password" style="margin-top:8px">
-        <label>Current password <input type="password" name="current" required autocomplete="current-password" maxlength="200"></label>
-        <label style="display:block;margin-top:8px">New password (${STAFF.MIN_PASSWORD}+ characters)
-          <input type="password" name="next" required minlength="${STAFF.MIN_PASSWORD}" autocomplete="new-password" maxlength="200"></label>
-        <label style="display:block;margin-top:8px">New password again
-          <input type="password" name="again" required minlength="${STAFF.MIN_PASSWORD}" autocomplete="new-password" maxlength="200"></label>
-        <button type="submit" style="margin-top:12px">Change password</button>
-      </form></div>`, ''));
-});
-
-app.post('/account/password', requireAdmin, async (req, res) => {
-  const a = currentActor();
-  if (!a || a.kind !== 'staff') return res.redirect('/admin/staff');
-  const b = req.body || {};
-  const next = String(b.next || '');
-  if (next !== String(b.again || '')) return back(res, '/account', 'err', 'The two new passwords do not match.');
-  if (next.length < STAFF.MIN_PASSWORD || next.length > 200) {
-    return back(res, '/account', 'err', `Use ${STAFF.MIN_PASSWORD} or more characters.`);
-  }
-  try {
-    const { rows: [s] } = await pool.query('SELECT password_hash FROM staff WHERE id = $1', [a.id]);
-    if (!s || !STAFF.verifyPassword(String(b.current || ''), s.password_hash)) {
-      return back(res, '/account', 'err', 'Your current password is not right.');
-    }
-    const { rows: [u] } = await pool.query(
-      `UPDATE staff SET password_hash = $2, session_version = session_version + 1 WHERE id = $1
-       RETURNING id, session_version`, [a.id, STAFF.hashPassword(next)]);
-    // Other browsers are signed out; this one carries on with a fresh session.
-    setStaffCookie(res, u);
-    return back(res, '/account', 'ok', 'Password changed. Any other device you were signed in on is signed out.');
-  } catch (err) {
-    console.error('password change failed:', err.message);
-    return back(res, '/account', 'err', 'Could not change it. Try again.');
-  }
-});
-
 /* ── Approvals ─────────────────────────────────────────────────────────────── */
 
 function approvalBody(a, q) {
   const p = a.payload || {};
   if (a.kind === 'quote') {
-    return `<div>Quote <a href="/quote/${escEmail(a.subject_id)}/edit"><b>${escEmail(a.subject_id)}</b></a>
+    return `<div>Quote <a href="/admin/quote/${escEmail(a.subject_id)}/edit"><b>${escEmail(a.subject_id)}</b></a>
       ${q ? ` for ${escEmail(q.name || q.email || q.phone || '')} &middot; ${money(q.total)}` : ' (no longer exists)'}</div>`;
   }
   if (a.kind === 'message') {
-    return `<div>${p.channel === 'text' ? 'Text' : 'Email'} about <a href="/production/${escEmail(a.subject_id)}#messages">${
+    return `<div>${p.channel === 'text' ? 'Text' : 'Email'} about <a href="/admin/production/${escEmail(a.subject_id)}#messages">${
       escEmail(a.subject_id)}</a>${p.channel === 'email' ? ` &middot; <b>${escEmail(p.subject || '')}</b>` : ''}</div>
       <div class="msg" style="white-space:pre-wrap;margin-top:6px">${escEmail(p.text || '')}</div>`;
   }
@@ -19959,7 +19754,7 @@ app.get('/admin/activity', requireAdmin, async (req, res) => {
         <tr><td class="muted" style="white-space:nowrap">${escEmail(whenShort(r.created_at))}</td>
           <td>${escEmail(nameOf(roster, r.staff_id))}</td>
           <td>${escEmail(r.action)}${r.subject_id ? ` <b>${r.subject_type === 'quote'
-            ? `<a href="/production/${escEmail(r.subject_id)}">${escEmail(r.subject_id)}</a>` : escEmail(r.subject_id)}</b>` : ''}</td>
+            ? `<a href="/admin/production/${escEmail(r.subject_id)}">${escEmail(r.subject_id)}</a>` : escEmail(r.subject_id)}</b>` : ''}</td>
           <td class="muted">${escEmail(describe(r))}</td></tr>`).join('')}</tbody></table>`
         : emptyState('Nothing in this period.')}</div>`, 'team'));
   } catch (err) {
@@ -20192,7 +19987,7 @@ app.get('/admin/commission', requireAdmin, async (req, res) => {
         </form></details></div>
       <div class="card">${lines.length ? `<table class="dt" style="width:100%"><thead><tr>
         <th>Quote</th><th>Customer</th><th>Collected</th><th>Base</th><th>Commission</th><th></th></tr></thead><tbody>
-        ${lines.map((l) => `<tr><td><a href="/production/${escEmail(l.code)}">${escEmail(l.code)}</a></td>
+        ${lines.map((l) => `<tr><td><a href="/admin/production/${escEmail(l.code)}">${escEmail(l.code)}</a></td>
           <td>${escEmail(l.name || '')}</td><td>${money(l.collected)}</td><td>${money(l.base)}</td>
           <td>${money(l.state === 'paid' ? l.paid_amount_c : l.amount)}</td><td>${pill(l.state, tone[l.state])}</td></tr>`).join('')}
         </tbody></table>` : emptyState('No money has come in on their quotes yet.')}</div>`, 'team'));
@@ -20316,15 +20111,15 @@ async function setSalesCredit(code, raw, actor) {
   return { ok: true, to };
 }
 
-app.post('/quote/:code/credit', requireAdmin, async (req, res) => {
+app.post('/admin/quote/:code/credit', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
-  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/quotes');
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/quotes');
   try {
     const r = await setSalesCredit(code, req.body && req.body.credit_to, currentActor() || OWNER_ACTOR);
-    return back(res, `/production/${code}`, r.ok ? 'ok' : 'err', r.ok ? 'Sales credit saved.' : r.msg);
+    return back(res, `/admin/production/${code}`, r.ok ? 'ok' : 'err', r.ok ? 'Sales credit saved.' : r.msg);
   } catch (err) {
     console.error('sales credit failed:', err.message);
-    return back(res, `/production/${code}`, 'err', 'Could not save the sales credit.');
+    return back(res, `/admin/production/${code}`, 'err', 'Could not save the sales credit.');
   }
 });
 
@@ -20336,7 +20131,7 @@ async function jobCreditCard(q) {
   const who = cur == null ? 'not set' : cur === CREDIT_OWNER ? 'the owner' : nameOf(everyone, cur);
   const field = creditField(q, active, { bare: true });
   return `<div class="card" id="credit"><b>Sales credit</b> <span class="muted">&middot; ${escEmail(who)}</span>
-    ${/<select/.test(field) ? `<form method="post" action="/quote/${escEmail(q.code)}/credit" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
+    ${/<select/.test(field) ? `<form method="post" action="/admin/quote/${escEmail(q.code)}/credit" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
       ${field}<button type="submit" class="btn btn-ghost">Save</button></form>` : field}</div>`;
 }
 
@@ -20434,7 +20229,7 @@ function earningsTiles(e) {
 
 /* A helper's own earnings, in full. Only ever their own: there is no id in
    the address to change. */
-app.get('/my-earnings', requireAdmin, async (req, res) => {
+app.get('/admin/my-earnings', requireAdmin, async (req, res) => {
   const actor = currentActor() || OWNER_ACTOR;
   if (actor.kind !== 'staff') return res.redirect('/admin/commission');
   try {
@@ -20449,7 +20244,7 @@ app.get('/my-earnings', requireAdmin, async (req, res) => {
         <div class="row-sub">${escEmail(whenShort(b.created_at))}</div></span><span class="row-end"><b>${money(b.amount)}</b> ${
         pill(b.paid_at ? 'paid' : 'owed', b.paid_at ? 'neutral' : 'green')}</span></div>`).join('')}</div>` : ''}
       <div class="card"><b>Commission by sale</b>${e.lines.length ? `<div class="rows">${e.lines.map((l) => `<div class="row-i">
-        <span class="row-main"><a href="/production/${escEmail(l.code)}"><b>${escEmail(l.code)}</b></a> ${escEmail(l.name || '')}
+        <span class="row-main"><a href="/admin/production/${escEmail(l.code)}"><b>${escEmail(l.code)}</b></a> ${escEmail(l.name || '')}
           <div class="row-sub">collected ${money(l.collected)} &middot; commission on ${money(l.base)}</div></span>
         <span class="row-end"><b>${money(l.state === 'paid' ? l.paid_amount_c : l.amount)}</b> ${pill(l.state, tone[l.state])}</span></div>`).join('')}</div>`
         : `<p class="muted">Nothing yet. When a customer pays on a quote credited to you, it shows here. Set the sales credit on the quote form or the job page.</p>`}</div>`, 'earnings'));
@@ -20541,12 +20336,12 @@ app.post('/admin/incentives/:id/award', requireAdmin, async (req, res) => {
 
 /* ── Lead work: notes, assignment, outcome, and leads added by hand ───────── */
 
-app.post('/lead/:id/note', requireAdmin, async (req, res) => {
+app.post('/admin/lead/:id/note', requireAdmin, async (req, res) => {
   const id = intIn(req.params.id);
   const b = req.body || {};
   const kind = NOTE_KINDS[b.kind] ? b.kind : 'note';
   const body = text(b.body, 2000);
-  const backTo = safeAdminPath(b.back, '/leads');
+  const backTo = safeAdminPath(b.back, '/admin/leads');
   if (!id || !body) return back(res, backTo, 'err', 'Write something first.');
   try {
     const actor = currentActor();
@@ -20562,11 +20357,11 @@ app.post('/lead/:id/note', requireAdmin, async (req, res) => {
   }
 });
 
-app.post('/lead/:id/assign', requireAdmin, async (req, res) => {
+app.post('/admin/lead/:id/assign', requireAdmin, async (req, res) => {
   const id = intIn(req.params.id);
   const to = req.body && req.body.to === 'me' && currentActor() && currentActor().kind === 'staff'
     ? currentActor().id : intIn(req.body && req.body.to);
-  const backTo = safeAdminPath(req.body && req.body.back, '/leads');
+  const backTo = safeAdminPath(req.body && req.body.back, '/admin/leads');
   if (!id) return res.redirect(backTo);
   try {
     await pool.query('UPDATE submissions SET assigned_to = $2 WHERE id = $1', [id, to]);
@@ -20577,10 +20372,10 @@ app.post('/lead/:id/assign', requireAdmin, async (req, res) => {
   }
 });
 
-app.post('/lead/:id/outcome', requireAdmin, async (req, res) => {
+app.post('/admin/lead/:id/outcome', requireAdmin, async (req, res) => {
   const id = intIn(req.params.id);
   const outcome = LEAD_OUTCOMES[req.body && req.body.outcome] ? req.body.outcome : null;
-  const backTo = safeAdminPath(req.body && req.body.back, '/leads');
+  const backTo = safeAdminPath(req.body && req.body.back, '/admin/leads');
   if (!id) return res.redirect(backTo);
   try {
     await pool.query('UPDATE submissions SET outcome = $2 WHERE id = $1', [id, outcome]);
@@ -20595,7 +20390,7 @@ app.post('/lead/:id/outcome', requireAdmin, async (req, res) => {
 /* A lead that did not come through the website: a social DM, a phone call, a
    walk-in. Same table as every other lead, so it is counted, chased and
    scored the same way. */
-app.post('/leads/add', requireAdmin, async (req, res) => {
+app.post('/admin/leads/add', requireAdmin, async (req, res) => {
   const b = req.body || {};
   const name = text(b.name, 200);
   const email = text(b.email, 254).toLowerCase();
@@ -20604,8 +20399,8 @@ app.post('/leads/add', requireAdmin, async (req, res) => {
   const platform = SOCIAL_PLATFORMS.includes(b.platform) ? b.platform : 'Other';
   const profile = text(b.profile_url, 300);
   const profileUrl = /^https:\/\/[^\s<>"']+$/i.test(profile) ? profile : null;
-  if (!name && !email && !phone && !profileUrl) return back(res, '/leads', 'err', 'A lead needs a name, contact or profile link.');
-  if (email && !STAFF.EMAIL_RE.test(email)) return back(res, '/leads', 'err', 'That email does not look right.');
+  if (!name && !email && !phone && !profileUrl) return back(res, '/admin/leads', 'err', 'A lead needs a name, contact or profile link.');
+  if (email && !STAFF.EMAIL_RE.test(email)) return back(res, '/admin/leads', 'err', 'That email does not look right.');
   try {
     const actor = currentActor();
     const source = ['Facebook', 'Instagram', 'TikTok', 'Google'].includes(platform) ? 'social' : 'manual';
@@ -20614,25 +20409,25 @@ app.post('/leads/add', requireAdmin, async (req, res) => {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
       [name || (profileUrl ? 'Social lead' : 'Lead'), phone, email, description || null, source, platform, profileUrl,
        actor && actor.kind === 'staff' ? actor.id : null]);
-    return res.redirect(`/leads#lead-${l.id}`);
+    return res.redirect(`/admin/leads#lead-${l.id}`);
   } catch (err) {
     console.error('add lead failed:', err.message);
-    return back(res, '/leads', 'err', 'Could not add the lead.');
+    return back(res, '/admin/leads', 'err', 'Could not add the lead.');
   }
 });
 
-app.post('/quote/:code/note', requireAdmin, async (req, res) => {
+app.post('/admin/quote/:code/note', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   const body = text(req.body && req.body.body, 2000);
   const kind = NOTE_KINDS[req.body && req.body.kind] ? req.body.kind : 'note';
-  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/quotes');
-  if (!body) return res.redirect(`/production/${code}#notes`);
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/quotes');
+  if (!body) return res.redirect(`/admin/production/${code}#notes`);
   try {
     const actor = currentActor();
     await pool.query(`INSERT INTO lead_notes (quote_code, kind, body, staff_id) VALUES ($1, $2, $3, $4)`,
       [code, kind, body, actor && actor.kind === 'staff' ? actor.id : null]);
   } catch (err) { console.error('quote note failed:', err.message); }
-  return res.redirect(`/production/${code}#notes`);
+  return res.redirect(`/admin/production/${code}#notes`);
 });
 
 /** The notes card on a job page. */
@@ -20648,7 +20443,7 @@ async function jobNotesCard(code) {
       <span style="white-space:pre-wrap">${escEmail(n.body)}</span>
       <div class="row-sub">${escEmail(nameOf(roster, n.staff_id))} &middot; ${escEmail(whenShort(n.created_at))}</div></span></div>`).join('')
       || '<p class="muted">No notes yet.</p>'}
-    <form method="post" action="/quote/${escEmail(code)}/note" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
+    <form method="post" action="/admin/quote/${escEmail(code)}/note" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
       <select name="kind">${Object.entries(NOTE_KINDS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
       <textarea name="body" rows="2" maxlength="2000" placeholder="What happened, or what should change" style="flex:1 1 260px" required></textarea>
       <button type="submit" class="btn btn-ghost">Add note</button>
@@ -20667,24 +20462,24 @@ function leadWorkPanel(l, notes, roster, actor) {
     ${l.profile_url ? `<p><a href="${escEmail(l.profile_url)}" target="_blank" rel="noopener noreferrer">Open their profile</a></p>` : ''}
     ${notes.map((n) => `<div class="row-sub" style="white-space:pre-wrap">${pill(NOTE_KINDS[n.kind] || n.kind, 'neutral')}
       ${escEmail(n.body)} <span class="muted">— ${escEmail(nameOf(roster, n.staff_id))}, ${escEmail(whenShort(n.created_at))}</span></div>`).join('')}
-    <form method="post" action="/lead/${l.id}/note" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
-      <input type="hidden" name="back" value="/leads">
+    <form method="post" action="/admin/lead/${l.id}/note" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
+      <input type="hidden" name="back" value="/admin/leads">
       <select name="kind">${Object.entries(NOTE_KINDS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
       <textarea name="body" rows="2" maxlength="2000" required placeholder="Call, message or note" style="flex:1 1 220px"></textarea>
       <label class="muted" style="font-size:12px">follow up <input type="date" name="follow_up"></label>
       <button type="submit" class="btn btn-ghost">Save</button>
     </form>
     <div class="row" style="gap:6px;flex-wrap:wrap;margin-top:6px">
-      <form method="post" action="/lead/${l.id}/assign" style="margin:0" class="row">
-        <input type="hidden" name="back" value="/leads">
+      <form method="post" action="/admin/lead/${l.id}/assign" style="margin:0" class="row">
+        <input type="hidden" name="back" value="/admin/leads">
         ${actor && actor.kind === 'staff'
           ? `<input type="hidden" name="to" value="${mine ? '' : 'me'}"><button type="submit" class="btn btn-ghost">${mine ? 'Unassign me' : 'Take it'}</button>`
           : `<select name="to"><option value="">Unassigned</option>${roster.filter((r) => r.active).map((r) =>
               `<option value="${r.id}"${l.assigned_to === r.id ? ' selected' : ''}>${escEmail(r.name)}</option>`).join('')}</select>
              <button type="submit" class="btn btn-ghost">Assign</button>`}
       </form>
-      <form method="post" action="/lead/${l.id}/outcome" style="margin:0" class="row">
-        <input type="hidden" name="back" value="/leads">
+      <form method="post" action="/admin/lead/${l.id}/outcome" style="margin:0" class="row">
+        <input type="hidden" name="back" value="/admin/leads">
         <select name="outcome"><option value="">No outcome</option>${Object.entries(LEAD_OUTCOMES).map(([k, v]) =>
           `<option value="${k}"${l.outcome === k ? ' selected' : ''}>${v}</option>`).join('')}</select>
         <button type="submit" class="btn btn-ghost">Set</button>
@@ -20695,7 +20490,7 @@ function leadWorkPanel(l, notes, roster, actor) {
 
 function addLeadForm() {
   return `<details class="card"><summary><b>Add a lead</b> <span class="muted">— a social DM, a call, a walk-in</span></summary>
-    <form method="post" action="/leads/add" class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px">
+    <form method="post" action="/admin/leads/add" class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px">
       <select name="platform">${SOCIAL_PLATFORMS.map((p) => `<option>${p}</option>`).join('')}</select>
       <input name="name" placeholder="Name" maxlength="200">
       <input name="email" type="email" placeholder="Email" maxlength="254">
@@ -20708,11 +20503,11 @@ function addLeadForm() {
 
 /* ── Tasks ────────────────────────────────────────────────────────────────── */
 
-app.post('/tasks', requireAdmin, async (req, res) => {
+app.post('/admin/tasks', requireAdmin, async (req, res) => {
   const b = req.body || {};
   const actor = currentActor();
   const title = text(b.title, 200);
-  const backTo = safeAdminPath(b.back, '/my-day');
+  const backTo = safeAdminPath(b.back, '/admin/my-day');
   if (!title) return back(res, backTo, 'err', 'A task needs a title.');
   const assignTo = actor && actor.kind === 'staff' ? actor.id : intIn(b.assigned_to);
   try {
@@ -20729,10 +20524,10 @@ app.post('/tasks', requireAdmin, async (req, res) => {
   }
 });
 
-app.post('/tasks/:id/done', requireAdmin, async (req, res) => {
+app.post('/admin/tasks/:id/done', requireAdmin, async (req, res) => {
   const id = intIn(req.params.id);
   const actor = currentActor();
-  const backTo = safeAdminPath(req.body && req.body.back, '/my-day');
+  const backTo = safeAdminPath(req.body && req.body.back, '/admin/my-day');
   if (!id) return res.redirect(backTo);
   try {
     /* A helper closes only their own tasks (or unassigned ones); the owner any. */
@@ -20807,7 +20602,7 @@ function chatLineJson(m) {
   return { id: Number(m.id), mine, body: m.body, when: whenShort(m.created_at) };
 }
 
-app.get('/team-chat', requireAdmin, async (req, res) => {
+app.get('/admin/team-chat', requireAdmin, async (req, res) => {
   try {
     const actor = currentActor() || OWNER_ACTOR;
     const roster = await staffRoster();
@@ -20831,7 +20626,7 @@ app.get('/team-chat', requireAdmin, async (req, res) => {
       }
       if (!staffId || !people.some((r) => r.id === staffId)) staffId = people[0].id;
       chips = filterChips(people.map((r) => ({ label: r.name + (r.active ? '' : ' (disabled)'),
-        href: `/team-chat?staff=${r.id}`, on: r.id === staffId, count: (by.get(r.id) || {}).unread || null })));
+        href: `/admin/team-chat?staff=${r.id}`, on: r.id === staffId, count: (by.get(r.id) || {}).unread || null })));
     }
     const lines = await chatLines(staffId);
     await chatMarkRead(staffId);
@@ -20848,7 +20643,7 @@ app.get('/team-chat', requireAdmin, async (req, res) => {
       <div class="card">
         <div class="tc-log" data-tclog data-after="${last}">${lines.length ? lines.map(line).join('')
           : `<p class="muted" data-tcempty>No messages yet. Say hello to ${escEmail(other)}.</p>`}</div>
-        ${canWrite ? `<form method="post" action="/team-chat" class="tc-form" data-tcform>
+        ${canWrite ? `<form method="post" action="/admin/team-chat" class="tc-form" data-tcform>
           <input type="hidden" name="staff" value="${staffId}">
           <textarea name="body" rows="2" maxlength="${TEAM_CHAT_MAX}" required placeholder="Message ${escEmail(other)}"></textarea>
           <button type="submit" class="btn">Send</button>
@@ -20871,7 +20666,7 @@ app.get('/team-chat', requireAdmin, async (req, res) => {
           }
           function poll(){
             if (document.hidden) return;
-            fetch('/api/team-chat?staff=' + encodeURIComponent(staff) + '&after=' + encodeURIComponent(log.getAttribute('data-after')),
+            fetch('/admin/api/team-chat?staff=' + encodeURIComponent(staff) + '&after=' + encodeURIComponent(log.getAttribute('data-after')),
                   { credentials: 'same-origin', cache: 'no-store' })
               .then(function(r){ return r.ok ? r.json() : null; }).then(function(d){
                 if (!d || !d.lines || !d.lines.length) return;
@@ -20896,15 +20691,15 @@ app.get('/team-chat', requireAdmin, async (req, res) => {
   }
 });
 
-app.post('/team-chat', requireAdmin, async (req, res) => {
+app.post('/admin/team-chat', requireAdmin, async (req, res) => {
   const b = req.body || {};
   const actor = currentActor() || OWNER_ACTOR;
   const body = text(b.body, TEAM_CHAT_MAX + 1);
   try {
     const roster = await staffRoster();
     const staffId = chatThreadFor(b.staff, roster);
-    const backTo = actor.kind === 'staff' || !staffId ? '/team-chat' : `/team-chat?staff=${staffId}`;
-    if (!staffId) return back(res, '/team-chat', 'err', 'Pick who to message.');
+    const backTo = actor.kind === 'staff' || !staffId ? '/admin/team-chat' : `/admin/team-chat?staff=${staffId}`;
+    if (!staffId) return back(res, '/admin/team-chat', 'err', 'Pick who to message.');
     if (!body) return back(res, backTo, 'err', 'Write something first.');
     if (body.length > TEAM_CHAT_MAX) return back(res, backTo, 'err', `That is too long. Keep it under ${TEAM_CHAT_MAX} characters.`);
     const who = roster.find((r) => r.id === staffId);
@@ -20920,11 +20715,11 @@ app.post('/team-chat', requireAdmin, async (req, res) => {
     return res.redirect(backTo);
   } catch (err) {
     console.error('team chat send failed:', err.message);
-    return back(res, '/team-chat', 'err', 'It did not send. Try again.');
+    return back(res, '/admin/team-chat', 'err', 'It did not send. Try again.');
   }
 });
 
-app.get('/api/team-chat', requireAdmin, async (req, res) => {
+app.get('/admin/api/team-chat', requireAdmin, async (req, res) => {
   res.set('Cache-Control', 'no-store');
   try {
     const roster = await staffRoster();
@@ -20942,7 +20737,7 @@ app.get('/api/team-chat', requireAdmin, async (req, res) => {
 
 /* ── My Day ───────────────────────────────────────────────────────────────── */
 
-app.get('/my-day', requireAdmin, async (req, res) => {
+app.get('/admin/my-day', requireAdmin, async (req, res) => {
   try {
     const actor = currentActor() || OWNER_ACTOR;
     const me = actor.kind === 'staff' ? actor.id : null;
@@ -20979,22 +20774,22 @@ app.get('/my-day', requireAdmin, async (req, res) => {
     const today = new Date().toISOString().slice(0, 10);
 
     const section = (title, inner, empty) => `<div class="card"><b>${title}</b>${inner || `<p class="muted">${empty}</p>`}</div>`;
-    const leadRow = (l) => `<div class="row-i"><span class="row-main"><a href="/leads#lead-${l.id}"><b>${escEmail(l.name || l.email || 'Lead')}</b></a>
+    const leadRow = (l) => `<div class="row-i"><span class="row-main"><a href="/admin/leads#lead-${l.id}"><b>${escEmail(l.name || l.email || 'Lead')}</b></a>
       <div class="row-sub">${escEmail((LEAD_SOURCES[l.source] || [l.source || 'form'])[0])} &middot; waiting ${
         escEmail(fmtMins(TEAM.businessMinutesBetween(l.created_at, new Date())))} of working time</div></span>
-      <span class="row-end">${can('quotes.draft') ? `<a class="btn btn-ghost" href="/quote/new?lead=${l.id}">Quote</a>` : ''}</span></div>`;
+      <span class="row-end">${can('quotes.draft') ? `<a class="btn btn-ghost" href="/admin/quote/new?lead=${l.id}">Quote</a>` : ''}</span></div>`;
     const copyJs = `<script>function jtCopy(id){var t=document.getElementById(id).innerText;
       (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).catch(function(){});}</script>`;
 
     res.send(adminPage('My Day', `
       ${pageHeader(`My Day${actor.kind === 'staff' ? ` — ${actor.name}` : ''}`, 'Oldest first. Answer leads, then follow-ups, then the jobs.',
-        '<a class="btn btn-ghost" href="/playbook">Playbook</a>')}
+        '<a class="btn btn-ghost" href="/admin/playbook">Playbook</a>')}
       ${flash(req.query)}
       ${released.rows.length ? section('Approved — send these now', released.rows.map((q) => `
         <div class="row-i" style="flex-wrap:wrap"><span class="row-main"><b>${escEmail(q.code)}</b> ${escEmail(q.name || '')} &middot; ${money(q.total)}
           <div class="msg" id="rel-${escEmail(q.code)}" style="white-space:pre-wrap">${escEmail(quoteMessages(q).initial)}</div></span>
           <span class="row-end"><button type="button" class="btn btn-ghost" onclick="jtCopy('rel-${escEmail(q.code)}')">Copy</button></span></div>`).join('')) : ''}
-      ${earn ? `<div class="card"><b>My earnings</b> <a class="muted" href="/my-earnings" style="float:right">See every sale →</a>
+      ${earn ? `<div class="card"><b>My earnings</b> <a class="muted" href="/admin/my-earnings" style="float:right">See every sale →</a>
         ${earningsTiles(earn.e)}
         ${earn.incentives.map((i) => incentiveRow(i)).join('')}</div>` : ''}
       ${mine.rows.length ? section('Waiting on the owner', mine.rows.map((a) => `
@@ -21003,19 +20798,19 @@ app.get('/my-day', requireAdmin, async (req, res) => {
           <span class="row-end">${pill(a.status === 'rejected' ? 'sent back' : 'waiting', a.status === 'rejected' ? 'amber' : 'blue')}</span></div>`).join('')) : ''}
       ${can('leads.view') ? section(`Leads waiting for a reply (${waiting.length})`, waiting.slice(0, 25).map(leadRow).join(''), 'Nobody is waiting.') : ''}
       ${can('leads.view') ? section(`Follow-ups due (${followUps.length})`, followUps.map((l) => `
-        <div class="row-i"><span class="row-main"><a href="/leads?status=all#lead-${l.id}"><b>${escEmail(l.name || l.email || 'Lead')}</b></a>
+        <div class="row-i"><span class="row-main"><a href="/admin/leads?status=all#lead-${l.id}"><b>${escEmail(l.name || l.email || 'Lead')}</b></a>
           <div class="row-sub">due ${escEmail(fmtDate(l.next_follow_up_on))}${l.assigned_to ? ` &middot; ${escEmail(nameOf(roster, l.assigned_to))}` : ''}</div></span></div>`).join(''),
         'No follow-ups due.') : ''}
       ${section(`Tasks (${tasks.rows.length})`, tasks.rows.map((t) => `
         <div class="row-i"><span class="row-main"><b>${escEmail(t.title)}</b>
           <div class="row-sub">${escEmail(BUSINESSES[t.business] || t.business)}${t.due_on ? ` &middot; due ${escEmail(fmtDate(t.due_on))}` : ''}${
-            t.quote_code ? ` &middot; <a href="/production/${escEmail(t.quote_code)}">${escEmail(t.quote_code)}</a>` : ''}${
+            t.quote_code ? ` &middot; <a href="/admin/production/${escEmail(t.quote_code)}">${escEmail(t.quote_code)}</a>` : ''}${
             t.assigned_to == null ? ' &middot; anyone' : ''}</div></span>
           <span class="row-end">${t.due_on && String(t.due_on instanceof Date ? t.due_on.toISOString() : t.due_on).slice(0, 10) < today ? pill('overdue', 'red') : ''}
-            <form method="post" action="/tasks/${t.id}/done" style="margin:0"><button type="submit" class="btn btn-ghost">Done</button></form></span></div>`).join(''),
+            <form method="post" action="/admin/tasks/${t.id}/done" style="margin:0"><button type="submit" class="btn btn-ghost">Done</button></form></span></div>`).join(''),
         'Nothing on your list.')}
       <details class="card"><summary><b>Add a task</b></summary>
-        <form method="post" action="/tasks" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
+        <form method="post" action="/admin/tasks" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
           <input name="title" placeholder="What needs doing" required maxlength="200" style="flex:1 1 240px">
           <input type="date" name="due_on">
           <select name="business">${Object.entries(BUSINESSES).map(([k, v]) => `<option value="${k}">${escEmail(v)}</option>`).join('')}</select>
@@ -21024,7 +20819,7 @@ app.get('/my-day', requireAdmin, async (req, res) => {
           <button type="submit" class="btn btn-ghost">Add</button>
         </form></details>
       ${nextSteps.length ? section('Jobs with a next step', nextSteps.map(({ q, cl }) => `
-        <div class="row-i"><span class="row-main"><a href="/production/${escEmail(q.code)}"><b>${escEmail(q.code)}</b></a> ${escEmail(q.name || '')}
+        <div class="row-i"><span class="row-main"><a href="/admin/production/${escEmail(q.code)}"><b>${escEmail(q.code)}</b></a> ${escEmail(q.name || '')}
           <div class="row-sub">${escEmail(cl.next.label)}${cl.next.hint ? ` — ${escEmail(cl.next.hint)}` : ''}</div></span>
           <span class="row-end muted">${cl.done}/${cl.of}</span></div>`).join('')) : ''}
       ${copyJs}`, 'myday'));
@@ -21084,7 +20879,7 @@ function kbRender(body) {
 }
 
 function kbEditor(a = {}) {
-  return `<form method="post" action="${a.id ? `/playbook/${a.id}` : '/playbook'}" style="margin-top:8px">
+  return `<form method="post" action="${a.id ? `/admin/playbook/${a.id}` : '/admin/playbook'}" style="margin-top:8px">
     ${a.id ? `<input type="hidden" name="id" value="${a.id}">` : ''}
     <div class="row" style="gap:6px;flex-wrap:wrap">
       <select name="kind">${Object.entries(KB_KINDS).map(([k, v]) => `<option value="${k}"${a.kind === k ? ' selected' : ''}>${v}</option>`).join('')}</select>
@@ -21102,7 +20897,7 @@ function kbEditor(a = {}) {
   </form>`;
 }
 
-app.get('/playbook', requireAdmin, async (req, res) => {
+app.get('/admin/playbook', requireAdmin, async (req, res) => {
   try {
     const q = text(req.query.q, 100);
     const kind = KB_KINDS[req.query.kind] ? req.query.kind : '';
@@ -21124,12 +20919,12 @@ app.get('/playbook', requireAdmin, async (req, res) => {
       `SELECT id, kind, title, shortcut, decoration, business, needs_review, updated_at,
               left(body, 240) AS excerpt${rankSel}
          FROM kb_articles WHERE ${where.join(' AND ')} ORDER BY ${order} LIMIT 100`, params);
-    const link = (over) => '/playbook?' + new URLSearchParams(Object.fromEntries(Object.entries({ q, kind, decoration, ...over }).filter(([, v]) => v)));
+    const link = (over) => '/admin/playbook?' + new URLSearchParams(Object.fromEntries(Object.entries({ q, kind, decoration, ...over }).filter(([, v]) => v)));
     const canEdit = actorLevel('kb.edit') !== 'off';
     res.send(adminPage('Playbook', `
       ${pageHeader('Playbook', 'Customer replies, artwork rules by decoration, and how we do things. Type a question in your own words.')}
       ${flash(req.query)}
-      <form class="search" method="GET" action="/playbook">
+      <form class="search" method="GET" action="/admin/playbook">
         ${kind ? `<input type="hidden" name="kind" value="${escEmail(kind)}">` : ''}
         ${decoration ? `<input type="hidden" name="decoration" value="${escEmail(decoration)}">` : ''}
         <input name="q" value="${escEmail(q)}" placeholder="e.g. how long will my order take? or /deposit" autofocus>
@@ -21139,7 +20934,7 @@ app.get('/playbook', requireAdmin, async (req, res) => {
         ...Object.entries(KB_KINDS).map(([k, v]) => ({ label: v, href: link({ kind: k }), on: kind === k }))])}
       ${filterChips([{ label: 'Any decoration', href: link({ decoration: '' }), on: !decoration },
         ...Object.entries(KB_DECORATIONS).filter(([k]) => k !== 'any').map(([k, v]) => ({ label: v, href: link({ decoration: k }), on: decoration === k }))])}
-      ${rows.length ? `<div class="grid-cards">${rows.map((a) => `<a class="card" href="/playbook/${a.id}" style="display:block;color:inherit;text-decoration:none">
+      ${rows.length ? `<div class="grid-cards">${rows.map((a) => `<a class="card" href="/admin/playbook/${a.id}" style="display:block;color:inherit;text-decoration:none">
         <div>${pill(KB_KINDS[a.kind] || a.kind, a.kind === 'faq' ? 'blue' : a.kind === 'artwork' ? 'amber' : 'green')}
           ${a.decoration ? pill(KB_DECORATIONS[a.decoration] || a.decoration, 'neutral') : ''}
           ${a.needs_review ? pill('starter draft', 'red') : ''}</div>
@@ -21154,17 +20949,17 @@ app.get('/playbook', requireAdmin, async (req, res) => {
   }
 });
 
-app.get('/playbook/:id', requireAdmin, async (req, res) => {
+app.get('/admin/playbook/:id', requireAdmin, async (req, res) => {
   const id = intIn(req.params.id);
-  if (!id) return res.redirect('/playbook');
+  if (!id) return res.redirect('/admin/playbook');
   try {
     const [{ rows: [a] }, roster] = await Promise.all([
       pool.query('SELECT * FROM kb_articles WHERE id = $1 AND published', [id]), staffRoster()]);
-    if (!a) return res.redirect('/playbook');
+    if (!a) return res.redirect('/admin/playbook');
     res.send(adminPage(a.title, `
       ${pageHeader(a.title, `${escEmail(KB_KINDS[a.kind] || a.kind)}${a.decoration ? ` &middot; ${escEmail(KB_DECORATIONS[a.decoration])}` : ''}${
         a.shortcut ? ` &middot; <code>/${escEmail(a.shortcut)}</code>` : ''} &middot; updated ${escEmail(whenShort(a.updated_at))} by ${
-        escEmail(nameOf(roster, a.updated_by))}`, '<a class="btn btn-ghost" href="/playbook">All articles</a>')}
+        escEmail(nameOf(roster, a.updated_by))}`, '<a class="btn btn-ghost" href="/admin/playbook">All articles</a>')}
       ${flash(req.query)}
       ${a.needs_review ? `<div class="warn">Starter draft, written from the shop's pricing rules and common practice.
         The owner should check it before anyone relies on it. Saving it marks it checked.</div>` : ''}
@@ -21181,7 +20976,7 @@ app.get('/playbook/:id', requireAdmin, async (req, res) => {
 async function playbookSave(req, res) {
   const p = kbFromForm(req.body || {});
   if (req.params.id) p.id = intIn(req.params.id);
-  const backTo = p.id ? `/playbook/${p.id}` : '/playbook';
+  const backTo = p.id ? `/admin/playbook/${p.id}` : '/admin/playbook';
   if (!p.title || !p.body) return back(res, backTo, 'err', 'A title and some text are needed.');
   const actor = currentActor() || OWNER_ACTOR;
   try {
@@ -21192,19 +20987,19 @@ async function playbookSave(req, res) {
       return back(res, backTo, 'ok', 'Sent to the owner. It appears here once approved.');
     }
     const id = await saveKbArticle(p, actor.kind === 'staff' ? actor.id : null);
-    if (!id) return back(res, '/playbook', 'err', 'That article no longer exists.');
-    return back(res, `/playbook/${id}`, 'ok', 'Saved.');
+    if (!id) return back(res, '/admin/playbook', 'err', 'That article no longer exists.');
+    return back(res, `/admin/playbook/${id}`, 'ok', 'Saved.');
   } catch (err) {
     if (err.code === '23505') return back(res, backTo, 'err', 'Another article already uses that /shortcut.');
     console.error('playbook save failed:', err.message);
     return back(res, backTo, 'err', 'Could not save it.');
   }
 }
-app.post('/playbook', requireAdmin, playbookSave);
-app.post('/playbook/:id', requireAdmin, playbookSave);
+app.post('/admin/playbook', requireAdmin, playbookSave);
+app.post('/admin/playbook/:id', requireAdmin, playbookSave);
 
 /* The customer replies, for the "Insert reply" picker on the job page. */
-app.get('/api/playbook/replies', requireAdmin, async (req, res) => {
+app.get('/admin/api/playbook/replies', requireAdmin, async (req, res) => {
   res.set('Cache-Control', 'no-store');
   try {
     const q = text(req.query.q, 100);
@@ -21256,7 +21051,7 @@ const KB_SEED = [
     body: `Confirm with the owner before quoting:\n\n- Minimum size and quantity [owner to fill in]\n- Colour limits [owner to fill in]\n- Which garments each one works on [owner to fill in]` },
 
   { kind: 'sop', title: 'New lead: first reply to quote', tags: 'lead, reply, quote, process, sop',
-    body: `- Open My Day. Answer the oldest lead first\n- Reply within 15 minutes for chats and 1 hour for forms, during working hours\n- Log what you did on the lead (Call / Email / Text / Chat). That is what counts as answered\n- Get the details in the /quote reply. Build the quote from the lead (the Quote button), so it links back\n- If your quote is held for approval, it shows on My Day once approved. Then copy the message and send it\n- Set a follow-up date on the lead` },
+    body: `- Open My Day. Answer the oldest lead first\n- Reply within 15 minutes for chats and 1 hour for forms, during working hours\n- Log what you did on the lead (Call / Email / Text / Chat). That is what counts as answered\n- Get the details in the /admin/quote reply. Build the quote from the lead (the Quote button), so it links back\n- If your quote is held for approval, it shows on My Day once approved. Then copy the message and send it\n- Set a follow-up date on the lead` },
   { kind: 'sop', title: 'Proof approval', tags: 'proof, approval, production',
     body: `- Send the proof from the job page\n- Get approval in writing (email, text or chat), and log it as a note on the job\n- Do not tick "Proof approved" until you have it in writing` },
   { kind: 'sop', title: 'Chasing deposits and balances', tags: 'deposit, balance, reminder, money',
@@ -21286,7 +21081,7 @@ async function seedPlaybook() {
 // ─── Global error handler ─────────────────────────────────────────────────────
 
 // Email test — exercises the same Brevo-first path production emails use
-app.get('/api/test-email', requireAdmin, async (_req, res) => {
+app.get('/admin/api/test-email', requireAdmin, async (_req, res) => {
   try {
     await sendEmail({
       to:      NOTIFY_EMAIL,
@@ -21313,7 +21108,7 @@ app.use((err, req, res, _next) => {
     return res.status(413).json({ error: 'Request body too large.' });
   }
   console.error('Unhandled error:', err.message);
-  /* The route PATTERN, not the path. `/quote/AB12CD` as a grouping key makes
+  /* The route PATTERN, not the path. `/admin/quote/AB12CD` as a grouping key makes
      one failing route look like a hundred distinct faults — a flood in the
      digest and a hundred issues in Sentry — which is exactly what the
      fingerprint elsewhere strips digits to avoid. Express only knows the
@@ -21363,7 +21158,7 @@ function validateEnv() {
     console.warn('WARNING: RESEND_API_KEY is not set — no fallback if Brevo sending fails.');
   }
   if (!process.env.ADMIN_PASSWORD?.trim()) {
-    console.warn('WARNING: ADMIN_PASSWORD is not set — admin routes will be inaccessible.');
+    console.warn('WARNING: ADMIN_PASSWORD is not set — the grad order panel is locked. (Staff pages sign in through Cloudflare Access.)');
   }
   if (!process.env.JT_INTERNAL_KEY?.trim()) {
     console.warn('WARNING: JT_INTERNAL_KEY is not set — every call from design.jtees.net ' +
