@@ -47,6 +47,10 @@ function route(signature) {
   assert.notStrictEqual(at, -1, `${signature} not found`);
   return src.slice(at, src.indexOf('\n});', at));
 }
+/* The job-page route and the sender it shares with /admin/approvals. */
+function msgRoute() {
+  return route("app.post('/quote/:code/message', requireAdmin") + '\n' + lift('sendJobMessage');
+}
 
 /* ── The record ─────────────────────────────────────────────────────────── */
 
@@ -54,10 +58,11 @@ function clientMail({ fail = null, unsubscribed = false } = {}) {
   const rows = [];
   const sent = [];
   const sandbox = {
-    pool: { query: async (sql, args) => { if (/INSERT INTO client_emails/.test(sql)) rows.push(args); return { rows: [] }; } },
+    pool: { query: async (sql, args) => { if (/INSERT INTO client_emails/.test(sql)) rows.push(args.slice(0, 7)); return { rows: [] }; } },
     sendEmail: async (m) => { if (fail) throw new Error(fail); sent.push(m); },
     isUnsubscribed: async () => unsubscribed,
     htmlToText: (h) => String(h).replace(/<[^>]+>/g, ''),
+    attributedStaffId: () => null,
     console: { error() {} },
   };
   vm.createContext(sandbox);
@@ -118,7 +123,7 @@ test('the record is a table of its own, keyed on the quote', () => {
     assert.ok(ddl.includes(col), col);
   }
   assert.match(src, /ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS quote_code TEXT/);
-  assert.match(lift('sendCustomerSms'), /VALUES \(\$1,\$2,\$3,\$4,\$5,'sending',\$6\)/, 'a text carries its quote');
+  assert.match(lift('sendCustomerSms'), /VALUES \(\$1,\$2,\$3,\$4,\$5,'sending',\$6,\$7\)/, 'a text carries its quote, and who sent it');
 });
 
 /* ── Replies ────────────────────────────────────────────────────────────── */
@@ -203,7 +208,7 @@ test('the quick messages fill the box, and one for a balance only when one is ow
 /* ── Sending ────────────────────────────────────────────────────────────── */
 
 test('sending is admin only, and answers on the job page from a fixed list', () => {
-  const r = route("app.post('/quote/:code/message', requireAdmin");
+  const r = msgRoute();
   assert.match(r, /QUOTE_CODE_RE\.test\(code\)/);
   assert.match(r, /res\.redirect\(`\/production\/\$\{code\}\?\$\{key\}=\$\{encodeURIComponent\(value\)\}#messages`\)/);
   const card = lift('jobMessagesCard');
@@ -212,14 +217,14 @@ test('sending is admin only, and answers on the job page from a fixed list', () 
 });
 
 test('an empty or over-long message is refused before anything is sent', () => {
-  const r = route("app.post('/quote/:code/message', requireAdmin");
+  const r = msgRoute();
   assert.ok(r.indexOf("answer('msg_err', 'empty')") < r.indexOf('SELECT * FROM quotes'));
   assert.match(r, /text\.length > \(channel === 'text' \? 300 : 5000\)/);
   assert.match(r, /\.replace\(\/\[\\r\\n\]\+\/g, ' '\)/, 'a subject is one line');
 });
 
 test('a double press is one message', () => {
-  const r = route("app.post('/quote/:code/message', requireAdmin");
+  const r = msgRoute();
   assert.ok(r.indexOf("recentJobMessages.has(key)") < r.indexOf('SELECT * FROM quotes'));
   assert.match(r, /ref: 'manual:' \+ key\.slice\(0, 32\)/, 'and a text is keyed too, by the dedupe index');
   assert.match(r, /recentJobMessages\.delete\(key\)/, 'a send that did not happen can be tried again');
@@ -243,9 +248,10 @@ function messageRoute(o = {}) {
     sendClientEmail: async (m) => { sent.push(m); }, customerEmailHtml: () => '', escEmail: (t) => t,
     SHOP_EMAIL: 'shop@example.com', smsPlain: (t) => t, reportError: async () => {},
     console: { log() {}, error() {} },
+    currentActor: () => null, actorLevel: () => 'on',
   };
   vm.createContext(sandbox);
-  vm.runInContext(route("app.post('/quote/:code/message', requireAdmin") + '\n});', sandbox);
+  vm.runInContext(lift('sendJobMessage') + '\n' + route("app.post('/quote/:code/message', requireAdmin") + '\n});', sandbox);
   const send = async (body) => {
     let location = null;
     await handler({ params: { code: 'AB12CD' }, body }, { redirect: (u) => { location = u; } });
@@ -286,7 +292,7 @@ test('a refused text does not hold the message back once it can go', async () =>
 });
 
 test('a text keeps the shape every customer text has', () => {
-  const r = route("app.post('/quote/:code/message', requireAdmin");
+  const r = msgRoute();
   assert.match(r, /body: `June's Tees: \$\{smsPlain\(text, 260\)\} Reply STOP to opt out\.`/);
   assert.match(r, /kind: 'transactional'/);
   const { plain } = require('../tools/lib/sms-templates');

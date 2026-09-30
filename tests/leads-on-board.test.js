@@ -121,7 +121,7 @@ test('the board, the Leads page, the dashboard and the menu badge share one defi
 test('a quote raised from a lead records which one', () => {
   /* Otherwise the lead only leaves the board if the contact details happen to
      match exactly — and the whole point is that they are typed fresh. */
-  assert.match(src, /from_submission_id\)\s*\n?\s*VALUES/,
+  assert.match(src, /from_submission_id(?:, [a-z_, ]+)?\)\s*\n?\s*VALUES/,
     'the insert must carry the link');
   assert.match(src, /<input type="hidden" name="from_submission_id" value="\$\{lead\.id\}">/,
     'and the form must post it');
