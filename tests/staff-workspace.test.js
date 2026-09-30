@@ -177,22 +177,24 @@ test('rounding noise is not a discount', () => {
   assert.strictEqual(STAFF.quoteNeedsApproval(supervised, { total: 100, discountPct: 0.3 }).held, false);
 });
 
+/* A DRAFT (2026-09-30) is kept out of every one of these in the same place. */
 test('a held quote is invisible to the customer, Brevo and the studio', () => {
   for (const sig of ["app.get('/q/:code', async", "app.get(['/q/:code/pay/card'", "app.post('/q/:code/changes'",
                      "app.get('/q/:code/vcard'", "app.post('/q/:code/accept'", "app.post('/q/:code/certificate', orderRateLimit"]) {
-    assert.match(route(sig), /status <> 'held'/, sig);
+    assert.match(route(sig), /status NOT IN \('held', 'draft'\)/, sig);
   }
-  assert.match(src, /async function syncQuoteToBrevo[\s\S]{0,400}if \(q\.status === 'held'\) return out;/);
+  assert.match(src, /async function syncQuoteToBrevo[\s\S]{0,400}if \(q\.status === 'held' \|\| q\.status === 'draft'\) return out;/);
   assert.match(src, /async function syncQuoteToLumise[\s\S]{0,200}q\.status === 'held'/);
   assert.match(src, /async function syncQuoteContact[\s\S]{0,120}q\.status === 'held'/);
-  assert.match(src, /async function brevoQuoteCatchUp[\s\S]{0,300}AND status <> 'held'/);
+  assert.match(src, /async function brevoQuoteCatchUp[\s\S]{0,300}AND status NOT IN \('held', 'draft'\)/);
   assert.doesNotMatch(src, /status <> 'expired'(?! AND)/, "totals exclude held quotes too: NOT IN ('expired', 'held')");
 });
 
 test('a helper cannot edit a quote the customer already has when the edit needs approval', () => {
   const r = route("app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin");
-  assert.match(r, /if \(existingQuote && !wasHeld && gate\.held\)/);
-  assert.ok(r.indexOf('if (existingQuote && !wasHeld && gate.held)') < r.indexOf('UPDATE quotes SET name=$2'),
+  /* A draft is not with the customer, so a helper may keep working on it. */
+  assert.match(r, /if \(existingQuote && !wasHeld && !wasDraft && gate\.held\)/);
+  assert.ok(r.indexOf('if (existingQuote && !wasHeld && !wasDraft && gate.held)') < r.indexOf('UPDATE quotes SET name=$2'),
     'refused before anything is written');
 });
 

@@ -4526,7 +4526,7 @@ const BREVO_STAGE = {
  * marketing plumbing must never be able to fail a payment.
  */
 async function syncQuoteContact(q, event = null) {
-  if (!q || !q.email || q.status === 'held') return;
+  if (!q || !q.email || q.status === 'held' || q.status === 'draft') return;
   const email = String(q.email).trim().toLowerCase();
   const total = Number(q.total || 0);
   const paid = Number(q.paid_amount || 0);
@@ -6354,7 +6354,7 @@ function toE164(phone) {
 async function syncQuoteToBrevo(q, { note = true } = {}) {
   const out = { contactId: q.brevo_contact_id || null, dealId: q.brevo_deal_id || null, error: null };
   // A quote waiting for the owner's approval is not a deal yet (staff_approvals).
-  if (q.status === 'held') return out;
+  if (q.status === 'held' || q.status === 'draft') return out;
   const email = String(q.email || '').trim();
   const phone = String(q.phone || '').trim();
   if (!email && !phone) return out;
@@ -6476,7 +6476,7 @@ async function brevoQuoteCatchUp() {
   if (!process.env.BREVO_API_KEY) return '';
   const { rows } = await pool.query(
     `SELECT * FROM quotes
-      WHERE brevo_deal_id IS NULL AND COALESCE(brevo_attempts, 0) < $2 AND status <> 'held'
+      WHERE brevo_deal_id IS NULL AND COALESCE(brevo_attempts, 0) < $2 AND status NOT IN ('held', 'draft')
         AND (NULLIF(btrim(email), '') IS NOT NULL
              OR length(regexp_replace(COALESCE(phone, ''), '\\D', '', 'g')) >= 10)
         AND created_at >= $1 AND created_at < NOW() - interval '10 minutes'
@@ -6509,7 +6509,7 @@ async function brevoQuoteCatchUp() {
  *  over the shared internal key). Fire-and-forget by design. */
 async function syncQuoteToLumise(q) {
   const key = process.env.JT_INTERNAL_KEY;
-  if (!key || (q && q.status === 'held')) return;
+  if (!key || (q && (q.status === 'held' || q.status === 'draft'))) return;
   try {
     const url = 'https://design.jtees.net/jt-contact.php';
     await studioFetch(url, {
@@ -7125,6 +7125,11 @@ app.get(['/admin/quote/new', '/admin/quote/:code/edit'], requireAdmin, async (re
      the first posts to the edit route — without this the form would POST to
      /admin/api/quotes/null and update nothing. */
   const isEdit = !!(existing && existing.code);
+  /* A draft is finished by saving it WITHOUT the draft button (see the save
+     route), so its main button says that is what it does. */
+  const isDraft = isEdit && existing.status === 'draft';
+  const canDraft = !isEdit || isDraft;
+  const goLabel = isDraft ? 'Finish & get the message' : isEdit ? 'Save changes' : 'Create quote & get the message';
   const eItems = (E.items && E.items.length) ? E.items : [null];
   const val = (v) => v == null ? '' : escEmail(String(v));
   const [eFirst, ...eRest] = String(E.name || '').trim().split(/\s+/);
@@ -7474,6 +7479,9 @@ function productGroupOf(name) {
       </div>`;
     })()}
     <form method="POST" action="${isEdit ? '/admin/api/quotes/' + existing.code : '/admin/api/quotes'}" id="qf">
+      ${isDraft ? `<div class="card" style="background:#f8fafc;border-color:#cbd5e1"><b>Draft.</b>
+        <span class="muted">The customer cannot see this quote yet. <b>Finish &amp; get the message</b> at the
+        bottom sends it; <b>Save as draft</b> keeps it private.</span></div>` : ''}
       ${lead ? `<input type="hidden" name="from_submission_id" value="${lead.id}">` : ''}
       <div class="card">
         <div class="row">
@@ -7581,7 +7589,11 @@ function productGroupOf(name) {
       </div>
 
       <p class="muted" id="qfstat" style="margin-top:10px;font-size:12.5px"></p>
-      <button type="submit" id="qfgo">${isEdit ? 'Save changes' : 'Create quote &amp; get the message'}</button>
+      <button type="submit" id="qfgo">${escEmail(goLabel)}</button>
+      ${canDraft ? `<button type="submit" name="draft" value="1" id="qfdraft" class="btn-ghost"
+          style="width:100%;margin-top:8px">Save as draft</button>
+        <p class="muted" style="margin-top:6px;font-size:12px">A draft stays private: the customer's link does not
+          open and nothing is sent until you finish it.</p>` : ''}
     </form>
     <p style="margin-top:14px"><a class="muted" href="/admin/quotes">View all quotes →</a></p>
     <script>
@@ -8357,12 +8369,16 @@ ${uploadStatusScript()}
         qfstat.style.color = upFailed ? '#b45309' : '#6b7280';
         qfgo.disabled = upPending > 0;
         qfgo.style.opacity = upPending > 0 ? '.6' : '';
+        /* A draft waits for the photos too: saving one without them loses them
+           just the same. */
+        var qfdraft = document.getElementById('qfdraft');
+        if (qfdraft) { qfdraft.disabled = upPending > 0; qfdraft.style.opacity = upPending > 0 ? '.6' : ''; }
         /* The button says what it is about to do. Saving with photos missing
            is allowed — a quote is worth more than its reference shots — but it
            must not look like the photos went with it. */
         qfgo.textContent = (!upPending && upFailed)
-          ? ${JSON.stringify(isEdit ? 'Save changes' : 'Create quote')} + ' without the missing photo' + (upFailed > 1 ? 's' : '')
-          : ${JSON.stringify(isEdit ? 'Save changes' : 'Create quote & get the message')};
+          ? ${JSON.stringify(isDraft ? 'Finish' : isEdit ? 'Save changes' : 'Create quote')} + ' without the missing photo' + (upFailed > 1 ? 's' : '')
+          : ${JSON.stringify(goLabel)};
       }
 
       function uploadFiles(L, files){
@@ -9244,11 +9260,19 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         </div>`));
     }
     const wasHeld = !!(existingQuote && existingQuote.status === 'held');
+    /* SAVE AS DRAFT (the owner, 2026-09-30): kept private until it is sent.
+       The customer's link answers "not found", nothing reaches Brevo or the
+       studio, and no follow-up or board figure counts it, exactly as for a
+       quote held for approval. Only a quote not yet with the customer can be a
+       draft; asking for one on a quote already sent saves it as usual. */
+    const wasDraft = !!(existingQuote && existingQuote.status === 'draft');
+    const draft = String(one(b.draft) || '') === '1' && (!existingQuote || wasDraft);
     /* Held until released: an owner's edit keeps it waiting for the Approve
        button (so releasing is always a deliberate act), and a helper's keeps
-       it held when their limits still say so. */
-    const keepHeld = wasHeld && (actor.kind === 'owner' || gate.held);
-    if (existingQuote && !wasHeld && gate.held) {
+       it held when their limits still say so. A helper SENDING a draft goes
+       through the same gate as a new quote. */
+    const keepHeld = (wasHeld && (actor.kind === 'owner' || gate.held)) || (wasDraft && !draft && gate.held);
+    if (existingQuote && !wasHeld && !wasDraft && gate.held) {
       /* The customer already has this one, so an edit would reach them the
          moment it saved. A helper whose changes need approval leaves a note
          for the owner instead. */
@@ -9270,16 +9294,16 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
                 discount_kind=$13, discount_value=$14, discount_note=$15, rush_pct=$16,
                 taxable=$17, tax_exempt_ref=$18, tax_exempt_reason=$19,
                 change_request=NULL, requested_items=NULL, revision=COALESCE(revision,1)+1,
-                status = CASE WHEN $20 THEN 'held' WHEN accepted_at IS NULL THEN 'sent' ELSE status END,
-                held_at = CASE WHEN $20 THEN held_at ELSE NULL END,
-                sent_by = CASE WHEN status = 'held' AND NOT $20 THEN $21 ELSE sent_by END,
-                -- released on this save: the customer's clock starts now (see releaseHeldQuote)
-                created_at = CASE WHEN status = 'held' AND NOT $20 THEN NOW() ELSE created_at END
+                status = CASE WHEN $20 THEN 'held' WHEN $22 THEN 'draft' WHEN accepted_at IS NULL THEN 'sent' ELSE status END,
+                held_at = CASE WHEN $20 THEN COALESCE(held_at, NOW()) ELSE NULL END,
+                sent_by = CASE WHEN status IN ('held', 'draft') AND NOT $20 AND NOT $22 THEN $21 ELSE sent_by END,
+                -- released or sent on this save: the customer's clock starts now (see releaseHeldQuote)
+                created_at = CASE WHEN status IN ('held', 'draft') AND NOT $20 AND NOT $22 THEN NOW() ELSE created_at END
           WHERE code=$1 RETURNING *`,
         [editing, name, phone, email, JSON.stringify(items), subtotal, tax, total, deposit,
          String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy,
          discountKind, discountValue, discountNote || null, rushPct, taxable, exemptRef, exemptReason,
-         keepHeld, staffId]));
+         keepHeld, staffId, draft]));
       if (!rows.length) {
         return res.status(404).send(quotePage('Not found',
           `<div class="card"><div class="warn">That quote no longer exists.</div>
@@ -9307,7 +9331,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
          discountKind, discountValue, discountNote || null, rushPct, taxable, exemptRef, exemptReason,
          (Number.isFinite(parseInt(one(b.from_submission_id), 10))
            ? parseInt(one(b.from_submission_id), 10) : null),
-         staffId, gate.held ? null : staffId, gate.held ? 'held' : 'sent']));
+         staffId, (gate.held || draft) ? null : staffId, draft ? 'draft' : gate.held ? 'held' : 'sent']));
     }
 
     const q = rows[0];
@@ -9350,13 +9374,31 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
           </p>
         </div>`, 'quotes'));
     }
+    if (q.status === 'draft') {
+      /* Saved, and nothing else: no Brevo, no studio copy, no message to send.
+         Sending it later is a save without the draft button, which runs
+         everything below as for a new quote. */
+      logActivity(actor, 'quote draft saved', { type: 'quote', id: code }, { total });
+      return res.send(adminPage('Draft saved', `
+        ${pageHeader(`Draft ${code} saved`, `${escEmail(name || email || phone || 'No contact yet')} &middot; ${money(total)}`)}
+        <div class="card">
+          <p><b>The customer cannot see it yet.</b> Nothing was sent, and it is not counted in your figures.</p>
+          <p class="muted" style="margin-top:6px">When it is ready, open it and press <b>Finish &amp; get the message</b>.
+            It is on your Quotes board, marked draft.</p>
+          <p style="margin-top:12px">
+            <a class="btn" href="/admin/quote/${code}/edit">Keep editing</a>
+            <a class="btn btn-ghost" href="/admin/quotes">All quotes</a>
+          </p>
+        </div>`, 'quotes'));
+    }
     if (wasHeld) {
       // Released by a helper whose limits now allow it: the request is moot.
       await pool.query(`UPDATE staff_approvals SET status = 'withdrawn', decided_at = NOW()
                          WHERE kind = 'quote' AND subject_id = $1 AND status = 'pending'`, [code]);
     }
-    if (!existingQuote) logActivity(actor, 'quote sent', { type: 'quote', id: code }, { total });
-    if (!existingQuote && q.from_submission_id) markLeadResponded(q.from_submission_id, actor);
+    /* A draft being sent is, to everyone else, a new quote. */
+    if (!existingQuote || wasDraft) logActivity(actor, 'quote sent', { type: 'quote', id: code }, { total });
+    if ((!existingQuote || wasDraft) && q.from_submission_id) markLeadResponded(q.from_submission_id, actor);
 
     /* An edit updates the quote's one deal (q carries brevo_deal_id from the
        UPDATE ... RETURNING); a failure is retried hourly, brevoQuoteCatchUp. */
@@ -9561,7 +9603,7 @@ app.get('/q/:code', async (req, res) => {
   }
 
   try {
-    const { rows } = await pool.query(`SELECT * FROM quotes WHERE code=$1 AND status <> 'held'`, [code]);
+    const { rows } = await pool.query(`SELECT * FROM quotes WHERE code=$1 AND status NOT IN ('held', 'draft')`, [code]);
     if (!rows.length) {
       quoteMissBudget.miss(req);
       return friendly('It may have been removed. Text or call and we will resend it.');
@@ -10330,7 +10372,7 @@ app.get(['/q/:code/pay/card', '/q/:code/pay/balance', '/q/:code/pay/full'], asyn
   const secret = process.env.STRIPE_SECRET_KEY;
 
   try {
-    const { rows } = await pool.query(`SELECT * FROM quotes WHERE code=$1 AND status <> 'held'`, [code]);
+    const { rows } = await pool.query(`SELECT * FROM quotes WHERE code=$1 AND status NOT IN ('held', 'draft')`, [code]);
     if (!rows.length) { quoteMissBudget.miss(req); return res.redirect('/q/' + code); }
     const q = rows[0];
 
@@ -12274,7 +12316,7 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
               total    = COALESCE($9::numeric, total),
               deposit  = COALESCE($10::numeric, deposit),
               declined_items = COALESCE($11::jsonb, declined_items)
-        WHERE code=$1 AND accepted_at IS NULL AND requested_items IS NULL AND cancelled_at IS NULL AND status <> 'held'
+        WHERE code=$1 AND accepted_at IS NULL AND requested_items IS NULL AND cancelled_at IS NULL AND status NOT IN ('held', 'draft')
           AND ($12::int IS NULL OR COALESCE(revision,1) = $12::int) RETURNING *`,
       [code, nb, cname, cemail, cphone,
        choice ? JSON.stringify(choice.items) : null,
@@ -12430,7 +12472,7 @@ app.post('/q/:code/changes', orderRateLimit, async (req, res) => {
   const b = req.body || {};
   const msg = String(b.message || '').trim().slice(0, 1000);
   try {
-    const { rows: found } = await pool.query(`SELECT * FROM quotes WHERE code=$1 AND status <> 'held'`, [code]);
+    const { rows: found } = await pool.query(`SELECT * FROM quotes WHERE code=$1 AND status NOT IN ('held', 'draft')`, [code]);
     if (!found.length) return res.redirect('/q/' + code);
     const q = found[0];
 
@@ -12755,7 +12797,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
                 COUNT(*) FILTER (WHERE (${JOB_COST}) > 0) AS costed,
                 COALESCE(SUM(COALESCE(total,0) - COALESCE(tax,0)) FILTER (WHERE (${JOB_COST}) > 0), 0) AS costed_sales
            FROM quotes
-          WHERE accepted_at IS NOT NULL AND cancelled_at IS NULL AND status NOT IN ('expired', 'held')
+          WHERE accepted_at IS NOT NULL AND cancelled_at IS NULL AND status NOT IN ('expired', 'held', 'draft')
             AND EXTRACT(YEAR FROM accepted_at) = $1
           GROUP BY 1),
        periods AS (SELECT period FROM pay UNION SELECT period FROM other UNION SELECT period FROM job)
@@ -13961,7 +14003,7 @@ app.get('/q/:code/vcard', async (req, res) => {
   if (quoteMissBudget.exhausted(req)) return res.status(429).send('too many attempts');
   if (!QUOTE_CODE_RE.test(code)) { quoteMissBudget.miss(req); return res.status(400).send('bad code'); }
   try {
-    const { rows } = await pool.query(`SELECT * FROM quotes WHERE code=$1 AND status <> 'held'`, [code]);
+    const { rows } = await pool.query(`SELECT * FROM quotes WHERE code=$1 AND status NOT IN ('held', 'draft')`, [code]);
     if (!rows.length) { quoteMissBudget.miss(req); return res.status(404).send('not found'); }
     const q = rows[0];
     const [first, ...rest] = String(q.name || '').trim().split(/\s+/);
@@ -15106,7 +15148,7 @@ async function renderBoard(VIEW, req, res) {
                      THEN q.tax * LEAST(COALESCE(q.paid_amount,0) / q.total, 1)
                      ELSE 0 END),0) AS tax_collected
          FROM quotes q
-        WHERE q.status NOT IN ('expired', 'held')
+        WHERE q.status NOT IN ('expired', 'held', 'draft')
         GROUP BY 1,2 ORDER BY m DESC LIMIT 12`);
     const taxTotal = taxRows.reduce((s, r) => s + Number(r.tax_collected), 0);
     const taxPos = await taxPositionByMonth(24);
@@ -15119,7 +15161,7 @@ async function renderBoard(VIEW, req, res) {
     const { rows: openAgg } = await pool.query(
       `SELECT COUNT(*) AS n, COALESCE(SUM(total - COALESCE(paid_amount,0)),0) AS due
          FROM quotes
-        WHERE status NOT IN ('expired', 'held') AND COALESCE(paid_amount,0) < total`);
+        WHERE status NOT IN ('expired', 'held', 'draft') AND COALESCE(paid_amount,0) < total`);
 
     const { rows: quotedAgg } = await pool.query(
       `SELECT to_char(date_trunc('month', created_at), 'Mon YYYY') AS label,
@@ -15128,10 +15170,10 @@ async function renderBoard(VIEW, req, res) {
               COALESCE(SUM(subtotal),0) AS sales,
               COALESCE(SUM(cost_blanks + cost_supplies + cost_outsourced + cost_shipping),0) AS costs,
               COUNT(*) FILTER (WHERE (cost_blanks + cost_supplies + cost_outsourced + cost_shipping) > 0) AS costed
-         FROM quotes WHERE status NOT IN ('expired', 'held') GROUP BY 1,2 ORDER BY m DESC LIMIT 12`);
+         FROM quotes WHERE status NOT IN ('expired', 'held', 'draft') GROUP BY 1,2 ORDER BY m DESC LIMIT 12`);
     const quotedByLabel = Object.fromEntries(quotedAgg.map(r => [r.label, r]));
     const colour = {
-      held: '#f5f3ff|#6d28d9', sent: '#eef1f8|#33415c', viewed: '#fff4e0|#8a5a00', changes: '#fdecea|#b45309',
+      held: '#f5f3ff|#6d28d9', draft: '#f1f5f9|#475569', sent: '#eef1f8|#33415c', viewed: '#fff4e0|#8a5a00', changes: '#fdecea|#b45309',
       accepted: '#e7f6ec|#166534', paid: '#1848B8|#ffffff', expired: '#f3f4f6|#6b7280',
     };
     const quoteCard = (q) => {
@@ -15185,6 +15227,8 @@ async function renderBoard(VIEW, req, res) {
           ? `<div class="muted" style="margin-top:6px">settled &middot; ${money(q.written_off)} written off${
               q.settled_note ? ' — ' + escEmail(q.settled_note) : ''}</div>`
           : ''}
+        ${q.status === 'draft' && !q.cancelled_at ? `<div class="muted" style="margin-top:6px">Draft: the customer cannot
+          see it yet. <a href="/admin/quote/${q.code}/edit">Finish it</a></div>` : ''}
         ${wantsChange ? `
           <div style="margin-top:10px;background:#eef4ff;border:1px solid #c3d4f8;border-radius:10px;padding:10px 12px">
             <div style="font-weight:700;color:#1848B8;font-size:13px">✏️ Change requested</div>
@@ -16298,6 +16342,7 @@ const MESSAGE_ERRORS = {
   failed: 'It did not send, and the error has been reported. Try again, or reach them another way.',
   duplicate: 'That message went out a moment ago, so it was not sent twice.',
   held: 'This quote is still waiting for approval, so the customer cannot open it yet. Nothing was sent. Once it is approved, message them.',
+  draft: 'This quote is still a draft, so the customer cannot open it yet. Nothing was sent. Open it and send it first.',
 };
 
 async function jobMessagesCard(q, query) {
@@ -16448,6 +16493,7 @@ async function sendJobMessage({ code, channel, subject, text }) {
     /* Every message links to the customer's quote page, which answers "not
        found" while the quote waits for approval. */
     if (q && q.status === 'held') return 'held';
+    if (q && q.status === 'draft') return 'draft';
     if (!q) return 'no-quote';
     if (channel === 'email') {
       if (!q.email) return 'no-email';
@@ -16500,6 +16546,7 @@ app.post('/admin/quote/:code/message', requireAdmin, async (req, res) => {
       // Not queued for a quote the customer cannot open yet (sendJobMessage refuses those too).
       const { rows: [hq] } = await pool.query('SELECT status FROM quotes WHERE code = $1', [code]);
       if (hq && hq.status === 'held') return answer('msg_err', 'held');
+      if (hq && hq.status === 'draft') return answer('msg_err', 'draft');
       await pool.query(
         `INSERT INTO staff_approvals (kind, subject_id, payload, reasons, requested_by)
          VALUES ('message', $1, $2, $3, $4)`,
@@ -16548,9 +16595,9 @@ const LEAD_QUOTE_MATCH = `(NULLIF(lower(trim(q.email)),'') = lower(trim(s.email)
 async function leadsWithStatus() {
   const { rows } = await pool.query(
     `SELECT s.*,
-            (SELECT q.code FROM quotes q WHERE q.from_submission_id = s.id AND q.status <> 'held'
+            (SELECT q.code FROM quotes q WHERE q.from_submission_id = s.id AND q.status NOT IN ('held', 'draft')
               ORDER BY q.created_at LIMIT 1) AS linked_quote,
-            (SELECT q.code FROM quotes q WHERE ${LEAD_QUOTE_MATCH} AND q.status <> 'held'
+            (SELECT q.code FROM quotes q WHERE ${LEAD_QUOTE_MATCH} AND q.status NOT IN ('held', 'draft')
               ORDER BY q.created_at LIMIT 1) AS matched_quote
        FROM submissions s
       ORDER BY s.created_at DESC`);
@@ -16840,7 +16887,7 @@ app.get('/admin/dashboard', requireAdmin, async (_req, res) => {
              FROM quotes WHERE ${OWING_JOBS_WHERE}`, 'owed'),
       one(`SELECT COUNT(*)::int AS n, COALESCE(SUM(total),0) AS value FROM quotes
             WHERE accepted_at IS NULL AND cancelled_at IS NULL AND COALESCE(paid_amount,0) = 0
-              AND status NOT IN ('expired', 'held') AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)`, 'quotes out'),
+              AND status NOT IN ('expired', 'held', 'draft') AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)`, 'quotes out'),
       safe(leadsWithStatus(), [], 'leads'),
       safe(liveJobs(), [], 'jobs'),
       one(REVIEWS_WAITING_SQL, 'reviews'),
@@ -18378,7 +18425,7 @@ async function sendBalanceReminders() {
           AND balance_nudged_at IS NULL
           AND cancelled_at IS NULL
           AND paid_at <= NOW() - ($1 || ' days')::interval
-          AND status NOT IN ('expired', 'held')
+          AND status NOT IN ('expired', 'held', 'draft')
           AND email <> ''
           AND NOT EXISTS (SELECT 1 FROM quote_payments p
                            WHERE p.quote_code = quotes.code AND p.kind = 'refund')
@@ -18517,7 +18564,7 @@ async function sendDailyDigest() {
 
     const { rows } = await pool.query(
       `SELECT * FROM quotes
-        WHERE status NOT IN ('expired', 'held') AND delivered_at IS NULL
+        WHERE status NOT IN ('expired', 'held', 'draft') AND delivered_at IS NULL
         ORDER BY COALESCE(needed_by, target_date) NULLS LAST, created_at`);
     if (!rows.length && !ship) return;
 
@@ -19627,7 +19674,7 @@ app.post('/q/:code/certificate', orderRateLimit, async (req, res) => {
   const notFound = () => { quoteMissBudget.miss(req); return res.status(404).json({ error: 'We could not find that quote.' }); };
   if (!QUOTE_CODE_RE.test(code)) return notFound();
   try {
-    const { rows } = await pool.query(`SELECT * FROM quotes WHERE code = $1 AND status <> 'held'`, [code]);
+    const { rows } = await pool.query(`SELECT * FROM quotes WHERE code = $1 AND status NOT IN ('held', 'draft')`, [code]);
     if (!rows.length) return notFound();
     const q = rows[0];
     if (q.cancelled_at) return res.status(409).json({ error: 'This order has been cancelled.' });
@@ -20999,7 +21046,7 @@ async function helperScore(staffId, from, to) {
                  WHERE first_response_by = $1 AND first_response_at >= $2 AND first_response_at < $3`, [staffId, from, to]),
     pool.query(`SELECT
                   COUNT(*) FILTER (WHERE created_by = $1 AND created_at >= $2 AND created_at < $3)::int AS drafted,
-                  COUNT(*) FILTER (WHERE sent_by = $1 AND created_at >= $2 AND created_at < $3 AND status <> 'held')::int AS sent,
+                  COUNT(*) FILTER (WHERE sent_by = $1 AND created_at >= $2 AND created_at < $3 AND status NOT IN ('held', 'draft'))::int AS sent,
                   COUNT(*) FILTER (WHERE credited_to = $1 AND accepted_at >= $2 AND accepted_at < $3)::int AS accepted
                   FROM quotes`, [staffId, from, to]),
     pool.query(`SELECT
