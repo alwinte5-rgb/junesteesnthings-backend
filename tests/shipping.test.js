@@ -432,7 +432,7 @@ test('sales are accepted jobs, in the month accepted, at what the customer pays 
      profit on $3,963.72 collected. Every quote CREATED counted as a sale. */
   const books = route('app.get(FINANCES_PATH, requireAdmin');
   assert.match(books, /SUM\(COALESCE\(total,0\) - COALESCE\(tax,0\)\) AS sales/);
-  assert.match(books, /WHERE accepted_at IS NOT NULL AND cancelled_at IS NULL AND status NOT IN \('expired', 'held'\)/);
+  assert.match(books, /WHERE accepted_at IS NOT NULL AND cancelled_at IS NULL AND status NOT IN \('expired', 'held', 'draft'\)/);
   assert.match(books, /EXTRACT\(YEAR FROM accepted_at\) = \$1/);
   assert.doesNotMatch(books, /SUM\(subtotal\) AS sales/);
   /* Studio orders and other card payments are sales too, in the month paid. */

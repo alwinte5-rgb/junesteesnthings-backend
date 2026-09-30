@@ -93,9 +93,9 @@ function desk({ quotes = [], quotePayments = [], unlinked = [], disputes = [], s
         for (const x of disputes) if (x.payment_intent === args[0] && !x.quote_code) x.quote_code = args[1];
         return ok([]);
       }
-      if (/^UPDATE quotes SET status = 'accepted', accepted_at = COALESCE\(accepted_at, NOW\(\)\) WHERE code = \$1 AND status <> 'held'$/.test(s)) {
+      if (/^UPDATE quotes SET status = 'accepted', accepted_at = COALESCE\(accepted_at, NOW\(\)\) WHERE code = \$1 AND status NOT IN \('held', 'draft'\)$/.test(s)) {
         const q = Q.get(args[0]);
-        if (q && q.status !== 'held') { q.status = 'accepted'; q.accepted_at = q.accepted_at || 'now'; }
+        if (q && q.status !== 'held' && q.status !== 'draft') { q.status = 'accepted'; q.accepted_at = q.accepted_at || 'now'; }
         return ok([]);
       }
       if (/^INSERT INTO unlinked_payments \(amount, fee, currency, channel, order_ref, client_ref, kind, source,/.test(s)) {
