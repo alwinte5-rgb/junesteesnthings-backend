@@ -265,12 +265,12 @@ test('HTTP 500s are reported — they used to go nowhere at all', () => {
 });
 
 test('one broken route is one fault, not one per customer', () => {
-  /* `/api/quotes/AB12CD` as a grouping key turns a single failing route into a
+  /* `/admin/api/quotes/AB12CD` as a grouping key turns a single failing route into a
      hundred issues in Sentry and a flood in the digest. */
   const fnSrc = src.slice(src.indexOf('function routeShape'));
   const routeShape = eval(`(${fnSrc.slice(0, fnSrc.indexOf('\n}') + 2)})`); // eslint-disable-line no-eval
-  assert.strictEqual(routeShape('/api/quotes/AB12CD/pay'), '/api/quotes/:id/pay');
-  assert.strictEqual(routeShape('/api/quotes/1029/pay'), '/api/quotes/:id/pay');
+  assert.strictEqual(routeShape('/admin/api/quotes/AB12CD/pay'), '/admin/api/quotes/:id/pay');
+  assert.strictEqual(routeShape('/admin/api/quotes/1029/pay'), '/admin/api/quotes/:id/pay');
   assert.strictEqual(routeShape('/unsub/9f2ab7c4d5e6f70819a2b3c4d5e6f708'), '/unsub/:id');
   assert.strictEqual(routeShape('/health'), '/health', 'a plain route is left alone');
   assert.strictEqual(routeShape('/api/products/categories'), '/api/products/categories');

@@ -1,7 +1,7 @@
 'use strict';
 
 /* Sales-tax exemption certificates (tools/lib/tax-certificates.js, and the
- * routes by /certificates in server.js).
+ * routes by /admin/certificates in server.js).
  *
  * Run: node --test tests/*.test.js
  *
@@ -183,7 +183,7 @@ test('the customer upload is guarded like paying: code budget, rate limit, and o
 });
 
 test('the shop attaches one only to an untaxed quote, and it counts as approved', () => {
-  const r = route("app.post('/quote/:code/certificate', requireAdmin");
+  const r = route("app.post('/admin/quote/:code/certificate', requireAdmin");
   assert.match(r, /if \(q\.taxable !== false\)/);
   assert.match(r, /source: 'shop'/);
   const keep = route('async function keepCertificate(');
@@ -196,29 +196,29 @@ test('the shop attaches one only to an untaxed quote, and it counts as approved'
 });
 
 test('the file goes only to an admin, uncached and unsniffed', () => {
-  const r = route("app.get('/certificates/:id/file', requireAdmin");
+  const r = route("app.get('/admin/certificates/:id/file', requireAdmin");
   assert.match(r, /'X-Content-Type-Options': 'nosniff'/);
   assert.match(r, /'Cache-Control': 'no-store, private'/);
   assert.match(r, /'Content-Type': f\.file_type/, 'the type the bytes said when stored');
 });
 
 test('refusing needs a reason, and the way back goes only to known pages', () => {
-  const r = route("app.post('/certificates/:id/review', requireAdmin");
+  const r = route("app.post('/admin/certificates/:id/review', requireAdmin");
   assert.match(r, /if \(!approve && !note\)/);
   assert.match(r, /\/\^\\\/\(certificates\|production\\\/\[A-Z0-9\]\{6\}\)\$\/\.test/);
   assert.doesNotMatch(r, /res\.redirect\(b\.back\)/);
 });
 
 test('uploads get a larger JSON limit on their own paths only, mounted first', () => {
-  const big = src.indexOf("app.use(['/q/:code/certificate', '/quote/:code/certificate', '/api/tax-certificates']");
+  const big = src.indexOf("app.use(['/q/:code/certificate', '/admin/quote/:code/certificate', '/api/tax-certificates']");
   const general = src.indexOf("app.use(express.json({\n  limit: '1mb'");
   assert.ok(big > 0 && general > big, 'the general 1mb parser would otherwise read the body first');
 });
 
 test('the menu, its badge and the dashboard all see what is waiting', () => {
-  assert.match(src, /\{ key: 'certificates', href: '\/certificates', label: 'Certificates', icon: 'cert', badge: 'certificates' \}/);
+  assert.match(src, /\{ key: 'certificates', href: '\/admin\/certificates', label: 'Certificates', icon: 'cert', badge: 'certificates' \}/);
   assert.match(route("app.get('/admin/nav-counts', requireAdmin"), /CERTS_WAITING_SQL\).then\(\(\{ rows \}\) => \{ out\.certificates = rows\[0\]\.n; \}\)/);
-  assert.match(route("app.get('/dashboard', requireAdmin"), /one\(CERTS_WAITING_SQL, 'certificates'\)/);
+  assert.match(route("app.get('/admin/dashboard', requireAdmin"), /one\(CERTS_WAITING_SQL, 'certificates'\)/);
 });
 
 test('the builder asks why, and only an untaxed quote keeps the answer', () => {
@@ -229,7 +229,7 @@ test('the builder asks why, and only an untaxed quote keeps the answer', () => {
 });
 
 test('the tax file says what each deduction stands on, in columns added at the end', () => {
-  const r = route("app.get('/tax.csv', requireAdmin");
+  const r = route("app.get('/admin/tax.csv', requireAdmin");
   assert.match(r, /'exempt', 'exempt_ref', 'source', 'exempt_reason', 'certificate', 'certificate_status'\]/);
   assert.match(r, /LEFT JOIN tax_certificates c ON c\.id = q\.tax_certificate_id/);
   assert.match(r, /LEFT JOIN tax_certificates c ON c\.id = u\.tax_certificate_id/, 'studio sales name theirs too');
@@ -284,13 +284,13 @@ test('a paid studio order is recorded once, and the shop told once, only while i
 test('a certificate nobody paid with is never put in front of the shop', () => {
   assert.match(src, /const CERT_IN_USE_SQL = `\(c\.source <> 'studio'/);
   assert.match(src, /const CERTS_WAITING_SQL = `SELECT COUNT\(\*\)::int AS n FROM tax_certificates c\s*\n\s*WHERE c\.status = 'pending' AND \$\{CERT_IN_USE_SQL\}`/);
-  const page = route("app.get('/certificates', requireAdmin");
+  const page = route("app.get('/admin/certificates', requireAdmin");
   assert.match(page, /WHERE \$\{CERT_IN_USE_SQL\}/);
   assert.match(page, /FROM studio_exemptions s WHERE s\.certificate_id = c\.id/, 'and the card names the studio order');
 });
 
 test('deciding a certificate tells the studio, which reads the decision back', () => {
-  const r = route("app.post('/certificates/:id/review', requireAdmin");
+  const r = route("app.post('/admin/certificates/:id/review', requireAdmin");
   assert.match(r, /pushCertificateDecisionToStudio\(id\)\.catch\(\(\) => \{\}\)/, 'never holds up the redirect');
   const push = route('async function pushCertificateDecisionToStudio(');
   assert.match(push, /FROM studio_exemptions WHERE certificate_id = \$1/, 'only when a studio order is on it');
@@ -341,7 +341,7 @@ test('the board holds an exempt studio order only once it is a sale', () => {
   const chip = new Function('money', src.slice(at, src.indexOf('\n}\n', at) + 2) + '\nreturn studioExemptChip;')(
     (n) => '$' + Number(n).toFixed(2));
   assert.strictEqual(chip({ tax_exempt: 'pending', paid: 0 }), '',
-    'unpaid: its certificate is not on /certificates yet, so there is nothing to check');
+    'unpaid: its certificate is not on /admin/certificates yet, so there is nothing to check');
   assert.match(chip({ tax_exempt: 'pending', paid: 120 }), /Tax certificate to check &mdash; don&rsquo;t produce/);
   assert.match(chip({ tax_exempt: 'refused', paid: 120, tax_due: 12.3 }), /Exemption refused &mdash; \$12\.30 tax due/);
   assert.match(chip({ tax_exempt: 'refused', paid: 132.3, tax_due: 0 }), /^<span[^>]*>Exemption refused<\/span>$/,

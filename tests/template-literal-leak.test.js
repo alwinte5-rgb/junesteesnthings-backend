@@ -10,7 +10,7 @@
  *
  * which looks like client-side string concatenation but is not: the `${n}` sits
  * inside a server-side template literal, so the SERVER evaluates it, against a
- * scope with no `n`. Every render of /quote/new and /quote/:code/edit threw
+ * scope with no `n`. Every render of /admin/quote/new and /admin/quote/:code/edit threw
  * `ReferenceError: n is not defined` as an unhandled rejection — the admin quote
  * builder was down for about three hours after #46 before anyone opened it.
  *

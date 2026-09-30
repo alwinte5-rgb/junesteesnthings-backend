@@ -183,7 +183,7 @@ test('rush is quoted by a person, never self-served', () => {
   /* The quote form is admin-only, so the control lives behind requireAdmin. A
      rush box on the storefront would be selling a date the shop has not
      agreed to. */
-  const form = src.slice(src.indexOf("app.get(['/quote/new'"));
+  const form = src.slice(src.indexOf("app.get(['/admin/quote/new'"));
   assert.match(form.slice(0, 40000), /name="rush_pct"/,
     'the admin form carries the control');
   const storefront = src.slice(src.indexOf("app.get('/q/:code'"),

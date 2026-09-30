@@ -74,7 +74,7 @@ test('a customer name with a comma cannot break the file', () => {
 
 test('exports are admin-only and never cached', () => {
   /* They carry names, emails, phone numbers and money. */
-  for (const r of ['/exports', '/exports/quotes.csv', '/exports/payments.csv', '/exports/expenses.csv']) {
+  for (const r of ['/admin/exports', '/admin/exports/quotes.csv', '/admin/exports/payments.csv', '/admin/exports/expenses.csv']) {
     assert.match(src, new RegExp(`app\\.get\\('${r.replace(/\//g, '\\/')}', requireAdmin`),
       `${r} must require admin`);
   }
@@ -86,7 +86,7 @@ test('exports are admin-only and never cached', () => {
 test('the payments export reports net of the card fee', () => {
   /* Gross minus the processing fee is what actually reached the bank. An export
      that only shows gross overstates income by the fee on every card payment. */
-  const route = src.slice(src.indexOf("app.get('/exports/payments.csv'"));
+  const route = src.slice(src.indexOf("app.get('/admin/exports/payments.csv'"));
   assert.match(route, /round2\(Number\(p\.amount \|\| 0\) - Number\(p\.fee \|\| 0\)\)/);
   assert.match(route, /'net'/, 'and the column must be named');
 });
@@ -94,14 +94,14 @@ test('the payments export reports net of the card fee', () => {
 test('the quotes export carries the written-off and balance figures', () => {
   /* Otherwise a settled job exports as though it were still owed, and the
      records disagree with the board. */
-  const route = src.slice(src.indexOf("app.get('/exports/quotes.csv'"));
+  const route = src.slice(src.indexOf("app.get('/admin/exports/quotes.csv'"));
   assert.match(route, /'written_off','balance'/);
   assert.match(route, /balanceOf\(q, t\.total\)/, 'through the shared balance rule');
 });
 
 test('the quotes export prices from items, not the stored total', () => {
   /* quotes.total can lag an edit; quoteTotals is what the customer was shown. */
-  const route = src.slice(src.indexOf("app.get('/exports/quotes.csv'"));
+  const route = src.slice(src.indexOf("app.get('/admin/exports/quotes.csv'"));
   assert.match(route, /const t = quoteTotals\(q\)/);
 });
 

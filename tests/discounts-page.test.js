@@ -19,13 +19,13 @@ const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
 const src = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
-const page = src.slice(src.indexOf("app.get('/discounts'"), src.indexOf("app.post('/discounts'"));
+const page = src.slice(src.indexOf("app.get('/admin/discounts'"), src.indexOf("app.post('/admin/discounts'"));
 const admin = fs.readFileSync(path.join(ROOT,
   'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/jt-promo-admin.php'), 'utf8');
 
 test('the page is in the admin nav and gated', () => {
-  assert.match(src, /\{ key: 'discounts',\s+href: '\/discounts',\s+label: 'Discounts'/);
-  for (const r of ["'/discounts'", "'/discounts/off'"]) {
+  assert.match(src, /\{ key: 'discounts',\s+href: '\/admin\/discounts',\s+label: 'Discounts'/);
+  for (const r of ["'/admin/discounts'", "'/admin/discounts/off'"]) {
     assert.ok(src.includes(`app.get(${r}, requireAdmin`) || src.includes(`app.post(${r}, requireAdmin`),
       `${r} must require admin — these codes are money`);
   }
@@ -42,7 +42,7 @@ test('an unreachable studio is not shown as an empty list', () => {
 test('the studio validation message is shown, not swallowed', () => {
   /* "A percentage must be between 1 and 100" is actionable. "Could not save"
      sends the operator back to guess which field was wrong. */
-  const post = src.slice(src.indexOf("app.post('/discounts'"), src.indexOf("app.post('/discounts/off'"));
+  const post = src.slice(src.indexOf("app.post('/admin/discounts'"), src.indexOf("app.post('/admin/discounts/off'"));
   assert.match(post, /d\.error \|\| `studio answered \$\{r\.status\}`/);
 });
 
@@ -87,7 +87,7 @@ test('a switched-off code can be turned back on', () => {
   /* Otherwise a code switched off by mistake has to be retyped, which is how
      its rules get lost. */
   assert.match(admin, /SET active=1 WHERE code=/);
-  assert.match(src, /app\.post\('\/discounts\/on', requireAdmin/);
+  assert.match(src, /app\.post\('\/admin\/discounts\/on', requireAdmin/);
 });
 
 test('expired and switched-off codes are told apart', () => {
@@ -163,13 +163,13 @@ test('the email states the code as stored, not as typed', () => {
 test('create-and-send does not re-post the form to another route', () => {
   /* A 307 would replay the create body at the send route, where `send_to` is
      read as `email` — the code would be created and silently never sent. */
-  assert.doesNotMatch(src, /res\.redirect\(307, '\/discounts\/send/);
+  assert.doesNotMatch(src, /res\.redirect\(307, '\/admin\/discounts\/send/);
   assert.match(src, /await sendDiscountEmail\(String\(d\.code\)\.toUpperCase\(\), to, ''\)/);
 });
 
 test('a failed send does not report a failed create', () => {
   /* The code exists. "Could not create" would have the shop make it twice. */
-  const post = src.slice(src.indexOf("app.post('/discounts'"), src.indexOf("app.post('/discounts/send'"));
+  const post = src.slice(src.indexOf("app.post('/admin/discounts'"), src.indexOf("app.post('/admin/discounts/send'"));
   assert.match(post, /was created, but the email did not send/);
 });
 
@@ -255,7 +255,7 @@ test('a datalist, so an unknown address is still allowed', () => {
 test('the rule fields actually reach the studio', () => {
   /* They were on the form and dropped by the POST handler — the shop would set
      a minimum order, see it accepted, and get a code with no minimum. */
-  const post = src.slice(src.indexOf("app.post('/discounts'"), src.indexOf("app.post('/discounts/send'"));
+  const post = src.slice(src.indexOf("app.post('/admin/discounts'"), src.indexOf("app.post('/admin/discounts/send'"));
   for (const f of ['min_order', 'max_uses', 'once_per_customer', 'assigned_to']) {
     assert.ok(post.includes(`'${f}'`), `${f} must be forwarded`);
   }
@@ -264,7 +264,7 @@ test('the rule fields actually reach the studio', () => {
 test('the send is stamped only after it succeeds', () => {
   /* Stamping first would show a code as sent that never left, and the shop
      would never chase it. */
-  const send = src.slice(src.indexOf("app.post('/discounts/send'"));
+  const send = src.slice(src.indexOf("app.post('/admin/discounts/send'"));
   const i = send.indexOf('await sendDiscountEmail');
   const j = send.indexOf("f.set('sent', '1')");
   assert.ok(i > -1 && j > i, 'the stamp must come after the send');
@@ -335,7 +335,7 @@ test('an unsent code sends without a confirmation', () => {
 
 test('a repeat is reported as a repeat', () => {
   /* "TYLER30 sent to Tyler" after the third send reads as the first. */
-  const send = src.slice(src.indexOf("app.post('/discounts/send'"));
+  const send = src.slice(src.indexOf("app.post('/admin/discounts/send'"));
   assert.match(send, /already \? `\$\{code\} sent to \$\{email\} again/);
   assert.match(send, /that is \$\{already \+ 1\} times now/);
 });
@@ -343,7 +343,7 @@ test('a repeat is reported as a repeat', () => {
 test('the count is read before the send, not after', () => {
   /* Reading it afterwards would include the send just made and report every
      first send as a second. */
-  const send = src.slice(src.indexOf("app.post('/discounts/send'"));
+  const send = src.slice(src.indexOf("app.post('/admin/discounts/send'"));
   const read = send.indexOf('const already =');
   const doSend = send.indexOf('await sendDiscountEmail');
   assert.ok(read > -1 && read < doSend, 'the count must be taken first');

@@ -254,7 +254,7 @@ test('the refund path reads the original amount and tax to apportion from', () =
 /* ── Settling an unknown tax portion by hand ─────────────────────────────── */
 
 const SETTLE = (() => {
-  const i = src.indexOf("app.post('/unlinked/:id/tax'");
+  const i = src.indexOf("app.post('/admin/unlinked/:id/tax'");
   assert.notStrictEqual(i, -1, 'there must be a way to establish a tax portion');
   return src.slice(i, i + 2600);
 })();
@@ -293,7 +293,7 @@ test('the tax cannot exceed the payment or contradict its sign', () => {
 test('the books page offers the rows that are holding a period open', () => {
   assert.match(src, /WHERE tax_portion IS NULL\s*\n\s*ORDER BY created_at LIMIT 50/,
     'the unsettled receipts are the ones worth showing');
-  assert.match(src, /action="\/unlinked\/\$\{u\.id\}\/tax"/,
+  assert.match(src, /action="\/admin\/unlinked\/\$\{u\.id\}\/tax"/,
     'each row needs a way to settle it, or the route is unreachable');
 });
 
@@ -460,8 +460,8 @@ test('a database without the table yet does not take the tax page down', async (
 /* ── The records that get filed from ─────────────────────────────────────── */
 
 const TAX_CSV = (() => {
-  const start = src.indexOf("app.get('/tax.csv'");
-  assert.notStrictEqual(start, -1, '/tax.csv route not found');
+  const start = src.indexOf("app.get('/admin/tax.csv'");
+  assert.notStrictEqual(start, -1, '/admin/tax.csv route not found');
   return src.slice(start, src.indexOf("\napp.get(", start + 10));
 })();
 
@@ -495,9 +495,9 @@ test('an unknown tax portion exports BLANK, never 0', () => {
 });
 
 test('unlinked receipts have a full export of their own', () => {
-  assert.match(src, /app\.get\('\/exports\/unlinked\.csv'/,
+  assert.match(src, /app\.get\('\/admin\/exports\/unlinked\.csv'/,
     'the Stripe identifiers are what make the studio order findable');
-  assert.match(src, /app\.get\('\/exports\/unlinked\.csv', requireAdmin/,
+  assert.match(src, /app\.get\('\/admin\/exports\/unlinked\.csv', requireAdmin/,
     'it carries customer names and money — admin only, like every other export');
 });
 

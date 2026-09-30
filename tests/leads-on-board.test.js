@@ -108,11 +108,11 @@ test('a lead reads new, quoted or let go, and only new ones are waiting', async 
 
 test('the board, the Leads page, the dashboard and the menu badge share one definition', () => {
   assert.ok(board.includes('const leads = await unansweredLeads();'), 'the board');
-  const leadsPage = src.slice(src.indexOf("app.get('/leads', requireAdmin"));
+  const leadsPage = src.slice(src.indexOf("app.get('/admin/leads', requireAdmin"));
   assert.match(leadsPage.slice(0, 1500), /await leadsWithStatus\(\)/, 'the Leads page');
   const counts = src.slice(src.indexOf("app.get('/admin/nav-counts', requireAdmin"));
   assert.match(counts.slice(0, 800), /unansweredLeads\(\)/, 'the menu badge');
-  const dash = src.slice(src.indexOf("app.get('/dashboard', requireAdmin"));
+  const dash = src.slice(src.indexOf("app.get('/admin/dashboard', requireAdmin"));
   assert.match(dash.slice(0, 4000), /leadsWithStatus\(\)/, 'the dashboard');
   assert.strictEqual((src.match(/FROM submissions s\b/g) || []).length, 1,
     'one query decides who is waiting; a second copy drifts');
@@ -130,20 +130,20 @@ test('a quote raised from a lead records which one', () => {
 test('a prefilled lead posts as a NEW quote, not an edit', () => {
   /* `existing` now means two things — a saved quote, and a blank one prefilled
      from an enquiry. Only the first has a code. Treating them alike made the
-     form POST to /api/quotes/null and silently update nothing. */
+     form POST to /admin/api/quotes/null and silently update nothing. */
   assert.match(src, /const isEdit = !!\(existing && existing\.code\);/);
-  assert.match(src, /action="\$\{isEdit \? '\/api\/quotes\/' \+ existing\.code : '\/api\/quotes'\}"/);
-  assert.doesNotMatch(src, /action="\$\{existing \? '\/api\/quotes\/'/,
-    'posting on the truthiness of `existing` sends a new quote to /api/quotes/null');
+  assert.match(src, /action="\$\{isEdit \? '\/admin\/api\/quotes\/' \+ existing\.code : '\/admin\/api\/quotes'\}"/);
+  assert.doesNotMatch(src, /action="\$\{existing \? '\/admin\/api\/quotes\/'/,
+    'posting on the truthiness of `existing` sends a new quote to /admin/api/quotes/null');
 });
 
 test('dismissing a lead keeps it, with the reason', () => {
   /* 132 of these were spam. That is only visible later if the dismissals say
      so — and an enquiry is evidence of demand either way. */
-  const route = src.slice(src.indexOf("app.post('/lead/:id/dismiss'"));
+  const route = src.slice(src.indexOf("app.post('/admin/lead/:id/dismiss'"));
   assert.doesNotMatch(route.slice(0, 500), /DELETE FROM/);
   assert.match(route, /SET dismissed_at = NOW\(\), dismiss_reason = \$2/);
-  assert.match(src, /app\.post\('\/lead\/:id\/dismiss', requireAdmin/);
+  assert.match(src, /app\.post\('\/admin\/lead\/:id\/dismiss', requireAdmin/);
 });
 
 test('enquiries are the first thing on the board', () => {
@@ -202,14 +202,14 @@ test('the bulk clear only offers itself for a real backlog', () => {
 test('the bulk clear cannot touch an enquiry that was quoted', () => {
   /* A quoted enquiry is already off the board by the link. Dismissing it would
      also write a false reason onto a job that was actually won. */
-  const at = src.indexOf("app.post('/leads/dismiss-old'");
+  const at = src.indexOf("app.post('/admin/leads/dismiss-old'");
   const route = src.slice(at, src.indexOf('\n});', at));
   assert.match(route, /NOT EXISTS \(SELECT 1 FROM quotes q WHERE q\.from_submission_id = submissions\.id\)/);
   assert.match(route, /dismissed_at IS NULL/, 'and it must not re-stamp one already cleared');
 });
 
 test('bulk clearing records the honest reason too', () => {
-  const at = src.indexOf("app.post('/leads/dismiss-old'");
+  const at = src.indexOf("app.post('/admin/leads/dismiss-old'");
   const route = src.slice(at, src.indexOf('\n});', at));
   assert.match(route, /Too late — cleared in bulk/,
     'so the backlog is still identifiable as missed rather than rejected');

@@ -56,7 +56,7 @@ function route(anchor) {
 }
 
 const OWING = (/const OWING_JOBS_WHERE = `([^`]*)`;/.exec(src) || [])[1];
-const DASH = route("app.get('/dashboard', requireAdmin");
+const DASH = route("app.get('/admin/dashboard', requireAdmin");
 
 /* ── What counts as owed ────────────────────────────────────────────────── */
 
@@ -82,7 +82,7 @@ test('jobs in hand are the undelivered ones; delivered ones are counted apart', 
 test('each delivered job still showing a balance is named, and links to its card', () => {
   assert.match(DASH, /WHERE \$\{OWING_JOBS_WHERE\} AND delivered_at IS NOT NULL/);
   assert.match(DASH, /\.\.\.deliveredOwing\.map\(/);
-  assert.match(DASH, /href: `\/quotes#q-\$\{escEmail\(q\.code\)\}`/);
+  assert.match(DASH, /href: `\/admin\/quotes#q-\$\{escEmail\(q\.code\)\}`/);
   /* ...and the card is there to land on. */
   assert.match(src, /return `<div class="card" id="q-\$\{q\.code\}">/);
 });
@@ -103,7 +103,7 @@ function cancelForm() {
 test('the job page can cancel a job, and says so about money already paid', () => {
   const form = cancelForm();
   const unpaid = form({ code: 'AB12CD34EF', paid_amount: 0 }, 'production');
-  assert.match(unpaid, /action="\/quote\/AB12CD34EF\/cancel"/);
+  assert.match(unpaid, /action="\/admin\/quote\/AB12CD34EF\/cancel"/);
   assert.match(unpaid, /<input type="hidden" name="back" value="production">/);
   assert.match(unpaid, /name="reason"/);
   assert.doesNotMatch(unpaid, /has been paid on this job/);
@@ -116,12 +116,12 @@ test('the job page can cancel a job, and says so about money already paid', () =
 });
 
 test('the job page offers it, and the money board uses the same form', () => {
-  const job = route("app.get('/production/:code', requireAdmin");
+  const job = route("app.get('/admin/production/:code', requireAdmin");
   assert.match(job, /Not going ahead\? Cancel this job/);
   assert.match(job, /cancelOrderForm\(q, 'production'\)/);
   assert.match(job, /\$\{q\.cancelled_at \? '' : `/, 'not offered on a job already cancelled');
   assert.match(src, /\$\{q\.cancelled_at \? '' : cancelOrderForm\(q\)\}/);
-  assert.strictEqual(src.split('action="/quote/${q.code}/cancel"').length - 1, 1,
+  assert.strictEqual(src.split('action="/admin/quote/${q.code}/cancel"').length - 1, 1,
     'one cancel form in the file, not a copy per page');
 });
 
@@ -139,23 +139,23 @@ test('a delivered job still owed money has a card with its payment buttons', () 
 });
 
 test('Orders says a delivered job still owes, rather than just "delivered"', () => {
-  const orders = route("app.get('/orders', requireAdmin");
+  const orders = route("app.get('/admin/orders', requireAdmin");
   assert.match(orders, /o\.delivered_at && balanceOf\(o\) > 0 \? \['delivered · ' \+ money\(balanceOf\(o\)\) \+ ' still owed'/);
 });
 
 test('a cancelled job can be restored from Orders, and it comes back there', () => {
   /* Orders is the one page that lists cancelled jobs; the cancel form and the
      paid-after-cancelling alert both promise a Restore. */
-  const orders = route("app.get('/orders', requireAdmin");
-  assert.match(orders, /o\.cancelled_at \? `\s+<form method="POST" action="\/quote\/\$\{o\.code\}\/uncancel"/);
+  const orders = route("app.get('/admin/orders', requireAdmin");
+  assert.match(orders, /o\.cancelled_at \? `\s+<form method="POST" action="\/admin\/quote\/\$\{o\.code\}\/uncancel"/);
   assert.match(orders, /<input type="hidden" name="back" value="orders">/);
-  const restore = route("app.post('/quote/:code/uncancel', requireAdmin");
+  const restore = route("app.post('/admin/quote/:code/uncancel', requireAdmin");
   assert.match(restore,
-    /res\.redirect\(String\(\(req\.body && req\.body\.back\) \|\| ''\) === 'orders' \? '\/orders' : '\/quotes'\)/);
+    /res\.redirect\(String\(\(req\.body && req\.body\.back\) \|\| ''\) === 'orders' \? '\/admin\/orders' : '\/admin\/quotes'\)/);
 });
 
 test('cancelling from Production comes back to Production', () => {
-  const cancel = route("app.post('/quote/:code/cancel', requireAdmin");
+  const cancel = route("app.post('/admin/quote/:code/cancel', requireAdmin");
   assert.match(cancel,
-    /res\.redirect\(String\(\(req\.body && req\.body\.back\) \|\| ''\) === 'production' \? '\/production' : '\/quotes'\)/);
+    /res\.redirect\(String\(\(req\.body && req\.body\.back\) \|\| ''\) === 'production' \? '\/admin\/production' : '\/admin\/quotes'\)/);
 });

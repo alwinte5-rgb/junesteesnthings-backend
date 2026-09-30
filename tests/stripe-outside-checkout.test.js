@@ -668,7 +668,7 @@ test('the offer sits beside "Record a payment", never inside its form', () => {
   assert.match(card, /var a=document\.getElementById\('ap-\$\{q\.code\}'\);if\(a\)a\.style\.display='block'/,
     'the same button opens both');
   const block = card.slice(offer, markPaid);
-  assert.match(block, /action="\/unlinked\/\$\{u\.id\}\/apply"/);
+  assert.match(block, /action="\/admin\/unlinked\/\$\{u\.id\}\/apply"/);
   assert.match(block, /<input type="hidden" name="quote" value="\$\{q\.code\}">/);
   assert.match(block, /if\(!confirm\('Apply this \$\{money\(u\.amount\)\} Stripe payment to \$\{q\.code\}\?'\)\)return false;/,
     'cancelling the confirm leaves the button usable');
@@ -676,7 +676,7 @@ test('the offer sits beside "Record a payment", never inside its form', () => {
 });
 
 test('the apply route is admin only, reads the result back, and answers from a fixed list', () => {
-  const at = src.indexOf("app.post('/unlinked/:id/apply', requireAdmin,");
+  const at = src.indexOf("app.post('/admin/unlinked/:id/apply', requireAdmin,");
   assert.ok(at > 0, 'gated by requireAdmin');
   const route = src.slice(at, src.indexOf('\n});', at));
   assert.match(route, /QUOTE_CODE_RE\.test\(code\)/);

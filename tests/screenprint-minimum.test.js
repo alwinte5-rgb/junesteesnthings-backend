@@ -261,7 +261,7 @@ const serverSrc = require('node:fs').readFileSync(
   require('node:path').join(__dirname, '..', 'server.js'), 'utf8');
 
 test('a line over the ceiling stops the save, not just the screen', () => {
-  const route = serverSrc.slice(serverSrc.indexOf("app.post(['/api/quotes'"));
+  const route = serverSrc.slice(serverSrc.indexOf("app.post(['/admin/api/quotes'"));
   const save = route.slice(0, route.indexOf('const subtotal = round2(items'));
   assert.match(save, /if \(priced\.overScreens\) \{[\s\S]{0,200}overCeiling\.push/,
     'the save path must collect over-ceiling lines');

@@ -9,7 +9,7 @@
  * offer. So the board groups on `paid_amount > 0`, with delivered work dropping
  * out of both.
  *
- * NOT moved to /orders — that route is the DESIGNER's online store orders from
+ * NOT moved to /admin/orders — that route is the DESIGNER's online store orders from
  * design.jtees.net, which are a different thing with a different source. Merging
  * them would produce one list that means nothing.
  */
@@ -114,11 +114,11 @@ test('the header counts the two live groups separately', () => {
 });
 
 test('the studio orders route is left alone', () => {
-  /* /orders is the designer storefront's own orders. If this ever starts
+  /* /admin/orders is the designer storefront's own orders. If this ever starts
      rendering quotes, the two sources have been conflated. */
-  const orders = src.slice(src.indexOf("app.get('/orders'"));
+  const orders = src.slice(src.indexOf("app.get('/admin/orders'"));
   assert.match(orders.slice(0, 400), /fetchStudioOrders\(\)/,
-    '/orders must still serve the designer store orders');
+    '/admin/orders must still serve the designer store orders');
   assert.doesNotMatch(orders.slice(0, 400), /gOrders|quoteCard/,
     'quotes must not be merged into the studio orders page');
 });

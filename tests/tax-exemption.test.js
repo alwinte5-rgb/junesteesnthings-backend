@@ -162,10 +162,10 @@ test('the books page says when its own numbers are incomplete', () => {
 /* ── The export ──────────────────────────────────────────────────────────── */
 
 const TAXCSV = (() => {
-  const i = src.indexOf("app.get('/tax.csv'");
-  assert.notStrictEqual(i, -1, '/tax.csv route not found');
-  const j = src.indexOf("app.get('/exports/unlinked.csv'", i);
-  assert.notStrictEqual(j, -1, 'could not find the end of the /tax.csv route');
+  const i = src.indexOf("app.get('/admin/tax.csv'");
+  assert.notStrictEqual(i, -1, '/admin/tax.csv route not found');
+  const j = src.indexOf("app.get('/admin/exports/unlinked.csv'", i);
+  assert.notStrictEqual(j, -1, 'could not find the end of the /admin/tax.csv route');
   return src.slice(i, j);
 })();
 
@@ -212,7 +212,7 @@ test('every row has exactly as many cells as there are headers', () => {
     'unlinked rows must line up with the header');
 });
 
-test('/tax.csv survives a deploy that races the migration', () => {
+test('/admin/tax.csv survives a deploy that races the migration', () => {
   /* Its sibling queries are all guarded. Unguarded, the export goes from
      working to a 500 during the deploy window — on the one file a return is
      filed from. */
@@ -242,7 +242,7 @@ test('the export says exempt rather than leaving a bare zero', () => {
 /* ── Documenting a sale that has already happened ────────────────────────── */
 
 const EXEMPT_ROUTE = (() => {
-  const i = src.indexOf("app.post('/quotes/:code/exemption'");
+  const i = src.indexOf("app.post('/admin/quotes/:code/exemption'");
   assert.notStrictEqual(i, -1, 'an exemption must be recordable after the sale');
   return src.slice(i, i + 2200);
 })();
@@ -291,9 +291,9 @@ test('the books page lists the sales that need a number', () => {
     'the undocumented sales are the ones worth showing');
   assert.match(src, /AND q\.cancelled_at IS NULL/,
     'a cancelled quote is not a deduction being claimed');
-  assert.match(src, /action="\/quotes\/\$\{escEmail\(String\(q\.code\)\)\}\/exemption"/,
+  assert.match(src, /action="\/admin\/quotes\/\$\{escEmail\(String\(q\.code\)\)\}\/exemption"/,
     'each row needs a way to record it, or the route is unreachable');
-  assert.match(src, /\? `<a href="\/production\/\$\{escEmail\(String\(q\.code\)\)\}#certificate"[^`]*>Attach the certificate<\/a>`/,
+  assert.match(src, /\? `<a href="\/admin\/production\/\$\{escEmail\(String\(q\.code\)\)\}#certificate"[^`]*>Attach the certificate<\/a>`/,
     'a sale that needs a certificate is sent to attach one: a note cannot document it');
 });
 

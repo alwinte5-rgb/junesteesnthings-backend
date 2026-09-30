@@ -77,7 +77,7 @@ test('carts carrying value sort first', () => {
 test('Quote them actually carries the customer across', () => {
   /* A button that looks like it prefills and does not is worse than no button:
      it teaches the operator the shortcut does not work. */
-  assert.match(board, /href="\/quote\/new\?email=\$\{encodeURIComponent\(c\.email \|\| ''\)\}"/);
+  assert.match(board, /href="\/admin\/quote\/new\?email=\$\{encodeURIComponent\(c\.email \|\| ''\)\}"/);
   assert.match(src, /const cartEmail = String\(req\.query\.email \|\| ''\)/,
     'the form must read it');
   assert.match(src, /cartEmail && isValidEmail\(cartEmail\)/,
@@ -115,7 +115,7 @@ test('a cart can be dismissed, and the dismissal lives in the backend', () => {
   /* The designer owns the cart; the backend owns whether the shop has dealt
      with it. Writing back to the designer's table would make the feed
      read-write and put that state in the app that deploys separately. */
-  assert.match(src, /app\.post\('\/cart\/dismiss', requireAdmin/);
+  assert.match(src, /app\.post\('\/admin\/cart\/dismiss', requireAdmin/);
   assert.match(src, /CREATE TABLE IF NOT EXISTS dismissed_carts/);
   assert.doesNotMatch(feed, /UPDATE .*saved_carts/, 'the feed stays read-only');
 });
@@ -124,7 +124,7 @@ test('dismissing closes the version seen, not the customer', () => {
   /* Keyed by the cart's `updated` at that moment: if they come back and change
      their cart it resurfaces, because that is new information. A permanent
      per-email block would hide a customer who returned ready to buy. */
-  const route = src.slice(src.indexOf("app.post('/cart/dismiss'"));
+  const route = src.slice(src.indexOf("app.post('/admin/cart/dismiss'"));
   assert.match(route, /cart_updated = EXCLUDED\.cart_updated/,
     're-dismissing must move the watermark forward');
   assert.match(board, /return !seen \|\| new Date\(c\.updated\) > seen;/,
@@ -134,14 +134,14 @@ test('dismissing closes the version seen, not the customer', () => {
 test('a malformed dismissal is refused rather than stored', () => {
   /* `updated` arrives from a hidden field. An unparseable date would store
      Invalid Date and hide the cart forever, or never. */
-  const route = src.slice(src.indexOf("app.post('/cart/dismiss'"));
+  const route = src.slice(src.indexOf("app.post('/admin/cart/dismiss'"));
   assert.match(route, /Number\.isNaN\(updated\.getTime\(\)\)\) return res\.redirect/);
 });
 
 test('cancelled quotes stay findable in Orders', () => {
   /* They are off the board now. If Orders only carried paid or delivered work,
      a cancelled quote with no payment would vanish from both places. */
-  const orders = src.slice(src.indexOf("app.get('/orders'"));
+  const orders = src.slice(src.indexOf("app.get('/admin/orders'"));
   assert.match(orders.slice(0, 1600), /OR cancelled_at IS NOT NULL/,
     'Orders must include cancelled work, or cancelling destroys the record');
 });

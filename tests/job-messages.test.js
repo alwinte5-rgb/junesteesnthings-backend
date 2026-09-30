@@ -49,7 +49,7 @@ function route(signature) {
 }
 /* The job-page route and the sender it shares with /admin/approvals. */
 function msgRoute() {
-  return route("app.post('/quote/:code/message', requireAdmin") + '\n' + lift('sendJobMessage');
+  return route("app.post('/admin/quote/:code/message', requireAdmin") + '\n' + lift('sendJobMessage');
 }
 
 /* ── The record ─────────────────────────────────────────────────────────── */
@@ -210,7 +210,7 @@ test('the quick messages fill the box, and one for a balance only when one is ow
 test('sending is admin only, and answers on the job page from a fixed list', () => {
   const r = msgRoute();
   assert.match(r, /QUOTE_CODE_RE\.test\(code\)/);
-  assert.match(r, /res\.redirect\(`\/production\/\$\{code\}\?\$\{key\}=\$\{encodeURIComponent\(value\)\}#messages`\)/);
+  assert.match(r, /res\.redirect\(`\/admin\/production\/\$\{code\}\?\$\{key\}=\$\{encodeURIComponent\(value\)\}#messages`\)/);
   const card = lift('jobMessagesCard');
   assert.match(card, /const failed = MESSAGE_ERRORS\[String\(query\.msg_err \|\| ''\)\];/);
   assert.match(card, /\['email', 'text'\]\.includes\(String\(query\.sent\)\)/);
@@ -251,7 +251,7 @@ function messageRoute(o = {}) {
     currentActor: () => null, actorLevel: () => 'on',
   };
   vm.createContext(sandbox);
-  vm.runInContext(lift('sendJobMessage') + '\n' + route("app.post('/quote/:code/message', requireAdmin") + '\n});', sandbox);
+  vm.runInContext(lift('sendJobMessage') + '\n' + route("app.post('/admin/quote/:code/message', requireAdmin") + '\n});', sandbox);
   const send = async (body) => {
     let location = null;
     await handler({ params: { code: 'AB12CD' }, body }, { redirect: (u) => { location = u; } });
@@ -261,7 +261,7 @@ function messageRoute(o = {}) {
 }
 
 test('a refused text names the reason the card showed, in the card\'s order', async () => {
-  const err = (why) => `/production/AB12CD?msg_err=${why}#messages`;
+  const err = (why) => `/admin/production/AB12CD?msg_err=${why}#messages`;
   const hi = { channel: 'text', body: 'Hi' };
   assert.strictEqual(await messageRoute({ smsOn: false, consent: false }).send(hi), err('texting-off'),
     'texting off comes before consent');
@@ -269,7 +269,7 @@ test('a refused text names the reason the card showed, in the card\'s order', as
     'and no number before either');
   assert.strictEqual(await messageRoute({ consent: false }).send(hi), err('no-consent'));
   const r = messageRoute();
-  assert.strictEqual(await r.send(hi), '/production/AB12CD?sent=text#messages');
+  assert.strictEqual(await r.send(hi), '/admin/production/AB12CD?sent=text#messages');
   assert.strictEqual(await r.send(hi), err('duplicate'), 'a second press');
   assert.strictEqual(r.sent.length, 1, 'one text went');
 });
@@ -277,7 +277,7 @@ test('a refused text names the reason the card showed, in the card\'s order', as
 test('an email from the job page is recorded as what was typed', async () => {
   const r = messageRoute();
   assert.strictEqual(await r.send({ channel: 'email', subject: 'Hoodies', body: 'Hi Bo,\nSee you Saturday!' }),
-    '/production/AB12CD?sent=email#messages');
+    '/admin/production/AB12CD?sent=email#messages');
   assert.strictEqual(r.sent[0].kind, 'manual');
   assert.strictEqual(r.sent[0].preview, 'Hi Bo,\nSee you Saturday!');
 });
@@ -285,9 +285,9 @@ test('an email from the job page is recorded as what was typed', async () => {
 test('a refused text does not hold the message back once it can go', async () => {
   const r = messageRoute({ smsOn: false });
   const hi = { channel: 'text', body: 'Hi' };
-  assert.strictEqual(await r.send(hi), '/production/AB12CD?msg_err=texting-off#messages');
+  assert.strictEqual(await r.send(hi), '/admin/production/AB12CD?msg_err=texting-off#messages');
   r.opts.smsOn = true;
-  assert.strictEqual(await r.send(hi), '/production/AB12CD?sent=text#messages');
+  assert.strictEqual(await r.send(hi), '/admin/production/AB12CD?sent=text#messages');
   assert.strictEqual(r.sent.length, 1);
 });
 

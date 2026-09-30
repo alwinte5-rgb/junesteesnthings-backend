@@ -169,7 +169,7 @@ test('both board routes move a job through one function that reads before it wri
   assert.ok(move.indexOf("SELECT * FROM quotes WHERE code = $1") < move.indexOf('UPDATE quotes SET'),
     'the row is read before it is updated, so a milestone is told only when newly reached');
   assert.match(move, /notifyQuoteMilestone\(before, after\)/);
-  for (const anchor of ["app.post('/quote/:code/step'", "app.post('/quote/:code/stage'"]) {
+  for (const anchor of ["app.post('/admin/quote/:code/step'", "app.post('/admin/quote/:code/stage'"]) {
     const start = server.indexOf(anchor);
     const body = server.slice(start, server.indexOf('\n});', start));
     assert.match(body, /await moveJobToStage\(code, /, `${anchor} goes through moveJobToStage`);
@@ -273,7 +273,7 @@ test('popup rate limit: 3 per IP per hour, 40 overall', () => {
 });
 
 test('tracking typed before Shipped is ticked sends nothing until it is', async () => {
-  const start = server.indexOf("app.post('/quote/:code/shipping'");
+  const start = server.indexOf("app.post('/admin/quote/:code/shipping'");
   const body = server.slice(start, server.indexOf('\n});', start));
   assert.match(body, /if \(q && q\.shipped_at && tracking/);
   /* And marking it shipped sends the number that was held back, in the one
@@ -309,11 +309,11 @@ test('dynamic pages default to no-store, after static files', () => {
   assert.ok(noStoreAt < server.indexOf("app.get('/q/:code'"));
 });
 
-test('admin password auth refuses state-changing requests from other sites', () => {
+test('staff sign-in refuses state-changing requests from other sites', () => {
   const start = server.indexOf('function requireAdmin(');
   const body = server.slice(start, server.indexOf('\n}\n', start));
   assert.match(body, /!\['GET', 'HEAD'\]\.includes\(req\.method\) && origin && !SITE_ORIGINS\.includes\(origin\)/);
-  assert.ok(body.indexOf('SITE_ORIGINS.includes(origin)') < body.indexOf("provided.startsWith('Basic ')"));
+  assert.ok(body.indexOf('SITE_ORIGINS.includes(origin)') < body.indexOf('verifyAccessToken'));
 });
 
 test('the cart follow-up: one segment pair, marketing consent, once a month per number', () => {
