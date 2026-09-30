@@ -77,6 +77,12 @@ test('the board marks a draft and links to finishing it', () => {
 
 test('every total that leaves out held quotes leaves out drafts too', () => {
   assert.doesNotMatch(src, /status NOT IN \('expired', 'held'\)/, "a total still counts drafts: use NOT IN ('expired', 'held', 'draft')");
-  assert.doesNotMatch(src.replace(/WHERE code = \$1 AND status <> 'held' RETURNING \*`, \[code\]\);\n    \/\* Never out of 'held'/, ''),
-    /status <> 'held'/, "a customer path still shows drafts: use NOT IN ('held', 'draft')");
+  /* Two places keep plain <> 'held' on purpose: restoring a cancelled quote,
+     and a Stripe payment made outside checkout, which makes a draft an
+     accepted job, since money has moved. Every other customer path must
+     leave drafts out. */
+  const rest = src
+    .replace(/WHERE code = \$1 AND status <> 'held' RETURNING \*`, \[code\]\);\n    \/\* Never out of 'held'/, '')
+    .replace(/UPDATE quotes SET status = 'accepted', accepted_at = COALESCE\(accepted_at, NOW\(\)\)\n      WHERE code = \$1 AND status <> 'held'/, '');
+  assert.doesNotMatch(rest, /status <> 'held'/, "a customer path still shows drafts: use NOT IN ('held', 'draft')");
 });

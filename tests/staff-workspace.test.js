@@ -478,7 +478,7 @@ test('a helper\'s discount is measured against catalogue price, not a typed garm
 test('nothing a helper can reach moves a quote out of held, except the owner\'s Approve', () => {
   assert.match(route("app.post('/admin/quote/:code/uncancel'"), /WHERE code = \$1 AND status <> 'held' RETURNING/);
   assert.match(route("app.post('/admin/quote/:code/mark-paid'"), /if \(q\.status === 'held'\) return/);
-  assert.match(src, /UPDATE quotes SET status = 'accepted', accepted_at = COALESCE\(accepted_at, NOW\(\)\)\n      WHERE code = \$1 AND status NOT IN \('held', 'draft'\)/);
+  assert.match(src, /UPDATE quotes SET status = 'accepted', accepted_at = COALESCE\(accepted_at, NOW\(\)\)\n      WHERE code = \$1 AND status <> 'held'/);
 });
 
 test('no customer message about a held quote, whose link the customer cannot open', () => {

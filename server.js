@@ -11683,7 +11683,7 @@ async function landStripePaymentOnQuote(q, { gross, pi, extRef, createdAt, how, 
   }
   await pool.query(
     `UPDATE quotes SET status = 'accepted', accepted_at = COALESCE(accepted_at, NOW())
-      WHERE code = $1 AND status NOT IN ('held', 'draft')`, [code]).catch(() => {});
+      WHERE code = $1 AND status <> 'held'`, [code]).catch(() => {});
   const nq = { ...q, paid_amount: res.paid };
   const stillDue = balanceOf(nq, t.total);
   const taxIn = (Number(q.total) > 0 && Number(q.tax) > 0)
