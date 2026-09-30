@@ -14502,6 +14502,13 @@ async function renderBoard(VIEW, req, res) {
        which is where you go to look something up. A dashboard is for what still
        needs doing; finished work on it is just noise you learn to scroll past. */
     const gDone = rows.filter(isDelivered);
+    /* Except delivered work the ledger still says is owed. Off the board it had
+       no Record a payment or Settle anywhere, so the balance could only sit
+       there, counted on the dashboard; the dashboard names each one and links
+       here. Refunded and disputed jobs are left out, as on the dashboard. */
+    const gOwedDone = gDone.filter((q) => q.accepted_at && balanceOf(q) > 0.005
+      && !(payByCode[q.code] || []).some((p) => p.kind === 'refund')
+      && !disputes.byQuote.has(q.code));
 
     /* A cart somebody started and did not finish.
        The five recovery emails already go out and already arrive; what was
@@ -14633,7 +14640,9 @@ async function renderBoard(VIEW, req, res) {
        to look something up. */
     const laneRight =
       group('Orders', 'deposit in — work in hand', gOrders) +
-      group('Open quotes', 'sent, nothing paid yet', gQuotes);
+      group('Open quotes', 'sent, nothing paid yet', gQuotes) +
+      group('Delivered, still owed', 'collect it, record a payment taken at pickup, or settle it', gOwedDone,
+            null, { accent: '#b45309' });
 
     /* Both lanes empty means an empty board; one empty lane is normal and still
        renders, so the two columns do not jump around as work moves between
@@ -14814,7 +14823,10 @@ async function renderBoard(VIEW, req, res) {
            drag is unreliable on the phone this is used on. */
         /* Accepted work only. An unaccepted quote is a sales problem and belongs
            on the Money board; putting it here is what made To start misleading. */
-        const live = rows.filter(q => !q.delivered_at && q.accepted_at);
+        /* Not cancelled either — the same jobs as liveJobs(), which the
+           dashboard counts. Without it a cancelled job stayed in its column,
+           and the only way off the board was to walk it through to Delivered. */
+        const live = rows.filter(q => !q.delivered_at && q.accepted_at && !q.cancelled_at);
         /* Delivered is a destination, not a column — a job that reaches it leaves
            the board, so rendering it produced an always-empty sixth column that
            wrapped onto a second row. The move buttons still target it by index. */
@@ -15916,7 +15928,11 @@ app.get('/orders', requireAdmin, async (req, res) => {
       .some((v) => String(v || '').toLowerCase().includes(needle));
     const shown = rows.filter(hit);
 
+    /* A delivered job that still shows a balance says so: plain "delivered"
+       hid exactly the money the dashboard's Owed to you (which links here)
+       was counting. */
     const label = (o) => o.cancelled_at ? ['cancelled', '#b91c1c']
+      : o.delivered_at && balanceOf(o) > 0 ? ['delivered · ' + money(balanceOf(o)) + ' still owed', '#b45309']
       : o.delivered_at ? ['delivered', '#166534']
       : balanceOf(o) > 0 ? ['balance due ' + money(balanceOf(o)), '#b45309']
       : ['paid', '#1848B8'];

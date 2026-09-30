@@ -125,6 +125,24 @@ test('the job page offers it, and the money board uses the same form', () => {
     'one cancel form in the file, not a copy per page');
 });
 
+test('a cancelled job is off the Production board', () => {
+  /* The reason cancelling never cleared it: the board's list checked
+     accepted and not delivered, and nothing else. */
+  assert.match(src, /const live = rows\.filter\(q => !q\.delivered_at && q\.accepted_at && !q\.cancelled_at\);/);
+});
+
+test('a delivered job still owed money has a card with its payment buttons', () => {
+  /* The dashboard's links land here; delivered work is otherwise off this board. */
+  assert.match(src, /const gOwedDone = gDone\.filter\(\(q\) => q\.accepted_at && balanceOf\(q\) > 0\.005/);
+  assert.match(src, /p\.kind === 'refund'\)\s+&& !disputes\.byQuote\.has\(q\.code\)\);/);
+  assert.match(src, /group\('Delivered, still owed', [^)]*gOwedDone,/);
+});
+
+test('Orders says a delivered job still owes, rather than just "delivered"', () => {
+  const orders = route("app.get('/orders', requireAdmin");
+  assert.match(orders, /o\.delivered_at && balanceOf\(o\) > 0 \? \['delivered · ' \+ money\(balanceOf\(o\)\) \+ ' still owed'/);
+});
+
 test('cancelling from Production comes back to Production', () => {
   const cancel = route("app.post('/quote/:code/cancel', requireAdmin");
   assert.match(cancel,
