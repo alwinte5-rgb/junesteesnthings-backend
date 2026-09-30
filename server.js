@@ -7153,6 +7153,17 @@ app.get(['/admin/quote/new', '/admin/quote/:code/edit'], requireAdmin, async (re
      the first posts to the edit route — without this the form would POST to
      /admin/api/quotes/null and update nothing. */
   const isEdit = !!(existing && existing.code);
+  /* The days a quote being edited has left, so saving it again keeps its
+     date: the box always said 14, and every re-save quietly moved the expiry
+     to fourteen days from then. An expired quote starts a fresh 14. Same UTC
+     day arithmetic as the save route's valid_until. */
+  const validDaysLeft = (() => {
+    const vu = existing && existing.valid_until;
+    if (!vu) return 14;
+    const day = (d) => Date.parse(String(d instanceof Date ? d.toISOString() : d).slice(0, 10) + 'T00:00:00Z');
+    const left = Math.round((day(vu) - day(new Date())) / 86400000);
+    return left >= 1 ? left : 14;
+  })();
   /* A draft is finished by saving it WITHOUT the draft button (see the save
      route), so its main button says that is what it does. */
   const isDraft = isEdit && existing.status === 'draft';
@@ -7568,7 +7579,7 @@ function productGroupOf(name) {
                 <option value="pct" ${E.discount_kind === 'pct' ? 'selected' : ''}>% off</option>
               </select>
               <input name="discount_value" type="number" step="0.01" min="0" inputmode="decimal"
-                     value="${Number(E.discount_value) > 0 ? val(E.discount_value) : ''}"
+                     value="${Number(E.discount_value) > 0 ? val(String(Number(E.discount_value))) : ''}"
                      placeholder="0" style="width:78px;padding:5px 7px;font-size:13px">
               <input name="discount_note" value="${val(E.discount_note)}" maxlength="120"
                      placeholder="Reason — they see this"
@@ -7611,7 +7622,7 @@ function productGroupOf(name) {
         <input name="needed_by" type="date" value="${E.needed_by ? String(E.needed_by).slice(0,10) : ''}">
         <p class="muted" id="eta" style="margin-top:8px"></p>
         <label>Quote good for (days)</label>
-        <input name="valid_days" type="number" value="14" inputmode="numeric">
+        <input name="valid_days" type="number" value="${validDaysLeft}" inputmode="numeric">
         ${creditField(existing, creditRoster)}
         <label>Notes for the customer</label><textarea name="notes" rows="2" placeholder="Optional">${val(E.notes)}</textarea>
       </div>
@@ -8365,6 +8376,13 @@ ${quotePricingSource()}
         if (oh) oh.open = false;
         tpl.querySelector('.lt').textContent = '—';
         tpl.querySelector('.ix').textContent = n + 1;
+        /* ITS OWN NUMBER. The colour picker, design-work choice and upgrade
+           boxes are built later from data-n, and a copy kept item 1's: what
+           was picked on an added item was posted as item 1's and lost
+           (2026-09-30: a delivery ticked on item 2 vanished on reopening).
+           And nothing item 1 was saved with carries over to a new item. */
+        tpl.dataset.n = n;
+        delete tpl.dataset.savedAddons; delete tpl.dataset.savedSizes; delete tpl.dataset.savedColour;
         tpl.querySelector('.thumbs').innerHTML = '';
         /* Options and the restore hint are data attributes, which cloneNode
            copies and the value-clearing loop above does not touch — left alone
@@ -8828,6 +8846,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     /* An option cannot pool its quantity with other lines: its price would
        depend on whether it is taken. Refused below, all at once. */
     const optionalInRun = [];
+    const formPos = [];
 
     for (const i of lineOrder) {
       const desc = String(one(b['description' + i]) || '').trim();
@@ -9123,6 +9142,10 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         images = [prod.thumbnail];
       }
 
+      /* Where the line sat on the form. Lines are PRICED required-first
+         (lineOrder) but stored in the order they were entered: a quote
+         reopened with its lines reshuffled reads as a different quote. */
+      formPos.push(i);
       items.push({
         /* The customer decides whether this line is in the job (see
            applyOptionChoice). Absent on an ordinary line. */
@@ -9187,6 +9210,11 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         method2_id: method2 ? method2.id : null,
         stage2: method2 ? stage2 : null,
       });
+    }
+
+    {
+      const at = new Map(items.map((it, k) => [it, formPos[k]]));
+      items.sort((x, y) => at.get(x) - at.get(y));
     }
 
     const backToForm = QUOTE_CODE_RE.test(String(req.params.code || '').toUpperCase())
