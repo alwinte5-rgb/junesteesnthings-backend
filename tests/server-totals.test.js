@@ -104,7 +104,8 @@ test('saving a quote takes no money figure from the request', () => {
 });
 
 test('what a saved quote stores is worked out from its lines', () => {
-  assert.match(SAVE, /const subtotal = round2\(items\.reduce\(\(a, i\) => a \+ i\.line_total, 0\)\);/);
+  /* Optional lines are left out until the customer ticks them. */
+  assert.match(SAVE, /const subtotal = round2\(items\.filter\(\(i\) => !i\.optional\)\.reduce\(\(a, i\) => a \+ i\.line_total, 0\)\);/);
   assert.match(SAVE, /const tax = quoteTax\(net, taxable\);/);
   assert.match(SAVE, /const total = round2\(net \+ tax\);/);
   assert.match(SAVE, /const deposit = depositFor\(total\);/);

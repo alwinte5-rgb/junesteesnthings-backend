@@ -51,8 +51,13 @@ const api = vm.runInThisContext(`(() => {
   ${liftConst('round2')}
   ${liftConst('money')}
   ${lift('escEmail')}
+  /* Signs365's freight is shown inside the item's price, not on a row
+     (tests/quote-optional-items.test.js pins which codes carry the flag). */
+  const IN_ITEM_PRICE_CODES = ['cutout_ship', 'cutout_ship_sat', 'cutout_ship_large'];
   ${lift('normalisedAddons')}
   ${lift('addonTotalOf')}
+  ${lift('shownAddons')}
+  ${lift('shownAddonTotalOf')}
   ${lift('addonRowsFor')}
   return { normalisedAddons, addonTotalOf, addonRowsFor, round2 };
 })()`);

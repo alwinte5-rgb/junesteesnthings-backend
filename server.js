@@ -384,6 +384,11 @@ async function initDB() {
     /* The certificate behind an e_number or resale exemption. A quote that
        needs one cannot be paid by card until it has one. */
     'tax_certificate_id BIGINT',
+    /* The optional lines the customer did NOT tick when they accepted, as they
+       were quoted. Accepting takes them out of `items` (see applyOptionChoice),
+       so everything downstream sees only what was bought; this keeps what was
+       turned down, for the record. */
+    'declined_items JSONB',
   ]) {
     await pool.query(`ALTER TABLE quotes ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
@@ -1027,6 +1032,7 @@ async function initStaffTables() {
   await pool.query(`UPDATE quotes SET credited_to = COALESCE(sent_by, created_by)
                      WHERE credited_to IS NULL AND COALESCE(sent_by, created_by) IS NOT NULL`);
   await seedPlaybook();
+  await addPlaybookArticles();
 }
 
 /**
@@ -5449,16 +5455,30 @@ const ADDONS = [
      twice, which is the failure packCost's note has warned about all along.
      So it stays an order-level charge, said plainly. orderShared means it is
      billed once for the whole quote however many cutout lines are on it. */
+  /* SHOWN INSIDE THE ITEM'S PRICE on the customer's quote (the owner,
+     2026-09-30: these are Signs365's charges, and the customer should see one
+     price for the item, not the supplier's fee list). `inItemPrice` changes
+     only what the customer's page SHOWS: the charge is still billed once an
+     order as an add-on, so the double-billing described above cannot come
+     back, and the admin form still lists it. Any other Signs365 charge added
+     here should carry the flag too; screens, digitizing and design work stay
+     on their own rows. */
   { code: 'cutout_ship', label: 'Cutout delivery to our shop', appliesTo: CUTOUT_METHOD_RE,
-    kind: 'once', rate: 10, orderShared: true,
+    kind: 'once', rate: 10, orderShared: true, inItemPrice: true,
     note: 'What our supplier charges to get the printed cutouts to us, so we can mount and finish them. Charged once for your whole order, however many sizes are on it — this is not a delivery to you.' },
   { code: 'cutout_ship_sat', label: 'Cutout shipping — Saturday rush', appliesTo: CUTOUT_METHOD_RE,
-    kind: 'once', rate: 50, orderShared: true,
+    kind: 'once', rate: 50, orderShared: true, inItemPrice: true,
     note: 'Saturday delivery of the printed cutouts. Charged once for the order. Use instead of the weekday rate, not as well as it.' },
   { code: 'cutout_ship_large', label: 'Cutout shipping — large format', appliesTo: CUTOUT_METHOD_RE,
-    kind: 'once', rate: 199, orderShared: true,
+    kind: 'once', rate: 199, orderShared: true, inItemPrice: true,
     note: 'Oversize freight, which some full-sheet rigid orders require. Charged once for the order. Confirm with the supplier before adding it.' },
 ];
+
+/* The add-on codes the customer's quote shows inside the item's price rather
+   than on a row of their own, and the ones billed once an order. Read from
+   ADDONS by code so a quote saved before a flag existed follows it too. */
+const IN_ITEM_PRICE_CODES = ADDONS.filter((a) => a.inItemPrice).map((a) => a.code);
+const ORDER_SHARED_CODES = ADDONS.filter((a) => a.orderShared).map((a) => a.code);
 
 /* NO RUSH OPTION, and this is a deliberate decision rather than a gap.
    A tier list used to sit here — "Rush — 2 business days" for a flat $15, on
@@ -6031,7 +6051,11 @@ function quoteDiscount(subtotal, kind, value) {
  *  what the job would have cost undiscounted. Taxing the full subtotal would
  *  have the shop remitting tax on money it never collected. */
 function quoteTotals(q) {
-  const subtotal = round2((q.items || []).reduce((a, i) => a + Number(i.line_total || 0), 0));
+  /* An OPTIONAL line is not in the job until the customer ticks it, so it is
+     never in a figure anyone is charged. Accepting settles it either way (see
+     applyOptionChoice), so after that no line is optional. */
+  const subtotal = round2((q.items || []).filter((i) => i && !i.optional)
+    .reduce((a, i) => a + Number(i.line_total || 0), 0));
   /* Rush is a surcharge on the whole job, so it lands BEFORE the discount and
      is discountable with everything else — "10% off" means off what they are
      actually being asked to pay, not off a figure that excludes the largest
@@ -6045,6 +6069,65 @@ function quoteTotals(q) {
   const total = round2(net + tax);
   return { subtotal, rushPct, rush, gross, discount, net, tax, total,
            deposit: depositFor(total) };
+}
+
+/* The lines a quote holds once the customer has picked from its OPTIONAL ones.
+ *
+ * `chosen` is the indexes (into `items`) of the optional lines they ticked.
+ * Required lines always stay; a ticked optional line stays and stops being
+ * optional; an unticked one goes to `declined`.
+ *
+ * Order-level charges (`sharedCodes`, freight) are billed once an ORDER. The
+ * save route never lets an optional line carry one a required line already
+ * pays, but each optional line keeps its own copy of any other, because it is
+ * priced as if it were taken on its own. So two ticked cutout options would
+ * both carry the delivery: the first keeps it and the later ones drop it here,
+ * line total and all.
+ *
+ * Self-contained and ES5 on purpose: the customer's page runs this same source
+ * to show the total as they tick (see /q/:code), so the figure they watch is
+ * the figure Accept saves. */
+function applyOptionChoice(items, chosen, sharedCodes) {
+  var r2 = function (n) { return Math.round(Number(n || 0) * 100) / 100; };
+  var shared = {}, pick = {}, paid = {};
+  (sharedCodes || []).forEach(function (c) { shared[c] = true; });
+  (chosen || []).forEach(function (ix) { pick[String(ix)] = true; });
+  var list = items || [];
+  list.forEach(function (it) {
+    if (!it || it.optional) return;
+    (it.addons || []).forEach(function (a) { if (a && shared[a.code]) paid[a.code] = true; });
+  });
+  var kept = [], declined = [];
+  list.forEach(function (it, ix) {
+    if (!it) return;
+    if (!it.optional) { kept.push(it); return; }
+    if (!pick[String(ix)]) { declined.push(it); return; }
+    var line = JSON.parse(JSON.stringify(it));
+    delete line.optional;
+    line.chosen_option = true;
+    var drop = 0;
+    line.addons = (line.addons || []).filter(function (a) {
+      if (!a || !shared[a.code]) return true;
+      if (paid[a.code]) { drop += Number(a.total) || 0; return false; }
+      paid[a.code] = true;
+      return true;
+    });
+    if (drop) {
+      line.line_total = r2(Number(line.line_total) - drop);
+      if (line.list_total != null) line.list_total = r2(Number(line.list_total) - drop);
+    }
+    kept.push(line);
+  });
+  return { items: kept, declined: declined };
+}
+
+/** Every figure for `items` on quote `q`, with the tax worked out again: the
+ *  stored tax was for the lines as they stood before the customer chose. */
+function totalsForItems(q, items) {
+  const base = quoteTotals({ ...q, items, tax: 0 });
+  const tax = quoteTax(base.net, quoteTaxable(q));
+  const total = round2(base.net + tax);
+  return { ...base, tax, total, deposit: depositFor(total) };
 }
 
 
@@ -6111,7 +6194,7 @@ function quoteSummary(items) {
  * -- goods + extras is still the same line total, and the subtotal is untouched.
  */
 function addonRowsFor(item, ix) {
-  const rows = normalisedAddons(item);
+  const rows = shownAddons(item);
   if (!rows.length) return '';
 
   const cell = 'style="padding-top:4px;padding-bottom:4px;border-top:0"';
@@ -6155,6 +6238,28 @@ function normalisedAddons(item) {
  *  shirts. Kept here so the row split and the live preview agree. */
 function addonTotalOf(item) {
   return round2(normalisedAddons(item).reduce((n, a) => n + (Number(a.total) || 0), 0));
+}
+
+/* The extras the CUSTOMER's quote puts on rows of their own: all of them but
+   the supplier charges it shows inside the item's price (IN_ITEM_PRICE_CODES).
+   Those stay in the line total, so the item's amount carries them. */
+function shownAddons(item) {
+  return normalisedAddons(item).filter((a) => !IN_ITEM_PRICE_CODES.includes(a.code));
+}
+function shownAddonTotalOf(item) {
+  return round2(shownAddons(item).reduce((n, a) => n + (Number(a.total) || 0), 0));
+}
+
+/* The item's own amount and each-price on the customer's quote: the line total
+   less the extras shown on their own rows. With nothing shown inside the price
+   the each is the stored unit_price, exactly as before. */
+function customerLineFigures(item) {
+  const qty = Number(item.qty) || 0;
+  const shown = shownAddonTotalOf(item);
+  const amount = round2(Number(item.line_total) - shown);
+  const folded = round2(addonTotalOf(item) - shown);
+  const each = folded > 0 && qty > 0 ? round2(amount / qty) : Number(item.unit_price) || 0;
+  return { amount, each, shown, folded };
 }
 
 /** The each-price a person actually TYPED on a hand-priced line.
@@ -7174,6 +7279,33 @@ function productGroupOf(name) {
         <span class="line-no">Item <b class="ix">${n + 1}</b></span>
         <button type="button" class="line-x" onclick="removeLine(this)" title="Remove this item">&times;</button>
       </div>
+      <!-- OPTIONAL: the customer ticks it on their quote if they want it. Not in
+           the total until they do; Accept keeps the ticked ones and sets the
+           rest aside (applyOptionChoice). -->
+      <div class="optbox" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 8px">
+        <label style="display:flex;align-items:center;gap:6px;margin:0;font-size:13px;text-transform:none;letter-spacing:0;font-weight:600;color:#1848B8">
+          <input type="checkbox" name="optional${n}" class="opt" value="1"
+                 ${it && it.optional ? 'checked' : ''} style="width:auto;margin:0">
+          Optional — the customer chooses</label>
+        <details class="opthelp" style="font-size:12.5px;color:#3f4a5f">
+          <summary style="cursor:pointer;color:#2563eb">How does this work?</summary>
+          <div style="margin-top:6px;background:#F6F8FC;border:1px solid #E2E8F4;border-radius:6px;padding:8px 10px;line-height:1.5">
+            Use it when a customer wants to see choices on one quote instead of two quotes.
+            <ul style="margin:4px 0 0;padding-left:18px">
+              <li>An optional item shows on their quote with an <b>Add this to my order</b> box. It is
+                <b>not in the total</b> until they tick it.</li>
+              <li>Their total, tax and deposit update as they tick. When they press Accept, the ticked
+                items become the order and the rest are set aside.</li>
+              <li>Items left unticked here are always included.</li>
+              <li>An optional item cannot have a Run number, because its price would change the other lines.</li>
+              <li>Once the customer has accepted, they cannot pick again. To change what they took, untick
+                Optional and remove what they did not want.</li>
+            </ul>
+          </div>
+        </details>
+        <p class="optwarn" style="display:none;flex-basis:100%;margin:0;font-size:12.5px;color:#b45309">
+          An optional item cannot have a Run number. Clear it, or untick Optional, before saving.</p>
+      </div>
       <input name="description${n}" class="d" value="${it ? val(oneSizeList(it.description)) : ''}"
              placeholder="What is it? e.g. 24 tees, 1 colour front">
       <div class="row row-2" style="margin-top:8px">
@@ -7431,6 +7563,10 @@ function productGroupOf(name) {
             <td class="num" id="tax">$0.00</td></tr>
           <tr><td class="tot">Total</td><td class="num tot" id="tot">$0.00</td></tr>
           <tr><td class="muted" style="padding-top:6px">Deposit to start</td><td class="num" id="dep" style="padding-top:6px">$0.00</td></tr>
+          <tr class="optrow" style="display:none"><td class="muted" style="padding-top:8px">Optional, <span id="optcount"></span>
+              <span style="font-size:12px;display:block">Not in the total above. The customer's total rises by
+              what they tick, plus its tax.</span></td>
+            <td class="num" id="optsub" style="padding-top:8px;color:#1848B8">$0.00</td></tr>
         </table>
       </div>
 
@@ -7753,7 +7889,21 @@ ${quotePricingSource()}
            must not bill it twice. Tracked across the whole pass rather than
            inside a line, because a line cannot know it is the second one. */
         var orderSharedSeen = {};
-        document.querySelectorAll('.line').forEach(function(L){
+        /* OPTIONAL lines are not in the subtotal: the customer decides. Their
+           sum is shown on its own row. Required lines are priced first so an
+           order-level charge is claimed by one of them before any option,
+           exactly as the save route orders them (lineOrder). */
+        var optSub = 0, optCount = 0;
+        function isOptLine(el){ var o = el.querySelector('.opt'); return o && o.checked ? 1 : 0; }
+        var ordered = Array.prototype.slice.call(document.querySelectorAll('.line'));
+        ordered.sort(function(a, b){ return isOptLine(a) - isOptLine(b); });
+        ordered.forEach(function(L){
+          var isOpt = isOptLine(L) === 1;
+          var ow = L.querySelector('.optwarn');
+          if (ow) {
+            var srEl = L.querySelector('.sr');
+            ow.style.display = isOpt && srEl && String(srEl.value || '').trim() ? 'block' : 'none';
+          }
           var prod = CAT.products.find(function(x){return String(x.id)===L.querySelector('.p').value;});
           var meth = CAT.methods.find(function(x){return String(x.id)===L.querySelector('.m').value;});
           var m2El = L.querySelector('.m2');
@@ -7933,7 +8083,9 @@ ${quotePricingSource()}
           addons = addons.filter(function(a){
             if (!a.orderShared) return true;
             if (orderSharedSeen[a.code]) return false;
-            orderSharedSeen[a.code] = true;
+            /* An option keeps its own copy of a charge no required line pays;
+               applyOptionChoice() drops it if another ticked line has it. */
+            if (!isOpt) orderSharedSeen[a.code] = true;
             return true;
           });
           /* Screens are not a choice — a screen-print job burns them whether or
@@ -8037,9 +8189,10 @@ ${quotePricingSource()}
             }
           }
 
-          sub += lt;
+          if (isOpt) { optSub += lt; optCount++; }
+          else sub += lt;
 
-          if (r.addonLines) r.addonLines.forEach(function(a){
+          if (r.addonLines && !isOpt) r.addonLines.forEach(function(a){
             if (a.code !== 'screens') return;
             scrTotal += a.total;
             scrCount += (a.count || 0);
@@ -8131,6 +8284,13 @@ ${quotePricingSource()}
         document.getElementById('tax').textContent = m2(tax);
         document.getElementById('tot').textContent = m2(tot);
         document.getElementById('dep').textContent = m2(dep) + (tot>0 && tot<FULL_UNDER ? ' (paid in full)' : ' (50%)');
+
+        optSub = Math.round(optSub * 100) / 100;
+        document.querySelectorAll('.optrow').forEach(function(el){ el.style.display = optCount ? '' : 'none'; });
+        var osEl = document.getElementById('optsub');
+        if (osEl) osEl.textContent = '+' + m2(optSub);
+        var ocEl = document.getElementById('optcount');
+        if (ocEl) ocEl.textContent = optCount === 1 ? '1 item' : optCount + ' items';
       }
       function addLine(){
         var tpl = document.getElementById('lines').firstElementChild.cloneNode(true);
@@ -8139,8 +8299,16 @@ ${quotePricingSource()}
              single backslash is eaten before the browser ever sees it. It was,
              and /d+$/ matched nothing: every added line kept the first line's
              name, so five items posted as one and the price arrived as NaN. */
-          el.name = el.name.replace(/\\d+$/, n); el.value='';
+          el.name = el.name.replace(/\\d+$/, n);
+          /* A tick box is RESET by unticking it. Blanking its value instead
+             posted "" for a ticked box, which the save route reads as unticked:
+             "Dark garment" on an added item priced dark on screen and saved
+             light, one screen short per location. */
+          if (el.type === 'checkbox' || el.type === 'radio') el.checked = false;
+          else el.value = '';
         });
+        var oh = tpl.querySelector('.opthelp');
+        if (oh) oh.open = false;
         tpl.querySelector('.lt').textContent = '—';
         tpl.querySelector('.ix').textContent = n + 1;
         tpl.querySelector('.thumbs').innerHTML = '';
@@ -8575,9 +8743,22 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
       runTotals[g] = (runTotals[g] || 0) + n;
     }
 
-    for (let i = 0; i < 40; i++) {
+    /* OPTIONAL lines (the customer ticks the ones they want) are priced AFTER
+       every required line, so an order-level charge such as freight is claimed
+       by a required line whenever one carries it: a customer turning an option
+       down can then never take the freight off the job with it. The lines are
+       stored in this order too, required first and the options after. */
+    const isOptional = (i) => String(one(b['optional' + i]) || '') === '1';
+    const lineOrder = [...Array(40).keys()]
+      .sort((x, y) => (Number(isOptional(x)) - Number(isOptional(y))) || (x - y));
+    /* An option cannot pool its quantity with other lines: its price would
+       depend on whether it is taken. Refused below, all at once. */
+    const optionalInRun = [];
+
+    for (const i of lineOrder) {
       const desc = String(one(b['description' + i]) || '').trim();
       const qty = parseInt(one(b['qty' + i]), 10) || 0;
+      const optional = isOptional(i);
       const prod = catalog.products.find(p => String(p.id) === String(one(b['product' + i])));
       const method = catalog.methods.find(m => String(m.id) === String(one(b['method' + i])));
       /* The second decoration on the same garment. Resolved against the
@@ -8700,10 +8881,16 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         const a = lineAddons[k];
         if (!a || !a.orderShared) continue;
         if (orderSharedSeen.has(a.code)) lineAddons.splice(k, 1);
-        else orderSharedSeen.add(a.code);
+        /* An option keeps its own copy of a charge no required line pays: it is
+           priced as if taken on its own, and applyOptionChoice() drops the copy
+           when another ticked line already carries it. */
+        else if (!optional) orderSharedSeen.add(a.code);
       }
 
       const runGroup = String(one(b['run' + i]) || '').trim();
+      if (optional && runGroup) {
+        optionalInRun.push({ line: i + 1, what: desc || (prod ? prod.name : `Line ${i + 1}`), run: runGroup });
+      }
       const stage2 = String(one(b['loc2' + i]) || '').trim();
       const priceArgs = {
         bandQty: runGroup ? (runTotals[runGroup] || 0) : 0,
@@ -8856,6 +9043,9 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
       }
 
       items.push({
+        /* The customer decides whether this line is in the job (see
+           applyOptionChoice). Absent on an ordinary line. */
+        ...(optional ? { optional: true } : {}),
         /* Saved so reopening the quote restores the runs. Without it an edit
            re-prices every line as its own job and the total quietly rises —
            the same shape as the add-ons that had to be saved for exactly this
@@ -8937,6 +9127,21 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         </div>`));
     }
 
+    if (optionalInRun.length) {
+      return res.status(400).send(quotePage('An optional item cannot share a run', `
+        <div class="card">
+          <div class="warn">Nothing was saved — ${optionalInRun.length === 1 ? 'an optional item has' : 'optional items have'}
+            a run number.</div>
+          <ul class="muted" style="margin:8px 0 0;padding-left:18px">
+            ${optionalInRun.map((o) => `<li>Line ${o.line} — ${escEmail(String(o.what))} (run ${escEmail(String(o.run))})</li>`).join('')}
+          </ul>
+          <p class="muted" style="margin-top:8px">A run shares one price band between its lines, so the other
+             lines' price would change depending on whether the customer takes the option. Clear the run
+             number on the optional item, or untick Optional.</p>
+          <p style="margin-top:12px"><a class="btn" href="${backToForm}">Go back</a></p>
+        </div>`));
+    }
+
     if (!items.length) {
       const backTo = backToForm;
       return res.status(400).send(quotePage('Nothing to quote', `
@@ -8948,7 +9153,8 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         </div>`));
     }
 
-    const subtotal = round2(items.reduce((a, i) => a + i.line_total, 0));
+    /* Options are not in the job until the customer ticks them (quoteTotals). */
+    const subtotal = round2(items.filter((i) => !i.optional).reduce((a, i) => a + i.line_total, 0));
 
     /* Discount off the top of the job. Stored as entered so that editing the
        lines later re-applies the same deal; the dollar figure is derived here
@@ -9008,14 +9214,34 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     const listSubtotal = round2(Math.max(catalogueSum, items.reduce((a, i) =>
       a + Math.max(Number(i.line_total) || 0, Number(i.list_total) || 0), 0)));
     const listGross = listSubtotal * (1 + rushPct / 100);
+    /* The gate judges the job with EVERY option taken, the most the customer
+       can accept, so marking a line optional cannot walk it past the owner.
+       With no options these are exactly total and net. */
+    const allSubtotal = round2(items.reduce((a, i) => a + i.line_total, 0));
+    const allGross = round2(allSubtotal + round2(allSubtotal * rushPct / 100));
+    const allNet = round2(allGross - quoteDiscount(allGross, discountKind, discountValue));
+    const allTotal = round2(allNet + quoteTax(allNet, taxable));
     const gate = STAFF.quoteNeedsApproval(actor, {
-      total, customPriced,
-      discountPct: listGross > 0 ? Math.max(0, (1 - net / listGross) * 100) : 0,
+      total: allTotal, customPriced,
+      discountPct: listGross > 0 ? Math.max(0, (1 - allNet / listGross) * 100) : 0,
     });
     let existingQuote = null;
     if (QUOTE_CODE_RE.test(editing)) {
       ({ rows: [existingQuote] } = await pool.query(
         'SELECT code, status, held_at, accepted_at FROM quotes WHERE code = $1', [editing]));
+    }
+    /* Options are for the customer to pick from, and an accepted quote has
+       already been picked from: an optional line saved onto it would be in no
+       total and never chosen. Said plainly rather than quietly charged. */
+    if (existingQuote && existingQuote.accepted_at && items.some((i) => i.optional)) {
+      return res.status(400).send(quotePage('This quote is already accepted', `
+        <div class="card">
+          <div class="warn">Nothing was saved — the customer has already accepted this quote, so they
+            can no longer tick options on it.</div>
+          <p class="muted" style="margin-top:8px">Untick <b>Optional</b> on the items they are taking,
+             and remove the ones they are not, then save again.</p>
+          <p style="margin-top:12px"><a class="btn" href="${backToForm}">Go back</a></p>
+        </div>`));
     }
     const wasHeld = !!(existingQuote && existingQuote.status === 'held');
     /* Held until released: an owner's edit keeps it waiting for the Approve
@@ -9103,12 +9329,12 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         `UPDATE staff_approvals SET reasons = $2, payload = $3, created_at = NOW()
           WHERE kind = 'quote' AND subject_id = $1 AND status = 'pending'`,
         [code, JSON.stringify(gate.reasons.length ? gate.reasons : ['Edited while waiting for approval.']),
-         JSON.stringify({ total })]);
+         JSON.stringify({ total: allTotal })]);
       if (!rowCount) {
         await pool.query(
           `INSERT INTO staff_approvals (kind, subject_id, payload, reasons, requested_by)
            VALUES ('quote', $1, $2, $3, $4)`,
-          [code, JSON.stringify({ total }), JSON.stringify(gate.reasons), q.created_by || staffId || 0]);
+          [code, JSON.stringify({ total: allTotal }), JSON.stringify(gate.reasons), q.created_by || staffId || 0]);
       }
       logActivity(actor, 'quote held for approval', { type: 'quote', id: code }, { total, reasons: gate.reasons });
       return res.send(adminPage('Waiting for approval', `
@@ -9306,8 +9532,11 @@ function customerLinePricing(items, catalog) {
       dark: !!it.garment_dark,
       colours: it.colours || null,
       colours2: it.colours2 || null,
+      /* No label for a supplier charge shown inside the item's price: the
+         page never names it, so its source should not either. */
       addons: (it.addons || []).map((a) => ({
-        code: a.code, label: a.label, kind: a.kind, rate: Number(a.rate) || 0,
+        code: a.code, label: IN_ITEM_PRICE_CODES.includes(a.code) ? '' : a.label,
+        kind: a.kind, rate: Number(a.rate) || 0,
       })),
       blankOverride: it.blank_price === undefined ? null : it.blank_price,
       /* The price as TYPED, never the blended one — see typedUnitOf(). Feeding
@@ -9444,6 +9673,10 @@ app.get('/q/:code', async (req, res) => {
      * blanks may be on order, so THAT is where a change becomes a conversation
      * rather than a form. */
     const canEditQty = !paid && !q.cancelled_at;
+    /* Lines the customer picks from. Accepting settles them (applyOptionChoice),
+       so an accepted quote has none and none of the option UI renders. */
+    const hasOptions = (q.items || []).some((i) => i && i.optional);
+    const requiredCount = (q.items || []).filter((i) => i && !i.optional).length;
 
     /* Every size the garment comes in, in catalogue order — not just the ones
        already ordered. A customer whose quote is all mediums has to be able to
@@ -9480,15 +9713,29 @@ app.get('/q/:code', async (req, res) => {
                  style="width:74px;height:74px;object-fit:cover;border-radius:8px;border:1px solid #e3e8f2;background:#fff"></a>`).join('')}
         </div>` : '';
       /* The shirts, priced as shirts. Every one-time and per-piece extra is its
-         own row below, so this line foots: qty x each = amount. */
-      const aTot  = addonTotalOf(i);
-      const goods = round2(Number(i.line_total) - aTot);
+         own row below, so this line foots: qty x each = amount. The supplier
+         charges shown inside the price (IN_ITEM_PRICE_CODES) are the exception:
+         they stay in this line's amount and get no row. */
+      const fig = customerLineFigures(i);
+      const aTot  = fig.shown;
+      const goods = fig.amount;
       const goodsList = round2(Number(i.list_total) - aTot);
       const cut = goodsList > goods;
+      /* An optional line: in the job only if the customer ticks it. The box
+         belongs to the Accept form, which is where the choice is saved. */
+      const opt = !!i.optional;
 
       return `
-      <tr>
+      <tr${opt ? ` data-optline="${ix}"` : ''}>
         <td>
+          ${opt ? `<label style="display:flex;align-items:center;gap:8px;margin:0 0 6px;cursor:pointer;
+                    text-transform:none;letter-spacing:0;font-size:14px;font-weight:700;color:#1848B8">
+              <input type="checkbox" class="opt" form="accept" name="opt" value="${ix}"
+                     style="width:20px;height:20px;margin:0;flex:0 0 20px">
+              Add this to my order
+              <span title="Not in your total unless you tick it" style="background:#eef3ff;color:#1848B8;
+                    border-radius:20px;padding:1px 8px;font-size:11px;font-weight:700;letter-spacing:.04em">OPTIONAL</span></label>
+            <div class="muted optstate" data-line="${ix}" style="font-size:12px;margin:-2px 0 6px">Not in your total yet.</div>` : ''}
           ${escEmail(oneSizeList(i.description))}
           ${i.colour ? `<div style="display:flex;align-items:center;gap:6px;margin-top:4px;font-size:13px">
               <span style="width:13px;height:13px;border-radius:3px;flex:0 0 13px;border:1px solid rgba(0,0,0,.25);
@@ -9516,8 +9763,8 @@ app.get('/q/:code', async (req, res) => {
                       name="qty_${ix}" value="${parseInt(i.qty, 10) || 0}"
                       style="width:64px;padding:5px;font-size:14px;text-align:right">`}</td>
         <td class="num" data-each="${ix}">${cut
-          ? `<span style="color:#9aa3b2;text-decoration:line-through">${money(i.qty > 0 ? goodsList / i.qty : 0)}</span><br>${money(i.unit_price)}`
-          : money(i.unit_price)}</td>
+          ? `<span style="color:#9aa3b2;text-decoration:line-through">${money(i.qty > 0 ? goodsList / i.qty : 0)}</span><br>${money(fig.each)}`
+          : money(fig.each)}</td>
         <td class="num" data-amount="${ix}">${cut
           ? `<span style="color:#9aa3b2;text-decoration:line-through">${money(goodsList)}</span><br>
              <b style="color:#166534">${money(goods)}</b>`
@@ -9544,6 +9791,10 @@ app.get('/q/:code', async (req, res) => {
           if (e === 'pending') return `<div class="warn"><b>Your changes are with ${SHOP_SIGNER} first.</b>
             Accepting is on hold until the quote is updated with the new price — usually the same day.</div>`;
           if (e === 'already') return `<div class="ok">This quote is already accepted — nothing more to do here.</div>`;
+          if (e === 'choose') return `<div class="warn"><b>Nothing was accepted yet.</b> Tick
+            <b>Add this to my order</b> on at least one item, then press Accept again.</div>`;
+          if (e === 'changed') return `<div class="warn"><b>${SHOP_SIGNER} just updated this quote.</b>
+            Please check it over and tick your choices again, then press Accept.</div>`;
           if (e === 'cancelled') return `<div class="warn">This order has been cancelled, so it cannot be accepted.
             If that is not right, please text ${SHOP_PHONE}.</div>`;
           if (e === 'gone') return `<div class="warn">We could not find that quote. Please text us and we will resend it.</div>`;
@@ -9559,28 +9810,47 @@ app.get('/q/:code', async (req, res) => {
           so there is nothing new to open. Accepting and paying are on hold until then, so nobody
           pays against the old figure.</div>` : ''}
 
+        ${hasOptions ? `
+        <div id="opthelp" style="background:#f4f7ff;border:1px solid #d8e2fb;border-radius:10px;padding:12px 14px;margin:14px 0 4px">
+          <b style="color:#0B1F4B">You choose what goes in this order</b>
+          <ol style="margin:6px 0 0;padding-left:20px;line-height:1.55;color:#374151;font-size:14px">
+            <li>Items marked <b>OPTIONAL</b> are not in your total yet.</li>
+            <li>Tick <b>Add this to my order</b> on each one you want. Your total and deposit
+              update as you tick.</li>
+            <li>Press <b>Accept</b> at the bottom of the page. Only what is in your total is ordered.</li>
+          </ol>
+          <p class="muted" style="margin:6px 0 0;font-size:12.5px">${requiredCount
+            ? 'Items without the OPTIONAL tag are always included. '
+            : ''}Not sure? Text ${SHOP_SIGNER} at ${SHOP_PHONE}. Accepting does not charge anything:
+            you choose how to pay after.</p>
+        </div>` : ''}
+
         <table class="items"><thead><tr>
           <th>Item</th><th class="num">Qty</th><th class="num">Each</th><th class="num">Amount</th>
         </tr></thead><tbody>
           ${lines}
-          <tr><td colspan="3" class="num muted" style="padding-top:12px">Subtotal</td>
-              <td class="num" style="padding-top:12px">${money(t.subtotal)}</td></tr>
-          ${t.rush > 0 ? `<tr><td colspan="3" class="num muted">Rush &mdash; ${
+          <tr><td colspan="3" class="num muted" style="padding-top:12px">Subtotal${hasOptions
+              ? ' <span style="font-size:12px">(the items you have ticked)</span>' : ''}</td>
+              <td class="num" style="padding-top:12px" id="qsub">${money(t.subtotal)}</td></tr>
+          ${/* A quote with options renders every row it COULD need, hidden while
+               it is zero, so ticking an option can show its rush, discount and
+               tax instead of a total with no working. */ ''}
+          ${t.rush > 0 || (hasOptions && Number(t.rushPct) > 0) ? `<tr id="qrushrow"${t.rush > 0 ? '' : ' style="display:none"'}><td colspan="3" class="num muted">Rush &mdash; ${
               Number(t.rushPct).toFixed(Number(t.rushPct) % 1 ? 2 : 0)}% for the requested date${
               q.needed_by ? ' of ' + fmtDate(q.needed_by) : ''}</td>
-              <td class="num">${money(t.rush)}</td></tr>` : ''}
-          ${t.discount > 0 ? `<tr><td colspan="3" class="num" style="color:#166534">
+              <td class="num" id="qrush">${money(t.rush)}</td></tr>` : ''}
+          ${t.discount > 0 || (hasOptions && Number(q.discount_value) > 0) ? `<tr id="qdiscrow"${t.discount > 0 ? '' : ' style="display:none"'}><td colspan="3" class="num" style="color:#166534">
               ${q.discount_note ? escEmail(q.discount_note) : 'Discount'}${
                 q.discount_kind === 'pct' ? ` (${Number(q.discount_value)}% off)` : ''}</td>
-              <td class="num" style="color:#166534">&minus;${money(t.discount)}</td></tr>` : ''}
-          ${t.tax > 0 ? `<tr><td colspan="3" class="num muted">Sales tax</td><td class="num">${money(t.tax)}</td></tr>` : ''}
+              <td class="num" style="color:#166534" id="qdisc">&minus;${money(t.discount)}</td></tr>` : ''}
+          ${t.tax > 0 || (hasOptions && quoteTaxable(q)) ? `<tr id="qtaxrow"${t.tax > 0 ? '' : ' style="display:none"'}><td colspan="3" class="num muted">Sales tax</td><td class="num" id="qtax">${money(t.tax)}</td></tr>` : ''}
           <tr><td colspan="3" class="num tot">Total</td><td class="num tot" id="qtotal">${money(t.total)}</td></tr>
           <tr id="estrow" style="display:none"><td colspan="3" class="num" style="color:#b45309;font-weight:700;padding-top:10px">
               With your changes <span style="font-weight:400;font-size:12px">(estimate)</span></td>
               <td class="num" style="color:#b45309;font-weight:700;padding-top:10px" id="esttotal">&mdash;</td></tr>
-          ${!paid ? (stopAsking ? '' : `<tr><td colspan="3" class="num" style="color:#1848B8;font-weight:700">
+          ${!paid ? (stopAsking ? '' : `<tr><td colspan="3" class="num" style="color:#1848B8;font-weight:700" id="qdeplab">
               ${t.deposit >= t.total ? 'Due now (paid in full)' : 'Deposit to start (50%)'}</td>
-              <td class="num" style="color:#1848B8;font-weight:700">${money(t.deposit)}</td></tr>`) : `
+              <td class="num" style="color:#1848B8;font-weight:700" id="qdep">${money(t.deposit)}</td></tr>`) : `
             <tr><td colspan="3" class="num muted">Paid ${q.paid_at ? fmtDate(q.paid_at) : ''}</td>
                 <td class="num" style="color:#166534">&minus;${money(q.paid_amount)}</td></tr>
             ${balanceDue > 0 && !stopAsking ? `<tr><td colspan="3" class="num" style="color:#1848B8;font-weight:700">Balance due</td>
@@ -9591,10 +9861,9 @@ app.get('/q/:code', async (req, res) => {
               <td class="num">${money(reversedByIssuer)}</td></tr>` : ''}
         </tbody></table>
 
-        <p class="muted" style="margin-top:12px;font-size:12.5px">The price each covers the garment
-          and all the printing listed on that line. Anything charged once for the job — screens,
-          setup, design — is its own row above, so nothing is folded into the shirt price without
-          being named.</p>
+        <p class="muted" style="margin-top:12px;font-size:12.5px">The price each covers the item
+          and all the printing listed on that line. Screens, setup and design work are charged once
+          for the job, so they have their own rows above.</p>
 
         ${q.notes ? `<p class="muted" style="margin-top:12px">${escEmail(q.notes)}</p>` : ''}
 
@@ -9722,7 +9991,9 @@ app.get('/q/:code', async (req, res) => {
           ${consentCheckboxesHtml()}
           <label>When do you need it? <span style="text-transform:none;font-weight:400">(optional)</span></label>
           <input type="date" name="needed_by" value="${q.needed_by ? String(q.needed_by).slice(0,10) : ''}">
-          <button type="submit" style="width:100%;margin-top:14px">Accept &amp; choose payment</button>
+          ${hasOptions ? `<p id="qoptsum" style="margin:14px 0 0;font-size:13.5px;color:#374151"></p>
+          <input type="hidden" name="rev" value="${Number(q.revision) || 1}">` : ''}
+          <button type="submit" id="qaccept" style="width:100%;margin-top:14px">Accept &amp; choose payment</button>
         </form>
         <p class="muted" style="margin-top:10px;text-align:center">Nothing is charged yet — you'll pick how to pay next.</p>
 
@@ -9732,10 +10003,10 @@ app.get('/q/:code', async (req, res) => {
         <div style="border-top:1px solid #e3e8f2;margin-top:14px;padding-top:12px">
           <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">How you can pay</div>
           <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap">
-            <span><b>Zelle or cash</b> — ${money(t.deposit)}</span>
-            <span style="background:#1a9c6b;color:#fff;border-radius:20px;padding:2px 10px;font-size:11px;font-weight:700;letter-spacing:.04em">SAVE ${money(cardFee(t.deposit))}</span>
+            <span><b>Zelle or cash</b> — <span id="qpayz">${money(t.deposit)}</span></span>
+            <span style="background:#1a9c6b;color:#fff;border-radius:20px;padding:2px 10px;font-size:11px;font-weight:700;letter-spacing:.04em">SAVE <span id="qpaysave">${money(cardFee(t.deposit))}</span></span>
           </div>
-          <div class="muted" style="margin-top:6px">Card or Apple&nbsp;Pay — ${money(round2(t.deposit + cardFee(t.deposit)))}
+          <div class="muted" style="margin-top:6px">Card or Apple&nbsp;Pay — <span id="qpayc">${money(round2(t.deposit + cardFee(t.deposit)))}</span>
             <span style="font-size:12.5px">(includes the ${Math.round(CARD_FEE*100)}% card fee)</span></div>
         </div>
       </div>`}
@@ -9784,13 +10055,32 @@ ${quotePricingSource()}
       var LINES = ${JSON.stringify(customerLinePricing(q.items || [], catalog))};
       var QITEMS = ${JSON.stringify((q.items || []).map((i) => ({
         qty: Number(i.qty) || 0, line_total: Number(i.line_total) || 0,
-        unit_price: Number(i.unit_price) || 0,
+        /* The each the page SHOWS, which carries any supplier charge shown
+           inside the item's price (customerLineFigures). */
+        unit_price: customerLineFigures(i).each,
         /* So the struck-through "was" amount is shirts-only too, matching the
-           live figure beside it. */
-        addon_total: addonTotalOf(i),
+           live figure beside it — less only the extras that have rows. */
+        addon_total: shownAddonTotalOf(i),
+        optional: !!i.optional,
       })))};
+      /* Supplier charges shown inside the item's price: they stay in the
+         amount, so they are not taken back out of it here. */
+      var FOLDED = ${JSON.stringify(IN_ITEM_PRICE_CODES)};
+      function shownExtras(r){
+        var n = 0;
+        (r.addonLines || []).forEach(function(a){ if (FOLDED.indexOf(a.code) === -1) n += a.total; });
+        return n;
+      }
+      /* An optional line counts only while it is ticked (the option script
+         below keeps window.jtPicked). */
+      function counts(ix){
+        if (!QITEMS[ix] || !QITEMS[ix].optional) return true;
+        return !!(window.jtPicked && window.jtPicked().indexOf(ix) > -1);
+      }
       var BLANK_TIERS = ${JSON.stringify(BLANK_TIERS)};
-      var TAX = ${TAX_RATE}, TAXABLE = ${Number(q.tax) > 0 ? 'true' : 'false'};
+      /* quoteTaxable(), not "tax above zero": a quote whose lines are all
+         optional stores no tax until something is ticked, and is still taxed. */
+      var TAX = ${TAX_RATE}, TAXABLE = ${quoteTaxable(q) ? 'true' : 'false'};
       var DISC_KIND = ${JSON.stringify(q.discount_kind || 'amt')};
       var DISC_VAL = ${Number(q.discount_value) || 0};
       /* The agreed rush percentage rides along so this estimate matches
@@ -9823,7 +10113,7 @@ ${quotePricingSource()}
             sizeMix: mix, blankTiers: BLANK_TIERS,
             blankOverride: L.blankOverride, unitOverride: L.unitOverride,
           });
-          sub += r.lineTotal;
+          if (counts(ix)) sub += r.lineTotal;
 
           var each = document.querySelector('[data-each="' + ix + '"]');
           var amt  = document.querySelector('[data-amount="' + ix + '"]');
@@ -9831,10 +10121,10 @@ ${quotePricingSource()}
           if (each) each.innerHTML = same ? each.dataset.orig
             : '<span style="color:#9aa3b2;text-decoration:line-through">' +
               m2(QITEMS[ix].unit_price) + '</span><br><b style="color:#b45309">' +
-              m2(qty > 0 ? (r.lineTotal - r.addonTotal) / qty : 0) + '</b>';
+              m2(qty > 0 ? (r.lineTotal - shownExtras(r)) / qty : 0) + '</b>';
           /* The Amount column is the SHIRTS, matching the split rows below it —
              the extras have their own amounts and must not be counted twice. */
-          var goodsNow  = Math.round((r.lineTotal - r.addonTotal) * 100) / 100;
+          var goodsNow  = Math.round((r.lineTotal - shownExtras(r)) * 100) / 100;
           var goodsWas  = Math.round((QITEMS[ix].line_total - QITEMS[ix].addon_total) * 100) / 100;
           if (amt) amt.innerHTML = same ? amt.dataset.orig
             : '<span style="color:#9aa3b2;text-decoration:line-through">' +
@@ -9869,6 +10159,116 @@ ${quotePricingSource()}
       document.querySelectorAll('.cq').forEach(function(el){
         el.addEventListener('input', estimate);
       });
+      </script>` : ''}
+
+      ${hasOptions ? `<script>
+      /* OPTIONAL LINES. The total, tax and deposit follow the ticks, worked out
+         by the SAME applyOptionChoice() the Accept route saves with, and the
+         same order of arithmetic as quoteTotals(): rush, then discount, then
+         tax. What the customer watches is what Accept stores and Pay charges. */
+      (function(){
+${applyOptionChoice.toString()}
+        var ITEMS = ${JSON.stringify((q.items || []).map((i, ix) => ({
+          _ix: ix, optional: !!i.optional, qty: Number(i.qty) || 0,
+          line_total: Number(i.line_total) || 0,
+          list_total: i.list_total == null ? null : Number(i.list_total),
+          amount: customerLineFigures(i).amount,
+          addons: (i.addons || []).map((a) => ({ code: a.code, total: Number(a.total) || 0 })),
+        })))};
+        var SHARED = ${JSON.stringify(ORDER_SHARED_CODES)};
+        var T = ${JSON.stringify({
+          tax: TAX_RATE, taxable: quoteTaxable(q), rushPct: Number(q.rush_pct) || 0,
+          discKind: q.discount_kind === 'pct' ? 'pct' : 'amt', discVal: Number(q.discount_value) || 0,
+          depPc: DEPOSIT_PC, fullUnder: DEPOSIT_FULL_UNDER, cardFee: CARD_FEE, required: requiredCount,
+        })};
+        function r2(v){ return Math.round(Number(v || 0) * 100) / 100; }
+        function m(v){ return '$' + r2(v).toFixed(2); }
+        function set(id, html){ var el = document.getElementById(id); if (el) el.innerHTML = html; }
+        function show(id, on){ var el = document.getElementById(id); if (el) el.style.display = on ? '' : 'none'; }
+        var boxes = Array.prototype.slice.call(document.querySelectorAll('input.opt'));
+        function picked(){
+          return boxes.filter(function(b){ return b.checked; })
+                      .map(function(b){ return parseInt(b.value, 10); });
+        }
+        window.jtPicked = picked;
+
+        function update(){
+          var pick = picked();
+          var res = applyOptionChoice(ITEMS, pick, SHARED);
+          var sub = 0;
+          res.items.forEach(function(it){ sub += Number(it.line_total) || 0; });
+          sub = r2(sub);
+          var rush = r2(sub * T.rushPct / 100);
+          var gross = r2(sub + rush);
+          var dv = T.discVal, disc = 0;
+          if (dv > 0 && gross > 0) {
+            if (T.discKind === 'pct') dv = Math.min(dv, 100);
+            disc = r2(Math.min(Math.max(T.discKind === 'pct' ? gross * dv / 100 : dv, 0), gross));
+          }
+          var net = r2(gross - disc);
+          var tax = T.taxable ? r2(net * T.tax) : 0;
+          var total = r2(net + tax);
+          var dep = total <= 0 ? 0 : (total < T.fullUnder ? total : Math.min(total, r2(total * T.depPc)));
+          var fee = r2(dep * T.cardFee);
+
+          set('qsub', m(sub));
+          set('qrush', m(rush)); show('qrushrow', rush > 0);
+          set('qdisc', '&minus;' + m(disc)); show('qdiscrow', disc > 0);
+          set('qtax', m(tax)); show('qtaxrow', tax > 0);
+          set('qtotal', m(total));
+          set('qdep', m(dep));
+          set('qdeplab', dep >= total ? 'Due now (paid in full)' : 'Deposit to start (50%)');
+          set('qpayz', m(dep)); set('qpaysave', m(fee)); set('qpayc', m(r2(dep + fee)));
+
+          /* Each option says whether it is in, and an option whose order-level
+             charge is already paid by another ticked line shows its amount
+             without it, so the amounts still add up to the subtotal. */
+          var kept = {};
+          res.items.forEach(function(it){ kept[it._ix] = it; });
+          ITEMS.forEach(function(it, ix){
+            if (!it.optional) return;
+            var on = !!kept[ix];
+            var st = document.querySelector('.optstate[data-line="' + ix + '"]');
+            if (st) { st.textContent = on ? 'In your total.' : 'Not in your total yet.';
+                      st.style.color = on ? '#166534' : ''; }
+            var row = document.querySelector('tr[data-optline="' + ix + '"]');
+            if (row) row.style.background = on ? '#f3faf6' : '';
+            var cut = on ? r2(it.line_total - kept[ix].line_total) : 0;
+            var amt = document.querySelector('[data-amount="' + ix + '"]');
+            var each = document.querySelector('[data-each="' + ix + '"]');
+            [amt, each].forEach(function(el){ if (el && el.dataset.optOrig === undefined) el.dataset.optOrig = el.innerHTML; });
+            var a2 = cut > 0 ? m(it.amount - cut) : (amt ? amt.dataset.optOrig : '');
+            var e2 = cut > 0 ? m(it.qty > 0 ? (it.amount - cut) / it.qty : 0) : (each ? each.dataset.optOrig : '');
+            /* dataset.orig is what the quantity estimate restores a cell to. */
+            if (amt) { amt.innerHTML = a2; amt.dataset.orig = a2; }
+            if (each) { each.innerHTML = e2; each.dataset.orig = e2; }
+            it.addons.forEach(function(a){
+              var cell = document.querySelector('[data-addon="' + ix + '-' + a.code + '"]');
+              var tr = cell && cell.parentNode;
+              var gone = on && !kept[ix].addons.some(function(k){ return k.code === a.code; });
+              if (tr) tr.style.display = gone ? 'none' : '';
+            });
+          });
+
+          var btn = document.getElementById('qaccept');
+          var none = !T.required && !pick.length;
+          if (btn) { btn.disabled = none; btn.style.opacity = none ? '.5' : ''; }
+          set('qoptsum', none
+            ? '<b>Tick at least one item above to accept.</b>'
+            : pick.length
+              ? 'Accept orders the ' + pick.length + ' option' + (pick.length === 1 ? '' : 's') +
+                ' you ticked' + (T.required ? ' plus the included items' : '') + ': <b>' + m(total) + '</b> in total.'
+              : 'No options ticked, so Accept orders only the included items: <b>' + m(total) + '</b> in total.');
+        }
+
+        boxes.forEach(function(b){
+          b.addEventListener('change', function(){
+            update();
+            if (typeof estimate === 'function') estimate();
+          });
+        });
+        update();
+      })();
       </script>` : ''}
     `));
   } catch (err) {
@@ -11818,7 +12218,27 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
        to reach the customer and nowhere to send it. What is on file and usable
        is kept; the quote page asks for exactly what is missing (acceptAsks). */
     const { rows: cur } = await pool.query(
-      'SELECT name, email, phone, ship_method, ship_to, accepted_at FROM quotes WHERE code = $1', [code]);
+      `SELECT name, email, phone, ship_method, ship_to, accepted_at, items, revision,
+              rush_pct, discount_kind, discount_value, taxable, tax
+         FROM quotes WHERE code = $1`, [code]);
+    /* A quote with OPTIONAL lines: the ones ticked join the order, the rest are
+       set aside, and every figure is worked out again from what is left
+       (applyOptionChoice, the same code the page ran as they ticked). The
+       ticks are indexes into the lines as the page showed them, so a quote the
+       shop has edited since is sent back to be looked at again rather than
+       having old ticks applied to new lines. */
+    let choice = null;
+    const q0 = cur[0];
+    if (q0 && !q0.accepted_at && (q0.items || []).some((i) => i && i.optional)) {
+      const rev = Number(q0.revision) || 1;
+      if (parseInt(rb.rev, 10) !== rev) return res.redirect(`/q/${code}?e=changed#accept`);
+      const chosen = [].concat(rb.opt || []).map((v) => parseInt(v, 10))
+        .filter((ix) => Number.isInteger(ix) && q0.items[ix] && q0.items[ix].optional);
+      const picked = applyOptionChoice(q0.items, chosen, ORDER_SHARED_CODES);
+      if (!picked.items.length) return res.redirect(`/q/${code}?e=choose#accept`);
+      choice = { items: picked.items, declined: picked.declined, rev,
+                 tt: totalsForItems(q0, picked.items) };
+    }
     if (cur.length && !cur[0].accepted_at) {
       const need = SHIP.acceptRequirements(cur[0], rb, { isValidEmail });
       if (need.problems.length) return res.redirect(`/q/${code}?e=details&need=${need.problems.join(',')}#accept`);
@@ -11846,9 +12266,22 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
               needed_by = COALESCE($2::date, needed_by),
               name  = COALESCE(NULLIF(name,''),  $3),
               email = COALESCE(NULLIF(email,''), $4),
-              phone = COALESCE(NULLIF(phone,''), $5)
-        WHERE code=$1 AND accepted_at IS NULL AND requested_items IS NULL AND cancelled_at IS NULL AND status <> 'held' RETURNING *`,
-      [code, nb, cname, cemail, cphone]);
+              phone = COALESCE(NULLIF(phone,''), $5),
+              -- the customer's choice of options, when the quote had any
+              items    = COALESCE($6::jsonb, items),
+              subtotal = COALESCE($7::numeric, subtotal),
+              tax      = COALESCE($8::numeric, tax),
+              total    = COALESCE($9::numeric, total),
+              deposit  = COALESCE($10::numeric, deposit),
+              declined_items = COALESCE($11::jsonb, declined_items)
+        WHERE code=$1 AND accepted_at IS NULL AND requested_items IS NULL AND cancelled_at IS NULL AND status <> 'held'
+          AND ($12::int IS NULL OR COALESCE(revision,1) = $12::int) RETURNING *`,
+      [code, nb, cname, cemail, cphone,
+       choice ? JSON.stringify(choice.items) : null,
+       choice ? choice.tt.subtotal : null, choice ? choice.tt.tax : null,
+       choice ? choice.tt.total : null, choice ? choice.tt.deposit : null,
+       choice ? JSON.stringify(choice.declined) : null,
+       choice ? choice.rev : null]);
 
     if (rows.length) {                       // first acceptance only
       const q = rows[0];
@@ -11914,7 +12347,9 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
          again — otherwise the CRM keeps the blank version forever. It updates
          the quote's deal rather than adding one, and adds no second note of a
          job that has not changed. */
-      if (cname || cemail || cphone) {
+      /* A choice of options changed the job and its amount, so the deal and the
+         studio's copy are pushed again for that as well. */
+      if (cname || cemail || cphone || choice) {
         syncQuoteToBrevo(q, { note: false }).then((ids) => keepBrevoIds(q.id, ids)).catch(() => {});
         syncQuoteToLumise(q).catch(() => {});
       }
@@ -11930,12 +12365,16 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
        told which. */
     const { rows: why } = await pool.query(
       `SELECT accepted_at IS NOT NULL AS already, requested_items IS NOT NULL AS pending,
-              cancelled_at IS NOT NULL AS cancelled FROM quotes WHERE code=$1`,
+              cancelled_at IS NOT NULL AS cancelled, COALESCE(revision,1) AS revision
+         FROM quotes WHERE code=$1`,
       [code]);
+    /* A third, for a quote with options: the shop saved a new version between
+       the customer's page loading and the UPDATE. */
     const reason = !why.length ? 'gone'
       : why[0].cancelled ? 'cancelled'
       : why[0].pending ? 'pending'
-      : why[0].already ? 'already' : 'gone';
+      : why[0].already ? 'already'
+      : (choice && Number(why[0].revision) !== choice.rev) ? 'changed' : 'gone';
     return res.redirect('/q/' + code + '?e=' + reason);
   } catch (err) {
     console.error('accept failed:', err.message);
@@ -21849,6 +22288,39 @@ const KB_SEED = [
   { kind: 'sop', title: 'End-of-day note', tags: 'end of day, eod, report',
     body: `Before you sign off, add a task or note for the owner with:\n\n- Leads answered, quotes sent, follow-ups done\n- Anything stuck, and what you need\n- The first thing you will do tomorrow` },
 ];
+
+/* Articles written after the playbook was first seeded. seedPlaybook() only
+   fills an EMPTY playbook, so anything new goes here and is added once, by
+   title: an article the owner has since edited keeps their version. */
+const KB_ADDED = [
+  { kind: 'sop', title: 'Quote with options the customer picks',
+    tags: 'quote, options, optional, choose, choice, alternatives, two quotes, checkbox, tick',
+    body: `Use this when a customer wants to compare choices, or add extras, without you writing two quotes.\n\n` +
+      `- Add every item to one quote. On each item the customer gets to choose, tick "Optional — the customer chooses"\n` +
+      `- Items you leave unticked are always in the order\n` +
+      `- An optional item cannot have a Run number, because its price would change the other lines. The form warns you\n` +
+      `- The totals box counts only the required items. The optional ones are shown on their own row, not added in\n` +
+      `- Send the link as usual. On their quote each optional item has an "Add this to my order" box, and their total, tax and deposit change as they tick\n` +
+      `- When they press Accept, what they ticked becomes the order and the rest is set aside. The deposit is on that total\n` +
+      `- After they accept they cannot pick again. If they change their mind, edit the quote: untick Optional on what they want, remove what they do not, and save\n` +
+      `- If they tell you their choice by text instead, make the same edit before they pay` },
+  { kind: 'faq', shortcut: 'quoteoptions', title: 'How do the options on my quote work?',
+    tags: 'options, optional, choose, tick, checkbox, quote',
+    body: `Some items on your quote are marked OPTIONAL. They are not in your total until you tick "Add this to my order" on them, and your total and deposit update as you tick.\n\n` +
+      `When you are happy with it, press Accept at the bottom of the page. Only what is in your total is ordered, and nothing is charged until you choose how to pay.` },
+];
+
+async function addPlaybookArticles() {
+  for (const a of KB_ADDED) {
+    await pool.query(
+      `INSERT INTO kb_articles (kind, title, shortcut, body, tags, decoration, needs_review)
+       SELECT $1, $2, $3, $4, $5, $6, FALSE
+        WHERE NOT EXISTS (SELECT 1 FROM kb_articles WHERE title = $2)
+       ON CONFLICT DO NOTHING`,
+      [a.kind, a.title, a.shortcut || null, a.body, a.tags || '', a.decoration || null])
+      .catch((e) => console.error(`playbook article "${a.title}" not added:`, e.message));
+  }
+}
 
 async function seedPlaybook() {
   const { rows: [c] } = await pool.query('SELECT COUNT(*)::int AS n FROM kb_articles');

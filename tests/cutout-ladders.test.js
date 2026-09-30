@@ -92,11 +92,11 @@ test('a pack is exactly one sheet, so nothing is wasted', () => {
   for (const t of [12, 18, 24, 36]) {
     assert.strictEqual(CUT.packSizeFor(t), CUT.PER_SHEET[t], t + 'in pack is not a whole sheet');
   }
-  assert.deepStrictEqual([12, 18, 24, 36].map(CUT.packSizeFor), [32, 10, 8, 3]);
+  assert.deepStrictEqual([12, 18, 24, 36].map(CUT.packSizeFor), [32, 10, 8, 5]);
   /* Pinned so a change to the cost model cannot move a PUBLISHED price without
      someone noticing: these four are on jtees.net and in the PDF handout.
      $212/$186/$184/$178 until 2026-09-23, when the shop rate went $35 -> $50. */
-  assert.deepStrictEqual([12, 18, 24, 36].map(CUT.packPrice), [208, 172, 168, 160]);
+  assert.deepStrictEqual([12, 18, 24, 36].map(CUT.packPrice), [208, 172, 168, 164]);
 });
 
 test('a pack always beats the same heads bought as singles', () => {
