@@ -58,3 +58,14 @@ test('adding an item unticks its boxes and mends a blanked value', () => {
 test('a line priced by its method alone is named after it, not "Custom item"', () => {
   assert.match(src, /: method \? String\(method\.title \|\| ''\)\.trim\(\) \|\| 'Custom item' : 'Custom item'\);/);
 });
+
+test('an item with only a decoration picked (a cutout pack) is kept, not dropped as empty', () => {
+  assert.match(src, /if \(!desc && !qty && !prod && !method && !method2 && !priceTyped && !sizeTyped && !detailTyped\) continue;/);
+});
+
+test('picking a product or decoration on an item with no quantity fills in 1, on the pick only', () => {
+  assert.match(src, /document\.querySelectorAll\('\.line \.p, \.line \.m'\)\.forEach\(function\(sel\)\{\s*if \(sel\.dataset\.qtyBound\) return;/);
+  assert.match(src, /if \(sel\.value && q && !String\(q\.value\)\.trim\(\)\) \{ q\.value = '1'; calc\(\); \}/);
+  /* A copied item must not inherit the mark, or its selects get no listener. */
+  assert.match(src, /tpl\.querySelectorAll\('\[data-qty-bound\]'\)\.forEach\(function\(el\)\{ delete el\.dataset\.qtyBound; \}\);/);
+});
