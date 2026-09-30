@@ -79,6 +79,11 @@ const T = {
     template: 'studio-order-placed',
     body: `${BRAND}: Thanks! Order #${plain(orderId, 10)} is in. We'll text you when it ships or is ready. ${STOP}`,
   }),
+  // A studio order the customer chose to collect (checkout's pickup option).
+  studioOrderReady: ({ orderId }) => ({
+    template: 'studio-ready',
+    body: `${BRAND}: Order #${plain(orderId, 10)} is ready for pickup at ${PICKUP}. Text (773) 849-1854 when you're outside. ${STOP}`,
+  }),
   studioOrderShipped: ({ orderId, tracking }) => {
     const t = plain(tracking, 40);
     return {

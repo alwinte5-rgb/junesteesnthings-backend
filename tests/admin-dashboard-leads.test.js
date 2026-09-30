@@ -143,8 +143,8 @@ test('the dashboard, the Leads page and the menu counts are admin only', () => {
 
 test('each count fails on its own, to zero', () => {
   const r = route("app.get('/admin/nav-counts', requireAdmin");
-  assert.strictEqual((r.match(/\.catch\(\(\) => \{\}\)/g) || []).length, 6,
-    'leads, reviews, late jobs, certificates, approvals waiting and unread team chat');
+  assert.strictEqual((r.match(/\.catch\(\(\) => \{\}\)/g) || []).length, 7,
+    'leads, reviews, late jobs, certificates, approvals waiting, unread team chat and orders to ship');
 });
 
 test('/admin lands the owner on the dashboard and a helper on My Day', () => {

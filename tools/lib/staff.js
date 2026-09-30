@@ -43,6 +43,9 @@ const PERMISSIONS = {
   'customers.message':     { group: 'Customers',  label: 'Email and text customers', levels: ['off', 'approval', 'on'] },
   'production.stage':      { group: 'Production', label: 'Move jobs through production, shipping', levels: ['off', 'on'] },
   'orders.view':           { group: 'Production', label: 'See studio orders', levels: ['off', 'on'] },
+  /* Its own toggle because it spends money: each label is charged to the
+     owner's Shippo account. In no preset, like Finances: opened on purpose. */
+  'shipping.labels':       { group: 'Production', label: 'Buy shipping labels (charged to your Shippo account)', levels: ['off', 'on'] },
   'reviews.manage':        { group: 'Reviews',    label: 'Manage reviews', levels: ['off', 'on'] },
   'certificates.prescreen':{ group: 'Tax',        label: 'See and attach tax certificates', levels: ['off', 'on'] },
   'certificates.decide':   { group: 'Tax',        label: 'Approve or refuse tax certificates', levels: ['off', 'on'] },
@@ -122,6 +125,11 @@ const ROUTES = {
   'POST /admin/quote/:code/stage': 'production.stage',
   'POST /admin/quote/:code/target': 'production.stage',
   'POST /admin/quote/:code/shipping': 'production.stage',
+  'GET /admin/shipping': 'production.stage',
+  'POST /admin/shipping/shipped': 'production.stage',
+  'POST /admin/shipping/address': 'production.stage',
+  'POST /admin/shipping/check': 'production.stage',
+  'POST /admin/shipping/buy': 'shipping.labels',
 
   'POST /admin/quote/:code/message': 'customers.message',
   'POST /admin/quote/:code/receipt': 'customers.message',
