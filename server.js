@@ -18349,14 +18349,16 @@ function parseShipRef(ref) {
 /** One call to the studio's jt-ship.php, as {status, body}. Never throws: a
  *  studio that is down or slow comes back as {status: 0} and its reason. */
 async function studioShip(payload, timeoutMs = 30000) {
-  if (!process.env.JT_INTERNAL_KEY) {
-    return { status: 0, body: { error: 'JT_INTERNAL_KEY is not set here, so the studio cannot be asked.' } };
-  }
   try {
     const r = await studioFetch(`${STUDIO_BASE}/jt-ship.php`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload), timeoutMs,
     });
+    /* The studio answers only this app's internal key (studioFetch sends it);
+       a refusal means the key is missing here or differs between the two. */
+    if (r.status === 403) {
+      return { status: 403, body: { error: 'The studio refused this app’s key: the internal key must be set, and the same, on both services.' } };
+    }
     const body = await r.json().catch(() => null);
     return { status: r.status, body: body || { error: `The studio answered ${r.status}.` } };
   } catch (e) {
