@@ -969,7 +969,37 @@ async function initStaffTables() {
     )`);
   await pool.query(`CREATE INDEX IF NOT EXISTS team_messages_thread_idx ON team_messages (staff_id, id)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS team_messages_unread_idx ON team_messages (staff_id) WHERE read_at IS NULL`);
+  /* Bonuses the owner adds by hand or awards for an incentive, and the
+     incentives themselves: a target over a period, for one helper or all. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_incentives (
+      id          SERIAL PRIMARY KEY,
+      title       TEXT NOT NULL,
+      metric      TEXT NOT NULL,
+      target      NUMERIC(12,2) NOT NULL,
+      reward      NUMERIC(10,2) NOT NULL,
+      starts_on   DATE NOT NULL,
+      ends_on     DATE NOT NULL,
+      staff_id    INTEGER,
+      ended_at    TIMESTAMPTZ,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_bonuses (
+      id            SERIAL PRIMARY KEY,
+      staff_id      INTEGER NOT NULL,
+      amount        NUMERIC(10,2) NOT NULL,
+      reason        TEXT NOT NULL,
+      incentive_id  INTEGER,
+      paid_at       TIMESTAMPTZ,
+      expense_id    INTEGER,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  // One award per incentive per helper, however often the button is pressed.
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS staff_bonuses_incentive_uq
+                      ON staff_bonuses (incentive_id, staff_id) WHERE incentive_id IS NOT NULL`);
   for (const sql of [
+    'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS credited_to INTEGER',
     'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS created_by INTEGER',
     'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS sent_by INTEGER',
     'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS held_at TIMESTAMPTZ',
@@ -983,6 +1013,10 @@ async function initStaffTables() {
     'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS platform TEXT',
     'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS profile_url TEXT',
   ]) await pool.query(sql);
+  /* Sales credit not yet decided falls to the helper who sent or built it.
+     0 (the owner's own sale) is a decision, so it is never overwritten. */
+  await pool.query(`UPDATE quotes SET credited_to = COALESCE(sent_by, created_by)
+                     WHERE credited_to IS NULL AND COALESCE(sent_by, created_by) IS NOT NULL`);
   await seedPlaybook();
 }
 
@@ -2371,6 +2405,8 @@ function setAdminCookie(res) {
   res.append('Set-Cookie',
     `${ADMIN_COOKIE}=${encodeURIComponent(stamp)}; Path=/; Max-Age=${ADMIN_SESSION_DAYS * 86400}` +
     '; HttpOnly; Secure; SameSite=Lax');
+  // One person per browser: signing in as the owner ends a helper's session here.
+  res.append('Set-Cookie', 'jt_staff=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax');
 }
 
 /* One-click in from the designer sidebar. The token proves the request came
@@ -2442,6 +2478,9 @@ function setStaffCookie(res, staff) {
   res.append('Set-Cookie',
     `${STAFF_COOKIE}=${encodeURIComponent(value)}; Path=/; Max-Age=${STAFF.STAFF_SESSION_HOURS * 3600}` +
     '; HttpOnly; Secure; SameSite=Lax');
+  /* A helper signing in on a computer the owner uses must not ride the
+     owner's month-long cookie, so it goes. */
+  res.append('Set-Cookie', `${ADMIN_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`);
 }
 
 /** The helper a jt_staff cookie names, if it is still good: signed, unexpired,
@@ -2539,10 +2578,8 @@ async function requireAdmin(req, res, next) {
     return actorStore.run(OWNER_ACTOR, next);
   };
 
-  // An unexpired signed cookie counts as signed in.
-  if (secret && checkStamp(adminCookieValue(req), secret)) return asOwner();
-
-  // A helper's own login.
+  /* A helper's own login is checked FIRST: with both cookies in one browser,
+     the narrower one wins, so a helper can never inherit the owner's access. */
   if (cookieValue(req, STAFF_COOKIE)) {
     let staff = null;
     try { staff = await staffFromRequest(req); }
@@ -2557,6 +2594,9 @@ async function requireAdmin(req, res, next) {
       return actorStore.run(staff, next);
     }
   }
+
+  // An unexpired signed owner cookie counts as signed in.
+  if (secret && checkStamp(adminCookieValue(req), secret)) return asOwner();
 
   /* The PASSWORD is the secret; the username is not checked.
      Phone keyboards autocapitalise the first letter, so "Admin" was failing and
@@ -2580,6 +2620,17 @@ async function requireAdmin(req, res, next) {
        owner's password or a helper's email and password. Anything else (a
        fetch, a script) gets a plain 401 without a Basic prompt. */
     if (wantsHtml(req)) return signinRedirect(req, res);
+    /* A form sent after the session ended (a helper's lasts 12 hours) must not
+       lose what was typed: a redirect would drop it. Sign in in another tab,
+       then Back here keeps the form filled in, and Save sends it again. */
+    if (!['GET', 'HEAD'].includes(req.method) && /text\/html/.test(String(req.headers.accept || ''))) {
+      return res.status(401).send(htmlDocument('Signed out', `<div class="wrap" style="max-width:520px;margin:40px auto;padding:0 16px">
+        <div class="card"><h1 style="font-size:22px">You were signed out</h1>
+        <p>Nothing was saved yet, and what you typed is still on the page you came from.</p>
+        <ol style="line-height:1.7"><li><a href="/signin" target="_blank" rel="noopener">Sign in again in a new tab</a></li>
+          <li>Come back to this tab and press your browser's <b>Back</b> button</li>
+          <li>Press Save (or Send) again</li></ol></div></div>`));
+    }
     return res.status(401).send('Unauthorized — sign in at /signin.');
   }
   // Signed in by password: remember it so this is the last prompt for a month.
@@ -6526,7 +6577,10 @@ button:active{transform:translateY(1px)}
 .warn{background:#fdecea;border:1px solid #f5c6cb;color:#b71c1c;padding:12px 14px;border-radius:10px;margin-bottom:12px}
 .chip{display:inline-block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:3px 10px;border-radius:20px}
 .muted{color:#6b7280;font-size:13px}
-@media(max-width:560px){.row{flex-direction:column;gap:0}}
+/* Stacked on a phone, a flex-basis written for width (flex:1 1 240px) becomes
+   a HEIGHT, and an input grows 240px tall. Every stacked child sizes to its
+   content instead, inline styles included. */
+@media(max-width:560px){.row{flex-direction:column;gap:0}.row>*{flex-basis:auto!important}}
 
 /* ── Item lines ──────────────────────────────────────────────────────────
    Each item is a quiet block, not a competing card. Only the essentials show;
@@ -6683,6 +6737,7 @@ form:has(>.step-row){display:block}
    page, forwards to /leads for the same reason. */
 const ADMIN_NAV = [
   { key: 'myday',      href: '/my-day',        label: 'My Day',     icon: 'check',  staffOnly: true },
+  { key: 'earnings',   href: '/my-earnings',   label: 'My earnings', icon: 'dollar', staffOnly: true },
   { key: 'dashboard',  href: '/dashboard',     label: 'Dashboard',  icon: 'grid' },
   { key: 'leads',      href: '/leads',         label: 'Leads',      icon: 'inbox',  badge: 'leads' },
   { key: 'quotes',     href: '/quotes',        label: 'Quotes',     icon: 'file' },
@@ -7040,6 +7095,7 @@ function emptyState(html, action) {
 app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
   let catalog = { products: [], methods: [] };
   try { catalog = await getCatalog(); } catch (e) { /* form still works manually */ }
+  const creditRoster = await staffRoster({ activeOnly: true }).catch(() => []);
 
   let existing = null;
   const editCode = String(req.params.code || '').toUpperCase();
@@ -7513,6 +7569,7 @@ function productGroupOf(name) {
         <p class="muted" id="eta" style="margin-top:8px"></p>
         <label>Quote good for (days)</label>
         <input name="valid_days" type="number" value="14" inputmode="numeric">
+        ${creditField(existing, creditRoster)}
         <label>Notes for the customer</label><textarea name="notes" rows="2" placeholder="Optional">${val(E.notes)}</textarea>
       </div>
 
@@ -8595,6 +8652,14 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
        description or a quantity counts; a product is optional so a purely
        manual line ("banner, 3ft x 8ft") works exactly as well. */
     const items = [];
+    /* For a helper's quote, what the same lines cost at CATALOGUE price, and
+       how many custom lines carry a typed price with no catalogue to measure
+       it against. The approval gate reads these: a typed garment price lowers
+       the "list" figure along with the line, so measuring against list_total
+       alone let a helper sell far below catalogue without the owner's OK. */
+    const measureForStaff = (currentActor() || OWNER_ACTOR).kind === 'staff';
+    let catalogueSum = 0;
+    let customPriced = 0;
     /* Lines whose ink count is past what the press can run in one pass. Collected
        rather than thrown at the first one, so a person fixing a multi-line quote
        is told about all of them at once. */
@@ -8769,7 +8834,7 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
 
       const runGroup = String(one(b['run' + i]) || '').trim();
       const stage2 = String(one(b['loc2' + i]) || '').trim();
-      const priced = priceLine({
+      const priceArgs = {
         bandQty: runGroup ? (runTotals[runGroup] || 0) : 0,
         product: prod, method, qty: q, sizeMix: mix, colours,
         method2, stage2, colours2: one(b['colors2' + i]) || '',
@@ -8780,7 +8845,17 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
            under-bills by one screen per location. */
         dark: garmentDark,
         blankOverride, unitOverride: rawUnit,
-      });
+      };
+      const priced = priceLine(priceArgs);
+      if (measureForStaff) {
+        const typedUnit = rawUnit != null && String(rawUnit).trim() !== '' && Number.isFinite(Number(rawUnit));
+        if (prod && (blankOverride != null || typedUnit)) {
+          catalogueSum += priceLine({ ...priceArgs, blankOverride: null, unitOverride: null }).lineTotal;
+        } else {
+          catalogueSum += priced.lineTotal;
+          if (!prod && typedUnit) customPriced++;
+        }
+      }
 
       /* A design past the press's screen ceiling is not a screen-print job, and
          saving it anyway prices work the shop cannot run. The form has warned
@@ -9059,11 +9134,11 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
        against what the same job costs at catalogue price. */
     const actor = currentActor() || OWNER_ACTOR;
     const staffId = actor.kind === 'staff' ? actor.id : null;
-    const listSubtotal = round2(items.reduce((a, i) =>
-      a + Math.max(Number(i.line_total) || 0, Number(i.list_total) || 0), 0));
+    const listSubtotal = round2(Math.max(catalogueSum, items.reduce((a, i) =>
+      a + Math.max(Number(i.line_total) || 0, Number(i.list_total) || 0), 0)));
     const listGross = listSubtotal * (1 + rushPct / 100);
     const gate = STAFF.quoteNeedsApproval(actor, {
-      total,
+      total, customPriced,
       discountPct: listGross > 0 ? Math.max(0, (1 - net / listGross) * 100) : 0,
     });
     let existingQuote = null;
@@ -9100,7 +9175,9 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
                 change_request=NULL, requested_items=NULL, revision=COALESCE(revision,1)+1,
                 status = CASE WHEN $20 THEN 'held' WHEN accepted_at IS NULL THEN 'sent' ELSE status END,
                 held_at = CASE WHEN $20 THEN held_at ELSE NULL END,
-                sent_by = CASE WHEN status = 'held' AND NOT $20 THEN $21 ELSE sent_by END
+                sent_by = CASE WHEN status = 'held' AND NOT $20 THEN $21 ELSE sent_by END,
+                -- released on this save: the customer's clock starts now (see releaseHeldQuote)
+                created_at = CASE WHEN status = 'held' AND NOT $20 THEN NOW() ELSE created_at END
           WHERE code=$1 RETURNING *`,
         [editing, name, phone, email, JSON.stringify(items), subtotal, tax, total, deposit,
          String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy,
@@ -9138,6 +9215,15 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
 
     const q = rows[0];
     const code = q.code;
+    /* Sales credit from the form. A helper's own quote is theirs unless they
+       name a teammate; a refusal (someone else's sale) keeps what was there. */
+    {
+      const want = String(one(b.credit_to) || '').trim();
+      const r = await setSalesCredit(code, want || (staffId && q.credited_to == null ? String(staffId) : ''), actor)
+        .catch((e) => ({ ok: false, msg: e.message }));
+      if (r.ok && r.to !== undefined) q.credited_to = r.to;
+      else if (!r.ok && want) console.warn(`sales credit on ${code} not changed: ${r.msg}`);
+    }
 
     if (q.status === 'held') {
       /* One open request per quote: a re-save replaces the reasons, it does not
@@ -11262,7 +11348,7 @@ async function landStripePaymentOnQuote(q, { gross, pi, extRef, createdAt, how, 
   }
   await pool.query(
     `UPDATE quotes SET status = 'accepted', accepted_at = COALESCE(accepted_at, NOW())
-      WHERE code = $1`, [code]).catch(() => {});
+      WHERE code = $1 AND status <> 'held'`, [code]).catch(() => {});
   const nq = { ...q, paid_amount: res.paid };
   const stillDue = balanceOf(nq, t.total);
   const taxIn = (Number(q.total) > 0 && Number(q.tax) > 0)
@@ -12114,6 +12200,9 @@ app.post('/quote/:code/mark-paid', requireAdmin, async (req, res) => {
     const { rows } = await pool.query('SELECT * FROM quotes WHERE code=$1', [code]);
     if (!rows.length) return res.redirect('/quotes');
     const q = rows[0];
+    /* A held quote has not reached the customer; recording a payment would
+       make it 'accepted' and live without the owner's Approve. */
+    if (q.status === 'held') return res.redirect(`/production/${code}?err=${encodeURIComponent('This quote is waiting for approval. Approve it first.')}`);
     const t = quoteTotals(q);
 
     // Blank amount means "they paid what was due" — deposit, or the balance if
@@ -13400,7 +13489,9 @@ app.post('/quote/:code/uncancel', requireAdmin, async (req, res) => {
                             THEN 'accepted' ELSE 'sent' END,
               accepted_at = CASE WHEN accepted_at IS NULL AND COALESCE(paid_amount, 0) > 0
                                  THEN NOW() ELSE accepted_at END
-        WHERE code = $1 RETURNING *`, [code]);
+        WHERE code = $1 AND status <> 'held' RETURNING *`, [code]);
+    /* Never out of 'held': that is the owner's Approve, not a Restore, or a
+       helper could release a quote their limits held back. */
     // And back out of lost, to the stage its own state says.
     if (rows.length) syncDealStage(rows[0]).catch(() => {});
   } catch (err) {
@@ -13439,6 +13530,13 @@ app.post('/quote/:code/receipt', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/quotes');
   const to = String((req.body && req.body.to) || req.query.to || '').trim() || null;
+  /* A receipt is an email to a customer. A helper whose messages wait for the
+     owner has no approval step for this one, so it is the owner's to send. */
+  if (actorLevel('customers.message') !== 'on') {
+    return res.status(403).send(adminPage('Needs the owner', `${pageHeader('Receipts go through the owner', '')}
+      <div class="card"><p>Your customer emails wait for the owner's OK, so sending a receipt is theirs to do.</p>
+      <p style="margin-top:12px"><a class="btn" href="/production/${escEmail(code)}">Back to the job</a></p></div>`, 'quotes'));
+  }
   try {
     const out = await sendReceipt(code, to);
     console.log(`receipt for ${code}:`, out.ok ? `sent to ${out.to}` : out.error);
@@ -14825,7 +14923,8 @@ async function renderBoard(VIEW, req, res) {
             </details></div>`;
         })()}
         ${(() => {
-          if (VIEW !== 'work') return '';
+          // Costs, margin and profit are Finances: the owner's unless they open it.
+          if (VIEW !== 'work' || actorLevel('finances') !== 'on') return '';
           const mg = quoteMargin(q);
           const good = mg.pct !== null && mg.pct >= 50;
           const thin = mg.pct !== null && mg.pct < 30;
@@ -15195,7 +15294,7 @@ async function renderBoard(VIEW, req, res) {
       <!-- Books moved to the main nav; these two stay because they are the two
            views of THIS board, not separate destinations. -->
 
-      ${VIEW !== 'money' ? '' : `
+      ${VIEW !== 'money' || actorLevel('finances') !== 'on' ? '' : `
       <div class="card" style="margin-bottom:16px">
         <div style="display:flex;gap:26px;flex-wrap:wrap;align-items:baseline;margin-bottom:4px">
           <div>
@@ -15587,6 +15686,7 @@ app.get('/production/:code', requireAdmin, async (req, res) => {
     const messagesCard = await jobMessagesCard(q, req.query);
     const certificateCard = await jobCertificateCard(q, req.query);
     const notesCard = await jobNotesCard(q.code);
+    const creditCard = await jobCreditCard(q).catch((e) => { console.error('credit card failed:', e.message); return ''; });
     res.send(adminPage(`${q.code} — production`, `
       <h1>${escEmail(q.name || q.code)}</h1>
       <div class="sub">${escEmail(q.code)} · ${money(q.total)} ·
@@ -15652,6 +15752,7 @@ app.get('/production/:code', requireAdmin, async (req, res) => {
       </div>
       ${certificateCard}
       ${messagesCard}
+      ${creditCard}
       ${notesCard}
 
       <script>
@@ -15759,6 +15860,7 @@ const MESSAGE_ERRORS = {
   'no-consent': 'They have not agreed to texts, so nothing was sent. Send it by email instead.',
   failed: 'It did not send, and the error has been reported. Try again, or reach them another way.',
   duplicate: 'That message went out a moment ago, so it was not sent twice.',
+  held: 'This quote is still waiting for approval, so the customer cannot open it yet. Nothing was sent. Once it is approved, message them.',
 };
 
 async function jobMessagesCard(q, query) {
@@ -15906,6 +16008,9 @@ async function sendJobMessage({ code, channel, subject, text }) {
   try {
     const { rows } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
     const q = rows[0];
+    /* Every message links to the customer's quote page, which answers "not
+       found" while the quote waits for approval. */
+    if (q && q.status === 'held') return 'held';
     if (!q) return 'no-quote';
     if (channel === 'email') {
       if (!q.email) return 'no-email';
@@ -15955,6 +16060,9 @@ app.post('/quote/:code/message', requireAdmin, async (req, res) => {
   const actor = currentActor();
   if (actor && actor.kind === 'staff' && actorLevel('customers.message') === 'approval') {
     try {
+      // Not queued for a quote the customer cannot open yet (sendJobMessage refuses those too).
+      const { rows: [hq] } = await pool.query('SELECT status FROM quotes WHERE code = $1', [code]);
+      if (hq && hq.status === 'held') return answer('msg_err', 'held');
       await pool.query(
         `INSERT INTO staff_approvals (kind, subject_id, payload, reasons, requested_by)
          VALUES ('message', $1, $2, $3, $4)`,
@@ -15998,13 +16106,14 @@ const LEAD_QUOTE_MATCH = `(NULLIF(lower(trim(q.email)),'') = lower(trim(s.email)
 
 /** Every lead, newest first, with where it stands: 'new', 'quoted' (and the
  *  quote), or 'dismissed' (and why). A quote wins over a dismissal: a lead let
- *  go and then quoted anyway did become work. */
+ *  go and then quoted anyway did become work. A quote still held for the
+ *  owner's approval does not count: the customer has not heard anything. */
 async function leadsWithStatus() {
   const { rows } = await pool.query(
     `SELECT s.*,
-            (SELECT q.code FROM quotes q WHERE q.from_submission_id = s.id
+            (SELECT q.code FROM quotes q WHERE q.from_submission_id = s.id AND q.status <> 'held'
               ORDER BY q.created_at LIMIT 1) AS linked_quote,
-            (SELECT q.code FROM quotes q WHERE ${LEAD_QUOTE_MATCH}
+            (SELECT q.code FROM quotes q WHERE ${LEAD_QUOTE_MATCH} AND q.status <> 'held'
               ORDER BY q.created_at LIMIT 1) AS matched_quote
        FROM submissions s
       ORDER BY s.created_at DESC`);
@@ -19379,7 +19488,12 @@ function flash(query) {
   const err = text(query.err, 200);
   return `${ok ? `<div class="ok">${escEmail(ok)}</div>` : ''}${err ? `<div class="warn">${escEmail(err)}</div>` : ''}`;
 }
-const back = (res, path, key, msg) => res.redirect(`${path}${path.includes('?') ? '&' : '?'}${key}=${encodeURIComponent(msg)}`);
+/* The message goes into the query, before any #fragment: after it, the
+   browser keeps it to itself and the page never shows the flash. */
+const back = (res, path, key, msg) => {
+  const [p, frag] = String(path).split('#');
+  return res.redirect(`${p}${p.includes('?') ? '&' : '?'}${key}=${encodeURIComponent(msg)}${frag ? '#' + frag : ''}`);
+};
 
 /** First reply to a lead: who and when, once. What the scorecard's reply time reads. */
 async function markLeadResponded(submissionId, actor) {
@@ -19660,7 +19774,15 @@ app.get('/admin/approvals', requireAdmin, async (req, res) => {
  *  and studio contact are made, and the helper who wrote it gets the credit. */
 async function releaseHeldQuote(code, requestedBy) {
   const { rows: [q] } = await pool.query(
-    `UPDATE quotes SET status = 'sent', held_at = NULL, sent_by = COALESCE(sent_by, $2)
+    /* The customer's clock starts now, not when the helper drafted it: the
+       follow-up email counts days from created_at and expiry reads
+       valid_until, so a quote held for a week would otherwise be chased at
+       once, or reach the customer already expired. It keeps the same number
+       of days it was written with. */
+    `UPDATE quotes SET status = 'sent', held_at = NULL, sent_by = COALESCE(sent_by, $2),
+            valid_until = CASE WHEN valid_until IS NULL THEN NULL
+                               ELSE CURRENT_DATE + GREATEST(1, valid_until - created_at::date) END,
+            created_at = NOW()
       WHERE code = $1 AND status = 'held' RETURNING *`, [code, requestedBy || null]);
   if (!q) return null;
   if (q.from_submission_id) markLeadResponded(q.from_submission_id, { kind: 'staff', id: requestedBy });
@@ -19783,13 +19905,16 @@ app.get('/admin/activity', requireAdmin, async (req, res) => {
 /** One helper's numbers for [from, to). Every figure from the tables that
  *  record the work itself, so the scorecard cannot drift from what happened. */
 async function helperScore(staffId, from, to) {
+  // A bare date means midnight on the shop's clock, not UTC's.
+  const edge = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? TEAM.localMidnight(v, SHOP_TZ) : v);
+  from = edge(from); to = edge(to);
   const [leads, quotes, tasks, money_, hours] = await Promise.all([
     pool.query(`SELECT created_at, first_response_at FROM submissions
                  WHERE first_response_by = $1 AND first_response_at >= $2 AND first_response_at < $3`, [staffId, from, to]),
     pool.query(`SELECT
                   COUNT(*) FILTER (WHERE created_by = $1 AND created_at >= $2 AND created_at < $3)::int AS drafted,
                   COUNT(*) FILTER (WHERE sent_by = $1 AND created_at >= $2 AND created_at < $3 AND status <> 'held')::int AS sent,
-                  COUNT(*) FILTER (WHERE sent_by = $1 AND accepted_at >= $2 AND accepted_at < $3)::int AS accepted
+                  COUNT(*) FILTER (WHERE credited_to = $1 AND accepted_at >= $2 AND accepted_at < $3)::int AS accepted
                   FROM quotes`, [staffId, from, to]),
     pool.query(`SELECT
                   COUNT(*) FILTER (WHERE done_by = $1 AND done_at >= $2 AND done_at < $3)::int AS done,
@@ -19799,7 +19924,7 @@ async function helperScore(staffId, from, to) {
                   FROM staff_tasks`, [staffId, from, to]),
     pool.query(`SELECT COALESCE(SUM(p.amount - COALESCE(p.fee, 0)), 0)::float AS collected
                   FROM quote_payments p JOIN quotes q ON q.code = p.quote_code
-                 WHERE q.sent_by = $1 AND p.created_at >= $2 AND p.created_at < $3`, [staffId, from, to]),
+                 WHERE q.credited_to = $1 AND p.created_at >= $2 AND p.created_at < $3`, [staffId, from, to]),
     pool.query(`SELECT business, SUM(hours)::float AS hours FROM staff_hours
                  WHERE staff_id = $1 AND week_of >= $2::date - 6 AND week_of < $3 GROUP BY business`, [staffId, from, to]),
   ]);
@@ -19933,7 +20058,7 @@ async function commissionLines(staffId, pct) {
                      AND d.status NOT IN ('won', 'lost', 'warning_closed')) AS dispute_open,
             (SELECT amount FROM commission_payouts c WHERE c.staff_id = $1 AND c.quote_code = q.code) AS paid_amount_c
        FROM quotes q JOIN quote_payments p ON p.quote_code = q.code
-      WHERE q.sent_by = $1
+      WHERE q.credited_to = $1
       GROUP BY q.code, q.name, q.total, q.tax, q.settled_at
       ORDER BY MAX(p.created_at) DESC LIMIT 500`, [staffId]);
   return rows.map((r) => {
@@ -19949,26 +20074,54 @@ app.get('/admin/commission', requireAdmin, async (req, res) => {
     const roster = await staffRoster();
     const s = roster.find((r) => r.id === intIn(req.query.staff)) || roster[0];
     if (!s) return res.redirect('/admin/staff');
-    const pct = Number(s.commission_pct || 0);
-    const lines = await commissionLines(s.id, pct);
-    const sum = (st) => lines.filter((l) => l.state === st).reduce((a, l) => a + (st === 'paid' ? Number(l.paid_amount_c) : l.amount), 0);
+    const [e, incentives] = await Promise.all([earningsFor(s), incentivesFor(s.id, { includeEnded: true })]);
+    const { pct, lines } = e;
     const payable = lines.filter((l) => l.state === 'payable' && l.amount > 0);
+    const owedBonuses = e.bonuses.filter((b) => !b.paid_at);
+    const payNow = round2(e.payable + e.bonusOwed);
+    const today = new Date().toISOString().slice(0, 10);
     const tone = { payable: 'green', waiting: 'blue', earning: 'neutral', 'on hold': 'red', paid: 'neutral' };
     res.send(adminPage('Commission', `
-      ${pageHeader(`Commission — ${s.name}`, `${pct}% of what was collected on quotes they sent, before tax, less refunds, lost disputes and card fees. Payable ${TEAM.HOLD_DAYS} days after the job is paid in full.`)}
+      ${pageHeader(`Commission — ${s.name}`, `${pct}% of what was collected on quotes credited to them, before tax, less refunds, lost disputes and card fees. Payable ${TEAM.HOLD_DAYS} days after the job is paid in full.`)}
       ${flash(req.query)}
       ${filterChips(roster.map((r) => ({ label: r.name, href: `/admin/commission?staff=${r.id}`, on: r.id === s.id })))}
-      ${statTiles([
-        { label: 'Payable now', value: money(sum('payable')), tone: 'green' },
-        { label: 'Waiting out the 14 days', value: money(sum('waiting')), tone: 'blue' },
-        { label: 'Not paid in full yet', value: money(sum('earning')), tone: 'gray' },
-        { label: 'Paid so far', value: money(sum('paid')), tone: 'navy' },
-      ])}
-      ${payable.length ? `<form method="post" action="/admin/commission/pay" class="card">
+      ${earningsTiles(e)}
+      ${payNow > 0 ? `<form method="post" action="/admin/commission/pay" class="card">
         <input type="hidden" name="staff_id" value="${s.id}">
-        <b>Pay ${money(sum('payable'))} through EasyPay, then record it here.</b>
-        <p class="muted">Recording it books one expense (Contract labor, vendor ${escEmail(s.name)}) and marks these quotes paid.</p>
-        <button type="submit">I paid it — record ${payable.length} quote${payable.length === 1 ? '' : 's'}</button></form>` : ''}
+        <b>Pay ${money(payNow)} through EasyPay, then record it here.</b>
+        <p class="muted">Recording it books one expense (Contract labor, vendor ${escEmail(s.name)}) and marks ${
+          [payable.length ? `${payable.length} quote${payable.length === 1 ? '' : 's'}` : '',
+           owedBonuses.length ? `${owedBonuses.length} bonus${owedBonuses.length === 1 ? '' : 'es'}` : ''].filter(Boolean).join(' and ')} paid.</p>
+        <button type="submit">I paid it — record ${money(payNow)}</button></form>` : ''}
+      <div class="card"><b>Bonuses</b>
+        ${e.bonuses.map((b) => `<div class="row-i"><span class="row-main">${escEmail(b.reason)}
+          <div class="row-sub">${escEmail(whenShort(b.created_at))}</div></span>
+          <span class="row-end"><b>${money(b.amount)}</b> ${pill(b.paid_at ? 'paid' : 'owed', b.paid_at ? 'neutral' : 'green')}${b.paid_at ? '' : `
+            <form method="post" action="/admin/bonuses/${b.id}/delete" style="display:inline;margin:0"><input type="hidden" name="staff_id" value="${s.id}">
+            <button type="submit" class="btn btn-ghost">Remove</button></form>`}</span></div>`).join('') || '<p class="muted">No bonuses yet.</p>'}
+        <form method="post" action="/admin/bonuses" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
+          <input type="hidden" name="staff_id" value="${s.id}">
+          <input name="amount" type="number" min="0.01" step="0.01" placeholder="$" required style="width:110px">
+          <input name="reason" maxlength="200" placeholder="What it is for" required style="flex:1 1 auto;min-width:10em">
+          <button type="submit" class="btn btn-ghost">Add bonus</button>
+        </form></div>
+      <div class="card"><b>Incentives</b> <span class="muted">&middot; ${escEmail(s.name)}'s progress</span>
+        ${incentives.map((i) => incentiveRow(i, { awardFor: s.id }) + (i.ended_at ? '' : `
+          <form method="post" action="/admin/incentives/${i.id}/end" style="margin:-4px 0 8px;text-align:right">
+            <button type="submit" class="btn btn-ghost" style="font-size:12px;padding:4px 10px">End this incentive</button></form>`)).join('')
+          || '<p class="muted">No incentives yet. Set a target below and the team sees their progress on My Day.</p>'}
+        <details style="margin-top:8px"><summary><b>New incentive</b></summary>
+        <form method="post" action="/admin/incentives" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
+          <input name="title" maxlength="120" placeholder="e.g. October push" required style="flex:1 1 auto;min-width:10em">
+          <select name="metric"><option value="collected">Money collected ($)</option><option value="accepted">Quotes accepted (count)</option></select>
+          <input name="target" type="number" min="0.01" step="0.01" placeholder="Target" required style="width:110px">
+          <input name="reward" type="number" min="0.01" step="0.01" placeholder="Bonus $" required style="width:110px">
+          <label style="font-size:12px">From <input name="starts_on" type="date" value="${today}" required></label>
+          <label style="font-size:12px">To <input name="ends_on" type="date" required></label>
+          <select name="staff_id"><option value="all">Everyone</option>${roster.filter((r) => r.active).map((r) =>
+            `<option value="${r.id}">${escEmail(r.name)} only</option>`).join('')}</select>
+          <button type="submit" class="btn">Add incentive</button>
+        </form></details></div>
       <div class="card">${lines.length ? `<table class="dt" style="width:100%"><thead><tr>
         <th>Quote</th><th>Customer</th><th>Collected</th><th>Base</th><th>Commission</th><th></th></tr></thead><tbody>
         ${lines.map((l) => `<tr><td><a href="/production/${escEmail(l.code)}">${escEmail(l.code)}</a></td>
@@ -19995,11 +20148,19 @@ app.post('/admin/commission/pay', requireAdmin, async (req, res) => {
        ledger says now. */
     const lines = (await commissionLines(staffId, Number(s.commission_pct || 0)))
       .filter((l) => l.state === 'payable' && l.amount > 0);
-    if (!lines.length) { await client.query('ROLLBACK'); return back(res, `/admin/commission?staff=${staffId}`, 'err', 'Nothing is payable.'); }
-    const total = round2(lines.reduce((a, l) => a + l.amount, 0));
+    const { rows: bonuses } = await client.query(
+      'SELECT id, amount, reason FROM staff_bonuses WHERE staff_id = $1 AND paid_at IS NULL FOR UPDATE', [staffId]);
+    if (!lines.length && !bonuses.length) { await client.query('ROLLBACK'); return back(res, `/admin/commission?staff=${staffId}`, 'err', 'Nothing is payable.'); }
+    const total = round2(lines.reduce((a, l) => a + l.amount, 0) + bonuses.reduce((a, b) => a + Number(b.amount), 0));
+    const note = [lines.length ? `Commission: ${lines.map((l) => l.code).join(', ')}` : '',
+                  bonuses.length ? `Bonuses: ${bonuses.map((b) => b.reason).join('; ')}` : ''].filter(Boolean).join(' / ');
     const { rows: [e] } = await client.query(
       `INSERT INTO expenses (spent_on, category, amount, vendor, note) VALUES (CURRENT_DATE, 'Contract labor', $1, $2, $3)
-       RETURNING id`, [total, s.name, `Commission: ${lines.map((l) => l.code).join(', ')}`.slice(0, 500)]);
+       RETURNING id`, [total, s.name, note.slice(0, 500)]);
+    if (bonuses.length) {
+      await client.query('UPDATE staff_bonuses SET paid_at = NOW(), expense_id = $2 WHERE id = ANY($1::int[])',
+        [bonuses.map((b) => b.id), e.id]);
+    }
     for (const l of lines) {
       await client.query(
         `INSERT INTO commission_payouts (staff_id, quote_code, amount, expense_id) VALUES ($1, $2, $3, $4)
@@ -20013,6 +20174,300 @@ app.post('/admin/commission/pay', requireAdmin, async (req, res) => {
     return back(res, `/admin/commission?staff=${staffId}`, 'err', 'Could not record it. Nothing was booked.');
   } finally {
     client.release();
+  }
+});
+
+/* ── Sales credit, bonuses and incentives ─────────────────────────────────── */
+
+/* Whose sale a quote is, for commission and the scorecard. It is its own
+   field rather than "who pressed send", because the helper who found the
+   customer and built the quote is not always the one who sent it — and the
+   owner releasing a held quote must not take the sale.
+     NULL  not decided yet: the helper who builds a quote gets it on save
+     0     the owner's own sale, which pays no commission
+     n     that helper
+   A helper may credit themselves or a teammate on a quote that is theirs or
+   nobody's, never take one already credited to someone else. Once commission
+   on a quote is paid the credit is fixed, so it cannot be paid twice. */
+const CREDIT_OWNER = 0;
+
+/** The sales-credit picker, or a line saying why this person cannot change
+ *  it. `bare` leaves out the label (the job page has its own heading). */
+function creditField(q, roster, { bare = false } = {}) {
+  const actor = currentActor() || OWNER_ACTOR;
+  if (!roster.length) return '';
+  const cur = q && q.credited_to != null ? Number(q.credited_to) : null;
+  if (actor.kind === 'staff' && cur != null && cur !== actor.id) {
+    return `${bare ? '' : '<label>Sales credit</label>'}<p class="muted" style="margin:4px 0 0">${
+      escEmail(cur === CREDIT_OWNER ? 'The owner' : nameOf(roster, cur))} — only the owner can change it.</p>`;
+  }
+  const pick = cur != null ? cur : actor.kind === 'staff' ? actor.id : null;
+  const opts = [
+    ...(actor.kind === 'staff' ? [] : [`<option value="owner"${pick === CREDIT_OWNER || pick == null ? ' selected' : ''}>No one — my own sale</option>`]),
+    ...roster.map((r) => `<option value="${r.id}"${r.id === pick ? ' selected' : ''}>${escEmail(r.name)}${
+      actor.kind === 'staff' && r.id === actor.id ? ' (me)' : ''}</option>`),
+  ];
+  return `${bare ? '' : '<label>Sales credit <span style="text-transform:none;font-weight:400">(who made this sale — their commission)</span></label>'}
+    <select name="credit_to">${opts.join('')}</select>`;
+}
+
+/** Sets a quote's sales credit, within the rules above. `raw` is '' (no
+ *  change), 'owner', or a helper id. Resolves { ok, to?, msg }. */
+async function setSalesCredit(code, raw, actor) {
+  const want = String(raw || '').trim();
+  if (!want) return { ok: true };
+  const isStaff = actor && actor.kind === 'staff';
+  let to;
+  if (want === 'owner') {
+    if (isStaff) return { ok: false, msg: 'Only the owner can mark a sale as their own.' };
+    to = CREDIT_OWNER;
+  } else {
+    to = intIn(want);
+    if (!to) return { ok: false, msg: 'Pick who made the sale.' };
+    const { rows: [s] } = await pool.query('SELECT active FROM staff WHERE id = $1', [to]);
+    if (!s || !s.active) return { ok: false, msg: 'That helper is not active.' };
+  }
+  const { rows: [q] } = await pool.query(
+    `SELECT credited_to, EXISTS (SELECT 1 FROM commission_payouts c WHERE c.quote_code = quotes.code) AS paid
+       FROM quotes WHERE code = $1`, [code]);
+  if (!q) return { ok: false, msg: 'That quote no longer exists.' };
+  const cur = q.credited_to == null ? null : Number(q.credited_to);
+  if (cur === to) return { ok: true, to };
+  if (q.paid) return { ok: false, msg: 'Commission on this sale is already paid, so the credit is fixed.' };
+  if (isStaff && cur != null && cur !== actor.id) {
+    return { ok: false, msg: 'This sale is credited to someone else. Ask the owner to change it.' };
+  }
+  /* The same conditions again in the UPDATE, so a payout or another change
+     landing in between cannot be overwritten. */
+  const { rowCount } = await pool.query(
+    `UPDATE quotes SET credited_to = $2
+      WHERE code = $1 AND credited_to IS NOT DISTINCT FROM $3
+        AND NOT EXISTS (SELECT 1 FROM commission_payouts c WHERE c.quote_code = $1)`, [code, to, cur]);
+  if (!rowCount) return { ok: false, msg: 'It changed while you were looking. Try again.' };
+  logActivity(actor, 'sales credit', { type: 'quote', id: code }, { from: cur, to });
+  return { ok: true, to };
+}
+
+app.post('/quote/:code/credit', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/quotes');
+  try {
+    const r = await setSalesCredit(code, req.body && req.body.credit_to, currentActor() || OWNER_ACTOR);
+    return back(res, `/production/${code}`, r.ok ? 'ok' : 'err', r.ok ? 'Sales credit saved.' : r.msg);
+  } catch (err) {
+    console.error('sales credit failed:', err.message);
+    return back(res, `/production/${code}`, 'err', 'Could not save the sales credit.');
+  }
+});
+
+/** The sales-credit card on a job page. */
+async function jobCreditCard(q) {
+  const [active, everyone] = await Promise.all([staffRoster({ activeOnly: true }), staffRoster()]);
+  if (!active.length) return '';  // no helpers: nothing to credit
+  const cur = q.credited_to == null ? null : Number(q.credited_to);
+  const who = cur == null ? 'not set' : cur === CREDIT_OWNER ? 'the owner' : nameOf(everyone, cur);
+  const field = creditField(q, active, { bare: true });
+  return `<div class="card" id="credit"><b>Sales credit</b> <span class="muted">&middot; ${escEmail(who)}</span>
+    ${/<select/.test(field) ? `<form method="post" action="/quote/${escEmail(q.code)}/credit" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
+      ${field}<button type="submit" class="btn btn-ghost">Save</button></form>` : field}</div>`;
+}
+
+/* Incentives: a target over a period — money collected (before tax, less
+   refunds and card fees) or quotes accepted — on sales credited to a helper.
+   Progress is worked out live from the ledger; the reward becomes a bonus
+   when the owner awards it, once. */
+const INCENTIVE_METRICS = {
+  collected: { label: 'Collected', fmt: (n) => money(n) },
+  accepted:  { label: 'Quotes accepted', fmt: (n) => String(Math.round(n)) },
+};
+
+/** An incentive's first and last day, as instants on the shop's clock. */
+function incentiveWindow(inc) {
+  /* pg hands a DATE back as a Date at the server's local midnight, so the
+     local getters give the day as stored, whatever zone the server runs in. */
+  const ymd = (d) => (d instanceof Date
+    ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    : String(d).slice(0, 10));
+  return [TEAM.localMidnight(ymd(inc.starts_on), SHOP_TZ), TEAM.localMidnight(ymd(inc.ends_on), SHOP_TZ, 1)];
+}
+
+async function incentiveProgress(inc, staffId) {
+  if (inc.metric === 'accepted') {
+    const { rows: [r] } = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM quotes WHERE credited_to = $1 AND cancelled_at IS NULL
+          AND accepted_at >= $2 AND accepted_at < $3`, [staffId, ...incentiveWindow(inc)]);
+    return Number(r.n);
+  }
+  const { rows: [r] } = await pool.query(
+    `SELECT COALESCE(SUM(p.amount - COALESCE(p.tax_portion, 0) - COALESCE(p.fee, 0)), 0)::float AS n
+       FROM quote_payments p JOIN quotes q ON q.code = p.quote_code
+      WHERE q.credited_to = $1 AND p.created_at >= $2 AND p.created_at < $3`,
+    [staffId, ...incentiveWindow(inc)]);
+  return round2(r.n);
+}
+
+/** Incentives open to a helper, with their progress and any award. */
+async function incentivesFor(staffId, { includeEnded = false } = {}) {
+  const { rows } = await pool.query(
+    `SELECT i.*, b.id AS bonus_id, b.paid_at AS bonus_paid_at
+       FROM staff_incentives i
+       LEFT JOIN staff_bonuses b ON b.incentive_id = i.id AND b.staff_id = $1
+      WHERE (i.staff_id IS NULL OR i.staff_id = $1)
+        AND (${includeEnded ? 'TRUE' : `i.ended_at IS NULL AND i.ends_on >= CURRENT_DATE - 30`})
+      ORDER BY i.ends_on DESC, i.id DESC LIMIT 20`, [staffId]);
+  for (const i of rows) {
+    i.progress = await incentiveProgress(i, staffId);
+    i.reached = i.progress >= Number(i.target);
+  }
+  return rows;
+}
+
+function incentiveRow(i, { awardFor } = {}) {
+  const m = INCENTIVE_METRICS[i.metric] || INCENTIVE_METRICS.collected;
+  const pct = Math.max(0, Math.min(100, Math.round(100 * i.progress / Math.max(0.01, Number(i.target)))));
+  const state = i.bonus_id ? (i.bonus_paid_at ? pill('bonus paid', 'neutral') : pill('bonus earned', 'green'))
+    : i.reached ? pill('target reached', 'green')
+    : i.ended_at || new Date(incentiveWindow(i)[1]) <= new Date() ? pill('ended', 'neutral') : pill('in progress', 'blue');
+  return `<div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="min-width:12em"><b>${escEmail(i.title)}</b>
+      <div class="row-sub" style="white-space:normal">${escEmail(m.label)} ${escEmail(m.fmt(i.progress))} of ${escEmail(m.fmt(Number(i.target)))}
+        &middot; ${money(i.reward)} bonus &middot; ${escEmail(fmtDate(i.starts_on))} – ${escEmail(fmtDate(i.ends_on))}</div>
+      <div style="height:8px;border-radius:8px;background:#e5eaf3;margin-top:6px;overflow:hidden" role="progressbar"
+        aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><div style="height:100%;width:${pct}%;background:${
+        i.reached ? '#16a34a' : '#1a47b8'}"></div></div></span>
+    <span class="row-end">${state}${awardFor && i.reached && !i.bonus_id ? `
+      <form method="post" action="/admin/incentives/${i.id}/award" style="display:inline;margin:0">
+        <input type="hidden" name="staff_id" value="${awardFor}"><button type="submit" class="btn">Award ${money(i.reward)}</button></form>` : ''}</span></div>`;
+}
+
+/** Everything a helper has earned: commission by quote, and bonuses. */
+async function earningsFor(staff) {
+  const pct = Number(staff.commission_pct || 0);
+  const [lines, { rows: bonuses }] = await Promise.all([
+    commissionLines(staff.id, pct),
+    pool.query(`SELECT * FROM staff_bonuses WHERE staff_id = $1 ORDER BY created_at DESC LIMIT 200`, [staff.id]),
+  ]);
+  const sum = (st) => round2(lines.filter((l) => l.state === st)
+    .reduce((a, l) => a + (st === 'paid' ? Number(l.paid_amount_c) : l.amount), 0));
+  const bonusOwed = round2(bonuses.filter((b) => !b.paid_at).reduce((a, b) => a + Number(b.amount), 0));
+  const bonusPaid = round2(bonuses.filter((b) => b.paid_at).reduce((a, b) => a + Number(b.amount), 0));
+  return { pct, lines, bonuses, payable: sum('payable'), waiting: sum('waiting'), earning: sum('earning'),
+           onHold: sum('on hold'), paid: sum('paid'), bonusOwed, bonusPaid };
+}
+
+function earningsTiles(e) {
+  return statTiles([
+    { label: 'Payable now', value: money(e.payable + e.bonusOwed), tone: 'green',
+      sub: e.bonusOwed ? `includes ${money(e.bonusOwed)} in bonuses` : 'commission ready to pay' },
+    { label: 'Waiting out the 14 days', value: money(e.waiting), tone: 'blue', sub: 'paid in full, settling' },
+    { label: 'Still being paid', value: money(e.earning), tone: 'gray', sub: 'customer has a balance' },
+    { label: 'Paid to you', value: money(e.paid + e.bonusPaid), tone: 'navy', sub: 'commission and bonuses' },
+  ]);
+}
+
+/* A helper's own earnings, in full. Only ever their own: there is no id in
+   the address to change. */
+app.get('/my-earnings', requireAdmin, async (req, res) => {
+  const actor = currentActor() || OWNER_ACTOR;
+  if (actor.kind !== 'staff') return res.redirect('/admin/commission');
+  try {
+    const { rows: [me] } = await pool.query('SELECT id, name, commission_pct FROM staff WHERE id = $1', [actor.id]);
+    const [e, incentives] = await Promise.all([earningsFor(me), incentivesFor(me.id)]);
+    const tone = { payable: 'green', waiting: 'blue', earning: 'neutral', 'on hold': 'red', paid: 'neutral' };
+    res.send(adminPage('My earnings', `
+      ${pageHeader('My earnings', `${e.pct}% commission on money collected from sales credited to you, before tax, less refunds and card fees. It is payable ${TEAM.HOLD_DAYS} days after the customer has paid in full.`)}
+      ${earningsTiles(e)}
+      ${incentives.length ? `<div class="card"><b>Incentives</b>${incentives.map((i) => incentiveRow(i)).join('')}</div>` : ''}
+      ${e.bonuses.length ? `<div class="card"><b>Bonuses</b>${e.bonuses.map((b) => `<div class="row-i"><span class="row-main">${escEmail(b.reason)}
+        <div class="row-sub">${escEmail(whenShort(b.created_at))}</div></span><span class="row-end"><b>${money(b.amount)}</b> ${
+        pill(b.paid_at ? 'paid' : 'owed', b.paid_at ? 'neutral' : 'green')}</span></div>`).join('')}</div>` : ''}
+      <div class="card"><b>Commission by sale</b>${e.lines.length ? `<div class="rows">${e.lines.map((l) => `<div class="row-i">
+        <span class="row-main"><a href="/production/${escEmail(l.code)}"><b>${escEmail(l.code)}</b></a> ${escEmail(l.name || '')}
+          <div class="row-sub">collected ${money(l.collected)} &middot; commission on ${money(l.base)}</div></span>
+        <span class="row-end"><b>${money(l.state === 'paid' ? l.paid_amount_c : l.amount)}</b> ${pill(l.state, tone[l.state])}</span></div>`).join('')}</div>`
+        : `<p class="muted">Nothing yet. When a customer pays on a quote credited to you, it shows here. Set the sales credit on the quote form or the job page.</p>`}</div>`, 'earnings'));
+  } catch (err) {
+    console.error('my earnings failed:', err.message);
+    res.status(500).send(adminPage('My earnings', '<div class="card"><div class="warn">Could not load your earnings.</div></div>', 'earnings'));
+  }
+});
+
+/* Owner: bonuses and incentives. */
+app.post('/admin/bonuses', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const staffId = intIn(b.staff_id);
+  const amount = round2(Number(b.amount));
+  const reason = text(b.reason, 200);
+  const backTo = `/admin/commission?staff=${staffId || ''}`;
+  if (!staffId || !(amount > 0) || amount > 100000 || !reason) return back(res, backTo, 'err', 'A bonus needs an amount and a reason.');
+  try {
+    const { rowCount } = await pool.query(
+      `INSERT INTO staff_bonuses (staff_id, amount, reason) SELECT id, $2, $3 FROM staff WHERE id = $1`, [staffId, amount, reason]);
+    return back(res, backTo, rowCount ? 'ok' : 'err', rowCount ? `Bonus of ${money(amount)} added.` : 'No such helper.');
+  } catch (err) {
+    console.error('bonus add failed:', err.message);
+    return back(res, backTo, 'err', 'Could not add the bonus.');
+  }
+});
+
+app.post('/admin/bonuses/:id/delete', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  const staffId = intIn(req.body && req.body.staff_id);
+  const backTo = `/admin/commission?staff=${staffId || ''}`;
+  if (!id) return res.redirect(backTo);
+  const { rowCount } = await pool.query('DELETE FROM staff_bonuses WHERE id = $1 AND paid_at IS NULL', [id])
+    .catch((e) => { console.error('bonus delete failed:', e.message); return { rowCount: 0 }; });
+  return back(res, backTo, rowCount ? 'ok' : 'err', rowCount ? 'Bonus removed.' : 'A paid bonus cannot be removed.');
+});
+
+app.post('/admin/incentives', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const title = text(b.title, 120);
+  const metric = INCENTIVE_METRICS[b.metric] ? b.metric : null;
+  const target = round2(Number(b.target));
+  const reward = round2(Number(b.reward));
+  const starts = isoDate(b.starts_on), ends = isoDate(b.ends_on);
+  const staffId = b.staff_id === 'all' ? null : intIn(b.staff_id);
+  const backTo = `/admin/commission${staffId ? `?staff=${staffId}` : ''}`;
+  if (!title || !metric || !(target > 0) || !(reward > 0) || reward > 100000 || !starts || !ends || ends < starts) {
+    return back(res, backTo, 'err', 'An incentive needs a name, a target, a reward, and an end date after its start.');
+  }
+  try {
+    await pool.query(
+      `INSERT INTO staff_incentives (title, metric, target, reward, starts_on, ends_on, staff_id) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [title, metric, target, reward, starts, ends, staffId]);
+    return back(res, backTo, 'ok', 'Incentive added. Your team sees it on My Day.');
+  } catch (err) {
+    console.error('incentive add failed:', err.message);
+    return back(res, backTo, 'err', 'Could not add the incentive.');
+  }
+});
+
+app.post('/admin/incentives/:id/end', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  if (id) await pool.query('UPDATE staff_incentives SET ended_at = NOW() WHERE id = $1 AND ended_at IS NULL', [id])
+    .catch((e) => console.error('incentive end failed:', e.message));
+  return back(res, '/admin/commission', 'ok', 'Incentive ended.');
+});
+
+app.post('/admin/incentives/:id/award', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  const staffId = intIn(req.body && req.body.staff_id);
+  const backTo = `/admin/commission?staff=${staffId || ''}`;
+  if (!id || !staffId) return res.redirect(backTo);
+  try {
+    const { rows: [i] } = await pool.query(
+      'SELECT * FROM staff_incentives WHERE id = $1 AND (staff_id IS NULL OR staff_id = $2)', [id, staffId]);
+    if (!i) return back(res, backTo, 'err', 'That incentive is not open to this helper.');
+    // Checked again here from the ledger, never taken from the page.
+    if (await incentiveProgress(i, staffId) < Number(i.target)) return back(res, backTo, 'err', 'The target has not been reached.');
+    const { rowCount } = await pool.query(
+      `INSERT INTO staff_bonuses (staff_id, amount, reason, incentive_id) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (incentive_id, staff_id) WHERE incentive_id IS NOT NULL DO NOTHING`,
+      [staffId, i.reward, `Incentive: ${i.title}`.slice(0, 200), i.id]);
+    return back(res, backTo, rowCount ? 'ok' : 'err', rowCount ? `Awarded ${money(i.reward)}.` : 'Already awarded.');
+  } catch (err) {
+    console.error('incentive award failed:', err.message);
+    return back(res, backTo, 'err', 'Could not award it.');
   }
 });
 
@@ -20443,6 +20898,13 @@ app.get('/my-day', requireAdmin, async (req, res) => {
       `SELECT * FROM submissions WHERE next_follow_up_on <= CURRENT_DATE AND dismissed_at IS NULL
           AND ($1::int IS NULL OR assigned_to = $1 OR assigned_to IS NULL)
         ORDER BY next_follow_up_on LIMIT 50`, [me])).rows : [];
+    /* A helper's own earnings, so they can follow what their sales are worth.
+       A failure costs this panel, not the page. */
+    const earn = me ? await (async () => {
+      const { rows: [st] } = await pool.query('SELECT id, name, commission_pct FROM staff WHERE id = $1', [me]);
+      const [e, incentives] = await Promise.all([earningsFor(st), incentivesFor(me)]);
+      return { e, incentives };
+    })().catch((err) => { console.error('my day earnings failed:', err.message); return null; }) : null;
     const waiting = leads.filter((l) => me == null || l.assigned_to == null || l.assigned_to === me)
       .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
     const nextSteps = liveList.map((q) => ({ q, cl: quoteChecklist(q) })).filter((x) => x.cl.next).slice(0, 15);
@@ -20464,6 +20926,9 @@ app.get('/my-day', requireAdmin, async (req, res) => {
         <div class="row-i" style="flex-wrap:wrap"><span class="row-main"><b>${escEmail(q.code)}</b> ${escEmail(q.name || '')} &middot; ${money(q.total)}
           <div class="msg" id="rel-${escEmail(q.code)}" style="white-space:pre-wrap">${escEmail(quoteMessages(q).initial)}</div></span>
           <span class="row-end"><button type="button" class="btn btn-ghost" onclick="jtCopy('rel-${escEmail(q.code)}')">Copy</button></span></div>`).join('')) : ''}
+      ${earn ? `<div class="card"><b>My earnings</b> <a class="muted" href="/my-earnings" style="float:right">See every sale →</a>
+        ${earningsTiles(earn.e)}
+        ${earn.incentives.map((i) => incentiveRow(i)).join('')}</div>` : ''}
       ${mine.rows.length ? section('Waiting on the owner', mine.rows.map((a) => `
         <div class="row-i"><span class="row-main">${escEmail(a.kind)} ${escEmail(a.subject_id)}${a.decision_note
           ? `<div class="row-sub">Sent back: ${escEmail(a.decision_note)}</div>` : ''}</span>

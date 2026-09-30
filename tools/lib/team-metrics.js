@@ -105,6 +105,18 @@ function weekOf(date, tz = DEFAULT_HOURS.tz) {
   return new Date(utc - back * 86400000).toISOString().slice(0, 10);
 }
 
+/** Midnight at the start of `ymd` (YYYY-MM-DD) on the shop's clock, as an ISO
+ *  instant. A bare date handed to Postgres as a timestamptz bound is read as
+ *  midnight UTC — 5 or 6 hours off in Chicago — so every period edge goes
+ *  through here. `addDays` moves the day first (1 = the end of that day). */
+function localMidnight(ymd, tz = DEFAULT_HOURS.tz, addDays = 0) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymd || '').slice(0, 10));
+  if (!m) return null;
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3] + addDays));
+  return new Date(atLocal(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate(), 0, tz)).toISOString();
+}
+
 module.exports = {
   DEFAULT_HOURS, HOLD_DAYS, businessMinutesBetween, median, commissionFor, commissionState, weekOf, zoned,
+  localMidnight,
 };

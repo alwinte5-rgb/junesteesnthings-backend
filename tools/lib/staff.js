@@ -184,6 +184,13 @@ const ROUTES = {
   'POST /quote/:code/note': 'quotes.view',
   'POST /tasks': 'any',
   'POST /tasks/:id/done': 'any',
+  'POST /quote/:code/credit': 'quotes.view',
+  'GET /my-earnings': 'any',
+  'POST /admin/bonuses': 'owner',
+  'POST /admin/bonuses/:id/delete': 'owner',
+  'POST /admin/incentives': 'owner',
+  'POST /admin/incentives/:id/end': 'owner',
+  'POST /admin/incentives/:id/award': 'owner',
   'GET /team-chat': 'any',
   'POST /team-chat': 'any',
   'GET /api/team-chat': 'any',
@@ -277,7 +284,7 @@ function mayUseRoute(actor, method, routePath) {
    `quote` is the saved row's money: total, and the list price the lines were
    discounted from. Returns { held: bool, reasons: [..] } — every reason, so the
    helper is told all of them at once. */
-function quoteNeedsApproval(actor, { total, listTotal, discountPct } = {}) {
+function quoteNeedsApproval(actor, { total, listTotal, discountPct, customPriced = 0 } = {}) {
   if (!actor || actor.kind === 'owner') return { held: false, reasons: [] };
   const reasons = [];
   const send = normalizePerm('quotes.send', actor.perms && actor.perms['quotes.send']);
@@ -294,6 +301,13 @@ function quoteNeedsApproval(actor, { total, listTotal, discountPct } = {}) {
     else if (disc.maxPct != null && pct > disc.maxPct + 0.01) {
       reasons.push(`The discount (${Math.round(pct)}%) is over your ${disc.maxPct}% limit.`);
     }
+  }
+  /* A line with no product and a typed price has no catalogue price, so how
+     far below it is cannot be measured. Unless discounts are fully theirs, the
+     owner sees it. */
+  if (customPriced > 0) {
+    const disc = normalizePerm('quotes.discount', actor.perms && actor.perms['quotes.discount']);
+    if (disc.level !== 'on') reasons.push('A custom line with a typed price has no catalogue price to check it against.');
   }
   return { held: reasons.length > 0, reasons };
 }

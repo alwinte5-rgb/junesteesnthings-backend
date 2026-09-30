@@ -202,13 +202,15 @@ test('the bulk clear only offers itself for a real backlog', () => {
 test('the bulk clear cannot touch an enquiry that was quoted', () => {
   /* A quoted enquiry is already off the board by the link. Dismissing it would
      also write a false reason onto a job that was actually won. */
-  const route = src.slice(src.indexOf("app.post('/leads/dismiss-old'"));
+  const at = src.indexOf("app.post('/leads/dismiss-old'");
+  const route = src.slice(at, src.indexOf('\n});', at));
   assert.match(route, /NOT EXISTS \(SELECT 1 FROM quotes q WHERE q\.from_submission_id = submissions\.id\)/);
   assert.match(route, /dismissed_at IS NULL/, 'and it must not re-stamp one already cleared');
 });
 
 test('bulk clearing records the honest reason too', () => {
-  const route = src.slice(src.indexOf("app.post('/leads/dismiss-old'"));
+  const at = src.indexOf("app.post('/leads/dismiss-old'");
+  const route = src.slice(at, src.indexOf('\n});', at));
   assert.match(route, /Too late — cleared in bulk/,
     'so the backlog is still identifiable as missed rather than rejected');
   assert.doesNotMatch(route, /DELETE FROM/, 'nothing is destroyed');

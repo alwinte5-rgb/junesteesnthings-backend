@@ -366,3 +366,101 @@ test('team chat lines are text, never markup', () => {
   assert.match(send, /interval '10 seconds'/, 'a double click does not post twice');
   assert.match(send, /who\.active/, 'the owner cannot write to a disabled helper');
 });
+
+test('sales credit: a helper can never take a sale credited to someone else, and paid credit is fixed', () => {
+  const fn = src.slice(src.indexOf('async function setSalesCredit('), src.indexOf('\n}\n', src.indexOf('async function setSalesCredit(')));
+  assert.match(fn, /if \(isStaff\) return \{ ok: false, msg: 'Only the owner can mark a sale as their own\.' \}/);
+  assert.match(fn, /isStaff && cur != null && cur !== actor\.id/);
+  assert.match(fn, /if \(q\.paid\) return/, 'no change once commission on it is paid');
+  assert.match(fn, /credited_to IS NOT DISTINCT FROM \$3[\s\S]*NOT EXISTS \(SELECT 1 FROM commission_payouts/,
+    'the same rules again in the UPDATE, against a race');
+  assert.strictEqual(STAFF.ROUTES['POST /quote/:code/credit'], 'quotes.view');
+});
+
+test('commission, the scorecard and incentives follow the sales credit, not who pressed send', () => {
+  assert.match(src.slice(src.indexOf('async function commissionLines(')), /WHERE q\.credited_to = \$1/);
+  const score = src.slice(src.indexOf('async function helperScore('), src.indexOf('\n}\n', src.indexOf('async function helperScore(')));
+  assert.match(score, /credited_to = \$1 AND accepted_at/);
+  assert.match(score, /WHERE q\.credited_to = \$1 AND p\.created_at/);
+});
+
+test('bonuses and incentives are the owner\'s; a helper sees only their own earnings', () => {
+  for (const r of ['POST /admin/bonuses', 'POST /admin/bonuses/:id/delete', 'POST /admin/incentives',
+                   'POST /admin/incentives/:id/end', 'POST /admin/incentives/:id/award']) {
+    assert.strictEqual(STAFF.ROUTES[r], 'owner', r);
+  }
+  assert.strictEqual(STAFF.ROUTES['GET /my-earnings'], 'any');
+  const page = route("app.get('/my-earnings', requireAdmin");
+  assert.match(page, /WHERE id = \$1', \[actor\.id\]/, 'the id is the signed-in helper, never the query');
+  const award = route("app.post('/admin/incentives/:id/award', requireAdmin");
+  assert.match(award, /incentiveProgress\(i, staffId\) < Number\(i\.target\)/, 'checked against the ledger, not the page');
+  assert.match(award, /ON CONFLICT \(incentive_id, staff_id\)/, 'awarded once');
+  const pay = route("app.post('/admin/commission/pay', requireAdmin");
+  assert.match(pay, /paid_at IS NULL FOR UPDATE/, 'bonuses are locked while they are paid');
+});
+
+test('period edges are midnight on the shop\'s clock, not UTC', () => {
+  assert.strictEqual(TEAM.localMidnight('2026-09-28', 'America/Chicago'), '2026-09-28T05:00:00.000Z');
+  assert.strictEqual(TEAM.localMidnight('2026-01-15', 'America/Chicago'), '2026-01-15T06:00:00.000Z');
+  assert.strictEqual(TEAM.localMidnight('2026-12-31', 'America/Chicago', 1), '2027-01-01T06:00:00.000Z');
+  assert.strictEqual(TEAM.localMidnight('nope'), null);
+});
+
+test('a custom line with a typed price goes to the owner unless discounts are fully the helper\'s', () => {
+  const sup = { kind: 'staff', perms: STAFF.presetPerms('supervised') };
+  const g = STAFF.quoteNeedsApproval(sup, { total: 50, customPriced: 1 });
+  assert.ok(g.held && g.reasons.some((r) => /no catalogue price/.test(r)));
+  const open = { kind: 'staff', perms: { ...STAFF.presetPerms('supervised'), 'quotes.discount': { level: 'on' } } };
+  assert.ok(!STAFF.quoteNeedsApproval(open, { total: 50, customPriced: 1 }).held);
+  assert.ok(!STAFF.quoteNeedsApproval({ kind: 'owner' }, { total: 50, customPriced: 3 }).held);
+});
+
+test('a helper\'s discount is measured against catalogue price, not a typed garment price', () => {
+  assert.match(src, /catalogueSum \+= priceLine\(\{ \.\.\.priceArgs, blankOverride: null, unitOverride: null \}\)\.lineTotal/);
+  assert.match(src, /const listSubtotal = round2\(Math\.max\(catalogueSum,/);
+});
+
+test('nothing a helper can reach moves a quote out of held, except the owner\'s Approve', () => {
+  assert.match(route("app.post('/quote/:code/uncancel'"), /WHERE code = \$1 AND status <> 'held' RETURNING/);
+  assert.match(route("app.post('/quote/:code/mark-paid'"), /if \(q\.status === 'held'\) return/);
+  assert.match(src, /UPDATE quotes SET status = 'accepted', accepted_at = COALESCE\(accepted_at, NOW\(\)\)\n      WHERE code = \$1 AND status <> 'held'/);
+});
+
+test('no customer message about a held quote, whose link the customer cannot open', () => {
+  const fn = src.slice(src.indexOf('async function sendJobMessage('));
+  assert.match(fn.slice(0, 800), /if \(q && q\.status === 'held'\) return 'held';/);
+  assert.ok(src.includes("  held: 'This quote is still waiting for approval"));
+});
+
+test('costs, margin and monthly profit on the boards need Finances', () => {
+  assert.match(src, /if \(VIEW !== 'work' \|\| actorLevel\('finances'\) !== 'on'\) return '';\n          const mg = quoteMargin\(q\);/);
+  assert.match(src, /\$\{VIEW !== 'money' \|\| actorLevel\('finances'\) !== 'on' \? '' : `/);
+});
+
+test('a receipt is a customer email: a helper whose messages need approval cannot send one', () => {
+  assert.match(route("app.post('/quote/:code/receipt'"), /if \(actorLevel\('customers\.message'\) !== 'on'\)/);
+});
+
+test('with a helper\'s and the owner\'s cookie in one browser, the helper\'s narrower access wins', () => {
+  const r = src.slice(src.indexOf('async function requireAdmin('), src.indexOf('\n}\n', src.indexOf('async function requireAdmin(')));
+  assert.ok(r.indexOf('cookieValue(req, STAFF_COOKIE)') < r.indexOf('checkStamp(adminCookieValue(req), secret)'));
+  assert.match(src.slice(src.indexOf('function setAdminCookie(')), /jt_staff=; Path=\/; Max-Age=0/);
+  assert.match(src.slice(src.indexOf('function setStaffCookie(')), /\$\{ADMIN_COOKIE\}=; Path=\/; Max-Age=0/);
+});
+
+test('a flash message goes before the #fragment, where the page can read it', () => {
+  const m = /const back = \(res, path, key, msg\) => \{[\s\S]*?\n\};/.exec(src);
+  assert.ok(m);
+  let to = null;
+  const back = new Function('encodeURIComponent', `${m[0]}; return back;`)(encodeURIComponent);
+  back({ redirect: (u) => { to = u; } }, '/admin/staff#staff-5', 'ok', 'Saved.');
+  assert.strictEqual(to, '/admin/staff?ok=Saved.#staff-5');
+  back({ redirect: (u) => { to = u; } }, '/x?a=1', 'err', 'No');
+  assert.strictEqual(to, '/x?a=1&err=No');
+});
+
+test('releasing a held quote starts the customer\'s clock then, keeping its days of validity', () => {
+  const fn = src.slice(src.indexOf('async function releaseHeldQuote('), src.indexOf('\n}\n', src.indexOf('async function releaseHeldQuote(')));
+  assert.match(fn, /created_at = NOW\(\)/);
+  assert.match(fn, /CURRENT_DATE \+ GREATEST\(1, valid_until - created_at::date\)/);
+});
