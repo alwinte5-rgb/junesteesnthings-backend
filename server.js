@@ -20,6 +20,7 @@ const {
   CONSENT_VERSION, TRANSACTIONAL_TEXT, MARKETING_TEXT,
   normalizeUsPhone, parseSmsConsent, consentCheckboxesHtml, foldSmsConsent,
 } = require('./tools/lib/sms-consent');
+const SHIP = require('./tools/lib/shipping');
 const { T: SMS, plain: smsPlain, PICKUP: SMS_PICKUP } = require('./tools/lib/sms-templates');
 const { verifyTwilioSignature, classifyInbound } = require('./tools/lib/twilio-webhook');
 const TAXCERT = require('./tools/lib/tax-certificates');
@@ -367,6 +368,14 @@ async function initDB() {
     'blanks_tracking TEXT',           // inbound tracking for the blanks
     'tracking TEXT',                  // outbound tracking to the customer
     'ship_method TEXT',               // pickup | ground | expedited
+    /* Where a job that ships goes: {name, street1, street2, city, state, zip,
+       country}. Asked for when the customer accepts a job set to ship
+       (SHIP.acceptRequirements), or typed by the shop on the Shipping page. */
+    'ship_to JSONB',
+    /* The label bought for it on the Shipping page (the studio buys it, see
+       its jt-ship.php): tracking, the PDF, carrier and cost. {pending: txn}
+       while Shippo is still making one, so nobody buys a second. */
+    'ship_label JSONB',
     /* WHY a quote charges no tax: e_number | resale | out_of_state | other
        (tools/lib/tax-certificates.js). "Untaxed" alone cannot say which line
        of the ST-1 the sale is deducted on, or what evidence it needs. NULL on
@@ -4860,8 +4869,14 @@ async function notifyQuoteMilestone(before, after) {
       text = SMS.shipped({ code, tracking: after.tracking });
       subject = `Your order has shipped — ${code}`;
       heading = 'On its way';
-      inner = `${hello}<p>Your order (${what}) has shipped.</p>${after.tracking
-        ? `<p>Tracking: <b>${escEmail(after.tracking)}</b></p>`
+      /* A label bought on the Shipping page knows its carrier and the carrier's
+         own tracking page; one bought elsewhere is just a number. */
+      const label = (after.ship_label && typeof after.ship_label === 'object') ? after.ship_label : {};
+      const by = String(label.name || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+      const trackUrl = /^https:\/\/[^\s"'<>]+$/.test(String(label.tracking_url || '')) ? String(label.tracking_url) : '';
+      inner = `${hello}<p>Your order (${what}) has shipped${by ? ` by ${escEmail(by)}` : ''}.</p>${after.tracking
+        ? `<p>Tracking: <b>${escEmail(after.tracking)}</b>${trackUrl
+          ? ` &middot; <a href="${escEmail(trackUrl)}">track it</a>` : ''}</p>`
         : "<p>We'll send the tracking number as soon as we have it.</p>"}${payLine}`;
     } else {
       text = SMS.finished({ code });
@@ -6588,6 +6603,7 @@ const ADMIN_NAV = [
   { key: 'quotes',     href: '/admin/quotes',        label: 'Quotes',     icon: 'file' },
   { key: 'production', href: '/admin/production',    label: 'Production', icon: 'layers', badge: 'late' },
   { key: 'orders',     href: '/admin/orders',        label: 'Orders',     icon: 'box' },
+  { key: 'shipping',   href: '/admin/shipping',      label: 'Shipping',   icon: 'truck',  badge: 'shipping' },
   { key: 'customers',  href: '/admin/customers',     label: 'Customers',  icon: 'users' },
   { key: 'reviews',    href: '/admin/reviews', label: 'Reviews',    icon: 'star',   badge: 'reviews' },
   { key: 'money',      href: FINANCES_PATH,    label: 'Finances',   icon: 'dollar' },
@@ -6616,6 +6632,7 @@ const STUDIO_ADMIN = (process.env.JT_DESIGNER_URL || 'https://design.jtees.net')
    Stroke-only on a 24px grid, sized by CSS. */
 const ADMIN_ICONS = {
   grid:   '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/>',
+  truck:  '<rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/>',
   inbox:  '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
   file:   '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>',
   cert:   '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="8.5 14.5 11 17 15.5 12"/>',
@@ -9660,16 +9677,38 @@ app.get('/q/:code', async (req, res) => {
         </div>
       </div>` : `
       <div class="card">
-        <form method="POST" action="/q/${q.code}/accept">
-          ${!q.name ? `
+        <form method="POST" action="/q/${q.code}/accept" id="accept">
+          ${(() => {
+            /* Only what the quote is missing, and all of it required: the
+               accept route refuses without it (SHIP.acceptRequirements). */
+            const ask = SHIP.acceptAsks(q, { isValidEmail });
+            const note = (t) => `<span style="text-transform:none;font-weight:400">(${t})</span>`;
+            /* Why the last Accept did not go through, here in the form: the
+               link it came back on jumps to #accept, below the page's own
+               messages, so on a phone a message up there is never seen. */
+            const need = String(req.query.e || '') === 'details' ? String(req.query.need || '').split(',')
+              .filter((k) => ['name', 'email', 'phone', 'address'].includes(k)) : null;
+            return `${need ? `<div class="warn">${escEmail(SHIP.acceptProblemsSentence(need)
+              || 'Please fill in your details before accepting, so we can reach you about your order.')}</div>` : ''}
+          ${ask.name ? `
           <div class="row">
             <div><label>First name</label><input name="first_name" required autocomplete="given-name"></div>
-            <div><label>Last name</label><input name="last_name" autocomplete="family-name"></div>
+            <div><label>Last name</label><input name="last_name" required autocomplete="family-name"></div>
           </div>` : ''}
-          ${!q.email ? `<label>Email <span style="text-transform:none;font-weight:400">(optional — for your receipt)</span></label>
-            <input type="email" name="email" autocomplete="email">` : ''}
-          ${!q.phone ? `<label>Mobile <span style="text-transform:none;font-weight:400">(optional)</span></label>
-            <input type="tel" name="phone" autocomplete="tel">` : ''}
+          ${ask.email ? `<label>Email ${note('for your receipt and order updates')}</label>
+            <input type="email" name="email" required autocomplete="email">` : ''}
+          ${ask.phone ? `<label>Mobile ${note('so we can reach you about your order')}</label>
+            <input type="tel" name="phone" required minlength="10" autocomplete="tel" inputmode="tel">` : ''}
+          ${ask.address ? `<label>Delivery address ${note('this order ships to you')}</label>
+            <input name="ship_street1" required autocomplete="address-line1" placeholder="Street address">
+            <input name="ship_street2" autocomplete="address-line2" placeholder="Apt, suite (optional)" style="margin-top:8px">
+            <div class="row" style="margin-top:8px">
+              <div><input name="ship_city" required autocomplete="address-level2" placeholder="City"></div>
+              <div style="display:flex;gap:8px"><input name="ship_state" required maxlength="2" pattern="[A-Za-z]{2}"
+                autocomplete="address-level1" placeholder="IL" style="max-width:72px">
+                <input name="ship_zip" required pattern="\\d{5}(-\\d{4})?" autocomplete="postal-code" inputmode="numeric" placeholder="ZIP"></div>
+            </div>` : ''}`;
+          })()}
           ${consentCheckboxesHtml()}
           <label>When do you need it? <span style="text-transform:none;font-weight:400">(optional)</span></label>
           <input type="date" name="needed_by" value="${q.needed_by ? String(q.needed_by).slice(0,10) : ''}">
@@ -11763,6 +11802,21 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/q/' + encodeURIComponent(code));
   try {
     const rb = req.body || {};
+    /* Name, email and a mobile on every quote, and where to send it when the
+       job ships (the owner, 2026-09-30). Only a first name was ever asked for,
+       and only when the quote had none, so a job could be accepted with no way
+       to reach the customer and nowhere to send it. What is on file and usable
+       is kept; the quote page asks for exactly what is missing (acceptAsks). */
+    const { rows: cur } = await pool.query(
+      'SELECT name, email, phone, ship_method, ship_to, accepted_at FROM quotes WHERE code = $1', [code]);
+    if (cur.length && !cur[0].accepted_at) {
+      const need = SHIP.acceptRequirements(cur[0], rb, { isValidEmail });
+      if (need.problems.length) return res.redirect(`/q/${code}?e=details&need=${need.problems.join(',')}#accept`);
+      await pool.query(
+        `UPDATE quotes SET name = $2, email = $3, phone = $4, ship_to = COALESCE($5::jsonb, ship_to)
+          WHERE code = $1 AND accepted_at IS NULL`,
+        [code, need.name, need.email, need.phone, need.shipTo ? JSON.stringify(need.shipTo) : null]);
+    }
     const nb = String(rb.needed_by || '').trim() || null;
     /* Details the customer fills in themselves when the quote went out without
        them — common for online and walk-up enquiries. NULLIF keeps existing
@@ -12212,6 +12266,23 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
     const year = /^\d{4}$/.test(String(req.query.year || ''))
       ? Number(req.query.year) : new Date().getFullYear();
 
+    /* What counts, and why (the owner, 2026-09-30: "this is wrong" — the page
+       said $12,183.66 of sales and $10,170 profit on $3,963.72 collected):
+       - A SALE is a job the customer accepted and nobody cancelled, in the
+         month it was accepted, at what they are paying before tax: the quote's
+         total less its tax, so a discount comes off and a rush charge counts.
+         Sales used to be every quote CREATED that month bar the expired ones,
+         at its pre-discount subtotal — quotes sent and never answered,
+         duplicates and cancelled jobs all read as money made.
+       - COLLECTED is every payment that arrived, including the ones no quote
+         claimed (studio orders, Dashboard charges), which is what makes it
+         reconcile with the bank as the note under the table says. Those count
+         as sales too, in the month they were paid, less their tax where it is
+         known.
+       - The MARGIN is worked out from the jobs that have costs entered, and
+         only those: it was the costs of 3 jobs set against the sales of 29,
+         which is how it read 99%. */
+    const JOB_COST = 'cost_blanks + cost_supplies + cost_outsourced + cost_shipping';
     const { rows: months } = await pool.query(
       `WITH pay AS (
          SELECT to_char(date_trunc('month', created_at), 'YYYY-MM') AS period,
@@ -12219,29 +12290,53 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
            FROM quote_payments
           WHERE EXTRACT(YEAR FROM created_at) = $1
           GROUP BY 1),
-       job AS (
+       other AS (
          SELECT to_char(date_trunc('month', created_at), 'YYYY-MM') AS period,
+                SUM(amount) AS collected, SUM(COALESCE(tax_portion,0)) AS tax, SUM(COALESCE(fee,0)) AS fees,
+                SUM(amount - COALESCE(tax_portion,0)) AS sales,
+                COUNT(*) FILTER (WHERE tax_portion IS NULL AND amount <> 0) AS tax_unknown
+           FROM unlinked_payments
+          WHERE EXTRACT(YEAR FROM created_at) = $1
+          GROUP BY 1),
+       job AS (
+         SELECT to_char(date_trunc('month', accepted_at), 'YYYY-MM') AS period,
                 COUNT(*) AS jobs,
-                SUM(subtotal) AS sales,
-                SUM(cost_blanks + cost_supplies + cost_outsourced + cost_shipping) AS costs,
-                COUNT(*) FILTER (WHERE (cost_blanks + cost_supplies + cost_outsourced + cost_shipping) > 0) AS costed
+                SUM(COALESCE(total,0) - COALESCE(tax,0)) AS sales,
+                SUM(${JOB_COST}) AS costs,
+                COUNT(*) FILTER (WHERE (${JOB_COST}) > 0) AS costed,
+                COALESCE(SUM(COALESCE(total,0) - COALESCE(tax,0)) FILTER (WHERE (${JOB_COST}) > 0), 0) AS costed_sales
            FROM quotes
-          WHERE status NOT IN ('expired', 'held') AND EXTRACT(YEAR FROM created_at) = $1
-          GROUP BY 1)
-       SELECT COALESCE(pay.period, job.period) AS period,
-              COALESCE(pay.collected,0) AS collected, COALESCE(pay.tax,0) AS tax,
-              COALESCE(pay.fees,0) AS fees, COALESCE(job.jobs,0) AS jobs,
-              COALESCE(job.sales,0) AS sales, COALESCE(job.costs,0) AS costs,
-              COALESCE(job.costed,0) AS costed
-         FROM pay FULL OUTER JOIN job ON pay.period = job.period
+          WHERE accepted_at IS NOT NULL AND cancelled_at IS NULL AND status NOT IN ('expired', 'held')
+            AND EXTRACT(YEAR FROM accepted_at) = $1
+          GROUP BY 1),
+       periods AS (SELECT period FROM pay UNION SELECT period FROM other UNION SELECT period FROM job)
+       SELECT p.period,
+              COALESCE(pay.collected,0) + COALESCE(other.collected,0) AS collected,
+              COALESCE(pay.tax,0) + COALESCE(other.tax,0) AS tax,
+              COALESCE(pay.fees,0) + COALESCE(other.fees,0) AS fees,
+              COALESCE(job.jobs,0) AS jobs,
+              COALESCE(job.sales,0) + COALESCE(other.sales,0) AS sales,
+              COALESCE(other.sales,0) AS other_sales,
+              COALESCE(other.tax_unknown,0) AS tax_unknown,
+              COALESCE(job.costs,0) AS costs,
+              COALESCE(job.costed,0) AS costed,
+              COALESCE(job.costed_sales,0) AS costed_sales
+         FROM periods p
+         LEFT JOIN pay ON pay.period = p.period
+         LEFT JOIN other ON other.period = p.period
+         LEFT JOIN job ON job.period = p.period
         ORDER BY 1`, [year]);
 
     const T = months.reduce((a, m) => ({
       collected: a.collected + Number(m.collected), tax: a.tax + Number(m.tax),
       fees: a.fees + Number(m.fees), sales: a.sales + Number(m.sales),
       costs: a.costs + Number(m.costs), jobs: a.jobs + Number(m.jobs),
-      costed: a.costed + Number(m.costed),
-    }), { collected: 0, tax: 0, fees: 0, sales: 0, costs: 0, jobs: 0, costed: 0 });
+      costed: a.costed + Number(m.costed), costedSales: a.costedSales + Number(m.costed_sales),
+      otherSales: a.otherSales + Number(m.other_sales), taxUnknown: a.taxUnknown + Number(m.tax_unknown),
+    }), { collected: 0, tax: 0, fees: 0, sales: 0, costs: 0, jobs: 0, costed: 0, costedSales: 0,
+          otherSales: 0, taxUnknown: 0 });
+    /* Kept on the jobs it was measured on (see above). */
+    const marginPct = T.costedSales > 0 ? (T.costedSales - T.costs) / T.costedSales : null;
 
     const { rows: remitted } = await pool.query(
       `SELECT COALESCE(SUM(amount),0) AS total FROM tax_remittances
@@ -12292,9 +12387,13 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
        rent is owed whether or not anybody ordered. */
     const gross = round2(T.sales - T.costs);
     const net = round2(gross - expTotal);
-    const pct = T.sales > 0 && T.costs > 0 ? Math.round((gross / T.sales) * 100) : null;
     const netPct = T.sales > 0 ? Math.round((net / T.sales) * 100) : null;
     const gap = T.jobs - T.costed;
+    /* A net figure means something once any cost at all is on file. Until then
+       it is only the sales again, so every place that shows one shows a dash —
+       the months and the total alike, so the rows always add up to the total. */
+    const netKnown = T.costs > 0 || expTotal > 0;
+    const fixedMonthly = round2(expList.filter(e => e.recurs).reduce((a, e) => a + Number(e.amount), 0));
 
     const { rows: years } = await pool.query(
       `SELECT DISTINCT EXTRACT(YEAR FROM created_at)::int AS y FROM quotes ORDER BY y DESC`);
@@ -12311,12 +12410,14 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
         &middot; <a href="/admin/quotes" style="color:#1848B8">back to jobs</a></div>
 
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin:14px 0">
-        ${tile('Sales (ex tax)', money(T.sales), '#111827', `${T.jobs} job${T.jobs === 1 ? '' : 's'} · collected ${money(T.collected)}`)}
+        ${tile('Sales (ex tax)', money(T.sales), '#111827', `${T.jobs} accepted job${T.jobs === 1 ? '' : 's'}${
+          T.otherSales ? ` + ${money(T.otherSales)} studio &amp; other` : ''} · collected ${money(T.collected)}`)}
         ${tile('Job costs', T.costs > 0 ? money(T.costs) : '—', '#111827', gap > 0 ? `${gap} job${gap === 1 ? '' : 's'} not costed` : 'all jobs costed')}
         ${tile('Overheads', expTotal > 0 ? money(expTotal) : '—', '#111827', 'rent, materials, everything else')}
-        ${tile('Net profit', (pct === null && expTotal === 0) ? '—' : money(net),
-               (pct === null && expTotal === 0) ? '#9ca3af' : net < 0 ? '#b91c1c' : '#047857',
-               (pct === null && expTotal === 0) ? 'enter costs to see this'
+        ${tile('Net profit', !netKnown ? '—' : money(net) + (gap > 0 ? '<span style="color:#b45309">*</span>' : ''),
+               !netKnown ? '#9ca3af' : net < 0 ? '#b91c1c' : '#047857',
+               !netKnown ? 'enter costs to see this'
+                 : gap > 0 ? `before the costs of ${gap} job${gap === 1 ? '' : 's'} nobody has entered — the real figure is lower`
                  : `gross ${money(gross)} − overheads${netPct !== null ? ` · ${netPct}%` : ''}`)}
       </div>
 
@@ -12340,19 +12441,26 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
             const periods = [...new Set([...months.map(m => m.period), ...Object.keys(expByPeriod)])].sort();
             const byPeriod = Object.fromEntries(months.map(m => [m.period, m]));
             return periods.map(period => {
-              const m = byPeriod[period] || { period, collected: 0, sales: 0, costs: 0, tax: 0, fees: 0, jobs: 0, costed: 0 };
+              const m = byPeriod[period] || { period, collected: 0, sales: 0, costs: 0, tax: 0, fees: 0, jobs: 0, costed: 0, tax_unknown: 0 };
               const ov = expByPeriod[period] || 0;
               const g = round2(Number(m.sales) - Number(m.costs));
               const n = round2(g - ov);
-              const known = Number(m.costs) > 0 || ov > 0;
+              /* Every month's net is shown whenever the total is, so the rows add
+                 up to it. The total used to count a month the row showed as "—",
+                 which is how September's sales went into the profit unseen. */
+              const unfinished = Number(m.costed) < Number(m.jobs);
+              /* A month with sales and no overheads entered, while monthly costs
+                 like rent are on file, has not had its overheads entered yet. */
+              const ovMissing = ov === 0 && fixedMonthly > 0 && Number(m.sales) > 0;
               return `<tr>
                 <td style="padding:6px 0">${periodLabel(period)}</td>
                 <td style="padding:6px 0;text-align:right;font-variant-numeric:tabular-nums">${money(m.collected)}</td>
                 <td style="padding:6px 0;text-align:right;color:#6b7280;font-variant-numeric:tabular-nums">${money(m.sales)}</td>
                 <td style="padding:6px 0;text-align:right;color:#6b7280;font-variant-numeric:tabular-nums">${Number(m.costs) > 0 ? money(m.costs) : '—'}</td>
-                <td style="padding:6px 0;text-align:right;color:#6b7280;font-variant-numeric:tabular-nums">${ov > 0 ? money(ov) : '—'}</td>
-                <td style="padding:6px 0;text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:${!known ? '#9ca3af' : n < 0 ? '#b91c1c' : '#047857'}">${!known ? '—' : money(n)}${Number(m.costed) < Number(m.jobs) && Number(m.costs) > 0 ? '<span style="color:#b45309">*</span>' : ''}</td>
-                <td style="padding:6px 0;text-align:right;color:#8a5a00;font-variant-numeric:tabular-nums">${money(m.tax)}</td>
+                <td style="padding:6px 0;text-align:right;color:#6b7280;font-variant-numeric:tabular-nums">${ov > 0 ? money(ov)
+                  : ovMissing ? '<span style="color:#b45309" title="Monthly costs such as rent are on file, but none are entered for this month">not entered</span>' : '—'}</td>
+                <td style="padding:6px 0;text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:${!netKnown ? '#9ca3af' : n < 0 ? '#b91c1c' : '#047857'}">${!netKnown ? '—' : money(n)}${netKnown && (unfinished || ovMissing) ? '<span style="color:#b45309">*</span>' : ''}</td>
+                <td style="padding:6px 0;text-align:right;color:#8a5a00;font-variant-numeric:tabular-nums">${money(m.tax)}${Number(m.tax_unknown) > 0 ? '<span style="color:#b45309">*</span>' : ''}</td>
                 <td style="padding:6px 0;text-align:right;color:#9ca3af;font-variant-numeric:tabular-nums">${money(m.fees)}</td>
               </tr>`; }).join('');
           })() || '<tr><td colspan="8" style="padding:10px 0;color:#9ca3af">Nothing recorded for this year.</td></tr>'}
@@ -12362,15 +12470,21 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
             <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums">${money(T.sales)}</td>
             <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums">${T.costs > 0 ? money(T.costs) : '—'}</td>
             <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums">${expTotal > 0 ? money(expTotal) : '—'}</td>
-            <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums;color:${net < 0 ? '#b91c1c' : '#047857'}">${(pct === null && expTotal === 0) ? '—' : money(net)}</td>
-            <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums">${money(T.tax)}</td>
+            <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums;color:${!netKnown ? '#9ca3af' : net < 0 ? '#b91c1c' : '#047857'}">${!netKnown ? '—' : money(net)}${netKnown && gap > 0 ? '<span style="color:#b45309">*</span>' : ''}</td>
+            <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums">${money(T.tax)}${T.taxUnknown > 0 ? '<span style="color:#b45309">*</span>' : ''}</td>
             <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums">${money(T.fees)}</td>
           </tr>
         </table>
         <div class="muted" style="font-size:11px;margin-top:10px">
-          Collected is money that actually arrived, from the payment ledger — it reconciles with the bank.
-          Sales is the work priced before tax. Sales tax is the part of what arrived that belongs to the
-          state. Card fees are what the processor took. ${gap > 0 ? `<b style="color:#b45309">${gap} job${gap === 1 ? ' has' : 's have'} no costs entered, so profit is overstated.</b>` : ''}
+          Collected is every payment that arrived — quotes, studio orders and card payments no quote
+          claimed — so it reconciles with the bank. Sales is jobs accepted that month at what the customer
+          pays before tax (after any discount), plus studio orders and other card payments in the month they
+          were paid. A quote that was only sent is not a sale, and a cancelled job never is. Sales tax is the
+          part of what arrived that belongs to the state. Card fees are what the processor took.
+          ${gap > 0 ? `<b style="color:#b45309">* ${gap} job${gap === 1 ? ' has' : 's have'} no costs entered, so profit is overstated.</b>` : ''}
+          ${T.taxUnknown > 0 ? `<b style="color:#b45309">* ${T.taxUnknown} payment${T.taxUnknown === 1 ? '' : 's'} outside quotes
+            ${T.taxUnknown === 1 ? 'has' : 'have'} no sales tax worked out yet: until settled, the tax counts in Sales and not in
+            Sales tax (<a href="#settle-tax" style="color:#b45309">settle them</a>).</b>` : ''}
         </div>
       </div>
 
@@ -12383,7 +12497,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
            every bar is direct-labelled and the axis carries the figure. */
         const monthsWithSales = months.filter(m => Number(m.sales) > 0).length || 1;
         const recurring = round2(expList.filter(e => e.recurs).reduce((a, e) => a + Number(e.amount), 0));
-        const marginPct = (T.sales > 0 && T.costs > 0) ? (T.sales - T.costs) / T.sales : null;
+        // marginPct: from the jobs with costs entered only (worked out once, above).
         const be = marginPct && marginPct > 0 ? round2(recurring / marginPct) : null;
 
         const series = months.map(m => ({ period: m.period, sales: Number(m.sales) }));
@@ -12444,7 +12558,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
         const avgSales = round2(T.sales / monthsWithSales);
         const recurring = round2(expList.filter(e => e.recurs)
           .reduce((a, e) => a + Number(e.amount), 0));
-        const marginPct = (T.sales > 0 && T.costs > 0) ? (T.sales - T.costs) / T.sales : null;
+        // marginPct: from the jobs with costs entered only (worked out once, above).
         // Sales needed to cover fixed costs at the margin actually achieved.
         const breakEven = marginPct && marginPct > 0 ? round2(recurring / marginPct) : null;
         const coverage = breakEven ? Math.round(avgSales / breakEven * 100) : null;
@@ -12471,7 +12585,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
               ? '<span style="color:#b91c1c">That is thin for print — worth checking whether the blanks price or the quoted price is the problem.</span>'
               : marginPct > 0.6 ? '<span style="color:#047857">Healthy. Room to absorb a rush or a reprint.</span>'
               : 'A normal range for this trade.'}
-            ${gap > 0 ? `<span class="muted"> Based on ${T.jobs - gap} of ${T.jobs} jobs — the rest have no costs entered, so the real figure is lower.</span>` : ''}
+            ${gap > 0 ? `<span class="muted"> Worked out from the ${T.costed} of ${T.jobs} jobs with costs entered — enter costs on the rest to make it the whole picture.</span>` : ''}
           </div>` : `<div style="padding:9px 0;border-bottom:1px solid #f1f4f9">
             <b>No job costs entered yet.</b> Until they are, this page can show what came in but not what you kept.
             <a href="/admin/quotes" style="color:#1848B8">Add costs to a job</a> and every figure here fills in.</div>`}
@@ -16231,6 +16345,8 @@ app.get('/admin/nav-counts', requireAdmin, async (_req, res) => {
     liveJobs().then((jobs) => {
       out.late = jobs.filter((q) => { const s = quoteSchedule(q); return !!(s && s.risks.length); }).length;
     }).catch(() => {}),
+    /* Paid orders waiting to go out, as the morning email counts them. */
+    shippingQueues().then((d) => { const w = shippingWaiting(d); out.shipping = w ? w.count : 0; }).catch(() => {}),
   ]);
   res.json(out);
 });
@@ -16246,6 +16362,9 @@ app.get('/admin/dashboard', requireAdmin, async (_req, res) => {
   const one = (sql, what, args) => safe(pool.query(sql, args).then((r) => r.rows[0] || {}), {}, what);
   const many = (sql, what, args) => safe(pool.query(sql, args).then((r) => r.rows), [], what);
 
+  /* Paid orders waiting to go out (the Shipping page), read beside the rest
+     and failing on its own like every panel here. */
+  const shipP = safe(shippingQueues().then(shippingWaiting), null, 'shipping');
   const [takings, owed, out, leads, jobs, reviewsWaiting, changes, disputes, unapplied, badTexts, recent, tax,
          certsWaiting, deliveredOwing] =
     await Promise.all([
@@ -16303,6 +16422,7 @@ app.get('/admin/dashboard', requireAdmin, async (_req, res) => {
   const waiting = leads.filter((l) => l.lead_status === 'new');
   const lastLead = leads[0];
   const late = jobs.map((q) => ({ q, s: quoteSchedule(q) })).filter((x) => x.s && x.s.risks.length);
+  const ship = await shipP;
 
   /* The one next thing, loudest first. */
   const attention = [
@@ -16315,6 +16435,10 @@ app.get('/admin/dashboard', requireAdmin, async (_req, res) => {
       title: `${escEmail(q.name || q.code)} is behind`,
       sub: `${escEmail(s.risks[0].label)} was due ${escEmail(dayShort(s.risks[0].by))} &middot; ${escEmail(q.code)}`,
       href: `/admin/production/${escEmail(q.code)}` })),
+    /* Paid and not gone: the customer is waiting on this one already. */
+    ...(ship && ship.count ? [{ tone: ship.oldest >= 7 ? 'red' : 'amber', icon: 'truck',
+      title: `${ship.count} paid order${ship.count === 1 ? '' : 's'} waiting to go out`,
+      sub: escEmail(ship.subject.replace(/^\S+\s+/, '')), href: '/admin/shipping' }] : []),
     ...(waiting.length ? [{ tone: 'amber', icon: 'inbox',
       title: `${waiting.length} enquir${waiting.length === 1 ? 'y' : 'ies'} waiting for a reply`,
       sub: `oldest ${escEmail(ageInWords(waiting[waiting.length - 1].created_at))}`, href: '/admin/leads' }] : []),
@@ -17393,9 +17517,33 @@ function orderExemption(b) {
   return { status: x.status, label: String(x.label || '').replace(/\s+/g, ' ').trim().slice(0, 160) };
 }
 
-function orderShell({ heading, intro, orderId, items, total, shipping, tax, address, footer, exempt = null }) {
+/** How a studio order leaves, as the designer sends it with the order emails
+ *  (since 2026-09-30), or null for an older one: `method` 'ship' | 'pickup',
+ *  `source` 'rate' | 'free' | 'flat', `service` the carrier and service its
+ *  postage paid for ("USPS Ground Advantage"). */
+function orderDelivery(b) {
+  const d = b && b.delivery;
+  if (!d || typeof d !== 'object' || !['ship', 'pickup'].includes(d.method)) return null;
+  return { method: d.method, source: ['rate', 'free', 'flat'].includes(d.source) ? d.source : '',
+           service: String(d.service || '').replace(/\s+/g, ' ').trim().slice(0, 120) };
+}
+
+/** Where a customer's order goes, under the totals: a pickup is not "shipped to". */
+function orderWhere(address, delivery) {
+  const p = 'style="color:#6b7280;font-size:13px;margin-top:16px;"';
+  if (delivery && delivery.method === 'pickup') {
+    return `<p ${p}><strong style="color:#374151;">Pickup</strong><br>Free curbside pickup at
+      ${escEmail(SMS_PICKUP)}. We&rsquo;ll email you when it&rsquo;s ready.</p>`;
+  }
+  if (!address) return '';
+  return `<p ${p}><strong style="color:#374151;">Ship to</strong><br>${escEmail(address)}${
+    delivery && delivery.service ? `<br>by ${escEmail(delivery.service)}` : ''}</p>`;
+}
+
+function orderShell({ heading, intro, orderId, items, total, shipping, tax, address, footer, exempt = null, delivery = null }) {
   const lines = [];
-  if (Number(shipping) > 0) lines.push(`<tr><td style="padding:3px 6px;text-align:right;color:#6b7280;">Shipping</td><td style="padding:3px 6px;text-align:right;white-space:nowrap;">${money(shipping)}</td></tr>`);
+  if (Number(shipping) > 0) lines.push(`<tr><td style="padding:3px 6px;text-align:right;color:#6b7280;">Shipping${
+    delivery && delivery.service ? ` &mdash; ${escEmail(delivery.service)}` : ''}</td><td style="padding:3px 6px;text-align:right;white-space:nowrap;">${money(shipping)}</td></tr>`);
   if (Number(tax) > 0) lines.push(`<tr><td style="padding:3px 6px;text-align:right;color:#6b7280;">Sales tax</td><td style="padding:3px 6px;text-align:right;white-space:nowrap;">${money(tax)}</td></tr>`);
   else if (exempt) lines.push(`<tr><td style="padding:3px 6px;text-align:right;color:#6b7280;">Sales tax &mdash; exempt${exempt.label ? ` (${escEmail(exempt.label)})` : ''}</td><td style="padding:3px 6px;text-align:right;white-space:nowrap;">${money(0)}</td></tr>`);
   return `
@@ -17409,7 +17557,7 @@ function orderShell({ heading, intro, orderId, items, total, shipping, tax, addr
       <tr><td style="padding:8px 6px;text-align:right;font-weight:700;border-top:2px solid #111;">Total</td>
           <td style="padding:8px 6px;text-align:right;font-weight:700;border-top:2px solid #111;white-space:nowrap;">${money(total)}</td></tr>
     </table>
-    ${address ? `<p style="color:#6b7280;font-size:13px;margin-top:16px;"><strong style="color:#374151;">Ship to</strong><br>${escEmail(address)}</p>` : ''}
+    ${orderWhere(address, delivery)}
     ${footer}
     <p style="color:#9ca3af;font-size:12px;margin-top:26px;border-top:1px solid #eee;padding-top:12px;">
       June&rsquo;s Tees &amp; Things &middot; 3047 N Lincoln Ave #435, Chicago, IL 60657<br>
@@ -17425,14 +17573,17 @@ app.post('/api/order-confirmation', requireInternalKey, capPerRecipient('order-c
     if (!isValidEmail(email)) return res.status(400).json({ error: 'bad email' });
     const name = String(b.name || '').trim();
     const exempt = orderExemption(b);
+    const delivery = orderDelivery(b);
+    const pickup = delivery && delivery.method === 'pickup';
     await sendEmail({
       to: email,
       subject: `Thanks${name ? ', ' + name.split(' ')[0] : ''}! Order #${b.order_id} is in 🎉`,
       html: orderShell({
         heading: 'Thank you for your order!',
-        intro: `We&rsquo;ve got it and we&rsquo;re on it. You&rsquo;ll hear from us again as soon as it ships &mdash; most orders print and go out within 7&ndash;10 business days. Need it sooner? Just reply, rush is often possible.`,
+        intro: `We&rsquo;ve got it and we&rsquo;re on it. You&rsquo;ll hear from us again as soon as it ${pickup
+          ? 'is ready to pick up' : 'ships'} &mdash; most orders print and ${pickup ? 'are ready' : 'go out'} within 7&ndash;10 business days. Need it sooner? Just reply, rush is often possible.`,
         orderId: b.order_id, items: b.items, total: b.total,
-        shipping: b.shipping, tax: b.tax, address: b.address, exempt,
+        shipping: b.shipping, tax: b.tax, address: b.address, exempt, delivery,
         footer: (exempt && exempt.status === 'pending'
           ? `<p style="color:#374151;line-height:1.6;">You checked out without sales tax on your exemption certificate. We check every certificate before we print. If we can&rsquo;t accept it, we&rsquo;ll email you a link to pay the tax.</p>`
           : '') +
@@ -17457,21 +17608,35 @@ app.post('/api/order-notification', requireInternalKey, capPerRecipient('order-n
     const to = String(b.to || SHOP_EMAIL || '').trim();
     if (!isValidEmail(to)) return res.status(400).json({ error: 'bad recipient' });
     const exempt = orderExemption(b);
+    const delivery = orderDelivery(b);
+    /* How it goes out, first thing: the shop's only notice of a new studio order
+       said nothing about shipping, which is how a paid order sat unshipped for
+       seven weeks (order #10). */
+    const shipNote = !delivery ? ''
+      : delivery.method === 'pickup'
+        ? '🏪 <b>Pickup</b> &mdash; no label needed. Mark it ready on Shipping when it is done; they are emailed.'
+        : '📦 <b>Ship</b> ' + (delivery.source === 'rate' && delivery.service
+            ? `by <b>${escEmail(delivery.service)}</b> &mdash; they paid ${money(b.shipping)} postage.`
+            : delivery.source === 'free' ? '&mdash; free shipping, so the postage is yours.'
+            : delivery.source === 'flat' ? `&mdash; flat ${money(b.shipping)} charged (live rates were down at checkout).`
+            : '') + ' Buy the label on Shipping.';
     await sendEmail({
       to,
       replyTo: isValidEmail(String(b.email || '')) ? String(b.email) : undefined,
-      subject: `🧾 New order #${b.order_id} — ${money(b.total)}${exempt && exempt.status === 'pending' ? ' — tax-exempt, check the certificate' : ''}`,
+      subject: `🧾 New order #${b.order_id} — ${money(b.total)}${delivery ? (delivery.method === 'pickup' ? ' — PICKUP' : ' — SHIP') : ''}${exempt && exempt.status === 'pending' ? ' — tax-exempt, check the certificate' : ''}`,
       html: orderShell({
         heading: 'New order received',
-        intro: `<strong>${escEmail(b.name || 'A customer')}</strong>${b.email ? ` (${escEmail(b.email)})` : ''} just checked out${b.payment ? ` via ${escEmail(b.payment)}` : ''}.`,
+        intro: `<strong>${escEmail(b.name || 'A customer')}</strong>${b.email ? ` (${escEmail(b.email)})` : ''} just checked out${b.payment ? ` via ${escEmail(b.payment)}` : ''}.${
+          shipNote ? `<br><span style="display:inline-block;margin-top:8px;padding:8px 12px;border-radius:8px;background:#eef2fd;color:#0B1F4B">${shipNote}</span>` : ''}`,
         orderId: b.order_id, items: b.items, total: b.total,
-        shipping: b.shipping, tax: b.tax, address: b.address, exempt,
+        shipping: b.shipping, tax: b.tax, address: b.address, exempt, delivery,
         footer: (exempt ? `<p style="color:#374151;line-height:1.6;">${exempt.status === 'pending'
             ? `<strong>Tax-exempt &mdash; don&rsquo;t print it yet.</strong> Check the certificate first on
                <a href="${PUBLIC_BASE_URL}/admin/certificates">Certificates</a>. Approving releases the order;
                refusing puts the tax back on it, to collect with Collect balance.`
             : 'Tax-exempt, on a certificate you have already approved.'}</p>` : '') +
-          `<p style="margin:18px 0;"><a href="https://design.jtees.net/admin.php?lumise-page=order&order_id=${encodeURIComponent(b.order_id)}" style="background:#1848B8;color:#fff;font-weight:700;text-decoration:none;padding:12px 26px;border-radius:100px;display:inline-block;">Open in admin →</a></p>`,
+          `<p style="margin:18px 0;"><a href="https://design.jtees.net/admin.php?lumise-page=order&order_id=${encodeURIComponent(b.order_id)}" style="background:#1848B8;color:#fff;font-weight:700;text-decoration:none;padding:12px 26px;border-radius:100px;display:inline-block;">Open in admin →</a>${
+            delivery ? ` <a href="${PUBLIC_BASE_URL}/admin/shipping#studio-${encodeURIComponent(b.order_id)}" style="margin-left:8px;color:#1848B8;font-weight:700;text-decoration:none;">Shipping →</a>` : ''}</p>`,
       }),
     });
     res.json({ ok: true });
@@ -17574,28 +17739,49 @@ app.post('/api/order-shipped', requireInternalKey, capPerRecipient('order-shippe
     const name = String(b.name || '').trim();
     const tracking = String(b.tracking || '').trim();
     const status = String(b.status || 'shipped').trim().toLowerCase();
+    /* A pickup order marked Shipped is ready to collect (since 2026-09-30, when
+       checkout first let a customer choose pickup): "it just left our shop"
+       would send them to watch for a parcel that is never coming. */
+    const pickup = b.pickup === true;
+    const carrier = String(b.carrier || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+    // The carrier's own tracking page when the label came through the Shipping page.
+    const trackUrl = /^https:\/\/[^\s"'<>]+$/.test(String(b.tracking_url || '')) ? String(b.tracking_url)
+      : tracking ? `https://www.google.com/search?q=${encodeURIComponent(tracking)}` : '';
     /* Only a real shipment gets the shipping notice. Telling someone their
        order "just left our shop" because it was marked complete is a message
        they will read as a mistake, and rightly. */
-    if (status === 'shipped') await sendEmail({
+    if (status === 'shipped' && pickup) await sendEmail({
+      to: email,
+      subject: `Your order #${b.order_id} is ready for pickup 🎉`,
+      html: orderShell({
+        heading: 'It&rsquo;s ready!',
+        intro: `${name ? escEmail(name.split(' ')[0]) + ', y' : 'Y'}our order is ready for curbside pickup at
+          ${escEmail(SMS_PICKUP)}. Text or call ${SHOP_PHONE} when you&rsquo;re outside and we&rsquo;ll bring it out.`,
+        orderId: b.order_id, items: b.items, total: b.total,
+        shipping: b.shipping, tax: b.tax, footer: '',
+      }),
+    });
+    else if (status === 'shipped') await sendEmail({
       to: email,
       subject: `Your order #${b.order_id} is on the way 📦`,
       html: orderShell({
         heading: 'It&rsquo;s on the way!',
-        intro: `${name ? escEmail(name.split(' ')[0]) + ', y' : 'Y'}our order just left our shop.`
+        intro: `${name ? escEmail(name.split(' ')[0]) + ', y' : 'Y'}our order just left our shop${
+          carrier ? ` by ${escEmail(carrier)}` : ''}.`
           + (tracking
               ? ` Tracking number: <strong>${escEmail(tracking)}</strong>.`
               : ` We&rsquo;ll follow up with tracking as soon as it&rsquo;s available.`),
         orderId: b.order_id, items: b.items, total: b.total,
         shipping: b.shipping, tax: b.tax, address: b.address,
-        footer: tracking
-          ? `<p style="margin:18px 0;"><a href="https://www.google.com/search?q=${encodeURIComponent(tracking)}" style="background:#1848B8;color:#fff;font-weight:700;text-decoration:none;padding:12px 26px;border-radius:100px;display:inline-block;">Track my package →</a></p>`
+        footer: trackUrl
+          ? `<p style="margin:18px 0;"><a href="${escEmail(trackUrl)}" style="background:#1848B8;color:#fff;font-weight:700;text-decoration:none;padding:12px 26px;border-radius:100px;display:inline-block;">Track my package →</a></p>`
           : '',
       }),
     });
     if (status === 'shipped' && b.phone) {
       await sendCustomerSms({ phone: b.phone, kind: 'transactional', ref: 'studio:' + smsPlain(b.order_id, 20),
-        msg: SMS.studioOrderShipped({ orderId: b.order_id, tracking }) });
+        msg: pickup ? SMS.studioOrderReady({ orderId: b.order_id })
+          : SMS.studioOrderShipped({ orderId: b.order_id, tracking }) });
     }
     /* Record the ask as DUE rather than holding a timer — a setTimeout would be
        lost on the next deploy, and this service redeploys often. The hourly
@@ -17874,11 +18060,17 @@ async function sendDailyDigest() {
       `INSERT INTO jt_digest_log (day) VALUES (CURRENT_DATE) ON CONFLICT DO NOTHING RETURNING day`);
     if (!claim.rowCount) return;   // already sent today
 
+    /* Paid orders waiting to go out, first: the one part of this email a
+       customer is already waiting on. It listed quotes only, so a studio order
+       paid on 2026-08-11 was never mentioned in seven weeks (order #10). */
+    const ship = await shippingQueues({ fresh: true }).then(shippingWaiting)
+      .catch((e) => { console.error('digest shipping list failed:', e.message); return null; });
+
     const { rows } = await pool.query(
       `SELECT * FROM quotes
         WHERE status NOT IN ('expired', 'held') AND delivered_at IS NULL
         ORDER BY COALESCE(needed_by, target_date) NULLS LAST, created_at`);
-    if (!rows.length) return;
+    if (!rows.length && !ship) return;
 
     const today = new Date(new Date().toDateString());
     const live = rows.map((q) => {
@@ -17889,7 +18081,7 @@ async function sendDailyDigest() {
       return { q, cl, sched, days };
     }).filter((x) => x.cl.next);           // nothing to do = not in the digest
 
-    if (!live.length) return;
+    if (!live.length && !ship) return;
 
     const overdue = live.filter((x) => x.days !== null && x.days < 0);
     const soon    = live.filter((x) => x.days !== null && x.days >= 0 && x.days <= 3);
@@ -17927,10 +18119,11 @@ async function sendDailyDigest() {
     const teamHtml = await teamDigestHtml().catch((e) => { console.error('team digest failed:', e.message); return ''; });
 
     await alertShop(
+      (ship ? `${ship.subject} · ` : '') +
       (atRisk.length ? `⚠️ ${atRisk.length} job${atRisk.length === 1 ? '' : 's'} at risk · ` : '☕ ') +
         `${live.length} job${live.length === 1 ? '' : 's'} need${live.length === 1 ? 's' : ''} you today` +
         (overdue.length ? ` — ${overdue.length} overdue` : ''),
-      `<h2 style="color:#1848B8;margin:0 0 2px">Today's jobs</h2>
+      `${shipDigestHtml(ship)}<h2 style="color:#1848B8;margin:0 0 2px">Today's jobs</h2>
        <p style="color:#6b7280;font-size:13px;margin:0 0 14px">
          ${atRisk.length ? `<b style="color:#b91c1c">${atRisk.length} behind schedule</b> &middot; ` : ''}
          ${overdue.length ? `<b style="color:#b91c1c">${overdue.length} overdue</b> &middot; ` : ''}
@@ -17944,7 +18137,7 @@ async function sendDailyDigest() {
          Each line is the next step for that job. Steps the system can answer are
          ticked automatically; the rest you tap on the quotes page.</p>`);
 
-    console.log(`daily digest sent: ${live.length} jobs, ${overdue.length} overdue`);
+    console.log(`daily digest sent: ${live.length} jobs, ${overdue.length} overdue${ship ? `, ${ship.count} to ship` : ''}`);
   } catch (e) {
     console.error('daily digest failed:', e.message);
   }
@@ -18123,6 +18316,587 @@ app.post('/admin/quote/:code/shipping', requireAdmin, async (req, res) => {
     console.error('shipping update failed:', err.message);
   }
   res.redirect('/admin/quotes');
+});
+
+/* ── Shipping ───────────────────────────────────────────────────────────────
+   Every paid order waiting to go out, on one page: studio orders from the
+   studio's feed, and quote jobs set to ship (ground or expedited). A label is
+   bought through the studio, which holds the Shippo key (its jt-ship.php), for
+   the service the customer paid for. Marking an order shipped is what tells
+   the customer: the studio's own notice for a studio order (it reaches
+   /api/order-shipped), notifyQuoteMilestone for a quote job.
+
+   Why (2026-09-30): studio order #10 paid $6.00 for USPS Ground Advantage on
+   2026-08-11 and sat unshipped for seven weeks. Nothing recorded which service
+   its postage paid for, no label had ever been bought, and nothing anywhere
+   said a paid order was waiting to go out. The rules are in
+   tools/lib/shipping.js, tested on their own (tests/shipping.test.js). */
+
+const SHIP_STAGE_OUT = JOB_STAGES.findIndex((s) => s.key === 'out');
+
+/** "studio-10" or "quote-ABCDEF2345": which order a form is about, or null. */
+function parseShipRef(ref) {
+  const s = String(ref || '').trim();
+  let m = /^studio-(\d{1,9})$/.exec(s);
+  if (m && Number(m[1]) > 0) return { kind: 'studio', id: Number(m[1]), ref: `studio-${Number(m[1])}` };
+  m = /^quote-([A-Za-z0-9]{6}|[A-Za-z0-9]{10})$/.exec(s);
+  if (m && QUOTE_CODE_RE.test(m[1].toUpperCase())) {
+    return { kind: 'quote', code: m[1].toUpperCase(), ref: `quote-${m[1].toUpperCase()}` };
+  }
+  return null;
+}
+
+/** One call to the studio's jt-ship.php, as {status, body}. Never throws: a
+ *  studio that is down or slow comes back as {status: 0} and its reason. */
+async function studioShip(payload, timeoutMs = 30000) {
+  try {
+    const r = await studioFetch(`${STUDIO_BASE}/jt-ship.php`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload), timeoutMs,
+    });
+    /* The studio answers only this app's internal key (studioFetch sends it);
+       a refusal means the key is missing here or differs between the two. */
+    if (r.status === 403) {
+      return { status: 403, body: { error: 'The studio refused this app’s key: the internal key must be set, and the same, on both services.' } };
+    }
+    const body = await r.json().catch(() => null);
+    return { status: r.status, body: body || { error: `The studio answered ${r.status}.` } };
+  } catch (e) {
+    const slow = !!e && (e.name === 'TimeoutError' || e.name === 'AbortError');
+    return { status: 0, timedOut: slow,
+      body: { error: slow ? 'The studio did not answer in time.' : 'The studio could not be reached.' } };
+  }
+}
+
+/* What the last button did, for the page it lands back on. Kept here under a
+   random id rather than written into the link, so the studio's own words about
+   a failure (an address Shippo cannot serve, a card it declined) reach the
+   shop, and nobody can craft a link that makes this page say something else. */
+const _shipFlash = new Map();
+function shipBack(res, ref, tone, text) {
+  const now = Date.now();
+  for (const [k, v] of _shipFlash) if (now - v.at > 15 * 60000) _shipFlash.delete(k);
+  const id = crypto.randomBytes(9).toString('base64url');
+  _shipFlash.set(id, { ref: String(ref || ''), tone, text: String(text || '').slice(0, 600), at: now });
+  res.redirect(`/admin/shipping?flash=${id}${ref ? '#' + ref : ''}`);
+}
+
+/** Everything the Shipping page, the dashboard, the menu badge and the morning
+ *  email need, from one read: the studio's feed and the quote jobs that ship. */
+async function shippingQueues({ fresh = false } = {}) {
+  if (fresh) _studioCache.at = 0;
+  const [feed, jobs] = await Promise.all([
+    fetchStudioOrders(),
+    pool.query(`SELECT * FROM quotes
+                 WHERE accepted_at IS NOT NULL AND cancelled_at IS NULL
+                   AND lower(COALESCE(ship_method, '')) IN ('ground', 'expedited')
+                   AND (delivered_at IS NULL OR delivered_at > NOW() - interval '31 days')
+                 ORDER BY accepted_at`).then((r) => r.rows),
+  ]);
+  return { feed, studio: SHIP.studioShipQueues(feed.orders), quotes: SHIP.quoteShipQueues(jobs) };
+}
+
+/** What is waiting on the shop, as the morning email, the dashboard and the
+ *  menu badge count it. A quote job still to ship is left out here: the
+ *  morning email already lists it with the date it must ship by, and the board
+ *  chases it. A label bought for one and not marked shipped is added, because
+ *  nothing else says its customer is still waiting for their tracking. */
+function shippingWaiting({ studio, quotes }) {
+  return SHIP.shippingReminder(studio, { toShip: [], labelled: quotes.labelled }, { money });
+}
+
+const shipUrlOk = (u) => /^https:\/\/[^\s"'<>]+$/.test(String(u || ''));
+
+/** The "waiting to ship" part of the morning email; '' when nothing is. */
+function shipDigestHtml(w) {
+  if (!w) return '';
+  const row = (x) => `<tr><td style="padding:7px 0;border-bottom:1px solid #eef1f6">
+      <a href="${PUBLIC_BASE_URL}/admin/shipping#${escEmail(x.anchor)}" style="color:#1848B8;font-weight:600;text-decoration:none">${escEmail(x.title)}</a>
+      <span style="color:#6b7280"> ${escEmail(x.who)}</span><br>
+      <span style="color:#111827;font-size:13px">${escEmail(x.what)}</span></td>
+    <td style="padding:7px 0;border-bottom:1px solid #eef1f6;text-align:right;white-space:nowrap;font-size:12.5px;color:${
+      x.days >= 7 ? '#b91c1c' : '#6b7280'}">${x.days === 0 ? 'paid today' : `waiting ${x.days}d`}</td></tr>`;
+  return `<h2 style="color:#1848B8;margin:0 0 2px">Waiting to ship</h2>
+    <p style="color:#6b7280;font-size:13px;margin:0 0 10px">${escEmail(w.subject.replace(/^\S+\s+/, ''))}</p>
+    <table style="width:100%;border-collapse:collapse">${[...w.toShip, ...w.labelled, ...w.pickups].map(row).join('')}</table>
+    <p style="margin:12px 0 24px"><a href="${PUBLIC_BASE_URL}/admin/shipping" style="color:#1848B8;font-weight:600">Open Shipping</a></p>`;
+}
+
+
+/** The weight and box form that asks the studio for label prices. A GET, so
+ *  asking again is a refresh and the list can be bookmarked; nothing is bought. */
+function shipWeighForm(ref, oz, box) {
+  const lb = oz ? Math.floor(oz / 16) : '';
+  const rest = oz ? oz % 16 : '';
+  return `<form method="GET" action="/admin/shipping#${ref}" class="ship-weigh">
+    <input type="hidden" name="rates" value="${ref}">
+    <label>Weight, packed <span class="ship-w"><input name="lb" type="number" min="0" max="70" step="1"
+      value="${lb}" inputmode="numeric" aria-label="pounds"> lb
+      <input name="oz" type="number" min="0" max="15.9" step="0.1" value="${rest}" inputmode="decimal"
+      aria-label="ounces"> oz</span></label>
+    <label>Box <select name="box">${Object.entries(SHIP.DEFAULT_BOXES).map(([k, v]) =>
+      `<option value="${k}"${k === box ? ' selected' : ''}>${escEmail(v)}</option>`).join('')}</select></label>
+    <button type="submit" class="btn-ghost">Get label prices</button>
+  </form>`;
+}
+
+/** The prices the studio came back with, and the one form that buys. */
+function shipRatesHtml(ref, rates, paidService) {
+  if (rates.error) return `<div class="warn" style="margin:10px 0 0">${escEmail(rates.error)}</div>`;
+  const pick = SHIP.preferredRate(rates.list, paidService);
+  const paid = String(paidService || '').trim().toLowerCase();
+  return `<form method="POST" action="/admin/shipping/buy" data-once style="margin-top:10px">
+    <input type="hidden" name="ref" value="${ref}">
+    <input type="hidden" name="shipment" value="${escEmail(rates.shipment)}">
+    <div class="ship-rates">${rates.list.map((r) => `
+      <label class="ship-rate"><input type="radio" name="rate" value="${escEmail(r.id)}"${
+        pick && r.id === pick.id ? ' checked' : ''} required>
+        <span class="ship-rate-name">${escEmail(r.name)}${paid && String(r.name || '').toLowerCase() === paid
+          ? ` ${pill('what they paid for', 'green')}` : ''}</span>
+        <span class="muted">${r.days ? `${Number(r.days)} day${Number(r.days) === 1 ? '' : 's'}` : ''}</span>
+        <b>${money(r.amount)}</b></label>`).join('')}</div>
+    <div class="ship-buy">
+      <select name="file" aria-label="Label paper">${Object.entries(SHIP.DEFAULT_FILES).map(([k, v]) =>
+        `<option value="${k}">${escEmail(v)}</option>`).join('')}</select>
+      <button type="submit" data-busy="Buying…">Buy the chosen label</button>
+    </div>
+    <div class="muted" style="font-size:12px;margin-top:6px">Charged to your Shippo account.
+      ${Number(rates.oz)} oz in a ${escEmail(String(SHIP.DEFAULT_BOXES[rates.box] || rates.box).toLowerCase())}.
+      Buying twice is safe: an order that has a label gets the same one back.</div>
+  </form>`;
+}
+
+/** The form that marks an order out of the door, which is what emails the customer. */
+function shipDoneForm(ref, label, busy) {
+  return `<form method="POST" action="/admin/shipping/shipped" data-once style="margin-top:8px">
+    <input type="hidden" name="ref" value="${ref}">
+    <button type="submit" data-busy="${busy}">${label}</button></form>`;
+}
+
+/** Postage bought somewhere else: the tracking number, then shipped. */
+function shipElsewhereForm(ref) {
+  return `<details class="ship-more"><summary>Bought the postage somewhere else?</summary>
+    <form method="POST" action="/admin/shipping/shipped" data-once class="ship-inline">
+      <input type="hidden" name="ref" value="${ref}">
+      <input name="tracking" required pattern="[A-Za-z0-9 \\-]{6,120}" placeholder="Tracking number" aria-label="Tracking number">
+      <button type="submit" class="btn-ghost" data-busy="Saving…">Mark shipped</button>
+    </form></details>`;
+}
+
+/** A quote job's delivery address, typed by the shop (from a call or a text). */
+function shipAddressForm(ref, a, name) {
+  const v = (k) => escEmail(String((a && a[k]) || ''));
+  return `<form method="POST" action="/admin/shipping/address" class="ship-addr">
+    <input type="hidden" name="ref" value="${ref}">
+    <input name="name" value="${escEmail(String((a && a.name) || name || ''))}" placeholder="Name on the label" required>
+    <input name="street1" value="${v('street1')}" placeholder="Street address" required autocomplete="off">
+    <input name="street2" value="${v('street2')}" placeholder="Apt, suite (optional)" autocomplete="off">
+    <div class="ship-addr-row">
+      <input name="city" value="${v('city')}" placeholder="City" required>
+      <input name="state" value="${v('state')}" placeholder="IL" required maxlength="2" pattern="[A-Za-z]{2}" style="max-width:70px">
+      <input name="zip" value="${v('zip')}" placeholder="ZIP" required pattern="\\d{5}(-\\d{4})?" style="max-width:110px">
+    </div>
+    <button type="submit" class="btn-ghost">Save address</button>
+  </form>`;
+}
+
+/** One order on the Shipping page. `x` is {kind, o}; `rates` is the price list
+ *  asked for on this load, when it is this order's. */
+function shipCardHtml(x, rates) {
+  const o = x.o;
+  const studio = x.kind === 'studio';
+  const ref = studio ? `studio-${Number(o.id)}` : `quote-${o.code}`;
+  const title = studio
+    ? `<a href="${STUDIO_ADMIN}?lumise-page=order&amp;order_id=${Number(o.id)}" target="_blank" rel="noopener">Studio order #${Number(o.id)}</a>`
+    : `<a href="/admin/production/${escEmail(o.code)}">Quote ${escEmail(o.code)}</a>`;
+  const country = studio ? String((o.ship_to && o.ship_to.country) || 'US').toUpperCase() : 'US';
+  const abroad = studio && country !== '' && country !== 'US';
+  const to = SHIP.cleanShipTo(o.ship_to, o.name);
+  /* The studio's checkout has an optional two-letter state box, so a studio
+     order can arrive without one; its ZIP says where it goes, and Shippo is
+     the judge of whether that is enough. A quote's address is typed through a
+     form here that asks for the state, so it must have one. */
+  const gaps = SHIP.shipToProblems(to).filter((f) => !(studio && f === 'state' && to && to.zip));
+  const phone = studio ? String((o.ship_to && o.ship_to.phone) || '') : String(o.phone || '');
+  const days = Number(o.waitingDays || 0);
+  const wait = `<span style="color:${days >= 7 ? '#b91c1c' : days >= 3 ? '#b45309' : '#6b7280'};font-weight:${days >= 3 ? 700 : 400}">${
+    days === 0 ? 'paid today' : `waiting ${days} day${days === 1 ? '' : 's'}`}</span>`;
+  const what = studio
+    ? (o.items || []).map((i) => `${escEmail(i.name)} &times; ${Number(i.qty) || 1}`).join('<br>') || 'the order'
+    : escEmail(quoteSummary(o.items));
+  const how = studio ? escEmail(SHIP.deliveryPhrase(o.delivery, money))
+    : `Ship &mdash; ${String(o.ship_method).toLowerCase() === 'expedited' ? 'expedited' : 'ground'}`;
+  const owe = studio ? Number(o.balance || 0) : balanceOf(o, quoteTotals(o).total);
+  const label = studio ? o.label : (o.ship_label && o.ship_label.label_url ? o.ship_label : null);
+  const paidService = studio && o.delivery && o.delivery.source === 'rate' ? o.delivery.service : '';
+
+  let act = '';
+  if (x.o.state === 'held') {
+    act = `<div class="warn" style="margin:10px 0 0"><b>Tax certificate to check &mdash; don&rsquo;t ship yet.</b>
+      <a href="/admin/certificates?status=pending">Check it on Certificates</a>: approving releases the order.</div>`;
+  } else if (x.o.state === 'pickup') {
+    act = `<div class="muted" style="margin-top:10px">No label: they collect it. When it is ready, this emails and
+      texts them that it is ready to pick up.</div>${shipDoneForm(ref, 'Mark ready for pickup', 'Telling them…')}`;
+  } else if (x.o.state === 'labelled' && label) {
+    act = `<div class="ship-label">Label: <b>${escEmail(label.name || 'bought')}</b>${
+      label.amount != null ? ` &middot; ${money(label.amount)}` : ''}${label.tracking
+      ? ` &middot; tracking ${shipUrlOk(label.tracking_url)
+        ? `<a href="${escEmail(label.tracking_url)}" target="_blank" rel="noopener">${escEmail(label.tracking)}</a>`
+        : escEmail(label.tracking)}` : ''}
+      ${shipUrlOk(label.label_url) ? `<a class="btn" style="margin-left:6px" href="${escEmail(label.label_url)}" target="_blank" rel="noopener">Print label</a>` : ''}</div>
+      <div class="muted" style="margin-top:6px">Once it is with the carrier, mark it shipped: that emails ${
+        studio ? 'and texts ' : ''}them the tracking.</div>
+      ${shipDoneForm(ref, 'Mark shipped', 'Marking…')}`;
+  } else if (x.o.state === 'pending') {
+    act = `<div class="warn" style="margin:10px 0 0">Shippo was still making the label bought earlier.
+      Check on it rather than buying another.</div>
+      <form method="POST" action="/admin/shipping/check" data-once style="margin-top:8px">
+        <input type="hidden" name="ref" value="${ref}">
+        <button type="submit" class="btn-ghost" data-busy="Checking…">Check on the label</button></form>`;
+  } else if (abroad) {
+    act = `<div class="muted" style="margin-top:10px">Going outside the US (${escEmail(country)}), which needs a
+      customs form: buy this one on goshippo.com, then enter its tracking number here.</div>${shipElsewhereForm(ref)}`;
+  } else if (!studio && gaps.length) {
+    act = `<div class="warn" style="margin:10px 0 0">No complete delivery address yet${
+      to ? ` (missing: ${gaps.map(escEmail).join(', ')})` : ''}. Ask them, then type it here.</div>
+      ${shipAddressForm(ref, to, o.name)}`;
+  } else if (studio && gaps.length) {
+    act = `<div class="warn" style="margin:10px 0 0">The checkout address is incomplete (missing: ${
+      gaps.map(escEmail).join(', ')}), so no label can be bought for it here. Confirm it with them, buy
+      the label on goshippo.com, and enter the tracking number below.</div>${shipElsewhereForm(ref)}`;
+  } else {
+    const mine = rates && rates.ref === ref;
+    const oz = mine && rates.oz ? rates.oz : (studio ? Number(o.est_oz) || null : null);
+    const box = mine ? rates.box : SHIP.boxFor(oz || 0);
+    act = `${shipWeighForm(ref, oz, box)}${mine ? shipRatesHtml(ref, rates, paidService) : ''}
+      ${shipElsewhereForm(ref)}${studio ? `<div class="muted" style="font-size:12px;margin-top:6px">Handed it over
+      in person? Set it to Complete in the <a href="${STUDIO_ADMIN}?lumise-page=order&amp;order_id=${Number(o.id)}"
+      target="_blank" rel="noopener">studio admin</a>.</div>` : ''}
+      ${!studio ? `<details class="ship-more"><summary>Change the address</summary>${shipAddressForm(ref, to, o.name)}</details>` : ''}`;
+  }
+
+  return `<div class="card ship-card" id="${ref}">
+    <div class="ship-top"><b>${title}</b>${wait}</div>
+    <div class="ship-who">${escEmail(o.name || 'No name')}${o.email ? ` &middot; ${escEmail(o.email)}` : ''}${
+      phone ? ` &middot; ${escEmail(phone)}` : ''}</div>
+    <div class="ship-how">${how}</div>
+    <div class="ship-grid">
+      <div><div class="ship-k">${x.o.state === 'pickup' ? 'Their address' : 'Goes to'}</div>${to && !abroad ? SHIP.shipToLines(to).map(escEmail).join('<br>')
+        : abroad ? `${SHIP.shipToLines(to).map(escEmail).join('<br>')}<br>${escEmail(country)}` : '<span class="muted">no address</span>'}</div>
+      <div><div class="ship-k">What</div>${what}</div>
+    </div>
+    ${owe > 0.005 ? `<div class="ship-owe">${money(owe)} still to pay &mdash; ${studio
+      ? 'the deposit terms say the balance is due before it ships' : 'collect it before it goes'}.</div>` : ''}
+    ${!studio && !(o.production_at || o.qc_at) ? `<div class="muted" style="margin-top:6px">Still in production.</div>` : ''}
+    ${act}
+  </div>`;
+}
+
+const SHIP_CSS = `<style>
+.ship-card .ship-top{display:flex;justify-content:space-between;gap:10px;align-items:baseline;flex-wrap:wrap}
+.ship-card .ship-top a{color:#0B1F4B;text-decoration:none}
+.ship-who{color:#46505f;font-size:13.5px;margin-top:4px;overflow-wrap:anywhere}
+.ship-how{margin-top:8px;font-size:14px;color:#0B1F4B}
+.ship-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px;font-size:13.5px;line-height:1.5}
+.ship-k{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#8b95a5;margin-bottom:2px}
+.ship-owe{margin-top:10px;color:#b45309;font-size:13px;font-weight:600}
+.ship-weigh{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-top:12px;padding-top:12px;border-top:1px solid #eef1f8}
+.ship-weigh label,.ship-addr label{text-transform:none;letter-spacing:0;font-size:12.5px;margin:0;display:flex;flex-direction:column;gap:4px}
+.ship-w{display:flex;align-items:center;gap:6px}
+.ship-w input{width:74px}
+.ship-rates{display:flex;flex-direction:column;gap:6px}
+.ship-rate{display:grid;grid-template-columns:auto 1fr auto auto;gap:10px;align-items:center;padding:9px 10px;
+  border:1px solid #e3e8f2;border-radius:10px;text-transform:none;letter-spacing:0;font-size:14px;margin:0;cursor:pointer}
+.ship-rate input{width:auto;margin:0}
+.ship-buy{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.ship-buy select{flex:1 1 200px}
+.ship-label{margin-top:10px;font-size:14px;line-height:1.8}
+.ship-more{margin-top:10px;font-size:13px}
+.ship-more summary{cursor:pointer;color:#1848B8}
+.ship-inline{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.ship-inline input{flex:1 1 200px}
+.ship-addr{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.ship-addr-row{display:flex;gap:8px;flex-wrap:wrap}
+.ship-addr-row input{flex:1 1 90px}
+.ship-table td a{color:#1848B8}
+@media (max-width:640px){.ship-grid{grid-template-columns:1fr}.ship-rate{grid-template-columns:auto 1fr auto}
+  .ship-rate .muted{display:none}}
+</style>`;
+
+/* One click, one purchase: the button greys out while the studio is asked, so
+   an impatient second tap cannot send a second request. The studio also refuses
+   to buy a label for an order that has one. */
+const SHIP_ONCE_JS = `<script>(function(){document.querySelectorAll('form[data-once]').forEach(function(f){
+f.addEventListener('submit',function(){var b=f.querySelector('button[type=submit]');if(!b)return;
+setTimeout(function(){b.disabled=true;b.textContent=b.getAttribute('data-busy')||'Working…';},0);});});})();</script>`;
+
+app.get('/admin/shipping', requireAdmin, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  let data;
+  try {
+    data = await shippingQueues({ fresh: true });
+  } catch (e) {
+    console.error('shipping page failed:', e.message);
+    return res.status(500).send(adminPage('Shipping', `${pageHeader('Shipping')}
+      <div class="card"><div class="warn">The shipping list could not be loaded (${escEmail(e.message)}).
+      Refresh to try again.</div></div>`, 'shipping'));
+  }
+  const { feed, studio, quotes } = data;
+  const flash = _shipFlash.get(String(req.query.flash || '')) || null;
+
+  /* Label prices asked for on this load, for one order. */
+  let rates = null;
+  const want = parseShipRef(req.query.rates);
+  if (want) {
+    const oz = SHIP.ouncesFrom(req.query.lb, req.query.oz);
+    const box = Object.prototype.hasOwnProperty.call(SHIP.DEFAULT_BOXES, String(req.query.box || ''))
+      ? String(req.query.box) : SHIP.boxFor(oz || 0);
+    rates = { ref: want.ref, oz, box, list: [], shipment: '', error: '' };
+    let payload = null;
+    if (!oz) {
+      rates.error = 'Enter the weight of the packed parcel, in pounds and ounces (up to 70 lb).';
+    } else if (want.kind === 'studio') {
+      payload = { action: 'rates', order_id: want.id, oz, box };
+    } else {
+      const q = quotes.toShip.find((j) => j.code === want.code);
+      const to = q && SHIP.cleanShipTo(q.ship_to, q.name);
+      if (!q) rates.error = 'That job is not waiting for a label.';
+      else if (SHIP.shipToProblems(to).length) rates.error = 'Add the delivery address first.';
+      else payload = { action: 'rates', quote: want.code, oz, box,
+                       to: Object.assign({}, to, { phone: q.phone || '', email: q.email || '' }) };
+    }
+    if (payload) {
+      const { body } = await studioShip(payload, 30000);
+      if (body && body.ok && Array.isArray(body.rates) && body.rates.length) {
+        rates.list = body.rates;
+        rates.shipment = String(body.shipment || '');
+        if (body.box) rates.box = String(body.box);
+      } else {
+        rates.error = (body && body.error) || 'No label prices came back. Try again in a minute.';
+      }
+    }
+  }
+
+  const tag = (kind) => (o) => ({ kind, o });
+  const byWait = (a, b) => (b.o.waitingDays || 0) - (a.o.waitingDays || 0);
+  const toShip = [...studio.toShip.map(tag('studio')), ...quotes.toShip.map(tag('quote'))].sort(byWait);
+  const labelled = [...studio.labelled.map(tag('studio')), ...quotes.labelled.map(tag('quote'))].sort(byWait);
+  const pickups = studio.pickups.map(tag('studio'));
+  const held = studio.held.map(tag('studio'));
+  const shipped = [...studio.shipped.map(tag('studio')), ...quotes.shipped.map(tag('quote'))]
+    .sort((a, b) => (a.o.shippedDays || 0) - (b.o.shippedDays || 0));
+  const oldest = Math.max(0, ...toShip.map((x) => x.o.waitingDays || 0));
+  const section = (title, list, hint) => list.length ? `
+    <h2 class="sec-h">${escEmail(title)} <span class="n">${list.length}</span>${
+      hint ? `<span class="muted" style="font-weight:500;font-size:12.5px">${hint}</span>` : ''}</h2>
+    <div class="grid-cards">${list.map((x) => shipCardHtml(x, rates)).join('')}</div>` : '';
+
+  const shippedRows = shipped.map(({ kind, o }) => {
+    const lbl = kind === 'studio' ? (o.label || {}) : (o.ship_label || {});
+    const tracking = String(lbl.tracking || o.tracking || '');
+    const link = shipUrlOk(lbl.tracking_url) ? lbl.tracking_url
+      : tracking ? `https://www.google.com/search?q=${encodeURIComponent(tracking)}` : '';
+    return `<tr>
+      <td>${kind === 'studio' ? `Studio #${Number(o.id)}` : `Quote ${escEmail(o.code)}`}</td>
+      <td>${escEmail(o.name || '')}</td>
+      <td>${o.delivery && o.delivery.method === 'pickup' ? 'Pickup' : escEmail(lbl.name || 'Shipped')}</td>
+      <td>${tracking ? (link ? `<a href="${escEmail(link)}" target="_blank" rel="noopener">${escEmail(tracking)}</a>`
+        : escEmail(tracking)) : '<span class="muted">—</span>'}</td>
+      <td class="num">${o.shippedDays === 0 ? 'today' : `${Number(o.shippedDays)}d ago`}</td></tr>`;
+  }).join('');
+
+  const nothing = !toShip.length && !labelled.length && !pickups.length && !held.length;
+  res.send(adminPage('Shipping', `${SHIP_CSS}
+    ${pageHeader('Shipping', 'Paid orders waiting to go out. Get the label prices, buy the label, print it, and mark it shipped once it has gone &mdash; that is what emails the customer their tracking.')}
+    ${flash ? `<div class="${flash.tone === 'ok' ? 'ok' : 'warn'}">${flash.ref
+      ? `<a href="#${escEmail(flash.ref)}" style="color:inherit"><b>${escEmail(flash.ref.replace('studio-', 'Studio order #').replace('quote-', 'Quote '))}</b></a>: ` : ''}${escEmail(flash.text)}</div>` : ''}
+    ${feed.error ? `<div class="warn">Studio orders could not be loaded just now (${escEmail(feed.error)}). ${
+      feed.orders.length ? 'This is the last list that loaded.' : 'None are shown, which does not mean there are none.'}</div>` : ''}
+    ${statTiles([
+      { label: 'To ship', value: String(toShip.length), tone: oldest >= 7 ? 'red' : toShip.length ? 'amber' : 'green',
+        sub: !toShip.length ? 'nothing waiting' : oldest === 0 ? 'paid today'
+          : `oldest waiting ${oldest} day${oldest === 1 ? '' : 's'}` },
+      { label: 'Labels to mark shipped', value: String(labelled.length), tone: labelled.length ? 'amber' : 'green',
+        sub: labelled.length ? 'the customer has no tracking yet' : 'none' },
+      { label: 'Pickups to get ready', value: String(pickups.length), tone: pickups.length ? 'blue' : 'green',
+        sub: pickups.length ? 'mark each ready when it is' : 'none' },
+      held.length ? { label: 'Held for a tax certificate', value: String(held.length), tone: 'red',
+        href: '/admin/certificates?status=pending', sub: 'check the certificate before it goes' } : null,
+    ])}
+    ${nothing ? emptyState('Nothing is waiting to go out. Every paid order has shipped or been collected.') : ''}
+    ${section('To ship', toShip, 'oldest first')}
+    ${section('Labels bought — mark shipped once it has gone', labelled)}
+    ${section('Pickups', pickups)}
+    ${section('Held — tax certificate to check', held)}
+    ${shippedRows ? `<h2 class="sec-h">Shipped in the last 30 days <span class="n">${shipped.length}</span></h2>
+      <div class="card" style="overflow-x:auto"><table class="dt ship-table"><thead><tr>
+        <th>Order</th><th>Customer</th><th>How</th><th>Tracking</th><th class="num">When</th></tr></thead>
+        <tbody>${shippedRows}</tbody></table></div>` : ''}
+    ${SHIP_ONCE_JS}`, 'shipping'));
+});
+
+/* Buy the label for one order, through the studio. The studio re-reads the
+   shipment from Shippo, checks the rate is one of its own and goes to this
+   order's address, buys under a lock, and answers an order that already has a
+   label with that label: two taps, or a retry after a timeout, never buy two. */
+app.post('/admin/shipping/buy', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const r = parseShipRef(b.ref);
+  if (!r) return shipBack(res, '', 'err', 'That order is not one this page knows.');
+  const shipment = String(b.shipment || '');
+  const rate = String(b.rate || '');
+  const file = Object.prototype.hasOwnProperty.call(SHIP.DEFAULT_FILES, String(b.file || '')) ? String(b.file) : 'PDF';
+  if (!/^[A-Za-z0-9_-]{8,64}$/.test(shipment) || !/^[A-Za-z0-9_-]{8,64}$/.test(rate)) {
+    return shipBack(res, r.ref, 'err', 'Pick one of the label prices first.');
+  }
+  try {
+    let payload;
+    if (r.kind === 'studio') {
+      payload = { action: 'buy', order_id: r.id, shipment, rate, file };
+    } else {
+      const { rows } = await pool.query('SELECT * FROM quotes WHERE code = $1', [r.code]);
+      const q = rows[0];
+      const state = q ? SHIP.quoteShipState(q) : 'gone';
+      if (state === 'labelled') return shipBack(res, r.ref, 'ok', 'It already has a label: print it below.');
+      if (state !== 'to-ship' && state !== 'pending') {
+        return shipBack(res, r.ref, 'err', `This job is not waiting for a label (${state.replace('-', ' ')}).`);
+      }
+      const to = SHIP.cleanShipTo(q.ship_to, q.name);
+      if (SHIP.shipToProblems(to).length) return shipBack(res, r.ref, 'err', 'Add the delivery address first.');
+      payload = { action: 'buy', quote: r.code, shipment, rate, file,
+                  to: Object.assign({}, to, { phone: q.phone || '', email: q.email || '' }) };
+    }
+    const { body, timedOut } = await studioShip(payload, 75000);
+    _studioCache.at = 0;
+    if (body && body.label && body.label.label_url) {
+      if (r.kind === 'quote') await keepQuoteLabel(r.code, body.label);
+      console.log(`shipping: label ${body.already ? 'already on' : 'bought for'} ${r.ref}`);
+      return shipBack(res, r.ref, 'ok', body.already
+        ? 'It already had a label, so no second one was bought. Print it below.'
+        : `Label bought: ${body.label.name || 'label'}${body.label.amount != null ? ', ' + money(body.label.amount) : ''}. Print it, and mark it shipped once it has gone.`);
+    }
+    if (body && body.pending) {
+      if (r.kind === 'quote') {
+        await pool.query(`UPDATE quotes SET ship_label = $2::jsonb WHERE code = $1 AND (ship_label IS NULL OR ship_label->>'label_url' IS NULL)`,
+          [r.code, JSON.stringify({ pending: String(body.txn || '') })]);
+      }
+      return shipBack(res, r.ref, 'warn', 'Shippo is still making the label. Check on it in a minute — do not buy another.');
+    }
+    if (timedOut) {
+      return shipBack(res, r.ref, 'warn', 'The studio did not answer in time, so the label may or may not have been bought. Check on the label before buying: buying again returns the same label, never a second.');
+    }
+    return shipBack(res, r.ref, 'err', (body && body.error) || 'The label was not bought.');
+  } catch (e) {
+    console.error('shipping buy failed:', e.message);
+    return shipBack(res, r.ref, 'err', 'Something went wrong here before the studio was asked. Nothing was bought.');
+  }
+});
+
+/** Keep a quote's label, and its tracking number when the job has none yet. */
+async function keepQuoteLabel(code, label) {
+  await pool.query(
+    `UPDATE quotes SET ship_label = $2::jsonb,
+            tracking = CASE WHEN COALESCE(tracking, '') = '' THEN NULLIF($3, '') ELSE tracking END
+      WHERE code = $1`,
+    [code, JSON.stringify(label), String(label.tracking || '').slice(0, 120)]);
+}
+
+/* Where a label bought earlier stands: finished, still being made by Shippo, or
+   none. Buys nothing. For a quote, a label the studio holds and this job does
+   not (a buy that timed out here but finished there) is kept now. */
+app.post('/admin/shipping/check', requireAdmin, async (req, res) => {
+  const r = parseShipRef((req.body || {}).ref);
+  if (!r) return shipBack(res, '', 'err', 'That order is not one this page knows.');
+  const { body } = await studioShip(r.kind === 'studio'
+    ? { action: 'label', order_id: r.id } : { action: 'label', quote: r.code }, 30000);
+  _studioCache.at = 0;
+  try {
+    if (body && body.label && body.label.label_url) {
+      if (r.kind === 'quote') await keepQuoteLabel(r.code, body.label);
+      return shipBack(res, r.ref, 'ok', 'The label is ready. Print it below.');
+    }
+    if (body && body.pending) return shipBack(res, r.ref, 'warn', 'Shippo is still making it. Check again in a minute.');
+    if (body && body.none) {
+      if (r.kind === 'quote') {
+        await pool.query(`UPDATE quotes SET ship_label = NULL WHERE code = $1 AND ship_label->>'label_url' IS NULL`, [r.code]);
+      }
+      return shipBack(res, r.ref, 'ok', 'No label was bought. Get the prices and buy one.');
+    }
+  } catch (e) {
+    console.error('shipping check failed:', e.message);
+  }
+  return shipBack(res, r.ref, 'err', (body && body.error) || 'The studio could not say.');
+});
+
+/* Out of the door, or ready to collect: the customer is told, once. A shipped
+   order needs a label or a tracking number first; a pickup needs neither. */
+app.post('/admin/shipping/shipped', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const r = parseShipRef(b.ref);
+  if (!r) return shipBack(res, '', 'err', 'That order is not one this page knows.');
+  const typed = String(b.tracking || '').replace(/\s+/g, '').slice(0, 100);
+  if (typed && !/^[A-Za-z0-9-]{6,100}$/.test(typed)) {
+    return shipBack(res, r.ref, 'err', 'That tracking number has characters a tracking number never has.');
+  }
+  try {
+    if (r.kind === 'studio') {
+      const { body } = await studioShip({ action: 'shipped', order_id: r.id, tracking: typed }, 30000);
+      _studioCache.at = 0;
+      if (!body || !body.ok) return shipBack(res, r.ref, 'err', (body && body.error) || 'It was not marked shipped.');
+      if (body.already) return shipBack(res, r.ref, 'ok', 'It was already marked shipped, so nobody was emailed twice.');
+      const told = body.emailed ? '' : ' The email to them did not go out: tell them yourself.';
+      return shipBack(res, r.ref, body.emailed ? 'ok' : 'warn', (body.pickup
+        ? 'Marked ready. They have been emailed that it is ready to pick up.'
+        : 'Marked shipped. They have been emailed their tracking.') + told);
+    }
+    const { rows } = await pool.query('SELECT * FROM quotes WHERE code = $1', [r.code]);
+    const q = rows[0];
+    const state = q ? SHIP.quoteShipState(q) : 'gone';
+    if (state === 'shipped') return shipBack(res, r.ref, 'ok', 'It was already marked shipped, so nobody was emailed twice.');
+    if (!['to-ship', 'labelled', 'pending'].includes(state)) {
+      return shipBack(res, r.ref, 'err', `This job is not waiting to ship (${state.replace('-', ' ')}).`);
+    }
+    const label = q.ship_label && q.ship_label.label_url ? q.ship_label : null;
+    const tracking = typed || String((label && label.tracking) || '') || String(q.tracking || '');
+    if (!label && !tracking) {
+      return shipBack(res, r.ref, 'err', 'Buy the label first, or enter the tracking number from the postage you bought.');
+    }
+    if (tracking && tracking !== String(q.tracking || '')) {
+      await pool.query('UPDATE quotes SET tracking = $2 WHERE code = $1', [r.code, tracking]);
+    }
+    /* The board's own move: the same "has shipped" message with its tracking,
+       and the review ask moved to after it arrives. */
+    await moveJobToStage(r.code, SHIP_STAGE_OUT);
+    return shipBack(res, r.ref, 'ok', 'Marked shipped. They have been emailed their tracking.');
+  } catch (e) {
+    console.error('mark shipped failed:', e.message);
+    return shipBack(res, r.ref, 'err', 'Something went wrong marking it shipped. Refresh and check before trying again.');
+  }
+});
+
+/* A quote job's delivery address, typed by the shop. Refused once a label is
+   bought: that label goes to the old address, and changing the words here
+   would not change where the parcel goes. */
+app.post('/admin/shipping/address', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const r = parseShipRef(b.ref);
+  if (!r || r.kind !== 'quote') return shipBack(res, '', 'err', 'Only a quote job’s address is kept here.');
+  try {
+    const { rows } = await pool.query('SELECT name, ship_label FROM quotes WHERE code = $1', [r.code]);
+    if (!rows.length) return shipBack(res, '', 'err', 'There is no such quote.');
+    if (rows[0].ship_label && (rows[0].ship_label.label_url || rows[0].ship_label.pending)) {
+      return shipBack(res, r.ref, 'err', 'A label was already bought for the old address. Void it on goshippo.com first.');
+    }
+    const a = SHIP.cleanShipTo({ name: b.name, street1: b.street1, street2: b.street2, city: b.city, state: b.state, zip: b.zip },
+      rows[0].name);
+    const gaps = SHIP.shipToProblems(a);
+    if (gaps.length) return shipBack(res, r.ref, 'err', `The address still needs: ${gaps.join(', ')}.`);
+    await pool.query('UPDATE quotes SET ship_to = $2::jsonb WHERE code = $1', [r.code, JSON.stringify(a)]);
+    return shipBack(res, r.ref, 'ok', 'Address saved. Get the label prices next.');
+  } catch (e) {
+    console.error('shipping address failed:', e.message);
+    return shipBack(res, r.ref, 'err', 'The address was not saved. Try again.');
+  }
 });
 
 /* Enter what a job cost. Blank fields are left alone rather than zeroed, so
