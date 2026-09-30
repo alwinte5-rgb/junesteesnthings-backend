@@ -8358,6 +8358,9 @@ ${quotePricingSource()}
           }
           else el.value = '';
         });
+        /* cloneNode copies attributes but not listeners: a copied "already
+           bound" mark would leave the new item's selects with none. */
+        tpl.querySelectorAll('[data-qty-bound]').forEach(function(el){ delete el.dataset.qtyBound; });
         var oh = tpl.querySelector('.opthelp');
         if (oh) oh.open = false;
         tpl.querySelector('.lt').textContent = '—';
@@ -8525,6 +8528,19 @@ ${uploadStatusScript()}
         /* Remove clears the fee AND remembers that it was cleared, so editing
            the date afterwards does not quietly put it back. Typing a figure in
            by hand lifts that. */
+        /* Picking a product or a decoration on an item with no quantity fills
+           in 1, so the item shows the price it will be saved at. Bound once
+           per select (bind() runs again for every added item), and only on a
+           pick: filling it in on every recalculation would stop anyone
+           clearing the box to type a new number. */
+        document.querySelectorAll('.line .p, .line .m').forEach(function(sel){
+          if (sel.dataset.qtyBound) return;
+          sel.dataset.qtyBound = '1';
+          sel.addEventListener('change', function(){
+            var q = sel.closest('.line').querySelector('.q');
+            if (sel.value && q && !String(q.value).trim()) { q.value = '1'; calc(); }
+          });
+        });
         var rc = document.getElementById('rushclear');
         var rb = document.getElementById('rushpct');
         if (rc && rb && !rc.dataset.rushBound) {
@@ -8829,7 +8845,11 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
       const priceTyped = String(one(b['unit_price' + i]) || '').trim() !== '';
       const sizeTyped = String(one(b['sizemix' + i]) || '').trim() !== '';
       const detailTyped = String(one(b['details' + i]) || '').trim() !== '';
-      if (!desc && !qty && !prod && !priceTyped && !sizeTyped && !detailTyped) continue;
+      /* A decoration picked counts too. A cutout pack is priced by its method
+         alone, with no product, and one added with nothing typed was dropped
+         here without a word while the form still showed it (2026-09-30). It
+         prices as one, the same fallback the quantity below already uses. */
+      if (!desc && !qty && !prod && !method && !method2 && !priceTyped && !sizeTyped && !detailTyped) continue;
 
       /* Size mix, when the product has sizes. The upcharge those extended sizes
          carry is applied by the pricing engine, from this mix and the product's
