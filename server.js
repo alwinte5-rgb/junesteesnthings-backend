@@ -3409,15 +3409,25 @@ function isSpamName(name) {
 
 const FORM_TOKEN_WINDOW_S = 30 * 60;
 
+/* The key form tokens are signed with. It once fell back to a fixed string: with
+   both variables missing, every token could be forged by anyone who read this
+   file. Now a missing key is a random one for this process — unguessable, and
+   the enquiry forms keep working; tokens just stop matching across a restart
+   or a second instance, so it is logged loudly to get the variable set. */
+const FORM_TOKEN_KEY = process.env.FORM_TOKEN_SECRET || process.env.ADMIN_PASSWORD || (() => {
+  console.error('FORM_TOKEN_SECRET (and ADMIN_PASSWORD) are not set — form tokens use a random key until restart. Set FORM_TOKEN_SECRET on Railway.');
+  return crypto.randomBytes(32).toString('hex');
+})();
+
 function generateFormToken() {
-  const secret = process.env.FORM_TOKEN_SECRET || process.env.ADMIN_PASSWORD || 'dev-insecure';
+  const secret = FORM_TOKEN_KEY;
   const window = Math.floor(Date.now() / 1000 / FORM_TOKEN_WINDOW_S);
   return crypto.createHmac('sha256', secret).update(String(window)).digest('hex');
 }
 
 function isValidFormToken(token) {
   if (!token || typeof token !== 'string') return false;
-  const secret = process.env.FORM_TOKEN_SECRET || process.env.ADMIN_PASSWORD || 'dev-insecure';
+  const secret = FORM_TOKEN_KEY;
   for (let offset = 0; offset <= 1; offset++) {
     const window = Math.floor(Date.now() / 1000 / FORM_TOKEN_WINDOW_S) - offset;
     const expected = crypto.createHmac('sha256', secret).update(String(window)).digest('hex');
