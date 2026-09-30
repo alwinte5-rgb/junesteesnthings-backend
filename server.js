@@ -13469,7 +13469,8 @@ app.post('/quote/:code/cancel', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('cancel failed:', err.message);
   }
-  res.redirect('/quotes');
+  // Back where it was cancelled from: the job page sends 'production'.
+  res.redirect(String((req.body && req.body.back) || '') === 'production' ? '/production' : '/quotes');
 });
 
 app.post('/quote/:code/uncancel', requireAdmin, async (req, res) => {
@@ -13497,7 +13498,8 @@ app.post('/quote/:code/uncancel', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('uncancel failed:', err.message);
   }
-  res.redirect('/quotes');
+  // Back where it was restored from: the Orders page sends 'orders'.
+  res.redirect(String((req.body && req.body.back) || '') === 'orders' ? '/orders' : '/quotes');
 });
 
 app.post('/quote/:code/settle', requireAdmin, async (req, res) => {
@@ -14567,6 +14569,26 @@ function studioOrdersSection(feed, { heading = true, disputes = null } = {}) {
     ${warn}${rows}${empty}`;
 }
 
+/* The cancel form, wherever a job is looked at: the money board and the job
+   page. One copy, so the warning about money already paid reads the same in
+   both. `back` says where to land afterwards; the cancel route knows only
+   'production', and anything else returns to the money board as before. */
+function cancelOrderForm(q, back = '') {
+  return `
+        <form id="cx-${q.code}" method="POST" action="/quote/${q.code}/cancel"
+              style="display:none;margin-top:10px;background:#fef4f4;border:1px solid #f3c8c8;border-radius:10px;padding:12px"
+              onsubmit="return confirm('Cancel ${q.code}? It leaves the board and all reminders stop. You can restore it later.')">
+          ${back ? `<input type="hidden" name="back" value="${escEmail(back)}">` : ''}
+          <div style="font-weight:700;color:#b91c1c;margin-bottom:4px">Cancel this order</div>
+          <p class="muted" style="margin:0 0 8px;font-size:12.5px">It comes off the board and every reminder stops.
+            Nothing is deleted &mdash; the record and any payments stay, and you can restore it.${
+            Number(q.paid_amount || 0) > 0 ? ` <b style="color:#b45309">${money(q.paid_amount)} has been paid on this job — refund it separately.</b>` : ''}</p>
+          <input name="reason" maxlength="200" placeholder="Why — e.g. customer cancelled"
+                 style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">
+          <button type="submit" class="btn" style="padding:7px 16px;font-size:13px;background:#b91c1c">Cancel the order</button>
+        </form>`;
+}
+
 async function renderBoard(VIEW, req, res) {
   try {
     /* The board showed the 200 most recent quotes and nothing else, so once the
@@ -14733,7 +14755,8 @@ async function renderBoard(VIEW, req, res) {
         ? quoteMessages(q).accepted.replace(/^Got it[^—]*—\s*/, '')
         : quoteMessages(q).followup) : '';
       const [bg, fg] = (colour[st] || colour.sent).split('|');
-      return `<div class="card">
+      /* The id is what the dashboard links to (/quotes#q-CODE). */
+      return `<div class="card" id="q-${q.code}">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
           <div>
             <a href="/customer?q=${encodeURIComponent(q.email || q.phone || '')}"
@@ -14788,18 +14811,7 @@ async function renderBoard(VIEW, req, res) {
           <button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px;color:#b91c1c"
              onclick="document.getElementById('cx-${q.code}').style.display='block';this.style.display='none'">Cancel order</button>`}
         </div>
-        ${q.cancelled_at ? '' : `
-        <form id="cx-${q.code}" method="POST" action="/quote/${q.code}/cancel"
-              style="display:none;margin-top:10px;background:#fef4f4;border:1px solid #f3c8c8;border-radius:10px;padding:12px"
-              onsubmit="return confirm('Cancel ${q.code}? It leaves the board and all reminders stop. You can restore it later.')">
-          <div style="font-weight:700;color:#b91c1c;margin-bottom:4px">Cancel this order</div>
-          <p class="muted" style="margin:0 0 8px;font-size:12.5px">It comes off the board and every reminder stops.
-            Nothing is deleted &mdash; the record and any payments stay, and you can restore it.${
-            Number(q.paid_amount || 0) > 0 ? ` <b style="color:#b45309">${money(q.paid_amount)} has been paid on this job — refund it separately.</b>` : ''}</p>
-          <input name="reason" maxlength="200" placeholder="Why — e.g. customer cancelled"
-                 style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">
-          <button type="submit" class="btn" style="padding:7px 16px;font-size:13px;background:#b91c1c">Cancel the order</button>
-        </form>`}
+        ${q.cancelled_at ? '' : cancelOrderForm(q)}
         ${outstanding > 0 ? `
         <form id="st-${q.code}" method="POST" action="/quote/${q.code}/settle"
               style="display:none;margin-top:10px;background:#fffbf2;border:1px solid #f0d9a8;border-radius:10px;padding:12px"
@@ -15086,6 +15098,13 @@ async function renderBoard(VIEW, req, res) {
        which is where you go to look something up. A dashboard is for what still
        needs doing; finished work on it is just noise you learn to scroll past. */
     const gDone = rows.filter(isDelivered);
+    /* Except delivered work the ledger still says is owed. Off the board it had
+       no Record a payment or Settle anywhere, so the balance could only sit
+       there, counted on the dashboard; the dashboard names each one and links
+       here. Refunded and disputed jobs are left out, as on the dashboard. */
+    const gOwedDone = gDone.filter((q) => q.accepted_at && balanceOf(q) > 0.005
+      && !(payByCode[q.code] || []).some((p) => p.kind === 'refund')
+      && !disputes.byQuote.has(q.code));
 
     /* A cart somebody started and did not finish.
        The five recovery emails already go out and already arrive; what was
@@ -15217,7 +15236,9 @@ async function renderBoard(VIEW, req, res) {
        to look something up. */
     const laneRight =
       group('Orders', 'deposit in — work in hand', gOrders) +
-      group('Open quotes', 'sent, nothing paid yet', gQuotes);
+      group('Open quotes', 'sent, nothing paid yet', gQuotes) +
+      group('Delivered, still owed', 'collect it, record a payment taken at pickup, or settle it', gOwedDone,
+            null, { accent: '#b45309' });
 
     /* Both lanes empty means an empty board; one empty lane is normal and still
        renders, so the two columns do not jump around as work moves between
@@ -15398,7 +15419,10 @@ async function renderBoard(VIEW, req, res) {
            drag is unreliable on the phone this is used on. */
         /* Accepted work only. An unaccepted quote is a sales problem and belongs
            on the Money board; putting it here is what made To start misleading. */
-        const live = rows.filter(q => !q.delivered_at && q.accepted_at);
+        /* Not cancelled either — the same jobs as liveJobs(), which the
+           dashboard counts. Without it a cancelled job stayed in its column,
+           and the only way off the board was to walk it through to Delivered. */
+        const live = rows.filter(q => !q.delivered_at && q.accepted_at && !q.cancelled_at);
         /* Delivered is a destination, not a column — a job that reaches it leaves
            the board, so rendering it produced an always-empty sixth column that
            wrapped onto a second row. The move buttons still target it by index. */
@@ -15749,6 +15773,12 @@ app.get('/production/:code', requireAdmin, async (req, res) => {
           <div data-bar style="height:100%;width:${Math.round(cl.done/cl.of*100)}%;background:#1848B8;transition:width .2s"></div></div>
         <span class="muted" style="font-size:11.5px" data-progress>${cl.done}/${cl.of}</span>
         <div style="margin-top:8px">${stepRows}</div>
+        ${q.cancelled_at ? '' : `
+        <div style="margin-top:12px;padding-top:10px;border-top:1px solid #eef1f6">
+          <button type="button" class="kbtn" style="font-size:12px;color:#b91c1c"
+             onclick="document.getElementById('cx-${q.code}').style.display='block';this.style.display='none'">Not going ahead? Cancel this job</button>
+          ${cancelOrderForm(q, 'production')}
+        </div>`}
       </div>
       ${certificateCard}
       ${messagesCard}
@@ -16329,6 +16359,16 @@ async function liveJobs() {
   return rows;
 }
 
+/* A job somebody still owes money on: accepted, not cancelled, a balance of at
+   least a cent. Refunded and disputed quotes are left out, for the reason the
+   balance reminders leave them out: a refund is booked as a negative payment,
+   so paid-versus-total reads money just given back as money owed. One
+   definition for the dashboard's figure and its list, so the two agree. */
+const OWING_JOBS_WHERE = `accepted_at IS NOT NULL AND cancelled_at IS NULL
+   AND total > COALESCE(paid_amount,0) + COALESCE(written_off,0) + 0.005
+   AND NOT EXISTS (SELECT 1 FROM quote_payments p WHERE p.quote_code = quotes.code AND p.kind = 'refund')
+   AND NOT EXISTS (SELECT 1 FROM stripe_disputes d WHERE d.quote_code = quotes.code)`;
+
 const REVIEWS_WAITING_SQL = `SELECT COUNT(*)::int AS n FROM reviews
   WHERE submitted_at IS NOT NULL AND deleted_at IS NULL AND moderated_at IS NULL AND approved IS NOT TRUE`;
 
@@ -16363,7 +16403,7 @@ app.get('/dashboard', requireAdmin, async (_req, res) => {
   const many = (sql, what, args) => safe(pool.query(sql, args).then((r) => r.rows), [], what);
 
   const [takings, owed, out, leads, jobs, reviewsWaiting, changes, disputes, unapplied, badTexts, recent, tax,
-         certsWaiting] =
+         certsWaiting, deliveredOwing] =
     await Promise.all([
       /* Quotes and everything else apart: the board's "Collected this month"
          and the Finances months count the quote ledger only, so the total here
@@ -16378,11 +16418,14 @@ app.get('/dashboard', requireAdmin, async (_req, res) => {
            + (SELECT COALESCE(SUM(amount),0) FROM unlinked_payments
                WHERE created_at >= date_trunc('month', NOW()) - interval '1 month' AND created_at < date_trunc('month', NOW()))
              AS last_month`, 'money'),
-      one(`SELECT COUNT(*)::int AS jobs,
+      /* "Jobs in hand" is work still being made. A delivered job that still
+         shows a balance is money to collect or a payment nobody recorded, so
+         it is counted apart: counted in, it made the tile say 7 jobs beside
+         In production's 2. */
+      one(`SELECT COUNT(*) FILTER (WHERE delivered_at IS NULL)::int AS jobs,
+                  COUNT(*) FILTER (WHERE delivered_at IS NOT NULL)::int AS delivered,
                   COALESCE(SUM(total - COALESCE(paid_amount,0) - COALESCE(written_off,0)),0) AS owed
-             FROM quotes
-            WHERE accepted_at IS NOT NULL AND cancelled_at IS NULL
-              AND total > COALESCE(paid_amount,0) + COALESCE(written_off,0) + 0.005`, 'owed'),
+             FROM quotes WHERE ${OWING_JOBS_WHERE}`, 'owed'),
       one(`SELECT COUNT(*)::int AS n, COALESCE(SUM(total),0) AS value FROM quotes
             WHERE accepted_at IS NULL AND cancelled_at IS NULL AND COALESCE(paid_amount,0) = 0
               AND status NOT IN ('expired', 'held') AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)`, 'quotes out'),
@@ -16408,6 +16451,9 @@ app.get('/dashboard', requireAdmin, async (_req, res) => {
             ORDER BY created_at DESC LIMIT 6`, 'recent payments'),
       safe(taxPositionByMonth(24), null, 'tax'),
       one(CERTS_WAITING_SQL, 'certificates'),
+      many(`SELECT code, name, total, paid_amount, written_off, delivered_at FROM quotes
+             WHERE ${OWING_JOBS_WHERE} AND delivered_at IS NOT NULL
+             ORDER BY delivered_at LIMIT 8`, 'delivered owing'),
     ]);
 
   const waiting = leads.filter((l) => l.lead_status === 'new');
@@ -16431,6 +16477,13 @@ app.get('/dashboard', requireAdmin, async (_req, res) => {
     ...changes.map((c) => ({ tone: 'blue', icon: 'edit',
       title: `${escEmail(c.name || c.code)} asked for a change`,
       sub: `&ldquo;${escEmail(String(c.change_request).slice(0, 90))}&rdquo;`, href: `/quote/${escEmail(c.code)}/edit` })),
+    /* Delivered, and the books still say they owe. Either money to collect or
+       a payment taken at pickup that was never recorded — both are fixed on
+       the job's card: Record a payment, or Settle. */
+    ...deliveredOwing.map((q) => ({ tone: 'amber', icon: 'dollar',
+      title: `${escEmail(q.name || q.code)} still shows ${money(balanceOf(q))} owed`,
+      sub: `delivered ${escEmail(dayShort(q.delivered_at))} &middot; ${escEmail(q.code)} &middot; record what they paid, or settle it`,
+      href: `/quotes#q-${escEmail(q.code)}` })),
     ...unapplied.map((u) => ({ tone: 'amber', icon: 'card',
       title: `${money(u.amount)} paid in Stripe, not on a quote`,
       sub: `${escEmail(u.customer_name || u.customer_email || 'no name')} &middot; apply it from Record a payment`,
@@ -16471,7 +16524,8 @@ app.get('/dashboard', requireAdmin, async (_req, res) => {
           ? `quotes ${money(takings.quotes_month)} &middot; studio &amp; other ${money(takings.other_month)}`
           : `last month ${money(takings.last_month)}` },
       { label: 'Owed to you', value: money(owed.owed), tone: 'amber', href: '/orders',
-        sub: `on ${owed.jobs || 0} job${owed.jobs === 1 ? '' : 's'} in hand` },
+        sub: `on ${owed.jobs || 0} job${owed.jobs === 1 ? '' : 's'} in hand` +
+             (owed.delivered ? ` and ${owed.delivered} delivered` : '') },
       { label: 'Quotes out', value: String(out.n || 0), tone: 'blue', href: '/quotes',
         sub: `${money(out.value)} waiting on a yes` },
       { label: 'New leads', value: String(waiting.length), href: '/leads',
@@ -16554,7 +16608,11 @@ app.get('/orders', requireAdmin, async (req, res) => {
       .some((v) => String(v || '').toLowerCase().includes(needle));
     const shown = rows.filter(hit);
 
+    /* A delivered job that still shows a balance says so: plain "delivered"
+       hid exactly the money the dashboard's Owed to you (which links here)
+       was counting. */
     const label = (o) => o.cancelled_at ? ['cancelled', '#b91c1c']
+      : o.delivered_at && balanceOf(o) > 0 ? ['delivered · ' + money(balanceOf(o)) + ' still owed', '#b45309']
       : o.delivered_at ? ['delivered', '#166534']
       : balanceOf(o) > 0 ? ['balance due ' + money(balanceOf(o)), '#b45309']
       : ['paid', '#1848B8'];
@@ -16569,7 +16627,17 @@ app.get('/orders', requireAdmin, async (req, res) => {
         <td style="padding:9px 6px;font-size:13px">${escEmail(quoteSummary(o.items) || '—')}</td>
         <td class="num" style="padding:9px 6px;white-space:nowrap">${money(quoteTotals(o).total)}</td>
         <td class="num" style="padding:9px 6px;white-space:nowrap">${money(o.paid_amount || 0)}</td>
-        <td style="padding:9px 6px;white-space:nowrap"><span style="color:${colour};font-size:12.5px;font-weight:600">${escEmail(text)}</span></td>
+        <td style="padding:9px 6px;white-space:nowrap"><span style="color:${colour};font-size:12.5px;font-weight:600">${escEmail(text)}</span>${
+          /* The one place a cancelled job is listed, so the one place it can
+             come back from. The cancel form and the paid-after-cancelling
+             alert both promise a Restore; the board no longer draws cancelled
+             cards, so without this there was none to press. */
+          o.cancelled_at ? `
+          <form method="POST" action="/quote/${o.code}/uncancel" style="display:inline;margin-left:6px"
+                onsubmit="return confirm('Put ${o.code} back on the board?')">
+            <input type="hidden" name="back" value="orders">
+            <button type="submit" class="kbtn" style="font-size:11.5px;padding:2px 9px">Restore</button>
+          </form>` : ''}</td>
         <td class="muted" style="padding:9px 6px;white-space:nowrap;font-size:12.5px">${
           d(o.paid_at || o.delivered_at || o.created_at)}</td>
       </tr>`;
