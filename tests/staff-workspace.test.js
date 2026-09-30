@@ -270,7 +270,7 @@ test('the owner is named by OWNER_EMAILS, a helper by an active staff row, anyon
 });
 
 test('a state-changing request from another site is refused before anything else', () => {
-  assert.ok(requireAdminSrc.indexOf('SITE_ORIGINS.includes(origin)') < requireAdminSrc.indexOf('verifyAccessToken'));
+  assert.ok(requireAdminSrc.indexOf('fromAnotherSite(req)') < requireAdminSrc.indexOf('verifyAccessToken'));
 });
 
 test('a page reached around Cloudflare is sent to the guarded address, never to one from the request', () => {
