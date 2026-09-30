@@ -145,7 +145,11 @@ test('a cancellation can be undone', () => {
   assert.match(src, /app\.post\('\/quote\/:code\/uncancel', requireAdmin/);
   const route = src.slice(src.indexOf("app.post('/quote/:code/uncancel'"));
   assert.match(route, /cancelled_at = NULL, cancel_reason = NULL/);
-  assert.match(route, /CASE WHEN accepted_at IS NOT NULL THEN 'accepted' ELSE 'sent' END/,
+  /* Accepted if they accepted OR paid — money on a quote counts as accepting
+     wherever a payment lands, and one paid while cancelled was never marked
+     accepted (paid-after-cancel.test.js). Both are recorded facts. */
+  assert.match(route,
+    /CASE WHEN accepted_at IS NOT NULL OR COALESCE\(paid_amount, 0\) > 0\s+THEN 'accepted' ELSE 'sent' END/,
     'restoring must not invent a status that was never recorded');
 });
 

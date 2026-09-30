@@ -9402,6 +9402,44 @@ ${quotePricingSource()}
   }
 });
 
+/* Switch off a Checkout Session that could still take money.
+
+   A session stays payable for 24 hours after it is made, whatever happens to
+   the quote meanwhile. Pressing Pay again made a new one and left the old one
+   open, so a customer with two tabs could pay twice; cancelling a quote left
+   its open session payable too, and the money landed on a dead job. So the
+   quote's last session is closed before a new one is made, and when the quote
+   is cancelled.
+
+   Best effort, and never throws: a payment page must not fail because an old
+   one could not be closed, and the overpayment and paid-after-cancelling
+   alerts still catch anything that gets through. Stripe answers 400 for a
+   session already paid or expired, which is the usual case and means nothing
+   was open, and 404 for one it has no record of — a cs_test_ id stored before
+   the live key went in (2026-07-13) — which means the same. Only other
+   failures are reported. */
+async function expireCheckoutSession(id) {
+  const secret = process.env.STRIPE_SECRET_KEY;
+  const sid = String(id || '');
+  if (!secret || !/^cs_[A-Za-z0-9_]+$/.test(sid)) return false;
+  try {
+    const r = await fetch(`https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(sid)}/expire`, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + secret },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (r.ok) return true;
+    if (r.status !== 400 && r.status !== 404) {
+      const d = await r.json().catch(() => ({}));
+      reportError('stripe:expire-session',
+        new Error(`HTTP ${r.status}: ${(d && d.error && d.error.message) || 'no message'}`), sid).catch(() => {});
+    }
+  } catch (err) {
+    reportError('stripe:expire-session', err, sid).catch(() => {});
+  }
+  return false;
+}
+
 /* Card / Apple Pay via Stripe Checkout.
    Uses the REST API directly rather than adding the stripe package — one
    form-encoded POST is all a Checkout Session needs, and Apple Pay + Google Pay
@@ -9514,6 +9552,15 @@ app.get(['/q/:code/pay/card', '/q/:code/pay/balance', '/q/:code/pay/full'], asyn
        Google Pay appear automatically on supported devices, and PayPal, Link,
        Cash App Pay or Klarna can be switched on there without touching code. */
     form.set('automatic_tax[enabled]', 'false');
+
+    /* One payable page per quote: the last one made is closed before the new
+       one exists, so two open pages cannot both take the same money. It is
+       forgotten first, so the expiry Stripe reports for it reads as replaced
+       rather than as a customer who gave up (checkout.session.expired). */
+    if (q.stripe_session) {
+      await pool.query('UPDATE quotes SET stripe_session = NULL WHERE id = $1', [q.id]).catch(() => {});
+      await expireCheckoutSession(q.stripe_session);
+    }
 
     const r = await fetch('https://api.stripe.com/v1/checkout/sessions', {
       method: 'POST',
@@ -9870,6 +9917,32 @@ async function bankStripeSession(session) {
   });
 
   if (res.duplicate) return { ok: true, duplicate: true };
+
+  /* Paid after the quote was cancelled: a card page opened before the
+     cancellation, still open in a tab. A cancelled quote cannot open a new one
+     and cancelling closes the last one it made, so this is what gets past
+     both. The money is banked, because it is real and the books have to show
+     it, but it does not bring the job back. Nothing that follows a live sale
+     happens: no status change, no receipt or text telling the customer they
+     are on the schedule, no CRM event, no review ask. The shop is told and
+     decides: refund it, or restore the quote. The same rule bookChargeNow()
+     applies to a payment taken in Stripe that names a cancelled quote. */
+  if (rows[0].cancelled_at) {
+    const pi = typeof session.payment_intent === 'string' ? session.payment_intent : '';
+    await alertShop(`⚠ Paid after cancelling — quote ${code}, ${money(gross)}`,
+      `<h2 style="color:#b91c1c">A cancelled quote was paid</h2>
+       <p>${escEmail(rows[0].name || 'The customer')} paid <b>${money(gross)}</b> by card for quote
+          <b>${escEmail(code)}</b>, which is cancelled${rows[0].cancel_reason
+            ? ` (${escEmail(rows[0].cancel_reason)})` : ''}. They paid on a card page opened before it
+          was cancelled.</p>
+       <p>The money is on the quote and the job is still cancelled. The customer has had Stripe's
+          receipt and nothing from the shop.</p>
+       <p><b>Refund it in Stripe</b>, or if the job is back on, press <b>Restore</b> on the quote and
+          let them know.</p>
+       <p><a href="${quoteLink(code)}">${quoteLink(code)}</a></p>
+       ${pi ? `<p><a href="https://dashboard.stripe.com/payments/${encodeURIComponent(pi)}">Open in Stripe &rarr;</a></p>` : ''}`);
+    return { ok: true, duplicate: false, paid: res.paid, cancelled: true };
+  }
 
   await pool.query(
     `UPDATE quotes SET status='accepted', accepted_at=COALESCE(accepted_at,NOW()),
@@ -11097,6 +11170,7 @@ async function handleStripeEvent(event) {
         const out = await bankStripeSession(obj);
         console.log(`Stripe ${event.type} for ${obj.client_reference_id}: ` +
           (out.duplicate ? 'already banked (redirect won the race)' :
+           out.cancelled ? `banked ${money(out.paid)} on a CANCELLED quote, shop told` :
            out.ok ? `banked ${money(out.paid)}` : `skipped — ${out.reason}`));
 
         /* A completed session that did NOT bank to a quote is still money that
@@ -11202,11 +11276,18 @@ async function handleStripeEvent(event) {
         const code = String(obj.client_reference_id || '').toUpperCase();
         if (!QUOTE_CODE_RE.test(code)) break;
         const { rows } = await pool.query(
-          `SELECT code,name,total,paid_amount,written_off FROM quotes WHERE code=$1`, [code]);
+          `SELECT code,name,total,paid_amount,written_off,cancelled_at,stripe_session
+             FROM quotes WHERE code=$1`, [code]);
         const q = rows[0];
         // Only worth a nudge if they still owe — an expired session on a
         // fully paid quote is just an abandoned second tab.
         if (!q || balanceOf(q) <= 0) break;
+        /* Nor when the page was closed on purpose. Cancelling a quote closes
+           its open page, and pressing Pay again closes the last one before
+           making a new one (expireCheckoutSession). Stripe reports both as
+           expired, and neither is a customer who gave up — a nudge there would
+           send the shop chasing a cancelled job, or a customer mid-payment. */
+        if (q.cancelled_at || q.stripe_session !== obj.id) break;
         console.log(`Stripe checkout expired for ${code} — customer did not finish paying`);
         await alertShop(`🛒 Checkout abandoned — quote ${code}`,
           `<p>${escEmail(q.name || 'A customer')} opened the payment page for quote
@@ -12797,6 +12878,9 @@ app.post('/quote/:code/cancel', requireAdmin, async (req, res) => {
       [code, reason || null]);
     // Its Brevo deal moves to lost, rather than staying open in the pipeline.
     if (rows.length) syncDealStage(rows[0]).catch(() => {});
+    /* A card page the customer opened before now could still be paid, and
+       the money would land on a job that no longer exists. Close it. */
+    if (rows.length && rows[0].stripe_session) await expireCheckoutSession(rows[0].stripe_session);
   } catch (err) {
     console.error('cancel failed:', err.message);
   }
@@ -12809,10 +12893,17 @@ app.post('/quote/:code/uncancel', requireAdmin, async (req, res) => {
   try {
     /* Back to accepted or sent depending on whether they had accepted — not to
        whatever the status was before, which is not recorded and would be a guess
-       dressed up as a fact. */
+       dressed up as a fact. Money on the quote counts as accepting, as it does
+       wherever a payment lands. A payment that arrived while the quote was
+       cancelled did NOT accept it (bankStripeSession leaves a cancelled quote
+       alone), and the shop is told to press Restore if the job is back on — so
+       Restore is what has to put that paid job back on the schedule. */
     const { rows } = await pool.query(
       `UPDATE quotes SET cancelled_at = NULL, cancel_reason = NULL,
-              status = CASE WHEN accepted_at IS NOT NULL THEN 'accepted' ELSE 'sent' END
+              status = CASE WHEN accepted_at IS NOT NULL OR COALESCE(paid_amount, 0) > 0
+                            THEN 'accepted' ELSE 'sent' END,
+              accepted_at = CASE WHEN accepted_at IS NULL AND COALESCE(paid_amount, 0) > 0
+                                 THEN NOW() ELSE accepted_at END
         WHERE code = $1 RETURNING *`, [code]);
     // And back out of lost, to the stage its own state says.
     if (rows.length) syncDealStage(rows[0]).catch(() => {});
