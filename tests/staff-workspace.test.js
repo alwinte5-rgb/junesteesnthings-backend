@@ -333,3 +333,36 @@ test('the starter playbook is marked for the owner to check', () => {
   assert.match(src, /VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, TRUE\) ON CONFLICT DO NOTHING/);
   assert.match(src, /if \(c\.n > 0\) return;/, 'written once, into an empty playbook');
 });
+
+test('playbook search takes a question in plain words: any word, as a prefix, best match first', () => {
+  const at = src.indexOf('function kbMatch(p)');
+  const fn = src.slice(at, src.indexOf('\n}\n', at) + 2);
+  assert.match(fn, /plainto_tsquery/, 'user text is never parsed as tsquery syntax');
+  assert.match(fn, /' & ', ' \| '/, 'words are ORed, not ANDed');
+  assert.match(fn, /:\*/, 'each word matches as a prefix');
+  assert.match(fn, /NULLIF\(/, 'a question of only stop words is no query, not an error');
+  assert.doesNotMatch(src, /websearch_to_tsquery\(/, 'no search left that needs every word');
+  assert.match(route("app.get('/api/playbook/replies'"), /kbMatch\(1\)\.rank\} DESC/);
+  assert.match(route("app.get('/playbook', requireAdmin"), /order = 'rank DESC, title'/);
+});
+
+test('team chat: a helper reaches only their own conversation', () => {
+  const at = src.indexOf('function chatThreadFor(');
+  const fn = src.slice(at, src.indexOf('\n}\n', at));
+  assert.match(fn, /a\.kind === 'staff'\) return a\.id;/, 'a helper\'s thread is always their own, whatever they send');
+  assert.match(fn, /roster\.some\(\(r\) => r\.id === id\)/, 'the owner may only open a real helper');
+  for (const r of ['GET /team-chat', 'POST /team-chat', 'GET /api/team-chat']) {
+    assert.strictEqual(STAFF.ROUTES[r], 'any', r);
+  }
+});
+
+test('team chat lines are text, never markup', () => {
+  const page = route("app.get('/team-chat', requireAdmin");
+  assert.match(page, /escEmail\(j\.body\)/);
+  assert.match(page, /el\.textContent = m\.body/);
+  assert.doesNotMatch(page, /innerHTML/);
+  const send = route("app.post('/team-chat', requireAdmin");
+  assert.match(send, /body\.length > TEAM_CHAT_MAX/, 'length is capped');
+  assert.match(send, /interval '10 seconds'/, 'a double click does not post twice');
+  assert.match(send, /who\.active/, 'the owner cannot write to a disabled helper');
+});

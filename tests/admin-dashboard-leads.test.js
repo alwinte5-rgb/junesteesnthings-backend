@@ -143,8 +143,8 @@ test('the dashboard, the Leads page and the menu counts are admin only', () => {
 
 test('each count fails on its own, to zero', () => {
   const r = route("app.get('/admin/nav-counts', requireAdmin");
-  assert.strictEqual((r.match(/\.catch\(\(\) => \{\}\)/g) || []).length, 5,
-    'leads, reviews, late jobs, certificates and approvals waiting');
+  assert.strictEqual((r.match(/\.catch\(\(\) => \{\}\)/g) || []).length, 6,
+    'leads, reviews, late jobs, certificates, approvals waiting and unread team chat');
 });
 
 test('the old enquiries page forwards to the new one', () => {

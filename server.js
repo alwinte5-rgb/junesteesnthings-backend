@@ -956,6 +956,19 @@ async function initStaffTables() {
       expense_id  INTEGER,
       UNIQUE (staff_id, quote_code)
     )`);
+  /* Team chat: one conversation per helper, between them and the owner.
+     staff_id is the helper whose conversation it is, whoever wrote the line. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_messages (
+      id          BIGSERIAL PRIMARY KEY,
+      staff_id    INTEGER NOT NULL,
+      from_owner  BOOLEAN NOT NULL,
+      body        TEXT NOT NULL,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      read_at     TIMESTAMPTZ
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS team_messages_thread_idx ON team_messages (staff_id, id)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS team_messages_unread_idx ON team_messages (staff_id) WHERE read_at IS NULL`);
   for (const sql of [
     'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS created_by INTEGER',
     'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS sent_by INTEGER',
@@ -6680,6 +6693,7 @@ const ADMIN_NAV = [
   { key: 'money',      href: FINANCES_PATH,    label: 'Finances',   icon: 'dollar' },
   { key: 'certificates', href: '/certificates', label: 'Certificates', icon: 'cert', badge: 'certificates' },
   { key: 'discounts',  href: '/discounts',     label: 'Discounts',  icon: 'tag' },
+  { key: 'chat',       href: '/team-chat',     label: 'Team chat',  icon: 'chat',   badge: 'chat' },
   { key: 'playbook',   href: '/playbook',      label: 'Playbook',   icon: 'book' },
   { key: 'team',       href: '/admin/team',    label: 'Team',       icon: 'team',   badge: 'approvals' },
 ];
@@ -15751,15 +15765,18 @@ async function jobMessagesCard(q, query) {
   const code = q.code;
   const { rows: history } = await pool.query(
     `SELECT * FROM (
-       SELECT 'email' AS channel, kind, subject, preview AS body, status, error, created_at
+       SELECT 'email' AS channel, kind, subject, preview AS body, status, error, created_at, sent_by
          FROM client_emails WHERE quote_code = $1
        UNION ALL
-       SELECT 'text', template, NULL, body, status, error, created_at
+       SELECT 'text', template, NULL, body, status, error, created_at, sent_by
          FROM sms_messages WHERE quote_code = $1) m
       ORDER BY created_at DESC LIMIT 60`, [code]).catch((e) => {
     console.error(`messages for ${code} failed:`, e.message);
     return { rows: [] };
   });
+  /* Which helper sent a message. Blank is the owner or the shop's automatic
+     emails, which is how it read before helpers existed. */
+  const roster = history.some((m) => m.sent_by != null) ? await staffRoster().catch(() => []) : [];
   const phone = normalizeUsPhone(q.phone);
   let textWhyNot = !phone ? 'no phone number on this quote'
     : !smsConfigured() ? 'texting is not switched on yet' : '';
@@ -15795,7 +15812,7 @@ async function jobMessagesCard(q, query) {
         bad && m.error ? `<div class="row-sub" style="white-space:normal;color:#b91c1c">${escEmail(m.error)}</div>` : ''}</span>
       <span class="row-end msg-end">${pill(inbound ? 'reply' : m.status, tone(m.status))}
         <span class="muted msg-when">${m.channel === 'email' ? 'email' : 'text'} &middot; ${
-          escEmail(when(m.created_at))}</span></span></div>`;
+          escEmail(when(m.created_at))}${m.sent_by != null ? ` &middot; by ${escEmail(nameOf(roster, m.sent_by))}` : ''}</span></span></div>`;
   };
   const radio = (value, text, why, checked) => `
           <label style="display:flex;gap:6px;align-items:center;margin:0;text-transform:none;letter-spacing:0;
@@ -15822,7 +15839,7 @@ async function jobMessagesCard(q, query) {
         <button type="submit" class="btn" style="padding:10px 22px;font-size:14px"${emailWhyNot && textWhyNot ? ' disabled' : ''}>Send</button>
         <span class="muted" style="font-size:12px;margin-left:8px">Their replies come to your inbox, or your phone for a text.</span>
         <details style="margin-top:8px"><summary>Insert a reply from the playbook</summary>
-          <input type="search" data-kbq placeholder="Search replies or type a /shortcut" style="margin-top:6px">
+          <input type="search" data-kbq placeholder="Type the question, e.g. do I pay up front?" style="margin-top:6px">
           <div data-kblist style="margin-top:6px"></div>
         </details>
       </form>
@@ -16210,8 +16227,9 @@ const REVIEWS_WAITING_SQL = `SELECT COUNT(*)::int AS n FROM reviews
    costs a badge rather than the lot. */
 app.get('/admin/nav-counts', requireAdmin, async (_req, res) => {
   res.set('Cache-Control', 'no-store');
-  const out = { leads: 0, reviews: 0, late: 0, certificates: 0, approvals: 0 };
+  const out = { leads: 0, reviews: 0, late: 0, certificates: 0, approvals: 0, chat: 0 };
   await Promise.all([
+    teamChatUnread().then((n) => { out.chat = n; }).catch(() => {}),
     unansweredLeads().then((l) => { out.leads = l.length; }).catch(() => {}),
     pool.query(REVIEWS_WAITING_SQL).then(({ rows }) => { out.reviews = rows[0].n; }).catch(() => {}),
     pool.query(CERTS_WAITING_SQL).then(({ rows }) => { out.certificates = rows[0].n; }).catch(() => {}),
@@ -19832,8 +19850,8 @@ app.get('/admin/team', requireAdmin, async (req, res) => {
       const x = scores[i];
       const conv = x.sent ? Math.round(100 * x.accepted / x.sent) + '%' : '—';
       return `<div class="card">
-        <div class="row-i"><span class="row-main"><b>${escEmail(s.name)}</b>
-          <div class="row-sub">${escEmail(range.label)} &middot; last seen ${escEmail(whenShort(s.last_seen_at))}</div></span>
+        <div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="min-width:12em"><b>${escEmail(s.name)}</b>
+          <div class="row-sub" style="white-space:normal">${escEmail(range.label)} &middot; last seen ${escEmail(whenShort(s.last_seen_at))}</div></span>
           <span class="row-end"><a class="btn btn-ghost" href="/admin/activity?who=${s.id}">Activity</a>
             <a class="btn btn-ghost" href="/admin/commission?staff=${s.id}">Commission</a></span></div>
         ${statTiles([
@@ -20207,6 +20225,198 @@ app.post('/tasks/:id/done', requireAdmin, async (req, res) => {
   }
 });
 
+/* ── Team chat ────────────────────────────────────────────────────────────── */
+
+/* One conversation per helper, between them and the owner. A helper only ever
+   reaches their own; the owner picks whose. Lines are text the team typed:
+   escaped on the page, and built with textContent when new ones arrive by
+   polling, never as markup. */
+const TEAM_CHAT_MAX = 2000;
+const TEAM_CHAT_CSS = `<style>
+.tc-log{display:flex;flex-direction:column;gap:8px;max-height:60vh;overflow-y:auto;padding:4px 2px}
+.tc-line{max-width:78%;padding:8px 12px;border-radius:14px;background:#eef2f9;color:#0B1F4B;white-space:pre-wrap;
+  overflow-wrap:anywhere;font-size:14px;line-height:1.45}
+.tc-line.me{align-self:flex-end;background:#0B1F4B;color:#fff}
+.tc-when{display:block;font-size:11px;opacity:.7;margin-top:2px}
+.tc-form{display:flex;gap:8px;align-items:flex-end;margin-top:12px}
+.tc-form textarea{flex:1;min-width:0}
+@media (max-width:640px){.tc-line{max-width:90%}.tc-form{flex-direction:column;align-items:stretch}}
+</style>`;
+
+/** Unread lines for whoever is signed in: helpers' lines for the owner, the
+ *  owner's lines for a helper. */
+async function teamChatUnread() {
+  const a = currentActor() || OWNER_ACTOR;
+  const { rows } = a.kind === 'staff'
+    ? await pool.query(`SELECT COUNT(*)::int AS n FROM team_messages
+                         WHERE staff_id = $1 AND from_owner AND read_at IS NULL`, [a.id])
+    : await pool.query(`SELECT COUNT(*)::int AS n FROM team_messages m JOIN staff s ON s.id = m.staff_id
+                         WHERE NOT m.from_owner AND m.read_at IS NULL`);
+  return rows[0].n;
+}
+
+/** Whose conversation a request is about: always a helper's own; for the
+ *  owner, the helper asked for if there is one, else null. */
+function chatThreadFor(raw, roster) {
+  const a = currentActor() || OWNER_ACTOR;
+  if (a.kind === 'staff') return a.id;
+  const id = intIn(raw);
+  return id && roster.some((r) => r.id === id) ? id : null;
+}
+
+async function chatLines(staffId, after = 0) {
+  const { rows } = await pool.query(
+    `SELECT id, from_owner, body, created_at FROM team_messages
+      WHERE staff_id = $1 AND id > $2 ORDER BY id DESC LIMIT 200`, [staffId, after]);
+  return rows.reverse();
+}
+
+/** The other side's lines are read once this person has had them on screen. */
+function chatMarkRead(staffId) {
+  const theirsFromOwner = (currentActor() || OWNER_ACTOR).kind === 'staff';
+  return pool.query(
+    `UPDATE team_messages SET read_at = NOW() WHERE staff_id = $1 AND from_owner = $2 AND read_at IS NULL`,
+    [staffId, theirsFromOwner]).catch((e) => console.error('team chat read mark failed:', e.message));
+}
+
+function chatLineJson(m) {
+  const mine = (currentActor() || OWNER_ACTOR).kind === 'staff' ? !m.from_owner : m.from_owner;
+  return { id: Number(m.id), mine, body: m.body, when: whenShort(m.created_at) };
+}
+
+app.get('/team-chat', requireAdmin, async (req, res) => {
+  try {
+    const actor = currentActor() || OWNER_ACTOR;
+    const roster = await staffRoster();
+    let staffId = chatThreadFor(req.query.staff, roster);
+    let chips = '';
+    if (actor.kind !== 'staff') {
+      const { rows: counts } = await pool.query(
+        `SELECT staff_id, COUNT(*) FILTER (WHERE NOT from_owner AND read_at IS NULL)::int AS unread,
+                MAX(created_at) AS last_at
+           FROM team_messages GROUP BY staff_id`);
+      const by = new Map(counts.map((c) => [c.staff_id, c]));
+      // Disabled helpers stay listed only while there is a conversation to read.
+      const people = roster.filter((r) => r.active || by.has(r.id)).sort((x, y) => {
+        const a = by.get(x.id) || {}, b = by.get(y.id) || {};
+        return (b.unread || 0) - (a.unread || 0) || new Date(b.last_at || 0) - new Date(a.last_at || 0);
+      });
+      if (!people.length) {
+        return res.send(adminPage('Team chat', `${pageHeader('Team chat', '')}
+          <div class="card">${emptyState('No helpers yet. Add one on the Staff page, then talk to them here.',
+            '<a class="btn" href="/admin/staff">Add a helper</a>')}</div>`, 'chat'));
+      }
+      if (!staffId || !people.some((r) => r.id === staffId)) staffId = people[0].id;
+      chips = filterChips(people.map((r) => ({ label: r.name + (r.active ? '' : ' (disabled)'),
+        href: `/team-chat?staff=${r.id}`, on: r.id === staffId, count: (by.get(r.id) || {}).unread || null })));
+    }
+    const lines = await chatLines(staffId);
+    await chatMarkRead(staffId);
+    const who = roster.find((r) => r.id === staffId);
+    const canWrite = actor.kind === 'staff' || (who && who.active);
+    const other = actor.kind === 'staff' ? 'the owner' : nameOf(roster, staffId);
+    const line = (m) => { const j = chatLineJson(m);
+      return `<div class="tc-line${j.mine ? ' me' : ''}">${escEmail(j.body)}<span class="tc-when">${escEmail(j.when)}</span></div>`; };
+    const last = lines.length ? Number(lines[lines.length - 1].id) : 0;
+    res.send(adminPage('Team chat', `${TEAM_CHAT_CSS}
+      ${pageHeader('Team chat', `Just you and ${escEmail(other)}. Customers never see this.`)}
+      ${flash(req.query)}
+      ${chips}
+      <div class="card">
+        <div class="tc-log" data-tclog data-after="${last}">${lines.length ? lines.map(line).join('')
+          : `<p class="muted" data-tcempty>No messages yet. Say hello to ${escEmail(other)}.</p>`}</div>
+        ${canWrite ? `<form method="post" action="/team-chat" class="tc-form" data-tcform>
+          <input type="hidden" name="staff" value="${staffId}">
+          <textarea name="body" rows="2" maxlength="${TEAM_CHAT_MAX}" required placeholder="Message ${escEmail(other)}"></textarea>
+          <button type="submit" class="btn">Send</button>
+        </form>` : '<p class="muted">This helper is disabled, so the conversation is read-only.</p>'}
+      </div>
+      <script>
+        (function(){
+          var log = document.querySelector('[data-tclog]'); if (!log) return;
+          var staff = ${JSON.stringify(String(staffId))};
+          log.scrollTop = log.scrollHeight;
+          var f = document.querySelector('[data-tcform]');
+          if (f) {
+            var ta = f.querySelector('textarea');
+            ta.addEventListener('keydown', function(e){
+              if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (ta.value.trim()) f.requestSubmit(); }
+            });
+            f.addEventListener('submit', function(){
+              var b = f.querySelector('button'); setTimeout(function(){ b.disabled = true; b.textContent = 'Sending…'; }, 0);
+            });
+          }
+          function poll(){
+            if (document.hidden) return;
+            fetch('/api/team-chat?staff=' + encodeURIComponent(staff) + '&after=' + encodeURIComponent(log.getAttribute('data-after')),
+                  { credentials: 'same-origin', cache: 'no-store' })
+              .then(function(r){ return r.ok ? r.json() : null; }).then(function(d){
+                if (!d || !d.lines || !d.lines.length) return;
+                var e = log.querySelector('[data-tcempty]'); if (e) e.remove();
+                var atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+                d.lines.forEach(function(m){
+                  var el = document.createElement('div'); el.className = 'tc-line' + (m.mine ? ' me' : '');
+                  el.textContent = m.body;
+                  var w = document.createElement('span'); w.className = 'tc-when'; w.textContent = m.when; el.appendChild(w);
+                  log.appendChild(el); log.setAttribute('data-after', String(m.id));
+                });
+                if (atEnd) log.scrollTop = log.scrollHeight;
+              }).catch(function(){});
+          }
+          setInterval(poll, 15000);
+          document.addEventListener('visibilitychange', poll);
+        })();
+      </script>`, 'chat'));
+  } catch (err) {
+    console.error('team chat failed:', err.message);
+    res.status(500).send(adminPage('Team chat', '<div class="card"><div class="warn">Could not load the chat.</div></div>', 'chat'));
+  }
+});
+
+app.post('/team-chat', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const actor = currentActor() || OWNER_ACTOR;
+  const body = text(b.body, TEAM_CHAT_MAX + 1);
+  try {
+    const roster = await staffRoster();
+    const staffId = chatThreadFor(b.staff, roster);
+    const backTo = actor.kind === 'staff' || !staffId ? '/team-chat' : `/team-chat?staff=${staffId}`;
+    if (!staffId) return back(res, '/team-chat', 'err', 'Pick who to message.');
+    if (!body) return back(res, backTo, 'err', 'Write something first.');
+    if (body.length > TEAM_CHAT_MAX) return back(res, backTo, 'err', `That is too long. Keep it under ${TEAM_CHAT_MAX} characters.`);
+    const who = roster.find((r) => r.id === staffId);
+    if (actor.kind !== 'staff' && !(who && who.active)) return back(res, backTo, 'err', 'That helper is disabled.');
+    /* A double-click or a resubmitted page sends the same line twice in a few
+       seconds; the second is dropped rather than shown twice. */
+    await pool.query(
+      `INSERT INTO team_messages (staff_id, from_owner, body)
+       SELECT $1, $2, $3 WHERE NOT EXISTS (
+         SELECT 1 FROM team_messages WHERE staff_id = $1 AND from_owner = $2 AND body = $3
+            AND created_at > NOW() - interval '10 seconds')`,
+      [staffId, actor.kind !== 'staff', body]);
+    return res.redirect(backTo);
+  } catch (err) {
+    console.error('team chat send failed:', err.message);
+    return back(res, '/team-chat', 'err', 'It did not send. Try again.');
+  }
+});
+
+app.get('/api/team-chat', requireAdmin, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try {
+    const roster = await staffRoster();
+    const staffId = chatThreadFor(req.query.staff, roster);
+    if (!staffId) return res.status(404).json({ lines: [] });
+    const after = Number.parseInt(String(req.query.after || '0'), 10);
+    const lines = await chatLines(staffId, Number.isSafeInteger(after) && after > 0 ? after : 0);
+    if (lines.length) await chatMarkRead(staffId);
+    res.json({ lines: lines.map(chatLineJson) });
+  } catch (err) {
+    console.error('team chat poll failed:', err.message);
+    res.status(500).json({ lines: [] });
+  }
+});
+
 /* ── My Day ───────────────────────────────────────────────────────────────── */
 
 app.get('/my-day', requireAdmin, async (req, res) => {
@@ -20293,6 +20503,21 @@ app.get('/my-day', requireAdmin, async (req, res) => {
 
 /* ── Playbook ─────────────────────────────────────────────────────────────── */
 
+/* Search in plain words. websearch_to_tsquery needs EVERY word in one article,
+   so a question typed the way a customer asked it ("how much do I pay up
+   front?") found nothing. Here any word counts, each as a prefix so a
+   half-typed word matches, and the article matching the most words ranks
+   first. A /shortcut still jumps straight to its article. `p` is the
+   placeholder holding the words; p + 1 holds the lower-cased shortcut. */
+function kbMatch(p) {
+  const tsq = `NULLIF(replace(regexp_replace(plainto_tsquery('english', $${p})::text,
+    '''([^'']+)''', '''\\1'':*', 'g'), ' & ', ' | '), '')::tsquery`;
+  return {
+    where: `(search @@ ${tsq} OR shortcut = $${p + 1} OR title ILIKE '%' || $${p + 1} || '%')`,
+    rank: `(COALESCE(ts_rank(search, ${tsq}), 0) + CASE WHEN shortcut = $${p + 1} THEN 10 ELSE 0 END)`,
+  };
+}
+
 const KB_KINDS = { faq: 'Customer reply', artwork: 'Artwork guide', sop: 'How we do it' };
 const KB_DECORATIONS = { screen: 'Screen printing', embroidery: 'Embroidery', dtf: 'DTF', patches: 'Patches',
                          vinyl: 'Vinyl', puff: 'Puff print', any: 'Any' };
@@ -20356,12 +20581,10 @@ app.get('/playbook', requireAdmin, async (req, res) => {
     let order = 'kind, title';
     let rankSel = '';
     if (q) {
-      const shortcut = q.replace(/^\/+/, '').toLowerCase();
-      params.push(q);
-      params.push(shortcut);
-      const pq = params.length - 1;
-      where.push(`(search @@ websearch_to_tsquery('english', $${pq}) OR shortcut = $${pq + 1} OR title ILIKE '%' || $${pq + 1} || '%')`);
-      rankSel = `, ts_rank(search, websearch_to_tsquery('english', $${pq})) + CASE WHEN shortcut = $${pq + 1} THEN 10 ELSE 0 END AS rank`;
+      params.push(q, q.replace(/^\/+/, '').toLowerCase());
+      const m = kbMatch(params.length - 1);
+      where.push(m.where);
+      rankSel = `, ${m.rank} AS rank`;
       order = 'rank DESC, title';
     }
     const { rows } = await pool.query(
@@ -20371,12 +20594,12 @@ app.get('/playbook', requireAdmin, async (req, res) => {
     const link = (over) => '/playbook?' + new URLSearchParams(Object.fromEntries(Object.entries({ q, kind, decoration, ...over }).filter(([, v]) => v)));
     const canEdit = actorLevel('kb.edit') !== 'off';
     res.send(adminPage('Playbook', `
-      ${pageHeader('Playbook', 'Customer replies, artwork rules by decoration, and how we do things. Search by words or a /shortcut.')}
+      ${pageHeader('Playbook', 'Customer replies, artwork rules by decoration, and how we do things. Type a question in your own words.')}
       ${flash(req.query)}
       <form class="search" method="GET" action="/playbook">
         ${kind ? `<input type="hidden" name="kind" value="${escEmail(kind)}">` : ''}
         ${decoration ? `<input type="hidden" name="decoration" value="${escEmail(decoration)}">` : ''}
-        <input name="q" value="${escEmail(q)}" placeholder="e.g. turnaround, gradients, /deposit, tax exempt" autofocus>
+        <input name="q" value="${escEmail(q)}" placeholder="e.g. how long will my order take? or /deposit" autofocus>
         <button type="submit" class="btn btn-ghost">Search</button>
       </form>
       ${filterChips([{ label: 'Everything', href: link({ kind: '' }), on: !kind },
@@ -20456,10 +20679,11 @@ app.get('/api/playbook/replies', requireAdmin, async (req, res) => {
     let where = `kind = 'faq' AND published`;
     if (q) {
       params.push(q, q.replace(/^\/+/, '').toLowerCase());
-      where += ` AND (search @@ websearch_to_tsquery('english', $1) OR shortcut = $2 OR title ILIKE '%' || $2 || '%')`;
+      where += ` AND ${kbMatch(1).where}`;
     }
     const { rows } = await pool.query(
-      `SELECT shortcut, title, body FROM kb_articles WHERE ${where} ORDER BY title LIMIT 30`, params);
+      `SELECT shortcut, title, body FROM kb_articles WHERE ${where}
+        ORDER BY ${q ? `${kbMatch(1).rank} DESC, ` : ''}title LIMIT 30`, params);
     res.json(rows.map((r) => ({ shortcut: r.shortcut, title: r.title, body: String(r.body).replace(/\*\*/g, '') })));
   } catch (err) {
     console.error('playbook replies failed:', err.message);
