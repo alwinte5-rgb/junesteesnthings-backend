@@ -126,8 +126,18 @@ const SINGLES = {
   12: singlesLadder(12, SINGLE_BANDS[12]),
   18: singlesLadder(18, SINGLE_BANDS[18]),
 };
-/* Flat: one band covering everything, because cost per pack does not move. */
-const packLadder = (size) => ({ 1000: packPrice(size).toFixed(2) });
+/* Flat: one band covering everything, because cost per pack does not move.
+   The price is the owner's own where she has set one (PACK_PRICES, below). */
+const packLadder = (size) => ({ 1000: (PACK_PRICES[size] || packPrice(size)).toFixed(2) });
+/* THE OWNER'S PACK PRICES (2026-09-30), set by hand. packPrice() is the x2
+   cost rule and stays the floor this is checked against: a price under it is
+   allowed, because it is her call, but the run says so. */
+const PACK_PRICES = { 12: 225, 18: 210, 24: 185, 36: 160 };
+for (const [size, price] of Object.entries(PACK_PRICES)) {
+  if (price < packPrice(Number(size))) {
+    console.log('  note: the ' + size + 'in pack at $' + price + ' is under the x2 cost rule ($' + packPrice(Number(size)) + ')');
+  }
+}
 
 /* `min_qty` is what the feed publishes as min_order_qty and what priceLine
    enforces — the same field Screen Printing carries a 50 in. Below it the line
