@@ -225,7 +225,7 @@ test('the builder asks why, and only an untaxed quote keeps the answer', () => {
   assert.match(src, /<select name="tax_exempt_reason"/);
   assert.match(src, /const exemptReason = taxable \? null : \(TAXCERT\.EXEMPT_REASONS\[reasonIn\] \? reasonIn : null\);/);
   assert.match(src, /tax_exempt_ref=\$18, tax_exempt_reason=\$19,/, 'the edit stores it');
-  assert.match(src, /taxable,tax_exempt_ref,tax_exempt_reason,\s*\n\s*from_submission_id\)/, 'and so does a new quote');
+  assert.match(src, /taxable,tax_exempt_ref,tax_exempt_reason,\s*\n\s*from_submission_id[,)]/, 'and so does a new quote');
 });
 
 test('the tax file says what each deduction stands on, in columns added at the end', () => {

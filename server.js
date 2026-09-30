@@ -23,6 +23,8 @@ const {
 const { T: SMS, plain: smsPlain, PICKUP: SMS_PICKUP } = require('./tools/lib/sms-templates');
 const { verifyTwilioSignature, classifyInbound } = require('./tools/lib/twilio-webhook');
 const TAXCERT = require('./tools/lib/tax-certificates');
+const STAFF = require('./tools/lib/staff');
+const TEAM = require('./tools/lib/team-metrics');
 
 const express    = require('express');
 const cors       = require('cors');
@@ -839,7 +841,183 @@ async function initDB() {
   await pool.query(`CREATE INDEX IF NOT EXISTS client_emails_quote_idx ON client_emails (quote_code, created_at DESC)`)
     .catch(() => {});
 
+  await initStaffTables();
+
   console.log('Database ready.');
+}
+
+/* The staff workspace (tools/lib/staff.js): helpers' logins, what they did,
+   what waits for the owner, their notes and tasks, the playbook, hours and
+   commission. Every "by" column is a staff id, NULL meaning the owner. */
+async function initStaffTables() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff (
+      id               SERIAL PRIMARY KEY,
+      name             TEXT NOT NULL,
+      email            TEXT NOT NULL UNIQUE,
+      password_hash    TEXT NOT NULL,
+      active           BOOLEAN NOT NULL DEFAULT TRUE,
+      perms            JSONB NOT NULL DEFAULT '{}'::jsonb,
+      session_version  INTEGER NOT NULL DEFAULT 1,
+      commission_pct   NUMERIC(5,2) NOT NULL DEFAULT 0,
+      created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_seen_at     TIMESTAMPTZ
+    )`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_activity (
+      id            BIGSERIAL PRIMARY KEY,
+      staff_id      INTEGER,
+      action        TEXT NOT NULL,
+      subject_type  TEXT,
+      subject_id    TEXT,
+      detail        JSONB,
+      ip            TEXT,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS staff_activity_when_idx ON staff_activity (created_at DESC)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS staff_activity_who_idx ON staff_activity (staff_id, created_at DESC)`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_approvals (
+      id            SERIAL PRIMARY KEY,
+      kind          TEXT NOT NULL,
+      subject_id    TEXT NOT NULL,
+      payload       JSONB NOT NULL DEFAULT '{}'::jsonb,
+      reasons       JSONB NOT NULL DEFAULT '[]'::jsonb,
+      requested_by  INTEGER NOT NULL,
+      status        TEXT NOT NULL DEFAULT 'pending',
+      decided_at    TIMESTAMPTZ,
+      decision_note TEXT,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS staff_approvals_pending_idx ON staff_approvals (status, created_at)`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS lead_notes (
+      id             BIGSERIAL PRIMARY KEY,
+      submission_id  INTEGER,
+      quote_code     TEXT,
+      kind           TEXT NOT NULL DEFAULT 'note',
+      body           TEXT NOT NULL,
+      staff_id       INTEGER,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS lead_notes_sub_idx ON lead_notes (submission_id, created_at)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS lead_notes_quote_idx ON lead_notes (quote_code, created_at)`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_tasks (
+      id             SERIAL PRIMARY KEY,
+      title          TEXT NOT NULL,
+      due_on         DATE,
+      assigned_to    INTEGER,
+      business       TEXT NOT NULL DEFAULT 'jtees',
+      submission_id  INTEGER,
+      quote_code     TEXT,
+      created_by     INTEGER,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      done_at        TIMESTAMPTZ,
+      done_by        INTEGER
+    )`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS kb_articles (
+      id          SERIAL PRIMARY KEY,
+      kind        TEXT NOT NULL,
+      title       TEXT NOT NULL,
+      shortcut    TEXT UNIQUE,
+      body        TEXT NOT NULL,
+      tags        TEXT NOT NULL DEFAULT '',
+      decoration  TEXT,
+      business    TEXT NOT NULL DEFAULT 'jtees',
+      published   BOOLEAN NOT NULL DEFAULT TRUE,
+      needs_review BOOLEAN NOT NULL DEFAULT FALSE,
+      updated_by  INTEGER,
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      search      TSVECTOR GENERATED ALWAYS AS (
+        setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
+        setweight(to_tsvector('english', coalesce(tags, '') || ' ' || coalesce(shortcut, '')), 'B') ||
+        setweight(to_tsvector('english', coalesce(body, '')), 'C')) STORED
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS kb_articles_search_idx ON kb_articles USING GIN (search)`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_hours (
+      id          SERIAL PRIMARY KEY,
+      staff_id    INTEGER NOT NULL,
+      week_of     DATE NOT NULL,
+      business    TEXT NOT NULL DEFAULT 'jtees',
+      hours       NUMERIC(6,2) NOT NULL,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (staff_id, week_of, business)
+    )`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS commission_payouts (
+      id          SERIAL PRIMARY KEY,
+      staff_id    INTEGER NOT NULL,
+      quote_code  TEXT NOT NULL,
+      amount      NUMERIC(10,2) NOT NULL,
+      paid_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expense_id  INTEGER,
+      UNIQUE (staff_id, quote_code)
+    )`);
+  /* Team chat: one conversation per helper, between them and the owner.
+     staff_id is the helper whose conversation it is, whoever wrote the line. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_messages (
+      id          BIGSERIAL PRIMARY KEY,
+      staff_id    INTEGER NOT NULL,
+      from_owner  BOOLEAN NOT NULL,
+      body        TEXT NOT NULL,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      read_at     TIMESTAMPTZ
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS team_messages_thread_idx ON team_messages (staff_id, id)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS team_messages_unread_idx ON team_messages (staff_id) WHERE read_at IS NULL`);
+  /* Bonuses the owner adds by hand or awards for an incentive, and the
+     incentives themselves: a target over a period, for one helper or all. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_incentives (
+      id          SERIAL PRIMARY KEY,
+      title       TEXT NOT NULL,
+      metric      TEXT NOT NULL,
+      target      NUMERIC(12,2) NOT NULL,
+      reward      NUMERIC(10,2) NOT NULL,
+      starts_on   DATE NOT NULL,
+      ends_on     DATE NOT NULL,
+      staff_id    INTEGER,
+      ended_at    TIMESTAMPTZ,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_bonuses (
+      id            SERIAL PRIMARY KEY,
+      staff_id      INTEGER NOT NULL,
+      amount        NUMERIC(10,2) NOT NULL,
+      reason        TEXT NOT NULL,
+      incentive_id  INTEGER,
+      paid_at       TIMESTAMPTZ,
+      expense_id    INTEGER,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  // One award per incentive per helper, however often the button is pressed.
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS staff_bonuses_incentive_uq
+                      ON staff_bonuses (incentive_id, staff_id) WHERE incentive_id IS NOT NULL`);
+  for (const sql of [
+    'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS credited_to INTEGER',
+    'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS created_by INTEGER',
+    'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS sent_by INTEGER',
+    'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS held_at TIMESTAMPTZ',
+    'ALTER TABLE client_emails ADD COLUMN IF NOT EXISTS sent_by INTEGER',
+    'ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS sent_by INTEGER',
+    'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS assigned_to INTEGER',
+    'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS first_response_at TIMESTAMPTZ',
+    'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS first_response_by INTEGER',
+    'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS next_follow_up_on DATE',
+    'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS outcome TEXT',
+    'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS platform TEXT',
+    'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS profile_url TEXT',
+  ]) await pool.query(sql);
+  /* Sales credit not yet decided falls to the helper who sent or built it.
+     0 (the owner's own sale) is a decision, so it is never overwritten. */
+  await pool.query(`UPDATE quotes SET credited_to = COALESCE(sent_by, created_by)
+                     WHERE credited_to IS NULL AND COALESCE(sent_by, created_by) IS NOT NULL`);
+  await seedPlaybook();
 }
 
 /**
@@ -2227,6 +2405,8 @@ function setAdminCookie(res) {
   res.append('Set-Cookie',
     `${ADMIN_COOKIE}=${encodeURIComponent(stamp)}; Path=/; Max-Age=${ADMIN_SESSION_DAYS * 86400}` +
     '; HttpOnly; Secure; SameSite=Lax');
+  // One person per browser: signing in as the owner ends a helper's session here.
+  res.append('Set-Cookie', 'jt_staff=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax');
 }
 
 /* One-click in from the designer sidebar. The token proves the request came
@@ -2248,27 +2428,184 @@ app.get('/admin/sso', (req, res) => {
   res.redirect(to);
 });
 
-function requireAdmin(req, res, next) {
-  const secret = process.env.ADMIN_PASSWORD || '';
-  let valid = false;
+/* ── Who is signed in ──────────────────────────────────────────────────────
+   The owner (ADMIN_PASSWORD, by cookie, SSO or Basic auth) or a helper with a
+   staff login (tools/lib/staff.js). requireAdmin decides which, checks the
+   helper may use this route, and makes the answer available to everything the
+   request runs — the menu included — through currentActor(). */
+const { AsyncLocalStorage } = require('node:async_hooks');
+const actorStore = new AsyncLocalStorage();
+const OWNER_ACTOR = Object.freeze({ kind: 'owner', id: null, name: 'Owner', perms: null });
+const STAFF_COOKIE = 'jt_staff';
 
-  // An unexpired signed cookie counts as signed in.
-  if (secret && checkStamp(adminCookieValue(req), secret)) return next();
+/** The signed-in person for this request, or null outside an admin request. */
+function currentActor() {
+  return actorStore.getStore() || null;
+}
+
+/** Whose work a customer message or quote counts as: the helper who did it,
+ *  or — when the owner releases something a helper asked for — that helper. */
+function attributedStaffId() {
+  const a = currentActor();
+  if (!a) return null;
+  if (a.sentBy != null) return a.sentBy;
+  return a.kind === 'staff' ? a.id : null;
+}
+
+/** Staff sessions are signed with their own secret. Without one, staff sign-in
+ *  is refused (never signed with a stand-in key); the owner is unaffected. */
+function staffSessionKey() {
+  const k = process.env.STAFF_SESSION_SECRET || '';
+  return k.length >= 32 ? k : '';
+}
+if (!staffSessionKey()) {
+  console.warn('STAFF_SESSION_SECRET is not set (32+ characters) — staff logins are switched off.');
+}
+
+function cookieValue(req, name) {
+  const raw = req.headers.cookie || '';
+  for (const part of raw.split(';')) {
+    const [k, ...v] = part.trim().split('=');
+    if (k === name) { try { return decodeURIComponent(v.join('=')); } catch { return ''; } }
+  }
+  return '';
+}
+
+function setStaffCookie(res, staff) {
+  const key = staffSessionKey();
+  if (!key) return;
+  const value = STAFF.makeSession(staff.id, staff.session_version, key);
+  res.append('Set-Cookie',
+    `${STAFF_COOKIE}=${encodeURIComponent(value)}; Path=/; Max-Age=${STAFF.STAFF_SESSION_HOURS * 3600}` +
+    '; HttpOnly; Secure; SameSite=Lax');
+  /* A helper signing in on a computer the owner uses must not ride the
+     owner's month-long cookie, so it goes. */
+  res.append('Set-Cookie', `${ADMIN_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`);
+}
+
+/** The helper a jt_staff cookie names, if it is still good: signed, unexpired,
+ *  the account active, and not signed out since (session_version). */
+async function staffFromRequest(req) {
+  const session = STAFF.readSession(cookieValue(req, STAFF_COOKIE), staffSessionKey());
+  if (!session) return null;
+  const { rows } = await pool.query(
+    'SELECT id, name, email, perms, session_version, active FROM staff WHERE id = $1', [session.id]);
+  const s = rows[0];
+  if (!s || !s.active || Number(s.session_version) !== session.version) return null;
+  pool.query(`UPDATE staff SET last_seen_at = NOW()
+               WHERE id = $1 AND (last_seen_at IS NULL OR last_seen_at < NOW() - interval '5 minutes')`, [s.id])
+    .catch(() => {});
+  return { kind: 'staff', id: s.id, name: s.name, email: s.email, perms: s.perms || {} };
+}
+
+/** May the signed-in person do this? For handlers that act differently by level. */
+function actorLevel(key) {
+  return STAFF.levelOf(currentActor() || OWNER_ACTOR, key);
+}
+function isOwner() {
+  const a = currentActor();
+  return !a || a.kind === 'owner';
+}
+
+/* Every change made in the back office, and by whom. Written when the response
+   finishes, so the status and where it redirected (which is how most handlers
+   report a refusal: ?msg_err=...) are recorded with it. Page views are not
+   logged; only what changed something, and signing in and out. */
+function logActivity(actor, action, subject = {}, detail = null, ip = null) {
+  return pool.query(
+    `INSERT INTO staff_activity (staff_id, action, subject_type, subject_id, detail, ip)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [actor && actor.kind === 'staff' ? actor.id : null, String(action).slice(0, 120),
+     subject.type || null, subject.id != null ? String(subject.id).slice(0, 80) : null,
+     detail ? JSON.stringify(detail) : null, ip ? String(ip).slice(0, 64) : null])
+    .catch((err) => console.error('activity log failed:', err.message));
+}
+
+function logMutationOnFinish(req, res, actor) {
+  if (['GET', 'HEAD'].includes(req.method)) return;
+  const key = STAFF.routeKey(req.method, req.route && req.route.path);
+  res.on('finish', () => {
+    const params = req.params || {};
+    const subject = params.code ? { type: 'quote', id: String(params.code).toUpperCase() }
+      : params.id ? { type: 'record', id: params.id } : {};
+    const detail = { status: res.statusCode };
+    const loc = res.get('Location');
+    if (loc) detail.location = String(loc).slice(0, 200);
+    for (const k of ['step', 'stage', 'channel', 'decision', 'outcome', 'kind']) {
+      if (req.body && typeof req.body[k] === 'string') detail[k] = req.body[k].slice(0, 60);
+    }
+    logActivity(actor, key, subject, detail, clientIp(req));
+  });
+}
+
+function wantsHtml(req) {
+  return ['GET', 'HEAD'].includes(req.method) && /text\/html/.test(String(req.headers.accept || ''));
+}
+
+function signinRedirect(req, res) {
+  const to = safeAdminPath(req.originalUrl);
+  return res.redirect(`/signin?to=${encodeURIComponent(to)}`);
+}
+
+/** Only ever a path on this site — never an address from the query. */
+function safeAdminPath(raw, fallback = '/dashboard') {
+  const s = String(raw || '');
+  return /^\/[A-Za-z0-9/_\-?=&.%#]*$/.test(s) && !s.startsWith('//') && s.length < 300 ? s : fallback;
+}
+
+function refuseStaff(req, res, actor) {
+  const need = STAFF.permForRoute(req.method, req.route && req.route.path);
+  if (!wantsHtml(req)) return res.status(403).json({ error: 'Not allowed for your account' });
+  return actorStore.run(actor, () => res.status(403).send(adminPage('Not available', `
+    ${pageHeader('Not available to your account', '')}
+    <div class="card"><p>This needs ${escEmail(need && STAFF.PERMISSIONS[need]
+      ? `"${STAFF.PERMISSIONS[need].label}"` : 'the owner')}. Ask the owner if you should have it.</p>
+      <p style="margin-top:12px"><a class="btn" href="/my-day">Back to My Day</a></p></div>`, '')));
+}
+
+async function requireAdmin(req, res, next) {
+  const secret = process.env.ADMIN_PASSWORD || '';
+
+  /* A browser re-sends a remembered admin password to this site even when
+     another website's hidden form is what made the request — SameSite, which
+     protects the cookie path, does nothing for Basic auth. So a state-changing
+     request carrying an Origin from anywhere else is refused outright. */
+  const origin = req.headers.origin;
+  const foreign = !['GET', 'HEAD'].includes(req.method) && origin && !SITE_ORIGINS.includes(origin);
+
+  const asOwner = () => {
+    logMutationOnFinish(req, res, OWNER_ACTOR);
+    return actorStore.run(OWNER_ACTOR, next);
+  };
+
+  /* A helper's own login is checked FIRST: with both cookies in one browser,
+     the narrower one wins, so a helper can never inherit the owner's access. */
+  if (cookieValue(req, STAFF_COOKIE)) {
+    let staff = null;
+    try { staff = await staffFromRequest(req); }
+    catch (err) {
+      console.error('staff session lookup failed:', err.message);
+      return res.status(503).send('Please try again in a moment.');
+    }
+    if (staff) {
+      if (foreign) return res.status(403).send('Forbidden');
+      if (!STAFF.mayUseRoute(staff, req.method, req.route && req.route.path)) return refuseStaff(req, res, staff);
+      logMutationOnFinish(req, res, staff);
+      return actorStore.run(staff, next);
+    }
+  }
+
+  // An unexpired signed owner cookie counts as signed in.
+  if (secret && checkStamp(adminCookieValue(req), secret)) return asOwner();
 
   /* The PASSWORD is the secret; the username is not checked.
      Phone keyboards autocapitalise the first letter, so "Admin" was failing and
      the browser re-prompted forever — an unguessable password is what actually
      protects this, and a case-sensitive username only ever locked out the owner. */
+  let valid = false;
   try {
     const provided = req.headers['authorization'] || '';
-    /* A browser re-sends a remembered admin password to this site even when
-       another website's hidden form is what made the request — SameSite, which
-       protects the cookie path, does nothing for Basic auth. So a state-changing
-       request carrying an Origin from anywhere else is refused outright. */
-    const origin = req.headers.origin;
-    if (!['GET', 'HEAD'].includes(req.method) && origin && !SITE_ORIGINS.includes(origin)) {
-      return res.status(403).send('Forbidden');
-    }
+    if (foreign) return res.status(403).send('Forbidden');
     if (secret && provided.startsWith('Basic ')) {
       const decoded = Buffer.from(provided.slice(6), 'base64').toString('utf8');
       const pass = decoded.slice(decoded.indexOf(':') + 1);
@@ -2279,13 +2616,111 @@ function requireAdmin(req, res, next) {
   } catch { valid = false; }
 
   if (!valid) {
-    res.set('WWW-Authenticate', 'Basic realm="Admin"');
-    return res.status(401).send('Unauthorized — any username, the password is what matters.');
+    /* A page opened in a browser goes to the sign-in form, which takes the
+       owner's password or a helper's email and password. Anything else (a
+       fetch, a script) gets a plain 401 without a Basic prompt. */
+    if (wantsHtml(req)) return signinRedirect(req, res);
+    /* A form sent after the session ended (a helper's lasts 12 hours) must not
+       lose what was typed: a redirect would drop it. Sign in in another tab,
+       then Back here keeps the form filled in, and Save sends it again. */
+    if (!['GET', 'HEAD'].includes(req.method) && /text\/html/.test(String(req.headers.accept || ''))) {
+      return res.status(401).send(htmlDocument('Signed out', `<div class="wrap" style="max-width:520px;margin:40px auto;padding:0 16px">
+        <div class="card"><h1 style="font-size:22px">You were signed out</h1>
+        <p>Nothing was saved yet, and what you typed is still on the page you came from.</p>
+        <ol style="line-height:1.7"><li><a href="/signin" target="_blank" rel="noopener">Sign in again in a new tab</a></li>
+          <li>Come back to this tab and press your browser's <b>Back</b> button</li>
+          <li>Press Save (or Send) again</li></ol></div></div>`));
+    }
+    return res.status(401).send('Unauthorized — sign in at /signin.');
   }
   // Signed in by password: remember it so this is the last prompt for a month.
   setAdminCookie(res);
-  next();
+  return asOwner();
 }
+
+/* ── Signing in and out ───────────────────────────────────────────────────── */
+const signinRateLimit = makeRateLimit(10, 15 * 60 * 1000);
+
+function signinPage(to, error) {
+  return quotePage('Sign in', `
+    <h1>Sign in</h1>
+    <div class="card" style="max-width:420px">
+      ${error ? `<div class="warn">${escEmail(error)}</div>` : ''}
+      <form method="post" action="/signin" autocomplete="on">
+        <input type="hidden" name="to" value="${escEmail(to)}">
+        <label>Email <span class="muted">(leave empty if you are the owner)</span>
+          <input type="email" name="email" autocomplete="username" maxlength="254"></label>
+        <label style="margin-top:10px;display:block">Password
+          <input type="password" name="password" autocomplete="current-password" required maxlength="200"></label>
+        <button type="submit" style="margin-top:14px">Sign in</button>
+      </form>
+    </div>`);
+}
+
+app.get('/signin', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.send(signinPage(safeAdminPath(req.query.to), ''));
+});
+
+app.post('/signin', signinRateLimit, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const origin = req.headers.origin;
+  if (origin && !SITE_ORIGINS.includes(origin)) return res.status(403).send('Forbidden');
+  const b = req.body || {};
+  const email = String(b.email || '').trim().toLowerCase().slice(0, 254);
+  const password = String(b.password || '').slice(0, 200);
+  const secret = process.env.ADMIN_PASSWORD || '';
+
+  if (!email) {
+    const a = Buffer.from(password), s = Buffer.from(secret);
+    if (secret && a.length === s.length && crypto.timingSafeEqual(a, s)) {
+      setAdminCookie(res);
+      logActivity(OWNER_ACTOR, 'signin', {}, null, clientIp(req));
+      return res.redirect(safeAdminPath(b.to));
+    }
+    return res.status(401).send(signinPage(safeAdminPath(b.to), 'That password is not right.'));
+  }
+
+  if (!staffSessionKey()) {
+    return res.status(503).send(signinPage(safeAdminPath(b.to),
+      'Staff sign-in is not switched on yet. Ask the owner.'));
+  }
+  try {
+    const { rows } = await pool.query(
+      'SELECT id, name, password_hash, active, session_version FROM staff WHERE lower(email) = $1', [email]);
+    const s = rows[0];
+    /* Hash even when there is no such account, so the time taken does not say
+       which emails have one. */
+    const ok = STAFF.verifyPassword(password, s ? s.password_hash : DUMMY_STAFF_HASH);
+    if (!s || !ok || !s.active) {
+      return res.status(401).send(signinPage(safeAdminPath(b.to), 'That email and password do not match an active account.'));
+    }
+    setStaffCookie(res, s);
+    logActivity({ kind: 'staff', id: s.id }, 'signin', {}, null, clientIp(req));
+    const to = safeAdminPath(b.to, '/my-day');
+    return res.redirect(to === '/dashboard' ? '/my-day' : to);
+  } catch (err) {
+    console.error('staff sign-in failed:', err.message);
+    return res.status(500).send(signinPage(safeAdminPath(b.to), 'Something went wrong. Please try again.'));
+  }
+});
+const DUMMY_STAFF_HASH = STAFF.hashPassword(crypto.randomBytes(18).toString('hex'));
+
+app.post('/signout', async (req, res) => {
+  const origin = req.headers.origin;
+  if (origin && !SITE_ORIGINS.includes(origin)) return res.status(403).send('Forbidden');
+  try {
+    const staff = cookieValue(req, STAFF_COOKIE) ? await staffFromRequest(req) : null;
+    if (staff) {
+      /* Signing out ends every session this helper has, not just this browser. */
+      await pool.query('UPDATE staff SET session_version = session_version + 1 WHERE id = $1', [staff.id]);
+      logActivity(staff, 'signout', {}, null, clientIp(req));
+    }
+  } catch (err) { console.error('sign-out failed:', err.message); }
+  res.append('Set-Cookie', `${STAFF_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`);
+  res.append('Set-Cookie', `${ADMIN_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`);
+  res.redirect('/signin');
+});
 
 const orderRateLimit     = makeRateLimit(10, 60 * 60 * 1000);
 const signatureRateLimit = makeRateLimit(30, 60 * 60 * 1000);
@@ -2738,10 +3173,10 @@ async function sendCustomerSms({ phone, kind, ref, msg, quote = null }) {
           AND created_at < NOW() - INTERVAL '5 minutes'`,
       [to, String(ref).slice(0, 80), msg.template.slice(0, 80)]);
     const { rows } = await pool.query(
-      `INSERT INTO sms_messages (phone, kind, ref, template, body, status, quote_code)
-       VALUES ($1,$2,$3,$4,$5,'sending',$6)
+      `INSERT INTO sms_messages (phone, kind, ref, template, body, status, quote_code, sent_by)
+       VALUES ($1,$2,$3,$4,$5,'sending',$6,$7)
        ON CONFLICT DO NOTHING RETURNING id`,
-      [to, kind, String(ref).slice(0, 80), msg.template.slice(0, 80), msg.body, quote]);
+      [to, kind, String(ref).slice(0, 80), msg.template.slice(0, 80), msg.body, quote, attributedStaffId()]);
     if (!rows.length) return 'duplicate';
     const id = rows[0].id;
     try {
@@ -4221,7 +4656,7 @@ const BREVO_STAGE = {
  * marketing plumbing must never be able to fail a payment.
  */
 async function syncQuoteContact(q, event = null) {
-  if (!q || !q.email) return;
+  if (!q || !q.email || q.status === 'held') return;
   const email = String(q.email).trim().toLowerCase();
   const total = Number(q.total || 0);
   const paid = Number(q.paid_amount || 0);
@@ -4517,10 +4952,11 @@ async function logClientEmail(quote, kind, mail, status, error = null) {
   if (!quote) return;
   const preview = mail.preview != null ? String(mail.preview) : htmlToText(mail.html || '');
   await pool.query(
-    `INSERT INTO client_emails (quote_code, kind, to_email, subject, preview, status, error)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    `INSERT INTO client_emails (quote_code, kind, to_email, subject, preview, status, error, sent_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
     [quote, kind, String(mail.to || '').slice(0, 254), String(mail.subject || '').slice(0, 300),
-     preview.replace(/\s+/g, ' ').trim().slice(0, 600), status, error ? String(error).slice(0, 300) : null])
+     preview.replace(/\s+/g, ' ').trim().slice(0, 600), status, error ? String(error).slice(0, 300) : null,
+     attributedStaffId()])
     .catch((e) => console.error('client email log failed:', e.message));
 }
 
@@ -5942,6 +6378,8 @@ function toE164(phone) {
  *  this one quote. Store the ids with keepBrevoIds(). */
 async function syncQuoteToBrevo(q, { note = true } = {}) {
   const out = { contactId: q.brevo_contact_id || null, dealId: q.brevo_deal_id || null, error: null };
+  // A quote waiting for the owner's approval is not a deal yet (staff_approvals).
+  if (q.status === 'held') return out;
   const email = String(q.email || '').trim();
   const phone = String(q.phone || '').trim();
   if (!email && !phone) return out;
@@ -6063,7 +6501,7 @@ async function brevoQuoteCatchUp() {
   if (!process.env.BREVO_API_KEY) return '';
   const { rows } = await pool.query(
     `SELECT * FROM quotes
-      WHERE brevo_deal_id IS NULL AND COALESCE(brevo_attempts, 0) < $2
+      WHERE brevo_deal_id IS NULL AND COALESCE(brevo_attempts, 0) < $2 AND status <> 'held'
         AND (NULLIF(btrim(email), '') IS NOT NULL
              OR length(regexp_replace(COALESCE(phone, ''), '\\D', '', 'g')) >= 10)
         AND created_at >= $1 AND created_at < NOW() - interval '10 minutes'
@@ -6096,7 +6534,7 @@ async function brevoQuoteCatchUp() {
  *  over the shared internal key). Fire-and-forget by design. */
 async function syncQuoteToLumise(q) {
   const key = process.env.JT_INTERNAL_KEY;
-  if (!key) return;
+  if (!key || (q && q.status === 'held')) return;
   try {
     const url = 'https://design.jtees.net/jt-contact.php';
     await studioFetch(url, {
@@ -6139,7 +6577,10 @@ button:active{transform:translateY(1px)}
 .warn{background:#fdecea;border:1px solid #f5c6cb;color:#b71c1c;padding:12px 14px;border-radius:10px;margin-bottom:12px}
 .chip{display:inline-block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:3px 10px;border-radius:20px}
 .muted{color:#6b7280;font-size:13px}
-@media(max-width:560px){.row{flex-direction:column;gap:0}}
+/* Stacked on a phone, a flex-basis written for width (flex:1 1 240px) becomes
+   a HEIGHT, and an input grows 240px tall. Every stacked child sizes to its
+   content instead, inline styles included. */
+@media(max-width:560px){.row{flex-direction:column;gap:0}.row>*{flex-basis:auto!important}}
 
 /* ── Item lines ──────────────────────────────────────────────────────────
    Each item is a quiet block, not a competing card. Only the essentials show;
@@ -6295,6 +6736,8 @@ form:has(>.step-row){display:block}
    links in mail already in June's inbox for no gain. /admin, the old enquiries
    page, forwards to /leads for the same reason. */
 const ADMIN_NAV = [
+  { key: 'myday',      href: '/my-day',        label: 'My Day',     icon: 'check',  staffOnly: true },
+  { key: 'earnings',   href: '/my-earnings',   label: 'My earnings', icon: 'dollar', staffOnly: true },
   { key: 'dashboard',  href: '/dashboard',     label: 'Dashboard',  icon: 'grid' },
   { key: 'leads',      href: '/leads',         label: 'Leads',      icon: 'inbox',  badge: 'leads' },
   { key: 'quotes',     href: '/quotes',        label: 'Quotes',     icon: 'file' },
@@ -6305,6 +6748,9 @@ const ADMIN_NAV = [
   { key: 'money',      href: FINANCES_PATH,    label: 'Finances',   icon: 'dollar' },
   { key: 'certificates', href: '/certificates', label: 'Certificates', icon: 'cert', badge: 'certificates' },
   { key: 'discounts',  href: '/discounts',     label: 'Discounts',  icon: 'tag' },
+  { key: 'chat',       href: '/team-chat',     label: 'Team chat',  icon: 'chat',   badge: 'chat' },
+  { key: 'playbook',   href: '/playbook',      label: 'Playbook',   icon: 'book' },
+  { key: 'team',       href: '/admin/team',    label: 'Team',       icon: 'team',   badge: 'approvals' },
 ];
 /* Ordered the way a shop is actually worked, not the way the routes grew: what
    needs you today, the enquiries that might become work, the work in hand, the
@@ -6343,6 +6789,9 @@ const ADMIN_ICONS = {
   edit:   '<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>',
   card:   '<rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/>',
   phone:  '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
+  check:  '<polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+  book:   '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
+  team:   '<circle cx="9" cy="7" r="4"/><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/><path d="M21 21v-2a4 4 0 0 0-3-3.85"/>',
   mail:   '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>',
 };
 function icon(name) {
@@ -6362,6 +6811,7 @@ const ADMIN_CSS = `
 .adm-mark{width:34px;height:34px;border-radius:10px;background:#A52429;color:#fff;display:grid;place-items:center;
   font-size:13px;font-weight:800;flex:0 0 34px}
 .adm-nav{display:flex;flex-direction:column;gap:2px}
+.adm-signout{background:none;border:0;width:100%;font:inherit;cursor:pointer;text-align:left}
 .adm-link{display:flex;align-items:center;gap:11px;padding:9px 12px;border-radius:10px;color:#c7d2e8;
   text-decoration:none;font-size:14px;font-weight:600}
 .adm-link svg,.adm-new svg,.adm-burger svg,.adm-top-new svg{width:18px;height:18px;flex:0 0 18px;
@@ -6526,17 +6976,30 @@ if(n>0){el.textContent=n>99?'99+':String(n);el.hidden=false;}});}).catch(functio
 
 /** The side menu. `active` is an ADMIN_NAV key. */
 function adminNav(active) {
+  /* A helper sees only what their permissions open; the owner sees everything
+     but the helper-only entries. Worked out from the same route table the
+     server enforces, so the menu cannot offer a page that would refuse them. */
+  const actor = typeof currentActor === 'function' ? currentActor() : null;
+  const staff = actor && actor.kind === 'staff' ? actor : null;
+  const items = ADMIN_NAV.filter((n) => staff
+    ? STAFF.mayUseRoute(staff, 'GET', n.href)
+    : !n.staffOnly);
+  const home = staff ? '/my-day' : '/dashboard';
   return `<aside class="adm-side" aria-label="Admin menu">
-    <a class="adm-brand" href="/dashboard"><span class="adm-mark">JT</span>
-      <span>June's Tees<small>Back office</small></span></a>
-    <nav class="adm-nav">${ADMIN_NAV.map((n) => `
+    <a class="adm-brand" href="${home}"><span class="adm-mark">JT</span>
+      <span>June's Tees<small>${staff ? escEmail(staff.name) : 'Back office'}</small></span></a>
+    <nav class="adm-nav">${items.map((n) => `
       <a class="adm-link${n.key === active ? ' is-active' : ''}" href="${n.href}"${
         n.key === active ? ' aria-current="page"' : ''}>${icon(n.icon)}<span>${n.label}</span>${
         n.badge ? `<span class="adm-badge" data-badge="${n.badge}" hidden></span>` : ''}</a>`).join('')}
     </nav>
     <div class="adm-foot">
-      <a class="adm-new" href="/quote/new">${icon('plus')}<span>New quote</span></a>
-      <a class="adm-link" href="${STUDIO_ADMIN}" target="_blank" rel="noopener">${icon('out')}<span>Studio</span></a>
+      ${!staff || STAFF.mayUseRoute(staff, 'GET', '/quote/new|/quote/:code/edit')
+        ? `<a class="adm-new" href="/quote/new">${icon('plus')}<span>New quote</span></a>` : ''}
+      ${staff ? `<a class="adm-link" href="/account">${icon('users')}<span>My account</span></a>`
+        : `<a class="adm-link" href="${STUDIO_ADMIN}" target="_blank" rel="noopener">${icon('out')}<span>Studio</span></a>`}
+      <form method="post" action="/signout" style="margin:0"><button type="submit" class="adm-link adm-signout">${
+        icon('out')}<span>Sign out</span></button></form>
     </div>
   </aside>`;
 }
@@ -6574,6 +7037,14 @@ function adminPage(title, body, active) {
   </div>
 </div>
 <script>${ADMIN_BADGE_JS}</script>`, { css: ADMIN_CSS, bodyClass: 'adm-body' });
+}
+
+/** The catalogue minus the shop's supplier costs, for a helper without
+ *  Finances. Pricing never reads `cost`; only the margin notes do. */
+function catalogWithoutCosts(catalog) {
+  return { ...catalog, products: (catalog.products || []).map((p) => {
+    const { cost, ...rest } = p; return rest;
+  }) };
 }
 
 function quotePage(title, body) {
@@ -6624,6 +7095,7 @@ function emptyState(html, action) {
 app.get(['/quote/new', '/quote/:code/edit'], requireAdmin, async (req, res) => {
   let catalog = { products: [], methods: [] };
   try { catalog = await getCatalog(); } catch (e) { /* form still works manually */ }
+  const creditRoster = await staffRoster({ activeOnly: true }).catch(() => []);
 
   let existing = null;
   const editCode = String(req.params.code || '').toUpperCase();
@@ -7097,6 +7569,7 @@ function productGroupOf(name) {
         <p class="muted" id="eta" style="margin-top:8px"></p>
         <label>Quote good for (days)</label>
         <input name="valid_days" type="number" value="14" inputmode="numeric">
+        ${creditField(existing, creditRoster)}
         <label>Notes for the customer</label><textarea name="notes" rows="2" placeholder="Optional">${val(E.notes)}</textarea>
       </div>
 
@@ -7105,7 +7578,7 @@ function productGroupOf(name) {
     </form>
     <p style="margin-top:14px"><a class="muted" href="/quotes">View all quotes →</a></p>
     <script>
-      var CAT = ${JSON.stringify(catalog)};
+      var CAT = ${JSON.stringify(actorLevel('finances') === 'on' ? catalog : catalogWithoutCosts(catalog))};
       var TAX = ${TAX_RATE}, DEP = ${DEPOSIT_PC}, FULL_UNDER = ${DEPOSIT_FULL_UNDER};
       /* The rush ladder, handed over from the server so the form and the save
          path read ONE table. Editable per quote: this only ever fills the box
@@ -8013,7 +8486,7 @@ ${uploadStatusScript()}
                      (d.margin.thin?' — thin, price this one higher':'')+
                      (d.avg_pct!==null&&d.count>1?' <span style="color:#6b7280">· '+d.avg_pct+'% average</span>':'')+
                      '</div>';
-              } else {
+              } else if (!d.margin_hidden) {
                 mg = '<div class="muted" style="margin-top:6px;font-size:12px">'+
                      'No costs entered on their last job, so there is no margin to check this price against.</div>';
               }
@@ -8145,10 +8618,12 @@ app.get('/api/quotes/prior', requireAdmin, async (req, res) => {
       count: rows.length,
       lifetime_quoted: money(quoted),
       lifetime_spent: money(spent),
-      margin: lastMg.entered
+      /* Profit is the owner's to see: a helper without Finances gets none. */
+      margin: lastMg.entered && actorLevel('finances') === 'on'
         ? { profit: money(lastMg.profit), pct: lastMg.pct, thin: lastMg.pct < 30 }
         : null,
-      avg_pct: avgPct,
+      margin_hidden: actorLevel('finances') !== 'on',
+      avg_pct: actorLevel('finances') === 'on' ? avgPct : null,
       link: `/customer?q=${encodeURIComponent(last.email || last.phone || '')}`,
       // The exact lines they were charged before, so a repeat quote can match.
       lines: (last.items || []).slice(0, 4).map(i => ({
@@ -8177,6 +8652,14 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
        description or a quantity counts; a product is optional so a purely
        manual line ("banner, 3ft x 8ft") works exactly as well. */
     const items = [];
+    /* For a helper's quote, what the same lines cost at CATALOGUE price, and
+       how many custom lines carry a typed price with no catalogue to measure
+       it against. The approval gate reads these: a typed garment price lowers
+       the "list" figure along with the line, so measuring against list_total
+       alone let a helper sell far below catalogue without the owner's OK. */
+    const measureForStaff = (currentActor() || OWNER_ACTOR).kind === 'staff';
+    let catalogueSum = 0;
+    let customPriced = 0;
     /* Lines whose ink count is past what the press can run in one pass. Collected
        rather than thrown at the first one, so a person fixing a multi-line quote
        is told about all of them at once. */
@@ -8351,7 +8834,7 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
 
       const runGroup = String(one(b['run' + i]) || '').trim();
       const stage2 = String(one(b['loc2' + i]) || '').trim();
-      const priced = priceLine({
+      const priceArgs = {
         bandQty: runGroup ? (runTotals[runGroup] || 0) : 0,
         product: prod, method, qty: q, sizeMix: mix, colours,
         method2, stage2, colours2: one(b['colors2' + i]) || '',
@@ -8362,7 +8845,17 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
            under-bills by one screen per location. */
         dark: garmentDark,
         blankOverride, unitOverride: rawUnit,
-      });
+      };
+      const priced = priceLine(priceArgs);
+      if (measureForStaff) {
+        const typedUnit = rawUnit != null && String(rawUnit).trim() !== '' && Number.isFinite(Number(rawUnit));
+        if (prod && (blankOverride != null || typedUnit)) {
+          catalogueSum += priceLine({ ...priceArgs, blankOverride: null, unitOverride: null }).lineTotal;
+        } else {
+          catalogueSum += priced.lineTotal;
+          if (!prod && typedUnit) customPriced++;
+        }
+      }
 
       /* A design past the press's screen ceiling is not a screen-print job, and
          saving it anyway prices work the shop cannot run. The form has warned
@@ -8633,6 +9126,43 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
     const editing = String(req.params.code || '').toUpperCase();
     let rows;
 
+    /* Does this go straight to the customer, or wait for the owner? A helper's
+       quote is HELD when their permissions say so (tools/lib/staff.js): the
+       customer's link answers "not found", nothing reaches Brevo, and the
+       owner releases it from /admin/approvals. The discount measured is
+       everything below list — typed-down line prices and the discount box —
+       against what the same job costs at catalogue price. */
+    const actor = currentActor() || OWNER_ACTOR;
+    const staffId = actor.kind === 'staff' ? actor.id : null;
+    const listSubtotal = round2(Math.max(catalogueSum, items.reduce((a, i) =>
+      a + Math.max(Number(i.line_total) || 0, Number(i.list_total) || 0), 0)));
+    const listGross = listSubtotal * (1 + rushPct / 100);
+    const gate = STAFF.quoteNeedsApproval(actor, {
+      total, customPriced,
+      discountPct: listGross > 0 ? Math.max(0, (1 - net / listGross) * 100) : 0,
+    });
+    let existingQuote = null;
+    if (QUOTE_CODE_RE.test(editing)) {
+      ({ rows: [existingQuote] } = await pool.query(
+        'SELECT code, status, held_at, accepted_at FROM quotes WHERE code = $1', [editing]));
+    }
+    const wasHeld = !!(existingQuote && existingQuote.status === 'held');
+    /* Held until released: an owner's edit keeps it waiting for the Approve
+       button (so releasing is always a deliberate act), and a helper's keeps
+       it held when their limits still say so. */
+    const keepHeld = wasHeld && (actor.kind === 'owner' || gate.held);
+    if (existingQuote && !wasHeld && gate.held) {
+      /* The customer already has this one, so an edit would reach them the
+         moment it saved. A helper whose changes need approval leaves a note
+         for the owner instead. */
+      return res.status(403).send(adminPage('Needs the owner', `
+        ${pageHeader('This quote is already with the customer', '')}
+        <div class="card"><div class="warn">Your changes would reach them straight away, and they need the owner's OK:</div>
+          <ul>${gate.reasons.map((r) => `<li>${escEmail(r)}</li>`).join('')}</ul>
+          <p>Leave a note on the job saying what should change, and the owner will make the edit.</p>
+          <p style="margin-top:12px"><a class="btn" href="/production/${escEmail(editing)}#notes">Leave a note</a></p></div>`, 'quotes'));
+    }
+
     if (QUOTE_CODE_RE.test(editing)) {
       /* Edit in place. The code never changes, so the link the customer already
          has updates itself — no need to re-send unless June wants to. Clearing
@@ -8643,11 +9173,16 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
                 discount_kind=$13, discount_value=$14, discount_note=$15, rush_pct=$16,
                 taxable=$17, tax_exempt_ref=$18, tax_exempt_reason=$19,
                 change_request=NULL, requested_items=NULL, revision=COALESCE(revision,1)+1,
-                status = CASE WHEN accepted_at IS NULL THEN 'sent' ELSE status END
+                status = CASE WHEN $20 THEN 'held' WHEN accepted_at IS NULL THEN 'sent' ELSE status END,
+                held_at = CASE WHEN $20 THEN held_at ELSE NULL END,
+                sent_by = CASE WHEN status = 'held' AND NOT $20 THEN $21 ELSE sent_by END,
+                -- released on this save: the customer's clock starts now (see releaseHeldQuote)
+                created_at = CASE WHEN status = 'held' AND NOT $20 THEN NOW() ELSE created_at END
           WHERE code=$1 RETURNING *`,
         [editing, name, phone, email, JSON.stringify(items), subtotal, tax, total, deposit,
          String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy,
-         discountKind, discountValue, discountNote || null, rushPct, taxable, exemptRef, exemptReason]));
+         discountKind, discountValue, discountNote || null, rushPct, taxable, exemptRef, exemptReason,
+         keepHeld, staffId]));
       if (!rows.length) {
         return res.status(404).send(quotePage('Not found',
           `<div class="card"><div class="warn">That quote no longer exists.</div>
@@ -8667,17 +9202,64 @@ app.post(['/api/quotes', '/api/quotes/:code'], requireAdmin, async (req, res) =>
            to catch it, which it only does when the details match exactly. */
         `INSERT INTO quotes (code,name,phone,email,items,subtotal,tax,total,deposit,notes,status,valid_until,needed_by,
                              discount_kind,discount_value,discount_note,rush_pct,taxable,tax_exempt_ref,tax_exempt_reason,
-                             from_submission_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'sent',$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *`,
+                             from_submission_id, created_by, sent_by, held_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$23,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,
+                 CASE WHEN $23 = 'held' THEN NOW() END) RETURNING *`,
         [code, name, phone, email, JSON.stringify(items), subtotal, tax, total, deposit,
          String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy,
          discountKind, discountValue, discountNote || null, rushPct, taxable, exemptRef, exemptReason,
          (Number.isFinite(parseInt(one(b.from_submission_id), 10))
-           ? parseInt(one(b.from_submission_id), 10) : null)]));
+           ? parseInt(one(b.from_submission_id), 10) : null),
+         staffId, gate.held ? null : staffId, gate.held ? 'held' : 'sent']));
     }
 
     const q = rows[0];
     const code = q.code;
+    /* Sales credit from the form. A helper's own quote is theirs unless they
+       name a teammate; a refusal (someone else's sale) keeps what was there. */
+    {
+      const want = String(one(b.credit_to) || '').trim();
+      const r = await setSalesCredit(code, want || (staffId && q.credited_to == null ? String(staffId) : ''), actor)
+        .catch((e) => ({ ok: false, msg: e.message }));
+      if (r.ok && r.to !== undefined) q.credited_to = r.to;
+      else if (!r.ok && want) console.warn(`sales credit on ${code} not changed: ${r.msg}`);
+    }
+
+    if (q.status === 'held') {
+      /* One open request per quote: a re-save replaces the reasons, it does not
+         queue a second approval for the same thing. */
+      const { rowCount } = await pool.query(
+        `UPDATE staff_approvals SET reasons = $2, payload = $3, created_at = NOW()
+          WHERE kind = 'quote' AND subject_id = $1 AND status = 'pending'`,
+        [code, JSON.stringify(gate.reasons.length ? gate.reasons : ['Edited while waiting for approval.']),
+         JSON.stringify({ total })]);
+      if (!rowCount) {
+        await pool.query(
+          `INSERT INTO staff_approvals (kind, subject_id, payload, reasons, requested_by)
+           VALUES ('quote', $1, $2, $3, $4)`,
+          [code, JSON.stringify({ total }), JSON.stringify(gate.reasons), q.created_by || staffId || 0]);
+      }
+      logActivity(actor, 'quote held for approval', { type: 'quote', id: code }, { total, reasons: gate.reasons });
+      return res.send(adminPage('Waiting for approval', `
+        ${pageHeader(`Quote ${code} is waiting for approval`, `${escEmail(name || email || phone || '')} &middot; ${money(total)}`)}
+        <div class="card">
+          <p>The customer cannot see it yet. ${actor.kind === 'owner'
+            ? 'Release it from Approvals when it is ready.'
+            : 'The owner will review it; you will see it move on your My Day list.'}</p>
+          ${gate.reasons.length ? `<ul>${gate.reasons.map((r) => `<li>${escEmail(r)}</li>`).join('')}</ul>` : ''}
+          <p style="margin-top:12px">
+            <a class="btn btn-ghost" href="/quote/${code}/edit">Edit it</a>
+            ${actor.kind === 'owner' ? '<a class="btn" href="/admin/approvals">Approvals</a>' : '<a class="btn" href="/my-day">My Day</a>'}
+          </p>
+        </div>`, 'quotes'));
+    }
+    if (wasHeld) {
+      // Released by a helper whose limits now allow it: the request is moot.
+      await pool.query(`UPDATE staff_approvals SET status = 'withdrawn', decided_at = NOW()
+                         WHERE kind = 'quote' AND subject_id = $1 AND status = 'pending'`, [code]);
+    }
+    if (!existingQuote) logActivity(actor, 'quote sent', { type: 'quote', id: code }, { total });
+    if (!existingQuote && q.from_submission_id) markLeadResponded(q.from_submission_id, actor);
 
     /* An edit updates the quote's one deal (q carries brevo_deal_id from the
        UPDATE ... RETURNING); a failure is retried hourly, brevoQuoteCatchUp. */
@@ -8879,7 +9461,7 @@ app.get('/q/:code', async (req, res) => {
   }
 
   try {
-    const { rows } = await pool.query('SELECT * FROM quotes WHERE code=$1', [code]);
+    const { rows } = await pool.query(`SELECT * FROM quotes WHERE code=$1 AND status <> 'held'`, [code]);
     if (!rows.length) {
       quoteMissBudget.miss(req);
       return friendly('It may have been removed. Text or call and we will resend it.');
@@ -9455,7 +10037,7 @@ app.get(['/q/:code/pay/card', '/q/:code/pay/balance', '/q/:code/pay/full'], asyn
   const secret = process.env.STRIPE_SECRET_KEY;
 
   try {
-    const { rows } = await pool.query('SELECT * FROM quotes WHERE code=$1', [code]);
+    const { rows } = await pool.query(`SELECT * FROM quotes WHERE code=$1 AND status <> 'held'`, [code]);
     if (!rows.length) { quoteMissBudget.miss(req); return res.redirect('/q/' + code); }
     const q = rows[0];
 
@@ -10766,7 +11348,7 @@ async function landStripePaymentOnQuote(q, { gross, pi, extRef, createdAt, how, 
   }
   await pool.query(
     `UPDATE quotes SET status = 'accepted', accepted_at = COALESCE(accepted_at, NOW())
-      WHERE code = $1`, [code]).catch(() => {});
+      WHERE code = $1 AND status <> 'held'`, [code]).catch(() => {});
   const nq = { ...q, paid_amount: res.paid };
   const stillDue = balanceOf(nq, t.total);
   const taxIn = (Number(q.total) > 0 && Number(q.tax) > 0)
@@ -11357,7 +11939,7 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
               name  = COALESCE(NULLIF(name,''),  $3),
               email = COALESCE(NULLIF(email,''), $4),
               phone = COALESCE(NULLIF(phone,''), $5)
-        WHERE code=$1 AND accepted_at IS NULL AND requested_items IS NULL AND cancelled_at IS NULL RETURNING *`,
+        WHERE code=$1 AND accepted_at IS NULL AND requested_items IS NULL AND cancelled_at IS NULL AND status <> 'held' RETURNING *`,
       [code, nb, cname, cemail, cphone]);
 
     if (rows.length) {                       // first acceptance only
@@ -11501,7 +12083,7 @@ app.post('/q/:code/changes', orderRateLimit, async (req, res) => {
   const b = req.body || {};
   const msg = String(b.message || '').trim().slice(0, 1000);
   try {
-    const { rows: found } = await pool.query('SELECT * FROM quotes WHERE code=$1', [code]);
+    const { rows: found } = await pool.query(`SELECT * FROM quotes WHERE code=$1 AND status <> 'held'`, [code]);
     if (!found.length) return res.redirect('/q/' + code);
     const q = found[0];
 
@@ -11618,6 +12200,9 @@ app.post('/quote/:code/mark-paid', requireAdmin, async (req, res) => {
     const { rows } = await pool.query('SELECT * FROM quotes WHERE code=$1', [code]);
     if (!rows.length) return res.redirect('/quotes');
     const q = rows[0];
+    /* A held quote has not reached the customer; recording a payment would
+       make it 'accepted' and live without the owner's Approve. */
+    if (q.status === 'held') return res.redirect(`/production/${code}?err=${encodeURIComponent('This quote is waiting for approval. Approve it first.')}`);
     const t = quoteTotals(q);
 
     // Blank amount means "they paid what was due" — deposit, or the balance if
@@ -11797,7 +12382,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
                 SUM(cost_blanks + cost_supplies + cost_outsourced + cost_shipping) AS costs,
                 COUNT(*) FILTER (WHERE (cost_blanks + cost_supplies + cost_outsourced + cost_shipping) > 0) AS costed
            FROM quotes
-          WHERE status <> 'expired' AND EXTRACT(YEAR FROM created_at) = $1
+          WHERE status NOT IN ('expired', 'held') AND EXTRACT(YEAR FROM created_at) = $1
           GROUP BY 1)
        SELECT COALESCE(pay.period, job.period) AS period,
               COALESCE(pay.collected,0) AS collected, COALESCE(pay.tax,0) AS tax,
@@ -12241,7 +12826,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
 /* The categories a print shop actually spends on. A fixed list beats free text:
    a category typed three different ways cannot be totalled. */
 const EXPENSE_CATEGORIES = ['Rent', 'Utilities', 'Materials', 'Equipment',
-  'Software', 'Insurance', 'Marketing', 'Vehicle', 'Fees', 'Other'];
+  'Software', 'Insurance', 'Marketing', 'Vehicle', 'Fees', 'Contract labor', 'Other'];
 
 /* Record an overhead. */
 app.post('/expenses', requireAdmin, async (req, res) => {
@@ -12905,7 +13490,9 @@ app.post('/quote/:code/uncancel', requireAdmin, async (req, res) => {
                             THEN 'accepted' ELSE 'sent' END,
               accepted_at = CASE WHEN accepted_at IS NULL AND COALESCE(paid_amount, 0) > 0
                                  THEN NOW() ELSE accepted_at END
-        WHERE code = $1 RETURNING *`, [code]);
+        WHERE code = $1 AND status <> 'held' RETURNING *`, [code]);
+    /* Never out of 'held': that is the owner's Approve, not a Restore, or a
+       helper could release a quote their limits held back. */
     // And back out of lost, to the stage its own state says.
     if (rows.length) syncDealStage(rows[0]).catch(() => {});
   } catch (err) {
@@ -12945,6 +13532,13 @@ app.post('/quote/:code/receipt', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/quotes');
   const to = String((req.body && req.body.to) || req.query.to || '').trim() || null;
+  /* A receipt is an email to a customer. A helper whose messages wait for the
+     owner has no approval step for this one, so it is the owner's to send. */
+  if (actorLevel('customers.message') !== 'on') {
+    return res.status(403).send(adminPage('Needs the owner', `${pageHeader('Receipts go through the owner', '')}
+      <div class="card"><p>Your customer emails wait for the owner's OK, so sending a receipt is theirs to do.</p>
+      <p style="margin-top:12px"><a class="btn" href="/production/${escEmail(code)}">Back to the job</a></p></div>`, 'quotes'));
+  }
   try {
     const out = await sendReceipt(code, to);
     console.log(`receipt for ${code}:`, out.ok ? `sent to ${out.to}` : out.error);
@@ -12960,7 +13554,7 @@ app.get('/q/:code/vcard', async (req, res) => {
   if (quoteMissBudget.exhausted(req)) return res.status(429).send('too many attempts');
   if (!QUOTE_CODE_RE.test(code)) { quoteMissBudget.miss(req); return res.status(400).send('bad code'); }
   try {
-    const { rows } = await pool.query('SELECT * FROM quotes WHERE code=$1', [code]);
+    const { rows } = await pool.query(`SELECT * FROM quotes WHERE code=$1 AND status <> 'held'`, [code]);
     if (!rows.length) { quoteMissBudget.miss(req); return res.status(404).send('not found'); }
     const q = rows[0];
     const [first, ...rest] = String(q.name || '').trim().split(/\s+/);
@@ -14105,7 +14699,7 @@ async function renderBoard(VIEW, req, res) {
                      THEN q.tax * LEAST(COALESCE(q.paid_amount,0) / q.total, 1)
                      ELSE 0 END),0) AS tax_collected
          FROM quotes q
-        WHERE q.status <> 'expired'
+        WHERE q.status NOT IN ('expired', 'held')
         GROUP BY 1,2 ORDER BY m DESC LIMIT 12`);
     const taxTotal = taxRows.reduce((s, r) => s + Number(r.tax_collected), 0);
     const taxPos = await taxPositionByMonth(24);
@@ -14118,7 +14712,7 @@ async function renderBoard(VIEW, req, res) {
     const { rows: openAgg } = await pool.query(
       `SELECT COUNT(*) AS n, COALESCE(SUM(total - COALESCE(paid_amount,0)),0) AS due
          FROM quotes
-        WHERE status <> 'expired' AND COALESCE(paid_amount,0) < total`);
+        WHERE status NOT IN ('expired', 'held') AND COALESCE(paid_amount,0) < total`);
 
     const { rows: quotedAgg } = await pool.query(
       `SELECT to_char(date_trunc('month', created_at), 'Mon YYYY') AS label,
@@ -14127,10 +14721,10 @@ async function renderBoard(VIEW, req, res) {
               COALESCE(SUM(subtotal),0) AS sales,
               COALESCE(SUM(cost_blanks + cost_supplies + cost_outsourced + cost_shipping),0) AS costs,
               COUNT(*) FILTER (WHERE (cost_blanks + cost_supplies + cost_outsourced + cost_shipping) > 0) AS costed
-         FROM quotes WHERE status <> 'expired' GROUP BY 1,2 ORDER BY m DESC LIMIT 12`);
+         FROM quotes WHERE status NOT IN ('expired', 'held') GROUP BY 1,2 ORDER BY m DESC LIMIT 12`);
     const quotedByLabel = Object.fromEntries(quotedAgg.map(r => [r.label, r]));
     const colour = {
-      sent: '#eef1f8|#33415c', viewed: '#fff4e0|#8a5a00', changes: '#fdecea|#b45309',
+      held: '#f5f3ff|#6d28d9', sent: '#eef1f8|#33415c', viewed: '#fff4e0|#8a5a00', changes: '#fdecea|#b45309',
       accepted: '#e7f6ec|#166534', paid: '#1848B8|#ffffff', expired: '#f3f4f6|#6b7280',
     };
     const quoteCard = (q) => {
@@ -14341,7 +14935,8 @@ async function renderBoard(VIEW, req, res) {
             </details></div>`;
         })()}
         ${(() => {
-          if (VIEW !== 'work') return '';
+          // Costs, margin and profit are Finances: the owner's unless they open it.
+          if (VIEW !== 'work' || actorLevel('finances') !== 'on') return '';
           const mg = quoteMargin(q);
           const good = mg.pct !== null && mg.pct >= 50;
           const thin = mg.pct !== null && mg.pct < 30;
@@ -14720,7 +15315,7 @@ async function renderBoard(VIEW, req, res) {
       <!-- Books moved to the main nav; these two stay because they are the two
            views of THIS board, not separate destinations. -->
 
-      ${VIEW !== 'money' ? '' : `
+      ${VIEW !== 'money' || actorLevel('finances') !== 'on' ? '' : `
       <div class="card" style="margin-bottom:16px">
         <div style="display:flex;gap:26px;flex-wrap:wrap;align-items:baseline;margin-bottom:4px">
           <div>
@@ -15114,6 +15709,8 @@ app.get('/production/:code', requireAdmin, async (req, res) => {
 
     const messagesCard = await jobMessagesCard(q, req.query);
     const certificateCard = await jobCertificateCard(q, req.query);
+    const notesCard = await jobNotesCard(q.code);
+    const creditCard = await jobCreditCard(q).catch((e) => { console.error('credit card failed:', e.message); return ''; });
     res.send(adminPage(`${q.code} — production`, `
       <h1>${escEmail(q.name || q.code)}</h1>
       <div class="sub">${escEmail(q.code)} · ${money(q.total)} ·
@@ -15185,6 +15782,8 @@ app.get('/production/:code', requireAdmin, async (req, res) => {
       </div>
       ${certificateCard}
       ${messagesCard}
+      ${creditCard}
+      ${notesCard}
 
       <script>
         document.querySelectorAll('form[data-stepform]').forEach(function(form){
@@ -15291,21 +15890,25 @@ const MESSAGE_ERRORS = {
   'no-consent': 'They have not agreed to texts, so nothing was sent. Send it by email instead.',
   failed: 'It did not send, and the error has been reported. Try again, or reach them another way.',
   duplicate: 'That message went out a moment ago, so it was not sent twice.',
+  held: 'This quote is still waiting for approval, so the customer cannot open it yet. Nothing was sent. Once it is approved, message them.',
 };
 
 async function jobMessagesCard(q, query) {
   const code = q.code;
   const { rows: history } = await pool.query(
     `SELECT * FROM (
-       SELECT 'email' AS channel, kind, subject, preview AS body, status, error, created_at
+       SELECT 'email' AS channel, kind, subject, preview AS body, status, error, created_at, sent_by
          FROM client_emails WHERE quote_code = $1
        UNION ALL
-       SELECT 'text', template, NULL, body, status, error, created_at
+       SELECT 'text', template, NULL, body, status, error, created_at, sent_by
          FROM sms_messages WHERE quote_code = $1) m
       ORDER BY created_at DESC LIMIT 60`, [code]).catch((e) => {
     console.error(`messages for ${code} failed:`, e.message);
     return { rows: [] };
   });
+  /* Which helper sent a message. Blank is the owner or the shop's automatic
+     emails, which is how it read before helpers existed. */
+  const roster = history.some((m) => m.sent_by != null) ? await staffRoster().catch(() => []) : [];
   const phone = normalizeUsPhone(q.phone);
   let textWhyNot = !phone ? 'no phone number on this quote'
     : !smsConfigured() ? 'texting is not switched on yet' : '';
@@ -15341,7 +15944,7 @@ async function jobMessagesCard(q, query) {
         bad && m.error ? `<div class="row-sub" style="white-space:normal;color:#b91c1c">${escEmail(m.error)}</div>` : ''}</span>
       <span class="row-end msg-end">${pill(inbound ? 'reply' : m.status, tone(m.status))}
         <span class="muted msg-when">${m.channel === 'email' ? 'email' : 'text'} &middot; ${
-          escEmail(when(m.created_at))}</span></span></div>`;
+          escEmail(when(m.created_at))}${m.sent_by != null ? ` &middot; by ${escEmail(nameOf(roster, m.sent_by))}` : ''}</span></span></div>`;
   };
   const radio = (value, text, why, checked) => `
           <label style="display:flex;gap:6px;align-items:center;margin:0;text-transform:none;letter-spacing:0;
@@ -15352,6 +15955,7 @@ async function jobMessagesCard(q, query) {
     <div class="card" id="messages" style="margin-top:14px">
       <h2 class="card-title">Messages${first ? ' with ' + escEmail(first) : ''} <span class="muted">${history.length || ''}</span></h2>
       ${sent ? `<div class="ok">Sent by ${sent}. It is in the list below.</div>` : ''}
+      ${String(query.sent) === 'held' ? `<div class="ok">Saved for the owner to approve. It goes out when they send it.</div>` : ''}
       ${failed ? `<div class="warn">${escEmail(failed)}</div>` : ''}
       <form method="POST" action="/quote/${code}/message" data-msgform style="margin:0 0 12px">
         <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px">
@@ -15366,6 +15970,10 @@ async function jobMessagesCard(q, query) {
           `<button type="button" class="kbtn kbtn-sm" data-fill="${escEmail(t)}">${escEmail(label)}</button>`).join('')}</div>
         <button type="submit" class="btn" style="padding:10px 22px;font-size:14px"${emailWhyNot && textWhyNot ? ' disabled' : ''}>Send</button>
         <span class="muted" style="font-size:12px;margin-left:8px">Their replies come to your inbox, or your phone for a text.</span>
+        <details style="margin-top:8px"><summary>Insert a reply from the playbook</summary>
+          <input type="search" data-kbq placeholder="Type the question, e.g. do I pay up front?" style="margin-top:6px">
+          <div data-kblist style="margin-top:6px"></div>
+        </details>
       </form>
       ${history.length ? `<div class="rows">${history.map(row).join('')}</div>`
         : emptyState('Nothing sent yet. Receipts, reminders and updates show here as they go out.')}
@@ -15385,6 +15993,27 @@ async function jobMessagesCard(q, query) {
         }
         f.querySelectorAll('input[name="channel"]').forEach(function(r){ r.addEventListener('change', sync); });
         sync();
+        /* Playbook replies. Built with textContent, never markup: an article
+           is text the shop wrote, and it goes into a textarea as text. */
+        var kq = f.querySelector('[data-kbq]'), kl = f.querySelector('[data-kblist]'), kt;
+        function kbLoad(){
+          fetch('/api/playbook/replies?q=' + encodeURIComponent(kq.value || ''), { credentials: 'same-origin' })
+            .then(function(r){ return r.ok ? r.json() : []; }).then(function(list){
+              kl.textContent = '';
+              if (!list.length) { kl.textContent = 'No replies match.'; return; }
+              list.forEach(function(a){
+                var b = document.createElement('button');
+                b.type = 'button'; b.className = 'btn btn-ghost'; b.style.margin = '0 6px 6px 0';
+                b.textContent = (a.shortcut ? '/' + a.shortcut + ' ' : '') + a.title;
+                b.addEventListener('click', function(){ body.value = a.body; body.focus(); });
+                kl.appendChild(b);
+              });
+            }).catch(function(){ kl.textContent = 'Could not load replies.'; });
+        }
+        if (kq) {
+          kq.addEventListener('input', function(){ clearTimeout(kt); kt = setTimeout(kbLoad, 250); });
+          kq.closest('details').addEventListener('toggle', function(e){ if (e.target.open && !kl.childNodes.length) kbLoad(); });
+        }
         f.addEventListener('submit', function(){
           var b = f.querySelector('button[type="submit"]');
           setTimeout(function(){ b.disabled = true; b.textContent = 'Sending…'; }, 0);
@@ -15397,6 +16026,55 @@ async function jobMessagesCard(q, query) {
    itself, but a back-button resubmit does not go through the button. */
 const recentJobMessages = new Map();
 
+/* Sends one message the shop wrote on the job page. Shared by the page itself
+   and by /admin/approvals, which sends a helper's held message once the owner
+   says yes. Returns 'sent' or the reason it did not go. */
+async function sendJobMessage({ code, channel, subject, text }) {
+  const key = crypto.createHash('sha256').update([code, channel, text].join('|')).digest('hex');
+  const now = Date.now();
+  for (const [k, at] of recentJobMessages) if (now - at > 2 * 60 * 1000) recentJobMessages.delete(k);
+  if (recentJobMessages.has(key)) return 'duplicate';
+
+  try {
+    const { rows } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
+    const q = rows[0];
+    /* Every message links to the customer's quote page, which answers "not
+       found" while the quote waits for approval. */
+    if (q && q.status === 'held') return 'held';
+    if (!q) return 'no-quote';
+    if (channel === 'email') {
+      if (!q.email) return 'no-email';
+      recentJobMessages.set(key, now);
+      await sendClientEmail({ quote: code, kind: 'manual', to: q.email, subject, replyTo: SHOP_EMAIL, preview: text,
+        html: customerEmailHtml('A note about your order',
+          `<p>${escEmail(text).replace(/\n/g, '<br>')}</p>`, code) });
+      console.log(`message to ${code} by email`);
+      return 'sent';
+    }
+    /* The reasons in the card's order (no number, texting off, no consent),
+       so a refusal names the reason the page showed. sendCustomerSms asks
+       about consent first, which would send June after the wrong fix. */
+    if (!normalizeUsPhone(q.phone)) return 'no-phone';
+    if (!smsConfigured()) return 'texting-off';
+    /* A text keeps the shape every other customer text has: the brand first,
+       the opt-out last, plain characters only (one curly quote makes it cost
+       three times as much). */
+    recentJobMessages.set(key, now);
+    const status = await sendCustomerSms({ phone: q.phone, kind: 'transactional', quote: code,
+      ref: 'manual:' + key.slice(0, 32),
+      msg: { template: 'manual', body: `June's Tees: ${smsPlain(text, 260)} Reply STOP to opt out.` } });
+    if (status === 'sent') { console.log(`message to ${code} by text`); return 'sent'; }
+    recentJobMessages.delete(key);
+    return { duplicate: 'duplicate', 'no-consent': 'no-consent', unconfigured: 'texting-off',
+             'no-phone': 'no-phone' }[status] || 'failed';
+  } catch (err) {
+    recentJobMessages.delete(key);
+    console.error(`message to ${code} failed:`, err.message);
+    reportError('job-message', err, `quote ${code} by ${channel}`).catch(() => {});
+    return 'failed';
+  }
+}
+
 app.post('/quote/:code/message', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/production');
@@ -15408,46 +16086,28 @@ app.post('/quote/:code/message', requireAdmin, async (req, res) => {
   if (!text) return answer('msg_err', 'empty');
   if (text.length > (channel === 'text' ? 300 : 5000)) return answer('msg_err', 'too-long');
 
-  const key = crypto.createHash('sha256').update([code, channel, text].join('|')).digest('hex');
-  const now = Date.now();
-  for (const [k, at] of recentJobMessages) if (now - at > 2 * 60 * 1000) recentJobMessages.delete(k);
-  if (recentJobMessages.has(key)) return answer('msg_err', 'duplicate');
-
-  try {
-    const { rows } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
-    const q = rows[0];
-    if (!q) return res.redirect('/production');
-    if (channel === 'email') {
-      if (!q.email) return answer('msg_err', 'no-email');
-      recentJobMessages.set(key, now);
-      await sendClientEmail({ quote: code, kind: 'manual', to: q.email, subject, replyTo: SHOP_EMAIL, preview: text,
-        html: customerEmailHtml('A note about your order',
-          `<p>${escEmail(text).replace(/\n/g, '<br>')}</p>`, code) });
-      console.log(`message to ${code} by email`);
-      return answer('sent', 'email');
+  /* A helper in training writes the message; the owner sends it. */
+  const actor = currentActor();
+  if (actor && actor.kind === 'staff' && actorLevel('customers.message') === 'approval') {
+    try {
+      // Not queued for a quote the customer cannot open yet (sendJobMessage refuses those too).
+      const { rows: [hq] } = await pool.query('SELECT status FROM quotes WHERE code = $1', [code]);
+      if (hq && hq.status === 'held') return answer('msg_err', 'held');
+      await pool.query(
+        `INSERT INTO staff_approvals (kind, subject_id, payload, reasons, requested_by)
+         VALUES ('message', $1, $2, $3, $4)`,
+        [code, JSON.stringify({ channel, subject, text }),
+         JSON.stringify(['Customer messages go to the owner first.']), actor.id]);
+      return answer('sent', 'held');
+    } catch (err) {
+      console.error(`holding message for ${code} failed:`, err.message);
+      return answer('msg_err', 'failed');
     }
-    /* The reasons in the card's order (no number, texting off, no consent),
-       so a refusal names the reason the page showed. sendCustomerSms asks
-       about consent first, which would send June after the wrong fix. */
-    if (!normalizeUsPhone(q.phone)) return answer('msg_err', 'no-phone');
-    if (!smsConfigured()) return answer('msg_err', 'texting-off');
-    /* A text keeps the shape every other customer text has: the brand first,
-       the opt-out last, plain characters only (one curly quote makes it cost
-       three times as much). */
-    recentJobMessages.set(key, now);
-    const status = await sendCustomerSms({ phone: q.phone, kind: 'transactional', quote: code,
-      ref: 'manual:' + key.slice(0, 32),
-      msg: { template: 'manual', body: `June's Tees: ${smsPlain(text, 260)} Reply STOP to opt out.` } });
-    if (status === 'sent') { console.log(`message to ${code} by text`); return answer('sent', 'text'); }
-    recentJobMessages.delete(key);
-    return answer('msg_err', { duplicate: 'duplicate', 'no-consent': 'no-consent', unconfigured: 'texting-off',
-                               'no-phone': 'no-phone' }[status] || 'failed');
-  } catch (err) {
-    recentJobMessages.delete(key);
-    console.error(`message to ${code} failed:`, err.message);
-    reportError('job-message', err, `quote ${code} by ${channel}`).catch(() => {});
-    return answer('msg_err', 'failed');
   }
+
+  const out = await sendJobMessage({ code, channel, subject, text });
+  if (out === 'no-quote') return res.redirect('/production');
+  return out === 'sent' ? answer('sent', channel) : answer('msg_err', out);
 });
 
 app.get('/quotes',     requireAdmin, (req, res) => renderBoard('money', req, res));
@@ -15476,13 +16136,14 @@ const LEAD_QUOTE_MATCH = `(NULLIF(lower(trim(q.email)),'') = lower(trim(s.email)
 
 /** Every lead, newest first, with where it stands: 'new', 'quoted' (and the
  *  quote), or 'dismissed' (and why). A quote wins over a dismissal: a lead let
- *  go and then quoted anyway did become work. */
+ *  go and then quoted anyway did become work. A quote still held for the
+ *  owner's approval does not count: the customer has not heard anything. */
 async function leadsWithStatus() {
   const { rows } = await pool.query(
     `SELECT s.*,
-            (SELECT q.code FROM quotes q WHERE q.from_submission_id = s.id
+            (SELECT q.code FROM quotes q WHERE q.from_submission_id = s.id AND q.status <> 'held'
               ORDER BY q.created_at LIMIT 1) AS linked_quote,
-            (SELECT q.code FROM quotes q WHERE ${LEAD_QUOTE_MATCH}
+            (SELECT q.code FROM quotes q WHERE ${LEAD_QUOTE_MATCH} AND q.status <> 'held'
               ORDER BY q.created_at LIMIT 1) AS matched_quote
        FROM submissions s
       ORDER BY s.created_at DESC`);
@@ -15503,6 +16164,8 @@ const LEAD_SOURCES = {
   embroidery: ['Embroidery', 'amber'],
   chat:       ['Chat', 'green'],
   offline:    ['Offline message', 'green'],
+  social:     ['Social', 'blue'],
+  manual:     ['Added by hand', 'neutral'],
 };
 
 /** How long ago, in the words a person uses. */
@@ -15587,20 +16250,29 @@ const shopMonth = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: SHO
 app.get('/leads', requireAdmin, async (req, res) => {
   try {
     const STATUSES = ['new', 'quoted', 'dismissed', 'all'];
-    const SOURCES = ['all', 'form', 'embroidery', 'chat'];
+    const SOURCES = ['all', 'form', 'embroidery', 'chat', 'social'];
     const status = STATUSES.includes(String(req.query.status)) ? String(req.query.status) : 'new';
     const source = SOURCES.includes(String(req.query.source)) ? String(req.query.source) : 'all';
     const q = String(req.query.q || '').trim().slice(0, 80);
 
     const all = await leadsWithStatus();
     const inSource = (l, src) => src === 'all' || (src === 'chat'
-      ? (l.source === 'chat' || l.source === 'offline') : (l.source || 'form') === src);
+      ? (l.source === 'chat' || l.source === 'offline')
+      : src === 'social' ? (l.source === 'social' || l.source === 'manual') : (l.source || 'form') === src);
     const needle = q.toLowerCase();
     const found = all.filter((l) => !needle || [l.name, l.email, l.phone, l.description]
       .some((v) => String(v || '').toLowerCase().includes(needle)));
     const count = (st, src) => found.filter((l) =>
       (st === 'all' || l.lead_status === st) && inSource(l, src)).length;
     const shown = found.filter((l) => (status === 'all' || l.lead_status === status) && inSource(l, source));
+    /* Who has each lead and what was said to them (the staff workspace). */
+    const [roster, { rows: noteRows }] = await Promise.all([
+      staffRoster(),
+      shown.length ? pool.query(`SELECT * FROM lead_notes WHERE submission_id = ANY($1) ORDER BY created_at`,
+        [shown.slice(0, 300).map((l) => l.id)]) : Promise.resolve({ rows: [] }),
+    ]);
+    const notesBy = {};
+    for (const n of noteRows) (notesBy[n.submission_id] ||= []).push(n);
 
     /* A filter is a URL, with the defaults left out so the plain page is /leads. */
     const link = (over) => {
@@ -15646,17 +16318,21 @@ app.get('/leads', requireAdmin, async (req, res) => {
       { label: 'Website form', href: link({ source: 'form' }), count: count(status, 'form'), on: source === 'form' },
       { label: 'Embroidery', href: link({ source: 'embroidery' }), count: count(status, 'embroidery'), on: source === 'embroidery' },
       { label: 'Chat', href: link({ source: 'chat' }), count: count(status, 'chat'), on: source === 'chat' },
+      { label: 'Social & added by hand', href: link({ source: 'social' }), count: count(status, 'social'), on: source === 'social' },
     ]);
 
     const body = shown.length
-      ? `<div class="grid-cards">${shown.map((l) => leadCardHtml(l, { back: '/leads' })).join('')}</div>`
+      ? `<div class="grid-cards">${shown.map((l) => `<div id="lead-${l.id}">${leadCardHtml(l, { back: '/leads' })}${
+          leadWorkPanel(l, notesBy[l.id] || [], roster, currentActor())}</div>`).join('')}</div>`
       : `<div class="card">${emptyState(q ? `Nothing matches &ldquo;${escEmail(q)}&rdquo;.`
           : status === 'new' ? 'Nobody is waiting for a reply.' : 'Nothing here.')}</div>`;
 
     res.send(adminPage('Leads', `
       ${pageHeader('Leads', 'Every enquiry: the website form, embroidery requests and tawk.to chats that left an email.',
         '<a class="btn" href="/quote/new">New quote</a>')}
+      ${flash(req.query)}
       ${tiles}
+      ${addLeadForm()}
       ${statusChips}
       ${sourceChips}
       <form class="search" method="GET" action="/leads">
@@ -15700,11 +16376,14 @@ const REVIEWS_WAITING_SQL = `SELECT COUNT(*)::int AS n FROM reviews
    costs a badge rather than the lot. */
 app.get('/admin/nav-counts', requireAdmin, async (_req, res) => {
   res.set('Cache-Control', 'no-store');
-  const out = { leads: 0, reviews: 0, late: 0, certificates: 0 };
+  const out = { leads: 0, reviews: 0, late: 0, certificates: 0, approvals: 0, chat: 0 };
   await Promise.all([
+    teamChatUnread().then((n) => { out.chat = n; }).catch(() => {}),
     unansweredLeads().then((l) => { out.leads = l.length; }).catch(() => {}),
     pool.query(REVIEWS_WAITING_SQL).then(({ rows }) => { out.reviews = rows[0].n; }).catch(() => {}),
     pool.query(CERTS_WAITING_SQL).then(({ rows }) => { out.certificates = rows[0].n; }).catch(() => {}),
+    isOwner() ? pool.query(`SELECT COUNT(*)::int AS n FROM staff_approvals WHERE status = 'pending'`)
+      .then(({ rows }) => { out.approvals = rows[0].n; }).catch(() => {}) : Promise.resolve(),
     liveJobs().then((jobs) => {
       out.late = jobs.filter((q) => { const s = quoteSchedule(q); return !!(s && s.risks.length); }).length;
     }).catch(() => {}),
@@ -15749,7 +16428,7 @@ app.get('/dashboard', requireAdmin, async (_req, res) => {
              FROM quotes WHERE ${OWING_JOBS_WHERE}`, 'owed'),
       one(`SELECT COUNT(*)::int AS n, COALESCE(SUM(total),0) AS value FROM quotes
             WHERE accepted_at IS NULL AND cancelled_at IS NULL AND COALESCE(paid_amount,0) = 0
-              AND status <> 'expired' AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)`, 'quotes out'),
+              AND status NOT IN ('expired', 'held') AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)`, 'quotes out'),
       safe(leadsWithStatus(), [], 'leads'),
       safe(liveJobs(), [], 'jobs'),
       one(REVIEWS_WAITING_SQL, 'reviews'),
@@ -17220,7 +17899,7 @@ async function sendBalanceReminders() {
           AND balance_nudged_at IS NULL
           AND cancelled_at IS NULL
           AND paid_at <= NOW() - ($1 || ' days')::interval
-          AND status <> 'expired'
+          AND status NOT IN ('expired', 'held')
           AND email <> ''
           AND NOT EXISTS (SELECT 1 FROM quote_payments p
                            WHERE p.quote_code = quotes.code AND p.kind = 'refund')
@@ -17353,7 +18032,7 @@ async function sendDailyDigest() {
 
     const { rows } = await pool.query(
       `SELECT * FROM quotes
-        WHERE status <> 'expired' AND delivered_at IS NULL
+        WHERE status NOT IN ('expired', 'held') AND delivered_at IS NULL
         ORDER BY COALESCE(needed_by, target_date) NULLS LAST, created_at`);
     if (!rows.length) return;
 
@@ -17401,6 +18080,7 @@ async function sendDailyDigest() {
     };
 
     const atRisk = live.filter((x) => x.sched && x.sched.risks.length);
+    const teamHtml = await teamDigestHtml().catch((e) => { console.error('team digest failed:', e.message); return ''; });
 
     await alertShop(
       (atRisk.length ? `⚠️ ${atRisk.length} job${atRisk.length === 1 ? '' : 's'} at risk · ` : '☕ ') +
@@ -17413,6 +18093,7 @@ async function sendDailyDigest() {
          ${soon.length ? `${soon.length} due within 3 days &middot; ` : ''}
          ${live.length} open</p>
        <table style="width:100%;border-collapse:collapse">${live.map(row).join('')}</table>
+       ${teamHtml}
        <p style="margin-top:16px"><a href="${PUBLIC_BASE_URL}/quotes"
          style="background:#1848B8;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;display:inline-block">Open the board</a></p>
        <p style="color:#9ca3af;font-size:11.5px;margin-top:14px">
@@ -17423,6 +18104,33 @@ async function sendDailyDigest() {
   } catch (e) {
     console.error('daily digest failed:', e.message);
   }
+}
+
+/* The helpers' day, for the morning email: yesterday for each active helper,
+   and on Mondays last week as well. Empty when there are no helpers. */
+async function teamDigestHtml() {
+  const roster = await staffRoster({ activeOnly: true });
+  if (!roster.length) return '';
+  const now = new Date();
+  const z = TEAM.zoned(now, SHOP_TZ);
+  const todayIso = `${z.y}-${String(z.m).padStart(2, '0')}-${String(z.d).padStart(2, '0')}`;
+  const y = new Date(Date.parse(todayIso + 'T12:00:00Z') - 86400000).toISOString().slice(0, 10);
+  const monday = z.dow === 1;
+  const ranges = [{ label: 'Yesterday', from: y, to: todayIso }];
+  if (monday) ranges.push({ ...periodRange('last'), label: 'Last week' });
+  const { rows: [p] } = await pool.query(`SELECT COUNT(*)::int AS n FROM staff_approvals WHERE status = 'pending'`);
+  let html = `<h3 style="color:#1848B8;margin:20px 0 6px">Team</h3>${p.n
+    ? `<p style="margin:0 0 8px"><a href="${PUBLIC_BASE_URL}/admin/approvals" style="color:#b45309"><b>${p.n} waiting for your approval</b></a></p>` : ''}`;
+  for (const r of ranges) {
+    const scores = await Promise.all(roster.map((s) => helperScore(s.id, r.from, r.to)));
+    html += `<p style="margin:6px 0 2px;font-size:13px;color:#6b7280">${r.label}</p>` + roster.map((s, i) => {
+      const x = scores[i];
+      return `<div style="font-size:13px;margin-bottom:4px"><b>${escEmail(s.name)}</b>: ${x.answered} leads answered${
+        x.medianReply != null ? ` (median ${fmtMins(x.medianReply)})` : ''}, ${x.sent} quotes sent, ${x.accepted} accepted, ${
+        x.tasksDone} tasks done${x.overdue ? `, <span style="color:#b91c1c">${x.overdue} overdue</span>` : ''}, ${money(x.collected)} collected</div>`;
+    }).join('');
+  }
+  return html + `<p style="font-size:12px"><a href="${PUBLIC_BASE_URL}/admin/team" style="color:#1848B8">Open the team scorecard</a></p>`;
 }
 
 /**
@@ -17852,7 +18560,7 @@ app.post('/q/:code/certificate', orderRateLimit, async (req, res) => {
   const notFound = () => { quoteMissBudget.miss(req); return res.status(404).json({ error: 'We could not find that quote.' }); };
   if (!QUOTE_CODE_RE.test(code)) return notFound();
   try {
-    const { rows } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
+    const { rows } = await pool.query(`SELECT * FROM quotes WHERE code = $1 AND status <> 'held'`, [code]);
     if (!rows.length) return notFound();
     const q = rows[0];
     if (q.cancelled_at) return res.status(409).json({ error: 'This order has been cancelled.' });
@@ -18810,6 +19518,1770 @@ app.patch('/api/orders/:ref/notes', requireGradAdmin, validateOrderRef, async (r
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
+
+/* ══ Staff workspace ═════════════════════════════════════════════════════════
+   Helpers' logins and permissions (/admin/staff), what waits for the owner
+   (/admin/approvals), who did what (/admin/activity), how each helper is doing
+   (/admin/team, /admin/commission), a helper's own day (/my-day), and the
+   playbook they answer customers from (/playbook). The rules live in
+   tools/lib/staff.js and tools/lib/team-metrics.js. */
+
+const BUSINESSES = { jtees: "June's Tees", cos: 'COS Creator Studio', cartbook: 'CartBook', other: 'Other' };
+const NOTE_KINDS = { note: 'Note', call: 'Call', email: 'Email', text: 'Text', chat: 'Chat', social: 'Social DM' };
+const CONTACT_KINDS = ['call', 'email', 'text', 'chat', 'social'];
+const LEAD_OUTCOMES = { quoted: 'Quoted', not_fit: 'Not a fit', no_reply: 'No reply', duplicate: 'Duplicate', won: 'Won' };
+const SOCIAL_PLATFORMS = ['Facebook', 'Instagram', 'TikTok', 'Google', 'Phone', 'Walk-in', 'Other'];
+
+const intIn = (v) => { const n = parseInt(String(v || ''), 10); return Number.isInteger(n) && n > 0 && n < 2 ** 31 ? n : null; };
+const text = (v, max) => String(v == null ? '' : v).replace(/\r\n?/g, '\n').trim().slice(0, max);
+const isoDate = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
+
+async function staffRoster({ activeOnly = false } = {}) {
+  const { rows } = await pool.query(
+    `SELECT id, name, email, active, perms, commission_pct, last_seen_at, created_at FROM staff
+      ${activeOnly ? 'WHERE active' : ''} ORDER BY active DESC, name`);
+  return rows;
+}
+function nameOf(roster, id) {
+  if (id == null) return 'Owner';
+  const s = roster.find((r) => r.id === id);
+  return s ? s.name : `Helper #${id}`;
+}
+function whenShort(d) {
+  return d ? new Date(d).toLocaleString('en-US', { timeZone: SHOP_TZ, month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit' }) : '—';
+}
+function flash(query) {
+  const ok = text(query.ok, 200);
+  const err = text(query.err, 200);
+  return `${ok ? `<div class="ok">${escEmail(ok)}</div>` : ''}${err ? `<div class="warn">${escEmail(err)}</div>` : ''}`;
+}
+/* The message goes into the query, before any #fragment: after it, the
+   browser keeps it to itself and the page never shows the flash. */
+const back = (res, path, key, msg) => {
+  const [p, frag] = String(path).split('#');
+  return res.redirect(`${p}${p.includes('?') ? '&' : '?'}${key}=${encodeURIComponent(msg)}${frag ? '#' + frag : ''}`);
+};
+
+/** First reply to a lead: who and when, once. What the scorecard's reply time reads. */
+async function markLeadResponded(submissionId, actor) {
+  if (!submissionId) return;
+  await pool.query(
+    `UPDATE submissions SET first_response_at = NOW(), first_response_by = $2
+      WHERE id = $1 AND first_response_at IS NULL`,
+    [submissionId, actor && actor.kind === 'staff' ? actor.id : null]).catch((e) =>
+    console.error('first response stamp failed:', e.message));
+}
+
+/* ── /admin/staff ─────────────────────────────────────────────────────────── */
+
+function permsEditor(perms) {
+  const groups = {};
+  for (const [key, def] of Object.entries(STAFF.PERMISSIONS)) (groups[def.group] ||= []).push([key, def]);
+  const levelWords = { off: 'Off', approval: 'Needs my OK', on: 'On' };
+  return Object.entries(groups).map(([group, list]) => `
+    <div style="margin-top:10px"><b>${escEmail(group)}</b>
+      ${list.map(([key, def]) => {
+        const cur = STAFF.normalizePerm(key, perms && perms[key]);
+        return `<div class="row-i" style="gap:8px;flex-wrap:wrap">
+          <span class="row-main">${escEmail(def.label)}</span>
+          <select name="perm_${key}">${def.levels.map((l) =>
+            `<option value="${l}"${cur.level === l ? ' selected' : ''}>${levelWords[l]}</option>`).join('')}</select>
+          ${def.limit ? `<label class="muted" style="font-size:12px">${escEmail(def.limit.label)}
+            <input name="limit_${key}" type="number" min="0" step="1" style="width:80px"
+              value="${cur[def.limit.key] != null ? escEmail(String(cur[def.limit.key])) : ''}" placeholder="no limit"></label>` : ''}
+        </div>`;
+      }).join('')}
+    </div>`).join('');
+}
+
+function oneTimePasswordCard(name, email, password) {
+  return `<div class="card" style="border:2px solid #16a34a">
+    <b>Give ${escEmail(name)} this password now — it is not shown again.</b>
+    <p style="margin-top:8px">Sign in at <b>${escEmail(PUBLIC_BASE_URL)}/signin</b> with <b>${escEmail(email)}</b> and
+      <code style="font-size:16px">${escEmail(password)}</code></p>
+    <p class="muted">Send it through your password manager, not email or chat. They can change it under My account.</p>
+  </div>`;
+}
+
+async function renderStaffPage(req, res, extra = '') {
+  const roster = await staffRoster();
+  const presetOptions = Object.entries(STAFF.PRESETS).map(([k, p]) => `<option value="${k}">${escEmail(p.label)}</option>`).join('');
+  const cards = roster.map((s) => {
+    const preset = STAFF.presetMatching(s.perms);
+    return `<div class="card" id="staff-${s.id}">
+      <div class="row-i"><span class="row-main"><b>${escEmail(s.name)}</b>
+        <div class="row-sub">${escEmail(s.email)} &middot; last seen ${escEmail(whenShort(s.last_seen_at))}</div></span>
+        <span class="row-end">${s.active ? pill(preset ? STAFF.PRESETS[preset].label : 'Custom', 'blue') : pill('Disabled', 'red')}</span></div>
+      <div class="row" style="margin-top:10px;gap:6px;flex-wrap:wrap">
+        ${Object.entries(STAFF.PRESETS).map(([k, p]) => `
+          <form method="post" action="/admin/staff/${s.id}" style="margin:0">
+            <input type="hidden" name="action" value="preset"><input type="hidden" name="preset" value="${k}">
+            <button type="submit" class="btn btn-ghost" title="${escEmail(p.note)}">${escEmail(p.label)}</button></form>`).join('')}
+        <form method="post" action="/admin/staff/${s.id}" style="margin:0">
+          <input type="hidden" name="action" value="${s.active ? 'disable' : 'enable'}">
+          <button type="submit" class="btn btn-ghost">${s.active ? 'Disable now' : 'Enable'}</button></form>
+        <form method="post" action="/admin/staff/${s.id}" style="margin:0">
+          <input type="hidden" name="action" value="reset">
+          <button type="submit" class="btn btn-ghost">New password</button></form>
+      </div>
+      <details style="margin-top:10px"><summary>Every permission, one by one</summary>
+        <form method="post" action="/admin/staff/${s.id}">
+          <input type="hidden" name="action" value="perms">
+          ${permsEditor(s.perms)}
+          <button type="submit" style="margin-top:12px">Save permissions</button>
+        </form>
+      </details>
+      <form method="post" action="/admin/staff/${s.id}" class="row" style="margin-top:10px;gap:6px;align-items:center">
+        <input type="hidden" name="action" value="commission">
+        <label>Commission % <input name="commission_pct" type="number" min="0" max="30" step="0.25"
+          value="${escEmail(String(Number(s.commission_pct || 0)))}" style="width:80px"></label>
+        <button type="submit" class="btn btn-ghost">Save</button>
+      </form>
+    </div>`;
+  }).join('');
+  res.send(adminPage('Staff', `
+    ${pageHeader('Staff', 'Each helper has their own login. Switch what they can do at any time; it applies on their next click.',
+      '<a class="btn btn-ghost" href="/admin/team">Team</a> <a class="btn btn-ghost" href="/admin/approvals">Approvals</a>')}
+    ${flash(req.query)}${extra}
+    ${staffSessionKey() ? '' : `<div class="warn">Staff sign-in is switched off until STAFF_SESSION_SECRET (32+ random characters)
+      is set on the backend service in Railway. You can add helpers now; they can sign in once it is set.</div>`}
+    <div class="card"><b>Add a helper</b>
+      <form method="post" action="/admin/staff" class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px">
+        <input name="name" placeholder="Name" required maxlength="80">
+        <input name="email" type="email" placeholder="Their email (their login)" required maxlength="254">
+        <label>Start as <select name="preset">${presetOptions}</select></label>
+        <label>Commission % <input name="commission_pct" type="number" min="0" max="30" step="0.25" value="0" style="width:80px"></label>
+        <button type="submit">Add</button>
+      </form>
+      <p class="muted" style="margin-top:8px">${Object.values(STAFF.PRESETS).map((p) =>
+        `<b>${escEmail(p.label)}</b>: ${escEmail(p.note)}`).join('<br>')}</p>
+    </div>
+    ${cards || emptyState('No helpers yet.')}`, 'team'));
+}
+
+app.get('/admin/staff', requireAdmin, async (req, res) => {
+  try { await renderStaffPage(req, res); }
+  catch (err) {
+    console.error('staff page failed:', err.message);
+    res.status(500).send(adminPage('Staff', '<div class="card"><div class="warn">Could not load staff.</div></div>', 'team'));
+  }
+});
+
+app.post('/admin/staff', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const name = text(b.name, 80);
+  const email = text(b.email, 254).toLowerCase();
+  const preset = STAFF.PRESETS[b.preset] ? b.preset : 'training';
+  const pct = Math.min(30, Math.max(0, Number(b.commission_pct) || 0));
+  if (!name || !STAFF.EMAIL_RE.test(email)) return back(res, '/admin/staff', 'err', 'A name and a real email are needed.');
+  try {
+    const password = STAFF.generatePassword();
+    await pool.query(
+      `INSERT INTO staff (name, email, password_hash, perms, commission_pct) VALUES ($1, $2, $3, $4, $5)`,
+      [name, email, STAFF.hashPassword(password), JSON.stringify(STAFF.presetPerms(preset)), pct]);
+    return renderStaffPage({ query: { ok: `${name} added as ${STAFF.PRESETS[preset].label}.` } }, res,
+      oneTimePasswordCard(name, email, password));
+  } catch (err) {
+    if (err.code === '23505') return back(res, '/admin/staff', 'err', 'Someone already has that email.');
+    console.error('add staff failed:', err.message);
+    return back(res, '/admin/staff', 'err', 'Could not add them. Try again.');
+  }
+});
+
+app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  const b = req.body || {};
+  if (!id) return res.redirect('/admin/staff');
+  try {
+    const { rows: [s] } = await pool.query('SELECT id, name, email FROM staff WHERE id = $1', [id]);
+    if (!s) return back(res, '/admin/staff', 'err', 'No such helper.');
+    switch (String(b.action)) {
+      case 'preset': {
+        const p = STAFF.presetPerms(String(b.preset));
+        if (!p) return back(res, '/admin/staff', 'err', 'Unknown preset.');
+        await pool.query('UPDATE staff SET perms = $2 WHERE id = $1', [id, JSON.stringify(p)]);
+        return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is now ${STAFF.PRESETS[b.preset].label}.`);
+      }
+      case 'perms':
+        await pool.query('UPDATE staff SET perms = $2 WHERE id = $1', [id, JSON.stringify(STAFF.permsFromForm(b))]);
+        return back(res, '/admin/staff', 'ok', `Saved ${s.name}'s permissions.`);
+      case 'disable':
+        /* The version bump ends every session they have on their next click. */
+        await pool.query('UPDATE staff SET active = FALSE, session_version = session_version + 1 WHERE id = $1', [id]);
+        return back(res, '/admin/staff', 'ok', `${s.name} is disabled and signed out.`);
+      case 'enable':
+        await pool.query('UPDATE staff SET active = TRUE WHERE id = $1', [id]);
+        return back(res, '/admin/staff', 'ok', `${s.name} can sign in again.`);
+      case 'reset': {
+        const password = STAFF.generatePassword();
+        await pool.query('UPDATE staff SET password_hash = $2, session_version = session_version + 1 WHERE id = $1',
+          [id, STAFF.hashPassword(password)]);
+        return renderStaffPage({ query: { ok: `${s.name} has a new password and was signed out.` } }, res,
+          oneTimePasswordCard(s.name, s.email, password));
+      }
+      case 'commission': {
+        const pct = Math.min(30, Math.max(0, Number(b.commission_pct) || 0));
+        await pool.query('UPDATE staff SET commission_pct = $2 WHERE id = $1', [id, pct]);
+        return back(res, '/admin/staff', 'ok', `${s.name}'s commission is ${pct}%.`);
+      }
+      default:
+        return back(res, '/admin/staff', 'err', 'Unknown action.');
+    }
+  } catch (err) {
+    console.error('staff update failed:', err.message);
+    return back(res, '/admin/staff', 'err', 'Could not save that. Try again.');
+  }
+});
+
+/* ── /account: a helper's own password ────────────────────────────────────── */
+
+app.get('/account', requireAdmin, (req, res) => {
+  const a = currentActor();
+  if (!a || a.kind !== 'staff') return res.redirect('/admin/staff');
+  res.send(adminPage('My account', `
+    ${pageHeader('My account', escEmail(a.email || ''))}
+    ${flash(req.query)}
+    <div class="card" style="max-width:460px"><b>Change your password</b>
+      <form method="post" action="/account/password" style="margin-top:8px">
+        <label>Current password <input type="password" name="current" required autocomplete="current-password" maxlength="200"></label>
+        <label style="display:block;margin-top:8px">New password (${STAFF.MIN_PASSWORD}+ characters)
+          <input type="password" name="next" required minlength="${STAFF.MIN_PASSWORD}" autocomplete="new-password" maxlength="200"></label>
+        <label style="display:block;margin-top:8px">New password again
+          <input type="password" name="again" required minlength="${STAFF.MIN_PASSWORD}" autocomplete="new-password" maxlength="200"></label>
+        <button type="submit" style="margin-top:12px">Change password</button>
+      </form></div>`, ''));
+});
+
+app.post('/account/password', requireAdmin, async (req, res) => {
+  const a = currentActor();
+  if (!a || a.kind !== 'staff') return res.redirect('/admin/staff');
+  const b = req.body || {};
+  const next = String(b.next || '');
+  if (next !== String(b.again || '')) return back(res, '/account', 'err', 'The two new passwords do not match.');
+  if (next.length < STAFF.MIN_PASSWORD || next.length > 200) {
+    return back(res, '/account', 'err', `Use ${STAFF.MIN_PASSWORD} or more characters.`);
+  }
+  try {
+    const { rows: [s] } = await pool.query('SELECT password_hash FROM staff WHERE id = $1', [a.id]);
+    if (!s || !STAFF.verifyPassword(String(b.current || ''), s.password_hash)) {
+      return back(res, '/account', 'err', 'Your current password is not right.');
+    }
+    const { rows: [u] } = await pool.query(
+      `UPDATE staff SET password_hash = $2, session_version = session_version + 1 WHERE id = $1
+       RETURNING id, session_version`, [a.id, STAFF.hashPassword(next)]);
+    // Other browsers are signed out; this one carries on with a fresh session.
+    setStaffCookie(res, u);
+    return back(res, '/account', 'ok', 'Password changed. Any other device you were signed in on is signed out.');
+  } catch (err) {
+    console.error('password change failed:', err.message);
+    return back(res, '/account', 'err', 'Could not change it. Try again.');
+  }
+});
+
+/* ── Approvals ─────────────────────────────────────────────────────────────── */
+
+function approvalBody(a, q) {
+  const p = a.payload || {};
+  if (a.kind === 'quote') {
+    return `<div>Quote <a href="/quote/${escEmail(a.subject_id)}/edit"><b>${escEmail(a.subject_id)}</b></a>
+      ${q ? ` for ${escEmail(q.name || q.email || q.phone || '')} &middot; ${money(q.total)}` : ' (no longer exists)'}</div>`;
+  }
+  if (a.kind === 'message') {
+    return `<div>${p.channel === 'text' ? 'Text' : 'Email'} about <a href="/production/${escEmail(a.subject_id)}#messages">${
+      escEmail(a.subject_id)}</a>${p.channel === 'email' ? ` &middot; <b>${escEmail(p.subject || '')}</b>` : ''}</div>
+      <div class="msg" style="white-space:pre-wrap;margin-top:6px">${escEmail(p.text || '')}</div>`;
+  }
+  if (a.kind === 'kb') {
+    return `<div>Playbook ${p.id ? 'edit' : 'article'}: <b>${escEmail(p.title || '')}</b> (${escEmail(p.kind || '')})</div>
+      <div class="msg" style="white-space:pre-wrap;margin-top:6px">${escEmail(String(p.body || '').slice(0, 1500))}</div>`;
+  }
+  return escEmail(a.kind);
+}
+
+app.get('/admin/approvals', requireAdmin, async (req, res) => {
+  try {
+    const roster = await staffRoster();
+    const { rows: pending } = await pool.query(
+      `SELECT * FROM staff_approvals WHERE status = 'pending' ORDER BY created_at LIMIT 100`);
+    const { rows: decided } = await pool.query(
+      `SELECT * FROM staff_approvals WHERE status NOT IN ('pending', 'processing')
+        ORDER BY decided_at DESC NULLS LAST LIMIT 20`);
+    const codes = pending.filter((a) => a.kind === 'quote').map((a) => a.subject_id);
+    const { rows: quotes } = codes.length
+      ? await pool.query('SELECT * FROM quotes WHERE code = ANY($1)', [codes]) : { rows: [] };
+    const quoteBy = Object.fromEntries(quotes.map((q) => [q.code, q]));
+    const card = (a) => `<div class="card">
+      <div class="row-i"><span class="row-main"><b>${escEmail(nameOf(roster, a.requested_by))}</b>
+        <div class="row-sub">${escEmail(whenShort(a.created_at))}</div></span>
+        <span class="row-end">${pill(a.kind, 'blue')}</span></div>
+      ${approvalBody(a, quoteBy[a.subject_id])}
+      ${(a.reasons || []).length ? `<ul class="muted">${a.reasons.map((r) => `<li>${escEmail(r)}</li>`).join('')}</ul>` : ''}
+      <form method="post" action="/admin/approvals/${a.id}" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
+        <input name="note" placeholder="Note back to them (optional)" maxlength="500" style="flex:1 1 220px">
+        <button type="submit" name="decision" value="approve">${a.kind === 'message' ? 'Approve and send' : 'Approve'}</button>
+        <button type="submit" name="decision" value="reject" class="btn-ghost">Send back</button>
+      </form></div>`;
+    res.send(adminPage('Approvals', `
+      ${pageHeader('Waiting for you', 'What helpers have asked to send. Nothing here has reached a customer.',
+        '<a class="btn btn-ghost" href="/admin/team">Team</a>')}
+      ${flash(req.query)}
+      ${pending.length ? pending.map(card).join('') : `<div class="card">${emptyState('Nothing is waiting.')}</div>`}
+      ${decided.length ? `<div class="card"><b>Recently decided</b>${decided.map((a) => `
+        <div class="row-i"><span class="row-main">${escEmail(a.kind)} ${escEmail(a.subject_id)} &middot; ${
+          escEmail(nameOf(roster, a.requested_by))}${a.decision_note ? ` <span class="muted">— ${escEmail(a.decision_note)}</span>` : ''}</span>
+          <span class="row-end">${pill(a.status, a.status === 'approved' ? 'green' : a.status === 'rejected' ? 'amber' : 'neutral')}
+          <span class="muted">${escEmail(whenShort(a.decided_at))}</span></span></div>`).join('')}</div>` : ''}`, 'team'));
+  } catch (err) {
+    console.error('approvals page failed:', err.message);
+    res.status(500).send(adminPage('Approvals', '<div class="card"><div class="warn">Could not load approvals.</div></div>', 'team'));
+  }
+});
+
+/** Releases a held quote: the customer's link starts working, the Brevo deal
+ *  and studio contact are made, and the helper who wrote it gets the credit. */
+async function releaseHeldQuote(code, requestedBy) {
+  const { rows: [q] } = await pool.query(
+    /* The customer's clock starts now, not when the helper drafted it: the
+       follow-up email counts days from created_at and expiry reads
+       valid_until, so a quote held for a week would otherwise be chased at
+       once, or reach the customer already expired. It keeps the same number
+       of days it was written with. */
+    `UPDATE quotes SET status = 'sent', held_at = NULL, sent_by = COALESCE(sent_by, $2),
+            valid_until = CASE WHEN valid_until IS NULL THEN NULL
+                               ELSE CURRENT_DATE + GREATEST(1, valid_until - created_at::date) END,
+            created_at = NOW()
+      WHERE code = $1 AND status = 'held' RETURNING *`, [code, requestedBy || null]);
+  if (!q) return null;
+  if (q.from_submission_id) markLeadResponded(q.from_submission_id, { kind: 'staff', id: requestedBy });
+  syncQuoteToBrevo(q).then((ids) => {
+    keepBrevoIds(q.id, ids).catch(() => {});
+    syncQuoteContact(q, 'jt_quote_sent').catch(() => {});
+  }).catch(() => {});
+  syncQuoteToLumise(q).catch(() => {});
+  return q;
+}
+
+/** Writes a playbook article from a form or an approved draft. */
+async function saveKbArticle(p, staffId) {
+  const fields = [p.kind, p.title, p.shortcut || null, p.body, p.tags || '', p.decoration || null, p.business || 'jtees', staffId];
+  if (p.id) {
+    const { rowCount } = await pool.query(
+      `UPDATE kb_articles SET kind=$2, title=$3, shortcut=$4, body=$5, tags=$6, decoration=$7, business=$8,
+              updated_by=$9, updated_at=NOW(), needs_review=FALSE WHERE id=$1`, [p.id, ...fields]);
+    return rowCount ? p.id : null;
+  }
+  const { rows: [r] } = await pool.query(
+    `INSERT INTO kb_articles (kind, title, shortcut, body, tags, decoration, business, updated_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`, fields);
+  return r.id;
+}
+
+app.post('/admin/approvals/:id', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  const decision = req.body && req.body.decision === 'approve' ? 'approve' : 'reject';
+  const note = text(req.body && req.body.note, 500) || null;
+  if (!id) return res.redirect('/admin/approvals');
+  /* Claimed before anything is sent, so a double press cannot send twice. */
+  const { rows: [a] } = await pool.query(
+    `UPDATE staff_approvals SET status = 'processing' WHERE id = $1 AND status = 'pending' RETURNING *`, [id]);
+  if (!a) return back(res, '/admin/approvals', 'err', 'That one was already decided.');
+  const finish = (status) => pool.query(
+    `UPDATE staff_approvals SET status = $2, decided_at = NOW(), decision_note = $3 WHERE id = $1`, [id, status, note]);
+  const unclaim = () => pool.query(`UPDATE staff_approvals SET status = 'pending' WHERE id = $1`, [id]).catch(() => {});
+  try {
+    if (decision === 'reject') {
+      await finish('rejected');
+      return back(res, '/admin/approvals', 'ok', 'Sent back with your note.');
+    }
+    if (a.kind === 'quote') {
+      const q = await releaseHeldQuote(a.subject_id, a.requested_by);
+      await finish(q ? 'approved' : 'withdrawn');
+      return back(res, '/admin/approvals', q ? 'ok' : 'err', q
+        ? `Quote ${a.subject_id} is live. The helper sees it on My Day with the message to send.`
+        : `Quote ${a.subject_id} was no longer waiting.`);
+    }
+    if (a.kind === 'message') {
+      const p = a.payload || {};
+      /* Sent as the owner's decision, credited to the helper who wrote it. */
+      const out = await actorStore.run({ ...OWNER_ACTOR, sentBy: a.requested_by }, () =>
+        sendJobMessage({ code: a.subject_id, channel: p.channel === 'text' ? 'text' : 'email',
+                         subject: text(p.subject, 150) || `About your order ${a.subject_id}`, text: text(p.text, 5000) }));
+      if (out !== 'sent') { await unclaim(); return back(res, '/admin/approvals', 'err', `Not sent: ${MESSAGE_ERRORS[out] || out}`); }
+      await finish('approved');
+      return back(res, '/admin/approvals', 'ok', 'Sent.');
+    }
+    if (a.kind === 'kb') {
+      const saved = await saveKbArticle(a.payload || {}, a.requested_by);
+      await finish(saved ? 'approved' : 'withdrawn');
+      return back(res, '/admin/approvals', 'ok', 'Published to the playbook.');
+    }
+    await finish('withdrawn');
+    return back(res, '/admin/approvals', 'err', 'Unknown request type.');
+  } catch (err) {
+    await unclaim();
+    console.error('approval failed:', err.message);
+    reportError('staff-approval', err, `approval ${id}`).catch(() => {});
+    return back(res, '/admin/approvals', 'err', 'That did not go through. Try again.');
+  }
+});
+
+/* ── Activity ─────────────────────────────────────────────────────────────── */
+
+app.get('/admin/activity', requireAdmin, async (req, res) => {
+  try {
+    const roster = await staffRoster();
+    const who = String(req.query.who || 'all');
+    const days = [1, 7, 30, 90].includes(Number(req.query.days)) ? Number(req.query.days) : 7;
+    const params = [days];
+    let where = `created_at > NOW() - ($1 || ' days')::interval`;
+    if (who === 'owner') where += ' AND staff_id IS NULL';
+    else if (intIn(who)) { params.push(intIn(who)); where += ` AND staff_id = $${params.length}`; }
+    const { rows } = await pool.query(
+      `SELECT * FROM staff_activity WHERE ${where} ORDER BY created_at DESC LIMIT 400`, params);
+    const link = (over) => '/admin/activity?' + new URLSearchParams({ who, days: String(days), ...over });
+    const describe = (r) => {
+      const d = r.detail || {};
+      const bits = [];
+      if (d.status && d.status >= 400) bits.push(`refused (${d.status})`);
+      if (d.location && /msg_err=|err=/.test(d.location)) bits.push('with an error');
+      for (const k of ['step', 'stage', 'channel', 'decision', 'outcome', 'kind']) if (d[k]) bits.push(`${k}: ${d[k]}`);
+      if (d.total != null) bits.push(money(d.total));
+      return bits.join(' · ');
+    };
+    res.send(adminPage('Activity', `
+      ${pageHeader('Activity', 'Every change made in the back office, and who made it. Page views are not recorded.')}
+      ${filterChips([{ label: 'Everyone', href: link({ who: 'all' }), on: who === 'all' },
+                     { label: 'Owner', href: link({ who: 'owner' }), on: who === 'owner' },
+                     ...roster.map((s) => ({ label: s.name, href: link({ who: String(s.id) }), on: who === String(s.id) }))])}
+      ${filterChips([1, 7, 30, 90].map((d) => ({ label: d === 1 ? 'Today' : `${d} days`, href: link({ days: String(d) }), on: days === d })))}
+      <div class="card">${rows.length ? `<table class="dt" style="width:100%"><tbody>${rows.map((r) => `
+        <tr><td class="muted" style="white-space:nowrap">${escEmail(whenShort(r.created_at))}</td>
+          <td>${escEmail(nameOf(roster, r.staff_id))}</td>
+          <td>${escEmail(r.action)}${r.subject_id ? ` <b>${r.subject_type === 'quote'
+            ? `<a href="/production/${escEmail(r.subject_id)}">${escEmail(r.subject_id)}</a>` : escEmail(r.subject_id)}</b>` : ''}</td>
+          <td class="muted">${escEmail(describe(r))}</td></tr>`).join('')}</tbody></table>`
+        : emptyState('Nothing in this period.')}</div>`, 'team'));
+  } catch (err) {
+    console.error('activity page failed:', err.message);
+    res.status(500).send(adminPage('Activity', '<div class="card"><div class="warn">Could not load activity.</div></div>', 'team'));
+  }
+});
+
+/* ── Team scorecard ───────────────────────────────────────────────────────── */
+
+/** One helper's numbers for [from, to). Every figure from the tables that
+ *  record the work itself, so the scorecard cannot drift from what happened. */
+async function helperScore(staffId, from, to) {
+  // A bare date means midnight on the shop's clock, not UTC's.
+  const edge = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? TEAM.localMidnight(v, SHOP_TZ) : v);
+  from = edge(from); to = edge(to);
+  const [leads, quotes, tasks, money_, hours] = await Promise.all([
+    pool.query(`SELECT created_at, first_response_at FROM submissions
+                 WHERE first_response_by = $1 AND first_response_at >= $2 AND first_response_at < $3`, [staffId, from, to]),
+    pool.query(`SELECT
+                  COUNT(*) FILTER (WHERE created_by = $1 AND created_at >= $2 AND created_at < $3)::int AS drafted,
+                  COUNT(*) FILTER (WHERE sent_by = $1 AND created_at >= $2 AND created_at < $3 AND status <> 'held')::int AS sent,
+                  COUNT(*) FILTER (WHERE credited_to = $1 AND accepted_at >= $2 AND accepted_at < $3)::int AS accepted
+                  FROM quotes`, [staffId, from, to]),
+    pool.query(`SELECT
+                  COUNT(*) FILTER (WHERE done_by = $1 AND done_at >= $2 AND done_at < $3)::int AS done,
+                  COUNT(*) FILTER (WHERE done_by = $1 AND done_at >= $2 AND done_at < $3
+                                   AND (due_on IS NULL OR done_at::date <= due_on))::int AS on_time,
+                  COUNT(*) FILTER (WHERE assigned_to = $1 AND done_at IS NULL AND due_on < CURRENT_DATE)::int AS overdue
+                  FROM staff_tasks`, [staffId, from, to]),
+    pool.query(`SELECT COALESCE(SUM(p.amount - COALESCE(p.fee, 0)), 0)::float AS collected
+                  FROM quote_payments p JOIN quotes q ON q.code = p.quote_code
+                 WHERE q.credited_to = $1 AND p.created_at >= $2 AND p.created_at < $3`, [staffId, from, to]),
+    pool.query(`SELECT business, SUM(hours)::float AS hours FROM staff_hours
+                 WHERE staff_id = $1 AND week_of >= $2::date - 6 AND week_of < $3 GROUP BY business`, [staffId, from, to]),
+  ]);
+  const replyMins = leads.rows.map((l) => TEAM.businessMinutesBetween(l.created_at, l.first_response_at));
+  const q = quotes.rows[0];
+  const t = tasks.rows[0];
+  const totalHours = hours.rows.reduce((s, h) => s + h.hours, 0);
+  return {
+    answered: leads.rows.length,
+    medianReply: TEAM.median(replyMins),
+    drafted: q.drafted, sent: q.sent, accepted: q.accepted,
+    tasksDone: t.done, onTime: t.on_time, overdue: t.overdue,
+    collected: money_.rows[0].collected,
+    hours: totalHours, hoursBy: hours.rows,
+  };
+}
+
+function periodRange(period) {
+  const now = new Date();
+  if (period === 'month') {
+    const z = TEAM.zoned(now, SHOP_TZ);
+    return { from: `${z.y}-${String(z.m).padStart(2, '0')}-01`, to: now.toISOString(), label: 'This month' };
+  }
+  if (period === 'last') {
+    const monday = new Date(TEAM.weekOf(now, SHOP_TZ) + 'T12:00:00Z');
+    const prev = new Date(monday.getTime() - 7 * 86400000).toISOString().slice(0, 10);
+    return { from: prev, to: TEAM.weekOf(now, SHOP_TZ), label: 'Last week' };
+  }
+  return { from: TEAM.weekOf(now, SHOP_TZ), to: now.toISOString(), label: 'This week' };
+}
+
+const fmtMins = (m) => m == null ? '—' : m < 60 ? `${Math.round(m)} min` : `${(m / 60).toFixed(1)} h`;
+
+app.get('/admin/team', requireAdmin, async (req, res) => {
+  try {
+    const period = ['week', 'last', 'month'].includes(String(req.query.period)) ? String(req.query.period) : 'week';
+    const range = periodRange(period);
+    const roster = await staffRoster({ activeOnly: true });
+    const scores = await Promise.all(roster.map((s) => helperScore(s.id, range.from, range.to)));
+    const { rows: [counts] } = await pool.query(
+      `SELECT (SELECT COUNT(*) FROM staff_approvals WHERE status = 'pending')::int AS approvals,
+              (SELECT COUNT(*) FROM submissions WHERE created_at >= $1 AND created_at < $2)::int AS leads_in,
+              (SELECT COUNT(*) FROM submissions WHERE created_at >= $1 AND created_at < $2
+                                                  AND first_response_at IS NOT NULL)::int AS leads_answered`,
+      [range.from, range.to]);
+    const thisWeek = TEAM.weekOf(new Date(), SHOP_TZ);
+    const cards = roster.map((s, i) => {
+      const x = scores[i];
+      const conv = x.sent ? Math.round(100 * x.accepted / x.sent) + '%' : '—';
+      return `<div class="card">
+        <div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="min-width:12em"><b>${escEmail(s.name)}</b>
+          <div class="row-sub" style="white-space:normal">${escEmail(range.label)} &middot; last seen ${escEmail(whenShort(s.last_seen_at))}</div></span>
+          <span class="row-end"><a class="btn btn-ghost" href="/admin/activity?who=${s.id}">Activity</a>
+            <a class="btn btn-ghost" href="/admin/commission?staff=${s.id}">Commission</a></span></div>
+        ${statTiles([
+          { label: 'Leads answered', value: String(x.answered), tone: 'blue' },
+          { label: 'Median first reply', value: fmtMins(x.medianReply), tone: x.medianReply == null ? 'gray' : x.medianReply <= 60 ? 'green' : 'amber',
+            sub: 'working hours only' },
+          { label: 'Quotes sent', value: String(x.sent), tone: 'navy', sub: `${x.drafted} drafted` },
+          { label: 'Accepted', value: String(x.accepted), tone: 'green', sub: `conversion ${conv}` },
+          { label: 'Tasks done', value: String(x.tasksDone), tone: x.overdue ? 'amber' : 'green',
+            sub: `${x.onTime} on time &middot; ${x.overdue} overdue` },
+          { label: 'Collected', value: money(x.collected), tone: 'gold', sub: 'on quotes they sent, less refunds and fees' },
+          { label: 'Hours', value: x.hours ? String(x.hours) : '—', tone: 'gray',
+            sub: x.hours ? `${money(x.collected / x.hours)} per hour` : 'enter from TimeProof below' },
+        ])}
+        ${x.hoursBy.length > 1 ? `<div class="muted">${x.hoursBy.map((h) =>
+          `${escEmail(BUSINESSES[h.business] || h.business)}: ${h.hours} h`).join(' &middot; ')}</div>` : ''}
+        <form method="post" action="/admin/team/hours" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center">
+          <input type="hidden" name="staff_id" value="${s.id}">
+          <span class="muted">Hours from TimeProof:</span>
+          <label>week of <input type="date" name="week_of" value="${thisWeek}" required></label>
+          <select name="business">${Object.entries(BUSINESSES).map(([k, v]) => `<option value="${k}">${escEmail(v)}</option>`).join('')}</select>
+          <input type="number" name="hours" min="0" max="80" step="0.25" placeholder="hours" required style="width:90px">
+          <button type="submit" class="btn btn-ghost">Save</button>
+        </form>
+      </div>`;
+    }).join('');
+    res.send(adminPage('Team', `
+      ${pageHeader('Team', 'How each helper is doing, from the work itself.',
+        `<a class="btn" href="/admin/approvals">Approvals${counts.approvals ? ` (${counts.approvals})` : ''}</a>
+         <a class="btn btn-ghost" href="/admin/activity">Activity</a>
+         <a class="btn btn-ghost" href="/admin/staff">Staff and permissions</a>`)}
+      ${flash(req.query)}
+      ${filterChips([{ label: 'This week', href: '/admin/team', on: period === 'week' },
+                     { label: 'Last week', href: '/admin/team?period=last', on: period === 'last' },
+                     { label: 'This month', href: '/admin/team?period=month', on: period === 'month' }])}
+      ${statTiles([
+        { label: 'Waiting for you', value: String(counts.approvals), href: '/admin/approvals', tone: counts.approvals ? 'amber' : 'green' },
+        { label: 'Leads in', value: String(counts.leads_in), tone: 'blue', sub: `${counts.leads_answered} answered` },
+      ])}
+      ${cards || `<div class="card">${emptyState('No active helpers yet.', '<a class="btn" href="/admin/staff">Add one</a>')}</div>`}`, 'team'));
+  } catch (err) {
+    console.error('team page failed:', err.message);
+    res.status(500).send(adminPage('Team', '<div class="card"><div class="warn">Could not load the team.</div></div>', 'team'));
+  }
+});
+
+app.post('/admin/team/hours', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const staffId = intIn(b.staff_id);
+  const week = isoDate(b.week_of);
+  const business = BUSINESSES[b.business] ? b.business : 'jtees';
+  const hours = Number(b.hours);
+  if (!staffId || !week || !Number.isFinite(hours) || hours < 0 || hours > 80) {
+    return back(res, '/admin/team', 'err', 'Hours need a helper, a week and 0–80 hours.');
+  }
+  try {
+    const monday = TEAM.weekOf(new Date(week + 'T12:00:00Z'), 'UTC');
+    await pool.query(
+      `INSERT INTO staff_hours (staff_id, week_of, business, hours) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (staff_id, week_of, business) DO UPDATE SET hours = EXCLUDED.hours`,
+      [staffId, monday, business, hours]);
+    return back(res, '/admin/team', 'ok', `Saved ${hours} hours for the week of ${monday}.`);
+  } catch (err) {
+    console.error('hours save failed:', err.message);
+    return back(res, '/admin/team', 'err', 'Could not save the hours.');
+  }
+});
+
+/* ── Commission ───────────────────────────────────────────────────────────── */
+
+/** Every quote a helper sent that has taken money, with its commission state. */
+async function commissionLines(staffId, pct) {
+  const { rows } = await pool.query(
+    `SELECT q.code, q.name, q.total, q.tax, q.settled_at,
+            COALESCE(SUM(p.amount - COALESCE(p.fee, 0)), 0)::float AS collected,
+            COALESCE(SUM(p.amount), 0)::float AS gross,
+            MAX(p.created_at) AS last_money_at,
+            EXISTS (SELECT 1 FROM stripe_disputes d WHERE d.quote_code = q.code
+                     AND d.status NOT IN ('won', 'lost', 'warning_closed')) AS dispute_open,
+            (SELECT amount FROM commission_payouts c WHERE c.staff_id = $1 AND c.quote_code = q.code) AS paid_amount_c
+       FROM quotes q JOIN quote_payments p ON p.quote_code = q.code
+      WHERE q.credited_to = $1
+      GROUP BY q.code, q.name, q.total, q.tax, q.settled_at
+      ORDER BY MAX(p.created_at) DESC LIMIT 500`, [staffId]);
+  return rows.map((r) => {
+    const c = TEAM.commissionFor({ collected: r.collected, total: r.total, tax: r.tax, pct });
+    const paidInFull = !!r.settled_at || r.gross + 0.005 >= Number(r.total);
+    return { ...r, ...c, state: TEAM.commissionState({ paidInFull, lastMoneyAt: r.last_money_at,
+      disputeOpen: r.dispute_open, alreadyPaid: r.paid_amount_c != null }) };
+  });
+}
+
+app.get('/admin/commission', requireAdmin, async (req, res) => {
+  try {
+    const roster = await staffRoster();
+    const s = roster.find((r) => r.id === intIn(req.query.staff)) || roster[0];
+    if (!s) return res.redirect('/admin/staff');
+    const [e, incentives] = await Promise.all([earningsFor(s), incentivesFor(s.id, { includeEnded: true })]);
+    const { pct, lines } = e;
+    const payable = lines.filter((l) => l.state === 'payable' && l.amount > 0);
+    const owedBonuses = e.bonuses.filter((b) => !b.paid_at);
+    const payNow = round2(e.payable + e.bonusOwed);
+    const today = new Date().toISOString().slice(0, 10);
+    const tone = { payable: 'green', waiting: 'blue', earning: 'neutral', 'on hold': 'red', paid: 'neutral' };
+    res.send(adminPage('Commission', `
+      ${pageHeader(`Commission — ${s.name}`, `${pct}% of what was collected on quotes credited to them, before tax, less refunds, lost disputes and card fees. Payable ${TEAM.HOLD_DAYS} days after the job is paid in full.`)}
+      ${flash(req.query)}
+      ${filterChips(roster.map((r) => ({ label: r.name, href: `/admin/commission?staff=${r.id}`, on: r.id === s.id })))}
+      ${earningsTiles(e)}
+      ${payNow > 0 ? `<form method="post" action="/admin/commission/pay" class="card">
+        <input type="hidden" name="staff_id" value="${s.id}">
+        <b>Pay ${money(payNow)} through EasyPay, then record it here.</b>
+        <p class="muted">Recording it books one expense (Contract labor, vendor ${escEmail(s.name)}) and marks ${
+          [payable.length ? `${payable.length} quote${payable.length === 1 ? '' : 's'}` : '',
+           owedBonuses.length ? `${owedBonuses.length} bonus${owedBonuses.length === 1 ? '' : 'es'}` : ''].filter(Boolean).join(' and ')} paid.</p>
+        <button type="submit">I paid it — record ${money(payNow)}</button></form>` : ''}
+      <div class="card"><b>Bonuses</b>
+        ${e.bonuses.map((b) => `<div class="row-i"><span class="row-main">${escEmail(b.reason)}
+          <div class="row-sub">${escEmail(whenShort(b.created_at))}</div></span>
+          <span class="row-end"><b>${money(b.amount)}</b> ${pill(b.paid_at ? 'paid' : 'owed', b.paid_at ? 'neutral' : 'green')}${b.paid_at ? '' : `
+            <form method="post" action="/admin/bonuses/${b.id}/delete" style="display:inline;margin:0"><input type="hidden" name="staff_id" value="${s.id}">
+            <button type="submit" class="btn btn-ghost">Remove</button></form>`}</span></div>`).join('') || '<p class="muted">No bonuses yet.</p>'}
+        <form method="post" action="/admin/bonuses" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
+          <input type="hidden" name="staff_id" value="${s.id}">
+          <input name="amount" type="number" min="0.01" step="0.01" placeholder="$" required style="width:110px">
+          <input name="reason" maxlength="200" placeholder="What it is for" required style="flex:1 1 auto;min-width:10em">
+          <button type="submit" class="btn btn-ghost">Add bonus</button>
+        </form></div>
+      <div class="card"><b>Incentives</b> <span class="muted">&middot; ${escEmail(s.name)}'s progress</span>
+        ${incentives.map((i) => incentiveRow(i, { awardFor: s.id }) + (i.ended_at ? '' : `
+          <form method="post" action="/admin/incentives/${i.id}/end" style="margin:-4px 0 8px;text-align:right">
+            <button type="submit" class="btn btn-ghost" style="font-size:12px;padding:4px 10px">End this incentive</button></form>`)).join('')
+          || '<p class="muted">No incentives yet. Set a target below and the team sees their progress on My Day.</p>'}
+        <details style="margin-top:8px"><summary><b>New incentive</b></summary>
+        <form method="post" action="/admin/incentives" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
+          <input name="title" maxlength="120" placeholder="e.g. October push" required style="flex:1 1 auto;min-width:10em">
+          <select name="metric"><option value="collected">Money collected ($)</option><option value="accepted">Quotes accepted (count)</option></select>
+          <input name="target" type="number" min="0.01" step="0.01" placeholder="Target" required style="width:110px">
+          <input name="reward" type="number" min="0.01" step="0.01" placeholder="Bonus $" required style="width:110px">
+          <label style="font-size:12px">From <input name="starts_on" type="date" value="${today}" required></label>
+          <label style="font-size:12px">To <input name="ends_on" type="date" required></label>
+          <select name="staff_id"><option value="all">Everyone</option>${roster.filter((r) => r.active).map((r) =>
+            `<option value="${r.id}">${escEmail(r.name)} only</option>`).join('')}</select>
+          <button type="submit" class="btn">Add incentive</button>
+        </form></details></div>
+      <div class="card">${lines.length ? `<table class="dt" style="width:100%"><thead><tr>
+        <th>Quote</th><th>Customer</th><th>Collected</th><th>Base</th><th>Commission</th><th></th></tr></thead><tbody>
+        ${lines.map((l) => `<tr><td><a href="/production/${escEmail(l.code)}">${escEmail(l.code)}</a></td>
+          <td>${escEmail(l.name || '')}</td><td>${money(l.collected)}</td><td>${money(l.base)}</td>
+          <td>${money(l.state === 'paid' ? l.paid_amount_c : l.amount)}</td><td>${pill(l.state, tone[l.state])}</td></tr>`).join('')}
+        </tbody></table>` : emptyState('No money has come in on their quotes yet.')}</div>`, 'team'));
+  } catch (err) {
+    console.error('commission page failed:', err.message);
+    res.status(500).send(adminPage('Commission', '<div class="card"><div class="warn">Could not load commission.</div></div>', 'team'));
+  }
+});
+
+app.post('/admin/commission/pay', requireAdmin, async (req, res) => {
+  const staffId = intIn(req.body && req.body.staff_id);
+  if (!staffId) return res.redirect('/admin/commission');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // One payout at a time per helper, so two presses cannot book it twice.
+    await client.query('SELECT pg_advisory_xact_lock($1, $2)', [7301, staffId]);
+    const { rows: [s] } = await client.query('SELECT id, name, commission_pct FROM staff WHERE id = $1', [staffId]);
+    if (!s) { await client.query('ROLLBACK'); return res.redirect('/admin/commission'); }
+    /* Recomputed here, never taken from the form: what is payable is what the
+       ledger says now. */
+    const lines = (await commissionLines(staffId, Number(s.commission_pct || 0)))
+      .filter((l) => l.state === 'payable' && l.amount > 0);
+    const { rows: bonuses } = await client.query(
+      'SELECT id, amount, reason FROM staff_bonuses WHERE staff_id = $1 AND paid_at IS NULL FOR UPDATE', [staffId]);
+    if (!lines.length && !bonuses.length) { await client.query('ROLLBACK'); return back(res, `/admin/commission?staff=${staffId}`, 'err', 'Nothing is payable.'); }
+    const total = round2(lines.reduce((a, l) => a + l.amount, 0) + bonuses.reduce((a, b) => a + Number(b.amount), 0));
+    const note = [lines.length ? `Commission: ${lines.map((l) => l.code).join(', ')}` : '',
+                  bonuses.length ? `Bonuses: ${bonuses.map((b) => b.reason).join('; ')}` : ''].filter(Boolean).join(' / ');
+    const { rows: [e] } = await client.query(
+      `INSERT INTO expenses (spent_on, category, amount, vendor, note) VALUES (CURRENT_DATE, 'Contract labor', $1, $2, $3)
+       RETURNING id`, [total, s.name, note.slice(0, 500)]);
+    if (bonuses.length) {
+      await client.query('UPDATE staff_bonuses SET paid_at = NOW(), expense_id = $2 WHERE id = ANY($1::int[])',
+        [bonuses.map((b) => b.id), e.id]);
+    }
+    for (const l of lines) {
+      await client.query(
+        `INSERT INTO commission_payouts (staff_id, quote_code, amount, expense_id) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (staff_id, quote_code) DO NOTHING`, [staffId, l.code, l.amount, e.id]);
+    }
+    await client.query('COMMIT');
+    return back(res, `/admin/commission?staff=${staffId}`, 'ok', `Recorded ${money(total)} for ${s.name}.`);
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('commission payout failed:', err.message);
+    return back(res, `/admin/commission?staff=${staffId}`, 'err', 'Could not record it. Nothing was booked.');
+  } finally {
+    client.release();
+  }
+});
+
+/* ── Sales credit, bonuses and incentives ─────────────────────────────────── */
+
+/* Whose sale a quote is, for commission and the scorecard. It is its own
+   field rather than "who pressed send", because the helper who found the
+   customer and built the quote is not always the one who sent it — and the
+   owner releasing a held quote must not take the sale.
+     NULL  not decided yet: the helper who builds a quote gets it on save
+     0     the owner's own sale, which pays no commission
+     n     that helper
+   A helper may credit themselves or a teammate on a quote that is theirs or
+   nobody's, never take one already credited to someone else. Once commission
+   on a quote is paid the credit is fixed, so it cannot be paid twice. */
+const CREDIT_OWNER = 0;
+
+/** The sales-credit picker, or a line saying why this person cannot change
+ *  it. `bare` leaves out the label (the job page has its own heading). */
+function creditField(q, roster, { bare = false } = {}) {
+  const actor = currentActor() || OWNER_ACTOR;
+  if (!roster.length) return '';
+  const cur = q && q.credited_to != null ? Number(q.credited_to) : null;
+  if (actor.kind === 'staff' && cur != null && cur !== actor.id) {
+    return `${bare ? '' : '<label>Sales credit</label>'}<p class="muted" style="margin:4px 0 0">${
+      escEmail(cur === CREDIT_OWNER ? 'The owner' : nameOf(roster, cur))} — only the owner can change it.</p>`;
+  }
+  const pick = cur != null ? cur : actor.kind === 'staff' ? actor.id : null;
+  const opts = [
+    ...(actor.kind === 'staff' ? [] : [`<option value="owner"${pick === CREDIT_OWNER || pick == null ? ' selected' : ''}>No one — my own sale</option>`]),
+    ...roster.map((r) => `<option value="${r.id}"${r.id === pick ? ' selected' : ''}>${escEmail(r.name)}${
+      actor.kind === 'staff' && r.id === actor.id ? ' (me)' : ''}</option>`),
+  ];
+  return `${bare ? '' : '<label>Sales credit <span style="text-transform:none;font-weight:400">(who made this sale — their commission)</span></label>'}
+    <select name="credit_to">${opts.join('')}</select>`;
+}
+
+/** Sets a quote's sales credit, within the rules above. `raw` is '' (no
+ *  change), 'owner', or a helper id. Resolves { ok, to?, msg }. */
+async function setSalesCredit(code, raw, actor) {
+  const want = String(raw || '').trim();
+  if (!want) return { ok: true };
+  const isStaff = actor && actor.kind === 'staff';
+  let to;
+  if (want === 'owner') {
+    if (isStaff) return { ok: false, msg: 'Only the owner can mark a sale as their own.' };
+    to = CREDIT_OWNER;
+  } else {
+    to = intIn(want);
+    if (!to) return { ok: false, msg: 'Pick who made the sale.' };
+    const { rows: [s] } = await pool.query('SELECT active FROM staff WHERE id = $1', [to]);
+    if (!s || !s.active) return { ok: false, msg: 'That helper is not active.' };
+  }
+  const { rows: [q] } = await pool.query(
+    `SELECT credited_to, EXISTS (SELECT 1 FROM commission_payouts c WHERE c.quote_code = quotes.code) AS paid
+       FROM quotes WHERE code = $1`, [code]);
+  if (!q) return { ok: false, msg: 'That quote no longer exists.' };
+  const cur = q.credited_to == null ? null : Number(q.credited_to);
+  if (cur === to) return { ok: true, to };
+  if (q.paid) return { ok: false, msg: 'Commission on this sale is already paid, so the credit is fixed.' };
+  if (isStaff && cur != null && cur !== actor.id) {
+    return { ok: false, msg: 'This sale is credited to someone else. Ask the owner to change it.' };
+  }
+  /* The same conditions again in the UPDATE, so a payout or another change
+     landing in between cannot be overwritten. */
+  const { rowCount } = await pool.query(
+    `UPDATE quotes SET credited_to = $2
+      WHERE code = $1 AND credited_to IS NOT DISTINCT FROM $3
+        AND NOT EXISTS (SELECT 1 FROM commission_payouts c WHERE c.quote_code = $1)`, [code, to, cur]);
+  if (!rowCount) return { ok: false, msg: 'It changed while you were looking. Try again.' };
+  logActivity(actor, 'sales credit', { type: 'quote', id: code }, { from: cur, to });
+  return { ok: true, to };
+}
+
+app.post('/quote/:code/credit', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/quotes');
+  try {
+    const r = await setSalesCredit(code, req.body && req.body.credit_to, currentActor() || OWNER_ACTOR);
+    return back(res, `/production/${code}`, r.ok ? 'ok' : 'err', r.ok ? 'Sales credit saved.' : r.msg);
+  } catch (err) {
+    console.error('sales credit failed:', err.message);
+    return back(res, `/production/${code}`, 'err', 'Could not save the sales credit.');
+  }
+});
+
+/** The sales-credit card on a job page. */
+async function jobCreditCard(q) {
+  const [active, everyone] = await Promise.all([staffRoster({ activeOnly: true }), staffRoster()]);
+  if (!active.length) return '';  // no helpers: nothing to credit
+  const cur = q.credited_to == null ? null : Number(q.credited_to);
+  const who = cur == null ? 'not set' : cur === CREDIT_OWNER ? 'the owner' : nameOf(everyone, cur);
+  const field = creditField(q, active, { bare: true });
+  return `<div class="card" id="credit"><b>Sales credit</b> <span class="muted">&middot; ${escEmail(who)}</span>
+    ${/<select/.test(field) ? `<form method="post" action="/quote/${escEmail(q.code)}/credit" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
+      ${field}<button type="submit" class="btn btn-ghost">Save</button></form>` : field}</div>`;
+}
+
+/* Incentives: a target over a period — money collected (before tax, less
+   refunds and card fees) or quotes accepted — on sales credited to a helper.
+   Progress is worked out live from the ledger; the reward becomes a bonus
+   when the owner awards it, once. */
+const INCENTIVE_METRICS = {
+  collected: { label: 'Collected', fmt: (n) => money(n) },
+  accepted:  { label: 'Quotes accepted', fmt: (n) => String(Math.round(n)) },
+};
+
+/** An incentive's first and last day, as instants on the shop's clock. */
+function incentiveWindow(inc) {
+  /* pg hands a DATE back as a Date at the server's local midnight, so the
+     local getters give the day as stored, whatever zone the server runs in. */
+  const ymd = (d) => (d instanceof Date
+    ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    : String(d).slice(0, 10));
+  return [TEAM.localMidnight(ymd(inc.starts_on), SHOP_TZ), TEAM.localMidnight(ymd(inc.ends_on), SHOP_TZ, 1)];
+}
+
+async function incentiveProgress(inc, staffId) {
+  if (inc.metric === 'accepted') {
+    const { rows: [r] } = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM quotes WHERE credited_to = $1 AND cancelled_at IS NULL
+          AND accepted_at >= $2 AND accepted_at < $3`, [staffId, ...incentiveWindow(inc)]);
+    return Number(r.n);
+  }
+  const { rows: [r] } = await pool.query(
+    `SELECT COALESCE(SUM(p.amount - COALESCE(p.tax_portion, 0) - COALESCE(p.fee, 0)), 0)::float AS n
+       FROM quote_payments p JOIN quotes q ON q.code = p.quote_code
+      WHERE q.credited_to = $1 AND p.created_at >= $2 AND p.created_at < $3`,
+    [staffId, ...incentiveWindow(inc)]);
+  return round2(r.n);
+}
+
+/** Incentives open to a helper, with their progress and any award. */
+async function incentivesFor(staffId, { includeEnded = false } = {}) {
+  const { rows } = await pool.query(
+    `SELECT i.*, b.id AS bonus_id, b.paid_at AS bonus_paid_at
+       FROM staff_incentives i
+       LEFT JOIN staff_bonuses b ON b.incentive_id = i.id AND b.staff_id = $1
+      WHERE (i.staff_id IS NULL OR i.staff_id = $1)
+        AND (${includeEnded ? 'TRUE' : `i.ended_at IS NULL AND i.ends_on >= CURRENT_DATE - 30`})
+      ORDER BY i.ends_on DESC, i.id DESC LIMIT 20`, [staffId]);
+  for (const i of rows) {
+    i.progress = await incentiveProgress(i, staffId);
+    i.reached = i.progress >= Number(i.target);
+  }
+  return rows;
+}
+
+function incentiveRow(i, { awardFor } = {}) {
+  const m = INCENTIVE_METRICS[i.metric] || INCENTIVE_METRICS.collected;
+  const pct = Math.max(0, Math.min(100, Math.round(100 * i.progress / Math.max(0.01, Number(i.target)))));
+  const state = i.bonus_id ? (i.bonus_paid_at ? pill('bonus paid', 'neutral') : pill('bonus earned', 'green'))
+    : i.reached ? pill('target reached', 'green')
+    : i.ended_at || new Date(incentiveWindow(i)[1]) <= new Date() ? pill('ended', 'neutral') : pill('in progress', 'blue');
+  return `<div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="min-width:12em"><b>${escEmail(i.title)}</b>
+      <div class="row-sub" style="white-space:normal">${escEmail(m.label)} ${escEmail(m.fmt(i.progress))} of ${escEmail(m.fmt(Number(i.target)))}
+        &middot; ${money(i.reward)} bonus &middot; ${escEmail(fmtDate(i.starts_on))} – ${escEmail(fmtDate(i.ends_on))}</div>
+      <div style="height:8px;border-radius:8px;background:#e5eaf3;margin-top:6px;overflow:hidden" role="progressbar"
+        aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><div style="height:100%;width:${pct}%;background:${
+        i.reached ? '#16a34a' : '#1a47b8'}"></div></div></span>
+    <span class="row-end">${state}${awardFor && i.reached && !i.bonus_id ? `
+      <form method="post" action="/admin/incentives/${i.id}/award" style="display:inline;margin:0">
+        <input type="hidden" name="staff_id" value="${awardFor}"><button type="submit" class="btn">Award ${money(i.reward)}</button></form>` : ''}</span></div>`;
+}
+
+/** Everything a helper has earned: commission by quote, and bonuses. */
+async function earningsFor(staff) {
+  const pct = Number(staff.commission_pct || 0);
+  const [lines, { rows: bonuses }] = await Promise.all([
+    commissionLines(staff.id, pct),
+    pool.query(`SELECT * FROM staff_bonuses WHERE staff_id = $1 ORDER BY created_at DESC LIMIT 200`, [staff.id]),
+  ]);
+  const sum = (st) => round2(lines.filter((l) => l.state === st)
+    .reduce((a, l) => a + (st === 'paid' ? Number(l.paid_amount_c) : l.amount), 0));
+  const bonusOwed = round2(bonuses.filter((b) => !b.paid_at).reduce((a, b) => a + Number(b.amount), 0));
+  const bonusPaid = round2(bonuses.filter((b) => b.paid_at).reduce((a, b) => a + Number(b.amount), 0));
+  return { pct, lines, bonuses, payable: sum('payable'), waiting: sum('waiting'), earning: sum('earning'),
+           onHold: sum('on hold'), paid: sum('paid'), bonusOwed, bonusPaid };
+}
+
+function earningsTiles(e) {
+  return statTiles([
+    { label: 'Payable now', value: money(e.payable + e.bonusOwed), tone: 'green',
+      sub: e.bonusOwed ? `includes ${money(e.bonusOwed)} in bonuses` : 'commission ready to pay' },
+    { label: 'Waiting out the 14 days', value: money(e.waiting), tone: 'blue', sub: 'paid in full, settling' },
+    { label: 'Still being paid', value: money(e.earning), tone: 'gray', sub: 'customer has a balance' },
+    { label: 'Paid to you', value: money(e.paid + e.bonusPaid), tone: 'navy', sub: 'commission and bonuses' },
+  ]);
+}
+
+/* A helper's own earnings, in full. Only ever their own: there is no id in
+   the address to change. */
+app.get('/my-earnings', requireAdmin, async (req, res) => {
+  const actor = currentActor() || OWNER_ACTOR;
+  if (actor.kind !== 'staff') return res.redirect('/admin/commission');
+  try {
+    const { rows: [me] } = await pool.query('SELECT id, name, commission_pct FROM staff WHERE id = $1', [actor.id]);
+    const [e, incentives] = await Promise.all([earningsFor(me), incentivesFor(me.id)]);
+    const tone = { payable: 'green', waiting: 'blue', earning: 'neutral', 'on hold': 'red', paid: 'neutral' };
+    res.send(adminPage('My earnings', `
+      ${pageHeader('My earnings', `${e.pct}% commission on money collected from sales credited to you, before tax, less refunds and card fees. It is payable ${TEAM.HOLD_DAYS} days after the customer has paid in full.`)}
+      ${earningsTiles(e)}
+      ${incentives.length ? `<div class="card"><b>Incentives</b>${incentives.map((i) => incentiveRow(i)).join('')}</div>` : ''}
+      ${e.bonuses.length ? `<div class="card"><b>Bonuses</b>${e.bonuses.map((b) => `<div class="row-i"><span class="row-main">${escEmail(b.reason)}
+        <div class="row-sub">${escEmail(whenShort(b.created_at))}</div></span><span class="row-end"><b>${money(b.amount)}</b> ${
+        pill(b.paid_at ? 'paid' : 'owed', b.paid_at ? 'neutral' : 'green')}</span></div>`).join('')}</div>` : ''}
+      <div class="card"><b>Commission by sale</b>${e.lines.length ? `<div class="rows">${e.lines.map((l) => `<div class="row-i">
+        <span class="row-main"><a href="/production/${escEmail(l.code)}"><b>${escEmail(l.code)}</b></a> ${escEmail(l.name || '')}
+          <div class="row-sub">collected ${money(l.collected)} &middot; commission on ${money(l.base)}</div></span>
+        <span class="row-end"><b>${money(l.state === 'paid' ? l.paid_amount_c : l.amount)}</b> ${pill(l.state, tone[l.state])}</span></div>`).join('')}</div>`
+        : `<p class="muted">Nothing yet. When a customer pays on a quote credited to you, it shows here. Set the sales credit on the quote form or the job page.</p>`}</div>`, 'earnings'));
+  } catch (err) {
+    console.error('my earnings failed:', err.message);
+    res.status(500).send(adminPage('My earnings', '<div class="card"><div class="warn">Could not load your earnings.</div></div>', 'earnings'));
+  }
+});
+
+/* Owner: bonuses and incentives. */
+app.post('/admin/bonuses', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const staffId = intIn(b.staff_id);
+  const amount = round2(Number(b.amount));
+  const reason = text(b.reason, 200);
+  const backTo = `/admin/commission?staff=${staffId || ''}`;
+  if (!staffId || !(amount > 0) || amount > 100000 || !reason) return back(res, backTo, 'err', 'A bonus needs an amount and a reason.');
+  try {
+    const { rowCount } = await pool.query(
+      `INSERT INTO staff_bonuses (staff_id, amount, reason) SELECT id, $2, $3 FROM staff WHERE id = $1`, [staffId, amount, reason]);
+    return back(res, backTo, rowCount ? 'ok' : 'err', rowCount ? `Bonus of ${money(amount)} added.` : 'No such helper.');
+  } catch (err) {
+    console.error('bonus add failed:', err.message);
+    return back(res, backTo, 'err', 'Could not add the bonus.');
+  }
+});
+
+app.post('/admin/bonuses/:id/delete', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  const staffId = intIn(req.body && req.body.staff_id);
+  const backTo = `/admin/commission?staff=${staffId || ''}`;
+  if (!id) return res.redirect(backTo);
+  const { rowCount } = await pool.query('DELETE FROM staff_bonuses WHERE id = $1 AND paid_at IS NULL', [id])
+    .catch((e) => { console.error('bonus delete failed:', e.message); return { rowCount: 0 }; });
+  return back(res, backTo, rowCount ? 'ok' : 'err', rowCount ? 'Bonus removed.' : 'A paid bonus cannot be removed.');
+});
+
+app.post('/admin/incentives', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const title = text(b.title, 120);
+  const metric = INCENTIVE_METRICS[b.metric] ? b.metric : null;
+  const target = round2(Number(b.target));
+  const reward = round2(Number(b.reward));
+  const starts = isoDate(b.starts_on), ends = isoDate(b.ends_on);
+  const staffId = b.staff_id === 'all' ? null : intIn(b.staff_id);
+  const backTo = `/admin/commission${staffId ? `?staff=${staffId}` : ''}`;
+  if (!title || !metric || !(target > 0) || !(reward > 0) || reward > 100000 || !starts || !ends || ends < starts) {
+    return back(res, backTo, 'err', 'An incentive needs a name, a target, a reward, and an end date after its start.');
+  }
+  try {
+    await pool.query(
+      `INSERT INTO staff_incentives (title, metric, target, reward, starts_on, ends_on, staff_id) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [title, metric, target, reward, starts, ends, staffId]);
+    return back(res, backTo, 'ok', 'Incentive added. Your team sees it on My Day.');
+  } catch (err) {
+    console.error('incentive add failed:', err.message);
+    return back(res, backTo, 'err', 'Could not add the incentive.');
+  }
+});
+
+app.post('/admin/incentives/:id/end', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  if (id) await pool.query('UPDATE staff_incentives SET ended_at = NOW() WHERE id = $1 AND ended_at IS NULL', [id])
+    .catch((e) => console.error('incentive end failed:', e.message));
+  return back(res, '/admin/commission', 'ok', 'Incentive ended.');
+});
+
+app.post('/admin/incentives/:id/award', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  const staffId = intIn(req.body && req.body.staff_id);
+  const backTo = `/admin/commission?staff=${staffId || ''}`;
+  if (!id || !staffId) return res.redirect(backTo);
+  try {
+    const { rows: [i] } = await pool.query(
+      'SELECT * FROM staff_incentives WHERE id = $1 AND (staff_id IS NULL OR staff_id = $2)', [id, staffId]);
+    if (!i) return back(res, backTo, 'err', 'That incentive is not open to this helper.');
+    // Checked again here from the ledger, never taken from the page.
+    if (await incentiveProgress(i, staffId) < Number(i.target)) return back(res, backTo, 'err', 'The target has not been reached.');
+    const { rowCount } = await pool.query(
+      `INSERT INTO staff_bonuses (staff_id, amount, reason, incentive_id) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (incentive_id, staff_id) WHERE incentive_id IS NOT NULL DO NOTHING`,
+      [staffId, i.reward, `Incentive: ${i.title}`.slice(0, 200), i.id]);
+    return back(res, backTo, rowCount ? 'ok' : 'err', rowCount ? `Awarded ${money(i.reward)}.` : 'Already awarded.');
+  } catch (err) {
+    console.error('incentive award failed:', err.message);
+    return back(res, backTo, 'err', 'Could not award it.');
+  }
+});
+
+/* ── Lead work: notes, assignment, outcome, and leads added by hand ───────── */
+
+app.post('/lead/:id/note', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  const b = req.body || {};
+  const kind = NOTE_KINDS[b.kind] ? b.kind : 'note';
+  const body = text(b.body, 2000);
+  const backTo = safeAdminPath(b.back, '/leads');
+  if (!id || !body) return back(res, backTo, 'err', 'Write something first.');
+  try {
+    const actor = currentActor();
+    await pool.query(`INSERT INTO lead_notes (submission_id, kind, body, staff_id) VALUES ($1, $2, $3, $4)`,
+      [id, kind, body, actor && actor.kind === 'staff' ? actor.id : null]);
+    if (CONTACT_KINDS.includes(kind)) await markLeadResponded(id, actor);
+    const follow = isoDate(b.follow_up);
+    if (follow) await pool.query('UPDATE submissions SET next_follow_up_on = $2 WHERE id = $1', [id, follow]);
+    return res.redirect(backTo + `#lead-${id}`);
+  } catch (err) {
+    console.error('lead note failed:', err.message);
+    return back(res, backTo, 'err', 'Could not save the note.');
+  }
+});
+
+app.post('/lead/:id/assign', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  const to = req.body && req.body.to === 'me' && currentActor() && currentActor().kind === 'staff'
+    ? currentActor().id : intIn(req.body && req.body.to);
+  const backTo = safeAdminPath(req.body && req.body.back, '/leads');
+  if (!id) return res.redirect(backTo);
+  try {
+    await pool.query('UPDATE submissions SET assigned_to = $2 WHERE id = $1', [id, to]);
+    return res.redirect(backTo + `#lead-${id}`);
+  } catch (err) {
+    console.error('lead assign failed:', err.message);
+    return back(res, backTo, 'err', 'Could not assign it.');
+  }
+});
+
+app.post('/lead/:id/outcome', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  const outcome = LEAD_OUTCOMES[req.body && req.body.outcome] ? req.body.outcome : null;
+  const backTo = safeAdminPath(req.body && req.body.back, '/leads');
+  if (!id) return res.redirect(backTo);
+  try {
+    await pool.query('UPDATE submissions SET outcome = $2 WHERE id = $1', [id, outcome]);
+    if (outcome) await markLeadResponded(id, currentActor());
+    return res.redirect(backTo + `#lead-${id}`);
+  } catch (err) {
+    console.error('lead outcome failed:', err.message);
+    return back(res, backTo, 'err', 'Could not save the outcome.');
+  }
+});
+
+/* A lead that did not come through the website: a social DM, a phone call, a
+   walk-in. Same table as every other lead, so it is counted, chased and
+   scored the same way. */
+app.post('/leads/add', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const name = text(b.name, 200);
+  const email = text(b.email, 254).toLowerCase();
+  const phone = text(b.phone, 40);
+  const description = text(b.description, 4000);
+  const platform = SOCIAL_PLATFORMS.includes(b.platform) ? b.platform : 'Other';
+  const profile = text(b.profile_url, 300);
+  const profileUrl = /^https:\/\/[^\s<>"']+$/i.test(profile) ? profile : null;
+  if (!name && !email && !phone && !profileUrl) return back(res, '/leads', 'err', 'A lead needs a name, contact or profile link.');
+  if (email && !STAFF.EMAIL_RE.test(email)) return back(res, '/leads', 'err', 'That email does not look right.');
+  try {
+    const actor = currentActor();
+    const source = ['Facebook', 'Instagram', 'TikTok', 'Google'].includes(platform) ? 'social' : 'manual';
+    const { rows: [l] } = await pool.query(
+      `INSERT INTO submissions (name, phone, email, description, source, platform, profile_url, assigned_to)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+      [name || (profileUrl ? 'Social lead' : 'Lead'), phone, email, description || null, source, platform, profileUrl,
+       actor && actor.kind === 'staff' ? actor.id : null]);
+    return res.redirect(`/leads#lead-${l.id}`);
+  } catch (err) {
+    console.error('add lead failed:', err.message);
+    return back(res, '/leads', 'err', 'Could not add the lead.');
+  }
+});
+
+app.post('/quote/:code/note', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  const body = text(req.body && req.body.body, 2000);
+  const kind = NOTE_KINDS[req.body && req.body.kind] ? req.body.kind : 'note';
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/quotes');
+  if (!body) return res.redirect(`/production/${code}#notes`);
+  try {
+    const actor = currentActor();
+    await pool.query(`INSERT INTO lead_notes (quote_code, kind, body, staff_id) VALUES ($1, $2, $3, $4)`,
+      [code, kind, body, actor && actor.kind === 'staff' ? actor.id : null]);
+  } catch (err) { console.error('quote note failed:', err.message); }
+  return res.redirect(`/production/${code}#notes`);
+});
+
+/** The notes card on a job page. */
+async function jobNotesCard(code) {
+  const [{ rows }, roster] = await Promise.all([
+    pool.query(`SELECT * FROM lead_notes WHERE quote_code = $1
+                 OR submission_id = (SELECT from_submission_id FROM quotes WHERE code = $1)
+                 ORDER BY created_at DESC LIMIT 50`, [code]),
+    staffRoster(),
+  ]);
+  return `<div class="card" id="notes"><b>Notes</b>
+    ${rows.map((n) => `<div class="row-i"><span class="row-main">${pill(NOTE_KINDS[n.kind] || n.kind, 'neutral')}
+      <span style="white-space:pre-wrap">${escEmail(n.body)}</span>
+      <div class="row-sub">${escEmail(nameOf(roster, n.staff_id))} &middot; ${escEmail(whenShort(n.created_at))}</div></span></div>`).join('')
+      || '<p class="muted">No notes yet.</p>'}
+    <form method="post" action="/quote/${escEmail(code)}/note" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
+      <select name="kind">${Object.entries(NOTE_KINDS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
+      <textarea name="body" rows="2" maxlength="2000" placeholder="What happened, or what should change" style="flex:1 1 260px" required></textarea>
+      <button type="submit" class="btn btn-ghost">Add note</button>
+    </form></div>`;
+}
+
+/** The "work this lead" panel under each card on /leads. */
+function leadWorkPanel(l, notes, roster, actor) {
+  const mine = actor && actor.kind === 'staff' && l.assigned_to === actor.id;
+  const assignee = l.assigned_to ? nameOf(roster, l.assigned_to) : null;
+  return `<details class="card" style="margin-top:-6px" id="lead-${l.id}-work">
+    <summary>${assignee ? `${escEmail(assignee)}'s` : 'Unassigned'}${notes.length ? ` &middot; ${notes.length} note${notes.length === 1 ? '' : 's'}` : ''}${
+      l.outcome ? ` &middot; ${escEmail(LEAD_OUTCOMES[l.outcome] || l.outcome)}` : ''}${
+      l.next_follow_up_on ? ` &middot; follow up ${escEmail(fmtDate(l.next_follow_up_on))}` : ''}${
+      l.platform ? ` &middot; ${escEmail(l.platform)}` : ''}</summary>
+    ${l.profile_url ? `<p><a href="${escEmail(l.profile_url)}" target="_blank" rel="noopener noreferrer">Open their profile</a></p>` : ''}
+    ${notes.map((n) => `<div class="row-sub" style="white-space:pre-wrap">${pill(NOTE_KINDS[n.kind] || n.kind, 'neutral')}
+      ${escEmail(n.body)} <span class="muted">— ${escEmail(nameOf(roster, n.staff_id))}, ${escEmail(whenShort(n.created_at))}</span></div>`).join('')}
+    <form method="post" action="/lead/${l.id}/note" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
+      <input type="hidden" name="back" value="/leads">
+      <select name="kind">${Object.entries(NOTE_KINDS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
+      <textarea name="body" rows="2" maxlength="2000" required placeholder="Call, message or note" style="flex:1 1 220px"></textarea>
+      <label class="muted" style="font-size:12px">follow up <input type="date" name="follow_up"></label>
+      <button type="submit" class="btn btn-ghost">Save</button>
+    </form>
+    <div class="row" style="gap:6px;flex-wrap:wrap;margin-top:6px">
+      <form method="post" action="/lead/${l.id}/assign" style="margin:0" class="row">
+        <input type="hidden" name="back" value="/leads">
+        ${actor && actor.kind === 'staff'
+          ? `<input type="hidden" name="to" value="${mine ? '' : 'me'}"><button type="submit" class="btn btn-ghost">${mine ? 'Unassign me' : 'Take it'}</button>`
+          : `<select name="to"><option value="">Unassigned</option>${roster.filter((r) => r.active).map((r) =>
+              `<option value="${r.id}"${l.assigned_to === r.id ? ' selected' : ''}>${escEmail(r.name)}</option>`).join('')}</select>
+             <button type="submit" class="btn btn-ghost">Assign</button>`}
+      </form>
+      <form method="post" action="/lead/${l.id}/outcome" style="margin:0" class="row">
+        <input type="hidden" name="back" value="/leads">
+        <select name="outcome"><option value="">No outcome</option>${Object.entries(LEAD_OUTCOMES).map(([k, v]) =>
+          `<option value="${k}"${l.outcome === k ? ' selected' : ''}>${v}</option>`).join('')}</select>
+        <button type="submit" class="btn btn-ghost">Set</button>
+      </form>
+    </div>
+  </details>`;
+}
+
+function addLeadForm() {
+  return `<details class="card"><summary><b>Add a lead</b> <span class="muted">— a social DM, a call, a walk-in</span></summary>
+    <form method="post" action="/leads/add" class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px">
+      <select name="platform">${SOCIAL_PLATFORMS.map((p) => `<option>${p}</option>`).join('')}</select>
+      <input name="name" placeholder="Name" maxlength="200">
+      <input name="email" type="email" placeholder="Email" maxlength="254">
+      <input name="phone" placeholder="Phone" maxlength="40">
+      <input name="profile_url" type="url" placeholder="https://… profile or post link" maxlength="300" style="flex:1 1 240px">
+      <textarea name="description" rows="2" maxlength="4000" placeholder="What they asked for" style="flex:1 1 100%"></textarea>
+      <button type="submit">Add lead</button>
+    </form></details>`;
+}
+
+/* ── Tasks ────────────────────────────────────────────────────────────────── */
+
+app.post('/tasks', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const actor = currentActor();
+  const title = text(b.title, 200);
+  const backTo = safeAdminPath(b.back, '/my-day');
+  if (!title) return back(res, backTo, 'err', 'A task needs a title.');
+  const assignTo = actor && actor.kind === 'staff' ? actor.id : intIn(b.assigned_to);
+  try {
+    await pool.query(
+      `INSERT INTO staff_tasks (title, due_on, assigned_to, business, submission_id, quote_code, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [title, isoDate(b.due_on), assignTo, BUSINESSES[b.business] ? b.business : 'jtees',
+       intIn(b.submission_id), QUOTE_CODE_RE.test(String(b.quote_code || '').toUpperCase()) ? String(b.quote_code).toUpperCase() : null,
+       actor && actor.kind === 'staff' ? actor.id : null]);
+    return back(res, backTo, 'ok', 'Task added.');
+  } catch (err) {
+    console.error('task add failed:', err.message);
+    return back(res, backTo, 'err', 'Could not add the task.');
+  }
+});
+
+app.post('/tasks/:id/done', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  const actor = currentActor();
+  const backTo = safeAdminPath(req.body && req.body.back, '/my-day');
+  if (!id) return res.redirect(backTo);
+  try {
+    /* A helper closes only their own tasks (or unassigned ones); the owner any. */
+    const staffId = actor && actor.kind === 'staff' ? actor.id : null;
+    await pool.query(
+      `UPDATE staff_tasks SET done_at = NOW(), done_by = $2
+        WHERE id = $1 AND done_at IS NULL AND ($2::int IS NULL OR assigned_to = $2 OR assigned_to IS NULL)`,
+      [id, staffId]);
+    return res.redirect(backTo);
+  } catch (err) {
+    console.error('task done failed:', err.message);
+    return back(res, backTo, 'err', 'Could not close the task.');
+  }
+});
+
+/* ── Team chat ────────────────────────────────────────────────────────────── */
+
+/* One conversation per helper, between them and the owner. A helper only ever
+   reaches their own; the owner picks whose. Lines are text the team typed:
+   escaped on the page, and built with textContent when new ones arrive by
+   polling, never as markup. */
+const TEAM_CHAT_MAX = 2000;
+const TEAM_CHAT_CSS = `<style>
+.tc-log{display:flex;flex-direction:column;gap:8px;max-height:60vh;overflow-y:auto;padding:4px 2px}
+.tc-line{max-width:78%;padding:8px 12px;border-radius:14px;background:#eef2f9;color:#0B1F4B;white-space:pre-wrap;
+  overflow-wrap:anywhere;font-size:14px;line-height:1.45}
+.tc-line.me{align-self:flex-end;background:#0B1F4B;color:#fff}
+.tc-when{display:block;font-size:11px;opacity:.7;margin-top:2px}
+.tc-form{display:flex;gap:8px;align-items:flex-end;margin-top:12px}
+.tc-form textarea{flex:1;min-width:0}
+@media (max-width:640px){.tc-line{max-width:90%}.tc-form{flex-direction:column;align-items:stretch}}
+</style>`;
+
+/** Unread lines for whoever is signed in: helpers' lines for the owner, the
+ *  owner's lines for a helper. */
+async function teamChatUnread() {
+  const a = currentActor() || OWNER_ACTOR;
+  const { rows } = a.kind === 'staff'
+    ? await pool.query(`SELECT COUNT(*)::int AS n FROM team_messages
+                         WHERE staff_id = $1 AND from_owner AND read_at IS NULL`, [a.id])
+    : await pool.query(`SELECT COUNT(*)::int AS n FROM team_messages m JOIN staff s ON s.id = m.staff_id
+                         WHERE NOT m.from_owner AND m.read_at IS NULL`);
+  return rows[0].n;
+}
+
+/** Whose conversation a request is about: always a helper's own; for the
+ *  owner, the helper asked for if there is one, else null. */
+function chatThreadFor(raw, roster) {
+  const a = currentActor() || OWNER_ACTOR;
+  if (a.kind === 'staff') return a.id;
+  const id = intIn(raw);
+  return id && roster.some((r) => r.id === id) ? id : null;
+}
+
+async function chatLines(staffId, after = 0) {
+  const { rows } = await pool.query(
+    `SELECT id, from_owner, body, created_at FROM team_messages
+      WHERE staff_id = $1 AND id > $2 ORDER BY id DESC LIMIT 200`, [staffId, after]);
+  return rows.reverse();
+}
+
+/** The other side's lines are read once this person has had them on screen. */
+function chatMarkRead(staffId) {
+  const theirsFromOwner = (currentActor() || OWNER_ACTOR).kind === 'staff';
+  return pool.query(
+    `UPDATE team_messages SET read_at = NOW() WHERE staff_id = $1 AND from_owner = $2 AND read_at IS NULL`,
+    [staffId, theirsFromOwner]).catch((e) => console.error('team chat read mark failed:', e.message));
+}
+
+function chatLineJson(m) {
+  const mine = (currentActor() || OWNER_ACTOR).kind === 'staff' ? !m.from_owner : m.from_owner;
+  return { id: Number(m.id), mine, body: m.body, when: whenShort(m.created_at) };
+}
+
+app.get('/team-chat', requireAdmin, async (req, res) => {
+  try {
+    const actor = currentActor() || OWNER_ACTOR;
+    const roster = await staffRoster();
+    let staffId = chatThreadFor(req.query.staff, roster);
+    let chips = '';
+    if (actor.kind !== 'staff') {
+      const { rows: counts } = await pool.query(
+        `SELECT staff_id, COUNT(*) FILTER (WHERE NOT from_owner AND read_at IS NULL)::int AS unread,
+                MAX(created_at) AS last_at
+           FROM team_messages GROUP BY staff_id`);
+      const by = new Map(counts.map((c) => [c.staff_id, c]));
+      // Disabled helpers stay listed only while there is a conversation to read.
+      const people = roster.filter((r) => r.active || by.has(r.id)).sort((x, y) => {
+        const a = by.get(x.id) || {}, b = by.get(y.id) || {};
+        return (b.unread || 0) - (a.unread || 0) || new Date(b.last_at || 0) - new Date(a.last_at || 0);
+      });
+      if (!people.length) {
+        return res.send(adminPage('Team chat', `${pageHeader('Team chat', '')}
+          <div class="card">${emptyState('No helpers yet. Add one on the Staff page, then talk to them here.',
+            '<a class="btn" href="/admin/staff">Add a helper</a>')}</div>`, 'chat'));
+      }
+      if (!staffId || !people.some((r) => r.id === staffId)) staffId = people[0].id;
+      chips = filterChips(people.map((r) => ({ label: r.name + (r.active ? '' : ' (disabled)'),
+        href: `/team-chat?staff=${r.id}`, on: r.id === staffId, count: (by.get(r.id) || {}).unread || null })));
+    }
+    const lines = await chatLines(staffId);
+    await chatMarkRead(staffId);
+    const who = roster.find((r) => r.id === staffId);
+    const canWrite = actor.kind === 'staff' || (who && who.active);
+    const other = actor.kind === 'staff' ? 'the owner' : nameOf(roster, staffId);
+    const line = (m) => { const j = chatLineJson(m);
+      return `<div class="tc-line${j.mine ? ' me' : ''}">${escEmail(j.body)}<span class="tc-when">${escEmail(j.when)}</span></div>`; };
+    const last = lines.length ? Number(lines[lines.length - 1].id) : 0;
+    res.send(adminPage('Team chat', `${TEAM_CHAT_CSS}
+      ${pageHeader('Team chat', `Just you and ${escEmail(other)}. Customers never see this.`)}
+      ${flash(req.query)}
+      ${chips}
+      <div class="card">
+        <div class="tc-log" data-tclog data-after="${last}">${lines.length ? lines.map(line).join('')
+          : `<p class="muted" data-tcempty>No messages yet. Say hello to ${escEmail(other)}.</p>`}</div>
+        ${canWrite ? `<form method="post" action="/team-chat" class="tc-form" data-tcform>
+          <input type="hidden" name="staff" value="${staffId}">
+          <textarea name="body" rows="2" maxlength="${TEAM_CHAT_MAX}" required placeholder="Message ${escEmail(other)}"></textarea>
+          <button type="submit" class="btn">Send</button>
+        </form>` : '<p class="muted">This helper is disabled, so the conversation is read-only.</p>'}
+      </div>
+      <script>
+        (function(){
+          var log = document.querySelector('[data-tclog]'); if (!log) return;
+          var staff = ${JSON.stringify(String(staffId))};
+          log.scrollTop = log.scrollHeight;
+          var f = document.querySelector('[data-tcform]');
+          if (f) {
+            var ta = f.querySelector('textarea');
+            ta.addEventListener('keydown', function(e){
+              if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (ta.value.trim()) f.requestSubmit(); }
+            });
+            f.addEventListener('submit', function(){
+              var b = f.querySelector('button'); setTimeout(function(){ b.disabled = true; b.textContent = 'Sending…'; }, 0);
+            });
+          }
+          function poll(){
+            if (document.hidden) return;
+            fetch('/api/team-chat?staff=' + encodeURIComponent(staff) + '&after=' + encodeURIComponent(log.getAttribute('data-after')),
+                  { credentials: 'same-origin', cache: 'no-store' })
+              .then(function(r){ return r.ok ? r.json() : null; }).then(function(d){
+                if (!d || !d.lines || !d.lines.length) return;
+                var e = log.querySelector('[data-tcempty]'); if (e) e.remove();
+                var atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+                d.lines.forEach(function(m){
+                  var el = document.createElement('div'); el.className = 'tc-line' + (m.mine ? ' me' : '');
+                  el.textContent = m.body;
+                  var w = document.createElement('span'); w.className = 'tc-when'; w.textContent = m.when; el.appendChild(w);
+                  log.appendChild(el); log.setAttribute('data-after', String(m.id));
+                });
+                if (atEnd) log.scrollTop = log.scrollHeight;
+              }).catch(function(){});
+          }
+          setInterval(poll, 15000);
+          document.addEventListener('visibilitychange', poll);
+        })();
+      </script>`, 'chat'));
+  } catch (err) {
+    console.error('team chat failed:', err.message);
+    res.status(500).send(adminPage('Team chat', '<div class="card"><div class="warn">Could not load the chat.</div></div>', 'chat'));
+  }
+});
+
+app.post('/team-chat', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const actor = currentActor() || OWNER_ACTOR;
+  const body = text(b.body, TEAM_CHAT_MAX + 1);
+  try {
+    const roster = await staffRoster();
+    const staffId = chatThreadFor(b.staff, roster);
+    const backTo = actor.kind === 'staff' || !staffId ? '/team-chat' : `/team-chat?staff=${staffId}`;
+    if (!staffId) return back(res, '/team-chat', 'err', 'Pick who to message.');
+    if (!body) return back(res, backTo, 'err', 'Write something first.');
+    if (body.length > TEAM_CHAT_MAX) return back(res, backTo, 'err', `That is too long. Keep it under ${TEAM_CHAT_MAX} characters.`);
+    const who = roster.find((r) => r.id === staffId);
+    if (actor.kind !== 'staff' && !(who && who.active)) return back(res, backTo, 'err', 'That helper is disabled.');
+    /* A double-click or a resubmitted page sends the same line twice in a few
+       seconds; the second is dropped rather than shown twice. */
+    await pool.query(
+      `INSERT INTO team_messages (staff_id, from_owner, body)
+       SELECT $1, $2, $3 WHERE NOT EXISTS (
+         SELECT 1 FROM team_messages WHERE staff_id = $1 AND from_owner = $2 AND body = $3
+            AND created_at > NOW() - interval '10 seconds')`,
+      [staffId, actor.kind !== 'staff', body]);
+    return res.redirect(backTo);
+  } catch (err) {
+    console.error('team chat send failed:', err.message);
+    return back(res, '/team-chat', 'err', 'It did not send. Try again.');
+  }
+});
+
+app.get('/api/team-chat', requireAdmin, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try {
+    const roster = await staffRoster();
+    const staffId = chatThreadFor(req.query.staff, roster);
+    if (!staffId) return res.status(404).json({ lines: [] });
+    const after = Number.parseInt(String(req.query.after || '0'), 10);
+    const lines = await chatLines(staffId, Number.isSafeInteger(after) && after > 0 ? after : 0);
+    if (lines.length) await chatMarkRead(staffId);
+    res.json({ lines: lines.map(chatLineJson) });
+  } catch (err) {
+    console.error('team chat poll failed:', err.message);
+    res.status(500).json({ lines: [] });
+  }
+});
+
+/* ── My Day ───────────────────────────────────────────────────────────────── */
+
+app.get('/my-day', requireAdmin, async (req, res) => {
+  try {
+    const actor = currentActor() || OWNER_ACTOR;
+    const me = actor.kind === 'staff' ? actor.id : null;
+    const can = (k) => actorLevel(k) !== 'off';
+    const roster = await staffRoster();
+    const [leads, tasks, mine, released, liveList] = await Promise.all([
+      can('leads.view') ? unansweredLeads() : Promise.resolve([]),
+      pool.query(`SELECT * FROM staff_tasks WHERE done_at IS NULL AND ($1::int IS NULL OR assigned_to = $1 OR assigned_to IS NULL)
+                   ORDER BY due_on NULLS LAST, created_at LIMIT 100`, [me]),
+      me ? pool.query(`SELECT * FROM staff_approvals WHERE requested_by = $1
+                        AND (status = 'pending' OR (status = 'rejected' AND decided_at > NOW() - interval '7 days'))
+                        ORDER BY created_at DESC`, [me]) : Promise.resolve({ rows: [] }),
+      me ? pool.query(`SELECT q.* FROM staff_approvals a JOIN quotes q ON q.code = a.subject_id
+                        WHERE a.kind = 'quote' AND a.status = 'approved' AND a.requested_by = $1
+                          AND a.decided_at > NOW() - interval '7 days'
+                          AND q.status IN ('sent', 'viewed') AND q.accepted_at IS NULL AND q.cancelled_at IS NULL
+                        ORDER BY a.decided_at DESC`, [me]) : Promise.resolve({ rows: [] }),
+      can('quotes.view') ? liveJobs() : Promise.resolve([]),
+    ]);
+    const followUps = can('leads.view') ? (await pool.query(
+      `SELECT * FROM submissions WHERE next_follow_up_on <= CURRENT_DATE AND dismissed_at IS NULL
+          AND ($1::int IS NULL OR assigned_to = $1 OR assigned_to IS NULL)
+        ORDER BY next_follow_up_on LIMIT 50`, [me])).rows : [];
+    /* A helper's own earnings, so they can follow what their sales are worth.
+       A failure costs this panel, not the page. */
+    const earn = me ? await (async () => {
+      const { rows: [st] } = await pool.query('SELECT id, name, commission_pct FROM staff WHERE id = $1', [me]);
+      const [e, incentives] = await Promise.all([earningsFor(st), incentivesFor(me)]);
+      return { e, incentives };
+    })().catch((err) => { console.error('my day earnings failed:', err.message); return null; }) : null;
+    const waiting = leads.filter((l) => me == null || l.assigned_to == null || l.assigned_to === me)
+      .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+    const nextSteps = liveList.map((q) => ({ q, cl: quoteChecklist(q) })).filter((x) => x.cl.next).slice(0, 15);
+    const today = new Date().toISOString().slice(0, 10);
+
+    const section = (title, inner, empty) => `<div class="card"><b>${title}</b>${inner || `<p class="muted">${empty}</p>`}</div>`;
+    const leadRow = (l) => `<div class="row-i"><span class="row-main"><a href="/leads#lead-${l.id}"><b>${escEmail(l.name || l.email || 'Lead')}</b></a>
+      <div class="row-sub">${escEmail((LEAD_SOURCES[l.source] || [l.source || 'form'])[0])} &middot; waiting ${
+        escEmail(fmtMins(TEAM.businessMinutesBetween(l.created_at, new Date())))} of working time</div></span>
+      <span class="row-end">${can('quotes.draft') ? `<a class="btn btn-ghost" href="/quote/new?lead=${l.id}">Quote</a>` : ''}</span></div>`;
+    const copyJs = `<script>function jtCopy(id){var t=document.getElementById(id).innerText;
+      (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).catch(function(){});}</script>`;
+
+    res.send(adminPage('My Day', `
+      ${pageHeader(`My Day${actor.kind === 'staff' ? ` — ${actor.name}` : ''}`, 'Oldest first. Answer leads, then follow-ups, then the jobs.',
+        '<a class="btn btn-ghost" href="/playbook">Playbook</a>')}
+      ${flash(req.query)}
+      ${released.rows.length ? section('Approved — send these now', released.rows.map((q) => `
+        <div class="row-i" style="flex-wrap:wrap"><span class="row-main"><b>${escEmail(q.code)}</b> ${escEmail(q.name || '')} &middot; ${money(q.total)}
+          <div class="msg" id="rel-${escEmail(q.code)}" style="white-space:pre-wrap">${escEmail(quoteMessages(q).initial)}</div></span>
+          <span class="row-end"><button type="button" class="btn btn-ghost" onclick="jtCopy('rel-${escEmail(q.code)}')">Copy</button></span></div>`).join('')) : ''}
+      ${earn ? `<div class="card"><b>My earnings</b> <a class="muted" href="/my-earnings" style="float:right">See every sale →</a>
+        ${earningsTiles(earn.e)}
+        ${earn.incentives.map((i) => incentiveRow(i)).join('')}</div>` : ''}
+      ${mine.rows.length ? section('Waiting on the owner', mine.rows.map((a) => `
+        <div class="row-i"><span class="row-main">${escEmail(a.kind)} ${escEmail(a.subject_id)}${a.decision_note
+          ? `<div class="row-sub">Sent back: ${escEmail(a.decision_note)}</div>` : ''}</span>
+          <span class="row-end">${pill(a.status === 'rejected' ? 'sent back' : 'waiting', a.status === 'rejected' ? 'amber' : 'blue')}</span></div>`).join('')) : ''}
+      ${can('leads.view') ? section(`Leads waiting for a reply (${waiting.length})`, waiting.slice(0, 25).map(leadRow).join(''), 'Nobody is waiting.') : ''}
+      ${can('leads.view') ? section(`Follow-ups due (${followUps.length})`, followUps.map((l) => `
+        <div class="row-i"><span class="row-main"><a href="/leads?status=all#lead-${l.id}"><b>${escEmail(l.name || l.email || 'Lead')}</b></a>
+          <div class="row-sub">due ${escEmail(fmtDate(l.next_follow_up_on))}${l.assigned_to ? ` &middot; ${escEmail(nameOf(roster, l.assigned_to))}` : ''}</div></span></div>`).join(''),
+        'No follow-ups due.') : ''}
+      ${section(`Tasks (${tasks.rows.length})`, tasks.rows.map((t) => `
+        <div class="row-i"><span class="row-main"><b>${escEmail(t.title)}</b>
+          <div class="row-sub">${escEmail(BUSINESSES[t.business] || t.business)}${t.due_on ? ` &middot; due ${escEmail(fmtDate(t.due_on))}` : ''}${
+            t.quote_code ? ` &middot; <a href="/production/${escEmail(t.quote_code)}">${escEmail(t.quote_code)}</a>` : ''}${
+            t.assigned_to == null ? ' &middot; anyone' : ''}</div></span>
+          <span class="row-end">${t.due_on && String(t.due_on instanceof Date ? t.due_on.toISOString() : t.due_on).slice(0, 10) < today ? pill('overdue', 'red') : ''}
+            <form method="post" action="/tasks/${t.id}/done" style="margin:0"><button type="submit" class="btn btn-ghost">Done</button></form></span></div>`).join(''),
+        'Nothing on your list.')}
+      <details class="card"><summary><b>Add a task</b></summary>
+        <form method="post" action="/tasks" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
+          <input name="title" placeholder="What needs doing" required maxlength="200" style="flex:1 1 240px">
+          <input type="date" name="due_on">
+          <select name="business">${Object.entries(BUSINESSES).map(([k, v]) => `<option value="${k}">${escEmail(v)}</option>`).join('')}</select>
+          ${actor.kind === 'owner' ? `<select name="assigned_to"><option value="">Anyone</option>${roster.filter((r) => r.active).map((r) =>
+            `<option value="${r.id}">${escEmail(r.name)}</option>`).join('')}</select>` : ''}
+          <button type="submit" class="btn btn-ghost">Add</button>
+        </form></details>
+      ${nextSteps.length ? section('Jobs with a next step', nextSteps.map(({ q, cl }) => `
+        <div class="row-i"><span class="row-main"><a href="/production/${escEmail(q.code)}"><b>${escEmail(q.code)}</b></a> ${escEmail(q.name || '')}
+          <div class="row-sub">${escEmail(cl.next.label)}${cl.next.hint ? ` — ${escEmail(cl.next.hint)}` : ''}</div></span>
+          <span class="row-end muted">${cl.done}/${cl.of}</span></div>`).join('')) : ''}
+      ${copyJs}`, 'myday'));
+  } catch (err) {
+    console.error('my day failed:', err.message);
+    res.status(500).send(adminPage('My Day', '<div class="card"><div class="warn">Could not load your day.</div></div>', 'myday'));
+  }
+});
+
+/* ── Playbook ─────────────────────────────────────────────────────────────── */
+
+/* Search in plain words. websearch_to_tsquery needs EVERY word in one article,
+   so a question typed the way a customer asked it ("how much do I pay up
+   front?") found nothing. Here any word counts, each as a prefix so a
+   half-typed word matches, and the article matching the most words ranks
+   first. A /shortcut still jumps straight to its article. `p` is the
+   placeholder holding the words; p + 1 holds the lower-cased shortcut. */
+function kbMatch(p) {
+  const tsq = `NULLIF(replace(regexp_replace(plainto_tsquery('english', $${p})::text,
+    '''([^'']+)''', '''\\1'':*', 'g'), ' & ', ' | '), '')::tsquery`;
+  return {
+    where: `(search @@ ${tsq} OR shortcut = $${p + 1} OR title ILIKE '%' || $${p + 1} || '%')`,
+    rank: `(COALESCE(ts_rank(search, ${tsq}), 0) + CASE WHEN shortcut = $${p + 1} THEN 10 ELSE 0 END)`,
+  };
+}
+
+const KB_KINDS = { faq: 'Customer reply', artwork: 'Artwork guide', sop: 'How we do it' };
+const KB_DECORATIONS = { screen: 'Screen printing', embroidery: 'Embroidery', dtf: 'DTF', patches: 'Patches',
+                         vinyl: 'Vinyl', puff: 'Puff print', any: 'Any' };
+
+function kbFromForm(b) {
+  const kind = KB_KINDS[b.kind] ? b.kind : 'faq';
+  const shortcutRaw = text(b.shortcut, 40).toLowerCase().replace(/^\/+/, '');
+  return {
+    id: intIn(b.id),
+    kind,
+    title: text(b.title, 160),
+    shortcut: /^[a-z0-9-]{2,30}$/.test(shortcutRaw) ? shortcutRaw : null,
+    body: text(b.body, 20000),
+    tags: text(b.tags, 300),
+    decoration: KB_DECORATIONS[b.decoration] ? b.decoration : null,
+    business: BUSINESSES[b.business] ? b.business : 'jtees',
+  };
+}
+
+/* Light formatting only: paragraphs, "- " bullets, **bold**. Escaped first,
+   so an article can never carry markup of its own. */
+function kbRender(body) {
+  const esc = escEmail(String(body || ''));
+  return esc.split(/\n{2,}/).map((block) => {
+    const lines = block.split('\n');
+    if (lines.every((l) => /^\s*[-*] /.test(l))) {
+      return `<ul>${lines.map((l) => `<li>${l.replace(/^\s*[-*] /, '')}</li>`).join('')}</ul>`;
+    }
+    return `<p>${lines.join('<br>')}</p>`;
+  }).join('').replace(/\*\*([^*]{1,200})\*\*/g, '<b>$1</b>');
+}
+
+function kbEditor(a = {}) {
+  return `<form method="post" action="${a.id ? `/playbook/${a.id}` : '/playbook'}" style="margin-top:8px">
+    ${a.id ? `<input type="hidden" name="id" value="${a.id}">` : ''}
+    <div class="row" style="gap:6px;flex-wrap:wrap">
+      <select name="kind">${Object.entries(KB_KINDS).map(([k, v]) => `<option value="${k}"${a.kind === k ? ' selected' : ''}>${v}</option>`).join('')}</select>
+      <input name="title" placeholder="Title" required maxlength="160" value="${escEmail(a.title || '')}" style="flex:1 1 240px">
+      <input name="shortcut" placeholder="/shortcut" maxlength="31" value="${a.shortcut ? '/' + escEmail(a.shortcut) : ''}" style="width:130px">
+      <select name="decoration"><option value="">No decoration</option>${Object.entries(KB_DECORATIONS).map(([k, v]) =>
+        `<option value="${k}"${a.decoration === k ? ' selected' : ''}>${v}</option>`).join('')}</select>
+      <select name="business">${Object.entries(BUSINESSES).map(([k, v]) =>
+        `<option value="${k}"${(a.business || 'jtees') === k ? ' selected' : ''}>${escEmail(v)}</option>`).join('')}</select>
+    </div>
+    <textarea name="body" rows="10" required maxlength="20000" style="width:100%;margin-top:6px"
+      placeholder="Blank line = new paragraph. Lines starting with '- ' become bullets. **bold**">${escEmail(a.body || '')}</textarea>
+    <input name="tags" placeholder="tags, comma separated" maxlength="300" value="${escEmail(a.tags || '')}" style="width:100%;margin-top:6px">
+    <button type="submit" style="margin-top:8px">${actorLevel('kb.edit') === 'approval' ? 'Send to the owner for approval' : 'Save'}</button>
+  </form>`;
+}
+
+app.get('/playbook', requireAdmin, async (req, res) => {
+  try {
+    const q = text(req.query.q, 100);
+    const kind = KB_KINDS[req.query.kind] ? req.query.kind : '';
+    const decoration = KB_DECORATIONS[req.query.decoration] ? req.query.decoration : '';
+    const params = [];
+    const where = ['published'];
+    if (kind) { params.push(kind); where.push(`kind = $${params.length}`); }
+    if (decoration) { params.push(decoration); where.push(`(decoration = $${params.length} OR decoration = 'any')`); }
+    let order = 'kind, title';
+    let rankSel = '';
+    if (q) {
+      params.push(q, q.replace(/^\/+/, '').toLowerCase());
+      const m = kbMatch(params.length - 1);
+      where.push(m.where);
+      rankSel = `, ${m.rank} AS rank`;
+      order = 'rank DESC, title';
+    }
+    const { rows } = await pool.query(
+      `SELECT id, kind, title, shortcut, decoration, business, needs_review, updated_at,
+              left(body, 240) AS excerpt${rankSel}
+         FROM kb_articles WHERE ${where.join(' AND ')} ORDER BY ${order} LIMIT 100`, params);
+    const link = (over) => '/playbook?' + new URLSearchParams(Object.fromEntries(Object.entries({ q, kind, decoration, ...over }).filter(([, v]) => v)));
+    const canEdit = actorLevel('kb.edit') !== 'off';
+    res.send(adminPage('Playbook', `
+      ${pageHeader('Playbook', 'Customer replies, artwork rules by decoration, and how we do things. Type a question in your own words.')}
+      ${flash(req.query)}
+      <form class="search" method="GET" action="/playbook">
+        ${kind ? `<input type="hidden" name="kind" value="${escEmail(kind)}">` : ''}
+        ${decoration ? `<input type="hidden" name="decoration" value="${escEmail(decoration)}">` : ''}
+        <input name="q" value="${escEmail(q)}" placeholder="e.g. how long will my order take? or /deposit" autofocus>
+        <button type="submit" class="btn btn-ghost">Search</button>
+      </form>
+      ${filterChips([{ label: 'Everything', href: link({ kind: '' }), on: !kind },
+        ...Object.entries(KB_KINDS).map(([k, v]) => ({ label: v, href: link({ kind: k }), on: kind === k }))])}
+      ${filterChips([{ label: 'Any decoration', href: link({ decoration: '' }), on: !decoration },
+        ...Object.entries(KB_DECORATIONS).filter(([k]) => k !== 'any').map(([k, v]) => ({ label: v, href: link({ decoration: k }), on: decoration === k }))])}
+      ${rows.length ? `<div class="grid-cards">${rows.map((a) => `<a class="card" href="/playbook/${a.id}" style="display:block;color:inherit;text-decoration:none">
+        <div>${pill(KB_KINDS[a.kind] || a.kind, a.kind === 'faq' ? 'blue' : a.kind === 'artwork' ? 'amber' : 'green')}
+          ${a.decoration ? pill(KB_DECORATIONS[a.decoration] || a.decoration, 'neutral') : ''}
+          ${a.needs_review ? pill('starter draft', 'red') : ''}</div>
+        <b style="display:block;margin-top:6px">${escEmail(a.title)}</b>
+        ${a.shortcut ? `<code>/${escEmail(a.shortcut)}</code>` : ''}
+        <div class="muted" style="margin-top:4px">${escEmail(String(a.excerpt || '').replace(/\*\*/g, ''))}…</div></a>`).join('')}</div>`
+        : `<div class="card">${emptyState(q ? `Nothing matches &ldquo;${escEmail(q)}&rdquo;.` : 'The playbook is empty.')}</div>`}
+      ${canEdit ? `<details class="card"><summary><b>Write a new article</b></summary>${kbEditor()}</details>` : ''}`, 'playbook'));
+  } catch (err) {
+    console.error('playbook failed:', err.message);
+    res.status(500).send(adminPage('Playbook', '<div class="card"><div class="warn">Could not load the playbook.</div></div>', 'playbook'));
+  }
+});
+
+app.get('/playbook/:id', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  if (!id) return res.redirect('/playbook');
+  try {
+    const [{ rows: [a] }, roster] = await Promise.all([
+      pool.query('SELECT * FROM kb_articles WHERE id = $1 AND published', [id]), staffRoster()]);
+    if (!a) return res.redirect('/playbook');
+    res.send(adminPage(a.title, `
+      ${pageHeader(a.title, `${escEmail(KB_KINDS[a.kind] || a.kind)}${a.decoration ? ` &middot; ${escEmail(KB_DECORATIONS[a.decoration])}` : ''}${
+        a.shortcut ? ` &middot; <code>/${escEmail(a.shortcut)}</code>` : ''} &middot; updated ${escEmail(whenShort(a.updated_at))} by ${
+        escEmail(nameOf(roster, a.updated_by))}`, '<a class="btn btn-ghost" href="/playbook">All articles</a>')}
+      ${flash(req.query)}
+      ${a.needs_review ? `<div class="warn">Starter draft, written from the shop's pricing rules and common practice.
+        The owner should check it before anyone relies on it. Saving it marks it checked.</div>` : ''}
+      <div class="card"><div id="kb-body">${kbRender(a.body)}</div>
+        ${a.kind === 'faq' ? `<button type="button" class="btn btn-ghost" style="margin-top:8px" onclick="(navigator.clipboard?navigator.clipboard.writeText(${
+          escEmail(JSON.stringify(a.body.replace(/\*\*/g, '')))}):0)">Copy the reply</button>` : ''}</div>
+      ${actorLevel('kb.edit') !== 'off' ? `<details class="card"><summary><b>Edit</b></summary>${kbEditor(a)}</details>` : ''}`, 'playbook'));
+  } catch (err) {
+    console.error('playbook article failed:', err.message);
+    res.status(500).send(adminPage('Playbook', '<div class="card"><div class="warn">Could not load that article.</div></div>', 'playbook'));
+  }
+});
+
+async function playbookSave(req, res) {
+  const p = kbFromForm(req.body || {});
+  if (req.params.id) p.id = intIn(req.params.id);
+  const backTo = p.id ? `/playbook/${p.id}` : '/playbook';
+  if (!p.title || !p.body) return back(res, backTo, 'err', 'A title and some text are needed.');
+  const actor = currentActor() || OWNER_ACTOR;
+  try {
+    if (actor.kind === 'staff' && actorLevel('kb.edit') === 'approval') {
+      await pool.query(
+        `INSERT INTO staff_approvals (kind, subject_id, payload, reasons, requested_by) VALUES ('kb', $1, $2, $3, $4)`,
+        [String(p.id || 'new'), JSON.stringify(p), JSON.stringify(['Playbook changes go to the owner first.']), actor.id]);
+      return back(res, backTo, 'ok', 'Sent to the owner. It appears here once approved.');
+    }
+    const id = await saveKbArticle(p, actor.kind === 'staff' ? actor.id : null);
+    if (!id) return back(res, '/playbook', 'err', 'That article no longer exists.');
+    return back(res, `/playbook/${id}`, 'ok', 'Saved.');
+  } catch (err) {
+    if (err.code === '23505') return back(res, backTo, 'err', 'Another article already uses that /shortcut.');
+    console.error('playbook save failed:', err.message);
+    return back(res, backTo, 'err', 'Could not save it.');
+  }
+}
+app.post('/playbook', requireAdmin, playbookSave);
+app.post('/playbook/:id', requireAdmin, playbookSave);
+
+/* The customer replies, for the "Insert reply" picker on the job page. */
+app.get('/api/playbook/replies', requireAdmin, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try {
+    const q = text(req.query.q, 100);
+    const params = [];
+    let where = `kind = 'faq' AND published`;
+    if (q) {
+      params.push(q, q.replace(/^\/+/, '').toLowerCase());
+      where += ` AND ${kbMatch(1).where}`;
+    }
+    const { rows } = await pool.query(
+      `SELECT shortcut, title, body FROM kb_articles WHERE ${where}
+        ORDER BY ${q ? `${kbMatch(1).rank} DESC, ` : ''}title LIMIT 30`, params);
+    res.json(rows.map((r) => ({ shortcut: r.shortcut, title: r.title, body: String(r.body).replace(/\*\*/g, '') })));
+  } catch (err) {
+    console.error('playbook replies failed:', err.message);
+    res.status(500).json([]);
+  }
+});
+
+/* Starter articles, written once into an empty playbook. Every one is marked
+   needs_review: they come from the shop's own pricing rules and common print
+   practice, and the owner checks them before anyone quotes from them. Anything
+   in [square brackets] is for the owner to fill in. */
+const KB_SEED = [
+  { kind: 'faq', shortcut: 'turnaround', title: 'How long will my order take?', tags: 'turnaround, lead time, timing, when',
+    body: `Thanks for asking! Most orders are ready in [standard turnaround] business days after you approve the proof and pay the deposit.\n\nNeed it sooner? We offer rush turnaround for a fee: next business day (+80%), 2 days (+50%), 3 days (+30%) or 4 days (+10%), depending on what is on the press. Tell me your date and I will confirm what we can do.` },
+  { kind: 'faq', shortcut: 'deposit', title: 'Do I pay up front?', tags: 'deposit, payment, pay, balance',
+    body: `We take a 50% deposit to start your order, and the balance when it is ready. Orders under $100 are paid in full up front.\n\nYou can pay online from your quote link. Card payments carry a 4% card fee; other ways to pay are listed on the quote.` },
+  { kind: 'faq', shortcut: 'minimums', title: 'Is there a minimum order?', tags: 'minimum, how many, quantity, small order',
+    body: `It depends on the decoration. Screen printing starts at 50 pieces, because each colour needs its own screen. For smaller runs we print DTF (full colour, no minimum) or embroider. Tell me how many you need and I will suggest the best-value option.` },
+  { kind: 'faq', shortcut: 'artfiles', title: 'What artwork should I send?', tags: 'artwork, files, logo, vector, png, resolution',
+    body: `The best file is a vector (AI, EPS, PDF or SVG). If you only have an image, send the largest PNG you have with a transparent background, ideally 300 dpi at the size you want it printed.\n\nNo file at all? No problem. Send a photo or sketch and we can redraw it (a design fee may apply; I will tell you before we start).` },
+  { kind: 'faq', shortcut: 'quote', title: 'What do you need for a quote?', tags: 'quote, price, estimate, cost',
+    body: `Happy to put a quote together! I just need:\n\n- How many pieces, and the size mix\n- The garment (or tell me the vibe and budget and I will suggest some)\n- Where the design goes (front, back, sleeve) and how many colours\n- Your artwork, or a description\n- The date you need them by` },
+  { kind: 'faq', shortcut: 'proof', title: 'Will I see a proof?', tags: 'proof, mockup, approve',
+    body: `Yes. We send a digital proof before anything is printed, and nothing goes to production until you approve it in writing. Please check spelling, colours and placement carefully; we print exactly what is approved.` },
+  { kind: 'faq', shortcut: 'taxexempt', title: 'We are tax exempt', tags: 'tax exempt, school, church, nonprofit, resale, certificate',
+    body: `Great, we can take the tax off. Please send your Illinois exemption letter (the E-number) or, if you are buying to resell, a completed CRT-61. Your quote page has a place to upload it, and we remove the tax once it is approved.` },
+  { kind: 'faq', shortcut: 'quotevalid', title: 'How long is my quote good for?', tags: 'quote expiry, valid, price hold',
+    body: `Quotes are good for 14 days. After that, garment prices from our suppliers can change, so we will re-check it for you before you order.` },
+
+  { kind: 'artwork', decoration: 'screen', title: 'Screen printing: artwork do\'s and don\'ts', tags: 'screen print, colours, spot colour, halftone',
+    body: `**Do**\n\n- Ask for vector art, or 300 dpi at print size\n- Count the ink colours: every colour is a screen, and it changes the price\n- Keep lines at least 1pt thick and text at least 6pt\n- Ask for Pantone numbers if the colour has to match exactly\n\n**Don't**\n\n- Quote gradients or photos without checking with the owner (they need halftones)\n- Promise an exact colour match without a Pantone\n- Quote under 50 pieces (suggest DTF instead)\n\n**Always escalate**\n\n- Logos the customer does not own (sports teams, brands, characters)\n- Screenshots or blurry art\n- Deadlines under [X] business days` },
+  { kind: 'artwork', decoration: 'embroidery', title: 'Embroidery: artwork do\'s and don\'ts', tags: 'embroidery, digitizing, stitches, hats, caps',
+    body: `**Do**\n\n- Go for bold, simple shapes\n- Keep text at least 0.25" tall\n- Tell the customer about the one-time digitizing (setup) fee\n- Confirm placement and size (left chest is about 3.5–4" wide)\n\n**Don't**\n\n- Quote gradients, photos or fine detail\n- Use more thread colours than the design needs\n- Promise small text on caps\n\n**Always escalate**\n\n- Logos the customer does not own\n- Very detailed or photographic art\n- Deadlines under [X] business days` },
+  { kind: 'artwork', decoration: 'dtf', title: 'DTF: artwork do\'s and don\'ts', tags: 'dtf, full colour, transfer, png',
+    body: `**Do**\n\n- Ask for a transparent PNG at 300 dpi at print size\n- Offer it for full-colour designs and small quantities\n\n**Don't**\n\n- Accept semi-transparent pixels, glows or soft shadows (they print as a haze)\n- Leave a white box behind the design\n\n**Always escalate**\n\n- Logos the customer does not own\n- Low-resolution files` },
+  { kind: 'artwork', decoration: 'patches', title: 'Patches, vinyl and puff print: what to check', tags: 'patches, vinyl, puff',
+    body: `Confirm with the owner before quoting:\n\n- Minimum size and quantity [owner to fill in]\n- Colour limits [owner to fill in]\n- Which garments each one works on [owner to fill in]` },
+
+  { kind: 'sop', title: 'New lead: first reply to quote', tags: 'lead, reply, quote, process, sop',
+    body: `- Open My Day. Answer the oldest lead first\n- Reply within 15 minutes for chats and 1 hour for forms, during working hours\n- Log what you did on the lead (Call / Email / Text / Chat). That is what counts as answered\n- Get the details in the /quote reply. Build the quote from the lead (the Quote button), so it links back\n- If your quote is held for approval, it shows on My Day once approved. Then copy the message and send it\n- Set a follow-up date on the lead` },
+  { kind: 'sop', title: 'Proof approval', tags: 'proof, approval, production',
+    body: `- Send the proof from the job page\n- Get approval in writing (email, text or chat), and log it as a note on the job\n- Do not tick "Proof approved" until you have it in writing` },
+  { kind: 'sop', title: 'Chasing deposits and balances', tags: 'deposit, balance, reminder, money',
+    body: `The system already sends automatic reminders. Your job is the human touch:\n\n- Check the Quotes board for anything marked "accepted but deposit unpaid"\n- Text or call once, friendly, with the quote link\n- Log what you did as a note\n- Never offer a discount to get paid; ask the owner` },
+  { kind: 'sop', title: 'Tax certificate pre-screen', tags: 'tax, certificate, exempt',
+    body: `- Open Certificates\n- Check that the name matches the customer, the number is filled in, and it has not expired (E-number letters have a date)\n- Leave a note with what you found. The owner approves or refuses it` },
+  { kind: 'sop', title: 'Social inbox check (twice a day)', tags: 'social, facebook, instagram, dm, comments',
+    body: `- Morning and afternoon, check comments and DMs on the shop's accounts\n- Answer with the customer replies in this playbook\n- Anyone asking about an order or price: add them on Leads (Add a lead, pick the platform, paste their profile link)\n- Nothing negative gets a reply without the owner seeing it first` },
+  { kind: 'sop', title: 'What never to promise', tags: 'rules, never, promise, escalate',
+    body: `- A delivery date without checking stock and the production board\n- A discount, a free item or a price match\n- Printing a logo the customer does not own\n- An exact colour match without a Pantone\n- A refund. Refunds are the owner's` },
+  { kind: 'sop', title: 'End-of-day note', tags: 'end of day, eod, report',
+    body: `Before you sign off, add a task or note for the owner with:\n\n- Leads answered, quotes sent, follow-ups done\n- Anything stuck, and what you need\n- The first thing you will do tomorrow` },
+];
+
+async function seedPlaybook() {
+  const { rows: [c] } = await pool.query('SELECT COUNT(*)::int AS n FROM kb_articles');
+  if (c.n > 0) return;
+  for (const a of KB_SEED) {
+    await pool.query(
+      `INSERT INTO kb_articles (kind, title, shortcut, body, tags, decoration, needs_review)
+       VALUES ($1, $2, $3, $4, $5, $6, TRUE) ON CONFLICT DO NOTHING`,
+      [a.kind, a.title, a.shortcut || null, a.body, a.tags || '', a.decoration || null]);
+  }
+}
+
 
 // ─── Global error handler ─────────────────────────────────────────────────────
 

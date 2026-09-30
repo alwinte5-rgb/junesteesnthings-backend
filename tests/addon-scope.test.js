@@ -67,7 +67,7 @@ test('the de-duplication happens after every add-on is on the line', () => {
      looking fixed. */
   const declared = src.indexOf('const lineAddons = [];');
   const filtered = src.indexOf('if (orderSharedSeen.has(a.code)) lineAddons.splice(k, 1);');
-  const priced = src.indexOf('const priced = priceLine({');
+  const priced = src.indexOf('const priced = priceLine(priceArgs);');
   assert.ok(declared > -1 && filtered > declared, 'the server filter runs before lineAddons exists');
   assert.ok(priced > filtered, 'the server filter runs after the line is priced, which is too late');
 });

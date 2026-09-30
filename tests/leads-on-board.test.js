@@ -121,7 +121,7 @@ test('the board, the Leads page, the dashboard and the menu badge share one defi
 test('a quote raised from a lead records which one', () => {
   /* Otherwise the lead only leaves the board if the contact details happen to
      match exactly — and the whole point is that they are typed fresh. */
-  assert.match(src, /from_submission_id\)\s*\n?\s*VALUES/,
+  assert.match(src, /from_submission_id(?:, [a-z_, ]+)?\)\s*\n?\s*VALUES/,
     'the insert must carry the link');
   assert.match(src, /<input type="hidden" name="from_submission_id" value="\$\{lead\.id\}">/,
     'and the form must post it');
@@ -202,13 +202,15 @@ test('the bulk clear only offers itself for a real backlog', () => {
 test('the bulk clear cannot touch an enquiry that was quoted', () => {
   /* A quoted enquiry is already off the board by the link. Dismissing it would
      also write a false reason onto a job that was actually won. */
-  const route = src.slice(src.indexOf("app.post('/leads/dismiss-old'"));
+  const at = src.indexOf("app.post('/leads/dismiss-old'");
+  const route = src.slice(at, src.indexOf('\n});', at));
   assert.match(route, /NOT EXISTS \(SELECT 1 FROM quotes q WHERE q\.from_submission_id = submissions\.id\)/);
   assert.match(route, /dismissed_at IS NULL/, 'and it must not re-stamp one already cleared');
 });
 
 test('bulk clearing records the honest reason too', () => {
-  const route = src.slice(src.indexOf("app.post('/leads/dismiss-old'"));
+  const at = src.indexOf("app.post('/leads/dismiss-old'");
+  const route = src.slice(at, src.indexOf('\n});', at));
   assert.match(route, /Too late — cleared in bulk/,
     'so the backlog is still identifiable as missed rather than rejected');
   assert.doesNotMatch(route, /DELETE FROM/, 'nothing is destroyed');
