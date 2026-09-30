@@ -5035,6 +5035,15 @@ const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
    change-request endpoint referenced it from a scope that could not see it. */
 const one = (v) => (Array.isArray(v) ? v[0] : v);
 
+/** Was a form tick box ticked? A ticked box is posted and an unticked one is
+ *  not, so presence is the answer, whatever value the page gave it. An
+ *  explicit '0' or 'false' still reads as no, for a caller that posts one. */
+function tickedBox(v) {
+  if (v === undefined || v === null) return false;
+  const s = String(v).trim().toLowerCase();
+  return s !== '0' && s !== 'false';
+}
+
 /** Tax applies to Illinois work. Toggle per quote; rate is env-configurable so
  *  it can be corrected without a deploy. */
 function quoteTax(subtotal, taxable) {
@@ -7719,7 +7728,13 @@ ${quotePricingSource()}
         var lines = document.querySelectorAll('.line');
         if (lines.length <= 1) {          // never leave the form with no item
           var only = lines[0];
-          only.querySelectorAll('input,select').forEach(function(el){ el.value = ''; });
+          /* Tick boxes are UNTICKED, never blanked: a blank value posts "" when
+             ticked again, which read as unticked, and every item added after
+             was copied from this one (2026-09-30: Optional silently lost). */
+          only.querySelectorAll('input,select').forEach(function(el){
+            if (el.type === 'checkbox' || el.type === 'radio') el.checked = false;
+            else el.value = '';
+          });
           only.querySelector('.thumbs').innerHTML = '';
           calc();
           return;
@@ -8335,7 +8350,12 @@ ${quotePricingSource()}
              posted "" for a ticked box, which the save route reads as unticked:
              "Dark garment" on an added item priced dark on screen and saved
              light, one screen short per location. */
-          if (el.type === 'checkbox' || el.type === 'radio') el.checked = false;
+          if (el.type === 'checkbox' || el.type === 'radio') {
+            el.checked = false;
+            /* Every tick box on an item posts "1". Mend one that lost it, so a
+               copy of a damaged item is not damaged too. */
+            if (el.type === 'checkbox' && !el.value) el.value = '1';
+          }
           else el.value = '';
         });
         var oh = tpl.querySelector('.opthelp');
@@ -8783,7 +8803,10 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
        by a required line whenever one carries it: a customer turning an option
        down can then never take the freight off the job with it. The lines are
        stored in this order too, required first and the options after. */
-    const isOptional = (i) => String(one(b['optional' + i]) || '') === '1';
+    /* A tick box that is ticked is POSTED; one that is not, is absent. Read
+       it that way rather than by its value: a page that blanked the value
+       (removeLine did, until 2026-09-30) still means ticked. */
+    const isOptional = (i) => tickedBox(one(b['optional' + i]));
     const lineOrder = [...Array(40).keys()]
       .sort((x, y) => (Number(isOptional(x)) - Number(isOptional(y))) || (x - y));
     /* An option cannot pool its quantity with other lines: its price would
@@ -8845,7 +8868,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
       const bothTitles = methodTitle + ' ' + (method2Title ? String(method2Title.title || '') : '');
       const isEmb = EMBROIDERY_METHOD_RE.test(bothTitles);
       const isScreen = SCREEN_METHOD_RE.test(bothTitles);
-      const garmentDark = String(one(b['dark' + i]) || '') === '1';
+      const garmentDark = tickedBox(one(b['dark' + i]));
 
       const setupId = String(one(b['setup' + i]) || '').trim();
       if (setupId && isEmb) {
@@ -8984,7 +9007,10 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         .filter((a) => a.code === 'digitizing').reduce((s, a) => s + a.total, 0));
       const setupLabel = (priced.addonLines.find((a) => a.code === 'digitizing') || {}).label || null;
 
-      let description = desc || (prod ? `${prod.name}${method ? ' — ' + method.title : ''}` : 'Custom item');
+      /* A line priced by its method alone (a cutout pack) is named after the
+         method, not "Custom item", which is all the customer had to go on. */
+      let description = desc || (prod ? `${prod.name}${method ? ' — ' + method.title : ''}`
+        : method ? String(method.title || '').trim() || 'Custom item' : 'Custom item');
 
       /* Strip any size list this line already carries before adding the current
          one. `desc` is the description POSTED BACK, which on an edit already
