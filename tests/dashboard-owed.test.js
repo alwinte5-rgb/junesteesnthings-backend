@@ -143,6 +143,17 @@ test('Orders says a delivered job still owes, rather than just "delivered"', () 
   assert.match(orders, /o\.delivered_at && balanceOf\(o\) > 0 \? \['delivered · ' \+ money\(balanceOf\(o\)\) \+ ' still owed'/);
 });
 
+test('a cancelled job can be restored from Orders, and it comes back there', () => {
+  /* Orders is the one page that lists cancelled jobs; the cancel form and the
+     paid-after-cancelling alert both promise a Restore. */
+  const orders = route("app.get('/orders', requireAdmin");
+  assert.match(orders, /o\.cancelled_at \? `\s+<form method="POST" action="\/quote\/\$\{o\.code\}\/uncancel"/);
+  assert.match(orders, /<input type="hidden" name="back" value="orders">/);
+  const restore = route("app.post('/quote/:code/uncancel', requireAdmin");
+  assert.match(restore,
+    /res\.redirect\(String\(\(req\.body && req\.body\.back\) \|\| ''\) === 'orders' \? '\/orders' : '\/quotes'\)/);
+});
+
 test('cancelling from Production comes back to Production', () => {
   const cancel = route("app.post('/quote/:code/cancel', requireAdmin");
   assert.match(cancel,

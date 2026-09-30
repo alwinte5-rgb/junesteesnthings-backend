@@ -12911,7 +12911,8 @@ app.post('/quote/:code/uncancel', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('uncancel failed:', err.message);
   }
-  res.redirect('/quotes');
+  // Back where it was restored from: the Orders page sends 'orders'.
+  res.redirect(String((req.body && req.body.back) || '') === 'orders' ? '/orders' : '/quotes');
 });
 
 app.post('/quote/:code/settle', requireAdmin, async (req, res) => {
@@ -15947,7 +15948,17 @@ app.get('/orders', requireAdmin, async (req, res) => {
         <td style="padding:9px 6px;font-size:13px">${escEmail(quoteSummary(o.items) || '—')}</td>
         <td class="num" style="padding:9px 6px;white-space:nowrap">${money(quoteTotals(o).total)}</td>
         <td class="num" style="padding:9px 6px;white-space:nowrap">${money(o.paid_amount || 0)}</td>
-        <td style="padding:9px 6px;white-space:nowrap"><span style="color:${colour};font-size:12.5px;font-weight:600">${escEmail(text)}</span></td>
+        <td style="padding:9px 6px;white-space:nowrap"><span style="color:${colour};font-size:12.5px;font-weight:600">${escEmail(text)}</span>${
+          /* The one place a cancelled job is listed, so the one place it can
+             come back from. The cancel form and the paid-after-cancelling
+             alert both promise a Restore; the board no longer draws cancelled
+             cards, so without this there was none to press. */
+          o.cancelled_at ? `
+          <form method="POST" action="/quote/${o.code}/uncancel" style="display:inline;margin-left:6px"
+                onsubmit="return confirm('Put ${o.code} back on the board?')">
+            <input type="hidden" name="back" value="orders">
+            <button type="submit" class="kbtn" style="font-size:11.5px;padding:2px 9px">Restore</button>
+          </form>` : ''}</td>
         <td class="muted" style="padding:9px 6px;white-space:nowrap;font-size:12.5px">${
           d(o.paid_at || o.delivered_at || o.created_at)}</td>
       </tr>`;
