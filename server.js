@@ -92,8 +92,29 @@ app.use(helmet({
   // Public images are embedded in emails and on design.jtees.net — the default
   // same-origin policy makes browsers/webmail refuse to render them.
   crossOriginResourcePolicy: { policy: 'cross-origin' },
+  /* same-origin, NOT helmet's default no-referrer. Under no-referrer a browser
+     sends `Origin: null` on a form POST even to its own site, and the admin
+     guard below reads null as another website: from 2026-09-25 every admin
+     form save was refused with a bare "Forbidden" (Safari and Chrome alike,
+     found 2026-09-30 on the quote form). same-origin still sends other sites
+     nothing, and gives this site's own forms their real Origin. */
+  referrerPolicy: { policy: 'same-origin' },
 }));
 const SITE_ORIGINS = ['https://www.jtees.net', 'https://jtees.net', 'https://design.jtees.net'];
+
+/* Was this state-changing request sent by another website's page?
+   No Origin at all is not a browser form (scripts, older clients) and passes,
+   as it always has. `Origin: null` names no site: a browser sends it for its
+   OWN page's form under a no-referrer policy, and also from sandboxed frames.
+   Sec-Fetch-Site, which no page script can set, tells the two apart; only
+   same-origin is trusted, since same-site would admit every jtees.net
+   subdomain rather than the three listed. */
+function fromAnotherSite(req) {
+  const origin = req.headers.origin;
+  if (!origin || SITE_ORIGINS.includes(origin)) return false;
+  if (origin === 'null') return req.headers['sec-fetch-site'] !== 'same-origin';
+  return true;
+}
 app.use(cors({ origin: SITE_ORIGINS }));
 /* ── /books is deliberately unused ─────────────────────────────────────────────
    The books app was proxied here until 2026-09-26. It has its own origin now,
@@ -2430,8 +2451,7 @@ app.get('/admin/sso', (req, res) => res.redirect(adminPathFor(String(req.query.t
    and signing out is Cloudflare's own sign-out. */
 app.get('/signin', (_req, res) => res.redirect('/admin'));
 app.post('/signout', (req, res) => {
-  const origin = req.headers.origin;
-  if (origin && !SITE_ORIGINS.includes(origin)) return res.status(403).send('Forbidden');
+  if (fromAnotherSite(req)) return res.status(403).send('Forbidden');
   res.redirect(cfAccess ? cfAccess.logoutUrl : '/');
 });
 
@@ -2542,8 +2562,7 @@ function notOnTeam(req, res, email) {
 async function requireAdmin(req, res, next) {
   /* A state-changing request sent by another website's page is refused
      outright, whatever the browser attaches to it. */
-  const origin = req.headers.origin;
-  if (!['GET', 'HEAD'].includes(req.method) && origin && !SITE_ORIGINS.includes(origin)) {
+  if (!['GET', 'HEAD'].includes(req.method) && fromAnotherSite(req)) {
     return res.status(403).send('Forbidden');
   }
   if (!cfAccess) return res.status(503).send('Staff sign-in is not set up yet.');

@@ -312,8 +312,8 @@ test('dynamic pages default to no-store, after static files', () => {
 test('staff sign-in refuses state-changing requests from other sites', () => {
   const start = server.indexOf('function requireAdmin(');
   const body = server.slice(start, server.indexOf('\n}\n', start));
-  assert.match(body, /!\['GET', 'HEAD'\]\.includes\(req\.method\) && origin && !SITE_ORIGINS\.includes\(origin\)/);
-  assert.ok(body.indexOf('SITE_ORIGINS.includes(origin)') < body.indexOf('verifyAccessToken'));
+  assert.match(body, /!\['GET', 'HEAD'\]\.includes\(req\.method\) && fromAnotherSite\(req\)/);
+  assert.ok(body.indexOf('fromAnotherSite(req)') < body.indexOf('verifyAccessToken'));
 });
 
 test('the cart follow-up: one segment pair, marketing consent, once a month per number', () => {
