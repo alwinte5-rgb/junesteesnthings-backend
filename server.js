@@ -6121,6 +6121,15 @@ function applyOptionChoice(items, chosen, sharedCodes) {
   (sharedCodes || []).forEach(function (c) { shared[c] = true; });
   (chosen || []).forEach(function (ix) { pick[String(ix)] = true; });
   var list = items || [];
+  /* A tick on any line of an option GROUP (optional lines sharing a run)
+     takes the whole group: it was priced together, so it is taken whole. */
+  var groupOf = function (it) {
+    var g = it && it.optional && it.run_group != null ? String(it.run_group).trim() : '';
+    return g || null;
+  };
+  var groupsPicked = {};
+  list.forEach(function (it, ix) { if (pick[String(ix)] && groupOf(it)) groupsPicked[groupOf(it)] = true; });
+  list.forEach(function (it, ix) { if (groupOf(it) && groupsPicked[groupOf(it)]) pick[String(ix)] = true; });
   list.forEach(function (it) {
     if (!it || it.optional) return;
     (it.addons || []).forEach(function (a) { if (a && shared[a.code]) paid[a.code] = true; });
@@ -7341,14 +7350,17 @@ function productGroupOf(name) {
               <li>Their total, tax and deposit update as they tick. When they press Accept, the ticked
                 items become the order and the rest are set aside.</li>
               <li>Items left unticked here are always included.</li>
-              <li>An optional item cannot have a Run number, because its price would change the other lines.</li>
+              <li>To offer several items as <b>one choice</b>, give them all Optional and the same Run
+                number. The customer gets one tick for the whole group, and its quantities share a price band.</li>
+              <li>A Run number cannot be on both optional and required items: the required items' price would
+                change with what the customer picks.</li>
               <li>Once the customer has accepted, they cannot pick again. To change what they took, untick
                 Optional and remove what they did not want.</li>
             </ul>
           </div>
         </details>
         <p class="optwarn" style="display:none;flex-basis:100%;margin:0;font-size:12.5px;color:#b45309">
-          An optional item cannot have a Run number. Clear it, or untick Optional, before saving.</p>
+          This Run number is on both optional and required items. Give the optional ones a number of their own.</p>
       </div>
       <input name="description${n}" class="d" value="${it ? val(oneSizeList(it.description)) : ''}"
              placeholder="What is it? e.g. 24 tees, 1 colour front">
@@ -7952,14 +7964,26 @@ ${quotePricingSource()}
            exactly as the save route orders them (lineOrder). */
         var optSub = 0, optCount = 0;
         function isOptLine(el){ var o = el.querySelector('.opt'); return o && o.checked ? 1 : 0; }
+        function runOfLine(el){ var r = el.querySelector('.sr'); return r ? String(r.value || '').trim() : ''; }
         var ordered = Array.prototype.slice.call(document.querySelectorAll('.line'));
+        /* A run is an option group when every line in it is optional; one that
+           mixes optional and required lines is refused on save, so say so. */
+        var runKind = {};
+        ordered.forEach(function(el){
+          var g = runOfLine(el); if (!g) return;
+          var k = runKind[g] || (runKind[g] = { opt: 0, req: 0 });
+          if (isOptLine(el)) k.opt++; else k.req++;
+        });
         ordered.sort(function(a, b){ return isOptLine(a) - isOptLine(b); });
+        /* Freight a group already carries, by run: it is taken whole. */
+        var optGroupSeen = {};
         ordered.forEach(function(L){
           var isOpt = isOptLine(L) === 1;
+          var grp = isOpt ? runOfLine(L) : '';
           var ow = L.querySelector('.optwarn');
           if (ow) {
-            var srEl = L.querySelector('.sr');
-            ow.style.display = isOpt && srEl && String(srEl.value || '').trim() ? 'block' : 'none';
+            var rk = runKind[runOfLine(L)];
+            ow.style.display = rk && rk.opt && rk.req ? 'block' : 'none';
           }
           var prod = CAT.products.find(function(x){return String(x.id)===L.querySelector('.p').value;});
           var meth = CAT.methods.find(function(x){return String(x.id)===L.querySelector('.m').value;});
@@ -8141,8 +8165,14 @@ ${quotePricingSource()}
             if (!a.orderShared) return true;
             if (orderSharedSeen[a.code]) return false;
             /* An option keeps its own copy of a charge no required line pays;
-               applyOptionChoice() drops it if another ticked line has it. */
-            if (!isOpt) orderSharedSeen[a.code] = true;
+               applyOptionChoice() drops it if another ticked line has it. A
+               group carries it once, on its first line. */
+            if (!isOpt) { orderSharedSeen[a.code] = true; return true; }
+            if (grp) {
+              var gs = optGroupSeen[grp] || (optGroupSeen[grp] = {});
+              if (gs[a.code]) return false;
+              gs[a.code] = true;
+            }
             return true;
           });
           /* Screens are not a choice — a screen-print job burns them whether or
@@ -8841,11 +8871,24 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
        it that way rather than by its value: a page that blanked the value
        (removeLine did, until 2026-09-30) still means ticked. */
     const isOptional = (i) => tickedBox(one(b['optional' + i]));
+    /* OPTION GROUPS (the owner, 2026-09-30): optional lines sharing a Run
+       number are ONE choice. The customer ticks the group once, it is taken or
+       left whole (applyOptionChoice), so pooling its quantities for the price
+       band is sound. Its lines are priced one after another here; they are
+       stored where they were entered, and the customer's page draws the
+       group as one wherever its lines sit. */
+    const runOf = (i) => String(one(b['run' + i]) || '').trim();
+    const groupStart = {};
+    for (let i = 0; i < 40; i++) {
+      if (isOptional(i) && runOf(i) && groupStart[runOf(i)] === undefined) groupStart[runOf(i)] = i;
+    }
+    const optKey = (i) => (runOf(i) ? groupStart[runOf(i)] : i);
     const lineOrder = [...Array(40).keys()]
-      .sort((x, y) => (Number(isOptional(x)) - Number(isOptional(y))) || (x - y));
-    /* An option cannot pool its quantity with other lines: its price would
-       depend on whether it is taken. Refused below, all at once. */
-    const optionalInRun = [];
+      .sort((x, y) => (Number(isOptional(x)) - Number(isOptional(y)))
+        || (isOptional(x) ? optKey(x) - optKey(y) : 0) || (x - y));
+    /* Freight a group already carries on one of its lines, by run: the group
+       is taken whole, so it pays an order-level charge once. */
+    const optGroupSeen = {};
     const formPos = [];
 
     for (const i of lineOrder) {
@@ -8974,19 +9017,21 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
 
       /* Order-level charges are claimed by the first line carrying each code,
          exactly as calc() does client-side — freight is once an ORDER. */
+      const runGroup = runOf(i);
       for (let k = lineAddons.length - 1; k >= 0; k--) {
         const a = lineAddons[k];
         if (!a || !a.orderShared) continue;
         if (orderSharedSeen.has(a.code)) lineAddons.splice(k, 1);
         /* An option keeps its own copy of a charge no required line pays: it is
            priced as if taken on its own, and applyOptionChoice() drops the copy
-           when another ticked line already carries it. */
+           when another ticked line already carries it. Within a group, only
+           the group's first line carries it. */
         else if (!optional) orderSharedSeen.add(a.code);
-      }
-
-      const runGroup = String(one(b['run' + i]) || '').trim();
-      if (optional && runGroup) {
-        optionalInRun.push({ line: i + 1, what: desc || (prod ? prod.name : `Line ${i + 1}`), run: runGroup });
+        else if (runGroup) {
+          const seen = (optGroupSeen[runGroup] ||= new Set());
+          if (seen.has(a.code)) lineAddons.splice(k, 1);
+          else seen.add(a.code);
+        }
       }
       const stage2 = String(one(b['loc2' + i]) || '').trim();
       const priceArgs = {
@@ -9236,17 +9281,29 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         </div>`));
     }
 
-    if (optionalInRun.length) {
-      return res.status(400).send(quotePage('An optional item cannot share a run', `
+    /* A run shares one price band between its lines. Mixing optional and
+       required lines in one would make the required lines' price depend on
+       what the customer ticks, so that is refused; a run of optional lines
+       only is an option group (above). */
+    const runKinds = {};
+    for (const it of items) {
+      if (!it.run_group) continue;
+      const k = (runKinds[it.run_group] ||= { opt: [], req: [] });
+      (it.optional ? k.opt : k.req).push(it.description);
+    }
+    const mixedRuns = Object.entries(runKinds).filter(([, k]) => k.opt.length && k.req.length);
+    if (mixedRuns.length) {
+      return res.status(400).send(quotePage('A run mixes optional and required items', `
         <div class="card">
-          <div class="warn">Nothing was saved — ${optionalInRun.length === 1 ? 'an optional item has' : 'optional items have'}
-            a run number.</div>
+          <div class="warn">Nothing was saved — ${mixedRuns.length === 1 ? 'a Run number is' : 'Run numbers are'} on
+            both optional and required items.</div>
           <ul class="muted" style="margin:8px 0 0;padding-left:18px">
-            ${optionalInRun.map((o) => `<li>Line ${o.line} — ${escEmail(String(o.what))} (run ${escEmail(String(o.run))})</li>`).join('')}
+            ${mixedRuns.map(([g, k]) => `<li>Run ${escEmail(String(g))}: optional ${k.opt.map((d) => escEmail(String(d))).join(', ')};
+              required ${k.req.map((d) => escEmail(String(d))).join(', ')}</li>`).join('')}
           </ul>
-          <p class="muted" style="margin-top:8px">A run shares one price band between its lines, so the other
-             lines' price would change depending on whether the customer takes the option. Clear the run
-             number on the optional item, or untick Optional.</p>
+          <p class="muted" style="margin-top:8px">A run shares one price band, so the required items' price would change
+             with what the customer ticks. Give the optional items a Run number of their own: optional items that
+             share a number are offered as one choice, with one tick.</p>
           <p style="margin-top:12px"><a class="btn" href="${backToForm}">Go back</a></p>
         </div>`));
     }
@@ -9839,7 +9896,27 @@ app.get('/q/:code', async (req, res) => {
                  style="width:56px;padding:4px;font-size:13px;text-align:center"></label>`;
       }).join(' ');
 
-    const lines = (q.items || []).map((i, ix) => {
+    /* OPTION GROUPS: optional lines sharing a run are one choice, drawn
+       together where the group's first line sits, with ONE box on that line.
+       Lines keep their stored index (ix) for everything the page and the
+       Accept route read, so only the drawing order changes. */
+    const grpKey = (i) => (i && i.optional && i.run_group != null && String(i.run_group).trim()
+      ? String(i.run_group).trim() : null);
+    const grpMembers = {};
+    (q.items || []).forEach((i, ix) => { const g = grpKey(i); if (g) (grpMembers[g] ||= []).push(ix); });
+    const drawOrder = [];
+    {
+      const drawn = new Set();
+      (q.items || []).forEach((i, ix) => {
+        if (drawn.has(ix)) return;
+        const g = grpKey(i);
+        for (const k of (g && grpMembers[g].length > 1 ? grpMembers[g] : [ix])) { drawOrder.push(k); drawn.add(k); }
+      });
+    }
+    const hasGroups = Object.values(grpMembers).some((m) => m.length > 1);
+
+    const lines = drawOrder.map((ix) => {
+      const i = q.items[ix];
       const imgs = (i.images || []).filter(u => /^https:\/\//.test(u));
       const gallery = imgs.length ? `
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
@@ -9859,18 +9936,25 @@ app.get('/q/:code', async (req, res) => {
       /* An optional line: in the job only if the customer ticks it. The box
          belongs to the Accept form, which is where the choice is saved. */
       const opt = !!i.optional;
+      const members = grpMembers[grpKey(i)] || null;
+      const inGroup = !!(members && members.length > 1);
+      /* The box sits on a group's first line; the rest say they come with it. */
+      const head = !inGroup || members[0] === ix;
 
       return `
       <tr${opt ? ` data-optline="${ix}"` : ''}>
-        <td>
-          ${opt ? `<label style="display:flex;align-items:center;gap:8px;margin:0 0 6px;cursor:pointer;
+        <td${inGroup ? ' style="border-left:3px solid #9db8f3;padding-left:10px"' : ''}>
+          ${opt && head ? `<label style="display:flex;align-items:center;gap:8px;margin:0 0 6px;cursor:pointer;
                     text-transform:none;letter-spacing:0;font-size:14px;font-weight:700;color:#1848B8">
               <input type="checkbox" class="opt" form="accept" name="opt" value="${ix}"
                      style="width:20px;height:20px;margin:0;flex:0 0 20px">
-              Add this to my order
+              ${inGroup ? 'Add this option to my order' : 'Add this to my order'}
               <span title="Not in your total unless you tick it" style="background:#eef3ff;color:#1848B8;
                     border-radius:20px;padding:1px 8px;font-size:11px;font-weight:700;letter-spacing:.04em">OPTIONAL</span></label>
-            <div class="muted optstate" data-line="${ix}" style="font-size:12px;margin:-2px 0 6px">Not in your total yet.</div>` : ''}
+            ${inGroup ? `<div class="muted" style="font-size:12px;margin:-2px 0 4px">One choice: the ${members.length}
+              items marked with this blue line come together.</div>` : ''}
+            <div class="muted optstate" data-line="${ix}" style="font-size:12px;margin:-2px 0 6px">Not in your total yet.</div>`
+          : opt ? `<div class="muted" style="font-size:12px;margin:0 0 4px">Part of the option above.</div>` : ''}
           ${escEmail(oneSizeList(i.description))}
           ${i.colour ? `<div style="display:flex;align-items:center;gap:6px;margin-top:4px;font-size:13px">
               <span style="width:13px;height:13px;border-radius:3px;flex:0 0 13px;border:1px solid rgba(0,0,0,.25);
@@ -9954,6 +10038,8 @@ app.get('/q/:code', async (req, res) => {
               update as you tick.</li>
             <li>Press <b>Accept</b> at the bottom of the page. Only what is in your total is ordered.</li>
           </ol>
+          ${hasGroups ? `<p style="margin:6px 0 0;font-size:13.5px;color:#374151">Items joined by a blue line
+            on the left are <b>one choice</b>: one tick adds them all.</p>` : ''}
           <p class="muted" style="margin:6px 0 0;font-size:12.5px">${requiredCount
             ? 'Items without the OPTIONAL tag are always included. '
             : ''}Not sure? Text ${SHOP_SIGNER} at ${SHOP_PHONE}. Accepting does not charge anything:
@@ -10305,6 +10391,7 @@ ${quotePricingSource()}
 ${applyOptionChoice.toString()}
         var ITEMS = ${JSON.stringify((q.items || []).map((i, ix) => ({
           _ix: ix, optional: !!i.optional, qty: Number(i.qty) || 0,
+          run_group: i.run_group == null ? null : String(i.run_group),
           line_total: Number(i.line_total) || 0,
           list_total: i.list_total == null ? null : Number(i.list_total),
           amount: customerLineFigures(i).amount,
@@ -22434,11 +22521,23 @@ const KB_SEED = [
    title: an article the owner has since edited keeps their version. */
 const KB_ADDED = [
   { kind: 'sop', title: 'Quote with options the customer picks',
+    /* The body as first published (2026-09-30, before option groups). A copy
+       still reading exactly this is replaced; one the owner edited is kept. */
+    was: [`Use this when a customer wants to compare choices, or add extras, without you writing two quotes.\n\n` +
+      `- Add every item to one quote. On each item the customer gets to choose, tick "Optional — the customer chooses"\n` +
+      `- Items you leave unticked are always in the order\n` +
+      `- An optional item cannot have a Run number, because its price would change the other lines. The form warns you\n` +
+      `- The totals box counts only the required items. The optional ones are shown on their own row, not added in\n` +
+      `- Send the link as usual. On their quote each optional item has an "Add this to my order" box, and their total, tax and deposit change as they tick\n` +
+      `- When they press Accept, what they ticked becomes the order and the rest is set aside. The deposit is on that total\n` +
+      `- After they accept they cannot pick again. If they change their mind, edit the quote: untick Optional on what they want, remove what they do not, and save\n` +
+      `- If they tell you their choice by text instead, make the same edit before they pay`],
     tags: 'quote, options, optional, choose, choice, alternatives, two quotes, checkbox, tick',
     body: `Use this when a customer wants to compare choices, or add extras, without you writing two quotes.\n\n` +
       `- Add every item to one quote. On each item the customer gets to choose, tick "Optional — the customer chooses"\n` +
       `- Items you leave unticked are always in the order\n` +
-      `- An optional item cannot have a Run number, because its price would change the other lines. The form warns you\n` +
+      `- To offer several items as one choice, tick Optional on each and give them the same Run number. The customer gets one tick for the whole group, and the group's quantities share a price band\n` +
+      `- A Run number cannot be on both optional and required items, because the required items' price would change with the customer's pick. The form warns you\n` +
       `- The totals box counts only the required items. The optional ones are shown on their own row, not added in\n` +
       `- Send the link as usual. On their quote each optional item has an "Add this to my order" box, and their total, tax and deposit change as they tick\n` +
       `- When they press Accept, what they ticked becomes the order and the rest is set aside. The deposit is on that total\n` +
@@ -22459,6 +22558,12 @@ async function addPlaybookArticles() {
        ON CONFLICT DO NOTHING`,
       [a.kind, a.title, a.shortcut || null, a.body, a.tags || '', a.decoration || null])
       .catch((e) => console.error(`playbook article "${a.title}" not added:`, e.message));
+    if (a.was && a.was.length) {
+      await pool.query(
+        `UPDATE kb_articles SET body = $2, tags = $3, updated_at = NOW() WHERE title = $1 AND body = ANY($4::text[])`,
+        [a.title, a.body, a.tags || '', a.was])
+        .catch((e) => console.error(`playbook article "${a.title}" not updated:`, e.message));
+    }
   }
 }
 
