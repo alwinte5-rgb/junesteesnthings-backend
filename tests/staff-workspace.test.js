@@ -265,7 +265,7 @@ test('the owner is named by OWNER_EMAILS, a helper by an active staff row, anyon
   assert.match(requireAdminSrc, /if \(!staff\) return notOnTeam\(req, res, email\);/);
   assert.match(requireAdminSrc, /if \(!STAFF\.mayUseRoute\(staff, req\.method, req\.route && req\.route\.path\)\) return refuseStaff/);
   const lookup = src.slice(src.indexOf('async function staffByEmail('), src.indexOf('\n}\n', src.indexOf('async function staffByEmail(')));
-  assert.match(lookup, /WHERE lower\(email\) = \$1/);
+  assert.match(lookup, /WHERE lower\(s\.email\) = \$1/);
   assert.match(lookup, /if \(!s \|\| !s\.active\) return null;/);
 });
 

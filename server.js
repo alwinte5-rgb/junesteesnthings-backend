@@ -26,6 +26,7 @@ const { verifyTwilioSignature, classifyInbound } = require('./tools/lib/twilio-w
 const TAXCERT = require('./tools/lib/tax-certificates');
 const STAFF = require('./tools/lib/staff');
 const TEAM = require('./tools/lib/team-metrics');
+const TRAINING = require('./tools/lib/training');
 
 const express    = require('express');
 const cors       = require('cors');
@@ -1030,6 +1031,26 @@ async function initStaffTables() {
       expense_id    INTEGER,
       created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
+  /* Training (tools/lib/training.js): a row per step a helper ticked or the
+     owner signed off, and per page tip dismissed (step_key 'tip:<page>').
+     Steps done by real work are never stored; they are read from the work. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_training (
+      staff_id   INTEGER NOT NULL,
+      step_key   TEXT NOT NULL,
+      done_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      signed_by  INTEGER,
+      PRIMARY KEY (staff_id, step_key)
+    )`);
+  // Coaching notes the owner writes outside an approval.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_feedback (
+      id          SERIAL PRIMARY KEY,
+      staff_id    INTEGER NOT NULL,
+      body        TEXT NOT NULL,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS staff_feedback_who_idx ON staff_feedback (staff_id, created_at DESC)`);
   // One award per incentive per helper, however often the button is pressed.
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS staff_bonuses_incentive_uq
                       ON staff_bonuses (incentive_id, staff_id) WHERE incentive_id IS NOT NULL`);
@@ -2480,14 +2501,22 @@ function attributedStaffId() {
 
 /** The active helper with this email, or null. */
 async function staffByEmail(email) {
+  /* `flags`: the page tips they dismissed and whether training is signed off,
+     so adminPage() can show tips without a query of its own. */
   const { rows } = await pool.query(
-    'SELECT id, name, email, perms, active FROM staff WHERE lower(email) = $1', [email]);
+    `SELECT s.id, s.name, s.email, s.perms, s.active,
+            COALESCE((SELECT array_agg(t.step_key) FROM staff_training t
+                       WHERE t.staff_id = s.id AND (t.step_key LIKE 'tip:%' OR t.step_key = $2)), '{}') AS flags
+       FROM staff s WHERE lower(s.email) = $1`, [email, TRAINING.READY_KEY]);
   const s = rows[0];
   if (!s || !s.active) return null;
   pool.query(`UPDATE staff SET last_seen_at = NOW()
                WHERE id = $1 AND (last_seen_at IS NULL OR last_seen_at < NOW() - interval '5 minutes')`, [s.id])
     .catch(() => {});
-  return { kind: 'staff', id: s.id, name: s.name, email: s.email, perms: s.perms || {} };
+  const flags = s.flags || [];
+  return { kind: 'staff', id: s.id, name: s.name, email: s.email, perms: s.perms || {},
+           inTraining: !flags.includes(TRAINING.READY_KEY),
+           tipsOff: new Set(flags.filter((f) => f.startsWith('tip:')).map((f) => f.slice(4))) };
 }
 
 /** May the signed-in person do this? For handlers that act differently by level. */
@@ -2596,6 +2625,7 @@ async function requireAdmin(req, res, next) {
     return res.status(503).send('Please try again in a moment.');
   }
   if (!staff) return notOnTeam(req, res, email);
+  staff.path = req.originalUrl;
   if (!STAFF.mayUseRoute(staff, req.method, req.route && req.route.path)) return refuseStaff(req, res, staff);
   logMutationOnFinish(req, res, staff);
   return actorStore.run(staff, next);
@@ -6763,6 +6793,7 @@ const ADMIN_NAV = [
   { key: 'discounts',  href: '/admin/discounts',     label: 'Discounts',  icon: 'tag' },
   { key: 'chat',       href: '/admin/team-chat',     label: 'Team chat',  icon: 'chat',   badge: 'chat' },
   { key: 'playbook',   href: '/admin/playbook',      label: 'Playbook',   icon: 'book' },
+  { key: 'training',   href: '/admin/training',      label: 'Training',   icon: 'learn' },
   { key: 'team',       href: '/admin/team',    label: 'Team',       icon: 'team',   badge: 'approvals' },
 ];
 /* Ordered the way a shop is actually worked, not the way the routes grew: what
@@ -6797,6 +6828,7 @@ const ADMIN_ICONS = {
   plus:   '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
   out:    '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>',
   menu:   '<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>',
+  learn:  '<path d="M22 10L12 5 2 10l10 5 10-5z"/><path d="M6 12v5c3 2 9 2 12 0v-5"/>',
   chat:   '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>',
   alert:  '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
   clock:  '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
@@ -7031,6 +7063,22 @@ function htmlDocument(title, body, opts = {}) {
 
 /** Admin pages: the side menu around the page. `active` is an ADMIN_NAV key.
  *  On a phone the menu is a drawer, opened by a checkbox, so it needs no script. */
+/* While a helper is in training, a short note at the top of each page says
+   what it is for (TRAINING.PAGE_TIPS). "Got it" hides it for good; the owner
+   can bring them all back from /admin/training. The owner never sees them. */
+function pageTip(key) {
+  const a = typeof currentActor === 'function' ? currentActor() : null;
+  if (!a || a.kind !== 'staff' || !a.inTraining) return '';
+  const tip = TRAINING.PAGE_TIPS[key];
+  if (!tip || (a.tipsOff && a.tipsOff.has(key))) return '';
+  return `<div class="card" style="border-left:4px solid #F4A623;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+    <span style="flex:1 1 240px"><b>How this page works.</b> ${escEmail(tip)}</span>
+    <form method="post" action="/admin/training/tip" style="margin:0">
+      <input type="hidden" name="key" value="${escEmail(key)}">
+      <input type="hidden" name="back" value="${escEmail(safeAdminPath(a.path, '/admin/my-day'))}">
+      <button type="submit" class="btn btn-ghost">Got it</button></form></div>`;
+}
+
 function adminPage(title, body, active) {
   /* 'jobs' was the key for both boards before Quotes and Production became two
      entries; a page still passing it highlights Quotes. */
@@ -7046,7 +7094,7 @@ function adminPage(title, body, active) {
       <span class="adm-top-title">${escEmail(title)}</span>
       <a class="adm-top-new" href="/admin/quote/new" title="New quote">${icon('plus')}</a>
     </header>
-    <main class="adm-page"><div class="wrap">${body}</div></main>
+    <main class="adm-page"><div class="wrap">${pageTip(key)}${body}</div></main>
   </div>
 </div>
 <script>${ADMIN_BADGE_JS}</script>`, { css: ADMIN_CSS, bodyClass: 'adm-body' });
@@ -21277,6 +21325,7 @@ app.get('/admin/team', requireAdmin, async (req, res) => {
     const range = periodRange(period);
     const roster = await staffRoster({ activeOnly: true });
     const scores = await Promise.all(roster.map((s) => helperScore(s.id, range.from, range.to)));
+    const trainings = await Promise.all(roster.map((s) => trainingFor(s.id).catch(() => null)));
     const { rows: [counts] } = await pool.query(
       `SELECT (SELECT COUNT(*) FROM staff_approvals WHERE status = 'pending')::int AS approvals,
               (SELECT COUNT(*) FROM submissions WHERE created_at >= $1 AND created_at < $2)::int AS leads_in,
@@ -21289,7 +21338,10 @@ app.get('/admin/team', requireAdmin, async (req, res) => {
       const conv = x.sent ? Math.round(100 * x.accepted / x.sent) + '%' : '—';
       return `<div class="card">
         <div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="min-width:12em"><b>${escEmail(s.name)}</b>
-          <div class="row-sub" style="white-space:normal">${escEmail(range.label)} &middot; last seen ${escEmail(whenShort(s.last_seen_at))}</div></span>
+          <div class="row-sub" style="white-space:normal">${escEmail(range.label)} &middot; last seen ${escEmail(whenShort(s.last_seen_at))}${
+            trainings[i] ? ` &middot; <a href="/admin/training?staff=${s.id}">training ${trainings[i].done}/${trainings[i].total}</a>` : ''}${
+            trainings[i] && trainings[i].complete && STAFF.presetMatching(s.perms) === 'training'
+              ? ` <a href="/admin/staff#staff-${s.id}">${pill('Ready for Supervised →', 'green')}</a>` : ''}</div></span>
           <span class="row-end"><a class="btn btn-ghost" href="/admin/activity?who=${s.id}">Activity</a>
             <a class="btn btn-ghost" href="/admin/commission?staff=${s.id}">Commission</a></span></div>
         ${statTiles([
@@ -22222,6 +22274,10 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
       .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
     const nextSteps = liveList.map((q) => ({ q, cl: quoteChecklist(q) })).filter((x) => x.cl.next).slice(0, 15);
     const today = new Date().toISOString().slice(0, 10);
+    // A helper's training until it is done, and the owner's latest note (two weeks).
+    const training = me ? await Promise.all([trainingFor(me), coachingNotes(me, 1)])
+      .then(([p, n]) => ({ p, note: n[0] && Date.now() - new Date(n[0].created_at).getTime() < 14 * 864e5 ? n[0] : null }))
+      .catch((err) => { console.error('my day training failed:', err.message); return null; }) : null;
 
     const section = (title, inner, empty) => `<div class="card"><b>${title}</b>${inner || `<p class="muted">${empty}</p>`}</div>`;
     const leadRow = (l) => `<div class="row-i"><span class="row-main"><a href="/admin/leads#lead-${l.id}"><b>${escEmail(l.name || l.email || 'Lead')}</b></a>
@@ -22235,6 +22291,10 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
       ${pageHeader(`My Day${actor.kind === 'staff' ? ` — ${actor.name}` : ''}`, 'Oldest first. Answer leads, then follow-ups, then the jobs.',
         '<a class="btn btn-ghost" href="/admin/playbook">Playbook</a>')}
       ${flash(req.query)}
+      ${training && !training.p.complete ? `<div class="card"><b>Your training: ${training.p.done} of ${training.p.total}</b>
+        <a class="muted" href="/admin/training" style="float:right">See it all →</a>${progressBar(training.p.done, training.p.total)}
+        ${training.p.next.map((st) => `<div class="row-sub">Next: ${escEmail(st.title)}</div>`).join('')}</div>` : ''}
+      ${training && training.note ? `<div class="card"><b>Latest note from the owner</b>${coachingRow(training.note)}</div>` : ''}
       ${released.rows.length ? section('Approved — send these now', released.rows.map((q) => `
         <div class="row-i" style="flex-wrap:wrap"><span class="row-main"><b>${escEmail(q.code)}</b> ${escEmail(q.name || '')} &middot; ${money(q.total)}
           <div class="msg" id="rel-${escEmail(q.code)}" style="white-space:pre-wrap">${escEmail(quoteMessages(q).initial)}</div></span>
@@ -22279,6 +22339,214 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
   }
 });
 
+/* ── Training ────────────────────────────────────────────────────────────────
+   The steps and the rules for who ticks what are in tools/lib/training.js.
+   Work steps are counted from the work itself on every view; only reading
+   ticks, sign-offs and dismissed page tips are stored (staff_training). */
+
+/** Counts of the real work a helper has done, for the "do" steps. A message
+ *  held for the owner counts: writing it is the skill being learned. */
+async function trainingFacts(staffId) {
+  const { rows: [f] } = await pool.query(
+    `SELECT ((SELECT COUNT(*) FROM submissions WHERE first_response_by = $1)
+             + (SELECT COUNT(*) FROM lead_notes WHERE staff_id = $1 AND submission_id IS NOT NULL))::int AS leads,
+            (SELECT COUNT(*) FROM quotes WHERE created_by = $1 OR sent_by = $1)::int AS quotes,
+            ((SELECT COUNT(*) FROM client_emails WHERE sent_by = $1)
+             + (SELECT COUNT(*) FROM sms_messages WHERE sent_by = $1)
+             + (SELECT COUNT(*) FROM staff_approvals WHERE requested_by = $1 AND kind = 'message'))::int AS messages`,
+    [staffId]);
+  return f || {};
+}
+
+async function trainingFor(staffId) {
+  const [ticks, facts] = await Promise.all([
+    pool.query('SELECT step_key, done_at, signed_by FROM staff_training WHERE staff_id = $1', [staffId]),
+    trainingFacts(staffId)]);
+  return TRAINING.progress(new Map(ticks.rows.map((t) => [t.step_key, t])), facts);
+}
+
+/** The owner's notes to a helper: written on /admin/training, or left when
+ *  deciding one of their approvals. Newest first. */
+async function coachingNotes(staffId, limit = 50) {
+  const { rows } = await pool.query(
+    `SELECT * FROM (
+       SELECT 'note' AS source, body, created_at, NULL::text AS kind, NULL::text AS subject
+         FROM staff_feedback WHERE staff_id = $1
+       UNION ALL
+       SELECT CASE WHEN status = 'rejected' THEN 'sent back' ELSE 'approved' END, decision_note, decided_at, kind, subject_id
+         FROM staff_approvals
+        WHERE requested_by = $1 AND decided_at IS NOT NULL AND COALESCE(decision_note, '') <> ''
+     ) x ORDER BY created_at DESC LIMIT $2`, [staffId, limit]);
+  return rows;
+}
+
+function progressBar(done, total) {
+  const pct = total ? Math.round(100 * done / total) : 0;
+  return `<div style="background:#eef1f8;border-radius:100px;height:10px;margin:8px 0" role="progressbar"
+    aria-valuenow="${done}" aria-valuemin="0" aria-valuemax="${total}">
+    <div style="width:${pct}%;background:${pct === 100 ? '#16a34a' : '#1848B8'};height:10px;border-radius:100px"></div></div>`;
+}
+
+function coachingRow(n) {
+  const label = n.source === 'note' ? 'Coaching note'
+    : `${n.source === 'sent back' ? 'Sent back' : 'Approved'}: ${n.kind || ''} ${n.subject || ''}`;
+  return `<div class="row-i"><span class="row-main"><b>${escEmail(label.trim())}</b>
+    <div style="white-space:pre-wrap;margin-top:2px">${escEmail(n.body)}</div></span>
+    <span class="row-end muted">${escEmail(whenShort(n.created_at))}</span></div>`;
+}
+
+app.get('/admin/training', requireAdmin, async (req, res) => {
+  try {
+    const actor = currentActor() || OWNER_ACTOR;
+    const owner = actor.kind !== 'staff';
+    const roster = owner ? await staffRoster({ activeOnly: true }) : [];
+    const staffId = owner ? (intIn(req.query.staff) && roster.some((r) => r.id === intIn(req.query.staff))
+      ? intIn(req.query.staff) : (roster[0] && roster[0].id)) : actor.id;
+    if (!staffId) {
+      return res.send(adminPage('Training', `${pageHeader('Training', 'Each helper\'s path from their first day to working on their own.')}
+        <div class="card">${emptyState('No active helpers yet.', '<a class="btn" href="/admin/staff">Add one</a>')}</div>`, 'training'));
+    }
+    const who = owner ? roster.find((r) => r.id === staffId) : actor;
+    const titles = TRAINING.visibleSteps().filter((s) => s.article).map((s) => s.article);
+    const [p, notes, arts, gaps] = await Promise.all([
+      trainingFor(staffId), coachingNotes(staffId),
+      pool.query('SELECT id, title FROM kb_articles WHERE published AND title = ANY($1)', [titles]),
+      owner ? pool.query('SELECT id, title, body FROM kb_articles WHERE published ORDER BY title') : Promise.resolve({ rows: [] }),
+    ]);
+    const articleId = new Map(arts.rows.map((a) => [a.title, a.id]));
+    const stepRow = (s) => {
+      const link = s.article && articleId.has(s.article)
+        ? `<a href="/admin/playbook/${articleId.get(s.article)}" style="color:#1848B8;text-decoration:none">${escEmail(s.title)} &rarr;</a>`
+        : escEmail(s.title);
+      let action = '';
+      if (s.type === 'read' && !s.done && !owner) {
+        action = `<form method="post" action="/admin/training/read" style="margin:0">
+          <input type="hidden" name="key" value="${escEmail(s.key)}"><button type="submit" class="btn btn-ghost">I've read it</button></form>`;
+      } else if (s.type === 'signoff' && owner) {
+        action = `<form method="post" action="/admin/training/signoff" style="margin:0">
+          <input type="hidden" name="staff_id" value="${staffId}"><input type="hidden" name="key" value="${escEmail(s.key)}">
+          ${s.done ? '<input type="hidden" name="undo" value="1"><button type="submit" class="btn btn-ghost">Undo</button>'
+                   : '<button type="submit" class="btn">Sign off</button>'}</form>`;
+      }
+      const kind = { read: 'Read', do: 'Do', signoff: 'Owner signs off' }[s.type];
+      return `<div class="row-i"><span class="row-main"><b>${link}</b>
+        <div class="row-sub" style="white-space:normal">${escEmail(kind)}${s.hint ? ` &middot; ${escEmail(s.hint)}` : ''}${
+          s.done && s.doneAt ? ` &middot; ${escEmail(whenShort(s.doneAt))}` : ''}</div></span>
+        <span class="row-end" style="display:flex;gap:8px;align-items:center">${
+          action || (s.done ? pill('done', 'green') : pill('to do', 'neutral'))}${s.done && action ? pill('done', 'green') : ''}</span></div>`;
+    };
+    const gapRows = gaps.rows.map((a) => ({ a, holes: TRAINING.placeholders(a.body) })).filter((x) => x.holes.length);
+    res.send(adminPage('Training', `
+      ${pageHeader(owner ? `Training — ${who.name}` : 'My training',
+        owner ? 'Reading they tick, work ticks itself, and you sign off the rest. Moving them up stays your call on Staff.'
+              : 'Work through it in order. Reading you tick, work ticks itself when you do it, and the owner signs off the rest.',
+        owner && roster.length > 1 ? roster.map((r) => `<a class="btn ${r.id === staffId ? '' : 'btn-ghost'}" href="/admin/training?staff=${r.id}">${escEmail(r.name)}</a>`).join(' ') : '')}
+      ${flash(req.query)}
+      <div class="card"><b>${p.done} of ${p.total} done</b>${progressBar(p.done, p.total)}
+        ${p.complete ? `<p>Training complete.${owner ? ` <a href="/admin/staff#staff-${staffId}">Move ${escEmail(who.name)} up on Staff →</a>` : ''}</p>` : ''}
+        ${p.steps.map(stepRow).join('')}</div>
+      <div class="card"><b>Coaching notes</b>
+        ${owner ? `<form method="post" action="/admin/feedback" style="margin:8px 0">
+          <input type="hidden" name="staff_id" value="${staffId}">
+          <textarea name="body" rows="3" maxlength="2000" required placeholder="What they did well, and one thing to do differently" style="width:100%"></textarea>
+          <button type="submit" class="btn btn-ghost" style="margin-top:6px">Add the note</button></form>` : ''}
+        ${notes.length ? notes.map(coachingRow).join('') : '<p class="muted">No notes yet. Notes the owner leaves on your quotes and messages show here too.</p>'}</div>
+      ${owner ? `<div class="card"><b>Page tips</b>
+        <p class="muted">${escEmail(who.name)} sees a short tip at the top of each page until training is signed off, and can hide each one.</p>
+        <form method="post" action="/admin/training/tips-reset" style="margin:0"><input type="hidden" name="staff_id" value="${staffId}">
+          <button type="submit" class="btn btn-ghost">Show all tips again</button></form></div>
+      <div class="card"><b>Playbook gaps to fill in (${gapRows.length})</b>
+        ${gapRows.length ? gapRows.map(({ a, holes }) => `<div class="row-i"><span class="row-main"><a href="/admin/playbook/${a.id}"><b>${escEmail(a.title)}</b></a>
+          <div class="row-sub" style="white-space:normal">${holes.map((h) => `[${escEmail(h)}]`).join(' &middot; ')}</div></span></div>`).join('')
+          : '<p class="muted">Every article is filled in.</p>'}</div>` : ''}`, 'training'));
+  } catch (err) {
+    console.error('training page failed:', err.message);
+    res.status(500).send(adminPage('Training', '<div class="card"><div class="warn">Could not load training.</div></div>', 'training'));
+  }
+});
+
+// A helper ticks their own reading. The owner has no reading to tick.
+app.post('/admin/training/read', requireAdmin, async (req, res) => {
+  const actor = currentActor();
+  if (!actor || actor.kind !== 'staff') return res.redirect('/admin/training');
+  const key = String((req.body || {}).key || '');
+  const s = TRAINING.stepByKey(key);
+  if (!s || s.type !== 'read' || !TRAINING.mayTick(key, false)) return back(res, '/admin/training', 'err', 'Unknown step.');
+  try {
+    await pool.query(`INSERT INTO staff_training (staff_id, step_key) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [actor.id, key]);
+    return back(res, '/admin/training', 'ok', `Ticked: ${s.title}.`);
+  } catch (err) {
+    console.error('training tick failed:', err.message);
+    return back(res, '/admin/training', 'err', 'Could not save that.');
+  }
+});
+
+// Only the owner signs off (ROUTES makes this route owner-only).
+app.post('/admin/training/signoff', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const staffId = intIn(b.staff_id);
+  const key = String(b.key || '');
+  const s = TRAINING.stepByKey(key);
+  const to = `/admin/training?staff=${staffId || ''}`;
+  if (!staffId || !s || s.type !== 'signoff' || !TRAINING.mayTick(key, true)) return back(res, to, 'err', 'Unknown step.');
+  try {
+    const { rows: [st] } = await pool.query('SELECT id FROM staff WHERE id = $1', [staffId]);
+    if (!st) return back(res, '/admin/training', 'err', 'No such helper.');
+    if (b.undo) {
+      await pool.query('DELETE FROM staff_training WHERE staff_id = $1 AND step_key = $2', [staffId, key]);
+      return back(res, to, 'ok', `Undone: ${s.title}.`);
+    }
+    await pool.query(`INSERT INTO staff_training (staff_id, step_key, signed_by) VALUES ($1, $2, NULL) ON CONFLICT DO NOTHING`,
+      [staffId, key]);
+    return back(res, to, 'ok', `Signed off: ${s.title}.`);
+  } catch (err) {
+    console.error('training sign-off failed:', err.message);
+    return back(res, to, 'err', 'Could not save that.');
+  }
+});
+
+// "Got it" on a page tip.
+app.post('/admin/training/tip', requireAdmin, async (req, res) => {
+  const actor = currentActor();
+  const b = req.body || {};
+  const to = safeAdminPath(b.back, '/admin/my-day');
+  const key = String(b.key || '');
+  if (!actor || actor.kind !== 'staff' || !Object.prototype.hasOwnProperty.call(TRAINING.PAGE_TIPS, key)) return res.redirect(to);
+  try {
+    await pool.query(`INSERT INTO staff_training (staff_id, step_key) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [actor.id, `tip:${key}`]);
+  } catch (err) { console.error('tip dismiss failed:', err.message); }
+  return res.redirect(to);
+});
+
+app.post('/admin/training/tips-reset', requireAdmin, async (req, res) => {
+  const staffId = intIn((req.body || {}).staff_id);
+  if (!staffId) return back(res, '/admin/training', 'err', 'No such helper.');
+  try {
+    await pool.query(`DELETE FROM staff_training WHERE staff_id = $1 AND step_key LIKE 'tip:%'`, [staffId]);
+    return back(res, `/admin/training?staff=${staffId}`, 'ok', 'Every page tip shows again.');
+  } catch (err) {
+    console.error('tips reset failed:', err.message);
+    return back(res, `/admin/training?staff=${staffId}`, 'err', 'Could not reset the tips.');
+  }
+});
+
+app.post('/admin/feedback', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const staffId = intIn(b.staff_id);
+  const body = text(b.body, 2000);
+  const to = `/admin/training?staff=${staffId || ''}`;
+  if (!staffId || !body) return back(res, to, 'err', 'Write the note first.');
+  try {
+    const { rows: [st] } = await pool.query('SELECT id FROM staff WHERE id = $1', [staffId]);
+    if (!st) return back(res, '/admin/training', 'err', 'No such helper.');
+    await pool.query('INSERT INTO staff_feedback (staff_id, body) VALUES ($1, $2)', [staffId, body]);
+    return back(res, to, 'ok', 'Note saved. They see it on My Day and here.');
+  } catch (err) {
+    console.error('feedback save failed:', err.message);
+    return back(res, to, 'err', 'Could not save the note.');
+  }
+});
+
 /* ── Playbook ─────────────────────────────────────────────────────────────── */
 
 /* Search in plain words. websearch_to_tsquery needs EVERY word in one article,
@@ -22296,7 +22564,14 @@ function kbMatch(p) {
   };
 }
 
-const KB_KINDS = { faq: 'Customer reply', artwork: 'Artwork guide', sop: 'How we do it' };
+/** The part of a prompt article to paste into ChatGPT: the quoted text, or
+ *  the whole body when nothing is quoted. */
+function kbPromptText(body) {
+  const quoted = String(body || '').match(/"([^"]{20,})"/);
+  return quoted ? quoted[1] : String(body || '').replace(/\*\*/g, '');
+}
+
+const KB_KINDS = { faq: 'Customer reply', artwork: 'Artwork guide', sop: 'How we do it', prompt: 'AI prompt' };
 const KB_DECORATIONS = { screen: 'Screen printing', embroidery: 'Embroidery', dtf: 'DTF', patches: 'Patches',
                          vinyl: 'Vinyl', puff: 'Puff print', any: 'Any' };
 
@@ -22414,8 +22689,9 @@ app.get('/admin/playbook/:id', requireAdmin, async (req, res) => {
       ${a.needs_review ? `<div class="warn">Starter draft, written from the shop's pricing rules and common practice.
         The owner should check it before anyone relies on it. Saving it marks it checked.</div>` : ''}
       <div class="card"><div id="kb-body">${kbRender(a.body)}</div>
-        ${a.kind === 'faq' ? `<button type="button" class="btn btn-ghost" style="margin-top:8px" onclick="(navigator.clipboard?navigator.clipboard.writeText(${
-          escEmail(JSON.stringify(a.body.replace(/\*\*/g, '')))}):0)">Copy the reply</button>` : ''}</div>
+        ${a.kind === 'faq' || a.kind === 'prompt' ? `<button type="button" class="btn btn-ghost" style="margin-top:8px" onclick="(navigator.clipboard?navigator.clipboard.writeText(${
+          escEmail(JSON.stringify(a.kind === 'prompt' ? kbPromptText(a.body) : a.body.replace(/\*\*/g, '')))}):0)">${
+          a.kind === 'prompt' ? 'Copy the prompt' : 'Copy the reply'}</button>` : ''}</div>
       ${actorLevel('kb.edit') !== 'off' ? `<details class="card"><summary><b>Edit</b></summary>${kbEditor(a)}</details>` : ''}`, 'playbook'));
   } catch (err) {
     console.error('playbook article failed:', err.message);
@@ -22547,16 +22823,99 @@ const KB_ADDED = [
     tags: 'options, optional, choose, tick, checkbox, quote',
     body: `Some items on your quote are marked OPTIONAL. They are not in your total until you tick "Add this to my order" on them, and your total and deposit update as you tick.\n\n` +
       `When you are happy with it, press Accept at the bottom of the page. Only what is in your total is ordered, and nothing is charged until you choose how to pay.` },
+  /* For a helper who designs with ChatGPT and image tools. Drafts: each is
+     marked for the owner to check (needsReview) and kept once edited. */
+  { kind: 'sop', title: 'AI rules', needsReview: true,
+    tags: 'ai, chatgpt, rules, privacy, image, design, generate, copyright',
+    body: `ChatGPT and the image tools make you faster. These rules keep the shop and our customers safe.
+
+` +
+`**Never put into ChatGPT or any AI tool**
+
+` +
+`- A customer's name, email, phone number or address. Write "the customer" instead
+` +
+`- Quote totals, payment details, or anything from Finances
+` +
+`- Screenshots of the back office
+
+` +
+`**Artwork**
+
+` +
+`- Only use artwork the customer gave us or owns. No sports teams, brands, characters or celebrities unless the owner has seen proof they may use it
+` +
+`- Never remove a watermark. It means someone else owns that image
+` +
+`- Do not copy another shop's or artist's design. AI can help you make something new, not a copy
+
+` +
+`**What comes back is a draft**
+
+` +
+`- Check every reply before it goes to a customer: prices, dates and promises come from the quote and this playbook, never from AI
+` +
+`- Check spelling in any design yourself. AI often misspells words in images
+` +
+`- For print: check the file is big enough (300 dpi at print size), has a clean transparent background, and the colour count fits the decoration
+
+` +
+`Unsure? Ask the owner in Team chat before you send it.` },
+  { kind: 'prompt', title: 'Design brief from what the customer said', needsReview: true,
+    tags: 'ai, chatgpt, design, brief, idea',
+    body: `Paste this into ChatGPT, then the customer's words (with their name and contact details removed):
+
+` +
+`"You are helping a custom T-shirt print shop. Turn this customer request into a short design brief with: the main idea, the text exactly as it should read, the style (for example vintage, sporty, cute), suggested colours, and where it goes on the shirt. List anything unclear as questions I should ask the customer. Request: [paste here]"` },
+  { kind: 'prompt', title: 'Print-ready design idea (image)', needsReview: true,
+    tags: 'ai, chatgpt, image, design, generate, transparent, print',
+    body: `For ChatGPT image generation. Fill in the brackets:
+
+` +
+`"Create a T-shirt design of [subject]. Style: [style]. Flat vector illustration, bold clean shapes, [number] solid colours only: [colours]. No gradients, no shadows, no background, no border or frame. Centered, isolated on a transparent background. Any text must read exactly: [text]."
+
+` +
+`Then check the spelling, open it in the image tools to remove any leftover background, and run Enhance if it will print larger than 8 inches.` },
+  { kind: 'prompt', title: 'Simplify a logo for embroidery', needsReview: true,
+    tags: 'ai, chatgpt, embroidery, logo, simplify',
+    body: `"I need to embroider this logo at [size, e.g. 3.5 inches wide] on a [polo / cap]. Suggest how to simplify it so it stitches cleanly: which details to remove, the smallest text that will read, and the fewest thread colours that keep it recognisable."
+
+` +
+`Attach the customer's logo only if they own it. The owner decides on the final digitizing.` },
+  { kind: 'prompt', title: 'Slogan and text ideas for a group shirt', needsReview: true,
+    tags: 'ai, chatgpt, slogan, text, reunion, team, event',
+    body: `"Give me 10 short, printable T-shirt slogans for [event, e.g. a family reunion in Chicago / a 5th grade field day]. Under 6 words each, no copyrighted phrases or brand names. Mark the 3 you think work best on the front of a shirt."` },
+  { kind: 'prompt', title: 'Polish my customer reply', needsReview: true,
+    tags: 'ai, chatgpt, reply, email, polish, tone',
+    body: `Write your reply first, remove the customer's name, then paste:
+
+` +
+`"Make this reply to a customer friendlier and clearer. Keep it short, keep every price, date and number exactly as written, and do not promise anything new: [paste here]"
+
+` +
+`Put the customer's name back before you send it.` },
+  { kind: 'prompt', title: 'Social post caption for a finished job', needsReview: true,
+    tags: 'ai, chatgpt, social, caption, instagram, facebook, post',
+    body: `"Write an Instagram caption for a photo of [what we made, e.g. 120 navy hoodies with a two-colour front print] for [type of customer, e.g. a local school band]. Friendly, under 40 words, end with an invitation to request a quote at jtees.net, plus 5 hashtags for Chicago custom shirts."
+
+` +
+`Only post photos of a customer's order if they said yes.` },
+  { kind: 'prompt', title: 'Explain screen print vs DTF vs embroidery', needsReview: true,
+    tags: 'ai, chatgpt, explain, screen print, dtf, embroidery, decoration',
+    body: `"Explain to a customer in plain words, in under 80 words, which is best for [their order: quantity, colours, garment]: screen printing, DTF transfers or embroidery. Our rules: screen printing from 50 pieces and each colour adds cost; DTF has no minimum and suits full colour; embroidery suits logos on polos, caps and jackets."
+
+` +
+`Check the answer against the artwork guides in this playbook before sending it.` },
 ];
 
 async function addPlaybookArticles() {
   for (const a of KB_ADDED) {
     await pool.query(
       `INSERT INTO kb_articles (kind, title, shortcut, body, tags, decoration, needs_review)
-       SELECT $1, $2, $3, $4, $5, $6, FALSE
+       SELECT $1, $2, $3, $4, $5, $6, $7
         WHERE NOT EXISTS (SELECT 1 FROM kb_articles WHERE title = $2)
        ON CONFLICT DO NOTHING`,
-      [a.kind, a.title, a.shortcut || null, a.body, a.tags || '', a.decoration || null])
+      [a.kind, a.title, a.shortcut || null, a.body, a.tags || '', a.decoration || null, !!a.needsReview])
       .catch((e) => console.error(`playbook article "${a.title}" not added:`, e.message));
     if (a.was && a.was.length) {
       await pool.query(
