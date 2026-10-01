@@ -59,7 +59,7 @@ function shell() {
     grab('const ADMIN_ICONS = {', '};'),
     grab('const ADMIN_CSS = `', '\n`;'),
     grab('const ADMIN_BADGE_JS = `', '`;'),
-    lift('escEmail'), lift('icon'), lift('adminNav'), lift('htmlDocument'), lift('adminPage'), lift('quotePage'),
+    lift('escEmail'), lift('icon'), lift('adminNav'), lift('pageTip'), lift('htmlDocument'), lift('adminPage'), lift('quotePage'),
   ].join('\n'), sandbox);
   return sandbox;
 }
