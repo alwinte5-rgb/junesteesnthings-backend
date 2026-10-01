@@ -205,7 +205,8 @@ test('Accept stores the chosen lines and their figures in the same UPDATE that a
 const save = src.slice(src.indexOf('const measureForStaff'), src.indexOf("res.send(quotePage('Quote ready'"));
 
 test('required lines are priced before options, so they claim the freight', () => {
-  assert.match(save, /\.sort\(\(x, y\) => \(Number\(isOptional\(x\)\) - Number\(isOptional\(y\)\)\) \|\| \(x - y\)\)/);
+  /* Options are then priced group by group (optKey), each group together. */
+  assert.match(save, /\.sort\(\(x, y\) => \(Number\(isOptional\(x\)\) - Number\(isOptional\(y\)\)\)\s*\|\| \(isOptional\(x\) \? optKey\(x\) - optKey\(y\) : 0\) \|\| \(x - y\)\)/);
   assert.match(save, /for \(const i of lineOrder\)/);
   assert.match(save, /else if \(!optional\) orderSharedSeen\.add\(a\.code\)/);
 });
@@ -215,9 +216,10 @@ test('the stored subtotal leaves options out, and the approval gate counts them 
   assert.match(save, /total: allTotal, customPriced/);
 });
 
-test('an option with a run number, or on an accepted quote, is refused rather than saved', () => {
-  assert.match(save, /if \(optional && runGroup\)/);
-  assert.match(save, /if \(optionalInRun\.length\)/);
+test('a run mixing optional and required items, or options on an accepted quote, is refused rather than saved', () => {
+  /* A run of optional items only is an option GROUP (quote-option-groups). */
+  assert.match(save, /const mixedRuns = Object\.entries\(runKinds\)\.filter\(\(\[, k\]\) => k\.opt\.length && k\.req\.length\);/);
+  assert.match(save, /if \(mixedRuns\.length\)/);
   assert.match(save, /existingQuote\.accepted_at && items\.some\(\(i\) => i\.optional\)/);
 });
 
@@ -261,4 +263,44 @@ test('screens keep their own row and the shirt price is unchanged', () => {
 test('the customer page names no Signs365 charge, not even in its script data', () => {
   assert.match(src, /label: IN_ITEM_PRICE_CODES\.includes\(a\.code\) \? '' : a\.label/);
   assert.match(src, /function addonRowsFor\(item, ix\) \{\s*const rows = shownAddons\(item\);/);
+});
+
+/* ── Option groups (optional lines sharing a run) ───────────────────────── */
+
+test('one tick on a group takes the whole group, whichever of its lines was ticked', () => {
+  const items = [
+    { description: 'tees', line_total: 200 },
+    { description: 'A adult', line_total: 120, optional: true, run_group: '1' },
+    { description: 'A youth', line_total: 100, optional: true, run_group: '1' },
+    { description: 'B hoodies', line_total: 300, optional: true, run_group: '2' },
+    { description: 'C hats', line_total: 90, optional: true },
+  ];
+  let r = F.applyOptionChoice(items, [1], SHARED);
+  assert.deepStrictEqual(r.items.map((i) => i.description), ['tees', 'A adult', 'A youth']);
+  assert.deepStrictEqual(r.declined.map((i) => i.description), ['B hoodies', 'C hats']);
+  r = F.applyOptionChoice(items, [2, 4], SHARED);
+  assert.deepStrictEqual(r.items.map((i) => i.description), ['tees', 'A adult', 'A youth', 'C hats'],
+    'a tick on the second line of a group takes the group too');
+});
+
+test('a run number on a required line groups nothing', () => {
+  const items = [
+    { description: 'tees', line_total: 200, run_group: '1' },
+    { description: 'hats', line_total: 90, optional: true },
+  ];
+  const r = F.applyOptionChoice(items, [], SHARED);
+  assert.deepStrictEqual(r.items.map((i) => i.description), ['tees']);
+});
+
+test('the customer page gives a group one box, on its first line, and draws it together', () => {
+  assert.match(page, /const head = !inGroup \|\| members\[0\] === ix;/);
+  assert.match(page, /\$\{opt && head \? `<label/);
+  assert.match(page, /Part of the option above\./);
+  assert.match(page, /for \(const k of \(g && grpMembers\[g\]\.length > 1 \? grpMembers\[g\] : \[ix\]\)\)/);
+  assert.match(page, /run_group: i\.run_group == null \? null : String\(i\.run_group\),/);
+});
+
+test('a group pays order-level freight once, on the line it reaches first', () => {
+  assert.match(save, /const seen = \(optGroupSeen\[runGroup\] \|\|= new Set\(\)\);/);
+  assert.match(src, /var gs = optGroupSeen\[grp\] \|\| \(optGroupSeen\[grp\] = \{\}\);/);
 });
