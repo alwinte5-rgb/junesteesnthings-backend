@@ -40,7 +40,7 @@ test('the successful path returns before the reason lookup', () => {
      "why did it fail" query and redirect with an error on a quote that just
      succeeded. */
   const body = accept.slice(0, accept.indexOf('} catch'));
-  assert.match(body, /return res\.redirect\('\/q\/' \+ code\);\s*\}/,
+  assert.match(body, /return res\.redirect\('\/q\/' \+ code(?: \+ '\?ev=accepted')?\);\s*\}/,
     'the success branch must return before the failure lookup');
 });
 

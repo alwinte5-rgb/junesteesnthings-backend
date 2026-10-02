@@ -21,6 +21,7 @@ const {
   normalizeUsPhone, parseSmsConsent, consentCheckboxesHtml, foldSmsConsent,
 } = require('./tools/lib/sms-consent');
 const SHIP = require('./tools/lib/shipping');
+const { quoteAnalyticsTags, paidQuery } = require('./tools/lib/quote-analytics');
 const { T: SMS, plain: smsPlain, PICKUP: SMS_PICKUP } = require('./tools/lib/sms-templates');
 const { verifyTwilioSignature, classifyInbound } = require('./tools/lib/twilio-webhook');
 const TAXCERT = require('./tools/lib/tax-certificates');
@@ -10541,6 +10542,7 @@ ${applyOptionChoice.toString()}
         update();
       })();
       </script>` : ''}
+      ${quoteAnalyticsTags(q.code, req.query)}
     `));
   } catch (err) {
     console.error('view quote failed:', err.message);
@@ -12469,6 +12471,13 @@ app.get('/q/:code/paid', async (req, res) => {
            amount, the fee split, or who gets emailed. Whichever arrives first
            banks it; the other is discarded by the ext_ref unique index. */
         await bankStripeSession(d);
+        /* The page counts the sale in analytics (once per payment). The value
+           is the quote money, without the card surcharge, as banked. */
+        if (d.payment_status === 'paid') {
+          const kind = (d.metadata || {}).kind === 'balance' ? 'balance' : 'deposit';
+          return res.redirect('/q/' + code + paidQuery({
+            amount: round2((d.amount_total || 0) / 100 / (1 + CARD_FEE)), kind, sessionId: d.id }));
+        }
       }
     }
   } catch (err) {
@@ -12624,7 +12633,7 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
         syncQuoteToBrevo(q, { note: false }).then((ids) => keepBrevoIds(q.id, ids)).catch(() => {});
         syncQuoteToLumise(q).catch(() => {});
       }
-      return res.redirect('/q/' + code);
+      return res.redirect('/q/' + code + '?ev=accepted');
     }
 
     /* The UPDATE matched nothing, and until now that fell through to a plain
@@ -12776,6 +12785,7 @@ app.post('/q/:code/changes', orderRateLimit, async (req, res) => {
     if (!rows.length) return res.redirect('/q/' + code);
 
     const saved = rows[0];
+    res.locals.quoteEvent = 'changes';   // the page records it in analytics
     const edits = describeRequestedEdits(items, requested);
     const editHtml = edits.length ? `
       <p style="color:#374151;margin:14px 0 4px"><b>They changed the numbers:</b></p>
@@ -12801,7 +12811,7 @@ app.post('/q/:code/changes', orderRateLimit, async (req, res) => {
   } catch (err) {
     console.error('change request failed:', err.message);
   }
-  res.redirect('/q/' + code);
+  res.redirect('/q/' + code + (res.locals.quoteEvent === 'changes' ? '?ev=changes' : ''));
 });
 
 /* Record a payment that arrived outside Stripe — Zelle, cash, a bank transfer.
