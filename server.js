@@ -9892,7 +9892,6 @@ app.get('/q/:code', async (req, res) => {
        after the deposit. Each file goes browser -> Cloudinary, then its URL to
        POST /q/:code/photos; nothing reloads, so a half-sent batch is not lost. */
     const qpCloud = QPHOTOS.cloudName();
-    const qpKey = process.env.CLOUDINARY_API_KEY || '';
     const qpPhotos = QPHOTOS.photosOf(q, qpCloud);
     const qpThumb = (u) => `
           <div data-qp-item style="position:relative;width:84px;height:84px">
@@ -9902,7 +9901,7 @@ app.get('/q/:code', async (req, res) => {
             <button type="button" data-qp-remove="${escEmail(u)}" aria-label="Remove this photo"
                     style="position:absolute;top:-6px;right:-6px;width:24px;height:24px;border-radius:12px;border:0;background:#0B1F4B;color:#fff;font-size:14px;line-height:24px;padding:0;cursor:pointer">&times;</button>
           </div>`;
-    const photosCard = (q.cancelled_at || !qpCloud || !qpKey) ? '' : `
+    const photosCard = (q.cancelled_at || !qpCloud) ? '' : `
       <div class="card" id="photos">
         <h1 style="font-size:18px">Your photos</h1>
         <p class="muted" style="margin-top:6px">Send the pictures for this order here: faces for big head
@@ -9918,7 +9917,11 @@ app.get('/q/:code', async (req, res) => {
       (function(){
         ${uploadStatusScript()}
         var CLOUD = ${JSON.stringify(qpCloud)};
-        var CKEY  = ${JSON.stringify(qpKey)};
+        /* The upload key (the public half) comes from /api/config, which
+           already serves it to every static page. */
+        var CKEY  = '';
+        var cfg = fetch('/api/config').then(function(r){ return r.json(); })
+          .then(function(c){ CKEY = c.cloudinaryApiKey || ''; }).catch(function(){});
         var URL_  = ${JSON.stringify(`/q/${q.code}/photos`)};
         var MAXB  = ${QPHOTOS.MAX_FILE_BYTES};
         var card = document.getElementById('photos');
@@ -9974,8 +9977,8 @@ app.get('/q/:code', async (req, res) => {
             if (file.size > MAXB) { failed++; reason = 'each photo must be under ' + Math.round(MAXB / 1048576) + ' MB'; say(); return; }
             pending++; say();
             var ts = Math.round(Date.now() / 1000);
-            fetch('/api/cloudinary-signature', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ folder: ${JSON.stringify(QPHOTOS.FOLDER)}, timestamp: ts }) })
+            cfg.then(function(){ if (!CKEY) throw new Error('signature'); return fetch('/api/cloudinary-signature', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ folder: ${JSON.stringify(QPHOTOS.FOLDER)}, timestamp: ts }) }); })
             .then(function(r){ if (!r.ok) throw new Error('signature'); return r.json(); })
             .then(function(sig){
               if (!sig.signature) throw new Error('signature');
