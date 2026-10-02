@@ -139,6 +139,7 @@ const ROUTES = {
   'GET /admin/orders': 'orders.view',
 
   'GET /admin/reviews': 'reviews.manage',
+  'POST /admin/reviews/google-reply': 'reviews.manage',
   'POST /admin/reviews/:id': 'reviews.manage',
   'POST /admin/reviews/backfill': 'owner',
 
