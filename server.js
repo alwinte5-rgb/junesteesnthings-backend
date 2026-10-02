@@ -27,6 +27,7 @@ const TAXCERT = require('./tools/lib/tax-certificates');
 const STAFF = require('./tools/lib/staff');
 const TEAM = require('./tools/lib/team-metrics');
 const TRAINING = require('./tools/lib/training');
+const GOOGLE_ADS = require('./tools/lib/google-ads').createClient();
 
 const express    = require('express');
 const cors       = require('cors');
@@ -17075,6 +17076,41 @@ app.get('/admin/nav-counts', requireAdmin, async (_req, res) => {
   res.json(out);
 });
 
+/* The last 30 days of Google Ads, read-only, owner only: ad spend is money.
+   Not connected, or Google refusing, says why in one line rather than hiding
+   the card, so a broken connection is noticed. */
+function googleAdsCard(o) {
+  const head = `<h2 class="card-title">Google Ads &middot; last 30 days
+    <a href="https://ads.google.com/" target="_blank" rel="noopener noreferrer">open Google Ads &rarr;</a></h2>`;
+  if (!o) return `<div class="card">${head}${emptyState('Could not load Google Ads.')}</div>`;
+  if (!o.ok) {
+    const what = o.notConnected
+      ? `Not connected yet: ${o.missing.map((m) => `<code>${escEmail(m)}</code>`).join(', ')} still to set in Railway.`
+      : escEmail(o.reason);
+    return `<div class="card">${head}${emptyState(what)}</div>`;
+  }
+  const cell = (label, value, sub) => `<div style="flex:1;min-width:120px"><div class="muted" style="font-size:12px">${
+    label}</div><div style="font-size:20px;font-weight:700;color:#0B1F4B">${value}</div>${
+    sub ? `<div class="muted" style="font-size:12px">${sub}</div>` : ''}</div>`;
+  const conv = Math.round(o.conversions * 10) / 10;
+  return `<div class="card">${head}
+    <div style="display:flex;flex-wrap:wrap;gap:12px;margin:4px 0 12px">
+      ${cell('Spent', money(o.spend), o.cpc != null ? `${money(o.cpc)} a click` : 'no clicks')}
+      ${cell('Clicks', o.clicks.toLocaleString('en-US'),
+        `${o.impressions.toLocaleString('en-US')} views${o.ctr != null ? ` &middot; ${(o.ctr * 100).toFixed(1)}%` : ''}`)}
+      ${cell('Conversions', String(conv),
+        o.costPerConversion != null ? `${money(o.costPerConversion)} each` : 'none tracked yet')}
+    </div>
+    ${o.campaigns.length ? `<div class="rows">${o.campaigns.map((c) => `<div class="row-i">
+      <span class="row-main"><b>${escEmail(c.name)}</b>
+        <div class="row-sub">${c.clicks.toLocaleString('en-US')} clicks &middot; ${
+          Math.round(c.conversions * 10) / 10} conversions</div></span>
+      <span class="row-end">${money(c.spend)}<div class="muted" style="font-size:12px;margin-top:3px">${
+        escEmail(String(c.status).toLowerCase())}</div></span></div>`).join('')}</div>`
+      : emptyState('No campaigns ran in the last 30 days.')}
+  </div>`;
+}
+
 /* What needs June today, and how the business is doing, on one screen. Every
    figure comes from the same place its own page reads it, and each panel fails
    on its own: a broken query shows a dash, never a blank dashboard. */
@@ -17090,7 +17126,7 @@ app.get('/admin/dashboard', requireAdmin, async (_req, res) => {
      and failing on its own like every panel here. */
   const shipP = safe(shippingQueues().then(shippingWaiting), null, 'shipping');
   const [takings, owed, out, leads, jobs, reviewsWaiting, changes, disputes, unapplied, badTexts, recent, tax,
-         certsWaiting, deliveredOwing] =
+         certsWaiting, deliveredOwing, ads] =
     await Promise.all([
       /* Quotes and everything else apart: the board's "Collected this month"
          and the Finances months count the quote ledger only, so the total here
@@ -17141,6 +17177,7 @@ app.get('/admin/dashboard', requireAdmin, async (_req, res) => {
       many(`SELECT code, name, total, paid_amount, written_off, delivered_at FROM quotes
              WHERE ${OWING_JOBS_WHERE} AND delivered_at IS NOT NULL
              ORDER BY delivered_at LIMIT 8`, 'delivered owing'),
+      isOwner() ? safe(GOOGLE_ADS.overview(), null, 'google ads') : Promise.resolve(undefined),
     ]);
 
   const waiting = leads.filter((l) => l.lead_status === 'new');
@@ -17261,6 +17298,7 @@ app.get('/admin/dashboard', requireAdmin, async (_req, res) => {
           return href ? `<a class="row-i" href="${href}">${inner}</a>` : `<div class="row-i">${inner}</div>`;
         }).join('')}</div>` : emptyState('No payments yet.')}
       </div>
+      ${ads === undefined ? '' : googleAdsCard(ads)}
     </div>`, 'dashboard'));
 });
 
