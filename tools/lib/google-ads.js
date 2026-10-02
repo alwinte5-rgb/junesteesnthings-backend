@@ -5,8 +5,8 @@
    Since 2026-09-10 the API no longer needs a developer token: access comes from
    the Google Cloud project that issued the OAuth client, and the project's
    access level (Test, Explorer, Basic) decides whether real accounts answer.
-   So what this needs is the OAuth client, a refresh token from signing in once
-   (tools/google-ads-signin.js), the ad account, and the manager account it is
+   So what this needs is the OAuth client, a refresh token from signing in once (a
+   one-off run, kept out of the repo by the radar boundary), the ad account, and the manager account it is
    reached through.
 
    Only reads. Nothing here changes a campaign, a bid or a budget.
