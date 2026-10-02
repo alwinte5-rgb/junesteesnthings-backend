@@ -16,15 +16,23 @@ test('a photo this shop uploaded into the quote folder is accepted', () => {
   assert.ok(P.photoUrlOk(ok, CLOUD));
   assert.ok(P.photoUrlOk(ok.replace('v1759430000/', ''), CLOUD), 'no version segment');
   assert.ok(P.photoUrlOk(ok.replace('.jpg', '.HEIC'), CLOUD), 'iPhone HEIC');
-  assert.ok(P.photoUrlOk(ok.replace('.jpg', '.pdf'), CLOUD), 'artwork as a PDF');
+  for (const ext of ['pdf', 'ai', 'eps', 'svg', 'psd', 'tif', 'png', 'webp']) {
+    assert.ok(P.photoUrlOk(ok.replace('.jpg', '.' + ext), CLOUD), ext);
+  }
+  /* What Cloudinary's auto upload stores as raw: stitch files and archives. */
+  for (const ext of ['dst', 'pes', 'exp', 'emb', 'zip', 'pdf']) {
+    assert.ok(P.photoUrlOk(ok.replace('/image/', '/raw/').replace('.jpg', '.' + ext), CLOUD), 'raw ' + ext);
+  }
 });
 
 test('anything else is refused', () => {
   const bad = [
     ok.replace('/jtees/', '/someoneelse/'),                  // another account
     ok.replace('quote_photos', 'review_photos'),             // another folder
-    ok.replace('/image/', '/raw/'),                          // not an image
-    ok.replace('.jpg', '.svg'),                              // script-capable
+    ok.replace('/image/', '/video/'),                        // not a type the shop takes
+    ok.replace('.jpg', '.exe'),
+    ok.replace('.jpg', '.html'),
+    ok.replace('.jpg', '.js'),
     ok.replace('https://', 'http://'),
     ok + '?x=1',
     ok.replace('abc_DEF-123', '../grad_orders/x'),
@@ -51,16 +59,50 @@ test('photosOf drops malformed rows and keeps order', () => {
   assert.deepStrictEqual(P.photosOf({}, CLOUD), []);
 });
 
-test('thumbnails and views convert the format, so HEIC shows in every browser', () => {
-  assert.match(P.thumbUrl(ok), /\/image\/upload\/c_fill,w_160,h_160,q_auto,f_auto\/v1759430000\/quote_photos\//);
-  assert.match(P.viewUrl(ok), /\/image\/upload\/f_auto,q_auto\/v1759430000\//);
+const base = 'https://res.cloudinary.com/jtees/image/upload/';
+test('a web photo thumbnails and views as itself, format chosen by the browser', () => {
+  const d = P.describe(ok, CLOUD, 'Coach Kim.jpg');
+  assert.strictEqual(d.kind, 'image');
+  assert.strictEqual(d.name, 'Coach Kim.jpg');
+  assert.strictEqual(d.thumb, base + 'c_fill,w_160,h_160,q_auto,f_auto/v1759430000/quote_photos/abc_DEF-123.jpg');
+  assert.strictEqual(d.view, base + 'f_auto,q_auto/v1759430000/quote_photos/abc_DEF-123.jpg');
 });
 
-test('a PDF thumbnails from its first page as a JPG, and opens as itself', () => {
-  const pdf = ok.replace('.jpg', '.pdf');
-  assert.strictEqual(P.thumbUrl(pdf),
-    'https://res.cloudinary.com/jtees/image/upload/c_fill,w_160,h_160,q_auto,pg_1/v1759430000/quote_photos/abc_DEF-123.jpg');
-  assert.strictEqual(P.viewUrl(pdf), pdf);
+test('a PDF, AI or EPS thumbnails from its first page and opens as itself', () => {
+  for (const ext of ['pdf', 'ai', 'eps']) {
+    const u = ok.replace('.jpg', '.' + ext);
+    const d = P.describe(u, CLOUD, 'logo.' + ext);
+    assert.strictEqual(d.thumb, base + 'c_fill,w_160,h_160,q_auto,pg_1/v1759430000/quote_photos/abc_DEF-123.jpg', ext);
+    assert.strictEqual(d.view, u, ext);
+  }
+});
+
+test('a HEIC, PSD or SVG is shown as a JPG the browser can draw', () => {
+  for (const ext of ['heic', 'psd', 'svg', 'tif']) {
+    const d = P.describe(ok.replace('.jpg', '.' + ext), CLOUD);
+    assert.strictEqual(d.kind, 'image', ext);
+    assert.match(d.thumb, /\/c_fill,w_160,h_160,q_auto\/v1759430000\/quote_photos\/abc_DEF-123\.jpg$/, ext);
+    assert.match(d.view, /\/q_auto\/v1759430000\/quote_photos\/abc_DEF-123\.jpg$/, ext);
+  }
+});
+
+test('a stitch file or a ZIP is a named file, linked as-is', () => {
+  const u = ok.replace('/image/', '/raw/').replace('.jpg', '.dst');
+  assert.deepStrictEqual(P.describe(u, CLOUD, 'Eagle crest.dst'),
+    { url: u, kind: 'file', ext: 'dst', name: 'Eagle crest.dst', thumb: '', view: u });
+  assert.strictEqual(P.describe(u, CLOUD).name, 'abc_DEF-123.dst', 'no name falls back to the stored one');
+});
+
+test('a file name is stored without markup or control characters, and capped', () => {
+  assert.strictEqual(P.cleanName('<b>logo</b>\u0000.ai'), 'blogo/b.ai');
+  assert.strictEqual(P.cleanName('x'.repeat(300)).length, 120);
+  assert.strictEqual(P.cleanName(undefined), '');
+});
+
+test('the picker offers the admin form\'s artwork types', () => {
+  const adminAccept = /class="fi" multiple[^>]*\n\s*accept="([^"]+)"/.exec(src);
+  assert.ok(adminAccept, 'admin artwork input not found');
+  assert.strictEqual(P.ACCEPT, adminAccept[1]);
 });
 
 test('saving a quote emails the customer, and says whether it went', () => {

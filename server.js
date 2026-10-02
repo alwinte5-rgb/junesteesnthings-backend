@@ -9940,31 +9940,37 @@ app.get('/q/:code', async (req, res) => {
     })() : `
       <div class="card"><p class="muted" style="margin:0">Tax-exempt order: your certificate
         (${escEmail(TAXCERT.certificateLabel(cert))}) is on file. Thank you.</p></div>`;
-    /* Photos the customer sends for the job (faces for big heads, a logo,
-       artwork). Open at every stage but a cancelled one: artwork often comes
-       after the deposit. Each file goes browser -> Cloudinary, then its URL to
-       POST /q/:code/photos; nothing reloads, so a half-sent batch is not lost. */
+    /* Artwork the customer sends for the job: photos, logos, vector and
+       stitch files, the faces for big heads. Open at every stage but a
+       cancelled one: artwork often comes after the deposit. Each file goes
+       browser -> Cloudinary (auto: image or raw, decided from the bytes), then
+       its URL and name to POST /q/:code/photos, which answers with how to show
+       it (QPHOTOS.describe), so the page and the server draw a file one way.
+       Nothing reloads, so a half-sent batch is not lost. */
     const qpCloud = QPHOTOS.cloudName();
     const qpPhotos = QPHOTOS.photosOf(q, qpCloud);
-    const qpThumb = (u) => `
-          <div data-qp-item style="position:relative;width:84px;height:84px">
-            <a href="${escEmail(QPHOTOS.viewUrl(u))}" target="_blank" rel="noopener">
-              <img src="${escEmail(QPHOTOS.thumbUrl(u))}" alt="" loading="lazy"
-                   style="width:84px;height:84px;object-fit:cover;border-radius:8px;border:1px solid #e3e8f2;background:#fff"></a>
-            <button type="button" data-qp-remove="${escEmail(u)}" aria-label="Remove this photo"
+    const TILE = 'width:84px;height:84px;border-radius:8px;border:1px solid #e3e8f2;background:#fff';
+    const qpTile = (d) => `
+          <div data-qp-item style="position:relative;width:84px">
+            <a href="${escEmail(d.view)}" target="_blank" rel="noopener" title="${escEmail(d.name)}" style="text-decoration:none">${d.kind === 'image'
+              ? `<img src="${escEmail(d.thumb)}" alt="" loading="lazy" style="${TILE};object-fit:cover;display:block">`
+              : `<div style="${TILE};display:flex;align-items:center;justify-content:center;font-weight:700;color:#1848B8;background:#eef3ff">${escEmail(d.ext.toUpperCase())}</div>`}</a>
+            <div style="font-size:11px;color:#6b7280;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escEmail(d.name)}</div>
+            <button type="button" data-qp-remove="${escEmail(d.url)}" aria-label="Remove ${escEmail(d.name)}"
                     style="position:absolute;top:-6px;right:-6px;width:24px;height:24px;border-radius:12px;border:0;background:#0B1F4B;color:#fff;font-size:14px;line-height:24px;padding:0;cursor:pointer">&times;</button>
           </div>`;
     const photosCard = (q.cancelled_at || !qpCloud) ? '' : `
       <div class="card" id="photos">
         <h1 style="font-size:18px">Upload artwork</h1>
-        <p class="muted" style="margin-top:6px">Send the artwork for this order here: your logo or design
-          (a photo or a PDF), or the faces for big head cutouts. Send the largest, clearest version you have;
-          for faces, a well-lit photo looking at the camera prints best.</p>
-        <div data-qp-grid style="display:flex;gap:10px;flex-wrap:wrap;margin:12px 0">${qpPhotos.map((p) => qpThumb(p.url)).join('')}</div>
+        <p class="muted" style="margin-top:6px">Send the artwork for this order here: your logo or design, or
+          the faces for big head cutouts. Photos, PDF, AI, EPS, SVG, PSD, embroidery files (DST, PES, EXP, EMB)
+          and ZIP all work, up to ${Math.round(QPHOTOS.MAX_FILE_BYTES / 1048576)} MB each. Send the largest, clearest
+          version you have; for faces, a well-lit photo looking at the camera prints best.</p>
+        <div data-qp-grid style="display:flex;gap:10px;flex-wrap:wrap;margin:12px 0">${qpPhotos.map(qpTile).join('')}</div>
         <button type="button" class="btn-ghost" data-qp-pick style="width:100%">Upload artwork</button>
-        <input type="file" accept="image/*,application/pdf" multiple data-qp-file hidden>
+        <input type="file" accept="${escEmail(QPHOTOS.ACCEPT)}" multiple data-qp-file hidden>
         <p data-qp-msg class="muted" style="margin-top:8px;font-size:13px" aria-live="polite">${
-          qpPhotos.length ? `${qpPhotos.length} photo${qpPhotos.length > 1 ? 's' : ''} sent to ${SHOP_SIGNER}.` : ''}</p>
+          qpPhotos.length ? `${qpPhotos.length} file${qpPhotos.length > 1 ? 's' : ''} sent to ${SHOP_SIGNER}.` : ''}</p>
       </div>
       <script>
       (function(){
@@ -9977,6 +9983,8 @@ app.get('/q/:code', async (req, res) => {
           .then(function(c){ CKEY = c.cloudinaryApiKey || ''; }).catch(function(){});
         var URL_  = ${JSON.stringify(`/q/${q.code}/photos`)};
         var MAXB  = ${QPHOTOS.MAX_FILE_BYTES};
+        var EXTS  = ${JSON.stringify(QPHOTOS.ACCEPT.split(',').filter((x) => x.startsWith('.')).map((x) => x.slice(1)))};
+        var TILE  = ${JSON.stringify(TILE)};
         var card = document.getElementById('photos');
         var grid = card.querySelector('[data-qp-grid]');
         var fi   = card.querySelector('[data-qp-file]');
@@ -9987,9 +9995,9 @@ app.get('/q/:code', async (req, res) => {
         var pending = 0, failed = 0, reason = '';
         function count(){ return grid.querySelectorAll('[data-qp-item]').length; }
         function say(){
-          var t = uploadStatus(pending, 0, failed, reason);
+          var t = uploadStatus(pending, 0, failed, reason).replace(/photo/g, 'file');
           var n = count();
-          msg.textContent = t || (n ? n + ' photo' + (n > 1 ? 's' : '') + ' sent to ' + ${JSON.stringify(SHOP_SIGNER)} + '.' : '');
+          msg.textContent = t || (n ? n + ' file' + (n > 1 ? 's' : '') + ' sent to ' + ${JSON.stringify(SHOP_SIGNER)} + '.' : '');
           msg.style.color = failed ? '#b45309' : '';
         }
         function post(body){
@@ -9999,23 +10007,32 @@ app.get('/q/:code', async (req, res) => {
           .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(d){
             if (!r.ok || !d.ok) throw new Error(d.error || 'That did not go through.'); return d; }); });
         }
-        function thumb(u){
+        /* The same tile as the server draws (qpTile), built with textContent. */
+        function tile(d){
           var w = document.createElement('div');
-          w.setAttribute('data-qp-item', '');
-          w.style.cssText = 'position:relative;width:84px;height:84px';
+          w.setAttribute('data-qp-item', ''); w.style.cssText = 'position:relative;width:84px';
           var a = document.createElement('a');
-          var pdf = /\\.pdf$/i.test(u);
-          a.href = pdf ? u : u.replace('/image/upload/', '/image/upload/f_auto,q_auto/'); a.target = '_blank'; a.rel = 'noopener';
-          var im = document.createElement('img');
-          im.src = pdf ? u.replace('/image/upload/', '/image/upload/c_fill,w_160,h_160,q_auto,pg_1/').replace(/\\.pdf$/i, '.jpg')
-                       : u.replace('/image/upload/', '/image/upload/c_fill,w_160,h_160,q_auto,f_auto/'); im.alt = '';
-          im.style.cssText = 'width:84px;height:84px;object-fit:cover;border-radius:8px;border:1px solid #e3e8f2;background:#fff';
-          a.appendChild(im); w.appendChild(a);
+          a.href = d.view; a.target = '_blank'; a.rel = 'noopener'; a.title = d.name; a.style.textDecoration = 'none';
+          var box;
+          if (d.kind === 'image') {
+            box = document.createElement('img'); box.src = d.thumb; box.alt = '';
+            box.style.cssText = TILE + ';object-fit:cover;display:block';
+          } else {
+            box = document.createElement('div'); box.textContent = String(d.ext).toUpperCase();
+            box.style.cssText = TILE + ';display:flex;align-items:center;justify-content:center;font-weight:700;color:#1848B8;background:#eef3ff';
+          }
+          a.appendChild(box); w.appendChild(a);
+          var nm = document.createElement('div'); nm.textContent = d.name;
+          nm.style.cssText = 'font-size:11px;color:#6b7280;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+          w.appendChild(nm);
           var x = document.createElement('button');
-          x.type = 'button'; x.setAttribute('data-qp-remove', u); x.setAttribute('aria-label', 'Remove this photo');
-          x.innerHTML = '&times;';
+          x.type = 'button'; x.setAttribute('data-qp-remove', d.url); x.setAttribute('aria-label', 'Remove ' + d.name);
+          x.textContent = '\\u00d7';
           x.style.cssText = 'position:absolute;top:-6px;right:-6px;width:24px;height:24px;border-radius:12px;border:0;background:#0B1F4B;color:#fff;font-size:14px;line-height:24px;padding:0;cursor:pointer';
           w.appendChild(x); grid.appendChild(w);
+        }
+        function has(u){
+          return Array.prototype.some.call(grid.querySelectorAll('[data-qp-remove]'), function(b){ return b.getAttribute('data-qp-remove') === u; });
         }
         grid.addEventListener('click', function(e){
           var b = e.target.closest('[data-qp-remove]');
@@ -10028,8 +10045,9 @@ app.get('/q/:code', async (req, res) => {
         fi.addEventListener('change', function(){
           failed = 0; reason = '';
           Array.prototype.forEach.call(fi.files, function(file){
-            if (!/^image\\//.test(file.type) && file.type !== 'application/pdf') { failed++; reason = 'send a photo or a PDF'; say(); return; }
-            if (file.size > MAXB) { failed++; reason = 'each photo must be under ' + Math.round(MAXB / 1048576) + ' MB'; say(); return; }
+            var ext = (String(file.name).split('.').pop() || '').toLowerCase();
+            if (!/^image\\//.test(file.type) && EXTS.indexOf(ext) < 0) { failed++; reason = file.name + ' is not a type we can use'; say(); return; }
+            if (file.size > MAXB) { failed++; reason = 'each file must be under ' + Math.round(MAXB / 1048576) + ' MB'; say(); return; }
             pending++; say();
             var ts = Math.round(Date.now() / 1000);
             cfg.then(function(){ if (!CKEY) throw new Error('signature'); return fetch('/api/cloudinary-signature', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -10040,21 +10058,23 @@ app.get('/q/:code', async (req, res) => {
               var fd = new FormData();
               fd.append('file', file); fd.append('api_key', CKEY); fd.append('timestamp', sig.timestamp);
               fd.append('folder', sig.folder); fd.append('signature', sig.signature);
-              return fetch('https://api.cloudinary.com/v1_1/' + CLOUD + '/image/upload', { method: 'POST', body: fd });
+              /* auto, as the admin form: Cloudinary keeps a stitch file or a
+                 ZIP as raw instead of refusing it as not-an-image. */
+              return fetch('https://api.cloudinary.com/v1_1/' + CLOUD + '/auto/upload', { method: 'POST', body: fd });
             })
             .then(function(r){ return r.json(); })
             .then(function(d){
-              if (!d.secure_url) throw new Error('rejected');
-              /* Shown only once the shop has it on file: a thumbnail that the
-                 server refused would be a photo the customer thinks was sent. */
-              return post({ add: d.secure_url }).then(function(){
-                if (!grid.querySelector('[data-qp-remove="' + d.secure_url.replace(/"/g, '') + '"]')) thumb(d.secure_url);
+              if (!d.secure_url) throw new Error(d.error && d.error.message ? 'Cloudinary: ' + d.error.message : 'rejected');
+              /* Shown only once the shop has it on file: a tile the server
+                 refused would be a file the customer thinks was sent. */
+              return post({ add: d.secure_url, name: file.name }).then(function(r){
+                if (r.file && !has(r.file.url)) tile(r.file);
               });
             })
             .catch(function(e){
               failed++;
               var m = e && e.message || '';
-              reason = m === 'signature' ? 'our photo service is down right now, please text them to us'
+              reason = m === 'signature' ? 'our upload service is down right now, please text them to us'
                 : m === 'rejected' ? 'the upload was rejected' : m;
             })
             .then(function(){ pending--; say(); });
@@ -16752,11 +16772,16 @@ function jobPhotosCard(q) {
   return `
     <div class="card" id="photos" style="margin-top:14px">
       <h2 class="card-title">Customer artwork (${photos.length})</h2>
-      <div class="muted" style="font-size:12.5px;margin-bottom:8px">Sent from their quote page. Tap one for the full-size file.</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">${photos.map((p) => `
-        <a href="${escEmail(p.url)}" target="_blank" rel="noopener" title="${escEmail(p.at ? new Date(p.at).toLocaleString('en-US', { timeZone: 'America/Chicago' }) : '')}">
-          <img src="${escEmail(QPHOTOS.thumbUrl(p.url))}" alt="" loading="lazy"
-               style="width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid #e3e8f2"></a>`).join('')}
+      <div class="muted" style="font-size:12.5px;margin-bottom:8px">Sent from their quote page. Tap a picture to view it;
+        <b>original</b> is the file exactly as they sent it, for production.</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">${photos.map((p) => `
+        <div style="width:96px" title="${escEmail(p.at ? new Date(p.at).toLocaleString('en-US', { timeZone: 'America/Chicago' }) : '')}">
+          <a href="${escEmail(p.view)}" target="_blank" rel="noopener" style="text-decoration:none">${p.kind === 'image'
+            ? `<img src="${escEmail(p.thumb)}" alt="" loading="lazy" style="width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid #e3e8f2;display:block">`
+            : `<div style="width:96px;height:96px;border-radius:8px;border:1px solid #e3e8f2;background:#eef3ff;display:flex;align-items:center;justify-content:center;font-weight:700;color:#1848B8">${escEmail(p.ext.toUpperCase())}</div>`}</a>
+          <div style="font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px">${escEmail(p.name)}</div>
+          <a href="${escEmail(p.url)}" target="_blank" rel="noopener" style="font-size:11.5px">original</a>
+        </div>`).join('')}
       </div>
     </div>`;
 }
@@ -20231,7 +20256,8 @@ app.post('/q/:code/photos', photoRateLimit, async (req, res) => {
   const add = typeof b.add === 'string' ? b.add.trim() : '';
   const remove = typeof b.remove === 'string' ? b.remove.trim() : '';
   const url = add || remove;
-  if (!QPHOTOS.photoUrlOk(url, cloud)) return res.status(400).json({ error: 'That photo did not upload properly. Please try again.' });
+  if (!QPHOTOS.photoUrlOk(url, cloud)) return res.status(400).json({ error: 'That file did not upload properly. Please try again.' });
+  const name = QPHOTOS.cleanName(b.name);
   try {
     const { rows } = await pool.query(
       `SELECT id, code, name, email, phone, cancelled_at FROM quotes WHERE code = $1 AND status NOT IN ('held', 'draft')`, [code]);
@@ -20251,19 +20277,19 @@ app.post('/q/:code/photos', photoRateLimit, async (req, res) => {
        check, and the same photo sent twice is kept once. */
     const { rows: up } = await pool.query(
       `UPDATE quotes SET customer_photos = COALESCE(customer_photos, '[]'::jsonb)
-                                         || jsonb_build_array(jsonb_build_object('url', $2::text, 'at', NOW()))
+                                         || jsonb_build_array(jsonb_build_object('url', $2::text, 'at', NOW(), 'name', $4::text))
         WHERE id = $1
           AND jsonb_array_length(COALESCE(customer_photos, '[]'::jsonb)) < $3
           AND NOT COALESCE(customer_photos, '[]'::jsonb) @> jsonb_build_array(jsonb_build_object('url', $2::text))
-        RETURNING jsonb_array_length(customer_photos) AS n`, [q.id, url, QPHOTOS.MAX_PHOTOS]);
+        RETURNING jsonb_array_length(customer_photos) AS n`, [q.id, url, QPHOTOS.MAX_PHOTOS, name]);
     if (!up.length) {
       const { rows: [cur] } = await pool.query(
         `SELECT COALESCE(customer_photos, '[]'::jsonb) @> jsonb_build_array(jsonb_build_object('url', $2::text)) AS dup
            FROM quotes WHERE id = $1`, [q.id, url]);
-      if (cur && cur.dup) return res.json({ ok: true });
-      return res.status(409).json({ error: `That is the limit of ${QPHOTOS.MAX_PHOTOS} photos on one quote. Text us for more.` });
+      if (cur && cur.dup) return res.json({ ok: true, file: QPHOTOS.describe(url, cloud, name) });
+      return res.status(409).json({ error: `That is the limit of ${QPHOTOS.MAX_PHOTOS} files on one quote. Text us for more.` });
     }
-    console.log(`quote ${code}: customer photo ${up[0].n} received`);
+    console.log(`quote ${code}: customer file ${up[0].n} received`);
 
     /* One email per batch, not one per photo: the first photo tells the shop,
        and the rest of that sitting arrive quietly on the job page. */
@@ -20275,14 +20301,14 @@ app.post('/q/:code/photos', photoRateLimit, async (req, res) => {
       sendEmail({
         to: NOTIFY_EMAIL,
         replyTo: q.email || undefined,
-        subject: `Photos for quote ${q.code}`,
+        subject: `Artwork for quote ${q.code}`,
         html: `<div style="font-family:system-ui,sans-serif;max-width:560px">
-          <h2 style="color:#1848B8;margin:0 0 10px">${escEmail(q.name || q.code)} sent photos</h2>
-          <p>They are uploading photos to quote ${escEmail(q.code)}. See them all on the job page:
+          <h2 style="color:#1848B8;margin:0 0 10px">${escEmail(q.name || q.code)} sent artwork</h2>
+          <p>They are uploading artwork to quote ${escEmail(q.code)}. See it all on the job page:
             <a href="${PUBLIC_BASE_URL}/admin/production/${encodeURIComponent(q.code)}#photos">open the job</a>.</p></div>`,
       }).catch((e) => console.error('photo alert failed:', e.message));
     }
-    res.json({ ok: true, count: up[0].n });
+    res.json({ ok: true, count: up[0].n, file: QPHOTOS.describe(url, cloud, name) });
   } catch (err) {
     console.error('quote photo failed:', err.message);
     reportError('quote-photo', err, `quote ${code}`).catch(() => {});
