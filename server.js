@@ -30,6 +30,7 @@ const STAFF = require('./tools/lib/staff');
 const TEAM = require('./tools/lib/team-metrics');
 const TRAINING = require('./tools/lib/training');
 const GOOGLE_ADS = require('./tools/lib/google-ads').createClient();
+const GOOGLE_ANALYTICS = require('./tools/lib/google-analytics').createClient();
 
 const express    = require('express');
 const cors       = require('cors');
@@ -17386,6 +17387,76 @@ function googleAdsCard(o) {
   </div>`;
 }
 
+/* Website traffic from Google Analytics, last 28 days against the 28 before:
+   where visits come from (the Traffic acquisition report), the two funnels the
+   homepage change is judged by, and the top landing pages. Owner only, beside
+   Google Ads. Not connected, or Google refusing, says why in one line. */
+function googleAnalyticsCard(o) {
+  const head = `<h2 class="card-title">Website traffic &middot; last 28 days
+    <a href="https://analytics.google.com/analytics/web/#/p${o && o.propertyId ? escEmail(o.propertyId) : '296855466'}/reports/intelligenthome"
+       target="_blank" rel="noopener noreferrer">open Google Analytics &rarr;</a></h2>`;
+  if (!o) return `<div class="card">${head}${emptyState('Could not load Google Analytics.')}</div>`;
+  if (!o.ok) {
+    const what = o.notConnected
+      ? `Not connected yet: ${o.missing.map((m) => `<code>${escEmail(m)}</code>`).join(', ')} still to set in Railway.`
+      : escEmail(o.reason);
+    return `<div class="card">${head}${emptyState(what)}</div>`;
+  }
+  const fmt = (n) => Math.round(n).toLocaleString('en-US');
+  const change = (r) => {
+    if (!r.before) return 'no earlier data';
+    const pct = Math.round(((r.now - r.before) / r.before) * 100);
+    const colour = pct > 0 ? '#16a34a' : pct < 0 ? '#dc2626' : '#6b7280';
+    return `<span style="color:${colour}">${pct > 0 ? '&uarr;' : pct < 0 ? '&darr;' : ''}${Math.abs(pct)}%</span> vs the 28 days before`;
+  };
+  const cell = (label, value, sub) => `<div style="flex:1;min-width:120px"><div class="muted" style="font-size:12px">${
+    label}</div><div style="font-size:20px;font-weight:700;color:#0B1F4B">${value}</div>${
+    sub ? `<div class="muted" style="font-size:12px">${sub}</div>` : ''}</div>`;
+  const total = o.channels.reduce((a, c) => a + c.sessions, 0) || 1;
+  const bar = (label, n, of) => `<div style="margin:6px 0">
+      <div style="display:flex;justify-content:space-between;font-size:13px"><span>${escEmail(label)}</span>
+        <span class="muted">${fmt(n)}${of ? ` &middot; ${Math.round((n / of) * 100)}%` : ''}</span></div>
+      <div style="height:6px;background:#eef2f8;border-radius:3px;overflow:hidden">
+        <div style="height:6px;width:${of ? Math.max(2, Math.round((n / of) * 100)) : 0}%;background:#1848B8"></div></div></div>`;
+  /* Each step is shown against the step before it, which is where a funnel
+     leaks; the first step stands on its own. */
+  const funnel = (title, steps) => `<div style="flex:1;min-width:220px">
+      <div style="font-weight:600;margin-bottom:4px">${title}</div>
+      ${steps.map((st, i) => {
+        const prev = i ? steps[i - 1].count : 0;
+        const rate = i && prev ? ` <span class="muted">(${Math.round((st.count / prev) * 100)}%)</span>` : '';
+        return `<div class="row-i" style="padding:6px 0"><span class="row-main">${escEmail(st.label)}</span>
+          <span class="row-end"><b>${fmt(st.count)}</b>${rate}</span></div>`;
+      }).join('')}</div>`;
+  return `<div class="card">${head}
+    <div style="display:flex;flex-wrap:wrap;gap:12px;margin:4px 0 14px">
+      ${cell('Visits', fmt(o.sessions.now), change(o.sessions))}
+      ${cell('People', fmt(o.users.now), change(o.users))}
+      ${cell('Engaged', o.engagedRate != null ? `${Math.round(o.engagedRate * 100)}%` : '&mdash;', 'of visits stayed or clicked')}
+      ${cell('Paid online', fmt(o.purchases), 'card payments tracked')}
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:20px">
+      <div style="flex:1;min-width:220px">
+        <div style="font-weight:600;margin-bottom:4px">Where visits come from</div>
+        ${o.channels.length ? o.channels.map((c) => bar(c.name, c.sessions, total)).join('') : emptyState('No visits yet.')}
+      </div>
+      <div style="flex:1;min-width:220px">
+        <div style="font-weight:600;margin-bottom:4px">Top landing pages</div>
+        ${o.landing.length ? `<div class="rows">${o.landing.map((l) => `<div class="row-i" style="padding:6px 0">
+          <span class="row-main" style="word-break:break-all">${escEmail(l.path)}</span>
+          <span class="row-end">${fmt(l.sessions)}</span></div>`).join('')}</div>` : emptyState('No landing pages yet.')}
+        ${o.hosts.length ? `<div class="muted" style="font-size:12px;margin-top:8px">${o.hosts.map((h) =>
+          `${escEmail(h.host)}: ${fmt(h.sessions)}`).join(' &middot; ')}</div>` : ''}
+      </div>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:20px;margin-top:14px">
+      ${funnel('Design it yourself', o.designFunnel)}
+      ${funnel('Ask for a quote', o.quoteFunnel)}
+    </div>
+    <div class="muted" style="font-size:12px;margin-top:10px">Design steps were first tracked on Oct 2, 2026, so earlier days count none.</div>
+  </div>`;
+}
+
 /* What needs June today, and how the business is doing, on one screen. Every
    figure comes from the same place its own page reads it, and each panel fails
    on its own: a broken query shows a dash, never a blank dashboard. */
@@ -17401,7 +17472,7 @@ app.get('/admin/dashboard', requireAdmin, async (_req, res) => {
      and failing on its own like every panel here. */
   const shipP = safe(shippingQueues().then(shippingWaiting), null, 'shipping');
   const [takings, owed, out, leads, jobs, reviewsWaiting, changes, disputes, unapplied, badTexts, recent, tax,
-         certsWaiting, deliveredOwing, ads] =
+         certsWaiting, deliveredOwing, ads, traffic] =
     await Promise.all([
       /* Quotes and everything else apart: the board's "Collected this month"
          and the Finances months count the quote ledger only, so the total here
@@ -17453,6 +17524,7 @@ app.get('/admin/dashboard', requireAdmin, async (_req, res) => {
              WHERE ${OWING_JOBS_WHERE} AND delivered_at IS NOT NULL
              ORDER BY delivered_at LIMIT 8`, 'delivered owing'),
       isOwner() ? safe(GOOGLE_ADS.overview(), null, 'google ads') : Promise.resolve(undefined),
+      isOwner() ? safe(GOOGLE_ANALYTICS.overview(), null, 'google analytics') : Promise.resolve(undefined),
     ]);
 
   const waiting = leads.filter((l) => l.lead_status === 'new');
@@ -17573,6 +17645,7 @@ app.get('/admin/dashboard', requireAdmin, async (_req, res) => {
           return href ? `<a class="row-i" href="${href}">${inner}</a>` : `<div class="row-i">${inner}</div>`;
         }).join('')}</div>` : emptyState('No payments yet.')}
       </div>
+      ${traffic === undefined ? '' : googleAnalyticsCard(traffic)}
       ${ads === undefined ? '' : googleAdsCard(ads)}
     </div>`, 'dashboard'));
 });
