@@ -196,7 +196,33 @@ function createClient({ env = process.env, fetchImpl = globalThis.fetch, now = (
     return result;
   }
 
-  return { overview };
+  /** Paths that showed the 404 page yesterday, most-viewed first:
+   *  [{ host, path, views }]. Throws on failure, like any sweep step should,
+   *  so a broken connection is reported rather than read as "no broken links". */
+  async function notFoundPages({ title = 'Page Not Found', limit = 50 } = {}) {
+    const cfg = configFromEnv(env);
+    if (cfg.missing) throw new Error('Google Analytics is not connected: ' + cfg.missing.join(', ') + ' not set');
+    const body = await call(
+      `https://analyticsdata.googleapis.com/v1beta/properties/${cfg.propertyId}:runReport`,
+      { method: 'POST',
+        headers: { Authorization: `Bearer ${await accessToken(cfg)}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dateRanges: [{ startDate: 'yesterday', endDate: 'yesterday' }],
+          dimensions: [{ name: 'hostName' }, { name: 'pagePath' }],
+          metrics: [{ name: 'screenPageViews' }],
+          dimensionFilter: { filter: { fieldName: 'pageTitle',
+            stringFilter: { matchType: 'CONTAINS', value: title, caseSensitive: false } } },
+          orderBys: [{ metric: { metricName: 'screenPageViews' }, desc: true }],
+          limit,
+        }) });
+    return rowsOf(body).map((r) => ({
+      host: String(r.dimensionValues[0].value || ''),
+      path: String(r.dimensionValues[1].value || ''),
+      views: num(r.metricValues[0].value),
+    }));
+  }
+
+  return { overview, notFoundPages };
 }
 
 module.exports = {

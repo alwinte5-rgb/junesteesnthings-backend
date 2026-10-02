@@ -22,6 +22,7 @@ const {
 } = require('./tools/lib/sms-consent');
 const SHIP = require('./tools/lib/shipping');
 const { quoteAnalyticsTags, paidQuery } = require('./tools/lib/quote-analytics');
+const { legacyRedirect, LEGACY_PATHS } = require('./tools/lib/legacy-redirects');
 const { T: SMS, plain: smsPlain, PICKUP: SMS_PICKUP } = require('./tools/lib/sms-templates');
 const { verifyTwilioSignature, classifyInbound } = require('./tools/lib/twilio-webhook');
 const TAXCERT = require('./tools/lib/tax-certificates');
@@ -152,6 +153,14 @@ app.use(express.urlencoded({ limit: '1mb', extended: true }));
 app.get(['/grad', '/grad/', '/grad/*'], (_req, res) => res.redirect(302, '/'));
 // Design Ideas is replaced by the online Design Studio — permanent redirect.
 app.get('/design-ideas.html', (_req, res) => res.redirect(301, 'https://design.jtees.net/'));
+/* Old Shopify and WooCommerce store URLs still bring customers in from Google,
+   old posts and texts; each used to end on the 404 page. tools/lib/legacy-redirects.js
+   sends each to what sells the same thing now. Destinations are fixed in that
+   file, never taken from the request. */
+app.get(LEGACY_PATHS, (req, res, next) => {
+  const to = legacyRedirect(req.path);
+  return to ? res.redirect(301, to) : next();
+});
 
 // Serve frontend
 /* Browser caching for static files. Images and fonts rarely change: 30 days.
@@ -17458,6 +17467,41 @@ function googleAnalyticsCard(o) {
   </div>`;
 }
 
+/* Hourly sweep steps that keep the Google side honest. A step that throws is
+   recorded by reportError and lands in the hourly "errors on jtees.net" email,
+   so these throw rather than log: a dead sign-in found by the owner weeks later
+   on the dashboard is exactly what the email exists to prevent. */
+async function googleAnalyticsCheck() {
+  const o = await GOOGLE_ANALYTICS.overview();
+  if (!o.ok) {
+    throw new Error('Google Analytics: ' + (o.notConnected ? `not connected (${o.missing.join(', ')} not set)` : o.reason));
+  }
+  return '';
+}
+
+async function googleAdsCheck() {
+  const o = await GOOGLE_ADS.overview();
+  /* Not connected is a setup state, not a breakage; the card already says so. */
+  if (!o.ok && !o.notConnected) throw new Error('Google Ads: ' + o.reason);
+  return '';
+}
+
+/* Once a day: pages that showed "Page not found" yesterday and are not already
+   redirected. Each is a visitor who arrived from a link and was turned away —
+   the old store URLs were hundreds of these before tools/lib/legacy-redirects.js.
+   API and webhook paths are left out: those are machines, not customers. */
+let brokenLinksCheckedOn = null;
+async function brokenLinksCheck() {
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+  if (brokenLinksCheckedOn === today) return '';
+  const pages = await GOOGLE_ANALYTICS.notFoundPages();
+  brokenLinksCheckedOn = today;
+  const missed = pages.filter((p) => !/^\/(api|webhooks|admin|staff)\//.test(p.path) && !legacyRedirect(p.path));
+  if (!missed.length) return `no new broken links yesterday (${pages.length} already redirected)`;
+  throw new Error(`${missed.length} page${missed.length === 1 ? '' : 's'} showed "Page not found" yesterday — add a redirect in tools/lib/legacy-redirects.js or fix the link: `
+    + missed.slice(0, 15).map((p) => `${p.host}${p.path} (${p.views} view${p.views === 1 ? '' : 's'})`).join(', '));
+}
+
 /* What needs June today, and how the business is doing, on one screen. Every
    figure comes from the same place its own page reads it, and each panel fails
    on its own: a broken query shows a dash, never a blank dashboard. */
@@ -21179,6 +21223,9 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
     await step('brevo breach check', brevoBreachCheck);
     await step('brevo catch-up', brevoCatchUp);
     await step('brevo quote catch-up', brevoQuoteCatchUp);
+    await step('google analytics', googleAnalyticsCheck);
+    await step('google ads', googleAdsCheck);
+    await step('broken links', brokenLinksCheck);
     await step('error digest', sendErrorDigest);
     await step('supplier sync', runSupplierSync);
     setTimeout(runSweep, 60 * 60 * 1000);
