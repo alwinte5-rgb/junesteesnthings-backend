@@ -26,7 +26,7 @@ function photoUrlOk(url, cloud) {
   if (typeof url !== 'string' || url.length > 400 || !cloud) return false;
   const esc = cloud.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp('^https://res\\.cloudinary\\.com/' + esc +
-    '/image/upload/(?:v\\d+/)?' + FOLDER + '/[A-Za-z0-9_-]{1,120}\\.(?:jpe?g|png|webp|heic|heif|gif|avif)$', 'i');
+    '/image/upload/(?:v\\d+/)?' + FOLDER + '/[A-Za-z0-9_-]{1,120}\\.(?:jpe?g|png|webp|heic|heif|gif|avif|pdf)$', 'i');
   return re.test(url);
 }
 
@@ -36,14 +36,20 @@ function photosOf(q, cloud) {
   return raw.filter((p) => p && photoUrlOk(p.url, cloud));
 }
 
-/** A square thumbnail, converted to a format every browser shows (HEIC is not). */
+const isPdf = (url) => /\.pdf$/i.test(url);
+
+/** A square thumbnail, converted to a format every browser shows (HEIC is not).
+ *  A PDF is drawn from its first page: Cloudinary renders it when asked for a
+ *  .jpg of the same file. */
 function thumbUrl(url, px = 160) {
-  return url.replace('/image/upload/', `/image/upload/c_fill,w_${px},h_${px},q_auto,f_auto/`);
+  const t = url.replace('/image/upload/', `/image/upload/c_fill,w_${px},h_${px},q_auto,${isPdf(url) ? 'pg_1' : 'f_auto'}/`);
+  return isPdf(url) ? t.replace(/\.pdf$/i, '.jpg') : t;
 }
 
-/** The full photo in a viewable format, for the link the shop opens. */
+/** The full file in a viewable format, for the link that opens it. A PDF opens
+ *  as itself. */
 function viewUrl(url) {
-  return url.replace('/image/upload/', '/image/upload/f_auto,q_auto/');
+  return isPdf(url) ? url : url.replace('/image/upload/', '/image/upload/f_auto,q_auto/');
 }
 
-module.exports = { FOLDER, MAX_PHOTOS, MAX_FILE_BYTES, cloudName, photoUrlOk, photosOf, thumbUrl, viewUrl };
+module.exports = { isPdf, FOLDER, MAX_PHOTOS, MAX_FILE_BYTES, cloudName, photoUrlOk, photosOf, thumbUrl, viewUrl };
