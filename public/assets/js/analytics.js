@@ -70,10 +70,24 @@
 
   // ── Unified event helper ──────────────────────────────────────────────
   // Usage anywhere:  window.jtTrack('lead_captured', { source: 'quote-form' });
+  // Money events go to Meta as its STANDARD events (fbq 'track'), which is
+  // what ad optimisation reads; the designer's analytics.php maps the same.
+  // Never put an email, phone or name in params — ids and amounts only.
+  var META_STANDARD = { purchase: 'Purchase', add_to_cart: 'AddToCart', begin_checkout: 'InitiateCheckout' };
   window.jtTrack = function (name, params) {
     params = params || {};
     if (gaOn && window.gtag) window.gtag('event', name, params);
-    if (fbOn && window.fbq) window.fbq('trackCustom', name, params);
+    if (fbOn && window.fbq) {
+      var std = META_STANDARD[name];
+      if (std) {
+        var fb = {};
+        if (params.value !== undefined) fb.value = params.value;
+        if (params.currency) fb.currency = params.currency;
+        window.fbq('track', std, fb, params.transaction_id ? { eventID: String(params.transaction_id) } : undefined);
+      } else {
+        window.fbq('trackCustom', name, params);
+      }
+    }
   };
 
   // ── Auto-instrument clicks (zero per-link markup, covers every page) ───
