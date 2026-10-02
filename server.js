@@ -418,6 +418,8 @@ async function initDB() {
        first (tools/lib/quote-photos.js), and when the shop was last told. */
     'customer_photos JSONB',
     'photos_notified_at TIMESTAMPTZ',
+    /* When the quote link was last emailed to the customer (emailQuote). */
+    'emailed_at TIMESTAMPTZ',
   ]) {
     await pool.query(`ALTER TABLE quotes ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
@@ -6375,6 +6377,46 @@ function typedUnitOf(item) {
 
 function quoteLink(code) { return `${PUBLIC_BASE_URL}/q/${code}`; }
 
+/** Email the customer their quote link, from this server.
+ *
+ *  Until 2026-10-02 nothing here emailed a quote: saving one fired a Brevo
+ *  event (jt_quote_sent) and the email depended on an automation built in the
+ *  Brevo UI, which nobody could see from here. A customer said they never got
+ *  theirs. Awaited, and the result is returned, so the page that sent it says
+ *  whether it went rather than assuming. */
+async function emailQuote(q) {
+  const to = String(q.email || '').trim();
+  if (!to || !isValidEmail(to)) return { ok: false, error: 'there is no valid email address on this quote' };
+  const t = quoteTotals(q);
+  const first = String(q.name || '').trim().split(/\s+/)[0] || 'there';
+  const link = quoteLink(q.code);
+  try {
+    await sendEmail({
+      to,
+      subject: `Your quote from ${SHOP_NAME} — ${q.code}`,
+      html: `<div style="font-family:system-ui,sans-serif;max-width:560px;color:#111827">
+        <h2 style="color:#0B1F4B;margin:0 0 12px">Hi ${escEmail(first)}, your quote is ready</h2>
+        <p style="margin:0 0 6px">${escEmail(quoteSummary(q.items) || 'Your order')}</p>
+        <p style="margin:0 0 16px"><b>Total ${money(t.total)}</b>${t.deposit < t.total
+          ? ` &middot; ${money(t.deposit)} deposit to start` : ''}</p>
+        <p style="margin:0 0 18px"><a href="${escEmail(link)}"
+          style="display:inline-block;background:#1848B8;color:#fff;text-decoration:none;padding:12px 22px;border-radius:999px;font-weight:600">View your quote</a></p>
+        <p style="margin:0 0 6px;font-size:14px">On that page you can accept it, change sizes and quantities,
+          upload your artwork, and pay the deposit.</p>
+        <p style="margin:0;font-size:14px;color:#6b7280">Questions? Reply to this email or call/text
+          <a href="tel:+17738491854">${SHOP_PHONE}</a>.</p>
+      </div>`,
+    });
+    await pool.query('UPDATE quotes SET emailed_at = NOW() WHERE id = $1', [q.id]).catch(() => {});
+    console.log(`quote ${q.code}: emailed to the customer`);
+    return { ok: true, to };
+  } catch (e) {
+    console.error(`quote ${q.code}: customer email failed:`, e.message);
+    reportError('quote-email', e, `quote ${q.code}`).catch(() => {});
+    return { ok: false, to, error: 'the email service did not accept it' };
+  }
+}
+
 function fmtDate(d) {
   if (!d) return '';
   // DATE columns carry no time; timezone-converting them shifts the day back.
@@ -9619,6 +9661,10 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     }).catch(() => {});
     syncQuoteToLumise(q).catch(() => {});
 
+    /* Emailed when it first reaches the customer; an edit offers a button
+       instead, so fixing a typo does not send them a second email. */
+    const emailed = (!existingQuote || wasDraft) && q.email ? await emailQuote(q) : null;
+
     const msgs = quoteMessages(q);
     const digits = phone.replace(/[^0-9+]/g, '');
     const smsHref = digits
@@ -9629,6 +9675,13 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
       <h1>Quote ${escEmail(code)}${q.revision > 1 ? ` <span class="muted" style="font-size:14px">rev ${q.revision}</span>` : ''}</h1>
       <div class="sub">${escEmail(name || phone || email || 'No contact on file')} &middot; ${money(total)}
         &middot; deposit ${money(deposit)} &middot; good through ${fmtDate(validUntil)}</div>
+      ${emailed ? (emailed.ok
+        ? `<div class="card"><div class="ok">Emailed to ${escEmail(emailed.to)}.</div></div>`
+        : `<div class="card"><div class="warn">The email did not go: ${escEmail(emailed.error)}.
+             Text them the message below instead.</div></div>`) : ''}
+      ${!emailed && q.email ? `<div class="card"><form method="POST" action="/admin/quote/${code}/email" style="margin:0">
+          <button type="submit" class="btn btn-ghost" style="width:100%">Email ${existingQuote ? 'the updated quote' : 'it'} to ${escEmail(q.email)}</button>
+        </form></div>` : ''}
       <div class="card">
         <div class="msg" id="m">${escEmail(msgs.initial)}</div>
         <div class="row">
@@ -9903,13 +9956,13 @@ app.get('/q/:code', async (req, res) => {
           </div>`;
     const photosCard = (q.cancelled_at || !qpCloud) ? '' : `
       <div class="card" id="photos">
-        <h1 style="font-size:18px">Your photos</h1>
-        <p class="muted" style="margin-top:6px">Send the pictures for this order here: faces for big head
-          cutouts, your logo, your artwork. Send the largest, clearest version you have; for faces, a
-          well-lit photo looking at the camera prints best.</p>
+        <h1 style="font-size:18px">Upload artwork</h1>
+        <p class="muted" style="margin-top:6px">Send the artwork for this order here: your logo or design
+          (a photo or a PDF), or the faces for big head cutouts. Send the largest, clearest version you have;
+          for faces, a well-lit photo looking at the camera prints best.</p>
         <div data-qp-grid style="display:flex;gap:10px;flex-wrap:wrap;margin:12px 0">${qpPhotos.map((p) => qpThumb(p.url)).join('')}</div>
-        <button type="button" class="btn-ghost" data-qp-pick style="width:100%">Add photos</button>
-        <input type="file" accept="image/*" multiple data-qp-file hidden>
+        <button type="button" class="btn-ghost" data-qp-pick style="width:100%">Upload artwork</button>
+        <input type="file" accept="image/*,application/pdf" multiple data-qp-file hidden>
         <p data-qp-msg class="muted" style="margin-top:8px;font-size:13px" aria-live="polite">${
           qpPhotos.length ? `${qpPhotos.length} photo${qpPhotos.length > 1 ? 's' : ''} sent to ${SHOP_SIGNER}.` : ''}</p>
       </div>
@@ -9951,9 +10004,11 @@ app.get('/q/:code', async (req, res) => {
           w.setAttribute('data-qp-item', '');
           w.style.cssText = 'position:relative;width:84px;height:84px';
           var a = document.createElement('a');
-          a.href = u.replace('/image/upload/', '/image/upload/f_auto,q_auto/'); a.target = '_blank'; a.rel = 'noopener';
+          var pdf = /\\.pdf$/i.test(u);
+          a.href = pdf ? u : u.replace('/image/upload/', '/image/upload/f_auto,q_auto/'); a.target = '_blank'; a.rel = 'noopener';
           var im = document.createElement('img');
-          im.src = u.replace('/image/upload/', '/image/upload/c_fill,w_160,h_160,q_auto,f_auto/'); im.alt = '';
+          im.src = pdf ? u.replace('/image/upload/', '/image/upload/c_fill,w_160,h_160,q_auto,pg_1/').replace(/\\.pdf$/i, '.jpg')
+                       : u.replace('/image/upload/', '/image/upload/c_fill,w_160,h_160,q_auto,f_auto/'); im.alt = '';
           im.style.cssText = 'width:84px;height:84px;object-fit:cover;border-radius:8px;border:1px solid #e3e8f2;background:#fff';
           a.appendChild(im); w.appendChild(a);
           var x = document.createElement('button');
@@ -9973,7 +10028,7 @@ app.get('/q/:code', async (req, res) => {
         fi.addEventListener('change', function(){
           failed = 0; reason = '';
           Array.prototype.forEach.call(fi.files, function(file){
-            if (!/^image\\//.test(file.type)) { failed++; reason = 'only photos can be sent here'; say(); return; }
+            if (!/^image\\//.test(file.type) && file.type !== 'application/pdf') { failed++; reason = 'send a photo or a PDF'; say(); return; }
             if (file.size > MAXB) { failed++; reason = 'each photo must be under ' + Math.round(MAXB / 1048576) + ' MB'; say(); return; }
             pending++; say();
             var ts = Math.round(Date.now() / 1000);
@@ -10281,6 +10336,9 @@ app.get('/q/:code', async (req, res) => {
         </div>
       </div>
 
+      ${/* Right under the items, above the contact and payment boxes (the
+           owner, 2026-10-02): artwork is the next thing a job needs. */ photosCard}
+
       ${disputed ? `
       <div class="card">
         <h1 style="font-size:18px">${reversedByIssuer > 0 ? `Payment reversed — ${money(reversedByIssuer)}` : 'Payment disputed'}</h1>
@@ -10413,8 +10471,6 @@ app.get('/q/:code', async (req, res) => {
             <span style="font-size:12.5px">(includes the ${Math.round(CARD_FEE*100)}% card fee)</span></div>
         </div>
       </div>`}
-
-      ${photosCard}
 
       ${(paid || q.cancelled_at) ? '' : `
       <div class="card">
@@ -14270,6 +14326,28 @@ app.post('/admin/lead/:id/dismiss', requireAdmin, async (req, res) => {
   res.redirect(back);
 });
 
+/* Email the quote (again) from the "Quote ready" page or the job page. A held
+   or draft quote is refused: the customer's link does not work yet. */
+app.post('/admin/quote/:code/email', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/quotes');
+  try {
+    const { rows: [q] } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
+    if (!q) return res.redirect('/admin/quotes');
+    const back = `/admin/production/${code}`;
+    if (q.status === 'held' || q.status === 'draft' || q.cancelled_at) {
+      return res.redirect(`${back}?err=${encodeURIComponent('That quote is not with the customer, so it was not emailed.')}`);
+    }
+    const r = await emailQuote(q);
+    if (r.ok) logActivity(currentActor() || OWNER_ACTOR, 'quote emailed', { type: 'quote', id: code }, {});
+    return res.redirect(`${back}?${r.ok ? 'ok=' + encodeURIComponent('Quote emailed to ' + r.to + '.')
+      : 'err=' + encodeURIComponent('The email did not go: ' + r.error + '. Text them the link instead.')}`);
+  } catch (err) {
+    console.error('quote email route failed:', err.message);
+    res.redirect(`/admin/production/${code}?err=${encodeURIComponent('The email did not go. Please try again.')}`);
+  }
+});
+
 app.post('/admin/quote/:code/cancel', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/quotes');
@@ -16540,7 +16618,12 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
       <h1>${escEmail(q.name || q.code)}</h1>
       <div class="sub">${escEmail(q.code)} · ${money(q.total)} ·
         <a href="/admin/production" style="color:#1848B8">back to the board</a> ·
-        <a href="/admin/customer?q=${encodeURIComponent(q.email || q.phone || '')}" style="color:#1848B8">customer</a></div>
+        <a href="/admin/customer?q=${encodeURIComponent(q.email || q.phone || '')}" style="color:#1848B8">customer</a>${
+          q.email && !['held', 'draft'].includes(q.status) && !q.cancelled_at ? ` ·
+        <form method="POST" action="/admin/quote/${escEmail(q.code)}/email" style="display:inline;margin:0">
+          <button type="submit" style="background:none;border:0;padding:0;color:#1848B8;font:inherit;cursor:pointer;text-decoration:underline">email the quote to them</button></form>${
+            q.emailed_at ? ` <span class="muted">(last emailed ${escEmail(new Date(q.emailed_at).toLocaleString('en-US', { timeZone: 'America/Chicago', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))})</span>` : ''}` : ''}</div>
+      ${flash(req.query)}
 
       <div class="card" style="margin-top:12px">
         ${(() => {
@@ -16668,7 +16751,7 @@ function jobPhotosCard(q) {
   if (!photos.length) return '';
   return `
     <div class="card" id="photos" style="margin-top:14px">
-      <h2 class="card-title">Customer photos (${photos.length})</h2>
+      <h2 class="card-title">Customer artwork (${photos.length})</h2>
       <div class="muted" style="font-size:12.5px;margin-bottom:8px">Sent from their quote page. Tap one for the full-size file.</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">${photos.map((p) => `
         <a href="${escEmail(p.url)}" target="_blank" rel="noopener" title="${escEmail(p.at ? new Date(p.at).toLocaleString('en-US', { timeZone: 'America/Chicago' }) : '')}">
@@ -17055,8 +17138,12 @@ function leadCardHtml(l, { back = '/admin/quotes' } = {}) {
           <img src="${escEmail(l.photo_url)}" alt="" loading="lazy"
                style="width:88px;height:88px;object-fit:cover;border-radius:8px;border:1px solid #e3e8f2"></a></div>` : ''}
         ${status === 'quoted' ? `
-        <div style="margin-top:12px"><a class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
-           href="/admin/quote/${escEmail(l.quote_code)}/edit">Open quote ${escEmail(l.quote_code)} &rarr;</a></div>`
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"><a class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
+           href="/admin/quote/${escEmail(l.quote_code)}/edit">Open quote ${escEmail(l.quote_code)} &rarr;</a>
+          ${/* A second quote from the same enquiry (a different option, or a
+                redo), with the contact details carried over again. Without it
+                the only way was retyping the customer into a blank quote. */ ''}
+          <a class="btn btn-ghost" style="padding:8px 16px;font-size:13px" href="/admin/quote/new?lead=${l.id}">New quote from this lead</a></div>`
         : status === 'dismissed' ? `
         <div class="muted" style="margin-top:10px;font-size:12.5px">Let go${
           l.dismiss_reason ? ': ' + escEmail(l.dismiss_reason) : ''} &middot;
@@ -21428,6 +21515,7 @@ async function releaseHeldQuote(code, requestedBy) {
     syncQuoteContact(q, 'jt_quote_sent').catch(() => {});
   }).catch(() => {});
   syncQuoteToLumise(q).catch(() => {});
+  if (q.email) emailQuote(q).catch(() => {});
   return q;
 }
 

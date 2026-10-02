@@ -16,6 +16,7 @@ test('a photo this shop uploaded into the quote folder is accepted', () => {
   assert.ok(P.photoUrlOk(ok, CLOUD));
   assert.ok(P.photoUrlOk(ok.replace('v1759430000/', ''), CLOUD), 'no version segment');
   assert.ok(P.photoUrlOk(ok.replace('.jpg', '.HEIC'), CLOUD), 'iPhone HEIC');
+  assert.ok(P.photoUrlOk(ok.replace('.jpg', '.pdf'), CLOUD), 'artwork as a PDF');
 });
 
 test('anything else is refused', () => {
@@ -24,7 +25,6 @@ test('anything else is refused', () => {
     ok.replace('quote_photos', 'review_photos'),             // another folder
     ok.replace('/image/', '/raw/'),                          // not an image
     ok.replace('.jpg', '.svg'),                              // script-capable
-    ok.replace('.jpg', '.pdf'),
     ok.replace('https://', 'http://'),
     ok + '?x=1',
     ok.replace('abc_DEF-123', '../grad_orders/x'),
@@ -54,6 +54,20 @@ test('photosOf drops malformed rows and keeps order', () => {
 test('thumbnails and views convert the format, so HEIC shows in every browser', () => {
   assert.match(P.thumbUrl(ok), /\/image\/upload\/c_fill,w_160,h_160,q_auto,f_auto\/v1759430000\/quote_photos\//);
   assert.match(P.viewUrl(ok), /\/image\/upload\/f_auto,q_auto\/v1759430000\//);
+});
+
+test('a PDF thumbnails from its first page as a JPG, and opens as itself', () => {
+  const pdf = ok.replace('.jpg', '.pdf');
+  assert.strictEqual(P.thumbUrl(pdf),
+    'https://res.cloudinary.com/jtees/image/upload/c_fill,w_160,h_160,q_auto,pg_1/v1759430000/quote_photos/abc_DEF-123.jpg');
+  assert.strictEqual(P.viewUrl(pdf), pdf);
+});
+
+test('saving a quote emails the customer, and says whether it went', () => {
+  assert.match(src, /const emailed = \(!existingQuote \|\| wasDraft\) && q\.email \? await emailQuote\(q\) : null;/);
+  assert.match(src, /The email did not go: \$\{escEmail\(emailed\.error\)\}/);
+  const rel = src.slice(src.indexOf('async function releaseHeldQuote'));
+  assert.match(rel.slice(0, rel.indexOf('\n}\n')), /emailQuote\(q\)/, 'an approved quote is emailed too');
 });
 
 /* Wiring, read from the source: the folder is signable, and the add is one

@@ -132,6 +132,7 @@ const ROUTES = {
   'POST /admin/shipping/buy': 'shipping.labels',
 
   'POST /admin/quote/:code/message': 'customers.message',
+  'POST /admin/quote/:code/email': 'customers.message',
   'POST /admin/quote/:code/receipt': 'customers.message',
   'GET /admin/customers': 'customers.view',
   'GET /admin/customer': 'customers.view',
