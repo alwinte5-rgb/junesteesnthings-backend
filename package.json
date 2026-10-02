@@ -10,6 +10,7 @@
     "dev": "nodemon server.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
     "@sentry/node": "^10.74.0",
     "axios": "^1.7.2",
     "cloudinary": "^2.9.0",

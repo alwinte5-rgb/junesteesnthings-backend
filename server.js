@@ -26,6 +26,7 @@ const { T: SMS, plain: smsPlain, PICKUP: SMS_PICKUP } = require('./tools/lib/sms
 const { verifyTwilioSignature, classifyInbound } = require('./tools/lib/twilio-webhook');
 const TAXCERT = require('./tools/lib/tax-certificates');
 const QPHOTOS = require('./tools/lib/quote-photos');
+const REVREPLY = require('./tools/lib/review-replies');
 const STAFF = require('./tools/lib/staff');
 const TEAM = require('./tools/lib/team-metrics');
 const TRAINING = require('./tools/lib/training');
@@ -18452,6 +18453,7 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
       ${pageHeader('Reviews', 'What customers said, and who has been asked')}
       ${req.query.failed ? '<div class="warn">That change did not save, so the review is as it was. Try again.</div>' : ''}
       ${tiles}
+      ${googleReplyForm()}
       ${waitingSec}
       ${liveSec}
       ${hiddenSec}
@@ -18526,6 +18528,79 @@ app.post('/admin/reviews/backfill', requireAdmin, async (req, res) => {
   }
   console.log(`review backfill: queued ${queued} of ${codes.length} selected`);
   res.redirect(`/admin/reviews?queued=${queued}&of=${codes.length}#ask`);
+});
+
+/* ── Replies to Google reviews ─────────────────────────────────────────────
+   Paste a review, get a reply drafted in June's voice (tools/lib/review-
+   replies.js), edit it, copy it to Google. Nothing is posted from here: the
+   owner approves every reply (2026-10-02). Nothing is stored either; the
+   draft lives on the page that shows it. */
+function googleReplyForm(v = {}) {
+  const star = (n) => `<option value="${n}"${Number(v.stars) === n ? ' selected' : ''}>${'★'.repeat(n)} ${n}</option>`;
+  return `
+      <div class="card" id="google-reply">
+        <b>Reply to a Google review</b>
+        <p class="muted" style="margin:4px 0 10px;font-size:13px">Paste the review from Google. You get a reply to
+          read, edit and paste back under it. Nothing is posted for you.</p>
+        <form method="POST" action="/admin/reviews/google-reply">
+          <label>Their name, as Google shows it</label>
+          <input name="name" maxlength="${REVREPLY.LIMITS.name}" value="${escEmail(v.name || '')}" placeholder="e.g. Nyla Pruitt">
+          <label>Stars</label>
+          <select name="stars" required>${[5, 4, 3, 2, 1].map(star).join('')}</select>
+          <label>The review</label>
+          <textarea name="text" rows="5" required maxlength="${REVREPLY.LIMITS.text}">${escEmail(v.text || '')}</textarea>
+          <label>What you made for them <span class="muted" style="text-transform:none">(optional, helps the reply be specific)</span></label>
+          <input name="job" maxlength="${REVREPLY.LIMITS.job}" value="${escEmail(v.job || '')}" placeholder="e.g. 40 reunion shirts">
+          <button type="submit" class="btn" style="width:100%;margin-top:12px">Draft a reply</button>
+        </form>
+      </div>`;
+}
+
+app.post('/admin/reviews/google-reply', requireAdmin, async (req, res) => {
+  const v = REVREPLY.validateReview(req.body);
+  const page = (inner) => res.send(adminPage('Reply to a review', `
+    ${pageHeader('Reply to a Google review', 'Read it, change anything, then paste it under their review on Google',
+      '<a class="btn btn-ghost" href="/admin/reviews">Reviews</a>')}
+    ${inner}`, 'reviews'));
+  if (v.error) return page(`<div class="warn">${escEmail(v.error)}</div>${googleReplyForm(req.body || {})}`);
+  const r = v.review;
+  let draft = '', error = '';
+  try {
+    draft = await REVREPLY.draftReply(r);
+  } catch (err) {
+    error = REVREPLY.failureMessage(err);
+    console.error('review reply draft failed:', err && (err.status || err.code || ''), err && err.message);
+  }
+  /* The same review again, for another version, without retyping it. */
+  const again = `<form method="POST" action="/admin/reviews/google-reply" style="margin:0">
+      ${['name', 'stars', 'text', 'job'].map((k) => `<input type="hidden" name="${k}" value="${escEmail(String(r[k] || ''))}">`).join('')}
+      <button type="submit" class="btn btn-ghost" style="width:100%">${draft ? 'Draft a different version' : 'Try again'}</button></form>`;
+  page(`
+    <div class="card">
+      <div class="muted" style="font-size:12.5px">${escEmail(r.name || 'No name')} &middot; ${'★'.repeat(r.stars)}${'☆'.repeat(5 - r.stars)}</div>
+      <div style="margin-top:6px;white-space:pre-wrap">${escEmail(r.text)}</div>
+    </div>
+    ${error ? `<div class="card"><div class="warn">${escEmail(error)}</div>${again}</div>` : `
+    <div class="card">
+      <b>Your reply</b>
+      <textarea id="gr-draft" rows="7" style="margin-top:8px">${escEmail(draft)}</textarea>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+        <button type="button" class="btn" data-copy-from="gr-draft">Copy reply</button>
+        <a class="btn btn-ghost" href="https://business.google.com/reviews" target="_blank" rel="noopener">Open Google reviews</a>
+      </div>
+      <div style="margin-top:10px">${again}</div>
+    </div>`}
+    <script>
+      document.querySelectorAll('[data-copy-from]').forEach(function(b){
+        b.addEventListener('click', function(){
+          var box = document.getElementById(b.getAttribute('data-copy-from')), label = b.textContent;
+          function done(){ b.textContent = 'Copied'; setTimeout(function(){ b.textContent = label; }, 1500); }
+          function old(){ try { box.select(); if (document.execCommand('copy')) done(); } catch (e) {} }
+          if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(box.value).then(done, old);
+          else old();
+        });
+      });
+    </script>`);
 });
 
 app.post('/admin/reviews/:id', requireAdmin, async (req, res) => {
