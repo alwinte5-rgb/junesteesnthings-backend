@@ -193,12 +193,15 @@ const METHODS = [
      alone comes to here.
      The sheet route has none of that: the cutouts arrive contour cut, so the
      pack beats the same specialist at volume. Sell the thing the shop is
-     actually good at. */
+     actually good at.
+     BACK ON SALE 2026-10-02, the owner's call: customers asking for one or two
+     heads found only packs on the quote form. Same computed ladders; the pack
+     still wins at volume and the page says so. */
   { title: 'Big Head Cutout — 12in, singles', bands: SINGLES[12], min: minimumFor(12),
-    offered: false, unit: 'piece',
+    offered: true, unit: 'piece',
     description: 'A 12 inch tall big head cutout on 3/16 inch board, printed and contour cut. Priced per cutout — a full sheet of 32 works out far cheaper.' },
   { title: 'Big Head Cutout — 18in, singles', bands: SINGLES[18], min: minimumFor(18),
-    offered: false, unit: 'piece',
+    offered: true, unit: 'piece',
     description: 'An 18 inch tall big head cutout on 3/16 inch board, printed and contour cut. Priced per cutout — a full sheet of 10 works out cheaper.' },
 
   /* Replaced by the packs above on 2026-09-22. A 24" or 36" sold by the piece
