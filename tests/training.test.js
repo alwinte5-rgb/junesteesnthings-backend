@@ -40,7 +40,8 @@ test('a step waiting for a later feature stays hidden until it ships', () => {
   const now = TRAINING.visibleSteps(new Set());
   assert.ok(!now.some((s) => s.needs), 'nothing asks for work the workspace cannot do yet');
   const later = TRAINING.visibleSteps(new Set(['eod', 'proofs']));
-  assert.ok(later.some((s) => s.key === 'do:eod') && later.some((s) => s.key === 'do:proof'));
+  assert.ok(later.some((s) => s.key === 'do:eod'));
+  assert.ok(TRAINING.visibleSteps(new Set(['proofs']), 'design').some((s) => s.key === 'do:proof'), 'the proof step is the designer\'s');
   assert.ok(!TRAINING.mayTick('do:eod', true, new Set()), 'a hidden step cannot be ticked');
 });
 
@@ -179,4 +180,64 @@ test('commission starts at the "ready" sign-off, and a recorded payout never dis
   assert.match(fn, /OR EXISTS \(SELECT 1 FROM commission_payouts c WHERE c\.staff_id = \$1 AND c\.quote_code = q\.code\)/);
   assert.match(fn, /\[staffId, TRAINING\.READY_KEY\]/);
   assert.match(TRAINING.STEPS.find((s) => s.key === TRAINING.READY_KEY).hint, /Commission starts here/);
+});
+
+
+test('two training paths: each ends with "ready", shares the basics, and keeps its own work', () => {
+  const sales = TRAINING.visibleSteps(undefined, 'sales').map((s) => s.key);
+  const design = TRAINING.visibleSteps(undefined, 'design').map((s) => s.key);
+  for (const path of [sales, design]) assert.strictEqual(path[path.length - 1], TRAINING.READY_KEY);
+  for (const k of ['read:never', 'read:proof', 'read:ai', 'do:message', 'signoff:handoff']) assert.ok(sales.includes(k) && design.includes(k), k);
+  for (const k of ['do:lead', 'do:quote', 'quiz:basics', 'read:prospect']) assert.ok(!design.includes(k), `designer is not asked to ${k}`);
+  for (const k of ['do:proof', 'read:cos', 'read:blog', 'quiz:design', 'signoff:art']) assert.ok(design.includes(k) && !sales.includes(k), k);
+  assert.match(TRAINING.visibleSteps(undefined, 'design').find((s) => s.key === TRAINING.READY_KEY).title, /proofs/);
+  assert.strictEqual(TRAINING.trackOf('nope'), 'sales');
+  assert.strictEqual(TRAINING.trackOf('__proto__'), 'sales');
+  assert.strictEqual(TRAINING.mayTick('read:blog', false, undefined, 'sales'), false, 'a step off your path cannot be ticked');
+  assert.strictEqual(TRAINING.mayTick('read:blog', false, undefined, 'design'), true);
+  // The routes pass the helper's own path, never one from the form.
+  assert.match(route("app.post('/admin/training/read', requireAdmin"), /stepByKey\(key, undefined, actor\.track\)/);
+  assert.match(route("app.post('/admin/training/signoff', requireAdmin"), /await trackFor\(staffId\)/);
+});
+
+test('every artwork quiz question points at a real article, and its answers are valid', () => {
+  const seeded = new Set([...src.matchAll(/^\s+\{ kind: '[a-z]+'.*?title: '((?:[^'\\]|\\.)+)'/gm)].map((m) => m[1].replace(/\\'/g, "'")));
+  const z = TRAINING.QUIZZES.design;
+  assert.ok(z.questions.length >= 8 && z.pass <= z.questions.length);
+  for (const x of z.questions) {
+    assert.ok(seeded.has(x.article), `${x.id}: no article "${x.article}"`);
+    assert.ok(x.answer >= 0 && x.answer < x.choices.length, x.id);
+  }
+});
+
+test('proofs: our cloud, the proofs folder, a picture or PDF only; uploads signed behind sign-in', () => {
+  const P = require('../tools/lib/job-proofs');
+  const ok = 'https://res.cloudinary.com/jtees/image/upload/v1759430000/job_proofs/abc_DEF-123.png';
+  assert.ok(P.proofUrlOk(ok, 'jtees'));
+  assert.ok(P.proofUrlOk(ok.replace('.png', '.pdf'), 'jtees'));
+  for (const bad of [ok.replace('/jtees/', '/other/'), ok.replace('job_proofs', 'quote_photos'), ok.replace('.png', '.svg'),
+    ok.replace('.png', '.html'), ok.replace('/image/', '/raw/'), ok.replace('https://', 'http://'), ok + '?x=1',
+    'https://res.cloudinary.com/jtees/image/upload/c_fill,w_9/job_proofs/a.png', 'javascript:alert(1)', ok.repeat(5)]) {
+    assert.ok(!P.proofUrlOk(bad, 'jtees'), bad.slice(0, 80));
+  }
+  assert.ok(!P.proofUrlOk(ok, ''), 'no cloud configured accepts nothing');
+  assert.match(P.thumbOf(ok.replace('.png', '.pdf'), 'jtees'), /pg_1\/.*\.jpg$/);
+  assert.match(P.proofMessage({ first: 'Ada', code: 'AB12CD', url: ok }), /^Hi Ada, your proof for order AB12CD is ready: https:/);
+
+  assert.strictEqual(STAFF.ROUTES['POST /admin/api/proof-signature'], 'proofs.upload');
+  assert.strictEqual(STAFF.ROUTES['POST /admin/quote/:code/proofs'], 'proofs.upload');
+  const sig = route("app.post('/admin/api/proof-signature', requireAdmin");
+  assert.match(sig, /api_sign_request\(\{ folder: PROOFS\.FOLDER, timestamp \}, apiSecret\)/, 'signs only the server\'s folder and time');
+  assert.doesNotMatch(sig, /req\.body/, 'nothing the caller sends is signed');
+  const add = route("app.post('/admin/quote/:code/proofs', requireAdmin");
+  assert.match(add, /PROOFS\.proofUrlOk\(url, QPHOTOS\.cloudName\(\)\)/);
+  assert.match(add, /< \$5/, 'a job holds a bounded number of proofs');
+  const card = src.slice(src.indexOf('async function jobProofsCard('), src.indexOf('\n}\n', src.indexOf('async function jobProofsCard(')));
+  assert.match(card, /escEmail\(r\.name \|\| 'Proof'\)/);
+  assert.match(card, /escEmail\(r\.url\)/);
+  // A trainee's proof message is held like any other message: same route, same gate.
+  assert.match(card, /\?proof=\$\{r\.id\}#messages/);
+  assert.match(src, /await markProofsSent\(a\.subject_id, p\.text\);/, 'held proofs are marked sent only when the owner sends them');
+  assert.ok(STAFF.PRESETS.design.perms['customers.message'] === 'approval' && STAFF.PRESETS.design.perms['proofs.upload'] === 'on');
+  assert.ok(!STAFF.PRESETS.design.perms['quotes.send'], 'a designer in training does not send quotes');
 });

@@ -43,6 +43,7 @@ const PERMISSIONS = {
   'customers.message':     { group: 'Customers',  label: 'Email and text customers', levels: ['off', 'approval', 'on'] },
   'production.stage':      { group: 'Production', label: 'Move jobs through production, shipping', levels: ['off', 'on'] },
   'orders.view':           { group: 'Production', label: 'See studio orders', levels: ['off', 'on'] },
+  'proofs.upload':         { group: 'Production', label: 'Upload proofs to jobs', levels: ['off', 'on'] },
   /* Its own toggle because it spends money: each label is charged to the
      owner's Shippo account. In no preset, like Finances: opened on purpose. */
   'shipping.labels':       { group: 'Production', label: 'Buy shipping labels (charged to your Shippo account)', levels: ['off', 'on'] },
@@ -70,6 +71,24 @@ const PRESETS = {
       'orders.view': 'on', 'kb.edit': 'approval',
     },
   },
+  /* A designer in training: sees the jobs and the customers, uploads proofs,
+     and writes the proof messages, which come to the owner before they send. */
+  design: {
+    label: 'Design training',
+    note: 'Sees the jobs, uploads proofs and writes proof messages; you approve each message before it is sent.',
+    perms: {
+      'quotes.view': 'on', 'customers.view': 'on', 'customers.message': 'approval',
+      'orders.view': 'on', 'proofs.upload': 'on', 'kb.edit': 'approval',
+    },
+  },
+  designer: {
+    label: 'Designer',
+    note: 'Design training signed off: sends proofs and messages to customers, and moves jobs along.',
+    perms: {
+      'quotes.view': 'on', 'customers.view': 'on', 'customers.message': 'on', 'production.stage': 'on',
+      'orders.view': 'on', 'proofs.upload': 'on', 'kb.edit': 'approval',
+    },
+  },
   supervised: {
     label: 'Supervised',
     note: 'Sends quotes up to $500 and messages customers; discounts still come to you.',
@@ -77,7 +96,7 @@ const PRESETS = {
       'leads.view': 'on', 'leads.dismiss': 'on', 'quotes.view': 'on', 'quotes.draft': 'on',
       'quotes.send': { level: 'on', maxTotal: 500 }, 'quotes.discount': 'approval',
       'customers.view': 'on', 'customers.message': 'on', 'production.stage': 'on',
-      'orders.view': 'on', 'certificates.prescreen': 'on', 'reviews.manage': 'on',
+      'orders.view': 'on', 'proofs.upload': 'on', 'certificates.prescreen': 'on', 'reviews.manage': 'on',
       'kb.edit': 'approval',
     },
   },
@@ -88,7 +107,7 @@ const PRESETS = {
       'leads.view': 'on', 'leads.dismiss': 'on', 'quotes.view': 'on', 'quotes.draft': 'on',
       'quotes.send': 'on', 'quotes.discount': { level: 'on', maxPct: 10 }, 'quotes.manage': 'on',
       'customers.view': 'on', 'customers.message': 'on', 'production.stage': 'on',
-      'orders.view': 'on', 'certificates.prescreen': 'on', 'reviews.manage': 'on',
+      'orders.view': 'on', 'proofs.upload': 'on', 'certificates.prescreen': 'on', 'reviews.manage': 'on',
       'kb.edit': 'on',
     },
   },
@@ -224,6 +243,8 @@ const ROUTES = {
   'POST /admin/training/read': 'any',
   'POST /admin/training/tip': 'any',
   'GET /admin/training/quiz/:key': 'any',
+  'POST /admin/api/proof-signature': 'proofs.upload',
+  'POST /admin/quote/:code/proofs': 'proofs.upload',
   'POST /admin/training/quiz/:key': 'any',
   'POST /admin/training/signoff': 'owner',
   'POST /admin/training/tips-reset': 'owner',
