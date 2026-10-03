@@ -14201,6 +14201,7 @@ async function rollRecurringExpenses() {
    the hourly sweep, which is how a newly accepted job gets its costs. */
 const JOB_COST_SUM = 'COALESCE(cost_blanks,0) + COALESCE(cost_supplies,0) + COALESCE(cost_outsourced,0) + COALESCE(cost_shipping,0)';
 const JOB_COST_EST_NOTE = 'Estimated from supplier price lists. Type the invoice figures over it.';
+let _jobCostLastSig = null;
 async function estimateMissingJobCosts() {
   const result = { filled: 0, unfinished: [], catalogue: true };
   const { rows } = await pool.query(
@@ -14237,7 +14238,11 @@ async function estimateMissingJobCosts() {
       [q.code, JSON.stringify(updated), blanks, est.outsourced, est.shipping, JOB_COST_EST_NOTE]);
     result.filled += rowCount;
   }
-  if (result.filled || result.unfinished.length) {
+  /* Said when something was filled or the to-do list changed, not every 5 minutes. */
+  const sig = result.unfinished.map((u) => u.code).join(',');
+  const changed = result.filled > 0 || sig !== _jobCostLastSig;
+  _jobCostLastSig = sig;
+  if (changed && (result.filled || result.unfinished.length)) {
     console.log(`job costs estimated: ${result.filled}; still to cost by hand: ${result.unfinished.length}` +
       (result.unfinished.length ? ` (${result.unfinished.map((u) => `${u.code}: ${u.missing.join('; ')}`).join(' | ').slice(0, 900)})` : ''));
   }
@@ -21588,6 +21593,14 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
     setTimeout(runSweep, 60 * 60 * 1000);
   };
   setTimeout(runSweep, 60 * 60 * 1000);
+  /* Job costs fill themselves (estimateMissingJobCosts): 30 seconds after a
+     deploy, then every 5 minutes, so an accepted job has its costs within
+     minutes — the hourly sweep first runs an hour after boot, which on a day
+     of deploys is never. One small query when there is nothing to do. */
+  const jobCostTick = () => estimateMissingJobCosts()
+    .catch((e) => console.error('job cost estimate failed:', e.message));
+  setTimeout(jobCostTick, 30 * 1000);
+  setInterval(jobCostTick, 5 * 60 * 1000);
 }
 
 // Submit grad order
