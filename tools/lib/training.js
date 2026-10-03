@@ -59,6 +59,8 @@ const STEPS = [
     title: 'Build your first quote', hint: 'Use the Quote button on a lead so it links back. The owner checks it before it goes out.' },
   { key: 'do:message', type: 'do', tracks: BOTH, fact: 'messages',
     title: 'Write your first customer message', hint: 'From a job page. While you are in training it waits for the owner.' },
+  { key: 'read:artflow', type: 'read', tracks: BOTH, article: 'Artwork pipeline: sales to designer to owner',
+    title: 'Read: how artwork moves from sales to the designer to the owner' },
   { key: 'read:proof', type: 'read', tracks: BOTH, article: 'Proof approval',
     title: 'Read: proof approval' },
   { key: 'read:deposits', type: 'read', article: 'Chasing deposits and balances',

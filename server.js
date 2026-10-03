@@ -41,6 +41,7 @@ const STAFF = require('./tools/lib/staff');
 const TEAM = require('./tools/lib/team-metrics');
 const TRAINING = require('./tools/lib/training');
 const PROOFS = require('./tools/lib/job-proofs');
+const ART = require('./tools/lib/art-pipeline');
 const GOOGLE_ADS = require('./tools/lib/google-ads').createClient();
 const GOOGLE_ANALYTICS = require('./tools/lib/google-analytics').createClient();
 
@@ -1131,6 +1132,20 @@ async function initStaffTables() {
       sent_at     TIMESTAMPTZ
     )`);
   await pool.query('CREATE INDEX IF NOT EXISTS job_proofs_code ON job_proofs (quote_code, created_at)');
+  /* The artwork pipeline (tools/lib/art-pipeline.js): one row per job, the
+     final print files, and every move in `events`. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS art_requests (
+      quote_code    TEXT PRIMARY KEY,
+      status        TEXT NOT NULL,
+      requested_by  INTEGER,
+      assigned_to   INTEGER,
+      files         JSONB NOT NULL DEFAULT '[]'::jsonb,
+      events        JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query('CREATE INDEX IF NOT EXISTS art_requests_status ON art_requests (status, updated_at)');
   /* Quiz attempts (TRAINING.QUIZZES). Every attempt is kept, so the owner
      sees the first score as well as the pass. Marked on the server. */
   await pool.query(`
@@ -17065,6 +17080,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
 
     const messagesCard = await jobMessagesCard(q, req.query);
     const proofsCard = await jobProofsCard(q, req.query).catch((e) => { console.error('proofs card failed:', e.message); return ''; });
+    const artCard = await jobArtCard(q, req.query).catch((e) => { console.error('art card failed:', e.message); return ''; });
     const certificateCard = await jobCertificateCard(q, req.query);
     const photosCard = jobPhotosCard(q);
     const notesCard = await jobNotesCard(q.code);
@@ -17149,6 +17165,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
       </div>${JOB_COST_SCRIPT}` : ''}
       ${photosCard}
       ${certificateCard}
+      ${artCard}
       ${proofsCard}
       ${messagesCard}
       ${creditCard}
@@ -17284,6 +17301,257 @@ const MESSAGE_ERRORS = {
   held: 'This quote is still waiting for approval, so the customer cannot open it yet. Nothing was sent. Once it is approved, message them.',
   draft: 'This quote is still a draft, so the customer cannot open it yet. Nothing was sent. Open it and send it first.',
 };
+
+/* ── Artwork pipeline ─────────────────────────────────────────────────────
+   Sales sends a job to the designer; the designer reviews it, can ask sales a
+   question, uploads the final print files and submits them; the owner approves
+   them (which records "artwork in hand" on the job) or sends them back. The
+   moves and who makes them are in tools/lib/art-pipeline.js. */
+const ART_ACTIONS = {
+  request: 'Sent to the designer', question: 'Asked a question', answer: 'Answered',
+  submit: 'Submitted final art', approve: 'Approved the final art', changes: 'Asked for changes',
+};
+
+/** Helpers who can work on artwork, for the "send to" list. */
+async function designersOnRoster() {
+  return (await staffRoster({ activeOnly: true })).filter((r) => STAFF.levelOf({ kind: 'staff', perms: r.perms }, 'art.work') === 'on');
+}
+
+/**
+ * Make one move on a job's artwork. Returns { ok, msg }. The state check is
+ * repeated in each statement's WHERE, so a double click or two people at once
+ * cannot skip a step. A helper works only on art assigned to them or to anyone.
+ */
+async function artMove(code, move, actor, { note = '', assignTo = null } = {}) {
+  const m = ART.MOVES[move];
+  if (!m) return { ok: false, msg: 'Unknown step.' };
+  const me = actor && actor.kind === 'staff' ? actor.id : null;
+  const ev = JSON.stringify([{ at: new Date().toISOString(), by: me, action: move, note: ART.cleanNote(note) }]);
+  if (move === 'request') {
+    const { rows: [q] } = await pool.query('SELECT code, cancelled_at FROM quotes WHERE code = $1', [code]);
+    if (!q || q.cancelled_at) return { ok: false, msg: 'That job is not open.' };
+    /* A new round after an approval starts with no files; the old ones stay
+       in the history with the event that set them aside. */
+    const { rowCount } = await pool.query(
+      `INSERT INTO art_requests (quote_code, status, requested_by, assigned_to, events)
+       VALUES ($1, 'waiting', $2, $3, $4::jsonb)
+       ON CONFLICT (quote_code) DO UPDATE SET status = 'waiting', requested_by = $2, assigned_to = $3, files = '[]'::jsonb,
+         events = art_requests.events || jsonb_build_array(jsonb_set((($4::jsonb)->0), '{set_aside}', art_requests.files)),
+         updated_at = NOW()
+       WHERE art_requests.status = 'approved'`, [code, me, assignTo, ev]);
+    return rowCount ? { ok: true, msg: 'Sent to the designer.' } : { ok: false, msg: 'The designer already has this job.' };
+  }
+  const mineOnly = me != null && m.who === 'art.work';
+  const { rows } = await pool.query(
+    `UPDATE art_requests SET status = $2, events = events || $3::jsonb, updated_at = NOW()
+      WHERE quote_code = $1 AND status = ANY($4::text[])
+        AND ($5::int IS NULL OR assigned_to IS NULL OR assigned_to = $5)
+        AND ($6::boolean = FALSE OR jsonb_array_length(files) > 0)
+      RETURNING quote_code`,
+    [code, m.to, ev, m.from.filter(Boolean), mineOnly ? me : null, move === 'submit']);
+  if (!rows.length) {
+    return { ok: false, msg: move === 'submit' ? 'Upload the final files first.' : 'That step is not open right now. Reload the page.' };
+  }
+  if (move === 'approve') {
+    await pool.query('UPDATE quotes SET artwork_at = COALESCE(artwork_at, NOW()) WHERE code = $1', [code]);
+  }
+  logActivity(actor || OWNER_ACTOR, `art: ${move}`, { type: 'quote', id: code }, {});
+  return { ok: true, msg: { question: 'Question sent to sales.', answer: 'Answer sent to the designer.',
+    submit: 'Final art sent to the owner.', approve: 'Final art approved.', changes: 'Sent back to the designer.' }[move] };
+}
+
+async function jobArtCard(q, query) {
+  const canRequest = actorLevel('art.request') === 'on';
+  const canWork = actorLevel('art.work') === 'on';
+  const owner = isOwner();
+  const { rows: [a] } = await pool.query('SELECT * FROM art_requests WHERE quote_code = $1', [q.code]);
+  if (!a && !canRequest) return '';
+  const actor = currentActor();
+  const me = actor && actor.kind === 'staff' ? actor.id : null;
+  const [roster, designers] = await Promise.all([staffRoster(), canRequest ? designersOnRoster() : Promise.resolve([])]);
+  const who = (id) => (id == null ? 'Owner' : nameOf(roster, id));
+  const st = a ? a.status : null;
+  const mine = canWork && a && (owner || a.assigned_to == null || a.assigned_to === me);
+  const cloud = QPHOTOS.cloudName();
+  const flashMsg = query.art_ok ? `<div class="ok">${escEmail(String(query.art_ok).slice(0, 120))}</div>`
+    : query.art_err ? `<div class="warn">${escEmail(String(query.art_err).slice(0, 160))}</div>` : '';
+  const files = (a ? a.files : []).filter((f) => f && ART.artUrlOk(f.url, cloud));
+  const noteBox = (ph) => `<textarea name="note" rows="2" maxlength="${ART.NOTE_MAX}" placeholder="${escEmail(ph)}" style="width:100%;margin:6px 0"></textarea>`;
+  const form = (path, inner) => `<form method="post" action="/admin/quote/${escEmail(q.code)}/art/${path}" style="margin:8px 0 0">${inner}</form>`;
+  let actions = '';
+  if (canRequest && ART.canMove('request', st)) {
+    actions += form('request', `<input type="hidden" name="move" value="request">
+      <label style="margin:0">Designer <select name="assign_to"><option value="">Any designer</option>${designers.map((d) =>
+        `<option value="${d.id}">${escEmail(d.name)}</option>`).join('')}</select></label>
+      ${noteBox('What the customer wants: design, colours, placement, sizes, deadline. Their files are in the Customer artwork card.')}
+      <button type="submit">${st === 'approved' ? 'Send back to the designer (new round)' : 'Send to the designer'}</button>`);
+  }
+  if (canRequest && ART.canMove('answer', st)) {
+    actions += form('request', `<input type="hidden" name="move" value="answer">${noteBox('Your answer for the designer')}
+      <button type="submit">Answer the designer</button>`);
+  }
+  if (mine && ART.canAddFile(st)) {
+    actions += `<form method="post" action="/admin/quote/${escEmail(q.code)}/art/file" data-artform style="margin:10px 0 0">
+      <input type="hidden" name="url"><input type="hidden" name="name">
+      <label class="btn btn-ghost" style="display:inline-block;cursor:pointer">Upload a final file
+        <input type="file" accept="${ART.ACCEPT}" data-artfile style="display:none"></label>
+      <span class="muted" data-artstat style="margin-left:8px;font-size:13px">AI, EPS, PDF, SVG, PNG, PSD, DST or ZIP, up to 50 MB.</span>
+    </form>
+    <script>
+      (function(){
+        var f = document.querySelector('form[data-artform]'); if (!f) return;
+        var inp = f.querySelector('[data-artfile]'), st = f.querySelector('[data-artstat]');
+        inp.addEventListener('change', function(){
+          var file = inp.files && inp.files[0]; if (!file) return;
+          if (file.size > ${ART.MAX_FILE_BYTES}) { st.textContent = 'That file is over 50 MB.'; return; }
+          st.textContent = 'Uploading…';
+          fetch('/admin/api/art-signature', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+            .then(function(r){ if (!r.ok) throw new Error('signature'); return r.json(); })
+            .then(function(sig){
+              var fd = new FormData();
+              fd.append('file', file); fd.append('api_key', sig.apiKey); fd.append('timestamp', sig.timestamp);
+              fd.append('folder', sig.folder); fd.append('signature', sig.signature);
+              return fetch('https://api.cloudinary.com/v1_1/' + sig.cloud + '/auto/upload', { method: 'POST', body: fd });
+            })
+            .then(function(r){ return r.json(); })
+            .then(function(d){
+              if (!d.secure_url) throw new Error('upload');
+              f.querySelector('[name="url"]').value = d.secure_url;
+              f.querySelector('[name="name"]').value = file.name;
+              f.submit();
+            })
+            .catch(function(){ st.textContent = 'The upload did not work. Try again.'; });
+        });
+      })();
+    </script>`;
+  }
+  if (mine && (ART.canMove('submit', st) || ART.canMove('question', st))) {
+    actions += form('work', `${noteBox('A note for the owner (what is in the files), or your question for sales')}
+      <button type="submit" name="move" value="submit"${files.length ? '' : ' disabled title="Upload the final files first"'}>Submit final art to the owner</button>
+      <button type="submit" name="move" value="question" class="btn-ghost">Ask sales a question</button>`);
+  }
+  if (owner && ART.canMove('approve', st)) {
+    actions += form('decide', `${noteBox('Note to the designer (needed when sending back)')}
+      <button type="submit" name="move" value="approve">Approve final art</button>
+      <button type="submit" name="move" value="changes" class="btn-ghost">Send back for changes</button>`);
+  }
+  const events = (a ? a.events : []).slice().reverse().map((e) => `<div class="row-i"><span class="row-main" style="white-space:normal">
+      <b>${escEmail(ART_ACTIONS[e.action] || e.action)}</b> &middot; ${escEmail(who(e.by))}
+      ${e.note ? `<div class="row-sub" style="white-space:pre-wrap">${escEmail(e.note)}</div>` : ''}</span>
+      <span class="row-end muted">${escEmail(whenShort(e.at))}</span></div>`).join('');
+  const fileRows = files.map((f, n) => `<div class="row-i"><span class="row-main"><a href="${escEmail(f.url)}" target="_blank" rel="noopener"><b>${
+      escEmail(f.name || 'File')}</b></a><div class="row-sub">${escEmail(who(f.by))} &middot; ${escEmail(whenShort(f.at))}</div></span>
+      <span class="row-end">${mine && ART.canAddFile(st) ? `<form method="post" action="/admin/quote/${escEmail(q.code)}/art/file" style="margin:0">
+        <input type="hidden" name="remove" value="${n}"><button type="submit" class="btn btn-ghost">Remove</button></form>` : ''}</span></div>`).join('');
+  return `<div class="card" id="art" style="margin-top:14px">
+    <h2 class="card-title">Artwork ${a ? pill(ART.STATES[st].label, ART.STATES[st].tone) : ''}</h2>
+    ${flashMsg}
+    ${a ? `<p class="muted" style="margin:4px 0 8px">Designer: ${escEmail(a.assigned_to == null ? 'any designer' : who(a.assigned_to))} &middot; sent by ${escEmail(who(a.requested_by))}</p>`
+      : '<p class="muted">Not with the designer yet. Send it once you know what the customer wants.</p>'}
+    ${files.length ? `<b>Final files</b><div class="rows">${fileRows}</div>` : ''}
+    ${actions}
+    ${events ? `<details style="margin-top:10px"${['needs_info', 'changes'].includes(st) ? ' open' : ''}><summary>History</summary><div class="rows">${events}</div></details>` : ''}
+  </div>`;
+}
+
+const artBack = (res, code, ok, msg) => res.redirect(`/admin/production/${code}?${ok ? 'art_ok' : 'art_err'}=${encodeURIComponent(msg)}#art`);
+
+/* One handler per gate (ROUTES): sales moves, designer moves, owner moves.
+   Each route accepts only its own moves. */
+function artMoveHandler(moves) {
+  return async (req, res) => {
+    const code = String(req.params.code || '').toUpperCase();
+    if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/production');
+    const b = req.body || {};
+    const move = String(b.move || '');
+    if (!moves.includes(move)) return artBack(res, code, false, 'Unknown step.');
+    const note = ART.cleanNote(b.note);
+    if (['question', 'answer', 'changes'].includes(move) && !note) return artBack(res, code, false, 'Write the note first.');
+    let assignTo = null;
+    if (move === 'request' && intIn(b.assign_to)) {
+      assignTo = intIn(b.assign_to);
+      if (!(await designersOnRoster()).some((d) => d.id === assignTo)) return artBack(res, code, false, 'Pick a designer from the list.');
+    }
+    try {
+      const r = await artMove(code, move, currentActor() || OWNER_ACTOR, { note, assignTo });
+      return artBack(res, code, r.ok, r.msg);
+    } catch (err) {
+      console.error(`art ${move} on ${code} failed:`, err.message);
+      return artBack(res, code, false, 'That did not save. Try again.');
+    }
+  };
+}
+app.post('/admin/quote/:code/art/request', requireAdmin, artMoveHandler(['request', 'answer']));
+app.post('/admin/quote/:code/art/work', requireAdmin, artMoveHandler(['question', 'submit']));
+app.post('/admin/quote/:code/art/decide', requireAdmin, artMoveHandler(['approve', 'changes']));
+
+/* Add or remove a final file while the art is with the designer. */
+app.post('/admin/quote/:code/art/file', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/production');
+  const b = req.body || {};
+  const actor = currentActor();
+  const me = actor && actor.kind === 'staff' ? actor.id : null;
+  try {
+    if (b.remove !== undefined) {
+      const n = /^\d{1,2}$/.test(String(b.remove)) ? Number(b.remove) : -1;
+      if (n < 0) return artBack(res, code, false, 'Unknown file.');
+      const { rowCount } = await pool.query(
+        `UPDATE art_requests SET files = files - $2::int, updated_at = NOW()
+          WHERE quote_code = $1 AND status = ANY($3::text[]) AND ($4::int IS NULL OR assigned_to IS NULL OR assigned_to = $4)
+            AND jsonb_array_length(files) > $2::int`, [code, n, ART.FILE_STATES, me]);
+      return artBack(res, code, !!rowCount, rowCount ? 'File removed.' : 'That file could not be removed.');
+    }
+    const url = String(b.url || '');
+    if (!ART.artUrlOk(url, QPHOTOS.cloudName())) return artBack(res, code, false, 'That upload could not be used.');
+    const f = JSON.stringify([{ url, name: ART.cleanName(b.name) || null, by: me, at: new Date().toISOString() }]);
+    const { rowCount } = await pool.query(
+      `UPDATE art_requests SET files = files || $2::jsonb, updated_at = NOW()
+        WHERE quote_code = $1 AND status = ANY($3::text[]) AND ($4::int IS NULL OR assigned_to IS NULL OR assigned_to = $4)
+          AND jsonb_array_length(files) < $5`, [code, f, ART.FILE_STATES, me, ART.MAX_FILES]);
+    return artBack(res, code, !!rowCount, rowCount ? 'File added.' : 'Files can only be added while the art is with you.');
+  } catch (err) {
+    console.error(`art file on ${code} failed:`, err.message);
+    return artBack(res, code, false, 'That did not save. Try again.');
+  }
+});
+
+/* A signature for one upload into the final-art folder: sign-in and art.work
+   only, signing nothing the caller chose. */
+app.post('/admin/api/art-signature', requireAdmin, (req, res) => {
+  const apiSecret = process.env.CLOUDINARY_API_SECRET || process.env.CLUDINARY_API_SECRET;
+  const cloud = QPHOTOS.cloudName();
+  if (!apiSecret || !cloud || !process.env.CLOUDINARY_API_KEY) return res.status(503).json({ error: 'Uploads are not set up.' });
+  const timestamp = Math.round(Date.now() / 1000);
+  const signature = cloudinary.utils.api_sign_request({ folder: ART.FOLDER, timestamp }, apiSecret);
+  res.set('Cache-Control', 'no-store');
+  res.json({ signature, timestamp, folder: ART.FOLDER, cloud, apiKey: process.env.CLOUDINARY_API_KEY });
+});
+
+/** Art waiting on this person: the designer's queue, sales' questions, the owner's approvals. */
+async function artQueues(actor) {
+  const me = actor && actor.kind === 'staff' ? actor.id : null;
+  const lvl = (k) => STAFF.levelOf(actor || OWNER_ACTOR, k);
+  const q = (sql, args) => pool.query(sql, args).then((r) => r.rows).catch((e) => { console.error('art queue failed:', e.message); return []; });
+  const base = `SELECT a.*, q.name, q.needed_by FROM art_requests a JOIN quotes q ON q.code = a.quote_code WHERE q.cancelled_at IS NULL AND`;
+  const [todo, questions, approve] = await Promise.all([
+    lvl('art.work') === 'on' && me != null
+      ? q(`${base} a.status IN ('waiting', 'changes') AND (a.assigned_to IS NULL OR a.assigned_to = $1) ORDER BY a.updated_at`, [me]) : [],
+    lvl('art.request') === 'on' ? q(`${base} a.status = 'needs_info' ORDER BY a.updated_at`, []) : [],
+    me == null ? q(`${base} a.status = 'submitted' ORDER BY a.updated_at`, []) : [],
+  ]);
+  return { todo, questions, approve };
+}
+
+function artQueueRows(list) {
+  return list.map((a) => {
+    const last = (a.events || [])[a.events.length - 1] || {};
+    return `<div class="row-i"><span class="row-main"><a href="/admin/production/${escEmail(a.quote_code)}#art"><b>${escEmail(a.quote_code)}</b></a> ${escEmail(a.name || '')}
+      <div class="row-sub" style="white-space:normal">${escEmail(ART.STATES[a.status].label)}${a.needed_by ? ` &middot; needed by ${escEmail(fmtDate(a.needed_by))}` : ''}${
+        last.note ? ` &middot; "${escEmail(String(last.note).slice(0, 140))}"` : ''}</div></span>
+      <span class="row-end muted">${escEmail(whenShort(a.updated_at))}</span></div>`;
+  }).join('');
+}
 
 /* ── Proofs ───────────────────────────────────────────────────────────────
    Upload a proof on the job, then "Send this proof" writes the customer
@@ -17936,8 +18204,10 @@ app.get('/admin/nav-counts', requireAdmin, async (_req, res) => {
     unansweredLeads().then((l) => { out.leads = l.length; }).catch(() => {}),
     pool.query(REVIEWS_WAITING_SQL).then(({ rows }) => { out.reviews = rows[0].n; }).catch(() => {}),
     pool.query(CERTS_WAITING_SQL).then(({ rows }) => { out.certificates = rows[0].n; }).catch(() => {}),
-    isOwner() ? pool.query(`SELECT COUNT(*)::int AS n FROM staff_approvals WHERE status = 'pending'`)
-      .then(({ rows }) => { out.approvals = rows[0].n; }).catch(() => {}) : Promise.resolve(),
+    isOwner() ? pool.query(`SELECT (SELECT COUNT(*) FROM staff_approvals WHERE status = 'pending')
+                                 + (SELECT COUNT(*) FROM art_requests a JOIN quotes q ON q.code = a.quote_code
+                                     WHERE a.status = 'submitted' AND q.cancelled_at IS NULL) AS n`)
+      .then(({ rows }) => { out.approvals = Number(rows[0].n); }).catch(() => {}) : Promise.resolve(),
     liveJobs().then((jobs) => {
       out.late = jobs.filter((q) => { const s = quoteSchedule(q); return !!(s && s.risks.length); }).length;
     }).catch(() => {}),
@@ -22457,6 +22727,8 @@ app.get('/admin/approvals', requireAdmin, async (req, res) => {
       ${pageHeader('Waiting for you', 'What helpers have asked to send. Nothing here has reached a customer.',
         '<a class="btn btn-ghost" href="/admin/team">Team</a>')}
       ${flash(req.query)}
+      ${await (async () => { const { approve } = await artQueues(OWNER_ACTOR);
+        return approve.length ? `<div class="card"><b>Final art to approve (${approve.length})</b>${artQueueRows(approve)}</div>` : ''; })()}
       ${pending.length ? pending.map(card).join('') : `<div class="card">${emptyState('Nothing is waiting.')}</div>`}
       ${decided.length ? `<div class="card"><b>Recently decided</b>${decided.map((a) => `
         <div class="row-i"><span class="row-main">${escEmail(a.kind)} ${escEmail(a.subject_id)} &middot; ${
@@ -23686,6 +23958,7 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
     const nextSteps = liveList.map((q) => ({ q, cl: quoteChecklist(q) })).filter((x) => x.cl.next).slice(0, 15);
     const today = new Date().toISOString().slice(0, 10);
     // A helper's training until it is done, and the owner's latest note (two weeks).
+    const art = await artQueues(actor);
     const training = me ? await Promise.all([trainingFor(me), coachingNotes(me, 1)])
       .then(([p, n]) => ({ p, note: n[0] && Date.now() - new Date(n[0].created_at).getTime() < 14 * 864e5 ? n[0] : null }))
       .catch((err) => { console.error('my day training failed:', err.message); return null; }) : null;
@@ -23706,6 +23979,9 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
         <a class="muted" href="/admin/training" style="float:right">See it all →</a>${progressBar(training.p.done, training.p.total)}
         ${training.p.next.map((st) => `<div class="row-sub">Next: ${escEmail(st.title)}</div>`).join('')}</div>` : ''}
       ${training && training.note ? `<div class="card"><b>Latest note from the owner</b>${coachingRow(training.note)}</div>` : ''}
+      ${art.todo.length || STAFF.levelOf(actor, 'art.work') === 'on' && me != null ? section(`Artwork to do (${art.todo.length})`, artQueueRows(art.todo), 'No artwork waiting for you.') : ''}
+      ${art.questions.length ? section(`The designer has a question (${art.questions.length})`, artQueueRows(art.questions)) : ''}
+      ${art.approve.length ? section(`Final art to approve (${art.approve.length})`, artQueueRows(art.approve)) : ''}
       ${released.rows.length ? section('Approved — send these now', released.rows.map((q) => `
         <div class="row-i" style="flex-wrap:wrap"><span class="row-main"><b>${escEmail(q.code)}</b> ${escEmail(q.name || '')} &middot; ${money(q.total)}
           <div class="msg" id="rel-${escEmail(q.code)}" style="white-space:pre-wrap">${escEmail(quoteMessages(q).initial)}</div></span>
@@ -24536,6 +24812,27 @@ const KB_ADDED = [
     tags: 'blog, seo, copy, images, photos, website, designer',
     body: `Our blog lives at jtees.net/blog. It brings in customers from Google, so every post should answer a real question a customer would search for.\n\n` +
 `**Writing (copy)**\n\n` +
+`- Everything lives in the **June's Tees – Blog** folder in Google Drive: https://drive.google.com/drive/folders/1Lycv9nXRp53qq15n2iL6liwNPCz2sJNB (the owner shares it with you)\n` +
+`- Open **Blog post template – copy me**, make a copy (File, Make a copy), move it into **1 – Drafts**, and fill it in. One Doc per post\n` +
+`- Title: the question or topic in plain words, under 60 characters (e.g. "Custom Team Shirts in Chicago: A Coach's Guide")\n` +
+`- Description: one sentence under 155 characters, for Google\n` +
+`- Short paragraphs and subheadings. Mention Chicago and the print method where it fits\n` +
+`- Link to the page that sells it (screen printing, embroidery, DTF, or the quote form)\n` +
+`- End with one next step: "Get a free quote at jtees.net"\n` +
+`- Check facts against the playbook (turnaround, minimums, deposits). Never promise a price or a date\n\n` +
+`**Images**\n\n` +
+`- Use our own job photos (the **June's Tees Website Photos** folder: https://drive.google.com/drive/folders/1mgbTpvBKWPGftga3R5R-VF5hUJ2vNSvz), or stock photos we are licensed to use. Never copy images from Google or other websites\n` +
+`- Save each finished image in **2 – Images**\n` +
+`- A customer's photo or design only with their permission. No children's faces without a parent's OK\n` +
+`- 1200 px wide, JPG or WebP, under 300 KB\n` +
+`- Name the file with words (team-shirts-chicago.jpg, not IMG_4432.jpg)\n` +
+`- Write alt text for every image: what it shows, in one short sentence\n\n` +
+`**Publishing**\n\n` +
+`- When the Doc and images are ready, send the Doc link in Team chat. The owner checks it, publishes it to the site, and moves the Doc to **3 – Published**\n` +
+`- For an update to an existing post, put the post's address at the top of the Doc and mark what changes`,
+    /* The first published body, with the folder still a placeholder: replaced once, unless the owner edited it. */
+    was: [`Our blog lives at jtees.net/blog. It brings in customers from Google, so every post should answer a real question a customer would search for.\n\n` +
+`**Writing (copy)**\n\n` +
 `- Draft in a Google Doc, one Doc per post, in [shared blog Drive folder, owner to fill in]\n` +
 `- Title: the question or topic in plain words, under 60 characters (e.g. "Custom Team Shirts in Chicago: A Coach's Guide")\n` +
 `- Description: one sentence under 155 characters, for Google\n` +
@@ -24551,7 +24848,22 @@ const KB_ADDED = [
 `- Write alt text for every image: what it shows, in one short sentence\n\n` +
 `**Publishing**\n\n` +
 `- When the Doc and images are ready, send the Doc link in Team chat. The owner checks it and publishes it to the site\n` +
-`- For an update to an existing post, put the post's address at the top of the Doc and mark what changes` },
+`- For an update to an existing post, put the post's address at the top of the Doc and mark what changes`] },
+  { kind: 'sop', title: 'Artwork pipeline: sales to designer to owner', needsReview: true,
+    tags: 'artwork, designer, pipeline, final art, review, approval, handoff',
+    body: `Every job's artwork moves through the **Artwork** card on its job page.\n\n` +
+`**Sales: send it to the designer**\n\n` +
+`- Once you know what the customer wants, open the job and press **Send to the designer**\n` +
+`- In the note: the design, colours, placement, sizes, print method and the date it is needed. The customer's own files are in the Customer artwork card on the same page\n` +
+`- If the designer asks a question, it shows on your My Day. Answer it on the job page\n\n` +
+`**Designer: review it and make the final art**\n\n` +
+`- New jobs show under **Artwork to do** on your My Day, oldest first\n` +
+`- Check the customer's files first. Missing something (a better logo, a colour, a size)? Press **Ask sales a question**. Don't guess\n` +
+`- Send the customer a proof from the Proofs card and get it approved in writing (see "Making and sending a proof")\n` +
+`- Upload the print-ready files (vector, separated colours, transparent PNG for DTF, or the stitch file) and press **Submit final art to the owner** with a short note on what is in them\n\n` +
+`**Owner: approve it**\n\n` +
+`- Final art waiting shows on Approvals and My Day. **Approve final art** marks the job's artwork as in hand; **Send back for changes** returns it to the designer with your note\n\n` +
+`A job can go round again (a reorder or a new design): sales sends it to the designer again, and the last round's files are kept in the History.` },
   /* Quiet-time prospecting, for the training step and quiz. A draft for the
      owner to check: the daily target is left as a placeholder. */
   { kind: 'sop', title: 'Finding new leads in quiet time', needsReview: true,
