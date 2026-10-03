@@ -44,6 +44,8 @@ const PERMISSIONS = {
   'production.stage':      { group: 'Production', label: 'Move jobs through production, shipping', levels: ['off', 'on'] },
   'orders.view':           { group: 'Production', label: 'See studio orders', levels: ['off', 'on'] },
   'proofs.upload':         { group: 'Production', label: 'Upload proofs to jobs', levels: ['off', 'on'] },
+  'art.request':           { group: 'Production', label: 'Send jobs to the designer, answer their questions', levels: ['off', 'on'] },
+  'art.work':              { group: 'Production', label: 'Work on artwork: ask sales, upload and submit final art', levels: ['off', 'on'] },
   /* Its own toggle because it spends money: each label is charged to the
      owner's Shippo account. In no preset, like Finances: opened on purpose. */
   'shipping.labels':       { group: 'Production', label: 'Buy shipping labels (charged to your Shippo account)', levels: ['off', 'on'] },
@@ -68,7 +70,7 @@ const PRESETS = {
       'leads.view': 'on', 'quotes.view': 'on', 'quotes.draft': 'on',
       'quotes.send': 'approval', 'quotes.discount': 'approval',
       'customers.view': 'on', 'customers.message': 'approval',
-      'orders.view': 'on', 'kb.edit': 'approval',
+      'orders.view': 'on', 'art.request': 'on', 'kb.edit': 'approval',
     },
   },
   /* A designer in training: sees the jobs and the customers, uploads proofs,
@@ -78,7 +80,7 @@ const PRESETS = {
     note: 'Sees the jobs, uploads proofs and writes proof messages; you approve each message before it is sent.',
     perms: {
       'quotes.view': 'on', 'customers.view': 'on', 'customers.message': 'approval',
-      'orders.view': 'on', 'proofs.upload': 'on', 'kb.edit': 'approval',
+      'orders.view': 'on', 'proofs.upload': 'on', 'art.work': 'on', 'kb.edit': 'approval',
     },
   },
   designer: {
@@ -86,7 +88,7 @@ const PRESETS = {
     note: 'Design training signed off: sends proofs and messages to customers, and moves jobs along.',
     perms: {
       'quotes.view': 'on', 'customers.view': 'on', 'customers.message': 'on', 'production.stage': 'on',
-      'orders.view': 'on', 'proofs.upload': 'on', 'kb.edit': 'approval',
+      'orders.view': 'on', 'proofs.upload': 'on', 'art.work': 'on', 'kb.edit': 'approval',
     },
   },
   supervised: {
@@ -96,7 +98,7 @@ const PRESETS = {
       'leads.view': 'on', 'leads.dismiss': 'on', 'quotes.view': 'on', 'quotes.draft': 'on',
       'quotes.send': { level: 'on', maxTotal: 500 }, 'quotes.discount': 'approval',
       'customers.view': 'on', 'customers.message': 'on', 'production.stage': 'on',
-      'orders.view': 'on', 'proofs.upload': 'on', 'certificates.prescreen': 'on', 'reviews.manage': 'on',
+      'orders.view': 'on', 'proofs.upload': 'on', 'art.request': 'on', 'certificates.prescreen': 'on', 'reviews.manage': 'on',
       'kb.edit': 'approval',
     },
   },
@@ -107,7 +109,7 @@ const PRESETS = {
       'leads.view': 'on', 'leads.dismiss': 'on', 'quotes.view': 'on', 'quotes.draft': 'on',
       'quotes.send': 'on', 'quotes.discount': { level: 'on', maxPct: 10 }, 'quotes.manage': 'on',
       'customers.view': 'on', 'customers.message': 'on', 'production.stage': 'on',
-      'orders.view': 'on', 'proofs.upload': 'on', 'certificates.prescreen': 'on', 'reviews.manage': 'on',
+      'orders.view': 'on', 'proofs.upload': 'on', 'art.request': 'on', 'certificates.prescreen': 'on', 'reviews.manage': 'on',
       'kb.edit': 'on',
     },
   },
@@ -245,6 +247,11 @@ const ROUTES = {
   'GET /admin/training/quiz/:key': 'any',
   'POST /admin/api/proof-signature': 'proofs.upload',
   'POST /admin/quote/:code/proofs': 'proofs.upload',
+  'POST /admin/quote/:code/art/request': 'art.request',
+  'POST /admin/quote/:code/art/work': 'art.work',
+  'POST /admin/quote/:code/art/file': 'art.work',
+  'POST /admin/api/art-signature': 'art.work',
+  'POST /admin/quote/:code/art/decide': 'owner',
   'POST /admin/training/quiz/:key': 'any',
   'POST /admin/training/signoff': 'owner',
   'POST /admin/training/tips-reset': 'owner',
