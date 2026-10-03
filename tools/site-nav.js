@@ -63,6 +63,7 @@ const ICON = {
   phone: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1C7 1 3 5 3 10v7c0 1.7 1.3 3 3 3h3v-8H5v-2c0-3.9 3.1-7 7-7s7 3.1 7 7v2h-4v8h3c1.7 0 3-1.3 3-3v-7c0-5-4-9-9-9z"/></svg>',
   cart: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 18a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm10 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM5.2 4l.9 2H20a1 1 0 0 1 .9 1.4l-3.3 6A2 2 0 0 1 15.9 14H8.1l-1 1.8V16h12v2H7a2 2 0 0 1-1.8-2.9l1.4-2.5L3 4H1V2h3.3l.9 2z"/></svg>',
   user: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10zm0 2c-4.4 0-9 2.2-9 5v3h18v-3c0-2.8-4.6-5-9-5z"/></svg>',
+  search: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2a8 8 0 0 1 6.3 12.9l5.4 5.4-1.4 1.4-5.4-5.4A8 8 0 1 1 10 2zm0 2a6 6 0 1 0 0 12 6 6 0 0 0 0-12z"/></svg>',
   text: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM7 9h10v2H7V9zm6 5H7v-2h6v2zm4-6H7V6h10v2z"/></svg>',
 };
 
@@ -82,6 +83,14 @@ function render(nav, site = '') {
   const bar = nav.announcement.map((a) => a.href ? `<a href="${esc(abs(a.href))}">${esc(a.text)}</a>` : esc(a.text)).join(' <span aria-hidden="true">|</span> ');
   const tel = `tel:${nav.phone.tel}`;
   const sms = `sms:${nav.phone.tel}?&body=Hi%20June%27s%20Tees!%20I%20have%20a%20question%20about%20a%20custom%20order.`;
+  /* Product search: a plain GET form to the Design Studio's product list
+     (products.php?q=). The header icon is a link to that list, so it works
+     with no script; assets/js/site-nav.js turns it into a toggle for the
+     search field. */
+  const sform = (cls, id) => `<form class="${cls}" action="${esc(nav.search.action)}" method="get" role="search"${id ? ` id="${id}"` : ''}>
+    <input type="search" name="q" maxlength="60" placeholder="${esc(nav.search.placeholder)}" aria-label="${esc(nav.search.label)}" enterkeyhint="search" required />
+    <button type="submit" aria-label="Search">${ICON.search}</button>
+  </form>`;
   const head = site ? `<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
 <link rel="stylesheet" href="${site}/assets/css/site-nav.css" />
 ` : '';
@@ -98,16 +107,19 @@ ${head}<div class="jtn-bar">${bar}</div>
       <a href="${tel}" class="jtn-contact" aria-label="Call us">${ICON.phone}<span><b>Talk to a Real Person</b>${esc(nav.phone.display)}</span></a>
       ${/* Text Us opens the Tawk messenger on every device (assets/js/site-nav.js);
             Talk to a Real Person always dials (owner, 2026-10-02). */ ''}<a href="${sms}" class="jtn-contact" aria-label="Text us">${ICON.text}<span><b>Text Us</b>Fast reply</span></a>
+      <a href="${esc(nav.search.action)}" class="jtn-icon jtn-ico-search" aria-label="${esc(nav.search.label)}" aria-expanded="false" aria-controls="jtn-search" data-from="nav">${ICON.search}</a>
       <a href="${esc(nav.account.href)}" class="jtn-icon jtn-ico-acct" aria-label="${esc(nav.account.label)}">${ICON.user}</a>
       <a href="${esc(nav.cart.href)}" class="jtn-icon jtn-ico-cart" aria-label="${esc(nav.cart.label)}">${ICON.cart}</a>
       <a href="${esc(abs(nav.quote.href))}" class="jtn-quote">${esc(nav.quote.label)}</a>
       <button type="button" class="jtn-burger" aria-label="Open menu" aria-expanded="false" aria-controls="jtn-drawer"><span></span><span></span><span></span></button>
     </div>
   </div>
+  ${sform('jtn-search', 'jtn-search').replace('class="jtn-search"', 'class="jtn-search" hidden')}
 </div>
 <div class="jtn-shade" hidden></div>
 <div class="jtn-drawer" id="jtn-drawer" hidden>
   <div class="jtn-drawer-h"><b>Menu</b><button type="button" class="jtn-close" aria-label="Close menu">&#x2715;</button></div>
+  ${sform('jtn-search jtn-search-drawer')}
   <div class="jtn-drawer-nav">
     ${drawer}
   </div>

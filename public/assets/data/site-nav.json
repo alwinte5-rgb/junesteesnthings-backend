@@ -169,6 +169,11 @@
     "label": "Start Designing",
     "href": "https://design.jtees.net/editor.php?product_base=14"
   },
+  "search": {
+    "label": "Search products",
+    "action": "https://design.jtees.net/products.php",
+    "placeholder": "Search products: hoodie, tote, youth tee…"
+  },
   "cart": {
     "label": "Cart",
     "href": "https://design.jtees.net/cart.php"

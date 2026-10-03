@@ -99,3 +99,17 @@ test('Text us opens the tracked Tawk messenger; calling always dials', () => {
   const snip = read('assets/data/site-nav.html');
   assert.doesNotMatch(snip, /class="[^"]*hcontact/, 'no menu link is left to the old desktop-only chat script');
 });
+
+test('product search is in the menu on every page and the phone drawer', () => {
+  const snip = read('assets/data/site-nav.html');
+  // A plain GET form to the Design Studio product list, so it works with no script.
+  const forms = snip.match(/<form class="jtn-search[^"]*"( hidden)? action="https:\/\/design\.jtees\.net\/products\.php" method="get" role="search"/g) || [];
+  assert.strictEqual(forms.length, 2, 'header field + drawer field');
+  assert.match(snip, /<input type="search" name="q" maxlength="60"/);
+  // The icon is a real link to the list: a tap still lands somewhere if site-nav.js fails.
+  assert.match(snip, /<a href="https:\/\/design\.jtees\.net\/products\.php" class="jtn-icon jtn-ico-search"/);
+  const js = read('assets/js/site-nav.js');
+  assert.match(js, /sIcon\.addEventListener\('click'/);
+  const css = read('assets/css/site-nav.css');
+  assert.match(css, /\.jtn-ico-search\{display:flex!important;\}/, 'the icon stays on phones');
+});

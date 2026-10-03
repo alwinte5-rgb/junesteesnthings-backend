@@ -68,3 +68,14 @@ html{overflow-x:clip;}
   .jtn-logo span{display:block;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.88rem;}
   .jtn-burger{width:36px;height:36px;padding:7px;}
 }
+/* Product search (header icon + field under the menu; top of the phone drawer). */
+.jtn-search{display:flex;gap:.4rem;max-width:640px;margin:0 auto;padding:.2rem 1.25rem .75rem;}
+.jtn-search[hidden]{display:none;}
+.jtn-search input{flex:1;min-width:0;height:42px;border:1px solid #D1D5DB;border-radius:999px;padding:0 1rem;font:500 1rem Inter,system-ui,sans-serif;color:#0B1F4B;background:#fff;}
+.jtn-search input:focus{outline:2px solid #1848B8;outline-offset:1px;border-color:#1848B8;}
+.jtn-search button{width:46px;height:42px;border:0;border-radius:999px;background:#1848B8;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+.jtn-search button svg{width:20px;height:20px;fill:#fff;}
+.jtn-search-drawer{padding:0 0 .6rem;max-width:none;}
+.jtn-ico-search svg{fill:#0B1F4B;}
+@media(max-width:1120px){.jtn-ico-search{display:flex!important;}}
+@media(max-width:480px){.jtn-search{padding:.2rem .75rem .6rem;}}

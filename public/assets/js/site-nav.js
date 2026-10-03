@@ -33,6 +33,23 @@
     try { tawk.maximize(); } catch (err) { window.location.href = a.getAttribute('href'); }
   });
 
+  /* Search icon: opens the search field under the menu (the link itself goes
+     to the product list, which is where a press lands if this script fails). */
+  var sIcon = document.querySelector('.jtn-ico-search');
+  var sForm = document.getElementById('jtn-search');
+  if (sIcon && sForm) {
+    sIcon.addEventListener('click', function (e) {
+      e.preventDefault();
+      var open = sForm.hidden;
+      sForm.hidden = !open;
+      sIcon.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) sForm.querySelector('input').focus();
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !sForm.hidden) { sForm.hidden = true; sIcon.setAttribute('aria-expanded', 'false'); sIcon.focus(); }
+    });
+  }
+
   var burger = document.querySelector('.jtn-burger');
   var drawer = document.getElementById('jtn-drawer');
   var shade = document.querySelector('.jtn-shade');
