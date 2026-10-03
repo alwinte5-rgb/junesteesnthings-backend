@@ -149,6 +149,92 @@ function addonCosts(addons) {
   return { outsourced, shipping, perLine };
 }
 
+/* ── Lines typed by hand ─────────────────────────────────────────────────
+   A line written into the quote rather than picked from the catalogue has no
+   product or method to read, only its words and its price: "Comfort Colors
+   T-shirt - Navy Blue", "Embroidery Chest Logo", "2XL Upcharge", "24x18 Yard
+   Signs - 100 pack". The words name the garment and the decoration well enough
+   to cost them from the same sheets; whatever they do not name is costed at half
+   what it was sold for (the shop's x2), and every such line says "rough". */
+const GARMENT_WORDS = [
+  ['hoodie', /\b(hood(ie|ed)?|pullover)\b/i],
+  ['sweatshirt', /\b(sweat\s*shirt|crew\s*neck|crewneck|fleece)\b/i],
+  ['polo', /\bpolos?\b/i],
+  ['tank', /\btanks?\b/i],
+  ['long sleeve', /\blong\s*sleeve\b/i],
+  ['tee', /\b(t-?shirts?|tees?|shirts?)\b/i],
+];
+const STOP = new Set(['the', 'and', 'for', 'with', 'bulk', 'custom', 'print', 'printed', 'shirt', 'shirts', 'tee', 'tees', 't', 'pack', 'pair',
+  'black', 'white', 'navy', 'blue', 'red', 'green', 'grey', 'gray', 'pink', 'purple', 'orange', 'yellow', 'gold', 'maroon', 'royal', 'heather']);
+const words = (t) => String(t || '').toLowerCase().replace(/t-shirt/g, 'tshirt').split(/[^a-z0-9]+/).filter((x) => x.length > 1);
+
+/** The catalogue garment a description names, or null. Needs the garment type
+ *  in both; brand and age words ("comfort colors", "toddler") pick between
+ *  candidates, and a tie goes to the cheaper blank. */
+function garmentFromWords(desc, products) {
+  const kind = GARMENT_WORDS.find(([, re]) => re.test(desc));
+  if (!kind) return null;
+  const want = words(desc).filter((x) => !STOP.has(x));
+  let best = null;
+  for (const p of products || []) {
+    if (!(num(p.cost) > 0 && num(p.price) > 0)) continue;
+    const name = String(p.name || '');
+    if (!kind[1].test(name)) continue;
+    const have = new Set(words(name));
+    const score = want.filter((x) => have.has(x)).length;
+    /* An age word in the description must be in the product, and one in the
+       product must be in the description: a toddler tee is not an adult one. */
+    const ages = ['toddler', 'youth', 'infant', 'baby', 'kids', 'ladies', 'womens', 'women'];
+    if (ages.some((a) => want.includes(a) !== have.has(a))) continue;
+    if (!best || score > best.score || (score === best.score && num(p.cost) < num(best.p.cost))) best = { p, score };
+  }
+  return best ? best.p : null;
+}
+
+/** A decoration a description names, as a method-like object for decorationEach. */
+function decorationFromWords(desc) {
+  const t = String(desc || '');
+  if (/embroider/i.test(t)) {
+    const size = /full\s*back/i.test(t) ? 'Full Back' : /extra\s*large/i.test(t) ? 'Extra Large Logo'
+      : /large/i.test(t) ? 'Large Logo' : /medium/i.test(t) ? 'Medium Logo'
+      : /name|text/i.test(t) ? 'Name/Text' : 'Small Logo';
+    return { title: `Embroidery — ${size}`, type: 'fixed' };
+  }
+  if (/\bdtf\b|direct\s*to\s*film/i.test(t)) return { title: 'DTF Printing', type: 'fixed' };
+  if (/screen\s*print/i.test(t)) {
+    const c = (t.match(/(\d)\s*-?\s*colou?r/i) || [])[1];
+    return { title: `Screen Printing — ${c || 1} Color`, type: 'fixed' };
+  }
+  return null;
+}
+
+/** Cost of a hand-typed line from its words, or null when there is nothing to go on. */
+function fromWording(it, catalog, bandQty) {
+  const desc = `${it.description || ''} ${it.details || ''}`;
+  const qty = parseInt(it.qty, 10) || 0;
+  const sell = num(it.unit_price);
+  const g = garmentFromWords(desc, catalog && catalog.products);
+  const deco = decorationFromWords(desc);
+  const stage = /front\s*(and|&|\+)\s*back|both\s*sides|2-?\s*sided|two[-\s]sided/i.test(desc) ? 'both' : null;
+  const garmentEach = g ? num(g.cost) : 0;
+  const garmentSell = g ? num(g.price) : 0;
+  const parts = [];
+  if (g) parts.push(`S&S cost of ${g.name} (matched by wording)`);
+  let decoEach = 0;
+  if (deco) {
+    const d = decorationEach(deco, stage, 1, Math.max(bandQty, qty), 0);
+    decoEach = d.each;
+    parts.push(`${d.basis} (matched by wording)`);
+  } else if (sell > garmentSell) {
+    /* Whatever the words do not name — the print on a typed shirt line, a sign,
+       an upcharge — at half its price. */
+    decoEach = (sell - garmentSell) / SHOP_MARKUP;
+    parts.push('rough: half the price');
+  }
+  if (!g && !deco && !(sell > 0)) return null;
+  return { each: garmentEach + decoEach, basis: parts.join(' + ') };
+}
+
 /**
  * Estimate a job's costs.
  *   items:   the quote's lines (accepted: optional ones already resolved)
@@ -185,12 +271,14 @@ function estimateJob(items, catalog) {
 
     const desc = String(it.description || `Line ${ix + 1}`);
     /* A product or method the catalogue no longer has cannot be costed honestly. */
-    if ((it.product_id != null && !prod) || (it.method_id != null && !m1) || (it.method2_id != null && !m2)) {
-      out.complete = false; out.missing.push(`${desc} (no longer in the catalogue)`); return;
-    }
-    if (!prod && !m1) {
-      if (SERVICE_WORDS.test(desc)) { out.lines.push({ ix, unit_cost: 0, basis: 'service: no supplier cost', estimated: false }); return; }
-      out.complete = false; out.missing.push(desc); return;
+    const gone = (it.product_id != null && !prod) || (it.method_id != null && !m1) || (it.method2_id != null && !m2);
+    if (gone || (!prod && !m1)) {
+      if (!gone && SERVICE_WORDS.test(desc)) { out.lines.push({ ix, unit_cost: 0, basis: 'service: no supplier cost', estimated: false }); return; }
+      /* Typed by hand, or picked from a catalogue that has since changed: read
+         the words instead. */
+      const w = fromWording(it, catalog, bandQty);
+      if (w) { out.lines.push({ ix, unit_cost: r2(w.each + ad.perLine / qty), basis: w.basis, estimated: true }); return; }
+      out.complete = false; out.missing.push(gone ? `${desc} (no longer in the catalogue)` : desc); return;
     }
 
     /* The garment, at S&S cost. A typed garment price is a SELL price (it
@@ -221,4 +309,4 @@ function estimateJob(items, catalog) {
 }
 
 module.exports = { SCREEN_PRINT, SCREEN_MIN_QTY, SCREEN_COST, SCREEN_FEE, DTF, EMBROIDERY, SHOP_MARKUP, SERVICE_WORDS,
-  methodKind, embroideryColumn, decorationEach, addonCosts, estimateJob };
+  methodKind, embroideryColumn, decorationEach, addonCosts, garmentFromWords, decorationFromWords, fromWording, estimateJob };
