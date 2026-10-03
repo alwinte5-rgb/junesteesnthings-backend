@@ -24,7 +24,7 @@ function route(signature) {
 test('every step has a unique key and a known type', () => {
   const keys = TRAINING.STEPS.map((s) => s.key);
   assert.strictEqual(new Set(keys).size, keys.length);
-  for (const s of TRAINING.STEPS) assert.ok(['read', 'do', 'signoff'].includes(s.type), s.key);
+  for (const s of TRAINING.STEPS) assert.ok(['read', 'do', 'signoff', 'quiz'].includes(s.type), s.key);
   assert.ok(keys.includes(TRAINING.READY_KEY), 'training ends with the "ready" sign-off');
   assert.strictEqual(TRAINING.STEPS[TRAINING.STEPS.length - 1].key, TRAINING.READY_KEY);
 });
@@ -58,7 +58,7 @@ test('work steps tick themselves from real work, never from a stored tick', () =
 test('training is complete only when every visible step is done', () => {
   const ticks = new Map(TRAINING.visibleSteps().filter((s) => s.type !== 'do').map((s) => [s.key, { done_at: new Date() }]));
   assert.strictEqual(TRAINING.progress(ticks, { leads: 1, quotes: 1, messages: 0 }).complete, false);
-  const p = TRAINING.progress(ticks, { leads: 1, quotes: 1, messages: 2 });
+  const p = TRAINING.progress(ticks, { leads: 1, quotes: 1, messages: 2, quizzes: { basics: 1 } });
   assert.strictEqual(p.complete, true);
   assert.strictEqual(p.done, p.total);
 });
@@ -121,4 +121,45 @@ test('AI prompts are a playbook kind with a copy button, and the AI rules are dr
   assert.match(src, /title: 'AI rules', needsReview: true/);
   assert.match(src, /Never remove a watermark/);
   assert.match(src, /SELECT \$1, \$2, \$3, \$4, \$5, \$6, \$7\s/, 'needsReview reaches the needs_review column');
+});
+
+test('the quiz is marked on the server; its step ticks only from a passing attempt', () => {
+  const z = TRAINING.QUIZZES.basics;
+  assert.ok(z.questions.length >= 8 && z.pass <= z.questions.length);
+  for (const x of z.questions) {
+    assert.ok(Number.isInteger(x.answer) && x.answer >= 0 && x.answer < x.choices.length, x.id);
+    assert.ok(x.why, `${x.id} explains the answer`);
+  }
+  const ids = z.questions.map((x) => x.id);
+  assert.strictEqual(new Set(ids).size, ids.length);
+  // The page copy carries no answers.
+  assert.ok(TRAINING.quizForPage('basics').questions.every((x) => !('answer' in x) && !('why' in x)));
+  assert.strictEqual(TRAINING.quizForPage('__proto__'), null);
+  assert.strictEqual(TRAINING.gradeQuiz('nope', {}), null);
+
+  const all = Object.fromEntries(z.questions.map((x) => [x.id, String(x.answer)]));
+  assert.deepStrictEqual([TRAINING.gradeQuiz('basics', all).score, TRAINING.gradeQuiz('basics', all).passed], [z.questions.length, true]);
+  const bad = { ...all, [ids[0]]: '9', [ids[1]]: '-1', [ids[2]]: 'x' };
+  delete bad[ids[3]];
+  const r = TRAINING.gradeQuiz('basics', bad);
+  assert.strictEqual(r.score, z.questions.length - 4, 'out-of-range, junk and missing picks are wrong, not errors');
+  assert.strictEqual(r.passed, r.score >= z.pass);
+
+  assert.strictEqual(TRAINING.mayTick('quiz:basics', true), false, 'nobody ticks the quiz by hand');
+  const none = TRAINING.progress(new Map([['quiz:basics', { done_at: new Date() }]]), {});
+  assert.strictEqual(none.steps.find((s) => s.key === 'quiz:basics').done, false, 'a stored tick does not stand in for a pass');
+  const passed = TRAINING.progress(new Map(), { quizzes: { basics: 1 } });
+  assert.strictEqual(passed.steps.find((s) => s.key === 'quiz:basics').done, true);
+});
+
+test('quiz routes: a helper hands in their own; answers stay off the helper page', () => {
+  assert.strictEqual(STAFF.ROUTES['GET /admin/training/quiz/:key'], 'any');
+  assert.strictEqual(STAFF.ROUTES['POST /admin/training/quiz/:key'], 'any');
+  const post = route("app.post('/admin/training/quiz/:key', requireAdmin");
+  assert.match(post, /actor\.kind !== 'staff'/, 'the owner does not take the quiz');
+  assert.match(post, /\[actor\.id, key, r\.score/, 'an attempt is stored against the signed-in helper only');
+  const page = route("app.get('/admin/training/quiz/:key', requireAdmin");
+  const helperView = page.slice(page.indexOf('TRAINING.quizForPage(key)'));
+  assert.doesNotMatch(helperView, /\.answer\b|\.why\b/, 'the helper page never prints answers');
+  assert.match(src, /CREATE TABLE IF NOT EXISTS staff_quiz_attempts/);
 });

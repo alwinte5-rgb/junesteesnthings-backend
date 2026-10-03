@@ -1112,6 +1112,20 @@ async function initStaffTables() {
       signed_by  INTEGER,
       PRIMARY KEY (staff_id, step_key)
     )`);
+  /* Quiz attempts (TRAINING.QUIZZES). Every attempt is kept, so the owner
+     sees the first score as well as the pass. Marked on the server. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_quiz_attempts (
+      id          SERIAL PRIMARY KEY,
+      staff_id    INTEGER NOT NULL,
+      quiz_key    TEXT NOT NULL,
+      score       INTEGER NOT NULL,
+      total       INTEGER NOT NULL,
+      passed      BOOLEAN NOT NULL,
+      missed      TEXT[] NOT NULL DEFAULT '{}',
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query('CREATE INDEX IF NOT EXISTS staff_quiz_attempts_staff ON staff_quiz_attempts (staff_id, quiz_key)');
   // Coaching notes the owner writes outside an approval.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS staff_feedback (
@@ -23507,7 +23521,28 @@ async function trainingFacts(staffId) {
              + (SELECT COUNT(*) FROM sms_messages WHERE sent_by = $1)
              + (SELECT COUNT(*) FROM staff_approvals WHERE requested_by = $1 AND kind = 'message'))::int AS messages`,
     [staffId]);
-  return f || {};
+  const { rows: q } = await pool.query(
+    'SELECT quiz_key, COUNT(*)::int AS n FROM staff_quiz_attempts WHERE staff_id = $1 AND passed GROUP BY quiz_key', [staffId]);
+  return { ...(f || {}), quizzes: Object.fromEntries(q.map((r) => [r.quiz_key, r.n])) };
+}
+
+/** A helper's attempts at one quiz, oldest first. */
+async function quizAttempts(staffId, quizKey) {
+  const { rows } = await pool.query(
+    `SELECT score, total, passed, missed, created_at FROM staff_quiz_attempts
+      WHERE staff_id = $1 AND quiz_key = $2 ORDER BY created_at, id`, [staffId, quizKey]);
+  return rows;
+}
+
+/** "First try 7/10 · passed 9/10 on try 2", for the owner. */
+function quizSummary(attempts) {
+  if (!attempts.length) return 'Not taken yet';
+  const first = attempts[0];
+  const passAt = attempts.findIndex((a) => a.passed);
+  const parts = [`First try ${first.score}/${first.total}`];
+  if (passAt > 0) parts.push(`passed ${attempts[passAt].score}/${attempts[passAt].total} on try ${passAt + 1}`);
+  else if (passAt === -1) parts.push(`${attempts.length} ${attempts.length === 1 ? 'try' : 'tries'}, not passed yet`);
+  return parts.join(' · ');
 }
 
 async function trainingFor(staffId) {
@@ -23560,11 +23595,14 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
     }
     const who = owner ? roster.find((r) => r.id === staffId) : actor;
     const titles = TRAINING.visibleSteps().filter((s) => s.article).map((s) => s.article);
-    const [p, notes, arts, gaps] = await Promise.all([
+    const quizSteps = TRAINING.visibleSteps().filter((s) => s.type === 'quiz');
+    const [p, notes, arts, gaps, ...tries] = await Promise.all([
       trainingFor(staffId), coachingNotes(staffId),
       pool.query('SELECT id, title FROM kb_articles WHERE published AND title = ANY($1)', [titles]),
       owner ? pool.query('SELECT id, title, body FROM kb_articles WHERE published ORDER BY title') : Promise.resolve({ rows: [] }),
+      ...quizSteps.map((s) => quizAttempts(staffId, s.quiz)),
     ]);
+    const quizTries = new Map(quizSteps.map((s, i) => [s.key, tries[i]]));
     const articleId = new Map(arts.rows.map((a) => [a.title, a.id]));
     const stepRow = (s) => {
       const link = s.article && articleId.has(s.article)
@@ -23574,15 +23612,19 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
       if (s.type === 'read' && !s.done && !owner) {
         action = `<form method="post" action="/admin/training/read" style="margin:0">
           <input type="hidden" name="key" value="${escEmail(s.key)}"><button type="submit" class="btn btn-ghost">I've read it</button></form>`;
+      } else if (s.type === 'quiz') {
+        action = owner ? `<a class="btn btn-ghost" href="/admin/training/quiz/${escEmail(s.quiz)}">See the questions</a>`
+          : `<a class="btn ${s.done ? 'btn-ghost' : ''}" href="/admin/training/quiz/${escEmail(s.quiz)}">${s.done ? 'Take it again' : 'Take the quiz'}</a>`;
       } else if (s.type === 'signoff' && owner) {
         action = `<form method="post" action="/admin/training/signoff" style="margin:0">
           <input type="hidden" name="staff_id" value="${staffId}"><input type="hidden" name="key" value="${escEmail(s.key)}">
           ${s.done ? '<input type="hidden" name="undo" value="1"><button type="submit" class="btn btn-ghost">Undo</button>'
                    : '<button type="submit" class="btn">Sign off</button>'}</form>`;
       }
-      const kind = { read: 'Read', do: 'Do', signoff: 'Owner signs off' }[s.type];
+      const kind = { read: 'Read', do: 'Do', signoff: 'Owner signs off', quiz: 'Quiz' }[s.type];
+      const tried = s.type === 'quiz' ? ` &middot; ${escEmail(quizSummary(quizTries.get(s.key) || []))}` : '';
       return `<div class="row-i"><span class="row-main"><b>${link}</b>
-        <div class="row-sub" style="white-space:normal">${escEmail(kind)}${s.hint ? ` &middot; ${escEmail(s.hint)}` : ''}${
+        <div class="row-sub" style="white-space:normal">${escEmail(kind)}${s.hint ? ` &middot; ${escEmail(s.hint)}` : ''}${tried}${
           s.done && s.doneAt ? ` &middot; ${escEmail(whenShort(s.doneAt))}` : ''}</div></span>
         <span class="row-end" style="display:flex;gap:8px;align-items:center">${
           action || (s.done ? pill('done', 'green') : pill('to do', 'neutral'))}${s.done && action ? pill('done', 'green') : ''}</span></div>`;
@@ -23615,6 +23657,82 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
     console.error('training page failed:', err.message);
     res.status(500).send(adminPage('Training', '<div class="card"><div class="warn">Could not load training.</div></div>', 'training'));
   }
+});
+
+/* The quiz page. A helper sees the questions without answers and posts them
+   back to be marked; the owner sees every question with its answer, and who
+   missed what. Answers never reach a helper's page before marking. */
+function quizStep(key) {
+  return TRAINING.visibleSteps().find((s) => s.type === 'quiz' && s.quiz === key) || null;
+}
+
+app.get('/admin/training/quiz/:key', requireAdmin, async (req, res) => {
+  const key = String(req.params.key || '');
+  const z = quizStep(key) && TRAINING.QUIZZES[key];
+  if (!z) return back(res, '/admin/training', 'err', 'No such quiz.');
+  const actor = currentActor() || OWNER_ACTOR;
+  const owner = actor.kind !== 'staff';
+  try {
+    if (owner) {
+      const roster = await staffRoster({ activeOnly: true });
+      const tries = await Promise.all(roster.map((r) => quizAttempts(r.id, key)));
+      const missedBy = new Map();
+      roster.forEach((r, i) => { const last = tries[i][tries[i].length - 1];
+        for (const id of (last ? last.missed : [])) missedBy.set(id, [...(missedBy.get(id) || []), r.name]); });
+      return res.send(adminPage('Training', `
+        ${pageHeader(z.title, `Pass mark ${z.pass} of ${z.questions.length}. Helpers see the questions without the answers until they finish.`,
+          '<a class="btn btn-ghost" href="/admin/training">Back to training</a>')}
+        <div class="card"><b>Results</b>${roster.length ? roster.map((r, i) => `<div class="row-i"><span class="row-main"><b>${escEmail(r.name)}</b>
+          <div class="row-sub">${escEmail(quizSummary(tries[i]))}</div></span></div>`).join('') : '<p class="muted">No active helpers yet.</p>'}</div>
+        <div class="card"><b>The questions</b>${z.questions.map((x, n) => `<div class="row-i"><span class="row-main" style="white-space:normal">
+          <b>${n + 1}. ${escEmail(x.q)}</b>
+          ${x.choices.map((c, i) => `<div class="row-sub" style="white-space:normal">${i === x.answer ? '✓ <b>' + escEmail(c) + '</b>' : '&nbsp;&nbsp;&nbsp;' + escEmail(c)}</div>`).join('')}
+          <div class="row-sub muted" style="white-space:normal">Why: ${escEmail(x.why)}</div>
+          ${missedBy.has(x.id) ? `<div class="row-sub" style="white-space:normal">${pill('missed', 'amber')} last try: ${escEmail(missedBy.get(x.id).join(', '))}</div>` : ''}
+        </span></div>`).join('')}</div>`, 'training'));
+    }
+    const view = TRAINING.quizForPage(key);
+    res.send(adminPage('Training', `
+      ${pageHeader(view.title, `${view.questions.length} questions. Get ${view.pass} right to pass. No sums: pick what you would really do.`,
+        '<a class="btn btn-ghost" href="/admin/training">Back to training</a>')}
+      <form method="post" action="/admin/training/quiz/${escEmail(key)}">
+        ${view.questions.map((x, n) => `<fieldset class="card" style="border:0">
+          <legend style="font-weight:700;white-space:normal">${n + 1}. ${escEmail(x.q)}</legend>
+          ${x.choices.map((c, i) => `<label style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;cursor:pointer">
+            <input type="radio" name="${escEmail(x.id)}" value="${i}" required style="margin-top:3px"> <span>${escEmail(c)}</span></label>`).join('')}
+        </fieldset>`).join('')}
+        <button type="submit" class="btn">Mark my answers</button>
+      </form>`, 'training'));
+  } catch (err) {
+    console.error('quiz page failed:', err.message);
+    res.status(500).send(adminPage('Training', '<div class="card"><div class="warn">Could not load the quiz.</div></div>', 'training'));
+  }
+});
+
+// A helper hands in the quiz. It is marked here and every attempt is kept.
+app.post('/admin/training/quiz/:key', requireAdmin, async (req, res) => {
+  const actor = currentActor();
+  const key = String(req.params.key || '');
+  if (!actor || actor.kind !== 'staff') return res.redirect(`/admin/training/quiz/${encodeURIComponent(key)}`);
+  if (!quizStep(key)) return back(res, '/admin/training', 'err', 'No such quiz.');
+  const r = TRAINING.gradeQuiz(key, req.body || {});
+  try {
+    await pool.query(
+      `INSERT INTO staff_quiz_attempts (staff_id, quiz_key, score, total, passed, missed) VALUES ($1, $2, $3, $4, $5, $6)`,
+      [actor.id, key, r.score, r.total, r.passed, r.results.filter((x) => !x.right).map((x) => x.id)]);
+  } catch (err) {
+    console.error('quiz save failed:', err.message);
+    return res.status(500).send(adminPage('Training', '<div class="card"><div class="warn">Your answers could not be saved. Please try again.</div></div>', 'training'));
+  }
+  res.send(adminPage('Training', `
+    ${pageHeader(r.passed ? `Passed: ${r.score} of ${r.total}` : `${r.score} of ${r.total}: not passed yet`,
+      r.passed ? 'Well done. The owner can see your result on Training.' : `You need ${r.pass} to pass. Read why below, then take it again.`,
+      `<a class="btn btn-ghost" href="/admin/training">Back to training</a> <a class="btn ${r.passed ? 'btn-ghost' : ''}" href="/admin/training/quiz/${escEmail(key)}">Take it again</a>`)}
+    <div class="card">${r.score === r.total ? '<p>Every answer right.</p>' : ''}${r.results.map((x, n) => `<div class="row-i"><span class="row-main" style="white-space:normal">
+      <b>${n + 1}. ${escEmail(x.q)}</b>
+      <div class="row-sub" style="white-space:normal">${x.right ? pill('right', 'green') : pill('wrong', 'red')}
+        ${x.right ? escEmail(x.answerText) : `You picked: ${escEmail(x.pickedText || 'nothing')}. Best answer: <b>${escEmail(x.answerText)}</b>`}</div>
+      <div class="row-sub muted" style="white-space:normal">${escEmail(x.why)}</div></span></div>`).join('')}</div>`, 'training'));
 });
 
 // A helper ticks their own reading. The owner has no reading to tick.
@@ -24058,6 +24176,31 @@ const KB_ADDED = [
 
 ` +
 `Check the answer against the artwork guides in this playbook before sending it.` },
+  /* Quiet-time prospecting, for the training step and quiz. A draft for the
+     owner to check: the daily target is left as a placeholder. */
+  { kind: 'sop', title: 'Finding new leads in quiet time', needsReview: true,
+    tags: 'prospecting, new leads, find customers, outreach, quiet time, sales',
+    body: `When no leads are waiting, find new ones. The aim is a few good prospects, not a long list.\n\n` +
+`**Who needs shirts soon**\n\n` +
+`- Schools, PTOs and booster clubs (spirit wear, field day, graduation)\n` +
+`- Youth and adult sports leagues before a season starts\n` +
+`- Churches, camps and charity runs or walks\n` +
+`- Small businesses (staff shirts, uniforms, opening events)\n` +
+`- Family reunions, clubs, and Greek life\n\n` +
+`**Where to look**\n\n` +
+`- Google Maps and league or school websites near us\n` +
+`- Local Facebook groups and events pages\n` +
+`- Past customers on Customers: a team that ordered last season will need shirts again\n\n` +
+`**What to do with each one**\n\n` +
+`- Add them on Leads (Add a lead) with the link where you found them, and a note on why they need shirts now\n` +
+`- Send one short, personal email or DM: mention their team or event, and offer an easy next step ("Want a couple of design ideas and a price?")\n` +
+`- Set a follow-up date. Follow up twice at most (after about 3 days, then about 10)\n\n` +
+`**Never**\n\n` +
+`- Text or call a number you found online. Email or DM only\n` +
+`- Add anyone to the newsletter who did not sign up\n` +
+`- Post the same message across many groups\n` +
+`- Contact anyone who has said no\n\n` +
+`Target: [new prospects per quiet hour, owner to fill in].` },
 ];
 
 async function addPlaybookArticles() {
