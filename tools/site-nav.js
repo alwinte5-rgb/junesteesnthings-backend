@@ -61,11 +61,17 @@ const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 const ICON = {
   ig: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.2c3.2 0 3.6 0 4.8.1 3.3.1 4.8 1.7 4.9 4.9.1 1.3.1 1.6.1 4.8s0 3.6-.1 4.8c-.1 3.2-1.7 4.8-4.9 4.9-1.3.1-1.6.1-4.8.1s-3.6 0-4.8-.1c-3.3-.1-4.8-1.7-4.9-4.9C2.2 15.6 2.2 15.2 2.2 12s0-3.6.1-4.8C2.4 3.9 3.9 2.4 7.2 2.3 8.4 2.2 8.8 2.2 12 2.2zm0 3.6a6.2 6.2 0 1 0 0 12.4 6.2 6.2 0 0 0 0-12.4zm0 10.2a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm6.4-11.8a1.4 1.4 0 1 0 0 2.9 1.4 1.4 0 0 0 0-2.9z"/></svg>',
   phone: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1C7 1 3 5 3 10v7c0 1.7 1.3 3 3 3h3v-8H5v-2c0-3.9 3.1-7 7-7s7 3.1 7 7v2h-4v8h3c1.7 0 3-1.3 3-3v-7c0-5-4-9-9-9z"/></svg>',
+  cart: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 18a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm10 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM5.2 4l.9 2H20a1 1 0 0 1 .9 1.4l-3.3 6A2 2 0 0 1 15.9 14H8.1l-1 1.8V16h12v2H7a2 2 0 0 1-1.8-2.9l1.4-2.5L3 4H1V2h3.3l.9 2z"/></svg>',
+  user: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10zm0 2c-4.4 0-9 2.2-9 5v3h18v-3c0-2.8-4.6-5-9-5z"/></svg>',
   text: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM7 9h10v2H7V9zm6 5H7v-2h6v2zm4-6H7V6h10v2z"/></svg>',
 };
 
-function render(nav) {
-  const link = (i, cls) => `<a href="${esc(i.href)}"${cls ? ` class="${cls}"` : ''}${/design\.jtees\.net/.test(i.href) ? ' data-from="nav"' : ''}>${esc(i.label)}</a>`;
+/* `site` is '' for jtees.net's own pages (links stay relative) and
+   'https://www.jtees.net' for the snippet the Design Studio shows, where every
+   jtees.net link and asset must be absolute. */
+function render(nav, site = '') {
+  const abs = (h) => (site && h.startsWith('/') ? site + h : h);
+  const link = (i, cls) => `<a href="${esc(abs(i.href))}"${cls ? ` class="${cls}"` : ''}${/design\.jtees\.net/.test(i.href) ? ' data-from="nav"' : ''}>${esc(i.label)}</a>`;
   const desk = nav.menu.map((m) => m.items
     ? `<div class="jtn-dd"><button type="button" class="jtn-dd-t" aria-expanded="false">${esc(m.label)}</button><div class="jtn-dd-m">${
         m.items.map((i) => link(i, i.strong ? 'jtn-strong' : '')).join('')}</div></div>`
@@ -73,22 +79,28 @@ function render(nav) {
   const drawer = nav.menu.map((m) => m.items
     ? `<details><summary>${esc(m.label)}</summary>${m.items.map((i) => link(i, i.strong ? 'jtn-strong' : '')).join('')}</details>`
     : link(m)).join('\n    ');
-  const bar = nav.announcement.map((a) => a.href ? `<a href="${esc(a.href)}">${esc(a.text)}</a>` : esc(a.text)).join(' <span aria-hidden="true">|</span> ');
+  const bar = nav.announcement.map((a) => a.href ? `<a href="${esc(abs(a.href))}">${esc(a.text)}</a>` : esc(a.text)).join(' <span aria-hidden="true">|</span> ');
   const tel = `tel:${nav.phone.tel}`;
   const sms = `sms:${nav.phone.tel}?&body=Hi%20June%27s%20Tees!%20I%20have%20a%20question%20about%20a%20custom%20order.`;
+  const head = site ? `<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
+<link rel="stylesheet" href="${site}/assets/css/site-nav.css" />
+` : '';
   return `${START}
-<div class="jtn-bar">${bar}</div>
+${head}<div class="jtn-bar">${bar}</div>
 <div class="jtn" role="banner">
   <div class="jtn-in">
-    <a href="/" class="jtn-logo"><img src="/assets/images/brand/logo-mark.png" alt="June's Tees &amp; Things logo" width="40" height="44" /><span>June's Tees &amp; Things<small>Chicago Custom Printing</small></span></a>
+    <a href="${abs('/')}" class="jtn-logo"><img src="${abs('/assets/images/brand/logo-mark.png')}" alt="June's Tees &amp; Things logo" width="40" height="44" /><span>June's Tees &amp; Things<small>Chicago Custom Printing</small></span></a>
     <nav class="jtn-menu" aria-label="Main">
       ${desk}
     </nav>
     <div class="jtn-act">
       <a href="${esc(nav.instagram)}" class="jtn-icon" target="_blank" rel="noopener noreferrer" aria-label="Instagram">${ICON.ig}</a>
-      <a href="${tel}" class="jtn-contact hcontact" aria-label="Call us">${ICON.phone}<span><b>Talk to a Real Person</b>${esc(nav.phone.display)}</span></a>
-      <a href="${sms}" class="jtn-contact hcontact" aria-label="Text us">${ICON.text}<span><b>Text Us</b>Fast reply</span></a>
-      <a href="${esc(nav.quote.href)}" class="jtn-quote">${esc(nav.quote.label)}</a>
+      <a href="${tel}" class="jtn-contact" aria-label="Call us">${ICON.phone}<span><b>Talk to a Real Person</b>${esc(nav.phone.display)}</span></a>
+      ${/* Only Text Us carries hcontact, which the pages' chat script turns into
+            the chat window on desktop. Calling always dials (owner, 2026-10-02). */ ''}<a href="${sms}" class="jtn-contact hcontact" aria-label="Text us">${ICON.text}<span><b>Text Us</b>Fast reply</span></a>
+      <a href="${esc(nav.account.href)}" class="jtn-icon jtn-ico-acct" aria-label="${esc(nav.account.label)}">${ICON.user}</a>
+      <a href="${esc(nav.cart.href)}" class="jtn-icon jtn-ico-cart" aria-label="${esc(nav.cart.label)}">${ICON.cart}</a>
+      <a href="${esc(abs(nav.quote.href))}" class="jtn-quote">${esc(nav.quote.label)}</a>
       <button type="button" class="jtn-burger" aria-label="Open menu" aria-expanded="false" aria-controls="jtn-drawer"><span></span><span></span><span></span></button>
     </div>
   </div>
@@ -99,13 +111,14 @@ function render(nav) {
   <div class="jtn-drawer-nav">
     ${drawer}
   </div>
+  <div class="jtn-drawer-nav jtn-drawer-me"><a href="${esc(nav.cart.href)}">🛒 ${esc(nav.cart.label)}</a><a href="${esc(nav.account.href)}">👤 ${esc(nav.account.label)}</a></div>
   <div class="jtn-drawer-cta">
     <a href="${esc(nav.design.href)}" class="jtn-btn" data-from="nav">${esc(nav.design.label)}</a>
-    <a href="${esc(nav.quote.href)}" class="jtn-btn jtn-btn-2">${esc(nav.quote.label)}</a>
+    <a href="${esc(abs(nav.quote.href))}" class="jtn-btn jtn-btn-2">${esc(nav.quote.label)}</a>
     <a href="${tel}" class="jtn-btn jtn-btn-2">📞 ${esc(nav.phone.display)}</a>
   </div>
 </div>
-<script src="/assets/js/site-nav.js" defer></script>
+<script src="${abs('/assets/js/site-nav.js')}" defer></script>
 ${END}`;
 }
 
@@ -185,6 +198,14 @@ function run(mode) {
   const nav = JSON.parse(fs.readFileSync(NAV, 'utf8'));
   const block = render(nav);
   const drifted = [];
+  /* The Design Studio's copy: same menu, absolute links. design.jtees.net
+     fetches this file (jt-site-nav.php) and keeps a copy in its repo. */
+  const snippetFile = path.join(PUBLIC, 'assets', 'data', 'site-nav.html');
+  const snippet = render(nav, 'https://www.jtees.net') + '\n';
+  if (!fs.existsSync(snippetFile) || fs.readFileSync(snippetFile, 'utf8') !== snippet) {
+    drifted.push('assets/data/site-nav.html');
+    if (mode === 'write') fs.writeFileSync(snippetFile, snippet);
+  }
   for (const rel of pages()) {
     const file = path.join(PUBLIC, rel);
     const before = fs.readFileSync(file, 'utf8');

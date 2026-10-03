@@ -33,6 +33,13 @@ test('every page has the current menu (else: node tools/site-nav.js --write)', (
   }
 });
 
+test("the Design Studio's copy has only absolute links, plus cart and account", () => {
+  const snip = read('assets/data/site-nav.html');
+  const refs = [...snip.matchAll(/(?:href|src)="([^"]+)"/g)].map((m) => m[1]);
+  assert.deepStrictEqual(refs.filter((h) => !/^(https:\/\/|tel:|sms:)/.test(h)), [], 'a relative link would point at design.jtees.net');
+  assert.ok(snip.includes('https://design.jtees.net/cart.php') && snip.includes('https://design.jtees.net/account.php'));
+});
+
 test('every menu link goes somewhere real', () => {
   const nav = JSON.parse(read('assets/data/site-nav.json'));
   const links = nav.menu.flatMap((m) => m.items ? m.items : [m]).map((i) => i.href);

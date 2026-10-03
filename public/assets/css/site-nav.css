@@ -21,6 +21,7 @@
 .jtn-dd-m a:hover{background:#F7F6F3;color:#0B1F4B;}
 .jtn .jtn-strong{color:#1848B8;font-weight:700;}
 .jtn-act{display:flex;align-items:center;gap:.6rem;flex-shrink:0;}
+.jtn-icon{display:flex;align-items:center;}
 .jtn-icon svg,.jtn-contact svg{width:20px;height:20px;fill:#F0275A;flex-shrink:0;}
 .jtn-icon svg{fill:#0B1F4B;}
 .jtn-contact{display:flex;align-items:center;gap:.4rem;color:#F0275A;font:600 .72rem/1.2 Inter,system-ui,sans-serif;}
@@ -54,3 +55,16 @@
 html{overflow-x:clip;}
 /* Price and comparison tables scroll inside their own box on phones. */
 @media(max-width:640px){table.price-table,table.compare-table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;}}
+/* Cart and account (they live in the Design Studio). */
+.jtn-ico-acct svg,.jtn-ico-cart svg{fill:#0B1F4B;}
+.jtn-drawer-me{margin-top:.4rem;}
+@media(max-width:1120px){.jtn-ico-cart{display:flex!important;}}
+/* Small phones: logo, cart, Get a Quote and the menu button must fit 360px. */
+@media(max-width:480px){
+  .jtn-in{padding:.5rem .75rem;gap:.5rem;}
+  .jtn-act{gap:.4rem;}
+  .jtn-logo{min-width:0;flex-shrink:1;gap:.4rem;}
+  .jtn-logo img{width:34px;height:38px;}
+  .jtn-logo span{display:block;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.88rem;}
+  .jtn-burger{width:36px;height:36px;padding:7px;}
+}
