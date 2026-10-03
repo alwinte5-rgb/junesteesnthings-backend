@@ -3333,6 +3333,13 @@
       else                   phoneField.value = d;
     });
 
+    /* Every way the form can fail, counted (plan 1d): GA4 quote_form_error
+       {reason}. Reasons are fixed words, never what was typed. The server
+       counts its own refusals too, for the morning email. */
+    const formError = (reason) => {
+      try { if (window.jtTrack) jtTrack('quote_form_error', { reason: reason }); } catch { /* never block the form */ }
+    };
+
     quoteForm.addEventListener('submit', async (e) => {
       e.preventDefault();
 
@@ -3340,6 +3347,7 @@
       if (phoneDigits.length !== 10) {
         formStatus.className = 'error';
         formStatus.textContent = 'Please enter a valid 10-digit phone number.';
+        formError('phone');
         phoneField.focus();
         return;
       }
@@ -3347,6 +3355,7 @@
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailField.value.trim())) {
         formStatus.className = 'error';
         formStatus.textContent = 'Please enter a valid email address.';
+        formError('email');
         emailField.focus();
         return;
       }
@@ -3402,10 +3411,18 @@
           const body = await res.json().catch(() => ({}));
           formStatus.className = 'error';
           formStatus.textContent = body.error || 'Please refresh the page and try again.';
+          formError(/human check/i.test(body.error || '') ? 'human_check' : body.error === 'Bad request' ? 'bot_filter' : 'server_refused');
+        } else if (res.status === 429) {
+          /* The 4-an-hour limit. Usually someone retrying a form that seemed
+             stuck: tell them how to reach us now rather than "went wrong". */
+          formStatus.className = 'error';
+          formStatus.textContent = "We've received several requests from you in the last hour. Please call or text us at (773) 849-1854 and we'll help right away.";
+          formError('rate_limit');
         } else {
           throw new Error('Server error');
         }
       } catch {
+        formError('network_or_server');
         formStatus.className = 'error';
         formStatus.textContent = 'Something went wrong. Please call or DM us directly.';
       } finally {

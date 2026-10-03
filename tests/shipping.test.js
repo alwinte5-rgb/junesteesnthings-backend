@@ -404,8 +404,8 @@ test('the menu, the dashboard and the morning email all say what is waiting', ()
   assert.match(dash, /title: `\$\{ship\.count\} paid order\$\{ship\.count === 1 \? '' : 's'\} waiting to go out`/);
   assert.match(dash, /href: '\/admin\/shipping' \}\] : \[\]\),/);
   const digest = lift('sendDailyDigest');
-  assert.match(digest, /if \(!rows\.length && !ship\) return;/, 'a day with only studio orders waiting still sends');
-  assert.match(digest, /if \(!live\.length && !ship\) return;/);
+  assert.match(digest, /if \(!rows\.length && !ship( && !healthHtml)?\) return;/, 'a day with only studio orders waiting still sends');
+  assert.match(digest, /if \(!live\.length && !ship( && !healthHtml)?\) return;/);
   assert.match(digest, /\(ship \? `\$\{ship\.subject\} · ` : ''\) \+/);
   assert.match(digest, /\$\{shipDigestHtml\(ship\)\}<h2/);
 });
