@@ -66,6 +66,8 @@ test('the Shop works without the feed: built-in cards, all into the designer', (
     const links = [...box.matchAll(/<a class="jt-card" href="([^"]+)"/g)].map((m) => m[1]);
     assert.ok(links.length >= 4, id + ' has built-in cards');
     for (const l of links) assert.match(l, /^https:\/\/design\.jtees\.net\/product/);
+    // Every card shows a price line, so the two grids read the same (owner, 2026-10-02).
+    assert.strictEqual((box.match(/class="pr">(From \$\d+\.\d\d \+ printing|Custom pricing)</g) || []).length, links.length, id + ': a price on every card');
   }
   assert.match(page, /<script src="\/assets\/js\/shop-feed\.js" defer><\/script>/);
   assert.match(page, /id="shop"/, 'design.jtees.net/ will redirect to /#shop');
