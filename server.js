@@ -22,6 +22,7 @@ const {
 } = require('./tools/lib/sms-consent');
 const SHIP = require('./tools/lib/shipping');
 const { quoteAnalyticsTags, paidQuery } = require('./tools/lib/quote-analytics');
+const { cleanShopFeed } = require('./tools/lib/shop-feed');
 const { legacyRedirect, LEGACY_PATHS } = require('./tools/lib/legacy-redirects');
 const { T: SMS, plain: smsPlain, PICKUP: SMS_PICKUP } = require('./tools/lib/sms-templates');
 const { verifyTwilioSignature, classifyInbound } = require('./tools/lib/twilio-webhook');
@@ -8803,6 +8804,31 @@ async function getCatalog() {
   } catch (err) {
     console.error('catalog fetch failed:', err.message);
     return _catCache.data || { products: [], methods: [] };
+  }
+}
+
+/* The homepage's Shop section: the designer's categories and best sellers
+   (jt-shop-feed.php), cached 10 minutes like the catalogue. When the designer
+   is down the last good copy is served, and with none the browser keeps the
+   cards built into the page — so the homepage never shows an empty shop.
+   A failure goes to the error digest: a stale shop window is easy to miss. */
+let _shopCache = { at: 0, data: null };
+async function getShopFeed() {
+  if (_shopCache.data && Date.now() - _shopCache.at < 10 * 60 * 1000) return _shopCache.data;
+  if (!process.env.JT_INTERNAL_KEY) return _shopCache.data;
+  try {
+    const r = await studioFetch('https://design.jtees.net/jt-shop-feed.php');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = cleanShopFeed(await r.json());
+    if (!d || !d.categories.length) throw new Error('no usable cards in the designer feed');
+    _shopCache = { at: Date.now(), data: d };
+    return d;
+  } catch (err) {
+    console.error('shop feed fetch failed:', err.message);
+    /* Retried on the next visitor after a minute, not on every one. */
+    _shopCache.at = Date.now() - 9 * 60 * 1000;
+    reportError('shop-feed', err).catch(() => {});
+    return _shopCache.data;
   }
 }
 
@@ -18271,6 +18297,15 @@ async function requestReview({ token, name, email, phone, product, order_ref, qu
   });
   return token;
 }
+
+/* The homepage's Shop cards. Public fields only; 204 when there is nothing
+   yet, and the page keeps its built-in cards. */
+app.get('/api/shop-feed', signatureRateLimit, async (_req, res) => {
+  const d = await getShopFeed();
+  if (!d) return res.status(204).end();
+  res.set('Cache-Control', 'public, max-age=300');
+  res.json(d);
+});
 
 /* Public feed for the storefront + schema. */
 app.get('/api/reviews', async (req, res) => {

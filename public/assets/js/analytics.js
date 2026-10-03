@@ -91,25 +91,39 @@
   };
 
   // ── Auto-instrument clicks (zero per-link markup, covers every page) ───
-  //   design.jtees.net links -> designer_open   (designer discovery)
+  //   design.jtees.net links -> designer_open {href, from}  (designer discovery)
+  //   a[data-card]           -> shop_card_click {kind, name, from}
   //   tel: links             -> phone_click + Meta 'Contact'
   //   sms: links             -> text_click  + Meta 'Contact'
-  document.addEventListener('DOMContentLoaded', function () {
-    function bind(sel, handler) {
-      Array.prototype.forEach.call(document.querySelectorAll(sel), function (a) {
-        a.addEventListener('click', function () { handler(a); });
+  // One listener on the document rather than one per link, so cards a script
+  // adds after load (the homepage's live Shop cards) are counted too.
+  // `from` is the link's data-from, else the id of the section it sits in,
+  // which is what tells a hero click from a Shop-card click.
+  function whereFrom(a) {
+    if (a.getAttribute('data-from')) return a.getAttribute('data-from');
+    var sec = a.closest('section[id], header, footer, nav');
+    return sec ? (sec.id || sec.tagName.toLowerCase()) : 'page';
+  }
+  document.addEventListener('click', function (e) {
+    var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    if (!a) return;
+    var href = a.getAttribute('href') || '';
+    if (a.hasAttribute('data-card')) {
+      var nm = a.querySelector('.nm');
+      window.jtTrack('shop_card_click', {
+        kind: a.getAttribute('data-card'),
+        name: nm ? nm.textContent.trim().slice(0, 100) : '',
+        from: whereFrom(a)
       });
     }
-    bind('a[href*="design.jtees.net"]', function (a) {
-      window.jtTrack('designer_open', { href: a.getAttribute('href') });
-    });
-    bind('a[href^="tel:"]', function (a) {
-      window.jtTrack('phone_click', { number: a.getAttribute('href').replace('tel:', '') });
+    if (href.indexOf('design.jtees.net') !== -1) {
+      window.jtTrack('designer_open', { href: href, from: whereFrom(a) });
+    } else if (href.indexOf('tel:') === 0) {
+      window.jtTrack('phone_click', { number: href.replace('tel:', '') });
       if (fbOn && window.fbq) window.fbq('track', 'Contact');
-    });
-    bind('a[href^="sms:"]', function () {
+    } else if (href.indexOf('sms:') === 0) {
       window.jtTrack('text_click', {});
       if (fbOn && window.fbq) window.fbq('track', 'Contact');
-    });
+    }
   });
 })();
