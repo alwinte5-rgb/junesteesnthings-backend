@@ -223,6 +223,8 @@ const ROUTES = {
   'GET /admin/training': 'any',
   'POST /admin/training/read': 'any',
   'POST /admin/training/tip': 'any',
+  'GET /admin/training/quiz/:key': 'any',
+  'POST /admin/training/quiz/:key': 'any',
   'POST /admin/training/signoff': 'owner',
   'POST /admin/training/tips-reset': 'owner',
   'POST /admin/feedback': 'owner',
