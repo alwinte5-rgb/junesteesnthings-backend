@@ -270,6 +270,6 @@ test('the webhook keeps a chat once however often tawk sends it, and says so whe
 });
 
 test('embroidery requests say what they are, and old ones are back-filled', () => {
-  assert.match(src, /VALUES \(\$1,\$2,\$3,\$4,\$5,\$6,'embroidery'\)/);
+  assert.match(src, /VALUES \(\$1,\$2,\$3,\$4,\$5,\$6,'embroidery'(,\$7)?\)/);
   assert.match(src, /SET source = 'embroidery'\s+WHERE source = 'form' AND description LIKE 'EMBROIDERY REQUEST:%'/);
 });

@@ -127,3 +127,26 @@
     }
   });
 })();
+
+/* First touch (plan Phase 1c): how this visitor FIRST found us, kept for 90
+   days on .jtees.net so jtees.net and the Design Studio share it, and never
+   overwritten. A quote request or order sends it along, and the owner's lead
+   card shows "Came from: Google Ads / Instagram / …". Marketing tags only —
+   no name, email or phone. Same block in lumise-designer/analytics.php;
+   the server cleans it (tools/lib/first-touch.js). */
+(function () {
+  try {
+    if (/(?:^|;\s*)jt_ft=/.test(document.cookie)) return;
+    var q = new URLSearchParams(location.search), ft = {};
+    var put = function (k, v, cap) { if (v) ft[k] = String(v).slice(0, cap); };
+    put('src', q.get('utm_source'), 100); put('med', q.get('utm_medium'), 100); put('cmp', q.get('utm_campaign'), 120);
+    put('gclid', q.get('gclid'), 300); put('fbclid', q.get('fbclid'), 300); put('msclkid', q.get('msclkid'), 300);
+    var r = document.referrer || '';
+    if (r && !/^https?:\/\/([a-z0-9-]+\.)*jtees\.net(\/|$)/i.test(r)) put('ref', r.split('?')[0], 200);
+    put('land', location.hostname.replace(/^www\./, '') + location.pathname, 200);
+    put('at', new Date().toISOString().slice(0, 10), 30);
+    var dom = /(^|\.)jtees\.net$/.test(location.hostname) ? '; domain=.jtees.net' : '';
+    document.cookie = 'jt_ft=' + encodeURIComponent(JSON.stringify(ft)) + '; max-age=' + (90 * 86400) +
+      '; path=/' + dom + '; SameSite=Lax' + (location.protocol === 'https:' ? '; Secure' : '');
+  } catch (e) { /* never break the page for analytics */ }
+})();
