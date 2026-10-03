@@ -96,3 +96,29 @@ test('the server fills months on its own, remembers deletions, and lists by mont
   assert.doesNotMatch(src, /FROM expenses WHERE EXTRACT\(YEAR FROM spent_on\) = \$1\s+ORDER BY spent_on DESC, id DESC LIMIT 40/,
     'a month is never cut off by a row limit');
 });
+
+test('Finances opens on this month; a month or a whole year on request', () => {
+  const now = '2026-10';
+  assert.deepStrictEqual(E.financeView({}, now), { year: 2026, month: '2026-10' });
+  assert.deepStrictEqual(E.financeView({ year: '2026' }, now), { year: 2026, month: '2026-10' });
+  assert.deepStrictEqual(E.financeView({ month: '2026-08' }, now), { year: 2026, month: '2026-08' });
+  assert.deepStrictEqual(E.financeView({ month: '2025-12', year: '2026' }, now), { year: 2025, month: '2025-12' });
+  assert.deepStrictEqual(E.financeView({ year: '2026', month: 'all' }, now), { year: 2026, month: null });
+  assert.deepStrictEqual(E.financeView({ year: '2025' }, now), { year: 2025, month: null });
+  // Junk never reaches a query: it falls back to this month.
+  assert.deepStrictEqual(E.financeView({ month: '2026-13' }, now), { year: 2026, month: '2026-10' });
+  assert.deepStrictEqual(E.financeView({ month: "2026-10' OR 1=1" }, now), { year: 2026, month: '2026-10' });
+  assert.deepStrictEqual(E.financeView({ year: 'abcd' }, now), { year: 2026, month: '2026-10' });
+});
+
+test('a form returns to the view it was sent from', () => {
+  assert.strictEqual(E.viewQuery({ year: 2026, month: '2026-09' }), '?month=2026-09');
+  assert.strictEqual(E.viewQuery({ year: 2026, month: null }), '?year=2026&month=all');
+});
+
+test('the month dropdown lists the year\'s months with data, this month and the shown one, newest first', () => {
+  assert.deepStrictEqual(E.monthOptions(['2026-08', '2026-09', '2025-12', 'junk'], 2026, '2026-10', '2026-10'),
+    ['2026-10', '2026-09', '2026-08']);
+  assert.deepStrictEqual(E.monthOptions(['2026-08'], 2026, '2026-10', '2026-03'), ['2026-10', '2026-08', '2026-03']);
+  assert.deepStrictEqual(E.monthOptions(['2025-11', '2025-12', '2026-01'], 2025, '2026-10', null), ['2025-12', '2025-11']);
+});

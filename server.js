@@ -13295,8 +13295,12 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
     /* A new month has its monthly costs before anything is counted. A failure
        here must not hide the page; the hourly sweep tries again. */
     await rollRecurringExpenses().catch((e) => console.error('monthly costs roll failed:', e.message));
-    const year = /^\d{4}$/.test(String(req.query.year || ''))
-      ? Number(req.query.year) : new Date().getFullYear();
+    /* One month by default (this one), a month or the whole year on request. */
+    const { rows: [{ ym: thisYm }] } = await pool.query("SELECT to_char(CURRENT_DATE, 'YYYY-MM') AS ym");
+    const view = EXP.financeView(req.query, thisYm);
+    const { year, month } = view;
+    const viewQS = EXP.viewQuery(view);
+    const viewName = month ? EXP.monthLabel(month) : String(year);
 
     /* What counts, and why (the owner, 2026-09-30: "this is wrong" — the page
        said $12,183.66 of sales and $10,170 profit on $3,963.72 collected):
@@ -13371,8 +13375,11 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
     const marginPct = T.costedSales > 0 ? (T.costedSales - T.costs) / T.costedSales : null;
 
     const { rows: remitted } = await pool.query(
-      `SELECT COALESCE(SUM(amount),0) AS total FROM tax_remittances
-        WHERE EXTRACT(YEAR FROM paid_at) = $1`, [year]);
+      month
+        ? `SELECT COALESCE(SUM(amount),0) AS total FROM tax_remittances
+            WHERE to_char(paid_at, 'YYYY-MM') = $1`
+        : `SELECT COALESCE(SUM(amount),0) AS total FROM tax_remittances
+            WHERE EXTRACT(YEAR FROM paid_at) = $1`, [month || year]);
     const pos = await taxPositionByMonth(60);
 
     /* Receipts still carrying an unknown tax portion, oldest first — the ones
@@ -13415,23 +13422,36 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
     const { rows: expList } = await pool.query(
       `SELECT *, to_char(spent_on, 'YYYY-MM-DD') AS day FROM expenses WHERE EXTRACT(YEAR FROM spent_on) = $1
         ORDER BY spent_on DESC, id DESC`, [year]);
-    const { rows: [{ ym: thisYm }] } = await pool.query("SELECT to_char(CURRENT_DATE, 'YYYY-MM') AS ym");
     const expMonthsList = EXP.byMonth(expList);
     /* Fixed costs a month are THIS month's monthly entries (or the year's last
        month, looking back) — not every monthly entry in the year added up. */
-    const fixedNow = EXP.fixedMonthly(expList, thisYm < `${year}-12` ? thisYm : `${year}-12`);
+    const fixedNow = EXP.fixedMonthly(expList, month || (thisYm < `${year}-12` ? thisYm : `${year}-12`));
     const expTotal = round2(expByCat.reduce((s, r) => s + Number(r.total), 0));
+
+    /* The figures for what is shown: one month's row, or the year's total. */
+    const mRow = month ? months.find((m) => m.period === month) : null;
+    const S = !month ? T : {
+      collected: Number(mRow ? mRow.collected : 0), tax: Number(mRow ? mRow.tax : 0),
+      fees: Number(mRow ? mRow.fees : 0), sales: Number(mRow ? mRow.sales : 0),
+      costs: Number(mRow ? mRow.costs : 0), jobs: Number(mRow ? mRow.jobs : 0),
+      costed: Number(mRow ? mRow.costed : 0), otherSales: Number(mRow ? mRow.other_sales : 0),
+      taxUnknown: Number(mRow ? mRow.tax_unknown : 0) };
+    const monthGroup = month ? expMonthsList.find((g) => g.ym === month) : null;
+    const ovShown = month ? (monthGroup ? monthGroup.total : 0) : expTotal;
 
     /* Gross profit is what the jobs made. Net is what the business made —
        rent is owed whether or not anybody ordered. */
-    const gross = round2(T.sales - T.costs);
-    const net = round2(gross - expTotal);
-    const netPct = T.sales > 0 ? Math.round((net / T.sales) * 100) : null;
-    const gap = T.jobs - T.costed;
+    const gross = round2(S.sales - S.costs);
+    const net = round2(gross - ovShown);
+    const netPct = S.sales > 0 ? Math.round((net / S.sales) * 100) : null;
+    const gap = S.jobs - S.costed;
     /* A net figure means something once any cost at all is on file. Until then
        it is only the sales again, so every place that shows one shows a dash —
        the months and the total alike, so the rows always add up to the total. */
-    const netKnown = T.costs > 0 || expTotal > 0;
+    const netKnown = S.costs > 0 || ovShown > 0;
+    const yearGap = T.jobs - T.costed;
+    const yearNet = round2(T.sales - T.costs - expTotal);
+    const yearNetKnown = T.costs > 0 || expTotal > 0;
     const fixedMonthly = fixedNow;
 
     const { rows: years } = await pool.query(
@@ -13443,24 +13463,41 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
         <div style="font-size:22px;font-weight:700;color:${colour || '#111827'};margin-top:2px">${value}</div>
         ${sub ? `<div class="muted" style="font-size:11.5px;margin-top:2px">${sub}</div>` : ''}</div>`;
 
-    res.send(adminPage('Books', `<h1>Books — ${year}</h1>
-      <div class="sub">${years.map(y => y.y === year
-        ? `<b>${y.y}</b>` : `<a href="${FINANCES_PATH}?year=${y.y}" style="color:#1848B8">${y.y}</a>`).join(' &middot; ')}
-        &middot; <a href="/admin/quotes" style="color:#1848B8">back to jobs</a></div>
+    const monthChoices = EXP.monthOptions([...months.map((m) => m.period), ...Object.keys(expByPeriod)], year, thisYm, month);
+    res.send(adminPage('Books', `<h1>Books — ${viewName}${month === thisYm ? ' <span class="pill pill-blue" style="font-size:12px;vertical-align:middle">this month</span>' : ''}</h1>
+      <div class="sub" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <form method="GET" action="${FINANCES_PATH}" style="margin:0;display:inline-flex;gap:6px;align-items:center">
+          <input type="hidden" name="year" value="${year}">
+          <select name="month" aria-label="Show which month" onchange="this.form.submit()"
+                  style="padding:6px 8px;font-size:14px;border-radius:8px">
+            ${monthChoices.map((ym) => `<option value="${ym}" ${ym === month ? 'selected' : ''}>${EXP.monthLabel(ym)}${ym === thisYm ? ' (this month)' : ''}</option>`).join('')}
+            <option value="all" ${!month ? 'selected' : ''}>All of ${year}</option>
+          </select>
+          <noscript><button type="submit" class="btn" style="padding:5px 12px;font-size:13px">Show</button></noscript>
+        </form>
+        <span>${years.map(y => y.y === year
+        ? `<b>${y.y}</b>` : `<a href="${FINANCES_PATH}?year=${y.y}&amp;month=all" style="color:#1848B8">${y.y}</a>`).join(' &middot; ')}
+        &middot; <a href="/admin/quotes" style="color:#1848B8">back to jobs</a></span></div>
 
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin:14px 0">
-        ${tile('Sales (ex tax)', money(T.sales), '#111827', `${T.jobs} accepted job${T.jobs === 1 ? '' : 's'}${
-          T.otherSales ? ` + ${money(T.otherSales)} studio &amp; other` : ''} · collected ${money(T.collected)}`)}
-        ${tile('Job costs', T.costs > 0 ? money(T.costs) : '—', '#111827', gap > 0 ? `${gap} job${gap === 1 ? '' : 's'} not costed` : 'all jobs costed')}
-        ${tile('Overheads', expTotal > 0 ? money(expTotal) : '—', '#111827', 'rent, materials, everything else')}
+        ${tile('Sales (ex tax)', money(S.sales), '#111827', `${S.jobs} accepted job${S.jobs === 1 ? '' : 's'}${
+          S.otherSales ? ` + ${money(S.otherSales)} studio &amp; other` : ''} · collected ${money(S.collected)}`)}
+        ${tile('Job costs', S.costs > 0 ? money(S.costs) : '—', '#111827', gap > 0 ? `${gap} job${gap === 1 ? '' : 's'} not costed` : S.jobs ? 'all jobs costed' : 'no jobs yet')}
+        ${tile('Overheads', ovShown > 0 ? money(ovShown) : '—', '#111827', 'rent, materials, everything else')}
         ${tile('Net profit', !netKnown ? '—' : money(net) + (gap > 0 ? '<span style="color:#b45309">*</span>' : ''),
                !netKnown ? '#9ca3af' : net < 0 ? '#b91c1c' : '#047857',
                !netKnown ? 'enter costs to see this'
                  : gap > 0 ? `before the costs of ${gap} job${gap === 1 ? '' : 's'} nobody has entered — the real figure is lower`
                  : `gross ${money(gross)} − overheads${netPct !== null ? ` · ${netPct}%` : ''}`)}
       </div>
+      ${month ? `<div class="muted" style="font-size:12px;margin:-4px 0 12px">
+        ${viewName}: sales tax collected <b>${money(S.tax)}</b>${S.taxUnknown > 0 ? '<span style="color:#b45309">*</span>' : ''}
+        &middot; card fees <b>${money(S.fees)}</b>
+        &middot; <a href="${FINANCES_PATH}?year=${year}&amp;month=all" style="color:#1848B8">see every month of ${year}</a>
+        ${S.taxUnknown > 0 ? `<br><b style="color:#b45309">* ${S.taxUnknown} payment${S.taxUnknown === 1 ? '' : 's'} this month ${S.taxUnknown === 1 ? 'has' : 'have'} no sales tax worked out yet (<a href="#settle-tax" style="color:#b45309">settle</a>).</b>` : ''}
+      </div>` : ''}
 
-      <div class="card">
+      ${month ? '' : `<div class="card">
         <h2 style="margin:0 0 8px;font-size:16px">Month by month</h2>
         <table style="width:100%;border-collapse:collapse;font-size:13px">
           <tr style="color:#6b7280;font-size:11px;letter-spacing:.05em;text-transform:uppercase">
@@ -13509,7 +13546,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
             <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums">${money(T.sales)}</td>
             <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums">${T.costs > 0 ? money(T.costs) : '—'}</td>
             <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums">${expTotal > 0 ? money(expTotal) : '—'}</td>
-            <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums;color:${!netKnown ? '#9ca3af' : net < 0 ? '#b91c1c' : '#047857'}">${!netKnown ? '—' : money(net)}${netKnown && gap > 0 ? '<span style="color:#b45309">*</span>' : ''}</td>
+            <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums;color:${!yearNetKnown ? '#9ca3af' : yearNet < 0 ? '#b91c1c' : '#047857'}">${!yearNetKnown ? '—' : money(yearNet)}${yearNetKnown && yearGap > 0 ? '<span style="color:#b45309">*</span>' : ''}</td>
             <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums">${money(T.tax)}${T.taxUnknown > 0 ? '<span style="color:#b45309">*</span>' : ''}</td>
             <td style="padding:8px 0;border-top:2px solid #111827;text-align:right;font-variant-numeric:tabular-nums">${money(T.fees)}</td>
           </tr>
@@ -13525,7 +13562,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
             ${T.taxUnknown === 1 ? 'has' : 'have'} no sales tax worked out yet: until settled, the tax counts in Sales and not in
             Sales tax (<a href="#settle-tax" style="color:#b45309">settle them</a>).</b>` : ''}
         </div>
-      </div>
+      </div>`}
 
       ${(() => {
         /* Sales by month against break-even. The job is "am I above or below the
@@ -13540,7 +13577,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
         const be = marginPct && marginPct > 0 ? round2(recurring / marginPct) : null;
 
         const series = months.map(m => ({ period: m.period, sales: Number(m.sales) }));
-        if (!series.length) return '';
+        if (month || !series.length) return '';
 
         const W = 720, H = 210, PL = 58, PR = 16, PT = 14, PB = 30;
         const iw = W - PL - PR, ih = H - PT - PB;
@@ -13599,7 +13636,9 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
         // marginPct: from the jobs with costs entered only (worked out once, above).
         // Sales needed to cover fixed costs at the margin actually achieved.
         const breakEven = marginPct && marginPct > 0 ? round2(recurring / marginPct) : null;
-        const coverage = breakEven ? Math.round(avgSales / breakEven * 100) : null;
+        /* One month is measured on its own sales; the year on its average. */
+        const measured = month ? S.sales : avgSales;
+        const coverage = breakEven ? Math.round(measured / breakEven * 100) : null;
         const bestM = months.reduce((b, m) => (!b || Number(m.sales) > Number(b.sales)) ? m : b, null);
 
         return `<div class="card" style="margin-top:14px">
@@ -13613,7 +13652,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
               ? ` At a ${Math.round(marginPct * 100)}% margin you need <b>${money(breakEven)}</b> of sales a month
                   just to cover them.` + (coverage !== null ? `
                   <span style="color:${coverage >= 100 ? '#047857' : '#b91c1c'}">
-                  You are averaging ${money(avgSales)} — ${coverage >= 100 ? `${coverage}% of break-even, covered` : `${coverage}% of break-even, short by ${money(round2(breakEven - avgSales))}`}.</span>` : '')
+                  ${month ? `${viewName}${month === thisYm ? ' so far' : ''}: ${money(measured)}` : `You are averaging ${money(avgSales)}`} — ${coverage >= 100 ? `${coverage}% of break-even, covered` : `${coverage}% of break-even, short by ${money(round2(breakEven - measured))}`}.</span>` : '')
               : ' Enter job costs on a few jobs and this becomes a break-even figure.'}
           </div>` : ''}
 
@@ -13634,7 +13673,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
             ${money(pos.setAside)} lighter than it reads.
           </div>` : ''}
 
-          ${bestM && Number(bestM.sales) > 0 ? `<div style="padding:9px 0">
+          ${!month && bestM && Number(bestM.sales) > 0 ? `<div style="padding:9px 0">
             <b>Best month so far: ${periodLabel(bestM.period)}</b> at ${money(bestM.sales)}.
             ${monthsWithSales > 1 ? `Average is ${money(avgSales)}.` : 'One month of trading — the averages get useful from about three.'}
           </div>` : ''}
@@ -13650,6 +13689,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
         <form method="POST" action="/admin/expenses" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;
               background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:10px">
           <input type="hidden" name="year" value="${year}">
+          <input type="hidden" name="month" value="${month || 'all'}">
           <input name="spent_on" type="date" value="${new Date().toISOString().slice(0,10)}" style="flex:0 0 145px;padding:7px">
           <select name="category" style="flex:0 0 130px;padding:7px">
             ${EXPENSE_CATEGORIES.map(c => `<option value="${c}">${c}</option>`).join('')}
@@ -13662,7 +13702,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
           <button type="submit" style="padding:7px 18px;font-size:14px">Add</button>
         </form>
 
-        ${expByCat.length ? `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px">
+        ${!month && expByCat.length ? `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px">
           <span class="muted" style="font-size:11px;letter-spacing:.06em;text-transform:uppercase">${year} so far</span>
           ${expByCat.map(c => `<div style="background:#f7f9fc;border:1px solid #e3e8f2;border-radius:8px;padding:6px 12px;font-size:12.5px">
             <span style="color:#6b7280">${escEmail(c.category)}</span>
@@ -13672,8 +13712,8 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
         ${/* One section per month, newest first. This month is open; the rest
              fold away with their totals showing, so a month's overheads are
              read on their own rather than as one long list. */
-          expMonthsList.length ? expMonthsList.map((g) => `
-          <details style="margin-top:12px;border:1px solid #e3e8f2;border-radius:10px;padding:8px 12px" ${g.ym === thisYm || (g === expMonthsList[0] && !expMonthsList.some((x) => x.ym === thisYm)) ? 'open' : ''}>
+          (month ? (monthGroup ? [monthGroup] : []) : expMonthsList).length ? (month ? [monthGroup] : expMonthsList).map((g) => `
+          <details style="margin-top:12px;border:1px solid #e3e8f2;border-radius:10px;padding:8px 12px" ${month || g.ym === thisYm || (g === expMonthsList[0] && !expMonthsList.some((x) => x.ym === thisYm)) ? 'open' : ''}>
             <summary style="cursor:pointer;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:14px">
               <b>${EXP.monthLabel(g.ym)}${g.ym === thisYm ? ' <span class="pill pill-blue" style="font-size:11px">this month</span>' : ''}</b>
               <span style="font-variant-numeric:tabular-nums"><b>${money(g.total)}</b>
@@ -13687,6 +13727,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
             <form method="POST" action="/admin/expenses/${e.id}"
                   style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;padding:5px 0;border-bottom:1px solid #f1f4f9;font-size:12.5px">
               <input type="hidden" name="year" value="${year}">
+              <input type="hidden" name="month" value="${month || 'all'}">
               <input name="spent_on" type="date" value="${escEmail(e.day)}"
                      style="flex:0 0 132px;padding:5px;font-size:12px">
               <select name="category" style="flex:0 0 118px;padding:5px;font-size:12px">
@@ -13705,7 +13746,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
                       onclick="return confirm('Delete this ${money(e.amount)} ${escEmail(e.category)} entry?')"
                       style="border:0;background:none;color:#9ca3af;cursor:pointer;font-size:15px;padding:0 4px">×</button>
             </form>`).join('')}
-          </details>`).join('') : '<div class="muted" style="font-size:12.5px;margin-top:10px">Nothing recorded yet.</div>'}
+          </details>`).join('') : `<div class="muted" style="font-size:12.5px;margin-top:10px">Nothing recorded${month ? ` for ${viewName}` : ' yet'}.</div>`}
 
         ${expList.some(e => e.recurs) ? `<p class="muted" style="font-size:11.5px;margin:10px 0 0">
           Costs ticked <b>monthly</b> carry into each new month by themselves, on the same day of the month.
@@ -13715,8 +13756,8 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
       <div class="card" style="margin-top:14px">
         <h2 style="margin:0 0 8px;font-size:16px">Sales tax position</h2>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
-          ${tile('Collected in ' + year, money(T.tax), '#8a5a00')}
-          ${tile('Remitted in ' + year, money(remitted[0].total), '#047857')}
+          ${tile('Collected in ' + viewName, money(S.tax), '#8a5a00')}
+          ${tile('Remitted in ' + viewName, money(remitted[0].total), '#047857')}
           ${tile('Held right now', money(pos.setAside),
                  pos.setAside > 0 ? '#b45309' : '#047857', 'across all periods')}
         </div>
@@ -13733,7 +13774,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
             <a href="#exemptions" style="color:#78350f">Record them below</a>.</div>` : ''}
         </div>` : ''}
         <div class="muted" style="font-size:11px;margin-top:10px">
-          Held right now spans every period, not just ${year} — it is what should be in the bank today.
+          Held right now spans every period, not just ${viewName} — it is what should be in the bank today.
           <a href="/admin/tax.csv" style="color:#1848B8">Download the payment-level detail</a>,
           or <a href="/admin/exports" style="color:#1848B8">keep a month's records</a>.
         </div>
@@ -13770,7 +13811,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
             <td class="num" style="padding:7px 4px;font-variant-numeric:tabular-nums">${money(u.amount)}</td>
             <td style="padding:7px 4px">
               <form method="post" action="/admin/unlinked/${u.id}/tax" style="display:flex;gap:6px;margin:0">
-                <input type="hidden" name="back" value="${FINANCES_PATH}?year=${year}">
+                <input type="hidden" name="back" value="${FINANCES_PATH}${viewQS}">
                 <input name="tax" type="number" step="0.01" inputmode="decimal"
                        placeholder="unknown"
                        style="width:96px;padding:5px 7px;font-size:13px">
@@ -13814,7 +13855,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
                 ? `<a href="/admin/production/${escEmail(String(q.code))}#certificate" style="color:#1848B8">Attach the certificate</a>`
                 : `<form method="post" action="/admin/quotes/${escEmail(String(q.code))}/exemption"
                     style="display:flex;gap:6px;margin:0">
-                <input type="hidden" name="back" value="${FINANCES_PATH}?year=${year}#exemptions">
+                <input type="hidden" name="back" value="${FINANCES_PATH}${viewQS}#exemptions">
                 <input name="tax_exempt_ref" maxlength="60" placeholder="E-number"
                        style="width:150px;padding:5px 7px;font-size:13px">
                 <button class="btn" style="padding:5px 12px;font-size:13px">Record</button>
@@ -13834,6 +13875,16 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
 const EXPENSE_CATEGORIES = ['Rent', 'Utilities', 'Materials', 'Equipment',
   'Software', 'Insurance', 'Marketing', 'Vehicle', 'Fees', 'Contract labor', 'Other'];
 
+/* Back to the month (or year) the form was sent from. Only a valid month or
+   year reaches the URL; anything else is the default view. */
+function financesBack(b) {
+  const q = b || {};
+  const m = String(q.month || '');
+  if (/^\d{4}-(0[1-9]|1[0-2])$/.test(m)) return `${FINANCES_PATH}?month=${m}`;
+  if (m === 'all' && /^\d{4}$/.test(String(q.year || ''))) return `${FINANCES_PATH}?year=${q.year}&month=all`;
+  return FINANCES_PATH;
+}
+
 /* Record an overhead. */
 app.post('/admin/expenses', requireAdmin, async (req, res) => {
   const b = req.body || {};
@@ -13851,7 +13902,7 @@ app.post('/admin/expenses', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('expense insert failed:', err.message);
   }
-  res.redirect(FINANCES_PATH + (b.year ? `?year=${encodeURIComponent(b.year)}` : ''));
+  res.redirect(financesBack(b));
 });
 
 /* Edit one in place. Overheads are typed by hand, so a wrong figure should be
@@ -13879,7 +13930,7 @@ app.post('/admin/expenses/:id', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('expense update failed:', err.message);
   }
-  res.redirect(FINANCES_PATH + (b.year ? `?year=${encodeURIComponent(b.year)}` : ''));
+  res.redirect(financesBack(b));
 });
 
 app.post('/admin/expenses/:id/delete', requireAdmin, async (req, res) => {
@@ -13894,7 +13945,7 @@ app.post('/admin/expenses/:id/delete', requireAdmin, async (req, res) => {
         [rows[0].ym, EXP.seriesKey(rows[0])]);
     }
   } catch (err) { console.error('expense delete failed:', err.message); }
-  res.redirect(FINANCES_PATH);
+  res.redirect(financesBack(req.body));
 });
 
 /* Monthly costs carry into every month on their own (tools/lib/expenses.js).
@@ -20391,7 +20442,7 @@ app.post('/admin/tax/remit', requireAdmin, async (req, res) => {
 app.post('/admin/quotes/:code/exemption', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   const b = req.body || {};
-  const back = String(b.back || FINANCES_PATH);
+  const back = safeAdminPath(b.back, FINANCES_PATH);
   if (!QUOTE_CODE_RE.test(code)) return res.redirect(FINANCES_PATH);
 
   const ref = String(b.tax_exempt_ref ?? '').trim().slice(0, 60) || null;
@@ -21017,7 +21068,7 @@ app.get('/admin/certificates', requireAdmin, async (req, res) => {
 app.post('/admin/unlinked/:id/tax', requireAdmin, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const b = req.body || {};
-  const back = String(b.back || FINANCES_PATH);
+  const back = safeAdminPath(b.back, FINANCES_PATH);
   if (!Number.isFinite(id)) return res.redirect(FINANCES_PATH);
 
   /* Blank means "put it back to unknown", which is not the same as 0. */
