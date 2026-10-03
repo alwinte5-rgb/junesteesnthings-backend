@@ -31,6 +31,7 @@ const { legacyRedirect, LEGACY_PATHS } = require('./tools/lib/legacy-redirects')
 const { parseFirstTouch, firstTouchLabel } = require('./tools/lib/first-touch');
 const SITEHEALTH = require('./tools/lib/site-health');
 const NUDGE = require('./tools/lib/lead-nudges');
+const FUNNEL = require('./tools/lib/funnel-health');
 const { T: SMS, plain: smsPlain, PICKUP: SMS_PICKUP } = require('./tools/lib/sms-templates');
 const { verifyTwilioSignature, classifyInbound } = require('./tools/lib/twilio-webhook');
 const TAXCERT = require('./tools/lib/tax-certificates');
@@ -19853,8 +19854,11 @@ async function sendDailyDigest() {
 }
 
 /** The morning email's customer-failure section (tools/lib/site-health.js):
- *  yesterday's refused quote forms, and on Mondays last week's 404s. Also
- *  prunes rows past 90 days, once a day, here. */
+ *  yesterday's refused quote forms, leads waiting over a day and the sites'
+ *  own error events (tools/lib/funnel-health.js), and on Mondays last week's
+ *  404s plus the Funnel health table. Also prunes rows past 90 days, once a
+ *  day, here. Each source fails on its own: a dead GA connection costs only
+ *  its own lines. */
 async function siteHealthHtml() {
   const tz = process.env.JT_TIMEZONE || 'America/Chicago';
   await pool.query(`DELETE FROM site_health WHERE day < (NOW() AT TIME ZONE $1)::date - 90`, [tz]);
@@ -19868,7 +19872,55 @@ async function siteHealthHtml() {
       WHERE kind = 'not_found' AND day >= (NOW() AT TIME ZONE $1)::date - 7
         AND day < (NOW() AT TIME ZONE $1)::date
       GROUP BY detail, ref ORDER BY n DESC, detail LIMIT 20`, [tz])).rows : [];
-  return SITEHEALTH.siteHealthDigestHtml({ formFails, notFound, esc: escEmail });
+  const now = Date.now();
+  const waiting = (await unansweredLeads().catch(() => []))
+    /* Same "waiting" as the lead texts (tools/lib/lead-nudges.js): no reply
+       logged, no outcome, not a live chat (answered inside tawk.to). */
+    .filter((l) => l.source !== 'chat' && !l.first_response_at && !l.outcome
+      && now - new Date(l.created_at).getTime() > 86400000);
+  const problems = await GOOGLE_ANALYTICS.yesterdayProblems().catch(() => null);
+  const extra = FUNNEL.problemLines({ waiting, problems,
+    problemNames: require('./tools/lib/google-analytics').PROBLEM_EVENTS });
+  const health = SITEHEALTH.siteHealthDigestHtml({ formFails, notFound, extra, esc: escEmail, base: PUBLIC_BASE_URL });
+  return health + (monday ? await funnelHealthSection(tz).catch((e) => {
+    console.error('funnel health failed:', e.message); return ''; }) : '');
+}
+
+/** Monday's Funnel health (tools/lib/funnel-health.js): the website steps
+ *  from GA4, and leads, quotes and studio orders from our own records, over
+ *  the same two weeks GA uses (7daysAgo–yesterday vs 14daysAgo–8daysAgo). */
+async function funnelHealthSection(tz) {
+  const [ga, { rows: [d] }, studio] = await Promise.all([
+    GOOGLE_ANALYTICS.weeklyFunnel(),
+    pool.query(
+      `WITH b AS (SELECT (NOW() AT TIME ZONE $1)::date AS today)
+       SELECT COUNT(*) FILTER (WHERE s.k = 'lead' AND s.d >= b.today - 7 AND s.d < b.today)::int AS leads_now,
+              COUNT(*) FILTER (WHERE s.k = 'lead' AND s.d >= b.today - 14 AND s.d < b.today - 7)::int AS leads_before,
+              COUNT(*) FILTER (WHERE s.k = 'sent' AND s.d >= b.today - 7 AND s.d < b.today)::int AS sent_now,
+              COUNT(*) FILTER (WHERE s.k = 'sent' AND s.d >= b.today - 14 AND s.d < b.today - 7)::int AS sent_before,
+              COUNT(*) FILTER (WHERE s.k = 'acc' AND s.d >= b.today - 7 AND s.d < b.today)::int AS acc_now,
+              COUNT(*) FILTER (WHERE s.k = 'acc' AND s.d >= b.today - 14 AND s.d < b.today - 7)::int AS acc_before
+         FROM b, (
+           SELECT 'lead' AS k, (created_at AT TIME ZONE $1)::date AS d FROM submissions
+           UNION ALL SELECT 'sent', (created_at AT TIME ZONE $1)::date FROM quotes WHERE status NOT IN ('held', 'draft')
+           UNION ALL SELECT 'acc', (accepted_at AT TIME ZONE $1)::date FROM quotes WHERE accepted_at IS NOT NULL
+         ) s`, [tz]),
+    fetchStudioOrders(),
+  ]);
+  /* Paid studio orders by the day they were placed (the feed's `created`;
+     its newest 100 cover two weeks many times over). */
+  const day = (offset) => new Date(Date.now() - offset * 86400000).toLocaleDateString('en-CA', { timeZone: tz });
+  const inRange = (o, from, to) => { const c = String(o.created || '').slice(0, 10);
+    return Number(o.paid || 0) > 0 && c >= day(from) && c < day(to); };
+  const orders = studio && !studio.error
+    ? { now: studio.orders.filter((o) => inRange(o, 7, 0)).length, before: studio.orders.filter((o) => inRange(o, 14, 7)).length }
+    : null;
+  return FUNNEL.funnelHealthHtml({ ga, esc: escEmail, db: {
+    orders,
+    leads: { now: d.leads_now, before: d.leads_before },
+    sent: { now: d.sent_now, before: d.sent_before },
+    accepted: { now: d.acc_now, before: d.acc_before },
+  } });
 }
 
 /* The helpers' day, for the morning email: yesterday for each active helper,

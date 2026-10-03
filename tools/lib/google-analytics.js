@@ -42,6 +42,44 @@ const QUOTE_FUNNEL = [
 ];
 const FUNNEL_EVENTS = [...DESIGN_FUNNEL, ...QUOTE_FUNNEL].map(([e]) => e).concat(['purchase']);
 
+/* What went wrong for a customer, as the sites report it (plan 1d/1f): the
+   morning email lists yesterday's counts. */
+const PROBLEM_EVENTS = [
+  ['checkout_error', 'Checkout errors'],
+  ['upload_failed', 'Artwork uploads that failed'],
+  ['ai_design_failed', 'AI designs that failed'],
+  ['quote_form_error', 'Quote form errors (in the browser)'],
+];
+/* Last full week against the one before, for the Monday "Funnel health". */
+const WEEK = { startDate: '7daysAgo', endDate: 'yesterday' };
+const WEEK_BEFORE = { startDate: '14daysAgo', endDate: '8daysAgo' };
+
+/** Request for weeklyFunnel(): sessions, then funnel event counts, each with
+ *  both weeks (GA4 adds the dateRange dimension last; see byRange). */
+function weeklyRequestBody() {
+  return {
+    requests: [
+      { dateRanges: [WEEK, WEEK_BEFORE], metrics: [{ name: 'sessions' }] },
+      { dateRanges: [WEEK, WEEK_BEFORE], dimensions: [{ name: 'eventName' }], metrics: [{ name: 'eventCount' }],
+        dimensionFilter: { filter: { fieldName: 'eventName', inListFilter: { values: FUNNEL_EVENTS } } } },
+    ],
+  };
+}
+
+/** { sessions: {now, before}, events: { name: {now, before} } } from weeklyRequestBody's reports. */
+function summariseWeek(reports) {
+  const [totals, events] = reports || [];
+  const out = { sessions: byRange(totals), events: {} };
+  for (const r of rowsOf(events)) {
+    const dims = r.dimensionValues || [];
+    const name = dims[0].value;
+    const which = (dims[dims.length - 1] || {}).value;
+    const e = (out.events[name] ||= { now: 0, before: 0 });
+    if (which === 'date_range_1') e.before += num(r.metricValues[0].value); else e.now += num(r.metricValues[0].value);
+  }
+  return out;
+}
+
 function configFromEnv(env = process.env) {
   const cfg = {};
   const missing = [];
@@ -222,10 +260,37 @@ function createClient({ env = process.env, fetchImpl = globalThis.fetch, now = (
     }));
   }
 
-  return { overview, notFoundPages };
+  /** One report, no cache (the morning email asks once a day).
+   *  { ok: true, ... } | { ok: false, reason } — never throws. */
+  async function report(path, body, shape) {
+    const cfg = configFromEnv(env);
+    if (cfg.missing) return { ok: false, notConnected: true, reason: 'Google Analytics is not connected.' };
+    try {
+      const out = await call(`https://analyticsdata.googleapis.com/v1beta/properties/${cfg.propertyId}:${path}`,
+        { method: 'POST', headers: { Authorization: `Bearer ${await accessToken(cfg)}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body) });
+      return { ok: true, ...shape(out) };
+    } catch (err) {
+      console.error('google analytics report failed:', err.message);
+      return { ok: false, reason: explainError(err) };
+    }
+  }
+
+  /** Last week vs the week before: sessions and every funnel event. */
+  const weeklyFunnel = () => report('batchRunReports', weeklyRequestBody(), (b) => summariseWeek(b.reports || []));
+
+  /** Yesterday's problem events: { counts: { checkout_error: 3, ... } }. */
+  const yesterdayProblems = () => report('runReport', {
+    dateRanges: [{ startDate: 'yesterday', endDate: 'yesterday' }],
+    dimensions: [{ name: 'eventName' }], metrics: [{ name: 'eventCount' }],
+    dimensionFilter: { filter: { fieldName: 'eventName', inListFilter: { values: PROBLEM_EVENTS.map(([e]) => e) } } },
+  }, (b) => ({ counts: Object.fromEntries(rowsOf(b).map((r) => [r.dimensionValues[0].value, num(r.metricValues[0].value)])) }));
+
+  return { overview, notFoundPages, weeklyFunnel, yesterdayProblems };
 }
 
 module.exports = {
   configFromEnv, explainError, summarise, requestBody, createClient,
   REQUIRED, DESIGN_FUNNEL, QUOTE_FUNNEL, FUNNEL_EVENTS, PROPERTY_DEFAULT,
+  PROBLEM_EVENTS, weeklyRequestBody, summariseWeek,
 };

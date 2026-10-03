@@ -62,13 +62,17 @@ function cleanNotFound(body) {
  * the last 7 days, detail being notFoundDetail(); the caller passes it on
  * Mondays only (a weekly list, per the plan).
  */
-function siteHealthDigestHtml({ formFails = [], notFound = [], esc }) {
+function siteHealthDigestHtml({ formFails = [], notFound = [], extra = [], esc, base = '' }) {
   /* detail is the reason, prefixed "embroidery " for the embroidery form. */
   const split = (d) => (/^embroidery /.test(d) ? { form: ' (embroidery form)', reason: d.slice(11) } : { form: '', reason: d });
   const real = formFails.filter((f) => split(f.detail).reason !== 'bot_filter');
   const bots = formFails.filter((f) => split(f.detail).reason === 'bot_filter').reduce((a, f) => a + f.n, 0);
-  if (!real.length && !notFound.length) return '';
+  if (!real.length && !notFound.length && !extra.length) return '';
   let html = `<h3 style="color:#b91c1c;margin:20px 0 6px">When something went wrong for a customer</h3>`;
+  /* Other failures (tools/lib/funnel-health.js problemLines): plain text, an
+     optional admin link. */
+  html += extra.map((x) => `<div style="font-size:13px;margin:0 0 4px"><b>${esc(x.text)}</b>${
+    x.href ? ` <a href="${esc(base + x.href)}" style="color:#1848B8">open</a>` : ''}</div>`).join('');
   if (real.length) {
     const total = real.reduce((a, f) => a + f.n, 0);
     html += `<p style="margin:0 0 4px;font-size:13px"><b>${total} quote request${total === 1 ? '' : 's'} refused yesterday</b>${
