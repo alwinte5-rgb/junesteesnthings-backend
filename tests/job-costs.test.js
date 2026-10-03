@@ -123,12 +123,13 @@ test('add-ons: screens at $20, freight passed through, design work free', () => 
 });
 
 test('a job is complete only when every line it bought can be costed', () => {
+  // A typed line with no price and no words to go on cannot be costed.
   const r = J.estimateJob([
     { product_id: 10, method_id: 1, qty: 12, unit_price: 20 },
-    { description: 'Custom banner 3x6', qty: 1, unit_price: 80 },
+    { description: 'Misc', qty: 1, unit_price: 0 },
   ], catalog);
   assert.strictEqual(r.complete, false);
-  assert.deepStrictEqual(r.missing, ['Custom banner 3x6']);
+  assert.deepStrictEqual(r.missing, ['Misc']);
 });
 
 test('service lines cost nothing; declined options and typed costs are left alone', () => {
@@ -141,8 +142,62 @@ test('service lines cost nothing; declined options and typed costs are left alon
   assert.deepStrictEqual(r.lines, [{ ix: 0, unit_cost: 0, basis: 'service: no supplier cost', estimated: false }]);
 });
 
-test('a product or method gone from the catalogue is not guessed at', () => {
-  const r = one({ product_id: 999, method_id: 1, qty: 12, unit_price: 20, description: 'Old tee' });
+test('a product gone from the catalogue is read by its words, and named when there are none', () => {
+  const r = one({ product_id: 999, method_id: 1, qty: 12, unit_price: 0, description: 'Old thing' });
   assert.strictEqual(r.complete, false);
   assert.match(r.missing[0], /no longer in the catalogue/);
+  const t = one({ product_id: 999, qty: 12, unit_price: 20, description: 'Old tee' });
+  assert.strictEqual(t.complete, true);
+});
+
+/* ── Lines typed by hand: the seven jobs the first run could not cost ── */
+const shop = {
+  products: [
+    { id: 10, name: 'Gildan 5000 Heavy Cotton T-Shirt', price: 5.64, cost: 2.82 },
+    { id: 20, name: 'Comfort Colors 1717 Garment-Dyed Heavyweight T-Shirt', price: 13.00, cost: 6.50 },
+    { id: 21, name: 'Comfort Colors 1566 Garment-Dyed Crewneck Sweatshirt', price: 40.00, cost: 20.00 },
+    { id: 30, name: 'Rabbit Skins 3321 Toddler Fine Jersey Tee', price: 7.00, cost: 3.50 },
+    { id: 31, name: 'Gildan 5000B Youth Heavy Cotton T-Shirt', price: 5.00, cost: 2.50 },
+  ],
+  methods: [],
+};
+const typed = (description, qty, unit_price) => J.estimateJob([{ description, qty, unit_price, manual: true }], shop);
+
+test('a typed shirt line is costed as the garment its words name, plus half the rest', () => {
+  const r = typed('Comfort Colors T-shirt - Navy Blue', 24, 25);
+  assert.strictEqual(r.complete, true);
+  // 6.50 S&S + (25 - 13) / 2
+  assert.strictEqual(r.lines[0].unit_cost, 12.5);
+  assert.match(r.lines[0].basis, /Comfort Colors 1717 .*matched by wording.*rough: half/);
+});
+
+test('age words pick the right blank, and never an adult one for a toddler', () => {
+  assert.match(typed('Toddler Shirt BULK', 20, 12).lines[0].basis, /Rabbit Skins 3321 Toddler/);
+  assert.match(typed('Youth/Adult Shirt BULK', 40, 10).lines[0].basis, /Gildan 5000B Youth/);
+  const noToddler = J.estimateJob([{ description: 'Toddler Shirt BULK', qty: 20, unit_price: 12 }],
+    { products: shop.products.filter((p) => p.id !== 30), methods: [] });
+  assert.match(noToddler.lines[0].basis, /^rough: half the price$/);
+});
+
+test('a typed embroidery line is costed at the Anchorfish rate for its size', () => {
+  const r = typed('Embroidery Chest Logo', 24, 20);
+  assert.strictEqual(r.lines[0].unit_cost, 4.25);
+  assert.match(r.lines[0].basis, /Anchorfish embroidery rate \(matched by wording\)/);
+  assert.strictEqual(typed('Embroidered full back', 100, 75).lines[0].unit_cost, 13.05);
+});
+
+test('typed DTF and screen print lines read their sheet, sides and colours included', () => {
+  assert.strictEqual(typed('DTF front and back', 12, 25).lines[0].unit_cost, Math.round((5.63 + 1.80) * 100) / 100);
+  assert.strictEqual(typed('Screen print 2 color', 100, 5).lines[0].unit_cost, 2.06);
+});
+
+test('upcharges, signs, jeans, jerseys and sublimation are half their price, marked rough', () => {
+  for (const [d, q, p] of [['2XL Upcharge', 4, 2], ['1000 Door Hangers', 1000, 0.3], ['24x18 Yard Signs - 100 pack', 1, 450],
+    ['Step Stakes for Yard Signs 100 pack', 1, 90], ['Car Magnet', 2, 40], ['Custom Print on Jeans - 2 pair- Princess & Frog', 2, 45],
+    ['Names/Numbers - Soccer Jersey', 15, 12], ['Sublimation full front extended print', 10, 30]]) {
+    const r = typed(d, q, p);
+    assert.strictEqual(r.complete, true, d);
+    assert.strictEqual(r.lines[0].unit_cost, Math.round(p / 2 * 100) / 100, d);
+    assert.strictEqual(r.lines[0].basis, 'rough: half the price', d);
+  }
 });
