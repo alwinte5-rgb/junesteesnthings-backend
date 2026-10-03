@@ -84,6 +84,17 @@ const T = {
     template: 'studio-ready',
     body: `${BRAND}: Order #${plain(orderId, 10)} is ready for pickup at ${PICKUP}. Text (773) 849-1854 when you're outside. ${STOP}`,
   }),
+  // Local delivery (the delivery board). The caller's ref is per change, so a
+  // second move is texted as well as the first. Two segments with the link:
+  // it is the customer's only way to pick another time without calling.
+  deliveryMoved: ({ ref, when, link }) => ({
+    template: 'delivery-moved',
+    body: `${BRAND}: New delivery time for order ${plain(ref, 12)}: ${plain(when, 40)}. Pick another: ${plain(link, 90)} ${STOP}`,
+  }),
+  deliveryOut: ({ ref, window }) => ({
+    template: 'delivery-out',
+    body: `${BRAND}: Order ${plain(ref, 12)} is out for delivery today, ${plain(window, 20)}. Questions? Text (773) 849-1854. ${STOP}`,
+  }),
   studioOrderShipped: ({ orderId, tracking }) => {
     const t = plain(tracking, 40);
     return {

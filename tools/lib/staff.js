@@ -131,6 +131,26 @@ const ROUTES = {
   'POST /admin/shipping/check': 'production.stage',
   'POST /admin/shipping/buy': 'shipping.labels',
 
+  /* Local delivery. Running the day is production work; what it costs and
+     where it goes (zones, fees, windows, the courier's rates) is the owner's. */
+  'GET /admin/delivery': 'production.stage',
+  'GET /admin/delivery/job/:id': 'production.stage',
+  'POST /admin/delivery/job/:id/move': 'production.stage',
+  'POST /admin/delivery/job/:id/status': 'production.stage',
+  'POST /admin/delivery/job/:id/courier': 'production.stage',
+  'POST /admin/delivery/window-courier': 'production.stage',
+  'POST /admin/delivery/day-move': 'production.stage',
+  'GET /admin/delivery/new': 'production.stage',
+  'POST /admin/delivery/new': 'production.stage',
+  'GET /admin/delivery/settings': 'owner',
+  'POST /admin/delivery/settings/zone': 'owner',
+  'POST /admin/delivery/settings/zone/:id/delete': 'owner',
+  'POST /admin/delivery/settings/window': 'owner',
+  'POST /admin/delivery/settings/window/:id/delete': 'owner',
+  'POST /admin/delivery/settings/blackout': 'owner',
+  'POST /admin/delivery/settings/blackout/delete': 'owner',
+  'POST /admin/delivery/settings/partner': 'owner',
+
   'POST /admin/quote/:code/message': 'customers.message',
   'POST /admin/quote/:code/email': 'customers.message',
   'POST /admin/quote/:code/receipt': 'customers.message',
