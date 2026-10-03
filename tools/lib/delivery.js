@@ -173,6 +173,16 @@ function money2(n) {
   return Math.round(Number(n || 0) * 100) / 100;
 }
 
+/* The owner's floor (2026-10-02): local delivery is never less than $20,
+   whatever a zone says. Applied where the price is read, not only where it
+   is saved, so a zone saved before the floor existed cannot undercut it. */
+const MIN_FEE = 20;
+
+/** What a customer in this zone pays. */
+function zoneFee(zone) {
+  return money2(Math.max(MIN_FEE, Number(zone && zone.fee) || 0));
+}
+
 /* ── Seats ────────────────────────────────────────────────────────────────── */
 
 /** Whether a booking holds its seat at `now`. */
@@ -411,14 +421,14 @@ function courierReady(partner) {
 /** What the shop keeps on a zone after the courier: fee − cost; null if unknown. */
 function zoneMargin(zone, partner) {
   const c = courierCost(partner, zone && zone.id);
-  return c == null ? null : money2(Number(zone.fee) - c);
+  return c == null ? null : money2(zoneFee(zone) - c);
 }
 
 module.exports = {
   SHOP_TZ, LIVE_STATUSES, settings,
   isYmd, addDays, weekdayOf, toYmd, shopClock, minutesBetween, dayLabel,
   toMinutes, hhmm, clock, windowLabel,
-  normZip, parseZipList, zoneForZip, deliveryOffered, money2,
+  normZip, parseZipList, zoneForZip, deliveryOffered, money2, MIN_FEE, zoneFee,
   holdsSeat, seatsTaken, earliestDate, availableSlots, checkSlot, slotProblem, SLOT_PROBLEMS,
   minutesUntil, rescheduleAllowed, bookingPhrase, historyEntry,
   newToken, hashToken, tokenShapeOk, tokenMatches,

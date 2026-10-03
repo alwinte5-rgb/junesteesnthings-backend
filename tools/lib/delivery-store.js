@@ -122,7 +122,7 @@ function createDeliveryStore(pool) {
     const days = D.availableSlots({ windows: cfg.windows, blackouts: cfg.blackouts, bookings, earliest,
       horizonDays: D.settings().horizonDays, now, exceptId });
     return { offered: true, available: days.length > 0, reason: days.length ? null : 'full',
-      zone: { id: zone.id, name: zone.name }, fee: D.money2(zone.fee), earliest, days };
+      zone: { id: zone.id, name: zone.name }, fee: D.zoneFee(zone), earliest, days };
   }
 
   /** Whether delivery is set up at all (for showing the choice). */
@@ -173,7 +173,7 @@ function createDeliveryStore(pool) {
       const holdUntil = status === 'held' ? new Date(now.getTime() + D.settings().holdMinutes * 60000) : null;
       const entry = D.historyEntry({ by, action: exceptId ? 'rebooked' : 'booked',
         to: D.bookingPhrase({ date, window_label: chk.label }), at: now });
-      const vals = [ref, zone.id, zone.name, D.money2(zone.fee), date, Number(windowId), chk.label,
+      const vals = [ref, zone.id, zone.name, D.zoneFee(zone), date, Number(windowId), chk.label,
         String(chk.window.start_time), JSON.stringify(address || null),
         String(name || '').slice(0, 120) || null, String(phone || '').slice(0, 40) || null,
         String(email || '').slice(0, 200) || null, status, holdUntil,
@@ -361,7 +361,8 @@ function createDeliveryStore(pool) {
   async function saveZone({ id, name, fee, zips, active, sort }) {
     const n = String(name || '').trim().slice(0, 60);
     const f = Number(fee);
-    if (!n || !Number.isFinite(f) || f < 0 || f > 500) return { ok: false, reason: 'Give the zone a name and a fee between $0 and $500.' };
+    if (!n || !Number.isFinite(f) || f > 500) return { ok: false, reason: 'Give the zone a name and a fee of $500 or less.' };
+    if (f < D.MIN_FEE) return { ok: false, reason: 'Local delivery is at least $20. Set the zone fee to $20 or more.' };
     const list = D.parseZipList(zips).slice(0, 400);
     if (!list.length) return { ok: false, reason: 'List at least one 5-digit ZIP code for the zone.' };
     const vals = [n, D.money2(f), list, active !== false, Number.isInteger(Number(sort)) ? Number(sort) : 0];

@@ -24226,13 +24226,13 @@ function deliveryCard(b, { partner, actions = true } = {}) {
       b.overdue ? ' ' + pill('Past its day', 'red') : ''}${b.courier ? ' ' + pill('Courier: ' + b.courier.partner, 'neutral') : ''}</h3>
     <div class="dmeta"><b>${escEmail(b.phrase || DELIV.bookingPhrase(b))}</b> &middot; ${escEmail(b.zone_name || '')} &middot; fee ${money(b.fee)}<br>
       ${escEmail(b.name || '')}${b.phone ? ` &middot; <a href="tel:${escEmail(b.phone)}">${escEmail(b.phone)}</a>` : ''}<br>
-      ${escEmail(DELIV.addressLine(b.address))}${b.ready_by && b.ready_by > b.date ? `<br><b style="color:#b91c1c">Ready ${escEmail(b.ready_by)} — after the delivery day. Move it.</b>` : ''}
+      ${escEmail(DELIV.addressLine(b.address))}${b.ready_by && b.ready_by > b.date && ['held', 'confirmed', 'out'].includes(b.status) ? `<br><b style="color:#b91c1c">Ready ${escEmail(b.ready_by)} — after the delivery day. Move it.</b>` : ''}
       ${link ? `<br><a href="${link}"${link.startsWith('http') ? ' target="_blank" rel="noopener"' : ''}>Open the order</a>` : ''}</div>
     ${actions && ['confirmed', 'out'].includes(b.status) ? `<div class="dactions">
       ${b.status === 'confirmed' ? act('out', 'Out for delivery', 'btn') : act('confirmed', 'Not out after all')}
       ${act('delivered', 'Delivered')}
       <a class="btn btn-ghost" href="/admin/delivery/job/${b.id}">Move</a>
-      ${!b.courier ? `<form method="POST" action="/admin/delivery/job/${b.id}/courier"><button type="submit" class="btn btn-ghost">Send by courier${
+      ${!b.courier && DELIV.courierReady(partner) ? `<form method="POST" action="/admin/delivery/job/${b.id}/courier"><button type="submit" class="btn btn-ghost">Send by ${escEmail(partner.name)}${
         cost != null ? ` (${money(cost)})` : ''}</button></form>` : ''}
     </div>` : ''}
   </div>`;
@@ -24588,12 +24588,17 @@ app.get('/admin/delivery/settings', requireAdmin, async (req, res) => {
     const WD = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const err = /^\d{1,2}$/.test(String(req.query.err || '')) ? (DELIVERY_SETTINGS_ERRORS[Number(req.query.err)] || '') : '';
     const p = cfg.partner || {};
-    const zoneForm = (z) => `<form method="POST" action="/admin/delivery/settings/zone" class="dcard">
+    /* The first zone starts as the shop's own ZIP and the ones bordering it
+       (the owner, 2026-10-02: "only the surrounding zip codes"), at the
+       minimum fee. Nothing is offered until it is saved. */
+    const STARTER = !cfg.zones.length ? { name: 'Near the shop', fee: DELIV.MIN_FEE, zips: ['60657', '60613', '60614', '60618'] } : null;
+    const zoneForm = (z, start = null) => `<form method="POST" action="/admin/delivery/settings/zone" class="dcard">
         ${z ? `<input type="hidden" name="id" value="${z.id}">` : ''}
-        <div class="row"><div><label>Zone name</label><input name="name" required maxlength="60" value="${escEmail(z ? z.name : '')}" placeholder="e.g. Lakeview &amp; nearby"></div>
-          <div><label>Customer pays ($)</label><input name="fee" required inputmode="decimal" value="${z ? Number(z.fee).toFixed(2) : ''}" placeholder="15.00"></div></div>
+        <div class="row"><div><label>Zone name</label><input name="name" required maxlength="60" value="${escEmail(z ? z.name : start ? start.name : '')}" placeholder="e.g. Lakeview &amp; nearby"></div>
+          <div><label>Customer pays ($${DELIV.MIN_FEE} minimum)</label><input name="fee" required inputmode="decimal" value="${z ? DELIV.zoneFee(z).toFixed(2) : start ? Number(start.fee).toFixed(2) : ''}" placeholder="${DELIV.MIN_FEE}.00"></div></div>
         <label>ZIP codes <span class="muted" style="text-transform:none;font-weight:400">(any separator)</span></label>
-        <textarea name="zips" rows="2" required placeholder="60657, 60613, 60618">${escEmail(z ? z.zips.join(', ') : '')}</textarea>
+        <textarea name="zips" rows="2" required placeholder="60657, 60613, 60614, 60618">${escEmail(z ? z.zips.join(', ') : start ? start.zips.join(', ') : '')}</textarea>
+        ${start ? `<p class="muted" style="font-size:12.5px;margin:4px 0 0">Filled in with the shop's ZIP and the ones around it (Lakeview, Wrigleyville, Lincoln Park, North Center). Change them if you like, then save.</p>` : ''}
         <div class="row"><div><label>Order in list</label><input name="sort" inputmode="numeric" value="${z ? z.sort : 0}"></div>
           <div><label style="text-transform:none;font-weight:400;display:flex;gap:8px;align-items:center;margin-top:26px">
             <input type="checkbox" name="active" value="1" ${!z || z.active ? 'checked' : ''} style="width:auto;margin:0"> Offered</label></div></div>
@@ -24609,7 +24614,7 @@ app.get('/admin/delivery/settings', requireAdmin, async (req, res) => {
       <div class="card"><h2 style="margin-top:0">Zones</h2>
         <p class="muted">A customer whose ZIP is in no zone is not offered delivery. A ZIP in two zones gets the first.</p>
         ${cfg.zones.map(zoneForm).join('')}
-        <h3>Add a zone</h3>${zoneForm(null)}</div>
+        <h3>${STARTER ? 'Your first zone' : 'Add a zone'}</h3>${zoneForm(null, STARTER)}</div>
       <div class="card"><h2 style="margin-top:0">Time windows</h2>
         <p class="muted">Each window repeats every week. Capacity is how many deliveries it takes; a window with bookings is switched off rather than removed.</p>
         ${cfg.windows.length ? `<table class="dtable"><tr><th>Day</th><th>Window</th><th>Capacity</th><th>Offered</th><th></th></tr>${winRows}</table>` : ''}
@@ -24635,7 +24640,7 @@ app.get('/admin/delivery/settings', requireAdmin, async (req, res) => {
             <div><label>Dispatch email</label><input type="email" name="email" maxlength="200" value="${escEmail(p.email || '')}"></div></div>
           <label>Dispatch phone</label><input name="phone" maxlength="40" value="${escEmail(p.phone || '')}">
           ${cfg.zones.length ? `<label>Their price per delivery, by zone ($)</label>
-            ${cfg.zones.map((z) => `<div class="row"><div style="padding-top:10px">${escEmail(z.name)} <span class="muted">(you charge ${money(z.fee)})</span></div>
+            ${cfg.zones.map((z) => `<div class="row"><div style="padding-top:10px">${escEmail(z.name)} <span class="muted">(you charge ${money(DELIV.zoneFee(z))})</span></div>
               <div><input name="cost_${z.id}" inputmode="decimal" value="${p.costs && p.costs[z.id] != null ? Number(p.costs[z.id]).toFixed(2) : ''}" placeholder="e.g. 12.00"></div></div>`).join('')}` : '<p class="muted">Add zones first, then their price per zone.</p>'}
           <button type="submit" class="btn" style="margin-top:10px">Save courier partner</button></form></div>`;
     res.send(adminPage('Delivery settings', body, 'delivery'));
@@ -24649,7 +24654,8 @@ app.get('/admin/delivery/settings', requireAdmin, async (req, res) => {
    so a crafted link cannot put words of its own on the owner's screen. */
 const DELIVERY_SETTINGS_ERRORS = [
   'That did not save. Please try again.',
-  'Give the zone a name and a fee between $0 and $500.',
+  'Give the zone a name and a fee of $500 or less.',
+  'Local delivery is at least $20. Set the zone fee to $20 or more.',
   'List at least one 5-digit ZIP code for the zone.',
   'Pick a day of the week.',
   'The window must end after it starts.',

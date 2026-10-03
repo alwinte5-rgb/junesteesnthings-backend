@@ -168,7 +168,7 @@ test('courier cost and margin per zone come from the partner sheet', () => {
   const partner = { name: 'Metrobi', email: 'dispatch@example.com', costs: { 1: 10, 2: '' } };
   assert.strictEqual(D.courierCost(partner, 1), 10);
   assert.strictEqual(D.courierCost(partner, 2), null);
-  assert.strictEqual(D.zoneMargin(zones[0], partner), 5);
+  assert.strictEqual(D.zoneMargin(zones[0], partner), 10, 'the $15 zone is charged the $20 floor, so $10 is kept');
   assert.strictEqual(D.zoneMargin(zones[1], partner), null);
   assert.strictEqual(D.courierReady(partner), true);
   assert.strictEqual(D.courierReady({ name: 'X', email: 'nope' }), false);
@@ -206,4 +206,18 @@ test('delivery texts are plain GSM-7, branded, with an opt-out; out-for-delivery
   assert.ok(out.body.length <= 160, `${out.body.length}: ${out.body}`);
   assert.ok(moved.body.length <= 306, `${moved.body.length}: ${moved.body}`);
   assert.ok(moved.body.includes('A'.repeat(43)), 'the whole link survives');
+});
+
+test('local delivery is never less than $20, whatever a zone was saved at', () => {
+  assert.strictEqual(D.MIN_FEE, 20);
+  assert.strictEqual(D.zoneFee({ fee: 15 }), 20);
+  assert.strictEqual(D.zoneFee({ fee: 0 }), 20);
+  assert.strictEqual(D.zoneFee({ fee: null }), 20);
+  assert.strictEqual(D.zoneFee({ fee: 25 }), 25);
+  assert.strictEqual(D.zoneFee({ fee: '22.5' }), 22.5);
+  const store = require('fs').readFileSync(require.resolve('../tools/lib/delivery-store'), 'utf8');
+  assert.match(store, /fee: D\.zoneFee\(zone\), earliest, days/, 'the price shown is floored');
+  assert.match(store, /const vals = \[ref, zone\.id, zone\.name, D\.zoneFee\(zone\)/, 'the price booked is floored');
+  assert.doesNotMatch(store, /D\.money2\(zone\.fee\)/, 'no reader takes the raw zone fee');
+  assert.match(store, /if \(f < D\.MIN_FEE\) return \{ ok: false/, 'a zone under the floor is refused at save');
 });
