@@ -23776,15 +23776,24 @@ app.post('/admin/training/quiz/:key', requireAdmin, async (req, res) => {
     console.error('quiz save failed:', err.message);
     return res.status(500).send(adminPage('Training', '<div class="card"><div class="warn">Your answers could not be saved. Please try again.</div></div>', 'training'));
   }
+  /* Never the answers: a helper may retake it, so the result says only which
+     questions were wrong and which playbook article covers each one. */
+  const wrong = r.results.filter((x) => !x.right);
+  const arts = await pool.query('SELECT id, title FROM kb_articles WHERE published AND title = ANY($1)',
+    [[...new Set(wrong.map((x) => x.article).filter(Boolean))]]).catch(() => ({ rows: [] }));
+  const artId = new Map(arts.rows.map((a) => [a.title, a.id]));
+  const reread = (x) => (x.article && artId.has(x.article)
+    ? `Re-read: <a href="/admin/playbook/${artId.get(x.article)}">${escEmail(x.article)}</a>`
+    : x.article ? `Re-read: ${escEmail(x.article)}` : '');
   res.send(adminPage('Training', `
     ${pageHeader(r.passed ? `Passed: ${r.score} of ${r.total}` : `${r.score} of ${r.total}: not passed yet`,
-      r.passed ? 'Well done. The owner can see your result on Training.' : `You need ${r.pass} to pass. Read why below, then take it again.`,
+      r.passed ? 'Well done. The owner can see your result on Training.'
+        : `You need ${r.pass} to pass. Re-read the articles below, then take it again.`,
       `<a class="btn btn-ghost" href="/admin/training">Back to training</a> <a class="btn ${r.passed ? 'btn-ghost' : ''}" href="/admin/training/quiz/${escEmail(key)}">Take it again</a>`)}
-    <div class="card">${r.score === r.total ? '<p>Every answer right.</p>' : ''}${r.results.map((x, n) => `<div class="row-i"><span class="row-main" style="white-space:normal">
+    <div class="card">${wrong.length ? '' : '<p>Every answer right.</p>'}${r.results.map((x, n) => `<div class="row-i"><span class="row-main" style="white-space:normal">
       <b>${n + 1}. ${escEmail(x.q)}</b>
-      <div class="row-sub" style="white-space:normal">${x.right ? pill('right', 'green') : pill('wrong', 'red')}
-        ${x.right ? escEmail(x.answerText) : `You picked: ${escEmail(x.pickedText || 'nothing')}. Best answer: <b>${escEmail(x.answerText)}</b>`}</div>
-      <div class="row-sub muted" style="white-space:normal">${escEmail(x.why)}</div></span></div>`).join('')}</div>`, 'training'));
+      <div class="row-sub" style="white-space:normal">${x.right ? pill('right', 'green') : `${pill('wrong', 'red')} ${reread(x)}`}</div>
+      </span></div>`).join('')}</div>`, 'training'));
 });
 
 // A helper ticks their own reading. The owner has no reading to tick.
@@ -24228,6 +24237,45 @@ const KB_ADDED = [
 
 ` +
 `Check the answer against the artwork guides in this playbook before sending it.` },
+  /* The practice quote, for the training step of the same name. A draft is
+     private (no customer link, no CRM deal, not in Finances), so a helper can
+     build a real one in the real builder without anything going out. */
+  { kind: 'sop', title: 'Practice quote: a basic screen print order', needsReview: true,
+    tags: 'practice, tutorial, training, first quote, screen print, quote builder',
+    body: `Build this quote in the real quote builder. Save it as a **draft**: a draft is private, the customer link does not open, and nothing is sent. The system does all the maths; your job is to put the right things in the right boxes.\n\n` +
+`**The order**\n\n` +
+`"Hi, I run Maple Street Bakery. I need 50 black t-shirts with our logo in white on the front for my staff. Sizes: 10 small, 15 medium, 15 large, 10 XL. We need them in 3 weeks."\n\n` +
+`**Step 1: open a new quote**\n\n` +
+`- Go to Quotes, then New quote\n` +
+`- First name: Practice. Last name: your own name. Leave phone and email **blank**, so nothing can ever be sent\n\n` +
+`**Step 2: the item**\n\n` +
+`- What is it: \`50 staff tees, 1 colour front\`\n` +
+`- Product: a basic short-sleeve tee (ask in Team chat if you are not sure which)\n` +
+`- Decoration: screen printing\n` +
+`- Colour: black\n` +
+`- Qty: \`50\`. Leave **Each $** blank: the system prices it\n` +
+`- Tick **Dark garment** (black is dark, so the white ink needs a base layer)\n` +
+`- Placement: **Front only**\n` +
+`- Ink colours in the design: **1** (white)\n` +
+`- Leave Run blank and the garment price blank\n\n` +
+`**Step 3: sizes**\n\n` +
+`- Open **Details, photos & sizes**\n` +
+`- Enter S 10, M 15, L 15, XL 10. Check they add up to 50\n` +
+`- Details (the customer sees this): \`Black tee, white logo, front\`\n\n` +
+`**Step 4: dates and notes**\n\n` +
+`- Needed by: 3 weeks from today\n` +
+`- Quote good for: leave it as it is\n` +
+`- Notes for the customer: \`Thanks for choosing June's Tees! A proof comes before anything is printed.\`\n\n` +
+`**Step 5: check it, then save**\n\n` +
+`- A total shows under the items. Write it down\n` +
+`- No orange warning under the item. (Change Qty to 30 and look: the warning says screen printing starts at 50 and to quote DTF. Change it back to 50)\n` +
+`- Press **Save as draft**, not Finish\n` +
+`- Tell the owner in Team chat: "Practice quote saved, total $___". The owner opens it, checks it, and signs off the step\n\n` +
+`**What the owner checks**\n\n` +
+`- Qty 50, and the sizes add up to 50\n` +
+`- Dark garment ticked, 1 ink colour, front only\n` +
+`- Each $ left blank, so the system priced it\n` +
+`- Saved as a draft, with no phone or email` },
   /* Quiet-time prospecting, for the training step and quiz. A draft for the
      owner to check: the daily target is left as a placeholder. */
   { kind: 'sop', title: 'Finding new leads in quiet time', needsReview: true,
