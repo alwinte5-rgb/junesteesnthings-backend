@@ -162,4 +162,13 @@ test('quiz routes: a helper hands in their own; answers stay off the helper page
   const helperView = page.slice(page.indexOf('TRAINING.quizForPage(key)'));
   assert.doesNotMatch(helperView, /\.answer\b|\.why\b/, 'the helper page never prints answers');
   assert.match(src, /CREATE TABLE IF NOT EXISTS staff_quiz_attempts/);
+  // Retakes are allowed, so the marked page never gives the answers away.
+  const marked = post.slice(post.indexOf('res.send(adminPage('));
+  assert.doesNotMatch(marked, /answerText|x\.why|pickedText/, 'the result never shows the answer, the reason or the pick');
+  assert.match(marked, /Re-read/);
+});
+
+test('every quiz question points at a playbook article that really exists', () => {
+  const seeded = new Set([...src.matchAll(/^\s+\{ kind: '[a-z]+'.*?title: '((?:[^'\\]|\\.)+)'/gm)].map((m) => m[1].replace(/\\'/g, "'")));
+  for (const x of TRAINING.QUIZZES.basics.questions) assert.ok(seeded.has(x.article), `${x.id}: no article "${x.article}"`);
 });

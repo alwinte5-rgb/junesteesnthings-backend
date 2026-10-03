@@ -11,7 +11,9 @@
               work was not.
      signoff  a skill the owner has seen. Only the owner can tick it.
      quiz     a short multiple-choice quiz. The server marks it, and the step
-              is done once a passing attempt is stored; nobody ticks it.
+              is done once a passing attempt is stored; nobody ticks it. A
+              helper may retake it, so their result never shows the answers:
+              only which questions were wrong, and the article to re-read.
 
    The last sign-off, "ready", ends training: page tips stop, and the Team page
    suggests moving the helper up from Training. Moving them stays the owner's
@@ -34,6 +36,8 @@ const STEPS = [
     title: 'Answer your first lead', hint: 'Open a lead from My Day and log the call, email, text or chat you sent.' },
   { key: 'read:options', type: 'read', article: 'Quote with options the customer picks',
     title: 'Read: quotes with options' },
+  { key: 'read:firstquote', type: 'read', article: 'Practice quote: a basic screen print order',
+    title: 'Practice: build a basic screen print quote', hint: 'Follow the tutorial step by step and save it as a draft. Nothing reaches a customer.' },
   { key: 'do:quote', type: 'do', fact: 'quotes',
     title: 'Build your first quote', hint: 'Use the Quote button on a lead so it links back. The owner checks it before it goes out.' },
   { key: 'do:message', type: 'do', fact: 'messages',
@@ -51,13 +55,13 @@ const STEPS = [
   { key: 'read:prospect', type: 'read', article: 'Finding new leads in quiet time',
     title: 'Read: finding new leads in quiet time' },
   { key: 'quiz:basics', type: 'quiz', quiz: 'basics',
-    title: 'Pass the quick quiz', hint: '10 questions, about 5 minutes. Get 8 right. You can take it again.' },
+    title: 'Pass the quick quiz', hint: '10 questions, about 5 minutes. Get 8 right. Retake it as often as you need.' },
   { key: 'do:eod', type: 'do', fact: 'eod', needs: 'eod',
     title: 'Send your first end-of-day note', hint: 'Use "Wrap up the day" on My Day.' },
   { key: 'do:proof', type: 'do', fact: 'proofs', needs: 'proofs',
     title: 'Upload your first proof', hint: 'From a job page. The owner checks it before the customer sees it.' },
   { key: 'signoff:screenprint', type: 'signoff',
-    title: 'Quotes a two-location screen print correctly', hint: 'The owner ticks this after checking one of your quotes.' },
+    title: 'Built the practice quote correctly', hint: 'The owner opens your practice draft and checks it against the tutorial.' },
   { key: 'signoff:handoff', type: 'signoff',
     title: 'Knows when to hand a customer to the owner', hint: 'Discounts, refunds, logos the customer does not own, angry customers.' },
   { key: 'signoff:ready', type: 'signoff',
@@ -133,45 +137,45 @@ const QUIZZES = {
     questions: [
       { id: 'reply', q: 'A customer fills in the quote form at 10am, during your shift. When should they hear from you?',
         choices: ['By the end of your shift', 'Within 1 hour', 'Once the quote is ready', 'The next morning'],
-        answer: 1, why: 'Forms get a reply within 1 hour, chats within 15 minutes. The first shop to answer usually gets the order.' },
+        answer: 1, article: 'New lead: first reply to quote', why: 'Forms get a reply within 1 hour, chats within 15 minutes. The first shop to answer usually gets the order.' },
       { id: 'vague', q: 'A message says only: "how much for shirts?" What is the best reply?',
         choices: ['Send the price of our cheapest shirt', 'Ask them to call the owner',
           'Thank them, and ask how many, which garment, where the design goes, their artwork and the date they need them',
           'Send the whole catalogue'],
-        answer: 2, why: 'You cannot quote without the details. The /quote reply in the playbook asks for all five in one friendly message.' },
+        answer: 2, article: 'What do you need for a quote?', why: 'You cannot quote without the details. The /quote reply in the playbook asks for all five in one friendly message.' },
       { id: 'minimum', q: 'A coach wants 30 shirts with a 2-colour logo. What do you suggest?',
         choices: ['Screen printing, it is always cheapest', 'Tell them 30 is too few for us',
           'DTF (or embroidery), because screen printing starts at 50 pieces', 'Ask them to order 50 so we can screen print'],
-        answer: 2, why: 'Screen printing starts at 50 pieces. DTF has no minimum and suits small runs. Offer the best-value option, never a refusal.' },
+        answer: 2, article: 'Is there a minimum order?', why: 'Screen printing starts at 50 pieces. DTF has no minimum and suits small runs. Offer the best-value option, never a refusal.' },
       { id: 'pricematch', q: 'A customer says another shop is 15% cheaper and asks you to match it. What do you do?',
         choices: ['Match it, to win the order', 'Offer 10% off as a middle ground',
           'Say we never match prices', 'Ask to see the other quote, explain what ours includes, and check with the owner before promising anything'],
-        answer: 3, why: 'Discounts and price matches are the owner\'s call. Comparing what is included often wins the sale without any discount.' },
+        answer: 3, article: 'What never to promise', why: 'Discounts and price matches are the owner\'s call. Comparing what is included often wins the sale without any discount.' },
       { id: 'logo', q: 'A customer asks for 60 shirts with an NFL team logo for a watch party. What do you do?',
         choices: ['Quote it like any other order', 'Quote it but use DTF instead', 'Bring it to the owner: we do not print logos the customer does not own',
           'Ignore the message'],
-        answer: 2, why: 'Logos the customer does not own (teams, brands, characters) always go to the owner. Suggest an original design for the party instead.' },
+        answer: 2, article: 'What never to promise', why: 'Logos the customer does not own (teams, brands, characters) always go to the owner. Suggest an original design for the party instead.' },
       { id: 'followup', q: 'You sent a quote 3 days ago and heard nothing. What is the best next step?',
         choices: ['Wait. They will reply when ready', 'Send a friendly note asking if they have questions, mention the quote is good for 14 days, and set the next follow-up date',
           'Offer a discount to get a reply', 'Call them every day until they answer'],
-        answer: 1, why: 'Most sales are won on the follow-up. One friendly nudge with a reason to act now, then a new follow-up date on the lead.' },
+        answer: 1, article: 'How long is my quote good for?', why: 'Most sales are won on the follow-up. One friendly nudge with a reason to act now, then a new follow-up date on the lead.' },
       { id: 'rush', q: 'A customer needs 40 shirts by Friday, 3 business days away. What do you say?',
         choices: ['"No problem, they\'ll be ready Friday"', '"Sorry, we can\'t do that"',
           '"We offer rush for a fee. Let me check what\'s on the press and confirm today"', '"Order now and we\'ll try our best"'],
-        answer: 2, why: 'Never promise a date without checking stock and the production board. Rush is a paid option, so offer it and confirm.' },
+        answer: 2, article: 'How long will my order take?', why: 'Never promise a date without checking stock and the production board. Rush is a paid option, so offer it and confirm.' },
       { id: 'upset', q: 'A customer writes: "One shirt is printed crooked and our event is tomorrow!" What do you do first?',
         choices: ['Promise a full refund', 'Apologise, ask for a photo, and bring it to the owner right away',
           'Explain that small differences are normal', 'Wait for the owner to see it'],
-        answer: 1, why: 'Apologise and act fast, but refunds and reprints are the owner\'s decision. A photo lets the owner fix it quickly.' },
+        answer: 1, article: 'What never to promise', why: 'Apologise and act fast, but refunds and reprints are the owner\'s decision. A photo lets the owner fix it quickly.' },
       { id: 'quiet', q: 'You have a quiet hour with no leads waiting. What is the best use of it?',
         choices: ['Find new customers: schools, teams, churches and businesses with events coming up, and add each one on Leads',
           'Log off early', 'Post the same message in as many Facebook groups as you can', 'Re-read old emails'],
-        answer: 0, why: 'Quiet time is for finding new leads. Look for groups that need shirts soon and add each one on Leads, so nothing is lost and the sale is credited to you.' },
+        answer: 0, article: 'Finding new leads in quiet time', why: 'Quiet time is for finding new leads. Look for groups that need shirts soon and add each one on Leads, so nothing is lost and the sale is credited to you.' },
       { id: 'prospect', q: 'You find a youth soccer league with the coach\'s email on its website. What do you do?',
         choices: ['Add them to our email newsletter', 'Text the coach\'s phone number',
           'Add them on Leads, then send one short personal email about their season with an easy next step',
           'Send our full price list'],
-        answer: 2, why: 'One short, personal message mentioning their team, with an easy yes ("Want a couple of design ideas and a price?"). Never add strangers to the newsletter, and never cold-text.' },
+        answer: 2, article: 'Finding new leads in quiet time', why: 'One short, personal message mentioning their team, with an easy yes ("Want a couple of design ideas and a price?"). Never add strangers to the newsletter, and never cold-text.' },
     ],
   },
 };
@@ -194,7 +198,7 @@ function gradeQuiz(key, picked = {}) {
     const raw = Object.prototype.hasOwnProperty.call(picked, x.id) ? String(picked[x.id]) : '';
     const n = /^\d{1,2}$/.test(raw) && Number(raw) < x.choices.length ? Number(raw) : null;
     return { id: x.id, q: x.q, picked: n, pickedText: n === null ? null : x.choices[n],
-             answer: x.answer, answerText: x.choices[x.answer], right: n === x.answer, why: x.why };
+             answer: x.answer, answerText: x.choices[x.answer], right: n === x.answer, why: x.why, article: x.article };
   });
   const score = results.filter((r) => r.right).length;
   return { score, total: results.length, pass: z.pass, passed: score >= z.pass, results };
