@@ -28,6 +28,7 @@ const { createDeliveryStore } = require('./tools/lib/delivery-store');
 const { quoteAnalyticsTags, paidQuery } = require('./tools/lib/quote-analytics');
 const { cleanShopFeed } = require('./tools/lib/shop-feed');
 const { legacyRedirect, LEGACY_PATHS } = require('./tools/lib/legacy-redirects');
+const { parseFirstTouch, firstTouchLabel } = require('./tools/lib/first-touch');
 const { T: SMS, plain: smsPlain, PICKUP: SMS_PICKUP } = require('./tools/lib/sms-templates');
 const { verifyTwilioSignature, classifyInbound } = require('./tools/lib/twilio-webhook');
 const TAXCERT = require('./tools/lib/tax-certificates');
@@ -287,6 +288,11 @@ async function initDB() {
   for (const col of [`source TEXT DEFAULT 'form'`, 'chat_ref TEXT']) {
     await pool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
+  /* How the customer first found us (tools/lib/first-touch.js): utm tags,
+     ad click ids, referring site, landing page — from the jt_ft cookie, already
+     cleaned and capped. NULL for anything that did not come through a browser
+     (chat, texts, leads added by hand) and for every lead before 2026-10. */
+  await pool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS first_touch JSONB`).catch(() => {});
   await pool.query(
     `UPDATE submissions SET source = 'embroidery'
       WHERE source = 'form' AND description LIKE 'EMBROIDERY REQUEST:%'`).catch(() => {});
@@ -1894,6 +1900,11 @@ async function sendNotificationEmail(s, { unverified = false } = {}) {
   const photoRow = s.photo_url
     ? `<tr><td style="padding:8px;font-weight:bold;vertical-align:top;">Photo</td><td style="padding:8px;"><a href="${escEmail(s.photo_url)}">View Photo</a><br/><img src="${escEmail(s.photo_url)}" style="max-width:300px;margin-top:8px;border-radius:6px;" /></td></tr>`
     : '';
+  /* How they first found us (tools/lib/first-touch.js), so the owner sees which marketing brought the lead. */
+  const sourceRow = s.first_touch
+    ? `<tr><td style="padding:8px;font-weight:bold;vertical-align:top;">Came from</td><td style="padding:8px;">${escEmail(firstTouchLabel(s.first_touch))}${
+        s.first_touch.land ? `<br/><span style="color:#6b7280;font-size:12px;">landed on ${escEmail(s.first_touch.land)}</span>` : ''}</td></tr>`
+    : '';
   /* Arrived without the spam check (allowMissingTurnstile): usually a real
      person whose browser could not run it, occasionally a bot. They were not
      emailed or added to Brevo, so a reply is up to the shop. */
@@ -1916,6 +1927,7 @@ async function sendNotificationEmail(s, { unverified = false } = {}) {
           <tr><td style="padding:8px;font-weight:bold;">Email</td><td style="padding:8px;"><a href="mailto:${escEmail(s.email)}">${escEmail(s.email)}</a></td></tr>
           <tr style="background:#f9f9f9;"><td style="padding:8px;font-weight:bold;vertical-align:top;">Description</td><td style="padding:8px;">${escEmail(s.description) || '—'}</td></tr>
           ${photoRow}
+          ${sourceRow}
         </table>
         <p style="color:#999;font-size:12px;margin-top:24px;">Submitted ${new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' })} CT</p>
       </div>
@@ -2705,6 +2717,13 @@ app.get('/api/form-token', signatureRateLimit, (_req, res) => {
 
 // ── Form submission ──────────────────────────────────────────────────────────
 
+/** The visitor's first-touch cookie as JSON for a JSONB column, or null.
+ *  Cleaned and capped by parseFirstTouch; the cookie is the visitor's to edit. */
+function firstTouchJson(req) {
+  const ft = parseFirstTouch(req.headers && req.headers.cookie);
+  return ft ? JSON.stringify(ft) : null;
+}
+
 app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, allowMissingTurnstile, verifyTurnstile, async (req, res) => {
   const { name, phone, email, description, photo_url } = req.body;
 
@@ -2733,7 +2752,8 @@ app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, allowMissingTu
     return res.status(400).json({ error: 'Invalid photo URL.' });
   }
 
-  const s = { name: name.trim(), phone: phone.trim(), email: email.trim().toLowerCase(), description, photo_url };
+  const s = { name: name.trim(), phone: phone.trim(), email: email.trim().toLowerCase(), description, photo_url,
+              first_touch: parseFirstTouch(req.headers.cookie) };
 
   /* One enquiry, however many times the button is pressed.
      
@@ -2763,11 +2783,12 @@ app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, allowMissingTu
          ON CONFLICT DO NOTHING is the guard itself. Two concurrent clicks both
          reach the INSERT — one wins the unique index and the other returns no
          row, which is how a race is decided rather than hoped about. */
-      `INSERT INTO submissions (name, phone, email, description, photo_url, dedupe_key)
-       VALUES ($1,$2,$3,$4,$5,$6)
+      `INSERT INTO submissions (name, phone, email, description, photo_url, dedupe_key, first_touch)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
        ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
        RETURNING id`,
-      [s.name, s.phone, s.email, s.description, s.photo_url, dedupeAt(nowBucket)]
+      [s.name, s.phone, s.email, s.description, s.photo_url, dedupeAt(nowBucket),
+       s.first_touch ? JSON.stringify(s.first_touch) : null]
     );
     if (rows.length) {
       submissionId = rows[0].id;
@@ -4013,11 +4034,11 @@ app.post('/api/embroidery-quote', orderRateLimit, verifyTurnstile, async (req, r
     let savedId = null;
     try {
       const { rows } = await pool.query(
-        `INSERT INTO submissions (name, phone, email, description, photo_url, dedupe_key, source)
-         VALUES ($1,$2,$3,$4,$5,$6,'embroidery')
+        `INSERT INTO submissions (name, phone, email, description, photo_url, dedupe_key, source, first_touch)
+         VALUES ($1,$2,$3,$4,$5,$6,'embroidery',$7)
          ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
          RETURNING id`,
-        [name, phone, email.toLowerCase(), description, fileUrl || null, dedupeKey]);
+        [name, phone, email.toLowerCase(), description, fileUrl || null, dedupeKey, firstTouchJson(req)]);
       if (!rows.length) return res.json({ ok: true, duplicate: true });   // a second click
       savedId = rows[0].id;
     } catch (err) {
@@ -15921,6 +15942,11 @@ function studioOrdersSection(feed, { heading = true, disputes = null } = {}) {
         ${disputes ? disputeChip(disputes.byOrder.get(String(o.id))) : ''}
         ${studioExemptChip(o)}
         ${o.tracking ? `<span class="muted" style="font-size:12.5px">tracking ${escEmail(o.tracking)}</span>` : ''}
+        ${/* Where the buyer first found us (feed's first_touch, cleaned by the
+              studio and again here — it started life as a cookie). */
+          o.first_touch && typeof o.first_touch === 'object'
+            ? `<span class="muted" style="font-size:12.5px">came from ${escEmail(firstTouchLabel(parseFirstTouch(
+                'jt_ft=' + encodeURIComponent(JSON.stringify(o.first_touch)))))}</span>` : ''}
         <a class="muted" style="font-size:12.5px;margin-left:auto"
            href="${STUDIO_BASE}/admin.php?lumise-page=order&order_id=${encodeURIComponent(o.id)}"
            target="_blank" rel="noopener">Open in studio &rarr;</a>
@@ -17472,6 +17498,9 @@ function leadCardHtml(l, { back = '/admin/quotes' } = {}) {
                l.email || l.phone ? 'answer in tawk.to' : 'No email left — answer in tawk.to'}</a>` : '',
             ].filter(Boolean).join(' &middot; ')}
         </div>
+        ${l.first_touch ? `<div class="muted" style="margin-top:6px;font-size:12.5px">Came from: <b style="color:#0B1F4B">${
+          escEmail(firstTouchLabel(l.first_touch))}</b>${l.first_touch.land ? ` &middot; landed on ${escEmail(l.first_touch.land)}` : ''}${
+          l.first_touch.at ? ` &middot; first visit ${escEmail(l.first_touch.at)}` : ''}</div>` : ''}
         ${l.photo_url ? `<div style="margin-top:8px"><a href="${escEmail(l.photo_url)}" target="_blank" rel="noopener">
           <img src="${escEmail(l.photo_url)}" alt="" loading="lazy"
                style="width:88px;height:88px;object-fit:cover;border-radius:8px;border:1px solid #e3e8f2"></a></div>` : ''}
