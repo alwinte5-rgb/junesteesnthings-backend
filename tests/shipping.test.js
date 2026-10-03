@@ -443,7 +443,9 @@ test('the margin is measured on the jobs that have costs, not three jobs against
   const books = route('app.get(FINANCES_PATH, requireAdmin');
   assert.match(books, /const marginPct = T\.costedSales > 0 \? \(T\.costedSales - T\.costs\) \/ T\.costedSales : null;/);
   assert.doesNotMatch(books, /const marginPct = \(T\.sales > 0 && T\.costs > 0\)/);
-  assert.match(books, /const netKnown = T\.costs > 0 \|\| expTotal > 0;/);
+  // The year's net, and the shown month's (S is the year's T in the year view).
+  assert.match(books, /const yearNetKnown = T\.costs > 0 \|\| expTotal > 0;/);
+  assert.match(books, /const netKnown = S\.costs > 0 \|\| ovShown > 0;/);
 });
 
 /* ── Helpers ────────────────────────────────────────────────────────────── */

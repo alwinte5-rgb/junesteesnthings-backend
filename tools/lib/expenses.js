@@ -131,4 +131,36 @@ function monthLabel(ym) {
   return `${MONTHS[m - 1]} ${y}`;
 }
 
-module.exports = { seriesKey, ymOf, nextYm, sameDayIn, planRoll, fixedMonthly, byMonth, monthLabel };
+/* Which slice of the books the Finances page shows (the owner, 2026-10-02: "an
+ * overview of the current month only by default and a dropdown menu for other
+ * months"). One month unless asked for a whole year:
+ *   ?month=YYYY-MM          that month
+ *   ?month=all&year=YYYY    the whole year
+ *   ?year=YYYY (a past one) the whole year, as the year links always did
+ *   nothing / this year     this month */
+const YM_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+function financeView(q, thisYm) {
+  const m = String((q && q.month) || '');
+  if (YM_RE.test(m)) return { year: Number(m.slice(0, 4)), month: m };
+  const thisYear = Number(String(thisYm).slice(0, 4));
+  const y = /^\d{4}$/.test(String((q && q.year) || '')) ? Number(q.year) : thisYear;
+  if (m === 'all' || y !== thisYear) return { year: y, month: null };
+  return { year: y, month: thisYm };
+}
+
+/** The query string that brings the page back to a view, for forms' return. */
+function viewQuery(v) {
+  return v.month ? `?month=${v.month}` : `?year=${v.year}&month=all`;
+}
+
+/** The month dropdown: every month of the year with anything recorded, plus
+ *  this month and the one being shown, newest first. */
+function monthOptions(periods, year, thisYm, shown) {
+  const set = new Set((periods || []).filter((p) => YM_RE.test(p) && p.startsWith(`${year}-`)));
+  if (String(thisYm).startsWith(`${year}-`)) set.add(thisYm);
+  if (shown && shown.startsWith(`${year}-`)) set.add(shown);
+  return [...set].sort().reverse();
+}
+
+module.exports = { seriesKey, ymOf, nextYm, sameDayIn, planRoll, fixedMonthly, byMonth, monthLabel,
+  financeView, viewQuery, monthOptions };
