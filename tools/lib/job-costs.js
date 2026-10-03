@@ -1,0 +1,224 @@
+'use strict';
+
+/* What a job cost to make, worked out from the price lists we already hold.
+ *
+ * Why this exists (the owner, 2026-10-02: "why isn't job costs inserted ... fill
+ * in the costs of each job"). Every job's cost was a box someone had to type
+ * into, line by line, from the supplier's invoice. Nobody did, so Finances
+ * showed sales with no costs against them and a profit that was really just the
+ * sales again. Everything needed to work the cost out is already here:
+ *
+ *   - the garment: each catalogue product carries its S&S cost
+ *     (`supplier_cost`, sold at x2 by tools/lib/markup.js);
+ *   - screen print and DTF: Anchorfish's 2026 contract sheets, the same numbers
+ *     tools/reprice-anchorfish-2026.js prices the store from (tests/job-costs
+ *     fails if the two drift apart);
+ *   - screens: $20 each from Anchorfish (invoice #16899);
+ *   - embroidery is sewn in house, so there is no bill: the owner chose
+ *     Anchorfish's embroidery sheet as the cost (2026-10-02), a cautious figure;
+ *   - cutouts, buttons, signs and anything else priced as the shop's x2 on its
+ *     cost: half the price, marked "rough".
+ *
+ * An estimate is marked as one on every line it fills, so the job page and
+ * Finances can say so, and a figure typed from the real invoice replaces it.
+ * A job is only filled when EVERY line it bought can be worked out: a job half
+ * costed would read as fully costed and overstate the margin, which is the
+ * failure this exists to fix. Those jobs are listed instead, with why.
+ *
+ * Pure functions only: the caller passes the catalogue and the quote's lines. */
+
+/* Anchorfish 2026, what they charge US. Keys are quantity FLOORS. */
+const SCREEN_PRINT = {          // per piece, per location, by ink colours 1..6
+    50: [1.80, 2.25, 2.72, 3.19, 3.66, 4.13],
+   100: [1.65, 2.06, 2.53, 3.00, 3.47, 3.94],
+   250: [1.47, 1.84, 2.31, 2.78, 3.25, 3.72],
+   500: [1.32, 1.65, 2.12, 2.59, 3.06, 3.53],
+  1000: [1.17, 1.46, 1.93, 2.40, 2.87, 3.34],
+  2500: [0.99, 1.24, 1.71, 2.18, 2.65, 3.12],
+};
+const SCREEN_MIN_QTY = 50;      // their contract minimum: under it they bill 50
+const SCREEN_COST = 20;         // per screen
+const SCREEN_FEE = 25;          // what a screen is billed at (server.js SCREEN_FEE_RATE)
+const DTF = {                   // [16sq, 132sq (the standard print), 252sq, additional location]
+     1: [5.00, 7.03, 9.38, 1.80],
+     4: [5.00, 7.03, 9.38, 1.80],
+    12: [3.23, 5.63, 7.50, 1.80],
+    25: [2.58, 4.50, 6.00, 1.50],
+    50: [2.73, 3.60, 4.80, 1.50],
+   100: [1.65, 3.06, 4.08, 1.35],
+   250: [1.47, 2.60, 3.47, 1.20],
+   500: [1.32, 2.21, 2.95, 1.11],
+  1000: [1.17, 1.88, 2.51, 1.05],
+  2500: [0.99, 1.60, 2.13, 1.02],
+};
+/* [0-8k, 8k-10k, 10k-14k, 14k-18k, 20k-22k, 22k-25k, puff, small name, large name] */
+const EMBROIDERY = {
+    1: [4.25, 6.25, 8.25, 10.25, 12.25, 14.25, 1.50, 2, 5],
+   12: [4.25, 6.25, 8.25, 10.25, 12.25, 14.25, 1.50, 2, 5],
+   25: [3.85, 5.85, 7.85,  9.85, 11.85, 13.85, 1.50, 2, 5],
+   50: [3.25, 5.25, 7.25,  9.25, 11.25, 13.25, 1.25, 2, 5],
+   75: [3.25, 5.20, 7.20,  9.15, 11.15, 13.15, 1.25, 2, 5],
+  100: [3.25, 5.15, 7.15,  9.05, 11.05, 13.05, 1.25, 2, 5],
+  150: [3.25, 5.15, 7.15,  9.05, 11.05, 13.05, 1.25, 2, 5],
+};
+/* The shop's x2 (tools/lib/markup.js): cost is half the price where no sheet says otherwise. */
+const SHOP_MARKUP = 2;
+
+/* Labour and design work cost the shop no supplier money. Same words the cost
+   form already treats as a service (server.js COST_SERVICE_WORDS). */
+const SERVICE_WORDS = /\b(digitiz\w*|stitch\w*|setup|set\s*up|design\w*|artwork|fees?|rush|shipping|delivery|labou?r|vector\w*|proof\w*)\b/i;
+
+const r2 = (n) => Math.round(Number(n || 0) * 100) / 100;
+const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+
+function rowAt(table, qty) {
+  const floors = Object.keys(table).map(Number).sort((a, b) => a - b);
+  let row = table[floors[0]];
+  for (const f of floors) if (qty >= f) row = table[f];
+  return row;
+}
+
+function colourCount(method, picked) {
+  if (method && method.type === 'color') return Math.max(1, parseInt(picked, 10) || 1);
+  return Math.max(1, parseInt((String((method && method.title) || '').match(/(\d+)\s*Colou?r/i) || [0, 1])[1], 10) || 1);
+}
+
+/** Which price list a decoration method is costed from. */
+function methodKind(method) {
+  const t = String((method && method.title) || '');
+  if (/screen\s*print/i.test(t)) return 'screen';
+  if (/\bdtf\b/i.test(t) || /^printing$/i.test(t.trim())) return 'dtf';
+  if (/digitiz/i.test(t)) return 'digitizing';
+  if (/embroider/i.test(t)) return 'embroidery';
+  return 'rough';
+}
+
+/* Which column of the embroidery sheet a method is. */
+function embroideryColumn(title) {
+  const t = String(title || '');
+  if (/name|text/i.test(t)) return /upper|back/i.test(t) ? 8 : 7;
+  if (/extra\s*large/i.test(t)) return 4;
+  if (/full\s*back/i.test(t)) return 5;
+  if (/large/i.test(t)) return 2;
+  if (/medium/i.test(t)) return 1;
+  return 0;
+}
+
+/** One decoration's cost per piece. `sellEach` is what it was billed at per
+ *  piece, used only where no sheet exists (rough: half of it). */
+function decorationEach(method, stage, colours, bandQty, sellEach) {
+  if (!method) return { each: 0, basis: null };
+  const kind = methodKind(method);
+  const locs = stage === 'both' ? 2 : 1;
+  if (kind === 'screen') {
+    const c = Math.min(6, colourCount(method, colours));
+    const row = rowAt(SCREEN_PRINT, Math.max(bandQty, SCREEN_MIN_QTY));
+    let each = row[c - 1] * locs;
+    if (bandQty > 0 && bandQty < SCREEN_MIN_QTY) each = each * SCREEN_MIN_QTY / bandQty;
+    return { each, basis: 'Anchorfish screen print' };
+  }
+  if (kind === 'dtf') {
+    const row = rowAt(DTF, Math.max(1, bandQty));
+    return { each: row[1] + (locs === 2 ? row[3] : 0), basis: 'Anchorfish DTF' };
+  }
+  if (kind === 'embroidery') {
+    const row = rowAt(EMBROIDERY, Math.max(1, bandQty));
+    return { each: row[embroideryColumn(method.title)] * locs, basis: 'Anchorfish embroidery rate' };
+  }
+  if (kind === 'digitizing') return { each: num(sellEach), basis: 'digitizing at the vendor rate' };
+  return { each: num(sellEach) / SHOP_MARKUP, basis: 'rough: half the price' };
+}
+
+/* What add-ons cost us, split by where the books keep it. */
+function addonCosts(addons) {
+  let outsourced = 0, shipping = 0, perLine = 0;
+  for (const a of addons || []) {
+    if (!a) continue;
+    const total = num(a.total);
+    switch (a.code) {
+      case 'screens': {
+        const count = a.count != null ? num(a.count) : total / SCREEN_FEE;
+        outsourced += count * SCREEN_COST; break;
+      }
+      case 'digitizing': case 'unbagging': outsourced += total; break;
+      case 'specialty_ink': perLine += total / SHOP_MARKUP; break;
+      case 'cutout_ship': case 'cutout_ship_sat': case 'cutout_ship_large': shipping += total; break;
+      default: break;   // design work and puff/hoop are handled as labour or with the embroidery
+    }
+  }
+  return { outsourced, shipping, perLine };
+}
+
+/**
+ * Estimate a job's costs.
+ *   items:   the quote's lines (accepted: optional ones already resolved)
+ *   catalog: { products: [{id, price, cost}], methods: [{id, title, type}] }
+ * Returns { complete, lines: [{ ix, unit_cost, basis, estimated }], outsourced, shipping,
+ *           missing: [description] }. Lines that already carry a cost keep it.
+ */
+function estimateJob(items, catalog) {
+  const list = Array.isArray(items) ? items : [];
+  const products = new Map(((catalog && catalog.products) || []).map((p) => [Number(p.id), p]));
+  const methods = new Map(((catalog && catalog.methods) || []).map((m) => [Number(m.id), m]));
+  const pooled = {};
+  for (const it of list) {
+    const g = it && it.run_group != null ? String(it.run_group).trim() : '';
+    if (g) pooled[g] = (pooled[g] || 0) + (parseInt(it.qty, 10) || 0);
+  }
+  const out = { complete: true, lines: [], outsourced: 0, shipping: 0, missing: [] };
+
+  list.forEach((it, ix) => {
+    if (!it || it.optional) return;                        // declined, never bought
+    const qty = parseInt(it.qty, 10) || 0;
+    if (qty <= 0) return;
+    const g = it.run_group != null ? String(it.run_group).trim() : '';
+    const bandQty = Math.max(qty, g ? pooled[g] || 0 : 0);
+    const prod = it.product_id != null ? products.get(Number(it.product_id)) : null;
+    const m1 = it.method_id != null ? methods.get(Number(it.method_id)) : null;
+    const m2 = it.method2_id != null ? methods.get(Number(it.method2_id)) : null;
+
+    const ad = addonCosts(it.addons);
+    out.outsourced += ad.outsourced;
+    out.shipping += ad.shipping;
+
+    if (num(it.unit_cost) > 0) return;                     // typed by hand: theirs to keep
+
+    const desc = String(it.description || `Line ${ix + 1}`);
+    /* A product or method the catalogue no longer has cannot be costed honestly. */
+    if ((it.product_id != null && !prod) || (it.method_id != null && !m1) || (it.method2_id != null && !m2)) {
+      out.complete = false; out.missing.push(`${desc} (no longer in the catalogue)`); return;
+    }
+    if (!prod && !m1) {
+      if (SERVICE_WORDS.test(desc)) { out.lines.push({ ix, unit_cost: 0, basis: 'service: no supplier cost', estimated: false }); return; }
+      out.complete = false; out.missing.push(desc); return;
+    }
+
+    /* The garment, at S&S cost. A typed garment price is a SELL price (it
+       replaces the catalogue price on the form), so it is costed at the same
+       ratio the catalogue price is. */
+    let garmentEach = 0, garmentSellEach = 0;
+    const basis = [];
+    if (prod && num(prod.price) > 0) {
+      const ratio = num(prod.cost) > 0 ? num(prod.cost) / num(prod.price) : 1 / SHOP_MARKUP;
+      garmentSellEach = (num(it.blank_price) > 0 ? num(it.blank_price) : num(prod.price)) + num(it.size_upcharge) / qty;
+      garmentEach = garmentSellEach * ratio;
+      basis.push(num(prod.cost) > 0 ? 'S&S cost' : 'garment at half price');
+    }
+    /* What the decoration was billed at per piece: only the rough rule uses it. */
+    const decoSellEach = Math.max(0, num(it.unit_price) - garmentSellEach);
+    const share = m1 && m2 ? 0.5 : 1;
+    const d1 = decorationEach(m1, it.stage, it.colours, bandQty, decoSellEach * share);
+    const d2 = decorationEach(m2, it.stage2, it.colours2 != null ? it.colours2 : it.colours, bandQty, decoSellEach * share);
+    for (const d of [d1, d2]) if (d.basis) basis.push(d.basis);
+
+    const each = garmentEach + d1.each + d2.each + ad.perLine / qty;
+    out.lines.push({ ix, unit_cost: r2(each), basis: basis.join(' + '), estimated: true });
+  });
+
+  out.outsourced = r2(out.outsourced);
+  out.shipping = r2(out.shipping);
+  return out;
+}
+
+module.exports = { SCREEN_PRINT, SCREEN_MIN_QTY, SCREEN_COST, SCREEN_FEE, DTF, EMBROIDERY, SHOP_MARKUP, SERVICE_WORDS,
+  methodKind, embroideryColumn, decorationEach, addonCosts, estimateJob };

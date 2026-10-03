@@ -488,7 +488,9 @@ test('no customer message about a held quote, whose link the customer cannot ope
 });
 
 test('costs, margin and monthly profit on the boards need Finances', () => {
-  assert.match(src, /if \(VIEW !== 'work' \|\| actorLevel\('finances'\) !== 'on'\) return '';\n          const mg = quoteMargin\(q\);/);
+  // The cost form is on the job page now (jobCostForm), gated twice: the card and the form.
+  assert.match(src, /function jobCostForm\(q, costBook, open\) \{\n  \/\/ [^\n]*\n  if \(actorLevel\('finances'\) !== 'on'\) return '';\n  const mg = quoteMargin\(q\);/);
+  assert.match(src, /\$\{actorLevel\('finances'\) === 'on' \? `<div class="card" id="costs"/);
   assert.match(src, /\$\{VIEW !== 'money' \|\| actorLevel\('finances'\) !== 'on' \? '' : `/);
 });
 
