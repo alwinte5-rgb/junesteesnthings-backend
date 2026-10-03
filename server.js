@@ -153,6 +153,18 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ limit: '1mb', extended: true }));
 
+/* One address for the site: jtees.net -> www.jtees.net (the sitemap's host),
+   so search engines stop splitting the homepage across two hosts. Page loads
+   only: a POST, a webhook or an API call is answered where it lands, and the
+   staff host is never moved. */
+app.use((req, res, next) => {
+  const host = String(req.headers.host || '').toLowerCase().replace(/:\d+$/, '');
+  if (host !== 'jtees.net' || host === STAFF_HOST) return next();
+  if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+  if (/^\/(api|webhooks)(\/|$)/.test(req.path)) return next();
+  return res.redirect(301, 'https://www.jtees.net' + req.originalUrl);
+});
+
 // Grad season pages are retired — redirect old links home.
 app.get(['/grad', '/grad/', '/grad/*'], (_req, res) => res.redirect(302, '/'));
 // Design Ideas is replaced by the online Design Studio — permanent redirect.
