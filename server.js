@@ -22587,6 +22587,17 @@ app.post('/admin/team/hours', requireAdmin, async (req, res) => {
 
 /* ── Commission ───────────────────────────────────────────────────────────── */
 
+/* Commission starts when training ends: only quotes a helper created on or
+   after the owner's "ready" sign-off (TRAINING.READY_KEY) earn it. Quotes
+   built in training were the owner's work as much as theirs, checked line by
+   line. A payout already recorded always stays on the list, even if the
+   sign-off is later undone. */
+async function commissionStartsAt(staffId) {
+  const { rows: [r] } = await pool.query(
+    'SELECT done_at FROM staff_training WHERE staff_id = $1 AND step_key = $2', [staffId, TRAINING.READY_KEY]);
+  return r ? r.done_at : null;
+}
+
 /** Every quote a helper sent that has taken money, with its commission state. */
 async function commissionLines(staffId, pct) {
   const { rows } = await pool.query(
@@ -22599,8 +22610,11 @@ async function commissionLines(staffId, pct) {
             (SELECT amount FROM commission_payouts c WHERE c.staff_id = $1 AND c.quote_code = q.code) AS paid_amount_c
        FROM quotes q JOIN quote_payments p ON p.quote_code = q.code
       WHERE q.credited_to = $1
+        AND (EXISTS (SELECT 1 FROM staff_training t WHERE t.staff_id = $1 AND t.step_key = $2
+                      AND q.created_at >= t.done_at)
+             OR EXISTS (SELECT 1 FROM commission_payouts c WHERE c.staff_id = $1 AND c.quote_code = q.code))
       GROUP BY q.code, q.name, q.total, q.tax, q.settled_at
-      ORDER BY MAX(p.created_at) DESC LIMIT 500`, [staffId]);
+      ORDER BY MAX(p.created_at) DESC LIMIT 500`, [staffId, TRAINING.READY_KEY]);
   return rows.map((r) => {
     const c = TEAM.commissionFor({ collected: r.collected, total: r.total, tax: r.tax, pct });
     const paidInFull = !!r.settled_at || r.gross + 0.005 >= Number(r.total);
@@ -22625,6 +22639,7 @@ app.get('/admin/commission', requireAdmin, async (req, res) => {
       ${pageHeader(`Commission — ${s.name}`, `${pct}% of what was collected on quotes credited to them, before tax, less refunds, lost disputes and card fees. Payable ${TEAM.HOLD_DAYS} days after the job is paid in full.`)}
       ${flash(req.query)}
       ${filterChips(roster.map((r) => ({ label: r.name, href: `/admin/commission?staff=${r.id}`, on: r.id === s.id })))}
+      ${commissionStartNote(e, true)}
       ${earningsTiles(e)}
       ${payNow > 0 ? `<form method="post" action="/admin/commission/pay" class="card">
         <input type="hidden" name="staff_id" value="${s.id}">
@@ -22882,16 +22897,28 @@ function incentiveRow(i, { awardFor } = {}) {
 /** Everything a helper has earned: commission by quote, and bonuses. */
 async function earningsFor(staff) {
   const pct = Number(staff.commission_pct || 0);
-  const [lines, { rows: bonuses }] = await Promise.all([
+  const [lines, { rows: bonuses }, startsAt] = await Promise.all([
     commissionLines(staff.id, pct),
     pool.query(`SELECT * FROM staff_bonuses WHERE staff_id = $1 ORDER BY created_at DESC LIMIT 200`, [staff.id]),
+    commissionStartsAt(staff.id),
   ]);
   const sum = (st) => round2(lines.filter((l) => l.state === st)
     .reduce((a, l) => a + (st === 'paid' ? Number(l.paid_amount_c) : l.amount), 0));
   const bonusOwed = round2(bonuses.filter((b) => !b.paid_at).reduce((a, b) => a + Number(b.amount), 0));
   const bonusPaid = round2(bonuses.filter((b) => b.paid_at).reduce((a, b) => a + Number(b.amount), 0));
-  return { pct, lines, bonuses, payable: sum('payable'), waiting: sum('waiting'), earning: sum('earning'),
+  return { pct, lines, bonuses, startsAt, payable: sum('payable'), waiting: sum('waiting'), earning: sum('earning'),
            onHold: sum('on hold'), paid: sum('paid'), bonusOwed, bonusPaid };
+}
+
+/** When commission starts, for the earnings pages. */
+function commissionStartNote(e, forOwner) {
+  if (!e.startsAt) {
+    return `<div class="card" style="border-left:4px solid #1848B8"><b>Commission starts after training.</b>
+      <span class="muted">${forOwner
+        ? 'It counts on quotes they create after you sign off "Ready to send small quotes on their own" on Training.'
+        : 'It counts on quotes you create once the owner signs off your training. Until then the owner checks every quote with you.'}</span></div>`;
+  }
+  return `<p class="muted">Commission counts on quotes created since ${escEmail(whenShort(e.startsAt))}, when training was signed off.</p>`;
 }
 
 function earningsTiles(e) {
@@ -22915,6 +22942,7 @@ app.get('/admin/my-earnings', requireAdmin, async (req, res) => {
     const tone = { payable: 'green', waiting: 'blue', earning: 'neutral', 'on hold': 'red', paid: 'neutral' };
     res.send(adminPage('My earnings', `
       ${pageHeader('My earnings', `${e.pct}% commission on money collected from sales credited to you, before tax, less refunds and card fees. It is payable ${TEAM.HOLD_DAYS} days after the customer has paid in full.`)}
+      ${commissionStartNote(e, false)}
       ${earningsTiles(e)}
       ${incentives.length ? `<div class="card"><b>Incentives</b>${incentives.map((i) => incentiveRow(i)).join('')}</div>` : ''}
       ${e.bonuses.length ? `<div class="card"><b>Bonuses</b>${e.bonuses.map((b) => `<div class="row-i"><span class="row-main">${escEmail(b.reason)}
@@ -22924,7 +22952,7 @@ app.get('/admin/my-earnings', requireAdmin, async (req, res) => {
         <span class="row-main"><a href="/admin/production/${escEmail(l.code)}"><b>${escEmail(l.code)}</b></a> ${escEmail(l.name || '')}
           <div class="row-sub">collected ${money(l.collected)} &middot; commission on ${money(l.base)}</div></span>
         <span class="row-end"><b>${money(l.state === 'paid' ? l.paid_amount_c : l.amount)}</b> ${pill(l.state, tone[l.state])}</span></div>`).join('')}</div>`
-        : `<p class="muted">Nothing yet. When a customer pays on a quote credited to you, it shows here. Set the sales credit on the quote form or the job page.</p>`}</div>`, 'earnings'));
+        : `<p class="muted">Nothing yet. When a customer pays on a quote you created after training, it shows here. Set the sales credit on the quote form or the job page.</p>`}</div>`, 'earnings'));
   } catch (err) {
     console.error('my earnings failed:', err.message);
     res.status(500).send(adminPage('My earnings', '<div class="card"><div class="warn">Could not load your earnings.</div></div>', 'earnings'));

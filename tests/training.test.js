@@ -172,3 +172,11 @@ test('every quiz question points at a playbook article that really exists', () =
   const seeded = new Set([...src.matchAll(/^\s+\{ kind: '[a-z]+'.*?title: '((?:[^'\\]|\\.)+)'/gm)].map((m) => m[1].replace(/\\'/g, "'")));
   for (const x of TRAINING.QUIZZES.basics.questions) assert.ok(seeded.has(x.article), `${x.id}: no article "${x.article}"`);
 });
+
+test('commission starts at the "ready" sign-off, and a recorded payout never disappears', () => {
+  const fn = src.slice(src.indexOf('async function commissionLines('), src.indexOf('\n}\n', src.indexOf('async function commissionLines(')));
+  assert.match(fn, /t\.step_key = \$2\s+AND q\.created_at >= t\.done_at/, 'only quotes created after the sign-off earn');
+  assert.match(fn, /OR EXISTS \(SELECT 1 FROM commission_payouts c WHERE c\.staff_id = \$1 AND c\.quote_code = q\.code\)/);
+  assert.match(fn, /\[staffId, TRAINING\.READY_KEY\]/);
+  assert.match(TRAINING.STEPS.find((s) => s.key === TRAINING.READY_KEY).hint, /Commission starts here/);
+});
