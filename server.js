@@ -21,6 +21,7 @@ const {
   normalizeUsPhone, parseSmsConsent, consentCheckboxesHtml, foldSmsConsent,
 } = require('./tools/lib/sms-consent');
 const SHIP = require('./tools/lib/shipping');
+const EXP = require('./tools/lib/expenses');
 const DELIV = require('./tools/lib/delivery');
 const { createDeliveryStore } = require('./tools/lib/delivery-store');
 const { quoteAnalyticsTags, paidQuery } = require('./tools/lib/quote-analytics');
@@ -592,6 +593,15 @@ async function initDB() {
       created_at  TIMESTAMPTZ DEFAULT NOW()
     )`);
   await pool.query(`CREATE INDEX IF NOT EXISTS expenses_date_idx ON expenses (spent_on)`);
+  /* A monthly cost deleted from a month, so the automatic carry-forward
+     (rollRecurringExpenses) does not put it back. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS expense_roll_skips (
+      ym          TEXT NOT NULL,
+      series_key  TEXT NOT NULL,
+      created_at  TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (ym, series_key)
+    )`);
   /* A Stripe fee booked by the dispute reconcile carries the Stripe object it
      came from, so a retried event cannot book it twice. Hand-entered rows
      leave it NULL. */
@@ -13270,6 +13280,9 @@ app.post('/admin/quote/:code/correct-payment', requireAdmin, async (req, res) =>
  */
 app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
   try {
+    /* A new month has its monthly costs before anything is counted. A failure
+       here must not hide the page; the hourly sweep tries again. */
+    await rollRecurringExpenses().catch((e) => console.error('monthly costs roll failed:', e.message));
     const year = /^\d{4}$/.test(String(req.query.year || ''))
       ? Number(req.query.year) : new Date().getFullYear();
 
@@ -13385,9 +13398,16 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
       `SELECT category, COALESCE(SUM(amount),0) AS total
          FROM expenses WHERE EXTRACT(YEAR FROM spent_on) = $1
         GROUP BY 1 ORDER BY 2 DESC`, [year]);
+    /* Every entry of the year, grouped by month below. `day` is the DATE as
+       text, so a month is never moved by the server's clock. */
     const { rows: expList } = await pool.query(
-      `SELECT * FROM expenses WHERE EXTRACT(YEAR FROM spent_on) = $1
-        ORDER BY spent_on DESC, id DESC LIMIT 40`, [year]);
+      `SELECT *, to_char(spent_on, 'YYYY-MM-DD') AS day FROM expenses WHERE EXTRACT(YEAR FROM spent_on) = $1
+        ORDER BY spent_on DESC, id DESC`, [year]);
+    const { rows: [{ ym: thisYm }] } = await pool.query("SELECT to_char(CURRENT_DATE, 'YYYY-MM') AS ym");
+    const expMonthsList = EXP.byMonth(expList);
+    /* Fixed costs a month are THIS month's monthly entries (or the year's last
+       month, looking back) — not every monthly entry in the year added up. */
+    const fixedNow = EXP.fixedMonthly(expList, thisYm < `${year}-12` ? thisYm : `${year}-12`);
     const expTotal = round2(expByCat.reduce((s, r) => s + Number(r.total), 0));
 
     /* Gross profit is what the jobs made. Net is what the business made —
@@ -13400,7 +13420,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
        it is only the sales again, so every place that shows one shows a dash —
        the months and the total alike, so the rows always add up to the total. */
     const netKnown = T.costs > 0 || expTotal > 0;
-    const fixedMonthly = round2(expList.filter(e => e.recurs).reduce((a, e) => a + Number(e.amount), 0));
+    const fixedMonthly = fixedNow;
 
     const { rows: years } = await pool.query(
       `SELECT DISTINCT EXTRACT(YEAR FROM created_at)::int AS y FROM quotes ORDER BY y DESC`);
@@ -13503,7 +13523,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
            (deutan dE 4.1; blue-red scores 22.4). Colour is never the only cue:
            every bar is direct-labelled and the axis carries the figure. */
         const monthsWithSales = months.filter(m => Number(m.sales) > 0).length || 1;
-        const recurring = round2(expList.filter(e => e.recurs).reduce((a, e) => a + Number(e.amount), 0));
+        const recurring = fixedNow;
         // marginPct: from the jobs with costs entered only (worked out once, above).
         const be = marginPct && marginPct > 0 ? round2(recurring / marginPct) : null;
 
@@ -13563,8 +13583,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
            here is derived from what is already recorded — no new input. */
         const monthsWithSales = months.filter(m => Number(m.sales) > 0).length || 1;
         const avgSales = round2(T.sales / monthsWithSales);
-        const recurring = round2(expList.filter(e => e.recurs)
-          .reduce((a, e) => a + Number(e.amount), 0));
+        const recurring = fixedNow;
         // marginPct: from the jobs with costs entered only (worked out once, above).
         // Sales needed to cover fixed costs at the margin actually achieved.
         const breakEven = marginPct && marginPct > 0 ? round2(recurring / marginPct) : null;
@@ -13631,20 +13650,32 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
           <button type="submit" style="padding:7px 18px;font-size:14px">Add</button>
         </form>
 
-        ${expByCat.length ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+        ${expByCat.length ? `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px">
+          <span class="muted" style="font-size:11px;letter-spacing:.06em;text-transform:uppercase">${year} so far</span>
           ${expByCat.map(c => `<div style="background:#f7f9fc;border:1px solid #e3e8f2;border-radius:8px;padding:6px 12px;font-size:12.5px">
             <span style="color:#6b7280">${escEmail(c.category)}</span>
             <b style="margin-left:6px;font-variant-numeric:tabular-nums">${money(c.total)}</b></div>`).join('')}
         </div>` : ''}
 
-        ${expList.length ? `<details style="margin-top:12px" ${expList.length <= 8 ? 'open' : ''}>
-          <summary style="cursor:pointer;color:#1848B8;font-size:13px">${expList.length} entr${expList.length === 1 ? 'y' : 'ies'}</summary>
-          <div style="margin-top:8px">
-            ${expList.map(e => `
+        ${/* One section per month, newest first. This month is open; the rest
+             fold away with their totals showing, so a month's overheads are
+             read on their own rather than as one long list. */
+          expMonthsList.length ? expMonthsList.map((g) => `
+          <details style="margin-top:12px;border:1px solid #e3e8f2;border-radius:10px;padding:8px 12px" ${g.ym === thisYm || (g === expMonthsList[0] && !expMonthsList.some((x) => x.ym === thisYm)) ? 'open' : ''}>
+            <summary style="cursor:pointer;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:14px">
+              <b>${EXP.monthLabel(g.ym)}${g.ym === thisYm ? ' <span class="pill pill-blue" style="font-size:11px">this month</span>' : ''}</b>
+              <span style="font-variant-numeric:tabular-nums"><b>${money(g.total)}</b>
+                <span class="muted" style="font-size:12px">&middot; ${g.entries.length} entr${g.entries.length === 1 ? 'y' : 'ies'}</span></span>
+            </summary>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 4px">
+              ${g.categories.map((c) => `<span style="background:#f7f9fc;border:1px solid #e3e8f2;border-radius:8px;padding:3px 10px;font-size:12px">
+                <span style="color:#6b7280">${escEmail(c.category)}</span> <b style="font-variant-numeric:tabular-nums">${money(c.total)}</b></span>`).join('')}
+            </div>
+            ${g.entries.map(e => `
             <form method="POST" action="/admin/expenses/${e.id}"
                   style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;padding:5px 0;border-bottom:1px solid #f1f4f9;font-size:12.5px">
               <input type="hidden" name="year" value="${year}">
-              <input name="spent_on" type="date" value="${new Date(e.spent_on).toISOString().slice(0,10)}"
+              <input name="spent_on" type="date" value="${escEmail(e.day)}"
                      style="flex:0 0 132px;padding:5px;font-size:12px">
               <select name="category" style="flex:0 0 118px;padding:5px;font-size:12px">
                 ${EXPENSE_CATEGORIES.map(c => `<option value="${c}" ${c === e.category ? 'selected' : ''}>${c}</option>`).join('')}
@@ -13662,13 +13693,11 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
                       onclick="return confirm('Delete this ${money(e.amount)} ${escEmail(e.category)} entry?')"
                       style="border:0;background:none;color:#9ca3af;cursor:pointer;font-size:15px;padding:0 4px">×</button>
             </form>`).join('')}
-          </div>
-        </details>` : '<div class="muted" style="font-size:12.5px;margin-top:10px">Nothing recorded yet.</div>'}
+          </details>`).join('') : '<div class="muted" style="font-size:12.5px;margin-top:10px">Nothing recorded yet.</div>'}
 
-        ${expList.some(e => e.recurs) ? `<form method="POST" action="/admin/expenses/roll" style="margin-top:10px">
-          <button type="submit" class="btn btn-ghost" style="padding:6px 14px;font-size:12.5px">Roll monthly costs into this month</button>
-          <span class="muted" style="font-size:11px;margin-left:8px">Copies last month's recurring entries. Skips any category already present.</span>
-        </form>` : ''}
+        ${expList.some(e => e.recurs) ? `<p class="muted" style="font-size:11.5px;margin:10px 0 0">
+          Costs ticked <b>monthly</b> carry into each new month by themselves, on the same day of the month.
+          To stop one, untick <b>monthly</b> on its latest entry. Deleting an entry removes just that month.</p>` : ''}
       </div>
 
       <div class="card" style="margin-top:14px">
@@ -13843,32 +13872,58 @@ app.post('/admin/expenses/:id', requireAdmin, async (req, res) => {
 
 app.post('/admin/expenses/:id/delete', requireAdmin, async (req, res) => {
   const id = Number(req.params.id) || 0;
-  try { await pool.query('DELETE FROM expenses WHERE id = $1', [id]); }
-  catch (err) { console.error('expense delete failed:', err.message); }
+  try {
+    /* A monthly cost deleted from a month stays deleted: remembered, so the
+       carry-forward does not put it straight back. */
+    const { rows } = await pool.query(
+      `DELETE FROM expenses WHERE id = $1 RETURNING to_char(spent_on, 'YYYY-MM') AS ym, category, vendor, note, recurs`, [id]);
+    if (rows[0] && rows[0].recurs) {
+      await pool.query(`INSERT INTO expense_roll_skips (ym, series_key) VALUES ($1, $2) ON CONFLICT (ym, series_key) DO NOTHING`,
+        [rows[0].ym, EXP.seriesKey(rows[0])]);
+    }
+  } catch (err) { console.error('expense delete failed:', err.message); }
   res.redirect(FINANCES_PATH);
 });
 
-/* Roll last month's recurring costs into this month. Rent does not stop being
-   owed because nobody typed it in, and a monthly cost retyped by hand is a
-   monthly cost eventually forgotten. Idempotent: it will not duplicate a
-   category already present this month. */
-app.post('/admin/expenses/roll', requireAdmin, async (req, res) => {
+/* Monthly costs carry into every month on their own (tools/lib/expenses.js).
+   It used to take a button that copied LAST month only, so one month nobody
+   pressed it broke the chain: August's rent was never carried into September,
+   and October then had nothing to copy. Every month from the first monthly
+   cost up to this one is filled now, oldest first, so a gap heals itself.
+   Run when Finances opens and in the hourly sweep, under a lock so two at once
+   cannot both add the same rent. */
+async function rollRecurringExpenses() {
+  const client = await pool.connect();
   try {
-    const { rowCount } = await pool.query(
-      `INSERT INTO expenses (spent_on, category, amount, vendor, note, recurs)
-       SELECT date_trunc('month', CURRENT_DATE)::date, e.category, e.amount, e.vendor,
-              COALESCE(e.note,'') , TRUE
-         FROM expenses e
-        WHERE e.recurs
-          AND date_trunc('month', e.spent_on) = date_trunc('month', CURRENT_DATE - INTERVAL '1 month')
-          AND NOT EXISTS (
-            SELECT 1 FROM expenses x
-             WHERE x.category = e.category
-               AND date_trunc('month', x.spent_on) = date_trunc('month', CURRENT_DATE))`);
-    console.log(`recurring expenses rolled forward: ${rowCount}`);
+    await client.query('BEGIN');
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('expenses:roll'))");
+    const { rows } = await client.query(
+      `SELECT id, to_char(spent_on, 'YYYY-MM-DD') AS day, category, amount, vendor, note, recurs
+         FROM expenses WHERE ext_ref IS NULL`);
+    const { rows: sk } = await client.query('SELECT ym, series_key FROM expense_roll_skips');
+    const { rows: [{ ym: currentYm }] } = await client.query("SELECT to_char(CURRENT_DATE, 'YYYY-MM') AS ym");
+    const plan = EXP.planRoll(rows, currentYm, new Set(sk.map((r) => `${r.ym}#${r.series_key}`)));
+    for (const e of plan) {
+      await client.query(
+        `INSERT INTO expenses (spent_on, category, amount, vendor, note, recurs) VALUES ($1::date, $2, $3, $4, $5, TRUE)`,
+        [e.day, e.category, e.amount, e.vendor, e.note]);
+    }
+    await client.query('COMMIT');
+    if (plan.length) console.log(`monthly costs carried forward: ${plan.length} (${[...new Set(plan.map((e) => EXP.ymOf(e.day)))].join(', ')})`);
+    return plan.length ? `${plan.length} added` : '';
   } catch (err) {
-    console.error('expense roll failed:', err.message);
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
   }
+}
+
+/* Kept for an old bookmark or a page open since before the change: it now
+   just runs the same fill. */
+app.post('/admin/expenses/roll', requireAdmin, async (req, res) => {
+  try { await rollRecurringExpenses(); }
+  catch (err) { console.error('expense roll failed:', err.message); }
   res.redirect(FINANCES_PATH);
 });
 
@@ -21323,6 +21378,7 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
     await step('balance reminders', sendBalanceReminders);
     await step('reorder nudges', sendReorderNudges);
     await step('expire quotes', expireOldQuotes);
+    await step('monthly costs', rollRecurringExpenses);
     await step('daily digest', sendDailyDigest);
     await step('tax check', taxMonthlyCheck);
     await step('brevo breach check', brevoBreachCheck);
