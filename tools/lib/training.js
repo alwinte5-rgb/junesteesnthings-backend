@@ -65,7 +65,7 @@ const STEPS = [
   { key: 'signoff:handoff', type: 'signoff',
     title: 'Knows when to hand a customer to the owner', hint: 'Discounts, refunds, logos the customer does not own, angry customers.' },
   { key: 'signoff:ready', type: 'signoff',
-    title: 'Ready to send small quotes on their own', hint: 'The last step. The owner decides when to move you up from Training.' },
+    title: 'Ready to send small quotes on their own', hint: 'The last step. Commission starts here, on quotes you create from now on. The owner decides when to move you up from Training.' },
 ];
 
 const READY_KEY = 'signoff:ready';
