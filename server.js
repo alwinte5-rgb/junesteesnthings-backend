@@ -4365,6 +4365,11 @@ app.post('/api/sms-cart-followup', requireInternalKey, capPerRecipient('sms-cart
 app.get('/sms-terms', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'sms-terms.html'));
 });
+// The opt-in as a customer sees it, with a screenshot: what A2P 10DLC campaign
+// vetting asks for, and what a carrier reviewer reads against the description.
+app.get('/sms-consent', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'sms-consent.html'));
+});
 
 // Passwordless login code for customer accounts on the designer site
 app.post('/api/send-login-code', requireInternalKey, capPerRecipient('send-login-code', 6), async (req, res) => {

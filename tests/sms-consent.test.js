@@ -123,3 +123,16 @@ test('STOP (both false) removes everything; START afterwards restores order upda
     { transactional: true, marketing: false });
   assert.deepEqual(foldSmsConsent([]), { transactional: false, marketing: false });
 });
+
+/* /sms-consent is what campaign vetting reads against the registration: it must
+   quote the boxes word for word, show them unticked, and its screenshot must ship. */
+test('/sms-consent quotes the stored wording and shows the form', () => {
+  assert.match(server, /app\.get\('\/sms-consent'/);
+  const page = unescape(fs.readFileSync(path.join(root, 'public', 'sms-consent.html'), 'utf8'));
+  assert.ok(page.includes(TRANSACTIONAL_TEXT), 'transactional wording drifted from sms-consent.js');
+  assert.ok(page.includes(MARKETING_TEXT), 'marketing wording drifted from sms-consent.js');
+  for (const re of [/\/sms-terms/, /privacy\.php/, /unchecked/, /STOP/, /HELP/]) assert.match(page, re);
+  const img = page.match(/<img src="([^"]+)"/);
+  assert.ok(img, 'no screenshot on the page');
+  assert.ok(fs.existsSync(path.join(root, 'public', img[1])), `screenshot missing: ${img[1]}`);
+});
