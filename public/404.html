@@ -112,6 +112,19 @@
     .btn-primary:hover,.btn-cta:hover,.btn-gold:hover,.btn-quote:hover{background:#123A9A!important;color:#fff!important;}
 </style>
   <script src="/assets/js/analytics.js"></script>
+  <script>
+    /* A page someone could not find (plan 1d): GA4 page_not_found, and the
+       Monday broken-links list in the owner's email (POST /api/not-found).
+       Path without its query string; the referrer is cut to its host server-side. */
+    (function () {
+      try {
+        var p = location.pathname, r = document.referrer || '';
+        if (window.jtTrack) jtTrack('page_not_found', { page_path: p, referrer: r.split('?')[0].slice(0, 200) });
+        fetch('/api/not-found', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ site: 'www', path: p.slice(0, 200), ref: r.slice(0, 500) }) }).catch(function () {});
+      } catch (e) { /* never break the page */ }
+    })();
+  </script>
   <link rel="stylesheet" href="/assets/css/site-nav.css" />
 </head>
 <body>

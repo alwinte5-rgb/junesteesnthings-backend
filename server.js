@@ -29,6 +29,7 @@ const { quoteAnalyticsTags, paidQuery } = require('./tools/lib/quote-analytics')
 const { cleanShopFeed } = require('./tools/lib/shop-feed');
 const { legacyRedirect, LEGACY_PATHS } = require('./tools/lib/legacy-redirects');
 const { parseFirstTouch, firstTouchLabel } = require('./tools/lib/first-touch');
+const SITEHEALTH = require('./tools/lib/site-health');
 const { T: SMS, plain: smsPlain, PICKUP: SMS_PICKUP } = require('./tools/lib/sms-templates');
 const { verifyTwilioSignature, classifyInbound } = require('./tools/lib/twilio-webhook');
 const TAXCERT = require('./tools/lib/tax-certificates');
@@ -865,6 +866,19 @@ async function initDB() {
     )`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS app_errors_open_uniq
                       ON app_errors (fingerprint) WHERE reported_at IS NULL`).catch(() => {});
+
+  /* Failures a customer hit (tools/lib/site-health.js): refused quote forms
+     and 404s, one row per shop-day, kind, detail and referring host, with a
+     count. Read by the morning email; rows older than 90 days are pruned. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS site_health (
+      day     DATE NOT NULL,
+      kind    TEXT NOT NULL,
+      detail  TEXT NOT NULL,
+      ref     TEXT NOT NULL DEFAULT '',
+      count   INTEGER NOT NULL DEFAULT 1,
+      PRIMARY KEY (day, kind, detail, ref)
+    )`);
 
   /* SMS consent — append-only. Each row is one moment someone ticked a box (or
      texted STOP), with the exact wording they saw. The CURRENT answer for a
@@ -2706,7 +2720,54 @@ const signatureRateLimit = makeRateLimit(60, 60 * 60 * 1000);
    use up the order limit that Accept and Pay share. */
 const photoRateLimit     = makeRateLimit(80, 60 * 60 * 1000);
 
+/* One day's distinct rows per kind are capped, so a flood of made-up paths
+   cannot grow the table without limit; the count on an existing row still
+   rises. Never throws: a counter must not break the request it counts. */
+const SITE_HEALTH_DAILY_ROWS = 300;
+async function countSiteHealth(kind, detail, ref = '') {
+  try {
+    await pool.query(
+      `INSERT INTO site_health (day, kind, detail, ref)
+       SELECT (NOW() AT TIME ZONE $4)::date, $1, $2, $3
+        WHERE EXISTS (SELECT 1 FROM site_health
+                       WHERE day = (NOW() AT TIME ZONE $4)::date AND kind = $1 AND detail = $2 AND ref = $3)
+           OR (SELECT COUNT(*) FROM site_health
+                WHERE day = (NOW() AT TIME ZONE $4)::date AND kind = $1) < ${SITE_HEALTH_DAILY_ROWS}
+       ON CONFLICT (day, kind, detail, ref) DO UPDATE SET count = site_health.count + 1`,
+      [String(kind).slice(0, 20), String(detail).slice(0, 220), String(ref || '').slice(0, 100),
+       process.env.JT_TIMEZONE || 'America/Chicago']);
+  } catch (e) {
+    console.warn('site health count failed (not fatal):', e.message);
+  }
+}
+
+/** First in a form route's chain: when the response is a refusal, count why.
+ *  Sees the limiter's 429 and the bot/human-check 400s as well as the
+ *  handler's own, which is the point — those never reached the Leads page. */
+function countFormFailures(form) {
+  return (req, res, next) => {
+    const json = res.json.bind(res);
+    res.json = (body) => { res.locals.formError = body && body.error; return json(body); };
+    res.on('finish', () => {
+      const reason = SITEHEALTH.formFailureReason(res.statusCode, res.locals.formError);
+      if (reason) countSiteHealth('quote_form', (form === 'quote' ? '' : form + ' ') + reason);
+    });
+    next();
+  };
+}
+
 // ─── Routes ───────────────────────────────────────────────────────────────────
+
+/* A 404 page a person saw, reported by the page itself (public/404.html and the
+   Design Studio's 404.html), for the Monday list of broken links. Only browsers
+   that run the page's script report, so scanners stay out of it. */
+app.post('/api/not-found', makeRateLimit(20, 60 * 60 * 1000), (req, res) => {
+  if (Number(req.headers['content-length'] || 0) > 2048) return res.status(413).end();
+  if (!req.headers.origin || fromAnotherSite(req)) return res.status(403).end();
+  const nf = SITEHEALTH.cleanNotFound(req.body);
+  if (nf) countSiteHealth('not_found', SITEHEALTH.notFoundDetail(nf), nf.ref);
+  res.status(204).end();
+});
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
@@ -2724,7 +2785,7 @@ function firstTouchJson(req) {
   return ft ? JSON.stringify(ft) : null;
 }
 
-app.post('/submit', makeRateLimit(4, 60 * 60 * 1000), rejectBots, allowMissingTurnstile, verifyTurnstile, async (req, res) => {
+app.post('/submit', countFormFailures('quote'), makeRateLimit(4, 60 * 60 * 1000), rejectBots, allowMissingTurnstile, verifyTurnstile, async (req, res) => {
   const { name, phone, email, description, photo_url } = req.body;
 
   if (!name || !phone || !email) {
@@ -3997,7 +4058,7 @@ app.post('/api/cloudinary-signature', signatureRateLimit, (req, res) => {
 // Embroidery order request from design.jtees.net product pages.
 // Embroidery files (DST/PES/...) can't render in the online designer, so this
 // flow collects the file + size + contact info and June follows up directly.
-app.post('/api/embroidery-quote', orderRateLimit, verifyTurnstile, async (req, res) => {
+app.post('/api/embroidery-quote', countFormFailures('embroidery'), orderRateLimit, verifyTurnstile, async (req, res) => {
   try {
     const b = req.body || {};
     const name  = String(b.name || '').trim().slice(0, 120);
@@ -19668,12 +19729,16 @@ async function sendDailyDigest() {
        paid on 2026-08-11 was never mentioned in seven weeks (order #10). */
     const ship = await shippingQueues({ fresh: true }).then(shippingWaiting)
       .catch((e) => { console.error('digest shipping list failed:', e.message); return null; });
+    /* Customer-facing failures (refused quote forms; on Mondays, 404s). A day
+       with no jobs still sends the email when this has something in it. */
+    const healthHtml = await siteHealthHtml()
+      .catch((e) => { console.error('digest site health failed:', e.message); return ''; });
 
     const { rows } = await pool.query(
       `SELECT * FROM quotes
         WHERE status NOT IN ('expired', 'held', 'draft') AND delivered_at IS NULL
         ORDER BY COALESCE(needed_by, target_date) NULLS LAST, created_at`);
-    if (!rows.length && !ship) return;
+    if (!rows.length && !ship && !healthHtml) return;
 
     const today = new Date(new Date().toDateString());
     const live = rows.map((q) => {
@@ -19684,7 +19749,7 @@ async function sendDailyDigest() {
       return { q, cl, sched, days };
     }).filter((x) => x.cl.next);           // nothing to do = not in the digest
 
-    if (!live.length && !ship) return;
+    if (!live.length && !ship && !healthHtml) return;
 
     const overdue = live.filter((x) => x.days !== null && x.days < 0);
     const soon    = live.filter((x) => x.days !== null && x.days >= 0 && x.days <= 3);
@@ -19734,7 +19799,7 @@ async function sendDailyDigest() {
          ${soon.length ? `${soon.length} due within 3 days &middot; ` : ''}
          ${live.length} open</p>
        <table style="width:100%;border-collapse:collapse">${live.map(row).join('')}</table>
-       ${teamHtml}
+       ${teamHtml}${healthHtml}
        <p style="margin-top:16px"><a href="${PUBLIC_BASE_URL}/admin/quotes"
          style="background:#1848B8;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;display:inline-block">Open the board</a></p>
        <p style="color:#9ca3af;font-size:11.5px;margin-top:14px">
@@ -19745,6 +19810,25 @@ async function sendDailyDigest() {
   } catch (e) {
     console.error('daily digest failed:', e.message);
   }
+}
+
+/** The morning email's customer-failure section (tools/lib/site-health.js):
+ *  yesterday's refused quote forms, and on Mondays last week's 404s. Also
+ *  prunes rows past 90 days, once a day, here. */
+async function siteHealthHtml() {
+  const tz = process.env.JT_TIMEZONE || 'America/Chicago';
+  await pool.query(`DELETE FROM site_health WHERE day < (NOW() AT TIME ZONE $1)::date - 90`, [tz]);
+  const { rows: formFails } = await pool.query(
+    `SELECT detail, SUM(count)::int AS n FROM site_health
+      WHERE kind = 'quote_form' AND day = (NOW() AT TIME ZONE $1)::date - 1
+      GROUP BY detail ORDER BY n DESC`, [tz]);
+  const monday = TEAM.zoned(new Date(), SHOP_TZ).dow === 1;
+  const notFound = monday ? (await pool.query(
+    `SELECT detail, ref, SUM(count)::int AS n FROM site_health
+      WHERE kind = 'not_found' AND day >= (NOW() AT TIME ZONE $1)::date - 7
+        AND day < (NOW() AT TIME ZONE $1)::date
+      GROUP BY detail, ref ORDER BY n DESC, detail LIMIT 20`, [tz])).rows : [];
+  return SITEHEALTH.siteHealthDigestHtml({ formFails, notFound, esc: escEmail });
 }
 
 /* The helpers' day, for the morning email: yesterday for each active helper,
