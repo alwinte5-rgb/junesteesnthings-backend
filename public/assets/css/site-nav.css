@@ -1,0 +1,56 @@
+/* The one site menu (tools/site-nav.js). Everything is under .jtn-* so no
+   page's own header CSS can reach it, and it reaches nothing of theirs. */
+.jtn-bar{background:#0B1F4B;color:#fff;text-align:center;font:600 .8rem/1.4 Inter,system-ui,sans-serif;padding:.55rem 1rem;}
+.jtn-bar a{color:#fff;text-decoration:underline;}
+.jtn-bar span{opacity:.6;margin:0 .45rem;}
+.jtn{position:sticky;top:0;z-index:1000;background:#fff;border-bottom:1px solid #E5E7EB;font-family:Inter,system-ui,sans-serif;}
+.jtn-in{max-width:1280px;margin:0 auto;padding:.6rem 1.25rem;display:flex;align-items:center;gap:1rem;}
+.jtn a{text-decoration:none;}
+.jtn-logo{display:flex;align-items:center;gap:.6rem;color:#0B1F4B;flex-shrink:0;}
+.jtn-logo img{width:40px;height:44px;object-fit:contain;}
+.jtn-logo span{font-weight:800;font-size:1.02rem;line-height:1.15;display:flex;flex-direction:column;}
+.jtn-logo small{font-weight:500;font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;color:#6B7280;}
+.jtn-menu{display:flex;align-items:center;gap:.15rem;margin-left:auto;}
+.jtn-menu>a,.jtn-dd-t{color:#0B1F4B;font:600 .9rem Inter,system-ui,sans-serif;padding:.55rem .65rem;border-radius:8px;background:none;border:0;cursor:pointer;white-space:nowrap;}
+.jtn-menu>a:hover,.jtn-dd-t:hover,.jtn-dd.open .jtn-dd-t{background:#EFF4FF;color:#1848B8;}
+.jtn-dd{position:relative;}
+.jtn-dd-t::after{content:"";display:inline-block;margin-left:.35rem;border:4px solid transparent;border-top-color:currentColor;transform:translateY(2px);}
+.jtn-dd-m{display:none;position:absolute;top:100%;left:0;min-width:230px;background:#fff;border:1px solid #E5E7EB;border-radius:12px;box-shadow:0 14px 34px rgba(11,31,75,.14);padding:.45rem;z-index:1001;}
+.jtn-dd:hover .jtn-dd-m,.jtn-dd:focus-within .jtn-dd-m,.jtn-dd.open .jtn-dd-m{display:block;}
+.jtn-dd-m a{display:block;color:#374151;font:500 .9rem Inter,system-ui,sans-serif;padding:.5rem .7rem;border-radius:8px;}
+.jtn-dd-m a:hover{background:#F7F6F3;color:#0B1F4B;}
+.jtn .jtn-strong{color:#1848B8;font-weight:700;}
+.jtn-act{display:flex;align-items:center;gap:.6rem;flex-shrink:0;}
+.jtn-icon svg,.jtn-contact svg{width:20px;height:20px;fill:#F0275A;flex-shrink:0;}
+.jtn-icon svg{fill:#0B1F4B;}
+.jtn-contact{display:flex;align-items:center;gap:.4rem;color:#F0275A;font:600 .72rem/1.2 Inter,system-ui,sans-serif;}
+.jtn-contact span{display:flex;flex-direction:column;}
+.jtn-contact b{color:#0B1F4B;font-size:.8rem;}
+.jtn-quote{background:#1848B8;color:#fff!important;font:700 .88rem Inter,system-ui,sans-serif;padding:.6rem 1rem;border-radius:999px;white-space:nowrap;}
+.jtn-quote:hover{background:#0B1F4B;}
+.jtn-burger{display:none;flex-direction:column;justify-content:center;gap:5px;width:42px;height:42px;background:none;border:0;cursor:pointer;padding:9px;}
+.jtn-burger span{display:block;height:2px;background:#0B1F4B;border-radius:2px;}
+.jtn-shade{position:fixed;inset:0;background:rgba(11,31,75,.45);z-index:1100;}
+.jtn-drawer{position:fixed;top:0;right:0;bottom:0;width:min(340px,88vw);background:#fff;z-index:1101;overflow-y:auto;padding:1rem 1.1rem calc(1.2rem + env(safe-area-inset-bottom));font-family:Inter,system-ui,sans-serif;box-shadow:-10px 0 30px rgba(11,31,75,.2);}
+.jtn-drawer[hidden],.jtn-shade[hidden]{display:none;}
+.jtn-drawer-h{display:flex;justify-content:space-between;align-items:center;color:#0B1F4B;margin-bottom:.6rem;}
+.jtn-close{background:none;border:0;font-size:1.3rem;color:#0B1F4B;cursor:pointer;padding:.4rem;}
+.jtn-drawer-nav>a,.jtn-drawer-nav summary{display:block;color:#0B1F4B;font-weight:700;padding:.8rem .2rem;border-bottom:1px solid #F0EEE9;text-decoration:none;cursor:pointer;list-style:none;}
+.jtn-drawer-nav summary::-webkit-details-marker{display:none;}
+.jtn-drawer-nav summary::after{content:"+";float:right;color:#6B7280;}
+.jtn-drawer-nav details[open] summary::after{content:"–";}
+.jtn-drawer-nav details a{display:block;color:#374151;padding:.55rem .9rem;text-decoration:none;}
+.jtn-drawer-cta{display:grid;gap:.55rem;margin-top:1.2rem;}
+.jtn-btn{display:block;text-align:center;background:#1848B8;color:#fff;font-weight:700;padding:.8rem;border-radius:999px;text-decoration:none;}
+.jtn-btn-2{background:#F7F6F3;color:#0B1F4B;}
+@media(max-width:1340px){.jtn-contact span{display:none;}}
+@media(max-width:1120px){.jtn-menu,.jtn-contact,.jtn-icon{display:none;}.jtn-burger{display:flex;}.jtn-act{margin-left:auto;}}
+@media(max-width:480px){.jtn-quote{padding:.5rem .8rem;font-size:.8rem;}.jtn-logo small{display:none;}.jtn-logo span{font-size:.92rem;}.jtn-bar{font-size:.72rem;}}
+
+/* Safety net on every page: decoration that starts off-screen (slide-in
+   animations, the scaled hero video) must never widen the page — on a phone
+   that zooms the whole site out. clip, not hidden, so the sticky menu still
+   sticks. Real content that is wide (tables) scrolls in its own box instead. */
+html{overflow-x:clip;}
+/* Price and comparison tables scroll inside their own box on phones. */
+@media(max-width:640px){table.price-table,table.compare-table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;}}

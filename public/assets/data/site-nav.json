@@ -1,0 +1,51 @@
+{
+  "_about": "The one menu for every jtees.net page. Edit this, then run: node tools/site-nav.js --write  (tests/site-nav.test.js fails if a page drifts).",
+  "announcement": [
+    { "text": "🎨 NEW — Design your own apparel online", "href": "/#shop" },
+    { "text": "Rush Turnaround Available on Request" },
+    { "text": "Curbside Pickup: Mon–Fri 10:30 AM – 6 PM" }
+  ],
+  "menu": [
+    { "label": "Shop", "items": [
+      { "label": "T-Shirts", "href": "https://design.jtees.net/products.php?category_id=52" },
+      { "label": "Tank Tops", "href": "https://design.jtees.net/products.php?category_id=54" },
+      { "label": "Kids & Youth", "href": "https://design.jtees.net/products.php?category_id=55" },
+      { "label": "Baby & Onesies", "href": "https://design.jtees.net/products.php?category_id=56" },
+      { "label": "Hoodies & Sweatshirts", "href": "https://design.jtees.net/products.php?category_id=53" },
+      { "label": "Polos & Business", "href": "https://design.jtees.net/products.php?category_id=59" },
+      { "label": "Hats & Caps", "href": "https://design.jtees.net/products.php?category_id=57" },
+      { "label": "Tote Bags", "href": "https://design.jtees.net/products.php?category_id=58" },
+      { "label": "Design Lab", "href": "https://design.jtees.net/editor.php?product_base=14" },
+      { "label": "All Products →", "href": "https://design.jtees.net/products.php", "strong": true }
+    ]},
+    { "label": "Groups & Events", "items": [
+      { "label": "Family Reunions", "href": "https://design.jtees.net/collection.php?c=family-reunion" },
+      { "label": "Birthdays", "href": "https://design.jtees.net/collection.php?c=birthday" },
+      { "label": "Graduation", "href": "https://design.jtees.net/collection.php?c=graduation" },
+      { "label": "Church Groups", "href": "https://design.jtees.net/collection.php?c=church-groups" },
+      { "label": "Sports Teams & Schools", "href": "https://design.jtees.net/collection.php?c=sports-teams" },
+      { "label": "Business / Staff", "href": "https://design.jtees.net/collection.php?c=staff-uniforms" },
+      { "label": "Memorial", "href": "https://design.jtees.net/collection.php?c=memorial" },
+      { "label": "Bulk Orders", "href": "https://design.jtees.net/collection.php?c=bulk-orders" },
+      { "label": "Get Design Help →", "href": "/#contact", "strong": true }
+    ]},
+    { "label": "Services", "items": [
+      { "label": "Custom T-Shirts Chicago", "href": "/services/custom-tshirts-chicago.html" },
+      { "label": "Screen Printing", "href": "/services/screen-printing.html" },
+      { "label": "Embroidery", "href": "/services/embroidery.html" },
+      { "label": "DTF Transfers", "href": "/services/dtf-transfers.html" },
+      { "label": "Banners & Signs", "href": "/services/banners-signs.html" },
+      { "label": "Event Decor & Favors", "href": "/services/event-decor.html" },
+      { "label": "Big Head Cutouts", "href": "/services/big-head-cutouts.html" },
+      { "label": "Graphic Design", "href": "/services/graphic-design.html" },
+      { "label": "All Services →", "href": "/#services", "strong": true }
+    ]},
+    { "label": "Our Work", "href": "/#portfolio" },
+    { "label": "Reviews", "href": "/#reviews" },
+    { "label": "Blog", "href": "/blog/" }
+  ],
+  "phone": { "display": "(773) 849-1854", "tel": "+17738491854" },
+  "instagram": "https://www.instagram.com/jtees228",
+  "quote": { "label": "Get a Quote", "href": "/#contact" },
+  "design": { "label": "Start Designing", "href": "https://design.jtees.net/editor.php?product_base=14" }
+}

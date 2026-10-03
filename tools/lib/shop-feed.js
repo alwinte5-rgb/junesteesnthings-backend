@@ -36,6 +36,12 @@ function imageUrl(v) {
   return u.protocol === 'https:' ? u.href : '';
 }
 
+/** A real positive amount in dollars, or null ("custom pricing"). */
+function price(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 && n < 10000 ? Math.round(n * 100) / 100 : null;
+}
+
 /** The designer's answer, reduced to cards that are safe to show.
  *  Returns null when the answer is not a feed at all. */
 function cleanShopFeed(d) {
@@ -45,18 +51,16 @@ function cleanShopFeed(d) {
     name: text(c && c.name, 60),
     image: imageUrl(c && c.image),
     link: designerLink(c && c.link),
+    from_price: price(c && c.from_price),
   })).filter((c) => c.name && c.image && c.link).slice(0, MAX_CATEGORIES);
 
-  const best = d.best.slice(0, MAX_BEST * 2).map((p) => {
-    const price = Number(p && p.from_price);
-    return {
-      name: text(p && p.name, 120),
-      image: imageUrl(p && p.image),
-      link: designerLink(p && p.link),
-      blurb: text(p && p.blurb, 120),
-      from_price: Number.isFinite(price) && price > 0 && price < 10000 ? Math.round(price * 100) / 100 : null,
-    };
-  }).filter((p) => p.name && p.image && p.link).slice(0, MAX_BEST);
+  const best = d.best.slice(0, MAX_BEST * 2).map((p) => ({
+    name: text(p && p.name, 120),
+    image: imageUrl(p && p.image),
+    link: designerLink(p && p.link),
+    blurb: text(p && p.blurb, 120),
+    from_price: price(p && p.from_price),
+  })).filter((p) => p.name && p.image && p.link).slice(0, MAX_BEST);
 
   return { categories, best };
 }

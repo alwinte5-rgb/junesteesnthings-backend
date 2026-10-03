@@ -1,0 +1,9 @@
+/* Blog pages: cover photos, and the index banner's title.
+   The pages' own CSS colours every h1 navy, which made the index banner's
+   title navy on navy (invisible) — it is white here. */
+.blog-index-hero h1{color:#fff!important;}
+.blog-card-img{display:block;aspect-ratio:16/9;overflow:hidden;background:#F3F4F6;}
+.blog-card-img img{width:100%;height:100%;object-fit:cover;transition:transform .3s;}
+.blog-card:hover .blog-card-img img{transform:scale(1.04);}
+.post-cover{margin:0 0 2rem;border-radius:16px;overflow:hidden;background:#F3F4F6;aspect-ratio:16/9;}
+.post-cover img{width:100%;height:100%;object-fit:cover;display:block;}

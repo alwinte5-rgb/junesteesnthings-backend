@@ -59,6 +59,11 @@ test('prices: only a real positive amount, else "custom pricing"', () => {
   assert.deepStrictEqual(prices, [null, null, null, null, null, null, 20]);
 });
 
+test('category cards keep their from-price', () => {
+  const d = cleanShopFeed({ ...good, categories: [{ ...good.categories[0], from_price: 5.124 }, { ...good.categories[1], from_price: 0 }] });
+  assert.deepStrictEqual(d.categories.map((c) => c.from_price), [5.12, null]);
+});
+
 test('names are capped and lists are bounded', () => {
   const many = Array.from({ length: 50 }, (_, i) => ({ ...good.best[0], name: 'x'.repeat(500) + i }));
   const d = cleanShopFeed({ ...good, best: many, categories: Array(50).fill(good.categories[0]) });

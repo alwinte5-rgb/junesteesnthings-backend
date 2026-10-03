@@ -18,7 +18,7 @@
     return n;
   }
 
-  function card(item, from, kind, showPrice) {
+  function card(item, from, kind, showBlurb) {
     var a = el('a', 'jt-card');
     a.href = item.link;
     a.setAttribute('data-from', from);
@@ -31,22 +31,21 @@
     im.appendChild(img);
     var bd = el('div', 'bd');
     bd.appendChild(el('div', 'nm', item.name));
-    if (showPrice) {
-      if (item.blurb) bd.appendChild(el('div', 'bl', item.blurb));
-      bd.appendChild(el('div', 'pr', typeof item.from_price === 'number'
-        ? 'From $' + item.from_price.toFixed(2) + ' + printing' : 'Custom pricing'));
-    }
+    /* Every card carries a price line, so the two grids read the same. */
+    if (showBlurb && item.blurb) bd.appendChild(el('div', 'bl', item.blurb));
+    bd.appendChild(el('div', 'pr', typeof item.from_price === 'number'
+      ? 'From $' + item.from_price.toFixed(2) + ' + printing' : 'Custom pricing'));
     bd.appendChild(el('span', 'go', 'Design This →'));
     a.appendChild(im);
     a.appendChild(bd);
     return a;
   }
 
-  function fill(id, items, from, kind, showPrice) {
+  function fill(id, items, from, kind, showBlurb) {
     var box = document.getElementById(id);
     if (!box || !items || !items.length) return;
     var frag = document.createDocumentFragment();
-    items.forEach(function (it) { frag.appendChild(card(it, from, kind, showPrice)); });
+    items.forEach(function (it) { frag.appendChild(card(it, from, kind, showBlurb)); });
     while (box.firstChild) box.removeChild(box.firstChild);
     box.appendChild(frag);
   }

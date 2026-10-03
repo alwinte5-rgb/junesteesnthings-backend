@@ -10,7 +10,7 @@
 
   var QA = [
     ['💲 How much does a custom shirt cost?', "Printing is priced per piece and drops fast with quantity — for example a full-color print runs about $20 at 1 piece down to $5.50 at 200+ (plus the garment). Design it at design.jtees.net to see your exact price live, or tell us what you need in chat and we'll quote it."],
-    ['⏱️ How fast can I get my order?', 'Most orders turn around in about 7 days, and many are faster. Have a deadline? Chat with us and tell us the date — we\'ll confirm we can hit it.'],
+    ['⏱️ How fast can I get my order?', 'Most orders take 7–14 business days, depending on the project. Faster turnaround is available on request. Have a deadline? Chat with us and tell us the date. Rush fees may apply.'],
     ['👕 Do you have minimums?', 'No minimums! Order a single shirt or hundreds — DTF printing lets us do one-offs at a great price. Bulk orders get volume discounts with big breaks at 12, 24, 48, and 100+.'],
     ['🎨 Can you help me with my design?', 'Yes — free design help is included! You can also build it yourself in our online Design Studio (design.jtees.net) with uploads, fonts, graphics, and an AI designer.'],
     ['🧵 Do you do embroidery?', 'We do! Embroidery is priced by size: small left-chest from $12/ea up to full-back from $65/ea, and prices drop with quantity. No stitch file? One-time digitizing is $25–$65 and reorders never pay it again.'],

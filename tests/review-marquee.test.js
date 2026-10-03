@@ -23,8 +23,10 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 
+/* The strip's CSS lives in one file since 2026-10, read by the quote page
+   (server.js REVIEW_CSS) and the site pages (assets/js/review-strip.js). */
 const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-const css = src.slice(src.indexOf('const REVIEW_CSS'), src.indexOf('const QUOTE_CODE_RE'));
+const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'assets', 'css', 'review-strip.css'), 'utf8');
 
 test('hover-pause applies only where a real cursor exists', () => {
   /* Without the media query this pauses forever on any touch device. */
@@ -60,7 +62,9 @@ test('the marquee still loops seamlessly', () => {
      wrap-around is invisible. Change one without the other and it jumps. */
   const strip = src.slice(src.indexOf('function reviewStrip'), src.indexOf('const REVIEW_CSS'));
   const sets = (strip.match(/<div class="rv-set">/g) || []).length;
-  assert.strictEqual(sets, 2, 'the card set must be rendered exactly twice');
+  assert.strictEqual(sets, 2, 'the card set must be rendered exactly twice (quote page)');
+  const site = fs.readFileSync(path.join(__dirname, '..', 'public', 'assets', 'js', 'review-strip.js'), 'utf8');
+  assert.strictEqual((site.match(/track\.appendChild\(/g) || []).length, 2, 'and twice on site pages');
   assert.match(css, /to\{transform:translateX\(-50%\)\}/,
     'the slide must be exactly half the track — one full set');
 });

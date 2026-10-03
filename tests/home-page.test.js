@@ -43,7 +43,8 @@ test('every FAQ question from both homepages is answered, and the structured dat
     'Can I order for a group or business?', 'Where are you located, and can I pick up?', 'Do you ship?',
     'How do I care for my custom apparel?',
   ];
-  const shown = [...page.matchAll(/<summary>(.*?)<\/summary>/g)].map((m) => m[1]);
+  const faq = page.slice(page.indexOf('<section id="faq"'), page.indexOf('</section>', page.indexOf('<section id="faq"')));
+  const shown = [...faq.matchAll(/<summary>(.*?)<\/summary>/g)].map((m) => m[1]);
   assert.deepStrictEqual(shown, questions);
   const ld = [...page.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)]
     .map((m) => JSON.parse(m[1])).find((d) => d['@type'] === 'FAQPage');
