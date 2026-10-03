@@ -156,7 +156,7 @@ app.use(express.urlencoded({ limit: '1mb', extended: true }));
 // Grad season pages are retired — redirect old links home.
 app.get(['/grad', '/grad/', '/grad/*'], (_req, res) => res.redirect(302, '/'));
 // Design Ideas is replaced by the online Design Studio — permanent redirect.
-app.get('/design-ideas.html', (_req, res) => res.redirect(301, 'https://design.jtees.net/'));
+app.get('/design-ideas.html', (_req, res) => res.redirect(301, 'https://design.jtees.net/products.php'));
 /* Old Shopify and WooCommerce store URLs still bring customers in from Google,
    old posts and texts; each used to end on the 404 page. tools/lib/legacy-redirects.js
    sends each to what sells the same thing now. Destinations are fixed in that
@@ -1861,7 +1861,7 @@ function escEmail(str) {
 // so they only render once the site is deployed.
 function designerPromoBlock() {
   const img = (file, alt) =>
-    `<td style="padding:0 4px;"><a href="https://design.jtees.net/"><img src="https://www.jtees.net/assets/images/email/${file}" alt="${alt}" width="170" style="width:100%;max-width:170px;border-radius:8px;display:block;" /></a></td>`;
+    `<td style="padding:0 4px;"><a href="https://design.jtees.net/products.php"><img src="https://www.jtees.net/assets/images/email/${file}" alt="${alt}" width="170" style="width:100%;max-width:170px;border-radius:8px;display:block;" /></a></td>`;
   return `
     <div style="margin-top:28px;padding-top:22px;border-top:1px solid #E5E7EB;">
       <h3 style="color:#0B1F4B;margin:0 0 6px;">Try our new online Design Studio 🎨</h3>
@@ -1872,7 +1872,7 @@ function designerPromoBlock() {
         ${img('work-kennedy.jpg', 'Custom contractor hoodies we printed')}
       </tr></table>
       <p style="text-align:center;margin:18px 0 6px;">
-        <a href="https://design.jtees.net/" style="background:#1848B8;color:#fff;font-weight:800;text-decoration:none;padding:13px 28px;border-radius:100px;display:inline-block;">Start Designing &rarr;</a>
+        <a href="https://design.jtees.net/products.php" style="background:#1848B8;color:#fff;font-weight:800;text-decoration:none;padding:13px 28px;border-radius:100px;display:inline-block;">Start Designing &rarr;</a>
       </p>
     </div>`;
 }
