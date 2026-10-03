@@ -19,6 +19,20 @@
   });
   document.addEventListener('click', function (e) { if (!e.target.closest('.jtn-dd')) closeAll(); });
 
+  /* Every "Text us" link opens the Tawk messenger, on phones too (owner,
+     2026-10-02): conversations there are tracked, a text from the phone's
+     Messages app is not. If Tawk has not loaded (blocked, slow, or a page
+     without it) the sms: link works as before, so the button never goes dead.
+     Calls (tel:) are never touched. */
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest && e.target.closest('a[href^="sms:"]');
+    if (!a || e.defaultPrevented) return;
+    var tawk = window.Tawk_API;
+    if (!tawk || typeof tawk.maximize !== 'function') return;
+    e.preventDefault();
+    try { tawk.maximize(); } catch (err) { window.location.href = a.getAttribute('href'); }
+  });
+
   var burger = document.querySelector('.jtn-burger');
   var drawer = document.getElementById('jtn-drawer');
   var shade = document.querySelector('.jtn-shade');

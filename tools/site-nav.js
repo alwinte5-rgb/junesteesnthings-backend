@@ -96,8 +96,8 @@ ${head}<div class="jtn-bar">${bar}</div>
     <div class="jtn-act">
       <a href="${esc(nav.instagram)}" class="jtn-icon" target="_blank" rel="noopener noreferrer" aria-label="Instagram">${ICON.ig}</a>
       <a href="${tel}" class="jtn-contact" aria-label="Call us">${ICON.phone}<span><b>Talk to a Real Person</b>${esc(nav.phone.display)}</span></a>
-      ${/* Only Text Us carries hcontact, which the pages' chat script turns into
-            the chat window on desktop. Calling always dials (owner, 2026-10-02). */ ''}<a href="${sms}" class="jtn-contact hcontact" aria-label="Text us">${ICON.text}<span><b>Text Us</b>Fast reply</span></a>
+      ${/* Text Us opens the Tawk messenger on every device (assets/js/site-nav.js);
+            Talk to a Real Person always dials (owner, 2026-10-02). */ ''}<a href="${sms}" class="jtn-contact" aria-label="Text us">${ICON.text}<span><b>Text Us</b>Fast reply</span></a>
       <a href="${esc(nav.account.href)}" class="jtn-icon jtn-ico-acct" aria-label="${esc(nav.account.label)}">${ICON.user}</a>
       <a href="${esc(nav.cart.href)}" class="jtn-icon jtn-ico-cart" aria-label="${esc(nav.cart.label)}">${ICON.cart}</a>
       <a href="${esc(abs(nav.quote.href))}" class="jtn-quote">${esc(nav.quote.label)}</a>

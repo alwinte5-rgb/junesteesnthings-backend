@@ -89,3 +89,13 @@ test('one review list: valid, photos exist, and the quote page reads it', () => 
   const js = read('assets/js/review-strip.js').replace(/\/\*[\s\S]*?\*\//g, '');
   assert.doesNotMatch(js, /innerHTML|insertAdjacentHTML/);
 });
+
+test('Text us opens the tracked Tawk messenger; calling always dials', () => {
+  const js = read('assets/js/site-nav.js');
+  // sms: links are taken over only when Tawk can open, so the link never goes dead.
+  assert.match(js, /closest\('a\[href\^="sms:"\]'\)/);
+  assert.match(js, /typeof tawk\.maximize !== 'function'\) return;/);
+  assert.doesNotMatch(js, /href\^="tel:"/, 'calls are never routed to the chat');
+  const snip = read('assets/data/site-nav.html');
+  assert.doesNotMatch(snip, /class="[^"]*hcontact/, 'no menu link is left to the old desktop-only chat script');
+});
