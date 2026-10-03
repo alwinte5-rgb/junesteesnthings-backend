@@ -105,6 +105,7 @@ const PAGE_TIPS = {
   production: 'The work board: artwork, proof, blanks, printing, ready. Move a job to its next step only when that step is really done.',
   orders: 'Online orders from the design studio. Check the artwork and the tax certificate badge before anything is produced.',
   shipping: 'Labels and tracking for orders going out. Double-check the address before buying a label; a label cannot be moved.',
+  delivery: 'Local deliveries by day and window. Mark each one Out when it leaves and Delivered when it is handed over; moving one tells the customer.',
   customers: 'Everyone who has ordered or asked. Search by name, email or phone to see their whole history before you reply.',
   reviews: 'Customer reviews waiting to go on the site. Approve real ones; anything rude or about an order problem goes to the owner first.',
   certificates: 'Tax-exempt certificates. Check the name, the number and the date, leave a note, and let the owner approve or refuse.',

@@ -21,6 +21,8 @@ const {
   normalizeUsPhone, parseSmsConsent, consentCheckboxesHtml, foldSmsConsent,
 } = require('./tools/lib/sms-consent');
 const SHIP = require('./tools/lib/shipping');
+const DELIV = require('./tools/lib/delivery');
+const { createDeliveryStore } = require('./tools/lib/delivery-store');
 const { quoteAnalyticsTags, paidQuery } = require('./tools/lib/quote-analytics');
 const { cleanShopFeed } = require('./tools/lib/shop-feed');
 const { legacyRedirect, LEGACY_PATHS } = require('./tools/lib/legacy-redirects');
@@ -201,6 +203,9 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
   options: `-c TimeZone=${(process.env.JT_TIMEZONE || 'America/Chicago').replace(/[^A-Za-z0-9_/+-]/g, '')}`,
 });
+/* Every delivery booking is made, moved and freed through this one store,
+   whichever checkout asked (tools/lib/delivery-store.js). */
+const DELIVERY = createDeliveryStore(pool);
 
 async function initDB() {
   await pool.query(`
@@ -1096,6 +1101,12 @@ async function initStaffTables() {
                      WHERE credited_to IS NULL AND COALESCE(sent_by, created_by) IS NOT NULL`);
   await seedPlaybook();
   await addPlaybookArticles();
+  /* Local delivery (tools/lib/delivery.js): zones, windows, bookings. The fee
+     a quote customer chose at Accept is kept on the quote and is part of its
+     total, after tax and outside the discount — the same as postage on a
+     studio order. */
+  await pool.query('ALTER TABLE quotes ADD COLUMN IF NOT EXISTS delivery_fee NUMERIC(8,2)');
+  await DELIVERY.ensureSchema();
 }
 
 /**
@@ -4733,7 +4744,12 @@ function quoteSchedule(q) {
   };
 
   const needed = new Date(by);
-  const isPickup = String(q.ship_method || '').toLowerCase() === 'pickup';
+  /* Local delivery is driven by us on the booked day, so like a pickup it has
+     no carrier transit: the job has to be READY by the date, not posted
+     days before it. */
+  const method = String(q.ship_method || '').toLowerCase();
+  const isLocal = method === 'local';
+  const isPickup = method === 'pickup' || isLocal;
   const back = (from, days) => addBusinessDays(from, -days);
 
   // Each date is the LATEST it can happen and still hit the deadline.
@@ -4752,7 +4768,7 @@ function quoteSchedule(q) {
     ship_by: shipBy, qc_by: qcBy, press_by: pressBy,
     blanks_in_by: blanksBy, blanks_order_by: orderBy,
     proof_by: proofBy, artwork_by: artBy,
-    isPickup,
+    isPickup, isLocal,
     /* A step is "at risk" when its latest safe date has passed and it has not
        happened. Reported per step so the digest can name the actual slip. */
     /* Two warnings, one per move that has a date. Starting is due when the
@@ -4760,7 +4776,7 @@ function quoteSchedule(q) {
        the rest of production has no move of its own to be late on. */
     risks: [
       { key: 'start', label: 'starting', by: orderBy, late: late(orderBy, q.production_at) },
-      { key: 'ship',  label: isPickup ? 'ready for pickup' : 'shipping',
+      { key: 'ship',  label: isLocal ? 'ready for delivery' : isPickup ? 'ready for pickup' : 'shipping',
         by: shipBy, late: late(shipBy, q.shipped_at) },
     ].filter((r) => r.late),
   };
@@ -4801,7 +4817,7 @@ function quoteChecklist(q) {
       hint: sched && !q.production_at
         ? `start by ${dayShort(sched.blanks_order_by)}, when the blanks have to be ordered`
         : 'artwork, proof, blanks and printing' },
-    { key: 'shipped', label: sched && sched.isPickup ? 'Ready for pickup' : 'Ready / Shipped',
+    { key: 'shipped', label: sched && sched.isLocal ? 'Ready for delivery' : sched && sched.isPickup ? 'Ready for pickup' : 'Ready / Shipped',
       done: !!q.shipped_at, manual: true,
       hint: sched ? `${sched.isPickup ? 'ready' : 'out'} by ${dayShort(sched.ship_by)}` : 'checked, then picked up or sent' },
     { key: 'delivered', label: 'Delivered', done: !!q.delivered_at, manual: true,
@@ -6090,8 +6106,13 @@ function quoteTotals(q) {
   const discount = quoteDiscount(gross, q.discount_kind, q.discount_value);
   const net = round2(gross - discount);
   const tax = Number(q.tax != null ? q.tax : 0);
-  const total = round2(net + tax);
-  return { subtotal, rushPct, rush, gross, discount, net, tax, total,
+  /* Local delivery, chosen at Accept: added after tax and outside the
+     discount, as postage is on a studio order (jt_tax_amount taxes goods
+     only). Every figure downstream — deposit, balance, the books — reads
+     this total, so it is added here and nowhere else. */
+  const delivery = round2(Math.max(0, Number(q.delivery_fee || 0)));
+  const total = round2(net + tax + delivery);
+  return { subtotal, rushPct, rush, gross, discount, net, tax, delivery, total,
            deposit: depositFor(total) };
 }
 
@@ -6159,7 +6180,7 @@ function applyOptionChoice(items, chosen, sharedCodes) {
 function totalsForItems(q, items) {
   const base = quoteTotals({ ...q, items, tax: 0 });
   const tax = quoteTax(base.net, quoteTaxable(q));
-  const total = round2(base.net + tax);
+  const total = round2(base.net + tax + base.delivery);
   return { ...base, tax, total, deposit: depositFor(total) };
 }
 
@@ -6792,6 +6813,7 @@ const ADMIN_NAV = [
   { key: 'production', href: '/admin/production',    label: 'Production', icon: 'layers', badge: 'late' },
   { key: 'orders',     href: '/admin/orders',        label: 'Orders',     icon: 'box' },
   { key: 'shipping',   href: '/admin/shipping',      label: 'Shipping',   icon: 'truck',  badge: 'shipping' },
+  { key: 'delivery',   href: '/admin/delivery',      label: 'Delivery',   icon: 'clock' },
   { key: 'customers',  href: '/admin/customers',     label: 'Customers',  icon: 'users' },
   { key: 'reviews',    href: '/admin/reviews', label: 'Reviews',    icon: 'star',   badge: 'reviews' },
   { key: 'money',      href: FINANCES_PATH,    label: 'Finances',   icon: 'dollar' },
@@ -9438,7 +9460,14 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     const reasonIn = String(one(b.tax_exempt_reason) || '').trim();
     const exemptReason = taxable ? null : (TAXCERT.EXEMPT_REASONS[reasonIn] ? reasonIn : null);
     const tax = quoteTax(net, taxable);
-    const total = round2(net + tax);
+    /* A delivery the customer booked at Accept stays on the job when the shop
+       edits it afterwards: re-saving used to recompute the total from the
+       lines alone, which would quietly drop the fee they agreed to. */
+    const savingCode = String(req.params.code || '').toUpperCase();
+    const keptDeliveryFee = QUOTE_CODE_RE.test(savingCode)
+      ? round2(Number(((await pool.query('SELECT delivery_fee FROM quotes WHERE code = $1', [savingCode])).rows[0] || {}).delivery_fee || 0))
+      : 0;
+    const total = round2(net + tax + keptDeliveryFee);
     const deposit = depositFor(total);
 
     const days = Math.max(1, parseInt(b.valid_days, 10) || 14);
@@ -9863,6 +9892,10 @@ app.get('/q/:code', async (req, res) => {
     try { catalog = await getCatalog(); } catch { /* fall back to the line */ }
     const expired = q.valid_until && new Date(q.valid_until) < new Date(new Date().toDateString());
     const accepted = !!q.accepted_at;
+    /* Local delivery: offered at Accept on a job that is not going by post,
+       once the shop has set up zones and windows; after Accept, the booking. */
+    const delivBooking = accepted ? await DELIVERY.byRef('quote:' + q.code).catch(() => null) : null;
+    const delivOffered = !accepted && !SHIP.quoteShips(q) ? await DELIVERY.offered().catch(() => false) : false;
     const paid = Number(q.paid_amount || 0) > 0;
     const balanceDue = balanceOf(q, t.total);
     /* What has gone back to the customer's card on this quote: its refund rows,
@@ -10299,6 +10332,7 @@ app.get('/q/:code', async (req, res) => {
                 q.discount_kind === 'pct' ? ` (${Number(q.discount_value)}% off)` : ''}</td>
               <td class="num" style="color:#166534" id="qdisc">&minus;${money(t.discount)}</td></tr>` : ''}
           ${t.tax > 0 || (hasOptions && quoteTaxable(q)) ? `<tr id="qtaxrow"${t.tax > 0 ? '' : ' style="display:none"'}><td colspan="3" class="num muted">Sales tax</td><td class="num" id="qtax">${money(t.tax)}</td></tr>` : ''}
+          ${t.delivery > 0 ? `<tr><td colspan="3" class="num muted">Local delivery</td><td class="num">${money(t.delivery)}</td></tr>` : ''}
           <tr><td colspan="3" class="num tot">Total</td><td class="num tot" id="qtotal">${money(t.total)}</td></tr>
           <tr id="estrow" style="display:none"><td colspan="3" class="num" style="color:#b45309;font-weight:700;padding-top:10px">
               With your changes <span style="font-weight:400;font-size:12px">(estimate)</span></td>
@@ -10324,8 +10358,12 @@ app.get('/q/:code', async (req, res) => {
 
         <div style="margin-top:16px;border-top:1px solid #eef1f8;padding-top:12px">
           ${q.needed_by ? `<p class="muted"><b>You need it by:</b> ${dayFmt(q.needed_by)}</p>` : ''}
-          <p class="muted"><b>Estimated:</b> ready ${dayFmt(eta.ready)}, delivered ${dayFmt(eta.deliver_from)}–${dayFmt(eta.deliver_to)}
-            ${accepted ? '' : ' once the deposit is in'}.</p>
+          ${delivBooking && ['held', 'confirmed', 'out'].includes(delivBooking.status)
+            ? `<p style="margin:0 0 8px"><b>Delivery:</b> ${escEmail(DELIV.bookingPhrase(delivBooking))} to
+                ${escEmail(DELIV.addressLine(delivBooking.address))}.
+                <a href="/q/${q.code}/delivery">Change the time</a></p>`
+            : `<p class="muted"><b>Estimated:</b> ready ${dayFmt(eta.ready)}, delivered ${dayFmt(eta.deliver_from)}–${dayFmt(eta.deliver_to)}
+            ${accepted ? '' : ' once the deposit is in'}.</p>`}
           ${eta.beyond_sheet ? `<p class="muted">This is a large run, so those dates are an
             estimate rather than a commitment — we confirm the schedule with the press before
             you pay.</p>` : ''}
@@ -10446,6 +10484,7 @@ app.get('/q/:code', async (req, res) => {
                 <input name="ship_zip" required pattern="\\d{5}(-\\d{4})?" autocomplete="postal-code" inputmode="numeric" placeholder="ZIP"></div>
             </div>` : ''}`;
           })()}
+          ${delivOffered ? acceptDeliveryHtml(q, req) : ''}
           ${consentCheckboxesHtml()}
           <label>When do you need it? <span style="text-transform:none;font-weight:400">(optional)</span></label>
           <input type="date" name="needed_by" value="${q.needed_by ? String(q.needed_by).slice(0,10) : ''}">
@@ -12686,7 +12725,7 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
        is kept; the quote page asks for exactly what is missing (acceptAsks). */
     const { rows: cur } = await pool.query(
       `SELECT name, email, phone, ship_method, ship_to, accepted_at, items, revision,
-              rush_pct, discount_kind, discount_value, taxable, tax
+              rush_pct, discount_kind, discount_value, taxable, tax, target_date, cancelled_at, status
          FROM quotes WHERE code = $1`, [code]);
     /* A quote with OPTIONAL lines: the ones ticked join the order, the rest are
        set aside, and every figure is worked out again from what is left
@@ -12714,6 +12753,36 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
           WHERE code = $1 AND accepted_at IS NULL`,
         [code, need.name, need.email, need.phone, need.shipTo ? JSON.stringify(need.shipTo) : null]);
     }
+    /* Local delivery chosen at Accept. The seat is booked FIRST, under the
+       advisory lock, so two customers cannot both take the last one; the fee
+       comes from the zone, never the form. If the accept below then matches
+       nothing, the booking is given back. */
+    const deliveryChoice = String(rb.delivery_choice || '');
+    let delivery = null;
+    if (q0 && !q0.accepted_at && !q0.cancelled_at && !['held', 'draft'].includes(q0.status)
+        && deliveryChoice === 'local' && !SHIP.quoteShips(q0)) {
+      const typed = [String(rb.first_name || '').trim(), String(rb.last_name || '').trim()].filter(Boolean).join(' ');
+      const dname = String(q0.name || '').trim() || typed;
+      const address = SHIP.cleanShipTo({ street1: rb.dl_street1, street2: rb.dl_street2, city: rb.dl_city,
+        state: rb.dl_state, zip: rb.dl_zip }, dname);
+      if (!address || SHIP.shipToProblems(address).filter((f) => f !== 'name').length) {
+        return res.redirect(`/q/${code}?dc=local&e=delivery&why=address#accept`);
+      }
+      const [ddate, dwin] = String(rb.slot || '').split('|');
+      const r = await DELIVERY.book({ ref: 'quote:' + code, zip: address.zip, date: ddate, windowId: dwin, address,
+        name: dname, phone: String(q0.phone || rb.phone || ''), email: String(q0.email || rb.email || ''),
+        readyYmd: quoteReadyYmd(q0), status: 'confirmed', by: 'customer' });
+      if (!r.ok) return res.redirect(`/q/${code}?dc=local&e=delivery&why=${encodeURIComponent(r.reason)}#accept`);
+      delivery = { booking: r.booking, address, fee: Number(r.booking.fee) };
+    }
+    /* Every figure with the delivery fee in it, worked out the one way
+       (quoteTotals), from the lines the customer is taking. */
+    const figures = delivery
+      ? quoteTotals({ ...q0, items: choice ? choice.items : q0.items, tax: choice ? choice.tt.tax : q0.tax, delivery_fee: delivery.fee })
+      : (choice ? choice.tt : null);
+    const shipMethod = delivery ? 'local'
+      : (deliveryChoice === 'pickup' && q0 && !SHIP.quoteShips(q0) ? 'pickup' : null);
+
     const nb = String(rb.needed_by || '').trim() || null;
     /* Details the customer fills in themselves when the quote went out without
        them — common for online and walk-up enquiries. NULLIF keeps existing
@@ -12740,15 +12809,32 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
               tax      = COALESCE($8::numeric, tax),
               total    = COALESCE($9::numeric, total),
               deposit  = COALESCE($10::numeric, deposit),
-              declined_items = COALESCE($11::jsonb, declined_items)
+              declined_items = COALESCE($11::jsonb, declined_items),
+              -- local delivery, or pickup, as chosen on the form
+              delivery_fee = COALESCE($13::numeric, delivery_fee),
+              ship_to      = COALESCE($14::jsonb, ship_to),
+              ship_method  = COALESCE($15, ship_method)
         WHERE code=$1 AND accepted_at IS NULL AND requested_items IS NULL AND cancelled_at IS NULL AND status NOT IN ('held', 'draft')
           AND ($12::int IS NULL OR COALESCE(revision,1) = $12::int) RETURNING *`,
       [code, nb, cname, cemail, cphone,
        choice ? JSON.stringify(choice.items) : null,
        choice ? choice.tt.subtotal : null, choice ? choice.tt.tax : null,
-       choice ? choice.tt.total : null, choice ? choice.tt.deposit : null,
+       figures ? figures.total : null, figures ? figures.deposit : null,
        choice ? JSON.stringify(choice.declined) : null,
-       choice ? choice.rev : null]);
+       choice ? choice.rev : null,
+       delivery ? delivery.fee : null, delivery ? JSON.stringify(delivery.address) : null, shipMethod]);
+    if (delivery && !rows.length) {
+      await DELIVERY.cancelRef('quote:' + code, 'system', 'the accept did not go through').catch(() => {});
+    }
+    if (delivery && rows.length) {
+      /* A walk-up enquiry may only now have given a name, email or number. */
+      const { rows: db } = await pool.query(
+        `UPDATE delivery_bookings SET name = COALESCE(NULLIF(name, ''), $2), phone = COALESCE(NULLIF(phone, ''), $3),
+                email = COALESCE(NULLIF(email, ''), $4) WHERE id = $1
+          RETURNING id, ref, name, phone, email, address, to_char(date, 'YYYY-MM-DD') AS date, window_label, history`,
+        [delivery.booking.id, rows[0].name, rows[0].phone, rows[0].email]);
+      notifyDelivery(db[0] || delivery.booking, 'booked').catch(() => {});
+    }
 
     if (rows.length) {                       // first acceptance only
       const q = rows[0];
@@ -12768,6 +12854,10 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
         ${tt.discount > 0 ? `<tr><td colspan="2" style="padding:8px 4px;text-align:right;color:#166534">
           ${q.discount_note ? escEmail(q.discount_note) : 'Discount'}</td>
           <td style="padding:8px 4px;text-align:right;color:#166534">&minus;${money(tt.discount)}</td></tr>` : ''}
+        ${tt.tax > 0 ? `<tr><td colspan="2" style="padding:8px 4px;text-align:right;color:#6b7280">Sales tax</td>
+          <td style="padding:8px 4px;text-align:right">${money(tt.tax)}</td></tr>` : ''}
+        ${tt.delivery > 0 ? `<tr><td colspan="2" style="padding:8px 4px;text-align:right;color:#6b7280">Local delivery</td>
+          <td style="padding:8px 4px;text-align:right">${money(tt.delivery)}</td></tr>` : ''}
         <tr><td colspan="2" style="padding:8px 4px;text-align:right;font-weight:700;border-top:2px solid #111">Total</td>
         <td style="padding:8px 4px;text-align:right;font-weight:700;border-top:2px solid #111">${money(tt.total)}</td></tr></table>`;
       const payBlock = `
@@ -15775,7 +15865,7 @@ async function renderBoard(VIEW, req, res) {
             <div style="color:#b91c1c;font-size:12.5px;margin-top:3px">
               ${s.risks.map(r => `${escEmail(r.label)} was due ${dayShort(r.by)}`).join(' &middot; ')}</div>
             <div class="muted" style="font-size:11.5px;margin-top:3px">
-              ${s.isPickup ? 'Ready for pickup' : 'Must ship'} by ${dayShort(s.ship_by)} to hit the deadline.</div>
+              ${s.isLocal ? 'Ready for delivery' : s.isPickup ? 'Ready for pickup' : 'Must ship'} by ${dayShort(s.ship_by)} to hit the deadline.</div>
           </div>`;
         })()}
         ${(() => {
@@ -15819,9 +15909,10 @@ async function renderBoard(VIEW, req, res) {
               <form method="POST" action="/admin/quote/${q.code}/shipping"
                     style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px;border-top:1px solid #e3e8f2;padding-top:8px">
                 <select name="ship_method" style="flex:0 0 118px;padding:6px;font-size:12px">
-                  ${['', 'pickup', 'ground', 'expedited'].map(v =>
+                  ${['', 'pickup', 'local', 'ground', 'expedited'].map(v =>
                     `<option value="${v}" ${String(q.ship_method || '') === v ? 'selected' : ''}>${
-                      v === '' ? 'how it goes…' : v === 'pickup' ? 'Pickup' : v === 'ground' ? 'Ground' : 'Expedited'}</option>`).join('')}
+                      v === '' ? 'how it goes…' : v === 'pickup' ? 'Pickup' : v === 'local' ? 'Local delivery'
+                        : v === 'ground' ? 'Ground' : 'Expedited'}</option>`).join('')}
                 </select>
                 <input name="tracking" value="${escEmail(q.tracking || '')}" placeholder="tracking number"
                        style="flex:1 1 150px;padding:6px;font-size:12px">
@@ -16573,6 +16664,10 @@ app.post('/admin/quote/:code/target', requireAdmin, async (req, res) => {
       `UPDATE quotes SET target_date = $2::date, deadline_flexible = $3 WHERE code = $1`,
       [code, flexible ? null : date, flexible]);
     console.log(`quote ${code}: ${flexible ? 'marked flexible' : 'target date ' + date}`);
+    /* A booked delivery is promised against the job being ready. When the
+       target moves past the delivery day, the delivery board marks it at risk
+       so the shop moves the delivery and the customer hears before the day. */
+    if (!flexible && DELIV.isYmd(date)) await DELIVERY.setReadyBy('quote:' + code, date);
   } catch (err) {
     console.error('target date failed:', err.message);
   }
@@ -18727,7 +18822,7 @@ function orderExemption(b) {
  *  postage paid for ("USPS Ground Advantage"). */
 function orderDelivery(b) {
   const d = b && b.delivery;
-  if (!d || typeof d !== 'object' || !['ship', 'pickup'].includes(d.method)) return null;
+  if (!d || typeof d !== 'object' || !['ship', 'pickup', 'local'].includes(d.method)) return null;
   return { method: d.method, source: ['rate', 'free', 'flat'].includes(d.source) ? d.source : '',
            service: String(d.service || '').replace(/\s+/g, ' ').trim().slice(0, 120) };
 }
@@ -18735,6 +18830,11 @@ function orderDelivery(b) {
 /** Where a customer's order goes, under the totals: a pickup is not "shipped to". */
 function orderWhere(address, delivery) {
   const p = 'style="color:#6b7280;font-size:13px;margin-top:16px;"';
+  if (delivery && delivery.method === 'local') {
+    return `<p ${p}><strong style="color:#374151;">Local delivery</strong><br>${delivery.when ? `${escEmail(delivery.when)}<br>` : ''}${
+      address ? escEmail(address) : ''}${delivery.link
+      ? `<br><a href="${escEmail(delivery.link)}" style="color:#1848B8">Change the delivery time</a>` : ''}</p>`;
+  }
   if (delivery && delivery.method === 'pickup') {
     return `<p ${p}><strong style="color:#374151;">Pickup</strong><br>Free curbside pickup at
       ${escEmail(SMS_PICKUP)}. We&rsquo;ll email you when it&rsquo;s ready.</p>`;
@@ -18779,12 +18879,36 @@ app.post('/api/order-confirmation', requireInternalKey, capPerRecipient('order-c
     const exempt = orderExemption(b);
     const delivery = orderDelivery(b);
     const pickup = delivery && delivery.method === 'pickup';
+    /* Paid: the seat held at checkout is theirs now (DELIVERY.confirm never
+       refuses a paid order for capacity), and their email carries the day,
+       the window and the link to change it. */
+    const local = delivery && delivery.method === 'local';
+    if (local && /^\d{1,10}$/.test(String(b.order_id))) {
+      const ref = 'studio:' + String(b.order_id);
+      /* The studio puts the order number on its hold right after the order is
+         written; if that call was lost, the hold is found here by its id and
+         the cart ref only the studio knew. */
+      const raw = b.delivery || {};
+      if (Number.isInteger(Number(raw.booking_id)) && /^cart:[a-f0-9]{16,32}$/.test(String(raw.hold_ref || ''))
+          && !(await DELIVERY.byRef(ref).catch(() => null))) {
+        await pool.query(`UPDATE delivery_bookings SET ref = $3, updated_at = NOW()
+                           WHERE id = $1 AND ref = $2 AND status <> 'cancelled'`,
+          [Number(raw.booking_id), String(raw.hold_ref), ref]).catch(() => {});
+      }
+      const booked = (await DELIVERY.confirm({ ref }).catch(() => null)) || await DELIVERY.byRef(ref).catch(() => null);
+      if (booked) {
+        delivery.when = DELIV.bookingPhrase(booked);
+        delivery.link = await deliveryChangeLink(booked).catch(() => '');
+      }
+    }
     await sendEmail({
       to: email,
       subject: `Thanks${name ? ', ' + name.split(' ')[0] : ''}! Order #${b.order_id} is in 🎉`,
       html: orderShell({
         heading: 'Thank you for your order!',
-        intro: `We&rsquo;ve got it and we&rsquo;re on it. You&rsquo;ll hear from us again as soon as it ${pickup
+        intro: local
+          ? `We&rsquo;ve got it and we&rsquo;re on it. We&rsquo;ll bring it to you ${delivery.when ? `on <b>${escEmail(delivery.when)}</b>` : 'on the day you booked'} &mdash; we&rsquo;ll text or email when it&rsquo;s out for delivery.`
+          : `We&rsquo;ve got it and we&rsquo;re on it. You&rsquo;ll hear from us again as soon as it ${pickup
           ? 'is ready to pick up' : 'ships'} &mdash; most orders print and ${pickup ? 'are ready' : 'go out'} within 7&ndash;10 business days. Need it sooner? Just reply, rush is often possible.`,
         orderId: b.order_id, items: b.items, total: b.total,
         shipping: b.shipping, tax: b.tax, address: b.address, exempt, delivery,
@@ -18827,7 +18951,7 @@ app.post('/api/order-notification', requireInternalKey, capPerRecipient('order-n
     await sendEmail({
       to,
       replyTo: isValidEmail(String(b.email || '')) ? String(b.email) : undefined,
-      subject: `🧾 New order #${b.order_id} — ${money(b.total)}${delivery ? (delivery.method === 'pickup' ? ' — PICKUP' : ' — SHIP') : ''}${exempt && exempt.status === 'pending' ? ' — tax-exempt, check the certificate' : ''}`,
+      subject: `🧾 New order #${b.order_id} — ${money(b.total)}${delivery ? (delivery.method === 'pickup' ? ' — PICKUP' : delivery.method === 'local' ? ' — LOCAL DELIVERY' : ' — SHIP') : ''}${exempt && exempt.status === 'pending' ? ' — tax-exempt, check the certificate' : ''}`,
       html: orderShell({
         heading: 'New order received',
         intro: `<strong>${escEmail(b.name || 'A customer')}</strong>${b.email ? ` (${escEmail(b.email)})` : ''} just checked out${b.payment ? ` via ${escEmail(b.payment)}` : ''}.${
@@ -18947,6 +19071,10 @@ app.post('/api/order-shipped', requireInternalKey, capPerRecipient('order-shippe
        checkout first let a customer choose pickup): "it just left our shop"
        would send them to watch for a parcel that is never coming. */
     const pickup = b.pickup === true;
+    /* A local delivery is told from the delivery board (Out for delivery,
+       with its window), so the studio's Shipped mark sends no "it just left
+       our shop" parcel notice. */
+    const local = b.local === true;
     const carrier = String(b.carrier || '').replace(/\s+/g, ' ').trim().slice(0, 120);
     // The carrier's own tracking page when the label came through the Shipping page.
     const trackUrl = /^https:\/\/[^\s"'<>]+$/.test(String(b.tracking_url || '')) ? String(b.tracking_url)
@@ -18954,7 +19082,8 @@ app.post('/api/order-shipped', requireInternalKey, capPerRecipient('order-shippe
     /* Only a real shipment gets the shipping notice. Telling someone their
        order "just left our shop" because it was marked complete is a message
        they will read as a mistake, and rightly. */
-    if (status === 'shipped' && pickup) await sendEmail({
+    if (status === 'shipped' && local) { /* told by the delivery board */ }
+    else if (status === 'shipped' && pickup) await sendEmail({
       to: email,
       subject: `Your order #${b.order_id} is ready for pickup 🎉`,
       html: orderShell({
@@ -18982,7 +19111,7 @@ app.post('/api/order-shipped', requireInternalKey, capPerRecipient('order-shippe
           : '',
       }),
     });
-    if (status === 'shipped' && b.phone) {
+    if (status === 'shipped' && b.phone && !local) {
       await sendCustomerSms({ phone: b.phone, kind: 'transactional', ref: 'studio:' + smsPlain(b.order_id, 20),
         msg: pickup ? SMS.studioOrderReady({ orderId: b.order_id })
           : SMS.studioOrderShipped({ orderId: b.order_id, tracking }) });
@@ -19303,7 +19432,7 @@ async function sendDailyDigest() {
         : '';
       const shipLine = sched && !sched.risks.length && !q.shipped_at
         ? `<div style="color:#6b7280;font-size:11.5px;margin-top:3px">${
-            sched.isPickup ? 'ready for pickup by' : 'must ship by'} ${dayShort(sched.ship_by)}${
+            sched.isLocal ? 'ready for delivery by' : sched.isPickup ? 'ready for pickup by' : 'must ship by'} ${dayShort(sched.ship_by)}${
             q.blanks_ordered_at ? '' : ` · order blanks by ${dayShort(sched.blanks_order_by)}`}</div>`
         : '';
       return `<tr>
@@ -19321,13 +19450,14 @@ async function sendDailyDigest() {
 
     const atRisk = live.filter((x) => x.sched && x.sched.risks.length);
     const teamHtml = await teamDigestHtml().catch((e) => { console.error('team digest failed:', e.message); return ''; });
+    const deliveryHtml = await deliveryDigestHtml().catch((e) => { console.error('delivery digest failed:', e.message); return ''; });
 
     await alertShop(
       (ship ? `${ship.subject} · ` : '') +
       (atRisk.length ? `⚠️ ${atRisk.length} job${atRisk.length === 1 ? '' : 's'} at risk · ` : '☕ ') +
         `${live.length} job${live.length === 1 ? '' : 's'} need${live.length === 1 ? 's' : ''} you today` +
         (overdue.length ? ` — ${overdue.length} overdue` : ''),
-      `${shipDigestHtml(ship)}<h2 style="color:#1848B8;margin:0 0 2px">Today's jobs</h2>
+      `${deliveryHtml}${shipDigestHtml(ship)}<h2 style="color:#1848B8;margin:0 0 2px">Today's jobs</h2>
        <p style="color:#6b7280;font-size:13px;margin:0 0 14px">
          ${atRisk.length ? `<b style="color:#b91c1c">${atRisk.length} behind schedule</b> &middot; ` : ''}
          ${overdue.length ? `<b style="color:#b91c1c">${overdue.length} overdue</b> &middot; ` : ''}
@@ -19494,7 +19624,7 @@ app.post('/admin/quote/:code/shipping', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/quotes');
   const b = req.body || {};
-  const method = ['pickup', 'ground', 'expedited'].includes(String(b.ship_method))
+  const method = ['pickup', 'local', 'ground', 'expedited'].includes(String(b.ship_method))
     ? String(b.ship_method) : null;
   const tracking = String(b.tracking || '').trim().slice(0, 120);
   try {
@@ -23538,6 +23668,992 @@ app.use((err, req, res, _next) => {
   const route = (req.route && req.route.path) || routeShape(req.path);
   reportError(`http:${req.method} ${route}`, err).catch(() => {});
   res.status(500).json({ error: 'Internal server error.' });
+});
+
+// ─── Local delivery ──────────────────────────────────────────────────────────
+/* Priced by ZIP zone, booked into a date and time window at checkout (the
+   studio's and the quote page), driven by the team or a fixed-price courier
+   partner, and moved — by the shop or the customer — when timeframes change.
+   Rules: tools/lib/delivery.js. Every write: tools/lib/delivery-store.js. */
+
+const SHOP_ADDRESS_LINE = '3047 N Lincoln Ave, Chicago, IL 60657';
+/* Its own budget: a customer typing a ZIP asks for slots on every change, and
+   that must not use up the order limit Accept and Pay share. */
+const deliveryRateLimit = makeRateLimit(60, 60 * 60 * 1000);
+
+/** A DATE column as the calendar day it holds. node-pg builds a DATE as local
+ *  midnight on THIS server, so its local parts are the day — reading it in
+ *  Chicago time instead would move it back a day on a UTC host. */
+function pgDateYmd(v) {
+  if (!v) return null;
+  if (v instanceof Date) {
+    if (!Number.isFinite(v.getTime())) return null;
+    return `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}`;
+  }
+  const s = String(v).slice(0, 10);
+  return DELIV.isYmd(s) ? s : null;
+}
+
+/** When a studio order placed now is promised ready: the far end of the
+ *  production window the checkout already quotes, with no transit. */
+function studioReadyYmd(now = new Date()) {
+  return DELIV.toYmd(deliveryEstimate(now, { pickup: true }).deliver_to);
+}
+
+/** When a quote job is promised ready: the shop's own target when it set one,
+ *  else the far end of the production estimate from today. */
+function quoteReadyYmd(q, now = new Date()) {
+  const target = pgDateYmd(q && q.target_date);
+  const est = DELIV.toYmd(deliveryEstimate(now, { pickup: true, items: (q && q.items) || [] }).deliver_to);
+  return target && target > est ? target : est;
+}
+
+/** "order #123" or "order ABCDEF" from a booking's ref. */
+function deliveryOrderName(ref) {
+  const [kind, id] = String(ref || '').split(':');
+  return kind === 'studio' ? `order #${id}` : kind === 'quote' ? `order ${id}` : 'your order';
+}
+
+function deliveryAdminLink(ref) {
+  const [kind, id] = String(ref || '').split(':');
+  if (kind === 'studio') return `${STUDIO_ADMIN}?lumise-page=order&amp;order_id=${Number(id)}`;
+  if (kind === 'quote') return `/admin/production/${encodeURIComponent(id)}`;
+  return '';
+}
+
+/** The customer's link for changing a booking. A quote's lives under its own
+ *  quote link (the code is already their password); a studio order's is a
+ *  fresh token, and issuing one retires the last. */
+async function deliveryChangeLink(b) {
+  const [kind, id] = String(b.ref || '').split(':');
+  if (kind === 'quote') return `${quoteLink(id)}/delivery`;
+  const token = await DELIVERY.newLink(b.id);
+  return `${PUBLIC_BASE_URL}/d/${token}`;
+}
+
+const SLOT_DAYS_SHOWN = 6;
+
+/** Open days as radio buttons, one group per day. `name` posts `date|window`. */
+function deliverySlotsHtml(days, { name = 'slot', selected = '' } = {}) {
+  if (!days || !days.length) return '<p class="muted">No delivery times are open right now.</p>';
+  const day = (d) => `
+    <fieldset class="dday"><legend>${escEmail(d.label)}</legend>${d.windows.map((w) => {
+      const v = `${d.date}|${w.id}`;
+      return `<label class="dwin"><input type="radio" name="${name}" value="${escEmail(v)}" required${
+        v === selected ? ' checked' : ''}> <span>${escEmail(w.label)}</span>${
+        w.left <= 2 ? `<small> ${w.left} left</small>` : ''}</label>`;
+    }).join('')}</fieldset>`;
+  /* Six weeks of days is a wall on a phone: the first few show, the rest
+     fold away — but the day already booked is always among those shown. */
+  const pinned = days.findIndex((d) => selected.startsWith(d.date + '|'));
+  const shown = Math.max(SLOT_DAYS_SHOWN, pinned + 1);
+  return `<div class="dslots">${days.slice(0, shown).map(day).join('')}</div>${days.length > shown
+    ? `<details class="dmore"><summary>More dates (${days.length - shown})</summary><div class="dslots">${
+      days.slice(shown).map(day).join('')}</div></details>` : ''}`;
+}
+
+const DELIVERY_CSS = `
+.dslots{display:grid;gap:10px;margin:10px 0}
+.dday{border:1px solid #e3e8f2;border-radius:10px;padding:8px 12px;margin:0}
+.dday legend{font-weight:700;font-size:13.5px;padding:0 4px}
+.dwin{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:14px;text-transform:none;font-weight:400;cursor:pointer}
+.dwin input{width:auto;margin:0}
+.dwin small{color:#b45309}
+.dmore summary{cursor:pointer;color:#1848B8;font-weight:600;font-size:13.5px;margin:4px 0}
+.dcard{border:1px solid #e3e8f2;border-radius:10px;padding:12px;margin:8px 0;background:#fff}
+.dcard h3{margin:0 0 4px;font-size:15px}
+.dmeta{color:#6b7280;font-size:13px;line-height:1.5}
+.dactions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.dactions form{margin:0}
+.dactions .btn{padding:6px 12px;font-size:12.5px}
+.dgroup{margin:18px 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#6b7280}
+.dtable{width:100%;border-collapse:collapse;font-size:13.5px}
+.dtable td,.dtable th{padding:6px 4px;border-bottom:1px solid #eef1f6;text-align:left;vertical-align:top}
+@media (max-width:640px){.dtable{font-size:12.5px}}
+`;
+
+/** The quote page's choice at Accept: pickup, or local delivery with an
+ *  address and a time. The slots come from /q/:code/delivery-options as the
+ *  ZIP is typed; the accept route checks the seat again, so nothing here is
+ *  trusted. Works without script as far as it can: pickup still submits. */
+function acceptDeliveryHtml(q, req) {
+  const a = SHIP.cleanShipTo(q.ship_to, q.name) || {};
+  const local = String(q.ship_method || '') === 'local' || String(req.query.dc || '') === 'local';
+  const v = (k) => escEmail(a[k] || '');
+  return `<style>${DELIVERY_CSS}</style>
+  <div id="qdeliv" style="margin:14px 0;padding:12px 14px;border:1px solid #e3e8f2;border-radius:10px">
+    ${String(req.query.e || '') === 'delivery' ? `<div class="warn">${escEmail(String(req.query.why || '') === 'address'
+      ? 'Please fill in the full delivery address: street, city, state and ZIP.'
+      : DELIV.slotProblem(String(req.query.why || '')))} Nothing was accepted yet.</div>` : ''}
+    <div style="font-weight:700;font-size:14px;margin-bottom:4px">How would you like to get it?</div>
+    <label class="dwin"><input type="radio" name="delivery_choice" value="pickup" ${local ? '' : 'checked'}>
+      <span>Free pickup at ${escEmail(SMS_PICKUP)}</span></label>
+    <label class="dwin"><input type="radio" name="delivery_choice" value="local" ${local ? 'checked' : ''}>
+      <span>Local delivery &mdash; we bring it to you on a day and time you pick</span></label>
+    <div id="qdlocal" style="display:${local ? 'block' : 'none'};margin-top:8px">
+      <input name="dl_street1" autocomplete="address-line1" placeholder="Street address" value="${v('street1')}">
+      <input name="dl_street2" autocomplete="address-line2" placeholder="Apt, suite (optional)" value="${v('street2')}" style="margin-top:8px">
+      <div class="row" style="margin-top:8px">
+        <div><input name="dl_city" autocomplete="address-level2" placeholder="City" value="${v('city') || 'Chicago'}"></div>
+        <div style="display:flex;gap:8px"><input name="dl_state" maxlength="2" autocomplete="address-level1" value="${v('state') || 'IL'}" style="max-width:72px">
+          <input name="dl_zip" id="qdzip" inputmode="numeric" autocomplete="postal-code" placeholder="ZIP" value="${v('zip')}" pattern="\\d{5}(-\\d{4})?"></div>
+      </div>
+      <p id="qdmsg" class="muted" style="margin:10px 0 0">Type your ZIP code to see delivery times and the price.</p>
+      <div id="qdslots"></div>
+    </div>
+  </div>
+  <script>(function(){
+    var box=document.getElementById('qdlocal'), zip=document.getElementById('qdzip'),
+        msg=document.getElementById('qdmsg'), slots=document.getElementById('qdslots'), last='';
+    function esc(t){return String(t).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+    function on(){var r=document.querySelector('input[name=delivery_choice]:checked');return r&&r.value==='local';}
+    function req(){['dl_street1','dl_city','dl_state','dl_zip'].forEach(function(n){var el=document.querySelector('[name='+n+']');if(el)el.required=on();});}
+    function load(){
+      var z=(zip.value||'').replace(/\\D/g,'').slice(0,5);
+      if(!on()||z.length!==5||z===last)return; last=z;
+      msg.textContent='Finding delivery times…'; slots.innerHTML='';
+      fetch('/q/${q.code}/delivery-options?zip='+z,{cache:'no-store'}).then(function(r){return r.json();}).then(function(o){
+        if(!o||!o.available){msg.textContent=(o&&o.message)||'Delivery is not available right now. Please choose pickup.';return;}
+        msg.innerHTML='<b>'+esc(o.zone.name)+'</b> &middot; delivery <b>$'+Number(o.fee).toFixed(2)+'</b>, added to your total.';
+        slots.innerHTML='<div class="dslots">'+o.days.slice(0,${SLOT_DAYS_SHOWN * 2}).map(function(d){
+          return '<fieldset class="dday"><legend>'+esc(d.label)+'</legend>'+d.windows.map(function(w){
+            return '<label class="dwin"><input type="radio" name="slot" required value="'+esc(d.date+'|'+w.id)+'"> <span>'+esc(w.label)+'</span>'+(w.left<=2?'<small> '+w.left+' left</small>':'')+'</label>';
+          }).join('')+'</fieldset>';}).join('')+'</div>';
+      }).catch(function(){last='';msg.textContent='Could not load delivery times. Please try again, or choose pickup.';});
+    }
+    Array.prototype.forEach.call(document.querySelectorAll('input[name=delivery_choice]'),function(r){
+      r.addEventListener('change',function(){box.style.display=on()?'block':'none';req();if(!on()){slots.innerHTML='';last='';}else load();});});
+    zip.addEventListener('input',load); req(); load();
+  })();</script>`;
+}
+
+/* ── Telling the customer ─────────────────────────────────────────────────── */
+
+function deliveryEmailHtml({ heading, paragraphs, link, linkLabel }) {
+  return `<div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto">
+    <h2 style="color:#1848B8">${heading}</h2>
+    ${paragraphs.map((p) => `<p style="color:#374151;line-height:1.6">${p}</p>`).join('')}
+    ${link ? `<p style="margin:18px 0"><a href="${escEmail(link)}" style="background:#1848B8;color:#fff;font-weight:700;text-decoration:none;padding:12px 26px;border-radius:100px;display:inline-block">${linkLabel}</a></p>` : ''}
+    <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_NAME} &middot; ${escEmail(SHOP_ADDRESS_LINE)} &middot; ${SHOP_PHONE}</p></div>`;
+}
+
+async function sendDeliveryMail(b, subject, html, kind) {
+  if (!b.email || !isValidEmail(b.email)) return;
+  const [refKind, id] = String(b.ref).split(':');
+  const mail = { to: b.email, subject, html };
+  try {
+    if (refKind === 'quote') await sendClientEmail({ quote: id, kind, ...mail });
+    else await sendEmail(mail);
+  } catch (e) {
+    console.error(`delivery email (${kind}) for ${b.ref} failed:`, e.message);
+  }
+}
+
+/** Every change the customer should hear about: email always, a text when
+ *  they agreed to order texts. Each text carries its own ref, so a second
+ *  move is told as well as the first (sms_messages dedupes per ref). */
+async function notifyDelivery(b, kind, { note = '' } = {}) {
+  if (!b) return;
+  const what = deliveryOrderName(b.ref);
+  const when = DELIV.bookingPhrase(b);
+  const first = String(b.name || '').trim().split(' ')[0];
+  const hi = first ? `Hi ${escEmail(first)},` : 'Hi,';
+  const quoteCode = String(b.ref).startsWith('quote:') ? String(b.ref).slice(6) : null;
+  const smsRef = `delivery:${b.id}:${(b.history || []).length}`;
+  const where = escEmail(DELIV.addressLine(b.address));
+  if (kind === 'booked' || kind === 'moved') {
+    const link = await deliveryChangeLink(b);
+    const moved = kind === 'moved';
+    await sendDeliveryMail(b, moved ? `New delivery time for ${what}: ${when}` : `Delivery booked for ${what}: ${when}`,
+      deliveryEmailHtml({
+        heading: moved ? 'Your delivery time has changed' : 'Your delivery is booked',
+        paragraphs: [
+          `${hi} ${moved ? 'we have moved the delivery of' : 'we will deliver'} ${escEmail(what)} ${moved ? 'to' : 'on'} <b>${escEmail(when)}</b>, to ${where}.`,
+          ...(note ? [escEmail(note)] : []),
+          moved ? 'Sorry for the change. If that time does not suit, pick another below &mdash; or text us and we will sort it out.'
+            : 'If plans change, you can pick another time below up to a day before.',
+        ],
+        link, linkLabel: moved ? 'Choose a different time' : 'Change my delivery time',
+      }), moved ? 'delivery-moved' : 'delivery-booked');
+    if (moved && b.phone) {
+      await sendCustomerSms({ phone: b.phone, kind: 'transactional', ref: smsRef, quote: quoteCode,
+        msg: SMS.deliveryMoved({ ref: quoteCode || String(b.ref).slice(7), when, link }) });
+    }
+  } else if (kind === 'out') {
+    await sendDeliveryMail(b, `${what} is out for delivery`, deliveryEmailHtml({
+      heading: 'Out for delivery today',
+      paragraphs: [`${hi} ${escEmail(what)} is on its way to ${where}, ${escEmail(b.window_label || 'today')}.`,
+        `Questions? Text or call ${SHOP_PHONE}.`],
+    }), 'delivery-out');
+    if (b.phone) {
+      await sendCustomerSms({ phone: b.phone, kind: 'transactional', ref: smsRef, quote: quoteCode,
+        msg: SMS.deliveryOut({ ref: quoteCode || String(b.ref).slice(7), window: b.window_label }) });
+    }
+  } else if (kind === 'cancelled') {
+    await sendDeliveryMail(b, `Delivery for ${what} cancelled`, deliveryEmailHtml({
+      heading: 'Delivery cancelled',
+      paragraphs: [`${hi} the delivery of ${escEmail(what)} on ${escEmail(when)} has been cancelled.`,
+        ...(note ? [escEmail(note)] : []), `Questions? Text or call ${SHOP_PHONE}.`],
+    }), 'delivery-cancelled');
+  }
+}
+
+/* ── Keeping bookings true to their orders ───────────────────────────────────
+   A cancelled quote or a refunded studio order frees its seat on its own,
+   and a hold nobody paid for is tidied after a day (it stopped counting
+   against the window when it lapsed). Run when the board loads. */
+async function reconcileDeliveries(bookings, feed) {
+  const gone = [];
+  const quoteCodes = bookings.filter((b) => b.ref.startsWith('quote:') && b.status !== 'cancelled')
+    .map((b) => b.ref.slice(6));
+  if (quoteCodes.length) {
+    const { rows } = await pool.query(
+      'SELECT code FROM quotes WHERE code = ANY($1::text[]) AND cancelled_at IS NOT NULL', [quoteCodes]);
+    for (const r of rows) gone.push(['quote:' + r.code, 'quote cancelled']);
+  }
+  const orders = new Map(((feed && feed.orders) || []).map((o) => [String(o.id), o]));
+  for (const b of bookings) {
+    if (!b.ref.startsWith('studio:') || b.status === 'cancelled') continue;
+    const o = orders.get(b.ref.slice(7));
+    if (!o) continue;
+    const st = SHIP.studioShipState(o);
+    if (st === 'gone' || st === 'refunded') gone.push([b.ref, `studio order ${st === 'gone' ? 'cancelled' : 'refunded'}`]);
+  }
+  for (const [ref, why] of gone) await DELIVERY.cancelRef(ref, 'system', why).catch(() => {});
+  await pool.query(`UPDATE delivery_bookings SET status='cancelled', updated_at=NOW(),
+                       history = history || '[{"by":"system","action":"cancelled","note":"hold never paid"}]'::jsonb
+                     WHERE status='held' AND hold_expires_at < NOW() - INTERVAL '1 day'`).catch(() => {});
+  return gone.length;
+}
+
+/** Today's deliveries and any at risk, for the morning email; '' when none. */
+async function deliveryDigestHtml() {
+  const q = DELIV.boardQueues(await DELIVERY.boardBookings());
+  if (!q.today.length && !q.atRisk.length) return '';
+  const row = (b, extra) => `<tr><td style="padding:7px 0;border-bottom:1px solid #eef1f6">
+      <a href="${PUBLIC_BASE_URL}/admin/delivery/job/${b.id}" style="color:#1848B8;font-weight:600;text-decoration:none">${escEmail(deliveryOrderName(b.ref))}</a>
+      <span style="color:#6b7280"> ${escEmail(b.name || '')}</span><br>
+      <span style="color:#111827;font-size:13px">${escEmail(b.phrase)} &middot; ${escEmail(DELIV.addressLine(b.address))}${extra}</span></td></tr>`;
+  return `<h2 style="color:#1848B8;margin:0 0 6px">Deliveries</h2>
+    ${q.atRisk.length ? `<p style="color:#b91c1c;font-size:13px;margin:0 0 6px"><b>${q.atRisk.length} at risk</b> — the job is due ready after its delivery day. Move the delivery so the customer hears before the day.</p>
+      <table style="width:100%;border-collapse:collapse">${q.atRisk.map((b) => row(b, ` &middot; ready ${escEmail(b.ready_by || '')}`)).join('')}</table>` : ''}
+    ${q.today.length ? `<p style="color:#6b7280;font-size:13px;margin:10px 0 6px">${q.today.length} going out today</p>
+      <table style="width:100%;border-collapse:collapse">${q.today.map((b) => row(b, b.courier ? ` &middot; courier: ${escEmail(b.courier.partner)}` : '')).join('')}</table>` : ''}
+    <p style="margin:8px 0 22px"><a href="${PUBLIC_BASE_URL}/admin/delivery" style="color:#1848B8">Open the delivery board →</a></p>`;
+}
+
+/* ── The studio checkout asks here ───────────────────────────────────────── */
+
+/** What a studio buyer at `zip` can book. The studio shows this as the price
+ *  and the slots; it is asked again, server to server, when they pay. */
+app.get('/api/delivery/options', requireInternalKey, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try {
+    const zip = DELIV.normZip(req.query.zip);
+    const o = await DELIVERY.options({ zip, readyYmd: studioReadyYmd() });
+    res.json({ ...o, message: o.reason ? DELIV.slotProblem(o.reason) : '' });
+  } catch (e) {
+    console.error('delivery options failed:', e.message);
+    res.status(500).json({ error: 'unavailable' });
+  }
+});
+
+/** Hold a seat while a studio buyer pays. Called by save_order BEFORE the
+ *  order row exists, under a per-cart ref (`cart:<hex>`); /attach puts the
+ *  order number on it once there is one. */
+app.post('/api/delivery/hold', requireInternalKey, async (req, res) => {
+  const b = req.body || {};
+  const ref = String(b.ref || '');
+  if (!/^cart:[a-f0-9]{16,32}$/.test(ref)) return res.status(400).json({ error: 'bad ref' });
+  const [date, win] = String(b.slot || '').split('|');
+  const address = SHIP.cleanShipTo(b.address || {}, b.name);
+  if (!address || SHIP.shipToProblems(address).filter((f) => f !== 'name').length) {
+    return res.json({ ok: false, reason: 'address', message: 'Please fill in the full delivery address.' });
+  }
+  try {
+    const r = await DELIVERY.book({ ref, zip: address.zip, date, windowId: win, address,
+      name: b.name, phone: b.phone, email: b.email, readyYmd: studioReadyYmd(), status: 'held', by: 'customer' });
+    if (!r.ok) return res.json({ ok: false, reason: r.reason, message: DELIV.slotProblem(r.reason) });
+    res.json({ ok: true, booking_id: r.booking.id, fee: Number(r.booking.fee), zone: r.booking.zone_name,
+      phrase: DELIV.bookingPhrase(r.booking), date: r.booking.date, window: r.booking.window_label });
+  } catch (e) {
+    console.error('delivery hold failed:', e.message);
+    res.status(500).json({ ok: false, reason: 'error', message: 'Delivery booking is unavailable right now. Please choose pickup or shipping.' });
+  }
+});
+
+/** The hold now belongs to studio order #id. */
+app.post('/api/delivery/attach', requireInternalKey, async (req, res) => {
+  const b = req.body || {};
+  const ref = String(b.ref || '');
+  const id = Number(b.booking_id), orderId = Number(b.order_id);
+  if (!/^cart:[a-f0-9]{16,32}$/.test(ref) || !Number.isInteger(id) || !Number.isInteger(orderId) || orderId <= 0) {
+    return res.status(400).json({ error: 'bad request' });
+  }
+  try {
+    const { rows } = await pool.query(
+      `UPDATE delivery_bookings SET ref=$3, updated_at=NOW() WHERE id=$1 AND ref=$2 AND status <> 'cancelled' RETURNING id`,
+      [id, ref, 'studio:' + orderId]);
+    res.json({ ok: rows.length === 1 });
+  } catch (e) {
+    console.error('delivery attach failed:', e.message);
+    res.status(500).json({ ok: false });
+  }
+});
+
+/* ── The customer changes their own booking ──────────────────────────────── */
+
+async function renderDeliveryChange(res, b, { action, msg = '', ok = '' }) {
+  res.set('Cache-Control', 'no-store');
+  res.set('Referrer-Policy', 'no-referrer');
+  const what = deliveryOrderName(b.ref);
+  const allowed = DELIV.rescheduleAllowed(b);
+  let slots = '';
+  if (allowed) {
+    const o = await DELIVERY.options({ zip: b.address && b.address.zip, readyYmd: b.ready_by, exceptId: b.id });
+    slots = o.available
+      ? `<form method="POST" action="${action}">
+          <label>Pick a new time</label>
+          ${deliverySlotsHtml(o.days, { selected: `${b.date}|${b.window_id}` })}
+          <button type="submit" style="width:100%;margin-top:6px">Move my delivery</button>
+        </form>`
+      : `<p class="muted">There are no other open times right now. Text us at ${SHOP_PHONE} and we will find one.</p>`;
+  }
+  const status = b.status === 'delivered' ? 'Delivered' : b.status === 'cancelled' ? 'Cancelled'
+    : b.status === 'out' ? 'Out for delivery' : '';
+  return res.send(htmlDocument(`Delivery for ${what}`, `<div class="wrap"><style>${DELIVERY_CSS}</style>
+    <div class="card">
+      <h2 style="margin-top:0">Delivery for ${escEmail(what)}</h2>
+      ${ok ? `<div class="ok" style="background:#e7f6ec;color:#166534;padding:10px 12px;border-radius:8px;margin-bottom:10px">${escEmail(ok)}</div>` : ''}
+      ${msg ? `<div class="warn">${escEmail(msg)}</div>` : ''}
+      <p style="font-size:17px;margin:6px 0"><b>${escEmail(DELIV.bookingPhrase(b))}</b>${status ? ` &middot; ${escEmail(status)}` : ''}</p>
+      <p class="muted">To ${escEmail(DELIV.addressLine(b.address))}</p>
+      ${allowed ? slots : (['held', 'confirmed'].includes(b.status)
+        ? `<p class="muted">It is less than ${DELIV.settings().cutoffHours} hours away, so it can't be changed online. Text or call ${SHOP_PHONE} and we will do our best.</p>`
+        : `<p class="muted">Questions? Text or call ${SHOP_PHONE}.</p>`)}
+    </div></div>`));
+}
+
+async function handleDeliveryChange(req, res, b, back) {
+  if (!DELIV.rescheduleAllowed(b)) return res.redirect(back + '?e=cutoff');
+  const [date, win] = String((req.body || {}).slot || '').split('|');
+  if (date === b.date && Number(win) === Number(b.window_id)) return res.redirect(back);
+  const r = await DELIVERY.move({ id: b.id, date, windowId: win, by: 'customer' });
+  if (!r.ok) return res.redirect(`${back}?e=${encodeURIComponent(r.reason)}`);
+  sendEmail({ to: SHOP_EMAIL, subject: `🚚 ${deliveryOrderName(b.ref)}: customer moved delivery to ${r.to}`,
+    html: `<p>${escEmail(b.name || 'The customer')} moved their delivery from <b>${escEmail(r.from)}</b> to <b>${escEmail(r.to)}</b>.</p>
+      <p><a href="${PUBLIC_BASE_URL}/admin/delivery/job/${b.id}">Open it on the delivery board</a></p>` }).catch(() => {});
+  return res.redirect(back + '?ok=moved');
+}
+
+function deliveryPageMessages(req) {
+  const e = String(req.query.e || '');
+  return {
+    msg: e === 'cutoff' ? `It is too close to the delivery to change online. Text or call ${SHOP_PHONE}.`
+      : e ? DELIV.slotProblem(e) : '',
+    ok: req.query.ok === 'moved' ? 'Done — your delivery has been moved. We have let the shop know.' : '',
+  };
+}
+
+app.get('/d/:token', deliveryRateLimit, async (req, res) => {
+  try {
+    const b = await DELIVERY.byToken(req.params.token);
+    if (!b) {
+      return res.status(404).send(quotePage('Link not found', `<div class="card"><h2 style="margin-top:0">This link has expired</h2>
+        <p class="muted">Each time your delivery changes we send a new link, and the old one stops working.
+        Use the link in your latest email or text, or text us at ${SHOP_PHONE}.</p></div>`));
+    }
+    await renderDeliveryChange(res, b, { action: `/d/${encodeURIComponent(req.params.token)}`, ...deliveryPageMessages(req) });
+  } catch (e) {
+    console.error('delivery page failed:', e.message);
+    res.status(500).send(quotePage('Try again', '<div class="card"><div class="warn">Something went wrong. Please refresh.</div></div>'));
+  }
+});
+
+app.post('/d/:token', deliveryRateLimit, async (req, res) => {
+  try {
+    const b = await DELIVERY.byToken(req.params.token);
+    if (!b) return res.redirect(`/d/${encodeURIComponent(String(req.params.token).slice(0, 64))}`);
+    await handleDeliveryChange(req, res, b, `/d/${encodeURIComponent(req.params.token)}`);
+  } catch (e) {
+    console.error('delivery change failed:', e.message);
+    res.status(500).send(quotePage('Try again', '<div class="card"><div class="warn">Something went wrong. Please try again.</div></div>'));
+  }
+});
+
+app.get('/q/:code/delivery', deliveryRateLimit, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/q/' + encodeURIComponent(code));
+  try {
+    const b = await DELIVERY.byRef('quote:' + code);
+    if (!b) return res.redirect('/q/' + code);
+    await renderDeliveryChange(res, b, { action: `/q/${code}/delivery`, ...deliveryPageMessages(req) });
+  } catch (e) {
+    console.error('quote delivery page failed:', e.message);
+    res.status(500).send(quotePage('Try again', '<div class="card"><div class="warn">Something went wrong. Please refresh.</div></div>'));
+  }
+});
+
+app.post('/q/:code/delivery', deliveryRateLimit, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/q/' + encodeURIComponent(code));
+  try {
+    const b = await DELIVERY.byRef('quote:' + code);
+    if (!b) return res.redirect('/q/' + code);
+    await handleDeliveryChange(req, res, b, `/q/${code}/delivery`);
+  } catch (e) {
+    console.error('quote delivery change failed:', e.message);
+    res.status(500).send(quotePage('Try again', '<div class="card"><div class="warn">Something went wrong. Please try again.</div></div>'));
+  }
+});
+
+/** The quote page's slot picker asks here as the customer types their ZIP. */
+app.get('/q/:code/delivery-options', deliveryRateLimit, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.status(404).json({ error: 'not found' });
+  try {
+    const { rows } = await pool.query(
+      `SELECT code, items, target_date FROM quotes
+        WHERE code = $1 AND accepted_at IS NULL AND cancelled_at IS NULL AND status NOT IN ('held', 'draft')`, [code]);
+    if (!rows.length) return res.status(404).json({ error: 'not found' });
+    const o = await DELIVERY.options({ zip: DELIV.normZip(req.query.zip), readyYmd: quoteReadyYmd(rows[0]) });
+    res.json({ ...o, message: o.reason ? DELIV.slotProblem(o.reason) : '' });
+  } catch (e) {
+    console.error('quote delivery options failed:', e.message);
+    res.status(500).json({ error: 'unavailable' });
+  }
+});
+
+/* ── The delivery board ──────────────────────────────────────────────────── */
+
+const DELIVERY_FLASH = {
+  moved: 'Moved, and the customer has been told.',
+  movedquiet: 'Moved. The customer was not told.',
+  out: 'Marked out for delivery, and the customer has been told.',
+  delivered: 'Marked delivered.',
+  cancelled: 'Cancelled, and the seat is free again.',
+  confirmed: 'Back to booked.',
+  courier: 'Sent to the courier.',
+  daymoved: 'Every delivery that day was moved, and each customer has been told.',
+  booked: 'Booked, and the customer has been told.',
+  saved: 'Saved.',
+  nocourier: 'Set up the courier partner first: name and dispatch email, under Delivery settings.',
+  nocost: 'There is no courier cost for that zone yet. Add it under Delivery settings.',
+  failed: 'That did not work. Please try again.',
+};
+
+function deliveryFlash(req) {
+  const k = String(req.query.flash || '');
+  const e = String(req.query.e || '');
+  if (e) return `<div class="warn">${escEmail(DELIV.SLOT_PROBLEMS[e] ? DELIV.slotProblem(e) : (DELIVERY_FLASH[e] || DELIVERY_FLASH.failed))}</div>`;
+  return DELIVERY_FLASH[k] ? `<div class="card" style="background:#e7f6ec;color:#166534">${escEmail(DELIVERY_FLASH[k])}</div>` : '';
+}
+
+const DELIVERY_STATUS_PILL = {
+  held: ['Paying', 'amber'], confirmed: ['Booked', 'blue'], out: ['Out', 'green'],
+  delivered: ['Delivered', 'neutral'], cancelled: ['Cancelled', 'red'],
+};
+
+function deliveryCard(b, { partner, actions = true } = {}) {
+  const [label, tone] = DELIVERY_STATUS_PILL[b.status] || [b.status, 'neutral'];
+  const link = deliveryAdminLink(b.ref);
+  const cost = DELIV.courierCost(partner, b.zone_id);
+  const act = (status, text, cls = 'btn btn-ghost') => `<form method="POST" action="/admin/delivery/job/${b.id}/status">
+      <input type="hidden" name="status" value="${status}"><button type="submit" class="${cls}">${text}</button></form>`;
+  return `<div class="dcard" id="d-${b.id}">
+    <h3><a href="/admin/delivery/job/${b.id}">${escEmail(deliveryOrderName(b.ref))}</a> ${pill(label, tone)}${
+      b.overdue ? ' ' + pill('Past its day', 'red') : ''}${b.courier ? ' ' + pill('Courier: ' + b.courier.partner, 'neutral') : ''}</h3>
+    <div class="dmeta"><b>${escEmail(b.phrase || DELIV.bookingPhrase(b))}</b> &middot; ${escEmail(b.zone_name || '')} &middot; fee ${money(b.fee)}<br>
+      ${escEmail(b.name || '')}${b.phone ? ` &middot; <a href="tel:${escEmail(b.phone)}">${escEmail(b.phone)}</a>` : ''}<br>
+      ${escEmail(DELIV.addressLine(b.address))}${b.ready_by && b.ready_by > b.date && ['held', 'confirmed', 'out'].includes(b.status) ? `<br><b style="color:#b91c1c">Ready ${escEmail(b.ready_by)} — after the delivery day. Move it.</b>` : ''}
+      ${link ? `<br><a href="${link}"${link.startsWith('http') ? ' target="_blank" rel="noopener"' : ''}>Open the order</a>` : ''}</div>
+    ${actions && ['confirmed', 'out'].includes(b.status) ? `<div class="dactions">
+      ${b.status === 'confirmed' ? act('out', 'Out for delivery', 'btn') : act('confirmed', 'Not out after all')}
+      ${act('delivered', 'Delivered')}
+      <a class="btn btn-ghost" href="/admin/delivery/job/${b.id}">Move</a>
+      ${!b.courier && DELIV.courierReady(partner) ? `<form method="POST" action="/admin/delivery/job/${b.id}/courier"><button type="submit" class="btn btn-ghost">Send by ${escEmail(partner.name)}${
+        cost != null ? ` (${money(cost)})` : ''}</button></form>` : ''}
+    </div>` : ''}
+  </div>`;
+}
+
+app.get('/admin/delivery', requireAdmin, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try {
+    const cfg = await DELIVERY.loadConfig();
+    let bookings = await DELIVERY.boardBookings();
+    const feed = await fetchStudioOrders().catch(() => null);
+    if (await reconcileDeliveries(bookings, feed)) bookings = await DELIVERY.boardBookings();
+    const q = DELIV.boardQueues(bookings);
+    const offered = DELIV.deliveryOffered(cfg.zones, cfg.windows);
+    const courierOk = DELIV.courierReady(cfg.partner);
+
+    const byDate = new Map();
+    for (const b of q.upcoming) {
+      if (!byDate.has(b.date)) byDate.set(b.date, []);
+      byDate.get(b.date).push(b);
+    }
+    const windowGroups = (list, date) => {
+      const groups = new Map();
+      for (const b of list) {
+        const k = `${b.window_id}|${b.window_label}`;
+        if (!groups.has(k)) groups.set(k, []);
+        groups.get(k).push(b);
+      }
+      return [...groups.entries()].map(([k, items]) => {
+        const [wid, wl] = k.split('|');
+        const route = DELIV.routeLink(SHOP_ADDRESS_LINE, items.map((b) => DELIV.addressLine(b.address)));
+        const cap = (cfg.windows.find((w) => String(w.id) === wid) || {}).capacity;
+        const notSent = items.filter((b) => !b.courier && b.status === 'confirmed').length;
+        return `<div class="dgroup">${escEmail(wl)} &middot; ${items.length}${cap != null ? ` of ${cap}` : ''}${
+          route ? ` &middot; <a href="${escEmail(route)}" target="_blank" rel="noopener">Route in Maps</a>` : ''}${
+          date && courierOk && notSent > 1 ? ` &middot; <form method="POST" action="/admin/delivery/window-courier" style="display:inline;margin:0">
+            <input type="hidden" name="date" value="${escEmail(date)}"><input type="hidden" name="window_id" value="${escEmail(wid)}">
+            <button type="submit" class="btn btn-ghost" style="padding:2px 10px;font-size:11.5px">Send all ${notSent} by courier</button></form>` : ''}</div>
+          ${items.map((b) => deliveryCard(b, { partner: cfg.partner })).join('')}`;
+      }).join('');
+    };
+
+    const today = DELIV.shopClock().ymd;
+    const body = `<style>${DELIVERY_CSS}</style>
+      ${pageHeader('Delivery', 'Local deliveries booked at checkout, by day and window.',
+        `<a class="btn btn-ghost" href="/admin/delivery/settings">Settings</a>`)}
+      ${deliveryFlash(req)}
+      ${!offered ? `<div class="card"><div class="warn">Delivery is not offered to customers yet. Add at least one zone (ZIP codes and a fee)
+        and one time window under <a href="/admin/delivery/settings">Settings</a>; until then neither checkout shows it.</div></div>` : ''}
+      ${statTiles([
+        { label: 'Today', value: String(q.today.length), tone: 'blue' },
+        { label: 'Coming up', value: String(q.upcoming.length), tone: 'navy' },
+        { label: 'At risk', value: String(q.atRisk.length), tone: q.atRisk.length ? 'red' : 'gray' },
+        { label: 'Paying now', value: String(q.held.length), tone: 'gray', sub: 'seat held while they pay' },
+      ])}
+      ${q.atRisk.length ? `<div class="card"><h2 style="margin-top:0;color:#b91c1c">At risk</h2>
+        <p class="muted">The job is due ready after its delivery day. Move the delivery (the customer is told) or bring the job forward.</p>
+        ${q.atRisk.map((b) => deliveryCard(b, { partner: cfg.partner })).join('')}</div>` : ''}
+      <div class="card"><h2 style="margin-top:0">Today &middot; ${escEmail(DELIV.dayLabel(today))}</h2>
+        ${q.today.length ? windowGroups(q.today, today) : emptyState('Nothing going out today.')}</div>
+      <div class="card"><h2 style="margin-top:0">Coming up</h2>
+        ${byDate.size ? [...byDate.entries()].map(([date, list]) => `
+          <h3 style="margin:16px 0 0">${escEmail(DELIV.dayLabel(date))}</h3>
+          <form method="POST" action="/admin/delivery/day-move" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0">
+            <input type="hidden" name="from" value="${escEmail(date)}">
+            <span class="muted" style="font-size:12.5px">Move this whole day to</span>
+            <input type="date" name="to" required style="width:auto;padding:5px">
+            <button type="submit" class="btn btn-ghost" style="padding:5px 12px;font-size:12px">Move all ${list.length}</button>
+          </form>
+          ${windowGroups(list, date)}`).join('') : emptyState('No deliveries booked yet.')}</div>
+      ${q.held.length ? `<div class="card"><h2 style="margin-top:0">Paying now</h2>
+        <p class="muted">A studio buyer is at the payment step; the seat is theirs for ${DELIV.settings().holdMinutes} minutes and frees itself if they don't pay.</p>
+        ${q.held.map((b) => deliveryCard(b, { partner: cfg.partner, actions: false })).join('')}</div>` : ''}
+      <div class="card"><h2 style="margin-top:0">Book a delivery for a quote job</h2>
+        <p class="muted">For a job accepted as pickup, or one where you agreed delivery with the customer.</p>
+        <form method="GET" action="/admin/delivery/new" style="display:flex;gap:6px;flex-wrap:wrap">
+          <input name="code" placeholder="Quote code" required maxlength="16" style="flex:1 1 140px;text-transform:uppercase">
+          <button type="submit" class="btn">Choose a time</button></form></div>
+      ${q.recent.length ? `<div class="card"><h2 style="margin-top:0">Last 14 days</h2>
+        ${q.recent.map((b) => deliveryCard(b, { partner: cfg.partner, actions: false })).join('')}</div>` : ''}`;
+    res.send(adminPage('Delivery', body, 'delivery'));
+  } catch (e) {
+    console.error('delivery board failed:', e.message);
+    res.status(500).send(adminPage('Delivery', `${pageHeader('Delivery')}<div class="card"><div class="warn">The delivery board could not be loaded. Refresh to try again.</div></div>`, 'delivery'));
+  }
+});
+
+app.get('/admin/delivery/job/:id', requireAdmin, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try {
+    const b = await DELIVERY.byId(req.params.id);
+    if (!b) return res.redirect('/admin/delivery');
+    const cfg = await DELIVERY.loadConfig();
+    const today = DELIV.shopClock().ymd;
+    // The shop sees every window, including full ones (marked), and may overbook on purpose.
+    const open = await DELIVERY.options({ zip: b.address && b.address.zip, readyYmd: today, exceptId: b.id });
+    const live = ['held', 'confirmed', 'out'].includes(b.status);
+    const allWindows = cfg.windows.filter((w) => w.active !== false)
+      .map((w) => `<option value="${w.id}">${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][w.weekday]} ${escEmail(DELIV.windowLabel(w))}</option>`).join('');
+    const history = (b.history || []).slice().reverse().map((h) => `<tr><td>${escEmail(new Date(h.at).toLocaleString('en-US', { timeZone: DELIV.SHOP_TZ, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}</td>
+      <td>${escEmail(h.action)}${h.from ? ` from ${escEmail(h.from)}` : ''}${h.to ? ` to ${escEmail(h.to)}` : ''}${h.note ? `<br><span class="muted">${escEmail(h.note)}</span>` : ''}</td>
+      <td>${escEmail(h.by)}</td></tr>`).join('');
+    const body = `<style>${DELIVERY_CSS}</style>
+      ${pageHeader(`Delivery for ${deliveryOrderName(b.ref)}`, '', `<a class="btn btn-ghost" href="/admin/delivery">Back to the board</a>`)}
+      ${deliveryFlash(req)}
+      <div class="card">${deliveryCard(Object.assign({}, b, { phrase: DELIV.bookingPhrase(b) }), { partner: cfg.partner })}</div>
+      ${live ? `<div class="card"><h2 style="margin-top:0">Move it</h2>
+        <form method="POST" action="/admin/delivery/job/${b.id}/move">
+          ${open.available ? deliverySlotsHtml(open.days, { selected: `${b.date}|${b.window_id}` }) : '<p class="muted">No open windows. Use "into a full window" below.</p>'}
+          <label>Note to the customer <span class="muted" style="text-transform:none;font-weight:400">(optional — why it moved)</span></label>
+          <input name="note" maxlength="300" placeholder="e.g. Your shirts need one more day to cure.">
+          <label style="text-transform:none;font-weight:400;display:flex;gap:8px;align-items:center;margin-top:8px">
+            <input type="checkbox" name="notify" value="1" checked style="width:auto;margin:0"> Email and text the customer the new time and a link to pick another</label>
+          <button type="submit" class="btn" style="margin-top:10px">Move delivery</button>
+        </form>
+        <details style="margin-top:14px"><summary>Into a full window, or a date not offered</summary>
+          <form method="POST" action="/admin/delivery/job/${b.id}/move" style="margin-top:8px">
+            <input type="hidden" name="force" value="1">
+            <div class="row"><div><label>Date</label><input type="date" name="date" required min="${today}"></div>
+              <div><label>Window</label><select name="window_id" required>${allWindows}</select></div></div>
+            <input name="note" maxlength="300" placeholder="Note to the customer (optional)" style="margin-top:8px">
+            <label style="text-transform:none;font-weight:400;display:flex;gap:8px;align-items:center;margin-top:8px">
+              <input type="checkbox" name="notify" value="1" checked style="width:auto;margin:0"> Tell the customer</label>
+            <button type="submit" class="btn btn-ghost" style="margin-top:10px">Move anyway</button>
+          </form></details></div>
+      <div class="card"><h2 style="margin-top:0">Cancel the delivery</h2>
+        <form method="POST" action="/admin/delivery/job/${b.id}/status">
+          <input type="hidden" name="status" value="cancelled">
+          <input name="note" maxlength="300" placeholder="Note to the customer (optional)">
+          <p class="muted" style="font-size:12.5px">Frees the seat and emails the customer. It does not refund the delivery fee — do that from the order if it is owed.</p>
+          <button type="submit" class="btn btn-ghost">Cancel delivery</button></form></div>` : ''}
+      <div class="card"><h2 style="margin-top:0">History</h2>
+        <table class="dtable"><tr><th>When</th><th>What</th><th>Who</th></tr>${history}</table></div>`;
+    res.send(adminPage('Delivery', body, 'delivery'));
+  } catch (e) {
+    console.error('delivery detail failed:', e.message);
+    res.redirect('/admin/delivery?e=failed');
+  }
+});
+
+function deliveryActor() {
+  const a = currentActor();
+  return a && a.kind === 'staff' ? String(a.name || 'helper') : 'shop';
+}
+
+app.post('/admin/delivery/job/:id/move', requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  const b = req.body || {};
+  let date = String(b.date || ''), win = b.window_id;
+  if (b.slot) [date, win] = String(b.slot).split('|');
+  try {
+    const r = await DELIVERY.move({ id, date, windowId: win, by: deliveryActor(),
+      note: String(b.note || '').slice(0, 300), force: b.force === '1', shop: true });
+    if (!r.ok) return res.redirect(`/admin/delivery/job/${id}?e=${encodeURIComponent(r.reason)}`);
+    const tell = b.notify === '1';
+    if (tell) await notifyDelivery(r.booking, 'moved', { note: String(b.note || '').slice(0, 300) });
+    res.redirect(`/admin/delivery/job/${id}?flash=${tell ? 'moved' : 'movedquiet'}`);
+  } catch (e) {
+    console.error('delivery move failed:', e.message);
+    res.redirect(`/admin/delivery/job/${id}?e=failed`);
+  }
+});
+
+app.post('/admin/delivery/job/:id/status', requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  const status = String((req.body || {}).status || '');
+  const note = String((req.body || {}).note || '').slice(0, 300);
+  try {
+    const b = await DELIVERY.setStatus({ id, status, by: deliveryActor(), note });
+    if (!b) return res.redirect('/admin/delivery?e=failed');
+    if (status === 'out') await notifyDelivery(b, 'out');
+    if (status === 'cancelled') await notifyDelivery(b, 'cancelled', { note });
+    /* Delivered is the moment the review ask counts from, as a pickup's
+       Ready is: a quote job is marked delivered on its own record too. */
+    if (status === 'delivered' && b.ref.startsWith('quote:')) {
+      await pool.query('UPDATE quotes SET delivered_at = COALESCE(delivered_at, NOW()) WHERE code = $1', [b.ref.slice(6)]);
+    }
+    res.redirect(`/admin/delivery?flash=${status}#d-${id}`);
+  } catch (e) {
+    console.error('delivery status failed:', e.message);
+    res.redirect('/admin/delivery?e=failed');
+  }
+});
+
+/** One job sheet (or a whole window's) to the courier partner's dispatch. */
+async function dispatchToCourier(partner, list) {
+  const rows = list.map((b, i) => `<tr><td style="padding:8px 4px;border-bottom:1px solid #eee;vertical-align:top">${i + 1}</td>
+    <td style="padding:8px 4px;border-bottom:1px solid #eee"><b>${escEmail(DELIV.addressLine(b.address))}</b><br>
+      ${escEmail(b.name || '')}${b.phone ? ` &middot; ${escEmail(b.phone)}` : ''}<br>
+      Ref ${escEmail(deliveryOrderName(b.ref))}</td></tr>`).join('');
+  const first = list[0];
+  await sendEmail({
+    to: partner.email, replyTo: SHOP_EMAIL,
+    subject: `Delivery request from ${SHOP_NAME}: ${list.length} stop${list.length === 1 ? '' : 's'}, ${DELIV.bookingPhrase(first)}`,
+    html: `<div style="font-family:system-ui,sans-serif;max-width:600px">
+      <p>Hello ${escEmail(partner.name)},</p>
+      <p>Please book ${list.length === 1 ? 'this delivery' : `this route of ${list.length} stops`} at our agreed rate.</p>
+      <p><b>Pickup:</b> ${escEmail(SHOP_NAME)}, ${escEmail(SHOP_ADDRESS_LINE)} &middot; ${SHOP_PHONE}<br>
+         <b>Deliver:</b> ${escEmail(DELIV.bookingPhrase(first))}</p>
+      <table style="width:100%;border-collapse:collapse">${rows}</table>
+      <p>Reply to this email to confirm. Thank you!</p></div>`,
+  });
+}
+
+app.post('/admin/delivery/job/:id/courier', requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  try {
+    const cfg = await DELIVERY.loadConfig();
+    if (!DELIV.courierReady(cfg.partner)) return res.redirect('/admin/delivery?e=nocourier');
+    const b = await DELIVERY.byId(id);
+    if (!b || !['confirmed', 'out'].includes(b.status)) return res.redirect('/admin/delivery?e=failed');
+    const cost = DELIV.courierCost(cfg.partner, b.zone_id);
+    if (cost == null) return res.redirect('/admin/delivery?e=nocost');
+    await dispatchToCourier(cfg.partner, [b]);
+    await DELIVERY.setCourier({ id, partner: cfg.partner.name, cost, by: deliveryActor() });
+    res.redirect(`/admin/delivery?flash=courier#d-${id}`);
+  } catch (e) {
+    console.error('courier dispatch failed:', e.message);
+    res.redirect('/admin/delivery?e=failed');
+  }
+});
+
+app.post('/admin/delivery/window-courier', requireAdmin, async (req, res) => {
+  const date = String((req.body || {}).date || '');
+  const wid = Number((req.body || {}).window_id);
+  if (!DELIV.isYmd(date) || !Number.isInteger(wid)) return res.redirect('/admin/delivery?e=failed');
+  try {
+    const cfg = await DELIVERY.loadConfig();
+    if (!DELIV.courierReady(cfg.partner)) return res.redirect('/admin/delivery?e=nocourier');
+    const list = (await DELIVERY.bookingsOn(date, wid)).filter((b) => !b.courier && b.status === 'confirmed');
+    if (!list.length) return res.redirect('/admin/delivery');
+    if (list.some((b) => DELIV.courierCost(cfg.partner, b.zone_id) == null)) return res.redirect('/admin/delivery?e=nocost');
+    await dispatchToCourier(cfg.partner, list);
+    for (const b of list) {
+      await DELIVERY.setCourier({ id: b.id, partner: cfg.partner.name, cost: DELIV.courierCost(cfg.partner, b.zone_id), by: deliveryActor() });
+    }
+    res.redirect('/admin/delivery?flash=courier');
+  } catch (e) {
+    console.error('window courier failed:', e.message);
+    res.redirect('/admin/delivery?e=failed');
+  }
+});
+
+/** Push a whole day (weather, a sick driver): each booking keeps its time
+ *  of day where the new day has that window, else takes the new day's
+ *  first. The shop is allowed past capacity; every customer is told. */
+app.post('/admin/delivery/day-move', requireAdmin, async (req, res) => {
+  const from = String((req.body || {}).from || ''), to = String((req.body || {}).to || '');
+  if (!DELIV.isYmd(from) || !DELIV.isYmd(to) || from === to) return res.redirect('/admin/delivery?e=date');
+  try {
+    const cfg = await DELIVERY.loadConfig();
+    const targets = cfg.windows.filter((w) => w.active !== false && Number(w.weekday) === DELIV.weekdayOf(to))
+      .sort((a, b) => DELIV.toMinutes(a.start_time) - DELIV.toMinutes(b.start_time));
+    if (!targets.length) return res.redirect('/admin/delivery?e=window');
+    const list = await DELIVERY.bookingsOn(from);
+    for (const b of list) {
+      const w = targets.find((x) => x.start_time === b.window_start) || targets[0];
+      const r = await DELIVERY.move({ id: b.id, date: to, windowId: w.id, by: deliveryActor(), force: true });
+      if (r.ok) await notifyDelivery(r.booking, 'moved');
+    }
+    res.redirect('/admin/delivery?flash=daymoved');
+  } catch (e) {
+    console.error('day move failed:', e.message);
+    res.redirect('/admin/delivery?e=failed');
+  }
+});
+
+/* Booking a delivery for a quote job by hand: one accepted as pickup, or one
+   where delivery was agreed by text. The fee is added to the job only when
+   the shop ticks it. */
+app.get('/admin/delivery/new', requireAdmin, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const code = String(req.query.code || '').trim().toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/delivery?e=failed');
+  try {
+    const { rows } = await pool.query('SELECT * FROM quotes WHERE code = $1 AND cancelled_at IS NULL', [code]);
+    if (!rows.length) return res.redirect('/admin/delivery?e=failed');
+    const q = rows[0];
+    const existing = await DELIVERY.byRef('quote:' + code);
+    if (existing) return res.redirect(`/admin/delivery/job/${existing.id}`);
+    const a = SHIP.cleanShipTo(q.ship_to, q.name) || {};
+    const zip = DELIV.normZip(req.query.zip || a.zip);
+    const o = zip ? await DELIVERY.options({ zip, readyYmd: quoteReadyYmd(q) }) : null;
+    const v = (k) => escEmail(String(req.query[k] != null ? req.query[k] : (a[k] || '')));
+    const body = `<style>${DELIVERY_CSS}</style>
+      ${pageHeader(`Book a delivery for ${code}`, escEmail(q.name || ''), `<a class="btn btn-ghost" href="/admin/delivery">Back</a>`)}
+      ${deliveryFlash(req)}
+      <div class="card"><form method="GET" action="/admin/delivery/new">
+        <input type="hidden" name="code" value="${code}">
+        <label>Delivery address</label>
+        <input name="street1" value="${v('street1')}" placeholder="Street address" required>
+        <input name="street2" value="${v('street2')}" placeholder="Apt, suite (optional)" style="margin-top:8px">
+        <div class="row" style="margin-top:8px"><div><input name="city" value="${v('city')}" placeholder="City" required></div>
+          <div style="display:flex;gap:8px"><input name="state" value="${v('state') || 'IL'}" maxlength="2" style="max-width:72px" required>
+          <input name="zip" value="${escEmail(zip)}" placeholder="ZIP" required pattern="\\d{5}(-\\d{4})?"></div></div>
+        <button type="submit" class="btn btn-ghost" style="margin-top:10px">Find times for this ZIP</button></form></div>
+      ${o ? `<div class="card">${!o.available ? `<div class="warn">${escEmail(DELIV.slotProblem(o.reason))}</div>` : `
+        <form method="POST" action="/admin/delivery/new">
+          <input type="hidden" name="code" value="${code}">
+          ${['street1', 'street2', 'city', 'state'].map((k) => `<input type="hidden" name="${k}" value="${v(k)}">`).join('')}
+          <input type="hidden" name="zip" value="${escEmail(zip)}">
+          <p><b>${escEmail(o.zone.name)}</b> zone &middot; fee ${money(o.fee)} &middot; job ready ${escEmail(quoteReadyYmd(q))}</p>
+          ${deliverySlotsHtml(o.days)}
+          <label style="text-transform:none;font-weight:400;display:flex;gap:8px;align-items:center">
+            <input type="checkbox" name="charge" value="1" ${q.delivery_fee ? '' : 'checked'} style="width:auto;margin:0"> Add the ${money(o.fee)} delivery fee to the job's total</label>
+          <button type="submit" class="btn" style="margin-top:10px">Book and tell the customer</button>
+        </form>`}</div>` : ''}`;
+    res.send(adminPage('Delivery', body, 'delivery'));
+  } catch (e) {
+    console.error('delivery new failed:', e.message);
+    res.redirect('/admin/delivery?e=failed');
+  }
+});
+
+app.post('/admin/delivery/new', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const code = String(b.code || '').trim().toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/delivery?e=failed');
+  const back = `/admin/delivery/new?code=${code}`;
+  try {
+    const { rows } = await pool.query('SELECT * FROM quotes WHERE code = $1 AND cancelled_at IS NULL', [code]);
+    if (!rows.length) return res.redirect('/admin/delivery?e=failed');
+    const q = rows[0];
+    const address = SHIP.cleanShipTo({ street1: b.street1, street2: b.street2, city: b.city, state: b.state, zip: b.zip }, q.name);
+    if (!address || SHIP.shipToProblems(address).filter((f) => f !== 'name').length) return res.redirect(back + '&e=failed');
+    const [date, win] = String(b.slot || '').split('|');
+    const r = await DELIVERY.book({ ref: 'quote:' + code, zip: address.zip, date, windowId: win, address,
+      name: q.name, phone: q.phone, email: q.email, readyYmd: quoteReadyYmd(q), status: 'confirmed', by: deliveryActor() });
+    if (!r.ok) return res.redirect(`${back}&zip=${encodeURIComponent(address.zip)}&e=${encodeURIComponent(r.reason)}`);
+    const fee = b.charge === '1' ? Number(r.booking.fee) : null;
+    const { rows: upd } = await pool.query(
+      `UPDATE quotes SET ship_method = 'local', ship_to = $2::jsonb,
+              delivery_fee = COALESCE($3::numeric, delivery_fee)
+        WHERE code = $1 RETURNING *`, [code, JSON.stringify(address), fee]);
+    if (fee != null && upd[0]) {
+      const tt = quoteTotals(upd[0]);
+      await pool.query('UPDATE quotes SET total = $2, deposit = $3 WHERE code = $1', [code, tt.total, tt.deposit]);
+    }
+    await notifyDelivery(r.booking, 'booked');
+    res.redirect(`/admin/delivery/job/${r.booking.id}?flash=booked`);
+  } catch (e) {
+    console.error('delivery book (admin) failed:', e.message);
+    res.redirect(back + '&e=failed');
+  }
+});
+
+/* ── Settings: zones, windows, days off, courier partner ─────────────────── */
+
+app.get('/admin/delivery/settings', requireAdmin, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try {
+    const cfg = await DELIVERY.loadConfig();
+    const WD = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const err = /^\d{1,2}$/.test(String(req.query.err || '')) ? (DELIVERY_SETTINGS_ERRORS[Number(req.query.err)] || '') : '';
+    const p = cfg.partner || {};
+    /* The first zone starts as the shop's own ZIP and the ones bordering it
+       (the owner, 2026-10-02: "only the surrounding zip codes"), at the
+       minimum fee. Nothing is offered until it is saved. */
+    const STARTER = !cfg.zones.length ? { name: 'Near the shop', fee: DELIV.MIN_FEE, zips: ['60657', '60613', '60614', '60618'] } : null;
+    const zoneForm = (z, start = null) => `<form method="POST" action="/admin/delivery/settings/zone" class="dcard">
+        ${z ? `<input type="hidden" name="id" value="${z.id}">` : ''}
+        <div class="row"><div><label>Zone name</label><input name="name" required maxlength="60" value="${escEmail(z ? z.name : start ? start.name : '')}" placeholder="e.g. Lakeview &amp; nearby"></div>
+          <div><label>Customer pays ($${DELIV.MIN_FEE} minimum)</label><input name="fee" required inputmode="decimal" value="${z ? DELIV.zoneFee(z).toFixed(2) : start ? Number(start.fee).toFixed(2) : ''}" placeholder="${DELIV.MIN_FEE}.00"></div></div>
+        <label>ZIP codes <span class="muted" style="text-transform:none;font-weight:400">(any separator)</span></label>
+        <textarea name="zips" rows="2" required placeholder="60657, 60613, 60614, 60618">${escEmail(z ? z.zips.join(', ') : start ? start.zips.join(', ') : '')}</textarea>
+        ${start ? `<p class="muted" style="font-size:12.5px;margin:4px 0 0">Filled in with the shop's ZIP and the ones around it (Lakeview, Wrigleyville, Lincoln Park, North Center). Change them if you like, then save.</p>` : ''}
+        <div class="row"><div><label>Order in list</label><input name="sort" inputmode="numeric" value="${z ? z.sort : 0}"></div>
+          <div><label style="text-transform:none;font-weight:400;display:flex;gap:8px;align-items:center;margin-top:26px">
+            <input type="checkbox" name="active" value="1" ${!z || z.active ? 'checked' : ''} style="width:auto;margin:0"> Offered</label></div></div>
+        ${z && DELIV.zoneMargin(z, p) != null ? `<p class="muted" style="font-size:12.5px">Courier costs ${money(DELIV.courierCost(p, z.id))} here — you keep <b style="color:${DELIV.zoneMargin(z, p) < 0 ? '#b91c1c' : '#166534'}">${money(DELIV.zoneMargin(z, p))}</b> when it goes by courier.</p>` : ''}
+        <div class="dactions"><button type="submit" class="btn">${z ? 'Save zone' : 'Add zone'}</button>
+        ${z ? `</div></form><form method="POST" action="/admin/delivery/settings/zone/${z.id}/delete" style="margin:-4px 0 10px"><button type="submit" class="btn btn-ghost" style="font-size:12px">Delete ${escEmail(z.name)}</button></form>` : '</div></form>'}`;
+    const winRows = cfg.windows.map((w) => `<tr>
+      <td>${WD[w.weekday]}</td><td>${escEmail(DELIV.windowLabel(w))}</td><td>${w.capacity}</td><td>${w.active ? 'Yes' : 'No'}</td>
+      <td><form method="POST" action="/admin/delivery/settings/window/${w.id}/delete" style="margin:0"><button type="submit" class="btn btn-ghost" style="padding:3px 10px;font-size:12px">Remove</button></form></td></tr>`).join('');
+    const body = `<style>${DELIVERY_CSS}</style>
+      ${pageHeader('Delivery settings', 'Where you deliver, what it costs, and when.', `<a class="btn btn-ghost" href="/admin/delivery">Back to the board</a>`)}
+      ${err ? `<div class="warn">${escEmail(err)}</div>` : deliveryFlash(req)}
+      <div class="card"><h2 style="margin-top:0">Zones</h2>
+        <p class="muted">A customer whose ZIP is in no zone is not offered delivery. A ZIP in two zones gets the first.</p>
+        ${cfg.zones.map(zoneForm).join('')}
+        <h3>${STARTER ? 'Your first zone' : 'Add a zone'}</h3>${zoneForm(null, STARTER)}</div>
+      <div class="card"><h2 style="margin-top:0">Time windows</h2>
+        <p class="muted">Each window repeats every week. Capacity is how many deliveries it takes; a window with bookings is switched off rather than removed.</p>
+        ${cfg.windows.length ? `<table class="dtable"><tr><th>Day</th><th>Window</th><th>Capacity</th><th>Offered</th><th></th></tr>${winRows}</table>` : ''}
+        <form method="POST" action="/admin/delivery/settings/window" style="margin-top:12px">
+          <div class="row"><div><label>Day</label><select name="weekday">${WD.map((d, i) => `<option value="${i}">${d}</option>`).join('')}</select></div>
+            <div><label>Capacity</label><input name="capacity" inputmode="numeric" value="4" required></div></div>
+          <div class="row"><div><label>From</label><input type="time" name="start" value="09:00" required></div>
+            <div><label>To</label><input type="time" name="end" value="12:00" required></div></div>
+          <button type="submit" class="btn" style="margin-top:10px">Add window</button></form></div>
+      <div class="card"><h2 style="margin-top:0">Days off</h2>
+        ${cfg.blackouts.length ? `<table class="dtable">${cfg.blackouts.map((d) => `<tr><td>${escEmail(DELIV.dayLabel(d.date))}</td><td>${escEmail(d.note || '')}</td>
+          <td><form method="POST" action="/admin/delivery/settings/blackout/delete" style="margin:0"><input type="hidden" name="date" value="${escEmail(d.date)}">
+          <button type="submit" class="btn btn-ghost" style="padding:3px 10px;font-size:12px">Remove</button></form></td></tr>`).join('')}</table>` : '<p class="muted">None.</p>'}
+        <form method="POST" action="/admin/delivery/settings/blackout" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+          <input type="date" name="date" required style="width:auto"><input name="note" maxlength="120" placeholder="Why (optional)" style="flex:1 1 160px">
+          <button type="submit" class="btn">Add day off</button></form>
+        <p class="muted" style="font-size:12.5px">Bookings already on a day you take off stay put — move them from the board.</p></div>
+      <div class="card"><h2 style="margin-top:0">Courier partner</h2>
+        <p class="muted">A courier at an agreed price per zone (Metrobi, or a messenger company's rate sheet). "Send by courier" on the board emails them the job.
+          The customer always pays the zone fee; this is your cost.</p>
+        <form method="POST" action="/admin/delivery/settings/partner">
+          <div class="row"><div><label>Name</label><input name="name" maxlength="80" value="${escEmail(p.name || '')}" placeholder="Metrobi"></div>
+            <div><label>Dispatch email</label><input type="email" name="email" maxlength="200" value="${escEmail(p.email || '')}"></div></div>
+          <label>Dispatch phone</label><input name="phone" maxlength="40" value="${escEmail(p.phone || '')}">
+          ${cfg.zones.length ? `<label>Their price per delivery, by zone ($)</label>
+            ${cfg.zones.map((z) => `<div class="row"><div style="padding-top:10px">${escEmail(z.name)} <span class="muted">(you charge ${money(DELIV.zoneFee(z))})</span></div>
+              <div><input name="cost_${z.id}" inputmode="decimal" value="${p.costs && p.costs[z.id] != null ? Number(p.costs[z.id]).toFixed(2) : ''}" placeholder="e.g. 12.00"></div></div>`).join('')}` : '<p class="muted">Add zones first, then their price per zone.</p>'}
+          <button type="submit" class="btn" style="margin-top:10px">Save courier partner</button></form></div>`;
+    res.send(adminPage('Delivery settings', body, 'delivery'));
+  } catch (e) {
+    console.error('delivery settings failed:', e.message);
+    res.status(500).send(adminPage('Delivery settings', `${pageHeader('Delivery settings')}<div class="card"><div class="warn">Settings could not be loaded. Refresh to try again.</div></div>`, 'delivery'));
+  }
+});
+
+/* What a refused settings save says, by number: the page shows only these,
+   so a crafted link cannot put words of its own on the owner's screen. */
+const DELIVERY_SETTINGS_ERRORS = [
+  'That did not save. Please try again.',
+  'Give the zone a name and a fee of $500 or less.',
+  'Local delivery is at least $20. Set the zone fee to $20 or more.',
+  'List at least one 5-digit ZIP code for the zone.',
+  'Pick a day of the week.',
+  'The window must end after it starts.',
+  'Capacity is a whole number from 0 to 100.',
+  'Pick a date.',
+  'That dispatch email does not look right.',
+];
+function settingsBack(res, r) {
+  if (!(r && r.ok === false)) return res.redirect('/admin/delivery/settings?flash=saved');
+  const n = Math.max(0, DELIVERY_SETTINGS_ERRORS.indexOf(r.reason));
+  return res.redirect(`/admin/delivery/settings?err=${n}`);
+}
+
+app.post('/admin/delivery/settings/zone', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  try {
+    settingsBack(res, await DELIVERY.saveZone({ id: /^\d+$/.test(String(b.id || '')) ? Number(b.id) : null,
+      name: b.name, fee: b.fee, zips: b.zips, active: b.active === '1', sort: parseInt(b.sort, 10) || 0 }));
+  } catch (e) { console.error('zone save failed:', e.message); settingsBack(res, { ok: false, reason: 'That did not save. Please try again.' }); }
+});
+
+app.post('/admin/delivery/settings/zone/:id/delete', requireAdmin, async (req, res) => {
+  try { await DELIVERY.deleteZone(req.params.id); settingsBack(res); }
+  catch (e) { console.error('zone delete failed:', e.message); settingsBack(res, { ok: false, reason: 'That did not save. Please try again.' }); }
+});
+
+app.post('/admin/delivery/settings/window', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  try {
+    settingsBack(res, await DELIVERY.saveWindow({ weekday: parseInt(b.weekday, 10), start: b.start, end: b.end,
+      capacity: parseInt(b.capacity, 10), active: true }));
+  } catch (e) { console.error('window save failed:', e.message); settingsBack(res, { ok: false, reason: 'That did not save. Please try again.' }); }
+});
+
+app.post('/admin/delivery/settings/window/:id/delete', requireAdmin, async (req, res) => {
+  try { await DELIVERY.deleteWindow(req.params.id); settingsBack(res); }
+  catch (e) { console.error('window delete failed:', e.message); settingsBack(res, { ok: false, reason: 'That did not save. Please try again.' }); }
+});
+
+app.post('/admin/delivery/settings/blackout', requireAdmin, async (req, res) => {
+  try { settingsBack(res, await DELIVERY.addBlackout(String((req.body || {}).date || ''), (req.body || {}).note)); }
+  catch (e) { console.error('blackout save failed:', e.message); settingsBack(res, { ok: false, reason: 'That did not save. Please try again.' }); }
+});
+
+app.post('/admin/delivery/settings/blackout/delete', requireAdmin, async (req, res) => {
+  try { await DELIVERY.removeBlackout(String((req.body || {}).date || '')); settingsBack(res); }
+  catch (e) { console.error('blackout delete failed:', e.message); settingsBack(res, { ok: false, reason: 'That did not save. Please try again.' }); }
+});
+
+app.post('/admin/delivery/settings/partner', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const costs = {};
+  for (const [k, v] of Object.entries(b)) {
+    const m = /^cost_(\d{1,9})$/.exec(k);
+    if (m) costs[m[1]] = v;
+  }
+  try { settingsBack(res, await DELIVERY.savePartner({ name: b.name, email: b.email, phone: b.phone, costs })); }
+  catch (e) { console.error('partner save failed:', e.message); settingsBack(res, { ok: false, reason: 'That did not save. Please try again.' }); }
 });
 
 // ─── 404 catch-all (HTML pages) ──────────────────────────────────────────────

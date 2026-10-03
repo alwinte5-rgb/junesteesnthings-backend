@@ -412,7 +412,7 @@ test('the menu, the dashboard and the morning email all say what is waiting', ()
 
 test('the new-order email opens with SHIP or PICKUP, and a pickup is told it is ready, not on its way', () => {
   const note = route("app.post('/api/order-notification'");
-  assert.match(note, /\(delivery\.method === 'pickup' \? ' — PICKUP' : ' — SHIP'\)/);
+  assert.match(note, /\(delivery\.method === 'pickup' \? ' — PICKUP' : delivery\.method === 'local' \? ' — LOCAL DELIVERY' : ' — SHIP'\)/);
   const shipped = route("app.post('/api/order-shipped'");
   assert.match(shipped, /if \(status === 'shipped' && pickup\) await sendEmail\(\{/);
   assert.match(shipped, /is ready for pickup 🎉/);

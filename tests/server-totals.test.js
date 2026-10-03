@@ -97,7 +97,7 @@ test('every figure is worked out from the lines, whatever total the quote carrie
 const SAVE = route("app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin");
 
 test('saving a quote takes no money figure from the request', () => {
-  for (const f of ['total', 'subtotal', 'tax', 'deposit', 'paid_amount', 'line_total', 'amount']) {
+  for (const f of ['total', 'subtotal', 'tax', 'deposit', 'paid_amount', 'line_total', 'amount', 'delivery_fee']) {
     const reads = new RegExp(`\\b(?:b|req\\.body)\\.${f}\\b|\\b(?:b|req\\.body)\\[['"\`]${f}['"\`]`);
     assert.doesNotMatch(SAVE, reads, `the save route reads ${f} from the request`);
   }
@@ -107,7 +107,10 @@ test('what a saved quote stores is worked out from its lines', () => {
   /* Optional lines are left out until the customer ticks them. */
   assert.match(SAVE, /const subtotal = round2\(items\.filter\(\(i\) => !i\.optional\)\.reduce\(\(a, i\) => a \+ i\.line_total, 0\)\);/);
   assert.match(SAVE, /const tax = quoteTax\(net, taxable\);/);
-  assert.match(SAVE, /const total = round2\(net \+ tax\);/);
+  /* A delivery booked at Accept stays on the job through later edits; the fee
+     is read from the stored quote, never from the request. */
+  assert.match(SAVE, /SELECT delivery_fee FROM quotes WHERE code = \$1/);
+  assert.match(SAVE, /const total = round2\(net \+ tax \+ keptDeliveryFee\);/);
   assert.match(SAVE, /const deposit = depositFor\(total\);/);
 });
 

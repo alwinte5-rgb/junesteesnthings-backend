@@ -37,6 +37,7 @@ function daysSince(at, now = Date.now()) {
  *  'pending'   a label purchase Shippo was still making (never buy another)
  *  'labelled'  label bought, not yet marked shipped (the customer has no tracking)
  *  'pickup'    paid, being collected, not yet ready
+ *  'local'     paid, going by local delivery: the delivery board's, never a label
  *  'held'      paid on a tax certificate the shop has not checked: don't produce
  *  'shipped'   marked shipped (or ready to collect), or complete
  *  'unpaid' | 'refunded' | 'gone'  not work for this page */
@@ -44,13 +45,15 @@ function studioShipState(o) {
   const status = String(o.status || '').toLowerCase();
   const paid = Number(o.paid || 0);
   const refunded = Number(o.refunded || 0);
-  const method = o.delivery && o.delivery.method === 'pickup' ? 'pickup' : 'ship';
+  const m = o.delivery && o.delivery.method;
+  const method = m === 'pickup' || m === 'local' ? m : 'ship';
   if (status === 'cancel') return 'gone';
   if (refunded > 0 && refunded >= paid - 0.005) return 'refunded';
   if (status === 'shipped' || status === 'complete') return 'shipped';
   if (!(paid > 0)) return 'unpaid';
   if (String(o.tax_exempt || '') === 'pending') return 'held';
   if (method === 'pickup') return 'pickup';
+  if (method === 'local') return 'local';
   if (o.label && o.label.label_url) return 'labelled';
   if (o.label_pending) return 'pending';
   return 'to-ship';
@@ -84,8 +87,9 @@ function studioShipQueues(orders, now = Date.now()) {
 
 /** How a studio order leaves, in the shop's words, for the page and the emails. */
 function deliveryPhrase(d, money) {
-  if (!d || d.method !== 'pickup' && d.method !== 'ship') return '';
+  if (!d || !['pickup', 'ship', 'local'].includes(d.method)) return '';
   if (d.method === 'pickup') return 'Pickup — free curbside pickup, no label needed';
+  if (d.method === 'local') return `Local delivery — we drive it, no label needed${d.paid ? ` (they paid ${money(d.paid)})` : ''}`;
   if (d.source === 'rate' && d.service) return `Ship by ${d.service} — they paid ${money(d.paid || 0)} postage`;
   if (d.source === 'free') return 'Ship — free shipping, so the postage is yours';
   if (d.source === 'flat') return `Ship — flat ${money(d.paid || 0)} charged (live rates were down at checkout)`;
