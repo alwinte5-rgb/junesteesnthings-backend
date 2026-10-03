@@ -15,7 +15,7 @@ const D = require('./delivery');
 
 const BOOKING_COLS = `id, ref, zone_id, zone_name, fee, to_char(date, 'YYYY-MM-DD') AS date, window_id,
   window_label, window_start, address, name, phone, email, status, hold_expires_at,
-  to_char(ready_by, 'YYYY-MM-DD') AS ready_by, courier, history, notes, created_at, updated_at`;
+  to_char(ready_by, 'YYYY-MM-DD') AS ready_by, courier, courier_quote, history, notes, created_at, updated_at`;
 
 /* studio:<order id>, quote:<code>, or cart:<hex> — a studio buyer's seat
    while they pay, before there is an order number (see /api/delivery/attach). */
@@ -83,6 +83,11 @@ function createDeliveryStore(pool) {
                         ON delivery_bookings (ref) WHERE status <> 'cancelled'`);
     await pool.query(`CREATE INDEX IF NOT EXISTS delivery_bookings_slot_idx
                         ON delivery_bookings (date, window_id) WHERE status <> 'cancelled'`);
+    /* An on-demand courier's live price (Uber), kept until it expires so the
+       shop books at the price it was shown: {partner, id, fee, expires, eta}. */
+    await pool.query('ALTER TABLE delivery_bookings ADD COLUMN IF NOT EXISTS courier_quote JSONB');
+    await pool.query(`CREATE INDEX IF NOT EXISTS delivery_bookings_courier_id_idx
+                        ON delivery_bookings ((courier->>'id')) WHERE courier IS NOT NULL`);
     await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS delivery_bookings_token_uq
                         ON delivery_bookings (token_hash) WHERE token_hash IS NOT NULL`);
   }
@@ -338,6 +343,59 @@ function createDeliveryStore(pool) {
     return rows[0] || null;
   }
 
+  async function setCourierQuote(id, q) {
+    const { rows } = await pool.query(
+      `UPDATE delivery_bookings SET courier_quote=$2::jsonb, updated_at=NOW()
+        WHERE id=$1 AND status IN ('confirmed', 'out') RETURNING ${BOOKING_COLS}`,
+      [Number(id) || 0, q ? JSON.stringify(q) : null]);
+    return rows[0] || null;
+  }
+
+  /** An on-demand courier booked: the courier record carries its id, live
+   *  status and tracking link; the quote it was booked at is spent. */
+  async function setCourierBooked({ id, partner, cost, courierId, status, tracking, by }) {
+    const c = { partner: String(partner || '').slice(0, 80), cost: cost == null ? null : D.money2(cost),
+      id: String(courierId || '').slice(0, 80), status: String(status || '').slice(0, 40),
+      tracking_url: /^https:\/\/[^\s"'<>]+$/.test(String(tracking || '')) ? String(tracking) : '',
+      sent_at: new Date().toISOString(), by: String(by || '').slice(0, 80) };
+    const entry = D.historyEntry({ by, action: 'courier', to: c.partner, note: cost == null ? '' : `booked at $${D.money2(cost).toFixed(2)}` });
+    const { rows } = await pool.query(
+      `UPDATE delivery_bookings SET courier=$2::jsonb, courier_quote=NULL, history = history || $3::jsonb, updated_at=NOW()
+        WHERE id=$1 AND status IN ('confirmed', 'out') AND courier IS NULL RETURNING ${BOOKING_COLS}`,
+      [Number(id) || 0, JSON.stringify(c), JSON.stringify([entry])]);
+    return rows[0] || null;
+  }
+
+  async function byCourierId(courierId) {
+    const { rows } = await pool.query(
+      `SELECT ${BOOKING_COLS} FROM delivery_bookings WHERE courier->>'id' = $1 ORDER BY id DESC LIMIT 1`,
+      [String(courierId || '').slice(0, 80)]);
+    return rows[0] || null;
+  }
+
+  /** The courier's own status moved (a webhook): recorded on the courier, with history. */
+  async function setCourierStatus(id, status, extra = {}) {
+    const patch = { status: String(status || '').slice(0, 40) };
+    if (extra.tracking_url && /^https:\/\/[^\s"'<>]+$/.test(String(extra.tracking_url))) patch.tracking_url = String(extra.tracking_url);
+    const entry = D.historyEntry({ by: 'courier', action: 'courier ' + patch.status, note: extra.note || '' });
+    const { rows } = await pool.query(
+      `UPDATE delivery_bookings SET courier = courier || $2::jsonb, history = history || $3::jsonb, updated_at=NOW()
+        WHERE id=$1 AND courier IS NOT NULL AND COALESCE(courier->>'status','') <> $4 RETURNING ${BOOKING_COLS}`,
+      [Number(id) || 0, JSON.stringify(patch), JSON.stringify([entry]), patch.status]);
+    return rows[0] || null;
+  }
+
+  /** The courier was called off (cancelled at Uber, or by them): the booking
+   *  is the team's again. */
+  async function clearCourier(id, by, note) {
+    const entry = D.historyEntry({ by, action: 'courier removed', note });
+    const { rows } = await pool.query(
+      `UPDATE delivery_bookings SET courier=NULL, courier_quote=NULL, history = history || $2::jsonb, updated_at=NOW(),
+              status = CASE WHEN status='out' THEN 'confirmed' ELSE status END
+        WHERE id=$1 RETURNING ${BOOKING_COLS}`, [Number(id) || 0, JSON.stringify([entry])]);
+    return rows[0] || null;
+  }
+
   /** Everything the board shows: live from yesterday on, plus the last 14 days done. */
   async function boardBookings() {
     const { rows } = await pool.query(
@@ -441,6 +499,7 @@ function createDeliveryStore(pool) {
   return {
     ensureSchema, loadConfig, options, offered, book, confirm, byId, byRef, byToken, newLink,
     move, setStatus, cancelRef, setReadyBy, setCourier, boardBookings, bookingsOn,
+    setCourierQuote, setCourierBooked, byCourierId, setCourierStatus, clearCourier,
     saveZone, deleteZone, saveWindow, deleteWindow, addBlackout, removeBlackout, savePartner,
   };
 }

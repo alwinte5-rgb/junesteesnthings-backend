@@ -206,6 +206,10 @@ const pool = new Pool({
 /* Every delivery booking is made, moved and freed through this one store,
    whichever checkout asked (tools/lib/delivery-store.js). */
 const DELIVERY = createDeliveryStore(pool);
+/* Uber Direct, the on-demand courier booked from the delivery board at its
+   live price (tools/lib/uber-direct.js). Off until its three keys are set. */
+const UBER = require('./tools/lib/uber-direct').createUberDirect();
+const { uberStatus } = require('./tools/lib/uber-direct');
 
 async function initDB() {
   await pool.query(`
@@ -23943,7 +23947,9 @@ async function notifyDelivery(b, kind, { note = '' } = {}) {
     await sendDeliveryMail(b, `${what} is out for delivery`, deliveryEmailHtml({
       heading: 'Out for delivery today',
       paragraphs: [`${hi} ${escEmail(what)} is on its way to ${where}, ${escEmail(b.window_label || 'today')}.`,
+        ...(b.courier && b.courier.partner ? [`Our courier partner, ${escEmail(b.courier.partner)}, is bringing it.`] : []),
         `Questions? Text or call ${SHOP_PHONE}.`],
+      link: b.courier && b.courier.tracking_url ? b.courier.tracking_url : '', linkLabel: 'Track the courier',
     }), 'delivery-out');
     if (b.phone) {
       await sendCustomerSms({ phone: b.phone, kind: 'transactional', ref: smsRef, quote: quoteCode,
@@ -24195,6 +24201,11 @@ const DELIVERY_FLASH = {
   cancelled: 'Cancelled, and the seat is free again.',
   confirmed: 'Back to booked.',
   courier: 'Sent to the courier.',
+  uberquoted: "Uber's price is below. Book it before it expires, or get a new one.",
+  uberbooked: 'Uber is booked. Its courier status shows on the delivery, and the customer is told when it is picked up.',
+  ubercancelled: 'The courier is cancelled. The delivery is back with the team.',
+  nouber: 'Uber Direct is not set up: it needs UBER_DIRECT_CLIENT_ID, UBER_DIRECT_CLIENT_SECRET and UBER_DIRECT_CUSTOMER_ID on the server.',
+  uberexpired: "That Uber price has expired. Get a new one; Uber's prices move.",
   daymoved: 'Every delivery that day was moved, and each customer has been told.',
   booked: 'Booked, and the customer has been told.',
   saved: 'Saved.',
@@ -24204,6 +24215,8 @@ const DELIVERY_FLASH = {
 };
 
 function deliveryFlash(req) {
+  const note = _uberNotes.get(String(req.query.note || ''));
+  if (note) return `<div class="warn">${escEmail(note.text)}</div>`;
   const k = String(req.query.flash || '');
   const e = String(req.query.e || '');
   if (e) return `<div class="warn">${escEmail(DELIV.SLOT_PROBLEMS[e] ? DELIV.slotProblem(e) : (DELIVERY_FLASH[e] || DELIVERY_FLASH.failed))}</div>`;
@@ -24214,6 +24227,22 @@ const DELIVERY_STATUS_PILL = {
   held: ['Paying', 'amber'], confirmed: ['Booked', 'blue'], out: ['Out', 'green'],
   delivered: ['Delivered', 'neutral'], cancelled: ['Cancelled', 'red'],
 };
+
+/** Uber on a booking with no courier yet: ask for its price, or — with a
+ *  price still good — book at that price. Its price moves with demand, so it
+ *  is never booked without the shop seeing the figure first. */
+function uberControls(b) {
+  if (!UBER.configured()) return '';
+  const q = b.courier_quote && b.courier_quote.partner === 'Uber Direct' ? b.courier_quote : null;
+  const live = q && (!q.expires || new Date(q.expires).getTime() > Date.now() + 30e3);
+  const until = live && q.expires ? new Date(q.expires).toLocaleTimeString('en-US', { timeZone: DELIV.SHOP_TZ, hour: 'numeric', minute: '2-digit' }) : '';
+  const margin = live ? DELIV.money2(Number(b.fee) - Number(q.fee)) : null;
+  return live
+    ? `<form method="POST" action="/admin/delivery/job/${b.id}/uber-book"><button type="submit" class="btn">Book Uber for ${money(q.fee)}</button></form>
+       <span class="muted" style="font-size:12px;align-self:center">price good until ${escEmail(until)} &middot; you ${margin >= 0 ? 'keep' : 'lose'} ${money(Math.abs(margin))}</span>
+       <form method="POST" action="/admin/delivery/job/${b.id}/uber-quote"><button type="submit" class="btn btn-ghost">New Uber price</button></form>`
+    : `<form method="POST" action="/admin/delivery/job/${b.id}/uber-quote"><button type="submit" class="btn btn-ghost">Uber: get a price</button></form>`;
+}
 
 function deliveryCard(b, { partner, actions = true } = {}) {
   const [label, tone] = DELIVERY_STATUS_PILL[b.status] || [b.status, 'neutral'];
@@ -24226,15 +24255,22 @@ function deliveryCard(b, { partner, actions = true } = {}) {
       b.overdue ? ' ' + pill('Past its day', 'red') : ''}${b.courier ? ' ' + pill('Courier: ' + b.courier.partner, 'neutral') : ''}</h3>
     <div class="dmeta"><b>${escEmail(b.phrase || DELIV.bookingPhrase(b))}</b> &middot; ${escEmail(b.zone_name || '')} &middot; fee ${money(b.fee)}<br>
       ${escEmail(b.name || '')}${b.phone ? ` &middot; <a href="tel:${escEmail(b.phone)}">${escEmail(b.phone)}</a>` : ''}<br>
-      ${escEmail(DELIV.addressLine(b.address))}${b.ready_by && b.ready_by > b.date ? `<br><b style="color:#b91c1c">Ready ${escEmail(b.ready_by)} — after the delivery day. Move it.</b>` : ''}
+      ${escEmail(DELIV.addressLine(b.address))}${b.ready_by && b.ready_by > b.date && ['held', 'confirmed', 'out'].includes(b.status) ? `<br><b style="color:#b91c1c">Ready ${escEmail(b.ready_by)} — after the delivery day. Move it.</b>` : ''}
       ${link ? `<br><a href="${link}"${link.startsWith('http') ? ' target="_blank" rel="noopener"' : ''}>Open the order</a>` : ''}</div>
     ${actions && ['confirmed', 'out'].includes(b.status) ? `<div class="dactions">
       ${b.status === 'confirmed' ? act('out', 'Out for delivery', 'btn') : act('confirmed', 'Not out after all')}
       ${act('delivered', 'Delivered')}
       <a class="btn btn-ghost" href="/admin/delivery/job/${b.id}">Move</a>
-      ${!b.courier ? `<form method="POST" action="/admin/delivery/job/${b.id}/courier"><button type="submit" class="btn btn-ghost">Send by courier${
+      ${!b.courier && DELIV.courierReady(partner) ? `<form method="POST" action="/admin/delivery/job/${b.id}/courier"><button type="submit" class="btn btn-ghost">Send by ${escEmail(partner.name)}${
         cost != null ? ` (${money(cost)})` : ''}</button></form>` : ''}
+      ${!b.courier ? uberControls(b) : ''}
     </div>` : ''}
+    ${b.courier && b.courier.id ? `<div class="dmeta" style="margin-top:6px">${escEmail(b.courier.partner)}: <b>${
+      escEmail(uberStatus(b.courier.status).label)}</b>${b.courier.cost != null ? ` &middot; costs you ${money(b.courier.cost)}` : ''}${
+      b.courier.tracking_url ? ` &middot; <a href="${escEmail(b.courier.tracking_url)}" target="_blank" rel="noopener">Track</a>` : ''}
+      ${['confirmed', 'out'].includes(b.status) && !['delivered', 'canceled', 'returned'].includes(b.courier.status)
+        ? `<form method="POST" action="/admin/delivery/job/${b.id}/uber-cancel" style="display:inline;margin:0 0 0 6px">
+            <button type="submit" class="btn btn-ghost" style="padding:3px 10px;font-size:12px">Cancel ${escEmail(b.courier.partner)}</button></form>` : ''}</div>` : ''}
   </div>`;
 }
 
@@ -24455,6 +24491,128 @@ app.post('/admin/delivery/job/:id/courier', requireAdmin, async (req, res) => {
   }
 });
 
+/* ── Uber Direct, booked from the board ──────────────────────────────────────
+   Price first, then book at that price: Uber's moves with demand, so the
+   shop always sees the figure (and what it keeps) before money is spent.
+   Uber's own error message is shown to the shop through a short-lived note
+   id, never through the URL. */
+const _uberNotes = new Map();
+function uberNote(text) {
+  const id = crypto.randomBytes(8).toString('hex');
+  _uberNotes.set(id, { text: String(text).slice(0, 300), at: Date.now() });
+  for (const [k, v] of _uberNotes) if (Date.now() - v.at > 15 * 60e3) _uberNotes.delete(k);
+  return id;
+}
+
+async function deliveryWindowEnd(b) {
+  const cfg = await DELIVERY.loadConfig();
+  const w = cfg.windows.find((x) => Number(x.id) === Number(b.window_id));
+  return w ? w.end_time : null;
+}
+
+app.post('/admin/delivery/job/:id/uber-quote', requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  const back = `/admin/delivery/job/${id}`;
+  if (!UBER.configured()) return res.redirect(back + '?e=nouber');
+  try {
+    const b = await DELIVERY.byId(id);
+    if (!b || !['confirmed', 'out'].includes(b.status) || b.courier) return res.redirect(back + '?e=failed');
+    const q = await UBER.quote(b, { endTime: await deliveryWindowEnd(b) });
+    await DELIVERY.setCourierQuote(id, { partner: 'Uber Direct', ...q, at: new Date().toISOString() });
+    res.redirect(back + '?flash=uberquoted');
+  } catch (e) {
+    console.error(`uber quote for delivery ${id} failed:`, e.message);
+    res.redirect(`${back}?note=${uberNote(e.message)}`);
+  }
+});
+
+app.post('/admin/delivery/job/:id/uber-book', requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  const back = `/admin/delivery/job/${id}`;
+  if (!UBER.configured()) return res.redirect(back + '?e=nouber');
+  try {
+    const b = await DELIVERY.byId(id);
+    if (!b || !['confirmed', 'out'].includes(b.status) || b.courier) return res.redirect(back + '?e=failed');
+    const q = b.courier_quote;
+    /* Only at a price the shop was shown and that is still good. */
+    if (!q || q.partner !== 'Uber Direct' || (q.expires && new Date(q.expires).getTime() <= Date.now())) {
+      return res.redirect(back + '?e=uberexpired');
+    }
+    const d = await UBER.book(b, q, { endTime: await deliveryWindowEnd(b) });
+    const saved = await DELIVERY.setCourierBooked({ id, partner: 'Uber Direct', cost: d.fee, courierId: d.id,
+      status: d.status, tracking: d.tracking_url, by: deliveryActor() });
+    if (!saved) {
+      /* Booked at Uber but not recorded here (someone else booked a courier
+         in the same moment): call this one off so it is not paid for twice. */
+      await UBER.cancel(d.id).catch((err) => console.error('uber cancel after lost race failed:', err.message));
+      return res.redirect(back + '?e=failed');
+    }
+    res.redirect(back + '?flash=uberbooked');
+  } catch (e) {
+    console.error(`uber booking for delivery ${id} failed:`, e.message);
+    res.redirect(`${back}?note=${uberNote(e.message)}`);
+  }
+});
+
+app.post('/admin/delivery/job/:id/uber-cancel', requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  const back = `/admin/delivery/job/${id}`;
+  try {
+    const b = await DELIVERY.byId(id);
+    if (!b || !b.courier || !b.courier.id) return res.redirect(back + '?e=failed');
+    if (b.courier.partner === 'Uber Direct') await UBER.cancel(b.courier.id);
+    await DELIVERY.clearCourier(id, deliveryActor(), `${b.courier.partner} cancelled by the shop`);
+    res.redirect(back + '?flash=ubercancelled');
+  } catch (e) {
+    console.error(`uber cancel for delivery ${id} failed:`, e.message);
+    res.redirect(`${back}?note=${uberNote(e.message)}`);
+  }
+});
+
+/* Uber tells us where its courier is. Verified on the raw bytes before
+   anything is read; answered 200 for anything genuine (even a delivery we
+   do not know), so Uber does not retry it forever. */
+app.post('/webhooks/uber', async (req, res) => {
+  if (!UBER.webhookReady()) return res.status(503).json({ error: 'not configured' });
+  const sig = req.get('x-uber-signature') || req.get('x-postmates-signature') || '';
+  if (!req.rawBody || !UBER.verifyWebhook(req.rawBody, sig)) return res.status(401).json({ error: 'bad signature' });
+  try {
+    const ev = req.body || {};
+    if (String(ev.kind || '') !== 'event.delivery_status') return res.json({ ok: true, ignored: true });
+    const data = ev.data && typeof ev.data === 'object' ? ev.data : {};
+    const deliveryId = String(ev.delivery_id || data.id || '');
+    const status = String(ev.status || data.status || '');
+    const b = deliveryId ? await DELIVERY.byCourierId(deliveryId) : null;
+    if (!b || !status) return res.json({ ok: true, unknown: true });
+    const moved = await DELIVERY.setCourierStatus(b.id, status, { tracking_url: data.tracking_url });
+    if (!moved) return res.json({ ok: true, repeat: true });
+    const u = uberStatus(status);
+    if (u.booking === 'out' && b.status === 'confirmed') {
+      const out = await DELIVERY.setStatus({ id: b.id, status: 'out', by: 'Uber' });
+      if (out) await notifyDelivery(out, 'out');
+    } else if (u.booking === 'delivered') {
+      if (b.status === 'confirmed') await DELIVERY.setStatus({ id: b.id, status: 'out', by: 'Uber' });
+      await DELIVERY.setStatus({ id: b.id, status: 'delivered', by: 'Uber' });
+      if (b.ref.startsWith('quote:')) {
+        await pool.query('UPDATE quotes SET delivered_at = COALESCE(delivered_at, NOW()) WHERE code = $1', [b.ref.slice(6)]);
+      }
+    } else if (u.problem) {
+      /* Uber is not bringing it after all: the delivery is the team's again,
+         and the shop hears straight away, before the customer's window. */
+      if (status === 'canceled') await DELIVERY.clearCourier(b.id, 'Uber', 'Uber cancelled the courier');
+      await sendEmail({ to: SHOP_EMAIL, subject: `⚠️ Uber ${u.label.toLowerCase()}: ${deliveryOrderName(b.ref)} (${DELIV.bookingPhrase(b)})`,
+        html: `<p>Uber says the courier for ${escEmail(deliveryOrderName(b.ref))} was <b>${escEmail(u.label.toLowerCase())}</b>${
+          data.undeliverable_reason ? ` (${escEmail(String(data.undeliverable_reason).slice(0, 200))})` : ''}.</p>
+          <p>The customer is expecting it ${escEmail(DELIV.bookingPhrase(b))}. Drive it, book another courier, or move it — moving tells them.</p>
+          <p><a href="${PUBLIC_BASE_URL}/admin/delivery/job/${b.id}">Open it on the delivery board</a></p>` }).catch(() => {});
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('uber webhook failed:', e.message);
+    res.status(500).json({ error: 'failed' });
+  }
+});
+
 app.post('/admin/delivery/window-courier', requireAdmin, async (req, res) => {
   const date = String((req.body || {}).date || '');
   const wid = Number((req.body || {}).window_id);
@@ -24627,6 +24785,15 @@ app.get('/admin/delivery/settings', requireAdmin, async (req, res) => {
           <input type="date" name="date" required style="width:auto"><input name="note" maxlength="120" placeholder="Why (optional)" style="flex:1 1 160px">
           <button type="submit" class="btn">Add day off</button></form>
         <p class="muted" style="font-size:12.5px">Bookings already on a day you take off stay put — move them from the board.</p></div>
+      <div class="card"><h2 style="margin-top:0">Uber Direct</h2>
+        ${UBER.configured()
+          ? `<p>${pill('Connected', 'green')} Each delivery on the board has <b>Uber: get a price</b>. Uber's price moves with demand, so you see it, and what you keep, before you book.</p>`
+          : `<p>${pill('Not set up', 'amber')} Sign up at <a href="https://direct.uber.com" target="_blank" rel="noopener">direct.uber.com</a>, then put its
+             Customer ID, Client ID and Client secret on the server as <code>UBER_DIRECT_CUSTOMER_ID</code>, <code>UBER_DIRECT_CLIENT_ID</code> and <code>UBER_DIRECT_CLIENT_SECRET</code>.</p>`}
+        <p class="muted" style="font-size:12.5px">Courier updates: in the Uber Direct dashboard, add a webhook to
+          <code>${escEmail(PUBLIC_BASE_URL)}/webhooks/uber</code> for delivery status, and put its signing key on the server as
+          <code>UBER_DIRECT_WEBHOOK_SECRET</code>. ${UBER.webhookReady() ? pill('Signing key set', 'green') : pill('No signing key yet', 'amber')}
+          Without it the board still books Uber, but cannot see pickup or delivery.</p></div>
       <div class="card"><h2 style="margin-top:0">Courier partner</h2>
         <p class="muted">A courier at an agreed price per zone (Metrobi, or a messenger company's rate sheet). "Send by courier" on the board emails them the job.
           The customer always pays the zone fee; this is your cost.</p>

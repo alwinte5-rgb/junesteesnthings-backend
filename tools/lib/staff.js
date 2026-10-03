@@ -46,6 +46,9 @@ const PERMISSIONS = {
   /* Its own toggle because it spends money: each label is charged to the
      owner's Shippo account. In no preset, like Finances: opened on purpose. */
   'shipping.labels':       { group: 'Production', label: 'Buy shipping labels (charged to your Shippo account)', levels: ['off', 'on'] },
+  /* Same reasoning: booking Uber spends the owner's money at a price that
+     moves. In no preset; opened on purpose. */
+  'delivery.courier':      { group: 'Production', label: 'Book Uber couriers (charged to your Uber account)', levels: ['off', 'on'] },
   'reviews.manage':        { group: 'Reviews',    label: 'Manage reviews', levels: ['off', 'on'] },
   'certificates.prescreen':{ group: 'Tax',        label: 'See and attach tax certificates', levels: ['off', 'on'] },
   'certificates.decide':   { group: 'Tax',        label: 'Approve or refuse tax certificates', levels: ['off', 'on'] },
@@ -138,6 +141,9 @@ const ROUTES = {
   'POST /admin/delivery/job/:id/move': 'production.stage',
   'POST /admin/delivery/job/:id/status': 'production.stage',
   'POST /admin/delivery/job/:id/courier': 'production.stage',
+  'POST /admin/delivery/job/:id/uber-quote': 'delivery.courier',
+  'POST /admin/delivery/job/:id/uber-book': 'delivery.courier',
+  'POST /admin/delivery/job/:id/uber-cancel': 'delivery.courier',
   'POST /admin/delivery/window-courier': 'production.stage',
   'POST /admin/delivery/day-move': 'production.stage',
   'GET /admin/delivery/new': 'production.stage',
