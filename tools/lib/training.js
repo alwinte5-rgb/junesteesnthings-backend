@@ -19,16 +19,33 @@
    suggests moving the helper up from Training. Moving them stays the owner's
    decision on /admin/staff.
 
+   Two paths, by the helper's job (staff.training_track): `sales` and
+   `design`. A step lists the tracks it belongs to (sales only when it says
+   nothing), and can carry per-track wording, e.g. `design: { title, hint }`.
+   Keys stay unique across the whole list, so a tick means one thing.
+
    A step can name a `needs` feature that ships later (the end-of-day note,
    proofs). It is hidden until that feature is listed in FEATURES, so nobody
    is asked to do something the workspace cannot do yet. */
 
 /* Features this deploy has. A later PR adds its name here, and the steps
    that wait for it appear. */
-const FEATURES = new Set([]);
+const FEATURES = new Set(['proofs']);
+
+const TRACKS = {
+  sales:  { label: 'Sales', note: 'Leads, quotes, follow-ups and finding new customers.' },
+  design: { label: 'Design', note: 'Print-ready artwork, proofs, social posts in COS, and blog updates.' },
+};
+const DEFAULT_TRACK = 'sales';
+const BOTH = ['sales', 'design'];
+
+/** A track name from anywhere (a form, a row), or the default. */
+function trackOf(t) {
+  return Object.prototype.hasOwnProperty.call(TRACKS, t) ? t : DEFAULT_TRACK;
+}
 
 const STEPS = [
-  { key: 'read:never', type: 'read', article: 'What never to promise',
+  { key: 'read:never', type: 'read', tracks: BOTH, article: 'What never to promise',
     title: 'Read: what never to promise' },
   { key: 'read:lead', type: 'read', article: 'New lead: first reply to quote',
     title: 'Read: how to answer a new lead' },
@@ -40,9 +57,9 @@ const STEPS = [
     title: 'Practice: build a basic screen print quote', hint: 'Follow the tutorial step by step and save it as a draft. Nothing reaches a customer.' },
   { key: 'do:quote', type: 'do', fact: 'quotes',
     title: 'Build your first quote', hint: 'Use the Quote button on a lead so it links back. The owner checks it before it goes out.' },
-  { key: 'do:message', type: 'do', fact: 'messages',
+  { key: 'do:message', type: 'do', tracks: BOTH, fact: 'messages',
     title: 'Write your first customer message', hint: 'From a job page. While you are in training it waits for the owner.' },
-  { key: 'read:proof', type: 'read', article: 'Proof approval',
+  { key: 'read:proof', type: 'read', tracks: BOTH, article: 'Proof approval',
     title: 'Read: proof approval' },
   { key: 'read:deposits', type: 'read', article: 'Chasing deposits and balances',
     title: 'Read: chasing deposits and balances' },
@@ -50,38 +67,60 @@ const STEPS = [
     title: 'Read: tax certificate pre-screen' },
   { key: 'read:social', type: 'read', article: 'Social inbox check (twice a day)',
     title: 'Read: the social inbox check' },
-  { key: 'read:ai', type: 'read', article: 'AI rules',
+  { key: 'read:ai', type: 'read', tracks: BOTH, article: 'AI rules',
     title: 'Read: the AI rules (ChatGPT, image tools)' },
   { key: 'read:prospect', type: 'read', article: 'Finding new leads in quiet time',
     title: 'Read: finding new leads in quiet time' },
   { key: 'quiz:basics', type: 'quiz', quiz: 'basics',
     title: 'Pass the quick quiz', hint: '10 questions, about 5 minutes. Get 8 right. Retake it as often as you need.' },
+  /* The design path: the artwork rules for each method, proofs, COS and the blog. */
+  { key: 'read:screenart', type: 'read', tracks: ['design'], article: 'Screen printing: artwork do\'s and don\'ts',
+    title: 'Read: screen printing artwork' },
+  { key: 'read:dtfart', type: 'read', tracks: ['design'], article: 'DTF: artwork do\'s and don\'ts',
+    title: 'Read: DTF artwork' },
+  { key: 'read:embart', type: 'read', tracks: ['design'], article: 'Embroidery: artwork do\'s and don\'ts',
+    title: 'Read: embroidery artwork' },
+  { key: 'read:patches', type: 'read', tracks: ['design'], article: 'Patches, vinyl and puff print: what to check',
+    title: 'Read: patches, vinyl and puff print' },
+  { key: 'read:proofhow', type: 'read', tracks: ['design'], article: 'Making and sending a proof',
+    title: 'Read: making and sending a proof' },
+  { key: 'do:proof', type: 'do', tracks: ['design'], fact: 'proofs', needs: 'proofs',
+    title: 'Upload your first proof', hint: 'From a job page. The owner checks it before the customer sees it.' },
+  { key: 'read:cos', type: 'read', tracks: ['design'], article: 'Social posts in COS Creator Studio',
+    title: 'Read: social posts in COS Creator Studio' },
+  { key: 'read:blog', type: 'read', tracks: ['design'], article: 'Blog updates: copy and images',
+    title: 'Read: blog updates (copy and images)' },
+  { key: 'quiz:design', type: 'quiz', tracks: ['design'], quiz: 'design',
+    title: 'Pass the artwork quiz', hint: '10 questions, about 5 minutes. Get 8 right. Retake it as often as you need.' },
+  { key: 'signoff:art', type: 'signoff', tracks: ['design'],
+    title: 'Prepares print-ready art correctly', hint: 'The owner checks a few of your files: vectors, colour count, size, transparent background.' },
   { key: 'do:eod', type: 'do', fact: 'eod', needs: 'eod',
     title: 'Send your first end-of-day note', hint: 'Use "Wrap up the day" on My Day.' },
-  { key: 'do:proof', type: 'do', fact: 'proofs', needs: 'proofs',
-    title: 'Upload your first proof', hint: 'From a job page. The owner checks it before the customer sees it.' },
   { key: 'signoff:screenprint', type: 'signoff',
     title: 'Built the practice quote correctly', hint: 'The owner opens your practice draft and checks it against the tutorial.' },
-  { key: 'signoff:handoff', type: 'signoff',
+  { key: 'signoff:handoff', type: 'signoff', tracks: BOTH,
     title: 'Knows when to hand a customer to the owner', hint: 'Discounts, refunds, logos the customer does not own, angry customers.' },
-  { key: 'signoff:ready', type: 'signoff',
+  { key: 'signoff:ready', type: 'signoff', tracks: BOTH,
+    design: { title: 'Ready to send proofs on their own', hint: 'The last step. Proofs and messages go straight to customers from here. The owner decides when to move you up from Training.' },
     title: 'Ready to send small quotes on their own', hint: 'The last step. Commission starts here, on quotes you create from now on. The owner decides when to move you up from Training.' },
 ];
 
 const READY_KEY = 'signoff:ready';
 
-function visibleSteps(features = FEATURES) {
-  return STEPS.filter((s) => !s.needs || features.has(s.needs));
+function visibleSteps(features = FEATURES, track = DEFAULT_TRACK) {
+  const t = trackOf(track);
+  return STEPS.filter((s) => (!s.needs || features.has(s.needs)) && (s.tracks || [DEFAULT_TRACK]).includes(t))
+    .map((s) => (s[t] ? { ...s, ...s[t] } : s));
 }
 
-function stepByKey(key, features = FEATURES) {
-  return visibleSteps(features).find((s) => s.key === key) || null;
+function stepByKey(key, features = FEATURES, track = DEFAULT_TRACK) {
+  return visibleSteps(features, track).find((s) => s.key === key) || null;
 }
 
 /** May this person tick this step? A helper ticks their own reading; only
  *  the owner signs off; "do" steps are never ticked by hand. */
-function mayTick(key, byOwner, features = FEATURES) {
-  const s = stepByKey(key, features);
+function mayTick(key, byOwner, features = FEATURES, track = DEFAULT_TRACK) {
+  const s = stepByKey(key, features, track);
   if (!s) return false;
   if (s.type === 'read') return true;
   if (s.type === 'signoff') return !!byOwner;
@@ -93,8 +132,8 @@ function mayTick(key, byOwner, features = FEATURES) {
  * @param ticks  Map step_key -> { done_at, signed_by } from staff_training
  * @param facts  counts of real work: { leads, quotes, messages, eod, proofs }
  */
-function progress(ticks, facts = {}, features = FEATURES) {
-  const steps = visibleSteps(features).map((s) => {
+function progress(ticks, facts = {}, features = FEATURES, track = DEFAULT_TRACK) {
+  const steps = visibleSteps(features, track).map((s) => {
     const t = ticks.get(s.key);
     const done = s.type === 'do' ? Number(facts[s.fact] || 0) > 0
       : s.type === 'quiz' ? Number((facts.quizzes || {})[s.quiz] || 0) > 0 : !!t;
@@ -178,6 +217,50 @@ const QUIZZES = {
         answer: 2, article: 'Finding new leads in quiet time', why: 'One short, personal message mentioning their team, with an easy yes ("Want a couple of design ideas and a price?"). Never add strangers to the newsletter, and never cold-text.' },
     ],
   },
+  design: {
+    title: 'Artwork quiz: print-ready files and proofs',
+    pass: 8,
+    questions: [
+      { id: 'blurry', q: 'A customer sends a blurry 200-pixel logo from Facebook for a 12-inch back print. What do you do?',
+        choices: ['Upscale it and print it', 'Ask for the original file, or offer to redraw it as a vector (a design fee may apply)',
+          'Print it smaller so the blur shows less', 'Tell them we cannot use it'],
+        answer: 1, article: 'What artwork should I send?', why: 'The best file is a vector. With only a small image, ask for the original or redraw it, and say if a fee applies.' },
+      { id: 'pantone', q: 'A customer wants their logo screen printed in "exactly our brand red". What do you need?',
+        choices: ['Nothing, pick the closest red', 'A screenshot of their website', 'The Pantone number for the red', 'A photo of a shirt they like'],
+        answer: 2, article: 'Screen printing: artwork do\'s and don\'ts', why: 'Never promise an exact colour match without a Pantone number.' },
+      { id: 'colours', q: 'Why does the number of ink colours matter for screen printing?',
+        choices: ['It does not matter', 'Every colour is its own screen, so it changes the price', 'More colours print faster', 'Only white ink costs extra'],
+        answer: 1, article: 'Screen printing: artwork do\'s and don\'ts', why: 'Every ink colour needs its own screen, and the price is banded on the colour count.' },
+      { id: 'glow', q: 'A DTF design has a soft glow and drop shadow behind the text. What do you do?',
+        choices: ['Leave it, DTF prints everything', 'Remove the semi-transparent glow and shadow, or make them solid',
+          'Make the glow bigger', 'Switch it to embroidery'],
+        answer: 1, article: 'DTF: artwork do\'s and don\'ts', why: 'Semi-transparent pixels, glows and soft shadows print as a haze on DTF.' },
+      { id: 'whitebox', q: 'Your DTF file has a white box behind the design. What is wrong?',
+        choices: ['Nothing, white disappears on a white shirt', 'The background must be transparent, or the white box prints too',
+          'It needs to be a JPG', 'It must be 72 dpi'],
+        answer: 1, article: 'DTF: artwork do\'s and don\'ts', why: 'DTF needs a transparent PNG at 300 dpi. A white box behind the design prints as a white box.' },
+      { id: 'embtext', q: 'A left-chest embroidery logo has a tiny tagline under it. What do you do?',
+        choices: ['Shrink it further to fit', 'Keep text at least 0.25 inches tall: enlarge it or drop the tagline (ask the customer)',
+          'Embroider it as is', 'Switch the whole logo to DTF without asking'],
+        answer: 1, article: 'Embroidery: artwork do\'s and don\'ts', why: 'Embroidered text needs to be at least 0.25 inches tall. Small text fills in and cannot be read.' },
+      { id: 'teamlogo', q: 'A parent asks for a design using the Chicago Bulls logo. What do you do?',
+        choices: ['Redraw the logo so it is not an exact copy', 'Design it, it is for personal use', 'Bring it to the owner: we do not print logos the customer does not own',
+          'Find the logo on Google Images'],
+        answer: 2, article: 'What never to promise', why: 'Logos the customer does not own always go to the owner. Offer an original design instead.' },
+      { id: 'typo', q: 'The customer replies "looks great!" to a proof, but you notice their team name is misspelled. What now?',
+        choices: ['Print it, they approved it', 'Fix it quietly and print', 'Point out the spelling, send a corrected proof, and get approval in writing again',
+          'Ask the owner to print it anyway'],
+        answer: 2, article: 'Proof approval', why: 'We print exactly what is approved. A corrected design needs a new proof and a new written approval.' },
+      { id: 'approved', q: 'When can you tick "Proof approved" on a job?',
+        choices: ['When you send the proof', 'When the customer says yes on a phone call', 'Only when you have their approval in writing (email, text or chat), logged as a note',
+          'After 24 hours with no reply'],
+        answer: 2, article: 'Proof approval', why: 'Approval must be in writing and logged on the job before anything goes to print.' },
+      { id: 'blogimg', q: 'You need a photo for a blog post about team shirts. Which can you use?',
+        choices: ['Any photo from Google Images', 'Our own job photos, or stock photos we are licensed to use',
+          'A photo from another print shop\'s website', 'A customer\'s child from their Facebook page'],
+        answer: 1, article: 'Blog updates: copy and images', why: 'Use our own photos (with permission for any customer in them) or licensed stock. Never copy images from the web.' },
+    ],
+  },
 };
 
 /** The quiz as a helper sees it: questions and choices, no answers. */
@@ -214,4 +297,4 @@ function placeholders(text) {
   return [...new Set(out)];
 }
 
-module.exports = { FEATURES, STEPS, READY_KEY, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, visibleSteps, stepByKey, mayTick, progress, placeholders };
+module.exports = { FEATURES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, visibleSteps, stepByKey, mayTick, progress, placeholders };

@@ -40,6 +40,7 @@ const REVREPLY = require('./tools/lib/review-replies');
 const STAFF = require('./tools/lib/staff');
 const TEAM = require('./tools/lib/team-metrics');
 const TRAINING = require('./tools/lib/training');
+const PROOFS = require('./tools/lib/job-proofs');
 const GOOGLE_ADS = require('./tools/lib/google-ads').createClient();
 const GOOGLE_ANALYTICS = require('./tools/lib/google-analytics').createClient();
 
@@ -1113,6 +1114,23 @@ async function initStaffTables() {
       signed_by  INTEGER,
       PRIMARY KEY (staff_id, step_key)
     )`);
+  /* Which training path a helper walks (TRAINING.TRACKS). Every helper
+     before this was a sales helper, hence the default. */
+  await pool.query(`ALTER TABLE staff ADD COLUMN IF NOT EXISTS training_track TEXT NOT NULL DEFAULT 'sales'`);
+  /* Proofs uploaded on a job (tools/lib/job-proofs.js). uploaded_by is the
+     helper, or NULL for the owner; sent_at is set when a message carrying its
+     link actually goes to the customer. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS job_proofs (
+      id          SERIAL PRIMARY KEY,
+      quote_code  TEXT NOT NULL,
+      url         TEXT NOT NULL,
+      name        TEXT,
+      uploaded_by INTEGER,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      sent_at     TIMESTAMPTZ
+    )`);
+  await pool.query('CREATE INDEX IF NOT EXISTS job_proofs_code ON job_proofs (quote_code, created_at)');
   /* Quiz attempts (TRAINING.QUIZZES). Every attempt is kept, so the owner
      sees the first score as well as the pass. Marked on the server. */
   await pool.query(`
@@ -2605,7 +2623,7 @@ async function staffByEmail(email) {
   /* `flags`: the page tips they dismissed and whether training is signed off,
      so adminPage() can show tips without a query of its own. */
   const { rows } = await pool.query(
-    `SELECT s.id, s.name, s.email, s.perms, s.active,
+    `SELECT s.id, s.name, s.email, s.perms, s.active, s.training_track,
             COALESCE((SELECT array_agg(t.step_key) FROM staff_training t
                        WHERE t.staff_id = s.id AND (t.step_key LIKE 'tip:%' OR t.step_key = $2)), '{}') AS flags
        FROM staff s WHERE lower(s.email) = $1`, [email, TRAINING.READY_KEY]);
@@ -2616,7 +2634,7 @@ async function staffByEmail(email) {
     .catch(() => {});
   const flags = s.flags || [];
   return { kind: 'staff', id: s.id, name: s.name, email: s.email, perms: s.perms || {},
-           inTraining: !flags.includes(TRAINING.READY_KEY),
+           inTraining: !flags.includes(TRAINING.READY_KEY), track: TRAINING.trackOf(s.training_track),
            tipsOff: new Set(flags.filter((f) => f.startsWith('tip:')).map((f) => f.slice(4))) };
 }
 
@@ -17046,6 +17064,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
     }).join('');
 
     const messagesCard = await jobMessagesCard(q, req.query);
+    const proofsCard = await jobProofsCard(q, req.query).catch((e) => { console.error('proofs card failed:', e.message); return ''; });
     const certificateCard = await jobCertificateCard(q, req.query);
     const photosCard = jobPhotosCard(q);
     const notesCard = await jobNotesCard(q.code);
@@ -17130,6 +17149,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
       </div>${JOB_COST_SCRIPT}` : ''}
       ${photosCard}
       ${certificateCard}
+      ${proofsCard}
       ${messagesCard}
       ${creditCard}
       ${notesCard}
@@ -17265,6 +17285,106 @@ const MESSAGE_ERRORS = {
   draft: 'This quote is still a draft, so the customer cannot open it yet. Nothing was sent. Open it and send it first.',
 };
 
+/* ── Proofs ───────────────────────────────────────────────────────────────
+   Upload a proof on the job, then "Send this proof" writes the customer
+   message with its link. A helper whose messages need approval has it held
+   for the owner like any other message, with the picture shown there. */
+async function jobProofsCard(q, query) {
+  const cloud = QPHOTOS.cloudName();
+  const canUpload = actorLevel('proofs.upload') === 'on';
+  const canMessage = actorLevel('customers.message') !== 'off';
+  const { rows } = await pool.query('SELECT * FROM job_proofs WHERE quote_code = $1 ORDER BY created_at DESC LIMIT $2',
+    [q.code, PROOFS.MAX_PER_JOB]);
+  if (!rows.length && !canUpload) return '';
+  const roster = rows.some((r) => r.uploaded_by != null) ? await staffRoster().catch(() => []) : [];
+  const flashMsg = { added: 'Proof added. Check it, then send it.', bad: 'That upload could not be used. Upload a JPG, PNG, WebP or PDF.',
+                     full: 'This job has as many proofs as it can hold.' }[String(query.proof_msg || '')];
+  const live = !['held', 'draft'].includes(q.status) && !q.cancelled_at;
+  const item = (r, n) => `<div class="row-i"><span class="row-main" style="display:flex;gap:10px;align-items:center">
+      <a href="${escEmail(r.url)}" target="_blank" rel="noopener"><img src="${escEmail(PROOFS.thumbOf(r.url, cloud))}" alt="Proof"
+        style="width:72px;height:72px;object-fit:contain;border:1px solid #e3e8f2;border-radius:6px;background:#fff"></a>
+      <span><b>${escEmail(r.name || 'Proof')}</b>${n === 0 ? ' ' + pill('latest', 'blue') : ''}
+        <div class="row-sub">${escEmail(whenShort(r.created_at))} &middot; ${escEmail(r.uploaded_by == null ? 'Owner' : nameOf(roster, r.uploaded_by))}</div></span></span>
+      <span class="row-end">${r.sent_at ? pill('sent', 'green') : ''}${canMessage && live
+        ? ` <a class="btn btn-ghost" href="/admin/production/${escEmail(q.code)}?proof=${r.id}#messages">Send this proof</a>` : ''}</span></div>`;
+  return `<div class="card" id="proofs" style="margin-top:14px">
+    <h2 class="card-title">Proofs <span class="muted">${rows.length || ''}</span></h2>
+    ${flashMsg ? `<div class="${query.proof_msg === 'added' ? 'ok' : 'warn'}">${escEmail(flashMsg)}</div>` : ''}
+    ${canUpload ? `<form method="POST" action="/admin/quote/${escEmail(q.code)}/proofs" data-proofform style="margin:0 0 10px">
+      <input type="hidden" name="url"><input type="hidden" name="name">
+      <label class="btn btn-ghost" style="display:inline-block;cursor:pointer">Upload a proof
+        <input type="file" accept="${PROOFS.ACCEPT}" data-prooffile style="display:none"></label>
+      <span class="muted" data-proofstat style="margin-left:8px;font-size:13px">JPG, PNG, WebP or PDF, up to 20 MB. The design on the garment colour, with the print size.</span>
+    </form>
+    <script>
+      (function(){
+        var f = document.querySelector('form[data-proofform]'); if (!f) return;
+        var inp = f.querySelector('[data-prooffile]'), st = f.querySelector('[data-proofstat]');
+        inp.addEventListener('change', function(){
+          var file = inp.files && inp.files[0]; if (!file) return;
+          if (file.size > ${PROOFS.MAX_FILE_BYTES}) { st.textContent = 'That file is over 20 MB.'; return; }
+          st.textContent = 'Uploading…';
+          fetch('/admin/api/proof-signature', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+            .then(function(r){ if (!r.ok) throw new Error('signature'); return r.json(); })
+            .then(function(sig){
+              var fd = new FormData();
+              fd.append('file', file); fd.append('api_key', sig.apiKey); fd.append('timestamp', sig.timestamp);
+              fd.append('folder', sig.folder); fd.append('signature', sig.signature);
+              return fetch('https://api.cloudinary.com/v1_1/' + sig.cloud + '/image/upload', { method: 'POST', body: fd });
+            })
+            .then(function(r){ return r.json(); })
+            .then(function(d){
+              if (!d.secure_url) throw new Error('upload');
+              f.querySelector('[name="url"]').value = d.secure_url;
+              f.querySelector('[name="name"]').value = file.name;
+              f.submit();
+            })
+            .catch(function(){ st.textContent = 'The upload did not work. Try again, or send a smaller JPG or PDF.'; });
+        });
+      })();
+    </script>` : ''}
+    ${rows.length ? `<div class="rows">${rows.map(item).join('')}</div>`
+      : '<p class="muted">No proofs yet. Upload the mockup the customer will approve.</p>'}
+  </div>`;
+}
+
+/* A signature for one upload into the proofs folder. Behind sign-in and the
+   proofs permission, unlike the public one, and it signs nothing the caller
+   chose: the folder and the time are the server's. */
+app.post('/admin/api/proof-signature', requireAdmin, (req, res) => {
+  const apiSecret = process.env.CLOUDINARY_API_SECRET || process.env.CLUDINARY_API_SECRET;
+  const cloud = QPHOTOS.cloudName();
+  if (!apiSecret || !cloud || !process.env.CLOUDINARY_API_KEY) return res.status(503).json({ error: 'Uploads are not set up.' });
+  const timestamp = Math.round(Date.now() / 1000);
+  const signature = cloudinary.utils.api_sign_request({ folder: PROOFS.FOLDER, timestamp }, apiSecret);
+  res.set('Cache-Control', 'no-store');
+  res.json({ signature, timestamp, folder: PROOFS.FOLDER, cloud, apiKey: process.env.CLOUDINARY_API_KEY });
+});
+
+app.post('/admin/quote/:code/proofs', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/production');
+  const b = req.body || {};
+  const url = String(b.url || '');
+  const to = (m) => res.redirect(`/admin/production/${code}?proof_msg=${m}#proofs`);
+  if (!PROOFS.proofUrlOk(url, QPHOTOS.cloudName())) return to('bad');
+  try {
+    const { rows: [q] } = await pool.query('SELECT code FROM quotes WHERE code = $1', [code]);
+    if (!q) return res.redirect('/admin/production');
+    const actor = currentActor();
+    const { rowCount } = await pool.query(
+      `INSERT INTO job_proofs (quote_code, url, name, uploaded_by)
+       SELECT $1, $2, $3, $4 WHERE (SELECT COUNT(*) FROM job_proofs WHERE quote_code = $1) < $5`,
+      [code, url, PROOFS.cleanName(b.name) || null, actor && actor.kind === 'staff' ? actor.id : null, PROOFS.MAX_PER_JOB]);
+    if (!rowCount) return to('full');
+    logActivity(actor || OWNER_ACTOR, 'proof uploaded', { type: 'quote', id: code }, {});
+    return to('added');
+  } catch (err) {
+    console.error(`proof upload on ${code} failed:`, err.message);
+    return to('bad');
+  }
+});
+
 async function jobMessagesCard(q, query) {
   const code = q.code;
   const { rows: history } = await pool.query(
@@ -17298,6 +17418,15 @@ async function jobMessagesCard(q, query) {
     ['Ready for pickup', `${hi}, order ${code} is ready for pickup at ${SMS_PICKUP}.`],
     ...(due > 0 ? [['Balance due', `${hi}, order ${code} has a balance of ${money(due)}. You can pay it online here: ${quoteLink(code)}`]] : []),
   ];
+  /* "Send this proof" on the Proofs card lands here with ?proof=<id>: the
+     message is written for them, with the proof's link, ready to check and send. */
+  let prefill = '';
+  const proofId = intIn(query.proof);
+  if (proofId) {
+    const { rows: [pf] } = await pool.query('SELECT url FROM job_proofs WHERE id = $1 AND quote_code = $2', [proofId, code])
+      .catch(() => ({ rows: [] }));
+    if (pf) prefill = PROOFS.proofMessage({ first, code, url: pf.url });
+  }
   const sent = ['email', 'text'].includes(String(query.sent)) ? String(query.sent) : '';
   const failed = MESSAGE_ERRORS[String(query.msg_err || '')];
   const tone = (st) => ({ delivered: 'green', sent: 'blue', received: 'neutral', sending: 'neutral',
@@ -17334,10 +17463,10 @@ async function jobMessagesCard(q, query) {
           ${radio('email', 'Email', emailWhyNot, true)}
           ${radio('text', 'Text', textWhyNot, !!emailWhyNot)}
         </div>
-        <input name="subject" maxlength="150" value="About your order ${escEmail(code)}" data-subject
+        <input name="subject" maxlength="150" value="${prefill ? `Your proof for order ${escEmail(code)}` : `About your order ${escEmail(code)}`}" data-subject
                style="margin-bottom:8px;padding:10px;font-size:14px">
         <textarea name="body" rows="4" maxlength="5000" placeholder="Write to ${escEmail(first || 'them')}…"
-                  style="font-size:14px;padding:10px"></textarea>
+                  style="font-size:14px;padding:10px">${escEmail(prefill)}</textarea>
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0">${quick.map(([label, t]) =>
           `<button type="button" class="kbtn kbtn-sm" data-fill="${escEmail(t)}">${escEmail(label)}</button>`).join('')}</div>
         <button type="submit" class="btn" style="padding:10px 22px;font-size:14px"${emailWhyNot && textWhyNot ? ' disabled' : ''}>Send</button>
@@ -17401,6 +17530,14 @@ const recentJobMessages = new Map();
 /* Sends one message the shop wrote on the job page. Shared by the page itself
    and by /admin/approvals, which sends a helper's held message once the owner
    says yes. Returns 'sent' or the reason it did not go. */
+/** Proofs whose link went out in a message that was really sent. */
+async function markProofsSent(code, text) {
+  await pool.query(
+    `UPDATE job_proofs SET sent_at = NOW()
+      WHERE quote_code = $1 AND sent_at IS NULL AND strpos($2, url) > 0`, [code, String(text || '')])
+    .catch((e) => console.error(`marking proofs sent on ${code} failed:`, e.message));
+}
+
 async function sendJobMessage({ code, channel, subject, text }) {
   const key = crypto.createHash('sha256').update([code, channel, text].join('|')).digest('hex');
   const now = Date.now();
@@ -17481,6 +17618,7 @@ app.post('/admin/quote/:code/message', requireAdmin, async (req, res) => {
 
   const out = await sendJobMessage({ code, channel, subject, text });
   if (out === 'no-quote') return res.redirect('/admin/production');
+  if (out === 'sent') await markProofsSent(code, text);
   return out === 'sent' ? answer('sent', channel) : answer('msg_err', out);
 });
 
@@ -22054,7 +22192,7 @@ const isoDate = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) 
 
 async function staffRoster({ activeOnly = false } = {}) {
   const { rows } = await pool.query(
-    `SELECT id, name, email, active, perms, commission_pct, last_seen_at, created_at FROM staff
+    `SELECT id, name, email, active, perms, commission_pct, training_track, last_seen_at, created_at FROM staff
       ${activeOnly ? 'WHERE active' : ''} ORDER BY active DESC, name`);
   return rows;
 }
@@ -22148,6 +22286,12 @@ async function renderStaffPage(req, res, extra = '') {
         </form>
       </details>
       <form method="post" action="/admin/staff/${s.id}" class="row" style="margin-top:10px;gap:6px;align-items:center">
+        <input type="hidden" name="action" value="track">
+        <label>Training path <select name="training_track">${Object.entries(TRAINING.TRACKS).map(([k, t]) =>
+          `<option value="${k}"${TRAINING.trackOf(s.training_track) === k ? ' selected' : ''}>${escEmail(t.label)}</option>`).join('')}</select></label>
+        <button type="submit" class="btn btn-ghost">Save</button>
+      </form>
+      <form method="post" action="/admin/staff/${s.id}" class="row" style="margin-top:10px;gap:6px;align-items:center">
         <input type="hidden" name="action" value="commission">
         <label>Commission % <input name="commission_pct" type="number" min="0" max="30" step="0.25"
           value="${escEmail(String(Number(s.commission_pct || 0)))}" style="width:80px"></label>
@@ -22166,11 +22310,14 @@ async function renderStaffPage(req, res, extra = '') {
         <input name="name" placeholder="Name" required maxlength="80">
         <input name="email" type="email" placeholder="Their email (what they sign in with)" required maxlength="254">
         <label>Start as <select name="preset">${presetOptions}</select></label>
+        <label>Training path <select name="training_track">${Object.entries(TRAINING.TRACKS).map(([k, t]) =>
+          `<option value="${k}">${escEmail(t.label)}</option>`).join('')}</select></label>
         <label>Commission % <input name="commission_pct" type="number" min="0" max="30" step="0.25" value="0" style="width:80px"></label>
         <button type="submit">Add</button>
       </form>
       <p class="muted" style="margin-top:8px">${Object.values(STAFF.PRESETS).map((p) =>
-        `<b>${escEmail(p.label)}</b>: ${escEmail(p.note)}`).join('<br>')}</p>
+        `<b>${escEmail(p.label)}</b>: ${escEmail(p.note)}`).join('<br>')}<br>Training paths: ${Object.values(TRAINING.TRACKS).map((t) =>
+        `<b>${escEmail(t.label)}</b> (${escEmail(t.note)})`).join(', ')}</p>
     </div>
     ${cards || emptyState('No helpers yet.')}`, 'team'));
 }
@@ -22188,6 +22335,7 @@ app.post('/admin/staff', requireAdmin, async (req, res) => {
   const name = text(b.name, 80);
   const email = text(b.email, 254).toLowerCase();
   const preset = STAFF.PRESETS[b.preset] ? b.preset : 'training';
+  const track = TRAINING.trackOf(b.training_track);
   const pct = Math.min(30, Math.max(0, Number(b.commission_pct) || 0));
   if (!name || !STAFF.EMAIL_RE.test(email)) return back(res, '/admin/staff', 'err', 'A name and a real email are needed.');
   try {
@@ -22196,8 +22344,8 @@ app.post('/admin/staff', requireAdmin, async (req, res) => {
     }
     /* password_hash predates signing in through Cloudflare; '!' matches no password. */
     await pool.query(
-      `INSERT INTO staff (name, email, password_hash, perms, commission_pct) VALUES ($1, $2, '!', $3, $4)`,
-      [name, email, JSON.stringify(STAFF.presetPerms(preset)), pct]);
+      `INSERT INTO staff (name, email, password_hash, perms, commission_pct, training_track) VALUES ($1, $2, '!', $3, $4, $5)`,
+      [name, email, JSON.stringify(STAFF.presetPerms(preset)), pct, track]);
     return renderStaffPage({ query: { ok: `${name} added as ${STAFF.PRESETS[preset].label}.` } }, res,
       cloudflareStepCard(name, email));
   } catch (err) {
@@ -22232,6 +22380,11 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
       case 'enable':
         await pool.query('UPDATE staff SET active = TRUE WHERE id = $1', [id]);
         return back(res, '/admin/staff', 'ok', `${s.name} can sign in again.`);
+      case 'track': {
+        const track = TRAINING.trackOf(b.training_track);
+        await pool.query('UPDATE staff SET training_track = $2 WHERE id = $1', [id, track]);
+        return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is on the ${TRAINING.TRACKS[track].label} training path.`);
+      }
       case 'commission': {
         const pct = Math.min(30, Math.max(0, Number(b.commission_pct) || 0));
         await pool.query('UPDATE staff SET commission_pct = $2 WHERE id = $1', [id, pct]);
@@ -22248,6 +22401,17 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
 
 /* ── Approvals ─────────────────────────────────────────────────────────────── */
 
+/** The proof picture for a held message that carries a proof link, so the
+ *  owner checks the artwork, not just the words. */
+function proofPreview(text) {
+  const cloud = QPHOTOS.cloudName();
+  const urls = String(text || '').match(/https:\/\/res\.cloudinary\.com\/[^\s]+/g) || [];
+  const ok = urls.filter((u) => PROOFS.proofUrlOk(u, cloud)).slice(0, 4);
+  return ok.length ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">${ok.map((u) =>
+    `<a href="${escEmail(u)}" target="_blank" rel="noopener"><img src="${escEmail(PROOFS.thumbOf(u, cloud))}" alt="Proof"
+      style="width:140px;height:140px;object-fit:contain;border:1px solid #e3e8f2;border-radius:8px;background:#fff"></a>`).join('')}</div>` : '';
+}
+
 function approvalBody(a, q) {
   const p = a.payload || {};
   if (a.kind === 'quote') {
@@ -22257,7 +22421,7 @@ function approvalBody(a, q) {
   if (a.kind === 'message') {
     return `<div>${p.channel === 'text' ? 'Text' : 'Email'} about <a href="/admin/production/${escEmail(a.subject_id)}#messages">${
       escEmail(a.subject_id)}</a>${p.channel === 'email' ? ` &middot; <b>${escEmail(p.subject || '')}</b>` : ''}</div>
-      <div class="msg" style="white-space:pre-wrap;margin-top:6px">${escEmail(p.text || '')}</div>`;
+      <div class="msg" style="white-space:pre-wrap;margin-top:6px">${escEmail(p.text || '')}</div>${proofPreview(p.text)}`;
   }
   if (a.kind === 'kb') {
     return `<div>Playbook ${p.id ? 'edit' : 'article'}: <b>${escEmail(p.title || '')}</b> (${escEmail(p.kind || '')})</div>
@@ -22376,6 +22540,7 @@ app.post('/admin/approvals/:id', requireAdmin, async (req, res) => {
         sendJobMessage({ code: a.subject_id, channel: p.channel === 'text' ? 'text' : 'email',
                          subject: text(p.subject, 150) || `About your order ${a.subject_id}`, text: text(p.text, 5000) }));
       if (out !== 'sent') { await unclaim(); return back(res, '/admin/approvals', 'err', `Not sent: ${MESSAGE_ERRORS[out] || out}`); }
+      await markProofsSent(a.subject_id, p.text);
       await finish('approved');
       return back(res, '/admin/approvals', 'ok', 'Sent.');
     }
@@ -22515,8 +22680,8 @@ app.get('/admin/team', requireAdmin, async (req, res) => {
         <div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="min-width:12em"><b>${escEmail(s.name)}</b>
           <div class="row-sub" style="white-space:normal">${escEmail(range.label)} &middot; last seen ${escEmail(whenShort(s.last_seen_at))}${
             trainings[i] ? ` &middot; <a href="/admin/training?staff=${s.id}">training ${trainings[i].done}/${trainings[i].total}</a>` : ''}${
-            trainings[i] && trainings[i].complete && STAFF.presetMatching(s.perms) === 'training'
-              ? ` <a href="/admin/staff#staff-${s.id}">${pill('Ready for Supervised →', 'green')}</a>` : ''}</div></span>
+            trainings[i] && trainings[i].complete && NEXT_PRESET[STAFF.presetMatching(s.perms)]
+              ? ` <a href="/admin/staff#staff-${s.id}">${pill(`Ready for ${STAFF.PRESETS[NEXT_PRESET[STAFF.presetMatching(s.perms)]].label} →`, 'green')}</a>` : ''}</div></span>
           <span class="row-end"><a class="btn btn-ghost" href="/admin/activity?who=${s.id}">Activity</a>
             <a class="btn btn-ghost" href="/admin/commission?staff=${s.id}">Commission</a></span></div>
         ${statTiles([
@@ -23601,9 +23766,10 @@ async function trainingFacts(staffId) {
              + (SELECT COUNT(*) FROM sms_messages WHERE sent_by = $1)
              + (SELECT COUNT(*) FROM staff_approvals WHERE requested_by = $1 AND kind = 'message'))::int AS messages`,
     [staffId]);
-  const { rows: q } = await pool.query(
-    'SELECT quiz_key, COUNT(*)::int AS n FROM staff_quiz_attempts WHERE staff_id = $1 AND passed GROUP BY quiz_key', [staffId]);
-  return { ...(f || {}), quizzes: Object.fromEntries(q.map((r) => [r.quiz_key, r.n])) };
+  const [{ rows: q }, { rows: [pr] }] = await Promise.all([
+    pool.query('SELECT quiz_key, COUNT(*)::int AS n FROM staff_quiz_attempts WHERE staff_id = $1 AND passed GROUP BY quiz_key', [staffId]),
+    pool.query('SELECT COUNT(*)::int AS n FROM job_proofs WHERE uploaded_by = $1', [staffId])]);
+  return { ...(f || {}), proofs: pr ? pr.n : 0, quizzes: Object.fromEntries(q.map((r) => [r.quiz_key, r.n])) };
 }
 
 /** A helper's attempts at one quiz, oldest first. */
@@ -23625,11 +23791,20 @@ function quizSummary(attempts) {
   return parts.join(' · ');
 }
 
+/* Where a helper goes once training is signed off, by the preset they trained on. */
+const NEXT_PRESET = { training: 'supervised', design: 'designer' };
+
+/** The training path a helper walks. */
+async function trackFor(staffId) {
+  const { rows: [r] } = await pool.query('SELECT training_track FROM staff WHERE id = $1', [staffId]);
+  return TRAINING.trackOf(r && r.training_track);
+}
+
 async function trainingFor(staffId) {
-  const [ticks, facts] = await Promise.all([
+  const [ticks, facts, track] = await Promise.all([
     pool.query('SELECT step_key, done_at, signed_by FROM staff_training WHERE staff_id = $1', [staffId]),
-    trainingFacts(staffId)]);
-  return TRAINING.progress(new Map(ticks.rows.map((t) => [t.step_key, t])), facts);
+    trainingFacts(staffId), trackFor(staffId)]);
+  return { ...TRAINING.progress(new Map(ticks.rows.map((t) => [t.step_key, t])), facts, undefined, track), track };
 }
 
 /** The owner's notes to a helper: written on /admin/training, or left when
@@ -23674,8 +23849,9 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
         <div class="card">${emptyState('No active helpers yet.', '<a class="btn" href="/admin/staff">Add one</a>')}</div>`, 'training'));
     }
     const who = owner ? roster.find((r) => r.id === staffId) : actor;
-    const titles = TRAINING.visibleSteps().filter((s) => s.article).map((s) => s.article);
-    const quizSteps = TRAINING.visibleSteps().filter((s) => s.type === 'quiz');
+    const track = owner ? TRAINING.trackOf(who.training_track) : TRAINING.trackOf(actor.track);
+    const titles = TRAINING.visibleSteps(undefined, track).filter((s) => s.article).map((s) => s.article);
+    const quizSteps = TRAINING.visibleSteps(undefined, track).filter((s) => s.type === 'quiz');
     const [p, notes, arts, gaps, ...tries] = await Promise.all([
       trainingFor(staffId), coachingNotes(staffId),
       pool.query('SELECT id, title FROM kb_articles WHERE published AND title = ANY($1)', [titles]),
@@ -23711,7 +23887,7 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
     };
     const gapRows = gaps.rows.map((a) => ({ a, holes: TRAINING.placeholders(a.body) })).filter((x) => x.holes.length);
     res.send(adminPage('Training', `
-      ${pageHeader(owner ? `Training — ${who.name}` : 'My training',
+      ${pageHeader(owner ? `Training — ${who.name} (${TRAINING.TRACKS[track].label})` : `My training: ${TRAINING.TRACKS[track].label}`,
         owner ? 'Reading they tick, work ticks itself, and you sign off the rest. Moving them up stays your call on Staff.'
               : 'Work through it in order. Reading you tick, work ticks itself when you do it, and the owner signs off the rest.',
         owner && roster.length > 1 ? roster.map((r) => `<a class="btn ${r.id === staffId ? '' : 'btn-ghost'}" href="/admin/training?staff=${r.id}">${escEmail(r.name)}</a>`).join(' ') : '')}
@@ -23742,19 +23918,25 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
 /* The quiz page. A helper sees the questions without answers and posts them
    back to be marked; the owner sees every question with its answer, and who
    missed what. Answers never reach a helper's page before marking. */
-function quizStep(key) {
-  return TRAINING.visibleSteps().find((s) => s.type === 'quiz' && s.quiz === key) || null;
+function quizStep(key, track = null) {
+  const tracks = track ? [TRAINING.trackOf(track)] : Object.keys(TRAINING.TRACKS);
+  for (const t of tracks) {
+    const s = TRAINING.visibleSteps(undefined, t).find((x) => x.type === 'quiz' && x.quiz === key);
+    if (s) return s;
+  }
+  return null;
 }
 
 app.get('/admin/training/quiz/:key', requireAdmin, async (req, res) => {
   const key = String(req.params.key || '');
-  const z = quizStep(key) && TRAINING.QUIZZES[key];
-  if (!z) return back(res, '/admin/training', 'err', 'No such quiz.');
   const actor = currentActor() || OWNER_ACTOR;
   const owner = actor.kind !== 'staff';
+  const z = quizStep(key, owner ? null : actor.track) && TRAINING.QUIZZES[key];
+  if (!z) return back(res, '/admin/training', 'err', 'No such quiz.');
   try {
     if (owner) {
-      const roster = await staffRoster({ activeOnly: true });
+      const roster = (await staffRoster({ activeOnly: true }))
+        .filter((r) => TRAINING.visibleSteps(undefined, r.training_track).some((x) => x.quiz === key));
       const tries = await Promise.all(roster.map((r) => quizAttempts(r.id, key)));
       const missedBy = new Map();
       roster.forEach((r, i) => { const last = tries[i][tries[i].length - 1];
@@ -23794,7 +23976,7 @@ app.post('/admin/training/quiz/:key', requireAdmin, async (req, res) => {
   const actor = currentActor();
   const key = String(req.params.key || '');
   if (!actor || actor.kind !== 'staff') return res.redirect(`/admin/training/quiz/${encodeURIComponent(key)}`);
-  if (!quizStep(key)) return back(res, '/admin/training', 'err', 'No such quiz.');
+  if (!quizStep(key, actor.track)) return back(res, '/admin/training', 'err', 'No such quiz.');
   const r = TRAINING.gradeQuiz(key, req.body || {});
   try {
     await pool.query(
@@ -23829,8 +24011,8 @@ app.post('/admin/training/read', requireAdmin, async (req, res) => {
   const actor = currentActor();
   if (!actor || actor.kind !== 'staff') return res.redirect('/admin/training');
   const key = String((req.body || {}).key || '');
-  const s = TRAINING.stepByKey(key);
-  if (!s || s.type !== 'read' || !TRAINING.mayTick(key, false)) return back(res, '/admin/training', 'err', 'Unknown step.');
+  const s = TRAINING.stepByKey(key, undefined, actor.track);
+  if (!s || s.type !== 'read' || !TRAINING.mayTick(key, false, undefined, actor.track)) return back(res, '/admin/training', 'err', 'Unknown step.');
   try {
     await pool.query(`INSERT INTO staff_training (staff_id, step_key) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [actor.id, key]);
     return back(res, '/admin/training', 'ok', `Ticked: ${s.title}.`);
@@ -23845,10 +24027,11 @@ app.post('/admin/training/signoff', requireAdmin, async (req, res) => {
   const b = req.body || {};
   const staffId = intIn(b.staff_id);
   const key = String(b.key || '');
-  const s = TRAINING.stepByKey(key);
   const to = `/admin/training?staff=${staffId || ''}`;
-  if (!staffId || !s || s.type !== 'signoff' || !TRAINING.mayTick(key, true)) return back(res, to, 'err', 'Unknown step.');
   try {
+    const track = staffId ? await trackFor(staffId) : null;
+    const s = track && TRAINING.stepByKey(key, undefined, track);
+    if (!staffId || !s || s.type !== 'signoff' || !TRAINING.mayTick(key, true, undefined, track)) return back(res, to, 'err', 'Unknown step.');
     const { rows: [st] } = await pool.query('SELECT id FROM staff WHERE id = $1', [staffId]);
     if (!st) return back(res, '/admin/training', 'err', 'No such helper.');
     if (b.undo) {
@@ -24304,6 +24487,71 @@ const KB_ADDED = [
 `- Dark garment ticked, 1 ink colour, front only\n` +
 `- Each $ left blank, so the system priced it\n` +
 `- Saved as a draft, with no phone or email` },
+  /* The design training path (TRAINING.TRACKS.design): proofs, COS and the
+     blog. Drafts for the owner to check (needsReview). */
+  { kind: 'sop', title: 'Making and sending a proof', needsReview: true,
+    tags: 'proof, mockup, upload, send, designer, approval',
+    body: `A proof is the picture the customer approves before anything is printed. We print exactly what they approve, so check it twice.\n\n` +
+`**Make the proof**\n\n` +
+`- Put the design on the garment, in the garment colour they ordered\n` +
+`- Write the print size in inches and the placement (e.g. "Front, 11 in wide, 3 in below the collar")\n` +
+`- Use the ink colours that are on the quote. More colours than the quote changes the price, so ask the owner first\n` +
+`- Save it as a JPG, PNG or PDF, under 20 MB\n\n` +
+`**Check before you upload**\n\n` +
+`- Spelling of every word, especially names and numbers\n` +
+`- Colours, size and placement match the quote and what the customer asked for\n` +
+`- The art is print-ready: vector or 300 dpi, transparent background for DTF\n\n` +
+`**Upload and send**\n\n` +
+`- Open the job (Production, then the job), find the **Proofs** card, press **Upload a proof**\n` +
+`- Press **Send this proof**. The message is written for you with the proof link. Read it, choose email or text, and press Send\n` +
+`- While you are in training, the message goes to the owner first. They see your proof and send it, or send it back with a note\n\n` +
+`**After**\n\n` +
+`- Changes asked for: make them, upload the new version, and send it again\n` +
+`- Approved: follow "Proof approval". Get it in writing and log it as a note before "Proof approved" is ticked` },
+  { kind: 'sop', title: 'Social posts in COS Creator Studio', needsReview: true,
+    tags: 'cos, social media, posts, instagram, facebook, content, calendar, designer',
+    body: `COS Creator Studio is the platform we use to plan, make and schedule our social posts.\n\n` +
+`**Signing in**\n\n` +
+`- [How the designer signs in to COS, owner to fill in]\n\n` +
+`**1. Add photos and videos (Media Library)**\n\n` +
+`- Upload finished-job photos and short videos\n` +
+`- Give each one a short description (what it is, the print method, the group). COS uses the description to match media to posts\n` +
+`- Use Edit to crop, add a text overlay, or trim a video\n\n` +
+`**2. Make posts (Dashboard)**\n\n` +
+`- Open **Create a Content Plan**\n` +
+`- Choose the content type, the June's Tees posting profile, and the platforms\n` +
+`- Generate the posts, then read every one before it is scheduled\n\n` +
+`**3. Check each post**\n\n` +
+`- Sounds like us: friendly, local, proud of the work\n` +
+`- Spelling, and the right business details\n` +
+`- One clear next step ("Get a quote at jtees.net")\n\n` +
+`**4. Calendar**\n\n` +
+`- Check what is scheduled each day. Posts marked Pending wait for approval\n\n` +
+`**Never post**\n\n` +
+`- A customer's photo, name or design without their permission\n` +
+`- Children's faces without a parent's OK\n` +
+`- Logos the customer does not own, or anything negative about a customer or another shop\n` +
+`- Anything about prices or discounts the owner has not approved` },
+  { kind: 'sop', title: 'Blog updates: copy and images', needsReview: true,
+    tags: 'blog, seo, copy, images, photos, website, designer',
+    body: `Our blog lives at jtees.net/blog. It brings in customers from Google, so every post should answer a real question a customer would search for.\n\n` +
+`**Writing (copy)**\n\n` +
+`- Draft in a Google Doc, one Doc per post, in [shared blog Drive folder, owner to fill in]\n` +
+`- Title: the question or topic in plain words, under 60 characters (e.g. "Custom Team Shirts in Chicago: A Coach's Guide")\n` +
+`- Description: one sentence under 155 characters, for Google\n` +
+`- Short paragraphs and subheadings. Mention Chicago and the print method where it fits\n` +
+`- Link to the page that sells it (screen printing, embroidery, DTF, or the quote form)\n` +
+`- End with one next step: "Get a free quote at jtees.net"\n` +
+`- Check facts against the playbook (turnaround, minimums, deposits). Never promise a price or a date\n\n` +
+`**Images**\n\n` +
+`- Use our own job photos, or stock photos we are licensed to use. Never copy images from Google or other websites\n` +
+`- A customer's photo or design only with their permission. No children's faces without a parent's OK\n` +
+`- 1200 px wide, JPG or WebP, under 300 KB\n` +
+`- Name the file with words (team-shirts-chicago.jpg, not IMG_4432.jpg)\n` +
+`- Write alt text for every image: what it shows, in one short sentence\n\n` +
+`**Publishing**\n\n` +
+`- When the Doc and images are ready, send the Doc link in Team chat. The owner checks it and publishes it to the site\n` +
+`- For an update to an existing post, put the post's address at the top of the Doc and mark what changes` },
   /* Quiet-time prospecting, for the training step and quiz. A draft for the
      owner to check: the daily target is left as a placeholder. */
   { kind: 'sop', title: 'Finding new leads in quiet time', needsReview: true,

@@ -150,6 +150,7 @@ function card({ history = [], smsOn = true, consent = true, q = {} } = {}) {
     balanceOf: () => 0, quoteTotals: () => ({ total: 0 }), money: (n) => '$' + Number(n).toFixed(2),
     quoteLink: (c) => 'https://www.jtees.net/q/' + c, SMS_PICKUP: '3047 N Lincoln Ave',
     SHOP_TZ: 'America/Chicago', console: { error() {} },
+    intIn: () => null, PROOFS: require('../tools/lib/job-proofs'),
   };
   vm.createContext(sandbox);
   vm.runInContext([grab('const MESSAGE_KINDS = {', '};'), grab('const MESSAGE_ERRORS = {', '};'),
@@ -248,7 +249,7 @@ function messageRoute(o = {}) {
     sendClientEmail: async (m) => { sent.push(m); }, customerEmailHtml: () => '', escEmail: (t) => t,
     SHOP_EMAIL: 'shop@example.com', smsPlain: (t) => t, reportError: async () => {},
     console: { log() {}, error() {} },
-    currentActor: () => null, actorLevel: () => 'on',
+    currentActor: () => null, actorLevel: () => 'on', markProofsSent: async () => {},
   };
   vm.createContext(sandbox);
   vm.runInContext(lift('sendJobMessage') + '\n' + route("app.post('/admin/quote/:code/message', requireAdmin") + '\n});', sandbox);
