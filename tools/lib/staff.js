@@ -209,6 +209,7 @@ const ROUTES = {
   'POST /admin/lead/:id/assign': 'leads.view',
   'POST /admin/lead/:id/outcome': 'leads.view',
   'POST /admin/leads/add': 'leads.view',
+  'POST /admin/leads/call': 'leads.view',
   'POST /admin/quote/:code/note': 'quotes.view',
   'POST /admin/tasks': 'any',
   'POST /admin/tasks/:id/done': 'any',

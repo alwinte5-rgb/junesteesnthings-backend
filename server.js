@@ -30,6 +30,7 @@ const { cleanShopFeed } = require('./tools/lib/shop-feed');
 const { legacyRedirect, LEGACY_PATHS } = require('./tools/lib/legacy-redirects');
 const { parseFirstTouch, firstTouchLabel } = require('./tools/lib/first-touch');
 const SITEHEALTH = require('./tools/lib/site-health');
+const NUDGE = require('./tools/lib/lead-nudges');
 const { T: SMS, plain: smsPlain, PICKUP: SMS_PICKUP } = require('./tools/lib/sms-templates');
 const { verifyTwilioSignature, classifyInbound } = require('./tools/lib/twilio-webhook');
 const TAXCERT = require('./tools/lib/tax-certificates');
@@ -1137,6 +1138,10 @@ async function initStaffTables() {
     'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS outcome TEXT',
     'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS platform TEXT',
     'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS profile_url TEXT',
+    /* Speed to lead (tools/lib/lead-nudges.js): when the owner was texted
+       that this lead was still waiting, after 2 working hours and after 24h. */
+    'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS unanswered_2h_at TIMESTAMPTZ',
+    'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS unanswered_24h_at TIMESTAMPTZ',
   ]) await pool.query(sql);
   /* Sales credit not yet decided falls to the helper who sent or built it.
      0 (the owner's own sale) is a decision, so it is never overwritten. */
@@ -17508,6 +17513,38 @@ async function leadsWithStatus() {
   });
 }
 
+/** Speed to lead (tools/lib/lead-nudges.js): one text to the owner naming the
+ *  leads still waiting 2 working hours, or a day, after they came in. Stamped
+ *  per lead BEFORE sending, so a crash between the two can only lose a text,
+ *  never repeat one. */
+async function nudgeUnansweredLeads(now = Date.now()) {
+  if (!NUDGE.inWorkingHours(now)) return '';
+  const due = NUDGE.dueNudges(await leadsWithStatus(), now);
+  if (!due.first.length && !due.second.length) return '';
+  const firstIds = due.first.map((l) => l.id), secondIds = due.second.map((l) => l.id);
+  /* Claimed with IS NULL guards: a second worker running the same sweep gets
+     no rows back and sends nothing. */
+  const { rows: c1 } = firstIds.length ? await pool.query(
+    `UPDATE submissions SET unanswered_2h_at = NOW() WHERE id = ANY($1) AND unanswered_2h_at IS NULL RETURNING id`, [firstIds]) : { rows: [] };
+  const { rows: c2 } = secondIds.length ? await pool.query(
+    `UPDATE submissions SET unanswered_24h_at = NOW(), unanswered_2h_at = COALESCE(unanswered_2h_at, NOW())
+      WHERE id = ANY($1) AND unanswered_24h_at IS NULL RETURNING id`, [secondIds]) : { rows: [] };
+  const got = new Set([...c1, ...c2].map((r) => r.id));
+  const claimed = { first: due.first.filter((l) => got.has(l.id)), second: due.second.filter((l) => got.has(l.id)) };
+  const body = NUDGE.nudgeText(claimed, { now, sourceLabel: (s) => (LEAD_SOURCES[s] || LEAD_SOURCES.form)[0],
+    link: `${PUBLIC_BASE_URL}/admin/leads` });
+  if (!body) return '';
+  /* Texted when Twilio is set up; otherwise (or if the text fails) the same
+     words by email, so the nudge is never just a log line. */
+  const sent = await sendOwnerSms(body).catch((e) => { console.error('lead nudge text failed:', e.message); return false; });
+  if (!sent) {
+    await alertShop(`⏰ ${got.size} lead${got.size === 1 ? '' : 's'} still waiting for a reply`,
+      `<p style="font-size:15px">${escEmail(body)}</p>
+       <p><a href="${PUBLIC_BASE_URL}/admin/leads" style="background:#1848B8;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;display:inline-block">Open Leads</a></p>`);
+  }
+  return `${got.size} waiting lead${got.size === 1 ? '' : 's'} ${sent ? 'texted' : 'emailed'} to the owner`;
+}
+
 /** The leads nobody has answered: not quoted, not let go. Newest first. */
 async function unansweredLeads() {
   return (await leadsWithStatus()).filter((l) => l.lead_status === 'new');
@@ -17519,6 +17556,7 @@ const LEAD_SOURCES = {
   chat:       ['Chat', 'green'],
   offline:    ['Offline message', 'green'],
   social:     ['Social', 'blue'],
+  phone:      ['Phone call', 'amber'],
   manual:     ['Added by hand', 'neutral'],
 };
 
@@ -17611,7 +17649,7 @@ const shopMonth = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: SHO
 app.get('/admin/leads', requireAdmin, async (req, res) => {
   try {
     const STATUSES = ['new', 'quoted', 'dismissed', 'all'];
-    const SOURCES = ['all', 'form', 'embroidery', 'chat', 'social'];
+    const SOURCES = ['all', 'form', 'embroidery', 'chat', 'phone', 'social'];
     const status = STATUSES.includes(String(req.query.status)) ? String(req.query.status) : 'new';
     const source = SOURCES.includes(String(req.query.source)) ? String(req.query.source) : 'all';
     const q = String(req.query.q || '').trim().slice(0, 80);
@@ -17679,6 +17717,7 @@ app.get('/admin/leads', requireAdmin, async (req, res) => {
       { label: 'Website form', href: link({ source: 'form' }), count: count(status, 'form'), on: source === 'form' },
       { label: 'Embroidery', href: link({ source: 'embroidery' }), count: count(status, 'embroidery'), on: source === 'embroidery' },
       { label: 'Chat', href: link({ source: 'chat' }), count: count(status, 'chat'), on: source === 'chat' },
+      { label: 'Phone calls', href: link({ source: 'phone' }), count: count(status, 'phone'), on: source === 'phone' },
       { label: 'Social & added by hand', href: link({ source: 'social' }), count: count(status, 'social'), on: source === 'social' },
     ]);
 
@@ -17693,6 +17732,7 @@ app.get('/admin/leads', requireAdmin, async (req, res) => {
         '<a class="btn" href="/admin/quote/new">New quote</a>')}
       ${flash(req.query)}
       ${tiles}
+      ${logCallForm()}
       ${addLeadForm()}
       ${statusChips}
       ${sourceChips}
@@ -21694,6 +21734,7 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
       return r.filled ? `${r.filled} estimated` : '';
     });
     await step('daily digest', sendDailyDigest);
+    await step('unanswered leads', nudgeUnansweredLeads);
     await step('tax check', taxMonthlyCheck);
     await step('brevo breach check', brevoBreachCheck);
     await step('brevo catch-up', brevoCatchUp);
@@ -22973,7 +23014,8 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
   if (email && !STAFF.EMAIL_RE.test(email)) return back(res, '/admin/leads', 'err', 'That email does not look right.');
   try {
     const actor = currentActor();
-    const source = ['Facebook', 'Instagram', 'TikTok', 'Google'].includes(platform) ? 'social' : 'manual';
+    const source = ['Facebook', 'Instagram', 'TikTok', 'Google'].includes(platform) ? 'social'
+      : platform === 'Phone' ? 'phone' : 'manual';
     const { rows: [l] } = await pool.query(
       `INSERT INTO submissions (name, phone, email, description, source, platform, profile_url, assigned_to)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
@@ -23056,6 +23098,48 @@ function leadWorkPanel(l, notes, roster, actor) {
       </form>
     </div>
   </details>`;
+}
+
+/* A phone call, logged in a few seconds (plan 1e). Calls used to leave no
+   record at all, so a job won on the phone never showed as a lead and a
+   missed call was remembered or not. A call that was answered counts as
+   replied to; one that was missed stays waiting (and is chased like any lead). */
+app.post('/admin/leads/call', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const name = text(b.name, 200);
+  const phone = text(b.phone, 40);
+  const description = text(b.description, 4000);
+  const missed = b.missed === '1';
+  if (!name && !phone) return back(res, '/admin/leads', 'err', 'A call needs a name or a number.');
+  if (phone && phone.replace(/\D/g, '').length < 7) {
+    return back(res, '/admin/leads', 'err', 'That phone number does not look right.');
+  }
+  try {
+    const actor = currentActor();
+    const staffId = actor && actor.kind === 'staff' ? actor.id : null;
+    const { rows: [l] } = await pool.query(
+      `INSERT INTO submissions (name, phone, email, description, source, platform, assigned_to,
+                                first_response_at, first_response_by)
+       VALUES ($1, $2, '', $3, 'phone', 'Phone', $4, ${missed ? 'NULL' : 'NOW()'}, ${missed ? 'NULL' : '$4'}) RETURNING id`,
+      [name || 'Caller', phone, description || null, staffId]);
+    await pool.query(`INSERT INTO lead_notes (submission_id, kind, body, staff_id) VALUES ($1, 'call', $2, $3)`,
+      [l.id, missed ? 'Missed call: call them back.' : 'Phone call taken.', staffId]);
+    return res.redirect(`/admin/leads?source=phone&ok=${encodeURIComponent(missed ? 'Missed call logged: it stays waiting until someone calls back.' : 'Call logged.')}#lead-${l.id}`);
+  } catch (err) {
+    console.error('log call failed:', err.message);
+    return back(res, '/admin/leads', 'err', 'Could not log the call.');
+  }
+});
+
+function logCallForm() {
+  return `<details class="card"><summary><b>Log a call</b> <span class="muted">— someone phoned about an order</span></summary>
+    <form method="post" action="/admin/leads/call" class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px">
+      <input name="name" placeholder="Name" maxlength="200">
+      <input name="phone" type="tel" placeholder="Their number" maxlength="40">
+      <textarea name="description" rows="2" maxlength="4000" placeholder="What they want (items, quantity, date)" style="flex:1 1 100%"></textarea>
+      <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" name="missed" value="1"> I missed it, they need a call back</label>
+      <button type="submit">Log call</button>
+    </form></details>`;
 }
 
 function addLeadForm() {
