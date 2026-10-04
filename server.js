@@ -24621,7 +24621,7 @@ app.get('/admin/hiring/:id', requireAdmin, async (req, res) => {
       actions.push(`<form method="post" action="/admin/hiring/${id}/link" style="display:inline"><button class="btn btn-ghost" type="submit">Make a new link</button></form>`);
       actions.push(`<form method="post" action="/admin/hiring/${id}/cancel" style="display:inline"><button class="btn btn-ghost" type="submit">Cancel the test</button></form>`);
     }
-    if (r.submitted_at) actions.push(`<form method="post" action="/admin/hiring/${id}/grade" style="display:inline"><button class="btn btn-ghost" type="submit">Grade again</button></form>`);
+    if (r.submitted_at) actions.push(`<form method="post" action="/admin/hiring/${id}/grade" style="display:inline" onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Grading, about 30 seconds...'"><button class="btn btn-ghost" type="submit">Grade again</button></form>`);
     actions.push('<a class="btn btn-ghost" href="/admin/hiring">Back to hiring</a>');
     const timeline = [
       `Link made ${whenShort(r.created_at)}`, r.opened_at ? `opened ${whenShort(r.opened_at)}` : 'not opened yet',
