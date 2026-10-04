@@ -24874,8 +24874,8 @@ app.get('/admin/hiring/test', requireAdmin, (req, res) => {
       <ul>${(post ? HIRE_POSTING.labelsFor(post.prefix) : []).map((l) => `<li>${escEmail(l)}</li>`).join('')}
         ${HIRE_POSTING.SHARED_LABELS.map((l) => `<li><b>${escEmail(l.name)}</b>: ${escEmail(l.use)}</li>`).join('')}</ul>
       ${post ? `<p><b>What a top pick for this job has:</b></p><ul>${post.lookFor.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>
-        <p><b>${escEmail(HIRE_POSTING.gemLabel(post.prefix))}: your exceptional applicants.</b> A top pick whose OLJ profile (work history, skills,
-        portfolio, certificates) shows transferable skills like these:</p><ul>${post.gem.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>` : ''}
+        <p><b>${escEmail(HIRE_POSTING.gemLabel(post.prefix))}: your exceptional applicants.</b> Only a Top pick who ALSO shows strong, proven
+        skills that complement this job (not the job itself), in their OLJ profile, portfolio or results, like:</p><ul>${post.gem.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>` : ''}
       <p><b>Rules for every job:</b></p><ul>${HIRE_POSTING.SCREENING.rules.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>
       <p><b>The steps:</b></p><ol>${HIRE_POSTING.SCREENING.steps.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ol></div>`;
   const mc = role.choice.map((x, n) => `<div class="row-i"><span class="row-main" style="white-space:normal">
