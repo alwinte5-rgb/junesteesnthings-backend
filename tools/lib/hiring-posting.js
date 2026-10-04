@@ -76,8 +76,8 @@ June's Tees is a growing US custom apparel and print shop (screen printing, DTF,
 What you'll do
 1. Reply to customer emails, website enquiries and messages quickly, in friendly, clear English
 2. Build quotes in our quote system. It does all the pricing; you put in the right details
-3. Follow up on open quotes so customers don't go quiet
-4. Gather order details: sizes, colors, artwork, deadlines, and delivery or pickup
+3. Follow up on open quotes so customers don't go quiet, and ask past customers about reorders
+4. Gather order details (sizes, colors, artwork, deadlines, delivery or pickup) and reply to our Google reviews
 5. Find new customers in quiet time: schools, sports teams, churches and local businesses that need shirts
 
 You'll do great here if you are
@@ -138,7 +138,7 @@ June's Tees is a growing US custom apparel and print shop (screen printing, DTF,
 What you'll do
 1. Turn customer requests from our sales team into designs and mockups
 2. Prepare print-ready files: vector art, spot-colour separations for screen printing, simplified versions for embroidery, and transparent PNGs for DTF
-3. Send proofs to customers and make their changes quickly and kindly
+3. Send proofs to customers, make their changes quickly and kindly, and follow up when their artwork or approval is late
 4. Redraw low-quality customer logos as clean vector art
 5. In quiet time, create ready-made designs for upcoming seasons and events, and mockups for our website and social media
 
@@ -203,7 +203,7 @@ What you'll do
 2. Build new features in our Node.js/Express + Postgres backend and our PHP/MySQL design studio
 3. Build and publish our iPhone and Android apps (React Native/Expo): TestFlight, App Store Connect and App Store review
 4. Build new projects, including features that use AI (the Claude API), and work alongside Claude Code every day
-5. Write tests for what you change and deploy carefully, and explain progress and problems in plain English to a non-technical owner
+5. Be our QA: write tests for what you change, test every release on real phones and browsers before it goes live, and explain progress and problems in plain English to a non-technical owner
 
 You'll do great here if you are
 - Careful with live systems, customer data, payments and passwords
@@ -305,6 +305,66 @@ ${howToApply('Green Screen', [
   '2–3 sentences on which AI tools you use in editing and how you check their work',
   'A screenshot of your internet speed test (speedtest.net)',
   'Your answer to this, as you\'d really write it:\n   "We have a 30-second clip of a shirt being printed. Describe the first 3 seconds of the TikTok you would make from it."',
+])}`,
+  },
+
+  ads: {
+    prefix: 'Ads',
+    code: 'Red Squeegee',
+    title: 'Part-Time Google & Meta Ads Specialist – Local Custom Apparel Shop (Small Budget, Real Results)',
+    type: 'Part Time', wage: '7', hours: '10', skills: ['Google Ads', 'Facebook Ads', 'Google Analytics'],
+    payNote: 'Check OLJ\'s Suggest-a-Salary box for PPC / ads before posting. Ads specialists usually cost more per hour than VAs; at about 10 hours a week, $7 is a starting point to check against it.',
+    lookFor: [
+      'Real results in numbers from an account they ran: cost per lead or sale, return on ad spend, with the budget',
+      'Google Ads Search experience (keywords, match types, negatives) for a small or local business, not only boosted Facebook posts',
+      'Sets up conversion tracking (Google Ads conversions, GA4, Tag Manager) before spending',
+      'The sample answer spots the wasted clicks and the wrong location, not just "raise the budget"',
+      'A speed test of at least 25 Mbps',
+      'Gem: also builds landing pages, makes ad creative or video, or does SEO',
+    ],
+    body: `Want to prove what a small, well-run ad budget can do? Run Google and Meta ads for a growing Chicago print shop, part-time.
+
+About us
+June's Tees is a growing US custom apparel and print shop in Chicago (screen printing, DTF, embroidery, signs, promo items). We serve schools, sports teams, churches, small businesses and event organizers, and take online orders through our design studio. We're hiring a dependable, long-term ads specialist, part-time, to turn a small monthly budget into quote requests and orders.
+
+What you'll do
+1. Set up and check conversion tracking: quote requests and online orders in Google Ads and GA4
+2. Run Google Search campaigns on the searches most likely to order, with tight targeting and negative keywords
+3. Run small Meta (Facebook and Instagram) campaigns: retargeting and local awareness with our real job photos
+4. Check the search terms and results every week, cut waste, and move budget to what brings orders
+5. Send a short weekly report in plain English: spend, quote requests, orders, and what you changed
+
+You'll do great here if you are
+- Someone who judges ads on orders and profit, not clicks
+- Careful with a small budget: every dollar has a job
+- Honest in ad copy and clear in reports
+- A self-starter who plans seasonal campaigns ahead
+
+Tools you'll use
+Google Ads, Google Analytics 4, Google Tag Manager, Meta Ads Manager, Google Sheets, and our staff dashboard. We'll give you access to everything.
+
+Nice to have: landing page building; ad creative and short video; SEO; email marketing; experience with local service businesses.
+
+Schedule
+- About 10 hours/week, flexible, with a weekly check-in during US Central business hours
+- Check the campaigns at least 3 times a week
+
+Pay
+- $7.00 USD/hour, paid weekly
+- A raise once training is signed off (60–90 days) and pay reviews every 6 months, with more hours as the ad budget grows
+
+${TIME_OFF}
+
+Training
+You start with our customers, prices, seasons and margins, so you can judge ads on profit. The owner approves the first campaigns before they go live.
+
+Career path
+As the ads pay back, the budget and your hours grow with them.
+
+${howToApply('Red Squeegee', [
+  'One ad account you managed: the business, monthly budget, goal, and results in numbers (cost per lead or sale, return on ad spend)',
+  'A screenshot of your internet speed test (speedtest.net)',
+  'Your answer to this, as you\'d really write it:\n   "Our Google Ads campaign got 3,000 clicks last month but only 2 quote requests. What are the first three things you check?"',
 ])}`,
   },
 };

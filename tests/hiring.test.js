@@ -134,7 +134,7 @@ test('a grade from the model is clamped; blanks never score above the floor', ()
   assert.strictEqual(g.initiative, 'some initiative');
   assert.strictEqual(g.english, 5);
   assert.strictEqual(g.strengths.length, 5);
-  assert.deepStrictEqual(g.follow_up, [{ question: 'Q?', why: 'w' }]);
+  assert.deepStrictEqual(g.follow_up, [{ question: 'Q?', why: 'w', about: null }]);
 });
 
 test('the score: weights, bonus on top, capped at 100, banded', () => {
@@ -185,7 +185,7 @@ test('public test routes: rate-limited, cross-site posts refused, token never st
 test('round 2: made from the follow-ups, only past the pass mark, answers capped to its own questions', () => {
   const qs = H.round2Questions({ follow_up: Array.from({ length: 9 }, (_, i) => ({ question: `Q${i}?`, why: 'w' })) });
   assert.strictEqual(qs.length, H.ROUND2_MAX);
-  assert.deepStrictEqual(qs[0], { id: 'f1', prompt: 'Q0?', why: 'w' });
+  assert.deepStrictEqual(qs[0], { id: 'f1', prompt: 'Q0?', why: 'w', about: null });
   assert.ok(H.passes(H.PASS_SCORE) && !H.passes(H.PASS_SCORE - 1) && !H.passes(null));
   const got = H.cleanRound2({ w_f1: 'yes', w_f9: 'not mine', w_angry: 'nope' }, qs.slice(0, 2));
   assert.deepStrictEqual(got, { written: { f1: 'yes', f2: '' } });
@@ -231,7 +231,7 @@ test('round 2 rides on the round-1 link, and the owner hears once per applicant'
 
 test('helpers learn the job from the playbook, written for customers, never as test answers', () => {
   const kb = src.slice(src.indexOf('const KB_ADDED = ['), src.indexOf('async function addPlaybookArticles'));
-  for (const t of ['Customer situations: what to do', 'Design situations: what to do', 'Can you make the design pop more?', 'Working on our live websites and apps', 'Making and posting our videos', 'Something is wrong with my order', 'Do you make shirts for businesses?',
+  for (const t of ['Customer situations: what to do', 'Design situations: what to do', 'Can you make the design pop more?', 'Working on our live websites and apps', 'Making and posting our videos', 'Reorders and replying to reviews', 'Chasing late artwork and approvals', 'Running our ads', 'Something is wrong with my order', 'Do you make shirts for businesses?',
     "Can you match another shop\\'s price?", 'Can you get it done by [date]?', 'Let me check and get back to you', 'A quiet afternoon: a plan']) {
     const at = kb.indexOf(`title: '${t}'`);
     assert.ok(at > 0, t);
@@ -245,7 +245,7 @@ test('helpers learn the job from the playbook, written for customers, never as t
 const POSTING = require('../tools/lib/hiring-posting');
 
 test('every job role is complete: test, model answers, guide, job post and screening', () => {
-  assert.deepStrictEqual(Object.keys(H.ROLES).sort(), ['content', 'designer', 'developer', 'sales']);
+  assert.deepStrictEqual(Object.keys(H.ROLES).sort(), ['ads', 'content', 'designer', 'developer', 'sales']);
   for (const role of Object.values(H.ROLES)) {
     const k = role.key;
     assert.ok(role.label && role.job && role.reward && role.intro, k);
@@ -274,7 +274,7 @@ test('every job role is complete: test, model answers, guide, job post and scree
     assert.ok(post.body.includes(`"${post.code}"`) && /speed test/i.test(post.body) && /Time off/.test(post.body), `${k} post asks the standard things`);
     assert.ok(!/[\u{1F300}-\u{1FAFF}★⚠]/u.test(POSTING.labelsFor(post.prefix).join('')), 'OLJ refuses emoji in labels');
   }
-  assert.strictEqual(new Set(Object.values(POSTING.POSTS).map((p) => p.code)).size, 4, 'code words differ per job');
+  assert.strictEqual(new Set(Object.values(POSTING.POSTS).map((p) => p.code)).size, 5, 'code words differ per job');
 });
 
 test('roles change the grading, not the engine', () => {
@@ -291,4 +291,15 @@ test('roles change the grading, not the engine', () => {
   assert.strictEqual(H.validateInvite({ name: 'A', role: '__proto__' }).invite.role, 'sales');
   assert.match(H.ROLES.developer.job, /Claude Code/);
   assert.ok(H.ROLES.developer.choice.some((x) => x.id === 'appstore') && /Xcode/.test(POSTING.POSTS.developer.body));
+});
+
+test('a follow-up remembers which round-1 question it is about, for the round-2 page', () => {
+  const g = H.normalizeGrade({ follow_up: [{ question: 'Q1?', why: 'w', about: 'angry' }, { question: 'Q2?', why: 'w', about: 'made-up' }] }, {});
+  assert.deepStrictEqual(g.follow_up.map((f) => f.about), ['angry', null]);
+  assert.deepStrictEqual(H.round2Questions(g).map((q) => q.about), ['angry', null]);
+  for (const k of Object.keys(H.ROLES)) {
+    const about = H.gradeSchema(k).properties.follow_up.items.properties.about.enum;
+    assert.deepStrictEqual(about, [...H.ROLES[k].written.map((w) => w.id), 'general'], k);
+  }
+  assert.match(src, /round2Page\(row, token, t, first\)/);
 });
