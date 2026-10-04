@@ -40,6 +40,7 @@ const REVREPLY = require('./tools/lib/review-replies');
 const STAFF = require('./tools/lib/staff');
 const TEAM = require('./tools/lib/team-metrics');
 const TRAINING = require('./tools/lib/training');
+const HIRING = require('./tools/lib/hiring');
 const PROOFS = require('./tools/lib/job-proofs');
 const ART = require('./tools/lib/art-pipeline');
 const GOOGLE_ADS = require('./tools/lib/google-ads').createClient();
@@ -1160,6 +1161,31 @@ async function initStaffTables() {
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
   await pool.query('CREATE INDEX IF NOT EXISTS staff_quiz_attempts_staff ON staff_quiz_attempts (staff_id, quiz_key)');
+  /* Applicant tests (tools/lib/hiring.js). One row per private link; only the
+     link's SHA-256 is kept. Answers, the part-1 marks and the grader's result
+     are stored as handed in, so a re-grade never needs the applicant again. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS hiring_tests (
+      id            SERIAL PRIMARY KEY,
+      token_hash    TEXT NOT NULL UNIQUE,
+      name          TEXT NOT NULL,
+      role          TEXT NOT NULL DEFAULT 'sales',
+      note          TEXT,
+      status        TEXT NOT NULL DEFAULT 'sent',
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at    TIMESTAMPTZ NOT NULL,
+      opened_at     TIMESTAMPTZ,
+      started_at    TIMESTAMPTZ,
+      submitted_at  TIMESTAMPTZ,
+      minutes_used  NUMERIC,
+      late          BOOLEAN NOT NULL DEFAULT false,
+      answers       JSONB,
+      choice        JSONB,
+      grade         JSONB,
+      score         INTEGER,
+      grade_error   TEXT,
+      graded_at     TIMESTAMPTZ
+    )`);
   // Coaching notes the owner writes outside an approval.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS staff_feedback (
@@ -7155,6 +7181,7 @@ const ADMIN_NAV = [
   { key: 'chat',       href: '/admin/team-chat',     label: 'Team chat',  icon: 'chat',   badge: 'chat' },
   { key: 'playbook',   href: '/admin/playbook',      label: 'Playbook',   icon: 'book' },
   { key: 'training',   href: '/admin/training',      label: 'Training',   icon: 'learn' },
+  { key: 'hiring',     href: '/admin/hiring',        label: 'Hiring',     icon: 'users' },
   { key: 'team',       href: '/admin/team',    label: 'Team',       icon: 'team',   badge: 'approvals' },
 ];
 /* Ordered the way a shop is actually worked, not the way the routes grew: what
@@ -24285,6 +24312,408 @@ app.post('/admin/training/quiz/:key', requireAdmin, async (req, res) => {
       <b>${n + 1}. ${escEmail(x.q)}</b>
       <div class="row-sub" style="white-space:normal">${x.right ? pill('right', 'green') : `${pill('wrong', 'red')} ${reread(x)}`}</div>
       </span></div>`).join('')}</div>`, 'training'));
+});
+
+/* ── Hiring: the applicant test (tools/lib/hiring.js) ─────────────────────────
+   The owner makes a private link per applicant on /admin/hiring. The applicant
+   opens /apply/test/:token with no login, starts a 30-minute clock and hands
+   the test in. Part 1 is marked here; the written parts are graded by Claude
+   in the background, and the owner is emailed when the result is ready.
+
+   The link is the only credential, so only its SHA-256 is stored; the owner
+   sees the link once, when it is made, and can make a new one (which kills the
+   old) at any time before the test is handed in. Every way a link can be
+   unusable — unknown, cancelled, expired — shows the same page, so a guessed
+   token learns nothing. */
+const hireRateLimit = makeRateLimit(60, 15 * 60 * 1000);
+
+function hireLink(token) {
+  return `${PUBLIC_BASE_URL}/apply/test/${token}`;
+}
+
+function hireHeaders(res) {
+  res.set('Cache-Control', 'no-store');
+  res.set('X-Robots-Tag', 'noindex, nofollow');
+}
+
+function hirePage(title, body, script = '') {
+  return htmlDocument(title, `<div class="wrap" style="max-width:760px;margin:24px auto;padding:0 16px">
+    <div style="font-weight:800;color:#0B1F4B;margin-bottom:12px">June's Tees &amp; Things</div>${body}</div>${
+    script ? `<script>${script}</script>` : ''}`, { css: `
+    .hire-q{display:block;font-weight:700;white-space:normal;margin-bottom:6px;text-transform:none;letter-spacing:normal;font-size:16px;color:#0B1F4B;text-align:left}
+    .hire-opt{display:flex;gap:10px;align-items:flex-start;justify-content:flex-start;padding:8px 0;cursor:pointer;
+      text-transform:none;letter-spacing:normal;font-size:16px;font-weight:400;color:#1f2937;text-align:left;margin:0}
+    .hire-opt input{width:auto;flex:0 0 auto;margin:3px 0 0}
+    .hire-ta{width:100%;min-height:150px;font:inherit;padding:10px;border:1px solid #cbd5e1;border-radius:8px;box-sizing:border-box}
+    .hire-clock{position:sticky;top:0;z-index:5;background:#0B1F4B;color:#fff;padding:10px 14px;border-radius:10px;margin-bottom:14px;font-weight:700}
+    .hire-clock.low{background:#dc2626}
+    .hire-part{margin:22px 0 8px;font-size:20px;color:#0B1F4B}` });
+}
+
+const HIRE_DEAD = () => hirePage('Link not available', `<div class="card"><h1 style="font-size:22px">This link is not available</h1>
+  <p>It may have expired, been replaced with a new link, or been cancelled. If you applied to June's Tees on OnlineJobs.ph,
+  please message us there and we will send you a new one.</p></div>`);
+
+async function hireRowByToken(token) {
+  if (!HIRING.validToken(token)) return null;
+  const { rows } = await pool.query('SELECT * FROM hiring_tests WHERE token_hash = $1', [HIRING.hashToken(token)]);
+  const r = rows[0];
+  if (!r || r.status === 'cancelled') return null;
+  return r;
+}
+
+app.get('/apply/test/:token', hireRateLimit, async (req, res) => {
+  hireHeaders(res);
+  const token = String(req.params.token || '');
+  let row;
+  try { row = await hireRowByToken(token); } catch (err) {
+    console.error('hiring test lookup failed:', err.message);
+    return res.status(503).send(hirePage('Try again', '<div class="card"><p>Please try again in a moment.</p></div>'));
+  }
+  if (!row) return res.status(404).send(HIRE_DEAD());
+  if (row.submitted_at) {
+    return res.send(hirePage('Thank you', `<div class="card"><h1 style="font-size:22px">Thank you, ${escEmail(row.name)}</h1>
+      <p>Your answers are in. We read every test ourselves and will reply on OnlineJobs.ph within a few days.</p></div>`));
+  }
+  const t = HIRING.timing(row);
+  if (!t.started && t.expired) return res.status(404).send(HIRE_DEAD());
+  if (!row.opened_at) pool.query('UPDATE hiring_tests SET opened_at = NOW() WHERE id = $1 AND opened_at IS NULL', [row.id]).catch(() => {});
+  const view = HIRING.testForPage();
+  if (!t.started) {
+    return res.send(hirePage('Applicant test', `<div class="card">
+      <h1 style="font-size:24px">Hi ${escEmail(row.name)}, welcome to the June's Tees applicant test</h1>
+      <p style="white-space:pre-line">${escEmail(view.intro)}</p>
+      <ul>${Object.values(view.parts).map((p) => `<li><b>${escEmail(p.label)}</b>: ${escEmail(p.note)}</li>`).join('')}</ul>
+      <p><b>The ${view.minutes}-minute clock starts when you press Start</b> and keeps running if you close the page,
+      so start when you have ${view.minutes} quiet minutes and a stable connection. Your answers are saved in this browser as you type.</p>
+      <form method="post" action="/apply/test/${escEmail(token)}/start" onsubmit="this.querySelector('button').disabled=true">
+        <button type="submit" class="btn">Start the test</button></form></div>`));
+  }
+  if (t.overGrace) {
+    return res.send(hirePage('Time is up', `<div class="card"><h1 style="font-size:22px">Time is up</h1>
+      <p>The ${view.minutes} minutes for this test have passed. If something went wrong (a power cut, a lost connection),
+      message us on OnlineJobs.ph and tell us what happened.</p></div>`));
+  }
+  const choice = view.choice.map((x, n) => `<div class="card" role="radiogroup" aria-labelledby="q_${escEmail(x.id)}">
+      <div class="hire-q" id="q_${escEmail(x.id)}">${n + 1}. ${escEmail(x.q)}</div>
+      ${x.choices.map((c, i) => `<label class="hire-opt"><input type="radio" name="mc_${escEmail(x.id)}" value="${i}"> <span>${escEmail(c)}</span></label>`).join('')}
+    </div>`).join('');
+  const written = (part) => view.written.filter((w) => w.part === part).map((w) => `<div class="card">
+      <label class="hire-q" for="w_${escEmail(w.id)}">${escEmail(w.label)}${w.optional ? ' <span class="muted">(optional)</span>' : ''} <span class="muted" style="font-weight:400">· about ${w.minutes} min</span></label>
+      <p style="white-space:normal">${escEmail(w.prompt)}</p>
+      <textarea class="hire-ta" id="w_${escEmail(w.id)}" name="w_${escEmail(w.id)}" maxlength="${HIRING.LIMITS.answer}"></textarea></div>`).join('');
+  const part = (k) => `<h2 class="hire-part">${escEmail(view.parts[k].label)}</h2><p class="muted">${escEmail(view.parts[k].note)}</p>`;
+  /* The clock counts down from what the SERVER says is left; the browser only
+     displays it, and hands the test in at zero. Answers are kept in this
+     browser's storage as they are typed, so a reload loses nothing. */
+  const script = `(function(){var left=${Number(t.secondsLeft) || 0},f=document.getElementById('hire-form'),c=document.getElementById('hire-clock'),k='jt-hire-${row.id}',sent=false;
+    function save(){try{var d={};f.querySelectorAll('input:checked,textarea').forEach(function(e){d[e.name]=e.type==='radio'?e.value:e.value});localStorage.setItem(k,JSON.stringify(d))}catch(e){}}
+    try{var d=JSON.parse(localStorage.getItem(k)||'{}');Object.keys(d).forEach(function(n){var els=f.querySelectorAll('[name="'+n+'"]');els.forEach(function(e){if(e.type==='radio'){e.checked=e.value===d[n]}else{e.value=d[n]}})})}catch(e){}
+    f.addEventListener('input',save);f.addEventListener('change',save);
+    f.addEventListener('submit',function(){sent=true;save();var b=f.querySelector('button[type=submit]');b.disabled=true;b.textContent='Sending...'});
+    function tick(){var m=Math.floor(left/60),s=left%60;c.textContent=left>0?('Time left: '+m+':'+(s<10?'0':'')+s):'Time is up: sending your answers...';
+      if(left<=300)c.className='hire-clock low';if(left<=0){if(!sent){sent=true;save();f.submit()}return}left--;setTimeout(tick,1000)}tick();})();`;
+  res.send(hirePage('Applicant test', `<div id="hire-clock" class="hire-clock"></div>
+    <form id="hire-form" method="post" action="/apply/test/${escEmail(token)}">
+      ${part('choice')}${choice}
+      ${part('replies')}${written('replies')}
+      ${part('initiative')}${written('initiative')}
+      ${part('bonus')}${written('bonus')}
+      <div class="card"><p>Check your answers, then hand the test in. You can only send it once.</p>
+        <button type="submit" class="btn">Hand in my test</button></div>
+    </form>`, script));
+});
+
+app.post('/apply/test/:token/start', hireRateLimit, async (req, res) => {
+  hireHeaders(res);
+  if (fromAnotherSite(req)) return res.status(403).send('Forbidden');
+  const token = String(req.params.token || '');
+  try {
+    const row = await hireRowByToken(token);
+    if (!row) return res.status(404).send(HIRE_DEAD());
+    if (!row.started_at && HIRING.timing(row).expired) return res.status(404).send(HIRE_DEAD());
+    // Only the first press starts the clock; a second one changes nothing.
+    await pool.query(`UPDATE hiring_tests SET started_at = NOW(), status = 'started'
+                       WHERE id = $1 AND started_at IS NULL AND submitted_at IS NULL`, [row.id]);
+    return res.redirect(303, `/apply/test/${encodeURIComponent(token)}`);
+  } catch (err) {
+    console.error('hiring test start failed:', err.message);
+    return res.status(503).send(hirePage('Try again', '<div class="card"><p>Please try again in a moment.</p></div>'));
+  }
+});
+
+app.post('/apply/test/:token', hireRateLimit, async (req, res) => {
+  hireHeaders(res);
+  if (fromAnotherSite(req)) return res.status(403).send('Forbidden');
+  const token = String(req.params.token || '');
+  try {
+    const row = await hireRowByToken(token);
+    if (!row) return res.status(404).send(HIRE_DEAD());
+    const t = HIRING.timing(row);
+    if (!t.started) return res.redirect(303, `/apply/test/${encodeURIComponent(token)}`);
+    const answers = HIRING.cleanAnswers(req.body);
+    const choice = HIRING.gradeChoices(answers.picks);
+    /* Handed in once: the WHERE makes a double press, or a second tab, a no-op.
+       A hand-in after the clock (plus grace) is still kept, flagged late, so a
+       bad connection never loses someone their work. */
+    const { rows } = await pool.query(
+      `UPDATE hiring_tests SET submitted_at = NOW(), status = 'submitted', answers = $2, choice = $3,
+              minutes_used = $4, late = $5
+        WHERE id = $1 AND submitted_at IS NULL RETURNING id`,
+      [row.id, JSON.stringify(answers), JSON.stringify(choice), t.minutesUsed, t.late]);
+    if (rows.length) {
+      gradeHiringTest(row.id, { notify: true }).catch((err) => console.error('hiring grade failed:', err.message));
+    }
+    return res.redirect(303, `/apply/test/${encodeURIComponent(token)}`);
+  } catch (err) {
+    console.error('hiring test submit failed:', err.message);
+    return res.status(503).send(hirePage('Not sent yet', `<div class="card"><h1 style="font-size:22px">Your test was not sent yet</h1>
+      <p>Your answers are still saved in this browser. Go back and press "Hand in my test" again.</p></div>`));
+  }
+});
+
+/** Grade one hand-in and store the result. Never throws: a failure is stored
+ *  as grade_error for the owner to see and retry. */
+async function gradeHiringTest(id, { notify = false } = {}) {
+  const { rows } = await pool.query('SELECT * FROM hiring_tests WHERE id = $1', [id]);
+  const row = rows[0];
+  if (!row || !row.answers) return null;
+  let grade = null;
+  let error = null;
+  try {
+    grade = await HIRING.gradeWritten(row.answers.written || {}, { name: row.name });
+  } catch (err) {
+    console.error(`hiring test ${id}: grading failed:`, err.message);
+    error = HIRING.failureMessage(err);
+    reportError('hiring-grade', err, `hiring test ${id}`).catch(() => {});
+  }
+  const total = grade ? HIRING.overall(row.choice || { score: 0, total: 0 }, grade) : null;
+  await pool.query(
+    /* A failed re-grade keeps the last good grade: it only records why. */
+    `UPDATE hiring_tests SET grade = COALESCE($2::jsonb, grade), score = COALESCE($3::int, score), grade_error = $4,
+            graded_at = CASE WHEN $2::jsonb IS NULL THEN graded_at ELSE NOW() END,
+            status = CASE WHEN $2::jsonb IS NULL THEN status ELSE 'graded' END
+      WHERE id = $1`,
+    [id, grade ? JSON.stringify(grade) : null, total ? total.score : null, error]);
+  if (notify && NOTIFY_EMAIL) {
+    const line = total ? `${total.score}/100 · ${total.band.label}` : 'not graded yet: open it to grade again';
+    sendEmail({
+      to: NOTIFY_EMAIL,
+      subject: `Applicant test finished: ${row.name} (${total ? total.score + '/100' : 'needs grading'})`,
+      html: `<p><b>${escEmail(row.name)}</b> handed in the applicant test${row.late ? ' (after the 30 minutes)' : ''}.</p>
+        <p>${escEmail(line)}</p><p><a href="${PUBLIC_BASE_URL}/admin/hiring/${id}">See the answers and the follow-up questions</a></p>`,
+    }).catch((err) => console.error('hiring notify failed:', err.message));
+  }
+  return grade;
+}
+
+const HIRE_STATUS = {
+  sent: ['Link sent', 'gray'], started: ['Taking it now', 'amber'], submitted: ['Handed in', 'blue'],
+  graded: ['Graded', 'green'], cancelled: ['Cancelled', 'gray'],
+};
+
+function hireBand(score) {
+  return score == null ? null : HIRING.BANDS.find((b) => score >= b.min);
+}
+
+app.get('/admin/hiring', requireAdmin, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, name, role, note, status, score, late, created_at, expires_at, opened_at, started_at, submitted_at, grade_error,
+              grade->>'initiative' AS initiative, grade->'extra_skills' AS skills
+         FROM hiring_tests ORDER BY (score IS NULL), score DESC, created_at DESC LIMIT 300`);
+    const list = rows.length ? rows.map((r) => {
+      const [label, tone] = HIRE_STATUS[r.status] || HIRE_STATUS.sent;
+      const band = hireBand(r.score);
+      const skills = Array.isArray(r.skills) ? r.skills : [];
+      const expired = r.status === 'sent' && r.expires_at && new Date(r.expires_at) < new Date();
+      return `<a class="row-i" href="/admin/hiring/${r.id}"><span class="row-main"><b>${escEmail(r.name)}</b>
+        <div class="row-sub">${pill(expired ? 'Link expired' : label, expired ? 'red' : tone)}
+          ${band ? `${pill(`${r.score}/100`, band.tone)} ${escEmail(band.label)}` : ''}
+          ${r.initiative ? pill(r.initiative, r.initiative === 'self-starter' ? 'green' : r.initiative === 'waits for direction' ? 'red' : 'neutral') : ''}
+          ${skills.length ? pill('Extra skills', 'gold') : ''}${r.late ? pill('late', 'amber') : ''}${r.grade_error ? pill('needs grading', 'red') : ''}</div>
+        <div class="row-sub muted">${escEmail(r.note || '')}${r.note ? ' · ' : ''}made ${escEmail(whenShort(r.created_at))}${
+          r.submitted_at ? ` · handed in ${escEmail(whenShort(r.submitted_at))}` : ''}</div></span></a>`;
+    }).join('') : emptyState('No applicant tests yet. Make the first link above.');
+    res.send(adminPage('Hiring', `
+      ${pageHeader('Hiring', `Each applicant gets a private ${HIRING.MINUTES}-minute test link. They need no login and see none of the shop's data.`,
+        '<a class="btn btn-ghost" href="/admin/hiring/test">See the test and the interview guide</a>')}
+      ${flash(req.query)}
+      <form class="card" method="post" action="/admin/hiring" style="display:grid;gap:10px">
+        <b>New test link</b>
+        <label>Applicant's name <input name="name" maxlength="${HIRING.LIMITS.name}" required placeholder="As it appears on OnlineJobs.ph"></label>
+        <label>Note for you (optional) <input name="note" maxlength="${HIRING.LIMITS.note}" placeholder="e.g. Top pick, apparel experience"></label>
+        <input type="hidden" name="role" value="sales">
+        <div><button type="submit" class="btn">Make the link</button></div>
+      </form>
+      <div class="card"><b>Applicants</b>${list}</div>`, 'hiring'));
+  } catch (err) {
+    console.error('hiring page failed:', err.message);
+    res.status(500).send(adminPage('Hiring', '<div class="card"><div class="warn">Could not load the applicants.</div></div>', 'hiring'));
+  }
+});
+
+function hireLinkCard(name, token) {
+  const link = hireLink(token);
+  return `<div class="card" style="border-left:4px solid #16a34a">
+    <b>Link for ${escEmail(name)}</b>
+    <p>Copy it now: for safety it is shown only once. You can make a new one from their page if it is lost.</p>
+    <input id="hire-link" readonly value="${escEmail(link)}" style="width:100%;font-family:monospace" onclick="this.select()">
+    <p style="margin-top:8px"><button type="button" class="btn" onclick="var i=document.getElementById('hire-link');i.select();(navigator.clipboard?navigator.clipboard.writeText(i.value):Promise.reject()).then(function(){event.target.textContent='Copied'},function(){document.execCommand('copy');event.target.textContent='Copied'})">Copy link</button></p>
+    <p class="muted">Message to send on OnlineJobs.ph:</p>
+    <textarea readonly style="width:100%;min-height:120px" onclick="this.select()">Hi ${escEmail(name.split(/\s+/)[0])}, thank you for applying to June's Tees! The next step is a short paid test (about ${HIRING.MINUTES} minutes, $15). Open this private link when you have ${HIRING.MINUTES} quiet minutes and a stable connection; the clock starts when you press Start:
+${escEmail(link)}
+The link works for ${HIRING.LINK_DAYS} days. Please write your own answers without AI tools. Thank you!</textarea></div>`;
+}
+
+app.post('/admin/hiring', requireAdmin, async (req, res) => {
+  const v = HIRING.validateInvite(req.body);
+  if (v.error) return back(res, '/admin/hiring', 'err', v.error);
+  const { token, hash } = HIRING.newToken();
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO hiring_tests (token_hash, name, role, note, expires_at)
+       VALUES ($1, $2, $3, $4, NOW() + make_interval(days => $5::int)) RETURNING id`,
+      [hash, v.invite.name, v.invite.role, v.invite.note || null, HIRING.LINK_DAYS]);
+    res.send(adminPage('Hiring', `
+      ${pageHeader('Test link made', '', `<a class="btn btn-ghost" href="/admin/hiring/${rows[0].id}">Their page</a> <a class="btn btn-ghost" href="/admin/hiring">Back to hiring</a>`)}
+      ${hireLinkCard(v.invite.name, token)}`, 'hiring'));
+  } catch (err) {
+    console.error('hiring invite failed:', err.message);
+    back(res, '/admin/hiring', 'err', 'The link could not be made. Try again.');
+  }
+});
+
+app.get('/admin/hiring/test', requireAdmin, (_req, res) => {
+  const mc = HIRING.MULTIPLE_CHOICE.map((x, n) => `<div class="row-i"><span class="row-main" style="white-space:normal">
+    <b>${n + 1}. ${escEmail(x.q)}</b>
+    ${x.choices.map((c, i) => `<div class="row-sub" style="white-space:normal">${i === x.answer ? '✓ <b>' + escEmail(c) + '</b>' : '&nbsp;&nbsp;&nbsp;' + escEmail(c)}</div>`).join('')}
+    <div class="row-sub muted" style="white-space:normal">Why: ${escEmail(x.why)}</div></span></div>`).join('');
+  const written = HIRING.WRITTEN.map((w) => `<div class="row-i"><span class="row-main" style="white-space:normal">
+    <b>${escEmail(HIRING.PARTS[w.part].label)}: ${escEmail(w.label)}</b>${w.optional ? ' ' + pill('optional', 'neutral') : ''}
+    <div class="row-sub" style="white-space:normal">${escEmail(w.prompt)}</div>
+    <div class="row-sub muted" style="white-space:normal">What a good answer does: ${escEmail(w.rubric)}</div></span></div>`).join('');
+  const guide = HIRING.INTERVIEW_GUIDE.map((s) => `<div class="row-i"><span class="row-main" style="white-space:normal"><b>${escEmail(s.section)}</b>
+    ${s.questions.map((q) => `<div class="row-sub" style="white-space:normal">• ${escEmail(q)}</div>`).join('')}</span></div>`).join('');
+  res.send(adminPage('Hiring', `
+    ${pageHeader('The applicant test', `About ${HIRING.MINUTES} minutes. Score out of 100: judgment ${HIRING.WEIGHTS.choice}, customer replies ${HIRING.WEIGHTS.replies}, initiative ${HIRING.WEIGHTS.initiative}, plus up to ${HIRING.BONUS_MAX} bonus points for an extra skill.`,
+      '<a class="btn btn-ghost" href="/admin/hiring">Back to hiring</a>')}
+    <div class="card"><b>${escEmail(HIRING.PARTS.choice.label)}</b> (marked automatically)${mc}</div>
+    <div class="card"><b>Written questions</b> (graded by Claude against these notes; you see every answer)${written}</div>
+    <div class="card"><b>Video call guide (about 30 minutes)</b>
+      <p class="muted">Ask everyone these, so applicants can be compared. Each applicant's page adds questions about their own answers.</p>${guide}</div>`, 'hiring'));
+});
+
+app.get('/admin/hiring/:id', requireAdmin, async (req, res) => {
+  const id = /^\d{1,9}$/.test(String(req.params.id)) ? Number(req.params.id) : null;
+  if (!id) return back(res, '/admin/hiring', 'err', 'No such applicant.');
+  try {
+    const { rows } = await pool.query('SELECT * FROM hiring_tests WHERE id = $1', [id]);
+    const r = rows[0];
+    if (!r) return back(res, '/admin/hiring', 'err', 'No such applicant.');
+    const [label, tone] = HIRE_STATUS[r.status] || HIRE_STATUS.sent;
+    const g = r.grade;
+    const choice = r.choice || { score: 0, total: HIRING.MULTIPLE_CHOICE.length, results: [] };
+    const total = g ? HIRING.overall(choice, g) : null;
+    const answers = (r.answers && r.answers.written) || {};
+    const actions = [];
+    if (!r.submitted_at && r.status !== 'cancelled') {
+      actions.push(`<form method="post" action="/admin/hiring/${id}/link" style="display:inline"><button class="btn btn-ghost" type="submit">Make a new link</button></form>`);
+      actions.push(`<form method="post" action="/admin/hiring/${id}/cancel" style="display:inline"><button class="btn btn-ghost" type="submit">Cancel the test</button></form>`);
+    }
+    if (r.submitted_at) actions.push(`<form method="post" action="/admin/hiring/${id}/grade" style="display:inline"><button class="btn btn-ghost" type="submit">Grade again</button></form>`);
+    actions.push('<a class="btn btn-ghost" href="/admin/hiring">Back to hiring</a>');
+    const timeline = [
+      `Link made ${whenShort(r.created_at)}`, r.opened_at ? `opened ${whenShort(r.opened_at)}` : 'not opened yet',
+      r.started_at ? `started ${whenShort(r.started_at)}` : '', r.submitted_at ? `handed in ${whenShort(r.submitted_at)} (${r.minutes_used} min${r.late ? ', over time' : ''})` : '',
+    ].filter(Boolean).join(' · ');
+    const summary = !r.submitted_at ? `<div class="card"><p>${pill(label, tone)} ${escEmail(timeline)}</p>
+        ${r.status === 'sent' ? `<p class="muted">The link expires ${escEmail(whenShort(r.expires_at))}.</p>` : ''}</div>`
+      : `<div class="card">
+        ${total ? `<div style="font-size:30px;font-weight:800">${total.score}/100 ${pill(total.band.label, total.band.tone)}</div>` : ''}
+        ${r.grade_error ? `<div class="warn">${escEmail(r.grade_error)}</div>` : ''}
+        ${!g && !r.grade_error ? '<p class="muted">Grading is running; refresh in a minute.</p>' : ''}
+        <p class="muted">${escEmail(timeline)}</p>
+        <p>Judgment: <b>${choice.score} of ${choice.total}</b>${total ? ` · Replies ${Math.round(total.parts.replies * 100)}% · Initiative ${Math.round(total.parts.initiative * 100)}% · Bonus +${total.bonus}` : ''}</p>
+        ${g ? `<p>${pill(g.initiative, g.initiative === 'self-starter' ? 'green' : g.initiative === 'waits for direction' ? 'red' : 'neutral')}
+          ${pill(`Written English ${g.english}/5`, g.english >= 4 ? 'green' : g.english >= 3 ? 'neutral' : 'amber')}
+          ${g.extra_skills.map((s) => pill(s, 'gold')).join(' ')}</p>
+          <p style="white-space:normal">${escEmail(g.summary)}</p>
+          ${g.strengths.length ? `<p><b>Strengths</b></p><ul>${g.strengths.map((s) => `<li>${escEmail(s)}</li>`).join('')}</ul>` : ''}
+          ${g.concerns.length ? `<p><b>Concerns</b></p><ul>${g.concerns.map((s) => `<li>${escEmail(s)}</li>`).join('')}</ul>` : ''}
+          ${g.generic_note ? `<div class="warn">Generic or templated: ${escEmail(g.generic_note)}</div>` : ''}` : ''}
+      </div>
+      ${g && g.follow_up.length ? `<div class="card"><b>Follow-up questions for the video call</b>
+        <p class="muted">About ${escEmail(r.name)}'s own answers. Use them with the <a href="/admin/hiring/test">standard guide</a>.</p>
+        <ol>${g.follow_up.map((f) => `<li style="margin-bottom:8px"><b>${escEmail(f.question)}</b><div class="muted">${escEmail(f.why)}</div></li>`).join('')}</ol></div>` : ''}
+      <div class="card"><b>Written answers</b>${HIRING.WRITTEN.map((w) => {
+        const s = g && g.scores[w.id];
+        return `<div class="row-i"><span class="row-main" style="white-space:normal">
+          <b>${escEmail(w.label)}</b> ${s ? pill(`${s.score}/5`, s.score >= 4 ? 'green' : s.score >= 3 ? 'neutral' : s.score >= 1 ? 'amber' : 'gray') : ''}
+          <div class="row-sub muted" style="white-space:normal">${escEmail(w.prompt)}</div>
+          <div style="white-space:pre-wrap;margin:8px 0;padding:10px;background:#F7F6F3;border-radius:8px">${escEmail(answers[w.id] || '(left blank)')}</div>
+          ${s && s.note ? `<div class="row-sub" style="white-space:normal">Grader: ${escEmail(s.note)}</div>` : ''}</span></div>`;
+      }).join('')}</div>
+      <div class="card"><b>Judgment answers</b>${(choice.results || []).map((x, n) => `<div class="row-i"><span class="row-main" style="white-space:normal">
+        <b>${n + 1}. ${escEmail(x.q)}</b>
+        <div class="row-sub" style="white-space:normal">${x.right ? pill('right', 'green') : pill(x.picked == null ? 'no answer' : 'wrong', 'red')} ${escEmail(x.pickedText || '')}</div>
+        ${x.right ? '' : `<div class="row-sub muted" style="white-space:normal">Best answer: ${escEmail(x.answerText)}</div>`}</span></div>`).join('')}</div>`;
+    res.send(adminPage('Hiring', `
+      ${pageHeader(r.name, r.note ? escEmail(r.note) : '', actions.join(' '))}
+      ${flash(req.query)}${summary}`, 'hiring'));
+  } catch (err) {
+    console.error('hiring result failed:', err.message);
+    res.status(500).send(adminPage('Hiring', '<div class="card"><div class="warn">Could not load this applicant.</div></div>', 'hiring'));
+  }
+});
+
+function hireId(req) {
+  return /^\d{1,9}$/.test(String(req.params.id)) ? Number(req.params.id) : null;
+}
+
+app.post('/admin/hiring/:id/grade', requireAdmin, async (req, res) => {
+  const id = hireId(req);
+  if (!id) return back(res, '/admin/hiring', 'err', 'No such applicant.');
+  try {
+    const g = await gradeHiringTest(id);
+    return back(res, `/admin/hiring/${id}`, g ? 'ok' : 'err', g ? 'Graded again.' : 'Grading did not finish; see the note below.');
+  } catch (err) {
+    console.error('hiring regrade failed:', err.message);
+    return back(res, `/admin/hiring/${id}`, 'err', 'Grading did not finish. Try again in a minute.');
+  }
+});
+
+app.post('/admin/hiring/:id/link', requireAdmin, async (req, res) => {
+  const id = hireId(req);
+  if (!id) return back(res, '/admin/hiring', 'err', 'No such applicant.');
+  const { token, hash } = HIRING.newToken();
+  try {
+    /* A new link replaces the old one (whose hash is gone) and restarts the
+       expiry. A test already started keeps its clock. */
+    const { rows } = await pool.query(
+      `UPDATE hiring_tests SET token_hash = $2, expires_at = NOW() + make_interval(days => $3::int)
+        WHERE id = $1 AND submitted_at IS NULL AND status <> 'cancelled' RETURNING name`,
+      [id, hash, HIRING.LINK_DAYS]);
+    if (!rows.length) return back(res, `/admin/hiring/${id}`, 'err', 'This test is finished or cancelled, so it has no link.');
+    res.send(adminPage('Hiring', `
+      ${pageHeader('New link made', 'The old link no longer works.', `<a class="btn btn-ghost" href="/admin/hiring/${id}">Their page</a>`)}
+      ${hireLinkCard(rows[0].name, token)}`, 'hiring'));
+  } catch (err) {
+    console.error('hiring new link failed:', err.message);
+    back(res, `/admin/hiring/${id}`, 'err', 'The link could not be made. Try again.');
+  }
+});
+
+app.post('/admin/hiring/:id/cancel', requireAdmin, async (req, res) => {
+  const id = hireId(req);
+  if (!id) return back(res, '/admin/hiring', 'err', 'No such applicant.');
+  try {
+    await pool.query(`UPDATE hiring_tests SET status = 'cancelled' WHERE id = $1 AND submitted_at IS NULL`, [id]);
+    return back(res, `/admin/hiring/${id}`, 'ok', 'Cancelled. The link no longer works.');
+  } catch (err) {
+    console.error('hiring cancel failed:', err.message);
+    return back(res, `/admin/hiring/${id}`, 'err', 'Could not cancel it. Try again.');
+  }
 });
 
 // A helper ticks their own reading. The owner has no reading to tick.

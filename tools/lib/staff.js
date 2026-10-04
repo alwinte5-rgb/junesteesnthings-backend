@@ -268,6 +268,14 @@ const ROUTES = {
   'GET /admin/team': 'owner',
   'POST /admin/team/hours': 'owner',
   'GET /admin/commission': 'owner',
+  // Hiring is the owner's alone: applicants' answers and the scores.
+  'GET /admin/hiring': 'owner',
+  'POST /admin/hiring': 'owner',
+  'GET /admin/hiring/test': 'owner',
+  'GET /admin/hiring/:id': 'owner',
+  'POST /admin/hiring/:id/grade': 'owner',
+  'POST /admin/hiring/:id/link': 'owner',
+  'POST /admin/hiring/:id/cancel': 'owner',
   'POST /admin/commission/pay': 'owner',
 };
 
