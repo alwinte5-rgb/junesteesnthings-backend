@@ -197,6 +197,7 @@ const ROLES = {
   developer: require('./hiring-developer'),
   content: require('./hiring-content'),
   ads: require('./hiring-ads'),
+  bookkeeper: require('./hiring-bookkeeper'),
 };
 /** A role by key (an unknown or missing key is sales, the first role). */
 function roleOf(r) {

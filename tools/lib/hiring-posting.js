@@ -13,10 +13,16 @@
 /* Labels in the OnlineJobs inbox. OLJ rejects emoji, stars and warning signs
    in label names ("Something went wrong"); "·" and "-" work. */
 function labelsFor(prefix) {
-  return [`${prefix} 1 · Top pick`, `${prefix} 2 · Maybe`, `${prefix} 3 · Rejected`];
+  return [`${prefix} 1 · Top pick`, `${prefix} 2 · Maybe`, `${prefix} 3 · Rejected`, gemLabel(prefix)];
+}
+/* A Gem is the owner's exceptional applicant: a top pick whose PROFILE (work
+   history, skills, portfolio, certificates), not only their application,
+   shows transferable skills beyond the job. Each job has its own Gem label
+   and its own list of skills that make one (POSTS[role].gem). */
+function gemLabel(prefix) {
+  return `Gem · ${prefix}`;
 }
 const SHARED_LABELS = [
-  { name: 'Gem · Marketing-Social-SEO', use: 'A top pick who can also do social media, SEO, ads or marketing. The owner values these most.' },
   { name: 'Apparel-Print Experience', use: 'Has worked with custom apparel, printing or merch before.' },
   { name: 'Future Pool', use: 'Rejected for this post but worth contacting for a later one.' },
   { name: 'Verify Before Hiring', use: 'Anything that does not add up. Verify means reject: do not send them the test.' },
@@ -24,6 +30,8 @@ const SHARED_LABELS = [
 
 const SCREENING = {
   rules: [
+    'Open every applicant\'s OLJ profile, not just their message: work history, skills, portfolio, certificates and past roles. Look for transferable skills from other jobs that would help here.',
+    'A Gem is a top pick whose profile shows transferable skills on the job\'s Gem list (or as valuable). Label them with the job\'s Gem label as well as Top pick, always send them the test, and put "Gem: <the skills>" in the note on Hiring.',
     'Reject straight away: no code words, or the required sample/links missing. The post says so, so it is fair.',
     'Verify = reject. If anything does not add up, label it Verify Before Hiring and move on.',
     'Maybe is only a holding spot: every Maybe ends as Top pick or Rejected before tests go out.',
@@ -34,10 +42,11 @@ const SCREENING = {
   ],
   steps: [
     'Post the job (copy the fields below). Approval can take up to 2 days.',
-    'Label every applicant with the role\'s labels as they come in.',
+    'Label every applicant with the role\'s labels as they come in, reading their profile for transferable skills, and add the job\'s Gem label to exceptional ones.',
     'Check the top picks (Background Data Check), and turn every Maybe into Top pick or Rejected.',
     'Make a test link for each top pick on Hiring and send it with the ready message.',
     'Read the one results email per applicant. Book a video call for "Book the video call", using the interview guide and the questions in the email.',
+    'Mark each applicant Video call, Hired or Rejected on their Hiring page, and send every rejected applicant the message from this page (or their Hiring page, filled in).',
     'Hire, then add them on Staff. Their Training page and the playbook take it from there.',
   ],
 };
@@ -58,6 +67,9 @@ Applications without the code words and ${items.length > 2 ? 'the items above' :
 const POSTS = {
   sales: {
     prefix: 'Sales',
+    gem: ['Marketing, social media, SEO or ads (the owner values these most)', 'Closing sales in another field: real estate, insurance, retail, cars, telesales',
+      'B2B outreach, lead generation or CRM work (HubSpot, Brevo)', 'E-commerce or Shopify store support', 'Events, school, church or sports-team coordination',
+      'Graphic design or Canva', 'Print, apparel or merch experience'],
     code: 'Purple Tee',
     title: 'Sales & Customer Service Assistant – Earn Commission on Every Sale (Custom Apparel)',
     type: 'Part Time', wage: '4', hours: '30', skills: ['Customer Service', 'Sales', 'Lead Generation'],
@@ -118,6 +130,8 @@ ${howToApply('Purple Tee', [
 
   designer: {
     prefix: 'Graphic',
+    gem: ['Worked in a print shop: screen printing, embroidery, DTF, signs or vinyl', 'Embroidery digitising (Wilcom, Hatch, Pulse)', 'Colour separations or film output',
+      'Packaging, merch or brand identity design', 'Video, Reels or motion graphics', 'Social media or marketing', 'Product photography or mockups'],
     code: 'Gold Ink',
     title: 'Graphic Designer for Custom Apparel – Screen Print, Embroidery & DTF Artwork',
     type: 'Part Time', wage: '4.5', hours: '30', skills: ['Adobe Illustrator', 'Graphic Design', 'Adobe Photoshop'],
@@ -128,7 +142,6 @@ ${howToApply('Purple Tee', [
       'Illustrator (vector) skill; Photoshop; CorelDRAW or Affinity is fine too',
       'The sample answer turns "make it pop" into specific choices and mentions a proof',
       'A speed test of at least 25 Mbps',
-      'Gem: also does embroidery digitising, separations, video/Reels or social media',
     ],
     body: `Love seeing your designs worn by real teams and businesses? Design custom apparel for a growing US print shop.
 
@@ -179,6 +192,9 @@ ${howToApply('Gold Ink', [
 
   developer: {
     prefix: 'Dev',
+    gem: ['Shipped iOS or Android apps to the stores, ideally with in-app purchases (RevenueCat)', 'Shopify apps or Stripe payments in production',
+      'Built features on the Claude API or other AI APIs', 'QA or test automation background', 'DevOps: Railway, AWS, CI, monitoring (Sentry)',
+      'Security work', 'Technical SEO, analytics or marketing sites'],
     code: 'Navy Server',
     title: 'Full-Stack Developer – Websites, iOS/Android Apps & AI (Node.js, React Native, Claude)',
     type: 'Part Time', wage: '8', hours: '30', skills: ['Node.js', 'React Native', 'iOS App Development'],
@@ -191,7 +207,6 @@ ${howToApply('Gold Ink', [
       'The sample answer checks logs and what changed first, and says how they would update the owner',
       'Careful with secrets and live data (no "I would test on production")',
       'A speed test of at least 25 Mbps and a computer that runs a local database',
-      'Gem: has handled an App Store rejection, in-app purchases (RevenueCat), Shopify apps, or built features on the Claude API',
     ],
     body: `Want to own a set of real websites and apps that real customers use every day? Join a growing US business as our developer.
 
@@ -249,6 +264,8 @@ ${howToApply('Navy Server', [
 
   content: {
     prefix: 'Content',
+    gem: ['TV, film or production-company work', 'Photography or filming and lighting', 'Motion graphics or thumbnails',
+      'Copywriting or scriptwriting', 'Community or social media management for a brand', 'YouTube SEO or growth', 'Ads or influencer collaborations'],
     code: 'Green Screen',
     title: 'Video Content Editor – YouTube, TikTok & Reels, Organic Growth (AI-Assisted Editing)',
     type: 'Part Time', wage: '5', hours: '30', skills: ['Video Editing', 'Social Media Management', 'TikTok Marketing'],
@@ -259,7 +276,6 @@ ${howToApply('Navy Server', [
       'The sample answer leads with a hook in the first seconds, and mentions captions and the platform',
       'Uses AI tools (CapCut, Descript, Opus Clip and similar) and says how they check the output',
       'A speed test of at least 25 Mbps (upload matters too) and a computer that edits 1080p smoothly',
-      'Gem: also does thumbnails, motion graphics, YouTube SEO or community management',
     ],
     body: `Love making videos people actually watch to the end? Edit and grow our YouTube, TikTok and Reels.
 
@@ -310,6 +326,8 @@ ${howToApply('Green Screen', [
 
   ads: {
     prefix: 'Ads',
+    gem: ['E-commerce or Shopify marketing', 'GA4, Tag Manager or analytics', 'Landing pages or conversion optimisation', 'Ad creative: design or short video',
+      'Copywriting', 'Local service business marketing', 'SEO or email marketing'],
     code: 'Red Squeegee',
     title: 'Part-Time Google & Meta Ads Specialist – Local Custom Apparel Shop (Small Budget, Real Results)',
     type: 'Part Time', wage: '7', hours: '10', skills: ['Google Ads', 'Facebook Ads', 'Google Analytics'],
@@ -320,7 +338,6 @@ ${howToApply('Green Screen', [
       'Sets up conversion tracking (Google Ads conversions, GA4, Tag Manager) before spending',
       'The sample answer spots the wasted clicks and the wrong location, not just "raise the budget"',
       'A speed test of at least 25 Mbps',
-      'Gem: also builds landing pages, makes ad creative or video, or does SEO',
     ],
     body: `Want to prove what a small, well-run ad budget can do? Run Google and Meta ads for a growing Chicago print shop, part-time.
 
@@ -367,6 +384,88 @@ ${howToApply('Red Squeegee', [
   'Your answer to this, as you\'d really write it:\n   "Our Google Ads campaign got 3,000 clicks last month but only 2 quote requests. What are the first three things you check?"',
 ])}`,
   },
+
+  bookkeeper: {
+    prefix: 'Books',
+    code: 'Blue Ledger',
+    title: 'Part-Time Bookkeeper – Small US Custom Apparel Shop (Stripe, PayPal, Sales Tax)',
+    type: 'Part Time', wage: '6', hours: '10', skills: ['Bookkeeping', 'QuickBooks', 'Account Reconciliation'],
+    payNote: 'Check OLJ\'s Suggest-a-Salary box for bookkeeping before posting. Experienced bookkeepers for US clients usually ask more than VAs; at about 10 hours a week, $6 is a starting point to check against it.',
+    gem: ['CPA, accounting degree or bookkeeping certification (QuickBooks ProAdvisor, Xero Advisor)', 'US clients, US sales tax filing', 'Payroll or contractor payments (1099s)',
+      'E-commerce books: Shopify, Stripe, PayPal', 'Inventory or job costing', 'Excel or Google Sheets dashboards and automation', 'Audit or tax preparation'],
+    lookFor: [
+      'Real bookkeeping for named small businesses, with the software (QuickBooks Online, Xero or spreadsheets)',
+      'Reconciles accounts to statements every month, and can explain a difference',
+      'Experience with Stripe or PayPal payouts, fees and refunds',
+      'The sample answer works out the numbers and does not book the net deposit as sales',
+      'Careful with financial logins and private data',
+      'A speed test of at least 25 Mbps',
+    ],
+    body: `Love it when every dollar matches? Keep the books for a growing US print shop, part-time.
+
+About us
+June's Tees is a growing US custom apparel and print shop in Chicago (screen printing, DTF, embroidery, signs, promo items). We take card payments through Stripe, some PayPal and cash, and serve schools, sports teams, churches and businesses, some of them tax-exempt. We're hiring a dependable, long-term bookkeeper, part-time.
+
+What you'll do
+1. Reconcile Stripe, PayPal, cash and the bank to their statements every month
+2. Record sales, refunds, disputes, card fees and expenses correctly, with a receipt for every cost
+3. Track Illinois sales tax, including tax-exempt customers and their certificates
+4. Close each month and send the owner a short, plain-English summary
+5. Spot savings and problems: unused subscriptions, unpaid balances, missing receipts
+
+You'll do great here if you are
+- Accurate and patient: you reconcile before you report
+- Someone who asks instead of guessing a category
+- Careful with financial logins and private data
+- Clear when explaining numbers to a non-accountant
+
+Tools you'll use
+Our own Finances page, Stripe, PayPal, our bank's read-only access, Google Sheets, and QuickBooks Online or Xero experience. We'll give you your own login for each.
+
+Nice to have: US sales tax filing; contractor payments; inventory or job costing; Excel or Google Sheets dashboards.
+
+Schedule
+- About 10 hours/week, flexible, with the first 3 working days of each month for the close
+- A short weekly check-in during US Central business hours
+
+Pay
+- $6.00 USD/hour, paid weekly
+- A raise once training is signed off (60–90 days) and pay reviews every 6 months, with more hours as we grow
+
+${TIME_OFF}
+
+Training
+You start with our accounts, how payments flow from Stripe to the bank, and one month's close together with the owner.
+
+Career path
+As we grow, strong performers get more hours, raises and more responsibility.
+
+${howToApply('Blue Ledger', [
+  '3–5 sentences about the books you keep or have kept: the businesses, the software, and what you do each month',
+  'A screenshot of your internet speed test (speedtest.net)',
+  'Your answer to this, as you\'d really write it:\n   "Stripe sold $2,000 of orders this week and paid $1,940 into the bank. How do you record it?"',
+])}`,
+  },
 };
 
-module.exports = { SCREENING, SHARED_LABELS, POSTS, labelsFor };
+/* Messages for applicants who are not going ahead, for the owner to copy into
+   OnlineJobs. Kind, short, and never a reason that could start an argument.
+   {first} and {job} are filled in; the fee line only when a fee is owed. */
+const REJECTIONS = {
+  screening: { label: 'Not invited to the test',
+    text: `Hi {first}, thank you for applying for the {job} position at June's Tees, and for the time you put into your application. We received many strong applications, and we have decided to move forward with applicants whose experience is a closer match for this role. We will keep your profile in mind for future openings. We wish you all the best in your search!` },
+  test: { label: 'After the test',
+    text: `Hi {first}, thank you for taking our test for the {job} position. We read every answer ourselves and appreciated the effort you put in. After careful thought, we have decided not to move forward with your application this time.{fee} We will keep your profile in mind for future openings. Thank you again, and all the best!` },
+  interview: { label: 'After the video call',
+    text: `Hi {first}, thank you for your time on our video call for the {job} position. It was great to meet you and learn about your work. We have chosen another candidate whose experience is a closer fit for what we need right now, which was a hard decision.{fee} We would be glad to keep in touch for future roles. Thank you again, and all the best!` },
+};
+
+/** A rejection message ready to paste. */
+function rejectionMessage(kind, { name, job, fee } = {}) {
+  const t = (REJECTIONS[kind] || REJECTIONS.screening).text;
+  const first = String(name || '').trim().split(/\s+/)[0] || 'there';
+  return t.replace('{first}', first).replace('{job}', job || 'this')
+    .replace('{fee}', fee ? ` ${fee}` : '');
+}
+
+module.exports = { SCREENING, SHARED_LABELS, POSTS, REJECTIONS, labelsFor, gemLabel, rejectionMessage };

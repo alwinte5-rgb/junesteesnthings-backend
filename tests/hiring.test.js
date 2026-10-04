@@ -231,7 +231,7 @@ test('round 2 rides on the round-1 link, and the owner hears once per applicant'
 
 test('helpers learn the job from the playbook, written for customers, never as test answers', () => {
   const kb = src.slice(src.indexOf('const KB_ADDED = ['), src.indexOf('async function addPlaybookArticles'));
-  for (const t of ['Customer situations: what to do', 'Design situations: what to do', 'Can you make the design pop more?', 'Working on our live websites and apps', 'Making and posting our videos', 'Reorders and replying to reviews', 'Chasing late artwork and approvals', 'Running our ads', 'Something is wrong with my order', 'Do you make shirts for businesses?',
+  for (const t of ['Customer situations: what to do', 'Design situations: what to do', 'Can you make the design pop more?', 'Working on our live websites and apps', 'Making and posting our videos', 'Reorders and replying to reviews', 'Chasing late artwork and approvals', 'Running our ads', 'Keeping the books', 'Something is wrong with my order', 'Do you make shirts for businesses?',
     "Can you match another shop\\'s price?", 'Can you get it done by [date]?', 'Let me check and get back to you', 'A quiet afternoon: a plan']) {
     const at = kb.indexOf(`title: '${t}'`);
     assert.ok(at > 0, t);
@@ -245,7 +245,7 @@ test('helpers learn the job from the playbook, written for customers, never as t
 const POSTING = require('../tools/lib/hiring-posting');
 
 test('every job role is complete: test, model answers, guide, job post and screening', () => {
-  assert.deepStrictEqual(Object.keys(H.ROLES).sort(), ['ads', 'content', 'designer', 'developer', 'sales']);
+  assert.deepStrictEqual(Object.keys(H.ROLES).sort(), ['ads', 'bookkeeper', 'content', 'designer', 'developer', 'sales']);
   for (const role of Object.values(H.ROLES)) {
     const k = role.key;
     assert.ok(role.label && role.job && role.reward && role.intro, k);
@@ -273,8 +273,10 @@ test('every job role is complete: test, model answers, guide, job post and scree
     assert.ok(post.title.length <= 120 && post.code && post.wage && post.hours && post.skills.length <= 3 && post.lookFor.length >= 3, k);
     assert.ok(post.body.includes(`"${post.code}"`) && /speed test/i.test(post.body) && /Time off/.test(post.body), `${k} post asks the standard things`);
     assert.ok(!/[\u{1F300}-\u{1FAFF}★⚠]/u.test(POSTING.labelsFor(post.prefix).join('')), 'OLJ refuses emoji in labels');
+    assert.ok(Array.isArray(post.gem) && post.gem.length >= 5, `${k} has a Gem list`);
+    assert.ok(POSTING.labelsFor(post.prefix).includes(`Gem · ${post.prefix}`), `${k} has its own Gem label`);
   }
-  assert.strictEqual(new Set(Object.values(POSTING.POSTS).map((p) => p.code)).size, 5, 'code words differ per job');
+  assert.strictEqual(new Set(Object.values(POSTING.POSTS).map((p) => p.code)).size, 6, 'code words differ per job');
 });
 
 test('roles change the grading, not the engine', () => {
@@ -339,4 +341,15 @@ test('the test fee: PayPal email checked, paid once, booked on Finances', () => 
   const pp = src.slice(src.indexOf("app.post('/apply/test/:token/paypal'"), src.indexOf("app.post('/apply/test/:token/start'"));
   assert.match(pp, /fromAnotherSite\(req\)/);
   assert.match(pp, /AND fee_paid_at IS NULL/, 'the address is fixed once paid');
+});
+
+test('rejection messages: filled in, kind, and the fee line only when a fee is due', () => {
+  assert.deepStrictEqual(Object.keys(POSTING.REJECTIONS), ['screening', 'test', 'interview']);
+  const m = POSTING.rejectionMessage('test', { name: 'Ana Cruz', job: 'graphic designer', fee: 'Your $15 test fee has been sent by PayPal.' });
+  assert.match(m, /^Hi Ana, thank you for taking our test for the graphic designer position/);
+  assert.match(m, /this time\. Your \$15 test fee has been sent by PayPal\. We will keep/);
+  assert.doesNotMatch(POSTING.rejectionMessage('screening', { name: 'Bo' }), /\{|\}|fee/);
+  assert.doesNotMatch(POSTING.rejectionMessage('interview', { name: 'Bo', job: 'x' }), /\{fee\}|  /);
+  assert.ok(!POSTING.SHARED_LABELS.some((l) => /^Gem/.test(l.name)), 'Gem labels are per job now');
+  assert.ok(POSTING.SCREENING.rules.some((r) => /profile/.test(r) && /transferable/.test(r)));
 });

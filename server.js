@@ -24780,7 +24780,7 @@ app.get('/admin/hiring', requireAdmin, async (req, res) => {
           ${band ? `${pill(`${r.score}/100`, band.tone)} ${escEmail(band.label)}` : ''}
           ${r.initiative ? pill(r.initiative, r.initiative === 'self-starter' ? 'green' : r.initiative === 'waits for direction' ? 'red' : 'neutral') : ''}
           ${pill(HIRING.roleOf(r.role).label, 'neutral')} ${hireRound2Pill(r)}
-          ${skills.length ? pill('Extra skills', 'gold') : ''}${r.late ? pill('late', 'amber') : ''}${r.grade_error ? pill('needs grading', 'red') : ''}</div>
+          ${/\bgem\b/i.test(r.note || '') ? pill('Gem', 'gold') + ' ' : ''}${skills.length ? pill('Extra skills', 'gold') : ''}${r.late ? pill('late', 'amber') : ''}${r.grade_error ? pill('needs grading', 'red') : ''}</div>
         <div class="row-sub muted">${escEmail(r.note || '')}${r.note ? ' · ' : ''}made ${escEmail(whenShort(r.created_at))}${
           r.submitted_at ? ` · handed in ${escEmail(whenShort(r.submitted_at))}` : ''}</div></span></a>`;
     }).join('') : emptyState(show === 'open' ? 'Nobody waiting on a decision. Make a test link above.' : 'Nobody here yet.');
@@ -24873,7 +24873,9 @@ app.get('/admin/hiring/test', requireAdmin, (req, res) => {
       <p><b>Labels to make in the OnlineJobs inbox:</b></p>
       <ul>${(post ? HIRE_POSTING.labelsFor(post.prefix) : []).map((l) => `<li>${escEmail(l)}</li>`).join('')}
         ${HIRE_POSTING.SHARED_LABELS.map((l) => `<li><b>${escEmail(l.name)}</b>: ${escEmail(l.use)}</li>`).join('')}</ul>
-      ${post ? `<p><b>What a top pick for this job has:</b></p><ul>${post.lookFor.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>` : ''}
+      ${post ? `<p><b>What a top pick for this job has:</b></p><ul>${post.lookFor.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>
+        <p><b>${escEmail(HIRE_POSTING.gemLabel(post.prefix))}: your exceptional applicants.</b> A top pick whose OLJ profile (work history, skills,
+        portfolio, certificates) shows transferable skills like these:</p><ul>${post.gem.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>` : ''}
       <p><b>Rules for every job:</b></p><ul>${HIRE_POSTING.SCREENING.rules.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>
       <p><b>The steps:</b></p><ol>${HIRE_POSTING.SCREENING.steps.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ol></div>`;
   const mc = role.choice.map((x, n) => `<div class="row-i"><span class="row-main" style="white-space:normal">
@@ -24894,6 +24896,10 @@ app.get('/admin/hiring/test', requireAdmin, (req, res) => {
       '<a class="btn btn-ghost" href="/admin/hiring">Back to hiring</a>')}
     <div class="card" style="display:flex;gap:8px;flex-wrap:wrap">${tabs}</div>
     ${postCard}${screen}
+    <div class="card"><b>Messages for applicants who are not going ahead</b>
+      <p class="muted">Copy one into their OnlineJobs conversation and change [Name]. A rejected applicant's page on Hiring has these filled in for them.</p>
+      ${Object.entries(HIRE_POSTING.REJECTIONS).map(([k, v]) => `<p style="margin-top:10px"><b>${escEmail(v.label)}</b></p>
+        <textarea readonly style="width:100%;min-height:96px" onclick="this.select()">${escEmail(HIRE_POSTING.rejectionMessage(k, { name: '[Name]', job: role.label.replace(/ \(.*\)$/, '').toLowerCase() }))}</textarea>`).join('')}</div>
     <div class="card"><b>3. The test: ${escEmail(role.parts.choice.label)}</b> (marked automatically)${mc}</div>
     <div class="card"><b>Written questions</b> (graded by Claude against these notes and model answers; you see every answer)${written}</div>
     <div class="card"><b>4. Round 2 (automatic)</b>
@@ -24954,7 +24960,7 @@ app.get('/admin/hiring/:id', requireAdmin, async (req, res) => {
           ${g.concerns.length ? `<p><b>Concerns</b></p><ul>${g.concerns.map((s) => `<li>${escEmail(s)}</li>`).join('')}</ul>` : ''}
           ${g.generic_note ? `<div class="warn">Generic or templated: ${escEmail(g.generic_note)}</div>` : ''}` : ''}
       </div>
-      ${hireDecisionCard(r)}
+      ${hireDecisionCard(Object.assign(r, { _r2: r2 }))}
       ${hireFeeCard2(r)}
       ${g && g.follow_up.length && !r2 ? `<div class="card"><b>Follow-up questions for the video call</b>
         <p class="muted">About ${escEmail(r.name)}'s own answers. Use them with the <a href="/admin/hiring/test">standard guide</a>.</p>
@@ -25004,6 +25010,19 @@ function hireFeeCard2(r) {
     ${r.fee_skip && !r.fee_paid_at ? `<form method="post" action="/admin/hiring/${r.id}/fee"><button class="btn btn-ghost" name="action" value="unskip" type="submit">Pay it after all</button></form>` : ''}</div>`;
 }
 
+/** The message to tell a rejected applicant, filled in: which one depends on
+ *  how far they got, and it mentions the test fee when one is paid or owed. */
+function hireRejectionBox(r, r2 = r._r2) {
+  const kind = r2 && r2.grade && r2.grade.recommendation === 'interview' ? 'interview' : r.submitted_at ? 'test' : 'screening';
+  const fee = !r.submitted_at || r.fee_skip ? '' : r.fee_paid_at ? `Your $${HIRING.TEST_FEE} test fee has been sent by PayPal.`
+    : `Your $${HIRING.TEST_FEE} test fee will be sent by PayPal within ${HIRING.FEE_DAYS} days.`;
+  const job = HIRING.roleOf(r.role).label.replace(/ \(.*\)$/, '').toLowerCase();
+  const box = (k) => `<textarea readonly style="width:100%;min-height:96px" onclick="this.select()">${escEmail(HIRE_POSTING.rejectionMessage(k, { name: r.name, job, fee }))}</textarea>`;
+  return `<p><b>Message to send them on OnlineJobs.ph</b> (${escEmail(HIRE_POSTING.REJECTIONS[kind].label.toLowerCase())}):</p>${box(kind)}
+    <details><summary class="muted">Other versions</summary>${Object.keys(HIRE_POSTING.REJECTIONS).filter((k) => k !== kind)
+      .map((k) => `<p style="margin:8px 0 4px">${escEmail(HIRE_POSTING.REJECTIONS[k].label)}</p>${box(k)}`).join('')}</details>`;
+}
+
 /** The owner's decision after the video call, with the buttons to set it. */
 function hireDecisionCard(r) {
   const cur = r.decision && HIRING.DECISIONS[r.decision];
@@ -25014,7 +25033,7 @@ function hireDecisionCard(r) {
       ${Object.entries(HIRING.DECISIONS).map(([k, [label]]) => btn(k, label)).join('')}
       ${r.decision ? '<button class="btn btn-ghost" type="submit" name="decision" value="">Clear</button>' : ''}</form>
     ${r.decision === 'hired' ? '<p class="muted">Next: add them on <a href="/admin/staff">Staff</a>. Their Training page and the playbook take it from there.</p>' : ''}
-    ${r.decision === 'rejected' ? '<p class="muted">Their test links are closed and no more emails come about them.</p>' : ''}</div>`;
+    ${r.decision === 'rejected' ? `<p class="muted">Their test links are closed and no more emails come about them.</p>${hireRejectionBox(r)}` : ''}</div>`;
 }
 
 /** Round 2 on the applicant's page: where it stands, the grader's verdict,
@@ -25970,6 +25989,29 @@ const KB_ADDED = [
 `- Ads say only what is true: real turnaround, real reviews, local pickup. No "cheapest" and no promises we cannot keep\n` +
 `- Plan seasons ahead: back to school, sports seasons, holidays, graduation. Build them paused a month early\n` +
 `- Every week, a short plain-English report to June: spend, quote requests, cost each, orders, what you changed. June approves new campaigns and budget changes` },
+  { kind: 'sop', title: 'Keeping the books', needsReview: true,
+    tags: 'bookkeeping, finances, reconcile, stripe, paypal, refunds, disputes, sales tax, month end, receipts',
+    body: `How we keep the books right every month.\n\n` +
+`**Recording**\n` +
+`- Sales are what the customer paid (gross). Stripe and PayPal fees are an expense, never taken off sales\n` +
+`- A refund or a dispute is recorded when it happens, linked to its order. A closed month is never changed\n` +
+`- Every expense has a receipt and a category. No receipt? Look in email and the supplier account, then ask June. Never guess\n` +
+`- A business cost paid on a personal card is still a business cost: record who paid it\n` +
+`- Contractor pay, including paid hiring tests, is contract labor, with the person's name\n\n` +
+`**Sales tax (Illinois)**\n` +
+`- A sale is tax-exempt only with the customer's exemption certificate (their "E" number) on file. Keep exempt sales separate\n` +
+`- Each month, note the tax collected that belongs to the state, so it is set aside\n\n` +
+`**Month-end close (first 3 working days)**\n` +
+`1. Download every statement: bank, Stripe, PayPal, and the cash log\n` +
+`2. Reconcile each account to its statement; match every deposit to a payout; anything in transit is noted, not missing\n` +
+`3. Check receipts, recurring costs (rent, software, phone) and contractor payments\n` +
+`4. Sales tax: taxable vs exempt, certificates on file\n` +
+`5. Look for duplicates and anything odd, then run the profit and loss\n` +
+`6. Send June a short summary: sales, costs, profit, cash in the bank, tax to set aside, and questions\n\n` +
+`**Safety**\n` +
+`- Your own login for every account, with two-factor sign-in. Never a password in chat or email\n\n` +
+`**Quiet time**\n` +
+`- Unused subscriptions, missing receipts and exemption certificates, customers who still owe money, a cash-flow forecast for the busy season` },
   { kind: 'sop', title: 'A quiet afternoon: a plan', needsReview: true,
     tags: 'quiet time, no messages, initiative, self-starter, what to do, follow up, leads, summary',
     body: `Nothing new, nothing assigned, June busy for a few hours? Here is a good way to spend it. Do the money first.\n\n` +
