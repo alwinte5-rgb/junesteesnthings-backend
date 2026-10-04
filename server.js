@@ -1192,6 +1192,8 @@ async function initStaffTables() {
   await pool.query(`ALTER TABLE hiring_tests ADD COLUMN IF NOT EXISTS parent_id INTEGER`);
   await pool.query(`ALTER TABLE hiring_tests ADD COLUMN IF NOT EXISTS questions JSONB`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS hiring_tests_parent ON hiring_tests (parent_id) WHERE parent_id IS NOT NULL`);
+  // When the owner was sent the result for this applicant: one email, ever.
+  await pool.query(`ALTER TABLE hiring_tests ADD COLUMN IF NOT EXISTS owner_told_at TIMESTAMPTZ`);
   // Coaching notes the owner writes outside an approval.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS staff_feedback (
@@ -22247,6 +22249,7 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
     });
     await step('daily digest', sendDailyDigest);
     await step('unanswered leads', nudgeUnansweredLeads);
+    await step('hiring round 2', reportUnfinishedRound2);
     await step('tax check', taxMonthlyCheck);
     await step('brevo breach check', brevoBreachCheck);
     await step('brevo catch-up', brevoCatchUp);
@@ -24362,10 +24365,20 @@ const HIRE_DEAD = () => hirePage('Link not available', `<div class="card"><h1 st
 
 async function hireRowByToken(token) {
   if (!HIRING.validToken(token)) return null;
-  const { rows } = await pool.query('SELECT * FROM hiring_tests WHERE token_hash = $1', [HIRING.hashToken(token)]);
+  const { rows } = await pool.query('SELECT * FROM hiring_tests WHERE token_hash = $1 AND stage = 1', [HIRING.hashToken(token)]);
   const r = rows[0];
   if (!r || r.status === 'cancelled') return null;
   return r;
+}
+
+/** The test a link opens now: round 1, or once round 1 is handed in and round
+ *  2 exists, round 2. Round 2 has no link of its own, so the applicant goes on
+ *  from the same page and the owner never has to send a second link. */
+async function hireActiveRow(token) {
+  const first = await hireRowByToken(token);
+  if (!first || !first.submitted_at) return { row: first, first };
+  const { rows } = await pool.query(`SELECT * FROM hiring_tests WHERE parent_id = $1 AND status <> 'cancelled'`, [first.id]);
+  return { row: rows[0] || first, first };
 }
 
   /* The clock counts down from what the SERVER says is left; the browser only
@@ -24418,13 +24431,23 @@ function round2Page(row, token, t) {
 app.get('/apply/test/:token', hireRateLimit, async (req, res) => {
   hireHeaders(res);
   const token = String(req.params.token || '');
-  let row;
-  try { row = await hireRowByToken(token); } catch (err) {
+  let row, first;
+  try { ({ row, first } = await hireActiveRow(token)); } catch (err) {
     console.error('hiring test lookup failed:', err.message);
     return res.status(503).send(hirePage('Try again', '<div class="card"><p>Please try again in a moment.</p></div>'));
   }
   if (!row) return res.status(404).send(HIRE_DEAD());
   if (row.submitted_at) {
+    /* Round 1 just handed in: the grade decides, in about 30 seconds, whether
+       round 2 opens. The page checks again on its own until it knows. It says
+       nothing about a score, and an applicant who does not go on sees the same
+       thank-you as everyone else. */
+    if (row === first && HIRING.round2Pending(first)) {
+      res.set('Refresh', '10');
+      return res.send(hirePage('Thank you', `<div class="card"><h1 style="font-size:22px">Thank you, ${escEmail(row.name)}</h1>
+        <p>Your answers are in. <b>Please keep this page open for a minute</b> while we check them: there may be a short
+        second part, and it will appear here.</p><p class="muted">This page refreshes by itself.</p></div>`));
+    }
     return res.send(hirePage('Thank you', `<div class="card"><h1 style="font-size:22px">Thank you, ${escEmail(row.name)}</h1>
       <p>Your answers are in. We read every test ourselves and will reply on OnlineJobs.ph within a few days.</p></div>`));
   }
@@ -24474,8 +24497,9 @@ app.post('/apply/test/:token/start', hireRateLimit, async (req, res) => {
   if (fromAnotherSite(req)) return res.status(403).send('Forbidden');
   const token = String(req.params.token || '');
   try {
-    const row = await hireRowByToken(token);
+    const { row } = await hireActiveRow(token);
     if (!row) return res.status(404).send(HIRE_DEAD());
+    if (row.submitted_at) return res.redirect(303, `/apply/test/${encodeURIComponent(token)}`);
     if (!row.started_at && HIRING.timing(row).expired) return res.status(404).send(HIRE_DEAD());
     // Only the first press starts the clock; a second one changes nothing.
     await pool.query(`UPDATE hiring_tests SET started_at = NOW(), status = 'started'
@@ -24492,8 +24516,10 @@ app.post('/apply/test/:token', hireRateLimit, async (req, res) => {
   if (fromAnotherSite(req)) return res.status(403).send('Forbidden');
   const token = String(req.params.token || '');
   try {
-    const row = await hireRowByToken(token);
+    const { row } = await hireActiveRow(token);
     if (!row) return res.status(404).send(HIRE_DEAD());
+    // Already in (a second tab, or a reload of the hand-in): show the page.
+    if (row.submitted_at) return res.redirect(303, `/apply/test/${encodeURIComponent(token)}`);
     const t = HIRING.timing(row, undefined, hireMinutes(row));
     if (!t.started) return res.redirect(303, `/apply/test/${encodeURIComponent(token)}`);
     const answers = row.stage === 2 ? HIRING.cleanRound2(req.body, row.questions) : HIRING.cleanAnswers(req.body);
@@ -24519,16 +24545,22 @@ app.post('/apply/test/:token', hireRateLimit, async (req, res) => {
 
 /** Grade one hand-in and store the result. Never throws: a failure is stored
  *  as grade_error for the owner to see and retry. A round-1 pass opens round 2
- *  (once), and its link goes to the owner in the same email. */
+ *  (once) on the applicant's same link.
+ *
+ *  `notify` is set by a hand-in. The owner gets ONE email per applicant, with
+ *  everything in it: when round 2 is graded, or when round 1 ends it (below
+ *  the pass mark, or a grade that failed and needs the owner). An applicant
+ *  who never finishes round 2 is reported by the hourly sweep instead,
+ *  reportUnfinishedRound2. A re-grade from the owner's screen sends nothing. */
 async function gradeHiringTest(id, { notify = false } = {}) {
   const { rows } = await pool.query('SELECT * FROM hiring_tests WHERE id = $1', [id]);
   const row = rows[0];
   if (!row || !row.answers) return null;
-  const round2 = row.stage === 2;
+  const isRound2 = row.stage === 2;
   let grade = null;
   let error = null;
   try {
-    grade = round2
+    grade = isRound2
       ? await HIRING.gradeRound2(row.questions || [], row.answers.written || {}, { name: row.name })
       : await HIRING.gradeWritten(row.answers.written || {}, { name: row.name });
   } catch (err) {
@@ -24536,7 +24568,7 @@ async function gradeHiringTest(id, { notify = false } = {}) {
     error = HIRING.failureMessage(err);
     reportError('hiring-grade', err, `hiring test ${id}`).catch(() => {});
   }
-  const score = !grade ? null : round2 ? HIRING.round2Score(grade)
+  const score = !grade ? null : isRound2 ? HIRING.round2Score(grade)
     : HIRING.overall(row.choice || { score: 0, total: 0 }, grade).score;
   await pool.query(
     /* A failed re-grade keeps the last good grade: it only records why. */
@@ -24545,55 +24577,117 @@ async function gradeHiringTest(id, { notify = false } = {}) {
             status = CASE WHEN $2::jsonb IS NULL THEN status ELSE 'graded' END
       WHERE id = $1`,
     [id, grade ? JSON.stringify(grade) : null, score, error]);
-  const next = !round2 && grade && HIRING.passes(score) ? await openRound2(row, grade).catch((err) => {
+  const opened = !isRound2 && grade && HIRING.passes(score) ? await openRound2(row, grade).catch((err) => {
     console.error(`hiring test ${id}: round 2 not opened:`, err.message);
     reportError('hiring-round2', err, `hiring test ${id}`).catch(() => {});
     return null;
   }) : null;
-  if (notify && NOTIFY_EMAIL) {
-    const band = !round2 && score != null ? hireBand(score) : null;
-    const label = round2 && grade ? (HIRING.ROUND2_LABELS[grade.recommendation] || [''])[0] : band ? band.label : '';
-    const line = score != null ? `${score}/100 · ${label}` : 'not graded yet: open it to grade again';
-    sendEmail({
-      to: NOTIFY_EMAIL,
-      subject: `${round2 ? 'Round 2' : 'Applicant test'} finished: ${row.name} (${score != null ? score + '/100' : 'needs grading'})`,
-      html: `<p><b>${escEmail(row.name)}</b> handed in ${round2 ? 'round 2' : 'the applicant test'}${row.late ? ' (after the time limit)' : ''}.</p>
-        <p>${escEmail(line)}</p>
-        ${next ? `<p><b>Passed, so round 2 is ready.</b> Send this on OnlineJobs.ph:</p>
-          <pre style="white-space:pre-wrap;font-family:inherit;background:#F7F6F3;padding:12px;border-radius:8px">${escEmail(round2Message(row.name, next.token))}</pre>` : ''}
-        <p><a href="${PUBLIC_BASE_URL}/admin/hiring/${id}">See the answers${round2 ? ' and the questions for the video call' : ''}</a></p>`,
-    }).catch((err) => console.error('hiring notify failed:', err.message));
-  }
+  /* Opened from the owner's screen after the first email went (a grade that
+     had failed): the round-2 result is still owed, so let it be sent. */
+  if (opened && !notify) await pool.query('UPDATE hiring_tests SET owner_told_at = NULL WHERE id = $1', [row.id]);
+  // A pass waits for round 2; anything else is the whole story now.
+  if (notify && !opened) await tellOwnerHiring(isRound2 ? row.parent_id : id).catch((err) => console.error('hiring notify failed:', err.message));
   return grade;
 }
 
-/** The message that carries a round-2 link. */
-function round2Message(name, token) {
-  return `Hi ${String(name || '').split(/\s+/)[0]}, thank you for your test: you passed the first round! ` +
-    `Round 2 is a few short questions about your answers (about ${HIRING.ROUND2_MINUTES} minutes). ` +
-    `Open this private link when you have ${HIRING.ROUND2_MINUTES} quiet minutes; the clock starts when you press Start:\n` +
-    `${hireLink(token)}\nThe link works for ${HIRING.LINK_DAYS} days. Please write your own answers without AI tools. Thank you!`;
-}
-
-/** Make round 2 for a graded round-1 row, once. Returns { id, token } when it
- *  made one now, or null when one already exists or there are no questions.
- *  The token is never stored: it reaches the owner in the email or on screen. */
+/** Make round 2 for a graded round-1 row, once. Returns its id when it made one
+ *  now, or null when one already exists or there are no questions. It opens on
+ *  the round-1 link, so its own token is random and never shown. */
 async function openRound2(row, grade) {
   const questions = HIRING.round2Questions(grade);
   if (!questions.length) return null;
-  const { token, hash } = HIRING.newToken();
   const { rows } = await pool.query(
     `INSERT INTO hiring_tests (token_hash, name, role, note, expires_at, stage, parent_id, questions)
      VALUES ($1, $2, $3, $4, NOW() + make_interval(days => $5::int), 2, $6, $7)
      ON CONFLICT (parent_id) WHERE parent_id IS NOT NULL DO NOTHING RETURNING id`,
-    [hash, row.name, row.role, 'Round 2', HIRING.LINK_DAYS, row.id, JSON.stringify(questions)]);
-  return rows.length ? { id: rows[0].id, token } : null;
+    [HIRING.newToken().hash, row.name, row.role, 'Round 2', HIRING.ROUND2_DAYS, row.id, JSON.stringify(questions)]);
+  return rows.length ? rows[0].id : null;
+}
+
+/** Both rounds for one applicant: { first, second } (second may be null). */
+async function hireRounds(firstId) {
+  const { rows } = await pool.query(
+    'SELECT * FROM hiring_tests WHERE id = $1 OR parent_id = $1 ORDER BY stage', [firstId]);
+  const first = rows.find((r) => r.stage !== 2) || null;
+  return { first, second: first ? rows.find((r) => r.stage === 2 && r.parent_id === first.id) || null : null };
+}
+
+/** The owner's one email for an applicant: both rounds and what to do next.
+ *  owner_told_at on the round-1 row makes it once, whoever calls first. */
+async function tellOwnerHiring(firstId, { unfinished = false } = {}) {
+  if (!NOTIFY_EMAIL || !firstId) return false;
+  const { rows } = await pool.query(
+    `UPDATE hiring_tests SET owner_told_at = NOW() WHERE id = $1 AND stage = 1 AND owner_told_at IS NULL RETURNING id`, [firstId]);
+  if (!rows.length) return false;
+  const { first, second } = await hireRounds(firstId);
+  const r1 = first.score != null ? `${first.score}/100 · ${(hireBand(first.score) || {}).label || ''}` : 'not graded: open it and press Grade again';
+  const g2 = second && second.grade;
+  const rec = g2 ? (HIRING.ROUND2_LABELS[g2.recommendation] || ['Maybe'])[0] : null;
+  const verdict = rec ? rec
+    : second && second.submitted_at ? 'Round 2 needs grading'
+    : second ? 'Did not finish round 2'
+    : first.score != null && !HIRING.passes(first.score) ? `Below ${HIRING.PASS_SCORE}, so no round 2`
+    : first.score != null ? 'Passed round 1' : 'Needs grading';
+  const li = (xs) => (xs || []).length ? `<ul>${xs.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>` : '';
+  const g1 = first.grade;
+  try {
+    await sendEmail({
+      to: NOTIFY_EMAIL,
+      subject: `Applicant results: ${first.name} (${verdict}${first.score != null ? `, round 1 ${first.score}/100` : ''})`,
+      html: `<p><b>${escEmail(first.name)}</b>${first.note ? ` · ${escEmail(first.note)}` : ''}</p>
+        <p><b>Round 1:</b> ${escEmail(r1)}${first.late ? ' (handed in after the time limit)' : ''}</p>
+        ${g1 && g1.summary ? `<p>${escEmail(g1.summary)}</p>` : ''}
+        ${second ? `<p><b>Round 2:</b> ${escEmail(g2 ? `${second.score}/100 · ${rec}` : second.submitted_at ? 'handed in, not graded: open it and press Grade again'
+          : unfinished || second.started_at ? 'not handed in' : 'not started')}${second.late ? ' (after the time limit)' : ''}</p>
+          ${g2 ? `<p>${escEmail(g2.summary)}</p>${g2.strengths.length ? `<p><b>Strengths</b></p>${li(g2.strengths)}` : ''}${
+            g2.concerns.length ? `<p><b>Concerns</b></p>${li(g2.concerns)}` : ''}${
+            g2.video_questions.length ? `<p><b>Questions still open for the video call</b></p>${li(g2.video_questions.map((q) => q.question))}` : ''}` : ''}` : ''}
+        <p><a href="${PUBLIC_BASE_URL}/admin/hiring/${first.id}">See every answer</a></p>`,
+    });
+    return true;
+  } catch (err) {
+    // Not sent: let the next hand-in, re-grade or sweep try again.
+    await pool.query('UPDATE hiring_tests SET owner_told_at = NULL WHERE id = $1', [firstId]).catch(() => {});
+    throw err;
+  }
+}
+
+/** Hourly: a round 2 that closed without a hand-in (the link window passed, or
+ *  the clock ran out and nothing came) still owes the owner the result. */
+async function reportUnfinishedRound2() {
+  const { rows } = await pool.query(
+    `SELECT c.parent_id FROM hiring_tests c JOIN hiring_tests p ON p.id = c.parent_id
+      WHERE c.stage = 2 AND c.submitted_at IS NULL AND p.owner_told_at IS NULL
+        AND (c.status = 'cancelled' OR c.expires_at < NOW()
+             OR c.started_at < NOW() - make_interval(mins => $1::int))
+      LIMIT 50`, [HIRING.ROUND2_MINUTES + HIRING.GRACE_MINUTES + 5]);
+  let sent = 0;
+  for (const r of rows) if (await tellOwnerHiring(r.parent_id, { unfinished: true })) sent++;
+  return sent ? `${sent} reported` : '';
 }
 
 const HIRE_STATUS = {
   sent: ['Link sent', 'gray'], started: ['Taking it now', 'amber'], submitted: ['Handed in', 'blue'],
   graded: ['Graded', 'green'], cancelled: ['Cancelled', 'gray'],
 };
+
+/** Round 2 in a word, for the list and the applicant page. */
+function hireRound2State(c) {
+  if (!c) return null;
+  if (c.rec) return [`Round 2: ${(HIRING.ROUND2_LABELS[c.rec] || ['Maybe'])[0]}`, (HIRING.ROUND2_LABELS[c.rec] || [0, 'amber'])[1]];
+  if (c.error) return ['Round 2: needs grading', 'red'];
+  if (c.submitted) return ['Round 2: grading', 'blue'];
+  if (c.status === 'cancelled') return ['Round 2: cancelled', 'gray'];
+  if (c.expires && new Date(c.expires) < new Date() && !c.started) return ['Round 2: not taken', 'gray'];
+  if (c.started) return ['Round 2: taking it', 'amber'];
+  return ['Round 2: waiting for them', 'gray'];
+}
+
+function hireRound2Pill(r) {
+  const st = r.r2_id ? hireRound2State({ rec: r.r2_rec, error: r.r2_error, submitted: r.r2_in, status: r.r2_status,
+    expires: r.r2_expires, started: r.r2_status === 'started' }) : null;
+  return st ? pill(st[0], st[1]) : '';
+}
 
 function hireBand(score) {
   return score == null ? null : HIRING.BANDS.find((b) => score >= b.min);
@@ -24602,9 +24696,13 @@ function hireBand(score) {
 app.get('/admin/hiring', requireAdmin, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT id, name, role, note, status, score, late, created_at, expires_at, opened_at, started_at, submitted_at, grade_error,
-              grade->>'initiative' AS initiative, grade->'extra_skills' AS skills
-         FROM hiring_tests ORDER BY (score IS NULL), score DESC, created_at DESC LIMIT 300`);
+      `SELECT t.id, t.name, t.role, t.note, t.status, t.score, t.late, t.created_at, t.expires_at, t.opened_at, t.started_at,
+              t.submitted_at, t.grade_error, t.grade->>'initiative' AS initiative, t.grade->'extra_skills' AS skills,
+              c.id AS r2_id, c.status AS r2_status, c.submitted_at AS r2_in, c.expires_at AS r2_expires,
+              c.grade_error AS r2_error, c.grade->>'recommendation' AS r2_rec
+         FROM hiring_tests t LEFT JOIN hiring_tests c ON c.parent_id = t.id
+        WHERE t.stage = 1
+        ORDER BY (t.score IS NULL), t.score DESC, t.created_at DESC LIMIT 300`);
     const list = rows.length ? rows.map((r) => {
       const [label, tone] = HIRE_STATUS[r.status] || HIRE_STATUS.sent;
       const band = hireBand(r.score);
@@ -24614,6 +24712,7 @@ app.get('/admin/hiring', requireAdmin, async (req, res) => {
         <div class="row-sub">${pill(expired ? 'Link expired' : label, expired ? 'red' : tone)}
           ${band ? `${pill(`${r.score}/100`, band.tone)} ${escEmail(band.label)}` : ''}
           ${r.initiative ? pill(r.initiative, r.initiative === 'self-starter' ? 'green' : r.initiative === 'waits for direction' ? 'red' : 'neutral') : ''}
+          ${hireRound2Pill(r)}
           ${skills.length ? pill('Extra skills', 'gold') : ''}${r.late ? pill('late', 'amber') : ''}${r.grade_error ? pill('needs grading', 'red') : ''}</div>
         <div class="row-sub muted">${escEmail(r.note || '')}${r.note ? ' · ' : ''}made ${escEmail(whenShort(r.created_at))}${
           r.submitted_at ? ` · handed in ${escEmail(whenShort(r.submitted_at))}` : ''}</div></span></a>`;
@@ -24636,17 +24735,23 @@ app.get('/admin/hiring', requireAdmin, async (req, res) => {
   }
 });
 
-function hireLinkCard(name, token) {
+function hireLinkCard(name, token, { round2 = false } = {}) {
   const link = hireLink(token);
+  const first = escEmail(String(name).split(/\s+/)[0]);
+  const message = round2
+    ? `Hi ${first}, thank you for your test: you are through to round 2! It is a few short questions about your answers (about ${HIRING.ROUND2_MINUTES} minutes). Open this private link when you have ${HIRING.ROUND2_MINUTES} quiet minutes; the clock starts when you press Start:
+${escEmail(link)}
+Please write your own answers without AI tools. Thank you!`
+    : `Hi ${first}, thank you for applying to June's Tees! The next step is a short paid test (about ${HIRING.MINUTES} minutes, $15). Open this private link when you have ${HIRING.MINUTES} quiet minutes and a stable connection; the clock starts when you press Start:
+${escEmail(link)}
+The link works for ${HIRING.LINK_DAYS} days. Please write your own answers without AI tools. Thank you!`;
   return `<div class="card" style="border-left:4px solid #16a34a">
     <b>Link for ${escEmail(name)}</b>
     <p>Copy it now: for safety it is shown only once. You can make a new one from their page if it is lost.</p>
     <input id="hire-link" readonly value="${escEmail(link)}" style="width:100%;font-family:monospace" onclick="this.select()">
     <p style="margin-top:8px"><button type="button" class="btn" onclick="var i=document.getElementById('hire-link');i.select();(navigator.clipboard?navigator.clipboard.writeText(i.value):Promise.reject()).then(function(){event.target.textContent='Copied'},function(){document.execCommand('copy');event.target.textContent='Copied'})">Copy link</button></p>
     <p class="muted">Message to send on OnlineJobs.ph:</p>
-    <textarea readonly style="width:100%;min-height:120px" onclick="this.select()">Hi ${escEmail(name.split(/\s+/)[0])}, thank you for applying to June's Tees! The next step is a short paid test (about ${HIRING.MINUTES} minutes, $15). Open this private link when you have ${HIRING.MINUTES} quiet minutes and a stable connection; the clock starts when you press Start:
-${escEmail(link)}
-The link works for ${HIRING.LINK_DAYS} days. Please write your own answers without AI tools. Thank you!</textarea></div>`;
+    <textarea readonly style="width:100%;min-height:120px" onclick="this.select()">${message}</textarea></div>`;
 }
 
 app.post('/admin/hiring', requireAdmin, async (req, res) => {
@@ -24675,14 +24780,21 @@ app.get('/admin/hiring/test', requireAdmin, (_req, res) => {
   const written = HIRING.WRITTEN.map((w) => `<div class="row-i"><span class="row-main" style="white-space:normal">
     <b>${escEmail(HIRING.PARTS[w.part].label)}: ${escEmail(w.label)}</b>${w.optional ? ' ' + pill('optional', 'neutral') : ''}
     <div class="row-sub" style="white-space:normal">${escEmail(w.prompt)}</div>
-    <div class="row-sub muted" style="white-space:normal">What a good answer does: ${escEmail(w.rubric)}</div></span></div>`).join('');
+    <div class="row-sub muted" style="white-space:normal">What a good answer does: ${escEmail(w.rubric)}</div>
+    ${w.model ? `<div class="row-sub" style="white-space:normal"><b>Model answer</b> (a 5 out of 5; other answers can score full marks too)</div>
+    <div style="white-space:pre-wrap;margin:6px 0;padding:10px;background:#F7F6F3;border-radius:8px">${escEmail(w.model)}</div>` : ''}</span></div>`).join('');
   const guide = HIRING.INTERVIEW_GUIDE.map((s) => `<div class="row-i"><span class="row-main" style="white-space:normal"><b>${escEmail(s.section)}</b>
     ${s.questions.map((q) => `<div class="row-sub" style="white-space:normal">• ${escEmail(q.q)}<div class="muted">Listen for: ${escEmail(q.listen)}</div></div>`).join('')}</span></div>`).join('');
   res.send(adminPage('Hiring', `
     ${pageHeader('The applicant test', `About ${HIRING.MINUTES} minutes. Score out of 100: judgment ${HIRING.WEIGHTS.choice}, customer replies ${HIRING.WEIGHTS.replies}, initiative ${HIRING.WEIGHTS.initiative}, plus up to ${HIRING.BONUS_MAX} bonus points for an extra skill.`,
       '<a class="btn btn-ghost" href="/admin/hiring">Back to hiring</a>')}
     <div class="card"><b>${escEmail(HIRING.PARTS.choice.label)}</b> (marked automatically)${mc}</div>
-    <div class="card"><b>Written questions</b> (graded by Claude against these notes; you see every answer)${written}</div>
+    <div class="card"><b>Written questions</b> (graded by Claude against these notes and model answers; you see every answer)${written}</div>
+    <div class="card"><b>Round 2 (automatic)</b>
+      <p>A round-1 score of ${HIRING.PASS_SCORE} or more opens round 2 straight away, on the same link: up to ${HIRING.ROUND2_MAX} questions
+      about the applicant's own answers, ${HIRING.ROUND2_MINUTES} minutes, open for ${HIRING.ROUND2_DAYS} days. Claude grades it and recommends
+      a video call or not. You get one email per applicant with both rounds, once round 2 is graded or not taken.</p>
+      <p class="muted">This page is yours alone: helpers cannot open Hiring, so they never see these answers.</p></div>
     <div class="card"><b>Video call guide (about 30 minutes)</b>
       <p class="muted">Ask everyone these, so applicants can be compared. Each applicant's page adds questions about their own answers.</p>${guide}</div>`, 'hiring'));
 });
@@ -24692,16 +24804,24 @@ app.get('/admin/hiring/:id', requireAdmin, async (req, res) => {
   if (!id) return back(res, '/admin/hiring', 'err', 'No such applicant.');
   try {
     const { rows } = await pool.query('SELECT * FROM hiring_tests WHERE id = $1', [id]);
-    const r = rows[0];
-    if (!r) return back(res, '/admin/hiring', 'err', 'No such applicant.');
+    if (!rows[0]) return back(res, '/admin/hiring', 'err', 'No such applicant.');
+    // Round 2 lives on the applicant's page, with round 1.
+    if (rows[0].stage === 2) return res.redirect(303, `/admin/hiring/${rows[0].parent_id}${req.query.ok || req.query.err ? `?${new URLSearchParams(req.query)}` : ''}`);
+    const { first: r, second: r2 } = await hireRounds(id);
     const [label, tone] = HIRE_STATUS[r.status] || HIRE_STATUS.sent;
     const g = r.grade;
     const choice = r.choice || { score: 0, total: HIRING.MULTIPLE_CHOICE.length, results: [] };
     const total = g ? HIRING.overall(choice, g) : null;
     const answers = (r.answers && r.answers.written) || {};
     const actions = [];
-    if (!r.submitted_at && r.status !== 'cancelled') {
+    const r2Open = r2 && !r2.submitted_at && r2.status !== 'cancelled';
+    if ((!r.submitted_at || r2Open) && r.status !== 'cancelled') {
       actions.push(`<form method="post" action="/admin/hiring/${id}/link" style="display:inline"><button class="btn btn-ghost" type="submit">Make a new link</button></form>`);
+    }
+    if (r.grade && !r2) {
+      actions.push(`<form method="post" action="/admin/hiring/${id}/round2" style="display:inline"><button class="btn btn-ghost" type="submit">Start round 2</button></form>`);
+    }
+    if (!r.submitted_at && r.status !== 'cancelled') {
       actions.push(`<form method="post" action="/admin/hiring/${id}/cancel" style="display:inline"><button class="btn btn-ghost" type="submit">Cancel the test</button></form>`);
     }
     if (r.submitted_at) actions.push(`<form method="post" action="/admin/hiring/${id}/grade" style="display:inline" onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Grading, about 30 seconds...'"><button class="btn btn-ghost" type="submit">Grade again</button></form>`);
@@ -24729,6 +24849,7 @@ app.get('/admin/hiring/:id', requireAdmin, async (req, res) => {
       ${g && g.follow_up.length ? `<div class="card"><b>Follow-up questions for the video call</b>
         <p class="muted">About ${escEmail(r.name)}'s own answers. Use them with the <a href="/admin/hiring/test">standard guide</a>.</p>
         <ol>${g.follow_up.map((f) => `<li style="margin-bottom:8px"><b>${escEmail(f.question)}</b><div class="muted">${escEmail(f.why)}</div></li>`).join('')}</ol></div>` : ''}
+      ${hireRound2Card(r, r2)}
       <div class="card"><b>Written answers</b>${HIRING.WRITTEN.map((w) => {
         const s = g && g.scores[w.id];
         return `<div class="row-i"><span class="row-main" style="white-space:normal">
@@ -24750,6 +24871,45 @@ app.get('/admin/hiring/:id', requireAdmin, async (req, res) => {
   }
 });
 
+/** Round 2 on the applicant's page: where it stands, the grader's verdict,
+ *  the questions left for the video call, and every answer. */
+function hireRound2Card(r, r2) {
+  if (!r.submitted_at) return '';
+  if (!r2) {
+    const why = !r.grade ? 'Round 2 opens once round 1 is graded.'
+      : HIRING.passes(r.score) ? 'No round 2: the grader wrote no follow-up questions. Use the ones above on the video call.'
+      : `No round 2: round 1 scored under ${HIRING.PASS_SCORE}. Start it anyway with the button above; it opens on their same link.`;
+    return `<div class="card"><b>Round 2</b><p class="muted">${escEmail(why)}</p></div>`;
+  }
+  const g = r2.grade;
+  const st = hireRound2State({ rec: g && g.recommendation, error: r2.grade_error, submitted: r2.submitted_at, status: r2.status,
+    expires: r2.expires_at, started: r2.started_at });
+  const qs = Array.isArray(r2.questions) ? r2.questions : [];
+  const answers = (r2.answers && r2.answers.written) || {};
+  const waiting = !r2.submitted_at && r2.status !== 'cancelled'
+    ? `<p class="muted">It opens on their round-1 link${r2.started_at ? `; started ${escEmail(whenShort(r2.started_at))}` : `, open until ${escEmail(whenShort(r2.expires_at))}`}.
+       If they closed the page, press Make a new link and send it to them.</p>` : '';
+  return `<div class="card" style="border-left:4px solid #0B1F4B">
+    <b>Round 2</b> ${pill(st[0], st[1])}${g ? ` ${pill(`${r2.score}/100`, st[1])}` : ''}${r2.late ? ` ${pill('late', 'amber')}` : ''}
+    ${r2.grade_error ? `<div class="warn">${escEmail(r2.grade_error)}</div>
+      <form method="post" action="/admin/hiring/${r2.id}/grade" onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Grading, about 30 seconds...'"><button class="btn btn-ghost" type="submit">Grade round 2 again</button></form>` : ''}
+    ${waiting}
+    ${g ? `<p style="white-space:normal">${escEmail(g.summary)}</p>
+      ${g.strengths.length ? `<p><b>Strengths</b></p><ul>${g.strengths.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>` : ''}
+      ${g.concerns.length ? `<p><b>Concerns</b></p><ul>${g.concerns.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>` : ''}
+      ${g.generic_note ? `<div class="warn">Generic or templated: ${escEmail(g.generic_note)}</div>` : ''}
+      ${g.video_questions.length ? `<p><b>Still open for the video call</b></p><ol>${g.video_questions.map((f) =>
+        `<li style="margin-bottom:8px"><b>${escEmail(f.question)}</b><div class="muted">${escEmail(f.why)}</div></li>`).join('')}</ol>` : ''}` : ''}
+    ${qs.map((q, n) => {
+      const sc = g && g.scores && g.scores[q.id];
+      return `<div class="row-i"><span class="row-main" style="white-space:normal">
+        <b>${n + 1}. ${escEmail(q.prompt)}</b> ${sc ? pill(`${sc.score}/5`, sc.score >= 4 ? 'green' : sc.score >= 3 ? 'neutral' : 'amber') : ''}
+        <div class="row-sub muted" style="white-space:normal">Why it was asked: ${escEmail(q.why)}</div>
+        ${r2.submitted_at ? `<div style="white-space:pre-wrap;margin:8px 0;padding:10px;background:#F7F6F3;border-radius:8px">${escEmail(answers[q.id] || '(left blank)')}</div>` : ''}
+        ${sc && sc.note ? `<div class="row-sub" style="white-space:normal">Grader: ${escEmail(sc.note)}</div>` : ''}</span></div>`;
+    }).join('')}</div>`;
+}
+
 function hireId(req) {
   return /^\d{1,9}$/.test(String(req.params.id)) ? Number(req.params.id) : null;
 }
@@ -24758,11 +24918,34 @@ app.post('/admin/hiring/:id/grade', requireAdmin, async (req, res) => {
   const id = hireId(req);
   if (!id) return back(res, '/admin/hiring', 'err', 'No such applicant.');
   try {
+    const before = await pool.query('SELECT 1 FROM hiring_tests WHERE parent_id = $1', [id]);
     const g = await gradeHiringTest(id);
-    return back(res, `/admin/hiring/${id}`, g ? 'ok' : 'err', g ? 'Graded again.' : 'Grading did not finish; see the note below.');
+    const after = before.rows.length ? before : await pool.query('SELECT 1 FROM hiring_tests WHERE parent_id = $1', [id]);
+    const msg = !g ? 'Grading did not finish; see the note below.'
+      : !before.rows.length && after.rows.length ? 'Graded, and round 2 is open. Ask them to open their link again, or make a new link for them.'
+      : 'Graded again.';
+    return back(res, `/admin/hiring/${id}`, g ? 'ok' : 'err', msg);
   } catch (err) {
     console.error('hiring regrade failed:', err.message);
     return back(res, `/admin/hiring/${id}`, 'err', 'Grading did not finish. Try again in a minute.');
+  }
+});
+
+// Round 2 for someone the grade did not pass, or who took round 1 before it existed.
+app.post('/admin/hiring/:id/round2', requireAdmin, async (req, res) => {
+  const id = hireId(req);
+  if (!id) return back(res, '/admin/hiring', 'err', 'No such applicant.');
+  try {
+    const { rows } = await pool.query(`SELECT * FROM hiring_tests WHERE id = $1 AND stage = 1 AND grade IS NOT NULL`, [id]);
+    if (!rows.length) return back(res, `/admin/hiring/${id}`, 'err', 'Round 2 needs a graded round 1.');
+    const made = await openRound2(rows[0], rows[0].grade);
+    if (!made) return back(res, `/admin/hiring/${id}`, 'err', 'Round 2 already exists, or the grade has no follow-up questions.');
+    // Its result is still owed, even if round 1's went out on its own.
+    await pool.query('UPDATE hiring_tests SET owner_told_at = NULL WHERE id = $1', [id]);
+    return back(res, `/admin/hiring/${id}`, 'ok', 'Round 2 is open on their link. Ask them to open it again, or make a new link for them.');
+  } catch (err) {
+    console.error('hiring round 2 failed:', err.message);
+    return back(res, `/admin/hiring/${id}`, 'err', 'Round 2 could not be made. Try again.');
   }
 });
 
@@ -24774,13 +24957,17 @@ app.post('/admin/hiring/:id/link', requireAdmin, async (req, res) => {
     /* A new link replaces the old one (whose hash is gone) and restarts the
        expiry. A test already started keeps its clock. */
     const { rows } = await pool.query(
-      `UPDATE hiring_tests SET token_hash = $2, expires_at = NOW() + make_interval(days => $3::int)
-        WHERE id = $1 AND submitted_at IS NULL AND status <> 'cancelled' RETURNING name`,
+      `UPDATE hiring_tests t SET token_hash = $2,
+              expires_at = CASE WHEN t.submitted_at IS NULL THEN NOW() + make_interval(days => $3::int) ELSE t.expires_at END
+        WHERE t.id = $1 AND t.stage = 1 AND t.status <> 'cancelled'
+          AND (t.submitted_at IS NULL OR EXISTS (SELECT 1 FROM hiring_tests c WHERE c.parent_id = t.id
+                 AND c.submitted_at IS NULL AND c.status <> 'cancelled'))
+        RETURNING name, submitted_at`,
       [id, hash, HIRING.LINK_DAYS]);
     if (!rows.length) return back(res, `/admin/hiring/${id}`, 'err', 'This test is finished or cancelled, so it has no link.');
     res.send(adminPage('Hiring', `
       ${pageHeader('New link made', 'The old link no longer works.', `<a class="btn btn-ghost" href="/admin/hiring/${id}">Their page</a>`)}
-      ${hireLinkCard(rows[0].name, token)}`, 'hiring'));
+      ${hireLinkCard(rows[0].name, token, { round2: !!rows[0].submitted_at })}`, 'hiring'));
   } catch (err) {
     console.error('hiring new link failed:', err.message);
     back(res, `/admin/hiring/${id}`, 'err', 'The link could not be made. Try again.');
@@ -25406,8 +25593,6 @@ const KB_ADDED = [
 `- Post the same message across many groups\n` +
 `- Contact anyone who has said no\n\n` +
 `Target: [new prospects per quiet hour, owner to fill in].` },
-  // Hiring: model answers for the applicant test and the interview guide (tools/lib/hiring.js).
-  ...HIRING.playbookArticles(),
 ];
 
 async function addPlaybookArticles() {

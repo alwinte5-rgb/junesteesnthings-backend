@@ -386,10 +386,21 @@ async function gradeWritten(written, { name, client } = {}) {
    grader's follow-up questions about that applicant's own answers. Its answers
    are graded the same way, and the grader then writes the questions left for
    the video call. Below the pass mark nothing is made; the owner can still
-   start round 2 by hand from the applicant's page. */
+   start round 2 by hand from the applicant's page.
+
+   Round 2 has no link of its own: the applicant's round-1 link opens it, and
+   the thank-you page waits for the grade so a passing applicant goes straight
+   on. The owner hears once per applicant, when round 2 is graded or given up
+   on, with both rounds in the one email. */
 const PASS_SCORE = 65;
 const ROUND2_MINUTES = 20;
 const ROUND2_MAX = 6;
+/* Offered the moment round 1 is graded, so it needs only a short window; an
+   unfinished round 2 is reported to the owner when it closes. */
+const ROUND2_DAYS = 2;
+/* How long the thank-you page keeps checking for the round-1 grade (it takes
+   about 30 seconds) before it says "we will be in touch" instead. */
+const ROUND2_WAIT_MINUTES = 5;
 
 const ROUND2_INTRO = `Thank you for your first test. This short second round asks about the answers you gave.
 It takes about ${ROUND2_MINUTES} minutes. Answer in your own words, as specifically as you can: real examples beat general statements.
@@ -479,6 +490,17 @@ function normalizeRound2(g, questions, written = {}) {
   };
 }
 
+/** Should the applicant's thank-you page keep waiting for round 2? Asked only
+ *  while no round 2 exists. True while the grade is on its way, and also for a
+ *  passing grade whose round 2 is a moment from being made (the grade is saved
+ *  first), so a fast grade never strands a passing applicant on a final page. */
+function round2Pending(row, now = new Date()) {
+  if (!row || !row.submitted_at || row.grade_error) return false;
+  if (now - new Date(row.submitted_at) >= ROUND2_WAIT_MINUTES * 60e3) return false;
+  if (!row.grade) return true;
+  return passes(row.score) && round2Questions(row.grade).length > 0;
+}
+
 /** Round 2 as 0-100: the average answer score. */
 function round2Score(grade) {
   const xs = Object.values((grade && grade.scores) || {}).map((x) => x.score);
@@ -505,37 +527,9 @@ async function gradeRound2(questions, written, { name, client } = {}) {
   return normalizeRound2(parsed, questions, written);
 }
 
-/* ── The playbook copy ─────────────────────────────────────────────────────
-   Model answers for the test and what to listen for on the video call, built
-   from the same lists the test and the grader use, so the three never drift.
-   Also good reading for a new helper: the scenarios are the real job. */
-function playbookArticles() {
-  const letters = 'ABCDEFGH';
-  const mc = MULTIPLE_CHOICE.map((x, n) => `**${n + 1}. ${x.q}**\n\n` +
-    `Best answer: ${letters[x.answer]}. ${x.choices[x.answer]}\n\nWhy: ${x.why}`).join('\n\n');
-  const written = WRITTEN.map((w) => `**${w.label}${w.optional ? ' (optional)' : ''}**\n\n${w.prompt}\n\n` +
-    `Model answer:\n${w.model}\n\nWhat makes it strong: ${w.rubric}`).join('\n\n');
-  const guide = INTERVIEW_GUIDE.map((s) => `**${s.section}**\n\n` +
-    s.questions.map((x) => `- ${x.q} **Listen for:** ${x.listen}`).join('\n')).join('\n\n');
-  return [
-    { kind: 'sop', title: 'Applicant test: model answers', needsReview: true,
-      tags: 'hiring, applicant test, model answers, interview, customer service, sales, examples',
-      body: `The model answers for the applicant test on Hiring. The grader marks written answers against the same notes, ` +
-        `so this is what a 5 out of 5 looks like. Other answers can score full marks too. They are also good examples ` +
-        `for anyone on the team: every question is a real day at June's Tees.\n\n` +
-        `Score out of 100: judgment ${WEIGHTS.choice}, customer replies ${WEIGHTS.replies}, initiative ${WEIGHTS.initiative}, ` +
-        `plus up to ${BONUS_MAX} bonus points. ${PASS_SCORE} or more opens round 2 automatically.\n\n` +
-        `**PART 1: QUICK JUDGMENT**\n\n${mc}\n\n**WRITTEN QUESTIONS**\n\n${written}` },
-    { kind: 'sop', title: 'Interview guide: what good answers sound like', needsReview: true,
-      tags: 'hiring, interview, video call, questions, what to listen for',
-      body: `The 30-minute video call, the same for every applicant so they can be compared. Each applicant's page on ` +
-        `Hiring adds questions about their own test answers.\n\n${guide}` },
-  ];
-}
-
 module.exports = {
-  PASS_SCORE, ROUND2_MINUTES, ROUND2_MAX, ROUND2_INTRO, ROUND2_SYSTEM, ROUND2_SCHEMA, ROUND2_LABELS,
-  round2Questions, passes, cleanRound2, round2Message, normalizeRound2, round2Score, gradeRound2, playbookArticles,
+  PASS_SCORE, ROUND2_MINUTES, ROUND2_MAX, ROUND2_DAYS, ROUND2_WAIT_MINUTES, ROUND2_INTRO, ROUND2_SYSTEM, ROUND2_SCHEMA, ROUND2_LABELS,
+  round2Questions, passes, cleanRound2, round2Message, normalizeRound2, round2Score, gradeRound2, round2Pending,
   MODEL, MINUTES, GRACE_MINUTES, LINK_DAYS, LIMITS, ROLES, INTRO, PARTS, MULTIPLE_CHOICE, WRITTEN,
   WEIGHTS, BONUS_MAX, BANDS, INTERVIEW_GUIDE, SYSTEM, GRADE_SCHEMA,
   newToken, hashToken, validToken, validateInvite, testForPage, cleanAnswers, gradeChoices, timing,
