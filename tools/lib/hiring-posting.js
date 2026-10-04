@@ -26,18 +26,68 @@ function gemLabel(prefix) {
 const SHARED_LABELS = [
   { name: 'Apparel-Print Experience', use: 'Has worked with custom apparel, printing or merch before.' },
   { name: 'Future Pool', use: 'Rejected for this post but worth contacting for a later one.' },
-  { name: 'Verify Before Hiring', use: 'Anything that does not add up. Verify means reject: do not send them the test.' },
+  { name: 'Verify Before Hiring', use: 'A RED flag in the trust check. Reject: do not send them the test.' },
+  { name: 'Check on Call', use: 'A top pick with a YELLOW flag. Send the test, and clear the flag on the video call before hiring.' },
 ];
+
+/* Safe and reliable, not only skilled (the owner, 2026-10-04: most applicants
+   come back with weak background checks, "I want the best candidate for the
+   job but a safe and reliable choice as well"). The Background Data Check and
+   the profile give three kinds of signal. A red flag is out, whatever the
+   skills. Yellow flags are normal on OLJ and do not reject on their own: a top
+   pick can carry up to two, each written in the Hiring note and cleared on the
+   video call. Green signs make the choice between equally skilled applicants.
+   OLJ's ID Proof score runs 0-70 today (it used to be 0-99). */
+const TRUST = {
+  red: [
+    'The multiple-accounts tracker shows another account, or the name, photo or details do not match across the profile, ID and application',
+    'Past employer reviews that mention dishonesty, disappearing without notice, or work that was not theirs',
+    'Logins from outside the Philippines with no believable reason (for example Brazil, or a new country every week)',
+    'ID Proof below 25, or a very new account (under 1 month) with no ID verified',
+    'A copied or AI-written application or sample (the same text as another applicant, or nothing personal in it)',
+    'Asks to be paid or to talk outside OnlineJobs before a test, or asks for money or equipment up front',
+  ],
+  yellow: [
+    'ID Proof from 25 to 44: ask them to show a government ID on the video call that matches their profile name',
+    'An account under 3 months old, or few employment records: ask for a past employer or client we can contact',
+    'Several short jobs (under 3 months each): ask why each ended',
+    'One mixed or average past employer review: ask them about that job',
+    'One login from abroad they can explain (a trip, a VPN for work): ask, and check the dates',
+    'No backup internet or power: ask what they do in a brownout',
+  ],
+  green: [
+    'ID Proof 45 or more, with ID verified',
+    'An account over 1 year old with a steady work history (jobs lasting 6 months or more)',
+    'Good past employer reviews, or a past employer we can contact',
+    'TimeProof history from previous jobs',
+    'A complete profile with a real photo that matches the application, and the post\'s instructions followed exactly',
+    'A backup internet connection and power, and their availability matches our schedule',
+  ],
+};
+
+/* Asked on every video call, whatever the job, before any offer. */
+const TRUST_CALL = {
+  section: 'Identity and reliability (3 min, every job)',
+  questions: [
+    { q: 'Please hold your government ID up to the camera next to your face.',
+      listen: 'The name and photo match their OLJ profile and the person on the call. No ID, or a different name, ends the process.' },
+    { q: 'Where are you working from, and what do you do in a brownout or an internet outage?',
+      listen: 'A city in the Philippines that matches their profile, and a real backup (a second connection, mobile data, a power bank or generator).' },
+    { q: 'Can we contact a past employer or client? (And ask about any yellow flag in the Hiring note.)',
+      listen: 'A name and a way to reach them, and a straight answer about the flag. Dodging is a red flag.' },
+  ],
+};
 
 const SCREENING = {
   rules: [
     'Open every applicant\'s OLJ profile, not just their message: work history, skills, portfolio, certificates and past roles. Look for transferable skills from other jobs that would help here.',
     'A Gem is ONLY a Top pick (they already meet everything for this job) who ALSO shows strong, proven skills that complement the job: skills from our other roles, like those on the job\'s Gem list. Skills that are part of this job make a Top pick, never a Gem. The extra skill must be shown in their profile (work history, portfolio, results), not just listed. Label them with the job\'s Gem label as well as Top pick, always send them the test, and put "Gem: <the skills>" in the note on Hiring.',
     'Reject straight away: no code words, or the required sample/links missing. The post says so, so it is fair.',
-    'Verify = reject. If anything does not add up, label it Verify Before Hiring and move on.',
+    'A Top pick needs BOTH: the skills on this job\'s list, AND the trust check (below) with no red flag and at most two yellow flags. The best candidate is the most skilled one who is also safe: when two are close, choose the one with more green signs.',
+    'Run the free Background Data Check on every possible top pick BEFORE labelling them Top pick, and read it with the trust check below.',
+    'Any red flag = Verify Before Hiring, which means reject, however good the skills.',
+    'Yellow flags do not reject on their own (most OLJ applicants have some). Label them Check on Call too, and write each flag in the note on Hiring (for example "Yellow: ID Proof 38; account 2 months").',
     'Maybe is only a holding spot: every Maybe ends as Top pick or Rejected before tests go out.',
-    'Run the free Background Data Check on every top pick: ID proof score, verification, account age, last-login country and TimeProof history.',
-    'A last login from outside the Philippines (for example Brazil) = Verify, so reject.',
     'Opening a conversation marks it read. OnlineJobs slows down after many page loads, so go slower.',
     'Send the paid test link (Hiring, New test link, choose the role) to the top picks only. Round 2 and your results email follow on their own.',
   ],
@@ -51,6 +101,11 @@ const SCREENING = {
     'Hire, then add them on Staff. Their Training page and the playbook take it from there.',
   ],
 };
+
+/* Pay terms every job shares, added under each post's Pay lines and repeated
+   on round 2, where a passing applicant confirms the pay. */
+const PAY_TERMS = `- 13th-month pay starts only after 12 months of service
+- Hours can be adjusted up or down based on performance`;
 
 /* Shared parts of every post: written once so every role says the same thing
    about time off, training and how to apply. */
@@ -112,6 +167,7 @@ Pay
 - $4.50/hour once training is signed off (60–90 days), with pay reviews every 6 months after that
 - Plus 3% commission on every sale you close once your training is signed off and you're building your own quotes. That includes customers you find yourself. The more you sell, the more you earn, with no cap.
 - Commission is paid 14 days after the customer pays in full, and your dashboard shows your earnings live.
+${PAY_TERMS}
 
 ${TIME_OFF}
 
@@ -173,6 +229,7 @@ Schedule
 Pay
 - $4.50 USD/hour ($135/week, about $585/month), paid weekly during training
 - $5.00/hour once training is signed off (60–90 days), with pay reviews every 6 months after that
+${PAY_TERMS}
 
 ${TIME_OFF}
 
@@ -243,6 +300,7 @@ Schedule
 Pay
 - $8.00 USD/hour ($240/week, about $1,040/month), paid weekly during training
 - A raise once training is signed off (60–90 days), with pay reviews every 6 months after that
+${PAY_TERMS}
 
 ${TIME_OFF}
 
@@ -306,6 +364,7 @@ Schedule
 Pay
 - $5.00 USD/hour ($150/week, about $650/month), paid weekly during training
 - $5.50/hour once training is signed off (60–90 days), with pay reviews every 6 months after that
+${PAY_TERMS}
 
 ${TIME_OFF}
 
@@ -368,6 +427,7 @@ Schedule
 Pay
 - $7.00 USD/hour, paid weekly
 - A raise once training is signed off (60–90 days) and pay reviews every 6 months, with more hours as the ad budget grows
+${PAY_TERMS}
 
 ${TIME_OFF}
 
@@ -430,6 +490,7 @@ Schedule
 Pay
 - $6.00 USD/hour, paid weekly
 - A raise once training is signed off (60–90 days) and pay reviews every 6 months, with more hours as we grow
+${PAY_TERMS}
 
 ${TIME_OFF}
 
@@ -467,4 +528,11 @@ function rejectionMessage(kind, { name, job, fee } = {}) {
     .replace('{fee}', fee ? ` ${fee}` : '');
 }
 
-module.exports = { SCREENING, SHARED_LABELS, POSTS, REJECTIONS, labelsFor, gemLabel, rejectionMessage };
+/** A job's pay lines, read from its post so round 2 can never disagree with it. */
+function payLines(key) {
+  const post = POSTS[key] || POSTS.sales;
+  const m = post.body.match(/\nPay\n((?:- .*\n?)+)/);
+  return m ? m[1].trim().split('\n').map((l) => l.replace(/^- /, '').trim()).filter(Boolean) : [];
+}
+
+module.exports = { TRUST, TRUST_CALL, PAY_TERMS, payLines, SCREENING, SHARED_LABELS, POSTS, REJECTIONS, labelsFor, gemLabel, rejectionMessage };

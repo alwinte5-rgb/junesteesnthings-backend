@@ -24410,6 +24410,30 @@ function hireMinutes(row) {
 }
 
 /* Round 2 as the applicant sees it: their own follow-up questions only. */
+/* The pay check at the end of round 2: the job's pay, read from its post, and
+   a yes or "let's talk". The owner sees the answer with the results. */
+function hirePayCheck(first) {
+  const key = HIRING.roleOf(first && first.role).key;
+  const post = HIRE_POSTING.POSTS[key];
+  const lines = HIRE_POSTING.payLines(key);
+  return `<div class="card"><div class="hire-q">Pay and hours</div>
+      <p style="white-space:normal">Before the video call, please check the pay for the ${escEmail(HIRING.roleOf(key).label.toLowerCase())} job${post ? `, about ${escEmail(post.hours)} hours a week` : ''}:</p>
+      <ul>${lines.map((l) => `<li>${escEmail(l)}</li>`).join('')}</ul>
+      <p style="white-space:normal"><b>Are you comfortable with this pay?</b></p>
+      <label class="hire-opt"><input type="radio" name="pay_agree" value="yes" required> <span>Yes, I agree to this pay and these terms</span></label>
+      <label class="hire-opt"><input type="radio" name="pay_agree" value="discuss"> <span>I would like to talk about it</span></label>
+      <label class="muted" for="pay_note" style="display:block;margin-top:6px;text-transform:none;letter-spacing:normal">Anything you would like us to know (optional)</label>
+      <textarea id="pay_note" name="pay_note" maxlength="600" style="width:100%;min-height:70px;font:inherit;padding:8px;border:1px solid #cbd5e1;border-radius:8px;box-sizing:border-box"></textarea></div>`;
+}
+
+/** What the applicant said about the pay, for the owner. */
+function hirePayAnswer(r2) {
+  const p = r2 && r2.answers && r2.answers.pay;
+  if (!r2 || !r2.submitted_at) return '';
+  const st = p && HIRING.PAY_AGREE[p.agree];
+  return `${st ? pill(st[0], st[1]) : pill('Did not answer the pay question', 'gray')}${p && p.note ? ` <span>"${escEmail(p.note)}"</span>` : ''}`;
+}
+
 /* Round 2 shows each follow-up beside the round-1 question it is about and the
    applicant's own answer to it, and all their round-1 answers below, so they
    can build on what they wrote. Only their own words: no scores, no key. */
@@ -24442,6 +24466,7 @@ function round2Page(row, token, t, first) {
       <h2 class="hire-part">Round 2: about your answers</h2>
       <p class="muted">Real examples beat general statements.</p>
       ${boxes}
+      ${hirePayCheck(first)}
       <div class="card"><p>Check your answers, then hand them in. You can only send them once.</p>
         <button type="submit" class="btn">Hand in round 2</button></div>
     </form>
@@ -24699,6 +24724,8 @@ async function tellOwnerHiring(firstId, { unfinished = false } = {}) {
         ${g1 && g1.summary ? `<p>${escEmail(g1.summary)}</p>` : ''}
         ${second ? `<p><b>Round 2:</b> ${escEmail(g2 ? `${second.score}/100 · ${rec}` : second.submitted_at ? 'handed in, not graded: open it and press Grade again'
           : unfinished || second.started_at ? 'not handed in' : 'not started')}${second.late ? ' (after the time limit)' : ''}</p>
+          ${second.submitted_at ? `<p><b>Pay:</b> ${escEmail(((HIRING.PAY_AGREE[(second.answers && second.answers.pay || {}).agree]) || ['Did not answer the pay question'])[0])}${
+            second.answers && second.answers.pay && second.answers.pay.note ? `: "${escEmail(second.answers.pay.note)}"` : ''}</p>` : ''}
           ${g2 ? `<p>${escEmail(g2.summary)}</p>${g2.strengths.length ? `<p><b>Strengths</b></p>${li(g2.strengths)}` : ''}${
             g2.concerns.length ? `<p><b>Concerns</b></p>${li(g2.concerns)}` : ''}${
             g2.video_questions.length ? `<p><b>Questions still open for the video call</b></p>${li(g2.video_questions.map((q) => q.question))}` : ''}` : ''}` : ''}
@@ -24877,6 +24904,10 @@ app.get('/admin/hiring/test', requireAdmin, (req, res) => {
         <p><b>${escEmail(HIRE_POSTING.gemLabel(post.prefix))}: your exceptional applicants.</b> Only a Top pick who ALSO shows strong, proven
         skills that complement this job (not the job itself), in their OLJ profile, portfolio or results, like:</p><ul>${post.gem.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>` : ''}
       <p><b>Rules for every job:</b></p><ul>${HIRE_POSTING.SCREENING.rules.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>
+      <p><b>Trust check (read the Background Data Check and the profile):</b></p>
+      ${[['red', 'Red flags: reject, whatever the skills', '#dc2626'], ['yellow', 'Yellow flags: up to two for a top pick; note each one and clear it on the video call', '#d97706'],
+         ['green', 'Green signs: choose these when two applicants are close', '#15803d']].map(([k, title, c]) =>
+        `<p style="margin:8px 0 2px;color:${c}"><b>${escEmail(title)}</b></p><ul>${HIRE_POSTING.TRUST[k].map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>`).join('')}
       <p><b>The steps:</b></p><ol>${HIRE_POSTING.SCREENING.steps.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ol></div>`;
   const mc = role.choice.map((x, n) => `<div class="row-i"><span class="row-main" style="white-space:normal">
     <b>${n + 1}. ${escEmail(x.q)}</b>
@@ -25059,6 +25090,7 @@ function hireRound2Card(r, r2) {
     ${r2.grade_error ? `<div class="warn">${escEmail(r2.grade_error)}</div>
       <form method="post" action="/admin/hiring/${r2.id}/grade" onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Grading, about 30 seconds...'"><button class="btn btn-ghost" type="submit">Grade round 2 again</button></form>` : ''}
     ${waiting}
+    ${r2.submitted_at ? `<p><b>Pay:</b> ${hirePayAnswer(r2)}</p>` : ''}
     ${g ? `<p style="white-space:normal">${escEmail(g.summary)}</p>
       ${g.strengths.length ? `<p><b>Strengths</b></p><ul>${g.strengths.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>` : ''}
       ${g.concerns.length ? `<p><b>Concerns</b></p><ul>${g.concerns.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>` : ''}

@@ -199,6 +199,14 @@ const ROLES = {
   ads: require('./hiring-ads'),
   bookkeeper: require('./hiring-bookkeeper'),
 };
+/* Every video call ends with the same identity and reliability check
+   (hiring-posting.js TRUST_CALL), whatever the job. */
+const { TRUST_CALL } = require('./hiring-posting');
+for (const role of Object.values(ROLES)) {
+  const at = role.guide.findIndex((g) => /^Their questions/.test(g.section));
+  if (!role.guide.includes(TRUST_CALL)) role.guide.splice(at < 0 ? role.guide.length : at, 0, TRUST_CALL);
+}
+
 /** A role by key (an unknown or missing key is sales, the first role). */
 function roleOf(r) {
   if (r && typeof r === 'object') return r;
@@ -474,8 +482,13 @@ function cleanRound2(body, questions) {
     if (!/^f\d{1,2}$/.test(q.id)) continue;
     written[q.id] = clip(has(b, `w_${q.id}`) ? b[`w_${q.id}`] : '', LIMITS.answer);
   }
-  return { written };
+  /* The pay check at the end of round 2: yes, or they want to talk about it
+     (with what they would like). Not graded: it goes to the owner as is. */
+  const agree = ['yes', 'discuss'].includes(b.pay_agree) ? b.pay_agree : null;
+  return { written, pay: { agree, note: clip(has(b, 'pay_note') ? b.pay_note : '', 600) } };
 }
+
+const PAY_AGREE = { yes: ['Agrees to the pay', 'green'], discuss: ['Wants to talk about pay', 'amber'] };
 
 function round2System(r) {
   return `You are helping June, the owner of June's Tees & Things (a small custom apparel and printing
@@ -602,7 +615,7 @@ async function gradeRound2(questions, written, { name, client, role } = {}) {
 }
 
 module.exports = {
-  TEST_FEE, FEE_DAYS, cleanPaypal,
+  TEST_FEE, FEE_DAYS, cleanPaypal, PAY_AGREE,
   SALES, roleOf, systemFor, gradeSchema, round2System, DECISIONS, sameQuestion,
   PASS_SCORE, ROUND2_MINUTES, ROUND2_MAX, ROUND2_DAYS, ROUND2_WAIT_MINUTES, ROUND2_INTRO, ROUND2_SYSTEM, ROUND2_SCHEMA, ROUND2_LABELS,
   round2Questions, passes, cleanRound2, round2Message, normalizeRound2, round2Score, gradeRound2, round2Pending,

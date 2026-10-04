@@ -188,7 +188,7 @@ test('round 2: made from the follow-ups, only past the pass mark, answers capped
   assert.deepStrictEqual(qs[0], { id: 'f1', prompt: 'Q0?', why: 'w', about: null });
   assert.ok(H.passes(H.PASS_SCORE) && !H.passes(H.PASS_SCORE - 1) && !H.passes(null));
   const got = H.cleanRound2({ w_f1: 'yes', w_f9: 'not mine', w_angry: 'nope' }, qs.slice(0, 2));
-  assert.deepStrictEqual(got, { written: { f1: 'yes', f2: '' } });
+  assert.deepStrictEqual(got, { written: { f1: 'yes', f2: '' }, pay: { agree: null, note: '' } });
   assert.strictEqual(H.round2Score({ scores: { f1: { score: 5 }, f2: { score: 3 } } }), 80);
   const g = H.normalizeRound2({ scores: [{ id: 'f1', score: 9, note: 'x' }], recommendation: 'hire!' }, qs.slice(0, 2), { f1: 'a' });
   assert.deepStrictEqual(g.scores, { f1: { score: 5, note: 'x' }, f2: { score: 1, note: 'Left blank.' } });
@@ -352,4 +352,29 @@ test('rejection messages: filled in, kind, and the fee line only when a fee is d
   assert.doesNotMatch(POSTING.rejectionMessage('interview', { name: 'Bo', job: 'x' }), /\{fee\}|  /);
   assert.ok(!POSTING.SHARED_LABELS.some((l) => /^Gem/.test(l.name)), 'Gem labels are per job now');
   assert.ok(POSTING.SCREENING.rules.some((r) => /profile/.test(r) && /transferable/.test(r)));
+});
+
+test('round 2 confirms the pay: read from the job post, with the shared terms', () => {
+  for (const k of Object.keys(H.ROLES)) {
+    const lines = POSTING.payLines(k);
+    assert.ok(lines.length >= 3 && /\$\d/.test(lines[0]), `${k} pay lines`);
+    assert.ok(lines.includes('13th-month pay starts only after 12 months of service'), `${k} 13th month`);
+    assert.ok(lines.includes('Hours can be adjusted up or down based on performance'), `${k} hours`);
+    assert.ok(POSTING.POSTS[k].body.includes(POSTING.PAY_TERMS), `${k} post says it too`);
+  }
+  assert.deepStrictEqual(H.cleanRound2({ pay_agree: 'discuss', pay_note: ' $5 please ' }, []).pay, { agree: 'discuss', note: '$5 please' });
+  assert.strictEqual(H.cleanRound2({ pay_agree: 'maybe' }, []).pay.agree, null);
+  assert.match(src, /\$\{hirePayCheck\(first\)\}/);
+});
+
+test('a top pick is skilled AND safe: the trust check, and an ID check on every call', () => {
+  assert.ok(POSTING.TRUST.red.length >= 4 && POSTING.TRUST.yellow.length >= 4 && POSTING.TRUST.green.length >= 4);
+  assert.ok(POSTING.SCREENING.rules.some((r) => /BOTH/.test(r) && /no red flag and at most two yellow flags/.test(r)));
+  assert.ok(POSTING.SHARED_LABELS.some((l) => l.name === 'Check on Call'));
+  for (const role of Object.values(H.ROLES)) {
+    assert.strictEqual(role.guide.filter((g) => g === POSTING.TRUST_CALL).length, 1, `${role.key} has the ID check once`);
+    assert.match(role.guide[role.guide.length - 1].section, /^Their questions/, `${role.key} ends with their questions`);
+  }
+  // round 2 is told the ID check is asked anyway, so it never repeats it
+  assert.ok(H.round2Message([], {}, { role: 'ads' }).includes(POSTING.TRUST_CALL.questions[0].q));
 });
