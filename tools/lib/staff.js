@@ -277,6 +277,7 @@ const ROUTES = {
   'POST /admin/hiring/:id/link': 'owner',
   'POST /admin/hiring/:id/round2': 'owner',
   'POST /admin/hiring/:id/decision': 'owner',
+  'POST /admin/hiring/:id/fee': 'owner',
   'POST /admin/hiring/:id/cancel': 'owner',
   'POST /admin/commission/pay': 'owner',
 };

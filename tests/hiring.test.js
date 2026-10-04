@@ -160,7 +160,7 @@ test('a refusal or broken JSON throws and is worded for the owner', async () => 
 test('hiring pages are the owner\'s alone; the menu hides them from helpers', () => {
   for (const k of ['GET /admin/hiring', 'POST /admin/hiring', 'GET /admin/hiring/test', 'GET /admin/hiring/:id',
     'POST /admin/hiring/:id/grade', 'POST /admin/hiring/:id/link', 'POST /admin/hiring/:id/cancel',
-    'POST /admin/hiring/:id/round2', 'POST /admin/hiring/:id/decision']) {
+    'POST /admin/hiring/:id/round2', 'POST /admin/hiring/:id/decision', 'POST /admin/hiring/:id/fee']) {
     assert.strictEqual(STAFF.ROUTES[k], 'owner', k);
     const [m, p] = k.split(' ');
     assert.ok(new RegExp(`app\\.${m.toLowerCase()}\\('${p.replace(/[/:]/g, (c) => '\\' + c)}', requireAdmin,`).test(src), `${k} is behind requireAdmin`);
@@ -323,4 +323,20 @@ test('the owner marks video call, hired or rejected; rejecting closes open tests
   assert.match(route, /SET status = 'cancelled'\s+WHERE \(id = \$1 OR parent_id = \$1\) AND submitted_at IS NULL/);
   assert.match(route, /owner_told_at = COALESCE\(owner_told_at, NOW\(\)\)/, 'no emails after a rejection');
   assert.match(src, /ADD COLUMN IF NOT EXISTS decision TEXT/);
+});
+
+test('the test fee: PayPal email checked, paid once, booked on Finances', () => {
+  assert.strictEqual(H.TEST_FEE, 15);
+  assert.strictEqual(H.cleanPaypal(' Ana@Example.COM '), 'ana@example.com');
+  assert.strictEqual(H.cleanPaypal(''), '');
+  for (const bad of ['ana', 'ana@', 'a<b>@x.com', `${'a'.repeat(260)}@x.com`]) assert.strictEqual(H.cleanPaypal(bad), null, bad);
+  const route = src.slice(src.indexOf("app.post('/admin/hiring/:id/fee'"), src.indexOf('/* Video call, hired or rejected.'));
+  assert.match(route, /FOR UPDATE/);
+  assert.match(route, /ext_ref\)\s+VALUES \(CURRENT_DATE, 'Contract labor'/);
+  assert.match(route, /`hire-fee:\$\{r\.id\}`/, 'one Finances entry per applicant');
+  assert.match(route, /if \(r\.fee_paid_at\)/, 'never paid twice');
+  assert.match(src, /app\.post\('\/apply\/test\/:token\/paypal', hireRateLimit,/);
+  const pp = src.slice(src.indexOf("app.post('/apply/test/:token/paypal'"), src.indexOf("app.post('/apply/test/:token/start'"));
+  assert.match(pp, /fromAnotherSite\(req\)/);
+  assert.match(pp, /AND fee_paid_at IS NULL/, 'the address is fixed once paid');
 });
