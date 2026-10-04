@@ -15,9 +15,10 @@
 function labelsFor(prefix) {
   return [`${prefix} 1 · Top pick`, `${prefix} 2 · Maybe`, `${prefix} 3 · Rejected`, gemLabel(prefix)];
 }
-/* A Gem is the owner's exceptional applicant: a top pick whose PROFILE (work
-   history, skills, portfolio, certificates), not only their application,
-   shows transferable skills beyond the job. Each job has its own Gem label
+/* A Gem is the owner's exceptional applicant: a Top pick for this job who ALSO
+   shows proven skills that complement it, usually the skills of our other
+   roles (a designer who edits video, a salesperson who grows social pages).
+   Skills that are part of the job itself never make a Gem. Each job has its own Gem label
    and its own list of skills that make one (POSTS[role].gem). */
 function gemLabel(prefix) {
   return `Gem · ${prefix}`;
@@ -31,7 +32,7 @@ const SHARED_LABELS = [
 const SCREENING = {
   rules: [
     'Open every applicant\'s OLJ profile, not just their message: work history, skills, portfolio, certificates and past roles. Look for transferable skills from other jobs that would help here.',
-    'A Gem is a top pick whose profile shows transferable skills on the job\'s Gem list (or as valuable). Label them with the job\'s Gem label as well as Top pick, always send them the test, and put "Gem: <the skills>" in the note on Hiring.',
+    'A Gem is ONLY a Top pick (they already meet everything for this job) who ALSO shows strong, proven skills that complement the job: skills from our other roles, like those on the job\'s Gem list. Skills that are part of this job make a Top pick, never a Gem. The extra skill must be shown in their profile (work history, portfolio, results), not just listed. Label them with the job\'s Gem label as well as Top pick, always send them the test, and put "Gem: <the skills>" in the note on Hiring.',
     'Reject straight away: no code words, or the required sample/links missing. The post says so, so it is fair.',
     'Verify = reject. If anything does not add up, label it Verify Before Hiring and move on.',
     'Maybe is only a holding spot: every Maybe ends as Top pick or Rejected before tests go out.',
@@ -67,9 +68,8 @@ Applications without the code words and ${items.length > 2 ? 'the items above' :
 const POSTS = {
   sales: {
     prefix: 'Sales',
-    gem: ['Marketing, social media, SEO or ads (the owner values these most)', 'Closing sales in another field: real estate, insurance, retail, cars, telesales',
-      'B2B outreach, lead generation or CRM work (HubSpot, Brevo)', 'E-commerce or Shopify store support', 'Events, school, church or sports-team coordination',
-      'Graphic design or Canva', 'Print, apparel or merch experience'],
+    gem: ['Social media and content: posts, Reels or TikToks that grew a page', 'Marketing, paid ads or SEO with results',
+      'Graphic design or mockups (Canva, Photoshop) good enough to show customers', 'Video editing', 'Running an online store (Shopify) or a website'],
     code: 'Purple Tee',
     title: 'Sales & Customer Service Assistant – Earn Commission on Every Sale (Custom Apparel)',
     type: 'Part Time', wage: '4', hours: '30', skills: ['Customer Service', 'Sales', 'Lead Generation'],
@@ -130,8 +130,8 @@ ${howToApply('Purple Tee', [
 
   designer: {
     prefix: 'Graphic',
-    gem: ['Worked in a print shop: screen printing, embroidery, DTF, signs or vinyl', 'Embroidery digitising (Wilcom, Hatch, Pulse)', 'Colour separations or film output',
-      'Packaging, merch or brand identity design', 'Video, Reels or motion graphics', 'Social media or marketing', 'Product photography or mockups'],
+    gem: ['Video editing or motion graphics (Reels, TikTok, product videos)', 'Social media content and marketing that grew a page',
+      'Photography: product shots, mockup shoots, job photos', 'Web or landing page design', 'Customer-facing sales or quoting experience'],
     code: 'Gold Ink',
     title: 'Graphic Designer for Custom Apparel – Screen Print, Embroidery & DTF Artwork',
     type: 'Part Time', wage: '4.5', hours: '30', skills: ['Adobe Illustrator', 'Graphic Design', 'Adobe Photoshop'],
@@ -192,9 +192,8 @@ ${howToApply('Gold Ink', [
 
   developer: {
     prefix: 'Dev',
-    gem: ['Shipped iOS or Android apps to the stores, ideally with in-app purchases (RevenueCat)', 'Shopify apps or Stripe payments in production',
-      'Built features on the Claude API or other AI APIs', 'QA or test automation background', 'DevOps: Railway, AWS, CI, monitoring (Sentry)',
-      'Security work', 'Technical SEO, analytics or marketing sites'],
+    gem: ['UI/UX or graphic design', 'SEO, analytics or marketing websites with results', 'Setting up ad tracking (Google Ads, Meta pixel, Tag Manager)',
+      'Automating business workflows (Zapier, n8n, scripts) or AI tools for non-developers', 'Customer or technical support'],
     code: 'Navy Server',
     title: 'Full-Stack Developer – Websites, iOS/Android Apps & AI (Node.js, React Native, Claude)',
     type: 'Part Time', wage: '8', hours: '30', skills: ['Node.js', 'React Native', 'iOS App Development'],
@@ -264,8 +263,8 @@ ${howToApply('Navy Server', [
 
   content: {
     prefix: 'Content',
-    gem: ['TV, film or production-company work', 'Photography or filming and lighting', 'Motion graphics or thumbnails',
-      'Copywriting or scriptwriting', 'Community or social media management for a brand', 'YouTube SEO or growth', 'Ads or influencer collaborations'],
+    gem: ['Graphic design: thumbnails, brand graphics, carousels', 'Running paid ads or boosts with results', 'Photography or filming and lighting',
+      'Website, SEO or email marketing', 'Sales or community management that turns comments and DMs into enquiries'],
     code: 'Green Screen',
     title: 'Video Content Editor – YouTube, TikTok & Reels, Organic Growth (AI-Assisted Editing)',
     type: 'Part Time', wage: '5', hours: '30', skills: ['Video Editing', 'Social Media Management', 'TikTok Marketing'],
@@ -326,8 +325,8 @@ ${howToApply('Green Screen', [
 
   ads: {
     prefix: 'Ads',
-    gem: ['E-commerce or Shopify marketing', 'GA4, Tag Manager or analytics', 'Landing pages or conversion optimisation', 'Ad creative: design or short video',
-      'Copywriting', 'Local service business marketing', 'SEO or email marketing'],
+    gem: ['Making the ads themselves: design or short video', 'Building landing pages or websites', 'SEO or email marketing with results',
+      'Social media content that grew a page', 'Sales or lead follow-up experience'],
     code: 'Red Squeegee',
     title: 'Part-Time Google & Meta Ads Specialist – Local Custom Apparel Shop (Small Budget, Real Results)',
     type: 'Part Time', wage: '7', hours: '10', skills: ['Google Ads', 'Facebook Ads', 'Google Analytics'],
@@ -391,8 +390,8 @@ ${howToApply('Red Squeegee', [
     title: 'Part-Time Bookkeeper – Small US Custom Apparel Shop (Stripe, PayPal, Sales Tax)',
     type: 'Part Time', wage: '6', hours: '10', skills: ['Bookkeeping', 'QuickBooks', 'Account Reconciliation'],
     payNote: 'Check OLJ\'s Suggest-a-Salary box for bookkeeping before posting. Experienced bookkeepers for US clients usually ask more than VAs; at about 10 hours a week, $6 is a starting point to check against it.',
-    gem: ['CPA, accounting degree or bookkeeping certification (QuickBooks ProAdvisor, Xero Advisor)', 'US clients, US sales tax filing', 'Payroll or contractor payments (1099s)',
-      'E-commerce books: Shopify, Stripe, PayPal', 'Inventory or job costing', 'Excel or Google Sheets dashboards and automation', 'Audit or tax preparation'],
+    gem: ['Admin or operations: invoicing, supplier orders, purchasing', 'Payroll or HR admin for contractors', 'Collections: following up unpaid customer balances',
+      'Spreadsheet automation and dashboards for the owner', 'Inventory or job costing'],
     lookFor: [
       'Real bookkeeping for named small businesses, with the software (QuickBooks Online, Xero or spreadsheets)',
       'Reconciles accounts to statements every month, and can explain a difference',
