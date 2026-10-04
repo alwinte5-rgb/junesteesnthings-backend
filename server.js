@@ -24401,8 +24401,16 @@ function hireMinutes(row) {
 }
 
 /* Round 2 as the applicant sees it: their own follow-up questions only. */
-function round2Page(row, token, t) {
+/* Round 2 shows each follow-up beside the round-1 question it is about and the
+   applicant's own answer to it, and all their round-1 answers below, so they
+   can build on what they wrote. Only their own words: no scores, no key. */
+function round2Page(row, token, t, first) {
   const qs = Array.isArray(row.questions) ? row.questions : [];
+  const role = HIRING.roleOf(first && first.role);
+  const theirs = (first && first.answers && first.answers.written) || {};
+  const r1 = (id) => role.written.find((w) => w.id === id);
+  const said = (w) => `<div class="muted" style="font-size:14px;margin:4px 0 2px"><b>Round 1 question:</b> ${escEmail(w.prompt)}</div>
+      <div style="white-space:pre-wrap;font-size:14px;padding:8px 10px;background:#F7F6F3;border-radius:8px;margin-bottom:8px"><b>Your answer:</b> ${escEmail(theirs[w.id] || '(left blank)')}</div>`;
   if (!t.started) {
     return hirePage('Round 2', `<div class="card">
       <h1 style="font-size:24px">Hi ${escEmail(row.name)}, welcome to round 2</h1>
@@ -24418,6 +24426,7 @@ function round2Page(row, token, t) {
   }
   const boxes = qs.map((q, n) => `<div class="card">
       <label class="hire-q" for="w_${escEmail(q.id)}">${n + 1}. ${escEmail(q.prompt)}</label>
+      ${q.about && r1(q.about) ? said(r1(q.about)) : ''}
       <textarea class="hire-ta" id="w_${escEmail(q.id)}" name="w_${escEmail(q.id)}" maxlength="${HIRING.LIMITS.answer}"></textarea></div>`).join('');
   return hirePage('Round 2', `<div id="hire-clock" class="hire-clock"></div>
     <form id="hire-form" method="post" action="/apply/test/${escEmail(token)}">
@@ -24426,7 +24435,9 @@ function round2Page(row, token, t) {
       ${boxes}
       <div class="card"><p>Check your answers, then hand them in. You can only send them once.</p>
         <button type="submit" class="btn">Hand in round 2</button></div>
-    </form>`, hireClockScript(row, t));
+    </form>
+    ${role.written.some((w) => theirs[w.id]) ? `<details class="card"><summary><b>All your round 1 answers</b> (to look back at)</summary>
+      ${role.written.filter((w) => theirs[w.id]).map((w) => `<p style="margin:12px 0 0"><b>${escEmail(w.label)}</b></p>${said(w)}`).join('')}</details>` : ''}`, hireClockScript(row, t));
 }
 
 app.get('/apply/test/:token', hireRateLimit, async (req, res) => {
@@ -24455,7 +24466,7 @@ app.get('/apply/test/:token', hireRateLimit, async (req, res) => {
   const t = HIRING.timing(row, undefined, hireMinutes(row));
   if (!t.started && t.expired) return res.status(404).send(HIRE_DEAD());
   if (!row.opened_at) pool.query('UPDATE hiring_tests SET opened_at = NOW() WHERE id = $1 AND opened_at IS NULL', [row.id]).catch(() => {});
-  if (row.stage === 2) return res.send(round2Page(row, token, t));
+  if (row.stage === 2) return res.send(round2Page(row, token, t, first));
   const view = HIRING.testForPage(row.role);
   if (!t.started) {
     return res.send(hirePage('Applicant test', `<div class="card">
@@ -25744,6 +25755,44 @@ const KB_ADDED = [
 `- Never buy views or followers\n\n` +
 `**Quiet time**\n` +
 `- Reply to comments and messages, cut new shorts from unused footage, plan next week's posts with a shot list June can film on her phone, then send her a short summary` },
+  { kind: 'sop', title: 'Reorders and replying to reviews', needsReview: true,
+    tags: 'reorders, repeat customers, reviews, google reviews, review replies, follow up, sales',
+    body: `Two jobs that keep customers coming back.\n\n` +
+`**Reorders**\n` +
+`- The system already emails customers about a reorder about 90 days after they paid. When one replies, answer within the hour like any new enquiry, starting from their last order\n` +
+`- Go further for the best customers: schools, teams, churches and businesses that order every season. Check when they last ordered and what is coming up for them (a new season, a yearly event, new staff) and send a short personal note a few weeks before they need it (/reorder)\n` +
+`- Log every reorder conversation on the lead, with the next follow-up date\n\n` +
+`**Replying to reviews**\n` +
+`- New reviews show on **Reviews**. Reply to every one within two days\n` +
+`- Use the draft button for a starting point, then make it personal: thank them by first name, mention what we made, keep it to two to four sentences, signed by June\n` +
+`- A bad review: thank them, apologise for their experience without arguing, and invite them to message us so we can put it right. Tell June the same day, before you post\n` +
+`- June approves replies before they go live` },
+  { kind: 'faq', shortcut: 'reorder', title: 'Time for your next order?', needsReview: true,
+    tags: 'reorder, repeat customer, season, follow up',
+    body: `Hi [name], it's [your name] from June's Tees! Last [season/year] we made your [what we made] and they looked great. With [their upcoming season/event] coming up, would you like the same again, or anything new this time?\n\n` +
+`I can send a quote today: just tell me the quantities and sizes, and any changes to the design. If we start by [date], they'll be ready in plenty of time.` },
+  { kind: 'sop', title: 'Chasing late artwork and approvals', needsReview: true,
+    tags: 'designer, late artwork, missing logo, proof approval, follow up, deadline',
+    body: `A job cannot print without the customer's artwork and their approval of the proof, so you chase both.\n\n` +
+`- Each morning, check your Artwork to do on My Day for jobs waiting on the customer: a logo file, a missing detail, or a proof not yet approved\n` +
+`- First nudge after 1 working day, friendly and specific: exactly what you need and the date it affects (/artnudge)\n` +
+`- Second nudge after 2 more days, with the print date at risk spelled out. Copy sales on the job so they can call if needed\n` +
+`- If the deadline is now at risk, tell sales and June the same day. Never print without written approval, however late it is\n` +
+`- Make it easy: offer to redraw a blurry logo, or send two options to pick from, rather than waiting for perfect files` },
+  { kind: 'faq', shortcut: 'artnudge', title: 'We are waiting on your artwork or approval', needsReview: true,
+    tags: 'artwork, logo file, proof approval, reminder, deadline',
+    body: `Hi [name]! Just a friendly reminder: we're waiting on [your logo file / your approval of the proof] for your [order]. To have everything ready by [their date], we need it by [date].\n\n` +
+`If the file is hard to find, send whatever you have (even a photo) and we'll redraw it. And if you'd like changes to the proof, just tell me what to adjust and I'll send a new one today.` },
+  { kind: 'sop', title: 'Running our ads', needsReview: true,
+    tags: 'ads, google ads, meta ads, facebook ads, budget, negatives, tracking, report',
+    body: `How we spend a small ad budget so it brings orders.\n\n` +
+`- Tracking first: quote requests and online orders recorded as conversions. Submit a test quote every month to make sure it still counts\n` +
+`- Focus: most of the budget on Google Search for searches likely to order (custom team shirts chicago, screen printing chicago, embroidered polos). Chicago area, presence only\n` +
+`- Twice a week: read the search terms, add negatives (free, template, jobs, DIY, how to, machine, wholesale blanks), pause anything that has spent about $40 with no quote request\n` +
+`- Judge on cost per quote request, orders and profit (about 40% of an order), never on clicks\n` +
+`- Ads say only what is true: real turnaround, real reviews, local pickup. No "cheapest" and no promises we cannot keep\n` +
+`- Plan seasons ahead: back to school, sports seasons, holidays, graduation. Build them paused a month early\n` +
+`- Every week, a short plain-English report to June: spend, quote requests, cost each, orders, what you changed. June approves new campaigns and budget changes` },
   { kind: 'sop', title: 'A quiet afternoon: a plan', needsReview: true,
     tags: 'quiet time, no messages, initiative, self-starter, what to do, follow up, leads, summary',
     body: `Nothing new, nothing assigned, June busy for a few hours? Here is a good way to spend it. Do the money first.\n\n` +
