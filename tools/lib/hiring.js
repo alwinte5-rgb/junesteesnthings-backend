@@ -33,7 +33,19 @@ const MINUTES = 30;
    lose someone a whole test. */
 const GRACE_MINUTES = 5;
 const LINK_DAYS = 7;
-const LIMITS = { name: 80, note: 300, answer: 3000 };
+const LIMITS = { name: 80, note: 300, answer: 3000, paypal: 254, ref: 80 };
+/* What a finished round 1 is paid, by PayPal (the post promises a paid test:
+   no unpaid trial work). One fee per applicant, round 2 included. */
+const TEST_FEE = 15;
+const FEE_DAYS = 7;
+
+/** A PayPal email from a form: '' when blank, null when it is not an email. */
+function cleanPaypal(v) {
+  const s = String(v == null ? '' : v).trim().toLowerCase();
+  if (!s) return '';
+  if (s.length > LIMITS.paypal || !/^[^\s@<>"']+@[^\s@<>"']+\.[a-z]{2,}$/.test(s)) return null;
+  return s;
+}
 
 
 const INTRO = `This test takes about ${MINUTES} minutes. It is the same kind of work you would do for us every day:
@@ -589,6 +601,7 @@ async function gradeRound2(questions, written, { name, client, role } = {}) {
 }
 
 module.exports = {
+  TEST_FEE, FEE_DAYS, cleanPaypal,
   SALES, roleOf, systemFor, gradeSchema, round2System, DECISIONS, sameQuestion,
   PASS_SCORE, ROUND2_MINUTES, ROUND2_MAX, ROUND2_DAYS, ROUND2_WAIT_MINUTES, ROUND2_INTRO, ROUND2_SYSTEM, ROUND2_SCHEMA, ROUND2_LABELS,
   round2Questions, passes, cleanRound2, round2Message, normalizeRound2, round2Score, gradeRound2, round2Pending,

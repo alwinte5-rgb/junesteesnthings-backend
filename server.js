@@ -1198,6 +1198,12 @@ async function initStaffTables() {
   // The owner's call after the video call (HIRING.DECISIONS), on the round-1 row.
   await pool.query(`ALTER TABLE hiring_tests ADD COLUMN IF NOT EXISTS decision TEXT`);
   await pool.query(`ALTER TABLE hiring_tests ADD COLUMN IF NOT EXISTS decided_at TIMESTAMPTZ`);
+  /* The paid test fee (HIRING.TEST_FEE), on the round-1 row: where to send it,
+     and when it was sent (or that the owner chose not to pay it). */
+  await pool.query(`ALTER TABLE hiring_tests ADD COLUMN IF NOT EXISTS fee_paypal TEXT`);
+  await pool.query(`ALTER TABLE hiring_tests ADD COLUMN IF NOT EXISTS fee_paid_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE hiring_tests ADD COLUMN IF NOT EXISTS fee_ref TEXT`);
+  await pool.query(`ALTER TABLE hiring_tests ADD COLUMN IF NOT EXISTS fee_skip BOOLEAN NOT NULL DEFAULT false`);
   // Coaching notes the owner writes outside an approval.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS staff_feedback (
@@ -24464,7 +24470,8 @@ app.get('/apply/test/:token', hireRateLimit, async (req, res) => {
         second part, and it will appear here.</p><p class="muted">This page refreshes by itself.</p></div>`));
     }
     return res.send(hirePage('Thank you', `<div class="card"><h1 style="font-size:22px">Thank you, ${escEmail(row.name)}</h1>
-      <p>Your answers are in. We read every test ourselves and will reply on OnlineJobs.ph within a few days.</p></div>`));
+      <p>Your answers are in. We read every test ourselves and will reply on OnlineJobs.ph within a few days.</p></div>
+      ${hireFeeCard(first, token, req.query)}`));
   }
   const t = HIRING.timing(row, undefined, hireMinutes(row));
   if (!t.started && t.expired) return res.status(404).send(HIRE_DEAD());
@@ -24500,9 +24507,48 @@ app.get('/apply/test/:token', hireRateLimit, async (req, res) => {
   res.send(hirePage('Applicant test', `<div id="hire-clock" class="hire-clock"></div>
     <form id="hire-form" method="post" action="/apply/test/${escEmail(token)}">
       ${Object.keys(view.parts).map((k) => k === 'choice' ? part(k) + choice : part(k) + written(k)).join('')}
+      <div class="card"><label class="hire-q" for="paypal">Your $${HIRING.TEST_FEE} test fee</label>
+        <p style="white-space:normal">We pay for this test by PayPal within ${HIRING.FEE_DAYS} days of hand-in. Your PayPal email:</p>
+        <input id="paypal" name="paypal" type="email" maxlength="${HIRING.LIMITS.paypal}" autocomplete="email" placeholder="name@example.com" style="width:100%"></div>
       <div class="card"><p>Check your answers, then hand the test in. You can only send it once.</p>
         <button type="submit" class="btn">Hand in my test</button></div>
     </form>`, script));
+});
+
+/* The applicant's side of the test fee: where to send it, changeable until it
+   is paid. Never shown on the waiting page, which reloads itself. */
+function hireFeeCard(first, token, q = {}) {
+  if (!first || first.fee_skip) return '';
+  if (first.fee_paid_at) {
+    return `<div class="card"><b>Your $${HIRING.TEST_FEE} test fee</b><p>Sent by PayPal to ${escEmail(first.fee_paypal || '')}. Thank you!</p></div>`;
+  }
+  const err = q.fee === 'bad' ? '<div class="warn">That does not look like an email address. Please check it.</div>' : '';
+  const ok = q.fee === 'saved' ? '<p style="color:#15803d"><b>Saved.</b></p>' : '';
+  return `<div class="card"><b>Your $${HIRING.TEST_FEE} test fee</b>
+    <p>${first.fee_paypal ? `We will send it by PayPal to <b>${escEmail(first.fee_paypal)}</b> within ${HIRING.FEE_DAYS} days. Wrong address? Change it here.`
+      : `We pay for this test by PayPal within ${HIRING.FEE_DAYS} days. Where should we send it?`}</p>${ok}${err}
+    <form method="post" action="/apply/test/${escEmail(token)}/paypal" style="display:flex;gap:8px;flex-wrap:wrap">
+      <input name="paypal" type="email" required maxlength="${HIRING.LIMITS.paypal}" autocomplete="email" placeholder="Your PayPal email"
+        value="${escEmail(first.fee_paypal || '')}" style="flex:1;min-width:220px">
+      <button class="btn" type="submit">${first.fee_paypal ? 'Update' : 'Save'}</button></form></div>`;
+}
+
+app.post('/apply/test/:token/paypal', hireRateLimit, async (req, res) => {
+  hireHeaders(res);
+  if (fromAnotherSite(req)) return res.status(403).send('Forbidden');
+  const token = String(req.params.token || '');
+  try {
+    const first = await hireRowByToken(token);
+    if (!first || !first.submitted_at) return res.status(404).send(HIRE_DEAD());
+    const email = HIRING.cleanPaypal((req.body || {}).paypal);
+    if (!email) return res.redirect(303, `/apply/test/${encodeURIComponent(token)}?fee=bad`);
+    // Only while unpaid: once sent, the address on record is the one it went to.
+    await pool.query('UPDATE hiring_tests SET fee_paypal = $2 WHERE id = $1 AND fee_paid_at IS NULL', [first.id, email]);
+    return res.redirect(303, `/apply/test/${encodeURIComponent(token)}?fee=saved`);
+  } catch (err) {
+    console.error('hiring paypal save failed:', err.message);
+    return res.status(503).send(hirePage('Try again', '<div class="card"><p>Please try again in a moment.</p></div>'));
+  }
 });
 
 app.post('/apply/test/:token/start', hireRateLimit, async (req, res) => {
@@ -24542,9 +24588,10 @@ app.post('/apply/test/:token', hireRateLimit, async (req, res) => {
        bad connection never loses someone their work. */
     const { rows } = await pool.query(
       `UPDATE hiring_tests SET submitted_at = NOW(), status = 'submitted', answers = $2, choice = $3,
-              minutes_used = $4, late = $5
+              minutes_used = $4, late = $5, fee_paypal = COALESCE($6, fee_paypal)
         WHERE id = $1 AND submitted_at IS NULL RETURNING id`,
-      [row.id, JSON.stringify(answers), choice ? JSON.stringify(choice) : null, t.minutesUsed, t.late]);
+      [row.id, JSON.stringify(answers), choice ? JSON.stringify(choice) : null, t.minutesUsed, t.late,
+       row.stage === 2 ? null : (HIRING.cleanPaypal((req.body || {}).paypal) || null)]);
     if (rows.length) {
       gradeHiringTest(row.id, { notify: true }).catch((err) => console.error('hiring grade failed:', err.message));
     }
@@ -24655,6 +24702,8 @@ async function tellOwnerHiring(firstId, { unfinished = false } = {}) {
           ${g2 ? `<p>${escEmail(g2.summary)}</p>${g2.strengths.length ? `<p><b>Strengths</b></p>${li(g2.strengths)}` : ''}${
             g2.concerns.length ? `<p><b>Concerns</b></p>${li(g2.concerns)}` : ''}${
             g2.video_questions.length ? `<p><b>Questions still open for the video call</b></p>${li(g2.video_questions.map((q) => q.question))}` : ''}` : ''}` : ''}
+        <p><b>Test fee:</b> $${HIRING.TEST_FEE} ${first.fee_paid_at ? 'paid' : first.fee_paypal ? `to pay by PayPal to ${escEmail(first.fee_paypal)}` : 'to pay: no PayPal email yet'}
+          (<a href="${PUBLIC_BASE_URL}/admin/hiring">Test fees to pay</a>)</p>
         <p><a href="${PUBLIC_BASE_URL}/admin/hiring/${first.id}">See every answer</a></p>`,
     });
     return true;
@@ -24735,6 +24784,15 @@ app.get('/admin/hiring', requireAdmin, async (req, res) => {
         <div class="row-sub muted">${escEmail(r.note || '')}${r.note ? ' · ' : ''}made ${escEmail(whenShort(r.created_at))}${
           r.submitted_at ? ` · handed in ${escEmail(whenShort(r.submitted_at))}` : ''}</div></span></a>`;
     }).join('') : emptyState(show === 'open' ? 'Nobody waiting on a decision. Make a test link above.' : 'Nobody here yet.');
+    const { rows: owed } = await pool.query(
+      `SELECT id, name, role, fee_paypal, submitted_at FROM hiring_tests
+        WHERE stage = 1 AND submitted_at IS NOT NULL AND fee_paid_at IS NULL AND NOT fee_skip
+        ORDER BY submitted_at LIMIT 100`);
+    const fees = owed.length ? `<div class="card" style="border-left:4px solid #F4A623"><b>Test fees to pay</b>
+      ${pill(`${owed.length} · $${owed.length * HIRING.TEST_FEE}`, 'gold')}
+      <p class="muted">$${HIRING.TEST_FEE} each by PayPal (<a href="https://www.paypal.com/myaccount/transfer/homepage/pay" target="_blank" rel="noopener noreferrer">Send money</a>, as a payment for a service).
+      Mark each one paid here and it goes on Finances as contract labor.</p>
+      ${owed.map((f) => hireFeeRow(f)).join('')}</div>` : '';
     const filters = Object.entries(HIRE_SHOW).map(([k, v]) => k === show ? `<b>${escEmail(v)}</b>`
       : `<a href="/admin/hiring?show=${k}">${escEmail(v)}</a>`).join(' · ');
     res.send(adminPage('Hiring', `
@@ -24748,6 +24806,7 @@ app.get('/admin/hiring', requireAdmin, async (req, res) => {
         <label>Job <select name="role">${Object.values(HIRING.ROLES).map((x) => `<option value="${escEmail(x.key)}">${escEmail(x.label)}</option>`).join('')}</select></label>
         <div><button type="submit" class="btn">Make the link</button></div>
       </form>
+      ${fees}
       <div class="card"><b>Applicants</b><div class="muted" style="margin:6px 0">${filters}</div>${list}</div>`, 'hiring'));
   } catch (err) {
     console.error('hiring page failed:', err.message);
@@ -24896,6 +24955,7 @@ app.get('/admin/hiring/:id', requireAdmin, async (req, res) => {
           ${g.generic_note ? `<div class="warn">Generic or templated: ${escEmail(g.generic_note)}</div>` : ''}` : ''}
       </div>
       ${hireDecisionCard(r)}
+      ${hireFeeCard2(r)}
       ${g && g.follow_up.length && !r2 ? `<div class="card"><b>Follow-up questions for the video call</b>
         <p class="muted">About ${escEmail(r.name)}'s own answers. Use them with the <a href="/admin/hiring/test">standard guide</a>.</p>
         <ol>${g.follow_up.map((f) => `<li style="margin-bottom:8px"><b>${escEmail(f.question)}</b><div class="muted">${escEmail(f.why)}</div></li>`).join('')}</ol></div>` : ''}
@@ -24920,6 +24980,29 @@ app.get('/admin/hiring/:id', requireAdmin, async (req, res) => {
     res.status(500).send(adminPage('Hiring', '<div class="card"><div class="warn">Could not load this applicant.</div></div>', 'hiring'));
   }
 });
+
+/** One owed fee, with what the owner needs to send it and mark it paid. */
+function hireFeeRow(f, from = 'list') {
+  return `<div class="row-i"><span class="row-main" style="white-space:normal">
+    <a href="/admin/hiring/${f.id}"><b>${escEmail(f.name)}</b></a> ${pill(HIRING.roleOf(f.role).label, 'neutral')}
+    <div class="row-sub">${f.fee_paypal ? `PayPal: <input readonly value="${escEmail(f.fee_paypal)}" onclick="this.select()" style="width:260px">`
+      : '<span class="muted">No PayPal email yet: they are asked for it on their thank-you page.</span>'}</div>
+    <form method="post" action="/admin/hiring/${f.id}/fee" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+      <input type="hidden" name="from" value="${from === 'page' ? 'page' : 'list'}">
+      <input name="ref" maxlength="${HIRING.LIMITS.ref}" placeholder="PayPal transaction ID (optional)" style="width:240px">
+      <button class="btn" type="submit" name="action" value="paid">Mark $${HIRING.TEST_FEE} paid</button>
+      <button class="btn btn-ghost" type="submit" name="action" value="skip">Don't pay</button></form></span></div>`;
+}
+
+/** The test fee on the applicant's page. */
+function hireFeeCard2(r) {
+  if (!r.submitted_at) return '';
+  const st = r.fee_paid_at ? pill(`Paid ${whenShort(r.fee_paid_at)}`, 'green') : r.fee_skip ? pill('Not paying', 'gray') : pill('To pay', 'gold');
+  return `<div class="card"><b>Test fee ($${HIRING.TEST_FEE})</b> ${st}
+    <p class="muted">PayPal: ${escEmail(r.fee_paypal || 'not given yet')}${r.fee_ref ? ` · ref ${escEmail(r.fee_ref)}` : ''}</p>
+    ${!r.fee_paid_at && !r.fee_skip ? hireFeeRow(r, 'page') : ''}
+    ${r.fee_skip && !r.fee_paid_at ? `<form method="post" action="/admin/hiring/${r.id}/fee"><button class="btn btn-ghost" name="action" value="unskip" type="submit">Pay it after all</button></form>` : ''}</div>`;
+}
 
 /** The owner's decision after the video call, with the buttons to set it. */
 function hireDecisionCard(r) {
@@ -24991,6 +25074,44 @@ app.post('/admin/hiring/:id/grade', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('hiring regrade failed:', err.message);
     return back(res, `/admin/hiring/${id}`, 'err', 'Grading did not finish. Try again in a minute.');
+  }
+});
+
+/* The test fee: paid (booked on Finances as contract labor, once, by
+   ext_ref), not paid, or back on the list. */
+app.post('/admin/hiring/:id/fee', requireAdmin, async (req, res) => {
+  const id = hireId(req);
+  if (!id) return back(res, '/admin/hiring', 'err', 'No such applicant.');
+  const action = String((req.body || {}).action || '');
+  const ref = String((req.body || {}).ref || '').trim().slice(0, HIRING.LIMITS.ref) || null;
+  if (!['paid', 'skip', 'unskip'].includes(action)) return back(res, `/admin/hiring/${id}`, 'err', 'Unknown action.');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      'SELECT * FROM hiring_tests WHERE id = $1 AND stage = 1 AND submitted_at IS NOT NULL FOR UPDATE', [id]);
+    const r = rows[0];
+    if (!r) { await client.query('ROLLBACK'); return back(res, `/admin/hiring/${id}`, 'err', 'Only a handed-in test has a fee.'); }
+    if (r.fee_paid_at) { await client.query('ROLLBACK'); return back(res, `/admin/hiring/${id}`, 'err', 'Already marked paid.'); }
+    if (action === 'paid') {
+      await client.query(
+        `INSERT INTO expenses (spent_on, category, amount, vendor, note, ext_ref)
+         VALUES (CURRENT_DATE, 'Contract labor', $1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+        [HIRING.TEST_FEE, r.name, `Applicant test fee (PayPal${r.fee_paypal ? ` to ${r.fee_paypal}` : ''}${ref ? `, ref ${ref}` : ''})`.slice(0, 500), `hire-fee:${r.id}`]);
+      await client.query('UPDATE hiring_tests SET fee_paid_at = NOW(), fee_ref = $2, fee_skip = false WHERE id = $1', [id, ref]);
+    } else {
+      await client.query('UPDATE hiring_tests SET fee_skip = $2 WHERE id = $1', [id, action === 'skip']);
+    }
+    await client.query('COMMIT');
+    const msg = action === 'paid' ? `Marked paid: $${HIRING.TEST_FEE} to ${r.name}, added to Finances.`
+      : action === 'skip' ? `${r.name}'s fee taken off the list.` : `${r.name}'s fee is back on the list.`;
+    return back(res, (req.body || {}).from === 'list' ? '/admin/hiring' : `/admin/hiring/${id}`, 'ok', msg);
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('hiring fee failed:', err.message);
+    return back(res, `/admin/hiring/${id}`, 'err', 'Could not save that. Try again.');
+  } finally {
+    client.release();
   }
 });
 
