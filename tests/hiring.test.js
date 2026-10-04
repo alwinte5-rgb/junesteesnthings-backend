@@ -160,7 +160,7 @@ test('a refusal or broken JSON throws and is worded for the owner', async () => 
 test('hiring pages are the owner\'s alone; the menu hides them from helpers', () => {
   for (const k of ['GET /admin/hiring', 'POST /admin/hiring', 'GET /admin/hiring/test', 'GET /admin/hiring/:id',
     'POST /admin/hiring/:id/grade', 'POST /admin/hiring/:id/link', 'POST /admin/hiring/:id/cancel',
-    'POST /admin/hiring/:id/round2']) {
+    'POST /admin/hiring/:id/round2', 'POST /admin/hiring/:id/decision']) {
     assert.strictEqual(STAFF.ROUTES[k], 'owner', k);
     const [m, p] = k.split(' ');
     assert.ok(new RegExp(`app\\.${m.toLowerCase()}\\('${p.replace(/[/:]/g, (c) => '\\' + c)}', requireAdmin,`).test(src), `${k} is behind requireAdmin`);
@@ -302,4 +302,25 @@ test('a follow-up remembers which round-1 question it is about, for the round-2 
     assert.deepStrictEqual(about, [...H.ROLES[k].written.map((w) => w.id), 'general'], k);
   }
   assert.match(src, /round2Page\(row, token, t, first\)/);
+});
+
+test('round 2 video-call questions are new: never a question already asked', () => {
+  const qs = [{ id: 'f1', prompt: 'How did you grow that page?', why: 'w' }];
+  const guideQ = H.SALES.guide[0].questions[0].q;
+  const g = H.normalizeRound2({ recommendation: 'interview', video_questions: [
+    { question: 'how did you grow that page', why: 'repeat' }, { question: guideQ, why: 'guide' },
+    { question: 'Show me the analytics for that page, live.', why: 'new' }] }, qs, { f1: 'x' }, 'sales');
+  assert.deepStrictEqual(g.video_questions.map((q) => q.why), ['new']);
+  const msg = H.round2Message(qs, { f1: 'x' }, { role: 'designer' });
+  assert.ok(msg.includes(H.ROLES.designer.guide[0].questions[0].q) && /do not repeat/.test(msg));
+  assert.match(H.round2System('sales'), /NEW questions for the video call/);
+});
+
+test('the owner marks video call, hired or rejected; rejecting closes open tests', () => {
+  assert.deepStrictEqual(Object.keys(H.DECISIONS), ['interview', 'hired', 'rejected']);
+  const route = src.slice(src.indexOf("app.post('/admin/hiring/:id/decision'"), src.indexOf('// Round 2 for someone the grade did not pass'));
+  assert.match(route, /hasOwnProperty\.call\(HIRING\.DECISIONS, raw\)/, 'only known decisions');
+  assert.match(route, /SET status = 'cancelled'\s+WHERE \(id = \$1 OR parent_id = \$1\) AND submitted_at IS NULL/);
+  assert.match(route, /owner_told_at = COALESCE\(owner_told_at, NOW\(\)\)/, 'no emails after a rejection');
+  assert.match(src, /ADD COLUMN IF NOT EXISTS decision TEXT/);
 });

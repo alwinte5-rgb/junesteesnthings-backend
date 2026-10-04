@@ -1195,6 +1195,9 @@ async function initStaffTables() {
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS hiring_tests_parent ON hiring_tests (parent_id) WHERE parent_id IS NOT NULL`);
   // When the owner was sent the result for this applicant: one email, ever.
   await pool.query(`ALTER TABLE hiring_tests ADD COLUMN IF NOT EXISTS owner_told_at TIMESTAMPTZ`);
+  // The owner's call after the video call (HIRING.DECISIONS), on the round-1 row.
+  await pool.query(`ALTER TABLE hiring_tests ADD COLUMN IF NOT EXISTS decision TEXT`);
+  await pool.query(`ALTER TABLE hiring_tests ADD COLUMN IF NOT EXISTS decided_at TIMESTAMPTZ`);
   // Coaching notes the owner writes outside an approval.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS staff_feedback (
@@ -24703,30 +24706,37 @@ function hireBand(score) {
   return score == null ? null : HIRING.BANDS.find((b) => score >= b.min);
 }
 
+/* The list's filters: still being decided, each decision, or everyone. */
+const HIRE_SHOW = { open: 'Still deciding', interview: 'Video call', hired: 'Hired', rejected: 'Rejected', all: 'Everyone' };
+
 app.get('/admin/hiring', requireAdmin, async (req, res) => {
+  const show = Object.prototype.hasOwnProperty.call(HIRE_SHOW, req.query.show) ? req.query.show : 'open';
   try {
     const { rows } = await pool.query(
       `SELECT t.id, t.name, t.role, t.note, t.status, t.score, t.late, t.created_at, t.expires_at, t.opened_at, t.started_at,
               t.submitted_at, t.grade_error, t.grade->>'initiative' AS initiative, t.grade->'extra_skills' AS skills,
               c.id AS r2_id, c.status AS r2_status, c.submitted_at AS r2_in, c.expires_at AS r2_expires,
-              c.grade_error AS r2_error, c.grade->>'recommendation' AS r2_rec
+              c.grade_error AS r2_error, c.grade->>'recommendation' AS r2_rec, t.decision
          FROM hiring_tests t LEFT JOIN hiring_tests c ON c.parent_id = t.id
         WHERE t.stage = 1
-        ORDER BY (t.score IS NULL), t.score DESC, t.created_at DESC LIMIT 300`);
+          AND ($1::text = 'all' OR ($1 = 'open' AND t.decision IS NULL) OR t.decision = $1)
+        ORDER BY (t.score IS NULL), t.score DESC, t.created_at DESC LIMIT 300`, [show]);
     const list = rows.length ? rows.map((r) => {
       const [label, tone] = HIRE_STATUS[r.status] || HIRE_STATUS.sent;
       const band = hireBand(r.score);
       const skills = Array.isArray(r.skills) ? r.skills : [];
       const expired = r.status === 'sent' && r.expires_at && new Date(r.expires_at) < new Date();
       return `<a class="row-i" href="/admin/hiring/${r.id}"><span class="row-main"><b>${escEmail(r.name)}</b>
-        <div class="row-sub">${pill(expired ? 'Link expired' : label, expired ? 'red' : tone)}
+        <div class="row-sub">${r.decision && HIRING.DECISIONS[r.decision] ? pill(...HIRING.DECISIONS[r.decision]) + ' ' : ''}${pill(expired ? 'Link expired' : label, expired ? 'red' : tone)}
           ${band ? `${pill(`${r.score}/100`, band.tone)} ${escEmail(band.label)}` : ''}
           ${r.initiative ? pill(r.initiative, r.initiative === 'self-starter' ? 'green' : r.initiative === 'waits for direction' ? 'red' : 'neutral') : ''}
           ${pill(HIRING.roleOf(r.role).label, 'neutral')} ${hireRound2Pill(r)}
           ${skills.length ? pill('Extra skills', 'gold') : ''}${r.late ? pill('late', 'amber') : ''}${r.grade_error ? pill('needs grading', 'red') : ''}</div>
         <div class="row-sub muted">${escEmail(r.note || '')}${r.note ? ' · ' : ''}made ${escEmail(whenShort(r.created_at))}${
           r.submitted_at ? ` · handed in ${escEmail(whenShort(r.submitted_at))}` : ''}</div></span></a>`;
-    }).join('') : emptyState('No applicant tests yet. Make the first link above.');
+    }).join('') : emptyState(show === 'open' ? 'Nobody waiting on a decision. Make a test link above.' : 'Nobody here yet.');
+    const filters = Object.entries(HIRE_SHOW).map(([k, v]) => k === show ? `<b>${escEmail(v)}</b>`
+      : `<a href="/admin/hiring?show=${k}">${escEmail(v)}</a>`).join(' · ');
     res.send(adminPage('Hiring', `
       ${pageHeader('Hiring', `Each applicant gets a private ${HIRING.MINUTES}-minute test link. They need no login and see none of the shop's data.`,
         '<a class="btn btn-ghost" href="/admin/hiring/test">Job posts, screening, tests and interview guides</a>')}
@@ -24738,7 +24748,7 @@ app.get('/admin/hiring', requireAdmin, async (req, res) => {
         <label>Job <select name="role">${Object.values(HIRING.ROLES).map((x) => `<option value="${escEmail(x.key)}">${escEmail(x.label)}</option>`).join('')}</select></label>
         <div><button type="submit" class="btn">Make the link</button></div>
       </form>
-      <div class="card"><b>Applicants</b>${list}</div>`, 'hiring'));
+      <div class="card"><b>Applicants</b><div class="muted" style="margin:6px 0">${filters}</div>${list}</div>`, 'hiring'));
   } catch (err) {
     console.error('hiring page failed:', err.message);
     res.status(500).send(adminPage('Hiring', '<div class="card"><div class="warn">Could not load the applicants.</div></div>', 'hiring'));
@@ -24885,7 +24895,8 @@ app.get('/admin/hiring/:id', requireAdmin, async (req, res) => {
           ${g.concerns.length ? `<p><b>Concerns</b></p><ul>${g.concerns.map((s) => `<li>${escEmail(s)}</li>`).join('')}</ul>` : ''}
           ${g.generic_note ? `<div class="warn">Generic or templated: ${escEmail(g.generic_note)}</div>` : ''}` : ''}
       </div>
-      ${g && g.follow_up.length ? `<div class="card"><b>Follow-up questions for the video call</b>
+      ${hireDecisionCard(r)}
+      ${g && g.follow_up.length && !r2 ? `<div class="card"><b>Follow-up questions for the video call</b>
         <p class="muted">About ${escEmail(r.name)}'s own answers. Use them with the <a href="/admin/hiring/test">standard guide</a>.</p>
         <ol>${g.follow_up.map((f) => `<li style="margin-bottom:8px"><b>${escEmail(f.question)}</b><div class="muted">${escEmail(f.why)}</div></li>`).join('')}</ol></div>` : ''}
       ${hireRound2Card(r, r2)}
@@ -24909,6 +24920,19 @@ app.get('/admin/hiring/:id', requireAdmin, async (req, res) => {
     res.status(500).send(adminPage('Hiring', '<div class="card"><div class="warn">Could not load this applicant.</div></div>', 'hiring'));
   }
 });
+
+/** The owner's decision after the video call, with the buttons to set it. */
+function hireDecisionCard(r) {
+  const cur = r.decision && HIRING.DECISIONS[r.decision];
+  const btn = (k, label) => `<button class="btn${r.decision === k ? '' : ' btn-ghost'}" type="submit" name="decision" value="${k}">${escEmail(label)}</button>`;
+  return `<div class="card"><b>Your decision</b> ${cur ? pill(cur[0], cur[1]) : pill('Not decided', 'gray')}
+    ${r.decided_at ? `<span class="muted">${escEmail(whenShort(r.decided_at))}</span>` : ''}
+    <form method="post" action="/admin/hiring/${r.id}/decision" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+      ${Object.entries(HIRING.DECISIONS).map(([k, [label]]) => btn(k, label)).join('')}
+      ${r.decision ? '<button class="btn btn-ghost" type="submit" name="decision" value="">Clear</button>' : ''}</form>
+    ${r.decision === 'hired' ? '<p class="muted">Next: add them on <a href="/admin/staff">Staff</a>. Their Training page and the playbook take it from there.</p>' : ''}
+    ${r.decision === 'rejected' ? '<p class="muted">Their test links are closed and no more emails come about them.</p>' : ''}</div>`;
+}
 
 /** Round 2 on the applicant's page: where it stands, the grader's verdict,
  *  the questions left for the video call, and every answer. */
@@ -24937,7 +24961,7 @@ function hireRound2Card(r, r2) {
       ${g.strengths.length ? `<p><b>Strengths</b></p><ul>${g.strengths.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>` : ''}
       ${g.concerns.length ? `<p><b>Concerns</b></p><ul>${g.concerns.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>` : ''}
       ${g.generic_note ? `<div class="warn">Generic or templated: ${escEmail(g.generic_note)}</div>` : ''}
-      ${g.video_questions.length ? `<p><b>Still open for the video call</b></p><ol>${g.video_questions.map((f) =>
+      ${g.video_questions.length ? `<p><b>Questions for the video call</b> <span class="muted">(new: not asked in round 2 or in the standard guide)</span></p><ol>${g.video_questions.map((f) =>
         `<li style="margin-bottom:8px"><b>${escEmail(f.question)}</b><div class="muted">${escEmail(f.why)}</div></li>`).join('')}</ol>` : ''}` : ''}
     ${qs.map((q, n) => {
       const sc = g && g.scores && g.scores[q.id];
@@ -24967,6 +24991,38 @@ app.post('/admin/hiring/:id/grade', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('hiring regrade failed:', err.message);
     return back(res, `/admin/hiring/${id}`, 'err', 'Grading did not finish. Try again in a minute.');
+  }
+});
+
+/* Video call, hired or rejected. Rejecting closes any test still open (so the
+   link dies) and marks the results email as sent, so nothing more arrives. */
+app.post('/admin/hiring/:id/decision', requireAdmin, async (req, res) => {
+  const id = hireId(req);
+  if (!id) return back(res, '/admin/hiring', 'err', 'No such applicant.');
+  const raw = String((req.body || {}).decision || '');
+  if (raw && !Object.prototype.hasOwnProperty.call(HIRING.DECISIONS, raw)) return back(res, `/admin/hiring/${id}`, 'err', 'Unknown decision.');
+  const decision = raw || null;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `UPDATE hiring_tests SET decision = $2, decided_at = CASE WHEN $2::text IS NULL THEN NULL ELSE NOW() END
+        WHERE id = $1 AND stage = 1 RETURNING id`, [id, decision]);
+    if (!rows.length) { await client.query('ROLLBACK'); return back(res, '/admin/hiring', 'err', 'No such applicant.'); }
+    if (decision === 'rejected') {
+      await client.query(`UPDATE hiring_tests SET status = 'cancelled'
+                           WHERE (id = $1 OR parent_id = $1) AND submitted_at IS NULL AND status <> 'cancelled'`, [id]);
+      await client.query('UPDATE hiring_tests SET owner_told_at = COALESCE(owner_told_at, NOW()) WHERE id = $1', [id]);
+    }
+    await client.query('COMMIT');
+    const msg = !decision ? 'Decision cleared.' : `Marked: ${HIRING.DECISIONS[decision][0]}.`;
+    return back(res, `/admin/hiring/${id}`, 'ok', msg);
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('hiring decision failed:', err.message);
+    return back(res, `/admin/hiring/${id}`, 'err', 'Could not save that. Try again.');
+  } finally {
+    client.release();
   }
 });
 
