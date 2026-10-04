@@ -25593,6 +25593,68 @@ const KB_ADDED = [
 `- Post the same message across many groups\n` +
 `- Contact anyone who has said no\n\n` +
 `Target: [new prospects per quiet hour, owner to fill in].` },
+  /* Customer-service know-how for helpers: how to handle the situations that
+     come up every week, with replies to adapt. Written for real customers,
+     needsReview so the owner checks the wording first. */
+  { kind: 'sop', title: 'Customer situations: what to do', needsReview: true,
+    tags: 'customer service, replies, judgment, owner decisions, discounts, refunds, rush, logos, follow up',
+    body: `The situations that come up most, and how we handle each one. Shortcuts in brackets insert a ready reply.\n\n` +
+`**Answer fast**\n` +
+`- Reply to every new enquiry within 1 hour during your shift, even if the full quote takes longer. The first shop to answer usually wins the order\n` +
+`- A quick "Thanks! Here's what I need to price this" is better than a perfect quote tomorrow\n\n` +
+`**"How much for shirts?"**\n` +
+`- Never send a random price. Thank them, then ask everything in ONE message: how many, which garment, where the design goes, whether they have artwork, and the date they need them (/quote)\n\n` +
+`**Decisions that are June's, not ours**\n` +
+`- Discounts and price matches (/pricematch)\n` +
+`- Refunds, reprints and anything that costs money to fix (/wrongitems)\n` +
+`- Rush dates: never promise a date you have not checked (/rush)\n` +
+`- Logos the customer does not own: sports teams, brands, characters. We do not print them; June decides, and an original design is the usual offer\n` +
+`- In each case: reply to the customer straight away, say you are checking, give a time you will update them, then message June\n\n` +
+`**When you do not know**\n` +
+`- Never guess. Say you will check and reply by a set time, ask June, and reply by that time even if the answer is "still checking" (/checking)\n\n` +
+`**Following up a quote**\n` +
+`- No reply after 3 days: one short, friendly note. Any questions? The quote is good for 14 days. Then set the next follow-up date on the lead\n` +
+`- Never chase every day, and never offer a discount just to get a reply\n\n` +
+`**Spotting a bigger order**\n` +
+`- A business, school or team asking about one order often needs more: staff polos, embroidered jackets, new-hire kits, event shirts, reorders. Ask about them once, without pushing (/business)` },
+  { kind: 'faq', shortcut: 'wrongitems', title: 'Something is wrong with my order', needsReview: true,
+    tags: 'mistake, wrong size, misprint, crooked, damaged, complaint, upset, fix',
+    body: `Hi [name], I'm so sorry about this, especially with [their event/date] coming up. Let's get it fixed quickly.\n\n` +
+`Could you reply with:\n- your order number\n- which items are wrong (for sizes: the size you got and the size you need)\n- a quick photo of the problem or the size tags\n\n` +
+`I'm bringing this to June right now and I'll update you by [time today] with exactly how and when we'll put it right.\n\n` +
+`(For you: apologise once and own it. Do not promise a refund, a free reprint or a date yourself. Send June the photos straight away.)` },
+  { kind: 'faq', shortcut: 'business', title: 'Do you make shirts for businesses?', needsReview: true,
+    tags: 'business, company, staff, uniforms, employees, polos, embroidery, corporate, team',
+    body: `Hi [name], yes we do! Staff shirts, polos and jackets for businesses are a big part of what we make. A few quick questions so I can put a quote together:\n\n` +
+`1. What would you like: t-shirts, polos, jackets, or a mix?\n` +
+`2. Do you have your logo file? A vector (.ai, .eps, .svg or .pdf) is best\n` +
+`3. Printed or embroidered? Polos and jackets usually look best embroidered\n` +
+`4. Roughly how many of each size, and which colours?\n` +
+`5. When do you need them, and is this a one-time order or will you reorder for new staff?\n\n` +
+`If it's easier, I can send two or three options with prices to choose from. What's the best email for your quote?` },
+  { kind: 'faq', shortcut: 'pricematch', title: 'Can you match another shop\'s price?', needsReview: true,
+    tags: 'price match, cheaper, discount, competitor, other shop, lower price',
+    body: `Hi [name], thanks for letting me know. Could you send me the other quote? Prices often differ because of what's included: the garment brand and weight, the number of print colours or locations, setup, and turnaround.\n\n` +
+`Here's what ours includes: [garment, decoration, setup, delivery or pickup]. Let me go through both with June and I'll get back to you by [time].\n\n` +
+`(For you: never agree to a discount yourself. Explaining what our price includes often wins the order on its own.)` },
+  { kind: 'faq', shortcut: 'rush', title: 'Can you get it done by [date]?', needsReview: true,
+    tags: 'rush, deadline, urgent, fast, by friday, need it soon, turnaround',
+    body: `Hi [name], thanks! [Date] is tight but we may be able to rush it for an extra fee. Let me check what's on the press and I'll confirm today by [time], with the price for the rush.\n\n` +
+`To keep it quick, could you send [the details still missing: quantity, sizes, artwork]?\n\n` +
+`(For you: never promise a date before June confirms it. Reply the same day either way.)` },
+  { kind: 'faq', shortcut: 'checking', title: 'Let me check and get back to you', needsReview: true,
+    tags: 'not sure, checking, question, unknown, get back, follow up',
+    body: `Good question! Let me check with our production team so I give you the right answer. I'll get back to you by [time].\n\n` +
+`(For you: write the time down and keep it, even if the answer is "still checking, here's when I'll know".)` },
+  { kind: 'sop', title: 'A quiet afternoon: a plan', needsReview: true,
+    tags: 'quiet time, no messages, initiative, self-starter, what to do, follow up, leads, summary',
+    body: `Nothing new, nothing assigned, June busy for a few hours? Here is a good way to spend it. Do the money first.\n\n` +
+`1. **Follow-ups (first 30 minutes).** Every open quote older than 3 days gets a short friendly note, and every lead gets a next follow-up date. Most sales are won here\n` +
+`2. **New customers (about 90 minutes).** Youth sports leagues starting a season, schools and PTOs with events, churches, local businesses. Log each one on Leads with where you found them and why they need shirts now, then send a personal email to the best five. See "Finding new leads in quiet time"\n` +
+`3. **Social (about 40 minutes).** Answer comments and messages, and draft two posts from recent job photos for June to approve\n` +
+`4. **A summary for June (last 20 minutes).** Who you followed up, the leads you added, and anything waiting on her decision, so she starts with a clear list\n\n` +
+`Other good jobs: replying to Google reviews that have no reply yet (draft, then June approves), tidying lead records, learning a product you are unsure about.\n\n` +
+`"I waited for instructions" is never the answer. When unsure what matters most, follow-ups first.` },
 ];
 
 async function addPlaybookArticles() {
