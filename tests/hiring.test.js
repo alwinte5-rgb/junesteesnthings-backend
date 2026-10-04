@@ -159,7 +159,8 @@ test('a refusal or broken JSON throws and is worded for the owner', async () => 
 
 test('hiring pages are the owner\'s alone; the menu hides them from helpers', () => {
   for (const k of ['GET /admin/hiring', 'POST /admin/hiring', 'GET /admin/hiring/test', 'GET /admin/hiring/:id',
-    'POST /admin/hiring/:id/grade', 'POST /admin/hiring/:id/link', 'POST /admin/hiring/:id/cancel']) {
+    'POST /admin/hiring/:id/grade', 'POST /admin/hiring/:id/link', 'POST /admin/hiring/:id/cancel',
+    'POST /admin/hiring/:id/round2']) {
     assert.strictEqual(STAFF.ROUTES[k], 'owner', k);
     const [m, p] = k.split(' ');
     assert.ok(new RegExp(`app\\.${m.toLowerCase()}\\('${p.replace(/[/:]/g, (c) => '\\' + c)}', requireAdmin,`).test(src), `${k} is behind requireAdmin`);
@@ -179,4 +180,51 @@ test('public test routes: rate-limited, cross-site posts refused, token never st
   assert.ok(!/INSERT INTO hiring_tests \([^)]*\btoken\b[,)]/.test(src), 'the raw token is never inserted');
   assert.match(src, /WHERE id = \$1 AND submitted_at IS NULL RETURNING id/, 'handed in once');
   assert.match(src, /WHERE id = \$1 AND started_at IS NULL AND submitted_at IS NULL/, 'the clock starts once');
+});
+
+test('round 2: made from the follow-ups, only past the pass mark, answers capped to its own questions', () => {
+  const qs = H.round2Questions({ follow_up: Array.from({ length: 9 }, (_, i) => ({ question: `Q${i}?`, why: 'w' })) });
+  assert.strictEqual(qs.length, H.ROUND2_MAX);
+  assert.deepStrictEqual(qs[0], { id: 'f1', prompt: 'Q0?', why: 'w' });
+  assert.ok(H.passes(H.PASS_SCORE) && !H.passes(H.PASS_SCORE - 1) && !H.passes(null));
+  const got = H.cleanRound2({ w_f1: 'yes', w_f9: 'not mine', w_angry: 'nope' }, qs.slice(0, 2));
+  assert.deepStrictEqual(got, { written: { f1: 'yes', f2: '' } });
+  assert.strictEqual(H.round2Score({ scores: { f1: { score: 5 }, f2: { score: 3 } } }), 80);
+  const g = H.normalizeRound2({ scores: [{ id: 'f1', score: 9, note: 'x' }], recommendation: 'hire!' }, qs.slice(0, 2), { f1: 'a' });
+  assert.deepStrictEqual(g.scores, { f1: { score: 5, note: 'x' }, f2: { score: 1, note: 'Left blank.' } });
+  assert.strictEqual(g.recommendation, 'maybe');
+});
+
+test('round 2 waits on the applicant page only while round 1 is being graded', () => {
+  const now = new Date('2026-10-04T12:00:00Z');
+  const at = (min) => new Date(now - min * 60e3);
+  assert.ok(H.round2Pending({ submitted_at: at(1) }, now));
+  assert.ok(!H.round2Pending({ submitted_at: at(H.ROUND2_WAIT_MINUTES + 1) }, now), 'gives up after a few minutes');
+  assert.ok(!H.round2Pending({ submitted_at: at(1), grade: {}, score: 90 }, now), 'a pass with no questions has no round 2 to wait for');
+  assert.ok(!H.round2Pending({ submitted_at: at(1), grade: { follow_up: [{ question: 'Q?' }] }, score: 40 }, now), 'below the mark: done');
+  assert.ok(H.round2Pending({ submitted_at: at(1), grade: { follow_up: [{ question: 'Q?' }] }, score: 90 }, now), 'graded, round 2 about to be made');
+  assert.ok(!H.round2Pending({ submitted_at: at(1), grade_error: 'x' }, now));
+  assert.ok(!H.round2Pending({}, now));
+});
+
+test('the answer key stays on the owner-only Hiring pages, never the helpers\' playbook', () => {
+  assert.ok(!('playbookArticles' in H));
+  assert.ok(!/HIRING\.playbookArticles/.test(src));
+  assert.ok(H.WRITTEN.every((w) => w.model), 'every written question has a model answer');
+  const page = H.testForPage();
+  assert.ok(page.written.every((w) => !('model' in w) && !('rubric' in w)), 'the applicant never gets them');
+  assert.match(src, /Model answer<\/b>/);
+});
+
+test('round 2 rides on the round-1 link, and the owner hears once per applicant', () => {
+  assert.match(src, /async function hireActiveRow\(token\)/);
+  for (const r of ["app.get('/apply/test/:token'", "app.post('/apply/test/:token/start'", "app.post('/apply/test/:token',"]) {
+    const block = src.slice(src.indexOf(r), src.indexOf(r) + 900);
+    assert.match(block, /hireActiveRow\(token\)/, r);
+  }
+  assert.match(src, /SELECT \* FROM hiring_tests WHERE token_hash = \$1 AND stage = 1/, 'a round-2 row is never reachable by its own token');
+  assert.match(src, /SET owner_told_at = NOW\(\) WHERE id = \$1 AND stage = 1 AND owner_told_at IS NULL RETURNING id/);
+  assert.match(src, /await step\('hiring round 2', reportUnfinishedRound2\)/);
+  const grade = src.slice(src.indexOf('async function gradeHiringTest'), src.indexOf('async function openRound2'));
+  assert.match(grade, /if \(notify && !opened\)/, 'a pass waits for round 2 before emailing');
 });
