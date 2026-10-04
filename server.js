@@ -1186,6 +1186,12 @@ async function initStaffTables() {
       grade_error   TEXT,
       graded_at     TIMESTAMPTZ
     )`);
+  /* Round 2 (HIRING.PASS_SCORE): a second, shorter test made from the grader's
+     follow-up questions. One per round-1 test, which the unique index holds. */
+  await pool.query(`ALTER TABLE hiring_tests ADD COLUMN IF NOT EXISTS stage INTEGER NOT NULL DEFAULT 1`);
+  await pool.query(`ALTER TABLE hiring_tests ADD COLUMN IF NOT EXISTS parent_id INTEGER`);
+  await pool.query(`ALTER TABLE hiring_tests ADD COLUMN IF NOT EXISTS questions JSONB`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS hiring_tests_parent ON hiring_tests (parent_id) WHERE parent_id IS NOT NULL`);
   // Coaching notes the owner writes outside an approval.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS staff_feedback (
@@ -24362,6 +24368,53 @@ async function hireRowByToken(token) {
   return r;
 }
 
+  /* The clock counts down from what the SERVER says is left; the browser only
+     displays it, and hands the test in at zero. Answers are kept in this
+     browser's storage as they are typed, so a reload loses nothing. */
+function hireClockScript(row, t) {
+  return `(function(){var left=${Number(t.secondsLeft) || 0},f=document.getElementById('hire-form'),c=document.getElementById('hire-clock'),k='jt-hire-${row.id}',sent=false;
+    function save(){try{var d={};f.querySelectorAll('input:checked,textarea').forEach(function(e){d[e.name]=e.type==='radio'?e.value:e.value});localStorage.setItem(k,JSON.stringify(d))}catch(e){}}
+    try{var d=JSON.parse(localStorage.getItem(k)||'{}');Object.keys(d).forEach(function(n){var els=f.querySelectorAll('[name="'+n+'"]');els.forEach(function(e){if(e.type==='radio'){e.checked=e.value===d[n]}else{e.value=d[n]}})})}catch(e){}
+    f.addEventListener('input',save);f.addEventListener('change',save);
+    f.addEventListener('submit',function(){sent=true;save();var b=f.querySelector('button[type=submit]');b.disabled=true;b.textContent='Sending...'});
+    function tick(){var m=Math.floor(left/60),s=left%60;c.textContent=left>0?('Time left: '+m+':'+(s<10?'0':'')+s):'Time is up: sending your answers...';
+      if(left<=300)c.className='hire-clock low';if(left<=0){if(!sent){sent=true;save();f.submit()}return}left--;setTimeout(tick,1000)}tick();})();`;
+}
+
+/** Minutes on the clock for this row: round 2 is shorter. */
+function hireMinutes(row) {
+  return row && row.stage === 2 ? HIRING.ROUND2_MINUTES : HIRING.MINUTES;
+}
+
+/* Round 2 as the applicant sees it: their own follow-up questions only. */
+function round2Page(row, token, t) {
+  const qs = Array.isArray(row.questions) ? row.questions : [];
+  if (!t.started) {
+    return hirePage('Round 2', `<div class="card">
+      <h1 style="font-size:24px">Hi ${escEmail(row.name)}, welcome to round 2</h1>
+      <p style="white-space:pre-line">${escEmail(HIRING.ROUND2_INTRO)}</p>
+      <p>${qs.length} questions. <b>The ${HIRING.ROUND2_MINUTES}-minute clock starts when you press Start</b> and keeps running if you
+      close the page. Your answers are saved in this browser as you type.</p>
+      <form method="post" action="/apply/test/${escEmail(token)}/start" onsubmit="this.querySelector('button').disabled=true">
+        <button type="submit" class="btn">Start round 2</button></form></div>`);
+  }
+  if (t.overGrace) {
+    return hirePage('Time is up', `<div class="card"><h1 style="font-size:22px">Time is up</h1>
+      <p>The ${HIRING.ROUND2_MINUTES} minutes for round 2 have passed. If something went wrong, message us on OnlineJobs.ph.</p></div>`);
+  }
+  const boxes = qs.map((q, n) => `<div class="card">
+      <label class="hire-q" for="w_${escEmail(q.id)}">${n + 1}. ${escEmail(q.prompt)}</label>
+      <textarea class="hire-ta" id="w_${escEmail(q.id)}" name="w_${escEmail(q.id)}" maxlength="${HIRING.LIMITS.answer}"></textarea></div>`).join('');
+  return hirePage('Round 2', `<div id="hire-clock" class="hire-clock"></div>
+    <form id="hire-form" method="post" action="/apply/test/${escEmail(token)}">
+      <h2 class="hire-part">Round 2: about your answers</h2>
+      <p class="muted">Real examples beat general statements.</p>
+      ${boxes}
+      <div class="card"><p>Check your answers, then hand them in. You can only send them once.</p>
+        <button type="submit" class="btn">Hand in round 2</button></div>
+    </form>`, hireClockScript(row, t));
+}
+
 app.get('/apply/test/:token', hireRateLimit, async (req, res) => {
   hireHeaders(res);
   const token = String(req.params.token || '');
@@ -24375,9 +24428,10 @@ app.get('/apply/test/:token', hireRateLimit, async (req, res) => {
     return res.send(hirePage('Thank you', `<div class="card"><h1 style="font-size:22px">Thank you, ${escEmail(row.name)}</h1>
       <p>Your answers are in. We read every test ourselves and will reply on OnlineJobs.ph within a few days.</p></div>`));
   }
-  const t = HIRING.timing(row);
+  const t = HIRING.timing(row, undefined, hireMinutes(row));
   if (!t.started && t.expired) return res.status(404).send(HIRE_DEAD());
   if (!row.opened_at) pool.query('UPDATE hiring_tests SET opened_at = NOW() WHERE id = $1 AND opened_at IS NULL', [row.id]).catch(() => {});
+  if (row.stage === 2) return res.send(round2Page(row, token, t));
   const view = HIRING.testForPage();
   if (!t.started) {
     return res.send(hirePage('Applicant test', `<div class="card">
@@ -24403,16 +24457,7 @@ app.get('/apply/test/:token', hireRateLimit, async (req, res) => {
       <p style="white-space:normal">${escEmail(w.prompt)}</p>
       <textarea class="hire-ta" id="w_${escEmail(w.id)}" name="w_${escEmail(w.id)}" maxlength="${HIRING.LIMITS.answer}"></textarea></div>`).join('');
   const part = (k) => `<h2 class="hire-part">${escEmail(view.parts[k].label)}</h2><p class="muted">${escEmail(view.parts[k].note)}</p>`;
-  /* The clock counts down from what the SERVER says is left; the browser only
-     displays it, and hands the test in at zero. Answers are kept in this
-     browser's storage as they are typed, so a reload loses nothing. */
-  const script = `(function(){var left=${Number(t.secondsLeft) || 0},f=document.getElementById('hire-form'),c=document.getElementById('hire-clock'),k='jt-hire-${row.id}',sent=false;
-    function save(){try{var d={};f.querySelectorAll('input:checked,textarea').forEach(function(e){d[e.name]=e.type==='radio'?e.value:e.value});localStorage.setItem(k,JSON.stringify(d))}catch(e){}}
-    try{var d=JSON.parse(localStorage.getItem(k)||'{}');Object.keys(d).forEach(function(n){var els=f.querySelectorAll('[name="'+n+'"]');els.forEach(function(e){if(e.type==='radio'){e.checked=e.value===d[n]}else{e.value=d[n]}})})}catch(e){}
-    f.addEventListener('input',save);f.addEventListener('change',save);
-    f.addEventListener('submit',function(){sent=true;save();var b=f.querySelector('button[type=submit]');b.disabled=true;b.textContent='Sending...'});
-    function tick(){var m=Math.floor(left/60),s=left%60;c.textContent=left>0?('Time left: '+m+':'+(s<10?'0':'')+s):'Time is up: sending your answers...';
-      if(left<=300)c.className='hire-clock low';if(left<=0){if(!sent){sent=true;save();f.submit()}return}left--;setTimeout(tick,1000)}tick();})();`;
+  const script = hireClockScript(row, t);
   res.send(hirePage('Applicant test', `<div id="hire-clock" class="hire-clock"></div>
     <form id="hire-form" method="post" action="/apply/test/${escEmail(token)}">
       ${part('choice')}${choice}
@@ -24449,10 +24494,10 @@ app.post('/apply/test/:token', hireRateLimit, async (req, res) => {
   try {
     const row = await hireRowByToken(token);
     if (!row) return res.status(404).send(HIRE_DEAD());
-    const t = HIRING.timing(row);
+    const t = HIRING.timing(row, undefined, hireMinutes(row));
     if (!t.started) return res.redirect(303, `/apply/test/${encodeURIComponent(token)}`);
-    const answers = HIRING.cleanAnswers(req.body);
-    const choice = HIRING.gradeChoices(answers.picks);
+    const answers = row.stage === 2 ? HIRING.cleanRound2(req.body, row.questions) : HIRING.cleanAnswers(req.body);
+    const choice = row.stage === 2 ? null : HIRING.gradeChoices(answers.picks);
     /* Handed in once: the WHERE makes a double press, or a second tab, a no-op.
        A hand-in after the clock (plus grace) is still kept, flagged late, so a
        bad connection never loses someone their work. */
@@ -24460,7 +24505,7 @@ app.post('/apply/test/:token', hireRateLimit, async (req, res) => {
       `UPDATE hiring_tests SET submitted_at = NOW(), status = 'submitted', answers = $2, choice = $3,
               minutes_used = $4, late = $5
         WHERE id = $1 AND submitted_at IS NULL RETURNING id`,
-      [row.id, JSON.stringify(answers), JSON.stringify(choice), t.minutesUsed, t.late]);
+      [row.id, JSON.stringify(answers), choice ? JSON.stringify(choice) : null, t.minutesUsed, t.late]);
     if (rows.length) {
       gradeHiringTest(row.id, { notify: true }).catch((err) => console.error('hiring grade failed:', err.message));
     }
@@ -24473,38 +24518,76 @@ app.post('/apply/test/:token', hireRateLimit, async (req, res) => {
 });
 
 /** Grade one hand-in and store the result. Never throws: a failure is stored
- *  as grade_error for the owner to see and retry. */
+ *  as grade_error for the owner to see and retry. A round-1 pass opens round 2
+ *  (once), and its link goes to the owner in the same email. */
 async function gradeHiringTest(id, { notify = false } = {}) {
   const { rows } = await pool.query('SELECT * FROM hiring_tests WHERE id = $1', [id]);
   const row = rows[0];
   if (!row || !row.answers) return null;
+  const round2 = row.stage === 2;
   let grade = null;
   let error = null;
   try {
-    grade = await HIRING.gradeWritten(row.answers.written || {}, { name: row.name });
+    grade = round2
+      ? await HIRING.gradeRound2(row.questions || [], row.answers.written || {}, { name: row.name })
+      : await HIRING.gradeWritten(row.answers.written || {}, { name: row.name });
   } catch (err) {
     console.error(`hiring test ${id}: grading failed:`, err.message);
     error = HIRING.failureMessage(err);
     reportError('hiring-grade', err, `hiring test ${id}`).catch(() => {});
   }
-  const total = grade ? HIRING.overall(row.choice || { score: 0, total: 0 }, grade) : null;
+  const score = !grade ? null : round2 ? HIRING.round2Score(grade)
+    : HIRING.overall(row.choice || { score: 0, total: 0 }, grade).score;
   await pool.query(
     /* A failed re-grade keeps the last good grade: it only records why. */
     `UPDATE hiring_tests SET grade = COALESCE($2::jsonb, grade), score = COALESCE($3::int, score), grade_error = $4,
             graded_at = CASE WHEN $2::jsonb IS NULL THEN graded_at ELSE NOW() END,
             status = CASE WHEN $2::jsonb IS NULL THEN status ELSE 'graded' END
       WHERE id = $1`,
-    [id, grade ? JSON.stringify(grade) : null, total ? total.score : null, error]);
+    [id, grade ? JSON.stringify(grade) : null, score, error]);
+  const next = !round2 && grade && HIRING.passes(score) ? await openRound2(row, grade).catch((err) => {
+    console.error(`hiring test ${id}: round 2 not opened:`, err.message);
+    reportError('hiring-round2', err, `hiring test ${id}`).catch(() => {});
+    return null;
+  }) : null;
   if (notify && NOTIFY_EMAIL) {
-    const line = total ? `${total.score}/100 · ${total.band.label}` : 'not graded yet: open it to grade again';
+    const band = !round2 && score != null ? hireBand(score) : null;
+    const label = round2 && grade ? (HIRING.ROUND2_LABELS[grade.recommendation] || [''])[0] : band ? band.label : '';
+    const line = score != null ? `${score}/100 · ${label}` : 'not graded yet: open it to grade again';
     sendEmail({
       to: NOTIFY_EMAIL,
-      subject: `Applicant test finished: ${row.name} (${total ? total.score + '/100' : 'needs grading'})`,
-      html: `<p><b>${escEmail(row.name)}</b> handed in the applicant test${row.late ? ' (after the 30 minutes)' : ''}.</p>
-        <p>${escEmail(line)}</p><p><a href="${PUBLIC_BASE_URL}/admin/hiring/${id}">See the answers and the follow-up questions</a></p>`,
+      subject: `${round2 ? 'Round 2' : 'Applicant test'} finished: ${row.name} (${score != null ? score + '/100' : 'needs grading'})`,
+      html: `<p><b>${escEmail(row.name)}</b> handed in ${round2 ? 'round 2' : 'the applicant test'}${row.late ? ' (after the time limit)' : ''}.</p>
+        <p>${escEmail(line)}</p>
+        ${next ? `<p><b>Passed, so round 2 is ready.</b> Send this on OnlineJobs.ph:</p>
+          <pre style="white-space:pre-wrap;font-family:inherit;background:#F7F6F3;padding:12px;border-radius:8px">${escEmail(round2Message(row.name, next.token))}</pre>` : ''}
+        <p><a href="${PUBLIC_BASE_URL}/admin/hiring/${id}">See the answers${round2 ? ' and the questions for the video call' : ''}</a></p>`,
     }).catch((err) => console.error('hiring notify failed:', err.message));
   }
   return grade;
+}
+
+/** The message that carries a round-2 link. */
+function round2Message(name, token) {
+  return `Hi ${String(name || '').split(/\s+/)[0]}, thank you for your test: you passed the first round! ` +
+    `Round 2 is a few short questions about your answers (about ${HIRING.ROUND2_MINUTES} minutes). ` +
+    `Open this private link when you have ${HIRING.ROUND2_MINUTES} quiet minutes; the clock starts when you press Start:\n` +
+    `${hireLink(token)}\nThe link works for ${HIRING.LINK_DAYS} days. Please write your own answers without AI tools. Thank you!`;
+}
+
+/** Make round 2 for a graded round-1 row, once. Returns { id, token } when it
+ *  made one now, or null when one already exists or there are no questions.
+ *  The token is never stored: it reaches the owner in the email or on screen. */
+async function openRound2(row, grade) {
+  const questions = HIRING.round2Questions(grade);
+  if (!questions.length) return null;
+  const { token, hash } = HIRING.newToken();
+  const { rows } = await pool.query(
+    `INSERT INTO hiring_tests (token_hash, name, role, note, expires_at, stage, parent_id, questions)
+     VALUES ($1, $2, $3, $4, NOW() + make_interval(days => $5::int), 2, $6, $7)
+     ON CONFLICT (parent_id) WHERE parent_id IS NOT NULL DO NOTHING RETURNING id`,
+    [hash, row.name, row.role, 'Round 2', HIRING.LINK_DAYS, row.id, JSON.stringify(questions)]);
+  return rows.length ? { id: rows[0].id, token } : null;
 }
 
 const HIRE_STATUS = {
@@ -24594,7 +24677,7 @@ app.get('/admin/hiring/test', requireAdmin, (_req, res) => {
     <div class="row-sub" style="white-space:normal">${escEmail(w.prompt)}</div>
     <div class="row-sub muted" style="white-space:normal">What a good answer does: ${escEmail(w.rubric)}</div></span></div>`).join('');
   const guide = HIRING.INTERVIEW_GUIDE.map((s) => `<div class="row-i"><span class="row-main" style="white-space:normal"><b>${escEmail(s.section)}</b>
-    ${s.questions.map((q) => `<div class="row-sub" style="white-space:normal">• ${escEmail(q)}</div>`).join('')}</span></div>`).join('');
+    ${s.questions.map((q) => `<div class="row-sub" style="white-space:normal">• ${escEmail(q.q)}<div class="muted">Listen for: ${escEmail(q.listen)}</div></div>`).join('')}</span></div>`).join('');
   res.send(adminPage('Hiring', `
     ${pageHeader('The applicant test', `About ${HIRING.MINUTES} minutes. Score out of 100: judgment ${HIRING.WEIGHTS.choice}, customer replies ${HIRING.WEIGHTS.replies}, initiative ${HIRING.WEIGHTS.initiative}, plus up to ${HIRING.BONUS_MAX} bonus points for an extra skill.`,
       '<a class="btn btn-ghost" href="/admin/hiring">Back to hiring</a>')}
@@ -25323,6 +25406,8 @@ const KB_ADDED = [
 `- Post the same message across many groups\n` +
 `- Contact anyone who has said no\n\n` +
 `Target: [new prospects per quiet hour, owner to fill in].` },
+  // Hiring: model answers for the applicant test and the interview guide (tools/lib/hiring.js).
+  ...HIRING.playbookArticles(),
 ];
 
 async function addPlaybookArticles() {
