@@ -41,6 +41,7 @@ const STAFF = require('./tools/lib/staff');
 const TEAM = require('./tools/lib/team-metrics');
 const TRAINING = require('./tools/lib/training');
 const HIRING = require('./tools/lib/hiring');
+const HIRE_POSTING = require('./tools/lib/hiring-posting');
 const PROOFS = require('./tools/lib/job-proofs');
 const ART = require('./tools/lib/art-pipeline');
 const GOOGLE_ADS = require('./tools/lib/google-ads').createClient();
@@ -24396,7 +24397,7 @@ function hireClockScript(row, t) {
 
 /** Minutes on the clock for this row: round 2 is shorter. */
 function hireMinutes(row) {
-  return row && row.stage === 2 ? HIRING.ROUND2_MINUTES : HIRING.MINUTES;
+  return row && row.stage === 2 ? HIRING.ROUND2_MINUTES : HIRING.roleOf(row && row.role).minutes;
 }
 
 /* Round 2 as the applicant sees it: their own follow-up questions only. */
@@ -24455,10 +24456,11 @@ app.get('/apply/test/:token', hireRateLimit, async (req, res) => {
   if (!t.started && t.expired) return res.status(404).send(HIRE_DEAD());
   if (!row.opened_at) pool.query('UPDATE hiring_tests SET opened_at = NOW() WHERE id = $1 AND opened_at IS NULL', [row.id]).catch(() => {});
   if (row.stage === 2) return res.send(round2Page(row, token, t));
-  const view = HIRING.testForPage();
+  const view = HIRING.testForPage(row.role);
   if (!t.started) {
     return res.send(hirePage('Applicant test', `<div class="card">
       <h1 style="font-size:24px">Hi ${escEmail(row.name)}, welcome to the June's Tees applicant test</h1>
+      <p class="muted">${escEmail(view.label)}</p>
       <p style="white-space:pre-line">${escEmail(view.intro)}</p>
       <ul>${Object.values(view.parts).map((p) => `<li><b>${escEmail(p.label)}</b>: ${escEmail(p.note)}</li>`).join('')}</ul>
       <p><b>The ${view.minutes}-minute clock starts when you press Start</b> and keeps running if you close the page,
@@ -24483,10 +24485,7 @@ app.get('/apply/test/:token', hireRateLimit, async (req, res) => {
   const script = hireClockScript(row, t);
   res.send(hirePage('Applicant test', `<div id="hire-clock" class="hire-clock"></div>
     <form id="hire-form" method="post" action="/apply/test/${escEmail(token)}">
-      ${part('choice')}${choice}
-      ${part('replies')}${written('replies')}
-      ${part('initiative')}${written('initiative')}
-      ${part('bonus')}${written('bonus')}
+      ${Object.keys(view.parts).map((k) => k === 'choice' ? part(k) + choice : part(k) + written(k)).join('')}
       <div class="card"><p>Check your answers, then hand the test in. You can only send it once.</p>
         <button type="submit" class="btn">Hand in my test</button></div>
     </form>`, script));
@@ -24522,8 +24521,8 @@ app.post('/apply/test/:token', hireRateLimit, async (req, res) => {
     if (row.submitted_at) return res.redirect(303, `/apply/test/${encodeURIComponent(token)}`);
     const t = HIRING.timing(row, undefined, hireMinutes(row));
     if (!t.started) return res.redirect(303, `/apply/test/${encodeURIComponent(token)}`);
-    const answers = row.stage === 2 ? HIRING.cleanRound2(req.body, row.questions) : HIRING.cleanAnswers(req.body);
-    const choice = row.stage === 2 ? null : HIRING.gradeChoices(answers.picks);
+    const answers = row.stage === 2 ? HIRING.cleanRound2(req.body, row.questions) : HIRING.cleanAnswers(req.body, row.role);
+    const choice = row.stage === 2 ? null : HIRING.gradeChoices(answers.picks, row.role);
     /* Handed in once: the WHERE makes a double press, or a second tab, a no-op.
        A hand-in after the clock (plus grace) is still kept, flagged late, so a
        bad connection never loses someone their work. */
@@ -24561,15 +24560,15 @@ async function gradeHiringTest(id, { notify = false } = {}) {
   let error = null;
   try {
     grade = isRound2
-      ? await HIRING.gradeRound2(row.questions || [], row.answers.written || {}, { name: row.name })
-      : await HIRING.gradeWritten(row.answers.written || {}, { name: row.name });
+      ? await HIRING.gradeRound2(row.questions || [], row.answers.written || {}, { name: row.name, role: row.role })
+      : await HIRING.gradeWritten(row.answers.written || {}, { name: row.name, role: row.role });
   } catch (err) {
     console.error(`hiring test ${id}: grading failed:`, err.message);
     error = HIRING.failureMessage(err);
     reportError('hiring-grade', err, `hiring test ${id}`).catch(() => {});
   }
   const score = !grade ? null : isRound2 ? HIRING.round2Score(grade)
-    : HIRING.overall(row.choice || { score: 0, total: 0 }, grade).score;
+    : HIRING.overall(row.choice || { score: 0, total: 0 }, grade, row.role).score;
   await pool.query(
     /* A failed re-grade keeps the last good grade: it only records why. */
     `UPDATE hiring_tests SET grade = COALESCE($2::jsonb, grade), score = COALESCE($3::int, score), grade_error = $4,
@@ -24633,7 +24632,7 @@ async function tellOwnerHiring(firstId, { unfinished = false } = {}) {
   try {
     await sendEmail({
       to: NOTIFY_EMAIL,
-      subject: `Applicant results: ${first.name} (${verdict}${first.score != null ? `, round 1 ${first.score}/100` : ''})`,
+      subject: `Applicant results: ${first.name}, ${HIRING.roleOf(first.role).label} (${verdict}${first.score != null ? `, round 1 ${first.score}/100` : ''})`,
       html: `<p><b>${escEmail(first.name)}</b>${first.note ? ` · ${escEmail(first.note)}` : ''}</p>
         <p><b>Round 1:</b> ${escEmail(r1)}${first.late ? ' (handed in after the time limit)' : ''}</p>
         ${g1 && g1.summary ? `<p>${escEmail(g1.summary)}</p>` : ''}
@@ -24712,20 +24711,20 @@ app.get('/admin/hiring', requireAdmin, async (req, res) => {
         <div class="row-sub">${pill(expired ? 'Link expired' : label, expired ? 'red' : tone)}
           ${band ? `${pill(`${r.score}/100`, band.tone)} ${escEmail(band.label)}` : ''}
           ${r.initiative ? pill(r.initiative, r.initiative === 'self-starter' ? 'green' : r.initiative === 'waits for direction' ? 'red' : 'neutral') : ''}
-          ${hireRound2Pill(r)}
+          ${pill(HIRING.roleOf(r.role).label, 'neutral')} ${hireRound2Pill(r)}
           ${skills.length ? pill('Extra skills', 'gold') : ''}${r.late ? pill('late', 'amber') : ''}${r.grade_error ? pill('needs grading', 'red') : ''}</div>
         <div class="row-sub muted">${escEmail(r.note || '')}${r.note ? ' · ' : ''}made ${escEmail(whenShort(r.created_at))}${
           r.submitted_at ? ` · handed in ${escEmail(whenShort(r.submitted_at))}` : ''}</div></span></a>`;
     }).join('') : emptyState('No applicant tests yet. Make the first link above.');
     res.send(adminPage('Hiring', `
       ${pageHeader('Hiring', `Each applicant gets a private ${HIRING.MINUTES}-minute test link. They need no login and see none of the shop's data.`,
-        '<a class="btn btn-ghost" href="/admin/hiring/test">See the test and the interview guide</a>')}
+        '<a class="btn btn-ghost" href="/admin/hiring/test">Job posts, screening, tests and interview guides</a>')}
       ${flash(req.query)}
       <form class="card" method="post" action="/admin/hiring" style="display:grid;gap:10px">
         <b>New test link</b>
         <label>Applicant's name <input name="name" maxlength="${HIRING.LIMITS.name}" required placeholder="As it appears on OnlineJobs.ph"></label>
         <label>Note for you (optional) <input name="note" maxlength="${HIRING.LIMITS.note}" placeholder="e.g. Top pick, apparel experience"></label>
-        <input type="hidden" name="role" value="sales">
+        <label>Job <select name="role">${Object.values(HIRING.ROLES).map((x) => `<option value="${escEmail(x.key)}">${escEmail(x.label)}</option>`).join('')}</select></label>
         <div><button type="submit" class="btn">Make the link</button></div>
       </form>
       <div class="card"><b>Applicants</b>${list}</div>`, 'hiring'));
@@ -24735,14 +24734,15 @@ app.get('/admin/hiring', requireAdmin, async (req, res) => {
   }
 });
 
-function hireLinkCard(name, token, { round2 = false } = {}) {
+function hireLinkCard(name, token, { round2 = false, role } = {}) {
   const link = hireLink(token);
+  const mins = HIRING.roleOf(role).minutes;
   const first = escEmail(String(name).split(/\s+/)[0]);
   const message = round2
     ? `Hi ${first}, thank you for your test: you are through to round 2! It is a few short questions about your answers (about ${HIRING.ROUND2_MINUTES} minutes). Open this private link when you have ${HIRING.ROUND2_MINUTES} quiet minutes; the clock starts when you press Start:
 ${escEmail(link)}
 Please write your own answers without AI tools. Thank you!`
-    : `Hi ${first}, thank you for applying to June's Tees! The next step is a short paid test (about ${HIRING.MINUTES} minutes, $15). Open this private link when you have ${HIRING.MINUTES} quiet minutes and a stable connection; the clock starts when you press Start:
+    : `Hi ${first}, thank you for applying to June's Tees! The next step for the ${escEmail(HIRING.roleOf(role).label.toLowerCase())} job is a short paid test (about ${mins} minutes, $15). Open this private link when you have ${mins} quiet minutes and a stable connection; the clock starts when you press Start:
 ${escEmail(link)}
 The link works for ${HIRING.LINK_DAYS} days. Please write your own answers without AI tools. Thank you!`;
   return `<div class="card" style="border-left:4px solid #16a34a">
@@ -24765,38 +24765,64 @@ app.post('/admin/hiring', requireAdmin, async (req, res) => {
       [hash, v.invite.name, v.invite.role, v.invite.note || null, HIRING.LINK_DAYS]);
     res.send(adminPage('Hiring', `
       ${pageHeader('Test link made', '', `<a class="btn btn-ghost" href="/admin/hiring/${rows[0].id}">Their page</a> <a class="btn btn-ghost" href="/admin/hiring">Back to hiring</a>`)}
-      ${hireLinkCard(v.invite.name, token)}`, 'hiring'));
+      ${hireLinkCard(v.invite.name, token, { role: v.invite.role })}`, 'hiring'));
   } catch (err) {
     console.error('hiring invite failed:', err.message);
     back(res, '/admin/hiring', 'err', 'The link could not be made. Try again.');
   }
 });
 
-app.get('/admin/hiring/test', requireAdmin, (_req, res) => {
-  const mc = HIRING.MULTIPLE_CHOICE.map((x, n) => `<div class="row-i"><span class="row-main" style="white-space:normal">
+/* Everything about hiring for one role, owner only: the OnlineJobs post to
+   paste, how to screen applications, the test with its answer key and model
+   answers, and the video-call guide. ?role= picks the job. */
+app.get('/admin/hiring/test', requireAdmin, (req, res) => {
+  const role = HIRING.roleOf(String((req.query || {}).role || ''));
+  const post = HIRE_POSTING.POSTS[role.key];
+  const tabs = Object.values(HIRING.ROLES).map((x) => x.key === role.key ? `<b class="btn">${escEmail(x.label)}</b>`
+    : `<a class="btn btn-ghost" href="/admin/hiring/test?role=${encodeURIComponent(x.key)}">${escEmail(x.label)}</a>`).join(' ');
+  const copy = (id, value, rows = 1) => rows > 1
+    ? `<textarea id="${id}" readonly style="width:100%;min-height:${rows * 22}px" onclick="this.select()">${escEmail(value)}</textarea>`
+    : `<input id="${id}" readonly value="${escEmail(value)}" style="width:100%" onclick="this.select()">`;
+  const postCard = post ? `<div class="card"><b>1. The job post for OnlineJobs.ph</b>
+      <p class="muted">Copy each field into "Enter New Job". ${escEmail(post.payNote)}</p>
+      <label>Job title ${copy('post-title', post.title)}</label>
+      <p>Type: <b>${escEmail(post.type)}</b> · Wage: <b>${escEmail(post.wage)}</b> USD/hour · Hours/week: <b>${escEmail(post.hours)}</b> ·
+        Business name: <b>June's Tees</b> · Skills: <b>${escEmail(post.skills.join(', '))}</b> · Code words: <b>${escEmail(post.code)}</b></p>
+      <label>Description (plain text) ${copy('post-body', post.body, 18)}</label></div>` : '';
+  const screen = `<div class="card"><b>2. Screening the applications</b>
+      <p><b>Labels to make in the OnlineJobs inbox:</b></p>
+      <ul>${(post ? HIRE_POSTING.labelsFor(post.prefix) : []).map((l) => `<li>${escEmail(l)}</li>`).join('')}
+        ${HIRE_POSTING.SHARED_LABELS.map((l) => `<li><b>${escEmail(l.name)}</b>: ${escEmail(l.use)}</li>`).join('')}</ul>
+      ${post ? `<p><b>What a top pick for this job has:</b></p><ul>${post.lookFor.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>` : ''}
+      <p><b>Rules for every job:</b></p><ul>${HIRE_POSTING.SCREENING.rules.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>
+      <p><b>The steps:</b></p><ol>${HIRE_POSTING.SCREENING.steps.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ol></div>`;
+  const mc = role.choice.map((x, n) => `<div class="row-i"><span class="row-main" style="white-space:normal">
     <b>${n + 1}. ${escEmail(x.q)}</b>
     ${x.choices.map((c, i) => `<div class="row-sub" style="white-space:normal">${i === x.answer ? '✓ <b>' + escEmail(c) + '</b>' : '&nbsp;&nbsp;&nbsp;' + escEmail(c)}</div>`).join('')}
     <div class="row-sub muted" style="white-space:normal">Why: ${escEmail(x.why)}</div></span></div>`).join('');
-  const written = HIRING.WRITTEN.map((w) => `<div class="row-i"><span class="row-main" style="white-space:normal">
-    <b>${escEmail(HIRING.PARTS[w.part].label)}: ${escEmail(w.label)}</b>${w.optional ? ' ' + pill('optional', 'neutral') : ''}
-    <div class="row-sub" style="white-space:normal">${escEmail(w.prompt)}</div>
+  const written = role.written.map((w) => `<div class="row-i"><span class="row-main" style="white-space:normal">
+    <b>${escEmail(role.parts[w.part].label)}: ${escEmail(w.label)}</b>${w.optional ? ' ' + pill('optional', 'neutral') : ''}
+    <div class="row-sub" style="white-space:pre-wrap">${escEmail(w.prompt)}</div>
     <div class="row-sub muted" style="white-space:normal">What a good answer does: ${escEmail(w.rubric)}</div>
     ${w.model ? `<div class="row-sub" style="white-space:normal"><b>Model answer</b> (a 5 out of 5; other answers can score full marks too)</div>
     <div style="white-space:pre-wrap;margin:6px 0;padding:10px;background:#F7F6F3;border-radius:8px">${escEmail(w.model)}</div>` : ''}</span></div>`).join('');
-  const guide = HIRING.INTERVIEW_GUIDE.map((s) => `<div class="row-i"><span class="row-main" style="white-space:normal"><b>${escEmail(s.section)}</b>
+  const guide = role.guide.map((s) => `<div class="row-i"><span class="row-main" style="white-space:normal"><b>${escEmail(s.section)}</b>
     ${s.questions.map((q) => `<div class="row-sub" style="white-space:normal">• ${escEmail(q.q)}<div class="muted">Listen for: ${escEmail(q.listen)}</div></div>`).join('')}</span></div>`).join('');
+  const weights = Object.entries(role.weights).map(([k, v]) => `${role.parts[k].label.replace(/^Part \d+: /, '').toLowerCase()} ${v}`).join(', ');
   res.send(adminPage('Hiring', `
-    ${pageHeader('The applicant test', `About ${HIRING.MINUTES} minutes. Score out of 100: judgment ${HIRING.WEIGHTS.choice}, customer replies ${HIRING.WEIGHTS.replies}, initiative ${HIRING.WEIGHTS.initiative}, plus up to ${HIRING.BONUS_MAX} bonus points for an extra skill.`,
+    ${pageHeader(role.label, `Test: about ${role.minutes} minutes. Score out of 100: ${weights}, plus up to ${HIRING.BONUS_MAX} bonus points for an extra skill.`,
       '<a class="btn btn-ghost" href="/admin/hiring">Back to hiring</a>')}
-    <div class="card"><b>${escEmail(HIRING.PARTS.choice.label)}</b> (marked automatically)${mc}</div>
+    <div class="card" style="display:flex;gap:8px;flex-wrap:wrap">${tabs}</div>
+    ${postCard}${screen}
+    <div class="card"><b>3. The test: ${escEmail(role.parts.choice.label)}</b> (marked automatically)${mc}</div>
     <div class="card"><b>Written questions</b> (graded by Claude against these notes and model answers; you see every answer)${written}</div>
-    <div class="card"><b>Round 2 (automatic)</b>
+    <div class="card"><b>4. Round 2 (automatic)</b>
       <p>A round-1 score of ${HIRING.PASS_SCORE} or more opens round 2 straight away, on the same link: up to ${HIRING.ROUND2_MAX} questions
       about the applicant's own answers, ${HIRING.ROUND2_MINUTES} minutes, open for ${HIRING.ROUND2_DAYS} days. Claude grades it and recommends
       a video call or not. You get one email per applicant with both rounds, once round 2 is graded or not taken.</p>
       <p class="muted">This page is yours alone: helpers cannot open Hiring, so they never see these answers.</p></div>
-    <div class="card"><b>Video call guide (about 30 minutes)</b>
-      <p class="muted">Ask everyone these, so applicants can be compared. Each applicant's page adds questions about their own answers.</p>${guide}</div>`, 'hiring'));
+    <div class="card"><b>5. Video call guide</b>
+      <p class="muted">Ask everyone these, so applicants can be compared. Each applicant's page and results email add questions about their own answers.</p>${guide}</div>`, 'hiring'));
 });
 
 app.get('/admin/hiring/:id', requireAdmin, async (req, res) => {
@@ -24810,8 +24836,9 @@ app.get('/admin/hiring/:id', requireAdmin, async (req, res) => {
     const { first: r, second: r2 } = await hireRounds(id);
     const [label, tone] = HIRE_STATUS[r.status] || HIRE_STATUS.sent;
     const g = r.grade;
-    const choice = r.choice || { score: 0, total: HIRING.MULTIPLE_CHOICE.length, results: [] };
-    const total = g ? HIRING.overall(choice, g) : null;
+    const role = HIRING.roleOf(r.role);
+    const choice = r.choice || { score: 0, total: role.choice.length, results: [] };
+    const total = g ? HIRING.overall(choice, g, role) : null;
     const answers = (r.answers && r.answers.written) || {};
     const actions = [];
     const r2Open = r2 && !r2.submitted_at && r2.status !== 'cancelled';
@@ -24837,7 +24864,8 @@ app.get('/admin/hiring/:id', requireAdmin, async (req, res) => {
         ${r.grade_error ? `<div class="warn">${escEmail(r.grade_error)}</div>` : ''}
         ${!g && !r.grade_error ? '<p class="muted">Grading is running; refresh in a minute.</p>' : ''}
         <p class="muted">${escEmail(timeline)}</p>
-        <p>Judgment: <b>${choice.score} of ${choice.total}</b>${total ? ` · Replies ${Math.round(total.parts.replies * 100)}% · Initiative ${Math.round(total.parts.initiative * 100)}% · Bonus +${total.bonus}` : ''}</p>
+        <p>Judgment: <b>${choice.score} of ${choice.total}</b>${total ? Object.keys(role.weights).filter((k) => k !== 'choice').map((k) =>
+          ` · ${escEmail(role.parts[k].label.replace(/^Part \d+: /, ''))} ${Math.round(total.parts[k] * 100)}%`).join('') + ` · Bonus +${total.bonus}` : ''}</p>
         ${g ? `<p>${pill(g.initiative, g.initiative === 'self-starter' ? 'green' : g.initiative === 'waits for direction' ? 'red' : 'neutral')}
           ${pill(`Written English ${g.english}/5`, g.english >= 4 ? 'green' : g.english >= 3 ? 'neutral' : 'amber')}
           ${g.extra_skills.map((s) => pill(s, 'gold')).join(' ')}</p>
@@ -24850,7 +24878,7 @@ app.get('/admin/hiring/:id', requireAdmin, async (req, res) => {
         <p class="muted">About ${escEmail(r.name)}'s own answers. Use them with the <a href="/admin/hiring/test">standard guide</a>.</p>
         <ol>${g.follow_up.map((f) => `<li style="margin-bottom:8px"><b>${escEmail(f.question)}</b><div class="muted">${escEmail(f.why)}</div></li>`).join('')}</ol></div>` : ''}
       ${hireRound2Card(r, r2)}
-      <div class="card"><b>Written answers</b>${HIRING.WRITTEN.map((w) => {
+      <div class="card"><b>Written answers</b>${role.written.map((w) => {
         const s = g && g.scores[w.id];
         return `<div class="row-i"><span class="row-main" style="white-space:normal">
           <b>${escEmail(w.label)}</b> ${s ? pill(`${s.score}/5`, s.score >= 4 ? 'green' : s.score >= 3 ? 'neutral' : s.score >= 1 ? 'amber' : 'gray') : ''}
@@ -24863,7 +24891,7 @@ app.get('/admin/hiring/:id', requireAdmin, async (req, res) => {
         <div class="row-sub" style="white-space:normal">${x.right ? pill('right', 'green') : pill(x.picked == null ? 'no answer' : 'wrong', 'red')} ${escEmail(x.pickedText || '')}</div>
         ${x.right ? '' : `<div class="row-sub muted" style="white-space:normal">Best answer: ${escEmail(x.answerText)}</div>`}</span></div>`).join('')}</div>`;
     res.send(adminPage('Hiring', `
-      ${pageHeader(r.name, r.note ? escEmail(r.note) : '', actions.join(' '))}
+      ${pageHeader(r.name, escEmail(role.label) + (r.note ? ` · ${escEmail(r.note)}` : ''), actions.join(' '))}
       ${flash(req.query)}${summary}`, 'hiring'));
   } catch (err) {
     console.error('hiring result failed:', err.message);
@@ -24962,12 +24990,12 @@ app.post('/admin/hiring/:id/link', requireAdmin, async (req, res) => {
         WHERE t.id = $1 AND t.stage = 1 AND t.status <> 'cancelled'
           AND (t.submitted_at IS NULL OR EXISTS (SELECT 1 FROM hiring_tests c WHERE c.parent_id = t.id
                  AND c.submitted_at IS NULL AND c.status <> 'cancelled'))
-        RETURNING name, submitted_at`,
+        RETURNING name, role, submitted_at`,
       [id, hash, HIRING.LINK_DAYS]);
     if (!rows.length) return back(res, `/admin/hiring/${id}`, 'err', 'This test is finished or cancelled, so it has no link.');
     res.send(adminPage('Hiring', `
       ${pageHeader('New link made', 'The old link no longer works.', `<a class="btn btn-ghost" href="/admin/hiring/${id}">Their page</a>`)}
-      ${hireLinkCard(rows[0].name, token, { round2: !!rows[0].submitted_at })}`, 'hiring'));
+      ${hireLinkCard(rows[0].name, token, { round2: !!rows[0].submitted_at, role: rows[0].role })}`, 'hiring'));
   } catch (err) {
     console.error('hiring new link failed:', err.message);
     back(res, `/admin/hiring/${id}`, 'err', 'The link could not be made. Try again.');
@@ -25646,6 +25674,76 @@ const KB_ADDED = [
     tags: 'not sure, checking, question, unknown, get back, follow up',
     body: `Good question! Let me check with our production team so I give you the right answer. I'll get back to you by [time].\n\n` +
 `(For you: write the time down and keep it, even if the answer is "still checking, here's when I'll know".)` },
+  { kind: 'sop', title: 'Design situations: what to do', needsReview: true,
+    tags: 'designer, artwork, print ready, vector, embroidery, dtf, screen printing, proofs, customer changes',
+    body: `How we handle the artwork situations that come up most. See also "Artwork pipeline: sales to designer to owner".\n\n` +
+`**Before you design**\n` +
+`- Missing sizes, placement, colours or the date? Press **Ask sales a question** straight away with exactly what is missing, and start on what you already know\n` +
+`- A small or blurry logo (a JPG off a website, a phone photo) will print blurry when enlarged. Ask for the original file (.ai, .eps, .svg or .pdf), or redraw it as clean vector. Tell sales first so June can price a redraw\n` +
+`- Characters, brands and team logos the customer does not own: we do not print them, changed or not. Bring it to June; an original design on the same theme is the usual offer\n\n` +
+`**Making it print-ready**\n` +
+`- **Screen printing:** spot colours, one screen per colour, and each colour adds cost. Fewer, well-chosen colours often look just as good. Shading becomes a halftone; lines at least 1pt; fonts outlined\n` +
+`- **Embroidery:** simplify. Text at least 0.25 inch tall, no gradients or thin outlines, solid thread colours. Send the digitiser the size and thread colours\n` +
+`- **DTF:** full colour is fine, but soft shadows and glows print as a faint box. Make them solid or a halftone. Transparent PNG at 300 dpi at print size\n` +
+`- Name and file the final art by customer, so a reorder takes minutes\n\n` +
+`**Proofs and changes**\n` +
+`- "Looks good" in a chat is not approval. Send the proof from the Proofs card and get written approval of spelling, colours, size and placement\n` +
+`- Spot a mistake after approval (a typo, a wrong date)? Tell the customer and June before it prints, and get the corrected proof approved again. Never change approved art quietly\n` +
+`- Vague feedback ("make it pop")? Turn it into two specific options and ask what they like about the current one (/designpop)\n` +
+`- Many rounds of changes close to the deadline: ask for every remaining change in one message, and tell sales or June about the deadline risk\n\n` +
+`**Quiet time**\n` +
+`- Ready-made designs for what is coming up (back to school, sports seasons, holidays, graduations), each as a 2-colour screen print and a full-colour DTF version\n` +
+`- Clean mockups of recent jobs for the website and social posts (June approves)\n` +
+`- File and name past artwork; finish with a short summary for June` },
+  { kind: 'faq', shortcut: 'designpop', title: 'Can you make the design pop more?', needsReview: true,
+    tags: 'design changes, proof feedback, pop, revisions, designer',
+    body: `Thanks for telling me! Let's get it to where you love it. "Pop" can mean a few things, so I'll send you two quick versions by [time]:\n` +
+`1. Brighter colours with more contrast against the [shirt colour]\n` +
+`2. A bigger, bolder title with the rest kept simpler\n\n` +
+`Is there anything in the current one you'd like to keep (the layout, the font, the icon)? If you've seen a shirt you love, a photo helps a lot. We're still on track for [date].` },
+  { kind: 'sop', title: 'Working on our live websites and apps', needsReview: true,
+    tags: 'developer, deploy, bugs, outage, secrets, database, claude code, app store, testing',
+    body: `How we look after the sites and apps that customers pay through every day.\n\n` +
+`**When something breaks**\n` +
+`- Tell June at once what you are checking and when you will update her, then keep that time\n` +
+`- Reproduce it, read the logs (Railway, Sentry, Stripe), and check what changed since it last worked\n` +
+`- If a deploy caused it, roll back first so customers can use the site, then fix it properly on a branch\n` +
+`- After the fix: a test so it cannot come back, a check of which customers or payments were affected, and a short note to June\n\n` +
+`**Safety**\n` +
+`- Secrets live in Railway environment variables or a password manager. Never in code, chat, email, or an AI prompt\n` +
+`- Never try changes on the live database. Use a copy or a local database, and take a backup before a change ships\n` +
+`- Every query is parameterised; every page escapes what customers typed; every order lookup checks the person owns it\n\n` +
+`**Working with Claude Code**\n` +
+`- It makes you fast, but you own what ships: read every line, run the tests, add one for the new behaviour, and try it for real (a test payment) before it goes live\n` +
+`- Never give it live secrets or customer data\n\n` +
+`**Apps**\n` +
+`- Build with the current Xcode SDK (Apple rejects older ones), test on TestFlight first, and read any rejection carefully: digital subscriptions must use in-app purchase\n\n` +
+`**Talking to June**\n` +
+`- Plain words, no jargon. If it will be late, say so early, with the reason, the new date, and a smaller first version if there is one\n\n` +
+`**Quiet time**\n` +
+`- Read the week's error logs for problems nobody reported, walk the main customer paths on a phone (quote, pay, design studio), apply security updates on a branch, add tests where there are none, then send June a short summary` },
+  { kind: 'sop', title: 'Making and posting our videos', needsReview: true,
+    tags: 'content, video, tiktok, reels, shorts, youtube, editing, captions, music, engagement, ai',
+    body: `How we turn footage into videos people watch, and grow without paid ads.\n\n` +
+`**Every short video**\n` +
+`- Lead with the payoff in the first 1 to 2 seconds: the first print pull, the reveal, the reaction, with on-screen text that makes people stay. No logo intros or "hi everyone"\n` +
+`- One idea per video, vertical 9:16 (1080x1920), captions burned in for sound-off viewing and kept clear of the app buttons\n` +
+`- End with one clear next step: "Team order? Link in bio", or a question for the comments\n\n` +
+`**From one shoot, many posts**\n` +
+`- A longer YouTube video (16:9), 3 to 5 shorts that each make sense alone, and stills for a carousel\n` +
+`- Cross-post shorts to TikTok, Reels, Shorts and Facebook, with a caption written for each\n\n` +
+`**Rules we never bend**\n` +
+`- Music: the platform's commercial library or licensed tracks only. Most trending songs are not licensed for business accounts\n` +
+`- People on camera: their permission. Children: their parents' or the team's permission, or no faces or names\n` +
+`- AI: use it for transcripts, captions, finding clips, audio clean-up and ideas, then proofread every caption (names, prices, dates) and watch the final export. Never a fake customer or review; label AI content where the platform asks\n\n` +
+`**Comments**\n` +
+`- Reply to every comment within the day; good questions get a video reply\n` +
+`- Criticism gets a calm, kind public reply and an invite to message us. Never delete fair criticism. Anything about a real order goes to June\n\n` +
+`**What is working**\n` +
+`- Every Friday, compare watch time, shares, saves, follows and enquiries per video. Look at where people left on the retention graph, and fix the opening on the next videos\n` +
+`- Never buy views or followers\n\n` +
+`**Quiet time**\n` +
+`- Reply to comments and messages, cut new shorts from unused footage, plan next week's posts with a shot list June can film on her phone, then send her a short summary` },
   { kind: 'sop', title: 'A quiet afternoon: a plan', needsReview: true,
     tags: 'quiet time, no messages, initiative, self-starter, what to do, follow up, leads, summary',
     body: `Nothing new, nothing assigned, June busy for a few hours? Here is a good way to spend it. Do the money first.\n\n` +
