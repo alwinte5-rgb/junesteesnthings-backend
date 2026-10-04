@@ -231,13 +231,64 @@ test('round 2 rides on the round-1 link, and the owner hears once per applicant'
 
 test('helpers learn the job from the playbook, written for customers, never as test answers', () => {
   const kb = src.slice(src.indexOf('const KB_ADDED = ['), src.indexOf('async function addPlaybookArticles'));
-  for (const t of ['Customer situations: what to do', 'Something is wrong with my order', 'Do you make shirts for businesses?',
+  for (const t of ['Customer situations: what to do', 'Design situations: what to do', 'Can you make the design pop more?', 'Working on our live websites and apps', 'Making and posting our videos', 'Something is wrong with my order', 'Do you make shirts for businesses?',
     "Can you match another shop\\'s price?", 'Can you get it done by [date]?', 'Let me check and get back to you', 'A quiet afternoon: a plan']) {
     const at = kb.indexOf(`title: '${t}'`);
     assert.ok(at > 0, t);
     const body = kb.slice(at, kb.indexOf('\n  {', at + 10) > 0 ? kb.indexOf('\n  {', at + 10) : undefined);
-    assert.ok(!/\b(applicant|test|score|grader|rubric|model answer|interview)\b/i.test(body), `${t} reads as a test answer`);
+    assert.ok(!/\b(applicant|applicant test|the test|score|grader|rubric|model answer|interview)\b/i.test(body), `${t} reads as a test answer`);
   }
   const shortcuts = [...src.matchAll(/shortcut: '([a-z]+)'/g)].map((m) => m[1]);
   assert.strictEqual(new Set(shortcuts).size, shortcuts.length, 'shortcuts are unique');
+});
+
+const POSTING = require('../tools/lib/hiring-posting');
+
+test('every job role is complete: test, model answers, guide, job post and screening', () => {
+  assert.deepStrictEqual(Object.keys(H.ROLES).sort(), ['content', 'designer', 'developer', 'sales']);
+  for (const role of Object.values(H.ROLES)) {
+    const k = role.key;
+    assert.ok(role.label && role.job && role.reward && role.intro, k);
+    assert.strictEqual(Object.values(role.weights).reduce((a, b) => a + b, 0), 100, `${k} weights`);
+    assert.ok(role.weights.choice && role.parts.choice && role.parts.bonus, k);
+    assert.strictEqual(role.choice.length, 8, `${k}: 8 judgment questions`);
+    for (const x of role.choice) assert.ok(x.choices[x.answer] && x.why, `${k}/${x.id}`);
+    assert.strictEqual(new Set(role.choice.map((x) => x.id)).size, role.choice.length, `${k} ids`);
+    for (const w of role.written) {
+      assert.ok(role.parts[w.part] && w.rubric && w.model && w.prompt, `${k}/${w.id}`);
+      assert.ok(w.part === 'bonus' || role.weights[w.part], `${k}/${w.id} counts`);
+    }
+    for (const p of Object.keys(role.weights)) assert.ok(p === 'choice' || role.written.some((w) => w.part === p), `${k}: ${p} has questions`);
+    assert.ok(role.written.find((w) => w.id === 'bonus' && w.optional), `${k} optional bonus`);
+    const mins = 6 + role.written.filter((w) => !w.optional).reduce((a, w) => a + w.minutes, 0);
+    assert.ok(mins <= role.minutes, `${k}: ${mins} minutes of questions in ${role.minutes}`);
+    for (const s of role.guide) for (const q of s.questions) assert.ok(q.q && q.listen, `${k} guide`);
+    const page = JSON.stringify(H.testForPage(k));
+    for (const x of role.choice) assert.ok(!page.includes(x.why), `${k}: no key on the page`);
+    for (const w of role.written) assert.ok(!page.includes(w.rubric.slice(0, 40)) && !page.includes(w.model.slice(0, 40)), `${k}/${w.id}`);
+    assert.ok(H.systemFor(k).includes(role.job) && H.round2System(k).includes(role.job), `${k} grader knows the job`);
+    assert.deepStrictEqual(H.gradeSchema(k).properties.scores.required, role.written.map((w) => w.id));
+    const post = POSTING.POSTS[k];
+    assert.ok(post, `${k} has a job post`);
+    assert.ok(post.title.length <= 120 && post.code && post.wage && post.hours && post.skills.length <= 3 && post.lookFor.length >= 3, k);
+    assert.ok(post.body.includes(`"${post.code}"`) && /speed test/i.test(post.body) && /Time off/.test(post.body), `${k} post asks the standard things`);
+    assert.ok(!/[\u{1F300}-\u{1FAFF}★⚠]/u.test(POSTING.labelsFor(post.prefix).join('')), 'OLJ refuses emoji in labels');
+  }
+  assert.strictEqual(new Set(Object.values(POSTING.POSTS).map((p) => p.code)).size, 4, 'code words differ per job');
+});
+
+test('roles change the grading, not the engine', () => {
+  const d = H.ROLES.designer;
+  const written = Object.fromEntries(d.written.map((w) => [w.id, 'x']));
+  const g = H.normalizeGrade({ scores: Object.fromEntries(d.written.map((w) => [w.id, { score: 5, note: '' }])) }, written, 'designer');
+  assert.strictEqual(H.overall({ score: 8, total: 8 }, g, 'designer').score, 100);
+  assert.ok('craft' in H.overall({ score: 8, total: 8 }, g, 'designer').parts);
+  assert.match(H.gradeMessage(written, { role: 'designer' }), /Make it print-ready/);
+  assert.strictEqual(H.cleanAnswers({ mc_lowres: '2', mc_speed: '1' }, 'designer').picks.lowres, 2);
+  assert.ok(!('speed' in H.cleanAnswers({}, 'designer').picks));
+  assert.strictEqual(H.roleOf('nope'), H.SALES);
+  assert.strictEqual(H.validateInvite({ name: 'A', role: 'developer' }).invite.role, 'developer');
+  assert.strictEqual(H.validateInvite({ name: 'A', role: '__proto__' }).invite.role, 'sales');
+  assert.match(H.ROLES.developer.job, /Claude Code/);
+  assert.ok(H.ROLES.developer.choice.some((x) => x.id === 'appstore') && /Xcode/.test(POSTING.POSTS.developer.body));
 });
