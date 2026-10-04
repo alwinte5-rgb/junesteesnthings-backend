@@ -228,3 +228,16 @@ test('round 2 rides on the round-1 link, and the owner hears once per applicant'
   const grade = src.slice(src.indexOf('async function gradeHiringTest'), src.indexOf('async function openRound2'));
   assert.match(grade, /if \(notify && !opened\)/, 'a pass waits for round 2 before emailing');
 });
+
+test('helpers learn the job from the playbook, written for customers, never as test answers', () => {
+  const kb = src.slice(src.indexOf('const KB_ADDED = ['), src.indexOf('async function addPlaybookArticles'));
+  for (const t of ['Customer situations: what to do', 'Something is wrong with my order', 'Do you make shirts for businesses?',
+    "Can you match another shop\\'s price?", 'Can you get it done by [date]?', 'Let me check and get back to you', 'A quiet afternoon: a plan']) {
+    const at = kb.indexOf(`title: '${t}'`);
+    assert.ok(at > 0, t);
+    const body = kb.slice(at, kb.indexOf('\n  {', at + 10) > 0 ? kb.indexOf('\n  {', at + 10) : undefined);
+    assert.ok(!/\b(applicant|test|score|grader|rubric|model answer|interview)\b/i.test(body), `${t} reads as a test answer`);
+  }
+  const shortcuts = [...src.matchAll(/shortcut: '([a-z]+)'/g)].map((m) => m[1]);
+  assert.strictEqual(new Set(shortcuts).size, shortcuts.length, 'shortcuts are unique');
+});
