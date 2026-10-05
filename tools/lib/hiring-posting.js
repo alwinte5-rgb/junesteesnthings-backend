@@ -134,6 +134,7 @@ const POSTS = {
       'A sample reply that asks for the details (sizes, garment, artwork, the 20th) and does not invent a price',
       'Customer service or sales experience, ideally e-commerce, print or apparel',
       'A speed test of at least 25 Mbps',
+      'Has taken the OnlineJobs IQ test ("Tests Taken" on their profile): the owner prefers these applicants',
     ],
     body: `Love helping customers and closing sales? Earn an hourly wage PLUS commission on every order you win.
 
