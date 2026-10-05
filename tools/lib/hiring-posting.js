@@ -294,8 +294,8 @@ Claude Code and the Claude API, GitHub, Railway, Postgres and MySQL, Node.js/Exp
 Nice to have: Shopify apps; Clerk sign-in; Cloudinary; Stripe Connect; SEO and site speed; Python.
 
 Schedule
-- 30 hours/week, Monday–Friday, including at least 10:00am–1:00pm US Central Time so you overlap with us
-- That overlap is 11:00pm–2:00am Philippine time now, and 12:00am–3:00am from November. The rest of your hours are flexible.
+- 30 hours/week, Monday–Friday
+- You choose your working hours, as long as you work the full 30 hours each week and stay in close contact with the team, so questions and urgent fixes get quick replies.
 
 Pay
 - $8.00 USD/hour ($240/week, about $1,040/month), paid weekly during training
