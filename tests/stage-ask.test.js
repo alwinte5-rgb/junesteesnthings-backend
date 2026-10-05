@@ -95,3 +95,20 @@ test('a tap emails only when the owner said yes', () => {
       `${route} must read notify from the body, defaulting to no email`);
   }
 });
+
+test('no delivery method means pickup: the job is ready on the needed date', () => {
+  /* Shipping time is extra, taken off only once the job is set to ship. A
+     quote with no method read as shipped and told the owner (and the
+     customer) a date two business days early. */
+  const { quoteSchedule } = vm.runInThisContext(`(function () {
+    ${extractFn('addBusinessDays')}
+    ${extractFn('quoteSchedule')}
+    return { quoteSchedule };
+  })`)();
+  const day = (d) => new Date(d).toDateString();
+  const none = quoteSchedule({ needed_by: '2026-10-09T12:00:00' });
+  assert.ok(none.isPickup, 'no method is pickup');
+  assert.strictEqual(day(none.ship_by), day('2026-10-09T12:00:00'));
+  const shipped = quoteSchedule({ needed_by: '2026-10-09T12:00:00', ship_method: 'ground' });
+  assert.strictEqual(day(shipped.ship_by), day('2026-10-07T12:00:00'), 'ground still allows transit');
+});

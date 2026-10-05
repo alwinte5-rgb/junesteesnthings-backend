@@ -5126,7 +5126,11 @@ function quoteSchedule(q) {
      days before it. */
   const method = String(q.ship_method || '').toLowerCase();
   const isLocal = method === 'local';
-  const isPickup = method === 'pickup' || isLocal;
+  /* No method chosen means pickup (owner, 2026-10-05): production time is
+     its own thing and carrier transit is extra, taken off only once the job
+     is actually set to ship. The quote page only asks pickup-or-delivery when
+     local delivery is offered, so most jobs never have a method at all. */
+  const isPickup = method === 'pickup' || isLocal || !method;
   const back = (from, days) => addBusinessDays(from, -days);
 
   // Each date is the LATEST it can happen and still hit the deadline.
@@ -17307,11 +17311,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
           <button type="submit" name="flexible" value="1" class="kbtn" style="font-size:12px">No fixed date</button>
         </form>` : ''}
         ${sched ? `<div class="muted" style="font-size:12px;margin-bottom:10px">
-          ${q.needed_by ? `Needed ${dayShort(q.needed_by)}` : `Working to ${dayShort(q.target_date)}`} · ${sched.isPickup ? 'ready by' : 'ship by'} ${dayShort(sched.ship_by)}${
-            /* Shipping is assumed until a method is chosen, which is what makes
-               the ready date two business days before the needed date. */
-            !q.ship_method && +new Date(sched.ship_by) !== +new Date(q.needed_by || q.target_date)
-              ? ` <span style="color:#8a5a00">(${parseInt(process.env.JT_SHIP_MIN || "2", 10)} business days early for the carrier: no pickup or delivery method is set)</span>` : ''}
+          ${q.needed_by ? `Needed ${dayShort(q.needed_by)}` : `Working to ${dayShort(q.target_date)}`} · ${sched.isPickup ? 'ready by' : 'ship by'} ${dayShort(sched.ship_by)}
           · order blanks by ${dayShort(sched.blanks_order_by)}
           ${sched.risks.length ? `<span style="color:#b91c1c"> · behind on ${sched.risks.map(r=>escEmail(r.label)).join(', ')}</span>` : ''}</div>` : ''}
         <div data-next style="font-size:13px;margin-bottom:6px">
