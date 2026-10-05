@@ -24980,7 +24980,7 @@ function hireLinkCard(name, token, { round2 = false, role } = {}) {
     ? `Hi ${first}, thank you for your test: you are through to round 2! It is a few short questions about your answers (about ${HIRING.ROUND2_MINUTES} minutes). Open this private link when you have ${HIRING.ROUND2_MINUTES} quiet minutes; the clock starts when you press Start:
 ${escEmail(link)}
 Please write your own answers without AI tools. Thank you!`
-    : `Hi ${first}, thank you for applying to June's Tees! The next step for the ${escEmail(HIRING.roleOf(role).label.toLowerCase())} job is a short paid test (about ${mins} minutes, $15). Open this private link when you have ${mins} quiet minutes and a stable connection; the clock starts when you press Start:
+    : `Hi ${first}, thank you for applying to June's Tees! The next step for the ${escEmail(HIRING.roleOf(role).label.toLowerCase())} job is a short paid test ($15) in two parts: about ${mins} minutes now, then, if you do well, a ${HIRING.ROUND2_MINUTES}-minute round 2 on the same link a few minutes later. Please set aside about an hour. Open this private link when you have that time and a stable connection; the clock starts when you press Start:
 ${escEmail(link)}
 The link works for ${HIRING.LINK_DAYS} days. Please write your own answers without AI tools. Thank you!`;
   return `<div class="card" style="border-left:4px solid #16a34a">
