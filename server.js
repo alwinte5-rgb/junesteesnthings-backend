@@ -5354,7 +5354,8 @@ app.post('/admin/quote/:code/step', requireAdmin, async (req, res) => {
                   : res.redirect('/admin/quotes');
   }
   try {
-    const job = await moveJobToStage(code, clear ? stage - 1 : stage);
+    const job = await moveJobToStage(code, clear ? stage - 1 : stage,
+      { notify: !clear && String((req.body && req.body.notify) || '') === '1' });
     /* Answer JSON to fetch so the page does not reload. A full reload collapsed
        the <details> the row lives in, which made a successful save look like
        the checklist had simply shut itself. */
@@ -15949,6 +15950,101 @@ function jobStageIndex(q) {
   return lastWorking;
 }
 
+/* The stage a job has REACHED: the last move made on it. The job page's stage
+   buttons light this one, because tapping a button means "it is at this
+   stage now". They used to light jobStageIndex (the work still in hand), so
+   tapping In production lit Ready / Shipped and the tap looked refused. */
+function jobReachedIndex(q) {
+  for (let n = JOB_STAGES.length - 1; n > 0; n--) {
+    if (JOB_STAGES[n].cols.some(c => q[c])) return n;
+  }
+  return 0;
+}
+
+/* What moving a job to `target` would tell the customer, as the question put
+   to the owner first; null when the move tells them nothing. Mirrors
+   notifyQuoteMilestone: only the furthest milestone the move newly reaches,
+   and none already emailed (`sent` holds the client_emails kinds sent). */
+function milestoneAsk(q, target, sent = new Set()) {
+  if (!q || (!q.email && !q.phone)) return null;
+  const method = String(q.ship_method || '').toLowerCase();
+  let kind, what;
+  if (target >= 2 && !q.shipped_at) {
+    kind = 'milestone:ready';
+    what = method === 'pickup' ? 'is ready for pickup' : method ? 'has shipped' : 'is ready';
+  } else if (target >= 1 && !q.production_at) {
+    kind = 'milestone:production';
+    what = 'is in production';
+  } else {
+    return null;
+  }
+  if (sent.has(kind)) return null;
+  const first = String(q.name || '').trim().split(/\s+/)[0];
+  return { kind, text: `Email ${first || 'the customer'} that their order ${what}?` };
+}
+
+/** The data-ask attributes and notify field for a form that moves a job. */
+function askAttrs(q, ask) {
+  return ask ? ` data-ask="${escEmail(q.code + ':' + ask.kind)}" data-ask-text="${escEmail(ask.text)}"` : '';
+}
+
+/** Milestone emails already sent, per quote code: code -> Set of kinds. */
+async function sentMilestones(codes) {
+  const out = new Map();
+  if (!codes.length) return out;
+  const { rows } = await pool.query(
+    `SELECT DISTINCT quote_code, kind FROM client_emails
+      WHERE quote_code = ANY($1) AND status = 'sent' AND kind LIKE 'milestone:%'`, [codes])
+    .catch(() => ({ rows: [] }));
+  for (const r of rows) {
+    if (!out.has(r.quote_code)) out.set(r.quote_code, new Set());
+    out.get(r.quote_code).add(r.kind);
+  }
+  return out;
+}
+
+/* Asks before a move messages the customer: Move and email them, Move
+   without emailing, or Cancel. Runs first (capture), so the board's and the
+   checklist's own submit handlers only see the form once it is answered.
+   Without JS nothing asks, and the server sends nothing (notify is unset). */
+const STAGE_ASK_SCRIPT = `<script>(function(){
+  var told = {};
+  function ask(text, done){
+    var d = document.createElement('dialog');
+    d.style.cssText = 'border:1px solid #e3e8f2;border-radius:12px;padding:18px 20px;max-width:380px;width:calc(100% - 32px)';
+    d.innerHTML = '<p style="margin:0 0 14px;font-size:15px;font-weight:600;color:#111827"></p>'
+      + '<div style="display:flex;gap:8px;flex-wrap:wrap">'
+      + '<button type="button" class="kbtn kbtn-go" data-a="yes">Move and email them</button>'
+      + '<button type="button" class="kbtn" data-a="no">Move, no email</button>'
+      + '<button type="button" class="kbtn" data-a="cancel">Cancel</button></div>';
+    d.querySelector('p').textContent = text;
+    document.body.appendChild(d);
+    var answered = false;
+    function finish(a){ if (answered) return; answered = true; if (d.open) d.close(); d.remove(); done(a); }
+    d.addEventListener('click', function(e){ var a = e.target.getAttribute && e.target.getAttribute('data-a'); if (a) finish(a); });
+    d.addEventListener('cancel', function(e){ e.preventDefault(); finish('cancel'); });
+    d.showModal();
+  }
+  document.addEventListener('submit', function(e){
+    var f = e.target;
+    if (!f || !f.hasAttribute || !f.hasAttribute('data-ask') || f.dataset.asked) return;
+    var clear = f.querySelector('input[name="clear"]');
+    if (clear && clear.value === '1') return;
+    var key = f.getAttribute('data-ask');
+    if (told[key]) return;
+    e.preventDefault(); e.stopPropagation();
+    ask(f.getAttribute('data-ask-text'), function(a){
+      if (a === 'cancel') return;
+      var n = f.querySelector('input[name="notify"]');
+      if (n) n.value = a === 'yes' ? '1' : '';
+      if (a === 'yes') told[key] = 1;
+      f.dataset.asked = '1';
+      if (f.requestSubmit) f.requestSubmit(); else f.submit();
+      delete f.dataset.asked;
+    });
+  }, true);
+})();</script>`;
+
 /**
  * Move a job to a stage: everything up to and including it is marked done,
  * everything after is cleared. That is what makes moving a card backwards mean
@@ -15962,7 +16058,7 @@ function jobStageIndex(q) {
    and the job page's checklist: the checklist used to stamp one date at a time
    and never moved the review ask, so the two disagreed about what "delivered"
    did. Returns the job as it now stands, or null if there is no such quote. */
-async function moveJobToStage(code, target) {
+async function moveJobToStage(code, target, { notify = true } = {}) {
   const sets = JOB_STAGES.slice(1).flatMap((st, i) =>
     st.cols.map(c => `${c} = ${i + 1 <= target ? `COALESCE(${c}, NOW())` : 'NULL'}`)).join(', ');
   const { rows: prev } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
@@ -15971,8 +16067,10 @@ async function moveJobToStage(code, target) {
   const before = prev[0];
   const after = rows[0];
   console.log(`quote ${code}: moved to ${JOB_STAGES[target].label}`);
-  notifyQuoteMilestone(before, after)
-    .catch((e) => console.error(`milestone message for ${code} failed:`, e.message));
+  if (notify) {
+    notifyQuoteMilestone(before, after)
+      .catch((e) => console.error(`milestone message for ${code} failed:`, e.message));
+  }
   /* Delivery is the honest moment to ask. The payment-time ask was dated on a
      guess made before the job existed; this moves it to a few days after the
      customer actually had the thing. Shipped counts too, because for pickup
@@ -15996,7 +16094,10 @@ app.post('/admin/quote/:code/stage', requireAdmin, async (req, res) => {
     return asJson ? res.status(400).json({ ok: false }) : res.redirect('/admin/production');
   }
   try {
-    const job = await moveJobToStage(code, target);
+    /* A tap only messages the customer when the owner said yes to it
+       (STAGE_ASK_SCRIPT sets notify=1). Until 2026-10-05 every tap emailed
+       at once, so a mis-tap told a customer their order was ready. */
+    const job = await moveJobToStage(code, target, { notify: String((req.body && req.body.notify) || '') === '1' });
     if (asJson) {
       if (!job) return res.status(404).json({ ok: false });
       const cl = quoteChecklist(job);
@@ -16747,6 +16848,11 @@ async function renderBoard(VIEW, req, res) {
       })();
     </script>`;
 
+    /* Which milestone emails each board job has had, so a card's move only
+       asks about an email that would really be sent. */
+    const boardSent = VIEW === 'work'
+      ? await sentMilestones(rows.filter(q => !q.delivered_at && q.accepted_at && !q.cancelled_at).map(q => q.code))
+      : new Map();
     const needCount = (body.match(/Needs a text/g) || []).length;
     const changeCount = (body.match(/Change requested/g) || []).length;
     res.send(adminPage(VIEW === 'work' ? 'Production' : 'Quotes',
@@ -16927,8 +17033,10 @@ async function renderBoard(VIEW, req, res) {
                 ${risk ? `<div class="kcard-risk-note">⚠ ${escEmail(q._sched.risks[0].label)} was due ${dayShort(q._sched.risks[0].by)}</div>` : ''}
                 ${disputes.byQuote.has(q.code) ? `<div style="margin-top:4px">${disputeChip(disputes.byQuote.get(q.code))}</div>` : ''}
                 ${act ? `
-                <form method="POST" action="/admin/quote/${q.code}/stage" data-stageform class="knext">
+                <form method="POST" action="/admin/quote/${q.code}/stage" data-stageform class="knext"${
+                  askAttrs(q, milestoneAsk(q, JOB_STAGES.indexOf(act), boardSent.get(q.code)))}>
                   <input type="hidden" name="stage" value="${act.key}">
+                  <input type="hidden" name="notify" value="">
                   <input type="hidden" name="json" value="" data-jsonflag>
                   <button type="submit" class="kbtn kbtn-next" title="${escEmail(act.hint)}">
                     ✓ ${escEmail(act.label)}</button>
@@ -16947,6 +17055,7 @@ async function renderBoard(VIEW, req, res) {
       })() : (body ? `${body}${groupScript}` : '<div class="card"><p class="muted">No quotes yet.</p></div>')}
 
       ${studioOrdersSection(studio, { disputes })}
+      ${VIEW === 'work' ? STAGE_ASK_SCRIPT : ''}
       <script>
         /* Moving a kanban card posts in the background and re-renders just
            that card into its new column, so the board does not jump back to
@@ -17108,7 +17217,8 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
     const q = rows[0];
     const cl = quoteChecklist(q);
     const sched = quoteSchedule(q);
-    const si = jobStageIndex(q);
+    const si = jobReachedIndex(q);
+    const sent = (await sentMilestones([q.code])).get(q.code) || new Set();
     /* What these lines cost last time, for the cost form's suggestions. */
     const { rows: knownCosts } = await pool.query('SELECT cost_key, unit_cost, samples FROM blank_costs')
       .catch(() => ({ rows: [] }));
@@ -17119,8 +17229,14 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
         <span class="step-label" style="color:${st.done ? '#6b7280' : '#111827'};${st.done ? 'text-decoration:line-through' : 'font-weight:600'}">${st.label}</span>
         <span class="step-hint">${escEmail(st.hint)}</span>`;
       return st.manual
-        ? `<form method="POST" action="/admin/quote/${q.code}/step" style="margin:0" data-stepform>
+        ? `<form method="POST" action="/admin/quote/${q.code}/step" style="margin:0" data-stepform${
+               /* Computed as if unticked: the checklist ticks in place, so a row
+                  unticked after the page loaded must still ask when re-ticked.
+                  Delivered only asks while nothing has said "ready" yet. */
+               askAttrs(q, milestoneAsk(st.key === 'delivered' ? q : { ...q, production_at: null, shipped_at: null },
+                 JOB_STAGES.findIndex((x) => x.key === STEP_STAGE[st.key]), sent))}>
              <input type="hidden" name="step" value="${st.key}">
+             <input type="hidden" name="notify" value="">
              <input type="hidden" name="clear" value="${st.done ? '1' : ''}">
              <input type="hidden" name="json" value="" data-jsonflag>
              <button type="submit" class="step-row${st.done ? ' is-done' : ''}">${inner}</button>
@@ -17170,8 +17286,9 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
         })()}
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
           ${JOB_STAGES.map((st, i) => `
-            <form method="POST" action="/admin/quote/${q.code}/stage" style="margin:0">
+            <form method="POST" action="/admin/quote/${q.code}/stage" style="margin:0"${askAttrs(q, milestoneAsk(q, i, sent))}>
               <input type="hidden" name="stage" value="${st.key}"><input type="hidden" name="back" value="job">
+              <input type="hidden" name="notify" value="">
               <button type="submit" class="kbtn${i === si ? ' kbtn-go' : ''}"
                       title="${escEmail(st.hint)}">${st.label}</button>
             </form>`).join('')}
@@ -17190,7 +17307,11 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
           <button type="submit" name="flexible" value="1" class="kbtn" style="font-size:12px">No fixed date</button>
         </form>` : ''}
         ${sched ? `<div class="muted" style="font-size:12px;margin-bottom:10px">
-          ${q.needed_by ? `Needed ${dayShort(q.needed_by)}` : `Working to ${dayShort(q.target_date)}`} · ${sched.isPickup ? 'ready by' : 'ship by'} ${dayShort(sched.ship_by)}
+          ${q.needed_by ? `Needed ${dayShort(q.needed_by)}` : `Working to ${dayShort(q.target_date)}`} · ${sched.isPickup ? 'ready by' : 'ship by'} ${dayShort(sched.ship_by)}${
+            /* Shipping is assumed until a method is chosen, which is what makes
+               the ready date two business days before the needed date. */
+            !q.ship_method && +new Date(sched.ship_by) !== +new Date(q.needed_by || q.target_date)
+              ? ` <span style="color:#8a5a00">(${parseInt(process.env.JT_SHIP_MIN || "2", 10)} business days early for the carrier: no pickup or delivery method is set)</span>` : ''}
           · order blanks by ${dayShort(sched.blanks_order_by)}
           ${sched.risks.length ? `<span style="color:#b91c1c"> · behind on ${sched.risks.map(r=>escEmail(r.label)).join(', ')}</span>` : ''}</div>` : ''}
         <div data-next style="font-size:13px;margin-bottom:6px">
@@ -17220,6 +17341,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
       ${messagesCard}
       ${creditCard}
       ${notesCard}
+      ${STAGE_ASK_SCRIPT}
 
       <script>
         document.querySelectorAll('form[data-stepform]').forEach(function(form){
