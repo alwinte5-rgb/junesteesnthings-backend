@@ -28,6 +28,9 @@ function verifyTwilioSignature(authToken, url, params, signature) {
 const STOP_WORDS = ['STOP', 'STOPALL', 'UNSUBSCRIBE', 'CANCEL', 'END', 'QUIT', 'OPTOUT', 'REVOKE'];
 const START_WORDS = ['START', 'UNSTOP', 'YES', 'SUBSCRIBE'];
 const HELP_WORDS = ['HELP', 'INFO'];
+/* Texting JOIN (or DEALS) signs up for promotional texts and earns the
+   sign-up code (tools/lib/reintro.js). Advertised on the shop sign. */
+const JOIN_WORDS = ['JOIN', 'DEALS'];
 
 // 'stop' | 'start' | 'help' | 'message'
 function classifyInbound(text) {
@@ -35,6 +38,7 @@ function classifyInbound(text) {
   if (STOP_WORDS.includes(w)) return 'stop';
   if (START_WORDS.includes(w)) return 'start';
   if (HELP_WORDS.includes(w)) return 'help';
+  if (JOIN_WORDS.includes(w)) return 'join';
   return 'message';
 }
 

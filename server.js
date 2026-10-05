@@ -31,6 +31,7 @@ const { legacyRedirect, LEGACY_PATHS } = require('./tools/lib/legacy-redirects')
 const { parseFirstTouch, firstTouchLabel } = require('./tools/lib/first-touch');
 const SITEHEALTH = require('./tools/lib/site-health');
 const NUDGE = require('./tools/lib/lead-nudges');
+const REINTRO = require('./tools/lib/reintro');
 const FUNNEL = require('./tools/lib/funnel-health');
 const { T: SMS, plain: smsPlain, PICKUP: SMS_PICKUP, PICKUP_ADDRESS, PICKUP_HOURS, PICKUP_STEPS } = require('./tools/lib/sms-templates');
 
@@ -1009,6 +1010,41 @@ async function initStaffTables() {
       created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
   await pool.query(`CREATE INDEX IF NOT EXISTS staff_approvals_pending_idx ON staff_approvals (status, created_at)`);
+  /* The reintroduction campaign (tools/lib/reintro.js): who signed up for
+     texts from the email and the code they were given, which addresses the
+     email went to, and when the owner started each half. One row per phone
+     and per address, so a second sign-up shows the same code again. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS text_signups (
+      id          BIGSERIAL PRIMARY KEY,
+      phone       TEXT NOT NULL,
+      email       TEXT NOT NULL,
+      first_name  TEXT,
+      code        TEXT,
+      source      TEXT,
+      campaign    TEXT NOT NULL,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS text_signups_phone ON text_signups (phone)`);
+  /* Partial: a sign-up by texting JOIN has no email address. */
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS text_signups_email ON text_signups (email) WHERE email <> ''`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS campaign_emails (
+      id          BIGSERIAL PRIMARY KEY,
+      campaign    TEXT NOT NULL,
+      email       TEXT NOT NULL,
+      status      TEXT NOT NULL,
+      error       TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS campaign_emails_once ON campaign_emails (campaign, email)`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS campaign_runs (
+      campaign    TEXT NOT NULL,
+      channel     TEXT NOT NULL,
+      started_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (campaign, channel)
+    )`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS lead_notes (
       id             BIGSERIAL PRIMARY KEY,
@@ -3459,6 +3495,8 @@ app.post('/webhooks/twilio/sms', async (req, res) => {
   try {
     if (kind === 'stop') {
       await recordSmsConsent({ phone: from, transactional: false, marketing: false }, { source: 'sms-reply:stop' });
+    } else if (kind === 'join') {
+      await joinByText(from);
     } else if (kind === 'start') {
       // Rejoins order updates only; marketing needs the box ticked again.
       await recordSmsConsent({ phone: from, transactional: true, marketing: false }, { source: 'sms-reply:start' });
@@ -4466,6 +4504,362 @@ app.post('/api/sms-cart-followup', requireInternalKey, capPerRecipient('sms-cart
   // a failed send answers 503 so the next hourly run tries again.
   const settled = ['sent', 'duplicate', 'no-consent', 'no-phone'].includes(status);
   res.status(settled ? 200 : 503).json({ ok: settled, status });
+});
+
+/* ── The reintroduction campaign (tools/lib/reintro.js) ─────────────────────
+   Owner, 2026-10-05: say hello to everyone, the safe way. A promotional TEXT
+   only to phones with marketing consent; an EMAIL to the rest of the Brevo
+   list, inviting them to sign up for texts, and signing up earns a 10% code.
+   The owner starts each half from /admin/campaign; nothing here sends on its
+   own until then. */
+
+/** Every Brevo contact (paged), for the campaign's email list. */
+async function brevoAllContacts() {
+  const out = [];
+  for (let offset = 0; offset < 20000; offset += 500) {
+    const { data } = await brevo.get('/contacts', { params: { limit: 500, offset } });
+    const page = (data && data.contacts) || [];
+    out.push(...page);
+    if (page.length < 500) break;
+  }
+  return out;
+}
+
+/** Phones whose newest consent includes promotional texts. */
+async function campaignTextPhones() {
+  const { rows } = await pool.query(
+    `SELECT phone, transactional, marketing FROM sms_consents ORDER BY phone, created_at, id`);
+  return REINTRO.marketingPhones(rows, foldSmsConsent);
+}
+
+/** A single-use 10% code for one sign-up, made in the studio's promo table. */
+async function mintSignupCode(email) {
+  const expires = new Date(Date.now() + REINTRO.CODE_DAYS * 86400000).toISOString().slice(0, 10);
+  let last = '';
+  for (let i = 0; i < 3; i++) {
+    const form = new URLSearchParams();
+    form.set('code', REINTRO.newCode());
+    form.set('kind', 'percent');
+    form.set('value', String(REINTRO.PCT));
+    form.set('expires', expires);
+    form.set('note', `Text sign-up (${REINTRO.CAMPAIGN})`);
+    form.set('max_uses', '1');
+    form.set('once_per_customer', '1');
+    if (email) form.set('assigned_to', email);
+    const r = await studioFetch(PROMO_ADMIN(), { method: 'POST', body: form });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && !d.error && d.code) return String(d.code).toUpperCase();
+    last = d.error || `studio answered ${r.status}`;
+  }
+  throw new Error('could not make a code: ' + last);
+}
+
+/* Sign-ups text a stranger's phone if the number typed is not theirs, and each
+   text costs money: capped per visitor (makeRateLimit) and in total. */
+const _signupHits = [];
+function signupAllowed(now = Date.now()) {
+  while (_signupHits.length && now - _signupHits[0] > 3600000) _signupHits.shift();
+  if (_signupHits.length >= 60) return false;
+  _signupHits.push(now);
+  return true;
+}
+
+function textsPage({ email = '', first = '', phone = '', error = '', code = '', done = false, again = false, src = 'site' } = {}) {
+  const v = (x) => escEmail(String(x || '').slice(0, 254));
+  const body = done ? `
+    <div class="card" style="max-width:520px;margin:30px auto;text-align:center">
+      <h1 style="color:#1848B8">${again ? "You're already on the list!" : "You're in, thank you!"}</h1>
+      ${code ? `<p>Here's your ${REINTRO.PCT}% off code:</p>
+        <p style="font-size:28px;font-weight:800;letter-spacing:2px;font-family:ui-monospace,Menlo,monospace">${escEmail(code)}</p>
+        <p>We've texted it to you too. Use it at checkout on
+          <a href="https://design.jtees.net">design.jtees.net</a>, or mention it when you get a quote.
+          It's good for ${REINTRO.CODE_DAYS} days.</p>`
+      : `<p>June will send your ${REINTRO.PCT}% off code to you shortly.</p>`}
+      <p><a class="btn" href="https://www.jtees.net">Visit June's Tees</a></p>
+    </div>` : `
+    <div class="card" style="max-width:520px;margin:30px auto">
+      <h1 style="color:#1848B8;margin-bottom:4px">Get ${REINTRO.PCT}% off</h1>
+      <p>Sign up for texts from June's Tees and your ${REINTRO.PCT}% off code is yours right away. That's where we share
+        new products, seasonal deals and first dibs on specials.</p>
+      ${error ? `<div class="warn">${escEmail(error)}</div>` : ''}
+      <form method="POST" action="${REINTRO.SIGNUP_PATH}">
+        <input type="hidden" name="src" value="${escEmail(REINTRO.cleanSource(src))}">
+        <label>First name <input name="first" maxlength="40" autocomplete="given-name" value="${v(first)}"></label>
+        <label>Email <input name="email" type="email" required maxlength="254" autocomplete="email" value="${v(email)}"></label>
+        <label>Mobile number <input name="phone" type="tel" required maxlength="20" autocomplete="tel" inputmode="tel"
+          placeholder="(773) 555-0123" value="${v(phone)}"></label>
+        ${consentCheckboxesHtml()}
+        <p style="font-size:12.5px;color:#6b7280">The code comes with the second box, our deals texts.</p>
+        <button type="submit" class="btn" style="width:100%">Get my ${REINTRO.PCT}% off</button>
+      </form>
+    </div>`;
+  return quotePage(`Get ${REINTRO.PCT}% off — June's Tees`, body);
+}
+
+app.get(REINTRO.SIGNUP_PATH, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.send(textsPage({ email: String(req.query.e || '').trim().toLowerCase(), src: String(req.query.src || '') }));
+});
+
+app.post(REINTRO.SIGNUP_PATH, makeRateLimit(6, 60 * 60 * 1000), async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const b = req.body || {};
+  const email = String(b.email || '').trim().toLowerCase().slice(0, 254);
+  const first = String(b.first || '').trim().slice(0, 40);
+  const consent = parseSmsConsent(b);
+  const src = REINTRO.cleanSource(String(b.src || ''));
+  const again = (error) => res.status(400).send(textsPage({ email, first, phone: b.phone, error, src }));
+  if (!isValidEmail(email)) return again('Please enter your email address.');
+  if (!consent) return again('Please enter a US mobile number and tick the deals box.');
+  if (!consent.marketing) return again('The code comes with our deals texts, so please tick the second box.');
+  try {
+    await recordSmsConsent(consent, { source: 'signup:' + src, ip: clientIp(req), userAgent: req.get('user-agent') });
+    const { rows: had } = await pool.query(
+      `SELECT code FROM text_signups WHERE phone = $1 OR email = $2 ORDER BY created_at LIMIT 1`, [consent.phone, email]);
+    if (had.length) return res.send(textsPage({ done: true, again: true, code: had[0].code }));
+    if (!signupAllowed()) return again('Lots of sign-ups right now! Please try again in a few minutes.');
+    let code = null;
+    try { code = await mintSignupCode(email); }
+    catch (e) { console.error('sign-up code failed:', e.message); reportError('reintro:code', e, email).catch(() => {}); }
+    const { rows } = await pool.query(
+      `INSERT INTO text_signups (phone, email, first_name, code, source, campaign) VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT DO NOTHING RETURNING id`, [consent.phone, email, first || null, code, src, REINTRO.CAMPAIGN]);
+    if (!rows.length) return res.send(textsPage({ done: true, again: true }));
+    if (code) {
+      sendCustomerSms({ phone: consent.phone, kind: 'marketing', ref: 'signup:' + REINTRO.CAMPAIGN, msg: REINTRO.codeText({ code }) })
+        .catch((e) => console.error('sign-up code text failed:', e.message));
+      sendEmail({ to: email, subject: `Your ${REINTRO.PCT}% off code: ${code}`,
+        html: customerEmailHtml(`Here's your ${REINTRO.PCT}% off`,
+          `<p>Hi${first ? ' ' + escEmail(first) : ''}, thanks for signing up for our texts!</p>
+           <p>Your code is <b style="font-size:18px;letter-spacing:1px">${escEmail(code)}</b>. Use it at checkout on
+             <a href="https://design.jtees.net">design.jtees.net</a>, or mention it when you get a quote. It's good for
+             ${REINTRO.CODE_DAYS} days, once.</p>`, null) })
+        .catch((e) => console.error('sign-up code email failed:', e.message));
+    } else {
+      sendEmail({ to: NOTIFY_EMAIL, subject: `Text sign-up needs a code: ${email}`,
+        html: `<p>${escEmail(first || email)} signed up for texts, but the ${REINTRO.PCT}% code could not be made.
+          Send them one from <a href="${PUBLIC_BASE_URL}/admin/discounts">Discounts</a>.</p>` }).catch(() => {});
+    }
+    res.send(textsPage({ done: true, code }));
+  } catch (err) {
+    console.error('text sign-up failed:', err.message);
+    reportError('reintro:signup', err).catch(() => {});
+    again('Something went wrong on our side. Please try again.');
+  }
+});
+
+/** Someone texted JOIN: they have just asked for promotional texts, so their
+ *  consent is recorded and the confirmation carries their code. Texting it
+ *  again sends nothing new (the sms_messages dedupe). */
+async function joinByText(phone) {
+  await recordSmsConsent({ phone, transactional: true, marketing: true }, { source: 'sms-keyword:join' });
+  const { rows: had } = await pool.query(`SELECT code FROM text_signups WHERE phone = $1`, [phone]);
+  let code = had.length ? had[0].code : null;
+  if (!had.length) {
+    if (!signupAllowed()) return;
+    try { code = await mintSignupCode(''); }
+    catch (e) { console.error('JOIN code failed:', e.message); reportError('reintro:code', e, 'texted JOIN').catch(() => {}); }
+    await pool.query(
+      `INSERT INTO text_signups (phone, email, code, source, campaign) VALUES ($1, '', $2, 'sms', $3) ON CONFLICT DO NOTHING`,
+      [phone, code, REINTRO.CAMPAIGN]);
+  }
+  if (code) {
+    await sendCustomerSms({ phone, kind: 'marketing', ref: 'signup:' + REINTRO.CAMPAIGN, msg: REINTRO.codeText({ code }) });
+  } else {
+    sendEmail({ to: NOTIFY_EMAIL, subject: `Texted JOIN, needs a code: ${phone}`,
+      html: `<p>${escEmail(phone)} texted JOIN, but the ${REINTRO.PCT}% code could not be made. Text them one from
+        <a href="${PUBLIC_BASE_URL}/admin/discounts">Discounts</a>.</p>` }).catch(() => {});
+  }
+}
+
+/** The email half: once started, up to the daily cap each hour-sweep, so the
+ *  Brevo plan's daily allowance is never used up by the campaign alone. */
+async function sendCampaignEmails() {
+  const { rows: run } = await pool.query(
+    `SELECT 1 FROM campaign_runs WHERE campaign = $1 AND channel = 'email'`, [REINTRO.CAMPAIGN]);
+  if (!run.length) return '';
+  const cap = Math.max(0, parseInt(process.env.JT_CAMPAIGN_EMAILS_PER_DAY || '200', 10));
+  const { rows: today } = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM campaign_emails WHERE campaign = $1
+        AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'America/Chicago') AT TIME ZONE 'America/Chicago'`,
+    [REINTRO.CAMPAIGN]);
+  let room = cap - today[0].n;
+  if (room <= 0) return '';
+  const [contacts, phones, { rows: done }] = await Promise.all([
+    brevoAllContacts(), campaignTextPhones(),
+    pool.query(`SELECT email FROM campaign_emails WHERE campaign = $1`, [REINTRO.CAMPAIGN])]);
+  const sent = new Set(done.map((r) => r.email));
+  let n = 0;
+  for (const c of REINTRO.emailAudience(contacts, phones)) {
+    if (room <= 0) break;
+    if (sent.has(c.email)) continue;
+    const { rows } = await pool.query(
+      `INSERT INTO campaign_emails (campaign, email, status) VALUES ($1, $2, 'sending')
+       ON CONFLICT (campaign, email) DO NOTHING RETURNING id`, [REINTRO.CAMPAIGN, c.email]);
+    if (!rows.length) continue;
+    room--;
+    try {
+      const m = REINTRO.helloEmail(c);
+      await sendEmail({ to: c.email, subject: m.subject, html: m.html, marketing: true });
+      await pool.query(`UPDATE campaign_emails SET status = 'sent' WHERE id = $1`, [rows[0].id]);
+      n++;
+    } catch (e) {
+      await pool.query(`UPDATE campaign_emails SET status = 'failed', error = $2 WHERE id = $1`,
+        [rows[0].id, String(e.message).slice(0, 300)]).catch(() => {});
+    }
+  }
+  return n ? `${n} sent` : '';
+}
+
+let campaignTextRunning = false;
+/** The text half: one hello per consenting phone, a second apart. */
+async function sendCampaignTexts() {
+  if (campaignTextRunning) return;
+  campaignTextRunning = true;
+  try {
+    const phones = [...await campaignTextPhones()];
+    /* Their first name, where the Brevo contact behind the number has one. */
+    const names = new Map();
+    try {
+      for (const c of await brevoAllContacts()) {
+        const ph = normalizeUsPhone((c.attributes || {}).SMS || '');
+        if (ph && (c.attributes || {}).FIRSTNAME) names.set(ph, String(c.attributes.FIRSTNAME));
+      }
+    } catch (e) { console.error('campaign names from Brevo failed:', e.message); }
+    for (const phone of phones) {
+      if (!inTextingHours()) break;   // picks up where it stopped when started again
+      await sendCustomerSms({ phone, kind: 'marketing', ref: 'campaign:' + REINTRO.CAMPAIGN,
+        msg: REINTRO.helloText({ first: names.get(phone) || '' }) });
+      await new Promise((r) => setTimeout(r, 1100));
+    }
+  } catch (e) {
+    console.error('campaign texts failed:', e.message);
+    reportError('reintro:texts', e).catch(() => {});
+  } finally {
+    campaignTextRunning = false;
+  }
+}
+
+app.get('/admin/campaign', requireAdmin, async (req, res) => {
+  if (!isOwner()) return res.redirect('/admin/dashboard');
+  try {
+    const phones = await campaignTextPhones();
+    let contacts = [], brevoErr = '';
+    try { contacts = await brevoAllContacts(); } catch (e) { brevoErr = e.message; }
+    const audience = REINTRO.emailAudience(contacts, phones);
+    const [{ rows: tx }, { rows: em }, { rows: su }, { rows: runs }] = await Promise.all([
+      pool.query(`SELECT status, COUNT(*)::int AS n FROM sms_messages WHERE ref = $1 GROUP BY status`, ['campaign:' + REINTRO.CAMPAIGN]),
+      pool.query(`SELECT status, COUNT(*)::int AS n FROM campaign_emails WHERE campaign = $1 GROUP BY status`, [REINTRO.CAMPAIGN]),
+      pool.query(`SELECT COALESCE(source, 'site') AS source, COUNT(*)::int AS n FROM text_signups WHERE campaign = $1 GROUP BY 1`, [REINTRO.CAMPAIGN]),
+      pool.query(`SELECT channel, started_at FROM campaign_runs WHERE campaign = $1`, [REINTRO.CAMPAIGN]),
+    ]);
+    const cnt = (rows, st) => rows.filter((r) => st.includes(r.status)).reduce((a, r) => a + r.n, 0);
+    const started = (ch) => runs.find((r) => r.channel === ch);
+    const text = REINTRO.helloText({ first: 'Tom' });
+    const segs = text.body.length <= 160 ? 1 : Math.ceil(text.body.length / 153);
+    const left = Math.max(0, phones.size - cnt(tx, ['sent', 'delivered', 'sending', 'undelivered']));
+    const mail = REINTRO.helloEmail({ first: 'Tom', email: 'tom@example.com' });
+    const emailedOk = cnt(em, ['sent']);
+    const cap = parseInt(process.env.JT_CAMPAIGN_EMAILS_PER_DAY || '200', 10);
+    const msg = String(req.query.msg || ''), err = String(req.query.err || '');
+    res.send(adminPage('Campaign', `
+      <h1>Reintroduction campaign</h1>
+      <div class="sub">Say hello to everyone, the safe way. <a href="/admin/discounts" style="color:#1848B8">Discounts</a></div>
+      ${msg ? `<div class="ok">${escEmail(msg)}</div>` : ''}${err ? `<div class="warn">${escEmail(err)}</div>` : ''}
+      <div class="card" style="margin-top:12px">
+        <h2 class="card-title">1. The hello text</h2>
+        <p class="muted">Only to the <b>${phones.size}</b> numbers whose owner ticked "text me deals". Everyone else gets the email.</p>
+        <div style="background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px;white-space:pre-wrap">${escEmail(text.body)}</div>
+        <p class="muted" style="font-size:12.5px">${text.body.length} characters, ${segs} segment${segs > 1 ? 's' : ''} each,
+          about ${money(left * segs * 0.012)} for the ${left} still to send. Sent so far: ${cnt(tx, ['sent', 'delivered'])}${
+          cnt(tx, ['failed', 'undelivered']) ? `, did not arrive: ${cnt(tx, ['failed', 'undelivered'])}` : ''}.</p>
+        ${left ? (inTextingHours() ? `
+        <form method="POST" action="/admin/campaign/text" onsubmit="this.querySelector('button').disabled=true">
+          <button type="submit" class="btn">Send the hello text to ${left} ${left === 1 ? 'person' : 'people'}</button></form>`
+          : '<p class="muted">Texts only go out 9am to 8pm Chicago time. Come back then to send.</p>')
+          : '<p><b>Done</b>: everyone with deals consent has had the hello text.</p>'}
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h2 class="card-title">2. The email, with ${REINTRO.PCT}% off for signing up for texts</h2>
+        ${brevoErr ? `<div class="warn">Could not read the Brevo list: ${escEmail(brevoErr)}</div>` : `
+        <p class="muted"><b>${audience.length}</b> people on the Brevo list who are not getting the text and have not
+          unsubscribed. Up to ${cap} a day go out, so your daily email allowance is not used up.</p>`}
+        <p><b>Subject:</b> ${escEmail(mail.subject)}</p>
+        <div style="border:1px solid #e3e8f2;border-radius:10px;padding:12px">${mail.html}</div>
+        <p class="muted" style="font-size:12.5px">The button goes to <a href="${REINTRO.SIGNUP_PATH}" target="_blank">the sign-up page</a>.
+          Each person who signs up gets their own single-use ${REINTRO.PCT}% code, by text, by email and on screen.</p>
+        <p>Emailed: <b>${emailedOk}</b>${cnt(em, ['failed']) ? ` · failed: ${cnt(em, ['failed'])}` : ''}</p>
+        ${started('email') ? `<p class="muted">Started ${fmtDate(started('email').started_at)}. It carries on by itself each day until everyone has it.</p>`
+          : brevoErr || !audience.length ? '' : `
+        <form method="POST" action="/admin/campaign/email" onsubmit="this.querySelector('button').disabled=true">
+          <button type="submit" class="btn">Start the email to ${audience.length} people</button></form>`}
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h2 class="card-title">3. Keep growing the text list</h2>
+        <p class="muted">Every way in gives the same single-use ${REINTRO.PCT}% code and records their consent.</p>
+        <table class="dtable" style="width:100%;font-size:14px">${Object.entries(REINTRO.SOURCES).map(([k, label]) =>
+          `<tr><td style="padding:6px 4px">${escEmail(label)}</td><td style="text-align:right;padding:6px 4px"><b>${
+            (su.find((r) => r.source === k) || { n: 0 }).n}</b></td></tr>`).join('')}
+          <tr><td style="padding:6px 4px"><b>Total sign-ups</b></td><td style="text-align:right;padding:6px 4px"><b>${su.reduce((a, r) => a + r.n, 0)}</b></td></tr></table>
+        <ul style="line-height:1.8;margin:12px 0 0 18px;padding:0">
+          <li><a href="/admin/campaign/sign" target="_blank" style="color:#1848B8">Print the shop sign</a>: a QR code plus "text JOIN to ${escEmail(twilioNumberPretty())}"</li>
+          <li>The sign-up page: <a href="${REINTRO.SIGNUP_PATH}?src=site" target="_blank" style="color:#1848B8">${escEmail(PUBLIC_BASE_URL + REINTRO.SIGNUP_PATH)}</a>, linked from the website's footer</li>
+          <li>Already asking: the website quote form, accepting a quote, and checkout and "save your design" in the Design Lab</li>
+        </ul>
+      </div>`, 'discounts'));
+  } catch (e) {
+    console.error('campaign page failed:', e.message);
+    res.status(500).send(adminPage('Campaign', '<div class="card"><div class="warn">Could not load the campaign.</div></div>', 'discounts'));
+  }
+});
+
+/** The shop's Twilio number as people read it: (773) 900-4592. */
+function twilioNumberPretty() {
+  const d = String(process.env.TWILIO_PHONE_NUMBER || '').replace(/\D/g, '').slice(-10);
+  return d.length === 10 ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}` : 'our number';
+}
+
+/* A sign for the counter: a QR code to the sign-up page and the JOIN keyword,
+   with the disclosures carriers want next to any opt-in. Printed from the
+   browser; the QR image is drawn by a public QR service from the page URL. */
+app.get('/admin/campaign/sign', requireAdmin, (req, res) => {
+  if (!isOwner()) return res.redirect('/admin/dashboard');
+  const url = `${PUBLIC_BASE_URL}${REINTRO.SIGNUP_PATH}?src=shop`;
+  const qr = `https://api.qrserver.com/v1/create-qr-code/?size=520x520&margin=8&data=${encodeURIComponent(url)}`;
+  res.send(`<!doctype html><html><head><meta charset="utf-8"><title>Get ${REINTRO.PCT}% off - June's Tees</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>body{font-family:system-ui,sans-serif;margin:0;color:#12203c;text-align:center}
+      .s{max-width:640px;margin:0 auto;padding:36px 24px}h1{font-size:54px;margin:8px 0;color:#F0275A}
+      .k{font-size:30px;font-weight:800;margin:18px 0}.k b{background:#12203c;color:#fff;padding:2px 12px;border-radius:8px}
+      img.qr{width:300px;height:300px}.f{font-size:13px;color:#4b5563;line-height:1.5;margin-top:22px}
+      @media print{.np{display:none}}</style></head><body><div class="s">
+    <img src="${PUBLIC_BASE_URL}/assets/images/brand/logo.png" alt="June's Tees" style="width:220px">
+    <h1>Get ${REINTRO.PCT}% off</h1>
+    <p style="font-size:22px;margin:0">your next order when you join our texts</p>
+    <img class="qr" src="${escEmail(qr)}" alt="QR code to sign up">
+    <p style="font-size:18px;margin:4px 0">Scan to sign up</p>
+    <div class="k">or text <b>JOIN</b> to ${escEmail(twilioNumberPretty())}</div>
+    <p class="f">June's Tees &amp; Things deals and updates, up to 4 msgs/month. Msg &amp; data rates may apply.
+      Reply HELP for help, STOP to opt out. Consent is not a condition of purchase.
+      Terms: jtees.net/sms-terms &middot; One code per person, good for ${REINTRO.CODE_DAYS} days.</p>
+    <p class="np"><button onclick="window.print()" style="font-size:16px;padding:10px 22px">Print</button></p>
+  </div></body></html>`);
+});
+
+app.post('/admin/campaign/text', requireAdmin, async (req, res) => {
+  if (!isOwner()) return res.redirect('/admin/dashboard');
+  if (!inTextingHours()) return res.redirect('/admin/campaign?err=' + encodeURIComponent('Texts only go out 9am to 8pm Chicago time.'));
+  if (!smsConfigured()) return res.redirect('/admin/campaign?err=' + encodeURIComponent('Texting is not switched on.'));
+  await pool.query(`INSERT INTO campaign_runs (campaign, channel) VALUES ($1, 'text') ON CONFLICT DO NOTHING`, [REINTRO.CAMPAIGN]);
+  sendCampaignTexts();
+  res.redirect('/admin/campaign?msg=' + encodeURIComponent('Sending now, about one a second. Refresh to see it count up.'));
+});
+
+app.post('/admin/campaign/email', requireAdmin, async (req, res) => {
+  if (!isOwner()) return res.redirect('/admin/dashboard');
+  await pool.query(`INSERT INTO campaign_runs (campaign, channel) VALUES ($1, 'email') ON CONFLICT DO NOTHING`, [REINTRO.CAMPAIGN]);
+  sendCampaignEmails().catch((e) => { console.error('campaign emails failed:', e.message); reportError('reintro:emails', e).catch(() => {}); });
+  res.redirect('/admin/campaign?msg=' + encodeURIComponent(`Started. The first batch is going out now, then up to the daily limit each day.`));
 });
 
 app.get('/sms-terms', (_req, res) => {
@@ -15391,7 +15785,8 @@ app.get('/admin/discounts', requireAdmin, async (req, res) => {
           c.source === 'recovery' ? 'automatic' : 'JT_PROMO_STANDING'}</span></td>
     </tr>`;
 
-  res.send(adminPage('Discounts', `<h1>Discounts</h1>
+  res.send(adminPage('Discounts', `<h1>Discounts</h1>${isOwner() ? `
+    <p style="margin:-4px 0 12px"><a href="/admin/campaign" style="color:#1848B8;font-weight:600">Reintroduction campaign: hello text + ${REINTRO.PCT}% off for signing up to texts &rarr;</a></p>` : ''}
     ${customerList}
     <div class="sub">${liveCount} live &middot; ${codes.length} total &middot;
       <span class="muted" style="font-size:12px">codes you issue by hand, for design.jtees.net checkout</span></div>
@@ -22510,6 +22905,7 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
       await step('deposit reminders', sendDepositReminders);
       await step('balance reminders', sendBalanceReminders);
       await step('pickup reminders', sendPickupReminders);
+      await step('reintro emails', sendCampaignEmails);
     }
     await step('reorder nudges', sendReorderNudges);
     await step('expire quotes', expireOldQuotes);
