@@ -190,7 +190,7 @@ ${howToApply('Purple Tee', [
       'Photography: product shots, mockup shoots, job photos', 'Web or landing page design', 'Customer-facing sales or quoting experience'],
     code: 'Gold Ink',
     title: 'Graphic Designer for Custom Apparel – Screen Print, Embroidery & DTF Artwork',
-    type: 'Part Time', wage: '4.5', hours: '30', skills: ['Adobe Illustrator', 'Graphic Design', 'Adobe Photoshop'],
+    type: 'Part Time', wage: '4.5', hours: '20', skills: ['Adobe Illustrator', 'Graphic Design', 'Adobe Photoshop'],
     payNote: 'Check OLJ\'s Suggest-a-Salary box for graphic design before posting. Graphic design posts on OLJ mostly offer $4–6 an hour (2026-10); $4.50 starts just above the common rate, the same approach as sales.',
     lookFor: [
       'A portfolio link that opens, with work made for print on clothing or merch, not only social posts or web',
@@ -223,11 +223,11 @@ Adobe Illustrator and Photoshop (your own licence), Google Drive, and our own st
 Nice to have: experience designing for screen printing, embroidery or DTF; embroidery digitising; colour separations; video or Reels editing.
 
 Schedule
-- Monday–Friday, 10:00am–4:00pm US Central Time (30 hours/week)
-- That's 11:00pm–5:00am Philippine time now, and 12:00am–6:00am from November. Fixed hours, so proofs go out while our customers are awake.
+- 20 hours/week, Monday–Friday
+- You choose your working hours, as long as you work the full 20 hours each week and stay in close contact with the team, so proofs and customer questions get quick replies.
 
 Pay
-- $4.50 USD/hour ($135/week, about $585/month), paid weekly during training
+- $4.50 USD/hour ($90/week, about $390/month), paid weekly during training
 - $5.00/hour once training is signed off (60–90 days), with pay reviews every 6 months after that
 ${PAY_TERMS}
 
