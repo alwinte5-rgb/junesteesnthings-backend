@@ -148,7 +148,7 @@ function card({ history = [], smsOn = true, consent = true, q = {} } = {}) {
     normalizeUsPhone: (p) => (p ? '+1' + String(p).replace(/\D/g, '').slice(-10) : null),
     smsConfigured: () => smsOn, smsConsentFor: async () => ({ transactional: consent }),
     balanceOf: () => 0, quoteTotals: () => ({ total: 0 }), money: (n) => '$' + Number(n).toFixed(2),
-    quoteLink: (c) => 'https://www.jtees.net/q/' + c, SMS_PICKUP: '3047 N Lincoln Ave',
+    quoteLink: (c) => 'https://www.jtees.net/q/' + c, SMS_PICKUP: '3047 N Lincoln Ave', SHOP_PHONE: '(773) 849-1854',
     ...(({ PICKUP_ADDRESS, PICKUP_HOURS, PICKUP_STEPS }) => ({ PICKUP_ADDRESS, PICKUP_HOURS, PICKUP_STEPS }))(require('../tools/lib/sms-templates')),
     SHOP_TZ: 'America/Chicago', console: { error() {} },
     intIn: () => null, PROOFS: require('../tools/lib/job-proofs'),
@@ -203,7 +203,7 @@ test('a long message is cut at a word with an ellipsis, and its time goes under 
 
 test('the quick messages fill the box, and one for a balance only when one is owed', async () => {
   const html = await card();
-  assert.match(html, /data-fill="Hi Ada, your proof for order AB12CD is ready\./);
+  assert.match(html, /data-fill="Hi Ada! Your proof for order AB12CD is ready\./);
   assert.doesNotMatch(html, /Balance due</);
 });
 
@@ -249,6 +249,7 @@ function messageRoute(o = {}) {
     sendCustomerSms: async (m) => { if (!opts.consent) return 'no-consent'; sent.push(m); return 'sent'; },
     sendClientEmail: async (m) => { sent.push(m); }, customerEmailHtml: () => '', escEmail: (t) => t,
     SHOP_EMAIL: 'shop@example.com', smsPlain: (t) => t, reportError: async () => {},
+    quoteLink: (c) => 'https://www.jtees.net/q/' + c,
     console: { log() {}, error() {} },
     currentActor: () => null, actorLevel: () => 'on', markProofsSent: async () => {},
   };
@@ -295,9 +296,10 @@ test('a refused text does not hold the message back once it can go', async () =>
 
 test('a text keeps the shape every customer text has', () => {
   const r = msgRoute();
-  assert.match(r, /body: `June's Tees: \$\{smsPlain\(text, 260\)\} Reply STOP to opt out\.`/);
+  assert.match(r, /body: `June's Tees: \$\{smsPlain\(text, 260\)\}\$\{/);
+  assert.match(r, /' ' \+ quoteLink\(code\)\} Reply STOP to opt out\.`/, 'their order page goes on every text');
   assert.match(r, /kind: 'transactional'/);
   const { plain } = require('../tools/lib/sms-templates');
-  const body = `June's Tees: ${plain('x'.repeat(300), 260)} Reply STOP to opt out.`;
-  assert.ok(body.length <= 320, 'two segments at most');
+  const body = `June's Tees: ${plain('x'.repeat(300), 260)} https://www.jtees.net/q/ABCDEFGHIJ Reply STOP to opt out.`;
+  assert.ok(body.length <= 459, 'three segments at most');
 });

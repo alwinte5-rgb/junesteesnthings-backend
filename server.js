@@ -408,6 +408,7 @@ async function initDB() {
     'deposit_nudged_at TIMESTAMPTZ',  // accepted but deposit unpaid reminder
     'balance_nudged_at TIMESTAMPTZ',  // deposit in, balance still outstanding
     'reorder_nudged_at TIMESTAMPTZ',  // paid in full months ago, worth asking again
+    'pickup_nudged_at TIMESTAMPTZ',   // ready for pickup two days and not collected
     /* Job milestones. These exist so the intake checklist can be DERIVED rather
        than written down somewhere nobody opens — the steps the database can
        already answer (contact, job, deadline, quote, deposit, balance) are
@@ -3309,6 +3310,13 @@ async function smsConsentFor(phone) {
 
    `kind` is which consent box this needs. `ref` + msg.template is the dedupe
    key: the same update for the same order goes to the same number once. */
+/** Whether an automatic text may go out now: 9am to 8pm in Chicago, inside
+ *  the hours the texting rules allow and hours a customer will not mind. */
+function inTextingHours(now = new Date()) {
+  const h = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hour: 'numeric', hourCycle: 'h23' }).format(now));
+  return h >= 9 && h < 20;
+}
+
 async function sendCustomerSms({ phone, kind, ref, msg, quote = null }) {
   const to = normalizeUsPhone(phone);
   if (!to) return 'no-phone';
@@ -3377,6 +3385,47 @@ function alertOwnerOfChat(body) {
 // covers that URL, so it is fixed here rather than read from proxy headers.
 const TWILIO_INBOUND_URL = (process.env.TWILIO_WEBHOOK_URL || 'https://www.jtees.net/webhooks/twilio/sms').trim();
 
+/* A text from a number with no job in the last four months is a new enquiry,
+   kept as a lead (source 'text') so it can be quoted from Leads. A second
+   text while that lead is still open is added to it as a note, not a second
+   lead. Returns { quote } when it belongs to a job, { lead } when it is one. */
+async function textToLead(from, text, sid) {
+  const digits = String(from).replace(/\D/g, '').slice(-10);
+  if (digits.length !== 10) return {};
+  const samePhone = `right(regexp_replace(COALESCE(phone, ''), '\\D', '', 'g'), 10) = $1`;
+  const { rows: jobs } = await pool.query(
+    `SELECT code FROM quotes WHERE ${samePhone} AND created_at > NOW() - INTERVAL '120 days'
+      ORDER BY created_at DESC LIMIT 1`, [digits]);
+  if (jobs.length) return { quote: jobs[0].code };
+  /* Twilio sends a text again when we are slow to answer: the same message
+     id is the same text, already kept. */
+  if (sid) {
+    const { rows: seen } = await pool.query(`SELECT id FROM submissions WHERE dedupe_key = $1`, ['sms:' + sid]);
+    if (seen.length) return { lead: seen[0].id };
+  }
+  const { rows: open } = await pool.query(
+    `SELECT id FROM submissions WHERE source = 'text' AND ${samePhone} AND dismissed_at IS NULL
+        AND created_at > NOW() - INTERVAL '14 days' ORDER BY created_at DESC LIMIT 1`, [digits]);
+  if (open.length) {
+    await pool.query(`INSERT INTO lead_notes (submission_id, kind, body) VALUES ($1, 'text', $2)`,
+      [open[0].id, String(text).slice(0, 2000)]);
+    return { lead: open[0].id };
+  }
+  /* Their name, if they have ever given it to us under this number. */
+  const { rows: known } = await pool.query(
+    `SELECT name FROM submissions WHERE ${samePhone} AND COALESCE(name, '') <> '' AND name NOT LIKE 'Text from %'
+      ORDER BY created_at DESC LIMIT 1`, [digits]);
+  const name = known.length ? known[0].name
+    : `Text from (${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+  const { rows } = await pool.query(
+    `INSERT INTO submissions (name, phone, email, description, dedupe_key, source)
+     VALUES ($1, $2, '', $3, $4, 'text')
+     ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
+     RETURNING id`,
+    [String(name).slice(0, 200), from, String(text).slice(0, 2000), 'sms:' + (sid || digits + ':' + Date.now())]);
+  return rows.length ? { lead: rows[0].id } : {};
+}
+
 app.post('/webhooks/twilio/sms', async (req, res) => {
   const token = String(process.env.TWILIO_AUTH_TOKEN || '').trim();
   if (!token) return res.sendStatus(503);
@@ -3415,13 +3464,19 @@ app.post('/webhooks/twilio/sms', async (req, res) => {
       await recordSmsConsent({ phone: from, transactional: true, marketing: false }, { source: 'sms-reply:start' });
     }
     if (kind === 'message') {
+      /* A text from someone with no job on the go is an enquiry: it becomes a
+         lead (2026-10-05), so the shop can quote it from Leads like any other. */
+      const lead = await textToLead(from, text, sid)
+        .catch((e) => { console.error('text lead not saved:', e.message); return {}; });
       // A customer replying to an order text is talking to the shop. Without
       // this their reply would land in the Twilio console and nowhere else.
       await sendEmail({
         to: NOTIFY_EMAIL,
         subject: `Text from ${from}: ${text.slice(0, 60)}`,
-        html: `<p><b>${escEmail(from)}</b> replied by text:</p>
+        html: `<p><b>${escEmail(from)}</b> ${lead.quote ? 'replied by text' : 'texted the shop'}:</p>
           <blockquote style="border-left:3px solid #1848B8;margin:0;padding:6px 12px">${escEmail(text)}</blockquote>
+          ${lead.quote ? `<p><a href="${PUBLIC_BASE_URL}/admin/production/${encodeURIComponent(lead.quote)}">Open their job</a></p>`
+            : lead.lead ? `<p><a href="${PUBLIC_BASE_URL}/admin/leads#lead-${Number(lead.lead)}">It is in Leads</a>, ready to quote.</p>` : ''}
           <p style="color:#6b7280">Call or text them back at this number. Replies to this email do not reach them.</p>`,
       });
     }
@@ -5299,12 +5354,12 @@ async function notifyQuoteMilestone(before, after) {
        delivery" and no address. Local delivery is not "shipped": it falls
        through to "it's ready", and the delivery board tells them the day. */
     if (method === 'pickup' || !method) {
-      text = SMS.readyForPickup({ code });
+      text = SMS.readyForPickup({ code, first, link: quoteLink(code) });
       subject = `Your order is ready for pickup — ${code}`;
       heading = 'Ready for pickup';
       inner = `${hello}<p>Your order (${what}) is ready to pick up.</p>${pickupHowHtml()}${payLine}`;
     } else if (method !== 'local') {
-      text = SMS.shipped({ code, tracking: after.tracking });
+      text = SMS.shipped({ code, tracking: after.tracking, first, link: quoteLink(code) });
       subject = `Your order has shipped — ${code}`;
       heading = 'On its way';
       /* A label bought on the Shipping page knows its carrier and the carrier's
@@ -5317,14 +5372,14 @@ async function notifyQuoteMilestone(before, after) {
           ? ` &middot; <a href="${escEmail(trackUrl)}">track it</a>` : ''}</p>`
         : "<p>We'll send the tracking number as soon as we have it.</p>"}${payLine}`;
     } else {
-      text = SMS.finished({ code });
+      text = SMS.finished({ code, first, link: quoteLink(code) });
       subject = `Your order is ready — ${code}`;
       heading = "It's ready";
       inner = `${hello}<p>Your order (${what}) is finished! We'll bring it to you on the delivery day you booked.</p>${payLine}`;
     }
   } else if (newly('production_at')) {
     kind = 'milestone:production';
-    text = SMS.inProduction({ code });
+    text = SMS.inProduction({ code, first, link: quoteLink(code) });
     subject = `Your order is in production — ${code}`;
     heading = "We've started on your order";
     const sched = quoteSchedule(after);
@@ -11758,7 +11813,7 @@ async function bankStripeSession(session) {
     // Keyed on the Stripe session: a 50% deposit and a 50% balance are the same
     // amount, so the amount cannot tell two payments apart.
     sendCustomerSms({ phone: q.phone, kind: 'transactional', ref: 'payment:' + session.id, quote: code,
-      msg: SMS.paymentReceived({ code, amount: gross, stillDue }) });
+      msg: SMS.paymentReceived({ code, amount: gross, stillDue, first: q.name, link: quoteLink(code) }) });
   }
 
   if (q.brevo_deal_id) {
@@ -12574,7 +12629,7 @@ async function landStripePaymentOnQuote(q, { gross, pi, extRef, createdAt, how, 
   }
   if (q.phone) {
     sendCustomerSms({ phone: q.phone, kind: 'transactional', ref: 'payment:' + extRef, quote: code,
-      msg: SMS.paymentReceived({ code, amount: gross, stillDue }) });
+      msg: SMS.paymentReceived({ code, amount: gross, stillDue, first: q.name, link: quoteLink(code) }) });
   }
   if (q.brevo_deal_id) {
     brevo.post('/crm/notes', {
@@ -13560,7 +13615,7 @@ app.post('/admin/quote/:code/mark-paid', requireAdmin, async (req, res) => {
     if (nq.phone) {
       sendCustomerSms({ phone: nq.phone, kind: 'transactional', quote: nq.code,
         ref: 'payment:' + manualRef(minute),
-        msg: SMS.paymentReceived({ code: nq.code, amount, stillDue }) });
+        msg: SMS.paymentReceived({ code: nq.code, amount, stillDue, first: nq.name, link: quoteLink(nq.code) }) });
     }
 
     if (nq.brevo_deal_id) {
@@ -17862,11 +17917,12 @@ async function jobMessagesCard(q, query) {
   const first = String(q.name || '').trim().split(/\s+/)[0];
   const hi = `Hi${first ? ' ' + first : ''}`;
   const due = balanceOf(q, quoteTotals(q).total);
+  /* Warm, and short enough for a text (the box allows 300 characters). */
   const quick = [
-    ['Proof ready', `${hi}, your proof for order ${code} is ready. Take a look and reply to approve it, or tell us what to change.`],
-    ['Running late', `${hi}, a quick heads-up: order ${code} is running a day or two behind. We'll keep you posted.`],
-    ['Ready for pickup', `${hi}, order ${code} is ready for pickup at ${PICKUP_ADDRESS} (${PICKUP_HOURS}). ${PICKUP_STEPS.join('. ')}.`],
-    ...(due > 0 ? [['Balance due', `${hi}, order ${code} has a balance of ${money(due)}. You can pay it online here: ${quoteLink(code)}`]] : []),
+    ['Proof ready', `${hi}! Your proof for order ${code} is ready. Take a look and reply "approved" to go ahead, or tell us what you'd like changed.`],
+    ['Running late', `${hi}, just a quick heads-up: order ${code} is running a day or two behind. We're on it and will keep you posted. Thank you so much for your patience!`],
+    ['Ready for pickup', `${hi}! Order ${code} is ready for pickup at ${PICKUP_ADDRESS} (${PICKUP_HOURS}). Call or text ${SHOP_PHONE} an hour before, ring the intercom for June's Tees, and come up to the 4th floor lobby.`],
+    ...(due > 0 ? [['Balance due', `${hi}, order ${code} has a balance of ${money(due)}. Whenever you're ready, you can pay it online here: ${quoteLink(code)} Thank you!`]] : []),
   ];
   /* "Send this proof" on the Proofs card lands here with ?proof=<id>: the
      message is written for them, with the proof's link, ready to check and send. */
@@ -18022,7 +18078,10 @@ async function sendJobMessage({ code, channel, subject, text }) {
     recentJobMessages.set(key, now);
     const status = await sendCustomerSms({ phone: q.phone, kind: 'transactional', quote: code,
       ref: 'manual:' + key.slice(0, 32),
-      msg: { template: 'manual', body: `June's Tees: ${smsPlain(text, 260)} Reply STOP to opt out.` } });
+      /* Every text carries a link to the website (2026-10-05): their order
+         page, unless the message already has a link in it. */
+      msg: { template: 'manual', body: `June's Tees: ${smsPlain(text, 260)}${
+        /https?:\/\//i.test(text) ? '' : ' ' + quoteLink(code)} Reply STOP to opt out.` } });
     if (status === 'sent') { console.log(`message to ${code} by text`); return 'sent'; }
     recentJobMessages.delete(key);
     return { duplicate: 'duplicate', 'no-consent': 'no-consent', unconfigured: 'texting-off',
@@ -18160,6 +18219,7 @@ const LEAD_SOURCES = {
   offline:    ['Offline message', 'green'],
   social:     ['Social', 'blue'],
   phone:      ['Phone call', 'amber'],
+  text:       ['Text message', 'green'],
   manual:     ['Added by hand', 'neutral'],
 };
 
@@ -18260,6 +18320,7 @@ app.get('/admin/leads', requireAdmin, async (req, res) => {
     const all = await leadsWithStatus();
     const inSource = (l, src) => src === 'all' || (src === 'chat'
       ? (l.source === 'chat' || l.source === 'offline')
+      : src === 'phone' ? (l.source === 'phone' || l.source === 'text')
       : src === 'social' ? (l.source === 'social' || l.source === 'manual') : (l.source || 'form') === src);
     const needle = q.toLowerCase();
     const found = all.filter((l) => !needle || [l.name, l.email, l.phone, l.description]
@@ -18320,7 +18381,7 @@ app.get('/admin/leads', requireAdmin, async (req, res) => {
       { label: 'Website form', href: link({ source: 'form' }), count: count(status, 'form'), on: source === 'form' },
       { label: 'Embroidery', href: link({ source: 'embroidery' }), count: count(status, 'embroidery'), on: source === 'embroidery' },
       { label: 'Chat', href: link({ source: 'chat' }), count: count(status, 'chat'), on: source === 'chat' },
-      { label: 'Phone calls', href: link({ source: 'phone' }), count: count(status, 'phone'), on: source === 'phone' },
+      { label: 'Calls & texts', href: link({ source: 'phone' }), count: count(status, 'phone'), on: source === 'phone' },
       { label: 'Social & added by hand', href: link({ source: 'social' }), count: count(status, 'social'), on: source === 'social' },
     ]);
 
@@ -20129,13 +20190,20 @@ async function sendQuoteFollowUps() {
           AND status IN ('sent','viewed')
           AND created_at <= NOW() - ($1 || ' days')::interval
           AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)
-          AND email <> ''
+          AND (email <> '' OR COALESCE(phone, '') <> '')
         LIMIT 20`, [String(days)]);
 
     for (const q of rows) {
       // Mark first: a send that throws must not re-fire every hour.
       await pool.query('UPDATE quotes SET followed_up_at=NOW() WHERE id=$1', [q.id]);
-      if (await isUnsubscribed(q.email)) continue;
+      /* A text as well as the email (2026-10-05): their own consent, kept per
+         phone, decides the text; the email list's opt-out decides the email. */
+      if (q.phone) {
+        sendCustomerSms({ phone: q.phone, kind: 'transactional', ref: 'quote:' + q.code, quote: q.code,
+          msg: SMS.quoteFollowup({ code: q.code, first: q.name, link: quoteLink(q.code) }) })
+          .catch((e) => console.error('quote follow-up text failed', q.code, e.message));
+      }
+      if (!q.email || await isUnsubscribed(q.email)) continue;
 
       const msgs = quoteMessages(q);
       const t = quoteTotals(q);
@@ -20183,7 +20251,7 @@ async function sendDepositReminders() {
           AND deposit_nudged_at IS NULL
           AND cancelled_at IS NULL
           AND accepted_at <= NOW() - ($1 || ' days')::interval
-          AND email <> ''
+          AND (email <> '' OR COALESCE(phone, '') <> '')
           AND NOT EXISTS (SELECT 1 FROM quote_payments p
                            WHERE p.quote_code = quotes.code AND p.kind = 'refund')
           AND NOT EXISTS (SELECT 1 FROM stripe_disputes d WHERE d.quote_code = quotes.code)
@@ -20192,6 +20260,12 @@ async function sendDepositReminders() {
     for (const q of rows) {
       await pool.query('UPDATE quotes SET deposit_nudged_at=NOW() WHERE id=$1', [q.id]);
       const t = quoteTotals(q);
+      if (q.phone) {
+        sendCustomerSms({ phone: q.phone, kind: 'transactional', ref: 'quote:' + q.code, quote: q.code,
+          msg: SMS.depositReminder({ code: q.code, amount: t.deposit, first: q.name, link: quoteLink(q.code) }) })
+          .catch((e) => console.error('deposit reminder text failed', q.code, e.message));
+      }
+      if (!q.email) continue;
       try {
         await sendClientEmail({ quote: q.code, kind: 'deposit-reminder',
           to: q.email,
@@ -20238,7 +20312,7 @@ async function sendBalanceReminders() {
           AND cancelled_at IS NULL
           AND paid_at <= NOW() - ($1 || ' days')::interval
           AND status NOT IN ('expired', 'held', 'draft')
-          AND email <> ''
+          AND (email <> '' OR COALESCE(phone, '') <> '')
           AND NOT EXISTS (SELECT 1 FROM quote_payments p
                            WHERE p.quote_code = quotes.code AND p.kind = 'refund')
           AND NOT EXISTS (SELECT 1 FROM stripe_disputes d WHERE d.quote_code = quotes.code)
@@ -20247,12 +20321,17 @@ async function sendBalanceReminders() {
     for (const q of rows) {
       // Stamp first: a send that throws must not re-fire every hour.
       await pool.query('UPDATE quotes SET balance_nudged_at=NOW() WHERE id=$1', [q.id]);
-      if (await isUnsubscribed(q.email)) continue;
 
       /* Through balanceOf, so a settled quote can never be emailed a demand
          for money the shop has already written off. */
       const due = balanceOf(q);
       if (due <= 0) continue;
+      if (q.phone) {
+        sendCustomerSms({ phone: q.phone, kind: 'transactional', ref: 'quote:' + q.code, quote: q.code,
+          msg: SMS.balanceReminder({ code: q.code, due, first: q.name, link: quoteLink(q.code) }) })
+          .catch((e) => console.error('balance reminder text failed', q.code, e.message));
+      }
+      if (!q.email || await isUnsubscribed(q.email)) continue;
       try {
         await sendClientEmail({ quote: q.code, kind: 'balance-reminder',
           to: q.email,
@@ -20276,6 +20355,52 @@ async function sendBalanceReminders() {
     }
   } catch (e) {
     console.error('balance reminder sweep failed:', e.message);
+  }
+}
+
+/* Ready for pickup and still here two days on (2026-10-05). One reminder,
+   email and text, with the way in; a job with a delivery method is the
+   delivery board's to chase, and no method means pickup (quoteSchedule). */
+async function sendPickupReminders() {
+  const days = Math.max(1, parseInt(process.env.JT_PICKUP_NUDGE_DAYS || '2', 10));
+  try {
+    const { rows } = await pool.query(
+      `SELECT * FROM quotes
+        WHERE shipped_at IS NOT NULL
+          AND delivered_at IS NULL
+          AND pickup_nudged_at IS NULL
+          AND cancelled_at IS NULL
+          AND COALESCE(ship_method, '') IN ('', 'pickup')
+          AND shipped_at <= NOW() - ($1 || ' days')::interval
+          AND shipped_at >= NOW() - INTERVAL '30 days'
+          AND (email <> '' OR COALESCE(phone, '') <> '')
+        LIMIT 20`, [String(days)]);
+    for (const q of rows) {
+      // Stamp first: a send that throws must not re-fire every hour.
+      await pool.query('UPDATE quotes SET pickup_nudged_at=NOW() WHERE id=$1', [q.id]);
+      const first = String(q.name || '').trim().split(/\s+/)[0];
+      if (q.phone) {
+        sendCustomerSms({ phone: q.phone, kind: 'transactional', ref: 'quote:' + q.code, quote: q.code,
+          msg: SMS.pickupReminder({ code: q.code, first, link: quoteLink(q.code) }) })
+          .catch((e) => console.error('pickup reminder text failed', q.code, e.message));
+      }
+      if (!q.email) continue;
+      const due = balanceOf(q);
+      try {
+        await sendClientEmail({ quote: q.code, kind: 'pickup-reminder', to: q.email,
+          subject: `Your order is ready and waiting — ${q.code}`,
+          html: customerEmailHtml('Ready and waiting for you',
+            `<p>Hi${first ? ' ' + escEmail(first) : ''},</p>
+             <p>Just a friendly reminder that your order is ready to pick up. We can't wait for you to see it!</p>
+             ${pickupHowHtml()}${due > 0 ? `<p>The balance of <b>${money(due)}</b> is due at pickup, or you can pay it online below.</p>` : ''}`,
+            q.code) });
+        console.log('pickup reminder sent:', q.code);
+      } catch (e) {
+        console.error('pickup reminder failed', q.code, e.message);
+      }
+    }
+  } catch (e) {
+    console.error('pickup reminder sweep failed:', e.message);
   }
 }
 
@@ -20692,7 +20817,7 @@ app.post('/admin/quote/:code/shipping', requireAdmin, async (req, res) => {
       sendTrackingEmail(q, tracking);
       if (q.phone) {
         sendCustomerSms({ phone: q.phone, kind: 'transactional', ref: 'quote:' + q.code, quote: q.code,
-          msg: SMS.shipped({ code: q.code, tracking }) });
+          msg: SMS.shipped({ code: q.code, tracking, first: q.name, link: quoteLink(q.code) }) });
       }
     }
   } catch (err) {
@@ -22378,9 +22503,14 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
     await step('stripe payouts', reconcileFailedPayouts);
     await step('review asks', sendDueReviewRequests);
     await step('review follow-ups', sendReviewFollowUps);
-    await step('quote follow-ups', sendQuoteFollowUps);
-    await step('deposit reminders', sendDepositReminders);
-    await step('balance reminders', sendBalanceReminders);
+    /* Reminders text as well as email, so they wait for daytime (9am-8pm
+       Chicago); the hourly sweep picks them up at 9. */
+    if (inTextingHours()) {
+      await step('quote follow-ups', sendQuoteFollowUps);
+      await step('deposit reminders', sendDepositReminders);
+      await step('balance reminders', sendBalanceReminders);
+      await step('pickup reminders', sendPickupReminders);
+    }
     await step('reorder nudges', sendReorderNudges);
     await step('expire quotes', expireOldQuotes);
     await step('monthly costs', rollRecurringExpenses);

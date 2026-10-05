@@ -44,7 +44,8 @@ test('every template is one GSM-7 segment, branded, with an opt-out', () => {
   for (const m of all) {
     assert.ok(isGsm7(m.body), `not GSM-7: ${m.body}`);
     /* The pickup texts carry the pickup steps, so they may run to two segments. */
-    const max = /is ready for pickup/.test(m.body) ? 306 : 160;
+    /* Warm, with a link to the website: two segments is the budget. */
+    const max = 306;
     assert.ok(m.body.length <= max, `${m.body.length} chars: ${m.body}`);
     assert.match(m.body, /^June's Tees: /);
     assert.match(m.body, /Reply STOP to opt out\.$/);
@@ -114,7 +115,7 @@ test('a newly reached pickup is told once: a text and an email, "ready for picku
   const { f, sent, emails } = loadMilestones();
   await f(base, { ...base, shipped_at: new Date() });
   assert.equal(sent.length, 1);
-  assert.match(sent[0].msg.body, /ready for pickup/);
+  assert.match(sent[0].msg.body, /is ready! Pickup: 3047 N Lincoln Ave/);
   assert.equal(sent[0].kind, 'transactional');
   assert.equal(sent[0].ref, 'quote:ABC123');
   assert.equal(sent[0].quote, 'ABC123', 'the text is kept on the quote');
@@ -142,7 +143,8 @@ test('jumping straight to ship sends only the furthest milestone', async () => {
   const { f, sent, emails } = loadMilestones();
   await f(base, { ...base, production_at: new Date(), shipped_at: new Date(), ship_method: 'ground', tracking: '1Z9' });
   assert.equal(sent.length, 1);
-  assert.match(sent[0].msg.body, /has shipped! Tracking: 1Z9\./);
+  assert.match(sent[0].msg.body, /is on its way! Tracking: 1Z9\./);
+  assert.match(sent[0].msg.body, /https:\/\/www\.jtees\.net\/q\/ABC123/, 'their order page');
   assert.equal(emails.length, 1);
   assert.match(emails[0].subject, /has shipped/);
   assert.match(emails[0].html, /Tracking: <b>1Z9<\/b>/);
@@ -152,7 +154,7 @@ test('no ship method yet means pickup, with the address and how to get in', asyn
   /* Owner, 2026-10-05: assume pickup when no delivery was chosen. */
   const { f, sent, emails } = loadMilestones();
   await f({ ...base, ship_method: null }, { ...base, ship_method: null, shipped_at: new Date() });
-  assert.match(sent[0].msg.body, /ready for pickup/);
+  assert.match(sent[0].msg.body, /is ready! Pickup: 3047 N Lincoln Ave/);
   assert.match(emails[0].subject, /ready for pickup — ABC123/);
   for (const re of [/3047 N Lincoln Ave, Chicago, IL 60657/, /an hour before/, /intercom for June/, /4th floor/, /lobby/]) {
     assert.match(emails[0].html, re);

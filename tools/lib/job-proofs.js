@@ -44,8 +44,8 @@ function thumbOf(url, cloud) {
 /** The text that goes to the customer with the proof link. */
 function proofMessage({ first = '', code, url }) {
   const hi = `Hi${first ? ' ' + first : ''}`;
-  return `${hi}, your proof for order ${code} is ready: ${url}\n\n` +
-    'Please check the spelling, colours, size and placement. Reply "approved" to go ahead, or tell us what to change.';
+  return `${hi}! Your proof for order ${code} is ready, and we're excited for you to see it: ${url}\n\n` +
+    'Take a look at the spelling, colors, size and placement. Reply "approved" and we\'ll get it printing, or just tell us what you\'d like changed.';
 }
 
 module.exports = { FOLDER, MAX_PER_JOB, MAX_FILE_BYTES, ACCEPT, proofUrlOk, cleanName, thumbOf, proofMessage };

@@ -222,7 +222,7 @@ test('proofs: our cloud, the proofs folder, a picture or PDF only; uploads signe
   }
   assert.ok(!P.proofUrlOk(ok, ''), 'no cloud configured accepts nothing');
   assert.match(P.thumbOf(ok.replace('.png', '.pdf'), 'jtees'), /pg_1\/.*\.jpg$/);
-  assert.match(P.proofMessage({ first: 'Ada', code: 'AB12CD', url: ok }), /^Hi Ada, your proof for order AB12CD is ready: https:/);
+  assert.match(P.proofMessage({ first: 'Ada', code: 'AB12CD', url: ok }), /^Hi Ada! Your proof for order AB12CD is ready, and we're excited for you to see it: https:/);
 
   assert.strictEqual(STAFF.ROUTES['POST /admin/api/proof-signature'], 'proofs.upload');
   assert.strictEqual(STAFF.ROUTES['POST /admin/quote/:code/proofs'], 'proofs.upload');
