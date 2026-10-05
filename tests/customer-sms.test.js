@@ -16,7 +16,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { T, plain, isGsm7 } = require('../tools/lib/sms-templates');
+const { T, plain, isGsm7, PICKUP_ADDRESS, PICKUP_HOURS, PICKUP_STEPS } = require('../tools/lib/sms-templates');
 const { twilioSignature, verifyTwilioSignature, classifyInbound } = require('../tools/lib/twilio-webhook');
 
 const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
@@ -28,12 +28,24 @@ const all = [
   T.paymentReceived(worst), T.paymentReceived({ ...worst, stillDue: 0 }), T.inProduction(worst),
   T.readyForPickup(worst), T.finished(worst), T.shipped(worst), T.shipped({ code: 'ABCDEF' }),
   T.studioOrderPlaced(worst), T.studioOrderShipped(worst), T.studioOrderShipped({ orderId: 12 }),
+  T.studioOrderReady(worst),
 ];
+
+test('a pickup text says how to get in: call ahead, intercom, 4th floor', () => {
+  for (const m of [T.readyForPickup(worst), T.studioOrderReady(worst)]) {
+    assert.match(m.body, /an hour before/);
+    assert.match(m.body, /intercom for June's Tees/);
+    assert.match(m.body, /4th floor/);
+    assert.match(m.body, /lobby/);
+  }
+});
 
 test('every template is one GSM-7 segment, branded, with an opt-out', () => {
   for (const m of all) {
     assert.ok(isGsm7(m.body), `not GSM-7: ${m.body}`);
-    assert.ok(m.body.length <= 160, `${m.body.length} chars: ${m.body}`);
+    /* The pickup texts carry the pickup steps, so they may run to two segments. */
+    const max = /is ready for pickup/.test(m.body) ? 306 : 160;
+    assert.ok(m.body.length <= max, `${m.body.length} chars: ${m.body}`);
     assert.match(m.body, /^June's Tees: /);
     assert.match(m.body, /Reply STOP to opt out\.$/);
     assert.ok(m.template && m.template.length <= 80);
@@ -80,7 +92,7 @@ function loadMilestones({ already = [], due = 0 } = {}) {
   const sent = [];
   const emails = [];
   const ctx = vm.createContext({
-    SMS: T, SMS_PICKUP: '3047 N Lincoln Ave, Mon-Fri 10:30am-6pm',
+    SMS: T, SMS_PICKUP: '3047 N Lincoln Ave, Mon-Fri 10:30am-6pm', PICKUP_ADDRESS, PICKUP_HOURS, PICKUP_STEPS,
     SHOP_SIGNER: 'June', SHOP_NAME: "June's Tees & Things", SHOP_PHONE: '(773) 849-1854',
     sendCustomerSms: (a) => { sent.push(a); return Promise.resolve('sent'); },
     sendClientEmail: async (m) => { emails.push(m); already.push(m.kind); },
@@ -90,7 +102,7 @@ function loadMilestones({ already = [], due = 0 } = {}) {
     money: (n) => '$' + Number(n).toFixed(2), quoteSchedule: () => null, dayShort: (d) => String(d),
     quoteLink: (c) => 'https://www.jtees.net/q/' + c,
   });
-  vm.runInContext([liftFn('htmlToText'), liftFn('customerEmailHtml'), liftFn('notifyQuoteMilestone')].join('\n')
+  vm.runInContext([liftFn('htmlToText'), liftFn('customerEmailHtml'), liftFn('pickupHowHtml'), liftFn('notifyQuoteMilestone')].join('\n')
     + ';this.f = notifyQuoteMilestone;', ctx);
   return { f: ctx.f, sent, emails };
 }
@@ -109,7 +121,7 @@ test('a newly reached pickup is told once: a text and an email, "ready for picku
   assert.equal(emails.length, 1);
   assert.equal(emails[0].to, 'ada@example.com');
   assert.match(emails[0].subject, /ready for pickup — ABC123/);
-  assert.match(emails[0].html, /3047 N Lincoln Ave, Mon-Fri 10:30am-6pm/, 'the same place and hours the text gives');
+  assert.match(emails[0].html, /3047 N Lincoln Ave, Chicago, IL 60657 &middot; Mon-Fri 10:30am-6pm/, 'the same place and hours the text gives');
   assert.equal(emails[0].kind, 'milestone:ready');
   assert.match(emails[0].preview, /^Hi Ada,\s+Your order \(24 tees\) is ready to pick up/,
     'the job page shows the message, not the heading and the button');
@@ -136,11 +148,22 @@ test('jumping straight to ship sends only the furthest milestone', async () => {
   assert.match(emails[0].html, /Tracking: <b>1Z9<\/b>/);
 });
 
-test('no ship method yet means a neutral "finished", not a guess', async () => {
+test('no ship method yet means pickup, with the address and how to get in', async () => {
+  /* Owner, 2026-10-05: assume pickup when no delivery was chosen. */
   const { f, sent, emails } = loadMilestones();
   await f({ ...base, ship_method: null }, { ...base, ship_method: null, shipped_at: new Date() });
-  assert.match(sent[0].msg.body, /finished/);
+  assert.match(sent[0].msg.body, /ready for pickup/);
+  assert.match(emails[0].subject, /ready for pickup — ABC123/);
+  for (const re of [/3047 N Lincoln Ave, Chicago, IL 60657/, /an hour before/, /intercom for June/, /4th floor/, /lobby/]) {
+    assert.match(emails[0].html, re);
+  }
+});
+
+test('local delivery is told it is ready, never that it has shipped', async () => {
+  const { f, emails } = loadMilestones();
+  await f({ ...base, ship_method: 'local' }, { ...base, ship_method: 'local', shipped_at: new Date() });
   assert.match(emails[0].subject, /Your order is ready — ABC123/);
+  assert.doesNotMatch(emails[0].html, /shipped/);
 });
 
 test('in production is told on its own; no phone means no text but still the email', async () => {

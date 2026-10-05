@@ -100,7 +100,7 @@ test('the lists are oldest first, and shipped ones stay for 30 days', () => {
 });
 
 test('how a studio order leaves, in the shop words', () => {
-  assert.strictEqual(SHIP.deliveryPhrase({ method: 'pickup' }, money), 'Pickup — free curbside pickup, no label needed');
+  assert.strictEqual(SHIP.deliveryPhrase({ method: 'pickup' }, money), 'Pickup — free pickup, no label needed');
   assert.strictEqual(SHIP.deliveryPhrase({ method: 'ship', source: 'rate', service: 'USPS Ground Advantage', paid: 6 }, money),
     'Ship by USPS Ground Advantage — they paid $6.00 postage');
   assert.match(SHIP.deliveryPhrase({ method: 'ship', source: 'free' }, money), /postage is yours/);

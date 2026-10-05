@@ -6,7 +6,9 @@
    - plain GSM-7 characters only. One curly quote or em-dash turns the whole
      message into UCS-2, where a segment holds 70 characters instead of 160 and
      the same text costs two or three times as much.
-   - one segment (160) at realistic field lengths.
+   - one segment (160) at realistic field lengths, except the two
+     ready-for-pickup texts: two segments (306), because the pickup steps
+     are the whole point of them.
    - starts with the brand, ends with the opt-out, as the SMS terms promise.
 
    Each builder returns { template, body }. `template` is the dedupe key used
@@ -15,6 +17,17 @@
 const BRAND = "June's Tees";
 const STOP = 'Reply STOP to opt out.';
 const PICKUP = '3047 N Lincoln Ave, Mon-Fri 10:30am-6pm';
+/* How a pickup works (owner, 2026-10-05). The shop is on the 4th floor
+   behind an intercom, so "text when you're outside" left people on the
+   street; every ready-for-pickup message carries these steps. */
+const PICKUP_ADDRESS = '3047 N Lincoln Ave, Chicago, IL 60657';
+const PICKUP_HOURS = 'Mon-Fri 10:30am-6pm';
+const PICKUP_STEPS = [
+  'Call or text (773) 849-1854 an hour before you arrive, so we can confirm',
+  "Ring the intercom for June's Tees and we'll let you in",
+  'Come up to the 4th floor and have a seat in the lobby',
+];
+const PICKUP_SMS = `Call/text (773) 849-1854 an hour before to confirm. Ring the intercom for June's Tees, come up to the 4th floor and have a seat in the lobby.`;
 
 // Strip anything outside printable ASCII so a customer name or a pasted
 // tracking number cannot push the message out of GSM-7.
@@ -44,7 +57,7 @@ const T = {
   }),
   readyForPickup: ({ code }) => ({
     template: 'ready',
-    body: `${BRAND}: Order ${plain(code, 12)} is ready for pickup at ${PICKUP}. Text (773) 849-1854 when you're outside. ${STOP}`,
+    body: `${BRAND}: Order ${plain(code, 12)} is ready for pickup at ${PICKUP}. ${PICKUP_SMS} ${STOP}`,
   }),
   finished: ({ code }) => ({
     template: 'ready',
@@ -82,7 +95,7 @@ const T = {
   // A studio order the customer chose to collect (checkout's pickup option).
   studioOrderReady: ({ orderId }) => ({
     template: 'studio-ready',
-    body: `${BRAND}: Order #${plain(orderId, 10)} is ready for pickup at ${PICKUP}. Text (773) 849-1854 when you're outside. ${STOP}`,
+    body: `${BRAND}: Order #${plain(orderId, 10)} is ready for pickup at ${PICKUP}. ${PICKUP_SMS} ${STOP}`,
   }),
   // Local delivery (the delivery board). The caller's ref is per change, so a
   // second move is texted as well as the first. Two segments with the link:
@@ -110,4 +123,4 @@ function isGsm7(s) {
   return /^[\x20-\x7E\n]*$/.test(s) && !/[\[\]{}\\^~|`]/.test(s);
 }
 
-module.exports = { T, plain, isGsm7, PICKUP };
+module.exports = { T, plain, isGsm7, PICKUP, PICKUP_ADDRESS, PICKUP_HOURS, PICKUP_STEPS };

@@ -88,7 +88,7 @@ function studioShipQueues(orders, now = Date.now()) {
 /** How a studio order leaves, in the shop's words, for the page and the emails. */
 function deliveryPhrase(d, money) {
   if (!d || !['pickup', 'ship', 'local'].includes(d.method)) return '';
-  if (d.method === 'pickup') return 'Pickup — free curbside pickup, no label needed';
+  if (d.method === 'pickup') return 'Pickup — free pickup, no label needed';
   if (d.method === 'local') return `Local delivery — we drive it, no label needed${d.paid ? ` (they paid ${money(d.paid)})` : ''}`;
   if (d.source === 'rate' && d.service) return `Ship by ${d.service} — they paid ${money(d.paid || 0)} postage`;
   if (d.source === 'free') return 'Ship — free shipping, so the postage is yours';

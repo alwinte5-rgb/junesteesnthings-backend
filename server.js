@@ -32,7 +32,14 @@ const { parseFirstTouch, firstTouchLabel } = require('./tools/lib/first-touch');
 const SITEHEALTH = require('./tools/lib/site-health');
 const NUDGE = require('./tools/lib/lead-nudges');
 const FUNNEL = require('./tools/lib/funnel-health');
-const { T: SMS, plain: smsPlain, PICKUP: SMS_PICKUP } = require('./tools/lib/sms-templates');
+const { T: SMS, plain: smsPlain, PICKUP: SMS_PICKUP, PICKUP_ADDRESS, PICKUP_HOURS, PICKUP_STEPS } = require('./tools/lib/sms-templates');
+
+/** Where and how to pick up, for an email: the address, the hours and the
+ *  steps (intercom, 4th floor). One copy, so every pickup email agrees. */
+function pickupHowHtml() {
+  return `<p><b>Pickup:</b> ${escEmail(PICKUP_ADDRESS)} &middot; ${escEmail(PICKUP_HOURS)}</p>
+    <ol style="padding-left:20px;margin:6px 0 12px">${PICKUP_STEPS.map((st) => `<li>${escEmail(st)}.</li>`).join('')}</ol>`;
+}
 const { verifyTwilioSignature, classifyInbound } = require('./tools/lib/twilio-webhook');
 const TAXCERT = require('./tools/lib/tax-certificates');
 const QPHOTOS = require('./tools/lib/quote-photos');
@@ -5281,19 +5288,22 @@ async function notifyQuoteMilestone(before, after) {
   const hello = `<p>Hi${first ? ' ' + escEmail(first) : ''},</p>`;
   const what = escEmail(quoteSummary(after.items));
   const due = balanceOf(after, quoteTotals(after).total);
-  const payLine = due > 0 ? `<p>A balance of <b>${money(due)}</b> is due${method === 'pickup' ? ' at pickup' : ''}.
+  const payLine = due > 0 ? `<p>A balance of <b>${money(due)}</b> is due${method === 'pickup' || !method ? ' at pickup' : ''}.
       You can pay it online from your order page below.</p>` : '';
 
   let kind, text, subject, heading, inner;
   if (newly('shipped_at')) {
     kind = 'milestone:ready';
-    if (method === 'pickup') {
+    /* No method chosen means pickup (quoteSchedule), so it gets the pickup
+       steps; until 2026-10-05 it got "we'll be in touch to set up pickup or
+       delivery" and no address. Local delivery is not "shipped": it falls
+       through to "it's ready", and the delivery board tells them the day. */
+    if (method === 'pickup' || !method) {
       text = SMS.readyForPickup({ code });
       subject = `Your order is ready for pickup — ${code}`;
       heading = 'Ready for pickup';
-      inner = `${hello}<p>Your order (${what}) is ready to pick up at ${escEmail(SMS_PICKUP)}.</p>
-        <p>Text or call ${SHOP_PHONE} when you're outside and we'll bring it out.</p>${payLine}`;
-    } else if (method) {
+      inner = `${hello}<p>Your order (${what}) is ready to pick up.</p>${pickupHowHtml()}${payLine}`;
+    } else if (method !== 'local') {
       text = SMS.shipped({ code, tracking: after.tracking });
       subject = `Your order has shipped — ${code}`;
       heading = 'On its way';
@@ -5310,7 +5320,7 @@ async function notifyQuoteMilestone(before, after) {
       text = SMS.finished({ code });
       subject = `Your order is ready — ${code}`;
       heading = "It's ready";
-      inner = `${hello}<p>Your order (${what}) is finished! We'll be in touch to set up pickup or delivery.</p>${payLine}`;
+      inner = `${hello}<p>Your order (${what}) is finished! We'll bring it to you on the delivery day you booked.</p>${payLine}`;
     }
   } else if (newly('production_at')) {
     kind = 'milestone:production';
@@ -15975,7 +15985,7 @@ function milestoneAsk(q, target, sent = new Set()) {
   let kind, what;
   if (target >= 2 && !q.shipped_at) {
     kind = 'milestone:ready';
-    what = method === 'pickup' ? 'is ready for pickup' : method ? 'has shipped' : 'is ready';
+    what = method === 'pickup' || !method ? 'is ready for pickup' : method === 'local' ? 'is ready' : 'has shipped';
   } else if (target >= 1 && !q.production_at) {
     kind = 'milestone:production';
     what = 'is in production';
@@ -17855,7 +17865,7 @@ async function jobMessagesCard(q, query) {
   const quick = [
     ['Proof ready', `${hi}, your proof for order ${code} is ready. Take a look and reply to approve it, or tell us what to change.`],
     ['Running late', `${hi}, a quick heads-up: order ${code} is running a day or two behind. We'll keep you posted.`],
-    ['Ready for pickup', `${hi}, order ${code} is ready for pickup at ${SMS_PICKUP}.`],
+    ['Ready for pickup', `${hi}, order ${code} is ready for pickup at ${PICKUP_ADDRESS} (${PICKUP_HOURS}). ${PICKUP_STEPS.join('. ')}.`],
     ...(due > 0 ? [['Balance due', `${hi}, order ${code} has a balance of ${money(due)}. You can pay it online here: ${quoteLink(code)}`]] : []),
   ];
   /* "Send this proof" on the Proofs card lands here with ?proof=<id>: the
@@ -19802,8 +19812,8 @@ function orderWhere(address, delivery) {
       ? `<br><a href="${escEmail(delivery.link)}" style="color:#1848B8">Change the delivery time</a>` : ''}</p>`;
   }
   if (delivery && delivery.method === 'pickup') {
-    return `<p ${p}><strong style="color:#374151;">Pickup</strong><br>Free curbside pickup at
-      ${escEmail(SMS_PICKUP)}. We&rsquo;ll email you when it&rsquo;s ready.</p>`;
+    return `<p ${p}><strong style="color:#374151;">Pickup</strong><br>Free pickup at
+      ${escEmail(PICKUP_ADDRESS)} (${escEmail(PICKUP_HOURS)}). We&rsquo;ll email you when it&rsquo;s ready, with how to find us.</p>`;
   }
   if (!address) return '';
   return `<p ${p}><strong style="color:#374151;">Ship to</strong><br>${escEmail(address)}${
@@ -20054,10 +20064,9 @@ app.post('/api/order-shipped', requireInternalKey, capPerRecipient('order-shippe
       subject: `Your order #${b.order_id} is ready for pickup 🎉`,
       html: orderShell({
         heading: 'It&rsquo;s ready!',
-        intro: `${name ? escEmail(name.split(' ')[0]) + ', y' : 'Y'}our order is ready for curbside pickup at
-          ${escEmail(SMS_PICKUP)}. Text or call ${SHOP_PHONE} when you&rsquo;re outside and we&rsquo;ll bring it out.`,
+        intro: `${name ? escEmail(name.split(' ')[0]) + ', y' : 'Y'}our order is ready for pickup.`,
         orderId: b.order_id, items: b.items, total: b.total,
-        shipping: b.shipping, tax: b.tax, footer: '',
+        shipping: b.shipping, tax: b.tax, footer: `<div style="color:#374151;line-height:1.6;margin-top:14px">${pickupHowHtml()}</div>`,
       }),
     });
     else if (status === 'shipped') await sendEmail({

@@ -149,6 +149,7 @@ function card({ history = [], smsOn = true, consent = true, q = {} } = {}) {
     smsConfigured: () => smsOn, smsConsentFor: async () => ({ transactional: consent }),
     balanceOf: () => 0, quoteTotals: () => ({ total: 0 }), money: (n) => '$' + Number(n).toFixed(2),
     quoteLink: (c) => 'https://www.jtees.net/q/' + c, SMS_PICKUP: '3047 N Lincoln Ave',
+    ...(({ PICKUP_ADDRESS, PICKUP_HOURS, PICKUP_STEPS }) => ({ PICKUP_ADDRESS, PICKUP_HOURS, PICKUP_STEPS }))(require('../tools/lib/sms-templates')),
     SHOP_TZ: 'America/Chicago', console: { error() {} },
     intIn: () => null, PROOFS: require('../tools/lib/job-proofs'),
   };
