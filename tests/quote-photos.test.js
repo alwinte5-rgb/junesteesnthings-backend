@@ -112,10 +112,14 @@ test('saving a quote does NOT email the customer: the page asks how to send it',
   assert.match(src, /<b>Send it to the customer\?<\/b>/);
   assert.match(src, /action="\/admin\/quote\/\$\{code\}\/delivered"/);
   /* Emailing it, texting it or marking it sent is what delivers it. */
-  assert.match(src, /emailed_at = NOW\(\), delivered_at = COALESCE\(delivered_at, NOW\(\)\)/);
+  assert.match(src, /emailed_at = NOW\(\), sent_to_customer_at = COALESCE\(sent_to_customer_at, NOW\(\)\)/);
+  /* Its own column: delivered_at is the ORDER being picked up or shipped, and
+     reusing it marked every emailed quote Delivered (fixed 2026-10-06). */
+  assert.doesNotMatch(src, /delivered_at = COALESCE\(delivered_at, NOW\(\)\) WHERE id = \$1/);
+  assert.doesNotMatch(src, /'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ DEFAULT NOW\(\)'/);
   /* The automatic follow-up is never the first thing a customer hears. */
   const sweep = src.slice(src.indexOf('async function sendQuoteFollowUps'));
-  assert.match(sweep.slice(0, sweep.indexOf('\n}\n')), /AND \(delivered_at IS NOT NULL OR status = 'viewed'\)/);
+  assert.match(sweep.slice(0, sweep.indexOf('\n}\n')), /AND \(sent_to_customer_at IS NOT NULL OR status = 'viewed'\)/);
   /* An owner approving a helper's held quote still emails it: the helper is
      not there to be asked. */
   const rel = src.slice(src.indexOf('async function releaseHeldQuote'));

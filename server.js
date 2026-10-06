@@ -1283,13 +1283,16 @@ async function initStaffTables() {
        for whoever follows up, and every one applied, by whom and when. */
     'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS upsell_ideas JSONB',
     'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS upsell_log JSONB',
-    /* When the quote actually reached the customer: emailed, texted, or marked
-       sent by hand (the owner, 2026-10-06: saving must not send it; staff are
-       asked). Added with NOW() so every quote already out counts as delivered,
-       once; the default is then dropped. Held and draft quotes never went out. */
-    'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ DEFAULT NOW()',
-    'ALTER TABLE quotes ALTER COLUMN delivered_at DROP DEFAULT',
-    "UPDATE quotes SET delivered_at = NULL WHERE status IN ('held', 'draft') AND delivered_at IS NOT NULL",
+    /* When the QUOTE reached the customer: emailed, texted, or marked sent by
+       hand (the owner, 2026-10-06: saving must not send it; staff are asked).
+       NOT delivered_at, which is the ORDER being picked up or shipped: from
+       12:50 to the fix that day this used delivered_at, and every quote emailed
+       or marked sent showed as Delivered (repaired below). Added with NOW() so
+       every quote already out counts as sent, once; the default is then
+       dropped. Held and draft quotes never went out. */
+    'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS sent_to_customer_at TIMESTAMPTZ DEFAULT NOW()',
+    'ALTER TABLE quotes ALTER COLUMN sent_to_customer_at DROP DEFAULT',
+    "UPDATE quotes SET sent_to_customer_at = NULL WHERE status IN ('held', 'draft') AND sent_to_customer_at IS NOT NULL",
     'ALTER TABLE client_emails ADD COLUMN IF NOT EXISTS sent_by INTEGER',
     'ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS sent_by INTEGER',
     'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS assigned_to INTEGER',
@@ -1368,6 +1371,7 @@ async function initStaffTables() {
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
   await pool.query(`CREATE INDEX IF NOT EXISTS quote_revisions_code_idx ON quote_revisions (quote_code, id DESC)`);
+  await repairSentAsDelivered().catch((e) => console.error('sent-as-delivered repair failed:', e.message));
   /* What the owner must follow up: every cancelled job, and a helper's
      request to cancel one that is agreed or paid. Open until the owner
      closes it with what happened. */
@@ -2926,6 +2930,44 @@ function noteStaffIp(staffId, ip) {
   pool.query(`INSERT INTO staff_ips (staff_id, ip) VALUES ($1, $2) ON CONFLICT (staff_id, ip) DO NOTHING`,
     [staffId, String(ip).slice(0, 64)])
     .catch((err) => { seenStaffIps.delete(key); console.error('staff ip note failed:', err.message); });
+}
+
+/* ONE-TIME REPAIR (2026-10-06). From 17:50 UTC that day until this fix,
+   emailing a quote or marking it sent stamped delivered_at — the ORDER's
+   "picked up or shipped" — instead of a column of its own, so those jobs read
+   Delivered on the board and the job page. Nothing reached a customer: the
+   milestone message and the review ask only follow moveJobToStage, which that
+   code never called. Reverted only where delivered_at is exactly what that
+   code wrote: the same instant as emailed_at (one UPDATE set both), or within
+   five seconds of a "quote marked sent" entry. The same quotes get their
+   sent_to_customer_at; quotes made in that window that were never sent lose
+   the NOW() the new column was added with. Runs once (staff_activity marker). */
+async function repairSentAsDelivered() {
+  const MARK = 'repair: sent stamped as delivered';
+  const { rows: done } = await pool.query('SELECT 1 FROM staff_activity WHERE action = $1 LIMIT 1', [MARK]);
+  if (done.length) return;
+  const since = '2026-10-06T17:50:00Z';
+  const { rows: fixed } = await pool.query(
+    `WITH marked AS (
+       SELECT subject_id AS code, created_at FROM staff_activity
+        WHERE action = 'quote marked sent' AND subject_type = 'quote' AND created_at >= $1)
+     UPDATE quotes q SET sent_to_customer_at = COALESCE(q.sent_to_customer_at, q.delivered_at), delivered_at = NULL
+      WHERE q.delivered_at >= $1
+        AND (q.delivered_at = q.emailed_at
+             OR EXISTS (SELECT 1 FROM marked m WHERE m.code = q.code
+                         AND q.delivered_at BETWEEN m.created_at - interval '5 seconds' AND m.created_at + interval '5 seconds'))
+      RETURNING q.code`, [since]);
+  /* New quotes in that window: sent only if they really were. */
+  const { rows: unsent } = await pool.query(
+    `UPDATE quotes SET sent_to_customer_at = emailed_at
+      WHERE created_at >= $1 AND (emailed_at IS NULL OR emailed_at >= $1)
+        AND code <> ALL($2::text[])
+        AND NOT EXISTS (SELECT 1 FROM staff_activity a WHERE a.action = 'quote marked sent' AND a.subject_id = quotes.code)
+      RETURNING code`, [since, fixed.map((r) => r.code)]);
+  await pool.query(`INSERT INTO staff_activity (action, subject_type, detail) VALUES ($1, 'system', $2)`,
+    [MARK, JSON.stringify({ undelivered: fixed.map((r) => r.code), resent_checked: unsent.map((r) => r.code) })]);
+  console.log(`repair: ${fixed.length} quote(s) no longer marked delivered (${fixed.map((r) => r.code).join(', ') || 'none'}); ` +
+    `${unsent.length} new quote(s) re-checked for sent`);
 }
 
 /* ── Quote history and owner follow-ups (tools/lib/fraud-signals.js) ──────
@@ -7790,7 +7832,7 @@ async function emailQuote(q) {
           <a href="tel:+17738491854">${SHOP_PHONE}</a>.</p>
       </div>`,
     });
-    await pool.query('UPDATE quotes SET emailed_at = NOW(), delivered_at = COALESCE(delivered_at, NOW()) WHERE id = $1', [q.id]).catch(() => {});
+    await pool.query('UPDATE quotes SET emailed_at = NOW(), sent_to_customer_at = COALESCE(sent_to_customer_at, NOW()) WHERE id = $1', [q.id]).catch(() => {});
     console.log(`quote ${q.code}: emailed to the customer`);
     return { ok: true, to };
   } catch (e) {
@@ -11592,7 +11634,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         ? `<div class="card"><div class="ok">Emailed to ${escEmail(emailed.to)}.</div></div>`
         : `<div class="card"><div class="warn">The email did not go: ${escEmail(emailed.error)}.
              Text them the message below instead.</div></div>`) : ''}
-      ${!q.delivered_at ? `<div class="card" style="border-color:#c7d7fb;background:#f7faff">
+      ${!q.sent_to_customer_at ? `<div class="card" style="border-color:#c7d7fb;background:#f7faff">
           <b>Send it to the customer?</b>
           <p class="muted" style="margin:4px 0 10px">Nothing has gone to them yet. Choose how, or leave it and send it
             later from the job page.</p>
@@ -16626,8 +16668,8 @@ app.post('/admin/quote/:code/delivered', requireAdmin, async (req, res) => {
   if (!QUOTE_CODE_RE.test(code)) return isFetch ? res.status(404).end() : res.redirect('/admin/quotes');
   try {
     const { rowCount } = await pool.query(
-      `UPDATE quotes SET delivered_at = NOW()
-        WHERE code = $1 AND delivered_at IS NULL AND status NOT IN ('held', 'draft') AND cancelled_at IS NULL`, [code]);
+      `UPDATE quotes SET sent_to_customer_at = NOW()
+        WHERE code = $1 AND sent_to_customer_at IS NULL AND status NOT IN ('held', 'draft') AND cancelled_at IS NULL`, [code]);
     if (rowCount) logActivity(currentActor() || OWNER_ACTOR, 'quote marked sent', { type: 'quote', id: code }, {});
     if (isFetch) return res.status(204).end();
     return res.redirect(`/admin/production/${code}?ok=${encodeURIComponent(rowCount
@@ -18952,7 +18994,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
           <button type="submit" style="background:none;border:0;padding:0;color:#1848B8;font:inherit;cursor:pointer;text-decoration:underline">email the quote to them</button></form>${
             q.emailed_at ? ` <span class="muted">(last emailed ${escEmail(new Date(q.emailed_at).toLocaleString('en-US', { timeZone: 'America/Chicago', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))})</span>` : ''}` : ''}</div>
       ${flash(req.query)}
-      ${!q.delivered_at && !['held', 'draft'].includes(q.status) && !q.cancelled_at && !q.accepted_at ? `
+      ${!q.sent_to_customer_at && !['held', 'draft'].includes(q.status) && !q.cancelled_at && !q.accepted_at ? `
       <div class="card" style="border-color:#f5d48a;background:#fffbeb"><b>Not sent to the customer yet.</b>
         <span class="muted">Saving a quote does not send it.</span>
         <div class="row" style="gap:8px;margin-top:8px;flex-wrap:wrap">
@@ -22057,7 +22099,7 @@ async function sendQuoteFollowUps() {
           AND status IN ('sent','viewed')
           -- never the first thing a customer hears: only a quote that was sent
           -- to them, or that they have opened (2026-10-06)
-          AND (delivered_at IS NOT NULL OR status = 'viewed')
+          AND (sent_to_customer_at IS NOT NULL OR status = 'viewed')
           AND created_at <= NOW() - ($1 || ' days')::interval
           AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)
           AND (email <> '' OR COALESCE(phone, '') <> '')
