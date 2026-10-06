@@ -81,10 +81,12 @@ test('the history is written before every change that moves a quote or its money
     ["app.post('/admin/quote/:code/correct-payment', requireAdmin", 'payment corrected'],
     ["app.post('/admin/quote/:code/credit', requireAdmin", 'sales credit'],
   ]) {
-    assert.match(route(sig), new RegExp(`snapshotQuote\\((?:code|editing), '${action}'`), `${sig} → ${action}`);
+    /* The quote save names an upsell when that is what changed (2026-10-06),
+       and 'edit' otherwise. */
+    assert.match(route(sig), new RegExp(`snapshotQuote\\((?:code|editing), (?:[^;]*: )?'${action}'`), `${sig} → ${action}`);
   }
   const save = route("app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin");
-  assert.ok(save.indexOf("snapshotQuote(editing, 'edit'") < save.indexOf('UPDATE quotes SET name=$2'), 'before the update, so it keeps the old row');
+  assert.ok((save.indexOf("snapshotQuote(editing, ") > -1 && save.indexOf("snapshotQuote(editing, ") < save.indexOf('UPDATE quotes SET name=$2')), 'before the update, so it keeps the old row');
   assert.doesNotMatch(src, /DELETE FROM quote_revisions/, 'nothing deletes history');
   assert.doesNotMatch(src, /DELETE FROM quotes\b/, 'nothing deletes a quote');
 });

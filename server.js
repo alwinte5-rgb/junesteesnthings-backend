@@ -1268,6 +1268,10 @@ async function initStaffTables() {
     'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS created_by INTEGER',
     'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS sent_by INTEGER',
     'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS held_at TIMESTAMPTZ',
+    /* Upsells (2026-10-06): the ideas the quote form showed at the last save,
+       for whoever follows up, and every one applied, by whom and when. */
+    'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS upsell_ideas JSONB',
+    'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS upsell_log JSONB',
     'ALTER TABLE client_emails ADD COLUMN IF NOT EXISTS sent_by INTEGER',
     'ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS sent_by INTEGER',
     'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS assigned_to INTEGER',
@@ -8625,6 +8629,9 @@ app.get(['/admin/quote/new', '/admin/quote/:code/edit'], requireAdmin, async (re
      route), so its main button says that is what it does. */
   const isDraft = isEdit && existing.status === 'draft';
   const canDraft = !isEdit || isDraft;
+  /* Upsells change the items, which a helper cannot do once the job is agreed
+     or paid; they still see the ideas, without the Apply button. */
+  const upLocked = isEdit && !isOwner() && !!(existing.accepted_at || Number(existing.paid_amount || 0) > 0);
   const goLabel = isDraft ? 'Finish & get the message' : isEdit ? 'Save changes' : 'Create quote & get the message';
   const eItems = (E.items && E.items.length) ? E.items : [null];
   const val = (v) => v == null ? '' : escEmail(String(v));
@@ -9006,6 +9013,8 @@ function productGroupOf(name) {
       </div>`;
     })()}
     <form method="POST" action="${isEdit ? '/admin/api/quotes/' + existing.code : '/admin/api/quotes'}" id="qf">
+      ${String(req.query.up || '') === '1' ? `<div class="card"><div class="ok">Upsell saved. The change is in this
+        quote's history on the job page${isDraft ? ' — the quote is a draft until you finish it' : ''}.</div></div>` : ''}
       ${isDraft ? `<div class="card" style="background:#f8fafc;border-color:#cbd5e1"><b>Draft.</b>
         <span class="muted">The customer cannot see this quote yet. <b>Finish &amp; get the message</b> at the
         bottom sends it; <b>Save as draft</b> keeps it private.</span></div>` : ''}
@@ -9108,6 +9117,17 @@ function productGroupOf(name) {
         </table>
       </div>
 
+      <!-- UPSELL IDEAS, for staff only (never on the customer's page). Built
+           by renderUpsells() from the same prices the form shows. Apply & save
+           changes the item and saves the quote at once, so an upsell is never
+           lost to a closed tab; each save is in the quote's history. -->
+      <div class="card" id="upsells" style="display:none;border-color:#c7d7fb;background:#f7faff">
+        <b>Upsell ideas</b>
+        <span class="muted" style="font-size:12px">&middot; for you, not the customer. Offer them when you follow up.</span>
+        <div id="uplist" style="margin-top:6px"></div>
+        <input type="hidden" name="upsell_ideas" id="upideas" value="">
+      </div>
+
       <div class="card">
         <label>Needed by <span style="text-transform:none;font-weight:400">(optional)</span></label>
         <input name="needed_by" type="date" value="${E.needed_by ? String(E.needed_by).slice(0,10) : ''}">
@@ -9128,6 +9148,159 @@ function productGroupOf(name) {
     <p style="margin-top:14px"><a class="muted" href="/admin/quotes">View all quotes →</a></p>
     <script>
       var CAT = ${JSON.stringify(actorLevel('finances') === 'on' ? catalog : catalogWithoutCosts(catalog))};
+      /* ── Upsell ideas (the owner, 2026-10-06) ─────────────────────────────
+         Worked out from the same priceLine() the totals use, on every calc():
+         singles that should be a pack, the next price break, a back print, a
+         sleeve. Apply & save edits the item and submits the form straight
+         away (a new quote is saved as a draft), so the change is stored the
+         moment it is made and lands in the quote's history. */
+      var UP_LOCKED = ${upLocked ? 'true' : 'false'};
+      var UP_CAN_DRAFT = ${canDraft ? 'true' : 'false'};
+      var upIdeasNow = [];
+      function upEsc(t){ return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+      /* The number written just before a marker: 18 in "18in,", 10 in "10-pack". */
+      function upNum(t, marker){
+        var i = String(t).indexOf(marker); if (i < 0) return 0;
+        var j = i; while (j > 0 && t.charAt(j - 1) >= '0' && t.charAt(j - 1) <= '9') j--;
+        return parseInt(t.slice(j, i), 10) || 0;
+      }
+      /* Per piece, leaving out the one-time charges (screens, delivery) that
+         make every bigger order look cheaper each. The screen-print minimum
+         stays in: reaching the minimum is a real saving. */
+      function upEach(r, q){
+        var once = 0;
+        (r.addonLines || []).forEach(function(a){
+          if (a.code === 'screens' || (a.kind === 'once' && a.code !== 'screen_min')) once += a.total;
+        });
+        return q > 0 ? (r.lineTotal - once) / q : 0;
+      }
+      function upTickPlace(L, loc, method, col){
+        var row = L.querySelector('.ploc[data-loc="' + loc + '"]');
+        if (!row) return false;
+        var pm = row.querySelector('.pm'), pc = row.querySelector('.pc');
+        row.querySelector('.pon').checked = true;
+        pm.value = String(method.id);
+        if (pm.value !== String(method.id)) return false;
+        if (col) { pc.dataset.v = col; pc.dataset.for = ''; }
+        return true;
+      }
+      function upsellIdeas(info){
+        var ideas = [];
+        var all = Array.prototype.slice.call(document.querySelectorAll('#lines .line'));
+        info.forEach(function(x){
+          if (x.isOpt || !(x.qty > 0)) return;
+          var n = all.indexOf(x.L) + 1, tag = 'Item ' + n + ': ';
+          /* Singles that should be a pack. */
+          if (x.cutMeth) {
+            if (x.cutMeth.title.indexOf('singles') < 0 || x.qty < 3) return;
+            var size = upNum(x.cutMeth.title, 'in,');
+            var packs = CAT.methods.filter(function(m){
+              return m.active !== false && m.use_for_quoting !== false &&
+                m.title.indexOf('Big Head Cutout') === 0 && upNum(m.title, 'in,') === size &&
+                upNum(m.title, '-pack') > x.qty;
+            }).sort(function(a, b){ return upNum(a.title, '-pack') - upNum(b.title, '-pack'); });
+            if (!packs.length) return;
+            var pk = packs[0], heads = upNum(pk.title, '-pack');
+            var pr = priceLine(Object.assign({}, x.args, { method: pk, qty: 1, unitOverride: '' }));
+            var more = Math.round((pr.lineTotal - x.lt) * 100) / 100;
+            ideas.push({ key: 'pack' + n, label: 'Item ' + n + ': ' + size + 'in singles to the ' + heads + '-pack',
+              text: tag + 'the ' + size + 'in ' + heads + '-pack is ' + m2(pr.lineTotal) + ' against ' + m2(x.lt) +
+                ' for these ' + x.qty + ' singles: ' + (heads - x.qty) + ' more heads for ' +
+                (more >= 0 ? m2(more) + ' more' : m2(-more) + ' less') + ' (' + m2(pr.lineTotal / heads) + ' a head).',
+              apply: function(){
+                var sel = x.L.querySelector('.p');
+                sel.value = 'cut:' + pk.id;
+                if (sel.value !== 'cut:' + pk.id) return false;
+                x.L.querySelector('.q').value = '1';
+                x.L.querySelector('.u').value = '';
+              } });
+            return;
+          }
+          if (!x.prod || x.manual || !x.prints.length) return;
+          /* The next price break. Runs pool their quantity, so leave those be. */
+          if (!(x.args.bandQty > x.qty)) {
+            var cands = [];
+            var addC = function(c){ c = parseInt(c, 10); if (c > x.qty && cands.indexOf(c) < 0) cands.push(c); };
+            var minQ = 0;
+            x.prints.forEach(function(p){
+              var pos = p.method.positions || {};
+              Object.keys(pos).forEach(function(k){ (pos[k] || []).forEach(function(b){ addC((parseInt(b.min_qty, 10) || 0) + 1); }); });
+              if (p.method.min_order_qty) { addC(p.method.min_order_qty); minQ = Math.max(minQ, parseInt(p.method.min_order_qty, 10) || 0); }
+            });
+            (BLANK_TIERS || []).forEach(function(t){ addC(t.min); });
+            cands.sort(function(a, b){ return a - b; });
+            /* Under a minimum the customer already pays for it: the idea is the
+               minimum itself, not the next few pieces. */
+            if (minQ > x.qty && (x.r.addonLines || []).some(function(a){ return a.code === 'screen_min'; })) cands = [minQ];
+            var base = x.sizeQty ? priceLine(Object.assign({}, x.args, { sizeMix: null })) : x.r;
+            var e0 = upEach(base, x.qty);
+            for (var i = 0; i < cands.length; i++) {
+              var c = cands[i];
+              if (c > Math.max(x.qty * 2, x.qty + 12) && c !== minQ) continue;
+              var rc = priceLine(Object.assign({}, x.args, { qty: c, sizeMix: null }));
+              var e1 = upEach(rc, c);
+              if (e1 < e0 - 0.01) {
+                var qc = c;
+                ideas.push({ key: 'qty' + n, label: 'Item ' + n + ': ' + x.qty + ' to ' + c + ' pieces',
+                  text: tag + 'at ' + c + ' pieces (' + (c - x.qty) + ' more) the price drops to ' + m2(e1) +
+                    ' each from ' + m2(e0) + ' — ' + m2(rc.lineTotal) + ' for the item, ' + m2(rc.lineTotal - x.lt) + ' more.' +
+                    (x.sizeQty ? ' Add the extra sizes on the item to take it.' : ''),
+                  apply: x.sizeQty ? null : function(){ x.L.querySelector('.q').value = String(qc); } });
+                break;
+              }
+            }
+          }
+          /* Another print place, in the same method. */
+          var locs = x.prints.map(function(p){ return p.loc; });
+          var first = x.prints[0];
+          var opts = first.method.colour_options || [];
+          var col = (first.method.type === 'color' && opts.length) ? String(opts.indexOf(1) > -1 ? 1 : opts[0]) : '';
+          var place = function(loc, words){
+            var rp = priceLine(Object.assign({}, x.args, { prints: x.prints.concat([{ loc: loc, method: first.method, colours: col }]) }));
+            var add = Math.round((rp.lineTotal - x.lt) * 100) / 100;
+            if (!(add > 0)) return;
+            ideas.push({ key: loc + n, label: 'Item ' + n + ': add a ' + words,
+              text: tag + 'add a ' + (col ? col + '-colour ' : '') + words + ' (' + first.method.title + '): ' +
+                m2(add) + ' more, ' + m2(add / x.qty) + ' a piece.',
+              apply: function(){ return upTickPlace(x.L, loc, first.method, col); } });
+          };
+          if (locs.indexOf('back') < 0) place('back', 'back print');
+          if (locs.indexOf('left') < 0 && locs.indexOf('right') < 0) place('left', 'left-sleeve print');
+        });
+        return ideas;
+      }
+      function renderUpsells(info){
+        var box = document.getElementById('upsells');
+        if (!box) return;
+        upIdeasNow = upsellIdeas(info);
+        document.getElementById('upideas').value = upIdeasNow.map(function(i){ return i.text; }).join('\\n');
+        box.style.display = upIdeasNow.length ? '' : 'none';
+        document.getElementById('uplist').innerHTML = upIdeasNow.map(function(i){
+          return '<div style="display:flex;gap:8px;align-items:flex-start;justify-content:space-between;padding:6px 0;border-top:1px solid #e3e8f2">' +
+            '<span style="font-size:13.5px">' + upEsc(i.text) + '</span>' +
+            (i.apply && !UP_LOCKED ? '<button type="button" class="btn btn-ghost" style="padding:4px 12px;font-size:13px;flex:0 0 auto"' +
+              ' onclick="applyUpsell(\\'' + i.key + '\\')">Apply &amp; save</button>' : '') + '</div>';
+        }).join('') + '<p class="muted" id="upstat" style="font-size:12px;margin-top:6px">' +
+          (UP_LOCKED ? 'This job is accepted or paid, so only the owner can change it. Leave a note on the job.'
+            : UP_CAN_DRAFT ? 'Apply &amp; save keeps the quote as a draft; nothing goes to the customer until you finish it.'
+            : 'Apply &amp; save saves the quote straight away. The customer is not emailed: use the Email button after.') + '</p>';
+      }
+      function applyUpsell(k){
+        var idea = upIdeasNow.filter(function(i){ return i.key === k; })[0];
+        var st = document.getElementById('upstat');
+        if (!idea || !idea.apply || UP_LOCKED) return;
+        if (idea.apply() === false) { if (st) st.textContent = 'Could not apply that one here — change the item by hand.'; return; }
+        calc();
+        var f = document.getElementById('qf');
+        [['upsell', idea.label], ['upsell_return', '1']].forEach(function(kv){
+          var h = document.createElement('input');
+          h.type = 'hidden'; h.name = kv[0]; h.value = kv[1];
+          f.appendChild(h);
+        });
+        if (st) st.textContent = 'Saving…';
+        var btn = UP_CAN_DRAFT ? document.getElementById('qfdraft') : document.getElementById('qfgo');
+        if (f.requestSubmit && btn) f.requestSubmit(btn); else if (btn) btn.click(); else f.submit();
+      }
       var TAX = ${TAX_RATE}, DEP = ${DEPOSIT_PC}, FULL_UNDER = ${DEPOSIT_FULL_UNDER};
       /* The rush ladder, handed over from the server so the form and the save
          path read ONE table. Editable per quote: this only ever fills the box
@@ -9461,6 +9634,7 @@ ${quotePricingSource()}
            order-level charge is claimed by one of them before any option,
            exactly as the save route orders them (lineOrder). */
         var optSub = 0, optCount = 0;
+        var upInfo = [];
         function isOptLine(el){ var o = el.querySelector('.opt'); return o && o.checked ? 1 : 0; }
         function runOfLine(el){ var r = el.querySelector('.sr'); return r ? String(r.value || '').trim() : ''; }
         var ordered = Array.prototype.slice.call(document.querySelectorAll('.line'));
@@ -9734,7 +9908,7 @@ ${quotePricingSource()}
 
           /* Printed places price from the list; a cutout pack (no places)
              prices from its method alone, exactly as the save route does. */
-          var r = priceLine({
+          var plArgs = {
             bandQty: runQty,
             prints: prints.length ? prints : undefined,
             product: prod, method: cutMeth || null, qty: qty, sizeMix: sizeQty ? mix : null,
@@ -9744,7 +9918,8 @@ ${quotePricingSource()}
             dark: isDark,
             blankOverride: bpEl ? bpEl.value : '',
             unitOverride: u.value
-          });
+          };
+          var r = priceLine(plArgs);
 
           /* Say what the catalogue holds, so a typed garment price is an
              informed correction rather than a guess. */
@@ -9836,6 +10011,8 @@ ${quotePricingSource()}
 
           if (isOpt) { optSub += lt; optCount++; }
           else sub += lt;
+          upInfo.push({ L: L, isOpt: isOpt, qty: qty, sizeQty: sizeQty, prod: prod, cutMeth: cutMeth,
+                        prints: prints, args: plArgs, r: r, lt: lt, manual: String(u.value || '').trim() !== '' });
 
           if (r.addonLines && !isOpt) r.addonLines.forEach(function(a){
             if (a.code !== 'screens') return;
@@ -9924,6 +10101,8 @@ ${quotePricingSource()}
         var tot = net + tax;
         var dep = tot <= 0 ? 0 : (tot < FULL_UNDER ? tot : tot*DEP);
         document.getElementById('sub').textContent = m2(sub);
+        /* Never let an idea break the totals. */
+        try { renderUpsells(upInfo); } catch (e) { console.error('upsells', e); }
 
         /* Split the subtotal only when there is something to split. On a job
            with no screens these rows would restate the subtotal twice under two
@@ -11138,11 +11317,20 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
           <p style="margin-top:12px"><a class="btn" href="/admin/production/${escEmail(editing)}#notes">Leave a note</a></p></div>`, 'quotes'));
     }
 
+    /* UPSELLS (2026-10-06). `upsell` names what an Apply & save on the form
+       changed; `upsell_ideas` is what the form was suggesting at this save,
+       kept for whoever follows up; `upsell_return` sends the person back to
+       the form rather than to the send page. */
+    const upsellsApplied = [].concat(b.upsell || []).map((v) => String(v).trim().slice(0, 200)).filter(Boolean).slice(0, 10);
+    const upsellIdeasNow = String(one(b.upsell_ideas) || '').split('\n')
+      .map((v) => v.trim().slice(0, 300)).filter(Boolean).slice(0, 8);
+    const upsellReturn = String(one(b.upsell_return) || '') === '1';
+
     if (QUOTE_CODE_RE.test(editing)) {
       /* Edit in place. The code never changes, so the link the customer already
          has updates itself — no need to re-send unless June wants to. Clearing
          change_request marks the request as handled. */
-      await snapshotQuote(editing, 'edit', clientIp(req));
+      await snapshotQuote(editing, upsellsApplied.length ? 'upsell: ' + upsellsApplied[upsellsApplied.length - 1] : 'edit', clientIp(req));
       ({ rows } = await pool.query(
         `UPDATE quotes SET name=$2, phone=$3, email=$4, items=$5, subtotal=$6, tax=$7,
                 total=$8, deposit=$9, notes=$10, valid_until=$11, needed_by=$12,
@@ -11191,6 +11379,20 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
 
     const q = rows[0];
     const code = q.code;
+    /* Kept on the quote: the ideas for the follow-up, and every upsell applied.
+       A failure is reported but never loses the save it rides on. */
+    try {
+      const at = new Date().toISOString();
+      await pool.query(
+        `UPDATE quotes SET upsell_ideas = $2::jsonb,
+                upsell_log = COALESCE(upsell_log, '[]'::jsonb) || $3::jsonb WHERE code = $1`,
+        [code, JSON.stringify(upsellIdeasNow),
+         JSON.stringify(upsellsApplied.map((what) => ({ what, at, by: staffId || null })))]);
+      for (const what of upsellsApplied) logActivity(actor, 'upsell applied', { type: 'quote', id: code }, { what });
+    } catch (err) {
+      console.error(`upsells on ${code} not kept:`, err.message);
+      reportError('quote-upsells', err, code).catch(() => {});
+    }
     /* SHOP OR REP, decided once when the quote is first saved
        (tools/lib/sales-credit.js): a salesperson's customer reordering within
        12 months stays theirs; otherwise the lead it answers decides; otherwise
@@ -11275,6 +11477,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
          Sending it later is a save without the draft button, which runs
          everything below as for a new quote. */
       logActivity(actor, 'quote draft saved', { type: 'quote', id: code }, { total });
+      if (upsellReturn) return res.redirect(303, `/admin/quote/${code}/edit?up=1`);
       return res.send(adminPage('Draft saved', `
         ${pageHeader(`Draft ${code} saved`, `${escEmail(name || email || phone || 'No contact yet')} &middot; ${money(total)}`)}
         <div class="card">
@@ -11307,6 +11510,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
 
     /* Emailed when it first reaches the customer; an edit offers a button
        instead, so fixing a typo does not send them a second email. */
+    if (upsellReturn && existingQuote && !wasDraft) return res.redirect(303, `/admin/quote/${code}/edit?up=1`);
     const emailed = (!existingQuote || wasDraft) && q.email ? await emailQuote(q) : null;
 
     const msgs = quoteMessages(q);
@@ -18631,6 +18835,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
     const notesCard = await jobNotesCard(q.code);
     const creditCard = await jobCreditCard(q).catch((e) => { console.error('credit card failed:', e.message); return ''; });
     const historyCard = await jobHistoryCard(q).catch((e) => { console.error('history card failed:', e.message); return ''; });
+    const upsellCard = await jobUpsellCard(q).catch((e) => { console.error('upsell card failed:', e.message); return ''; });
     res.send(adminPage(`${q.code} — production`, `
       <h1>${escEmail(q.name || q.code)}</h1>
       <div class="sub">${escEmail(q.code)} · ${money(q.total)} ·
@@ -18716,6 +18921,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
       ${proofsCard}
       ${messagesCard}
       ${creditCard}
+      ${upsellCard}
       ${historyCard}
       ${notesCard}
       ${STAGE_ASK_SCRIPT}
@@ -25693,6 +25899,27 @@ async function jobNotesCard(code) {
       <textarea name="body" rows="2" maxlength="2000" placeholder="What happened, or what should change" style="flex:1 1 260px" required></textarea>
       <button type="submit" class="btn btn-ghost">Add note</button>
     </form></div>`;
+}
+
+/* ── Upsells ──────────────────────────────────────────────────────────────
+   What the quote form suggested at the last save, to offer when following up,
+   and every upsell applied (2026-10-06). Applying one is done on the form,
+   where the price is worked out. */
+async function jobUpsellCard(q) {
+  const ideas = Array.isArray(q.upsell_ideas) ? q.upsell_ideas : [];
+  const log = Array.isArray(q.upsell_log) ? q.upsell_log : [];
+  if (!ideas.length && !log.length) return '';
+  const roster = log.length ? await staffRoster() : [];
+  return `<div class="card" id="upsells"><b>Upsells</b>
+    ${ideas.length ? `<div class="muted" style="font-size:12px;margin-top:4px">Ideas to offer when you follow up:</div>
+      <ul style="margin:4px 0 0 18px">${ideas.map((t) => `<li style="margin:3px 0">${escEmail(t)}</li>`).join('')}</ul>
+      ${!q.cancelled_at ? `<p style="margin-top:6px"><a class="btn btn-ghost" style="padding:5px 12px;font-size:13px"
+        href="/admin/quote/${escEmail(q.code)}/edit#upsells">Open the quote to apply one</a></p>` : ''}` : ''}
+    ${log.length ? `<div class="muted" style="font-size:12px;margin-top:8px">Applied:</div>
+      <ul style="margin:4px 0 0 18px">${log.slice().reverse().map((e) => `<li style="margin:3px 0">${escEmail(String(e.what || ''))}
+        <span class="muted" style="font-size:12px">&middot; ${e.by ? escEmail(nameOf(roster, e.by)) : 'owner'}
+        &middot; ${escEmail(fmtDate(e.at))}</span></li>`).join('')}</ul>` : ''}
+  </div>`;
 }
 
 /* ── Quote history ─────────────────────────────────────────────────────────
