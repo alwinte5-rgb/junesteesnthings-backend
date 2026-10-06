@@ -25599,7 +25599,7 @@ async function gradeHiringTest(id, { notify = false } = {}) {
             status = CASE WHEN $2::jsonb IS NULL THEN status ELSE 'graded' END
       WHERE id = $1`,
     [id, grade ? JSON.stringify(grade) : null, score, error]);
-  const opened = !isRound2 && grade && HIRING.passes(score) ? await openRound2(row, grade).catch((err) => {
+  const opened = !isRound2 && grade ? await openRound2(row, grade).catch((err) => {
     console.error(`hiring test ${id}: round 2 not opened:`, err.message);
     reportError('hiring-round2', err, `hiring test ${id}`).catch(() => {});
     return null;
@@ -25648,7 +25648,7 @@ async function tellOwnerHiring(firstId, { unfinished = false } = {}) {
   const verdict = rec ? rec
     : second && second.submitted_at ? 'Round 2 needs grading'
     : second ? 'Did not finish round 2'
-    : first.score != null && !HIRING.passes(first.score) ? `Below ${HIRING.PASS_SCORE}, so no round 2`
+    : first.score != null && !HIRING.round2Questions(first.grade).length ? 'No round 2 (the grader wrote no follow-up questions)'
     : first.score != null ? 'Passed round 1' : 'Needs grading';
   const li = (xs) => (xs || []).length ? `<ul>${xs.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>` : '';
   const g1 = first.grade;
@@ -25786,7 +25786,7 @@ function hireLinkCard(name, token, { round2 = false, role } = {}) {
     ? `Hi ${first}, thank you for your test: you are through to round 2! It is a few short questions about your answers (about ${HIRING.ROUND2_MINUTES} minutes). Open this private link when you have ${HIRING.ROUND2_MINUTES} quiet minutes; the clock starts when you press Start:
 ${escEmail(link)}
 Please write your own answers without AI tools. Thank you!`
-    : `Hi ${first}, thank you for applying to June's Tees! The next step for the ${escEmail(HIRING.roleOf(role).label.toLowerCase())} job is a short paid test ($15) in two parts: about ${mins} minutes now, then, if you do well, a ${HIRING.ROUND2_MINUTES}-minute round 2 on the same link a few minutes later. Please set aside about an hour. Open this private link when you have that time and a stable connection; the clock starts when you press Start:
+    : `Hi ${first}, thank you for applying to June's Tees! The next step for the ${escEmail(HIRING.roleOf(role).label.toLowerCase())} job is a short paid test ($15) in two parts: about ${mins} minutes now, then a ${HIRING.ROUND2_MINUTES}-minute round 2 on the same link a few minutes later. Please set aside about an hour. Open this private link when you have that time and a stable connection; the clock starts when you press Start:
 ${escEmail(link)}
 The link works for ${HIRING.LINK_DAYS} days. Please write your own answers without AI tools. Thank you!`;
   return `<div class="card" style="border-left:4px solid #16a34a">
@@ -26010,8 +26010,8 @@ function hireRound2Card(r, r2) {
   if (!r.submitted_at) return '';
   if (!r2) {
     const why = !r.grade ? 'Round 2 opens once round 1 is graded.'
-      : HIRING.passes(r.score) ? 'No round 2: the grader wrote no follow-up questions. Use the ones above on the video call.'
-      : `No round 2: round 1 scored under ${HIRING.PASS_SCORE}. Start it anyway with the button above; it opens on their same link.`;
+      : !HIRING.round2Questions(r.grade).length ? 'No round 2: the grader wrote no follow-up questions. Use the ones above on the video call.'
+      : 'No round 2 yet. Press "Start round 2" above, then ask them on OnlineJobs to open their link again (or make a new link for them).';
     return `<div class="card"><b>Round 2</b><p class="muted">${escEmail(why)}</p></div>`;
   }
   const g = r2.grade;

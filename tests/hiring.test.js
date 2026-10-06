@@ -201,7 +201,7 @@ test('round 2 waits on the applicant page only while round 1 is being graded', (
   assert.ok(H.round2Pending({ submitted_at: at(1) }, now));
   assert.ok(!H.round2Pending({ submitted_at: at(H.ROUND2_WAIT_MINUTES + 1) }, now), 'gives up after a few minutes');
   assert.ok(!H.round2Pending({ submitted_at: at(1), grade: {}, score: 90 }, now), 'a pass with no questions has no round 2 to wait for');
-  assert.ok(!H.round2Pending({ submitted_at: at(1), grade: { follow_up: [{ question: 'Q?' }] }, score: 40 }, now), 'below the mark: done');
+  assert.ok(H.round2Pending({ submitted_at: at(1), grade: { follow_up: [{ question: 'Q?' }] }, score: 40 }, now), 'round 2 is for everybody, below the old pass mark too');
   assert.ok(H.round2Pending({ submitted_at: at(1), grade: { follow_up: [{ question: 'Q?' }] }, score: 90 }, now), 'graded, round 2 about to be made');
   assert.ok(!H.round2Pending({ submitted_at: at(1), grade_error: 'x' }, now));
   assert.ok(!H.round2Pending({}, now));
@@ -377,4 +377,10 @@ test('a top pick is skilled AND safe: the trust check, and an ID check on every 
   }
   // round 2 is told the ID check is asked anyway, so it never repeats it
   assert.ok(H.round2Message([], {}, { role: 'ads' }).includes(POSTING.TRUST_CALL.questions[0].q));
+});
+
+test('the designer grader is told print methods are trained, and other roles are not', () => {
+  const d = H.systemFor('designer');
+  assert.ok(/train printing methods/.test(d) && /Customer-facing communication counts heavily/.test(d));
+  assert.ok(!/train printing methods/.test(H.systemFor('sales')), 'only the designer carries the calibration');
 });

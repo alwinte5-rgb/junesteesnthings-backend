@@ -135,6 +135,10 @@ module.exports = {
   label: 'Graphic designer',
   job: 'a remote graphic designer who turns customer requests into proofs and print-ready art for screen printing, embroidery and DTF',
   reward: 'Reward designers who think about how the art will actually print, communicate clearly with customers and sales, and find useful design work without being told.',
+  /* The owner, 2026-10-06: every designer scored low, and the best customer
+     communicator lost marks for print-shop detail. The post promises "We'll
+     train you on our printing methods", so the grade must not demand them. */
+  calibration: 'Calibrate to the people who apply. The job post promises we train printing methods (screen printing, embroidery, DTF) on the job, so do not mark a designer down to 1 or 2 only for missing print-shop specifics: Pantone numbers, colour separations, thread colours, digitising, minimum text heights or exact print sizes. Those lift an answer to 4 or 5 when present. Score the design thinking, the customer communication and basic file sense (a clean vector redraw, sensible sizing, sending a proof). A capable designer with no print-shop experience who answers clearly and sensibly scores 3 or 4. Customer-facing communication counts heavily: a warm, clear reply that asks the right questions is worth at least a 3 even if it suggests a technique we would steer away from in print. Keep low scores for answers that are vague, careless, off-topic or blank, and keep judging initiative strictly.',
   minutes: MINUTES,
   intro: INTRO, parts: PARTS, weights: WEIGHTS, choice: MULTIPLE_CHOICE, written: WRITTEN, guide: INTERVIEW_GUIDE,
 };

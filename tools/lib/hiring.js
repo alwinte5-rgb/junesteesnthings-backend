@@ -221,7 +221,7 @@ churches, businesses and families), choose ${role.job}, hired remotely from the 
 
 You will read one applicant's written answers to a timed test and mark each against its rubric. Be fair
 and specific, and remember the applicant writes in their second language: judge clarity and judgement,
-not idiom. ${role.reward} Flag answers that read as generic
+not idiom. ${role.reward}${role.calibration ? `\n\n${role.calibration}\n\n` : ' '}Flag answers that read as generic
 or templated (for example pasted from an AI tool) in "generic_note", but do not refuse to score them.
 
 Scores are 1-5 (1 poor, 3 acceptable, 5 excellent); the optional bonus is 0 when left blank.
@@ -439,11 +439,12 @@ async function gradeWritten(written, { name, client, role } = {}) {
 
 
 /* ── Round 2: follow-up questions for applicants who pass ─────────────────
-   A round-1 score of PASS_SCORE or more makes a second, shorter test from the
-   grader's follow-up questions about that applicant's own answers. Its answers
+   Every graded round 1 makes a second, shorter test from the grader's
+   follow-up questions about that applicant's own answers (the owner,
+   2026-10-06: "I would like round 2 to go to everybody"; it used to need
+   PASS_SCORE, which now only names the "worth a video call" band). Its answers
    are graded the same way, and the grader then writes the questions left for
-   the video call. Below the pass mark nothing is made; the owner can still
-   start round 2 by hand from the applicant's page.
+   the video call.
 
    Round 2 has no link of its own: the applicant's round-1 link opens it, and
    the thank-you page waits for the grade so a passing applicant goes straight
@@ -582,7 +583,7 @@ function round2Pending(row, now = new Date()) {
   if (!row || !row.submitted_at || row.grade_error) return false;
   if (now - new Date(row.submitted_at) >= ROUND2_WAIT_MINUTES * 60e3) return false;
   if (!row.grade) return true;
-  return passes(row.score) && round2Questions(row.grade).length > 0;
+  return round2Questions(row.grade).length > 0;
 }
 
 /** Round 2 as 0-100: the average answer score. */
