@@ -34,3 +34,8 @@ test('Orders: the customer\'s name opens the job page; the customer page lists j
   const cust = src.slice(src.indexOf("app.get('/admin/customer', requireAdmin"));
   assert.match(cust.slice(0, cust.indexOf('\n});')), /<td><a href="\/admin\/production\/\$\{r\.code\}">/);
 });
+
+test('a change request opens the job page, which shows it with an Edit button', () => {
+  assert.match(src, /asked for a change`,\n\s+sub: [^\n]+href: `\/admin\/production\/\$\{escEmail\(c\.code\)\}`/);
+  assert.match(src, /<b>They asked for a change<\/b>\n\s+<div style="margin:6px 0 10px;white-space:pre-wrap">&ldquo;\$\{escEmail\(String\(q\.change_request\)/);
+});

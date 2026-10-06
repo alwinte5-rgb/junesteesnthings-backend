@@ -19015,6 +19015,10 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
           <button type="submit" style="background:none;border:0;padding:0;color:#1848B8;font:inherit;cursor:pointer;text-decoration:underline">email the quote to them</button></form>${
             q.emailed_at ? ` <span class="muted">(last emailed ${escEmail(new Date(q.emailed_at).toLocaleString('en-US', { timeZone: 'America/Chicago', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))})</span>` : ''}` : ''}</div>
       ${flash(req.query)}
+      ${q.change_request && !q.cancelled_at ? `
+      <div class="card" style="border-color:#c7d7fb;background:#f7faff"><b>They asked for a change</b>
+        <div style="margin:6px 0 10px;white-space:pre-wrap">&ldquo;${escEmail(String(q.change_request).slice(0, 2000))}&rdquo;</div>
+        <a class="btn" href="/admin/quote/${escEmail(q.code)}/edit">Edit the quote &rarr;</a></div>` : ''}
       ${!q.sent_to_customer_at && !['held', 'draft'].includes(q.status) && !q.cancelled_at && !q.accepted_at ? `
       <div class="card" style="border-color:#f5d48a;background:#fffbeb"><b>Not sent to the customer yet.</b>
         <span class="muted">Saving a quote does not send it.</span>
@@ -20625,7 +20629,7 @@ app.get('/admin/dashboard', requireAdmin, async (_req, res) => {
       sub: `oldest ${escEmail(ageInWords(waiting[waiting.length - 1].created_at))}`, href: '/admin/leads' }] : []),
     ...changes.map((c) => ({ tone: 'blue', icon: 'edit',
       title: `${escEmail(c.name || c.code)} asked for a change`,
-      sub: `&ldquo;${escEmail(String(c.change_request).slice(0, 90))}&rdquo;`, href: `/admin/quote/${escEmail(c.code)}/edit` })),
+      sub: `&ldquo;${escEmail(String(c.change_request).slice(0, 90))}&rdquo;`, href: `/admin/production/${escEmail(c.code)}` })),
     /* Delivered, and the books still say they owe. Either money to collect or
        a payment taken at pickup that was never recorded — both are fixed on
        the job's card: Record a payment, or Settle. */
