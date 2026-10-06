@@ -2955,6 +2955,26 @@
               </div>
             </div>
 
+            <!-- How they heard about us: optional. Keys must match HEARD_FROM in tools/lib/sales-credit.js. -->
+            <div class="form-group">
+              <label for="f-heard">How did you hear about us? <span style="font-weight:400;text-transform:none;letter-spacing:0;">(optional)</span></label>
+              <select id="f-heard" name="heard_from">
+                <option value="">Choose one</option>
+                <option value="google">Google search</option>
+                <option value="google_ad">Google ad</option>
+                <option value="social">Facebook, Instagram or TikTok</option>
+                <option value="friend">A friend or family member</option>
+                <option value="repeat">I've ordered before</option>
+                <option value="saw_work">Saw your work or met you at an event</option>
+                <option value="rep">A June's Tees salesperson</option>
+                <option value="other">Somewhere else</option>
+              </select>
+            </div>
+            <div class="form-group" id="f-heard-rep-wrap" hidden>
+              <label for="f-heard-rep">Their name</label>
+              <input id="f-heard-rep" name="heard_rep" maxlength="80" placeholder="Who did you speak to?" autocomplete="off" />
+            </div>
+
             <!-- SMS consent: both unchecked by default; wording must match tools/lib/sms-consent.js -->
             <div class="sms-consent" style="margin:-4px 0 14px;font-size:12.5px;line-height:1.45;color:var(--text-body)">
               <label style="display:flex;gap:8px;align-items:flex-start;font-weight:400;text-transform:none;letter-spacing:0;margin:6px 0">
@@ -3340,6 +3360,21 @@
     const formError = (reason) => {
       try { if (window.jtTrack) jtTrack('quote_form_error', { reason: reason }); } catch { /* never block the form */ }
     };
+
+    /* "A June's Tees salesperson" asks for their name; any other answer hides
+       and clears it, so a name is never sent with the wrong answer. */
+    (function () {
+      const heard = document.getElementById('f-heard');
+      const wrap = document.getElementById('f-heard-rep-wrap');
+      if (!heard || !wrap) return;
+      const sync = () => {
+        const rep = heard.value === 'rep';
+        wrap.hidden = !rep;
+        if (!rep) document.getElementById('f-heard-rep').value = '';
+      };
+      heard.addEventListener('change', sync);
+      sync();
+    })();
 
     quoteForm.addEventListener('submit', async (e) => {
       e.preventDefault();

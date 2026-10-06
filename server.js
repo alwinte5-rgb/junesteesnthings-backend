@@ -48,6 +48,7 @@ const QPHOTOS = require('./tools/lib/quote-photos');
 const REVREPLY = require('./tools/lib/review-replies');
 const STAFF = require('./tools/lib/staff');
 const FRAUD = require('./tools/lib/fraud-signals');
+const CREDIT = require('./tools/lib/sales-credit');
 const TEAM = require('./tools/lib/team-metrics');
 const TRAINING = require('./tools/lib/training');
 const HIRING = require('./tools/lib/hiring');
@@ -1288,7 +1289,31 @@ async function initStaffTables() {
     'ALTER TABLE quote_payments ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMPTZ',
     // Who settled (wrote off) the balance: only the owner may, but say so.
     'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS settled_by INTEGER',
+    /* Shop lead or a salesperson's own (tools/lib/sales-credit.js), set when
+       the lead or quote is saved. Everything the public sends in is the
+       shop's by default, so a door nobody remembered to label still is. */
+    "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS sale_type TEXT NOT NULL DEFAULT 'shop'",
+    'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS sale_type_reason TEXT',
+    'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS rep_id INTEGER',
+    'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS heard_from TEXT',
+    'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS heard_rep_text TEXT',
+    "ALTER TABLE quotes ADD COLUMN IF NOT EXISTS sale_type TEXT NOT NULL DEFAULT 'shop'",
+    'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS sale_type_reason TEXT',
+    // A helper's rate on the shop's own leads they close; commission_pct is for their own.
+    'ALTER TABLE staff ADD COLUMN IF NOT EXISTS shop_commission_pct NUMERIC(5,2) NOT NULL DEFAULT 0',
   ]) await pool.query(sql);
+  /* Quotes and leads from before labels existed are the shop's: no helper
+     ever registered a lead of their own. Said in the reason, so the owner
+     can tell them apart and relabel any that were a helper's. Once only. */
+  await pool.query(`UPDATE quotes SET sale_type_reason = 'Before lead tracking (2026-10-06)'
+                     WHERE sale_type_reason IS NULL AND created_at < NOW() - interval '1 minute'
+                       AND NOT EXISTS (SELECT 1 FROM staff_activity WHERE action = 'sale labels backfilled')`);
+  await pool.query(`UPDATE submissions SET sale_type_reason = 'Before lead tracking (2026-10-06)'
+                     WHERE sale_type_reason IS NULL
+                       AND NOT EXISTS (SELECT 1 FROM staff_activity WHERE action = 'sale labels backfilled')`);
+  await pool.query(`INSERT INTO staff_activity (staff_id, action, subject_type, subject_id)
+                    SELECT NULL, 'sale labels backfilled', 'system', 'sales-credit'
+                     WHERE NOT EXISTS (SELECT 1 FROM staff_activity WHERE action = 'sale labels backfilled')`);
   /* Every version of a quote before it changed: who changed it, from where,
      and why. Nothing deletes from here; the owner can put a version back. */
   await pool.query(`
@@ -2909,6 +2934,45 @@ async function raiseFollowup({ kind, code = null, title, detail = {}, alert = tr
     .catch((err) => console.error('follow-up text failed:', err.message));
 }
 
+/* ── Shop lead or rep lead (tools/lib/sales-credit.js) ───────────────────── */
+
+/** What the shop already knows about a contact: a quote at any age, a lead
+ *  in the last year (not `excludeLead`), an online studio order. The studio
+ *  is asked only when the database knows nothing, and a studio that does not
+ *  answer counts as not knowing: the owner still sees the label and can
+ *  change it. */
+async function seenCustomer({ email, phone }, { excludeLead = null } = {}) {
+  const e = FRAUD.emailKey(email);
+  const p = FRAUD.phoneKey(phone);
+  if (!e && !p) return null;
+  const match = (t) => `((${t}.email IS NOT NULL AND $1 <> '' AND lower(trim(${t}.email)) = $1)
+                        OR ($2 <> '' AND right(regexp_replace(COALESCE(${t}.phone, ''), '\\D', '', 'g'), 10) = $2))`;
+  const [{ rows: [quote] }, { rows: [lead] }] = await Promise.all([
+    pool.query(`SELECT code, created_at FROM quotes q WHERE ${match('q')} ORDER BY created_at LIMIT 1`, [e, p]),
+    pool.query(`SELECT id, created_at FROM submissions s WHERE ${match('s')}
+                  AND s.created_at > NOW() - make_interval(days => $3) AND ($4::int IS NULL OR s.id <> $4)
+                ORDER BY created_at LIMIT 1`, [e, p, CREDIT.KNOWN_LEAD_DAYS, excludeLead]),
+  ]);
+  let studio = null;
+  if (!quote && !lead && e) {
+    const feed = await fetchStudioOrders().catch(() => ({ orders: [] }));
+    const o = (feed.orders || []).find((x) => FRAUD.emailKey(x.email) === e);
+    if (o) studio = { ref: o.id || o.ref || null, created: o.created || null };
+  }
+  return { quote: quote || null, lead: lead || null, studio };
+}
+
+/** Salespeople a customer might name: active helpers who may draft quotes. */
+async function salesReps() {
+  return (await staffRoster({ activeOnly: true }))
+    .filter((r) => STAFF.levelOf({ kind: 'staff', perms: r.perms }, 'quotes.draft') === 'on');
+}
+
+function saleTypePill(type, repName) {
+  const t = CREDIT.SALE_TYPES[type] || CREDIT.SALE_TYPES.shop;
+  return pill(type === 'rep' && repName ? `${t.label} · ${repName}` : t.label, t.tone);
+}
+
 /** Where a job opens for whoever is signed in: the full job page, or the
  *  designer's page for someone who may not see prices or contact details. */
 function jobPath(code) {
@@ -3108,6 +3172,17 @@ app.post('/submit', countFormFailures('quote'), makeRateLimit(4, 60 * 60 * 1000)
 
   const s = { name: name.trim(), phone: phone.trim(), email: email.trim().toLowerCase(), description, photo_url,
               first_touch: parseFirstTouch(req.headers.cookie) };
+  /* "How did you hear about us?" (optional). Naming a salesperson makes the
+     lead `pending` for the owner to decide; it never pays on its own. A
+     failed lookup leaves it pending with the name as typed. */
+  const heardFrom = CREDIT.heardFromIn(req.body.heard_from);
+  const heardRepText = heardFrom === 'rep' ? String(req.body.heard_rep || '').trim().slice(0, 80) : '';
+  let heardRepId = null;
+  if (heardFrom === 'rep' && heardRepText) {
+    heardRepId = CREDIT.matchRep(heardRepText, await salesReps().catch(() => []));
+  }
+  const label = CREDIT.classifyLead({ by: 'public',
+    heardRep: heardFrom === 'rep' ? { id: heardRepId, typed: heardRepText || 'not named' } : null });
 
   /* One enquiry, however many times the button is pressed.
      
@@ -3137,12 +3212,14 @@ app.post('/submit', countFormFailures('quote'), makeRateLimit(4, 60 * 60 * 1000)
          ON CONFLICT DO NOTHING is the guard itself. Two concurrent clicks both
          reach the INSERT — one wins the unique index and the other returns no
          row, which is how a race is decided rather than hoped about. */
-      `INSERT INTO submissions (name, phone, email, description, photo_url, dedupe_key, first_touch)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
+      `INSERT INTO submissions (name, phone, email, description, photo_url, dedupe_key, first_touch,
+                                heard_from, heard_rep_text, sale_type, sale_type_reason, rep_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
        ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
        RETURNING id`,
       [s.name, s.phone, s.email, s.description, s.photo_url, dedupeAt(nowBucket),
-       s.first_touch ? JSON.stringify(s.first_touch) : null]
+       s.first_touch ? JSON.stringify(s.first_touch) : null,
+       heardFrom, heardRepText || null, label.sale_type, label.reason, label.rep_id]
     );
     if (rows.length) {
       submissionId = rows[0].id;
@@ -11095,6 +11172,40 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
 
     const q = rows[0];
     const code = q.code;
+    /* SHOP OR REP, decided once when the quote is first saved
+       (tools/lib/sales-credit.js): a salesperson's customer reordering within
+       12 months stays theirs; otherwise the lead it answers decides; otherwise
+       it is the shop's, credited to whoever built it at the shop-lead rate. */
+    if (!QUOTE_CODE_RE.test(editing)) {
+      try {
+        const e = FRAUD.emailKey(q.email);
+        const p = FRAUD.phoneKey(q.phone);
+        const contact = `((NULLIF($1, '') IS NOT NULL AND lower(trim(x.email)) = $1)
+                          OR (NULLIF($2, '') IS NOT NULL AND right(regexp_replace(COALESCE(x.phone, ''), '\\D', '', 'g'), 10) = $2))`;
+        const [{ rows: [first] }, { rows: [lead] }] = await Promise.all([
+          (e || p) ? pool.query(
+            `SELECT x.code, x.credited_to AS rep_id, x.accepted_at AS at FROM quotes x
+              WHERE x.sale_type = 'rep' AND x.credited_to > 0 AND x.accepted_at IS NOT NULL AND x.code <> $3 AND ${contact}
+              ORDER BY x.accepted_at LIMIT 1`, [e, p, code]) : { rows: [] },
+          q.from_submission_id
+            ? pool.query('SELECT sale_type, rep_id FROM submissions WHERE id = $1', [q.from_submission_id])
+            : (e || p) ? pool.query(
+              `SELECT x.sale_type, x.rep_id FROM submissions x
+                WHERE x.sale_type IN ('rep', 'pending') AND x.created_at > NOW() - make_interval(days => $3) AND ${contact}
+                ORDER BY x.created_at DESC LIMIT 1`, [e, p, CREDIT.KNOWN_LEAD_DAYS]) : { rows: [] },
+        ]);
+        const label = CREDIT.classifyQuote({ reorder: first || null, lead: lead || null, builder: staffId });
+        await pool.query('UPDATE quotes SET sale_type = $2, sale_type_reason = $3, credited_to = $4 WHERE code = $1',
+          [code, label.sale_type, label.reason, label.credited_to]);
+        Object.assign(q, { sale_type: label.sale_type, sale_type_reason: label.reason, credited_to: label.credited_to });
+      } catch (err) {
+        /* The quote is saved; an unlabelled one is a shop sale (the column's
+           default), which pays a helper at most their shop rate. Reported so
+           a real rep sale is not quietly lost. */
+        console.error(`sale label for ${code} failed:`, err.message);
+        reportError('sale-label', err, code).catch(() => {});
+      }
+    }
     /* Sales credit. A helper's own quote is theirs when nobody has it yet;
        only the owner names who else made a sale (credit decides commission,
        so a helper never picks it). */
@@ -17656,6 +17767,7 @@ async function renderBoard(VIEW, req, res) {
             <a href="/admin/customer?q=${encodeURIComponent(q.email || q.phone || '')}"
                style="color:#0B1F4B;text-decoration:none"><b>${escEmail(q.name || q.phone || q.email || '—')}</b></a>
             <div class="muted">${escEmail(quoteSummary(q.items))} &middot; ${fmtDate(q.created_at)}</div>
+            <div style="margin-top:4px">${saleTypePill(q.sale_type || 'shop')}</div>
           </div>
           <div style="text-align:right;white-space:nowrap">
             <div class="tot" style="font-size:16px">${money(q.total || q.subtotal)}</div>
@@ -19551,6 +19663,8 @@ function leadCardHtml(l, { back = '/admin/quotes' } = {}) {
         <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <b style="color:#0B1F4B">${escEmail(l.name || 'No name given')}</b>${pill(srcLabel, srcTone)}${
+              /* Shop lead or a salesperson's own, from the moment it came in (tools/lib/sales-credit.js). */
+              saleTypePill(l.sale_type || 'shop')}${
               status === 'quoted' ? pill('Quoted', 'green') : status === 'dismissed' ? pill('Let go', 'neutral') : ''}
           </div>
           <span class="muted" style="font-size:12.5px">${escEmail(ageInWords(l.created_at))}</span>
@@ -19567,6 +19681,9 @@ function leadCardHtml(l, { back = '/admin/quotes' } = {}) {
                l.email || l.phone ? 'answer in tawk.to' : 'No email left — answer in tawk.to'}</a>` : '',
             ].filter(Boolean).join(' &middot; ')}
         </div>
+        ${l.sale_type_reason && l.sale_type !== 'shop' ? `<div class="muted" style="margin-top:6px;font-size:12.5px">${escEmail(l.sale_type_reason)}</div>` : ''}
+        ${l.heard_from ? `<div class="muted" style="margin-top:6px;font-size:12.5px">Heard about us: <b style="color:#0B1F4B">${
+          escEmail(CREDIT.HEARD_FROM[l.heard_from] || l.heard_from)}</b>${l.heard_rep_text ? ` &middot; named “${escEmail(l.heard_rep_text)}”` : ''}</div>` : ''}
         ${l.first_touch ? `<div class="muted" style="margin-top:6px;font-size:12.5px">Came from: <b style="color:#0B1F4B">${
           escEmail(firstTouchLabel(l.first_touch))}</b>${l.first_touch.land ? ` &middot; landed on ${escEmail(l.first_touch.land)}` : ''}${
           l.first_touch.at ? ` &middot; first visit ${escEmail(l.first_touch.at)}` : ''}</div>` : ''}
@@ -24097,7 +24214,7 @@ const isoDate = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) 
 
 async function staffRoster({ activeOnly = false } = {}) {
   const { rows } = await pool.query(
-    `SELECT id, name, email, active, perms, commission_pct, training_track, last_seen_at, created_at FROM staff
+    `SELECT id, name, email, active, perms, commission_pct, shop_commission_pct, training_track, last_seen_at, created_at FROM staff
       ${activeOnly ? 'WHERE active' : ''} ORDER BY active DESC, name`);
   return rows;
 }
@@ -24198,8 +24315,10 @@ async function renderStaffPage(req, res, extra = '') {
       </form>
       <form method="post" action="/admin/staff/${s.id}" class="row" style="margin-top:10px;gap:6px;align-items:center">
         <input type="hidden" name="action" value="commission">
-        <label>Commission % <input name="commission_pct" type="number" min="0" max="30" step="0.25"
+        <label>Own leads % <input name="commission_pct" type="number" min="0" max="30" step="0.25"
           value="${escEmail(String(Number(s.commission_pct || 0)))}" style="width:80px"></label>
+        <label>Shop leads % <input name="shop_commission_pct" type="number" min="0" max="30" step="0.25"
+          value="${escEmail(String(Number(s.shop_commission_pct || 0)))}" style="width:80px"></label>
         <button type="submit" class="btn btn-ghost">Save</button>
       </form>
     </div>`;
@@ -24217,7 +24336,8 @@ async function renderStaffPage(req, res, extra = '') {
         <label>Start as <select name="preset">${presetOptions}</select></label>
         <label>Training path <select name="training_track">${Object.entries(TRAINING.TRACKS).map(([k, t]) =>
           `<option value="${k}">${escEmail(t.label)}</option>`).join('')}</select></label>
-        <label>Commission % <input name="commission_pct" type="number" min="0" max="30" step="0.25" value="0" style="width:80px"></label>
+        <label>Own leads % <input name="commission_pct" type="number" min="0" max="30" step="0.25" value="0" style="width:80px"></label>
+        <label>Shop leads % <input name="shop_commission_pct" type="number" min="0" max="30" step="0.25" value="0" style="width:80px"></label>
         <button type="submit">Add</button>
       </form>
       <p class="muted" style="margin-top:8px">${Object.values(STAFF.PRESETS).map((p) =>
@@ -24249,8 +24369,10 @@ app.post('/admin/staff', requireAdmin, async (req, res) => {
     }
     /* password_hash predates signing in through Cloudflare; '!' matches no password. */
     await pool.query(
-      `INSERT INTO staff (name, email, password_hash, perms, commission_pct, training_track) VALUES ($1, $2, '!', $3, $4, $5)`,
-      [name, email, JSON.stringify(STAFF.presetPerms(preset)), pct, track]);
+      `INSERT INTO staff (name, email, password_hash, perms, commission_pct, training_track, shop_commission_pct)
+       VALUES ($1, $2, '!', $3, $4, $5, $6)`,
+      [name, email, JSON.stringify(STAFF.presetPerms(preset)), pct, track,
+       Math.min(30, Math.max(0, Number(b.shop_commission_pct) || 0))]);
     return renderStaffPage({ query: { ok: `${name} added as ${STAFF.PRESETS[preset].label}.` } }, res,
       cloudflareStepCard(name, email));
   } catch (err) {
@@ -24292,8 +24414,9 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
       }
       case 'commission': {
         const pct = Math.min(30, Math.max(0, Number(b.commission_pct) || 0));
-        await pool.query('UPDATE staff SET commission_pct = $2 WHERE id = $1', [id, pct]);
-        return back(res, '/admin/staff', 'ok', `${s.name}'s commission is ${pct}%.`);
+        const shopPct = Math.min(30, Math.max(0, Number(b.shop_commission_pct) || 0));
+        await pool.query('UPDATE staff SET commission_pct = $2, shop_commission_pct = $3 WHERE id = $1', [id, pct, shopPct]);
+        return back(res, '/admin/staff', 'ok', `${s.name}: ${pct}% on their own leads, ${shopPct}% on shop leads.`);
       }
       default:
         return back(res, '/admin/staff', 'err', 'Unknown action.');
@@ -24360,7 +24483,7 @@ async function watchList(days = WATCH_DAYS) {
         WHERE p.unconfirmed ORDER BY p.created_at`),
     q(`SELECT staff_id, action, subject_id, detail, created_at FROM staff_activity
         WHERE staff_id IS NOT NULL AND created_at > NOW() - $1::interval
-          AND (action IN ('quote edit refused', 'message held: outside payment')
+          AND (action IN ('quote edit refused', 'message held: outside payment', 'found lead was already known', 'lead registered as theirs')
                OR action = 'POST /admin/lead/:id/dismiss' OR action = 'POST /admin/leads/dismiss-old')
         ORDER BY created_at DESC LIMIT 100`, [since]),
     q(`SELECT i.staff_id, i.ip, i.first_seen FROM staff_ips i
@@ -24384,13 +24507,16 @@ async function watchList(days = WATCH_DAYS) {
   }
   const said = { 'quote edit refused': 'tried to change a locked quote',
                  'message held: outside payment': 'wrote a message mentioning payment outside the shop (held)',
+                 'found lead was already known': 'said they found a customer the shop already knew (kept as a shop lead)',
+                 'lead registered as theirs': 'registered a lead as their own',
                  'POST /admin/lead/:id/dismiss': 'dismissed a lead',
                  'POST /admin/leads/dismiss-old': 'dismissed old leads in bulk' };
   for (const a of activity) {
     const d = a.detail || {};
-    out.push({ tone: a.action.startsWith('POST') ? 'neutral' : 'red', at: a.created_at,
+    out.push({ tone: a.action.startsWith('POST') || a.action === 'lead registered as theirs' ? 'neutral'
+      : a.action === 'found lead was already known' ? 'amber' : 'red', at: a.created_at,
       code: /^[A-Z0-9]{6}$/.test(String(a.subject_id || '')) ? a.subject_id : null,
-      text: `${who(a.staff_id)} ${said[a.action] || a.action}${d.tried ? ` (${d.tried.join(', ')})` : ''}${d.phrase ? `: "${d.phrase}"` : ''}` });
+      text: `${who(a.staff_id)} ${said[a.action] || a.action}${d.tried ? ` (${d.tried.join(', ')})` : ''}${d.phrase ? `: "${d.phrase}"` : ''}${d.reason && a.action === 'found lead was already known' ? ` — ${d.reason}` : ''}` });
   }
   for (const i of ips) {
     out.push({ tone: 'neutral', at: i.first_seen, code: null, text: `${who(i.staff_id)} signed in from a new address (${i.ip})` });
@@ -24805,9 +24931,11 @@ async function commissionStartsAt(staffId) {
 }
 
 /** Every quote a helper sent that has taken money, with its commission state. */
-async function commissionLines(staffId, pct) {
+/* `rates` is the staff row: commission_pct on their own leads, shop_commission_pct
+   on the shop's, nothing on a sale still waiting for the owner's OK. */
+async function commissionLines(staffId, rates) {
   const { rows } = await pool.query(
-    `SELECT q.code, q.name, q.total, q.tax, q.settled_at,
+    `SELECT q.code, q.name, q.total, q.tax, q.settled_at, q.sale_type, q.sale_type_reason,
             -- A helper's cash or Zelle the owner has not confirmed counts for nothing yet.
             COALESCE(SUM(p.amount - COALESCE(p.fee, 0)) FILTER (WHERE NOT p.unconfirmed), 0)::float AS collected,
             COALESCE(SUM(p.amount) FILTER (WHERE NOT p.unconfirmed), 0)::float AS gross,
@@ -24820,13 +24948,14 @@ async function commissionLines(staffId, pct) {
         AND (EXISTS (SELECT 1 FROM staff_training t WHERE t.staff_id = $1 AND t.step_key = $2
                       AND q.created_at >= t.done_at)
              OR EXISTS (SELECT 1 FROM commission_payouts c WHERE c.staff_id = $1 AND c.quote_code = q.code))
-      GROUP BY q.code, q.name, q.total, q.tax, q.settled_at
+      GROUP BY q.code, q.name, q.total, q.tax, q.settled_at, q.sale_type, q.sale_type_reason
       ORDER BY MAX(p.created_at) DESC LIMIT 500`, [staffId, TRAINING.READY_KEY]);
   return rows.map((r) => {
+    const pct = CREDIT.rateFor(r.sale_type, rates || {});
     const c = TEAM.commissionFor({ collected: r.collected, total: r.total, tax: r.tax, pct });
     const paidInFull = !!r.settled_at || r.gross + 0.005 >= Number(r.total);
-    return { ...r, ...c, state: TEAM.commissionState({ paidInFull, lastMoneyAt: r.last_money_at,
-      disputeOpen: r.dispute_open, alreadyPaid: r.paid_amount_c != null }) };
+    return { ...r, ...c, pct, state: TEAM.commissionState({ paidInFull, lastMoneyAt: r.last_money_at,
+      disputeOpen: r.dispute_open, alreadyPaid: r.paid_amount_c != null, needsOk: r.sale_type === 'pending' }) };
   });
 }
 
@@ -24841,9 +24970,9 @@ app.get('/admin/commission', requireAdmin, async (req, res) => {
     const owedBonuses = e.bonuses.filter((b) => !b.paid_at);
     const payNow = round2(e.payable + e.bonusOwed);
     const today = new Date().toISOString().slice(0, 10);
-    const tone = { payable: 'green', waiting: 'blue', earning: 'neutral', 'on hold': 'red', paid: 'neutral' };
+    const tone = { payable: 'green', waiting: 'blue', earning: 'neutral', 'on hold': 'red', paid: 'neutral', 'needs your OK': 'amber' };
     res.send(adminPage('Commission', `
-      ${pageHeader(`Commission — ${s.name}`, `${pct}% of what was collected on quotes credited to them, before tax, less refunds, lost disputes and card fees. Payable ${TEAM.HOLD_DAYS} days after the job is paid in full.`)}
+      ${pageHeader(`Commission — ${s.name}`, `${pct}% on their own leads, ${e.shopPct}% on shop leads they close, of what was collected, before tax, less refunds, lost disputes and card fees. Payable ${TEAM.HOLD_DAYS} days after the job is paid in full.`)}
       ${flash(req.query)}
       ${filterChips(roster.map((r) => ({ label: r.name, href: `/admin/commission?staff=${r.id}`, on: r.id === s.id })))}
       ${commissionStartNote(e, true)}
@@ -24885,9 +25014,9 @@ app.get('/admin/commission', requireAdmin, async (req, res) => {
           <button type="submit" class="btn">Add incentive</button>
         </form></details></div>
       <div class="card">${lines.length ? `<table class="dt" style="width:100%"><thead><tr>
-        <th>Quote</th><th>Customer</th><th>Collected</th><th>Base</th><th>Commission</th><th></th></tr></thead><tbody>
-        ${lines.map((l) => `<tr><td><a href="/admin/production/${escEmail(l.code)}">${escEmail(l.code)}</a></td>
-          <td>${escEmail(l.name || '')}</td><td>${money(l.collected)}</td><td>${money(l.base)}</td>
+        <th>Quote</th><th>Customer</th><th>Lead</th><th>Collected</th><th>Base</th><th>Commission</th><th></th></tr></thead><tbody>
+        ${lines.map((l) => `<tr><td><a href="/admin/production/${escEmail(l.code)}#credit">${escEmail(l.code)}</a></td>
+          <td>${escEmail(l.name || '')}</td><td>${saleTypePill(l.sale_type)} <span class="muted">${l.pct}%</span></td><td>${money(l.collected)}</td><td>${money(l.base)}</td>
           <td>${money(l.state === 'paid' ? l.paid_amount_c : l.amount)}</td><td>${pill(l.state, tone[l.state])}</td></tr>`).join('')}
         </tbody></table>` : emptyState('No money has come in on their quotes yet.')}</div>`, 'team'));
   } catch (err) {
@@ -24904,11 +25033,11 @@ app.post('/admin/commission/pay', requireAdmin, async (req, res) => {
     await client.query('BEGIN');
     // One payout at a time per helper, so two presses cannot book it twice.
     await client.query('SELECT pg_advisory_xact_lock($1, $2)', [7301, staffId]);
-    const { rows: [s] } = await client.query('SELECT id, name, commission_pct FROM staff WHERE id = $1', [staffId]);
+    const { rows: [s] } = await client.query('SELECT id, name, commission_pct, shop_commission_pct FROM staff WHERE id = $1', [staffId]);
     if (!s) { await client.query('ROLLBACK'); return res.redirect('/admin/commission'); }
     /* Recomputed here, never taken from the form: what is payable is what the
        ledger says now. */
-    const lines = (await commissionLines(staffId, Number(s.commission_pct || 0)))
+    const lines = (await commissionLines(staffId, s))
       .filter((l) => l.state === 'payable' && l.amount > 0);
     const { rows: bonuses } = await client.query(
       'SELECT id, amount, reason FROM staff_bonuses WHERE staff_id = $1 AND paid_at IS NULL FOR UPDATE', [staffId]);
@@ -25027,6 +25156,58 @@ app.post('/admin/quote/:code/credit', requireAdmin, async (req, res) => {
   }
 });
 
+/** The shop/rep label on a job page, with the owner's controls: approve or
+ *  decline a customer's claim, or relabel with a reason. Fixed once paid. */
+async function jobSaleTypeHtml(q, everyone) {
+  const type = q.sale_type || 'shop';
+  const repName = q.credited_to > 0 ? nameOf(everyone, Number(q.credited_to)) : '';
+  const head = `<div style="margin-top:8px">${saleTypePill(type, repName)}
+    ${q.sale_type_reason ? `<span class="muted" style="font-size:12.5px"> ${escEmail(q.sale_type_reason)}</span>` : ''}</div>`;
+  if (!isOwner()) return head;
+  const { rows: [paid] } = await pool.query('SELECT 1 AS x FROM commission_payouts WHERE quote_code = $1 LIMIT 1', [q.code]);
+  if (paid) return head + '<p class="muted" style="font-size:12px;margin:4px 0 0">Commission on this sale is paid, so the label is fixed.</p>';
+  const form = (inner) => `<form method="post" action="/admin/quote/${escEmail(q.code)}/sale-type" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">${inner}</form>`;
+  if (type === 'pending') {
+    return head + form(`<input name="reason" maxlength="200" placeholder="Why (optional)" style="flex:1 1 180px">
+      <button type="submit" name="sale_type" value="rep">Approve: their lead</button>
+      <button type="submit" name="sale_type" value="shop" class="btn-ghost">Decline: shop lead</button>`);
+  }
+  return head + `<details style="margin-top:6px"><summary style="font-size:12.5px">Change the label</summary>${form(`
+    <select name="sale_type">${Object.entries(CREDIT.SALE_TYPES).filter(([k]) => k !== 'pending' && k !== type)
+      .map(([k, v]) => `<option value="${k}">${escEmail(v.label)}</option>`).join('')}</select>
+    <input name="reason" maxlength="200" placeholder="Why — this is recorded" required style="flex:1 1 180px">
+    <button type="submit" class="btn btn-ghost">Save</button>`)}</details>`;
+}
+
+app.post('/admin/quote/:code/sale-type', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/quotes');
+  if (!isOwner()) return res.status(403).send('Only the owner labels a sale.');
+  const type = CREDIT.saleTypeIn(req.body && req.body.sale_type);
+  const why = text(req.body && req.body.reason, 200);
+  const backTo = `/admin/production/${code}#credit`;
+  if (!type || type === 'pending') return back(res, backTo, 'err', 'Pick shop lead or rep lead.');
+  try {
+    const { rows: [q] } = await pool.query('SELECT sale_type, credited_to FROM quotes WHERE code = $1', [code]);
+    if (!q) return res.redirect('/admin/quotes');
+    if (q.sale_type !== 'pending' && !why) return back(res, backTo, 'err', 'Say why the label changes.');
+    if (type === 'rep' && !(Number(q.credited_to) > 0)) return back(res, backTo, 'err', 'Credit the sale to the salesperson first, then mark it theirs.');
+    await snapshotQuote(code, 'sale label', clientIp(req));
+    const reason = q.sale_type === 'pending'
+      ? `${type === 'rep' ? 'Approved' : 'Declined'} by the owner${why ? `: ${why}` : ''}`
+      : `Changed by the owner: ${why}`;
+    const { rowCount } = await pool.query(
+      `UPDATE quotes SET sale_type = $2, sale_type_reason = $3
+        WHERE code = $1 AND NOT EXISTS (SELECT 1 FROM commission_payouts c WHERE c.quote_code = $1)`, [code, type, reason]);
+    if (!rowCount) return back(res, backTo, 'err', 'Commission on this sale is paid, so the label is fixed.');
+    logActivity(OWNER_ACTOR, 'sale label', { type: 'quote', id: code }, { from: q.sale_type, to: type, why });
+    return back(res, backTo, 'ok', type === 'rep' ? 'Marked as their lead.' : 'Marked as a shop lead.');
+  } catch (err) {
+    console.error('sale label failed:', err.message);
+    return back(res, backTo, 'err', 'Could not save the label.');
+  }
+});
+
 /** The sales-credit card on a job page. */
 async function jobCreditCard(q) {
   const [active, everyone] = await Promise.all([staffRoster({ activeOnly: true }), staffRoster()]);
@@ -25035,6 +25216,7 @@ async function jobCreditCard(q) {
   const who = cur == null ? 'not set' : cur === CREDIT_OWNER ? 'the owner' : nameOf(everyone, cur);
   const field = creditField(q, active, { bare: true });
   return `<div class="card" id="credit"><b>Sales credit</b> <span class="muted">&middot; ${escEmail(who)}</span>
+    ${await jobSaleTypeHtml(q, everyone)}
     ${/<select/.test(field) ? `<form method="post" action="/admin/quote/${escEmail(q.code)}/credit" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
       ${field}<button type="submit" class="btn btn-ghost">Save</button></form>` : field}</div>`;
 }
@@ -25109,8 +25291,9 @@ function incentiveRow(i, { awardFor } = {}) {
 /** Everything a helper has earned: commission by quote, and bonuses. */
 async function earningsFor(staff) {
   const pct = Number(staff.commission_pct || 0);
+  const shopPct = Number(staff.shop_commission_pct || 0);
   const [lines, { rows: bonuses }, startsAt] = await Promise.all([
-    commissionLines(staff.id, pct),
+    commissionLines(staff.id, staff),
     pool.query(`SELECT * FROM staff_bonuses WHERE staff_id = $1 ORDER BY created_at DESC LIMIT 200`, [staff.id]),
     commissionStartsAt(staff.id),
   ]);
@@ -25118,8 +25301,11 @@ async function earningsFor(staff) {
     .reduce((a, l) => a + (st === 'paid' ? Number(l.paid_amount_c) : l.amount), 0));
   const bonusOwed = round2(bonuses.filter((b) => !b.paid_at).reduce((a, b) => a + Number(b.amount), 0));
   const bonusPaid = round2(bonuses.filter((b) => b.paid_at).reduce((a, b) => a + Number(b.amount), 0));
-  return { pct, lines, bonuses, startsAt, payable: sum('payable'), waiting: sum('waiting'), earning: sum('earning'),
-           onHold: sum('on hold'), paid: sum('paid'), bonusOwed, bonusPaid };
+  const byType = (t) => round2(lines.filter((l) => l.sale_type === t && l.state !== 'paid').reduce((a, l) => a + l.amount, 0));
+  return { pct, shopPct, lines, bonuses, startsAt, payable: sum('payable'), waiting: sum('waiting'), earning: sum('earning'),
+           onHold: sum('on hold'), paid: sum('paid'), bonusOwed, bonusPaid,
+           repOpen: byType('rep'), shopOpen: byType('shop'),
+           needsOk: lines.filter((l) => l.state === 'needs your OK').length };
 }
 
 /** When commission starts, for the earnings pages. */
@@ -25140,6 +25326,9 @@ function earningsTiles(e) {
     { label: 'Waiting out the 14 days', value: money(e.waiting), tone: 'blue', sub: 'paid in full, settling' },
     { label: 'Still being paid', value: money(e.earning), tone: 'gray', sub: 'customer has a balance' },
     { label: 'Paid to you', value: money(e.paid + e.bonusPaid), tone: 'navy', sub: 'commission and bonuses' },
+    { label: 'Own leads (unpaid)', value: money(e.repOpen || 0), tone: 'green', sub: `at ${e.pct}%` },
+    { label: 'Shop leads (unpaid)', value: money(e.shopOpen || 0), tone: 'gray', sub: `at ${e.shopPct || 0}%` },
+    ...(e.needsOk ? [{ label: 'Waiting for the owner', value: String(e.needsOk), tone: 'amber', sub: 'customer named a salesperson' }] : []),
   ]);
 }
 
@@ -25149,11 +25338,12 @@ app.get('/admin/my-earnings', requireAdmin, async (req, res) => {
   const actor = currentActor() || OWNER_ACTOR;
   if (actor.kind !== 'staff') return res.redirect('/admin/commission');
   try {
-    const { rows: [me] } = await pool.query('SELECT id, name, commission_pct FROM staff WHERE id = $1', [actor.id]);
+    const { rows: [me] } = await pool.query('SELECT id, name, commission_pct, shop_commission_pct FROM staff WHERE id = $1', [actor.id]);
     const [e, incentives] = await Promise.all([earningsFor(me), incentivesFor(me.id)]);
-    const tone = { payable: 'green', waiting: 'blue', earning: 'neutral', 'on hold': 'red', paid: 'neutral' };
+    const tone = { payable: 'green', waiting: 'blue', earning: 'neutral', 'on hold': 'red', paid: 'neutral', 'needs your OK': 'amber' };
     res.send(adminPage('My earnings', `
-      ${pageHeader('My earnings', `${e.pct}% commission on money collected from sales credited to you, before tax, less refunds and card fees. It is payable ${TEAM.HOLD_DAYS} days after the customer has paid in full.`)}
+      ${pageHeader('My earnings', `${e.pct}% on customers you found and registered as your leads (and their reorders for 12 months); ${e.shopPct}% on shop leads you close. On money collected, before tax, less refunds and card fees, payable ${TEAM.HOLD_DAYS} days after the customer has paid in full.`)}
+      <div class="card"><b>How a sale becomes yours.</b> <span class="muted">Add the customer on Leads with "I found this customer" before you quote them. If the shop has already heard from them, it stays a shop lead. A customer who says you sent them waits for the owner's OK.</span></div>
       ${commissionStartNote(e, false)}
       ${earningsTiles(e)}
       ${incentives.length ? `<div class="card"><b>Incentives</b>${incentives.map((i) => incentiveRow(i)).join('')}</div>` : ''}
@@ -25162,9 +25352,9 @@ app.get('/admin/my-earnings', requireAdmin, async (req, res) => {
         pill(b.paid_at ? 'paid' : 'owed', b.paid_at ? 'neutral' : 'green')}</span></div>`).join('')}</div>` : ''}
       <div class="card"><b>Commission by sale</b>${e.lines.length ? `<div class="rows">${e.lines.map((l) => `<div class="row-i">
         <span class="row-main"><a href="/admin/production/${escEmail(l.code)}"><b>${escEmail(l.code)}</b></a> ${escEmail(l.name || '')}
-          <div class="row-sub">collected ${money(l.collected)} &middot; commission on ${money(l.base)}</div></span>
+          <div class="row-sub">${saleTypePill(l.sale_type)} ${l.pct}% &middot; collected ${money(l.collected)} &middot; commission on ${money(l.base)}</div></span>
         <span class="row-end"><b>${money(l.state === 'paid' ? l.paid_amount_c : l.amount)}</b> ${pill(l.state, tone[l.state])}</span></div>`).join('')}</div>`
-        : `<p class="muted">Nothing yet. When a customer pays on a quote you created after training, it shows here. Set the sales credit on the quote form or the job page.</p>`}</div>`, 'earnings'));
+        : `<p class="muted">Nothing yet. When a customer pays on a quote credited to you after training, it shows here.</p>`}</div>`, 'earnings'));
   } catch (err) {
     console.error('my earnings failed:', err.message);
     res.status(500).send(adminPage('My earnings', '<div class="card"><div class="warn">Could not load your earnings.</div></div>', 'earnings'));
@@ -25320,13 +25510,33 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
   if (email && !STAFF.EMAIL_RE.test(email)) return back(res, '/admin/leads', 'err', 'That email does not look right.');
   try {
     const actor = currentActor();
+    const isStaff = !!(actor && actor.kind === 'staff');
+    /* A helper says where it came from; the shop's records decide whether a
+       "found" lead really is theirs (tools/lib/sales-credit.js). */
+    const origin = String(b.origin || '');
+    if (isStaff && !['shop', 'found'].includes(origin)) {
+      return back(res, '/admin/leads', 'err', 'Say where the lead came from: they contacted the shop, or you found them.');
+    }
+    const foundIt = isStaff && origin === 'found';
+    if (foundIt && !email && !FRAUD.phoneKey(phone)) {
+      return back(res, '/admin/leads', 'err', 'A lead you found needs their email or phone, so it can be checked against the shop’s customers.');
+    }
+    const known = foundIt ? CREDIT.knownReason(await seenCustomer({ email, phone }), fmtDate) : '';
+    const label = CREDIT.classifyLead({ by: isStaff ? 'staff' : 'owner', staffId: isStaff ? actor.id : null, foundIt, known });
     const source = ['Facebook', 'Instagram', 'TikTok', 'Google'].includes(platform) ? 'social'
       : platform === 'Phone' ? 'phone' : 'manual';
     const { rows: [l] } = await pool.query(
-      `INSERT INTO submissions (name, phone, email, description, source, platform, profile_url, assigned_to)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+      `INSERT INTO submissions (name, phone, email, description, source, platform, profile_url, assigned_to,
+                                sale_type, sale_type_reason, rep_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
       [name || (profileUrl ? 'Social lead' : 'Lead'), phone, email, description || null, source, platform, profileUrl,
-       actor && actor.kind === 'staff' ? actor.id : null]);
+       isStaff ? actor.id : null, label.sale_type, label.reason, label.rep_id]);
+    if (foundIt) {
+      logActivity(actor, label.sale_type === 'rep' ? 'lead registered as theirs' : 'found lead was already known',
+        { type: 'lead', id: l.id }, { reason: label.reason });
+      return back(res, `/admin/leads#lead-${l.id}`, label.sale_type === 'rep' ? 'ok' : 'err',
+        label.sale_type === 'rep' ? 'Registered as your lead.' : `Saved as a shop lead: ${label.reason}.`);
+    }
     return res.redirect(`/admin/leads#lead-${l.id}`);
   } catch (err) {
     console.error('add lead failed:', err.message);
@@ -25512,8 +25722,18 @@ function logCallForm() {
 }
 
 function addLeadForm() {
-  return `<details class="card"><summary><b>Add a lead</b> <span class="muted">— a social DM, a call, a walk-in</span></summary>
+  const staff = !isOwner();
+  return `<details class="card"><summary><b>Add a lead</b> <span class="muted">— a social DM, a call, a walk-in, or someone you found</span></summary>
     <form method="post" action="/admin/leads/add" class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px">
+      ${staff ? `<fieldset style="flex:1 1 100%;border:1px solid #e3e8f2;border-radius:10px;padding:8px 12px;margin:0">
+        <legend style="font-size:13px;font-weight:600;padding:0 4px">Where did this lead come from?</legend>
+        <label style="display:flex;gap:8px;align-items:flex-start;margin:4px 0;text-transform:none;letter-spacing:0;font-weight:400">
+          <input type="radio" name="origin" value="shop" required style="width:auto;margin-top:3px">
+          <span><b>They contacted the shop</b> — a DM, call, email or walk-in to June's Tees. A shop lead.</span></label>
+        <label style="display:flex;gap:8px;align-items:flex-start;margin:4px 0;text-transform:none;letter-spacing:0;font-weight:400">
+          <input type="radio" name="origin" value="found" required style="width:auto;margin-top:3px">
+          <span><b>I found this customer</b> — my own outreach. Your lead, if the shop has not heard from them before.</span></label>
+      </fieldset>` : ''}
       <select name="platform">${SOCIAL_PLATFORMS.map((p) => `<option>${p}</option>`).join('')}</select>
       <input name="name" placeholder="Name" maxlength="200">
       <input name="email" type="email" placeholder="Email" maxlength="254">
@@ -25787,7 +26007,7 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
     /* A helper's own earnings, so they can follow what their sales are worth.
        A failure costs this panel, not the page. */
     const earn = me ? await (async () => {
-      const { rows: [st] } = await pool.query('SELECT id, name, commission_pct FROM staff WHERE id = $1', [me]);
+      const { rows: [st] } = await pool.query('SELECT id, name, commission_pct, shop_commission_pct FROM staff WHERE id = $1', [me]);
       const [e, incentives] = await Promise.all([earningsFor(st), incentivesFor(me)]);
       return { e, incentives };
     })().catch((err) => { console.error('my day earnings failed:', err.message); return null; }) : null;
