@@ -79,4 +79,29 @@ function photosOf(q, cloud) {
     .map((p) => ({ ...p, ...describe(p.url, cloud, p.name) }));
 }
 
-module.exports = { FOLDER, MAX_PHOTOS, MAX_FILE_BYTES, ACCEPT, cloudName, photoUrlOk, cleanName, describe, photosOf };
+/** What Cloudinary's download API needs to hand back the ORIGINAL of a file
+ *  (2026-10-06). The plain delivery URL is refused for PDFs and ZIPs on this
+ *  account ("deny or ACL failure", Cloudinary's default security setting), so
+ *  the job page could not open them; the signed API download is not subject
+ *  to that setting and returns the bytes exactly as uploaded. Null for a URL
+ *  that is not ours. */
+function downloadSource(url, cloud) {
+  const p = parse(url, cloud);
+  if (!p) return null;
+  const m = /\/(image|raw)\/upload\/(?:v\d+\/)?(.+)$/.exec(url);
+  const file = m[2];
+  return p.type === 'raw'
+    ? { resourceType: 'raw', publicId: file, format: '' }
+    : { resourceType: 'image', publicId: file.replace(/\.[A-Za-z0-9]+$/, ''), format: p.ext };
+}
+
+/** The name to save a file under: the customer's, with its real extension. */
+function downloadName(photo) {
+  const ext = String(photo.ext || '').toLowerCase();
+  let n = cleanName(photo.name).replace(/[\\/:*?"<>|]/g, '_') || 'artwork';
+  if (ext && !n.toLowerCase().endsWith('.' + ext)) n += '.' + ext;
+  return n;
+}
+
+module.exports = { FOLDER, MAX_PHOTOS, MAX_FILE_BYTES, ACCEPT, cloudName, photoUrlOk, cleanName, describe, photosOf,
+  downloadSource, downloadName };

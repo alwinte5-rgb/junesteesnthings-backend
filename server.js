@@ -45,6 +45,8 @@ function pickupHowHtml() {
 const { verifyTwilioSignature, classifyInbound } = require('./tools/lib/twilio-webhook');
 const TAXCERT = require('./tools/lib/tax-certificates');
 const QPHOTOS = require('./tools/lib/quote-photos');
+const ZIPSTREAM = require('./tools/lib/zip-stream');
+const { Readable } = require('node:stream');
 const REVREPLY = require('./tools/lib/review-replies');
 const STAFF = require('./tools/lib/staff');
 const FRAUD = require('./tools/lib/fraud-signals');
@@ -19091,21 +19093,26 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
    the routes by /certificates. */
 /** The photos the customer sent from their quote page, full size a tap away.
  *  Nothing renders until there is one. */
-function jobPhotosCard(q) {
+/* `base` is the page the downloads hang off: the job page, or a designer's
+   design page (which checks the job is theirs). */
+function jobPhotosCard(q, base = `/admin/production/${q.code}`) {
   const photos = QPHOTOS.photosOf(q, QPHOTOS.cloudName());
   if (!photos.length) return '';
   return `
     <div class="card" id="photos" style="margin-top:14px">
-      <h2 class="card-title">Customer artwork (${photos.length})</h2>
-      <div class="muted" style="font-size:12.5px;margin-bottom:8px">Sent from their quote page. Tap a picture to view it;
-        <b>original</b> is the file exactly as they sent it, for production.</div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap">${photos.map((p) => `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+        <h2 class="card-title" style="margin:0">Customer artwork (${photos.length})</h2>
+        <a class="btn" style="padding:7px 14px;font-size:13px" href="${escEmail(base)}/artwork.zip">Download all (zip)</a>
+      </div>
+      <div class="muted" style="font-size:12.5px;margin:6px 0 8px">Sent from their quote page. Tap a picture to look at it;
+        <b>download</b> saves the file exactly as they sent it, for production.</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">${photos.map((p, n) => `
         <div style="width:96px" title="${escEmail(p.at ? new Date(p.at).toLocaleString('en-US', { timeZone: 'America/Chicago' }) : '')}">
-          <a href="${escEmail(p.view)}" target="_blank" rel="noopener" style="text-decoration:none">${p.kind === 'image'
+          <a href="${escEmail(p.kind === 'file' || p.view === p.url ? `${base}/artwork/${n}?view=1` : p.view)}" target="_blank" rel="noopener" style="text-decoration:none">${p.kind === 'image'
             ? `<img src="${escEmail(p.thumb)}" alt="" loading="lazy" style="width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid #e3e8f2;display:block">`
             : `<div style="width:96px;height:96px;border-radius:8px;border:1px solid #e3e8f2;background:#eef3ff;display:flex;align-items:center;justify-content:center;font-weight:700;color:#1848B8">${escEmail(p.ext.toUpperCase())}</div>`}</a>
           <div style="font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px">${escEmail(p.name)}</div>
-          <a href="${escEmail(p.url)}" target="_blank" rel="noopener" style="font-size:11.5px">original</a>
+          <a href="${escEmail(base)}/artwork/${n}" style="font-size:11.5px">download</a>
         </div>`).join('')}
       </div>
     </div>`;
@@ -19429,58 +19436,142 @@ function artQueueRows(list) {
    customer's files, the artwork and proof cards, notes, and a proof message.
    No price, total or payment; no email, phone or address; the customer by
    first name. They open only a job whose art is theirs or anyone's. */
-async function designJobFor(code, actor) {
-  const me = actor && actor.kind === 'staff' ? actor.id : null;
-  const { rows: [q] } = await pool.query(
-    `SELECT q.* FROM quotes q
-      WHERE q.code = $1 AND q.cancelled_at IS NULL
-        AND ($2::int IS NULL OR EXISTS (SELECT 1 FROM art_requests a WHERE a.quote_code = q.code
-                                        AND (a.assigned_to IS NULL OR a.assigned_to = $2)))`, [code, me]);
+/* ── Customer artwork downloads (2026-10-06) ───────────────────────────────
+   Each file comes through Cloudinary's signed download API rather than its
+   delivery URL, which this account refuses for PDFs and ZIPs, and is handed
+   over under the customer's own file name. Download all streams one ZIP.
+   The job is found by the page's own rule: any job for /admin/production,
+   only the designer's own for /admin/design (designJobFor). */
+async function artworkJobFor(kind, code) {
+  if (!QUOTE_CODE_RE.test(code)) return null;
+  if (kind === 'design') return designJobFor(code, currentActor());
+  const { rows: [q] } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
   return q || null;
+}
+async function openArtwork(photo) {
+  const src = QPHOTOS.downloadSource(photo.url, QPHOTOS.cloudName());
+  if (!src) throw new Error('not one of our files');
+  const url = cloudinary.utils.private_download_url(src.publicId, src.format,
+    { resource_type: src.resourceType, type: 'upload' });
+  const r = await fetch(url);
+  if (!r.ok || !r.body) throw new Error(`Cloudinary answered ${r.status}`);
+  return r;
+}
+const ARTWORK_TYPES = { pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif',
+  webp: 'image/webp', svg: 'image/svg+xml', zip: 'application/zip' };
+const artworkFile = (kind) => async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  try {
+    const q = await artworkJobFor(kind, code);
+    const photos = q ? QPHOTOS.photosOf(q, QPHOTOS.cloudName()) : [];
+    const n = /^\d{1,3}$/.test(String(req.params.n)) ? Number(req.params.n) : -1;
+    const photo = photos[n];
+    if (!photo) return res.status(404).send('That file is not on this job.');
+    const r = await openArtwork(photo);
+    const name = QPHOTOS.downloadName(photo);
+    /* ?view=1 opens a PDF or picture in the browser; anything else, and
+       every plain download, saves as a file. An SVG is never shown inline:
+       it can carry script. */
+    const inline = req.query.view === '1' && ['pdf', 'jpg', 'jpeg', 'png', 'gif', 'webp'].includes(photo.ext);
+    res.set('Content-Type', inline ? ARTWORK_TYPES[photo.ext] : (ARTWORK_TYPES[photo.ext] || 'application/octet-stream'));
+    res.set('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${name.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(name)}`);
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.set('Cache-Control', 'private, no-store');
+    const len = r.headers.get('content-length');
+    if (len) res.set('Content-Length', len);
+    Readable.fromWeb(r.body).pipe(res);
+  } catch (err) {
+    console.error(`artwork download ${code}/${req.params.n} failed:`, err.message);
+    if (!res.headersSent) res.status(502).send('Could not fetch that file just now. Try again in a minute.');
+    else res.destroy(err);
+  }
+};
+const artworkZip = (kind) => async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  let started = false;
+  try {
+    const q = await artworkJobFor(kind, code);
+    const photos = q ? QPHOTOS.photosOf(q, QPHOTOS.cloudName()) : [];
+    if (!photos.length) return res.status(404).send('No customer artwork on this job.');
+    /* Every file is reached BEFORE the zip starts, so a broken one is an
+       error page, not a half-written zip that will not open. */
+    const opened = [];
+    for (const p of photos) opened.push(await openArtwork(p));
+    const folder = `${code}-artwork`;
+    res.set('Content-Type', 'application/zip');
+    res.set('Content-Disposition', `attachment; filename="${folder}.zip"`);
+    res.set('Cache-Control', 'private, no-store');
+    started = true;
+    const zip = ZIPSTREAM.zipWriter(res);
+    const nameOf = ZIPSTREAM.uniqueNames();
+    for (let i = 0; i < photos.length; i++) {
+      await zip.add(`${folder}/${nameOf(QPHOTOS.downloadName(photos[i]))}`, Readable.fromWeb(opened[i].body),
+        photos[i].at ? new Date(photos[i].at) : new Date());
+    }
+    await zip.finish();
+  } catch (err) {
+    console.error(`artwork zip ${code} failed:`, err.message);
+    if (!started) res.status(502).send('Could not fetch the files just now. Try again in a minute.');
+    else res.destroy(err);
+  }
+};
+
+async function designJobFor(code, actor) {
+const me = actor && actor.kind === 'staff' ? actor.id : null;
+const { rows: [q] } = await pool.query(
+  `SELECT q.* FROM quotes q
+    WHERE q.code = $1 AND q.cancelled_at IS NULL
+      AND ($2::int IS NULL OR EXISTS (SELECT 1 FROM art_requests a WHERE a.quote_code = q.code
+                                      AND (a.assigned_to IS NULL OR a.assigned_to = $2)))`, [code, me]);
+return q || null;
 }
 
 function firstNameOf(name) {
-  return String(name || '').trim().split(/\s+/)[0] || 'Customer';
+return String(name || '').trim().split(/\s+/)[0] || 'Customer';
 }
 
 /** What to make, line by line, with no money in it. */
 function designSpecCard(q, catalog) {
-  const items = Array.isArray(q.items) ? q.items : [];
-  const sizes = (mix) => Object.entries(mix || {}).filter(([, n]) => Number(n) > 0)
-    .map(([k, n]) => `${escEmail(k)} ${Number(n)}`).join(', ');
-  const rows = items.filter((i) => !i.optional || q.accepted_at).map((i) => `<div class="row-i"><span class="row-main" style="white-space:normal">
-      <b>${escEmail(i.description || 'Item')}</b>${i.colour ? ` &middot; ${escEmail(i.colour)}` : ''} &middot; ${Number(i.qty) || 0} pcs
-      ${(() => { const d = decorationSummary(i, catalog); return d ? `<div class="row-sub" style="white-space:normal">${escEmail(d)}</div>` : ''; })()}
-      ${sizes(i.size_mix) ? `<div class="row-sub">Sizes: ${sizes(i.size_mix)}</div>` : ''}
-      ${i.details ? `<div class="row-sub" style="white-space:pre-wrap">${escEmail(i.details)}</div>` : ''}</span></div>`).join('');
-  return `<div class="card" id="spec"><h2 class="card-title">What to make</h2>
-    ${rows ? `<div class="rows">${rows}</div>` : '<p class="muted">No items on this job.</p>'}</div>`;
+const items = Array.isArray(q.items) ? q.items : [];
+const sizes = (mix) => Object.entries(mix || {}).filter(([, n]) => Number(n) > 0)
+  .map(([k, n]) => `${escEmail(k)} ${Number(n)}`).join(', ');
+const rows = items.filter((i) => !i.optional || q.accepted_at).map((i) => `<div class="row-i"><span class="row-main" style="white-space:normal">
+    <b>${escEmail(i.description || 'Item')}</b>${i.colour ? ` &middot; ${escEmail(i.colour)}` : ''} &middot; ${Number(i.qty) || 0} pcs
+    ${(() => { const d = decorationSummary(i, catalog); return d ? `<div class="row-sub" style="white-space:normal">${escEmail(d)}</div>` : ''; })()}
+    ${sizes(i.size_mix) ? `<div class="row-sub">Sizes: ${sizes(i.size_mix)}</div>` : ''}
+    ${i.details ? `<div class="row-sub" style="white-space:pre-wrap">${escEmail(i.details)}</div>` : ''}</span></div>`).join('');
+return `<div class="card" id="spec"><h2 class="card-title">What to make</h2>
+  ${rows ? `<div class="rows">${rows}</div>` : '<p class="muted">No items on this job.</p>'}</div>`;
 }
 
 app.get('/admin/design', requireAdmin, async (req, res) => {
-  try {
-    const actor = currentActor() || OWNER_ACTOR;
-    const me = actor.kind === 'staff' ? actor.id : null;
-    const { rows } = await pool.query(
-      `SELECT a.quote_code, a.status, a.updated_at, q.name, q.needed_by
-         FROM art_requests a JOIN quotes q ON q.code = a.quote_code
-        WHERE q.cancelled_at IS NULL AND ($1::int IS NULL OR a.assigned_to IS NULL OR a.assigned_to = $1)
-          AND (a.status <> 'approved' OR a.updated_at > NOW() - interval '14 days')
-        ORDER BY (a.status = 'approved'), q.needed_by NULLS LAST, a.updated_at LIMIT 200`, [me]);
-    const row = (a) => `<div class="row-i"><span class="row-main"><a href="/admin/design/${escEmail(a.quote_code)}"><b>${escEmail(a.quote_code)}</b></a>
-        ${escEmail(firstNameOf(a.name))}
-        <div class="row-sub">${escEmail(ART.STATES[a.status] ? ART.STATES[a.status].label : a.status)}${
-          a.needed_by ? ` &middot; needed by ${escEmail(fmtDate(a.needed_by))}` : ''}</div></span>
-      <span class="row-end muted">${escEmail(whenShort(a.updated_at))}</span></div>`;
-    res.send(adminPage('Design jobs', `
-      ${pageHeader('Design jobs', 'The jobs with you, soonest due first. Finished ones stay here for two weeks.')}
-      <div class="card">${rows.length ? `<div class="rows">${rows.map(row).join('')}</div>` : emptyState('No design jobs with you right now.')}</div>`, 'design'));
-  } catch (err) {
-    console.error('design board failed:', err.message);
-    res.status(500).send(adminPage('Design jobs', '<div class="card"><div class="warn">Could not load your jobs.</div></div>', 'design'));
-  }
+try {
+  const actor = currentActor() || OWNER_ACTOR;
+  const me = actor.kind === 'staff' ? actor.id : null;
+  const { rows } = await pool.query(
+    `SELECT a.quote_code, a.status, a.updated_at, q.name, q.needed_by
+       FROM art_requests a JOIN quotes q ON q.code = a.quote_code
+      WHERE q.cancelled_at IS NULL AND ($1::int IS NULL OR a.assigned_to IS NULL OR a.assigned_to = $1)
+        AND (a.status <> 'approved' OR a.updated_at > NOW() - interval '14 days')
+      ORDER BY (a.status = 'approved'), q.needed_by NULLS LAST, a.updated_at LIMIT 200`, [me]);
+  const row = (a) => `<div class="row-i"><span class="row-main"><a href="/admin/design/${escEmail(a.quote_code)}"><b>${escEmail(a.quote_code)}</b></a>
+      ${escEmail(firstNameOf(a.name))}
+      <div class="row-sub">${escEmail(ART.STATES[a.status] ? ART.STATES[a.status].label : a.status)}${
+        a.needed_by ? ` &middot; needed by ${escEmail(fmtDate(a.needed_by))}` : ''}</div></span>
+    <span class="row-end muted">${escEmail(whenShort(a.updated_at))}</span></div>`;
+  res.send(adminPage('Design jobs', `
+    ${pageHeader('Design jobs', 'The jobs with you, soonest due first. Finished ones stay here for two weeks.')}
+    <div class="card">${rows.length ? `<div class="rows">${rows.map(row).join('')}</div>` : emptyState('No design jobs with you right now.')}</div>`, 'design'));
+} catch (err) {
+  console.error('design board failed:', err.message);
+  res.status(500).send(adminPage('Design jobs', '<div class="card"><div class="warn">Could not load your jobs.</div></div>', 'design'));
+}
 });
 
+app.get('/admin/production/:code/artwork/:n', requireAdmin, artworkFile('production'));
+app.get('/admin/production/:code/artwork.zip', requireAdmin, artworkZip('production'));
+app.get('/admin/design/:code/artwork/:n', requireAdmin, artworkFile('design'));
+app.get('/admin/design/:code/artwork.zip', requireAdmin, artworkZip('design'));
 app.get('/admin/design/:code', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/design');
@@ -19499,7 +19590,7 @@ app.get('/admin/design/:code', requireAdmin, async (req, res) => {
       <div class="sub">${q.needed_by ? `Needed by ${escEmail(fmtDate(q.needed_by))} &middot; ` : ''}<a href="/admin/design" style="color:#1848B8">your design jobs</a></div>
       ${flash(req.query)}
       ${designSpecCard(q, catalog)}
-      ${jobPhotosCard(q)}
+      ${jobPhotosCard(q, `/admin/design/${code}`)}
       ${art}
       ${proofs}
       ${messages}

@@ -179,6 +179,10 @@ const ROUTES = {
   'GET /admin/quotes': 'quotes.view',
   'GET /admin/production': 'quotes.view',
   'GET /admin/production/:code': 'quotes.view',
+  /* The customer's artwork, one original or all of them zipped (2026-10-06).
+     A designer reaches the same files from their design page. */
+  'GET /admin/production/:code/artwork/:n': 'quotes.view',
+  'GET /admin/production/:code/artwork.zip': 'quotes.view',
   'GET /admin/quote/new|/admin/quote/:code/edit': 'quotes.draft',
   'GET /admin/api/quotes/prior': 'quotes.draft',
   'POST /admin/api/quotes|/admin/api/quotes/:code': 'quotes.draft',
@@ -251,6 +255,8 @@ const ROUTES = {
   // A designer's own board and job page.
   'GET /admin/design': 'jobs.design',
   'GET /admin/design/:code': 'jobs.design',
+  'GET /admin/design/:code/artwork/:n': 'jobs.design',
+  'GET /admin/design/:code/artwork.zip': 'jobs.design',
   'POST /admin/design/:code/note': 'jobs.design',
 
   'GET /admin/discounts': 'discounts.manage',
