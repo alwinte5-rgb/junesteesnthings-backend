@@ -127,3 +127,25 @@ test('a refused or unreadable review fails, so the page offers to send without i
   await assert.rejects(C.reviewMessage(input({ ask }), { client: fake({ stop_reason: 'refusal', content: [] }) }), (e) => e.code === 'refusal');
   await assert.rejects(C.reviewMessage(input({ ask }), { client: fake({ stop_reason: 'end_turn', content: [{ type: 'text', text: '{' }] }) }), /unreadable/);
 });
+
+test('Claude is told which files are on the job, which go with this message, and is shown the customer\'s pictures', async () => {
+  const j = { ...job, files: [{ name: 'IMG_2342.jpeg.jpg', from: 'customer' }, { name: 'final.pdf', from: 'design' }], pictures: 1 };
+  const ask = C.validateAsk({ draft: 'Hi', attached: ['IMG_8235_20x24_upload.pdf', 'x'.repeat(500)], subject: 's' }).ask;
+  assert.strictEqual(ask.attached[1].length, 120);
+  const pics = ['https://res.cloudinary.com/shop/image/upload/c_limit,w_1000/quote_photos/a.jpg', 'http://evil.example/x.jpg'];
+  const f = fake(answer({ verdict: 'ok', summary: 'fine', issues: [], improved_subject: 's', improved: 'Hi' }));
+  await C.reviewMessage({ ...input({ job: j, ask }), pictures: pics, shop: { delivery: 'free pickup; local delivery' } }, { client: f });
+  const content = f.calls[0].messages[0].content;
+  assert.ok(Array.isArray(content));
+  assert.deepStrictEqual(content.filter((b) => b.type === 'image').map((b) => b.source.url), [pics[0]], 'only our Cloudinary pictures are shown');
+  const text = content[content.length - 1].text;
+  assert.match(text, /IMG_2342\.jpeg\.jpg \(sent by the customer\)/);
+  assert.match(text, /final\.pdf \(the designer's final art\)/);
+  assert.match(text, /Attached to this message: IMG_8235_20x24_upload\.pdf/);
+  assert.match(text, /Getting it to them: free pickup; local delivery/);
+  // No pictures: plain text, as before.
+  const g = fake(answer(good));
+  await C.suggestReply(input(), { client: g });
+  assert.strictEqual(typeof g.calls[0].messages[0].content, 'string');
+  assert.match(g.calls[0].messages[0].content, /No files on this job yet/);
+});

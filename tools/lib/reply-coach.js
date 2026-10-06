@@ -96,6 +96,8 @@ function validateAsk(body) {
     pasted: clip(b.pasted, LIMITS.pasted),    // a customer email pasted in from the inbox
     draft: clip(b.draft, LIMITS.draft),       // what is already in the message box
     subject: clip(b.subject, LIMITS.subject).replace(/[\r\n]+/g, ' '),
+    /* The names of the files ticked or uploaded for this message. */
+    attached: (Array.isArray(b.attached) ? b.attached : []).slice(0, 10).map((n) => clip(n, 120)).filter(Boolean),
   } };
 }
 
@@ -138,15 +140,22 @@ function messagesBlock(history) {
 
 /** The whole user message. Kept separate so a test can read it. */
 function askMessage({ job, history, playbook = [], shop = {}, ask, money = true }) {
+  const files = job.files || [];
   const parts = [
     '<shop_facts>',
     shop.phone ? `Phone: ${esc(shop.phone)}` : '',
     shop.pickup ? `Pickup: ${esc(shop.pickup)}` : '',
+    shop.delivery ? `Getting it to them: ${esc(shop.delivery)}` : '',
     shop.link ? `Their order page: ${esc(shop.link)}` : '',
     '</shop_facts>',
     playbook.length ? ['<playbook>', ...playbook.map((a) => `Q: ${esc(a.title)}\nA: ${esc(clip(a.body, 800))}`), '</playbook>'].join('\n') : '',
     jobBlock(job, { money }),
+    files.length ? ['<files>', 'Files already on this job:', ...files.map((f) => `- ${esc(f.name)} (${
+      f.from === 'design' ? "the designer's final art" : 'sent by the customer'})`),
+      job.pictures ? `The first ${job.pictures} of the customer's pictures are shown to you above as resized previews: judge what is in them and whether faces are clear, not their print resolution.` : '',
+      '</files>'].filter(Boolean).join('\n') : '<files>\nNo files on this job yet.\n</files>',
     messagesBlock(history),
+    ask.attached && ask.attached.length ? `Attached to this message: ${ask.attached.map(esc).join(', ')}` : '',
     ask.pasted ? `<customer_said kind="email pasted from the inbox">\n${esc(ask.pasted)}\n</customer_said>` : '',
     ask.draft ? `<draft>\nWhat the shop has started writing (improve it, keep its intent):\n${esc(ask.draft)}\n</draft>` : '',
     `Channel: ${ask.channel === 'text' ? `text message, at most ${TEXT_MAX} characters` : 'email'}.`,
@@ -241,7 +250,7 @@ async function reviewMessage(input, { client } = {}) {
     betas: ['server-side-fallback-2026-07-01'],
     fallbacks: 'default',
     system: REVIEW_SYSTEM,
-    messages: [{ role: 'user', content }],
+    messages: [{ role: 'user', content: withPictures(input, content) }],
   });
   if (res.stop_reason === 'refusal') {
     const e = new Error('model declined'); e.code = 'refusal'; throw e;
@@ -250,6 +259,13 @@ async function reviewMessage(input, { client } = {}) {
   let parsed;
   try { parsed = JSON.parse(text); } catch (e) { throw new Error('unreadable review'); }
   return shapeReview(parsed, a.channel);
+}
+
+/** The customer's pictures (https previews, at most 8) before the text. */
+function withPictures(input, text) {
+  const pics = (input.pictures || []).filter((u) => /^https:\/\/res\.cloudinary\.com\//.test(u)).slice(0, 8);
+  if (!pics.length) return text;
+  return [...pics.map((url) => ({ type: 'image', source: { type: 'url', url } })), { type: 'text', text }];
 }
 
 /** The model's JSON, made safe for the page: strings and short lists only. */
@@ -284,7 +300,7 @@ async function suggestReply(input, { client } = {}) {
     betas: ['server-side-fallback-2026-07-01'],
     fallbacks: 'default',
     system: SYSTEM,
-    messages: [{ role: 'user', content: askMessage(input) }],
+    messages: [{ role: 'user', content: withPictures(input, askMessage(input)) }],
   });
   if (res.stop_reason === 'refusal') {
     const e = new Error('model declined'); e.code = 'refusal'; throw e;
@@ -297,5 +313,5 @@ async function suggestReply(input, { client } = {}) {
   return out;
 }
 
-module.exports = { MODEL, SYSTEM, SCHEMA, REVIEW_SYSTEM, REVIEW_SCHEMA, LIMITS, TEXT_MAX, validateAsk, askMessage,
+module.exports = { withPictures, MODEL, SYSTEM, SCHEMA, REVIEW_SYSTEM, REVIEW_SCHEMA, LIMITS, TEXT_MAX, validateAsk, askMessage,
                    shapeSuggestion, suggestReply, shapeReview, reviewMessage, failureMessage };

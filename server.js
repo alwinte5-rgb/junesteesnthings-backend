@@ -20269,6 +20269,13 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
             row.appendChild(x); ul.appendChild(row);
           });
         }
+        /* What this message carries, by name, for Claude. */
+        function attachedNames(){
+          var n = [];
+          f.querySelectorAll('[data-jobfile]:checked').forEach(function(x){ n.push(x.getAttribute('data-name')); });
+          uploads.forEach(function(u){ n.push(u.name); });
+          return n;
+        }
         var upInput = f.querySelector('[data-upfile]');
         if (upInput) upInput.addEventListener('change', function(){
           Array.prototype.forEach.call(upInput.files || [], function(file){
@@ -20314,7 +20321,7 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
             go.disabled = true; st.textContent = 'Claude is reading the job…';
             fetch('/admin/api/quote/${code}/suggest-reply', { method: 'POST', credentials: 'same-origin',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ channel: c ? c.value : 'email', note: cl.querySelector('[data-cnote]').value,
+              body: JSON.stringify({ channel: c ? c.value : 'email', attached: attachedNames(), note: cl.querySelector('[data-cnote]').value,
                                      pasted: cl.querySelector('[data-cpaste]').value, draft: body.value }) })
               .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(d){ if (!r.ok) throw new Error(d.error || 'No suggestion this time. Try again.'); return d; }); })
               .then(function(d){
@@ -20378,7 +20385,7 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
           rv.textContent = 'Claude is checking your message for accuracy, tone and spelling…';
           fetch('/admin/api/quote/${code}/review-message', { method: 'POST', credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ channel: isText ? 'text' : 'email', subject: subj.value, draft: body.value }) })
+            body: JSON.stringify({ channel: isText ? 'text' : 'email', subject: subj.value, draft: body.value, attached: isText ? [] : attachedNames() }) })
             .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(d){ if (!r.ok) throw new Error(d.error || 'Claude could not check it.'); return d; }); })
             .then(function(d){
               if (d.verdict === 'ok') { rv.textContent = 'Claude checked it: ' + (d.summary || 'good to go.') + ' Sending…'; checking = false; sb.disabled = false; sendNow(); return; }
@@ -20666,8 +20673,19 @@ async function claudeJobContext(code, ask, fullView) {
     change_request: q.change_request ? String(q.change_request).slice(0, 1500) : '',
     notes: q.notes ? String(q.notes).slice(0, 1500) : '',
   };
-  return { job, history, playbook, ask, money: fullView,
-           shop: { phone: SHOP_PHONE, pickup: `${PICKUP_ADDRESS} (${PICKUP_HOURS})`, link: quoteLink(code) } };
+  /* The files on the job, and a look at the customer's pictures, so Claude
+     knows what the shop already has (2026-10-06: it told the owner a job
+     with seven photos had none). */
+  const jobFiles = await jobFilesFor(q).catch(() => []);
+  job.files = jobFiles.slice(0, 30).map((f) => ({ name: f.name, from: f.from }));
+  const pictures = jobFiles.filter((f) => f.from === 'customer')
+    .map((f) => { const ext = String(f.url).split('.').pop().toLowerCase();
+                  return MSGFILES.previewUrl(f.url, ext).replace('w_600', 'w_1000'); })
+    .filter(Boolean).slice(0, 8);
+  job.pictures = pictures.length;
+  return { job, history, playbook, ask, money: fullView, pictures,
+           shop: { phone: SHOP_PHONE, pickup: `free at ${PICKUP_ADDRESS} (${PICKUP_HOURS})`, link: quoteLink(code),
+                   delivery: 'free pickup; local delivery in nearby Chicago ZIPs on a day and time they book from their order page, for a fee; shipping by carrier, quoted per order' } };
 }
 
 app.post('/admin/api/quote/:code/suggest-reply', requireAdmin, claudeRoute('suggest'));
