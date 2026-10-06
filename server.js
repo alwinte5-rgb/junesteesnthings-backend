@@ -6304,6 +6304,16 @@ const ANY_METHOD_RE = /./;
 /* Cutouts are bought in from Signs365, so a job carries that supplier's
    freight and the shop does not absorb it. Matches the four size ladders. */
 const CUTOUT_METHOD_RE = /big head cutout/i;
+/* Everything bought printed from Signs365 — cutouts, banners, stands,
+   posters, window/wall/vehicle graphics, magnets, paper, acrylic, canvas (the
+   titles tools/add-cutouts.js and tools/add-signage.js write). These are what
+   is being SOLD, not a print on a garment, so the quote form offers them as
+   the product, never as a print location. */
+const SUPPLIER_PRODUCT_RE = /^(big head cutout|full body cutout|vinyl banner|retractable banner stand|poster|window graphic|wall graphic|vehicle graphic|vehicle magnet|acrylic panel|canvas print|business cards|flyers)\b/i;
+/* The Signs365 products that carry its delivery charge. Not the full body
+   cutout: a full 48x96 board always ships oversized, and that freight is
+   already inside its price (tools/lib/signage.js, boardFreight). */
+const SIGNS365_FREIGHT_RE = /^(big head cutout|vinyl banner|retractable banner stand|poster|window graphic|wall graphic|vehicle graphic|vehicle magnet|acrylic panel|canvas print|business cards|flyers)\b/i;
 const DIGITIZING_METHOD_RE = /digitiz/i;
 
 /** The digitizing fees the catalogue offers, cheapest first. */
@@ -6448,13 +6458,18 @@ const ADDONS = [
      back, and the admin form still lists it. Any other Signs365 charge added
      here should carry the flag too; screens, digitizing and design work stay
      on their own rows. */
-  { code: 'cutout_ship', label: 'Cutout delivery to our shop', appliesTo: CUTOUT_METHOD_RE,
-    kind: 'once', rate: 10, orderShared: true, inItemPrice: true,
+  /* AUTOMATIC since 2026-10-06 (the owner: every product priced from
+     Signs365 gets its delivery charge). It was a tick box, on cutouts only, so
+     banners, posters and signs went out without it and the shop paid it. Still
+     once an order; a Saturday or large-format rate ticked anywhere on the
+     quote REPLACES it rather than adding to it (freightUpgraded). */
+  { code: 'cutout_ship', label: 'Supplier delivery to our shop', appliesTo: SIGNS365_FREIGHT_RE,
+    kind: 'once', rate: 10, orderShared: true, inItemPrice: true, auto: 'method',
     note: 'What our supplier charges to get the printed cutouts to us, so we can mount and finish them. Charged once for your whole order, however many sizes are on it — this is not a delivery to you.' },
-  { code: 'cutout_ship_sat', label: 'Cutout shipping — Saturday rush', appliesTo: CUTOUT_METHOD_RE,
+  { code: 'cutout_ship_sat', label: 'Supplier shipping — Saturday rush', appliesTo: SIGNS365_FREIGHT_RE,
     kind: 'once', rate: 50, orderShared: true, inItemPrice: true,
     note: 'Saturday delivery of the printed cutouts. Charged once for the order. Use instead of the weekday rate, not as well as it.' },
-  { code: 'cutout_ship_large', label: 'Cutout shipping — large format', appliesTo: CUTOUT_METHOD_RE,
+  { code: 'cutout_ship_large', label: 'Supplier shipping — large format', appliesTo: SIGNS365_FREIGHT_RE,
     kind: 'once', rate: 199, orderShared: true, inItemPrice: true,
     note: 'Oversize freight, which some full-sheet rigid orders require. Charged once for the order. Confirm with the supplier before adding it.' },
 ];
@@ -6893,12 +6908,22 @@ function quotePricingSource() {
            per place printed, because each place is another set of screens. */
         var prints = o.prints ? linePrintsFrom(o.prints) : legacyPrints(o);
         var legacy = !o.prints;
+        /* A method's FIRST place on the garment reads its main table and
+           every later place its additional-location table — wherever they
+           are. A DTF print on the back alone is DTF's main print ($26.05 at
+           one piece), not an "additional location" ($6.70): that is how the
+           designer charges (core/cart.php: the first stage with a design takes
+           the first table), and reading "back" as "second" under-quoted every
+           back-only and sleeve-only DTF job. A single-table method such as
+           screen printing charges its one table at every place either way. */
+        var seenMethod = {};
         function keyOf(p) {
           if (p.key !== undefined) return p.key;
           var pk = Object.keys(p.method.positions || {});
-          if (p.loc === 'back') return pk[1] || pk[0];
-          if (p.loc === 'left' || p.loc === 'right') return pk[pk.length - 1];
-          return '';
+          var mid = String(p.method.id);
+          var later = !!seenMethod[mid];
+          seenMethod[mid] = true;
+          return later ? (pk[1] || pk[0]) : '';
         }
 
         /* A method's own minimum, scaled per piece so unit x qty still holds.
@@ -8405,7 +8430,7 @@ function productGroupOf(name) {
     /* Cutout packs are what is being SOLD, not a place on a shirt, so they
        are picked here rather than as a print location. Posted as cut:<id>;
        the form copies the id into the line's method field. */
-    const cuts = quotable.filter((m) => CUTOUT_METHOD_RE.test(m.title || ''));
+    const cuts = quotable.filter((m) => SUPPLIER_PRODUCT_RE.test(m.title || ''));
     return garments + (cuts.length ? `<optgroup label="Cutouts &amp; signs">${cuts.map((m) =>
       `<option value="cut:${m.id}"${String(m.id) === String(cutSel) ? ' selected' : ''}>${escEmail(m.title)}</option>`).join('')}</optgroup>` : '');
   };
@@ -8438,7 +8463,7 @@ function productGroupOf(name) {
      cutout packs. A line already saved with a method since retired keeps it
      selectable, so re-saving an old quote never silently drops its printing. */
   const decoOpts = (sel) => {
-    const list = quotable.filter((m) => !CUTOUT_METHOD_RE.test(m.title || ''));
+    const list = quotable.filter((m) => !SUPPLIER_PRODUCT_RE.test(m.title || ''));
     const kept = sel != null && sel !== '' && !list.some((m) => String(m.id) === String(sel))
       ? catalog.methods.find((m) => String(m.id) === String(sel)) : null;
     return (kept ? [kept] : []).concat(list)
@@ -8499,7 +8524,7 @@ function productGroupOf(name) {
     /* What this line prints where, for the location rows. A cutout pack is
        the PRODUCT, so it is shown in the product picker instead. */
     const savedMethod = it ? catalog.methods.find((m) => String(m.id) === String(it.method_id)) : null;
-    const isCut = !!(it && !it.product_id && savedMethod && CUTOUT_METHOD_RE.test(savedMethod.title || '') &&
+    const isCut = !!(it && !it.product_id && savedMethod && SUPPLIER_PRODUCT_RE.test(savedMethod.title || '') &&
       !Array.isArray(it.prints));
     const placed = {};
     if (it && !isCut) for (const p of itemPrints(it, catalog)) if (!placed[p.loc]) placed[p.loc] = p;
@@ -9147,6 +9172,16 @@ ${quotePricingSource()}
            must not bill it twice. Tracked across the whole pass rather than
            inside a line, because a line cannot know it is the second one. */
         var orderSharedSeen = {};
+        /* A Saturday or large-format supplier rate replaces the standard
+           delivery charge: ticked on a required item, for the whole order; on
+           an optional item, for that item only (the customer may decline it). */
+        function upgradedOn(el){
+          return !!el.querySelector('.ao[data-code="cutout_ship_sat"]:checked, .ao[data-code="cutout_ship_large"]:checked');
+        }
+        var freightUpgraded = Array.prototype.some.call(document.querySelectorAll('#qf .line'), function(el){
+          var o = el.querySelector('.opt');
+          return !(o && o.checked) && upgradedOn(el);
+        });
         /* OPTIONAL lines are not in the subtotal: the customer decides. Their
            sum is shown on its own row. Required lines are priced first so an
            order-level charge is claimed by one of them before any option,
@@ -9380,6 +9415,21 @@ ${quotePricingSource()}
             var dtA = ADDONS.find(function(x){ return x.code === dtPick.value; });
             if (dtA) addons.push(dtA);
           }
+          /* Charges the method carries automatically — screens, and the
+             supplier's delivery charge on a Signs365 product — from every
+             method on the line. Added BEFORE the once-an-order filter below,
+             so an automatic order-level charge is claimed once, exactly as the
+             save route claims it. A Saturday or large-format rate ticked
+             anywhere on the quote replaces the standard delivery charge. */
+          lineTitles.forEach(function(t){
+            addonsForTitle(t).forEach(function(a){
+              if (a.auto !== 'method') return;
+              if (a.code === 'screens' && !SCREEN_FEES_LIVE) return;
+              if (a.code === 'cutout_ship' && (freightUpgraded || upgradedOn(L))) return;
+              if (addons.some(function(x){ return x.code === a.code; })) return;
+              addons.push(a);
+            });
+          });
           addons = addons.filter(function(a){
             if (!a.orderShared) return true;
             if (orderSharedSeen[a.code]) return false;
@@ -9394,21 +9444,7 @@ ${quotePricingSource()}
             }
             return true;
           });
-          /* Screens are not a choice — a screen-print job burns them whether or
-             not anyone ticked anything, so they come from the method. The dark
-             garment does not add a CHARGE here, it adds a SCREEN: it is passed
-             to priceLine below and screenCount() decides how many. */
-          /* Both decorations, because the screens belong to whichever half is
-             the screen-print one — on a DTF-front/screen-back line that is the
-             second slot, and reading only the first would drop the screen fee. */
-          lineTitles.forEach(function(t){
-            addonsForTitle(t).forEach(function(a){
-              if (a.auto !== 'method') return;
-              if (a.code === 'screens' && !SCREEN_FEES_LIVE) return;
-              if (addons.some(function(x){ return x.code === a.code; })) return;
-              addons.push(a);
-            });
-          });
+
 
           var bpEl = L.querySelector('.bp');
           /* Only a ticked line takes the pooled figure, and bandQtyFor's floor
@@ -10155,6 +10191,14 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
        is taken whole, so it pays an order-level charge once. */
     const optGroupSeen = {};
     const formPos = [];
+    /* A Saturday or large-format supplier rate REPLACES the standard Signs365
+       delivery charge: on a required item, for the whole order; on an optional
+       item, for that item only — the customer may decline it, and the order
+       must not then be left with no delivery charge at all. Same rule as
+       calc() on the form. */
+    const upgradedAt = (i) => String(one(b[`addon_cutout_ship_sat${i}`]) || '') === '1' ||
+      String(one(b[`addon_cutout_ship_large${i}`]) || '') === '1';
+    const freightUpgraded = [...Array(40).keys()].some((i) => !isOptional(i) && upgradedAt(i));
 
     for (const i of lineOrder) {
       const desc = String(one(b['description' + i]) || '').trim();
@@ -10171,7 +10215,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
       for (const loc of PRINT_LOCS) {
         if (!tickedBox(one(b[`pr_on_${loc}${i}`]))) continue;
         const pm = catalog.methods.find((m) => String(m.id) === String(one(b[`pr_m_${loc}${i}`])) &&
-          !CUTOUT_METHOD_RE.test(String(m.title || '')));
+          !SUPPLIER_PRODUCT_RE.test(String(m.title || '')));
         if (!pm) continue;
         prints.push({ loc, method: pm, colours: colourCount(pm, one(b[`pr_c_${loc}${i}`])) });
       }
@@ -10268,6 +10312,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
       for (const a of addonsForAny(addonTitles)) {
         if (a.auto !== 'method') continue;
         if (a.code === 'screens' && !SCREEN_FEES_LIVE) continue;
+        if (a.code === 'cutout_ship' && (freightUpgraded || upgradedAt(i))) continue;
         lineAddons.push({ code: a.code, label: a.label, kind: a.kind, rate: a.rate });
       }
 

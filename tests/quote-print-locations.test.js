@@ -68,6 +68,9 @@ test('a job written as print locations prices exactly as the same job written th
   for (const method of [SCREEN, DTF, EMB]) for (const stage of ['', 'mr8a5dlx', 'both'])
   for (const colours of [1, 3]) for (const backColours of ['', 1]) for (const sleeves of ['', 'left', 'both'])
   for (const sleeveColours of ['', 2]) for (const dark of [false, true]) for (const qty of [12, 60, 200]) {
+    /* The one deliberate difference: a DTF print on the back ALONE is DTF's
+       main print, not its additional location (see the test below). */
+    if (method === DTF && stage === 'mr8a5dlx') continue;
     const old = { ...base, qty, method, stage, colours, backColours, sleeves, sleeveColours, dark };
     const now = { ...base, qty, dark, prints: strip(legacyPrints(old)) };
     const a = priceLine(old), b = priceLine(now);
@@ -78,6 +81,20 @@ test('a job written as print locations prices exactly as the same job written th
     n++;
   }
   assert.ok(n > 500);
+});
+
+test('a method\'s first place takes its main price, later places its additional-location price', () => {
+  /* The owner's screenshot, 2026-10-06: screen front + DTF back at 1 piece had
+     the DTF back at the $6.70 additional-location rate. It is the only DTF
+     print on the shirt, so it is DTF's main print. */
+  const backOnly = priceLine({ ...base, addons: [], qty: 60, prints: [{ loc: 'back', method: DTF }] });
+  assert.equal(backOnly.decoration, 5.1, 'DTF on the back alone is the main print');
+  const sleeveOnly = priceLine({ ...base, addons: [], qty: 60, prints: [{ loc: 'right', method: DTF }] });
+  assert.equal(sleeveOnly.decoration, 5.1, 'DTF on a sleeve alone is the main print');
+  const frontBack = priceLine({ ...base, addons: [], qty: 60, prints: [{ loc: 'front', method: DTF }, { loc: 'back', method: DTF }] });
+  assert.equal(frontBack.decoration, 5.1 + 3.9, 'a second DTF place is the additional location');
+  const mixed = priceLine({ ...base, addons: [], qty: 60, prints: [{ loc: 'front', method: SCREEN, colours: 1 }, { loc: 'back', method: DTF }] });
+  assert.equal(mixed.decoration, 4.1 + 5.1, 'screen front + DTF back: the back is still DTF\'s main print');
 });
 
 test('mixed methods: each place prices with its own method', () => {
@@ -143,7 +160,7 @@ test('a posted list is cleaned: known places only, one each, in order', () => {
 
 test('the save route reads the four places, real non-cutout methods, and stores them', () => {
   assert.match(src, /for \(const loc of PRINT_LOCS\) \{\s*if \(!tickedBox\(one\(b\[`pr_on_\$\{loc\}\$\{i\}`\]\)\)\) continue;/);
-  assert.match(src, /!CUTOUT_METHOD_RE\.test\(String\(m\.title \|\| ''\)\)\);/);
+  assert.match(src, /!SUPPLIER_PRODUCT_RE\.test\(String\(m\.title \|\| ''\)\)\);/);
   assert.match(src, /colours: colourCount\(pm, one\(b\[`pr_c_\$\{loc\}\$\{i\}`\]\)\)/);
   assert.match(src, /prints: usePrints \? prints\.map\(\(p\) => \(\{ loc: p\.loc, method_id: p\.method\.id,/);
   /* Every method on the line brings its own add-ons — a DTF front with a
@@ -165,4 +182,27 @@ test('job costs: every place is costed, DTF extra places at the second-location 
   /* An old line with sleeves and a back count is costed the same way. */
   const legacy = JC.linePlaces({ method_id: 22, stage: 'both', colours: 3, back_colours: 1, sleeves: 'right' }, methods);
   assert.deepStrictEqual(legacy.places.map((p) => p.loc + ':' + p.colours), ['front:3', 'back:1', 'right:3']);
+});
+
+test('every Signs365 product carries the supplier delivery charge automatically, once an order', () => {
+  const re = eval(src.match(/const SIGNS365_FREIGHT_RE = (\/.*\/i);/)[1]);
+  for (const t of ['Big Head Cutout — 24in, 8-pack (full sheet)', 'Vinyl Banner — 3ft x 6ft, 13oz single-sided',
+    'Retractable Banner Stand — 33.5in x 80in', 'Poster — 18in x 24in, single-sided', 'Window Graphic — one-way vinyl, per sqft',
+    'Wall Graphic — removable fabric, per sqft', 'Vehicle Graphic — 3M ControlTac, per sqft', 'Vehicle Magnet — 24in x 12in, single-sided',
+    'Acrylic Panel — 12in x 12in, single-sided', 'Canvas Print — 16in x 20in, single-sided', 'Business Cards — single or double-sided',
+    'Flyers — 6in x 4in, single or double-sided']) assert.ok(re.test(t), t);
+  /* A full board ships oversized and that freight is inside its price. */
+  assert.ok(!re.test('Full Body Cutout — single-sided'));
+  for (const t of ['Screen Printing', 'DTF Printing', 'Embroidery']) assert.ok(!re.test(t), t);
+  const ship = src.match(/code: 'cutout_ship'[\s\S]*?\},/)[0];
+  assert.match(ship, /auto: 'method'/, 'the standard delivery charge must be automatic');
+  assert.match(ship, /orderShared: true/);
+  /* The form claims automatic order-level charges before its once-an-order
+     filter, as the save route does — or the screen bills it per line. */
+  const form = src.slice(src.indexOf('Charges the method carries automatically'));
+  assert.ok(form.indexOf("if (a.code === 'cutout_ship' && (freightUpgraded || upgradedOn(L))) return;") > -1 &&
+    form.indexOf("if (a.code === 'cutout_ship' && (freightUpgraded || upgradedOn(L))) return;") < form.indexOf('addons = addons.filter(function(a){'));
+  /* Only a REQUIRED item's Saturday/large rate replaces the charge order-wide. */
+  assert.match(src, /const freightUpgraded = \[\.\.\.Array\(40\)\.keys\(\)\]\.some\(\(i\) => !isOptional\(i\) && upgradedAt\(i\)\);/);
+  assert.match(src, /if \(a\.code === 'cutout_ship' && \(freightUpgraded \|\| upgradedAt\(i\)\)\) continue;/);
 });
