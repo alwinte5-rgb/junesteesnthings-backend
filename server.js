@@ -3860,6 +3860,20 @@ app.post('/webhooks/twilio/sms', async (req, res) => {
          lead (2026-10-05), so the shop can quote it from Leads like any other. */
       const lead = await textToLead(from, text, sid)
         .catch((e) => { console.error('text lead not saved:', e.message); return {}; });
+      /* And to the owner's phone as a text (owner, 2026-10-06), with who it is
+         and a link to their job or lead. Not when the owner's own phone wrote,
+         or every test would loop back. A failed forward is reported; the
+         email below still goes. */
+      const owner = String(process.env.TWILIO_TO_NUMBER || '').replace(/\D/g, '').slice(-10);
+      if (owner && from.replace(/\D/g, '').slice(-10) !== owner) {
+        const who = lead.quote ? await pool.query('SELECT name FROM quotes WHERE code = $1', [lead.quote])
+          .then((r) => (r.rows[0] && r.rows[0].name) || '').catch(() => '') : '';
+        const link = lead.quote ? `${PUBLIC_BASE_URL}/admin/production/${encodeURIComponent(lead.quote)}#messages`
+          : lead.lead ? `${PUBLIC_BASE_URL}/admin/leads#lead-${Number(lead.lead)}` : '';
+        await sendOwnerSms(`Text from ${smsPlain(who, 40) || from}${who ? ' ' + from : ''}${lead.quote ? ' (' + lead.quote + ')' : ' (new enquiry)'}: ` +
+          `"${smsPlain(text, 400)}"${link ? ' ' + link : ''}`)
+          .catch((e) => { console.error('text forward to owner failed:', e.message); reportError('twilio:forward', e).catch(() => {}); });
+      }
       // A customer replying to an order text is talking to the shop. Without
       // this their reply would land in the Twilio console and nowhere else.
       await sendEmail({

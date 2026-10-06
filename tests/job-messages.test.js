@@ -366,3 +366,46 @@ test('uploads go to Cloudinary as raw files for design files, with the 10 MB lim
   assert.match(html, /file\.size > 10485760/);
   assert.match(html, /did not upload' \+ \(e && e\.message/);
 });
+
+/* ── A customer's text, forwarded to the owner's phone (2026-10-06) ─────────── */
+
+async function inboundText({ from = '+13125550199', body = 'Can I add 2 XL?', owner = '+17738491854', quote = 'AB12CD', name = 'Kim Lee' } = {}) {
+  const ownerTexts = [];
+  const emails = [];
+  let handler;
+  const sandbox = {
+    app: { post: (p, h) => { handler = h; } },
+    process: { env: { TWILIO_AUTH_TOKEN: 't', TWILIO_TO_NUMBER: owner } },
+    verifyTwilioSignature: () => true, TWILIO_INBOUND_URL: 'u',
+    normalizeUsPhone: (p) => (p ? '+1' + String(p).replace(/\D/g, '').slice(-10) : null),
+    classifyInbound: () => 'message',
+    pool: { query: async (sql) => ({ rows: /SELECT name FROM quotes/.test(sql) ? [{ name }] : [] }) },
+    textToLead: async () => (quote ? { quote } : { lead: 7 }),
+    sendOwnerSms: async (b) => { ownerTexts.push(b); return true; },
+    sendEmail: async (m) => { emails.push(m); },
+    smsPlain: require('../tools/lib/sms-templates').plain,
+    PUBLIC_BASE_URL: 'https://www.jtees.net', NOTIFY_EMAIL: 'shop@x', escEmail: (s) => String(s),
+    reportError: async () => {}, recordSmsConsent: async () => {}, joinByText: async () => {},
+    console: { error() {}, warn() {}, log() {} }, String, Number, encodeURIComponent,
+  };
+  vm.createContext(sandbox);
+  const start = src.indexOf("app.post('/webhooks/twilio/sms'");
+  vm.runInContext(src.slice(start, src.indexOf('\n});', start) + 4), sandbox);
+  const res = { type() { return this; }, send() {}, sendStatus() {} };
+  await handler({ body: { From: from, Body: body, MessageSid: 'SM1' }, get: () => 'sig' }, res);
+  return { ownerTexts, emails };
+}
+
+test('a customer\'s text comes to the owner\'s phone with who it is and a link to their job', async () => {
+  const { ownerTexts, emails } = await inboundText();
+  assert.strictEqual(ownerTexts.length, 1);
+  assert.match(ownerTexts[0], /^Text from Kim Lee \+13125550199 \(AB12CD\): "Can I add 2 XL\?" https:\/\/www\.jtees\.net\/admin\/production\/AB12CD#messages$/);
+  assert.strictEqual(emails.length, 1, 'the email still goes too');
+  const lead = await inboundText({ quote: null });
+  assert.match(lead.ownerTexts[0], /\(new enquiry\).*\/admin\/leads#lead-7/);
+});
+
+test('the owner\'s own phone texting the shop is not forwarded back to it', async () => {
+  const { ownerTexts } = await inboundText({ from: '(773) 849-1854' });
+  assert.strictEqual(ownerTexts.length, 0);
+});
