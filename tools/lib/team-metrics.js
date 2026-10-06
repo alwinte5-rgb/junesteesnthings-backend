@@ -70,31 +70,30 @@ function median(values) {
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
-/* Commission on one quote, on the profit (owner, 2026-10-06: "Commission is
-   only available on profit").
+/* Commission on one quote, on its price (owner, 2026-10-06: "lets just base
+   it on total price thats more transparent" — replacing profit the same day).
      collected   every ledger row on the quote, summed: payments less refunds,
-                 lost disputes and corrections, with card fees taken out
+                 lost disputes and corrections (card fees are the shop's cost)
      total, tax  the quote's, so tax the shop only holds for the state is not
                  paid out as commission
-     cost        the job's costs (blanks, supplies, outsourced, shipping)
-   The base is what was collected before tax, less the job's costs.
+   The base is the job's price before sales tax, as far as it has been paid:
+   a job paid in full is its total less tax, a refund takes its share back.
    Payable once the job is paid in full (or settled) and 14 days have passed
    since the last money moved, so a quick refund cannot claw back a payout,
-   never while a dispute is open, and never before the job has costs: with
-   none entered, profit would read as the whole sale. */
+   and never while a dispute is open. */
 const HOLD_DAYS = 14;
 
-function commissionFor({ collected, total, tax, cost = 0, pct }) {
+function commissionFor({ collected, total, tax, pct }) {
   const t = Number(total) || 0;
   const netCollected = Math.max(0, Number(collected) || 0);
   if (t <= 0 || !(pct > 0)) return { base: 0, amount: 0 };
   const preTaxShare = Math.max(0, Math.min(1, (t - (Number(tax) || 0)) / t));
-  const base = round2(Math.max(0, netCollected * preTaxShare - Math.max(0, Number(cost) || 0)));
+  const base = round2(Math.min(netCollected, t) * preTaxShare);
   return { base, amount: round2(base * pct / 100) };
 }
 
 function commissionState({ paidInFull, lastMoneyAt, disputeOpen, alreadyPaid, needsOk = false,
-                           noCommission = false, needsCosts = false, now = Date.now() }) {
+                           noCommission = false, now = Date.now() }) {
   if (alreadyPaid) return 'paid';
   // A customer said a salesperson sent them; nothing is owed until the owner agrees (tools/lib/sales-credit.js).
   if (needsOk) return 'needs your OK';
@@ -102,7 +101,6 @@ function commissionState({ paidInFull, lastMoneyAt, disputeOpen, alreadyPaid, ne
   if (noCommission) return 'wage only';
   if (disputeOpen) return 'on hold';
   if (!paidInFull) return 'earning';
-  if (needsCosts) return 'needs costs';
   const last = new Date(lastMoneyAt || 0).getTime();
   return now - last >= HOLD_DAYS * 86400000 ? 'payable' : 'waiting';
 }

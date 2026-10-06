@@ -369,18 +369,20 @@ test('commission is on money kept, before tax', () => {
   assert.deepStrictEqual(TEAM.commissionFor({ collected: 100, total: 100, tax: 0, pct: 0 }), { base: 0, amount: 0 });
 });
 
-test('commission is on the profit: collected before tax, less the job costs', () => {
-  assert.deepStrictEqual(TEAM.commissionFor({ collected: 1100, total: 1100, tax: 100, cost: 400, pct: 10 }), { base: 600, amount: 60 });
-  assert.deepStrictEqual(TEAM.commissionFor({ collected: 300, total: 1100, tax: 100, cost: 400, pct: 10 }), { base: 0, amount: 0 },
-    'a deposit smaller than the costs has no profit yet');
-  assert.deepStrictEqual(TEAM.commissionFor({ collected: 500, total: 500, tax: 0, cost: 700, pct: 10 }), { base: 0, amount: 0 },
-    'a loss pays nothing and never owes');
+test('commission is on the price before tax: card fees and job costs are the shop\'s', () => {
+  assert.deepStrictEqual(TEAM.commissionFor({ collected: 1100, total: 1100, tax: 100, pct: 10 }), { base: 1000, amount: 100 });
+  assert.deepStrictEqual(TEAM.commissionFor({ collected: 1100, total: 1100, tax: 100, cost: 400, pct: 10 }), { base: 1000, amount: 100 },
+    'costs are not taken off');
+  assert.deepStrictEqual(TEAM.commissionFor({ collected: 1150, total: 1100, tax: 100, pct: 10 }), { base: 1000, amount: 100 },
+    'an overpayment never raises it past the price');
+  assert.deepStrictEqual(TEAM.commissionFor({ collected: 880, total: 1100, tax: 100, pct: 10 }), { base: 800, amount: 80 },
+    'a partial refund takes its share back');
 });
 
-test('no costs, no payout; a shop lead is wage only', () => {
+test('a shop lead is wage only', () => {
   const now = Date.parse('2026-10-30T12:00:00Z');
   const old = now - 30 * 86400000;
-  assert.strictEqual(TEAM.commissionState({ paidInFull: true, lastMoneyAt: old, needsCosts: true, now }), 'needs costs');
+  assert.strictEqual(TEAM.commissionState({ paidInFull: true, lastMoneyAt: old, now }), 'payable');
   assert.strictEqual(TEAM.commissionState({ paidInFull: true, lastMoneyAt: old, noCommission: true, now }), 'wage only');
   assert.strictEqual(TEAM.commissionState({ paidInFull: true, lastMoneyAt: old, noCommission: true, alreadyPaid: true, now }), 'paid',
     'a payout already made stays on the books');
