@@ -82,7 +82,8 @@ test('jobs in hand are the undelivered ones; delivered ones are counted apart', 
 test('each delivered job still showing a balance is named, and links to its card', () => {
   assert.match(DASH, /WHERE \$\{OWING_JOBS_WHERE\} AND delivered_at IS NOT NULL/);
   assert.match(DASH, /\.\.\.deliveredOwing\.map\(/);
-  assert.match(DASH, /href: `\/admin\/quotes#q-\$\{escEmail\(q\.code\)\}`/);
+  /* Opens the job page, where the payment is recorded (2026-10-06; it was the Quotes board card). */
+  assert.match(DASH, /href: `\/admin\/production\/\$\{escEmail\(q\.code\)\}`/);
   /* ...and the card is there to land on. */
   assert.match(src, /return `<div class="card" id="q-\$\{q\.code\}">/);
 });
