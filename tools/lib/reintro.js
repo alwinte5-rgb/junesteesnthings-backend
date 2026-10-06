@@ -35,7 +35,7 @@ function helloText({ first }) {
        choosing the garment. No delivery or turnaround promises until those
        are ready. */
     body: `June's Tees: Hi${f ? ' ' + f : ''}! New at June's Tees: design your own shirts online. Pick from 45+ garments ` +
-      `(tees, hoodies, tanks, kids, hats), add your logo or text, and see the price live. Try it: ${short(DESIGN)} Reply STOP to opt out.`,
+      `(tees, hoodies, tanks, kids, hats), add your logo or text, and see the price live. Try it: ${short(SITE)} Reply STOP to opt out.`,
   };
 }
 
@@ -46,7 +46,7 @@ function codeText({ code }) {
   return {
     template: 'reintro-code',
     body: `June's Tees: You're in, thank you! Your ${PCT}% off code: ${plain(code, 20)}. ` +
-      `Use it at design.jtees.net or mention it on your quote. Up to 4 msgs/mo, msg & data rates may apply. ` +
+      `Use it at jtees.net or mention it on your quote. Up to 4 msgs/mo, msg & data rates may apply. ` +
       `Reply HELP for help, STOP to opt out.`,
   };
 }
@@ -132,7 +132,7 @@ function helloEmail({ first, email }) {
       make it yours, and see the price before you order. Any time, from your phone or computer. We still print every
       order right here in Chicago.</p>
   </td></tr>
-  <tr><td style="padding:6px 24px"><a href="${DESIGN}"><img src="${IMG('work/design-studio-live.jpg')}"
+  <tr><td style="padding:6px 24px"><a href="${SITE}"><img src="${IMG('work/design-studio-live.jpg')}"
     alt="The June's Tees Design Lab, designing a shirt online" width="512"
     style="display:block;width:100%;max-width:512px;height:auto;border-radius:12px;border:0"></a></td></tr>
   <tr><td style="padding:14px 24px 4px">
@@ -153,7 +153,7 @@ function helloEmail({ first, email }) {
       ${feature('💲', 'Live pricing with volume discounts', 'No minimums. Order one piece or a whole team.')}
       ${feature('💾', 'Save your designs and track your order', 'Free account, so it is all there next time.')}
     </table>
-    <p style="text-align:center;margin:16px 0 6px">${btn(DESIGN, 'Start designing')}</p>
+    <p style="text-align:center;margin:16px 0 6px">${btn(SITE, 'Start designing')}</p>
   </td></tr>
   <tr><td style="padding:14px 24px 4px">
     <h2 style="font-size:18px;color:#0B1F4B;margin:0 0 8px 4px">Still printing everything you love</h2>

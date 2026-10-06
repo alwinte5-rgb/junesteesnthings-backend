@@ -4714,7 +4714,7 @@ app.post(REINTRO.SIGNUP_PATH, makeRateLimit(6, 60 * 60 * 1000), async (req, res)
         html: customerEmailHtml(`Here's your ${REINTRO.PCT}% off`,
           `<p>Hi${first ? ' ' + escEmail(first) : ''}, thanks for signing up for our texts!</p>
            <p>Your code is <b style="font-size:18px;letter-spacing:1px">${escEmail(code)}</b>. Use it at checkout on
-             <a href="https://design.jtees.net">design.jtees.net</a>, or mention it when you get a quote. It's good for
+             <a href="https://www.jtees.net">jtees.net</a>, or mention it when you get a quote. It's good for
              ${REINTRO.CODE_DAYS} days, once.</p>`, null) })
         .catch((e) => console.error('sign-up code email failed:', e.message));
     } else {
@@ -4990,7 +4990,7 @@ app.post('/api/send-login-code', requireInternalKey, capPerRecipient('send-login
         <div style="font-family:sans-serif;max-width:480px;margin:0 auto;text-align:center;">
           <h2 style="color:#1848B8;">Your sign-in code</h2>
           <div style="font-size:38px;font-weight:900;letter-spacing:10px;color:#0B1F4B;background:#F7F6F3;border-radius:12px;padding:18px 0;margin:14px 0;">${code}</div>
-          <p style="color:#374151;">Enter this code on design.jtees.net to sign in. It expires in 15 minutes.</p>
+          <p style="color:#374151;">Enter this code on jtees.net to sign in. It expires in 15 minutes.</p>
           <p style="color:#999;font-size:12px;">Didn't request this? You can ignore this email.</p>
         </div>`,
     });
@@ -23147,7 +23147,7 @@ app.post('/api/submit-order', orderRateLimit, rejectBots, async (req, res) => {
   // Grad ordering is retired — delete this early return to reactivate the
   // handler below, which is kept intact in case the program returns.
   if (!process.env.GRAD_ORDERS_ENABLED) {
-    return res.status(410).json({ success: false, error: 'Grad ordering has ended. Visit https://design.jtees.net/ to place a custom order.' });
+    return res.status(410).json({ success: false, error: 'Grad ordering has ended. Visit https://www.jtees.net/ to place a custom order.' });
   }
   try {
     const body = req.body;

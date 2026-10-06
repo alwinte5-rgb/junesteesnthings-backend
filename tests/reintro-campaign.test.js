@@ -49,7 +49,8 @@ test('the hello text is warm, links to the site, carries the opt-out and fits tw
     assert.ok(isGsm7(body), body);
     assert.ok(body.length <= 306, `${body.length}: ${body}`);
     assert.match(body, /^June's Tees: Hi/);
-    assert.match(body, / design\.jtees\.net /);
+    assert.match(body, / jtees\.net /);
+    assert.doesNotMatch(body, /design\.jtees\.net/);
     assert.match(body, /design your own/);
     assert.match(body, /45\+ garments/);
     assert.match(body, /Reply STOP to opt out\.$/);
@@ -86,7 +87,7 @@ test('the email offers the 10% for signing up, links to sign-up with their addre
     assert.match(i, /src="https:\/\/www\.jtees\.net\/assets\/images\//, i);
     assert.match(i, /alt="[^"]+"/, 'every image has alt text');
   }
-  assert.match(m.html, /href="https:\/\/design\.jtees\.net"[^>]*>Start designing/);
+  assert.match(m.html, /href="https:\/\/www\.jtees\.net"[^>]*>Start designing/);
   assert.match(m.html, />Visit jtees\.net</);
   for (const f of ['Upload your logo', 'fonts', 'AI design help', '45+ real garments', 'No minimums', 'Save your designs']) {
     assert.ok(m.html.includes(f), `the Design Lab feature "${f}"`);

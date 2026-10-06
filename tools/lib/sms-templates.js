@@ -110,7 +110,7 @@ const T = {
   cartCode: ({ code, pct, restoreUrl }) => ({
     template: 'cart-code',
     body: `${BRAND}: So glad you stopped by! Your ${Number(pct) || 10}% off first-order code is ${plain(code, 20)}.` +
-      (restoreUrl ? ` Pick up where you left off: ${short(restoreUrl)}` : ' Design yours at design.jtees.net') +
+      (restoreUrl ? ` Pick up where you left off: ${short(restoreUrl)}` : ' Design yours at jtees.net') +
       ` ${STOP}`,
   }),
 
