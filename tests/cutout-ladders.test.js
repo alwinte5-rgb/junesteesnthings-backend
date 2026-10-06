@@ -45,8 +45,8 @@ const each = (method, qty) => Number(W.priceLine({
    stopped being true the day the ladder became computed — so the suite was
    asserting against prices the shop no longer sold. */
 const SINGLE_BANDS = { 12: [6, 12, 32, 1000], 18: [5, 10, 20, 50, 1000] };
-/* Less the owner's $5 off every singles band (2026-10-06), as add-cutouts does. */
-const lessOff = (l) => Object.fromEntries(Object.entries(l).map(([q, p]) => [q, (Number(p) - 5).toFixed(2)]));
+/* Less the owner's $10 off every singles band, not below cost (2026-10-06), as add-cutouts does. */
+const lessOff = (l) => Object.fromEntries(Object.entries(l).map(([q, p]) => [q, Math.max(Number(p) - 10, Math.ceil(Number(p) / 2)).toFixed(2)]));
 const SINGLES = {
   12: lessOff(CUT.singlesLadder(12, SINGLE_BANDS[12])),
   18: lessOff(CUT.singlesLadder(18, SINGLE_BANDS[18])),

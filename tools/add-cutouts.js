@@ -122,11 +122,12 @@ if (!url) { console.error('no MySQL URL'); process.exit(2); }
    cost model the packs use. They used to be written out here and went stale the
    moment the shop rate changed. */
 const SINGLE_BANDS = { 12: [6, 12, 32, 1000], 18: [5, 10, 20, 50, 1000] };
-/* THE OWNER'S SINGLES CUT (2026-10-06): $5 off every band of the cost-model
-   ladder. Every band stays above its worst cost per piece. */
-const SINGLES_OFF = 5;
+/* THE OWNER'S SINGLES CUT (2026-10-06): $10 off every band (two $5 cuts) of the cost-model
+   ladder, never below cost (the ladder is cost x2, so half of it): $10 off
+   would have sold 12in at 33+ for $1. */
+const SINGLES_OFF = 10;
 const lessOff = (ladder) => Object.fromEntries(Object.entries(ladder)
-  .map(([q, p]) => [q, (Number(p) - SINGLES_OFF).toFixed(2)]));
+  .map(([q, p]) => [q, Math.max(Number(p) - SINGLES_OFF, Math.ceil(Number(p) / 2)).toFixed(2)]));
 const SINGLES = {
   12: lessOff(singlesLadder(12, SINGLE_BANDS[12])),
   18: lessOff(singlesLadder(18, SINGLE_BANDS[18])),
