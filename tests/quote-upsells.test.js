@@ -19,7 +19,7 @@ test('Apply & save saves at once: a new quote as a draft, never sent', () => {
   assert.match(src, /if \(upsellReturn\) return res\.redirect\(303, `\/admin\/quote\/\$\{code\}\/edit\?up=1`\);/);
   /* An edit returns to the form BEFORE anything is emailed. */
   const ret = src.indexOf('if (upsellReturn && existingQuote && !wasDraft) return res.redirect');
-  assert.ok(ret > -1 && ret < src.indexOf('const emailed = (!existingQuote || wasDraft) && q.email ? await emailQuote(q) : null;'));
+  assert.ok(ret > -1 && ret < src.indexOf('const emailed = null;'));
 });
 
 test('every upsell is named in the quote history and kept on the quote', () => {

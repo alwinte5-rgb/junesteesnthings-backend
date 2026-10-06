@@ -1272,6 +1272,13 @@ async function initStaffTables() {
        for whoever follows up, and every one applied, by whom and when. */
     'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS upsell_ideas JSONB',
     'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS upsell_log JSONB',
+    /* When the quote actually reached the customer: emailed, texted, or marked
+       sent by hand (the owner, 2026-10-06: saving must not send it; staff are
+       asked). Added with NOW() so every quote already out counts as delivered,
+       once; the default is then dropped. Held and draft quotes never went out. */
+    'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ DEFAULT NOW()',
+    'ALTER TABLE quotes ALTER COLUMN delivered_at DROP DEFAULT',
+    "UPDATE quotes SET delivered_at = NULL WHERE status IN ('held', 'draft') AND delivered_at IS NOT NULL",
     'ALTER TABLE client_emails ADD COLUMN IF NOT EXISTS sent_by INTEGER',
     'ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS sent_by INTEGER',
     'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS assigned_to INTEGER',
@@ -7727,7 +7734,7 @@ async function emailQuote(q) {
           <a href="tel:+17738491854">${SHOP_PHONE}</a>.</p>
       </div>`,
     });
-    await pool.query('UPDATE quotes SET emailed_at = NOW() WHERE id = $1', [q.id]).catch(() => {});
+    await pool.query('UPDATE quotes SET emailed_at = NOW(), delivered_at = COALESCE(delivered_at, NOW()) WHERE id = $1', [q.id]).catch(() => {});
     console.log(`quote ${q.code}: emailed to the customer`);
     return { ok: true, to };
   } catch (e) {
@@ -11508,10 +11515,12 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     }).catch(() => {});
     syncQuoteToLumise(q).catch(() => {});
 
-    /* Emailed when it first reaches the customer; an edit offers a button
-       instead, so fixing a typo does not send them a second email. */
     if (upsellReturn && existingQuote && !wasDraft) return res.redirect(303, `/admin/quote/${code}/edit?up=1`);
-    const emailed = (!existingQuote || wasDraft) && q.email ? await emailQuote(q) : null;
+    /* NOT emailed on save (the owner, 2026-10-06: "on the save can you not
+       auto send the quote. Ask to send."). The page below asks how to send it:
+       email, a text from the phone, or marked sent by hand. Until one of those,
+       delivered_at is empty and the automatic follow-up leaves it alone. */
+    const emailed = null;
 
     const msgs = quoteMessages(q);
     const digits = phone.replace(/[^0-9+]/g, '');
@@ -11527,14 +11536,25 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         ? `<div class="card"><div class="ok">Emailed to ${escEmail(emailed.to)}.</div></div>`
         : `<div class="card"><div class="warn">The email did not go: ${escEmail(emailed.error)}.
              Text them the message below instead.</div></div>`) : ''}
-      ${!emailed && q.email ? `<div class="card"><form method="POST" action="/admin/quote/${code}/email" style="margin:0">
+      ${!q.delivered_at ? `<div class="card" style="border-color:#c7d7fb;background:#f7faff">
+          <b>Send it to the customer?</b>
+          <p class="muted" style="margin:4px 0 10px">Nothing has gone to them yet. Choose how, or leave it and send it
+            later from the job page.</p>
+          ${q.email ? `<form method="POST" action="/admin/quote/${code}/email" style="margin:0 0 8px">
+            <button type="submit" style="width:100%">Email it to ${escEmail(q.email)}</button></form>` : ''}
+          ${smsHref ? `<a class="btn btn-ghost" style="display:block;text-align:center;margin-bottom:8px" href="${escEmail(smsHref)}"
+            onclick="markSent()">Text it (opens Messages)</a>` : ''}
+          <form method="POST" action="/admin/quote/${code}/delivered" style="margin:0 0 8px">
+            <button type="submit" class="btn-ghost" style="width:100%">I sent it another way</button></form>
+          <a class="btn btn-ghost" style="display:block;text-align:center" href="/admin/production/${code}">Not yet</a>
+        </div>` : q.email ? `<div class="card"><form method="POST" action="/admin/quote/${code}/email" style="margin:0">
           <button type="submit" class="btn btn-ghost" style="width:100%">Email ${existingQuote ? 'the updated quote' : 'it'} to ${escEmail(q.email)}</button>
         </form></div>` : ''}
       <div class="card">
         <div class="msg" id="m">${escEmail(msgs.initial)}</div>
         <div class="row">
           <button type="button" onclick="cp()">Copy message</button>
-          ${smsHref ? `<a class="btn btn-ghost" href="${escEmail(smsHref)}">Open in Messages</a>` : ''}
+          ${smsHref ? `<a class="btn btn-ghost" href="${escEmail(smsHref)}" onclick="markSent()">Open in Messages</a>` : ''}
         </div>
         <p class="muted" style="margin-top:10px">They see: <a href="${quoteLink(code)}">${quoteLink(code)}</a></p>
         ${TAXCERT.quoteNeedsCertificate(q) && !q.tax_certificate_id ? `
@@ -11549,7 +11569,14 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         <a class="btn btn-ghost" href="/admin/quotes">All quotes</a>
       </div>
       <script>
+        /* Opening Messages or copying the message is sending it: mark the quote
+           delivered so the follow-up may chase it. Fire-and-forget. */
+        function markSent(){
+          try { fetch('/admin/quote/${code}/delivered', { method: 'POST', keepalive: true, credentials: 'same-origin',
+            headers: { 'X-Requested-With': 'fetch' } }); } catch (e) {}
+        }
         function cp(){
+          markSent();
           var t=document.getElementById('m').innerText;
           (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject())
             .then(function(){alert('Message copied — paste it into a text.');})
@@ -16533,6 +16560,29 @@ app.post('/admin/quote/:code/email', requireAdmin, async (req, res) => {
   }
 });
 
+/* Marks a quote as with the customer: sent by text or some other way the
+   server cannot see (2026-10-06). Only a quote whose link works; never undone
+   here. Answers a fetch with 204, a form with the job page. */
+app.post('/admin/quote/:code/delivered', requireAdmin, async (req, res) => {
+  if (actorLevel('quotes.view') !== 'on') return res.status(403).send('Not available to your account.');
+  const code = String(req.params.code || '').toUpperCase();
+  const isFetch = req.get('X-Requested-With') === 'fetch';
+  if (!QUOTE_CODE_RE.test(code)) return isFetch ? res.status(404).end() : res.redirect('/admin/quotes');
+  try {
+    const { rowCount } = await pool.query(
+      `UPDATE quotes SET delivered_at = NOW()
+        WHERE code = $1 AND delivered_at IS NULL AND status NOT IN ('held', 'draft') AND cancelled_at IS NULL`, [code]);
+    if (rowCount) logActivity(currentActor() || OWNER_ACTOR, 'quote marked sent', { type: 'quote', id: code }, {});
+    if (isFetch) return res.status(204).end();
+    return res.redirect(`/admin/production/${code}?ok=${encodeURIComponent(rowCount
+      ? 'Marked as sent to the customer.' : 'That quote was already marked as sent.')}`);
+  } catch (err) {
+    console.error('quote delivered route failed:', err.message);
+    if (isFetch) return res.status(500).end();
+    res.redirect(`/admin/production/${code}?err=${encodeURIComponent('Could not mark it sent. Please try again.')}`);
+  }
+});
+
 app.post('/admin/quote/:code/cancel', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/quotes');
@@ -18846,6 +18896,15 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
           <button type="submit" style="background:none;border:0;padding:0;color:#1848B8;font:inherit;cursor:pointer;text-decoration:underline">email the quote to them</button></form>${
             q.emailed_at ? ` <span class="muted">(last emailed ${escEmail(new Date(q.emailed_at).toLocaleString('en-US', { timeZone: 'America/Chicago', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))})</span>` : ''}` : ''}</div>
       ${flash(req.query)}
+      ${!q.delivered_at && !['held', 'draft'].includes(q.status) && !q.cancelled_at && !q.accepted_at ? `
+      <div class="card" style="border-color:#f5d48a;background:#fffbeb"><b>Not sent to the customer yet.</b>
+        <span class="muted">Saving a quote does not send it.</span>
+        <div class="row" style="gap:8px;margin-top:8px;flex-wrap:wrap">
+          ${q.email ? `<form method="POST" action="/admin/quote/${escEmail(q.code)}/email" style="margin:0">
+            <button type="submit">Email it to ${escEmail(q.email)}</button></form>` : ''}
+          <form method="POST" action="/admin/quote/${escEmail(q.code)}/delivered" style="margin:0">
+            <button type="submit" class="btn-ghost">I sent it another way</button></form>
+        </div></div>` : ''}
 
       <div class="card" style="margin-top:12px">
         ${(() => {
@@ -21843,6 +21902,9 @@ async function sendQuoteFollowUps() {
         WHERE accepted_at IS NULL
           AND followed_up_at IS NULL
           AND status IN ('sent','viewed')
+          -- never the first thing a customer hears: only a quote that was sent
+          -- to them, or that they have opened (2026-10-06)
+          AND (delivered_at IS NOT NULL OR status = 'viewed')
           AND created_at <= NOW() - ($1 || ' days')::interval
           AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)
           AND (email <> '' OR COALESCE(phone, '') <> '')

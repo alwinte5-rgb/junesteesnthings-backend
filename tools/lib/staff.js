@@ -217,6 +217,8 @@ const ROUTES = {
 
   'POST /admin/quote/:code/message': 'customers.message',
   'POST /admin/quote/:code/email': 'customers.message',
+  /* Marks a quote as sent by text or by hand (2026-10-06): sending, so the same permission. */
+  'POST /admin/quote/:code/delivered': 'customers.message',
   'POST /admin/quote/:code/receipt': 'customers.message',
   'GET /admin/customers': 'customers.view',
   'GET /admin/customer': 'customers.view',

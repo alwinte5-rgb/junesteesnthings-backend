@@ -105,11 +105,21 @@ test('the picker offers the admin form\'s artwork types', () => {
   assert.strictEqual(P.ACCEPT, adminAccept[1]);
 });
 
-test('saving a quote emails the customer, and says whether it went', () => {
-  assert.match(src, /const emailed = \(!existingQuote \|\| wasDraft\) && q\.email \? await emailQuote\(q\) : null;/);
-  assert.match(src, /The email did not go: \$\{escEmail\(emailed\.error\)\}/);
+test('saving a quote does NOT email the customer: the page asks how to send it', () => {
+  /* The owner, 2026-10-06: "on the save can you not auto send the quote. Ask
+     to send." Until 2026-10-06 the first save emailed it (emailQuote). */
+  assert.doesNotMatch(src, /\? await emailQuote\(q\) : null/);
+  assert.match(src, /<b>Send it to the customer\?<\/b>/);
+  assert.match(src, /action="\/admin\/quote\/\$\{code\}\/delivered"/);
+  /* Emailing it, texting it or marking it sent is what delivers it. */
+  assert.match(src, /emailed_at = NOW\(\), delivered_at = COALESCE\(delivered_at, NOW\(\)\)/);
+  /* The automatic follow-up is never the first thing a customer hears. */
+  const sweep = src.slice(src.indexOf('async function sendQuoteFollowUps'));
+  assert.match(sweep.slice(0, sweep.indexOf('\n}\n')), /AND \(delivered_at IS NOT NULL OR status = 'viewed'\)/);
+  /* An owner approving a helper's held quote still emails it: the helper is
+     not there to be asked. */
   const rel = src.slice(src.indexOf('async function releaseHeldQuote'));
-  assert.match(rel.slice(0, rel.indexOf('\n}\n')), /emailQuote\(q\)/, 'an approved quote is emailed too');
+  assert.match(rel.slice(0, rel.indexOf('\n}\n')), /emailQuote\(q\)/, 'an approved quote is emailed');
 });
 
 /* Wiring, read from the source: the folder is signable, and the add is one
