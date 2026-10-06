@@ -215,11 +215,11 @@ test('every Signs365 product carries the supplier delivery charge automatically,
   /* The form claims automatic order-level charges before its once-an-order
      filter, as the save route does — or the screen bills it per line. */
   const form = src.slice(src.indexOf('Charges the method carries automatically'));
-  assert.ok(form.indexOf("if (a.code === 'cutout_ship' && (freightUpgraded || upgradedOn(L))) return;") > -1 &&
-    form.indexOf("if (a.code === 'cutout_ship' && (freightUpgraded || upgradedOn(L))) return;") < form.indexOf('addons = addons.filter(function(a){'));
+  const autoAt = form.indexOf("if (a.code === 'cutout_ship' && (freightUpgraded || upgradedOn(L)");
+  assert.ok(autoAt > -1 && autoAt < form.indexOf('addons = addons.filter(function(a){'));
   /* Only a REQUIRED item's Saturday/large rate replaces the charge order-wide. */
   assert.match(src, /const freightUpgraded = \[\.\.\.Array\(40\)\.keys\(\)\]\.some\(\(i\) => !isOptional\(i\) && upgradedAt\(i\)\);/);
-  assert.match(src, /if \(a\.code === 'cutout_ship' && \(freightUpgraded \|\| upgradedAt\(i\)\)\) continue;/);
+
 });
 
 test('under 50, screen printing is charged as 50 on a line of its own', () => {
@@ -250,4 +250,17 @@ test('on a dark garment the white base is a colour in the screen-print price', (
   /* DTF is not screen printed and has no base column. */
   const dtf = priceLine({ ...base, product: null, addons: [], qty: 60, dark: true, prints: [{ loc: 'front', method: DTF }] });
   assert.equal(dtf.decoration, 5.1);
+});
+
+test('a price typed on a supplier item is all-in: no delivery added on top', () => {
+  /* 2026-10-06: a 36in pack typed at $160 to match what the customer saw on the
+     website was saved at $170. */
+  assert.match(src, /if \(a\.code === 'cutout_ship' && \(freightUpgraded \|\| upgradedAt\(i\) \|\| priceTyped\)\) continue;/);
+  assert.match(src, /if \(a\.code === 'cutout_ship' && \(freightUpgraded \|\| upgradedOn\(L\) \|\| String\(u\.value \|\| ''\)\.trim\(\) !== ''\)\) return;/);
+});
+
+test('a price typed on a supplier item is what the customer is charged: no delivery added on top', () => {
+  /* 2026-10-06: a 36in pack adjusted to $160 kept coming back as $170. */
+  assert.match(src, /if \(a\.code === 'cutout_ship' && \(freightUpgraded \|\| upgradedAt\(i\) \|\| priceTyped\)\) continue;/);
+  assert.match(src, /if \(a\.code === 'cutout_ship' && \(freightUpgraded \|\| upgradedOn\(L\) \|\| String\(u\.value \|\| ''\)\.trim\(\) !== ''\)\) return;/);
 });

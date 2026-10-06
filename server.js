@@ -9470,7 +9470,10 @@ ${quotePricingSource()}
             addonsForTitle(t).forEach(function(a){
               if (a.auto !== 'method') return;
               if (a.code === 'screens' && !SCREEN_FEES_LIVE) return;
-              if (a.code === 'cutout_ship' && (freightUpgraded || upgradedOn(L))) return;
+              /* A price typed on the item is the price the customer was given,
+                 delivery and all (2026-10-06: a 36in pack typed at $160 to
+                 match the website came out $170). */
+              if (a.code === 'cutout_ship' && (freightUpgraded || upgradedOn(L) || String(u.value || '').trim() !== '')) return;
               if (addons.some(function(x){ return x.code === a.code; })) return;
               addons.push(a);
             });
@@ -10382,7 +10385,8 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
       for (const a of addonsForAny(addonTitles)) {
         if (a.auto !== 'method') continue;
         if (a.code === 'screens' && !SCREEN_FEES_LIVE) continue;
-        if (a.code === 'cutout_ship' && (freightUpgraded || upgradedAt(i))) continue;
+        /* A typed price is all-in: the supplier delivery is not added on top. */
+        if (a.code === 'cutout_ship' && (freightUpgraded || upgradedAt(i) || priceTyped)) continue;
         lineAddons.push({ code: a.code, label: a.label, kind: a.kind, rate: a.rate });
       }
 
