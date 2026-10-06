@@ -6841,13 +6841,20 @@ function quotePricingSource() {
            colour count, and each is minimum-enforced on its own method below —
            screen printing's 50-piece floor must not be applied to the DTF half
            and vice versa. */
-        function decoFor(method, stage, colourPick) {
+        /* backPick: the BACK's ink count on a front + back line. A 3-colour
+           front with a 1-colour back is $6 + $4 a shirt, not $6 + $6, and four
+           screens, not six. Absent, the back takes the front's count — which
+           is how every quote before 2026-10-05 was priced, so they re-price
+           unchanged. */
+        function decoFor(method, stage, colourPick, backPick) {
           if (!method) return 0;
           var c = colourCount(method, colourPick);
           if (stage === 'both') {
             var pk = Object.keys(method.positions || {});
+            var cb = (backPick !== undefined && backPick !== null && backPick !== '')
+              ? colourCount(method, backPick) : c;
             return Number(tierAt(method.positions, bandQty, pk[0], c)) +
-                   Number(tierAt(method.positions, bandQty, pk[1] || pk[0], c));
+                   Number(tierAt(method.positions, bandQty, pk[1] || pk[0], cb));
           }
           return Number(tierAt(method.positions, bandQty, stage, c));
         }
@@ -6880,7 +6887,9 @@ function quotePricingSource() {
         var sleeveColourPick = (o.sleeveColours !== undefined && o.sleeveColours !== null && o.sleeveColours !== '')
           ? o.sleeveColours : o.colours;
 
-        var decoration = applyMin(o.method, decoFor(o.method, o.stage, o.colours) +
+        var backColourPick = (o.backColours !== undefined && o.backColours !== null && o.backColours !== '')
+          ? o.backColours : o.colours;
+        var decoration = applyMin(o.method, decoFor(o.method, o.stage, o.colours, backColourPick) +
                                             sleeveDeco(o.method, sleeveColourPick));
         var decoration2 = applyMin(o.method2, decoFor(o.method2, o.stage2, o.colours2));
 
@@ -6921,6 +6930,9 @@ function quotePricingSource() {
           var sc = colourCount(sm, sm === o.method ? o.colours : o.colours2);
           screenCeiling = maxScreens(sm);
           passScreens = screensPerPass(sc, !!o.dark);
+          if (sm === o.method && o.stage === 'both') {
+            passScreens = Math.max(passScreens, screensPerPass(colourCount(sm, backColourPick), !!o.dark));
+          }
           /* A sleeve is its own pass, so it is checked on its own count. */
           if (sm === o.method && sleeves) {
             passScreens = Math.max(passScreens, screensPerPass(colourCount(sm, sleeveColourPick), !!o.dark));
@@ -6973,6 +6985,11 @@ function quotePricingSource() {
         var screenColours = sm ? colourCount(sm, sm === o.method2 ? o.colours2 : o.colours) : colours;
         var locations = (screenStage === 'both') ? 2 : 1;
         var screens = screenCount(screenColours, locations, !!o.dark);
+        /* Front and back each burn their own colours' worth of screens. */
+        if (sm && sm === o.method && o.stage === 'both') {
+          screens = screenCount(screenColours, 1, !!o.dark) +
+                    screenCount(colourCount(sm, backColourPick), 1, !!o.dark);
+        }
         /* Sleeves burn their own screens — per sleeve, at the sleeve's own ink
            count — but only when the sleeves are the screen-print half. */
         if (sm && sm === o.method && sleeves) {
@@ -7659,6 +7676,11 @@ button:active{transform:translateY(1px)}
 .more:hover{color:#1848B8}
 .more .caret{font-size:10px;display:inline-block;width:12px}
 .extra{padding-top:8px}
+/* The three groups inside an item: Garment, Printing, Quantity & price. */
+.lsec{border-top:1px solid #eef1f7;margin-top:10px;padding-top:8px}
+.lsec-h{font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#1848B8;margin-bottom:6px}
+.lsec select,.lsec input:not([type=checkbox]){font-size:13.5px}
+.lcheck{display:flex;align-items:center;gap:6px;margin:0;font-size:13px;text-transform:none;letter-spacing:0;font-weight:400}
 @media (max-width:520px){
   .row-2{flex-direction:row}
   .row-2>*{min-width:0}
@@ -8427,111 +8449,125 @@ function productGroupOf(name) {
       </div>
       <input name="description${n}" class="d" value="${it ? val(oneSizeList(it.description)) : ''}"
              placeholder="What is it? e.g. 24 tees, 1 colour front">
-      <div class="row row-2" style="margin-top:8px">
-        <select name="product${n}" class="p"><option value="">Product (optional)</option>${prodOpts(it && it.product_id)}</select>
-        <select name="method${n}" class="m"><option value="">Decoration (optional)</option>${methodOpts(it && it.method_id)}</select>
-      </div>
-      <!-- A SECOND decoration on the SAME garment. A job that is DTF on one
-           side and screen printed on the other is one shirt and two processes;
-           quoting it as two lines charged the shirt twice, and quoting it as
-           one line charged only one process. Hidden until the first decoration
-           is chosen, because a second process without a first is not a thing. -->
-      <div class="row row-2 deco2" style="display:none;margin-top:8px">
-        <select name="method2${n}" class="m2"><option value="">+ Second decoration (optional)</option>${methodOpts(it && it.method2_id)}</select>
-        <select name="loc2${n}" class="loc2" style="font-size:13px;padding:6px 7px">
-          <option value="">Front only</option>
-          <option value="mr8a5dlx"${it && it.stage2 === 'mr8a5dlx' ? ' selected' : ''}>Back only</option>
-          <option value="both"${it && it.stage2 === 'both' ? ' selected' : ''}>Front + back</option>
-        </select>
-      </div>
-      <!-- Directly under the product, because it is a property OF the product
-           and the two are chosen together. It sat inside the collapsed "Details,
-           photos & sizes" section, where choosing a colour meant opening a
-           panel first — so the common case was the hidden one. -->
-      <div class="colours" style="display:none;margin-top:8px"></div>
-      <div class="row row-tight" style="margin-top:8px">
-        <input name="qty${n}" class="q" type="number" inputmode="numeric" min="1"
-               value="${it ? val(it.qty) : ''}" placeholder="Qty">
-        <input name="unit_price${n}" class="u" type="number" step="0.01" inputmode="decimal"
-               value="${it && it.manual ? val(typedUnitOf(it)) : ''}" placeholder="Each $">
-        <b class="lt">—</b>
-      </div>
-      <!-- RUN NUMBER. Lines sharing a number pool their quantity for the price
-           BAND only; each keeps its own garment cost and its own total. Blank
-           means the line prices on its own.
 
-           A number rather than a tick box, because a tick can only say "one
-           run per quote". Six designs on one quote are six runs, and ticking
-           all six would pool them into a single job and under-charge every one
-           of them. The engine never cared — runGroup was always a tag — so this
-           costs nothing and removes the ceiling. -->
-      <label class="runlab" style="display:flex;align-items:center;gap:6px;margin-top:6px;
-             font-size:12.5px;color:#3f4a5f">
-        <span>Run</span>
-        <input name="run${n}" class="sr" type="number" inputmode="numeric" min="1" max="99"
-               style="width:56px" value="${it && it.run_group ? val(it.run_group) : ''}"
-               placeholder="—" title="Lines with the same run number are printed together and share a price band. Leave blank to price this line on its own.">
-        <b class="srq" style="color:#2563eb"></b>
-      </label>
-      <p class="minwarn" style="display:none;margin:6px 0 0;font-size:12.5px;color:#b45309"></p>
-      <p class="aonote" style="display:none;margin:6px 0 0;font-size:12px;color:#6b7280"></p>
-      <!-- Internal cost split. This form is requireAdmin and the customer's page
-           (/q/:code) renders from the stored line total, so nothing here reaches
-           them — it is for deciding whether a line is worth taking. -->
-      <p class="costnote" style="display:none;margin:6px 0 0;font-size:12px;color:#3f4a5f;
-         background:#F6F8FC;border:1px solid #E2E8F4;border-radius:6px;padding:6px 9px"></p>
-      <div class="row row-2" style="margin-top:8px">
-        <label style="display:flex;align-items:center;gap:6px;margin:0;font-size:13px;text-transform:none;letter-spacing:0;font-weight:400">
-          <input type="checkbox" name="dark${n}" class="dark" value="1"
-                 ${it && it.garment_dark ? 'checked' : ''} style="width:auto;margin:0">
-          Dark garment</label>
-        <select name="loc${n}" class="loc" style="font-size:13px;padding:6px 7px">
-          <option value="">Front only</option>
-          <option value="mr8a5dlx"${it && it.stage === 'mr8a5dlx' ? ' selected' : ''}>Back only</option>
-          <option value="both"${it && it.stage === 'both' ? ' selected' : ''}>Front + back</option>
-        </select>
-      </div>
-      <!-- Sleeves, on top of the front/back choice: each one is another pass of
-           this decoration, with its own ink count and its own screens. -->
-      <div class="row row-2" style="margin-top:8px">
-        <select name="sleeves${n}" class="slv" style="font-size:13px;padding:6px 7px">
-          <option value="">No sleeves</option>
-          <option value="left"${it && it.sleeves === 'left' ? ' selected' : ''}>+ Left sleeve</option>
-          <option value="right"${it && it.sleeves === 'right' ? ' selected' : ''}>+ Right sleeve</option>
-          <option value="both"${it && it.sleeves === 'both' ? ' selected' : ''}>+ Both sleeves</option>
-        </select>
-        <select name="sleeve_colors${n}" class="slc" style="font-size:13px;padding:6px 7px;display:none"
-                title="Ink colours on each sleeve"
-                data-v="${it && it.sleeve_colours ? val(it.sleeve_colours) : ''}"></select>
-      </div>
-      <div style="margin-top:6px">
-        <input name="blank_price${n}" class="bp" type="number" step="0.01" min="0" inputmode="decimal"
-               value="${it && it.blank_price ? val(it.blank_price) : ''}"
-               style="font-size:13px;padding:6px 7px" placeholder="Garment price each — leave blank for catalogue">
+      <!-- The item reads top to bottom in the order it is quoted: the GARMENT,
+           then the PRINTING on it, then QUANTITY & PRICE. Each group keeps
+           everything about one thing together, so a helper never has to hunt
+           for which box belongs to what. -->
+      <div class="lsec">
+        <div class="lsec-h">Garment</div>
+        <select name="product${n}" class="p"><option value="">Product (optional)</option>${prodOpts(it && it.product_id)}</select>
+        <!-- Directly under the product, because it is a property OF the product
+             and the two are chosen together. -->
+        <div class="colours" style="display:none;margin-top:8px"></div>
+        <div class="row row-2" style="margin-top:8px;align-items:center">
+          <label class="lcheck" title="A dark garment needs a white base screen under the ink">
+            <input type="checkbox" name="dark${n}" class="dark" value="1"
+                   ${it && it.garment_dark ? 'checked' : ''} style="width:auto;margin:0">
+            Dark garment</label>
+          <input name="blank_price${n}" class="bp" type="number" step="0.01" min="0" inputmode="decimal"
+                 value="${it && it.blank_price ? val(it.blank_price) : ''}"
+                 style="font-size:13px;padding:6px 7px" placeholder="Garment $ each">
+        </div>
         <p class="muted bpnote" style="margin:3px 0 0;font-size:11.5px"></p>
       </div>
-      <!-- Ink colours. Screen printing is ONE method with a column per colour
-           count, so the count is the thing that picks the price and nothing on
-           this page can infer it — only a person who has seen the artwork
-           knows. Options are filled in by calc() from the method's own
-           colour_options, so the picker can never offer a column the shop has
-           not priced. Hidden for every other method. -->
-      <div class="inks" style="display:none;margin-top:8px;padding:8px 10px;background:#f6f8fd;border:1px solid #e3e8f2;border-radius:8px">
-        <label style="margin:0 0 4px;font-size:11px">Ink colours in the design</label>
-        <select name="colors${n}" class="cols" style="font-size:13px;padding:6px 7px"
-                data-v="${it && it.colours ? val(it.colours) : ''}"></select>
-        <p class="muted" style="margin:4px 0 0;font-size:11.5px">One screen per colour — the price is banded on this.</p>
+
+      <div class="lsec">
+        <div class="lsec-h">Printing</div>
+        <div class="row row-2">
+          <select name="method${n}" class="m"><option value="">Decoration (optional)</option>${methodOpts(it && it.method_id)}</select>
+          <select name="loc${n}" class="loc" title="Where it is printed">
+            <option value="">Front only</option>
+            <option value="mr8a5dlx"${it && it.stage === 'mr8a5dlx' ? ' selected' : ''}>Back only</option>
+            <option value="both"${it && it.stage === 'both' ? ' selected' : ''}>Front + back</option>
+          </select>
+        </div>
+        <!-- Ink colours, one per place printed. Screen printing is ONE method
+             with a column per colour count, so the count picks the price and
+             only a person who has seen the artwork knows it. Options come from
+             the method's own colour_options in calc(), so the picker never
+             offers a column the shop has not priced. Hidden for every other
+             method. The back gets its own count: a 3-colour front with a
+             1-colour back is not two 3-colour prints. -->
+        <div class="inks" style="display:none;margin-top:8px;padding:8px 10px;background:#f6f8fd;border:1px solid #e3e8f2;border-radius:8px">
+          <div class="row row-2">
+            <div><label class="inklab" style="margin:0 0 4px;font-size:11px">Ink colours</label>
+              <select name="colors${n}" class="cols" style="font-size:13px;padding:6px 7px"
+                      data-v="${it && it.colours ? val(it.colours) : ''}"></select></div>
+            <div class="bink" style="display:none"><label style="margin:0 0 4px;font-size:11px">Back ink colours</label>
+              <select name="back_colors${n}" class="bcols" style="font-size:13px;padding:6px 7px"
+                      data-v="${it && (it.back_colours || it.colours) ? val(it.back_colours || it.colours) : ''}"></select></div>
+          </div>
+          ${it && it.stage === 'both' && it.colours && !it.back_colours && !(existing && existing.accepted_at) ? `
+          <p class="backcheck" style="margin:6px 0 0;font-size:12px;color:#b45309">Saved before the back had its own
+            colour count, so the back was priced at the front's. Set the back's real count and save to re-price.</p>` : ''}
+          <p class="muted" style="margin:4px 0 0;font-size:11.5px">One screen per colour, per place printed — the price is banded on this.</p>
+        </div>
+        <!-- Sleeves: each one is another pass of this decoration, with its
+             own ink count and its own screens. -->
+        <div class="row row-2" style="margin-top:8px">
+          <select name="sleeves${n}" class="slv">
+            <option value="">No sleeves</option>
+            <option value="left"${it && it.sleeves === 'left' ? ' selected' : ''}>+ Left sleeve</option>
+            <option value="right"${it && it.sleeves === 'right' ? ' selected' : ''}>+ Right sleeve</option>
+            <option value="both"${it && it.sleeves === 'both' ? ' selected' : ''}>+ Both sleeves</option>
+          </select>
+          <select name="sleeve_colors${n}" class="slc" style="display:none"
+                  title="Ink colours on each sleeve"
+                  data-v="${it && it.sleeve_colours ? val(it.sleeve_colours) : ''}"></select>
+        </div>
+        <!-- A SECOND decoration on the SAME garment: DTF on one side and screen
+             printed on the other is one shirt and two processes. Hidden until
+             the first decoration is chosen. -->
+        <div class="row row-2 deco2" style="display:none;margin-top:8px">
+          <select name="method2${n}" class="m2"><option value="">+ 2nd decoration (optional)</option>${methodOpts(it && it.method2_id)}</select>
+          <select name="loc2${n}" class="loc2">
+            <option value="">Front only</option>
+            <option value="mr8a5dlx"${it && it.stage2 === 'mr8a5dlx' ? ' selected' : ''}>Back only</option>
+            <option value="both"${it && it.stage2 === 'both' ? ' selected' : ''}>Front + back</option>
+          </select>
+        </div>
+        <div class="addons" style="margin-top:6px;display:none"></div>
+        <div class="digi" style="display:none;margin-top:8px;padding:8px 10px;background:#f6f8fd;border:1px solid #e3e8f2;border-radius:8px">
+          <label style="margin:0 0 4px;font-size:11px">Digitizing — one time, not per piece</label>
+          <select name="setup${n}" class="su" style="font-size:13px;padding:6px 7px">
+            <option value="">No digitizing — they supplied a usable file</option>
+            ${digiList.map(d => `<option value="${d.id}"${
+              it && String(it.setup_method_id) === String(d.id) ? ' selected' : ''
+            }>${escEmail(d.title)} — ${money(d.price)}</option>`).join('')}
+          </select>
+          <p class="muted" style="margin:4px 0 0;font-size:11.5px">Charged once for the design. Leave as-is to waive it.</p>
+        </div>
       </div>
-      <div class="addons" style="margin-top:6px;display:none"></div>
-      <div class="digi" style="display:none;margin-top:8px;padding:8px 10px;background:#f6f8fd;border:1px solid #e3e8f2;border-radius:8px">
-        <label style="margin:0 0 4px;font-size:11px">Digitizing — one time, not per piece</label>
-        <select name="setup${n}" class="su" style="font-size:13px;padding:6px 7px">
-          <option value="">No digitizing — they supplied a usable file</option>
-          ${digiList.map(d => `<option value="${d.id}"${
-            it && String(it.setup_method_id) === String(d.id) ? ' selected' : ''
-          }>${escEmail(d.title)} — ${money(d.price)}</option>`).join('')}
-        </select>
-        <p class="muted" style="margin:4px 0 0;font-size:11.5px">Charged once for the design. Leave as-is to waive it.</p>
+
+      <div class="lsec">
+        <div class="lsec-h">Quantity &amp; price</div>
+        <div class="row-tight">
+          <input name="qty${n}" class="q" type="number" inputmode="numeric" min="1"
+                 value="${it ? val(it.qty) : ''}" placeholder="Qty">
+          <input name="unit_price${n}" class="u" type="number" step="0.01" inputmode="decimal"
+                 value="${it && it.manual ? val(typedUnitOf(it)) : ''}" placeholder="Each $" title="Leave blank to use the calculated price">
+          <b class="lt">—</b>
+        </div>
+        <!-- RUN NUMBER. Lines sharing a number pool their quantity for the
+             price BAND only; each keeps its own garment cost and total. A
+             number, not a tick, so six designs can be six runs. -->
+        <label class="runlab" style="display:flex;align-items:center;gap:6px;margin-top:6px;
+               font-size:12.5px;color:#3f4a5f;text-transform:none;letter-spacing:0;font-weight:400">
+          <span>Run</span>
+          <input name="run${n}" class="sr" type="number" inputmode="numeric" min="1" max="99"
+                 style="width:56px" value="${it && it.run_group ? val(it.run_group) : ''}"
+                 placeholder="—" title="Lines with the same run number are printed together and share a price band. Leave blank to price this line on its own.">
+          <span class="muted" style="font-size:11.5px">same number = printed together, shares a price band</span>
+          <b class="srq" style="color:#2563eb"></b>
+        </label>
+        <p class="minwarn" style="display:none;margin:6px 0 0;font-size:12.5px;color:#b45309"></p>
+        <p class="aonote" style="display:none;margin:6px 0 0;font-size:12px;color:#6b7280"></p>
+        <!-- Internal cost split. This form is requireAdmin and the customer's
+             page renders from the stored line total, so nothing here reaches
+             them. -->
+        <p class="costnote" style="display:none;margin:6px 0 0;font-size:12px;color:#3f4a5f;
+           background:#F6F8FC;border:1px solid #E2E8F4;border-radius:6px;padding:6px 9px"></p>
       </div>
       <button type="button" class="more" onclick="toggleMore(this)"
         aria-expanded="${hasExtras ? 'true' : 'false'}">
@@ -9129,6 +9165,30 @@ ${quotePricingSource()}
           }
           /* The sleeve ink picker offers the same priced columns, and shows
              only when a sleeve is chosen on a method priced by colour. */
+          /* The back's own ink picker: same priced columns, shown only on a
+             front + back line. The front's label says "Front" then, so the
+             two boxes cannot be mistaken for each other. */
+          var locNow = L.querySelector('.loc') ? L.querySelector('.loc').value : '';
+          var bcEl = L.querySelector('.bcols');
+          var bink = L.querySelector('.bink');
+          var inkLab = L.querySelector('.inklab');
+          if (bcEl) {
+            var bkey = inks ? String(meth.id) : '';
+            if (bcEl.dataset.for !== bkey) {
+              bcEl.dataset.for = bkey;
+              bcEl.innerHTML = inks ? inks.map(function(c){
+                return '<option value="' + c + '">' + c + (c === 1 ? ' colour' : ' colours') + '</option>';
+              }).join('') : '';
+              if (inks) {
+                var bwas = parseInt(bcEl.dataset.v, 10);
+                bcEl.value = String(inks.indexOf(bwas) > -1 ? bwas : (colEl && colEl.value) || inks[0]);
+              }
+            }
+            if (inks && !bcEl.value) bcEl.value = String((colEl && colEl.value) || inks[0]);
+            var showBack = !!(inks && locNow === 'both');
+            if (bink) bink.style.display = showBack ? '' : 'none';
+            if (inkLab) inkLab.textContent = showBack ? 'Front ink colours' : 'Ink colours';
+          }
           var slvEl = L.querySelector('.slv');
           var slcEl = L.querySelector('.slc');
           if (slcEl) {
@@ -9136,7 +9196,7 @@ ${quotePricingSource()}
             if (slcEl.dataset.for !== skey) {
               slcEl.dataset.for = skey;
               slcEl.innerHTML = inks ? inks.map(function(c){
-                return '<option value="' + c + '">' + c + (c === 1 ? ' colour' : ' colours') + ' each sleeve</option>';
+                return '<option value="' + c + '">' + c + (c === 1 ? ' colour' : ' colours') + ' each</option>';
               }).join('') : '';
               if (inks) {
                 var swas = parseInt(slcEl.dataset.v, 10);
@@ -9305,6 +9365,7 @@ ${quotePricingSource()}
             colours: colEl ? colEl.value : '',
             method2: meth2, stage2: stage2, colours2: '',
             sleeves: slvEl ? slvEl.value : '',
+            backColours: (bcEl && bink && bink.style.display !== 'none') ? bcEl.value : '',
             sleeveColours: (slcEl && slcEl.value) ? slcEl.value : '',
             runPrimary: isRunPrimary,
             stage: stage, addons: addons, blankTiers: BLANK_TIERS,
@@ -9519,6 +9580,10 @@ ${quotePricingSource()}
            a new item would inherit item 1's ink count. */
         var ck = tpl.querySelector('.cols');
         if (ck) { ck.innerHTML = ''; ck.dataset.v = ''; ck.dataset.for = ''; }
+        var bk = tpl.querySelector('.bcols');
+        if (bk) { bk.innerHTML = ''; bk.dataset.v = ''; bk.dataset.for = ''; }
+        var bc = tpl.querySelector('.backcheck');
+        if (bc) bc.remove();
         var sk = tpl.querySelector('.slc');
         if (sk) { sk.innerHTML = ''; sk.dataset.v = ''; sk.dataset.for = ''; sk.style.display = 'none'; }
         // A new item starts tidy: sizes hidden, extras closed.
@@ -10166,11 +10231,17 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
       const rawSleeves = String(one(b['sleeves' + i]) || '').trim();
       const sleeves = method && ['left', 'right', 'both'].includes(rawSleeves) ? rawSleeves : '';
       const sleeveColours = sleeves ? colourCount(method, one(b['sleeve_colors' + i])) : null;
+      /* The back's own ink count — only on a front + back line, only for a
+         method priced by colour. Blank means "same as the front". */
+      const rawBack = String(one(b['back_colors' + i]) || '').trim();
+      const backColours = (stage === 'both' && method && method.type === 'color' && rawBack)
+        ? colourCount(method, rawBack) : null;
       const priceArgs = {
         bandQty: runGroup ? (runTotals[runGroup] || 0) : 0,
         product: prod, method, qty: q, sizeMix: mix, colours,
         method2, stage2, colours2: one(b['colors2' + i]) || '',
         sleeves, sleeveColours: sleeveColours || '',
+        backColours: backColours || '',
         runPrimary: !runGroup || runPrimaryIdx[runGroup] === i,
         stage, addons: lineAddons, blankTiers: BLANK_TIERS,
         /* The garment colour is a pricing INPUT, not a charge: it decides how
@@ -10364,6 +10435,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         garment_dark: garmentDark || null,
         stage: stage || null,
         sleeves: sleeves || null,
+        back_colours: backColours || null,
         /* Kept only for a method priced by colour, like `colours` below. */
         sleeve_colours: (sleeves && method && method.type === 'color') ? sleeveColours : null,
         /* The ink count this line was priced on, kept ONLY for the method that
@@ -10833,21 +10905,25 @@ function decorationSummary(item, catalog) {
     return 'front';
   };
   const sleeveWords = { left: 'left sleeve', right: 'right sleeve', both: 'both sleeves' };
-  const one = (m, stage, colours, sleeves, sleeveColours) => {
+  const one = (m, stage, colours, sleeves, sleeveColours, backColours) => {
     if (!m) return null;
     const bits = [String(m.title || '').trim(),
       where(stage) + (sleeveWords[sleeves] ? ' + ' + sleeveWords[sleeves] : '')];
     const c = parseInt(colours, 10);
     /* Only for a method whose price actually turns on the colour count —
        saying "1 colour" about DTF would be meaningless and slightly wrong. */
-    if (m.type === 'color' && c > 0) bits.push(c === 1 ? '1 colour' : c + ' colours');
+    const cw = (n) => (n === 1 ? '1 colour' : n + ' colours');
+    const bc = parseInt(backColours, 10);
+    if (m.type === 'color' && c > 0) {
+      bits.push(stage === 'both' && bc > 0 && bc !== c ? cw(c) + ' front, ' + cw(bc) + ' back' : cw(c));
+    }
     const sc = parseInt(sleeveColours, 10);
     if (sleeveWords[sleeves] && m.type === 'color' && sc > 0) {
       bits.push((sleeves === 'both' ? 'sleeves ' : 'sleeve ') + (sc === 1 ? '1 colour' : sc + ' colours'));
     }
     return bits.join(' — ');
   };
-  return [one(find(item.method_id), item.stage, item.colours, item.sleeves, item.sleeve_colours),
+  return [one(find(item.method_id), item.stage, item.colours, item.sleeves, item.sleeve_colours, item.back_colours),
           one(find(item.method2_id), item.stage2, item.colours2)].filter(Boolean);
 }
 
@@ -10883,6 +10959,7 @@ function customerLinePricing(items, catalog) {
       stage2: it.stage2 || null,
       sleeves: it.sleeves || null,
       sleeveColours: it.sleeve_colours || null,
+      backColours: it.back_colours || null,
       dark: !!it.garment_dark,
       colours: it.colours || null,
       colours2: it.colours2 || null,
@@ -11650,7 +11727,7 @@ ${quotePricingSource()}
           var r = priceLine({
             qty: qty, product: L.product, method: L.method, stage: L.stage,
             method2: L.method2, stage2: L.stage2, colours2: L.colours2,
-            sleeves: L.sleeves, sleeveColours: L.sleeveColours,
+            sleeves: L.sleeves, sleeveColours: L.sleeveColours, backColours: L.backColours,
             dark: L.dark, colours: L.colours, addons: L.addons,
             sizeMix: mix, blankTiers: BLANK_TIERS,
             blankOverride: L.blankOverride, unitOverride: L.unitOverride,

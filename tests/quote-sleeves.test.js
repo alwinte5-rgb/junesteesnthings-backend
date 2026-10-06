@@ -124,3 +124,40 @@ test('the pricing source recognises "Screen Printing" as screen printing', () =>
   const r = priceLine({ ...base, method: { ...SCREEN, max_screens: 3 }, colours: 3, dark: true });
   assert.equal(r.overScreens, true);
 });
+
+/* Front + back at different ink counts (2026-10-05). */
+test('front + back: each side priced and screened at its own count', () => {
+  const same = priceLine({ ...base, method: SCREEN, colours: 3, stage: 'both' });
+  assert.equal(same.decoration, 12, 'no back count = the front count, as old quotes were priced');
+  assert.equal(same.screens, 6);
+  const diff = priceLine({ ...base, method: SCREEN, colours: 3, stage: 'both', backColours: 1 });
+  assert.equal(diff.decoration, 6 + 4);
+  assert.equal(diff.screens, 3 + 1);
+  const dark = priceLine({ ...base, method: SCREEN, colours: 3, stage: 'both', backColours: 1, dark: true });
+  assert.equal(dark.screens, 4 + 2);
+});
+
+test('a back count is ignored unless the line is front + back', () => {
+  const r = priceLine({ ...base, method: SCREEN, colours: 3, stage: '', backColours: 1 });
+  assert.equal(r.decoration, 6);
+  assert.equal(r.screens, 3);
+});
+
+test('the back is checked against the press ceiling as its own pass', () => {
+  const big = { ...SCREEN, max_screens: 3 };
+  const r = priceLine({ ...base, method: big, colours: 1, stage: 'both', backColours: 3, dark: true });
+  assert.equal(r.overScreens, true);
+});
+
+test('the customer page names different front and back counts', () => {
+  const cat = { methods: [SCREEN] };
+  assert.equal(summary({ method_id: 22, stage: 'both', colours: '3', back_colours: 1 }, cat)[0],
+    'Screen Printing — front and back — 3 colours front, 1 colour back');
+  assert.equal(summary({ method_id: 22, stage: 'both', colours: '2', back_colours: 2 }, cat)[0],
+    'Screen Printing — front and back — 2 colours');
+});
+
+test('the save route keeps a back count only on a front + back colour-priced line', () => {
+  assert.match(src, /stage === 'both' && method && method\.type === 'color' && rawBack/);
+  assert.match(src, /back_colours: backColours \|\| null,/);
+});
