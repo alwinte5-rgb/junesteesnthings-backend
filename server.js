@@ -9119,7 +9119,6 @@ ${quotePricingSource()}
         runShared: a.runShared || false, orderShared: a.orderShared || false,
       })))};
       var SCREEN_FEES_LIVE = ${SCREEN_FEES_LIVE ? 'true' : 'false'};
-      var FOLDED_CODES = ${JSON.stringify(IN_ITEM_PRICE_CODES)};
 
       /** Which add-ons apply to a method, mirroring addonsFor() on the server. */
       function addonsForTitle(title){
@@ -9604,7 +9603,8 @@ ${quotePricingSource()}
             addonsForTitle(t).forEach(function(a){
               if (a.auto !== 'method') return;
               if (a.code === 'screens' && !SCREEN_FEES_LIVE) return;
-              if (a.code === 'cutout_ship' && (freightUpgraded || upgradedOn(L))) return;
+              /* A typed price is all-in, like the price the form shows. */
+              if (a.code === 'cutout_ship' && (freightUpgraded || upgradedOn(L) || String(u.value || '').trim() !== '')) return;
               if (addons.some(function(x){ return x.code === a.code; })) return;
               addons.push(a);
             });
@@ -9667,6 +9667,9 @@ ${quotePricingSource()}
 
           if (prod) u.placeholder = r.listUnit.toFixed(2);
           var lt = r.lineTotal;
+          /* A supplier item shows its price with the delivery in it ($170 for
+             a 36in pack), so the figure staff see is the one they would type. */
+          if (cutMeth) u.placeholder = (qty > 0 && u.value === '') ? (lt / qty).toFixed(2) : '';
           /* Show the override the way the customer will see it: struck-through
              list, then what they actually pay. Only for a genuine reduction —
              a price ABOVE list is a surcharge, not a deal. */
@@ -9680,15 +9683,15 @@ ${quotePricingSource()}
           /* Say what the extras added, so a line total is never unexplained. */
           var aoNote = L.querySelector('.aonote');
           if (aoNote) {
-            /* Supplier delivery is billed on top of the item but the customer
-               sees one price (a 36in pack: $160 + $10 = $170 on their quote),
-               so say so rather than leave the $160 looking like their price. */
-            var folded = r.addonLines.filter(function(a){ return FOLDED_CODES.indexOf(a.code) > -1; });
-            aoNote.innerHTML = r.addonLines.length
-              ? r.addonLines.map(function(a){ return a.label + ' ' + m2(a.total); }).join(' &middot; ') +
-                (folded.length && lt ? ' &middot; <b>customer sees one price: ' + m2(lt) + '</b>' : '')
+            /* The standard supplier delivery is part of the item's price for
+               staff as well as the customer (the owner, 2026-10-06: a 36in pack
+               is $170, no extra step). Only a Saturday or large-format rate,
+               ticked on purpose, is listed. */
+            var listed = r.addonLines.filter(function(a){ return a.code !== 'cutout_ship'; });
+            aoNote.innerHTML = listed.length
+              ? listed.map(function(a){ return a.label + ' ' + m2(a.total); }).join(' &middot; ')
               : '';
-            aoNote.style.display = r.addonLines.length ? 'block' : 'none';
+            aoNote.style.display = listed.length ? 'block' : 'none';
           }
 
           /* Garment vs decoration, per piece and for the line. The unit price is
@@ -10521,7 +10524,8 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
       for (const a of addonsForAny(addonTitles)) {
         if (a.auto !== 'method') continue;
         if (a.code === 'screens' && !SCREEN_FEES_LIVE) continue;
-        if (a.code === 'cutout_ship' && (freightUpgraded || upgradedAt(i))) continue;
+        /* A typed price is all-in, like the price the form shows. */
+        if (a.code === 'cutout_ship' && (freightUpgraded || upgradedAt(i) || priceTyped)) continue;
         lineAddons.push({ code: a.code, label: a.label, kind: a.kind, rate: a.rate });
       }
 
