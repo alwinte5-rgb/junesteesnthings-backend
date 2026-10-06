@@ -3915,10 +3915,23 @@ async function checkInbound() {
       let hooks = [];
       try { hooks = list.ok ? (JSON.parse(listed).webhooks || []) : []; } catch (e) { hooks = []; }
       if (!hooks.some((w) => w.url === INBOUND_URL)) {
-        const made = await fetch('https://api.brevo.com/v3/webhooks', { method: 'POST', headers: h,
+        const create = () => fetch('https://api.brevo.com/v3/webhooks', { method: 'POST', headers: h,
           body: JSON.stringify({ type: 'inbound', events: ['inboundEmailProcessed'], url: INBOUND_URL,
                                  domain: INBOUND_DOMAIN, description: "June's Tees: customer replies onto the job page" }) });
-        if (!made.ok) throw new Error(`Brevo POST webhooks ${made.status}: ${(await made.text().catch(() => '')).slice(0, 200)}`);
+        let made = await create();
+        let said = made.ok ? '' : await made.text().catch(() => '');
+        /* The reply domain must also be a verified domain in Brevo (a TXT
+           brevo-code record on it). Ask Brevo to check it, then try again. */
+        if (!made.ok && /not found or is inactive/i.test(said)) {
+          await fetch(`https://api.brevo.com/v3/senders/domains/${INBOUND_DOMAIN}/authenticate`, { method: 'PUT', headers: h })
+            .catch(() => {});
+          made = await create();
+          said = made.ok ? '' : await made.text().catch(() => '');
+          if (!made.ok && /not found or is inactive/i.test(said)) {
+            throw new Error(`Brevo has not verified ${INBOUND_DOMAIN} yet: add its TXT brevo-code record in Cloudflare`);
+          }
+        }
+        if (!made.ok) throw new Error(`Brevo POST webhooks ${made.status}: ${said.slice(0, 200)}`);
         console.log(`inbound email: registered the Brevo webhook for ${INBOUND_DOMAIN}`);
       }
     } catch (err) {
