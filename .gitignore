@@ -45,3 +45,4 @@ public/assets/images/junes_tees_jtees_social-share.jpg
 
 # canvas-audit writes its findings here; regenerate rather than commit.
 canvas-bad.json
+node_modules

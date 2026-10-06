@@ -165,9 +165,11 @@ test('labels show wherever a lead or sale is listed', () => {
 /* ── The worker's pay guide says what the code does ─────────────────────── */
 
 test('the pay guide states the rules the code applies', () => {
-  const at = src.indexOf('KB_ADDED.push({ kind: \'sop\', title: PAY_GUIDE_TITLE');
-  assert.ok(at > 0, 'the guide is a playbook article');
-  const guide = src.slice(at, src.indexOf('});', at));
+  const title = src.indexOf("const PAY_GUIDE_TITLE = 'How the platform works and how you are paid';");
+  assert.ok(title > 0, 'the guide has its title');
+  const at = src.indexOf('Everything you do for June\'s Tees happens here', title);
+  const guide = src.slice(at, src.indexOf('The owner can see exactly how every figure was worked out.', at));
+  assert.ok(at > 0 && guide.length > 1000, 'and its text');
   assert.strictEqual(TEAM.HOLD_DAYS, 14);
   assert.match(guide, /\*\*and 14 days have passed\*\*/);
   assert.strictEqual(CREDIT.REORDER_DAYS, 365);

@@ -24975,6 +24975,8 @@ async function commissionLines(staffId, rates) {
             -- Card fees are the shop's cost, not taken off the salesperson's base.
             COALESCE(SUM(p.amount) FILTER (WHERE NOT p.unconfirmed), 0)::float AS collected,
             COALESCE(SUM(p.amount) FILTER (WHERE NOT p.unconfirmed), 0)::float AS gross,
+            -- Paid in full before any refund: a refund lowers the commission, it does not stop it being paid.
+            COALESCE(SUM(p.amount) FILTER (WHERE NOT p.unconfirmed AND p.kind <> 'refund'), 0)::float AS paid_before_refunds,
             MAX(p.created_at) FILTER (WHERE NOT p.unconfirmed) AS last_money_at,
             EXISTS (SELECT 1 FROM stripe_disputes d WHERE d.quote_code = q.code
                      AND d.status NOT IN ('won', 'lost', 'warning_closed')) AS dispute_open,
@@ -24989,7 +24991,7 @@ async function commissionLines(staffId, rates) {
   return rows.map((r) => {
     const pct = CREDIT.rateFor(r.sale_type, rates || {});
     const c = TEAM.commissionFor({ collected: r.collected, total: r.total, tax: r.tax, pct });
-    const paidInFull = !!r.settled_at || r.gross + 0.005 >= Number(r.total);
+    const paidInFull = !!r.settled_at || r.paid_before_refunds + 0.005 >= Number(r.total);
     return { ...r, ...c, pct,
       state: TEAM.commissionState({ paidInFull, lastMoneyAt: r.last_money_at,
         disputeOpen: r.dispute_open, alreadyPaid: r.paid_amount_c != null, needsOk: r.sale_type === 'pending',
