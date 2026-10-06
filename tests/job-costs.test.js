@@ -48,7 +48,11 @@ test('the cost sheets are the ones the store is priced from', () => {
   assert.deepStrictEqual(Object.keys(J.DTF), Object.keys(DTF));
   assert.deepStrictEqual(J.EMBROIDERY, lift('EMB'));
   assert.match(src, new RegExp(`const SCREEN_COST = ${J.SCREEN_COST};`));
-  assert.match(src, new RegExp(`const SCREEN_MIN_QTY = ${J.SCREEN_MIN_QTY};`));
+  /* Two different minimums since 2026-10-06: the shop SELLS screen printing
+     from 25 (the reprice tool writes that into the method), while Anchorfish
+     still BILLS 50 under 50, which is what the job cost reads. */
+  assert.match(src, /const SCREEN_MIN_QTY = 25;/);
+  assert.strictEqual(J.SCREEN_MIN_QTY, 50);
   const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   assert.match(server, new RegExp(`const SCREEN_FEE_RATE = ${J.SCREEN_FEE};`));
 });

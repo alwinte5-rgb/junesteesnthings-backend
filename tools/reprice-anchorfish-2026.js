@@ -126,7 +126,7 @@ const SP = {
    it. The charge itself is applied by the `screens` add-on in server.js. */
 /* The contracted floor. Under this the job goes to DTF or HTV, both of which
    the designer already prices. */
-const SCREEN_MIN_QTY = 50;
+const SCREEN_MIN_QTY = 25;
 /* Screens the press can run in one pass, INCLUDING the white underbase. A dark
    garment therefore tops out at five printed colours, a light one at six. Over
    that the job is not a screen-print job at all and belongs on DTF. */

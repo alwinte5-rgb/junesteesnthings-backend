@@ -198,11 +198,11 @@ test('discounting never inverts the price', () => {
 
 /* ── The screen-print floor ────────────────────────────────────────────── */
 
-test('the screen-print minimum is 50', () => {
+test('the screen-print minimum is 25', () => {
   /* The decoration tiers are keyed on band CEILINGS, so the lowest screen tier
      is 71 and a 20-piece job would price at the 50-71 rate and look entirely
      normal. The minimum is what stops that being quoted. */
-  assert.strictEqual(SCREEN_MIN_QTY, 50);
+  assert.strictEqual(SCREEN_MIN_QTY, 25);
 });
 
 /* ── The override strike-through ───────────────────────────────────────── */

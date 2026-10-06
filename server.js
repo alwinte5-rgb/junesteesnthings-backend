@@ -6287,7 +6287,7 @@ function oneSizeList(desc) {
   return m ? stripSizeLists(d) + m[0].replace(/\s+$/, '') : d;
 }
 
-const SCREEN_MIN_QTY = 50;
+const SCREEN_MIN_QTY = 25;
 const SCREEN_METHOD_RE = /screen\s*print/i;
 
 /* Digitizing is billed ONCE PER DESIGN, but a decoration method in this system
@@ -26635,7 +26635,7 @@ const KB_SEED = [
   { kind: 'faq', shortcut: 'deposit', title: 'Do I pay up front?', tags: 'deposit, payment, pay, balance',
     body: `We take a 50% deposit to start your order, and the balance when it is ready. Orders under $100 are paid in full up front.\n\nYou can pay online from your quote link. Card payments carry a 4% card fee; other ways to pay are listed on the quote.` },
   { kind: 'faq', shortcut: 'minimums', title: 'Is there a minimum order?', tags: 'minimum, how many, quantity, small order',
-    body: `It depends on the decoration. Screen printing starts at 50 pieces, because each colour needs its own screen. For smaller runs we print DTF (full colour, no minimum) or embroider. Tell me how many you need and I will suggest the best-value option.` },
+    body: `It depends on the decoration. Screen printing starts at 25 pieces, because each colour needs its own screen. For smaller runs we print DTF (full colour, no minimum) or embroider. Tell me how many you need and I will suggest the best-value option.` },
   { kind: 'faq', shortcut: 'artfiles', title: 'What artwork should I send?', tags: 'artwork, files, logo, vector, png, resolution',
     body: `The best file is a vector (AI, EPS, PDF or SVG). If you only have an image, send the largest PNG you have with a transparent background, ideally 300 dpi at the size you want it printed.\n\nNo file at all? No problem. Send a photo or sketch and we can redraw it (a design fee may apply; I will tell you before we start).` },
   { kind: 'faq', shortcut: 'quote', title: 'What do you need for a quote?', tags: 'quote, price, estimate, cost',
