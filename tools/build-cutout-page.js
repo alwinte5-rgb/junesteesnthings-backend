@@ -411,7 +411,7 @@ ${!singles.length ? '' : `<section>
     <div class="section-tag">By the single</div>
     <h2>Just need a few?</h2>
     <p class="lead">The ${bothWays.map((s) => s + '&Prime;').join(' and ')} are also sold one at a time, for orders
-       too small to want a whole sheet. The more you order, the less each one costs.
+       too small to want a whole sheet. One price each, however many you order.
        Single cutouts add ${money(DELIVERY)} standard delivery once per order.</p>
     <div class="ladders">${singleTables}
     </div>

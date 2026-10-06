@@ -45,12 +45,10 @@ const each = (method, qty) => Number(W.priceLine({
    stopped being true the day the ladder became computed — so the suite was
    asserting against prices the shop no longer sold. */
 const SINGLE_BANDS = { 12: [6, 12, 32, 1000], 18: [5, 10, 20, 50, 1000] };
-/* Less the owner's $10 off every singles band, not below cost (2026-10-06), as add-cutouts does. */
-const lessOff = (l) => Object.fromEntries(Object.entries(l).map(([q, p]) => [q, Math.max(Number(p) - 10, Math.ceil(Number(p) / 2)).toFixed(2)]));
-const SINGLES = {
-  12: lessOff(CUT.singlesLadder(12, SINGLE_BANDS[12])),
-  18: lessOff(CUT.singlesLadder(18, SINGLE_BANDS[18])),
-};
+/* The owner's flat singles price (2026-10-06), as add-cutouts derives it: the
+   one-piece cost-model price less $10, the same at every quantity. */
+const flatSingle = (t) => ({ 1000: (Number(Object.values(CUT.singlesLadder(t, SINGLE_BANDS[t]))[0]) - 10).toFixed(2) });
+const SINGLES = { 12: flatSingle(12), 18: flatSingle(18) };
 const S12 = ladder(SINGLES[12]);
 const S18 = ladder(SINGLES[18]);
 const PACKS = [12, 18, 24, 36].map((t) => [t, ladder({ 1000: CUT.packPrice(t).toFixed(2) })]);
@@ -114,33 +112,15 @@ test('a pack always beats the same heads bought as singles', () => {
 
 /* ── Singles ───────────────────────────────────────────────────────────── */
 
-test('singles price at every published band', () => {
-  /* Against the DERIVED ladder rather than a copy of last month's numbers.
-     What matters is that every quantity inside a band pays that band's rate
-     and the first quantity past its ceiling pays the next one — the prices
-     themselves move whenever the cost model does, and pinning them here only
-     ever meant updating two places. */
-  for (const [t, bands] of Object.entries(SINGLE_BANDS)) {
-    const L = t === '12' ? S12 : S18;
-    let lo = 1;
-    for (const ceil of bands) {
-      const rate = parseFloat(SINGLES[t][ceil]);
-      assert.strictEqual(each(L, lo), rate, t + 'in at ' + lo + ' (band start)');
-      assert.strictEqual(each(L, ceil), rate, t + 'in at ' + ceil + ' (band ceiling)');
-      lo = ceil + 1;
-    }
+test('a single is one price at any quantity: no quantity discount', () => {
+  /* The owner, 2026-10-06: "is there a quantity discount on singles? there
+     shouldn't be." Many heads is what a pack is for. */
+  assert.deepStrictEqual(Object.keys(SINGLES[12]), ['1000']);
+  assert.deepStrictEqual(Object.keys(SINGLES[18]), ['1000']);
+  for (const q of [1, 2, 5, 6, 7, 12, 13, 50, 1000]) {
+    assert.strictEqual(each(S12, q), 18, '12in at ' + q);
+    assert.strictEqual(each(S18, q), 33, '18in at ' + q);
   }
-});
-
-test('a ceiling applies UP TO its quantity, not from it', () => {
-  /* The floor/ceiling trap. 6 pays the <=6 rate; 7 has fallen into the next
-     band. Read as floors, every band would sit one step out. */
-  assert.strictEqual(each(S12, 6), parseFloat(SINGLES[12][6]));
-  assert.strictEqual(each(S12, 7), parseFloat(SINGLES[12][12]));
-  assert.ok(each(S12, 7) < each(S12, 6), '7 must have fallen into a cheaper band than 6');
-  assert.strictEqual(each(S18, 5), parseFloat(SINGLES[18][5]));
-  assert.strictEqual(each(S18, 6), parseFloat(SINGLES[18][10]));
-  assert.ok(each(S18, 6) < each(S18, 5), '6 must have fallen into a cheaper band than 5');
 });
 
 test('no singles ladder ever rises as the order grows', () => {
