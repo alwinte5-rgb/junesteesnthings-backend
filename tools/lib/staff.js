@@ -226,6 +226,8 @@ const ROUTES = {
   'POST /admin/quote/:code/receipt': 'customers.message',
   'GET /admin/customers': 'customers.view',
   'GET /admin/customer': 'customers.view',
+  /* Find an order: a quote code opens its job page, else a customer search. */
+  'GET /admin/find': 'customers.view',
   'GET /admin/orders': 'orders.view',
 
   'GET /admin/reviews': 'reviews.manage',

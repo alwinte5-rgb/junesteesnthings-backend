@@ -17482,6 +17482,20 @@ app.get('/admin/customers', requireAdmin, async (_req, res) => {
   }
 });
 
+/* The dashboard's Find an order box (2026-10-06). A quote code goes straight
+   to its job page; anything else is a customer search, whose page lists every
+   job for that person with a link to each. */
+app.get('/admin/find', requireAdmin, async (req, res) => {
+  const q = String(req.query.q || '').trim().slice(0, 120);
+  if (!q) return res.redirect('/admin/dashboard');
+  const code = q.toUpperCase().replace(/^#/, '');
+  if (QUOTE_CODE_RE.test(code)) {
+    const { rows } = await pool.query('SELECT 1 FROM quotes WHERE code = $1', [code]).catch(() => ({ rows: [] }));
+    if (rows.length) return res.redirect(`/admin/production/${code}`);
+  }
+  res.redirect(`/admin/customer?q=${encodeURIComponent(q)}`);
+});
+
 app.get('/admin/customer', requireAdmin, async (req, res) => {
   const q = String(req.query.q || '').trim();
   if (!q) return res.redirect('/admin/quotes');
@@ -17515,7 +17529,7 @@ app.get('/admin/customer', requireAdmin, async (req, res) => {
         : (r.accepted_at ? 'accepted, unpaid' : r.status);
       return `
         <tr>
-          <td><a href="/q/${r.code}">${escEmail(r.code)}</a>
+          <td><a href="/admin/production/${r.code}">${escEmail(r.code)}</a> <a class="muted" style="font-size:12px" href="/q/${r.code}" target="_blank" rel="noopener">customer view</a>
             <div class="muted" style="font-size:12px">${escEmail(quoteSummary(r.items))}</div></td>
           <td class="num">${fmtDate(r.created_at)}</td>
           <td class="num">${money(total)}</td>
@@ -18138,12 +18152,18 @@ async function renderBoard(VIEW, req, res) {
         : quoteMessages(q).followup) : '';
       const [bg, fg] = (colour[st] || colour.sent).split('|');
       /* The id is what the dashboard links to (/admin/quotes#q-CODE). */
+      /* The name opens the JOB page, where everything about the order lives:
+         items, payments, messages, notes, artwork, history (the owner,
+         2026-10-06: "I cant get to it"). It used to open the customer page,
+         which is now the small link beside the code. */
       return `<div class="card" id="q-${q.code}">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
           <div>
-            <a href="/admin/customer?q=${encodeURIComponent(q.email || q.phone || '')}"
+            <a href="/admin/production/${q.code}"
                style="color:#0B1F4B;text-decoration:none"><b>${escEmail(q.name || q.phone || q.email || '—')}</b></a>
-            <div class="muted">${escEmail(quoteSummary(q.items))} &middot; ${fmtDate(q.created_at)}</div>
+            <div class="muted">${escEmail(quoteSummary(q.items))} &middot; ${fmtDate(q.created_at)} &middot;
+              <a href="/admin/production/${q.code}" style="color:#1848B8">${q.code}</a>${q.email || q.phone ? ` &middot;
+              <a href="/admin/customer?q=${encodeURIComponent(q.email || q.phone || '')}" style="color:#1848B8">customer</a>` : ''}</div>
             <div style="margin-top:4px">${saleTypePill(q.sale_type || 'shop')}</div>
           </div>
           <div style="text-align:right;white-space:nowrap">
@@ -18182,6 +18202,7 @@ async function renderBoard(VIEW, req, res) {
             </div>
           </div>` : ''}
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+          <a class="btn" style="padding:8px 16px;font-size:13px" href="/admin/production/${q.code}">Open job</a>
           <a class="btn btn-ghost" style="padding:8px 16px;font-size:13px" href="/admin/quote/${q.code}/edit">Edit</a>
           <a class="btn btn-ghost" style="padding:8px 16px;font-size:13px" href="/q/${q.code}" target="_blank" rel="noopener">View as customer</a>
           ${outstanding > 0 ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
@@ -18756,7 +18777,7 @@ async function renderBoard(VIEW, req, res) {
                 ? JOB_STAGES[c.i + 1] : JOB_STAGES[c.i];
               return `<article class="kcard${risk ? ' kcard-risk' : ''}">
                 <div class="kcard-top">
-                  <a href="/admin/customer?q=${encodeURIComponent(q.email || q.phone || '')}" class="kcard-name">${escEmail(q.name || q.code)}</a>
+                  <a href="/admin/production/${q.code}" class="kcard-name">${escEmail(q.name || q.code)}</a>
                   ${due ? `<span class="kcard-due">${due}</span>` : ''}
                 </div>
                 <div class="kcard-sub">${escEmail(q.code)} · ${money(q.total)}${
@@ -18777,7 +18798,7 @@ async function renderBoard(VIEW, req, res) {
                     <input type="hidden" name="stage" value="${JOB_STAGES[c.i-1].key}">
                     <input type="hidden" name="json" value="" data-jsonflag>
                     <button type="submit" class="kbtn kbtn-sm" title="Back to ${JOB_STAGES[c.i-1].label}">←</button></form>` : '<span></span>'}
-                  <a class="kbtn kbtn-link" href="/admin/production/${q.code}">details</a>
+                  <a class="kbtn kbtn-link" href="/admin/production/${q.code}">Open job</a>
                 </div>
               </article>`;
             }).join('') || '<div class="kempty">—</div>'}
@@ -20611,7 +20632,7 @@ app.get('/admin/dashboard', requireAdmin, async (_req, res) => {
     ...deliveredOwing.map((q) => ({ tone: 'amber', icon: 'dollar',
       title: `${escEmail(q.name || q.code)} still shows ${money(balanceOf(q))} owed`,
       sub: `delivered ${escEmail(dayShort(q.delivered_at))} &middot; ${escEmail(q.code)} &middot; record what they paid, or settle it`,
-      href: `/admin/quotes#q-${escEmail(q.code)}` })),
+      href: `/admin/production/${escEmail(q.code)}` })),
     ...unapplied.map((u) => ({ tone: 'amber', icon: 'card',
       title: `${money(u.amount)} paid in Stripe, not on a quote`,
       sub: `${escEmail(u.customer_name || u.customer_email || 'no name')} &middot; apply it from Record a payment`,
@@ -20645,6 +20666,11 @@ app.get('/admin/dashboard', requireAdmin, async (_req, res) => {
   res.send(adminPage('Dashboard', `
     ${pageHeader(hello + ', ' + SHOP_SIGNER, escEmail(today),
       '<a class="btn" href="/admin/quote/new">New quote</a><a class="btn btn-ghost" href="/admin/production">Production</a>')}
+    <form method="get" action="/admin/find" class="card" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:12px 14px">
+      <label for="findq" style="margin:0;white-space:nowrap">Find an order</label>
+      <input id="findq" name="q" maxlength="120" placeholder="Quote code, name, phone or email" style="flex:1 1 220px;min-width:0" required>
+      <button type="submit">Open</button>
+    </form>
     ${statTiles([
       { label: 'Money in this month', tone: 'green', href: FINANCES_PATH,
         value: money(Number(takings.quotes_month || 0) + Number(takings.other_month || 0)),
@@ -20752,8 +20778,10 @@ app.get('/admin/orders', requireAdmin, async (req, res) => {
       const d = (v) => (v ? fmtDate(v) : '');
       return `
       <tr style="border-top:1px solid #eef1f8">
-        <td style="padding:9px 6px"><a href="/admin/quote/${o.code}/edit"><b>${escEmail(o.code)}</b></a>
-          <div class="muted" style="font-size:12.5px">${escEmail(o.name || 'no name')}</div></td>
+        <td style="padding:9px 6px">${/* The name opens the job page: everything about the order in one place (2026-10-06). */ ''}
+          <a href="/admin/production/${o.code}"><b>${escEmail(o.name || 'no name')}</b></a>
+          <div class="muted" style="font-size:12.5px"><a href="/admin/production/${o.code}">${escEmail(o.code)}</a>
+            &middot; <a href="/admin/quote/${o.code}/edit">edit</a></div></td>
         <td style="padding:9px 6px;font-size:13px">${escEmail(quoteSummary(o.items) || '—')}</td>
         <td class="num" style="padding:9px 6px;white-space:nowrap">${money(quoteTotals(o).total)}</td>
         <td class="num" style="padding:9px 6px;white-space:nowrap">${money(o.paid_amount || 0)}</td>
