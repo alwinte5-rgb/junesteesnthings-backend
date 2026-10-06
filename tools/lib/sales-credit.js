@@ -12,7 +12,7 @@
               and messages to the shop, and anyone the shop already knows.
               A helper who closes one is paid their hourly wage, no commission.
      rep      a customer the helper found themselves, registered by them
-              before the shop knew of them. Their commission % of the profit,
+              before the shop knew of them. Their commission % of the price,
               and the same on reorders for 12 months after their first sale
               to that customer.
      pending  the customer says a salesperson sent them, but no salesperson

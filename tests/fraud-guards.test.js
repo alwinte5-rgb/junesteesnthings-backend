@@ -144,7 +144,7 @@ test('a helper\'s cash payment pays no commission until the owner confirms it', 
   assert.match(r, /UPDATE quote_payments SET recorded_by = \$2, unconfirmed = \$3/);
   assert.match(r, /byStaff \? actor\.id : null, byStaff\]/);
   const lines = fn('async function commissionLines(');
-  assert.match(lines, /SUM\(p\.amount - COALESCE\(p\.fee, 0\)\) FILTER \(WHERE NOT p\.unconfirmed\)/);
+  assert.match(lines, /SUM\(p\.amount\) FILTER \(WHERE NOT p\.unconfirmed\), 0\)::float AS collected/);
   assert.match(lines, /SUM\(p\.amount\) FILTER \(WHERE NOT p\.unconfirmed\)/, 'nor does it make a job paid in full');
   assert.strictEqual(STAFF.ROUTES['POST /admin/quote/:code/confirm-payment'], 'owner');
   assert.match(route("app.post('/admin/quote/:code/confirm-payment', requireAdmin"), /if \(!isOwner\(\)\)/);

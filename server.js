@@ -1301,15 +1301,15 @@ async function initStaffTables() {
     'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS sale_type_reason TEXT',
     // A helper's rate on the shop's own leads they close; commission_pct is for their own.
     'ALTER TABLE staff ADD COLUMN IF NOT EXISTS shop_commission_pct NUMERIC(5,2) NOT NULL DEFAULT 0',
-    /* Owner, 2026-10-06: an hourly wage, with commission on profit only on
-       their own leads. shop_commission_pct is no longer paid; kept so old
+    /* Owner, 2026-10-06: an hourly wage, with commission (on the price before
+       tax) only on their own leads. shop_commission_pct is no longer paid; kept so old
        rows still read. Hours come from the Team page; a paid week is locked. */
     'ALTER TABLE staff ADD COLUMN IF NOT EXISTS hourly_rate NUMERIC(6,2) NOT NULL DEFAULT 0',
     'ALTER TABLE staff_hours ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ',
     'ALTER TABLE staff_hours ADD COLUMN IF NOT EXISTS paid_rate NUMERIC(6,2)',
     'ALTER TABLE staff_hours ADD COLUMN IF NOT EXISTS expense_id INTEGER',
-    /* The owner's word that a job's costs are the real ones, not the price-list
-       estimate: commission on a rep sale waits for it (a $0-cost job included). */
+    /* Was the gate for commission on profit (a few hours on 2026-10-06);
+       commission is on the price now. Unused, kept so the column reads. */
     'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS costs_final_at TIMESTAMPTZ',
   ]) await pool.query(sql);
   /* Hours entered before wages were paid here were paid outside it. Marked
@@ -24345,7 +24345,7 @@ async function renderStaffPage(req, res, extra = '') {
         <input type="hidden" name="action" value="commission">
         <label>Hourly wage $ <input name="hourly_rate" type="number" min="0" max="200" step="0.25"
           value="${escEmail(String(Number(s.hourly_rate || 0)))}" style="width:80px"></label>
-        <label>Commission % of profit, own leads <input name="commission_pct" type="number" min="0" max="50" step="0.25"
+        <label>Commission % of price, own leads <input name="commission_pct" type="number" min="0" max="50" step="0.25"
           value="${escEmail(String(Number(s.commission_pct || 0)))}" style="width:80px"></label>
         <button type="submit" class="btn btn-ghost">Save</button>
       </form>
@@ -24365,7 +24365,7 @@ async function renderStaffPage(req, res, extra = '') {
         <label>Training path <select name="training_track">${Object.entries(TRAINING.TRACKS).map(([k, t]) =>
           `<option value="${k}">${escEmail(t.label)}</option>`).join('')}</select></label>
         <label>Hourly wage $ <input name="hourly_rate" type="number" min="0" max="200" step="0.25" value="0" style="width:80px"></label>
-        <label>Commission % of profit, own leads <input name="commission_pct" type="number" min="0" max="50" step="0.25" value="0" style="width:80px"></label>
+        <label>Commission % of price, own leads <input name="commission_pct" type="number" min="0" max="50" step="0.25" value="0" style="width:80px"></label>
         <button type="submit">Add</button>
       </form>
       <p class="muted" style="margin-top:8px">${Object.values(STAFF.PRESETS).map((p) =>
@@ -24444,7 +24444,7 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
         const pct = staffRate(b.commission_pct, 50);
         const wage = staffRate(b.hourly_rate, 200);
         await pool.query('UPDATE staff SET commission_pct = $2, hourly_rate = $3 WHERE id = $1', [id, pct, wage]);
-        return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name}: ${money(wage)} an hour, ${pct}% of the profit on their own leads.`);
+        return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name}: ${money(wage)} an hour, ${pct}% of the price on their own leads.`);
       }
       default:
         return back(res, '/admin/staff', 'err', 'Unknown action.');
@@ -24962,19 +24962,18 @@ async function commissionStartsAt(staffId) {
 }
 
 const COMMISSION_TONE = { payable: 'green', waiting: 'blue', earning: 'neutral', 'on hold': 'red', paid: 'neutral',
-  'needs your OK': 'amber', 'needs costs': 'amber', 'wage only': 'neutral' };
+  'needs your OK': 'amber', 'wage only': 'neutral' };
 
 /** Every quote a helper sent that has taken money, with its commission state. */
-/* `rates` is the staff row: commission_pct of the profit on their own leads,
+/* `rates` is the staff row: commission_pct of the price on their own leads,
    nothing on the shop's (the hourly wage covers those), nothing on a sale
    still waiting for the owner's OK. */
 async function commissionLines(staffId, rates) {
   const { rows } = await pool.query(
-    `SELECT q.code, q.name, q.total, q.tax, q.settled_at, q.sale_type, q.sale_type_reason, q.items,
-            (COALESCE(q.cost_blanks, 0) + COALESCE(q.cost_supplies, 0) + COALESCE(q.cost_outsourced, 0)
-             + COALESCE(q.cost_shipping, 0))::float AS cost, q.costs_final_at,
+    `SELECT q.code, q.name, q.total, q.tax, q.settled_at, q.sale_type, q.sale_type_reason,
             -- A helper's cash or Zelle the owner has not confirmed counts for nothing yet.
-            COALESCE(SUM(p.amount - COALESCE(p.fee, 0)) FILTER (WHERE NOT p.unconfirmed), 0)::float AS collected,
+            -- Card fees are the shop's cost, not taken off the salesperson's base.
+            COALESCE(SUM(p.amount) FILTER (WHERE NOT p.unconfirmed), 0)::float AS collected,
             COALESCE(SUM(p.amount) FILTER (WHERE NOT p.unconfirmed), 0)::float AS gross,
             MAX(p.created_at) FILTER (WHERE NOT p.unconfirmed) AS last_money_at,
             EXISTS (SELECT 1 FROM stripe_disputes d WHERE d.quote_code = q.code
@@ -24989,13 +24988,12 @@ async function commissionLines(staffId, rates) {
       ORDER BY MAX(p.created_at) DESC LIMIT 500`, [staffId, TRAINING.READY_KEY]);
   return rows.map((r) => {
     const pct = CREDIT.rateFor(r.sale_type, rates || {});
-    const c = TEAM.commissionFor({ collected: r.collected, total: r.total, tax: r.tax, cost: r.cost, pct });
+    const c = TEAM.commissionFor({ collected: r.collected, total: r.total, tax: r.tax, pct });
     const paidInFull = !!r.settled_at || r.gross + 0.005 >= Number(r.total);
-    const { items, ...line } = r;
-    return { ...line, ...c, pct, costEstimated: costIsEstimate(items),
+    return { ...r, ...c, pct,
       state: TEAM.commissionState({ paidInFull, lastMoneyAt: r.last_money_at,
         disputeOpen: r.dispute_open, alreadyPaid: r.paid_amount_c != null, needsOk: r.sale_type === 'pending',
-        noCommission: r.sale_type === 'shop', needsCosts: !r.costs_final_at }) };
+        noCommission: r.sale_type === 'shop' }) };
   });
 }
 
@@ -25013,7 +25011,7 @@ app.get('/admin/commission', requireAdmin, async (req, res) => {
     const today = new Date().toISOString().slice(0, 10);
     const tone = COMMISSION_TONE;
     res.send(adminPage('Commission', `
-      ${pageHeader(`Pay — ${s.name}`, `${money(e.wages.rate)} an hour for the hours on the Team page. On their own leads, ${pct}% of the profit as well: what was collected before tax, less refunds, lost disputes, card fees and the job's costs. Shop leads pay the wage only. Commission is payable ${TEAM.HOLD_DAYS} days after the job is paid in full, once its costs are in.`)}
+      ${pageHeader(`Pay — ${s.name}`, `${money(e.wages.rate)} an hour for the hours on the Team page. On their own leads, ${pct}% of the price as well: the job's total before sales tax, less any refund. Shop leads pay the wage only. Commission is payable ${TEAM.HOLD_DAYS} days after the job is paid in full.`)}
       ${flash(req.query)}
       ${filterChips(roster.map((r) => ({ label: r.name, href: `/admin/commission?staff=${r.id}`, on: r.id === s.id })))}
       ${commissionStartNote(e, true)}
@@ -25058,13 +25056,10 @@ app.get('/admin/commission', requireAdmin, async (req, res) => {
           <button type="submit" class="btn">Add incentive</button>
         </form></details></div>
       <div class="card">${lines.length ? `<table class="dt" style="width:100%"><thead><tr>
-        <th>Quote</th><th>Customer</th><th>Lead</th><th>Collected</th><th>Job costs</th><th>Profit base</th><th>Commission</th><th></th></tr></thead><tbody>
+        <th>Quote</th><th>Customer</th><th>Lead</th><th>Paid</th><th>Price before tax</th><th>Commission</th><th></th></tr></thead><tbody>
         ${lines.map((l) => `<tr><td><a href="/admin/production/${escEmail(l.code)}#credit">${escEmail(l.code)}</a></td>
           <td>${escEmail(l.name || '')}</td><td>${saleTypePill(l.sale_type)} <span class="muted">${l.pct}%</span></td><td>${money(l.collected)}</td>
-          <td><a href="/admin/production/${escEmail(l.code)}#costs">${money(l.cost)}</a>${l.costEstimated ? ' <span class="muted">est.</span>' : ''}${
-            l.state === 'needs costs' ? `<form method="post" action="/admin/quote/${escEmail(l.code)}/costs-final" style="margin:4px 0 0">
-              <input type="hidden" name="staff_id" value="${s.id}">
-              <button type="submit" class="btn btn-ghost" style="font-size:12px;padding:3px 8px">These are the final costs</button></form>` : ''}</td><td>${money(l.base)}</td>
+          <td>${money(l.base)}</td>
           <td>${money(l.state === 'paid' ? l.paid_amount_c : l.amount)}</td><td>${pill(l.state, tone[l.state])}</td></tr>`).join('')}
         </tbody></table>` : emptyState('No money has come in on their quotes yet.')}</div>`, 'team'));
   } catch (err) {
@@ -25126,27 +25121,6 @@ app.post('/admin/commission/pay', requireAdmin, async (req, res) => {
     return back(res, `/admin/commission?staff=${staffId}`, 'err', 'Could not record it. Nothing was booked.');
   } finally {
     client.release();
-  }
-});
-
-/* The owner confirms a job's costs are the real ones (not the price-list
-   estimate), so commission on it can be paid. Owner only (tools/lib/staff.js). */
-app.post('/admin/quote/:code/costs-final', requireAdmin, async (req, res) => {
-  const code = String(req.params.code || '').toUpperCase();
-  const staffId = intIn(req.body && req.body.staff_id);
-  const backTo = staffId ? `/admin/commission?staff=${staffId}` : `/admin/production/${code}#costs`;
-  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/commission');
-  try {
-    const { rows: [q] } = await pool.query(
-      `UPDATE quotes SET costs_final_at = NOW() WHERE code = $1 AND costs_final_at IS NULL
-       RETURNING (COALESCE(cost_blanks, 0) + COALESCE(cost_supplies, 0) + COALESCE(cost_outsourced, 0)
-                  + COALESCE(cost_shipping, 0))::float AS cost`, [code]);
-    if (!q) return back(res, backTo, 'err', `${code}: costs were already confirmed, or there is no such quote.`);
-    logActivity(OWNER_ACTOR, 'costs confirmed', { type: 'quote', id: code }, { cost: q.cost });
-    return back(res, backTo, 'ok', `${code}: costs confirmed at ${money(q.cost)}.`);
-  } catch (err) {
-    console.error('costs confirm failed:', err.message);
-    return back(res, backTo, 'err', 'Could not confirm the costs.');
   }
 });
 
@@ -25397,7 +25371,6 @@ async function earningsFor(staff) {
   return { pct, lines, bonuses, startsAt, payable: sum('payable'), waiting: sum('waiting'), earning: sum('earning'),
            onHold: sum('on hold'), paid: sum('paid'), bonusOwed, bonusPaid, hours, wages, wagesPaid, thisWeek,
            repOpen: byType('rep'),
-           needsCosts: lines.filter((l) => l.state === 'needs costs').length,
            needsOk: lines.filter((l) => l.state === 'needs your OK').length };
 }
 
@@ -25423,10 +25396,16 @@ function earningsTiles(e) {
     { label: 'Waiting out the 14 days', value: money(e.waiting), tone: 'blue', sub: 'paid in full, settling' },
     { label: 'Still being paid', value: money(e.earning), tone: 'gray', sub: 'customer has a balance' },
     { label: 'Paid to you', value: money(e.paid + e.bonusPaid + e.wagesPaid), tone: 'navy', sub: 'wages, commission and bonuses' },
-    { label: 'Own leads (unpaid)', value: money(e.repOpen || 0), tone: 'green', sub: `${e.pct}% of profit` },
-    ...(e.needsCosts ? [{ label: 'Waiting for job costs', value: String(e.needsCosts), tone: 'amber', sub: 'profit unknown until costs are in' }] : []),
+    { label: 'Own leads (unpaid)', value: money(e.repOpen || 0), tone: 'green', sub: `${e.pct}% of the price` },
     ...(e.needsOk ? [{ label: 'Waiting for the owner', value: String(e.needsOk), tone: 'amber', sub: 'customer named a salesperson' }] : []),
   ]);
+}
+
+/** Where the pay guide is (PAY_GUIDE_TITLE); the playbook if it is missing. */
+async function payGuideHref() {
+  const { rows: [a] } = await pool.query('SELECT id FROM kb_articles WHERE published AND title = $1', [PAY_GUIDE_TITLE])
+    .catch(() => ({ rows: [] }));
+  return a ? `/admin/playbook/${a.id}` : '/admin/playbook';
 }
 
 /** A helper's weeks of hours and what each one pays. */
@@ -25452,10 +25431,12 @@ app.get('/admin/my-earnings', requireAdmin, async (req, res) => {
   if (actor.kind !== 'staff') return res.redirect('/admin/commission');
   try {
     const { rows: [me] } = await pool.query('SELECT id, name, commission_pct, shop_commission_pct, hourly_rate FROM staff WHERE id = $1', [actor.id]);
-    const [e, incentives] = await Promise.all([earningsFor(me), incentivesFor(me.id)]);
+    const [e, incentives, guide] = await Promise.all([earningsFor(me), incentivesFor(me.id), payGuideHref()]);
     const tone = COMMISSION_TONE;
     res.send(adminPage('My earnings', `
-      ${pageHeader('My earnings', `${money(e.wages.rate)} an hour for every hour worked. On customers you found and registered as your leads (and their reorders for 12 months), ${e.pct}% of the profit as well: money collected before tax, less refunds, card fees and the job's costs, payable ${TEAM.HOLD_DAYS} days after the customer has paid in full. Shop leads you close are covered by your hourly wage.`)}
+      ${pageHeader('My earnings', `${money(e.wages.rate)} an hour for every hour worked. On customers you found and registered as your leads (and their reorders for 12 months), ${e.pct}% of the price as well: the job's total before sales tax, less any refund, payable ${TEAM.HOLD_DAYS} days after the customer has paid in full. Shop leads you close are covered by your hourly wage.`)}
+      <div class="card"><b>How pay works.</b> <span class="muted">Wages, commission, when each is paid and what every status means, with examples.</span>
+        <a class="btn btn-ghost" href="${guide}" style="float:right">Read the pay guide</a></div>
       <div class="card"><b>How a sale becomes yours.</b> <span class="muted">Add the customer on Leads with "I found this customer" before you quote them. If the shop has already heard from them, it stays a shop lead. A customer who says you sent them waits for the owner's OK.</span></div>
       ${commissionStartNote(e, false)}
       ${earningsTiles(e)}
@@ -25466,7 +25447,7 @@ app.get('/admin/my-earnings', requireAdmin, async (req, res) => {
         pill(b.paid_at ? 'paid' : 'owed', b.paid_at ? 'neutral' : 'green')}</span></div>`).join('')}</div>` : ''}
       <div class="card"><b>Commission by sale</b>${e.lines.length ? `<div class="rows">${e.lines.map((l) => `<div class="row-i">
         <span class="row-main"><a href="/admin/production/${escEmail(l.code)}"><b>${escEmail(l.code)}</b></a> ${escEmail(l.name || '')}
-          <div class="row-sub">${saleTypePill(l.sale_type)} ${l.pct}% &middot; collected ${money(l.collected)} &middot; job costs ${l.cost > 0 ? money(l.cost) : 'not in yet'} &middot; commission on ${money(l.base)}</div></span>
+          <div class="row-sub">${saleTypePill(l.sale_type)} ${l.pct}% &middot; paid ${money(l.collected)} &middot; commission on ${money(l.base)} before tax</div></span>
         <span class="row-end"><b>${money(l.state === 'paid' ? l.paid_amount_c : l.amount)}</b> ${pill(l.state, tone[l.state])}</span></div>`).join('')}</div>`
         : `<p class="muted">Nothing yet. When a customer pays on a quote credited to you after training, it shows here.</p>`}</div>`, 'earnings'));
   } catch (err) {
@@ -26142,8 +26123,8 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
        A failure costs this panel, not the page. */
     const earn = me ? await (async () => {
       const { rows: [st] } = await pool.query('SELECT id, name, commission_pct, shop_commission_pct, hourly_rate FROM staff WHERE id = $1', [me]);
-      const [e, incentives] = await Promise.all([earningsFor(st), incentivesFor(me)]);
-      return { e, incentives };
+      const [e, incentives, guide] = await Promise.all([earningsFor(st), incentivesFor(me), payGuideHref()]);
+      return { e, incentives, guide };
     })().catch((err) => { console.error('my day earnings failed:', err.message); return null; }) : null;
     const waiting = leads.filter((l) => me == null || l.assigned_to == null || l.assigned_to === me)
       .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
@@ -26179,6 +26160,7 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
           <div class="msg" id="rel-${escEmail(q.code)}" style="white-space:pre-wrap">${escEmail(quoteMessages(q).initial)}</div></span>
           <span class="row-end"><button type="button" class="btn btn-ghost" onclick="jtCopy('rel-${escEmail(q.code)}')">Copy</button></span></div>`).join('')) : ''}
       ${earn ? `<div class="card"><b>My earnings</b> <a class="muted" href="/admin/my-earnings" style="float:right">See every sale →</a>
+        <a class="muted" href="${earn.guide}" style="float:right;margin-right:14px">How pay works</a>
         ${earningsTiles(earn.e)}
         ${earn.incentives.map((i) => incentiveRow(i)).join('')}</div>` : ''}
       ${mine.rows.length ? section('Waiting on the owner', mine.rows.map((a) => `
@@ -28195,6 +28177,68 @@ const KB_ADDED = [
 `Other good jobs: replying to Google reviews that have no reply yet (draft, then June approves), tidying lead records, learning a product you are unsure about.\n\n` +
 `"I waited for instructions" is never the answer. When unsure what matters most, follow-ups first.` },
 ];
+
+/* The worker's guide to the platform and to pay (owner, 2026-10-06: "create a
+   guide to explain to the worker the platform and how pay works and is
+   calculated"). Linked from My earnings and My Day by PAY_GUIDE_TITLE. If the
+   pay rules change, change this text with them (tools/lib/team-metrics.js). */
+const PAY_GUIDE_TITLE = 'How the platform works and how you are paid';
+KB_ADDED.push({ kind: 'sop', title: PAY_GUIDE_TITLE,
+  tags: 'pay, wage, hourly, hours, commission, earnings, my earnings, how pay works, payday, timeproof, own lead, shop lead, reorder, platform, menu, getting started, rules',
+  body: `Everything you do for June's Tees happens here, and everything you earn shows on **My earnings**. This guide explains both.\n\n` +
+`## The platform\n\n` +
+`You sign in with your own email (through Cloudflare). Never share your sign-in; everything you do is recorded under your name.\n\n` +
+`**The menu**\n` +
+`- **My Day**: start here. Leads waiting for a reply, follow-ups due, your tasks, your training and the owner's latest note\n` +
+`- **Leads**: every enquiry. Reply, set a follow-up date, add new leads\n` +
+`- **Quotes**: build and send quotes\n` +
+`- **Production**: each job's page, with its history, artwork, payments and messages\n` +
+`- **Design jobs** (designers): the jobs assigned to you, proofs and final art\n` +
+`- **Team chat**: your conversation with the owner. Ask here when unsure\n` +
+`- **Playbook**: ready replies, how-tos and guides like this one. Search it before you ask\n` +
+`- **Training**: your training steps and the owner's sign-offs\n` +
+`- **My earnings**: your wages, commission and bonuses\n\n` +
+`You only see what your level allows. **Training** and **Design training**: the owner approves your quotes and messages before a customer sees them. **Supervised**: you send quotes up to $500; discounts still go to the owner. **Trusted**: you run sales day to day. Something that needs the owner shows as **waiting for approval**. That is normal; it is not an error.\n\n` +
+`**Money rules**\n` +
+`- Sales tax is set automatically on your quotes\n` +
+`- Customers pay the shop only: by the payment link on their quote, or cash or Zelle that you record. A message asking a customer to pay any other way is held for the owner\n` +
+`- Cash or Zelle you record shows **not confirmed** until the owner confirms it arrived, and counts for nothing until then\n` +
+`- Refunds, corrections, write-offs, discounts beyond your level and sales credit are the owner's\n` +
+`- You cannot change a customer's name, email or phone on a quote that has been sent. Ask the owner\n\n` +
+`## How you are paid\n\n` +
+`You earn two ways. Your two rates are set by the owner and shown at the top of My earnings.\n\n` +
+`**1. Your hourly wage, for every hour you work**\n` +
+`- Track your time in TimeProof. Each week the owner enters your hours from TimeProof\n` +
+`- Wage = hours × your hourly rate\n` +
+`- A week is paid once it is over. The current week shows as **this week** until then\n` +
+`- Example: 30 hours at $15 an hour = **$450**\n\n` +
+`**2. Commission, on customers you bring in yourself**\n` +
+`- Commission = your % × the job's price **before sales tax**\n` +
+`- Example at 10%: a quote of $1,082.50, of which $82.50 is sales tax. The price before tax is $1,000, so your commission is **$100**\n` +
+`- Card fees and the cost of making the job are the shop's. They are never taken off your commission\n` +
+`- If part of a job is refunded, your commission goes down by the same share. If it is fully refunded, there is no commission\n` +
+`- Commission starts once the owner signs off your training. Quotes you created before that do not earn it\n\n` +
+`**Which sales earn commission**\n` +
+`- **Rep lead** (yours): a customer you found through your own outreach. Add them on **Leads** and choose **"I found this customer"** *before* you quote them. They earn your commission, and so do their reorders for 12 months after your first sale to them\n` +
+`- **Shop lead**: anyone who came to the shop (the website, chat, ads, calls, messages, walk-ins) or that the shop already knew. Your hourly wage covers these, so there is no commission, even when you close the sale\n` +
+`- If the shop has already heard from a customer you "found" (a quote at any time, or a lead or online order in the last year), it stays a shop lead. The page tells you why. When two people register the same new customer, the first one wins\n` +
+`- **Rep claimed · needs OK**: the customer told us a salesperson sent them, but nobody registered them first. Nothing is paid until the owner decides\n` +
+`- Every lead and quote shows its label from the start, so you always know which kind it is. Only the owner can change a label, and says why\n\n` +
+`**When commission is paid**\n` +
+`Commission is paid once the customer has paid in full **and 14 days have passed** since the last payment, so a quick refund cannot undo a payout. It is never paid while a card dispute is open.\n\n` +
+`**What each status on My earnings means**\n` +
+`- **earning**: the customer still has a balance\n` +
+`- **waiting**: paid in full, waiting out the 14 days\n` +
+`- **payable**: ready to pay\n` +
+`- **paid**: paid to you\n` +
+`- **wage only**: a shop lead, covered by your wage\n` +
+`- **needs your OK**: a customer's claim, waiting for the owner\n` +
+`- **on hold**: a card dispute is open\n\n` +
+`**Payday**\n` +
+`The owner pays wages, payable commission and any bonuses together through EasyPay, then records it here. Everything in that payment turns **paid** on My earnings. Bonuses and incentives (targets with a reward) also show on My earnings and My Day.\n\n` +
+`**A week, added up**\n` +
+`You work 30 hours at $15 = $450. A customer you found pays a $1,082.50 job in full; 14 days later, 10% of $1,000 = $100 is payable. You also closed a $600 shop-lead job: wage only. That payday: $450 + $100 = **$550**.\n\n` +
+`Something looks wrong? Ask in **Team chat** with the quote number. The owner can see exactly how every figure was worked out.` });
 
 async function addPlaybookArticles() {
   for (const a of KB_ADDED) {

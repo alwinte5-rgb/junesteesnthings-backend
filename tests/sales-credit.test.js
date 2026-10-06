@@ -133,7 +133,6 @@ test('a sale waiting for the owner is never payable', () => {
   assert.match(lines, /const pct = CREDIT\.rateFor\(r\.sale_type, rates \|\| \{\}\)/);
   assert.match(lines, /needsOk: r\.sale_type === 'pending'/);
   assert.match(lines, /noCommission: r\.sale_type === 'shop'/);
-  assert.match(lines, /needsCosts: !r\.costs_final_at/);
   assert.match(route("app.post('/admin/commission/pay', requireAdmin"), /filter\(\(l\) => l\.state === 'payable' && l\.amount > 0\)/);
 });
 
@@ -161,4 +160,26 @@ test('labels show wherever a lead or sale is listed', () => {
   assert.match(src, /saleTypePill\(q\.sale_type \|\| 'shop'\)/, 'the quote board');
   assert.match(src, /await jobSaleTypeHtml\(q, everyone\)/, 'the job page');
   assert.match(src, /<td>\$\{saleTypePill\(l\.sale_type\)\} <span class="muted">\$\{l\.pct\}%<\/span><\/td>/, 'the owner\'s commission page');
+});
+
+/* ── The worker's pay guide says what the code does ─────────────────────── */
+
+test('the pay guide states the rules the code applies', () => {
+  const at = src.indexOf('KB_ADDED.push({ kind: \'sop\', title: PAY_GUIDE_TITLE');
+  assert.ok(at > 0, 'the guide is a playbook article');
+  const guide = src.slice(at, src.indexOf('});', at));
+  assert.strictEqual(TEAM.HOLD_DAYS, 14);
+  assert.match(guide, /\*\*and 14 days have passed\*\*/);
+  assert.strictEqual(CREDIT.REORDER_DAYS, 365);
+  assert.match(guide, /reorders for 12 months/);
+  assert.match(guide, /price \*\*before sales tax\*\*/);
+  assert.match(guide, /never taken off your commission/);
+  assert.match(guide, /\*\*wage only\*\*/);
+  // The worked example is the formula.
+  assert.deepStrictEqual(TEAM.commissionFor({ collected: 1082.5, total: 1082.5, tax: 82.5, pct: 10 }), { base: 1000, amount: 100 });
+  assert.match(guide, /10% of \$1,000 = \$100/);
+  // Every status the code can show is explained.
+  for (const st of ['earning', 'waiting', 'payable', 'paid', 'wage only', 'needs your OK', 'on hold']) {
+    assert.ok(guide.includes(`**${st}**`), `explains "${st}"`);
+  }
 });
