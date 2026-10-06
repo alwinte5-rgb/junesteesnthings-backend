@@ -107,11 +107,13 @@ function commissionState({ paidInFull, lastMoneyAt, disputeOpen, alreadyPaid, ne
   return now - last >= HOLD_DAYS * 86400000 ? 'payable' : 'waiting';
 }
 
-/** Wages owed for a helper's unpaid weeks. `rows` are staff_hours rows
- *  ({ hours, paid_at }); `rate` is their hourly wage. */
-function wagesFor(rows, rate) {
+/** Wages owed for a helper's unpaid, finished weeks. `rows` are staff_hours
+ *  rows ({ week_of, hours, paid_at }); `rate` is their hourly wage;
+ *  `before` is this week's Monday (YYYY-MM-DD): a week still under way is
+ *  not paid, or paying it would lock it before its hours are all in. */
+function wagesFor(rows, rate, before = null) {
   const r = Math.max(0, Number(rate) || 0);
-  const open = (rows || []).filter((h) => !h.paid_at);
+  const open = (rows || []).filter((h) => !h.paid_at && (!before || String(h.week_of).slice(0, 10) < before));
   const hours = Math.round(open.reduce((s, h) => s + (Number(h.hours) || 0), 0) * 100) / 100;
   return { hours, rate: r, amount: round2(hours * r) };
 }

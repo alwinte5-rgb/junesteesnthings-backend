@@ -1308,7 +1308,19 @@ async function initStaffTables() {
     'ALTER TABLE staff_hours ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ',
     'ALTER TABLE staff_hours ADD COLUMN IF NOT EXISTS paid_rate NUMERIC(6,2)',
     'ALTER TABLE staff_hours ADD COLUMN IF NOT EXISTS expense_id INTEGER',
+    /* The owner's word that a job's costs are the real ones, not the price-list
+       estimate: commission on a rep sale waits for it (a $0-cost job included). */
+    'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS costs_final_at TIMESTAMPTZ',
   ]) await pool.query(sql);
+  /* Hours entered before wages were paid here were paid outside it. Marked
+     paid (with no rate, "paid outside") so the first payout does not pay them
+     again. Once only. */
+  await pool.query(`UPDATE staff_hours SET paid_at = created_at
+                     WHERE paid_at IS NULL
+                       AND NOT EXISTS (SELECT 1 FROM staff_activity WHERE action = 'wage hours backfilled')`);
+  await pool.query(`INSERT INTO staff_activity (staff_id, action, subject_type, subject_id)
+                    SELECT NULL, 'wage hours backfilled', 'system', 'wages'
+                     WHERE NOT EXISTS (SELECT 1 FROM staff_activity WHERE action = 'wage hours backfilled')`);
   /* Quotes and leads from before labels existed are the shop's: no helper
      ever registered a lead of their own. Said in the reason, so the owner
      can tell them apart and relabel any that were a helper's. Once only. */
@@ -11183,6 +11195,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
        (tools/lib/sales-credit.js): a salesperson's customer reordering within
        12 months stays theirs; otherwise the lead it answers decides; otherwise
        it is the shop's, credited to whoever built it (wage only, no commission). */
+    let derivedCredit = false;
     if (!QUOTE_CODE_RE.test(editing)) {
       try {
         const e = FRAUD.emailKey(q.email);
@@ -11205,6 +11218,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         await pool.query('UPDATE quotes SET sale_type = $2, sale_type_reason = $3, credited_to = $4 WHERE code = $1',
           [code, label.sale_type, label.reason, label.credited_to]);
         Object.assign(q, { sale_type: label.sale_type, sale_type_reason: label.reason, credited_to: label.credited_to });
+        derivedCredit = label.sale_type !== 'shop' && label.credited_to != null;
       } catch (err) {
         /* The quote is saved; an unlabelled one is a shop sale (the column's
            default), which pays a helper no commission. Reported so
@@ -11217,7 +11231,11 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
        only the owner names who else made a sale (credit decides commission,
        so a helper never picks it). */
     {
-      const want = actor.kind === 'owner' ? String(one(b.credit_to) || '').trim() : '';
+      /* A new quote the records credit to a salesperson (their lead, their
+         claim, their customer's reorder) keeps it: the form's picker starts on
+         "my own sale" and would take it away unseen. The owner can change it
+         on the job page afterwards. */
+      const want = actor.kind === 'owner' && !derivedCredit ? String(one(b.credit_to) || '').trim() : '';
       const r = await setSalesCredit(code, want || (staffId && q.credited_to == null ? String(staffId) : ''), actor)
         .catch((e) => ({ ok: false, msg: e.message }));
       if (r.ok && r.to !== undefined) q.credited_to = r.to;
@@ -24954,7 +24972,7 @@ async function commissionLines(staffId, rates) {
   const { rows } = await pool.query(
     `SELECT q.code, q.name, q.total, q.tax, q.settled_at, q.sale_type, q.sale_type_reason, q.items,
             (COALESCE(q.cost_blanks, 0) + COALESCE(q.cost_supplies, 0) + COALESCE(q.cost_outsourced, 0)
-             + COALESCE(q.cost_shipping, 0))::float AS cost,
+             + COALESCE(q.cost_shipping, 0))::float AS cost, q.costs_final_at,
             -- A helper's cash or Zelle the owner has not confirmed counts for nothing yet.
             COALESCE(SUM(p.amount - COALESCE(p.fee, 0)) FILTER (WHERE NOT p.unconfirmed), 0)::float AS collected,
             COALESCE(SUM(p.amount) FILTER (WHERE NOT p.unconfirmed), 0)::float AS gross,
@@ -24977,7 +24995,7 @@ async function commissionLines(staffId, rates) {
     return { ...line, ...c, pct, costEstimated: costIsEstimate(items),
       state: TEAM.commissionState({ paidInFull, lastMoneyAt: r.last_money_at,
         disputeOpen: r.dispute_open, alreadyPaid: r.paid_amount_c != null, needsOk: r.sale_type === 'pending',
-        noCommission: r.sale_type === 'shop', needsCosts: !(r.cost > 0) }) };
+        noCommission: r.sale_type === 'shop', needsCosts: !r.costs_final_at }) };
   });
 }
 
@@ -24990,7 +25008,7 @@ app.get('/admin/commission', requireAdmin, async (req, res) => {
     const { pct, lines } = e;
     const payable = lines.filter((l) => l.state === 'payable' && l.amount > 0);
     const owedBonuses = e.bonuses.filter((b) => !b.paid_at);
-    const openWeeks = e.hours.filter((h) => !h.paid_at);
+    const openWeeks = e.hours.filter((h) => !h.paid_at && h.week_of < e.thisWeek);
     const payNow = round2(e.payable + e.bonusOwed + e.wages.amount);
     const today = new Date().toISOString().slice(0, 10);
     const tone = COMMISSION_TONE;
@@ -25043,7 +25061,10 @@ app.get('/admin/commission', requireAdmin, async (req, res) => {
         <th>Quote</th><th>Customer</th><th>Lead</th><th>Collected</th><th>Job costs</th><th>Profit base</th><th>Commission</th><th></th></tr></thead><tbody>
         ${lines.map((l) => `<tr><td><a href="/admin/production/${escEmail(l.code)}#credit">${escEmail(l.code)}</a></td>
           <td>${escEmail(l.name || '')}</td><td>${saleTypePill(l.sale_type)} <span class="muted">${l.pct}%</span></td><td>${money(l.collected)}</td>
-          <td>${l.cost > 0 ? money(l.cost) : `<a href="/admin/production/${escEmail(l.code)}#costs">enter</a>`}${l.costEstimated ? ' <span class="muted">est.</span>' : ''}</td><td>${money(l.base)}</td>
+          <td><a href="/admin/production/${escEmail(l.code)}#costs">${money(l.cost)}</a>${l.costEstimated ? ' <span class="muted">est.</span>' : ''}${
+            l.state === 'needs costs' ? `<form method="post" action="/admin/quote/${escEmail(l.code)}/costs-final" style="margin:4px 0 0">
+              <input type="hidden" name="staff_id" value="${s.id}">
+              <button type="submit" class="btn btn-ghost" style="font-size:12px;padding:3px 8px">These are the final costs</button></form>` : ''}</td><td>${money(l.base)}</td>
           <td>${money(l.state === 'paid' ? l.paid_amount_c : l.amount)}</td><td>${pill(l.state, tone[l.state])}</td></tr>`).join('')}
         </tbody></table>` : emptyState('No money has come in on their quotes yet.')}</div>`, 'team'));
   } catch (err) {
@@ -25070,9 +25091,11 @@ app.post('/admin/commission/pay', requireAdmin, async (req, res) => {
       'SELECT id, amount, reason FROM staff_bonuses WHERE staff_id = $1 AND paid_at IS NULL FOR UPDATE', [staffId]);
     // Wages at today's rate, written onto each week so a later raise never changes what was paid.
     const rate = round2(Number(s.hourly_rate) || 0);
+    // Finished weeks only: this week is paid once it is over, so it is never locked half-entered.
     const { rows: weeks } = rate > 0 ? await client.query(
       `SELECT id, week_of::text AS week_of, hours::float AS hours FROM staff_hours
-        WHERE staff_id = $1 AND paid_at IS NULL AND hours > 0 FOR UPDATE`, [staffId]) : { rows: [] };
+        WHERE staff_id = $1 AND paid_at IS NULL AND hours > 0 AND week_of < $2 FOR UPDATE`,
+      [staffId, TEAM.weekOf(new Date(), SHOP_TZ)]) : { rows: [] };
     const wages = TEAM.wagesFor(weeks, rate);
     if (!lines.length && !bonuses.length && !(wages.amount > 0)) { await client.query('ROLLBACK'); return back(res, `/admin/commission?staff=${staffId}`, 'err', 'Nothing is payable.'); }
     const total = round2(wages.amount + lines.reduce((a, l) => a + l.amount, 0) + bonuses.reduce((a, b) => a + Number(b.amount), 0));
@@ -25103,6 +25126,27 @@ app.post('/admin/commission/pay', requireAdmin, async (req, res) => {
     return back(res, `/admin/commission?staff=${staffId}`, 'err', 'Could not record it. Nothing was booked.');
   } finally {
     client.release();
+  }
+});
+
+/* The owner confirms a job's costs are the real ones (not the price-list
+   estimate), so commission on it can be paid. Owner only (tools/lib/staff.js). */
+app.post('/admin/quote/:code/costs-final', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  const staffId = intIn(req.body && req.body.staff_id);
+  const backTo = staffId ? `/admin/commission?staff=${staffId}` : `/admin/production/${code}#costs`;
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/commission');
+  try {
+    const { rows: [q] } = await pool.query(
+      `UPDATE quotes SET costs_final_at = NOW() WHERE code = $1 AND costs_final_at IS NULL
+       RETURNING (COALESCE(cost_blanks, 0) + COALESCE(cost_supplies, 0) + COALESCE(cost_outsourced, 0)
+                  + COALESCE(cost_shipping, 0))::float AS cost`, [code]);
+    if (!q) return back(res, backTo, 'err', `${code}: costs were already confirmed, or there is no such quote.`);
+    logActivity(OWNER_ACTOR, 'costs confirmed', { type: 'quote', id: code }, { cost: q.cost });
+    return back(res, backTo, 'ok', `${code}: costs confirmed at ${money(q.cost)}.`);
+  } catch (err) {
+    console.error('costs confirm failed:', err.message);
+    return back(res, backTo, 'err', 'Could not confirm the costs.');
   }
 });
 
@@ -25334,17 +25378,24 @@ async function earningsFor(staff) {
     pool.query(`SELECT * FROM staff_bonuses WHERE staff_id = $1 ORDER BY created_at DESC LIMIT 200`, [staff.id]),
     commissionStartsAt(staff.id),
     pool.query(`SELECT week_of::text AS week_of, business, hours::float AS hours, paid_at, paid_rate::float AS paid_rate
-                  FROM staff_hours WHERE staff_id = $1 ORDER BY week_of DESC, business LIMIT 200`, [staff.id]),
+                  FROM staff_hours WHERE staff_id = $1 ORDER BY week_of DESC, business LIMIT 60`, [staff.id]),
   ]);
-  const wages = TEAM.wagesFor(hours, staff.hourly_rate);
-  const wagesPaid = round2(hours.filter((h) => h.paid_at).reduce((a, h) => a + h.hours * (h.paid_rate || 0), 0));
+  /* Totals from every row, not the 60 listed, so what the page says to pay is
+     what the pay button books. Same rule as the payout: finished weeks only. */
+  const thisWeek = TEAM.weekOf(new Date(), SHOP_TZ);
+  const { rows: [tot] } = await pool.query(
+    `SELECT COALESCE(SUM(hours) FILTER (WHERE paid_at IS NULL AND week_of < $2), 0)::float AS open_hours,
+            COALESCE(SUM(hours * paid_rate) FILTER (WHERE paid_at IS NOT NULL), 0)::float AS paid
+       FROM staff_hours WHERE staff_id = $1`, [staff.id, thisWeek]);
+  const wages = TEAM.wagesFor([{ hours: tot.open_hours }], staff.hourly_rate);
+  const wagesPaid = round2(tot.paid);
   const sum = (st) => round2(lines.filter((l) => l.state === st)
     .reduce((a, l) => a + (st === 'paid' ? Number(l.paid_amount_c) : l.amount), 0));
   const bonusOwed = round2(bonuses.filter((b) => !b.paid_at).reduce((a, b) => a + Number(b.amount), 0));
   const bonusPaid = round2(bonuses.filter((b) => b.paid_at).reduce((a, b) => a + Number(b.amount), 0));
   const byType = (t) => round2(lines.filter((l) => l.sale_type === t && l.state !== 'paid').reduce((a, l) => a + l.amount, 0));
   return { pct, lines, bonuses, startsAt, payable: sum('payable'), waiting: sum('waiting'), earning: sum('earning'),
-           onHold: sum('on hold'), paid: sum('paid'), bonusOwed, bonusPaid, hours, wages, wagesPaid,
+           onHold: sum('on hold'), paid: sum('paid'), bonusOwed, bonusPaid, hours, wages, wagesPaid, thisWeek,
            repOpen: byType('rep'),
            needsCosts: lines.filter((l) => l.state === 'needs costs').length,
            needsOk: lines.filter((l) => l.state === 'needs your OK').length };
@@ -25382,11 +25433,16 @@ function earningsTiles(e) {
 function wageRows(e) {
   if (!e.hours.length) return '<p class="muted">No hours entered yet. Hours go in on the Team page, from TimeProof.</p>';
   return `<div class="rows">${e.hours.map((h) => {
+    // Hours from before wages were paid here have no rate: paid outside.
+    const outside = h.paid_at && h.paid_rate == null;
     const rate = h.paid_at ? h.paid_rate : e.wages.rate;
+    const state = outside ? ['paid outside', 'neutral'] : h.paid_at ? ['paid', 'neutral']
+      : h.week_of >= e.thisWeek ? ['this week', 'blue'] : ['owed', 'green'];
     return `<div class="row-i"><span class="row-main">Week of ${escEmail(h.week_of)}
-      <div class="row-sub">${escEmail(BUSINESSES[h.business] || h.business)} &middot; ${h.hours} h at ${money(rate || 0)}/h</div></span>
-      <span class="row-end"><b>${money(round2(h.hours * (rate || 0)))}</b> ${pill(h.paid_at ? 'paid' : 'owed', h.paid_at ? 'neutral' : 'green')}</span></div>`;
-  }).join('')}</div>`;
+      <div class="row-sub">${escEmail(BUSINESSES[h.business] || h.business)} &middot; ${h.hours} h${outside ? '' : ` at ${money(rate || 0)}/h`}</div></span>
+      <span class="row-end">${outside ? '' : `<b>${money(round2(h.hours * (rate || 0)))}</b> `}${pill(state[0], state[1])}</span></div>`;
+  }).join('')}</div>${e.hours.some((h) => !h.paid_at && h.week_of >= e.thisWeek)
+    ? '<p class="muted" style="margin-top:6px">This week is paid once it is over.</p>' : ''}`;
 }
 
 /* A helper's own earnings, in full. Only ever their own: there is no id in
@@ -25589,6 +25645,26 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
       [name || (profileUrl ? 'Social lead' : 'Lead'), phone, email, description || null, source, platform, profileUrl,
        isStaff ? actor.id : null, label.sale_type, label.reason, label.rep_id]);
+    /* Two helpers registering the same customer at the same moment both pass
+       the check above. The first one saved wins: a later row that finds an
+       earlier lead for this contact turns into a shop lead. */
+    if (label.sale_type === 'rep') {
+      const e = FRAUD.emailKey(email);
+      const p = FRAUD.phoneKey(phone);
+      const { rows: [first] } = await pool.query(
+        `SELECT id, created_at FROM submissions s
+          WHERE s.id < $3 AND s.created_at > NOW() - make_interval(days => $4)
+            AND ((s.email IS NOT NULL AND $1 <> '' AND lower(trim(s.email)) = $1)
+                 OR ($2 <> '' AND right(regexp_replace(COALESCE(s.phone, ''), '\\D', '', 'g'), 10) = $2))
+          ORDER BY s.id LIMIT 1`, [e || '', p || '', l.id, CREDIT.KNOWN_LEAD_DAYS]);
+      if (first) {
+        label.sale_type = 'shop';
+        label.rep_id = null;
+        label.reason = CREDIT.knownReason({ lead: first }, fmtDate);
+        await pool.query('UPDATE submissions SET sale_type = $2, sale_type_reason = $3, rep_id = NULL WHERE id = $1',
+          [l.id, label.sale_type, label.reason]);
+      }
+    }
     if (foundIt) {
       logActivity(actor, label.sale_type === 'rep' ? 'lead registered as theirs' : 'found lead was already known',
         { type: 'lead', id: l.id }, { reason: label.reason });

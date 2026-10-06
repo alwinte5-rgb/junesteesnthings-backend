@@ -391,12 +391,14 @@ test('wages are the unpaid hours at the hourly rate', () => {
     { hours: 32.5, rate: 15, amount: 487.5 });
   assert.deepStrictEqual(TEAM.wagesFor([{ hours: 10 }], 0), { hours: 10, rate: 0, amount: 0 });
   assert.deepStrictEqual(TEAM.wagesFor([], 18), { hours: 0, rate: 18, amount: 0 });
+  assert.deepStrictEqual(TEAM.wagesFor([{ week_of: '2026-09-28', hours: 20 }, { week_of: '2026-10-05', hours: 8 }], 15, '2026-10-05'),
+    { hours: 20, rate: 15, amount: 300 }, 'the week still under way is not paid yet');
 });
 
 test('a payout books wages at today\'s rate and locks the week; a paid week cannot be edited', () => {
   const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'server.js'), 'utf8');
   const pay = src.slice(src.indexOf("app.post('/admin/commission/pay'"), src.indexOf("app.post('/admin/commission/pay'") + 5000);
-  assert.match(pay, /paid_at IS NULL AND hours > 0 FOR UPDATE/);
+  assert.match(pay, /paid_at IS NULL AND hours > 0 AND week_of < \$2 FOR UPDATE/);
   assert.match(pay, /UPDATE staff_hours SET paid_at = NOW\(\), paid_rate = \$2, expense_id = \$3/);
   const hours = src.slice(src.indexOf("app.post('/admin/team/hours'"), src.indexOf("app.post('/admin/team/hours'") + 1500);
   assert.match(hours, /WHERE staff_hours\.paid_at IS NULL/);

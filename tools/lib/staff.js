@@ -91,6 +91,7 @@ const NEVER_STAFF = [
   'GET /admin/tax.csv',
   'POST /admin/tax/remit',
   'POST /admin/quote/:code/costs',
+  'POST /admin/quote/:code/costs-final',
   'GET /admin/staff',
   'POST /admin/staff',
   'POST /admin/staff/:id',
@@ -280,6 +281,7 @@ const ROUTES = {
   'POST /admin/tax/remit': 'owner',
   'POST /admin/unlinked/:id/tax': 'owner',
   'POST /admin/quote/:code/costs': 'owner',
+  'POST /admin/quote/:code/costs-final': 'owner',
 
   // The staff workspace itself.
   'GET /admin/my-day': 'any',
