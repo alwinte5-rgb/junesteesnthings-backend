@@ -49,7 +49,9 @@ test('the hello text is warm, links to the site, carries the opt-out and fits tw
     assert.ok(isGsm7(body), body);
     assert.ok(body.length <= 306, `${body.length}: ${body}`);
     assert.match(body, /^June's Tees: Hi/);
-    assert.match(body, /https:\/\/www\.jtees\.net/);
+    assert.match(body, /https:\/\/design\.jtees\.net/);
+    assert.match(body, /design your own/);
+    assert.match(body, /45\+ garments/);
     assert.match(body, /Reply STOP to opt out\.$/);
     assert.strictEqual(template, 'reintro');
   }
@@ -144,4 +146,53 @@ test('the shop sign is the owner\'s and carries the disclosures', () => {
 
 test('a JOIN sign-up has no email, so only real addresses are unique', () => {
   assert.match(src, /CREATE UNIQUE INDEX IF NOT EXISTS text_signups_email ON text_signups \(email\) WHERE email <> ''/);
+});
+
+test('no promises the shop cannot keep yet: no delivery, no faster turnaround', () => {
+  const t = R.helloText({ first: 'Tom' }).body;
+  const m = R.helloEmail({ first: 'Tom', email: 't@example.com' }).html;
+  for (const text of [t, m]) {
+    assert.doesNotMatch(text, /deliver/i, 'local delivery is paused until it is set up');
+    assert.doesNotMatch(text, /faster|turnaround/i);
+  }
+  assert.match(m, /choose your garment/i);
+  assert.match(m, /design it your way/i);
+  for (const cat of [52, 53, 54, 55, 56, 57]) assert.ok(m.includes(`products.php?category_id=${cat}`), `garment ${cat} links to its page`);
+});
+
+/* withTextsInvite, lifted out and run against a fake pool. */
+function invite(rows = []) {
+  const vm = require('node:vm');
+  const at = src.indexOf('const TEXTS_INVITE_UNTIL');
+  const end = src.indexOf('// ─── Brevo email (preferred');
+  const ctx = vm.createContext({ pool: { query: async () => ({ rows }) }, REINTRO: R, NOTIFY_EMAIL: 'shop@example.com',
+    SHOP_EMAIL: 'june@example.com', process: { env: { OWNER_EMAILS: 'owner@example.com' } }, console: { error() {} } });
+  vm.runInContext(src.slice(at, end) + ';this.f = withTextsInvite;', ctx);
+  return ctx.f;
+}
+
+test('every customer email carries the sign-up box until the new year', async () => {
+  const f = invite();
+  const out = await f('Cat@Example.com', '<p>Your receipt</p>', new Date('2026-12-31T23:00:00-06:00'));
+  assert.match(out, /^<p>Your receipt<\/p>/, 'after the email, never instead of it');
+  assert.match(out, /texts\?src=receipt&amp;e=cat%40example\.com/);
+  assert.match(out, /Get 10% off/);
+  assert.strictEqual(await f('cat@example.com', '<p>x</p>', new Date('2027-01-01T00:00:00-06:00')), '<p>x</p>', 'fresh start in the new year');
+});
+
+test('never to the shop, the owner, staff, or anyone already signed up', async () => {
+  const f = invite();
+  for (const to of ['shop@example.com', 'june@example.com', 'owner@example.com', 'ana@jtees.net']) {
+    assert.strictEqual(await f(to, '<p>x</p>', new Date('2026-10-06T12:00:00Z')), '<p>x</p>', to);
+  }
+  assert.strictEqual(await invite([{ 1: 1 }])('cat@example.com', '<p>x</p>', new Date('2026-10-06T12:00:00Z')), '<p>x</p>',
+    'signed up (or on the staff list)');
+});
+
+test('the emails that must stay plain opt out', () => {
+  assert.match(src, /async function sendEmail\(\{ to, subject, html, replyTo, marketing = false, text, promo = true \}\)/);
+  assert.match(src, /is your June's Tees sign-in code`, promo: false/);
+  assert.match(src, /to: partner\.email, promo: false/);
+  assert.match(src, /Your \$\{REINTRO\.PCT\}% off code: \$\{code\}`, promo: false/);
+  assert.match(src, /html: m\.html, marketing: true, promo: false/, 'the hello email has its own, bigger offer');
 });

@@ -23,6 +23,7 @@ const CAMPAIGN = 'reintro-2026-10';
 const SITE = 'https://www.jtees.net';
 const SIGNUP_PATH = '/texts';
 const PCT = 10;
+const DESIGN = 'https://design.jtees.net';
 const CODE_DAYS = 60;
 
 /** The hello text, to people who agreed to promotional texts. */
@@ -30,8 +31,11 @@ function helloText({ first }) {
   const f = plain(first, 20).split(' ')[0];
   return {
     template: 'reintro',
-    body: `June's Tees: Hi${f ? ' ' + f : ''}! Lots of new things at June's Tees: design your own online, local delivery, ` +
-      `and faster turnaround on tees and hoodies. Come see what's new: ${SITE} Reply STOP to opt out.`,
+    /* What is actually new (owner, 2026-10-05): designing your own online and
+       choosing the garment. No delivery or turnaround promises until those
+       are ready. */
+    body: `June's Tees: Hi${f ? ' ' + f : ''}! New at June's Tees: design your own shirts online. Pick from 45+ garments ` +
+      `(tees, hoodies, tanks, kids, hats), add your logo or text, and see the price live. Try it: ${DESIGN} Reply STOP to opt out.`,
   };
 }
 
@@ -48,7 +52,7 @@ function codeText({ code }) {
 }
 
 /** Where a sign-up came from, for the campaign page's count. */
-const SOURCES = { email: 'The hello email', shop: 'Shop sign (QR)', site: 'Website', sms: 'Texted JOIN' };
+const SOURCES = { email: 'The hello email', receipt: 'Other emails (quotes, orders)', shop: 'Shop sign (QR)', site: 'Website', sms: 'Texted JOIN' };
 function cleanSource(s) { return Object.prototype.hasOwnProperty.call(SOURCES, s) ? s : 'site'; }
 
 /** A fresh single-use code: TEXTS plus five characters nobody misreads. */
@@ -100,17 +104,21 @@ const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</
  *  texts. Tables and inline styles, because email clients ignore most CSS;
  *  images are absolute https URLs on the site, each with alt text. */
 const IMG = (p) => `${SITE}/assets/images/${p}`;
-const DESIGN = 'https://design.jtees.net';
 function helloEmail({ first, email }) {
   const link = `${SITE}${SIGNUP_PATH}?src=email&e=${encodeURIComponent(email)}`;
   const btn = (href, label, bg = '#1848B8') => `<a href="${esc(href)}" style="display:inline-block;background:${bg};color:#fff;
     padding:13px 26px;border-radius:100px;text-decoration:none;font-weight:700;font-size:15px">${label}</a>`;
   const photo = (p, alt) => `<td width="50%" style="padding:4px"><a href="${SITE}"><img src="${IMG(p)}" alt="${esc(alt)}" width="262"
     style="display:block;width:100%;max-width:262px;height:auto;border-radius:10px;border:0"></a></td>`;
+  const garment = (img, label, cat) => `<td width="33%" align="center" style="padding:4px;vertical-align:top">
+    <a href="${DESIGN}/products.php?category_id=${cat}" style="text-decoration:none;color:#12203c">
+    <img src="${IMG('shop/' + img + '.jpg')}" alt="Custom ${label.replace('&amp;', '&')}" width="164"
+      style="display:block;width:100%;max-width:164px;height:auto;border-radius:10px;border:0;margin:0 auto">
+    <div style="font-weight:700;font-size:13.5px;margin-top:4px">${label}</div></a></td>`;
   const feature = (icon, title, text) => `<tr><td style="padding:7px 10px 7px 0;vertical-align:top;font-size:20px">${icon}</td>
     <td style="padding:7px 0;color:#374151;line-height:1.5"><b style="color:#12203c">${title}</b><br>${text}</td></tr>`;
   return {
-    subject: `It's been a while! See what's new at June's Tees (+${PCT}% off)`,
+    subject: `New: design your own at June's Tees (+${PCT}% off)`,
     html: `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6fb;padding:18px 0">
 <tr><td align="center">
 <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;background:#fff;border-radius:14px;
@@ -119,20 +127,29 @@ function helloEmail({ first, email }) {
     width="150" style="display:block;width:150px;height:auto;border:0"></a></td></tr>
   <tr><td style="padding:10px 28px 0">
     <h1 style="color:#1848B8;font-size:24px;margin:8px 0 6px">Hi${first ? ' ' + esc(first) : ''}, it's June!</h1>
-    <p style="line-height:1.6;margin:0 0 12px">A lot has changed since we last worked together, and I wanted you to be among the
-      first to know. You can now design your own custom tees, hoodies and more online, any time, from your phone or computer,
-      and we still print every order right here in Chicago.</p>
+    <p style="line-height:1.6;margin:0 0 12px">It's been a while, and I have something new I couldn't wait to share:
+      you can now <b>design your own</b> custom apparel online at the June's Tees Design Lab. Pick the exact garment you want,
+      make it yours, and see the price before you order. Any time, from your phone or computer. We still print every
+      order right here in Chicago.</p>
   </td></tr>
   <tr><td style="padding:6px 24px"><a href="${DESIGN}"><img src="${IMG('work/design-studio-live.jpg')}"
     alt="The June's Tees Design Lab, designing a shirt online" width="512"
     style="display:block;width:100%;max-width:512px;height:auto;border-radius:12px;border:0"></a></td></tr>
+  <tr><td style="padding:14px 24px 4px">
+    <h2 style="font-size:18px;color:#12203c;margin:0 0 4px 4px">New: choose your garment</h2>
+    <p style="line-height:1.6;margin:0 4px 8px">Start with the piece you want: 45+ real garments in your choice of color and size.</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+      <tr>${garment('ssa-33929_f_fm', 'T-shirts', 52)}${garment('ssa-107784_f_fm', 'Hoodies', 53)}${garment('ssa-18365_f_fm', 'Tank tops', 54)}</tr>
+      <tr>${garment('ssa-113683_f_fm', 'Kids &amp; youth', 55)}${garment('ssa-36262_f_fm', 'Baby', 56)}${garment('ssa-97052_f_fm', 'Hats', 57)}</tr>
+    </table>
+  </td></tr>
   <tr><td style="padding:14px 28px 4px">
-    <h2 style="font-size:18px;color:#12203c;margin:0 0 6px">What you can do in the Design Lab</h2>
+    <h2 style="font-size:18px;color:#12203c;margin:0 0 6px">New: design it your way</h2>
     <table role="presentation" cellpadding="0" cellspacing="0">
       ${feature('⬆️', 'Upload your logo or photo', 'Bring your own artwork, or start from ours.')}
       ${feature('🔤', 'Hundreds of fonts and graphics', 'Add names, numbers, dates and designs in a few taps.')}
       ${feature('✨', 'AI design help', 'Describe your idea, like "a family reunion shirt with our last name and year", and get a starting point.')}
-      ${feature('👕', 'See it on the shirt instantly', '45+ real garments: tees, hoodies, tanks, kids and more, in full color.')}
+      ${feature('👕', 'See it on the garment instantly', 'Your design on the exact piece and color you picked, in full color.')}
       ${feature('💲', 'Live pricing with volume discounts', 'No minimums. Order one piece or a whole team.')}
       ${feature('💾', 'Save your designs and track your order', 'Free account, so it is all there next time.')}
     </table>
@@ -145,7 +162,7 @@ function helloEmail({ first, email }) {
       <tr>${photo('work/embroidery-machine-polos.jpg', 'Embroidered polos')}${photo('work/screen-printing-press.jpg', 'Our screen printing press in Chicago')}</tr>
     </table>
     <p style="line-height:1.6;margin:10px 4px">Screen printing, embroidery and full-color prints for teams, schools, businesses,
-      churches, birthdays and family reunions. Pick up at the shop in Lakeview, or we'll deliver locally.</p>
+      churches, birthdays and family reunions. Pick up at the shop in Lakeview.</p>
   </td></tr>
   <tr><td style="padding:10px 24px">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fff8ed;border:1px solid #fde3c0;border-radius:12px">
@@ -170,4 +187,19 @@ function helloEmail({ first, email }) {
   };
 }
 
-module.exports = { CAMPAIGN, SIGNUP_PATH, PCT, CODE_DAYS, SOURCES, cleanSource, helloText, codeText, newCode, marketingPhones, emailAudience, helloEmail };
+/** The small sign-up box added to every customer email until the new year
+ *  (withTextsInvite in server.js). */
+function inviteBlock(email) {
+  const link = `${SITE}${SIGNUP_PATH}?src=receipt&e=${encodeURIComponent(email)}`;
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:18px auto 0">
+  <tr><td style="background:#fff8ed;border:1px solid #fde3c0;border-radius:12px;padding:14px 16px;font-family:system-ui,sans-serif;
+    color:#374151;text-align:center">
+    <div style="font-weight:800;font-size:16px;color:#12203c">Get ${PCT}% off your next order</div>
+    <div style="font-size:13.5px;line-height:1.5;margin:4px 0 10px">Join our texts for new products, seasonal deals and first dibs on specials.</div>
+    <a href="${esc(link)}" style="display:inline-block;background:#F0275A;color:#fff;padding:10px 22px;border-radius:100px;
+      text-decoration:none;font-weight:700;font-size:14px">Sign up and get ${PCT}% off</a>
+    <div style="font-size:11px;color:#6b7280;margin-top:8px">Up to 4 texts a month, msg &amp; data rates may apply, reply STOP any time.</div>
+  </td></tr></table>`;
+}
+
+module.exports = { inviteBlock, CAMPAIGN, SIGNUP_PATH, PCT, CODE_DAYS, SOURCES, cleanSource, helloText, codeText, newCode, marketingPhones, emailAudience, helloEmail };

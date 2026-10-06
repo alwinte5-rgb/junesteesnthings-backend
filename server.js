@@ -1766,14 +1766,39 @@ async function brevoCanSend(apiKey) {
   }
 }
 
+/* The text sign-up offer on every customer email for the rest of 2026
+   (owner, 2026-10-05; "we'll start fresh in the new year"). Never to the
+   shop, the owner or staff, never to someone already signed up, and never
+   allowed to stop an email going out. Callers that must stay plain (sign-in
+   codes, the code email itself, delivery partners) pass promo: false. */
+const TEXTS_INVITE_UNTIL = new Date('2027-01-01T06:00:00Z');   // midnight in Chicago
+async function withTextsInvite(to, html, now = new Date()) {
+  try {
+    const email = String(to || '').trim().toLowerCase();
+    if (now >= TEXTS_INVITE_UNTIL || !email || !html) return html;
+    const shop = [NOTIFY_EMAIL, SHOP_EMAIL, ...String(process.env.OWNER_EMAILS || '').split(',')]
+      .map((e) => String(e || '').trim().toLowerCase()).filter(Boolean);
+    if (shop.includes(email) || email.endsWith('@jtees.net')) return html;
+    const { rows } = await pool.query(
+      `SELECT 1 FROM text_signups WHERE email = $1
+        UNION ALL SELECT 1 FROM staff WHERE lower(email) = $1 LIMIT 1`, [email]);
+    if (rows.length) return html;
+    return html + REINTRO.inviteBlock(email);
+  } catch (e) {
+    console.error('texts invite skipped:', e.message);
+    return html;
+  }
+}
+
 // ─── Brevo email (preferred for customer messages; Resend is the fallback) ───
 // marketing:true adds the unsubscribe headers/footer and honours opt-outs.
 // Order receipts and shipping notices are transactional and stay exempt.
-async function sendEmail({ to, subject, html, replyTo, marketing = false, text }) {
+async function sendEmail({ to, subject, html, replyTo, marketing = false, text, promo = true }) {
   if (marketing && await isUnsubscribed(to)) {
     console.log(`sendEmail: skipped ${to} (unsubscribed)`);
     return;
   }
+  if (promo) html = await withTextsInvite(to, html);
   /* Applied HERE rather than at each call site, because thirty call sites is
      thirty chances to forget — and the one that forgets is the one that gets
      reported. A new email gets this by existing. */
@@ -3346,11 +3371,12 @@ async function smsConsentFor(phone) {
 
    `kind` is which consent box this needs. `ref` + msg.template is the dedupe
    key: the same update for the same order goes to the same number once. */
-/** Whether an automatic text may go out now: 9am to 8pm in Chicago, inside
+/** Whether an automatic text may go out now: 9am to 6pm in Chicago (owner,
+ *  2026-10-05), inside
  *  the hours the texting rules allow and hours a customer will not mind. */
 function inTextingHours(now = new Date()) {
   const h = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hour: 'numeric', hourCycle: 'h23' }).format(now));
-  return h >= 9 && h < 20;
+  return h >= 9 && h < 18;
 }
 
 async function sendCustomerSms({ phone, kind, ref, msg, quote = null }) {
@@ -4628,7 +4654,7 @@ app.post(REINTRO.SIGNUP_PATH, makeRateLimit(6, 60 * 60 * 1000), async (req, res)
     if (code) {
       sendCustomerSms({ phone: consent.phone, kind: 'marketing', ref: 'signup:' + REINTRO.CAMPAIGN, msg: REINTRO.codeText({ code }) })
         .catch((e) => console.error('sign-up code text failed:', e.message));
-      sendEmail({ to: email, subject: `Your ${REINTRO.PCT}% off code: ${code}`,
+      sendEmail({ to: email, subject: `Your ${REINTRO.PCT}% off code: ${code}`, promo: false,
         html: customerEmailHtml(`Here's your ${REINTRO.PCT}% off`,
           `<p>Hi${first ? ' ' + escEmail(first) : ''}, thanks for signing up for our texts!</p>
            <p>Your code is <b style="font-size:18px;letter-spacing:1px">${escEmail(code)}</b>. Use it at checkout on
@@ -4700,7 +4726,7 @@ async function sendCampaignEmails() {
     room--;
     try {
       const m = REINTRO.helloEmail(c);
-      await sendEmail({ to: c.email, subject: m.subject, html: m.html, marketing: true });
+      await sendEmail({ to: c.email, subject: m.subject, html: m.html, marketing: true, promo: false });
       await pool.query(`UPDATE campaign_emails SET status = 'sent' WHERE id = $1`, [rows[0].id]);
       n++;
     } catch (e) {
@@ -4776,7 +4802,7 @@ app.get('/admin/campaign', requireAdmin, async (req, res) => {
         ${left ? (inTextingHours() ? `
         <form method="POST" action="/admin/campaign/text" onsubmit="this.querySelector('button').disabled=true">
           <button type="submit" class="btn">Send the hello text to ${left} ${left === 1 ? 'person' : 'people'}</button></form>`
-          : '<p class="muted">Texts only go out 9am to 8pm Chicago time. Come back then to send.</p>')
+          : '<p class="muted">Texts only go out 9am to 6pm Chicago time. Come back then to send.</p>')
           : '<p><b>Done</b>: everyone with deals consent has had the hello text.</p>'}
       </div>
       <div class="card" style="margin-top:14px">
@@ -4848,7 +4874,7 @@ app.get('/admin/campaign/sign', requireAdmin, (req, res) => {
 
 app.post('/admin/campaign/text', requireAdmin, async (req, res) => {
   if (!isOwner()) return res.redirect('/admin/dashboard');
-  if (!inTextingHours()) return res.redirect('/admin/campaign?err=' + encodeURIComponent('Texts only go out 9am to 8pm Chicago time.'));
+  if (!inTextingHours()) return res.redirect('/admin/campaign?err=' + encodeURIComponent('Texts only go out 9am to 6pm Chicago time.'));
   if (!smsConfigured()) return res.redirect('/admin/campaign?err=' + encodeURIComponent('Texting is not switched on.'));
   await pool.query(`INSERT INTO campaign_runs (campaign, channel) VALUES ($1, 'text') ON CONFLICT DO NOTHING`, [REINTRO.CAMPAIGN]);
   sendCampaignTexts();
@@ -4881,7 +4907,7 @@ app.post('/api/send-login-code', requireInternalKey, capPerRecipient('send-login
     }
     await sendEmail({
       to: email,
-      subject: `${code} is your June's Tees sign-in code`,
+      subject: `${code} is your June's Tees sign-in code`, promo: false,
       html: `
         <div style="font-family:sans-serif;max-width:480px;margin:0 auto;text-align:center;">
           <h2 style="color:#1848B8;">Your sign-in code</h2>
@@ -22898,7 +22924,7 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
     await step('stripe payouts', reconcileFailedPayouts);
     await step('review asks', sendDueReviewRequests);
     await step('review follow-ups', sendReviewFollowUps);
-    /* Reminders text as well as email, so they wait for daytime (9am-8pm
+    /* Reminders text as well as email, so they wait for daytime (9am-6pm
        Chicago); the hourly sweep picks them up at 9. */
     if (inTextingHours()) {
       await step('quote follow-ups', sendQuoteFollowUps);
@@ -27479,7 +27505,7 @@ async function dispatchToCourier(partner, list) {
       Ref ${escEmail(deliveryOrderName(b.ref))}</td></tr>`).join('');
   const first = list[0];
   await sendEmail({
-    to: partner.email, replyTo: SHOP_EMAIL,
+    to: partner.email, promo: false, replyTo: SHOP_EMAIL,
     subject: `Delivery request from ${SHOP_NAME}: ${list.length} stop${list.length === 1 ? '' : 's'}, ${DELIV.bookingPhrase(first)}`,
     html: `<div style="font-family:system-ui,sans-serif;max-width:600px">
       <p>Hello ${escEmail(partner.name)},</p>

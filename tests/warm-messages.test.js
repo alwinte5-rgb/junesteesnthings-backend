@@ -64,8 +64,8 @@ test('reminders only text in the daytime, Chicago time', () => {
   const { inTextingHours } = vm.runInThisContext(`(function () { ${liftFn('inTextingHours')} return { inTextingHours }; })`)();
   assert.strictEqual(inTextingHours(new Date('2026-10-05T14:00:00Z')), true, '9am Chicago');
   assert.strictEqual(inTextingHours(new Date('2026-10-05T13:59:00Z')), false, '8:59am');
-  assert.strictEqual(inTextingHours(new Date('2026-10-06T00:59:00Z')), true, '7:59pm');
-  assert.strictEqual(inTextingHours(new Date('2026-10-06T01:00:00Z')), false, '8pm');
+  assert.strictEqual(inTextingHours(new Date('2026-10-05T22:59:00Z')), true, '5:59pm');
+  assert.strictEqual(inTextingHours(new Date('2026-10-05T23:00:00Z')), false, '6pm (owner, 2026-10-05)');
   const sweep = src.slice(src.indexOf('if (inTextingHours()) {'), src.indexOf('if (inTextingHours()) {') + 400);
   for (const s of ['sendQuoteFollowUps', 'sendDepositReminders', 'sendBalanceReminders', 'sendPickupReminders']) {
     assert.ok(sweep.includes(s), `${s} runs outside texting hours`);
