@@ -369,9 +369,12 @@ test('uploads go to Cloudinary as raw files for design files, with the 10 MB lim
 
 /* ── A customer's text, forwarded to the owner's phone (2026-10-06) ─────────── */
 
-async function inboundText({ from = '+13125550199', body = 'Can I add 2 XL?', owner = '+17738491854', quote = 'AB12CD', name = 'Kim Lee' } = {}) {
+async function inboundText({ from = '+13125550199', body = 'Can I add 2 XL?', owner = '+17738491854', quote = 'AB12CD', name = 'Kim Lee',
+                             forwards = [], twilioFails = null } = {}) {
   const ownerTexts = [];
   const emails = [];
+  const sent = [];
+  const sql = [];
   let handler;
   const sandbox = {
     app: { post: (p, h) => { handler = h; } },
@@ -379,7 +382,16 @@ async function inboundText({ from = '+13125550199', body = 'Can I add 2 XL?', ow
     verifyTwilioSignature: () => true, TWILIO_INBOUND_URL: 'u',
     normalizeUsPhone: (p) => (p ? '+1' + String(p).replace(/\D/g, '').slice(-10) : null),
     classifyInbound: () => 'message',
-    pool: { query: async (sql) => ({ rows: /SELECT name FROM quotes/.test(sql) ? [{ name }] : [] }) },
+    pool: { query: async (q, args) => {
+      sql.push([q, args]);
+      if (/SELECT name FROM quotes/.test(q)) return { rows: [{ name }] };
+      if (/FROM owner_text_forwards/.test(q)) return { rows: forwards };
+      if (/INSERT INTO sms_messages[\s\S]*RETURNING id/.test(q)) return { rows: [{ id: 1 }] };
+      return { rows: [] };
+    } },
+    RELAY: require('../tools/lib/text-relay'), QUOTE_CODE_RE: /^(?:[A-Z0-9]{6}|[A-Z0-9]{10})$/,
+    twilioSend: async (to, b) => { if (twilioFails) throw Object.assign(new Error('nope'), { twilioCode: twilioFails }); sent.push([to, b]); return { sid: 'SMx' }; },
+    markLeadResponded: async () => {},
     textToLead: async () => (quote ? { quote } : { lead: 7 }),
     sendOwnerSms: async (b) => { ownerTexts.push(b); return true; },
     sendEmail: async (m) => { emails.push(m); },
@@ -390,22 +402,55 @@ async function inboundText({ from = '+13125550199', body = 'Can I add 2 XL?', ow
   };
   vm.createContext(sandbox);
   const start = src.indexOf("app.post('/webhooks/twilio/sms'");
-  vm.runInContext(src.slice(start, src.indexOf('\n});', start) + 4), sandbox);
+  vm.runInContext(lift('relayOwnerReply') + '\n' + src.slice(start, src.indexOf('\n});', start) + 4), sandbox);
   const res = { type() { return this; }, send() {}, sendStatus() {} };
   await handler({ body: { From: from, Body: body, MessageSid: 'SM1' }, get: () => 'sig' }, res);
-  return { ownerTexts, emails };
+  return { ownerTexts, emails, sent, sql };
 }
 
 test('a customer\'s text comes to the owner\'s phone with who it is and a link to their job', async () => {
   const { ownerTexts, emails } = await inboundText();
   assert.strictEqual(ownerTexts.length, 1);
-  assert.match(ownerTexts[0], /^Text from Kim Lee \+13125550199 \(AB12CD\): "Can I add 2 XL\?" https:\/\/www\.jtees\.net\/admin\/production\/AB12CD#messages$/);
+  assert.match(ownerTexts[0], /^Text from Kim Lee \+13125550199 \(AB12CD\): "Can I add 2 XL\?" Reply here to answer them\. https:\/\/www\.jtees\.net\/admin\/production\/AB12CD#messages$/);
   assert.strictEqual(emails.length, 1, 'the email still goes too');
   const lead = await inboundText({ quote: null });
-  assert.match(lead.ownerTexts[0], /\(new enquiry\).*\/admin\/leads#lead-7/);
+  assert.match(lead.ownerTexts[0], /\(new enquiry L7\).*\/admin\/leads#lead-7/);
 });
 
 test('the owner\'s own phone texting the shop is not forwarded back to it', async () => {
-  const { ownerTexts } = await inboundText({ from: '(773) 849-1854' });
-  assert.strictEqual(ownerTexts.length, 0);
+  const { ownerTexts, emails } = await inboundText({ from: '(773) 849-1854' });
+  assert.ok(!ownerTexts.some((t) => /^Text from/.test(t)), 'forwarded to itself');
+  assert.strictEqual(emails.length, 0);
+});
+
+const ago = (min) => new Date(Date.now() - min * 60000).toISOString();
+const kim = { phone: '+13125550199', quote_code: 'AB12CD', lead_id: null, name: 'Kim Lee', created_at: ago(5) };
+const ann = { phone: '+13125550111', quote_code: 'FARYDGZMRY', lead_id: null, name: 'Ann Cole', created_at: ago(8) };
+
+test('the owner replying to a forwarded text answers that customer from the shop number, on their job', async () => {
+  const r = await inboundText({ from: '+17738491854', body: 'Yes we can add 2 XL', forwards: [kim] });
+  assert.deepStrictEqual(r.sent, [['+13125550199', "June's Tees: Yes we can add 2 XL"]]);
+  assert.deepStrictEqual(r.ownerTexts, ['Sent to Kim Lee (AB12CD).']);
+  assert.strictEqual(r.emails.length, 0, 'the owner\'s own text is not handled as a customer message');
+  const ins = r.sql.find(([q]) => /INSERT INTO sms_messages/.test(q));
+  assert.match(ins[0], /'manual'/, 'it counts as an answer on the dashboard');
+  assert.strictEqual(ins[1][3], 'AB12CD');
+});
+
+test('two customers within ten minutes: nobody is guessed at; a code picks one, and a word like Thanks is not a code', async () => {
+  const both = await inboundText({ from: '+17738491854', body: 'Yes we can', forwards: [kim, ann] });
+  assert.strictEqual(both.sent.length, 0);
+  assert.match(both.ownerTexts[0], /^Not sent: 2 customers texted just now\. Start your reply with their code: AB12CD for Kim Lee, FARYDGZMRY for Ann Cole\.$/);
+  const coded = await inboundText({ from: '+17738491854', body: 'farydgzmry: ready Friday', forwards: [kim, ann] });
+  assert.deepStrictEqual(coded.sent, [['+13125550111', "June's Tees: ready Friday"]]);
+  const thanks = await inboundText({ from: '+17738491854', body: 'Thanks so much Kim', forwards: [kim] });
+  assert.deepStrictEqual(thanks.sent, [['+13125550199', "June's Tees: Thanks so much Kim"]]);
+});
+
+test('no recent customer, or a customer who texted STOP: the owner is told it was not sent', async () => {
+  const none = await inboundText({ from: '+17738491854', body: 'hello', forwards: [{ ...kim, created_at: ago(60 * 30) }] });
+  assert.strictEqual(none.sent.length, 0);
+  assert.match(none.ownerTexts[0], /^Not sent: no customer has texted in the last day/);
+  const stop = await inboundText({ from: '+17738491854', body: 'hello', forwards: [kim], twilioFails: 21610 });
+  assert.match(stop.ownerTexts[0], /^Not sent to Kim Lee \(AB12CD\): they have texted STOP/);
 });

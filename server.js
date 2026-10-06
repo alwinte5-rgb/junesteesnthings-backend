@@ -50,6 +50,7 @@ const { Readable } = require('node:stream');
 const REVREPLY = require('./tools/lib/review-replies');
 const REPLYCOACH = require('./tools/lib/reply-coach');
 const INBOUND = require('./tools/lib/inbound-email');
+const RELAY = require('./tools/lib/text-relay');
 
 /* Every browser upload to Cloudinary goes through this, pasted into each page's
    script (2026-10-06). The account is on Cloudinary's Free plan: 10 MB a file,
@@ -1005,6 +1006,17 @@ async function initDB() {
   /* "No reply needed" on a customer's message: replies before this are not
      counted as waiting on the dashboard (2026-10-06). */
   await pool.query(`ALTER TABLE quotes ADD COLUMN IF NOT EXISTS replies_handled_at TIMESTAMPTZ`).catch(() => {});
+  /* Customer texts forwarded to the owner's phone, so a reply to one can go
+     back to that customer (tools/lib/text-relay.js, 2026-10-06). */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS owner_text_forwards (
+      id          BIGSERIAL PRIMARY KEY,
+      phone       TEXT NOT NULL,
+      quote_code  TEXT,
+      lead_id     INTEGER,
+      name        TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`).catch((e) => console.error('owner_text_forwards:', e.message));
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS client_emails_inbound_once
                       ON client_emails (inbound_id) WHERE inbound_id IS NOT NULL`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS client_emails_quote_idx ON client_emails (quote_code, created_at DESC)`)
@@ -3816,6 +3828,43 @@ async function textToLead(from, text, sid) {
   return rows.length ? { lead: rows[0].id } : {};
 }
 
+/** Send the owner's reply to the customer it was meant for (RELAY), record it
+ *  on their job or lead, and tell the owner what happened. */
+async function relayOwnerReply(text, sid) {
+  const { rows: forwards } = await pool.query(
+    `SELECT phone, quote_code, lead_id, name, created_at FROM owner_text_forwards
+      WHERE created_at > NOW() - interval '30 days' ORDER BY created_at DESC LIMIT 50`);
+  const pick = RELAY.pickTarget(forwards, text, QUOTE_CODE_RE);
+  if (pick.none) return sendOwnerSms('Not sent: no customer has texted in the last day. To answer an older one, start with their code, e.g. AB12CD then your message, or use the job page.');
+  if (pick.ask) return sendOwnerSms(RELAY.askText(pick.ask));
+  const to = pick.to;
+  const label = `${to.name || 'the ' + String(to.phone).slice(-4) + ' number'} (${RELAY.codeOf(to)})`;
+  const words = smsPlain(pick.body, 600);
+  if (!words) return sendOwnerSms(`Not sent to ${label}: the message was empty.`);
+  /* One row per incoming text: Twilio retrying the webhook does not send twice. */
+  const { rows: [row] } = await pool.query(
+    `INSERT INTO sms_messages (phone, kind, ref, template, body, status, quote_code)
+     VALUES ($1, 'transactional', $2, 'manual', $3, 'sending', $4)
+     ON CONFLICT DO NOTHING RETURNING id`,
+    [to.phone, 'relay:' + (sid || Date.now()), `June's Tees: ${words}`, to.quote_code || null]);
+  if (!row) return;
+  try {
+    const { sid: tsid } = await twilioSend(to.phone, `June's Tees: ${words}`);
+    await pool.query(`UPDATE sms_messages SET status = 'sent', twilio_sid = $2 WHERE id = $1`, [row.id, tsid]);
+  } catch (err) {
+    await pool.query(`UPDATE sms_messages SET status = 'failed', error = $2 WHERE id = $1`, [row.id, String(err.message).slice(0, 300)]);
+    console.error(`owner reply to ${RELAY.codeOf(to)} failed:`, err.message);
+    return sendOwnerSms(`Not sent to ${label}: ${err.twilioCode === 21610 ? 'they have texted STOP' : 'the text service refused it'}. Try the job page or call them.`);
+  }
+  if (to.lead_id) {
+    await pool.query(`INSERT INTO lead_notes (submission_id, kind, body) VALUES ($1, 'text', $2)`,
+      [to.lead_id, `You replied: ${words}`]).catch(() => {});
+    await markLeadResponded(to.lead_id, null);
+  }
+  console.log(`owner reply sent to ${RELAY.codeOf(to)}`);
+  return sendOwnerSms(`Sent to ${label}.`);
+}
+
 app.post('/webhooks/twilio/sms', async (req, res) => {
   const token = String(process.env.TWILIO_AUTH_TOKEN || '').trim();
   if (!token) return res.sendStatus(503);
@@ -3830,6 +3879,19 @@ app.post('/webhooks/twilio/sms', async (req, res) => {
   const text = String(req.body.Body || '').slice(0, 1600);
   const kind = classifyInbound(text);
   if (!from) return;
+  /* The owner replying to a forwarded customer text: it goes on to that
+     customer from the shop number, never into the shop's own records as a
+     customer message. */
+  const ownerDigits = String(process.env.TWILIO_TO_NUMBER || '').replace(/\D/g, '').slice(-10);
+  if (ownerDigits && from.replace(/\D/g, '').slice(-10) === ownerDigits) {
+    const ownerSid = String(req.body.MessageSid || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 64);
+    await relayOwnerReply(text, ownerSid).catch((e) => {
+      console.error('owner reply relay failed:', e.message);
+      reportError('twilio:relay', e).catch(() => {});
+      sendOwnerSms('Not sent: something went wrong passing your reply on. Send it from the job page instead.').catch(() => {});
+    });
+    return;
+  }
   /* Kept on the customer's latest quote, matched by the last ten digits of the
      phone, so the job page shows their replies beside what they were sent.
      '\\D' is doubled: in a template string '\D' is just 'D'. */
@@ -3870,9 +3932,15 @@ app.post('/webhooks/twilio/sms', async (req, res) => {
           .then((r) => (r.rows[0] && r.rows[0].name) || '').catch(() => '') : '';
         const link = lead.quote ? `${PUBLIC_BASE_URL}/admin/production/${encodeURIComponent(lead.quote)}#messages`
           : lead.lead ? `${PUBLIC_BASE_URL}/admin/leads#lead-${Number(lead.lead)}` : '';
-        await sendOwnerSms(`Text from ${smsPlain(who, 40) || from}${who ? ' ' + from : ''}${lead.quote ? ' (' + lead.quote + ')' : ' (new enquiry)'}: ` +
-          `"${smsPlain(text, 400)}"${link ? ' ' + link : ''}`)
-          .catch((e) => { console.error('text forward to owner failed:', e.message); reportError('twilio:forward', e).catch(() => {}); });
+        const tag = lead.quote ? lead.quote : lead.lead ? 'new enquiry L' + Number(lead.lead) : 'new enquiry';
+        const sent = await sendOwnerSms(`Text from ${smsPlain(who, 40) || from}${who ? ' ' + from : ''} (${tag}): ` +
+          `"${smsPlain(text, 400)}" Reply here to answer them.${link ? ' ' + link : ''}`)
+          .catch((e) => { console.error('text forward to owner failed:', e.message); reportError('twilio:forward', e).catch(() => {}); return false; });
+        if (sent && (lead.quote || lead.lead)) {
+          await pool.query(`INSERT INTO owner_text_forwards (phone, quote_code, lead_id, name) VALUES ($1, $2, $3, $4)`,
+            [from, lead.quote || null, lead.quote ? null : Number(lead.lead), smsPlain(who, 60) || null])
+            .catch((e) => console.error('forward not recorded:', e.message));
+        }
       }
       // A customer replying to an order text is talking to the shop. Without
       // this their reply would land in the Twilio console and nowhere else.
