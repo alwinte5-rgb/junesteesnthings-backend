@@ -270,22 +270,29 @@ expected the discount to move, and it would not have.
 ## Where the margin actually is
 
 Costs for the shop's most common job — 100 pieces, 1 colour, front and back, on
-a dark Gildan 5000:
+a dark Gildan 5000. **Corrected 2026-10-06 from Anchorfish quote #18249**: on a
+dark shirt they bill the white base as a colour on every piece, so a 1-colour
+white print is their "2 Color" rate ($2.06 at 100), not the 1-colour $1.65 this
+table first assumed.
 
 | | | |
 | --- | --- | --- |
 | Blanks | 100 × $2.82 | $282.00 |
-| Printing | 100 × $1.65 × 2 locations | $330.00 |
+| Printing | 100 × $2.06 × 2 locations | $412.00 |
 | Screens | 4 × $20 | $80.00 |
-| | | **$692.00** ($6.92/pc) |
+| | | **$774.00** ($7.74/pc) |
+
+The quote now prices dark garments the same way — the price column is the
+design's colours plus one — so the margin the table was built on holds on dark
+shirts too. Before that, a dark 1-colour job sold at the 1-colour column and
+earned about 1.7x its print cost instead of 2.1x.
 
 The **second location is the constraint, not the markup.** Anchorfish charges the
-full rate again for location two — no shared-setup discount — so it adds $1.65/pc
-of real cost where a shop printing in-house pays almost nothing for the second
-pass. At 100 pieces one location sells at $9.68/pc against $4.87 of cost (49.7%);
-two sells at $13.83 against $6.92 (50.0%). On two-sided work this shop is structurally behind an in-house
-competitor, and no amount of garment discounting closes that gap: the garment is
-only $2.82 of the $6.92.
+full rate again for location two — no shared-setup discount. That is why pressing
+1-colour and small designs in-house with Transfer Express Goof Proof Premium
+transfers (no base, no screens) is the cheaper way to make them: #18249 is $492 at
+Anchorfish and about $283–$353 in-house. The quote form shows both for every
+screen-print line (tools/lib/production-cost.js).
 
 ## Six screens, and the white underbase is one of them
 

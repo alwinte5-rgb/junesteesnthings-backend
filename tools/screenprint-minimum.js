@@ -28,7 +28,7 @@ const { urlFromStdinJson, mysql, dejson, enjson } = require('./lib/db');
 
 const BACKUP_DIR = path.join(os.homedir(), 'jtees-backups');
 const TITLE = 'Screen Printing';
-const MIN_QTY = 25;
+const MIN_QTY = 50;
 
 const APPLY = process.argv.includes('--apply');
 

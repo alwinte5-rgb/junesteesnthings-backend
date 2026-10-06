@@ -121,7 +121,7 @@ test('the reprice tool passes the contracted floor', () => {
   const fs = require('node:fs');
   const path = require('node:path');
   const tool = fs.readFileSync(path.join(__dirname, '..', 'tools', 'reprice-anchorfish-2026.js'), 'utf8');
-  assert.match(tool, /const SCREEN_MIN_QTY = 25;/);
+  assert.match(tool, /const SCREEN_MIN_QTY = 50;/);
   assert.match(tool, /colorTable\(all, SCREEN_MIN_QTY, SCREEN_MAX\)/,
     'the generator must be told the minimum AND the screen ceiling, or it emits ' +
     'a method that sells colour counts the press cannot run');

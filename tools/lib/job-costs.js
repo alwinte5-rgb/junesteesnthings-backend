@@ -167,7 +167,7 @@ function linePlaces(it, methods) {
    one run per place; DTF is the front rate for a method's first place and its
    second-location rate for each one after; anything costed off the sell price
    is costed once per method, its share of the decoration billed. */
-function placesCost(places, bandQty, decoSellEach) {
+function placesCost(places, bandQty, decoSellEach, dark = false) {
   const groups = [];
   for (const p of places) {
     let g = groups.find((x) => x.method === p.method);
@@ -181,9 +181,13 @@ function placesCost(places, bandQty, decoSellEach) {
     const kind = methodKind(g.method);
     if (kind === 'screen' || kind === 'embroidery' || kind === 'dtf') {
       g.places.forEach((p, k) => {
-        const one = decorationEach(g.method, '', p.colours, bandQty, 0);
+        /* On a dark garment Anchorfish bills the white BASE as a colour on
+           every piece: a 1-colour white print is their "2 Color" rate
+           (invoices #16899, #18249). Screen printing only. */
+        const c = kind === 'screen' && dark ? (parseInt(p.colours, 10) > 0 ? parseInt(p.colours, 10) : 1) + 1 : p.colours;
+        const one = decorationEach(g.method, '', c, bandQty, 0);
         const extra = kind === 'dtf' && k > 0
-          ? decorationEach(g.method, 'both', p.colours, bandQty, 0).each - one.each : one.each;
+          ? decorationEach(g.method, 'both', c, bandQty, 0).each - one.each : one.each;
         each += extra;
         if (one.basis && !basis.includes(one.basis)) basis.push(one.basis);
       });
@@ -360,7 +364,7 @@ function estimateJob(items, catalog) {
     }
     /* What the decoration was billed at per piece: only the rough rule uses it. */
     const decoSellEach = Math.max(0, num(it.unit_price) - garmentSellEach);
-    const deco = placesCost(places, bandQty, decoSellEach);
+    const deco = placesCost(places, bandQty, decoSellEach, !!it.garment_dark);
     basis.push(...deco.basis);
 
     const each = garmentEach + deco.each + ad.perLine / qty;

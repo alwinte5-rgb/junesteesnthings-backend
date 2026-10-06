@@ -74,6 +74,17 @@ test('a job written as print locations prices exactly as the same job written th
     const old = { ...base, qty, method, stage, colours, backColours, sleeves, sleeveColours, dark };
     const now = { ...base, qty, dark, prints: strip(legacyPrints(old)) };
     const a = priceLine(old), b = priceLine(now);
+    /* Under screen printing's minimum the new path shows the shortfall as its
+       own line instead of inside the per-piece price: same money (to rounding
+       of a cent a piece), different telling. */
+    const underMin = method === SCREEN && qty < SCREEN.min_order_qty;
+    if (underMin) {
+      assert.ok(Math.abs(b.lineTotal - a.lineTotal) <= 0.01 * qty,
+        `charged as 50: ${a.lineTotal} vs ${b.lineTotal} ` + JSON.stringify({ stage, colours, sleeves, dark, qty }));
+      assert.ok(b.addonLines.some((x) => x.code === 'screen_min'));
+      n++;
+      continue;
+    }
     assert.deepStrictEqual(
       [b.lineTotal, b.listUnit, b.screens, b.overScreens, b.passScreens],
       [a.lineTotal, a.listUnit, a.screens, a.overScreens, a.passScreens],
@@ -114,8 +125,12 @@ test('a method\'s minimum applies to its own places only', () => {
     { loc: 'front', method: DTF, colours: '' },
     { loc: 'left', method: SCREEN, colours: 1 },
   ] });
-  const screenAt20 = Math.round(4.1 * (50 / 20) * 100) / 100;
-  assert.equal(Math.round(r.decoration * 100) / 100, Math.round((7.25 + screenAt20) * 100) / 100);
+  /* The DTF front is not scaled; the screen sleeve is priced at 20 and its
+     shortfall to 50 is a line of its own. */
+  assert.equal(Math.round(r.decoration * 100) / 100, Math.round((7.25 + 4.1) * 100) / 100);
+  const srm = r.addonLines.find((a) => a.code === 'screen_min');
+  assert.ok(srm, 'the small-run minimum is shown');
+  assert.equal(srm.total, Math.round(4.1 * 30 * 100) / 100, '30 missing pieces at the screen rate');
 });
 
 test('screens: one set per screen-printed place, at its own count, plus the underbase on dark', () => {
@@ -205,4 +220,34 @@ test('every Signs365 product carries the supplier delivery charge automatically,
   /* Only a REQUIRED item's Saturday/large rate replaces the charge order-wide. */
   assert.match(src, /const freightUpgraded = \[\.\.\.Array\(40\)\.keys\(\)\]\.some\(\(i\) => !isOptional\(i\) && upgradedAt\(i\)\);/);
   assert.match(src, /if \(a\.code === 'cutout_ship' && \(freightUpgraded \|\| upgradedAt\(i\)\)\) continue;/);
+});
+
+test('under 50, screen printing is charged as 50 on a line of its own', () => {
+  const S = { ...SCREEN, positions: { id: [{ min_qty: 99, colors: { '1-color': 3.85, '2-color': 4.8 } }] } };
+  for (const qty of [24, 30, 49]) {
+    const r = priceLine({ ...base, product: null, addons: [], qty, prints: [{ loc: 'front', method: S, colours: 1 }] });
+    assert.equal(r.lineTotal, 192.5, qty + ' pieces cost what 50 do');
+    assert.equal(r.addonLines.find((a) => a.code === 'screen_min').total, Math.round(3.85 * (50 - qty) * 100) / 100);
+  }
+  const fifty = priceLine({ ...base, product: null, addons: [], qty: 50, prints: [{ loc: 'front', method: S, colours: 1 }] });
+  assert.ok(!fifty.addonLines.some((a) => a.code === 'screen_min'));
+  /* A Run that reaches 50 together pays nothing. */
+  const run = priceLine({ ...base, product: null, addons: [], qty: 25, bandQty: 50, prints: [{ loc: 'front', method: S, colours: 1 }] });
+  assert.ok(!run.addonLines.some((a) => a.code === 'screen_min'));
+  /* A typed price replaces it. */
+  const typed = priceLine({ ...base, product: null, addons: [], qty: 30, unitOverride: 9, prints: [{ loc: 'front', method: S, colours: 1 }] });
+  assert.ok(!typed.addonLines.some((a) => a.code === 'screen_min'));
+  assert.equal(typed.lineTotal, 270);
+});
+
+test('on a dark garment the white base is a colour in the screen-print price', () => {
+  /* Anchorfish #18249: 1-colour white on black is billed at the 2-colour rate. */
+  const S = { ...SCREEN, positions: { id: [{ min_qty: 249, colors: { '1-color': 3.45, '2-color': 4.35, '3-color': 5.3 } }] } };
+  const light = priceLine({ ...base, product: null, addons: [], qty: 100, prints: [{ loc: 'front', method: S, colours: 1 }] });
+  const dark = priceLine({ ...base, product: null, addons: [], qty: 100, dark: true, prints: [{ loc: 'front', method: S, colours: 1 }] });
+  assert.equal(light.decoration, 3.45);
+  assert.equal(dark.decoration, 4.35);
+  /* DTF is not screen printed and has no base column. */
+  const dtf = priceLine({ ...base, product: null, addons: [], qty: 60, dark: true, prints: [{ loc: 'front', method: DTF }] });
+  assert.equal(dtf.decoration, 5.1);
 });

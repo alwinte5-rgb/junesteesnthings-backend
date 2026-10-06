@@ -48,23 +48,26 @@ test('the cost sheets are the ones the store is priced from', () => {
   assert.deepStrictEqual(Object.keys(J.DTF), Object.keys(DTF));
   assert.deepStrictEqual(J.EMBROIDERY, lift('EMB'));
   assert.match(src, new RegExp(`const SCREEN_COST = ${J.SCREEN_COST};`));
-  /* Two different minimums since 2026-10-06: the shop SELLS screen printing
-     from 25 (the reprice tool writes that into the method), while Anchorfish
-     still BILLS 50 under 50, which is what the job cost reads. */
-  assert.match(src, /const SCREEN_MIN_QTY = 25;/);
+  /* Two minimums that happen to agree: what the shop SELLS screen printing from
+     (the reprice tool writes it into the method) and what Anchorfish BILLS under
+     (the job cost reads it). Kept as separate assertions so either can move. */
+  assert.match(src, /const SCREEN_MIN_QTY = 50;/);
   assert.strictEqual(J.SCREEN_MIN_QTY, 50);
   const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   assert.match(server, new RegExp(`const SCREEN_FEE_RATE = ${J.SCREEN_FEE};`));
 });
 
 test('the shop\'s common job: 100 Gildan 5000s, 1 colour front and back, dark', () => {
-  // docs/pricing-2026.md "Where the margin actually is": $692 = 282 blanks + 330 print + 80 screens.
+  /* Anchorfish quote #18249 (2026-09-10): white on black, left chest + full
+     back, billed "2 Color" (Base + White) at $2.06 a place — the base is a
+     colour on every shirt — plus 4 screens at $20. docs/pricing-2026.md had
+     this at $1.65 a place ($692), which understated the cost by $82. */
   const r = one({ product_id: 10, method_id: 22, colours: 1, stage: 'both', garment_dark: true, qty: 100,
     unit_price: 13.83, addons: [{ code: 'screens', count: 4, total: 100 }] });
   assert.strictEqual(r.complete, true);
-  assert.strictEqual(r.lines[0].unit_cost, 6.12);           // 2.82 + 1.65 x 2
+  assert.strictEqual(r.lines[0].unit_cost, 6.94);           // 2.82 + 2.06 x 2
   assert.strictEqual(r.outsourced, 80);
-  assert.strictEqual(r.lines[0].unit_cost * 100 + r.outsourced, 692);
+  assert.strictEqual(Math.round(r.lines[0].unit_cost * 100 + r.outsourced), 774);
 });
 
 test('a legacy per-colour method reads its count from its title', () => {

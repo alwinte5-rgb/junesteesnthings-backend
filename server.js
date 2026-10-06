@@ -23,6 +23,7 @@ const {
 const SHIP = require('./tools/lib/shipping');
 const EXP = require('./tools/lib/expenses');
 const JOBCOST = require('./tools/lib/job-costs');
+const PRODCOST = require('./tools/lib/production-cost');
 const DELIV = require('./tools/lib/delivery');
 const { createDeliveryStore } = require('./tools/lib/delivery-store');
 const { quoteAnalyticsTags, paidQuery } = require('./tools/lib/quote-analytics');
@@ -6287,7 +6288,7 @@ function oneSizeList(desc) {
   return m ? stripSizeLists(d) + m[0].replace(/\s+$/, '') : d;
 }
 
-const SCREEN_MIN_QTY = 25;
+const SCREEN_MIN_QTY = 50;
 const SCREEN_METHOD_RE = /screen\s*print/i;
 
 /* Digitizing is billed ONCE PER DESIGN, but a decoration method in this system
@@ -6944,11 +6945,38 @@ function quotePricingSource() {
           var gk = legacy ? 's' + pr.slot : 'm' + String(pr.method.id);
           if (!(gk in gi)) { gi[gk] = groups.length; groups.push({ method: pr.method, amount: 0, slot: pr.slot }); }
           pr.c = colourCount(pr.method, pr.colours);
-          groups[gi[gk]].amount += Number(tierAt(pr.method.positions, bandQty, keyOf(pr), pr.c));
+          /* DARK GARMENTS: the white base is a colour. A 1-colour white print on
+             a black shirt is billed by Anchorfish as "2 Color" (Base + White)
+             on every piece — invoices #16899 and #18249 — so the price column is
+             the design's colours plus one. Selling it at the 1-colour column
+             sold dark jobs at 1.7x cost instead of the 2.1x the table is built
+             on. Screen printing priced by colour only; the screen COUNT already
+             carried the base (screenCount). The designer applies the same rule
+             (app.js printing ink column, core/cart.php printing_calc_raw). */
+          var col = (o.dark && pr.method.type === 'color' && /screen\\s*print/i.test(String(pr.method.title || '')))
+            ? pr.c + 1 : pr.c;
+          groups[gi[gk]].amount += Number(tierAt(pr.method.positions, bandQty, keyOf(pr), col));
         }
+        /* SMALL-RUN MINIMUM, shown. On a line priced from print locations a
+           screen-print group under its minimum is priced at the real quantity
+           and the shortfall becomes its own line ("charged as 50"), so the
+           customer sees why a 30-piece job costs what it does instead of an
+           unexplained per-piece price. Same money: the line is exactly what the
+           hidden scaling added. Older lines, and every other method, keep the
+           scaling. */
+        var smallRunMin = 0, screenMinQty = 0;
         var decoTotal = 0, primaryDeco = 0;
         for (var g = 0; g < groups.length; g++) {
-          groups[g].amount = applyMin(groups[g].method, groups[g].amount);
+          var gmn = groups[g].method.min_order_qty ? (parseInt(groups[g].method.min_order_qty, 10) || 0) : 0;
+          if (!legacy && gmn > 0 && bandQty > 0 && bandQty < gmn && groups[g].amount > 0 &&
+              /screen\\s*print/i.test(String(groups[g].method.title || ''))) {
+            /* Per piece, unrounded: the line rounds once, so 30 pieces at $3.85
+               charged as 50 is exactly 20 x $3.85. */
+            smallRunMin += groups[g].amount * (gmn / bandQty - 1);
+            screenMinQty = gmn;
+          } else {
+            groups[g].amount = applyMin(groups[g].method, groups[g].amount);
+          }
           decoTotal += groups[g].amount;
         }
         /* The PRIMARY decoration — the first slot of an old line, the first
@@ -7070,6 +7098,17 @@ function quotePricingSource() {
           addonLines.push({ code: a.code, label: a.label, kind: a.kind, rate: a.rate,
                             count: (a.kind === 'per_screen' ? screens : null), total: amt });
           addonTotal += amt;
+        }
+        /* The small-run minimum, as a line of its own. A price typed by hand is
+           a person's judgement about the whole piece and replaces it, as it
+           replaced the hidden scaling before. */
+        if (smallRunMin > 0 && !hasOverride) {
+          var srm = Math.round(smallRunMin * qty * 100) / 100;
+          if (srm > 0) {
+            addonLines.push({ code: 'screen_min', label: 'Screen print small-run minimum (charged as ' + screenMinQty + ')',
+                              kind: 'once', rate: srm, count: null, total: srm });
+            addonTotal += srm;
+          }
         }
 
         /* Extended-size upcharges apply whether or not the unit price was typed.
@@ -8935,6 +8974,12 @@ ${quotePricingSource()}
       /* Add-ons and digitizing fees, from the same catalogue the server prices
          against, keyed by method id so a line only offers what applies to it. */
       var DIGI = ${JSON.stringify(digiList)};
+      /* What a screen-print line costs to MAKE, at Anchorfish or pressed here
+         with Goof Proof Premium — internal, for choosing who prints it. The
+         function is shipped by its source so the form and the tests run the
+         same code (tools/lib/production-cost.js). */
+      var PROD_DATA = ${JSON.stringify(PRODCOST.DATA)};
+      ${PRODCOST.productionCompare.toString()}
       var ADDONS = ${JSON.stringify(ADDONS.map((a) => ({
         code: a.code, label: a.label, kind: a.kind, rate: a.rate,
         auto: a.auto || null, note: a.note || null, appliesTo: a.appliesTo.source,
@@ -9512,8 +9557,27 @@ ${quotePricingSource()}
              from the blank or the printing — which is the decision this form is
              actually for. Shown only when a quantity makes the totals real. */
           var costNote = L.querySelector('.costnote');
+          /* Who should print it: Anchorfish, or in-house with Premium
+             transfers. Only for a line with a screen-printed place. */
+          var makeIt = '';
+          if (qty > 0 && prints.some(function(p){ return /screen\\s*print/i.test(p.method.title); })) {
+            var mk = productionCompare({ qty: Math.max(qty, runQty || 0), dark: isDark,
+              places: prints.map(function(p){
+                return { loc: p.loc, colours: p.colours || 1,
+                         kind: /screen\\s*print/i.test(p.method.title) ? 'screen'
+                             : (/\\bdtf\\b/i.test(p.method.title) ? 'dtf' : 'other') };
+              }) }, PROD_DATA);
+            if (mk) makeIt = '<b>To make it:</b> Anchorfish ' + m2(mk.anchorfish) + ' &nbsp;&middot;&nbsp; ' +
+              (mk.premiumLow == null ? 'Premium transfers: not over 4 colours'
+                : 'Premium in-house ' + (mk.premiumLow === mk.premiumHigh ? m2(mk.premiumLow)
+                    : m2(mk.premiumLow) + '–' + m2(mk.premiumHigh) + ' (left-chest to full front)') + ' + pressing');
+          }
           if (costNote) {
-            if (!prod || qty <= 0) { costNote.style.display = 'none'; }
+            if ((!prod && !makeIt) || qty <= 0) { costNote.style.display = 'none'; }
+            else if (!prod) {
+              costNote.innerHTML = makeIt;
+              costNote.style.display = 'block';
+            }
             else {
               var gTot = r.blank * qty, dTot = r.decoration * qty;
               var parts = [
@@ -9526,7 +9590,8 @@ ${quotePricingSource()}
                  what the job COSTS to build, not what is being charged. Say so
                  rather than showing two sets of numbers that do not reconcile. */
               if (r.manual) parts.push('override in use — line bills ' + m2(lt));
-              costNote.innerHTML = '<b>Internal:</b> ' + parts.join(' &nbsp;&middot;&nbsp; ');
+              costNote.innerHTML = '<b>Internal:</b> ' + parts.join(' &nbsp;&middot;&nbsp; ') +
+                (makeIt ? '<br>' + makeIt : '');
               costNote.style.display = 'block';
             }
           }
@@ -9556,10 +9621,15 @@ ${quotePricingSource()}
                 (isDark ? r.screenCeiling - 1 : r.screenCeiling) + ' colours is the most on a ' +
                 (isDark ? 'dark' : 'light') + ' garment. Quote DTF instead.';
             } else {
+              /* Under the minimum the line still prices — charged as
+                 ${SCREEN_MIN_QTY}, with the shortfall on its own line — so say
+                 what that costs, and that DTF may be the better quote. */
+              var srmLine = (r.addonLines || []).filter(function(a){ return a.code === 'screen_min'; })[0];
               warn.style.display = tooFew ? 'block' : 'none';
               warn.textContent = tooFew
-                ? 'Screen printing starts at ${SCREEN_MIN_QTY} pieces. For ' + qty +
-                  ', quote DTF or heat-transfer vinyl instead.' : '';
+                ? 'Under ${SCREEN_MIN_QTY} pieces screen printing is charged as ${SCREEN_MIN_QTY}' +
+                  (srmLine ? ': a ' + m2(srmLine.total) + ' small-run minimum on this line' : '') +
+                  '. For ' + qty + ', DTF may be the better quote.' : '';
             }
           }
 
@@ -26635,7 +26705,7 @@ const KB_SEED = [
   { kind: 'faq', shortcut: 'deposit', title: 'Do I pay up front?', tags: 'deposit, payment, pay, balance',
     body: `We take a 50% deposit to start your order, and the balance when it is ready. Orders under $100 are paid in full up front.\n\nYou can pay online from your quote link. Card payments carry a 4% card fee; other ways to pay are listed on the quote.` },
   { kind: 'faq', shortcut: 'minimums', title: 'Is there a minimum order?', tags: 'minimum, how many, quantity, small order',
-    body: `It depends on the decoration. Screen printing starts at 25 pieces, because each colour needs its own screen. For smaller runs we print DTF (full colour, no minimum) or embroider. Tell me how many you need and I will suggest the best-value option.` },
+    body: `It depends on the decoration. Screen printing starts at 50 pieces, because each colour needs its own screen. For smaller runs we print DTF (full colour, no minimum) or embroider. Tell me how many you need and I will suggest the best-value option.` },
   { kind: 'faq', shortcut: 'artfiles', title: 'What artwork should I send?', tags: 'artwork, files, logo, vector, png, resolution',
     body: `The best file is a vector (AI, EPS, PDF or SVG). If you only have an image, send the largest PNG you have with a transparent background, ideally 300 dpi at the size you want it printed.\n\nNo file at all? No problem. Send a photo or sketch and we can redraw it (a design fee may apply; I will tell you before we start).` },
   { kind: 'faq', shortcut: 'quote', title: 'What do you need for a quote?', tags: 'quote, price, estimate, cost',
