@@ -1301,6 +1301,13 @@ async function initStaffTables() {
     'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS sale_type_reason TEXT',
     // A helper's rate on the shop's own leads they close; commission_pct is for their own.
     'ALTER TABLE staff ADD COLUMN IF NOT EXISTS shop_commission_pct NUMERIC(5,2) NOT NULL DEFAULT 0',
+    /* Owner, 2026-10-06: an hourly wage, with commission on profit only on
+       their own leads. shop_commission_pct is no longer paid; kept so old
+       rows still read. Hours come from the Team page; a paid week is locked. */
+    'ALTER TABLE staff ADD COLUMN IF NOT EXISTS hourly_rate NUMERIC(6,2) NOT NULL DEFAULT 0',
+    'ALTER TABLE staff_hours ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ',
+    'ALTER TABLE staff_hours ADD COLUMN IF NOT EXISTS paid_rate NUMERIC(6,2)',
+    'ALTER TABLE staff_hours ADD COLUMN IF NOT EXISTS expense_id INTEGER',
   ]) await pool.query(sql);
   /* Quotes and leads from before labels existed are the shop's: no helper
      ever registered a lead of their own. Said in the reason, so the owner
@@ -11175,7 +11182,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     /* SHOP OR REP, decided once when the quote is first saved
        (tools/lib/sales-credit.js): a salesperson's customer reordering within
        12 months stays theirs; otherwise the lead it answers decides; otherwise
-       it is the shop's, credited to whoever built it at the shop-lead rate. */
+       it is the shop's, credited to whoever built it (wage only, no commission). */
     if (!QUOTE_CODE_RE.test(editing)) {
       try {
         const e = FRAUD.emailKey(q.email);
@@ -11200,7 +11207,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         Object.assign(q, { sale_type: label.sale_type, sale_type_reason: label.reason, credited_to: label.credited_to });
       } catch (err) {
         /* The quote is saved; an unlabelled one is a shop sale (the column's
-           default), which pays a helper at most their shop rate. Reported so
+           default), which pays a helper no commission. Reported so
            a real rep sale is not quietly lost. */
         console.error(`sale label for ${code} failed:`, err.message);
         reportError('sale-label', err, code).catch(() => {});
@@ -24212,9 +24219,12 @@ const intIn = (v) => { const n = parseInt(String(v || ''), 10); return Number.is
 const text = (v, max) => String(v == null ? '' : v).replace(/\r\n?/g, '\n').trim().slice(0, max);
 const isoDate = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
 
+/** A pay rate typed on the Staff page: 0 to `max`, to the cent. */
+const staffRate = (v, max) => Math.round(Math.min(max, Math.max(0, Number(v) || 0)) * 100) / 100;
+
 async function staffRoster({ activeOnly = false } = {}) {
   const { rows } = await pool.query(
-    `SELECT id, name, email, active, perms, commission_pct, shop_commission_pct, training_track, last_seen_at, created_at FROM staff
+    `SELECT id, name, email, active, perms, commission_pct, shop_commission_pct, hourly_rate, training_track, last_seen_at, created_at FROM staff
       ${activeOnly ? 'WHERE active' : ''} ORDER BY active DESC, name`);
   return rows;
 }
@@ -24315,10 +24325,10 @@ async function renderStaffPage(req, res, extra = '') {
       </form>
       <form method="post" action="/admin/staff/${s.id}" class="row" style="margin-top:10px;gap:6px;align-items:center">
         <input type="hidden" name="action" value="commission">
-        <label>Own leads % <input name="commission_pct" type="number" min="0" max="30" step="0.25"
+        <label>Hourly wage $ <input name="hourly_rate" type="number" min="0" max="200" step="0.25"
+          value="${escEmail(String(Number(s.hourly_rate || 0)))}" style="width:80px"></label>
+        <label>Commission % of profit, own leads <input name="commission_pct" type="number" min="0" max="50" step="0.25"
           value="${escEmail(String(Number(s.commission_pct || 0)))}" style="width:80px"></label>
-        <label>Shop leads % <input name="shop_commission_pct" type="number" min="0" max="30" step="0.25"
-          value="${escEmail(String(Number(s.shop_commission_pct || 0)))}" style="width:80px"></label>
         <button type="submit" class="btn btn-ghost">Save</button>
       </form>
     </div>`;
@@ -24336,8 +24346,8 @@ async function renderStaffPage(req, res, extra = '') {
         <label>Start as <select name="preset">${presetOptions}</select></label>
         <label>Training path <select name="training_track">${Object.entries(TRAINING.TRACKS).map(([k, t]) =>
           `<option value="${k}">${escEmail(t.label)}</option>`).join('')}</select></label>
-        <label>Own leads % <input name="commission_pct" type="number" min="0" max="30" step="0.25" value="0" style="width:80px"></label>
-        <label>Shop leads % <input name="shop_commission_pct" type="number" min="0" max="30" step="0.25" value="0" style="width:80px"></label>
+        <label>Hourly wage $ <input name="hourly_rate" type="number" min="0" max="200" step="0.25" value="0" style="width:80px"></label>
+        <label>Commission % of profit, own leads <input name="commission_pct" type="number" min="0" max="50" step="0.25" value="0" style="width:80px"></label>
         <button type="submit">Add</button>
       </form>
       <p class="muted" style="margin-top:8px">${Object.values(STAFF.PRESETS).map((p) =>
@@ -24361,7 +24371,8 @@ app.post('/admin/staff', requireAdmin, async (req, res) => {
   const email = text(b.email, 254).toLowerCase();
   const preset = STAFF.PRESETS[b.preset] ? b.preset : 'training';
   const track = TRAINING.trackOf(b.training_track);
-  const pct = Math.min(30, Math.max(0, Number(b.commission_pct) || 0));
+  const pct = staffRate(b.commission_pct, 50);
+  const wage = staffRate(b.hourly_rate, 200);
   if (!name || !STAFF.EMAIL_RE.test(email)) return back(res, '/admin/staff', 'err', 'A name and a real email are needed.');
   try {
     if (cfAccess && cfAccess.owners.includes(email)) {
@@ -24369,10 +24380,9 @@ app.post('/admin/staff', requireAdmin, async (req, res) => {
     }
     /* password_hash predates signing in through Cloudflare; '!' matches no password. */
     await pool.query(
-      `INSERT INTO staff (name, email, password_hash, perms, commission_pct, training_track, shop_commission_pct)
+      `INSERT INTO staff (name, email, password_hash, perms, commission_pct, training_track, hourly_rate)
        VALUES ($1, $2, '!', $3, $4, $5, $6)`,
-      [name, email, JSON.stringify(STAFF.presetPerms(preset)), pct, track,
-       Math.min(30, Math.max(0, Number(b.shop_commission_pct) || 0))]);
+      [name, email, JSON.stringify(STAFF.presetPerms(preset)), pct, track, wage]);
     return renderStaffPage({ query: { ok: `${name} added as ${STAFF.PRESETS[preset].label}.` } }, res,
       cloudflareStepCard(name, email));
   } catch (err) {
@@ -24413,10 +24423,10 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
         return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is on the ${TRAINING.TRACKS[track].label} training path.`);
       }
       case 'commission': {
-        const pct = Math.min(30, Math.max(0, Number(b.commission_pct) || 0));
-        const shopPct = Math.min(30, Math.max(0, Number(b.shop_commission_pct) || 0));
-        await pool.query('UPDATE staff SET commission_pct = $2, shop_commission_pct = $3 WHERE id = $1', [id, pct, shopPct]);
-        return back(res, '/admin/staff', 'ok', `${s.name}: ${pct}% on their own leads, ${shopPct}% on shop leads.`);
+        const pct = staffRate(b.commission_pct, 50);
+        const wage = staffRate(b.hourly_rate, 200);
+        await pool.query('UPDATE staff SET commission_pct = $2, hourly_rate = $3 WHERE id = $1', [id, pct, wage]);
+        return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name}: ${money(wage)} an hour, ${pct}% of the profit on their own leads.`);
       }
       default:
         return back(res, '/admin/staff', 'err', 'Unknown action.');
@@ -24906,10 +24916,13 @@ app.post('/admin/team/hours', requireAdmin, async (req, res) => {
   }
   try {
     const monday = TEAM.weekOf(new Date(week + 'T12:00:00Z'), 'UTC');
-    await pool.query(
+    // A week already paid as wages is locked: changing it would not change what was paid.
+    const { rowCount } = await pool.query(
       `INSERT INTO staff_hours (staff_id, week_of, business, hours) VALUES ($1, $2, $3, $4)
-       ON CONFLICT (staff_id, week_of, business) DO UPDATE SET hours = EXCLUDED.hours`,
+       ON CONFLICT (staff_id, week_of, business) DO UPDATE SET hours = EXCLUDED.hours
+       WHERE staff_hours.paid_at IS NULL`,
       [staffId, monday, business, hours]);
+    if (!rowCount) return back(res, '/admin/team', 'err', `The week of ${monday} is already paid, so its hours are locked.`);
     return back(res, '/admin/team', 'ok', `Saved ${hours} hours for the week of ${monday}.`);
   } catch (err) {
     console.error('hours save failed:', err.message);
@@ -24930,12 +24943,18 @@ async function commissionStartsAt(staffId) {
   return r ? r.done_at : null;
 }
 
+const COMMISSION_TONE = { payable: 'green', waiting: 'blue', earning: 'neutral', 'on hold': 'red', paid: 'neutral',
+  'needs your OK': 'amber', 'needs costs': 'amber', 'wage only': 'neutral' };
+
 /** Every quote a helper sent that has taken money, with its commission state. */
-/* `rates` is the staff row: commission_pct on their own leads, shop_commission_pct
-   on the shop's, nothing on a sale still waiting for the owner's OK. */
+/* `rates` is the staff row: commission_pct of the profit on their own leads,
+   nothing on the shop's (the hourly wage covers those), nothing on a sale
+   still waiting for the owner's OK. */
 async function commissionLines(staffId, rates) {
   const { rows } = await pool.query(
-    `SELECT q.code, q.name, q.total, q.tax, q.settled_at, q.sale_type, q.sale_type_reason,
+    `SELECT q.code, q.name, q.total, q.tax, q.settled_at, q.sale_type, q.sale_type_reason, q.items,
+            (COALESCE(q.cost_blanks, 0) + COALESCE(q.cost_supplies, 0) + COALESCE(q.cost_outsourced, 0)
+             + COALESCE(q.cost_shipping, 0))::float AS cost,
             -- A helper's cash or Zelle the owner has not confirmed counts for nothing yet.
             COALESCE(SUM(p.amount - COALESCE(p.fee, 0)) FILTER (WHERE NOT p.unconfirmed), 0)::float AS collected,
             COALESCE(SUM(p.amount) FILTER (WHERE NOT p.unconfirmed), 0)::float AS gross,
@@ -24948,14 +24967,17 @@ async function commissionLines(staffId, rates) {
         AND (EXISTS (SELECT 1 FROM staff_training t WHERE t.staff_id = $1 AND t.step_key = $2
                       AND q.created_at >= t.done_at)
              OR EXISTS (SELECT 1 FROM commission_payouts c WHERE c.staff_id = $1 AND c.quote_code = q.code))
-      GROUP BY q.code, q.name, q.total, q.tax, q.settled_at, q.sale_type, q.sale_type_reason
+      GROUP BY q.id
       ORDER BY MAX(p.created_at) DESC LIMIT 500`, [staffId, TRAINING.READY_KEY]);
   return rows.map((r) => {
     const pct = CREDIT.rateFor(r.sale_type, rates || {});
-    const c = TEAM.commissionFor({ collected: r.collected, total: r.total, tax: r.tax, pct });
+    const c = TEAM.commissionFor({ collected: r.collected, total: r.total, tax: r.tax, cost: r.cost, pct });
     const paidInFull = !!r.settled_at || r.gross + 0.005 >= Number(r.total);
-    return { ...r, ...c, pct, state: TEAM.commissionState({ paidInFull, lastMoneyAt: r.last_money_at,
-      disputeOpen: r.dispute_open, alreadyPaid: r.paid_amount_c != null, needsOk: r.sale_type === 'pending' }) };
+    const { items, ...line } = r;
+    return { ...line, ...c, pct, costEstimated: costIsEstimate(items),
+      state: TEAM.commissionState({ paidInFull, lastMoneyAt: r.last_money_at,
+        disputeOpen: r.dispute_open, alreadyPaid: r.paid_amount_c != null, needsOk: r.sale_type === 'pending',
+        noCommission: r.sale_type === 'shop', needsCosts: !(r.cost > 0) }) };
   });
 }
 
@@ -24968,11 +24990,12 @@ app.get('/admin/commission', requireAdmin, async (req, res) => {
     const { pct, lines } = e;
     const payable = lines.filter((l) => l.state === 'payable' && l.amount > 0);
     const owedBonuses = e.bonuses.filter((b) => !b.paid_at);
-    const payNow = round2(e.payable + e.bonusOwed);
+    const openWeeks = e.hours.filter((h) => !h.paid_at);
+    const payNow = round2(e.payable + e.bonusOwed + e.wages.amount);
     const today = new Date().toISOString().slice(0, 10);
-    const tone = { payable: 'green', waiting: 'blue', earning: 'neutral', 'on hold': 'red', paid: 'neutral', 'needs your OK': 'amber' };
+    const tone = COMMISSION_TONE;
     res.send(adminPage('Commission', `
-      ${pageHeader(`Commission — ${s.name}`, `${pct}% on their own leads, ${e.shopPct}% on shop leads they close, of what was collected, before tax, less refunds, lost disputes and card fees. Payable ${TEAM.HOLD_DAYS} days after the job is paid in full.`)}
+      ${pageHeader(`Pay — ${s.name}`, `${money(e.wages.rate)} an hour for the hours on the Team page. On their own leads, ${pct}% of the profit as well: what was collected before tax, less refunds, lost disputes, card fees and the job's costs. Shop leads pay the wage only. Commission is payable ${TEAM.HOLD_DAYS} days after the job is paid in full, once its costs are in.`)}
       ${flash(req.query)}
       ${filterChips(roster.map((r) => ({ label: r.name, href: `/admin/commission?staff=${r.id}`, on: r.id === s.id })))}
       ${commissionStartNote(e, true)}
@@ -24981,9 +25004,12 @@ app.get('/admin/commission', requireAdmin, async (req, res) => {
         <input type="hidden" name="staff_id" value="${s.id}">
         <b>Pay ${money(payNow)} through EasyPay, then record it here.</b>
         <p class="muted">Recording it books one expense (Contract labor, vendor ${escEmail(s.name)}) and marks ${
-          [payable.length ? `${payable.length} quote${payable.length === 1 ? '' : 's'}` : '',
+          [openWeeks.length && e.wages.amount ? `${openWeeks.length} week${openWeeks.length === 1 ? '' : 's'} of hours` : '',
+           payable.length ? `${payable.length} quote${payable.length === 1 ? '' : 's'}` : '',
            owedBonuses.length ? `${owedBonuses.length} bonus${owedBonuses.length === 1 ? '' : 'es'}` : ''].filter(Boolean).join(' and ')} paid.</p>
         <button type="submit">I paid it — record ${money(payNow)}</button></form>` : ''}
+      ${e.wages.rate ? '' : `<div class="warn">No hourly rate set for ${escEmail(s.name)}. <a href="/admin/staff#staff-${s.id}">Set it on Staff</a>.</div>`}
+      <div class="card"><b>Wages</b> <span class="muted">&middot; hours from the <a href="/admin/team">Team page</a></span>${wageRows(e)}</div>
       <div class="card"><b>Bonuses</b>
         ${e.bonuses.map((b) => `<div class="row-i"><span class="row-main">${escEmail(b.reason)}
           <div class="row-sub">${escEmail(whenShort(b.created_at))}</div></span>
@@ -25014,9 +25040,10 @@ app.get('/admin/commission', requireAdmin, async (req, res) => {
           <button type="submit" class="btn">Add incentive</button>
         </form></details></div>
       <div class="card">${lines.length ? `<table class="dt" style="width:100%"><thead><tr>
-        <th>Quote</th><th>Customer</th><th>Lead</th><th>Collected</th><th>Base</th><th>Commission</th><th></th></tr></thead><tbody>
+        <th>Quote</th><th>Customer</th><th>Lead</th><th>Collected</th><th>Job costs</th><th>Profit base</th><th>Commission</th><th></th></tr></thead><tbody>
         ${lines.map((l) => `<tr><td><a href="/admin/production/${escEmail(l.code)}#credit">${escEmail(l.code)}</a></td>
-          <td>${escEmail(l.name || '')}</td><td>${saleTypePill(l.sale_type)} <span class="muted">${l.pct}%</span></td><td>${money(l.collected)}</td><td>${money(l.base)}</td>
+          <td>${escEmail(l.name || '')}</td><td>${saleTypePill(l.sale_type)} <span class="muted">${l.pct}%</span></td><td>${money(l.collected)}</td>
+          <td>${l.cost > 0 ? money(l.cost) : `<a href="/admin/production/${escEmail(l.code)}#costs">enter</a>`}${l.costEstimated ? ' <span class="muted">est.</span>' : ''}</td><td>${money(l.base)}</td>
           <td>${money(l.state === 'paid' ? l.paid_amount_c : l.amount)}</td><td>${pill(l.state, tone[l.state])}</td></tr>`).join('')}
         </tbody></table>` : emptyState('No money has come in on their quotes yet.')}</div>`, 'team'));
   } catch (err) {
@@ -25033,7 +25060,7 @@ app.post('/admin/commission/pay', requireAdmin, async (req, res) => {
     await client.query('BEGIN');
     // One payout at a time per helper, so two presses cannot book it twice.
     await client.query('SELECT pg_advisory_xact_lock($1, $2)', [7301, staffId]);
-    const { rows: [s] } = await client.query('SELECT id, name, commission_pct, shop_commission_pct FROM staff WHERE id = $1', [staffId]);
+    const { rows: [s] } = await client.query('SELECT id, name, commission_pct, shop_commission_pct, hourly_rate FROM staff WHERE id = $1', [staffId]);
     if (!s) { await client.query('ROLLBACK'); return res.redirect('/admin/commission'); }
     /* Recomputed here, never taken from the form: what is payable is what the
        ledger says now. */
@@ -25041,9 +25068,16 @@ app.post('/admin/commission/pay', requireAdmin, async (req, res) => {
       .filter((l) => l.state === 'payable' && l.amount > 0);
     const { rows: bonuses } = await client.query(
       'SELECT id, amount, reason FROM staff_bonuses WHERE staff_id = $1 AND paid_at IS NULL FOR UPDATE', [staffId]);
-    if (!lines.length && !bonuses.length) { await client.query('ROLLBACK'); return back(res, `/admin/commission?staff=${staffId}`, 'err', 'Nothing is payable.'); }
-    const total = round2(lines.reduce((a, l) => a + l.amount, 0) + bonuses.reduce((a, b) => a + Number(b.amount), 0));
-    const note = [lines.length ? `Commission: ${lines.map((l) => l.code).join(', ')}` : '',
+    // Wages at today's rate, written onto each week so a later raise never changes what was paid.
+    const rate = round2(Number(s.hourly_rate) || 0);
+    const { rows: weeks } = rate > 0 ? await client.query(
+      `SELECT id, week_of::text AS week_of, hours::float AS hours FROM staff_hours
+        WHERE staff_id = $1 AND paid_at IS NULL AND hours > 0 FOR UPDATE`, [staffId]) : { rows: [] };
+    const wages = TEAM.wagesFor(weeks, rate);
+    if (!lines.length && !bonuses.length && !(wages.amount > 0)) { await client.query('ROLLBACK'); return back(res, `/admin/commission?staff=${staffId}`, 'err', 'Nothing is payable.'); }
+    const total = round2(wages.amount + lines.reduce((a, l) => a + l.amount, 0) + bonuses.reduce((a, b) => a + Number(b.amount), 0));
+    const note = [wages.amount > 0 ? `Wages: ${wages.hours} h at ${money(rate)}/h (weeks of ${weeks.map((w) => w.week_of).join(', ')})` : '',
+                  lines.length ? `Commission: ${lines.map((l) => l.code).join(', ')}` : '',
                   bonuses.length ? `Bonuses: ${bonuses.map((b) => b.reason).join('; ')}` : ''].filter(Boolean).join(' / ');
     const { rows: [e] } = await client.query(
       `INSERT INTO expenses (spent_on, category, amount, vendor, note) VALUES (CURRENT_DATE, 'Contract labor', $1, $2, $3)
@@ -25051,6 +25085,10 @@ app.post('/admin/commission/pay', requireAdmin, async (req, res) => {
     if (bonuses.length) {
       await client.query('UPDATE staff_bonuses SET paid_at = NOW(), expense_id = $2 WHERE id = ANY($1::int[])',
         [bonuses.map((b) => b.id), e.id]);
+    }
+    if (weeks.length) {
+      await client.query('UPDATE staff_hours SET paid_at = NOW(), paid_rate = $2, expense_id = $3 WHERE id = ANY($1::int[])',
+        [weeks.map((w) => w.id), rate, e.id]);
     }
     for (const l of lines) {
       await client.query(
@@ -25288,23 +25326,27 @@ function incentiveRow(i, { awardFor } = {}) {
         <input type="hidden" name="staff_id" value="${awardFor}"><button type="submit" class="btn">Award ${money(i.reward)}</button></form>` : ''}</span></div>`;
 }
 
-/** Everything a helper has earned: commission by quote, and bonuses. */
+/** Everything a helper has earned: wages by week, commission by quote, and bonuses. */
 async function earningsFor(staff) {
   const pct = Number(staff.commission_pct || 0);
-  const shopPct = Number(staff.shop_commission_pct || 0);
-  const [lines, { rows: bonuses }, startsAt] = await Promise.all([
+  const [lines, { rows: bonuses }, startsAt, { rows: hours }] = await Promise.all([
     commissionLines(staff.id, staff),
     pool.query(`SELECT * FROM staff_bonuses WHERE staff_id = $1 ORDER BY created_at DESC LIMIT 200`, [staff.id]),
     commissionStartsAt(staff.id),
+    pool.query(`SELECT week_of::text AS week_of, business, hours::float AS hours, paid_at, paid_rate::float AS paid_rate
+                  FROM staff_hours WHERE staff_id = $1 ORDER BY week_of DESC, business LIMIT 200`, [staff.id]),
   ]);
+  const wages = TEAM.wagesFor(hours, staff.hourly_rate);
+  const wagesPaid = round2(hours.filter((h) => h.paid_at).reduce((a, h) => a + h.hours * (h.paid_rate || 0), 0));
   const sum = (st) => round2(lines.filter((l) => l.state === st)
     .reduce((a, l) => a + (st === 'paid' ? Number(l.paid_amount_c) : l.amount), 0));
   const bonusOwed = round2(bonuses.filter((b) => !b.paid_at).reduce((a, b) => a + Number(b.amount), 0));
   const bonusPaid = round2(bonuses.filter((b) => b.paid_at).reduce((a, b) => a + Number(b.amount), 0));
   const byType = (t) => round2(lines.filter((l) => l.sale_type === t && l.state !== 'paid').reduce((a, l) => a + l.amount, 0));
-  return { pct, shopPct, lines, bonuses, startsAt, payable: sum('payable'), waiting: sum('waiting'), earning: sum('earning'),
-           onHold: sum('on hold'), paid: sum('paid'), bonusOwed, bonusPaid,
-           repOpen: byType('rep'), shopOpen: byType('shop'),
+  return { pct, lines, bonuses, startsAt, payable: sum('payable'), waiting: sum('waiting'), earning: sum('earning'),
+           onHold: sum('on hold'), paid: sum('paid'), bonusOwed, bonusPaid, hours, wages, wagesPaid,
+           repOpen: byType('rep'),
+           needsCosts: lines.filter((l) => l.state === 'needs costs').length,
            needsOk: lines.filter((l) => l.state === 'needs your OK').length };
 }
 
@@ -25320,16 +25362,31 @@ function commissionStartNote(e, forOwner) {
 }
 
 function earningsTiles(e) {
+  const owed = round2(e.payable + e.bonusOwed + e.wages.amount);
   return statTiles([
-    { label: 'Payable now', value: money(e.payable + e.bonusOwed), tone: 'green',
-      sub: e.bonusOwed ? `includes ${money(e.bonusOwed)} in bonuses` : 'commission ready to pay' },
+    { label: 'Payable now', value: money(owed), tone: 'green',
+      sub: [e.wages.amount ? `${money(e.wages.amount)} wages` : '', e.payable ? `${money(e.payable)} commission` : '',
+            e.bonusOwed ? `${money(e.bonusOwed)} bonuses` : ''].filter(Boolean).join(' + ') || 'nothing owed' },
+    { label: 'Wages (unpaid)', value: money(e.wages.amount), tone: 'navy',
+      sub: e.wages.rate ? `${e.wages.hours} h at ${money(e.wages.rate)}/h` : 'no hourly rate set' },
     { label: 'Waiting out the 14 days', value: money(e.waiting), tone: 'blue', sub: 'paid in full, settling' },
     { label: 'Still being paid', value: money(e.earning), tone: 'gray', sub: 'customer has a balance' },
-    { label: 'Paid to you', value: money(e.paid + e.bonusPaid), tone: 'navy', sub: 'commission and bonuses' },
-    { label: 'Own leads (unpaid)', value: money(e.repOpen || 0), tone: 'green', sub: `at ${e.pct}%` },
-    { label: 'Shop leads (unpaid)', value: money(e.shopOpen || 0), tone: 'gray', sub: `at ${e.shopPct || 0}%` },
+    { label: 'Paid to you', value: money(e.paid + e.bonusPaid + e.wagesPaid), tone: 'navy', sub: 'wages, commission and bonuses' },
+    { label: 'Own leads (unpaid)', value: money(e.repOpen || 0), tone: 'green', sub: `${e.pct}% of profit` },
+    ...(e.needsCosts ? [{ label: 'Waiting for job costs', value: String(e.needsCosts), tone: 'amber', sub: 'profit unknown until costs are in' }] : []),
     ...(e.needsOk ? [{ label: 'Waiting for the owner', value: String(e.needsOk), tone: 'amber', sub: 'customer named a salesperson' }] : []),
   ]);
+}
+
+/** A helper's weeks of hours and what each one pays. */
+function wageRows(e) {
+  if (!e.hours.length) return '<p class="muted">No hours entered yet. Hours go in on the Team page, from TimeProof.</p>';
+  return `<div class="rows">${e.hours.map((h) => {
+    const rate = h.paid_at ? h.paid_rate : e.wages.rate;
+    return `<div class="row-i"><span class="row-main">Week of ${escEmail(h.week_of)}
+      <div class="row-sub">${escEmail(BUSINESSES[h.business] || h.business)} &middot; ${h.hours} h at ${money(rate || 0)}/h</div></span>
+      <span class="row-end"><b>${money(round2(h.hours * (rate || 0)))}</b> ${pill(h.paid_at ? 'paid' : 'owed', h.paid_at ? 'neutral' : 'green')}</span></div>`;
+  }).join('')}</div>`;
 }
 
 /* A helper's own earnings, in full. Only ever their own: there is no id in
@@ -25338,21 +25395,22 @@ app.get('/admin/my-earnings', requireAdmin, async (req, res) => {
   const actor = currentActor() || OWNER_ACTOR;
   if (actor.kind !== 'staff') return res.redirect('/admin/commission');
   try {
-    const { rows: [me] } = await pool.query('SELECT id, name, commission_pct, shop_commission_pct FROM staff WHERE id = $1', [actor.id]);
+    const { rows: [me] } = await pool.query('SELECT id, name, commission_pct, shop_commission_pct, hourly_rate FROM staff WHERE id = $1', [actor.id]);
     const [e, incentives] = await Promise.all([earningsFor(me), incentivesFor(me.id)]);
-    const tone = { payable: 'green', waiting: 'blue', earning: 'neutral', 'on hold': 'red', paid: 'neutral', 'needs your OK': 'amber' };
+    const tone = COMMISSION_TONE;
     res.send(adminPage('My earnings', `
-      ${pageHeader('My earnings', `${e.pct}% on customers you found and registered as your leads (and their reorders for 12 months); ${e.shopPct}% on shop leads you close. On money collected, before tax, less refunds and card fees, payable ${TEAM.HOLD_DAYS} days after the customer has paid in full.`)}
+      ${pageHeader('My earnings', `${money(e.wages.rate)} an hour for every hour worked. On customers you found and registered as your leads (and their reorders for 12 months), ${e.pct}% of the profit as well: money collected before tax, less refunds, card fees and the job's costs, payable ${TEAM.HOLD_DAYS} days after the customer has paid in full. Shop leads you close are covered by your hourly wage.`)}
       <div class="card"><b>How a sale becomes yours.</b> <span class="muted">Add the customer on Leads with "I found this customer" before you quote them. If the shop has already heard from them, it stays a shop lead. A customer who says you sent them waits for the owner's OK.</span></div>
       ${commissionStartNote(e, false)}
       ${earningsTiles(e)}
+      <div class="card"><b>Wages</b>${wageRows(e)}</div>
       ${incentives.length ? `<div class="card"><b>Incentives</b>${incentives.map((i) => incentiveRow(i)).join('')}</div>` : ''}
       ${e.bonuses.length ? `<div class="card"><b>Bonuses</b>${e.bonuses.map((b) => `<div class="row-i"><span class="row-main">${escEmail(b.reason)}
         <div class="row-sub">${escEmail(whenShort(b.created_at))}</div></span><span class="row-end"><b>${money(b.amount)}</b> ${
         pill(b.paid_at ? 'paid' : 'owed', b.paid_at ? 'neutral' : 'green')}</span></div>`).join('')}</div>` : ''}
       <div class="card"><b>Commission by sale</b>${e.lines.length ? `<div class="rows">${e.lines.map((l) => `<div class="row-i">
         <span class="row-main"><a href="/admin/production/${escEmail(l.code)}"><b>${escEmail(l.code)}</b></a> ${escEmail(l.name || '')}
-          <div class="row-sub">${saleTypePill(l.sale_type)} ${l.pct}% &middot; collected ${money(l.collected)} &middot; commission on ${money(l.base)}</div></span>
+          <div class="row-sub">${saleTypePill(l.sale_type)} ${l.pct}% &middot; collected ${money(l.collected)} &middot; job costs ${l.cost > 0 ? money(l.cost) : 'not in yet'} &middot; commission on ${money(l.base)}</div></span>
         <span class="row-end"><b>${money(l.state === 'paid' ? l.paid_amount_c : l.amount)}</b> ${pill(l.state, tone[l.state])}</span></div>`).join('')}</div>`
         : `<p class="muted">Nothing yet. When a customer pays on a quote credited to you after training, it shows here.</p>`}</div>`, 'earnings'));
   } catch (err) {
@@ -26007,7 +26065,7 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
     /* A helper's own earnings, so they can follow what their sales are worth.
        A failure costs this panel, not the page. */
     const earn = me ? await (async () => {
-      const { rows: [st] } = await pool.query('SELECT id, name, commission_pct, shop_commission_pct FROM staff WHERE id = $1', [me]);
+      const { rows: [st] } = await pool.query('SELECT id, name, commission_pct, shop_commission_pct, hourly_rate FROM staff WHERE id = $1', [me]);
       const [e, incentives] = await Promise.all([earningsFor(st), incentivesFor(me)]);
       return { e, incentives };
     })().catch((err) => { console.error('my day earnings failed:', err.message); return null; }) : null;

@@ -70,33 +70,50 @@ function median(values) {
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
-/* Commission on one quote.
+/* Commission on one quote, on the profit (owner, 2026-10-06: "Commission is
+   only available on profit").
      collected   every ledger row on the quote, summed: payments less refunds,
                  lost disputes and corrections, with card fees taken out
      total, tax  the quote's, so tax the shop only holds for the state is not
                  paid out as commission
+     cost        the job's costs (blanks, supplies, outsourced, shipping)
+   The base is what was collected before tax, less the job's costs.
    Payable once the job is paid in full (or settled) and 14 days have passed
    since the last money moved, so a quick refund cannot claw back a payout,
-   and never while a dispute is open. */
+   never while a dispute is open, and never before the job has costs: with
+   none entered, profit would read as the whole sale. */
 const HOLD_DAYS = 14;
 
-function commissionFor({ collected, total, tax, pct }) {
+function commissionFor({ collected, total, tax, cost = 0, pct }) {
   const t = Number(total) || 0;
   const netCollected = Math.max(0, Number(collected) || 0);
   if (t <= 0 || !(pct > 0)) return { base: 0, amount: 0 };
   const preTaxShare = Math.max(0, Math.min(1, (t - (Number(tax) || 0)) / t));
-  const base = round2(netCollected * preTaxShare);
+  const base = round2(Math.max(0, netCollected * preTaxShare - Math.max(0, Number(cost) || 0)));
   return { base, amount: round2(base * pct / 100) };
 }
 
-function commissionState({ paidInFull, lastMoneyAt, disputeOpen, alreadyPaid, needsOk = false, now = Date.now() }) {
+function commissionState({ paidInFull, lastMoneyAt, disputeOpen, alreadyPaid, needsOk = false,
+                           noCommission = false, needsCosts = false, now = Date.now() }) {
   if (alreadyPaid) return 'paid';
   // A customer said a salesperson sent them; nothing is owed until the owner agrees (tools/lib/sales-credit.js).
   if (needsOk) return 'needs your OK';
+  // A shop lead: the hourly wage covers it.
+  if (noCommission) return 'wage only';
   if (disputeOpen) return 'on hold';
   if (!paidInFull) return 'earning';
+  if (needsCosts) return 'needs costs';
   const last = new Date(lastMoneyAt || 0).getTime();
   return now - last >= HOLD_DAYS * 86400000 ? 'payable' : 'waiting';
+}
+
+/** Wages owed for a helper's unpaid weeks. `rows` are staff_hours rows
+ *  ({ hours, paid_at }); `rate` is their hourly wage. */
+function wagesFor(rows, rate) {
+  const r = Math.max(0, Number(rate) || 0);
+  const open = (rows || []).filter((h) => !h.paid_at);
+  const hours = Math.round(open.reduce((s, h) => s + (Number(h.hours) || 0), 0) * 100) / 100;
+  return { hours, rate: r, amount: round2(hours * r) };
 }
 
 /** Monday of the week containing `date`, as YYYY-MM-DD in the shop's zone. */
@@ -119,6 +136,6 @@ function localMidnight(ymd, tz = DEFAULT_HOURS.tz, addDays = 0) {
 }
 
 module.exports = {
-  DEFAULT_HOURS, HOLD_DAYS, businessMinutesBetween, median, commissionFor, commissionState, weekOf, zoned,
+  DEFAULT_HOURS, HOLD_DAYS, businessMinutesBetween, median, commissionFor, commissionState, wagesFor, weekOf, zoned,
   localMidnight,
 };
