@@ -248,7 +248,7 @@ function messageRoute(o = {}) {
     smsConfigured: () => opts.smsOn,
     sendCustomerSms: async (m) => { if (!opts.consent) return 'no-consent'; sent.push(m); return 'sent'; },
     sendClientEmail: async (m) => { sent.push(m); }, customerEmailHtml: () => '', escEmail: (t) => t,
-    SHOP_EMAIL: 'shop@example.com', smsPlain: (t) => t, reportError: async () => {},
+    SHOP_EMAIL: 'shop@example.com', smsPlain: (t) => t, smsShort: require('../tools/lib/sms-templates').short, reportError: async () => {},
     quoteLink: (c) => 'https://www.jtees.net/q/' + c,
     console: { log() {}, error() {} },
     currentActor: () => null, actorLevel: () => 'on', markProofsSent: async () => {},
@@ -297,7 +297,7 @@ test('a refused text does not hold the message back once it can go', async () =>
 test('a text keeps the shape every customer text has', () => {
   const r = msgRoute();
   assert.match(r, /body: `June's Tees: \$\{smsPlain\(text, 260\)\}\$\{/);
-  assert.match(r, /' ' \+ quoteLink\(code\)\} Reply STOP to opt out\.`/, 'their order page goes on every text');
+  assert.match(r, /' ' \+ smsShort\(quoteLink\(code\)\)\} Reply STOP to opt out\.`/, 'their order page goes on every text, short and branded');
   assert.match(r, /kind: 'transactional'/);
   const { plain } = require('../tools/lib/sms-templates');
   const body = `June's Tees: ${plain('x'.repeat(300), 260)} https://www.jtees.net/q/ABCDEFGHIJ Reply STOP to opt out.`;

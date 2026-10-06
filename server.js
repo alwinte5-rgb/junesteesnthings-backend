@@ -33,7 +33,7 @@ const SITEHEALTH = require('./tools/lib/site-health');
 const NUDGE = require('./tools/lib/lead-nudges');
 const REINTRO = require('./tools/lib/reintro');
 const FUNNEL = require('./tools/lib/funnel-health');
-const { T: SMS, plain: smsPlain, PICKUP: SMS_PICKUP, PICKUP_ADDRESS, PICKUP_HOURS, PICKUP_STEPS } = require('./tools/lib/sms-templates');
+const { T: SMS, plain: smsPlain, short: smsShort, PICKUP: SMS_PICKUP, PICKUP_ADDRESS, PICKUP_HOURS, PICKUP_STEPS } = require('./tools/lib/sms-templates');
 
 /** Where and how to pick up, for an email: the address, the hours and the
  *  steps (intercom, 4th floor). One copy, so every pickup email agrees. */
@@ -4590,36 +4590,92 @@ function signupAllowed(now = Date.now()) {
   return true;
 }
 
+/* The sign-up page, in the shop's own dress (owner, 2026-10-05: "brand it
+   with June's Tees"): the homepage's navy, pink and Inter, the logo, and the
+   garments the email shows. Works without script; phone-first. */
+const TEXTS_CSS = `
+body{margin:0;background:#f7f6f3;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#374151}
+.tx-top{background:#fff;border-bottom:4px solid #F0275A;text-align:center;padding:14px 16px}
+.tx-top img{height:44px;width:auto}
+.tx-hero{background:#0B1F4B;color:#fff;text-align:center;padding:28px 16px 70px}
+.tx-hero h1{color:#fff;font-size:34px;line-height:1.15;margin:0 0 8px;font-weight:800;letter-spacing:-.5px}
+.tx-hero h1 span{color:#F0275A}
+.tx-hero p{margin:0 auto;max-width:440px;font-size:16px;line-height:1.5;color:#dbe2f1}
+.tx-wrap{max-width:480px;margin:-52px auto 0;padding:0 16px 28px}
+.tx-card{background:#fff;border-radius:16px;box-shadow:0 10px 30px rgba(11,31,75,.12);padding:22px 20px}
+.tx-card label{display:block;font-size:13px;font-weight:700;color:#0B1F4B;margin:12px 0 4px;text-transform:none;letter-spacing:0}
+.tx-card input[type=text],.tx-card input[type=email],.tx-card input[type=tel],.tx-card input:not([type]){width:100%;box-sizing:border-box;
+  padding:13px 14px;font-size:16px;border:1.5px solid #E5E7EB;border-radius:10px;font-family:inherit;background:#fff}
+.tx-card input:focus{outline:none;border-color:#F0275A;box-shadow:0 0 0 3px rgba(240,39,90,.15)}
+.tx-btn{display:block;width:100%;border:0;border-radius:100px;background:#F0275A;color:#fff;font-weight:800;font-size:17px;
+  padding:15px;margin-top:16px;cursor:pointer;font-family:inherit;text-align:center;text-decoration:none}
+.tx-btn:hover{background:#C41E47}
+.tx-err{background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;border-radius:10px;padding:10px 12px;font-size:14px;margin-bottom:6px}
+.tx-code{font-size:30px;font-weight:800;letter-spacing:3px;color:#0B1F4B;background:#fff8ed;border:2px dashed #F0275A;
+  border-radius:12px;padding:14px;margin:12px 0;font-family:ui-monospace,Menlo,monospace}
+.tx-garments{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:18px 0 4px}
+.tx-garments a{text-decoration:none;color:#0B1F4B;font-size:12.5px;font-weight:700;text-align:center}
+.tx-garments img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px;background:#fff;display:block;margin-bottom:4px}
+.tx-perks{list-style:none;padding:0;margin:14px 0 0;font-size:14px;line-height:1.5}
+.tx-perks li{padding:4px 0 4px 26px;position:relative}.tx-perks li:before{content:"\\2713";position:absolute;left:4px;color:#F0275A;font-weight:800}
+.tx-small{font-size:12px;color:#6B7280;line-height:1.5}
+.tx-foot{text-align:center;font-size:12.5px;color:#6B7280;padding:8px 16px 24px;line-height:1.6}
+.tx-foot a{color:#0B1F4B}
+.sms-consent label{font-weight:400!important;color:#374151!important;font-size:12.5px!important}
+@media(max-width:420px){.tx-hero h1{font-size:28px}}`;
+
 function textsPage({ email = '', first = '', phone = '', error = '', code = '', done = false, again = false, src = 'site' } = {}) {
   const v = (x) => escEmail(String(x || '').slice(0, 254));
-  const body = done ? `
-    <div class="card" style="max-width:520px;margin:30px auto;text-align:center">
-      <h1 style="color:#1848B8">${again ? "You're already on the list!" : "You're in, thank you!"}</h1>
-      ${code ? `<p>Here's your ${REINTRO.PCT}% off code:</p>
-        <p style="font-size:28px;font-weight:800;letter-spacing:2px;font-family:ui-monospace,Menlo,monospace">${escEmail(code)}</p>
-        <p>We've texted it to you too. Use it at checkout on
-          <a href="https://design.jtees.net">design.jtees.net</a>, or mention it when you get a quote.
-          It's good for ${REINTRO.CODE_DAYS} days.</p>`
+  const D = 'https://design.jtees.net';
+  const garments = [['ssa-33929_f_fm', 'T-shirts', 52], ['ssa-107784_f_fm', 'Hoodies', 53], ['ssa-18365_f_fm', 'Tanks', 54],
+    ['ssa-113683_f_fm', 'Kids', 55], ['ssa-36262_f_fm', 'Baby', 56], ['ssa-97052_f_fm', 'Hats', 57]]
+    .map(([img, label, cat]) => `<a href="${D}/products.php?category_id=${cat}"><img src="/assets/images/shop/${img}.jpg"
+      alt="Custom ${label}" loading="lazy">${label}</a>`).join('');
+  const top = `<div class="tx-top"><a href="/"><img src="/assets/images/brand/logo.png" alt="June's Tees &amp; Things"></a></div>`;
+  const foot = `<div class="tx-foot">June's Tees &amp; Things &middot; 3047 N Lincoln Ave, Chicago &middot; (773) 849-1854<br>
+    <a href="/">jtees.net</a> &middot; <a href="${D}">Design Lab</a> &middot; <a href="/sms-terms">SMS terms</a> &middot;
+    <a href="${D}/privacy.php">Privacy</a></div>`;
+  const body = done ? `${top}
+    <div class="tx-hero"><h1>${again ? "You're already <span>on the list!</span>" : "You're in. <span>Thank you!</span>"}</h1>
+      <p>${code ? "Here's your code. We've texted it to you too." : "Your code is on its way."}</p></div>
+    <div class="tx-wrap"><div class="tx-card" style="text-align:center">
+      ${code ? `<div style="font-weight:700;color:#0B1F4B">Your ${REINTRO.PCT}% off code</div>
+        <div class="tx-code">${escEmail(code)}</div>
+        <p class="tx-small">Use it at checkout in the Design Lab, or mention it when you get a quote.
+          Good once, for ${REINTRO.CODE_DAYS} days.</p>`
       : `<p>June will send your ${REINTRO.PCT}% off code to you shortly.</p>`}
-      <p><a class="btn" href="https://www.jtees.net">Visit June's Tees</a></p>
-    </div>` : `
-    <div class="card" style="max-width:520px;margin:30px auto">
-      <h1 style="color:#1848B8;margin-bottom:4px">Get ${REINTRO.PCT}% off</h1>
-      <p>Sign up for texts from June's Tees and your ${REINTRO.PCT}% off code is yours right away. That's where we share
-        new products, seasonal deals and first dibs on specials.</p>
-      ${error ? `<div class="warn">${escEmail(error)}</div>` : ''}
+      <a class="tx-btn" href="${D}">Start designing</a>
+      <div class="tx-garments">${garments}</div>
+    </div></div>${foot}` : `${top}
+    <div class="tx-hero"><h1>Get <span>${REINTRO.PCT}% off</span><br>your next order</h1>
+      <p>Join June's Tees texts for new products, seasonal deals and first dibs on specials. Your code is yours right away.</p></div>
+    <div class="tx-wrap"><div class="tx-card">
+      ${error ? `<div class="tx-err">${escEmail(error)}</div>` : ''}
       <form method="POST" action="${REINTRO.SIGNUP_PATH}">
         <input type="hidden" name="src" value="${escEmail(REINTRO.cleanSource(src))}">
-        <label>First name <input name="first" maxlength="40" autocomplete="given-name" value="${v(first)}"></label>
-        <label>Email <input name="email" type="email" required maxlength="254" autocomplete="email" value="${v(email)}"></label>
-        <label>Mobile number <input name="phone" type="tel" required maxlength="20" autocomplete="tel" inputmode="tel"
-          placeholder="(773) 555-0123" value="${v(phone)}"></label>
-        ${consentCheckboxesHtml()}
-        <p style="font-size:12.5px;color:#6b7280">The code comes with the second box, our deals texts.</p>
-        <button type="submit" class="btn" style="width:100%">Get my ${REINTRO.PCT}% off</button>
+        <label for="tx-phone">Mobile number</label>
+        <input id="tx-phone" name="phone" type="tel" required maxlength="20" autocomplete="tel" inputmode="tel"
+          placeholder="(773) 555-0123" value="${v(phone)}" autofocus>
+        <label for="tx-email">Email</label>
+        <input id="tx-email" name="email" type="email" required maxlength="254" autocomplete="email" value="${v(email)}">
+        <label for="tx-first">First name <span style="font-weight:400;color:#6B7280">(optional)</span></label>
+        <input id="tx-first" name="first" maxlength="40" autocomplete="given-name" value="${v(first)}">
+        <div style="margin-top:12px">${consentCheckboxesHtml()}</div>
+        <p class="tx-small" style="margin:6px 0 0">Your code comes with the second box, our deals texts.</p>
+        <button type="submit" class="tx-btn">Get my ${REINTRO.PCT}% off</button>
       </form>
-    </div>`;
-  return quotePage(`Get ${REINTRO.PCT}% off — June's Tees`, body);
+      <ul class="tx-perks"><li>Design your own online: 45+ garments, live pricing, no minimums</li>
+        <li>Printed by June's Tees in Chicago</li><li>Up to 4 texts a month. Reply STOP any time.</li></ul>
+      <div class="tx-garments">${garments}</div>
+    </div></div>${foot}`;
+  /* Its own document, not htmlDocument: the quote page's styles size and
+     colour headings and inputs for a different layout, and leaked through. */
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Get ${REINTRO.PCT}% off - June's Tees</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap">
+<style>*,*:before,*:after{box-sizing:border-box}${TEXTS_CSS}</style></head><body>${body}</body></html>`;
 }
 
 app.get(REINTRO.SIGNUP_PATH, (req, res) => {
@@ -4791,6 +4847,9 @@ app.get('/admin/campaign', requireAdmin, async (req, res) => {
     res.send(adminPage('Campaign', `
       <h1>Reintroduction campaign</h1>
       <div class="sub">Say hello to everyone, the safe way. <a href="/admin/discounts" style="color:#1848B8">Discounts</a></div>
+      <form method="POST" action="/admin/campaign/test" style="margin:10px 0 0" onsubmit="this.querySelector('button').disabled=true">
+        <button type="submit" class="btn btn-ghost">Send me a test (the email to my inbox, the text to the shop phone)</button>
+        <a href="${REINTRO.SIGNUP_PATH}" target="_blank" style="color:#1848B8;margin-left:10px">See the sign-up page</a></form>
       ${msg ? `<div class="ok">${escEmail(msg)}</div>` : ''}${err ? `<div class="warn">${escEmail(err)}</div>` : ''}
       <div class="card" style="margin-top:12px">
         <h2 class="card-title">1. The hello text</h2>
@@ -4870,6 +4929,25 @@ app.get('/admin/campaign/sign', requireAdmin, (req, res) => {
       Terms: jtees.net/sms-terms &middot; One code per person, good for ${REINTRO.CODE_DAYS} days.</p>
     <p class="np"><button onclick="window.print()" style="font-size:16px;padding:10px 22px">Print</button></p>
   </div></body></html>`);
+});
+
+/* "Show me the email live": the hello email to the owner's own inbox, and
+   the hello text to the shop's phone (TWILIO_TO_NUMBER), marked TEST. Goes
+   to nobody else, and does not count as the campaign starting. */
+app.post('/admin/campaign/test', requireAdmin, async (req, res) => {
+  if (!isOwner()) return res.redirect('/admin/dashboard');
+  const to = String(process.env.OWNER_EMAILS || '').split(',').map((e) => e.trim()).find(isValidEmail) || NOTIFY_EMAIL;
+  const said = [];
+  try {
+    const m = REINTRO.helloEmail({ first: 'June', email: to });
+    await sendEmail({ to, subject: '[TEST] ' + m.subject, html: m.html, marketing: true, promo: false });
+    said.push(`the email went to ${to}`);
+  } catch (e) { said.push(`the email could not be sent (${e.message})`); }
+  try {
+    const sent = await sendOwnerSms('[TEST] ' + REINTRO.helloText({ first: 'June' }).body);
+    said.push(sent ? 'the text went to the shop phone' : 'the text was skipped: TWILIO_TO_NUMBER is not set');
+  } catch (e) { said.push(`the text could not be sent (${e.message})`); }
+  res.redirect('/admin/campaign?msg=' + encodeURIComponent('Test sent: ' + said.join('; ') + '.'));
 });
 
 app.post('/admin/campaign/text', requireAdmin, async (req, res) => {
@@ -18502,7 +18580,7 @@ async function sendJobMessage({ code, channel, subject, text }) {
       /* Every text carries a link to the website (2026-10-05): their order
          page, unless the message already has a link in it. */
       msg: { template: 'manual', body: `June's Tees: ${smsPlain(text, 260)}${
-        /https?:\/\//i.test(text) ? '' : ' ' + quoteLink(code)} Reply STOP to opt out.` } });
+        /https?:\/\/|jtees\.net/i.test(text) ? '' : ' ' + smsShort(quoteLink(code))} Reply STOP to opt out.` } });
     if (status === 'sent') { console.log(`message to ${code} by text`); return 'sent'; }
     recentJobMessages.delete(key);
     return { duplicate: 'duplicate', 'no-consent': 'no-consent', unconfigured: 'texting-off',

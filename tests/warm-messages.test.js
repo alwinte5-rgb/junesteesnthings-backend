@@ -39,7 +39,8 @@ test('every order text is warm, links to the website, and fits two segments', ()
     const m = build({ ...worst, restoreUrl: 'https://design.jtees.net/r/abc' });
     assert.ok(isGsm7(m.body), `${name} is not GSM-7: ${m.body}`);
     assert.ok(m.body.length <= 306, `${name} is ${m.body.length} chars`);
-    assert.match(m.body, /https:\/\/(www|design)\.jtees\.net/, `${name} has no website link`);
+    assert.match(m.body, /(^|\s)(design\.)?jtees\.net(\/|\s)/, `${name} has no website link`);
+    assert.doesNotMatch(m.body, /https?:\/\/|www\./, `${name} has a long link; links read as jtees.net/...`);
     assert.match(m.body, /Reply STOP to opt out\.$/, `${name} has no opt-out`);
   }
 });
@@ -50,7 +51,7 @@ test('order texts greet by first name and link to the order itself', () => {
     const body = T[name](worst).body;
     assert.match(body, /Christopher/, `${name} does not use their name`);
     assert.doesNotMatch(body, /Alexander/, `${name} uses their whole name`);
-    assert.match(body, /https:\/\/www\.jtees\.net\/q\/ABCDEFGHIJ/, `${name} does not link to the order`);
+    assert.match(body, / jtees\.net\/q\/ABCDEFGHIJ /, `${name} does not link to the order`);
   }
   assert.match(T.inProduction({ code: 'AB' }).body, /^June's Tees: Good news! /, 'no name, no dangling comma');
 });

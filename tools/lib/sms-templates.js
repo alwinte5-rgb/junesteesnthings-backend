@@ -49,7 +49,11 @@ function money(n) {
    run to three, because the way in (intercom, 4th floor) is the point. */
 const SITE = 'https://www.jtees.net';
 const hi = (first) => { const f = plain(first, 20).split(' ')[0]; return f ? f : ''; };
-const lnk = (link) => plain(link || SITE, 90);
+/* Links as the customer reads them (owner, 2026-10-05: "make it look better
+   and brand it"): jtees.net/q/ABC123, not https://www.jtees.net/q/ABC123.
+   Phones turn a bare domain into a link, and jtees.net forwards to www. */
+const short = (u) => plain(String(u || SITE).trim().replace(/^https?:\/\//i, '').replace(/^www\./i, ''), 90);
+const lnk = (link) => short(link);
 
 const T = {
   // Quote orders (the admin board)
@@ -106,43 +110,43 @@ const T = {
   cartCode: ({ code, pct, restoreUrl }) => ({
     template: 'cart-code',
     body: `${BRAND}: So glad you stopped by! Your ${Number(pct) || 10}% off first-order code is ${plain(code, 20)}.` +
-      (restoreUrl ? ` Pick up where you left off: ${plain(restoreUrl, 120)}` : ' Design yours at https://design.jtees.net') +
+      (restoreUrl ? ` Pick up where you left off: ${short(restoreUrl)}` : ' Design yours at design.jtees.net') +
       ` ${STOP}`,
   }),
 
   // The one follow-up, 3+ days after a popup capture with a saved cart.
   cartFollowup: ({ code, pct, restoreUrl }) => ({
     template: 'cart-followup',
-    body: `${BRAND}: Still thinking it over? Your design is saved: ${plain(restoreUrl, 120)}` +
+    body: `${BRAND}: Still thinking it over? Your design is saved: ${short(restoreUrl)}` +
       ` Code ${plain(code, 20)} still takes ${Number(pct) || 10}% off your first order. ${STOP}`,
   }),
 
   // Design-studio orders (design.jtees.net)
   studioOrderPlaced: ({ orderId }) => ({
     template: 'studio-order-placed',
-    body: `${BRAND}: Thank you! Order #${plain(orderId, 10)} is in and we can't wait to make it. We'll text you when it ships or is ready. ${SITE} ${STOP}`,
+    body: `${BRAND}: Thank you! Order #${plain(orderId, 10)} is in and we can't wait to make it. We'll text you when it ships or is ready. ${short(SITE)} ${STOP}`,
   }),
   // A studio order the customer chose to collect (checkout's pickup option).
   studioOrderReady: ({ orderId }) => ({
     template: 'studio-ready',
-    body: `${BRAND}: Your order #${plain(orderId, 10)} is ready! Pickup: ${PICKUP}. ${PICKUP_SMS} ${SITE} ${STOP}`,
+    body: `${BRAND}: Your order #${plain(orderId, 10)} is ready! Pickup: ${PICKUP}. ${PICKUP_SMS} ${short(SITE)} ${STOP}`,
   }),
   // Local delivery (the delivery board). The caller's ref is per change, so a
   // second move is texted as well as the first. Two segments with the link:
   // it is the customer's only way to pick another time without calling.
   deliveryMoved: ({ ref, when, link }) => ({
     template: 'delivery-moved',
-    body: `${BRAND}: Heads up, your delivery for order ${plain(ref, 12)} is now ${plain(when, 40)}. Need a different time? ${plain(link, 90)} ${STOP}`,
+    body: `${BRAND}: Heads up, your delivery for order ${plain(ref, 12)} is now ${plain(when, 40)}. Need a different time? ${short(link)} ${STOP}`,
   }),
   deliveryOut: ({ ref, window }) => ({
     template: 'delivery-out',
-    body: `${BRAND}: Your order ${plain(ref, 12)} is out for delivery today, ${plain(window, 20)}! Questions? Text (773) 849-1854. ${SITE} ${STOP}`,
+    body: `${BRAND}: Your order ${plain(ref, 12)} is out for delivery today, ${plain(window, 20)}! Questions? Text (773) 849-1854. ${short(SITE)} ${STOP}`,
   }),
   studioOrderShipped: ({ orderId, tracking }) => {
     const t = plain(tracking, 40);
     return {
       template: t ? 'studio-shipped:' + t : 'studio-shipped',
-      body: `${BRAND}: Your order #${plain(orderId, 10)} is on its way!` + (t ? ` Tracking: ${t}.` : '') + ` ${SITE} ${STOP}`,
+      body: `${BRAND}: Your order #${plain(orderId, 10)} is on its way!` + (t ? ` Tracking: ${t}.` : '') + ` ${short(SITE)} ${STOP}`,
     };
   },
 };
@@ -153,4 +157,4 @@ function isGsm7(s) {
   return /^[\x20-\x7E\n]*$/.test(s) && !/[\[\]{}\\^~|`]/.test(s);
 }
 
-module.exports = { T, plain, isGsm7, SITE, PICKUP, PICKUP_ADDRESS, PICKUP_HOURS, PICKUP_STEPS };
+module.exports = { T, plain, short, isGsm7, SITE, PICKUP, PICKUP_ADDRESS, PICKUP_HOURS, PICKUP_STEPS };

@@ -144,7 +144,7 @@ test('jumping straight to ship sends only the furthest milestone', async () => {
   await f(base, { ...base, production_at: new Date(), shipped_at: new Date(), ship_method: 'ground', tracking: '1Z9' });
   assert.equal(sent.length, 1);
   assert.match(sent[0].msg.body, /is on its way! Tracking: 1Z9\./);
-  assert.match(sent[0].msg.body, /https:\/\/www\.jtees\.net\/q\/ABC123/, 'their order page');
+  assert.match(sent[0].msg.body, / jtees\.net\/q\/ABC123 /, 'their order page, as a short branded link');
   assert.equal(emails.length, 1);
   assert.match(emails[0].subject, /has shipped/);
   assert.match(emails[0].html, /Tracking: <b>1Z9<\/b>/);

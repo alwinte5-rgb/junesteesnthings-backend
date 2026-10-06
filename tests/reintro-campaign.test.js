@@ -49,7 +49,7 @@ test('the hello text is warm, links to the site, carries the opt-out and fits tw
     assert.ok(isGsm7(body), body);
     assert.ok(body.length <= 306, `${body.length}: ${body}`);
     assert.match(body, /^June's Tees: Hi/);
-    assert.match(body, /https:\/\/design\.jtees\.net/);
+    assert.match(body, / design\.jtees\.net /);
     assert.match(body, /design your own/);
     assert.match(body, /45\+ garments/);
     assert.match(body, /Reply STOP to opt out\.$/);
@@ -195,4 +195,19 @@ test('the emails that must stay plain opt out', () => {
   assert.match(src, /to: partner\.email, promo: false/);
   assert.match(src, /Your \$\{REINTRO\.PCT\}% off code: \$\{code\}`, promo: false/);
   assert.match(src, /html: m\.html, marketing: true, promo: false/, 'the hello email has its own, bigger offer');
+});
+
+test('the test send is the owner\'s and reaches only the owner', () => {
+  const at = src.indexOf("app.post('/admin/campaign/test', requireAdmin");
+  assert.ok(at > 0);
+  const r = src.slice(at, src.indexOf('app.post(', at + 10));
+  assert.match(r, /if \(!isOwner\(\)\) return res\.redirect/);
+  assert.match(r, /OWNER_EMAILS/);
+  assert.match(r, /sendOwnerSms\('\[TEST\] '/, 'the text goes to the shop phone only');
+  assert.doesNotMatch(r, /campaign_runs/, 'a test does not start the campaign');
+});
+
+test('the sign-up page wears the brand', () => {
+  const p = src.slice(src.indexOf('const TEXTS_CSS'), src.indexOf('app.get(REINTRO.SIGNUP_PATH'));
+  for (const re of [/#0B1F4B/, /#F0275A/, /Inter/, /\/assets\/images\/brand\/logo\.png/, /products\.php\?category_id=/]) assert.match(p, re);
 });
