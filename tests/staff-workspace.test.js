@@ -324,7 +324,7 @@ test('old staff addresses forward into /admin, and only within the site', () => 
 
 test('helpers are added without a password, and an owner email cannot be a helper', () => {
   const r = route("app.post('/admin/staff', requireAdmin");
-  assert.match(r, /VALUES \(\$1, \$2, '!', \$3, \$4, \$5\)/);
+  assert.match(r, /VALUES \(\$1, \$2, '!', \$3, \$4, \$5, \$6\)/);
   assert.match(r, /cfAccess\.owners\.includes\(email\)/);
   assert.ok(!r.includes('generatePassword'));
 });

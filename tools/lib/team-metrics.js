@@ -89,8 +89,10 @@ function commissionFor({ collected, total, tax, pct }) {
   return { base, amount: round2(base * pct / 100) };
 }
 
-function commissionState({ paidInFull, lastMoneyAt, disputeOpen, alreadyPaid, now = Date.now() }) {
+function commissionState({ paidInFull, lastMoneyAt, disputeOpen, alreadyPaid, needsOk = false, now = Date.now() }) {
   if (alreadyPaid) return 'paid';
+  // A customer said a salesperson sent them; nothing is owed until the owner agrees (tools/lib/sales-credit.js).
+  if (needsOk) return 'needs your OK';
   if (disputeOpen) return 'on hold';
   if (!paidInFull) return 'earning';
   const last = new Date(lastMoneyAt || 0).getTime();

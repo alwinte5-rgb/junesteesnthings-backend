@@ -76,6 +76,7 @@ const NEVER_STAFF = [
   'POST /admin/unlinked/:id/apply',
   'POST /admin/unlinked/:id/tax',
   'POST /admin/quote/:code/credit',
+  'POST /admin/quote/:code/sale-type',
   'POST /admin/quote/:code/restore-version',
   'GET /admin/finances',
   'POST /admin/expenses',
@@ -296,6 +297,8 @@ const ROUTES = {
   'POST /admin/tasks': 'any',
   'POST /admin/tasks/:id/done': 'any',
   'POST /admin/quote/:code/credit': 'owner',
+  // Shop lead or rep lead: decided by the records; only the owner relabels (tools/lib/sales-credit.js).
+  'POST /admin/quote/:code/sale-type': 'owner',
   'GET /admin/my-earnings': 'any',
   'POST /admin/bonuses': 'owner',
   'POST /admin/bonuses/:id/delete': 'owner',
