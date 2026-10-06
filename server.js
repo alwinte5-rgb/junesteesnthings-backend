@@ -48,6 +48,7 @@ const QPHOTOS = require('./tools/lib/quote-photos');
 const ZIPSTREAM = require('./tools/lib/zip-stream');
 const { Readable } = require('node:stream');
 const REVREPLY = require('./tools/lib/review-replies');
+const REPLYCOACH = require('./tools/lib/reply-coach');
 const STAFF = require('./tools/lib/staff');
 const FRAUD = require('./tools/lib/fraud-signals');
 const CREDIT = require('./tools/lib/sales-credit');
@@ -19962,6 +19963,23 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
       ${sent ? `<div class="ok">Sent by ${sent}. It is in the list below.</div>` : ''}
       ${String(query.sent) === 'held' ? `<div class="ok">Saved for the owner to approve. It goes out when they send it.</div>` : ''}
       ${failed ? `<div class="warn">${escEmail(failed)}</div>` : ''}
+      <div data-claude style="margin:0 0 12px;padding:10px 12px;border:1px solid #d9ccf5;border-radius:10px;background:#faf8ff">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+          <b style="font-size:14px;color:#3b2a6b">Ask Claude how to reply</b>
+          <span class="muted" style="font-size:12px">Reads this job and its messages. Suggests only; you edit and send.</span>
+        </div>
+        <input data-cnote maxlength="2000" placeholder="Optional: what do you want to say? e.g. tell her the proof is ready, ask for sizes, the shirts came in wrong colour"
+               style="margin-top:8px;padding:9px;font-size:14px">
+        <details style="margin-top:6px"><summary style="font-size:13px">Paste an email they sent you</summary>
+          <textarea data-cpaste rows="4" maxlength="6000" placeholder="Paste the customer's email here if it is not in the list below yet."
+                    style="margin-top:6px;font-size:13px;padding:8px"></textarea>
+        </details>
+        <div style="margin-top:8px">
+          <button type="button" class="btn" data-cgo style="padding:8px 16px;font-size:14px;background:#5b3fb0">Suggest a reply</button>
+          <span class="muted" data-cstat style="font-size:12px;margin-left:6px">Uses whatever you have already typed in the message as a starting point.</span>
+        </div>
+        <div data-cout style="display:none;margin-top:10px;font-size:14px;line-height:1.45"></div>
+      </div>
       <form method="POST" action="/admin/quote/${code}/message" data-msgform style="margin:0 0 12px">
         <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px">
           ${radio('email', 'Email', emailWhyNot, true)}
@@ -20050,6 +20068,50 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
         });
         f.querySelectorAll('input[name="channel"]').forEach(function(r){ r.addEventListener('change', sync); });
         sync();
+        /* Ask Claude. The answer is drawn with textContent only: it is model
+           output built partly from what the customer wrote. */
+        var cl = document.querySelector('[data-claude]');
+        if (cl) (function(){
+          var go = cl.querySelector('[data-cgo]'), st = cl.querySelector('[data-cstat]'), out = cl.querySelector('[data-cout]');
+          function el(tag, text, css){ var e = document.createElement(tag); if (text) e.textContent = text; if (css) e.style.cssText = css; return e; }
+          function section(title, items, colour){
+            if (!items || !items.length) return;
+            out.appendChild(el('div', title, 'font-weight:700;margin-top:8px;color:' + colour));
+            var ul = el('ul', '', 'margin:4px 0 0 18px;padding:0');
+            items.forEach(function(t){ ul.appendChild(el('li', t)); });
+            out.appendChild(ul);
+          }
+          go.addEventListener('click', function(){
+            var c = f.querySelector('input[name="channel"]:checked');
+            go.disabled = true; st.textContent = 'Claude is reading the job…';
+            fetch('/admin/api/quote/${code}/suggest-reply', { method: 'POST', credentials: 'same-origin',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ channel: c ? c.value : 'email', note: cl.querySelector('[data-cnote]').value,
+                                     pasted: cl.querySelector('[data-cpaste]').value, draft: body.value }) })
+              .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(d){ if (!r.ok) throw new Error(d.error || 'No suggestion this time. Try again.'); return d; }); })
+              .then(function(d){
+                out.textContent = ''; out.style.display = '';
+                if (d.they_want) { out.appendChild(el('div', 'What they need', 'font-weight:700;color:#3b2a6b')); out.appendChild(el('div', d.they_want)); }
+                section('Make sure the reply covers', d.cover, '#3b2a6b');
+                section('Watch out for', d.watch_out, '#b45309');
+                section('Check before you send', d.ask_shop, '#b91c1c');
+                out.appendChild(el('div', 'Suggested ' + ((c && c.value === 'text') ? 'text' : 'email'), 'font-weight:700;margin-top:10px;color:#3b2a6b'));
+                if (d.subject && !(c && c.value === 'text')) out.appendChild(el('div', 'Subject: ' + d.subject, 'font-size:13px;color:#4b5563'));
+                out.appendChild(el('div', d.reply, 'white-space:pre-wrap;background:#fff;border:1px solid #e5e0f5;border-radius:8px;padding:10px;margin-top:4px'));
+                var use = el('button', 'Use this reply', 'margin-top:8px;padding:7px 14px;font-size:13px');
+                use.type = 'button'; use.className = 'btn';
+                use.addEventListener('click', function(){
+                  body.value = d.reply;
+                  if (d.subject && !(c && c.value === 'text')) subj.value = d.subject;
+                  body.focus(); st.textContent = 'In the message box. Read it, change anything, then press Send.';
+                });
+                out.appendChild(use);
+                st.textContent = 'Check every fact before sending. Claude can be wrong.';
+              })
+              .catch(function(e){ st.textContent = e.message || 'No suggestion this time. Try again.'; })
+              .then(function(){ go.disabled = false; });
+          });
+        })();
         /* Playbook replies. Built with textContent, never markup: an article
            is text the shop wrote, and it goes into a textarea as text. */
         var kq = f.querySelector('[data-kbq]'), kl = f.querySelector('[data-kblist]'), kt;
@@ -20212,6 +20274,77 @@ app.post('/admin/quote/:code/message', requireAdmin, async (req, res) => {
   if (out === 'no-quote') return res.redirect('/admin/production');
   if (out === 'sent') await markProofsSent(code, text);
   return out === 'sent' ? answer('sent', channel) : answer('msg_err', out);
+});
+
+/* "Ask Claude" on the job page (2026-10-06): a checklist and a suggested reply
+   for the message box. Nothing is sent from here; the suggestion goes into the
+   box and the person sends it through the route above, with all its checks.
+   A designer's suggestion is written without any money in it. Each Claude call
+   costs money, so one person gets a few a minute. */
+const replyAsks = new Map();
+app.post('/admin/api/quote/:code/suggest-reply', requireAdmin, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.status(404).json({ error: 'No such job.' });
+  if (actorLevel('customers.message') === 'off') return res.status(403).json({ error: 'You cannot message customers.' });
+  const fullView = actorLevel('quotes.view') === 'on';
+  if (!fullView && !(await designJobFor(code, currentActor()))) return res.status(403).json({ error: 'That job is not with you.' });
+  const actor = currentActor() || OWNER_ACTOR;
+  const who = actor.kind === 'staff' ? 's' + actor.id : 'owner';
+  const now = Date.now();
+  const recent = (replyAsks.get(who) || []).filter((t) => now - t < 60 * 1000);
+  if (recent.length >= 6) return res.status(429).json({ error: 'That is a lot of suggestions in a minute. Wait a moment.' });
+  replyAsks.set(who, [...recent, now]);
+
+  const { ask } = REPLYCOACH.validateAsk(req.body);
+  try {
+    const { rows: [q] } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
+    if (!q) return res.status(404).json({ error: 'No such job.' });
+    const { rows: msgs } = await pool.query(
+      `SELECT * FROM (
+         SELECT 'email' AS channel, subject, preview AS body, status, created_at FROM client_emails WHERE quote_code = $1
+         UNION ALL
+         SELECT 'text', NULL, body, status, created_at FROM sms_messages WHERE quote_code = $1) m
+        WHERE status NOT IN ('failed', 'skipped')
+        ORDER BY created_at DESC LIMIT 25`, [code]);
+    const when = (d) => new Date(d).toLocaleString('en-US', { timeZone: SHOP_TZ, month: 'short', day: 'numeric',
+                                                              hour: 'numeric', minute: '2-digit' });
+    const history = msgs.map((m) => ({ channel: m.channel, subject: m.subject, body: m.body,
+                                       inbound: m.status === 'received', when: when(m.created_at) }));
+    /* Answers the owner has checked, picked by what the customer last said. */
+    const lastIn = history.find((m) => m.inbound);
+    const topic = [ask.note, ask.pasted, lastIn && lastIn.body].filter(Boolean).join(' ').slice(0, 300);
+    const playbook = topic ? (await pool.query(
+      `SELECT title, body FROM kb_articles WHERE kind = 'faq' AND published AND NOT needs_review AND ${kbMatch(1).where}
+        ORDER BY ${kbMatch(1).rank} DESC LIMIT 4`, [topic, topic.toLowerCase().slice(0, 60)])
+      .then((r) => r.rows).catch(() => [])) : [];
+    const t = quoteTotals(q);
+    const due = balanceOf(q, t.total);
+    const stage = q.cancelled_at ? 'cancelled' : q.accepted_at || q.paid_at ? JOB_STAGES[jobStageIndex(q)].label
+      : 'quote, not accepted yet';
+    const job = {
+      code, name: q.name, status: q.status, stage, today: new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ }),
+      needed_by: q.needed_by || q.target_date, deadline_flexible: q.deadline_flexible,
+      proof: q.proof_ok_at ? 'approved' : q.proof_sent_at ? 'sent, waiting for their approval' : '',
+      delivery: q.ship_method || '', tracking: q.shipped_at ? q.tracking || '' : '',
+      items: (Array.isArray(q.items) ? q.items : []).slice(0, 30).map((it) => ({
+        qty: Number(it && it.qty) || 0, description: String((it && (it.description || it.name)) || 'Item').slice(0, 200),
+        total: it && Number(it.total) ? money(it.total) : '', optional: !!(it && it.optional) })),
+      money: { total: money(t.total), paid: money(Number(q.paid_amount) || 0), balance: money(due),
+               deposit: Number(q.deposit) > 0 && !(Number(q.paid_amount) > 0) ? money(q.deposit) : '' },
+      change_request: q.change_request ? String(q.change_request).slice(0, 1500) : '',
+      notes: q.notes ? String(q.notes).slice(0, 1500) : '',
+    };
+    const suggestion = await REPLYCOACH.suggestReply({
+      job, history, playbook, ask, money: fullView,
+      shop: { phone: SHOP_PHONE, pickup: `${PICKUP_ADDRESS} (${PICKUP_HOURS})`, link: quoteLink(code) },
+    });
+    return res.json(suggestion);
+  } catch (err) {
+    console.error(`suggested reply for ${code} failed:`, err.message);
+    if (err.code !== 'refusal') reportError('suggest-reply', err, `quote ${code}`).catch(() => {});
+    return res.status(502).json({ error: REPLYCOACH.failureMessage(err) });
+  }
 });
 
 app.get('/admin/quotes',     requireAdmin, (req, res) => renderBoard('money', req, res));

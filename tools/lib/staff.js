@@ -328,6 +328,8 @@ const ROUTES = {
   'POST /admin/api/art-signature': 'art.work',
   /* Files for an email from the job page (2026-10-06). */
   'POST /admin/api/message-file-signature': 'customers.message',
+  /* Ask Claude for a suggested reply on the job page (2026-10-06). */
+  'POST /admin/api/quote/:code/suggest-reply': 'customers.message',
   'POST /admin/quote/:code/art/decide': 'owner',
   'POST /admin/training/quiz/:key': 'any',
   'POST /admin/training/signoff': 'owner',
