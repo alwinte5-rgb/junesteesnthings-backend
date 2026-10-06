@@ -15,7 +15,7 @@ const {
   releaseName: monitoringRelease,
 } = require('./tools/lib/monitoring');
 initMonitoring();
-const { describeTawkEvent, tawkLead, isE164 } = require('./tools/lib/chat-alert');
+const { describeTawkEvent, tawkLead, tawkTranscript, isE164 } = require('./tools/lib/chat-alert');
 const {
   CONSENT_VERSION, TRANSACTIONAL_TEXT, MARKETING_TEXT,
   normalizeUsPhone, parseSmsConsent, consentCheckboxesHtml, foldSmsConsent,
@@ -303,9 +303,18 @@ async function initDB() {
      tawk.to chat or offline message (saveChatLead). chat_ref is the chat or
      ticket id, so a lead can be traced back to its conversation. Embroidery
      requests were told apart only by their description until this existed. */
-  for (const col of [`source TEXT DEFAULT 'form'`, 'chat_ref TEXT']) {
+  /* chat_transcript: the whole tawk.to conversation, [{who, name, text, at}]
+     (tawkTranscript, 2026-10-06), shown on the lead's card. */
+  for (const col of [`source TEXT DEFAULT 'form'`, 'chat_ref TEXT', 'chat_transcript JSONB']) {
     await pool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
+  /* Chats already waiting with no way to reach the person are let go by the
+     same rule as new ones (saveChatLead). Safe to repeat: it only ever touches
+     a chat with no email and no phone that nobody has dealt with. */
+  await pool.query(
+    `UPDATE submissions SET dismissed_at = NOW(), dismiss_reason = 'No contact details left — answer it in tawk.to'
+      WHERE source IN ('chat', 'offline') AND COALESCE(email, '') = '' AND COALESCE(phone, '') = ''
+        AND dismissed_at IS NULL`).catch((e) => console.error('anonymous chat clean-up failed:', e.message));
   /* How the customer first found us (tools/lib/first-touch.js): utm tags,
      ad click ids, referring site, landing page — from the jt_ft cookie, already
      cleaned and capped. NULL for anything that did not come through a browser
@@ -3904,6 +3913,23 @@ app.post('/webhooks/tawk', async (req, res) => {
      already answered tawk, so a failed save cannot be retried by tawk: it goes
      to the error digest. */
   let leadId = null;
+  /* The finished conversation: kept on the chat's lead, and any contact
+     details the visitor gave fill the ones the lead is missing. */
+  const transcript = tawkTranscript(req.body);
+  if (transcript) {
+    try {
+      leadId = await saveChatTranscript(transcript);
+      console.log(`tawk webhook: transcript of ${transcript.lines.length} messages kept on enquiry #${leadId}`);
+      if (transcript.email) {
+        await syncTawkContactToBrevo({ name: transcript.name, email: transcript.email })
+          .catch((e) => console.error('tawk transcript → Brevo sync failed:', e.message));
+      }
+    } catch (err) {
+      console.error('tawk transcript not kept:', err.message);
+      reportError('tawk-transcript', err, transcript.ref).catch(() => {});
+    }
+    return;
+  }
   const lead = tawkLead(req.body);
   if (lead) {
     try {
@@ -3941,15 +3967,43 @@ app.post('/webhooks/tawk', async (req, res) => {
    it (tests/on-conflict-targets.test.js). A chat has no phone, and an
    anonymous one no email; both columns are NOT NULL, so they are stored empty.
    Returns the new id, or null if it was already there. */
+/* A chat or offline message that left no email and no phone is let go the
+   moment it arrives (the owner, 2026-10-06: "contact information is key"). It
+   stays on the Leads page under Let go, and tawk.to is still where to answer
+   it live; if the conversation later gives an email or phone, its transcript
+   brings it back as new (saveChatTranscript). */
+const NO_CONTACT_REASON = 'No contact details left — answer it in tawk.to';
 async function saveChatLead(lead) {
+  const phone = String(lead.phone || '').slice(0, 40);
+  const anonymous = !lead.email && !phone;
   const { rows } = await pool.query(
-    `INSERT INTO submissions (name, phone, email, description, dedupe_key, source, chat_ref)
-     VALUES ($1, '', $2, $3, $4, $5, $6)
+    `INSERT INTO submissions (name, phone, email, description, dedupe_key, source, chat_ref, dismissed_at, dismiss_reason)
+     VALUES ($1, $7, $2, $3, $4, $5, $6, CASE WHEN $8 THEN NOW() END, CASE WHEN $8 THEN $9 END)
      ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
      RETURNING id`,
     [String(lead.name).slice(0, 200), lead.email, lead.description || null,
-     lead.ref, lead.source, lead.chatRef || null]);
+     lead.ref, lead.source, lead.chatRef || null, phone, anonymous, NO_CONTACT_REASON]);
   return rows.length ? rows[0].id : null;
+}
+
+/* The whole conversation onto the chat's lead (2026-10-06). A chat whose start
+   never arrived is created here. Contact details fill only what is empty, and
+   a real name replaces only the "Chat visitor" placeholder: nothing a person
+   typed on the lead is overwritten. Returns the lead's id. */
+async function saveChatTranscript(t) {
+  await saveChatLead(t);
+  const { rows: [r] } = await pool.query(
+    `UPDATE submissions SET chat_transcript = $2::jsonb,
+            name  = CASE WHEN name = 'Chat visitor' OR name = '' THEN $3 ELSE name END,
+            email = CASE WHEN email = '' THEN $4 ELSE email END,
+            phone = CASE WHEN phone = '' THEN $5 ELSE phone END,
+            description = COALESCE(NULLIF(description, ''), NULLIF($6, '')),
+            -- let go only for having no contact details, and now it has some: new again
+            dismissed_at   = CASE WHEN dismiss_reason = $7 AND ($4 <> '' OR $5 <> '') THEN NULL ELSE dismissed_at END,
+            dismiss_reason = CASE WHEN dismiss_reason = $7 AND ($4 <> '' OR $5 <> '') THEN NULL ELSE dismiss_reason END
+      WHERE dedupe_key = $1 RETURNING id`,
+    [t.ref, JSON.stringify(t.lines), String(t.name).slice(0, 200), t.email, t.phone, t.description || '', NO_CONTACT_REASON]);
+  return r ? r.id : null;
 }
 
 // ── Inventory (for building order forms) ──────────────────────────────────────
@@ -19971,6 +20025,14 @@ function leadCardHtml(l, { back = '/admin/quotes' } = {}) {
                l.email || l.phone ? 'answer in tawk.to' : 'No email left — answer in tawk.to'}</a>` : '',
             ].filter(Boolean).join(' &middot; ')}
         </div>
+        ${Array.isArray(l.chat_transcript) && l.chat_transcript.length ? `
+        <details style="margin-top:8px"><summary style="cursor:pointer;font-size:13px;color:#1848B8">The chat
+          (${l.chat_transcript.length} message${l.chat_transcript.length === 1 ? '' : 's'})</summary>
+          <div style="margin-top:6px;max-height:320px;overflow:auto;border:1px solid #e3e8f2;border-radius:8px;padding:8px 10px;background:#fafbfd">
+          ${l.chat_transcript.map((m) => `<div style="margin:4px 0;font-size:13px${m.who === 'system' ? ';color:#6b7280;font-style:italic' : ''}">
+            <b style="color:${m.who === 'visitor' ? '#0B1F4B' : '#166534'}">${escEmail(m.who === 'visitor' ? (l.name || 'Visitor')
+              : m.who === 'shop' ? (m.name || 'Shop') : 'tawk')}:</b> ${escEmail(m.text)}</div>`).join('')}
+          </div></details>` : ''}
         ${l.sale_type_reason && l.sale_type !== 'shop' ? `<div class="muted" style="margin-top:6px;font-size:12.5px">${escEmail(l.sale_type_reason)}</div>` : ''}
         ${l.heard_from ? `<div class="muted" style="margin-top:6px;font-size:12.5px">Heard about us: <b style="color:#0B1F4B">${
           escEmail(CREDIT.HEARD_FROM[l.heard_from] || l.heard_from)}</b>${l.heard_rep_text ? ` &middot; named “${escEmail(l.heard_rep_text)}”` : ''}</div>` : ''}

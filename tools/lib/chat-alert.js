@@ -83,9 +83,59 @@ function tawkLead(body) {
   return null;
 }
 
+/* The whole conversation, from tawk's chat:transcript_created event (the
+   owner, 2026-10-06: the Leads page showed nothing of what a chat said). Only
+   chat:start was handled before, and it carries the first message alone.
+
+   Returns null for any other event. Messages keep who said them (visitor, shop
+   or tawk itself), capped at 200 lines of 1000 characters. An email or phone
+   number the VISITOR typed is picked out, so an anonymous chat that left one
+   becomes a lead the shop can answer; the shop's own lines are never read for
+   contact details (they contain the shop's number). */
+const PHONE_IN_TEXT = /(?:\+?1[\s.-]?)?\(?([2-9]\d{2})\)?[\s.-]?(\d{3})[\s.-]?(\d{4})\b/;
+const EMAIL_IN_TEXT = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
+
+function tawkTranscript(body) {
+  const b = body || {};
+  if (String(b.event || '') !== 'chat:transcript_created') return null;
+  const chat = b.chat || {};
+  const chatId = clip(chat.id || b.chatId, 120);
+  if (!chatId) return null;
+  const v = chat.visitor || b.visitor || {};
+  const WHO = { v: 'visitor', a: 'shop', s: 'system' };
+  const lines = (Array.isArray(chat.messages) ? chat.messages : []).slice(0, 200).map((m) => {
+    const sender = (m && m.sender) || {};
+    const text = clip(m && m.msg, 1000);
+    const files = Array.isArray(m && m.attchs) ? m.attchs.length : 0;
+    return {
+      who: WHO[sender.t] || 'system',
+      name: clip(sender.n, 60),
+      text: text || (files ? `(sent ${files} file${files === 1 ? '' : 's'})` : ''),
+      at: clip(m && m.time, 40),
+    };
+  }).filter((l) => l.text);
+  const said = lines.filter((l) => l.who === 'visitor').map((l) => l.text).join('\n');
+  let email = clip(v.email, 254).toLowerCase();
+  if (!looksLikeEmail(email)) {
+    const m = said.match(EMAIL_IN_TEXT);
+    email = m ? m[0].toLowerCase().slice(0, 254) : '';
+  }
+  const pm = said.match(PHONE_IN_TEXT);
+  const name = clip(v.name, 120);
+  const first = lines.find((l) => l.who === 'visitor');
+  return {
+    source: 'chat', ref: `tawk:chat:${chatId}`, chatRef: chatId,
+    name: name && !ANON_NAME.test(name) ? name : 'Chat visitor',
+    email: looksLikeEmail(email) ? email : '',
+    phone: pm ? `(${pm[1]}) ${pm[2]}-${pm[3]}` : '',
+    description: first ? clip(first.text, 1500) : '',
+    lines,
+  };
+}
+
 // E.164 check so a malformed env var fails loudly at send time, not silently.
 function isE164(n) {
   return /^\+[1-9]\d{7,14}$/.test(String(n || ''));
 }
 
-module.exports = { describeTawkEvent, tawkLead, isE164 };
+module.exports = { describeTawkEvent, tawkLead, tawkTranscript, isE164 };

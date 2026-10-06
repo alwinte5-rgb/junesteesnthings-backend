@@ -260,7 +260,9 @@ test('the webhook keeps a chat once however often tawk sends it, and says so whe
   const save = lift('saveChatLead');
   assert.match(save, /ON CONFLICT \(dedupe_key\) WHERE dedupe_key IS NOT NULL DO NOTHING/,
     'keyed on the chat or ticket id; the WHERE repeats the partial index predicate');
-  assert.match(save, /VALUES \(\$1, '', \$2, \$3, \$4, \$5, \$6\)/, 'phone is NOT NULL, so a chat stores it empty');
+  /* phone is NOT NULL: a chat stores what it gave, or empty (never null). */
+  assert.match(save, /const phone = String\(lead\.phone \|\| ''\)\.slice\(0, 40\);/, 'phone is NOT NULL, so a chat stores it empty');
+  assert.match(save, /VALUES \(\$1, \$7, \$2, \$3, \$4, \$5, \$6,/);
   const hook = route("app.post('/webhooks/tawk'");
   assert.ok(hook.indexOf('alertOwnerOfChat(req.body)') < hook.indexOf('tawkLead(req.body)'),
     'the alert still goes first');
