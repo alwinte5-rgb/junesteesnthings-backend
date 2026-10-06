@@ -3888,8 +3888,12 @@ async function checkInbound() {
     try {
       const h = { 'api-key': process.env.BREVO_API_KEY, 'Content-Type': 'application/json', accept: 'application/json' };
       const list = await fetch('https://api.brevo.com/v3/webhooks?type=inbound', { headers: h });
-      if (!list.ok) throw new Error(`Brevo GET webhooks ${list.status}: ${(await list.text().catch(() => '')).slice(0, 200)}`);
-      const hooks = (await list.json()).webhooks || [];
+      /* With no webhook of the type yet, Brevo answers 400 document_not_found
+         rather than an empty list. */
+      const listed = await list.text().catch(() => '');
+      if (!list.ok && !/document_not_found/.test(listed)) throw new Error(`Brevo GET webhooks ${list.status}: ${listed.slice(0, 200)}`);
+      let hooks = [];
+      try { hooks = list.ok ? (JSON.parse(listed).webhooks || []) : []; } catch (e) { hooks = []; }
       if (!hooks.some((w) => w.url === INBOUND_URL)) {
         const made = await fetch('https://api.brevo.com/v3/webhooks', { method: 'POST', headers: h,
           body: JSON.stringify({ type: 'inbound', events: ['inboundEmailProcessed'], url: INBOUND_URL,
