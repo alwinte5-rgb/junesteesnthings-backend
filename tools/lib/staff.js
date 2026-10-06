@@ -180,6 +180,8 @@ const ROUTES = {
   'GET /admin/production': 'quotes.view',
   'GET /admin/production/:code': 'quotes.view',
   'GET /admin/production/:code/sent-file/:id/:n': 'quotes.view',
+  /* A file a customer's emailed reply carried (2026-10-06). */
+  'GET /admin/production/:code/reply-file/:id/:n': 'quotes.view',
   /* The customer's artwork, one original or all of them zipped (2026-10-06).
      A designer reaches the same files from their design page. */
   'GET /admin/production/:code/artwork/:n': 'quotes.view',
@@ -330,6 +332,8 @@ const ROUTES = {
   'POST /admin/api/message-file-signature': 'customers.message',
   /* Ask Claude for a suggested reply on the job page (2026-10-06). */
   'POST /admin/api/quote/:code/suggest-reply': 'customers.message',
+  /* Claude reads a message for accuracy and tone before it is sent. */
+  'POST /admin/api/quote/:code/review-message': 'customers.message',
   'POST /admin/quote/:code/art/decide': 'owner',
   'POST /admin/training/quiz/:key': 'any',
   'POST /admin/training/signoff': 'owner',

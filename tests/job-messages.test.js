@@ -54,10 +54,12 @@ function msgRoute() {
 
 /* ── The record ─────────────────────────────────────────────────────────── */
 
-function clientMail({ fail = null, unsubscribed = false } = {}) {
+function clientMail({ fail = null, unsubscribed = false, inbound = false } = {}) {
   const rows = [];
   const sent = [];
   const sandbox = {
+    /* Customer replies onto the job page (2026-10-06): off unless the reply domain is live. */
+    inboundReady: inbound, INBOUND: require('../tools/lib/inbound-email'), INBOUND_DOMAIN: 'reply.jtees.net',
     pool: { query: async (sql, args) => { if (/INSERT INTO client_emails/.test(sql)) rows.push(args.slice(0, 7)); return { rows: [] }; } },
     sendEmail: async (m) => { if (fail) throw new Error(fail); sent.push(m); },
     isUnsubscribed: async () => unsubscribed,
@@ -153,7 +155,7 @@ function card({ history = [], smsOn = true, consent = true, q = {} } = {}) {
     SHOP_TZ: 'America/Chicago', console: { error() {} },
     intIn: () => null, PROOFS: require('../tools/lib/job-proofs'),
     /* Files on the job an email may carry (2026-10-06): none here. */
-    jobFilesFor: async () => [], MSGFILES: require('../tools/lib/message-files'),
+    jobFilesFor: async () => [], MSGFILES: require('../tools/lib/message-files'), inboundReady: false,
   };
   vm.createContext(sandbox);
   vm.runInContext([grab('const MESSAGE_KINDS = {', '};'), grab('const MESSAGE_ERRORS = {', '};'),
@@ -310,4 +312,15 @@ test('a text keeps the shape every customer text has', () => {
   const { plain } = require('../tools/lib/sms-templates');
   const body = `June's Tees: ${plain('x'.repeat(300), 260)} https://www.jtees.net/q/ABCDEFGHIJ Reply STOP to opt out.`;
   assert.ok(body.length <= 459, 'three segments at most');
+});
+
+test('once the reply domain is live, a job email asks for replies at the job address; marketing never does', async () => {
+  const off = clientMail();
+  await off.send({ quote: 'AB12CD', kind: 'manual', to: 'a@b.co', subject: 's', html: '<p>x</p>', replyTo: 'shop@jtees.net' });
+  assert.strictEqual(off.sent[0].replyTo, 'shop@jtees.net');
+  const on = clientMail({ inbound: true });
+  await on.send({ quote: 'AB12CD', kind: 'manual', to: 'a@b.co', subject: 's', html: '<p>x</p>', replyTo: 'shop@jtees.net' });
+  assert.strictEqual(on.sent[0].replyTo, 'order-ab12cd@reply.jtees.net');
+  await on.send({ quote: 'AB12CD', kind: 'promo', to: 'a@b.co', subject: 's', html: '<p>x</p>', marketing: true });
+  assert.strictEqual(on.sent[1].replyTo, undefined);
 });

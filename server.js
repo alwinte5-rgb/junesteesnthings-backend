@@ -49,6 +49,7 @@ const ZIPSTREAM = require('./tools/lib/zip-stream');
 const { Readable } = require('node:stream');
 const REVREPLY = require('./tools/lib/review-replies');
 const REPLYCOACH = require('./tools/lib/reply-coach');
+const INBOUND = require('./tools/lib/inbound-email');
 const STAFF = require('./tools/lib/staff');
 const FRAUD = require('./tools/lib/fraud-signals');
 const CREDIT = require('./tools/lib/sales-credit');
@@ -169,6 +170,8 @@ const FINANCES_PATH = '/admin/finances';
    marks a body as read, and the general parser below then leaves it alone. */
 app.use(['/q/:code/certificate', '/admin/quote/:code/certificate', '/api/tax-certificates'],
   express.json({ limit: '12mb' }));
+/* A customer's email, parsed by Brevo: long HTML threads run past 1mb. */
+app.use('/webhooks/brevo/inbound', express.json({ limit: '8mb' }));
 app.use(express.json({
   limit: '1mb',
   verify: (req, _res, buf) => {
@@ -976,6 +979,11 @@ async function initDB() {
     )`);
   /* What an email carried: [{name, url, bytes}] (MSGFILES, 2026-10-06). */
   await pool.query(`ALTER TABLE client_emails ADD COLUMN IF NOT EXISTS attachments JSONB`).catch(() => {});
+  /* A customer's emailed reply (status 'received', 2026-10-06) keeps Brevo's
+     message id here, so a webhook delivered twice is kept once. */
+  await pool.query(`ALTER TABLE client_emails ADD COLUMN IF NOT EXISTS inbound_id TEXT`).catch(() => {});
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS client_emails_inbound_once
+                      ON client_emails (inbound_id) WHERE inbound_id IS NOT NULL`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS client_emails_quote_idx ON client_emails (quote_code, created_at DESC)`)
     .catch(() => {});
 
@@ -3848,6 +3856,127 @@ app.post('/webhooks/twilio/sms', async (req, res) => {
   }
 });
 
+
+// ── Customer email replies (Brevo inbound parsing) ─────────────────────────────
+/* Set INBOUND_REPLY_DOMAIN (reply.jtees.net) and INBOUND_WEBHOOK_SECRET (any
+   long random string) on Railway, and give the domain two MX records:
+   10 inbound1.sendinblue.com and 20 inbound2.sendinblue.com. The server then
+   registers its own webhook with Brevo and, once the MX answers, starts
+   sending job emails with Reply-To order-<code>@reply.jtees.net. Checked
+   hourly; if the MX or the webhook goes away, emails fall back to the shop's
+   own address so no reply ever bounces. */
+const INBOUND_DOMAIN = INBOUND.domainOf(process.env.INBOUND_REPLY_DOMAIN);
+const INBOUND_SECRET = String(process.env.INBOUND_WEBHOOK_SECRET || '').trim();
+const INBOUND_URL = `${PUBLIC_BASE_URL}/webhooks/brevo/inbound/${INBOUND_SECRET}`;
+let inboundReady = false;
+let inboundWhyNot = 'not checked yet';
+
+async function checkInbound() {
+  const was = inboundReady;
+  let why = '';
+  if (!INBOUND_DOMAIN) why = 'INBOUND_REPLY_DOMAIN is not set';
+  else if (INBOUND_SECRET.length < 24 || !/^[A-Za-z0-9_-]+$/.test(INBOUND_SECRET)) why = 'INBOUND_WEBHOOK_SECRET is missing or too short (24+ letters and digits)';
+  else if (!process.env.BREVO_API_KEY) why = 'BREVO_API_KEY is not set';
+  if (!why) {
+    const mx = await require('dns').promises.resolveMx(INBOUND_DOMAIN).catch(() => []);
+    if (!mx.some((r) => /(^|\.)(sendinblue|brevo)\.com\.?$/i.test(r.exchange))) why = `${INBOUND_DOMAIN} has no MX record pointing at Brevo`;
+  }
+  if (!why) {
+    try {
+      const h = { 'api-key': process.env.BREVO_API_KEY, 'Content-Type': 'application/json', accept: 'application/json' };
+      const list = await fetch('https://api.brevo.com/v3/webhooks?type=inbound', { headers: h });
+      if (!list.ok) throw new Error(`Brevo GET webhooks ${list.status}: ${(await list.text().catch(() => '')).slice(0, 200)}`);
+      const hooks = (await list.json()).webhooks || [];
+      if (!hooks.some((w) => w.url === INBOUND_URL)) {
+        const made = await fetch('https://api.brevo.com/v3/webhooks', { method: 'POST', headers: h,
+          body: JSON.stringify({ type: 'inbound', events: ['inboundEmailProcessed'], url: INBOUND_URL,
+                                 domain: INBOUND_DOMAIN, description: "June's Tees: customer replies onto the job page" }) });
+        if (!made.ok) throw new Error(`Brevo POST webhooks ${made.status}: ${(await made.text().catch(() => '')).slice(0, 200)}`);
+        console.log(`inbound email: registered the Brevo webhook for ${INBOUND_DOMAIN}`);
+      }
+    } catch (err) {
+      why = `the Brevo webhook could not be checked (${err.message})`;
+    }
+  }
+  inboundReady = !why;
+  inboundWhyNot = why;
+  if (inboundReady && !was) console.log(`inbound email: live, replies to job emails go to order-<code>@${INBOUND_DOMAIN}`);
+  if (!inboundReady) console.log(`inbound email: off, ${why}; job emails keep the shop's reply address`);
+  // Was working and stopped: customers' replies now go to the inbox only.
+  if (was && !inboundReady) reportError('inbound-email', new Error(`email replies stopped reaching job pages: ${why}`)).catch(() => {});
+}
+setTimeout(() => { checkInbound().catch((e) => console.error('inbound check failed:', e.message)); }, 15 * 1000).unref();
+setInterval(() => { checkInbound().catch((e) => console.error('inbound check failed:', e.message)); }, 60 * 60 * 1000).unref();
+
+/** Keep one parsed email and tell the shop. Returns true when it was new. */
+async function keepInboundEmail(m) {
+  const code = INBOUND.codeFrom(m.raw, INBOUND_DOMAIN, QUOTE_CODE_RE);
+  let quote = '';
+  if (code) {
+    const { rows } = await pool.query('SELECT code FROM quotes WHERE code = $1', [code]);
+    if (rows.length) quote = code;
+  }
+  /* Written to the shop's own address by an old email, or the code was
+     mangled: their latest job from the last four months, by email address. */
+  if (!quote && m.from) {
+    const { rows } = await pool.query(
+      `SELECT code FROM quotes WHERE lower(email) = $1 AND created_at > NOW() - INTERVAL '120 days'
+        ORDER BY created_at DESC LIMIT 1`, [m.from]);
+    if (rows.length) quote = rows[0].code;
+  }
+  let fresh = true;
+  if (quote) {
+    const { rowCount } = await pool.query(
+      `INSERT INTO client_emails (quote_code, kind, to_email, subject, preview, status, attachments, inbound_id)
+       VALUES ($1, 'reply', $2, $3, $4, 'received', $5, $6)
+       ON CONFLICT (inbound_id) WHERE inbound_id IS NOT NULL DO NOTHING`,
+      [quote, m.from || 'unknown', m.subject, m.text.slice(0, 5000),
+       m.files.length ? JSON.stringify(m.files) : null, m.id || null]);
+    fresh = rowCount > 0;
+  } else if (m.id) {
+    if (recentInbound.has(m.id)) fresh = false;
+    recentInbound.add(m.id);
+    if (recentInbound.size > 500) recentInbound.delete(recentInbound.values().next().value);
+  }
+  if (!fresh) return false;
+  /* The shop's inbox still gets every reply, as it did before: replying to
+     this one answers the customer directly. */
+  const who = m.fromName ? `${m.fromName} <${m.from}>` : m.from || 'Someone';
+  await sendEmail({
+    to: NOTIFY_EMAIL, promo: false, replyTo: m.from || undefined,
+    subject: `${quote ? `Reply on ${quote}` : 'Email'} from ${m.fromName || m.from}: ${m.subject}`.slice(0, 200),
+    html: `<p><b>${escEmail(who)}</b> ${quote ? 'replied about their order' : 'wrote to the shop'}:</p>
+      <blockquote style="border-left:3px solid #1848B8;margin:0;padding:6px 12px;white-space:pre-wrap">${escEmail(m.text || '(no text)')}</blockquote>
+      ${m.files.length ? `<p>&#128206; ${m.files.map((f) => escEmail(f.name)).join(', ')}${quote ? ' (on the job page)' : ''}</p>` : ''}
+      ${quote ? `<p><a href="${PUBLIC_BASE_URL}${jobPath(quote)}#messages">Open their job</a>. It is in the Messages list there, with Ask Claude for a suggested reply.</p>`
+        : '<p style="color:#6b7280">No job matched this sender, so it is not on a job page.</p>'}
+      <p style="color:#6b7280">Reply to this email to answer them directly.</p>`,
+  });
+  console.log(`inbound email from ${m.from} ${quote ? 'kept on ' + quote : 'matched no job'}`);
+  return true;
+}
+const recentInbound = new Set();
+
+app.post('/webhooks/brevo/inbound/:secret', async (req, res) => {
+  const given = Buffer.from(String(req.params.secret || ''));
+  const want = Buffer.from(INBOUND_SECRET);
+  if (INBOUND_SECRET.length < 24 || given.length !== want.length || !crypto.timingSafeEqual(given, want)) {
+    return res.sendStatus(404);
+  }
+  let failed = 0;
+  for (const raw of INBOUND.itemsOf(req.body)) {
+    const m = { ...INBOUND.shapeItem(raw), raw };
+    try { await keepInboundEmail(m); }
+    catch (err) {
+      failed++;
+      console.error(`inbound email from ${m.from} not kept:`, err.message);
+      reportError('inbound-email', err, `from ${m.from}`).catch(() => {});
+    }
+  }
+  // Non-2xx so Brevo tries again; the message id keeps a retry from doubling it.
+  res.sendStatus(failed ? 500 : 200);
+});
+
 // ── Twilio delivery reports ───────────────────────────────────────────────────
 // Every text asks for one (StatusCallback in twilioSend), so nothing is set in
 // the Twilio console. Until this existed a text was 'sent' once Twilio accepted
@@ -6156,6 +6285,9 @@ async function sendClientEmail({ quote, kind, ...mail }) {
     return;
   }
   const { preview, ...email } = mail;   // for the record, not the customer
+  /* Their reply comes back onto the job page (and on to the shop's inbox),
+     once the reply domain is live. Marketing keeps the shop's address. */
+  if (inboundReady && quote && !mail.marketing) email.replyTo = INBOUND.replyAddress(quote, INBOUND_DOMAIN);
   try {
     await sendEmail(email);
   } catch (err) {
@@ -19518,6 +19650,36 @@ app.post('/admin/api/message-file-signature', requireAdmin, (req, res) => {
   res.json({ signature, timestamp, folder: MSGFILES.FOLDER, cloud, apiKey: process.env.CLOUDINARY_API_KEY });
 });
 
+/* A file a customer's emailed reply carried, fetched from Brevo when clicked. */
+app.get('/admin/production/:code/reply-file/:id/:n', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  const id = /^\d{1,12}$/.test(String(req.params.id)) ? req.params.id : null;
+  const n = /^\d{1,2}$/.test(String(req.params.n)) ? Number(req.params.n) : -1;
+  if (!QUOTE_CODE_RE.test(code) || !id) return res.status(404).send('Not found.');
+  if (actorLevel('quotes.view') !== 'on') return res.status(403).send('Not available.');
+  try {
+    const { rows: [e] } = await pool.query(
+      `SELECT attachments FROM client_emails WHERE id = $1 AND quote_code = $2 AND status = 'received'`, [id, code]);
+    const a = e && Array.isArray(e.attachments) ? e.attachments[n] : null;
+    if (!a || !a.token) return res.status(404).send('That file is not on this message.');
+    const r = await fetch(`https://api.brevo.com/v3/inbound/attachments/${encodeURIComponent(a.token)}`,
+      { headers: { 'api-key': process.env.BREVO_API_KEY || '' } });
+    if (!r.ok) {
+      console.error(`reply file ${id}/${n} on ${code}: Brevo ${r.status}`);
+      return res.status(502).send('Brevo would not hand that file over just now. The copy in your inbox has it too.');
+    }
+    const buf = Buffer.from(await r.arrayBuffer());
+    res.set('Cache-Control', 'no-store');
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.type('application/octet-stream');
+    res.attachment(String(a.name || 'attachment').replace(/[^\w .()-]+/g, '_').slice(0, 120));
+    return res.send(buf);
+  } catch (err) {
+    console.error(`reply file on ${code} failed:`, err.message);
+    return res.status(500).send('Could not fetch that file.');
+  }
+});
+
 /* A file an email carried, from the job page's message list. */
 app.get('/admin/production/:code/sent-file/:id/:n', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
@@ -19946,7 +20108,7 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
       <span class="row-main"><b>${escEmail(m.channel === 'email' ? (m.subject || label) : label)}</b>
         <div class="row-sub" style="white-space:normal">${escEmail(body.length > 220 ? body.slice(0, 219).trimEnd() + '…' : body)}</div>${
         Array.isArray(m.attachments) && m.attachments.length ? `<div class="row-sub" style="white-space:normal">&#128206; ${
-          m.attachments.map((a, n) => `<a href="/admin/production/${escEmail(code)}/sent-file/${Number(m.id)}/${n}">${escEmail(a.name)}</a>`).join(' &middot; ')}</div>` : ''}${
+          m.attachments.map((a, n) => `<a href="/admin/production/${escEmail(code)}/${inbound ? 'reply' : 'sent'}-file/${Number(m.id)}/${n}">${escEmail(a.name)}</a>`).join(' &middot; ')}</div>` : ''}${
         bad && m.error ? `<div class="row-sub" style="white-space:normal;color:#b91c1c">${escEmail(m.error)}</div>` : ''}</span>
       <span class="row-end msg-end">${pill(inbound ? 'reply' : m.status, tone(m.status))}
         <span class="muted msg-when">${m.channel === 'email' ? 'email' : 'text'} &middot; ${
@@ -19989,6 +20151,7 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
                style="margin-bottom:8px;padding:10px;font-size:14px">
         <textarea name="body" rows="4" maxlength="5000" placeholder="Write to ${escEmail(first || 'them')}…"
                   style="font-size:14px;padding:10px">${escEmail(prefill)}</textarea>
+        <div data-review style="display:none;margin:8px 0;padding:10px 12px;border-radius:10px;font-size:14px;line-height:1.45"></div>
         <div data-attach style="margin:8px 0;padding:8px 10px;border:1px dashed #c7d7fb;border-radius:8px;background:#fafcff">
           <div style="font-size:13px;font-weight:600;color:#12203c">Attach files <span class="muted" style="font-weight:400">(email only)</span></div>
           ${jobFiles.length ? `<div style="display:flex;flex-direction:column;gap:3px;margin-top:6px">${jobFiles.map((f) => `
@@ -20004,7 +20167,7 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0">${quick.map(([label, t]) =>
           `<button type="button" class="kbtn kbtn-sm" data-fill="${escEmail(t)}">${escEmail(label)}</button>`).join('')}</div>
         <button type="submit" class="btn" style="padding:10px 22px;font-size:14px"${emailWhyNot && textWhyNot ? ' disabled' : ''}>Send</button>
-        <span class="muted" style="font-size:12px;margin-left:8px">Their replies come to your inbox, or your phone for a text.</span>
+        <span class="muted" style="font-size:12px;margin-left:8px">${inboundReady ? 'Their replies show in the list below and come to your inbox too.' : 'Their replies come to your inbox, or your phone for a text.'}</span>
         <details style="margin-top:8px"><summary>Insert a reply from the playbook</summary>
           <input type="search" data-kbq placeholder="Type the question, e.g. do I pay up front?" style="margin-top:6px">
           <div data-kblist style="margin-top:6px"></div>
@@ -20133,8 +20296,58 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
           kq.addEventListener('input', function(){ clearTimeout(kt); kt = setTimeout(kbLoad, 250); });
           kq.closest('details').addEventListener('toggle', function(e){ if (e.target.open && !kl.childNodes.length) kbLoad(); });
         }
+        /* Check before sending: Claude reads the message for accuracy, tone
+           and spelling first. It never blocks: "Send mine anyway" always works,
+           and so does sending when Claude cannot be reached. Drawn with
+           textContent only. */
+        var rv = f.querySelector('[data-review]'), checked = null, checking = false;
+        function keyNow(){ var c = f.querySelector('input[name="channel"]:checked'); return (c ? c.value : '') + '|' + subj.value + '|' + body.value; }
+        function rel(tag, text, css){ var e = document.createElement(tag); if (text) e.textContent = text; if (css) e.style.cssText = css; return e; }
+        function rbtn(label, primary, fn){ var b = rel('button', label, 'margin:8px 8px 0 0;padding:7px 14px;font-size:13px'); b.type = 'button'; b.className = primary ? 'btn' : 'btn btn-ghost'; b.addEventListener('click', fn); return b; }
+        function sendNow(){ checked = keyNow(); rv.style.display = 'none'; if (f.requestSubmit) f.requestSubmit(); else f.submit(); }
+        function review(){
+          var c = f.querySelector('input[name="channel"]:checked'), isText = c && c.value === 'text';
+          var sb = f.querySelector('button[type="submit"]');
+          checking = true; sb.disabled = true;
+          rv.style.display = ''; rv.style.background = '#faf8ff'; rv.style.border = '1px solid #d9ccf5';
+          rv.textContent = 'Claude is checking your message for accuracy, tone and spelling…';
+          fetch('/admin/api/quote/${code}/review-message', { method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ channel: isText ? 'text' : 'email', subject: subj.value, draft: body.value }) })
+            .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(d){ if (!r.ok) throw new Error(d.error || 'Claude could not check it.'); return d; }); })
+            .then(function(d){
+              if (d.verdict === 'ok') { rv.textContent = 'Claude checked it: ' + (d.summary || 'good to go.') + ' Sending…'; checking = false; sb.disabled = false; sendNow(); return; }
+              rv.textContent = '';
+              var stop = d.verdict === 'stop';
+              rv.style.background = stop ? '#fef2f2' : '#fffbeb'; rv.style.border = '1px solid ' + (stop ? '#fca5a5' : '#fcd34d');
+              rv.appendChild(rel('div', (stop ? 'Claude found a problem before this goes out' : 'Claude suggests a few changes') + (d.summary ? ': ' + d.summary : ''), 'font-weight:700;color:' + (stop ? '#991b1b' : '#92400e')));
+              var names = { accuracy: 'Accuracy', missing: 'Missing', tone: 'Tone', spelling: 'Spelling', risk: 'Risk' };
+              var ul = rel('ul', '', 'margin:6px 0 0 18px;padding:0');
+              (d.issues || []).forEach(function(i){ var li = rel('li', ''); li.appendChild(rel('b', (names[i.kind] || 'Note') + ': ')); li.appendChild(document.createTextNode(i.note)); ul.appendChild(li); });
+              rv.appendChild(ul);
+              if (d.improved) {
+                rv.appendChild(rel('div', 'Corrected version', 'font-weight:700;margin-top:8px'));
+                if (!isText && d.improved_subject) rv.appendChild(rel('div', 'Subject: ' + d.improved_subject, 'font-size:13px;color:#4b5563'));
+                rv.appendChild(rel('div', d.improved, 'white-space:pre-wrap;background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:10px;margin-top:4px'));
+                rv.appendChild(rbtn('Use the corrected version', true, function(){
+                  body.value = d.improved; if (!isText && d.improved_subject) subj.value = d.improved_subject;
+                  checked = keyNow(); rv.style.display = 'none'; body.focus();
+                }));
+              }
+              rv.appendChild(rbtn('Send mine anyway', false, sendNow));
+              rv.appendChild(rbtn('Keep editing', false, function(){ rv.style.display = 'none'; body.focus(); }));
+            })
+            .catch(function(err){
+              rv.textContent = ''; rv.style.background = '#f9fafb'; rv.style.border = '1px solid #e5e7eb';
+              rv.appendChild(rel('div', (err.message || 'Claude could not check it.') + ' Read it over yourself, then send.'));
+              rv.appendChild(rbtn('Send without the check', true, sendNow));
+            })
+            .then(function(){ checking = false; sb.disabled = false; });
+        }
         f.addEventListener('submit', function(e){
           if (busy > 0) { e.preventDefault(); ust.textContent = 'Wait for the upload to finish, then press Send.'; return; }
+          if (checking) { e.preventDefault(); return; }
+          if (body.value.trim() && checked !== keyNow()) { e.preventDefault(); review(); return; }
           var c = f.querySelector('input[name="channel"]:checked');
           var list = [];
           if (!c || c.value === 'email') {
@@ -20282,70 +20495,85 @@ app.post('/admin/quote/:code/message', requireAdmin, async (req, res) => {
    A designer's suggestion is written without any money in it. Each Claude call
    costs money, so one person gets a few a minute. */
 const replyAsks = new Map();
-app.post('/admin/api/quote/:code/suggest-reply', requireAdmin, async (req, res) => {
-  res.set('Cache-Control', 'no-store');
-  const code = String(req.params.code || '').toUpperCase();
-  if (!QUOTE_CODE_RE.test(code)) return res.status(404).json({ error: 'No such job.' });
-  if (actorLevel('customers.message') === 'off') return res.status(403).json({ error: 'You cannot message customers.' });
-  const fullView = actorLevel('quotes.view') === 'on';
-  if (!fullView && !(await designJobFor(code, currentActor()))) return res.status(403).json({ error: 'That job is not with you.' });
-  const actor = currentActor() || OWNER_ACTOR;
-  const who = actor.kind === 'staff' ? 's' + actor.id : 'owner';
-  const now = Date.now();
-  const recent = (replyAsks.get(who) || []).filter((t) => now - t < 60 * 1000);
-  if (recent.length >= 6) return res.status(429).json({ error: 'That is a lot of suggestions in a minute. Wait a moment.' });
-  replyAsks.set(who, [...recent, now]);
+/* "Check before sending" (2026-10-06): the same job and conversation, and the
+   message the person wrote, read by Claude for accuracy, tone and spelling
+   before it goes. The page asks this first when Send is pressed; it never
+   sends and never blocks: the person can always send their own words. */
+function claudeRoute(kind) {
+  return async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    const code = String(req.params.code || '').toUpperCase();
+    if (!QUOTE_CODE_RE.test(code)) return res.status(404).json({ error: 'No such job.' });
+    if (actorLevel('customers.message') === 'off') return res.status(403).json({ error: 'You cannot message customers.' });
+    const fullView = actorLevel('quotes.view') === 'on';
+    if (!fullView && !(await designJobFor(code, currentActor()))) return res.status(403).json({ error: 'That job is not with you.' });
+    const actor = currentActor() || OWNER_ACTOR;
+    const who = actor.kind === 'staff' ? 's' + actor.id : 'owner';
+    const now = Date.now();
+    const recent = (replyAsks.get(who) || []).filter((t) => now - t < 60 * 1000);
+    if (recent.length >= 10) return res.status(429).json({ error: 'That is a lot of Claude requests in a minute. Wait a moment.' });
+    replyAsks.set(who, [...recent, now]);
 
-  const { ask } = REPLYCOACH.validateAsk(req.body);
-  try {
-    const { rows: [q] } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
-    if (!q) return res.status(404).json({ error: 'No such job.' });
-    const { rows: msgs } = await pool.query(
-      `SELECT * FROM (
-         SELECT 'email' AS channel, subject, preview AS body, status, created_at FROM client_emails WHERE quote_code = $1
-         UNION ALL
-         SELECT 'text', NULL, body, status, created_at FROM sms_messages WHERE quote_code = $1) m
-        WHERE status NOT IN ('failed', 'skipped')
-        ORDER BY created_at DESC LIMIT 25`, [code]);
-    const when = (d) => new Date(d).toLocaleString('en-US', { timeZone: SHOP_TZ, month: 'short', day: 'numeric',
-                                                              hour: 'numeric', minute: '2-digit' });
-    const history = msgs.map((m) => ({ channel: m.channel, subject: m.subject, body: m.body,
-                                       inbound: m.status === 'received', when: when(m.created_at) }));
-    /* Answers the owner has checked, picked by what the customer last said. */
-    const lastIn = history.find((m) => m.inbound);
-    const topic = [ask.note, ask.pasted, lastIn && lastIn.body].filter(Boolean).join(' ').slice(0, 300);
-    const playbook = topic ? (await pool.query(
-      `SELECT title, body FROM kb_articles WHERE kind = 'faq' AND published AND NOT needs_review AND ${kbMatch(1).where}
-        ORDER BY ${kbMatch(1).rank} DESC LIMIT 4`, [topic, topic.toLowerCase().slice(0, 60)])
-      .then((r) => r.rows).catch(() => [])) : [];
-    const t = quoteTotals(q);
-    const due = balanceOf(q, t.total);
-    const stage = q.cancelled_at ? 'cancelled' : q.accepted_at || q.paid_at ? JOB_STAGES[jobStageIndex(q)].label
-      : 'quote, not accepted yet';
-    const job = {
-      code, name: q.name, status: q.status, stage, today: new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ }),
-      needed_by: q.needed_by || q.target_date, deadline_flexible: q.deadline_flexible,
-      proof: q.proof_ok_at ? 'approved' : q.proof_sent_at ? 'sent, waiting for their approval' : '',
-      delivery: q.ship_method || '', tracking: q.shipped_at ? q.tracking || '' : '',
-      items: (Array.isArray(q.items) ? q.items : []).slice(0, 30).map((it) => ({
-        qty: Number(it && it.qty) || 0, description: String((it && (it.description || it.name)) || 'Item').slice(0, 200),
-        total: it && Number(it.total) ? money(it.total) : '', optional: !!(it && it.optional) })),
-      money: { total: money(t.total), paid: money(Number(q.paid_amount) || 0), balance: money(due),
-               deposit: Number(q.deposit) > 0 && !(Number(q.paid_amount) > 0) ? money(q.deposit) : '' },
-      change_request: q.change_request ? String(q.change_request).slice(0, 1500) : '',
-      notes: q.notes ? String(q.notes).slice(0, 1500) : '',
-    };
-    const suggestion = await REPLYCOACH.suggestReply({
-      job, history, playbook, ask, money: fullView,
-      shop: { phone: SHOP_PHONE, pickup: `${PICKUP_ADDRESS} (${PICKUP_HOURS})`, link: quoteLink(code) },
-    });
-    return res.json(suggestion);
-  } catch (err) {
-    console.error(`suggested reply for ${code} failed:`, err.message);
-    if (err.code !== 'refusal') reportError('suggest-reply', err, `quote ${code}`).catch(() => {});
-    return res.status(502).json({ error: REPLYCOACH.failureMessage(err) });
-  }
-});
+    const { ask } = REPLYCOACH.validateAsk(req.body);
+    if (kind === 'review' && !ask.draft) return res.status(400).json({ error: 'Write the message first.' });
+    try {
+      const ctx = await claudeJobContext(code, ask, fullView);
+      if (!ctx) return res.status(404).json({ error: 'No such job.' });
+      return res.json(kind === 'review' ? await REPLYCOACH.reviewMessage(ctx) : await REPLYCOACH.suggestReply(ctx));
+    } catch (err) {
+      console.error(`claude ${kind} for ${code} failed:`, err.message);
+      if (err.code !== 'refusal') reportError(`claude-${kind}`, err, `quote ${code}`).catch(() => {});
+      return res.status(502).json({ error: REPLYCOACH.failureMessage(err) });
+    }
+  };
+}
+
+/** What Claude is shown about a job: the job, its messages, the shop's
+ *  checked playbook answers. Money only for someone who may see the quote. */
+async function claudeJobContext(code, ask, fullView) {
+  const { rows: [q] } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
+  if (!q) return null;
+  const { rows: msgs } = await pool.query(
+    `SELECT * FROM (
+       SELECT 'email' AS channel, subject, preview AS body, status, created_at FROM client_emails WHERE quote_code = $1
+       UNION ALL
+       SELECT 'text', NULL, body, status, created_at FROM sms_messages WHERE quote_code = $1) m
+      WHERE status NOT IN ('failed', 'skipped')
+      ORDER BY created_at DESC LIMIT 25`, [code]);
+  const when = (d) => new Date(d).toLocaleString('en-US', { timeZone: SHOP_TZ, month: 'short', day: 'numeric',
+                                                            hour: 'numeric', minute: '2-digit' });
+  const history = msgs.map((m) => ({ channel: m.channel, subject: m.subject, body: m.body,
+                                     inbound: m.status === 'received', when: when(m.created_at) }));
+  /* Answers the owner has checked, picked by what the customer last said. */
+  const lastIn = history.find((m) => m.inbound);
+  const topic = [ask.note, ask.pasted, ask.draft, lastIn && lastIn.body].filter(Boolean).join(' ').slice(0, 300);
+  const playbook = topic ? (await pool.query(
+    `SELECT title, body FROM kb_articles WHERE kind = 'faq' AND published AND NOT needs_review AND ${kbMatch(1).where}
+      ORDER BY ${kbMatch(1).rank} DESC LIMIT 4`, [topic, topic.toLowerCase().slice(0, 60)])
+    .then((r) => r.rows).catch(() => [])) : [];
+  const t = quoteTotals(q);
+  const due = balanceOf(q, t.total);
+  const stage = q.cancelled_at ? 'cancelled' : q.accepted_at || q.paid_at ? JOB_STAGES[jobStageIndex(q)].label
+    : 'quote, not accepted yet';
+  const job = {
+    code, name: q.name, status: q.status, stage, today: new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ }),
+    needed_by: q.needed_by || q.target_date, deadline_flexible: q.deadline_flexible,
+    proof: q.proof_ok_at ? 'approved' : q.proof_sent_at ? 'sent, waiting for their approval' : '',
+    delivery: q.ship_method || '', tracking: q.shipped_at ? q.tracking || '' : '',
+    items: (Array.isArray(q.items) ? q.items : []).slice(0, 30).map((it) => ({
+      qty: Number(it && it.qty) || 0, description: String((it && (it.description || it.name)) || 'Item').slice(0, 200),
+      total: it && Number(it.total) ? money(it.total) : '', optional: !!(it && it.optional) })),
+    money: { total: money(t.total), paid: money(Number(q.paid_amount) || 0), balance: money(due),
+             deposit: Number(q.deposit) > 0 && !(Number(q.paid_amount) > 0) ? money(q.deposit) : '' },
+    change_request: q.change_request ? String(q.change_request).slice(0, 1500) : '',
+    notes: q.notes ? String(q.notes).slice(0, 1500) : '',
+  };
+  return { job, history, playbook, ask, money: fullView,
+           shop: { phone: SHOP_PHONE, pickup: `${PICKUP_ADDRESS} (${PICKUP_HOURS})`, link: quoteLink(code) } };
+}
+
+app.post('/admin/api/quote/:code/suggest-reply', requireAdmin, claudeRoute('suggest'));
+app.post('/admin/api/quote/:code/review-message', requireAdmin, claudeRoute('review'));
 
 app.get('/admin/quotes',     requireAdmin, (req, res) => renderBoard('money', req, res));
 app.get('/admin/production', requireAdmin, (req, res) => renderBoard('work',  req, res));

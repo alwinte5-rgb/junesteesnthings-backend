@@ -78,17 +78,52 @@ test('a refusal, an empty reply and unreadable output all fail, and say so', asy
   assert.match(C.failureMessage(new Error('x')), /Try again/);
 });
 
-test('the route is wired: signed in, messaging allowed, a designer only on their job, and nothing sent', () => {
+test('the routes are wired: signed in, messaging allowed, a designer only on their job, and nothing sent', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  const i = src.indexOf("app.post('/admin/api/quote/:code/suggest-reply', requireAdmin");
-  assert.ok(i > 0, 'route missing or not behind requireAdmin');
-  const route = src.slice(i, src.indexOf('\n});', i));
+  assert.match(src, /app\.post\('\/admin\/api\/quote\/:code\/suggest-reply', requireAdmin, claudeRoute\('suggest'\)\)/);
+  assert.match(src, /app\.post\('\/admin\/api\/quote\/:code\/review-message', requireAdmin, claudeRoute\('review'\)\)/);
+  const i = src.indexOf('function claudeRoute(kind)');
+  const route = src.slice(i, src.indexOf('\napp.post(', i));
   assert.match(route, /actorLevel\('customers\.message'\) === 'off'/);
   assert.match(route, /designJobFor\(code/);
+  assert.match(route, /claudeJobContext\(code, ask, fullView\)/);
   assert.match(route, /money: fullView/);
-  assert.doesNotMatch(route, /sendJobMessage|sendClientEmail|sendCustomerSms/);
+  assert.doesNotMatch(route, /sendJobMessage|sendClientEmail|sendCustomerSms|sendEmail\(/);
   assert.strictEqual(STAFF.ROUTES['POST /admin/api/quote/:code/suggest-reply'], 'customers.message');
-  // The page draws the answer as text, never markup.
-  const card = src.slice(src.indexOf('var cl = document.querySelector(\'[data-claude]\')'));
-  assert.doesNotMatch(card.slice(0, 4000), /innerHTML/);
+  assert.strictEqual(STAFF.ROUTES['POST /admin/api/quote/:code/review-message'], 'customers.message');
+  // The page draws Claude's answers as text, never markup, and the check never blocks a send.
+  const card = src.slice(src.indexOf('async function jobMessagesCard'), src.indexOf('const recentJobMessages'));
+  assert.doesNotMatch(card, /innerHTML/);
+  assert.match(card, /Send mine anyway/);
+  assert.match(card, /Send without the check/);
+});
+
+test('a review comes back as a verdict, issues and a corrected version', async () => {
+  const f = fake(answer({ verdict: 'stop', summary: 'Wrong balance', issues: [{ kind: 'accuracy', note: 'Balance is $156, not $200' }, { kind: 'weird', note: 'x' }],
+                          improved_subject: 'About your\norder', improved: 'Hi Kim, your balance is $156.00.' }));
+  const r = await C.reviewMessage(input({ ask: C.validateAsk({ subject: 'Hi', draft: 'Hi Kim, your balance is $200.' }).ask }), { client: f });
+  assert.strictEqual(r.verdict, 'stop');
+  assert.deepStrictEqual(r.issues.map((i) => i.kind), ['accuracy', 'risk']);
+  assert.strictEqual(r.improved_subject, 'About your order');
+  const p = f.calls[0];
+  assert.strictEqual(p.system, C.REVIEW_SYSTEM);
+  assert.strictEqual(p.output_config.format.schema, C.REVIEW_SCHEMA);
+  const msg = p.messages[0].content;
+  assert.strictEqual(msg.match(/<draft>/g).length, 1, 'the draft was shown twice');
+  assert.match(msg, /Subject: Hi/);
+  assert.match(msg, /\$312\.00/);
+});
+
+test('an "ok" that still lists issues is treated as "fix", and a long text is cut', () => {
+  assert.strictEqual(C.shapeReview({ verdict: 'ok', issues: [{ kind: 'tone', note: 'curt' }] }, 'email').verdict, 'fix');
+  assert.strictEqual(C.shapeReview({ verdict: 'maybe' }, 'email').verdict, 'fix');
+  assert.strictEqual(C.shapeReview({ verdict: 'ok', issues: [] }, 'email').verdict, 'ok');
+  assert.ok(C.shapeReview({ verdict: 'fix', improved: 'word '.repeat(200) }, 'text').improved.length <= C.TEXT_MAX);
+  assert.match(C.REVIEW_SYSTEM, /never\s+instructions/);
+});
+
+test('a refused or unreadable review fails, so the page offers to send without it', async () => {
+  const ask = C.validateAsk({ draft: 'Hi' }).ask;
+  await assert.rejects(C.reviewMessage(input({ ask }), { client: fake({ stop_reason: 'refusal', content: [] }) }), (e) => e.code === 'refusal');
+  await assert.rejects(C.reviewMessage(input({ ask }), { client: fake({ stop_reason: 'end_turn', content: [{ type: 'text', text: '{' }] }) }), /unreadable/);
 });
