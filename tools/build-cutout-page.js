@@ -18,11 +18,10 @@
  *
  * WHAT IS DELIBERATELY NOT HERE
  *
- * Delivery, at any of its three rates. All of it is charged once an ORDER and
- * none of it is inside a price, so a per-size sheet is the wrong place to
- * quote it: this page cannot know how many cutout lines the eventual order
- * has. It is one line on the quote instead, named "Cutout delivery to our
- * shop" so nobody reads it as a delivery to them.
+ * The Saturday and large-format delivery rates: they are exceptions picked for
+ * one job on the quote. STANDARD delivery ($10, once an order) IS shown, since
+ * 2026-10-06: inside each pack price, and stated once beside the singles — the
+ * page must say what the quote will charge.
  */
 const fs = require('fs');
 const path = require('path');
@@ -66,7 +65,15 @@ const parse = (r) => {
 };
 
 const all = rows.map(parse);
-const packs = all.filter((m) => m.pack).sort((a, b) => a.size - b.size);
+/* CUSTOMER-FACING PRICES INCLUDE STANDARD DELIVERY (the owner, 2026-10-06).
+   Signs365 charges $10 weekday delivery once an order, and the quote adds it
+   (the cutout_ship add-on, shown inside the item's price). This page showed
+   the pack price without it, so a customer saw $160 here and $170 on the quote.
+   A pack is shown with the delivery in it; singles are priced per piece, so
+   the delivery is stated once beside them — exactly what the quote charges. */
+const DELIVERY = require('./lib/cutouts').SHIPPING_WEEKDAY;
+const packs = all.filter((m) => m.pack).sort((a, b) => a.size - b.size)
+  .map((m) => ({ ...m, bands: m.bands.map((b) => ({ ...b, price: b.price + DELIVERY })) }));
 const singles = all.filter((m) => !m.pack).sort((a, b) => a.size - b.size);
 if (!packs.length) { console.error('no pack methods found — refusing to write'); process.exit(1); }
 
@@ -191,8 +198,8 @@ const singleTables = singles.map((m) => `
           const p = packs.find((x) => x.size === m.size);
           if (!p) return '';
           const atPack = priceAt(m, p.pack);
-          return `<p class="ladder-note">A full sheet of ${p.pack} is ${money(p.bands[0].price)} &mdash;
-            ${money(atPack * p.pack)} for the same ${p.pack} bought one at a time.
+          return `<p class="ladder-note">A full sheet of ${p.pack} is ${money(p.bands[0].price)} with delivery &mdash;
+            ${money(atPack * p.pack + DELIVERY)} for the same ${p.pack} bought one at a time, with delivery.
             Once you are near a dozen, ask about the pack.</p>`;
         })()}
       </div>`).join('');
@@ -348,7 +355,7 @@ const BODY = `<section class="hero">
     <h1>Send us a face.<br />We&rsquo;ll make it <em>enormous</em>.</h1>
     <p>Printed and cut around the outline on rigid ${'3/16'}&Prime; board, in ${SIZES.map((s) => s + '&Prime;').join(', ')}.
        ${singles.length ? 'Buy one at a time, or a full sheet' : 'Sold by the full sheet'} &mdash; a sheet works out from ${cheapestEach.size}&Prime; at ${each(cheapestEach)} a head.
-       Every price on this page is what we charge; nothing is added at the end.</p>
+       Pack prices include standard delivery${singles.length ? `; single cutouts add ${money(DELIVERY)} delivery once per order` : ''}.</p>
     <div class="hero-btns">
       <a href="sms:+17738491854?&amp;body=Hi%20June%27s%20Tees!%20I%27d%20like%20big%20head%20cutouts." class="btn btn-gold">Text a photo &rarr;</a>
       <a href="tel:+17738491854" class="btn btn-outline-white">(773) 849-1854</a>
@@ -404,7 +411,8 @@ ${!singles.length ? '' : `<section>
     <div class="section-tag">By the single</div>
     <h2>Just need a few?</h2>
     <p class="lead">The ${bothWays.map((s) => s + '&Prime;').join(' and ')} are also sold one at a time, for orders
-       too small to want a whole sheet. The more you order, the less each one costs.</p>
+       too small to want a whole sheet. The more you order, the less each one costs.
+       Single cutouts add ${money(DELIVERY)} standard delivery once per order.</p>
     <div class="ladders">${singleTables}
     </div>
   </div>
@@ -522,7 +530,7 @@ const PRINT_HTML = `<!DOCTYPE html>
     <b>The faces do not have to match.</b> A pack is a quantity, not a design &mdash; send one photo per cutout
     and say how many of each.${packOnly.length ? ` The ${packOnly.map((s) => s + '&Prime;').join(' and ')} come by the sheet only:
     they are wider than the board a single is cut from.` : ''}
-    Delivery is included in pack prices and added to the quote on single cutouts.
+    Standard delivery is included in pack prices. Single cutouts add ${money(DELIVERY)} delivery once per order.
   </div>
 
   <div class="foot"><span>Prices current as of ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}.</span><span>jtees.net/services/big-head-cutouts.html</span></div>
