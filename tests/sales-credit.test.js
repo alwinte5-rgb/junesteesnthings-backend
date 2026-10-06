@@ -167,7 +167,7 @@ test('labels show wherever a lead or sale is listed', () => {
 test('the pay guide states the rules the code applies', () => {
   const title = src.indexOf("const PAY_GUIDE_TITLE = 'How the platform works and how you are paid';");
   assert.ok(title > 0, 'the guide has its title');
-  const at = src.indexOf('Everything you do for June\'s Tees happens here', title);
+  const at = src.indexOf('Everything you do for June\'s Tees happens here', src.indexOf('const PAY_GUIDE_BODY = '));
   const guide = src.slice(at, src.indexOf('The owner can see exactly how every figure was worked out.', at));
   assert.ok(at > 0 && guide.length > 1000, 'and its text');
   assert.strictEqual(TEAM.HOLD_DAYS, 14);
@@ -178,10 +178,14 @@ test('the pay guide states the rules the code applies', () => {
   assert.match(guide, /never taken off your commission/);
   assert.match(guide, /\*\*wage only\*\*/);
   // The worked example is the formula.
-  assert.deepStrictEqual(TEAM.commissionFor({ collected: 1082.5, total: 1082.5, tax: 82.5, pct: 10 }), { base: 1000, amount: 100 });
-  assert.match(guide, /10% of \$1,000 = \$100/);
+  assert.deepStrictEqual(TEAM.commissionFor({ collected: 1082.5, total: 1082.5, tax: 82.5, pct: 3 }), { base: 1000, amount: 30 });
+  assert.match(guide, /3% of \$1,000 = \$30/);
   // Every status the code can show is explained.
   for (const st of ['earning', 'waiting', 'payable', 'paid', 'wage only', 'needs your OK', 'on hold']) {
     assert.ok(guide.includes(`**${st}**`), `explains "${st}"`);
   }
+});
+
+test('a live guide that still says 10% is rewritten to 3%', () => {
+  assert.match(src, /body: PAY_GUIDE_BODY,\n  was: \[PAY_GUIDE_BODY_10PCT\]/);
 });

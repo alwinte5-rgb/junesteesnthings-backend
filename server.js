@@ -24365,7 +24365,7 @@ async function renderStaffPage(req, res, extra = '') {
         <label>Training path <select name="training_track">${Object.entries(TRAINING.TRACKS).map(([k, t]) =>
           `<option value="${k}">${escEmail(t.label)}</option>`).join('')}</select></label>
         <label>Hourly wage $ <input name="hourly_rate" type="number" min="0" max="200" step="0.25" value="0" style="width:80px"></label>
-        <label>Commission % of price, own leads <input name="commission_pct" type="number" min="0" max="50" step="0.25" value="0" style="width:80px"></label>
+        <label>Commission % of price, own leads <input name="commission_pct" type="number" min="0" max="50" step="0.25" value="3" style="width:80px"></label>
         <button type="submit">Add</button>
       </form>
       <p class="muted" style="margin-top:8px">${Object.values(STAFF.PRESETS).map((p) =>
@@ -28185,9 +28185,10 @@ const KB_ADDED = [
    calculated"). Linked from My earnings and My Day by PAY_GUIDE_TITLE. If the
    pay rules change, change this text with them (tools/lib/team-metrics.js). */
 const PAY_GUIDE_TITLE = 'How the platform works and how you are paid';
-KB_ADDED.push({ kind: 'sop', title: PAY_GUIDE_TITLE,
-  tags: 'pay, wage, hourly, hours, commission, earnings, my earnings, how pay works, payday, timeproof, own lead, shop lead, reorder, platform, menu, getting started, rules',
-  body: `Everything you do for June's Tees happens here, and everything you earn shows on **My earnings**. This guide explains both.\n\n` +
+/* The guide's text before commission examples used the real rate (3%, owner
+   2026-10-06: "commisions is 3% not 10"). Listed so a live copy that still
+   says 10% is rewritten; an owner-edited one is left alone. */
+const PAY_GUIDE_BODY_10PCT = `Everything you do for June's Tees happens here, and everything you earn shows on **My earnings**. This guide explains both.\n\n` +
 `## The platform\n\n` +
 `You sign in with your own email (through Cloudflare). Never share your sign-in; everything you do is recorded under your name.\n\n` +
 `**The menu**\n` +
@@ -28240,7 +28241,65 @@ KB_ADDED.push({ kind: 'sop', title: PAY_GUIDE_TITLE,
 `The owner pays wages, payable commission and any bonuses together through EasyPay, then records it here. Everything in that payment turns **paid** on My earnings. Bonuses and incentives (targets with a reward) also show on My earnings and My Day.\n\n` +
 `**A week, added up**\n` +
 `You work 30 hours at $15 = $450. A customer you found pays a $1,082.50 job in full; 14 days later, 10% of $1,000 = $100 is payable. You also closed a $600 shop-lead job: wage only. That payday: $450 + $100 = **$550**.\n\n` +
-`Something looks wrong? Ask in **Team chat** with the quote number. The owner can see exactly how every figure was worked out.` });
+`Something looks wrong? Ask in **Team chat** with the quote number. The owner can see exactly how every figure was worked out.`;
+const PAY_GUIDE_BODY = `Everything you do for June's Tees happens here, and everything you earn shows on **My earnings**. This guide explains both.\n\n` +
+`## The platform\n\n` +
+`You sign in with your own email (through Cloudflare). Never share your sign-in; everything you do is recorded under your name.\n\n` +
+`**The menu**\n` +
+`- **My Day**: start here. Leads waiting for a reply, follow-ups due, your tasks, your training and the owner's latest note\n` +
+`- **Leads**: every enquiry. Reply, set a follow-up date, add new leads\n` +
+`- **Quotes**: build and send quotes\n` +
+`- **Production**: each job's page, with its history, artwork, payments and messages\n` +
+`- **Design jobs** (designers): the jobs assigned to you, proofs and final art\n` +
+`- **Team chat**: your conversation with the owner. Ask here when unsure\n` +
+`- **Playbook**: ready replies, how-tos and guides like this one. Search it before you ask\n` +
+`- **Training**: your training steps and the owner's sign-offs\n` +
+`- **My earnings**: your wages, commission and bonuses\n\n` +
+`You only see what your level allows. **Training** and **Design training**: the owner approves your quotes and messages before a customer sees them. **Supervised**: you send quotes up to $500; discounts still go to the owner. **Trusted**: you run sales day to day. Something that needs the owner shows as **waiting for approval**. That is normal; it is not an error.\n\n` +
+`**Money rules**\n` +
+`- Sales tax is set automatically on your quotes\n` +
+`- Customers pay the shop only: by the payment link on their quote, or cash or Zelle that you record. A message asking a customer to pay any other way is held for the owner\n` +
+`- Cash or Zelle you record shows **not confirmed** until the owner confirms it arrived, and counts for nothing until then\n` +
+`- Refunds, corrections, write-offs, discounts beyond your level and sales credit are the owner's\n` +
+`- You cannot change a customer's name, email or phone on a quote that has been sent. Ask the owner\n\n` +
+`## How you are paid\n\n` +
+`You earn two ways. Your two rates are set by the owner and shown at the top of My earnings.\n\n` +
+`**1. Your hourly wage, for every hour you work**\n` +
+`- Track your time in TimeProof. Each week the owner enters your hours from TimeProof\n` +
+`- Wage = hours × your hourly rate\n` +
+`- A week is paid once it is over. The current week shows as **this week** until then\n` +
+`- Example: 30 hours at $15 an hour = **$450**\n\n` +
+`**2. Commission, on customers you bring in yourself**\n` +
+`- Commission = your % × the job's price **before sales tax**\n` +
+`- Example at 3%: a quote of $1,082.50, of which $82.50 is sales tax. The price before tax is $1,000, so your commission is **$30**\n` +
+`- Card fees and the cost of making the job are the shop's. They are never taken off your commission\n` +
+`- If part of a job is refunded, your commission goes down by the same share. If it is fully refunded, there is no commission\n` +
+`- Commission starts once the owner signs off your training. Quotes you created before that do not earn it\n\n` +
+`**Which sales earn commission**\n` +
+`- **Rep lead** (yours): a customer you found through your own outreach. Add them on **Leads** and choose **"I found this customer"** *before* you quote them. They earn your commission, and so do their reorders for 12 months after your first sale to them\n` +
+`- **Shop lead**: anyone who came to the shop (the website, chat, ads, calls, messages, walk-ins) or that the shop already knew. Your hourly wage covers these, so there is no commission, even when you close the sale\n` +
+`- If the shop has already heard from a customer you "found" (a quote at any time, or a lead or online order in the last year), it stays a shop lead. The page tells you why. When two people register the same new customer, the first one wins\n` +
+`- **Rep claimed · needs OK**: the customer told us a salesperson sent them, but nobody registered them first. Nothing is paid until the owner decides\n` +
+`- Every lead and quote shows its label from the start, so you always know which kind it is. Only the owner can change a label, and says why\n\n` +
+`**When commission is paid**\n` +
+`Commission is paid once the customer has paid in full **and 14 days have passed** since the last payment, so a quick refund cannot undo a payout. It is never paid while a card dispute is open.\n\n` +
+`**What each status on My earnings means**\n` +
+`- **earning**: the customer still has a balance\n` +
+`- **waiting**: paid in full, waiting out the 14 days\n` +
+`- **payable**: ready to pay\n` +
+`- **paid**: paid to you\n` +
+`- **wage only**: a shop lead, covered by your wage\n` +
+`- **needs your OK**: a customer's claim, waiting for the owner\n` +
+`- **on hold**: a card dispute is open\n\n` +
+`**Payday**\n` +
+`The owner pays wages, payable commission and any bonuses together through EasyPay, then records it here. Everything in that payment turns **paid** on My earnings. Bonuses and incentives (targets with a reward) also show on My earnings and My Day.\n\n` +
+`**A week, added up**\n` +
+`You work 30 hours at $15 = $450. A customer you found pays a $1,082.50 job in full; 14 days later, 3% of $1,000 = $30 is payable. You also closed a $600 shop-lead job: wage only. That payday: $450 + $30 = **$480**.\n\n` +
+`Something looks wrong? Ask in **Team chat** with the quote number. The owner can see exactly how every figure was worked out.`;
+KB_ADDED.push({ kind: 'sop', title: PAY_GUIDE_TITLE,
+  tags: 'pay, wage, hourly, hours, commission, earnings, my earnings, how pay works, payday, timeproof, own lead, shop lead, reorder, platform, menu, getting started, rules',
+  body: PAY_GUIDE_BODY,
+  was: [PAY_GUIDE_BODY_10PCT], });
 
 async function addPlaybookArticles() {
   for (const a of KB_ADDED) {
