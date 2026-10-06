@@ -223,6 +223,8 @@ const ROUTES = {
   'POST /admin/delivery/settings/partner': 'owner',
 
   'POST /admin/quote/:code/message': 'customers.message',
+  /* "No reply needed" on a customer's message (2026-10-06). */
+  'POST /admin/quote/:code/replies-handled': 'customers.message',
   'POST /admin/quote/:code/email': 'customers.message',
   /* Marks a quote as sent by text or by hand (2026-10-06): sending, so the same permission. */
   'POST /admin/quote/:code/delivered': 'customers.message',

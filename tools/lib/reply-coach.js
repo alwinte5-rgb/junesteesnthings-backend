@@ -165,7 +165,8 @@ Check, in this order:
 1. Accuracy: every fact in the draft (order number, quantities, sizes, colours,
    dates, prices, balance, pickup address and hours, links, what stage the job
    is at) matches the job and shop facts. A figure or promise the job does not
-   support is a problem. On a draft without money in the job, any price is a
+   support is a problem. Never work out a new price, total or date yourself: say
+   the shop must confirm it, and leave it out of the corrected version. On a draft without money in the job, any price is a
    problem.
 2. Completeness: it answers every question in the customer's latest message,
    and ends with one clear next step for them.

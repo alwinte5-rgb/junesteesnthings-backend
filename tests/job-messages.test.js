@@ -156,6 +156,7 @@ function card({ history = [], smsOn = true, consent = true, q = {} } = {}) {
     intIn: () => null, PROOFS: require('../tools/lib/job-proofs'),
     /* Files on the job an email may carry (2026-10-06): none here. */
     jobFilesFor: async () => [], MSGFILES: require('../tools/lib/message-files'), inboundReady: false,
+    jobPath: (c) => '/admin/production/' + c,
   };
   vm.createContext(sandbox);
   vm.runInContext([grab('const MESSAGE_KINDS = {', '};'), grab('const MESSAGE_ERRORS = {', '};'),
@@ -176,6 +177,33 @@ test('the card lists what was sent, how it went, and what they replied', async (
   assert.match(html, /Their reply[\s\S]*Can I pick up Saturday\?[\s\S]*pill-neutral">reply</);
   assert.match(html, /Your order is ready for pickup — AB12CD[\s\S]*pill-blue">sent</);
   assert.match(html, /In production[\s\S]*Twilio 30006: it is a landline[\s\S]*pill-red">undelivered</);
+});
+
+test('a reply nobody has answered says so, with No reply needed; an answer written here clears it', async () => {
+  const waiting = await card({ history: [
+    { channel: 'text', kind: 'reply', body: 'Sizes are 4 M 2 L', status: 'received', created_at: '2026-09-28T15:00:00Z' },
+    { channel: 'email', kind: 'milestone:ready', body: 'Ready', status: 'sent', created_at: '2026-09-28T16:00:00Z' }].reverse() });
+  assert.match(waiting, /has not had an answer yet[\s\S]*action="\/admin\/quote\/AB12CD\/replies-handled"[\s\S]*No reply needed/);
+  const answered = await card({ history: [
+    { channel: 'email', kind: 'manual', body: 'Thanks!', status: 'sent', created_at: '2026-09-28T16:00:00Z' },
+    { channel: 'text', kind: 'reply', body: 'Sizes', status: 'received', created_at: '2026-09-28T15:00:00Z' }] });
+  assert.doesNotMatch(answered, /has not had an answer yet/);
+  const handled = await card({ q: { replies_handled_at: '2026-09-29T00:00:00Z' }, history: [
+    { channel: 'text', kind: 'reply', body: 'Thanks', status: 'received', created_at: '2026-09-28T15:00:00Z' }] });
+  assert.doesNotMatch(handled, /has not had an answer yet/);
+  assert.match(handled, /Add a to-do for this job[\s\S]*name="quote_code" value="AB12CD"/);
+});
+
+test('the dashboard lists replies waiting and the to-do list, and the routes are mapped', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const d = src.slice(src.indexOf("app.get('/admin/dashboard'"), src.indexOf("app.get('/admin/dashboard'") + 20000);
+  assert.match(d, /many\(UNANSWERED_REPLIES_SQL/);
+  assert.match(d, /is waiting for a reply/);
+  assert.match(d, /id="todo"[\s\S]*action="\/admin\/tasks"/);
+  const STAFF = require('../tools/lib/staff');
+  assert.strictEqual(STAFF.ROUTES['POST /admin/quote/:code/replies-handled'], 'customers.message');
+  // Automatic emails are not an answer: only messages written from the job page count.
+  assert.match(src, /FILTER \(WHERE what = 'manual' AND status NOT IN/);
 });
 
 test('what a customer wrote is escaped', async () => {

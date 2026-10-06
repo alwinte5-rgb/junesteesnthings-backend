@@ -982,6 +982,9 @@ async function initDB() {
   /* A customer's emailed reply (status 'received', 2026-10-06) keeps Brevo's
      message id here, so a webhook delivered twice is kept once. */
   await pool.query(`ALTER TABLE client_emails ADD COLUMN IF NOT EXISTS inbound_id TEXT`).catch(() => {});
+  /* "No reply needed" on a customer's message: replies before this are not
+     counted as waiting on the dashboard (2026-10-06). */
+  await pool.query(`ALTER TABLE quotes ADD COLUMN IF NOT EXISTS replies_handled_at TIMESTAMPTZ`).catch(() => {});
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS client_emails_inbound_once
                       ON client_emails (inbound_id) WHERE inbound_id IS NOT NULL`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS client_emails_quote_idx ON client_emails (quote_code, created_at DESC)`)
@@ -20094,6 +20097,12 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
   }
   const sent = ['email', 'text'].includes(String(query.sent)) ? String(query.sent) : '';
   const failed = MESSAGE_ERRORS[String(query.msg_err || '')];
+  /* Their latest message is still waiting if nothing was written to them
+     from here after it (the dashboard counts the same way). */
+  const lastOut = history.find((m) => m.status !== 'received' && m.kind === 'manual' && !['failed', 'skipped', 'undelivered'].includes(m.status));
+  const lastIn = history.find((m) => m.status === 'received');
+  const waitingReply = lastIn && (!lastOut || new Date(lastIn.created_at) > new Date(lastOut.created_at))
+    && (!q.replies_handled_at || new Date(lastIn.created_at) > new Date(q.replies_handled_at)) ? lastIn : null;
   const tone = (st) => ({ delivered: 'green', sent: 'blue', received: 'neutral', sending: 'neutral',
                          skipped: 'amber', failed: 'red', undelivered: 'red' })[st] || 'neutral';
   const when = (d) => new Date(d).toLocaleString('en-US', { timeZone: SHOP_TZ, month: 'short', day: 'numeric',
@@ -20125,6 +20134,10 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
       ${sent ? `<div class="ok">Sent by ${sent}. It is in the list below.</div>` : ''}
       ${String(query.sent) === 'held' ? `<div class="ok">Saved for the owner to approve. It goes out when they send it.</div>` : ''}
       ${failed ? `<div class="warn">${escEmail(failed)}</div>` : ''}
+      ${waitingReply ? `<div class="warn" style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+        <span>${escEmail(first || 'They')} wrote ${escEmail(when(waitingReply.created_at))} and has not had an answer yet.</span>
+        <form method="POST" action="/admin/quote/${code}/replies-handled" style="margin:0">
+          <button type="submit" class="btn btn-ghost" style="padding:5px 12px;font-size:13px">No reply needed</button></form></div>` : ''}
       <div data-claude style="margin:0 0 12px;padding:10px 12px;border:1px solid #d9ccf5;border-radius:10px;background:#faf8ff">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
           <b style="font-size:14px;color:#3b2a6b">Ask Claude how to reply</b>
@@ -20173,6 +20186,14 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
           <div data-kblist style="margin-top:6px"></div>
         </details>
       </form>
+      <details style="margin:0 0 12px"><summary style="font-size:13px">Add a to-do for this job</summary>
+        <form method="POST" action="/admin/tasks" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+          <input name="title" required maxlength="200" placeholder="e.g. Call ${escEmail(first || 'them')} about sizes" style="flex:1 1 220px">
+          <input type="date" name="due_on" style="width:auto">
+          <input type="hidden" name="quote_code" value="${escEmail(code)}">
+          <input type="hidden" name="back" value="${escEmail(jobPath(code))}#messages">
+          <button type="submit" class="btn btn-ghost">Add</button>
+        </form></details>
       ${design ? '<p class="muted" style="font-size:12.5px">Your message goes to the customer from the shop. Their reply comes to the owner, who passes on anything for you.</p>'
         : history.length ? `<div class="rows">${history.map(row).join('')}</div>`
         : emptyState('Nothing sent yet. Receipts, reminders and updates show here as they go out.')}
@@ -20494,6 +20515,39 @@ app.post('/admin/quote/:code/message', requireAdmin, async (req, res) => {
    box and the person sends it through the route above, with all its checks.
    A designer's suggestion is written without any money in it. Each Claude call
    costs money, so one person gets a few a minute. */
+/* Customers whose latest message to the shop has not been answered: a reply
+   by email or text in the last 21 days with no message written from the job
+   page after it (automatic receipts and reminders do not count as an answer),
+   and not marked "no reply needed". Oldest waiting first. */
+const UNANSWERED_REPLIES_SQL = `
+  WITH m AS (
+    SELECT quote_code, created_at, status, kind AS what, preview AS body FROM client_emails
+     WHERE created_at > NOW() - interval '21 days'
+    UNION ALL
+    SELECT quote_code, created_at, status, template, body FROM sms_messages
+     WHERE quote_code IS NOT NULL AND created_at > NOW() - interval '21 days'),
+  t AS (
+    SELECT quote_code,
+           MAX(created_at) FILTER (WHERE status = 'received') AS last_in,
+           MAX(created_at) FILTER (WHERE what = 'manual' AND status NOT IN ('failed', 'skipped', 'undelivered')) AS last_out
+      FROM m GROUP BY quote_code)
+  SELECT q.code, q.name, t.last_in,
+         (SELECT body FROM m WHERE m.quote_code = q.code AND m.status = 'received' ORDER BY created_at DESC LIMIT 1) AS body
+    FROM t JOIN quotes q ON q.code = t.quote_code
+   WHERE t.last_in IS NOT NULL AND q.cancelled_at IS NULL
+     AND t.last_in > COALESCE(t.last_out, 'epoch') AND t.last_in > COALESCE(q.replies_handled_at, 'epoch')
+   ORDER BY t.last_in LIMIT 20`;
+
+/* "No reply needed" from the job page: the reply stops showing as waiting. */
+app.post('/admin/quote/:code/replies-handled', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/production');
+  if (actorLevel('quotes.view') !== 'on' && !(await designJobFor(code, currentActor()))) return res.redirect('/admin/design');
+  await pool.query('UPDATE quotes SET replies_handled_at = NOW() WHERE code = $1', [code])
+    .catch((e) => console.error(`replies handled on ${code} failed:`, e.message));
+  return res.redirect(`${jobPath(code)}#messages`);
+});
+
 const replyAsks = new Map();
 /* "Check before sending" (2026-10-06): the same job and conversation, and the
    message the person wrote, read by Claude for accuracy, tone and spelling
@@ -21071,8 +21125,9 @@ app.get('/admin/dashboard', requireAdmin, async (_req, res) => {
   /* Paid orders waiting to go out (the Shipping page), read beside the rest
      and failing on its own like every panel here. */
   const shipP = safe(shippingQueues().then(shippingWaiting), null, 'shipping');
+  const me = (currentActor() || OWNER_ACTOR).kind === 'staff' ? currentActor().id : null;
   const [takings, owed, out, leads, jobs, reviewsWaiting, changes, disputes, unapplied, badTexts, recent, tax,
-         certsWaiting, deliveredOwing, ads, traffic] =
+         certsWaiting, deliveredOwing, ads, traffic, replies, tasks, roster] =
     await Promise.all([
       /* Quotes and everything else apart: the board's "Collected this month"
          and the Finances months count the quote ledger only, so the total here
@@ -21125,6 +21180,11 @@ app.get('/admin/dashboard', requireAdmin, async (_req, res) => {
              ORDER BY delivered_at LIMIT 8`, 'delivered owing'),
       isOwner() ? safe(GOOGLE_ADS.overview(), null, 'google ads') : Promise.resolve(undefined),
       isOwner() ? safe(GOOGLE_ANALYTICS.overview(), null, 'google analytics') : Promise.resolve(undefined),
+      many(UNANSWERED_REPLIES_SQL, 'customer replies'),
+      /* The to-do list: the owner sees every open task, a helper theirs and anyone's. */
+      many(`SELECT * FROM staff_tasks WHERE done_at IS NULL AND ($1::int IS NULL OR assigned_to = $1 OR assigned_to IS NULL)
+             ORDER BY due_on NULLS LAST, created_at LIMIT 50`, 'tasks', [me]),
+      safe(staffRoster(), [], 'roster'),
     ]);
 
   const waiting = leads.filter((l) => l.lead_status === 'new');
@@ -21134,6 +21194,11 @@ app.get('/admin/dashboard', requireAdmin, async (_req, res) => {
 
   /* The one next thing, loudest first. */
   const attention = [
+    /* A customer wrote and nobody has answered (2026-10-06). */
+    ...replies.map((r) => ({ tone: Date.now() - new Date(r.last_in) > 24 * 3600 * 1000 ? 'red' : 'amber', icon: 'mail',
+      title: `${escEmail(r.name || r.code)} is waiting for a reply`,
+      sub: `&ldquo;${escEmail(String(r.body || '').replace(/\s+/g, ' ').slice(0, 90))}&rdquo; &middot; ${escEmail(ageInWords(r.last_in))}`,
+      href: `/admin/production/${escEmail(r.code)}#messages` })),
     ...disputes.map((d) => ({ tone: 'red', icon: 'alert',
       title: `Chargeback: ${money(d.amount)} ${d.quote_code ? 'on quote ' + escEmail(d.quote_code)
         : d.order_ref ? 'on studio order #' + escEmail(d.order_ref) : ''}`,
@@ -21222,6 +21287,29 @@ app.get('/admin/dashboard', requireAdmin, async (_req, res) => {
         <h2 class="card-title">Needs attention <span class="muted">${attention.length || ''}</span></h2>
         ${attention.length ? `<div class="rows">${attention.slice(0, 12).map(row).join('')}</div>`
           : emptyState('All clear. Nothing is late, waiting or disputed.')}
+      </div>
+      <div class="card" id="todo">
+        <h2 class="card-title">To-do <span class="muted">${tasks.length || ''}</span></h2>
+        ${tasks.length ? `<div class="rows">${tasks.map((t) => {
+          const due = t.due_on ? new Date(t.due_on).toISOString().slice(0, 10) : '';
+          const todayIso = new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ });
+          return `<div class="row-i"><span class="row-main"><b>${escEmail(t.title)}</b>
+            <div class="row-sub">${due ? `due ${escEmail(fmtDate(t.due_on))}` : 'no date'}${
+              t.quote_code ? ` &middot; <a href="/admin/production/${escEmail(t.quote_code)}">${escEmail(t.quote_code)}</a>` : ''}${
+              t.assigned_to != null ? ` &middot; ${escEmail(nameOf(roster, t.assigned_to))}` : ''}</div></span>
+            <span class="row-end">${due && due < todayIso ? pill('overdue', 'red') : due === todayIso ? pill('today', 'amber') : ''}
+              <form method="post" action="/admin/tasks/${Number(t.id)}/done" style="margin:0">
+                <input type="hidden" name="back" value="/admin/dashboard#todo">
+                <button type="submit" class="btn btn-ghost">Done</button></form></span></div>`;
+        }).join('')}</div>` : emptyState('Nothing on the list.')}
+        <form method="post" action="/admin/tasks" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+          <input name="title" required maxlength="200" placeholder="Add a to-do" style="flex:1 1 200px">
+          <input type="date" name="due_on" style="width:auto">
+          ${isOwner() && roster.some((r) => r.active) ? `<select name="assigned_to" style="width:auto"><option value="">Anyone</option>${
+            roster.filter((r) => r.active).map((r) => `<option value="${Number(r.id)}">${escEmail(r.name)}</option>`).join('')}</select>` : ''}
+          <input type="hidden" name="back" value="/admin/dashboard#todo">
+          <button type="submit" class="btn btn-ghost">Add</button>
+        </form>
       </div>
       <div class="card">
         <h2 class="card-title">Latest leads <a href="/admin/leads?status=all">all leads &rarr;</a></h2>
