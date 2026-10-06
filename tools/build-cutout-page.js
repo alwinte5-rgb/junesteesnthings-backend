@@ -72,7 +72,7 @@ const all = rows.map(parse);
    A pack is shown with the delivery in it; singles are priced per piece, so
    the delivery is stated once beside them — exactly what the quote charges. */
 const DELIVERY = require('./lib/cutouts').SHIPPING_WEEKDAY;
-const packs = all.filter((m) => m.pack).sort((a, b) => a.size - b.size)
+const packs = all.filter((m) => m.pack).sort((a, b) => a.size - b.size || a.pack - b.pack)
   .map((m) => ({ ...m, bands: m.bands.map((b) => ({ ...b, price: b.price + DELIVERY })) }));
 const singles = all.filter((m) => !m.pack).sort((a, b) => a.size - b.size);
 if (!packs.length) { console.error('no pack methods found — refusing to write'); process.exit(1); }
@@ -207,7 +207,7 @@ const singleTables = singles.map((m) => `
 const packCards = packs.map((m) => `
         <figure class="pack-card">
           ${packDrawing(m)}
-          <figcaption><b>${m.size} inch</b><span>${m.pack} to a sheet</span></figcaption>
+          <figcaption><b>${m.size} inch</b><span>${/half sheet/i.test(m.title) ? m.pack + ', half a sheet' : m.pack + ' to a sheet'}</span></figcaption>
         </figure>`).join('');
 
 const FAQ = [
@@ -384,7 +384,7 @@ const BODY = `<section class="hero">
 <section class="alt">
   <div class="container">
     <div class="section-tag">By the pack</div>
-    <h2>A pack is one full sheet</h2>
+    <h2>A pack is a sheet, or half of one</h2>
     <p class="lead">Cutouts are printed on a sheet and cut out of it, so a sheet is the natural unit.
        The price of a pack is the same whether you order one or ten, and delivery is already in it &mdash;
        which makes it the cheapest way to buy at every size.</p>

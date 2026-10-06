@@ -139,7 +139,13 @@ const packLadder = (size) => ({ 1000: (PACK_PRICES[size] || packPrice(size)).toF
 /* THE OWNER'S PACK PRICES (2026-09-30), set by hand. packPrice() is the x2
    cost rule and stays the floor this is checked against: a price under it is
    allowed, because it is her call, but the run says so. */
-const PACK_PRICES = { 12: 225, 18: 210, 24: 185, 36: 160 };
+/* 2026-10-06: the owner hand-cuts every head (about 5 minutes each; setting up
+   contour-cut files takes longer), so the 12in 32-pack went $225 -> $315 ($325
+   with delivery): 32 heads by hand was costing ~$261 and selling at $225.
+   A 12in HALF pack of 16 sits beside it at $165 ($175 with delivery). The 24in
+   is hand-cut on a 20x24 board. */
+const PACK_PRICES = { 12: 315, 18: 210, 24: 185, 36: 160 };
+const HALF_PACK_12 = 165;
 for (const [size, price] of Object.entries(PACK_PRICES)) {
   if (price < packPrice(Number(size))) {
     console.log('  note: the ' + size + 'in pack at $' + price + ' is under the x2 cost rule ($' + packPrice(Number(size)) + ')');
@@ -165,6 +171,9 @@ const METHODS = [
      see first in the decoration list. A customer ordering ten 12" heads pays
      for a whole sheet either way — the only question is whether they go home
      with ten or with thirty-two. */
+  { title: 'Big Head Cutout — 12in, 16-pack (half sheet)',
+    bands: { 1000: HALF_PACK_12.toFixed(2) }, min: 1, offered: true, unit: 'pack',
+    description: 'Half a sheet of 12 inch big head cutouts — 16 of them, printed and cut on 3/16 inch board. Priced per pack.' },
   { title: 'Big Head Cutout — 12in, ' + packSizeFor(12) + '-pack (full sheet)',
     bands: packLadder(12), min: 1, offered: true, unit: 'pack',
     description: 'A full sheet of 12 inch big head cutouts — ' + packSizeFor(12) +
