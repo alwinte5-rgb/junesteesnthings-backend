@@ -92,7 +92,7 @@
  */
 const fs = require('fs');
 const { mysql, enjson, sq } = require('./lib/db');
-const { ladderFor, minimumFor, packSizeFor, packPrice, MINUTES_PER_HEAD, SHOP_RATE, singlesLadder } = require('./lib/cutouts');
+const { ladderFor, minimumFor, packSizeFor, packPrice, MINUTES_PER_HEAD, SHOP_RATE } = require('./lib/cutouts');
 
 const argv = process.argv.slice(2);
 const APPLY = argv.includes('--apply');
@@ -118,20 +118,13 @@ if (!url) { console.error('no MySQL URL'); process.exit(2); }
  *
  * Keys are band CEILINGS — the price applies UP TO that quantity. The opposite
  * convention to BLANK_TIERS, which are floors. */
-/* Band CEILINGS only — the PRICES are derived by singlesLadder() from the same
-   cost model the packs use. They used to be written out here and went stale the
-   moment the shop rate changed. */
-const SINGLE_BANDS = { 12: [6, 12, 32, 1000], 18: [5, 10, 20, 50, 1000] };
-/* THE OWNER'S SINGLES PRICE (2026-10-06): ONE price at any quantity — "there
-   shouldn't be" a quantity discount on singles; anyone buying many buys a pack.
-   It is the cost-model price for a single piece less $10 (two $5 cuts):
-   12in $18, 18in $33. A flat price set at the worst-case (one piece) cost is
-   above cost at every quantity, so there is no floor to check. */
-const SINGLES_OFF = 10;
-const flatSingle = (size) => ({ 1000: (Number(Object.values(singlesLadder(size, SINGLE_BANDS[size]))[0]) - SINGLES_OFF).toFixed(2) });
+/* THE OWNER'S SINGLES PRICES (2026-10-06), set by hand. 12in is one price at
+   any quantity. 18in steps down: $33 for one, $30 each for 2-3, $25 each from
+   4 (so five 18in are $125, under the 36in 5-pack). Band keys are CEILINGS.
+   Each head is cut by hand from a $44 printed coroplast sheet. */
 const SINGLES = {
-  12: flatSingle(12),
-  18: flatSingle(18),
+  12: { 1000: '18.00' },
+  18: { 1: '33.00', 3: '30.00', 1000: '25.00' },
 };
 /* Flat: one band covering everything, because cost per pack does not move.
    The price is the owner's own where she has set one (PACK_PRICES, below). */

@@ -45,10 +45,8 @@ const each = (method, qty) => Number(W.priceLine({
    stopped being true the day the ladder became computed — so the suite was
    asserting against prices the shop no longer sold. */
 const SINGLE_BANDS = { 12: [6, 12, 32, 1000], 18: [5, 10, 20, 50, 1000] };
-/* The owner's flat singles price (2026-10-06), as add-cutouts derives it: the
-   one-piece cost-model price less $10, the same at every quantity. */
-const flatSingle = (t) => ({ 1000: (Number(Object.values(CUT.singlesLadder(t, SINGLE_BANDS[t]))[0]) - 10).toFixed(2) });
-const SINGLES = { 12: flatSingle(12), 18: flatSingle(18) };
+/* The owner's singles prices (2026-10-06), as add-cutouts writes them. */
+const SINGLES = { 12: { 1000: '18.00' }, 18: { 1: '33.00', 3: '30.00', 1000: '25.00' } };
 const S12 = ladder(SINGLES[12]);
 const S18 = ladder(SINGLES[18]);
 const PACKS = [12, 18, 24, 36].map((t) => [t, ladder({ 1000: CUT.packPrice(t).toFixed(2) })]);
@@ -95,8 +93,11 @@ test('a pack is exactly one sheet, so nothing is wasted', () => {
   assert.deepStrictEqual([12, 18, 24, 36].map(CUT.packSizeFor), [32, 10, 8, 5]);
   /* Pinned so a change to the cost model cannot move a PUBLISHED price without
      someone noticing: these four are on jtees.net and in the PDF handout.
-     $212/$186/$184/$178 until 2026-09-23, when the shop rate went $35 -> $50. */
-  assert.deepStrictEqual([12, 18, 24, 36].map(CUT.packPrice), [208, 172, 168, 164]);
+     $212/$186/$184/$178 until 2026-09-23, when the shop rate went $35 -> $50;
+     $208/$172/$168/$164 until 2026-10-06, when the sheet became the owner's
+     $44 printed coroplast, cut by hand at 5 minutes a head. These are the x2
+     cost floor; what is charged is her PACK_PRICES in tools/add-cutouts.js. */
+  assert.deepStrictEqual([12, 18, 24, 36].map(CUT.packPrice), [356, 172, 156, 130]);
 });
 
 test('a pack always beats the same heads bought as singles', () => {
@@ -112,15 +113,13 @@ test('a pack always beats the same heads bought as singles', () => {
 
 /* ── Singles ───────────────────────────────────────────────────────────── */
 
-test('a single is one price at any quantity: no quantity discount', () => {
-  /* The owner, 2026-10-06: "is there a quantity discount on singles? there
-     shouldn't be." Many heads is what a pack is for. */
-  assert.deepStrictEqual(Object.keys(SINGLES[12]), ['1000']);
-  assert.deepStrictEqual(Object.keys(SINGLES[18]), ['1000']);
-  for (const q of [1, 2, 5, 6, 7, 12, 13, 50, 1000]) {
-    assert.strictEqual(each(S12, q), 18, '12in at ' + q);
-    assert.strictEqual(each(S18, q), 33, '18in at ' + q);
-  }
+test('singles: 12in one price; 18in $33 for one, $30 for 2-3, $25 from 4', () => {
+  for (const q of [1, 2, 5, 50]) assert.strictEqual(each(S12, q), 18, '12in at ' + q);
+  assert.strictEqual(each(S18, 1), 33);
+  assert.strictEqual(each(S18, 2), 30);
+  assert.strictEqual(each(S18, 3), 30);
+  assert.strictEqual(each(S18, 4), 25);
+  assert.strictEqual(each(S18, 50), 25);
 });
 
 test('no singles ladder ever rises as the order grows', () => {

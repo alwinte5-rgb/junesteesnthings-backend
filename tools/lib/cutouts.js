@@ -28,16 +28,16 @@
 const VINYL_SQFT = 2.49;          // GF 203OAPAE
 const LAMINATE_AND_CUT = 1.20;    // +10% gloss laminate, +10% contour cut
 const BOARD = 3.00;               // one 20x30 board per head
-const SHEET = 77.00;              // 48x96 foamcore, contour cut included
+const SHEET = 44.00;              // 48x96 coroplast, printed by Signs365 (the owner, 2026-10-06); she cuts it
 const SHOP_RATE = 50;             // $/hour
-const MINUTES_PER_HEAD = 10;      // mount vinyl to board, hand-cut the head
+const MINUTES_PER_HEAD = 5;       // timed by the owner 2026-10-06: about 5 minutes a head
 /* Per head, on a PACK. The sheet arrives contour cut, so none of the cutting
    is ours — but the sticks still have to be glued on, and one minute a head is
    almost certainly short for that. It is the number the pack price is most
    sensitive to: a 32-pack at 3 minutes is 96 minutes of shop time, $80 against
    the $26.67 assumed here, and the 12in pack goes $208 -> $314.
    UNTIMED. Time one and correct it; everything above moves with it. */
-const MINUTES_HANDLING = 1;
+const MINUTES_HANDLING = 5;       // 2026-10-06: every head is cut by hand from the printed sheet
 const MARKUP = 2.0;               // the shop's x2, as tools/lib/markup.js holds it
 const SHIPPING_WEEKDAY = 10.00;   // Signs365 weekday freight, charged once an ORDER
 

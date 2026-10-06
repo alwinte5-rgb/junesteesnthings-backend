@@ -195,7 +195,8 @@ const singleTables = singles.map((m) => `
           </tbody>
         </table>
         ${(() => {
-          const p = packs.find((x) => x.size === m.size);
+          /* The FULL sheet of this size: the largest pack (a 12in also comes as a half). */
+          const p = packs.filter((x) => x.size === m.size).sort((a, b) => b.pack - a.pack)[0];
           if (!p) return '';
           const atPack = priceAt(m, p.pack);
           return `<p class="ladder-note">A full sheet of ${p.pack} is ${money(p.bands[0].price)} with delivery &mdash;
@@ -411,7 +412,7 @@ ${!singles.length ? '' : `<section>
     <div class="section-tag">By the single</div>
     <h2>Just need a few?</h2>
     <p class="lead">The ${bothWays.map((s) => s + '&Prime;').join(' and ')} are also sold one at a time, for orders
-       too small to want a whole sheet. One price each, however many you order.
+       too small to want a whole sheet.
        Single cutouts add ${money(DELIVERY)} standard delivery once per order.</p>
     <div class="ladders">${singleTables}
     </div>
