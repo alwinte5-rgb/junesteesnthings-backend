@@ -17,11 +17,19 @@ const vm = require('node:vm');
 
 const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 
+/* decorationSummary reads the line through itemPrints(), which uses the
+   pricing engine's legacyPrints(): lift all three, so the test runs the real
+   chain. */
 const fn = (() => {
-  const i = src.indexOf('function decorationSummary(item, catalog)');
-  assert.ok(i > -1, 'decorationSummary not found in server.js');
-  const body = src.slice(i);
-  return vm.runInThisContext('(' + body.slice(0, body.indexOf('\n}\n') + 2) + ')');
+  const top = (name) => {
+    const i = src.indexOf('function ' + name + '(');
+    assert.ok(i > -1, name + ' not found in server.js');
+    const body = src.slice(i);
+    return body.slice(0, body.indexOf('\n}\n') + 2);
+  };
+  const engine = vm.runInThisContext('(' + top('quotePricingSource') + ')()');
+  return vm.runInThisContext('(function(){' + engine +
+    '\n' + top('itemPrints') + '\n' + top('decorationSummary') + '\nreturn decorationSummary; })()');
 })();
 
 const DTF = { id: 1, title: 'DTF Printing', type: 'fixed' };

@@ -6730,6 +6730,55 @@ function quotePricingSource() {
         return v === 'both' ? 2 : (v === 'left' || v === 'right') ? 1 : 0;
       }
 
+      /* The four places a garment is printed, in the order the form lists
+         them and the customer reads them. */
+      var PRINT_LOCS = ['front', 'back', 'left', 'right'];
+
+      /* A posted/stored location list, cleaned: known places only, one print
+         per place, each with a real method, in PRINT_LOCS order. */
+      function linePrintsFrom(list) {
+        var seen = {}, out = [];
+        for (var i = 0; i < PRINT_LOCS.length; i++) {
+          for (var j = 0; j < (list || []).length; j++) {
+            var p = list[j];
+            if (!p || p.loc !== PRINT_LOCS[i] || seen[p.loc] || !p.method) continue;
+            seen[p.loc] = true;
+            out.push({ loc: p.loc, method: p.method, colours: p.colours });
+          }
+        }
+        return out;
+      }
+
+      /* An old line's seven placement fields, as the same list. Each print
+         keeps the slot it came from and the position key the old engine read,
+         so the old price is reproduced exactly. */
+      function legacyPrints(o) {
+        var out = [];
+        var has = function (v) { return v !== undefined && v !== null && v !== ''; };
+        function add(method, stage, cPick, backPick, slot) {
+          if (!method) return;
+          var pk = Object.keys(method.positions || {});
+          if (stage === 'both') {
+            out.push({ loc: 'front', method: method, colours: cPick, slot: slot, key: pk[0] });
+            out.push({ loc: 'back', method: method, colours: has(backPick) ? backPick : cPick, slot: slot, key: pk[1] || pk[0] });
+          } else if (stage && stage !== 'front') {
+            out.push({ loc: 'back', method: method, colours: cPick, slot: slot, key: stage });
+          } else {
+            out.push({ loc: 'front', method: method, colours: cPick, slot: slot, key: stage || '' });
+          }
+        }
+        add(o.method, o.stage, o.colours, o.backColours, 1);
+        if (o.method) {
+          var pk1 = Object.keys(o.method.positions || {});
+          var sc = has(o.sleeveColours) ? o.sleeveColours : o.colours;
+          var sv = o.sleeves;
+          if (sv === 'left' || sv === 'both') out.push({ loc: 'left', method: o.method, colours: sc, slot: 1, key: pk1[pk1.length - 1] });
+          if (sv === 'right' || sv === 'both') out.push({ loc: 'right', method: o.method, colours: sc, slot: 1, key: pk1[pk1.length - 1] });
+        }
+        add(o.method2, o.stage2, o.colours2, null, 2);
+        return out;
+      }
+
       function screensPerPass(colours, dark) {
         var c = parseInt(colours, 10); if (!(c > 0)) c = 1;
         return c + (dark ? 1 : 0);
@@ -6824,43 +6873,38 @@ function quotePricingSource() {
           blankBase = parseFloat(o.blankOverride);
         }
         var blank = blankBase ? blankPriceAt(blankBase, bandQty, o.blankTiers || []) : 0;
-        /* Both sides, when the job is printed front AND back. The picker used to
-           offer only "one location" or "second location" — either/or — so a
-           two-sided job could be quoted at one side's price while the designer
-           charged both, and the quote came in under the work.
+        /* PRINT LOCATIONS. A line is printed in up to four places — front,
+           back, left sleeve, right sleeve — each with its own method and its
+           own ink count. The form lists them that way, and \`o.prints\` carries
+           them: [{ loc, method, colours }].
 
-           Positions are read by ORDER, not by name: the group keys are opaque
-           ("id", "mr8a5dlx"). A method with two groups (DTF) gives front + the
-           cheaper back; a method with one (screen printing, multi:false) doubles
-           its only table — which is what the designer does too, because a second
-           screen-print location is a second set of screens, not a cheaper pass. */
-        /* Written as a function because a line can carry TWO decorations: a job
-           that is DTF on one side and screen printed on the other is one
-           garment and two processes, and quoting it as two lines charged the
-           shirt twice. Each decoration reads its own placement and its own
-           colour count, and each is minimum-enforced on its own method below —
-           screen printing's 50-piece floor must not be applied to the DTF half
-           and vice versa. */
-        /* backPick: the BACK's ink count on a front + back line. A 3-colour
-           front with a 1-colour back is $6 + $4 a shirt, not $6 + $6, and four
-           screens, not six. Absent, the back takes the front's count — which
-           is how every quote before 2026-10-05 was priced, so they re-price
-           unchanged. */
-        function decoFor(method, stage, colourPick, backPick) {
-          if (!method) return 0;
-          var c = colourCount(method, colourPick);
-          if (stage === 'both') {
-            var pk = Object.keys(method.positions || {});
-            var cb = (backPick !== undefined && backPick !== null && backPick !== '')
-              ? colourCount(method, backPick) : c;
-            return Number(tierAt(method.positions, bandQty, pk[0], c)) +
-                   Number(tierAt(method.positions, bandQty, pk[1] || pk[0], cb));
-          }
-          return Number(tierAt(method.positions, bandQty, stage, c));
+           A line saved before 2026-10-06 described the same thing in seven
+           overlapping fields (method/stage/colours, back_colours, sleeves,
+           sleeve_colours, method2/stage2/colours2). legacyPrints() turns those
+           into the same list, tagging each print with the SLOT it came from and
+           the exact position key the old engine read, so an old quote prices
+           to the cent as it did — pinned by tests/quote-print-locations.test.js
+           against the previous engine.
+
+           Which position table a location reads: the front reads the method's
+           front table, the back its second group (or its only one), a sleeve
+           its last — the same tables the designer charges for those stages. A
+           single-table method such as screen printing charges that table once
+           per place printed, because each place is another set of screens. */
+        var prints = o.prints ? linePrintsFrom(o.prints) : legacyPrints(o);
+        var legacy = !o.prints;
+        function keyOf(p) {
+          if (p.key !== undefined) return p.key;
+          var pk = Object.keys(p.method.positions || {});
+          if (p.loc === 'back') return pk[1] || pk[0];
+          if (p.loc === 'left' || p.loc === 'right') return pk[pk.length - 1];
+          return '';
         }
 
         /* A method's own minimum, scaled per piece so unit x qty still holds.
-           Applied per decoration, not to the line total. */
+           Applied to each decoration GROUP — every place one method prints —
+           not to the line total, so screen printing's 50-piece floor is never
+           applied to a DTF sleeve on the same shirt. */
         function applyMin(method, amount) {
           if (!method || !(amount > 0)) return amount;
           var mn = method.min_order_qty ? (parseInt(method.min_order_qty, 10) || 0) : 0;
@@ -6868,84 +6912,92 @@ function quotePricingSource() {
           return Math.round(amount * (mn / bandQty) * 100) / 100;
         }
 
-        /* SLEEVES. Each printed sleeve is one more pass of the FIRST
-           decoration, priced the way the designer prices any extra stage
-           (core/cart.php printing_calc_raw): a single-table method such as
-           screen printing charges its only table again per sleeve; a method
-           with separate position groups charges its secondary (last) group,
-           the same table a back print uses. A sleeve carries its own ink count
-           because it is usually a one-colour mark beside a fuller front.
-           Folded into the first decoration BEFORE the minimum, because the
-           sleeves are the same method's work on the same garments. */
-        var sleeves = sleeveCount(o.sleeves);
-        function sleeveDeco(method, colourPick) {
-          if (!method || !sleeves) return 0;
-          var c = colourCount(method, colourPick);
-          var pk = Object.keys(method.positions || {});
-          return sleeves * Number(tierAt(method.positions, bandQty, pk[pk.length - 1], c));
+        /* Group by method (by slot, for an old line), in order of first use. */
+        var groups = [], gi = {};
+        for (var pi = 0; pi < prints.length; pi++) {
+          var pr = prints[pi];
+          var gk = legacy ? 's' + pr.slot : 'm' + String(pr.method.id);
+          if (!(gk in gi)) { gi[gk] = groups.length; groups.push({ method: pr.method, amount: 0, slot: pr.slot }); }
+          pr.c = colourCount(pr.method, pr.colours);
+          groups[gi[gk]].amount += Number(tierAt(pr.method.positions, bandQty, keyOf(pr), pr.c));
         }
-        var sleeveColourPick = (o.sleeveColours !== undefined && o.sleeveColours !== null && o.sleeveColours !== '')
-          ? o.sleeveColours : o.colours;
-
-        var backColourPick = (o.backColours !== undefined && o.backColours !== null && o.backColours !== '')
-          ? o.backColours : o.colours;
-        var decoration = applyMin(o.method, decoFor(o.method, o.stage, o.colours, backColourPick) +
-                                            sleeveDeco(o.method, sleeveColourPick));
-        var decoration2 = applyMin(o.method2, decoFor(o.method2, o.stage2, o.colours2));
-
-        /* A decoration minimum, enforced. Tier keys are CEILINGS, so a quantity
-           below the smallest band prices at that band — a 12-piece screen job
-           quoted at the 50-99 rate while the shop pays a 50-piece contract
-           minimum plus screens. The form already WARNED about this; warning does
-           not stop the quote being saved and the money being taken, so the charge
-           itself is corrected here.
-
-           Billed as the minimum order it actually triggers, scaled per piece so
-           the line arithmetic (unit x qty) still holds. The admin keeps the last
-           word through the unit override — this sets the honest default, it does
-           not remove a human's ability to decide otherwise.
-
-           Lives in priceLine, not beside it, because this is the source both the
-           browser and the save path execute: enforcement written anywhere else
-           would apply on one surface and not the other, which is the exact class
-           of bug quotePricingSource() exists to prevent.
-
-           min_order_qty comes from the method row itself, which is also where the
-           designer reads it (core/cart.php printing_min_qty). One definition in
-           the database, read by every engine — not a constant restated in each
-           language, which is how the two drift. It is also why this function has
-           no free variables: the parity test lifts this source and executes it
-           alone, so anything it cannot see would break that guarantee. */
-        /* Over the press's screen ceiling this is not a screen-print job. Said
-           here, in the source both engines run, so the quote form and the
-           designer refuse the same designs — and said as a fact about the
-           press rather than a price, because there is no price for it. */
-        var overScreens = false, screenCeiling = 0, passScreens = 0;
-        /* \\s, not \s: this source lives in a template literal, which eats a
-           single backslash. It did: the test compiled to /screens*print/, never
-           matched "Screen Printing", and the press ceiling went unchecked. */
-        var sm = (o.method && /screen\\s*print/i.test(String(o.method.title || ''))) ? o.method
-               : (o.method2 && /screen\\s*print/i.test(String(o.method2.title || ''))) ? o.method2 : null;
-        if (sm) {
-          var sc = colourCount(sm, sm === o.method ? o.colours : o.colours2);
-          screenCeiling = maxScreens(sm);
-          passScreens = screensPerPass(sc, !!o.dark);
-          if (sm === o.method && o.stage === 'both') {
-            passScreens = Math.max(passScreens, screensPerPass(colourCount(sm, backColourPick), !!o.dark));
-          }
-          /* A sleeve is its own pass, so it is checked on its own count. */
-          if (sm === o.method && sleeves) {
-            passScreens = Math.max(passScreens, screensPerPass(colourCount(sm, sleeveColourPick), !!o.dark));
-          }
-          overScreens = passScreens > screenCeiling;
+        var decoTotal = 0, primaryDeco = 0;
+        for (var g = 0; g < groups.length; g++) {
+          groups[g].amount = applyMin(groups[g].method, groups[g].amount);
+          decoTotal += groups[g].amount;
         }
+        /* The PRIMARY decoration — the first slot of an old line, the first
+           method used on a new one — is what a percent-of-decoration add-on
+           (jumbo hoop) and a per-colour add-on are measured on. */
+        var primaryMethod = legacy ? (o.method || null) : (prints.length ? prints[0].method : null);
+        if (legacy) { for (g = 0; g < groups.length; g++) if (groups[g].slot === 1) primaryDeco = groups[g].amount; }
+        else if (groups.length) primaryDeco = groups[0].amount;
+        var colours = legacy ? colours : (prints.length ? prints[0].c : 1);
 
-        /* The charge itself is already corrected above, per decoration. What is
-           left here is the FLAG the form reads to explain why — kept reporting
-           the strictest minimum either decoration triggers. */
+        /* SCREENS: one set per place screen printed, at that place's own ink
+           count, plus the white underbase on a dark garment. An old line counts
+           only its first screen-printed slot, as it always did. */
+        var isScreen = function (m) { return !!m && /screen\\s*print/i.test(String(m.title || '')); };
+        var overScreens = false, screenCeiling = 0, passScreens = 0, screens = 0, locations = 0;
+        if (legacy) {
+          /* An old line counts screens exactly as the engine it was priced by
+             did — including its quirks — so re-saving it cannot move its price. */
+          var sv0 = sleeveCount(o.sleeves);
+          var has0 = function (v) { return v !== undefined && v !== null && v !== ''; };
+          var backPick0 = has0(o.backColours) ? o.backColours : o.colours;
+          var sleevePick0 = has0(o.sleeveColours) ? o.sleeveColours : o.colours;
+          var sm = isScreen(o.method) ? o.method : (isScreen(o.method2) ? o.method2 : null);
+          if (sm) {
+            screenCeiling = maxScreens(sm);
+            passScreens = screensPerPass(colourCount(sm, sm === o.method ? o.colours : o.colours2), !!o.dark);
+            if (sm === o.method && o.stage === 'both') passScreens = Math.max(passScreens, screensPerPass(colourCount(sm, backPick0), !!o.dark));
+            if (sm === o.method && sv0) passScreens = Math.max(passScreens, screensPerPass(colourCount(sm, sleevePick0), !!o.dark));
+            overScreens = passScreens > screenCeiling;
+          }
+          var screenStage = sm ? (sm === o.method2 ? o.stage2 : o.stage) : o.stage;
+          var screenColours = sm ? colourCount(sm, sm === o.method2 ? o.colours2 : o.colours) : colours;
+          locations = (screenStage === 'both') ? 2 : 1;
+          screens = screenCount(screenColours, locations, !!o.dark);
+          if (sm && sm === o.method && o.stage === 'both') {
+            screens = screenCount(screenColours, 1, !!o.dark) + screenCount(colourCount(sm, backPick0), 1, !!o.dark);
+          }
+          if (sm && sm === o.method && sv0) {
+            screens += screenCount(colourCount(sm, sleevePick0), sv0, !!o.dark);
+            locations += sv0;
+          }
+        } else {
+          for (pi = 0; pi < prints.length; pi++) {
+            pr = prints[pi];
+            if (!isScreen(pr.method)) continue;
+            if (!screenCeiling) screenCeiling = maxScreens(pr.method);
+            var pass = screensPerPass(pr.c, !!o.dark);
+            if (pass > passScreens) passScreens = pass;
+            if (pass > maxScreens(pr.method)) overScreens = true;
+            screens += screenCount(pr.c, 1, !!o.dark);
+            locations++;
+          }
+          if (!locations) {
+            /* Nothing screen printed: never billed (only a screen method
+               carries the fee); kept in the shape callers read. */
+            var faces = 0;
+            for (pi = 0; pi < prints.length; pi++) {
+              if (prints[pi].loc === 'left' || prints[pi].loc === 'right') continue;
+              if (prints[pi].method === primaryMethod) faces++;
+            }
+            locations = faces > 1 ? 2 : 1;
+            screens = screenCount(colours, locations, !!o.dark);
+          }
+        }
+        var sleeves = 0;
+        for (pi = 0; pi < prints.length; pi++) if (prints[pi].loc === 'left' || prints[pi].loc === 'right') sleeves++;
+
+        /* The strictest minimum any method on the line triggers — the FLAG the
+           form reads to explain why; the charge is corrected per group above. */
         var decoMin = 0;
-        if (o.method && o.method.min_order_qty) decoMin = parseInt(o.method.min_order_qty, 10) || 0;
-        if (o.method2 && o.method2.min_order_qty) decoMin = Math.max(decoMin, parseInt(o.method2.min_order_qty, 10) || 0);
+        for (g = 0; g < groups.length; g++) {
+          var gm = groups[g].method;
+          if (gm && gm.min_order_qty) decoMin = Math.max(decoMin, parseInt(gm.min_order_qty, 10) || 0);
+        }
         var belowDecoMin = decoMin > 0 && bandQty > 0 && bandQty < decoMin;
 
         /* Extended sizes carry an upcharge that applies only to the pieces in
@@ -6961,41 +7013,14 @@ function quotePricingSource() {
           }
         }
 
-        var listUnit = Math.round((blank + decoration + decoration2) * 100) / 100;
+        var listUnit = Math.round((blank + decoTotal) * 100) / 100;
         var hasOverride = o.unitOverride !== null && o.unitOverride !== undefined &&
                           o.unitOverride !== '' && isFinite(parseFloat(o.unitOverride));
         var unit = hasOverride ? parseFloat(o.unitOverride) : listUnit;
 
-        var decorationSubtotal = decoration * qty;
+        var decorationSubtotal = primaryDeco * qty;
+        var decoration = decoTotal;
 
-        /* Locations comes from the same \`stage\` the decoration was priced off,
-           so the screens billed and the passes charged can never disagree —
-           'both' is two locations by the same definition that doubled the
-           table above. */
-        /* SCREENS BELONG TO THE SCREEN-PRINT HALF, whichever slot it is in.
-           Reading o.stage and o.colours unconditionally was right while a line
-           held one decoration and wrong the moment it held two: a DTF front
-           with a 4-colour screen BACK billed one screen instead of four ($75
-           short), and a DTF printed both sides with a 1-colour screen front
-           billed two instead of one. The sm variable is already resolved above
-           for the ceiling check; placement and colour count come from the same
-           side of the line, so the screens billed and the passes charged still
-           cannot disagree. */
-        var screenStage = sm ? (sm === o.method2 ? o.stage2 : o.stage) : o.stage;
-        var screenColours = sm ? colourCount(sm, sm === o.method2 ? o.colours2 : o.colours) : colours;
-        var locations = (screenStage === 'both') ? 2 : 1;
-        var screens = screenCount(screenColours, locations, !!o.dark);
-        /* Front and back each burn their own colours' worth of screens. */
-        if (sm && sm === o.method && o.stage === 'both') {
-          screens = screenCount(screenColours, 1, !!o.dark) +
-                    screenCount(colourCount(sm, backColourPick), 1, !!o.dark);
-        }
-        /* Sleeves burn their own screens — per sleeve, at the sleeve's own ink
-           count — but only when the sleeves are the screen-print half. */
-        if (sm && sm === o.method && sleeves) {
-          screens += screenCount(colourCount(sm, sleeveColourPick), sleeves, !!o.dark);
-          locations += sleeves;
-        }
 
         /* SCREENS ARE BURNED ONCE FOR A RUN, not once a line. Lines pooled into
            the same run are one press setup — the same artwork across several
@@ -7062,14 +7087,43 @@ function quotePricingSource() {
 
 /* The same source, executed here, so Node prices a line with the identical
    code the browser runs. */
-const { priceLine, addonAmount, colourCount, screenCount, runGroupTotals, bandQtyFor } = (function () {
+const { priceLine, addonAmount, colourCount, screenCount, runGroupTotals, bandQtyFor,
+        legacyPrints, PRINT_LOCS } = (function () {
   const sandbox = {};
   vm.runInNewContext(quotePricingSource() +
     '\nthis.priceLine = priceLine; this.addonAmount = addonAmount;' +
+    '\nthis.legacyPrints = legacyPrints; this.PRINT_LOCS = PRINT_LOCS;' +
     '\nthis.runGroupTotals = runGroupTotals; this.bandQtyFor = bandQtyFor;' +
     '\nthis.colourCount = colourCount; this.screenCount = screenCount;', sandbox);
   return sandbox;
 })();
+
+/** A stored quote line's print locations, [{ loc, method, colours }], with
+ *  methods resolved against the catalogue. A line saved with `prints` reads
+ *  them; an older one is converted from its placement fields by the SAME
+ *  legacyPrints() the pricing engine uses, so the form, the customer's page
+ *  and the job cost all describe exactly what was priced. */
+function itemPrints(it, catalog) {
+  const meths = (catalog && catalog.methods) || [];
+  const find = (id) => (id != null && id !== '' ? meths.find((m) => String(m.id) === String(id)) || null : null);
+  if (!it) return [];
+  if (Array.isArray(it.prints)) {
+    return it.prints.map((p) => ({ loc: p && p.loc, method: find(p && p.method_id), colours: p && p.colours }))
+      .filter((p) => PRINT_LOCS.includes(p.loc) && p.method);
+  }
+  return legacyPrints({
+    method: find(it.method_id), stage: it.stage || '', colours: it.colours,
+    backColours: it.back_colours, sleeves: it.sleeves, sleeveColours: it.sleeve_colours,
+    method2: find(it.method2_id), stage2: it.stage2 || '', colours2: it.colours2,
+  }).map((p) => ({ loc: p.loc, method: p.method, colours: p.colours }));
+}
+
+/** Add-ons offered by ANY of these method titles, once each. */
+function addonsForAny(titles) {
+  const out = [], seen = new Set();
+  for (const t of titles) for (const a of addonsFor(t)) if (!seen.has(a.code)) { seen.add(a.code); out.push(a); }
+  return out;
+}
 
 /** The whole-job discount as a positive dollar figure.
  *
@@ -7681,6 +7735,25 @@ button:active{transform:translateY(1px)}
 .lsec-h{font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#1848B8;margin-bottom:6px}
 .lsec select,.lsec input:not([type=checkbox]){font-size:13.5px}
 .lcheck{display:flex;align-items:center;gap:6px;margin:0;font-size:13px;text-transform:none;letter-spacing:0;font-weight:400}
+.lsec-n{display:inline-block;width:16px;height:16px;line-height:16px;text-align:center;border-radius:50%;
+  background:#1848B8;color:#fff;font-size:10px;margin-right:4px}
+.lsec-sub{text-transform:none;letter-spacing:0;font-weight:400;color:#8b96ad;margin-left:4px}
+/* Print locations: one row per place, the same three columns on every row. */
+.ploc{display:grid;grid-template-columns:118px minmax(0,1fr) 128px;gap:8px;align-items:center;
+  padding:5px 6px;border-radius:8px}
+.ploc.on{background:#f3f6fd}
+.ploc-head{padding:0 6px 2px;font-size:10.5px;color:#8b96ad;text-transform:uppercase;letter-spacing:.05em}
+.ploc-name{display:flex;align-items:center;gap:7px;margin:0;font-size:13.5px;text-transform:none;
+  letter-spacing:0;font-weight:600;color:#0B1F4B;cursor:pointer}
+.ploc-name input{width:auto;margin:0}
+.backcheck{margin:2px 6px 4px;font-size:12px;color:#b45309}
+/* On a phone each place is a line of its own, with its pickers full width
+   beneath it, so method names are never cut off. */
+@media (max-width:520px){
+  .ploc{grid-template-columns:minmax(0,1fr) 112px;gap:6px;padding:6px 6px}
+  .ploc-name{grid-column:1 / -1}
+  .ploc-head{display:none}
+}
 @media (max-width:520px){
   .row-2{flex-direction:row}
   .row-2>*{min-width:0}
@@ -8313,7 +8386,7 @@ function productGroupOf(name) {
   return 'Everything else';
 }
 
-  const prodOpts = (sel) => {
+  const prodOpts = (sel, cutSel) => {
     const opt = (p) =>
       `<option value="${escEmail(String(p.id))}"${String(p.id) === String(sel) ? ' selected' : ''}>` +
       `${escEmail(p.name)} — ${money(p.price)}</option>`;
@@ -8324,11 +8397,17 @@ function productGroupOf(name) {
 
     /* A group with nothing in it is not rendered — an empty heading is worse
        than no heading. Within a group the catalogue's own order is kept. */
-    return [...bucket.entries()]
+    const garments = [...bucket.entries()]
       .filter(([, list]) => list.length)
       .map(([label, list]) =>
         `<optgroup label="${escEmail(label)}">${list.map(opt).join('')}</optgroup>`)
       .join('');
+    /* Cutout packs are what is being SOLD, not a place on a shirt, so they
+       are picked here rather than as a print location. Posted as cut:<id>;
+       the form copies the id into the line's method field. */
+    const cuts = quotable.filter((m) => CUTOUT_METHOD_RE.test(m.title || ''));
+    return garments + (cuts.length ? `<optgroup label="Cutouts &amp; signs">${cuts.map((m) =>
+      `<option value="cut:${m.id}"${String(m.id) === String(cutSel) ? ' selected' : ''}>${escEmail(m.title)}</option>`).join('')}</optgroup>` : '');
   };
   /* A decoration can only be offered here if it can be PRICED here: the line
      total is (blank + size upcharge + decoration tier for qty) x qty, so a
@@ -8355,9 +8434,17 @@ function productGroupOf(name) {
   const quotable = catalog.methods.filter(m =>
     m.active && m.use_for_quoting && Object.keys(m.positions || {}).length &&
     !DIGITIZING_METHOD_RE.test(m.title || ''));
-  const methodOpts = (sel) => quotable
-    .map(m => `<option value="${m.id}"${String(m.id) === String(sel) ? ' selected' : ''}>` +
-      `${escEmail(m.title)}</option>`).join('');
+  /* The decorations a print location can take: everything quotable except
+     cutout packs. A line already saved with a method since retired keeps it
+     selectable, so re-saving an old quote never silently drops its printing. */
+  const decoOpts = (sel) => {
+    const list = quotable.filter((m) => !CUTOUT_METHOD_RE.test(m.title || ''));
+    const kept = sel != null && sel !== '' && !list.some((m) => String(m.id) === String(sel))
+      ? catalog.methods.find((m) => String(m.id) === String(sel)) : null;
+    return (kept ? [kept] : []).concat(list)
+      .map((m) => `<option value="${m.id}"${String(m.id) === String(sel) ? ' selected' : ''}>` +
+        `${escEmail(m.title)}${m === kept ? ' (retired)' : ''}</option>`).join('');
+  };
 
   /* Embroidery run rates are excluded on purpose (the shop prices embroidery
      another way and only its digitizing fees are authoritative), so those are
@@ -8409,6 +8496,36 @@ function productGroupOf(name) {
       .filter((a) => a && a.code && Number(a.total) > 0)
       .map((a) => String(a.code));
 
+    /* What this line prints where, for the location rows. A cutout pack is
+       the PRODUCT, so it is shown in the product picker instead. */
+    const savedMethod = it ? catalog.methods.find((m) => String(m.id) === String(it.method_id)) : null;
+    const isCut = !!(it && !it.product_id && savedMethod && CUTOUT_METHOD_RE.test(savedMethod.title || '') &&
+      !Array.isArray(it.prints));
+    const placed = {};
+    if (it && !isCut) for (const p of itemPrints(it, catalog)) if (!placed[p.loc]) placed[p.loc] = p;
+    /* A new item starts with Front ticked: that is where almost every job
+       prints, and it puts "Choose decoration" right in front of the person. */
+    if (!it) placed.front = { loc: 'front', method: null, colours: '' };
+    /* Saved before the back had its own colour count: the back was priced at
+       the front's. Said on the back row of a quote not yet accepted. */
+    const backCheck = !!(it && !Array.isArray(it.prints) && it.stage === 'both' && it.colours &&
+      !it.back_colours && !(existing && existing.accepted_at));
+    const LOC_LABEL = { front: 'Front', back: 'Back', left: 'Left sleeve', right: 'Right sleeve' };
+    const locRow = (loc) => {
+      const p = placed[loc];
+      return `
+          <div class="ploc${p ? ' on' : ''}" data-loc="${loc}">
+            <label class="ploc-name"><input type="checkbox" class="pon" name="pr_on_${loc}${n}" value="1"${p ? ' checked' : ''}>
+              ${LOC_LABEL[loc]}</label>
+            <select class="pm" name="pr_m_${loc}${n}" aria-label="${LOC_LABEL[loc]} decoration"${p ? '' : ' style="display:none"'}>
+              <option value="">Choose decoration</option>${decoOpts(p && p.method ? p.method.id : null)}</select>
+            <select class="pc" name="pr_c_${loc}${n}" aria-label="${LOC_LABEL[loc]} ink colours" style="display:none"
+                    data-v="${p && p.colours ? val(p.colours) : ''}"></select>
+          </div>${loc === 'back' && backCheck ? `
+          <p class="backcheck">Saved before the back had its own colour count, so it was priced at the
+            front's. Check the back's ink colours and save to re-price.</p>` : ''}`;
+    };
+
     return `
     <div class="line" data-n="${n}" data-saved-addons="${val(savedAddons.join(','))}"
          data-saved-sizes="${val(JSON.stringify((it && it.size_mix) || {}))}"
@@ -8454,13 +8571,16 @@ function productGroupOf(name) {
            then the PRINTING on it, then QUANTITY & PRICE. Each group keeps
            everything about one thing together, so a helper never has to hunt
            for which box belongs to what. -->
+      <!-- The item reads top to bottom in the order it is quoted:
+             1 what we are making, 2 where it is printed and how,
+             3 quantity & price. Everything about one thing sits together. -->
       <div class="lsec">
-        <div class="lsec-h">Garment</div>
-        <select name="product${n}" class="p"><option value="">Product (optional)</option>${prodOpts(it && it.product_id)}</select>
+        <div class="lsec-h"><span class="lsec-n">1</span> What are we making</div>
+        <select name="product${n}" class="p"><option value="">Product (optional)</option>${prodOpts(it && it.product_id, isCut ? it.method_id : null)}</select>
         <!-- Directly under the product, because it is a property OF the product
              and the two are chosen together. -->
         <div class="colours" style="display:none;margin-top:8px"></div>
-        <div class="row row-2" style="margin-top:8px;align-items:center">
+        <div class="row row-2 garm" style="margin-top:8px;align-items:center">
           <label class="lcheck" title="A dark garment needs a white base screen under the ink">
             <input type="checkbox" name="dark${n}" class="dark" value="1"
                    ${it && it.garment_dark ? 'checked' : ''} style="width:auto;margin:0">
@@ -8472,62 +8592,16 @@ function productGroupOf(name) {
         <p class="muted bpnote" style="margin:3px 0 0;font-size:11.5px"></p>
       </div>
 
-      <div class="lsec">
-        <div class="lsec-h">Printing</div>
-        <div class="row row-2">
-          <select name="method${n}" class="m"><option value="">Decoration (optional)</option>${methodOpts(it && it.method_id)}</select>
-          <select name="loc${n}" class="loc" title="Where it is printed">
-            <option value="">Front only</option>
-            <option value="mr8a5dlx"${it && it.stage === 'mr8a5dlx' ? ' selected' : ''}>Back only</option>
-            <option value="both"${it && it.stage === 'both' ? ' selected' : ''}>Front + back</option>
-          </select>
+      <div class="lsec psec">
+        <div class="lsec-h"><span class="lsec-n">2</span> Printing <span class="lsec-sub">tick each place it is printed</span></div>
+        <!-- The line's main method — the first place printed, or the cutout
+             pack — kept in the field the save route and add-ons read. -->
+        <input type="hidden" name="method${n}" class="m" value="${it && it.method_id != null ? val(it.method_id) : ''}">
+        <div class="plocs">
+          <div class="ploc ploc-head" aria-hidden="true"><span>Where</span><span>Decoration</span><span>Ink colours</span></div>
+          ${PRINT_LOCS.map(locRow).join('')}
         </div>
-        <!-- Ink colours, one per place printed. Screen printing is ONE method
-             with a column per colour count, so the count picks the price and
-             only a person who has seen the artwork knows it. Options come from
-             the method's own colour_options in calc(), so the picker never
-             offers a column the shop has not priced. Hidden for every other
-             method. The back gets its own count: a 3-colour front with a
-             1-colour back is not two 3-colour prints. -->
-        <div class="inks" style="display:none;margin-top:8px;padding:8px 10px;background:#f6f8fd;border:1px solid #e3e8f2;border-radius:8px">
-          <div class="row row-2">
-            <div><label class="inklab" style="margin:0 0 4px;font-size:11px">Ink colours</label>
-              <select name="colors${n}" class="cols" style="font-size:13px;padding:6px 7px"
-                      data-v="${it && it.colours ? val(it.colours) : ''}"></select></div>
-            <div class="bink" style="display:none"><label style="margin:0 0 4px;font-size:11px">Back ink colours</label>
-              <select name="back_colors${n}" class="bcols" style="font-size:13px;padding:6px 7px"
-                      data-v="${it && (it.back_colours || it.colours) ? val(it.back_colours || it.colours) : ''}"></select></div>
-          </div>
-          ${it && it.stage === 'both' && it.colours && !it.back_colours && !(existing && existing.accepted_at) ? `
-          <p class="backcheck" style="margin:6px 0 0;font-size:12px;color:#b45309">Saved before the back had its own
-            colour count, so the back was priced at the front's. Set the back's real count and save to re-price.</p>` : ''}
-          <p class="muted" style="margin:4px 0 0;font-size:11.5px">One screen per colour, per place printed — the price is banded on this.</p>
-        </div>
-        <!-- Sleeves: each one is another pass of this decoration, with its
-             own ink count and its own screens. -->
-        <div class="row row-2" style="margin-top:8px">
-          <select name="sleeves${n}" class="slv">
-            <option value="">No sleeves</option>
-            <option value="left"${it && it.sleeves === 'left' ? ' selected' : ''}>+ Left sleeve</option>
-            <option value="right"${it && it.sleeves === 'right' ? ' selected' : ''}>+ Right sleeve</option>
-            <option value="both"${it && it.sleeves === 'both' ? ' selected' : ''}>+ Both sleeves</option>
-          </select>
-          <select name="sleeve_colors${n}" class="slc" style="display:none"
-                  title="Ink colours on each sleeve"
-                  data-v="${it && it.sleeve_colours ? val(it.sleeve_colours) : ''}"></select>
-        </div>
-        <!-- A SECOND decoration on the SAME garment: DTF on one side and screen
-             printed on the other is one shirt and two processes. Hidden until
-             the first decoration is chosen. -->
-        <div class="row row-2 deco2" style="display:none;margin-top:8px">
-          <select name="method2${n}" class="m2"><option value="">+ 2nd decoration (optional)</option>${methodOpts(it && it.method2_id)}</select>
-          <select name="loc2${n}" class="loc2">
-            <option value="">Front only</option>
-            <option value="mr8a5dlx"${it && it.stage2 === 'mr8a5dlx' ? ' selected' : ''}>Back only</option>
-            <option value="both"${it && it.stage2 === 'both' ? ' selected' : ''}>Front + back</option>
-          </select>
-        </div>
-        <div class="addons" style="margin-top:6px;display:none"></div>
+        <div class="addons" style="margin-top:8px;display:none"></div>
         <div class="digi" style="display:none;margin-top:8px;padding:8px 10px;background:#f6f8fd;border:1px solid #e3e8f2;border-radius:8px">
           <label style="margin:0 0 4px;font-size:11px">Digitizing — one time, not per piece</label>
           <select name="setup${n}" class="su" style="font-size:13px;padding:6px 7px">
@@ -8541,7 +8615,7 @@ function productGroupOf(name) {
       </div>
 
       <div class="lsec">
-        <div class="lsec-h">Quantity &amp; price</div>
+        <div class="lsec-h"><span class="lsec-n">3</span> Quantity &amp; price</div>
         <div class="row-tight">
           <input name="qty${n}" class="q" type="number" inputmode="numeric" min="1"
                  value="${it ? val(it.qty) : ''}" placeholder="Qty">
@@ -8871,6 +8945,9 @@ ${quotePricingSource()}
             else el.value = '';
           });
           only.querySelector('.thumbs').innerHTML = '';
+          only.querySelectorAll('.pc').forEach(function(pc){ pc.dataset.v = ''; pc.dataset.for = ''; });
+          var fr = only.querySelector('.ploc[data-loc="front"] .pon');
+          if (fr) fr.checked = true;
           calc();
           return;
         }
@@ -9098,17 +9175,58 @@ ${quotePricingSource()}
             ow.style.display = rk && rk.opt && rk.req ? 'block' : 'none';
           }
           var prod = CAT.products.find(function(x){return String(x.id)===L.querySelector('.p').value;});
-          var meth = CAT.methods.find(function(x){return String(x.id)===L.querySelector('.m').value;});
-          var m2El = L.querySelector('.m2');
-          var meth2 = m2El ? CAT.methods.find(function(x){return String(x.id)===m2El.value;}) : null;
-          /* The second slot only appears once the first is filled, and clears
-             itself if the first is emptied — a line cannot have a back print
-             and no front one. */
-          var d2row = L.querySelector('.deco2');
-          if (d2row) {
-            d2row.style.display = meth ? '' : 'none';
-            if (!meth && m2El && m2El.value) { m2El.value = ''; meth2 = null; }
-          }
+          /* WHERE IT IS PRINTED. One row per place; a ticked row takes a
+             decoration (defaulting to the one already used on this item, so
+             "same on the back" is one tick) and, for a method priced by
+             colour, its own ink count. A cutout pack is picked as the
+             product, and has no print places. */
+          var pSel = L.querySelector('.p');
+          var cutMeth = (pSel && pSel.value.indexOf('cut:') === 0)
+            ? CAT.methods.find(function(x){ return String(x.id) === pSel.value.slice(4); }) : null;
+          if (cutMeth) prod = null;
+          var psec = L.querySelector('.psec');
+          if (psec) psec.style.display = cutMeth ? 'none' : '';
+          var prints = [];
+          var firstM = '';
+          L.querySelectorAll('.ploc[data-loc]').forEach(function(row){
+            var on = !cutMeth && row.querySelector('.pon').checked;
+            var pm = row.querySelector('.pm');
+            if (on && pm.value && !firstM) firstM = pm.value;
+          });
+          L.querySelectorAll('.ploc[data-loc]').forEach(function(row){
+            var on = !cutMeth && row.querySelector('.pon').checked;
+            var pm = row.querySelector('.pm'), pc = row.querySelector('.pc');
+            row.classList.toggle('on', on);
+            pm.style.display = on ? '' : 'none';
+            if (on && !pm.value && firstM) pm.value = firstM;
+            var m = on ? CAT.methods.find(function(x){ return String(x.id) === pm.value; }) : null;
+            var inks = (m && m.type === 'color' && (m.colour_options || []).length) ? m.colour_options : null;
+            var key = inks ? String(m.id) : '';
+            if (pc.dataset.for !== key) {
+              pc.dataset.for = key;
+              pc.innerHTML = inks ? inks.map(function(c){
+                return '<option value="' + c + '">' + c + (c === 1 ? ' colour' : ' colours') + '</option>';
+              }).join('') : '';
+              if (inks) {
+                var was = parseInt(pc.dataset.v, 10);
+                pc.value = String(inks.indexOf(was) > -1 ? was : inks[0]);
+              }
+            }
+            /* Never blank: a blank posts as 1 anyway, so a picker showing
+               nothing would quote one colour while looking broken. */
+            if (inks && !pc.value) pc.value = String(inks[0]);
+            if (inks) pc.dataset.v = pc.value;
+            pc.style.display = inks ? '' : 'none';
+            if (m) prints.push({ loc: row.dataset.loc, method: m, colours: inks ? pc.value : '' });
+          });
+          /* The line's main method: the first place printed, or the cutout. */
+          var meth = cutMeth || (prints.length ? prints[0].method : null);
+          var mHidden = L.querySelector('.m');
+          if (mHidden) mHidden.value = meth ? String(meth.id) : '';
+          var lineTitles = [];
+          (cutMeth ? [cutMeth] : prints.map(function(p){ return p.method; })).forEach(function(m){
+            if (lineTitles.indexOf(m.title) === -1) lineTitles.push(m.title);
+          });
           var u    = L.querySelector('.u');
           var qEl  = L.querySelector('.q');
           buildColours(L, prod);
@@ -9131,89 +9249,29 @@ ${quotePricingSource()}
              decoration method. */
           var digiBox = L.querySelector('.digi');
           var su = L.querySelector('.su');
-          var isEmb = meth && /embroider/i.test(meth.title);
+          var isEmb = lineTitles.some(function(t){ return /embroider/i.test(t); });
           if (digiBox) {
             digiBox.style.display = isEmb ? 'block' : 'none';
             if (!isEmb && su) su.value = '';
           }
 
-          /* Ink colours, asked only for a method that prices by them. The seven
-             legacy per-colour methods carry the count in their titles and get
-             no picker, so the engine reads it from there instead — one rule,
-             two data generations. Rebuilt only when the method changes, so
-             re-pricing does not reset a chosen count. */
-          var inkBox = L.querySelector('.inks');
-          var colEl  = L.querySelector('.cols');
-          var inks = (meth && meth.type === 'color' && (meth.colour_options || []).length)
-                   ? meth.colour_options : null;
-          if (inkBox && colEl) {
-            var ikey = inks ? String(meth.id) : '';
-            if (colEl.dataset.for !== ikey) {
-              colEl.dataset.for = ikey;
-              colEl.innerHTML = inks ? inks.map(function(c){
-                return '<option value="' + c + '">' + c + (c === 1 ? ' colour' : ' colours') + '</option>';
-              }).join('') : '';
-              /* Restore what this line was saved with, else start at one — never
-                 blank. A blank posts as 1 anyway, so a picker showing nothing
-                 would quote a 1-colour job while looking like it failed to load. */
-              if (inks) {
-                var was = parseInt(colEl.dataset.v, 10);
-                colEl.value = String(inks.indexOf(was) > -1 ? was : inks[0]);
-              }
-            }
-            inkBox.style.display = inks ? 'block' : 'none';
-          }
-          /* The sleeve ink picker offers the same priced columns, and shows
-             only when a sleeve is chosen on a method priced by colour. */
-          /* The back's own ink picker: same priced columns, shown only on a
-             front + back line. The front's label says "Front" then, so the
-             two boxes cannot be mistaken for each other. */
-          var locNow = L.querySelector('.loc') ? L.querySelector('.loc').value : '';
-          var bcEl = L.querySelector('.bcols');
-          var bink = L.querySelector('.bink');
-          var inkLab = L.querySelector('.inklab');
-          if (bcEl) {
-            var bkey = inks ? String(meth.id) : '';
-            if (bcEl.dataset.for !== bkey) {
-              bcEl.dataset.for = bkey;
-              bcEl.innerHTML = inks ? inks.map(function(c){
-                return '<option value="' + c + '">' + c + (c === 1 ? ' colour' : ' colours') + '</option>';
-              }).join('') : '';
-              if (inks) {
-                var bwas = parseInt(bcEl.dataset.v, 10);
-                bcEl.value = String(inks.indexOf(bwas) > -1 ? bwas : (colEl && colEl.value) || inks[0]);
-              }
-            }
-            if (inks && !bcEl.value) bcEl.value = String((colEl && colEl.value) || inks[0]);
-            var showBack = !!(inks && locNow === 'both');
-            if (bink) bink.style.display = showBack ? '' : 'none';
-            if (inkLab) inkLab.textContent = showBack ? 'Front ink colours' : 'Ink colours';
-          }
-          var slvEl = L.querySelector('.slv');
-          var slcEl = L.querySelector('.slc');
-          if (slcEl) {
-            var skey = inks ? String(meth.id) : '';
-            if (slcEl.dataset.for !== skey) {
-              slcEl.dataset.for = skey;
-              slcEl.innerHTML = inks ? inks.map(function(c){
-                return '<option value="' + c + '">' + c + (c === 1 ? ' colour' : ' colours') + ' each</option>';
-              }).join('') : '';
-              if (inks) {
-                var swas = parseInt(slcEl.dataset.v, 10);
-                slcEl.value = String(inks.indexOf(swas) > -1 ? swas : inks[0]);
-              }
-            }
-            if (inks && !slcEl.value) slcEl.value = String(inks[0]);
-            slcEl.style.display = (inks && slvEl && slvEl.value) ? '' : 'none';
-          }
-
           /* Offer exactly the add-ons this decoration allows. Rebuilt only when
              the method changes, so ticking one does not wipe the others. */
           var aoBox = L.querySelector('.addons');
-          var mkey = meth ? String(meth.id) : '';
+          var mkey = lineTitles.join('|');
           if (aoBox && aoBox.dataset.for !== mkey) {
+            /* Adding a place printed in another method must not untick what was
+               already chosen: remember it, rebuild, put it back. */
+            var keepTicks = [];
+            aoBox.querySelectorAll('.ao').forEach(function(cb){ if (cb.checked) keepTicks.push(cb.dataset.code); });
+            var keepTier = aoBox.querySelector('.dtier') ? aoBox.querySelector('.dtier').value : '';
             aoBox.dataset.for = mkey;
-            var avail = addonsForTitle(meth && meth.title);
+            var avail = [];
+            lineTitles.forEach(function(t){
+              addonsForTitle(t).forEach(function(a){
+                if (!avail.some(function(x){ return x.code === a.code; })) avail.push(a);
+              });
+            });
             /* Anything the method carries automatically — screens — is never
                offered as something to tick, because it is not a decision. */
             avail = avail.filter(function(a){ return !a.auto; });
@@ -9289,6 +9347,12 @@ ${quotePricingSource()}
               }
             }
 
+            /* What was ticked before this rebuild, where it is still offered. */
+            aoBox.querySelectorAll('.ao').forEach(function(cb){
+              if (keepTicks.indexOf(cb.dataset.code) > -1) cb.checked = true;
+            });
+            if (keepTier && aoBox.querySelector('.dtier')) aoBox.querySelector('.dtier').value = keepTier;
+
             aoBox.querySelectorAll('.ao').forEach(function(cb){ cb.onchange = calc; });
             var dtBind = aoBox.querySelector('.dtier');
             if (dtBind) dtBind.onchange = calc;
@@ -9337,7 +9401,7 @@ ${quotePricingSource()}
           /* Both decorations, because the screens belong to whichever half is
              the screen-print one — on a DTF-front/screen-back line that is the
              second slot, and reading only the first would drop the screen fee. */
-          [meth && meth.title, meth2 && meth2.title].forEach(function(t){
+          lineTitles.forEach(function(t){
             addonsForTitle(t).forEach(function(a){
               if (a.auto !== 'method') return;
               if (a.code === 'screens' && !SCREEN_FEES_LIVE) return;
@@ -9346,8 +9410,6 @@ ${quotePricingSource()}
             });
           });
 
-          var stage = L.querySelector('.loc') ? L.querySelector('.loc').value : '';
-          var stage2 = L.querySelector('.loc2') ? L.querySelector('.loc2').value : '';
           var bpEl = L.querySelector('.bp');
           /* Only a ticked line takes the pooled figure, and bandQtyFor's floor
              means a lone ticked line is unaffected. */
@@ -9359,16 +9421,15 @@ ${quotePricingSource()}
           var srOut = L.querySelector('.srq');
           if (srOut) srOut.textContent = (runQty > qty) ? 'run of ' + runQty : '';
 
+          /* Printed places price from the list; a cutout pack (no places)
+             prices from its method alone, exactly as the save route does. */
           var r = priceLine({
             bandQty: runQty,
-            product: prod, method: meth, qty: qty, sizeMix: sizeQty ? mix : null,
-            colours: colEl ? colEl.value : '',
-            method2: meth2, stage2: stage2, colours2: '',
-            sleeves: slvEl ? slvEl.value : '',
-            backColours: (bcEl && bink && bink.style.display !== 'none') ? bcEl.value : '',
-            sleeveColours: (slcEl && slcEl.value) ? slcEl.value : '',
+            prints: prints.length ? prints : undefined,
+            product: prod, method: cutMeth || null, qty: qty, sizeMix: sizeQty ? mix : null,
+            colours: '', stage: '',
             runPrimary: isRunPrimary,
-            stage: stage, addons: addons, blankTiers: BLANK_TIERS,
+            addons: addons, blankTiers: BLANK_TIERS,
             dark: isDark,
             blankOverride: bpEl ? bpEl.value : '',
             unitOverride: u.value
@@ -9447,7 +9508,7 @@ ${quotePricingSource()}
              20-piece screen job would otherwise quote at the 50-71 rate and look
              perfectly normal — say so instead, and point at what does run. */
           var warn = L.querySelector('.minwarn');
-          var tooFew = meth && /screen\\s*print/i.test(meth.title) && qty > 0 && qty < ${SCREEN_MIN_QTY};
+          var tooFew = lineTitles.some(function(t){ return /screen\\s*print/i.test(t); }) && qty > 0 && qty < ${SCREEN_MIN_QTY};
           if (warn) {
             /* Two different refusals, one line. Too many colours outranks too
                few pieces: adding pieces fixes the second, nothing fixes the
@@ -9456,8 +9517,8 @@ ${quotePricingSource()}
               warn.style.display = 'block';
               warn.textContent = 'The press runs ' + r.screenCeiling + ' screens including the white ' +
                 'underbase, so this is ' + (r.passScreens || r.screens / (r.locations || 1)) + ' per pass — ' +
-                (dark ? r.screenCeiling - 1 : r.screenCeiling) + ' colours is the most on a ' +
-                (dark ? 'dark' : 'light') + ' garment. Quote DTF instead.';
+                (isDark ? r.screenCeiling - 1 : r.screenCeiling) + ' colours is the most on a ' +
+                (isDark ? 'dark' : 'light') + ' garment. Quote DTF instead.';
             } else {
               warn.style.display = tooFew ? 'block' : 'none';
               warn.textContent = tooFew
@@ -9470,13 +9531,24 @@ ${quotePricingSource()}
              exactly like a front-only one and costs twice as much, so the only
              evidence of what was quoted was a number the customer cannot check. */
           var d = L.querySelector('.d');
-          if (!d.value && prod) {
-            var where = stage === 'both' ? ' (front + back'
-                      : (stage ? ' (back' : ' (front');
-            var sv = slvEl ? slvEl.value : '';
-            where += sv === 'both' ? ' + both sleeves)' : sv ? ' + ' + sv + ' sleeve)' : ')';
-            if (where === ' (front)') where = '';
-            d.value = prod.name + (meth ? ' — ' + meth.title : '') + where;
+          /* Kept up to date while it is still the one this form wrote — so it
+             follows the printing as it is chosen — and never over anything a
+             person typed, or what a saved quote was named. */
+          if ((!d.value || d.value === d.dataset.auto) && prod) {
+            /* "Screen Printing front + back, DTF left sleeve" */
+            var PW = { front: 'front', back: 'back', left: 'left sleeve', right: 'right sleeve' };
+            var byM = [];
+            prints.forEach(function(p){
+              var g = byM.filter(function(x){ return x.m === p.method; })[0];
+              if (!g) byM.push(g = { m: p.method, w: [] });
+              g.w.push(PW[p.loc]);
+            });
+            byM.forEach(function(g){
+              var li = g.w.indexOf('left sleeve'), ri = g.w.indexOf('right sleeve');
+              if (li > -1 && ri > -1) { g.w = g.w.filter(function(x){ return x.indexOf('sleeve') === -1; }); g.w.push('both sleeves'); }
+            });
+            d.value = prod.name + (byM.length ? ' — ' + byM.map(function(g){ return g.m.title + ' ' + g.w.join(' + '); }).join(', ') : '');
+            d.dataset.auto = d.value;
           }
         });
         /* Rush, mirroring quoteTotals() on the server: a percentage of the
@@ -9574,18 +9646,19 @@ ${quotePricingSource()}
            And nothing item 1 was saved with carries over to a new item. */
         tpl.dataset.n = n;
         delete tpl.dataset.savedAddons; delete tpl.dataset.savedSizes; delete tpl.dataset.savedColour;
+        delete tpl.querySelector('.d').dataset.auto;
         tpl.querySelector('.thumbs').innerHTML = '';
         /* Options and the restore hint are data attributes, which cloneNode
            copies and the value-clearing loop above does not touch — left alone
            a new item would inherit item 1's ink count. */
-        var ck = tpl.querySelector('.cols');
-        if (ck) { ck.innerHTML = ''; ck.dataset.v = ''; ck.dataset.for = ''; }
-        var bk = tpl.querySelector('.bcols');
-        if (bk) { bk.innerHTML = ''; bk.dataset.v = ''; bk.dataset.for = ''; }
+        tpl.querySelectorAll('.pc').forEach(function(pc){
+          pc.innerHTML = ''; pc.dataset.v = ''; pc.dataset.for = ''; pc.style.display = 'none';
+        });
         var bc = tpl.querySelector('.backcheck');
         if (bc) bc.remove();
-        var sk = tpl.querySelector('.slc');
-        if (sk) { sk.innerHTML = ''; sk.dataset.v = ''; sk.dataset.for = ''; sk.style.display = 'none'; }
+        /* A new item starts with Front ticked, waiting for its decoration. */
+        var fr = tpl.querySelector('.ploc[data-loc="front"] .pon');
+        if (fr) fr.checked = true;
         // A new item starts tidy: sizes hidden, extras closed.
         var sz = tpl.querySelector('.sizes');
         if (sz) { sz.style.display = 'none'; sz.innerHTML = ''; }
@@ -9748,7 +9821,7 @@ ${uploadStatusScript()}
            per select (bind() runs again for every added item), and only on a
            pick: filling it in on every recalculation would stop anyone
            clearing the box to type a new number. */
-        document.querySelectorAll('.line .p, .line .m').forEach(function(sel){
+        document.querySelectorAll('.line .p, .line .pm').forEach(function(sel){
           if (sel.dataset.qtyBound) return;
           sel.dataset.qtyBound = '1';
           sel.addEventListener('change', function(){
@@ -10088,11 +10161,28 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
       const qty = parseInt(one(b['qty' + i]), 10) || 0;
       const optional = isOptional(i);
       const prod = catalog.products.find(p => String(p.id) === String(one(b['product' + i])));
-      const method = catalog.methods.find(m => String(m.id) === String(one(b['method' + i])));
-      /* The second decoration on the same garment. Resolved against the
-         CATALOGUE like the first, so a posted id that names no real method
-         prices nothing rather than whatever the body claimed. */
-      const method2 = catalog.methods.find(m => String(m.id) === String(one(b['method2' + i])));
+      /* PRINT LOCATIONS (the form since 2026-10-06): one row per place —
+         front, back, left sleeve, right sleeve — each ticked or not, with its
+         own method and ink count. Methods resolve against the CATALOGUE and a
+         cutout pack is never a print location, so a posted id that names no
+         real decoration prints nothing. Colours go through the same
+         colourCount() the browser ran. */
+      const prints = [];
+      for (const loc of PRINT_LOCS) {
+        if (!tickedBox(one(b[`pr_on_${loc}${i}`]))) continue;
+        const pm = catalog.methods.find((m) => String(m.id) === String(one(b[`pr_m_${loc}${i}`])) &&
+          !CUTOUT_METHOD_RE.test(String(m.title || '')));
+        if (!pm) continue;
+        prints.push({ loc, method: pm, colours: colourCount(pm, one(b[`pr_c_${loc}${i}`])) });
+      }
+      const usePrints = prints.length > 0;
+      /* Without locations, the line is priced the way it always was: a cutout
+         pack (method alone), a plain typed line, or an older client. */
+      const method = usePrints ? prints[0].method
+        : catalog.methods.find(m => String(m.id) === String(one(b['method' + i])));
+      /* The second decoration on the same garment, for a line without
+         locations. Resolved against the CATALOGUE like the first. */
+      const method2 = usePrints ? undefined : catalog.methods.find(m => String(m.id) === String(one(b['method2' + i])));
       /* Count a row as real if ANY field was filled in. Previously a line with
          only a price (or only a size mix) was silently dropped, which for a
          single-line quote produced "Add at least one item" and lost the work. */
@@ -10136,10 +10226,15 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
          fee cannot be attached to a screen-print line. */
       const lineAddons = [];
       const methodTitle = method ? String(method.title || '') : '';
+      /* Every method on the line offers its add-ons and attaches its
+         automatic ones (screens), not just the first: a DTF front with a
+         screen-printed back burns screens. */
+      const addonTitles = usePrints ? [...new Set(prints.map((p) => String(p.method.title || '')))] : [methodTitle];
       /* Both halves: on a DTF-front/screen-back line the screen print is the
          SECOND method, and reading only the first drops its screen fee. */
-      const method2Title = catalog.methods.find(m => String(m.id) === String(one(b['method2' + i])));
-      const bothTitles = methodTitle + ' ' + (method2Title ? String(method2Title.title || '') : '');
+      const method2Title = usePrints ? null : catalog.methods.find(m => String(m.id) === String(one(b['method2' + i])));
+      const bothTitles = usePrints ? addonTitles.join(' ')
+        : methodTitle + ' ' + (method2Title ? String(method2Title.title || '') : '');
       const isEmb = EMBROIDERY_METHOD_RE.test(bothTitles);
       const isScreen = SCREEN_METHOD_RE.test(bothTitles);
       const garmentDark = tickedBox(one(b['dark' + i]));
@@ -10155,12 +10250,12 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
          for this method, is ignored rather than trusted. */
       const tierPick = String(one(b['designtier' + i]) || '').trim();
       if (tierPick) {
-        const t = addonsFor(methodTitle).find((a) =>
+        const t = addonsForAny(addonTitles).find((a) =>
           a.code === tierPick && /^design_(tweak|setup|commission)$/.test(a.code));
         if (t) lineAddons.push(t);
       }
 
-      for (const a of addonsFor(methodTitle)) {
+      for (const a of addonsForAny(addonTitles)) {
         if (a.auto) continue;              // attached by the method itself, below
         if (/^design_(tweak|setup|commission)$/.test(a.code)) continue;  // the dropdown above
         if (String(one(b[`addon_${a.code}${i}`]) || '') !== '1') continue;
@@ -10170,7 +10265,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
          anyone ticked a box, and the garment colour decides how many. Note the
          rate comes from ADDONS here and never from the posted body: the client
          says only WHICH line and how dark the garment is, never what it costs. */
-      for (const a of addonsFor(methodTitle)) {
+      for (const a of addonsForAny(addonTitles)) {
         if (a.auto !== 'method') continue;
         if (a.code === 'screens' && !SCREEN_FEES_LIVE) continue;
         lineAddons.push({ code: a.code, label: a.label, kind: a.kind, rate: a.rate });
@@ -10189,7 +10284,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
          posted value is only consulted for a method that prices by colour; a
          legacy per-colour method reads its own title and ignores it, so this
          cannot be used to buy a 7-colour job at the 1-colour rate. */
-      const colours = colourCount(method, one(b['colors' + i]));
+      const colours = usePrints ? prints[0].colours : colourCount(method, one(b['colors' + i]));
 
       /* A typed garment price. Supplier costs move between the day a cost was
          recorded and the day a quote is written, so this is a correction, not
@@ -10237,6 +10332,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
       const backColours = (stage === 'both' && method && method.type === 'color' && rawBack)
         ? colourCount(method, rawBack) : null;
       const priceArgs = {
+        prints: usePrints ? prints : undefined,
         bandQty: runGroup ? (runTotals[runGroup] || 0) : 0,
         product: prod, method, qty: q, sizeMix: mix, colours,
         method2, stage2, colours2: one(b['colors2' + i]) || '',
@@ -10433,6 +10529,10 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
            rather than showing an unexplained difference. */
         addons: priced.addonLines,
         garment_dark: garmentDark || null,
+        /* Where it is printed, place by place — what the form shows and what
+           priced it. The fields below describe lines saved before this. */
+        prints: usePrints ? prints.map((p) => ({ loc: p.loc, method_id: p.method.id,
+          colours: p.method.type === 'color' ? p.colours : null })) : null,
         stage: stage || null,
         sleeves: sleeves || null,
         back_colours: backColours || null,
@@ -10897,34 +10997,37 @@ function orderedSizeKeys(item, catalog) {
  * table is still two passes, which is why the wording does not distinguish.
  */
 function decorationSummary(item, catalog) {
-  const meths = (catalog && catalog.methods) || [];
-  const find = (id) => (id ? meths.find((m) => String(m.id) === String(id)) : null);
-  const where = (stage) => {
-    if (stage === 'both') return 'front and back';
-    if (stage && stage !== 'front') return 'back';
-    return 'front';
-  };
-  const sleeveWords = { left: 'left sleeve', right: 'right sleeve', both: 'both sleeves' };
-  const one = (m, stage, colours, sleeves, sleeveColours, backColours) => {
-    if (!m) return null;
-    const bits = [String(m.title || '').trim(),
-      where(stage) + (sleeveWords[sleeves] ? ' + ' + sleeveWords[sleeves] : '')];
-    const c = parseInt(colours, 10);
+  /* Read through itemPrints(), so an old line and a new one are described
+     from the same list the price came from. One phrase per method, places in
+     the order front, back, sleeves; matching sleeves read as "both sleeves". */
+  const prints = itemPrints(item, catalog);
+  const groups = [];
+  for (const p of prints) {
+    let g = groups.find((x) => x.method === p.method);
+    if (!g) groups.push(g = { method: p.method, places: [] });
+    g.places.push(p);
+  }
+  const word = { front: 'front', back: 'back', left: 'left sleeve', right: 'right sleeve' };
+  const cw = (n) => (n === 1 ? '1 colour' : n + ' colours');
+  return groups.map(({ method: m, places: ps }) => {
     /* Only for a method whose price actually turns on the colour count —
        saying "1 colour" about DTF would be meaningless and slightly wrong. */
-    const cw = (n) => (n === 1 ? '1 colour' : n + ' colours');
-    const bc = parseInt(backColours, 10);
-    if (m.type === 'color' && c > 0) {
-      bits.push(stage === 'both' && bc > 0 && bc !== c ? cw(c) + ' front, ' + cw(bc) + ' back' : cw(c));
+    const byColour = m.type === 'color';
+    let places = ps.map((p) => ({ w: word[p.loc], c: parseInt(p.colours, 10), sleeve: p.loc === 'left' || p.loc === 'right' }));
+    const L = places.find((x) => x.w === 'left sleeve'), R = places.find((x) => x.w === 'right sleeve');
+    if (L && R && (!byColour || L.c === R.c)) {
+      places = places.filter((x) => !x.sleeve).concat([{ w: 'both sleeves', c: L.c, sleeve: true }]);
     }
-    const sc = parseInt(sleeveColours, 10);
-    if (sleeveWords[sleeves] && m.type === 'color' && sc > 0) {
-      bits.push((sleeves === 'both' ? 'sleeves ' : 'sleeve ') + (sc === 1 ? '1 colour' : sc + ' colours'));
+    const ws = places.map((x) => x.w);
+    const where = ws.length <= 1 ? ws[0] : ws.slice(0, -1).join(', ') + ' and ' + ws[ws.length - 1];
+    const bits = [String(m.title || '').trim(), where];
+    const cs = places.map((x) => x.c);
+    if (byColour && cs.every((c) => c > 0)) {
+      bits.push(cs.every((c) => c === cs[0]) ? cw(cs[0])
+        : places.map((x) => cw(x.c) + ' ' + (x.w === 'both sleeves' ? 'sleeves' : x.w)).join(', '));
     }
     return bits.join(' — ');
-  };
-  return [one(find(item.method_id), item.stage, item.colours, item.sleeves, item.sleeve_colours, item.back_colours),
-          one(find(item.method2_id), item.stage2, item.colours2)].filter(Boolean);
+  });
 }
 
 function customerLinePricing(items, catalog) {
@@ -10943,7 +11046,7 @@ function customerLinePricing(items, catalog) {
     const slim = (x) => (x ? {
       id: x.id, title: x.title, type: x.type, multi: x.multi,
       positions: x.positions, colour_options: x.colour_options || null,
-      min_order_qty: x.min_order_qty || 0,
+      min_order_qty: x.min_order_qty || 0, max_screens: x.max_screens || 0,
     } : null);
     return {
       /* Sell price and upcharges only — never `cost`. */
@@ -10953,6 +11056,11 @@ function customerLinePricing(items, catalog) {
       } : null,
       method: slim(m),
       method2: slim(m2),
+      /* A line saved with print locations re-prices from them; an older
+         line from its own fields below, exactly as it was priced. */
+      prints: Array.isArray(it.prints)
+        ? itemPrints(it, catalog).map((x) => ({ loc: x.loc, method: slim(x.method), colours: x.colours }))
+        : null,
       /* The line as it was priced, so an untouched line re-prices to exactly
          what is already on screen rather than drifting by a rounding step. */
       stage: it.stage || null,
@@ -11726,6 +11834,7 @@ ${quotePricingSource()}
 
           var r = priceLine({
             qty: qty, product: L.product, method: L.method, stage: L.stage,
+            prints: L.prints || undefined,
             method2: L.method2, stage2: L.stage2, colours2: L.colours2,
             sleeves: L.sleeves, sleeveColours: L.sleeveColours, backColours: L.backColours,
             dark: L.dark, colours: L.colours, addons: L.addons,

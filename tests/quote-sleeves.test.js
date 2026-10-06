@@ -37,9 +37,9 @@ const text = vm.runInThisContext(lift('quotePricingSource') + '\nquotePricingSou
 const { priceLine } = vm.runInThisContext(text + '\n({ priceLine })');
 
 const summary = (() => {
-  const i = src.indexOf('function decorationSummary(item, catalog)');
-  const body = src.slice(i);
-  return vm.runInThisContext('(' + body.slice(0, body.indexOf('\n}\n') + 2) + ')');
+  const top = (name) => { const b = src.slice(src.indexOf('function ' + name + '(')); return b.slice(0, b.indexOf('\n}\n') + 2); };
+  return vm.runInThisContext('(function(){' + text + '\n' + top('itemPrints') + '\n' +
+    top('decorationSummary') + '\nreturn decorationSummary; })()');
 })();
 
 /* One table (multi:false), priced by colour, like the shop's screen printing. */
@@ -107,15 +107,15 @@ test('an unknown sleeves value adds nothing', () => {
 test('the customer page names the sleeves and their ink count', () => {
   const cat = { methods: [SCREEN, DTF] };
   assert.equal(summary({ method_id: 22, stage: '', colours: '3', sleeves: 'both', sleeve_colours: 1 }, cat)[0],
-    'Screen Printing — front + both sleeves — 3 colours — sleeves 1 colour');
+    'Screen Printing — front and both sleeves — 3 colours front, 1 colour sleeves');
   assert.equal(summary({ method_id: 1, stage: 'both', sleeves: 'left' }, cat)[0],
-    'DTF Printing — front and back + left sleeve');
+    'DTF Printing — front, back and left sleeve');
   assert.equal(summary({ method_id: 1, stage: '' }, cat)[0], 'DTF Printing — front');
 });
 
 test('the save route keeps sleeves to the three known values', () => {
   assert.match(src, /\['left', 'right', 'both'\]\.includes\(rawSleeves\)/);
-  assert.match(src, /sleeves: sleeves \|\| null,/);
+  assert.match(src, /for \(const loc of PRINT_LOCS\)/);
 });
 
 test('the pricing source recognises "Screen Printing" as screen printing', () => {

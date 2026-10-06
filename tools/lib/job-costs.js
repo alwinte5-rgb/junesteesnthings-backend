@@ -129,6 +129,73 @@ function decorationEach(method, stage, colours, bandQty, sellEach) {
   return { each: num(sellEach) / SHOP_MARKUP, basis: 'rough: half the price' };
 }
 
+/* Where a line is printed, as [{ loc, method, colours }]. A line saved since
+   2026-10-06 carries `prints`; an older one is read from its placement fields
+   (front/back/both, the back's own count, sleeves, a second method). `gone` is
+   true when the line names a method the catalogue no longer has. */
+function linePlaces(it, methods) {
+  const get = (id) => (id != null && id !== '' ? methods.get(Number(id)) || null : null);
+  const out = [];
+  let gone = false;
+  if (Array.isArray(it.prints)) {
+    for (const p of it.prints) {
+      const m = get(p && p.method_id);
+      if (!m) { gone = true; continue; }
+      out.push({ loc: p.loc, method: m, colours: p.colours });
+    }
+    return { places: out, gone };
+  }
+  const has = (v) => v !== undefined && v !== null && v !== '';
+  const add = (m, stage, c, back) => {
+    if (!m) return;
+    if (stage === 'both') { out.push({ loc: 'front', method: m, colours: c }); out.push({ loc: 'back', method: m, colours: has(back) ? back : c }); }
+    else out.push({ loc: stage && stage !== 'front' ? 'back' : 'front', method: m, colours: c });
+  };
+  const m1 = get(it.method_id), m2 = get(it.method2_id);
+  if ((it.method_id != null && !m1) || (it.method2_id != null && !m2)) gone = true;
+  add(m1, it.stage, it.colours, it.back_colours);
+  if (m1) {
+    const sc = has(it.sleeve_colours) ? it.sleeve_colours : it.colours;
+    if (it.sleeves === 'left' || it.sleeves === 'both') out.push({ loc: 'left', method: m1, colours: sc });
+    if (it.sleeves === 'right' || it.sleeves === 'both') out.push({ loc: 'right', method: m1, colours: sc });
+  }
+  add(m2, it.stage2, it.colours2 != null ? it.colours2 : it.colours, null);
+  return { places: out, gone };
+}
+
+/* The decoration's cost for every place printed: screen and embroidery are
+   one run per place; DTF is the front rate for a method's first place and its
+   second-location rate for each one after; anything costed off the sell price
+   is costed once per method, its share of the decoration billed. */
+function placesCost(places, bandQty, decoSellEach) {
+  const groups = [];
+  for (const p of places) {
+    let g = groups.find((x) => x.method === p.method);
+    if (!g) groups.push(g = { method: p.method, places: [] });
+    g.places.push(p);
+  }
+  const share = groups.length > 1 ? 1 / groups.length : 1;
+  let each = 0;
+  const basis = [];
+  for (const g of groups) {
+    const kind = methodKind(g.method);
+    if (kind === 'screen' || kind === 'embroidery' || kind === 'dtf') {
+      g.places.forEach((p, k) => {
+        const one = decorationEach(g.method, '', p.colours, bandQty, 0);
+        const extra = kind === 'dtf' && k > 0
+          ? decorationEach(g.method, 'both', p.colours, bandQty, 0).each - one.each : one.each;
+        each += extra;
+        if (one.basis && !basis.includes(one.basis)) basis.push(one.basis);
+      });
+    } else {
+      const d = decorationEach(g.method, '', g.places[0].colours, bandQty, decoSellEach * share);
+      each += d.each;
+      if (d.basis && !basis.includes(d.basis)) basis.push(d.basis);
+    }
+  }
+  return { each, basis };
+}
+
 /* What add-ons cost us, split by where the books keep it. */
 function addonCosts(addons) {
   let outsourced = 0, shipping = 0, perLine = 0;
@@ -260,8 +327,7 @@ function estimateJob(items, catalog) {
     const g = it.run_group != null ? String(it.run_group).trim() : '';
     const bandQty = Math.max(qty, g ? pooled[g] || 0 : 0);
     const prod = it.product_id != null ? products.get(Number(it.product_id)) : null;
-    const m1 = it.method_id != null ? methods.get(Number(it.method_id)) : null;
-    const m2 = it.method2_id != null ? methods.get(Number(it.method2_id)) : null;
+    const { places, gone: methodGone } = linePlaces(it, methods);
 
     const ad = addonCosts(it.addons);
     out.outsourced += ad.outsourced;
@@ -271,8 +337,8 @@ function estimateJob(items, catalog) {
 
     const desc = String(it.description || `Line ${ix + 1}`);
     /* A product or method the catalogue no longer has cannot be costed honestly. */
-    const gone = (it.product_id != null && !prod) || (it.method_id != null && !m1) || (it.method2_id != null && !m2);
-    if (gone || (!prod && !m1)) {
+    const gone = (it.product_id != null && !prod) || methodGone;
+    if (gone || (!prod && !places.length)) {
       if (!gone && SERVICE_WORDS.test(desc)) { out.lines.push({ ix, unit_cost: 0, basis: 'service: no supplier cost', estimated: false }); return; }
       /* Typed by hand, or picked from a catalogue that has since changed: read
          the words instead. */
@@ -294,12 +360,10 @@ function estimateJob(items, catalog) {
     }
     /* What the decoration was billed at per piece: only the rough rule uses it. */
     const decoSellEach = Math.max(0, num(it.unit_price) - garmentSellEach);
-    const share = m1 && m2 ? 0.5 : 1;
-    const d1 = decorationEach(m1, it.stage, it.colours, bandQty, decoSellEach * share);
-    const d2 = decorationEach(m2, it.stage2, it.colours2 != null ? it.colours2 : it.colours, bandQty, decoSellEach * share);
-    for (const d of [d1, d2]) if (d.basis) basis.push(d.basis);
+    const deco = placesCost(places, bandQty, decoSellEach);
+    basis.push(...deco.basis);
 
-    const each = garmentEach + d1.each + d2.each + ad.perLine / qty;
+    const each = garmentEach + deco.each + ad.perLine / qty;
     out.lines.push({ ix, unit_cost: r2(each), basis: basis.join(' + '), estimated: true });
   });
 
@@ -309,4 +373,4 @@ function estimateJob(items, catalog) {
 }
 
 module.exports = { SCREEN_PRINT, SCREEN_MIN_QTY, SCREEN_COST, SCREEN_FEE, DTF, EMBROIDERY, SHOP_MARKUP, SERVICE_WORDS,
-  methodKind, embroideryColumn, decorationEach, addonCosts, garmentFromWords, decorationFromWords, fromWording, estimateJob };
+  methodKind, embroideryColumn, decorationEach, linePlaces, placesCost, addonCosts, garmentFromWords, decorationFromWords, fromWording, estimateJob };

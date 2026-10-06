@@ -292,17 +292,18 @@ test('the colour picker posts under the name the save path reads', () => {
   /* A mismatch here is invisible: the picker works, the preview prices
      correctly, and the save path reads an absent field and quotes every screen
      job at one colour. Both ends are checked against the same literal. */
-  const form = src.slice(src.indexOf("app.get(['/admin/quote/new'"));
-  assert.ok(/name="colors\$\{n\}"[^>]*class="cols"/.test(form.replace(/\s+/g, ' ')),
-    'the line template must render <select name="colors${n}" class="cols">');
-  assert.ok(/one\(b\['colors' \+ i\]\)/.test(src),
-    "the save path must read b['colors' + i]");
+  /* One picker per print location since 2026-10-06. */
+  const form = src.slice(src.indexOf('const locRow = (loc) =>'));
+  assert.ok(/class="pc" name="pr_c_\$\{loc\}\$\{n\}"/.test(form.replace(/\s+/g, ' ')),
+    'each location row must render <select class="pc" name="pr_c_${loc}${n}">');
+  assert.ok(/one\(b\[`pr_c_\$\{loc\}\$\{i\}`\]\)/.test(src),
+    'the save path must read b[`pr_c_${loc}${i}`]');
 });
 
 test('the picker only ever offers columns the catalogue published', () => {
   /* Hardcoding 1..7 here would survive a reprice to six columns and quote a
      column that no longer exists — which prices at the full-colour backstop. */
   const script = emittedFormScript();
-  assert.ok(/meth\.colour_options/.test(script),
+  assert.ok(/m\.type === 'color' && \(m\.colour_options \|\| \[\]\)\.length\) \? m\.colour_options/.test(script),
     'options must come from the method, not from a constant in the form');
 });

@@ -22,10 +22,10 @@ const path = require('node:path');
 const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 
 test('the option builders mark the saved choice selected', () => {
-  const prod = src.match(/const prodOpts = \(sel\) =>[\s\S]*?\.join\(''\);/);
-  const meth = src.match(/const methodOpts = \(sel\) =>[\s\S]*?\.join\(''\);/);
+  const prod = src.match(/const prodOpts = \(sel, cutSel\) =>[\s\S]*?\.join\(''\);/);
+  const meth = src.match(/const decoOpts = \(sel\) =>[\s\S]*?\.join\(''\);/);
   assert.ok(prod, 'prodOpts is not per-line — a shared string cannot mark a selection');
-  assert.ok(meth, 'methodOpts is not per-line');
+  assert.ok(meth, 'decoOpts is not per-line');
   for (const [name, m] of [['product', prod], ['method', meth]]) {
     assert.match(m[0], /selected/, name + ' options never mark anything selected');
     assert.match(m[0], /String\((?:p|m)\.id\) === String\(sel\)/,
@@ -35,8 +35,10 @@ test('the option builders mark the saved choice selected', () => {
 });
 
 test('the line passes the saved ids in', () => {
-  assert.match(src, /\$\{prodOpts\(it && it\.product_id\)\}/, 'product_id is not passed to the options');
-  assert.match(src, /\$\{methodOpts\(it && it\.method_id\)\}/, 'method_id is not passed to the options');
+  assert.match(src, /\$\{prodOpts\(it && it\.product_id, isCut \? it\.method_id : null\)\}/, 'product_id is not passed to the options');
+  /* Each print location's method comes from the line's own prints. */
+  assert.match(src, /\$\{decoOpts\(p && p\.method \? p\.method\.id : null\)\}/, 'a location\'s method is not passed to the options');
+  assert.match(src, /for \(const p of itemPrints\(it, catalog\)\)/, 'the form does not read the line\'s print locations');
 });
 
 test('every field the save writes is read back by the form', () => {
@@ -54,7 +56,12 @@ test('every field the save writes is read back by the form', () => {
   const DERIVED = new Set(['line_total', 'list_total', 'unit_price', 'size_upcharge',
     'blank_price', 'colour_hex', 'setup_fee', 'setup_label', 'unit_override']);
 
-  const missing = saved.filter((k) => !DERIVED.has(k) && !form.includes('it.' + k));
+  /* Placement fields are restored THROUGH itemPrints(it, …), the same reader
+     the price and the customer's page use, so the form names none of them. */
+  const VIA_PRINTS = new Set(['prints', 'stage', 'stage2', 'sleeves', 'sleeve_colours', 'back_colours',
+    'colours', 'colours2', 'method2_id']);
+  const viaPrints = form.includes('itemPrints(it, catalog)');
+  const missing = saved.filter((k) => !DERIVED.has(k) && !(viaPrints && VIA_PRINTS.has(k)) && !form.includes('it.' + k));
   assert.deepStrictEqual(missing, [],
     'saved but never restored, so an edit loses them: ' + missing.join(', '));
 });
