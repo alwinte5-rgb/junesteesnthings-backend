@@ -179,6 +179,7 @@ const ROUTES = {
   'GET /admin/quotes': 'quotes.view',
   'GET /admin/production': 'quotes.view',
   'GET /admin/production/:code': 'quotes.view',
+  'GET /admin/production/:code/sent-file/:id/:n': 'quotes.view',
   /* The customer's artwork, one original or all of them zipped (2026-10-06).
      A designer reaches the same files from their design page. */
   'GET /admin/production/:code/artwork/:n': 'quotes.view',
@@ -325,6 +326,8 @@ const ROUTES = {
   'POST /admin/quote/:code/art/work': 'art.work',
   'POST /admin/quote/:code/art/file': 'art.work',
   'POST /admin/api/art-signature': 'art.work',
+  /* Files for an email from the job page (2026-10-06). */
+  'POST /admin/api/message-file-signature': 'customers.message',
   'POST /admin/quote/:code/art/decide': 'owner',
   'POST /admin/training/quiz/:key': 'any',
   'POST /admin/training/signoff': 'owner',

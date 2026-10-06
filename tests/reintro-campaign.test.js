@@ -191,7 +191,7 @@ test('never to the shop, the owner, staff, or anyone already signed up', async (
 });
 
 test('the emails that must stay plain opt out', () => {
-  assert.match(src, /async function sendEmail\(\{ to, subject, html, replyTo, marketing = false, text, promo = true \}\)/);
+  assert.match(src, /async function sendEmail\(\{ to, subject, html, replyTo, marketing = false, text, promo = true(, attachments = \[\])? \}\)/);
   assert.match(src, /is your June's Tees sign-in code`, promo: false/);
   assert.match(src, /to: partner\.email, promo: false/);
   assert.match(src, /Your \$\{REINTRO\.PCT\}% off code: \$\{code\}`, promo: false/);

@@ -152,6 +152,8 @@ function card({ history = [], smsOn = true, consent = true, q = {} } = {}) {
     ...(({ PICKUP_ADDRESS, PICKUP_HOURS, PICKUP_STEPS }) => ({ PICKUP_ADDRESS, PICKUP_HOURS, PICKUP_STEPS }))(require('../tools/lib/sms-templates')),
     SHOP_TZ: 'America/Chicago', console: { error() {} },
     intIn: () => null, PROOFS: require('../tools/lib/job-proofs'),
+    /* Files on the job an email may carry (2026-10-06): none here. */
+    jobFilesFor: async () => [], MSGFILES: require('../tools/lib/message-files'),
   };
   vm.createContext(sandbox);
   vm.runInContext([grab('const MESSAGE_KINDS = {', '};'), grab('const MESSAGE_ERRORS = {', '};'),
@@ -255,6 +257,9 @@ function messageRoute(o = {}) {
     currentActor: () => null, actorLevel: () => 'on', markProofsSent: async () => {},
     jobPath: (c) => `/admin/production/${c}`, designJobFor: async () => null,
     FRAUD: require('../tools/lib/fraud-signals'), logActivity: () => {},
+    /* Attachments (2026-10-06): none on the job, none posted. */
+    jobFilesFor: async () => [], MSGFILES: require('../tools/lib/message-files'),
+    QPHOTOS: { cloudName: () => 'demo' }, fetchAttachments: async () => [],
   };
   vm.createContext(sandbox);
   vm.runInContext(lift('sendJobMessage') + '\n' + route("app.post('/admin/quote/:code/message', requireAdmin") + '\n});', sandbox);

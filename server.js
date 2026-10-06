@@ -57,6 +57,7 @@ const HIRING = require('./tools/lib/hiring');
 const HIRE_POSTING = require('./tools/lib/hiring-posting');
 const PROOFS = require('./tools/lib/job-proofs');
 const ART = require('./tools/lib/art-pipeline');
+const MSGFILES = require('./tools/lib/message-files');
 const GOOGLE_ADS = require('./tools/lib/google-ads').createClient();
 const GOOGLE_ANALYTICS = require('./tools/lib/google-analytics').createClient();
 
@@ -972,6 +973,8 @@ async function initDB() {
       error       TEXT,
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
+  /* What an email carried: [{name, url, bytes}] (MSGFILES, 2026-10-06). */
+  await pool.query(`ALTER TABLE client_emails ADD COLUMN IF NOT EXISTS attachments JSONB`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS client_emails_quote_idx ON client_emails (quote_code, created_at DESC)`)
     .catch(() => {});
 
@@ -1922,7 +1925,7 @@ async function withTextsInvite(to, html, now = new Date()) {
 // ─── Brevo email (preferred for customer messages; Resend is the fallback) ───
 // marketing:true adds the unsubscribe headers/footer and honours opt-outs.
 // Order receipts and shipping notices are transactional and stay exempt.
-async function sendEmail({ to, subject, html, replyTo, marketing = false, text, promo = true }) {
+async function sendEmail({ to, subject, html, replyTo, marketing = false, text, promo = true, attachments = [] }) {
   if (marketing && await isUnsubscribed(to)) {
     console.log(`sendEmail: skipped ${to} (unsubscribed)`);
     return;
@@ -1944,7 +1947,11 @@ async function sendEmail({ to, subject, html, replyTo, marketing = false, text, 
      JT_EMAIL_PROVIDER=resend skips Brevo entirely rather than trying it first
      and waiting for it to fail on every single send. */
   const provider = String(process.env.JT_EMAIL_PROVIDER || 'auto').toLowerCase();
-  const brevoKey = provider === 'resend' ? '' : process.env.BREVO_API_KEY;
+  /* Files: Brevo takes up to about 4 MB each; anything bigger goes by Resend,
+     which takes far more (MSGFILES.fitsBrevo). */
+  const files = Array.isArray(attachments) ? attachments.filter((a) => a && a.content) : [];
+  const brevoOk = MSGFILES.fitsBrevo(files.map((a) => a.content.length));
+  const brevoKey = provider === 'resend' || !brevoOk ? '' : process.env.BREVO_API_KEY;
   if (provider === 'resend' && !resend) {
     throw new Error('JT_EMAIL_PROVIDER=resend but RESEND_API_KEY is not configured');
   }
@@ -1960,6 +1967,7 @@ async function sendEmail({ to, subject, html, replyTo, marketing = false, text, 
           subject,
           htmlContent: html,
           textContent,
+          ...(files.length ? { attachment: files.map((a) => ({ name: a.name, content: a.content.toString('base64') })) } : {}),
           ...(Object.keys(extraHeaders).length ? { headers: extraHeaders } : {}),
         }),
       });
@@ -1977,6 +1985,7 @@ async function sendEmail({ to, subject, html, replyTo, marketing = false, text, 
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS, reply_to: replyTo || NOTIFY_EMAIL, to, subject, html,
     text: textContent,
+    ...(files.length ? { attachments: files.map((a) => ({ filename: a.name, content: a.content })) } : {}),
     ...(Object.keys(extraHeaders).length ? { headers: extraHeaders } : {}),
   });
   if (error) throw new Error(`Resend: ${error.message || JSON.stringify(error)}`);
@@ -6125,12 +6134,14 @@ function customerEmailHtml(heading, inner, code) {
 async function logClientEmail(quote, kind, mail, status, error = null) {
   if (!quote) return;
   const preview = mail.preview != null ? String(mail.preview) : htmlToText(mail.html || '');
+  const files = Array.isArray(mail.attachments) && mail.attachments.length
+    ? JSON.stringify(mail.attachments.map((a) => ({ name: a.name, url: a.url, bytes: a.content ? a.content.length : null }))) : null;
   await pool.query(
-    `INSERT INTO client_emails (quote_code, kind, to_email, subject, preview, status, error, sent_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    `INSERT INTO client_emails (quote_code, kind, to_email, subject, preview, status, error, sent_by, attachments)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
     [quote, kind, String(mail.to || '').slice(0, 254), String(mail.subject || '').slice(0, 300),
      preview.replace(/\s+/g, ' ').trim().slice(0, 600), status, error ? String(error).slice(0, 300) : null,
-     attributedStaffId()])
+     attributedStaffId(), files])
     .catch((e) => console.error('client email log failed:', e.message));
 }
 
@@ -19242,7 +19253,42 @@ const MESSAGE_ERRORS = {
   duplicate: 'That message went out a moment ago, so it was not sent twice.',
   held: 'This quote is still waiting for approval, so the customer cannot open it yet. Nothing was sent. Once it is approved, message them.',
   draft: 'This quote is still a draft, so the customer cannot open it yet. Nothing was sent. Open it and send it first.',
+  'attach-email': 'Files go by email only. Choose Email, or send the text without them.',
+  'attach-bad': 'One of the files could not be attached. Nothing was sent. Pick the files again.',
+  'attach-big': 'Those files are too big for one email (25 MB in all). Nothing was sent. Send fewer at a time.',
+  'attach-fetch': 'One of the files could not be fetched just now. Nothing was sent. Try again in a minute.',
 };
+
+/* Every file on a job an email may carry: the customer's artwork and the
+   designer's final files, as {url, name, from}. */
+async function jobFilesFor(q) {
+  const cloud = QPHOTOS.cloudName();
+  const mine = QPHOTOS.photosOf(q, cloud).map((p) => ({ url: p.url, name: QPHOTOS.downloadName(p), from: 'customer' }));
+  const { rows: [a] } = await pool.query('SELECT files FROM art_requests WHERE quote_code = $1', [q.code])
+    .catch(() => ({ rows: [] }));
+  const art = (a && Array.isArray(a.files) ? a.files : []).filter((f) => f && ART.artUrlOk(f.url, cloud))
+    .map((f) => ({ url: f.url, name: MSGFILES.cleanName(f.name, String(f.url).split('.').pop().toLowerCase()), from: 'design' }));
+  return [...mine, ...art];
+}
+
+/* The bytes of each attachment, through the signed download API. */
+async function fetchAttachments(files) {
+  const out = [];
+  let total = 0;
+  for (const f of files) {
+    const url = cloudinary.utils.private_download_url(f.src.publicId, f.src.format,
+      { resource_type: f.src.resourceType, type: 'upload' });
+    const r = await fetch(url);
+    if (!r.ok) throw Object.assign(new Error(`Cloudinary ${r.status} for ${f.name}`), { code: 'attach-fetch' });
+    const content = Buffer.from(await r.arrayBuffer());
+    total += content.length;
+    if (content.length > MSGFILES.MAX_FILE_BYTES || total > MSGFILES.MAX_TOTAL_BYTES) {
+      throw Object.assign(new Error('attachments too big'), { code: 'attach-big' });
+    }
+    out.push({ name: f.name, url: f.url, ext: f.ext, content });
+  }
+  return out;
+}
 
 /* ── Artwork pipeline ─────────────────────────────────────────────────────
    Sales sends a job to the designer; the designer reviews it, can ask sales a
@@ -19460,6 +19506,43 @@ app.post('/admin/quote/:code/art/file', requireAdmin, async (req, res) => {
 
 /* A signature for one upload into the final-art folder: sign-in and art.work
    only, signing nothing the caller chose. */
+/* Uploads for an email from the job page, signed into the message folder only. */
+app.post('/admin/api/message-file-signature', requireAdmin, (req, res) => {
+  const apiSecret = process.env.CLOUDINARY_API_SECRET || process.env.CLUDINARY_API_SECRET;
+  const cloud = QPHOTOS.cloudName();
+  if (!apiSecret || !cloud || !process.env.CLOUDINARY_API_KEY) return res.status(503).json({ error: 'Uploads are not set up.' });
+  const timestamp = Math.round(Date.now() / 1000);
+  const signature = cloudinary.utils.api_sign_request({ folder: MSGFILES.FOLDER, timestamp }, apiSecret);
+  res.set('Cache-Control', 'no-store');
+  res.json({ signature, timestamp, folder: MSGFILES.FOLDER, cloud, apiKey: process.env.CLOUDINARY_API_KEY });
+});
+
+/* A file an email carried, from the job page's message list. */
+app.get('/admin/production/:code/sent-file/:id/:n', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  const id = /^\d{1,12}$/.test(String(req.params.id)) ? req.params.id : null;
+  const n = /^\d{1,2}$/.test(String(req.params.n)) ? Number(req.params.n) : -1;
+  if (!QUOTE_CODE_RE.test(code) || !id) return res.status(404).send('Not found.');
+  try {
+    const { rows: [e] } = await pool.query('SELECT attachments FROM client_emails WHERE id = $1 AND quote_code = $2', [id, code]);
+    const a = e && Array.isArray(e.attachments) ? e.attachments[n] : null;
+    const src = a ? MSGFILES.parse(a.url, QPHOTOS.cloudName()) : null;
+    if (!src) return res.status(404).send('That file is not on this message.');
+    const r = await fetch(cloudinary.utils.private_download_url(src.publicId, src.format, { resource_type: src.resourceType, type: 'upload' }));
+    if (!r.ok || !r.body) throw new Error(`Cloudinary answered ${r.status}`);
+    const name = MSGFILES.cleanName(a.name, src.ext);
+    res.set('Content-Type', 'application/octet-stream');
+    res.set('Content-Disposition', `attachment; filename="${name.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(name)}`);
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.set('Cache-Control', 'private, no-store');
+    Readable.fromWeb(r.body).pipe(res);
+  } catch (err) {
+    console.error(`sent file ${code}/${req.params.id}/${req.params.n} failed:`, err.message);
+    if (!res.headersSent) res.status(502).send('Could not fetch that file just now.');
+    else res.destroy(err);
+  }
+});
+
 app.post('/admin/api/art-signature', requireAdmin, (req, res) => {
   const apiSecret = process.env.CLOUDINARY_API_SECRET || process.env.CLUDINARY_API_SECRET;
   const cloud = QPHOTOS.cloudName();
@@ -19806,10 +19889,10 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
   const code = q.code;
   const { rows: history } = await pool.query(
     `SELECT * FROM (
-       SELECT 'email' AS channel, kind, subject, preview AS body, status, error, created_at, sent_by
+       SELECT 'email' AS channel, kind, subject, preview AS body, status, error, created_at, sent_by, id, attachments
          FROM client_emails WHERE quote_code = $1
        UNION ALL
-       SELECT 'text', template, NULL, body, status, error, created_at, sent_by
+       SELECT 'text', template, NULL, body, status, error, created_at, sent_by, NULL, NULL
          FROM sms_messages WHERE quote_code = $1) m
       ORDER BY created_at DESC LIMIT 60`, [code]).catch((e) => {
     console.error(`messages for ${code} failed:`, e.message);
@@ -19826,6 +19909,7 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
     if (!c.transactional) textWhyNot = 'they have not agreed to texts';
   }
   const emailWhyNot = q.email ? '' : 'no email address on this quote';
+  const jobFiles = await jobFilesFor(q).catch(() => []);
   const first = String(q.name || '').trim().split(/\s+/)[0];
   const hi = `Hi${first ? ' ' + first : ''}`;
   const due = balanceOf(q, quoteTotals(q).total);
@@ -19860,6 +19944,8 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
       <span class="ico ${inbound ? 'ico-green' : bad ? 'ico-red' : 'ico-blue'}">${icon(m.channel === 'email' ? 'mail' : 'phone')}</span>
       <span class="row-main"><b>${escEmail(m.channel === 'email' ? (m.subject || label) : label)}</b>
         <div class="row-sub" style="white-space:normal">${escEmail(body.length > 220 ? body.slice(0, 219).trimEnd() + '…' : body)}</div>${
+        Array.isArray(m.attachments) && m.attachments.length ? `<div class="row-sub" style="white-space:normal">&#128206; ${
+          m.attachments.map((a, n) => `<a href="/admin/production/${escEmail(code)}/sent-file/${Number(m.id)}/${n}">${escEmail(a.name)}</a>`).join(' &middot; ')}</div>` : ''}${
         bad && m.error ? `<div class="row-sub" style="white-space:normal;color:#b91c1c">${escEmail(m.error)}</div>` : ''}</span>
       <span class="row-end msg-end">${pill(inbound ? 'reply' : m.status, tone(m.status))}
         <span class="muted msg-when">${m.channel === 'email' ? 'email' : 'text'} &middot; ${
@@ -19885,6 +19971,18 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
                style="margin-bottom:8px;padding:10px;font-size:14px">
         <textarea name="body" rows="4" maxlength="5000" placeholder="Write to ${escEmail(first || 'them')}…"
                   style="font-size:14px;padding:10px">${escEmail(prefill)}</textarea>
+        <div data-attach style="margin:8px 0;padding:8px 10px;border:1px dashed #c7d7fb;border-radius:8px;background:#fafcff">
+          <div style="font-size:13px;font-weight:600;color:#12203c">Attach files <span class="muted" style="font-weight:400">(email only)</span></div>
+          ${jobFiles.length ? `<div style="display:flex;flex-direction:column;gap:3px;margin-top:6px">${jobFiles.map((f) => `
+            <label style="display:flex;gap:6px;align-items:center;margin:0;text-transform:none;letter-spacing:0;font-weight:400;font-size:13px">
+              <input type="checkbox" data-jobfile value="${escEmail(f.url)}" data-name="${escEmail(f.name)}" style="width:auto">
+              ${escEmail(f.name)} <span class="muted" style="font-size:12px">${f.from === 'design' ? 'final art' : 'from the customer'}</span></label>`).join('')}</div>` : ''}
+          <div data-uplist style="display:flex;flex-direction:column;gap:3px;margin-top:6px"></div>
+          <label class="btn btn-ghost" style="display:inline-block;cursor:pointer;padding:6px 12px;font-size:13px;margin-top:6px">Upload a file
+            <input type="file" multiple accept="${MSGFILES.ACCEPT}" data-upfile style="display:none"></label>
+          <span class="muted" data-upstat style="font-size:12px;margin-left:6px">Pictures show in the email; every file is attached. 25 MB in all.</span>
+          <input type="hidden" name="attachments" value="[]">
+        </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0">${quick.map(([label, t]) =>
           `<button type="button" class="kbtn kbtn-sm" data-fill="${escEmail(t)}">${escEmail(label)}</button>`).join('')}</div>
         <button type="submit" class="btn" style="padding:10px 22px;font-size:14px"${emailWhyNot && textWhyNot ? ' disabled' : ''}>Send</button>
@@ -19905,12 +20003,51 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
         f.querySelectorAll('[data-fill]').forEach(function(b){
           b.addEventListener('click', function(){ body.value = b.getAttribute('data-fill'); body.focus(); });
         });
+        var att = f.querySelector('[data-attach]');
         function sync(){
           var c = f.querySelector('input[name="channel"]:checked');
           var text = c && c.value === 'text';
           subj.style.display = text ? 'none' : '';
           body.maxLength = text ? 300 : 5000;
+          if (att) att.style.display = text ? 'none' : '';
         }
+        /* Files: ticked ones already on the job, and uploads signed into the
+           message folder. Built with textContent; posted as JSON on submit. */
+        var uploads = [], ul = f.querySelector('[data-uplist]'), ust = f.querySelector('[data-upstat]'), busy = 0;
+        function drawUploads(){
+          ul.textContent = '';
+          uploads.forEach(function(u, i){
+            var row = document.createElement('div'); row.style.fontSize = '13px';
+            row.textContent = '\u{1F4CE} ' + u.name + ' ';
+            var x = document.createElement('button'); x.type = 'button'; x.className = 'kbtn kbtn-sm'; x.textContent = 'remove';
+            x.addEventListener('click', function(){ uploads.splice(i, 1); drawUploads(); });
+            row.appendChild(x); ul.appendChild(row);
+          });
+        }
+        var upInput = f.querySelector('[data-upfile]');
+        if (upInput) upInput.addEventListener('change', function(){
+          Array.prototype.forEach.call(upInput.files || [], function(file){
+            if (file.size > ${MSGFILES.MAX_FILE_BYTES}) { ust.textContent = file.name + ' is over 20 MB.'; return; }
+            busy++; ust.textContent = 'Uploading ' + file.name + '…';
+            fetch('/admin/api/message-file-signature', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+              .then(function(r){ if (!r.ok) throw new Error('signature'); return r.json(); })
+              .then(function(sig){
+                var fd = new FormData();
+                fd.append('file', file); fd.append('api_key', sig.apiKey); fd.append('timestamp', sig.timestamp);
+                fd.append('folder', sig.folder); fd.append('signature', sig.signature);
+                return fetch('https://api.cloudinary.com/v1_1/' + sig.cloud + '/auto/upload', { method: 'POST', body: fd });
+              })
+              .then(function(r){ return r.json(); })
+              .then(function(d){
+                if (!d.secure_url) throw new Error('upload');
+                uploads.push({ url: d.secure_url, name: file.name }); drawUploads();
+                ust.textContent = 'Added ' + file.name + '.';
+              })
+              .catch(function(){ ust.textContent = file.name + ' did not upload. Try again.'; })
+              .then(function(){ busy--; });
+          });
+          upInput.value = '';
+        });
         f.querySelectorAll('input[name="channel"]').forEach(function(r){ r.addEventListener('change', sync); });
         sync();
         /* Playbook replies. Built with textContent, never markup: an article
@@ -19934,9 +20071,17 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
           kq.addEventListener('input', function(){ clearTimeout(kt); kt = setTimeout(kbLoad, 250); });
           kq.closest('details').addEventListener('toggle', function(e){ if (e.target.open && !kl.childNodes.length) kbLoad(); });
         }
-        f.addEventListener('submit', function(){
+        f.addEventListener('submit', function(e){
+          if (busy > 0) { e.preventDefault(); ust.textContent = 'Wait for the upload to finish, then press Send.'; return; }
+          var c = f.querySelector('input[name="channel"]:checked');
+          var list = [];
+          if (!c || c.value === 'email') {
+            f.querySelectorAll('[data-jobfile]:checked').forEach(function(x){ list.push({ url: x.value, name: x.getAttribute('data-name') }); });
+            uploads.forEach(function(u){ list.push(u); });
+          }
+          f.querySelector('input[name="attachments"]').value = JSON.stringify(list);
           var b = f.querySelector('button[type="submit"]');
-          setTimeout(function(){ b.disabled = true; b.textContent = 'Sending…'; }, 0);
+          setTimeout(function(){ b.disabled = true; b.textContent = list.length ? 'Sending with ' + list.length + ' file' + (list.length === 1 ? '' : 's') + '…' : 'Sending…'; }, 0);
         });
       })();
     </script>`;
@@ -19957,8 +20102,8 @@ async function markProofsSent(code, text) {
     .catch((e) => console.error(`marking proofs sent on ${code} failed:`, e.message));
 }
 
-async function sendJobMessage({ code, channel, subject, text }) {
-  const key = crypto.createHash('sha256').update([code, channel, text].join('|')).digest('hex');
+async function sendJobMessage({ code, channel, subject, text, attachments = '[]' }) {
+  const key = crypto.createHash('sha256').update([code, channel, text, String(attachments)].join('|')).digest('hex');
   const now = Date.now();
   for (const [k, at] of recentJobMessages) if (now - at > 2 * 60 * 1000) recentJobMessages.delete(k);
   if (recentJobMessages.has(key)) return 'duplicate';
@@ -19971,12 +20116,27 @@ async function sendJobMessage({ code, channel, subject, text }) {
     if (q && q.status === 'held') return 'held';
     if (q && q.status === 'draft') return 'draft';
     if (!q) return 'no-quote';
+    /* Files: checked against THIS job (pickAttachments) at the moment of
+       sending, so a held message approved later still sends only what is on
+       the job then. */
+    const picked = MSGFILES.pickAttachments(attachments, await jobFilesFor(q), QPHOTOS.cloudName());
+    if (picked.error) return picked.error === 'too-many' ? 'attach-big' : 'attach-bad';
+    if (picked.files.length && channel !== 'email') return 'attach-email';
     if (channel === 'email') {
       if (!q.email) return 'no-email';
+      let files = [];
+      try { files = await fetchAttachments(picked.files); }
+      catch (e) { console.error(`attachments for ${code}:`, e.message); return e.code || 'attach-fetch'; }
       recentJobMessages.set(key, now);
+      /* Pictures show in the email itself; every file is attached as well. */
+      const pics = files.map((f) => MSGFILES.previewUrl(f.url, f.ext)).filter(Boolean);
+      const listed = files.length ? `<p style="margin-top:14px;color:#374151"><b>Attached:</b> ${
+        files.map((f) => escEmail(f.name)).join(', ')}</p>` : '';
       await sendClientEmail({ quote: code, kind: 'manual', to: q.email, subject, replyTo: SHOP_EMAIL, preview: text,
+        attachments: files,
         html: customerEmailHtml('A note about your order',
-          `<p>${escEmail(text).replace(/\n/g, '<br>')}</p>`, code) });
+          `<p>${escEmail(text).replace(/\n/g, '<br>')}</p>${pics.map((u) =>
+            `<p style="margin:12px 0"><img src="${escEmail(u)}" alt="" style="max-width:100%;height:auto;border-radius:8px;border:1px solid #e3e8f2"></p>`).join('')}${listed}`, code) });
       console.log(`message to ${code} by email`);
       return 'sent';
     }
@@ -20014,6 +20174,8 @@ app.post('/admin/quote/:code/message', requireAdmin, async (req, res) => {
   const channel = b.channel === 'text' ? 'text' : 'email';
   const text = String(b.body || '').replace(/\r\n?/g, '\n').trim();
   const subject = String(b.subject || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 150) || `About your order ${code}`;
+  /* The files picked or uploaded, as JSON [{url, name}]; checked when sent. */
+  const attachments = String(b.attachments || '[]').slice(0, 8000);
   const answer = (key, value) => res.redirect(`${jobPath(code)}?${key}=${encodeURIComponent(value)}#messages`);
   // A designer writes only to the customers of jobs that are with them.
   if (actorLevel('quotes.view') !== 'on' && !(await designJobFor(code, currentActor()))) return res.redirect('/admin/design');
@@ -20034,7 +20196,7 @@ app.post('/admin/quote/:code/message', requireAdmin, async (req, res) => {
       await pool.query(
         `INSERT INTO staff_approvals (kind, subject_id, payload, reasons, requested_by)
          VALUES ('message', $1, $2, $3, $4)`,
-        [code, JSON.stringify({ channel, subject, text }),
+        [code, JSON.stringify({ channel, subject, text, attachments }),
          JSON.stringify(outside
            ? [`It mentions being paid outside the shop ("${outside.slice(0, 60)}").`]
            : ['Customer messages go to the owner first.']), actor.id]);
@@ -20046,7 +20208,7 @@ app.post('/admin/quote/:code/message', requireAdmin, async (req, res) => {
     }
   }
 
-  const out = await sendJobMessage({ code, channel, subject, text });
+  const out = await sendJobMessage({ code, channel, subject, text, attachments });
   if (out === 'no-quote') return res.redirect('/admin/production');
   if (out === 'sent') await markProofsSent(code, text);
   return out === 'sent' ? answer('sent', channel) : answer('msg_err', out);
@@ -25228,7 +25390,8 @@ app.post('/admin/approvals/:id', requireAdmin, async (req, res) => {
       /* Sent as the owner's decision, credited to the helper who wrote it. */
       const out = await actorStore.run({ ...OWNER_ACTOR, sentBy: a.requested_by }, () =>
         sendJobMessage({ code: a.subject_id, channel: p.channel === 'text' ? 'text' : 'email',
-                         subject: text(p.subject, 150) || `About your order ${a.subject_id}`, text: text(p.text, 5000) }));
+                         subject: text(p.subject, 150) || `About your order ${a.subject_id}`, text: text(p.text, 5000),
+                         attachments: typeof p.attachments === 'string' ? p.attachments : '[]' }));
       if (out !== 'sent') { await unclaim(); return back(res, '/admin/approvals', 'err', `Not sent: ${MESSAGE_ERRORS[out] || out}`); }
       await markProofsSent(a.subject_id, p.text);
       await finish('approved');
