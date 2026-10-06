@@ -157,5 +157,6 @@ test('a cancelled job can be restored from Orders, and it comes back there', () 
 test('cancelling from Production comes back to Production', () => {
   const cancel = route("app.post('/admin/quote/:code/cancel', requireAdmin");
   assert.match(cancel,
-    /res\.redirect\(String\(\(req\.body && req\.body\.back\) \|\| ''\) === 'production' \? '\/admin\/production' : '\/admin\/quotes'\)/);
+    /const backTo = String\(\(req\.body && req\.body\.back\) \|\| ''\) === 'production' \? '\/admin\/production' : '\/admin\/quotes';/);
+  assert.match(cancel, /res\.redirect\(backTo\);\s*\}\);?$|res\.redirect\(backTo\);/);
 });

@@ -43,6 +43,10 @@ const PERMISSIONS = {
   'customers.message':     { group: 'Customers',  label: 'Email and text customers', levels: ['off', 'approval', 'on'] },
   'production.stage':      { group: 'Production', label: 'Move jobs through production, shipping', levels: ['off', 'on'] },
   'orders.view':           { group: 'Production', label: 'See studio orders', levels: ['off', 'on'] },
+  /* A designer's whole view of a job: what to print, where, by when, the
+     customer's files and the notes. No prices, no payments, no contact
+     details, and no other board (/admin/design). */
+  'jobs.design':           { group: 'Production', label: 'Design jobs (no prices or contact details)', levels: ['off', 'on'] },
   'proofs.upload':         { group: 'Production', label: 'Upload proofs to jobs', levels: ['off', 'on'] },
   'art.request':           { group: 'Production', label: 'Send jobs to the designer, answer their questions', levels: ['off', 'on'] },
   'art.work':              { group: 'Production', label: 'Work on artwork: ask sales, upload and submit final art', levels: ['off', 'on'] },
@@ -51,17 +55,52 @@ const PERMISSIONS = {
   'shipping.labels':       { group: 'Production', label: 'Buy shipping labels (charged to your Shippo account)', levels: ['off', 'on'] },
   'reviews.manage':        { group: 'Reviews',    label: 'Manage reviews', levels: ['off', 'on'] },
   'certificates.prescreen':{ group: 'Tax',        label: 'See and attach tax certificates', levels: ['off', 'on'] },
-  'certificates.decide':   { group: 'Tax',        label: 'Approve or refuse tax certificates', levels: ['off', 'on'] },
-  'payments.record':       { group: 'Money',      label: 'Record payments and settle quotes', levels: ['off', 'on'] },
+  'payments.record':       { group: 'Money',      label: 'Record cash and Zelle payments (you confirm each one)', levels: ['off', 'on'] },
   'discounts.manage':      { group: 'Money',      label: 'Discount codes', levels: ['off', 'on'] },
   'dashboard.view':        { group: 'Money',      label: 'Dashboard (takings, money owed)', levels: ['off', 'on'] },
-  'finances':              { group: 'Money',      label: 'Finances, expenses, exports, tax', levels: ['off', 'on'] },
   'kb.edit':               { group: 'Playbook',   label: 'Write playbook articles', levels: ['off', 'approval', 'on'] },
 };
 
+/* What no helper can ever be given, at any level, by preset or by toggle
+   (owner, 2026-10-06: "they never gain these permissions even after
+   training"). Tax decisions, money corrections and write-offs, sales credit,
+   the books, staff and pay. These are not in PERMISSIONS at all, so there is
+   no toggle to turn on; their routes are 'owner' in ROUTES, and a test checks
+   every one stays that way. */
+const NEVER_STAFF = [
+  'POST /admin/certificates/:id/review',
+  'POST /admin/quotes/:code/exemption',
+  'POST /admin/quote/:code/correct-payment',
+  'POST /admin/quote/:code/settle',
+  'POST /admin/quote/:code/confirm-payment',
+  'POST /admin/unlinked/:id/apply',
+  'POST /admin/unlinked/:id/tax',
+  'POST /admin/quote/:code/credit',
+  'POST /admin/quote/:code/restore-version',
+  'GET /admin/finances',
+  'POST /admin/expenses',
+  'POST /admin/expenses/:id',
+  'POST /admin/expenses/:id/delete',
+  'POST /admin/expenses/roll',
+  'GET /admin/exports',
+  'GET /admin/exports/quotes.csv',
+  'GET /admin/exports/payments.csv',
+  'GET /admin/exports/expenses.csv',
+  'GET /admin/exports/unlinked.csv',
+  'GET /admin/tax.csv',
+  'POST /admin/tax/remit',
+  'POST /admin/quote/:code/costs',
+  'GET /admin/staff',
+  'POST /admin/staff',
+  'POST /admin/staff/:id',
+  'GET /admin/approvals',
+  'POST /admin/approvals/:id',
+  'GET /admin/commission',
+  'POST /admin/commission/pay',
+];
+
 /* Starting points, not rules: applying one sets every toggle, and the owner can
-   then change any single one. Finances is in none of them on purpose — it is
-   the owner's to open, deliberately, never as a side effect of a promotion. */
+   then change any single one. */
 const PRESETS = {
   training: {
     label: 'Training',
@@ -73,22 +112,25 @@ const PRESETS = {
       'orders.view': 'on', 'art.request': 'on', 'kb.edit': 'approval',
     },
   },
-  /* A designer in training: sees the jobs and the customers, uploads proofs,
-     and writes the proof messages, which come to the owner before they send. */
+  /* Designers see their design jobs and nothing else (owner, 2026-10-06: "no
+     access to things that don't pertain to them"): no quote or production
+     board, no prices, no customer list, no studio orders, no leads. Proof
+     messages go out through the system, so the customer's address is never
+     shown to them. */
   design: {
     label: 'Design training',
-    note: 'Sees the jobs, uploads proofs and writes proof messages; you approve each message before it is sent.',
+    note: 'Sees only their design jobs, uploads proofs and writes proof messages; you approve each message before it is sent.',
     perms: {
-      'quotes.view': 'on', 'customers.view': 'on', 'customers.message': 'approval',
-      'orders.view': 'on', 'proofs.upload': 'on', 'art.work': 'on', 'kb.edit': 'approval',
+      'jobs.design': 'on', 'customers.message': 'approval',
+      'proofs.upload': 'on', 'art.work': 'on', 'kb.edit': 'approval',
     },
   },
   designer: {
     label: 'Designer',
-    note: 'Design training signed off: sends proofs and messages to customers, and moves jobs along.',
+    note: 'Design training signed off: sends proofs to customers themselves. Still sees only their design jobs.',
     perms: {
-      'quotes.view': 'on', 'customers.view': 'on', 'customers.message': 'on', 'production.stage': 'on',
-      'orders.view': 'on', 'proofs.upload': 'on', 'art.work': 'on', 'kb.edit': 'approval',
+      'jobs.design': 'on', 'customers.message': 'on',
+      'proofs.upload': 'on', 'art.work': 'on', 'kb.edit': 'approval',
     },
   },
   supervised: {
@@ -187,13 +229,26 @@ const ROUTES = {
   'GET /admin/certificates': 'certificates.prescreen',
   'GET /admin/certificates/:id/file': 'certificates.prescreen',
   'POST /admin/quote/:code/certificate': 'certificates.prescreen',
-  'POST /admin/quotes/:code/exemption': 'certificates.prescreen',
-  'POST /admin/certificates/:id/review': 'certificates.decide',
+  'POST /admin/certificates/:id/review': 'owner',
+  'POST /admin/quotes/:code/exemption': 'owner',
 
+  /* A helper's cash or Zelle payment is recorded unconfirmed and counts for
+     nothing (commission included) until the owner confirms it. Correcting,
+     voiding, writing off and moving payments are the owner's alone. */
   'POST /admin/quote/:code/mark-paid': 'payments.record',
-  'POST /admin/quote/:code/correct-payment': 'payments.record',
-  'POST /admin/quote/:code/settle': 'payments.record',
-  'POST /admin/unlinked/:id/apply': 'payments.record',
+  'POST /admin/quote/:code/confirm-payment': 'owner',
+  'POST /admin/quote/:code/correct-payment': 'owner',
+  'POST /admin/quote/:code/settle': 'owner',
+  'POST /admin/unlinked/:id/apply': 'owner',
+
+  // Quote history: anyone who can see the job reads it; only the owner restores.
+  'POST /admin/quote/:code/restore-version': 'owner',
+  'POST /admin/followups/:id/done': 'owner',
+
+  // A designer's own board and job page.
+  'GET /admin/design': 'jobs.design',
+  'GET /admin/design/:code': 'jobs.design',
+  'POST /admin/design/:code/note': 'jobs.design',
 
   'GET /admin/discounts': 'discounts.manage',
   'POST /admin/discounts': 'discounts.manage',
@@ -210,20 +265,20 @@ const ROUTES = {
 
   'GET /admin/dashboard': 'dashboard.view',
 
-  'GET /admin/finances': 'finances',
-  'POST /admin/expenses': 'finances',
-  'POST /admin/expenses/:id': 'finances',
-  'POST /admin/expenses/:id/delete': 'finances',
-  'POST /admin/expenses/roll': 'finances',
-  'GET /admin/exports': 'finances',
-  'GET /admin/exports/quotes.csv': 'finances',
-  'GET /admin/exports/payments.csv': 'finances',
-  'GET /admin/exports/expenses.csv': 'finances',
-  'GET /admin/exports/unlinked.csv': 'finances',
-  'GET /admin/tax.csv': 'finances',
-  'POST /admin/tax/remit': 'finances',
-  'POST /admin/unlinked/:id/tax': 'finances',
-  'POST /admin/quote/:code/costs': 'finances',
+  'GET /admin/finances': 'owner',
+  'POST /admin/expenses': 'owner',
+  'POST /admin/expenses/:id': 'owner',
+  'POST /admin/expenses/:id/delete': 'owner',
+  'POST /admin/expenses/roll': 'owner',
+  'GET /admin/exports': 'owner',
+  'GET /admin/exports/quotes.csv': 'owner',
+  'GET /admin/exports/payments.csv': 'owner',
+  'GET /admin/exports/expenses.csv': 'owner',
+  'GET /admin/exports/unlinked.csv': 'owner',
+  'GET /admin/tax.csv': 'owner',
+  'POST /admin/tax/remit': 'owner',
+  'POST /admin/unlinked/:id/tax': 'owner',
+  'POST /admin/quote/:code/costs': 'owner',
 
   // The staff workspace itself.
   'GET /admin/my-day': 'any',
@@ -240,7 +295,7 @@ const ROUTES = {
   'POST /admin/quote/:code/note': 'quotes.view',
   'POST /admin/tasks': 'any',
   'POST /admin/tasks/:id/done': 'any',
-  'POST /admin/quote/:code/credit': 'quotes.view',
+  'POST /admin/quote/:code/credit': 'owner',
   'GET /admin/my-earnings': 'any',
   'POST /admin/bonuses': 'owner',
   'POST /admin/bonuses/:id/delete': 'owner',
@@ -356,6 +411,8 @@ function levelOf(actor, key) {
 function mayUseRoute(actor, method, routePath) {
   if (actor && actor.kind === 'owner') return true;
   if (!actor || actor.kind !== 'staff') return false;
+  // Belt and braces: even a ROUTES slip cannot open one of these.
+  if (NEVER_STAFF.includes(routeKey(method, routePath))) return false;
   const need = permForRoute(method, routePath);
   if (!need || need === 'owner') return false;
   if (need === 'any') return true;
@@ -366,9 +423,12 @@ function mayUseRoute(actor, method, routePath) {
    `quote` is the saved row's money: total, and the list price the lines were
    discounted from. Returns { held: bool, reasons: [..] } — every reason, so the
    helper is told all of them at once. */
-function quoteNeedsApproval(actor, { total, listTotal, discountPct, customPriced = 0 } = {}) {
+function quoteNeedsApproval(actor, { total, listTotal, discountPct, customPriced = 0, forStaff = false } = {}) {
   if (!actor || actor.kind === 'owner') return { held: false, reasons: [] };
   const reasons = [];
+  /* A quote whose email or phone is a staff member's: a helper selling to
+     themselves (or a teammate) sets their own price and earns on it. */
+  if (forStaff) reasons.push('The customer’s email or phone belongs to someone on the team.');
   const send = normalizePerm('quotes.send', actor.perms && actor.perms['quotes.send']);
   if (send.level !== 'on') reasons.push('Your quotes go to the owner before the customer sees them.');
   else if (send.maxTotal != null && Number(total) > send.maxTotal) {
@@ -392,6 +452,17 @@ function quoteNeedsApproval(actor, { total, listTotal, discountPct, customPriced
     if (disc.level !== 'on') reasons.push('A custom line with a typed price has no catalogue price to check it against.');
   }
   return { held: reasons.length > 0, reasons };
+}
+
+/** The most a helper's discount CODE may take off, in percent: their quote
+ *  discount limit when discounts are theirs, else nothing (0). A helper with
+ *  discounts fully theirs and no limit gets the 10% a trusted helper has,
+ *  since a code, unlike a quote, reaches anyone it is passed to. */
+function discountCodeCap(actor) {
+  if (!actor || actor.kind === 'owner') return 100;
+  const d = normalizePerm('quotes.discount', actor.perms && actor.perms['quotes.discount']);
+  if (d.level !== 'on') return 0;
+  return d.maxPct != null ? d.maxPct : 10;
 }
 
 /* ── Passwords ─────────────────────────────────────────────────────────────
@@ -499,8 +570,8 @@ function presetMatching(perms) {
 const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,190}\.[a-z]{2,}$/i;
 
 module.exports = {
-  LEVELS, PERMISSIONS, PRESETS, ROUTES, STAFF_SESSION_HOURS, MIN_PASSWORD, EMAIL_RE,
+  LEVELS, PERMISSIONS, PRESETS, ROUTES, NEVER_STAFF, STAFF_SESSION_HOURS, MIN_PASSWORD, EMAIL_RE,
   routeKey, permForRoute, normalizePerm, presetPerms, effectivePerms, levelOf, mayUseRoute,
-  quoteNeedsApproval, hashPassword, verifyPassword, generatePassword,
+  quoteNeedsApproval, discountCodeCap, hashPassword, verifyPassword, generatePassword,
   makeSession, readSession, permsFromForm, presetMatching,
 };

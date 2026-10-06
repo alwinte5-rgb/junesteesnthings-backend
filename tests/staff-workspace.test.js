@@ -103,12 +103,30 @@ test('limits are kept only as real, non-negative numbers', () => {
   assert.deepStrictEqual(STAFF.normalizePerm('quotes.send', { level: 'on', maxTotal: 'lots' }), { level: 'on' });
 });
 
-test('no preset opens Finances, the dashboard or certificate decisions', () => {
+test('no preset opens the dashboard, payments or discount codes', () => {
   for (const name of Object.keys(STAFF.PRESETS)) {
     const p = STAFF.presetPerms(name);
-    for (const k of ['finances', 'dashboard.view', 'certificates.decide', 'payments.record', 'discounts.manage']) {
+    for (const k of ['dashboard.view', 'payments.record', 'discounts.manage']) {
       assert.strictEqual(p[k].level, 'off', `${name} → ${k}`);
     }
+  }
+});
+
+/* Owner, 2026-10-06: "they never gain these permission even after training".
+   The books and tax decisions are not toggles at all any more, so neither a
+   preset nor a hand-made permission set can name them. */
+test('Finances and certificate decisions cannot be given to a helper at all', () => {
+  assert.ok(!STAFF.PERMISSIONS.finances, 'finances is not a toggle');
+  assert.ok(!STAFF.PERMISSIONS['certificates.decide'], 'certificate decisions are not a toggle');
+  const everything = {};
+  for (const k of Object.keys(STAFF.PERMISSIONS)) everything[k] = { level: 'on' };
+  everything.finances = 'on';
+  everything['certificates.decide'] = 'on';
+  const h = helper(everything);
+  for (const k of STAFF.NEVER_STAFF) {
+    assert.strictEqual(STAFF.ROUTES[k], 'owner', `${k} is the owner's in ROUTES`);
+    const [method, ...rest] = k.split(' ');
+    assert.ok(!STAFF.mayUseRoute(h, method, rest.join(' ')), `${k} refused to a helper with every toggle on`);
   }
 });
 
@@ -137,10 +155,11 @@ test('the owner may use every route, and nobody else without a login', () => {
 
 test('a form of toggles is read back as a permission set, fail-closed', () => {
   const p = STAFF.permsFromForm({ 'perm_leads.view': 'on', 'perm_quotes.send': 'on', 'limit_quotes.send': '250',
-                                  'perm_finances': 'approval', 'perm_quotes.discount': 'bogus' });
+                                  'perm_dashboard.view': 'approval', 'perm_finances': 'on', 'perm_quotes.discount': 'bogus' });
   assert.deepStrictEqual(p['leads.view'], { level: 'on' });
   assert.deepStrictEqual(p['quotes.send'], { level: 'on', maxTotal: 250 });
-  assert.strictEqual(p.finances.level, 'off');
+  assert.strictEqual(p['dashboard.view'].level, 'off');
+  assert.strictEqual(p.finances, undefined, 'a toggle that does not exist is not read back');
   assert.strictEqual(p['quotes.discount'].level, 'off');
   assert.strictEqual(p['customers.view'].level, 'off', 'an unposted toggle is off');
 });
@@ -148,7 +167,7 @@ test('a form of toggles is read back as a permission set, fail-closed', () => {
 test('presets are recognised again after saving', () => {
   assert.strictEqual(STAFF.presetMatching(STAFF.presetPerms('supervised')), 'supervised');
   const custom = STAFF.presetPerms('supervised');
-  custom.finances = { level: 'on' };
+  custom['dashboard.view'] = { level: 'on' };
   assert.strictEqual(STAFF.presetMatching(custom), null);
 });
 
@@ -429,7 +448,9 @@ test('sales credit: a helper can never take a sale credited to someone else, and
   assert.match(fn, /if \(q\.paid\) return/, 'no change once commission on it is paid');
   assert.match(fn, /credited_to IS NOT DISTINCT FROM \$3[\s\S]*NOT EXISTS \(SELECT 1 FROM commission_payouts/,
     'the same rules again in the UPDATE, against a race');
-  assert.strictEqual(STAFF.ROUTES['POST /admin/quote/:code/credit'], 'quotes.view');
+  // Credit decides commission, so only the owner changes it (2026-10-06).
+  assert.strictEqual(STAFF.ROUTES['POST /admin/quote/:code/credit'], 'owner');
+  assert.match(route("app.post('/admin/quote/:code/credit', requireAdmin"), /if \(!isOwner\(\)\) return res\.status\(403\)/);
 });
 
 test('commission, the scorecard and incentives follow the sales credit, not who pressed send', () => {

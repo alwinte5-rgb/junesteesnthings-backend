@@ -212,7 +212,8 @@ test('the quick messages fill the box, and one for a balance only when one is ow
 test('sending is admin only, and answers on the job page from a fixed list', () => {
   const r = msgRoute();
   assert.match(r, /QUOTE_CODE_RE\.test\(code\)/);
-  assert.match(r, /res\.redirect\(`\/admin\/production\/\$\{code\}\?\$\{key\}=\$\{encodeURIComponent\(value\)\}#messages`\)/);
+  // The job page for whoever sent it: production, or a designer's own page.
+  assert.match(r, /res\.redirect\(`\$\{jobPath\(code\)\}\?\$\{key\}=\$\{encodeURIComponent\(value\)\}#messages`\)/);
   const card = lift('jobMessagesCard');
   assert.match(card, /const failed = MESSAGE_ERRORS\[String\(query\.msg_err \|\| ''\)\];/);
   assert.match(card, /\['email', 'text'\]\.includes\(String\(query\.sent\)\)/);
@@ -252,6 +253,8 @@ function messageRoute(o = {}) {
     quoteLink: (c) => 'https://www.jtees.net/q/' + c,
     console: { log() {}, error() {} },
     currentActor: () => null, actorLevel: () => 'on', markProofsSent: async () => {},
+    jobPath: (c) => `/admin/production/${c}`, designJobFor: async () => null,
+    FRAUD: require('../tools/lib/fraud-signals'), logActivity: () => {},
   };
   vm.createContext(sandbox);
   vm.runInContext(lift('sendJobMessage') + '\n' + route("app.post('/admin/quote/:code/message', requireAdmin") + '\n});', sandbox);
