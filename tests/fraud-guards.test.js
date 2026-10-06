@@ -189,7 +189,8 @@ test('a message asking to be paid outside the shop is held, whatever the helper\
 
 test('only the owner moves sales credit; a helper only reads it', () => {
   const save = route("app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin");
-  assert.match(save, /const want = actor\.kind === 'owner' \? String\(one\(b\.credit_to\) \|\| ''\)\.trim\(\) : '';/);
+  assert.match(save, /const want = actor\.kind === 'owner' && !derivedCredit \? String\(one\(b\.credit_to\) \|\| ''\)\.trim\(\) : '';/,
+    'owner only, and never over the credit the records gave a new quote');
   assert.match(fn('function creditField('), /if \(actor\.kind === 'staff'\) \{/);
 });
 

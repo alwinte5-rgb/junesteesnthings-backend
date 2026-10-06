@@ -133,7 +133,7 @@ test('a sale waiting for the owner is never payable', () => {
   assert.match(lines, /const pct = CREDIT\.rateFor\(r\.sale_type, rates \|\| \{\}\)/);
   assert.match(lines, /needsOk: r\.sale_type === 'pending'/);
   assert.match(lines, /noCommission: r\.sale_type === 'shop'/);
-  assert.match(lines, /needsCosts: !\(r\.cost > 0\)/);
+  assert.match(lines, /needsCosts: !r\.costs_final_at/);
   assert.match(route("app.post('/admin/commission/pay', requireAdmin"), /filter\(\(l\) => l\.state === 'payable' && l\.amount > 0\)/);
 });
 
