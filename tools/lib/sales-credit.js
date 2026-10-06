@@ -10,10 +10,11 @@
 
      shop     the shop's own traffic: the website, chat, ads, walk-ins, calls
               and messages to the shop, and anyone the shop already knows.
-              A helper who closes one earns their (smaller) shop-lead rate.
+              A helper who closes one is paid their hourly wage, no commission.
      rep      a customer the helper found themselves, registered by them
-              before the shop knew of them. Their full rate, and the same on
-              reorders for 12 months after their first sale to that customer.
+              before the shop knew of them. Their commission % of the profit,
+              and the same on reorders for 12 months after their first sale
+              to that customer.
      pending  the customer says a salesperson sent them, but no salesperson
               registered them first. Pays nothing until the owner decides.
 
@@ -131,11 +132,12 @@ function classifyQuote({ reorder = null, lead = null, builder = null, now = Date
   return { sale_type: 'shop', credited_to: builder, reason: lead ? 'From a shop lead' : 'Shop customer' };
 }
 
-/** The commission rate for a sale: the full rate on their own, the shop-lead
- *  rate on the shop's, nothing while the owner has not decided. */
-function rateFor(saleType, { commission_pct = 0, shop_commission_pct = 0 } = {}) {
+/** The commission rate for a sale: their rate on their own leads, nothing on
+ *  the shop's (owner, 2026-10-06: "Commission is only available on profit and
+ *  regular wage if no commission sale" — a shop lead is covered by the hourly
+ *  wage), nothing while the owner has not decided. */
+function rateFor(saleType, { commission_pct = 0 } = {}) {
   if (saleType === 'rep') return Number(commission_pct) || 0;
-  if (saleType === 'shop') return Number(shop_commission_pct) || 0;
   return 0;
 }
 

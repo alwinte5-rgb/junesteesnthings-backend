@@ -369,6 +369,39 @@ test('commission is on money kept, before tax', () => {
   assert.deepStrictEqual(TEAM.commissionFor({ collected: 100, total: 100, tax: 0, pct: 0 }), { base: 0, amount: 0 });
 });
 
+test('commission is on the profit: collected before tax, less the job costs', () => {
+  assert.deepStrictEqual(TEAM.commissionFor({ collected: 1100, total: 1100, tax: 100, cost: 400, pct: 10 }), { base: 600, amount: 60 });
+  assert.deepStrictEqual(TEAM.commissionFor({ collected: 300, total: 1100, tax: 100, cost: 400, pct: 10 }), { base: 0, amount: 0 },
+    'a deposit smaller than the costs has no profit yet');
+  assert.deepStrictEqual(TEAM.commissionFor({ collected: 500, total: 500, tax: 0, cost: 700, pct: 10 }), { base: 0, amount: 0 },
+    'a loss pays nothing and never owes');
+});
+
+test('no costs, no payout; a shop lead is wage only', () => {
+  const now = Date.parse('2026-10-30T12:00:00Z');
+  const old = now - 30 * 86400000;
+  assert.strictEqual(TEAM.commissionState({ paidInFull: true, lastMoneyAt: old, needsCosts: true, now }), 'needs costs');
+  assert.strictEqual(TEAM.commissionState({ paidInFull: true, lastMoneyAt: old, noCommission: true, now }), 'wage only');
+  assert.strictEqual(TEAM.commissionState({ paidInFull: true, lastMoneyAt: old, noCommission: true, alreadyPaid: true, now }), 'paid',
+    'a payout already made stays on the books');
+});
+
+test('wages are the unpaid hours at the hourly rate', () => {
+  assert.deepStrictEqual(TEAM.wagesFor([{ hours: 20 }, { hours: 12.5 }, { hours: 40, paid_at: '2026-10-01' }], 15),
+    { hours: 32.5, rate: 15, amount: 487.5 });
+  assert.deepStrictEqual(TEAM.wagesFor([{ hours: 10 }], 0), { hours: 10, rate: 0, amount: 0 });
+  assert.deepStrictEqual(TEAM.wagesFor([], 18), { hours: 0, rate: 18, amount: 0 });
+});
+
+test('a payout books wages at today\'s rate and locks the week; a paid week cannot be edited', () => {
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'server.js'), 'utf8');
+  const pay = src.slice(src.indexOf("app.post('/admin/commission/pay'"), src.indexOf("app.post('/admin/commission/pay'") + 5000);
+  assert.match(pay, /paid_at IS NULL AND hours > 0 FOR UPDATE/);
+  assert.match(pay, /UPDATE staff_hours SET paid_at = NOW\(\), paid_rate = \$2, expense_id = \$3/);
+  const hours = src.slice(src.indexOf("app.post('/admin/team/hours'"), src.indexOf("app.post('/admin/team/hours'") + 1500);
+  assert.match(hours, /WHERE staff_hours\.paid_at IS NULL/);
+});
+
 test('commission is payable only once paid in full, 14 days on, with no open dispute', () => {
   const now = Date.parse('2026-10-30T12:00:00Z');
   const day = 86400000;
