@@ -50,6 +50,26 @@ const { Readable } = require('node:stream');
 const REVREPLY = require('./tools/lib/review-replies');
 const REPLYCOACH = require('./tools/lib/reply-coach');
 const INBOUND = require('./tools/lib/inbound-email');
+
+/* Every browser upload to Cloudinary goes through this, pasted into each page's
+   script (2026-10-06). The account is on Cloudinary's Free plan: 10 MB a file,
+   and an image may be at most 25 megapixels. Through the auto endpoint a
+   print PDF counts as an image, so a 20x24 at 300 dpi (43 MP) was refused
+   however small the file. Design files therefore go up as raw files, which
+   have no pixel limit; photos go up as images (the email can show them) and,
+   if Cloudinary refuses one, as a raw file instead. Answers like a fetch
+   Response, so each caller keeps its .then(r => r.json()). No backticks or
+   dollar-brace in here: it is pasted into template literals. */
+const CLOUDINARY_UPLOAD_MAX = 10 * 1024 * 1024;
+const CLD_UPLOAD_FN = `function jtCldUpload(cloud, fd, name){
+              var ext = (String(name || '').split('.').pop() || '').toLowerCase();
+              var img = ['jpg','jpeg','png','gif','webp','heic','heif'].indexOf(ext) >= 0;
+              function go(kind){ return fetch('https://api.cloudinary.com/v1_1/' + cloud + '/' + kind + '/upload', { method: 'POST', body: fd })
+                .then(function(r){ return r.json().catch(function(){ return { error: { message: 'HTTP ' + r.status } }; }); }); }
+              return go(img ? 'image' : 'raw').then(function(d){ return d && d.secure_url || !img ? d : go('raw'); })
+                .then(function(d){ return { json: function(){ return Promise.resolve(d); } }; });
+            }`;
+
 const STAFF = require('./tools/lib/staff');
 const FRAUD = require('./tools/lib/fraud-signals');
 const CREDIT = require('./tools/lib/sales-credit');
@@ -10503,6 +10523,9 @@ ${uploadStatusScript()}
         var hidden = L.querySelector('.im');
         var thumbs = L.querySelector('.thumbs');
         Array.prototype.forEach.call(files, function(file){
+          if (file.size > ${CLOUDINARY_UPLOAD_MAX}) {
+            upFailed++; upReason = file.name + ' is over 10 MB, the most our file storage takes'; saySoon(); return;
+          }
           var ph = document.createElement('div');
           ph.style.cssText = 'width:58px;height:58px;border-radius:8px;background:#eef1f8;display:flex;align-items:center;justify-content:center;font-size:10px;color:#6b7280';
           ph.textContent = '…';
@@ -10532,7 +10555,8 @@ ${uploadStatusScript()}
                instead of being rejected as not-an-image.
                No backticks in this comment — it sits inside a server-side
                template literal and one would end it. */
-            return fetch('https://api.cloudinary.com/v1_1/'+CLOUD+'/auto/upload', {method:'POST', body:fd});
+            ${CLD_UPLOAD_FN}
+            return jtCldUpload(CLOUD, fd, file.name);
           }).then(function(r){return r.json();}).then(function(d){
             if(!d.secure_url) throw new Error(d.error ? d.error.message : 'upload failed');
 
@@ -12113,7 +12137,7 @@ app.get('/q/:code', async (req, res) => {
         <h1 style="font-size:18px">Upload artwork</h1>
         <p class="muted" style="margin-top:6px">Send the artwork for this order here: your logo or design, or
           the faces for big head cutouts. Photos, PDF, AI, EPS, SVG, PSD, embroidery files (DST, PES, EXP, EMB)
-          and ZIP all work, up to ${Math.round(QPHOTOS.MAX_FILE_BYTES / 1048576)} MB each. Send the largest, clearest
+          and ZIP all work, up to ${Math.round(Math.min(QPHOTOS.MAX_FILE_BYTES, CLOUDINARY_UPLOAD_MAX) / 1048576)} MB each. Send the largest, clearest
           version you have; for faces, a well-lit photo looking at the camera prints best.</p>
         <div data-qp-grid style="display:flex;gap:10px;flex-wrap:wrap;margin:12px 0">${qpPhotos.map(qpTile).join('')}</div>
         <button type="button" class="btn-ghost" data-qp-pick style="width:100%">Upload artwork</button>
@@ -12131,7 +12155,7 @@ app.get('/q/:code', async (req, res) => {
         var cfg = fetch('/api/config').then(function(r){ return r.json(); })
           .then(function(c){ CKEY = c.cloudinaryApiKey || ''; }).catch(function(){});
         var URL_  = ${JSON.stringify(`/q/${q.code}/photos`)};
-        var MAXB  = ${QPHOTOS.MAX_FILE_BYTES};
+        var MAXB  = ${Math.min(QPHOTOS.MAX_FILE_BYTES, CLOUDINARY_UPLOAD_MAX)};
         var EXTS  = ${JSON.stringify(QPHOTOS.ACCEPT.split(',').filter((x) => x.startsWith('.')).map((x) => x.slice(1)))};
         var TILE  = ${JSON.stringify(TILE)};
         var card = document.getElementById('photos');
@@ -12209,7 +12233,8 @@ app.get('/q/:code', async (req, res) => {
               fd.append('folder', sig.folder); fd.append('signature', sig.signature);
               /* auto, as the admin form: Cloudinary keeps a stitch file or a
                  ZIP as raw instead of refusing it as not-an-image. */
-              return fetch('https://api.cloudinary.com/v1_1/' + CLOUD + '/auto/upload', { method: 'POST', body: fd });
+              ${CLD_UPLOAD_FN}
+            return jtCldUpload(CLOUD, fd, file.name);
             })
             .then(function(r){ return r.json(); })
             .then(function(d){
@@ -19523,7 +19548,7 @@ async function jobArtCard(q, query) {
       <input type="hidden" name="url"><input type="hidden" name="name">
       <label class="btn btn-ghost" style="display:inline-block;cursor:pointer">Upload a final file
         <input type="file" accept="${ART.ACCEPT}" data-artfile style="display:none"></label>
-      <span class="muted" data-artstat style="margin-left:8px;font-size:13px">AI, EPS, PDF, SVG, PNG, PSD, DST or ZIP, up to 50 MB.</span>
+      <span class="muted" data-artstat style="margin-left:8px;font-size:13px">AI, EPS, PDF, SVG, PNG, PSD, DST or ZIP, up to 10 MB each.</span>
     </form>
     <script>
       (function(){
@@ -19531,7 +19556,7 @@ async function jobArtCard(q, query) {
         var inp = f.querySelector('[data-artfile]'), st = f.querySelector('[data-artstat]');
         inp.addEventListener('change', function(){
           var file = inp.files && inp.files[0]; if (!file) return;
-          if (file.size > ${ART.MAX_FILE_BYTES}) { st.textContent = 'That file is over 50 MB.'; return; }
+          if (file.size > ${CLOUDINARY_UPLOAD_MAX}) { st.textContent = file.name + ' is over 10 MB, the most our file storage takes. Save a smaller copy (a 150 dpi PDF or a JPG) and upload that.'; return; }
           st.textContent = 'Uploading…';
           fetch('/admin/api/art-signature', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' })
             .then(function(r){ if (!r.ok) throw new Error('signature'); return r.json(); })
@@ -19539,16 +19564,17 @@ async function jobArtCard(q, query) {
               var fd = new FormData();
               fd.append('file', file); fd.append('api_key', sig.apiKey); fd.append('timestamp', sig.timestamp);
               fd.append('folder', sig.folder); fd.append('signature', sig.signature);
-              return fetch('https://api.cloudinary.com/v1_1/' + sig.cloud + '/auto/upload', { method: 'POST', body: fd });
+              ${CLD_UPLOAD_FN}
+            return jtCldUpload(sig.cloud, fd, file.name);
             })
             .then(function(r){ return r.json(); })
             .then(function(d){
-              if (!d.secure_url) throw new Error('upload');
+              if (!d.secure_url) throw new Error(d.error && d.error.message ? d.error.message : 'upload');
               f.querySelector('[name="url"]').value = d.secure_url;
               f.querySelector('[name="name"]').value = file.name;
               f.submit();
             })
-            .catch(function(){ st.textContent = 'The upload did not work. Try again.'; });
+            .catch(function(e){ st.textContent = 'The upload did not work' + (e && e.message && e.message !== 'upload' ? ' (' + e.message + ')' : '') + '. Try again.'; });
         });
       })();
     </script>`;
@@ -20001,12 +20027,12 @@ async function jobProofsCard(q, query) {
             })
             .then(function(r){ return r.json(); })
             .then(function(d){
-              if (!d.secure_url) throw new Error('upload');
+              if (!d.secure_url) throw new Error(d.error && d.error.message ? d.error.message : 'upload');
               f.querySelector('[name="url"]').value = d.secure_url;
               f.querySelector('[name="name"]').value = file.name;
               f.submit();
             })
-            .catch(function(){ st.textContent = 'The upload did not work. Try again, or send a smaller JPG or PDF.'; });
+            .catch(function(e){ st.textContent = 'The upload did not work' + (e && e.message && e.message !== 'upload' ? ' (' + e.message + ')' : '') + '. Try again, or send a smaller JPG.'; });
         });
       })();
     </script>` : ''}
@@ -20178,7 +20204,7 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
           <div data-uplist style="display:flex;flex-direction:column;gap:3px;margin-top:6px"></div>
           <label class="btn btn-ghost" style="display:inline-block;cursor:pointer;padding:6px 12px;font-size:13px;margin-top:6px">Upload a file
             <input type="file" multiple accept="${MSGFILES.ACCEPT}" data-upfile style="display:none"></label>
-          <span class="muted" data-upstat style="font-size:12px;margin-left:6px">Pictures show in the email; every file is attached. 25 MB in all.</span>
+          <span class="muted" data-upstat style="font-size:12px;margin-left:6px">Pictures show in the email; every file is attached. Up to 10 MB a file.</span>
           <input type="hidden" name="attachments" value="[]">
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0">${quick.map(([label, t]) =>
@@ -20233,7 +20259,7 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
         var upInput = f.querySelector('[data-upfile]');
         if (upInput) upInput.addEventListener('change', function(){
           Array.prototype.forEach.call(upInput.files || [], function(file){
-            if (file.size > ${MSGFILES.MAX_FILE_BYTES}) { ust.textContent = file.name + ' is over 20 MB.'; return; }
+            if (file.size > ${CLOUDINARY_UPLOAD_MAX}) { ust.textContent = file.name + ' is over 10 MB, the most our file storage takes. Save a smaller copy (a 150 dpi PDF or a JPG) and upload that.'; return; }
             busy++; ust.textContent = 'Uploading ' + file.name + '…';
             fetch('/admin/api/message-file-signature', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' })
               .then(function(r){ if (!r.ok) throw new Error('signature'); return r.json(); })
@@ -20241,15 +20267,16 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
                 var fd = new FormData();
                 fd.append('file', file); fd.append('api_key', sig.apiKey); fd.append('timestamp', sig.timestamp);
                 fd.append('folder', sig.folder); fd.append('signature', sig.signature);
-                return fetch('https://api.cloudinary.com/v1_1/' + sig.cloud + '/auto/upload', { method: 'POST', body: fd });
+                ${CLD_UPLOAD_FN}
+            return jtCldUpload(sig.cloud, fd, file.name);
               })
               .then(function(r){ return r.json(); })
               .then(function(d){
-                if (!d.secure_url) throw new Error('upload');
+                if (!d.secure_url) throw new Error(d.error && d.error.message ? d.error.message : 'upload');
                 uploads.push({ url: d.secure_url, name: file.name }); drawUploads();
                 ust.textContent = 'Added ' + file.name + '.';
               })
-              .catch(function(){ ust.textContent = file.name + ' did not upload. Try again.'; })
+              .catch(function(e){ ust.textContent = file.name + ' did not upload' + (e && e.message && e.message !== 'upload' ? ' (' + e.message + ')' : '') + '. Try again.'; })
               .then(function(){ busy--; });
           });
           upInput.value = '';

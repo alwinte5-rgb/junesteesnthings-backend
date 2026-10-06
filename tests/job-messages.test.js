@@ -157,6 +157,8 @@ function card({ history = [], smsOn = true, consent = true, q = {} } = {}) {
     /* Files on the job an email may carry (2026-10-06): none here. */
     jobFilesFor: async () => [], MSGFILES: require('../tools/lib/message-files'), inboundReady: false,
     jobPath: (c) => '/admin/production/' + c,
+    /* The shared browser upload helper (2026-10-06), as server.js defines it. */
+    CLOUDINARY_UPLOAD_MAX: 10 * 1024 * 1024, CLD_UPLOAD_FN: 'function jtCldUpload(){}',
   };
   vm.createContext(sandbox);
   vm.runInContext([grab('const MESSAGE_KINDS = {', '};'), grab('const MESSAGE_ERRORS = {', '};'),
@@ -351,4 +353,16 @@ test('once the reply domain is live, a job email asks for replies at the job add
   assert.strictEqual(on.sent[0].replyTo, 'order-ab12cd@reply.jtees.net');
   await on.send({ quote: 'AB12CD', kind: 'promo', to: 'a@b.co', subject: 's', html: '<p>x</p>', marketing: true });
   assert.strictEqual(on.sent[1].replyTo, undefined);
+});
+
+test('uploads go to Cloudinary as raw files for design files, with the 10 MB limit and the real error shown', async () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  assert.doesNotMatch(src, /\/auto\/upload'/, 'an upload still uses the auto endpoint, which counts a PDF as an image');
+  const fn = src.slice(src.indexOf('const CLD_UPLOAD_FN = `'), src.indexOf('`;', src.indexOf('const CLD_UPLOAD_FN')));
+  assert.match(fn, /go\(img \? 'image' : 'raw'\)/);
+  assert.match(fn, /\|\| !img \? d : go\('raw'\)/, 'a refused photo is not retried as a raw file');
+  assert.strictEqual((src.match(/\$\{CLD_UPLOAD_FN\}/g) || []).length, 4);
+  const html = await card();
+  assert.match(html, /file\.size > 10485760/);
+  assert.match(html, /did not upload' \+ \(e && e\.message/);
 });
