@@ -595,6 +595,23 @@ function round2Score(grade) {
 /* What the owner decides after the video call; set by hand on the applicant's page. */
 const DECISIONS = { interview: ['Video call', 'blue'], hired: ['Hired', 'green'], rejected: ['Rejected', 'red'] };
 
+/* The owner's Google Calendar booking page: the applicant picks a time and
+   the invite carries its own Google Meet link. One link for every job. */
+const BOOKING_URL = 'https://calendar.app.google/ehCBC65kQCDYdBHAA';
+
+/** The video-call invite to send on OnlineJobs.ph, filled in. */
+function bookingMessage(name) {
+  const first = String(name || '').trim().split(/\s+/)[0] || 'there';
+  return `Hi ${first}, thank you for completing the test. We'd like to invite you to a 30-minute video interview.
+
+Please choose a time that works for you here: ${BOOKING_URL}
+
+The page shows times in your own time zone. Once you book, you'll get a calendar invite with the Google Meet link. Please join from a quiet place with your camera on, and have a valid ID ready to show on camera.
+
+Looking forward to talking with you!
+June's Tees`;
+}
+
 const ROUND2_LABELS = { interview: ['Book the video call', 'green'], maybe: ['Maybe', 'amber'], no: ['No', 'red'] };
 
 async function gradeRound2(questions, written, { name, client, role } = {}) {
@@ -617,7 +634,7 @@ async function gradeRound2(questions, written, { name, client, role } = {}) {
 
 module.exports = {
   TEST_FEE, FEE_DAYS, cleanPaypal, PAY_AGREE,
-  SALES, roleOf, systemFor, gradeSchema, round2System, DECISIONS, sameQuestion,
+  SALES, roleOf, systemFor, gradeSchema, round2System, DECISIONS, sameQuestion, BOOKING_URL, bookingMessage,
   PASS_SCORE, ROUND2_MINUTES, ROUND2_MAX, ROUND2_DAYS, ROUND2_WAIT_MINUTES, ROUND2_INTRO, ROUND2_SYSTEM, ROUND2_SCHEMA, ROUND2_LABELS,
   round2Questions, passes, cleanRound2, round2Message, normalizeRound2, round2Score, gradeRound2, round2Pending,
   MODEL, MINUTES, GRACE_MINUTES, LINK_DAYS, LIMITS, ROLES, INTRO, PARTS, MULTIPLE_CHOICE, WRITTEN,
