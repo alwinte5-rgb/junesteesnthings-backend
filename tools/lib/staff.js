@@ -304,6 +304,7 @@ const ROUTES = {
   'POST /admin/playbook/:id': 'kb.edit',
   'GET /admin/api/playbook/replies': 'any',
   'POST /admin/lead/:id/note': 'leads.view',
+  'POST /admin/lead/:id/email': 'customers.message',
   'POST /admin/lead/:id/assign': 'leads.view',
   'POST /admin/lead/:id/outcome': 'leads.view',
   'POST /admin/leads/add': 'leads.view',
