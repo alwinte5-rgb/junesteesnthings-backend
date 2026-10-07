@@ -1422,6 +1422,8 @@ async function initStaffTables() {
     )`);
   await pool.query(`CREATE INDEX IF NOT EXISTS quote_revisions_code_idx ON quote_revisions (quote_code, id DESC)`);
   await repairSentAsDelivered().catch((e) => console.error('sent-as-delivered repair failed:', e.message));
+  /* After the server is listening: it calls Twilio and Cloudinary. */
+  setTimeout(() => repairTextPictures().catch((e) => console.error('text picture repair failed:', e.message)), 30 * 1000).unref();
   /* What the owner must follow up: every cancelled job, and a helper's
      request to cancel one that is agreed or paid. Open until the owner
      closes it with what happened. */
@@ -2998,6 +3000,36 @@ function noteStaffIp(staffId, ip) {
    five seconds of a "quote marked sent" entry. The same quotes get their
    sent_to_customer_at; quotes made in that window that were never sent lose
    the NOW() the new column was added with. Runs once (staff_activity marker). */
+/* Texts that carried a picture before pictures were kept (until 2026-10-06)
+   show on the job as an empty reply. Ask Twilio for each one's media and keep
+   it like a new one: with the job's files and on the message. Only rows from
+   the last 30 days with no media yet, so it does nothing once they are done;
+   a text with no media is marked [] so it is not asked about again. */
+async function repairTextPictures() {
+  if (!smsConfigured()) return;
+  const { rows } = await pool.query(
+    `SELECT id, twilio_sid, quote_code FROM sms_messages
+      WHERE status = 'received' AND media IS NULL AND twilio_sid LIKE 'MM%'
+        AND created_at > NOW() - interval '30 days' ORDER BY created_at LIMIT 50`);
+  if (!rows.length) return;
+  const acct = String(process.env.TWILIO_ACCOUNT_SID).trim();
+  const auth = 'Basic ' + Buffer.from(`${acct}:${String(process.env.TWILIO_AUTH_TOKEN).trim()}`).toString('base64');
+  let fixed = 0;
+  for (const r of rows) {
+    const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${acct}/Messages/${encodeURIComponent(r.twilio_sid)}/Media.json`,
+      { headers: { Authorization: auth }, signal: AbortSignal.timeout(15000) });
+    if (!res.ok) { console.error(`text picture repair: Twilio ${res.status} for ${r.twilio_sid}`); continue; }
+    const list = ((await res.json()).media_list || []).slice(0, TMEDIA.MAX_MEDIA).map((m) => {
+      const type = String(m.content_type || '').toLowerCase();
+      return { url: 'https://api.twilio.com' + String(m.uri).replace(/\.json$/, ''), type, ext: TMEDIA.mediaOf({ NumMedia: 1, MediaUrl0: 'https://api.twilio.com/x', MediaContentType0: type })[0].ext };
+    });
+    const media = await saveTextMedia(list, r.quote_code);
+    await pool.query('UPDATE sms_messages SET media = $2 WHERE id = $1 AND media IS NULL', [r.id, JSON.stringify(media)]);
+    if (media.length) fixed++;
+  }
+  console.log(`repair: pictures recovered on ${fixed} earlier text(s)`);
+}
+
 async function repairSentAsDelivered() {
   const MARK = 'repair: sent stamped as delivered';
   const { rows: done } = await pool.query('SELECT 1 FROM staff_activity WHERE action = $1 LIMIT 1', [MARK]);
@@ -3885,7 +3917,7 @@ async function relayOwnerReply(text, sid, ownerMedia = []) {
   if (pick.ask) return sendOwnerSms(RELAY.askText(pick.ask));
   const to = pick.to;
   const label = `${to.name || 'the ' + String(to.phone).slice(-4) + ' number'} (${RELAY.codeOf(to)})`;
-  const words = smsPlain(pick.body, 600);
+  const words = smsPlain(String(pick.body).replace(/^\s*june['\u2019]?s\s+tees\s*(&\s*things\s*)?[:,-]\s*/i, ''), 600);
   if (!words && !ownerMedia.length) return sendOwnerSms(`Not sent to ${label}: the message was empty.`);
   const pics = ownerMedia.length ? await saveTextMedia(ownerMedia, to.quote_code || null) : [];
   /* One row per incoming text: Twilio retrying the webhook does not send twice. */
@@ -20652,7 +20684,9 @@ async function sendJobMessage({ code, channel, subject, text, attachments = '[]'
       ref: 'manual:' + key.slice(0, 32),
       /* Every text carries a link to the website (2026-10-05): their order
          page, unless the message already has a link in it. */
-      msg: { template: 'manual', body: `June's Tees: ${smsPlain(text, 260)}${
+      /* The brand once: a message typed (or suggested) as "June's Tees: ..."
+         went out as "June's Tees: June's Tees: ..." (2026-10-06). */
+      msg: { template: 'manual', body: `June's Tees: ${smsPlain(text.replace(/^\s*june['\u2019]?s\s+tees\s*(&\s*things\s*)?[:,-]\s*/i, ''), 260)}${
         /https?:\/\/|jtees\.net/i.test(text) ? '' : ' ' + smsShort(quoteLink(code))} Reply STOP to opt out.` } });
     if (status === 'sent') { console.log(`message to ${code} by text`); return 'sent'; }
     recentJobMessages.delete(key);

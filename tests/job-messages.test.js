@@ -336,7 +336,7 @@ test('a refused text does not hold the message back once it can go', async () =>
 
 test('a text keeps the shape every customer text has', () => {
   const r = msgRoute();
-  assert.match(r, /body: `June's Tees: \$\{smsPlain\(text, 260\)\}\$\{/);
+  assert.match(r, /body: `June's Tees: \$\{smsPlain\(text\.replace\([^\n]*, ''\), 260\)\}\$\{/);
   assert.match(r, /' ' \+ smsShort\(quoteLink\(code\)\)\} Reply STOP to opt out\.`/, 'their order page goes on every text, short and branded');
   assert.match(r, /kind: 'transactional'/);
   const { plain } = require('../tools/lib/sms-templates');
@@ -481,4 +481,12 @@ test('a texted picture shows on the job page as a picture', async () => {
       attachments: [{ url: 'https://evil.example/x.jpg', name: 'bad' }] }] });
   assert.match(html, /<img src="https:\/\/res\.cloudinary\.com\/shop\/image\/upload\/c_limit,w_240/);
   assert.doesNotMatch(html, /evil\.example/);
+});
+
+test('a message typed as "June\'s Tees: ..." does not go out with the brand twice', () => {
+  const at = src.indexOf("msg: { template: 'manual', body: `June's Tees: ${smsPlain(text.replace(");
+  assert.ok(at > 0, 'the manual text strips a leading brand');
+  const re = /^\s*june['’]?s\s+tees\s*(&\s*things\s*)?[:,-]\s*/i;
+  for (const t of ["June's Tees: Hi Samantha", 'June’s Tees & Things - Hi', "june's tees, hi"]) assert.ok(!/^june/i.test(t.replace(re, '')), t);
+  assert.strictEqual("June's Tees has your proof".replace(re, ''), "June's Tees has your proof", 'a sentence about the shop stays');
 });
