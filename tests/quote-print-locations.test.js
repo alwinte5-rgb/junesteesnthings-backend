@@ -11,7 +11,7 @@
  *
  * What these pin:
  *   - a line written the new way prices exactly as the same job written the
- *     old way, across methods, places, ink counts, dark garments and bands;
+ *     old way, across methods, places, ink counts, with and without the base, and bands;
  *   - mixed methods on one garment price each place with its own method, and
  *     each method's minimum applies only to its own places;
  *   - screens are one set per screen-printed place, at that place's count;
@@ -60,19 +60,22 @@ const DTF = { id: 1, title: 'DTF Printing', type: 'fixed', min_order_qty: 0,
 const EMB = { id: 5, title: 'Embroidery', type: 'fixed', min_order_qty: 12,
   positions: { front: [{ min_qty: 23, price: 8.75 }, { min_qty: 10000, price: 6.5 }] } };
 const screens = { code: 'screens', label: 'Screens', kind: 'per_screen', rate: 25, runShared: true };
-const base = { product: { price: 4.37, sizes: [] }, addons: [screens], blankTiers: [] };
+/* noBase: place-by-place arithmetic is pinned without the white base so the
+   numbers stay readable; the tests about the base set noBase: false, the real
+   rule (every garment carries it — screen-fees.test.js). */
+const base = { product: { price: 4.37, sizes: [] }, addons: [screens], blankTiers: [], noBase: true };
 const strip = (ps) => ps.map((p) => ({ loc: p.loc, method: p.method, colours: p.colours }));
 
 test('a job written as print locations prices exactly as the same job written the old way', () => {
   let n = 0;
   for (const method of [SCREEN, DTF, EMB]) for (const stage of ['', 'mr8a5dlx', 'both'])
   for (const colours of [1, 3]) for (const backColours of ['', 1]) for (const sleeves of ['', 'left', 'both'])
-  for (const sleeveColours of ['', 2]) for (const dark of [false, true]) for (const qty of [12, 60, 200]) {
+  for (const sleeveColours of ['', 2]) for (const noBase of [false, true]) for (const qty of [12, 60, 200]) {
     /* The one deliberate difference: a DTF print on the back ALONE is DTF's
        main print, not its additional location (see the test below). */
     if (method === DTF && stage === 'mr8a5dlx') continue;
-    const old = { ...base, qty, method, stage, colours, backColours, sleeves, sleeveColours, dark };
-    const now = { ...base, qty, dark, prints: strip(legacyPrints(old)) };
+    const old = { ...base, qty, method, stage, colours, backColours, sleeves, sleeveColours, noBase };
+    const now = { ...base, qty, noBase, prints: strip(legacyPrints(old)) };
     const a = priceLine(old), b = priceLine(now);
     /* Under screen printing's minimum the new path shows the shortfall as its
        own line instead of inside the per-piece price: same money (to rounding
@@ -80,7 +83,7 @@ test('a job written as print locations prices exactly as the same job written th
     const underMin = method === SCREEN && qty < SCREEN.min_order_qty;
     if (underMin) {
       assert.ok(Math.abs(b.lineTotal - a.lineTotal) <= 0.01 * qty,
-        `charged as 50: ${a.lineTotal} vs ${b.lineTotal} ` + JSON.stringify({ stage, colours, sleeves, dark, qty }));
+        `charged as 50: ${a.lineTotal} vs ${b.lineTotal} ` + JSON.stringify({ stage, colours, sleeves, noBase, qty }));
       assert.ok(b.addonLines.some((x) => x.code === 'screen_min'));
       n++;
       continue;
@@ -88,7 +91,7 @@ test('a job written as print locations prices exactly as the same job written th
     assert.deepStrictEqual(
       [b.lineTotal, b.listUnit, b.screens, b.overScreens, b.passScreens],
       [a.lineTotal, a.listUnit, a.screens, a.overScreens, a.passScreens],
-      JSON.stringify({ method: method.id, stage, colours, backColours, sleeves, sleeveColours, dark, qty }));
+      JSON.stringify({ method: method.id, stage, colours, backColours, sleeves, sleeveColours, noBase, qty }));
     n++;
   }
   assert.ok(n > 500);
@@ -133,8 +136,8 @@ test('a method\'s minimum applies to its own places only', () => {
   assert.equal(srm.total, Math.round(4.1 * 30 * 100) / 100, '30 missing pieces at the screen rate');
 });
 
-test('screens: one set per screen-printed place, at its own count, plus the underbase on dark', () => {
-  const r = priceLine({ ...base, qty: 100, dark: true, prints: [
+test('screens: one set per screen-printed place, at its own count, plus the underbase', () => {
+  const r = priceLine({ ...base, qty: 100, noBase: false, prints: [
     { loc: 'front', method: SCREEN, colours: 3 },
     { loc: 'back', method: SCREEN, colours: 1 },
     { loc: 'right', method: SCREEN, colours: 2 },
@@ -142,7 +145,7 @@ test('screens: one set per screen-printed place, at its own count, plus the unde
   assert.equal(r.screens, 4 + 2 + 3);
   assert.equal(r.passScreens, 4);
   assert.equal(r.overScreens, false);
-  const over = priceLine({ ...base, qty: 100, dark: true, prints: [
+  const over = priceLine({ ...base, qty: 100, noBase: false, prints: [
     { loc: 'front', method: SCREEN, colours: 1 },
     { loc: 'back', method: { ...SCREEN, max_screens: 3 }, colours: 3 },
   ] });
@@ -239,15 +242,17 @@ test('under 50, screen printing is charged as 50 on a line of its own', () => {
   assert.equal(typed.lineTotal, 270);
 });
 
-test('on a dark garment the white base is a colour in the screen-print price', () => {
-  /* Anchorfish #18249: 1-colour white on black is billed at the 2-colour rate. */
+test('the white base is a colour in the screen-print price, on every garment', () => {
+  /* Anchorfish #18249: 1-colour white on black is billed at the 2-colour rate,
+     and since 2026-10-07 light garments carry the base too. Only a line saved
+     before that without the dark tick (noBase) keeps the 1-colour column. */
   const S = { ...SCREEN, positions: { id: [{ min_qty: 249, colors: { '1-color': 3.45, '2-color': 4.35, '3-color': 5.3 } }] } };
-  const light = priceLine({ ...base, product: null, addons: [], qty: 100, prints: [{ loc: 'front', method: S, colours: 1 }] });
-  const dark = priceLine({ ...base, product: null, addons: [], qty: 100, dark: true, prints: [{ loc: 'front', method: S, colours: 1 }] });
-  assert.equal(light.decoration, 3.45);
-  assert.equal(dark.decoration, 4.35);
+  const sent = priceLine({ ...base, product: null, addons: [], qty: 100, noBase: true, prints: [{ loc: 'front', method: S, colours: 1 }] });
+  const now = priceLine({ ...base, product: null, addons: [], qty: 100, noBase: false, prints: [{ loc: 'front', method: S, colours: 1 }] });
+  assert.equal(sent.decoration, 3.45);
+  assert.equal(now.decoration, 4.35);
   /* DTF is not screen printed and has no base column. */
-  const dtf = priceLine({ ...base, product: null, addons: [], qty: 60, dark: true, prints: [{ loc: 'front', method: DTF }] });
+  const dtf = priceLine({ ...base, product: null, addons: [], qty: 60, prints: [{ loc: 'front', method: DTF }] });
   assert.equal(dtf.decoration, 5.1);
 });
 

@@ -201,10 +201,12 @@ test('the colour check runs before the quantity check', () => {
   assert.ok(colour > -1 && qty > -1 && colour < qty);
 });
 
-test('an unknown garment colour does not refuse the job', () => {
-  /* A product whose colour is a plain select carries a label, not a hex. Erring
-     toward dark would refuse a light-garment order on a guess. */
-  assert.match(cartPhp, /if \(!preg_match\('\/\^#\?\(\[0-9a-f\]\{6\}\)\$\/i', trim\(\$hex\), \$m\)\) return false;/);
+test('the garment colour plays no part in the colour ceiling', () => {
+  /* It used to: a dark garment's base took one screen from the ceiling, and a
+     label-only colour had to err toward light. Since 2026-10-07 the base is on
+     every garment, so the ceiling always counts it and nothing guesses. */
+  assert.doesNotMatch(cartPhp, /printing_is_dark/);
+  assert.match(cartPhp, /if \(\$raster \|\| \(\$colors > 0 && \(\$colors \+ 1\) > \$maxScreens\)\)/);
 });
 
 /* ── A photograph is not a screen-print job ──────────────────────────────── */

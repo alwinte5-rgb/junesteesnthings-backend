@@ -64,7 +64,10 @@ const SHIRT = { id: 187, price: 6.40, sizes: [], colours: [] };
 const line = (over) => Object.assign({
   product: SHIRT, qty: 100, sizeMix: null, colours: '', stage: '',
   method2: null, stage2: '', colours2: '',
-  addons: [], blankTiers: [], dark: false, blankOverride: null, unitOverride: '',
+  /* noBase: these pin how two decorations and runs share charges, without the
+     white base so the numbers stay readable. The base itself — on every
+     garment since 2026-10-07 — is pinned in screen-fees.test.js. */
+  addons: [], blankTiers: [], noBase: true, blankOverride: null, unitOverride: '',
 }, over);
 
 test('a line with two decorations charges the garment ONCE', () => {
@@ -227,8 +230,8 @@ test('screens are counted from the screen-print half, whichever slot it is in', 
   assert.equal(L({ method: DTF, stage: 'both', method2: SCREEN4, stage2: '', colours2: '1' }).screens, 1,
     "the DTF's two sides inflated the screen count");
 
-  /* A dark garment still adds its underbase, on the screen half. */
-  assert.equal(L({ method: DTF, method2: SCREEN4, stage2: '', colours2: '1', dark: true }).screens, 2);
+  /* The underbase is added on the screen half. */
+  assert.equal(L({ method: DTF, method2: SCREEN4, stage2: '', colours2: '1', noBase: false }).screens, 2);
 });
 
 test('a run burns its screens once, not once a line', () => {

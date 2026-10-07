@@ -77,7 +77,7 @@ function liftCalc() {
 const calcFn = vm.runInThisContext('(' + liftCalc() + ')');
 
 /** Price one job through the STOREFRONT engine. */
-function storefront(blob, qty, { colours = 0, stage = 'front', multi = false, dark = false } = {}) {
+function storefront(blob, qty, { colours = 0, stage = 'front', multi = false } = {}) {
   const states = {};
   /* A real design, not an empty stage: the storefront only charges a fixed
      band when the stage actually carries something (`total_res > 0`), which is
@@ -88,7 +88,7 @@ function storefront(blob, qty, { colours = 0, stage = 'front', multi = false, da
   global.lumise = {
     fn: { dejson: (v) => v },
     data: { printings: [{ id: 1, calculate: JSON.parse(JSON.stringify(blob)) }] },
-    cart: { printing: { current: 1, states_data: states, is_dark: () => dark } },
+    cart: { printing: { current: 1, states_data: states } },
   };
   global.lumise.data.printings[0].calculate.multi = multi;
   return calcFn.call(null, qty);
@@ -177,10 +177,14 @@ test('above the largest band, the largest band holds — not zero', () => {
 
 test('screen printing agrees at every ink count and every band', () => {
   if (!havePhp) return;
+  /* The storefront reads the column one up for the white base (on every
+     garment since 2026-10-07); the quote side here is the bare table lookup,
+     so it is asked for that same column. priceLine adds the base the same way
+     — pinned in the base test below. */
   for (const q of EDGES) {
     for (const c of [1, 2, 3, 4, 7]) {
       const a = storefront(SCREEN, q, { colours: c });
-      const b = quote(SCREEN, q, { colours: c });
+      const b = quote(SCREEN, q, { colours: c + 1 });
       assert.strictEqual(Math.round(a * 100) / 100, Math.round(b * 100) / 100,
         `qty ${q}, ${c} colours: store ${a}, quote ${b}`);
     }
@@ -190,7 +194,7 @@ test('screen printing agrees at every ink count and every band', () => {
 test('an ink count with no column of its own falls to full-color, on both', () => {
   /* 4 and 7 colours have no column here; both engines must land on the
      full-color backstop rather than inventing a rate or charging nothing. */
-  assert.strictEqual(storefront(SCREEN, 50, { colours: 4 }), 9.10);
+  assert.strictEqual(storefront(SCREEN, 50, { colours: 3 }), 9.10, '3 + the base = 4: no column');
   if (havePhp) assert.strictEqual(quote(SCREEN, 50, { colours: 4 }), 9.10);
 });
 
@@ -230,13 +234,14 @@ test('every live active method is one the quote engine can actually price', () =
   }
 });
 
-/* ---------- dark garments: the base is a colour, on every engine ---------- */
+/* ---------- the white base is a colour, on every engine, every garment ---- */
 
-test('on a dark garment every engine prices screen printing one colour higher', () => {
+test('every engine prices screen printing one colour higher, on every garment', () => {
   /* Anchorfish bills 1-colour white on black at its 2-colour rate (#16899,
-     #18249). The storefront (app.js), checkout (core/cart.php) and the quote
-     form (priceLine) must all add the base, or the same shirt costs different
-     amounts depending on where it was priced. */
+     #18249), and lays the base on light garments too — on every garment
+     since 2026-10-07. The storefront (app.js), checkout (core/cart.php) and
+     the quote form (priceLine) must all add the base, or the same shirt costs
+     different amounts depending on where it was priced. */
   /* The engine as the server runs it — quotePricingSource() evaluated, so its
      template-literal escapes (the \\s in the screen-print test) resolve as
      they do live. fromEngine() reads the raw text and would not. */
@@ -249,18 +254,17 @@ test('on a dark garment every engine prices screen printing one colour higher', 
   const { priceLine } = vm.runInThisContext('(() => {' + qps + '\n return { priceLine }; })()');
   for (const q of EDGES) {
     for (const c of [1, 2, 3]) {
-      const storeDark = storefront(SCREEN, q, { colours: c, dark: true });
-      const storeUp = storefront(SCREEN, q, { colours: c + 1 });
-      assert.strictEqual(storeDark, storeUp, `store: qty ${q}, ${c} colours on dark`);
+      const store = storefront(SCREEN, q, { colours: c });
       if (!havePhp) continue;
+      assert.strictEqual(store, quote(SCREEN, q, { colours: c + 1 }), `store: qty ${q}, ${c} colours + the base`);
       const method = { id: 22, title: 'Screen Printing', type: 'color', min_order_qty: 0,
                        positions: positionsFor(SCREEN).positions };
-      const quoteDark = priceLine({ qty: q, dark: true, addons: [], prints: [{ loc: 'front', method, colours: c }] });
-      assert.strictEqual(Math.round(quoteDark.decoration * 100) / 100, Math.round(storeDark * 100) / 100,
-        `quote vs store: qty ${q}, ${c} colours on dark`);
+      const quoted = priceLine({ qty: q, addons: [], prints: [{ loc: 'front', method, colours: c }] });
+      assert.strictEqual(Math.round(quoted.decoration * 100) / 100, Math.round(store * 100) / 100,
+        `quote vs store: qty ${q}, ${c} colours`);
     }
   }
   /* Checkout re-prices server-side in PHP; it carries the same rule. */
   assert.match(fs.readFileSync(path.join(DESIGNER, 'core/cart.php'), 'utf8'),
-    /\$option = \(count\(\(array\)\$val\) \+ \(\$this->printing_is_dark\(\$item\) \? 1 : 0\)\)\.'-color';/);
+    /\$option = \(count\(\(array\)\$val\) \+ 1\)\.'-color';/);
 });

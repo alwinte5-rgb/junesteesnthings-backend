@@ -52,7 +52,7 @@ const DATA = {
 };
 
 /**
- * input: { qty, dark, places: [{ loc, kind: 'screen'|'dtf'|'other', colours }] }
+ * input: { qty, places: [{ loc, kind: 'screen'|'dtf'|'other', colours }] }
  * returns { anchorfish, premiumLow, premiumHigh } in dollars for the whole line,
  * or premium* null when a place cannot be made with Premium (5+ colours).
  * premiumLow treats the front as a left chest, premiumHigh as a full front;
@@ -62,7 +62,6 @@ const DATA = {
 function productionCompare(input, data) {
   var q = Math.max(0, parseInt(input && input.qty, 10) || 0);
   if (!q) return null;
-  var dark = !!(input && input.dark);
   var A = data.anchorfish, P = data.premium;
   function floorIdx(floors, n) { var k = -1; for (var i = 0; i < floors.length; i++) if (n >= floors[i]) k = i; return k; }
   function rowAt(table, n) {
@@ -73,11 +72,12 @@ function productionCompare(input, data) {
   }
   function cols(c) { var n = parseInt(c, 10); return n > 0 ? n : 1; }
 
-  /* Anchorfish: screen print at colours (+ the base on dark), billed as their
+  /* Anchorfish: screen print at colours + the white base (on every garment
+     since 2026-10-07 — they lay and bill it on light ones too), billed as their
      minimum under it, plus $20 a screen; DTF main print then additional. */
   function anchorScreen(c) {
     var billed = Math.max(q, A.screenMin);
-    var n = Math.min(6, cols(c) + (dark ? 1 : 0));
+    var n = Math.min(6, cols(c) + 1);
     return rowAt(A.screen, billed)[n - 1] * billed + n * A.screenCost;
   }
   var dtfSeen = 0;
