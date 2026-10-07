@@ -55,7 +55,8 @@ function leadsDesk(rows) {
   const seen = [];
   const sandbox = { pool: { query: async (sql) => { seen.push(sql); return { rows: rows.map((r) => ({ ...r })) }; } } };
   vm.createContext(sandbox);
-  vm.runInContext([MATCH, liftFn('leadsWithStatus'), liftFn('unansweredLeads')].join('\n'), sandbox);
+  const kinds = src.match(/^const CONTACT_KINDS = .*;$/m)[0];
+  vm.runInContext([MATCH, kinds, liftFn('leadsWithStatus'), liftFn('unansweredLeads')].join('\n'), sandbox);
   return { sandbox, seen };
 }
 
@@ -90,7 +91,7 @@ test('the phone match ignores formatting', async () => {
     'a short or partial number must not match everything');
 });
 
-test('a lead reads new, quoted or let go, and only new ones are waiting', async () => {
+test('a lead reads new, contacted, quoted or let go, and only new ones are waiting', async () => {
   const { sandbox } = leadsDesk([
     { id: 1, created_at: '2026-09-27', linked_quote: null, matched_quote: null, dismissed_at: null },
     { id: 2, created_at: '2026-09-26', linked_quote: 'AB12CD', matched_quote: null, dismissed_at: null },
@@ -98,10 +99,12 @@ test('a lead reads new, quoted or let go, and only new ones are waiting', async 
     { id: 4, created_at: '2026-09-24', linked_quote: null, matched_quote: null, dismissed_at: '2026-09-25' },
     /* Let go, then quoted anyway: it became work, so it reads quoted. */
     { id: 5, created_at: '2026-09-23', linked_quote: 'GH56JK', matched_quote: null, dismissed_at: '2026-09-24' },
+    /* Answered (an email, call or text logged), not quoted yet: the next move is theirs. */
+    { id: 6, created_at: '2026-09-22', linked_quote: null, matched_quote: null, dismissed_at: null, first_response_at: '2026-09-22' },
   ]);
   const all = await sandbox.leadsWithStatus();
   assert.deepStrictEqual(JSON.parse(JSON.stringify(all.map((l) => [l.id, l.lead_status, l.quote_code]))),
-    [[1, 'new', null], [2, 'quoted', 'AB12CD'], [3, 'quoted', 'EF34GH'], [4, 'dismissed', null], [5, 'quoted', 'GH56JK']]);
+    [[1, 'new', null], [2, 'quoted', 'AB12CD'], [3, 'quoted', 'EF34GH'], [4, 'dismissed', null], [5, 'quoted', 'GH56JK'], [6, 'contacted', null]]);
   const waiting = await sandbox.unansweredLeads();
   assert.deepStrictEqual(JSON.parse(JSON.stringify(waiting.map((l) => l.id))), [1]);
 });
@@ -109,7 +112,7 @@ test('a lead reads new, quoted or let go, and only new ones are waiting', async 
 test('the board, the Leads page, the dashboard and the menu badge share one definition', () => {
   assert.ok(board.includes('const leads = await unansweredLeads();'), 'the board');
   const leadsPage = src.slice(src.indexOf("app.get('/admin/leads', requireAdmin"));
-  assert.match(leadsPage.slice(0, 1500), /await leadsWithStatus\(\)/, 'the Leads page');
+  assert.match(leadsPage.slice(0, 2000), /await leadsWithStatus\(\)/, 'the Leads page');
   const counts = src.slice(src.indexOf("app.get('/admin/nav-counts', requireAdmin"));
   assert.match(counts.slice(0, 800), /unansweredLeads\(\)/, 'the menu badge');
   const dash = src.slice(src.indexOf("app.get('/admin/dashboard', requireAdmin"));

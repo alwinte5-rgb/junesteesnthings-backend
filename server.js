@@ -32,6 +32,7 @@ const { legacyRedirect, LEGACY_PATHS } = require('./tools/lib/legacy-redirects')
 const { parseFirstTouch, firstTouchLabel } = require('./tools/lib/first-touch');
 const SITEHEALTH = require('./tools/lib/site-health');
 const NUDGE = require('./tools/lib/lead-nudges');
+const LEADMAIL = require('./tools/lib/lead-email');
 const REINTRO = require('./tools/lib/reintro');
 const FUNNEL = require('./tools/lib/funnel-health');
 const { T: SMS, plain: smsPlain, short: smsShort, PICKUP: SMS_PICKUP, PICKUP_ADDRESS, PICKUP_HOURS, PICKUP_STEPS } = require('./tools/lib/sms-templates');
@@ -20917,13 +20918,18 @@ async function leadsWithStatus() {
             (SELECT q.code FROM quotes q WHERE q.from_submission_id = s.id AND q.status NOT IN ('held', 'draft')
               ORDER BY q.created_at LIMIT 1) AS linked_quote,
             (SELECT q.code FROM quotes q WHERE ${LEAD_QUOTE_MATCH} AND q.status NOT IN ('held', 'draft')
-              ORDER BY q.created_at LIMIT 1) AS matched_quote
+              ORDER BY q.created_at LIMIT 1) AS matched_quote,
+            (SELECT row_to_json(n) FROM (SELECT kind, created_at, staff_id FROM lead_notes
+              WHERE submission_id = s.id AND kind = ANY($1) ORDER BY created_at DESC LIMIT 1) n) AS last_contact
        FROM submissions s
-      ORDER BY s.created_at DESC`);
+      ORDER BY s.created_at DESC`, [CONTACT_KINDS]);
+  /* 'contacted': someone has answered them (a call, email, text or chat was
+     logged, or an outcome set) and the next move is theirs. Not 'new', so the
+     board, the badge and the speed-to-lead texts stop asking for a reply. */
   return rows.map((l) => {
     const quote = l.linked_quote || l.matched_quote || null;
     return { ...l, quote_code: quote,
-             lead_status: quote ? 'quoted' : l.dismissed_at ? 'dismissed' : 'new' };
+             lead_status: quote ? 'quoted' : l.dismissed_at ? 'dismissed' : l.first_response_at ? 'contacted' : 'new' };
   });
 }
 
@@ -20985,11 +20991,16 @@ function ageInWords(d) {
 /** One enquiry as a card. A new one carries the three ways to deal with it;
  *  an answered one says how it was answered. `back` is the page the dismiss
  *  buttons return to. */
-function leadCardHtml(l, { back = '/admin/quotes' } = {}) {
+function leadCardHtml(l, { back = '/admin/quotes', roster = null } = {}) {
   const [srcLabel, srcTone] = LEAD_SOURCES[l.source] || LEAD_SOURCES.form;
   const status = l.lead_status || 'new';
   const chat = l.source === 'chat' || l.source === 'offline';
-  const edge = status === 'quoted' ? '#16a34a' : status === 'dismissed' ? '#b6c0d2' : '#b45309';
+  const edge = status === 'quoted' ? '#16a34a' : status === 'dismissed' ? '#b6c0d2' : status === 'contacted' ? '#1848B8' : '#b45309';
+  const lc = l.last_contact;
+  const contactedLine = status === 'contacted' ? `<div style="margin-top:6px;font-size:12.5px;color:#1848B8">${
+    lc ? `${escEmail({ email: 'Emailed', call: 'Called', text: 'Texted', chat: 'Chatted with', social: 'Messaged' }[lc.kind] || 'Contacted')} ${
+      escEmail(whenShort(lc.created_at))}${roster ? ` by ${escEmail(nameOf(roster, lc.staff_id))}` : ''}`
+      : `Answered ${escEmail(whenShort(l.first_response_at))}`} &middot; waiting on them</div>` : '';
   const backField = `<input type="hidden" name="back" value="${escEmail(back)}">`;
   return `
       <div class="card" style="border-left:4px solid ${edge}">
@@ -20998,12 +21009,13 @@ function leadCardHtml(l, { back = '/admin/quotes' } = {}) {
             <b style="color:#0B1F4B">${escEmail(l.name || 'No name given')}</b>${pill(srcLabel, srcTone)}${
               /* Shop lead or a salesperson's own, from the moment it came in (tools/lib/sales-credit.js). */
               saleTypePill(l.sale_type || 'shop')}${
-              status === 'quoted' ? pill('Quoted', 'green') : status === 'dismissed' ? pill('Let go', 'neutral') : ''}
+              status === 'quoted' ? pill('Quoted', 'green') : status === 'dismissed' ? pill('Let go', 'neutral')
+              : status === 'contacted' ? pill('Contacted', 'blue') : ''}
           </div>
           <span class="muted" style="font-size:12.5px">${escEmail(ageInWords(l.created_at))}</span>
         </div>
         ${l.description ? `<div class="muted" style="margin-top:6px;font-size:13.5px">${
-          escEmail(String(l.description).slice(0, 300))}</div>` : ''}
+          escEmail(String(l.description).slice(0, 300))}</div>` : ''}${contactedLine}
         <div class="muted" style="margin-top:8px;font-size:12.5px">
           ${/* Joined, so a lead with no email does not open on a separator. An
                 anonymous chat has neither email nor phone, and tawk.to is the
@@ -21051,6 +21063,8 @@ function leadCardHtml(l, { back = '/admin/quotes' } = {}) {
                 job and the window closed. Filing the second under the first
                 loses the only number that says the shop is leaving money on the
                 table, and it is untrue about the customer. */ ''}
+          ${l.email ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
+             onclick="var f=document.getElementById('em-${l.id}');f.style.display=f.style.display==='block'?'none':'block'">Email them</button>` : ''}
           <form method="POST" action="/admin/lead/${l.id}/dismiss" style="display:inline">
             <input type="hidden" name="reason" value="Too late — past the date they needed it">${backField}
             <button type="submit" class="btn btn-ghost" style="padding:8px 16px;font-size:13px">Too late</button>
@@ -21064,8 +21078,27 @@ function leadCardHtml(l, { back = '/admin/quotes' } = {}) {
           <input name="reason" maxlength="200" placeholder="Why — e.g. spam, or went elsewhere"
                  style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">${backField}
           <button type="submit" class="btn btn-ghost" style="padding:7px 16px;font-size:13px">Dismiss</button>
-        </form>`}
+        </form>
+        ${l.email ? leadEmailBox(l, backField) : ''}`}
       </div>`;
+}
+
+/** Email a lead from their card: opens on the "a few more details" message,
+ *  editable. Below it, one press records an email sent from your own inbox. */
+function leadEmailBox(l, backField) {
+  const m = LEADMAIL.infoRequest(l, { signer: SHOP_SIGNER, shop: SHOP_NAME });
+  return `<div id="em-${l.id}" style="display:none;margin-top:10px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px">
+      <form method="POST" action="/admin/lead/${l.id}/email"
+            onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Sending...'">
+        <p class="muted" style="margin:0 0 8px;font-size:12.5px">To ${escEmail(l.email)}. Their reply comes to the shop's email.</p>
+        <input name="subject" maxlength="${LEADMAIL.LIMITS.subject}" required value="${escEmail(m.subject)}" style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">
+        <textarea name="body" rows="14" maxlength="${LEADMAIL.LIMITS.body}" required style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">${escEmail(m.body)}</textarea>${backField}
+        <button type="submit" class="btn" style="padding:7px 16px;font-size:13px">Send email</button>
+      </form>
+      <form method="POST" action="/admin/lead/${l.id}/note" style="margin-top:10px">
+        <input type="hidden" name="kind" value="email"><input type="hidden" name="body" value="Emailed them from my own inbox.">${backField}
+        <button type="submit" class="btn btn-ghost" style="padding:6px 14px;font-size:12.5px">I already emailed them</button>
+      </form></div>`;
 }
 
 /* The month a moment falls in, in the shop's time, as 'YYYY-MM'. */
@@ -21076,9 +21109,10 @@ const shopMonth = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: SHO
    inbox shows up as a date rather than as nothing. */
 app.get('/admin/leads', requireAdmin, async (req, res) => {
   try {
-    const STATUSES = ['new', 'quoted', 'dismissed', 'all'];
+    const STATUSES = ['open', 'new', 'contacted', 'quoted', 'dismissed', 'all'];
     const SOURCES = ['all', 'form', 'embroidery', 'chat', 'phone', 'social'];
-    const status = STATUSES.includes(String(req.query.status)) ? String(req.query.status) : 'new';
+    const status = STATUSES.includes(String(req.query.status)) ? String(req.query.status) : 'open';
+    const inStatus = (l, st) => st === 'all' || l.lead_status === st || (st === 'open' && (l.lead_status === 'new' || l.lead_status === 'contacted'));
     const source = SOURCES.includes(String(req.query.source)) ? String(req.query.source) : 'all';
     const q = String(req.query.q || '').trim().slice(0, 80);
 
@@ -21090,9 +21124,8 @@ app.get('/admin/leads', requireAdmin, async (req, res) => {
     const needle = q.toLowerCase();
     const found = all.filter((l) => !needle || [l.name, l.email, l.phone, l.description]
       .some((v) => String(v || '').toLowerCase().includes(needle)));
-    const count = (st, src) => found.filter((l) =>
-      (st === 'all' || l.lead_status === st) && inSource(l, src)).length;
-    const shown = found.filter((l) => (status === 'all' || l.lead_status === status) && inSource(l, source));
+    const count = (st, src) => found.filter((l) => inStatus(l, st) && inSource(l, src)).length;
+    const shown = found.filter((l) => inStatus(l, status) && inSource(l, source));
     /* Who has each lead and what was said to them (the staff workspace). */
     const [roster, { rows: noteRows }] = await Promise.all([
       staffRoster(),
@@ -21105,7 +21138,7 @@ app.get('/admin/leads', requireAdmin, async (req, res) => {
     /* A filter is a URL, with the defaults left out so the plain page is /leads. */
     const link = (over) => {
       const p = new URLSearchParams({ status, source, ...(q ? { q } : {}), ...over });
-      if (p.get('status') === 'new') p.delete('status');
+      if (p.get('status') === 'open') p.delete('status');
       if (p.get('source') === 'all') p.delete('source');
       const qs = p.toString();
       return '/admin/leads' + (qs ? '?' + qs : '');
@@ -21136,7 +21169,9 @@ app.get('/admin/leads', requireAdmin, async (req, res) => {
     ]);
 
     const statusChips = filterChips([
-      { label: 'Waiting', href: link({ status: 'new' }), count: count('new', source), on: status === 'new' },
+      { label: 'Open', href: link({ status: 'open' }), count: count('open', source), on: status === 'open' },
+      { label: 'Waiting for a reply', href: link({ status: 'new' }), count: count('new', source), on: status === 'new' },
+      { label: 'Contacted', href: link({ status: 'contacted' }), count: count('contacted', source), on: status === 'contacted' },
       { label: 'Quoted', href: link({ status: 'quoted' }), count: count('quoted', source), on: status === 'quoted' },
       { label: 'Let go', href: link({ status: 'dismissed' }), count: count('dismissed', source), on: status === 'dismissed' },
       { label: 'All', href: link({ status: 'all' }), count: count('all', source), on: status === 'all' },
@@ -21151,10 +21186,10 @@ app.get('/admin/leads', requireAdmin, async (req, res) => {
     ]);
 
     const body = shown.length
-      ? `<div class="grid-cards">${shown.map((l) => `<div id="lead-${l.id}">${leadCardHtml(l, { back: '/admin/leads' })}${
+      ? `<div class="grid-cards">${shown.map((l) => `<div id="lead-${l.id}">${leadCardHtml(l, { back: '/admin/leads', roster })}${
           leadWorkPanel(l, notesBy[l.id] || [], roster, currentActor())}</div>`).join('')}</div>`
       : `<div class="card">${emptyState(q ? `Nothing matches &ldquo;${escEmail(q)}&rdquo;.`
-          : status === 'new' ? 'Nobody is waiting for a reply.' : 'Nothing here.')}</div>`;
+          : status === 'new' || status === 'open' ? 'Nobody is waiting for a reply.' : 'Nothing here.')}</div>`;
 
     res.send(adminPage('Leads', `
       ${pageHeader('Leads', 'Every enquiry: the website form, embroidery requests and tawk.to chats that left an email.',
@@ -21166,7 +21201,7 @@ app.get('/admin/leads', requireAdmin, async (req, res) => {
       ${statusChips}
       ${sourceChips}
       <form class="search" method="GET" action="/admin/leads">
-        ${status !== 'new' ? `<input type="hidden" name="status" value="${escEmail(status)}">` : ''}
+        ${status !== 'open' ? `<input type="hidden" name="status" value="${escEmail(status)}">` : ''}
         ${source !== 'all' ? `<input type="hidden" name="source" value="${escEmail(source)}">` : ''}
         <input name="q" value="${escEmail(q)}" placeholder="Find by name, email, phone or what they asked for">
         <button type="submit" class="btn btn-ghost">Search</button>
@@ -21574,7 +21609,8 @@ app.get('/admin/dashboard', requireAdmin, async (_req, res) => {
               <div class="row-sub">${escEmail(String(l.description || l.email || '').slice(0, 80))}</div></span>
             <span class="row-end">${pill(label, tone)}<div class="muted" style="font-size:12px;margin-top:3px">${
               escEmail(ageInWords(l.created_at))} &middot; ${l.lead_status === 'quoted' ? 'quoted'
-              : l.lead_status === 'dismissed' ? 'let go' : '<b style="color:#b45309">waiting</b>'}</div></span></a>`;
+              : l.lead_status === 'dismissed' ? 'let go' : l.lead_status === 'contacted' ? 'contacted'
+              : '<b style="color:#b45309">waiting</b>'}</div></span></a>`;
         }).join('')}</div>` : emptyState('No enquiries yet.')}
       </div>
       <div class="card">
@@ -26919,6 +26955,47 @@ app.post('/admin/lead/:id/note', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('lead note failed:', err.message);
     return back(res, backTo, 'err', 'Could not save the note.');
+  }
+});
+
+/* Email a lead from the Leads page (2026-10-07). Recorded as an email note on
+   the lead, which marks it Contacted; the note is written only after the send
+   succeeds, so the card never says "Emailed" for a mail that did not go. A
+   helper sends only with "Email and text customers" fully on, and never one
+   that mentions being paid outside the shop: lead emails have no owner-approval
+   queue, so those go to the owner instead. */
+app.post('/admin/lead/:id/email', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  const b = req.body || {};
+  const backTo = safeAdminPath(b.back, '/admin/leads');
+  if (!id) return res.redirect(backTo);
+  const m = LEADMAIL.cleanEmail(b);
+  if (m.error) return back(res, backTo, 'err', m.error);
+  const actor = currentActor();
+  if (actor && actor.kind === 'staff' && (actorLevel('customers.message') !== 'on'
+      || FRAUD.mentionsOutsidePayment(`${m.subject}\n${m.text}`))) {
+    return back(res, backTo, 'err', 'Emails to leads go through the owner for now. Write what you want to say in a note on the lead.');
+  }
+  try {
+    const { rows: [l] } = await pool.query('SELECT id, email FROM submissions WHERE id = $1', [id]);
+    if (!l) return back(res, backTo, 'err', 'No such lead.');
+    const to = String(l.email || '').trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return back(res, backTo, 'err', 'This lead has no email address.');
+    const noteBody = `Emailed "${m.subject}":\n${m.text}`;
+    // A second press, or a reload of the send: the same email is not sent twice.
+    const { rows: dup } = await pool.query(
+      `SELECT 1 FROM lead_notes WHERE submission_id = $1 AND kind = 'email' AND body = $2 AND created_at > NOW() - INTERVAL '10 minutes'`,
+      [id, noteBody]);
+    if (dup.length) return back(res, backTo, 'ok', 'That email was already sent.');
+    await sendEmail({ to, subject: m.subject, html: LEADMAIL.toHtml(m.text), text: m.text, promo: false });
+    await pool.query(`INSERT INTO lead_notes (submission_id, kind, body, staff_id) VALUES ($1, 'email', $2, $3)`,
+      [id, noteBody, actor && actor.kind === 'staff' ? actor.id : null]);
+    await markLeadResponded(id, actor);
+    return res.redirect(`${backTo}${backTo.includes('?') ? '&' : '?'}ok=${encodeURIComponent(`Email sent to ${to}.`)}#lead-${id}`);
+  } catch (err) {
+    console.error('lead email failed:', err.message);
+    reportError('lead-email', err, `lead ${id}`).catch(() => {});
+    return back(res, backTo, 'err', 'The email did not send. Nothing was recorded; try again.');
   }
 });
 
