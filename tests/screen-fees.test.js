@@ -20,11 +20,15 @@
  * --------
  * $35 per screen, charged ONCE per order, where
  *
- *     screens = (design colours + 1 if the garment is dark) x locations
+ *     screens = (design colours + 1 for the white base) x locations
  *
- * The "+1 on darks" is not a surcharge. Invoice #16899 lists "Ink: Base,
- * White", which is the white underbase getting its own screen — so a 1-colour
- * design on black is physically a 2-screen job per location.
+ * The "+1" is not a surcharge. Invoice #16899 lists "Ink: Base, White", which
+ * is the white underbase getting its own screen — so a 1-colour design is
+ * physically a 2-screen job per location. Until 2026-10-07 the +1 applied
+ * only when "Dark garment" was ticked; Anchorfish lays and bills the base on
+ * light garments too, so it now applies to every garment and the box is gone.
+ * The third argument (noBase) exists only to re-price lines saved before that
+ * without the tick, so a quote already sent keeps its price.
  *
  * WHAT THESE PIN
  * --------------
@@ -88,34 +92,43 @@ const line = (over) => priceLine(Object.assign({
 
 /* ── screenCount ─────────────────────────────────────────────────────────── */
 
-test('screens are per colour and per location', () => {
-  assert.strictEqual(screenCount(1, 1, false), 1);
-  assert.strictEqual(screenCount(3, 1, false), 3);
-  assert.strictEqual(screenCount(3, 2, false), 6, 'a second location is a second set of screens');
-  assert.strictEqual(screenCount(7, 2, false), 14);
+test('screens are per colour and per location, plus the base', () => {
+  assert.strictEqual(screenCount(1, 1), 2, 'a 1-colour logo is two screens');
+  assert.strictEqual(screenCount(3, 1), 4);
+  assert.strictEqual(screenCount(3, 2), 8, 'a second location is a second set of screens, base included');
+  assert.strictEqual(screenCount(7, 2), 16);
 });
 
-test('a dark garment adds one underbase screen PER LOCATION', () => {
-  assert.strictEqual(screenCount(1, 1, true), 2, '1 colour on black is two screens');
-  assert.strictEqual(screenCount(3, 1, true), 4);
-  assert.strictEqual(screenCount(3, 2, true), 8, 'the underbase is burned for each location');
+test('every garment gets the underbase screen, not only dark ones', () => {
+  /* Nothing a caller passes for the garment colour can drop it: the old
+     dark flag is no longer an argument. */
+  assert.strictEqual(screenCount(1, 1, false), 2);
+  assert.strictEqual(screenCount(1, 1, undefined), 2);
+});
+
+test('a line saved before the change without the tick re-prices without the base', () => {
+  assert.strictEqual(screenCount(3, 2, true), 6);
+  const sent = line({ colours: 2, stage: 'both', noBase: true });
+  assert.strictEqual(sent.screens, 4);
+  assert.strictEqual(sent.decoration, 4.75 * 2, '2-colour column, as it was sent');
 });
 
 test('invoice #16899: white on black, two locations, is four screens', () => {
   /* 62 shirts. Anchorfish charged 4 screens at $20 = $80 of cost. The retired
      flat-$25 underbase add-on recovered $25 of that. */
-  assert.strictEqual(screenCount(1, 2, true), 4);
-  assert.strictEqual(screenCount(1, 2, true) * SCREEN_FEE, 100);
+  assert.strictEqual(screenCount(1, 2), 4);
+  assert.strictEqual(screenCount(1, 2) * SCREEN_FEE, 100);
 });
 
 test('junk colour or location counts floor at one, never zero', () => {
   /* A zero would make the screens free silently, which is the failure mode this
      codebase keeps having to design against. */
   for (const bad of [0, -3, null, undefined, '', 'abc', NaN]) {
-    assert.ok(screenCount(bad, 1, false) >= 1, `colours=${String(bad)} must not zero the fee`);
-    assert.ok(screenCount(1, bad, false) >= 1, `locations=${String(bad)} must not zero the fee`);
+    assert.ok(screenCount(bad, 1, true) >= 1, `colours=${String(bad)} must not zero the fee`);
+    assert.ok(screenCount(1, bad, true) >= 1, `locations=${String(bad)} must not zero the fee`);
   }
-  assert.strictEqual(screenCount(-3, -3, false), 1);
+  assert.strictEqual(screenCount(-3, -3, true), 1);
+  assert.strictEqual(screenCount(-3, -3), 2);
 });
 
 /* ── addonAmount ─────────────────────────────────────────────────────────── */
@@ -138,8 +151,8 @@ test('the screen fee is charged ONCE, not per piece', () => {
      line billed $1,500 instead of $30. */
   const small = line({ qty: 50, colours: 3 });
   const big   = line({ qty: 500, colours: 3 });
-  assert.strictEqual(small.addonTotal, 3 * SCREEN_FEE);
-  assert.strictEqual(big.addonTotal, 3 * SCREEN_FEE, 'ten times the shirts, the same screens');
+  assert.strictEqual(small.addonTotal, 4 * SCREEN_FEE);
+  assert.strictEqual(big.addonTotal, 4 * SCREEN_FEE, 'ten times the shirts, the same screens');
 });
 
 test('priceLine derives locations from the same stage it priced the print off', () => {
@@ -147,22 +160,22 @@ test('priceLine derives locations from the same stage it priced the print off', 
   const both = line({ colours: 2, stage: 'both' });
   assert.strictEqual(one.locations, 1);
   assert.strictEqual(both.locations, 2);
-  assert.strictEqual(both.screens, 4);
-  assert.strictEqual(both.addonTotal, 4 * SCREEN_FEE);
+  assert.strictEqual(both.screens, 6);
+  assert.strictEqual(both.addonTotal, 6 * SCREEN_FEE);
   /* And the print itself doubled, because a second screen-print location is a
      second pass — confirmed with Anchorfish 2026-08-30, no shared-setup
      discount on their screen sheet. */
   assert.strictEqual(both.decoration, one.decoration * 2);
 });
 
-test('a dark two-sided job bills every screen it burns', () => {
-  const r = line({ qty: 62, colours: 1, stage: 'both', dark: true });
+test('a two-sided job bills every screen it burns', () => {
+  const r = line({ qty: 62, colours: 1, stage: 'both' });
   assert.strictEqual(r.screens, 4);
   assert.strictEqual(r.addonTotal, 4 * SCREEN_FEE);
 });
 
 test('the line reports the counts it charged, so a surface can show them', () => {
-  const r = line({ colours: 3, stage: 'both', dark: true });
+  const r = line({ colours: 3, stage: 'both' });
   assert.strictEqual(r.colours, 3);
   assert.strictEqual(r.locations, 2);
   assert.strictEqual(r.screens, 8);
@@ -171,8 +184,8 @@ test('the line reports the counts it charged, so a surface can show them', () =>
 });
 
 test('screens ride on top of the print, they do not replace it', () => {
-  const r = line({ qty: 100, colours: 3, stage: 'front' });
-  assert.strictEqual(r.decoration, 5.85, 'the 100-249 band, 3 colours, print only');
+  const r = line({ qty: 100, colours: 2, stage: 'front' });
+  assert.strictEqual(r.decoration, 5.85, 'the 100-249 band, 2 colours + the base, print only');
   assert.strictEqual(r.lineTotal, 5.85 * 100 + 3 * SCREEN_FEE);
 });
 

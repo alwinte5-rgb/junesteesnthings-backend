@@ -7087,7 +7087,7 @@ const ADDONS = [
      touching the print table. */
   { code: 'screens', label: 'Screens', appliesTo: SCREEN_METHOD_RE,
     kind: 'per_screen', rate: SCREEN_FEE_RATE, auto: 'method', runShared: true,
-    note: 'A screen is burned once and then runs the whole job, so it is billed once — not per shirt. (Colours + 1 on a dark garment) x locations, at $25 each.' },
+    note: 'A screen is burned once and then runs the whole job, so it is billed once — not per shirt. (Colours + 1 for the white base) x locations, at $25 each.' },
   { code: 'specialty_ink', label: 'Specialty ink (metallic, glitter, waterbase, discharge)',
     appliesTo: SCREEN_METHOD_RE, kind: 'per_piece', rate: 1.50 },
   { code: 'unbagging', label: 'Unbagging', appliesTo: SCREEN_METHOD_RE,
@@ -7408,14 +7408,24 @@ function quotePricingSource() {
          differ from the screens bought.
 
          A screen is per COLOUR and per LOCATION — invoice #16899 is 4 screens
-         for a 2-colour job across 2 locations. A dark garment adds one more per
+         for a 2-colour job across 2 locations. Every garment adds one more per
          location for the white underbase; the same invoice's "Ink: Base, White"
          line is what proves the underbase is its own screen rather than part of
-         the first colour. */
-      function screenCount(colours, locations, dark) {
+         the first colour.
+
+         EVERY garment, not only dark ones — owner's rule from 2026-10-07.
+         Anchorfish lays the base on light garments too and bills for it, so
+         the old "Dark garment" tick box only let a light job be quoted below
+         what it costs. The box is gone from the quote form.
+
+         noBase is NOT that switch come back. It is set only when re-pricing a
+         line saved before the change without the tick (quoteLineArgs), so a
+         quote the customer already holds keeps the price it was sent at. Every
+         line saved from now on stores garment_dark: true. */
+      function screenCount(colours, locations, noBase) {
         var c = parseInt(colours, 10); if (!(c > 0)) c = 1;
         var l = parseInt(locations, 10); if (!(l > 0)) l = 1;
-        return (c + (dark ? 1 : 0)) * l;
+        return (c + (noBase ? 0 : 1)) * l;
       }
 
       /* Screens the press runs in one pass, INCLUDING the white underbase.
@@ -7429,7 +7439,7 @@ function quotePricingSource() {
 
       /* Screens ONE LOCATION needs. The ceiling is per pass, not per order — a
          two-sided 5-colour job is two passes of six screens, which is fine; a
-         one-sided 6-colour job on a dark garment is seven on one pass, which is
+         one-sided 6-colour job is seven on one pass, base included, which is
          not. Multiplying by locations first would refuse work the press can do
          and accept work it cannot. */
       /* How many sleeves a line prints: '' none, 'left'/'right' one, 'both'
@@ -7487,9 +7497,10 @@ function quotePricingSource() {
         return out;
       }
 
-      function screensPerPass(colours, dark) {
+      /* The underbase is one of them on every garment (see screenCount). */
+      function screensPerPass(colours, noBase) {
         var c = parseInt(colours, 10); if (!(c > 0)) c = 1;
-        return c + (dark ? 1 : 0);
+        return c + (noBase ? 0 : 1);
       }
 
       /* One add-on's charge. The whole point of the table is that this
@@ -7561,6 +7572,9 @@ function quotePricingSource() {
 
       function priceLine(o) {
         var qty = parseInt(o.qty, 10) || 0;
+        /* The white base goes on every garment; only a line saved before
+           2026-10-07 without the old dark tick re-prices without it. */
+        var nb = !!o.noBase;
         /* The quantity the LADDERS are read at. Defaults to this line's own,
            so nothing changes for a line that is not in a run group. */
         var bandQty = Math.max(qty, parseInt(o.bandQty, 10) || 0);
@@ -7637,7 +7651,8 @@ function quotePricingSource() {
           var gk = legacy ? 's' + pr.slot : 'm' + String(pr.method.id);
           if (!(gk in gi)) { gi[gk] = groups.length; groups.push({ method: pr.method, amount: 0, slot: pr.slot }); }
           pr.c = colourCount(pr.method, pr.colours);
-          /* DARK GARMENTS: the white base is a colour. A 1-colour white print on
+          /* THE WHITE BASE IS A COLOUR, on every garment since 2026-10-07 (see
+             screenCount). A 1-colour white print on
              a black shirt is billed by Anchorfish as "2 Color" (Base + White)
              on every piece — invoices #16899 and #18249 — so the price column is
              the design's colours plus one. Selling it at the 1-colour column
@@ -7645,7 +7660,7 @@ function quotePricingSource() {
              on. Screen printing priced by colour only; the screen COUNT already
              carried the base (screenCount). The designer applies the same rule
              (app.js printing ink column, core/cart.php printing_calc_raw). */
-          var col = (o.dark && pr.method.type === 'color' && /screen\\s*print/i.test(String(pr.method.title || '')))
+          var col = (!nb && pr.method.type === 'color' && /screen\\s*print/i.test(String(pr.method.title || '')))
             ? pr.c + 1 : pr.c;
           groups[gi[gk]].amount += Number(tierAt(pr.method.positions, bandQty, keyOf(pr), col));
         }
@@ -7680,7 +7695,7 @@ function quotePricingSource() {
         var colours = legacy ? colours : (prints.length ? prints[0].c : 1);
 
         /* SCREENS: one set per place screen printed, at that place's own ink
-           count, plus the white underbase on a dark garment. An old line counts
+           count, plus the white underbase. An old line counts
            only its first screen-printed slot, as it always did. */
         var isScreen = function (m) { return !!m && /screen\\s*print/i.test(String(m.title || '')); };
         var overScreens = false, screenCeiling = 0, passScreens = 0, screens = 0, locations = 0;
@@ -7694,20 +7709,20 @@ function quotePricingSource() {
           var sm = isScreen(o.method) ? o.method : (isScreen(o.method2) ? o.method2 : null);
           if (sm) {
             screenCeiling = maxScreens(sm);
-            passScreens = screensPerPass(colourCount(sm, sm === o.method ? o.colours : o.colours2), !!o.dark);
-            if (sm === o.method && o.stage === 'both') passScreens = Math.max(passScreens, screensPerPass(colourCount(sm, backPick0), !!o.dark));
-            if (sm === o.method && sv0) passScreens = Math.max(passScreens, screensPerPass(colourCount(sm, sleevePick0), !!o.dark));
+            passScreens = screensPerPass(colourCount(sm, sm === o.method ? o.colours : o.colours2), nb);
+            if (sm === o.method && o.stage === 'both') passScreens = Math.max(passScreens, screensPerPass(colourCount(sm, backPick0), nb));
+            if (sm === o.method && sv0) passScreens = Math.max(passScreens, screensPerPass(colourCount(sm, sleevePick0), nb));
             overScreens = passScreens > screenCeiling;
           }
           var screenStage = sm ? (sm === o.method2 ? o.stage2 : o.stage) : o.stage;
           var screenColours = sm ? colourCount(sm, sm === o.method2 ? o.colours2 : o.colours) : colours;
           locations = (screenStage === 'both') ? 2 : 1;
-          screens = screenCount(screenColours, locations, !!o.dark);
+          screens = screenCount(screenColours, locations, nb);
           if (sm && sm === o.method && o.stage === 'both') {
-            screens = screenCount(screenColours, 1, !!o.dark) + screenCount(colourCount(sm, backPick0), 1, !!o.dark);
+            screens = screenCount(screenColours, 1, nb) + screenCount(colourCount(sm, backPick0), 1, nb);
           }
           if (sm && sm === o.method && sv0) {
-            screens += screenCount(colourCount(sm, sleevePick0), sv0, !!o.dark);
+            screens += screenCount(colourCount(sm, sleevePick0), sv0, nb);
             locations += sv0;
           }
         } else {
@@ -7715,10 +7730,10 @@ function quotePricingSource() {
             pr = prints[pi];
             if (!isScreen(pr.method)) continue;
             if (!screenCeiling) screenCeiling = maxScreens(pr.method);
-            var pass = screensPerPass(pr.c, !!o.dark);
+            var pass = screensPerPass(pr.c, nb);
             if (pass > passScreens) passScreens = pass;
             if (pass > maxScreens(pr.method)) overScreens = true;
-            screens += screenCount(pr.c, 1, !!o.dark);
+            screens += screenCount(pr.c, 1, nb);
             locations++;
           }
           if (!locations) {
@@ -7730,7 +7745,7 @@ function quotePricingSource() {
               if (prints[pi].method === primaryMethod) faces++;
             }
             locations = faces > 1 ? 2 : 1;
-            screens = screenCount(colours, locations, !!o.dark);
+          screens = screenCount(colours, locations, nb);
           }
         }
         var sleeves = 0;
@@ -9344,10 +9359,6 @@ function productGroupOf(name) {
              and the two are chosen together. -->
         <div class="colours" style="display:none;margin-top:8px"></div>
         <div class="row row-2 garm" style="margin-top:8px;align-items:center">
-          <label class="lcheck" title="A dark garment needs a white base screen under the ink">
-            <input type="checkbox" name="dark${n}" class="dark" value="1"
-                   ${it && it.garment_dark ? 'checked' : ''} style="width:auto;margin:0">
-            Dark garment</label>
           <input name="blank_price${n}" class="bp" type="number" step="0.01" min="0" inputmode="decimal"
                  value="${it && it.blank_price ? val(it.blank_price) : ''}"
                  style="font-size:13px;padding:6px 7px" placeholder="Garment $ each">
@@ -10317,8 +10328,6 @@ ${quotePricingSource()}
             var dm = DIGI.find(function(d){ return String(d.id) === su.value; });
             if (dm) addons.push({ code:'digitizing', label:dm.title, kind:'once', rate:dm.price });
           }
-          var dark = L.querySelector('.dark');
-          var isDark = !!(dark && dark.checked);
           L.querySelectorAll('.ao').forEach(function(cb){
             if (!cb.checked) return;
             var a = ADDONS.find(function(x){ return x.code === cb.dataset.code; });
@@ -10381,7 +10390,6 @@ ${quotePricingSource()}
             colours: '', stage: '',
             runPrimary: isRunPrimary,
             addons: addons, blankTiers: BLANK_TIERS,
-            dark: isDark,
             blankOverride: bpEl ? bpEl.value : '',
             unitOverride: u.value
           };
@@ -10440,7 +10448,7 @@ ${quotePricingSource()}
              transfers. Only for a line with a screen-printed place. */
           var makeIt = '';
           if (qty > 0 && prints.some(function(p){ return /screen\\s*print/i.test(p.method.title); })) {
-            var mk = productionCompare({ qty: Math.max(qty, runQty || 0), dark: isDark,
+            var mk = productionCompare({ qty: Math.max(qty, runQty || 0),
               places: prints.map(function(p){
                 return { loc: p.loc, colours: p.colours || 1,
                          kind: /screen\\s*print/i.test(p.method.title) ? 'screen'
@@ -10499,8 +10507,7 @@ ${quotePricingSource()}
               warn.style.display = 'block';
               warn.textContent = 'The press runs ' + r.screenCeiling + ' screens including the white ' +
                 'underbase, so this is ' + (r.passScreens || r.screens / (r.locations || 1)) + ' per pass — ' +
-                (isDark ? r.screenCeiling - 1 : r.screenCeiling) + ' colours is the most on a ' +
-                (isDark ? 'dark' : 'light') + ' garment. Quote DTF instead.';
+                (r.screenCeiling - 1) + ' colours is the most. Quote DTF instead.';
             } else {
               /* Under the minimum the line still prices — charged as
                  ${SCREEN_MIN_QTY}, with the shortfall on its own line — so say
@@ -10611,8 +10618,8 @@ ${quotePricingSource()}
           el.name = el.name.replace(/\\d+$/, n);
           /* A tick box is RESET by unticking it. Blanking its value instead
              posted "" for a ticked box, which the save route reads as unticked:
-             "Dark garment" on an added item priced dark on screen and saved
-             light, one screen short per location. */
+             a tick box on an added item priced ticked on screen and saved
+             unticked. */
           if (el.type === 'checkbox' || el.type === 'radio') {
             el.checked = false;
             /* Every tick box on an item posts "1". Mend one that lost it, so a
@@ -11238,7 +11245,6 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         : methodTitle + ' ' + (method2Title ? String(method2Title.title || '') : '');
       const isEmb = EMBROIDERY_METHOD_RE.test(bothTitles);
       const isScreen = SCREEN_METHOD_RE.test(bothTitles);
-      const garmentDark = tickedBox(one(b['dark' + i]));
 
       const setupId = String(one(b['setup' + i]) || '').trim();
       if (setupId && isEmb) {
@@ -11343,10 +11349,6 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         backColours: backColours || '',
         runPrimary: !runGroup || runPrimaryIdx[runGroup] === i,
         stage, addons: lineAddons, blankTiers: BLANK_TIERS,
-        /* The garment colour is a pricing INPUT, not a charge: it decides how
-           many screens screenCount() asks for. Omit it and a dark job silently
-           under-bills by one screen per location. */
-        dark: garmentDark,
         blankOverride, unitOverride: rawUnit,
       };
       const priced = priceLine(priceArgs);
@@ -11379,7 +11381,6 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
           what: desc || (prod ? prod.name : `Line ${i + 1}`),
           screens: priced.passScreens || priced.screens / (priced.locations || 1),
           ceiling: priced.screenCeiling,
-          dark: garmentDark,
         });
       }
 
@@ -11531,7 +11532,10 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         /* Every extra, itemised, so the customer's page can name each one
            rather than showing an unexplained difference. */
         addons: priced.addonLines,
-        garment_dark: garmentDark || null,
+        /* Every line now carries the white base (screenCount). Stored as true
+           so the customer page re-prices it with the base; a line saved before
+           2026-10-07 without it keeps the price it was sent at. */
+        garment_dark: true,
         /* Where it is printed, place by place — what the form shows and what
            priced it. The fields below describe lines saved before this. */
         prints: usePrints ? prints.map((p) => ({ loc: p.loc, method_id: p.method.id,
@@ -11583,7 +11587,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
             for more screens than one pass can hold.</div>
           <ul class="muted" style="margin:8px 0 0;padding-left:18px">
             ${overCeiling.map((o) => `<li>Line ${o.line} — ${escEmail(String(o.what))}:
-              ${o.screens} screens per pass${o.dark ? ' (the white underbase is one of them)' : ''},
+              ${o.screens} screens per pass (the white underbase is one of them),
               and the press runs ${o.ceiling}.</li>`).join('')}
           </ul>
           <p class="muted" style="margin-top:8px">Quote DTF instead — it has no colour limit, and the
@@ -12193,7 +12197,9 @@ function customerLinePricing(items, catalog) {
       sleeves: it.sleeves || null,
       sleeveColours: it.sleeve_colours || null,
       backColours: it.back_colours || null,
-      dark: !!it.garment_dark,
+      /* Saved before the base went on every garment, without the dark tick:
+         re-price without it, so the customer sees the price they were sent. */
+      noBase: !it.garment_dark,
       colours: it.colours || null,
       colours2: it.colours2 || null,
       /* No label for a supplier charge shown inside the item's price: the
@@ -12963,7 +12969,7 @@ ${quotePricingSource()}
             prints: L.prints || undefined,
             method2: L.method2, stage2: L.stage2, colours2: L.colours2,
             sleeves: L.sleeves, sleeveColours: L.sleeveColours, backColours: L.backColours,
-            dark: L.dark, colours: L.colours, addons: L.addons,
+            noBase: L.noBase, colours: L.colours, addons: L.addons,
             sizeMix: mix, blankTiers: BLANK_TIERS,
             blankOverride: L.blankOverride, unitOverride: L.unitOverride,
           });
@@ -29213,7 +29219,6 @@ const KB_ADDED = [
 `- Decoration: screen printing\n` +
 `- Colour: black\n` +
 `- Qty: \`50\`. Leave **Each $** blank: the system prices it\n` +
-`- Tick **Dark garment** (black is dark, so the white ink needs a base layer)\n` +
 `- Placement: **Front only**\n` +
 `- Ink colours in the design: **1** (white)\n` +
 `- Leave Run blank and the garment price blank\n\n` +
@@ -29232,7 +29237,7 @@ const KB_ADDED = [
 `- Tell the owner in Team chat: "Practice quote saved, total $___". The owner opens it, checks it, and signs off the step\n\n` +
 `**What the owner checks**\n\n` +
 `- Qty 50, and the sizes add up to 50\n` +
-`- Dark garment ticked, 1 ink colour, front only\n` +
+`- 1 ink colour, front only\n` +
 `- Each $ left blank, so the system priced it\n` +
 `- Saved as a draft, with no phone or email` },
   /* The design training path (TRAINING.TRACKS.design): proofs, COS and the
@@ -29672,6 +29677,15 @@ const PAY_GUIDE_BODY = `Everything you do for June's Tees happens here, and ever
 `**A week, added up**\n` +
 `You work 30 hours at $15 = $450. A customer you found pays a $1,082.50 job in full; 14 days later, 3% of $1,000 = $30 is payable. You also closed a $600 shop-lead job: wage only. That payday: $450 + $30 = **$480**.\n\n` +
 `Something looks wrong? Ask in **Team chat** with the quote number. The owner can see exactly how every figure was worked out.`;
+/* The practice quote said to tick "Dark garment" until 2026-10-07, when the
+   box was removed (the white base now goes on every garment). Its old text is
+   rebuilt here so a live copy nobody has edited is brought up to date. */
+{
+  const practice = KB_ADDED.find((a) => a.title === 'Practice quote: a basic screen print order');
+  practice.was = [practice.body
+    .replace('- Placement: **Front only**\n', '- Tick **Dark garment** (black is dark, so the white ink needs a base layer)\n- Placement: **Front only**\n')
+    .replace('- 1 ink colour, front only\n', '- Dark garment ticked, 1 ink colour, front only\n')];
+}
 KB_ADDED.push({ kind: 'sop', title: PAY_GUIDE_TITLE,
   tags: 'pay, wage, hourly, hours, commission, earnings, my earnings, how pay works, payday, timeproof, own lead, shop lead, reorder, platform, menu, getting started, rules',
   body: PAY_GUIDE_BODY,

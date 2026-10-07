@@ -60,8 +60,12 @@ test('every field the save writes is read back by the form', () => {
      the price and the customer's page use, so the form names none of them. */
   const VIA_PRINTS = new Set(['prints', 'stage', 'stage2', 'sleeves', 'sleeve_colours', 'back_colours',
     'colours', 'colours2', 'method2_id']);
+  /* Written as a constant on every save, so there is nothing to restore:
+     garment_dark is always true since the white base went on every garment
+     (2026-10-07) and the form lost its "Dark garment" box. */
+  const CONSTANT = new Set(['garment_dark']);
   const viaPrints = form.includes('itemPrints(it, catalog)');
-  const missing = saved.filter((k) => !DERIVED.has(k) && !(viaPrints && VIA_PRINTS.has(k)) && !form.includes('it.' + k));
+  const missing = saved.filter((k) => !DERIVED.has(k) && !CONSTANT.has(k) && !(viaPrints && VIA_PRINTS.has(k)) && !form.includes('it.' + k));
   assert.deepStrictEqual(missing, [],
     'saved but never restored, so an edit loses them: ' + missing.join(', '));
 });

@@ -14,16 +14,20 @@ const fs = require('node:fs');
 const path = require('node:path');
 const PC = require('../tools/lib/production-cost');
 
-const job = (qty, dark, places) => PC.productionCompare({ qty, dark, places }, PC.DATA);
+/* The second argument used to be "dark". The white base now goes on every
+   garment (2026-10-07), so it is ignored; kept so the calls below read as
+   the invoices they come from. */
+const job = (qty, _shirt, places) => PC.productionCompare({ qty, places }, PC.DATA);
 const LCFB = [{ loc: 'front', kind: 'screen', colours: 1 }, { loc: 'back', kind: 'screen', colours: 1 }];
 
-test('Anchorfish matches its own paperwork: the base is a colour on dark shirts', () => {
+test('Anchorfish matches its own paperwork: the base is a colour, on every shirt', () => {
   /* #18249: 100 black, white left chest + full back: $4.12 x 100 + 4 x $20 */
   assert.strictEqual(job(100, true, LCFB).anchorfish, 492);
   /* #16899: 62 of the same: $4.50 x 62 + $80 */
   assert.strictEqual(job(62, true, LCFB).anchorfish, 359);
-  /* Under 50 they bill 50. */
-  assert.strictEqual(job(30, false, [{ loc: 'front', kind: 'screen', colours: 1 }]).anchorfish, 1.80 * 50 + 20);
+  /* Under 50 they bill 50 — a 1-colour print is billed as 2 colours (base
+     + ink) with two screens, light shirt or dark. */
+  assert.strictEqual(job(30, false, [{ loc: 'front', kind: 'screen', colours: 1 }]).anchorfish, 2.25 * 50 + 2 * 20);
 });
 
 test('Premium in-house, as a range from left-chest to full front', () => {
@@ -56,6 +60,6 @@ test('the quote form ships this exact function and data', () => {
   assert.match(src, /\$\{PRODCOST\.productionCompare\.toString\(\)\}/);
   /* Self-contained, so its source runs in the browser. */
   const fn = new Function('return ' + PC.productionCompare.toString())();
-  assert.deepStrictEqual(fn({ qty: 100, dark: true, places: LCFB }, JSON.parse(JSON.stringify(PC.DATA))),
+  assert.deepStrictEqual(fn({ qty: 100, places: LCFB }, JSON.parse(JSON.stringify(PC.DATA))),
     job(100, true, LCFB));
 });

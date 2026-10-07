@@ -167,14 +167,21 @@ test('a screen-print line is never quoted with free decoration', () => {
 });
 
 test('the arithmetic, pinned', () => {
+  /* Every line reads the column one up: the white base is a colour on every
+     garment since 2026-10-07 (screen-fees.test.js). */
   // 100 pieces sits in the 249 band (keys are CEILINGS, not floors).
   assert.strictEqual(priceLine({ product: GILDAN, method: SCREEN, qty: 100, colours: 1,
-    stage: 'front', blankTiers: TIERS }).decoration, 6.30);
+    stage: 'front', blankTiers: TIERS }).decoration, PER_COLOUR[2][1]);
   assert.strictEqual(priceLine({ product: GILDAN, method: SCREEN, qty: 100, colours: 3,
-    stage: 'front', blankTiers: TIERS }).decoration, 10.00);
+    stage: 'front', blankTiers: TIERS }).decoration, PER_COLOUR[4][1]);
   // 99 is the top of its own band, so one more piece is CHEAPER, not dearer.
-  assert.strictEqual(priceLine({ product: GILDAN, method: SCREEN, qty: 99, colours: 3,
-    stage: 'front', blankTiers: TIERS }).decoration, 13.50);
+  const at99 = priceLine({ product: GILDAN, method: SCREEN, qty: 99, colours: 3,
+    stage: 'front', blankTiers: TIERS }).decoration;
+  assert.strictEqual(at99, PER_COLOUR[4][0]);
+  assert.ok(at99 > PER_COLOUR[4][1]);
+  /* A line saved before the change without the dark tick keeps its column. */
+  assert.strictEqual(priceLine({ product: GILDAN, method: SCREEN, qty: 100, colours: 1,
+    stage: 'front', blankTiers: TIERS, noBase: true }).decoration, 6.30);
 });
 
 test('an over-range colour count falls back to full-color, not to nothing', () => {
@@ -193,7 +200,7 @@ test('a missing, junk or absent colour count prices at one colour, never zero', 
 test('front + back doubles the chosen colour column, not the one-colour one', () => {
   const r = priceLine({ product: GILDAN, method: SCREEN, qty: 100, colours: 4,
                         stage: 'both', blankTiers: TIERS });
-  assert.strictEqual(r.decoration, PER_COLOUR[4][1] * 2);
+  assert.strictEqual(r.decoration, PER_COLOUR[5][1] * 2, '4 colours + the base, both sides');
 });
 
 test('the 50-piece minimum still applies on top of the colour column', () => {
@@ -202,7 +209,7 @@ test('the 50-piece minimum still applies on top of the colour column', () => {
      unit x qty still holds; it must scale the COLOUR the job really is. */
   const r = priceLine({ product: GILDAN, method: SCREEN, qty: 25, colours: 3,
                         stage: 'front', blankTiers: TIERS });
-  assert.strictEqual(r.decoration, Math.round(PER_COLOUR[3][0] * (50 / 25) * 100) / 100);
+  assert.strictEqual(r.decoration, Math.round(PER_COLOUR[4][0] * (50 / 25) * 100) / 100, '3 colours + the base');
 });
 
 /* ── The two data generations, one rule ─────────────────────────────────── */

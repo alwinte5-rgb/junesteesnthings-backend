@@ -81,7 +81,7 @@ cheaper than DTF on a small run.
 
 
 SCREEN PRINT — Anchorfish 2026, print only. Screens are NOT in these rates:
-they bill once per order at $35/screen (cost $20), screens = (colours + 1 on darks) x locations.
+they bill once per order at $35/screen (cost $20), screens = (colours + 1 on darks) x locations. **Since 2026-10-07 the +1 is on every garment** — see Screens below.
 50-piece minimum: the old bands started at 12, which contradicted it.
 
   id   colours         50-99    100-249    250-499    500-999  1000-2499  2500-7000
@@ -196,8 +196,22 @@ change, more than the overcharge is.
 ## Screens: the count, and where it is defined
 
 ```
-screenCount(colours, locations, dark) = (colours + (dark ? 1 : 0)) * locations
+screenCount(colours, locations) = (colours + 1) * locations
 ```
+
+**The white base goes on every garment, light or dark — owner's rule from
+2026-10-07.** Anchorfish lays the base on light garments too and bills it, so
+the old "Dark garment" tick box on the quote form only ever let a light job be
+quoted under cost. The box is gone; every engine (quote form, storefront
+`app.js`, checkout `core/cart.php`, `jt-auth.php`) adds the base screen AND
+prices the print one colour column up, on every garment. Everything below that
+says "on a dark garment" now applies to all of them: the press ceiling is five
+printed colours, and a 1-colour design is a 2-screen job everywhere.
+
+One exception, and it is not the switch come back: a line saved **before**
+2026-10-07 without the old tick re-prices without the base (`noBase`), so a
+quote the customer already holds keeps the price it was sent at. Every line
+saved since stores `garment_dark: true`.
 
 Written once, in `quotePricingSource()` in `server.js`, so the fee charged and
 the screens ordered from Anchorfish are the same number.
@@ -365,7 +379,7 @@ DTF now wins **earlier at volume** and **later on small runs** than it used to.
   screen count, while DTF's second location runs roughly 58% less. Anything
   two-sided above 3 colours belongs on DTF at almost any quantity.
 
-Screens are counted as `(colours + 1 on darks) × locations` at $25 each, the same
+Screens are counted as `(colours + 1) × locations` at $25 each (the +1 on every garment since 2026-10-07), the same
 rule `screenCount()` uses in `server.js`.
 
 **Regenerate this table** whenever either price table moves — it is derived from

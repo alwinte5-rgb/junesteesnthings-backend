@@ -38,9 +38,16 @@ test('a posted tick box is ticked, whatever value the page gave it', () => {
   assert.strictEqual(tickedBox('false'), false);
 });
 
-test('Optional and Dark garment are read by presence', () => {
+test('Optional is read by presence', () => {
   assert.match(src, /const isOptional = \(i\) => tickedBox\(one\(b\['optional' \+ i\]\)\);/);
-  assert.match(src, /const garmentDark = tickedBox\(one\(b\['dark' \+ i\]\)\);/);
+});
+
+test('the Dark garment box is gone, and every saved line carries the base', () => {
+  /* 2026-10-07: the white base goes on every garment, so there is nothing to
+     tick. A box left behind would look like it changed the price. */
+  assert.doesNotMatch(src, /name="dark\$\{n\}"/, 'the Dark garment box is back on the quote form');
+  assert.doesNotMatch(src, /b\['dark' \+ i\]/, 'the save route reads a dark box again');
+  assert.match(src, /garment_dark: true,/);
 });
 
 test('clearing the only item unticks its boxes rather than blanking them', () => {

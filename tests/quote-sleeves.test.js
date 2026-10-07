@@ -7,7 +7,7 @@
  *
  *   - adds one more pass of the first decoration's table per sleeve,
  *   - is priced at its own ink count (usually one colour beside a fuller front),
- *   - burns its own screens, at its own ink count, plus the dark underbase,
+ *   - burns its own screens, at its own ink count, plus the white underbase,
  *   - is checked against the press ceiling as its own pass,
  *   - and that anything but left/right/both adds nothing.
  *
@@ -53,7 +53,11 @@ const DTF = {
   positions: { id: [{ min_qty: 100, price: 7 }], mr8a5dlx: [{ min_qty: 100, price: 5 }] },
 };
 const screens = { code: 'screens', label: 'Screens', kind: 'per_screen', rate: 25 };
-const base = { qty: 50, product: { price: 3, sizes: [] }, addons: [screens] };
+/* noBase: the sleeve arithmetic is pinned without the white base so the
+   numbers stay readable; every case marked `withBase` runs the real rule
+   (the base on every garment, screen-fees.test.js). */
+const base = { qty: 50, product: { price: 3, sizes: [] }, addons: [screens], noBase: true };
+const withBase = { noBase: false };
 
 test('no sleeves prices exactly as before', () => {
   const a = priceLine({ ...base, method: SCREEN, colours: 3 });
@@ -76,12 +80,12 @@ test('a sleeve with no ink count of its own takes the front count', () => {
   assert.equal(r.decoration, 5 + 5);
 });
 
-test('sleeves burn their own screens, with the underbase on a dark garment', () => {
-  const light = priceLine({ ...base, method: SCREEN, colours: 3, sleeves: 'both', sleeveColours: 1 });
-  assert.equal(light.screens, 3 + 2);
-  const dark = priceLine({ ...base, method: SCREEN, colours: 3, sleeves: 'both', sleeveColours: 1, dark: true });
-  assert.equal(dark.screens, 4 + 2 * 2);
-  assert.equal(dark.addonLines.find((a) => a.code === 'screens').total, (4 + 4) * 25);
+test('sleeves burn their own screens, each with its own underbase', () => {
+  const bare = priceLine({ ...base, method: SCREEN, colours: 3, sleeves: 'both', sleeveColours: 1 });
+  assert.equal(bare.screens, 3 + 2);
+  const based = priceLine({ ...base, method: SCREEN, colours: 3, sleeves: 'both', sleeveColours: 1, ...withBase });
+  assert.equal(based.screens, 4 + 2 * 2);
+  assert.equal(based.addonLines.find((a) => a.code === 'screens').total, (4 + 4) * 25);
 });
 
 test('a multi-group method prices a sleeve on its secondary group', () => {
@@ -91,9 +95,9 @@ test('a multi-group method prices a sleeve on its secondary group', () => {
 
 test('a sleeve is checked against the press ceiling as its own pass', () => {
   const big = { ...SCREEN, max_screens: 3 };
-  const ok = priceLine({ ...base, method: big, colours: 2, sleeves: 'left', sleeveColours: 1, dark: true });
+  const ok = priceLine({ ...base, method: big, colours: 2, sleeves: 'left', sleeveColours: 1, ...withBase });
   assert.equal(ok.overScreens, false);
-  const over = priceLine({ ...base, method: big, colours: 1, sleeves: 'left', sleeveColours: 3, dark: true });
+  const over = priceLine({ ...base, method: big, colours: 1, sleeves: 'left', sleeveColours: 3, ...withBase });
   assert.equal(over.overScreens, true);
   assert.equal(over.passScreens, 4);
 });
@@ -121,7 +125,7 @@ test('the save route keeps sleeves to the three known values', () => {
 test('the pricing source recognises "Screen Printing" as screen printing', () => {
   /* The regex lives in a template literal; a single backslash compiled it to
      /screens*print/ and the press ceiling was never checked. */
-  const r = priceLine({ ...base, method: { ...SCREEN, max_screens: 3 }, colours: 3, dark: true });
+  const r = priceLine({ ...base, method: { ...SCREEN, max_screens: 3 }, colours: 3, ...withBase });
   assert.equal(r.overScreens, true);
 });
 
@@ -133,8 +137,8 @@ test('front + back: each side priced and screened at its own count', () => {
   const diff = priceLine({ ...base, method: SCREEN, colours: 3, stage: 'both', backColours: 1 });
   assert.equal(diff.decoration, 6 + 4);
   assert.equal(diff.screens, 3 + 1);
-  const dark = priceLine({ ...base, method: SCREEN, colours: 3, stage: 'both', backColours: 1, dark: true });
-  assert.equal(dark.screens, 4 + 2);
+  const based = priceLine({ ...base, method: SCREEN, colours: 3, stage: 'both', backColours: 1, ...withBase });
+  assert.equal(based.screens, 4 + 2);
 });
 
 test('a back count is ignored unless the line is front + back', () => {
@@ -145,7 +149,7 @@ test('a back count is ignored unless the line is front + back', () => {
 
 test('the back is checked against the press ceiling as its own pass', () => {
   const big = { ...SCREEN, max_screens: 3 };
-  const r = priceLine({ ...base, method: big, colours: 1, stage: 'both', backColours: 3, dark: true });
+  const r = priceLine({ ...base, method: big, colours: 1, stage: 'both', backColours: 3, ...withBase });
   assert.equal(r.overScreens, true);
 });
 
