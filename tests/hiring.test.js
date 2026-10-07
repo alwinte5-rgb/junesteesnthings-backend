@@ -384,3 +384,28 @@ test('the designer grader is told print methods are trained, and other roles are
   assert.ok(/train printing methods/.test(d) && /Customer-facing communication counts heavily/.test(d));
   assert.ok(!/train printing methods/.test(H.systemFor('sales')), 'only the designer carries the calibration');
 });
+
+test('a video call stays on the default list, and every filter shows its count', () => {
+  assert.match(src, /\$1 = 'open' AND \(t\.decision IS NULL OR t\.decision = 'interview'\)/, 'Still deciding keeps Video call applicants');
+  assert.match(src, /COUNT\(\*\) FILTER \(WHERE decision = 'rejected'\)::int AS rejected/);
+  assert.match(src, /\(\$\{n\[k\]\}\)/, 'each filter link shows its count');
+});
+
+test('the video call: booking link + message, their own questions and the standard guide on their page', () => {
+  assert.match(H.BOOKING_URL, /^https:\/\/calendar\.app\.google\//);
+  const m = H.bookingMessage('Camille Reyes');
+  assert.match(m, /^Hi Camille,/);
+  assert.ok(m.includes(H.BOOKING_URL));
+  assert.match(m, /ID/);
+  assert.match(src, /\$\{hireVideoCallCard\(r, r2\)\}/, 'the applicant page shows the card');
+  assert.match(src, /function hireVideoCallCard[\s\S]{0,1600}role\.guide\.map/, 'the card carries the standard questions');
+  assert.match(src, /function hireVideoCallCard[\s\S]{0,700}r\.grade\.follow_up/, 'falls back to round 1 follow-ups');
+  assert.match(src, /value="\$\{escEmail\(HIRING\.BOOKING_URL\)\}"/, 'the Hiring page shows the link');
+});
+
+test('a name typed wrong can be fixed, on both rounds, by the owner only', () => {
+  const route = src.slice(src.indexOf("app.post('/admin/hiring/:id/name'"), src.indexOf('// Round 2 for someone the grade did not pass'));
+  assert.match(route, /requireAdmin/);
+  assert.match(route, /HIRING\.validateInvite/, 'the same name rules as a new link');
+  assert.match(route, /WHERE \(id = \$1 AND stage = 1\) OR parent_id = \$1/);
+});

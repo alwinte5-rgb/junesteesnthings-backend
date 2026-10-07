@@ -28283,7 +28283,8 @@ function hireBand(score) {
   return score == null ? null : HIRING.BANDS.find((b) => score >= b.min);
 }
 
-/* The list's filters: still being decided, each decision, or everyone. */
+/* The list's filters: still being decided (a video call is still deciding),
+   each decision, or everyone. Each shows its count, so nobody seems to vanish. */
 const HIRE_SHOW = { open: 'Still deciding', interview: 'Video call', hired: 'Hired', rejected: 'Rejected', all: 'Everyone' };
 
 app.get('/admin/hiring', requireAdmin, async (req, res) => {
@@ -28296,7 +28297,7 @@ app.get('/admin/hiring', requireAdmin, async (req, res) => {
               c.grade_error AS r2_error, c.grade->>'recommendation' AS r2_rec, t.decision
          FROM hiring_tests t LEFT JOIN hiring_tests c ON c.parent_id = t.id
         WHERE t.stage = 1
-          AND ($1::text = 'all' OR ($1 = 'open' AND t.decision IS NULL) OR t.decision = $1)
+          AND ($1::text = 'all' OR ($1 = 'open' AND (t.decision IS NULL OR t.decision = 'interview')) OR t.decision = $1)
         ORDER BY (t.score IS NULL), t.score DESC, t.created_at DESC LIMIT 300`, [show]);
     const list = rows.length ? rows.map((r) => {
       const [label, tone] = HIRE_STATUS[r.status] || HIRE_STATUS.sent;
@@ -28321,8 +28322,13 @@ app.get('/admin/hiring', requireAdmin, async (req, res) => {
       <p class="muted">$${HIRING.TEST_FEE} each by PayPal (<a href="https://www.paypal.com/myaccount/transfer/homepage/pay" target="_blank" rel="noopener noreferrer">Send money</a>, as a payment for a service).
       Mark each one paid here and it goes on Finances as contract labor.</p>
       ${owed.map((f) => hireFeeRow(f)).join('')}</div>` : '';
-    const filters = Object.entries(HIRE_SHOW).map(([k, v]) => k === show ? `<b>${escEmail(v)}</b>`
-      : `<a href="/admin/hiring?show=${k}">${escEmail(v)}</a>`).join(' · ');
+    const { rows: [n] } = await pool.query(
+      `SELECT COUNT(*) FILTER (WHERE decision IS NULL OR decision = 'interview')::int AS open,
+              COUNT(*) FILTER (WHERE decision = 'interview')::int AS interview, COUNT(*) FILTER (WHERE decision = 'hired')::int AS hired,
+              COUNT(*) FILTER (WHERE decision = 'rejected')::int AS rejected, COUNT(*)::int AS "all"
+         FROM hiring_tests WHERE stage = 1`);
+    const filters = Object.entries(HIRE_SHOW).map(([k, v]) => `${k === show ? `<b>${escEmail(v)}</b>`
+      : `<a href="/admin/hiring?show=${k}">${escEmail(v)}</a>`} (${n[k]})`).join(' · ');
     res.send(adminPage('Hiring', `
       ${pageHeader('Hiring', `Each applicant gets a private ${HIRING.MINUTES}-minute test link. They need no login and see none of the shop's data.`,
         '<a class="btn btn-ghost" href="/admin/hiring/test">Job posts, screening, tests and interview guides</a>')}
@@ -28335,6 +28341,9 @@ app.get('/admin/hiring', requireAdmin, async (req, res) => {
         <div><button type="submit" class="btn">Make the link</button></div>
       </form>
       ${fees}
+      <div class="card"><b>Video call booking link</b>
+        <p class="muted">The applicant picks a time; the calendar invite carries the Google Meet link. Each applicant's page has the message filled in.</p>
+        <input readonly value="${escEmail(HIRING.BOOKING_URL)}" style="width:100%;font-family:monospace" onclick="this.select()"></div>
       <div class="card"><b>Applicants</b><div class="muted" style="margin:6px 0">${filters}</div>${list}</div>`, 'hiring'));
   } catch (err) {
     console.error('hiring page failed:', err.message);
@@ -28494,9 +28503,7 @@ app.get('/admin/hiring/:id', requireAdmin, async (req, res) => {
       </div>
       ${hireDecisionCard(Object.assign(r, { _r2: r2 }))}
       ${hireFeeCard2(r)}
-      ${g && g.follow_up.length && !r2 ? `<div class="card"><b>Follow-up questions for the video call</b>
-        <p class="muted">About ${escEmail(r.name)}'s own answers. Use them with the <a href="/admin/hiring/test">standard guide</a>.</p>
-        <ol>${g.follow_up.map((f) => `<li style="margin-bottom:8px"><b>${escEmail(f.question)}</b><div class="muted">${escEmail(f.why)}</div></li>`).join('')}</ol></div>` : ''}
+      ${hireVideoCallCard(r, r2)}
       ${hireRound2Card(r, r2)}
       <div class="card"><b>Written answers</b>${role.written.map((w) => {
         const s = g && g.scores[w.id];
@@ -28512,7 +28519,11 @@ app.get('/admin/hiring/:id', requireAdmin, async (req, res) => {
         ${x.right ? '' : `<div class="row-sub muted" style="white-space:normal">Best answer: ${escEmail(x.answerText)}</div>`}</span></div>`).join('')}</div>`;
     res.send(adminPage('Hiring', `
       ${pageHeader(r.name, escEmail(role.label) + (r.note ? ` · ${escEmail(r.note)}` : ''), actions.join(' '))}
-      ${flash(req.query)}${summary}`, 'hiring'));
+      ${flash(req.query)}${summary}
+      <details class="card"><summary class="muted">Fix the name</summary>
+        <form method="post" action="/admin/hiring/${id}/name" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+          <input name="name" maxlength="${HIRING.LIMITS.name}" required value="${escEmail(r.name)}" style="width:260px">
+          <button class="btn btn-ghost" type="submit">Save name</button></form></details>`, 'hiring'));
   } catch (err) {
     console.error('hiring result failed:', err.message);
     res.status(500).send(adminPage('Hiring', '<div class="card"><div class="warn">Could not load this applicant.</div></div>', 'hiring'));
@@ -28553,6 +28564,29 @@ function hireRejectionBox(r, r2 = r._r2) {
   return `<p><b>Message to send them on OnlineJobs.ph</b> (${escEmail(HIRE_POSTING.REJECTIONS[kind].label.toLowerCase())}):</p>${box(kind)}
     <details><summary class="muted">Other versions</summary>${Object.keys(HIRE_POSTING.REJECTIONS).filter((k) => k !== kind)
       .map((k) => `<p style="margin:8px 0 4px">${escEmail(HIRE_POSTING.REJECTIONS[k].label)}</p>${box(k)}`).join('')}</details>`;
+}
+
+/** Everything for the video call in one place: the booking message to send,
+ *  the questions about this applicant's own answers, and the standard guide.
+ *  Their own questions: round 2's new ones once it is graded, else round 1's
+ *  follow-ups (round 2 not taken or not graded yet). */
+function hireVideoCallCard(r, r2) {
+  if (!r.submitted_at || r.decision === 'rejected' || r.decision === 'hired') return '';
+  const role = HIRING.roleOf(r.role);
+  const g2 = r2 && r2.grade;
+  const own = g2 && g2.video_questions && g2.video_questions.length ? g2.video_questions
+    : !g2 && r.grade && r.grade.follow_up ? r.grade.follow_up : [];
+  const ownNote = g2 ? 'New ones: not asked in round 2 or in the standard questions.'
+    : r2 ? 'Round 2 is not graded yet, so these are round 1\'s follow-ups.' : 'From round 1\'s answers.';
+  return `<div class="card" style="border-left:4px solid #2563eb"><b>Video call</b>
+    <p class="muted">Send this on OnlineJobs.ph. They pick a time; the calendar invite carries the Google Meet link. Then press Video call below.</p>
+    <textarea readonly style="width:100%;min-height:150px" onclick="this.select()">${escEmail(HIRING.bookingMessage(r.name))}</textarea>
+    ${own.length ? `<p><b>Questions about ${escEmail(r.name)}'s own answers</b> <span class="muted">${escEmail(ownNote)}</span></p>
+      <ol>${own.map((f) => `<li style="margin-bottom:8px"><b>${escEmail(f.question)}</b><div class="muted">${escEmail(f.why)}</div></li>`).join('')}</ol>`
+      : '<p class="muted">No questions of their own yet: they come with the grade.</p>'}
+    <details open><summary><b>Standard questions for every ${escEmail(role.label.replace(/ \(.*\)$/, '').toLowerCase())} applicant</b></summary>
+      ${role.guide.map((s) => `<p style="margin:10px 0 4px"><b>${escEmail(s.section)}</b></p>
+        ${s.questions.map((q) => `<div style="white-space:normal;margin-bottom:6px">• ${escEmail(q.q)}<div class="muted">Listen for: ${escEmail(q.listen)}</div></div>`).join('')}`).join('')}</details></div>`;
 }
 
 /** The owner's decision after the video call, with the buttons to set it. */
@@ -28596,8 +28630,7 @@ function hireRound2Card(r, r2) {
       ${g.strengths.length ? `<p><b>Strengths</b></p><ul>${g.strengths.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>` : ''}
       ${g.concerns.length ? `<p><b>Concerns</b></p><ul>${g.concerns.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>` : ''}
       ${g.generic_note ? `<div class="warn">Generic or templated: ${escEmail(g.generic_note)}</div>` : ''}
-      ${g.video_questions.length ? `<p><b>Questions for the video call</b> <span class="muted">(new: not asked in round 2 or in the standard guide)</span></p><ol>${g.video_questions.map((f) =>
-        `<li style="margin-bottom:8px"><b>${escEmail(f.question)}</b><div class="muted">${escEmail(f.why)}</div></li>`).join('')}</ol>` : ''}` : ''}
+      ${g.video_questions.length ? '<p class="muted">Its questions for the video call are in the Video call card above.</p>' : ''}` : ''}
     ${qs.map((q, n) => {
       const sc = g && g.scores && g.scores[q.id];
       return `<div class="row-i"><span class="row-main" style="white-space:normal">
@@ -28696,6 +28729,23 @@ app.post('/admin/hiring/:id/decision', requireAdmin, async (req, res) => {
     return back(res, `/admin/hiring/${id}`, 'err', 'Could not save that. Try again.');
   } finally {
     client.release();
+  }
+});
+
+/* Fix a name typed wrong when the link was made. Round 2 carries the name too. */
+app.post('/admin/hiring/:id/name', requireAdmin, async (req, res) => {
+  const id = hireId(req);
+  if (!id) return back(res, '/admin/hiring', 'err', 'No such applicant.');
+  const v = HIRING.validateInvite({ name: (req.body || {}).name });
+  if (v.error) return back(res, `/admin/hiring/${id}`, 'err', v.error);
+  try {
+    const { rowCount } = await pool.query(
+      `UPDATE hiring_tests SET name = $2 WHERE (id = $1 AND stage = 1) OR parent_id = $1`, [id, v.invite.name]);
+    if (!rowCount) return back(res, '/admin/hiring', 'err', 'No such applicant.');
+    return back(res, `/admin/hiring/${id}`, 'ok', `Name saved: ${v.invite.name}.`);
+  } catch (err) {
+    console.error('hiring rename failed:', err.message);
+    return back(res, `/admin/hiring/${id}`, 'err', 'Could not save the name. Try again.');
   }
 });
 
