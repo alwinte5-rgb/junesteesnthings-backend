@@ -51,6 +51,7 @@ const REVREPLY = require('./tools/lib/review-replies');
 const REPLYCOACH = require('./tools/lib/reply-coach');
 const INBOUND = require('./tools/lib/inbound-email');
 const RELAY = require('./tools/lib/text-relay');
+const TMEDIA = require('./tools/lib/text-media');
 
 /* Every browser upload to Cloudinary goes through this, pasted into each page's
    script (2026-10-06). The account is on Cloudinary's Free plan: 10 MB a file,
@@ -978,6 +979,8 @@ async function initDB() {
      replies are stored here too, status 'received', matched to the customer's
      latest quote by phone. */
   await pool.query(`ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS quote_code TEXT`).catch(() => {});
+  /* Pictures and files a text carried, kept on Cloudinary: [{url, name, type}] (2026-10-06). */
+  await pool.query(`ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS media JSONB`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS sms_messages_quote_idx ON sms_messages (quote_code, created_at DESC)`)
     .catch(() => {});
 
@@ -3663,7 +3666,7 @@ function smsConfigured() {
 const TWILIO_STATUS_URL = (process.env.TWILIO_STATUS_URL || 'https://www.jtees.net/webhooks/twilio/status').trim();
 
 // One send. Resolves { sid } or throws an Error carrying Twilio's error code.
-async function twilioSend(to, body) {
+async function twilioSend(to, body, media = []) {
   const from = process.env.TWILIO_PHONE_NUMBER.trim();
   if (!isE164(from) || !isE164(to)) throw new Error('phone numbers must be +1XXXXXXXXXX form');
   const sid = process.env.TWILIO_ACCOUNT_SID.trim();
@@ -3674,7 +3677,12 @@ async function twilioSend(to, body) {
     /* Twilio accepting a text is not the phone receiving it: a landline, a
        disconnected number or carrier filtering fails it afterwards, and only
        this callback says so. */
-    body: new URLSearchParams({ From: from, To: to, Body: body, StatusCallback: TWILIO_STATUS_URL }).toString(),
+    body: (() => {
+      const p = new URLSearchParams({ From: from, To: to, Body: body, StatusCallback: TWILIO_STATUS_URL });
+      /* Pictures go as a picture text (MMS): https addresses Twilio fetches. */
+      for (const m of (media || []).slice(0, 10)) if (/^https:\/\//.test(m)) p.append('MediaUrl', m);
+      return p.toString();
+    })(),
     signal: AbortSignal.timeout(15000),
   });
   const d = await r.json().catch(() => ({}));
@@ -3686,13 +3694,13 @@ async function twilioSend(to, body) {
   return { sid: d.sid || null };
 }
 
-async function sendOwnerSms(body) {
+async function sendOwnerSms(body, media = []) {
   const to = String(process.env.TWILIO_TO_NUMBER || '').trim();
   if (!smsConfigured() || !to) {
     console.log('sendOwnerSms: skipped — Twilio not fully configured');
     return false;
   }
-  await twilioSend(to, body);
+  await twilioSend(to, body, media);
   console.log('owner sms sent');
   return true;
 }
@@ -3828,9 +3836,47 @@ async function textToLead(from, text, sid) {
   return rows.length ? { lead: rows[0].id } : {};
 }
 
+/** Copy the pictures and files a text carried from Twilio to Cloudinary.
+ *  Into the job's customer artwork when it belongs to a job, so it is with
+ *  her other files; else into the message folder. Returns [{url, name, type}];
+ *  a file that cannot be fetched or kept is reported and left out. */
+async function saveTextMedia(list, quoteCode) {
+  const out = [];
+  if (!list.length) return out;
+  const auth = 'Basic ' + Buffer.from(`${String(process.env.TWILIO_ACCOUNT_SID || '').trim()}:${String(process.env.TWILIO_AUTH_TOKEN || '').trim()}`).toString('base64');
+  const day = new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ });
+  for (const [i, m] of list.entries()) {
+    try {
+      const r = await fetch(m.url, { headers: { Authorization: auth }, signal: AbortSignal.timeout(20000) });
+      if (!r.ok) throw new Error(`Twilio media ${r.status}`);
+      const buf = Buffer.from(await r.arrayBuffer());
+      if (buf.length > TMEDIA.MAX_BYTES) throw new Error(`media too big (${buf.length} bytes)`);
+      const up = await new Promise((resolve, reject) => cloudinary.uploader.upload_stream(
+        { folder: quoteCode ? QPHOTOS.FOLDER : MSGFILES.FOLDER, resource_type: TMEDIA.isPicture(m.type) ? 'image' : 'raw',
+          ...(TMEDIA.isPicture(m.type) ? {} : { public_id: crypto.randomBytes(10).toString('hex') + '.' + m.ext }) },
+        (err, res) => (err ? reject(new Error(err.message || 'upload failed')) : resolve(res))).end(buf));
+      out.push({ url: up.secure_url, name: TMEDIA.nameFor(i, m.ext, day), type: m.type });
+    } catch (err) {
+      console.error('text media not kept:', err.message);
+      reportError('twilio:media', err).catch(() => {});
+    }
+  }
+  if (quoteCode && out.length) {
+    for (const f of out) {
+      await pool.query(
+        `UPDATE quotes SET customer_photos = COALESCE(customer_photos, '[]'::jsonb)
+                                           || jsonb_build_array(jsonb_build_object('url', $2::text, 'at', NOW(), 'name', $3::text))
+          WHERE code = $1 AND jsonb_array_length(COALESCE(customer_photos, '[]'::jsonb)) < $4
+            AND NOT COALESCE(customer_photos, '[]'::jsonb) @> jsonb_build_array(jsonb_build_object('url', $2::text))`,
+        [quoteCode, f.url, f.name, QPHOTOS.MAX_PHOTOS]).catch((e) => console.error('text photo not added to job:', e.message));
+    }
+  }
+  return out;
+}
+
 /** Send the owner's reply to the customer it was meant for (RELAY), record it
  *  on their job or lead, and tell the owner what happened. */
-async function relayOwnerReply(text, sid) {
+async function relayOwnerReply(text, sid, ownerMedia = []) {
   const { rows: forwards } = await pool.query(
     `SELECT phone, quote_code, lead_id, name, created_at FROM owner_text_forwards
       WHERE created_at > NOW() - interval '30 days' ORDER BY created_at DESC LIMIT 50`);
@@ -3840,16 +3886,18 @@ async function relayOwnerReply(text, sid) {
   const to = pick.to;
   const label = `${to.name || 'the ' + String(to.phone).slice(-4) + ' number'} (${RELAY.codeOf(to)})`;
   const words = smsPlain(pick.body, 600);
-  if (!words) return sendOwnerSms(`Not sent to ${label}: the message was empty.`);
+  if (!words && !ownerMedia.length) return sendOwnerSms(`Not sent to ${label}: the message was empty.`);
+  const pics = ownerMedia.length ? await saveTextMedia(ownerMedia, to.quote_code || null) : [];
   /* One row per incoming text: Twilio retrying the webhook does not send twice. */
   const { rows: [row] } = await pool.query(
     `INSERT INTO sms_messages (phone, kind, ref, template, body, status, quote_code)
      VALUES ($1, 'transactional', $2, 'manual', $3, 'sending', $4)
      ON CONFLICT DO NOTHING RETURNING id`,
-    [to.phone, 'relay:' + (sid || Date.now()), `June's Tees: ${words}`, to.quote_code || null]);
+    [to.phone, 'relay:' + (sid || Date.now()), `June's Tees: ${words || '(picture)'}`, to.quote_code || null]);
   if (!row) return;
+  if (pics.length) await pool.query('UPDATE sms_messages SET media = $2 WHERE id = $1', [row.id, JSON.stringify(pics)]).catch(() => {});
   try {
-    const { sid: tsid } = await twilioSend(to.phone, `June's Tees: ${words}`);
+    const { sid: tsid } = await twilioSend(to.phone, `June's Tees: ${words}`.trim(), pics.map((p) => TMEDIA.smallUrl(p.url) || p.url));
     await pool.query(`UPDATE sms_messages SET status = 'sent', twilio_sid = $2 WHERE id = $1`, [row.id, tsid]);
   } catch (err) {
     await pool.query(`UPDATE sms_messages SET status = 'failed', error = $2 WHERE id = $1`, [row.id, String(err.message).slice(0, 300)]);
@@ -3885,7 +3933,7 @@ app.post('/webhooks/twilio/sms', async (req, res) => {
   const ownerDigits = String(process.env.TWILIO_TO_NUMBER || '').replace(/\D/g, '').slice(-10);
   if (ownerDigits && from.replace(/\D/g, '').slice(-10) === ownerDigits) {
     const ownerSid = String(req.body.MessageSid || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 64);
-    await relayOwnerReply(text, ownerSid).catch((e) => {
+    await relayOwnerReply(text, ownerSid, TMEDIA.mediaOf(req.body)).catch((e) => {
       console.error('owner reply relay failed:', e.message);
       reportError('twilio:relay', e).catch(() => {});
       sendOwnerSms('Not sent: something went wrong passing your reply on. Send it from the job page instead.').catch(() => {});
@@ -3896,18 +3944,30 @@ app.post('/webhooks/twilio/sms', async (req, res) => {
      phone, so the job page shows their replies beside what they were sent.
      '\\D' is doubled: in a template string '\D' is just 'D'. */
   const sid = String(req.body.MessageSid || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 64);
+  let kept = null;
   if (sid) {
-    pool.query(
+    kept = await pool.query(
       `INSERT INTO sms_messages (phone, kind, ref, template, body, status, twilio_sid, quote_code)
        VALUES ($1, 'inbound', $2, 'reply', $3, 'received', $4,
                (SELECT code FROM quotes
                  WHERE length(regexp_replace(COALESCE(phone,''), '\\D', '', 'g')) >= 10
                    AND right(regexp_replace(COALESCE(phone,''), '\\D', '', 'g'), 10) = right($5, 10)
                  ORDER BY created_at DESC LIMIT 1))
-       ON CONFLICT DO NOTHING`,
+       ON CONFLICT DO NOTHING
+       RETURNING id, quote_code`,
       [from, 'in:' + sid, text, sid, from.replace(/\D/g, '')])
-      .catch((e) => console.error('inbound text not kept:', e.message));
+      .then((r) => r.rows[0] || null)
+      .catch((e) => { console.error('inbound text not kept:', e.message); return null; });
   }
+  /* A picture or file they sent (MMS): kept on the job and passed on below.
+     Only for a text seen for the first time, so a Twilio retry adds nothing. */
+  const media = kept || !sid ? await saveTextMedia(TMEDIA.mediaOf(req.body), kept && kept.quote_code) : [];
+  if (kept && media.length) {
+    await pool.query('UPDATE sms_messages SET media = $2 WHERE id = $1', [kept.id, JSON.stringify(media)])
+      .catch((e) => console.error('text media not recorded:', e.message));
+  }
+  const pictures = media.map((m) => TMEDIA.smallUrl(m.url)).filter(Boolean);
+  const said = text || (media.length ? `(sent ${media.length === 1 ? 'a picture' : media.length + ' pictures or files'})` : '');
   try {
     if (kind === 'stop') {
       await recordSmsConsent({ phone: from, transactional: false, marketing: false }, { source: 'sms-reply:stop' });
@@ -3934,7 +3994,7 @@ app.post('/webhooks/twilio/sms', async (req, res) => {
           : lead.lead ? `${PUBLIC_BASE_URL}/admin/leads#lead-${Number(lead.lead)}` : '';
         const tag = lead.quote ? lead.quote : lead.lead ? 'new enquiry L' + Number(lead.lead) : 'new enquiry';
         const sent = await sendOwnerSms(`Text from ${smsPlain(who, 40) || from}${who ? ' ' + from : ''} (${tag}): ` +
-          `"${smsPlain(text, 400)}" Reply here to answer them.${link ? ' ' + link : ''}`)
+          `"${smsPlain(said, 400)}" Reply here to answer them.${link ? ' ' + link : ''}`, pictures)
           .catch((e) => { console.error('text forward to owner failed:', e.message); reportError('twilio:forward', e).catch(() => {}); return false; });
         if (sent && (lead.quote || lead.lead)) {
           await pool.query(`INSERT INTO owner_text_forwards (phone, quote_code, lead_id, name) VALUES ($1, $2, $3, $4)`,
@@ -3946,9 +4006,12 @@ app.post('/webhooks/twilio/sms', async (req, res) => {
       // this their reply would land in the Twilio console and nowhere else.
       await sendEmail({
         to: NOTIFY_EMAIL,
-        subject: `Text from ${from}: ${text.slice(0, 60)}`,
+        subject: `Text from ${from}: ${said.slice(0, 60)}`,
         html: `<p><b>${escEmail(from)}</b> ${lead.quote ? 'replied by text' : 'texted the shop'}:</p>
-          <blockquote style="border-left:3px solid #1848B8;margin:0;padding:6px 12px">${escEmail(text)}</blockquote>
+          <blockquote style="border-left:3px solid #1848B8;margin:0;padding:6px 12px">${escEmail(said)}</blockquote>
+          ${pictures.map((u) => `<p style="margin:10px 0"><img src="${escEmail(u)}" alt="" style="max-width:100%;height:auto;border-radius:8px"></p>`).join('')}
+          ${media.filter((m) => !TMEDIA.smallUrl(m.url)).map((m) => `<p><a href="${escEmail(m.url)}">${escEmail(m.name)}</a></p>`).join('')}
+          ${media.length && lead.quote ? '<p>It is saved with their files on the job.</p>' : ''}
           ${lead.quote ? `<p><a href="${PUBLIC_BASE_URL}/admin/production/${encodeURIComponent(lead.quote)}">Open their job</a></p>`
             : lead.lead ? `<p><a href="${PUBLIC_BASE_URL}/admin/leads#lead-${Number(lead.lead)}">It is in Leads</a>, ready to quote.</p>` : ''}
           <p style="color:#6b7280">Call or text them back at this number. Replies to this email do not reach them.</p>`,
@@ -20183,7 +20246,7 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
        SELECT 'email' AS channel, kind, subject, preview AS body, status, error, created_at, sent_by, id, attachments
          FROM client_emails WHERE quote_code = $1
        UNION ALL
-       SELECT 'text', template, NULL, body, status, error, created_at, sent_by, NULL, NULL
+       SELECT 'text', template, NULL, body, status, error, created_at, sent_by, NULL, media
          FROM sms_messages WHERE quote_code = $1) m
       ORDER BY created_at DESC LIMIT 60`, [code]).catch((e) => {
     console.error(`messages for ${code} failed:`, e.message);
@@ -20241,7 +20304,14 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
       <span class="ico ${inbound ? 'ico-green' : bad ? 'ico-red' : 'ico-blue'}">${icon(m.channel === 'email' ? 'mail' : 'phone')}</span>
       <span class="row-main"><b>${escEmail(m.channel === 'email' ? (m.subject || label) : label)}</b>
         <div class="row-sub" style="white-space:normal">${escEmail(body.length > 220 ? body.slice(0, 219).trimEnd() + '…' : body)}</div>${
-        Array.isArray(m.attachments) && m.attachments.length ? `<div class="row-sub" style="white-space:normal">&#128206; ${
+        Array.isArray(m.attachments) && m.attachments.length && m.channel === 'text' ? `<div class="row-sub" style="white-space:normal;display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">${
+          /* Pictures sent by text: shown, and open full size. Our Cloudinary only. */
+          m.attachments.filter((a) => a && /^https:\/\/res\.cloudinary\.com\//.test(String(a.url))).map((a) => {
+            const small = TMEDIA.smallUrl(a.url);
+            return small ? `<a href="${escEmail(a.url)}" target="_blank" rel="noopener"><img src="${escEmail(small.replace('w_1200', 'w_240'))}" alt="${escEmail(a.name)}" style="width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid #e3e8f2"></a>`
+              : `<a href="${escEmail(a.url)}" target="_blank" rel="noopener">&#128206; ${escEmail(a.name)}</a>`;
+          }).join('')}</div>`
+        : Array.isArray(m.attachments) && m.attachments.length ? `<div class="row-sub" style="white-space:normal">&#128206; ${
           m.attachments.map((a, n) => `<a href="/admin/production/${escEmail(code)}/${inbound ? 'reply' : 'sent'}-file/${Number(m.id)}/${n}">${escEmail(a.name)}</a>`).join(' &middot; ')}</div>` : ''}${
         bad && m.error ? `<div class="row-sub" style="white-space:normal;color:#b91c1c">${escEmail(m.error)}</div>` : ''}</span>
       <span class="row-end msg-end">${pill(inbound ? 'reply' : m.status, tone(m.status))}
@@ -21341,7 +21411,7 @@ app.get('/admin/dashboard', requireAdmin, async (_req, res) => {
     /* A customer wrote and nobody has answered (2026-10-06). */
     ...replies.map((r) => ({ tone: Date.now() - new Date(r.last_in) > 24 * 3600 * 1000 ? 'red' : 'amber', icon: 'mail',
       title: `${escEmail(r.name || r.code)} is waiting for a reply`,
-      sub: `&ldquo;${escEmail(String(r.body || '').replace(/\s+/g, ' ').slice(0, 90))}&rdquo; &middot; ${escEmail(ageInWords(r.last_in))}`,
+      sub: `${r.body ? `&ldquo;${escEmail(String(r.body).replace(/\s+/g, ' ').slice(0, 90))}&rdquo;` : 'sent a picture'} &middot; ${escEmail(ageInWords(r.last_in))}`,
       href: `/admin/production/${escEmail(r.code)}#messages` })),
     ...disputes.map((d) => ({ tone: 'red', icon: 'alert',
       title: `Chargeback: ${money(d.amount)} ${d.quote_code ? 'on quote ' + escEmail(d.quote_code)

@@ -135,7 +135,7 @@ test('a customer text reply is kept on their latest quote, matched by phone', ()
   const at = r.indexOf('INSERT INTO sms_messages');
   assert.ok(at > 0 && at < r.indexOf("if (kind === 'stop')"), 'kept before anything else is done with it');
   /* The SQL as Postgres receives it: '\D' has to arrive with its backslash. */
-  const lit = r.slice(r.indexOf('`', at - 20), r.indexOf('ON CONFLICT DO NOTHING`', at) + 'ON CONFLICT DO NOTHING`'.length);
+  const lit = r.slice(r.indexOf('`', at - 20), r.indexOf('RETURNING id, quote_code`', at) + 'RETURNING id, quote_code`'.length);
   const cooked = vm.runInThisContext(lit);
   assert.ok(cooked.includes("regexp_replace(COALESCE(phone,''), '\\D', '', 'g')"), cooked);
   assert.match(cooked, /'received'/);
@@ -156,7 +156,7 @@ function card({ history = [], smsOn = true, consent = true, q = {} } = {}) {
     intIn: () => null, PROOFS: require('../tools/lib/job-proofs'),
     /* Files on the job an email may carry (2026-10-06): none here. */
     jobFilesFor: async () => [], MSGFILES: require('../tools/lib/message-files'), inboundReady: false,
-    jobPath: (c) => '/admin/production/' + c,
+    jobPath: (c) => '/admin/production/' + c, TMEDIA: require('../tools/lib/text-media'),
     /* The shared browser upload helper (2026-10-06), as server.js defines it. */
     CLOUDINARY_UPLOAD_MAX: 10 * 1024 * 1024, CLD_UPLOAD_FN: 'function jtCldUpload(){}',
   };
@@ -370,11 +370,12 @@ test('uploads go to Cloudinary as raw files for design files, with the 10 MB lim
 /* ── A customer's text, forwarded to the owner's phone (2026-10-06) ─────────── */
 
 async function inboundText({ from = '+13125550199', body = 'Can I add 2 XL?', owner = '+17738491854', quote = 'AB12CD', name = 'Kim Lee',
-                             forwards = [], twilioFails = null } = {}) {
+                             forwards = [], twilioFails = null, media = {} } = {}) {
   const ownerTexts = [];
   const emails = [];
   const sent = [];
   const sql = [];
+  const ownerPics = [];
   let handler;
   const sandbox = {
     app: { post: (p, h) => { handler = h; } },
@@ -386,14 +387,16 @@ async function inboundText({ from = '+13125550199', body = 'Can I add 2 XL?', ow
       sql.push([q, args]);
       if (/SELECT name FROM quotes/.test(q)) return { rows: [{ name }] };
       if (/FROM owner_text_forwards/.test(q)) return { rows: forwards };
-      if (/INSERT INTO sms_messages[\s\S]*RETURNING id/.test(q)) return { rows: [{ id: 1 }] };
+      if (/INSERT INTO sms_messages[\s\S]*RETURNING id/.test(q)) return { rows: [{ id: 1, quote_code: quote }] };
       return { rows: [] };
     } },
     RELAY: require('../tools/lib/text-relay'), QUOTE_CODE_RE: /^(?:[A-Z0-9]{6}|[A-Z0-9]{10})$/,
     twilioSend: async (to, b) => { if (twilioFails) throw Object.assign(new Error('nope'), { twilioCode: twilioFails }); sent.push([to, b]); return { sid: 'SMx' }; },
     markLeadResponded: async () => {},
     textToLead: async () => (quote ? { quote } : { lead: 7 }),
-    sendOwnerSms: async (b) => { ownerTexts.push(b); return true; },
+    sendOwnerSms: async (b, pics = []) => { ownerTexts.push(b); ownerPics.push(pics); return true; },
+    TMEDIA: require('../tools/lib/text-media'),
+    saveTextMedia: async (list, q) => list.map((m, i) => ({ url: `https://res.cloudinary.com/shop/image/upload/v1/quote_photos/p${i}.jpg`, name: 'Text photo ' + (i + 1) + '.jpg', type: m.type, q })),
     sendEmail: async (m) => { emails.push(m); },
     smsPlain: require('../tools/lib/sms-templates').plain,
     PUBLIC_BASE_URL: 'https://www.jtees.net', NOTIFY_EMAIL: 'shop@x', escEmail: (s) => String(s),
@@ -404,8 +407,8 @@ async function inboundText({ from = '+13125550199', body = 'Can I add 2 XL?', ow
   const start = src.indexOf("app.post('/webhooks/twilio/sms'");
   vm.runInContext(lift('relayOwnerReply') + '\n' + src.slice(start, src.indexOf('\n});', start) + 4), sandbox);
   const res = { type() { return this; }, send() {}, sendStatus() {} };
-  await handler({ body: { From: from, Body: body, MessageSid: 'SM1' }, get: () => 'sig' }, res);
-  return { ownerTexts, emails, sent, sql };
+  await handler({ body: { From: from, Body: body, MessageSid: 'SM1', ...media }, get: () => 'sig' }, res);
+  return { ownerTexts, emails, sent, sql, ownerPics };
 }
 
 test('a customer\'s text comes to the owner\'s phone with who it is and a link to their job', async () => {
@@ -453,4 +456,29 @@ test('no recent customer, or a customer who texted STOP: the owner is told it wa
   assert.match(none.ownerTexts[0], /^Not sent: no customer has texted in the last day/);
   const stop = await inboundText({ from: '+17738491854', body: 'hello', forwards: [kim], twilioFails: 21610 });
   assert.match(stop.ownerTexts[0], /^Not sent to Kim Lee \(AB12CD\): they have texted STOP/);
+});
+
+test('a picture sent by text reaches the owner as a picture, is kept on the job, and is in the email', async () => {
+  const r = await inboundText({ body: '', media: { NumMedia: '1', MediaUrl0: 'https://api.twilio.com/2010-04-01/Accounts/AC1/Messages/MM1/Media/ME1', MediaContentType0: 'image/jpeg' } });
+  assert.match(r.ownerTexts[0], /\(AB12CD\): "\(sent a picture\)"/);
+  assert.deepStrictEqual(r.ownerPics[0], ['https://res.cloudinary.com/shop/image/upload/c_limit,w_1200,q_auto,f_jpg/v1/quote_photos/p0.jpg']);
+  assert.match(r.emails[0].html, /<img src="https:\/\/res\.cloudinary\.com\/shop\/image\/upload\/c_limit,w_1200/);
+  assert.match(r.emails[0].html, /saved with their files on the job/);
+  assert.ok(r.sql.some(([q, a]) => /UPDATE sms_messages SET media/.test(q) && /p0\.jpg/.test(a[1])), 'kept on the text');
+});
+
+test('media from anywhere but Twilio is ignored', () => {
+  const T = require('../tools/lib/text-media');
+  assert.deepStrictEqual(T.mediaOf({ NumMedia: '2', MediaUrl0: 'https://evil.example/x.jpg', MediaUrl1: 'http://api.twilio.com/x' }), []);
+  assert.strictEqual(T.mediaOf({ NumMedia: '99' }).length, 0);
+  assert.strictEqual(T.mediaOf({ NumMedia: '1', MediaUrl0: 'https://api.twilio.com/a', MediaContentType0: 'image/png' })[0].ext, 'png');
+});
+
+test('a texted picture shows on the job page as a picture', async () => {
+  const html = await card({ history: [{ channel: 'text', kind: 'reply', body: '', status: 'received', created_at: '2026-10-06T21:00:00Z',
+    attachments: [{ url: 'https://res.cloudinary.com/shop/image/upload/v1/quote_photos/p0.jpg', name: 'Text photo 1.jpg' }] },
+    { channel: 'text', kind: 'reply', body: 'x', status: 'received', created_at: '2026-10-06T20:00:00Z',
+      attachments: [{ url: 'https://evil.example/x.jpg', name: 'bad' }] }] });
+  assert.match(html, /<img src="https:\/\/res\.cloudinary\.com\/shop\/image\/upload\/c_limit,w_240/);
+  assert.doesNotMatch(html, /evil\.example/);
 });
