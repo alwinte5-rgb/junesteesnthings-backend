@@ -26201,13 +26201,13 @@ async function renderStaffPage(req, res, extra = '') {
     ${flash(req.query)}${extra}
     ${cfAccess ? '' : `<div class="warn">Sign-in is switched off until CF_ACCESS_TEAM_DOMAIN, CF_ACCESS_AUD and OWNER_EMAILS
       are set on the backend service in Railway.</div>`}
-    <div class="card"><b>Add a helper</b>
+    <div class="card" id="add"><b>Add a helper</b>
       <form method="post" action="/admin/staff" class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px">
-        <input name="name" placeholder="Name" required maxlength="80">
+        <input name="name" placeholder="Name" required maxlength="80" value="${escEmail(text((req.query || {}).add_name, 80))}">
         <input name="email" type="email" placeholder="Their email (what they sign in with)" required maxlength="254">
         <label>Start as <select name="preset">${presetOptions}</select></label>
         <label>Training path <select name="training_track">${Object.entries(TRAINING.TRACKS).map(([k, t]) =>
-          `<option value="${k}">${escEmail(t.label)}</option>`).join('')}</select></label>
+          `<option value="${k}"${TRAINING.trackOf((req.query || {}).add_track) === k && (req.query || {}).add_track ? ' selected' : ''}>${escEmail(t.label)}</option>`).join('')}</select></label>
         <label>Hourly wage $ <input name="hourly_rate" type="number" min="0" max="200" step="0.25" value="0" style="width:80px"></label>
         <label>Commission % of price, own leads <input name="commission_pct" type="number" min="0" max="50" step="0.25" value="3" style="width:80px"></label>
         <button type="submit">Add</button>
@@ -29136,7 +29136,9 @@ function hireDecisionCard(r) {
     <form method="post" action="/admin/hiring/${r.id}/decision" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
       ${Object.entries(HIRING.DECISIONS).map(([k, [label]]) => btn(k, label)).join('')}
       ${r.decision ? '<button class="btn btn-ghost" type="submit" name="decision" value="">Clear</button>' : ''}</form>
-    ${r.decision === 'hired' ? '<p class="muted">Next: add them on <a href="/admin/staff">Staff</a>. Their Training page and the playbook take it from there.</p>' : ''}
+    ${r.decision === 'hired' ? `<p style="margin-top:10px">Marking someone hired does not put them on Team. Add them as a helper next,
+      with the email they will sign in with; their Training page and the playbook take it from there.</p>
+      <a class="btn" href="/admin/staff?${new URLSearchParams({ add_name: r.name, add_track: r.role === 'designer' ? 'design' : 'sales' })}#add">Add ${escEmail(r.name)} to Team</a>` : ''}
     ${r.decision === 'rejected' ? `<p class="muted">Their test links are closed and no more emails come about them.</p>${hireRejectionBox(r)}` : ''}</div>`;
 }
 
