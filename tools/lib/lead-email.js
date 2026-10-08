@@ -24,8 +24,8 @@ function infoRequest(lead, { signer = 'June', shop = "June's Tees" } = {}) {
 Thank you for reaching out to ${shop}${about}! To put your quote together, could you tell us a little more:
 
 1. How many pieces, and the sizes you need
-2. The item and colour (for example a black t-shirt or a navy hoodie)
-3. Where the design goes (front, back, sleeve) and how many colours it has
+2. The item and color (for example a black t-shirt or a navy hoodie)
+3. Where the design goes (front, back, sleeve) and how many colors it has
 4. Your logo or artwork file, if you have one
 5. The date you need them by
 

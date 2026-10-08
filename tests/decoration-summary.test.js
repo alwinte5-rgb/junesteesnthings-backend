@@ -46,14 +46,14 @@ test('a two-decoration line names both, in order', () => {
   const out = fn({ method_id: 1, stage: '', method2_id: 22, stage2: 'mr8a5dlx', colours2: '1' }, catalog);
   assert.equal(out.length, 2);
   assert.equal(out[0], 'DTF Printing — front');
-  assert.equal(out[1], 'Screen Printing — back — 1 colour');
+  assert.equal(out[1], 'Screen Printing — back — 1 color');
 });
 
 test('the colour count is said only where the price turns on it', () => {
   /* Screen printing is priced per colour, so the count belongs on the line.
-     DTF is not, and "1 colour" about a full-colour process would be wrong. */
-  assert.equal(fn({ method_id: 22, stage: '', colours: '4' }, catalog)[0], 'Screen Printing — front — 4 colours');
-  assert.equal(fn({ method_id: 22, stage: '', colours: '1' }, catalog)[0], 'Screen Printing — front — 1 colour');
+     DTF is not, and "1 color" about a full-colour process would be wrong. */
+  assert.equal(fn({ method_id: 22, stage: '', colours: '4' }, catalog)[0], 'Screen Printing — front — 4 colors');
+  assert.equal(fn({ method_id: 22, stage: '', colours: '1' }, catalog)[0], 'Screen Printing — front — 1 color');
   assert.equal(fn({ method_id: 1, stage: '', colours: '4' }, catalog)[0], 'DTF Printing — front');
 });
 

@@ -195,7 +195,7 @@ ${howToApply('Purple Tee', [
     payNote: 'Check OLJ\'s Suggest-a-Salary box for graphic design before posting. Graphic design posts on OLJ mostly offer $4–6 an hour (2026-10); $4.50 starts just above the common rate, the same approach as sales.',
     lookFor: [
       'A portfolio link that opens, with work made for print on clothing or merch, not only social posts or web',
-      'Their one apparel piece explained concretely: colours, file type, how it was prepared for print',
+      'Their one apparel piece explained concretely: colors, file type, how it was prepared for print',
       'Illustrator (vector) skill; Photoshop; CorelDRAW or Affinity is fine too',
       'The sample answer turns "make it pop" into specific choices and mentions a proof',
       'A speed test of at least 25 Mbps',
@@ -207,7 +207,7 @@ June's Tees is a growing US custom apparel and print shop (screen printing, DTF,
 
 What you'll do
 1. Turn customer requests from our sales team into designs and mockups
-2. Prepare print-ready files: vector art, spot-colour separations for screen printing, simplified versions for embroidery, and transparent PNGs for DTF
+2. Prepare print-ready files: vector art, spot-color separations for screen printing, simplified versions for embroidery, and transparent PNGs for DTF
 3. Send proofs to customers, make their changes quickly and kindly, and follow up when their artwork or approval is late
 4. Redraw low-quality customer logos as clean vector art
 5. In quiet time, create ready-made designs for upcoming seasons and events, and mockups for our website and social media
@@ -221,7 +221,7 @@ You'll do great here if you are
 Tools you'll use
 Adobe Illustrator and Photoshop (your own licence), Google Drive, and our own staff dashboard (jobs, proofs, team chat). Canva is a plus. We'll train you on our printing methods and systems.
 
-Nice to have: experience designing for screen printing, embroidery or DTF; embroidery digitising; colour separations; video or Reels editing.
+Nice to have: experience designing for screen printing, embroidery or DTF; embroidery digitising; color separations; video or Reels editing.
 
 Schedule
 - 20 hours/week, Monday–Friday

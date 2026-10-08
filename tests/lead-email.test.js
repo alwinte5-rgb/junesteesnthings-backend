@@ -16,7 +16,7 @@ test('the ready message asks for what a quote needs, by first name, about what t
   const m = M.infoRequest({ name: 'Maria Lopez', description: 'Shirts for a family reunion' }, { signer: 'June', shop: "June's Tees" });
   assert.match(m.body, /^Hi Maria,/);
   assert.match(m.body, /"Shirts for a family reunion"/);
-  for (const ask of [/How many pieces/, /colour/, /Where the design goes/, /artwork/, /date you need/]) assert.match(m.body, ask);
+  for (const ask of [/How many pieces/, /color/, /Where the design goes/, /artwork/, /date you need/]) assert.match(m.body, ask);
   assert.match(m.body, /\nJune\n/);
   assert.match(M.infoRequest({}).body, /^Hi,/, 'no name, no stray space');
   assert.ok(M.infoRequest({ description: 'x'.repeat(300) }).body.includes('...'), 'a long enquiry is shortened');
