@@ -1158,106 +1158,54 @@ const FINAL = {
   ],
 };
 
-/* Photos for each lesson, from the shop's own work, and its "check yourself"
-   questions: multiple choice, answered on the page, never marked. */
+/* Photos for each lesson, from the shop's own work. Its pages and their
+   questions are in sales-core-pages.js. */
 const W = (f) => `/assets/images/work/${f}.jpg`;
 const LESSON_EXTRAS = {
   's1-welcome': {
     images: [{ src: W('hero-banner'), alt: 'Finished custom shirts from June\'s Tees' }, { src: W('youth-team-shirts'), alt: 'A youth team in their custom shirts' }],
-    checks: [
-      { q: 'A customer asks for 20% off if they order today. What do you say?', choices: ['"Sure, 20% off today only!"', '"Let me check with June and get back to you by 3pm"', '"We never give discounts"'], answer: 1, why: 'Discounts are June\'s decision. Reply now, give a time, ask June.' },
-      { q: 'You are not sure if a garment comes in pink. What do you do?', choices: ['Say yes, it probably does', 'Say you will check and reply by a set time, then ask June', 'Ignore that part of the message'], answer: 1, why: 'Never guess. Give a time, ask, and keep the time.' },
-      { q: 'Which of these is NOT something you ever promise on your own?', choices: ['That a proof comes before printing', 'A refund', 'That you will reply by 2pm'], answer: 1, why: 'Refunds, discounts, dates and exact colour matches are June\'s.' },
-    ],
   },
   's2-tour': {
     images: [{ src: '/assets/images/work/logo-tee-and-cap-set.jpg', alt: 'A logo tee and cap set' }],
-    checks: [
-      { q: 'Your shift starts. Where do you go first?', choices: ['Quotes', 'My Day', 'Playbook'], answer: 1, why: 'My Day lists what needs you, oldest first.' },
-      { q: 'Your quote says "waiting for approval". What does that mean?', choices: ['Something is broken', 'June checks it before the customer sees it', 'The customer declined'], answer: 1, why: 'While you are in training, June checks quotes and messages first.' },
-      { q: 'Where do you see everything a customer ordered before?', choices: ['Customers', 'Team chat', 'Training'], answer: 0, why: 'Search Customers by name, email or phone.' },
-    ],
   },
   's3-methods': {
     images: [{ src: W('screen-printing-press'), alt: 'Screen printing: one screen per colour' }, { src: W('full-color-dtf-transfer'), alt: 'DTF: a full-colour transfer' },
       { src: W('embroidery-machine-polos'), alt: 'Embroidery on polos' }],
-    checks: [
-      { q: '30 shirts, a 2-colour logo on the front. Which method?', choices: ['Screen printing', 'DTF (or embroidery on polos and caps)', 'We cannot do 30'], answer: 1, why: 'Screen printing starts at 50 pieces. DTF has no minimum.' },
-      { q: '200 shirts, a 1-colour design. Usually the best value?', choices: ['Screen printing', 'DTF', 'Embroidery'], answer: 0, why: 'Screens are a one-time charge spread over many shirts.' },
-      { q: 'Why does a 4-colour design cost more to screen print?', choices: ['Ink is expensive', 'Each colour, plus the white base, is its own screen', 'It takes longer to dry'], answer: 1, why: 'Screens = (ink colours + 1 for the white base) x print places.' },
-    ],
   },
   's3-products': {
     images: [{ src: W('company-zip-hoodies'), alt: 'Company zip hoodies' }, { src: W('custom-printed-banner'), alt: 'A custom printed banner' },
       { src: '/assets/images/products/big-head-cutouts.svg', alt: 'Big Head Cutouts' }],
-    checks: [
-      { q: 'A customer needs shirts in 3 business days. What do you say?', choices: ['"No problem, guaranteed"', '"We offer rush for a fee. Let me check the press and confirm today by [time]"', '"Impossible"'], answer: 1, why: 'Rush is +30% for 3 days, and only after checking the press.' },
-      { q: 'A coach wants giant photo heads of the players for the stands. What is that?', choices: ['A banner', 'Big Head Cutouts', 'A yard sign'], answer: 1, why: 'Big Head Cutouts, sold as singles or packs.' },
-      { q: 'When does the turnaround clock start?', choices: ['At the first message', 'When the proof is approved and the deposit paid', 'When you send the quote'], answer: 1, why: 'Late artwork or approval moves the date.' },
-    ],
   },
   's4-leads': {
     images: [{ src: '/assets/images/email/school-team.jpg', alt: 'A school team order' }],
-    checks: [
-      { q: 'A message says only "how much for hoodies?". What do you send?', choices: ['Our cheapest hoodie price', 'Thanks, plus the five questions in one message', 'Nothing until they send more'], answer: 1, why: 'The /quote reply asks quantity and sizes, garment, placement and colours, artwork, and the date.' },
-      { q: 'You answered a chat but forgot to log it. Does it count as answered?', choices: ['Yes', 'No: log it on the lead', 'Only if they reply'], answer: 1, why: 'Logging on the lead is what counts.' },
-      { q: 'How fast should a website chat get a reply?', choices: ['15 minutes', '1 hour', 'Same day'], answer: 0, why: 'Chats 15 minutes, forms 1 hour.' },
-    ],
   },
   's5-quotes': {
     images: [{ src: W('full-color-team-logo-print'), alt: 'A full-colour team logo print' }],
-    checks: [
-      { q: 'What goes in "Each $" on a normal item?', choices: ['Your best guess', 'Nothing: leave it blank so the system prices it', 'The garment cost'], answer: 1, why: 'A typed price is a custom price June has to approve.' },
-      { q: 'A customer wants to compare a tee and a hoodie. What do you build?', choices: ['Two quotes', 'One quote with both items ticked Optional', 'An email with two prices'], answer: 1, why: 'Optional items let the customer tick what they want.' },
-      { q: 'A school asks for no tax. What do you need?', choices: ['Nothing', 'Their Illinois exemption letter (E-number), approved first', 'The principal\'s signature'], answer: 1, why: 'Tax comes off only with an approved certificate.' },
-    ],
   },
   's5-practice': {
     images: [],
-    checks: [
-      { q: 'Why leave the phone and email blank on a practice quote?', choices: ['To save time', 'So nothing can ever be sent to anyone', 'The form requires it'], answer: 1, why: 'A practice quote must never reach a real person.' },
-      { q: 'Which button keeps a quote private?', choices: ['Finish', 'Save as draft', 'Duplicate'], answer: 1, why: 'A draft sends nothing and the link does not open.' },
-    ],
   },
   's7-upsell': {
     images: [{ src: W('logo-tee-and-cap-set'), alt: 'A tee and cap set: an easy add-on' }, { src: W('youth-team-shirts'), alt: 'Team shirts with names and numbers' }],
-    checks: [
-      { q: 'The Upsell box says "at 48 pieces the price drops". The customer has not answered yet. What do you do?', choices: ['Press Apply & save', 'Offer it as an optional item or in your follow-up', 'Ignore it'], answer: 1, why: 'Apply only with their yes; otherwise offer it.' },
-      { q: 'A customer said their budget is fixed. Which upsell is OK?', choices: ['Hoodies for everyone', 'A price break that lowers their per-piece price', 'Rush'], answer: 1, why: 'On a fixed budget, only what saves them money.' },
-      { q: 'They said no to the back print. What next?', choices: ['Ask again tomorrow', 'Drop it', 'Add it anyway'], answer: 1, why: 'Offer once. A no is a no.' },
-    ],
   },
   's8-prospect': {
     images: [{ src: W('kindergarten-back-to-school-tee'), alt: 'A back-to-school class shirt' }, { src: W('youth-team-shirts'), alt: 'A youth sports team' }],
-    checks: [
-      { q: 'You found a coach\'s phone number on a league website. Do you text them?', choices: ['Yes, texts get replies', 'No: email or DM only', 'Only once'], answer: 1, why: 'Never text or call a number you found online.' },
-      { q: 'When do you click "I found this customer"?', choices: ['After they pay', 'When you add them on Leads, before you quote', 'Never'], answer: 1, why: 'Only then is it your rep lead.' },
-      { q: 'It is February. Who is most likely to need shirts soon?', choices: ['Spring sports leagues', 'Back-to-school PTOs', 'Homecoming'], answer: 0, why: 'January to March: spring sports sign-ups and spring break trips.' },
-    ],
   },
   's9-reorders': {
     images: [{ src: W('embroidered-business-apparel'), alt: 'Embroidered business apparel: a classic reorder' }],
-    checks: [
-      { q: 'A league ordered last March. When do you get in touch?', choices: ['Next March', 'A few weeks before the spring season', 'Only if they write'], answer: 1, why: 'Get there while they are deciding.' },
-      { q: 'A 1-star review comes in. What do you do first?', choices: ['Reply defending the shop', 'Tell June the same day and draft a calm reply', 'Delete it'], answer: 1, why: 'June sees it before anything is posted.' },
-    ],
   },
   's10-money': {
     images: [{ src: W('screen-printing-silkscreen'), alt: 'A screen ready for the press' }],
-    checks: [
-      { q: 'Another shop is 15% cheaper. What do you do?', choices: ['Match it', 'Ask to see their quote, explain what ours includes, check with June', 'Offer 10%'], answer: 1, why: 'Price matches are June\'s.' },
-      { q: 'The customer says "looks great!" about a proof on a call. Can it print?', choices: ['Yes', 'Not until approval is in writing and logged', 'After 24 hours'], answer: 1, why: 'Approval must be in writing.' },
-      { q: 'At 3%, commission on a $1,082.50 rep-lead quote with $82.50 tax is…', choices: ['$32.48', '$30.00', '$0'], answer: 1, why: '3% of the price before tax ($1,000).' },
-    ],
   },
   's10-social': {
     images: [{ src: W('juneteenth-graphic-design'), alt: 'A finished design, ready to share' }, { src: W('ghost-graphic-tee'), alt: 'A graphic tee photo for a post' }],
-    checks: [
-      { q: 'May you post a photo of a customer\'s team shirts?', choices: ['Yes, it is our work', 'Only with the customer\'s permission (and a parent\'s OK for children\'s faces)', 'Only on Instagram'], answer: 1, why: 'Never post a customer\'s photo, name or design without permission.' },
-      { q: 'COS made a post that mentions a 20% discount. What do you do?', choices: ['Schedule it', 'Fix it: nothing about prices or discounts June has not approved', 'Post it on one platform only'], answer: 1, why: 'Read every generated post before it is scheduled.' },
-    ],
   },
 };
-for (const l of MODULES.flatMap((m) => m.lessons)) Object.assign(l, LESSON_EXTRAS[l.id] || {});
+const PAGES = require('./sales-core-pages');
+for (const l of MODULES.flatMap((m) => m.lessons)) {
+  Object.assign(l, LESSON_EXTRAS[l.id] || {});
+  l.pages = PAGES[l.id] || [{ from: null, checks: [] }];
+  l.checks = l.pages.flatMap((pg) => pg.checks);
+}
 
 module.exports = { key: 'sales-core', title: 'Sales', track: 'sales', articles: A, glossary: GLOSSARY, modules: MODULES, final: FINAL };

@@ -121,7 +121,7 @@ function courseSteps(course, features = FEATURES) {
     }
     for (const l of m.lessons) {
       push({ key: `lesson:${l.id}`, type: 'lesson', article: l.article, minutes: l.minutes, goals: l.goals || [],
-        checks: l.checks || [], tryIt: l.tryIt || [], images: l.images || [], title: l.article.replace(/^Sales course [0-9a-z]+: /, '') });
+        checks: l.checks || [], pages: l.pages || [], tryIt: l.tryIt || [], images: l.images || [], title: l.article.replace(/^Sales course [0-9a-z]+: /, '') });
     }
     for (const x of m.practice || []) push(!m.quiz && x.type === 'exam' ? { ...x, gate: true } : x);
     if (m.quiz) {
@@ -195,6 +195,39 @@ function progress(ticks, facts = {}, features = FEATURES, track = DEFAULT_TRACK,
            complete: done === work.length,
            minutes: { expected: steps.reduce((n, s) => n + (Number(s.minutes) || 0), 0),
                       took: steps.reduce((n, s) => n + (s.took || 0), 0) } };
+}
+
+/**
+ * A lesson article cut into pages. The article is split into sections at its
+ * bold heading lines ("**Who we are**"); a page starts at the section whose
+ * heading is its `from` (the first page starts at the top). If any `from`
+ * heading is missing (the owner renamed it in the Playbook), the sections
+ * are shared out evenly by length across the same number of pages instead,
+ * so an edit never breaks a lesson. Returns one markdown string per page.
+ */
+function lessonPages(body, pages = []) {
+  const blocks = String(body || '').split(/\n{2,}/);
+  const isHead = (b) => /^\*\*[^*\n]+\*\*$/.test(b.trim());
+  const sections = [];
+  for (const b of blocks) {
+    if (!sections.length || isHead(b)) sections.push({ head: isHead(b) ? b.trim().slice(2, -2) : null, blocks: [] });
+    sections[sections.length - 1].blocks.push(b);
+  }
+  const want = Math.max(1, Math.min(pages.length || 1, sections.length));
+  const starts = pages.slice(1, want).map((pg) => sections.findIndex((x) => x.head === pg.from));
+  let cuts;
+  if (starts.every((i, n) => i > 0 && (n === 0 || i > starts[n - 1]))) cuts = [0, ...starts];
+  else {
+    const size = sections.map((x) => x.blocks.join(' ').length);
+    const total = size.reduce((a, b) => a + b, 0);
+    cuts = [0];
+    let run = 0;
+    for (let i = 0; i < sections.length && cuts.length < want; i++) {
+      run += size[i];
+      if (run >= (total * cuts.length) / want && i + 1 < sections.length) cuts.push(i + 1);
+    }
+  }
+  return cuts.map((c, n) => sections.slice(c, cuts[n + 1] || sections.length).flatMap((x) => x.blocks).join('\n\n'));
 }
 
 /** Is this step open to the helper now? False for a locked module's step. */
@@ -318,6 +351,6 @@ function placeholders(text) {
 }
 
 module.exports = { FEATURES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz,
-  visibleSteps, stepByKey, mayTick, progress, stepOpen, placeholders, passMark, courseSteps,
+  visibleSteps, stepByKey, mayTick, progress, stepOpen, placeholders, passMark, courseSteps, lessonPages,
   COURSES: COURSES.COURSES, SALES_ROLES: COURSES.SALES_ROLES, salesRoleOf: COURSES.salesRoleOf,
   lessonArticles: COURSES.lessonArticles, glossary: COURSES.glossary };
