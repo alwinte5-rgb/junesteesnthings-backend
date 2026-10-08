@@ -33,6 +33,7 @@ const { parseFirstTouch, firstTouchLabel } = require('./tools/lib/first-touch');
 const SITEHEALTH = require('./tools/lib/site-health');
 const NUDGE = require('./tools/lib/lead-nudges');
 const SIGNAGE = require('./tools/lib/signage');
+const QSIGNS = require('./tools/lib/quote-signs');
 const SIGN_FAMILIES = require('./tools/lib/sign-families');
 const LEADMAIL = require('./tools/lib/lead-email');
 const REINTRO = require('./tools/lib/reintro');
@@ -9174,7 +9175,7 @@ const PRODUCT_GROUPS = [
      were wrong: "canvas" swept in the whole Bella+Canvas range and every
      canvas tote — thirteen shirts filed under Signs — because a brand name
      and a material share a word. Match on what only a sign is called. */
-  ['Signs, Print & Décor',    /banner|cutout|poster|magnet|acrylic|business card|flyer|window graphic|wall graphic|yard sign/i],
+  ['Signs, Print & Décor',    /banner|cutout|poster|magnet|acrylic|business card|flyer|window graphic|wall graphic|floor graphic|vehicle graphic|yard sign|rigid sign|photo panel|stretched canvas/i],
   ['Youth, Toddler & Infant', /youth|toddler|infant|bodysuit|onesie/i],
   ['Scrubs',                  /scrub/i],
   /* Before Hoodies, because a "Quarter-Zip Pullover" is a quarter-zip and a
@@ -9293,6 +9294,10 @@ function productGroupOf(name) {
      how many, what each costs. Colour notes, photos and the size grid are real
      but occasional, so they sit behind a disclosure rather than stacking seven
      blocks per item down the page. */
+  /* Can the person filling this in change prices? The owner always; a helper
+     only with quotes.price (owner, 2026-10-08). The save route enforces it —
+     this only stops the boxes inviting a number that would be refused. */
+  const canPrice = actorLevel('quotes.price') === 'on';
   const lineHtml = (n, it) => {
     const hasExtras = it && ((it.details && it.details.length) ||
                              (it.images && it.images.length) || it.size_mix);
@@ -9397,7 +9402,8 @@ function productGroupOf(name) {
         <div class="row row-2 garm" style="margin-top:8px;align-items:center">
           <input name="blank_price${n}" class="bp" type="number" step="0.01" min="0" inputmode="decimal"
                  value="${it && it.blank_price ? val(it.blank_price) : ''}"
-                 style="font-size:13px;padding:6px 7px" placeholder="Garment $ each">
+                 style="font-size:13px;padding:6px 7px"
+                 ${canPrice ? 'placeholder="Garment $ each"' : 'readonly placeholder="Garment $ — set by the owner" title="Only the owner can change prices"'}>
         </div>
         <p class="muted bpnote" style="margin:3px 0 0;font-size:11.5px"></p>
         <!-- SIGNS. A banner, poster or sign is not a garment: it has no garment
@@ -9406,8 +9412,12 @@ function productGroupOf(name) {
              priced from the same table the designer sells from. Not posted:
              the result lands in Each $ and the customer-facing details. -->
         <p class="muted signnote" style="display:none;margin:6px 0 0;font-size:12.5px">A sign or print item:
-          no garment or decoration to choose. Type the price each under Quantity &amp; price.</p>
-        <div class="bsz" style="display:none;margin-top:8px"></div>
+          no garment or decoration to choose.${canPrice ? ' Type the price each under Quantity &amp; price.' : ''}</p>
+        <!-- The size and options; the SERVER prices them (tools/lib/quote-signs.js)
+             and posts nothing but the choices. data-sign is what this line was
+             saved with, so reopening puts the same size back. -->
+        <div class="bsz" style="display:none;margin-top:8px"
+             data-sign="${it && it.sign ? val(JSON.stringify(it.sign)) : ''}"></div>
       </div>
 
       <div class="lsec psec">
@@ -9438,7 +9448,9 @@ function productGroupOf(name) {
           <input name="qty${n}" class="q" type="number" inputmode="numeric" min="1"
                  value="${it ? val(it.qty) : ''}" placeholder="Qty">
           <input name="unit_price${n}" class="u" type="number" step="0.01" inputmode="decimal"
-                 value="${it && it.manual ? val(typedUnitOf(it)) : ''}" placeholder="Each $" title="Leave blank to use the calculated price">
+                 value="${it && it.manual && !it.sign_priced ? val(typedUnitOf(it)) : ''}"
+                 ${canPrice ? 'placeholder="Each $" title="Leave blank to use the calculated price"'
+                   : 'readonly placeholder="Priced from the list" title="Only the owner can change prices"'}>
           <b class="lt">—</b>
         </div>
         <!-- RUN NUMBER. Lines sharing a number pool their quantity for the
@@ -9465,7 +9477,7 @@ function productGroupOf(name) {
         aria-expanded="${hasExtras ? 'true' : 'false'}">
         <span class="caret">${hasExtras ? '&#9662;' : '&#9656;'}</span> Details, photos &amp; sizes</button>
       <div class="extra" style="display:${hasExtras ? 'block' : 'none'}">
-        <input name="details${n}" class="dt" value="${it ? val(it.details) : ''}"
+        <input name="details${n}" class="dt" value="${it ? val(it.sign ? (it.details_note || '') : it.details) : ''}"
                placeholder="Colour, ink, placement — the customer sees this">
         <div class="sizes" style="display:none;margin-top:8px"></div>
         <input type="hidden" name="sizemix${n}" class="sm" value="">
@@ -9597,7 +9609,7 @@ function productGroupOf(name) {
                 <option value="pct" ${E.discount_kind === 'pct' ? 'selected' : ''}>% off</option>
               </select>
               <input name="discount_value" type="number" step="0.01" min="0" inputmode="decimal"
-                     value="${Number(E.discount_value) > 0 ? val(String(Number(E.discount_value))) : ''}"
+                     value="${Number(E.discount_value) > 0 ? val(String(Number(E.discount_value))) : ''}"${canPrice ? '' : ' readonly title="Only the owner can give a discount"'}
                      placeholder="0" style="width:78px;padding:5px 7px;font-size:13px">
               <input name="discount_note" value="${val(E.discount_note)}" maxlength="120"
                      placeholder="Reason — they see this"
@@ -9673,13 +9685,14 @@ function productGroupOf(name) {
          the same rule that files it under Signs in the product list, so the
          two cannot disagree. A banner (not a banner stand) also gets the sizer. */
       var SIGN_RE = new RegExp(${JSON.stringify(PRODUCT_GROUPS[0][1].source)}, 'i');
-      var BANNER_RE = /banner/i, BANNER_NOT_RE = /stand|retractable/i;
-      var BANNER = ${JSON.stringify(SIGNAGE.bannerTable())};
+      /* Each catalogue product's sign kind (quote-signs.js signKindOf), and what
+         each kind's sizer offers. No prices here: /admin/api/sign-price asks
+         the server, which is also what prices the save. */
+      var SIGN_KIND = ${JSON.stringify(Object.fromEntries(catalog.products
+        .map((p) => [String(p.id), QSIGNS.signKindOf(p.name)]).filter((x) => x[1])))};
+      var SIGN_OPTS = ${JSON.stringify(QSIGNS.sizerOptions())};
       function isSignProduct(prod){ return !!(prod && SIGN_RE.test(String(prod.name || ''))); }
-      function isBannerProduct(prod){
-        var nm = String((prod && prod.name) || '');
-        return isSignProduct(prod) && BANNER_RE.test(nm) && !BANNER_NOT_RE.test(nm);
-      }
+      function signKindOf(prod){ return prod ? (SIGN_KIND[String(prod.id)] || null) : null; }
       /* ── Upsell ideas (the owner, 2026-10-06) ─────────────────────────────
          Worked out from the same priceLine() the totals use, on every calc():
          singles that should be a pack, the next price break, a back print, a
@@ -9936,89 +9949,105 @@ ${quotePricingSource()}
         btn.querySelector('.caret').innerHTML = open ? '&#9656;' : '&#9662;';
       }
 
-      /* BANNER SIZER. Width and height in whole feet, the vinyl and the
-         finishing; the price per banner comes from BANNER (the table the
-         designer sells from), so a quote and the website agree. It fills
-         Each $ — a typed price is all-in on save, delivery included — until
-         someone types their own figure there (data-auto is then dropped).
-         Returns true when this line carried the order's delivery. */
-      function bannerSizer(L, on, takeFreight){
+      /* SIGN SIZER. The size and options for a banner, yard sign, magnet or any
+         other Signs365 item, as fields named like every other line field so
+         they post and renumber with it. The price comes from the server
+         (/admin/api/sign-price) — the same function that prices the save — and
+         is held on the line (data-sign-each) for the totals; Each $ stays
+         empty unless the owner types a price of their own. */
+      var signAsked = {};
+      function signSizer(L, kind, takeFreight){
         var box = L.querySelector('.bsz');
         if (!box) return false;
-        if (!on) { box.style.display = 'none'; return false; }
+        if (!kind) { box.style.display = 'none'; box.innerHTML = ''; box.dataset.kind = ''; delete L.dataset.signEach; return false; }
+        var o = SIGN_OPTS[kind];
         box.style.display = 'block';
-        var dt = L.querySelector('.dt'), u = L.querySelector('.u'), q = L.querySelector('.q');
-        if (box.dataset.built !== '1') {
-          var feet = function(cls, label, def){
-            var o = '';
-            for (var i = 1; i <= BANNER.max.long; i++) o += '<option value="' + i + '"' + (i === def ? ' selected' : '') + '>' + i + ' ft</option>';
-            return '<label style="margin:0;font-size:11px">' + label + '<select class="' + cls + '" style="margin-top:2px">' + o + '</select></label>';
+        var n = L.dataset.n;
+        if (box.dataset.kind !== kind) {
+          var saved = {};
+          try { saved = box.dataset.sign ? JSON.parse(box.dataset.sign) : {}; } catch (e) { saved = {}; }
+          if (saved.kind && saved.kind !== kind) saved = {};
+          box.dataset.kind = kind;
+          var esc = function(t){ return String(t).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
+          var sel = function(cls, name, label, opts, cur){
+            return '<label style="margin:8px 0 0;font-size:11px">' + label + '<select class="' + cls + '" name="' + name + n + '" style="margin-top:2px">' +
+              opts.map(function(x){ return '<option value="' + esc(x[0]) + '"' + (String(x[0]) === String(cur) ? ' selected' : '') + '>' + esc(x[1]) + '</option>'; }).join('') +
+              '</select></label>';
           };
-          box.innerHTML =
-            '<div style="padding:10px;background:#f6f8fd;border:1px solid #e3e8f2;border-radius:8px">' +
-            '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#1848B8;font-weight:700;margin-bottom:6px">Banner size &amp; finishing</div>' +
-            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
-              feet('bw', 'Width', 6) + feet('bh', 'Height', 3) +
-            '</div>' +
-            '<label style="margin:8px 0 0;font-size:11px">Vinyl<select class="bm" style="margin-top:2px">' +
-              BANNER.materials.map(function(m){ return '<option value="' + m.key + '">' + m.label + '</option>'; }).join('') +
-            '</select></label>' +
-            '<label style="margin:8px 0 0;font-size:11px">Hanging<select class="bhg" style="margin-top:2px">' +
-              BANNER.hanging.map(function(h){ return '<option value="' + h.key + '">' + h.label + '</option>'; }).join('') +
-            '</select></label>' +
-            '<label class="bwsl" style="display:flex;align-items:center;gap:6px;margin:8px 0 0;font-size:13px;text-transform:none;letter-spacing:0;font-weight:400">' +
-              '<input type="checkbox" class="bws" style="width:auto;margin:0"> Wind slits</label>' +
-            '<p class="bnote" style="margin:8px 0 0;font-size:12.5px;color:#3f4a5f"></p>' +
-            '</div>';
-          box.dataset.built = '1';
-          /* Reopening a saved quote: read the size back from the details it wrote. */
-          var saved = /(\\d+) ft wide \u00d7 (\\d+) ft tall/.exec(dt ? dt.value : '');
-          if (saved) {
-            box.querySelector('.bw').value = saved[1]; box.querySelector('.bh').value = saved[2];
-            BANNER.materials.forEach(function(m){ if (dt.value.indexOf(m.label) > -1) box.querySelector('.bm').value = m.key; });
-            BANNER.hanging.forEach(function(h){ if (dt.value.indexOf(h.label) > -1) box.querySelector('.bhg').value = h.key; });
-            box.querySelector('.bws').checked = dt.value.indexOf('wind slits') > -1;
-          } else if (u && !String(u.value).trim()) {
-            u.dataset.auto = '1';
+          var html = '<div style="padding:10px;background:#f6f8fd;border:1px solid #e3e8f2;border-radius:8px">' +
+            '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#1848B8;font-weight:700">' + esc(o.label) + ' size &amp; options</div>';
+          if (kind === 'banner') {
+            var ft = []; for (var i = 1; i <= o.max.long; i++) ft.push([i, i + ' ft']);
+            html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
+              sel('sgw', 'sgw', 'Width', ft, saved.w || 6) + sel('sgh', 'sgh', 'Height', ft, saved.h || 3) + '</div>' +
+              sel('sgm', 'sgm', 'Vinyl', o.materials.map(function(m){ return [m.key, m.label]; }), saved.mat) +
+              sel('sghang', 'sghang', 'Hanging', o.hanging.map(function(h){ return [h.key, h.label]; }), saved.hang);
+          } else if (o.sizing === 'stock') {
+            html += sel('sgsize', 'sgsize', 'Size', o.sizes.map(function(z){ return [z.key, z.label]; }), saved.size) +
+              sel('sgm', 'sgm', 'Material', o.materials.map(function(m){ return [m.key, m.label]; }), saved.mat);
+          } else {
+            var lim = o.limits;
+            html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
+              '<label style="margin:8px 0 0;font-size:11px">Width (inches)<input class="sgw" name="sgw' + n + '" type="number" min="' + lim.min + '" max="' + lim.max_w + '" step="0.5" inputmode="decimal" value="' + (saved.w || '') + '" style="margin-top:2px"></label>' +
+              '<label style="margin:8px 0 0;font-size:11px">Height (inches)<input class="sgh" name="sgh' + n + '" type="number" min="' + lim.min + '" max="' + lim.max_h + '" step="0.5" inputmode="decimal" value="' + (saved.h || '') + '" style="margin-top:2px"></label></div>' +
+              sel('sgm', 'sgm', 'Material', o.materials.map(function(m){ return [m.key, m.label]; }), saved.mat);
           }
-          box.querySelectorAll('select,input').forEach(function(el){
-            el.addEventListener('change', function(){ if (u) u.dataset.auto = '1'; calc(); });
-          });
+          var ups = [];
+          Object.keys(o.sheet_upgrades || {}).forEach(function(k){ ups.push({ key: k, label: o.sheet_upgrades[k].label, only: null }); });
+          (o.upgrades || []).forEach(function(u){ ups.push(u); });
+          var had = saved.up || [];
+          html += ups.map(function(u){
+            return '<label class="sgupl" data-only="' + esc((u.only || []).join(',')) + '" style="display:flex;align-items:center;gap:6px;margin:8px 0 0;font-size:13px;text-transform:none;letter-spacing:0;font-weight:400">' +
+              '<input type="checkbox" class="sgu" value="' + esc(u.key) + '"' + (had.indexOf(u.key) > -1 ? ' checked' : '') + ' style="width:auto;margin:0"> ' + esc(u.label) + '</label>';
+          }).join('') +
+            '<input type="hidden" class="sgup" name="sgup' + n + '" value="">' +
+            '<p class="bnote" style="margin:8px 0 0;font-size:12.5px;color:#3f4a5f"></p></div>';
+          box.innerHTML = html;
+          box.querySelectorAll('select,input').forEach(function(el){ el.addEventListener('change', calc); el.addEventListener('input', calc); });
         }
-        var w = parseInt(box.querySelector('.bw').value, 10), h = parseInt(box.querySelector('.bh').value, 10);
-        var mk = box.querySelector('.bm').value, hk = box.querySelector('.bhg').value;
-        var key = w + 'x' + h;
-        var base = (BANNER.prices[mk] || {})[key];
-        var fin = BANNER.finishing[key] || {};
-        var wsAllowed = fin.wind_slits != null;
-        var wsBox = box.querySelector('.bws');
-        box.querySelector('.bwsl').style.display = wsAllowed ? 'flex' : 'none';
-        if (!wsAllowed) wsBox.checked = false;
+        /* Upgrades offered only on some materials hide on the others. */
+        var mat = (box.querySelector('.sgm') || {}).value || '';
+        var picked = [];
+        box.querySelectorAll('.sgupl').forEach(function(lab){
+          var only = lab.dataset.only ? lab.dataset.only.split(',') : null;
+          var ok = !only || only.indexOf(mat) > -1;
+          lab.style.display = ok ? 'flex' : 'none';
+          var cb = lab.querySelector('.sgu');
+          if (!ok) cb.checked = false;
+          if (cb.checked) picked.push(cb.value);
+        });
+        box.querySelector('.sgup').value = picked.join(',');
+        var v = function(c){ var e = box.querySelector(c); return e ? e.value : ''; };
+        var spec = { w: v('.sgw'), h: v('.sgh'), size: v('.sgsize'), mat: mat, hang: v('.sghang'), up: picked };
+        var qty = Math.max(1, parseInt(L.querySelector('.q').value, 10) || 1);
+        var key = JSON.stringify([kind, spec, qty, !!takeFreight]);
         var note = box.querySelector('.bnote');
-        if (base == null) {
-          note.innerHTML = '<b style="color:#b45309">No price for ' + w + ' ft \u00d7 ' + h + ' ft.</b> The short side can be up to ' +
-            BANNER.max.short + ' ft and the long side up to ' + BANNER.max.long + ' ft.';
-          return false;
+        if (box.dataset.asked !== key) {
+          box.dataset.asked = key;
+          delete L.dataset.signEach;
+          note.textContent = 'Working out the price…';
+          var done = function(r){
+            if (box.dataset.asked !== key) return;      // the size changed while asking
+            if (r && r.ok) {
+              L.dataset.signEach = String(r.each);
+              L.dataset.signFreight = r.freight && !r.oversized ? '1' : '';
+              note.innerHTML = '<b>$' + r.each.toFixed(2) + ' each</b>' +
+                (r.freight ? ' <span class="muted">(Signs365 delivery included' + (qty > 1 ? ', spread over ' + qty : '') + ')</span>' : '');
+            } else {
+              delete L.dataset.signEach;
+              note.innerHTML = '<b style="color:#b45309">' + String((r && r.error) || 'Could not price this size.').replace(/[<>&]/g, '') + '</b>';
+            }
+            calc();
+          };
+          if (signAsked[key]) done(signAsked[key]);
+          else fetch('/admin/api/sign-price', { method: 'POST', credentials: 'same-origin',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ kind: kind, spec: spec, qty: qty, freight: !!takeFreight }) })
+            .then(function(res){ return res.json(); })
+            .then(function(r){ signAsked[key] = r; done(r); })
+            .catch(function(){ done({ ok: false, error: 'Could not reach the price list. Check the connection and change a size to try again.' }); });
         }
-        var finish = (fin[hk] || 0) + (wsBox.checked ? (fin.wind_slits || 0) : 0);
-        var qty = Math.max(1, parseInt(q.value, 10) || 1);
-        var freight = takeFreight ? (BANNER.freight || 0) : 0;
-        var each = Math.ceil((base + finish + freight / qty) * 100) / 100;
-        if (u && u.dataset.auto === '1') {
-          u.value = each.toFixed(2);
-          var mLabel = '', hLabel = '';
-          BANNER.materials.forEach(function(m){ if (m.key === mk) mLabel = m.label; });
-          BANNER.hanging.forEach(function(x){ if (x.key === hk) hLabel = x.label; });
-          if (dt) dt.value = w + ' ft wide \u00d7 ' + h + ' ft tall \u00b7 ' + mLabel + ' \u00b7 ' + hLabel +
-            (wsBox.checked ? ' \u00b7 wind slits' : '');
-        }
-        note.innerHTML = '$' + base.toFixed(2) + ' a banner' +
-          (finish ? ' + $' + finish.toFixed(2) + ' finishing' : '') +
-          (freight ? ' + $' + freight.toFixed(2) + ' Signs365 delivery (once an order' + (qty > 1 ? ', spread over ' + qty : '') + ')' : '') +
-          ' = <b>$' + each.toFixed(2) + ' each</b>' +
-          (u && u.dataset.auto !== '1' ? ' <span style="color:#b45309">\u2014 Each $ was typed by hand, so it is kept. Change a size to use this price.</span>' : '') +
-          '. Ready in about ' + BANNER.turnaround_days + ' working days.';
-        return !!freight;
+        return L.dataset.signFreight === '1';
       }
 
       /* DUPLICATE. A copy of the item, with everything filled in, straight
@@ -10043,9 +10072,15 @@ ${quotePricingSource()}
         var cao = copy.querySelector('.addons');
         if (cao) delete cao.dataset.for;
         var bs = copy.querySelector('.bsz');
-        if (bs) { bs.innerHTML = ''; delete bs.dataset.built; }
-        var cu = copy.querySelector('.u'), su0 = src.querySelector('.u');
-        if (cu && su0 && su0.dataset.auto === '1') cu.dataset.auto = '1';
+        var srcBox = src.querySelector('.bsz');
+        if (bs && srcBox && srcBox.dataset.kind) {
+          /* Rebuilt for the copy from the source's current choices. */
+          var g = function(c){ var e = srcBox.querySelector(c); return e ? e.value : undefined; };
+          bs.dataset.sign = JSON.stringify({ kind: srcBox.dataset.kind, w: g('.sgw'), h: g('.sgh'), size: g('.sgsize'),
+            mat: g('.sgm'), hang: g('.sghang'), up: (g('.sgup') || '').split(',').filter(Boolean) });
+        }
+        if (bs) { bs.innerHTML = ''; delete bs.dataset.kind; delete bs.dataset.asked; }
+        delete copy.dataset.signEach; delete copy.dataset.signFreight;
         /* Saved-once hints belong to the quote as it was stored, not to a copy. */
         delete copy.dataset.savedAddons; delete copy.dataset.savedSizes; delete copy.dataset.savedColour;
         /* The colour picker is rebuilt so its swatch follows the pick, with
@@ -10307,7 +10342,8 @@ ${quotePricingSource()}
         /* Freight a group already carries, by run: it is taken whole. */
         var optGroupSeen = {};
         /* Signs365 delivers once an order: the first banner line carries it. */
-        var bannerFreightTaken = false;
+        /* Signs365 delivers once an order: the first required sign carries it. */
+        var signFreightTaken = false;
         ordered.forEach(function(L){
           var isOpt = isOptLine(L) === 1;
           var grp = isOpt ? runOfLine(L) : '';
@@ -10328,7 +10364,7 @@ ${quotePricingSource()}
           if (cutMeth) prod = null;
           /* A sign has no garment price, no sleeves and no decoration: hide
              them, and untick the print places so nothing is priced on it. */
-          var isSign = isSignProduct(prod);
+          var isSign = isSignProduct(prod) || !!signKindOf(prod);
           var psec = L.querySelector('.psec');
           if (psec) psec.style.display = (cutMeth || isSign) ? 'none' : '';
           if (isSign) L.querySelectorAll('.pon').forEach(function(cb){ cb.checked = false; });
@@ -10336,9 +10372,9 @@ ${quotePricingSource()}
           if (garm) garm.style.display = isSign ? 'none' : '';
           if (bpn) bpn.style.display = isSign ? 'none' : '';
           if (isSign) { var bpi = L.querySelector('.bp'); if (bpi) bpi.value = ''; }
-          var bannerHere = isBannerProduct(prod);
+          var signKind = signKindOf(prod);
           var sgn = L.querySelector('.signnote');
-          if (sgn) sgn.style.display = isSign && !bannerHere ? '' : 'none';
+          if (sgn) sgn.style.display = isSign && !signKind ? '' : 'none';
           var prints = [];
           var firstM = '';
           L.querySelectorAll('.ploc[data-loc]').forEach(function(row){
@@ -10391,7 +10427,7 @@ ${quotePricingSource()}
             L.querySelector('.sm').value = '';
           }
 
-          if (bannerSizer(L, bannerHere, !bannerFreightTaken)) bannerFreightTaken = true;
+          if (signSizer(L, signKind, !signFreightTaken) && !isOpt) signFreightTaken = true;
 
           var boxes = L.querySelectorAll('.sz');
           var mix = {}, sizeQty = 0, upTotal = 0;
@@ -10604,7 +10640,8 @@ ${quotePricingSource()}
             runPrimary: isRunPrimary,
             addons: addons, blankTiers: BLANK_TIERS,
             blankOverride: bpEl ? bpEl.value : '',
-            unitOverride: u.value
+            /* A sign with no typed price is priced by the server (signSizer). */
+            unitOverride: u.value || (signKind && L.dataset.signEach) || ''
           };
           var r = priceLine(plArgs);
 
@@ -10674,6 +10711,14 @@ ${quotePricingSource()}
           }
           if (costNote) {
             if ((!prod && !makeIt) || qty <= 0) { costNote.style.display = 'none'; }
+            else if (signKind) {
+              /* A sign has no garment or printing split: the server prices it
+                 from the Signs365 list (quote-signs.js). */
+              costNote.innerHTML = '<b>Internal:</b> ' + (u.value
+                ? 'your typed price is used — line bills ' + m2(lt)
+                : 'priced from the Signs365 sign list, cost x2 plus shop time');
+              costNote.style.display = 'block';
+            }
             else if (!prod) {
               costNote.innerHTML = makeIt;
               costNote.style.display = 'block';
@@ -10869,7 +10914,9 @@ ${quotePricingSource()}
         var fr = tpl.querySelector('.ploc[data-loc="front"] .pon');
         if (fr) fr.checked = true;
         var nbs = tpl.querySelector('.bsz');
-        if (nbs) { nbs.innerHTML = ''; nbs.style.display = 'none'; delete nbs.dataset.built; }
+        if (nbs) { nbs.innerHTML = ''; nbs.style.display = 'none'; nbs.dataset.sign = '';
+                   delete nbs.dataset.kind; delete nbs.dataset.asked; }
+        delete tpl.dataset.signEach; delete tpl.dataset.signFreight;
         delete tpl.querySelector('.u').dataset.auto;
         // A new item starts tidy: sizes hidden, extras closed.
         var sz = tpl.querySelector('.sizes');
@@ -11226,6 +11273,25 @@ async function customerHistory(q) {
 }
 
 /* Prior pricing for a returning customer — what keeps a repeat quote consistent. */
+/* The quote form's sign sizer asks here for a price (tools/lib/quote-signs.js),
+   so the form holds no copy of the formula and shows exactly what the save
+   will charge. Only choices come in; the price goes out. */
+app.post('/admin/api/sign-price', requireAdmin, (req, res) => {
+  const b = req.body && typeof req.body === 'object' ? req.body : {};
+  const kind = String(b.kind || '').slice(0, 30);
+  res.set('Cache-Control', 'no-store');
+  if (!Object.prototype.hasOwnProperty.call(QSIGNS.sizerOptions(), kind)) {
+    return res.status(400).json({ ok: false, error: 'That item is not priced by size.' });
+  }
+  const sp = b.spec && typeof b.spec === 'object' ? b.spec : {};
+  const qty = Math.min(100000, Math.max(1, parseInt(b.qty, 10) || 1));
+  res.json(QSIGNS.priceSign(kind, {
+    w: sp.w, h: sp.h, size: String(sp.size || '').slice(0, 20), mat: String(sp.mat || '').slice(0, 30),
+    hang: String(sp.hang || '').slice(0, 30),
+    up: (Array.isArray(sp.up) ? sp.up : []).map((x) => String(x).slice(0, 30)).slice(0, 10),
+  }, qty, b.freight === true));
+});
+
 app.get('/admin/api/quotes/prior', requireAdmin, async (req, res) => {
   const q = String(req.query.q || '').trim();
   if (q.length < 5) return res.json({ found: false });
@@ -11308,6 +11374,16 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
        rather than thrown at the first one, so a person fixing a multi-line quote
        is told about all of them at once. */
     const overCeiling = [];
+    /* SIGNS (tools/lib/quote-signs.js): a sized line is priced HERE from its
+       size and options, never from a posted price. A spec the price list
+       cannot make is refused with the reason, like the press ceiling below.
+       Delivery is once a quote: the first required sign carries it, and an
+       optional sign carries its own only when no required one does. */
+    const signErrors = [];
+    let signFreightTaken = false;
+    /* Every price a person typed on this save, for the helper price lock
+       (quotes.price) checked once the quote as it stands has been read. */
+    const typedPrices = [];
     /* Two fields sharing a name arrive as an array. Stringifying one silently
        merges every value into a single field and turns a price into NaN, which
        renders as $0.00 — so read only the first value. */
@@ -11446,7 +11522,24 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
 
       const q = sizeQty > 0 ? sizeQty : (qty || 1);
 
-      const rawUnit = one(b['unit_price' + i]);
+      let rawUnit = one(b['unit_price' + i]);
+      const signKind = prod ? QSIGNS.signKindOf(prod.name) : null;
+      let sign = null;
+      if (signKind && String(one(b['sgm' + i]) || '').trim()) {
+        const r = QSIGNS.priceSign(signKind, {
+          w: one(b['sgw' + i]), h: one(b['sgh' + i]), size: String(one(b['sgsize' + i]) || '').slice(0, 20),
+          mat: String(one(b['sgm' + i]) || '').slice(0, 30), hang: String(one(b['sghang' + i]) || '').slice(0, 30),
+          up: String(one(b['sgup' + i]) || '').split(',').map((x) => x.trim()).filter(Boolean).slice(0, 10),
+        }, q, !signFreightTaken);
+        if (!r.ok) signErrors.push({ line: i + 1, what: desc || prod.name, error: r.error });
+        else {
+          sign = r;
+          if (r.freight && !r.oversized && !optional) signFreightTaken = true;
+        }
+      }
+      if (priceTyped) typedPrices.push({ kind: 'unit', value: round2(Number(rawUnit)), what: desc || (prod ? prod.name : `Line ${i + 1}`) });
+      /* No price typed: the sign's own price is the line's price. */
+      if (sign && !priceTyped) rawUnit = String(sign.each);
 
       /* Every chargeable extra on this line, assembled from what was posted but
          PRICED FROM THE SERVER'S OWN TABLE. The form posts which add-ons are on,
@@ -11527,6 +11620,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
          positive so a stray minus cannot invert a line. */
       let blankOverride = Number(one(b['blank_price' + i]));
       if (!Number.isFinite(blankOverride) || blankOverride <= 0) blankOverride = null;
+      if (blankOverride != null) typedPrices.push({ kind: 'blank', value: round2(blankOverride), what: desc || (prod ? prod.name : `Line ${i + 1}`) });
 
       /* THE price calculation — the same source the browser ran. */
       /* The chosen colourway, resolved against the CATALOGUE rather than
@@ -11739,7 +11833,14 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         colour_hex: colourRow && /^#[0-9a-fA-F]{6}$/.test(String(colourRow.value || ''))
           ? colourRow.value : null,
         description,
-        details: String(one(b['details' + i]) || '').trim().slice(0, 300),
+        /* A sign's size and options lead its details, written by the server
+           from what it priced, so what the customer reads is what was priced.
+           What was typed is kept apart so the edit form gets it back alone. */
+        details: sign
+          ? [sign.text, String(one(b['details' + i]) || '').trim()].filter(Boolean).join(' · ').slice(0, 400)
+          : String(one(b['details' + i]) || '').trim().slice(0, 300),
+        ...(sign ? { sign: sign.spec, details_note: String(one(b['details' + i]) || '').trim().slice(0, 300),
+                     ...(priceTyped ? {} : { sign_priced: true }) } : {}),
         images,
         qty: q,
         /* Blended per-piece rate, EXCLUDING every one-off and extra, so
@@ -11806,6 +11907,16 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     const backToForm = QUOTE_CODE_RE.test(String(req.params.code || '').toUpperCase())
       ? `/admin/quote/${String(req.params.code).toUpperCase()}/edit` : '/admin/quote/new';
 
+    if (signErrors.length) {
+      return res.status(400).send(quotePage('A sign size cannot be made', `
+        <div class="card">
+          <div class="warn">Nothing was saved — ${signErrors.length === 1 ? 'a sign' : 'some signs'} could not be priced.</div>
+          <ul class="muted" style="margin:8px 0 0;padding-left:18px">
+            ${signErrors.map((o) => `<li>Line ${o.line} — ${escEmail(String(o.what))}: ${escEmail(o.error)}</li>`).join('')}
+          </ul>
+          <p style="margin-top:12px"><a class="btn" href="${backToForm}">Go back</a></p>
+        </div>`));
+    }
     if (overCeiling.length) {
       return res.status(400).send(quotePage('More colours than the press runs', `
         <div class="card">
@@ -11891,6 +12002,37 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     const priorCode = String(req.params.code || '').toUpperCase();
     const prior = QUOTE_CODE_RE.test(priorCode)
       ? ((await pool.query('SELECT * FROM quotes WHERE code = $1', [priorCode])).rows[0] || null) : null;
+    /* PRICE LOCK (owner, 2026-10-08: "no price changes only me unless I grant
+       full access to the helper"). Without quotes.price a helper cannot type
+       an each price, change the garment cost or give a discount. Re-saving a
+       price the owner already set is not a change, so those are let through;
+       anything else is refused before a thing is written. Sign prices are
+       worked out above from the size, so a helper never needs to type one. */
+    if (saver.kind === 'staff' && STAFF.levelOf(saver, 'quotes.price') !== 'on') {
+      const priorItems = (prior && Array.isArray(prior.items)) ? prior.items : [];
+      const had = { unit: new Set(), blank: new Set() };
+      for (const it of priorItems) {
+        const tu = typedUnitOf(it);
+        if (tu != null && Number.isFinite(Number(tu))) had.unit.add(round2(Number(tu)));
+        if (it.blank_price != null) had.blank.add(round2(Number(it.blank_price)));
+      }
+      const changed = typedPrices.filter((t) => !had[t.kind].has(t.value));
+      const priorDiscount = prior ? round2(Number(prior.discount_value || 0)) : 0;
+      const discountChanged = round2(Number(discountValue) || 0) > 0 &&
+        (round2(Number(discountValue) || 0) !== priorDiscount || String(discountKind) !== String((prior && prior.discount_kind) || discountKind));
+      if (changed.length || discountChanged) {
+        logActivity(saver, 'price change refused', { type: 'quote', id: priorCode || null },
+          { prices: changed, discount: discountChanged ? { kind: discountKind, value: discountValue } : null });
+        return res.status(403).send(adminPage('Prices are set by the owner', `
+          ${pageHeader('Only the owner can change prices', '')}
+          <div class="card"><div class="warn">Nothing was saved. ${changed.length
+            ? `You typed a price on ${escEmail(changed.map((c) => c.what).join(', '))}.` : ''}${
+            discountChanged ? ' You added a discount.' : ''}</div>
+            <p>Leave the price boxes empty and the quote prices itself from the price list. If it needs a
+               different price, save it without one and leave a note on the job for the owner.</p>
+            <p style="margin-top:12px"><a class="btn" href="${backToForm}">Go back</a></p></div>`, 'quotes'));
+      }
+    }
     /* SALES TAX IS AUTOMATIC FOR HELPERS (owner, 2026-10-06: "leave tax
        automatic unless certificate is loaded. they never gain these
        permission"). A helper's save charges tax whatever the form says; an

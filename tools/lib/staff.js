@@ -39,6 +39,12 @@ const PERMISSIONS = {
   'quotes.discount':       { group: 'Quotes',     label: 'Discounts and prices below list', levels: ['off', 'approval', 'on'],
                              limit: { key: 'maxPct', label: 'Up to %', unit: '%' } },
   'quotes.manage':         { group: 'Quotes',     label: 'Cancel and restore quotes', levels: ['off', 'on'] },
+  /* Full price access (owner, 2026-10-08: "no price changes only me unless I
+     grant full access to the helper"). Without it a helper cannot type an each
+     price, change a garment cost or give a discount; the quote prices itself.
+     In no preset, like buying labels: it is given on purpose, one person at a
+     time. With it, quotes.discount above still decides what waits for approval. */
+  'quotes.price':          { group: 'Quotes',     label: 'Change prices: type a price, garment cost or discount (full access)', levels: ['off', 'on'] },
   'customers.view':        { group: 'Customers',  label: 'See customers', levels: ['off', 'on'] },
   'customers.message':     { group: 'Customers',  label: 'Email and text customers', levels: ['off', 'approval', 'on'] },
   'production.stage':      { group: 'Production', label: 'Move jobs through production, shipping', levels: ['off', 'on'] },
@@ -188,6 +194,7 @@ const ROUTES = {
   'GET /admin/production/:code/artwork.zip': 'quotes.view',
   'GET /admin/quote/new|/admin/quote/:code/edit': 'quotes.draft',
   'GET /admin/api/quotes/prior': 'quotes.draft',
+  'POST /admin/api/sign-price': 'quotes.draft',
   'POST /admin/api/quotes|/admin/api/quotes/:code': 'quotes.draft',
   'POST /admin/quote/:code/cancel': 'quotes.manage',
   'POST /admin/quote/:code/uncancel': 'quotes.manage',
