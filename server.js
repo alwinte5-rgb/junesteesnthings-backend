@@ -33,6 +33,7 @@ const { parseFirstTouch, firstTouchLabel } = require('./tools/lib/first-touch');
 const SITEHEALTH = require('./tools/lib/site-health');
 const NUDGE = require('./tools/lib/lead-nudges');
 const SIGNAGE = require('./tools/lib/signage');
+const SIGN_FAMILIES = require('./tools/lib/sign-families');
 const LEADMAIL = require('./tools/lib/lead-email');
 const REINTRO = require('./tools/lib/reintro');
 const FUNNEL = require('./tools/lib/funnel-health');
@@ -5803,6 +5804,10 @@ app.get('/api/pricing-rules', requireInternalKey, (_req, res) => {
        whole-foot size and vinyl, so the designer looks a banner up instead of
        holding its own copy of the per-foot rates. */
     banner: SIGNAGE.bannerTable(),
+    /* Every other sign family the designer sells (tools/lib/sign-families.js):
+       stock ladders precomputed, area families as rates the designer runs
+       through the one shared formula. */
+    signs: SIGN_FAMILIES.signsTable(),
     generated: new Date().toISOString(),
   });
 });
