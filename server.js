@@ -8019,6 +8019,16 @@ function totalsForItems(q, items) {
    page, the payment routes and the books cannot disagree — a balance shown in
    one place and not another is how a customer gets chased for money the shop has
    already written off. */
+/* Accepted, but no money in yet. Accepting puts a job on the production board
+   without any payment (the customer pays by card, Zelle or cash afterwards),
+   so a job could sit in "To start" looking like a sale while the shop had not
+   been paid a cent (owner, 2026-10-07). Nothing written off, nothing paid. */
+function awaitingDeposit(q) {
+  return !!q && !!q.accepted_at && !q.cancelled_at
+    && Number(q.paid_amount || 0) <= 0 && Number(q.written_off || 0) <= 0
+    && Number(q.total || q.subtotal || 0) > 0;
+}
+
 function balanceOf(q, total) {
   const t = Number(total != null ? total : (q && q.total) || 0);
   return round2(Math.max(0, t - Number((q && q.paid_amount) || 0) - Number((q && q.written_off) || 0)));
@@ -8583,6 +8593,8 @@ form:has(>.step-row){display:block}
 .kcard-due{font-size:11px;color:#6b7280;white-space:nowrap}
 .kcard-sub{font-size:11.5px;color:#6b7280;margin-top:2px}
 .kcard-risk-note{font-size:11px;color:#b91c1c;margin-top:4px}
+.kcard-deposit{display:inline-block;font-size:11px;font-weight:700;color:#8a5a00;background:#fff4e0;
+  border:1px solid #f3dfa8;border-radius:100px;padding:2px 8px;margin-top:5px}
 .kmove{display:flex;justify-content:space-between;align-items:center;gap:4px;margin-top:8px}
 .kmove form{margin:0}
 .kbtn{background:#eef2f9;color:#33415c;border:0;border-radius:8px;padding:5px 11px;font-size:13px;
@@ -18541,7 +18553,8 @@ async function renderBoard(VIEW, req, res) {
           </div>
           <div style="text-align:right;white-space:nowrap">
             <div class="tot" style="font-size:16px">${money(q.total || q.subtotal)}</div>
-            <span class="chip" style="background:${bg};color:${fg}">${paid ? 'paid ' + money(q.paid_amount) : st}</span>
+            <span class="chip" style="background:${awaitingDeposit(q) ? '#fff4e0' : bg};color:${awaitingDeposit(q) ? '#8a5a00' : fg}">${
+              paid ? 'paid ' + money(q.paid_amount) : awaitingDeposit(q) ? 'awaiting deposit' : st}</span>
           </div>
         </div>
         ${q.cancelled_at
@@ -18987,7 +19000,10 @@ async function renderBoard(VIEW, req, res) {
         carts.length ? `<b style="color:#1848B8">${carts.length} unfinished cart${
         carts.length === 1 ? '' : 's'}</b> &middot; ` : ''}${
         gQuotes.length} open quote${gQuotes.length === 1 ? '' : 's'} &middot; ${
-        gOrders.length} order${gOrders.length === 1 ? '' : 's'} in hand${
+        gOrders.length} order${gOrders.length === 1 ? '' : 's'} in hand${(() => {
+          const n = rows.filter(q => !q.delivered_at && awaitingDeposit(q)).length;
+          return n ? ` &middot; <b style="color:#8a5a00">${n} awaiting deposit</b>` : '';
+        })()}${
         atRiskCount ? ` &middot; <b style="color:#b91c1c">${atRiskCount} behind schedule</b>` : ''}${
         changeCount ? ` &middot; <b style="color:#1848B8">${changeCount} awaiting your edit</b>` : ''}${
         needCount ? ` &middot; <b style="color:#8a5a00">${needCount} need a text</b>` : ''}
@@ -19156,6 +19172,8 @@ async function renderBoard(VIEW, req, res) {
                 <div class="kcard-sub">${escEmail(q.code)} · ${money(q.total)}${
                   Number(q.paid_amount||0) < Number(q.total||0) ? ` · <span style="color:#b45309">${money(round2(q.total - (q.paid_amount||0)))} due</span>` : ''}</div>
                 ${risk ? `<div class="kcard-risk-note">⚠ ${escEmail(q._sched.risks[0].label)} was due ${dayShort(q._sched.risks[0].by)}</div>` : ''}
+                ${awaitingDeposit(q) ? `<div class="kcard-deposit">💳 Awaiting deposit${
+                  q.deposit_nudged_at ? ` · reminded ${dayShort(q.deposit_nudged_at)}` : ''}</div>` : ''}
                 ${disputes.byQuote.has(q.code) ? `<div style="margin-top:4px">${disputeChip(disputes.byQuote.get(q.code))}</div>` : ''}
                 ${act ? `
                 <form method="POST" action="/admin/quote/${q.code}/stage" data-stageform class="knext"${
@@ -23079,9 +23097,12 @@ async function sendQuoteFollowUps() {
 
 /* Accepted but never paid. This is the expensive one — the customer has said
    yes and is waiting on June, while June is waiting on the deposit and nothing
-   moves. One reminder, two days after acceptance. */
+   moves. One reminder, 12 hours after acceptance (owner, 2026-10-07; it was two
+   days), saying the deposit secures their place in the order cycle and a late
+   one can delay the order. Sent in texting hours only, so 12 hours after an
+   evening acceptance lands at 9am. */
 async function sendDepositReminders() {
-  const days = Math.max(1, parseInt(process.env.JT_DEPOSIT_NUDGE_DAYS || '2', 10));
+  const hours = Math.max(1, parseInt(process.env.JT_DEPOSIT_NUDGE_HOURS || '12', 10));
   try {
     /* Not after a refund. Paid and then refunded in full reads as never paid,
        and this would ask that customer for a deposit on a job the shop had
@@ -23095,12 +23116,12 @@ async function sendDepositReminders() {
           AND COALESCE(paid_amount,0) = 0
           AND deposit_nudged_at IS NULL
           AND cancelled_at IS NULL
-          AND accepted_at <= NOW() - ($1 || ' days')::interval
+          AND accepted_at <= NOW() - ($1 || ' hours')::interval
           AND (email <> '' OR COALESCE(phone, '') <> '')
           AND NOT EXISTS (SELECT 1 FROM quote_payments p
                            WHERE p.quote_code = quotes.code AND p.kind = 'refund')
           AND NOT EXISTS (SELECT 1 FROM stripe_disputes d WHERE d.quote_code = quotes.code)
-        LIMIT 20`, [String(days)]);
+        LIMIT 20`, [String(hours)]);
 
     for (const q of rows) {
       await pool.query('UPDATE quotes SET deposit_nudged_at=NOW() WHERE id=$1', [q.id]);
@@ -23114,18 +23135,21 @@ async function sendDepositReminders() {
       try {
         await sendClientEmail({ quote: q.code, kind: 'deposit-reminder',
           to: q.email,
-          subject: `Ready when you are — deposit for quote ${q.code}`,
+          subject: `Deposit needed to secure your order — quote ${q.code}`,
           html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
-            <h2 style="color:#1848B8">We're ready to start</h2>
+            <h2 style="color:#1848B8">Secure your place in our order schedule</h2>
             <p style="color:#374151;line-height:1.6">
               ${q.name ? escEmail(String(q.name).split(' ')[0]) + ', thanks' : 'Thanks'} for approving your quote.
-              We'll get straight on it as soon as the deposit is in — that's what reserves your spot in the
-              print schedule.</p>
+              We haven't received your deposit yet. <b>The deposit must be paid to secure the position we
+              promised you in our order cycle</b> — until it arrives your order is not scheduled, and a
+              delay in payment may delay your order.</p>
             <p style="text-align:center;margin:22px 0">
               <a href="${quoteLink(q.code)}" style="background:#1848B8;color:#fff;padding:13px 28px;
                  border-radius:100px;text-decoration:none;font-weight:700">Pay ${money(t.deposit)} deposit</a></p>
             <p style="color:#374151;line-height:1.6">Card, Apple Pay, Zelle to <b>${escEmail(ZELLE_HANDLE)}</b>
-               (shows as ${escEmail(ZELLE_NAME)}), or cash — whichever suits. Questions? Just reply or text ${SHOP_PHONE}.</p>
+               (shows as ${escEmail(ZELLE_NAME)}) with memo <b>${q.code}</b>, or cash — whichever suits.
+               Already paid by Zelle or cash? Thank you — just reply and we'll mark it received.
+               Questions? Reply or text ${SHOP_PHONE}.</p>
             <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_NAME} &middot; ${SHOP_SIGNER}</p>
           </div>`,
         });

@@ -108,7 +108,7 @@ test('every email a customer gets about a quote goes through the record', () => 
     ['`Payment received — quote ${code}`', 'receipt'], ['`Thanks — quote ${q.code} accepted`', 'accepted'],
     ['`Payment received — quote ${nq.code}`', 'receipt'], ['`Receipt — quote ${q.code}`', 'receipt'],
     ['`Still thinking it over? Quote ${q.code}`', 'follow-up'],
-    ['`Ready when you are — deposit for quote ${q.code}`', 'deposit-reminder'],
+    ['`Deposit needed to secure your order — quote ${q.code}`', 'deposit-reminder'],
     ['`Balance on quote ${q.code} — ${money(due)}`', 'balance-reminder'],
     ['`Your order has shipped — ${q.code}`', 'tracking'],
   ]) {

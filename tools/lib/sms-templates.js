@@ -92,7 +92,7 @@ const T = {
   // Accepted, no deposit yet (sendDepositReminders).
   depositReminder: ({ code, amount, first, link }) => ({
     template: 'deposit-reminder',
-    body: `${BRAND}: Thanks for approving your quote${hi(first) ? ', ' + hi(first) : ''}! The ${money(amount)} deposit saves your spot on our schedule. Pay whenever you're ready: ${lnk(link)} ${STOP}`,
+    body: `${BRAND}: Hi${hi(first) ? ' ' + hi(first) : ''}, thanks for approving quote ${plain(code, 12)}! Your ${money(amount)} deposit secures your place in our order cycle; a late deposit may delay your order. Pay here: ${lnk(link)} ${STOP}`,
   }),
   // Deposit in, balance still owed (sendBalanceReminders).
   balanceReminder: ({ code, due, first, link }) => ({
