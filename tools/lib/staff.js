@@ -319,6 +319,11 @@ const ROUTES = {
   'POST /admin/quote/:code/note': 'quotes.view',
   'POST /admin/tasks': 'any',
   'POST /admin/tasks/:id/done': 'any',
+  'POST /admin/tasks/:id/start': 'any',
+  /* The tools the team works in: everyone reads the list; only the owner edits it. */
+  'GET /admin/resources': 'any',
+  'POST /admin/resources': 'owner',
+  'POST /admin/resources/:id': 'owner',
   'POST /admin/quote/:code/credit': 'owner',
   // Shop lead or rep lead: decided by the records; only the owner relabels (tools/lib/sales-credit.js).
   'POST /admin/quote/:code/sale-type': 'owner',

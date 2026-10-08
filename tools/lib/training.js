@@ -47,7 +47,7 @@ const passMark = (n) => Math.ceil(n * PASS_SHARE - 1e-9);
 
 /* Features this deploy has. A later PR adds its name here, and the steps
    that wait for it appear. */
-const FEATURES = new Set(['proofs']);
+const FEATURES = new Set(['proofs', 'resources']);
 
 const TRACKS = {
   sales:  { label: 'Sales', note: 'Leads, quotes, follow-ups and finding new customers.' },
@@ -240,7 +240,7 @@ function stepOpen(p, key) {
    the page is for, and the one mistake to avoid. Keyed by the menu key the
    page passes to adminPage(). Drafted for the owner to edit. */
 const PAGE_TIPS = {
-  myday: 'Start here every shift. Work top to bottom: leads waiting, then follow-ups, then tasks and jobs. The oldest lead is always first.',
+  myday: 'Start here every shift. Work top to bottom: leads waiting, then follow-ups, then tasks and jobs. The oldest lead is always first. Press Start on a task when you take it on, and Mark completed when it is done. Fold away any section you do not need.',
   earnings: 'Your commission on sales credited to you. A sale becomes payable 14 days after it is paid in full, if there is no open dispute.',
   leads: 'Everyone who asked about an order. Log every call, email, text or chat on the lead; that is what counts as answered. Set a follow-up date before you leave a lead.',
   quotes: 'The money board: quotes out, accepted, waiting on a deposit. Build a new quote from a lead with its Quote button so the two stay linked.',
@@ -254,6 +254,7 @@ const PAGE_TIPS = {
   discounts: 'Discount codes. Never offer one to win or keep a sale without the owner.',
   chat: 'Your private conversation with the owner. Ask here whenever you are unsure; it is faster than guessing.',
   playbook: 'Ready-made replies and how we do things. Type a question in plain words, or a /shortcut. Copy a reply and adjust it to the customer.',
+  resources: 'The tools you work in, with a link to each and how to get in. Logins are never here: they are in the team password manager.',
   training: 'Your training path. Reading steps you tick yourself, work steps tick when you do the work, and the owner signs off the rest.',
 };
 
