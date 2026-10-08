@@ -12249,7 +12249,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
           <button type="button" onclick="cp()">Copy message</button>
           ${smsHref ? `<a class="btn btn-ghost" href="${escEmail(smsHref)}" onclick="markSent()">Open in Messages</a>` : ''}
         </div>
-        <p class="muted" style="margin-top:10px">They see: <a href="${quoteLink(code)}">${quoteLink(code)}</a></p>
+        <p class="muted" style="margin-top:10px">They see: <a href="/q/${code}?staff=1" target="_blank" rel="noopener">${quoteLink(code)}</a></p>
         ${TAXCERT.quoteNeedsCertificate(q) && !q.tax_certificate_id ? `
         <div class="warn" style="margin-top:10px">No tax on this one, so their quote page asks for the
           exemption certificate before they can pay. Already have it?
@@ -12464,7 +12464,26 @@ app.get('/q/:code', async (req, res) => {
     }
     const q = rows[0];
 
-    if (!q.viewed_at) {
+    /* STAFF PREVIEW (the owner, 2026-10-08: "I need a way back"). Links from
+       the back office add ?staff=1 and open in a new tab. The page then carries
+       a bar back to the job and the edit form, and the visit does not count as
+       the customer opening it — before, checking a quote marked it Viewed. The
+       bar only links to /admin pages, which sign-in still guards, so a customer
+       who typed the parameter would see nothing they could use. */
+    const staffView = String(req.query.staff || '') === '1';
+    const staffBar = staffView ? `
+      <div style="position:sticky;top:0;z-index:50;margin:-8px -8px 14px;padding:10px 14px;background:#0B1F4B;color:#fff;
+                  border-radius:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:13.5px">
+        <span style="flex:1 1 200px">Staff preview &mdash; this is what the customer sees.</span>
+        <a href="/admin/production/${code}" style="color:#0B1F4B;background:#fff;border-radius:100px;padding:6px 14px;
+           text-decoration:none;font-weight:700">&larr; Back to the job</a>
+        <a href="/admin/quote/${code}/edit" style="color:#fff;border:1px solid rgba(255,255,255,.5);border-radius:100px;
+           padding:6px 14px;text-decoration:none">Edit quote</a>
+        <a href="/admin/quotes" style="color:#fff;border:1px solid rgba(255,255,255,.5);border-radius:100px;
+           padding:6px 14px;text-decoration:none">All quotes</a>
+      </div>` : '';
+
+    if (!q.viewed_at && !staffView) {
       pool.query(`UPDATE quotes SET viewed_at=NOW(),
                   status=CASE WHEN status='sent' THEN 'viewed' ELSE status END WHERE id=$1`, [q.id]).catch(() => {});
     }
@@ -12844,7 +12863,7 @@ app.get('/q/:code', async (req, res) => {
       </tr>${addonRowsFor(i, ix)}`;
     }).join('');
 
-    res.send(quotePage(`Your quote from ${SHOP_NAME}`, `
+    res.send(quotePage(`Your quote from ${SHOP_NAME}`, `${staffBar}
       <div class="card">
         <h1>${SHOP_NAME}</h1>
         <div class="sub">Quote ${escEmail(q.code)} &middot; ${fmtDate(q.created_at)}${q.name ? ' &middot; for ' + escEmail(q.name) : ''}</div>
@@ -16482,7 +16501,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
           ${undocumented.map((q) => `
           <tr style="border-top:1px solid #e5e7eb">
             <td style="padding:7px 4px;white-space:nowrap">
-              <a href="/q/${escEmail(String(q.code))}" style="color:#1848B8">${escEmail(String(q.code))}</a>
+              <a href="/q/${escEmail(String(q.code))}?staff=1" target="_blank" rel="noopener" style="color:#1848B8">${escEmail(String(q.code))}</a>
               <div class="muted" style="font-size:11px">${new Date(q.created_at).toISOString().slice(0, 10)}</div>
             </td>
             <td style="padding:7px 4px">${escEmail(String(q.name || ''))}</td>
@@ -18127,7 +18146,7 @@ app.get('/admin/customer', requireAdmin, async (req, res) => {
         : (r.accepted_at ? 'accepted, unpaid' : r.status);
       return `
         <tr>
-          <td><a href="/admin/production/${r.code}">${escEmail(r.code)}</a> <a class="muted" style="font-size:12px" href="/q/${r.code}" target="_blank" rel="noopener">customer view</a>
+          <td><a href="/admin/production/${r.code}">${escEmail(r.code)}</a> <a class="muted" style="font-size:12px" href="/q/${r.code}?staff=1" target="_blank" rel="noopener">customer view</a>
             <div class="muted" style="font-size:12px">${escEmail(quoteSummary(r.items))}</div></td>
           <td class="num">${fmtDate(r.created_at)}</td>
           <td class="num">${money(total)}</td>
@@ -18803,7 +18822,7 @@ async function renderBoard(VIEW, req, res) {
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
           <a class="btn" style="padding:8px 16px;font-size:13px" href="/admin/production/${q.code}">Open job</a>
           <a class="btn btn-ghost" style="padding:8px 16px;font-size:13px" href="/admin/quote/${q.code}/edit">Edit</a>
-          <a class="btn btn-ghost" style="padding:8px 16px;font-size:13px" href="/q/${q.code}" target="_blank" rel="noopener">View as customer</a>
+          <a class="btn btn-ghost" style="padding:8px 16px;font-size:13px" href="/q/${q.code}?staff=1" target="_blank" rel="noopener">View as customer</a>
           ${outstanding > 0 ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
              onclick="document.getElementById('mp-${q.code}').style.display='block';var a=document.getElementById('ap-${q.code}');if(a)a.style.display='block';this.style.display='none'">Record a payment</button>` : ''}
           ${outstanding > 0 && q.accepted_at ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
