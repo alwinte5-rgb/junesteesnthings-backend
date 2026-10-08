@@ -13,9 +13,9 @@
  *
  *   HD Banner (vinyl scrim), PER SQUARE FOOT
  *     13oz  single  $1.25        grommets and heat-welded edges INCLUDED
- *     15oz  single  $1.75        rope / pole pockets / wind slits are EXTRA
- *     18oz  single  $2.25        (their price is not yet recorded — see below)
- *     18oz  double  $4.25        double-sided is 18oz ONLY
+ *     15oz  single  $1.75        rope / pole pockets / wind slits are EXTRA, read 2026-10-07
+ *     18oz  single  $2.25        (priced in BANNER_FINISH below)
+ *     18oz  double  $4.25        double-sided is 18oz ONLY  (finishing costs: BANNER_FINISH)
  *
  *   Coro (corrugated plastic), PER 48x96 SHEET, nest as many as fit
  *     4mm   single  $44.00       the yard-sign material
@@ -79,7 +79,7 @@ const CORO = {
   10: { single: 70.00, double: 90.00 },
 };
 
-const STEP_STAKE = 5.00;       // each, from the order screen's STEP STAKES control
+const STEP_STAKE = 1.25;       // each, read off the coro order screen 2026-10-07 (10 stakes = +$12.50); was $5.00
 
 /* Per square foot, single-sided. Poster paper, portal/#order/21. */
 const POSTER = 2.00;
@@ -289,13 +289,72 @@ const PAPER_MARKUP_LARGE = 2.0;
  * 37%, under the x2 floor — because eight square feet cannot carry a fixed
  * handling charge. The floor price is cost x2, so small banners are sold at
  * the minimum rather than below cost. */
-const BANNER_SQFT_RATE = 7.00;
+/* THE RATE GOES UP WITH THE MATERIAL, June's call 2026-10-07. One $7 rate
+ * sold 13oz, 15oz and 18oz at the same price although 18oz costs Signs365
+ * $1.00 a foot more, so the heavier the vinyl the less the banner earned.
+ * Each step up in cost is a step up in rate:
+ *
+ *   13oz single  $1.25 cost  ->  $7  (a little under the $8 local standard)
+ *   15oz single  $1.75       ->  $8
+ *   18oz single  $2.25       ->  $9
+ *   18oz double  $4.25       -> $12  (two prints; NOT YET CONFIRMED BY JUNE)
+ *
+ * Keyed as bannerMaterial() keys them: weight, plus 'd' for double-sided. */
+const BANNER_RATES = { '13': 7.00, '15': 8.00, '18': 9.00, '18d': 12.00 };
+const BANNER_SQFT_RATE = BANNER_RATES['13'];
+
+const bannerKey = ({ oz = 13, sides = 'single' } = {}) => `${oz}${sides === 'double' ? 'd' : ''}`;
 
 /** Published price for a banner at WxH: per billable foot, never under x2. */
 function bannerPrice(w, h, opts = {}) {
-  const cost = bannerCost(w, h, opts) + labourCost('banner', 1);
-  if (cost === null) return null;
-  return evenUp(Math.max(billableSqft(w, h) * BANNER_SQFT_RATE, cost * MARKUP));
+  const cost = bannerCost(w, h, opts);
+  const rate = BANNER_RATES[bannerKey(opts)];
+  if (cost === null || !rate) return null;
+  return evenUp(Math.max(billableSqft(w, h) * rate, (cost + labourCost('banner', 1)) * MARKUP));
+}
+
+/* ANY-SIZE BANNERS IN THE DESIGNER (2026-10-07). A customer types the width
+ * and height in whole feet and picks the vinyl. Rather than hand the designer
+ * the formula — which it would then hold in PHP AND in the browser, three
+ * copies of one price — the backend publishes the price of every size it
+ * sells, and the designer only looks one up. /api/pricing-rules carries it.
+ *
+ * SIZE LIMITS ARE PROVISIONAL until the Signs365 order screen's own maximum is
+ * read: the short side up to 5ft, the long side up to 30ft. A size outside
+ * them has no price, and the designer refuses it rather than guessing. */
+const BANNER_MATERIALS = [
+  { key: '13',  oz: 13, sides: 'single', label: '13oz vinyl (standard, indoor or outdoor)' },
+  { key: '15',  oz: 15, sides: 'single', label: '15oz vinyl (heavier, for longer outdoor use)' },
+  { key: '18',  oz: 18, sides: 'single', label: '18oz vinyl (heavy duty)' },
+  { key: '18d', oz: 18, sides: 'double', label: '18oz vinyl, printed both sides' },
+];
+const BANNER_MAX_FT = { short: 5, long: 30 };
+
+/** Every whole-foot banner the designer sells: { materials, max, prices: { key: { 'WxH': price } } }.
+ *  W is the width and H the height, in feet. */
+function bannerTable() {
+  const prices = {};
+  for (const m of BANNER_MATERIALS) {
+    prices[m.key] = {};
+    for (let w = 1; w <= BANNER_MAX_FT.long; w++) {
+      for (let h = 1; h <= BANNER_MAX_FT.long; h++) {
+        if (Math.min(w, h) > BANNER_MAX_FT.short) continue;
+        prices[m.key][`${w}x${h}`] = bannerPrice(w * 12, h * 12, { oz: m.oz, sides: m.sides });
+      }
+    }
+  }
+  /* Finishing, priced per size the same way: { 'WxH': { hanging key: price, wind_slits: price|null } }.
+     The same for every vinyl. */
+  const finishing = {};
+  for (const k of Object.keys(prices['13'])) {
+    const [w, h] = k.split('x').map((n) => Number(n) * 12);
+    const row = {};
+    for (const hg of Object.keys(BANNER_HANGING)) row[hg] = bannerFinishPrice(w, h, { hanging: hg });
+    row.wind_slits = windSlitsAllowed(w, h) ? bannerFinishPrice(w, h, { windSlits: true }) : null;
+    finishing[k] = row;
+  }
+  return { materials: BANNER_MATERIALS.map(({ key, label }) => ({ key, label })), max: BANNER_MAX_FT,
+    hanging: Object.entries(BANNER_HANGING).map(([key, v]) => ({ key, label: v.label })), prices, finishing };
 }
 const PAPER_YIELD_SMALL = 9;
 
@@ -347,6 +406,93 @@ const PER_ITEM = {
    they are deliberately absent here — charging for an included finish is how a
    quote ends up above the competition for no reason. */
 const BANNER_EXTRAS = ['rope', 'pole_pockets', 'wind_slits'];
+
+/* BANNER FINISHING: what each costs, and what Signs365 will not combine.
+ * Read off the HD Banner order screen 2026-10-07 by pricing test sizes
+ * (10x2, 8x2, 6x3 ft) with each option on and off:
+ *
+ *   rope           $1.00 per foot of roped edge   top 10ft +$10, top+bottom +$20, top 8ft +$8
+ *   pole pockets   $10.00 a banner + $1.00 a foot  top 10ft +$20, top+bottom +$30, left+right (2ft) +$14
+ *                  any pocket size, 1" to 4", costs the same
+ *   wind slits     $0.50 per square foot          8x2 +$8, 6x3 +$9
+ *   grommets, welded edges   included, $0 either way
+ *
+ * THE RULES (the order screen refuses these, so the quote must too):
+ *   - rope needs welded edges ON and grommets OFF
+ *   - pole pockets need welded edges OFF
+ *   - so rope and pole pockets never go on the same banner
+ *   - rope goes on the top and/or bottom only
+ *   - wind slits only on banners OVER 24"x24" and UNDER 120"x120"
+ *   - double-sided is 18oz only
+ * One "hanging" choice per banner encodes the first three: grommets, rope, or
+ * pockets, never two of them. */
+const BANNER_FINISH = { rope_ft: 1.00, pocket_base: 10.00, pocket_ft: 1.00, windslit_sqft: 0.50 };
+
+/* Which edges each hanging choice uses, as (top/bottom edges, side edges). */
+const BANNER_HANGING = {
+  grommets:      { label: 'Grommets (included)',            kind: 'grommets', tb: 0, sides: 0 },
+  rope_top:      { label: 'Rope along the top',             kind: 'rope',     tb: 1, sides: 0 },
+  rope_both:     { label: 'Rope along the top and bottom',  kind: 'rope',     tb: 2, sides: 0 },
+  pocket_top:    { label: 'Pole pocket along the top',      kind: 'pocket',   tb: 1, sides: 0 },
+  pocket_both:   { label: 'Pole pockets top and bottom',    kind: 'pocket',   tb: 2, sides: 0 },
+  pocket_sides:  { label: 'Pole pockets left and right',    kind: 'pocket',   tb: 0, sides: 2 },
+};
+
+/** Wind slits are offered only between these sizes, in inches. */
+const windSlitsAllowed = (w, h) => w > 24 && h > 24 && w < 120 && h < 120;
+
+/** Supplier cost of a banner's finishing at WxH inches, or null when that
+ *  combination is not sold (an unknown hanging, or wind slits off-size). */
+function bannerFinishCost(w, h, { hanging = 'grommets', windSlits = false } = {}) {
+  const hg = BANNER_HANGING[hanging];
+  if (!hg) return null;
+  if (windSlits && !windSlitsAllowed(w, h)) return null;
+  const edgeFt = hg.tb * (w / 12) + hg.sides * (h / 12);
+  let cost = 0;
+  if (hg.kind === 'rope') cost += edgeFt * BANNER_FINISH.rope_ft;
+  if (hg.kind === 'pocket') cost += BANNER_FINISH.pocket_base + edgeFt * BANNER_FINISH.pocket_ft;
+  if (windSlits) cost += (w * h / 144) * BANNER_FINISH.windslit_sqft;
+  return cost;
+}
+
+/* The stock banner sizes the quote form sells (tools/add-signage.js makes a
+   method per size). Inches, width x height as the method title reads them. */
+const BANNER_STOCK_SIZES = [[24, 48], [36, 72], [48, 96], [36, 120]];
+
+/** The quote form's banner finishing add-ons: one set per stock size, each
+ *  matching ONLY that size's method titles, so a rope price for a 3x6 can
+ *  never land on a 4x8 or on a t-shirt. The hanging choices share a `group`:
+ *  one per banner, because the supplier will not combine rope and pockets. The
+ *  rope/pocket edges are the LONG sides, the way a stock banner is hung. */
+function stockBannerAddons() {
+  const out = [];
+  for (const [a, b] of BANNER_STOCK_SIZES) {
+    const w = Math.max(a, b), h = Math.min(a, b);
+    const size = `${a / 12}ft x ${b / 12}ft`;
+    const appliesTo = new RegExp(`^Vinyl Banner — ${size}\\b`);
+    const tag = `${a / 12}x${b / 12}`;
+    for (const [key, hg] of Object.entries(BANNER_HANGING)) {
+      if (key === 'grommets') continue;
+      out.push({ code: `banner_${key}_${tag}`, label: hg.label, appliesTo, kind: 'per_piece',
+        rate: bannerFinishPrice(w, h, { hanging: key }), group: 'banner_hanging',
+        note: hg.kind === 'rope'
+          ? 'Rope sewn into the hem. Replaces the grommets on that banner; not with pole pockets.'
+          : 'Sewn pole pocket for a pole or rod. No welded edge on that banner; not with rope.' });
+    }
+    if (windSlitsAllowed(w, h)) {
+      out.push({ code: `banner_windslits_${tag}`, label: 'Wind slits', appliesTo, kind: 'per_piece',
+        rate: bannerFinishPrice(w, h, { windSlits: true }),
+        note: 'Half-moon cuts that let wind through, for a banner hung outdoors on a fence or between posts.' });
+    }
+  }
+  return out;
+}
+
+/** What the customer pays for that finishing: the shop's x2, evened up. */
+function bannerFinishPrice(w, h, opts) {
+  const c = bannerFinishCost(w, h, opts);
+  return c === null ? null : c === 0 ? 0 : evenUp(c * MARKUP);
+}
 
 /** How many WxH pieces nest on one 48x96 sheet, trying both orientations.
  *  Bounding box only; real artwork nests tighter, which only ever helps. */
@@ -535,7 +681,8 @@ module.exports = {
   fullBodyCutoutCost, standeeLadder, evenUp,
   SHOP_RATE, LABOUR, labourCost, PAPER_MARKUP, PAPER_MARKUP_LARGE, paperMarkupFor,
   YARD_SIGN_MIN_QTY,
-  BANNER_SQFT_RATE, bannerPrice,
+  BANNER_FINISH, BANNER_HANGING, BANNER_STOCK_SIZES, stockBannerAddons, windSlitsAllowed, bannerFinishCost, bannerFinishPrice,
+  BANNER_SQFT_RATE, BANNER_RATES, BANNER_MATERIALS, BANNER_MAX_FT, bannerPrice, bannerTable,
   perSheet, coroCost, bannerCost, posterCost, windowCost, adhesiveCost,
   magnetCost, paperCost, acrylicCost, canvasCost, retail,
 };

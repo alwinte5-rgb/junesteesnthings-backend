@@ -32,6 +32,7 @@ const { legacyRedirect, LEGACY_PATHS } = require('./tools/lib/legacy-redirects')
 const { parseFirstTouch, firstTouchLabel } = require('./tools/lib/first-touch');
 const SITEHEALTH = require('./tools/lib/site-health');
 const NUDGE = require('./tools/lib/lead-nudges');
+const SIGNAGE = require('./tools/lib/signage');
 const LEADMAIL = require('./tools/lib/lead-email');
 const REINTRO = require('./tools/lib/reintro');
 const FUNNEL = require('./tools/lib/funnel-health');
@@ -5798,6 +5799,10 @@ app.get('/api/pricing-rules', requireInternalKey, (_req, res) => {
      * what the shop quotes for the same job. */
     screen_fee_rate: SCREEN_FEE_RATE,
     screen_fees_live: SCREEN_FEES_LIVE,
+    /* Any-size banners (tools/lib/signage.js bannerTable): the price of every
+       whole-foot size and vinyl, so the designer looks a banner up instead of
+       holding its own copy of the per-foot rates. */
+    banner: SIGNAGE.bannerTable(),
     generated: new Date().toISOString(),
   });
 });
@@ -7157,6 +7162,13 @@ const ADDONS = [
      banners, posters and signs went out without it and the shop paid it. Still
      once an order; a Saturday or large-format rate ticked anywhere on the
      quote REPLACES it rather than adding to it (freightUpgraded). */
+  /* Banner finishing (tools/lib/signage.js stockBannerAddons): rope, pole
+     pockets and wind slits, priced per stock size from what Signs365 charges,
+     each offered ONLY on its own size. Rope and pockets share group
+     'banner_hanging': one per banner, because the supplier will not combine
+     them. Wind slits appear only on the sizes Signs365 cuts them for. */
+  ...SIGNAGE.stockBannerAddons(),
+
   { code: 'cutout_ship', label: 'Supplier delivery to our shop', appliesTo: SIGNS365_FREIGHT_RE,
     kind: 'once', rate: 10, orderShared: true, inItemPrice: true, auto: 'method',
     note: 'What our supplier charges to get the printed cutouts to us, so we can mount and finish them. Charged once for your whole order, however many sizes are on it — this is not a delivery to you.' },
@@ -9875,7 +9887,7 @@ ${quotePricingSource()}
       var ADDONS = ${JSON.stringify(ADDONS.map((a) => ({
         code: a.code, label: a.label, kind: a.kind, rate: a.rate,
         auto: a.auto || null, note: a.note || null, appliesTo: a.appliesTo.source,
-        runShared: a.runShared || false, orderShared: a.orderShared || false,
+        runShared: a.runShared || false, orderShared: a.orderShared || false, group: a.group || null,
       })))};
       var SCREEN_FEES_LIVE = ${SCREEN_FEES_LIVE ? 'true' : 'false'};
 
@@ -10282,7 +10294,8 @@ ${quotePricingSource()}
                 avail.map(function(a){
                   return '<label style="display:flex;align-items:flex-start;gap:6px;margin:0 0 3px;font-size:13px;text-transform:none;letter-spacing:0;font-weight:400">' +
                     '<input type="checkbox" class="ao" name="addon_' + a.code + L.dataset.n + '" value="1" data-code="' +
-                    a.code + '" style="width:auto;margin:3px 0 0"><span>' + a.label +
+                    a.code + '"' + (a.group ? ' data-group="' + a.group + '"' : '') +
+                    ' style="width:auto;margin:3px 0 0"><span>' + a.label +
                     (a.kind === 'per_piece' ? ' <span class="muted">$' + a.rate.toFixed(2) + ' ea</span>'
                      : a.kind === 'percent_of_decoration' ? ' <span class="muted">+' + a.rate + '%</span>'
                      : ' <span class="muted">$' + a.rate.toFixed(2) + '</span>') +
@@ -10290,6 +10303,17 @@ ${quotePricingSource()}
                 }).join('')
               : '';
             aoBox.style.display = (tiers.length || avail.length) ? 'block' : 'none';
+            /* One per group (banner hanging: rope OR pole pockets, never both).
+               On the box itself, so it runs before the line re-prices on the
+               same change event bubbling up. The server keeps one too. */
+            aoBox.querySelectorAll('.ao[data-group]').forEach(function(cb){
+              cb.addEventListener('change', function(){
+                if (!cb.checked) return;
+                aoBox.querySelectorAll('.ao[data-group="' + cb.dataset.group + '"]').forEach(function(o){
+                  if (o !== cb) o.checked = false;
+                });
+              });
+            });
 
             /* Put back what this line was saved with. ONE shot: the attribute
                is cleared as it is read, so this restores on the first build of
@@ -11275,10 +11299,15 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         if (t) lineAddons.push(t);
       }
 
+      const groupsTaken = new Set();
       for (const a of addonsForAny(addonTitles)) {
         if (a.auto) continue;              // attached by the method itself, below
         if (/^design_(tweak|setup|commission)$/.test(a.code)) continue;  // the dropdown above
         if (String(one(b[`addon_${a.code}${i}`]) || '') !== '1') continue;
+        /* One per group: a banner takes rope OR pole pockets (Signs365 will not
+           combine them). The page unticks the other; a body that sends both
+           keeps the first, so the quote never sells what cannot be ordered. */
+        if (a.group) { if (groupsTaken.has(a.group)) continue; groupsTaken.add(a.group); }
         lineAddons.push({ code: a.code, label: a.label, kind: a.kind, rate: a.rate });
       }
       /* Screens are not a choice — a screen-print job burns them whether or not
