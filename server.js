@@ -18774,7 +18774,7 @@ async function renderBoard(VIEW, req, res) {
           ? `<div class="muted" style="margin-top:6px;color:#b91c1c">cancelled${
               q.cancel_reason ? ' — ' + escEmail(q.cancel_reason) : ''}${
               Number(q.paid_amount || 0) > 0 ? ` &middot; <b>${money(q.paid_amount)} paid — refund owed</b>` : ''}</div>`
-          : balanceOf(q) > 0
+          : balanceOf(q) > 0 && q.accepted_at
           ? `<div class="muted" style="margin-top:6px;color:#b45309">balance due ${money(balanceOf(q))}</div>`
           : Number(q.written_off || 0) > 0
           ? `<div class="muted" style="margin-top:6px">settled &middot; ${money(q.written_off)} written off${
@@ -18806,7 +18806,7 @@ async function renderBoard(VIEW, req, res) {
           <a class="btn btn-ghost" style="padding:8px 16px;font-size:13px" href="/q/${q.code}" target="_blank" rel="noopener">View as customer</a>
           ${outstanding > 0 ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
              onclick="document.getElementById('mp-${q.code}').style.display='block';var a=document.getElementById('ap-${q.code}');if(a)a.style.display='block';this.style.display='none'">Record a payment</button>` : ''}
-          ${outstanding > 0 ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
+          ${outstanding > 0 && q.accepted_at ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
              onclick="document.getElementById('st-${q.code}').style.display='block';this.style.display='none'">Settle &mdash; no more owed</button>` : ''}
           ${q.cancelled_at ? `
           <form method="POST" action="/admin/quote/${q.code}/uncancel" style="display:inline"
@@ -18814,7 +18814,7 @@ async function renderBoard(VIEW, req, res) {
             <button type="submit" class="btn btn-ghost" style="padding:8px 16px;font-size:13px">Restore</button>
           </form>` : `
           <button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px;color:#b91c1c"
-             onclick="document.getElementById('cx-${q.code}').style.display='block';this.style.display='none'">Cancel order</button>`}
+             onclick="document.getElementById('cx-${q.code}').style.display='block';this.style.display='none'">${q.accepted_at ? 'Cancel order' : 'Cancel quote'}</button>`}
         </div>
         ${q.cancelled_at ? '' : cancelOrderForm(q)}
         ${outstanding > 0 ? `
@@ -19006,7 +19006,19 @@ async function renderBoard(VIEW, req, res) {
        can be found and undone — the previous fix failed precisely because the
        only available action could not be reversed. */
     const gOrders = rows.filter((q) => !isCancelled(q) && isPaid(q) && !isDelivered(q));
-    const gQuotes = rows.filter((q) => !isCancelled(q) && !isPaid(q) && !isDelivered(q));
+    const gOpen = rows.filter((q) => !isCancelled(q) && !isPaid(q) && !isDelivered(q));
+    /* Three different things were one "Open quotes" list (the owner,
+       2026-10-08): quotes the customer has said yes to and only owes a deposit
+       on, quotes still waiting on an answer, and quotes that expired without
+       one. Accepted ones are their own group; expired ones leave the board
+       (a link shows them) — prices usually still stand, so they are found from
+       the customer or the link at the bottom, not shown as live work. */
+    const isQuoteExpired = (q) => !q.accepted_at && (q.status === 'expired' ||
+      (q.valid_until && new Date(q.valid_until) < new Date(new Date().toDateString())));
+    const gAccepted = gOpen.filter((q) => !!q.accepted_at);
+    const gQuotes = gOpen.filter((q) => !q.accepted_at && !isQuoteExpired(q));
+    const gExpired = gOpen.filter((q) => !q.accepted_at && isQuoteExpired(q));
+    const showExpired = String(req.query.expired || '') === '1';
     /* Not rendered on the board any more — kept for the count, so cancelled work
        is findable rather than silently vanished. */
     const gCancelled = rows.filter(isCancelled);
@@ -19152,9 +19164,15 @@ async function renderBoard(VIEW, req, res) {
        to look something up. */
     const laneRight =
       group('Orders', 'deposit in — work in hand', gOrders) +
-      group('Open quotes', 'sent, nothing paid yet', gQuotes) +
+      group('Accepted, waiting on deposit', 'they said yes — nothing paid yet', gAccepted, null, { accent: '#8a5a00' }) +
+      group('Waiting on the customer', 'sent, not accepted yet', gQuotes) +
       group('Delivered, still owed', 'collect it, record a payment taken at pickup, or settle it', gOwedDone,
-            null, { accent: '#b45309' });
+            null, { accent: '#b45309' }) +
+      (showExpired ? group('Expired', 'not accepted in time — edit one to send it again', gExpired) : '') +
+      (gExpired.length ? `<p class="muted" style="margin:4px 0 0;font-size:12.5px">${showExpired
+        ? `<a href="?">Hide the ${gExpired.length} expired quote${gExpired.length === 1 ? '' : 's'}</a>`
+        : `${gExpired.length} expired quote${gExpired.length === 1 ? ' is' : 's are'} off the board &middot;
+           <a href="?expired=1">show ${gExpired.length === 1 ? 'it' : 'them'}</a>`}</p>` : '');
 
     /* Both lanes empty means an empty board; one empty lane is normal and still
        renders, so the two columns do not jump around as work moves between
@@ -19212,7 +19230,7 @@ async function renderBoard(VIEW, req, res) {
         leads.length === 1 ? 'y' : 'ies'}</b> &middot; ` : ''}${
         carts.length ? `<b style="color:#1848B8">${carts.length} unfinished cart${
         carts.length === 1 ? '' : 's'}</b> &middot; ` : ''}${
-        gQuotes.length} open quote${gQuotes.length === 1 ? '' : 's'} &middot; ${
+        gQuotes.length} waiting on the customer &middot; ${
         gOrders.length} order${gOrders.length === 1 ? '' : 's'} in hand${(() => {
           const n = rows.filter(q => !q.delivered_at && awaitingDeposit(q)).length;
           return n ? ` &middot; <b style="color:#8a5a00">${n} awaiting deposit</b>` : '';

@@ -29,7 +29,12 @@ test('the board groups on money arriving, not on status text', () => {
   assert.match(board, /const isPaid = \(q\) => Number\(q\.paid_amount \|\| 0\) > 0/,
     'the split must be on the amount actually paid');
   assert.match(board, /const gOrders = rows\.filter\(\(q\) => !isCancelled\(q\) && isPaid\(q\) && !isDelivered\(q\)\)/);
-  assert.match(board, /const gQuotes = rows\.filter\(\(q\) => !isCancelled\(q\) && !isPaid\(q\) && !isDelivered\(q\)\)/);
+  assert.match(board, /const gOpen = rows\.filter\(\(q\) => !isCancelled\(q\) && !isPaid\(q\) && !isDelivered\(q\)\)/);
+  /* Open work splits three ways (the owner, 2026-10-08): accepted and owing a
+     deposit, still waiting on the customer, and expired — which leaves the board. */
+  assert.match(board, /const gAccepted = gOpen\.filter\(\(q\) => !!q\.accepted_at\)/);
+  assert.match(board, /const gQuotes = gOpen\.filter\(\(q\) => !q\.accepted_at && !isQuoteExpired\(q\)\)/);
+  assert.match(board, /const gExpired = gOpen\.filter\(\(q\) => !q\.accepted_at && isQuoteExpired\(q\)\)/);
 });
 
 test('every job lands in exactly one group', () => {
@@ -82,9 +87,13 @@ test('the three groups are rendered in working order', () => {
      dashboard is for what still needs doing. */
   const e = board.indexOf("group('New enquiries'");
   const i = board.indexOf("group('Orders'");
-  const j = board.indexOf("group('Open quotes'");
-  assert.ok(e > -1 && i > -1 && j > -1, 'all three live groups must be rendered');
-  assert.ok(e < i && i < j, 'order must be New enquiries, Orders, then Open quotes');
+  const a = board.indexOf("group('Accepted, waiting on deposit'");
+  const j = board.indexOf("group('Waiting on the customer'");
+  assert.ok(e > -1 && i > -1 && a > -1 && j > -1, 'all the live groups must be rendered');
+  assert.ok(e < i && i < a && a < j,
+    'order must be New enquiries, Orders, Accepted waiting on deposit, then Waiting on the customer');
+  /* Expired quotes are shown only when asked for (?expired=1). */
+  assert.match(board, /showExpired \? group\('Expired'/);
   /* Neither delivered nor cancelled work belongs on a working board. Cancelled
      was a group here, which meant cancelling relabelled a job instead of
      clearing it and the dashboard stayed exactly as full. Both live in Orders. */
@@ -107,7 +116,7 @@ test('the header counts the two live groups separately', () => {
      outstanding — which is the number the board exists to answer. */
   /* Whitespace-tolerant: the header wraps across lines, and a test that breaks
      on reformatting teaches people to stop trusting the suite. */
-  assert.match(board, /gQuotes\.length\}\s*open quote/);
+  assert.match(board, /gQuotes\.length\}\s*waiting on the customer/);
   assert.match(board, /gOrders\.length\}\s*order/);
   assert.match(board, /\$\{leads\.length\} new enquir/,
     'unanswered enquiries lead the count — they are the ones that cost money');
