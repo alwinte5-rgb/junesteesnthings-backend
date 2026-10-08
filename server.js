@@ -28862,7 +28862,7 @@ app.get('/admin/hiring', requireAdmin, async (req, res) => {
       : `<a href="/admin/hiring?show=${k}">${escEmail(v)}</a>`} (${n[k]})`).join(' · ');
     res.send(adminPage('Hiring', `
       ${pageHeader('Hiring', `Each applicant gets a private ${HIRING.MINUTES}-minute test link. They need no login and see none of the shop's data.`,
-        '<a class="btn btn-ghost" href="/admin/hiring/test">Job posts, screening, tests and interview guides</a>')}
+        HIRE_GUIDE_SECTIONS.map(([k, label]) => `<a class="btn btn-ghost" href="/admin/hiring/test#${k}">${label}</a>`).join(' '))}
       ${flash(req.query)}
       <form class="card" method="post" action="/admin/hiring" style="display:grid;gap:10px">
         <b>New test link</b>
@@ -28923,6 +28923,10 @@ app.post('/admin/hiring', requireAdmin, async (req, res) => {
 /* Everything about hiring for one role, owner only: the OnlineJobs post to
    paste, how to screen applications, the test with its answer key and model
    answers, and the video-call guide. ?role= picks the job. */
+/* The guide page's sections, in page order: the Hiring list links straight to
+   each one, and the guide page repeats them so a long page is one click deep. */
+const HIRE_GUIDE_SECTIONS = [['post', 'Job post'], ['screening', 'Screening'], ['test', 'Test and answers'], ['interview', 'Interview questions']];
+
 app.get('/admin/hiring/test', requireAdmin, (req, res) => {
   const role = HIRING.roleOf(String((req.query || {}).role || ''));
   const post = HIRE_POSTING.POSTS[role.key];
@@ -28931,13 +28935,13 @@ app.get('/admin/hiring/test', requireAdmin, (req, res) => {
   const copy = (id, value, rows = 1) => rows > 1
     ? `<textarea id="${id}" readonly style="width:100%;min-height:${rows * 22}px" onclick="this.select()">${escEmail(value)}</textarea>`
     : `<input id="${id}" readonly value="${escEmail(value)}" style="width:100%" onclick="this.select()">`;
-  const postCard = post ? `<div class="card"><b>1. The job post for OnlineJobs.ph</b>
+  const postCard = post ? `<div class="card" id="post"><b>1. The job post for OnlineJobs.ph</b>
       <p class="muted">Copy each field into "Enter New Job". ${escEmail(post.payNote)}</p>
       <label>Job title ${copy('post-title', post.title)}</label>
       <p>Type: <b>${escEmail(post.type)}</b> · Wage: <b>${escEmail(post.wage)}</b> USD/hour · Hours/week: <b>${escEmail(post.hours)}</b> ·
         Business name: <b>June's Tees</b> · Skills: <b>${escEmail(post.skills.join(', '))}</b> · Code words: <b>${escEmail(post.code)}</b></p>
       <label>Description (plain text) ${copy('post-body', post.body, 18)}</label></div>` : '';
-  const screen = `<div class="card"><b>2. Screening the applications</b>
+  const screen = `<div class="card" id="screening"><b>2. Screening the applications</b>
       <p><b>Labels to make in the OnlineJobs inbox:</b></p>
       <ul>${(post ? HIRE_POSTING.labelsFor(post.prefix) : []).map((l) => `<li>${escEmail(l)}</li>`).join('')}
         ${HIRE_POSTING.SHARED_LABELS.map((l) => `<li><b>${escEmail(l.name)}</b>: ${escEmail(l.use)}</li>`).join('')}</ul>
@@ -28967,19 +28971,21 @@ app.get('/admin/hiring/test', requireAdmin, (req, res) => {
     ${pageHeader(role.label, `Test: about ${role.minutes} minutes. Score out of 100: ${weights}, plus up to ${HIRING.BONUS_MAX} bonus points for an extra skill.`,
       '<a class="btn btn-ghost" href="/admin/hiring">Back to hiring</a>')}
     <div class="card" style="display:flex;gap:8px;flex-wrap:wrap">${tabs}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:0 0 12px">${HIRE_GUIDE_SECTIONS.map(([k, label]) =>
+      `<a class="btn btn-ghost" href="#${k}">${label}</a>`).join(' ')}</div>
     ${postCard}${screen}
     <div class="card"><b>Messages for applicants who are not going ahead</b>
       <p class="muted">Copy one into their OnlineJobs conversation and change [Name]. A rejected applicant's page on Hiring has these filled in for them.</p>
       ${Object.entries(HIRE_POSTING.REJECTIONS).map(([k, v]) => `<p style="margin-top:10px"><b>${escEmail(v.label)}</b></p>
         <textarea readonly style="width:100%;min-height:96px" onclick="this.select()">${escEmail(HIRE_POSTING.rejectionMessage(k, { name: '[Name]', job: role.label.replace(/ \(.*\)$/, '').toLowerCase() }))}</textarea>`).join('')}</div>
-    <div class="card"><b>3. The test: ${escEmail(role.parts.choice.label)}</b> (marked automatically)${mc}</div>
+    <div class="card" id="test"><b>3. The test: ${escEmail(role.parts.choice.label)}</b> (marked automatically)${mc}</div>
     <div class="card"><b>Written questions</b> (graded by Claude against these notes and model answers; you see every answer)${written}</div>
     <div class="card"><b>4. Round 2 (automatic)</b>
       <p>A round-1 score of ${HIRING.PASS_SCORE} or more opens round 2 straight away, on the same link: up to ${HIRING.ROUND2_MAX} questions
       about the applicant's own answers, ${HIRING.ROUND2_MINUTES} minutes, open for ${HIRING.ROUND2_DAYS} days. Claude grades it and recommends
       a video call or not. You get one email per applicant with both rounds, once round 2 is graded or not taken.</p>
       <p class="muted">This page is yours alone: helpers cannot open Hiring, so they never see these answers.</p></div>
-    <div class="card"><b>5. Video call guide</b>
+    <div class="card" id="interview"><b>5. Video call guide</b>
       <p class="muted">Ask everyone these, so applicants can be compared. Each applicant's page and results email add questions about their own answers.</p>${guide}</div>`, 'hiring'));
 });
 
@@ -29050,11 +29056,12 @@ app.get('/admin/hiring/:id', requireAdmin, async (req, res) => {
         ${x.right ? '' : `<div class="row-sub muted" style="white-space:normal">Best answer: ${escEmail(x.answerText)}</div>`}</span></div>`).join('')}</div>`;
     res.send(adminPage('Hiring', `
       ${pageHeader(r.name, escEmail(role.label) + (r.note ? ` · ${escEmail(r.note)}` : ''), actions.join(' '))}
-      ${flash(req.query)}${summary}
+      ${flash(req.query)}
       <details class="card"><summary class="muted">Fix the name</summary>
         <form method="post" action="/admin/hiring/${id}/name" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
           <input name="name" maxlength="${HIRING.LIMITS.name}" required value="${escEmail(r.name)}" style="width:260px">
-          <button class="btn btn-ghost" type="submit">Save name</button></form></details>`, 'hiring'));
+          <button class="btn btn-ghost" type="submit">Save name</button></form></details>
+      ${summary}`, 'hiring'));
   } catch (err) {
     console.error('hiring result failed:', err.message);
     res.status(500).send(adminPage('Hiring', '<div class="card"><div class="warn">Could not load this applicant.</div></div>', 'hiring'));
