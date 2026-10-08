@@ -2923,6 +2923,9 @@ app.get('/admin/sso', (req, res) => res.redirect(adminPathFor(String(req.query.t
 /* No sign-in form any more: Cloudflare asks. Old links land on the back office,
    and signing out is Cloudflare's own sign-out. */
 app.get('/signin', (_req, res) => res.redirect('/admin'));
+/* People type jtees.net/shop (and /products) and got the 404 page; the shop is
+   the Design Studio's product list. 301 so search engines follow it too. */
+app.get(['/shop', '/shop/', '/products', '/products/'], (_req, res) => res.redirect(301, 'https://design.jtees.net/products.php'));
 app.post('/signout', (req, res) => {
   if (fromAnotherSite(req)) return res.status(403).send('Forbidden');
   res.redirect(cfAccess ? cfAccess.logoutUrl : '/');
