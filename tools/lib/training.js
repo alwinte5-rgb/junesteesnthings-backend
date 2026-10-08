@@ -19,14 +19,31 @@
    suggests moving the helper up from Training. Moving them stays the owner's
    decision on /admin/staff.
 
+     lesson   a course lesson: a playbook article with minutes, goals and
+              "check yourself" questions. The helper ticks "I've finished".
+     buffer   catch-up time at the end of a module. Never ticked; it shows
+              how the day is meant to run, and is "done" once the module is.
+     exam     the quote exam (tools/lib/courses), marked against the owner's
+              own quotes. Done once a passing attempt is stored.
+
    Two paths, by the helper's job (staff.training_track): `sales` and
-   `design`. A step lists the tracks it belongs to (sales only when it says
-   nothing), and can carry per-track wording, e.g. `design: { title, hint }`.
-   Keys stay unique across the whole list, so a tick means one thing.
+   `design`. Sales walks the academy courses in tools/lib/courses: the
+   consolidated Sales course, then the course for the sales role the owner
+   assigns (staff.sales_role). Courses are split into modules; a module opens
+   once the one before it has passed its quiz. Design walks STEPS below. A
+   step lists the tracks it belongs to, and can carry per-track wording,
+   e.g. `design: { title, hint }`. Keys stay unique across the whole list,
+   so a tick means one thing.
 
    A step can name a `needs` feature that ships later (the end-of-day note,
    proofs). It is hidden until that feature is listed in FEATURES, so nobody
    is asked to do something the workspace cannot do yet. */
+
+const COURSES = require('./courses');
+
+/* Every quiz and exam passes at 80%, rounded up to a whole question. */
+const PASS_SHARE = 0.8;
+const passMark = (n) => Math.ceil(n * PASS_SHARE - 1e-9);
 
 /* Features this deploy has. A later PR adds its name here, and the steps
    that wait for it appear. */
@@ -37,94 +54,105 @@ const TRACKS = {
   design: { label: 'Design', note: 'Print-ready artwork, proofs, social posts in COS, and blog updates.' },
 };
 const DEFAULT_TRACK = 'sales';
-const BOTH = ['sales', 'design'];
 
 /** A track name from anywhere (a form, a row), or the default. */
 function trackOf(t) {
   return Object.prototype.hasOwnProperty.call(TRACKS, t) ? t : DEFAULT_TRACK;
 }
 
+/* The design path. Sales walks the academy courses instead (coursesFor). */
 const STEPS = [
-  { key: 'read:never', type: 'read', tracks: BOTH, article: 'What never to promise',
+  { key: 'read:never', type: 'read', article: 'What never to promise',
     title: 'Read: what never to promise' },
-  { key: 'read:lead', type: 'read', article: 'New lead: first reply to quote',
-    title: 'Read: how to answer a new lead' },
-  { key: 'do:lead', type: 'do', fact: 'leads',
-    title: 'Answer your first lead', hint: 'Open a lead from My Day and log the call, email, text or chat you sent.' },
-  { key: 'read:options', type: 'read', article: 'Quote with options the customer picks',
-    title: 'Read: quotes with options' },
-  { key: 'read:firstquote', type: 'read', article: 'Practice quote: a basic screen print order',
-    title: 'Practice: build a basic screen print quote', hint: 'Follow the tutorial step by step and save it as a draft. Nothing reaches a customer.' },
-  { key: 'do:quote', type: 'do', fact: 'quotes',
-    title: 'Build your first quote', hint: 'Use the Quote button on a lead so it links back. The owner checks it before it goes out.' },
-  { key: 'do:message', type: 'do', tracks: BOTH, fact: 'messages',
+  { key: 'do:message', type: 'do', fact: 'messages',
     title: 'Write your first customer message', hint: 'From a job page. While you are in training it waits for the owner.' },
-  { key: 'read:artflow', type: 'read', tracks: BOTH, article: 'Artwork pipeline: sales to designer to owner',
+  { key: 'read:artflow', type: 'read', article: 'Artwork pipeline: sales to designer to owner',
     title: 'Read: how artwork moves from sales to the designer to the owner' },
-  { key: 'read:proof', type: 'read', tracks: BOTH, article: 'Proof approval',
+  { key: 'read:proof', type: 'read', article: 'Proof approval',
     title: 'Read: proof approval' },
-  { key: 'read:deposits', type: 'read', article: 'Chasing deposits and balances',
-    title: 'Read: chasing deposits and balances' },
-  { key: 'read:tax', type: 'read', article: 'Tax certificate pre-screen',
-    title: 'Read: tax certificate pre-screen' },
-  { key: 'read:social', type: 'read', article: 'Social inbox check (twice a day)',
-    title: 'Read: the social inbox check' },
-  { key: 'read:ai', type: 'read', tracks: BOTH, article: 'AI rules',
+  { key: 'read:ai', type: 'read', article: 'AI rules',
     title: 'Read: the AI rules (ChatGPT, image tools)' },
-  { key: 'read:prospect', type: 'read', article: 'Finding new leads in quiet time',
-    title: 'Read: finding new leads in quiet time' },
-  { key: 'quiz:basics', type: 'quiz', quiz: 'basics',
-    title: 'Pass the quick quiz', hint: '10 questions, about 5 minutes. Get 8 right. Retake it as often as you need.' },
-  /* The design path: the artwork rules for each method, proofs, COS and the blog. */
-  { key: 'read:screenart', type: 'read', tracks: ['design'], article: 'Screen printing: artwork do\'s and don\'ts',
+  { key: 'read:screenart', type: 'read', article: 'Screen printing: artwork do\'s and don\'ts',
     title: 'Read: screen printing artwork' },
-  { key: 'read:dtfart', type: 'read', tracks: ['design'], article: 'DTF: artwork do\'s and don\'ts',
+  { key: 'read:dtfart', type: 'read', article: 'DTF: artwork do\'s and don\'ts',
     title: 'Read: DTF artwork' },
-  { key: 'read:embart', type: 'read', tracks: ['design'], article: 'Embroidery: artwork do\'s and don\'ts',
+  { key: 'read:embart', type: 'read', article: 'Embroidery: artwork do\'s and don\'ts',
     title: 'Read: embroidery artwork' },
-  { key: 'read:patches', type: 'read', tracks: ['design'], article: 'Patches, vinyl and puff print: what to check',
+  { key: 'read:patches', type: 'read', article: 'Patches, vinyl and puff print: what to check',
     title: 'Read: patches, vinyl and puff print' },
-  { key: 'read:proofhow', type: 'read', tracks: ['design'], article: 'Making and sending a proof',
+  { key: 'read:proofhow', type: 'read', article: 'Making and sending a proof',
     title: 'Read: making and sending a proof' },
-  { key: 'do:proof', type: 'do', tracks: ['design'], fact: 'proofs', needs: 'proofs',
+  { key: 'do:proof', type: 'do', fact: 'proofs', needs: 'proofs',
     title: 'Upload your first proof', hint: 'From a job page. The owner checks it before the customer sees it.' },
-  { key: 'read:cos', type: 'read', tracks: ['design'], article: 'Social posts in COS Creator Studio',
+  { key: 'read:cos', type: 'read', article: 'Social posts in COS Creator Studio',
     title: 'Read: social posts in COS Creator Studio' },
-  { key: 'read:blog', type: 'read', tracks: ['design'], article: 'Blog updates: copy and images',
+  { key: 'read:blog', type: 'read', article: 'Blog updates: copy and images',
     title: 'Read: blog updates (copy and images)' },
-  { key: 'quiz:design', type: 'quiz', tracks: ['design'], quiz: 'design',
+  { key: 'quiz:design', type: 'quiz', quiz: 'design',
     title: 'Pass the artwork quiz', hint: '10 questions, about 5 minutes. Get 8 right. Retake it as often as you need.' },
-  { key: 'signoff:art', type: 'signoff', tracks: ['design'],
+  { key: 'signoff:art', type: 'signoff',
     title: 'Prepares print-ready art correctly', hint: 'The owner checks a few of your files: vectors, colour count, size, transparent background.' },
-  { key: 'do:eod', type: 'do', fact: 'eod', needs: 'eod',
-    title: 'Send your first end-of-day note', hint: 'Use "Wrap up the day" on My Day.' },
-  { key: 'signoff:screenprint', type: 'signoff',
-    title: 'Built the practice quote correctly', hint: 'The owner opens your practice draft and checks it against the tutorial.' },
-  { key: 'signoff:handoff', type: 'signoff', tracks: BOTH,
+  { key: 'signoff:handoff', type: 'signoff',
     title: 'Knows when to hand a customer to the owner', hint: 'Discounts, refunds, logos the customer does not own, angry customers.' },
-  { key: 'signoff:ready', type: 'signoff', tracks: BOTH,
-    design: { title: 'Ready to send proofs on their own', hint: 'The last step. Proofs and messages go straight to customers from here. The owner decides when to move you up from Training.' },
-    title: 'Ready to send small quotes on their own', hint: 'The last step. Commission starts here, on quotes you create from now on. The owner decides when to move you up from Training.' },
-];
+  { key: 'signoff:ready', type: 'signoff',
+    title: 'Ready to send proofs on their own', hint: 'The last step. Proofs and messages go straight to customers from here. The owner decides when to move you up from Training.' },
+].map((st) => ({ ...st, tracks: ['design'] }));
 
 const READY_KEY = 'signoff:ready';
 
-function visibleSteps(features = FEATURES, track = DEFAULT_TRACK) {
+/* A course as steps, in order. Each step carries its module, so the page can
+   group them and progress() can keep later modules closed. A module's gate
+   is its quiz, or its exam when it has no quiz; a module with neither (or
+   whose gate waits for a feature) never holds the next one shut. */
+function courseSteps(course, features = FEATURES) {
+  const out = [];
+  const mods = [...course.modules, { key: 'final', title: 'Final exam and sign-off', final: true }];
+  mods.forEach((m, i) => {
+    const mod = { module: `${course.key}:${m.key}`, moduleTitle: m.title, moduleIndex: i, course: course.key };
+    const push = (st) => { if (!st.needs || features.has(st.needs)) out.push({ ...st, ...mod }); };
+    if (m.final) {
+      push({ key: `buffer:${course.key}:final`, type: 'buffer', minutes: course.final.floating,
+        title: 'Buffer: catch up before the final exam', hint: 'Re-read anything you were unsure of, finish any step still open, and ask June what you need.' });
+      push({ key: `quiz:${course.final.quiz.key}`, type: 'quiz', quiz: course.final.quiz.key, minutes: course.final.quiz.minutes, gate: true,
+        title: `Pass the final exam (${course.final.quiz.questions.length} questions)`,
+        hint: `Get ${passMark(course.final.quiz.questions.length)} right (80%). Retake it as often as you need.` });
+      course.final.signoffs.forEach(push);
+      return;
+    }
+    for (const l of m.lessons) {
+      push({ key: `lesson:${l.id}`, type: 'lesson', article: l.article, minutes: l.minutes, goals: l.goals || [],
+        checks: l.checks || [], tryIt: l.tryIt || [], title: l.article.replace(/^Sales course [0-9a-z]+: /, '') });
+    }
+    for (const x of m.practice || []) push(!m.quiz && x.type === 'exam' ? { ...x, gate: true } : x);
+    if (m.quiz) {
+      push({ key: `quiz:${m.quiz.key}`, type: 'quiz', quiz: m.quiz.key, minutes: m.quiz.minutes, gate: true,
+        title: m.quiz.title, hint: `${m.quiz.questions.length} questions. Get ${passMark(m.quiz.questions.length)} right (80%). Retake it as often as you need.` });
+    }
+    push({ key: `buffer:${course.key}:${m.key}`, type: 'buffer', minutes: m.buffer,
+      title: 'Buffer: catch-up time', hint: 'Re-read, ask June in Team chat, or retake the quiz. Ahead of time? Move on.' });
+  });
+  return out;
+}
+
+function visibleSteps(features = FEATURES, track = DEFAULT_TRACK, role = null) {
   const t = trackOf(track);
+  const courses = COURSES.coursesFor(t, role);
+  if (courses.length) return courses.flatMap((c) => courseSteps(c, features));
   return STEPS.filter((s) => (!s.needs || features.has(s.needs)) && (s.tracks || [DEFAULT_TRACK]).includes(t))
     .map((s) => (s[t] ? { ...s, ...s[t] } : s));
 }
 
-function stepByKey(key, features = FEATURES, track = DEFAULT_TRACK) {
-  return visibleSteps(features, track).find((s) => s.key === key) || null;
+function stepByKey(key, features = FEATURES, track = DEFAULT_TRACK, role = null) {
+  return visibleSteps(features, track, role).find((s) => s.key === key) || null;
 }
 
-/** May this person tick this step? A helper ticks their own reading; only
- *  the owner signs off; "do" steps are never ticked by hand. */
-function mayTick(key, byOwner, features = FEATURES, track = DEFAULT_TRACK) {
-  const s = stepByKey(key, features, track);
+/** May this person tick this step? A helper ticks their own reading and
+ *  lessons; only the owner signs off; "do", quiz, exam and buffer rows are
+ *  never ticked by hand. */
+function mayTick(key, byOwner, features = FEATURES, track = DEFAULT_TRACK, role = null) {
+  const s = stepByKey(key, features, track, role);
   if (!s) return false;
-  if (s.type === 'read') return true;
+  if (s.type === 'read' || s.type === 'lesson') return true;
   if (s.type === 'signoff') return !!byOwner;
   return false;
 }
@@ -132,18 +160,47 @@ function mayTick(key, byOwner, features = FEATURES, track = DEFAULT_TRACK) {
 /**
  * Where a helper stands.
  * @param ticks  Map step_key -> { done_at, signed_by } from staff_training
- * @param facts  counts of real work: { leads, quotes, messages, eod, proofs }
+ * @param facts  counts of real work: { leads, quotes, messages, eod, proofs,
+ *               prospects, quizzes: { key: passes }, exams: { key: passes } }
+ * @param times  Map step_key -> { started_at, done_at } from staff_lesson_time
+ *
+ * Buffer rows are time, not work: never counted in done/total, and shown
+ * done once their module's gate is passed. Every step after the first
+ * module whose gate is not passed is `locked`.
  */
-function progress(ticks, facts = {}, features = FEATURES, track = DEFAULT_TRACK) {
-  const steps = visibleSteps(features, track).map((s) => {
+function progress(ticks, facts = {}, features = FEATURES, track = DEFAULT_TRACK, role = null, times = new Map()) {
+  const raw = visibleSteps(features, track, role).map((s) => {
     const t = ticks.get(s.key);
-    const done = s.type === 'do' ? Number(facts[s.fact] || 0) > 0
-      : s.type === 'quiz' ? Number((facts.quizzes || {})[s.quiz] || 0) > 0 : !!t;
-    return { ...s, done, doneAt: t ? t.done_at : null, signedBy: t ? t.signed_by : null };
+    const done = s.type === 'do' ? Number(facts[s.fact] || 0) >= (s.need || 1)
+      : s.type === 'quiz' ? Number((facts.quizzes || {})[s.quiz] || 0) > 0
+      : s.type === 'exam' ? Number((facts.exams || {})[s.exam] || 0) > 0
+      : s.type === 'buffer' ? false : !!t;
+    const tm = times.get(s.key);
+    const took = tm && tm.started_at && tm.done_at
+      ? Math.max(0, Math.round((new Date(tm.done_at) - new Date(tm.started_at)) / 60000)) : null;
+    return { ...s, done, doneAt: t ? t.done_at : null, signedBy: t ? t.signed_by : null, took };
   });
-  const done = steps.filter((s) => s.done).length;
-  return { steps, done, total: steps.length, next: steps.filter((s) => !s.done).slice(0, 3),
-           complete: done === steps.length };
+  const gateDone = new Map();
+  for (const s of raw) if (s.gate) gateDone.set(s.module, s.done);
+  const order = [...new Set(raw.filter((s) => s.module).map((s) => s.module))];
+  const openUpTo = order.findIndex((m) => gateDone.has(m) && !gateDone.get(m));
+  const steps = raw.map((s) => {
+    if (!s.module) return { ...s, locked: false };
+    const locked = openUpTo !== -1 && order.indexOf(s.module) > openUpTo;
+    return { ...s, locked, done: s.type === 'buffer' ? !!gateDone.get(s.module) : s.done };
+  });
+  const work = steps.filter((s) => s.type !== 'buffer');
+  const done = work.filter((s) => s.done).length;
+  return { steps, done, total: work.length, next: work.filter((s) => !s.done && !s.locked).slice(0, 3),
+           complete: done === work.length,
+           minutes: { expected: steps.reduce((n, s) => n + (Number(s.minutes) || 0), 0),
+                      took: steps.reduce((n, s) => n + (s.took || 0), 0) } };
+}
+
+/** Is this step open to the helper now? False for a locked module's step. */
+function stepOpen(p, key) {
+  const s = p.steps.find((x) => x.key === key);
+  return !!s && !s.locked;
 }
 
 /* A short note at the top of each page while a helper is in training: what
@@ -172,53 +229,6 @@ const PAGE_TIPS = {
    explained by the rule the helper will meet at work. `answer` is the index
    of the right choice; it never reaches the page until the quiz is marked. */
 const QUIZZES = {
-  basics: {
-    title: 'Quick quiz: customers and sales',
-    pass: 8,
-    questions: [
-      { id: 'reply', q: 'A customer fills in the quote form at 10am, during your shift. When should they hear from you?',
-        choices: ['By the end of your shift', 'Within 1 hour', 'Once the quote is ready', 'The next morning'],
-        answer: 1, article: 'New lead: first reply to quote', why: 'Forms get a reply within 1 hour, chats within 15 minutes. The first shop to answer usually gets the order.' },
-      { id: 'vague', q: 'A message says only: "how much for shirts?" What is the best reply?',
-        choices: ['Send the price of our cheapest shirt', 'Ask them to call the owner',
-          'Thank them, and ask how many, which garment, where the design goes, their artwork and the date they need them',
-          'Send the whole catalogue'],
-        answer: 2, article: 'What do you need for a quote?', why: 'You cannot quote without the details. The /quote reply in the playbook asks for all five in one friendly message.' },
-      { id: 'minimum', q: 'A coach wants 30 shirts with a 2-colour logo. What do you suggest?',
-        choices: ['Screen printing, it is always cheapest', 'Tell them 30 is too few for us',
-          'DTF (or embroidery), because screen printing starts at 50 pieces', 'Ask them to order 50 so we can screen print'],
-        answer: 2, article: 'Is there a minimum order?', why: 'Screen printing starts at 50 pieces. DTF has no minimum and suits small runs. Offer the best-value option, never a refusal.' },
-      { id: 'pricematch', q: 'A customer says another shop is 15% cheaper and asks you to match it. What do you do?',
-        choices: ['Match it, to win the order', 'Offer 10% off as a middle ground',
-          'Say we never match prices', 'Ask to see the other quote, explain what ours includes, and check with the owner before promising anything'],
-        answer: 3, article: 'What never to promise', why: 'Discounts and price matches are the owner\'s call. Comparing what is included often wins the sale without any discount.' },
-      { id: 'logo', q: 'A customer asks for 60 shirts with an NFL team logo for a watch party. What do you do?',
-        choices: ['Quote it like any other order', 'Quote it but use DTF instead', 'Bring it to the owner: we do not print logos the customer does not own',
-          'Ignore the message'],
-        answer: 2, article: 'What never to promise', why: 'Logos the customer does not own (teams, brands, characters) always go to the owner. Suggest an original design for the party instead.' },
-      { id: 'followup', q: 'You sent a quote 3 days ago and heard nothing. What is the best next step?',
-        choices: ['Wait. They will reply when ready', 'Send a friendly note asking if they have questions, mention the quote is good for 14 days, and set the next follow-up date',
-          'Offer a discount to get a reply', 'Call them every day until they answer'],
-        answer: 1, article: 'How long is my quote good for?', why: 'Most sales are won on the follow-up. One friendly nudge with a reason to act now, then a new follow-up date on the lead.' },
-      { id: 'rush', q: 'A customer needs 40 shirts by Friday, 3 business days away. What do you say?',
-        choices: ['"No problem, they\'ll be ready Friday"', '"Sorry, we can\'t do that"',
-          '"We offer rush for a fee. Let me check what\'s on the press and confirm today"', '"Order now and we\'ll try our best"'],
-        answer: 2, article: 'How long will my order take?', why: 'Never promise a date without checking stock and the production board. Rush is a paid option, so offer it and confirm.' },
-      { id: 'upset', q: 'A customer writes: "One shirt is printed crooked and our event is tomorrow!" What do you do first?',
-        choices: ['Promise a full refund', 'Apologise, ask for a photo, and bring it to the owner right away',
-          'Explain that small differences are normal', 'Wait for the owner to see it'],
-        answer: 1, article: 'What never to promise', why: 'Apologise and act fast, but refunds and reprints are the owner\'s decision. A photo lets the owner fix it quickly.' },
-      { id: 'quiet', q: 'You have a quiet hour with no leads waiting. What is the best use of it?',
-        choices: ['Find new customers: schools, teams, churches and businesses with events coming up, and add each one on Leads',
-          'Log off early', 'Post the same message in as many Facebook groups as you can', 'Re-read old emails'],
-        answer: 0, article: 'Finding new leads in quiet time', why: 'Quiet time is for finding new leads. Look for groups that need shirts soon and add each one on Leads, so nothing is lost and the sale is credited to you.' },
-      { id: 'prospect', q: 'You find a youth soccer league with the coach\'s email on its website. What do you do?',
-        choices: ['Add them to our email newsletter', 'Text the coach\'s phone number',
-          'Add them on Leads, then send one short personal email about their season with an easy next step',
-          'Send our full price list'],
-        answer: 2, article: 'Finding new leads in quiet time', why: 'One short, personal message mentioning their team, with an easy yes ("Want a couple of design ideas and a price?"). Never add strangers to the newsletter, and never cold-text.' },
-    ],
-  },
   design: {
     title: 'Artwork quiz: print-ready files and proofs',
     pass: 8,
@@ -265,6 +275,14 @@ const QUIZZES = {
   },
 };
 
+/* Every course quiz joins the list, passing at 80%. */
+for (const c of Object.values(COURSES.COURSES)) {
+  for (const z of [...c.modules.map((m) => m.quiz).filter(Boolean), c.final.quiz]) {
+    if (QUIZZES[z.key]) throw new Error(`quiz key ${z.key} is used twice`);
+    QUIZZES[z.key] = { title: z.title, pass: passMark(z.questions.length), questions: z.questions };
+  }
+}
+
 /** The quiz as a helper sees it: questions and choices, no answers. */
 function quizForPage(key) {
   const z = Object.prototype.hasOwnProperty.call(QUIZZES, key) ? QUIZZES[key] : null;
@@ -299,4 +317,7 @@ function placeholders(text) {
   return [...new Set(out)];
 }
 
-module.exports = { FEATURES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, visibleSteps, stepByKey, mayTick, progress, placeholders };
+module.exports = { FEATURES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz,
+  visibleSteps, stepByKey, mayTick, progress, stepOpen, placeholders, passMark, courseSteps,
+  COURSES: COURSES.COURSES, SALES_ROLES: COURSES.SALES_ROLES, salesRoleOf: COURSES.salesRoleOf,
+  lessonArticles: COURSES.lessonArticles, glossary: COURSES.glossary };

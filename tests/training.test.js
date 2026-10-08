@@ -46,29 +46,35 @@ test('a step waiting for a later feature stays hidden until it ships', () => {
 });
 
 test('work steps tick themselves from real work, never from a stored tick', () => {
-  const ticks = new Map([['do:quote', { done_at: new Date() }]]);
-  const p = TRAINING.progress(ticks, { leads: 1, quotes: 0, messages: 0 });
+  const ticks = new Map([['do:message', { done_at: new Date() }], ['do:prospects', { done_at: new Date() }]]);
+  const p = TRAINING.progress(ticks, { leads: 1, messages: 0, prospects: 2 });
   const by = Object.fromEntries(p.steps.map((s) => [s.key, s.done]));
   assert.strictEqual(by['do:lead'], true, 'a lead answered counts');
-  assert.strictEqual(by['do:quote'], false, 'a stored tick does not stand in for a quote never built');
+  assert.strictEqual(by['do:message'], false, 'a stored tick does not stand in for a message never written');
+  assert.strictEqual(by['do:prospects'], false, 'three prospects are needed, not two');
+  assert.strictEqual(TRAINING.progress(new Map(), { prospects: 3 }).steps.find((s) => s.key === 'do:prospects').done, true);
   assert.strictEqual(p.done, 1);
-  assert.strictEqual(p.next.length, 3);
   assert.strictEqual(p.complete, false);
 });
 
 test('training is complete only when every visible step is done', () => {
-  const ticks = new Map(TRAINING.visibleSteps().filter((s) => s.type !== 'do').map((s) => [s.key, { done_at: new Date() }]));
-  assert.strictEqual(TRAINING.progress(ticks, { leads: 1, quotes: 1, messages: 0 }).complete, false);
-  const p = TRAINING.progress(ticks, { leads: 1, quotes: 1, messages: 2, quizzes: { basics: 1 } });
+  const steps = TRAINING.visibleSteps();
+  const ticks = new Map(steps.filter((s) => ['lesson', 'read', 'signoff'].includes(s.type)).map((s) => [s.key, { done_at: new Date() }]));
+  const quizzes = Object.fromEntries(steps.filter((s) => s.type === 'quiz').map((s) => [s.quiz, 1]));
+  assert.strictEqual(TRAINING.progress(ticks, { leads: 1, messages: 1, prospects: 2, quizzes }).complete, false);
+  const p = TRAINING.progress(ticks, { leads: 1, messages: 2, prospects: 3, quizzes });
   assert.strictEqual(p.complete, true);
   assert.strictEqual(p.done, p.total);
 });
 
 test('a helper ticks their reading; only the owner signs off; nobody ticks work by hand', () => {
-  assert.strictEqual(TRAINING.mayTick('read:never', false), true);
+  assert.strictEqual(TRAINING.mayTick('lesson:s1-welcome', false), true);
+  assert.strictEqual(TRAINING.mayTick('read:never', false, undefined, 'design'), true);
   assert.strictEqual(TRAINING.mayTick('signoff:ready', false), false);
   assert.strictEqual(TRAINING.mayTick('signoff:ready', true), true);
-  assert.strictEqual(TRAINING.mayTick('do:quote', true), false);
+  assert.strictEqual(TRAINING.mayTick('do:lead', true), false);
+  assert.strictEqual(TRAINING.mayTick('buffer:sales-core:s1', false), false, 'a buffer is time, not a tick');
+  assert.strictEqual(TRAINING.mayTick('quiz:sales-s1', true), false);
   assert.strictEqual(TRAINING.mayTick('read:nope', true), false);
   assert.strictEqual(TRAINING.mayTick('__proto__', true), false);
 });
@@ -78,9 +84,12 @@ test('the routes enforce the same rules', () => {
   assert.strictEqual(STAFF.ROUTES['POST /admin/training/tips-reset'], 'owner');
   assert.strictEqual(STAFF.ROUTES['POST /admin/feedback'], 'owner');
   assert.strictEqual(STAFF.ROUTES['POST /admin/training/read'], 'any');
+  assert.strictEqual(STAFF.ROUTES['POST /admin/training/restart'], 'owner');
+  assert.strictEqual(STAFF.ROUTES['GET /admin/training/lesson/:id'], 'any');
   const read = route("app.post('/admin/training/read', requireAdmin");
   assert.match(read, /if \(!actor \|\| actor\.kind !== 'staff'\)/, 'the owner has no reading to tick');
-  assert.match(read, /s\.type !== 'read'/, 'a sign-off cannot be smuggled through the reading form');
+  assert.match(read, /!\['read', 'lesson'\]\.includes\(s\.type\)/, 'a sign-off cannot be smuggled through the reading form');
+  assert.match(read, /if \(!TRAINING\.stepOpen\(p, key\)\)/, 'a lesson in a closed module cannot be ticked');
   assert.match(read, /\[actor\.id, key\]/, 'a helper ticks only their own steps');
   const sign = route("app.post('/admin/training/signoff', requireAdmin");
   assert.match(sign, /s\.type !== 'signoff'/);
@@ -92,7 +101,7 @@ test('page tips: a known page only, back only within the site, and never for the
   assert.match(tip, /safeAdminPath\(b\.back, '\/admin\/my-day'\)/);
   const fn = src.slice(src.indexOf('function pageTip('), src.indexOf('\n}\n', src.indexOf('function pageTip(')));
   assert.match(fn, /a\.kind !== 'staff' \|\| !a\.inTraining/);
-  assert.match(fn, /\$\{escEmail\(tip\)\}/);
+  assert.match(fn, /\$\{withTips\(escEmail\(tip\)\)\}/);
   assert.match(src, /<main class="adm-page"><div class="wrap">\$\{pageTip\(key\)\}\$\{body\}/);
 });
 
@@ -125,7 +134,7 @@ test('AI prompts are a playbook kind with a copy button, and the AI rules are dr
 });
 
 test('the quiz is marked on the server; its step ticks only from a passing attempt', () => {
-  const z = TRAINING.QUIZZES.basics;
+  const z = TRAINING.QUIZZES['sales-s1'];
   assert.ok(z.questions.length >= 8 && z.pass <= z.questions.length);
   for (const x of z.questions) {
     assert.ok(Number.isInteger(x.answer) && x.answer >= 0 && x.answer < x.choices.length, x.id);
@@ -134,23 +143,23 @@ test('the quiz is marked on the server; its step ticks only from a passing attem
   const ids = z.questions.map((x) => x.id);
   assert.strictEqual(new Set(ids).size, ids.length);
   // The page copy carries no answers.
-  assert.ok(TRAINING.quizForPage('basics').questions.every((x) => !('answer' in x) && !('why' in x)));
+  assert.ok(TRAINING.quizForPage('sales-s1').questions.every((x) => !('answer' in x) && !('why' in x)));
   assert.strictEqual(TRAINING.quizForPage('__proto__'), null);
   assert.strictEqual(TRAINING.gradeQuiz('nope', {}), null);
 
   const all = Object.fromEntries(z.questions.map((x) => [x.id, String(x.answer)]));
-  assert.deepStrictEqual([TRAINING.gradeQuiz('basics', all).score, TRAINING.gradeQuiz('basics', all).passed], [z.questions.length, true]);
+  assert.deepStrictEqual([TRAINING.gradeQuiz('sales-s1', all).score, TRAINING.gradeQuiz('sales-s1', all).passed], [z.questions.length, true]);
   const bad = { ...all, [ids[0]]: '9', [ids[1]]: '-1', [ids[2]]: 'x' };
   delete bad[ids[3]];
-  const r = TRAINING.gradeQuiz('basics', bad);
+  const r = TRAINING.gradeQuiz('sales-s1', bad);
   assert.strictEqual(r.score, z.questions.length - 4, 'out-of-range, junk and missing picks are wrong, not errors');
   assert.strictEqual(r.passed, r.score >= z.pass);
 
-  assert.strictEqual(TRAINING.mayTick('quiz:basics', true), false, 'nobody ticks the quiz by hand');
-  const none = TRAINING.progress(new Map([['quiz:basics', { done_at: new Date() }]]), {});
-  assert.strictEqual(none.steps.find((s) => s.key === 'quiz:basics').done, false, 'a stored tick does not stand in for a pass');
-  const passed = TRAINING.progress(new Map(), { quizzes: { basics: 1 } });
-  assert.strictEqual(passed.steps.find((s) => s.key === 'quiz:basics').done, true);
+  assert.strictEqual(TRAINING.mayTick('quiz:sales-s1', true), false, 'nobody ticks the quiz by hand');
+  const none = TRAINING.progress(new Map([['quiz:sales-s1', { done_at: new Date() }]]), {});
+  assert.strictEqual(none.steps.find((s) => s.key === 'quiz:sales-s1').done, false, 'a stored tick does not stand in for a pass');
+  const passed = TRAINING.progress(new Map(), { quizzes: { 'sales-s1': 1 } });
+  assert.strictEqual(passed.steps.find((s) => s.key === 'quiz:sales-s1').done, true);
 });
 
 test('quiz routes: a helper hands in their own; answers stay off the helper page', () => {
@@ -171,7 +180,10 @@ test('quiz routes: a helper hands in their own; answers stay off the helper page
 
 test('every quiz question points at a playbook article that really exists', () => {
   const seeded = new Set([...src.matchAll(/^\s+\{ kind: '[a-z]+'.*?title: '((?:[^'\\]|\\.)+)'/gm)].map((m) => m[1].replace(/\\'/g, "'")));
-  for (const x of TRAINING.QUIZZES.basics.questions) assert.ok(seeded.has(x.article), `${x.id}: no article "${x.article}"`);
+  for (const a of TRAINING.lessonArticles()) seeded.add(a.title);
+  for (const [key, z] of Object.entries(TRAINING.QUIZZES)) {
+    for (const x of z.questions) assert.ok(seeded.has(x.article), `${key}/${x.id}: no article "${x.article}"`);
+  }
 });
 
 test('commission starts at the "ready" sign-off, and a recorded payout never disappears', () => {
@@ -179,7 +191,7 @@ test('commission starts at the "ready" sign-off, and a recorded payout never dis
   assert.match(fn, /t\.step_key = \$2\s+AND q\.created_at >= t\.done_at/, 'only quotes created after the sign-off earn');
   assert.match(fn, /OR EXISTS \(SELECT 1 FROM commission_payouts c WHERE c\.staff_id = \$1 AND c\.quote_code = q\.code\)/);
   assert.match(fn, /\[staffId, TRAINING\.READY_KEY\]/);
-  assert.match(TRAINING.STEPS.find((s) => s.key === TRAINING.READY_KEY).hint, /Commission starts here/);
+  assert.match(TRAINING.visibleSteps(undefined, 'sales').find((s) => s.key === TRAINING.READY_KEY).hint, /Commission starts here/);
 });
 
 
@@ -187,8 +199,8 @@ test('two training paths: each ends with "ready", shares the basics, and keeps i
   const sales = TRAINING.visibleSteps(undefined, 'sales').map((s) => s.key);
   const design = TRAINING.visibleSteps(undefined, 'design').map((s) => s.key);
   for (const path of [sales, design]) assert.strictEqual(path[path.length - 1], TRAINING.READY_KEY);
-  for (const k of ['read:never', 'read:proof', 'read:ai', 'do:message', 'signoff:handoff']) assert.ok(sales.includes(k) && design.includes(k), k);
-  for (const k of ['do:lead', 'do:quote', 'quiz:basics', 'read:prospect']) assert.ok(!design.includes(k), `designer is not asked to ${k}`);
+  for (const k of ['do:message', 'signoff:handoff']) assert.ok(sales.includes(k) && design.includes(k), k);
+  for (const k of ['do:lead', 'do:prospects', 'quiz:sales-s1', 'lesson:s8-prospect']) assert.ok(!design.includes(k), `designer is not asked to ${k}`);
   for (const k of ['do:proof', 'read:cos', 'read:blog', 'quiz:design', 'signoff:art']) assert.ok(design.includes(k) && !sales.includes(k), k);
   assert.match(TRAINING.visibleSteps(undefined, 'design').find((s) => s.key === TRAINING.READY_KEY).title, /proofs/);
   assert.strictEqual(TRAINING.trackOf('nope'), 'sales');
@@ -196,8 +208,8 @@ test('two training paths: each ends with "ready", shares the basics, and keeps i
   assert.strictEqual(TRAINING.mayTick('read:blog', false, undefined, 'sales'), false, 'a step off your path cannot be ticked');
   assert.strictEqual(TRAINING.mayTick('read:blog', false, undefined, 'design'), true);
   // The routes pass the helper's own path, never one from the form.
-  assert.match(route("app.post('/admin/training/read', requireAdmin"), /stepByKey\(key, undefined, actor\.track\)/);
-  assert.match(route("app.post('/admin/training/signoff', requireAdmin"), /await trackFor\(staffId\)/);
+  assert.match(route("app.post('/admin/training/read', requireAdmin"), /stepByKey\(key, undefined, actor\.track, actor\.role\)/);
+  assert.match(route("app.post('/admin/training/signoff', requireAdmin"), /await pathFor\(staffId\)/);
 });
 
 test('every artwork quiz question points at a real article, and its answers are valid', () => {
