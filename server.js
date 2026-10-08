@@ -1139,6 +1139,39 @@ async function initStaffTables() {
       done_at        TIMESTAMPTZ,
       done_by        INTEGER
     )`);
+  /* A task says what to do and, for something new, how; the person doing it
+     presses Start (accepting it) and then Completed, so the owner sees where
+     each one stands. */
+  for (const col of ['description TEXT', 'how_to TEXT', 'started_at TIMESTAMPTZ', 'started_by INTEGER']) {
+    await pool.query(`ALTER TABLE staff_tasks ADD COLUMN IF NOT EXISTS ${col}`);
+  }
+  /* The tools the team works in (/admin/resources): links and how to get in,
+     never a password. Started with what the playbook already names. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_resources (
+      id          SERIAL PRIMARY KEY,
+      name        TEXT NOT NULL,
+      url         TEXT,
+      purpose     TEXT NOT NULL DEFAULT '',
+      login_note  TEXT NOT NULL DEFAULT '',
+      audience    TEXT NOT NULL DEFAULT 'all',
+      position    INTEGER NOT NULL DEFAULT 0,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  {
+    const { rows: [n] } = await pool.query('SELECT COUNT(*)::int AS n FROM staff_resources');
+    if (!n.n) {
+      const start = [
+        ['COS Creator Studio', 'https://coscreatorstudio.com', 'Plan, make and schedule our social posts.', 'Your own login: June invites you.', 'all'],
+        ['June\'s Tees Website Photos', 'https://drive.google.com/drive/folders/1mgbTpvBKWPGftga3R5R-VF5hUJ2vNSvz', 'Our own job photos for posts, the blog and the website.', 'June shares the folder with your Google account.', 'all'],
+        ['June\'s Tees – Blog', 'https://drive.google.com/drive/folders/1Lycv9nXRp53qq15n2iL6liwNPCz2sJNB', 'Blog drafts, the post template and images.', 'June shares the folder with your Google account.', 'design'],
+      ];
+      for (const [i, r] of start.entries()) {
+        await pool.query(`INSERT INTO staff_resources (name, url, purpose, login_note, audience, position) VALUES ($1, $2, $3, $4, $5, $6)`, [...r, i + 1]);
+      }
+    }
+  }
   await pool.query(`
     CREATE TABLE IF NOT EXISTS kb_articles (
       id          SERIAL PRIMARY KEY,
@@ -8726,6 +8759,7 @@ const ADMIN_NAV = [
   { key: 'discounts',  href: '/admin/discounts',     label: 'Discounts',  icon: 'tag' },
   { key: 'chat',       href: '/admin/team-chat',     label: 'Team chat',  icon: 'chat',   badge: 'chat' },
   { key: 'playbook',   href: '/admin/playbook',      label: 'Playbook',   icon: 'book' },
+  { key: 'resources',  href: '/admin/resources',     label: 'Resources',  icon: 'key' },
   { key: 'training',   href: '/admin/training',      label: 'Training',   icon: 'learn' },
   { key: 'hiring',     href: '/admin/hiring',        label: 'Hiring',     icon: 'users' },
   { key: 'team',       href: '/admin/team',    label: 'Team',       icon: 'team',   badge: 'approvals' },
@@ -8770,6 +8804,7 @@ const ADMIN_ICONS = {
   card:   '<rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/>',
   phone:  '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
   check:  '<polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+  key:    '<circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3L21 2"/><path d="M16 7l3 3"/><path d="M14 9l2 2"/>',
   book:   '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
   team:   '<circle cx="9" cy="7" r="4"/><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/><path d="M21 21v-2a4 4 0 0 0-3-3.85"/>',
   mail:   '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>',
@@ -8803,6 +8838,11 @@ const ADMIN_CSS = `
 .page-dots a{width:10px;height:10px;border-radius:50%;background:#d6deef}
 .page-dots a.on{background:#1848B8;width:26px;border-radius:6px}
 .mod-icon{font-size:20px;margin-right:4px}
+details.md-sec>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px}
+details.md-sec>summary::-webkit-details-marker{display:none}
+details.md-sec>summary::before{content:'▾';color:#8e9fc5;transition:transform .15s}
+details.md-sec:not([open])>summary::before{transform:rotate(-90deg)}
+.res-card .btn{white-space:nowrap}
 .adm-body{padding:0;background:#f3f5fa}
 .adm-toggle{position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none}
 .adm{display:flex;min-height:100vh}
@@ -27834,15 +27874,34 @@ app.post('/admin/tasks', requireAdmin, async (req, res) => {
   const assignTo = actor && actor.kind === 'staff' ? actor.id : intIn(b.assigned_to);
   try {
     await pool.query(
-      `INSERT INTO staff_tasks (title, due_on, assigned_to, business, submission_id, quote_code, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      `INSERT INTO staff_tasks (title, due_on, assigned_to, business, submission_id, quote_code, created_by, description, how_to)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [title, isoDate(b.due_on), assignTo, BUSINESSES[b.business] ? b.business : 'jtees',
        intIn(b.submission_id), QUOTE_CODE_RE.test(String(b.quote_code || '').toUpperCase()) ? String(b.quote_code).toUpperCase() : null,
-       actor && actor.kind === 'staff' ? actor.id : null]);
+       actor && actor.kind === 'staff' ? actor.id : null, text(b.description, 2000) || null, text(b.how_to, 4000) || null]);
     return back(res, backTo, 'ok', 'Task added.');
   } catch (err) {
     console.error('task add failed:', err.message);
     return back(res, backTo, 'err', 'Could not add the task.');
+  }
+});
+
+/* "Start: I accept this task". Only the person doing it starts it: an
+   unassigned task becomes theirs, someone else's is refused. */
+app.post('/admin/tasks/:id/start', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  const actor = currentActor();
+  const backTo = safeAdminPath(req.body && req.body.back, '/admin/my-day');
+  if (!id) return res.redirect(backTo);
+  if (!actor || actor.kind !== 'staff') return back(res, backTo, 'err', 'The person doing the task starts it.');
+  try {
+    const { rowCount } = await pool.query(
+      `UPDATE staff_tasks SET started_at = NOW(), started_by = $2, assigned_to = COALESCE(assigned_to, $2)
+        WHERE id = $1 AND done_at IS NULL AND started_at IS NULL AND (assigned_to = $2 OR assigned_to IS NULL)`, [id, actor.id]);
+    return back(res, backTo, rowCount ? 'ok' : 'err', rowCount ? 'Started: the task is yours.' : 'That task is someone else\'s, or already started.');
+  } catch (err) {
+    console.error('task start failed:', err.message);
+    return back(res, backTo, 'err', 'Could not start the task.');
   }
 });
 
@@ -27862,6 +27921,104 @@ app.post('/admin/tasks/:id/done', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('task done failed:', err.message);
     return back(res, backTo, 'err', 'Could not close the task.');
+  }
+});
+
+/* ── Resources ────────────────────────────────────────────────────────────────
+   The tools the team works in (COS, Google Drive folders, Canva…), one list
+   the owner keeps. Links and how to get in only: logins live in the team
+   password manager, never here. A helper sees the tools for everyone and for
+   their own path; the owner sees and edits all of them (ROUTES). */
+const RESOURCE_AUDIENCES = { all: 'Everyone', sales: 'Sales', design: 'Design' };
+
+function resourceFromForm(b) {
+  const url = text(b.url, 500);
+  return {
+    name: text(b.name, 80), url, urlOk: !url || /^https:\/\/[^\s"'<>]+$/i.test(url),
+    purpose: text(b.purpose, 300), login_note: text(b.login_note, 200),
+    audience: Object.prototype.hasOwnProperty.call(RESOURCE_AUDIENCES, b.audience) ? b.audience : 'all',
+  };
+}
+
+app.get('/admin/resources', requireAdmin, async (req, res) => {
+  const actor = currentActor() || OWNER_ACTOR;
+  const owner = actor.kind !== 'staff';
+  try {
+    const { rows } = await pool.query(
+      `SELECT * FROM staff_resources WHERE $1::text IS NULL OR audience IN ('all', $1) ORDER BY position, name`,
+      [owner ? null : TRAINING.trackOf(actor.track)]);
+    const card = (r) => `<div class="card res-card">
+      <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
+        <span style="flex:1 1 240px"><b style="font-size:16px">${escEmail(r.name)}</b> ${owner ? pill(RESOURCE_AUDIENCES[r.audience] || r.audience, 'neutral') : ''}
+          ${r.purpose ? `<div class="row-sub" style="white-space:normal">${escEmail(r.purpose)}</div>` : ''}
+          ${r.login_note ? `<div class="row-sub" style="white-space:normal">🔑 ${escEmail(r.login_note)}</div>` : ''}</span>
+        ${r.url ? `<a class="btn" href="${escEmail(r.url)}" target="_blank" rel="noopener noreferrer">Open &#8599;</a>` : ''}</div>
+      ${owner ? `<details style="margin-top:8px"><summary class="muted">Edit</summary>
+        <form method="post" action="/admin/resources/${r.id}" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
+          ${resourceFields(r)}
+          <button type="submit" name="action" value="save" class="btn btn-ghost">Save</button>
+          <button type="submit" name="action" value="delete" class="btn btn-ghost">Remove</button></form></details>` : ''}</div>`;
+    res.set('Cache-Control', 'no-store');
+    res.send(adminPage('Resources', `
+      ${pageHeader('Resources', owner ? 'The tools the team works in. Helpers see the ones for everyone and for their own path.'
+        : 'The tools you work in. Your logins are in the team password manager; ask June if one is missing.')}
+      ${flash(req.query)}
+      <div class="card" style="border-left:4px solid #F4A623"><b>🔐 Logins never go here, or in chat, email or texts.</b>
+        <div class="row-sub" style="white-space:normal">They live in the team password manager. [owner to fill in: which one, and how a new helper is invited]</div></div>
+      ${rows.length ? rows.map(card).join('') : `<div class="card">${emptyState(owner ? 'No tools listed yet. Add the first one below.' : 'No tools listed yet. Ask June.')}</div>`}
+      ${owner ? `<details class="card"><summary><b>Add a tool</b></summary>
+        <form method="post" action="/admin/resources" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
+          ${resourceFields({})}<button type="submit">Add</button></form></details>` : ''}`, 'resources'));
+  } catch (err) {
+    console.error('resources page failed:', err.message);
+    res.status(500).send(adminPage('Resources', '<div class="card"><div class="warn">Could not load the tools.</div></div>', 'resources'));
+  }
+});
+
+function resourceFields(r) {
+  return `<input name="name" placeholder="Tool, e.g. COS Creator Studio" required maxlength="80" value="${escEmail(r.name || '')}" style="flex:1 1 200px">
+    <input name="url" type="url" placeholder="https://… link" maxlength="500" value="${escEmail(r.url || '')}" style="flex:2 1 260px">
+    <input name="purpose" placeholder="What it is for" maxlength="300" value="${escEmail(r.purpose || '')}" style="flex:1 1 100%">
+    <input name="login_note" placeholder="How to get in, e.g. Your own login: June invites you" maxlength="200" value="${escEmail(r.login_note || '')}" style="flex:2 1 260px">
+    <label>Who sees it <select name="audience">${Object.entries(RESOURCE_AUDIENCES).map(([k, v]) =>
+      `<option value="${k}"${(r.audience || 'all') === k ? ' selected' : ''}>${escEmail(v)}</option>`).join('')}</select></label>`;
+}
+
+app.post('/admin/resources', requireAdmin, async (req, res) => {
+  const r = resourceFromForm(req.body || {});
+  if (!r.name) return back(res, '/admin/resources', 'err', 'A tool needs a name.');
+  if (!r.urlOk) return back(res, '/admin/resources', 'err', 'The link must start with https://');
+  try {
+    await pool.query(
+      `INSERT INTO staff_resources (name, url, purpose, login_note, audience, position)
+       VALUES ($1, $2, $3, $4, $5, (SELECT COALESCE(MAX(position), 0) + 1 FROM staff_resources))`,
+      [r.name, r.url || null, r.purpose, r.login_note, r.audience]);
+    return back(res, '/admin/resources', 'ok', `Added ${r.name}.`);
+  } catch (err) {
+    console.error('resource add failed:', err.message);
+    return back(res, '/admin/resources', 'err', 'Could not add it. Try again.');
+  }
+});
+
+app.post('/admin/resources/:id', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  const b = req.body || {};
+  if (!id) return back(res, '/admin/resources', 'err', 'No such tool.');
+  try {
+    if (b.action === 'delete') {
+      const { rowCount } = await pool.query('DELETE FROM staff_resources WHERE id = $1', [id]);
+      return back(res, '/admin/resources', rowCount ? 'ok' : 'err', rowCount ? 'Removed.' : 'No such tool.');
+    }
+    const r = resourceFromForm(b);
+    if (!r.name) return back(res, '/admin/resources', 'err', 'A tool needs a name.');
+    if (!r.urlOk) return back(res, '/admin/resources', 'err', 'The link must start with https://');
+    const { rowCount } = await pool.query(
+      `UPDATE staff_resources SET name = $2, url = $3, purpose = $4, login_note = $5, audience = $6, updated_at = NOW() WHERE id = $1`,
+      [id, r.name, r.url || null, r.purpose, r.login_note, r.audience]);
+    return back(res, '/admin/resources', rowCount ? 'ok' : 'err', rowCount ? `Saved ${r.name}.` : 'No such tool.');
+  } catch (err) {
+    console.error('resource save failed:', err.message);
+    return back(res, '/admin/resources', 'err', 'Could not save it. Try again.');
   }
 });
 
@@ -28079,6 +28236,8 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
                         ORDER BY a.decided_at DESC`, [me]) : Promise.resolve({ rows: [] }),
       can('quotes.view') ? liveJobs() : Promise.resolve([]),
     ]);
+    const doneLately = me == null ? (await pool.query(
+      `SELECT * FROM staff_tasks WHERE done_at > NOW() - interval '7 days' ORDER BY done_at DESC LIMIT 50`)).rows : [];
     const followUps = can('leads.view') ? (await pool.query(
       `SELECT * FROM submissions WHERE next_follow_up_on <= CURRENT_DATE AND dismissed_at IS NULL
           AND ($1::int IS NULL OR assigned_to = $1 OR assigned_to IS NULL)
@@ -28100,7 +28259,26 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
       .then(([p, n]) => ({ p, note: n[0] && Date.now() - new Date(n[0].created_at).getTime() < 14 * 864e5 ? n[0] : null }))
       .catch((err) => { console.error('my day training failed:', err.message); return null; }) : null;
 
-    const section = (title, inner, empty) => `<div class="card"><b>${title}</b>${inner || `<p class="muted">${empty}</p>`}</div>`;
+    /* Every section folds away; the browser remembers which, per section. */
+    const secKey = (title) => String(title).replace(/<[^>]*>|\([^)]*\)|[^a-z ]/gi, '').trim().toLowerCase().replace(/ +/g, '-').slice(0, 40);
+    const section = (title, inner, empty) => `<details class="card md-sec" open data-sec="${escEmail(secKey(title))}">
+      <summary><b>${title}</b></summary>${inner || `<p class="muted">${empty}</p>`}</details>`;
+    const startedBy = (t) => nameOf(roster, t.started_by);
+    const taskStatus = (t) => (t.done_at ? pill('completed', 'green') : t.started_at ? pill('started', 'blue') : pill('not started', 'neutral'));
+    const taskRow = (t) => `
+        <div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal"><b>${escEmail(t.title)}</b> ${taskStatus(t)}
+          <div class="row-sub">${escEmail(BUSINESSES[t.business] || t.business)}${t.due_on ? ` &middot; due ${escEmail(fmtDate(t.due_on))}` : ''}${
+            t.quote_code ? ` &middot; <a href="/admin/production/${escEmail(t.quote_code)}">${escEmail(t.quote_code)}</a>` : ''}${
+            t.assigned_to == null ? ' &middot; anyone' : me == null ? ` &middot; ${escEmail(nameOf(roster, t.assigned_to))}` : ''}${
+            t.started_at ? ` &middot; started ${escEmail(whenShort(t.started_at))}${me == null ? ` by ${escEmail(startedBy(t))}` : ''}` : ''}${
+            t.done_at ? ` &middot; completed ${escEmail(whenShort(t.done_at))}` : ''}</div>
+          ${t.description ? `<div style="white-space:pre-wrap;margin-top:4px">${escEmail(t.description)}</div>` : ''}
+          ${t.how_to ? `<details style="margin-top:4px"><summary class="muted" style="cursor:pointer">How to do it</summary>
+            <div style="white-space:pre-wrap;margin-top:4px;padding:8px 10px;background:#f7f8fb;border-radius:8px">${escEmail(t.how_to)}</div></details>` : ''}</span>
+          <span class="row-end" style="display:flex;gap:6px;align-items:center">${!t.done_at && t.due_on && String(t.due_on instanceof Date ? t.due_on.toISOString() : t.due_on).slice(0, 10) < today ? pill('overdue', 'red') : ''}
+            ${t.done_at ? '' : me != null && !t.started_at
+              ? `<form method="post" action="/admin/tasks/${t.id}/start" style="margin:0"><button type="submit" class="btn">Start: I accept this task</button></form>`
+              : `<form method="post" action="/admin/tasks/${t.id}/done" style="margin:0"><button type="submit" class="btn ${me != null ? '' : 'btn-ghost'}">${me != null ? 'Mark completed' : 'Done'}</button></form>`}</span></div>`;
     const leadRow = (l) => `<div class="row-i"><span class="row-main"><a href="/admin/leads#lead-${l.id}"><b>${escEmail(l.name || l.email || 'Lead')}</b></a>
       <div class="row-sub">${escEmail((LEAD_SOURCES[l.source] || [l.source || 'form'])[0])} &middot; waiting ${
         escEmail(fmtMins(TEAM.businessMinutesBetween(l.created_at, new Date())))} of working time</div></span>
@@ -28112,10 +28290,10 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
       ${pageHeader(`My Day${actor.kind === 'staff' ? ` — ${actor.name}` : ''}`, 'Oldest first. Answer leads, then follow-ups, then the jobs.',
         '<a class="btn btn-ghost" href="/admin/playbook">Playbook</a>')}
       ${flash(req.query)}
-      ${training && !training.p.complete ? `<div class="card"><b>Your training: ${training.p.done} of ${training.p.total}</b>
-        <a class="muted" href="/admin/training" style="float:right">See it all →</a>${progressBar(training.p.done, training.p.total)}
-        ${training.p.next.map((st) => `<div class="row-sub">Next: ${escEmail(st.title)}</div>`).join('')}</div>` : ''}
-      ${training && training.note ? `<div class="card"><b>Latest note from the owner</b>${coachingRow(training.note)}</div>` : ''}
+      ${training && !training.p.complete ? section(`Your training: ${training.p.done} of ${training.p.total}`,
+        `<a class="muted" href="/admin/training" style="float:right">See it all →</a>${progressBar(training.p.done, training.p.total)}
+        ${training.p.next.map((st) => `<div class="row-sub">Next: ${escEmail(st.title)}</div>`).join('')}`) : ''}
+      ${training && training.note ? section('Latest note from the owner', coachingRow(training.note)) : ''}
       ${art.todo.length || STAFF.levelOf(actor, 'art.work') === 'on' && me != null ? section(`Artwork to do (${art.todo.length})`, artQueueRows(art.todo), 'No artwork waiting for you.') : ''}
       ${art.questions.length ? section(`The designer has a question (${art.questions.length})`, artQueueRows(art.questions)) : ''}
       ${art.approve.length ? section(`Final art to approve (${art.approve.length})`, artQueueRows(art.approve)) : ''}
@@ -28123,10 +28301,10 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
         <div class="row-i" style="flex-wrap:wrap"><span class="row-main"><b>${escEmail(q.code)}</b> ${escEmail(q.name || '')} &middot; ${money(q.total)}
           <div class="msg" id="rel-${escEmail(q.code)}" style="white-space:pre-wrap">${escEmail(quoteMessages(q).initial)}</div></span>
           <span class="row-end"><button type="button" class="btn btn-ghost" onclick="jtCopy('rel-${escEmail(q.code)}')">Copy</button></span></div>`).join('')) : ''}
-      ${earn ? `<div class="card"><b>My earnings</b> <a class="muted" href="/admin/my-earnings" style="float:right">See every sale →</a>
+      ${earn ? section('My earnings', `<a class="muted" href="/admin/my-earnings" style="float:right">See every sale →</a>
         <a class="muted" href="${earn.guide}" style="float:right;margin-right:14px">How pay works</a>
         ${earningsTiles(earn.e)}
-        ${earn.incentives.map((i) => incentiveRow(i)).join('')}</div>` : ''}
+        ${earn.incentives.map((i) => incentiveRow(i)).join('')}`) : ''}
       ${mine.rows.length ? section('Waiting on the owner', mine.rows.map((a) => `
         <div class="row-i"><span class="row-main">${escEmail(a.kind)} ${escEmail(a.subject_id)}${a.decision_note
           ? `<div class="row-sub">Sent back: ${escEmail(a.decision_note)}</div>` : ''}</span>
@@ -28136,17 +28314,13 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
         <div class="row-i"><span class="row-main"><a href="/admin/leads?status=all#lead-${l.id}"><b>${escEmail(l.name || l.email || 'Lead')}</b></a>
           <div class="row-sub">due ${escEmail(fmtDate(l.next_follow_up_on))}${l.assigned_to ? ` &middot; ${escEmail(nameOf(roster, l.assigned_to))}` : ''}</div></span></div>`).join(''),
         'No follow-ups due.') : ''}
-      ${section(`Tasks (${tasks.rows.length})`, tasks.rows.map((t) => `
-        <div class="row-i"><span class="row-main"><b>${escEmail(t.title)}</b>
-          <div class="row-sub">${escEmail(BUSINESSES[t.business] || t.business)}${t.due_on ? ` &middot; due ${escEmail(fmtDate(t.due_on))}` : ''}${
-            t.quote_code ? ` &middot; <a href="/admin/production/${escEmail(t.quote_code)}">${escEmail(t.quote_code)}</a>` : ''}${
-            t.assigned_to == null ? ' &middot; anyone' : ''}</div></span>
-          <span class="row-end">${t.due_on && String(t.due_on instanceof Date ? t.due_on.toISOString() : t.due_on).slice(0, 10) < today ? pill('overdue', 'red') : ''}
-            <form method="post" action="/admin/tasks/${t.id}/done" style="margin:0"><button type="submit" class="btn btn-ghost">Done</button></form></span></div>`).join(''),
-        'Nothing on your list.')}
+      ${section(`Tasks (${tasks.rows.length})`, tasks.rows.map(taskRow).join(''), 'Nothing on your list.')}
+      ${me == null && doneLately.length ? section(`Completed this week (${doneLately.length})`, doneLately.map(taskRow).join('')) : ''}
       <details class="card"><summary><b>Add a task</b></summary>
         <form method="post" action="/admin/tasks" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
           <input name="title" placeholder="What needs doing" required maxlength="200" style="flex:1 1 240px">
+          <textarea name="description" rows="2" maxlength="2000" placeholder="The task: what, for whom, and what done looks like" style="flex:1 1 100%"></textarea>
+          <textarea name="how_to" rows="3" maxlength="4000" placeholder="How to do it, step by step (for something new; optional)" style="flex:1 1 100%"></textarea>
           <input type="date" name="due_on">
           <select name="business">${Object.entries(BUSINESSES).map(([k, v]) => `<option value="${k}">${escEmail(v)}</option>`).join('')}</select>
           ${actor.kind === 'owner' ? `<select name="assigned_to"><option value="">Anyone</option>${roster.filter((r) => r.active).map((r) =>
@@ -28157,7 +28331,10 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
         <div class="row-i"><span class="row-main"><a href="/admin/production/${escEmail(q.code)}"><b>${escEmail(q.code)}</b></a> ${escEmail(q.name || '')}
           <div class="row-sub">${escEmail(cl.next.label)}${cl.next.hint ? ` — ${escEmail(cl.next.hint)}` : ''}</div></span>
           <span class="row-end muted">${cl.done}/${cl.of}</span></div>`).join('')) : ''}
-      ${copyJs}`, 'myday'));
+      ${copyJs}
+      <script>(function(){try{document.querySelectorAll('details.md-sec').forEach(function(d){
+        var k='md:'+d.getAttribute('data-sec');if(localStorage.getItem(k)==='0')d.open=false;
+        d.addEventListener('toggle',function(){try{localStorage.setItem(k,d.open?'1':'0');}catch(e){}});});}catch(e){}})();</script>`, 'myday'));
   } catch (err) {
     console.error('my day failed:', err.message);
     res.status(500).send(adminPage('My Day', '<div class="card"><div class="warn">Could not load your day.</div></div>', 'myday'));
