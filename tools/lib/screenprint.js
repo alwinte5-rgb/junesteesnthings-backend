@@ -3,14 +3,14 @@
  *
  * WHY THIS EXISTS
  * ---------------
- * The catalogue carried a separate printing method per colour count — "Screen
+ * The catalogue carried a separate printing method per color count — "Screen
  * Printing — 1 Color" through "— 7 Colors". Seven methods make the customer
- * declare a colour count before they have drawn anything, which is a question
+ * declare a color count before they have drawn anything, which is a question
  * only the finished design can answer, and getting it wrong is discovered at
  * the cart.
  *
  * Lumise already has the right shape for this and nobody used it. A `color`-type
- * method holds one row per quantity band with a column per colour count, and
+ * method holds one row per quantity band with a column per color count, and
  * both pricing engines (core/assets/js/app.js ~16287 and core/cart.php ~516)
  * read `colors.length` off the real canvas, build the key `N-color`, and fall
  * back to `full-color` when there is no such column. So the design decides the
@@ -20,7 +20,7 @@
  * pivoted into columns, so the combined method and the rows the quote form
  * still prices from can never disagree.
  *
- * `full-color` MUST exist. Without it a design with more colours than any
+ * `full-color` MUST exist. Without it a design with more colors than any
  * column silently prices the decoration at $0 in both engines — screen printing
  * for free rather than an error anyone would see.
  *
@@ -28,29 +28,29 @@
  * press runs six screens including the white underbase, so a design past that
  * is not a cheaper screen-print job, it is a DTF job — and the honest thing for
  * this backstop to do is charge the most screen printing can cost rather than
- * quote a colour count the shop cannot run. The editor steers those designs to
+ * quote a color count the shop cannot run. The editor steers those designs to
  * DTF; this only stops the fall-through from being free.
  */
 
-/** Column key for a colour count, matching what the admin UI writes (main.js:3323). */
+/** Column key for a color count, matching what the admin UI writes (main.js:3323). */
 const colorKey = (n) => n + '-color';
 
 /**
  * @param {Array<{colors:number, tiers:Array<[number|string, number]>}>} rows
- *        One entry per colour count. `tiers` is [band ceiling, price per piece].
+ *        One entry per color count. `tiers` is [band ceiling, price per piece].
  * @returns {{multi:boolean,type:string,show_detail:string,values:object}}
  */
 function colorTable(rows, minQty, maxScreens) {
   if (!rows || rows.length === 0) throw new Error('no per-colour tables to combine');
 
-  /* Refuse a colour count the press cannot run, rather than publishing a column
+  /* Refuse a color count the press cannot run, rather than publishing a column
      for it. A price that exists is a price somebody will be quoted. */
   const cap = parseInt(maxScreens, 10);
   if (Number.isFinite(cap) && cap > 0) {
     const over = rows.filter((r) => r.colors > cap);
     if (over.length) {
       throw new Error('the press runs ' + cap + ' screens, so ' +
-        over.map((r) => r.colors).join(' and ') + ' colours cannot be printed — ' +
+        over.map((r) => r.colors).join(' and ') + ' colors cannot be printed — ' +
         'remove those rows rather than pricing them');
     }
   }
@@ -61,7 +61,7 @@ function colorTable(rows, minQty, maxScreens) {
   for (const r of sorted) {
     const mine = r.tiers.map(([q]) => String(q));
     if (mine.join(',') !== bands.join(',')) {
-      /* Combining tables banded differently would put one colour count's price
+      /* Combining tables banded differently would put one color count's price
          under another's quantity, which reads as a working price and is not. */
       throw new Error(r.colors + '-colour bands (' + mine.join(',') +
         ') do not match the 1-colour bands (' + bands.join(',') + ')');
@@ -75,14 +75,14 @@ function colorTable(rows, minQty, maxScreens) {
     for (const r of sorted) {
       const price = Number(r.tiers[i][1]);
       if (!Number.isFinite(price) || price <= 0) {
-        throw new Error('no price for ' + r.colors + ' colours at band ' + band);
+        throw new Error('no price for ' + r.colors + ' colors at band ' + band);
       }
       /* More colours means another screen, another pass and another wash-up. A
          table where they got cheaper would be a transcription error, and it
          would price the biggest jobs lowest. */
       if (price < last) {
-        throw new Error('band ' + band + ': ' + r.colors + ' colours ($' + price +
-          ') is cheaper than ' + (r.colors - 1) + ' colours ($' + last + ')');
+        throw new Error('band ' + band + ': ' + r.colors + ' colors ($' + price +
+          ') is cheaper than ' + (r.colors - 1) + ' colors ($' + last + ')');
       }
       last = price;
       cell[colorKey(r.colors)] = price.toFixed(2);

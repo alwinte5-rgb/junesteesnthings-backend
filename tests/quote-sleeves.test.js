@@ -111,7 +111,7 @@ test('an unknown sleeves value adds nothing', () => {
 test('the customer page names the sleeves and their ink count', () => {
   const cat = { methods: [SCREEN, DTF] };
   assert.equal(summary({ method_id: 22, stage: '', colours: '3', sleeves: 'both', sleeve_colours: 1 }, cat)[0],
-    'Screen Printing — front and both sleeves — 3 colours front, 1 colour sleeves');
+    'Screen Printing — front and both sleeves — 3 colors front, 1 color sleeves');
   assert.equal(summary({ method_id: 1, stage: 'both', sleeves: 'left' }, cat)[0],
     'DTF Printing — front, back and left sleeve');
   assert.equal(summary({ method_id: 1, stage: '' }, cat)[0], 'DTF Printing — front');
@@ -156,9 +156,9 @@ test('the back is checked against the press ceiling as its own pass', () => {
 test('the customer page names different front and back counts', () => {
   const cat = { methods: [SCREEN] };
   assert.equal(summary({ method_id: 22, stage: 'both', colours: '3', back_colours: 1 }, cat)[0],
-    'Screen Printing — front and back — 3 colours front, 1 colour back');
+    'Screen Printing — front and back — 3 colors front, 1 color back');
   assert.equal(summary({ method_id: 22, stage: 'both', colours: '2', back_colours: 2 }, cat)[0],
-    'Screen Printing — front and back — 2 colours');
+    'Screen Printing — front and back — 2 colors');
 });
 
 test('the save route keeps a back count only on a front + back colour-priced line', () => {

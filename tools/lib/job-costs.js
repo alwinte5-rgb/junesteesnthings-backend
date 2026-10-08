@@ -28,7 +28,7 @@
  * Pure functions only: the caller passes the catalogue and the quote's lines. */
 
 /* Anchorfish 2026, what they charge US. Keys are quantity FLOORS. */
-const SCREEN_PRINT = {          // per piece, per location, by ink colours 1..6
+const SCREEN_PRINT = {          // per piece, per location, by ink colors 1..6
     50: [1.80, 2.25, 2.72, 3.19, 3.66, 4.13],
    100: [1.65, 2.06, 2.53, 3.00, 3.47, 3.94],
    250: [1.47, 1.84, 2.31, 2.78, 3.25, 3.72],
@@ -181,7 +181,7 @@ function placesCost(places, bandQty, decoSellEach, dark = false) {
     const kind = methodKind(g.method);
     if (kind === 'screen' || kind === 'embroidery' || kind === 'dtf') {
       g.places.forEach((p, k) => {
-        /* On a dark garment Anchorfish bills the white BASE as a colour on
+        /* On a dark garment Anchorfish bills the white BASE as a color on
            every piece: a 1-colour white print is their "2 Color" rate
            (invoices #16899, #18249). Screen printing only. */
         const c = kind === 'screen' && dark ? (parseInt(p.colours, 10) > 0 ? parseInt(p.colours, 10) : 1) + 1 : p.colours;

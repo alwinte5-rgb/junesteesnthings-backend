@@ -30,7 +30,7 @@ const PREMIUM = {
     small: [3.00, 1.69, 1.39, 0.99, 0.79, 0.69],   // 9 x 12.75 — left chest, sleeve
     large: [3.75, 1.89, 1.69, 1.29, 1.19, 1.09],   // 11 x 14 — full front/back
   },
-  /* Sheet-count floors -> price per sheet, by ink colours 1..4. */
+  /* Sheet-count floors -> price per sheet, by ink colors 1..4. */
   gang: {
     floors: [6, 12, 18, 24, 36, 48, 60, 72, 90, 108, 144, 180, 216],
     1: [15.31, 8.27, 6.15, 5.19, 4.52, 3.69, 3.42, 3.12, 2.89, 2.66, 2.19, 2.09, 1.97],
@@ -87,7 +87,7 @@ function productionCompare(input, data) {
     return each * q;
   }
 
-  /* Premium for one place: the cheaper of single images (1 colour only) and
+  /* Premium for one place: the cheaper of single images (1 color only) and
      gang sheets, buying up to a cheaper tier when that costs less in total. */
   function cheapestBuy(floors, prices, need, perUnit) {
     var best = null;
