@@ -9593,11 +9593,12 @@ function productGroupOf(name) {
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
               <span>Rush</span>
               <input name="rush_pct" id="rushpct" type="number" step="0.01" min="0" max="100"
-                     inputmode="decimal" value="${Number(E.rush_pct) > 0 ? val(E.rush_pct) : ''}"
+                     inputmode="decimal" value="${Number(E.rush_pct) > 0 ? val(E.rush_pct) : ''}"${
+                     canPrice ? '' : ' readonly title="Set from the needed-by date. Only the owner can change it."'}
                      style="width:80px;padding:5px 6px;font-size:13px" placeholder="0">
               <span style="font-size:13px;color:#6b7280">% &middot;</span>
               <span id="rushwhy" style="font-size:12px;color:#b45309"></span>
-              <button type="button" id="rushclear" class="btn btn-ghost"
+              <button type="button" id="rushclear" class="btn btn-ghost"${canPrice ? '' : ' hidden'}
                       style="padding:3px 10px;font-size:12px">Remove</button>
             </div>
           </td><td class="num" id="rushamt">&mdash;</td></tr>
@@ -9899,6 +9900,9 @@ function productGroupOf(name) {
            date field or the override is not an override. */
         if (fill && box.value.trim() === '' && pct > 0 && !box.dataset.cleared)
           box.value = String(pct);
+        /* A helper's rush is always the ladder's figure (the save route
+           enforces it); the owner's box keeps whatever they typed. */
+        if (fill && box.readOnly) box.value = pct > 0 ? String(pct) : '';
 
         if (why) {
           why.textContent = pct > 0
@@ -11991,6 +11995,25 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     let rushPct = Number(one(b.rush_pct));
     if (!Number.isFinite(rushPct) || rushPct < 0) rushPct = 0;
     rushPct = Math.min(rushPct, 100);
+    /* RUSH IS LOCKED FOR HELPERS (owner, 2026-10-08: "lock rush. keep open for
+       me to override"). Without quotes.price a helper's rush is what the
+       needed-by date earns on the ladder; whatever was typed is replaced, not
+       refused, because the box only ever holds that suggestion for them. A
+       rush the owner already set stays while the date is unchanged, so a
+       helper re-saving the quote cannot undo the owner's figure either. */
+    {
+      const who = currentActor() || OWNER_ACTOR;
+      if (who.kind === 'staff' && STAFF.levelOf(who, 'quotes.price') !== 'on') {
+        const wantDate = String(b.needed_by || '').trim() || null;
+        const code0 = String(req.params.code || '').toUpperCase();
+        const was = QUOTE_CODE_RE.test(code0)
+          ? (await pool.query('SELECT rush_pct, needed_by::text AS needed_by FROM quotes WHERE code = $1', [code0])).rows[0] : null;
+        const wasDate = was && was.needed_by ? String(was.needed_by).slice(0, 10) : null;
+        rushPct = (was && wasDate === wantDate)
+          ? Math.max(0, Number(was.rush_pct || 0))
+          : (wantDate ? rushPctFor(wantDate) : 0);
+      }
+    }
     const rush = round2(subtotal * rushPct / 100);
     const gross = round2(subtotal + rush);
 
