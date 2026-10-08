@@ -78,3 +78,10 @@ test('/api/pricing-rules publishes the families', () => {
   assert.match(route, /signs: SIGN_FAMILIES\.signsTable\(\)/);
   assert.ok(JSON.stringify(F.signsTable()).length < 60000, 'small enough for every page');
 });
+
+test('every sign family is filed under exactly one storefront category', () => {
+  const { NAMES, CATEGORIES } = require('../tools/add-sign-products');
+  const filed = CATEGORIES.flatMap((c) => c.families || []);
+  assert.deepStrictEqual([...filed].sort(), Object.keys(NAMES).sort());
+  assert.strictEqual(new Set(CATEGORIES.map((c) => c.slug)).size, CATEGORIES.length);
+});
