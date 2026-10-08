@@ -34,7 +34,7 @@
     /* Every card carries a price line, so the two grids read the same. */
     if (showBlurb && item.blurb) bd.appendChild(el('div', 'bl', item.blurb));
     bd.appendChild(el('div', 'pr', typeof item.from_price === 'number'
-      ? 'From $' + item.from_price.toFixed(2) + ' + printing' : 'Custom pricing'));
+      ? 'From $' + item.from_price.toFixed(2) + ' + printing' : 'Priced as you design'));
     bd.appendChild(el('span', 'go', 'Design This →'));
     a.appendChild(im);
     a.appendChild(bd);
@@ -54,7 +54,9 @@
     .then(function (r) { return r.status === 200 ? r.json() : null; })
     .then(function (d) {
       if (!d) return;
-      fill('shop-categories', (d.categories || []).slice(0, 8), 'home_shop', 'category', false);
+      /* Every category, signs included (the feed caps it at 16). Showing the
+         first 8 left the banner and sign categories off the homepage. */
+      fill('shop-categories', (d.categories || []).slice(0, 16), 'home_shop', 'category', false);
       fill('shop-best', (d.best || []).slice(0, 4), 'home_best', 'product', true);
     })
     .catch(function () { /* keep the built-in cards */ });
