@@ -118,6 +118,46 @@ test('placeholders the owner still has to fill in are found; links are not place
   assert.deepStrictEqual(TRAINING.placeholders(''), []);
 });
 
+test('playbook gaps: only facts the owner knows, never the blanks in a ready-made reply', () => {
+  const body = 'Ready in [standard turnaround] days, [name].\n- Deadlines under [X] business days\n'
+    + '[owner to fill in: which password manager, and which tools sales uses]\n- [How you sign in to COS, owner to fill in]\n'
+    + 'Hi [name], see you at [time] on [their date]. [paste here]';
+  const gaps = TRAINING.ownerGaps(body);
+  assert.deepStrictEqual(gaps.map((g) => g.token), ['[standard turnaround]', '[X]',
+    '[owner to fill in: which password manager, and which tools sales uses]', '[How you sign in to COS, owner to fill in]']);
+  assert.deepStrictEqual(gaps.map((g) => g.ask), ['Standard turnaround', 'The number of business days',
+    'Which password manager, and which tools sales uses', 'How you sign in to COS']);
+  assert.strictEqual(gaps[1].line, '- Deadlines under [X] business days', 'the line it sits in, for context');
+  assert.deepStrictEqual(gaps.map((g) => g.hint), ['Just the number, e.g. 7', 'Just the number, e.g. 7', '', ''],
+    'a blank followed by "days" asks for the number alone');
+  // every course lesson's gap is found, long ones included
+  const lessonGaps = TRAINING.lessonArticles().flatMap((a) => TRAINING.ownerGaps(a.body));
+  assert.ok(lessonGaps.length >= 4, `only ${lessonGaps.length} lesson gaps found`);
+});
+
+test('filling a gap replaces every copy of it, and an answer cannot plant a new placeholder', () => {
+  const body = 'Under [X] days. Again: under [X] days. Hi [name].';
+  assert.strictEqual(TRAINING.fillGap(body, '[X]', ' 5 [days]\n'), 'Under 5 days days. Again: under 5 days days. Hi [name].');
+  assert.strictEqual(TRAINING.fillGap(body, '[X]', '  '), null);
+});
+
+test('gap answers: owner only, the gap must still be there, and an edit made meanwhile is never overwritten', () => {
+  assert.strictEqual(STAFF.ROUTES['POST /admin/training/gap'], 'owner');
+  const r = route("app.post('/admin/training/gap', requireAdmin");
+  assert.match(r, /TRAINING\.ownerGaps\(a\.body\)\.some\(\(h\) => h\.token === token\)/);
+  assert.match(r, /WHERE id = \$1 AND body = \$3/);
+  assert.match(r, /if \(!rowCount\) return back/);
+  assert.match(r, /text\(b\.answer, 500\)/);
+  const page = route("app.get('/admin/training', requireAdmin");
+  assert.match(page, /TRAINING\.ownerGaps\(a\.body\)/, 'the card lists owner gaps, not every placeholder');
+  assert.match(page, /value="\$\{escEmail\(h\.token\)\}"/);
+});
+
+test('the Resources page shows staff no unfilled placeholder', () => {
+  const r = route("app.get('/admin/resources', requireAdmin");
+  assert.deepStrictEqual(TRAINING.ownerGaps(r), []);
+});
+
 test('coaching notes are escaped, and a helper only ever reads their own', () => {
   const row = src.slice(src.indexOf('function coachingRow('), src.indexOf('\n}\n', src.indexOf('function coachingRow(')));
   assert.match(row, /\$\{escEmail\(n\.body\)\}/);

@@ -27964,7 +27964,7 @@ app.get('/admin/resources', requireAdmin, async (req, res) => {
         : 'The tools you work in. Your logins are in the team password manager; ask June if one is missing.')}
       ${flash(req.query)}
       <div class="card" style="border-left:4px solid #F4A623"><b>🔐 Logins never go here, or in chat, email or texts.</b>
-        <div class="row-sub" style="white-space:normal">They live in the team password manager. [owner to fill in: which one, and how a new helper is invited]</div></div>
+        <div class="row-sub" style="white-space:normal">They live in the team password manager. June invites you to it; it is listed below with the other tools.</div></div>
       ${rows.length ? rows.map(card).join('') : `<div class="card">${emptyState(owner ? 'No tools listed yet. Add the first one below.' : 'No tools listed yet. Ask June.')}</div>`}
       ${owner ? `<details class="card"><summary><b>Add a tool</b></summary>
         <form method="post" action="/admin/resources" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
@@ -28517,7 +28517,7 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
             : doneN === work.length && work.length ? pill('done', 'green') : pill(`${doneN} of ${work.length}`, 'neutral')}</div>
         ${m.steps.map(stepRow).join('')}</div>`;
     };
-    const gapRows = gaps.rows.map((a) => ({ a, holes: TRAINING.placeholders(a.body) })).filter((x) => x.holes.length);
+    const gapRows = gaps.rows.map((a) => ({ a, holes: TRAINING.ownerGaps(a.body) })).filter((x) => x.holes.length);
     const roleLabel = role ? TRAINING.SALES_ROLES[role].label : null;
     const pathLabel = `${TRAINING.TRACKS[track].label}${track === 'sales' ? ` · ${roleLabel || 'all sales work'}` : ''}`;
     res.send(adminPage('Training', `
@@ -28549,9 +28549,18 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
           <input type="hidden" name="staff_id" value="${staffId}">
           <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" name="confirm" value="1" required style="width:auto"> Yes, start ${escEmail(who.name)} again</label>
           <button type="submit" class="btn">Restart training</button></form></details>
-      <div class="card"><b>Playbook gaps to fill in (${gapRows.length})</b>
-        ${gapRows.length ? gapRows.map(({ a, holes }) => `<div class="row-i"><span class="row-main"><a href="/admin/playbook/${a.id}"><b>${escEmail(a.title)}</b></a>
-          <div class="row-sub" style="white-space:normal">${holes.map((h) => `[${escEmail(h)}]`).join(' &middot; ')}</div></span></div>`).join('')
+      <div class="card" id="gaps"><b>Playbook gaps to fill in (${gapRows.reduce((n, x) => n + x.holes.length, 0)})</b>
+        <p class="muted">Facts only you know. Your answer replaces the blank in the Playbook article, and in the lessons that read from it.
+          Blanks inside ready-made replies, like [name] or [time], are left alone: staff fill those in for each customer.</p>
+        ${gapRows.length ? gapRows.map(({ a, holes }) => `<div class="row-i" style="display:block"><a href="/admin/playbook/${a.id}"><b>${escEmail(a.title)}</b></a>
+          ${holes.map((h) => `<form method="post" action="/admin/training/gap" style="margin:8px 0 0">
+            <input type="hidden" name="article_id" value="${a.id}"><input type="hidden" name="token" value="${escEmail(h.token)}">
+            <input type="hidden" name="staff_id" value="${staffId}">
+            <label style="display:block"><b>${escEmail(h.ask)}</b>
+              ${h.line && h.line !== h.token ? `<div class="row-sub" style="white-space:normal">${escEmail(h.line)}</div>` : ''}</label>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
+              <input name="answer" maxlength="500" required aria-label="${escEmail(h.ask)}"${h.hint ? ` placeholder="${escEmail(h.hint)}"` : ''} style="flex:1 1 220px">
+              <button type="submit" class="btn btn-ghost">Save</button></div></form>`).join('')}</div>`).join('')
           : '<p class="muted">Every article is filled in.</p>'}</div>` : ''}`, 'training'));
   } catch (err) {
     console.error('training page failed:', err.message);
@@ -29934,6 +29943,36 @@ app.post('/admin/training/tips-reset', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('tips reset failed:', err.message);
     return back(res, `/admin/training?staff=${staffId}`, 'err', 'Could not reset the tips.');
+  }
+});
+
+/* The owner answers a playbook gap from the Training page. The answer replaces
+   that one placeholder everywhere in the article; the write only lands if the
+   article is still the text the gap was read from, so an edit made meanwhile
+   is never overwritten. Owner only (ROUTES). */
+app.post('/admin/training/gap', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const id = intIn(b.article_id);
+  const token = String(b.token || '').slice(0, 210);
+  const answer = text(b.answer, 500);
+  const to = `/admin/training${intIn(b.staff_id) ? `?staff=${intIn(b.staff_id)}` : ''}#gaps`;
+  if (!id || !token) return back(res, to, 'err', 'That gap was not found.');
+  if (!answer) return back(res, to, 'err', 'Type the answer first.');
+  try {
+    const { rows: [a] } = await pool.query('SELECT id, title, body FROM kb_articles WHERE id = $1 AND published', [id]);
+    if (!a || !TRAINING.ownerGaps(a.body).some((h) => h.token === token)) {
+      return back(res, to, 'err', 'That gap is already filled in.');
+    }
+    const body = TRAINING.fillGap(a.body, token, answer);
+    if (!body) return back(res, to, 'err', 'Type the answer first.');
+    const { rowCount } = await pool.query(
+      `UPDATE kb_articles SET body = $2, updated_by = NULL, needs_review = FALSE, updated_at = NOW() WHERE id = $1 AND body = $3`,
+      [id, body, a.body]);
+    if (!rowCount) return back(res, to, 'err', 'The article changed while you were typing. Try again.');
+    return back(res, to, 'ok', `Saved in "${a.title}".`);
+  } catch (err) {
+    console.error('playbook gap not saved:', err.message);
+    return back(res, to, 'err', 'Could not save that. Try again.');
   }
 });
 

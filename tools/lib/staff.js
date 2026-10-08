@@ -356,6 +356,7 @@ const ROUTES = {
   'POST /admin/training/signoff': 'owner',
   'POST /admin/training/tips-reset': 'owner',
   'POST /admin/training/restart': 'owner',
+  'POST /admin/training/gap': 'owner',
   'POST /admin/feedback': 'owner',
   'GET /admin/team-chat': 'any',
   'POST /admin/team-chat': 'any',
