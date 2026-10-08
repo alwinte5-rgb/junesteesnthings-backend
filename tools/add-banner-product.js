@@ -28,20 +28,20 @@ const DESCRIPTION = 'Design your own vinyl banner at any size, in whole feet: pi
 function bannerAttributes({ width = 6, height = 3 } = {}) {
   const feet = (pick) => Array.from({ length: sg.BANNER_MAX_FT.long }, (_, i) => {
     const n = String(i + 1);
-    return { value: n, title: `${n} ft`, price: '', default: Number(n) === pick ? '1' : '' };
+    return { value: n, title: `${n} ft`, price: '', default: Number(n) === pick };
   });
   return {
     BMAT: { id: 'BMAT', name: 'Vinyl', type: 'select', required: true,
-      values: { options: sg.BANNER_MATERIALS.map((m, i) => ({ value: m.key, title: m.label, price: '', default: i === 0 ? '1' : '' })) } },
+      values: { options: sg.BANNER_MATERIALS.map((m, i) => ({ value: m.key, title: m.label, price: '', default: i === 0 })) } },
     BW: { id: 'BW', name: 'Width (feet)', type: 'select', required: true, values: { options: feet(width) } },
     BH: { id: 'BH', name: 'Height (feet)', type: 'select', required: true, values: { options: feet(height) } },
     /* Finishing (signage.js BANNER_HANGING): ONE hanging choice, because
        Signs365 will not put rope and pole pockets on the same banner. Wind
        slits are refused by the page on sizes Signs365 does not cut them for. */
     BHANG: { id: 'BHANG', name: 'Hanging', type: 'select', required: true,
-      values: { options: Object.entries(sg.BANNER_HANGING).map(([value, h]) => ({ value, title: h.label, price: '', default: value === 'grommets' ? '1' : '' })) } },
+      values: { options: Object.entries(sg.BANNER_HANGING).map(([value, h]) => ({ value, title: h.label, price: '', default: value === 'grommets' })) } },
     BSLIT: { id: 'BSLIT', name: 'Wind slits (for outdoor banners over 2ft x 2ft and under 10ft x 10ft)', type: 'select', required: true,
-      values: { options: [{ value: 'no', title: 'No', price: '', default: '1' }, { value: 'yes', title: 'Yes', price: '', default: '' }] } },
+      values: { options: [{ value: 'no', title: 'No', price: '', default: true }, { value: 'yes', title: 'Yes', price: '', default: false }] } },
     QTY: { id: 'QTY', name: 'Quantity', type: 'quantity', required: true, values: { type: 'standard', min_qty: '1', max_qty: '' } },
   };
 }
