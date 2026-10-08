@@ -8785,6 +8785,25 @@ const ADMIN_CSS = `
   padding:8px 10px;border-radius:8px;white-space:normal;box-shadow:0 6px 18px rgba(0,0,0,.18)}
 .lesson p,.lesson li{line-height:1.6;font-size:15px}
 .lesson ul{margin:4px 0 12px 20px}
+.lesson-hero{position:relative;border-radius:16px;overflow:hidden;background:linear-gradient(135deg,#1848B8,#0f1b3d);color:#fff;margin:0 0 14px;min-height:120px}
+.lesson-hero img{display:block;width:100%;height:220px;object-fit:cover;opacity:.55}
+.lesson-hero-text{position:absolute;left:0;right:0;bottom:0;padding:16px 18px;background:linear-gradient(transparent,rgba(10,20,50,.85))}
+.lesson-hero:not(:has(img)) .lesson-hero-text{position:static}
+.lesson-hero h1{color:#fff;font-size:24px;line-height:1.2}
+.lesson-chips{display:flex;gap:6px;flex-wrap:wrap}
+.lesson-chips span{background:rgba(255,255,255,.18);border-radius:100px;padding:3px 10px;font-size:12.5px;font-weight:600}
+.lesson-nav{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin:0 0 14px}
+.lesson-nav .btn{max-width:100%;white-space:normal;text-align:left}
+.lesson-gallery{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:0 0 14px}
+.lesson-gallery figure{margin:0;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(15,27,61,.08)}
+.lesson-gallery img{display:block;width:100%;height:160px;object-fit:cover;background:#f3f5fa}
+.lesson-gallery figcaption{padding:8px 10px;font-size:13px;color:#4a5878}
+.mc-choice{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;margin:4px 0;border-radius:10px;cursor:pointer;border:1px solid #e3e8f2}
+.mc-choice input{width:auto;margin-top:3px}
+.mc-choice.mc-right{background:#ecfdf3;border-color:#16a34a}
+.mc-choice.mc-wrong{background:#fef2f2;border-color:#dc2626}
+.mc-why{margin-top:6px;font-size:14px}
+.mod-icon{font-size:20px;margin-right:4px}
 .adm-body{padding:0;background:#f3f5fa}
 .adm-toggle{position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none}
 .adm{display:flex;min-height:100vh}
@@ -27777,8 +27796,8 @@ function logCallForm() {
       <input name="name" placeholder="Name" maxlength="200">
       <input name="phone" type="tel" placeholder="Their number" maxlength="40">
       <textarea name="description" rows="2" maxlength="4000" placeholder="What they want (items, quantity, date)" style="flex:1 1 100%"></textarea>
-      <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" name="missed" value="1"> I missed it, they need a call back</label>
-      <button type="submit">Log call</button>
+      <label style="display:flex;gap:8px;align-items:center;flex:1 1 100%"><input type="checkbox" name="missed" value="1" style="width:auto;flex:0 0 auto"> I missed it, they need a call back</label>
+      <button type="submit" style="flex:0 0 auto">Log call</button>
     </form></details>`;
 }
 
@@ -28317,7 +28336,7 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
       const locked = m.steps.every((s) => s.locked);
       const label = m.title === 'Final exam and sign-off' ? 'Final' : `Module ${m.index + 1}`;
       return `<div class="card" id="${escEmail(m.key.replace(/[^a-z0-9-]/gi, '-'))}">
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="flex:1 1 220px">${escEmail(label)}: ${escEmail(m.title)}</b>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="flex:1 1 220px">${m.steps[0].moduleIcon ? `<span class="mod-icon" aria-hidden="true">${escEmail(m.steps[0].moduleIcon)}</span>` : ''}${escEmail(label)}: ${escEmail(m.title)}</b>
           <span class="muted">${mins(total)}</span>${locked && !owner ? pill('opens after the module before', 'gray')
             : doneN === work.length && work.length ? pill('done', 'green') : pill(`${doneN} of ${work.length}`, 'neutral')}</div>
         ${m.steps.map(stepRow).join('')}</div>`;
@@ -28450,15 +28469,6 @@ function withTips(html, seen = new Set()) {
   }).join('');
 }
 
-/** A lesson step in any course, for the owner (who may open every lesson). */
-function anyLessonStep(key) {
-  for (const c of Object.values(TRAINING.COURSES)) {
-    const s = TRAINING.courseSteps(c).find((x) => x.key === key);
-    if (s) return s;
-  }
-  return null;
-}
-
 /* A course lesson. Opening it as a helper records when they started; the
    "I've finished" button records when they finished. The words are the
    playbook article, so the owner edits them there. */
@@ -28471,11 +28481,17 @@ app.get('/admin/training/lesson/:id', requireAdmin, async (req, res) => {
   try {
     let p = null;
     let s = null;
-    if (owner) s = anyLessonStep(key);
-    else {
+    let course = null;
+    if (owner) {
+      for (const c of Object.values(TRAINING.COURSES)) {
+        const steps = TRAINING.courseSteps(c);
+        if (steps.some((x) => x.key === key)) { course = steps; s = steps.find((x) => x.key === key); break; }
+      }
+    } else {
       p = await trainingFor(actor.id);
       s = p.steps.find((x) => x.key === key) || null;
       if (s && s.locked) return back(res, '/admin/training', 'err', 'That lesson opens once you pass the quiz before it.');
+      course = p.steps;
     }
     if (!s) return back(res, '/admin/training', 'err', 'No such lesson.');
     if (!owner) {
@@ -28486,34 +28502,59 @@ app.get('/admin/training/lesson/:id', requireAdmin, async (req, res) => {
     const tryIt = (s.tryIt || []).map((t) => /^\/admin\//.test(t.href)
       ? `<a class="btn btn-ghost" href="${escEmail(t.href)}" target="_blank" rel="noopener">${escEmail(t.label)}</a>`
       : `<a class="btn btn-ghost" href="${escEmail(t.href)}" target="_blank" rel="noopener noreferrer">${escEmail(t.label)} &#8599;</a>`).join(' ');
-    const work = p ? p.steps.filter((x) => x.type !== 'buffer') : [];
-    const at = work.findIndex((x) => x.key === key);
-    const next = at >= 0 ? work.slice(at + 1).find((x) => !x.done) : null;
-    const nextHref = next && next.type === 'lesson' ? `/admin/training/lesson/${encodeURIComponent(next.key.slice('lesson:'.length))}`
-      : next && next.type === 'quiz' ? `/admin/training/quiz/${encodeURIComponent(next.quiz)}` : '/admin/training';
+    /* Previous and next run through the lessons and quizzes in course order.
+       A helper's "next" past a closed module shows, but does not link. */
+    const walk = course.filter((x) => x.type === 'lesson' || x.type === 'quiz');
+    const at = walk.findIndex((x) => x.key === key);
+    const hrefOf = (x) => (x.type === 'lesson' ? `/admin/training/lesson/${encodeURIComponent(x.key.slice('lesson:'.length))}`
+      : `/admin/training/quiz/${encodeURIComponent(x.quiz)}`);
+    const prev = at > 0 ? walk[at - 1] : null;
+    const next = at >= 0 && at < walk.length - 1 ? walk[at + 1] : null;
+    const navBtn = (x, dir) => !x ? '<span></span>'
+      : x.locked && !owner ? `<span class="btn btn-ghost" style="opacity:.55" title="Opens once you pass the quiz before it">${dir === 'prev' ? '&larr; ' : ''}${escEmail(x.title)}${dir === 'next' ? ' &rarr;' : ''}</span>`
+      : `<a class="btn ${dir === 'next' ? '' : 'btn-ghost'}" href="${hrefOf(x)}">${dir === 'prev' ? '&larr; ' : ''}${escEmail(x.title)}${dir === 'next' ? ' &rarr;' : ''}</a>`;
+    const nav = `<div class="lesson-nav">${navBtn(prev, 'prev')}${navBtn(next, 'next')}</div>`;
+    const lessons = course.filter((x) => x.type === 'lesson');
+    const n = lessons.findIndex((x) => x.key === key) + 1;
     const mine = p ? p.steps.find((x) => x.key === key) : null;
+    const pics = (s.images || []).filter((im) => /^\/assets\/images\/[a-z0-9/_-]+\.(jpe?g|png|webp|svg)$/i.test(im.src));
+    const checks = (s.checks || []).map((c, i) => `<fieldset class="mc" data-answer="${Number(c.answer)}" style="border:0;padding:10px 0;margin:0;border-top:1px solid #eef1f8">
+        <legend style="font-weight:600;white-space:normal">${i + 1}. ${withTips(escEmail(c.q), seen)}</legend>
+        ${(c.choices || []).map((ch, j) => `<label class="mc-choice"><input type="radio" name="mc${i}" value="${j}"> <span>${escEmail(ch)}</span></label>`).join('')}
+        <div class="mc-why" hidden><b class="mc-verdict"></b> ${escEmail(c.why || '')}</div></fieldset>`).join('');
     res.set('Cache-Control', 'no-store');
     res.send(adminPage('Training', `
-      ${pageHeader(s.title, `${escEmail(s.moduleTitle || '')} &middot; about ${s.minutes} minutes`,
-        `<a class="btn btn-ghost" href="/admin/training">Back to training</a>${owner && a ? ` <a class="btn btn-ghost" href="/admin/playbook/${a.id}">Edit in the Playbook</a>` : ''}`)}
+      <div class="lesson-hero">
+        ${pics[0] ? `<img src="${escEmail(pics[0].src)}" alt="${escEmail(pics[0].alt || '')}" loading="lazy">` : ''}
+        <div class="lesson-hero-text"><div class="lesson-chips"><span>${escEmail(s.moduleIcon || '📘')} ${escEmail(s.moduleTitle || '')}</span>
+          <span>Lesson ${n} of ${lessons.length}</span><span>⏱ about ${s.minutes} min</span>${mine && mine.done ? '<span>✅ done</span>' : ''}</div>
+          <h1 style="margin:6px 0 0">${escEmail(s.title)}</h1></div></div>
       ${flash(req.query)}
-      ${s.goals && s.goals.length ? `<div class="card" style="border-left:4px solid #1848B8"><b>By the end of this lesson you can</b>
+      ${nav}
+      ${s.goals && s.goals.length ? `<div class="card" style="border-left:4px solid #1848B8"><b>🎯 By the end of this lesson you can</b>
         <ul style="margin:6px 0 8px 20px">${s.goals.map((g) => `<li>${withTips(escEmail(g), seen)}</li>`).join('')}</ul>
         <p class="muted" style="margin:0">Words with a dotted underline have a short explanation: hover, tap or tab to them.</p></div>` : ''}
       ${owner && a && a.needs_review ? '<div class="warn">Starter draft. Check it in the Playbook; saving it there marks it checked.</div>' : ''}
       <div class="card lesson">${a ? withTips(kbRender(a.body), seen) : '<div class="warn">This lesson\'s article is missing from the Playbook. Tell June.</div>'}</div>
-      ${tryIt ? `<div class="card"><b>Try it</b><p class="muted">These open the real screen in a new tab. Nothing reaches a customer unless you send it.</p>
+      ${pics.length > 1 ? `<div class="lesson-gallery">${pics.slice(1).map((im) => `<figure><img src="${escEmail(im.src)}" alt="${escEmail(im.alt || '')}" loading="lazy">
+        <figcaption>${escEmail(im.alt || '')}</figcaption></figure>`).join('')}</div>` : ''}
+      ${tryIt ? `<div class="card"><b>🛠 Try it</b><p class="muted">These open the real screen in a new tab. Nothing reaches a customer unless you send it.</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap">${tryIt}</div></div>` : ''}
-      ${s.checks && s.checks.length ? `<div class="card"><b>Check yourself</b>
-        <p class="muted">Not marked. Answer in your head, then tap to see.</p>
-        ${s.checks.map((c) => `<details style="padding:8px 0;border-top:1px solid #eef1f8"><summary style="cursor:pointer;font-weight:600">${escEmail(c.q)}</summary>
-          <p style="margin:6px 0 0">${withTips(escEmail(c.a), seen)}</p></details>`).join('')}</div>` : ''}
+      ${checks ? `<div class="card"><b>🧠 Check yourself</b>
+        <p class="muted">Not marked. Pick an answer to see if you were right.</p>${checks}</div>` : ''}
       ${!owner ? `<div class="card" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${mine && mine.done
-        ? `${pill('done', 'green')} <span class="muted">${mine.took != null ? `You took ${mine.took} minutes.` : ''}</span> <a class="btn" href="${nextHref}">Next &rarr;</a>`
+        ? `${pill('done', 'green')} <span class="muted">${mine.took != null ? `You took ${mine.took} minutes.` : ''}</span>`
         : `<form method="post" action="/admin/training/read" style="margin:0">
             <input type="hidden" name="key" value="${escEmail(key)}">
             <button type="submit" class="btn">I've finished this lesson</button></form>
-           <span class="muted">Then the next step opens: ${next ? escEmail(next.title) : 'back to Training'}.</span>`}</div>` : ''}`, 'training'));
+           <span class="muted">Then carry on with: ${next ? escEmail(next.title) : 'Training'}.</span>`}</div>` : `<div class="card" style="display:flex;gap:8px;flex-wrap:wrap">
+        <a class="btn btn-ghost" href="/admin/training">Back to training</a>${a ? ` <a class="btn btn-ghost" href="/admin/playbook/${a.id}">Edit in the Playbook</a>` : ''}</div>`}
+      ${nav}
+      <script>document.querySelectorAll('.mc').forEach(function(f){f.addEventListener('change',function(e){
+        var right=String(e.target.value)===f.getAttribute('data-answer');var w=f.querySelector('.mc-why');
+        f.querySelectorAll('.mc-choice').forEach(function(l){l.classList.remove('mc-right','mc-wrong');});
+        e.target.closest('.mc-choice').classList.add(right?'mc-right':'mc-wrong');
+        w.querySelector('.mc-verdict').textContent=right?'Right!':'Not quite.';w.hidden=false;});});</script>`, 'training'));
   } catch (err) {
     console.error('lesson page failed:', err.message);
     res.status(500).send(adminPage('Training', '<div class="card"><div class="warn">Could not load the lesson.</div></div>', 'training'));
@@ -28568,9 +28609,12 @@ app.get('/admin/training/quiz/:key', requireAdmin, async (req, res) => {
         </span></div>`).join('')}</div>`, 'training'));
     }
     const view = TRAINING.quizForPage(key);
+    const path = TRAINING.visibleSteps(undefined, actor.track, actor.role);
+    const at = path.findIndex((x) => x.type === 'quiz' && x.quiz === key);
+    const lessonBefore = at > 0 ? path.slice(0, at).reverse().find((x) => x.type === 'lesson' && x.module === path[at].module) : null;
     res.send(adminPage('Training', `
       ${pageHeader(view.title, `${view.questions.length} questions. Get ${view.pass} right to pass. No sums: pick what you would really do.`,
-        '<a class="btn btn-ghost" href="/admin/training">Back to training</a>')}
+        `${lessonBefore ? `<a class="btn btn-ghost" href="/admin/training/lesson/${encodeURIComponent(lessonBefore.key.slice('lesson:'.length))}">&larr; Back to the lesson</a> ` : ''}<a class="btn btn-ghost" href="/admin/training">Back to training</a>`)}
       <form method="post" action="/admin/training/quiz/${escEmail(key)}">
         ${view.questions.map((x, n) => `<fieldset class="card" style="border:0">
           <legend style="font-weight:700;white-space:normal">${n + 1}. ${withTips(escEmail(x.q))}</legend>
@@ -30564,6 +30608,14 @@ const PAY_GUIDE_BODY = `Everything you do for June's Tees happens here, and ever
   practice.was = [practice.body
     .replace('- Placement: **Front only**\n', '- Tick **Dark garment** (black is dark, so the white ink needs a base layer)\n- Placement: **Front only**\n')
     .replace('- 1 ink color, front only\n', '- Dark garment ticked, 1 ink color, front only\n')];
+}
+/* Social posts are made by sales as well as the designer (owner, 2026-10-08),
+   so the sign-in line no longer names the designer. An unedited copy updates. */
+{
+  const cos = KB_ADDED.find((a) => a.title === 'Social posts in COS Creator Studio');
+  const old = cos.body;
+  cos.body = old.replace('[How the designer signs in to COS, owner to fill in]', '[How you sign in to COS, owner to fill in]');
+  cos.was = [...(cos.was || []), old];
 }
 KB_ADDED.push({ kind: 'sop', title: PAY_GUIDE_TITLE,
   tags: 'pay, wage, hourly, hours, commission, earnings, my earnings, how pay works, payday, timeproof, own lead, shop lead, reorder, platform, menu, getting started, rules',
