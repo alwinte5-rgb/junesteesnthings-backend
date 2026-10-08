@@ -28244,7 +28244,8 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
     const staffId = owner ? (intIn(req.query.staff) && roster.some((r) => r.id === intIn(req.query.staff))
       ? intIn(req.query.staff) : (roster[0] && roster[0].id)) : actor.id;
     if (!staffId) {
-      return res.send(adminPage('Training', `${pageHeader('Training', 'Each helper\'s path from their first day to working on their own.')}
+      return res.send(adminPage('Training', `${pageHeader('Training', 'Each helper\'s path from their first day to working on their own.',
+        '<a class="btn btn-ghost" href="/admin/training/paths">Every role\'s training</a>')}
         <div class="card">${emptyState('No active helpers yet.', '<a class="btn" href="/admin/staff">Add one</a>')}</div>`, 'training'));
     }
     const who = owner ? roster.find((r) => r.id === staffId) : actor;
@@ -28325,7 +28326,8 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
       ${pageHeader(owner ? `Training — ${who.name} (${pathLabel})` : `My training: ${pathLabel}`,
         owner ? 'Lessons and reading they tick, work ticks itself, quizzes are marked here, and you sign off the rest. Moving them up stays your call on Staff.'
               : 'Work through it in order. Each module opens when you pass the quiz before it. Times are a guide, not a limit.',
-        owner && roster.length > 1 ? roster.map((r) => `<a class="btn ${r.id === staffId ? '' : 'btn-ghost'}" href="/admin/training?staff=${r.id}">${escEmail(r.name)}</a>`).join(' ') : '')}
+        owner ? [...(roster.length > 1 ? roster.map((r) => `<a class="btn ${r.id === staffId ? '' : 'btn-ghost'}" href="/admin/training?staff=${r.id}">${escEmail(r.name)}</a>`) : []),
+          '<a class="btn btn-ghost" href="/admin/training/paths">Every role\'s training</a>'].join(' ') : '')}
       ${flash(req.query)}
       <div class="card"><b>${p.done} of ${p.total} done</b>${progressBar(p.done, p.total)}
         ${p.minutes.expected ? `<div class="muted">About ${mins(p.minutes.expected)} in all, buffers included${p.minutes.took ? ` &middot; time logged on lessons so far: ${mins(p.minutes.took)}` : ''}.</div>` : ''}
@@ -28356,6 +28358,65 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('training page failed:', err.message);
     res.status(500).send(adminPage('Training', '<div class="card"><div class="warn">Could not load training.</div></div>', 'training'));
+  }
+});
+
+/* Every training path, for the owner: what a helper on each role walks,
+   module by module, with every lesson and quiz one click away (the owner's
+   quiz page shows the answers). Who is on each path is listed with a link
+   to their own progress. Owner only (ROUTES). */
+const TRAINING_PATHS = [
+  { key: 'sales', track: 'sales', role: null, label: 'Sales: all sales work', note: 'Everyone in sales until a role is assigned.' },
+  ...Object.entries(TRAINING.SALES_ROLES).map(([k, r]) => ({ key: `sales-${k}`, track: 'sales', role: k, label: `Sales: ${r.label}`, note: r.goal })),
+  { key: 'design', track: 'design', role: null, label: 'Design', note: TRAINING.TRACKS.design.note },
+];
+
+app.get('/admin/training/paths', requireAdmin, async (req, res) => {
+  const path = TRAINING_PATHS.find((x) => x.key === String(req.query.path || '')) || TRAINING_PATHS[0];
+  try {
+    const roster = await staffRoster({ activeOnly: true });
+    const on = roster.filter((r) => TRAINING.trackOf(r.training_track) === path.track
+      && (path.track !== 'sales' || TRAINING.salesRoleOf(r.sales_role) === path.role));
+    const steps = TRAINING.visibleSteps(undefined, path.track, path.role);
+    const roleCourse = path.role && TRAINING.COURSES[`sales-${path.role}`];
+    const mins = (n) => (n >= 60 ? `${Math.floor(n / 60)}h${n % 60 ? ` ${n % 60}m` : ''}` : `${n}m`);
+    const articles = await pool.query('SELECT id, title FROM kb_articles WHERE published AND title = ANY($1)',
+      [steps.filter((st) => st.article).map((st) => st.article)]);
+    const artId = new Map(articles.rows.map((a) => [a.title, a.id]));
+    const row = (st) => {
+      const kind = { read: 'Read', lesson: 'Lesson', do: 'Do', signoff: 'You sign off', quiz: 'Quiz', exam: 'Exam', buffer: 'Buffer' }[st.type];
+      const href = st.type === 'lesson' ? `/admin/training/lesson/${encodeURIComponent(st.key.slice('lesson:'.length))}`
+        : st.type === 'quiz' ? `/admin/training/quiz/${encodeURIComponent(st.quiz)}`
+        : st.article && artId.has(st.article) ? `/admin/playbook/${artId.get(st.article)}` : '';
+      const title = href ? `<a href="${href}" style="color:#1848B8;text-decoration:none">${escEmail(st.title)} &rarr;</a>` : escEmail(st.title);
+      return `<div class="row-i"${st.type === 'buffer' ? ' style="opacity:.75"' : ''}><span class="row-main">${st.type === 'buffer' ? escEmail(st.title) : `<b>${title}</b>`}
+        <div class="row-sub" style="white-space:normal">${escEmail(kind)}${st.minutes ? ` &middot; ${mins(st.minutes)}` : ''}${st.hint ? ` &middot; ${escEmail(st.hint)}` : ''}</div></span></div>`;
+    };
+    const groups = [];
+    for (const st of steps) {
+      const m = st.module || '';
+      if (!groups.length || groups[groups.length - 1].key !== m) groups.push({ key: m, title: st.moduleTitle, index: st.moduleIndex, steps: [] });
+      groups[groups.length - 1].steps.push(st);
+    }
+    const total = steps.reduce((n, st) => n + (Number(st.minutes) || 0), 0);
+    const buffer = steps.filter((st) => st.type === 'buffer').reduce((n, st) => n + (Number(st.minutes) || 0), 0);
+    res.set('Cache-Control', 'no-store');
+    res.send(adminPage('Training', `
+      ${pageHeader('Every role\'s training', 'What a helper on each path walks, module by module. Open any lesson or quiz; quizzes show you the answers.',
+        '<a class="btn btn-ghost" href="/admin/training">Back to training</a>')}
+      <div class="card" style="display:flex;gap:8px;flex-wrap:wrap">${TRAINING_PATHS.map((x) => x.key === path.key
+        ? `<b class="btn">${escEmail(x.label)}</b>` : `<a class="btn btn-ghost" href="/admin/training/paths?path=${encodeURIComponent(x.key)}">${escEmail(x.label)}</a>`).join(' ')}</div>
+      <div class="card"><b>${escEmail(path.label)}</b><p class="muted" style="margin:4px 0">${escEmail(path.note)}</p>
+        ${total ? `<p style="margin:4px 0">About ${mins(total)} in all, ${mins(buffer)} of it buffer. Quizzes pass at 80%.</p>` : ''}
+        ${path.role && !roleCourse ? '<div class="warn">This role\'s own course is not written yet. Until it is, someone given this role takes the Sales course below, the same as everyone in sales.</div>' : ''}
+        <p style="margin:8px 0 0"><b>On this path:</b> ${on.length ? on.map((r) => `<a href="/admin/training?staff=${r.id}">${escEmail(r.name)}</a>`).join(', ')
+          : '<span class="muted">nobody yet. Set a helper\'s path and sales role on <a href="/admin/staff">Staff</a>.</span>'}</p></div>
+      ${groups.map((g) => g.key ? `<div class="card"><b>${g.title === 'Final exam and sign-off' ? 'Final' : `Module ${g.index + 1}`}: ${escEmail(g.title)}</b>
+        <span class="muted"> &middot; ${mins(g.steps.reduce((n, st) => n + (Number(st.minutes) || 0), 0))}</span>${g.steps.map(row).join('')}</div>`
+        : `<div class="card">${g.steps.map(row).join('')}</div>`).join('')}`, 'training'));
+  } catch (err) {
+    console.error('training paths failed:', err.message);
+    res.status(500).send(adminPage('Training', '<div class="card"><div class="warn">Could not load the training paths.</div></div>', 'training'));
   }
 });
 
