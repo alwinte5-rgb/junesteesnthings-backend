@@ -40,18 +40,22 @@ function bannerAttributes({ width = 6, height = 3 } = {}) {
        slits are refused by the page on sizes Signs365 does not cut them for. */
     BHANG: { id: 'BHANG', name: 'Hanging', type: 'select', required: true,
       values: { options: Object.entries(sg.BANNER_HANGING).map(([value, h]) => ({ value, title: h.label, price: '', default: value === 'grommets' })) } },
+    /* Free: which edges get grommets (a Signs365 preset). The page shows it,
+       with the diagram, only when the hanging is grommets. */
+    BGROM: { id: 'BGROM', name: 'Grommet placement', type: 'select', required: true,
+      values: { options: Object.entries(sg.BANNER_GROMMETS).map(([value, g]) => ({ value, title: g.label, price: '', default: value === 'tb' })) } },
     BSLIT: { id: 'BSLIT', name: 'Wind slits (for outdoor banners over 2ft x 2ft and under 10ft x 10ft)', type: 'select', required: true,
       values: { options: [{ value: 'no', title: 'No', price: '', default: true }, { value: 'yes', title: 'Yes', price: '', default: false }] } },
     QTY: { id: 'QTY', name: 'Quantity', type: 'quantity', required: true, values: { type: 'standard', min_qty: '1', max_qty: '' } },
   };
 }
 
-/** One design side on a plain backdrop; the page reshapes the zone to the size chosen. */
+/** Front and back on a plain backdrop; the page reshapes the zone to the size
+ *  chosen, and shows the Back only when the vinyl is printed both sides. */
 function bannerStages() {
-  return {
-    front: { source: 'raws', overlay: false, url: 'products/jt-banner-backdrop.png', label: 'Banner',
-      edit_zone: { width: 400, height: 200, left: 0, top: 0, radius: '0' }, product_width: 500, product_height: 500 },
-  };
+  const side = (label) => ({ source: 'raws', overlay: false, url: 'products/jt-banner-backdrop.png', label,
+    edit_zone: { width: 400, height: 200, left: 0, top: 0, radius: '0' }, product_width: 500, product_height: 500 });
+  return { front: side('Front'), back: side('Back') };
 }
 
 module.exports = { NAME, bannerAttributes, bannerStages };

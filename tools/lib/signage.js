@@ -354,7 +354,13 @@ function bannerTable() {
     finishing[k] = row;
   }
   return { materials: BANNER_MATERIALS.map(({ key, label }) => ({ key, label })), max: BANNER_MAX_FT,
-    hanging: Object.entries(BANNER_HANGING).map(([key, v]) => ({ key, label: v.label })), prices, finishing };
+    hanging: Object.entries(BANNER_HANGING).map(([key, v]) => ({ key, label: v.label })), prices, finishing,
+    grommets: Object.entries(BANNER_GROMMETS).map(([key, v]) => ({ key, label: v.label, edges: v.edges })),
+    grommet_spacing_ft: BANNER_GROMMET_SPACING_FT,
+    /* Signs365's delivery to the shop, once an order. Shown inside the
+       banner's price on the designer, as the quote form shows it (inItemPrice). */
+    freight: FREIGHT.standard,
+    turnaround_days: BANNER_TURNAROUND_DAYS };
 }
 const PAPER_YIELD_SMALL = 9;
 
@@ -454,6 +460,26 @@ function bannerFinishCost(w, h, { hanging = 'grommets', windSlits = false } = {}
   if (windSlits) cost += (w * h / 144) * BANNER_FINISH.windslit_sqft;
   return cost;
 }
+
+/* GROMMET PLACEMENT — free, a Signs365 preset (the order screen's GROMMET
+   PRESETS + "Every 2-3 Feet" spacing). Corners always get one; along an edge
+   they sit evenly no more than 3ft apart. Which edges, by preset: */
+const BANNER_GROMMETS = {
+  tb:      { label: 'Top and bottom, every 2-3 ft (standard)', edges: ['top', 'bottom'] },
+  all:     { label: 'All four sides, every 2-3 ft',            edges: ['top', 'bottom', 'left', 'right'] },
+  corners: { label: 'Corners only',                           edges: [] },
+};
+const BANNER_GROMMET_SPACING_FT = 3;
+
+/** Grommet positions along an edge of `ft` feet, in feet from one end, ends included. */
+function grommetPositions(ft) {
+  const gaps = Math.max(1, Math.ceil(ft / BANNER_GROMMET_SPACING_FT));
+  return Array.from({ length: gaps + 1 }, (_, i) => Math.round((ft * i / gaps) * 100) / 100);
+}
+
+/* Banners are promised in 3 business days (the owner, 2026-10-08): Signs365
+   prints in 24 hours and ships next day; the rest is our check and handover. */
+const BANNER_TURNAROUND_DAYS = 3;
 
 /* The stock banner sizes the quote form sells (tools/add-signage.js makes a
    method per size). Inches, width x height as the method title reads them. */
@@ -681,6 +707,7 @@ module.exports = {
   fullBodyCutoutCost, standeeLadder, evenUp,
   SHOP_RATE, LABOUR, labourCost, PAPER_MARKUP, PAPER_MARKUP_LARGE, paperMarkupFor,
   YARD_SIGN_MIN_QTY,
+  BANNER_GROMMETS, BANNER_GROMMET_SPACING_FT, grommetPositions, BANNER_TURNAROUND_DAYS,
   BANNER_FINISH, BANNER_HANGING, BANNER_STOCK_SIZES, stockBannerAddons, windSlitsAllowed, bannerFinishCost, bannerFinishPrice,
   BANNER_SQFT_RATE, BANNER_RATES, BANNER_MATERIALS, BANNER_MAX_FT, bannerPrice, bannerTable,
   perSheet, coroCost, bannerCost, posterCost, windowCost, adhesiveCost,

@@ -80,14 +80,15 @@ test('/api/pricing-rules publishes the banner table', () => {
 
 test('the designer product carries the five option ids the designer reads', () => {
   const a = P.bannerAttributes();
-  assert.deepStrictEqual(Object.keys(a).sort(), ['BH', 'BHANG', 'BMAT', 'BSLIT', 'BW', 'QTY']);
+  assert.deepStrictEqual(Object.keys(a).sort(), ['BGROM', 'BH', 'BHANG', 'BMAT', 'BSLIT', 'BW', 'QTY']);
+  assert.deepStrictEqual(Object.keys(P.bannerStages()), ['front', 'back'], 'a back for double-sided');
   assert.deepStrictEqual(a.BMAT.values.options.map((o) => o.value), s.BANNER_MATERIALS.map((m) => m.key));
   assert.deepStrictEqual(a.BHANG.values.options.map((o) => o.value), Object.keys(s.BANNER_HANGING));
   assert.strictEqual(a.BW.values.options.length, s.BANNER_MAX_FT.long);
   assert.ok(a.BMAT.values.options.every((o) => o.price === ''), 'no price on an option: the table carries it');
   /* Lumise selects an option only when default === true (app.js: o.default === true); a '1' was ignored and the banner opened at 1ft x 1ft. */
   const dflt = (k) => a[k].values.options.filter((o) => o.default === true).map((o) => o.value);
-  assert.deepStrictEqual([dflt('BMAT'), dflt('BW'), dflt('BH'), dflt('BHANG'), dflt('BSLIT')], [['13'], ['6'], ['3'], ['grommets'], ['no']]);
+  assert.deepStrictEqual([dflt('BMAT'), dflt('BW'), dflt('BH'), dflt('BHANG'), dflt('BSLIT'), dflt('BGROM')], [['13'], ['6'], ['3'], ['grommets'], ['no'], ['tb']]);
   assert.strictEqual(P.bannerStages().front.url, 'products/jt-banner-backdrop.png');
 });
 
@@ -114,4 +115,18 @@ test('the Signs365 record agrees with the costs the shop sells from', () => {
     assert.ok(p.id > 0 && p.name && p.unit, `${p.key} needs its order screen id, name and unit`);
     assert.ok(p.prices && Object.keys(p.prices).length, `${p.key} has no price`);
   }
+});
+
+test('grommets every 2-3 ft with corners, the delivery and the turnaround ride with the table', () => {
+  assert.deepStrictEqual(s.grommetPositions(10), [0, 2.5, 5, 7.5, 10]);
+  assert.deepStrictEqual(s.grommetPositions(2), [0, 2]);
+  assert.deepStrictEqual(s.grommetPositions(6), [0, 3, 6]);
+  for (const ft of [1, 2, 4, 7, 10, 30]) {
+    const p = s.grommetPositions(ft);
+    for (let i = 1; i < p.length; i++) assert.ok(p[i] - p[i - 1] <= 3 + 1e-9, `${ft}ft: gap over 3ft`);
+  }
+  const t = s.bannerTable();
+  assert.strictEqual(t.freight, 10);
+  assert.strictEqual(t.turnaround_days, 3);
+  assert.deepStrictEqual(t.grommets.map((g) => g.key), ['tb', 'all', 'corners']);
 });
