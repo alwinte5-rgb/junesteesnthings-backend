@@ -85,6 +85,9 @@ test('the designer product carries the five option ids the designer reads', () =
   assert.deepStrictEqual(a.BHANG.values.options.map((o) => o.value), Object.keys(s.BANNER_HANGING));
   assert.strictEqual(a.BW.values.options.length, s.BANNER_MAX_FT.long);
   assert.ok(a.BMAT.values.options.every((o) => o.price === ''), 'no price on an option: the table carries it');
+  /* Lumise selects an option only when default === true (app.js: o.default === true); a '1' was ignored and the banner opened at 1ft x 1ft. */
+  const dflt = (k) => a[k].values.options.filter((o) => o.default === true).map((o) => o.value);
+  assert.deepStrictEqual([dflt('BMAT'), dflt('BW'), dflt('BH'), dflt('BHANG'), dflt('BSLIT')], [['13'], ['6'], ['3'], ['grommets'], ['no']]);
   assert.strictEqual(P.bannerStages().front.url, 'products/jt-banner-backdrop.png');
 });
 
