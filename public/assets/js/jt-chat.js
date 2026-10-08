@@ -53,6 +53,10 @@
       'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;',
       '💬 Quick answers');
     launcher.type = 'button';
+    /* On a phone with the sticky action bar, sit on the LEFT above it: on the
+       right this button and the live-chat bubble stacked over the bar's
+       "Call" button (2026-10-08). The panel opens from the same side. */
+    var phoneBar = window.matchMedia && window.matchMedia('(max-width: 760px)').matches && document.querySelector('.jt-mcb');
 
     var panel = el('div',
       'position:fixed;bottom:96px;right:18px;z-index:2147482999;display:none;flex-direction:column;' +
@@ -60,6 +64,11 @@
       'background:#fff;border:1px solid #e5e7eb;border-radius:16px;overflow:hidden;' +
       'box-shadow:0 16px 44px rgba(15,23,42,.28);' +
       'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;');
+
+    if (phoneBar) {
+      launcher.style.right = 'auto'; launcher.style.left = '12px'; launcher.style.bottom = '84px';
+      panel.style.right = 'auto'; panel.style.left = '12px'; panel.style.bottom = '84px';
+    }
 
     var head = el('div',
       'background:#1848B8;color:#fff;padding:13px 16px;display:flex;align-items:center;justify-content:space-between;flex:0 0 auto;',

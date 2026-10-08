@@ -489,6 +489,8 @@ document.addEventListener('click', function(e){
 <!--Start of Tawk.to Script-->
 <script type="text/javascript">
 var Tawk_API=Tawk_API||{}, Tawk_LoadStart=new Date();
+/* Phones: above the sticky action bar, which it covered (the Call button). */
+Tawk_API.customStyle={visibility:{mobile:{position:'br',xOffset:10,yOffset:78}}};
 (function(){
 var s1=document.createElement("script"),s0=document.getElementsByTagName("script")[0];
 s1.async=true;
@@ -499,6 +501,6 @@ s0.parentNode.insertBefore(s1,s0);
 })();
 </script>
 <!--End of Tawk.to Script-->
-<script src="/assets/js/jt-chat.js" defer></script>
+<script src="/assets/js/jt-chat.js?v=20261008" defer></script>
 </body>
 </html>
