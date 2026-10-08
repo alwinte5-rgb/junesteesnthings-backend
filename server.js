@@ -18022,6 +18022,10 @@ async function allCustomers() {
   const { rows: quoteCustomers } = await pool.query(
     `SELECT lower(email) AS email, max(name) AS name,
             count(*) AS jobs, coalesce(sum(paid_amount), 0) AS paid,
+            /* What they have been quoted, live quotes only. The list showed
+               only Paid, so every customer still deciding read $0.00 and
+               looked like a broken total (the owner, 2026-10-08). */
+            coalesce(sum(total) FILTER (WHERE cancelled_at IS NULL AND status NOT IN ('draft', 'held')), 0) AS quoted,
             max(created_at) AS last_seen
        FROM quotes
       WHERE email IS NOT NULL AND email <> ''
@@ -18033,7 +18037,7 @@ async function allCustomers() {
   for (const c of quoteCustomers) {
     byEmail.set(c.email, {
       email: c.email, name: c.name || '', quotes: Number(c.jobs),
-      orders: 0, spent: Number(c.paid || 0), last: c.last_seen, source: 'quotes',
+      orders: 0, spent: Number(c.paid || 0), quoted: Number(c.quoted || 0), last: c.last_seen, source: 'quotes',
     });
   }
   for (const o of studio.orders) {
@@ -18043,17 +18047,19 @@ async function allCustomers() {
     if (cur) {
       cur.orders += 1;
       cur.spent += Number(o.paid || 0) - Number(o.refunded || 0);   // net of refunds
+      cur.quoted += Number(o.total || 0);
       cur.source = 'both';
       if (!cur.name) cur.name = o.name || '';
       if (o.created && new Date(o.created) > new Date(cur.last)) cur.last = o.created;
     } else {
       byEmail.set(key, {
         email: key, name: o.name || '', quotes: 0, orders: 1,
-        spent: Number(o.paid || 0) - Number(o.refunded || 0), last: o.created, source: 'studio',
+        spent: Number(o.paid || 0) - Number(o.refunded || 0), quoted: Number(o.total || 0), last: o.created, source: 'studio',
       });
     }
   }
-  return { people: [...byEmail.values()].sort((a, b) => Number(b.spent) - Number(a.spent)), studio };
+  return { people: [...byEmail.values()].sort((a, b) =>
+    Number(b.spent) - Number(a.spent) || Number(b.quoted) - Number(a.quoted)), studio };
 }
 
 app.get('/admin/customers', requireAdmin, async (_req, res) => {
@@ -18076,8 +18082,10 @@ app.get('/admin/customers', requireAdmin, async (_req, res) => {
           c.quotes || '—'}</td>
         <td style="padding:9px 6px;border-bottom:1px solid #eef1f8;text-align:right;white-space:nowrap">${
           c.orders || '—'}</td>
+        <td style="padding:9px 6px;border-bottom:1px solid #eef1f8;text-align:right;white-space:nowrap;color:#46505f">${
+          c.quoted ? money(c.quoted) : '—'}</td>
         <td style="padding:9px 6px;border-bottom:1px solid #eef1f8;text-align:right;white-space:nowrap;font-weight:600">${
-          money(c.spent)}</td>
+          c.spent ? money(c.spent) : '<span class="muted" style="font-weight:400">not paid yet</span>'}</td>
       </tr>`;
     }).join('');
 
@@ -18089,6 +18097,7 @@ app.get('/admin/customers', requireAdmin, async (_req, res) => {
           <th style="padding:6px">Customer</th><th style="padding:6px">Seen in</th>
           <th style="padding:6px;text-align:right">Quotes</th>
           <th style="padding:6px;text-align:right">Orders</th>
+          <th style="padding:6px;text-align:right">Quoted</th>
           <th style="padding:6px;text-align:right">Paid</th></tr></thead>
         <tbody>${rows}</tbody></table></div>`
         : '<div class="card"><p class="muted">No customers yet.</p></div>'}`, 'customers'));
