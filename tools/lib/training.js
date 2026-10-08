@@ -345,13 +345,41 @@ function gradeQuiz(key, picked = {}) {
  *  in a playbook article. Markdown links "[text](url)" are not placeholders. */
 function placeholders(text) {
   const out = [];
-  const re = /\[([^\]\n]{1,60})\](?!\()/g;
+  const re = /\[([^\]\n]{1,200})\](?!\()/g;
   let m;
   while ((m = re.exec(String(text || '')))) out.push(m[1]);
   return [...new Set(out)];
 }
 
+/** The placeholders only the owner can answer, as opposed to the blanks in a
+ *  ready-made reply ("[name]", "[time]") that staff fill in per customer.
+ *  A gap says "owner to fill in", or is one of the two the first playbook was
+ *  written with: "[standard turnaround]" and the escalation deadline "[X]".
+ *  Each comes with the question to ask and the line it sits in, so the owner
+ *  can answer it without opening the article. */
+function ownerGaps(text) {
+  const body = String(text || '');
+  return placeholders(body).filter((h) => /owner to fill in/i.test(h) || /^(standard turnaround|X)$/i.test(h))
+    .map((h) => {
+      const token = `[${h}]`;
+      const line = body.split('\n').find((l) => l.includes(token)) || '';
+      const ask = h.replace(/,?\s*owner to fill in\s*:?\s*/i, ' ').trim();
+      /* "[X] business days": the words after the blank stay, so ask for the number alone. */
+      const hint = line.includes(`${token} business days`) || line.includes(`${token} days`) ? 'Just the number, e.g. 7' : '';
+      return { token, ask: ask && !/^x$/i.test(ask) ? ask[0].toUpperCase() + ask.slice(1) : 'The number of business days', line: line.trim(), hint };
+    });
+}
+
+/** Writes the owner's answer in place of one gap, everywhere it appears in the
+ *  article. Square brackets are taken out of the answer so it can never read
+ *  as a new placeholder. */
+function fillGap(text, token, answer) {
+  const a = String(answer || '').replace(/[\r\n]+/g, ' ').replace(/[[\]]/g, '').trim();
+  if (!a) return null;
+  return String(text || '').split(token).join(a);
+}
+
 module.exports = { FEATURES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz,
-  visibleSteps, stepByKey, mayTick, progress, stepOpen, placeholders, passMark, courseSteps, lessonPages,
+  visibleSteps, stepByKey, mayTick, progress, stepOpen, placeholders, ownerGaps, fillGap, passMark, courseSteps, lessonPages,
   COURSES: COURSES.COURSES, SALES_ROLES: COURSES.SALES_ROLES, salesRoleOf: COURSES.salesRoleOf,
   lessonArticles: COURSES.lessonArticles, glossary: COURSES.glossary };
