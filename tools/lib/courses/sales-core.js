@@ -24,6 +24,7 @@ const A = {
   leads:     'Sales course 4: Answering leads',
   quotes:    'Sales course 5: Building a quote',
   practice:  'Practice quote: a basic screen print order',
+  social:    'Social posts in COS Creator Studio',
   upsell:    'Sales course 7: Upselling',
   prospect:  'Sales course 8: Finding new leads',
   reorders:  'Sales course 9: Reorders and repeat customers',
@@ -76,15 +77,11 @@ const GLOSSARY = {
 const MODULES = [
   /* ── 1 ── */
   {
-    key: 's1', title: 'Welcome: the shop, our customers, and the lines we never cross',
+    key: 's1', icon: '👋', title: 'Welcome: the shop, our customers, and the lines we never cross',
     goal: 'Know who we serve, what a good day looks like, and which decisions are always June\'s.',
     lessons: [{
       id: 's1-welcome', article: A.welcome, minutes: 15, tags: 'welcome, rules, hand off, never promise',
       goals: ['Describe what June\'s Tees makes and for whom', 'List the five things you never promise', 'Know when and how to hand a customer to June'],
-      checks: [
-        { q: 'A customer asks for 20% off if they order today. What do you say?', a: 'Thank them, say you will check with June, and give a time you will reply by. Discounts are June\'s decision.' },
-        { q: 'You are not sure if a garment comes in pink. What do you do?', a: 'Say you will check and reply by a set time, ask June in Team chat, and reply by that time even if the answer is "still checking".' },
-      ],
       tryIt: [{ label: 'Open Team chat and say hello to June', href: '/admin/team-chat' }],
       body:
 `Welcome to the team! This first lesson explains who we are, who our customers are, and the few rules that protect the shop. Everything else in this course builds on it.
@@ -174,15 +171,11 @@ This course is about 8 hours. Each module has lessons, a short quiz (80% to pass
 
   /* ── 2 ── */
   {
-    key: 's2', title: 'The back office, screen by screen',
+    key: 's2', icon: '🧭', title: 'The back office, screen by screen',
     goal: 'Find your way around every screen you will use, and know what each one is for.',
     lessons: [{
-      id: 's2-tour', article: A.tour, minutes: 25, tags: 'back office, menu, my day, leads, quotes, production, customers, playbook, team chat, levels, sign in',
+      id: 's2-tour', article: A.tour, minutes: 20, tags: 'back office, menu, my day, leads, quotes, production, customers, playbook, team chat, levels, sign in',
       goals: ['Open each screen from the menu and say what it is for', 'Start every shift from My Day', 'Know what your training level lets you do'],
-      checks: [
-        { q: 'Where do you look first when your shift starts?', a: 'My Day. It lists leads waiting, follow-ups due, your tasks and training, oldest first.' },
-        { q: 'Your quote says "waiting for approval". Is something broken?', a: 'No. While you are in training, June checks quotes and messages before the customer sees them. It shows on My Day once approved.' },
-      ],
       tryIt: [
         { label: 'My Day', href: '/admin/my-day' }, { label: 'Leads', href: '/admin/leads' }, { label: 'Quotes', href: '/admin/quotes' },
         { label: 'Production', href: '/admin/production' }, { label: 'Customers', href: '/admin/customers' }, { label: 'Playbook', href: '/admin/playbook' },
@@ -293,16 +286,11 @@ Some shop tools (social accounts, Canva, supplier sites) have shared logins. The
 
   /* ── 3 ── */
   {
-    key: 's3', title: 'What we make: print methods, garments and products',
+    key: 's3', icon: '👕', title: 'What we make: print methods, garments and products',
     goal: 'Recommend the right decoration for any order, and know what changes a price.',
     lessons: [{
       id: 's3-methods', article: A.methods, minutes: 20, tags: 'screen printing, dtf, embroidery, patches, vinyl, puff, minimum, colours, white base, which method',
       goals: ['Choose between screen printing, DTF and embroidery for any order', 'Explain the 50-piece screen print minimum in a friendly way', 'Know what artwork each method needs'],
-      checks: [
-        { q: '30 shirts, a 2-colour logo on the front. Which method?', a: 'DTF (or embroidery for polos/caps). Screen printing starts at 50 pieces.' },
-        { q: '200 shirts, a 1-colour design. Which method is usually cheapest?', a: 'Screen printing: the screens are a one-time charge spread over many shirts.' },
-        { q: 'Why does a 4-colour design cost more to screen print than a 1-colour one?', a: 'Every colour (plus the white base) is its own screen, for each print place.' },
-      ],
       tryIt: [{ label: 'Search the Playbook for "artwork"', href: '/admin/playbook?q=artwork' }],
       body:
 `Customers rarely know which decoration they need. Your job is to recommend the best value for their order. Three methods cover almost everything.
@@ -351,12 +339,8 @@ When you recommend, explain why in plain words: "For 30 shirts, DTF is the bette
 
 Whatever the method: sports teams, brands, characters and celebrities go to June. We offer an original design on the same theme.`,
     }, {
-      id: 's3-products', article: A.products, minutes: 20, tags: 'garments, blanks, signs, banners, cutouts, turnaround, rush, delivery, shipping, pickup',
+      id: 's3-products', article: A.products, minutes: 15, tags: 'garments, blanks, signs, banners, cutouts, turnaround, rush, delivery, shipping, pickup',
       goals: ['Name the product families beyond shirts', 'Quote turnaround and rush correctly', 'Explain pickup, shipping and local delivery'],
-      checks: [
-        { q: 'A customer needs shirts in 3 business days. What do you say?', a: '"We offer rush for a fee. Let me check what is on the press and confirm today by [time]." Never promise before checking.' },
-        { q: 'A coach wants giant photo heads of the players for the stands. What product is that?', a: 'Big Head Cutouts. Check whether a pack is better value than singles.' },
-      ],
       tryIt: [{ label: 'See how the shop looks to customers', href: 'https://www.jtees.net' }],
       body:
 `Shirts are most of what we sell, but not all of it. This lesson covers garments, the other products, and the timing rules behind every quote.
@@ -447,15 +431,11 @@ Customers can also design and pay online at jtees.net. Those show on **Orders**.
 
   /* ── 4 ── */
   {
-    key: 's4', title: 'Answering leads',
+    key: 's4', icon: '💬', title: 'Answering leads',
     goal: 'Answer every enquiry fast, get every detail a quote needs in one message, and never lose a lead.',
     lessons: [{
       id: 's4-leads', article: A.leads, minutes: 20, tags: 'new lead, first reply, five details, quote reply, chat, phone, follow up, logging, social inbox',
       goals: ['Reply within the time limits on every channel', 'Ask for the five details in one friendly message', 'Log every contact and set a follow-up date'],
-      checks: [
-        { q: 'A message says only "how much for hoodies?". What do you send?', a: 'Thanks, plus the five questions in one message: how many and the size mix, which garment, where the design goes and how many colours, their artwork, and the date they need them (/quote).' },
-        { q: 'You answered a chat but forgot to log it. Does it count?', a: 'No. Log the chat on the lead: logging is what counts as answered.' },
-      ],
       tryIt: [{ label: 'Open Leads', href: '/admin/leads' }, { label: 'The /quote reply in the Playbook', href: '/admin/playbook?q=quote' }],
       body:
 `The first shop to answer usually wins the order. A quick, friendly reply that asks the right questions beats a perfect quote tomorrow.
@@ -555,16 +535,11 @@ Never guess. "Good question! Let me check and I'll get back to you by 2pm." Then
 
   /* ── 5 ── */
   {
-    key: 's5', title: 'Building quotes',
+    key: 's5', icon: '🧾', title: 'Building quotes',
     goal: 'Build an accurate quote from a lead, with options, sizes, dates and the right tax, and save it safely.',
     lessons: [{
       id: 's5-quotes', article: A.quotes, minutes: 25, tags: 'quote form, items, decoration, ink colours, where, sizes, options, run number, draft, rush, deposit, tax exempt, digitizing',
       goals: ['Fill in every part of the quote form', 'Use optional items and Run numbers', 'Know when tax comes off and how deposits work'],
-      checks: [
-        { q: 'Should you type a price into "Each $"?', a: 'No. Leave it blank and the system prices it from the list. A typed price is a custom price June has to approve.' },
-        { q: 'A customer wants to compare a tee and a hoodie. Two quotes?', a: 'No. One quote with both as optional items; the customer ticks what they want.' },
-        { q: 'A school asks for no tax. What do you need?', a: 'Their Illinois exemption letter (E-number). They upload it on the quote page; tax comes off once it is approved.' },
-      ],
       tryIt: [{ label: 'Open the quote form (save as a draft only)', href: '/admin/quote/new' }],
       body:
 `The quote form does all the maths. Your job is to put the right things in the right boxes. A wrong box means a wrong price, so go slowly at first. In the next lesson you build a practice quote step by step.
@@ -631,7 +606,6 @@ The customer's link always shows the latest version, so a fix is just an edit an
     }, {
       id: 's5-practice', article: A.practice, existing: true, minutes: 20,
       goals: ['Build a full screen print quote in the real form', 'Save it as a draft so nothing is sent'],
-      checks: [{ q: 'Why leave the phone and email blank on a practice quote?', a: 'So nothing can ever be sent to anyone.' }],
       tryIt: [{ label: 'Open the quote form', href: '/admin/quote/new' }],
     }],
     practice: [
@@ -678,7 +652,7 @@ The customer's link always shows the latest version, so a fix is just an edit an
 
   /* ── 6 ── */
   {
-    key: 's6', title: 'The quote exam',
+    key: 's6', icon: '🎯', title: 'The quote exam',
     goal: 'Prove you can quote real orders the way June does.',
     lessons: [],
     practice: [
@@ -691,15 +665,11 @@ The customer's link always shows the latest version, so a fix is just an edit an
 
   /* ── 7 ── */
   {
-    key: 's7', title: 'Upselling',
+    key: 's7', icon: '⬆️', title: 'Upselling',
     goal: 'Offer what genuinely makes the order better, at the right moment, without pushing.',
     lessons: [{
       id: 's7-upsell', article: A.upsell, minutes: 25, tags: 'upsell, price break, more pieces, second print, back print, sleeve, pack, cutouts, optional items, rush, embroidery upgrade, bundle',
       goals: ['Read the Upsell ideas box and turn an idea into one friendly sentence', 'Offer upsells as optional items', 'Know when not to upsell'],
-      checks: [
-        { q: 'The box says "at 48 pieces the price drops to $X each". How do you offer it?', a: '"Good news: at 48 the price per shirt drops to $X, so 6 more costs only $Y. Want extras for new players?" Add it as an option or ask, never change their order without a yes.' },
-        { q: 'A customer said their budget is tight. Do you upsell?', a: 'Only something that saves them money (a price break that lowers the per-piece price). Never push extras.' },
-      ],
       tryIt: [{ label: 'Open a quote and find the Upsell ideas box', href: '/admin/quotes' }],
       body:
 `A good upsell helps the customer: more for their money, a better-looking order, or one less thing to organise. A bad upsell feels like pressure. We only do the first kind.
@@ -788,15 +758,11 @@ On the quote form, a blue **Upsell ideas** box appears when the system spots a b
 
   /* ── 8 ── */
   {
-    key: 's8', title: 'Finding new leads',
+    key: 's8', icon: '🔎', title: 'Finding new leads',
     goal: 'Find groups that need shirts soon, register them as yours, and make a first contact that gets replies.',
     lessons: [{
       id: 's8-prospect', article: A.prospect, minutes: 25, tags: 'prospecting, new leads, find customers, outreach, seasonal calendar, google maps, facebook, eventbrite, chamber, opener, follow up cadence, rep lead',
       goals: ['Name who needs shirts in each season', 'Find prospects in six places', 'Register a prospect as yours and send a first message that gets replies'],
-      checks: [
-        { q: 'You found a league\'s coach on its website, with a phone number. Do you text them?', a: 'No. Email or DM only. Never text or call a number you found online.' },
-        { q: 'When do you click "I found this customer"?', a: 'When you add them on Leads, before you quote them. Otherwise they stay a shop lead.' },
-      ],
       tryIt: [{ label: 'Leads: Add a lead', href: '/admin/leads' }, { label: 'Search Google Maps for youth soccer near the shop', href: 'https://www.google.com/maps/search/youth+soccer+league+chicago' }],
       body:
 `Quiet time is selling time. A few well-chosen prospects, contacted personally, are worth more than a long list nobody follows up.
@@ -900,15 +866,11 @@ Follow up twice at most: about 3 days after, then about 10 days after. Set the f
 
   /* ── 9 ── */
   {
-    key: 's9', title: 'Reorders and repeat customers',
+    key: 's9', icon: '🔁', title: 'Reorders and repeat customers',
     goal: 'Bring past customers back at the right time, and look after the reviews that bring new ones.',
     lessons: [{
       id: 's9-reorders', article: A.reorders, minutes: 15, tags: 'reorder, repeat customers, seasonal, schools, teams, churches, businesses, reviews, tax exempt, customers history',
       goals: ['Find who is due a reorder', 'Send a personal reorder note at the right time', 'Reply to reviews the way we do'],
-      checks: [
-        { q: 'A league ordered last March. When do you get in touch?', a: 'A few weeks before this spring season: roughly late January to February, with a personal note about last year\'s order.' },
-        { q: 'A 1-star review comes in. Do you reply right away?', a: 'Tell June the same day. Draft a calm, kind reply that invites them to message us; June approves before it posts.' },
-      ],
       tryIt: [{ label: 'Customers', href: '/admin/customers' }, { label: 'Reviews', href: '/admin/reviews' }, { label: 'The /reorder reply', href: '/admin/playbook?q=reorder' }],
       body:
 `The easiest sale is a customer who already liked their last order. Schools, teams, churches and businesses order on a calendar, so you can be there first.
@@ -990,15 +952,11 @@ Review requests are sent automatically after an order. Never offer anything in r
 
   /* ── 10 ── */
   {
-    key: 's10', title: 'Following up, getting paid, and how you are paid',
+    key: 's10', icon: '💸', title: 'Following up, getting paid, and how you are paid',
     goal: 'Follow quotes through to payment and production, and understand your own pay.',
     lessons: [{
       id: 's10-money', article: A.money, minutes: 15, tags: 'follow up, objections, price match, deposits, balances, proofs, artwork, social inbox, ai rules, end of day, commission, pay',
       goals: ['Follow up a quote without chasing', 'Hand artwork to the designer and get written proof approval', 'Explain how your wage and commission work'],
-      checks: [
-        { q: 'A customer says another shop is 15% cheaper. What do you do?', a: 'Ask to see their quote, explain what ours includes, and check with June before promising anything (/pricematch).' },
-        { q: 'The customer says "looks great!" to a proof in a phone call. Can it print?', a: 'Not yet. Approval must be in writing (email, text or chat) and logged on the job.' },
-      ],
       tryIt: [{ label: 'My earnings', href: '/admin/my-earnings' }, { label: 'How the platform works and how you are paid', href: '/admin/playbook?q=commission' }],
       body:
 `A sent quote is halfway. Most sales are won on the follow-up, and an order only becomes real when it is paid, proofed and printed.
@@ -1048,6 +1006,10 @@ Before you sign off: leads answered, quotes sent, follow-ups done, anything stuc
 - Commission is payable once the customer has paid in full and 14 days have passed, never while a card dispute is open. A refund lowers it by the same share
 - Commission starts once June signs off your training
 - My earnings shows every figure and its status. The full guide is "How the platform works and how you are paid" in the Playbook`,
+    }, {
+      id: 's10-social', article: A.social, existing: true, minutes: 10,
+      goals: ['Make and check a post in COS Creator Studio', 'Know what may never be posted'],
+      tryIt: [{ label: 'The Resources page (COS and other tools)', href: '/admin/resources' }],
     }],
     practice: [
       { key: 'do:message', type: 'do', fact: 'messages', minutes: 5,
@@ -1056,8 +1018,14 @@ Before you sign off: leads answered, quotes sent, follow-ups done, anything stuc
         title: 'Send your first end-of-day note', hint: 'Use "Wrap up the day" on My Day.' },
     ],
     quiz: {
-      key: 'sales-s10', title: 'Module 10 quiz: follow-ups and pay', minutes: 10,
+      key: 'sales-s10', title: 'Module 10 quiz: follow-ups, social posts and pay', minutes: 10,
       questions: [
+        { id: 'post', q: 'A customer\'s finished team shirts look great. May you post the photo?',
+          choices: ['Yes, it is our work', 'Only with their permission, and a parent\'s OK for any child\'s face', 'Only without the team name', 'Only on Facebook'],
+          answer: 1, article: A.social, why: 'Never post a customer\'s photo, name or design without permission; no children\'s faces without a parent\'s OK.' },
+        { id: 'cos', q: 'COS Creator Studio generates a post. What do you do before it is scheduled?',
+          choices: ['Nothing, it is automatic', 'Read every post: our voice, spelling, business details, one clear next step, and no unapproved prices', 'Add more hashtags', 'Ask the customer'],
+          answer: 1, article: A.social, why: 'Every generated post is read and checked before it goes on the calendar.' },
         { id: 'followup', q: 'You sent a quote 3 days ago and heard nothing. Best next step?',
           choices: ['Wait', 'A friendly note asking if they have questions, mentioning the quote is good for 14 days, then a new follow-up date', 'Offer a discount', 'Call every day'],
           answer: 1, article: A.money, why: 'One friendly nudge with a reason to act, then a new follow-up date.' },
@@ -1189,5 +1157,107 @@ const FINAL = {
       title: 'Ready to send small quotes on their own', hint: 'The last step. Commission starts here, on quotes you create from now on. June decides when to move you up from Training.' },
   ],
 };
+
+/* Photos for each lesson, from the shop's own work, and its "check yourself"
+   questions: multiple choice, answered on the page, never marked. */
+const W = (f) => `/assets/images/work/${f}.jpg`;
+const LESSON_EXTRAS = {
+  's1-welcome': {
+    images: [{ src: W('hero-banner'), alt: 'Finished custom shirts from June\'s Tees' }, { src: W('youth-team-shirts'), alt: 'A youth team in their custom shirts' }],
+    checks: [
+      { q: 'A customer asks for 20% off if they order today. What do you say?', choices: ['"Sure, 20% off today only!"', '"Let me check with June and get back to you by 3pm"', '"We never give discounts"'], answer: 1, why: 'Discounts are June\'s decision. Reply now, give a time, ask June.' },
+      { q: 'You are not sure if a garment comes in pink. What do you do?', choices: ['Say yes, it probably does', 'Say you will check and reply by a set time, then ask June', 'Ignore that part of the message'], answer: 1, why: 'Never guess. Give a time, ask, and keep the time.' },
+      { q: 'Which of these is NOT something you ever promise on your own?', choices: ['That a proof comes before printing', 'A refund', 'That you will reply by 2pm'], answer: 1, why: 'Refunds, discounts, dates and exact colour matches are June\'s.' },
+    ],
+  },
+  's2-tour': {
+    images: [{ src: '/assets/images/work/logo-tee-and-cap-set.jpg', alt: 'A logo tee and cap set' }],
+    checks: [
+      { q: 'Your shift starts. Where do you go first?', choices: ['Quotes', 'My Day', 'Playbook'], answer: 1, why: 'My Day lists what needs you, oldest first.' },
+      { q: 'Your quote says "waiting for approval". What does that mean?', choices: ['Something is broken', 'June checks it before the customer sees it', 'The customer declined'], answer: 1, why: 'While you are in training, June checks quotes and messages first.' },
+      { q: 'Where do you see everything a customer ordered before?', choices: ['Customers', 'Team chat', 'Training'], answer: 0, why: 'Search Customers by name, email or phone.' },
+    ],
+  },
+  's3-methods': {
+    images: [{ src: W('screen-printing-press'), alt: 'Screen printing: one screen per colour' }, { src: W('full-color-dtf-transfer'), alt: 'DTF: a full-colour transfer' },
+      { src: W('embroidery-machine-polos'), alt: 'Embroidery on polos' }],
+    checks: [
+      { q: '30 shirts, a 2-colour logo on the front. Which method?', choices: ['Screen printing', 'DTF (or embroidery on polos and caps)', 'We cannot do 30'], answer: 1, why: 'Screen printing starts at 50 pieces. DTF has no minimum.' },
+      { q: '200 shirts, a 1-colour design. Usually the best value?', choices: ['Screen printing', 'DTF', 'Embroidery'], answer: 0, why: 'Screens are a one-time charge spread over many shirts.' },
+      { q: 'Why does a 4-colour design cost more to screen print?', choices: ['Ink is expensive', 'Each colour, plus the white base, is its own screen', 'It takes longer to dry'], answer: 1, why: 'Screens = (ink colours + 1 for the white base) x print places.' },
+    ],
+  },
+  's3-products': {
+    images: [{ src: W('company-zip-hoodies'), alt: 'Company zip hoodies' }, { src: W('custom-printed-banner'), alt: 'A custom printed banner' },
+      { src: '/assets/images/products/big-head-cutouts.svg', alt: 'Big Head Cutouts' }],
+    checks: [
+      { q: 'A customer needs shirts in 3 business days. What do you say?', choices: ['"No problem, guaranteed"', '"We offer rush for a fee. Let me check the press and confirm today by [time]"', '"Impossible"'], answer: 1, why: 'Rush is +30% for 3 days, and only after checking the press.' },
+      { q: 'A coach wants giant photo heads of the players for the stands. What is that?', choices: ['A banner', 'Big Head Cutouts', 'A yard sign'], answer: 1, why: 'Big Head Cutouts, sold as singles or packs.' },
+      { q: 'When does the turnaround clock start?', choices: ['At the first message', 'When the proof is approved and the deposit paid', 'When you send the quote'], answer: 1, why: 'Late artwork or approval moves the date.' },
+    ],
+  },
+  's4-leads': {
+    images: [{ src: '/assets/images/email/school-team.jpg', alt: 'A school team order' }],
+    checks: [
+      { q: 'A message says only "how much for hoodies?". What do you send?', choices: ['Our cheapest hoodie price', 'Thanks, plus the five questions in one message', 'Nothing until they send more'], answer: 1, why: 'The /quote reply asks quantity and sizes, garment, placement and colours, artwork, and the date.' },
+      { q: 'You answered a chat but forgot to log it. Does it count as answered?', choices: ['Yes', 'No: log it on the lead', 'Only if they reply'], answer: 1, why: 'Logging on the lead is what counts.' },
+      { q: 'How fast should a website chat get a reply?', choices: ['15 minutes', '1 hour', 'Same day'], answer: 0, why: 'Chats 15 minutes, forms 1 hour.' },
+    ],
+  },
+  's5-quotes': {
+    images: [{ src: W('full-color-team-logo-print'), alt: 'A full-colour team logo print' }],
+    checks: [
+      { q: 'What goes in "Each $" on a normal item?', choices: ['Your best guess', 'Nothing: leave it blank so the system prices it', 'The garment cost'], answer: 1, why: 'A typed price is a custom price June has to approve.' },
+      { q: 'A customer wants to compare a tee and a hoodie. What do you build?', choices: ['Two quotes', 'One quote with both items ticked Optional', 'An email with two prices'], answer: 1, why: 'Optional items let the customer tick what they want.' },
+      { q: 'A school asks for no tax. What do you need?', choices: ['Nothing', 'Their Illinois exemption letter (E-number), approved first', 'The principal\'s signature'], answer: 1, why: 'Tax comes off only with an approved certificate.' },
+    ],
+  },
+  's5-practice': {
+    images: [],
+    checks: [
+      { q: 'Why leave the phone and email blank on a practice quote?', choices: ['To save time', 'So nothing can ever be sent to anyone', 'The form requires it'], answer: 1, why: 'A practice quote must never reach a real person.' },
+      { q: 'Which button keeps a quote private?', choices: ['Finish', 'Save as draft', 'Duplicate'], answer: 1, why: 'A draft sends nothing and the link does not open.' },
+    ],
+  },
+  's7-upsell': {
+    images: [{ src: W('logo-tee-and-cap-set'), alt: 'A tee and cap set: an easy add-on' }, { src: W('youth-team-shirts'), alt: 'Team shirts with names and numbers' }],
+    checks: [
+      { q: 'The Upsell box says "at 48 pieces the price drops". The customer has not answered yet. What do you do?', choices: ['Press Apply & save', 'Offer it as an optional item or in your follow-up', 'Ignore it'], answer: 1, why: 'Apply only with their yes; otherwise offer it.' },
+      { q: 'A customer said their budget is fixed. Which upsell is OK?', choices: ['Hoodies for everyone', 'A price break that lowers their per-piece price', 'Rush'], answer: 1, why: 'On a fixed budget, only what saves them money.' },
+      { q: 'They said no to the back print. What next?', choices: ['Ask again tomorrow', 'Drop it', 'Add it anyway'], answer: 1, why: 'Offer once. A no is a no.' },
+    ],
+  },
+  's8-prospect': {
+    images: [{ src: W('kindergarten-back-to-school-tee'), alt: 'A back-to-school class shirt' }, { src: W('youth-team-shirts'), alt: 'A youth sports team' }],
+    checks: [
+      { q: 'You found a coach\'s phone number on a league website. Do you text them?', choices: ['Yes, texts get replies', 'No: email or DM only', 'Only once'], answer: 1, why: 'Never text or call a number you found online.' },
+      { q: 'When do you click "I found this customer"?', choices: ['After they pay', 'When you add them on Leads, before you quote', 'Never'], answer: 1, why: 'Only then is it your rep lead.' },
+      { q: 'It is February. Who is most likely to need shirts soon?', choices: ['Spring sports leagues', 'Back-to-school PTOs', 'Homecoming'], answer: 0, why: 'January to March: spring sports sign-ups and spring break trips.' },
+    ],
+  },
+  's9-reorders': {
+    images: [{ src: W('embroidered-business-apparel'), alt: 'Embroidered business apparel: a classic reorder' }],
+    checks: [
+      { q: 'A league ordered last March. When do you get in touch?', choices: ['Next March', 'A few weeks before the spring season', 'Only if they write'], answer: 1, why: 'Get there while they are deciding.' },
+      { q: 'A 1-star review comes in. What do you do first?', choices: ['Reply defending the shop', 'Tell June the same day and draft a calm reply', 'Delete it'], answer: 1, why: 'June sees it before anything is posted.' },
+    ],
+  },
+  's10-money': {
+    images: [{ src: W('screen-printing-silkscreen'), alt: 'A screen ready for the press' }],
+    checks: [
+      { q: 'Another shop is 15% cheaper. What do you do?', choices: ['Match it', 'Ask to see their quote, explain what ours includes, check with June', 'Offer 10%'], answer: 1, why: 'Price matches are June\'s.' },
+      { q: 'The customer says "looks great!" about a proof on a call. Can it print?', choices: ['Yes', 'Not until approval is in writing and logged', 'After 24 hours'], answer: 1, why: 'Approval must be in writing.' },
+      { q: 'At 3%, commission on a $1,082.50 rep-lead quote with $82.50 tax is…', choices: ['$32.48', '$30.00', '$0'], answer: 1, why: '3% of the price before tax ($1,000).' },
+    ],
+  },
+  's10-social': {
+    images: [{ src: W('juneteenth-graphic-design'), alt: 'A finished design, ready to share' }, { src: W('ghost-graphic-tee'), alt: 'A graphic tee photo for a post' }],
+    checks: [
+      { q: 'May you post a photo of a customer\'s team shirts?', choices: ['Yes, it is our work', 'Only with the customer\'s permission (and a parent\'s OK for children\'s faces)', 'Only on Instagram'], answer: 1, why: 'Never post a customer\'s photo, name or design without permission.' },
+      { q: 'COS made a post that mentions a 20% discount. What do you do?', choices: ['Schedule it', 'Fix it: nothing about prices or discounts June has not approved', 'Post it on one platform only'], answer: 1, why: 'Read every generated post before it is scheduled.' },
+    ],
+  },
+};
+for (const l of MODULES.flatMap((m) => m.lessons)) Object.assign(l, LESSON_EXTRAS[l.id] || {});
 
 module.exports = { key: 'sales-core', title: 'Sales', track: 'sales', articles: A, glossary: GLOSSARY, modules: MODULES, final: FINAL };

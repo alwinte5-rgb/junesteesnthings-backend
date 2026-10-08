@@ -153,7 +153,11 @@ test('the lesson page: a known lesson id only, closed modules stay closed, and o
   assert.match(page, /p = await trainingFor\(actor\.id\)/, 'a helper only ever sees their own path');
   assert.match(page, /res\.set\('Cache-Control', 'no-store'\)/);
   assert.match(page, /withTips\(kbRender\(a\.body\), seen\)/, 'the body is the Playbook\'s escaped render');
-  assert.match(page, /withTips\(escEmail\(c\.a\), seen\)/);
+  assert.match(page, /withTips\(escEmail\(c\.q\), seen\)/, 'check-yourself questions are escaped');
+  assert.match(page, /<span>\$\{escEmail\(ch\)\}<\/span>/, 'and so are their choices');
+  assert.match(page, /\/\^\\\/assets\\\/images\\\/\[a-z0-9\/_-\]\+\\\.\(jpe\?g\|png\|webp\|svg\)\$\/i\.test\(im\.src\)/,
+    'a lesson shows only the site\'s own images');
+  assert.match(page, /x\.locked && !owner \? `<span class="btn btn-ghost"/, 'next past a closed module never links');
   const read = route("app.post('/admin/training/read', requireAdmin");
   assert.match(read, /ON CONFLICT \(staff_id, step_key\) DO UPDATE SET done_at = COALESCE\(staff_lesson_time\.done_at, NOW\(\)\)/,
     'finishing twice keeps the first finish time');
@@ -188,7 +192,7 @@ test('prospects are counted from the leads they registered as found', () => {
 
 test('tooltips: the first use of a term, escaped, never inside a tag or a link', () => {
   const start = src.indexOf('const TIP_DEFS = ');
-  const code = src.slice(start, src.indexOf('/** A lesson step in any course', start));
+  const code = src.slice(start, src.indexOf('/* A course lesson.', start));
   const ctx = { TRAINING, escEmail: (x) => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;') };
   vm.runInNewContext(`${code}\nthis.withTips = withTips;`, ctx);
   const out = ctx.withTips('<p>DTF has no minimum. DTF again. <a href="/x">DTF link</a> a <b title="DTF">deposit</b></p>');
@@ -211,4 +215,28 @@ test('every role\'s training: owner only, a known path or the first one, and eve
   assert.match(list, /Object\.entries\(TRAINING\.SALES_ROLES\)\.map/, 'one path per sales role');
   assert.match(list, /key: 'design', track: 'design'/);
   assert.match(src, /href="\/admin\/training\/paths">Every role\\'s training<\/a>/);
+});
+
+test('every lesson has photos from the shop and multiple-choice checks with a real answer', () => {
+  for (const c of Object.values(COURSES.COURSES)) {
+    for (const l of c.modules.flatMap((m) => m.lessons)) {
+      assert.ok(l.checks && l.checks.length >= 2, `${l.id} needs at least two check-yourself questions`);
+      for (const q of l.checks) {
+        assert.ok(Array.isArray(q.choices) && q.choices.length >= 2, `${l.id}: "${q.q}" is not multiple choice`);
+        assert.ok(Number.isInteger(q.answer) && q.answer >= 0 && q.answer < q.choices.length, `${l.id}: "${q.q}" has no valid answer`);
+        assert.ok(q.why, `${l.id}: "${q.q}" explains the answer`);
+      }
+      for (const im of l.images || []) {
+        assert.match(im.src, /^\/assets\/images\/[a-z0-9/_-]+\.(jpe?g|png|webp|svg)$/i, `${l.id}: ${im.src}`);
+        assert.ok(fs.existsSync(path.join(__dirname, '..', 'public', im.src)), `${l.id}: ${im.src} is not in public/`);
+        assert.ok(im.alt, `${l.id}: every picture says what it shows`);
+      }
+    }
+    for (const m of c.modules) assert.ok(m.icon, `${m.key} has an icon`);
+  }
+});
+
+test('the call form keeps its checkbox small and its label on one line', () => {
+  const fn = src.slice(src.indexOf('function logCallForm('), src.indexOf('\n}\n', src.indexOf('function logCallForm(')));
+  assert.match(fn, /name="missed" value="1" style="width:auto;flex:0 0 auto"/);
 });

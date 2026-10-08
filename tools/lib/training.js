@@ -108,7 +108,7 @@ function courseSteps(course, features = FEATURES) {
   const out = [];
   const mods = [...course.modules, { key: 'final', title: 'Final exam and sign-off', final: true }];
   mods.forEach((m, i) => {
-    const mod = { module: `${course.key}:${m.key}`, moduleTitle: m.title, moduleIndex: i, course: course.key };
+    const mod = { module: `${course.key}:${m.key}`, moduleTitle: m.title, moduleIndex: i, moduleIcon: m.icon || '', course: course.key };
     const push = (st) => { if (!st.needs || features.has(st.needs)) out.push({ ...st, ...mod }); };
     if (m.final) {
       push({ key: `buffer:${course.key}:final`, type: 'buffer', minutes: course.final.floating,
@@ -121,7 +121,7 @@ function courseSteps(course, features = FEATURES) {
     }
     for (const l of m.lessons) {
       push({ key: `lesson:${l.id}`, type: 'lesson', article: l.article, minutes: l.minutes, goals: l.goals || [],
-        checks: l.checks || [], tryIt: l.tryIt || [], title: l.article.replace(/^Sales course [0-9a-z]+: /, '') });
+        checks: l.checks || [], tryIt: l.tryIt || [], images: l.images || [], title: l.article.replace(/^Sales course [0-9a-z]+: /, '') });
     }
     for (const x of m.practice || []) push(!m.quiz && x.type === 'exam' ? { ...x, gate: true } : x);
     if (m.quiz) {
