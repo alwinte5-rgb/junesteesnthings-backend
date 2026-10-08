@@ -8794,15 +8794,14 @@ const ADMIN_CSS = `
 .lesson-chips span{background:rgba(255,255,255,.18);border-radius:100px;padding:3px 10px;font-size:12.5px;font-weight:600}
 .lesson-nav{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin:0 0 14px}
 .lesson-nav .btn{max-width:100%;white-space:normal;text-align:left}
-.lesson-gallery{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:0 0 14px}
-.lesson-gallery figure{margin:0;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(15,27,61,.08)}
-.lesson-gallery img{display:block;width:100%;height:160px;object-fit:cover;background:#f3f5fa}
-.lesson-gallery figcaption{padding:8px 10px;font-size:13px;color:#4a5878}
 .mc-choice{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;margin:4px 0;border-radius:10px;cursor:pointer;border:1px solid #e3e8f2}
 .mc-choice input{width:auto;margin-top:3px}
 .mc-choice.mc-right{background:#ecfdf3;border-color:#16a34a}
 .mc-choice.mc-wrong{background:#fef2f2;border-color:#dc2626}
 .mc-why{margin-top:6px;font-size:14px}
+.page-dots{display:flex;gap:6px;justify-content:center;margin:-4px 0 12px}
+.page-dots a{width:10px;height:10px;border-radius:50%;background:#d6deef}
+.page-dots a.on{background:#1848B8;width:26px;border-radius:6px}
 .mod-icon{font-size:20px;margin-right:4px}
 .adm-body{padding:0;background:#f3f5fa}
 .adm-toggle{position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none}
@@ -28498,6 +28497,13 @@ app.get('/admin/training/lesson/:id', requireAdmin, async (req, res) => {
       await pool.query('INSERT INTO staff_lesson_time (staff_id, step_key) VALUES ($1, $2) ON CONFLICT DO NOTHING', [actor.id, key]);
     }
     const { rows: [a] } = await pool.query('SELECT id, body, needs_review FROM kb_articles WHERE published AND title = $1', [s.article]);
+    /* A page at a time (?p=), each ending with its own questions. */
+    const pageMd = a ? TRAINING.lessonPages(a.body, s.pages) : [''];
+    const pages = pageMd.length;
+    const pageNo = Math.min(pages, Math.max(1, intIn(req.query.p) || 1));
+    const last = pageNo === pages;
+    const pageChecks = ((s.pages || [])[pageNo - 1] || {}).checks || (pages === 1 ? s.checks || [] : []);
+    const lessonHref = (pn) => `/admin/training/lesson/${encodeURIComponent(id)}${pn > 1 ? `?p=${pn}` : ''}`;
     const seen = new Set();
     const tryIt = (s.tryIt || []).map((t) => /^\/admin\//.test(t.href)
       ? `<a class="btn btn-ghost" href="${escEmail(t.href)}" target="_blank" rel="noopener">${escEmail(t.label)}</a>`
@@ -28510,7 +28516,10 @@ app.get('/admin/training/lesson/:id', requireAdmin, async (req, res) => {
       : `/admin/training/quiz/${encodeURIComponent(x.quiz)}`);
     const prev = at > 0 ? walk[at - 1] : null;
     const next = at >= 0 && at < walk.length - 1 ? walk[at + 1] : null;
-    const navBtn = (x, dir) => !x ? '<span></span>'
+    const pageBtn = (pn, dir) => `<a class="btn ${dir === 'next' ? '' : 'btn-ghost'}" href="${lessonHref(pn)}">${dir === 'prev' ? '&larr; Previous page' : 'Next page &rarr;'}</a>`;
+    const navBtn = (x, dir) => dir === 'prev' && pageNo > 1 ? pageBtn(pageNo - 1, 'prev')
+      : dir === 'next' && !last ? pageBtn(pageNo + 1, 'next')
+      : !x ? '<span></span>'
       : x.locked && !owner ? `<span class="btn btn-ghost" style="opacity:.55" title="Opens once you pass the quiz before it">${dir === 'prev' ? '&larr; ' : ''}${escEmail(x.title)}${dir === 'next' ? ' &rarr;' : ''}</span>`
       : `<a class="btn ${dir === 'next' ? '' : 'btn-ghost'}" href="${hrefOf(x)}">${dir === 'prev' ? '&larr; ' : ''}${escEmail(x.title)}${dir === 'next' ? ' &rarr;' : ''}</a>`;
     const nav = `<div class="lesson-nav">${navBtn(prev, 'prev')}${navBtn(next, 'next')}</div>`;
@@ -28518,31 +28527,33 @@ app.get('/admin/training/lesson/:id', requireAdmin, async (req, res) => {
     const n = lessons.findIndex((x) => x.key === key) + 1;
     const mine = p ? p.steps.find((x) => x.key === key) : null;
     const pics = (s.images || []).filter((im) => /^\/assets\/images\/[a-z0-9/_-]+\.(jpe?g|png|webp|svg)$/i.test(im.src));
-    const checks = (s.checks || []).map((c, i) => `<fieldset class="mc" data-answer="${Number(c.answer)}" style="border:0;padding:10px 0;margin:0;border-top:1px solid #eef1f8">
+    const pic = pics.length ? pics[(pageNo - 1) % pics.length] : null;
+    const checks = pageChecks.map((c, i) => `<fieldset class="mc" data-answer="${Number(c.answer)}" style="border:0;padding:10px 0;margin:0;border-top:1px solid #eef1f8">
         <legend style="font-weight:600;white-space:normal">${i + 1}. ${withTips(escEmail(c.q), seen)}</legend>
         ${(c.choices || []).map((ch, j) => `<label class="mc-choice"><input type="radio" name="mc${i}" value="${j}"> <span>${escEmail(ch)}</span></label>`).join('')}
         <div class="mc-why" hidden><b class="mc-verdict"></b> ${escEmail(c.why || '')}</div></fieldset>`).join('');
     res.set('Cache-Control', 'no-store');
     res.send(adminPage('Training', `
       <div class="lesson-hero">
-        ${pics[0] ? `<img src="${escEmail(pics[0].src)}" alt="${escEmail(pics[0].alt || '')}" loading="lazy">` : ''}
+        ${pic ? `<img src="${escEmail(pic.src)}" alt="${escEmail(pic.alt || '')}" loading="lazy">` : ''}
         <div class="lesson-hero-text"><div class="lesson-chips"><span>${escEmail(s.moduleIcon || '📘')} ${escEmail(s.moduleTitle || '')}</span>
-          <span>Lesson ${n} of ${lessons.length}</span><span>⏱ about ${s.minutes} min</span>${mine && mine.done ? '<span>✅ done</span>' : ''}</div>
+          <span>Lesson ${n} of ${lessons.length}</span>${pages > 1 ? `<span>Page ${pageNo} of ${pages}</span>` : ''}<span>⏱ about ${s.minutes} min</span>${mine && mine.done ? '<span>✅ done</span>' : ''}</div>
           <h1 style="margin:6px 0 0">${escEmail(s.title)}</h1></div></div>
       ${flash(req.query)}
       ${nav}
-      ${s.goals && s.goals.length ? `<div class="card" style="border-left:4px solid #1848B8"><b>🎯 By the end of this lesson you can</b>
+      ${pages > 1 ? `<div class="page-dots" aria-label="Page ${pageNo} of ${pages}">${pageMd.map((_, i) =>
+        `<a href="${lessonHref(i + 1)}" class="${i + 1 === pageNo ? 'on' : ''}" aria-label="Page ${i + 1}"></a>`).join('')}</div>` : ''}
+      ${pageNo === 1 && s.goals && s.goals.length ? `<div class="card" style="border-left:4px solid #1848B8"><b>🎯 By the end of this lesson you can</b>
         <ul style="margin:6px 0 8px 20px">${s.goals.map((g) => `<li>${withTips(escEmail(g), seen)}</li>`).join('')}</ul>
         <p class="muted" style="margin:0">Words with a dotted underline have a short explanation: hover, tap or tab to them.</p></div>` : ''}
       ${owner && a && a.needs_review ? '<div class="warn">Starter draft. Check it in the Playbook; saving it there marks it checked.</div>' : ''}
-      <div class="card lesson">${a ? withTips(kbRender(a.body), seen) : '<div class="warn">This lesson\'s article is missing from the Playbook. Tell June.</div>'}</div>
-      ${pics.length > 1 ? `<div class="lesson-gallery">${pics.slice(1).map((im) => `<figure><img src="${escEmail(im.src)}" alt="${escEmail(im.alt || '')}" loading="lazy">
-        <figcaption>${escEmail(im.alt || '')}</figcaption></figure>`).join('')}</div>` : ''}
-      ${tryIt ? `<div class="card"><b>🛠 Try it</b><p class="muted">These open the real screen in a new tab. Nothing reaches a customer unless you send it.</p>
+      <div class="card lesson">${a ? withTips(kbRender(pageMd[pageNo - 1]), seen) : '<div class="warn">This lesson\'s article is missing from the Playbook. Tell June.</div>'}</div>
+      ${pic && pic.alt ? `<p class="muted" style="margin:-6px 0 14px;font-size:13px">📷 ${escEmail(pic.alt)}</p>` : ''}
+      ${last && tryIt ? `<div class="card"><b>🛠 Try it</b><p class="muted">These open the real screen in a new tab. Nothing reaches a customer unless you send it.</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap">${tryIt}</div></div>` : ''}
       ${checks ? `<div class="card"><b>🧠 Check yourself</b>
         <p class="muted">Not marked. Pick an answer to see if you were right.</p>${checks}</div>` : ''}
-      ${!owner ? `<div class="card" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${mine && mine.done
+      ${!owner && !last ? '' : !owner ? `<div class="card" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${mine && mine.done
         ? `${pill('done', 'green')} <span class="muted">${mine.took != null ? `You took ${mine.took} minutes.` : ''}</span>`
         : `<form method="post" action="/admin/training/read" style="margin:0">
             <input type="hidden" name="key" value="${escEmail(key)}">

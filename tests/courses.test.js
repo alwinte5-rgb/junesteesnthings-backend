@@ -152,7 +152,7 @@ test('the lesson page: a known lesson id only, closed modules stay closed, and o
   assert.match(page, /INSERT INTO staff_lesson_time \(staff_id, step_key\) VALUES \(\$1, \$2\) ON CONFLICT DO NOTHING', \[actor\.id, key\]/);
   assert.match(page, /p = await trainingFor\(actor\.id\)/, 'a helper only ever sees their own path');
   assert.match(page, /res\.set\('Cache-Control', 'no-store'\)/);
-  assert.match(page, /withTips\(kbRender\(a\.body\), seen\)/, 'the body is the Playbook\'s escaped render');
+  assert.match(page, /withTips\(kbRender\(pageMd\[pageNo - 1\]\), seen\)/, 'each page is the Playbook\'s escaped render');
   assert.match(page, /withTips\(escEmail\(c\.q\), seen\)/, 'check-yourself questions are escaped');
   assert.match(page, /<span>\$\{escEmail\(ch\)\}<\/span>/, 'and so are their choices');
   assert.match(page, /\/\^\\\/assets\\\/images\\\/\[a-z0-9\/_-\]\+\\\.\(jpe\?g\|png\|webp\|svg\)\$\/i\.test\(im\.src\)/,
@@ -239,4 +239,33 @@ test('every lesson has photos from the shop and multiple-choice checks with a re
 test('the call form keeps its checkbox small and its label on one line', () => {
   const fn = src.slice(src.indexOf('function logCallForm('), src.indexOf('\n}\n', src.indexOf('function logCallForm(')));
   assert.match(fn, /name="missed" value="1" style="width:auto;flex:0 0 auto"/);
+});
+
+test('lessons read a page at a time, each page with its own questions', () => {
+  for (const c of Object.values(COURSES.COURSES)) {
+    const seeded = c.modules.flatMap((m) => m.lessons);
+    for (const l of seeded) {
+      assert.ok(l.pages && l.pages.length >= 1, `${l.id} has no pages`);
+      assert.strictEqual(l.pages[0].from, null, `${l.id}: the first page starts at the top`);
+      for (const pg of l.pages) assert.ok(pg.checks.length >= 2, `${l.id}: every page asks at least two questions`);
+      if (!l.existing) {
+        const heads = new Set((l.body.match(/^\*\*[^*\n]+\*\*$/gm) || []).map((h) => h.slice(2, -2)));
+        for (const pg of l.pages.slice(1)) assert.ok(heads.has(pg.from), `${l.id}: page heading "${pg.from}" is not in the lesson`);
+        const md = TRAINING.lessonPages(l.body, l.pages);
+        assert.strictEqual(md.length, l.pages.length, `${l.id}: split into the wrong number of pages`);
+        assert.strictEqual(md.join('\n\n'), l.body, `${l.id}: the pages lose or repeat words`);
+        for (const pg of md) assert.ok(pg.split(/\s+/).length <= 300, `${l.id}: a page is too long to read in one go`);
+      }
+    }
+  }
+  // A heading the owner renamed: the same number of pages, split evenly, nothing lost.
+  const body = '**A**\n\none\n\n**B**\n\ntwo\n\n**C**\n\nthree\n\n**D**\n\nfour';
+  const even = TRAINING.lessonPages(body, [{ from: null }, { from: 'Renamed' }]);
+  assert.strictEqual(even.length, 2);
+  assert.strictEqual(even.join('\n\n'), body);
+  assert.deepStrictEqual(TRAINING.lessonPages('no headings at all', [{ from: null }, { from: 'X' }]), ['no headings at all']);
+  assert.deepStrictEqual(TRAINING.lessonPages('', []), ['']);
+  const page = route("app.get('/admin/training/lesson/:id', requireAdmin");
+  assert.match(page, /Math\.min\(pages, Math\.max\(1, intIn\(req\.query\.p\) \|\| 1\)\)/, 'the page number is clamped');
+  assert.match(page, /!owner && !last \? ''/, 'the finish button is only on the last page');
 });
