@@ -333,6 +333,7 @@ const ROUTES = {
   'POST /admin/training/tip': 'any',
   'GET /admin/training/quiz/:key': 'any',
   'GET /admin/training/lesson/:id': 'any',
+  'GET /admin/training/paths': 'owner',
   'POST /admin/api/proof-signature': 'proofs.upload',
   'POST /admin/quote/:code/proofs': 'proofs.upload',
   'POST /admin/quote/:code/art/request': 'art.request',

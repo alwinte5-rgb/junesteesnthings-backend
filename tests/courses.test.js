@@ -200,3 +200,15 @@ test('tooltips: the first use of a term, escaped, never inside a tag or a link',
   for (const def of Object.values(TRAINING.glossary())) assert.doesNotMatch(def, /[<>]/);
   assert.match(src, /\.tip:hover::after,\.tip:focus::after\{content:attr\(data-tip\)/);
 });
+
+test('every role\'s training: owner only, a known path or the first one, and every path listed', () => {
+  assert.strictEqual(STAFF.ROUTES['GET /admin/training/paths'], 'owner');
+  const page = route("app.get('/admin/training/paths', requireAdmin");
+  assert.match(page, /TRAINING_PATHS\.find\(\(x\) => x\.key === String\(req\.query\.path \|\| ''\)\) \|\| TRAINING_PATHS\[0\]/,
+    'an unknown ?path= falls back instead of reaching into the list');
+  const list = src.slice(src.indexOf('const TRAINING_PATHS = ['), src.indexOf('];', src.indexOf('const TRAINING_PATHS = [')));
+  assert.match(list, /key: 'sales', track: 'sales', role: null/);
+  assert.match(list, /Object\.entries\(TRAINING\.SALES_ROLES\)\.map/, 'one path per sales role');
+  assert.match(list, /key: 'design', track: 'design'/);
+  assert.match(src, /href="\/admin\/training\/paths">Every role\\'s training<\/a>/);
+});
