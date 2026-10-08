@@ -8513,6 +8513,9 @@ button:active{transform:translateY(1px)}
 .line{border:1px solid #e6eaf3;border-radius:12px;padding:12px;margin-bottom:10px;background:#fcfdff}
 .line-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
 .line-no{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#8b96ad}
+.line-dup{background:#eef2fb;border:1px solid #d9e1f2;color:#1848B8;font-size:12.5px;font-weight:600;
+  border-radius:6px;padding:4px 10px;cursor:pointer}
+.line-dup:hover{background:#e0e8fa}
 .line-x{background:none;border:0;color:#b6bfd0;font-size:22px;line-height:1;padding:0 4px;
   width:auto;cursor:pointer;border-radius:6px}
 .line-x:hover{color:#c0392b;background:#fdf0ee}
@@ -9340,7 +9343,10 @@ function productGroupOf(name) {
          data-saved-colour="${val((it && it.colour) || '')}">
       <div class="line-head">
         <span class="line-no">Item <b class="ix">${n + 1}</b></span>
-        <button type="button" class="line-x" onclick="removeLine(this)" title="Remove this item">&times;</button>
+        <span style="display:flex;align-items:center;gap:4px">
+          <button type="button" class="line-dup" onclick="dupLine(this)" title="Add a copy of this item below it">Duplicate</button>
+          <button type="button" class="line-x" onclick="removeLine(this)" title="Remove this item">&times;</button>
+        </span>
       </div>
       <!-- OPTIONAL: the customer ticks it on their quote if they want it. Not in
            the total until they do; Accept keeps the ticked ones and sets the
@@ -9394,6 +9400,14 @@ function productGroupOf(name) {
                  style="font-size:13px;padding:6px 7px" placeholder="Garment $ each">
         </div>
         <p class="muted bpnote" style="margin:3px 0 0;font-size:11.5px"></p>
+        <!-- SIGNS. A banner, poster or sign is not a garment: it has no garment
+             price, no sleeves and no decoration, so those are hidden for it
+             (calc, isSign). A banner gets its size and finishing here instead,
+             priced from the same table the designer sells from. Not posted:
+             the result lands in Each $ and the customer-facing details. -->
+        <p class="muted signnote" style="display:none;margin:6px 0 0;font-size:12.5px">A sign or print item:
+          no garment or decoration to choose. Type the price each under Quantity &amp; price.</p>
+        <div class="bsz" style="display:none;margin-top:8px"></div>
       </div>
 
       <div class="lsec psec">
@@ -9655,6 +9669,17 @@ function productGroupOf(name) {
     <p style="margin-top:14px"><a class="muted" href="/admin/quotes">View all quotes →</a></p>
     <script>
       var CAT = ${JSON.stringify(actorLevel('finances') === 'on' ? catalog : catalogWithoutCosts(catalog))};
+      /* What a product IS decides what the item asks for. A sign is matched by
+         the same rule that files it under Signs in the product list, so the
+         two cannot disagree. A banner (not a banner stand) also gets the sizer. */
+      var SIGN_RE = new RegExp(${JSON.stringify(PRODUCT_GROUPS[0][1].source)}, 'i');
+      var BANNER_RE = /banner/i, BANNER_NOT_RE = /stand|retractable/i;
+      var BANNER = ${JSON.stringify(SIGNAGE.bannerTable())};
+      function isSignProduct(prod){ return !!(prod && SIGN_RE.test(String(prod.name || ''))); }
+      function isBannerProduct(prod){
+        var nm = String((prod && prod.name) || '');
+        return isSignProduct(prod) && BANNER_RE.test(nm) && !BANNER_NOT_RE.test(nm);
+      }
       /* ── Upsell ideas (the owner, 2026-10-06) ─────────────────────────────
          Worked out from the same priceLine() the totals use, on every calc():
          singles that should be a pack, the next price break, a back print, a
@@ -9911,6 +9936,131 @@ ${quotePricingSource()}
         btn.querySelector('.caret').innerHTML = open ? '&#9656;' : '&#9662;';
       }
 
+      /* BANNER SIZER. Width and height in whole feet, the vinyl and the
+         finishing; the price per banner comes from BANNER (the table the
+         designer sells from), so a quote and the website agree. It fills
+         Each $ — a typed price is all-in on save, delivery included — until
+         someone types their own figure there (data-auto is then dropped).
+         Returns true when this line carried the order's delivery. */
+      function bannerSizer(L, on, takeFreight){
+        var box = L.querySelector('.bsz');
+        if (!box) return false;
+        if (!on) { box.style.display = 'none'; return false; }
+        box.style.display = 'block';
+        var dt = L.querySelector('.dt'), u = L.querySelector('.u'), q = L.querySelector('.q');
+        if (box.dataset.built !== '1') {
+          var feet = function(cls, label, def){
+            var o = '';
+            for (var i = 1; i <= BANNER.max.long; i++) o += '<option value="' + i + '"' + (i === def ? ' selected' : '') + '>' + i + ' ft</option>';
+            return '<label style="margin:0;font-size:11px">' + label + '<select class="' + cls + '" style="margin-top:2px">' + o + '</select></label>';
+          };
+          box.innerHTML =
+            '<div style="padding:10px;background:#f6f8fd;border:1px solid #e3e8f2;border-radius:8px">' +
+            '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#1848B8;font-weight:700;margin-bottom:6px">Banner size &amp; finishing</div>' +
+            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
+              feet('bw', 'Width', 6) + feet('bh', 'Height', 3) +
+            '</div>' +
+            '<label style="margin:8px 0 0;font-size:11px">Vinyl<select class="bm" style="margin-top:2px">' +
+              BANNER.materials.map(function(m){ return '<option value="' + m.key + '">' + m.label + '</option>'; }).join('') +
+            '</select></label>' +
+            '<label style="margin:8px 0 0;font-size:11px">Hanging<select class="bhg" style="margin-top:2px">' +
+              BANNER.hanging.map(function(h){ return '<option value="' + h.key + '">' + h.label + '</option>'; }).join('') +
+            '</select></label>' +
+            '<label class="bwsl" style="display:flex;align-items:center;gap:6px;margin:8px 0 0;font-size:13px;text-transform:none;letter-spacing:0;font-weight:400">' +
+              '<input type="checkbox" class="bws" style="width:auto;margin:0"> Wind slits</label>' +
+            '<p class="bnote" style="margin:8px 0 0;font-size:12.5px;color:#3f4a5f"></p>' +
+            '</div>';
+          box.dataset.built = '1';
+          /* Reopening a saved quote: read the size back from the details it wrote. */
+          var saved = /(\\d+) ft wide \u00d7 (\\d+) ft tall/.exec(dt ? dt.value : '');
+          if (saved) {
+            box.querySelector('.bw').value = saved[1]; box.querySelector('.bh').value = saved[2];
+            BANNER.materials.forEach(function(m){ if (dt.value.indexOf(m.label) > -1) box.querySelector('.bm').value = m.key; });
+            BANNER.hanging.forEach(function(h){ if (dt.value.indexOf(h.label) > -1) box.querySelector('.bhg').value = h.key; });
+            box.querySelector('.bws').checked = dt.value.indexOf('wind slits') > -1;
+          } else if (u && !String(u.value).trim()) {
+            u.dataset.auto = '1';
+          }
+          box.querySelectorAll('select,input').forEach(function(el){
+            el.addEventListener('change', function(){ if (u) u.dataset.auto = '1'; calc(); });
+          });
+        }
+        var w = parseInt(box.querySelector('.bw').value, 10), h = parseInt(box.querySelector('.bh').value, 10);
+        var mk = box.querySelector('.bm').value, hk = box.querySelector('.bhg').value;
+        var key = w + 'x' + h;
+        var base = (BANNER.prices[mk] || {})[key];
+        var fin = BANNER.finishing[key] || {};
+        var wsAllowed = fin.wind_slits != null;
+        var wsBox = box.querySelector('.bws');
+        box.querySelector('.bwsl').style.display = wsAllowed ? 'flex' : 'none';
+        if (!wsAllowed) wsBox.checked = false;
+        var note = box.querySelector('.bnote');
+        if (base == null) {
+          note.innerHTML = '<b style="color:#b45309">No price for ' + w + ' ft \u00d7 ' + h + ' ft.</b> The short side can be up to ' +
+            BANNER.max.short + ' ft and the long side up to ' + BANNER.max.long + ' ft.';
+          return false;
+        }
+        var finish = (fin[hk] || 0) + (wsBox.checked ? (fin.wind_slits || 0) : 0);
+        var qty = Math.max(1, parseInt(q.value, 10) || 1);
+        var freight = takeFreight ? (BANNER.freight || 0) : 0;
+        var each = Math.ceil((base + finish + freight / qty) * 100) / 100;
+        if (u && u.dataset.auto === '1') {
+          u.value = each.toFixed(2);
+          var mLabel = '', hLabel = '';
+          BANNER.materials.forEach(function(m){ if (m.key === mk) mLabel = m.label; });
+          BANNER.hanging.forEach(function(x){ if (x.key === hk) hLabel = x.label; });
+          if (dt) dt.value = w + ' ft wide \u00d7 ' + h + ' ft tall \u00b7 ' + mLabel + ' \u00b7 ' + hLabel +
+            (wsBox.checked ? ' \u00b7 wind slits' : '');
+        }
+        note.innerHTML = '$' + base.toFixed(2) + ' a banner' +
+          (finish ? ' + $' + finish.toFixed(2) + ' finishing' : '') +
+          (freight ? ' + $' + freight.toFixed(2) + ' Signs365 delivery (once an order' + (qty > 1 ? ', spread over ' + qty : '') + ')' : '') +
+          ' = <b>$' + each.toFixed(2) + ' each</b>' +
+          (u && u.dataset.auto !== '1' ? ' <span style="color:#b45309">\u2014 Each $ was typed by hand, so it is kept. Change a size to use this price.</span>' : '') +
+          '. Ready in about ' + BANNER.turnaround_days + ' working days.';
+        return !!freight;
+      }
+
+      /* DUPLICATE. A copy of the item, with everything filled in, straight
+         below it: the same shirt in another colour, the same banner twice.
+         Values are copied field by field, because cloneNode does not reliably
+         carry what was typed or picked into a select. */
+      function dupLine(btn){
+        var src = btn.closest('.line');
+        var copy = src.cloneNode(true);
+        var from = src.querySelectorAll('input,select,textarea'), to = copy.querySelectorAll('input,select,textarea');
+        for (var i = 0; i < from.length; i++) {
+          if (!to[i] || from[i].type === 'file') continue;
+          if (from[i].type === 'checkbox' || from[i].type === 'radio') to[i].checked = from[i].checked;
+          else to[i].value = from[i].value;
+        }
+        /* Listeners do not come with a clone: clear the marks that say they
+           were bound, and let bind() and the sizer attach their own. */
+        copy.querySelectorAll('[data-qty-bound]').forEach(function(el){ delete el.dataset.qtyBound; });
+        copy.querySelectorAll('[data-hand-bound]').forEach(function(el){ delete el.dataset.handBound; });
+        /* Rebuilt for the copy so its upgrade boxes get their own listeners;
+           the rebuild keeps whatever was ticked. */
+        var cao = copy.querySelector('.addons');
+        if (cao) delete cao.dataset.for;
+        var bs = copy.querySelector('.bsz');
+        if (bs) { bs.innerHTML = ''; delete bs.dataset.built; }
+        var cu = copy.querySelector('.u'), su0 = src.querySelector('.u');
+        if (cu && su0 && su0.dataset.auto === '1') cu.dataset.auto = '1';
+        /* Saved-once hints belong to the quote as it was stored, not to a copy. */
+        delete copy.dataset.savedAddons; delete copy.dataset.savedSizes; delete copy.dataset.savedColour;
+        /* The colour picker is rebuilt so its swatch follows the pick, with
+           the source's colour chosen. */
+        var scl = src.querySelector('.cl'), ccb = copy.querySelector('.colours');
+        if (ccb) { delete ccb.dataset.for; if (scl && scl.value) copy.dataset.savedColour = scl.value; }
+        var bc = copy.querySelector('.backcheck');
+        if (bc) bc.remove();
+        src.parentNode.insertBefore(copy, src.nextSibling);
+        reindex();
+        bind();
+        calc();
+        copy.scrollIntoView({ block: 'nearest' });
+      }
+
       /* Adding an item by mistake used to be permanent. */
       function removeLine(btn){
         var lines = document.querySelectorAll('.line');
@@ -10156,6 +10306,8 @@ ${quotePricingSource()}
         ordered.sort(function(a, b){ return isOptLine(a) - isOptLine(b); });
         /* Freight a group already carries, by run: it is taken whole. */
         var optGroupSeen = {};
+        /* Signs365 delivers once an order: the first banner line carries it. */
+        var bannerFreightTaken = false;
         ordered.forEach(function(L){
           var isOpt = isOptLine(L) === 1;
           var grp = isOpt ? runOfLine(L) : '';
@@ -10174,17 +10326,28 @@ ${quotePricingSource()}
           var cutMeth = (pSel && pSel.value.indexOf('cut:') === 0)
             ? CAT.methods.find(function(x){ return String(x.id) === pSel.value.slice(4); }) : null;
           if (cutMeth) prod = null;
+          /* A sign has no garment price, no sleeves and no decoration: hide
+             them, and untick the print places so nothing is priced on it. */
+          var isSign = isSignProduct(prod);
           var psec = L.querySelector('.psec');
-          if (psec) psec.style.display = cutMeth ? 'none' : '';
+          if (psec) psec.style.display = (cutMeth || isSign) ? 'none' : '';
+          if (isSign) L.querySelectorAll('.pon').forEach(function(cb){ cb.checked = false; });
+          var garm = L.querySelector('.garm'), bpn = L.querySelector('.bpnote');
+          if (garm) garm.style.display = isSign ? 'none' : '';
+          if (bpn) bpn.style.display = isSign ? 'none' : '';
+          if (isSign) { var bpi = L.querySelector('.bp'); if (bpi) bpi.value = ''; }
+          var bannerHere = isBannerProduct(prod);
+          var sgn = L.querySelector('.signnote');
+          if (sgn) sgn.style.display = isSign && !bannerHere ? '' : 'none';
           var prints = [];
           var firstM = '';
           L.querySelectorAll('.ploc[data-loc]').forEach(function(row){
-            var on = !cutMeth && row.querySelector('.pon').checked;
+            var on = !cutMeth && !isSign && row.querySelector('.pon').checked;
             var pm = row.querySelector('.pm');
             if (on && pm.value && !firstM) firstM = pm.value;
           });
           L.querySelectorAll('.ploc[data-loc]').forEach(function(row){
-            var on = !cutMeth && row.querySelector('.pon').checked;
+            var on = !cutMeth && !isSign && row.querySelector('.pon').checked;
             var pm = row.querySelector('.pm'), pc = row.querySelector('.pc');
             row.classList.toggle('on', on);
             pm.style.display = on ? '' : 'none';
@@ -10221,6 +10384,14 @@ ${quotePricingSource()}
           var qEl  = L.querySelector('.q');
           buildColours(L, prod);
           buildSizes(L, prod);
+          if (isSign) {
+            var cbx = L.querySelector('.colours'), sbx = L.querySelector('.sizes');
+            if (cbx) cbx.style.display = 'none';
+            if (sbx) { sbx.style.display = 'none'; sbx.querySelectorAll('.sz').forEach(function(el){ el.value = ''; }); }
+            L.querySelector('.sm').value = '';
+          }
+
+          if (bannerSizer(L, bannerHere, !bannerFreightTaken)) bannerFreightTaken = true;
 
           var boxes = L.querySelectorAll('.sz');
           var mix = {}, sizeQty = 0, upTotal = 0;
@@ -10697,6 +10868,9 @@ ${quotePricingSource()}
         /* A new item starts with Front ticked, waiting for its decoration. */
         var fr = tpl.querySelector('.ploc[data-loc="front"] .pon');
         if (fr) fr.checked = true;
+        var nbs = tpl.querySelector('.bsz');
+        if (nbs) { nbs.innerHTML = ''; nbs.style.display = 'none'; delete nbs.dataset.built; }
+        delete tpl.querySelector('.u').dataset.auto;
         // A new item starts tidy: sizes hidden, extras closed.
         var sz = tpl.querySelector('.sizes');
         if (sz) { sz.style.display = 'none'; sz.innerHTML = ''; }
@@ -10889,6 +11063,11 @@ ${uploadStatusScript()}
         });
         document.querySelectorAll('.fi').forEach(function(fi){
           fi.onchange = function(){ uploadFiles(fi.closest('.line'), fi.files); };
+        });
+        document.querySelectorAll('.line .u').forEach(function(u){
+          if (u.dataset.handBound) return;
+          u.dataset.handBound = '1';
+          u.addEventListener('input', function(){ delete u.dataset.auto; });
         });
       }
       /* fill=false on load: a saved quote already carries the figure that was
