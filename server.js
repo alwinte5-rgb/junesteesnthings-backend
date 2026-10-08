@@ -1232,6 +1232,10 @@ async function initStaffTables() {
   /* Which training path a helper walks (TRAINING.TRACKS). Every helper
      before this was a sales helper, hence the default. */
   await pool.query(`ALTER TABLE staff ADD COLUMN IF NOT EXISTS training_track TEXT NOT NULL DEFAULT 'sales'`);
+  /* Which of the three sales jobs a salesperson holds (TRAINING.SALES_ROLES):
+     NULL until the owner assigns one, and everyone does all of it until then.
+     The role adds its own course after the consolidated Sales course. */
+  await pool.query('ALTER TABLE staff ADD COLUMN IF NOT EXISTS sales_role TEXT');
   /* Proofs uploaded on a job (tools/lib/job-proofs.js). uploaded_by is the
      helper, or NULL for the owner; sent_at is set when a message carrying its
      link actually goes to the customer. */
@@ -1274,6 +1278,16 @@ async function initStaffTables() {
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
   await pool.query('CREATE INDEX IF NOT EXISTS staff_quiz_attempts_staff ON staff_quiz_attempts (staff_id, quiz_key)');
+  /* When a helper opened each course lesson and when they finished it, so the
+     owner sees "expected 20m, took 14m". Nothing is ever blocked on time. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_lesson_time (
+      staff_id    INTEGER NOT NULL,
+      step_key    TEXT NOT NULL,
+      started_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      done_at     TIMESTAMPTZ,
+      PRIMARY KEY (staff_id, step_key)
+    )`);
   /* Applicant tests (tools/lib/hiring.js). One row per private link; only the
      link's SHA-256 is kept. Answers, the part-1 marks and the grader's result
      are stored as handed in, so a re-grade never needs the applicant again. */
@@ -2942,7 +2956,7 @@ async function staffByEmail(email) {
   /* `flags`: the page tips they dismissed and whether training is signed off,
      so adminPage() can show tips without a query of its own. */
   const { rows } = await pool.query(
-    `SELECT s.id, s.name, s.email, s.perms, s.active, s.training_track,
+    `SELECT s.id, s.name, s.email, s.perms, s.active, s.training_track, s.sales_role,
             COALESCE((SELECT array_agg(t.step_key) FROM staff_training t
                        WHERE t.staff_id = s.id AND (t.step_key LIKE 'tip:%' OR t.step_key = $2)), '{}') AS flags
        FROM staff s WHERE lower(s.email) = $1`, [email, TRAINING.READY_KEY]);
@@ -2954,6 +2968,7 @@ async function staffByEmail(email) {
   const flags = s.flags || [];
   return { kind: 'staff', id: s.id, name: s.name, email: s.email, perms: s.perms || {},
            inTraining: !flags.includes(TRAINING.READY_KEY), track: TRAINING.trackOf(s.training_track),
+           role: TRAINING.salesRoleOf(s.sales_role),
            tipsOff: new Set(flags.filter((f) => f.startsWith('tip:')).map((f) => f.slice(4))) };
 }
 
@@ -8761,6 +8776,12 @@ function icon(name) {
 }
 
 const ADMIN_CSS = `
+.tip{border-bottom:1px dotted #1848B8;cursor:pointer;position:relative;outline:none}
+.tip:hover::after,.tip:focus::after{content:attr(data-tip);position:absolute;left:0;top:calc(100% + 6px);z-index:40;
+  width:max-content;max-width:min(280px,70vw);background:#0f1b3d;color:#fff;font-size:12.5px;font-weight:500;line-height:1.4;
+  padding:8px 10px;border-radius:8px;white-space:normal;box-shadow:0 6px 18px rgba(0,0,0,.18)}
+.lesson p,.lesson li{line-height:1.6;font-size:15px}
+.lesson ul{margin:4px 0 12px 20px}
 .adm-body{padding:0;background:#f3f5fa}
 .adm-toggle{position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none}
 .adm{display:flex;min-height:100vh}
@@ -8988,7 +9009,7 @@ function pageTip(key) {
   const tip = TRAINING.PAGE_TIPS[key];
   if (!tip || (a.tipsOff && a.tipsOff.has(key))) return '';
   return `<div class="card" style="border-left:4px solid #F4A623;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-    <span style="flex:1 1 240px"><b>How this page works.</b> ${escEmail(tip)}</span>
+    <span style="flex:1 1 240px"><b>How this page works.</b> ${withTips(escEmail(tip))}</span>
     <form method="post" action="/admin/training/tip" style="margin:0">
       <input type="hidden" name="key" value="${escEmail(key)}">
       <input type="hidden" name="back" value="${escEmail(safeAdminPath(a.path, '/admin/my-day'))}">
@@ -26086,7 +26107,7 @@ const staffRate = (v, max) => Math.round(Math.min(max, Math.max(0, Number(v) || 
 
 async function staffRoster({ activeOnly = false } = {}) {
   const { rows } = await pool.query(
-    `SELECT id, name, email, active, perms, commission_pct, shop_commission_pct, hourly_rate, training_track, last_seen_at, created_at FROM staff
+    `SELECT id, name, email, active, perms, commission_pct, shop_commission_pct, hourly_rate, training_track, sales_role, last_seen_at, created_at FROM staff
       ${activeOnly ? 'WHERE active' : ''} ORDER BY active DESC, name`);
   return rows;
 }
@@ -26185,6 +26206,12 @@ async function renderStaffPage(req, res, extra = '') {
           `<option value="${k}"${TRAINING.trackOf(s.training_track) === k ? ' selected' : ''}>${escEmail(t.label)}</option>`).join('')}</select></label>
         <button type="submit" class="btn btn-ghost">Save</button>
       </form>
+      ${TRAINING.trackOf(s.training_track) === 'sales' ? `<form method="post" action="/admin/staff/${s.id}" class="row" style="margin-top:10px;gap:6px;align-items:center">
+        <input type="hidden" name="action" value="role">
+        <label>Sales role <select name="sales_role"><option value="">All sales work (no role yet)</option>${Object.entries(TRAINING.SALES_ROLES).map(([k, r]) =>
+          `<option value="${k}"${s.sales_role === k ? ' selected' : ''} title="${escEmail(r.goal)}">${escEmail(r.label)}</option>`).join('')}</select></label>
+        <button type="submit" class="btn btn-ghost">Save</button>
+      </form>` : ''}
       <form method="post" action="/admin/staff/${s.id}" class="row" style="margin-top:10px;gap:6px;align-items:center">
         <input type="hidden" name="action" value="commission">
         <label>Hourly wage $ <input name="hourly_rate" type="number" min="0" max="200" step="0.25"
@@ -26283,6 +26310,13 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
         const track = TRAINING.trackOf(b.training_track);
         await pool.query('UPDATE staff SET training_track = $2 WHERE id = $1', [id, track]);
         return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is on the ${TRAINING.TRACKS[track].label} training path.`);
+      }
+      case 'role': {
+        const role = TRAINING.salesRoleOf(String(b.sales_role || ''));
+        await pool.query('UPDATE staff SET sales_role = $2 WHERE id = $1', [id, role]);
+        return back(res, `/admin/staff#staff-${id}`, 'ok', role
+          ? `${s.name} is now ${TRAINING.SALES_ROLES[role].label}. Their role course follows the Sales course.`
+          : `${s.name} does all sales work (no role yet).`);
       }
       case 'commission': {
         const pct = staffRate(b.commission_pct, 50);
@@ -28123,7 +28157,11 @@ async function trainingFacts(staffId) {
             (SELECT COUNT(*) FROM quotes WHERE created_by = $1 OR sent_by = $1)::int AS quotes,
             ((SELECT COUNT(*) FROM client_emails WHERE sent_by = $1)
              + (SELECT COUNT(*) FROM sms_messages WHERE sent_by = $1)
-             + (SELECT COUNT(*) FROM staff_approvals WHERE requested_by = $1 AND kind = 'message'))::int AS messages`,
+             + (SELECT COUNT(*) FROM staff_approvals WHERE requested_by = $1 AND kind = 'message'))::int AS messages,
+            /* Customers they registered as found on Leads, whether or not the
+               shop already knew them: the work of finding them is the same. */
+            (SELECT COUNT(*) FROM staff_activity WHERE staff_id = $1
+                AND action IN ('lead registered as theirs', 'found lead was already known'))::int AS prospects`,
     [staffId]);
   const [{ rows: q }, { rows: [pr] }] = await Promise.all([
     pool.query('SELECT quiz_key, COUNT(*)::int AS n FROM staff_quiz_attempts WHERE staff_id = $1 AND passed GROUP BY quiz_key', [staffId]),
@@ -28153,17 +28191,19 @@ function quizSummary(attempts) {
 /* Where a helper goes once training is signed off, by the preset they trained on. */
 const NEXT_PRESET = { training: 'supervised', design: 'designer' };
 
-/** The training path a helper walks. */
-async function trackFor(staffId) {
-  const { rows: [r] } = await pool.query('SELECT training_track FROM staff WHERE id = $1', [staffId]);
-  return TRAINING.trackOf(r && r.training_track);
+/** The training path a helper walks, and their sales role (or null). */
+async function pathFor(staffId) {
+  const { rows: [r] } = await pool.query('SELECT training_track, sales_role FROM staff WHERE id = $1', [staffId]);
+  return { track: TRAINING.trackOf(r && r.training_track), role: TRAINING.salesRoleOf(r && r.sales_role) };
 }
 
 async function trainingFor(staffId) {
-  const [ticks, facts, track] = await Promise.all([
+  const [ticks, facts, path, times] = await Promise.all([
     pool.query('SELECT step_key, done_at, signed_by FROM staff_training WHERE staff_id = $1', [staffId]),
-    trainingFacts(staffId), trackFor(staffId)]);
-  return { ...TRAINING.progress(new Map(ticks.rows.map((t) => [t.step_key, t])), facts, undefined, track), track };
+    trainingFacts(staffId), pathFor(staffId),
+    pool.query('SELECT step_key, started_at, done_at FROM staff_lesson_time WHERE staff_id = $1', [staffId])]);
+  return { ...TRAINING.progress(new Map(ticks.rows.map((t) => [t.step_key, t])), facts, undefined, path.track, path.role,
+    new Map(times.rows.map((t) => [t.step_key, t]))), track: path.track, role: path.role };
 }
 
 /** The owner's notes to a helper: written on /admin/training, or left when
@@ -28208,23 +28248,32 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
         <div class="card">${emptyState('No active helpers yet.', '<a class="btn" href="/admin/staff">Add one</a>')}</div>`, 'training'));
     }
     const who = owner ? roster.find((r) => r.id === staffId) : actor;
-    const track = owner ? TRAINING.trackOf(who.training_track) : TRAINING.trackOf(actor.track);
-    const titles = TRAINING.visibleSteps(undefined, track).filter((s) => s.article).map((s) => s.article);
-    const quizSteps = TRAINING.visibleSteps(undefined, track).filter((s) => s.type === 'quiz');
-    const [p, notes, arts, gaps, ...tries] = await Promise.all([
-      trainingFor(staffId), coachingNotes(staffId),
+    const p = await trainingFor(staffId);
+    const { track, role } = p;
+    const titles = p.steps.filter((s) => s.article && s.type === 'read').map((s) => s.article);
+    const quizSteps = p.steps.filter((s) => s.type === 'quiz');
+    const [notes, arts, gaps, ...tries] = await Promise.all([
+      coachingNotes(staffId),
       pool.query('SELECT id, title FROM kb_articles WHERE published AND title = ANY($1)', [titles]),
       owner ? pool.query('SELECT id, title, body FROM kb_articles WHERE published ORDER BY title') : Promise.resolve({ rows: [] }),
       ...quizSteps.map((s) => quizAttempts(staffId, s.quiz)),
     ]);
     const quizTries = new Map(quizSteps.map((s, i) => [s.key, tries[i]]));
     const articleId = new Map(arts.rows.map((a) => [a.title, a.id]));
+    const mins = (n) => (n >= 60 ? `${Math.floor(n / 60)}h${n % 60 ? ` ${n % 60}m` : ''}` : `${n}m`);
     const stepRow = (s) => {
-      const link = s.article && articleId.has(s.article)
-        ? `<a href="/admin/playbook/${articleId.get(s.article)}" style="color:#1848B8;text-decoration:none">${escEmail(s.title)} &rarr;</a>`
-        : escEmail(s.title);
+      const lessonHref = s.type === 'lesson' ? `/admin/training/lesson/${encodeURIComponent(s.key.slice('lesson:'.length))}` : '';
+      const link = s.locked && !owner ? escEmail(s.title)
+        : s.type === 'lesson' ? `<a href="${lessonHref}" style="color:#1848B8;text-decoration:none">${escEmail(s.title)} &rarr;</a>`
+        : s.article && articleId.has(s.article)
+          ? `<a href="/admin/playbook/${articleId.get(s.article)}" style="color:#1848B8;text-decoration:none">${escEmail(s.title)} &rarr;</a>`
+          : escEmail(s.title);
       let action = '';
-      if (s.type === 'read' && !s.done && !owner) {
+      if (s.locked && !owner) {
+        action = pill('opens later', 'gray');
+      } else if (s.type === 'lesson' && !s.done && !owner) {
+        action = `<a class="btn" href="${lessonHref}">Start</a>`;
+      } else if (s.type === 'read' && !s.done && !owner) {
         action = `<form method="post" action="/admin/training/read" style="margin:0">
           <input type="hidden" name="key" value="${escEmail(s.key)}"><button type="submit" class="btn btn-ghost">I've read it</button></form>`;
       } else if (s.type === 'quiz') {
@@ -28236,24 +28285,53 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
           ${s.done ? '<input type="hidden" name="undo" value="1"><button type="submit" class="btn btn-ghost">Undo</button>'
                    : '<button type="submit" class="btn">Sign off</button>'}</form>`;
       }
-      const kind = { read: 'Read', do: 'Do', signoff: 'Owner signs off', quiz: 'Quiz' }[s.type];
+      const kind = { read: 'Read', lesson: 'Lesson', do: 'Do', signoff: 'Owner signs off', quiz: 'Quiz', exam: 'Exam', buffer: 'Buffer' }[s.type];
       const tried = s.type === 'quiz' ? ` &middot; ${escEmail(quizSummary(quizTries.get(s.key) || []))}` : '';
-      return `<div class="row-i"><span class="row-main"><b>${link}</b>
-        <div class="row-sub" style="white-space:normal">${escEmail(kind)}${s.hint ? ` &middot; ${escEmail(s.hint)}` : ''}${tried}${
+      const time = s.minutes ? ` &middot; ${mins(s.minutes)}${s.took != null ? ` (took ${mins(s.took)})` : ''}` : '';
+      if (s.type === 'buffer') {
+        return `<div class="row-i" style="opacity:.75"><span class="row-main"><span class="muted">${escEmail(s.title)}</span>
+          <div class="row-sub" style="white-space:normal">${mins(s.minutes)} &middot; ${escEmail(s.hint)}</div></span></div>`;
+      }
+      return `<div class="row-i"${s.locked && !owner ? ' style="opacity:.6"' : ''}><span class="row-main"><b>${link}</b>
+        <div class="row-sub" style="white-space:normal">${escEmail(kind)}${time}${s.hint ? ` &middot; ${escEmail(s.hint)}` : ''}${tried}${
           s.done && s.doneAt ? ` &middot; ${escEmail(whenShort(s.doneAt))}` : ''}</div></span>
         <span class="row-end" style="display:flex;gap:8px;align-items:center">${
           action || (s.done ? pill('done', 'green') : pill('to do', 'neutral'))}${s.done && action ? pill('done', 'green') : ''}</span></div>`;
     };
+    /* Courses come in modules; the design path is one list. */
+    const modules = [];
+    for (const s of p.steps) {
+      const m = s.module || '';
+      if (!modules.length || modules[modules.length - 1].key !== m) modules.push({ key: m, title: s.moduleTitle, index: s.moduleIndex, steps: [] });
+      modules[modules.length - 1].steps.push(s);
+    }
+    const moduleCard = (m) => {
+      if (!m.key) return `<div class="card">${m.steps.map(stepRow).join('')}</div>`;
+      const work = m.steps.filter((s) => s.type !== 'buffer');
+      const doneN = work.filter((s) => s.done).length;
+      const total = m.steps.reduce((n, s) => n + (Number(s.minutes) || 0), 0);
+      const locked = m.steps.every((s) => s.locked);
+      const label = m.title === 'Final exam and sign-off' ? 'Final' : `Module ${m.index + 1}`;
+      return `<div class="card" id="${escEmail(m.key.replace(/[^a-z0-9-]/gi, '-'))}">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="flex:1 1 220px">${escEmail(label)}: ${escEmail(m.title)}</b>
+          <span class="muted">${mins(total)}</span>${locked && !owner ? pill('opens after the module before', 'gray')
+            : doneN === work.length && work.length ? pill('done', 'green') : pill(`${doneN} of ${work.length}`, 'neutral')}</div>
+        ${m.steps.map(stepRow).join('')}</div>`;
+    };
     const gapRows = gaps.rows.map((a) => ({ a, holes: TRAINING.placeholders(a.body) })).filter((x) => x.holes.length);
+    const roleLabel = role ? TRAINING.SALES_ROLES[role].label : null;
+    const pathLabel = `${TRAINING.TRACKS[track].label}${track === 'sales' ? ` · ${roleLabel || 'all sales work'}` : ''}`;
     res.send(adminPage('Training', `
-      ${pageHeader(owner ? `Training — ${who.name} (${TRAINING.TRACKS[track].label})` : `My training: ${TRAINING.TRACKS[track].label}`,
-        owner ? 'Reading they tick, work ticks itself, and you sign off the rest. Moving them up stays your call on Staff.'
-              : 'Work through it in order. Reading you tick, work ticks itself when you do it, and the owner signs off the rest.',
+      ${pageHeader(owner ? `Training — ${who.name} (${pathLabel})` : `My training: ${pathLabel}`,
+        owner ? 'Lessons and reading they tick, work ticks itself, quizzes are marked here, and you sign off the rest. Moving them up stays your call on Staff.'
+              : 'Work through it in order. Each module opens when you pass the quiz before it. Times are a guide, not a limit.',
         owner && roster.length > 1 ? roster.map((r) => `<a class="btn ${r.id === staffId ? '' : 'btn-ghost'}" href="/admin/training?staff=${r.id}">${escEmail(r.name)}</a>`).join(' ') : '')}
       ${flash(req.query)}
       <div class="card"><b>${p.done} of ${p.total} done</b>${progressBar(p.done, p.total)}
+        ${p.minutes.expected ? `<div class="muted">About ${mins(p.minutes.expected)} in all, buffers included${p.minutes.took ? ` &middot; time logged on lessons so far: ${mins(p.minutes.took)}` : ''}.</div>` : ''}
         ${p.complete ? `<p>Training complete.${owner ? ` <a href="/admin/staff#staff-${staffId}">Move ${escEmail(who.name)} up on Staff →</a>` : ''}</p>` : ''}
-        ${p.steps.map(stepRow).join('')}</div>
+        ${!owner && p.next.length ? `<p style="margin-top:8px"><b>Next:</b> ${p.next.map((s) => escEmail(s.title)).join(' &middot; ')}</p>` : ''}</div>
+      ${modules.map(moduleCard).join('')}
       <div class="card"><b>Coaching notes</b>
         ${owner ? `<form method="post" action="/admin/feedback" style="margin:8px 0">
           <input type="hidden" name="staff_id" value="${staffId}">
@@ -28264,6 +28342,13 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
         <p class="muted">${escEmail(who.name)} sees a short tip at the top of each page until training is signed off, and can hide each one.</p>
         <form method="post" action="/admin/training/tips-reset" style="margin:0"><input type="hidden" name="staff_id" value="${staffId}">
           <button type="submit" class="btn btn-ghost">Show all tips again</button></form></div>
+      <details class="card"><summary><b>Restart ${escEmail(who.name)}'s training</b></summary>
+        <p class="muted">Clears every lesson, reading tick, sign-off, quiz attempt and lesson time, so they start the course from the beginning.
+          Real work they have done (leads answered, quotes built) still counts, because it is read from the work itself. This cannot be undone.</p>
+        <form method="post" action="/admin/training/restart" style="margin:0;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <input type="hidden" name="staff_id" value="${staffId}">
+          <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" name="confirm" value="1" required style="width:auto"> Yes, start ${escEmail(who.name)} again</label>
+          <button type="submit" class="btn">Restart training</button></form></details>
       <div class="card"><b>Playbook gaps to fill in (${gapRows.length})</b>
         ${gapRows.length ? gapRows.map(({ a, holes }) => `<div class="row-i"><span class="row-main"><a href="/admin/playbook/${a.id}"><b>${escEmail(a.title)}</b></a>
           <div class="row-sub" style="white-space:normal">${holes.map((h) => `[${escEmail(h)}]`).join(' &middot; ')}</div></span></div>`).join('')
@@ -28274,28 +28359,134 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
   }
 });
 
-/* The quiz page. A helper sees the questions without answers and posts them
-   back to be marked; the owner sees every question with its answer, and who
-   missed what. Answers never reach a helper's page before marking. */
-function quizStep(key, track = null) {
-  const tracks = track ? [TRAINING.trackOf(track)] : Object.keys(TRAINING.TRACKS);
-  for (const t of tracks) {
-    const s = TRAINING.visibleSteps(undefined, t).find((x) => x.type === 'quiz' && x.quiz === key);
+/* Glossary tooltips (TRAINING.glossary()). The first use of each term in a
+   block of course text gets a dotted underline and a short definition that
+   opens on hover, tap or keyboard focus, with no script. Only text between
+   tags is touched, never a tag, an attribute or a link's words. The input is
+   already-escaped HTML. */
+const TIP_DEFS = new Map(Object.entries(TRAINING.glossary()).map(([k, v]) => [k.toLowerCase(), v]));
+const TIP_TERMS = [...TIP_DEFS.keys()].sort((a, b) => b.length - a.length)
+  .map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+const TIP_RE = new RegExp('(?<![\\w-])(' + TIP_TERMS.join('|') + ')(?![\\w-])', 'gi');
+function withTips(html, seen = new Set()) {
+  let inLink = 0;
+  return String(html || '').split(/(<[^>]+>)/).map((part) => {
+    if (part.startsWith('<')) {
+      if (/^<a[\s>]/i.test(part)) inLink += 1;
+      else if (/^<\/a>/i.test(part)) inLink = Math.max(0, inLink - 1);
+      return part;
+    }
+    if (inLink) return part;
+    return part.replace(TIP_RE, (m) => {
+      const k = m.toLowerCase();
+      if (seen.has(k) || !TIP_DEFS.has(k)) return m;
+      seen.add(k);
+      return `<span class="tip" tabindex="0" data-tip="${escEmail(TIP_DEFS.get(k))}">${m}</span>`;
+    });
+  }).join('');
+}
+
+/** A lesson step in any course, for the owner (who may open every lesson). */
+function anyLessonStep(key) {
+  for (const c of Object.values(TRAINING.COURSES)) {
+    const s = TRAINING.courseSteps(c).find((x) => x.key === key);
     if (s) return s;
   }
   return null;
+}
+
+/* A course lesson. Opening it as a helper records when they started; the
+   "I've finished" button records when they finished. The words are the
+   playbook article, so the owner edits them there. */
+app.get('/admin/training/lesson/:id', requireAdmin, async (req, res) => {
+  const id = String(req.params.id || '');
+  if (!/^[a-z0-9-]{1,60}$/.test(id)) return back(res, '/admin/training', 'err', 'No such lesson.');
+  const key = `lesson:${id}`;
+  const actor = currentActor() || OWNER_ACTOR;
+  const owner = actor.kind !== 'staff';
+  try {
+    let p = null;
+    let s = null;
+    if (owner) s = anyLessonStep(key);
+    else {
+      p = await trainingFor(actor.id);
+      s = p.steps.find((x) => x.key === key) || null;
+      if (s && s.locked) return back(res, '/admin/training', 'err', 'That lesson opens once you pass the quiz before it.');
+    }
+    if (!s) return back(res, '/admin/training', 'err', 'No such lesson.');
+    if (!owner) {
+      await pool.query('INSERT INTO staff_lesson_time (staff_id, step_key) VALUES ($1, $2) ON CONFLICT DO NOTHING', [actor.id, key]);
+    }
+    const { rows: [a] } = await pool.query('SELECT id, body, needs_review FROM kb_articles WHERE published AND title = $1', [s.article]);
+    const seen = new Set();
+    const tryIt = (s.tryIt || []).map((t) => /^\/admin\//.test(t.href)
+      ? `<a class="btn btn-ghost" href="${escEmail(t.href)}" target="_blank" rel="noopener">${escEmail(t.label)}</a>`
+      : `<a class="btn btn-ghost" href="${escEmail(t.href)}" target="_blank" rel="noopener noreferrer">${escEmail(t.label)} &#8599;</a>`).join(' ');
+    const work = p ? p.steps.filter((x) => x.type !== 'buffer') : [];
+    const at = work.findIndex((x) => x.key === key);
+    const next = at >= 0 ? work.slice(at + 1).find((x) => !x.done) : null;
+    const nextHref = next && next.type === 'lesson' ? `/admin/training/lesson/${encodeURIComponent(next.key.slice('lesson:'.length))}`
+      : next && next.type === 'quiz' ? `/admin/training/quiz/${encodeURIComponent(next.quiz)}` : '/admin/training';
+    const mine = p ? p.steps.find((x) => x.key === key) : null;
+    res.set('Cache-Control', 'no-store');
+    res.send(adminPage('Training', `
+      ${pageHeader(s.title, `${escEmail(s.moduleTitle || '')} &middot; about ${s.minutes} minutes`,
+        `<a class="btn btn-ghost" href="/admin/training">Back to training</a>${owner && a ? ` <a class="btn btn-ghost" href="/admin/playbook/${a.id}">Edit in the Playbook</a>` : ''}`)}
+      ${flash(req.query)}
+      ${s.goals && s.goals.length ? `<div class="card" style="border-left:4px solid #1848B8"><b>By the end of this lesson you can</b>
+        <ul style="margin:6px 0 8px 20px">${s.goals.map((g) => `<li>${withTips(escEmail(g), seen)}</li>`).join('')}</ul>
+        <p class="muted" style="margin:0">Words with a dotted underline have a short explanation: hover, tap or tab to them.</p></div>` : ''}
+      ${owner && a && a.needs_review ? '<div class="warn">Starter draft. Check it in the Playbook; saving it there marks it checked.</div>' : ''}
+      <div class="card lesson">${a ? withTips(kbRender(a.body), seen) : '<div class="warn">This lesson\'s article is missing from the Playbook. Tell June.</div>'}</div>
+      ${tryIt ? `<div class="card"><b>Try it</b><p class="muted">These open the real screen in a new tab. Nothing reaches a customer unless you send it.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">${tryIt}</div></div>` : ''}
+      ${s.checks && s.checks.length ? `<div class="card"><b>Check yourself</b>
+        <p class="muted">Not marked. Answer in your head, then tap to see.</p>
+        ${s.checks.map((c) => `<details style="padding:8px 0;border-top:1px solid #eef1f8"><summary style="cursor:pointer;font-weight:600">${escEmail(c.q)}</summary>
+          <p style="margin:6px 0 0">${withTips(escEmail(c.a), seen)}</p></details>`).join('')}</div>` : ''}
+      ${!owner ? `<div class="card" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${mine && mine.done
+        ? `${pill('done', 'green')} <span class="muted">${mine.took != null ? `You took ${mine.took} minutes.` : ''}</span> <a class="btn" href="${nextHref}">Next &rarr;</a>`
+        : `<form method="post" action="/admin/training/read" style="margin:0">
+            <input type="hidden" name="key" value="${escEmail(key)}">
+            <button type="submit" class="btn">I've finished this lesson</button></form>
+           <span class="muted">Then the next step opens: ${next ? escEmail(next.title) : 'back to Training'}.</span>`}</div>` : ''}`, 'training'));
+  } catch (err) {
+    console.error('lesson page failed:', err.message);
+    res.status(500).send(adminPage('Training', '<div class="card"><div class="warn">Could not load the lesson.</div></div>', 'training'));
+  }
+});
+
+/* The quiz page. A helper sees the questions without answers and posts them
+   back to be marked; the owner sees every question with its answer, and who
+   missed what. Answers never reach a helper's page before marking. */
+function quizStep(key, track = null, role = null) {
+  const paths = track ? [[TRAINING.trackOf(track), role]]
+    : Object.keys(TRAINING.TRACKS).flatMap((t) => [[t, null], ...Object.keys(TRAINING.SALES_ROLES).map((r) => [t, r])]);
+  for (const [t, r] of paths) {
+    const s = TRAINING.visibleSteps(undefined, t, r).find((x) => x.type === 'quiz' && x.quiz === key);
+    if (s) return s;
+  }
+  return null;
+}
+
+/** A helper's quiz is open only once the module before it is passed. */
+async function quizOpenFor(actor, key) {
+  const p = await trainingFor(actor.id);
+  const s = p.steps.find((x) => x.type === 'quiz' && x.quiz === key);
+  return !!s && !s.locked;
 }
 
 app.get('/admin/training/quiz/:key', requireAdmin, async (req, res) => {
   const key = String(req.params.key || '');
   const actor = currentActor() || OWNER_ACTOR;
   const owner = actor.kind !== 'staff';
-  const z = quizStep(key, owner ? null : actor.track) && TRAINING.QUIZZES[key];
+  const z = quizStep(key, owner ? null : actor.track, owner ? null : actor.role) && TRAINING.QUIZZES[key];
   if (!z) return back(res, '/admin/training', 'err', 'No such quiz.');
   try {
+    if (!owner && !(await quizOpenFor(actor, key))) return back(res, '/admin/training', 'err', 'That quiz opens once you pass the module before it.');
     if (owner) {
       const roster = (await staffRoster({ activeOnly: true }))
-        .filter((r) => TRAINING.visibleSteps(undefined, r.training_track).some((x) => x.quiz === key));
+        .filter((r) => TRAINING.visibleSteps(undefined, r.training_track, r.sales_role).some((x) => x.quiz === key));
       const tries = await Promise.all(roster.map((r) => quizAttempts(r.id, key)));
       const missedBy = new Map();
       roster.forEach((r, i) => { const last = tries[i][tries[i].length - 1];
@@ -28318,7 +28509,7 @@ app.get('/admin/training/quiz/:key', requireAdmin, async (req, res) => {
         '<a class="btn btn-ghost" href="/admin/training">Back to training</a>')}
       <form method="post" action="/admin/training/quiz/${escEmail(key)}">
         ${view.questions.map((x, n) => `<fieldset class="card" style="border:0">
-          <legend style="font-weight:700;white-space:normal">${n + 1}. ${escEmail(x.q)}</legend>
+          <legend style="font-weight:700;white-space:normal">${n + 1}. ${withTips(escEmail(x.q))}</legend>
           ${x.choices.map((c, i) => `<label style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;cursor:pointer">
             <input type="radio" name="${escEmail(x.id)}" value="${i}" required style="margin-top:3px"> <span>${escEmail(c)}</span></label>`).join('')}
         </fieldset>`).join('')}
@@ -28335,7 +28526,8 @@ app.post('/admin/training/quiz/:key', requireAdmin, async (req, res) => {
   const actor = currentActor();
   const key = String(req.params.key || '');
   if (!actor || actor.kind !== 'staff') return res.redirect(`/admin/training/quiz/${encodeURIComponent(key)}`);
-  if (!quizStep(key, actor.track)) return back(res, '/admin/training', 'err', 'No such quiz.');
+  if (!quizStep(key, actor.track, actor.role)) return back(res, '/admin/training', 'err', 'No such quiz.');
+  if (!(await quizOpenFor(actor, key).catch(() => false))) return back(res, '/admin/training', 'err', 'That quiz opens once you pass the module before it.');
   const r = TRAINING.gradeQuiz(key, req.body || {});
   try {
     await pool.query(
@@ -29348,11 +29540,23 @@ app.post('/admin/hiring/:id/cancel', requireAdmin, async (req, res) => {
 app.post('/admin/training/read', requireAdmin, async (req, res) => {
   const actor = currentActor();
   if (!actor || actor.kind !== 'staff') return res.redirect('/admin/training');
-  const key = String((req.body || {}).key || '');
-  const s = TRAINING.stepByKey(key, undefined, actor.track);
-  if (!s || s.type !== 'read' || !TRAINING.mayTick(key, false, undefined, actor.track)) return back(res, '/admin/training', 'err', 'Unknown step.');
+  const key = String((req.body || {}).key || '').slice(0, 80);
+  const s = TRAINING.stepByKey(key, undefined, actor.track, actor.role);
+  if (!s || !['read', 'lesson'].includes(s.type) || !TRAINING.mayTick(key, false, undefined, actor.track, actor.role)) {
+    return back(res, '/admin/training', 'err', 'Unknown step.');
+  }
   try {
+    if (s.type === 'lesson') {
+      const p = await trainingFor(actor.id);
+      if (!TRAINING.stepOpen(p, key)) return back(res, '/admin/training', 'err', 'That lesson opens once you pass the quiz before it.');
+      await pool.query(
+        `INSERT INTO staff_lesson_time (staff_id, step_key, started_at, done_at) VALUES ($1, $2, NOW(), NOW())
+         ON CONFLICT (staff_id, step_key) DO UPDATE SET done_at = COALESCE(staff_lesson_time.done_at, NOW())`, [actor.id, key]);
+    }
     await pool.query(`INSERT INTO staff_training (staff_id, step_key) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [actor.id, key]);
+    if (s.type === 'lesson') {
+      return back(res, `/admin/training/lesson/${encodeURIComponent(key.slice('lesson:'.length))}`, 'ok', `Done: ${s.title}.`);
+    }
     return back(res, '/admin/training', 'ok', `Ticked: ${s.title}.`);
   } catch (err) {
     console.error('training tick failed:', err.message);
@@ -29367,9 +29571,9 @@ app.post('/admin/training/signoff', requireAdmin, async (req, res) => {
   const key = String(b.key || '');
   const to = `/admin/training?staff=${staffId || ''}`;
   try {
-    const track = staffId ? await trackFor(staffId) : null;
-    const s = track && TRAINING.stepByKey(key, undefined, track);
-    if (!staffId || !s || s.type !== 'signoff' || !TRAINING.mayTick(key, true, undefined, track)) return back(res, to, 'err', 'Unknown step.');
+    const path = staffId ? await pathFor(staffId) : null;
+    const s = path && TRAINING.stepByKey(key, undefined, path.track, path.role);
+    if (!staffId || !s || s.type !== 'signoff' || !TRAINING.mayTick(key, true, undefined, path.track, path.role)) return back(res, to, 'err', 'Unknown step.');
     const { rows: [st] } = await pool.query('SELECT id FROM staff WHERE id = $1', [staffId]);
     if (!st) return back(res, '/admin/training', 'err', 'No such helper.');
     if (b.undo) {
@@ -29396,6 +29600,33 @@ app.post('/admin/training/tip', requireAdmin, async (req, res) => {
     await pool.query(`INSERT INTO staff_training (staff_id, step_key) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [actor.id, `tip:${key}`]);
   } catch (err) { console.error('tip dismiss failed:', err.message); }
   return res.redirect(to);
+});
+
+/* Start a helper's training again. Ticks, sign-offs, quiz attempts and
+   lesson times go; page-tip choices stay. Work steps read the work itself,
+   so a lead they really answered still counts. */
+app.post('/admin/training/restart', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const staffId = intIn(b.staff_id);
+  if (!staffId) return back(res, '/admin/training', 'err', 'No such helper.');
+  if (String(b.confirm || '') !== '1') return back(res, `/admin/training?staff=${staffId}`, 'err', 'Tick the box to confirm the restart.');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: [st] } = await client.query('SELECT id, name FROM staff WHERE id = $1', [staffId]);
+    if (!st) { await client.query('ROLLBACK'); return back(res, '/admin/training', 'err', 'No such helper.'); }
+    await client.query(`DELETE FROM staff_training WHERE staff_id = $1 AND step_key NOT LIKE 'tip:%'`, [staffId]);
+    await client.query('DELETE FROM staff_quiz_attempts WHERE staff_id = $1', [staffId]);
+    await client.query('DELETE FROM staff_lesson_time WHERE staff_id = $1', [staffId]);
+    await client.query('COMMIT');
+    return back(res, `/admin/training?staff=${staffId}`, 'ok', `${st.name} starts training from the beginning.`);
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('training restart failed:', err.message);
+    return back(res, `/admin/training?staff=${staffId}`, 'err', 'Could not restart. Try again.');
+  } finally {
+    client.release();
+  }
 });
 
 app.post('/admin/training/tips-reset', requireAdmin, async (req, res) => {
@@ -29451,7 +29682,7 @@ function kbPromptText(body) {
   return quoted ? quoted[1] : String(body || '').replace(/\*\*/g, '');
 }
 
-const KB_KINDS = { faq: 'Customer reply', artwork: 'Artwork guide', sop: 'How we do it', prompt: 'AI prompt' };
+const KB_KINDS = { faq: 'Customer reply', artwork: 'Artwork guide', sop: 'How we do it', prompt: 'AI prompt', course: 'Training lesson' };
 const KB_DECORATIONS = { screen: 'Screen printing', embroidery: 'Embroidery', dtf: 'DTF', patches: 'Patches',
                          vinyl: 'Vinyl', puff: 'Puff print', any: 'Any' };
 
@@ -30274,6 +30505,10 @@ KB_ADDED.push({ kind: 'sop', title: PAY_GUIDE_TITLE,
   tags: 'pay, wage, hourly, hours, commission, earnings, my earnings, how pay works, payday, timeproof, own lead, shop lead, reorder, platform, menu, getting started, rules',
   body: PAY_GUIDE_BODY,
   was: [PAY_GUIDE_BODY_10PCT], });
+
+/* Every course lesson (tools/lib/courses), added once by title like the rest,
+   so the owner's edits are kept. */
+KB_ADDED.push(...TRAINING.lessonArticles());
 
 async function addPlaybookArticles() {
   for (const a of KB_ADDED) {
