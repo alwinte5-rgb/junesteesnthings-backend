@@ -537,7 +537,7 @@ document.addEventListener('click', function(e){
 <script type="text/javascript">
 var Tawk_API=Tawk_API||{}, Tawk_LoadStart=new Date();
 /* Phones: above the sticky action bar, which it covered (the Call button). */
-Tawk_API.customStyle={visibility:{mobile:{position:'br',xOffset:10,yOffset:78}}};
+Tawk_API.customStyle=(window.innerWidth<=760)?{visibility:{desktop:{position:'br',xOffset:10,yOffset:78},mobile:{position:'br',xOffset:10,yOffset:78}}}:{visibility:{mobile:{position:'br',xOffset:10,yOffset:78}}};
 (function(){
 var s1=document.createElement("script"),s0=document.getElementsByTagName("script")[0];
 s1.async=true;
