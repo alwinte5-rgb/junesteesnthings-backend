@@ -54,6 +54,7 @@ const TRACKS = {
   content: { label: 'Content (video)', note: 'Shot lists, editing shorts and longer videos, music and permission rules, posting, comments and the Friday numbers.' },
   ads: { label: 'Ads', note: 'Conversion tracking, Google Search, negatives and the $40 rule, Meta retargeting, seasonal campaigns and the weekly report.' },
   bookkeeper: { label: 'Bookkeeper', note: 'Sales and fees, expenses and receipts, job costs, refunds and disputes, Illinois sales tax, the month-end close and the summary for June.' },
+  developer: { label: 'Developer', note: 'The stack, shipping through pull requests, outages and roll-backs, secrets and safe code, payment code, tests and Claude Code, apps.' },
 };
 const DEFAULT_TRACK = 'sales';
 
@@ -90,7 +91,7 @@ function courseSteps(course, features = FEATURES) {
     }
     for (const l of m.lessons) {
       push({ key: `lesson:${l.id}`, type: 'lesson', article: l.article, minutes: l.minutes, goals: l.goals || [],
-        checks: l.checks || [], pages: l.pages || [], tryIt: l.tryIt || [], images: l.images || [], title: l.article.replace(/^(Sales course|Lead Generation|Sales Closer|Account Manager|Design course|Content course|Ads course|Bookkeeper course|Team basics) [0-9a-z]+: /, '') });
+        checks: l.checks || [], pages: l.pages || [], tryIt: l.tryIt || [], images: l.images || [], title: l.article.replace(/^(Sales course|Lead Generation|Sales Closer|Account Manager|Design course|Content course|Ads course|Bookkeeper course|Developer course|Team basics) [0-9a-z]+: /, '') });
     }
     for (const x of m.practice || []) push(!m.quiz && x.type === 'exam' ? { ...x, gate: true } : x);
     if (m.quiz) {
