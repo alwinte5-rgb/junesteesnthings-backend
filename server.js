@@ -26422,7 +26422,9 @@ function cloudflareStepCard(name, email) {
 
 async function renderStaffPage(req, res, extra = '') {
   const roster = await staffRoster();
-  const presetOptions = Object.entries(STAFF.PRESETS).map(([k, p]) => `<option value="${k}">${escEmail(p.label)}</option>`).join('');
+  /* A hire arriving from Hiring (?add_track=) starts on their path's preset. */
+  const addPreset = STAFF.presetForTrack(TRAINING.trackOf((req.query || {}).add_track));
+  const presetOptions = Object.entries(STAFF.PRESETS).map(([k, p]) => `<option value="${k}"${k === addPreset ? ' selected' : ''}>${escEmail(p.label)}</option>`).join('');
   const cards = roster.map((s) => {
     const preset = STAFF.presetMatching(s.perms);
     return `<div class="card" id="staff-${s.id}">
@@ -26503,8 +26505,8 @@ app.post('/admin/staff', requireAdmin, async (req, res) => {
   const b = req.body || {};
   const name = text(b.name, 80);
   const email = text(b.email, 254).toLowerCase();
-  const preset = STAFF.PRESETS[b.preset] ? b.preset : 'training';
   const track = TRAINING.trackOf(b.training_track);
+  const preset = STAFF.PRESETS[b.preset] ? b.preset : STAFF.presetForTrack(track);
   const pct = staffRate(b.commission_pct, 50);
   const wage = staffRate(b.hourly_rate, 200);
   if (!name || !STAFF.EMAIL_RE.test(email)) return back(res, '/admin/staff', 'err', 'A name and a real email are needed.');

@@ -574,3 +574,37 @@ test('releasing a held quote starts the customer\'s clock then, keeping its days
   assert.match(fn, /created_at = NOW\(\)/);
   assert.match(fn, /CURRENT_DATE \+ GREATEST\(1, valid_until - created_at::date\)/);
 });
+
+/* Owner, 2026-10-09: content, ads, bookkeeping and development need chat, the
+   Playbook and their training without seeing jobs, prices or customers. */
+test('the Team preset opens chat, the Playbook and training, and nothing that shows work, prices or customers', () => {
+  const p = STAFF.presetPerms('team');
+  assert.ok(p, 'the preset exists');
+  for (const [k, v] of Object.entries(p)) {
+    if (k === 'kb.edit') { assert.strictEqual(v.level, 'approval', 'Playbook suggestions wait for June'); continue; }
+    // The lowest level each permission has: 'off', or 'approval' where off is not an option (quotes.send).
+    const levels = STAFF.PERMISSIONS[k].levels || [];
+    assert.strictEqual(v.level, levels.includes('off') || !levels.length ? 'off' : levels[0], `team → ${k}`);
+  }
+  for (const route of ['GET /admin/training', 'GET /admin/team-chat', 'POST /admin/team-chat', 'GET /admin/playbook', 'GET /admin/resources', 'GET /admin/my-day']) {
+    assert.strictEqual(STAFF.ROUTES[route], 'any', `${route} is open to every helper`);
+  }
+  for (const [route, need] of Object.entries(STAFF.ROUTES)) {
+    if (need === 'any') continue;
+    if (need === 'owner') continue;
+    const perm = typeof need === 'string' ? need : need.perm;
+    if (perm && perm !== 'kb.edit' && p[perm] && p[perm].level !== 'off') {
+      assert.ok(perm === 'quotes.send' && p['quotes.view'].level === 'off', `${route} stays shut`);
+    }
+  }
+  assert.strictEqual(STAFF.presetMatching(p), 'team', 'the Staff page names it');
+});
+
+test('a new helper starts on their training path\'s preset', () => {
+  for (const t of ['content', 'ads', 'bookkeeper', 'developer']) assert.strictEqual(STAFF.presetForTrack(t), 'team', t);
+  assert.strictEqual(STAFF.presetForTrack('design'), 'design');
+  assert.strictEqual(STAFF.presetForTrack('sales'), 'training');
+  assert.strictEqual(STAFF.presetForTrack('nonsense'), 'training');
+  const post = src.slice(src.indexOf("app.post('/admin/staff', requireAdmin"), src.indexOf('\n});', src.indexOf("app.post('/admin/staff', requireAdmin")));
+  assert.match(post, /STAFF\.PRESETS\[b\.preset\] \? b\.preset : STAFF\.presetForTrack\(track\)/, 'no preset sent: the path decides, never Training for a non-sales hire');
+});

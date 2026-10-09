@@ -140,6 +140,17 @@ const PRESETS = {
       'proofs.upload': 'on', 'art.work': 'on', 'kb.edit': 'approval',
     },
   },
+  /* Content, ads, bookkeeping and development happen outside the back
+     office (owner, 2026-10-09: they need chat, the Playbook and their
+     training without seeing jobs, prices or customers). Team chat, the
+     Playbook, Resources, My Day and Training are open to every helper
+     ('any' in ROUTES), so this preset switches everything else off and lets
+     them suggest Playbook edits for June to approve. */
+  team: {
+    label: 'Team (no back office)',
+    note: 'Team chat, the Playbook, Resources and their own training. No jobs, quotes, prices or customers.',
+    perms: { 'kb.edit': 'approval' },
+  },
   supervised: {
     label: 'Supervised',
     note: 'Sends quotes up to $500 and messages customers; discounts still come to you.',
@@ -163,6 +174,13 @@ const PRESETS = {
     },
   },
 };
+
+/* The preset a new helper starts on for each training path: the path's own
+   training preset, or Training for sales. */
+const TRACK_PRESET = { design: 'design', content: 'team', ads: 'team', bookkeeper: 'team', developer: 'team' };
+function presetForTrack(track) {
+  return Object.prototype.hasOwnProperty.call(TRACK_PRESET, track) ? TRACK_PRESET[track] : 'training';
+}
 
 /* Every admin route, and the permission a helper needs for it.
    'owner'  only the owner, whatever toggles are set.
@@ -615,7 +633,7 @@ function presetMatching(perms) {
 
 const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,190}\.[a-z]{2,}$/i;
 
-module.exports = {
+module.exports = { presetForTrack,
   LEVELS, PERMISSIONS, PRESETS, ROUTES, NEVER_STAFF, STAFF_SESSION_HOURS, MIN_PASSWORD, EMAIL_RE,
   routeKey, permForRoute, normalizePerm, presetPerms, effectivePerms, levelOf, mayUseRoute,
   quoteNeedsApproval, discountCodeCap, hashPassword, verifyPassword, generatePassword,
