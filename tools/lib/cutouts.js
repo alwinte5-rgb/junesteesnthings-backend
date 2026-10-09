@@ -217,7 +217,30 @@ const packCost = (size) => SHEET + PER_SHEET[size] * labour(MINUTES_HANDLING);
 /** Published pack price, rounded up to an even dollar so 50% always holds. */
 const packPrice = (size) => Math.ceil((packCost(size) * MARKUP) / 2) * 2;
 
+/* THE DESIGNER PRODUCT (2026-10-08, owner's call: keep Big Head Cutouts on in
+ * the designer, designable). It was a quote-only row with no design area and
+ * no methods, so the designer had nothing to draw on, and the admin product
+ * list's DTF default filled the empty methods with a shirt print.
+ *
+ * The methods ARE the price (a pack or a singles ladder), so the product lists
+ * exactly the cutout methods that are on sale, in the storefront's shape:
+ * URL-encoded JSON keyed "_<id>". Non-empty, so the DTF default leaves it alone. */
+const CUTOUT_METHOD = /^Big Head Cutout — /;
+function cutoutPrintings(methods) {
+  const on = methods.filter((m) => String(m.active) === '1' && CUTOUT_METHOD.test(m.title))
+    .map((m) => Number(m.id)).sort((a, b) => a - b);
+  if (!on.length) return '';
+  return encodeURIComponent(JSON.stringify(Object.fromEntries(on.map((id) => ['_' + id, 'A3']))));
+}
+/** One plain white board to design on: a cutout is one-sided. */
+function cutoutStages() {
+  return { front: { source: 'raws', overlay: false, url: 'products/jt-banner-backdrop.png', label: 'Front',
+    edit_zone: { width: 300, height: 300, left: 0, top: 0, radius: '0' }, product_width: 500, product_height: 500 } };
+}
+const CUTOUT_CATEGORY = { name: 'Big Head Cutouts', slug: 'custom-big-head-cutouts', order: 15 };
+
 module.exports = {
+  CUTOUT_METHOD, cutoutPrintings, cutoutStages, CUTOUT_CATEGORY,
   VINYL_SQFT, LAMINATE_AND_CUT, BOARD, SHEET, SHOP_RATE, MINUTES_PER_HEAD,
   MINUTES_HANDLING, MARKUP, PER_SHEET, BANDS,
   boxOf, sqftOf, fitsBoard, labour, costEach, ladderFor, minimumFor,

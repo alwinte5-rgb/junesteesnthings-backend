@@ -92,7 +92,7 @@
  */
 const fs = require('fs');
 const { mysql, enjson, sq } = require('./lib/db');
-const { ladderFor, minimumFor, packSizeFor, packPrice, MINUTES_PER_HEAD, SHOP_RATE } = require('./lib/cutouts');
+const { ladderFor, minimumFor, packSizeFor, packPrice, MINUTES_PER_HEAD, SHOP_RATE, cutoutPrintings, cutoutStages, CUTOUT_CATEGORY } = require('./lib/cutouts');
 
 const argv = process.argv.slice(2);
 const APPLY = argv.includes('--apply');
@@ -249,6 +249,7 @@ for (const m of METHODS) {
   }
 }
 console.log('\n  ' + (prod.length ? 'product #' + prod[0].id : 'create product') + '  ' + NAME + '  (no price — the size carries it)');
+console.log('  designer: white board to design on, the cutout methods on sale, category "' + CUTOUT_CATEGORY.name + '"');
 console.log('  shipping is an ADDON in server.js, billed once an order, not per size');
 
 if (!APPLY) { console.log('\n  dry run — pass --apply to write'); process.exit(0); }
@@ -272,14 +273,29 @@ for (const m of METHODS) {
 /* The size attribute is dropped: the size is the decoration method now, and
    leaving a second place to say "18in" is two sources of truth for the one
    fact the price turns on. */
+/* The product carries the cutout methods on sale and a white board to design
+   on (lib/cutouts.js cutoutPrintings / cutoutStages), so it opens in the
+   designer and the admin list's DTF default never sees it as empty. */
+const printings = cutoutPrintings(mysql(url, "SELECT id,title,active FROM lumise_printings WHERE title LIKE 'Big Head Cutout%';", { rows: true }));
+if (!printings) { console.error('  !! no cutout method is on sale — refusing to write a product with nothing to price it'); process.exit(1); }
 if (prod.length) {
   mysql(url, 'UPDATE lumise_products SET description=' + sq(DESCRIPTION) + ', attributes=' + sq(enjson({})) +
-    ", price=0, printings='', active=1, updated=NOW() WHERE id=" + prod[0].id + ';');
+    ', stages=' + sq(enjson(cutoutStages())) + ', price=0, printings=' + sq(printings) + ', active=1, updated=NOW() WHERE id=' + prod[0].id + ';');
 } else {
   mysql(url, 'INSERT INTO lumise_products (name,description,price,supplier_cost,stages,attributes,printings,' +
     'thumbnail_url,active,`order`,author,created,updated) VALUES (' + sq(NAME) + ',' + sq(DESCRIPTION) +
-    ',0,0,' + sq(enjson({})) + ',' + sq(enjson({})) + ",'','',1,999," + sq(author) + ',NOW(),NOW());');
+    ',0,0,' + sq(enjson(cutoutStages())) + ',' + sq(enjson({})) + ',' + sq(printings) + ",'',1,999," + sq(author) + ',NOW(),NOW());');
 }
+/* Filed in its own category so the designer's product picker can find it. */
+let cat = mysql(url, "SELECT id FROM lumise_categories WHERE type='products' AND slug=" + sq(CUTOUT_CATEGORY.slug) + ';', { rows: true })[0];
+if (!cat) {
+  mysql(url, 'INSERT INTO lumise_categories (name,slug,upload,thumbnail_url,parent,type,active,`order`,author,created,updated) VALUES ('
+    + sq(CUTOUT_CATEGORY.name) + ',' + sq(CUTOUT_CATEGORY.slug) + ",'','',0,'products',1," + Number(CUTOUT_CATEGORY.order) + ",'',NOW(),NOW());");
+  cat = mysql(url, "SELECT id FROM lumise_categories WHERE type='products' AND slug=" + sq(CUTOUT_CATEGORY.slug) + ';', { rows: true })[0];
+}
+const pid = mysql(url, 'SELECT id FROM lumise_products WHERE name=' + sq(NAME) + ';', { rows: true })[0].id;
+if (!mysql(url, "SELECT 1 FROM lumise_categories_reference WHERE type='products' AND category_id=" + Number(cat.id) + ' AND item_id=' + Number(pid) + ';', { rows: true }).length)
+  mysql(url, 'INSERT INTO lumise_categories_reference (category_id,item_id,author,type) VALUES (' + Number(cat.id) + ',' + Number(pid) + ",'','products');");
 for (const a of mysql(url, "SELECT id,title,active FROM lumise_printings WHERE title LIKE 'Big Head Cutout%' ORDER BY id;", { rows: true }))
   console.log('  verified #' + a.id + '  active=' + a.active + '  ' + a.title);
 for (const a of mysql(url, 'SELECT id,name,price FROM lumise_products WHERE name=' + sq(NAME) + ';', { rows: true }))
