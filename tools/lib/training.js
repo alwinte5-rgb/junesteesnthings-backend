@@ -121,7 +121,7 @@ function courseSteps(course, features = FEATURES) {
     }
     for (const l of m.lessons) {
       push({ key: `lesson:${l.id}`, type: 'lesson', article: l.article, minutes: l.minutes, goals: l.goals || [],
-        checks: l.checks || [], pages: l.pages || [], tryIt: l.tryIt || [], images: l.images || [], title: l.article.replace(/^(Sales course|Lead Generation) [0-9a-z]+: /, '') });
+        checks: l.checks || [], pages: l.pages || [], tryIt: l.tryIt || [], images: l.images || [], title: l.article.replace(/^(Sales course|Lead Generation|Sales Closer|Account Manager) [0-9a-z]+: /, '') });
     }
     for (const x of m.practice || []) push(!m.quiz && x.type === 'exam' ? { ...x, gate: true } : x);
     if (m.quiz) {
