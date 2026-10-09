@@ -315,6 +315,26 @@ test('the Content course is the content track\'s path: its own sign-offs, the ow
   assert.strictEqual(require('../tools/lib/team-channels').audienceOf('content'), 'content');
 });
 
+test('the Ads course is the ads track\'s path: its own sign-offs, the owner\'s gaps, and the promotion step last', () => {
+  assert.ok(TRAINING.TRACKS.ads);
+  assert.deepStrictEqual(COURSES.coursesFor('ads').map((c) => c.key), ['ads-core']);
+  const keys = TRAINING.visibleSteps(undefined, 'ads').map((s) => s.key);
+  for (const k of ['quiz:team-1', 'signoff:ads-tracking', 'signoff:ads-terms', 'signoff:ads-report', 'quiz:ads-final', 'signoff:handoff']) assert.ok(keys.includes(k), k);
+  assert.strictEqual(keys[keys.length - 1], TRAINING.READY_KEY);
+  assert.ok(!TRAINING.stepOpen(TRAINING.progress(new Map(), {}, undefined, 'ads'), 'lesson:a2-judge'));
+  assert.ok(TRAINING.stepOpen(TRAINING.progress(new Map(), { quizzes: { 'team-1': 1 } }, undefined, 'ads'), 'lesson:a2-judge'));
+  const gaps = TRAINING.lessonArticles().filter((a) => /^Ads course /.test(a.title)).flatMap((a) => TRAINING.ownerGaps(a.body));
+  assert.ok(gaps.length >= 5, `${gaps.length} gaps`);
+  for (const g of gaps) assert.match(g.token, /owner to fill in/);
+  assert.strictEqual(TRAINING.visibleSteps(undefined, 'ads').find((s) => s.key === 'lesson:a5-terms').title, 'Search terms, negatives and the $40 rule');
+  // Ads never send anyone to the back office.
+  for (const a of TRAINING.lessonArticles().filter((x) => /^Ads course /.test(x.title))) assert.doesNotMatch(a.body.replace(/\*\*jtees\.net\/quote:\*\*/, ''), /jtees\.net\/quote\b/, a.title);
+  const list = src.slice(src.indexOf('const TRAINING_PATHS = ['), src.indexOf('];', src.indexOf('const TRAINING_PATHS = [')));
+  assert.match(list, /key: 'ads', track: 'ads'/);
+  assert.strictEqual(TRAINING.trackOf('ads'), 'ads', 'a hired ads specialist lands on the ads path');
+  assert.strictEqual(require('../tools/lib/team-channels').audienceOf('ads'), 'ads');
+});
+
 test('the Design course keeps the old checklist\'s keys, so a designer\'s ticks and passes still count', () => {
   const keys = TRAINING.visibleSteps(new Set(['proofs']), 'design').map((s) => s.key);
   for (const k of ['do:message', 'do:proof', 'quiz:design', 'signoff:art', 'signoff:handoff', 'signoff:ready']) assert.ok(keys.includes(k), k);
