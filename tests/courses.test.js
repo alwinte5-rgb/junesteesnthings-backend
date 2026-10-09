@@ -365,6 +365,9 @@ test('the Developer course is the developer track\'s path, and a hired developer
   assert.ok(gaps.length >= 4, `${gaps.length} gaps`);
   for (const g of gaps) assert.match(g.token, /owner to fill in/);
   assert.strictEqual(TRAINING.visibleSteps(undefined, 'developer').find((s) => s.key === 'lesson:v3-incident').title, 'When something breaks');
+  // The developer is told how they get Claude Code, and that the repo's rules load with it.
+  assert.ok(gaps.some((g) => /Claude account/.test(g.token)), 'June is asked which Claude account the developer uses');
+  assert.ok(fs.existsSync(path.join(__dirname, '..', 'CLAUDE.md')) && /@AGENTS\.md/.test(fs.readFileSync(path.join(__dirname, '..', 'CLAUDE.md'), 'utf8')), 'CLAUDE.md loads AGENTS.md');
   const list = src.slice(src.indexOf('const TRAINING_PATHS = ['), src.indexOf('];', src.indexOf('const TRAINING_PATHS = [')));
   assert.match(list, /key: 'developer', track: 'developer'/);
   // Every non-sales hiring role now has a course of its own.

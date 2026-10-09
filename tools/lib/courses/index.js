@@ -62,7 +62,7 @@ function lessonArticles() {
   const seen = new Set();
   return Object.values(COURSES).flatMap((c) => c.modules.flatMap((m) => m.lessons.filter((l) => !l.existing && !seen.has(l) && seen.add(l)).map((l) => ({
     kind: 'course', title: l.article, tags: `training, course, ${m.key === 'team' ? 'team basics' : c.title.toLowerCase()}, ${l.tags || ''}`.replace(/,\s*$/, ''),
-    body: l.body, needsReview: true,
+    body: l.body, needsReview: true, ...(l.was ? { was: l.was } : {}),
   }))));
 }
 
