@@ -353,6 +353,24 @@ test('the Bookkeeper course is the bookkeeper track\'s path, and a hired bookkee
   assert.strictEqual(require('../tools/lib/team-channels').audienceOf('bookkeeper'), 'bookkeeper');
 });
 
+test('the Developer course is the developer track\'s path, and a hired developer lands on it', () => {
+  assert.strictEqual(TRAINING.trackOf('developer'), 'developer', 'the hiring role name is the track name');
+  assert.deepStrictEqual(COURSES.coursesFor('developer').map((c) => c.key), ['dev-core']);
+  const keys = TRAINING.visibleSteps(undefined, 'developer').map((s) => s.key);
+  for (const k of ['quiz:team-1', 'signoff:dev-rollback', 'signoff:dev-first-pr', 'quiz:dev-final', 'signoff:handoff']) assert.ok(keys.includes(k), k);
+  assert.strictEqual(keys[keys.length - 1], TRAINING.READY_KEY);
+  assert.ok(!TRAINING.stepOpen(TRAINING.progress(new Map(), {}, undefined, 'developer'), 'lesson:v2-stack'));
+  assert.ok(TRAINING.stepOpen(TRAINING.progress(new Map(), { quizzes: { 'team-1': 1 } }, undefined, 'developer'), 'lesson:v2-stack'));
+  const gaps = TRAINING.lessonArticles().filter((a) => /^Developer course /.test(a.title)).flatMap((a) => TRAINING.ownerGaps(a.body));
+  assert.ok(gaps.length >= 4, `${gaps.length} gaps`);
+  for (const g of gaps) assert.match(g.token, /owner to fill in/);
+  assert.strictEqual(TRAINING.visibleSteps(undefined, 'developer').find((s) => s.key === 'lesson:v3-incident').title, 'When something breaks');
+  const list = src.slice(src.indexOf('const TRAINING_PATHS = ['), src.indexOf('];', src.indexOf('const TRAINING_PATHS = [')));
+  assert.match(list, /key: 'developer', track: 'developer'/);
+  // Every non-sales hiring role now has a course of its own.
+  for (const role of ['content', 'ads', 'bookkeeper', 'developer']) assert.strictEqual(COURSES.coursesFor(TRAINING.trackOf(role)).length, 1, role);
+});
+
 test('the Design course keeps the old checklist\'s keys, so a designer\'s ticks and passes still count', () => {
   const keys = TRAINING.visibleSteps(new Set(['proofs']), 'design').map((s) => s.key);
   for (const k of ['do:message', 'do:proof', 'quiz:design', 'signoff:art', 'signoff:handoff', 'signoff:ready']) assert.ok(keys.includes(k), k);

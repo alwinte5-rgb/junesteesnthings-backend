@@ -28206,7 +28206,7 @@ app.post('/admin/tasks/:id/done', requireAdmin, async (req, res) => {
    the owner keeps. Links and how to get in only: logins live in the team
    password manager, never here. A helper sees the tools for everyone and for
    their own path; the owner sees and edits all of them (ROUTES). */
-const RESOURCE_AUDIENCES = { all: 'Everyone', sales: 'Sales', design: 'Design', content: 'Content', ads: 'Ads', bookkeeper: 'Bookkeeper' };
+const RESOURCE_AUDIENCES = { all: 'Everyone', sales: 'Sales', design: 'Design', content: 'Content', ads: 'Ads', bookkeeper: 'Bookkeeper', developer: 'Developer' };
 
 function resourceFromForm(b) {
   const url = text(b.url, 500);
@@ -29114,6 +29114,7 @@ const TRAINING_PATHS = [
   { key: 'content', track: 'content', role: null, label: 'Content (video)', note: TRAINING.TRACKS.content.note },
   { key: 'ads', track: 'ads', role: null, label: 'Ads', note: TRAINING.TRACKS.ads.note },
   { key: 'bookkeeper', track: 'bookkeeper', role: null, label: 'Bookkeeper', note: TRAINING.TRACKS.bookkeeper.note },
+  { key: 'developer', track: 'developer', role: null, label: 'Developer', note: TRAINING.TRACKS.developer.note },
 ];
 
 app.get('/admin/training/paths', requireAdmin, async (req, res) => {

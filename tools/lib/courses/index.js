@@ -14,7 +14,7 @@
    course adds up to eight hours with at least an hour of buffer.
 
    Every other job has one course of its own (design-core.js for designers,
-   content-core.js for the content (video) person, ads-core.js for ads, books-core.js for the bookkeeper).
+   content-core.js for the content (video) person, ads-core.js for ads, books-core.js for the bookkeeper, dev-core.js for the developer).
    Each opens with the Team basics module (shared-team.js), the same module
    object in every course: its quiz and lessons are registered once. */
 
@@ -26,13 +26,15 @@ const DESIGN_CORE = require('./design-core');
 const CONTENT_CORE = require('./content-core');
 const ADS_CORE = require('./ads-core');
 const BOOKS_CORE = require('./books-core');
+const DEV_CORE = require('./dev-core');
 
 const COURSES = { [SALES_CORE.key]: SALES_CORE, [SALES_LEADGEN.key]: SALES_LEADGEN, [SALES_CLOSER.key]: SALES_CLOSER,
   [SALES_ACCOUNTS.key]: SALES_ACCOUNTS, [DESIGN_CORE.key]: DESIGN_CORE, [CONTENT_CORE.key]: CONTENT_CORE,
-  [ADS_CORE.key]: ADS_CORE, [BOOKS_CORE.key]: BOOKS_CORE };
+  [ADS_CORE.key]: ADS_CORE, [BOOKS_CORE.key]: BOOKS_CORE,
+  [DEV_CORE.key]: DEV_CORE };
 
 /* The course each non-sales track walks. */
-const TRACK_COURSES = { design: [DESIGN_CORE], content: [CONTENT_CORE], ads: [ADS_CORE], bookkeeper: [BOOKS_CORE] };
+const TRACK_COURSES = { design: [DESIGN_CORE], content: [CONTENT_CORE], ads: [ADS_CORE], bookkeeper: [BOOKS_CORE], developer: [DEV_CORE] };
 
 /* The three sales jobs. Until all three are filled, everyone does all of it. */
 const SALES_ROLES = {
