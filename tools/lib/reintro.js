@@ -150,7 +150,7 @@ function helloEmail({ first, email }) {
       ${feature('🔤', 'Hundreds of fonts and graphics', 'Add names, numbers, dates and designs in a few taps.')}
       ${feature('✨', 'AI design help', 'Describe your idea, like "a family reunion shirt with our last name and year", and get a starting point.')}
       ${feature('👕', 'See it on the garment instantly', 'Your design on the exact piece and color you picked, in full color.')}
-      ${feature('💲', 'Live pricing with volume discounts', 'No minimums. Order one piece or a whole team.')}
+      ${feature('💲', 'Live pricing with volume discounts', 'No minimums online. Order one piece or a whole team.')}
       ${feature('💾', 'Save your designs and track your order', 'Free account, so it is all there next time.')}
     </table>
     <p style="text-align:center;margin:16px 0 6px">${btn(SITE, 'Start designing')}</p>
