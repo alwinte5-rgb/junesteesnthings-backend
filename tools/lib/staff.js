@@ -362,6 +362,8 @@ const ROUTES = {
   'GET /admin/team-chat': 'any',
   'POST /admin/team-chat': 'any',
   'GET /admin/api/team-chat': 'any',
+  'POST /admin/team-chat/alerts': 'any',
+  'POST /admin/team-chat/channels': 'owner',
   'GET /admin/staff': 'owner',
   'POST /admin/staff': 'owner',
   'POST /admin/staff/:id': 'owner',

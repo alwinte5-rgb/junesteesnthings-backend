@@ -82,6 +82,7 @@ const CREDIT = require('./tools/lib/sales-credit');
 const TEAM = require('./tools/lib/team-metrics');
 const TRAINING = require('./tools/lib/training');
 const QEXAM = require('./tools/lib/quote-exam');
+const CHAN = require('./tools/lib/team-channels');
 const HIRING = require('./tools/lib/hiring');
 const HIRE_POSTING = require('./tools/lib/hiring-posting');
 const PROOFS = require('./tools/lib/job-proofs');
@@ -1226,6 +1227,46 @@ async function initStaffTables() {
     )`);
   await pool.query(`CREATE INDEX IF NOT EXISTS team_messages_thread_idx ON team_messages (staff_id, id)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS team_messages_unread_idx ON team_messages (staff_id) WHERE read_at IS NULL`);
+  /* Team chat channels (tools/lib/team-channels.js): group conversations for
+     everyone, or for one training track. The owner is in all of them.
+     staff_id on a message is its author, NULL for the owner. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_channels (
+      id           SERIAL PRIMARY KEY,
+      name         TEXT NOT NULL,
+      audience     TEXT NOT NULL DEFAULT 'all',
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      archived_at  TIMESTAMPTZ
+    )`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_channel_messages (
+      id          BIGSERIAL PRIMARY KEY,
+      channel_id  INTEGER NOT NULL,
+      staff_id    INTEGER,
+      body        TEXT NOT NULL,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query('CREATE INDEX IF NOT EXISTS team_channel_messages_idx ON team_channel_messages (channel_id, id)');
+  /* Per reader ('owner' or 'staff:<id>') and conversation ('ch:<id>' or
+     'dm:<staff id>'): what they have read in a channel, and the newest message
+     an alert email has already been sent about. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_chat_reads (
+      reader        TEXT NOT NULL,
+      convo         TEXT NOT NULL,
+      last_read_id  BIGINT NOT NULL DEFAULT 0,
+      alerted_id    BIGINT NOT NULL DEFAULT 0,
+      PRIMARY KEY (reader, convo)
+    )`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_chat_prefs (
+      reader        TEXT PRIMARY KEY,
+      email_alerts  BOOLEAN NOT NULL DEFAULT TRUE
+    )`);
+  /* The two channels the team starts with, made once. */
+  await pool.query(`INSERT INTO team_channels (name, audience)
+                    SELECT x.name, x.audience FROM (VALUES ('Everyone', 'all'), ('Sales', 'sales')) AS x(name, audience)
+                     WHERE NOT EXISTS (SELECT 1 FROM team_channels)`);
   /* Bonuses the owner adds by hand or awards for an incentive, and the
      incentives themselves: a target over a period, for one helper or all. */
   await pool.query(`
@@ -25973,6 +26014,10 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
     .catch((e) => console.error('job cost estimate failed:', e.message));
   setTimeout(jobCostTick, 30 * 1000);
   setInterval(jobCostTick, 5 * 60 * 1000);
+  /* Team chat alert emails: every 5 minutes, so a message waits at most about
+     15 minutes before its email goes. */
+  setInterval(() => step('chat alerts', sendChatAlerts),
+    Math.max(5000, Number(process.env.JT_CHAT_ALERT_EVERY_MS) || 5 * 60 * 1000));
 }
 
 // Submit grad order
@@ -28076,13 +28121,44 @@ const TEAM_CHAT_CSS = `<style>
   overflow-wrap:anywhere;font-size:14px;line-height:1.45}
 .tc-line.me{align-self:flex-end;background:#0B1F4B;color:#fff}
 .tc-when{display:block;font-size:11px;opacity:.7;margin-top:2px}
+.tc-who{display:block;font-size:11.5px;opacity:.8;margin-bottom:2px}
 .tc-form{display:flex;gap:8px;align-items:flex-end;margin-top:12px}
 .tc-form textarea{flex:1;min-width:0}
 @media (max-width:640px){.tc-line{max-width:90%}.tc-form{flex-direction:column;align-items:stretch}}
 </style>`;
 
-/** Unread lines for whoever is signed in: helpers' lines for the owner, the
- *  owner's lines for a helper. */
+/** Channels, oldest first. */
+async function teamChannels({ withArchived = false } = {}) {
+  const { rows } = await pool.query(
+    `SELECT id, name, audience, archived_at FROM team_channels ${withArchived ? '' : 'WHERE archived_at IS NULL'} ORDER BY id`);
+  return rows;
+}
+
+/** The channels this person may use: all of them for the owner, their
+ *  track's (and everyone's) for a helper. */
+function channelsFor(actor, channels, roster) {
+  const me = actor.kind === 'staff' ? roster.find((r) => r.id === actor.id) : null;
+  return channels.filter((c) => CHAN.mayUse(actor, c, me, TRAINING.trackOf));
+}
+
+/** Unread channel messages per channel for this reader: newer than what they
+ *  have read, and not their own. */
+async function channelUnread(actor, channelIds) {
+  if (!channelIds.length) return new Map();
+  const reader = CHAN.readerKey(actor);
+  const mine = actor.kind === 'staff' ? actor.id : null;
+  const { rows } = await pool.query(
+    `SELECT m.channel_id, COUNT(*)::int AS n
+       FROM team_channel_messages m
+       LEFT JOIN team_chat_reads r ON r.reader = $1 AND r.convo = 'ch:' || m.channel_id
+      WHERE m.channel_id = ANY($2) AND m.id > COALESCE(r.last_read_id, 0)
+        AND m.staff_id IS DISTINCT FROM $3
+      GROUP BY m.channel_id`, [reader, channelIds, mine]);
+  return new Map(rows.map((r) => [r.channel_id, r.n]));
+}
+
+/** Unread lines for whoever is signed in: direct lines from the other side,
+ *  plus channel messages from anyone else. */
 async function teamChatUnread() {
   const a = currentActor() || OWNER_ACTOR;
   const { rows } = a.kind === 'staff'
@@ -28090,7 +28166,10 @@ async function teamChatUnread() {
                          WHERE staff_id = $1 AND from_owner AND read_at IS NULL`, [a.id])
     : await pool.query(`SELECT COUNT(*)::int AS n FROM team_messages m JOIN staff s ON s.id = m.staff_id
                          WHERE NOT m.from_owner AND m.read_at IS NULL`);
-  return rows[0].n;
+  const [roster, channels] = await Promise.all([staffRoster(), teamChannels()]);
+  const mine = channelsFor(a, channels, roster);
+  const per = await channelUnread(a, mine.map((c) => c.id));
+  return rows[0].n + [...per.values()].reduce((x, n) => x + n, 0);
 }
 
 /** Whose conversation a request is about: always a helper's own; for the
@@ -28102,10 +28181,25 @@ function chatThreadFor(raw, roster) {
   return id && roster.some((r) => r.id === id) ? id : null;
 }
 
+/** The channel a request is about, if this person may use it. */
+function chatChannelFor(raw, channels, roster) {
+  const id = intIn(raw);
+  if (!id) return null;
+  const c = channels.find((x) => x.id === id);
+  return c && channelsFor(currentActor() || OWNER_ACTOR, [c], roster).length ? c : null;
+}
+
 async function chatLines(staffId, after = 0) {
   const { rows } = await pool.query(
     `SELECT id, from_owner, body, created_at FROM team_messages
       WHERE staff_id = $1 AND id > $2 ORDER BY id DESC LIMIT 200`, [staffId, after]);
+  return rows.reverse();
+}
+
+async function channelLines(channelId, after = 0) {
+  const { rows } = await pool.query(
+    `SELECT id, staff_id, body, created_at FROM team_channel_messages
+      WHERE channel_id = $1 AND id > $2 ORDER BY id DESC LIMIT 200`, [channelId, after]);
   return rows.reverse();
 }
 
@@ -28117,62 +28211,131 @@ function chatMarkRead(staffId) {
     [staffId, theirsFromOwner]).catch((e) => console.error('team chat read mark failed:', e.message));
 }
 
+/** A channel is read up to the newest message this person has had on screen. */
+function channelMarkRead(channelId, upTo) {
+  if (!upTo) return Promise.resolve();
+  return pool.query(
+    `INSERT INTO team_chat_reads (reader, convo, last_read_id) VALUES ($1, $2, $3)
+     ON CONFLICT (reader, convo) DO UPDATE SET last_read_id = GREATEST(team_chat_reads.last_read_id, EXCLUDED.last_read_id)`,
+    [CHAN.readerKey(currentActor() || OWNER_ACTOR), `ch:${channelId}`, upTo])
+    .catch((e) => console.error('channel read mark failed:', e.message));
+}
+
 function chatLineJson(m) {
   const mine = (currentActor() || OWNER_ACTOR).kind === 'staff' ? !m.from_owner : m.from_owner;
   return { id: Number(m.id), mine, body: m.body, when: whenShort(m.created_at) };
 }
 
+function channelLineJson(m, roster) {
+  const a = currentActor() || OWNER_ACTOR;
+  const mine = a.kind === 'staff' ? m.staff_id === a.id : m.staff_id == null;
+  return { id: Number(m.id), mine, body: m.body, when: whenShort(m.created_at), who: mine ? '' : (m.staff_id == null ? 'June' : nameOf(roster, m.staff_id)) };
+}
+
+async function chatAlertsOn(actor) {
+  const { rows: [p] } = await pool.query('SELECT email_alerts FROM team_chat_prefs WHERE reader = $1', [CHAN.readerKey(actor)]);
+  return !p || p.email_alerts;
+}
+
 app.get('/admin/team-chat', requireAdmin, async (req, res) => {
   try {
     const actor = currentActor() || OWNER_ACTOR;
-    const roster = await staffRoster();
-    let staffId = chatThreadFor(req.query.staff, roster);
-    let chips = '';
-    if (actor.kind !== 'staff') {
+    const owner = actor.kind !== 'staff';
+    const [roster, allChannels] = await Promise.all([staffRoster(), teamChannels()]);
+    const channels = channelsFor(actor, allChannels, roster);
+    const unreadCh = await channelUnread(actor, channels.map((c) => c.id));
+    const channel = chatChannelFor(req.query.channel, allChannels, roster);
+    let staffId = channel ? null : chatThreadFor(req.query.staff, roster);
+    const chanChips = channels.map((c) => ({ label: `# ${c.name}`, href: `/admin/team-chat?channel=${c.id}`,
+      on: !!channel && channel.id === c.id, count: unreadCh.get(c.id) || null }));
+    let people = [];
+    let dmChips = [];
+    if (owner) {
       const { rows: counts } = await pool.query(
         `SELECT staff_id, COUNT(*) FILTER (WHERE NOT from_owner AND read_at IS NULL)::int AS unread,
                 MAX(created_at) AS last_at
            FROM team_messages GROUP BY staff_id`);
       const by = new Map(counts.map((c) => [c.staff_id, c]));
       // Disabled helpers stay listed only while there is a conversation to read.
-      const people = roster.filter((r) => r.active || by.has(r.id)).sort((x, y) => {
+      people = roster.filter((r) => r.active || by.has(r.id)).sort((x, y) => {
         const a = by.get(x.id) || {}, b = by.get(y.id) || {};
         return (b.unread || 0) - (a.unread || 0) || new Date(b.last_at || 0) - new Date(a.last_at || 0);
       });
-      if (!people.length) {
+      if (!people.length && !channel) {
         return res.send(adminPage('Team chat', `${pageHeader('Team chat', '')}
           <div class="card">${emptyState('No helpers yet. Add one on the Staff page, then talk to them here.',
             '<a class="btn" href="/admin/staff">Add a helper</a>')}</div>`, 'chat'));
       }
-      if (!staffId || !people.some((r) => r.id === staffId)) staffId = people[0].id;
-      chips = filterChips(people.map((r) => ({ label: r.name + (r.active ? '' : ' (disabled)'),
-        href: `/admin/team-chat?staff=${r.id}`, on: r.id === staffId, count: (by.get(r.id) || {}).unread || null })));
+      if (!channel && (!staffId || !people.some((r) => r.id === staffId))) staffId = people[0].id;
+      dmChips = people.map((r) => ({ label: r.name + (r.active ? '' : ' (disabled)'),
+        href: `/admin/team-chat?staff=${r.id}`, on: !channel && r.id === staffId, count: (by.get(r.id) || {}).unread || null }));
+    } else {
+      const { rows: [u] } = await pool.query(
+        'SELECT COUNT(*)::int AS n FROM team_messages WHERE staff_id = $1 AND from_owner AND read_at IS NULL', [actor.id]);
+      dmChips = [{ label: 'June', href: '/admin/team-chat', on: !channel, count: u.n || null }];
     }
-    const lines = await chatLines(staffId);
-    await chatMarkRead(staffId);
-    const who = roster.find((r) => r.id === staffId);
-    const canWrite = actor.kind === 'staff' || (who && who.active);
-    const other = actor.kind === 'staff' ? 'the owner' : nameOf(roster, staffId);
-    const line = (m) => { const j = chatLineJson(m);
-      return `<div class="tc-line${j.mine ? ' me' : ''}">${escEmail(j.body)}<span class="tc-when">${escEmail(j.when)}</span></div>`; };
+    let lines, lineHtml, canWrite, intro, placeholder, hidden, pollQuery;
+    if (channel) {
+      lines = await channelLines(channel.id);
+      const last = lines.length ? Number(lines[lines.length - 1].id) : 0;
+      await channelMarkRead(channel.id, last);
+      lineHtml = (m) => { const j = channelLineJson(m, roster);
+        return `<div class="tc-line${j.mine ? ' me' : ''}">${j.who ? `<b class="tc-who">${escEmail(j.who)}</b>` : ''}${escEmail(j.body)}<span class="tc-when">${escEmail(j.when)}</span></div>`; };
+      canWrite = true;
+      intro = `# ${escEmail(channel.name)}: ${channel.audience === 'all' ? 'everyone on the team' : `the ${escEmail(CHAN.AUDIENCES[channel.audience] || channel.audience)} team`} and June. Customers never see this.`;
+      placeholder = `Message # ${channel.name}`;
+      hidden = `<input type="hidden" name="channel" value="${channel.id}">`;
+      pollQuery = `channel=${channel.id}`;
+    } else {
+      lines = await chatLines(staffId);
+      await chatMarkRead(staffId);
+      const who = roster.find((r) => r.id === staffId);
+      canWrite = !owner || (who && who.active);
+      const other = !owner ? 'June' : nameOf(roster, staffId);
+      lineHtml = (m) => { const j = chatLineJson(m);
+        return `<div class="tc-line${j.mine ? ' me' : ''}">${escEmail(j.body)}<span class="tc-when">${escEmail(j.when)}</span></div>`; };
+      intro = `Just you and ${escEmail(other)}. Customers never see this.`;
+      placeholder = `Message ${other}`;
+      hidden = `<input type="hidden" name="staff" value="${staffId}">`;
+      pollQuery = `staff=${staffId}`;
+    }
     const last = lines.length ? Number(lines[lines.length - 1].id) : 0;
+    const alertsOn = await chatAlertsOn(actor);
+    res.set('Cache-Control', 'no-store');
     res.send(adminPage('Team chat', `${TEAM_CHAT_CSS}
-      ${pageHeader('Team chat', `Just you and ${escEmail(other)}. Customers never see this.`)}
+      ${pageHeader('Team chat', intro)}
       ${flash(req.query)}
-      ${chips}
+      <div class="muted" style="font-size:12px;margin:4px 0">Channels</div>${filterChips(chanChips)}
+      <div class="muted" style="font-size:12px;margin:8px 0 4px">${owner ? 'Direct' : 'Direct with June'}</div>${filterChips(dmChips)}
       <div class="card">
-        <div class="tc-log" data-tclog data-after="${last}">${lines.length ? lines.map(line).join('')
-          : `<p class="muted" data-tcempty>No messages yet. Say hello to ${escEmail(other)}.</p>`}</div>
+        <div class="tc-log" data-tclog data-after="${last}">${lines.length ? lines.map(lineHtml).join('')
+          : '<p class="muted" data-tcempty>No messages yet. Say hello.</p>'}</div>
         ${canWrite ? `<form method="post" action="/admin/team-chat" class="tc-form" data-tcform>
-          <input type="hidden" name="staff" value="${staffId}">
-          <textarea name="body" rows="2" maxlength="${TEAM_CHAT_MAX}" required placeholder="Message ${escEmail(other)}"></textarea>
+          ${hidden}
+          <textarea name="body" rows="2" maxlength="${TEAM_CHAT_MAX}" required placeholder="${escEmail(placeholder)}"></textarea>
           <button type="submit" class="btn">Send</button>
         </form>` : '<p class="muted">This helper is disabled, so the conversation is read-only.</p>'}
       </div>
+      <details class="card" id="alerts"><summary><b>Email alerts</b> <span class="muted">${alertsOn ? 'on' : 'off'}</span></summary>
+        <p class="muted">When a message waits ${CHAN.ALERT_AFTER_MIN} minutes without you reading it, you get one email for that conversation. No more for it until you have read it.</p>
+        <form method="post" action="/admin/team-chat/alerts" style="margin:0">
+          <input type="hidden" name="on" value="${alertsOn ? '0' : '1'}">
+          <button type="submit" class="btn btn-ghost">${alertsOn ? 'Turn email alerts off' : 'Turn email alerts on'}</button></form></details>
+      ${owner ? `<details class="card"><summary><b>Channels</b> <span class="muted">add or archive</span></summary>
+        ${allChannels.map((c) => `<div class="row-i"><span class="row-main"><b># ${escEmail(c.name)}</b>
+          <div class="row-sub">${escEmail(CHAN.AUDIENCES[c.audience] || c.audience)}</div></span>
+          <span class="row-end"><form method="post" action="/admin/team-chat/channels" style="margin:0">
+            <input type="hidden" name="action" value="archive"><input type="hidden" name="id" value="${c.id}">
+            <button type="submit" class="btn btn-ghost">Archive</button></form></span></div>`).join('')}
+        <form method="post" action="/admin/team-chat/channels" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
+          <input type="hidden" name="action" value="add">
+          <input name="name" maxlength="${CHAN.NAME_MAX}" required placeholder="Channel name" style="flex:1 1 180px">
+          <select name="audience">${Object.entries(CHAN.AUDIENCES).map(([k, v]) => `<option value="${k}">${escEmail(v)}</option>`).join('')}</select>
+          <button type="submit" class="btn">Add channel</button></form></details>` : ''}
       <script>
         (function(){
           var log = document.querySelector('[data-tclog]'); if (!log) return;
-          var staff = ${JSON.stringify(String(staffId))};
+          var q = ${JSON.stringify(pollQuery)};
           log.scrollTop = log.scrollHeight;
           var f = document.querySelector('[data-tcform]');
           if (f) {
@@ -28186,7 +28349,7 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
           }
           function poll(){
             if (document.hidden) return;
-            fetch('/admin/api/team-chat?staff=' + encodeURIComponent(staff) + '&after=' + encodeURIComponent(log.getAttribute('data-after')),
+            fetch('/admin/api/team-chat?' + q + '&after=' + encodeURIComponent(log.getAttribute('data-after')),
                   { credentials: 'same-origin', cache: 'no-store' })
               .then(function(r){ return r.ok ? r.json() : null; }).then(function(d){
                 if (!d || !d.lines || !d.lines.length) return;
@@ -28194,7 +28357,8 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
                 var atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
                 d.lines.forEach(function(m){
                   var el = document.createElement('div'); el.className = 'tc-line' + (m.mine ? ' me' : '');
-                  el.textContent = m.body;
+                  if (m.who) { var b = document.createElement('b'); b.className = 'tc-who'; b.textContent = m.who; el.appendChild(b); }
+                  el.appendChild(document.createTextNode(m.body));
                   var w = document.createElement('span'); w.className = 'tc-when'; w.textContent = m.when; el.appendChild(w);
                   log.appendChild(el); log.setAttribute('data-after', String(m.id));
                 });
@@ -28216,7 +28380,24 @@ app.post('/admin/team-chat', requireAdmin, async (req, res) => {
   const actor = currentActor() || OWNER_ACTOR;
   const body = text(b.body, TEAM_CHAT_MAX + 1);
   try {
-    const roster = await staffRoster();
+    const [roster, channels] = await Promise.all([staffRoster(), teamChannels()]);
+    /* A channel message: only in a channel this person may use, which the
+       server decides from their own track, never from the form. */
+    if (String(b.channel || '').trim()) {
+      const ch = chatChannelFor(b.channel, channels, roster);
+      if (!ch) return back(res, '/admin/team-chat', 'err', 'That channel is not one of yours.');
+      const backTo = `/admin/team-chat?channel=${ch.id}`;
+      if (!body) return back(res, backTo, 'err', 'Write something first.');
+      if (body.length > TEAM_CHAT_MAX) return back(res, backTo, 'err', `That is too long. Keep it under ${TEAM_CHAT_MAX} characters.`);
+      const author = actor.kind === 'staff' ? actor.id : null;
+      await pool.query(
+        `INSERT INTO team_channel_messages (channel_id, staff_id, body)
+         SELECT $1, $2, $3 WHERE NOT EXISTS (
+           SELECT 1 FROM team_channel_messages WHERE channel_id = $1 AND staff_id IS NOT DISTINCT FROM $2 AND body = $3
+              AND created_at > NOW() - interval '10 seconds')`,
+        [ch.id, author, body]);
+      return res.redirect(backTo);
+    }
     const staffId = chatThreadFor(b.staff, roster);
     const backTo = actor.kind === 'staff' || !staffId ? '/admin/team-chat' : `/admin/team-chat?staff=${staffId}`;
     if (!staffId) return back(res, '/admin/team-chat', 'err', 'Pick who to message.');
@@ -28239,14 +28420,59 @@ app.post('/admin/team-chat', requireAdmin, async (req, res) => {
   }
 });
 
+/* Each person turns their own alert emails on or off. */
+app.post('/admin/team-chat/alerts', requireAdmin, async (req, res) => {
+  const on = String((req.body || {}).on || '') === '1';
+  try {
+    await pool.query(
+      `INSERT INTO team_chat_prefs (reader, email_alerts) VALUES ($1, $2)
+       ON CONFLICT (reader) DO UPDATE SET email_alerts = EXCLUDED.email_alerts`,
+      [CHAN.readerKey(currentActor() || OWNER_ACTOR), on]);
+    return back(res, '/admin/team-chat#alerts', 'ok', on ? 'Email alerts are on.' : 'Email alerts are off.');
+  } catch (err) {
+    console.error('chat alert setting failed:', err.message);
+    return back(res, '/admin/team-chat#alerts', 'err', 'Could not save that.');
+  }
+});
+
+/* The owner adds a channel or archives one (ROUTES: owner only). An archived
+   channel disappears for everyone; its messages are kept. */
+app.post('/admin/team-chat/channels', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  try {
+    if (b.action === 'archive') {
+      const id = intIn(b.id);
+      if (!id) return back(res, '/admin/team-chat', 'err', 'No such channel.');
+      const { rowCount } = await pool.query('UPDATE team_channels SET archived_at = NOW() WHERE id = $1 AND archived_at IS NULL', [id]);
+      return back(res, '/admin/team-chat', rowCount ? 'ok' : 'err', rowCount ? 'Channel archived.' : 'No such channel.');
+    }
+    const name = CHAN.cleanName(b.name);
+    const audience = CHAN.audienceOf(String(b.audience || ''));
+    if (!name || !audience) return back(res, '/admin/team-chat', 'err', 'Give the channel a name and say who it is for.');
+    const { rows: [c] } = await pool.query('INSERT INTO team_channels (name, audience) VALUES ($1, $2) RETURNING id', [name, audience]);
+    return back(res, `/admin/team-chat?channel=${c.id}`, 'ok', `# ${name} is ready.`);
+  } catch (err) {
+    console.error('channel change failed:', err.message);
+    return back(res, '/admin/team-chat', 'err', 'Could not save that.');
+  }
+});
+
 app.get('/admin/api/team-chat', requireAdmin, async (req, res) => {
   res.set('Cache-Control', 'no-store');
   try {
+    const after0 = Number.parseInt(String(req.query.after || '0'), 10);
+    const after = Number.isSafeInteger(after0) && after0 > 0 ? after0 : 0;
     const roster = await staffRoster();
+    if (String(req.query.channel || '').trim()) {
+      const ch = chatChannelFor(req.query.channel, await teamChannels(), roster);
+      if (!ch) return res.status(404).json({ lines: [] });
+      const lines = await channelLines(ch.id, after);
+      if (lines.length) await channelMarkRead(ch.id, Number(lines[lines.length - 1].id));
+      return res.json({ lines: lines.map((m) => channelLineJson(m, roster)) });
+    }
     const staffId = chatThreadFor(req.query.staff, roster);
     if (!staffId) return res.status(404).json({ lines: [] });
-    const after = Number.parseInt(String(req.query.after || '0'), 10);
-    const lines = await chatLines(staffId, Number.isSafeInteger(after) && after > 0 ? after : 0);
+    const lines = await chatLines(staffId, after);
     if (lines.length) await chatMarkRead(staffId);
     res.json({ lines: lines.map(chatLineJson) });
   } catch (err) {
@@ -28254,6 +28480,76 @@ app.get('/admin/api/team-chat', requireAdmin, async (req, res) => {
     res.status(500).json({ lines: [] });
   }
 });
+
+/* ── Team chat email alerts ──────────────────────────────────────────────
+   Every 5 minutes (with the sweeps). For each person with alerts on, each
+   conversation whose oldest unread message from someone else is at least
+   ALERT_AFTER_MIN minutes old gets ONE email, unless one has already been
+   sent since they last read it. */
+async function sendChatAlerts() {
+  const [roster, channels] = await Promise.all([staffRoster({ activeOnly: true }), teamChannels()]);
+  const { rows: prefs } = await pool.query('SELECT reader, email_alerts FROM team_chat_prefs');
+  const off = new Set(prefs.filter((p) => !p.email_alerts).map((p) => p.reader));
+  const { rows: alerted } = await pool.query('SELECT reader, convo, alerted_id, last_read_id FROM team_chat_reads');
+  const state = new Map(alerted.map((r) => [`${r.reader}|${r.convo}`, r]));
+  const ownerTo = String(process.env.OWNER_EMAILS || '').split(',').map((e) => e.trim()).find(isValidEmail) || NOTIFY_EMAIL;
+  const readers = [
+    ...(ownerTo ? [{ actor: OWNER_ACTOR, to: ownerTo, name: 'June' }] : []),
+    ...roster.filter((r) => isValidEmail(r.email)).map((r) => ({ actor: { kind: 'staff', id: r.id }, to: r.email, name: r.name, row: r })),
+  ];
+  let sent = 0;
+  for (const rd of readers) {
+    const reader = CHAN.readerKey(rd.actor);
+    if (off.has(reader)) continue;
+    const due = [];
+    /* Direct conversations. */
+    const { rows: dms } = rd.actor.kind === 'staff'
+      ? await pool.query(`SELECT staff_id, MIN(id) AS first, MAX(id) AS last, COUNT(*)::int AS n FROM team_messages
+                           WHERE staff_id = $1 AND from_owner AND read_at IS NULL
+                             AND created_at < NOW() - make_interval(mins => $2) GROUP BY staff_id`, [rd.actor.id, CHAN.ALERT_AFTER_MIN])
+      : await pool.query(`SELECT staff_id, MIN(id) AS first, MAX(id) AS last, COUNT(*)::int AS n FROM team_messages
+                           WHERE NOT from_owner AND read_at IS NULL
+                             AND created_at < NOW() - make_interval(mins => $1) GROUP BY staff_id`, [CHAN.ALERT_AFTER_MIN]);
+    for (const d of dms) {
+      due.push({ convo: `dm:${d.staff_id}`, first: d.first, last: d.last, n: d.n,
+        where: rd.actor.kind === 'staff' ? 'your chat with June' : `your chat with ${nameOf(roster, d.staff_id)}`,
+        href: rd.actor.kind === 'staff' ? '/admin/team-chat' : `/admin/team-chat?staff=${d.staff_id}` });
+    }
+    /* Channels. */
+    const mine = channels.filter((c) => (rd.actor.kind === 'staff' ? CHAN.isMember(c, rd.row, TRAINING.trackOf) : true));
+    for (const c of mine) {
+      const st = state.get(`${reader}|ch:${c.id}`);
+      const { rows: [u] } = await pool.query(
+        `SELECT MIN(id) AS first, MAX(id) AS last, COUNT(*)::int AS n FROM team_channel_messages
+          WHERE channel_id = $1 AND id > $2 AND staff_id IS DISTINCT FROM $3
+            AND created_at < NOW() - make_interval(mins => $4)`,
+        [c.id, st ? st.last_read_id : 0, rd.actor.kind === 'staff' ? rd.actor.id : null, CHAN.ALERT_AFTER_MIN]);
+      if (u && u.n) due.push({ convo: `ch:${c.id}`, first: u.first, last: u.last, n: u.n, where: `# ${c.name}`, href: `/admin/team-chat?channel=${c.id}` });
+    }
+    for (const d of due) {
+      const st = state.get(`${reader}|${d.convo}`);
+      if (!CHAN.alertDue(d.first, st && st.alerted_id)) continue;
+      /* Claimed before sending, so two sweeps cannot both send it. */
+      const { rowCount } = await pool.query(
+        `INSERT INTO team_chat_reads (reader, convo, alerted_id) VALUES ($1, $2, $3)
+         ON CONFLICT (reader, convo) DO UPDATE SET alerted_id = EXCLUDED.alerted_id
+          WHERE team_chat_reads.alerted_id < $4`,
+        [reader, d.convo, d.last, d.first]);
+      if (!rowCount) continue;
+      const link = `${PUBLIC_BASE_URL}${d.href}`;
+      await sendEmail({
+        to: rd.to,
+        subject: `Team chat: ${d.n === 1 ? 'a new message' : `${d.n} new messages`} in ${d.where}`,
+        html: `<p>Hi ${escEmail(rd.name)},</p>
+          <p>You have ${d.n === 1 ? 'a message' : `${d.n} messages`} waiting in ${escEmail(d.where)} on June's Tees Team chat.</p>
+          <p><a href="${escEmail(link)}">Open Team chat</a></p>
+          <p style="color:#6b7280;font-size:12px">You get one email per conversation until you read it.
+            Turn these emails off on the Team chat page, under Email alerts.</p>`,
+      }).then(() => { sent++; }).catch((e) => console.error('chat alert email failed:', e.message));
+    }
+  }
+  return sent ? `${sent} sent` : '';
+}
 
 /* ── My Day ───────────────────────────────────────────────────────────────── */
 
