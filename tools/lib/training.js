@@ -52,6 +52,7 @@ const TRACKS = {
   sales:  { label: 'Sales', note: 'Leads, quotes, follow-ups and finding new customers.' },
   design: { label: 'Design', note: 'Print-ready artwork, signs, proofs, AI and its cleanup, site and blog images, and social graphics.' },
   content: { label: 'Content (video)', note: 'Shot lists, editing shorts and longer videos, music and permission rules, posting, comments and the Friday numbers.' },
+  ads: { label: 'Ads', note: 'Conversion tracking, Google Search, negatives and the $40 rule, Meta retargeting, seasonal campaigns and the weekly report.' },
 };
 const DEFAULT_TRACK = 'sales';
 
@@ -88,7 +89,7 @@ function courseSteps(course, features = FEATURES) {
     }
     for (const l of m.lessons) {
       push({ key: `lesson:${l.id}`, type: 'lesson', article: l.article, minutes: l.minutes, goals: l.goals || [],
-        checks: l.checks || [], pages: l.pages || [], tryIt: l.tryIt || [], images: l.images || [], title: l.article.replace(/^(Sales course|Lead Generation|Sales Closer|Account Manager|Design course|Content course|Team basics) [0-9a-z]+: /, '') });
+        checks: l.checks || [], pages: l.pages || [], tryIt: l.tryIt || [], images: l.images || [], title: l.article.replace(/^(Sales course|Lead Generation|Sales Closer|Account Manager|Design course|Content course|Ads course|Team basics) [0-9a-z]+: /, '') });
     }
     for (const x of m.practice || []) push(!m.quiz && x.type === 'exam' ? { ...x, gate: true } : x);
     if (m.quiz) {
