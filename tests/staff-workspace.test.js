@@ -470,7 +470,9 @@ test('team chat: a helper reaches only their own conversation', () => {
 test('team chat lines are text, never markup', () => {
   const page = route("app.get('/admin/team-chat', requireAdmin");
   assert.match(page, /escEmail\(j\.body\)/);
-  assert.match(page, /el\.textContent = m\.body/);
+  assert.match(page, /el\.appendChild\(document\.createTextNode\(m\.body\)\)/);
+  assert.match(page, /b\.textContent = m\.who/);
+  assert.match(page, /escEmail\(j\.who\)/);
   assert.doesNotMatch(page, /innerHTML/);
   const send = route("app.post('/admin/team-chat', requireAdmin");
   assert.match(send, /body\.length > TEAM_CHAT_MAX/, 'length is capped');
