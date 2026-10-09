@@ -14,7 +14,7 @@ module.exports = {
       q('Shared rules live in…', ['tools/lib, with tests in tests/', 'public/', 'The database'], 0, 'Each with its tests.'),
     ] },
     { from: 'Its database', checks: [
-      q('A schema change must be…', ['Safe to run on every start', 'Run once by hand'], 0, 'It runs at every boot.'),
+      q('A database set-up change must be…', ['Safe to run on every start', 'Run once by hand'], 0, 'It runs at every boot.'),
       q('Who else receives Stripe\'s events?', ['The design studio', 'Nobody'], 0, 'Both services.'),
     ] },
     { from: 'Around them', checks: [

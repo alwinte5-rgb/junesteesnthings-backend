@@ -320,7 +320,7 @@ When you read Railway's variables, do it so the values are not shown on your scr
 
 - Never try a change on the live database. Use a local database or a copy
 - Before a change that rewrites data ships, take a backup, and know how you would undo it
-- Schema changes run on every start, so they must be safe to run twice and safe on a table with real rows in it
+- Database set-up code runs on every start, so it must be safe to run twice and safe on a table with real rows in it
 - Never delete customer records, orders or payments to "clean up". Money is a ledger: a correction is a new row, not an edit
 
 **Customer data**
