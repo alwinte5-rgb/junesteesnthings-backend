@@ -38,7 +38,7 @@ module.exports = {
     ] },
     { from: 'Playbook', checks: [
       q('A customer asks about deposits. Quickest ready reply?', ['Google it', 'Search the Playbook (or its shortcut)', 'An old email'], 1, 'Copy the Playbook reply, then make it personal.'),
-      q('Where do you ask June something private?', ['Team chat', 'The Leads page', 'A customer email'], 0, 'Team chat is your private line to June.'),
+      q('Where do you ask June something private?', ['Direct with June, in Team chat', 'The # Sales channel', 'A customer email'], 0, 'Channels are for the team; Direct is just you and June.'),
     ] },
     { from: 'Your level, and why some things wait', checks: [
       q('Your quote says "waiting for approval". What does it mean?', ['Something broke', 'June checks it before the customer sees it', 'The customer declined'], 1, 'While you are in training, June checks quotes and messages first.'),

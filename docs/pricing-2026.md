@@ -81,7 +81,7 @@ cheaper than DTF on a small run.
 
 
 SCREEN PRINT — Anchorfish 2026, print only. Screens are NOT in these rates:
-they bill once per order at $35/screen (cost $20), screens = (colours + 1 on darks) x locations. **Since 2026-10-07 the +1 is on every garment** — see Screens below.
+they bill once per order at $25/screen (cost $20; $35 until 2026-08-30), screens = (colours + 1 on darks) x locations. **Since 2026-10-07 the +1 is on every garment** — see Screens below.
 50-piece minimum: the old bands started at 12, which contradicted it.
 
   id   colours         50-99    100-249    250-499    500-999  1000-2499  2500-7000
@@ -253,7 +253,7 @@ both, on purpose. That floor was tightened to 1.8× on 2026-08-29, away from the
 **Keep the size of this lever in view.** The garment is about 40% of a decorated
 job, so the whole move from 2% to 10% is worth about **17¢ a piece at 100** —
 $13.83 → $13.66. If a quote needs to look visibly cheaper, the print table and the
-$35 screen fee are where that lives, not here.
+$25 screen fee are where that lives, not here.
 
 **These are FLOORS** (`qty >= min`), the opposite convention to the decoration
 tables above, whose keys are band CEILINGS. Read one as the other and every band

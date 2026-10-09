@@ -136,7 +136,9 @@ test('sales roles: three jobs, an unknown one is "no role", and an unwritten rol
   for (const bad of ['', 'nope', '__proto__', 'constructor', null, undefined]) assert.strictEqual(TRAINING.salesRoleOf(bad), null);
   assert.strictEqual(TRAINING.salesRoleOf('leadgen'), 'leadgen');
   assert.deepStrictEqual(COURSES.coursesFor('sales').map((c) => c.key), ['sales-core']);
-  assert.deepStrictEqual(COURSES.coursesFor('design'), []);
+  assert.deepStrictEqual(COURSES.coursesFor('design').map((c) => c.key), ['design-core']);
+  assert.deepStrictEqual(COURSES.coursesFor('nope'), []);
+  assert.deepStrictEqual(COURSES.coursesFor('__proto__'), []);
   for (const r of Object.keys(TRAINING.SALES_ROLES)) {
     const keys = COURSES.coursesFor('sales', r).map((c) => c.key);
     assert.strictEqual(keys[0], 'sales-core', 'every salesperson takes the consolidated course first');
@@ -271,4 +273,34 @@ test('lessons read a page at a time, each page with its own questions', () => {
   const page = route("app.get('/admin/training/lesson/:id', requireAdmin");
   assert.match(page, /Math\.min\(pages, Math\.max\(1, intIn\(req\.query\.p\) \|\| 1\)\)/, 'the page number is clamped');
   assert.match(page, /!owner && !last \? ''/, 'the finish button is only on the last page');
+});
+
+test('every non-sales course opens with Team basics, registered once however many courses share it', () => {
+  const TEAM = require('../tools/lib/courses/shared-team');
+  const others = Object.values(COURSES.COURSES).filter((c) => c.track !== 'sales');
+  assert.ok(others.length >= 1);
+  for (const c of others) {
+    assert.strictEqual(c.modules[0].quiz, TEAM.MODULE.quiz, `${c.key} opens with the shared module`);
+    assert.strictEqual(c.modules[0].lessons, TEAM.MODULE.lessons);
+  }
+  assert.strictEqual(TRAINING.lessonArticles().filter((a) => /^Team basics /.test(a.title)).length, TEAM.MODULE.lessons.length);
+  assert.ok(TRAINING.QUIZZES['team-1']);
+  // Salespeople learn the same ground in the Sales course, so they do not take it twice.
+  for (const r of [null, ...Object.keys(TRAINING.SALES_ROLES)]) {
+    assert.ok(!TRAINING.visibleSteps(undefined, 'sales', r).some((s) => s.key === 'quiz:team-1'));
+  }
+});
+
+test('the Design course keeps the old checklist\'s keys, so a designer\'s ticks and passes still count', () => {
+  const keys = TRAINING.visibleSteps(new Set(['proofs']), 'design').map((s) => s.key);
+  for (const k of ['do:message', 'do:proof', 'quiz:design', 'signoff:art', 'signoff:handoff', 'signoff:ready']) assert.ok(keys.includes(k), k);
+  assert.strictEqual(keys[keys.length - 1], TRAINING.READY_KEY);
+  assert.strictEqual(TRAINING.visibleSteps(new Set(['proofs']), 'design').find((s) => s.key === 'do:proof').need, 3);
+  // What only the owner knows reaches her Playbook gaps card, and nothing else is a gap.
+  const gaps = TRAINING.lessonArticles().filter((a) => /^Design course /.test(a.title)).flatMap((a) => TRAINING.ownerGaps(a.body));
+  assert.ok(gaps.length >= 6, `${gaps.length} gaps`);
+  for (const g of gaps) assert.match(g.token, /owner to fill in/);
+  // Lesson titles lose their "Design course 3a:" prefix on the page.
+  assert.strictEqual(TRAINING.visibleSteps(undefined, 'design').find((s) => s.key === 'lesson:d3-dtf').title, 'DTF, embroidery and the rest');
+  assert.strictEqual(TRAINING.visibleSteps(undefined, 'design').find((s) => s.key === 'lesson:team-chat').title, 'Team chat and working on your own');
 });
