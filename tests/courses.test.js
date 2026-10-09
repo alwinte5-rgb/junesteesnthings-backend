@@ -335,6 +335,24 @@ test('the Ads course is the ads track\'s path: its own sign-offs, the owner\'s g
   assert.strictEqual(require('../tools/lib/team-channels').audienceOf('ads'), 'ads');
 });
 
+test('the Bookkeeper course is the bookkeeper track\'s path, and a hired bookkeeper lands on it', () => {
+  assert.ok(TRAINING.TRACKS.bookkeeper);
+  assert.strictEqual(TRAINING.trackOf('bookkeeper'), 'bookkeeper', 'the hiring role name is the track name');
+  assert.deepStrictEqual(COURSES.coursesFor('bookkeeper').map((c) => c.key), ['books-core']);
+  const keys = TRAINING.visibleSteps(undefined, 'bookkeeper').map((s) => s.key);
+  for (const k of ['quiz:team-1', 'signoff:books-receipts', 'signoff:books-tax', 'signoff:books-close', 'quiz:books-final', 'signoff:handoff']) assert.ok(keys.includes(k), k);
+  assert.strictEqual(keys[keys.length - 1], TRAINING.READY_KEY);
+  assert.ok(!TRAINING.stepOpen(TRAINING.progress(new Map(), {}, undefined, 'bookkeeper'), 'lesson:b2-money'));
+  assert.ok(TRAINING.stepOpen(TRAINING.progress(new Map(), { quizzes: { 'team-1': 1 } }, undefined, 'bookkeeper'), 'lesson:b2-money'));
+  const gaps = TRAINING.lessonArticles().filter((a) => /^Bookkeeper course /.test(a.title)).flatMap((a) => TRAINING.ownerGaps(a.body));
+  assert.ok(gaps.length >= 5, `${gaps.length} gaps`);
+  for (const g of gaps) assert.match(g.token, /owner to fill in/);
+  assert.strictEqual(TRAINING.visibleSteps(undefined, 'bookkeeper').find((s) => s.key === 'lesson:b5-tax').title, 'Illinois sales tax');
+  const list = src.slice(src.indexOf('const TRAINING_PATHS = ['), src.indexOf('];', src.indexOf('const TRAINING_PATHS = [')));
+  assert.match(list, /key: 'bookkeeper', track: 'bookkeeper'/);
+  assert.strictEqual(require('../tools/lib/team-channels').audienceOf('bookkeeper'), 'bookkeeper');
+});
+
 test('the Design course keeps the old checklist\'s keys, so a designer\'s ticks and passes still count', () => {
   const keys = TRAINING.visibleSteps(new Set(['proofs']), 'design').map((s) => s.key);
   for (const k of ['do:message', 'do:proof', 'quiz:design', 'signoff:art', 'signoff:handoff', 'signoff:ready']) assert.ok(keys.includes(k), k);
