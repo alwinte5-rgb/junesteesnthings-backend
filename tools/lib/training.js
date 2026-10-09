@@ -252,7 +252,7 @@ const PAGE_TIPS = {
   reviews: 'Customer reviews waiting to go on the site. Approve real ones; anything rude or about an order problem goes to the owner first.',
   certificates: 'Tax-exempt certificates. Check the name, the number and the date, leave a note, and let the owner approve or refuse.',
   discounts: 'Discount codes. Never offer one to win or keep a sale without the owner.',
-  chat: 'Your private conversation with the owner. Ask here whenever you are unsure; it is faster than guessing.',
+  chat: 'Channels are for the whole team or your part of it; June sees them all. Direct with June is just the two of you. Ask whenever you are unsure; it is faster than guessing.',
   playbook: 'Ready-made replies and how we do things. Type a question in plain words, or a /shortcut. Copy a reply and adjust it to the customer.',
   resources: 'The tools you work in, with a link to each and how to get in. Logins are never here: they are in the team password manager.',
   training: 'Your training path. Reading steps you tick yourself, work steps tick when you do the work, and the owner signs off the rest.',
