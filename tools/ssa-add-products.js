@@ -217,6 +217,15 @@ const WANTED = [
      50/50 will not take dye sublimation, so `isPoly` must stay false here or
      the page offers a method the shop has to refuse. */
   ['8000',     'tee',     'Gildan',      'Gildan 8000 Adult DryBlend 50/50 Tee'],
+
+  /* Asked for October 2026 for a brand-merch quote (cream / orange / chocolate
+     / green palette). 1717 is the garment-dyed tee the look calls for; no
+     Comfort Colors hoodie carries that palette, so SS4500 and 18500 cover the
+     hoodie at two price points. 3483 is the shop's muscle tank. */
+  ['1717',     'tee',     'Comfort',     'Comfort Colors 1717 Garment-Dyed Heavyweight Tee'],
+  ['SS4500',   'hoodie',  'Independent', 'Independent Trading SS4500 Midweight Hooded Sweatshirt'],
+  ['18500',    'hoodie',  'Gildan',      'Gildan 18500 Heavy Blend Hooded Sweatshirt'],
+  ['3483',     'tee',     'BELLA',       'BELLA + CANVAS 3483 Jersey Muscle Tank'],
 ];
 
 /* Sublimation needs a poly garment, so it is added only where the fabric
