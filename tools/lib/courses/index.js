@@ -15,8 +15,11 @@
 
 const SALES_CORE = require('./sales-core');
 const SALES_LEADGEN = require('./sales-leadgen');
+const SALES_CLOSER = require('./sales-closer');
+const SALES_ACCOUNTS = require('./sales-accounts');
 
-const COURSES = { [SALES_CORE.key]: SALES_CORE, [SALES_LEADGEN.key]: SALES_LEADGEN };
+const COURSES = { [SALES_CORE.key]: SALES_CORE, [SALES_LEADGEN.key]: SALES_LEADGEN, [SALES_CLOSER.key]: SALES_CLOSER,
+  [SALES_ACCOUNTS.key]: SALES_ACCOUNTS };
 
 /* The three sales jobs. Until all three are filled, everyone does all of it. */
 const SALES_ROLES = {
