@@ -43,6 +43,17 @@ const GLOSSARY = {
   'testflight': 'Apple\'s way to send a test build of an iPhone app to testers before it goes to the App Store.',
 };
 
+/* Added 2026-10-09, after the course went live: how the developer gets
+   Claude Code. The lesson's first published body is in `was`, so a copy June
+   has not edited is replaced; one she edited keeps her version. */
+const CLAUDE_ACCOUNT = `**Your Claude account**
+
+[owner to fill in: which Claude account and plan the developer uses for Claude Code, paid by the shop]
+
+Use your own seat, never June's login. Install Claude Code on your computer, sign in with that account, and start it inside the repository: the repository's CLAUDE.md loads AGENTS.md, so every session starts with our rules.
+
+`;
+
 const MODULES = [
   /* ── 1 ── */
   TEAM.MODULE,
@@ -570,7 +581,7 @@ Whatever Claude Code writes, you are the one who merged it:
 - Check it did what you asked, and only that. AI tools like to tidy nearby code, rename things and add features nobody asked for
 - Check it did not quietly weaken a check to make a test pass: a removed permission, a skipped test, a looser validation
 
-**The rules it works by**
+${CLAUDE_ACCOUNT}**The rules it works by**
 
 The repository's AGENTS.md is the rulebook for every agent and person: the money rules, the SQL rules, what an agent may and may not change, and how to deliver work. Read it once fully. When Claude Code breaks one of its rules, the rule wins.
 
@@ -767,6 +778,11 @@ const FINAL = {
   ],
 };
 FINAL.quiz.questions = require('./dev-core-final')(A);
+
+{
+  const l = MODULES.flatMap((m) => m.lessons).find((x) => x.id === 'v6-claude');
+  l.was = [l.body.replace(CLAUDE_ACCOUNT, '')];
+}
 
 const PAGES = require('./dev-core-pages');
 for (const l of MODULES.flatMap((m) => m.lessons)) {
