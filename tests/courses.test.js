@@ -48,12 +48,15 @@ test('every course is an eight-hour day with at least an hour of buffer', () => 
 
 test('every module teaches something and checks it; every quiz passes at 80%', () => {
   const quizKeys = new Set();
+  const seen = new Set(); // Team basics is one quiz object shared by every non-sales course
   for (const c of Object.values(COURSES.COURSES)) {
     for (const m of c.modules) {
       assert.ok(m.lessons.length || (m.practice || []).some((x) => x.type === 'exam'), `${m.key} has no lesson`);
       assert.ok(m.quiz || (m.practice || []).some((x) => x.type === 'exam'), `${m.key} is never checked`);
     }
     for (const z of [...c.modules.map((m) => m.quiz).filter(Boolean), c.final.quiz]) {
+      if (seen.has(z)) continue;
+      seen.add(z);
       assert.ok(!quizKeys.has(z.key), `quiz ${z.key} twice`);
       quizKeys.add(z.key);
       const q = TRAINING.QUIZZES[z.key];
@@ -289,6 +292,27 @@ test('every non-sales course opens with Team basics, registered once however man
   for (const r of [null, ...Object.keys(TRAINING.SALES_ROLES)]) {
     assert.ok(!TRAINING.visibleSteps(undefined, 'sales', r).some((s) => s.key === 'quiz:team-1'));
   }
+});
+
+test('the Content course is the content track\'s path: its own sign-offs, the owner\'s gaps, and the promotion step last', () => {
+  assert.ok(TRAINING.TRACKS.content);
+  assert.deepStrictEqual(COURSES.coursesFor('content').map((c) => c.key), ['content-core']);
+  const keys = TRAINING.visibleSteps(undefined, 'content').map((s) => s.key);
+  for (const k of ['quiz:team-1', 'signoff:content-edit', 'signoff:content-report', 'quiz:content-final', 'signoff:handoff']) assert.ok(keys.includes(k), k);
+  assert.strictEqual(keys[keys.length - 1], TRAINING.READY_KEY);
+  // Module 2 stays shut until Team basics is passed.
+  assert.ok(!TRAINING.stepOpen(TRAINING.progress(new Map(), {}, undefined, 'content'), 'lesson:c2-why'));
+  assert.ok(TRAINING.stepOpen(TRAINING.progress(new Map(), { quizzes: { 'team-1': 1 } }, undefined, 'content'), 'lesson:c2-why'));
+  const gaps = TRAINING.lessonArticles().filter((a) => /^Content course /.test(a.title)).flatMap((a) => TRAINING.ownerGaps(a.body));
+  assert.ok(gaps.length >= 5, `${gaps.length} gaps`);
+  for (const g of gaps) assert.match(g.token, /owner to fill in/);
+  assert.strictEqual(TRAINING.visibleSteps(undefined, 'content').find((s) => s.key === 'lesson:c4-edit').title, 'Editing a short');
+  // The path is listed for the owner, and a hired content editor lands on it.
+  const list = src.slice(src.indexOf('const TRAINING_PATHS = ['), src.indexOf('];', src.indexOf('const TRAINING_PATHS = [')));
+  assert.match(list, /key: 'content', track: 'content'/);
+  assert.match(src, /add_track: r\.role === 'designer' \? 'design' : TRAINING\.trackOf\(r\.role\)/);
+  assert.strictEqual(TRAINING.trackOf('content'), 'content');
+  assert.strictEqual(require('../tools/lib/team-channels').audienceOf('content'), 'content');
 });
 
 test('the Design course keeps the old checklist\'s keys, so a designer\'s ticks and passes still count', () => {

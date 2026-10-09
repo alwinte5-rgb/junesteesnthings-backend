@@ -28206,7 +28206,7 @@ app.post('/admin/tasks/:id/done', requireAdmin, async (req, res) => {
    the owner keeps. Links and how to get in only: logins live in the team
    password manager, never here. A helper sees the tools for everyone and for
    their own path; the owner sees and edits all of them (ROUTES). */
-const RESOURCE_AUDIENCES = { all: 'Everyone', sales: 'Sales', design: 'Design' };
+const RESOURCE_AUDIENCES = { all: 'Everyone', sales: 'Sales', design: 'Design', content: 'Content' };
 
 function resourceFromForm(b) {
   const url = text(b.url, 500);
@@ -29111,6 +29111,7 @@ const TRAINING_PATHS = [
   { key: 'sales', track: 'sales', role: null, label: 'Sales: all sales work', note: 'Everyone in sales until a role is assigned.' },
   ...Object.entries(TRAINING.SALES_ROLES).map(([k, r]) => ({ key: `sales-${k}`, track: 'sales', role: k, label: `Sales: ${r.label}`, note: r.goal })),
   { key: 'design', track: 'design', role: null, label: 'Design', note: TRAINING.TRACKS.design.note },
+  { key: 'content', track: 'content', role: null, label: 'Content (video)', note: TRAINING.TRACKS.content.note },
 ];
 
 app.get('/admin/training/paths', requireAdmin, async (req, res) => {
@@ -30253,7 +30254,7 @@ function hireDecisionCard(r) {
       ${r.decision ? '<button class="btn btn-ghost" type="submit" name="decision" value="">Clear</button>' : ''}</form>
     ${r.decision === 'hired' ? `<p style="margin-top:10px">Marking someone hired does not put them on Team. Add them as a helper next,
       with the email they will sign in with; their Training page and the playbook take it from there.</p>
-      <a class="btn" href="/admin/staff?${new URLSearchParams({ add_name: r.name, add_track: r.role === 'designer' ? 'design' : 'sales' })}#add">Add ${escEmail(r.name)} to Team</a>` : ''}
+      <a class="btn" href="/admin/staff?${new URLSearchParams({ add_name: r.name, add_track: r.role === 'designer' ? 'design' : TRAINING.trackOf(r.role) })}#add">Add ${escEmail(r.name)} to Team</a>` : ''}
     ${r.decision === 'rejected' ? `<p class="muted">Their test links are closed and no more emails come about them.</p>${hireRejectionBox(r)}` : ''}</div>`;
 }
 

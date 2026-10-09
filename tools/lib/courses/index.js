@@ -13,7 +13,8 @@
    tools/lib/training.js turns it into steps; tests/courses.test.js checks every
    course adds up to eight hours with at least an hour of buffer.
 
-   Every other job has one course of its own (design-core.js for designers).
+   Every other job has one course of its own (design-core.js for designers,
+   content-core.js for the content (video) person).
    Each opens with the Team basics module (shared-team.js), the same module
    object in every course: its quiz and lessons are registered once. */
 
@@ -22,12 +23,13 @@ const SALES_LEADGEN = require('./sales-leadgen');
 const SALES_CLOSER = require('./sales-closer');
 const SALES_ACCOUNTS = require('./sales-accounts');
 const DESIGN_CORE = require('./design-core');
+const CONTENT_CORE = require('./content-core');
 
 const COURSES = { [SALES_CORE.key]: SALES_CORE, [SALES_LEADGEN.key]: SALES_LEADGEN, [SALES_CLOSER.key]: SALES_CLOSER,
-  [SALES_ACCOUNTS.key]: SALES_ACCOUNTS, [DESIGN_CORE.key]: DESIGN_CORE };
+  [SALES_ACCOUNTS.key]: SALES_ACCOUNTS, [DESIGN_CORE.key]: DESIGN_CORE, [CONTENT_CORE.key]: CONTENT_CORE };
 
 /* The course each non-sales track walks. */
-const TRACK_COURSES = { design: [DESIGN_CORE] };
+const TRACK_COURSES = { design: [DESIGN_CORE], content: [CONTENT_CORE] };
 
 /* The three sales jobs. Until all three are filled, everyone does all of it. */
 const SALES_ROLES = {
