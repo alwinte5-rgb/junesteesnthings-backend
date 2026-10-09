@@ -166,6 +166,20 @@ for (const m of METHODS) {
   }
 }
 
+/* RETIRED 2026-10-08, the owner's call: these fixed sizes were showing twice in
+   the staff quote form beside the sign products that replaced them, which size
+   and price every sign from the backend's table (tools/lib/quote-signs.js):
+     banners      -> #196 Custom Size Vinyl Banner (any size)
+     posters, acrylic, canvas prints -> #204 photo panels, #205 stretched canvas
+     window / wall / vehicle graphics -> #199 / #200 / #201
+     vehicle magnets -> #202 and #203
+   A rerun keeps them OFF and never creates them again. They are switched off,
+   not deleted, because saved quotes that used them still re-price by title.
+   The old products were deleted (backup: ~/.jtees-backups/old-sign-products-2026-10-08.json). */
+const RETIRED_METHOD = /^(Vinyl Banner|Poster|Window Graphic|Wall Graphic|Vehicle Graphic|Vehicle Magnet|Acrylic Panel|Canvas Print) — /;
+const RETIRED_PRODUCTS = new Set(['Vinyl Banners', 'Posters & Prints', 'Window & Wall Graphics', 'Vehicle Magnets', 'Acrylic & Canvas']);
+const isRetiredMethod = (title) => RETIRED_METHOD.test(title);
+
 const PRODUCTS = [
   ['Full Body Cutouts', 'Life-size cutouts on rigid corrugated plastic. Send a full-length photo and choose 4mm or 10mm; the 10mm stands on its own.'],
   ['Vinyl Banners', 'Custom printed vinyl banners with welded edges and grommets included. Indoor or outdoor, in 13oz, 15oz and 18oz.'],
@@ -178,6 +192,7 @@ const PRODUCTS = [
 console.log('');
 for (const [name] of PRODUCTS) {
   const got = mysql(url, 'SELECT id FROM lumise_products WHERE name=' + sq(name) + ';', { rows: true });
+  if (RETIRED_PRODUCTS.has(name)) { console.log('  retired' + (got.length ? ' product #' + got[0].id : '') + '  ' + name + '  (kept off)'); continue; }
   console.log('  ' + (got.length ? 'product #' + got[0].id : 'create product') + '  ' + name + '  (no price — the size carries it)');
 }
 
@@ -195,6 +210,10 @@ const calc = (bands, minQty) => enjson({
 const author = mysql(url, 'SELECT author FROM lumise_products WHERE active=1 LIMIT 1;', { rows: true })[0].author;
 
 for (const m of METHODS) {
+  if (isRetiredMethod(m.title)) {
+    if (have.has(m.title)) mysql(url, 'UPDATE lumise_printings SET active=0, updated=NOW() WHERE id=' + have.get(m.title) + ';');
+    continue;
+  }
   if (have.has(m.title)) {
     mysql(url, 'UPDATE lumise_printings SET calculate=' + sq(calc(m.bands, m.min)) + ', description=' + sq(m.description) +
       ', active=1, updated=NOW() WHERE id=' + have.get(m.title) + ';');
@@ -205,6 +224,10 @@ for (const m of METHODS) {
 }
 for (const [name, description] of PRODUCTS) {
   const got = mysql(url, 'SELECT id FROM lumise_products WHERE name=' + sq(name) + ';', { rows: true });
+  if (RETIRED_PRODUCTS.has(name)) {
+    if (got.length) mysql(url, 'UPDATE lumise_products SET active=0, updated=NOW() WHERE id=' + got[0].id + ';');
+    continue;
+  }
   if (got.length) {
     mysql(url, 'UPDATE lumise_products SET description=' + sq(description) + ", price=0, active=1, updated=NOW() WHERE id=" + got[0].id + ';');
   } else {
