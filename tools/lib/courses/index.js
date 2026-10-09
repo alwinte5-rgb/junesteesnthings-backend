@@ -14,8 +14,9 @@
    course adds up to eight hours with at least an hour of buffer. */
 
 const SALES_CORE = require('./sales-core');
+const SALES_LEADGEN = require('./sales-leadgen');
 
-const COURSES = { [SALES_CORE.key]: SALES_CORE };
+const COURSES = { [SALES_CORE.key]: SALES_CORE, [SALES_LEADGEN.key]: SALES_LEADGEN };
 
 /* The three sales jobs. Until all three are filled, everyone does all of it. */
 const SALES_ROLES = {
