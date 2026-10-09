@@ -340,7 +340,8 @@ async function initDB() {
      requests were told apart only by their description until this existed. */
   /* chat_transcript: the whole tawk.to conversation, [{who, name, text, at}]
      (tawkTranscript, 2026-10-06), shown on the lead's card. */
-  for (const col of [`source TEXT DEFAULT 'form'`, 'chat_ref TEXT', 'chat_transcript JSONB']) {
+  /* design_url: the reopen link of a design sent from the designer (/api/design-lead). */
+  for (const col of [`source TEXT DEFAULT 'form'`, 'chat_ref TEXT', 'chat_transcript JSONB', 'design_url TEXT']) {
     await pool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
   /* Chats already waiting with no way to reach the person are let go by the
@@ -5189,6 +5190,97 @@ app.post('/api/embroidery-quote', countFormFailures('embroidery'), orderRateLimi
   }
 });
 
+
+// ─── A design sent from the designer as a quote lead (2026-10-09) ────────────
+/* "Email me this design + price" in design.jtees.net. The designer has taken
+   no real order since card payments went live, while quotes are what sell, so
+   a visitor who is not ready to pay online hands the design to the team
+   instead. Called by the designer only (X-JT-Key), never by a browser: the
+   designer checks origin, rate-limits the visitor, stores the preview and the
+   reopen link, and sends them here. Kept in `submissions` first, like every
+   enquiry, so a failed email can never lose it. */
+const DESIGNER_BASE = (process.env.JT_DESIGNER_URL || 'https://design.jtees.net').replace(/\/+$/, '');
+function designerUrlOk(u) {
+  const v = String(u || '');
+  return v.length <= 500 && v.startsWith(DESIGNER_BASE + '/') && !/[\s"'<>]/.test(v);
+}
+app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 6), async (req, res) => {
+  try {
+    const b = req.body || {};
+    const name  = String(b.name || '').trim().slice(0, 120);
+    const email = String(b.email || '').trim().toLowerCase().slice(0, 200);
+    const phone = String(b.phone || '').replace(/\D/g, '').slice(-10);
+    const note  = String(b.note || '').trim().slice(0, 1000);
+    const product = String(b.product || '').trim().slice(0, 200);
+    const summary = String(b.summary || '').trim().slice(0, 1200);
+    const total = Number.isFinite(Number(b.total)) ? Math.max(0, Math.min(100000, Number(b.total))) : 0;
+    const previewUrl = String(b.preview_url || '').trim();
+    const designUrl  = String(b.design_url || '').trim();
+    if (!name || (!email && !phone)) return res.status(400).json({ error: 'A name and an email or phone are required.' });
+    if (email && !isValidEmail(email)) return res.status(400).json({ error: 'That email address does not look valid.' });
+    if (b.phone && phone.length !== 10) return res.status(400).json({ error: 'That phone number does not look right.' });
+    if ((previewUrl && !designerUrlOk(previewUrl)) || !designerUrlOk(designUrl)) return res.status(400).json({ error: 'bad design reference' });
+
+    await recordSmsConsent(parseSmsConsent(b),
+      { source: 'design-lead', ip: String(b.ip || '').slice(0, 64), userAgent: String(b.ua || '').slice(0, 300) });
+
+    const description = ['DESIGN FROM THE DESIGNER', product && `${product}`, summary, total ? `shown $${total.toFixed(2)}` : '',
+      note && `note: ${note}`].filter(Boolean).join(' · ').slice(0, 2000);
+    const dedupeKey = crypto.createHash('sha256').update(['design', email, phone, designUrl,
+      Math.floor(Date.now() / (10 * 60 * 1000))].join('|')).digest('hex');
+    let savedId = null;
+    try {
+      const { rows } = await pool.query(
+        `INSERT INTO submissions (name, phone, email, description, photo_url, design_url, dedupe_key, source)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'designer')
+         ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
+         RETURNING id`,
+        [name, phone, email, description, previewUrl || null, designUrl, dedupeKey]);
+      if (!rows.length) return res.json({ ok: true, duplicate: true });   // a second click
+      savedId = rows[0].id;
+    } catch (err) {
+      reportError('design-lead:save', err).catch(() => {});
+    }
+
+    const img = previewUrl ? `<p><img src="${escEmail(previewUrl)}" alt="Design preview" style="max-width:100%;border:1px solid #e3e8f2;border-radius:8px"></p>` : '';
+    try {
+      await sendEmail({
+        to: NOTIFY_EMAIL,
+        replyTo: email || NOTIFY_EMAIL,
+        subject: `New design from the designer — ${name}${total ? ` ($${total.toFixed(2)})` : ''}`,
+        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
+          <h2 style="color:#1848B8;">A customer sent their design</h2>
+          <p><b>${escEmail(name)}</b> &middot; ${escEmail(email) || '—'} &middot; ${escEmail(phone) || '—'}</p>
+          <p>${escEmail(product)}${summary ? '<br>' + escEmail(summary).replace(/\n/g, '<br>') : ''}${total ? `<br>Price shown: <b>$${total.toFixed(2)}</b>` : ''}</p>
+          ${note ? `<p><b>Note:</b> ${escEmail(note)}</p>` : ''}${img}
+          <p><a href="${escEmail(designUrl)}">Open the design</a> &middot; it is on the leads page as "Designer".</p></div>`,
+      });
+    } catch (err) {
+      reportError('design-lead:notify-shop', err).catch(() => {});
+      if (!savedId) throw err;
+    }
+    syncToBrevo({ name, email, phone })
+      .then(() => savedId && pool.query('UPDATE submissions SET brevo_synced_at = NOW() WHERE id = $1', [savedId]))
+      .catch((err) => { if (!savedId) reportError('design-lead:brevo', err).catch(() => {}); });
+    if (email) {
+      await sendEmail({
+        to: email,
+        subject: 'Your June’s Tees design and price',
+        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
+          <h2 style="color:#1848B8;">Here’s your design, ${escEmail(name.split(' ')[0])}!</h2>
+          ${img}
+          <p>${escEmail(product)}${summary ? '<br>' + escEmail(summary).replace(/\n/g, '<br>') : ''}${total ? `<br>Price: <b>$${total.toFixed(2)}</b>` : ''}</p>
+          <p><a href="${escEmail(designUrl)}" style="display:inline-block;background:#1848B8;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none;font-weight:bold">Open my design</a></p>
+          <p>We’ll be in touch within 1 business day to help you finish it. Questions? Call or text <a href="tel:+17738491854">(773) 849-1854</a>.</p>
+          <p style="color:#999;font-size:12px;margin-top:24px;">June’s Tees &amp; Things · Chicago, IL</p></div>`,
+      }).catch(() => {});
+    }
+    res.json({ ok: true, id: savedId });
+  } catch (err) {
+    console.error('design-lead error:', err.message);
+    res.status(500).json({ error: 'Something went wrong — please call or text (773) 849-1854.' });
+  }
+});
 
 // ─── Internal APIs for design.jtees.net (shared-secret) ──────────────────────
 
@@ -21580,6 +21672,7 @@ async function unansweredLeads() {
 const LEAD_SOURCES = {
   form:       ['Website form', 'blue'],
   embroidery: ['Embroidery', 'amber'],
+  designer:   ['Designer', 'blue'],
   chat:       ['Chat', 'green'],
   offline:    ['Offline message', 'green'],
   social:     ['Social', 'blue'],
@@ -21622,7 +21715,10 @@ function leadCardHtml(l, { back = '/admin/quotes', roster = null } = {}) {
           <span class="muted" style="font-size:12.5px">${escEmail(ageInWords(l.created_at))}</span>
         </div>
         ${l.description ? `<div class="muted" style="margin-top:6px;font-size:13.5px">${
-          escEmail(String(l.description).slice(0, 300))}</div>` : ''}${contactedLine}
+          escEmail(String(l.description).slice(0, 300))}</div>` : ''}${
+          l.source === 'designer' && l.design_url ? `<div style="margin-top:8px;display:flex;gap:10px;align-items:center">${
+            l.photo_url ? `<img src="${escEmail(l.photo_url)}" alt="" style="width:72px;height:72px;object-fit:contain;border:1px solid #e3e8f2;border-radius:6px;background:#fff">` : ''}
+            <a href="${escEmail(l.design_url)}" target="_blank" rel="noopener">Open the design</a></div>` : ''}${contactedLine}
         <div class="muted" style="margin-top:8px;font-size:12.5px">
           ${/* Joined, so a lead with no email does not open on a separator. An
                 anonymous chat has neither email nor phone, and tawk.to is the
@@ -21717,7 +21813,7 @@ const shopMonth = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: SHO
 app.get('/admin/leads', requireAdmin, async (req, res) => {
   try {
     const STATUSES = ['open', 'new', 'contacted', 'quoted', 'dismissed', 'all'];
-    const SOURCES = ['all', 'form', 'embroidery', 'chat', 'phone', 'social'];
+    const SOURCES = ['all', 'form', 'designer', 'embroidery', 'chat', 'phone', 'social'];
     const status = STATUSES.includes(String(req.query.status)) ? String(req.query.status) : 'open';
     const inStatus = (l, st) => st === 'all' || l.lead_status === st || (st === 'open' && (l.lead_status === 'new' || l.lead_status === 'contacted'));
     const source = SOURCES.includes(String(req.query.source)) ? String(req.query.source) : 'all';
@@ -21786,6 +21882,7 @@ app.get('/admin/leads', requireAdmin, async (req, res) => {
     const sourceChips = filterChips([
       { label: 'Every source', href: link({ source: 'all' }), on: source === 'all' },
       { label: 'Website form', href: link({ source: 'form' }), count: count(status, 'form'), on: source === 'form' },
+      { label: 'Designer', href: link({ source: 'designer' }), count: count(status, 'designer'), on: source === 'designer' },
       { label: 'Embroidery', href: link({ source: 'embroidery' }), count: count(status, 'embroidery'), on: source === 'embroidery' },
       { label: 'Chat', href: link({ source: 'chat' }), count: count(status, 'chat'), on: source === 'chat' },
       { label: 'Calls & texts', href: link({ source: 'phone' }), count: count(status, 'phone'), on: source === 'phone' },
