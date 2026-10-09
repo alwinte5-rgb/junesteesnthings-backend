@@ -25,7 +25,7 @@ const scrub = (v) => (typeof v === 'string' ? v.replace(EMAIL, '[email]').replac
   const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
   try {
     const { rows } = await pool.query(
-      `SELECT q.code, q.items, q.subtotal, q.tax, q.taxable, q.total, q.rush_pct,
+      `SELECT q.code, q.created_at::date::text AS created_on, q.items, q.subtotal, q.tax, q.taxable, q.total, q.rush_pct,
               q.discount_kind, q.discount_value, (q.needed_by - q.created_at::date) AS days_to_need,
               s.description AS request
          FROM quotes q LEFT JOIN submissions s ON s.id = q.from_submission_id

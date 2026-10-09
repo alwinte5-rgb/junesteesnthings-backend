@@ -62,7 +62,9 @@ test('training is complete only when every visible step is done', () => {
   const ticks = new Map(steps.filter((s) => ['lesson', 'read', 'signoff'].includes(s.type)).map((s) => [s.key, { done_at: new Date() }]));
   const quizzes = Object.fromEntries(steps.filter((s) => s.type === 'quiz').map((s) => [s.quiz, 1]));
   assert.strictEqual(TRAINING.progress(ticks, { leads: 1, messages: 1, prospects: 2, quizzes }).complete, false);
-  const p = TRAINING.progress(ticks, { leads: 1, messages: 2, prospects: 3, quizzes });
+  assert.strictEqual(TRAINING.progress(ticks, { leads: 1, messages: 2, prospects: 3, quizzes }).complete, false,
+    'the quote exam is part of it');
+  const p = TRAINING.progress(ticks, { leads: 1, messages: 2, prospects: 3, quizzes, exams: { 'sales-core': 1 } });
   assert.strictEqual(p.complete, true);
   assert.strictEqual(p.done, p.total);
 });

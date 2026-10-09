@@ -58,7 +58,7 @@ test('a draft being sent is logged as sent and answers its lead', () => {
 });
 
 test('the form offers Save as draft only where a draft is possible', () => {
-  assert.match(src, /const canDraft = !isEdit \|\| isDraft;/);
+  assert.match(src, /const canDraft = \(!isEdit \|\| isDraft\) && !exam;/, 'and never on a practice (exam) quote');
   assert.match(form, /\$\{canDraft \? `<button type="submit" name="draft" value="1" id="qfdraft"/);
   /* The draft button waits for photo uploads, as the main one does. */
   assert.match(form, /if \(qfdraft\) \{ qfdraft\.disabled = upPending > 0;/);

@@ -657,7 +657,7 @@ The customer's link always shows the latest version, so a fix is just an edit an
     lessons: [],
     practice: [
       { key: 'exam:quotes', type: 'exam', exam: 'sales-core', minutes: 45, needs: 'quoteexam',
-        title: 'Pass the quote exam', hint: 'Real requests June has already quoted. Build each one in practice mode; the system checks it against her quote. 80% to pass.' },
+        title: 'Pass the quote exam', hint: '12 customer requests, four from our newest real orders. Build each one in practice mode: nothing is sent or saved as a quote, and the system checks your choices. 80% to pass.' },
     ],
     quiz: null,
     buffer: 5,
