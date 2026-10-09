@@ -71,7 +71,7 @@ There is no build step and no frontend framework. Admin pages are HTML written b
 
 **Its database**
 
-PostgreSQL. Tables and columns are created when the server starts (CREATE TABLE IF NOT EXISTS, ADD COLUMN IF NOT EXISTS). A schema change ships with the code that needs it, and must be safe to run on every start.
+PostgreSQL. The server sets up its own tables and columns each time it starts, written so that running it again changes nothing. A database change ships with the code that needs it, and must be safe to run on every start.
 
 **The design studio (design.jtees.net)**
 
@@ -138,8 +138,8 @@ Other people and AI agents work in the same repository. Before starting, check n
       key: 'dev-2', title: 'Module 2 quiz: the stack, and how a change ships', minutes: 10,
       questions: [
         { id: 'tables', q: 'How are database tables created in the backend?',
-          choices: ['By hand in a database console', 'When the server starts, with IF NOT EXISTS', 'Never', 'By Stripe'],
-          answer: 1, article: A.stack, why: 'Schema ships with the code and must be safe to run every start.' },
+          choices: ['By hand in a database console', 'By the server\'s own start-up code, safe to run every time', 'Never', 'By Stripe'],
+          answer: 1, article: A.stack, why: 'Database changes ship with the code and must be safe to run every start.' },
         { id: 'studio', q: 'The design studio at design.jtees.net is…',
           choices: ['Part of server.js', 'A separate PHP app on MySQL in its own repository', 'A Next.js app', 'Hosted by Stripe'],
           answer: 1, article: A.stack, why: 'It talks to the backend with an internal key.' },
