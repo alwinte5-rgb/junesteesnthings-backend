@@ -108,9 +108,12 @@ test('modules open in order: everything after the first unpassed quiz is locked'
   assert.ok(!TRAINING.stepOpen(p1, 'lesson:s3-methods'));
   assert.strictEqual(p1.steps.find((s) => s.key === 'buffer:sales-core:s1').done, true, 'a module\'s buffer is done once its quiz is');
   assert.strictEqual(p1.steps.find((s) => s.key === 'buffer:sales-core:s2').done, false);
-  // A module whose exam waits for a later feature does not hold the course shut.
+  // The quote exam gates module 7 like a quiz does...
   const allQuizzes = Object.fromEntries(['s1', 's2', 's3', 's4', 's5'].map((k) => [`sales-${k}`, 1]));
-  assert.ok(TRAINING.stepOpen(TRAINING.progress(new Map(), { quizzes: allQuizzes }), 'lesson:s7-upsell'));
+  assert.ok(!TRAINING.stepOpen(TRAINING.progress(new Map(), { quizzes: allQuizzes }), 'lesson:s7-upsell'));
+  assert.ok(TRAINING.stepOpen(TRAINING.progress(new Map(), { quizzes: allQuizzes, exams: { 'sales-core': 1 } }), 'lesson:s7-upsell'));
+  // ...but a module whose exam waits for a feature not switched on does not hold the course shut.
+  assert.ok(TRAINING.stepOpen(TRAINING.progress(new Map(), { quizzes: allQuizzes }, new Set(['resources'])), 'lesson:s7-upsell'));
   // Buffers are time, not work.
   assert.ok(!p0.steps.filter((s) => s.type === 'buffer').some((s) => p0.next.includes(s)));
   assert.strictEqual(p0.total, p0.steps.filter((s) => s.type !== 'buffer').length);

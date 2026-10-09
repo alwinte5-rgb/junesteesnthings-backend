@@ -81,6 +81,7 @@ const FRAUD = require('./tools/lib/fraud-signals');
 const CREDIT = require('./tools/lib/sales-credit');
 const TEAM = require('./tools/lib/team-metrics');
 const TRAINING = require('./tools/lib/training');
+const QEXAM = require('./tools/lib/quote-exam');
 const HIRING = require('./tools/lib/hiring');
 const HIRE_POSTING = require('./tools/lib/hiring-posting');
 const PROOFS = require('./tools/lib/job-proofs');
@@ -1311,6 +1312,21 @@ async function initStaffTables() {
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
   await pool.query('CREATE INDEX IF NOT EXISTS staff_quiz_attempts_staff ON staff_quiz_attempts (staff_id, quiz_key)');
+  /* Quote exam attempts (tools/lib/quote-exam.js). A practice quote is never
+     a row in quotes: only what was built and how it was marked is kept here. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_exam_attempts (
+      id          SERIAL PRIMARY KEY,
+      staff_id    INTEGER NOT NULL,
+      exam_key    TEXT NOT NULL,
+      scenario    TEXT NOT NULL,
+      passed      BOOLEAN NOT NULL,
+      checks      JSONB NOT NULL DEFAULT '[]',
+      items       JSONB NOT NULL DEFAULT '[]',
+      total       NUMERIC(10,2),
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query('CREATE INDEX IF NOT EXISTS staff_exam_attempts_staff ON staff_exam_attempts (staff_id, exam_key)');
   /* When a helper opened each course lesson and when they finished it, so the
      owner sees "expected 20m, took 14m". Nothing is ever blocked on time. */
   await pool.query(`
@@ -9225,11 +9241,20 @@ app.get(['/admin/quote/new', '/admin/quote/:code/edit'], requireAdmin, async (re
   /* A draft is finished by saving it WITHOUT the draft button (see the save
      route), so its main button says that is what it does. */
   const isDraft = isEdit && existing.status === 'draft';
-  const canDraft = !isEdit || isDraft;
+  /* PRACTICE MODE (the quote exam, tools/lib/quote-exam.js): a new quote
+     only, opened from the exam page. The save route marks it and writes no
+     quote, so there is no draft to save. A helper reaches it only once the
+     exam's module is open. */
+  const exam = !isEdit ? QEXAM.byId(String(req.query.exam || '')) : null;
+  if (exam && !(await examOpenFor(currentActor() || OWNER_ACTOR))) {
+    return back(res, '/admin/training', 'err', 'The quote exam opens once you pass the module before it.');
+  }
+  const examDate = exam ? addBusinessDays(new Date(), exam.businessDays).toISOString().slice(0, 10) : '';
+  const canDraft = (!isEdit || isDraft) && !exam;
   /* Upsells change the items, which a helper cannot do once the job is agreed
      or paid; they still see the ideas, without the Apply button. */
   const upLocked = isEdit && !isOwner() && !!(existing.accepted_at || Number(existing.paid_amount || 0) > 0);
-  const goLabel = isDraft ? 'Finish & get the message' : isEdit ? 'Save changes' : 'Create quote & get the message';
+  const goLabel = exam ? 'Check my quote' : isDraft ? 'Finish & get the message' : isEdit ? 'Save changes' : 'Create quote & get the message';
   const eItems = (E.items && E.items.length) ? E.items : [null];
   const val = (v) => v == null ? '' : escEmail(String(v));
   const [eFirst, ...eRest] = String(E.name || '').trim().split(/\s+/);
@@ -9634,6 +9659,12 @@ function productGroupOf(name) {
         <span class="muted">The customer cannot see this quote yet. <b>Finish &amp; get the message</b> at the
         bottom sends it; <b>Save as draft</b> keeps it private.</span></div>` : ''}
       ${lead ? `<input type="hidden" name="from_submission_id" value="${lead.id}">` : ''}
+      ${exam ? `<input type="hidden" name="exam_scenario" value="${escEmail(exam.id)}">
+      <div class="card" style="border-left:4px solid #1848B8;background:#f7faff">
+        <b>Quote exam: ${escEmail(exam.title)}</b> <span class="muted">&middot; practice. Nothing is saved as a quote or sent to anyone.</span>
+        <blockquote style="margin:10px 0;padding:10px 14px;background:#fff;border-radius:8px;border:1px solid #e3e8f2">${escEmail(exam.brief)}</blockquote>
+        <p style="margin:0">They need it by <b>${escEmail(fmtDate(examDate))}</b> (${escEmail(examDate)}). Leave the name, email and phone empty.
+          Build the quote, then press <b>Check my quote</b>.</p></div>` : ''}
       <div class="card">
         <div class="row">
           <div><label>First name <span style="text-transform:none;font-weight:400">(optional)</span></label>
@@ -12170,6 +12201,16 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
       : 0;
     const total = round2(net + tax + keptDeliveryFee);
     const deposit = depositFor(total);
+
+    /* THE QUOTE EXAM. A practice quote is priced above exactly like a real
+       one, then marked here and never written: nothing below this line runs
+       for it, so it cannot reach a board, a report, commission, Brevo or a
+       customer. Only a new quote can be one. */
+    if (String(one(b.exam_scenario) || '').trim()) {
+      const sc = QEXAM.byId(String(one(b.exam_scenario)).trim());
+      if (!sc || String(req.params.code || '')) return back(res, '/admin/training', 'err', 'No such exam scenario.');
+      return finishExamAttempt(res, sc, { items, total, rushPct, catalog });
+    }
 
     const days = Math.max(1, parseInt(b.valid_days, 10) || 14);
     const validUntil = new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
@@ -28361,10 +28402,14 @@ async function trainingFacts(staffId) {
             (SELECT COUNT(*) FROM staff_activity WHERE staff_id = $1
                 AND action IN ('lead registered as theirs', 'found lead was already known'))::int AS prospects`,
     [staffId]);
-  const [{ rows: q }, { rows: [pr] }] = await Promise.all([
+  const [{ rows: q }, { rows: [pr] }, { rows: ex }] = await Promise.all([
     pool.query('SELECT quiz_key, COUNT(*)::int AS n FROM staff_quiz_attempts WHERE staff_id = $1 AND passed GROUP BY quiz_key', [staffId]),
-    pool.query('SELECT COUNT(*)::int AS n FROM job_proofs WHERE uploaded_by = $1', [staffId])]);
-  return { ...(f || {}), proofs: pr ? pr.n : 0, quizzes: Object.fromEntries(q.map((r) => [r.quiz_key, r.n])) };
+    pool.query('SELECT COUNT(*)::int AS n FROM job_proofs WHERE uploaded_by = $1', [staffId]),
+    /* An exam is passed once enough DIFFERENT scenarios have been built right. */
+    pool.query(`SELECT exam_key, COUNT(DISTINCT scenario)::int AS n FROM staff_exam_attempts
+                 WHERE staff_id = $1 AND passed AND scenario = ANY($2) GROUP BY exam_key`, [staffId, QEXAM.SCENARIOS.map((x) => x.id)])]);
+  return { ...(f || {}), proofs: pr ? pr.n : 0, quizzes: Object.fromEntries(q.map((r) => [r.quiz_key, r.n])),
+    exams: Object.fromEntries(ex.map((r) => [r.exam_key, r.n >= QEXAM.passMark() ? 1 : 0])) };
 }
 
 /** A helper's attempts at one quiz, oldest first. */
@@ -28475,6 +28520,9 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
       } else if (s.type === 'read' && !s.done && !owner) {
         action = `<form method="post" action="/admin/training/read" style="margin:0">
           <input type="hidden" name="key" value="${escEmail(s.key)}"><button type="submit" class="btn btn-ghost">I've read it</button></form>`;
+      } else if (s.type === 'exam') {
+        action = `<a class="btn ${s.done || owner ? 'btn-ghost' : ''}" href="/admin/training/exam/${escEmail(s.exam)}${owner ? `?staff=${staffId}` : ''}">${
+          owner ? 'See the scenarios' : s.done ? 'Practise again' : 'Start the exam'}</a>`;
       } else if (s.type === 'quiz') {
         action = owner ? `<a class="btn btn-ghost" href="/admin/training/quiz/${escEmail(s.quiz)}">See the questions</a>`
           : `<a class="btn ${s.done ? 'btn-ghost' : ''}" href="/admin/training/quiz/${escEmail(s.quiz)}">${s.done ? 'Take it again' : 'Take the quiz'}</a>`;
@@ -28777,6 +28825,89 @@ async function quizOpenFor(actor, key) {
   const s = p.steps.find((x) => x.type === 'quiz' && x.quiz === key);
   return !!s && !s.locked;
 }
+
+/* ── The quote exam (tools/lib/quote-exam.js) ─────────────────────────────
+   The Sales course's module 6. Each scenario is built in the real quote form
+   in practice mode; the save route prices it, then hands it here to be
+   marked, and no quote is written. */
+const QUOTE_EXAM_KEY = 'sales-core';
+
+/** May this person build exam quotes? The owner always; a helper once the
+ *  exam's module is open on their own path. */
+async function examOpenFor(actor) {
+  if (!actor || actor.kind !== 'staff') return true;
+  const p = await trainingFor(actor.id);
+  const s = p.steps.find((x) => x.type === 'exam' && x.exam === QUOTE_EXAM_KEY);
+  return !!s && !s.locked;
+}
+
+/** Marks a practice quote and shows the result. Called by the quote save
+ *  route before anything is written. */
+async function finishExamAttempt(res, sc, { items, total, rushPct, catalog }) {
+  const actor = currentActor() || OWNER_ACTOR;
+  if (!(await examOpenFor(actor))) return back(res, '/admin/training', 'err', 'The quote exam opens once you pass the module before it.');
+  const r = QEXAM.grade(sc, items, rushPct, catalog);
+  if (actor.kind === 'staff') {
+    await pool.query(
+      `INSERT INTO staff_exam_attempts (staff_id, exam_key, scenario, passed, checks, items, total)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7)`,
+      [actor.id, QUOTE_EXAM_KEY, sc.id, r.passed, JSON.stringify(r.checks), JSON.stringify(items), total]);
+    logActivity(actor, 'quote exam attempt', { type: 'exam', id: sc.id }, { passed: r.passed });
+  }
+  res.set('Cache-Control', 'no-store');
+  return res.send(adminPage('Quote exam', `
+    ${pageHeader(`${r.passed ? 'Right' : 'Not quite'}: ${sc.title}`, r.passed ? 'Every choice matches the quote June would build.' : 'Look at what was off, then try it again.')}
+    <div class="card">${r.checks.map((c) => `<div class="row-i"><span class="row-main"><b>${escEmail(c.what)}</b>
+        <div class="row-sub" style="white-space:normal">You: ${escEmail(c.got)}${c.ok ? '' : ` &middot; should be: ${escEmail(c.want)}`}</div></span>
+        <span class="row-end">${c.ok ? pill('right', 'green') : pill('off', 'red')}</span></div>`).join('')}
+      <p class="muted" style="margin-top:10px">The system priced what you built at <b>$${Number(total).toFixed(2)}</b>.</p></div>
+    <div class="card"><b>Why</b><p style="margin-top:6px">${escEmail(sc.why)}</p></div>
+    <p><a class="btn" href="/admin/training/exam/${QUOTE_EXAM_KEY}">Back to the exam</a>
+       <a class="btn btn-ghost" href="/admin/quote/new?exam=${encodeURIComponent(sc.id)}">Build it again</a></p>`, 'training'));
+}
+
+app.get('/admin/training/exam/:key', requireAdmin, async (req, res) => {
+  if (String(req.params.key) !== QUOTE_EXAM_KEY) return back(res, '/admin/training', 'err', 'No such exam.');
+  try {
+    const actor = currentActor() || OWNER_ACTOR;
+    const owner = actor.kind !== 'staff';
+    const roster = owner ? await staffRoster({ activeOnly: true }) : [];
+    const staffId = owner ? (roster.some((r) => r.id === intIn(req.query.staff)) ? intIn(req.query.staff) : null) : actor.id;
+    if (!owner && !(await examOpenFor(actor))) return back(res, '/admin/training', 'err', 'The quote exam opens once you pass the module before it.');
+    const { rows } = staffId ? await pool.query(
+      `SELECT scenario, passed, checks, total, created_at FROM staff_exam_attempts
+        WHERE staff_id = $1 AND exam_key = $2 ORDER BY created_at, id`, [staffId, QUOTE_EXAM_KEY]) : { rows: [] };
+    const tries = (id) => rows.filter((x) => x.scenario === id);
+    const passedN = QEXAM.SCENARIOS.filter((sc) => tries(sc.id).some((x) => x.passed)).length;
+    const need = QEXAM.passMark();
+    const who = owner && staffId ? roster.find((r) => r.id === staffId) : null;
+    res.set('Cache-Control', 'no-store');
+    res.send(adminPage('Quote exam', `
+      ${pageHeader(owner ? `Quote exam${who ? ` — ${who.name}` : ''}` : 'Quote exam',
+        `Build each request in the real quote form. Nothing is sent or saved as a quote. Get ${need} of ${QEXAM.SCENARIOS.length} right to pass; try each as often as you need.`,
+        owner && roster.length ? roster.map((r) => `<a class="btn ${r.id === staffId ? '' : 'btn-ghost'}" href="/admin/training/exam/${QUOTE_EXAM_KEY}?staff=${r.id}">${escEmail(r.name)}</a>`).join(' ') : '')}
+      ${flash(req.query)}
+      ${staffId ? `<div class="card"><b>${passedN} of ${QEXAM.SCENARIOS.length} right</b>${progressBar(passedN, QEXAM.SCENARIOS.length)}
+        <div class="muted">${passedN >= need ? 'Passed.' : `${need - passedN} more to pass.`}</div></div>` : ''}
+      ${QEXAM.SCENARIOS.map((sc, i) => {
+        const t = tries(sc.id);
+        const ok = t.some((x) => x.passed);
+        const last = t[t.length - 1];
+        const off = last && !last.passed ? (last.checks || []).filter((c) => !c.ok).map((c) => c.what).join(', ') : '';
+        return `<div class="card"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <b style="flex:1 1 220px">${i + 1}. ${escEmail(sc.title)}</b>${sc.real ? pill('real quote', 'neutral') : ''}
+          ${ok ? pill('right', 'green') : t.length ? pill(`${t.length} ${t.length === 1 ? 'try' : 'tries'}`, 'gray') : ''}</div>
+          <p class="muted" style="margin:6px 0">"${escEmail(sc.brief)}"</p>
+          ${off ? `<p style="margin:0 0 6px">Last try was off on: ${escEmail(off)}</p>` : ''}
+          ${owner ? `<p style="margin:0 0 6px"><b>Answer:</b> ${escEmail(sc.why)}</p>` : ''}
+          <a class="btn ${ok ? 'btn-ghost' : ''}" href="/admin/quote/new?exam=${encodeURIComponent(sc.id)}">${owner ? 'Try it yourself' : ok ? 'Build it again' : 'Build this quote'}</a></div>`;
+      }).join('')}
+      <p><a class="muted" href="/admin/training${owner && staffId ? `?staff=${staffId}` : ''}">&larr; Training</a></p>`, 'training'));
+  } catch (err) {
+    console.error('quote exam page failed:', err.message);
+    res.status(500).send(adminPage('Quote exam', '<div class="card"><div class="warn">Could not load the exam.</div></div>', 'training'));
+  }
+});
 
 app.get('/admin/training/quiz/:key', requireAdmin, async (req, res) => {
   const key = String(req.params.key || '');
@@ -29922,6 +30053,7 @@ app.post('/admin/training/restart', requireAdmin, async (req, res) => {
     if (!st) { await client.query('ROLLBACK'); return back(res, '/admin/training', 'err', 'No such helper.'); }
     await client.query(`DELETE FROM staff_training WHERE staff_id = $1 AND step_key NOT LIKE 'tip:%'`, [staffId]);
     await client.query('DELETE FROM staff_quiz_attempts WHERE staff_id = $1', [staffId]);
+    await client.query('DELETE FROM staff_exam_attempts WHERE staff_id = $1', [staffId]);
     await client.query('DELETE FROM staff_lesson_time WHERE staff_id = $1', [staffId]);
     await client.query('COMMIT');
     return back(res, `/admin/training?staff=${staffId}`, 'ok', `${st.name} starts training from the beginning.`);

@@ -47,7 +47,7 @@ const passMark = (n) => Math.ceil(n * PASS_SHARE - 1e-9);
 
 /* Features this deploy has. A later PR adds its name here, and the steps
    that wait for it appear. */
-const FEATURES = new Set(['proofs', 'resources']);
+const FEATURES = new Set(['proofs', 'resources', 'quoteexam']);
 
 const TRACKS = {
   sales:  { label: 'Sales', note: 'Leads, quotes, follow-ups and finding new customers.' },
