@@ -328,6 +328,7 @@ const ROUTES = {
   // Shop lead or rep lead: decided by the records; only the owner relabels (tools/lib/sales-credit.js).
   'POST /admin/quote/:code/sale-type': 'owner',
   'GET /admin/my-earnings': 'any',
+  'GET /admin/my-stats': 'any',
   'POST /admin/bonuses': 'owner',
   'POST /admin/bonuses/:id/delete': 'owner',
   'POST /admin/incentives': 'owner',

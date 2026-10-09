@@ -8802,6 +8802,7 @@ const ADMIN_NAV = [
   { key: 'myday',      href: '/admin/my-day',        label: 'My Day',     icon: 'check',  staffOnly: true },
   { key: 'design',     href: '/admin/design',        label: 'Design jobs', icon: 'layers', staffOnly: true },
   { key: 'earnings',   href: '/admin/my-earnings',   label: 'My earnings', icon: 'dollar', staffOnly: true },
+  { key: 'mystats',    href: '/admin/my-stats',      label: 'My stats',   icon: 'grid',   staffOnly: true },
   { key: 'dashboard',  href: '/admin/dashboard',     label: 'Dashboard',  icon: 'grid' },
   { key: 'leads',      href: '/admin/leads',         label: 'Leads',      icon: 'inbox',  badge: 'leads' },
   { key: 'quotes',     href: '/admin/quotes',        label: 'Quotes',     icon: 'file' },
@@ -26903,7 +26904,8 @@ app.get('/admin/team', requireAdmin, async (req, res) => {
             trainings[i] ? ` &middot; <a href="/admin/training?staff=${s.id}">training ${trainings[i].done}/${trainings[i].total}</a>` : ''}${
             trainings[i] && trainings[i].complete && NEXT_PRESET[STAFF.presetMatching(s.perms)]
               ? ` <a href="/admin/staff#staff-${s.id}">${pill(`Ready for ${STAFF.PRESETS[NEXT_PRESET[STAFF.presetMatching(s.perms)]].label} →`, 'green')}</a>` : ''}</div></span>
-          <span class="row-end"><a class="btn btn-ghost" href="/admin/activity?who=${s.id}">Activity</a>
+          <span class="row-end"><a class="btn btn-ghost" href="/admin/my-stats?staff=${s.id}">Stats</a>
+            <a class="btn btn-ghost" href="/admin/activity?who=${s.id}">Activity</a>
             <a class="btn btn-ghost" href="/admin/commission?staff=${s.id}">Commission</a></span></div>
         ${statTiles([
           { label: 'Leads answered', value: String(x.answered), tone: 'blue' },
@@ -26946,6 +26948,98 @@ app.get('/admin/team', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('team page failed:', err.message);
     res.status(500).send(adminPage('Team', '<div class="card"><div class="warn">Could not load the team.</div></div>', 'team'));
+  }
+});
+
+/* ── My stats ───────────────────────────────────────────────────────────────
+   Each helper's own numbers, from the work itself: the same helperScore() the
+   owner's Team page reads, plus training, finding new customers, upsells and
+   activity. A helper only ever sees their own; the owner sees anyone's with
+   ?staff= (ROUTES: any). */
+async function myStatsExtras(staffId, from, to) {
+  const edge = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? TEAM.localMidnight(v, SHOP_TZ) : v);
+  from = edge(from); to = edge(to);
+  const { rows: [x] } = await pool.query(
+    `SELECT (SELECT COUNT(*) FROM staff_activity WHERE staff_id = $1 AND created_at >= $2 AND created_at < $3
+               AND action IN ('lead registered as theirs', 'found lead was already known'))::int AS prospects,
+            (SELECT COUNT(*) FROM submissions s WHERE s.rep_id = $1 AND s.created_at >= $2 AND s.created_at < $3)::int AS rep_leads,
+            (SELECT COUNT(*) FROM submissions s WHERE s.rep_id = $1 AND s.created_at >= $2 AND s.created_at < $3
+               AND EXISTS (SELECT 1 FROM quotes q WHERE q.from_submission_id = s.id AND q.status <> 'draft'))::int AS rep_quoted,
+            (SELECT COUNT(*) FROM staff_activity WHERE staff_id = $1 AND created_at >= $2 AND created_at < $3
+               AND action = 'upsell applied')::int AS upsells,
+            (SELECT COUNT(*) FROM staff_activity WHERE staff_id = $1 AND created_at >= $2 AND created_at < $3)::int AS actions,
+            (SELECT COUNT(DISTINCT (created_at AT TIME ZONE $4)::date) FROM staff_activity
+              WHERE staff_id = $1 AND created_at >= $2 AND created_at < $3)::int AS days_active,
+            (SELECT COALESCE(AVG(q.total), 0)::float FROM quotes q
+              WHERE q.credited_to = $1 AND q.accepted_at >= $2 AND q.accepted_at < $3)::float AS avg_order`,
+    [staffId, from, to, SHOP_TZ]);
+  return x;
+}
+
+app.get('/admin/my-stats', requireAdmin, async (req, res) => {
+  try {
+    const actor = currentActor() || OWNER_ACTOR;
+    const owner = actor.kind !== 'staff';
+    const roster = await staffRoster({ activeOnly: true });
+    const staffId = owner ? (roster.some((r) => r.id === intIn(req.query.staff)) ? intIn(req.query.staff) : (roster[0] && roster[0].id)) : actor.id;
+    if (!staffId) {
+      return res.send(adminPage('My stats', `${pageHeader('Stats', '')}
+        <div class="card">${emptyState('No active helpers yet.', '<a class="btn" href="/admin/staff">Add one</a>')}</div>`, 'mystats'));
+    }
+    const period = ['week', 'last', 'month'].includes(String(req.query.period)) ? String(req.query.period) : 'week';
+    const range = periodRange(period);
+    const [x, e, p] = await Promise.all([helperScore(staffId, range.from, range.to), myStatsExtras(staffId, range.from, range.to), trainingFor(staffId)]);
+    const who = roster.find((r) => r.id === staffId) || {};
+    const role = TRAINING.salesRoleOf(who.sales_role);
+    const conv = x.sent ? `${Math.round(100 * x.accepted / x.sent)}%` : '—';
+    const reach = e.rep_leads ? `${Math.round(100 * e.rep_quoted / e.rep_leads)}%` : '—';
+    const q = (k) => (owner ? `&staff=${staffId}` : '') + k;
+    const quizSteps = p.steps.filter((s) => s.type === 'quiz');
+    const tries = await Promise.all(quizSteps.map((s) => quizAttempts(staffId, s.quiz)));
+    const firstTry = tries.filter((t) => t.length).map((t) => t[0].score / t[0].total);
+    const firstAvg = firstTry.length ? `${Math.round(100 * firstTry.reduce((a, b) => a + b, 0) / firstTry.length)}%` : '—';
+    const section = (title, tiles, note = '') => `<div class="card"><b>${escEmail(title)}</b>${note ? `<div class="muted" style="margin-top:2px">${note}</div>` : ''}${statTiles(tiles)}</div>`;
+    res.set('Cache-Control', 'no-store');
+    res.send(adminPage('My stats', `
+      ${pageHeader(owner ? `Stats — ${who.name || ''}` : 'My stats', owner ? 'What this helper sees on their own My stats page.'
+        : 'Your own numbers, worked out from your work. Nobody else on the team sees them; June does.',
+        owner && roster.length > 1 ? roster.map((r) => `<a class="btn ${r.id === staffId ? '' : 'btn-ghost'}" href="/admin/my-stats?staff=${r.id}&period=${period}">${escEmail(r.name)}</a>`).join(' ') : '')}
+      ${filterChips([{ label: 'This week', href: `/admin/my-stats?period=week${q('')}`, on: period === 'week' },
+                     { label: 'Last week', href: `/admin/my-stats?period=last${q('')}`, on: period === 'last' },
+                     { label: 'This month', href: `/admin/my-stats?period=month${q('')}`, on: period === 'month' }])}
+      ${section('Leads', [
+        { label: 'Leads answered', value: String(x.answered), tone: 'blue' },
+        { label: 'Median first reply', value: fmtMins(x.medianReply), tone: x.medianReply == null ? 'gray' : x.medianReply <= 60 ? 'green' : 'amber', sub: 'working hours only · aim under 1 hour' },
+      ])}
+      ${section('Quotes', [
+        { label: 'Quotes sent', value: String(x.sent), tone: 'navy', sub: `${x.drafted} drafted` },
+        { label: 'Accepted', value: String(x.accepted), tone: 'green', sub: `conversion ${conv}` },
+        { label: 'Average order', value: e.avg_order ? money(e.avg_order) : '—', tone: 'gold', sub: 'accepted quotes credited to you' },
+        { label: 'Upsells applied', value: String(e.upsells), tone: 'blue' },
+      ])}
+      ${section('Finding new customers', [
+        { label: 'Prospects registered', value: String(e.prospects), tone: 'blue', sub: '"I found this customer" on Leads' },
+        { label: 'Your leads', value: String(e.rep_leads), tone: 'navy' },
+        { label: 'Reached a quote', value: String(e.rep_quoted), tone: 'green', sub: `${reach} of your leads` },
+      ], role === 'leadgen' ? 'Your main numbers as Lead Generation.' : '')}
+      ${section('Money', [
+        { label: 'Collected', value: money(x.collected), tone: 'gold', sub: 'on sales credited to you, less refunds and fees' },
+        { label: 'Hours', value: x.hours ? String(x.hours) : '—', tone: 'gray', sub: 'from TimeProof' },
+      ], owner ? '' : '<a href="/admin/my-earnings">Your pay and commission are on My earnings →</a>')}
+      ${section('Training', [
+        { label: 'Steps done', value: `${p.done} of ${p.total}`, tone: p.complete ? 'green' : 'blue', href: owner ? `/admin/training?staff=${staffId}` : '/admin/training' },
+        { label: 'Quiz first tries', value: firstAvg, tone: 'navy', sub: `${firstTry.length} quizzes taken` },
+        { label: 'Lesson time', value: p.minutes.took ? fmtMins(p.minutes.took) : '—', tone: 'gray', sub: `about ${fmtMins(p.minutes.expected)} expected` },
+      ])}
+      ${section('Activity', [
+        { label: 'Days active', value: String(e.days_active), tone: 'blue' },
+        { label: 'Actions', value: String(e.actions), tone: 'gray', sub: 'leads, quotes, messages and more' },
+        { label: 'Tasks done', value: String(x.tasksDone), tone: x.overdue ? 'amber' : 'green', sub: `${x.onTime} on time · ${x.overdue} overdue` },
+      ])}
+`, 'mystats'));
+  } catch (err) {
+    console.error('my stats failed:', err.message);
+    res.status(500).send(adminPage('My stats', '<div class="card"><div class="warn">Could not load your stats.</div></div>', 'mystats'));
   }
 });
 
