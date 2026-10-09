@@ -4,7 +4,7 @@
    they can be tested on their own.
 
    A channel has an audience: everyone on the team, or one training track
-   ("sales", "design"), the same track that decides a helper's training. The
+   ("sales", "design", "content"), the same track that decides a helper's training. The
    owner is in every channel. A helper sees and posts only in the channels
    their track belongs to, and the server decides that, never the form.
 
@@ -13,7 +13,7 @@
    have read it, however many messages arrive meanwhile. */
 
 const ALERT_AFTER_MIN = 10;
-const AUDIENCES = { all: 'Everyone', sales: 'Sales', design: 'Design' };
+const AUDIENCES = { all: 'Everyone', sales: 'Sales', design: 'Design', content: 'Content' };
 const NAME_MAX = 40;
 
 /** An audience from a form, or null. */
