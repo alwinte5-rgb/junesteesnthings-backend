@@ -21,18 +21,23 @@ function route(signature) {
   return src.slice(at, src.indexOf('\n});', at));
 }
 
-test('every step has a unique key and a known type', () => {
-  const keys = TRAINING.STEPS.map((s) => s.key);
-  assert.strictEqual(new Set(keys).size, keys.length);
-  for (const s of TRAINING.STEPS) assert.ok(['read', 'do', 'signoff', 'quiz'].includes(s.type), s.key);
-  assert.ok(keys.includes(TRAINING.READY_KEY), 'training ends with the "ready" sign-off');
-  assert.strictEqual(TRAINING.STEPS[TRAINING.STEPS.length - 1].key, TRAINING.READY_KEY);
+test('every path: unique keys, known types, and it ends with the "ready" sign-off', () => {
+  const paths = [['sales', null], ...Object.keys(TRAINING.SALES_ROLES).map((r) => ['sales', r]), ...Object.keys(TRAINING.TRACKS).filter((t) => t !== 'sales').map((t) => [t, null])];
+  for (const [track, role] of paths) {
+    const steps = TRAINING.visibleSteps(new Set(['quoteexam', 'proofs', 'resources', 'eod']), track, role);
+    const keys = steps.map((s) => s.key);
+    assert.strictEqual(new Set(keys).size, keys.length, `${track}/${role}: a key twice`);
+    for (const s of steps) assert.ok(['read', 'do', 'signoff', 'quiz', 'lesson', 'buffer', 'exam'].includes(s.type), s.key);
+    assert.ok(keys.includes(TRAINING.READY_KEY), `${track}/${role}: training ends with the "ready" sign-off`);
+  }
+  assert.deepStrictEqual(TRAINING.STEPS, [], 'every path is a course now');
 });
 
-test('every reading step points at an article the playbook really seeds, by its exact title', () => {
+test('every quiz question names an article that really exists, by its exact title', () => {
   const seeded = new Set([...src.matchAll(/^\s+\{ kind: '[a-z]+'.*?title: '((?:[^'\\]|\\.)+)'/gm)].map((m) => m[1].replace(/\\'/g, "'")));
-  for (const s of TRAINING.STEPS.filter((x) => x.type === 'read')) {
-    assert.ok(seeded.has(s.article), `${s.key}: no seeded article titled "${s.article}"`);
+  for (const a of TRAINING.lessonArticles()) seeded.add(a.title);
+  for (const [key, z] of Object.entries(TRAINING.QUIZZES)) {
+    for (const x of z.questions) assert.ok(seeded.has(x.article), `${key}/${x.id}: no article titled "${x.article}"`);
   }
 });
 
@@ -71,7 +76,7 @@ test('training is complete only when every visible step is done', () => {
 
 test('a helper ticks their reading; only the owner signs off; nobody ticks work by hand', () => {
   assert.strictEqual(TRAINING.mayTick('lesson:s1-welcome', false), true);
-  assert.strictEqual(TRAINING.mayTick('read:never', false, undefined, 'design'), true);
+  assert.strictEqual(TRAINING.mayTick('lesson:team-chat', false, undefined, 'design'), true);
   assert.strictEqual(TRAINING.mayTick('signoff:ready', false), false);
   assert.strictEqual(TRAINING.mayTick('signoff:ready', true), true);
   assert.strictEqual(TRAINING.mayTick('do:lead', true), false);
@@ -243,12 +248,13 @@ test('two training paths: each ends with "ready", shares the basics, and keeps i
   for (const path of [sales, design]) assert.strictEqual(path[path.length - 1], TRAINING.READY_KEY);
   for (const k of ['do:message', 'signoff:handoff']) assert.ok(sales.includes(k) && design.includes(k), k);
   for (const k of ['do:lead', 'do:prospects', 'quiz:sales-s1', 'lesson:s8-prospect']) assert.ok(!design.includes(k), `designer is not asked to ${k}`);
-  for (const k of ['do:proof', 'read:cos', 'read:blog', 'quiz:design', 'signoff:art']) assert.ok(design.includes(k) && !sales.includes(k), k);
+  for (const k of ['do:proof', 'lesson:d9-social', 'lesson:d8-web', 'quiz:design', 'signoff:art', 'signoff:ai-cleanup', 'lesson:team-chat'])
+    assert.ok(design.includes(k) && !sales.includes(k), k);
   assert.match(TRAINING.visibleSteps(undefined, 'design').find((s) => s.key === TRAINING.READY_KEY).title, /proofs/);
   assert.strictEqual(TRAINING.trackOf('nope'), 'sales');
   assert.strictEqual(TRAINING.trackOf('__proto__'), 'sales');
-  assert.strictEqual(TRAINING.mayTick('read:blog', false, undefined, 'sales'), false, 'a step off your path cannot be ticked');
-  assert.strictEqual(TRAINING.mayTick('read:blog', false, undefined, 'design'), true);
+  assert.strictEqual(TRAINING.mayTick('lesson:d8-web', false, undefined, 'sales'), false, 'a step off your path cannot be ticked');
+  assert.strictEqual(TRAINING.mayTick('lesson:d8-web', false, undefined, 'design'), true);
   // The routes pass the helper's own path, never one from the form.
   assert.match(route("app.post('/admin/training/read', requireAdmin"), /stepByKey\(key, undefined, actor\.track, actor\.role\)/);
   assert.match(route("app.post('/admin/training/signoff', requireAdmin"), /await pathFor\(staffId\)/);
@@ -257,7 +263,7 @@ test('two training paths: each ends with "ready", shares the basics, and keeps i
 test('every artwork quiz question points at a real article, and its answers are valid', () => {
   const seeded = new Set([...src.matchAll(/^\s+\{ kind: '[a-z]+'.*?title: '((?:[^'\\]|\\.)+)'/gm)].map((m) => m[1].replace(/\\'/g, "'")));
   const z = TRAINING.QUIZZES.design;
-  assert.ok(z.questions.length >= 8 && z.pass <= z.questions.length);
+  assert.ok(z.questions.length >= 10 && z.pass === 8, 'the same quiz the design checklist had, so earlier passes count');
   for (const x of z.questions) {
     assert.ok(seeded.has(x.article), `${x.id}: no article "${x.article}"`);
     assert.ok(x.answer >= 0 && x.answer < x.choices.length, x.id);

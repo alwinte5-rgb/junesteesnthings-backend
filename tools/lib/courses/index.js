@@ -11,15 +11,23 @@
    A course is plain data: modules of lessons (playbook articles the owner can
    edit), practice steps, a quiz per module and a buffer row, then a final exam.
    tools/lib/training.js turns it into steps; tests/courses.test.js checks every
-   course adds up to eight hours with at least an hour of buffer. */
+   course adds up to eight hours with at least an hour of buffer.
+
+   Every other job has one course of its own (design-core.js for designers).
+   Each opens with the Team basics module (shared-team.js), the same module
+   object in every course: its quiz and lessons are registered once. */
 
 const SALES_CORE = require('./sales-core');
 const SALES_LEADGEN = require('./sales-leadgen');
 const SALES_CLOSER = require('./sales-closer');
 const SALES_ACCOUNTS = require('./sales-accounts');
+const DESIGN_CORE = require('./design-core');
 
 const COURSES = { [SALES_CORE.key]: SALES_CORE, [SALES_LEADGEN.key]: SALES_LEADGEN, [SALES_CLOSER.key]: SALES_CLOSER,
-  [SALES_ACCOUNTS.key]: SALES_ACCOUNTS };
+  [SALES_ACCOUNTS.key]: SALES_ACCOUNTS, [DESIGN_CORE.key]: DESIGN_CORE };
+
+/* The course each non-sales track walks. */
+const TRACK_COURSES = { design: [DESIGN_CORE] };
 
 /* The three sales jobs. Until all three are filled, everyone does all of it. */
 const SALES_ROLES = {
@@ -35,7 +43,7 @@ function salesRoleOf(r) {
 
 /** The courses a helper walks, in order: the track's core course, then their role's. */
 function coursesFor(track, role = null) {
-  if (track !== 'sales') return [];
+  if (track !== 'sales') return Object.prototype.hasOwnProperty.call(TRACK_COURSES, track) ? TRACK_COURSES[track] : [];
   const out = [SALES_CORE];
   const r = salesRoleOf(role);
   if (r && COURSES[`sales-${r}`]) out.push(COURSES[`sales-${r}`]);
@@ -44,8 +52,9 @@ function coursesFor(track, role = null) {
 
 /** Every lesson article across every course, for the playbook. */
 function lessonArticles() {
-  return Object.values(COURSES).flatMap((c) => c.modules.flatMap((m) => m.lessons.filter((l) => !l.existing).map((l) => ({
-    kind: 'course', title: l.article, tags: `training, course, ${c.title.toLowerCase()}, ${l.tags || ''}`.replace(/,\s*$/, ''),
+  const seen = new Set();
+  return Object.values(COURSES).flatMap((c) => c.modules.flatMap((m) => m.lessons.filter((l) => !l.existing && !seen.has(l) && seen.add(l)).map((l) => ({
+    kind: 'course', title: l.article, tags: `training, course, ${m.key === 'team' ? 'team basics' : c.title.toLowerCase()}, ${l.tags || ''}`.replace(/,\s*$/, ''),
     body: l.body, needsReview: true,
   }))));
 }

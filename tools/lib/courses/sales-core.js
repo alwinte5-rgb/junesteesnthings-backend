@@ -68,7 +68,7 @@ const GLOSSARY = {
   'Playbook': 'Ready replies, how-tos and guides. Type a question or a /shortcut to find one.',
   'commission': 'Your % of the price before tax, on your own (rep) leads only.',
   'cutout pack': 'Big Head Cutouts sold as a pack of heads. Often cheaper per head than singles.',
-  'Team chat': 'Your private conversation with June. Ask here whenever you are unsure.',
+  'Team chat': 'Channels for the whole team or your part of it, and Direct: your private conversation with June. Ask whenever you are unsure.',
   'quote exam': 'Real requests the owner has already quoted. You build each one and the system checks it against her answer.',
 };
 
@@ -224,7 +224,7 @@ Ready-made replies and how-tos. Type a question in plain words ("deposit", "rush
 
 **Team chat**
 
-Your private conversation with June. Ask here whenever you are unsure: it is faster than guessing, and asking is never wrong.
+Channels (# Everyone, # Sales) are for things the team needs to know; June sees them all. **Direct with June** is just the two of you: questions about a customer, your pay or anything private. Ask whenever you are unsure: it is faster than guessing, and asking is never wrong.
 
 **Training and My earnings**
 
