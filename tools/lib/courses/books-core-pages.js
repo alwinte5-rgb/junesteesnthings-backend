@@ -25,7 +25,7 @@ module.exports = {
   'b2-page': [
     { from: null, checks: [
       q('The Finances page opens on…', ['This month', 'Last year', 'All time'], 0, 'The menu picks another month or a year.'),
-      q('The Finances page is…', ['Owner only', 'Public', 'For customers'], 0, 'It shows the shop\'s money.'),
+      q('Who can change anything on the Finances page?', ['Only June', 'Anyone on the team', 'Customers'], 0, 'You may read it; only June changes it.'),
     ] },
     { from: 'What each card shows', checks: [
       q('A deleted copy of a monthly cost…', ['Is remembered and does not come back', 'Comes back next day'], 0, 'Deleting one month\'s copy is remembered.'),

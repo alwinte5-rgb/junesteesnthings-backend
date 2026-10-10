@@ -601,10 +601,41 @@ test('the Team preset opens chat, the Playbook and training, and nothing that sh
 });
 
 test('a new helper starts on their training path\'s preset', () => {
-  for (const t of ['content', 'ads', 'bookkeeper', 'developer']) assert.strictEqual(STAFF.presetForTrack(t), 'team', t);
+  for (const t of ['content', 'ads', 'developer']) assert.strictEqual(STAFF.presetForTrack(t), 'team', t);
+  assert.strictEqual(STAFF.presetForTrack('bookkeeper'), 'books', 'a bookkeeper can read the books');
   assert.strictEqual(STAFF.presetForTrack('design'), 'design');
   assert.strictEqual(STAFF.presetForTrack('sales'), 'training');
   assert.strictEqual(STAFF.presetForTrack('nonsense'), 'training');
   const post = src.slice(src.indexOf("app.post('/admin/staff', requireAdmin"), src.indexOf('\n});', src.indexOf("app.post('/admin/staff', requireAdmin")));
   assert.match(post, /STAFF\.PRESETS\[b\.preset\] \? b\.preset : STAFF\.presetForTrack\(track\)/, 'no preset sent: the path decides, never Training for a non-sales hire');
+});
+
+/* Owner, 2026-10-09: "build read only finance" for the bookkeeper. Reading the
+   books is a toggle; changing them never is. */
+test('finances.view reads the Finances page and its reports, and can change nothing', () => {
+  const reader = helper({ ...STAFF.presetPerms('team'), 'finances.view': 'on' });
+  for (const r of ['/admin/finances', '/admin/exports/payments.csv', '/admin/exports/expenses.csv', '/admin/exports/unlinked.csv', '/admin/tax.csv']) {
+    assert.ok(STAFF.mayUseRoute(reader, 'GET', r), `${r} opens to a reader`);
+    assert.ok(!STAFF.mayUseRoute(helper(STAFF.presetPerms('team')), 'GET', r), `${r} stays shut without the toggle`);
+  }
+  for (const k of ['POST /admin/expenses', 'POST /admin/expenses/:id', 'POST /admin/expenses/:id/delete', 'POST /admin/expenses/roll',
+    'POST /admin/tax/remit', 'POST /admin/unlinked/:id/tax', 'POST /admin/quotes/:code/exemption', 'GET /admin/exports', 'GET /admin/exports/quotes.csv']) {
+    assert.ok(STAFF.NEVER_STAFF.includes(k), `${k} is never a helper's`);
+    const [method, ...rest] = k.split(' ');
+    assert.ok(!STAFF.mayUseRoute(reader, method, rest.join(' ')), `${k} refused to a reader`);
+  }
+  // Every finance change is still refused to a helper with every toggle on.
+  const everything = {};
+  for (const k of Object.keys(STAFF.PERMISSIONS)) everything[k] = { level: 'on' };
+  for (const k of STAFF.NEVER_STAFF.filter((x) => x.startsWith('POST'))) {
+    const [method, ...rest] = k.split(' ');
+    assert.ok(!STAFF.mayUseRoute(helper(everything), method, rest.join(' ')), k);
+  }
+  assert.ok(!Object.values(STAFF.PRESETS).some((p, i) => Object.keys(STAFF.PRESETS)[i] !== 'books' && p.perms['finances.view']), 'only the Bookkeeper preset reads the books');
+  // The page leaves its forms out for anyone but the owner.
+  const page = src.slice(src.indexOf('app.get(FINANCES_PATH, requireAdmin'), src.indexOf('\n});', src.indexOf('app.get(FINANCES_PATH, requireAdmin')));
+  assert.match(page, /const canEdit = isOwner\(\);/);
+  assert.match(page, /\$\{canEdit \? `\s*<form method="POST" action="\/admin\/expenses"/);
+  assert.match(page, /g\.entries\.map\(e => !canEdit \?/);
+  assert.match(page, /!canEdit \? '<span class="muted">June settles this<\/span>'/);
 });

@@ -87,7 +87,7 @@ Every payment, refund and dispute belongs to an order (a quote code like AB12CD,
       id: 'b2-page', article: A.page, minutes: 20, tags: 'bookkeeping, finances page, break-even, overheads, job costs, sales tax position, month by month, export, csv',
       goals: ['Read each card on the Finances page', 'Pick a month or a whole year', 'Export what you need'],
       body:
-`The Finances page is where the shop's own records add up: sales, overheads, job costs and sales tax, by month. June owns it; it shows the shop's money, so it is owner only. How you see it: [owner to fill in: how the bookkeeper sees the Finances page figures and exports]
+`The Finances page is where the shop's own records add up: sales, overheads, job costs and sales tax, by month. June owns it, and only she can change anything on it. How you see it: [owner to fill in: how the bookkeeper sees the Finances page figures and exports]
 
 **Choosing the period**
 
@@ -132,7 +132,7 @@ The Finances page is not the bank statement. It shows what our system recorded. 
           answer: 1, article: A.money, why: 'The order is the anchor.' },
         { id: 'owner', q: 'Who owns the Finances page?',
           choices: ['Anyone on the team', 'June', 'Customers', 'Stripe'],
-          answer: 1, article: A.page, why: 'It shows the shop\'s money, so it is owner only.' },
+          answer: 1, article: A.page, why: 'June owns it; a bookkeeper can be given read-only access.' },
         { id: 'roll', q: 'A cost is ticked as monthly. What happens next month?',
           choices: ['Nothing', 'It copies itself into the new month on the same day', 'It is deleted', 'It doubles'],
           answer: 1, article: A.page, why: 'Monthly overheads roll forward on their own.' },
@@ -756,6 +756,14 @@ const FINAL = {
   ],
 };
 FINAL.quiz.questions = require('./books-core-final')(A);
+
+/* The Finances page was owner only when this lesson first went live; a
+   bookkeeper can now read it (finances.view). The published wording is kept
+   in `was`, so a copy June has not edited is updated. */
+{
+  const l = MODULES.flatMap((m) => m.lessons).find((x) => x.id === 'b2-page');
+  l.was = [l.body.replace('June owns it, and only she can change anything on it. How you see it:', "June owns it; it shows the shop's money, so it is owner only. How you see it:")];
+}
 
 const PAGES = require('./books-core-pages');
 for (const l of MODULES.flatMap((m) => m.lessons)) {

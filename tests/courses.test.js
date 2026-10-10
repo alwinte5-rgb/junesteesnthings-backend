@@ -303,9 +303,12 @@ test('the Content course is the content track\'s path: its own sign-offs, the ow
   // Module 2 stays shut until Team basics is passed.
   assert.ok(!TRAINING.stepOpen(TRAINING.progress(new Map(), {}, undefined, 'content'), 'lesson:c2-why'));
   assert.ok(TRAINING.stepOpen(TRAINING.progress(new Map(), { quizzes: { 'team-1': 1 } }, undefined, 'content'), 'lesson:c2-why'));
-  const gaps = TRAINING.lessonArticles().filter((a) => /^Content course /.test(a.title)).flatMap((a) => TRAINING.ownerGaps(a.body));
-  assert.ok(gaps.length >= 5, `${gaps.length} gaps`);
-  for (const g of gaps) assert.match(g.token, /owner to fill in/);
+  // June answered every blank (answers.js); each answered lesson keeps its unanswered body in `was`.
+  const arts = TRAINING.lessonArticles().filter((a) => /^Content course /.test(a.title));
+  assert.deepStrictEqual(arts.flatMap((a) => TRAINING.ownerGaps(a.body)), []);
+  const answered = arts.filter((a) => a.was);
+  assert.ok(answered.length >= 3, `${answered.length} answered lessons`);
+  for (const a of answered) assert.ok(a.was.some((w) => /owner to fill in/.test(w)), `${a.title} keeps its unanswered body`);
   assert.strictEqual(TRAINING.visibleSteps(undefined, 'content').find((s) => s.key === 'lesson:c4-edit').title, 'Editing a short');
   // The path is listed for the owner, and a hired content editor lands on it.
   const list = src.slice(src.indexOf('const TRAINING_PATHS = ['), src.indexOf('];', src.indexOf('const TRAINING_PATHS = [')));
@@ -323,12 +326,15 @@ test('the Ads course is the ads track\'s path: its own sign-offs, the owner\'s g
   assert.strictEqual(keys[keys.length - 1], TRAINING.READY_KEY);
   assert.ok(!TRAINING.stepOpen(TRAINING.progress(new Map(), {}, undefined, 'ads'), 'lesson:a2-judge'));
   assert.ok(TRAINING.stepOpen(TRAINING.progress(new Map(), { quizzes: { 'team-1': 1 } }, undefined, 'ads'), 'lesson:a2-judge'));
-  const gaps = TRAINING.lessonArticles().filter((a) => /^Ads course /.test(a.title)).flatMap((a) => TRAINING.ownerGaps(a.body));
-  assert.ok(gaps.length >= 5, `${gaps.length} gaps`);
-  for (const g of gaps) assert.match(g.token, /owner to fill in/);
+  // June answered every blank (answers.js); each answered lesson keeps its unanswered body in `was`.
+  const arts = TRAINING.lessonArticles().filter((a) => /^Ads course /.test(a.title));
+  assert.deepStrictEqual(arts.flatMap((a) => TRAINING.ownerGaps(a.body)), []);
+  const answered = arts.filter((a) => a.was);
+  assert.ok(answered.length >= 3, `${answered.length} answered lessons`);
+  for (const a of answered) assert.ok(a.was.some((w) => /owner to fill in/.test(w)), `${a.title} keeps its unanswered body`);
   assert.strictEqual(TRAINING.visibleSteps(undefined, 'ads').find((s) => s.key === 'lesson:a5-terms').title, 'Search terms, negatives and the $40 rule');
   // Ads never send anyone to the back office.
-  for (const a of TRAINING.lessonArticles().filter((x) => /^Ads course /.test(x.title))) assert.doesNotMatch(a.body.replace(/\*\*jtees\.net\/quote:\*\*/, ''), /jtees\.net\/quote\b/, a.title);
+  for (const a of arts) assert.doesNotMatch(a.body.replace(/\*\*jtees\.net\/quote:\*\*/, ''), /jtees\.net\/quote\b/, a.title);
   const list = src.slice(src.indexOf('const TRAINING_PATHS = ['), src.indexOf('];', src.indexOf('const TRAINING_PATHS = [')));
   assert.match(list, /key: 'ads', track: 'ads'/);
   assert.strictEqual(TRAINING.trackOf('ads'), 'ads', 'a hired ads specialist lands on the ads path');
@@ -344,9 +350,12 @@ test('the Bookkeeper course is the bookkeeper track\'s path, and a hired bookkee
   assert.strictEqual(keys[keys.length - 1], TRAINING.READY_KEY);
   assert.ok(!TRAINING.stepOpen(TRAINING.progress(new Map(), {}, undefined, 'bookkeeper'), 'lesson:b2-money'));
   assert.ok(TRAINING.stepOpen(TRAINING.progress(new Map(), { quizzes: { 'team-1': 1 } }, undefined, 'bookkeeper'), 'lesson:b2-money'));
-  const gaps = TRAINING.lessonArticles().filter((a) => /^Bookkeeper course /.test(a.title)).flatMap((a) => TRAINING.ownerGaps(a.body));
-  assert.ok(gaps.length >= 5, `${gaps.length} gaps`);
-  for (const g of gaps) assert.match(g.token, /owner to fill in/);
+  // June answered every blank (answers.js); each answered lesson keeps its unanswered body in `was`.
+  const arts = TRAINING.lessonArticles().filter((a) => /^Bookkeeper course /.test(a.title));
+  assert.deepStrictEqual(arts.flatMap((a) => TRAINING.ownerGaps(a.body)), []);
+  const answered = arts.filter((a) => a.was);
+  assert.ok(answered.length >= 3, `${answered.length} answered lessons`);
+  for (const a of answered) assert.ok(a.was.some((w) => /owner to fill in/.test(w)), `${a.title} keeps its unanswered body`);
   assert.strictEqual(TRAINING.visibleSteps(undefined, 'bookkeeper').find((s) => s.key === 'lesson:b5-tax').title, 'Illinois sales tax');
   const list = src.slice(src.indexOf('const TRAINING_PATHS = ['), src.indexOf('];', src.indexOf('const TRAINING_PATHS = [')));
   assert.match(list, /key: 'bookkeeper', track: 'bookkeeper'/);
@@ -361,12 +370,15 @@ test('the Developer course is the developer track\'s path, and a hired developer
   assert.strictEqual(keys[keys.length - 1], TRAINING.READY_KEY);
   assert.ok(!TRAINING.stepOpen(TRAINING.progress(new Map(), {}, undefined, 'developer'), 'lesson:v2-stack'));
   assert.ok(TRAINING.stepOpen(TRAINING.progress(new Map(), { quizzes: { 'team-1': 1 } }, undefined, 'developer'), 'lesson:v2-stack'));
-  const gaps = TRAINING.lessonArticles().filter((a) => /^Developer course /.test(a.title)).flatMap((a) => TRAINING.ownerGaps(a.body));
-  assert.ok(gaps.length >= 4, `${gaps.length} gaps`);
-  for (const g of gaps) assert.match(g.token, /owner to fill in/);
+  // June answered every blank (answers.js); each answered lesson keeps its unanswered body in `was`.
+  const arts = TRAINING.lessonArticles().filter((a) => /^Developer course /.test(a.title));
+  assert.deepStrictEqual(arts.flatMap((a) => TRAINING.ownerGaps(a.body)), []);
+  const answered = arts.filter((a) => a.was);
+  assert.ok(answered.length >= 3, `${answered.length} answered lessons`);
+  for (const a of answered) assert.ok(a.was.some((w) => /owner to fill in/.test(w)), `${a.title} keeps its unanswered body`);
   assert.strictEqual(TRAINING.visibleSteps(undefined, 'developer').find((s) => s.key === 'lesson:v3-incident').title, 'When something breaks');
   // The developer is told how they get Claude Code, and that the repo's rules load with it.
-  assert.ok(gaps.some((g) => /Claude account/.test(g.token)), 'June is asked which Claude account the developer uses');
+  assert.ok(arts.some((a) => /Your own Claude Pro or Max subscription/.test(a.body)), 'the lesson says which Claude account the developer uses');
   assert.ok(fs.existsSync(path.join(__dirname, '..', 'CLAUDE.md')) && /@AGENTS\.md/.test(fs.readFileSync(path.join(__dirname, '..', 'CLAUDE.md'), 'utf8')), 'CLAUDE.md loads AGENTS.md');
   const list = src.slice(src.indexOf('const TRAINING_PATHS = ['), src.indexOf('];', src.indexOf('const TRAINING_PATHS = [')));
   assert.match(list, /key: 'developer', track: 'developer'/);
