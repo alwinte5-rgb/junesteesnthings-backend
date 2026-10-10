@@ -303,8 +303,8 @@ test('an exempt studio payment names its certificate, and its refunds carry it b
   const rec = route('async function recordUnlinkedPayment(');
   assert.match(rec, /session\.metadata\?\.jt_exempt_cert/);
   assert.match(rec, /\/\^\[1-9\]\[0-9\]\{0,15\}\$\/\.test/, 'a positive integer or nothing');
-  assert.match(rec, /tax_portion, resolved_at, tax_certificate_id\)/);
-  assert.match(rec, /\$17::bigint\)/);
+  assert.match(rec, /tax_portion, resolved_at, tax_certificate_id, created_at\)/);
+  assert.match(rec, /\$17::bigint,/);
   assert.strictEqual((src.match(/taxCertificateId: u\.tax_certificate_id/g) || []).length, 2, 'the refund and the chargeback');
   assert.strictEqual((src.match(/amount, tax_portion, tax_certificate_id\n/g) || []).length, 2,
     'both read the certificate off the payment they reverse');

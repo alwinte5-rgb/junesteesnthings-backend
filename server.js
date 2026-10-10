@@ -3752,6 +3752,7 @@ app.post('/webhooks/clover', async (req, res) => {
       rows.length ? 'clover payment against a website enquiry' : 'clover payment with no matching enquiry',
       { channel: 'clover', source: 'clover_webhook',
         extRef: `clover:${paymentId}`,
+        at: Number(payment.createdTime) > 0 ? new Date(Number(payment.createdTime)) : undefined,   // Clover: ms
         note: payment.order?.id ? `Clover order ${payment.order.id}` : null },
     ).catch((e) => {
       /* Swallowed deliberately, unlike the Stripe path: this handler already
@@ -11929,7 +11930,10 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
           catalogueSum += priceLine({ ...priceArgs, blankOverride: null, unitOverride: null }).lineTotal;
         } else {
           catalogueSum += priced.lineTotal;
-          if (!prod && typedUnit) customPriced++;
+          /* A custom line with its price left blank prices at $0: it needs the
+             same sign-off as a typed price, or a helper publishes a free line
+             (Codex #123, fixed 2026-10-10). */
+          if (!prod && (typedUnit || !(Number(priced.lineTotal) > 0))) customPriced++;
         }
       }
 
@@ -14173,6 +14177,12 @@ async function recordUnlinkedPayment(session, reason, opts = {}) {
   const clientRef = String(session.client_reference_id || '').trim() || null;
   const pi = typeof session.payment_intent === 'string' ? session.payment_intent : null;
   const extRef = opts.extRef || session.id || pi;
+  /* When the money ARRIVED: the caller's time, else Stripe's unix `created`,
+     else NOW() in SQL. A webhook retried after an outage would otherwise move
+     a receipt into the next tax month (Codex #105, fixed 2026-10-10). Inline,
+     not a helper, because tests lift this function on its own. */
+  const atDate = opts.at ? new Date(opts.at) : (Number(session.created) > 0 ? new Date(Number(session.created) * 1000) : null);
+  const receivedAt = atDate && !Number.isNaN(atDate.getTime()) ? atDate.toISOString() : null;
 
   /* The tax inside this payment, if the payer told us.
      The design studio computes sales tax at checkout (subtotal x rate, tax on
@@ -14214,9 +14224,10 @@ async function recordUnlinkedPayment(session, reason, opts = {}) {
       `INSERT INTO unlinked_payments
          (amount, fee, currency, channel, order_ref, client_ref, kind, source,
           stripe_session, stripe_pi, ext_ref, customer_email, customer_name, reason, note,
-          tax_portion, resolved_at, tax_certificate_id)
+          tax_portion, resolved_at, tax_certificate_id, created_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
-               $16, CASE WHEN $16::numeric IS NULL THEN NULL ELSE NOW() END, $17::bigint)`,
+               $16, CASE WHEN $16::numeric IS NULL THEN NULL ELSE NOW() END, $17::bigint,
+               COALESCE($18::timestamptz, NOW()))`,
       [round2(opts.amount ?? gross), round2(opts.fee || 0),
        String(session.currency || 'usd').toLowerCase(),
        opts.channel || (orderRef ? 'studio' : 'unknown'),
@@ -14225,7 +14236,7 @@ async function recordUnlinkedPayment(session, reason, opts = {}) {
        session.id || null, pi, extRef,
        session.customer_details?.email || null,
        session.customer_details?.name || null,
-       reason || null, opts.note || null, taxPortion, certId]);
+       reason || null, opts.note || null, taxPortion, certId, receivedAt]);
   } catch (err) {
     // 23505 = unique_violation on ext_ref. The other handler got here first.
     if (err.code === '23505') return { ok: true, duplicate: true };
@@ -15301,6 +15312,7 @@ async function bookChargeNow(charge, via = 'webhook') {
       payment_intent: pi, metadata: {}, customer_details: { email, name } },
     reason,
     { channel: 'stripe', source: via === 'sweep' ? 'stripe_sweep' : 'stripe_webhook', extRef,
+      at: Number(charge.created) > 0 ? new Date(Number(charge.created) * 1000) : undefined,   // the sweep finds it late
       note: [how, charge.description].filter(Boolean).join(' · ').slice(0, 200) });
   if (kept.duplicate) return { duplicate: true };
   console.log(`Stripe payment outside checkout (${via}): ${money(gross)} ${pi || id} on the unlinked ledger (${reason})`);
@@ -17416,7 +17428,9 @@ app.get('/admin/tax.csv', requireAdmin, async (req, res) => {
         `SELECT created_at, order_ref, client_ref, stripe_pi, customer_name,
                 amount, kind, tax_portion, channel
            FROM unlinked_payments ORDER BY created_at`))
-      .catch(() => ({ rows: [] }));
+      /* Both queries failed: an export without the studio receipts looks
+         complete and would under-file the ST-1. Refuse it (Codex #105). */
+      .catch((err) => { err.jtUnlinked = true; throw err; });
 
     const day = (d) => new Date(d).toISOString().slice(0, 10);
     const all = [
