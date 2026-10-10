@@ -15201,7 +15201,10 @@ async function landStripePaymentOnQuote(q, { gross, pi, extRef, createdAt, how, 
   await pool.query(
     `UPDATE quotes SET status = 'accepted', accepted_at = COALESCE(accepted_at, NOW())
       WHERE code = $1 AND status <> 'held'`, [code]).catch(() => {});
-  await declineUnchosenOptions(code).catch((e) => console.error(`options not settled on ${code}:`, e.message));
+  /* typeof: tests lift this function on its own, without its neighbours. */
+  if (typeof declineUnchosenOptions === 'function') {
+    await declineUnchosenOptions(code).catch((e) => console.error(`options not settled on ${code}:`, e.message));
+  }
   const nq = { ...q, paid_amount: res.paid };
   const stillDue = balanceOf(nq, t.total);
   const taxIn = (Number(q.total) > 0 && Number(q.tax) > 0)
