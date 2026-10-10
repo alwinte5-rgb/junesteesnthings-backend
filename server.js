@@ -8223,6 +8223,25 @@ function applyOptionChoice(items, chosen, sharedCodes) {
   return { items: kept, declined: declined };
 }
 
+/** A payment (Stripe outside checkout, or recorded by hand) accepted a quote
+ *  that still had OPTIONAL lines nobody chose: they are declined, exactly as an
+ *  Accept with none ticked would decline them, so no job sheet shows unpaid
+ *  options as work (Codex #127, fixed 2026-10-10). No-op without options. */
+async function declineUnchosenOptions(code) {
+  const { rows } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
+  const q = rows[0];
+  if (!q || !(q.items || []).some((i) => i && i.optional)) return false;
+  const choice = applyOptionChoice(q.items, [], []);
+  const tt = totalsForItems(q, choice.items);
+  await pool.query(
+    `UPDATE quotes SET items = $2::jsonb,
+            declined_items = COALESCE(declined_items, '[]'::jsonb) || $3::jsonb,
+            subtotal = $4, tax = $5, total = $6, deposit = $7
+      WHERE code = $1`,
+    [code, JSON.stringify(choice.items), JSON.stringify(choice.declined), tt.subtotal, tt.tax, tt.total, tt.deposit]);
+  return true;
+}
+
 /** Every figure for `items` on quote `q`, with the tax worked out again: the
  *  stored tax was for the lines as they stood before the customer chose. */
 function totalsForItems(q, items) {
@@ -15182,6 +15201,7 @@ async function landStripePaymentOnQuote(q, { gross, pi, extRef, createdAt, how, 
   await pool.query(
     `UPDATE quotes SET status = 'accepted', accepted_at = COALESCE(accepted_at, NOW())
       WHERE code = $1 AND status <> 'held'`, [code]).catch(() => {});
+  await declineUnchosenOptions(code).catch((e) => console.error(`options not settled on ${code}:`, e.message));
   const nq = { ...q, paid_amount: res.paid };
   const stillDue = balanceOf(nq, t.total);
   const taxIn = (Number(q.total) > 0 && Number(q.tax) > 0)
@@ -15419,6 +15439,10 @@ async function applyStripePaymentNow(uid, code) {
   const q = qs[0];
   if (!q) return { error: 'no-quote' };
   if (q.cancelled_at) return { error: 'cancelled' };
+  /* A held quote waits on the owner's price approval; its balance must not be
+     moved by applying money to it first (Codex #123, fixed 2026-10-10). Approve
+     it, then apply. A payment already on it (a second press) is let through. */
+  if (q.status === 'held' && !onQuote.length) return { error: 'held' };
 
   if (!onQuote.length) {
     /* The note starts with how it was taken (stripePaymentHow). */
@@ -15866,7 +15890,13 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
        choice ? choice.rev : null,
        delivery ? delivery.fee : null, delivery ? JSON.stringify(delivery.address) : null, shipMethod]);
     if (delivery && !rows.length) {
-      await DELIVERY.cancelRef('quote:' + code, 'system', 'the accept did not go through').catch(() => {});
+      /* A second, overlapping accept loses the UPDATE but books the same
+         'quote:<code>' ref: cancelling it then cancels the WINNER's booking.
+         Only cancel when the quote really was not accepted (Codex #143). */
+      const { rows: now } = await pool.query('SELECT accepted_at FROM quotes WHERE code = $1', [code]).catch(() => ({ rows: [] }));
+      if (!(now[0] && now[0].accepted_at)) {
+        await DELIVERY.cancelRef('quote:' + code, 'system', 'the accept did not go through').catch(() => {});
+      }
     }
     if (delivery && rows.length) {
       /* A walk-up enquiry may only now have given a name, email or number. */
@@ -16195,10 +16225,12 @@ app.post('/admin/quote/:code/mark-paid', requireAdmin, async (req, res) => {
           WHERE ext_ref = $1`, [manualRef(minute), byStaff ? actor.id : null, byStaff]);
     }
 
-    const { rows: upd } = await pool.query(
+    await pool.query(
       `UPDATE quotes SET status = 'accepted',
               accepted_at = COALESCE(accepted_at, NOW())
-        WHERE code = $1 RETURNING *`, [code]);
+        WHERE code = $1`, [code]);
+    await declineUnchosenOptions(code).catch((e) => console.error(`options not settled on ${code}:`, e.message));
+    const { rows: upd } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
 
     const nq = upd[0];
     const stillDue = round2(Math.max(0, Number(nq.total) - Number(nq.paid_amount)));
@@ -23505,6 +23537,13 @@ app.post('/api/order-confirmation', requireInternalKey, capPerRecipient('order-c
           [Number(raw.booking_id), String(raw.hold_ref), ref]).catch(() => {});
       }
       const booked = (await DELIVERY.confirm({ ref }).catch(() => null)) || await DELIVERY.byRef(ref).catch(() => null);
+      /* A paid local delivery that cannot be CONFIRMED must not be thanked as
+         booked: answer an error so the studio keeps its confirmation unsent and
+         retries it hourly, before the hold expires (Codex #143, fixed 2026-10-10). */
+      if (!booked || !['confirmed', 'out', 'delivered'].includes(String(booked.status))) {
+        reportError('delivery:confirm-on-order', new Error('paid local delivery not confirmed'), ref).catch(() => {});
+        return res.status(502).json({ ok: false, error: 'delivery not confirmed yet' });
+      }
       if (booked) {
         delivery.when = DELIV.bookingPhrase(booked);
         delivery.link = await deliveryChangeLink(booked).catch(() => '');
@@ -25782,6 +25821,7 @@ const APPLY_ERRORS = {
   'refunded': 'That payment has had a refund or chargeback, so it was left where it is.',
   'no-quote': 'That quote does not exist.',
   'cancelled': 'That quote is cancelled. Restore it first if the payment is for it.',
+  'held': 'That quote is waiting on price approval. Approve it first, then apply the payment.',
   'failed': 'Applying the payment did not finish. Press Apply again: it carries on from where it stopped. The error has been reported.',
 };
 
@@ -32426,6 +32466,13 @@ app.post('/admin/delivery/new', requireAdmin, async (req, res) => {
     if (fee != null && upd[0]) {
       const tt = quoteTotals(upd[0]);
       await pool.query('UPDATE quotes SET total = $2, deposit = $3 WHERE code = $1', [code, tt.total, tt.deposit]);
+      /* The total just changed: an open card page made for the old total must
+         not stay payable (Codex #143, fixed 2026-10-10). Forgotten first, then
+         expired, the same order the card route uses. */
+      if (upd[0].stripe_session) {
+        await pool.query('UPDATE quotes SET stripe_session = NULL WHERE code = $1', [code]).catch(() => {});
+        await expireCheckoutSession(upd[0].stripe_session);
+      }
     }
     await notifyDelivery(r.booking, 'booked');
     res.redirect(`/admin/delivery/job/${r.booking.id}?flash=booked`);
