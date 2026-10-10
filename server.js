@@ -70,7 +70,12 @@ const CLOUDINARY_UPLOAD_MAX = 10 * 1024 * 1024;
 const CLD_UPLOAD_FN = `function jtCldUpload(cloud, fd, name){
               var ext = (String(name || '').split('.').pop() || '').toLowerCase();
               var img = ['jpg','jpeg','png','gif','webp','heic','heif'].indexOf(ext) >= 0;
-              function go(kind){ return fetch('https://api.cloudinary.com/v1_1/' + cloud + '/' + kind + '/upload', { method: 'POST', body: fd })
+              function go(kind){
+                /* A stalled upload must fail, not hang: a pending upload keeps
+                   the form's submit disabled (Codex #34, fixed 2026-10-10). */
+                var ac = window.AbortController ? new AbortController() : null;
+                if (ac) setTimeout(function(){ ac.abort(); }, 120000);
+                return fetch('https://api.cloudinary.com/v1_1/' + cloud + '/' + kind + '/upload', { method: 'POST', body: fd, signal: ac ? ac.signal : undefined })
                 .then(function(r){ return r.json().catch(function(){ return { error: { message: 'HTTP ' + r.status } }; }); }); }
               return go(img ? 'image' : 'raw').then(function(d){ return d && d.secure_url || !img ? d : go('raw'); })
                 .then(function(d){ return { json: function(){ return Promise.resolve(d); } }; });
@@ -24586,9 +24591,9 @@ function shipWeighForm(ref, oz, box) {
 }
 
 /** The prices the studio came back with, and the one form that buys. */
-function shipRatesHtml(ref, rates, paidService) {
+function shipRatesHtml(ref, rates, paidService, expedited = false) {
   if (rates.error) return `<div class="warn" style="margin:10px 0 0">${escEmail(rates.error)}</div>`;
-  const pick = SHIP.preferredRate(rates.list, paidService);
+  const pick = SHIP.preferredRate(rates.list, paidService, { expedited });   // expedited quote jobs: fastest (Codex #125)
   const paid = String(paidService || '').trim().toLowerCase();
   return `<form method="POST" action="/admin/shipping/buy" data-once style="margin-top:10px">
     <input type="hidden" name="ref" value="${ref}">
@@ -24713,7 +24718,7 @@ function shipCardHtml(x, rates) {
     const mine = rates && rates.ref === ref;
     const oz = mine && rates.oz ? rates.oz : (studio ? Number(o.est_oz) || null : null);
     const box = mine ? rates.box : SHIP.boxFor(oz || 0);
-    act = `${shipWeighForm(ref, oz, box)}${mine ? shipRatesHtml(ref, rates, paidService) : ''}
+    act = `${shipWeighForm(ref, oz, box)}${mine ? shipRatesHtml(ref, rates, paidService, !studio && String(o.ship_method).toLowerCase() === 'expedited') : ''}
       ${shipElsewhereForm(ref)}${studio ? `<div class="muted" style="font-size:12px;margin-top:6px">Handed it over
       in person? Set it to Complete in the <a href="${STUDIO_ADMIN}?lumise-page=order&amp;order_id=${Number(o.id)}"
       target="_blank" rel="noopener">studio admin</a>.</div>` : ''}
