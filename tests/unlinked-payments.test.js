@@ -562,3 +562,20 @@ test('an unmatchable refund is still reported rather than dropped silently', () 
   assert.match(src, /no matching quote or unlinked payment for PI/,
     'the 08-16 lesson: code that decides nothing is wrong and says nothing');
 });
+
+/* Codex #105 (fixed 2026-10-10): a receipt is dated when the money ARRIVED. */
+const AT_ARG = 17;
+test('a late webhook dates the receipt by Stripe\'s created time, not by now', async () => {
+  const args = await captureInsert({ id: 'cs_1', amount_total: 5000, created: 1759000000 }, 'x', {});
+  assert.strictEqual(args[AT_ARG], new Date(1759000000 * 1000).toISOString());
+});
+test('a caller-supplied time wins; no time at all means NOW() in SQL', async () => {
+  const a = await captureInsert({ id: 'cs_2', amount_total: 5000, created: 1759000000 }, 'x', { at: '2026-09-30T23:59:00Z' });
+  assert.strictEqual(a[AT_ARG], '2026-09-30T23:59:00.000Z');
+  const b = await captureInsert({ id: null, amount_total: 0 }, 'refund', { amount: -10, allowZero: true });
+  assert.strictEqual(b[AT_ARG], null);
+});
+test('the tax export refuses rather than drop the studio receipts', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  assert.ok(src.includes(".catch((err) => { err.jtUnlinked = true; throw err; });"));
+});

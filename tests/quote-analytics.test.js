@@ -30,7 +30,7 @@ test('a paid redirect round-trips into one purchase with the banked value', () =
   const ev = QA.quoteEvent('AB12CD', query);
   assert.strictEqual(ev.name, 'purchase');
   assert.deepStrictEqual(ev.params, {
-    transaction_id: 'Q-AB12CD-B2c3D4e5F6g7H8i9', value: 104, currency: 'USD', kind: 'balance', quote_code: 'AB12CD',
+    transaction_id: `Q-${QA.quoteRef('AB12CD')}-B2c3D4e5F6g7H8i9`, value: 104, currency: 'USD', kind: 'balance', quote_ref: QA.quoteRef('AB12CD'),
   });
   assert.strictEqual(ev.once, 'purchase_q_B2c3D4e5F6g7H8i9');
 });
@@ -63,4 +63,12 @@ test('the server wires the page and every redirect', () => {
   assert.match(src, /res\.redirect\('\/q\/' \+ code \+ '\?ev=accepted'\)/);
   assert.match(src, /'\?ev=changes'/);
   assert.match(src, /paidQuery\(\{/);
+});
+
+test('the quote code itself never reaches analytics (Codex #138)', () => {
+  const tags = QA.quoteAnalyticsTags('AB12CD', { ev: 'paid', v: '104', k: 'balance', tx: 'B2c3D4e5F6g7H8i9' });
+  assert.ok(!/"quote_code"/.test(tags) && !tags.includes('Q-AB12CD'), 'no code in params or transaction id');
+  assert.match(QA.quoteRef('AB12CD'), /^[0-9a-f]{12}$/);
+  const js = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'public', 'assets', 'js', 'analytics.js'), 'utf8');
+  assert.ok(js.includes("var fbOn = !QUOTE_PAGE &&") && js.includes("if (!QUOTE_PAGE && CLARITY_ID") && js.includes("'/q/:code'"));
 });

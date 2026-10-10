@@ -26,8 +26,13 @@
   var GA4_ID = 'G-E65381594C';           // June's Tees & Things — ONE GA4 property across both domains (cross-domain funnel)
   var META_PIXEL_ID = '348199180594218'; // June's Tees Meta Pixel (same on both domains)
 
+  /* A quote page's address IS its password (/q/<code> shows the customer's
+     name, email, phone and address). On it: GA4 gets the address with the
+     code replaced, and neither the Meta pixel (sends the full URL) nor Clarity
+     (records the whole session) loads (Codex #138, fixed 2026-10-10). */
+  var QUOTE_PAGE = /^\/q\/[^\/]+/.test(location.pathname);
   var gaOn = GA4_ID && GA4_ID.indexOf('XXXX') === -1;
-  var fbOn = META_PIXEL_ID && META_PIXEL_ID.indexOf('XXXX') === -1;
+  var fbOn = !QUOTE_PAGE && META_PIXEL_ID && META_PIXEL_ID.indexOf('XXXX') === -1;
 
   // ── Google Analytics 4 ────────────────────────────────────────────────
   if (gaOn) {
@@ -38,9 +43,14 @@
     window.dataLayer = window.dataLayer || [];
     window.gtag = function () { window.dataLayer.push(arguments); };
     window.gtag('js', new Date());
-    window.gtag('config', GA4_ID, {
-      linker: { domains: ['jtees.net', 'design.jtees.net'] }
-    });
+    var gcfg = { linker: { domains: ['jtees.net', 'design.jtees.net'] } };
+    if (QUOTE_PAGE) {
+      var safe = location.pathname.replace(/^\/q\/[^\/]+/, '/q/:code');
+      gcfg.page_location = location.origin + safe;
+      gcfg.page_path = safe;
+      gcfg.page_title = 'Quote';
+    }
+    window.gtag('config', GA4_ID, gcfg);
   }
 
   // ── Meta (Facebook) Pixel ─────────────────────────────────────────────
@@ -60,7 +70,7 @@
 
   // ── Microsoft Clarity (heatmaps + session recordings) ─────────────────
   var CLARITY_ID = 'xs2ulr5z6y';
-  if (CLARITY_ID && CLARITY_ID.indexOf('XXXX') === -1) {
+  if (!QUOTE_PAGE && CLARITY_ID && CLARITY_ID.indexOf('XXXX') === -1) {
     (function (c, l, a, r, i, t, y) {
       c[a] = c[a] || function () { (c[a].q = c[a].q || []).push(arguments); };
       t = l.createElement(r); t.async = 1; t.src = 'https://www.clarity.ms/tag/' + i;

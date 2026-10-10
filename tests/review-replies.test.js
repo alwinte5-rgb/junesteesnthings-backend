@@ -77,3 +77,17 @@ test('nothing in the reply route posts to Google', () => {
   const body = route.slice(0, route.indexOf('\n});'));
   assert.ok(!/mybusiness|googleapis|fetch\(/.test(body));
 });
+
+/* Codex #142 (fixed 2026-10-10). */
+test('the reviewer\'s name never reaches the model; the server fills it in', () => {
+  const RR = require('../tools/lib/review-replies');
+  const msg = RR.reviewMessage({ name: 'Tanya Smith', stars: 5, text: 'Great shirts', job: '' });
+  assert.ok(!msg.includes('Tanya') && msg.includes('{first_name}'));
+  assert.strictEqual(RR.fillFirstName('Thank you, {first_name}!', 'Tanya Smith'), 'Thank you, Tanya!');
+  assert.strictEqual(RR.fillFirstName('Thanks {first_name}.', ''), 'Thanks there.');
+});
+test('stars must be exactly 1 to 5', () => {
+  const RR = require('../tools/lib/review-replies');
+  for (const bad of ['3.9', '5anything', '0', '6', '', 'x']) assert.ok(RR.validateReview({ stars: bad, text: 'ok' }).error, bad);
+  assert.strictEqual(RR.validateReview({ stars: '4', text: 'ok' }).review.stars, 4);
+});

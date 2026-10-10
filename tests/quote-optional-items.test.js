@@ -304,3 +304,8 @@ test('a group pays order-level freight once, on the line it reaches first', () =
   assert.match(save, /const seen = \(optGroupSeen\[runGroup\] \|\|= new Set\(\)\);/);
   assert.match(src, /var gs = optGroupSeen\[grp\] \|\| \(optGroupSeen\[grp\] = \{\}\);/);
 });
+
+test('a custom line with a blank price still needs approval (Codex #123)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  assert.ok(src.includes("if (!prod && (typedUnit || !(Number(priced.lineTotal) > 0))) customPriced++;"));
+});

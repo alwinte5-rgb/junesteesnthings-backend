@@ -22,7 +22,8 @@ free pickup in Lakeview). The owner, June, signs every reply.
 
 Write the reply June would post under the review:
 - Two to four sentences. Warm, plain, specific to what the reviewer said.
-- Thank them by first name if they gave one. If they mention what was made or
+- If the review says a name was given, thank them by writing {first_name}
+  exactly (it is filled in later; never guess a name). If they mention what was made or
   the occasion, refer to it; do not invent details they did not give.
 - 4 or 5 stars: thank them and, where it fits, invite them back. No sales pitch.
 - 1 to 3 stars: thank them for the feedback, acknowledge the problem without
@@ -41,7 +42,8 @@ const clip = (v, n) => String(v == null ? '' : v).replace(/\u0000/g, '').trim().
 /** The review as posted to the form, checked: {review} or {error}. */
 function validateReview(body) {
   const b = body && typeof body === 'object' ? body : {};
-  const stars = parseInt(b.stars, 10);
+  /* Exactly 1-5: parseInt let "3.9" or "5anything" through (Codex #142). */
+  const stars = /^[1-5]$/.test(String(b.stars).trim()) ? Number(String(b.stars).trim()) : NaN;
   if (!(stars >= 1 && stars <= 5)) return { error: 'Pick how many stars the review gave.' };
   const text = clip(b.text, LIMITS.text);
   if (!text) return { error: 'Paste the review text first.' };
@@ -53,7 +55,9 @@ function reviewMessage(r) {
   const esc = (s) => String(s || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   return [
     '<review>',
-    `Reviewer: ${esc(r.name) || '(no name given)'}`,
+    /* Never the name itself: the shop's rule is no customer name into any AI
+       tool. The model writes {first_name}; draftReply fills it in (Codex #142). */
+    `Reviewer: ${r.name ? '(name given: write {first_name})' : '(no name given)'}`,
     `Stars: ${r.stars} of 5`,
     r.job ? `What the shop made for them (from June): ${esc(r.job)}` : '',
     '',
@@ -74,6 +78,12 @@ function failureMessage(err) {
   return 'The draft could not be made. Try again in a moment.';
 }
 
+/** {first_name} -> the reviewer's first name, here on the server. */
+function fillFirstName(text, name) {
+  const first = String(name || '').trim().split(/\s+/)[0] || '';
+  return String(text).replace(/\{first_name\}/g, first || 'there').replace(/\s+([,.!?])/g, '$1');
+}
+
 /** Draft a reply. `client` is for tests; the app uses the SDK's own
  *  credential lookup. Throws on failure; failureMessage() words it. */
 async function draftReply(review, { client } = {}) {
@@ -90,9 +100,9 @@ async function draftReply(review, { client } = {}) {
   if (res.stop_reason === 'refusal') {
     const e = new Error('model declined'); e.code = 'refusal'; throw e;
   }
-  const text = (res.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('').trim();
-  if (!text) throw new Error('empty draft');
-  return text;
+  const raw = (res.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('').trim();
+  if (!raw) throw new Error('empty draft');
+  return fillFirstName(raw, review.name);
 }
 
-module.exports = { MODEL, SYSTEM, LIMITS, validateReview, reviewMessage, draftReply, failureMessage };
+module.exports = { MODEL, SYSTEM, LIMITS, validateReview, reviewMessage, draftReply, failureMessage, fillFirstName };

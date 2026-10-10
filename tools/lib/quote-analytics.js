@@ -27,13 +27,19 @@ function paidQuery({ amount, kind, sessionId }) {
   return `?ev=paid&v=${encodeURIComponent(v)}&k=${k}&tx=${encodeURIComponent(tx)}`;
 }
 
+/** A stable one-way reference for a quote in analytics: the code itself opens
+ *  the customer's page, so it never leaves the server (Codex #138, 2026-10-10). */
+function quoteRef(code) {
+  return require('crypto').createHash('sha256').update('jt-quote:' + String(code)).digest('hex').slice(0, 12);
+}
+
 /** The event (if any) a quote-page request should fire. */
 function quoteEvent(code, query) {
   const q = query || {};
   const key = String(q.ev || '');
   const name = Object.prototype.hasOwnProperty.call(EVENTS, key) ? EVENTS[key] : null;
   if (!name) return null;
-  if (name !== 'purchase') return { once: `${name}_${code}`, name, params: { quote_code: code } };
+  if (name !== 'purchase') return { once: `${name}_${code}`, name, params: { quote_ref: quoteRef(code) } };
   const value = Number(q.v);
   const tx = String(q.tx || '');
   if (!Number.isFinite(value) || value <= 0 || value > MAX_VALUE) return null;
@@ -42,8 +48,8 @@ function quoteEvent(code, query) {
   return {
     once: `purchase_q_${tx}`,
     name,
-    params: { transaction_id: `Q-${code}-${tx}`, value: Math.round(value * 100) / 100,
-              currency: 'USD', kind, quote_code: code },
+    params: { transaction_id: `Q-${quoteRef(code)}-${tx}`, value: Math.round(value * 100) / 100,
+              currency: 'USD', kind, quote_ref: quoteRef(code) },
   };
 }
 
@@ -58,7 +64,7 @@ function scriptJson(v) {
  *  per browser per quote, then the redirect's event once. */
 function quoteAnalyticsTags(code, query) {
   const ev = quoteEvent(code, query);
-  const calls = [`once(${scriptJson(`quote_viewed_${code}`)}, 'quote_viewed', ${scriptJson({ quote_code: code })});`];
+  const calls = [`once(${scriptJson(`quote_viewed_${code}`)}, 'quote_viewed', ${scriptJson({ quote_ref: quoteRef(code) })});`];
   if (ev) calls.push(`once(${scriptJson(ev.once)}, ${scriptJson(ev.name)}, ${scriptJson(ev.params)});`);
   return `<script src="/assets/js/analytics.js"></script>
 <script>(function(){
@@ -73,4 +79,4 @@ function quoteAnalyticsTags(code, query) {
 })();</script>`;
 }
 
-module.exports = { quoteEvent, quoteAnalyticsTags, paidQuery, EVENTS };
+module.exports = { quoteEvent, quoteAnalyticsTags, paidQuery, quoteRef, EVENTS };
