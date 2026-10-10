@@ -279,11 +279,19 @@ function ouncesFrom(lb, oz) {
 }
 
 /** The rate to start on: the service the customer paid for, else the cheapest. */
-function preferredRate(rates, paidService) {
+function preferredRate(rates, paidService, { expedited = false } = {}) {
   const list = Array.isArray(rates) ? rates : [];
   if (!list.length) return null;
   const want = String(paidService || '').trim().toLowerCase();
-  return (want && list.find((r) => String(r.name || '').toLowerCase() === want)) || list[0];
+  const named = want && list.find((r) => String(r.name || '').toLowerCase() === want);
+  if (named) return named;
+  /* A quote job the customer chose EXPEDITED for: the fastest rate, cheapest
+     among equals, never the cheapest overall (Codex #125, fixed 2026-10-10). */
+  if (expedited) {
+    const timed = list.filter((r) => Number(r.days) > 0);
+    if (timed.length) return timed.slice().sort((a, b) => Number(a.days) - Number(b.days) || Number(a.amount) - Number(b.amount))[0];
+  }
+  return list[0];
 }
 
 /* ── The morning reminder ─────────────────────────────────────────────────── */
