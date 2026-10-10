@@ -5263,8 +5263,9 @@ app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 
     syncToBrevo({ name, email, phone })
       .then(() => savedId && pool.query('UPDATE submissions SET brevo_synced_at = NOW() WHERE id = $1', [savedId]))
       .catch((err) => { if (!savedId) reportError('design-lead:brevo', err).catch(() => {}); });
+    let customerEmailed = null;
     if (email) {
-      await sendEmail({
+      customerEmailed = await sendEmail({
         to: email,
         subject: 'Your June’s Tees design and price',
         html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
@@ -5274,9 +5275,15 @@ app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 
           <p><a href="${escEmail(designUrl)}" style="display:inline-block;background:#1848B8;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none;font-weight:bold">Open my design</a></p>
           <p>We’ll be in touch within 1 business day to help you finish it. Questions? Call or text <a href="tel:+17738491854">(773) 849-1854</a>.</p>
           <p style="color:#999;font-size:12px;margin-top:24px;">June’s Tees &amp; Things · Chicago, IL</p></div>`,
-      }).catch(() => {});
+      }).then(() => true).catch((err) => {
+        /* They asked to be emailed; a failure must reach the error digest so
+           the shop follows up by phone or text (Codex #221, fixed 2026-10-10).
+           The page still shows them their link. */
+        reportError('design-lead:email-customer', err, String(savedId || '')).catch(() => {});
+        return false;
+      });
     }
-    res.json({ ok: true, id: savedId });
+    res.json({ ok: true, id: savedId, emailed: email ? customerEmailed : null });
   } catch (err) {
     console.error('design-lead error:', err.message);
     res.status(500).json({ error: 'Something went wrong — please call or text (773) 849-1854.' });
@@ -16389,10 +16396,12 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
   try {
     /* A new month has its monthly costs before anything is counted. A failure
        here must not hide the page; the hourly sweep tries again. */
-    await rollRecurringExpenses().catch((e) => console.error('monthly costs roll failed:', e.message));
+    /* Only the owner's visit writes (Codex #230, fixed 2026-10-10): a helper
+       with finances.view only READS; the hourly sweep does the same writes. */
+    if (canEdit) await rollRecurringExpenses().catch((e) => console.error('monthly costs roll failed:', e.message));
     /* Jobs with no costs get them from the price lists before anything is
        counted. Same rule: a failure must not hide the page. */
-    const jobCostRun = await estimateMissingJobCosts().catch((e) => {
+    const jobCostRun = !canEdit ? { filled: 0, unfinished: [], catalogue: true } : await estimateMissingJobCosts().catch((e) => {
       console.error('job cost estimate failed:', e.message);
       return { filled: 0, unfinished: [], catalogue: false };
     });
@@ -27273,6 +27282,11 @@ async function commissionLines(staffId, rates) {
       WHERE q.credited_to = $1
         AND (EXISTS (SELECT 1 FROM staff_training t WHERE t.staff_id = $1 AND t.step_key = $2
                       AND q.created_at >= t.done_at)
+             -- signed off earlier, then training restarted: that window still earns
+             OR EXISTS (SELECT 1 FROM staff_training t WHERE t.staff_id = $1
+                      AND t.step_key LIKE 'signoff:was-ready-until:%'
+                      AND q.created_at >= t.done_at
+                      AND q.created_at < substring(t.step_key from 25)::timestamptz)
              OR EXISTS (SELECT 1 FROM commission_payouts c WHERE c.staff_id = $1 AND c.quote_code = q.code))
       GROUP BY q.id
       ORDER BY MAX(p.created_at) DESC LIMIT 500`, [staffId, TRAINING.READY_KEY]);
@@ -27863,7 +27877,9 @@ app.post('/admin/lead/:id/email', requireAdmin, async (req, res) => {
   const m = LEADMAIL.cleanEmail(b);
   if (m.error) return back(res, backTo, 'err', m.error);
   const actor = currentActor();
-  if (actor && actor.kind === 'staff' && (actorLevel('customers.message') !== 'on'
+  /* Both: messaging AND seeing leads. The designer preset messages customers
+     but has no leads.view, and must not email a lead it cannot see (Codex #179). */
+  if (actor && actor.kind === 'staff' && (actorLevel('customers.message') !== 'on' || actorLevel('leads.view') !== 'on'
       || FRAUD.mentionsOutsidePayment(`${m.subject}\n${m.text}`))) {
     return back(res, backTo, 'err', 'Emails to leads go through the owner for now. Write what you want to say in a note on the lead.');
   }
@@ -30613,7 +30629,17 @@ app.post('/admin/training/restart', requireAdmin, async (req, res) => {
     await client.query('BEGIN');
     const { rows: [st] } = await client.query('SELECT id, name FROM staff WHERE id = $1', [staffId]);
     if (!st) { await client.query('ROLLBACK'); return back(res, '/admin/training', 'err', 'No such helper.'); }
-    await client.query(`DELETE FROM staff_training WHERE staff_id = $1 AND step_key NOT LIKE 'tip:%'`, [staffId]);
+    /* Commission already earned while signed off must survive a restart
+       (Codex #195, fixed 2026-10-10): the old sign-off is kept as
+       'signoff:was-ready-until:<restart time>' with its original done_at, and
+       commissionLines() honours it for quotes made inside that window. */
+    await client.query(
+      `INSERT INTO staff_training (staff_id, step_key, done_at)
+       SELECT staff_id, 'signoff:was-ready-until:' || to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), done_at
+         FROM staff_training WHERE staff_id = $1 AND step_key = $2
+       ON CONFLICT DO NOTHING`, [staffId, TRAINING.READY_KEY]);
+    await client.query(`DELETE FROM staff_training WHERE staff_id = $1 AND step_key NOT LIKE 'tip:%'
+                          AND step_key NOT LIKE 'signoff:was-ready-until:%'`, [staffId]);
     await client.query('DELETE FROM staff_quiz_attempts WHERE staff_id = $1', [staffId]);
     await client.query('DELETE FROM staff_exam_attempts WHERE staff_id = $1', [staffId]);
     await client.query('DELETE FROM staff_lesson_time WHERE staff_id = $1', [staffId]);
