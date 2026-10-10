@@ -135,6 +135,17 @@ const MAP = {
   'Custom Magnets (any size)': 'vehicle-magnets',
   'Custom Photo Panels & Prints': 'acrylic-canvas',
   'Custom Stretched Canvas': 'stretched-canvas',
+  /* The same products under their clearer titles (2026-10-10). */
+  'Vinyl Banners, Any Size — Hemmed with Grommets': 'vinyl-banners',
+  'Yard Signs — Corrugated Plastic, Stakes Available': 'yard-signs',
+  'Rigid Signs — Aluminum, PVC & Foam Board': 'rigid-signs',
+  'Window Graphics — See-Through, Cling & Clear Decals': 'window-wall-graphics',
+  'Wall & Floor Graphics — Removable Decals & Murals': 'wall-floor-graphics',
+  'Vehicle Graphics — Car, Van & Truck Lettering': 'vehicle-graphics',
+  'Vehicle Magnets — Removable Car Door Signs': 'vehicle-magnets',
+  'Custom Magnets — Fridge & Promo, Any Size': 'vehicle-magnets',
+  'Photo Panels — Acrylic, Canvas & Poster Prints': 'acrylic-canvas',
+  'Stretched Canvas — Gallery-Wrapped, Ready to Hang': 'stretched-canvas',
 };
 const BASE = 'https://www.jtees.net/assets/images/products/';
 

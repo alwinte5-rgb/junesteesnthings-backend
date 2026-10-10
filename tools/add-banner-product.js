@@ -20,7 +20,11 @@ const fs = require('fs');
 const sg = require('./lib/signage');
 const { mysql, enjson, sq } = require('./lib/db');
 
-const NAME = 'Custom Size Vinyl Banner';
+/* Shop title (owner, 2026-10-10: "be more specific in the titles"). Starts
+   with "Vinyl Banners" for the quote form's matcher, and is NOT plain
+   "Vinyl Banners", which is the older fixed-size product's name. */
+const NAME = 'Vinyl Banners, Any Size — Hemmed with Grommets';
+const OLD_NAME = 'Custom Size Vinyl Banner';
 const DESCRIPTION = 'Design your own vinyl banner at any size, in whole feet: pick the vinyl, type the width and height, '
   + 'and the price updates as you go. Hemmed with welded edges and grommets included. Indoor or outdoor.';
 
@@ -58,7 +62,7 @@ function bannerStages() {
   return { front: side('Front'), back: side('Back') };
 }
 
-module.exports = { NAME, bannerAttributes, bannerStages };
+module.exports = { NAME, OLD_NAME, bannerAttributes, bannerStages };
 if (require.main !== module) return;
 
 const argv = process.argv.slice(2);
@@ -74,14 +78,14 @@ console.log(`${APPLY ? 'APPLYING' : 'DRY RUN'}  ${NAME}`);
 for (const m of t.materials) {
   console.log(`  ${m.label.padEnd(48)} 2x4 $${t.prices[m.key]['4x2']}  3x6 $${t.prices[m.key]['6x3']}  2x10 $${t.prices[m.key]['10x2']}  4x8 $${t.prices[m.key]['8x4']}`);
 }
-const got = mysql(url, 'SELECT id FROM lumise_products WHERE name=' + sq(NAME) + ';', { rows: true });
+const got = mysql(url, 'SELECT id FROM lumise_products WHERE name IN (' + sq(NAME) + ',' + sq(OLD_NAME) + ') ORDER BY name=' + sq(NAME) + ' DESC;', { rows: true });
 console.log(`  ${got.length ? 'update product #' + got[0].id : 'create product'}`);
 if (!APPLY) { console.log('\n  dry run: pass --apply to write'); process.exit(0); }
 
 const attrs = sq(enjson(bannerAttributes()));
 const stages = sq(enjson(bannerStages()));
 if (got.length) {
-  mysql(url, `UPDATE lumise_products SET description=${sq(DESCRIPTION)}, price=0, attributes=${attrs}, stages=${stages}, `
+  mysql(url, `UPDATE lumise_products SET name=${sq(NAME)}, description=${sq(DESCRIPTION)}, price=0, attributes=${attrs}, stages=${stages}, `
     + `printings='', active=1, updated=NOW() WHERE id=${Number(got[0].id)};`);
 } else {
   const author = mysql(url, 'SELECT author FROM lumise_products WHERE active=1 LIMIT 1;', { rows: true })[0].author;
