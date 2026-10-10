@@ -16336,6 +16336,9 @@ app.post('/admin/quote/:code/correct-payment', requireAdmin, async (req, res) =>
  * rather than with what was invoiced.
  */
 app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
+  /* A helper with finances.view reads the page; only the owner changes it.
+     The forms are left out for them, and their routes are owner-only anyway. */
+  const canEdit = isOwner();
   try {
     /* A new month has its monthly costs before anything is counted. A failure
        here must not hide the page; the hourly sweep tries again. */
@@ -16766,7 +16769,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
           Costs not attached to a job — rent, utilities, materials that are not garments.
           These are what turn "the jobs made money" into "the business made money".</div>
 
-        <form method="POST" action="/admin/expenses" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;
+        ${canEdit ? `        <form method="POST" action="/admin/expenses" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;
               background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:10px">
           <input type="hidden" name="year" value="${year}">
           <input type="hidden" name="month" value="${month || 'all'}">
@@ -16780,7 +16783,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
           <label style="font-size:12px;color:#6b7280;display:flex;align-items:center;gap:4px;white-space:nowrap">
             <input type="checkbox" name="recurs" value="1" style="width:auto"> monthly</label>
           <button type="submit" style="padding:7px 18px;font-size:14px">Add</button>
-        </form>
+        </form>` : ''}
 
         ${!month && expByCat.length ? `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px">
           <span class="muted" style="font-size:11px;letter-spacing:.06em;text-transform:uppercase">${year} so far</span>
@@ -16803,7 +16806,14 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
               ${g.categories.map((c) => `<span style="background:#f7f9fc;border:1px solid #e3e8f2;border-radius:8px;padding:3px 10px;font-size:12px">
                 <span style="color:#6b7280">${escEmail(c.category)}</span> <b style="font-variant-numeric:tabular-nums">${money(c.total)}</b></span>`).join('')}
             </div>
-            ${g.entries.map(e => `
+            ${g.entries.map(e => !canEdit ? `
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:5px 0;border-bottom:1px solid #f1f4f9;font-size:12.5px">
+              <span style="flex:0 0 90px">${escEmail(e.day)}</span>
+              <span style="flex:0 0 110px;color:#6b7280">${escEmail(e.category)}</span>
+              <b style="flex:0 0 80px;text-align:right;font-variant-numeric:tabular-nums">${money(e.amount)}</b>
+              <span style="flex:1 1 110px">${escEmail(e.vendor || '')}</span>
+              <span class="muted" style="flex:1 1 110px">${escEmail(e.note || '')}${e.recurs ? ' &middot; monthly' : ''}</span>
+            </div>` : `
             <form method="POST" action="/admin/expenses/${e.id}"
                   style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;padding:5px 0;border-bottom:1px solid #f1f4f9;font-size:12.5px">
               <input type="hidden" name="year" value="${year}">
@@ -16856,7 +16866,8 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
         <div class="muted" style="font-size:11px;margin-top:10px">
           Held right now spans every period, not just ${viewName} — it is what should be in the bank today.
           <a href="/admin/tax.csv" style="color:#1848B8">Download the payment-level detail</a>,
-          or <a href="/admin/exports" style="color:#1848B8">keep a month's records</a>.
+          or ${canEdit ? `<a href="/admin/exports" style="color:#1848B8">keep a month's records</a>`
+            : `download <a href="/admin/exports/payments.csv" style="color:#1848B8">payments</a>, <a href="/admin/exports/expenses.csv" style="color:#1848B8">expenses</a> and <a href="/admin/exports/unlinked.csv" style="color:#1848B8">payments with no order</a>`}.
         </div>
       </div>
 
@@ -16890,13 +16901,13 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
             </td>
             <td class="num" style="padding:7px 4px;font-variant-numeric:tabular-nums">${money(u.amount)}</td>
             <td style="padding:7px 4px">
-              <form method="post" action="/admin/unlinked/${u.id}/tax" style="display:flex;gap:6px;margin:0">
+              ${!canEdit ? '<span class="muted">June settles this</span>' : `<form method="post" action="/admin/unlinked/${u.id}/tax" style="display:flex;gap:6px;margin:0">
                 <input type="hidden" name="back" value="${FINANCES_PATH}${viewQS}">
                 <input name="tax" type="number" step="0.01" inputmode="decimal"
                        placeholder="unknown"
                        style="width:96px;padding:5px 7px;font-size:13px">
                 <button class="btn" style="padding:5px 12px;font-size:13px">Settle</button>
-              </form>
+              </form>`}
             </td>
           </tr>`).join('')}
         </table>
@@ -16930,7 +16941,8 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
             <td class="num" style="padding:7px 4px;font-variant-numeric:tabular-nums">${money(q.subtotal)}</td>
             <td class="num" style="padding:7px 4px;font-variant-numeric:tabular-nums">${money(q.paid)}</td>
             <td style="padding:7px 4px">
-              ${TAXCERT.EXEMPT_REASONS[q.tax_exempt_reason] && TAXCERT.EXEMPT_REASONS[q.tax_exempt_reason].certificate
+              ${!canEdit ? '<span class="muted">Needs a certificate or June&rsquo;s answer</span>'
+                : TAXCERT.EXEMPT_REASONS[q.tax_exempt_reason] && TAXCERT.EXEMPT_REASONS[q.tax_exempt_reason].certificate
                 /* A note cannot document these: only the certificate does. */
                 ? `<a href="/admin/production/${escEmail(String(q.code))}#certificate" style="color:#1848B8">Attach the certificate</a>`
                 : `<form method="post" action="/admin/quotes/${escEmail(String(q.code))}/exemption"

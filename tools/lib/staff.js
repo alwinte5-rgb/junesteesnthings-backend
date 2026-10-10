@@ -64,6 +64,9 @@ const PERMISSIONS = {
   'payments.record':       { group: 'Money',      label: 'Record cash and Zelle payments (you confirm each one)', levels: ['off', 'on'] },
   'discounts.manage':      { group: 'Money',      label: 'Discount codes', levels: ['off', 'on'] },
   'dashboard.view':        { group: 'Money',      label: 'Dashboard (takings, money owed)', levels: ['off', 'on'] },
+  /* Read only: the Finances page and the expense, payment and tax reports.
+     Adding, editing or deleting anything there stays the owner's (NEVER_STAFF). */
+  'finances.view':         { group: 'Money',      label: 'See Finances and download its reports (read only)', levels: ['off', 'on'] },
   'kb.edit':               { group: 'Playbook',   label: 'Write playbook articles', levels: ['off', 'approval', 'on'] },
 };
 
@@ -72,7 +75,9 @@ const PERMISSIONS = {
    training"). Tax decisions, money corrections and write-offs, sales credit,
    the books, staff and pay. These are not in PERMISSIONS at all, so there is
    no toggle to turn on; their routes are 'owner' in ROUTES, and a test checks
-   every one stays that way. */
+   every one stays that way. Reading the books is the one exception (owner,
+   2026-10-09: "build read only finance" for the bookkeeper): finances.view
+   opens the Finances page and its reports, and every change stays here. */
 const NEVER_STAFF = [
   'POST /admin/certificates/:id/review',
   'POST /admin/quotes/:code/exemption',
@@ -84,17 +89,12 @@ const NEVER_STAFF = [
   'POST /admin/quote/:code/credit',
   'POST /admin/quote/:code/sale-type',
   'POST /admin/quote/:code/restore-version',
-  'GET /admin/finances',
   'POST /admin/expenses',
   'POST /admin/expenses/:id',
   'POST /admin/expenses/:id/delete',
   'POST /admin/expenses/roll',
   'GET /admin/exports',
   'GET /admin/exports/quotes.csv',
-  'GET /admin/exports/payments.csv',
-  'GET /admin/exports/expenses.csv',
-  'GET /admin/exports/unlinked.csv',
-  'GET /admin/tax.csv',
   'POST /admin/tax/remit',
   'POST /admin/quote/:code/costs',
   'GET /admin/staff',
@@ -151,6 +151,13 @@ const PRESETS = {
     note: 'Team chat, the Playbook, Resources and their own training. No jobs, quotes, prices or customers.',
     perms: { 'kb.edit': 'approval' },
   },
+  /* The Team preset plus read-only Finances: what a bookkeeper needs to
+     close a month, and nothing that changes the books. */
+  books: {
+    label: 'Bookkeeper (read-only finances)',
+    note: 'Team chat, the Playbook and training, plus the Finances page and its reports to read and download. Cannot change anything there.',
+    perms: { 'kb.edit': 'approval', 'finances.view': 'on' },
+  },
   supervised: {
     label: 'Supervised',
     note: 'Sends quotes up to $500 and messages customers; discounts still come to you.',
@@ -177,7 +184,7 @@ const PRESETS = {
 
 /* The preset a new helper starts on for each training path: the path's own
    training preset, or Training for sales. */
-const TRACK_PRESET = { design: 'design', content: 'team', ads: 'team', bookkeeper: 'team', developer: 'team' };
+const TRACK_PRESET = { design: 'design', content: 'team', ads: 'team', bookkeeper: 'books', developer: 'team' };
 function presetForTrack(track) {
   return Object.prototype.hasOwnProperty.call(TRACK_PRESET, track) ? TRACK_PRESET[track] : 'training';
 }
@@ -306,17 +313,17 @@ const ROUTES = {
 
   'GET /admin/dashboard': 'dashboard.view',
 
-  'GET /admin/finances': 'owner',
+  'GET /admin/finances': 'finances.view',
   'POST /admin/expenses': 'owner',
   'POST /admin/expenses/:id': 'owner',
   'POST /admin/expenses/:id/delete': 'owner',
   'POST /admin/expenses/roll': 'owner',
   'GET /admin/exports': 'owner',
   'GET /admin/exports/quotes.csv': 'owner',
-  'GET /admin/exports/payments.csv': 'owner',
-  'GET /admin/exports/expenses.csv': 'owner',
-  'GET /admin/exports/unlinked.csv': 'owner',
-  'GET /admin/tax.csv': 'owner',
+  'GET /admin/exports/payments.csv': 'finances.view',
+  'GET /admin/exports/expenses.csv': 'finances.view',
+  'GET /admin/exports/unlinked.csv': 'finances.view',
+  'GET /admin/tax.csv': 'finances.view',
   'POST /admin/tax/remit': 'owner',
   'POST /admin/unlinked/:id/tax': 'owner',
   'POST /admin/quote/:code/costs': 'owner',

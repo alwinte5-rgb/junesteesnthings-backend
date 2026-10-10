@@ -28,6 +28,18 @@ const ADS_CORE = require('./ads-core');
 const BOOKS_CORE = require('./books-core');
 const DEV_CORE = require('./dev-core');
 
+/* June's answers to the blanks in each lesson (answers.js). The unanswered
+   body joins `was`, so a live copy she has not edited is replaced. */
+const ANSWERS = require('./answers');
+for (const c of [SALES_CORE, SALES_LEADGEN, SALES_CLOSER, SALES_ACCOUNTS, DESIGN_CORE, CONTENT_CORE, ADS_CORE, BOOKS_CORE, DEV_CORE]) {
+  for (const l of c.modules.flatMap((m) => m.lessons)) {
+    if (!l.body) continue;
+    let b = l.body;
+    for (const [token, answer] of Object.entries(ANSWERS)) b = b.split(token).join(answer);
+    if (b !== l.body) { l.was = [...(l.was || []), l.body]; l.body = b; }
+  }
+}
+
 const COURSES = { [SALES_CORE.key]: SALES_CORE, [SALES_LEADGEN.key]: SALES_LEADGEN, [SALES_CLOSER.key]: SALES_CLOSER,
   [SALES_ACCOUNTS.key]: SALES_ACCOUNTS, [DESIGN_CORE.key]: DESIGN_CORE, [CONTENT_CORE.key]: CONTENT_CORE,
   [ADS_CORE.key]: ADS_CORE, [BOOKS_CORE.key]: BOOKS_CORE,
