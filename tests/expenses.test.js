@@ -85,8 +85,9 @@ test('entries grouped by month, newest first, with totals and categories', () =>
 
 test('the server fills months on its own, remembers deletions, and lists by month', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  const fin = src.slice(src.indexOf('app.get(FINANCES_PATH'), src.indexOf('app.get(FINANCES_PATH') + 600);
-  assert.match(fin, /await rollRecurringExpenses\(\)/, 'Finances fills the months before it counts');
+  const fin = src.slice(src.indexOf('app.get(FINANCES_PATH'), src.indexOf('app.get(FINANCES_PATH') + 1200);
+  /* The owner's visit fills the months first; a view-only helper's visit writes nothing (Codex #230). */
+  assert.match(fin, /if \(canEdit\) await rollRecurringExpenses\(\)/, 'Finances fills the months before it counts');
   assert.match(src, /await step\('monthly costs', rollRecurringExpenses\);/, 'and so does the hourly sweep');
   assert.match(src, /pg_advisory_xact_lock\(hashtext\('expenses:roll'\)\)/, 'two at once cannot both add the rent');
   assert.match(src, /INSERT INTO expense_roll_skips/, 'a deleted monthly cost is remembered');
