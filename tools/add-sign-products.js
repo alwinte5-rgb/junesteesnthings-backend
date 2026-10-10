@@ -19,18 +19,48 @@ const fs = require('fs');
 const F = require('./lib/sign-families');
 const { mysql, enjson, sq } = require('./lib/db');
 
+/* Shop titles (owner, 2026-10-10: "what's a custom rigid sign? Be more
+   specific in the titles"). Each one STARTS with the words the quote form and
+   the product list match on (quote-signs.js KINDS, server.js PRODUCT_GROUPS),
+   and the specifics follow the dash; tests/sign-titles.test.js pins both. */
 const NAMES = {
+  yard_sign: 'Yard Signs — Corrugated Plastic, Stakes Available',
+  rigid_sign: 'Rigid Signs — Aluminum, PVC & Foam Board',
+  window_graphic: 'Window Graphics — See-Through, Cling & Clear Decals',
+  wall_floor: 'Wall & Floor Graphics — Removable Decals & Murals',
+  vehicle_graphic: 'Vehicle Graphics — Car, Van & Truck Lettering',
+  vehicle_magnet: 'Vehicle Magnets — Removable Car Door Signs',
+  custom_magnet: 'Custom Magnets — Fridge & Promo, Any Size',
+  photo_panel: 'Photo Panels — Acrylic, Canvas & Poster Prints',
+  stretched_canvas: 'Stretched Canvas — Gallery-Wrapped, Ready to Hang',
+};
+/* What each product was called before, so a run finds the row and renames it
+   instead of creating a second one. */
+const OLD_NAMES = {
   yard_sign: 'Custom Yard Signs', rigid_sign: 'Custom Rigid Signs', window_graphic: 'Custom Window Graphics',
   wall_floor: 'Custom Wall & Floor Graphics', vehicle_graphic: 'Custom Vehicle Graphics', vehicle_magnet: 'Custom Vehicle Magnets',
   custom_magnet: 'Custom Magnets (any size)', photo_panel: 'Custom Photo Panels & Prints', stretched_canvas: 'Custom Stretched Canvas',
 };
+/* The first line of each description: what it is and where it is used. */
+const LEADS = {
+  yard_sign: 'Printed corrugated plastic (coroplast) signs for lawns, events and job sites. 4mm signs take a metal step stake; 10mm is stiff enough to stand on its own.',
+  rigid_sign: 'Flat printed signs on foam board, PVC or aluminum, for walls, easels, doors and posts, indoors or out.',
+  window_graphic: 'Printed decals for shop windows and glass doors: see-through one-way vinyl, reusable cling, or clear vinyl.',
+  wall_floor: 'Printed decals and murals for walls and floors: removable fabric, long-life vinyl, floor graphics, dry-erase and reflective.',
+  vehicle_graphic: 'Printed vinyl lettering and graphics that stick to cars, vans and trucks.',
+  vehicle_magnet: 'Printed magnetic signs for car doors that lift off whenever you need, such as at the car wash.',
+  custom_magnet: 'Printed magnets at any size for fridges, giveaways and promotions, priced by the square inch.',
+  photo_panel: 'Photos and art printed on acrylic, rolled canvas or satin poster paper, for indoor walls.',
+  stretched_canvas: 'Canvas prints gallery-wrapped on 1-1/2" bars, ready to hang.',
+};
+const descriptionOf = (key) => `${LEADS[key]} Design it here; the price updates as you choose.`;
 
 /* The storefront tabs the sign products are filed under, after the apparel
    tabs (orders 1-9). Resolved by slug, created when missing, so a re-run only
    adds what is not there. The any-size banner (tools/add-banner-product.js)
    is filed here too, since it belongs with the signs. */
 const CATEGORIES = [
-  { name: 'Banners', slug: 'custom-banners', order: 10, products: ['Custom Size Vinyl Banner'] },
+  { name: 'Banners', slug: 'custom-banners', order: 10, products: [require('./add-banner-product').NAME] },
   { name: 'Yard & Rigid Signs', slug: 'custom-yard-rigid-signs', order: 11, families: ['yard_sign', 'rigid_sign'] },
   { name: 'Window, Wall & Floor Graphics', slug: 'custom-window-wall-floor-graphics', order: 12, families: ['window_graphic', 'wall_floor'] },
   { name: 'Vehicle Graphics & Magnets', slug: 'custom-vehicle-graphics-magnets', order: 13, families: ['vehicle_graphic', 'vehicle_magnet', 'custom_magnet'] },
@@ -74,7 +104,7 @@ function familyStages() {
   return { front: side('Front'), back: side('Back') };
 }
 
-module.exports = { NAMES, CATEGORIES, familyAttributes, familyStages };
+module.exports = { NAMES, OLD_NAMES, LEADS, descriptionOf, CATEGORIES, familyAttributes, familyStages };
 if (require.main !== module) return;
 
 const argv = process.argv.slice(2);
@@ -89,13 +119,13 @@ console.log(APPLY ? 'APPLYING' : 'DRY RUN');
 const author = mysql(url, 'SELECT author FROM lumise_products WHERE active=1 LIMIT 1;', { rows: true })[0].author;
 for (const [key, name] of Object.entries(NAMES)) {
   const fam = F.FAMILIES[key];
-  const got = mysql(url, 'SELECT id FROM lumise_products WHERE name=' + sq(name) + ';', { rows: true });
+  const got = mysql(url, 'SELECT id FROM lumise_products WHERE name IN (' + sq(name) + ',' + sq(OLD_NAMES[key]) + ') ORDER BY name=' + sq(name) + ' DESC;', { rows: true });
   console.log(`  ${got.length ? 'update #' + got[0].id : 'create'}  ${name}  (${fam.materials.length} materials, ${fam.sizing})`);
   if (!APPLY) continue;
   const attrs = sq(enjson(familyAttributes(key))), stages = sq(enjson(familyStages()));
-  const desc = sq(`${fam.note} Design it here; the price updates as you choose.`);
+  const desc = sq(descriptionOf(key));
   if (got.length) {
-    mysql(url, `UPDATE lumise_products SET description=${desc}, price=0, attributes=${attrs}, stages=${stages}, printings='', active=1, updated=NOW() WHERE id=${Number(got[0].id)};`);
+    mysql(url, `UPDATE lumise_products SET name=${sq(name)}, description=${desc}, price=0, attributes=${attrs}, stages=${stages}, printings='', active=1, updated=NOW() WHERE id=${Number(got[0].id)};`);
   } else {
     mysql(url, 'INSERT INTO lumise_products (name,description,price,supplier_cost,stages,attributes,printings,'
       + 'thumbnail_url,active,`order`,author,created,updated) VALUES (' + sq(name) + ',' + desc
