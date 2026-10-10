@@ -384,7 +384,8 @@ test('the exempt query survives a database that has not migrated yet', () => {
   const fn = lift('taxPositionByMonth');
   const i = fn.indexOf('WHERE COALESCE(q.taxable');
   assert.notStrictEqual(i, -1, 'exempt query not found');
-  assert.match(fn.slice(i, i + 260), /\.catch\(\(\) => \(\{ rows: \[\] \}\)\)/,
+  /* Degrades to no rows, and (Codex #108) says so in the error digest. */
+  assert.match(fn.slice(i, i + 420), /\.catch\(\(err\) => \{ if \(typeof reportError === 'function'\) reportError\('tax:position-query', err\)\.catch\(\(\) => \{\}\); return \{ rows: \[\] \}; \}\)/,
     'a missing column must not take the tax position down with it');
 });
 

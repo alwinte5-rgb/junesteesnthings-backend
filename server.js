@@ -1615,7 +1615,7 @@ async function taxPositionByMonth(limit = 24) {
             COALESCE(SUM(tax_portion),0)                         AS tax_known,
             COUNT(*) FILTER (WHERE tax_portion IS NULL)          AS tax_unknown
        FROM unlinked_payments
-      GROUP BY 1`).catch(() => ({ rows: [] }));
+      GROUP BY 1`).catch((err) => { if (typeof reportError === 'function') reportError('tax:position-query', err).catch(() => {}); return { rows: [] }; })   /* never silent (Codex #108) */;
 
   /* Receipts deliberately not taxed. Illinois files these as receipts and then
      DEDUCTS them, so the return needs the figure — leaving an exempt sale out
@@ -1634,7 +1634,7 @@ async function taxPositionByMonth(limit = 24) {
                                       AS exempt_undocumented
        FROM quote_payments p JOIN quotes q ON q.code = p.quote_code
       WHERE COALESCE(q.taxable, q.tax > 0) = false
-      GROUP BY 1`).catch(() => ({ rows: [] }));
+      GROUP BY 1`).catch((err) => { if (typeof reportError === 'function') reportError('tax:position-query', err).catch(() => {}); return { rows: [] }; })   /* never silent (Codex #108) */;
 
   /* Tax-exempt design-studio sales: payments stamped with the certificate
      their checkout took the tax off for (recordUnlinkedPayment). Deducted while
@@ -1648,7 +1648,7 @@ async function taxPositionByMonth(limit = 24) {
             COUNT(*)                  AS exempt_payments
        FROM unlinked_payments u JOIN tax_certificates c ON c.id = u.tax_certificate_id
       WHERE c.status <> 'rejected'
-      GROUP BY 1`).catch(() => ({ rows: [] }));
+      GROUP BY 1`).catch((err) => { if (typeof reportError === 'function') reportError('tax:position-query', err).catch(() => {}); return { rows: [] }; })   /* never silent (Codex #108) */;
 
   const blank = (period) => ({
     period, collected: 0, gross: 0, payments: 0, remitted: 0, last_paid: null,
@@ -17757,6 +17757,11 @@ app.post('/admin/quote/:code/email', requireAdmin, async (req, res) => {
     if (q.status === 'held' || q.status === 'draft' || q.cancelled_at) {
       return res.redirect(`${back}?err=${encodeURIComponent('That quote is not with the customer, so it was not emailed.')}`);
     }
+    /* This email asks them to accept and pay the deposit: wrong for a job that
+       already has money on it, or a dispute (Codex #140, fixed 2026-10-10). */
+    if (Number(q.paid_amount) > 0) {
+      return res.redirect(`${back}?err=${encodeURIComponent('This job already has a payment on it, so the "accept and pay" quote email was not sent. Send a message from the job instead.')}`);
+    }
     const r = await emailQuote(q);
     if (r.ok) logActivity(currentActor() || OWNER_ACTOR, 'quote emailed', { type: 'quote', id: code }, {});
     return res.redirect(`${back}?${r.ok ? 'ok=' + encodeURIComponent('Quote emailed to ' + r.to + '.')
@@ -26888,7 +26893,9 @@ async function releaseHeldQuote(code, requestedBy) {
     syncQuoteContact(q, 'jt_quote_sent').catch(() => {});
   }).catch(() => {});
   syncQuoteToLumise(q).catch(() => {});
-  if (q.email) emailQuote(q).catch(() => {});
+  /* The owner is told if the customer's email did not go (Codex #140, fixed
+     2026-10-10); the quote is live either way. */
+  q.emailResult = q.email ? await emailQuote(q).catch((e) => ({ ok: false, error: e.message })) : null;
   return q;
 }
 
@@ -26927,8 +26934,10 @@ app.post('/admin/approvals/:id', requireAdmin, async (req, res) => {
     if (a.kind === 'quote') {
       const q = await releaseHeldQuote(a.subject_id, a.requested_by);
       await finish(q ? 'approved' : 'withdrawn');
-      return back(res, '/admin/approvals', q ? 'ok' : 'err', q
-        ? `Quote ${a.subject_id} is live. The helper sees it on My Day with the message to send.`
+      const mailFail = q && q.emailResult && !q.emailResult.ok
+        ? ` The email to the customer did NOT go (${q.emailResult.error}): send it from the quote page.` : '';
+      return back(res, '/admin/approvals', q ? (mailFail ? 'err' : 'ok') : 'err', q
+        ? `Quote ${a.subject_id} is live. The helper sees it on My Day with the message to send.${mailFail}`
         : `Quote ${a.subject_id} was no longer waiting.`);
     }
     if (a.kind === 'message') {
@@ -27461,6 +27470,12 @@ function creditField(q, roster, { bare = false } = {}) {
     ...roster.map((r) => `<option value="${r.id}"${r.id === pick ? ' selected' : ''}>${escEmail(r.name)}${
       actor.kind === 'staff' && r.id === actor.id ? ' (me)' : ''}</option>`),
   ];
+  /* Credited to a helper no longer on the active roster: keep them selected,
+     or the browser picks the first option and a plain save moves the credit
+     (and its commission) to the owner (Codex #123, fixed 2026-10-10). */
+  if (pick != null && pick !== CREDIT_OWNER && !roster.some((r) => r.id === pick)) {
+    opts.push(`<option value="${Number(pick)}" selected>Helper #${Number(pick)} (no longer active)</option>`);
+  }
   return `${bare ? '' : '<label>Sales credit <span style="text-transform:none;font-weight:400">(who made this sale — their commission)</span></label>'}
     <select name="credit_to">${opts.join('')}</select>`;
 }
@@ -27478,6 +27493,10 @@ async function setSalesCredit(code, raw, actor) {
   } else {
     to = intIn(want);
     if (!to) return { ok: false, msg: 'Pick who made the sale.' };
+    /* Keeping the CURRENT credit is no change, even for a helper since
+       disabled (the form keeps them selected; Codex #123). */
+    const { rows: [cur] } = await pool.query('SELECT credited_to FROM quotes WHERE code = $1', [code]);
+    if (cur && Number(cur.credited_to) === to) return { ok: true };
     const { rows: [s] } = await pool.query('SELECT active FROM staff WHERE id = $1', [to]);
     if (!s || !s.active) return { ok: false, msg: 'That helper is not active.' };
   }
