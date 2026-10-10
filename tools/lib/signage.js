@@ -234,6 +234,20 @@ const LABOUR = {
    ten, the same way the 24in cutout carries its own sheet minimum. */
 const YARD_SIGN_MIN_QTY = 10;
 
+/* CUTTING. Signs365 cuts rectangles out of the sheet as part of the sheet price:
+   the coro order screen (2026-09-22) charges only gloss, grommets and stakes,
+   and rounded corners are free, so a rectangle has no cut line. Contour cutting
+   is only on full 48x96 sheets.
+
+   CONTOUR FILES COST TIME (owner, 2026-10-10): building the cut-contour path
+   for a shaped piece takes 20-30 minutes a design, about twice as long as
+   cutting it by hand, which is why the owner hand-cuts big heads (cutouts.js
+   prices those by hand, 5 minutes a head). Every product Signs365 contour-cuts
+   adds this once per DESIGN, not per piece. */
+const CONTOUR_FILE_MINUTES = 25;
+/** Shop time to build the contour files for `designs` distinct shapes, in dollars. */
+const contourFileCost = (designs = 1) => (SHOP_RATE * CONTOUR_FILE_MINUTES * designs) / 60;
+
 /** Shop time on a line of `qty` `kind`, in dollars. */
 function labourCost(kind, qty = 1) {
   const l = LABOUR[kind];
@@ -591,9 +605,12 @@ function fullBodyCutoutCost(qty, { sides = 'single', minutes = STANDEE_MINUTES, 
   const vinyl = STANDEE_PRINT_SQFT * GF_VINYL * 1.20 * (sides === 'double' ? 2 : 1);
   const inHouse = qty * (BLANK_BOARD['4mm_white'] + vinyl + (shopRate * minutes) / 60);
 
-  /* Signs365, freight amortised across the order. */
-  const s365_4 = CORO[4][sides] * qty + boardFreight('coro');
-  const s365_10 = CORO[10][sides] * qty + boardFreight('coro');
+  /* Signs365, freight amortised across the order. Signs365 contour-cuts the
+     board, so the order also carries the time to build the cut file
+     (CONTOUR_FILE_MINUTES, once a design; a line is one design). The
+     in-house route is cut by hand and needs no file. */
+  const s365_4 = CORO[4][sides] * qty + boardFreight('coro') + contourFileCost(1);
+  const s365_10 = CORO[10][sides] * qty + boardFreight('coro') + contourFileCost(1);
 
   const options = [
     { route: 'in-house (collected blank)', cost: inHouse, mm: 4 },
@@ -710,6 +727,7 @@ module.exports = {
   BANNER_GROMMETS, BANNER_GROMMET_SPACING_FT, grommetPositions, BANNER_TURNAROUND_DAYS,
   BANNER_FINISH, BANNER_HANGING, BANNER_STOCK_SIZES, stockBannerAddons, windSlitsAllowed, bannerFinishCost, bannerFinishPrice,
   BANNER_SQFT_RATE, BANNER_RATES, BANNER_MATERIALS, BANNER_MAX_FT, bannerPrice, bannerTable,
+  CONTOUR_FILE_MINUTES, contourFileCost,
   perSheet, coroCost, bannerCost, posterCost, windowCost, adhesiveCost,
   magnetCost, paperCost, acrylicCost, canvasCost, retail,
 };

@@ -36,7 +36,22 @@ test('stock ladders never rise with quantity, never fall under x2, and honour th
   }
   const y = t.families.yard_sign.prices['4s'];
   assert.strictEqual(y['24x18'][''][0][0], 10, 'small yard signs start at 10');
-  assert.strictEqual(y['36x24'][''][0][0], 1);
+  /* Owner, 2026-10-10: one 36x24 was $125 because one sign paid for the whole
+     sheet. A yard-sign minimum is a full sheet (capped at 10), sold in sets
+     of a sheet where 2-9 fit. */
+  assert.strictEqual(y['36x24'][''][0][0], 4, '36x24 starts at a sheet of 4');
+  assert.strictEqual(y['48x36'][''][0][0], 2, '48x36 starts at a sheet of 2');
+  assert.strictEqual(y['96x48'][''][0][0], 1, 'a 96x48 is one board');
+  for (const [size, step] of [['36x24', 4], ['48x36', 2]]) {
+    for (const [q] of y[size]['']) assert.strictEqual(q % step, 0, `${size} bands are whole sheets (${q})`);
+    assert.strictEqual(t.families.yard_sign.sizes.find((z) => z.key === size).step, step, `${size} publishes its step`);
+  }
+  /* Worked example: four 36x24 = one $44 sheet + labour (15 min + 4 x 0.5 min
+     at $50/h) = $58.17, x2 = $116.33 -> $29.08 each -> evened up to $30. */
+  const lab4 = sg.labourCost('yard_sign', 4);
+  assert.strictEqual(Math.round(lab4 * 100) / 100, 14.17, 'labour is in the price');
+  assert.strictEqual(y['36x24'][''][0][1], sg.evenUp(((sg.CORO[4].single + lab4) / 4) * sg.MARKUP));
+  assert.strictEqual(y['36x24'][''][0][1], 30);
   assert.ok(y['24x18']['gloss'][0][1] > y['24x18'][''][0][1], 'gloss costs more');
   const cost10 = F.stockLadder('yard_sign', F.FAMILIES.yard_sign, F.FAMILIES.yard_sign.materials[0], 24, 18, '')[0][1] * 10;
   assert.ok(cost10 >= (sg.CORO[4].single + sg.labourCost('yard_sign', 10)) * sg.MARKUP, 'ten small signs carry their sheet x2');
@@ -84,4 +99,14 @@ test('every sign family is filed under exactly one storefront category', () => {
   const filed = CATEGORIES.flatMap((c) => c.families || []);
   assert.deepStrictEqual([...filed].sort(), Object.keys(NAMES).sort());
   assert.strictEqual(new Set(CATEGORIES.map((c) => c.slug)).size, CATEGORIES.length);
+});
+
+test('contour-cut work carries the cut-file time, once a design (owner, 2026-10-10)', () => {
+  assert.strictEqual(sg.CONTOUR_FILE_MINUTES, 25);
+  assert.strictEqual(Math.round(sg.contourFileCost(1) * 100) / 100, 20.83);
+  // The standee's Signs365 routes are contour cut: their cost includes the file.
+  const r = sg.fullBodyCutoutCost(10);
+  const s365 = sg.CORO[4].single * 10 + sg.FREIGHT.oversized_coro + sg.contourFileCost(1) + 24 * 10;
+  if (r.route === 'signs365 4mm') assert.ok(Math.abs(r.cost - s365) < 0.01, 'the contour file is in the Signs365 route');
+  assert.ok(Math.abs(r.premium10mm.cost - (sg.CORO[10].single * 10 + sg.FREIGHT.oversized_coro + sg.contourFileCost(1) + 24 * 10)) < 0.01);
 });

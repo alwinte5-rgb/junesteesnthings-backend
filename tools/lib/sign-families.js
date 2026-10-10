@@ -76,9 +76,21 @@ const FAMILIES = {
       { key: 'stake', label: 'A step stake with each sign', cost: sg.STEP_STAKE, only: ['4s', '4d'] },
     ],
     oversized_freight: sg.FREIGHT.oversized_coro,
-    /* The owner's minimum (signage.js YARD_SIGN_MIN_QTY): one small sign is a
-       whole sheet and a whole job, ~$115, against a $15-25 local market. */
-    min_qty_by_size: { '18x12': sg.YARD_SIGN_MIN_QTY, '24x18': sg.YARD_SIGN_MIN_QTY },
+    /* The minimum is a full Signs365 sheet: coro is bought by the whole 48x96
+       sheet, so one sign pays for every sign that would have fit beside it.
+       One 36x24 was $115 + freight against a $30-58 market (owner, 2026-10-10,
+       "1 36x24 board is $125 when more can fit on the sheet"); four, a full
+       sheet, are about $30 each. Capped at YARD_SIGN_MIN_QTY (10): an 18x12
+       fits 20 but 10 already prices inside the market. 96x48 is one board. */
+    min_qty_by_size: Object.fromEntries([[18, 12], [24, 18], [36, 24], [48, 36], [96, 48]]
+      .map(([w, h]) => [`${w}x${h}`, Math.max(1, Math.min(sg.perSheet(w, h), sg.YARD_SIGN_MIN_QTY))])),
+    /* ...and sold in whole sheets where a sheet holds 2-9: a 5th 36x24 opens a
+       second sheet, so selling "any number from 4" priced the 4 at the 5's
+       $42 (the ladder never lets a bigger order cost more each). In sets of a
+       sheet, 4 is $30 each and 8 is two sheets. 18x12 and 24x18 sit at the
+       10 minimum, already inside the market, so they keep a step of 1. */
+    qty_step_by_size: Object.fromEntries([[18, 12], [24, 18], [36, 24], [48, 36], [96, 48]]
+      .map(([w, h]) => { const per = sg.perSheet(w, h); return [`${w}x${h}`, per >= 2 && per < sg.YARD_SIGN_MIN_QTY ? per : 1]; })),
   },
   rigid_sign: {
     label: 'Rigid Signs', sizing: 'stock', target_dpi: 150, labour: 'rigid',
@@ -220,12 +232,16 @@ function stockLadder(famKey, fam, mat, w, h, combo) {
   const out = [];
   let worst = 0;
   const min = (fam.min_qty_by_size || {})[`${w}x${h}`] || 1;
-  const bands = LADDER_BANDS.filter((b) => b >= min);
+  /* A size sold in sets (qty_step_by_size) has bands on whole sets, and only
+     whole sets are priced: a quantity between them is not for sale. */
+  const step = (fam.qty_step_by_size || {})[`${w}x${h}`] || 1;
+  const up = (b) => Math.ceil(b / step) * step;
+  const bands = [...new Set(LADDER_BANDS.map(up).filter((b) => b >= min))];
   if (bands[0] !== min) bands.unshift(min);
   for (let i = bands.length - 1; i >= 0; i--) {
-    const lo = bands[i], hi = (bands[i + 1] || lo + 1) - 1;
+    const lo = bands[i], hi = (bands[i + 1] || lo + step) - 1;
     let bandWorst = 0;
-    for (let q = lo; q <= Math.min(hi, lo + 60); q++) {
+    for (let q = lo; q <= Math.min(hi, lo + 60); q += step) {
       const c = stockCost(famKey, fam, mat, w, h, q, combo);
       if (c === null) return null;
       bandWorst = Math.max(bandWorst, (c + stockLabour(famKey, fam, q)) / q);
@@ -259,7 +275,8 @@ function signsTable() {
       out.limits = fam.limits;
       out.labour_each = Math.round(labourEach(fam.labour) * 10000) / 10000;
     } else {
-      out.sizes = fam.sizes.map(([w, h]) => ({ key: `${w}x${h}`, w, h, label: `${w}" x ${h}"` }));
+      out.sizes = fam.sizes.map(([w, h]) => ({ key: `${w}x${h}`, w, h, label: `${w}" x ${h}"`,
+        step: (fam.qty_step_by_size || {})[`${w}x${h}`] || 1 }));
       out.sheet_upgrades = Object.fromEntries(Object.entries(fam.sheet_upgrades || {}).map(([k, v]) => [k, { label: v.label }]));
       out.prices = {};
       out.freight_by_size = {};
