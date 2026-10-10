@@ -33,7 +33,7 @@ test('#123 money is not applied to a quote still waiting on price approval', () 
 
 test('#127 a payment that accepts a quote declines its unchosen options', () => {
   assert.match(src, /async function declineUnchosenOptions\(code\)/);
-  const n = (src.match(/await declineUnchosenOptions\(code\)/g) || []).length;
+  const n = (src.match(/await declineUnchosenOptions\(code\)/g) || []).length;   // both call sites
   assert.strictEqual(n, 2, 'Stripe landing and manual mark-paid');
   /* The rule itself: nothing ticked keeps required lines and declines the rest. */
   const fn = after('function applyOptionChoice(items, chosen, sharedCodes) {', 4000);
