@@ -19,5 +19,5 @@ test('#125 an expedited quote job preselects the fastest rate, not the cheapest'
   assert.strictEqual(SHIP.preferredRate(rates, '').id, 'g', 'ground jobs keep the first (cheapest)');
   assert.strictEqual(SHIP.preferredRate(rates, '', { expedited: true }).id, 'p2', 'fastest, cheapest among equals');
   assert.strictEqual(SHIP.preferredRate(rates, 'Ground', { expedited: true }).id, 'g', 'a paid service still wins');
-  assert.match(src, /shipRatesHtml\(ref, rates, paidService, !studio && String\(o\.ship_method\)\.toLowerCase\(\) === 'expedited'\)/);
+  assert.match(src, /shipRatesHtml\(ref, rates, paidService, !studio && String\(o\.ship_method\)\.toLowerCase\(\) === 'expedited',/);
 });

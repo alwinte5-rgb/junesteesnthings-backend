@@ -28,5 +28,5 @@ test('#108 each payment keeps whether the sale was exempt when it was banked', (
 
 test('designer #12: a label bought but not saved on the studio order is said, with the PDF', () => {
   const r = src.slice(src.indexOf("const { body, timedOut } = await studioShip(payload, 75000);"));
-  assert.match(r.slice(0, 1600), /if \(r\.kind !== 'quote' && body\.saved === false\) \{\s*return shipBack\(res, r\.ref, 'warn', `Label bought, but the studio could not save it/);
+  assert.match(r.slice(0, 3500), /if \(r\.kind !== 'quote' && body\.saved === false\) \{\s*return shipBack\(res, r\.ref, 'warn', `Label bought, but the studio could not save it/);
 });

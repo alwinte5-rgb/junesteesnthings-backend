@@ -310,6 +310,8 @@ test('refs are parsed strictly', () => {
 /* The card, rendered from its own source with the helpers it uses. */
 function card() {
   const sandbox = { SHIP, money, STUDIO_ADMIN: 'https://design.jtees.net/admin.php',
+    // the owner: every control shows (who sees Buy is tested in codex-p2-c)
+    STAFF: { mayUseRoute: () => true }, currentActor: () => null, OWNER_ACTOR: { kind: 'owner' },
     quoteSummary: (items) => (items || []).map((i) => i.description).join(' + ') || 'your order',
     balanceOf: (q, t) => Math.max(0, Number(t) - Number(q.paid_amount || 0)),
     quoteTotals: (q) => ({ total: Number(q.total || 0) }) };
@@ -406,7 +408,7 @@ test('the menu, the dashboard and the morning email all say what is waiting', ()
   assert.match(dash, /href: '\/admin\/shipping' \}\] : \[\]\),/);
   const digest = lift('sendDailyDigest');
   assert.match(digest, /if \(!rows\.length && !ship( && !healthHtml)?\) return;/, 'a day with only studio orders waiting still sends');
-  assert.match(digest, /if \(!live\.length && !ship( && !healthHtml)?\) return;/);
+  assert.match(digest, /if \(!live\.length && !ship( && !healthHtml)?( && !teamFirst)?\) return;/);
   assert.match(digest, /\(ship \? `\$\{ship\.subject\} · ` : ''\) \+/);
   assert.match(digest, /\$\{shipDigestHtml\(ship\)\}<h2/);
 });
