@@ -43,13 +43,16 @@ async function ssa(p, tries = 5) {
       const r = await fetch(API + p, { headers: { Authorization: auth, Accept: 'application/json' }, signal: AbortSignal.timeout(60000) });
       st = r.status;
       if (r.status === 429 || r.status >= 500) continue;
-      if (!r.ok) throw new Error('S&S returned ' + r.status);
+      /* Verb, route and S&S's own words: a bad key, a refused IP and a wrong
+         route must not all read "unreachable" (Codex #232). */
+      if (!r.ok) throw new Error('S&S GET ' + p.split('?')[0] + ' returned ' + r.status + ': ' + (await r.text().catch(() => '')).slice(0, 200));
       return await r.json();
     } catch (e) {
-      if (e.message && e.message.startsWith('S&S returned')) throw e;
+      if (e.message && e.message.startsWith('S&S GET')) throw e;
+      st = st || (e.name || 'network') + ': ' + e.message;
     }
   }
-  throw new Error('S&S unreachable (last ' + st + ')');
+  throw new Error('S&S GET ' + p.split('?')[0] + ' unreachable after ' + tries + ' tries (last ' + st + ')');
 }
 
 function colourTitles(attributes) {
@@ -104,7 +107,7 @@ async function main() {
     if (!titles.length) continue;
     let prods;
     try { prods = await ssa('products/?styleid=' + p.sid); }
-    catch (e) { console.log('  #' + String(p.id).padStart(3) + '  ' + p.name.slice(0, 42).padEnd(44) + 'UNREACHABLE'); errors++; continue; }
+    catch (e) { console.log('  #' + String(p.id).padStart(3) + '  ' + p.name.slice(0, 42).padEnd(44) + 'FAILED — ' + e.message); errors++; continue; }
     if (!Array.isArray(prods) || !prods.length) { console.log('  #' + String(p.id).padStart(3) + '  ' + p.name.slice(0, 42).padEnd(44) + 'no S&S rows'); errors++; continue; }
 
     const byColour = new Map();
@@ -136,7 +139,20 @@ async function main() {
   if (!WRITE) { console.log('\n  dry run — pass --write to update ' + OUT); return; }
   if (errors) { process.exitCode = 1; console.error('\n  refusing to write an incomplete map'); return; }
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
-  fs.writeFileSync(OUT, JSON.stringify(map, null, 1) + '\n');
+  /* A run limited to some products MERGES into the file: writing only them
+     wiped every other product's photos (Codex #232). A product listed but now
+     without any photo is removed, as a full run would. */
+  let out = map;
+  if (only.length) {
+    let prev = {};
+    try { prev = JSON.parse(fs.readFileSync(OUT, 'utf8')); } catch (e) {
+      if (e.code !== 'ENOENT') { process.exitCode = 1; console.error('\n  ' + OUT + ' could not be read (' + e.message + '); refusing to replace it with ' + only.length + ' product(s)'); return; }
+    }
+    out = { ...prev };
+    for (const id of only) delete out[id];
+    Object.assign(out, map);
+  }
+  fs.writeFileSync(OUT, JSON.stringify(out, null, 1) + '\n');
   console.log('\n  wrote ' + OUT);
 }
 

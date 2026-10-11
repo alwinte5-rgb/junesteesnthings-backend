@@ -137,7 +137,7 @@ test('the generator refuses a colour count the press cannot run', () => {
   const { colorTable } = require('../tools/lib/screenprint');
   const rows = (n) => Array.from({ length: n }, (_, i) =>
     ({ colors: i + 1, tiers: [[99, 3.85 + i], [249, 3.45 + i]] }));
-  assert.throws(() => colorTable(rows(7), 50, 6), /7 colours cannot be printed/);
+  assert.throws(() => colorTable(rows(7), 50, 6), /7 colou?rs cannot be printed/);
   assert.doesNotThrow(() => colorTable(rows(6), 50, 6));
 });
 
@@ -233,8 +233,8 @@ test('any stage carrying an image is enough', () => {
 test('the note names the real reason', () => {
   /* "7 colours" would be wrong and confusing on a design whose countable colour
      total is zero. */
-  assert.match(cartPhp, /uses a photo or uploaded image, which has more colours than/);
-  assert.match(cartPhp, /which prints any number of colours/);
+  assert.match(cartPhp, /uses a photo or uploaded image, which has more colou?rs than/);
+  assert.match(cartPhp, /which prints any number of colou?rs/);
 });
 
 test('erring toward DTF is deliberate and recorded', () => {

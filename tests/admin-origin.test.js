@@ -31,7 +31,8 @@ function lift(name) {
   throw new Error('unbalanced');
 }
 const sites = src.match(/^const SITE_ORIGINS = .*;$/m)[0];
-const fromAnotherSite = vm.runInNewContext(`${sites}\n${lift('fromAnotherSite')}\nfromAnotherSite`);
+/* Host realm: it needs no faked globals, and a foreign-realm array would fail deepStrictEqual (Codex #131). */
+const fromAnotherSite = vm.runInThisContext(`(() => { ${sites}\n${lift('fromAnotherSite')}\nreturn fromAnotherSite; })()`);
 const req = (headers) => ({ headers });
 
 test('the pages ask browsers for same-origin, not no-referrer', () => {

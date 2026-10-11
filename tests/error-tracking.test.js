@@ -284,7 +284,7 @@ test('the test-event script checks the ingest response, not just the flush', () 
      it does whether Sentry answered 200 or 400. A verification that passes
      against a made-up project verifies nothing, and this is the assertion that
      stops it being written that way again. */
-  const t = fs.readFileSync(path.join(root, 'tools', 'sentry-test.js'), 'utf8');
+  const t = fs.readFileSync(path.join(root, 'tools', 'sentry-check.js'), 'utf8');
   assert.match(t, /afterSendEvent/, 'the hook that exposes the HTTP status');
   assert.match(t, /statusCode/);
   assert.match(t, /status < 200 \|\| status >= 300/, 'and a non-2xx is a failure');
@@ -298,7 +298,7 @@ test('the test script fails loudly when the project does not exist', () => {
   let code = 0;
   let out = '';
   try {
-    out = execFileSync(process.execPath, ['tools/sentry-test.js'], {
+    out = execFileSync(process.execPath, ['tools/sentry-check.js'], {
       cwd: root,
       encoding: 'utf8',
       env: {

@@ -212,11 +212,12 @@ test('an anonymous chat is a lead too, with no email', () => {
 });
 
 test("an anonymous chat's card sends the owner to tawk.to, and no card opens on a separator", () => {
-  const sandbox = {};
+  /* The card shows the sale label (saleTypePill), which reads tools/lib/sales-credit. */
+  const sandbox = { CREDIT: require('../tools/lib/sales-credit'), leadEmailBox: () => '' };   // the email box is tested elsewhere
   vm.createContext(sandbox);
   vm.runInContext([
     grab('const LEAD_SOURCES = {', '};'),
-    lift('escEmail'), lift('pill'), lift('ageInWords'), lift('leadCardHtml'),
+    lift('escEmail'), lift('pill'), lift('ageInWords'), lift('saleTypePill'), lift('leadCardHtml'),
   ].join('\n'), sandbox);
   const contactLine = (html) => html.match(/margin-top:8px;font-size:12\.5px">([\s\S]*?)<\/div>/)[1].trim();
   const base = { id: 7, created_at: new Date().toISOString(), description: 'hi', phone: '' };

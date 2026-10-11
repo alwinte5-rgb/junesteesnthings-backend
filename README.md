@@ -113,6 +113,13 @@ this project's.
 `.env.example` is the full list and says where each value comes from. Nothing
 below is needed to get the app running locally.
 
+- **Card payments** — `STRIPE_SECRET_KEY` (the card buttons on quote pages)
+  and `STRIPE_WEBHOOK_SECRET` (without it `/webhooks/stripe` answers 503 and
+  no Stripe payment is booked). Clover is the card reader, not the online card.
+- **Staff sign-in** — `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD`, `OWNER_EMAILS`.
+  Required on Railway: missing or malformed, `/health` answers 503 and the
+  deploy does not go live.
+
 - **Bot protection** — `REQUIRE_CLOUDFLARE`, `REQUIRE_FORM_TOKEN`,
   `FORM_TOKEN_SECRET`. Set the first two to `true` in production only; leaving
   them off locally is what lets you submit the forms by hand.
@@ -168,8 +175,8 @@ below is needed to get the app running locally.
   Check it end to end, where the DSN is:
 
   ```bash
-  node tools/sentry-test.js                       # local, reads .env
-  railway run --service <service> node tools/sentry-test.js   # production
+  node tools/sentry-check.js                       # local, reads .env
+  railway run --service <service> node tools/sentry-check.js   # production
   ```
 
   It sends one real event and **fails non-zero unless Sentry's ingest answers

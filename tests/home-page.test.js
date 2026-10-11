@@ -69,7 +69,8 @@ test('the Shop works without the feed: built-in cards, all into the designer', (
     // Every card shows a price line, so the two grids read the same (owner, 2026-10-02).
     assert.strictEqual((box.match(/class="pr">(From \$\d+\.\d\d \+ printing|Custom pricing)</g) || []).length, links.length, id + ': a price on every card');
   }
-  assert.match(page, /<script src="\/assets\/js\/shop-feed\.js" defer><\/script>/);
+  /* A ?v= cache-buster is allowed (Codex #198); the tag itself must stay. */
+  assert.match(page, /<script src="\/assets\/js\/shop-feed\.js(\?v=[\w.-]+)?" defer><\/script>/);
   assert.match(page, /id="shop"/, 'design.jtees.net/ will redirect to /#shop');
 });
 

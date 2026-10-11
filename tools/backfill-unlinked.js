@@ -244,6 +244,7 @@ async function* paginate(path, params) {
        happened to have a session. These are not written — a charge with no
        session carries no reference at all, so placing it is a human job. */
     const orphans = [];
+    const refunded = [];   // refunded charges whose payment is on the unlinked ledger
     let charges = 0, chargesSkipped = 0;
     for await (const c of paginate('charges', { 'created[gte]': String(SINCE) })) {
       charges++;
@@ -253,9 +254,52 @@ async function* paginate(path, params) {
       if (pi && seenPI.has(pi)) continue;
       const { rows } = await pool.query(
         `SELECT 1 FROM unlinked_payments WHERE stripe_pi = $1 LIMIT 1`, [pi]);
-      if (rows.length) continue;
-      if (found.some((s) => s.payment_intent === pi)) continue; // covered above
+      const covered = rows.length || found.some((s) => s.payment_intent === pi);
+      if (covered && Number(c.amount_refunded) > 0) refunded.push(c);
+      if (covered) continue;
       orphans.push(c);
+    }
+
+    /* ── Refunds on what was recovered (Codex #105) ────────────────────────
+       A session stays "paid" after its charge is refunded, so the pass above
+       books the full receipt. The live reconciler only sweeps refunds from the
+       last 60 days, so an older one would never come off. Booked here as the
+       charge's refunded TOTAL less what the ledger already holds for it, with
+       the server's own ext_ref shape (charge:totalCents:n), so the live
+       reconciler reads the same figure and never books it twice. */
+    let refundWritten = 0, refundDue = 0;
+    for (const c of refunded) {
+      const pi = typeof c.payment_intent === 'string' ? c.payment_intent : null;
+      const want = Math.round(Number(c.amount_refunded) || 0);
+      const { rows: [b] } = await pool.query(
+        `SELECT COALESCE(ROUND(-SUM(amount) * 100), 0)::int AS cents, COUNT(*)::int AS n
+           FROM unlinked_payments WHERE split_part(ext_ref, ':', 1) = $1`, [c.id]);
+      const change = round2((want - Number(b.cents)) / 100);
+      if (!(change > 0)) continue;
+      refundDue++;
+      console.log(`    refund ${day(c.created)}  ${money(change).padStart(10)}  ${c.id}`);
+      if (!APPLY) continue;
+      const { rows: [u] } = await pool.query(
+        `SELECT amount, tax_portion, order_ref, client_ref, customer_email, customer_name, channel
+           FROM unlinked_payments WHERE stripe_pi = $1 AND kind = 'payment' ORDER BY id LIMIT 1`, [pi]);
+      if (!u) continue;   // dry-run-only session: written on the --apply run
+      const amt = round2(Number(u.amount) || 0);
+      const tax = u.tax_portion == null || !(amt > 0) ? null : -round2(Number(u.tax_portion) * Math.min(change, amt) / amt);
+      await pool.query(
+        `INSERT INTO unlinked_payments
+           (amount, currency, channel, order_ref, client_ref, kind, source, stripe_pi, ext_ref,
+            customer_email, customer_name, reason, note, tax_portion, resolved_at)
+         VALUES ($1,$2,$3,$4,$5,'refund','backfill',$6,$7,$8,$9,'refund of an unlinked payment',
+                 'Recovered from Stripe by tools/backfill-unlinked.js', $10::numeric,
+                 CASE WHEN $10::numeric IS NULL THEN NULL ELSE NOW() END)
+         ON CONFLICT (ext_ref) WHERE ext_ref IS NOT NULL DO NOTHING`,
+        [-change, String(c.currency || 'usd').toLowerCase(), u.channel, u.order_ref, u.client_ref, pi,
+         `${c.id}:${want}:${Number(b.n) + 1}`, u.customer_email, u.customer_name, tax]);
+      refundWritten++;
+    }
+    if (refundDue) {
+      if (APPLY) ok(`${refundWritten} refund(s) written against recovered payments`);
+      else console.log(`\n  ${refundDue} refund(s) on recovered payments — re-run with --apply to write them.`);
     }
 
     console.log(`\n  ${charges} charge(s) checked against both ledgers` +

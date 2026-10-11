@@ -33,7 +33,8 @@ test('the form posts exactly one size field, and it is sizemix', () => {
 
 test('every reader of the size mix names the field the form actually posts', () => {
   /* Any b['...' + i] whose key mentions size must be sizemix. */
-  const reads = [...src.matchAll(/b\['([a-z_]*size[a-z_]*)' \+ i\]/gi)].map((m) => m[1]);
+  /* sgsize is a SIGN's size (Signs365 sizes), not the garment size mix. */
+  const reads = [...src.matchAll(/b\['([a-z_]*size[a-z_]*)' \+ i\]/gi)].map((m) => m[1]).filter((r) => r !== 'sgsize');
   assert.ok(reads.length >= 2, 'expected the line reader and the run-total reader, found ' + reads.length);
   for (const r of reads) {
     assert.equal(r, 'sizemix',
