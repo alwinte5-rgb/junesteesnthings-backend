@@ -20304,11 +20304,18 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
       .catch(() => ({ rows: [] }));
     const costBook = Object.fromEntries(knownCosts.map((r) => [r.cost_key, r]));
 
+    /* Only the controls this account may use: a helper who can VIEW a job saw
+       every button on it and was refused by the server after pressing
+       (Codex #123). The owner passes every check. */
+    const may = (route) => STAFF.mayUseRoute(currentActor() || OWNER_ACTOR, 'POST', route);
+    const mayStep = may('/admin/quote/:code/step'), mayStage = may('/admin/quote/:code/stage'),
+          mayTarget = may('/admin/quote/:code/target'), mayEmail = may('/admin/quote/:code/email'),
+          maySent = may('/admin/quote/:code/delivered');
     const stepRows = cl.steps.map((st) => {
       const inner = `<span class="step-tick" style="color:${st.done ? '#047857' : '#9ca3af'}">${st.done ? '☑' : '☐'}</span>
         <span class="step-label" style="color:${st.done ? '#6b7280' : '#111827'};${st.done ? 'text-decoration:line-through' : 'font-weight:600'}">${st.label}</span>
         <span class="step-hint">${escEmail(st.hint)}</span>`;
-      return st.manual
+      return st.manual && mayStep
         ? `<form method="POST" action="/admin/quote/${q.code}/step" style="margin:0" data-stepform${
                /* Computed as if unticked: the checklist ticks in place, so a row
                   unticked after the page loaded must still ask when re-ticked.
@@ -20321,6 +20328,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
              <input type="hidden" name="json" value="" data-jsonflag>
              <button type="submit" class="step-row${st.done ? ' is-done' : ''}">${inner}</button>
            </form>`
+        : st.manual ? `<div class="step-row step-auto" title="ticked by someone with production access">${inner}</div>`
         : `<div class="step-row step-auto" title="set automatically from your data — nothing to tap">${inner}<span class="step-auto-tag">auto</span></div>`;
     }).join('');
 
@@ -20338,7 +20346,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
       <div class="sub">${escEmail(q.code)} · ${money(q.total)} ·
         <a href="/admin/production" style="color:#1848B8">back to the board</a> ·
         <a href="/admin/customer?q=${encodeURIComponent(q.email || q.phone || '')}" style="color:#1848B8">customer</a>${
-          q.email && !['held', 'draft'].includes(q.status) && !q.cancelled_at ? ` ·
+          q.email && mayEmail && !['held', 'draft'].includes(q.status) && !q.cancelled_at ? ` ·
         <form method="POST" action="/admin/quote/${escEmail(q.code)}/email" style="display:inline;margin:0">
           <button type="submit" style="background:none;border:0;padding:0;color:#1848B8;font:inherit;cursor:pointer;text-decoration:underline">email the quote to them</button></form>${
             q.emailed_at ? ` <span class="muted">(last emailed ${escEmail(new Date(q.emailed_at).toLocaleString('en-US', { timeZone: 'America/Chicago', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))})</span>` : ''}` : ''}</div>
@@ -20347,14 +20355,14 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
       <div class="card" style="border-color:#c7d7fb;background:#f7faff"><b>They asked for a change</b>
         <div style="margin:6px 0 10px;white-space:pre-wrap">&ldquo;${escEmail(String(q.change_request).slice(0, 2000))}&rdquo;</div>
         <a class="btn" href="/admin/quote/${escEmail(q.code)}/edit">Edit the quote &rarr;</a></div>` : ''}
-      ${!q.sent_to_customer_at && !['held', 'draft'].includes(q.status) && !q.cancelled_at && !q.accepted_at ? `
+      ${!q.sent_to_customer_at && (mayEmail || maySent) && !['held', 'draft'].includes(q.status) && !q.cancelled_at && !q.accepted_at ? `
       <div class="card" style="border-color:#f5d48a;background:#fffbeb"><b>Not sent to the customer yet.</b>
         <span class="muted">Saving a quote does not send it.</span>
         <div class="row" style="gap:8px;margin-top:8px;flex-wrap:wrap">
-          ${q.email ? `<form method="POST" action="/admin/quote/${escEmail(q.code)}/email" style="margin:0">
+          ${q.email && mayEmail ? `<form method="POST" action="/admin/quote/${escEmail(q.code)}/email" style="margin:0">
             <button type="submit">Email it to ${escEmail(q.email)}</button></form>` : ''}
-          <form method="POST" action="/admin/quote/${escEmail(q.code)}/delivered" style="margin:0">
-            <button type="submit" class="btn-ghost">I sent it another way</button></form>
+          ${maySent ? `<form method="POST" action="/admin/quote/${escEmail(q.code)}/delivered" style="margin:0">
+            <button type="submit" class="btn-ghost">I sent it another way</button></form>` : ''}
         </div></div>` : ''}
 
       <div class="card" style="margin-top:12px">
@@ -20380,7 +20388,8 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
           </div>`;
         })()}
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
-          ${JOB_STAGES.map((st, i) => `
+          ${!mayStage ? JOB_STAGES.map((st, i) => `<span class="kbtn${i === si ? ' kbtn-go' : ''}" style="cursor:default">${st.label}</span>`).join('')
+            : JOB_STAGES.map((st, i) => `
             <form method="POST" action="/admin/quote/${q.code}/stage" style="margin:0"${askAttrs(q, milestoneAsk(q, i, sent))}>
               <input type="hidden" name="stage" value="${st.key}"><input type="hidden" name="back" value="job">
               <input type="hidden" name="notify" value="">
@@ -20388,7 +20397,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
                       title="${escEmail(st.hint)}">${st.label}</button>
             </form>`).join('')}
         </div>
-        ${!q.needed_by ? `
+        ${!q.needed_by && mayTarget ? `
         <form method="POST" action="/admin/quote/${q.code}/target"
               style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;background:#fff8ed;
                      border:1px solid #fde3c0;border-radius:10px;padding:9px 11px;margin-bottom:10px">
@@ -24356,7 +24365,10 @@ async function sendDailyDigest() {
       return { q, cl, sched, days };
     }).filter((x) => x.cl.next);           // nothing to do = not in the digest
 
-    if (!live.length && !ship && !healthHtml) return;
+    /* The team section is built first: a day with approvals waiting but no
+       live jobs still sends (Codex #123: it returned before reaching it). */
+    const teamFirst = await teamDigestHtml().catch((e) => { console.error('team digest failed:', e.message); return ''; });
+    if (!live.length && !ship && !healthHtml && !teamFirst) return;
 
     const overdue = live.filter((x) => x.days !== null && x.days < 0);
     const soon    = live.filter((x) => x.days !== null && x.days >= 0 && x.days <= 3);
@@ -24391,7 +24403,7 @@ async function sendDailyDigest() {
     };
 
     const atRisk = live.filter((x) => x.sched && x.sched.risks.length);
-    const teamHtml = await teamDigestHtml().catch((e) => { console.error('team digest failed:', e.message); return ''; });
+    const teamHtml = teamFirst;
     const deliveryHtml = await deliveryDigestHtml().catch((e) => { console.error('delivery digest failed:', e.message); return ''; });
 
     await alertShop(
@@ -24787,7 +24799,7 @@ function shipWeighForm(ref, oz, box) {
 }
 
 /** The prices the studio came back with, and the one form that buys. */
-function shipRatesHtml(ref, rates, paidService, expedited = false) {
+function shipRatesHtml(ref, rates, paidService, expedited = false, canBuy = true) {
   if (rates.error) return `<div class="warn" style="margin:10px 0 0">${escEmail(rates.error)}</div>`;
   const pick = SHIP.preferredRate(rates.list, paidService, { expedited });   // expedited quote jobs: fastest (Codex #125)
   const paid = String(paidService || '').trim().toLowerCase();
@@ -24801,11 +24813,11 @@ function shipRatesHtml(ref, rates, paidService, expedited = false) {
           ? ` ${pill('what they paid for', 'green')}` : ''}</span>
         <span class="muted">${r.days ? `${Number(r.days)} day${Number(r.days) === 1 ? '' : 's'}` : ''}</span>
         <b>${money(r.amount)}</b></label>`).join('')}</div>
-    <div class="ship-buy">
+    ${canBuy ? `<div class="ship-buy">
       <select name="file" aria-label="Label paper">${Object.entries(SHIP.DEFAULT_FILES).map(([k, v]) =>
         `<option value="${k}">${escEmail(v)}</option>`).join('')}</select>
       <button type="submit" data-busy="Buying…">Buy the chosen label</button>
-    </div>
+    </div>` : `<p class="muted" style="margin:8px 0 0">Buying labels is the owner's: these are the prices to tell them.</p>`}
     <div class="muted" style="font-size:12px;margin-top:6px">Charged to your Shippo account.
       ${Number(rates.oz)} oz in a ${escEmail(String(SHIP.DEFAULT_BOXES[rates.box] || rates.box).toLowerCase())}.
       Buying twice is safe: an order that has a label gets the same one back.</div>
@@ -24914,7 +24926,8 @@ function shipCardHtml(x, rates) {
     const mine = rates && rates.ref === ref;
     const oz = mine && rates.oz ? rates.oz : (studio ? Number(o.est_oz) || null : null);
     const box = mine ? rates.box : SHIP.boxFor(oz || 0);
-    act = `${shipWeighForm(ref, oz, box)}${mine ? shipRatesHtml(ref, rates, paidService, !studio && String(o.ship_method).toLowerCase() === 'expedited') : ''}
+    act = `${shipWeighForm(ref, oz, box)}${mine ? shipRatesHtml(ref, rates, paidService, !studio && String(o.ship_method).toLowerCase() === 'expedited',
+      STAFF.mayUseRoute(currentActor() || OWNER_ACTOR, 'POST', '/admin/shipping/buy')) : ''}
       ${shipElsewhereForm(ref)}${studio ? `<div class="muted" style="font-size:12px;margin-top:6px">Handed it over
       in person? Set it to Complete in the <a href="${STUDIO_ADMIN}?lumise-page=order&amp;order_id=${Number(o.id)}"
       target="_blank" rel="noopener">studio admin</a>.</div>` : ''}
@@ -25111,11 +25124,32 @@ app.post('/admin/shipping/buy', requireAdmin, async (req, res) => {
       if (SHIP.shipToProblems(to).length) return shipBack(res, r.ref, 'err', 'Add the delivery address first.');
       payload = { action: 'buy', quote: r.code, shipment, rate, file,
                   to: Object.assign({}, to, { phone: q.phone || '', email: q.email || '' }) };
+      /* Marked as buying for the length of the call, so the address cannot be
+         changed under a label being bought for it (Codex #125). */
+      await pool.query(
+        `UPDATE quotes SET ship_label = jsonb_build_object('buying', NOW())
+          WHERE code = $1 AND (ship_label IS NULL OR (ship_label->>'label_url' IS NULL AND ship_label->>'pending' IS NULL))`,
+        [r.code]);
     }
     const { body, timedOut } = await studioShip(payload, 75000);
     _studioCache.at = 0;
+    if (r.kind === 'quote' && !timedOut && !(body && (body.pending || (body.label && body.label.label_url)))) {
+      // Nothing bought: the mark comes off again. After a timeout it stays (the
+      // studio may still be buying) and lapses by itself after 5 minutes.
+      await pool.query(`UPDATE quotes SET ship_label = NULL WHERE code = $1 AND ship_label ? 'buying'`, [r.code]).catch(() => {});
+    }
     if (body && body.label && body.label.label_url) {
-      if (r.kind === 'quote') await keepQuoteLabel(r.code, body.label);
+      /* Bought is bought. A failed save here must not fall into the catch
+         below, which says nothing was bought (Codex #125): the PDF is given,
+         and the studio still holds it, so Check on this job saves it later. */
+      if (r.kind === 'quote') {
+        try { await keepQuoteLabel(r.code, body.label); }
+        catch (e) {
+          console.error(`label for ${r.ref} bought but not saved:`, e.message);
+          reportError('shipping:label-not-saved', e, r.ref).catch(() => {});
+          return shipBack(res, r.ref, 'warn', `Label bought, but it could not be saved on the job. Print it now: ${body.label.label_url}. Press Check on this job later to save it; do not buy another.`);
+        }
+      }
       console.log(`shipping: label ${body.already ? 'already on' : 'bought for'} ${r.ref}`);
       /* The studio bought it but could not save it on the order: say so, with
          the PDF, so it is printed now rather than looked for after a refresh
@@ -25250,11 +25284,21 @@ app.post('/admin/shipping/address', requireAdmin, async (req, res) => {
     if (rows[0].ship_label && (rows[0].ship_label.label_url || rows[0].ship_label.pending)) {
       return shipBack(res, r.ref, 'err', 'A label was already bought for the old address. Void it on goshippo.com first.');
     }
+    const buying = rows[0].ship_label && rows[0].ship_label.buying;
+    if (buying && Date.now() - new Date(buying).getTime() < 5 * 60000) {
+      return shipBack(res, r.ref, 'err', 'A label is being bought for this address right now. Wait for it, then void it on goshippo.com if the address was wrong.');
+    }
     const a = SHIP.cleanShipTo({ name: b.name, street1: b.street1, street2: b.street2, city: b.city, state: b.state, zip: b.zip },
       rows[0].name);
     const gaps = SHIP.shipToProblems(a);
     if (gaps.length) return shipBack(res, r.ref, 'err', `The address still needs: ${gaps.join(', ')}.`);
-    await pool.query('UPDATE quotes SET ship_to = $2::jsonb WHERE code = $1', [r.code, JSON.stringify(a)]);
+    /* The same rule in the write, so a buy starting in between still wins. */
+    const { rowCount } = await pool.query(
+      `UPDATE quotes SET ship_to = $2::jsonb WHERE code = $1
+          AND (ship_label IS NULL OR (ship_label->>'label_url' IS NULL AND ship_label->>'pending' IS NULL
+               AND COALESCE((ship_label->>'buying')::timestamptz, 'epoch') < NOW() - INTERVAL '5 minutes'))`,
+      [r.code, JSON.stringify(a)]);
+    if (!rowCount) return shipBack(res, r.ref, 'err', 'A label is being bought for this job. Wait for it, then try again.');
     return shipBack(res, r.ref, 'ok', 'Address saved. Get the label prices next.');
   } catch (e) {
     console.error('shipping address failed:', e.message);

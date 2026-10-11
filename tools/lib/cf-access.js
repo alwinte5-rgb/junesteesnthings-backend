@@ -82,9 +82,18 @@ function makeKeyStore(certsUrl, fetchKeys = defaultFetchKeys) {
 }
 
 async function defaultFetchKeys(url) {
-  const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
-  if (!res.ok) throw new Error(`Cloudflare Access keys: HTTP ${res.status}`);
-  return res.json();
+  /* Service, verb, route and Cloudflare's own words, so a wrong team domain, a
+     refusal and a network blip read differently in the error digest (Codex #124). */
+  const where = (() => { try { const u = new URL(url); return u.hostname + u.pathname; } catch { return 'certs'; } })();
+  let res;
+  try { res = await fetch(url, { signal: AbortSignal.timeout(5000) }); }
+  catch (e) { throw new Error(`Cloudflare Access GET ${where}: ${e.name === 'TimeoutError' ? 'timed out' : e.message}`); }
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Cloudflare Access GET ${where}: HTTP ${res.status}${body ? ' ' + body.slice(0, 200) : ''}`);
+  }
+  try { return await res.json(); }
+  catch (e) { throw new Error(`Cloudflare Access GET ${where}: the answer was not JSON`); }
 }
 
 /** The verified email in a Cloudflare Access pass, or null. Signature first;
