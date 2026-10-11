@@ -340,7 +340,10 @@ const BANNER_MATERIALS = [
   { key: '13',  oz: 13, sides: 'single', label: '13oz vinyl (standard, indoor or outdoor)' },
   { key: '15',  oz: 15, sides: 'single', label: '15oz vinyl (heavier, for longer outdoor use)' },
   { key: '18',  oz: 18, sides: 'single', label: '18oz vinyl (heavy duty)' },
-  { key: '18d', oz: 18, sides: 'double', label: '18oz vinyl, printed both sides' },
+  /* NOT OFFERED (owner, 2026-10-10: "double sided banner price never
+     confirmed"). Left out of the published table, so the designer and the
+     quote form cannot sell it, until June confirms a rate in BANNER_RATES. */
+  { key: '18d', oz: 18, sides: 'double', label: '18oz vinyl, printed both sides', offered: false },
 ];
 const BANNER_MAX_FT = { short: 5, long: 30 };
 
@@ -348,7 +351,7 @@ const BANNER_MAX_FT = { short: 5, long: 30 };
  *  W is the width and H the height, in feet. */
 function bannerTable() {
   const prices = {};
-  for (const m of BANNER_MATERIALS) {
+  for (const m of BANNER_MATERIALS.filter((x) => x.offered !== false)) {
     prices[m.key] = {};
     for (let w = 1; w <= BANNER_MAX_FT.long; w++) {
       for (let h = 1; h <= BANNER_MAX_FT.long; h++) {
@@ -367,7 +370,7 @@ function bannerTable() {
     row.wind_slits = windSlitsAllowed(w, h) ? bannerFinishPrice(w, h, { windSlits: true }) : null;
     finishing[k] = row;
   }
-  return { materials: BANNER_MATERIALS.map(({ key, label }) => ({ key, label })), max: BANNER_MAX_FT,
+  return { materials: BANNER_MATERIALS.filter((x) => x.offered !== false).map(({ key, label }) => ({ key, label })), max: BANNER_MAX_FT,
     hanging: Object.entries(BANNER_HANGING).map(([key, v]) => ({ key, label: v.label })), prices, finishing,
     grommets: Object.entries(BANNER_GROMMETS).map(([key, v]) => ({ key, label: v.label, edges: v.edges })),
     grommet_spacing_ft: BANNER_GROMMET_SPACING_FT,
