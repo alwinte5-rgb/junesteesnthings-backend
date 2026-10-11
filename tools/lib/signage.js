@@ -311,10 +311,11 @@ const PAPER_MARKUP_LARGE = 2.0;
  *   13oz single  $1.25 cost  ->  $7  (a little under the $8 local standard)
  *   15oz single  $1.75       ->  $8
  *   18oz single  $2.25       ->  $9
- *   18oz double  $4.25       -> $12  (two prints; NOT YET CONFIRMED BY JUNE)
+ *   18oz double  $4.25       -> $8.50 (June, 2026-10-11: "use the price from
+ *                                       Signs365 and x2 like the others")
  *
  * Keyed as bannerMaterial() keys them: weight, plus 'd' for double-sided. */
-const BANNER_RATES = { '13': 7.00, '15': 8.00, '18': 9.00, '18d': 12.00 };
+const BANNER_RATES = { '13': 7.00, '15': 8.00, '18': 9.00, '18d': 8.50 };
 const BANNER_SQFT_RATE = BANNER_RATES['13'];
 
 const bannerKey = ({ oz = 13, sides = 'single' } = {}) => `${oz}${sides === 'double' ? 'd' : ''}`;
@@ -340,10 +341,9 @@ const BANNER_MATERIALS = [
   { key: '13',  oz: 13, sides: 'single', label: '13oz vinyl (standard, indoor or outdoor)' },
   { key: '15',  oz: 15, sides: 'single', label: '15oz vinyl (heavier, for longer outdoor use)' },
   { key: '18',  oz: 18, sides: 'single', label: '18oz vinyl (heavy duty)' },
-  /* NOT OFFERED (owner, 2026-10-10: "double sided banner price never
-     confirmed"). Left out of the published table, so the designer and the
-     quote form cannot sell it, until June confirms a rate in BANNER_RATES. */
-  { key: '18d', oz: 18, sides: 'double', label: '18oz vinyl, printed both sides', offered: false },
+  /* On sale from 2026-10-11 at cost x2 (BANNER_RATES). The designer gives it a
+     Back to design; single-sided vinyl refuses a design on the back. */
+  { key: '18d', oz: 18, sides: 'double', label: '18oz vinyl, printed both sides' },
 ];
 const BANNER_MAX_FT = { short: 5, long: 30 };
 
