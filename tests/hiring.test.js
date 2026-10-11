@@ -200,7 +200,8 @@ test('round 2 waits on the applicant page only while round 1 is being graded', (
   const at = (min) => new Date(now - min * 60e3);
   assert.ok(H.round2Pending({ submitted_at: at(1) }, now));
   assert.ok(!H.round2Pending({ submitted_at: at(H.ROUND2_WAIT_MINUTES + 1) }, now), 'gives up after a few minutes');
-  assert.ok(!H.round2Pending({ submitted_at: at(1), grade: {}, score: 90 }, now), 'a pass with no questions has no round 2 to wait for');
+  /* No follow-ups from the grader now means the standard questions (Codex #173): round 2 still comes. */
+  assert.ok(H.round2Pending({ submitted_at: at(1), grade: {}, score: 90 }, now), 'a grade with no follow-ups still gets round 2');
   assert.ok(H.round2Pending({ submitted_at: at(1), grade: { follow_up: [{ question: 'Q?' }] }, score: 40 }, now), 'round 2 is for everybody, below the old pass mark too');
   assert.ok(H.round2Pending({ submitted_at: at(1), grade: { follow_up: [{ question: 'Q?' }] }, score: 90 }, now), 'graded, round 2 about to be made');
   assert.ok(!H.round2Pending({ submitted_at: at(1), grade_error: 'x' }, now));

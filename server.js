@@ -18072,6 +18072,9 @@ app.post('/admin/quote/:code/cancel', requireAdmin, async (req, res) => {
     /* A card page the customer opened before now could still be paid, and
        the money would land on a job that no longer exists. Close it. */
     if (rows.length && rows[0].stripe_session) await expireCheckoutSession(rows[0].stripe_session);
+    /* Its delivery seat is freed now, not when someone next opens the
+       delivery board (Codex #143). */
+    if (rows.length) await DELIVERY.cancelRef('quote:' + code, 'system', 'quote cancelled').catch(() => {});
     /* Every cancelled job comes to the owner to follow up (owner, 2026-10-06),
        whoever cancelled it: win it back, refund it, or let it go. */
     if (rows.length) {
@@ -26601,6 +26604,12 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
     await step('brevo catch-up', brevoCatchUp);
     await step('brevo quote catch-up', brevoQuoteCatchUp);
     await step('brevo quote re-sync', brevoQuoteResync);
+    /* Cancelled quotes and refunded studio orders give their delivery seats
+       back hourly, whether or not anyone opens the board (Codex #143). */
+    await step('delivery reconcile', async () => {
+      const n = await reconcileDeliveries(await DELIVERY.boardBookings(), await fetchStudioOrders().catch(() => null));
+      return n ? `${n} booking(s) freed` : '';
+    });
     await step('google analytics', googleAnalyticsCheck);
     await step('google ads', googleAdsCheck);
     await step('broken links', brokenLinksCheck);
@@ -30425,6 +30434,18 @@ async function gradeHiringTest(id, { notify = false } = {}) {
   if (opened && !notify) await pool.query('UPDATE hiring_tests SET owner_told_at = NULL WHERE id = $1', [row.id]);
   // A pass waits for round 2; anything else is the whole story now.
   if (notify && !opened) await tellOwnerHiring(isRound2 ? row.parent_id : id).catch((err) => console.error('hiring notify failed:', err.message));
+  /* Grading outlasted the applicant's page, which stopped waiting and told
+     them we would reply: round 2 is open but nobody knows. The owner is told
+     to send the link again (Codex #158). */
+  if (opened && NOTIFY_EMAIL && row.submitted_at
+      && Date.now() - new Date(row.submitted_at).getTime() > HIRING.ROUND2_WAIT_MINUTES * 60e3) {
+    sendEmail({ to: NOTIFY_EMAIL, promo: false,
+      subject: `Round 2 opened late for ${row.name}: send them their link again`,
+      html: `<p>Round 1 for <b>${escEmail(row.name)}</b> took longer to grade than their page waits, so they were told
+        we would reply. Round 2 is now open on the same link. Make a new link from their page and send it:
+        <a href="${PUBLIC_BASE_URL}/admin/hiring/${row.id}">open their page</a>.</p>`,
+    }).catch((err) => console.error('late round 2 notice failed:', err.message));
+  }
   return grade;
 }
 
@@ -30502,7 +30523,10 @@ async function reportUnfinishedRound2() {
   const { rows } = await pool.query(
     `SELECT c.parent_id FROM hiring_tests c JOIN hiring_tests p ON p.id = c.parent_id
       WHERE c.stage = 2 AND c.submitted_at IS NULL AND p.owner_told_at IS NULL
-        AND (c.status = 'cancelled' OR c.expires_at < NOW()
+        /* An expired link counts only for a test never started: one started
+           just before expiry is still on its clock (Codex #158). */
+        AND (c.status = 'cancelled'
+             OR (c.expires_at < NOW() AND c.started_at IS NULL)
              OR c.started_at < NOW() - make_interval(mins => $1::int))
       LIMIT 50`, [HIRING.ROUND2_MINUTES + HIRING.GRACE_MINUTES + 5]);
   let sent = 0;
@@ -30704,7 +30728,7 @@ app.get('/admin/hiring/test', requireAdmin, (req, res) => {
     <div class="card" id="test"><b>3. The test: ${escEmail(role.parts.choice.label)}</b> (marked automatically)${mc}</div>
     <div class="card"><b>Written questions</b> (graded by Claude against these notes and model answers; you see every answer)${written}</div>
     <div class="card"><b>4. Round 2 (automatic)</b>
-      <p>A round-1 score of ${HIRING.PASS_SCORE} or more opens round 2 straight away, on the same link: up to ${HIRING.ROUND2_MAX} questions
+      <p>Every graded round 1 opens round 2 straight away, on the same link, whatever the score (when the grader wrote follow-up questions): up to ${HIRING.ROUND2_MAX} questions
       about the applicant's own answers, ${HIRING.ROUND2_MINUTES} minutes, open for ${HIRING.ROUND2_DAYS} days. Claude grades it and recommends
       a video call or not. You get one email per applicant with both rounds, once round 2 is graded or not taken.</p>
       <p class="muted">This page is yours alone: helpers cannot open Hiring, so they never see these answers.</p></div>
@@ -31046,6 +31070,14 @@ app.post('/admin/hiring/:id/link', requireAdmin, async (req, res) => {
         RETURNING name, role, submitted_at`,
       [id, hash, HIRING.LINK_DAYS]);
     if (!rows.length) return back(res, `/admin/hiring/${id}`, 'err', 'This test is finished or cancelled, so it has no link.');
+    /* Round 2 rides on this link: an unstarted one gets the new window too, or
+       the new link opened an expired test (Codex #158). A started one keeps its clock. */
+    if (rows[0].submitted_at) {
+      await pool.query(
+        `UPDATE hiring_tests SET expires_at = NOW() + make_interval(days => $2::int)
+          WHERE parent_id = $1 AND stage = 2 AND submitted_at IS NULL AND started_at IS NULL AND status <> 'cancelled'`,
+        [id, HIRING.LINK_DAYS]);
+    }
     res.send(adminPage('Hiring', `
       ${pageHeader('New link made', 'The old link no longer works.', `<a class="btn btn-ghost" href="/admin/hiring/${id}">Their page</a>`)}
       ${hireLinkCard(rows[0].name, token, { round2: !!rows[0].submitted_at, role: rows[0].role })}`, 'hiring'));
@@ -32224,7 +32256,11 @@ function studioReadyYmd(now = new Date()) {
 function quoteReadyYmd(q, now = new Date()) {
   const target = pgDateYmd(q && q.target_date);
   const est = DELIV.toYmd(deliveryEstimate(now, { pickup: true, items: (q && q.items) || [] }).deliver_to);
-  return target && target > est ? target : est;
+  /* A date the shop set is the shop's word, earlier or later than the
+     generic estimate: only "later" counted, so a rush the shop said it could
+     meet could not be booked (Codex #143). Never before today. */
+  const today = DELIV.toYmd(now);
+  return target ? (target < today ? today : target) : est;
 }
 
 /** "order #123" or "order ABCDEF" from a booking's ref. */
@@ -32424,6 +32460,14 @@ async function notifyDelivery(b, kind, { note = '' } = {}) {
       await sendCustomerSms({ phone: b.phone, kind: 'transactional', ref: smsRef, quote: quoteCode,
         msg: SMS.deliveryOut({ ref: quoteCode || String(b.ref).slice(7), window: b.window_label }) });
     }
+  } else if (kind === 'delivered') {
+    /* The notice the board promised: marked delivered said nothing to the
+       customer (Codex #143). Email only; their texts already said "on its way". */
+    await sendDeliveryMail(b, `${what} has been delivered`, deliveryEmailHtml({
+      heading: 'Delivered',
+      paragraphs: [`${hi} ${escEmail(what)} was delivered to ${where}. Thank you for your order!`,
+        `If anything is not right, text or call ${SHOP_PHONE} and we will sort it out.`],
+    }), 'delivery-delivered');
   } else if (kind === 'cancelled') {
     await sendDeliveryMail(b, `Delivery for ${what} cancelled`, deliveryEmailHtml({
       heading: 'Delivery cancelled',
@@ -32876,14 +32920,20 @@ app.post('/admin/delivery/job/:id/status', requireAdmin, async (req, res) => {
   const status = String((req.body || {}).status || '');
   const note = String((req.body || {}).note || '').slice(0, 300);
   try {
+    const was = await DELIVERY.byId(id).catch(() => null);
     const b = await DELIVERY.setStatus({ id, status, by: deliveryActor(), note });
     if (!b) return res.redirect('/admin/delivery?e=failed');
     if (status === 'out') await notifyDelivery(b, 'out');
     if (status === 'cancelled') await notifyDelivery(b, 'cancelled', { note });
     /* Delivered is the moment the review ask counts from, as a pickup's
        Ready is: a quote job is marked delivered on its own record too. */
-    if (status === 'delivered' && b.ref.startsWith('quote:')) {
-      await pool.query('UPDATE quotes SET delivered_at = COALESCE(delivered_at, NOW()) WHERE code = $1', [b.ref.slice(6)]);
+    if (status === 'delivered' && !(was && was.status === 'delivered')) {
+      await notifyDelivery(b, 'delivered').catch((e) => console.error(`delivered notice ${id} failed:`, e.message));
+      /* Through the board's own move, which also moves the review ask to a
+         few days after this (Codex #143); keepLater, so nothing is cleared. */
+      if (b.ref.startsWith('quote:')) {
+        await moveJobToStage(b.ref.slice(6), JOB_STAGES.length - 1, { notify: false, keepLater: true });
+      }
     }
     res.redirect(`/admin/delivery?flash=${status}#d-${id}`);
   } catch (e) {
@@ -32988,6 +33038,12 @@ app.get('/admin/delivery/new', requireAdmin, async (req, res) => {
     const q = rows[0];
     const existing = await DELIVERY.byRef('quote:' + code);
     if (existing) return res.redirect(`/admin/delivery/job/${existing.id}`);
+    if (!q.accepted_at || ['held', 'draft'].includes(q.status)) {
+      return res.send(adminPage('Book a delivery', `${pageHeader(`Book a delivery for ${code}`, escEmail(q.name || ''),
+        '<a class="btn btn-ghost" href="/admin/delivery">Back</a>')}
+        <div class="card"><div class="warn">Delivery is booked for accepted jobs. This quote has not been accepted yet:
+          the customer picks delivery when they accept it, or accept it for them first.</div></div>`, 'delivery'));
+    }
     const a = SHIP.cleanShipTo(q.ship_to, q.name) || {};
     const zip = DELIV.normZip(req.query.zip || a.zip);
     const o = zip ? await DELIVERY.options({ zip, readyYmd: quoteReadyYmd(q) }) : null;
@@ -33028,8 +33084,12 @@ app.post('/admin/delivery/new', requireAdmin, async (req, res) => {
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/delivery?e=failed');
   const back = `/admin/delivery/new?code=${code}`;
   try {
-    const { rows } = await pool.query('SELECT * FROM quotes WHERE code = $1 AND cancelled_at IS NULL', [code]);
-    if (!rows.length) return res.redirect('/admin/delivery?e=failed');
+    /* An accepted job only: a draft or an unaccepted quote booked a confirmed
+       seat and had its fee and total changed under it (Codex #143). */
+    const { rows } = await pool.query(
+      `SELECT * FROM quotes WHERE code = $1 AND cancelled_at IS NULL AND accepted_at IS NOT NULL
+          AND status NOT IN ('held', 'draft')`, [code]);
+    if (!rows.length) return res.redirect(back + '&e=notaccepted');
     const q = rows[0];
     const address = SHIP.cleanShipTo({ street1: b.street1, street2: b.street2, city: b.city, state: b.state, zip: b.zip }, q.name);
     if (!address || SHIP.shipToProblems(address).filter((f) => f !== 'name').length) return res.redirect(back + '&e=failed');
@@ -33038,13 +33098,18 @@ app.post('/admin/delivery/new', requireAdmin, async (req, res) => {
       name: q.name, phone: q.phone, email: q.email, readyYmd: quoteReadyYmd(q), status: 'confirmed', by: deliveryActor() });
     if (!r.ok) return res.redirect(`${back}&zip=${encodeURIComponent(address.zip)}&e=${encodeURIComponent(r.reason)}`);
     const fee = b.charge === '1' ? Number(r.booking.fee) : null;
+    /* The fee and the totals it makes in ONE statement: two left a fee
+       charged on a pickup-priced total if the second failed (Codex #143). */
+    const tt = fee != null ? quoteTotals({ ...q, delivery_fee: fee }) : null;
     const { rows: upd } = await pool.query(
       `UPDATE quotes SET ship_method = 'local', ship_to = $2::jsonb,
-              delivery_fee = COALESCE($3::numeric, delivery_fee)
-        WHERE code = $1 RETURNING *`, [code, JSON.stringify(address), fee]);
+              delivery_fee = COALESCE($3::numeric, delivery_fee),
+              total = COALESCE($4::numeric, total), deposit = COALESCE($5::numeric, deposit)
+        WHERE code = $1 RETURNING *`,
+      [code, JSON.stringify(address), fee, tt ? tt.total : null, tt ? tt.deposit : null]);
     if (fee != null && upd[0]) {
-      const tt = quoteTotals(upd[0]);
-      await pool.query('UPDATE quotes SET total = $2, deposit = $3 WHERE code = $1', [code, tt.total, tt.deposit]);
+      /* The CRM deal shows the new amount too (Codex #143). */
+      syncQuoteToBrevo(upd[0], { note: false }).then((ids) => keepBrevoIds(upd[0].id, ids)).catch(() => {});
       /* The total just changed: an open card page made for the old total must
          not stay payable (Codex #143, fixed 2026-10-10). Forgotten first, then
          expired, the same order the card route uses. */
