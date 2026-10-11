@@ -79,18 +79,20 @@ design — the server warns about this at boot.
 | `/customer` | one customer's history |
 | `/admin/reviews` | review moderation |
 
-A job moves across `/production` through five columns, derived from milestone
-dates on the quote rather than a separate status field — To start → Artwork &
-proof → Blanks → Press → Check & ship. Delivered is a destination, not a
-column: a delivered job leaves the board.
+A job moves across `/production` through three columns, derived from milestone
+dates on the quote rather than a separate status field: To start, In production
+(artwork, proof, blanks and printing), and Ready / Shipped. Delivered is a
+destination, not a column: a delivered job leaves the board.
 
-The button on a card **finishes the column the card is in**, it does not jump
-to the next one — a card in Press offers "✓ Press". The exception is To start,
-which owns no milestone of its own, so its button advances. This means Check &
-ship takes **two** taps to clear: the first records checked-and-shipped and the
-card stays put, the second stamps delivered and drops it off the board. That
-second tap is deliberate — shipped is the last state where a problem is still
-recoverable, so nothing but an explicit tap may call a job arrived.
+The button on a card **finishes the column the card is in**: one tap stamps
+every milestone that column owns (In production stamps artwork, proof, blanks
+and press together), and never clears a later milestone already recorded out of
+order. To start owns none, so its button advances. Ready / Shipped therefore
+takes **two** taps to clear: the first stamps checked and shipped and the card
+stays put, the second targets Delivered and drops it off the board. That second
+tap is deliberate: shipped is the last state where a problem is still
+recoverable, so nothing but an explicit tap may call a job arrived. The ← arrow
+moves a card back one column and clears the dates after it.
 
 ## Tests
 
@@ -155,7 +157,10 @@ below is needed to get the app running locally.
     -H 'Content-Type: application/json' -d '{"folder":"quote_requests"}'
   ```
 
-  `200` is healthy, `503` means neither spelling is set. Note the cloud name
+  `503` means neither spelling is set. `200` only means a secret is present:
+  the signature is computed here, so a stale secret, or a wrong cloud name or
+  API key, still answers 200 and fails at Cloudinary. The real check is one
+  upload through a quote form's photo button. Note the cloud name
   and API key come from a separate public endpoint (`/api/config`) and can
   look perfectly correct while the secret is absent — which is why this failure
   is easy to look straight at and call fine.

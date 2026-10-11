@@ -134,7 +134,12 @@ async function* paginate(path, params) {
     for await (const s of paginate('checkout/sessions', { 'created[gte]': String(SINCE) })) {
       sessions++;
       if (s.payment_status !== 'paid') { unpaid++; continue; }
-      if (excluded(s.id, s.payment_intent)) { skipped++; continue; }
+      if (excluded(s.id, s.payment_intent)) {
+        /* Its charge carries only ch_/pi_ ids, so the session's payment intent
+           is excluded too, or the charge pass names it an orphan (Codex #108). */
+        if (typeof s.payment_intent === 'string') EXCLUDE.add(s.payment_intent);
+        skipped++; continue;
+      }
 
       const code = String(s.client_reference_id || '').toUpperCase();
       // Actually on the quote ledger — the only thing that proves it banked.
