@@ -284,7 +284,8 @@ test('a studio order is bought for the address the studio holds, never one sent 
 
 test('marking a quote job shipped is the board move, which tells the customer', () => {
   const shipped = route("app.post('/admin/shipping/shipped', requireAdmin");
-  assert.match(shipped, /await moveJobToStage\(r\.code, SHIP_STAGE_OUT\);/);
+  assert.match(shipped, /await moveJobToStage\(r\.code, SHIP_STAGE_OUT, \{ awaitNotify: true \}\);/);
+  assert.match(shipped, /how === 'failed'\) return shipBack\(res, r\.ref, 'warn'/, 'a failed email is said, not reported as sent');
   assert.match(shipped, /if \(!label && !tracking\)/, 'no label and no tracking number: not shipped');
   assert.match(src, /const SHIP_STAGE_OUT = JOB_STAGES\.findIndex\(\(s\) => s\.key === 'out'\);/);
 });
@@ -431,7 +432,8 @@ test('sales are accepted jobs, in the month accepted, at what the customer pays 
   /* "This is wrong" (the owner, 2026-09-30): $12,183.66 of sales and $10,170
      profit on $3,963.72 collected. Every quote CREATED counted as a sale. */
   const books = route('app.get(FINANCES_PATH, requireAdmin');
-  assert.match(books, /SUM\(COALESCE\(total,0\) - COALESCE\(tax,0\)\) AS sales/);
+  assert.match(books, /SUM\(\$\{JOB_SALE\}\) AS sales/);
+  assert.match(src, /const JOB_SALE = `\(COALESCE\(total,0\) - COALESCE\(tax,0\)\)\s*\* CASE WHEN COALESCE\(total,0\) > 0 THEN GREATEST\(0, 1 - COALESCE\(written_off,0\) \/ total\) ELSE 1 END`/, 'less what was written off (Codex #125)');
   assert.match(books, /WHERE accepted_at IS NOT NULL AND cancelled_at IS NULL AND status NOT IN \('expired', 'held', 'draft'\)/);
   assert.match(books, /EXTRACT\(YEAR FROM accepted_at\) = \$1/);
   assert.doesNotMatch(books, /SUM\(subtotal\) AS sales/);

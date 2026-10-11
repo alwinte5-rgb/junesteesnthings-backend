@@ -1095,6 +1095,9 @@ async function initStaffTables() {
       created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
   await pool.query(`CREATE INDEX IF NOT EXISTS staff_approvals_pending_idx ON staff_approvals (status, created_at)`);
+  /* When a decision was claimed: a claim cut off by a restart is shown again
+     after 10 minutes instead of vanishing (Codex #123). */
+  await pool.query(`ALTER TABLE staff_approvals ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ`).catch(() => {});
   /* The reintroduction campaign (tools/lib/reintro.js): who signed up for
      texts from the email and the code they were given, which addresses the
      email went to, and when the owner started each half. One row per phone
@@ -3025,7 +3028,7 @@ function hexEqual(a, b) {
    Cloudflare did not cover them. Old bookmarks and emails still point there,
    so a page opened at an old address is sent to its new one. Only pages: a
    form posted to an old address has no handler and is refused. */
-const MOVED_TO_ADMIN = new Set(['account', 'cart', 'certificates', 'customer', 'customers', 'dashboard',
+const MOVED_TO_ADMIN = new Set([/* 'account' retired: no /admin/account (Codex #124) */ 'cart', 'certificates', 'customer', 'customers', 'dashboard',
   'discounts', 'expenses', 'exports', 'inventory', 'lead', 'leads', 'my-day', 'my-earnings', 'orders',
   'playbook', 'production', 'quote', 'quotes', 'tasks', 'tax', 'tax.csv', 'team-chat', 'unlinked']);
 
@@ -6859,12 +6862,13 @@ async function notifyQuoteMilestone(before, after) {
   if (after.phone) {
     sendCustomerSms({ phone: after.phone, kind: 'transactional', ref: 'quote:' + code, msg: text, quote: code });
   }
-  if (!after.email) return;
+  if (!after.email) return 'no-email';
   const { rows } = await pool.query(
     `SELECT 1 FROM client_emails WHERE quote_code = $1 AND kind = $2 AND status = 'sent' LIMIT 1`, [code, kind]);
-  if (rows.length) return;
+  if (rows.length) return 'already';
   await sendClientEmail({ quote: code, kind, to: after.email, subject,
                           html: customerEmailHtml(heading, inner, code), preview: htmlToText(inner) });
+  return 'emailed';
 }
 
 /* The job page's checklist: ticking a step moves the job to that stage, and
@@ -8522,6 +8526,8 @@ async function emailQuote(q) {
       </div>`,
     });
     await pool.query('UPDATE quotes SET emailed_at = NOW(), sent_to_customer_at = COALESCE(sent_to_customer_at, NOW()) WHERE id = $1', [q.id]).catch(() => {});
+    /* The lead was answered when the quote actually reached them (Codex #123). */
+    if (q.from_submission_id && typeof markLeadResponded === 'function') markLeadResponded(q.from_submission_id, currentActor() || null).catch(() => {});
     console.log(`quote ${q.code}: emailed to the customer`);
     return { ok: true, to };
   } catch (e) {
@@ -12738,7 +12744,8 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     }
     /* A draft being sent is, to everyone else, a new quote. */
     if (!existingQuote || wasDraft) logActivity(actor, 'quote sent', { type: 'quote', id: code }, { total });
-    if ((!existingQuote || wasDraft) && q.from_submission_id) markLeadResponded(q.from_submission_id, actor);
+    /* Not here: saving sends nothing. The lead is answered when the quote is
+       emailed or marked sent (Codex #123). */
 
     /* An edit updates the quote's one deal (q carries brevo_deal_id from the
        UPDATE ... RETURNING); a failure is retried hourly, brevoQuoteCatchUp. */
@@ -15993,6 +16000,14 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
        choice ? JSON.stringify(choice.declined) : null,
        choice ? choice.rev : null,
        delivery ? delivery.fee : null, delivery ? JSON.stringify(delivery.address) : null, shipMethod]);
+    /* The options chosen (or a delivery fee) changed the amount: a card page
+       opened before accepting is still payable for the old one, so it is
+       closed and forgotten; the next Pay makes a fresh one (Codex #127). */
+    if (rows.length && (choice || delivery) && rows[0].stripe_session) {
+      await expireCheckoutSession(rows[0].stripe_session);
+      await pool.query('UPDATE quotes SET stripe_session = NULL WHERE code = $1 AND stripe_session = $2',
+        [code, rows[0].stripe_session]).catch(() => {});
+    }
     if (delivery && !rows.length) {
       /* A second, overlapping accept loses the UPDATE but books the same
          'quote:<code>' ref: cancelling it then cancels the WINNER's booking.
@@ -16523,6 +16538,11 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
          only those: it was the costs of 3 jobs set against the sales of 29,
          which is how it read 99%. */
     const JOB_COST = 'cost_blanks + cost_supplies + cost_outsourced + cost_shipping';
+    /* A job's sale is its price before tax LESS what was written off: settled
+       money that will never arrive is not a sale (Codex #125). Written-off is
+       gross, so its pre-tax share comes off. */
+    const JOB_SALE = `(COALESCE(total,0) - COALESCE(tax,0))
+      * CASE WHEN COALESCE(total,0) > 0 THEN GREATEST(0, 1 - COALESCE(written_off,0) / total) ELSE 1 END`;
     const { rows: months } = await pool.query(
       `WITH pay AS (
          SELECT to_char(date_trunc('month', created_at), 'YYYY-MM') AS period,
@@ -16541,10 +16561,10 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
        job AS (
          SELECT to_char(date_trunc('month', accepted_at), 'YYYY-MM') AS period,
                 COUNT(*) AS jobs,
-                SUM(COALESCE(total,0) - COALESCE(tax,0)) AS sales,
+                SUM(${JOB_SALE}) AS sales,
                 SUM(${JOB_COST}) AS costs,
                 COUNT(*) FILTER (WHERE (${JOB_COST}) > 0) AS costed,
-                COALESCE(SUM(COALESCE(total,0) - COALESCE(tax,0)) FILTER (WHERE (${JOB_COST}) > 0), 0) AS costed_sales
+                COALESCE(SUM(${JOB_SALE}) FILTER (WHERE (${JOB_COST}) > 0), 0) AS costed_sales
            FROM quotes
           WHERE accepted_at IS NOT NULL AND cancelled_at IS NULL AND status NOT IN ('expired', 'held', 'draft')
             AND EXTRACT(YEAR FROM accepted_at) = $1
@@ -17927,10 +17947,12 @@ app.post('/admin/quote/:code/delivered', requireAdmin, async (req, res) => {
   const isFetch = req.get('X-Requested-With') === 'fetch';
   if (!QUOTE_CODE_RE.test(code)) return isFetch ? res.status(404).end() : res.redirect('/admin/quotes');
   try {
-    const { rowCount } = await pool.query(
+    const { rows: sentRows, rowCount } = await pool.query(
       `UPDATE quotes SET sent_to_customer_at = NOW()
-        WHERE code = $1 AND sent_to_customer_at IS NULL AND status NOT IN ('held', 'draft') AND cancelled_at IS NULL`, [code]);
+        WHERE code = $1 AND sent_to_customer_at IS NULL AND status NOT IN ('held', 'draft') AND cancelled_at IS NULL
+        RETURNING from_submission_id`, [code]);
     if (rowCount) logActivity(currentActor() || OWNER_ACTOR, 'quote marked sent', { type: 'quote', id: code }, {});
+    if (rowCount && sentRows[0].from_submission_id) await markLeadResponded(sentRows[0].from_submission_id, currentActor());
     if (isFetch) return res.status(204).end();
     return res.redirect(`/admin/production/${code}?ok=${encodeURIComponent(rowCount
       ? 'Marked as sent to the customer.' : 'That quote was already marked as sent.')}`);
@@ -19065,7 +19087,7 @@ const STAGE_ASK_SCRIPT = `<script>(function(){
    and the job page's checklist: the checklist used to stamp one date at a time
    and never moved the review ask, so the two disagreed about what "delivered"
    did. Returns the job as it now stands, or null if there is no such quote. */
-async function moveJobToStage(code, target, { notify = true, keepLater = false } = {}) {
+async function moveJobToStage(code, target, { notify = true, keepLater = false, awaitNotify = false } = {}) {
   /* keepLater: the board's "✓ finish this stage" button. It stamps up to the
      target and leaves any milestone recorded out of order (blanks in while the
      proof is still out) alone; only an explicit move back clears later ones
@@ -19078,7 +19100,14 @@ async function moveJobToStage(code, target, { notify = true, keepLater = false }
   const before = prev[0];
   const after = rows[0];
   console.log(`quote ${code}: moved to ${JOB_STAGES[target].label}`);
-  if (notify) {
+  if (notify && awaitNotify) {
+    /* The caller says what happened, so it waits (Codex #125: "they have been
+       emailed" was shown over a failed send). */
+    after._notified = await notifyQuoteMilestone(before, after).catch((e) => {
+      console.error(`milestone message for ${code} failed:`, e.message);
+      return 'failed';
+    });
+  } else if (notify) {
     notifyQuoteMilestone(before, after)
       .catch((e) => console.error(`milestone message for ${code} failed:`, e.message));
   }
@@ -21675,9 +21704,13 @@ app.post('/admin/quote/:code/message', requireAdmin, async (req, res) => {
       const { rows: [hq] } = await pool.query('SELECT status FROM quotes WHERE code = $1', [code]);
       if (hq && hq.status === 'held') return answer('msg_err', 'held');
       if (hq && hq.status === 'draft') return answer('msg_err', 'draft');
+      /* One request per message: a resubmitted or double-clicked identical
+         message does not queue a second Approve-and-send (Codex #123). */
       await pool.query(
         `INSERT INTO staff_approvals (kind, subject_id, payload, reasons, requested_by)
-         VALUES ('message', $1, $2, $3, $4)`,
+         SELECT 'message', $1, $2::jsonb, $3::jsonb, $4
+          WHERE NOT EXISTS (SELECT 1 FROM staff_approvals WHERE kind = 'message' AND subject_id = $1
+                              AND status IN ('pending', 'processing') AND payload = $2::jsonb)`,
         [code, JSON.stringify({ channel, subject, text, attachments }),
          JSON.stringify(outside
            ? [`It mentions being paid outside the shop ("${outside.slice(0, 60)}").`]
@@ -25113,11 +25146,19 @@ app.post('/admin/shipping/buy', requireAdmin, async (req, res) => {
 
 /** Keep a quote's label, and its tracking number when the job has none yet. */
 async function keepQuoteLabel(code, label) {
+  /* The postage is a job cost: added to cost_shipping once, the first time
+     this label (by its Shippo transaction) is kept, so margins and the books
+     see it (Codex #125). A re-check of the same label adds nothing. */
+  const amt = round2(Number(label && label.amount) || 0);
   await pool.query(
     `UPDATE quotes SET ship_label = $2::jsonb,
-            tracking = CASE WHEN COALESCE(tracking, '') = '' THEN NULLIF($3, '') ELSE tracking END
+            tracking = CASE WHEN COALESCE(tracking, '') = '' THEN NULLIF($3, '') ELSE tracking END,
+            cost_shipping = CASE WHEN $4::numeric > 0
+                                  AND COALESCE(ship_label->>'txn', '') IS DISTINCT FROM COALESCE($5::text, '')
+                                  AND COALESCE(ship_label->>'label_url', '') = ''
+                                 THEN COALESCE(cost_shipping, 0) + $4::numeric ELSE cost_shipping END
       WHERE code = $1`,
-    [code, JSON.stringify(label), String(label.tracking || '').slice(0, 120)]);
+    [code, JSON.stringify(label), String(label.tracking || '').slice(0, 120), amt, String((label && label.txn) || '')]);
 }
 
 /* Where a label bought earlier stands: finished, still being made by Shippo, or
@@ -25185,8 +25226,11 @@ app.post('/admin/shipping/shipped', requireAdmin, async (req, res) => {
     }
     /* The board's own move: the same "has shipped" message with its tracking,
        and the review ask moved to after it arrives. */
-    await moveJobToStage(r.code, SHIP_STAGE_OUT);
-    return shipBack(res, r.ref, 'ok', 'Marked shipped. They have been emailed their tracking.');
+    const moved = await moveJobToStage(r.code, SHIP_STAGE_OUT, { awaitNotify: true });
+    const how = moved && moved._notified;
+    if (how === 'failed') return shipBack(res, r.ref, 'warn', 'Marked shipped, but the email with their tracking did not go. Send it from the job page.');
+    return shipBack(res, r.ref, 'ok', how === 'no-email' ? 'Marked shipped. They have no email on file, so text them the tracking.'
+      : 'Marked shipped. They have been emailed their tracking.');
   } catch (e) {
     console.error('mark shipped failed:', e.message);
     return shipBack(res, r.ref, 'err', 'Something went wrong marking it shipped. Refresh and check before trying again.');
@@ -27060,7 +27104,9 @@ app.get('/admin/approvals', requireAdmin, async (req, res) => {
   try {
     const roster = await staffRoster();
     const { rows: pending } = await pool.query(
-      `SELECT * FROM staff_approvals WHERE status = 'pending' ORDER BY created_at LIMIT 100`);
+      `SELECT *, (status = 'processing') AS interrupted FROM staff_approvals
+        WHERE status = 'pending' OR (status = 'processing' AND COALESCE(claimed_at, created_at) < NOW() - INTERVAL '10 minutes')
+        ORDER BY created_at LIMIT 100`);
     const { rows: decided } = await pool.query(
       `SELECT * FROM staff_approvals WHERE status NOT IN ('pending', 'processing')
         ORDER BY decided_at DESC NULLS LAST LIMIT 20`);
@@ -27072,6 +27118,8 @@ app.get('/admin/approvals', requireAdmin, async (req, res) => {
       <div class="row-i"><span class="row-main"><b>${escEmail(nameOf(roster, a.requested_by))}</b>
         <div class="row-sub">${escEmail(whenShort(a.created_at))}</div></span>
         <span class="row-end">${pill(a.kind, 'blue')}</span></div>
+      ${a.interrupted ? `<div class="warn">This was being ${a.kind === 'message' ? 'sent' : 'decided'} when the app restarted, and did not finish.
+        ${a.kind === 'message' ? 'Check the job\'s messages before approving again, or it may go twice.' : 'Decide it again.'}</div>` : ''}
       ${approvalBody(a, quoteBy[a.subject_id])}
       ${(a.reasons || []).length ? `<ul class="muted">${a.reasons.map((r) => `<li>${escEmail(r)}</li>`).join('')}</ul>` : ''}
       <form method="post" action="/admin/approvals/${a.id}" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
@@ -27151,7 +27199,9 @@ app.post('/admin/approvals/:id', requireAdmin, async (req, res) => {
   if (!id) return res.redirect('/admin/approvals');
   /* Claimed before anything is sent, so a double press cannot send twice. */
   const { rows: [a] } = await pool.query(
-    `UPDATE staff_approvals SET status = 'processing' WHERE id = $1 AND status = 'pending' RETURNING *`, [id]);
+    `UPDATE staff_approvals SET status = 'processing', claimed_at = NOW()
+      WHERE id = $1 AND (status = 'pending' OR (status = 'processing' AND COALESCE(claimed_at, created_at) < NOW() - INTERVAL '10 minutes'))
+      RETURNING *`, [id]);
   if (!a) return back(res, '/admin/approvals', 'err', 'That one was already decided.');
   const finish = (status) => pool.query(
     `UPDATE staff_approvals SET status = $2, decided_at = NOW(), decision_note = $3 WHERE id = $1`, [id, status, note]);
@@ -27870,7 +27920,15 @@ function incentiveWindow(inc) {
   const ymd = (d) => (d instanceof Date
     ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
     : String(d).slice(0, 10));
-  return [TEAM.localMidnight(ymd(inc.starts_on), SHOP_TZ), TEAM.localMidnight(ymd(inc.ends_on), SHOP_TZ, 1)];
+  const from = TEAM.localMidnight(ymd(inc.starts_on), SHOP_TZ);
+  let to = TEAM.localMidnight(ymd(inc.ends_on), SHOP_TZ, 1);
+  /* Ended early by the owner: it counts up to that moment, not to its old end
+     date, so sales after "End" cannot reach the target (Codex #123). */
+  if (inc.ended_at) {
+    const e = new Date(inc.ended_at);
+    if (!Number.isNaN(e.getTime()) && e < new Date(to)) to = e.toISOString();
+  }
+  return [from, to];
 }
 
 async function incentiveProgress(inc, staffId) {
@@ -28192,8 +28250,22 @@ app.post('/admin/lead/:id/assign', requireAdmin, async (req, res) => {
     ? currentActor().id : intIn(req.body && req.body.to);
   const backTo = safeAdminPath(req.body && req.body.back, '/admin/leads');
   if (!id) return res.redirect(backTo);
+  const actor = currentActor();
+  const isStaff = actor && actor.kind === 'staff';
   try {
-    await pool.query('UPDATE submissions SET assigned_to = $2 WHERE id = $1', [id, to]);
+    /* A helper takes a lead or lets go of their own; only the owner hands one
+       to someone else. Any other id from a helper was written as posted
+       (Codex #123), including people who do not exist. */
+    if (isStaff && to != null && to !== actor.id) return back(res, backTo, 'err', 'Only the owner can give a lead to someone else.');
+    if (to != null) {
+      const { rows: [who] } = await pool.query('SELECT active FROM staff WHERE id = $1', [to]);
+      if (!who || !who.active) return back(res, backTo, 'err', 'That helper is not active.');
+    }
+    const { rowCount } = await pool.query(
+      `UPDATE submissions SET assigned_to = $2 WHERE id = $1
+          AND ($3::int IS NULL OR assigned_to IS NULL OR assigned_to = $3)`,
+      [id, to, isStaff ? actor.id : null]);
+    if (!rowCount) return back(res, backTo, 'err', 'That lead is someone else\'s. Ask the owner to move it.');
     return res.redirect(backTo + `#lead-${id}`);
   } catch (err) {
     console.error('lead assign failed:', err.message);
