@@ -1727,7 +1727,20 @@ async function taxPositionByMonth(limit = 24) {
        exempt sale is DETERMINED — its tax really is zero — so this never feeds
        `undetermined`; it is a separate question about evidence, not amount. */
     exemptGross: round2(list.reduce((s, p) => s + p.exemptGross, 0)),
-    exemptUndocumented: list.reduce((s, p) => s + p.exemptUndocumented, 0),
+    /* Quotes, once each across the periods shown: a deposit in one month and
+       the balance in the next is ONE undocumented sale, and summing the
+       per-month counts said two (Codex #108). The sum is the fallback. */
+    exemptUndocumented: await (async () => {
+      const sum = list.reduce((s, p) => s + p.exemptUndocumented, 0);
+      if (!sum) return 0;
+      const { rows: [u] } = await pool.query(
+        `SELECT COUNT(DISTINCT p.quote_code) FILTER (WHERE NOT ${EXEMPT_DOCUMENTED_SQL}) AS n
+           FROM quote_payments p JOIN quotes q ON q.code = p.quote_code
+          WHERE COALESCE(p.exempt, COALESCE(q.taxable, q.tax > 0) = false)
+            AND to_char(date_trunc('month', p.created_at), 'YYYY-MM') = ANY($1::text[])`,
+        [list.map((p) => p.period)]).catch(() => ({ rows: [] }));
+      return u && u.n != null && Number.isFinite(Number(u.n)) ? Number(u.n) : sum;
+    })(),
   };
 }
 
@@ -2104,6 +2117,11 @@ async function sendEmail({ to, subject, html, replyTo, marketing = false, text, 
   if (marketing && await isUnsubscribed(to)) {
     console.log(`sendEmail: skipped ${to} (unsubscribed)`);
     return;
+  }
+  /* Marketing mail must carry an unsubscribe link that works. With no signing
+     secret every link is refused, so it is not sent at all (Codex #27). */
+  if (marketing && !unsubSecret()) {
+    throw new Error('marketing email not sent: UNSUB_TOKEN_SECRET is not set, so its unsubscribe link could not work');
   }
   if (promo) html = await withTextsInvite(to, html);
   /* Applied HERE rather than at each call site, because thirty call sites is
@@ -9371,7 +9389,7 @@ function emptyState(html, action) {
 /* The form June opens on her phone. Also serves /admin/quote/:code/edit, pre-filled,
    so editing is the same screen rather than a second thing to maintain. */
 app.get(['/admin/quote/new', '/admin/quote/:code/edit'], requireAdmin, async (req, res) => {
-  let catalog = { products: [], methods: [] };
+  let catalog = { products: [], methods: [], failed: true };
   try { catalog = await getCatalog(); } catch (e) { /* form still works manually */ }
   const creditRoster = await staffRoster({ activeOnly: true }).catch(() => []);
 
@@ -9586,10 +9604,14 @@ function productGroupOf(name) {
   const digiOpts = digiList.map(d =>
     `<option value="${d.id}">${escEmail(d.title)} — ${money(d.price)}</option>`).join('');
 
-  const catalogNote = !catalog.methods.length
+  const catalogNote = catalog.failed
     ? `<div class="warn" style="margin-bottom:10px">The product catalogue could not be
        loaded from the designer, so the dropdowns are empty. Every line can still be
        priced by hand. If this persists, check <code>JT_INTERNAL_KEY</code>.</div>`
+    : (!catalog.methods.length || !catalog.products.length)
+    ? `<div class="warn" style="margin-bottom:10px">The designer answered, but has no
+       ${!catalog.products.length ? 'active products' : 'decoration methods'}${!catalog.products.length && !catalog.methods.length ? ' or decoration methods' : ''}
+       to list. Turn them on (Active) in the designer admin; meanwhile lines can be priced by hand.</div>`
     : untiered.length
     ? `<p class="muted" style="margin:-4px 0 10px;font-size:12.5px">
        ${untiered.length} decoration ${untiered.length === 1 ? 'method is' : 'methods are'}
@@ -11269,6 +11291,10 @@ ${uploadStatusScript()}
          with nothing said. A ✕ in a 58px thumbnail was the only sign, and it
          did not stop the save. */
       var upPending = 0, upFailed = 0, upReason = '';
+      /* Failures by file name, so retrying that file and succeeding takes its
+         failure back off: the count only ever rose, and the form kept saying a
+         photo was missing after it arrived (Codex #34). */
+      var upFailedNames = {};
       var qfstat = document.getElementById('qfstat');
       var qfgo   = document.getElementById('qfgo');
 
@@ -11342,6 +11368,12 @@ ${uploadStatusScript()}
             return jtCldUpload(CLOUD, fd, file.name);
           }).then(function(r){return r.json();}).then(function(d){
             if(!d.secure_url) throw new Error(d.error ? d.error.message : 'upload failed');
+            if (upFailedNames[file.name] > 0) {
+              upFailedNames[file.name]--; upFailed = Math.max(0, upFailed - 1);
+              if (!upFailed) upReason = '';
+              var old = thumbs.querySelector('[data-failed="' + encodeURIComponent(file.name) + '"]');
+              if (old) old.remove();
+            }
 
             /* Every upload is recorded WITH the name the customer gave it. Only
                the ones that are actually images also go in the images list,
@@ -11365,7 +11397,8 @@ ${uploadStatusScript()}
             }
           }).catch(function(e){
             ph.textContent = '✕'; ph.style.color = '#b71c1c';
-            upFailed++;
+            ph.setAttribute('data-failed', encodeURIComponent(file.name));
+            upFailed++; upFailedNames[file.name] = (upFailedNames[file.name] || 0) + 1;
             upReason = /signature/.test(e && e.message || '')
               ? 'the server would not sign the upload' : 'the upload was rejected';
             console.error('upload failed', e);
@@ -11506,7 +11539,9 @@ const JT_SERVER_UA =
 async function getCatalog() {
   if (_catCache.data && Date.now() - _catCache.at < 10 * 60 * 1000) return _catCache.data;
   const key = process.env.JT_INTERNAL_KEY;
-  if (!key) return _catCache.data || { products: [], methods: [] };
+  /* failed:true only when the catalogue could not be fetched, so the form
+     tells that apart from one that loaded with nothing active (Codex #35). */
+  if (!key) return _catCache.data || { products: [], methods: [], failed: true };
   try {
     /* Identify as a browser. Cloudflare's bot heuristics 403 unfamiliar user
        agents — that silently killed every Lumise sync earlier in this project —
@@ -11520,7 +11555,7 @@ async function getCatalog() {
     throw new Error('bad payload');
   } catch (err) {
     console.error('catalog fetch failed:', err.message);
-    return _catCache.data || { products: [], methods: [] };
+    return _catCache.data || { products: [], methods: [], failed: true };
   }
 }
 
@@ -25288,6 +25323,9 @@ app.post('/admin/quotes/:code/exemption', requireAdmin, async (req, res) => {
   const back = safeAdminPath(b.back, FINANCES_PATH);
   if (!QUOTE_CODE_RE.test(code)) return res.redirect(FINANCES_PATH);
 
+  /* A string only: a JSON or extended body can send an object, which became
+     "[object Object]" and silenced the missing-certificate warning (Codex #108). */
+  if (b.tax_exempt_ref != null && typeof b.tax_exempt_ref !== 'string') return res.redirect(back);
   const ref = String(b.tax_exempt_ref ?? '').trim().slice(0, 60) || null;
 
   try {
