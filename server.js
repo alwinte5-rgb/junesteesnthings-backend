@@ -766,6 +766,15 @@ async function initDB() {
      portion, and remittances are recorded against it; what is left is what
      still has to be set aside. */
   await pool.query(`ALTER TABLE quote_payments ADD COLUMN IF NOT EXISTS tax_portion NUMERIC(10,2) DEFAULT 0`).catch(() => {});
+  /* Whether the sale was tax-exempt WHEN this money was banked, like
+     tax_portion. Read live from the quote, editing a paid quote's taxable box
+     moved its earlier receipts in or out of the exempt deduction and restated
+     months already filed (Codex #108). Rows from before this are frozen at
+     today's classification once (only NULLs), the best record there is. */
+  await pool.query(`ALTER TABLE quote_payments ADD COLUMN IF NOT EXISTS exempt BOOLEAN`).catch(() => {});
+  await pool.query(`UPDATE quote_payments p SET exempt = (COALESCE(q.taxable, q.tax > 0) = false)
+                      FROM quotes q WHERE q.code = p.quote_code AND p.exempt IS NULL`)
+    .catch((e) => console.error('payment exemption snapshot failed:', e.message));
   await pool.query(`
     CREATE TABLE IF NOT EXISTS tax_remittances (
       id          BIGSERIAL PRIMARY KEY,
@@ -1638,7 +1647,7 @@ async function taxPositionByMonth(limit = 24) {
               FILTER (WHERE NOT ${EXEMPT_DOCUMENTED_SQL})
                                       AS exempt_undocumented
        FROM quote_payments p JOIN quotes q ON q.code = p.quote_code
-      WHERE COALESCE(q.taxable, q.tax > 0) = false
+      WHERE COALESCE(p.exempt, COALESCE(q.taxable, q.tax > 0) = false)   -- as banked (Codex #108)
       GROUP BY 1`).catch((err) => { if (typeof reportError === 'function') reportError('tax:position-query', err).catch(() => {}); return { rows: [] }; })   /* never silent (Codex #108) */;
 
   /* Tax-exempt design-studio sales: payments stamped with the certificate
@@ -1758,12 +1767,15 @@ async function recordPayment({ code, amount, fee = 0, method, kind = 'payment',
      itself from a quote total that may since have been edited. A correction or
      refund carries its tax back out the same way. */
   let taxPortion = 0;
+  let exempt = null;
   try {
     const { rows: tq } = await pool.query(
-      'SELECT tax, total FROM quotes WHERE code = $1', [code]);
+      'SELECT tax, total, taxable FROM quotes WHERE code = $1', [code]);
     if (tq.length && Number(tq[0].total) > 0 && Number(tq[0].tax) > 0) {
       taxPortion = round2(Number(tq[0].tax) * (round2(amount) / Number(tq[0].total)));
     }
+    // Exempt as of now, kept with the money (see the exempt column).
+    if (tq.length) exempt = !quoteTaxable(tq[0]);
   } catch { /* a missing quote is handled by the insert below */ }
 
   try {
@@ -1771,10 +1783,10 @@ async function recordPayment({ code, amount, fee = 0, method, kind = 'payment',
        owed in. Only a payment recorded after the fact (a Stripe card payment
        applied to its quote later) passes it; everything else lands now. */
     await pool.query(
-      `INSERT INTO quote_payments (quote_code, amount, fee, method, kind, source, stripe_session, stripe_pi, ext_ref, note, tax_portion, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, COALESCE($12::timestamptz, NOW()))`,
+      `INSERT INTO quote_payments (quote_code, amount, fee, method, kind, source, stripe_session, stripe_pi, ext_ref, note, tax_portion, created_at, exempt)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, COALESCE($12::timestamptz, NOW()), $13::boolean)`,
       [code, round2(amount), round2(fee), method, kind, source, session, pi,
-       extRef || session, note, taxPortion, createdAt]);
+       extRef || session, note, taxPortion, createdAt, exempt]);
   } catch (err) {
     // 23505 = unique_violation on the ext_ref index.
     if (err.code === '23505') return { ok: false, duplicate: true, paid: null };
@@ -17536,7 +17548,9 @@ app.get('/admin/tax.csv', requireAdmin, async (req, res) => {
     const { rows } = await pool.query(
       `SELECT p.created_at, p.quote_code, q.name, q.subtotal, q.tax, q.total,
               p.amount, p.method, p.kind, p.tax_portion,
-              q.taxable, q.tax_exempt_ref, q.tax_exempt_reason,
+              -- Exempt as banked, not as the quote reads today (Codex #108).
+              CASE WHEN p.exempt IS NOT NULL THEN NOT p.exempt ELSE q.taxable END AS taxable,
+              q.tax_exempt_ref, q.tax_exempt_reason,
               c.kind AS cert_kind, c.number AS cert_number, c.holder AS cert_holder, c.status AS cert_status
          FROM quote_payments p JOIN quotes q ON q.code = p.quote_code
          LEFT JOIN tax_certificates c ON c.id = q.tax_certificate_id
@@ -20832,20 +20846,30 @@ async function artQueues(actor) {
   const lvl = (k) => STAFF.levelOf(actor || OWNER_ACTOR, k);
   const q = (sql, args) => pool.query(sql, args).then((r) => r.rows).catch((e) => { console.error('art queue failed:', e.message); return []; });
   const base = `SELECT a.*, q.name, q.needed_by FROM art_requests a JOIN quotes q ON q.code = a.quote_code WHERE q.cancelled_at IS NULL AND`;
-  const [todo, questions, approve] = await Promise.all([
+  const [todo, questions, approve, customer] = await Promise.all([
     lvl('art.work') === 'on' && me != null
       ? q(`${base} a.status IN ('waiting', 'changes') AND (a.assigned_to IS NULL OR a.assigned_to = $1) ORDER BY a.updated_at`, [me]) : [],
     lvl('art.request') === 'on' ? q(`${base} a.status = 'needs_info' ORDER BY a.updated_at`, []) : [],
     me == null ? q(`${base} a.status = 'submitted' ORDER BY a.updated_at`, []) : [],
+    /* The designer's own jobs held up by the customer: a question out, or a
+       proof sent and not approved. The SOP sends them here each morning; the
+       to-do list above cannot hold either (Codex #161). Unfinished jobs only. */
+    lvl('art.work') === 'on' && me != null
+      ? q(`SELECT a.*, q.name, q.needed_by, (q.proof_sent_at IS NOT NULL AND q.proof_ok_at IS NULL) AS proof_out
+             FROM art_requests a JOIN quotes q ON q.code = a.quote_code
+            WHERE q.cancelled_at IS NULL AND q.delivered_at IS NULL
+              AND (a.assigned_to IS NULL OR a.assigned_to = $1)
+              AND (a.status = 'needs_info' OR (q.proof_sent_at IS NOT NULL AND q.proof_ok_at IS NULL))
+            ORDER BY q.needed_by NULLS LAST, a.updated_at`, [me]) : [],
   ]);
-  return { todo, questions, approve };
+  return { todo, questions, approve, customer };
 }
 
 function artQueueRows(list) {
   return list.map((a) => {
     const last = (a.events || [])[a.events.length - 1] || {};
     return `<div class="row-i"><span class="row-main"><a href="${escEmail(jobPath(a.quote_code))}#art"><b>${escEmail(a.quote_code)}</b></a> ${escEmail(a.name || '')}
-      <div class="row-sub" style="white-space:normal">${escEmail(ART.STATES[a.status].label)}${a.needed_by ? ` &middot; needed by ${escEmail(fmtDate(a.needed_by))}` : ''}${
+      <div class="row-sub" style="white-space:normal">${escEmail(a.proof_out && a.status !== 'needs_info' ? 'Proof sent, waiting for their approval' : ART.STATES[a.status].label)}${a.needed_by ? ` &middot; needed by ${escEmail(fmtDate(a.needed_by))}` : ''}${
         last.note ? ` &middot; "${escEmail(String(last.note).slice(0, 140))}"` : ''}</div></span>
       <span class="row-end muted">${escEmail(whenShort(a.updated_at))}</span></div>`;
   }).join('');
@@ -29122,6 +29146,7 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
         ${training.p.next.map((st) => `<div class="row-sub">Next: ${escEmail(st.title)}</div>`).join('')}`) : ''}
       ${training && training.note ? section('Latest note from the owner', coachingRow(training.note)) : ''}
       ${art.todo.length || STAFF.levelOf(actor, 'art.work') === 'on' && me != null ? section(`Artwork to do (${art.todo.length})`, artQueueRows(art.todo), 'No artwork waiting for you.') : ''}
+      ${art.customer.length ? section(`Waiting on the customer (${art.customer.length})`, artQueueRows(art.customer)) : ''}
       ${art.questions.length ? section(`The designer has a question (${art.questions.length})`, artQueueRows(art.questions)) : ''}
       ${art.approve.length ? section(`Final art to approve (${art.approve.length})`, artQueueRows(art.approve)) : ''}
       ${released.rows.length ? section('Approved — send these now', released.rows.map((q) => `
@@ -31605,7 +31630,7 @@ const KB_ADDED = [
   { kind: 'sop', title: 'Chasing late artwork and approvals', needsReview: true,
     tags: 'designer, late artwork, missing logo, proof approval, follow up, deadline',
     body: `A job cannot print without the customer's artwork and their approval of the proof, so you chase both.\n\n` +
-`- Each morning, check your Artwork to do on My Day for jobs waiting on the customer: a logo file, a missing detail, or a proof not yet approved\n` +
+`- Each morning, check Waiting on the customer on My Day: jobs where you asked a question, or sent a proof that is not approved yet. The soonest deadline is at the top\n` +
 `- First nudge after 1 working day, friendly and specific: exactly what you need and the date it affects (/artnudge)\n` +
 `- Second nudge after 2 more days, with the print date at risk spelled out. Copy sales on the job so they can call if needed\n` +
 `- If the deadline is now at risk, tell sales and June the same day. Never print without written approval, however late it is\n` +
@@ -31798,6 +31823,14 @@ KB_ADDED.push({ kind: 'sop', title: PAY_GUIDE_TITLE,
 
 /* Every course lesson (tools/lib/courses), added once by title like the rest,
    so the owner's edits are kept. */
+/* Codex #161: the chase SOP named a list that cannot hold a customer wait. A
+   live copy still reading the old line, and not otherwise edited, is updated. */
+{
+  const a = KB_ADDED.find((x) => x.title === 'Chasing late artwork and approvals');
+  const now = '- Each morning, check Waiting on the customer on My Day: jobs where you asked a question, or sent a proof that is not approved yet. The soonest deadline is at the top';
+  const then = '- Each morning, check your Artwork to do on My Day for jobs waiting on the customer: a logo file, a missing detail, or a proof not yet approved';
+  if (a && a.body.includes(now)) a.was = [...(a.was || []), a.body.split(now).join(then)];
+}
 KB_ADDED.push(...TRAINING.lessonArticles());
 
 async function addPlaybookArticles() {

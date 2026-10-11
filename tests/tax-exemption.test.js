@@ -235,7 +235,8 @@ test('the export says exempt rather than leaving a bare zero', () => {
     'the ST-1 deducts exempt sales, so they have to be identifiable as exempt');
   assert.match(TAXCSV, /quoteTaxable\(r\) \? '' : 'exempt'/,
     'exemption is read through the shared helper, not re-derived here');
-  assert.match(TAXCSV, /q\.taxable, q\.tax_exempt_ref/,
+  /* taxable is the payment's own stamp where it has one (Codex #108). */
+  assert.match(TAXCSV, /CASE WHEN p\.exempt IS NOT NULL THEN NOT p\.exempt ELSE q\.taxable END AS taxable,\s*q\.tax_exempt_ref/,
     'the query has to actually select the columns the rows print');
 });
 
