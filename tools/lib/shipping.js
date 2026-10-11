@@ -128,7 +128,9 @@ function quoteShipQueues(quotes, now = Date.now()) {
     const item = Object.assign({}, job, { state, waitingDays: daysSince(job.accepted_at || job.created_at, now) });
     if (state === 'to-ship' || state === 'pending') q.toShip.push(item);
     else if (state === 'labelled') q.labelled.push(item);
-    else if (state === 'shipped' && job.ship_label && job.ship_label.label_url) {
+    /* Shipped with our label, or with postage bought elsewhere (a tracking
+       number typed in): both went by post. Pickups have neither (Codex #125). */
+    else if (state === 'shipped' && ((job.ship_label && job.ship_label.label_url) || String(job.tracking || '').trim())) {
       const since = daysSince(job.shipped_at || job.delivered_at, now);
       if (since !== null && since <= 30) q.shipped.push(Object.assign(item, { shippedDays: since }));
     }

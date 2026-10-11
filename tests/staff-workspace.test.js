@@ -219,7 +219,8 @@ test('a helper cannot edit a quote the customer already has when the edit needs 
 
 test('approving is claimed first, so a double press cannot send twice', () => {
   const r = route("app.post('/admin/approvals/:id', requireAdmin");
-  assert.match(r, /SET status = 'processing' WHERE id = \$1 AND status = 'pending' RETURNING \*/);
+  /* Pending, or a claim a restart cut off over 10 minutes ago (Codex #123). */
+  assert.match(r, /SET status = 'processing', claimed_at = NOW\(\)\s*WHERE id = \$1 AND \(status = 'pending' OR \(status = 'processing' AND COALESCE\(claimed_at, created_at\) < NOW\(\) - INTERVAL '10 minutes'\)\)\s*RETURNING \*/);
   assert.ok(r.indexOf("'processing'") < r.indexOf('sendJobMessage'));
 });
 

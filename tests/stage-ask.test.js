@@ -89,7 +89,7 @@ test('no question when nothing would be sent', () => {
 
 test('a tap emails only when the owner said yes', () => {
   const move = src.slice(src.indexOf('async function moveJobToStage('));
-  assert.match(move.slice(0, 1200), /if \(notify\) \{\s*notifyQuoteMilestone/);
+  assert.match(move.slice(0, 1600), /\} else if \(notify\) \{\s*notifyQuoteMilestone/);   // or awaited (awaitNotify), still only when notify
   for (const route of ["app.post('/admin/quote/:code/stage'", "app.post('/admin/quote/:code/step'"]) {
     const body = src.slice(src.indexOf(route), src.indexOf(route) + 2000);
     assert.match(body, /moveJobToStage\([^;]*notify: [^;]*req\.body && req\.body\.notify\) \|\| ''\) === '1'/,

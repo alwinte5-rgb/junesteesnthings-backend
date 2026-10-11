@@ -47,14 +47,18 @@ test('a helper sending a draft goes through the owner\'s approval', () => {
 test('saving a draft stops before anything leaves the building', () => {
   const stop = save.indexOf("if (q.status === 'draft') {");
   assert.ok(stop > 0, 'the draft stop is missing');
-  for (const later of ['syncQuoteToBrevo(q)', 'syncQuoteToLumise(q)', 'markLeadResponded(']) {
+  /* markLeadResponded left the save (Codex #123): saving sends nothing, so the
+     lead is answered when the quote is emailed or marked sent. */
+  for (const later of ['syncQuoteToBrevo(q)', 'syncQuoteToLumise(q)']) {
     assert.ok(save.indexOf(later) > stop, `${later} must come after the draft stop`);
   }
 });
 
 test('a draft being sent is logged as sent and answers its lead', () => {
   assert.match(save, /if \(!existingQuote \|\| wasDraft\) logActivity\(actor, 'quote sent'/);
-  assert.match(save, /if \(\(!existingQuote \|\| wasDraft\) && q\.from_submission_id\) markLeadResponded/);
+  assert.doesNotMatch(save, /markLeadResponded\(q\.from_submission_id/, 'saving does not answer the lead');
+  assert.match(src, /if \(q\.from_submission_id && typeof markLeadResponded === 'function'\) markLeadResponded\(q\.from_submission_id/, 'emailing it does');
+  assert.match(src, /if \(rowCount && sentRows\[0\]\.from_submission_id\) await markLeadResponded\(sentRows\[0\]\.from_submission_id/, 'and so does marking it sent');
 });
 
 test('the form offers Save as draft only where a draft is possible', () => {
