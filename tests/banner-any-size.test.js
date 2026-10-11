@@ -13,7 +13,7 @@ const P = require('../tools/add-banner-product');
 const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 
 test('the per-foot rate rises with the vinyl, and every one keeps the x2 floor', () => {
-  assert.deepStrictEqual(s.BANNER_RATES, { '13': 7, '15': 8, '18': 9, '18d': 12 });
+  assert.deepStrictEqual(s.BANNER_RATES, { '13': 7, '15': 8, '18': 9, '18d': 8.5 });
   assert.strictEqual(s.BANNER_SQFT_RATE, 7, 'the 13oz rate the older tests know');
   const at = (oz, sides) => s.bannerPrice(120, 24, { oz, sides });
   assert.ok(at(13) < at(15) && at(15) < at(18) && at(18) < at(18, 'double'), 'heavier vinyl costs more');
@@ -30,9 +30,9 @@ test('the per-foot rate rises with the vinyl, and every one keeps the x2 floor',
 
 test('the designer table: every whole-foot size inside the limits, nothing outside', () => {
   const t = s.bannerTable();
-  /* 18oz double-sided is not sold until the owner confirms its rate (2026-10-10). */
-  assert.deepStrictEqual(t.materials.map((m) => m.key), ['13', '15', '18']);
-  assert.ok(!t.prices['18d'], 'no published price for the unconfirmed 18d');
+  /* 18oz double-sided on sale at cost x2 (owner, 2026-10-11). */
+  assert.deepStrictEqual(t.materials.map((m) => m.key), ['13', '15', '18', '18d']);
+  assert.ok(t.prices['18d']['6x3'] >= s.bannerCost(72, 36, { oz: 18, sides: 'double' }) * s.MARKUP, '18d at least cost x2');
   for (const m of t.materials) {
     assert.strictEqual(t.prices[m.key]['10x2'], s.bannerPrice(120, 24, s.BANNER_MATERIALS.find((x) => x.key === m.key)));
     assert.ok(t.prices[m.key]['30x5'] > 0 && t.prices[m.key]['5x30'] > 0, 'the limits themselves are sold');
