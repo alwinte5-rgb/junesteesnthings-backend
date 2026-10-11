@@ -161,8 +161,10 @@ test('the save and the accept both keep their ids that way', () => {
   const save = route("app.post(['/admin/api/quotes', '/admin/api/quotes/:code']");
   assert.match(save, /syncQuoteToBrevo\(q\)\.then\(ids => \{\s*keepBrevoIds\(q\.id, ids\)/);
   assert.doesNotMatch(save, /SET brevo_contact_id=\$1, brevo_deal_id=\$2/, 'the old write erased ids with nulls');
-  assert.match(src, /syncQuoteToBrevo\(q, \{ note: false \}\)\.then\(\(ids\) => keepBrevoIds\(q\.id, ids\)\)/,
+  assert.match(src, /syncQuoteToBrevo\(q, \{ note: false \}\)\.then\(\(ids\) => keepBrevoIds\(q\.id, ids\)\.then\(\(\) => ids\)\)/,
     'the accept path updates the deal and keeps what came back');
+  assert.match(src, /ids && ids\.error && pool\.query\('UPDATE quotes SET brevo_resync_at = NOW\(\) WHERE id = \$1'/,
+    'and a failed update is stamped for the hourly re-sync (Codex #127)');
 });
 
 /* ── every quote reaches Brevo eventually ─────────────────────────────────── */

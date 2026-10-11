@@ -339,6 +339,9 @@ async function initDB() {
   for (const col of ['brevo_synced_at TIMESTAMPTZ', 'brevo_attempts INT DEFAULT 0', 'human_check TEXT']) {
     await pool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
+  /* A quote whose deal update failed (options accepted, new contact details):
+     retried by brevoQuoteCatchUp until it goes (Codex #127). */
+  await pool.query(`ALTER TABLE quotes ADD COLUMN IF NOT EXISTS brevo_resync_at TIMESTAMPTZ`).catch(() => {});
   /* Where an enquiry came from: the website form, an embroidery request, or a
      tawk.to chat or offline message (saveChatLead). chat_ref is the chat or
      ticket id, so a lead can be traced back to its conversation. Embroidery
@@ -8713,6 +8716,27 @@ function keepBrevoIds(quoteId, ids) {
    counted and reported once, when the quote is given up on.
    tests/brevo-quote-sync.test.js. */
 const BREVO_QUOTE_CATCH_UP_SINCE = '2026-09-28';
+/* Deal updates that failed after a quote was accepted (options chosen, new
+   contact details): pushed again hourly, and dropped with a report after
+   three days of refusals (Codex #127). */
+async function brevoQuoteResync() {
+  if (!process.env.BREVO_API_KEY) return '';
+  const { rows: again } = await pool.query(
+    `SELECT * FROM quotes WHERE brevo_resync_at IS NOT NULL AND brevo_resync_at < NOW() - interval '10 minutes'
+      ORDER BY brevo_resync_at LIMIT 10`).catch(() => ({ rows: [] }));
+  for (const q of again) {
+    const ids = await syncQuoteToBrevo(q, { note: false }).catch((e) => ({ error: e }));
+    if (!ids.error) {
+      await keepBrevoIds(q.id, ids);
+      await pool.query('UPDATE quotes SET brevo_resync_at = NULL WHERE id = $1', [q.id]);
+    } else if (Date.now() - new Date(q.brevo_resync_at).getTime() > 3 * 86400000) {
+      reportError('brevo-quote-resync', ids.error, `quote ${q.code} update given up after 3 days`).catch(() => {});
+      await pool.query('UPDATE quotes SET brevo_resync_at = NULL WHERE id = $1', [q.id]);
+    }
+  }
+  return again.length ? `${again.length} re-sent` : '';
+}
+
 async function brevoQuoteCatchUp() {
   if (!process.env.BREVO_API_KEY) return '';
   const { rows } = await pool.query(
@@ -11303,6 +11327,28 @@ ${uploadStatusScript()}
       var upFailedNames = {};
       var qfstat = document.getElementById('qfstat');
       var qfgo   = document.getElementById('qfgo');
+      /* One submit: a double-click made two quotes (two codes, two drafts).
+         The buttons are disabled a tick later, so the pressed one still sends
+         its value (draft=1), and not at all if something cancelled the submit
+         (Codex #129). */
+      (function(){
+        var qf = document.getElementById('qf');
+        if (!qf) return;
+        qf.addEventListener('submit', function(e){
+          if (qf.getAttribute('data-sent') === '1') { e.preventDefault(); return; }
+          qf.setAttribute('data-sent', '1');
+          setTimeout(function(){
+            if (e.defaultPrevented) { qf.removeAttribute('data-sent'); return; }
+            [qfgo, document.getElementById('qfdraft')].forEach(function(b){ if (b) { b.disabled = true; b.style.opacity = '.6'; } });
+          }, 0);
+        });
+        // Back to this page from the browser's cache: usable again.
+        window.addEventListener('pageshow', function(ev){
+          if (!ev.persisted) return;
+          qf.removeAttribute('data-sent');
+          [qfgo, document.getElementById('qfdraft')].forEach(function(b){ if (b) { b.disabled = false; b.style.opacity = ''; } });
+        });
+      })();
 
       function saySoon(){
         var attached = 0;
@@ -11600,8 +11646,9 @@ async function customerHistory(q) {
 
   const { rows } = await pool.query(
     `SELECT * FROM quotes
-      WHERE ($1 <> '' AND lower(email) = $1)
-         OR ($2 <> '' AND regexp_replace(coalesce(phone,''), '\\D', '', 'g') LIKE '%' || $2)
+      WHERE (($1 <> '' AND lower(email) = $1)
+         OR ($2 <> '' AND regexp_replace(coalesce(phone,''), '\\D', '', 'g') LIKE '%' || $2))
+        AND status <> 'draft'   -- not history until it is finished (Codex #129)
       ORDER BY created_at DESC`, [email, digits]);
   if (!rows.length) return null;
 
@@ -11663,8 +11710,9 @@ app.get('/admin/api/quotes/prior', requireAdmin, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT * FROM quotes
-        WHERE (email <> '' AND lower(email) = lower($1))
-           OR ($2 <> '' AND regexp_replace(coalesce(phone,''), '\\D', '', 'g') LIKE '%' || $2)
+        WHERE ((email <> '' AND lower(email) = lower($1))
+           OR ($2 <> '' AND regexp_replace(coalesce(phone,''), '\\D', '', 'g') LIKE '%' || $2))
+          AND status <> 'draft'   -- an unfinished quote is not history (Codex #129)
         ORDER BY created_at DESC LIMIT 25`, [q, digits.slice(-10)]);
     if (!rows.length) return res.json({ found: false });
     const last = rows[0];
@@ -13740,8 +13788,12 @@ ${quotePricingSource()}
       var RUSH_PCT = ${Number(q.rush_pct) || 0};
       function m2(v){ return '$' + (Math.round(v*100)/100).toFixed(2); }
 
+      /* Order-level charges (freight) are paid once an order: two options each
+         carrying their own copy were both added once a quantity changed
+         (Codex #127), though applyOptionChoice counts them once. */
+      var EST_SHARED = ${JSON.stringify(ORDER_SHARED_CODES)};
       function estimate(){
-        var moved = false, sub = 0;
+        var moved = false, sub = 0, sharedSeen = {};
         LINES.forEach(function(L, ix){
           var boxes = document.querySelectorAll('.cq[data-line="' + ix + '"]');
           var mix = null, qty = 0;
@@ -13767,7 +13819,13 @@ ${quotePricingSource()}
             sizeMix: mix, blankTiers: BLANK_TIERS,
             blankOverride: L.blankOverride, unitOverride: L.unitOverride,
           });
-          if (counts(ix)) sub += r.lineTotal;
+          if (counts(ix)) {
+            sub += r.lineTotal;
+            (r.addonLines || []).forEach(function(al){
+              if (EST_SHARED.indexOf(al.code) < 0) return;
+              if (sharedSeen[al.code]) sub -= Number(al.total) || 0; else sharedSeen[al.code] = 1;
+            });
+          }
 
           var each = document.querySelector('[data-each="' + ix + '"]');
           var amt  = document.querySelector('[data-amount="' + ix + '"]');
@@ -16098,7 +16156,10 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
       /* A choice of options changed the job and its amount, so the deal and the
          studio's copy are pushed again for that as well. */
       if (cname || cemail || cphone || choice) {
-        syncQuoteToBrevo(q, { note: false }).then((ids) => keepBrevoIds(q.id, ids)).catch(() => {});
+        syncQuoteToBrevo(q, { note: false }).then((ids) => keepBrevoIds(q.id, ids).then(() => ids))
+          /* A failed update is stamped for brevoQuoteResync (Codex #127). */
+          .then((ids) => ids && ids.error && pool.query('UPDATE quotes SET brevo_resync_at = NOW() WHERE id = $1', [q.id]))
+          .catch(() => pool.query('UPDATE quotes SET brevo_resync_at = NOW() WHERE id = $1', [q.id]).catch(() => {}));
         syncQuoteToLumise(q).catch(() => {});
       }
       return res.redirect('/q/' + code + '?ev=accepted');
@@ -16299,6 +16360,9 @@ app.post('/admin/quote/:code/mark-paid', requireAdmin, async (req, res) => {
     /* A held quote has not reached the customer; recording a payment would
        make it 'accepted' and live without the owner's Approve. */
     if (q.status === 'held') return res.redirect(`/admin/production/${code}?err=${encodeURIComponent('This quote is waiting for approval. Approve it first.')}`);
+    /* A draft is unfinished: recording money would make it accepted and send
+       the customer a receipt for a quote they never saw (Codex #129). */
+    if (q.status === 'draft') return res.redirect(`/admin/quote/${code}/edit?err=${encodeURIComponent('This is still a draft. Finish it first, then record the payment.')}`);
     const t = quoteTotals(q);
 
     // Blank amount means "they paid what was due" — deposit, or the balance if
@@ -17989,8 +18053,10 @@ app.post('/admin/quote/:code/cancel', requireAdmin, async (req, res) => {
        stamp on would keep it counted as delivered work in the schedule. It is
        also how these were being hidden before cancelling existed. */
     const { rows } = await pool.query(
+      /* A cancelled DRAFT stays a draft: 'cancelled' would open it on the
+         customer's page, which hides only held and draft (Codex #129). */
       `UPDATE quotes SET cancelled_at = NOW(), cancel_reason = $2,
-              status = 'cancelled', delivered_at = NULL
+              status = CASE WHEN status = 'draft' THEN 'draft' ELSE 'cancelled' END, delivered_at = NULL
         WHERE code = $1 AND cancelled_at IS NULL RETURNING *`,
       [code, reason || null]);
     // Its Brevo deal moves to lost, rather than staying open in the pipeline.
@@ -19099,6 +19165,9 @@ async function moveJobToStage(code, target, { notify = true, keepLater = false, 
   const { rows } = await pool.query(`UPDATE quotes SET ${sets} WHERE code = $1 RETURNING *`, [code]);
   const before = prev[0];
   const after = rows[0];
+  /* A draft or held quote has not reached the customer: no message about it
+     (Codex #129: "in production" went out for a draft). */
+  if (['draft', 'held'].includes(String(before.status || ''))) notify = false;
   console.log(`quote ${code}: moved to ${JOB_STAGES[target].label}`);
   if (notify && awaitNotify) {
     /* The caller says what happened, so it waits (Codex #125: "they have been
@@ -19935,7 +20004,12 @@ async function renderBoard(VIEW, req, res) {
         leads.length === 1 ? 'y' : 'ies'}</b> &middot; ` : ''}${
         carts.length ? `<b style="color:#1848B8">${carts.length} unfinished cart${
         carts.length === 1 ? '' : 's'}</b> &middot; ` : ''}${
-        gQuotes.length} waiting on the customer &middot; ${
+        /* Drafts sit in this group to be found, but nobody is waiting on a
+           quote they never got (Codex #129). */
+        gQuotes.filter((q) => q.status !== 'draft').length} waiting on the customer${(() => {
+          const d = gQuotes.filter((q) => q.status === 'draft').length;
+          return d ? ` (+${d} draft${d === 1 ? '' : 's'})` : '';
+        })()} &middot; ${
         gOrders.length} order${gOrders.length === 1 ? '' : 's'} in hand${(() => {
           const n = rows.filter(q => !q.delivered_at && awaitingDeposit(q)).length;
           return n ? ` &middot; <b style="color:#8a5a00">${n} awaiting deposit</b>` : '';
@@ -26492,6 +26566,7 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
     await step('brevo breach check', brevoBreachCheck);
     await step('brevo catch-up', brevoCatchUp);
     await step('brevo quote catch-up', brevoQuoteCatchUp);
+    await step('brevo quote re-sync', brevoQuoteResync);
     await step('google analytics', googleAnalyticsCheck);
     await step('google ads', googleAdsCheck);
     await step('broken links', brokenLinksCheck);
@@ -27347,7 +27422,12 @@ async function helperScore(staffId, from, to) {
     pool.query(`SELECT
                   COUNT(*) FILTER (WHERE created_by = $1 AND created_at >= $2 AND created_at < $3)::int AS drafted,
                   COUNT(*) FILTER (WHERE sent_by = $1 AND created_at >= $2 AND created_at < $3 AND status NOT IN ('held', 'draft'))::int AS sent,
-                  COUNT(*) FILTER (WHERE credited_to = $1 AND accepted_at >= $2 AND accepted_at < $3)::int AS accepted
+                  COUNT(*) FILTER (WHERE credited_to = $1 AND accepted_at >= $2 AND accepted_at < $3)::int AS accepted,
+                  /* Conversion from ONE cohort: their quotes made in the period,
+                     and how many of THOSE were accepted. Dividing accepted-by-
+                     credit by sent-by-sender mixed two groups (Codex #123). */
+                  COUNT(*) FILTER (WHERE credited_to = $1 AND created_at >= $2 AND created_at < $3 AND status NOT IN ('held', 'draft'))::int AS conv_base,
+                  COUNT(*) FILTER (WHERE credited_to = $1 AND created_at >= $2 AND created_at < $3 AND status NOT IN ('held', 'draft') AND accepted_at IS NOT NULL)::int AS conv_won
                   FROM quotes`, [staffId, from, to]),
     pool.query(`SELECT
                   COUNT(*) FILTER (WHERE done_by = $1 AND done_at >= $2 AND done_at < $3)::int AS done,
@@ -27368,7 +27448,7 @@ async function helperScore(staffId, from, to) {
   return {
     answered: leads.rows.length,
     medianReply: TEAM.median(replyMins),
-    drafted: q.drafted, sent: q.sent, accepted: q.accepted,
+    drafted: q.drafted, sent: q.sent, accepted: q.accepted, convBase: q.conv_base, convWon: q.conv_won,
     tasksDone: t.done, onTime: t.on_time, overdue: t.overdue,
     collected: money_.rows[0].collected,
     hours: totalHours, hoursBy: hours.rows,
@@ -27407,7 +27487,7 @@ app.get('/admin/team', requireAdmin, async (req, res) => {
     const thisWeek = TEAM.weekOf(new Date(), SHOP_TZ);
     const cards = roster.map((s, i) => {
       const x = scores[i];
-      const conv = x.sent ? Math.round(100 * x.accepted / x.sent) + '%' : '—';
+      const conv = x.convBase ? Math.round(100 * x.convWon / x.convBase) + '%' : '—';
       return `<div class="card">
         <div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="min-width:12em"><b>${escEmail(s.name)}</b>
           <div class="row-sub" style="white-space:normal">${escEmail(range.label)} &middot; last seen ${escEmail(whenShort(s.last_seen_at))}${
@@ -27501,7 +27581,7 @@ app.get('/admin/my-stats', requireAdmin, async (req, res) => {
     const [x, e, p] = await Promise.all([helperScore(staffId, range.from, range.to), myStatsExtras(staffId, range.from, range.to), trainingFor(staffId)]);
     const who = roster.find((r) => r.id === staffId) || {};
     const role = TRAINING.salesRoleOf(who.sales_role);
-    const conv = x.sent ? `${Math.round(100 * x.accepted / x.sent)}%` : '—';
+    const conv = x.convBase ? `${Math.round(100 * x.convWon / x.convBase)}%` : '—';
     const reach = e.rep_leads ? `${Math.round(100 * e.rep_quoted / e.rep_leads)}%` : '—';
     const q = (k) => (owner ? `&staff=${staffId}` : '') + k;
     const quizSteps = p.steps.filter((s) => s.type === 'quiz');
