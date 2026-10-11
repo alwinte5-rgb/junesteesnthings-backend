@@ -250,7 +250,9 @@ const offersLd = JSON.stringify({
     priceCurrency: 'USD', availability: 'https://schema.org/InStock',
     url: 'https://www.jtees.net/services/big-head-cutouts.html',
   })).concat(singles.map((m) => ({
-    '@type': 'Offer', name: `${m.size} inch, single`, price: m.bands[m.bands.length - 1].price.toFixed(2),
+    /* `price` is ONE cutout's price (the first band); the cheapest band is the
+       range's minimum. Search showed the bulk-floor price as a single's (Codex #139). */
+    '@type': 'Offer', name: `${m.size} inch, single`, price: m.bands[0].price.toFixed(2),
     priceCurrency: 'USD', priceSpecification: {
       '@type': 'PriceSpecification', minPrice: m.bands[m.bands.length - 1].price.toFixed(2),
       maxPrice: m.bands[0].price.toFixed(2), priceCurrency: 'USD',

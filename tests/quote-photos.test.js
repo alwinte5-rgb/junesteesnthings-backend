@@ -100,9 +100,9 @@ test('a file name is stored without markup or control characters, and capped', (
 });
 
 test('the picker offers the admin form\'s artwork types', () => {
-  const adminAccept = /class="fi" multiple[^>]*\n\s*accept="([^"]+)"/.exec(src);
-  assert.ok(adminAccept, 'admin artwork input not found');
-  assert.strictEqual(P.ACCEPT, adminAccept[1]);
+  /* One list for both: the admin input reads QPHOTOS.ACCEPT (Codex #141). */
+  assert.match(src, /class="fi" multiple[^>]*\n\s*accept="\$\{QPHOTOS\.ACCEPT\}"/, 'admin artwork input reads the shared list');
+  assert.ok(!/image\/\*/.test(P.ACCEPT), 'and the list is the server\'s own types');
 });
 
 test('saving a quote does NOT email the customer: the page asks how to send it', () => {

@@ -68,7 +68,10 @@ function reviewMessage(r) {
 
 /** Why a draft could not be made, in words for the Reviews page. */
 function failureMessage(err) {
-  if (err instanceof Anthropic.AuthenticationError) {
+  /* With no key at all the SDK never sends the request, so there is no 401:
+     it throws a plain Error about resolving authentication (Codex #142). */
+  const noKey = !(err instanceof Anthropic.APIError) && /authentication method|api[_ ]?key/i.test(String(err && err.message));
+  if (err instanceof Anthropic.AuthenticationError || noKey) {
     return 'Reply drafting is not set up yet: the Anthropic API key is missing or wrong on Railway.';
   }
   if (err instanceof Anthropic.RateLimitError) return 'Too many drafts at once. Wait a minute and try again.';
@@ -88,15 +91,27 @@ function fillFirstName(text, name) {
  *  credential lookup. Throws on failure; failureMessage() words it. */
 async function draftReply(review, { client } = {}) {
   const c = client || new Anthropic();
-  const res = await c.beta.messages.create({
-    model: MODEL,
-    max_tokens: 2000,
-    output_config: { effort: 'low' },
-    betas: ['server-side-fallback-2026-07-01'],
-    fallbacks: 'default',
-    system: SYSTEM,
-    messages: [{ role: 'user', content: reviewMessage(review) }],
-  });
+  let res;
+  try {
+    /* Bounded: the SDK default is 10 minutes a try and two retries, which
+       held the owner's page open for half an hour (Codex #142). */
+    res = await c.beta.messages.create({
+      model: MODEL,
+      max_tokens: 2000,
+      output_config: { effort: 'low' },
+      betas: ['server-side-fallback-2026-07-01'],
+      fallbacks: 'default',
+      system: SYSTEM,
+      messages: [{ role: 'user', content: reviewMessage(review) }],
+    }, { timeout: 60000, maxRetries: 1 });
+  } catch (err) {
+    /* Service, verb and route in the log line; the same object is rethrown,
+       so failureMessage's instanceof checks still work (Codex #142). */
+    if (err && typeof err.message === 'string' && !err.message.startsWith('Anthropic POST')) {
+      err.message = `Anthropic POST /v1/messages (${MODEL}): ${err.message}`;
+    }
+    throw err;
+  }
   if (res.stop_reason === 'refusal') {
     const e = new Error('model declined'); e.code = 'refusal'; throw e;
   }
