@@ -123,8 +123,8 @@ const INTERVIEW_GUIDE = [
   { section: 'Practical check (3 min)', questions: [
     { q: 'Show me your internet speed test and which design software you have, with its licence.',
       listen: 'At least 25 Mbps down, a backup connection, licensed Illustrator and Photoshop (or CorelDRAW / Affinity), a computer that runs them smoothly.' },
-    { q: 'Confirm the schedule we posted. Any conflicts with other clients in those hours?',
-      listen: 'A clear yes with no other job in the same hours.' }] },
+    { q: 'Which hours will you work for us each week, and how do you fit them around other clients?',
+      listen: 'Clear, reliable weekly hours they chose (the post lets them choose), with turnaround on rush art the same US day; other clients are fine if the hours are protected.' }] },
   { section: 'Their questions (2 min)', questions: [
     { q: 'What would you like to know about us?',
       listen: 'Questions about the printing methods, the customers or how feedback works show real interest.' }] },

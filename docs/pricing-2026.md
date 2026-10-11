@@ -355,6 +355,14 @@ base is seven screens. So at 50 pieces a dark garment goes to DTF at 6 colours
 where a light one could still be screen printed. Everywhere else the dark and
 light crossovers are the same.
 
+> **Since 2026-10-07 every garment carries the base** (see "White base" above),
+> so read every row as the *dark* case: column 6 is unavailable on all garments
+> (at most five printed colours), and each colour count costs the next column's
+> rate. The light-garment readings in this section and in the profitability
+> table further up (a white 1-colour job at the 1-colour rate) describe quotes
+> made before that date, which keep their price; new work is costed with the
+> base by `tools/lib/job-costs.js` and the quote form (Codex #178).
+
 ### Two locations
 
 | qty | 1 | 2 | 3 | 4 | 5 | 6 | DTF wins from |

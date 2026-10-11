@@ -83,7 +83,7 @@ const SCREENING = {
     'Open every applicant\'s OLJ profile, not just their message: work history, skills, portfolio, certificates and past roles. Look for transferable skills from other jobs that would help here.',
     'A Gem is ONLY a Top pick (they already meet everything for this job) who ALSO shows strong, proven skills that complement the job: skills from our other roles, like those on the job\'s Gem list. Skills that are part of this job make a Top pick, never a Gem. The extra skill must be shown in their profile (work history, portfolio, results), not just listed. Label them with the job\'s Gem label as well as Top pick, always send them the test, and put "Gem: <the skills>" in the note on Hiring.',
     'Reject straight away: no code words, or the required sample/links missing. The post says so, so it is fair.',
-    'A Top pick needs BOTH: the skills on this job\'s list, AND the trust check (below) with no red flag and at most two yellow flags. The best candidate is the most skilled one who is also safe: when two are close, choose the one with more green signs.',
+    'A Top pick needs BOTH: the skills on this job\'s list, AND the trust check (below) with no red flag and at most two yellow flags. An item marked "Not required" on the list (like the IQ test) is never a reason to reject or to hold someone back from Top pick: it only breaks a tie between two close applicants. The best candidate is the most skilled one who is also safe: when two are close, choose the one with more green signs.',
     'Run the free Background Data Check on every possible top pick BEFORE labelling them Top pick, and read it with the trust check below.',
     'Any red flag = Verify Before Hiring, which means reject, however good the skills.',
     'Yellow flags do not reject on their own (most OLJ applicants have some). Label them Check on Call too, and write each flag in the note on Hiring (for example "Yellow: ID Proof 38; account 2 months").',
@@ -161,7 +161,7 @@ Nice to have: sales or customer service experience in e-commerce, print or appar
 
 Schedule
 - Monday–Friday, 10:00am–4:00pm US Central Time (30 hours/week)
-- That's 11:00pm–5:00am Philippine time now, and 12:00am–6:00am from November. Fixed hours: you work while our customers are awake.
+- That's 11:00pm–5:00am Philippine time while the US is on daylight saving time (mid-March to early November), 12:00am–6:00am the rest of the year. Fixed hours: you work while our customers are awake.
 
 Pay
 - $4.00 USD/hour ($120/week, about $520/month), paid weekly during training
@@ -360,7 +360,7 @@ Nice to have: thumbnails and motion graphics; YouTube SEO; community management;
 
 Schedule
 - 30 hours/week, Monday–Friday, including at least 10:00am–12:00pm US Central Time so you overlap with us
-- That overlap is 11:00pm–1:00am Philippine time now, and 12:00am–2:00am from November. The rest of your hours are flexible; posts are scheduled for US times.
+- That overlap is 11:00pm–1:00am Philippine time while the US is on daylight saving time (mid-March to early November), 12:00am–2:00am the rest of the year. The rest of your hours are flexible; posts are scheduled for US times.
 
 Pay
 - $5.00 USD/hour ($150/week, about $650/month), paid weekly during training

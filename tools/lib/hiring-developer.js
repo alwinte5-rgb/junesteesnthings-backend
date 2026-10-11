@@ -129,8 +129,8 @@ const INTERVIEW_GUIDE = [
   { section: 'Practical check (2 min)', questions: [
     { q: 'Show me your internet speed test and your development setup.',
       listen: 'At least 25 Mbps down, a backup connection, a Mac that builds iOS apps (current Xcode) and runs a local database.' },
-    { q: 'Confirm the schedule we posted, including the hours you overlap with US Central. Any conflicts?',
-      listen: 'A clear yes, and enough overlap to handle an outage during US business hours.' }] },
+    { q: 'Which hours will you work, and how would you hear about and handle an outage during US business hours?',
+      listen: 'Hours they chose (the post lets them), plus a believable way to be reached for an outage (alerts on their phone, a stated response time), not a promise to be awake all US day.' }] },
   { section: 'Their questions (1 min)', questions: [
     { q: 'What would you like to know about us?',
       listen: 'Questions about the stack, how deploys work or how they will get access show real interest.' }] },

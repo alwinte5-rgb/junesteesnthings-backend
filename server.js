@@ -21615,7 +21615,16 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
                 var b = document.createElement('button');
                 b.type = 'button'; b.className = 'btn btn-ghost'; b.style.margin = '0 6px 6px 0';
                 b.textContent = (a.shortcut ? '/' + a.shortcut + ' ' : '') + a.title;
-                b.addEventListener('click', function(){ body.value = a.body; body.focus(); });
+                b.addEventListener('click', function(){
+                  body.value = a.body; body.focus();
+                  /* A text holds 300 characters and several replies run longer:
+                     said here, not after Send is refused (Codex #159). */
+                  var ch = f.querySelector('input[name="channel"]:checked');
+                  var warn = kl.querySelector('[data-kblen]');
+                  if (!warn) { warn = document.createElement('div'); warn.setAttribute('data-kblen', ''); warn.style.cssText = 'color:#b45309;font-size:12.5px;margin-top:4px'; kl.appendChild(warn); }
+                  warn.textContent = ch && ch.value === 'text' && a.body.length > 300
+                    ? 'This reply is ' + a.body.length + ' characters and a text holds 300: shorten it, or send it as an email.' : '';
+                });
                 kl.appendChild(b);
               });
             }).catch(function(){ kl.textContent = 'Could not load replies.'; });
@@ -27535,8 +27544,8 @@ app.get('/admin/team', requireAdmin, async (req, res) => {
         <div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="min-width:12em"><b>${escEmail(s.name)}</b>
           <div class="row-sub" style="white-space:normal">${escEmail(range.label)} &middot; last seen ${escEmail(whenShort(s.last_seen_at))}${
             trainings[i] ? ` &middot; <a href="/admin/training?staff=${s.id}">training ${trainings[i].done}/${trainings[i].total}</a>` : ''}${
-            trainings[i] && trainings[i].complete && NEXT_PRESET[STAFF.presetMatching(s.perms)]
-              ? ` <a href="/admin/staff#staff-${s.id}">${pill(`Ready for ${STAFF.PRESETS[NEXT_PRESET[STAFF.presetMatching(s.perms)]].label} →`, 'green')}</a>` : ''}</div></span>
+            trainings[i] && trainings[i].complete && nextPresetFor(s)
+              ? ` <a href="/admin/staff#staff-${s.id}">${pill(`Ready for ${STAFF.PRESETS[nextPresetFor(s)].label} →`, 'green')}</a>` : ''}</div></span>
           <span class="row-end"><a class="btn btn-ghost" href="/admin/my-stats?staff=${s.id}">Stats</a>
             <a class="btn btn-ghost" href="/admin/activity?who=${s.id}">Activity</a>
             <a class="btn btn-ghost" href="/admin/commission?staff=${s.id}">Commission</a></span></div>
@@ -29527,6 +29536,18 @@ function quizSummary(attempts) {
 
 /* Where a helper goes once training is signed off, by the preset they trained on. */
 const NEXT_PRESET = { training: 'supervised', design: 'designer' };
+/* The preset a helper moves up to once trained. "Supervised" is the sales and
+   production step: a content, ads, books or developer trainee on the default
+   Training preset goes to their own track's preset instead (Codex #224). */
+function nextPresetFor(s) {
+  const cur = STAFF.presetMatching(s.perms);
+  if (cur === 'training') {
+    const track = TRAINING.trackOf(s.training_track);
+    const own = track === 'sales' ? 'supervised' : STAFF.presetForTrack(track);
+    return own && own !== 'training' && STAFF.PRESETS[own] ? own : null;
+  }
+  return NEXT_PRESET[cur] || null;
+}
 
 /** The training path a helper walks, and their sales role (or null). */
 async function pathFor(staffId) {
@@ -30203,7 +30224,10 @@ function round2Page(row, token, t, first) {
   const qs = Array.isArray(row.questions) ? row.questions : [];
   const role = HIRING.roleOf(first && first.role);
   const theirs = (first && first.answers && first.answers.written) || {};
-  const r1 = (id) => role.written.find((w) => w.id === id);
+  const snap = (first && first.answers && first.answers.prompts) || {};
+  /* As they saw it at hand-in (answers.prompts), else today's wording. */
+  const asked = role.written.map((w) => (snap[w.id] ? { ...w, ...snap[w.id] } : w));
+  const r1 = (id) => asked.find((w) => w.id === id);
   const said = (w) => `<div class="muted" style="font-size:14px;margin:4px 0 2px"><b>Round 1 question:</b> ${escEmail(w.prompt)}</div>
       <div style="white-space:pre-wrap;font-size:14px;padding:8px 10px;background:#F7F6F3;border-radius:8px;margin-bottom:8px"><b>Your answer:</b> ${escEmail(theirs[w.id] || '(left blank)')}</div>`;
   if (!t.started) {
@@ -30232,8 +30256,8 @@ function round2Page(row, token, t, first) {
       <div class="card"><p>Check your answers, then hand them in. You can only send them once.</p>
         <button type="submit" class="btn">Hand in round 2</button></div>
     </form>
-    ${role.written.some((w) => theirs[w.id]) ? `<details class="card"><summary><b>All your round 1 answers</b> (to look back at)</summary>
-      ${role.written.filter((w) => theirs[w.id]).map((w) => `<p style="margin:12px 0 0"><b>${escEmail(w.label)}</b></p>${said(w)}`).join('')}</details>` : ''}`, hireClockScript(row, t));
+    ${asked.some((w) => theirs[w.id]) ? `<details class="card"><summary><b>All your round 1 answers</b> (to look back at)</summary>
+      ${asked.filter((w) => theirs[w.id]).map((w) => `<p style="margin:12px 0 0"><b>${escEmail(w.label)}</b></p>${said(w)}`).join('')}</details>` : ''}`, hireClockScript(row, t));
 }
 
 app.get('/apply/test/:token', hireRateLimit, async (req, res) => {
@@ -30369,6 +30393,11 @@ app.post('/apply/test/:token', hireRateLimit, async (req, res) => {
     const t = HIRING.timing(row, undefined, hireMinutes(row));
     if (!t.started) return res.redirect(303, `/apply/test/${encodeURIComponent(token)}`);
     const answers = row.stage === 2 ? HIRING.cleanRound2(req.body, row.questions) : HIRING.cleanAnswers(req.body, row.role);
+    /* The wording they answered, kept with the answers: a question edited
+       later must not show their answer under new words (Codex #161). */
+    if (row.stage !== 2) {
+      answers.prompts = Object.fromEntries(HIRING.roleOf(row.role).written.map((w) => [w.id, { label: w.label, prompt: w.prompt }]));
+    }
     const choice = row.stage === 2 ? null : HIRING.gradeChoices(answers.picks, row.role);
     /* Handed in once: the WHERE makes a double press, or a second tab, a no-op.
        A hand-in after the clock (plus grace) is still kept, flagged late, so a
@@ -30456,8 +30485,11 @@ async function openRound2(row, grade) {
   const questions = HIRING.round2Questions(grade);
   if (!questions.length) return null;
   const { rows } = await pool.query(
+    /* The name from the round-1 row as it is NOW: one corrected while round 1
+       was being graded would otherwise be copied stale (Codex #177). */
     `INSERT INTO hiring_tests (token_hash, name, role, note, expires_at, stage, parent_id, questions)
-     VALUES ($1, $2, $3, $4, NOW() + make_interval(days => $5::int), 2, $6, $7)
+     SELECT $1, COALESCE((SELECT p.name FROM hiring_tests p WHERE p.id = $6), $2), $3, $4,
+            NOW() + make_interval(days => $5::int), 2, $6, $7::jsonb
      ON CONFLICT (parent_id) WHERE parent_id IS NOT NULL DO NOTHING RETURNING id`,
     [HIRING.newToken().hash, row.name, row.role, 'Round 2', HIRING.ROUND2_DAYS, row.id, JSON.stringify(questions)]);
   return rows.length ? rows[0].id : null;
@@ -30856,22 +30888,28 @@ function hireRejectionBox(r, r2 = r._r2) {
  *  Their own questions: round 2's new ones once it is graded, else round 1's
  *  follow-ups (round 2 not taken or not graded yet). */
 function hireVideoCallCard(r, r2) {
-  if (!r.submitted_at || r.decision === 'rejected' || r.decision === 'hired') return '';
+  if (!r.submitted_at) return '';
+  /* After the decision the questions stay, folded away, as the record of the
+     call: they were removed with the card and existed nowhere else (Codex #177).
+     Only the booking message goes. */
+  const decided = r.decision === 'rejected' || r.decision === 'hired';
   const role = HIRING.roleOf(r.role);
   const g2 = r2 && r2.grade;
   const own = g2 && g2.video_questions && g2.video_questions.length ? g2.video_questions
     : !g2 && r.grade && r.grade.follow_up ? r.grade.follow_up : [];
   const ownNote = g2 ? 'New ones: not asked in round 2 or in the standard questions.'
     : r2 ? 'Round 2 is not graded yet, so these are round 1\'s follow-ups.' : 'From round 1\'s answers.';
-  return `<div class="card" style="border-left:4px solid #2563eb"><b>Video call</b>
-    <p class="muted">Send this on OnlineJobs.ph. They pick a time; the calendar invite carries the Google Meet link. Then press Video call below.</p>
-    <textarea readonly style="width:100%;min-height:150px" onclick="this.select()">${escEmail(HIRING.bookingMessage(r.name))}</textarea>
-    ${own.length ? `<p><b>Questions about ${escEmail(r.name)}'s own answers</b> <span class="muted">${escEmail(ownNote)}</span></p>
+  const inner = `${own.length ? `<p><b>Questions about ${escEmail(r.name)}'s own answers</b> <span class="muted">${escEmail(ownNote)}</span></p>
       <ol>${own.map((f) => `<li style="margin-bottom:8px"><b>${escEmail(f.question)}</b><div class="muted">${escEmail(f.why)}</div></li>`).join('')}</ol>`
       : '<p class="muted">No questions of their own yet: they come with the grade.</p>'}
     <details open><summary><b>Standard questions for every ${escEmail(role.label.replace(/ \(.*\)$/, '').toLowerCase())} applicant</b></summary>
       ${role.guide.map((s) => `<p style="margin:10px 0 4px"><b>${escEmail(s.section)}</b></p>
-        ${s.questions.map((q) => `<div style="white-space:normal;margin-bottom:6px">• ${escEmail(q.q)}<div class="muted">Listen for: ${escEmail(q.listen)}</div></div>`).join('')}`).join('')}</details></div>`;
+        ${s.questions.map((q) => `<div style="white-space:normal;margin-bottom:6px">• ${escEmail(q.q)}<div class="muted">Listen for: ${escEmail(q.listen)}</div></div>`).join('')}`).join('')}</details>`;
+  if (decided) return `<details class="card"><summary><b>Video call questions</b> <span class="muted">kept for the record</span></summary>${inner}</details>`;
+  return `<div class="card" style="border-left:4px solid #2563eb"><b>Video call</b>
+    <p class="muted">Send this on OnlineJobs.ph. They pick a time; the calendar invite carries the Google Meet link. Then press Video call below.</p>
+    <textarea readonly style="width:100%;min-height:150px" onclick="this.select()">${escEmail(HIRING.bookingMessage(r.name))}</textarea>
+    ${inner}</div>`;
 }
 
 /** The owner's decision after the video call, with the buttons to set it. */
@@ -31414,7 +31452,7 @@ app.get('/admin/playbook/:id', requireAdmin, async (req, res) => {
         The owner should check it before anyone relies on it. Saving it marks it checked.</div>` : ''}
       <div class="card"><div id="kb-body">${kbRender(a.body)}</div>
         ${a.kind === 'faq' || a.kind === 'prompt' ? `<button type="button" class="btn btn-ghost" style="margin-top:8px" onclick="(navigator.clipboard?navigator.clipboard.writeText(${
-          escEmail(JSON.stringify(a.kind === 'prompt' ? kbPromptText(a.body) : a.body.replace(/\*\*/g, '')))}):0)">${
+          escEmail(JSON.stringify(a.kind === 'prompt' ? kbPromptText(a.body) : customerReplyText(a.body)))}):0)">${
           a.kind === 'prompt' ? 'Copy the prompt' : 'Copy the reply'}</button>` : ''}</div>
       ${actorLevel('kb.edit') !== 'off' ? `<details class="card"><summary><b>Edit</b></summary>${kbEditor(a)}</details>` : ''}`, 'playbook'));
   } catch (err) {
@@ -31454,20 +31492,31 @@ app.get('/admin/api/playbook/replies', requireAdmin, async (req, res) => {
   try {
     const q = text(req.query.q, 100);
     const params = [];
-    let where = `kind = 'faq' AND published`;
+    /* A starter reply nobody has checked yet is not one a helper may send
+       (Codex #159); the owner still sees it, marked, and checks it by saving. */
+    const owner = isOwner();
+    let where = `kind = 'faq' AND published${owner ? '' : ' AND NOT needs_review'}`;
     if (q) {
       params.push(q, q.replace(/^\/+/, '').toLowerCase());
       where += ` AND ${kbMatch(1).where}`;
     }
     const { rows } = await pool.query(
-      `SELECT shortcut, title, body FROM kb_articles WHERE ${where}
+      `SELECT shortcut, title, body, needs_review FROM kb_articles WHERE ${where}
         ORDER BY ${q ? `${kbMatch(1).rank} DESC, ` : ''}title LIMIT 30`, params);
-    res.json(rows.map((r) => ({ shortcut: r.shortcut, title: r.title, body: String(r.body).replace(/\*\*/g, '') })));
+    res.json(rows.map((r) => ({ shortcut: r.shortcut, title: (r.needs_review ? '(unchecked) ' : '') + r.title,
+      body: customerReplyText(r.body) })));
   } catch (err) {
     console.error('playbook replies failed:', err.message);
     res.status(500).json([]);
   }
 });
+
+/** A playbook reply as the customer should read it: no bold markers, and no
+ *  "(For you: ...)" note to staff, which was being pasted into customer
+ *  messages along with the reply (Codex #159). */
+function customerReplyText(body) {
+  return String(body || '').replace(/\*\*/g, '').replace(/\n*\(For you:[^)]*\)\s*/g, '\n').trim();
+}
 
 /* Starter articles, written once into an empty playbook. Every one is marked
    needs_review: they come from the shop's own pricing rules and common print
@@ -31840,9 +31889,9 @@ const KB_ADDED = [
 `(For you: never agree to a discount yourself. Explaining what our price includes often wins the order on its own.)` },
   { kind: 'faq', shortcut: 'rush', title: 'Can you get it done by [date]?', needsReview: true,
     tags: 'rush, deadline, urgent, fast, by friday, need it soon, turnaround',
-    body: `Hi [name], thanks! [Date] is tight but we may be able to rush it for an extra fee. Let me check what's on the press and I'll confirm today by [time], with the price for the rush.\n\n` +
+    body: `Hi [name], thanks! [Date] is tight. Let me check with the team what we can do for your date and I'll confirm today by [time].\n\n` +
 `To keep it quick, could you send [the details still missing: quantity, sizes, artwork]?\n\n` +
-`(For you: never promise a date before June confirms it. Reply the same day either way.)` },
+`(For you: never promise a date or a rush price before June confirms it. Only embroidery can be rushed: screen printing and DTF are made by our partner, who sells no rush. Reply the same day either way.)` },
   { kind: 'faq', shortcut: 'checking', title: 'Let me check and get back to you', needsReview: true,
     tags: 'not sure, checking, question, unknown, get back, follow up',
     body: `Good question! Let me check with our production team so I give you the right answer. I'll get back to you by [time].\n\n` +
@@ -31925,7 +31974,7 @@ const KB_ADDED = [
 `- Go further for the best customers: schools, teams, churches and businesses that order every season. Check when they last ordered and what is coming up for them (a new season, a yearly event, new staff) and send a short personal note a few weeks before they need it (/reorder)\n` +
 `- Log every reorder conversation on the lead, with the next follow-up date\n\n` +
 `**Replying to reviews**\n` +
-`- New reviews show on **Reviews**. Reply to every one within two days\n` +
+`- Website reviews show on **Reviews**. Google reviews do not: check the Google Business profile each morning, paste a new one into **Reply to a Google review** on Reviews, then paste the reply back on Google. Reply to every one within two days\n` +
 `- Use the draft button for a starting point, then make it personal: thank them by first name, mention what we made, keep it to two to four sentences, signed by June\n` +
 `- A bad review: thank them, apologise for their experience without arguing, and invite them to message us so we can put it right. Tell June the same day, before you post\n` +
 `- June approves replies before they go live` },
@@ -31981,7 +32030,7 @@ const KB_ADDED = [
   { kind: 'sop', title: 'A quiet afternoon: a plan', needsReview: true,
     tags: 'quiet time, no messages, initiative, self-starter, what to do, follow up, leads, summary',
     body: `Nothing new, nothing assigned, June busy for a few hours? Here is a good way to spend it. Do the money first.\n\n` +
-`1. **Follow-ups (first 30 minutes).** Every open quote older than 3 days gets a short friendly note, and every lead gets a next follow-up date. Most sales are won here\n` +
+`1. **Follow-ups (first 30 minutes).** Every open quote whose next follow-up is due (or older than 3 days with none set) gets a short friendly note and a new follow-up date; a quote you already followed up waits for its date. Most sales are won here\n` +
 `2. **New customers (about 90 minutes).** Youth sports leagues starting a season, schools and PTOs with events, churches, local businesses. Log each one on Leads with where you found them and why they need shirts now, then send a personal email to the best five. See "Finding new leads in quiet time"\n` +
 `3. **Social (about 40 minutes).** Answer comments and messages, and draft two posts from recent job photos for June to approve\n` +
 `4. **A summary for June (last 20 minutes).** Who you followed up, the leads you added, and anything waiting on her decision, so she starts with a clear list\n\n` +
@@ -32137,6 +32186,16 @@ KB_ADDED.push({ kind: 'sop', title: PAY_GUIDE_TITLE,
   const then = '- Each morning, check your Artwork to do on My Day for jobs waiting on the customer: a logo file, a missing detail, or a proof not yet approved';
   if (a && a.body.includes(now)) a.was = [...(a.was || []), a.body.split(now).join(then)];
 }
+{
+  /* Codex #159: rush is embroidery-only, so the reply no longer offers one
+     before the method is known. A live copy still on the old wording updates. */
+  const r = KB_ADDED.find((x) => x.shortcut === 'rush');
+  if (r) r.was = [...(r.was || []), r.body.split("Hi [name], thanks! [Date] is tight. Let me check with the team what we can do for your date and I'll confirm today by [time].").join("Hi [name], thanks! [Date] is tight but we may be able to rush it for an extra fee. Let me check what's on the press and I'll confirm today by [time], with the price for the rush.")
+    .split('(For you: never promise a date or a rush price before June confirms it. Only embroidery can be rushed: screen printing and DTF are made by our partner, who sells no rush. Reply the same day either way.)').join('(For you: never promise a date before June confirms it. Reply the same day either way.)')];
+}
+/* Codex #159/#161: two SOP lines corrected; unedited live copies update. */
+{ const x = KB_ADDED.find((y) => y.title === 'Reorders and replying to reviews'); if (x && x.body.includes('- Website reviews show on **Reviews**. Google reviews do not: check the Google Business profile each morning, paste a new one into **Reply to a Google review** on Reviews, then paste the reply back on Google. Reply to every one within two days')) x.was = [...(x.was || []), x.body.split('- Website reviews show on **Reviews**. Google reviews do not: check the Google Business profile each morning, paste a new one into **Reply to a Google review** on Reviews, then paste the reply back on Google. Reply to every one within two days').join('- New reviews show on **Reviews**. Reply to every one within two days')]; }
+{ const x = KB_ADDED.find((y) => y.title === 'A quiet afternoon: a plan'); if (x && x.body.includes('1. **Follow-ups (first 30 minutes).** Every open quote whose next follow-up is due (or older than 3 days with none set) gets a short friendly note and a new follow-up date; a quote you already followed up waits for its date. Most sales are won here')) x.was = [...(x.was || []), x.body.split('1. **Follow-ups (first 30 minutes).** Every open quote whose next follow-up is due (or older than 3 days with none set) gets a short friendly note and a new follow-up date; a quote you already followed up waits for its date. Most sales are won here').join('1. **Follow-ups (first 30 minutes).** Every open quote older than 3 days gets a short friendly note, and every lead gets a next follow-up date. Most sales are won here')]; }
 KB_ADDED.push(...TRAINING.lessonArticles());
 
 async function addPlaybookArticles() {
