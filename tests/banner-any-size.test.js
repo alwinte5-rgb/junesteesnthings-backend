@@ -30,7 +30,9 @@ test('the per-foot rate rises with the vinyl, and every one keeps the x2 floor',
 
 test('the designer table: every whole-foot size inside the limits, nothing outside', () => {
   const t = s.bannerTable();
-  assert.deepStrictEqual(t.materials.map((m) => m.key), ['13', '15', '18', '18d']);
+  /* 18oz double-sided is not sold until the owner confirms its rate (2026-10-10). */
+  assert.deepStrictEqual(t.materials.map((m) => m.key), ['13', '15', '18']);
+  assert.ok(!t.prices['18d'], 'no published price for the unconfirmed 18d');
   for (const m of t.materials) {
     assert.strictEqual(t.prices[m.key]['10x2'], s.bannerPrice(120, 24, s.BANNER_MATERIALS.find((x) => x.key === m.key)));
     assert.ok(t.prices[m.key]['30x5'] > 0 && t.prices[m.key]['5x30'] > 0, 'the limits themselves are sold');
@@ -82,7 +84,7 @@ test('the designer product carries the five option ids the designer reads', () =
   const a = P.bannerAttributes();
   assert.deepStrictEqual(Object.keys(a).sort(), ['BGROM', 'BH', 'BHANG', 'BMAT', 'BSLIT', 'BW', 'QTY']);
   assert.deepStrictEqual(Object.keys(P.bannerStages()), ['front', 'back'], 'a back for double-sided');
-  assert.deepStrictEqual(a.BMAT.values.options.map((o) => o.value), s.BANNER_MATERIALS.map((m) => m.key));
+  assert.deepStrictEqual(a.BMAT.values.options.map((o) => o.value), s.BANNER_MATERIALS.filter((m) => m.offered !== false).map((m) => m.key), 'only materials on sale');
   assert.deepStrictEqual(a.BHANG.values.options.map((o) => o.value), Object.keys(s.BANNER_HANGING));
   assert.strictEqual(a.BW.values.options.length, s.BANNER_MAX_FT.long);
   assert.ok(a.BMAT.values.options.every((o) => o.price === ''), 'no price on an option: the table carries it');

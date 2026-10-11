@@ -36,7 +36,7 @@ function bannerAttributes({ width = 6, height = 3 } = {}) {
   });
   return {
     BMAT: { id: 'BMAT', name: 'Vinyl', type: 'select', required: true,
-      values: { options: sg.BANNER_MATERIALS.map((m, i) => ({ value: m.key, title: m.label, price: '', default: i === 0 })) } },
+      values: { options: sg.BANNER_MATERIALS.filter((m) => m.offered !== false).map((m, i) => ({ value: m.key, title: m.label, price: '', default: i === 0 })) } },
     BW: { id: 'BW', name: 'Width (feet)', type: 'select', required: true, values: { options: feet(width) } },
     BH: { id: 'BH', name: 'Height (feet)', type: 'select', required: true, values: { options: feet(height) } },
     /* Finishing (signage.js BANNER_HANGING): ONE hanging choice, because
