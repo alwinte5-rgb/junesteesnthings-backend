@@ -2137,7 +2137,7 @@
         <div>
           <div class="section-tag">Shop by Category</div>
           <h2 id="shop-h">Custom Apparel, Banners &amp; Signs</h2>
-          <p>Pick a product, design it online, and check out. No minimums.</p>
+          <p>Pick a product, design it online, and check out. No minimums on apparel.</p>
         </div>
         <a class="jt-see" href="https://design.jtees.net/products.php" data-from="home_shop">View all products &rarr;</a>
       </div>
@@ -2173,6 +2173,15 @@
           <a class="jt-card" href="https://design.jtees.net/products.php?category_id=59" data-from="home_shop" data-card="category">
             <div class="im"><img src="/assets/images/shop/ssa-130179_f_fm.jpg" alt="Custom Polos &amp; Business by June's Tees" loading="lazy" /></div>
             <div class="bd"><div class="nm">Polos &amp; Business</div><div class="pr">From $12.26 + printing</div><span class="go">Design This &rarr;</span></div>
+          </a>
+          <!-- The heading promises signs, so the no-script / feed-down fallback shows them too (Codex #198). -->
+          <a class="jt-card" href="https://design.jtees.net/products.php?category_id=67" data-from="home_shop" data-card="category">
+            <div class="im"><img src="/assets/images/products/vinyl-banners.svg" alt="Custom Vinyl Banners by June's Tees" loading="lazy" /></div>
+            <div class="bd"><div class="nm">Banners</div><div class="pr">Custom pricing</div><span class="go">Design This &rarr;</span></div>
+          </a>
+          <a class="jt-card" href="https://design.jtees.net/products.php?category_id=68" data-from="home_shop" data-card="category">
+            <div class="im"><img src="/assets/images/products/yard-signs.svg" alt="Custom Yard &amp; Rigid Signs by June's Tees" loading="lazy" /></div>
+            <div class="bd"><div class="nm">Yard &amp; Rigid Signs</div><div class="pr">Custom pricing</div><span class="go">Design This &rarr;</span></div>
           </a>
       </div>
 
@@ -3578,7 +3587,7 @@ document.addEventListener('click', function(e){
 <!--Start of Tawk.to Script-->
 <script type="text/javascript">
 var Tawk_API=Tawk_API||{}, Tawk_LoadStart=new Date();
-/* Phones: above the sticky action bar, which it covered (the Call button). */
+/* Phones: above the sticky action bar, which it covered (the Call button). Only this page has that bar, so only this page moves Tawk: elsewhere it sat on Quick Answers (Codex #200/#203). */
 Tawk_API.customStyle=(window.innerWidth<=760)?{visibility:{desktop:{position:'br',xOffset:10,yOffset:78},mobile:{position:'br',xOffset:10,yOffset:78}}}:{visibility:{mobile:{position:'br',xOffset:10,yOffset:78}}};
 (function(){
 var s1=document.createElement("script"),s0=document.getElementsByTagName("script")[0];

@@ -151,11 +151,13 @@ test('filling a gap replaces every copy of it, and an answer cannot plant a new 
 test('gap answers: owner only, the gap must still be there, and an edit made meanwhile is never overwritten', () => {
   assert.strictEqual(STAFF.ROUTES['POST /admin/training/gap'], 'owner');
   const r = route("app.post('/admin/training/gap', requireAdmin");
-  assert.match(r, /TRAINING\.ownerGaps\(a\.body\)\.some\(\(h\) => h\.token === token && \(h\.nth \?\? null\) === nth/);
+  // .find, not .some: the matched gap's hint decides whether a number is wanted (Codex #204)
+  assert.match(r, /TRAINING\.ownerGaps\(a\.body\)\.find\(\(h\) => h\.token === token && \(h\.nth \?\? null\) === nth/);
   assert.match(r, /WHERE id = \$1 AND body = \$3/);
   assert.match(r, /if \(!rowCount\) return back/);
   assert.match(r, /text\(b\.answer, 500\)/);
-  const page = route("app.get('/admin/training', requireAdmin");
+  // The card is its own function now, shown with or without helpers (Codex #204).
+  const page = route('async function playbookGapRows()') + route('function playbookGapsCard(');
   assert.match(page, /TRAINING\.ownerGaps\(a\.body\)/, 'the card lists owner gaps, not every placeholder');
   assert.match(page, /value="\$\{escEmail\(h\.token\)\}"/);
 });

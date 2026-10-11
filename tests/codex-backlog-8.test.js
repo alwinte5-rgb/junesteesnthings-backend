@@ -16,7 +16,9 @@ test('#204 three bare owner gaps in one article are three questions, each filled
   const one = TRAINING.fillGap(body, '[owner to fill in]', '12 pieces', 0);
   assert.match(one, /Minimum: 12 pieces\n- Colors: \[owner to fill in\] max\n- Works on: \[owner to fill in\]/);
   assert.strictEqual(TRAINING.fillGap(body, '[owner to fill in]', 'x', 3), null, 'no such copy');
-  assert.match(TRAINING.fillGap(body, '[X]', '5'), /Under 5 days, again 5\./, 'a named gap still fills every copy');
+  /* Every DEADLINE copy of "[X]"; any other "[X]" is a reply's blank (Codex #204). */
+  assert.match(TRAINING.fillGap(body, '[X]', '5'), /Under 5 days, again \[X\]\./, 'a named gap fills every deadline copy');
+  assert.match(TRAINING.fillGap('Under [X] days, or [X] business days.', '[X]', '5'), /Under 5 days, or 5 business days\./);
   const r = after("app.post('/admin/training/gap'", 1500);
   assert.match(r, /h\.line === String\(b\.line \|\| ''\)\.trim\(\)/, 'a renumbered gap cannot be filled from a stale form');
 });

@@ -18,7 +18,7 @@
  */
 const fs = require('fs');
 const sg = require('./lib/signage');
-const { mysql, enjson, sq } = require('./lib/db');
+const { mysql, enjson, sq, mysqlUrlFrom } = require('./lib/db');
 
 /* Shop title (owner, 2026-10-10: "be more specific in the titles"). Starts
    with "Vinyl Banners" for the quote form's matcher, and is NOT plain
@@ -62,7 +62,11 @@ function bannerStages() {
   return { front: side('Front'), back: side('Back') };
 }
 
-module.exports = { NAME, OLD_NAME, bannerAttributes, bannerStages };
+/* The drawing tools/make-product-thumbs.js points this product at, set on
+   create so a new product never shows as a broken image (Codex #181). */
+const THUMB = 'https://www.jtees.net/assets/images/products/vinyl-banners.svg';
+
+module.exports = { NAME, OLD_NAME, THUMB, bannerAttributes, bannerStages };
 if (require.main !== module) return;
 
 const argv = process.argv.slice(2);
@@ -70,7 +74,8 @@ const APPLY = argv.includes('--apply');
 const varsFile = ((argv.find((a) => a.startsWith('--vars=')) || '').split('=').slice(1).join('=') || '').replace(/^~/, process.env.HOME);
 if (!varsFile) { console.error('usage: add-banner-product.js --vars=<file> [--apply]'); process.exit(2); }
 const env = JSON.parse(fs.readFileSync(varsFile, 'utf8'));
-const url = env.MYSQL_PUBLIC_URL || env.MYSQL_URL;
+/* Railway's five separate MYSQL* fields as well as a URL (Codex #181). */
+const url = mysqlUrlFrom(env);
 if (!url) { console.error('no MySQL URL'); process.exit(2); }
 
 const t = sg.bannerTable();
@@ -86,12 +91,12 @@ const attrs = sq(enjson(bannerAttributes()));
 const stages = sq(enjson(bannerStages()));
 if (got.length) {
   mysql(url, `UPDATE lumise_products SET name=${sq(NAME)}, description=${sq(DESCRIPTION)}, price=0, attributes=${attrs}, stages=${stages}, `
-    + `printings='', active=1, updated=NOW() WHERE id=${Number(got[0].id)};`);
+    + `printings='', thumbnail_url=IF(COALESCE(thumbnail_url,'')='', ${sq(THUMB)}, thumbnail_url), active=1, updated=NOW() WHERE id=${Number(got[0].id)};`);
 } else {
   const author = mysql(url, 'SELECT author FROM lumise_products WHERE active=1 LIMIT 1;', { rows: true })[0].author;
   mysql(url, 'INSERT INTO lumise_products (name,description,price,supplier_cost,stages,attributes,printings,'
     + 'thumbnail_url,active,`order`,author,created,updated) VALUES (' + sq(NAME) + ',' + sq(DESCRIPTION)
-    + ',0,0,' + stages + ',' + attrs + ",'','',1,998," + sq(author) + ',NOW(),NOW());');
+    + ',0,0,' + stages + ',' + attrs + ",''," + sq(THUMB) + ',1,998,' + sq(author) + ',NOW(),NOW());');
 }
 const id = mysql(url, 'SELECT id FROM lumise_products WHERE name=' + sq(NAME) + ';', { rows: true })[0].id;
 console.log(`\n  written: product #${id}. Open it at design.jtees.net/editor.php?product_base=${id}`);

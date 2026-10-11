@@ -39,13 +39,17 @@ test('what was typed is escaped for the email', () => {
   assert.strictEqual((html.match(/<p /g) || []).length, 2);
 });
 
-test('the send route: checked, sends before it records, no double send, helpers need full messaging', () => {
+test('the send route: checked, claims before it sends, no double send, helpers need full messaging', () => {
   assert.ok(route.length > 200, 'route found');
   assert.match(route, /LEADMAIL\.cleanEmail\(b\)/);
   assert.match(route, /actorLevel\('customers\.message'\) !== 'on'/);
   assert.match(route, /FRAUD\.mentionsOutsidePayment/);
   assert.match(route, /INTERVAL '10 minutes'/, 'a second press sends nothing');
-  assert.ok(route.indexOf('await sendEmail(') < route.indexOf('INSERT INTO lead_notes'), 'the note only after a real send');
+  /* The note is now the claim, written under a lock BEFORE the send and taken
+     back out if the send fails (Codex #179): two presses could both pass a
+     read-then-send check, and a note that failed after a send invited a resend. */
+  assert.ok(route.indexOf('INSERT INTO lead_notes') < route.indexOf('await sendEmail('), 'claimed before the send');
+  assert.match(route, /DELETE FROM lead_notes WHERE id = \$1', \[noteId\]/, 'a failed send un-claims');
   assert.ok(route.indexOf('INSERT INTO lead_notes') < route.indexOf('markLeadResponded'), 'then Contacted');
   assert.match(route, /Nothing was recorded/, 'a failure says so');
   assert.strictEqual(STAFF.ROUTES['POST /admin/lead/:id/email'], 'customers.message');

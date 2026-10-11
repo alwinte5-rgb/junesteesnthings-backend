@@ -247,7 +247,7 @@ function makeClient(acct, key) {
   return async function ssa(path, tries = 5) {
     let st = 0;
     for (let i = 0; i < tries; i++) {
-      const wait = Math.max(0, last + 700 - Date.now()) + (i ? 1200 * i * i : 0);
+      const wait = Math.max(0, last + 1000 - Date.now())  /* S&S: 60 a minute (Codex #232) */ + (i ? 1200 * i * i : 0);
       if (wait) await new Promise((r) => setTimeout(r, wait));
       last = Date.now();
       try {
