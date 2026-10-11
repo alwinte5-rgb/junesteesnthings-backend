@@ -50,7 +50,7 @@ const { verifyTwilioSignature, classifyInbound } = require('./tools/lib/twilio-w
 const TAXCERT = require('./tools/lib/tax-certificates');
 const QPHOTOS = require('./tools/lib/quote-photos');
 const ZIPSTREAM = require('./tools/lib/zip-stream');
-const { Readable } = require('node:stream');
+const { Readable, pipeline } = require('node:stream');
 const REVREPLY = require('./tools/lib/review-replies');
 const REPLYCOACH = require('./tools/lib/reply-coach');
 const INBOUND = require('./tools/lib/inbound-email');
@@ -13404,7 +13404,8 @@ app.get('/q/:code', async (req, res) => {
                 q.discount_kind === 'pct' ? ` (${Number(q.discount_value)}% off)` : ''}</td>
               <td class="num" style="color:#166534" id="qdisc">&minus;${money(t.discount)}</td></tr>` : ''}
           ${t.tax > 0 || (hasOptions && quoteTaxable(q)) ? `<tr id="qtaxrow"${t.tax > 0 ? '' : ' style="display:none"'}><td colspan="3" class="num muted">Sales tax</td><td class="num" id="qtax">${money(t.tax)}</td></tr>` : ''}
-          ${t.delivery > 0 ? `<tr><td colspan="3" class="num muted">Local delivery</td><td class="num">${money(t.delivery)}</td></tr>` : ''}
+          ${t.delivery > 0 ? `<tr><td colspan="3" class="num muted">Local delivery</td><td class="num">${money(t.delivery)}</td></tr>`
+            : delivOffered ? `<tr id="qdelrow" style="display:none"><td colspan="3" class="num muted">Local delivery</td><td class="num" id="qdel"></td></tr>` : ''}
           <tr><td colspan="3" class="num tot">Total</td><td class="num tot" id="qtotal">${money(t.total)}</td></tr>
           <tr id="estrow" style="display:none"><td colspan="3" class="num" style="color:#b45309;font-weight:700;padding-top:10px">
               With your changes <span style="font-weight:400;font-size:12px">(estimate)</span></td>
@@ -13556,7 +13557,7 @@ app.get('/q/:code', async (req, res) => {
                 <input name="ship_zip" required pattern="\\d{5}(-\\d{4})?" autocomplete="postal-code" inputmode="numeric" placeholder="ZIP"></div>
             </div>` : ''}`;
           })()}
-          ${delivOffered ? acceptDeliveryHtml(q, req) : ''}
+          ${delivOffered ? acceptDeliveryHtml(q, req, t) : ''}
           ${consentCheckboxesHtml()}
           <label>When do you need it? <span style="text-transform:none;font-weight:400">(optional)</span></label>
           <input type="date" name="needed_by" value="${q.needed_by ? String(q.needed_by).slice(0,10) : ''}">
@@ -13764,6 +13765,7 @@ ${applyOptionChoice.toString()}
                       .map(function(b){ return parseInt(b.value, 10); });
         }
         window.jtPicked = picked;
+        window.jtUpdate = function(){ update(); };
 
         function update(){
           var pick = picked();
@@ -13780,8 +13782,11 @@ ${applyOptionChoice.toString()}
           }
           var net = r2(gross - disc);
           var tax = T.taxable ? r2(net * T.tax) : 0;
-          var total = r2(net + tax);
+          /* Local delivery picked at Accept: after tax, as quoteTotals adds it. */
+          var dfee = r2(window.jtDelivFee || 0);
+          var total = r2(net + tax + dfee);
           var dep = total <= 0 ? 0 : (total < T.fullUnder ? total : Math.min(total, r2(total * T.depPc)));
+          set('qdel', m(dfee)); show('qdelrow', dfee > 0);
           var fee = r2(dep * T.cardFee);
 
           set('qsub', m(sub));
@@ -16932,6 +16937,14 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
           ${tile('Remitted in ' + viewName, money(remitted[0].total), '#047857')}
           ${tile('Held right now', money(pos.setAside),
                  pos.setAside > 0 ? '#b45309' : '#047857', 'across all periods')}
+          ${(() => {
+            /* The return's deduction line, shown whether or not every exempt
+               sale is documented: it was only ever printed inside the
+               missing-number warning, so the normal case never showed it (Codex #108). */
+            const ex = round2(pos.months.filter((p) => (month ? p.period === month : String(p.period).startsWith(`${year}-`)))
+              .reduce((t, p) => t + p.exemptGross, 0));
+            return ex > 0 ? tile('Exempt sales in ' + viewName, money(ex), '#1848B8', 'deducted on the return') : '';
+          })()}
         </div>
         ${(pos.undeterminedPayments > 0 || pos.exemptUndocumented > 0) ? `
         <div style="margin-top:10px;padding:8px 10px;border-radius:6px;background:#fef3c7;
@@ -20765,7 +20778,10 @@ app.get('/admin/production/:code/sent-file/:id/:n', requireAdmin, async (req, re
     res.set('Content-Disposition', `attachment; filename="${name.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(name)}`);
     res.set('X-Content-Type-Options', 'nosniff');
     res.set('Cache-Control', 'private, no-store');
-    Readable.fromWeb(r.body).pipe(res);
+    /* pipeline, not pipe: a download cut off mid-stream emits an error that
+       .pipe() leaves unhandled, and an uncaught error restarts the whole shop
+       (Codex #109). Headers are already sent, so the only answer is to end it. */
+    pipeline(Readable.fromWeb(r.body), res, (e) => { if (e) console.error('file stream cut off:', e.message); });
   } catch (err) {
     console.error(`sent file ${code}/${req.params.id}/${req.params.n} failed:`, err.message);
     if (!res.headersSent) res.status(502).send('Could not fetch that file just now.');
@@ -20859,7 +20875,10 @@ const artworkFile = (kind) => async (req, res) => {
     res.set('Cache-Control', 'private, no-store');
     const len = r.headers.get('content-length');
     if (len) res.set('Content-Length', len);
-    Readable.fromWeb(r.body).pipe(res);
+    /* pipeline, not pipe: a download cut off mid-stream emits an error that
+       .pipe() leaves unhandled, and an uncaught error restarts the whole shop
+       (Codex #109). Headers are already sent, so the only answer is to end it. */
+    pipeline(Readable.fromWeb(r.body), res, (e) => { if (e) console.error('file stream cut off:', e.message); });
   } catch (err) {
     console.error(`artwork download ${code}/${req.params.n} failed:`, err.message);
     if (!res.headersSent) res.status(502).send('Could not fetch that file just now. Try again in a minute.');
@@ -30103,18 +30122,20 @@ async function tellOwnerHiring(firstId, { unfinished = false } = {}) {
   const { rows } = await pool.query(
     `UPDATE hiring_tests SET owner_told_at = NOW() WHERE id = $1 AND stage = 1 AND owner_told_at IS NULL RETURNING id`, [firstId]);
   if (!rows.length) return false;
-  const { first, second } = await hireRounds(firstId);
-  const r1 = first.score != null ? `${first.score}/100 · ${(hireBand(first.score) || {}).label || ''}` : 'not graded: open it and press Grade again';
-  const g2 = second && second.grade;
-  const rec = g2 ? (HIRING.ROUND2_LABELS[g2.recommendation] || ['Maybe'])[0] : null;
-  const verdict = rec ? rec
-    : second && second.submitted_at ? 'Round 2 needs grading'
-    : second ? 'Did not finish round 2'
-    : first.score != null && !HIRING.round2Questions(first.grade).length ? 'No round 2 (the grader wrote no follow-up questions)'
-    : first.score != null ? 'Passed round 1' : 'Needs grading';
-  const li = (xs) => (xs || []).length ? `<ul>${xs.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>` : '';
-  const g1 = first.grade;
+  /* Everything after the claim is inside the try, so a failed read clears it
+     too; a claim left set skipped this email forever (Codex #158). */
   try {
+    const { first, second } = await hireRounds(firstId);
+    const r1 = first.score != null ? `${first.score}/100 · ${(hireBand(first.score) || {}).label || ''}` : 'not graded: open it and press Grade again';
+    const g2 = second && second.grade;
+    const rec = g2 ? (HIRING.ROUND2_LABELS[g2.recommendation] || ['Maybe'])[0] : null;
+    const verdict = rec ? rec
+      : second && second.submitted_at ? 'Round 2 needs grading'
+      : second ? 'Did not finish round 2'
+      : first.score != null && !HIRING.round2Questions(first.grade).length ? 'No round 2 (the grader wrote no follow-up questions)'
+      : first.score != null ? 'Passed round 1' : 'Needs grading';
+    const li = (xs) => (xs || []).length ? `<ul>${xs.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>` : '';
+    const g1 = first.grade;
     await sendEmail({
       to: NOTIFY_EMAIL,
       subject: `Applicant results: ${first.name}, ${HIRING.roleOf(first.role).label} (${verdict}${first.score != null ? `, round 1 ${first.score}/100` : ''})`,
@@ -31922,7 +31943,7 @@ const DELIVERY_CSS = `
  *  address and a time. The slots come from /q/:code/delivery-options as the
  *  ZIP is typed; the accept route checks the seat again, so nothing here is
  *  trusted. Works without script as far as it can: pickup still submits. */
-function acceptDeliveryHtml(q, req) {
+function acceptDeliveryHtml(q, req, t) {
   const a = SHIP.cleanShipTo(q.ship_to, q.name) || {};
   const local = String(q.ship_method || '') === 'local' || String(req.query.dc || '') === 'local';
   const v = (k) => escEmail(a[k] || '');
@@ -31953,13 +31974,29 @@ function acceptDeliveryHtml(q, req) {
         msg=document.getElementById('qdmsg'), slots=document.getElementById('qdslots'), last='';
     function esc(t){return String(t).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
     function on(){var r=document.querySelector('input[name=delivery_choice]:checked');return r&&r.value==='local';}
+    /* The fee goes into the total and deposit on screen, the way the accept
+       route will charge it (Codex #143). A quote with options recomputes
+       through its own script; otherwise the deposit rule is applied here. */
+    var B=${JSON.stringify({ total: round2((t && t.total) || 0), depPc: DEPOSIT_PC, fullUnder: DEPOSIT_FULL_UNDER, cardFee: CARD_FEE })};
+    function r2(v){return Math.round(Number(v||0)*100)/100;}
+    function put(id,h){var el=document.getElementById(id);if(el)el.innerHTML=h;}
+    function fee(f){
+      window.jtDelivFee=on()?r2(f):0;
+      if(window.jtUpdate){window.jtUpdate();return;}
+      var d=window.jtDelivFee, tot=r2(B.total+d), dep=tot<=0?0:(tot<B.fullUnder?tot:Math.min(tot,r2(tot*B.depPc))), cf=r2(dep*B.cardFee);
+      var m=function(v){return '$'+r2(v).toFixed(2);};
+      put('qdel',m(d)); var row=document.getElementById('qdelrow'); if(row)row.style.display=d>0?'':'none';
+      put('qtotal',m(tot)); put('qdep',m(dep)); put('qdeplab',dep>=tot?'Due now (paid in full)':'Deposit to start (50%)');
+      put('qpayz',m(dep)); put('qpaysave',m(cf)); put('qpayc',m(r2(dep+cf)));
+    }
     function req(){['dl_street1','dl_city','dl_state','dl_zip'].forEach(function(n){var el=document.querySelector('[name='+n+']');if(el)el.required=on();});}
     function load(){
       var z=(zip.value||'').replace(/\\D/g,'').slice(0,5);
       if(!on()||z.length!==5||z===last)return; last=z;
-      msg.textContent='Finding delivery times…'; slots.innerHTML='';
+      msg.textContent='Finding delivery times…'; slots.innerHTML=''; fee(0);
       fetch('/q/${q.code}/delivery-options?zip='+z,{cache:'no-store'}).then(function(r){return r.json();}).then(function(o){
-        if(!o||!o.available){msg.textContent=(o&&o.message)||'Delivery is not available right now. Please choose pickup.';return;}
+        if(!o||!o.available){fee(0);msg.textContent=(o&&o.message)||'Delivery is not available right now. Please choose pickup.';return;}
+        fee(o.fee);
         msg.innerHTML='<b>'+esc(o.zone.name)+'</b> &middot; delivery <b>$'+Number(o.fee).toFixed(2)+'</b>, added to your total.';
         slots.innerHTML='<div class="dslots">'+o.days.slice(0,${SLOT_DAYS_SHOWN * 2}).map(function(d){
           return '<fieldset class="dday"><legend>'+esc(d.label)+'</legend>'+d.windows.map(function(w){
@@ -31968,7 +32005,7 @@ function acceptDeliveryHtml(q, req) {
       }).catch(function(){last='';msg.textContent='Could not load delivery times. Please try again, or choose pickup.';});
     }
     Array.prototype.forEach.call(document.querySelectorAll('input[name=delivery_choice]'),function(r){
-      r.addEventListener('change',function(){box.style.display=on()?'block':'none';req();if(!on()){slots.innerHTML='';last='';}else load();});});
+      r.addEventListener('change',function(){box.style.display=on()?'block':'none';req();if(!on()){slots.innerHTML='';last='';fee(0);}else load();});});
     zip.addEventListener('input',load); req(); load();
   })();</script>`;
 }
