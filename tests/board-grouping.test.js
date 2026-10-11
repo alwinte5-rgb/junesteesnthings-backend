@@ -116,7 +116,8 @@ test('the header counts the two live groups separately', () => {
      outstanding — which is the number the board exists to answer. */
   /* Whitespace-tolerant: the header wraps across lines, and a test that breaks
      on reformatting teaches people to stop trusting the suite. */
-  assert.match(board, /gQuotes\.length\}\s*waiting on the customer/);
+  // drafts counted apart: nobody waits on a quote they never got (Codex #129)
+  assert.match(board, /gQuotes\.filter\(\(q\) => q\.status !== 'draft'\)\.length\}\s*waiting on the customer/);
   assert.match(board, /gOrders\.length\}\s*order/);
   assert.match(board, /\$\{leads\.length\} new enquir/,
     'unanswered enquiries lead the count — they are the ones that cost money');
