@@ -86,6 +86,7 @@ const NEVER_STAFF = [
   'POST /admin/quote/:code/confirm-payment',
   'POST /admin/unlinked/:id/apply',
   'POST /admin/unlinked/:id/tax',
+  'POST /admin/unlinked/:id/refund',
   'POST /admin/quote/:code/credit',
   'POST /admin/quote/:code/sale-type',
   'POST /admin/quote/:code/restore-version',
@@ -326,6 +327,7 @@ const ROUTES = {
   'GET /admin/tax.csv': 'finances.view',
   'POST /admin/tax/remit': 'owner',
   'POST /admin/unlinked/:id/tax': 'owner',
+  'POST /admin/unlinked/:id/refund': 'owner',
   'POST /admin/quote/:code/costs': 'owner',
 
   // The staff workspace itself.
