@@ -61,7 +61,7 @@ test('the server wires the page and every redirect', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   assert.match(src, /\$\{quoteAnalyticsTags\(q\.code, req\.query\)\}/);
   assert.match(src, /res\.redirect\('\/q\/' \+ code \+ '\?ev=accepted'\)/);
-  assert.match(src, /'\?ev=changes'/);
+  assert.match(src, /'\?ev=changes&r=' \+ Date\.now\(\)\.toString\(36\)/);
   assert.match(src, /paidQuery\(\{/);
 });
 

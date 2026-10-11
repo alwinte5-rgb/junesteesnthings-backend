@@ -8512,7 +8512,10 @@ async function emailQuote(q) {
   const first = String(q.name || '').trim().split(/\s+/)[0] || 'there';
   const link = quoteLink(q.code);
   try {
-    await sendEmail({
+    /* Through sendClientEmail, so it is on the job page's message history
+       like every other customer email about the quote (Codex #140). */
+    await sendClientEmail({
+      quote: q.code, kind: 'quote',
       to,
       subject: `Your quote from ${SHOP_NAME} — ${q.code}`,
       html: `<div style="font-family:system-ui,sans-serif;max-width:560px;color:#111827">
@@ -9851,7 +9854,7 @@ function productGroupOf(name) {
                .eps, .pdf or a stitch file — so it went to email instead and
                lived somewhere the job could not see it. -->
           <input type="file" class="fi" multiple style="padding:8px;font-size:13px"
-                 accept="image/*,.pdf,.ai,.eps,.svg,.psd,.dst,.emb,.exp,.pes,.zip">
+                 accept="${QPHOTOS.ACCEPT}">
           <input type="hidden" name="images${n}" class="im" value="${it && it.images ? escEmail(JSON.stringify(it.images)) : ''}">
           <!-- Everything uploaded, WITH its original name. Cloudinary assigns
                its own opaque public_id, so without this a file is findable only
@@ -13256,7 +13259,7 @@ app.get('/q/:code', async (req, res) => {
           failed = 0; reason = '';
           Array.prototype.forEach.call(fi.files, function(file){
             var ext = (String(file.name).split('.').pop() || '').toLowerCase();
-            if (!/^image\\//.test(file.type) && EXTS.indexOf(ext) < 0) { failed++; reason = file.name + ' is not a type we can use'; say(); return; }
+            if (EXTS.indexOf(ext) < 0) { failed++; reason = file.name + ' is not a type we can use'; say(); return; }   // the server's list, nothing wider (Codex #141)
             if (file.size > MAXB) { failed++; reason = 'each file must be under ' + Math.round(MAXB / 1048576) + ' MB'; say(); return; }
             pending++; say();
             var ts = Math.round(Date.now() / 1000);
@@ -14115,6 +14118,9 @@ app.get(['/q/:code/pay/card', '/q/:code/pay/balance', '/q/:code/pay/full'], asyn
     form.set('mode', 'payment');
     form.set('success_url', `${PUBLIC_BASE_URL}/q/${q.code}/paid?s={CHECKOUT_SESSION_ID}`);
     form.set('metadata[kind]', wantsBalance ? 'balance' : 'deposit');
+    /* Analytics only: a first payment of the whole amount is "full", not a
+       balance (Codex #138). metadata[kind] above is what banking reads. */
+    if (wantsBalance && !(alreadyPaid > 0)) form.set('metadata[pay_flow]', 'full');
     form.set('cancel_url', `${PUBLIC_BASE_URL}/q/${q.code}`);
     form.set('client_reference_id', q.code);
     if (q.email) form.set('customer_email', q.email);
@@ -15935,7 +15941,8 @@ app.get('/q/:code/paid', async (req, res) => {
         /* The page counts the sale in analytics (once per payment). The value
            is the quote money, without the card surcharge, as banked. */
         if (d.payment_status === 'paid') {
-          const kind = (d.metadata || {}).kind === 'balance' ? 'balance' : 'deposit';
+          const md = d.metadata || {};
+          const kind = md.pay_flow === 'full' ? 'full' : md.kind === 'balance' ? 'balance' : 'deposit';
           return res.redirect('/q/' + code + paidQuery({
             amount: round2((d.amount_total || 0) / 100 / (1 + CARD_FEE)), kind, sessionId: d.id }));
         }
@@ -16340,7 +16347,8 @@ app.post('/q/:code/changes', orderRateLimit, async (req, res) => {
   } catch (err) {
     console.error('change request failed:', err.message);
   }
-  res.redirect('/q/' + code + (res.locals.quoteEvent === 'changes' ? '?ev=changes' : ''));
+  /* Each request its own token, so a second one is counted too (Codex #138). */
+  res.redirect('/q/' + code + (res.locals.quoteEvent === 'changes' ? '?ev=changes&r=' + Date.now().toString(36) : ''));
 });
 
 /* Record a payment that arrived outside Stripe — Zelle, cash, a bank transfer.
@@ -21973,8 +21981,9 @@ const LEAD_QUOTE_MATCH = `(NULLIF(lower(trim(q.email)),'') = lower(trim(s.email)
 async function leadsWithStatus() {
   const { rows } = await pool.query(
     `SELECT s.*,
+            -- the newest: after a redo the card opens the redo, not the first (Codex #140)
             (SELECT q.code FROM quotes q WHERE q.from_submission_id = s.id AND q.status NOT IN ('held', 'draft')
-              ORDER BY q.created_at LIMIT 1) AS linked_quote,
+              ORDER BY q.created_at DESC LIMIT 1) AS linked_quote,
             (SELECT q.code FROM quotes q WHERE ${LEAD_QUOTE_MATCH} AND q.status NOT IN ('held', 'draft')
               ORDER BY q.created_at LIMIT 1) AS matched_quote,
             (SELECT row_to_json(n) FROM (SELECT kind, created_at, staff_id FROM lead_notes
@@ -23598,7 +23607,7 @@ function googleReplyForm(v = {}) {
         <b>Reply to a Google review</b>
         <p class="muted" style="margin:4px 0 10px;font-size:13px">Paste the review from Google. You get a reply to
           read, edit and paste back under it. Nothing is posted for you.</p>
-        <form method="POST" action="/admin/reviews/google-reply">
+        <form method="POST" action="/admin/reviews/google-reply" onsubmit="var b=this.querySelector('button[type=submit],button:not([type])');if(b){b.disabled=true;b.textContent='Drafting…'}">
           <label>Their name, as Google shows it</label>
           <input name="name" maxlength="${REVREPLY.LIMITS.name}" value="${escEmail(v.name || '')}" placeholder="e.g. Nyla Pruitt">
           <label>Stars</label>
@@ -23612,6 +23621,10 @@ function googleReplyForm(v = {}) {
       </div>`;
 }
 
+/* Drafts in flight, by review: a double-click shares one paid request
+   instead of starting two (Codex #142). Finished drafts are not kept, so
+   "another version" still makes a new one. */
+const _reviewDraftsInFlight = new Map();
 app.post('/admin/reviews/google-reply', requireAdmin, async (req, res) => {
   const v = REVREPLY.validateReview(req.body);
   const page = (inner) => res.send(adminPage('Reply to a review', `
@@ -23622,13 +23635,19 @@ app.post('/admin/reviews/google-reply', requireAdmin, async (req, res) => {
   const r = v.review;
   let draft = '', error = '';
   try {
-    draft = await REVREPLY.draftReply(r);
+    const key = crypto.createHash('sha256').update(JSON.stringify(r)).digest('hex');
+    let p = _reviewDraftsInFlight.get(key);
+    if (!p) {
+      p = REVREPLY.draftReply(r).finally(() => _reviewDraftsInFlight.delete(key));
+      _reviewDraftsInFlight.set(key, p);
+    }
+    draft = await p;
   } catch (err) {
     error = REVREPLY.failureMessage(err);
     console.error('review reply draft failed:', err && (err.status || err.code || ''), err && err.message);
   }
   /* The same review again, for another version, without retyping it. */
-  const again = `<form method="POST" action="/admin/reviews/google-reply" style="margin:0">
+  const again = `<form method="POST" action="/admin/reviews/google-reply" onsubmit="var b=this.querySelector('button[type=submit],button:not([type])');if(b){b.disabled=true;b.textContent='Drafting…'}" style="margin:0">
       ${['name', 'stars', 'text', 'job'].map((k) => `<input type="hidden" name="${k}" value="${escEmail(String(r[k] || ''))}">`).join('')}
       <button type="submit" class="btn btn-ghost" style="width:100%">${draft ? 'Draft a different version' : 'Try again'}</button></form>`;
   page(`
@@ -25724,10 +25743,19 @@ app.post('/q/:code/photos', photoRateLimit, async (req, res) => {
     if (q.cancelled_at) return res.status(409).json({ error: 'This order has been cancelled.' });
 
     if (remove) {
-      await pool.query(
+      /* Only a photo this quote held is removed, and then its file goes too:
+         dropping the reference alone left it stored and public, and let
+         upload/remove cycles get round the per-quote cap (Codex #139). */
+      const { rowCount: had } = await pool.query(
         `UPDATE quotes SET customer_photos = COALESCE((SELECT jsonb_agg(p) FROM jsonb_array_elements(customer_photos) p
                                                         WHERE p->>'url' <> $2), '[]'::jsonb)
-          WHERE id = $1 AND customer_photos IS NOT NULL`, [q.id, url]);
+          WHERE id = $1 AND customer_photos IS NOT NULL
+            AND EXISTS (SELECT 1 FROM jsonb_array_elements(customer_photos) p WHERE p->>'url' = $2)`, [q.id, url]);
+      const pid = had ? QPHOTOS.publicIdOf(url, QPHOTOS.cloudName()) : null;
+      if (pid) {
+        cloudinary.uploader.destroy(pid.id, { resource_type: pid.type, invalidate: true })
+          .catch((e) => reportError('quote-photo:delete', e, `${code} ${pid.id}`).catch(() => {}));
+      }
       return res.json({ ok: true });
     }
 
@@ -25764,7 +25792,13 @@ app.post('/q/:code/photos', photoRateLimit, async (req, res) => {
           <h2 style="color:#1848B8;margin:0 0 10px">${escEmail(q.name || q.code)} sent artwork</h2>
           <p>They are uploading artwork to quote ${escEmail(q.code)}. See it all on the job page:
             <a href="${PUBLIC_BASE_URL}/admin/production/${encodeURIComponent(q.code)}#photos">open the job</a>.</p></div>`,
-      }).catch((e) => console.error('photo alert failed:', e.message));
+      }).catch((e) => {
+        /* Not sent: the claim is given back, so the next photo tries again
+           rather than the shop never hearing (Codex #139). */
+        console.error('photo alert failed:', e.message);
+        reportError('quote-photo:alert', e, q.code).catch(() => {});
+        pool.query('UPDATE quotes SET photos_notified_at = NULL WHERE id = $1', [q.id]).catch(() => {});
+      });
     }
     res.json({ ok: true, count: up[0].n, file: QPHOTOS.describe(url, cloud, name) });
   } catch (err) {

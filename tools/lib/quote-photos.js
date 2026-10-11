@@ -16,12 +16,12 @@
 const FOLDER = 'quote_photos';
 /* A team's worth of faces fits; the bound is what stops a quote code from
    being used as somebody's file host. */
-const MAX_PHOTOS = 30;
+/* At least the biggest pack: the 12-inch cutout pack is 32, one photo each
+   (it was 30, so photos 31 and 32 were refused; Codex #139). */
+const MAX_PHOTOS = 40;
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 /* What the file picker offers. Kept beside the server-side list below so the
    two cannot drift: the page reads this one. */
-const ACCEPT = 'image/*,.pdf,.ai,.eps,.svg,.psd,.dst,.emb,.exp,.pes,.zip';
-
 /* Cloudinary's auto upload decides image vs raw from the bytes, so each type
    can arrive under either. `web` is what a browser shows as-is; `paged` is
    rendered by Cloudinary as a picture of its first page. */
@@ -30,6 +30,9 @@ const CONVERT = ['heic', 'heif', 'tif', 'tiff', 'bmp', 'psd', 'svg'];
 const PAGED = ['pdf', 'ai', 'eps'];
 const FILE_ONLY = ['dst', 'emb', 'exp', 'pes', 'zip'];
 const ALL = [...WEB, ...CONVERT, ...PAGED, ...FILE_ONLY];
+/* The picker offers exactly what is kept below. It offered every image/*, so
+   an .ico or a .jxl uploaded fine and was then refused here (Codex #141). */
+const ACCEPT = ALL.map((e) => '.' + e).join(',');
 
 /** The cloud name a URL has to carry, or '' when Cloudinary is not set up. */
 function cloudName(env = process.env) {
@@ -44,6 +47,15 @@ function parse(url, cloud) {
   if (!m) return null;
   const ext = m[2].toLowerCase();
   return ALL.includes(ext) ? { type: m[1], ext } : null;
+}
+
+/** The Cloudinary id and type of a quote photo, for deleting it; null for
+ *  anything that is not one. Images drop the extension, raw files keep it. */
+function publicIdOf(url, cloud) {
+  const p = parse(url, cloud);
+  if (!p) return null;
+  const file = url.split('/').pop();
+  return { id: FOLDER + '/' + (p.type === 'raw' ? file : file.replace(/\.[A-Za-z0-9]+$/, '')), type: p.type };
 }
 
 /** Whether `url` is a file this shop's Cloudinary holds in the quote folder. */
@@ -103,5 +115,5 @@ function downloadName(photo) {
   return n;
 }
 
-module.exports = { FOLDER, MAX_PHOTOS, MAX_FILE_BYTES, ACCEPT, cloudName, photoUrlOk, cleanName, describe, photosOf,
+module.exports = { FOLDER, MAX_PHOTOS, MAX_FILE_BYTES, ACCEPT, cloudName, photoUrlOk, publicIdOf, cleanName, describe, photosOf,
   downloadSource, downloadName };

@@ -39,7 +39,12 @@ function quoteEvent(code, query) {
   const key = String(q.ev || '');
   const name = Object.prototype.hasOwnProperty.call(EVENTS, key) ? EVENTS[key] : null;
   if (!name) return null;
-  if (name !== 'purchase') return { once: `${name}_${code}`, name, params: { quote_ref: quoteRef(code) } };
+  if (name !== 'purchase') {
+    /* A change request is counted per request: its redirect carries a token,
+       so the browser's once-key does not swallow the next one (Codex #138). */
+    const r = name === 'quote_changes_requested' && /^[a-z0-9]{1,12}$/.test(String(q.r || '')) ? '_' + q.r : '';
+    return { once: `${name}_${code}${r}`, name, params: { quote_ref: quoteRef(code) } };
+  }
   const value = Number(q.v);
   const tx = String(q.tx || '');
   if (!Number.isFinite(value) || value <= 0 || value > MAX_VALUE) return null;
