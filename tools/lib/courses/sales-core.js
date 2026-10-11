@@ -371,14 +371,16 @@ Giant printed heads of players, graduates or family members, for games, parties 
 
 **Rush**
 
-For a fee, depending on what is on the press:
+Only **embroidery** can be rushed: it is the one thing we make in house. Screen printing and DTF are made for us by a partner in 7 to 10 business days, and they sell no rush at any price. So for a screen print, DTF, or a mix that includes either, the answer to "can you do it faster?" is "let me ask June", never a yes and never a price.
+
+On embroidery, for a fee, depending on what is on the machine:
 
 - Next business day: +80%
 - 2 business days: +50%
 - 3 business days: +30%
 - 4 business days: +10%
 
-The quote form sets the rush from the **Needed by** date you enter, so get the real date from the customer. Never promise a rush date before June confirms the press can do it.
+The quote form sets the rush from the **Needed by** date you enter, so get the real date from the customer. Never promise a rush date before June confirms it can be done.
 
 **Getting the order to the customer**
 
@@ -412,9 +414,9 @@ Customers can also design and pay online at jtees.net. Those show on **Orders**.
         { id: 'captext', q: 'A customer wants a long, tiny slogan embroidered on a cap. What do you say?',
           choices: ['"No problem"', 'Embroidered text needs to be at least 0.25 inch tall, so suggest a shorter slogan or a bigger place', 'Switch to DTF without asking', 'Shrink it to fit'],
           answer: 1, article: A.methods, why: 'Small text fills in and cannot be read. Never promise small text on caps.' },
-        { id: 'rush', q: 'Rush for 2 business days adds what to the price?',
+        { id: 'rush', q: 'An embroidery order needs a 2-business-day rush. What does it add to the price?',
           choices: ['+10%', '+30%', '+50%', '+80%'],
-          answer: 2, article: A.products, why: 'Next day +80%, 2 days +50%, 3 days +30%, 4 days +10%, and only after checking the press.' },
+          answer: 2, article: A.products, why: 'Next day +80%, 2 days +50%, 3 days +30%, 4 days +10%, on embroidery only, and only after June confirms.' },
         { id: 'clock', q: 'When does the turnaround clock start?',
           choices: ['When the customer first writes', 'When you send the quote', 'When the customer approves the proof and pays the deposit', 'When the blanks arrive'],
           answer: 2, article: A.products, why: 'Turnaround counts from proof approval and deposit, so late artwork moves the date.' },
@@ -1080,8 +1082,8 @@ const FINAL = {
         choices: ['Screen printing', 'Embroidery, with a one-time digitizing fee', 'DTF on caps', 'Vinyl'], answer: 1, article: A.methods, why: 'Logos on polos and caps: embroidery.' },
       { id: 'f6', q: 'She asks if the digitizing fee is charged again when she reorders next year. Answer?',
         choices: ['Yes, every time', 'No, it is one-time: reorders reuse the stitch file', 'Only for caps', 'It depends on the season'], answer: 1, article: A.methods, why: 'Digitizing is a one-time fee per design.' },
-      { id: 'f7', q: 'A customer needs shirts in 3 business days. What is the rush fee and what do you say?',
-        choices: ['+30%, and "let me check the press and confirm today by [time]"', '+80%, guaranteed', 'No rush available', '+10%, no need to check'], answer: 0, article: A.products, why: '3 days is +30%, only after checking the press.' },
+      { id: 'f7', q: 'A customer needs screen-printed shirts in 3 business days. What do you say?',
+        choices: ['"Let me ask June and confirm today by [time]", with no price or promise', '+30%, guaranteed', '+80%, guaranteed', '+10%, no need to check'], answer: 0, article: A.products, why: 'Screen printing is made by our partner in 7 to 10 business days and cannot be rushed; only June can say yes to a date like that.' },
       { id: 'f8', q: 'A message says "price for hoodies?" and nothing else. You…',
         choices: ['Send the cheapest hoodie price', 'Thank them and ask the five details in one message', 'Ignore it until they send more', 'Send a catalogue'], answer: 1, article: A.leads, why: 'Ask for all five in one message (/quote).' },
       { id: 'f9', q: 'You replied to a chat but did not log it. On the board, the lead shows as…',

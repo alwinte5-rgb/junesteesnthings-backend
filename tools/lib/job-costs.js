@@ -364,7 +364,10 @@ function estimateJob(items, catalog) {
     }
     /* What the decoration was billed at per piece: only the rough rule uses it. */
     const decoSellEach = Math.max(0, num(it.unit_price) - garmentSellEach);
-    const deco = placesCost(places, bandQty, decoSellEach, !!it.garment_dark);
+    /* Always with the base: Anchorfish lays and bills it on every garment.
+       garment_dark (false on lines saved before 2026-10-07) only keeps an old
+       quote's SELLING price; it says nothing about what the job costs (Codex #178). */
+    const deco = placesCost(places, bandQty, decoSellEach, true);
     basis.push(...deco.basis);
 
     const each = garmentEach + deco.each + ad.perLine / qty;

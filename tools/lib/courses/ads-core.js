@@ -189,7 +189,7 @@ What is set up today: [owner to fill in: which conversions are set up in Google 
 Once a month, and after any change to the website:
 
 1. On your phone, click one of our ads (or open the landing page with the ad's link), and send a real quote request. Write "TEST from ads, please ignore" in the message
-2. Tell sales in # Sales that a test is coming, so nobody answers it
+2. Tell sales in # Everyone that a test is coming, so nobody answers it
 3. Check the next day that it shows as one conversion in Google Ads and one in Meta. Conversions can take a few hours to appear
 4. Write the date and the result in your change notes
 
@@ -261,7 +261,7 @@ You do not edit the website. If a landing page is wrong, slow or missing somethi
           choices: ['Never', 'Monthly, and after any website change', 'Every day', 'Once a year'],
           answer: 1, article: A.convs, why: 'Tracking breaks quietly.' },
         { id: 'tell', q: 'Before sending a test quote you…',
-          choices: ['Tell nobody', 'Tell sales in # Sales so nobody answers it', 'Email the customer', 'Pause all ads'],
+          choices: ['Tell nobody', 'Tell sales in # Everyone so nobody answers it', 'Email the customer', 'Pause all ads'],
           answer: 1, article: A.convs, why: 'Sales should not chase a test.' },
         { id: 'double', q: 'Your test quote shows as two conversions. You…',
           choices: ['Ignore it', 'Tell June the same day', 'Delete one', 'Raise the budget'],
@@ -541,7 +541,7 @@ On Meta, the picture or video is the ad. Use our own:
 
 Ads collect comments like posts do, and everyone who sees the ad sees them.
 
-- Reply within the day, friendly and short. Questions about prices or orders: point them to the quote form and post it in # Sales
+- Reply within the day, friendly and short. Questions about prices or orders: point them to the quote form and post it in # Everyone for sales
 - Spam and scams: hide them
 - Complaints or anything about a real order: tell June the same day, before replying beyond "please message us"
 - Never argue in an ad's comments`,
@@ -575,7 +575,7 @@ Ads collect comments like posts do, and everyone who sees the ad sees them.
           choices: ['12', 'The 7 sales actually received, and check tracking', 'The average', 'Neither'],
           answer: 1, article: A.meta, why: 'Meta often over-reports; compare with real requests.' },
         { id: 'price', q: 'A comment on an ad asks the price for 30 hoodies. You…',
-          choices: ['Give a price', 'Point them to the quote form and post it in # Sales', 'Hide it', 'Ignore it'],
+          choices: ['Give a price', 'Point them to the quote form and post it in # Everyone for sales', 'Hide it', 'Ignore it'],
           answer: 1, article: A.meta, why: 'Prices come from sales.' },
         { id: 'complaint', q: 'A comment on an ad complains about an order. You…',
           choices: ['Argue', 'Tell June the same day; reply only "please message us"', 'Hide it and forget it', 'Offer a refund'],
@@ -746,7 +746,7 @@ Say so plainly, with what you think happened and what you will do. "Quote reques
 
 **Where the order numbers come from**
 
-The platforms count conversions; sales knows which became orders. Ask in # Sales which quote requests from the week came from ads and whether they paid, or check with June how she wants you to see it: [owner to fill in: how the ads person sees which quote requests came from ads and which became orders]
+The platforms count conversions; sales knows which became orders. Ask sales in # Everyone which quote requests from the week came from ads and whether they paid, or check with June how she wants you to see it: [owner to fill in: how the ads person sees which quote requests came from ads and which became orders]
 
 **Quiet time**
 

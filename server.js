@@ -5220,9 +5220,16 @@ function designerUrlOk(u) {
   const v = String(u || '');
   return v.length <= 500 && v.startsWith(DESIGNER_BASE + '/') && !/[\s"'<>]/.test(v);
 }
+const DESIGN_LEAD_FIELDS = new Set(['name', 'email', 'phone', 'note', 'product', 'summary', 'total', 'preview_url',
+  'design_url', 'sms_transactional', 'sms_marketing', 'ip', 'ua']);
 app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 6), async (req, res) => {
   try {
     const b = req.body || {};
+    /* What the designer sends (jt-design-lead.php). A field outside it means the
+       two have drifted, e.g. a renamed "total" that would arrive as no price.
+       Reported, not refused: a lead is never lost to validation (Codex #221). */
+    const extra = Object.keys(b).filter((k) => !DESIGN_LEAD_FIELDS.has(k));
+    if (extra.length) reportError('design-lead:unknown-fields', new Error(extra.slice(0, 10).join(', '))).catch(() => {});
     const name  = String(b.name || '').trim().slice(0, 120);
     const email = String(b.email || '').trim().toLowerCase().slice(0, 200);
     const phone = String(b.phone || '').replace(/\D/g, '').slice(-10);
@@ -5263,13 +5270,16 @@ app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 
       await sendEmail({
         to: NOTIFY_EMAIL,
         replyTo: email || NOTIFY_EMAIL,
-        subject: `New design from the designer — ${name}${total ? ` ($${total.toFixed(2)})` : ''}`,
+        subject: `${savedId ? '' : 'NOT SAVED: '}New design from the designer — ${name}${total ? ` ($${total.toFixed(2)})` : ''}`,
         html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
           <h2 style="color:#1848B8;">A customer sent their design</h2>
+          ${savedId ? '' : `<p style="background:#fef3c7;border:1px solid #fcd34d;padding:8px 10px;border-radius:6px">
+            <b>This lead did not save</b>, so it is not on the leads page and nothing will follow it up.
+            This email is the only record: add it as a lead by hand.</p>`}
           <p><b>${escEmail(name)}</b> &middot; ${escEmail(email) || '—'} &middot; ${escEmail(phone) || '—'}</p>
           <p>${escEmail(product)}${summary ? '<br>' + escEmail(summary).replace(/\n/g, '<br>') : ''}${total ? `<br>Price shown: <b>$${total.toFixed(2)}</b>` : ''}</p>
           ${note ? `<p><b>Note:</b> ${escEmail(note)}</p>` : ''}${img}
-          <p><a href="${escEmail(designUrl)}">Open the design</a> &middot; it is on the leads page as "Designer".</p></div>`,
+          <p><a href="${escEmail(designUrl)}">Open the design</a>${savedId ? ' &middot; it is on the leads page as "Designer".' : ''}</p></div>`,
       });
     } catch (err) {
       reportError('design-lead:notify-shop', err).catch(() => {});
@@ -7951,9 +7961,11 @@ function quotePricingSource() {
           var sm = isScreen(o.method) ? o.method : (isScreen(o.method2) ? o.method2 : null);
           if (sm) {
             screenCeiling = maxScreens(sm);
-            passScreens = screensPerPass(colourCount(sm, sm === o.method ? o.colours : o.colours2), nb);
-            if (sm === o.method && o.stage === 'both') passScreens = Math.max(passScreens, screensPerPass(colourCount(sm, backPick0), nb));
-            if (sm === o.method && sv0) passScreens = Math.max(passScreens, screensPerPass(colourCount(sm, sleevePick0), nb));
+            /* Capacity always counts the base, whatever the old price did: the
+               press holds the screens the job really needs (Codex #178). */
+            passScreens = screensPerPass(colourCount(sm, sm === o.method ? o.colours : o.colours2), false);
+            if (sm === o.method && o.stage === 'both') passScreens = Math.max(passScreens, screensPerPass(colourCount(sm, backPick0), false));
+            if (sm === o.method && sv0) passScreens = Math.max(passScreens, screensPerPass(colourCount(sm, sleevePick0), false));
             overScreens = passScreens > screenCeiling;
           }
           var screenStage = sm ? (sm === o.method2 ? o.stage2 : o.stage) : o.stage;
@@ -7972,7 +7984,7 @@ function quotePricingSource() {
             pr = prints[pi];
             if (!isScreen(pr.method)) continue;
             if (!screenCeiling) screenCeiling = maxScreens(pr.method);
-            var pass = screensPerPass(pr.c, nb);
+            var pass = screensPerPass(pr.c, false);   // capacity: the base is always on the press
             if (pass > passScreens) passScreens = pass;
             if (pass > maxScreens(pr.method)) overScreens = true;
             screens += screenCount(pr.c, 1, nb);
@@ -9403,6 +9415,8 @@ app.get(['/admin/quote/new', '/admin/quote/:code/edit'], requireAdmin, async (re
      the first posts to the edit route — without this the form would POST to
      /admin/api/quotes/null and update nothing. */
   const isEdit = !!(existing && existing.code);
+  /* The same test the save route makes before it honours a line's nobase. */
+  const legacyBaseQuote = isEdit && Date.parse(existing.created_at) < Date.parse('2026-10-07T05:00:00Z');
   /* The days a quote being edited has left, so saving it again keeps its
      date: the box always said 14, and every re-save quietly moved the expiry
      to fourteen days from then. An expired quote starts a fresh 14. Same UTC
@@ -9729,7 +9743,10 @@ function productGroupOf(name) {
         <div class="lsec-h"><span class="lsec-n">3</span> Quantity &amp; price</div>
         <div class="row-tight">
           <input name="qty${n}" class="q" type="number" inputmode="numeric" min="1"
-                 value="${it ? val(it.qty) : ''}" placeholder="Qty">
+                 value="${it ? val(it.qty) : ''}" placeholder="Qty">${
+            /* Saved before the base went on every garment: re-priced without it,
+               so editing anything else on the quote does not raise this line (Codex #178). */
+            legacyBaseQuote && it && !it.garment_dark ? `<input type="hidden" name="nobase${n}" class="nb" value="1">` : ''}
           <input name="unit_price${n}" class="u" type="number" step="0.01" inputmode="decimal"
                  value="${it && it.manual && !it.sign_priced ? val(typedUnitOf(it)) : ''}"
                  ${canPrice ? 'placeholder="Each $" title="Leave blank to use the calculated price"'
@@ -10934,7 +10951,8 @@ ${quotePricingSource()}
             addons: addons, blankTiers: BLANK_TIERS,
             blankOverride: bpEl ? bpEl.value : '',
             /* A sign with no typed price is priced by the server (signSizer). */
-            unitOverride: u.value || (signKind && L.dataset.signEach) || ''
+            unitOverride: u.value || (signKind && L.dataset.signEach) || '',
+            noBase: !!L.querySelector('input.nb')
           };
           var r = priceLine(plArgs);
 
@@ -11745,6 +11763,12 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
        is taken whole, so it pays an order-level charge once. */
     const optGroupSeen = {};
     const formPos = [];
+    /* Editing a quote made before the white base went on every garment
+       (2026-10-07, shop time)? Only then may a line keep its old no-base price. */
+    const editCode = String(req.params.code || '').toUpperCase();
+    const legacyBaseQuote = QUOTE_CODE_RE.test(editCode) && !!((await pool.query(
+      `SELECT created_at < '2026-10-07T05:00:00Z'::timestamptz AS old FROM quotes WHERE code = $1`, [editCode])
+      .catch(() => ({ rows: [] }))).rows[0] || {}).old;
     /* A Saturday or large-format supplier rate REPLACES the standard Signs365
        delivery charge: on a required item, for the whole order; on an optional
        item, for that item only — the customer may decline it, and the order
@@ -11963,6 +11987,9 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         runPrimary: !runGroup || runPrimaryIdx[runGroup] === i,
         stage, addons: lineAddons, blankTiers: BLANK_TIERS,
         blankOverride, unitOverride: rawUnit,
+        /* Only on a quote made before 2026-10-07, so the marker cannot price a
+           new line without the base. */
+        noBase: legacyBaseQuote && String(one(b['nobase' + i]) || '') === '1',
       };
       const priced = priceLine(priceArgs);
       if (measureForStaff) {
@@ -12158,7 +12185,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         /* Every line now carries the white base (screenCount). Stored as true
            so the customer page re-prices it with the base; a line saved before
            2026-10-07 without it keeps the price it was sent at. */
-        garment_dark: true,
+        garment_dark: !priceArgs.noBase,
         /* Where it is printed, place by place — what the form shows and what
            priced it. The fields below describe lines saved before this. */
         prints: usePrints ? prints.map((p) => ({ loc: p.loc, method_id: p.method.id,
@@ -28052,6 +28079,11 @@ app.post('/admin/lead/:id/email', requireAdmin, async (req, res) => {
   const b = req.body || {};
   const backTo = safeAdminPath(b.back, '/admin/leads');
   if (!id) return res.redirect(backTo);
+  /* The form sends these three and nothing else; anything more is a stale or
+     forged form, refused before a customer is emailed (Codex #179). */
+  if (Object.keys(b).some((k) => !['subject', 'body', 'back'].includes(k))) {
+    return back(res, backTo, 'err', 'That form was out of date. Reload the page and send it again.');
+  }
   const m = LEADMAIL.cleanEmail(b);
   if (m.error) return back(res, backTo, 'err', m.error);
   const actor = currentActor();
@@ -29284,6 +29316,7 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
         action = `<form method="post" action="/admin/training/signoff" style="margin:0">
           <input type="hidden" name="staff_id" value="${staffId}"><input type="hidden" name="key" value="${escEmail(s.key)}">
           ${s.done ? '<input type="hidden" name="undo" value="1"><button type="submit" class="btn btn-ghost">Undo</button>'
+                   : s.locked ? '<button type="button" class="btn btn-ghost" disabled title="Opens once they pass the quiz or exam before it">Not yet</button>'
                    : '<button type="submit" class="btn">Sign off</button>'}</form>`;
       }
       const kind = { read: 'Read', lesson: 'Lesson', do: 'Do', signoff: 'Owner signs off', quiz: 'Quiz', exam: 'Exam', buffer: 'Buffer' }[s.type];
@@ -29356,7 +29389,8 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
           Blanks inside ready-made replies, like [name] or [time], are left alone: staff fill those in for each customer.</p>
         ${gapRows.length ? gapRows.map(({ a, holes }) => `<div class="row-i" style="display:block"><a href="/admin/playbook/${a.id}"><b>${escEmail(a.title)}</b></a>
           ${holes.map((h) => `<form method="post" action="/admin/training/gap" style="margin:8px 0 0">
-            <input type="hidden" name="article_id" value="${a.id}"><input type="hidden" name="token" value="${escEmail(h.token)}">
+            <input type="hidden" name="article_id" value="${a.id}"><input type="hidden" name="token" value="${escEmail(h.token)}">${
+              h.nth != null ? `<input type="hidden" name="nth" value="${h.nth}"><input type="hidden" name="line" value="${escEmail(h.line)}">` : ''}
             <input type="hidden" name="staff_id" value="${staffId}">
             <label style="display:block"><b>${escEmail(h.ask)}</b>
               ${h.line && h.line !== h.token ? `<div class="row-sub" style="white-space:normal">${escEmail(h.line)}</div>` : ''}</label>
@@ -29539,6 +29573,8 @@ app.get('/admin/training/lesson/:id', requireAdmin, async (req, res) => {
         <ul style="margin:6px 0 8px 20px">${s.goals.map((g) => `<li>${withTips(escEmail(g), seen)}</li>`).join('')}</ul>
         <p class="muted" style="margin:0">Words with a dotted underline have a short explanation: hover, tap or tab to them.</p></div>` : ''}
       ${owner && a && a.needs_review ? '<div class="warn">Starter draft. Check it in the Playbook; saving it there marks it checked.</div>' : ''}
+      ${!owner && a && a.needs_review ? `<div class="warn">June has not checked this lesson yet. Learn from it, but ask June before
+        you tell a customer a price, a minimum or a date from it.</div>` : ''}
       <div class="card lesson">${a ? withTips(kbRender(pageMd[pageNo - 1]), seen) : '<div class="warn">This lesson\'s article is missing from the Playbook. Tell June.</div>'}</div>
       ${pic && pic.alt ? `<p class="muted" style="margin:-6px 0 14px;font-size:13px">📷 ${escEmail(pic.alt)}</p>` : ''}
       ${last && tryIt ? `<div class="card"><b>🛠 Try it</b><p class="muted">These open the real screen in a new tab. Nothing reaches a customer unless you send it.</p>
@@ -30776,6 +30812,11 @@ app.post('/admin/training/signoff', requireAdmin, async (req, res) => {
       await pool.query('DELETE FROM staff_training WHERE staff_id = $1 AND step_key = $2', [staffId, key]);
       return back(res, to, 'ok', `Undone: ${s.title}.`);
     }
+    /* Not before the gate in front of it: the ready sign-off starts commission
+       and ends training, so it waits for the final exam (Codex #222). */
+    if (!TRAINING.stepOpen(await trainingFor(staffId), key)) {
+      return back(res, to, 'err', `${s.title} opens once they pass the quiz or exam before it.`);
+    }
     await pool.query(`INSERT INTO staff_training (staff_id, step_key, signed_by) VALUES ($1, $2, NULL) ON CONFLICT DO NOTHING`,
       [staffId, key]);
     return back(res, to, 'ok', `Signed off: ${s.title}.`);
@@ -30862,10 +30903,14 @@ app.post('/admin/training/gap', requireAdmin, async (req, res) => {
   if (!answer) return back(res, to, 'err', 'Type the answer first.');
   try {
     const { rows: [a] } = await pool.query('SELECT id, title, body FROM kb_articles WHERE id = $1 AND published', [id]);
-    if (!a || !TRAINING.ownerGaps(a.body).some((h) => h.token === token)) {
+    const nth = String(b.nth ?? '') === '' ? null : (/^\d{1,3}$/.test(String(b.nth)) ? Number(b.nth) : -1);
+    /* The line too: filling one bare gap renumbers the rest, so a form left
+       open in another tab must not land on a different blank. */
+    if (!a || !TRAINING.ownerGaps(a.body).some((h) => h.token === token && (h.nth ?? null) === nth
+        && (nth == null || h.line === String(b.line || '').trim()))) {
       return back(res, to, 'err', 'That gap is already filled in.');
     }
-    const body = TRAINING.fillGap(a.body, token, answer);
+    const body = TRAINING.fillGap(a.body, token, answer, nth);
     if (!body) return back(res, to, 'err', 'Type the answer first.');
     const { rowCount } = await pool.query(
       `UPDATE kb_articles SET body = $2, updated_by = NULL, needs_review = FALSE, updated_at = NOW() WHERE id = $1 AND body = $3`,

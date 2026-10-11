@@ -628,7 +628,7 @@ Every caption: spelling checked, names right, and never a price, discount, date 
 When someone asks for a price, a quote or how to order, in a comment or a message:
 
 1. Reply kindly that we would love to help, and point them to the quote form at jtees.net
-2. Post their profile link and what they asked in the # Sales channel, the same day, so sales can follow up
+2. Post their profile link and what they asked in the # Everyone channel, tagged "for sales", the same day, so sales can follow up (content helpers cannot see # Sales)
 3. Never quote a price, a date or a discount yourself, even a rough one. Those come from sales and June
 
 Anything about an order that already exists (a late order, a wrong size, a problem with a print) goes to June, the same day, before you reply beyond "Thank you for telling us, we will message you".
@@ -648,7 +648,7 @@ Anything about an order that already exists (a late order, a wrong size, a probl
 
 **Messages**
 
-Direct messages to our accounts follow the same rules: reply within the day, send would-be customers to the quote form and the # Sales channel, and send anything about an existing order to June. If you are not the person checking messages on an account, leave them for whoever is, and tell them about anything urgent.`,
+Direct messages to our accounts follow the same rules: reply within the day, send would-be customers to the quote form and post them in the # Everyone channel for sales, and send anything about an existing order to June. If you are not the person checking messages on an account, leave them for whoever is, and tell them about anything urgent.`,
     }],
     practice: [],
     quiz: {
@@ -664,7 +664,7 @@ Direct messages to our accounts follow the same rules: reply within the day, sen
           choices: ['Spam', 'A good question for a video reply', 'Something to delete', 'A complaint'],
           answer: 1, article: A.comments, why: 'A good question is a short already.' },
         { id: 'price', q: 'A commenter asks "how much for 40 shirts?" You…',
-          choices: ['Guess a price', 'Point them to the quote form and post it in # Sales the same day', 'Ignore it', 'Give a discount'],
+          choices: ['Guess a price', 'Point them to the quote form and post it in # Everyone for sales the same day', 'Ignore it', 'Give a discount'],
           answer: 1, article: A.comments, why: 'Prices and quotes come from sales and June.' },
         { id: 'late', q: 'A comment says their order is late. You…',
           choices: ['Promise it tomorrow', 'Tell June the same day; reply only that we will message them', 'Delete it', 'Argue that it is not late'],
@@ -682,7 +682,7 @@ Direct messages to our accounts follow the same rules: reply within the day, sen
           choices: ['Delete it and forget it', 'Screenshot it, hide or delete it, and tell June', 'Reply to it', 'Leave it up'],
           answer: 1, article: A.comments, why: 'Keep a record, remove it, tell June.' },
         { id: 'dm', q: 'A message asks how to order team shirts. You…',
-          choices: ['Send a price', 'Point them to the quote form and tell sales in # Sales', 'Ignore it', 'Ask for their card number'],
+          choices: ['Send a price', 'Point them to the quote form and tell sales in # Everyone', 'Ignore it', 'Ask for their card number'],
           answer: 1, article: A.comments, why: 'Messages follow the same rules as comments.' },
       ],
     },

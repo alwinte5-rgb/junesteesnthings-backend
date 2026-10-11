@@ -16,7 +16,7 @@ test('#195 a training restart keeps the window that already earned commission', 
 });
 
 test('#221 a failed "email me my design" reaches the error digest', () => {
-  const d = after("app.post('/api/design-lead'", 6000);
+  const d = after("app.post('/api/design-lead'", 9000);
   assert.match(d, /reportError\('design-lead:email-customer'/);
   assert.match(d, /res\.json\(\{ ok: true, id: savedId, emailed: email \? customerEmailed : null \}\)/);
 });

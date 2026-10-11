@@ -140,7 +140,7 @@ module.exports = {
       q('You do not know the answer to a question. You…', ['Say you will find out, and come back', 'Make one up', 'Ignore it'], 0, 'Answer what was asked, or come back.'),
     ] },
     { from: 'Someone wants to order', checks: [
-      q('Where do you post a would-be customer\'s profile link?', ['The # Sales channel', 'Nowhere', 'Your own account'], 0, 'So sales can follow up the same day.'),
+      q('Where do you post a would-be customer\'s profile link?', ['The # Everyone channel, for sales', 'Nowhere', 'Your own account'], 0, 'So sales can follow up the same day.'),
       q('A rough price in a comment is…', ['Fine', 'Never yours to give'], 1, 'Prices come from sales and June.'),
     ] },
     { from: 'Criticism and complaints', checks: [

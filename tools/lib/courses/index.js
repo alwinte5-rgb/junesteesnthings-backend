@@ -40,6 +40,31 @@ for (const c of [SALES_CORE, SALES_LEADGEN, SALES_CLOSER, SALES_ACCOUNTS, DESIGN
   }
 }
 
+/* Wording changed after lessons went live: [now, then]. A live article that
+   still reads the old way (answers above already filled in) and was not
+   otherwise edited is brought up to date. Applied after the answers, because
+   the live copy has them filled in.
+   2026-10-11: rush is embroidery only (Codex #195); handoffs to sales go to
+   # Everyone, the channel content and ads helpers can see (Codex #224). */
+const REWORDED = [
+  ["**Rush**\n\nOnly **embroidery** can be rushed: it is the one thing we make in house. Screen printing and DTF are made for us by a partner in 7 to 10 business days, and they sell no rush at any price. So for a screen print, DTF, or a mix that includes either, the answer to \"can you do it faster?\" is \"let me ask June\", never a yes and never a price.\n\nOn embroidery, for a fee, depending on what is on the machine:\n\n- Next business day: +80%\n- 2 business days: +50%\n- 3 business days: +30%\n- 4 business days: +10%\n\nThe quote form sets the rush from the **Needed by** date you enter, so get the real date from the customer. Never promise a rush date before June confirms it can be done.",
+   "**Rush**\n\nFor a fee, depending on what is on the press:\n\n- Next business day: +80%\n- 2 business days: +50%\n- 3 business days: +30%\n- 4 business days: +10%\n\nThe quote form sets the rush from the **Needed by** date you enter, so get the real date from the customer. Never promise a rush date before June confirms the press can do it."],
+  ['in the # Everyone channel, tagged "for sales", the same day, so sales can follow up (content helpers cannot see # Sales)',
+   'in the # Sales channel, the same day, so sales can follow up'],
+  ['send would-be customers to the quote form and post them in the # Everyone channel for sales',
+   'send would-be customers to the quote form and the # Sales channel'],
+  ['2. Tell sales in # Everyone that a test is coming', '2. Tell sales in # Sales that a test is coming'],
+  ['point them to the quote form and post it in # Everyone for sales\n', 'point them to the quote form and post it in # Sales\n'],
+  ['Ask sales in # Everyone which quote requests', 'Ask in # Sales which quote requests'],
+  ['every Monday, sales posts in # Everyone which', 'every Monday, sales posts in # Sales which'],
+];
+for (const c of [SALES_CORE, CONTENT_CORE, ADS_CORE]) {
+  for (const l of c.modules.flatMap((m) => m.lessons)) {
+    if (typeof l.body !== 'string' || !REWORDED.some(([now]) => l.body.includes(now))) continue;
+    l.was = [...(l.was || []), REWORDED.reduce((b, [now, then]) => b.split(now).join(then), l.body)];
+  }
+}
+
 const COURSES = { [SALES_CORE.key]: SALES_CORE, [SALES_LEADGEN.key]: SALES_LEADGEN, [SALES_CLOSER.key]: SALES_CLOSER,
   [SALES_ACCOUNTS.key]: SALES_ACCOUNTS, [DESIGN_CORE.key]: DESIGN_CORE, [CONTENT_CORE.key]: CONTENT_CORE,
   [ADS_CORE.key]: ADS_CORE, [BOOKS_CORE.key]: BOOKS_CORE,

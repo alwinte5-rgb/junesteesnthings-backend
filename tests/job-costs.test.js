@@ -77,7 +77,9 @@ test('a legacy per-colour method reads its count from its title', () => {
 
 test('screen print under 50 is billed by Anchorfish as 50', () => {
   const r = one({ product_id: 10, method_id: 22, colours: 1, qty: 25, unit_price: 12 });
-  assert.strictEqual(r.lines[0].unit_cost, Math.round((2.82 + 1.80 * 2) * 100) / 100);
+  /* 1 ink + the white base = their "2 Color" rate ($2.25 at 50), on a line saved
+     before 2026-10-07 too: the base is costed on every garment (Codex #178). */
+  assert.strictEqual(r.lines[0].unit_cost, Math.round((2.82 + 2.25 * 2) * 100) / 100);
 });
 
 test('DTF: the main print, plus the additional-location rate for a second side', () => {
