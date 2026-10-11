@@ -306,7 +306,7 @@ test('the Content course is the content track\'s path: its own sign-offs, the ow
   // June answered every blank (answers.js); each answered lesson keeps its unanswered body in `was`.
   const arts = TRAINING.lessonArticles().filter((a) => /^Content course /.test(a.title));
   assert.deepStrictEqual(arts.flatMap((a) => TRAINING.ownerGaps(a.body)), []);
-  const answered = arts.filter((a) => a.was);
+  const answered = arts.filter((a) => a.was && a.was.some((w) => /\[owner to fill in/.test(w)));   // a `was` can also be a rewording (index.js REWORDED)
   assert.ok(answered.length >= 3, `${answered.length} answered lessons`);
   for (const a of answered) assert.ok(a.was.some((w) => /owner to fill in/.test(w)), `${a.title} keeps its unanswered body`);
   assert.strictEqual(TRAINING.visibleSteps(undefined, 'content').find((s) => s.key === 'lesson:c4-edit').title, 'Editing a short');
@@ -329,7 +329,7 @@ test('the Ads course is the ads track\'s path: its own sign-offs, the owner\'s g
   // June answered every blank (answers.js); each answered lesson keeps its unanswered body in `was`.
   const arts = TRAINING.lessonArticles().filter((a) => /^Ads course /.test(a.title));
   assert.deepStrictEqual(arts.flatMap((a) => TRAINING.ownerGaps(a.body)), []);
-  const answered = arts.filter((a) => a.was);
+  const answered = arts.filter((a) => a.was && a.was.some((w) => /\[owner to fill in/.test(w)));   // a `was` can also be a rewording (index.js REWORDED)
   assert.ok(answered.length >= 3, `${answered.length} answered lessons`);
   for (const a of answered) assert.ok(a.was.some((w) => /owner to fill in/.test(w)), `${a.title} keeps its unanswered body`);
   assert.strictEqual(TRAINING.visibleSteps(undefined, 'ads').find((s) => s.key === 'lesson:a5-terms').title, 'Search terms, negatives and the $40 rule');
@@ -353,7 +353,7 @@ test('the Bookkeeper course is the bookkeeper track\'s path, and a hired bookkee
   // June answered every blank (answers.js); each answered lesson keeps its unanswered body in `was`.
   const arts = TRAINING.lessonArticles().filter((a) => /^Bookkeeper course /.test(a.title));
   assert.deepStrictEqual(arts.flatMap((a) => TRAINING.ownerGaps(a.body)), []);
-  const answered = arts.filter((a) => a.was);
+  const answered = arts.filter((a) => a.was && a.was.some((w) => /\[owner to fill in/.test(w)));   // a `was` can also be a rewording (index.js REWORDED)
   assert.ok(answered.length >= 3, `${answered.length} answered lessons`);
   for (const a of answered) assert.ok(a.was.some((w) => /owner to fill in/.test(w)), `${a.title} keeps its unanswered body`);
   assert.strictEqual(TRAINING.visibleSteps(undefined, 'bookkeeper').find((s) => s.key === 'lesson:b5-tax').title, 'Illinois sales tax');
@@ -373,7 +373,7 @@ test('the Developer course is the developer track\'s path, and a hired developer
   // June answered every blank (answers.js); each answered lesson keeps its unanswered body in `was`.
   const arts = TRAINING.lessonArticles().filter((a) => /^Developer course /.test(a.title));
   assert.deepStrictEqual(arts.flatMap((a) => TRAINING.ownerGaps(a.body)), []);
-  const answered = arts.filter((a) => a.was);
+  const answered = arts.filter((a) => a.was && a.was.some((w) => /\[owner to fill in/.test(w)));   // a `was` can also be a rewording (index.js REWORDED)
   assert.ok(answered.length >= 3, `${answered.length} answered lessons`);
   for (const a of answered) assert.ok(a.was.some((w) => /owner to fill in/.test(w)), `${a.title} keeps its unanswered body`);
   assert.strictEqual(TRAINING.visibleSteps(undefined, 'developer').find((s) => s.key === 'lesson:v3-incident').title, 'When something breaks');

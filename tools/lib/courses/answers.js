@@ -21,7 +21,7 @@ module.exports = {
   '[owner to fill in: where the ads change notes are kept]':
     'a Google Doc in the shared June\'s Tees – Ads folder in Google Drive.',
   '[owner to fill in: how the ads person sees which quote requests came from ads and which became orders]':
-    'every Monday, sales posts in # Sales which of last week\'s quote requests came from ads and which have paid.',
+    'every Monday, sales posts in # Everyone which of last week\'s quote requests came from ads and which have paid.',
 
   // Content
   '[owner to fill in: where June\'s footage goes (a shared Drive folder or another place), and how you are told new footage is there]':

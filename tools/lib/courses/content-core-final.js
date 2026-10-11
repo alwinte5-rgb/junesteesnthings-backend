@@ -125,7 +125,7 @@ module.exports = (A) => [
 
   // Comments
   f('f35', '"Do you do hoodies? How much for 25?" in a comment. You…',
-    ['Give a price', 'Say yes, point them to the quote form, and post it in # Sales', 'Ignore it', 'Reply "DM us" and nothing else'], 1, A.comments,
+    ['Give a price', 'Say yes, point them to the quote form, and post it in # Everyone for sales', 'Ignore it', 'Reply "DM us" and nothing else'], 1, A.comments,
     'Prices come from sales; sales follows up the same day.'),
   f('f36', '"My order still hasn\'t arrived" in a comment. You…',
     ['Promise a date', 'Tell June the same day, and reply that we will message them', 'Delete it', 'Argue'], 1, A.comments,

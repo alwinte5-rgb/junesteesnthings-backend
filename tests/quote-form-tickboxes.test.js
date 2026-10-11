@@ -47,7 +47,10 @@ test('the Dark garment box is gone, and every saved line carries the base', () =
      tick. A box left behind would look like it changed the price. */
   assert.doesNotMatch(src, /name="dark\$\{n\}"/, 'the Dark garment box is back on the quote form');
   assert.doesNotMatch(src, /b\['dark' \+ i\]/, 'the save route reads a dark box again');
-  assert.match(src, /garment_dark: true,/);
+  /* true on every new line; false only for a line of a pre-2026-10-07 quote
+     that was sent without the base and is being edited (Codex #178). */
+  assert.match(src, /garment_dark: !priceArgs\.noBase,/);
+  assert.match(src, /noBase: legacyBaseQuote && /);
 });
 
 test('clearing the only item unticks its boxes rather than blanking them', () => {

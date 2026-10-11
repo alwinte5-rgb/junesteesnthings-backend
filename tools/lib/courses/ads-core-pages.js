@@ -163,7 +163,7 @@ module.exports = {
     ] },
     { from: 'Bad weeks', checks: [
       q('A bad week goes in the report…', ['Plainly, with a reason and a plan', 'Never'], 0, 'Hidden is not fine.'),
-      q('Who knows which requests became orders?', ['Sales and June', 'Meta'], 0, 'Ask in # Sales.'),
+      q('Who knows which requests became orders?', ['Sales and June', 'Meta'], 0, 'Ask sales in # Everyone.'),
     ] },
     { from: 'Quiet time', checks: [
       q('Quiet time is for…', ['Negatives, tests, the next season, a test quote', 'Raising budgets'], 0, 'Keep the account in shape.'),

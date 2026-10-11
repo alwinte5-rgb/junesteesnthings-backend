@@ -287,24 +287,41 @@ function placeholders(text) {
  *  can answer it without opening the article. */
 function ownerGaps(text) {
   const body = String(text || '');
+  const lines = body.split('\n');
   return placeholders(body).filter((h) => /owner to fill in/i.test(h) || /^(standard turnaround|X)$/i.test(h))
-    .map((h) => {
+    .flatMap((h) => {
       const token = `[${h}]`;
-      const line = body.split('\n').find((l) => l.includes(token)) || '';
       const ask = h.replace(/,?\s*owner to fill in\s*:?\s*/i, ' ').trim();
-      /* "[X] business days": the words after the blank stay, so ask for the number alone. */
-      const hint = line.includes(`${token} business days`) || line.includes(`${token} days`) ? 'Just the number, e.g. 7' : '';
-      return { token, ask: ask && !/^x$/i.test(ask) ? ask[0].toUpperCase() + ask.slice(1) : 'The number of business days', line: line.trim(), hint };
+      const gap = (line, nth) => {
+        /* "[X] business days": the words after the blank stay, so ask for the number alone. */
+        const hint = line.includes(`${token} business days`) || line.includes(`${token} days`) ? 'Just the number, e.g. 7' : '';
+        return { token, ask: ask && !/^x$/i.test(ask) ? ask[0].toUpperCase() + ask.slice(1)
+          : nth != null ? 'Fill in the blank in this line' : 'The number of business days', line: line.trim(), hint,
+          ...(nth != null ? { nth } : {}) };
+      };
+      /* A bare "[owner to fill in]" says nothing about what it wants, so each
+         copy is its own question, answered on its own (Codex #204: three
+         different facts in one article took one answer). A named gap, like
+         "[X]", means the same thing everywhere, so one answer fills every copy. */
+      if (/^owner to fill in$/i.test(h.trim())) {
+        const out = [];
+        lines.forEach((l) => { let at = l.indexOf(token); while (at > -1) { out.push(gap(l, out.length)); at = l.indexOf(token, at + token.length); } });
+        return out;
+      }
+      return [gap(lines.find((l) => l.includes(token)) || '')];
     });
 }
 
-/** Writes the owner's answer in place of one gap, everywhere it appears in the
- *  article. Square brackets are taken out of the answer so it can never read
- *  as a new placeholder. */
-function fillGap(text, token, answer) {
+/** Writes the owner's answer in place of one gap: every copy of it, or only
+ *  copy number `nth` (counting from 0) when given. Square brackets are taken
+ *  out of the answer so it can never read as a new placeholder. */
+function fillGap(text, token, answer, nth) {
   const a = String(answer || '').replace(/[\r\n]+/g, ' ').replace(/[[\]]/g, '').trim();
   if (!a) return null;
-  return String(text || '').split(token).join(a);
+  const parts = String(text || '').split(token);
+  if (nth == null) return parts.join(a);
+  if (!(Number.isInteger(nth) && nth >= 0 && nth < parts.length - 1)) return null;
+  return parts.slice(0, nth + 1).join(token) + a + parts.slice(nth + 1).join(token);
 }
 
 module.exports = { FEATURES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz,
