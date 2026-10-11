@@ -96,7 +96,7 @@ const WRITTEN = [
   { id: 'angry', part: 'replies', minutes: 5, label: 'Reply to an upset customer',
     prompt: 'A customer writes: "I ordered 25 hoodies for our dance team. They arrived today and 4 are the wrong size. Our competition is Saturday. This is really frustrating." Write your reply to her exactly as you would send it.',
     rubric: 'Apologises sincerely without excuses; takes ownership; asks for what is needed to fix it (which sizes, a photo, the order number); shows urgency about Saturday; does NOT promise a refund, a free reprint or a delivery date on their own, but says they are bringing it to the owner now and will update her by a stated time; warm, clear, short.',
-    model: "Hi! I'm so sorry about the sizes, especially with your competition on Saturday. Let's get this fixed fast. Could you reply with which 4 hoodies are wrong (the size you got and the size you need) and your order number? A quick photo of the size tags helps too. I'm taking this to June right now so we can get the right sizes made and to you before Saturday, and I'll message you by 3pm today with exactly when they'll be ready.",
+    model: "Hi! I'm so sorry about the sizes, especially with your competition on Saturday. Let's get this fixed fast. Could you reply with which 4 hoodies are wrong (the size you got and the size you need) and your order number? A quick photo of the size tags helps too. I'm taking this to June right now so we can work out the fastest way to get you the right sizes, and I'll message you by 3pm today with exactly what we can do before Saturday.",
   },
   { id: 'business', part: 'replies', minutes: 5, label: 'Reply to a lead that could be big',
     prompt: 'A message on our website chat says: "Hey, do you guys do shirts for businesses? We have about 120 employees." Write your reply exactly as you would send it.',
@@ -465,8 +465,19 @@ It takes about ${ROUND2_MINUTES} minutes. Answer in your own words, as specifica
 Please do not use ChatGPT or other AI tools to write your answers.`;
 
 /** The round-2 questions, from a round-1 grade. */
+/* Asked when the grader wrote no follow-ups (an empty list is a valid grade):
+   the invitation promises every applicant two parts (Codex #173). */
+const ROUND2_STANDARD = [
+  { question: 'Pick the round-1 answer you are least happy with. What would you change, and why?',
+    why: 'Can they judge their own work and improve it without being told what was wrong?' },
+  { question: 'Describe a real time you had to finish work for someone by a deadline and something went wrong. What did you do, step by step?',
+    why: 'Real experience, specifics and ownership, not a generic answer.' },
+];
+
 function round2Questions(grade) {
-  return ((grade && grade.follow_up) || []).slice(0, ROUND2_MAX)
+  const asked = (grade && Array.isArray(grade.follow_up) && grade.follow_up.length) ? grade.follow_up
+    : (grade ? ROUND2_STANDARD : []);
+  return asked.slice(0, ROUND2_MAX)
     .map((f, i) => ({ id: `f${i + 1}`, prompt: clip(f.question, 300), why: clip(f.why, 200), about: f.about || null }))
     .filter((q) => q.prompt);
 }
@@ -495,10 +506,14 @@ function round2System(r) {
   return `You are helping June, the owner of June's Tees & Things (a small custom apparel and printing
 shop in Chicago), choose ${roleOf(r).job}, hired remotely from the Philippines.
 
-The applicant passed a first test. June then asked them follow-up questions about their own answers, each
-with the reason it was asked. Mark each answer 1-5 against that reason: did they answer what was asked, with
-specifics and real examples, and did they fix the weakness the question was probing? Remember they write in
-their second language: judge clarity and judgement, not idiom. Flag answers that read as generic or pasted
+The applicant took a first test (every applicant gets this round, whatever they scored). June then asked
+them follow-up questions about their own answers, each with the reason it was asked. Mark each answer 1-5
+against that reason: did they answer what was asked, with specifics and real examples, and did they fix the
+weakness the question was probing? Remember they write in their second language: judge clarity and
+judgement, not idiom.${roleOf(r).calibration ? `
+
+${roleOf(r).calibration}
+` : ''} Flag answers that read as generic or pasted
 from an AI tool in "generic_note".
 
 Then recommend: "interview" (book the video call), "maybe" (only if the pool is thin) or "no", and write a
