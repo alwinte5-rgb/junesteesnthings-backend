@@ -2826,7 +2826,8 @@ async function getCloverInventory() {
 }
 
 async function getCloverPayment(paymentId) {
-  const res = await clover.get(`/v3/merchants/${MID()}/payments/${paymentId}`);
+  // Bounded: the Clover webhook now waits for this before it answers.
+  const res = await clover.get(`/v3/merchants/${MID()}/payments/${paymentId}`, { timeout: 15000 });
   return res.data;
 }
 
@@ -3415,7 +3416,16 @@ app.post('/api/not-found', makeRateLimit(20, 60 * 60 * 1000), (req, res) => {
   res.status(204).end();
 });
 
-app.get('/health', (_req, res) => res.json({ status: 'ok' }));
+/* On Railway a missing or malformed Cloudflare Access setting fails the health
+   check, so that deploy never goes live and the previous one keeps serving the
+   shop AND the back office. Not a boot crash: an admin-only setting must never
+   take the storefront down (see validateEnv). Codex #124. */
+app.get('/health', (_req, res) => {
+  if (!cfAccess && (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT)) {
+    return res.status(503).json({ status: 'staff-sign-in-not-configured' });
+  }
+  res.json({ status: 'ok' });
+});
 
 // ── Form token — fetched by the browser on page load ─────────────────────────
 app.get('/api/form-token', signatureRateLimit, (_req, res) => {
@@ -3716,16 +3726,18 @@ app.post('/webhooks/clover', async (req, res) => {
     return res.sendStatus(401);
   }
 
-  res.sendStatus(200); // acknowledge immediately
-
+  /* Acknowledged only once the payment is written down (Codex #105): a 200
+     sent first left Clover no reason to resend when the fetch or the insert
+     failed, so the receipt was simply missing. The write is idempotent on the
+     Clover payment id, so a resend after a slow reply books nothing twice. */
   const { merchantId, type, id: paymentId } = req.body;
 
   // Validate merchant and event type
   if (process.env.CLOVER_MERCHANT_ID && merchantId !== process.env.CLOVER_MERCHANT_ID) {
     console.warn('Clover webhook rejected — merchant ID mismatch');
-    return;
+    return res.sendStatus(200);
   }
-  if (type !== 'PAYMENT' || !paymentId) return;
+  if (type !== 'PAYMENT' || !paymentId) return res.sendStatus(200);
 
   try {
     const payment = await getCloverPayment(paymentId);
@@ -3760,16 +3772,14 @@ app.post('/webhooks/clover', async (req, res) => {
         at: Number(payment.createdTime) > 0 ? new Date(Number(payment.createdTime)) : undefined,   // Clover: ms
         note: payment.order?.id ? `Clover order ${payment.order.id}` : null },
     ).catch((e) => {
-      /* Swallowed deliberately, unlike the Stripe path: this handler already
-         sent 200 at the top, so there is no retry left to earn by throwing —
-         only an unhandled rejection. But a payment that failed to record is
-         exactly the thing nobody finds out about later, so it goes in the
-         error table that gets digested to the shop rather than a log line. */
+      /* Reported AND answered 500, so Clover sends it again. */
       console.error('clover payment not recorded:', e.message);
       reportError('clover-payment-unrecorded', e,
         `payment ${paymentId}, order ${payment.order?.id || '?'}, ${money((amount || 0) / 100)}`)
         .catch(() => {});
+      throw e;
     });
+    res.sendStatus(200);
 
     if (!rows.length) return;
     const sub = rows[0];
@@ -3791,14 +3801,14 @@ app.post('/webhooks/clover', async (req, res) => {
       .catch(err => { console.error('Payment email failed:', err.message); reportError('clover:payment-email', err).catch(() => {}); });
 
   } catch (err) {
-    /* Clover was already answered 200 at the top of this handler, so it will
-       not resend: a payment that fails here is gone unless somebody hears of
-       it. The likeliest cause is a rejected CLOVER_API_TOKEN failing
-       getCloverPayment — BEFORE the money is written down, so not even the
-       amount is known. The payment id is, and it is all the shop needs to look
-       the sale up in Clover. Logged only, this was silent (2026-09-26). */
+    /* Before the payment was written down (fetch or insert failed): 500, so
+       Clover resends. After it: the money is safe and only the follow-ups
+       failed, which a resend would not redo (the status reads paid). The
+       likeliest cause is a rejected CLOVER_API_TOKEN failing getCloverPayment;
+       the payment id is all the shop needs to look the sale up in Clover. */
     console.error('Webhook processing failed:', err.message);
     reportError('clover-webhook', err, `payment ${paymentId}`).catch(() => {});
+    if (!res.headersSent) res.sendStatus(500);
   }
 });
 
@@ -6840,7 +6850,7 @@ app.post('/admin/quote/:code/step', requireAdmin, async (req, res) => {
   }
   try {
     const job = await moveJobToStage(code, clear ? stage - 1 : stage,
-      { notify: !clear && String((req.body && req.body.notify) || '') === '1' });
+      { notify: !clear && String((req.body && req.body.notify) || '') === '1', keepLater: !clear });
     /* Answer JSON to fetch so the page does not reload. A full reload collapsed
        the <details> the row lives in, which made a successful save look like
        the checklist had simply shut itself. */
@@ -16507,6 +16517,17 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
         WHERE tax_portion IS NULL
         ORDER BY created_at LIMIT 50`).catch(() => ({ rows: [] }));
 
+    /* Clover receipts and what has been refunded on each. Clover's webhook
+       only reports payments, so a refund made on the Clover device is entered
+       here by hand (Codex #105). Empty unless Clover money has arrived. */
+    const { rows: cloverPaid } = await pool.query(
+      `SELECT p.id, p.created_at, p.amount, p.customer_name, p.note,
+              COALESCE((SELECT -SUM(r.amount) FROM unlinked_payments r
+                         WHERE r.ext_ref LIKE 'clover-refund:' || p.id || ':%'), 0)::float AS refunded
+         FROM unlinked_payments p
+        WHERE p.channel = 'clover' AND p.kind = 'payment' AND p.created_at > NOW() - INTERVAL '180 days'
+        ORDER BY p.created_at DESC LIMIT 50`).catch(() => ({ rows: [] }));
+
     /* Sales that charged no tax with nothing on file saying why. Illinois
        deducts these on the return and expects the purchaser's number to be
        producible, so each is a deduction currently claimed without evidence. */
@@ -16968,6 +16989,37 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
                        placeholder="unknown"
                        style="width:96px;padding:5px 7px;font-size:13px">
                 <button class="btn" style="padding:5px 12px;font-size:13px">Settle</button>
+              </form>`}
+            </td>
+          </tr>`).join('')}
+        </table>
+      </div>` : ''}
+
+      ${cloverPaid.length ? `
+      <div class="card" id="clover-refunds" style="margin-top:14px">
+        <h2 style="margin:0 0 4px;font-size:16px">Clover receipts</h2>
+        <p class="muted" style="font-size:12px;margin:0 0 10px">
+          Clover tells this side about payments but not refunds. When you refund one on the Clover
+          device, type the <b>total refunded so far</b> here. Pressing it twice changes nothing.
+        </p>
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <tr style="text-align:left;color:#6b7280;font-size:11px;text-transform:uppercase">
+            <th style="padding:6px 4px">Arrived</th><th style="padding:6px 4px">What</th>
+            <th class="num" style="padding:6px 4px">Payment</th><th style="padding:6px 4px">Refunded</th>
+          </tr>
+          ${cloverPaid.map((u) => `
+          <tr style="border-top:1px solid #e5e7eb">
+            <td style="padding:7px 4px;white-space:nowrap">${new Date(u.created_at).toISOString().slice(0, 10)}</td>
+            <td style="padding:7px 4px">${escEmail(String(u.note || 'Clover payment'))}${
+              u.customer_name ? `<span class="muted"> — ${escEmail(String(u.customer_name))}</span>` : ''}</td>
+            <td class="num" style="padding:7px 4px;font-variant-numeric:tabular-nums">${money(u.amount)}</td>
+            <td style="padding:7px 4px">
+              ${!canEdit ? (u.refunded > 0 ? money(u.refunded) : '<span class="muted">none</span>') : `<form method="post" action="/admin/unlinked/${u.id}/refund" style="display:flex;gap:6px;margin:0">
+                <input type="hidden" name="back" value="${FINANCES_PATH}${viewQS}">
+                <input name="refunded" type="number" step="0.01" min="0" max="${Number(u.amount)}" inputmode="decimal"
+                       value="${u.refunded > 0 ? round2(u.refunded) : ''}" placeholder="0.00" required
+                       style="width:96px;padding:5px 7px;font-size:13px">
+                <button class="btn" style="padding:5px 12px;font-size:13px">Save</button>
               </form>`}
             </td>
           </tr>`).join('')}
@@ -18924,9 +18976,13 @@ const STAGE_ASK_SCRIPT = `<script>(function(){
    and the job page's checklist: the checklist used to stamp one date at a time
    and never moved the review ask, so the two disagreed about what "delivered"
    did. Returns the job as it now stands, or null if there is no such quote. */
-async function moveJobToStage(code, target, { notify = true } = {}) {
+async function moveJobToStage(code, target, { notify = true, keepLater = false } = {}) {
+  /* keepLater: the board's "✓ finish this stage" button. It stamps up to the
+     target and leaves any milestone recorded out of order (blanks in while the
+     proof is still out) alone; only an explicit move back clears later ones
+     (Codex #7). */
   const sets = JOB_STAGES.slice(1).flatMap((st, i) =>
-    st.cols.map(c => `${c} = ${i + 1 <= target ? `COALESCE(${c}, NOW())` : 'NULL'}`)).join(', ');
+    st.cols.map(c => `${c} = ${i + 1 <= target ? `COALESCE(${c}, NOW())` : (keepLater ? c : 'NULL')}`)).join(', ');
   const { rows: prev } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
   if (!prev.length) return null;
   const { rows } = await pool.query(`UPDATE quotes SET ${sets} WHERE code = $1 RETURNING *`, [code]);
@@ -18963,7 +19019,8 @@ app.post('/admin/quote/:code/stage', requireAdmin, async (req, res) => {
     /* A tap only messages the customer when the owner said yes to it
        (STAGE_ASK_SCRIPT sets notify=1). Until 2026-10-05 every tap emailed
        at once, so a mis-tap told a customer their order was ready. */
-    const job = await moveJobToStage(code, target, { notify: String((req.body && req.body.notify) || '') === '1' });
+    const job = await moveJobToStage(code, target, { notify: String((req.body && req.body.notify) || '') === '1',
+                                                     keepLater: String((req.body && req.body.keep_later) || '') === '1' });
     if (asJson) {
       if (!job) return res.status(404).json({ ok: false });
       const cl = quoteChecklist(job);
@@ -19940,6 +19997,7 @@ async function renderBoard(VIEW, req, res) {
                 <form method="POST" action="/admin/quote/${q.code}/stage" data-stageform class="knext"${
                   askAttrs(q, milestoneAsk(q, JOB_STAGES.indexOf(act), boardSent.get(q.code)))}>
                   <input type="hidden" name="stage" value="${act.key}">
+                  <input type="hidden" name="keep_later" value="1">
                   <input type="hidden" name="notify" value="">
                   <input type="hidden" name="json" value="" data-jsonflag>
                   <button type="submit" class="kbtn kbtn-next" title="${escEmail(act.hint)}">
@@ -25832,6 +25890,54 @@ app.post('/admin/unlinked/:id/tax', requireAdmin, async (req, res) => {
   res.redirect(back);
 });
 
+/* Record a refund made on the Clover device against a Clover receipt (Codex
+   #105: Clover's webhook reports payments only, so the ledger kept the full
+   receipt forever). The owner types the TOTAL refunded so far; the ledger gets
+   the difference from what it already holds, under a per-receipt lock, so a
+   double press or a re-save writes nothing. Dated today, the day the money
+   went back, and carrying the receipt's tax back out in proportion. */
+app.post('/admin/unlinked/:id/refund', requireAdmin, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const b = req.body || {};
+  const back = safeAdminPath(b.back, FINANCES_PATH);
+  if (!(id > 0)) return res.redirect(FINANCES_PATH);
+  const want = round2(Number(String(b.refunded ?? '').trim()));
+  if (!Number.isFinite(want) || want < 0) return res.redirect(back);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock($1, $2)', [7302, id]);
+    const { rows: [p] } = await client.query(
+      `SELECT id, amount, tax_portion, customer_email, customer_name, note FROM unlinked_payments
+        WHERE id = $1 AND channel = 'clover' AND kind = 'payment'`, [id]);
+    if (!p || want > round2(Number(p.amount))) { await client.query('ROLLBACK'); return res.redirect(back); }
+    const { rows: [h] } = await client.query(
+      `SELECT COALESCE(-SUM(amount), 0)::float AS refunded FROM unlinked_payments
+        WHERE ext_ref LIKE 'clover-refund:' || $1::text || ':%'`, [String(id)]);
+    const delta = round2(want - Number(h.refunded));
+    if (delta !== 0) {
+      const amt = Number(p.amount);
+      const tax = p.tax_portion == null || !(amt > 0) ? null : round2(-delta * Number(p.tax_portion) / amt);
+      await client.query(
+        `INSERT INTO unlinked_payments (amount, currency, channel, kind, source, ext_ref, customer_email,
+                                        customer_name, reason, tax_portion, resolved_at, note)
+         VALUES ($1, 'usd', 'clover', 'refund', 'admin', $2, $3, $4, $5, $6::numeric,
+                 CASE WHEN $6::numeric IS NULL THEN NULL ELSE NOW() END, $7)`,
+        [-delta, `clover-refund:${id}:${Date.now()}`, p.customer_email, p.customer_name,
+         'clover refund recorded by hand', tax, `Refund on Clover receipt ${id}${p.note ? ` (${p.note})` : ''}`.slice(0, 500)]);
+    }
+    await client.query('COMMIT');
+    console.log(`clover receipt ${id}: refunded total now ${money(want)}`);
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('clover refund record failed:', err.message);
+    reportError('clover-refund-record', err, `receipt ${id}`).catch(() => {});
+  } finally {
+    client.release();
+  }
+  res.redirect(back);
+});
+
 /* Apply a payment taken in Stripe to the quote it was for (applyStripePaymentNow).
    Offered in each quote's "Record a payment" panel, and answered on the board:
    what happened, or why nothing did, from a fixed list, so nothing a request
@@ -26466,13 +26572,18 @@ const back = (res, path, key, msg) => {
 };
 
 /** First reply to a lead: who and when, once. What the scorecard's reply time reads. */
+/* Returns false when the stamp could not be written, so a caller that tells
+   staff "done" can say the lead still reads New (Codex #179, 2026-10-10). */
 async function markLeadResponded(submissionId, actor) {
-  if (!submissionId) return;
-  await pool.query(
+  if (!submissionId) return true;
+  return pool.query(
     `UPDATE submissions SET first_response_at = NOW(), first_response_by = $2
       WHERE id = $1 AND first_response_at IS NULL`,
-    [submissionId, actor && actor.kind === 'staff' ? actor.id : null]).catch((e) =>
-    console.error('first response stamp failed:', e.message));
+    [submissionId, actor && actor.kind === 'staff' ? actor.id : null]).then(() => true).catch((e) => {
+    console.error('first response stamp failed:', e.message);
+    if (typeof reportError === 'function') reportError('lead:first-response', e, `lead ${submissionId}`).catch(() => {});
+    return false;
+  });
 }
 
 /* ── /admin/staff ─────────────────────────────────────────────────────────── */
@@ -27398,8 +27509,17 @@ app.post('/admin/commission/pay', requireAdmin, async (req, res) => {
     if (!s) { await client.query('ROLLBACK'); return res.redirect('/admin/commission'); }
     /* Recomputed here, never taken from the form: what is payable is what the
        ledger says now. */
-    const lines = (await commissionLines(staffId, s))
+    let lines = (await commissionLines(staffId, s))
       .filter((l) => l.state === 'payable' && l.amount > 0);
+    /* Still this helper's sale, read under a row lock inside this transaction:
+       a credit change that committed after commissionLines read is left out. */
+    if (lines.length) {
+      const { rows: mine } = await client.query(
+        'SELECT code FROM quotes WHERE code = ANY($1::text[]) AND credited_to = $2 FOR UPDATE',
+        [lines.map((l) => l.code), staffId]);
+      const still = new Set(mine.map((r) => r.code));
+      lines = lines.filter((l) => still.has(l.code));
+    }
     const { rows: bonuses } = await client.query(
       'SELECT id, amount, reason FROM staff_bonuses WHERE staff_id = $1 AND paid_at IS NULL FOR UPDATE', [staffId]);
     // Wages at today's rate, written onto each week so a later raise never changes what was paid.
@@ -27516,11 +27636,26 @@ async function setSalesCredit(code, raw, actor) {
     return { ok: false, msg: 'This sale is credited to someone else. Ask the owner to change it.' };
   }
   /* The same conditions again in the UPDATE, so a payout or another change
-     landing in between cannot be overwritten. */
-  const { rowCount } = await pool.query(
-    `UPDATE quotes SET credited_to = $2
-      WHERE code = $1 AND credited_to IS NOT DISTINCT FROM $3
-        AND NOT EXISTS (SELECT 1 FROM commission_payouts c WHERE c.quote_code = $1)`, [code, to, cur]);
+     landing in between cannot be overwritten. A payout running right now
+     holds its helper's lock (7301) until it commits; taking that lock first
+     means the UPDATE's NOT EXISTS sees the payout instead of racing it
+     (Codex #123: the old helper paid, then the quote paid again to the new one). */
+  const client = await pool.connect();
+  let rowCount = 0;
+  try {
+    await client.query('BEGIN');
+    if (cur > 0) await client.query('SELECT pg_advisory_xact_lock($1, $2)', [7301, cur]);
+    ({ rowCount } = await client.query(
+      `UPDATE quotes SET credited_to = $2
+        WHERE code = $1 AND credited_to IS NOT DISTINCT FROM $3
+          AND NOT EXISTS (SELECT 1 FROM commission_payouts c WHERE c.quote_code = $1)`, [code, to, cur]));
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
   if (!rowCount) return { ok: false, msg: 'It changed while you were looking. Try again.' };
   logActivity(actor, 'sales credit', { type: 'quote', id: code }, { from: cur, to });
   return { ok: true, to };
@@ -27921,7 +28056,9 @@ app.post('/admin/lead/:id/email', requireAdmin, async (req, res) => {
     await sendEmail({ to, subject: m.subject, html: LEADMAIL.toHtml(m.text), text: m.text, promo: false });
     await pool.query(`INSERT INTO lead_notes (submission_id, kind, body, staff_id) VALUES ($1, 'email', $2, $3)`,
       [id, noteBody, actor && actor.kind === 'staff' ? actor.id : null]);
-    await markLeadResponded(id, actor);
+    if (!(await markLeadResponded(id, actor))) {
+      return back(res, backTo, 'err', `Email sent to ${to}, but the lead could not be marked Contacted. Mark it by hand.`);
+    }
     return res.redirect(`${backTo}${backTo.includes('?') ? '&' : '?'}ok=${encodeURIComponent(`Email sent to ${to}.`)}#lead-${id}`);
   } catch (err) {
     console.error('lead email failed:', err.message);

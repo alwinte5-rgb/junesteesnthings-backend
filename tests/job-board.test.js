@@ -97,7 +97,7 @@ function load() {
     /* The columns the board renders, from the real expression. */
     function board(rows) { ${LIVE_SRC} ${COLS_SRC} return cols; }
     /* The SET clause the stage POST builds for a given target index. */
-    function setsFor(target) { ${SETS_SRC} return sets; }
+    function setsFor(target, keepLater = false) { ${SETS_SRC} return sets; }
     return { JOB_STAGES, jobStageIndex, nextAction, board, setsFor };
   })`)();
 }
@@ -116,15 +116,16 @@ function job(milestones = {}) {
  * forms that clause can emit are understood, so if the handler ever starts
  * writing something else this throws rather than passing.
  */
-function tap(q, stageKey) {
+function tap(q, stageKey, keepLater = false) {
   const target = JOB_STAGES.findIndex(s => s.key === stageKey);
   assert.ok(target > 0, `no such stage: ${stageKey}`);
   const next = { ...q };
-  for (const clause of setsFor(target).split(/,\s*(?=\w+ = )/)) {
+  for (const clause of setsFor(target, keepLater).split(/,\s*(?=\w+ = )/)) {
     const m = /^(\w+) = (.+)$/.exec(clause.trim());
     if (!m) throw new Error(`unparseable SET clause from server.js: ${clause}`);
     const [, col, value] = m;
     if (value === 'NULL') next[col] = null;
+    else if (value === col) { /* keepLater: left as it is */ }
     else if (value === `COALESCE(${col}, NOW())`) next[col] ||= '2026-06-01';
     else throw new Error(`unrecognised SET clause from server.js: ${clause}`);
   }
@@ -211,6 +212,17 @@ test('moving a card back clears the dates after its new stage', () => {
   assert.deepStrictEqual(cardIn(back), { column: 'Ready / Shipped', button: 'Ready / Shipped' });
   const start = tap(done, 'production');
   assert.ok(start);
+});
+
+/* Codex #7: blanks recorded in while the proof was still out. The board's
+   "finish this stage" button must not wipe it; an explicit move back still does. */
+test('finishing the current stage keeps a later milestone recorded out of order', () => {
+  const later = JOB_STAGES.slice(2).flatMap((st) => st.cols)[0];
+  const q = job({ [later]: '2026-05-05' });
+  const kept = tap(q, JOB_STAGES[1].key, true);
+  assert.strictEqual(kept[later], '2026-05-05', 'the later milestone survives');
+  JOB_STAGES[1].cols.forEach((c) => assert.ok(kept[c], `${c} stamped`));
+  assert.strictEqual(tap(q, JOB_STAGES[1].key)[later], null, 'a move back still clears it');
 });
 
 /* Five columns scrolled sideways on a phone, which was right; three did too,
