@@ -192,9 +192,12 @@ function lessonPages(body, pages = []) {
     const total = size.reduce((a, b) => a + b, 0);
     cuts = [0];
     let run = 0;
-    for (let i = 0; i < sections.length && cuts.length < want; i++) {
+    /* Cut early when only as many sections are left as pages still owed, so
+       a long late section can never leave the lesson short of pages
+       (Codex #202). */
+    for (let i = 0; i < sections.length - 1 && cuts.length < want; i++) {
       run += size[i];
-      if (run >= (total * cuts.length) / want && i + 1 < sections.length) cuts.push(i + 1);
+      if (run >= (total * cuts.length) / want || sections.length - (i + 1) <= want - cuts.length) cuts.push(i + 1);
     }
   }
   return cuts.map((c, n) => sections.slice(c, cuts[n + 1] || sections.length).flatMap((x) => x.blocks).join('\n\n'));
@@ -285,10 +288,25 @@ function placeholders(text) {
  *  written with: "[standard turnaround]" and the escalation deadline "[X]".
  *  Each comes with the question to ask and the line it sits in, so the owner
  *  can answer it without opening the article. */
+const DEADLINE_X = (token) => new RegExp(token.replace(/[[\]]/g, '\\$&') + '(?= (?:business )?days\\b)');
+
+/** The number a "[X] days" gap wants, from an answer like "5", "5 days" or
+ *  "5 business days"; null when it is not a number (Codex #204: "5 business
+ *  days" was saved as-is and read "5 business days business days"). */
+function dayCount(answer) {
+  const m = /^\s*(\d{1,3})(?:\s+(?:business\s+)?days?)?\s*$/i.exec(String(answer || ''));
+  return m ? m[1] : null;
+}
+
 function ownerGaps(text) {
   const body = String(text || '');
   const lines = body.split('\n');
-  return placeholders(body).filter((h) => /owner to fill in/i.test(h) || /^(standard turnaround|X)$/i.test(h))
+  /* "[X]" is the owner's only where it is the escalation deadline ("[X] days",
+     "[X] business days"); in a ready-made reply ("need [X] shirts") it is a
+     blank staff fill per customer, and must not be answered once for good
+     (Codex #204). */
+  return placeholders(body).filter((h) => /owner to fill in/i.test(h) || /^standard turnaround$/i.test(h)
+      || (/^X$/i.test(h) && DEADLINE_X(`[${h}]`).test(body)))
     .flatMap((h) => {
       const token = `[${h}]`;
       const ask = h.replace(/,?\s*owner to fill in\s*:?\s*/i, ' ').trim();
@@ -308,6 +326,7 @@ function ownerGaps(text) {
         lines.forEach((l) => { let at = l.indexOf(token); while (at > -1) { out.push(gap(l, out.length)); at = l.indexOf(token, at + token.length); } });
         return out;
       }
+      if (/^\[X\]$/i.test(token)) return [gap(lines.find((l) => DEADLINE_X(token).test(l)) || '')];
       return [gap(lines.find((l) => l.includes(token)) || '')];
     });
 }
@@ -318,6 +337,8 @@ function ownerGaps(text) {
 function fillGap(text, token, answer, nth) {
   const a = String(answer || '').replace(/[\r\n]+/g, ' ').replace(/[[\]]/g, '').trim();
   if (!a) return null;
+  /* Only the deadline copies of "[X]": any other "[X]" is a reply's blank (Codex #204). */
+  if (nth == null && /^\[X\]$/i.test(token)) return String(text || '').replace(new RegExp(DEADLINE_X(token).source, 'g'), () => a);
   const parts = String(text || '').split(token);
   if (nth == null) return parts.join(a);
   if (!(Number.isInteger(nth) && nth >= 0 && nth < parts.length - 1)) return null;
@@ -325,6 +346,6 @@ function fillGap(text, token, answer, nth) {
 }
 
 module.exports = { FEATURES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz,
-  visibleSteps, stepByKey, mayTick, progress, stepOpen, placeholders, ownerGaps, fillGap, passMark, courseSteps, lessonPages,
+  visibleSteps, stepByKey, mayTick, progress, stepOpen, placeholders, ownerGaps, fillGap, dayCount, passMark, courseSteps, lessonPages,
   COURSES: COURSES.COURSES, SALES_ROLES: COURSES.SALES_ROLES, salesRoleOf: COURSES.salesRoleOf,
   lessonArticles: COURSES.lessonArticles, glossary: COURSES.glossary };

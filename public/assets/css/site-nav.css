@@ -15,7 +15,7 @@
 .jtn-menu>a:hover,.jtn-dd-t:hover,.jtn-dd.open .jtn-dd-t{background:#EFF4FF;color:#1848B8;}
 .jtn-dd{position:relative;}
 .jtn-dd-t::after{content:"";display:inline-block;margin-left:.35rem;border:4px solid transparent;border-top-color:currentColor;transform:translateY(2px);}
-.jtn-dd-m{display:none;position:absolute;top:100%;left:0;min-width:230px;background:#fff;border:1px solid #E5E7EB;border-radius:12px;box-shadow:0 14px 34px rgba(11,31,75,.14);padding:.45rem;z-index:1001;}
+.jtn-dd-m{display:none;position:absolute;top:100%;left:0;min-width:230px;background:#fff;border:1px solid #E5E7EB;border-radius:12px;box-shadow:0 14px 34px rgba(11,31,75,.14);padding:.45rem;z-index:1001;max-height:calc(100vh - 90px);overflow-y:auto;overscroll-behavior:contain;}
 .jtn-dd:hover .jtn-dd-m,.jtn-dd:focus-within .jtn-dd-m,.jtn-dd.open .jtn-dd-m{display:block;}
 .jtn-dd-m a{display:block;color:#374151;font:500 .9rem Inter,system-ui,sans-serif;padding:.5rem .7rem;border-radius:8px;}
 .jtn-dd-m a:hover{background:#F7F6F3;color:#0B1F4B;}

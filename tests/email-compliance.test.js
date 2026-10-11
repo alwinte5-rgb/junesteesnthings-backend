@@ -30,7 +30,9 @@ const sendEmail = src.slice(src.indexOf('async function sendEmail'),
 test('every email carries the shop identity and postal address', () => {
   /* Applied inside sendEmail, not at the call sites: thirty call sites is
      thirty chances to forget, and the one that forgets is the one reported. */
-  assert.match(sendEmail, /html = marketing \? html \+ unsubFooter\(to\) : html \+ shopFooter\(\)/,
+  /* The footer is picked once and added to the html AND to a caller's own
+     plain text (Codex #179). */
+  assert.match(sendEmail, /const footer = marketing \? unsubFooter\(to\) : shopFooter\(\);\s*html \+= footer;/,
     'the footer must be attached centrally, so a new email gets it by existing');
   const footer = src.slice(src.indexOf('function shopFooter'), src.indexOf('function unsubFooter'));
   assert.match(footer, /3047 N Lincoln Ave/, 'a real postal address');

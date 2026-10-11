@@ -1170,6 +1170,10 @@ async function initStaffTables() {
   }
   /* The tools the team works in (/admin/resources): links and how to get in,
      never a password. Started with what the playbook already names. */
+  /* Seeded only by the run that creates the table: seeding whenever it was
+     empty brought the starters back after the owner removed the last one
+     (Codex #201). */
+  const { rows: [resTable] } = await pool.query(`SELECT to_regclass('public.staff_resources') IS NOT NULL AS had`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS staff_resources (
       id          SERIAL PRIMARY KEY,
@@ -1183,8 +1187,7 @@ async function initStaffTables() {
       updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
   {
-    const { rows: [n] } = await pool.query('SELECT COUNT(*)::int AS n FROM staff_resources');
-    if (!n.n) {
+    if (!resTable.had) {
       const start = [
         ['COS Creator Studio', 'https://coscreatorstudio.com', 'Plan, make and schedule our social posts.', 'Your own login: June invites you.', 'all'],
         ['June\'s Tees Website Photos', 'https://drive.google.com/drive/folders/1mgbTpvBKWPGftga3R5R-VF5hUJ2vNSvz', 'Our own job photos for posts, the blog and the website.', 'June shares the folder with your Google account.', 'all'],
@@ -2133,8 +2136,11 @@ async function sendEmail({ to, subject, html, replyTo, marketing = false, text, 
   /* Applied HERE rather than at each call site, because thirty call sites is
      thirty chances to forget — and the one that forgets is the one that gets
      reported. A new email gets this by existing. */
-  html = marketing ? html + unsubFooter(to) : html + shopFooter();
-  const textContent = text || htmlToText(html);
+  const footer = marketing ? unsubFooter(to) : shopFooter();
+  html += footer;
+  /* A caller's own plain text still carries the footer: the text part is what
+     some clients show, and it needs the address too (Codex #179). */
+  const textContent = text ? `${text}\n\n${htmlToText(footer)}` : htmlToText(html);
   const extraHeaders = marketing ? unsubHeaders(to) : {};
 
   /* Which provider, and a way to say so out loud.
@@ -5268,7 +5274,11 @@ app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 
     if (extra.length) reportError('design-lead:unknown-fields', new Error(extra.slice(0, 10).join(', '))).catch(() => {});
     const name  = String(b.name || '').trim().slice(0, 120);
     const email = String(b.email || '').trim().toLowerCase().slice(0, 200);
-    const phone = String(b.phone || '').replace(/\D/g, '').slice(-10);
+    /* Ten digits, or eleven starting with the US country code 1. Keeping the
+       last ten of anything longer turned a UK number into a plausible US one
+       that staff would then call (Codex #221). */
+    const rawPhone = String(b.phone || '').replace(/\D/g, '');
+    const phone = rawPhone.length === 11 && rawPhone[0] === '1' ? rawPhone.slice(1) : rawPhone;
     const note  = String(b.note || '').trim().slice(0, 1000);
     const product = String(b.product || '').trim().slice(0, 200);
     const summary = String(b.summary || '').trim().slice(0, 1200);
@@ -5285,8 +5295,8 @@ app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 
 
     const description = ['DESIGN FROM THE DESIGNER', product && `${product}`, summary, total ? `shown $${total.toFixed(2)}` : '',
       note && `note: ${note}`].filter(Boolean).join(' · ').slice(0, 2000);
-    const dedupeKey = crypto.createHash('sha256').update(['design', email, phone, designUrl,
-      Math.floor(Date.now() / (10 * 60 * 1000))].join('|')).digest('hex');
+    const keyAt = (bucket) => crypto.createHash('sha256').update(['design', email, phone, designUrl, bucket].join('|')).digest('hex');
+    const nowBucket = Math.floor(Date.now() / (10 * 60 * 1000));
     let savedId = null;
     try {
       const { rows } = await pool.query(
@@ -5294,9 +5304,18 @@ app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 
          VALUES ($1,$2,$3,$4,$5,$6,$7,'designer')
          ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
          RETURNING id`,
-        [name, phone, email, description, previewUrl || null, designUrl, dedupeKey]);
+        [name, phone, email, description, previewUrl || null, designUrl, keyAt(nowBucket)]);
       if (!rows.length) return res.json({ ok: true, duplicate: true });   // a second click
       savedId = rows[0].id;
+      /* The previous bucket too, as /submit does: two clicks either side of a
+         ten-minute edge got different keys and both sent (Codex #221). */
+      const { rows: prev } = await pool.query(
+        `SELECT 1 FROM submissions WHERE dedupe_key = $1 AND created_at > NOW() - INTERVAL '10 minutes' LIMIT 1`,
+        [keyAt(nowBucket - 1)]);
+      if (prev.length) {
+        await pool.query('DELETE FROM submissions WHERE id = $1', [savedId]).catch(() => {});
+        return res.json({ ok: true, duplicate: true });
+      }
     } catch (err) {
       reportError('design-lead:save', err).catch(() => {});
     }
@@ -8333,7 +8352,10 @@ function totalsForItems(q, items) {
    so a job could sit in "To start" looking like a sale while the shop had not
    been paid a cent (owner, 2026-10-07). Nothing written off, nothing paid. */
 function awaitingDeposit(q) {
-  return !!q && !!q.accepted_at && !q.cancelled_at
+  /* Not a delivered job (what is owed is a balance, shown under "Delivered,
+     still owed") nor one that had a refund (the shop chases those by hand)
+     (Codex #180). */
+  return !!q && !!q.accepted_at && !q.cancelled_at && !q.delivered_at && !q._refunded
     && Number(q.paid_amount || 0) <= 0 && Number(q.written_off || 0) <= 0
     && Number(q.total || q.subtotal || 0) > 0;
 }
@@ -17128,7 +17150,8 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
           Held right now spans every period, not just ${viewName} — it is what should be in the bank today.
           <a href="/admin/tax.csv" style="color:#1848B8">Download the payment-level detail</a>,
           or ${canEdit ? `<a href="/admin/exports" style="color:#1848B8">keep a month's records</a>`
-            : `download <a href="/admin/exports/payments.csv" style="color:#1848B8">payments</a>, <a href="/admin/exports/expenses.csv" style="color:#1848B8">expenses</a> and <a href="/admin/exports/unlinked.csv" style="color:#1848B8">payments with no order</a>`}.
+            /* The month on screen, not every month ever (Codex #230). */
+            : `download ${month ? `${viewName}'s` : 'all'} <a href="/admin/exports/payments.csv${month ? `?month=${month}` : ''}" style="color:#1848B8">payments</a>, <a href="/admin/exports/expenses.csv${month ? `?month=${month}` : ''}" style="color:#1848B8">expenses</a> and <a href="/admin/exports/unlinked.csv${month ? `?month=${month}` : ''}" style="color:#1848B8">payments with no order</a>`}.
         </div>
       </div>
 
@@ -19397,6 +19420,15 @@ async function renderBoard(VIEW, req, res) {
              AND requested_items IS NULL
            ORDER BY created_at DESC LIMIT 200) AS finished
         ORDER BY created_at DESC`);
+    /* Which of them had money go back: a refunded job reads paid 0 and was
+       tagged "awaiting deposit" for chasing (Codex #180). */
+    {
+      const { rows: rf } = await pool.query(
+        `SELECT DISTINCT quote_code FROM quote_payments WHERE kind IN ('refund', 'dispute') AND quote_code = ANY($1::text[])`,
+        [allRows.map((q) => q.code)]).catch(() => ({ rows: [] }));
+      const had = new Set(rf.map((r) => r.quote_code));
+      for (const q of allRows) if (had.has(q.code)) q._refunded = true;
+    }
     /* Fetched alongside the quotes so both halves of the shop appear on one
        page. Never awaited in a way that can fail the board — fetchStudioOrders
        resolves to a stale list plus an error rather than throwing. */
@@ -22178,6 +22210,12 @@ function leadEmailBox(l, backField) {
         <textarea name="body" rows="14" maxlength="${LEADMAIL.LIMITS.body}" required style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">${escEmail(m.body)}</textarea>${backField}
         <button type="submit" class="btn" style="padding:7px 16px;font-size:13px">Send email</button>
       </form>
+      <script>/* A send that fails comes back with the stock message; the draft typed
+         here is kept in this tab and put back (Codex #179). */
+      (function(){var k='jt-lead-draft-${l.id}',box=document.getElementById('em-${l.id}'),f=box&&box.querySelector('form');if(!f)return;
+      try{var p=new URLSearchParams(location.search),d=JSON.parse(sessionStorage.getItem(k)||'null');
+        if(d&&p.get('err')){f.subject.value=d.s;f.body.value=d.b;box.style.display='block';}else if(p.get('ok'))sessionStorage.removeItem(k);}catch(e){}
+      f.addEventListener('submit',function(){try{sessionStorage.setItem(k,JSON.stringify({s:f.subject.value,b:f.body.value}));}catch(e){}});})();</script>
       <form method="POST" action="/admin/lead/${l.id}/note" style="margin-top:10px">
         <input type="hidden" name="kind" value="email"><input type="hidden" name="body" value="Emailed them from my own inbox.">${backField}
         <button type="submit" class="btn btn-ghost" style="padding:6px 14px;font-size:12.5px">I already emailed them</button>
@@ -24199,6 +24237,7 @@ async function sendDepositReminders() {
           AND COALESCE(paid_amount,0) = 0
           AND deposit_nudged_at IS NULL
           AND cancelled_at IS NULL
+          AND delivered_at IS NULL   -- delivered: a balance, not a deposit to chase (Codex #180)
           AND accepted_at <= NOW() - ($1 || ' hours')::interval
           AND (email <> '' OR COALESCE(phone, '') <> '')
           AND NOT EXISTS (SELECT 1 FROM quote_payments p
@@ -28401,14 +28440,36 @@ app.post('/admin/lead/:id/email', requireAdmin, async (req, res) => {
     const to = String(l.email || '').trim();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return back(res, backTo, 'err', 'This lead has no email address.');
     const noteBody = `Emailed "${m.subject}":\n${m.text}`;
-    // A second press, or a reload of the send: the same email is not sent twice.
-    const { rows: dup } = await pool.query(
-      `SELECT 1 FROM lead_notes WHERE submission_id = $1 AND kind = 'email' AND body = $2 AND created_at > NOW() - INTERVAL '10 minutes'`,
-      [id, noteBody]);
-    if (dup.length) return back(res, backTo, 'ok', 'That email was already sent.');
-    await sendEmail({ to, subject: m.subject, html: LEADMAIL.toHtml(m.text), text: m.text, promo: false });
-    await pool.query(`INSERT INTO lead_notes (submission_id, kind, body, staff_id) VALUES ($1, 'email', $2, $3)`,
-      [id, noteBody, actor && actor.kind === 'staff' ? actor.id : null]);
+    /* A second press, or a reload of the send: the same email is not sent twice.
+       The note is the claim, written under a per-lead lock BEFORE the provider
+       is called: two presses used to both find no note and both send, and a
+       note that failed to save after a send invited a retry that sent again
+       (Codex #179). A send that fails takes its claim back out. */
+    let noteId = null;
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock($1, $2)', [7303, id]);
+      const { rows: [claim] } = await client.query(
+        `INSERT INTO lead_notes (submission_id, kind, body, staff_id)
+         SELECT $1, 'email', $2::text, $3
+          WHERE NOT EXISTS (SELECT 1 FROM lead_notes WHERE submission_id = $1 AND kind = 'email' AND body = $2::text
+                               AND created_at > NOW() - INTERVAL '10 minutes')
+         RETURNING id`,
+        [id, noteBody, actor && actor.kind === 'staff' ? actor.id : null]);
+      await client.query('COMMIT');
+      noteId = claim ? claim.id : null;
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally { client.release(); }
+    if (!noteId) return back(res, backTo, 'ok', 'That email was already sent.');
+    try {
+      await sendEmail({ to, subject: m.subject, html: LEADMAIL.toHtml(m.text), text: m.text, promo: false });
+    } catch (e) {
+      await pool.query('DELETE FROM lead_notes WHERE id = $1', [noteId]).catch(() => {});
+      throw e;
+    }
     if (!(await markLeadResponded(id, actor))) {
       return back(res, backTo, 'err', `Email sent to ${to}, but the lead could not be marked Contacted. Mark it by hand.`);
     }
@@ -28803,12 +28864,15 @@ app.post('/admin/tasks/:id/done', requireAdmin, async (req, res) => {
   const backTo = safeAdminPath(req.body && req.body.back, '/admin/my-day');
   if (!id) return res.redirect(backTo);
   try {
-    /* A helper closes only their own tasks (or unassigned ones); the owner any. */
+    /* A helper closes only a task they started (which made it theirs); the
+       owner any. Done without Start skipped the accepting step the page asks
+       for, by a direct post or a tab loaded before Start existed (Codex #201). */
     const staffId = actor && actor.kind === 'staff' ? actor.id : null;
-    await pool.query(
+    const { rowCount } = await pool.query(
       `UPDATE staff_tasks SET done_at = NOW(), done_by = $2
-        WHERE id = $1 AND done_at IS NULL AND ($2::int IS NULL OR assigned_to = $2 OR assigned_to IS NULL)`,
+        WHERE id = $1 AND done_at IS NULL AND ($2::int IS NULL OR (assigned_to = $2 AND started_at IS NOT NULL))`,
       [id, staffId]);
+    if (!rowCount) return back(res, backTo, 'err', staffId ? 'Press Start on the task first, then Done.' : 'That task is already closed.');
     return res.redirect(backTo);
   } catch (err) {
     console.error('task done failed:', err.message);
@@ -28848,15 +28912,19 @@ app.get('/admin/resources', requireAdmin, async (req, res) => {
       ${owner ? `<details style="margin-top:8px"><summary class="muted">Edit</summary>
         <form method="post" action="/admin/resources/${r.id}" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
           ${resourceFields(r)}
-          <button type="submit" name="action" value="save" class="btn btn-ghost">Save</button>
-          <button type="submit" name="action" value="delete" class="btn btn-ghost">Remove</button></form></details>` : ''}</div>`;
+          <button type="submit" name="action" value="save" class="btn btn-ghost">Save</button></form>
+        <!-- Its own form, and a box to tick: Remove sat beside Save and deleted at once (Codex #201). -->
+        <form method="post" action="/admin/resources/${r.id}" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
+          <input type="hidden" name="action" value="delete">
+          <label class="muted" style="font-size:12.5px"><input type="checkbox" name="confirm" value="1" required> Remove ${escEmail(r.name)} for good</label>
+          <button type="submit" class="btn btn-ghost">Remove</button></form></details>` : ''}</div>`;
     res.set('Cache-Control', 'no-store');
     res.send(adminPage('Resources', `
       ${pageHeader('Resources', owner ? 'The tools the team works in. Helpers see the ones for everyone and for their own path.'
         : 'The tools you work in. Your logins are in the team password manager; ask June if one is missing.')}
       ${flash(req.query)}
       <div class="card" style="border-left:4px solid #F4A623"><b>🔐 Logins never go here, or in chat, email or texts.</b>
-        <div class="row-sub" style="white-space:normal">They live in the team password manager. June invites you to it; it is listed below with the other tools.</div></div>
+        <div class="row-sub" style="white-space:normal">They live in the team password manager, which June invites you to.</div></div>
       ${rows.length ? rows.map(card).join('') : `<div class="card">${emptyState(owner ? 'No tools listed yet. Add the first one below.' : 'No tools listed yet. Ask June.')}</div>`}
       ${owner ? `<details class="card"><summary><b>Add a tool</b></summary>
         <form method="post" action="/admin/resources" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
@@ -28898,6 +28966,7 @@ app.post('/admin/resources/:id', requireAdmin, async (req, res) => {
   if (!id) return back(res, '/admin/resources', 'err', 'No such tool.');
   try {
     if (b.action === 'delete') {
+      if (String(b.confirm || '') !== '1') return back(res, '/admin/resources', 'err', 'Tick the box to confirm the removal.');
       const { rowCount } = await pool.query('DELETE FROM staff_resources WHERE id = $1', [id]);
       return back(res, '/admin/resources', rowCount ? 'ok' : 'err', rowCount ? 'Removed.' : 'No such tool.');
     }
@@ -29379,8 +29448,11 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
                         ORDER BY a.decided_at DESC`, [me]) : Promise.resolve({ rows: [] }),
       can('quotes.view') ? liveJobs() : Promise.resolve([]),
     ]);
+    /* "This week" is the shop's Monday onward, the scorecard's week; seven
+       rolling days showed last Friday on a Thursday (Codex #201). */
     const doneLately = me == null ? (await pool.query(
-      `SELECT * FROM staff_tasks WHERE done_at > NOW() - interval '7 days' ORDER BY done_at DESC LIMIT 50`)).rows : [];
+      `SELECT * FROM staff_tasks WHERE done_at >= ($1::date::timestamp AT TIME ZONE $2) ORDER BY done_at DESC LIMIT 50`,
+      [TEAM.weekOf(new Date(), SHOP_TZ), SHOP_TZ])).rows : [];
     const followUps = can('leads.view') ? (await pool.query(
       `SELECT * FROM submissions WHERE next_follow_up_on <= CURRENT_DATE AND dismissed_at IS NULL
           AND ($1::int IS NULL OR assigned_to = $1 OR assigned_to IS NULL)
@@ -29594,6 +29666,31 @@ function coachingRow(n) {
     <span class="row-end muted">${escEmail(whenShort(n.created_at))}</span></div>`;
 }
 
+/* The owner's Playbook gaps. Shown with or without helpers: the facts are
+   the owner's, not a helper's, and a fresh shop with nobody on staff still
+   has them to fill in (Codex #204). */
+const gapVersion = (body) => crypto.createHash('sha256').update(String(body || '')).digest('hex').slice(0, 16);
+async function playbookGapRows() {
+  const { rows } = await pool.query('SELECT id, title, body FROM kb_articles WHERE published ORDER BY title');
+  return rows.map((a) => ({ a, holes: TRAINING.ownerGaps(a.body) })).filter((x) => x.holes.length);
+}
+function playbookGapsCard(gapRows, staffId) {
+  return `<div class="card" id="gaps"><b>Playbook gaps to fill in (${gapRows.reduce((n, x) => n + x.holes.length, 0)})</b>
+        <p class="muted">Facts only you know. Your answer replaces the blank in the Playbook article, and in the lessons that read from it.
+          Blanks inside ready-made replies, like [name] or [time], are left alone: staff fill those in for each customer.</p>
+        ${gapRows.length ? gapRows.map(({ a, holes }) => `<div class="row-i" style="display:block"><a href="/admin/playbook/${a.id}"><b>${escEmail(a.title)}</b></a>
+          ${holes.map((h) => `<form method="post" action="/admin/training/gap" style="margin:8px 0 0">
+            <input type="hidden" name="article_id" value="${a.id}"><input type="hidden" name="token" value="${escEmail(h.token)}"><input type="hidden" name="v" value="${gapVersion(a.body)}">${
+              h.nth != null ? `<input type="hidden" name="nth" value="${h.nth}"><input type="hidden" name="line" value="${escEmail(h.line)}">` : ''}
+            ${staffId ? `<input type="hidden" name="staff_id" value="${staffId}">` : ''}
+            <label style="display:block"><b>${escEmail(h.ask)}</b>
+              ${h.line && h.line !== h.token ? `<div class="row-sub" style="white-space:normal">${escEmail(h.line)}</div>` : ''}</label>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
+              <input name="answer" maxlength="500" required aria-label="${escEmail(h.ask)}"${h.hint ? ` placeholder="${escEmail(h.hint)}"` : ''} style="flex:1 1 220px">
+              <button type="submit" class="btn btn-ghost">Save</button></div></form>`).join('')}</div>`).join('')
+          : '<p class="muted">Every article is filled in.</p>'}</div>`;
+}
+
 app.get('/admin/training', requireAdmin, async (req, res) => {
   try {
     const actor = currentActor() || OWNER_ACTOR;
@@ -29604,7 +29701,8 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
     if (!staffId) {
       return res.send(adminPage('Training', `${pageHeader('Training', 'Each helper\'s path from their first day to working on their own.',
         '<a class="btn btn-ghost" href="/admin/training/paths">Every role\'s training</a>')}
-        <div class="card">${emptyState('No active helpers yet.', '<a class="btn" href="/admin/staff">Add one</a>')}</div>`, 'training'));
+        <div class="card">${emptyState('No active helpers yet.', '<a class="btn" href="/admin/staff">Add one</a>')}</div>
+        ${flash(req.query)}${owner ? playbookGapsCard(await playbookGapRows(), null) : ''}`, 'training'));
     }
     const who = owner ? roster.find((r) => r.id === staffId) : actor;
     const p = await trainingFor(staffId);
@@ -29614,7 +29712,7 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
     const [notes, arts, gaps, ...tries] = await Promise.all([
       coachingNotes(staffId),
       pool.query('SELECT id, title FROM kb_articles WHERE published AND title = ANY($1)', [titles]),
-      owner ? pool.query('SELECT id, title, body FROM kb_articles WHERE published ORDER BY title') : Promise.resolve({ rows: [] }),
+      owner ? playbookGapRows() : Promise.resolve([]),
       ...quizSteps.map((s) => quizAttempts(staffId, s.quiz)),
     ]);
     const quizTries = new Map(quizSteps.map((s, i) => [s.key, tries[i]]));
@@ -29681,7 +29779,7 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
             : doneN === work.length && work.length ? pill('done', 'green') : pill(`${doneN} of ${work.length}`, 'neutral')}</div>
         ${m.steps.map(stepRow).join('')}</div>`;
     };
-    const gapRows = gaps.rows.map((a) => ({ a, holes: TRAINING.ownerGaps(a.body) })).filter((x) => x.holes.length);
+    const gapRows = gaps;
     const roleLabel = role ? TRAINING.SALES_ROLES[role].label : null;
     const pathLabel = `${TRAINING.TRACKS[track].label}${track === 'sales' ? ` · ${roleLabel || 'all sales work'}` : ''}`;
     res.send(adminPage('Training', `
@@ -29713,20 +29811,7 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
           <input type="hidden" name="staff_id" value="${staffId}">
           <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" name="confirm" value="1" required style="width:auto"> Yes, start ${escEmail(who.name)} again</label>
           <button type="submit" class="btn">Restart training</button></form></details>
-      <div class="card" id="gaps"><b>Playbook gaps to fill in (${gapRows.reduce((n, x) => n + x.holes.length, 0)})</b>
-        <p class="muted">Facts only you know. Your answer replaces the blank in the Playbook article, and in the lessons that read from it.
-          Blanks inside ready-made replies, like [name] or [time], are left alone: staff fill those in for each customer.</p>
-        ${gapRows.length ? gapRows.map(({ a, holes }) => `<div class="row-i" style="display:block"><a href="/admin/playbook/${a.id}"><b>${escEmail(a.title)}</b></a>
-          ${holes.map((h) => `<form method="post" action="/admin/training/gap" style="margin:8px 0 0">
-            <input type="hidden" name="article_id" value="${a.id}"><input type="hidden" name="token" value="${escEmail(h.token)}">${
-              h.nth != null ? `<input type="hidden" name="nth" value="${h.nth}"><input type="hidden" name="line" value="${escEmail(h.line)}">` : ''}
-            <input type="hidden" name="staff_id" value="${staffId}">
-            <label style="display:block"><b>${escEmail(h.ask)}</b>
-              ${h.line && h.line !== h.token ? `<div class="row-sub" style="white-space:normal">${escEmail(h.line)}</div>` : ''}</label>
-            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
-              <input name="answer" maxlength="500" required aria-label="${escEmail(h.ask)}"${h.hint ? ` placeholder="${escEmail(h.hint)}"` : ''} style="flex:1 1 220px">
-              <button type="submit" class="btn btn-ghost">Save</button></div></form>`).join('')}</div>`).join('')
-          : '<p class="muted">Every article is filled in.</p>'}</div>` : ''}`, 'training'));
+      ${playbookGapsCard(gapRows, staffId)}` : ''}`, 'training'));
   } catch (err) {
     console.error('training page failed:', err.message);
     res.status(500).send(adminPage('Training', '<div class="card"><div class="warn">Could not load training.</div></div>', 'training'));
@@ -31147,8 +31232,9 @@ app.post('/admin/training/read', requireAdmin, async (req, res) => {
     return back(res, '/admin/training', 'err', 'Unknown step.');
   }
   try {
+    let p = null;
     if (s.type === 'lesson') {
-      const p = await trainingFor(actor.id);
+      p = await trainingFor(actor.id);
       if (!TRAINING.stepOpen(p, key)) return back(res, '/admin/training', 'err', 'That lesson opens once you pass the quiz before it.');
       await pool.query(
         `INSERT INTO staff_lesson_time (staff_id, step_key, started_at, done_at) VALUES ($1, $2, NOW(), NOW())
@@ -31156,7 +31242,15 @@ app.post('/admin/training/read', requireAdmin, async (req, res) => {
     }
     await pool.query(`INSERT INTO staff_training (staff_id, step_key) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [actor.id, key]);
     if (s.type === 'lesson') {
-      return back(res, `/admin/training/lesson/${encodeURIComponent(key.slice('lesson:'.length))}`, 'ok', `Done: ${s.title}.`);
+      /* On to the next lesson or quiz, as the page promised. Back to this
+         lesson's base URL was page 1 of what was just finished (Codex #202). */
+      const walk = p.steps.filter((x) => x.type === 'lesson' || x.type === 'quiz');
+      const nx = walk[walk.findIndex((x) => x.key === key) + 1];
+      const to = nx && !nx.locked
+        ? (nx.type === 'lesson' ? `/admin/training/lesson/${encodeURIComponent(nx.key.slice('lesson:'.length))}`
+          : `/admin/training/quiz/${encodeURIComponent(nx.quiz)}`)
+        : '/admin/training';
+      return back(res, to, 'ok', `Done: ${s.title}.`);
     }
     return back(res, '/admin/training', 'ok', `Ticked: ${s.title}.`);
   } catch (err) {
@@ -31216,8 +31310,11 @@ app.post('/admin/training/restart', requireAdmin, async (req, res) => {
   const staffId = intIn(b.staff_id);
   if (!staffId) return back(res, '/admin/training', 'err', 'No such helper.');
   if (String(b.confirm || '') !== '1') return back(res, `/admin/training?staff=${staffId}`, 'err', 'Tick the box to confirm the restart.');
-  const client = await pool.connect();
+  /* Connected inside the try: a pool that cannot hand out a client is a
+     "could not restart", not an unhandled rejection (Codex #195). */
+  let client = null;
   try {
+    client = await pool.connect();
     await client.query('BEGIN');
     const { rows: [st] } = await client.query('SELECT id, name FROM staff WHERE id = $1', [staffId]);
     if (!st) { await client.query('ROLLBACK'); return back(res, '/admin/training', 'err', 'No such helper.'); }
@@ -31238,11 +31335,11 @@ app.post('/admin/training/restart', requireAdmin, async (req, res) => {
     await client.query('COMMIT');
     return back(res, `/admin/training?staff=${staffId}`, 'ok', `${st.name} starts training from the beginning.`);
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
+    if (client) await client.query('ROLLBACK').catch(() => {});
     console.error('training restart failed:', err.message);
     return back(res, `/admin/training?staff=${staffId}`, 'err', 'Could not restart. Try again.');
   } finally {
-    client.release();
+    if (client) client.release();
   }
 });
 
@@ -31275,14 +31372,24 @@ app.post('/admin/training/gap', requireAdmin, async (req, res) => {
     const nth = String(b.nth ?? '') === '' ? null : (/^\d{1,3}$/.test(String(b.nth)) ? Number(b.nth) : -1);
     /* The line too: filling one bare gap renumbers the rest, so a form left
        open in another tab must not land on a different blank. */
-    if (!a || !TRAINING.ownerGaps(a.body).some((h) => h.token === token && (h.nth ?? null) === nth
-        && (nth == null || h.line === String(b.line || '').trim()))) {
-      return back(res, to, 'err', 'That gap is already filled in.');
+    const hole = a && TRAINING.ownerGaps(a.body).find((h) => h.token === token && (h.nth ?? null) === nth
+        && (nth == null || h.line === String(b.line || '').trim()));
+    if (!hole) return back(res, to, 'err', 'That gap is already filled in.');
+    /* The answer is written into the version the owner was shown: another
+       edit since then, even one leaving this blank in place, is not answered
+       blind (Codex #204). */
+    if (String(b.v || '') !== gapVersion(a.body)) {
+      return back(res, to, 'err', 'The article changed since this page loaded. Reload it and answer again.');
     }
-    const body = TRAINING.fillGap(a.body, token, answer, nth);
+    /* "[X] business days" keeps its words, so the answer is the number alone (Codex #204). */
+    const fill = hole.hint ? TRAINING.dayCount(answer) : answer;
+    if (!fill) return back(res, to, 'err', 'Type just the number of days, for example 7.');
+    const body = TRAINING.fillGap(a.body, token, fill, nth);
     if (!body) return back(res, to, 'err', 'Type the answer first.');
+    /* needs_review stays as it was: one blank answered is not the rest of a
+       starter draft checked (Codex #204). */
     const { rowCount } = await pool.query(
-      `UPDATE kb_articles SET body = $2, updated_by = NULL, needs_review = FALSE, updated_at = NOW() WHERE id = $1 AND body = $3`,
+      `UPDATE kb_articles SET body = $2, updated_by = NULL, updated_at = NOW() WHERE id = $1 AND body = $3`,
       [id, body, a.body]);
     if (!rowCount) return back(res, to, 'err', 'The article changed while you were typing. Try again.');
     return back(res, to, 'ok', `Saved in "${a.title}".`);
@@ -32201,11 +32308,14 @@ KB_ADDED.push(...TRAINING.lessonArticles());
 async function addPlaybookArticles() {
   /* US spelling (owner, 2026-10-08: "spell color like this"). A saved article
      whose ONLY difference from the current text is colour/color is brought up
-     to date; one the owner has edited in any other way is left alone. */
+     to date; one the owner has edited in any other way is left alone. Both
+     sides are normalised: a current text that still mixes the two spellings
+     could never equal a fully converted saved copy (Codex #197). */
   for (const a of [...KB_SEED, ...KB_ADDED]) {
     await pool.query(
       `UPDATE kb_articles SET body = $2, updated_at = NOW()
-        WHERE title = $1 AND body <> $2 AND regexp_replace(body, '([Cc])olour', '\\1olor', 'g') = $2`,
+        WHERE title = $1 AND body <> $2
+          AND regexp_replace(body, '([Cc])olour', '\\1olor', 'g') = regexp_replace($2::text, '([Cc])olour', '\\1olor', 'g')`,
       [a.title, a.body])
       .catch((e) => console.error(`playbook article "${a.title}" spelling not updated:`, e.message));
   }
@@ -32219,7 +32329,12 @@ async function addPlaybookArticles() {
       .catch((e) => console.error(`playbook article "${a.title}" not added:`, e.message));
     if (a.was && a.was.length) {
       await pool.query(
-        `UPDATE kb_articles SET body = $2, tags = $3, updated_at = NOW() WHERE title = $1 AND body = ANY($4::text[])`,
+        /* Spelling-blind: a `was` rebuilt from the partly US-spelled current
+           text must still match a live copy saved with every "colour" (Codex #197). */
+        `UPDATE kb_articles SET body = $2, tags = $3, updated_at = NOW()
+          WHERE title = $1 AND body <> $2
+            AND regexp_replace(body, '([Cc])olour', '\\1olor', 'g')
+                = ANY(SELECT regexp_replace(w, '([Cc])olour', '\\1olor', 'g') FROM unnest($4::text[]) AS w)`,
         [a.title, a.body, a.tags || '', a.was])
         .catch((e) => console.error(`playbook article "${a.title}" not updated:`, e.message));
     }

@@ -36,13 +36,20 @@ let last = 0;
 async function ssa(p, tries = 5) {
   let st = 0;
   for (let i = 0; i < tries; i++) {
-    const wait = Math.max(0, last + 700 - Date.now()) + (i ? 1200 * i * i : 0);
+    /* S&S allows 60 requests a minute: one a second at most. 700 ms was about
+       86 a minute and drew its own 429s (Codex #232). */
+    const wait = Math.max(0, last + 1000 - Date.now()) + (i ? 1200 * i * i : 0);
     if (wait) await new Promise((r) => setTimeout(r, wait));
     last = Date.now();
     try {
       const r = await fetch(API + p, { headers: { Authorization: auth, Accept: 'application/json' }, signal: AbortSignal.timeout(60000) });
       st = r.status;
-      if (r.status === 429 || r.status >= 500) continue;
+      if (r.status === 429 || r.status >= 500) {
+        /* Wait as long as S&S says before the next try, when it says. */
+        const after = Number(r.headers.get('retry-after'));
+        if (after > 0 && after <= 120) last = Date.now() + after * 1000 - 1000;
+        continue;
+      }
       /* Verb, route and S&S's own words: a bad key, a refused IP and a wrong
          route must not all read "unreachable" (Codex #232). */
       if (!r.ok) throw new Error('S&S GET ' + p.split('?')[0] + ' returned ' + r.status + ': ' + (await r.text().catch(() => '')).slice(0, 200));

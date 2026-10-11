@@ -11,7 +11,9 @@ module.exports = {
   '[owner to fill in: the cost per quote request we aim for]':
     'under $15 to start.',
   '[owner to fill in: the monthly ad budget, and the most any day may spend]':
-    '$100 a month to start (about $3 a day), and never more than $5 on any one day. June raises it only once the ads bring quote requests at our target',
+    /* Codex #230: Google may spend up to twice a daily budget, so a $3 daily
+       budget allowed a $6 day. Half the cap keeps every day under it. */
+    '$100 a month at most to start, and never more than $5 on any one day. Google may spend up to twice the daily budget on a busy day, so set it to $2.50 a day (about $76 a month): then no day can pass $5. June raises it only once the ads bring quote requests at our target',
   '[owner to fill in: how the ads person is given access to Google Ads and Meta, and at what access level]':
     'June invites your own Google account to Google Ads with Standard access, and gives you the Advertiser role in Meta Business Suite. Never a shared login.',
   '[owner to fill in: which conversions are set up in Google Ads and Meta today, and anything known to be broken]':
@@ -57,7 +59,7 @@ module.exports = {
   '[owner to fill in: which other sites and apps the developer looks after, and where each lives]':
     'For now, jtees.net and the design studio at design.jtees.net. Other projects only when June asks.',
   '[owner to fill in: how the developer is given access to GitHub, Railway, Sentry and Stripe, and at what level]':
-    'June adds you on GitHub with Write access to the junesteesnthings-backend and lumise-designer repositories, and approves every pull request before it is merged. To start, you work only with Stripe test keys and a local database: no Railway, live Stripe or Sentry access. When you need production logs or errors, ask June and she shares them.',
+    'June adds you on GitHub with Write access to the junesteesnthings-backend and lumise-designer repositories, and approves every pull request before it is merged. The repository rules tell Claude Code to merge its own finished pull request; you do not: tell it to stop at an open pull request, and GitHub keeps main locked until June approves. To start, you work only with Stripe test keys and a local database: no Railway, live Stripe or Sentry access. When you need production logs or errors, ask June and she shares them.',
   '[owner to fill in: hours the developer should avoid deploying]':
     'Monday to Friday, 9am to 3pm Chicago time. Ship early in the morning or after 6pm, when you can watch for an hour',
   '[owner to fill in: how the developer reaches June in an outage]':

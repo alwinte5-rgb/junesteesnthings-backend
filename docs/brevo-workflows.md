@@ -21,7 +21,7 @@ errors without throwing.
 | # | Sequence | Fires when | Tunable | Function |
 |---|---|---|---|---|
 | 1 | **Quote follow-up** | 3 days after a quote goes unaccepted, while it is still valid | `JT_QUOTE_FOLLOWUP_DAYS` | `sendQuoteFollowUps` |
-| 2 | **Deposit reminder** | 2 days after acceptance with nothing paid | `JT_DEPOSIT_NUDGE_DAYS` | `sendDepositReminders` |
+| 2 | **Deposit reminder** | 12 hours after acceptance with nothing paid | `JT_DEPOSIT_NUDGE_HOURS` | `sendDepositReminders` |
 | 3 | **Balance reminder** | 7 days after a deposit, balance still outstanding | `JT_BALANCE_NUDGE_DAYS` | `sendBalanceReminders` |
 | 4 | **Review request** | after delivery, on the stored due date | — | `sendDueReviewRequests` |
 | 5 | **Reorder nudge** | 90 days after paid in full, if they have not been back | `JT_REORDER_NUDGE_DAYS` | `sendReorderNudges` |
@@ -50,7 +50,7 @@ Set the env var on the `junesteesnthings-backend` service; no code change:
 
 ```
 JT_QUOTE_FOLLOWUP_DAYS=3
-JT_DEPOSIT_NUDGE_DAYS=2
+JT_DEPOSIT_NUDGE_HOURS=12   # was JT_DEPOSIT_NUDGE_DAYS (days), which is no longer read
 JT_BALANCE_NUDGE_DAYS=7
 JT_REORDER_NUDGE_DAYS=90
 ```

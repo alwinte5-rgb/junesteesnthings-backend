@@ -57,8 +57,13 @@ const REWORDED = [
   ['point them to the quote form and post it in # Everyone for sales\n', 'point them to the quote form and post it in # Sales\n'],
   ['Ask sales in # Everyone which quote requests', 'Ask in # Sales which quote requests'],
   ['every Monday, sales posts in # Everyone which', 'every Monday, sales posts in # Sales which'],
+  /* Codex #230: the ad cap now allows for Google's overdelivery, and the
+     developer is told the repo's self-merge rule is not theirs. */
+  ['$100 a month at most to start, and never more than $5 on any one day. Google may spend up to twice the daily budget on a busy day, so set it to $2.50 a day (about $76 a month): then no day can pass $5. June raises it',
+   '$100 a month to start (about $3 a day), and never more than $5 on any one day. June raises it'],
+  [' The repository rules tell Claude Code to merge its own finished pull request; you do not: tell it to stop at an open pull request, and GitHub keeps main locked until June approves.', ''],
 ];
-for (const c of [SALES_CORE, CONTENT_CORE, ADS_CORE]) {
+for (const c of [SALES_CORE, CONTENT_CORE, ADS_CORE, DEV_CORE]) {
   for (const l of c.modules.flatMap((m) => m.lessons)) {
     if (typeof l.body !== 'string' || !REWORDED.some(([now]) => l.body.includes(now))) continue;
     l.was = [...(l.was || []), REWORDED.reduce((b, [now, then]) => b.split(now).join(then), l.body)];

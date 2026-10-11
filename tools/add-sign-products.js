@@ -17,7 +17,7 @@
  */
 const fs = require('fs');
 const F = require('./lib/sign-families');
-const { mysql, enjson, sq } = require('./lib/db');
+const { mysql, enjson, sq, mysqlUrlFrom } = require('./lib/db');
 
 /* Shop titles (owner, 2026-10-10: "what's a custom rigid sign? Be more
    specific in the titles"). Each one STARTS with the words the quote form and
@@ -36,6 +36,14 @@ const NAMES = {
 };
 /* What each product was called before, so a run finds the row and renames it
    instead of creating a second one. */
+/* The drawing tools/make-product-thumbs.js points each at, set on create so a
+   new product never shows as a broken image (Codex #181). */
+const THUMBS = {
+  yard_sign: 'yard-signs', rigid_sign: 'rigid-signs', window_graphic: 'window-wall-graphics',
+  wall_floor: 'wall-floor-graphics', vehicle_graphic: 'vehicle-graphics', vehicle_magnet: 'vehicle-magnets',
+  custom_magnet: 'vehicle-magnets', photo_panel: 'acrylic-canvas', stretched_canvas: 'stretched-canvas',
+};
+const thumbOf = (key) => 'https://www.jtees.net/assets/images/products/' + THUMBS[key] + '.svg';
 const OLD_NAMES = {
   yard_sign: 'Custom Yard Signs', rigid_sign: 'Custom Rigid Signs', window_graphic: 'Custom Window Graphics',
   wall_floor: 'Custom Wall & Floor Graphics', vehicle_graphic: 'Custom Vehicle Graphics', vehicle_magnet: 'Custom Vehicle Magnets',
@@ -104,7 +112,7 @@ function familyStages() {
   return { front: side('Front'), back: side('Back') };
 }
 
-module.exports = { NAMES, OLD_NAMES, LEADS, descriptionOf, CATEGORIES, familyAttributes, familyStages };
+module.exports = { NAMES, OLD_NAMES, THUMBS, LEADS, descriptionOf, CATEGORIES, familyAttributes, familyStages };
 if (require.main !== module) return;
 
 const argv = process.argv.slice(2);
@@ -112,7 +120,7 @@ const APPLY = argv.includes('--apply');
 const varsFile = ((argv.find((x) => x.startsWith('--vars=')) || '').split('=').slice(1).join('=') || '').replace(/^~/, process.env.HOME);
 if (!varsFile) { console.error('usage: add-sign-products.js --vars=<file> [--apply]'); process.exit(2); }
 const env = JSON.parse(fs.readFileSync(varsFile, 'utf8'));
-const url = env.MYSQL_PUBLIC_URL || env.MYSQL_URL;
+const url = mysqlUrlFrom(env);
 if (!url) { console.error('no MySQL URL'); process.exit(2); }
 
 console.log(APPLY ? 'APPLYING' : 'DRY RUN');
@@ -129,7 +137,7 @@ for (const [key, name] of Object.entries(NAMES)) {
   } else {
     mysql(url, 'INSERT INTO lumise_products (name,description,price,supplier_cost,stages,attributes,printings,'
       + 'thumbnail_url,active,`order`,author,created,updated) VALUES (' + sq(name) + ',' + desc
-      + ',0,0,' + stages + ',' + attrs + ",'','',1,997," + sq(author) + ',NOW(),NOW());');
+      + ',0,0,' + stages + ',' + attrs + ",''," + sq(thumbOf(key)) + ',1,997,' + sq(author) + ',NOW(),NOW());');
   }
 }
 
