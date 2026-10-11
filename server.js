@@ -25049,6 +25049,12 @@ app.post('/admin/shipping/buy', requireAdmin, async (req, res) => {
     if (body && body.label && body.label.label_url) {
       if (r.kind === 'quote') await keepQuoteLabel(r.code, body.label);
       console.log(`shipping: label ${body.already ? 'already on' : 'bought for'} ${r.ref}`);
+      /* The studio bought it but could not save it on the order: say so, with
+         the PDF, so it is printed now rather than looked for after a refresh
+         (designer Codex #12). A second press finds it in Shippo, not buys it. */
+      if (r.kind !== 'quote' && body.saved === false) {
+        return shipBack(res, r.ref, 'warn', `Label bought, but the studio could not save it on the order. Print it now: ${body.label.label_url}. Pressing Buy again finds this one in Shippo rather than buying another.`);
+      }
       return shipBack(res, r.ref, 'ok', body.already
         ? 'It already had a label, so no second one was bought. Print it below.'
         : `Label bought: ${body.label.name || 'label'}${body.label.amount != null ? ', ' + money(body.label.amount) : ''}. Print it, and mark it shipped once it has gone.`);

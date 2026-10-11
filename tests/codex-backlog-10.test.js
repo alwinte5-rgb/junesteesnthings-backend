@@ -25,3 +25,8 @@ test('#108 each payment keeps whether the sale was exempt when it was banked', (
   assert.match(after('const { rows: exempt } = await pool.query(', 1200), /WHERE COALESCE\(p\.exempt, COALESCE\(q\.taxable, q\.tax > 0\) = false\)/);
   assert.match(src, /CASE WHEN p\.exempt IS NOT NULL THEN NOT p\.exempt ELSE q\.taxable END AS taxable/, 'the tax export reads it too');
 });
+
+test('designer #12: a label bought but not saved on the studio order is said, with the PDF', () => {
+  const r = src.slice(src.indexOf("const { body, timedOut } = await studioShip(payload, 75000);"));
+  assert.match(r.slice(0, 1600), /if \(r\.kind !== 'quote' && body\.saved === false\) \{\s*return shipBack\(res, r\.ref, 'warn', `Label bought, but the studio could not save it/);
+});
