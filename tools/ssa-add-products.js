@@ -51,6 +51,10 @@ const CORE = CORE_SIZES;
 const TYPES = {
   tee:      { raws: 'basic_tshirt',       front: { height: 280, width: 175, left: -2.5, top: -7.5 },
               back: { height: 339, width: 160, left: -4, top: -11 } },
+  /* A tank opens on tank art, not a T-shirt (canvas-audit accepts only /tank/
+     for a tank; Codex #223). Narrower body, chest below the scoop neck. */
+  tank:     { raws: 'tank_tops',          front: { height: 250, width: 150, left: 0, top: 15 },
+              back: { height: 300, width: 150, left: 0, top: 0 } },
   longslv:  { raws: 'long_sleeve',        front: { height: 280, width: 175, left: -2.5, top: -7.5 },
               back: { height: 339, width: 160, left: -4, top: -11 } },
   polo:     { raws: 'polo_core365',       front: { height: 200, width: 170, left: 0, top: 25 },
@@ -225,7 +229,7 @@ const WANTED = [
   ['1717',     'tee',     'Comfort',     'Comfort Colors 1717 Garment-Dyed Heavyweight Tee'],
   ['SS4500',   'hoodie',  'Independent', 'Independent Trading SS4500 Midweight Hooded Sweatshirt'],
   ['18500',    'hoodie',  'Gildan',      'Gildan 18500 Heavy Blend Hooded Sweatshirt'],
-  ['3483',     'tee',     'BELLA',       'BELLA + CANVAS 3483 Jersey Muscle Tank'],
+  ['3483',     'tank',    'BELLA',       'BELLA + CANVAS 3483 Jersey Muscle Tank'],
 ];
 
 /* Sublimation needs a poly garment, so it is added only where the fabric
@@ -281,6 +285,23 @@ function makeClient(acct, key) {
 const enjson = (o) => Buffer.from(encodeURIComponent(JSON.stringify(o)), 'utf8').toString('base64');
 const money = (n) => Math.round(Number(n) * 100) / 100;
 
+/* What this account PAYS (customerPrice), not S&S's list price, and the MEDIAN
+   colour per size: the same figures tools/ssa-sync.js keeps the catalogue on.
+   Built from the list price and the cheapest colour, a new style's extended-size
+   prices were wrong for good, because the hourly sync corrects the base price
+   but never rebuilds the size options (Codex #223). */
+const pieceCost = (r) => Number(r.customerPrice || r.piecePrice || r.casePrice || 0);
+function costBySize(rows) {
+  const per = {};
+  for (const r of rows) { const c = pieceCost(r); if (r.sizeName && c) (per[r.sizeName] = per[r.sizeName] || []).push(c); }
+  const out = {};
+  for (const [size, xs] of Object.entries(per)) {
+    const a = xs.slice().sort((x, y) => x - y); const m = a.length >> 1;
+    out[size] = a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+  }
+  return out;
+}
+
 function buildStages(type) {
   const t = TYPES[type];
   const shape = (side, zone) => ({
@@ -297,11 +318,10 @@ function buildStages(type) {
 
 /** Sizes and colours, from what S&S actually stocks. */
 function buildAttributes(rows, baseCost) {
-  const sizeCost = {}, order = {}, colours = new Map();
+  const sizeCost = costBySize(rows), order = {}, colours = new Map();
   for (const r of rows) {
-    const c = Number(r.piecePrice || r.casePrice || 0);
+    const c = pieceCost(r);
     if (!r.sizeName || !c) continue;
-    if (!sizeCost[r.sizeName] || c < sizeCost[r.sizeName]) sizeCost[r.sizeName] = c;
     if (order[r.sizeName] === undefined) order[r.sizeName] = Number(r.sizeOrder || 999);
     if (r.colorName && !colours.has(r.colorName)) {
       colours.set(r.colorName, '#' + String(r.color1 || '000000').replace(/^#/, ''));
@@ -376,7 +396,7 @@ function buildAttributes(rows, baseCost) {
  */
 function defaultColourImage(rows) {
   for (const r of rows) {
-    const c = Number(r.piecePrice || r.casePrice || 0);
+    const c = pieceCost(r);
     if (!r.sizeName || !c || !r.colorName) continue;
     if (r.colorFrontImage) return 'https://cdn.ssactivewear.com/' + r.colorFrontImage;
   }
@@ -487,14 +507,16 @@ async function run(env) {
       skipped++; continue;
     }
 
-    let baseCost = Infinity, il = 0;
+    let il = 0;
     const seenSizes = new Set(), seenCols = new Set();
+    const bySize = costBySize(rows);
+    /* Cheapest CORE size of the typical colour, as ssa-sync's baseCost(). */
+    const baseCost = Math.min(...CORE.filter((z) => bySize[z]).map((z) => bySize[z]), Infinity);
     for (const r of rows) {
-      const c = Number(r.piecePrice || r.casePrice || 0);
+      const c = pieceCost(r);
       if (!r.sizeName || !c) continue;
       seenSizes.add(r.sizeName);
       if (r.colorName) seenCols.add(r.colorName);
-      if (CORE.includes(r.sizeName) && c < baseCost) baseCost = c;
       if (CORE.includes(r.sizeName)) {
         for (const w of r.warehouses || []) if (w.warehouseAbbr === HOME) il += w.qty;
       }
@@ -559,6 +581,16 @@ async function run(env) {
 
   mysql(dbUrl, "SET SESSION sql_mode='';\nSTART TRANSACTION;\n" + stmts.join('\n') + '\nCOMMIT;');
   console.log('done.');
+  /* Filed into their categories in the same run: this tool writes no category
+     row, so a new hoodie was missing from Hoodies until somebody remembered
+     categorise-products (Codex #223). Its own dry-run logic decides the rows. */
+  const cat = require('child_process').spawnSync(process.execPath,
+    [require('path').join(__dirname, 'categorise-products.js'), '--apply'],
+    { input: JSON.stringify({ MYSQL_PUBLIC_URL: dbUrl, SSA_ACCOUNT: env.SSA_ACCOUNT, SSA_API_KEY: env.SSA_API_KEY }), stdio: ['pipe', 'inherit', 'inherit'] });
+  if (cat.status !== 0) {
+    console.error('\n  products added, but filing them into categories FAILED: run tools/categorise-products.js --apply');
+    process.exit(1);
+  }
   process.exit(apiErrors ? 1 : 0);
 }
 

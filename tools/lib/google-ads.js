@@ -110,7 +110,12 @@ function createClient({ env = process.env, fetchImpl = globalThis.fetch, now = (
     if (!res.ok) {
       /* Keep Google's reason codes, which explainError reads; never the request. */
       const detail = body ? JSON.stringify(body.error || body).slice(0, 600) : text.slice(0, 200);
-      const e = new Error(`HTTP ${res.status}: ${detail}`);
+      /* Which service, verb and route: a token refusal and a search refusal must
+         not read the same in the digest (Codex #137). The path only, never the
+         query or body, which can carry credentials. */
+      let where = '';
+      try { const u = new URL(url); where = `${u.hostname}${u.pathname}`; } catch { where = 'google'; }
+      const e = new Error(`Google ${String((init && init.method) || 'GET').toUpperCase()} ${where}: HTTP ${res.status}: ${detail}`);
       e.code = body && (body.error === 'invalid_grant' ? 'invalid_grant' : body.error && body.error.status);
       throw e;
     }

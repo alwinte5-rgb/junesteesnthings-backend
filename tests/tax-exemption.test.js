@@ -382,10 +382,12 @@ test('the exempt query survives a database that has not migrated yet', () => {
   /* q.taxable does not exist until initDB has run. Without the catch, the
      whole tax page dies on a stale schema instead of degrading. */
   const fn = lift('taxPositionByMonth');
-  const i = fn.indexOf('WHERE COALESCE(q.taxable');
+  /* Anchored on the column it SELECTS, not on the WHERE it guards (Codex #108):
+     a rewritten condition still reaches the assertion that matters. */
+  const i = fn.indexOf('AS exempt_gross');
   assert.notStrictEqual(i, -1, 'exempt query not found');
   /* Degrades to no rows, and (Codex #108) says so in the error digest. */
-  assert.match(fn.slice(i, i + 420), /\.catch\(\(err\) => \{ if \(typeof reportError === 'function'\) reportError\('tax:position-query', err\)\.catch\(\(\) => \{\}\); return \{ rows: \[\] \}; \}\)/,
+  assert.match(fn.slice(i, i + 900), /\.catch\(\(err\) => \{ if \(typeof reportError === 'function'\) reportError\('tax:position-query', err\)\.catch\(\(\) => \{\}\); return \{ rows: \[\] \}; \}\)/,
     'a missing column must not take the tax position down with it');
 });
 

@@ -55,7 +55,11 @@ function leadsDesk(rows) {
   const seen = [];
   const sandbox = { pool: { query: async (sql) => { seen.push(sql); return { rows: rows.map((r) => ({ ...r })) }; } } };
   vm.createContext(sandbox);
-  const kinds = src.match(/^const CONTACT_KINDS = .*;$/m)[0];
+  /* Found by name, whatever its layout, so a reformat reaches the behaviour
+     assertions instead of crashing the extraction (Codex #179). */
+  const kAt = src.indexOf('const CONTACT_KINDS =');
+  assert.notStrictEqual(kAt, -1, 'CONTACT_KINDS is gone: leadsWithStatus reads it');
+  const kinds = src.slice(kAt, src.indexOf(';', kAt) + 1);
   vm.runInContext([MATCH, kinds, liftFn('leadsWithStatus'), liftFn('unansweredLeads')].join('\n'), sandbox);
   return { sandbox, seen };
 }
@@ -117,7 +121,9 @@ test('the board, the Leads page, the dashboard and the menu badge share one defi
   assert.match(counts.slice(0, 800), /unansweredLeads\(\)/, 'the menu badge');
   const dash = src.slice(src.indexOf("app.get('/admin/dashboard', requireAdmin"));
   assert.match(dash.slice(0, 4000), /leadsWithStatus\(\)/, 'the dashboard');
-  assert.strictEqual((src.match(/FROM submissions s\b/g) || []).length, 1,
+  /* Other reads of submissions (a returning-customer lookup, a rep's counts)
+     decide nothing about waiting; the linked-quote test that does is one copy. */
+  assert.strictEqual((src.match(/\) AS linked_quote,/g) || []).length, 1,
     'one query decides who is waiting; a second copy drifts');
 });
 

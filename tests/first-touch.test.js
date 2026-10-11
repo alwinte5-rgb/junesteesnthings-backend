@@ -92,7 +92,7 @@ test('quote requests and embroidery requests save it; the owner sees it, escaped
   const server = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
   assert.match(server, /ALTER TABLE submissions ADD COLUMN IF NOT EXISTS first_touch JSONB/);
   assert.match(server, /first_touch: parseFirstTouch\(req\.headers\.cookie\) \}/);
-  assert.match(server, /INSERT INTO submissions \(name, phone, email, description, photo_url, dedupe_key, first_touch\)/);
+  assert.match(server, /INSERT INTO submissions \(name, phone, email, description, photo_url, dedupe_key, first_touch[,)]/);
   assert.match(server, /dedupe_key, source, first_touch\)\s+VALUES \(\$1,\$2,\$3,\$4,\$5,\$6,'embroidery',\$7\)/);
   assert.match(server, /Came from: <b style="color:#0B1F4B">\$\{\s*escEmail\(firstTouchLabel\(l\.first_touch\)\)\}/);
   assert.match(server, /landed on \$\{escEmail\(l\.first_touch\.land\)\}/);

@@ -77,7 +77,7 @@ test('one text for all of them: first names, source, age, never a number or emai
 
 test('server: calls are leads, nudges are claimed before sending, in the hourly sweep', () => {
   assert.match(server, /phone: +\['Phone call', 'amber'\]/);
-  assert.match(server, /const SOURCES = \['all', 'form', 'embroidery', 'chat', 'phone', 'social'\]/);
+  assert.match(server, /const SOURCES = \['all', 'form', 'designer', 'embroidery', 'chat', 'phone', 'social'\]/);
   assert.match(server, /app\.post\('\/admin\/leads\/call', requireAdmin,/);
   assert.match(server, /\$\{logCallForm\(\)\}\s+\$\{addLeadForm\(\)\}/);
   assert.match(server, /platform === 'Phone' \? 'phone' : 'manual'/);

@@ -416,3 +416,17 @@ test('a name typed wrong can be fixed, on both rounds, by the owner only', () =>
   assert.match(route, /HIRING\.validateInvite/, 'the same name rules as a new link');
   assert.match(route, /WHERE \(id = \$1 AND stage = 1\) OR parent_id = \$1/);
 });
+
+/* Codex #169: the first message must tell an applicant there are two timed
+   rounds and to set aside about an hour. The old "about 30 minutes" wording
+   had them start round 1 with no time left for round 2. */
+test('the invite names both timed rounds and asks for about an hour', () => {
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'server.js'), 'utf8');
+  const at = src.indexOf("thank you for applying to June's Tees! The next step for the");
+  assert.ok(at > -1, 'the invite text moved');
+  const msg = src.slice(at, at + 700);
+  assert.match(msg, /in two parts: about \$\{mins\} minutes now/);
+  assert.match(msg, /\$\{HIRING\.ROUND2_MINUTES\}-minute round 2/);
+  assert.match(msg, /set aside about an hour/);
+  assert.doesNotMatch(msg, /when you have \$\{mins\} quiet minutes/, 'the 30-minute promise is back');
+});

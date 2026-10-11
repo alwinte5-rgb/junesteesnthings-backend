@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /* Prove the error pipeline actually reaches Sentry.
  *
- *     node tools/sentry-test.js
+ *     node tools/sentry-check.js
  *
  * Run it where the DSN is. Locally that is .env; against production, run it
  * with production's variables:
  *
- *     railway run --service <service> node tools/sentry-test.js
+ *     railway run --service <service> node tools/sentry-check.js
  *
  * WHY A SCRIPT AND NOT A ROUTE
  * ----------------------------
@@ -50,7 +50,7 @@ async function main() {
   if (!process.env.SENTRY_DSN || !process.env.SENTRY_DSN.trim()) {
     console.error('FAIL: SENTRY_DSN is not set in this environment.');
     console.error('      Set it in .env for a local check, or run this with');
-    console.error('      `railway run --service <service> node tools/sentry-test.js`.');
+    console.error('      `railway run --service <service> node tools/sentry-check.js`.');
     process.exit(1);
   }
 
@@ -85,7 +85,7 @@ async function main() {
      path an actual failure takes. */
   let eventId;
   try {
-    throw new Error(`Sentry test event from tools/sentry-test.js at ${new Date().toISOString()}`);
+    throw new Error(`Sentry test event from tools/sentry-check.js at ${new Date().toISOString()}`);
   } catch (err) {
     captureError('sentry-test', err, 'deliberate test event — safe to resolve');
     eventId = Sentry.lastEventId();

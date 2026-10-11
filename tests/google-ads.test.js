@@ -96,6 +96,11 @@ test('a failure is reported and also cached, never retried on every load', async
 
 test('the card is on the dashboard for the owner only', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  assert.match(src, /isOwner\(\) \? safe\(GOOGLE_ADS\.overview\(\)/);
+  /* Anchored on the dashboard route and the call, then the guard is checked
+     around it, so a rewrite reaches a meaningful assertion (Codex #137). */
+  const dash = src.slice(src.indexOf("app.get('/admin/dashboard'"));
+  const at = dash.indexOf('GOOGLE_ADS.overview(');
+  assert.ok(at > -1, 'the dashboard no longer reads the Google Ads overview');
+  assert.match(dash.slice(Math.max(0, at - 160), at), /isOwner\(\)/, 'the overview is fetched for the owner only');
   assert.match(src, /ads === undefined \? '' : googleAdsCard\(ads\)/);
 });

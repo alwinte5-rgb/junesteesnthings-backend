@@ -36,7 +36,8 @@ function liftFn(name) {
   throw new Error('unbalanced ' + name);
 }
 
-const awaitingDeposit = vm.runInNewContext(`${liftFn('awaitingDeposit')}\nawaitingDeposit`);
+/* Host realm: no faked globals needed (Codex #180). */
+const awaitingDeposit = vm.runInThisContext(`(() => { ${liftFn('awaitingDeposit')}\nreturn awaitingDeposit; })()`);
 const job = (over) => ({ accepted_at: '2026-10-07T15:00:00Z', total: 400, paid_amount: 0, written_off: 0, ...over });
 
 test('awaiting deposit: accepted, live, nothing paid', () => {
