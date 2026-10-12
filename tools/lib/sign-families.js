@@ -171,6 +171,9 @@ const FAMILIES = {
     label: 'Custom Magnets', sizing: 'area', target_dpi: 150, labour: 'magnet',
     note: 'Any size, priced by the square inch.',
     limits: { min: 2, max_w: 48, max_h: 48, max_short: 24 },
+    /* The size the designer opens on. The shared 36x24 suits a wall graphic;
+       a "fridge and promo" magnet opening at three feet read as a mistake. */
+    open_at: [6, 4],
     materials: [m('magnet', 'Magnet, one side', 'sqin', sg.MAGNET_SQIN)],
     upgrades: [
       { key: 'corners', label: 'Rounded corners', cost: 0, only: ['magnet'] },
