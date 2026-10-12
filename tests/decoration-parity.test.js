@@ -1,4 +1,5 @@
 'use strict';
+const { designerDir } = require('./designer-dir');
 
 /* The decoration rate must be ONE number, whichever engine asks for it.
  *
@@ -33,7 +34,7 @@ const vm = require('node:vm');
 const { execFileSync } = require('node:child_process');
 
 const ROOT = path.join(__dirname, '..');
-const DESIGNER = path.join(ROOT, 'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise');
+const DESIGNER = designerDir();
 const src = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
 const appjs = fs.readFileSync(path.join(DESIGNER, 'core/assets/js/app.js'), 'utf8');
 const auth = fs.readFileSync(path.join(DESIGNER, 'jt-auth.php'), 'utf8');

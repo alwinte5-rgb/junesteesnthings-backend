@@ -1,4 +1,5 @@
 'use strict';
+const { designerDir } = require('./designer-dir');
 
 /* Customer order-update texts.
 
@@ -213,8 +214,7 @@ test('sendCustomerSms checks consent for the right kind before sending', () => {
 });
 
 test('designer: consent before the held confirmation; confirmation only after payment', () => {
-  const dir = path.join(process.env.HOME || '', 'lumise-designer');
-  if (!fs.existsSync(dir)) return; // designer repo not checked out alongside
+  const dir = designerDir();
   const conn = fs.readFileSync(path.join(dir, 'php_connector.php'), 'utf8');
   const stripe = fs.readFileSync(path.join(dir, 'inc', 'stripe.php'), 'utf8');
   const ipn = fs.readFileSync(path.join(dir, 'paypal_ipn.php'), 'utf8');
@@ -317,8 +317,7 @@ test('a send stuck in "sending" is released for retry', () => {
 
 test('designer copies of the consent wording match what the consent row records', () => {
   const { TRANSACTIONAL_TEXT, MARKETING_TEXT } = require('../tools/lib/sms-consent');
-  const dir = path.join(process.env.HOME || '', 'lumise-designer');
-  if (!fs.existsSync(dir)) return; // designer repo not checked out alongside
+  const dir = designerDir();
   const read = (f) => fs.readFileSync(path.join(dir, f), 'utf8').replace(/&amp;/g, '&');
   for (const f of ['checkout.php', 'product.php']) {
     assert.ok(read(f).includes(TRANSACTIONAL_TEXT), `${f}: order-update wording drifted`);

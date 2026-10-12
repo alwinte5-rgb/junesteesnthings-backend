@@ -1,4 +1,5 @@
 'use strict';
+const { designerDir } = require('./designer-dir');
 
 /* An address from somebody who did NOT buy.
  *
@@ -22,7 +23,7 @@ const vm = require('node:vm');
 
 const ROOT = path.join(__dirname, '..');
 const src = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
-const DESIGNER = path.join(ROOT, 'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise');
+const DESIGNER = designerDir();
 
 /* The attribute builder, lifted from the route so this tests what ships. */
 const route = src.slice(src.indexOf("app.post('/api/crm-contact'"));
