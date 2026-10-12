@@ -1,3 +1,4 @@
+const { designerPath } = require('./designer-dir');
 /* Screen printing must never quote at $0 decoration.
  *
  * WHAT WENT WRONG
@@ -33,7 +34,7 @@ const { execFileSync } = require('node:child_process');
 
 const ROOT = path.join(__dirname, '..');
 const src = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
-const AUTH = path.join(ROOT, 'Lumise', 'Lumise-Product-Designer-PHP-ver2.0', 'lumise', 'jt-auth.php');
+const AUTH = designerPath('jt-auth.php');
 
 /** Lift a top-level `function name(...) {...}` out of server.js by brace depth. */
 function lift(name) {

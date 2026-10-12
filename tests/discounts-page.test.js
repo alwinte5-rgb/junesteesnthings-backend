@@ -1,4 +1,5 @@
 'use strict';
+const { readDesigner } = require('./designer-dir');
 
 /* The discount-code admin page.
  *
@@ -20,8 +21,7 @@ const path = require('node:path');
 const ROOT = path.join(__dirname, '..');
 const src = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
 const page = src.slice(src.indexOf("app.get('/admin/discounts'"), src.indexOf("app.post('/admin/discounts'"));
-const admin = fs.readFileSync(path.join(ROOT,
-  'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/jt-promo-admin.php'), 'utf8');
+const admin = readDesigner('jt-promo-admin.php');
 
 test('the page is in the admin nav and gated', () => {
   assert.match(src, /\{ key: 'discounts',\s+href: '\/admin\/discounts',\s+label: 'Discounts'/);
@@ -50,8 +50,7 @@ test('an amount code cannot take a total below zero', () => {
   /* A negative total is a refund the shop never agreed to, and the charge is
      computed from that number. Clamped in the one place the discount is
      calculated, so both the checkout page and the order path get it. */
-  const auth = fs.readFileSync(path.join(ROOT,
-    'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/jt-auth.php'), 'utf8');
+  const auth = readDesigner('jt-auth.php');
   assert.match(auth, /return min\(round\(\$d\['value'\], 2\), \$sub\);/);
   assert.match(page, /spent, not drawn down/,
     'and the page explains it is spent, not drawn down — no leftover balance');
@@ -99,8 +98,7 @@ test('hand-issued codes are not capped like recovery codes', () => {
   /* The cap exists because the weekly codes are shared with every abandoned
      cart. A code issued to one person by name is a promise to them. */
   assert.match(page, /it is a promise to one person/);
-  const auth = fs.readFileSync(path.join(ROOT,
-    'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/jt-auth.php'), 'utf8');
+  const auth = readDesigner('jt-auth.php');
   assert.match(auth, /if \(\$d\['source'\] === 'recovery'\) return true;/,
     'recovery codes are always capped');
   assert.match(auth, /return !empty\(\$d\['once_per_customer'\]\);/,
@@ -109,8 +107,7 @@ test('hand-issued codes are not capped like recovery codes', () => {
 
 /* ── Use rules ───────────────────────────────────────────────────────────── */
 
-const auth = fs.readFileSync(path.join(ROOT,
-  'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/jt-auth.php'), 'utf8');
+const auth = readDesigner('jt-auth.php');
 
 test('a dollar code is spent, not drawn down', () => {
   /* $30 off a $12 order takes $12 and the code is finished. Anything else is a
@@ -125,8 +122,7 @@ test('a dollar code is spent, not drawn down', () => {
 test('every rule is re-checked when the order is placed', () => {
   /* A customer can enter a valid code and then change the cart until it no
      longer qualifies, and a direct POST skips the checkout page entirely. */
-  const conn = fs.readFileSync(path.join(ROOT,
-    'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/php_connector.php'), 'utf8');
+  const conn = readDesigner('php_connector.php');
   assert.match(conn, /jt_promo_block_reason\(\$jt_promo_code, \$order_total,/,
     'the order path must re-check with the real total and email');
   assert.match(auth, /if \(jt_promo_block_reason\(\$code, \$sub\) !== ''\) return 0\.0;/,
@@ -137,8 +133,7 @@ test('one refusal function serves every surface', () => {
   /* A code accepted at the entry field and refused at checkout is the worst
      version of this — the customer has already decided to buy. */
   assert.match(auth, /function jt_promo_block_reason\(/);
-  const promo = fs.readFileSync(path.join(ROOT,
-    'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/jt-promo.php'), 'utf8');
+  const promo = readDesigner('jt-promo.php');
   assert.match(promo, /jt_promo_block_reason\(\$match, \$sub, \$email\)/);
 });
 
@@ -146,8 +141,7 @@ test('the customer is told which rule blocked them', () => {
   /* "Not valid" tells someone $5 short to give up rather than add an item. */
   assert.match(auth, /needs an order of at least/);
   assert.match(auth, /has been fully claimed/);
-  const checkout = fs.readFileSync(path.join(ROOT,
-    'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/checkout.php'), 'utf8');
+  const checkout = readDesigner('checkout.php');
   assert.match(checkout, /d\.reason \|\|/, 'the page shows the server reason');
 });
 
@@ -199,8 +193,7 @@ test('the page says weekly, because that is what the code does', () => {
   /* floor(time()/604800) is a 7-day period. Calling it monthly on the page
      would have the shop expect a code to last four times as long as it does. */
   assert.match(page, /rotate <b>weekly<\/b>/);
-  const auth = fs.readFileSync(path.join(ROOT,
-    'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/jt-auth.php'), 'utf8');
+  const auth = readDesigner('jt-auth.php');
   assert.match(auth, /floor\(time\(\) \/ 604800\)/, '604800 seconds is one week');
 });
 
@@ -222,8 +215,7 @@ test('adding the rule columns is safe to run on every request', () => {
 
      The columns must be asked for before they are added, not attempted and
      suppressed. */
-  const auth = fs.readFileSync(path.join(ROOT,
-    'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/jt-auth.php'), 'utf8');
+  const auth = readDesigner('jt-auth.php');
   assert.match(auth, /SELECT COLUMN_NAME FROM information_schema\.COLUMNS/,
     'existing columns must be read first');
   assert.match(auth, /if \(isset\(\$have\[\$name\]\)\) continue;/,
@@ -395,8 +387,7 @@ test('a minimum item count is enforced with the real cart', () => {
   /* Minimum SPEND and minimum ITEMS are different offers — "any 3 shirts" is
      not "$60 of shirts". */
   assert.match(auth, /needs at least ' \. \(int\) \$d\['min_items'\] \. ' items/);
-  const conn = fs.readFileSync(path.join(ROOT,
-    'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/php_connector.php'), 'utf8');
+  const conn = readDesigner('php_connector.php');
   assert.match(conn, /count\(\(array\) \$cart_data\['items'\]\)/,
     'the order path must pass the real item count');
 });
@@ -415,8 +406,7 @@ test('the order path re-checks BEFORE the discount is applied', () => {
      and keep the discount.
      The check clears both the local code AND the session, so jt_promo_discount
      then reads an empty session and returns 0 regardless. */
-  const conn = fs.readFileSync(path.join(ROOT,
-    'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/php_connector.php'), 'utf8');
+  const conn = readDesigner('php_connector.php');
   const check = conn.indexOf('jt_promo_block_reason($jt_promo_code');
   const apply = conn.indexOf('$order_total - jt_promo_discount($order_total)');
   assert.ok(check > -1 && apply > -1, 'both steps must exist');

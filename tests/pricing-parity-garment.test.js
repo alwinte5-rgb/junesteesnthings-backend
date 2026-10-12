@@ -1,4 +1,5 @@
 'use strict';
+const { readDesigner } = require('./designer-dir');
 
 /* The same shirt, the same quantity, one price.
  *
@@ -20,8 +21,7 @@ const vm = require('node:vm');
 
 const ROOT = path.join(__dirname, '..');
 const src = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
-const D = (f) => fs.readFileSync(path.join(ROOT,
-  'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise', f), 'utf8');
+const D = (f) => readDesigner(f);
 
 test('the backend publishes the tiers it prices with', () => {
   assert.match(src, /app\.get\('\/api\/pricing-rules', requireInternalKey/,

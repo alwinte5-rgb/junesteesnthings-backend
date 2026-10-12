@@ -1,3 +1,4 @@
+const { readDesigner } = require('./designer-dir');
 /* Regression tests for the quoted delivery window (server.js).
  *
  * Run: node --test tests/*.test.js
@@ -201,8 +202,7 @@ test('the designer does not promise a rush the shop cannot buy', () => {
      Embroidery is the exception and the reason this is gated rather than
      deleted: it is done in house and Anchorfish's own rush ladder says it
      applies to embroidery only. */
-  const auth = fs.readFileSync(path.join(__dirname, '..',
-    'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/jt-auth.php'), 'utf8');
+  const auth = readDesigner('jt-auth.php');
 
   assert.doesNotMatch(auth, /rush is often possible\.<\/span>/,
     'the unconditional promise is back');

@@ -1,4 +1,5 @@
 'use strict';
+const { readDesigner } = require('./designer-dir');
 
 /* Unfinished carts on the board.
  *
@@ -17,8 +18,7 @@ const path = require('node:path');
 const ROOT = path.join(__dirname, '..');
 const src = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
 const board = src.slice(src.indexOf('async function renderBoard'));
-const feed = fs.readFileSync(path.join(ROOT,
-  'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/orders_feed.php'), 'utf8');
+const feed = readDesigner('orders_feed.php');
 
 test('the board reads carts over the feed, not a second database', () => {
   /* The designer owns its own MySQL. Opening a connection to it from the
