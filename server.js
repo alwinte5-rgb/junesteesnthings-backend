@@ -92,6 +92,7 @@ const HIRING = require('./tools/lib/hiring');
 const HIRE_POSTING = require('./tools/lib/hiring-posting');
 const PROOFS = require('./tools/lib/job-proofs');
 const ART = require('./tools/lib/art-pipeline');
+const WELCOME = require('./tools/lib/staff-welcome');
 const MSGFILES = require('./tools/lib/message-files');
 const GOOGLE_ADS = require('./tools/lib/google-ads').createClient();
 const GOOGLE_ANALYTICS = require('./tools/lib/google-analytics').createClient();
@@ -25131,7 +25132,10 @@ const SHIP_CSS = `<style>
    to buy a label for an order that has one. */
 const SHIP_ONCE_JS = `<script>(function(){document.querySelectorAll('form[data-once]').forEach(function(f){
 f.addEventListener('submit',function(){var b=f.querySelector('button[type=submit]');if(!b)return;
-setTimeout(function(){b.disabled=true;b.textContent=b.getAttribute('data-busy')||'Working…';},0);});});})();</script>`;
+if(!b.hasAttribute('data-label'))b.setAttribute('data-label',b.textContent);
+setTimeout(function(){b.disabled=true;b.textContent=b.getAttribute('data-busy')||'Working…';},0);});});
+window.addEventListener('pageshow',function(e){if(!e.persisted)return;document.querySelectorAll('form[data-once] button[data-label]').forEach(function(b){
+b.disabled=false;b.textContent=b.getAttribute('data-label');});});})();</script>`;
 
 app.get('/admin/shipping', requireAdmin, async (req, res) => {
   res.set('Cache-Control', 'no-store');
@@ -26976,6 +26980,42 @@ function permsEditor(perms) {
     </div>`).join('');
 }
 
+/* The welcome-email fields, shared by the add form and each helper's card.
+   Nothing here is stored: it goes into the email and nowhere else. */
+function welcomeFields(checkbox) {
+  return `<div class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px;width:100%">
+    ${checkbox ? '<label><input type="checkbox" name="welcome_send" value="1" checked> Email them a welcome</label>' : ''}
+    <input name="welcome_role" placeholder="Job title (blank = from training path)" maxlength="80">
+    <label>Hours a week <input name="welcome_hours" type="number" min="1" max="60" step="1" style="width:70px"></label>
+    <input name="welcome_schedule" placeholder="Schedule, e.g. Mon–Fri 9am–2pm US Central" maxlength="200" style="min-width:280px">
+    <label>Start date <input name="welcome_start" type="date"></label>
+    <label>Rate after training $ <input name="welcome_raise" type="number" min="0" max="200" step="0.25" style="width:80px"></label>
+    <input name="welcome_folder" type="url" placeholder="Shared folder link (optional, https)" maxlength="500" style="min-width:240px">
+  </div>`;
+}
+
+/** Sends the welcome email with details already checked by WELCOME.detailsFromForm;
+    resolves to '' when sent, or what to tell the owner. Never throws. */
+async function sendStaffWelcome(s, b, details) {
+  try {
+    const track = TRAINING.trackOf(s.training_track);
+    const mail = WELCOME.welcomeEmail({
+      name: s.name,
+      role: text(b.welcome_role, 80) || WELCOME.ROLE_FOR_TRACK[track] || 'Team member',
+      track: TRAINING.TRACKS[track].label,
+      wage: Number(s.hourly_rate || 0),
+      signInUrl: `${PUBLIC_BASE_URL}/admin`,
+      siteUrl: PUBLIC_BASE_URL,
+      details,
+    });
+    await sendEmail({ to: s.email, subject: mail.subject, html: mail.html, promo: false });
+    return '';
+  } catch (err) {
+    console.error(`staff welcome email to staff ${s.id} failed:`, err.message);
+    return 'The welcome email could not be sent. Try "Send welcome email" on their card.';
+  }
+}
+
 /** What the owner does in Cloudflare so a new helper can get in. */
 function cloudflareStepCard(name, email) {
   return `<div class="card" style="border:2px solid #16a34a">
@@ -27034,6 +27074,13 @@ async function renderStaffPage(req, res, extra = '') {
           value="${escEmail(String(Number(s.commission_pct || 0)))}" style="width:80px"></label>
         <button type="submit" class="btn btn-ghost">Save</button>
       </form>
+      ${s.active ? `<details style="margin-top:10px"><summary>Send welcome email</summary>
+        <form method="post" action="/admin/staff/${s.id}" data-once>
+          <input type="hidden" name="action" value="welcome">
+          ${welcomeFields(false)}
+          <button type="submit" style="margin-top:8px" data-busy="Sending…">Send to ${escEmail(s.email)}</button>
+        </form>
+      </details>` : ''}
     </div>`;
   }).join('');
   res.send(adminPage('Staff', `
@@ -27043,7 +27090,7 @@ async function renderStaffPage(req, res, extra = '') {
     ${cfAccess ? '' : `<div class="warn">Sign-in is switched off until CF_ACCESS_TEAM_DOMAIN, CF_ACCESS_AUD and OWNER_EMAILS
       are set on the backend service in Railway.</div>`}
     <div class="card" id="add"><b>Add a helper</b>
-      <form method="post" action="/admin/staff" class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px">
+      <form method="post" action="/admin/staff" class="row" data-once style="gap:8px;flex-wrap:wrap;margin-top:8px">
         <input name="name" placeholder="Name" required maxlength="80" value="${escEmail(text((req.query || {}).add_name, 80))}">
         <input name="email" type="email" placeholder="Their email (what they sign in with)" required maxlength="254">
         <label>Start as <select name="preset">${presetOptions}</select></label>
@@ -27051,13 +27098,15 @@ async function renderStaffPage(req, res, extra = '') {
           `<option value="${k}"${TRAINING.trackOf((req.query || {}).add_track) === k && (req.query || {}).add_track ? ' selected' : ''}>${escEmail(t.label)}</option>`).join('')}</select></label>
         <label>Hourly wage $ <input name="hourly_rate" type="number" min="0" max="200" step="0.25" value="0" style="width:80px"></label>
         <label>Commission % of price, own leads <input name="commission_pct" type="number" min="0" max="50" step="0.25" value="3" style="width:80px"></label>
+        ${welcomeFields(true)}
         <button type="submit">Add</button>
       </form>
+      <p class="muted" style="margin-top:8px">The welcome email gives them the sign-in steps, so add their email in Cloudflare (next step) straight away.</p>
       <p class="muted" style="margin-top:8px">${Object.values(STAFF.PRESETS).map((p) =>
         `<b>${escEmail(p.label)}</b>: ${escEmail(p.note)}`).join('<br>')}<br>Training paths: ${Object.values(TRAINING.TRACKS).map((t) =>
         `<b>${escEmail(t.label)}</b> (${escEmail(t.note)})`).join(', ')}</p>
     </div>
-    ${cards || emptyState('No helpers yet.')}`, 'team'));
+    ${cards || emptyState('No helpers yet.')}${SHIP_ONCE_JS}`, 'team'));
 }
 
 app.get('/admin/staff', requireAdmin, async (req, res) => {
@@ -27077,16 +27126,22 @@ app.post('/admin/staff', requireAdmin, async (req, res) => {
   const pct = staffRate(b.commission_pct, 50);
   const wage = staffRate(b.hourly_rate, 200);
   if (!name || !STAFF.EMAIL_RE.test(email)) return back(res, '/admin/staff', 'err', 'A name and a real email are needed.');
+  /* Checked before the insert, so a bad welcome field adds nobody. */
+  const welcome = b.welcome_send ? WELCOME.detailsFromForm(b, wage) : null;
+  if (welcome && welcome.problems.length) return back(res, '/admin/staff', 'err', `Nobody was added. ${welcome.problems.join(' ')}`);
   try {
     if (cfAccess && cfAccess.owners.includes(email)) {
       return back(res, '/admin/staff', 'err', 'That is an owner email. Helpers need their own.');
     }
     /* password_hash predates signing in through Cloudflare; '!' matches no password. */
-    await pool.query(
+    const { rows: [added] } = await pool.query(
       `INSERT INTO staff (name, email, password_hash, perms, commission_pct, training_track, hourly_rate)
-       VALUES ($1, $2, '!', $3, $4, $5, $6)`,
+       VALUES ($1, $2, '!', $3, $4, $5, $6) RETURNING id, name, email, training_track, hourly_rate`,
       [name, email, JSON.stringify(STAFF.presetPerms(preset)), pct, track, wage]);
-    return renderStaffPage({ query: { ok: `${name} added as ${STAFF.PRESETS[preset].label}.` } }, res,
+    /* Added first, emailed second: a failed send never undoes the add. */
+    const mailErr = welcome ? await sendStaffWelcome(added, b, welcome.details) : '';
+    const okMsg = `${name} added as ${STAFF.PRESETS[preset].label}.${welcome && !mailErr ? ` Welcome email sent to ${email}.` : ''}`;
+    return renderStaffPage({ query: mailErr ? { ok: okMsg, err: mailErr } : { ok: okMsg } }, res,
       cloudflareStepCard(name, email));
   } catch (err) {
     if (err.code === '23505') return back(res, '/admin/staff', 'err', 'Someone already has that email.');
@@ -27100,7 +27155,7 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
   const b = req.body || {};
   if (!id) return res.redirect('/admin/staff');
   try {
-    const { rows: [s] } = await pool.query('SELECT id, name, email FROM staff WHERE id = $1', [id]);
+    const { rows: [s] } = await pool.query('SELECT id, name, email, active, training_track, hourly_rate FROM staff WHERE id = $1', [id]);
     if (!s) return back(res, '/admin/staff', 'err', 'No such helper.');
     switch (String(b.action)) {
       case 'preset': {
@@ -27117,6 +27172,13 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
            Remove them from the Cloudflare policy too. */
         await pool.query('UPDATE staff SET active = FALSE WHERE id = $1', [id]);
         return back(res, '/admin/staff', 'ok', `${s.name} is disabled. Also remove ${s.email} from the Cloudflare policy.`);
+      case 'welcome': {
+        if (!s.active) return back(res, `/admin/staff#staff-${id}`, 'err', `${s.name} is disabled. Enable them before sending a welcome.`);
+        const w = WELCOME.detailsFromForm(b, Number(s.hourly_rate || 0));
+        if (w.problems.length) return back(res, `/admin/staff#staff-${id}`, 'err', `Not sent. ${w.problems.join(' ')}`);
+        const mailErr = await sendStaffWelcome(s, b, w.details);
+        return back(res, `/admin/staff#staff-${id}`, mailErr ? 'err' : 'ok', mailErr || `Welcome email sent to ${s.email}.`);
+      }
       case 'enable':
         await pool.query('UPDATE staff SET active = TRUE WHERE id = $1', [id]);
         return back(res, '/admin/staff', 'ok', `${s.name} can sign in again.`);

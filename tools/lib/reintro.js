@@ -96,8 +96,7 @@ function emailAudience(contacts, textPhones) {
   return out;
 }
 
-const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
-  .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+const { escHtml: esc } = require('./html-escape');
 
 /** The invitation email (owner, 2026-10-05): the shop's own photos, what
  *  the designer can do, links to the site, and the 10% for signing up for
