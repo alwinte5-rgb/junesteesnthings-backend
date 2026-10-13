@@ -3316,6 +3316,18 @@ async function seenCustomer({ email, phone }, { excludeLead = null } = {}) {
   return { quote: quote || null, lead: lead || null, studio };
 }
 
+/** The earliest recent lead with this social profile (CREDIT.profileKey), or
+ *  null; only leads before `beforeId` when given. Compared in JS so every way
+ *  of writing the link matches. */
+async function seenProfile(key, beforeId = null) {
+  if (!key) return null;
+  const { rows } = await pool.query(
+    `SELECT id, created_at, profile_url FROM submissions
+      WHERE profile_url IS NOT NULL AND created_at > NOW() - make_interval(days => $1) AND ($2::int IS NULL OR id < $2)
+      ORDER BY id LIMIT 5000`, [CREDIT.KNOWN_LEAD_DAYS, beforeId]);
+  return rows.find((r) => CREDIT.profileKey(r.profile_url) === key) || null;
+}
+
 /** Salespeople a customer might name: active helpers who may draft quotes. */
 async function salesReps() {
   return (await staffRoster({ activeOnly: true }))
@@ -22224,13 +22236,16 @@ function leadCardHtml(l, { back = '/admin/quotes', roster = null } = {}) {
  *  editable. Below it, one press records an email sent from your own inbox. */
 function leadEmailBox(l, backField) {
   const m = LEADMAIL.infoRequest(l, { signer: SHOP_SIGNER, shop: SHOP_NAME });
+  // In training it goes to the owner first (POST /admin/lead/:id/email).
+  const actor = currentActor();
+  const held = !!actor && actor.kind === 'staff' && actorLevel('customers.message') === 'approval';
   return `<div id="em-${l.id}" style="display:none;margin-top:10px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px">
       <form method="POST" action="/admin/lead/${l.id}/email"
             onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Sending...'">
-        <p class="muted" style="margin:0 0 8px;font-size:12.5px">To ${escEmail(l.email)}. Their reply comes to the shop's email.</p>
+        <p class="muted" style="margin:0 0 8px;font-size:12.5px">To ${escEmail(l.email)}. ${held ? 'June checks it first and it is sent when she approves it. ' : ''}Their reply comes to the shop's email.</p>
         <input name="subject" maxlength="${LEADMAIL.LIMITS.subject}" required value="${escEmail(m.subject)}" style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">
         <textarea name="body" rows="14" maxlength="${LEADMAIL.LIMITS.body}" required style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">${escEmail(m.body)}</textarea>${backField}
-        <button type="submit" class="btn" style="padding:7px 16px;font-size:13px">Send email</button>
+        <button type="submit" class="btn" style="padding:7px 16px;font-size:13px">${held ? 'Send to June to check' : 'Send email'}</button>
       </form>
       <script>/* A send that fails comes back with the stock message; the draft typed
          here is kept in this tab and put back (Codex #179). */
@@ -27254,6 +27269,12 @@ function approvalBody(a, q) {
       escEmail(a.subject_id)}</a>${p.channel === 'email' ? ` &middot; <b>${escEmail(p.subject || '')}</b>` : ''}</div>
       <div class="msg" style="white-space:pre-wrap;margin-top:6px">${escEmail(p.text || '')}</div>${proofPreview(p.text)}`;
   }
+  if (a.kind === 'lead_email') {
+    // `q` is the lead here ({ id, name, email }), or missing if it was deleted.
+    return `<div>Email to ${q ? `<a href="/admin/leads?status=all&amp;q=${encodeURIComponent(q.email || '')}#lead-${Number(q.id)}">${escEmail(q.name || q.email || 'a lead')}</a>`
+      : 'a lead that no longer exists'} &middot; <b>${escEmail(p.subject || '')}</b></div>
+      <div class="msg" style="white-space:pre-wrap;margin-top:6px">${escEmail(p.text || '')}</div>`;
+  }
   if (a.kind === 'kb') {
     return `<div>Playbook ${p.id ? 'edit' : 'article'}: <b>${escEmail(p.title || '')}</b> (${escEmail(p.kind || '')})</div>
       <div class="msg" style="white-space:pre-wrap;margin-top:6px">${escEmail(String(p.body || '').slice(0, 1500))}</div>`;
@@ -27407,17 +27428,21 @@ app.get('/admin/approvals', requireAdmin, async (req, res) => {
     const { rows: quotes } = codes.length
       ? await pool.query('SELECT * FROM quotes WHERE code = ANY($1)', [codes]) : { rows: [] };
     const quoteBy = Object.fromEntries(quotes.map((q) => [q.code, q]));
+    const leadIds = pending.filter((a) => a.kind === 'lead_email').map((a) => intIn(a.subject_id)).filter(Boolean);
+    const { rows: leads } = leadIds.length
+      ? await pool.query('SELECT id, name, email FROM submissions WHERE id = ANY($1)', [leadIds]) : { rows: [] };
+    const leadBy = Object.fromEntries(leads.map((l) => [String(l.id), l]));
     const card = (a) => `<div class="card">
       <div class="row-i"><span class="row-main"><b>${escEmail(nameOf(roster, a.requested_by))}</b>
         <div class="row-sub">${escEmail(whenShort(a.created_at))}</div></span>
         <span class="row-end">${pill(a.kind, 'blue')}</span></div>
-      ${a.interrupted ? `<div class="warn">This was being ${a.kind === 'message' ? 'sent' : 'decided'} when the app restarted, and did not finish.
-        ${a.kind === 'message' ? 'Check the job\'s messages before approving again, or it may go twice.' : 'Decide it again.'}</div>` : ''}
-      ${approvalBody(a, quoteBy[a.subject_id])}
+      ${a.interrupted ? `<div class="warn">This was being ${['message', 'lead_email'].includes(a.kind) ? 'sent' : 'decided'} when the app restarted, and did not finish.
+        ${a.kind === 'message' ? 'Check the job\'s messages before approving again, or it may go twice.' : a.kind === 'lead_email' ? 'Check the lead\'s notes before approving again: an email sent in the last 10 minutes is not sent twice.' : 'Decide it again.'}</div>` : ''}
+      ${approvalBody(a, a.kind === 'lead_email' ? leadBy[a.subject_id] : quoteBy[a.subject_id])}
       ${(a.reasons || []).length ? `<ul class="muted">${a.reasons.map((r) => `<li>${escEmail(r)}</li>`).join('')}</ul>` : ''}
       <form method="post" action="/admin/approvals/${a.id}" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
         <input name="note" placeholder="Note back to them (optional)" maxlength="500" style="flex:1 1 220px">
-        <button type="submit" name="decision" value="approve">${a.kind === 'message' ? 'Approve and send' : 'Approve'}</button>
+        <button type="submit" name="decision" value="approve">${['message', 'lead_email'].includes(a.kind) ? 'Approve and send' : 'Approve'}</button>
         <button type="submit" name="decision" value="reject" class="btn-ghost">Send back</button>
       </form></div>`;
     res.send(adminPage('Approvals', `
@@ -27524,6 +27549,20 @@ app.post('/admin/approvals/:id', requireAdmin, async (req, res) => {
       await markProofsSent(a.subject_id, p.text);
       await finish('approved');
       return back(res, '/admin/approvals', 'ok', 'Sent.');
+    }
+    if (a.kind === 'lead_email') {
+      /* Sent as the owner's decision, credited to the helper who wrote it. */
+      const p = a.payload || {};
+      const m = LEADMAIL.cleanEmail({ subject: p.subject, body: p.text });
+      if (m.error) { await finish('withdrawn'); return back(res, '/admin/approvals', 'err', `Not sent: ${m.error}`); }
+      let out;
+      try { out = await sendLeadEmail(intIn(a.subject_id), m, a.requested_by); } catch (e) {
+        if (/no such lead|no email address/.test(e.message)) { await finish('withdrawn'); return back(res, '/admin/approvals', 'err', 'Not sent: that lead is gone or has no email address.'); }
+        throw e;
+      }
+      await finish('approved');
+      return back(res, '/admin/approvals', out.marked ? 'ok' : 'err', out.already ? 'That email had already been sent.'
+        : out.marked ? `Sent to ${out.to}.` : `Sent to ${out.to}, but the lead could not be marked Contacted. Mark it by hand.`);
     }
     if (a.kind === 'kb') {
       const saved = await saveKbArticle(a.payload || {}, a.requested_by);
@@ -28495,9 +28534,9 @@ app.post('/admin/lead/:id/note', requireAdmin, async (req, res) => {
 /* Email a lead from the Leads page (2026-10-07). Recorded as an email note on
    the lead, which marks it Contacted; the note is written only after the send
    succeeds, so the card never says "Emailed" for a mail that did not go. A
-   helper sends only with "Email and text customers" fully on, and never one
-   that mentions being paid outside the shop: lead emails have no owner-approval
-   queue, so those go to the owner instead. */
+   helper sends with "Email and text customers" fully on; at "Needs my OK", or
+   when the email mentions being paid outside the shop, it waits for the owner
+   on Approvals (kind 'lead_email') and is sent when she approves it. */
 app.post('/admin/lead/:id/email', requireAdmin, async (req, res) => {
   const id = intIn(req.params.id);
   const b = req.body || {};
@@ -28513,56 +28552,82 @@ app.post('/admin/lead/:id/email', requireAdmin, async (req, res) => {
   const actor = currentActor();
   /* Both: messaging AND seeing leads. The designer preset messages customers
      but has no leads.view, and must not email a lead it cannot see (Codex #179). */
-  if (actor && actor.kind === 'staff' && (actorLevel('customers.message') !== 'on' || actorLevel('leads.view') !== 'on'
-      || FRAUD.mentionsOutsidePayment(`${m.subject}\n${m.text}`))) {
+  if (actor && actor.kind === 'staff' && (actorLevel('customers.message') === 'off' || actorLevel('leads.view') !== 'on')) {
     return back(res, backTo, 'err', 'Emails to leads go through the owner for now. Write what you want to say in a note on the lead.');
   }
   try {
     const { rows: [l] } = await pool.query('SELECT id, email FROM submissions WHERE id = $1', [id]);
     if (!l) return back(res, backTo, 'err', 'No such lead.');
-    const to = String(l.email || '').trim();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return back(res, backTo, 'err', 'This lead has no email address.');
-    const noteBody = `Emailed "${m.subject}":\n${m.text}`;
-    /* A second press, or a reload of the send: the same email is not sent twice.
-       The note is the claim, written under a per-lead lock BEFORE the provider
-       is called: two presses used to both find no note and both send, and a
-       note that failed to save after a send invited a retry that sent again
-       (Codex #179). A send that fails takes its claim back out. */
-    let noteId = null;
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query('SELECT pg_advisory_xact_lock($1, $2)', [7303, id]);
-      const { rows: [claim] } = await client.query(
-        `INSERT INTO lead_notes (submission_id, kind, body, staff_id)
-         SELECT $1, 'email', $2::text, $3
-          WHERE NOT EXISTS (SELECT 1 FROM lead_notes WHERE submission_id = $1 AND kind = 'email' AND body = $2::text
-                               AND created_at > NOW() - INTERVAL '10 minutes')
-         RETURNING id`,
-        [id, noteBody, actor && actor.kind === 'staff' ? actor.id : null]);
-      await client.query('COMMIT');
-      noteId = claim ? claim.id : null;
-    } catch (e) {
-      await client.query('ROLLBACK').catch(() => {});
-      throw e;
-    } finally { client.release(); }
-    if (!noteId) return back(res, backTo, 'ok', 'That email was already sent.');
-    try {
-      await sendEmail({ to, subject: m.subject, html: LEADMAIL.toHtml(m.text), text: m.text, promo: false });
-    } catch (e) {
-      await pool.query('DELETE FROM lead_notes WHERE id = $1', [noteId]).catch(() => {});
-      throw e;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(l.email || '').trim())) return back(res, backTo, 'err', 'This lead has no email address.');
+    /* A helper in training writes it and the owner sends it, as with job
+       messages (2026-10-13: trainees were stuck with no way to write to a
+       lead). So does any helper whose email mentions being paid outside the
+       shop. Approving it sends it through sendLeadEmail, credited to them. */
+    const outside = actor && actor.kind === 'staff' ? FRAUD.mentionsOutsidePayment(`${m.subject}\n${m.text}`) : '';
+    if (actor && actor.kind === 'staff' && (actorLevel('customers.message') === 'approval' || outside)) {
+      const { rowCount: queued } = await pool.query(
+        `INSERT INTO staff_approvals (kind, subject_id, payload, reasons, requested_by)
+         SELECT 'lead_email', $1, $2::jsonb, $3::jsonb, $4
+          WHERE NOT EXISTS (SELECT 1 FROM staff_approvals WHERE kind = 'lead_email' AND subject_id = $1
+                              AND requested_by = $4 AND status IN ('pending', 'processing') AND payload->>'text' = $5)`,
+        [String(id), JSON.stringify({ subject: m.subject, text: m.text }),
+         JSON.stringify([outside ? `Mentions being paid outside the shop: ${outside}` : 'Written in training']), actor.id, m.text]);
+      if (outside) logActivity(actor, 'message held: outside payment', { type: 'lead', id: String(id) }, { what: outside }, clientIp(req)).catch(() => {});
+      return res.redirect(`${backTo}${backTo.includes('?') ? '&' : '?'}ok=${encodeURIComponent(queued
+        ? 'Saved for June to check. It is sent to the customer when she approves it.' : 'That email is already waiting for June.')}#lead-${id}`);
     }
-    if (!(await markLeadResponded(id, actor))) {
-      return back(res, backTo, 'err', `Email sent to ${to}, but the lead could not be marked Contacted. Mark it by hand.`);
-    }
-    return res.redirect(`${backTo}${backTo.includes('?') ? '&' : '?'}ok=${encodeURIComponent(`Email sent to ${to}.`)}#lead-${id}`);
+    const out = await sendLeadEmail(id, m, actor && actor.kind === 'staff' ? actor.id : null);
+    if (out.already) return back(res, backTo, 'ok', 'That email was already sent.');
+    if (!out.marked) return back(res, backTo, 'err', `Email sent to ${out.to}, but the lead could not be marked Contacted. Mark it by hand.`);
+    return res.redirect(`${backTo}${backTo.includes('?') ? '&' : '?'}ok=${encodeURIComponent(`Email sent to ${out.to}.`)}#lead-${id}`);
   } catch (err) {
     console.error('lead email failed:', err.message);
     reportError('lead-email', err, `lead ${id}`).catch(() => {});
     return back(res, backTo, 'err', 'The email did not send. Nothing was recorded; try again.');
   }
 });
+
+/** Sends a cleaned lead email ({subject, text}) to lead `id`, recorded as an
+ *  email note by `staffId` (null for the owner), which marks it Contacted.
+ *  Returns { to, already, marked }; throws when the send fails. */
+async function sendLeadEmail(id, m, staffId) {
+  const { rows: [l] } = await pool.query('SELECT id, email FROM submissions WHERE id = $1', [id]);
+  if (!l) throw new Error('no such lead');
+  const to = String(l.email || '').trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) throw new Error('lead has no email address');
+  const noteBody = `Emailed "${m.subject}":\n${m.text}`;
+  /* A second press, or a reload of the send: the same email is not sent twice.
+     The note is the claim, written under a per-lead lock BEFORE the provider
+     is called: two presses used to both find no note and both send, and a
+     note that failed to save after a send invited a retry that sent again
+     (Codex #179). A send that fails takes its claim back out. */
+  let noteId = null;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock($1, $2)', [7303, id]);
+    const { rows: [claim] } = await client.query(
+      `INSERT INTO lead_notes (submission_id, kind, body, staff_id)
+       SELECT $1, 'email', $2::text, $3
+        WHERE NOT EXISTS (SELECT 1 FROM lead_notes WHERE submission_id = $1 AND kind = 'email' AND body = $2::text
+                             AND created_at > NOW() - INTERVAL '10 minutes')
+       RETURNING id`,
+      [id, noteBody, staffId]);
+    await client.query('COMMIT');
+    noteId = claim ? claim.id : null;
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally { client.release(); }
+  if (!noteId) return { to, already: true, marked: true };
+  try {
+    await sendEmail({ to, subject: m.subject, html: LEADMAIL.toHtml(m.text), text: m.text, promo: false });
+  } catch (e) {
+    await pool.query('DELETE FROM lead_notes WHERE id = $1', [noteId]).catch(() => {});
+    throw e;
+  }
+  return { to, already: false, marked: await markLeadResponded(id, staffId ? { kind: 'staff', id: staffId } : null) };
+}
 
 app.post('/admin/lead/:id/assign', requireAdmin, async (req, res) => {
   const id = intIn(req.params.id);
@@ -28619,7 +28684,10 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
   const description = text(b.description, 4000);
   const platform = SOCIAL_PLATFORMS.includes(b.platform) ? b.platform : 'Other';
   const profile = text(b.profile_url, 300);
-  const profileUrl = /^https:\/\/[^\s<>"']+$/i.test(profile) ? profile : null;
+  /* A recognised social profile (or @handle) first; any other https link is
+     still kept as a note of where they were found. */
+  const profileUrl = CREDIT.profileUrlIn(profile, platform) || (/^https:\/\/[^\s<>"']+$/i.test(profile) ? profile : null);
+  const profileId = CREDIT.profileKey(profileUrl);
   if (!name && !email && !phone && !profileUrl) return back(res, '/admin/leads', 'err', 'A lead needs a name, contact or profile link.');
   if (email && !STAFF.EMAIL_RE.test(email)) return back(res, '/admin/leads', 'err', 'That email does not look right.');
   try {
@@ -28632,10 +28700,11 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
       return back(res, '/admin/leads', 'err', 'Say where the lead came from: they contacted the shop, or you found them.');
     }
     const foundIt = isStaff && origin === 'found';
-    if (foundIt && !email && !FRAUD.phoneKey(phone)) {
-      return back(res, '/admin/leads', 'err', 'A lead you found needs their email or phone, so it can be checked against the shop’s customers.');
+    if (foundIt && !email && !FRAUD.phoneKey(phone) && !profileId) {
+      return back(res, '/admin/leads', 'err', `A lead you found needs their email, phone or profile link (${CREDIT.PROFILE_HOSTS.slice(0, 3).join(', ')} and the like), so it can be checked against the shop’s leads.`);
     }
-    const known = foundIt ? CREDIT.knownReason(await seenCustomer({ email, phone }), fmtDate) : '';
+    const known = foundIt ? (CREDIT.knownReason(await seenCustomer({ email, phone }), fmtDate)
+      || CREDIT.knownReason({ lead: await seenProfile(profileId) }, fmtDate)) : '';
     const label = CREDIT.classifyLead({ by: isStaff ? 'staff' : 'owner', staffId: isStaff ? actor.id : null, foundIt, known });
     const source = ['Facebook', 'Instagram', 'TikTok', 'Google'].includes(platform) ? 'social'
       : platform === 'Phone' ? 'phone' : 'manual';
@@ -28657,10 +28726,11 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
             AND ((s.email IS NOT NULL AND $1 <> '' AND lower(trim(s.email)) = $1)
                  OR ($2 <> '' AND right(regexp_replace(COALESCE(s.phone, ''), '\\D', '', 'g'), 10) = $2))
           ORDER BY s.id LIMIT 1`, [e || '', p || '', l.id, CREDIT.KNOWN_LEAD_DAYS]);
-      if (first) {
+      const earlier = first || await seenProfile(profileId, l.id);
+      if (earlier) {
         label.sale_type = 'shop';
         label.rep_id = null;
-        label.reason = CREDIT.knownReason({ lead: first }, fmtDate);
+        label.reason = CREDIT.knownReason({ lead: earlier }, fmtDate);
         await pool.query('UPDATE submissions SET sale_type = $2, sale_type_reason = $3, rep_id = NULL WHERE id = $1',
           [l.id, label.sale_type, label.reason]);
       }
@@ -28887,13 +28957,13 @@ function addLeadForm() {
           <span><b>They contacted the shop</b> — a DM, call, email or walk-in to June's Tees. A shop lead.</span></label>
         <label style="display:flex;gap:8px;align-items:flex-start;margin:4px 0;text-transform:none;letter-spacing:0;font-weight:400">
           <input type="radio" name="origin" value="found" required style="width:auto;margin-top:3px">
-          <span><b>I found this customer</b> — my own outreach. Your lead, if the shop has not heard from them before.</span></label>
+          <span><b>I found this customer</b> — my own outreach. Your lead, if the shop has not heard from them before. Give their email, phone or social profile so it can be checked.</span></label>
       </fieldset>` : ''}
       <select name="platform">${SOCIAL_PLATFORMS.map((p) => `<option>${p}</option>`).join('')}</select>
       <input name="name" placeholder="Name" maxlength="200">
       <input name="email" type="email" placeholder="Email" maxlength="254">
       <input name="phone" placeholder="Phone" maxlength="40">
-      <input name="profile_url" type="url" placeholder="https://… profile or post link" maxlength="300" style="flex:1 1 240px">
+      <input name="profile_url" placeholder="Profile link (https://…) or @handle" maxlength="300" style="flex:1 1 240px">
       <textarea name="description" rows="2" maxlength="4000" placeholder="What they asked for" style="flex:1 1 100%"></textarea>
       <button type="submit">Add lead</button>
     </form></details>`;
@@ -29654,7 +29724,11 @@ async function trainingFacts(staffId) {
             (SELECT COUNT(*) FROM quotes WHERE created_by = $1 OR sent_by = $1)::int AS quotes,
             ((SELECT COUNT(*) FROM client_emails WHERE sent_by = $1)
              + (SELECT COUNT(*) FROM sms_messages WHERE sent_by = $1)
-             + (SELECT COUNT(*) FROM staff_approvals WHERE requested_by = $1 AND kind = 'message'))::int AS messages,
+             + (SELECT COUNT(*) FROM staff_approvals WHERE requested_by = $1 AND kind = 'message')
+             /* Lead emails held for the owner (an approved one becomes the
+                email note below), and emails, texts and DMs on a lead. */
+             + (SELECT COUNT(*) FROM staff_approvals WHERE requested_by = $1 AND kind = 'lead_email' AND status <> 'approved')
+             + (SELECT COUNT(*) FROM lead_notes WHERE staff_id = $1 AND kind IN ('email', 'text', 'social', 'chat')))::int AS messages,
             /* Customers they registered as found on Leads, whether or not the
                shop already knew them: the work of finding them is the same. */
             (SELECT COUNT(*) FROM staff_activity WHERE staff_id = $1
@@ -30065,8 +30139,13 @@ app.get('/admin/training/lesson/:id', requireAdmin, async (req, res) => {
     const pageChecks = ((s.pages || [])[pageNo - 1] || {}).checks || (pages === 1 ? s.checks || [] : []);
     const lessonHref = (pn) => `/admin/training/lesson/${encodeURIComponent(id)}${pn > 1 ? `?p=${pn}` : ''}`;
     const seen = new Set();
+    /* A screen this helper cannot open (Reviews and Certificates on the
+       Training preset) is named, not linked: the link only led to a refusal. */
+    const staffActor = actor && actor.kind === 'staff' ? actor : null;
     const tryIt = (s.tryIt || []).map((t) => /^\/admin\//.test(t.href)
-      ? `<a class="btn btn-ghost" href="${escEmail(t.href)}" target="_blank" rel="noopener">${escEmail(t.label)}</a>`
+      ? (staffActor && !STAFF.mayUseRoute(staffActor, 'GET', t.href.split(/[?#]/)[0])
+        ? `<span class="btn btn-ghost" style="opacity:.6;cursor:default" title="June will show you this page">${escEmail(t.label)} (June shows you)</span>`
+        : `<a class="btn btn-ghost" href="${escEmail(t.href)}" target="_blank" rel="noopener">${escEmail(t.label)}</a>`)
       : `<a class="btn btn-ghost" href="${escEmail(t.href)}" target="_blank" rel="noopener noreferrer">${escEmail(t.label)} &#8599;</a>`).join(' ');
     /* Previous and next run through the lessons and quizzes in course order.
        A helper's "next" past a closed module shows, but does not link. */

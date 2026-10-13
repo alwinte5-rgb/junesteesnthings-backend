@@ -29,5 +29,5 @@ test('#230 a view-only helper on /admin/finances writes nothing', () => {
 
 test('#179 emailing a lead needs leads.view as well as messaging', () => {
   const l = after("app.post('/admin/lead/:id/email'", 1200);
-  assert.match(l, /actorLevel\('customers\.message'\) !== 'on' \|\| actorLevel\('leads\.view'\) !== 'on'/);
+  assert.match(l, /actorLevel\('customers\.message'\) === 'off' \|\| actorLevel\('leads\.view'\) !== 'on'/);
 });

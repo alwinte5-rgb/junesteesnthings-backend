@@ -145,7 +145,38 @@ function saleTypeIn(v) {
   return SALE_TYPES[v] ? v : null;
 }
 
+/* A found lead may be known only by a social profile (2026-10-13: most
+   outreach starts in a DM, with no email or phone yet). Only these hosts are
+   accepted, and a profile is compared by host and path, so the same person
+   pasted as m.facebook.com/x/ or https://www.facebook.com/x?ref=1 is one
+   profile. A bare @handle is turned into a link on the platform picked. */
+const PROFILE_HOSTS = ['facebook.com', 'instagram.com', 'tiktok.com', 'x.com', 'twitter.com', 'linkedin.com', 'youtube.com', 'threads.net', 'nextdoor.com'];
+const HANDLE_URLS = { Instagram: 'https://www.instagram.com/', TikTok: 'https://www.tiktok.com/@', Facebook: 'https://www.facebook.com/' };
+
+/** A profile link (https on an allowed host) or @handle as a clean URL, or null. */
+function profileUrlIn(raw, platform = '') {
+  const v = String(raw || '').trim().slice(0, 300);
+  const handle = /^@([A-Za-z0-9._]{1,60})$/.exec(v);
+  if (handle) return Object.prototype.hasOwnProperty.call(HANDLE_URLS, platform) ? HANDLE_URLS[platform] + handle[1] : null;
+  return profileKey(v) ? v : null;
+}
+
+/** host/path of an allowed profile link, lower case, for matching; '' if not one. */
+function profileKey(url) {
+  let u;
+  try { u = new URL(String(url || '')); } catch { return ''; }
+  if (u.protocol !== 'https:' || u.username || u.password || u.port) return '';
+  const host = u.hostname.toLowerCase().replace(/^(www|m|mobile|web)\./, '');
+  if (!PROFILE_HOSTS.includes(host)) return '';
+  let path;
+  try { path = decodeURIComponent(u.pathname).toLowerCase().replace(/\/+$/, ''); } catch { return ''; }
+  /* profile.php?id= is the one place Facebook keeps who it is in the query. */
+  const id = host === 'facebook.com' && path === '/profile.php' ? u.searchParams.get('id') : '';
+  if (!path || path === '/' || (path === '/profile.php' && !/^\d+$/.test(id || ''))) return '';
+  return `${host}${path}${id ? `?id=${id}` : ''}`;
+}
+
 module.exports = {
-  SALE_TYPES, REORDER_DAYS, KNOWN_LEAD_DAYS, HEARD_FROM,
-  heardFromIn, matchRep, knownReason, classifyLead, classifyQuote, rateFor, saleTypeIn,
+  SALE_TYPES, REORDER_DAYS, KNOWN_LEAD_DAYS, HEARD_FROM, PROFILE_HOSTS,
+  heardFromIn, matchRep, knownReason, classifyLead, classifyQuote, rateFor, saleTypeIn, profileUrlIn, profileKey,
 };

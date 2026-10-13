@@ -24,7 +24,7 @@ test('#180 the docs name the setting the code reads', () => {
   assert.doesNotMatch(read('docs/brevo-workflows.md'), /^JT_DEPOSIT_NUDGE_DAYS=/m, 'only named as the old, unread setting');
 });
 test('#179 a lead email is claimed under a lock before the provider is called, and un-claimed if it fails', () => {
-  const r = after("app.post('/admin/lead/:id/email'", 4000);
+  const r = after('async function sendLeadEmail(', 3000);
   const claim = r.indexOf('pg_advisory_xact_lock($1, $2)'), send = r.indexOf('await sendEmail(');
   assert.ok(claim > -1 && send > claim, 'claim before send');
   assert.match(r, /WHERE NOT EXISTS \(SELECT 1 FROM lead_notes/);

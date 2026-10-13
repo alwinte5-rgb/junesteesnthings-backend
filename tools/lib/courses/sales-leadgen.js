@@ -590,7 +590,7 @@ When something about credit looks wrong, ask June. Never change a lead's owner y
     }],
     practice: [
       { key: 'do:leadgen-message', type: 'do', fact: 'messages', need: 5, minutes: 10,
-        title: 'Send 5 messages from the back office', hint: 'Emails or texts to customers sent from a lead or a quote count. Sent from the back office, they are logged for you. This ticks itself at 5.' },
+        title: 'Send 5 messages from the back office', hint: 'Emails or texts sent from a lead or a quote count, and so does a DM you log on a lead (add a note, type Social DM). While you are in training an email waits for June and still counts. This ticks itself at 5.' },
     ],
     quiz: {
       key: 'leadgen-7', title: 'Module 7 quiz: reply to quote request', minutes: 10,

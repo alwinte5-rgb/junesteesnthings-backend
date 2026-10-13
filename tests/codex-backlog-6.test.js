@@ -52,5 +52,6 @@ test('#105 a Clover refund is recorded by hand, idempotently, by the owner only'
 test('#179 a lead email that could not mark the lead Contacted says so', () => {
   const m = after('async function markLeadResponded(', 900);
   assert.match(m, /return false;/);
-  assert.match(after("app.post('/admin/lead/:id/email'", 4000), /if \(!\(await markLeadResponded\(id, actor\)\)\)/);
+  assert.match(after('async function sendLeadEmail(', 3000), /marked: await markLeadResponded\(id, /);
+  assert.match(after("app.post('/admin/lead/:id/email'", 5000), /if \(!out\.marked\) return back\(res, backTo, 'err'/);
 });

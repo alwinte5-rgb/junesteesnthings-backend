@@ -152,7 +152,9 @@ test('a helper must say where a hand-added lead came from, and the records decid
   const r = route("app.post('/admin/leads/add', requireAdmin");
   assert.match(r, /if \(isStaff && !\['shop', 'found'\]\.includes\(origin\)\)/);
   assert.match(r, /CREDIT\.knownReason\(await seenCustomer\(\{ email, phone \}\), fmtDate\)/);
-  assert.match(r, /A lead you found needs their email or phone/, 'nothing to check means nothing to claim');
+  assert.match(r, /CREDIT\.knownReason\(\{ lead: await seenProfile\(profileId\) \}, fmtDate\)/, 'a profile is checked too');
+  assert.match(r, /A lead you found needs their email, phone or profile link/, 'nothing to check means nothing to claim');
+  assert.match(r, /if \(foundIt && !email && !FRAUD\.phoneKey\(phone\) && !profileId\)/);
 });
 
 test('labels show wherever a lead or sale is listed', () => {
@@ -188,4 +190,17 @@ test('the pay guide states the rules the code applies', () => {
 
 test('a live guide that still says 10% is rewritten to 3%', () => {
   assert.match(src, /body: PAY_GUIDE_BODY,\n  was: \[PAY_GUIDE_BODY_10PCT\]/);
+});
+
+test('a found lead\'s social profile: allowed hosts only, https, matched however it is written', () => {
+  const same = ['https://www.facebook.com/JaneDoe', 'https://m.facebook.com/janedoe/', 'https://facebook.com/janedoe?ref=share'];
+  for (const u of same) assert.strictEqual(CREDIT.profileKey(u), 'facebook.com/janedoe', u);
+  assert.strictEqual(CREDIT.profileUrlIn('@jane.d', 'Instagram'), 'https://www.instagram.com/jane.d');
+  assert.strictEqual(CREDIT.profileUrlIn('@jane', 'Phone'), null, 'a handle needs a platform');
+  for (const bad of ['http://facebook.com/x', 'https://facebook.com.evil.com/x', 'https://evil.com/facebook.com/x',
+    'https://user@facebook.com/x', 'https://facebook.com:8443/x', 'https://facebook.com/', 'https://facebook.com/profile.php',
+    'https://facebook.com/%E0%A4%A', 'javascript:alert(1)', 'x'.repeat(400)]) {
+    assert.strictEqual(CREDIT.profileUrlIn(bad), null, bad);
+  }
+  assert.strictEqual(CREDIT.profileKey('https://www.facebook.com/profile.php?id=123&ref=x'), 'facebook.com/profile.php?id=123');
 });
