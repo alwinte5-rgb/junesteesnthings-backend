@@ -3112,13 +3112,17 @@ function attributedStaffId() {
 
 /** The active helper with this email, or null. */
 async function staffByEmail(email) {
-  /* `flags`: the page tips they dismissed and whether training is signed off,
-     so adminPage() can show tips without a query of its own. */
+  /* `flags`: the page tips they dismissed and their ready sign-offs, so
+     adminPage() can show tips without a query of its own. Training is over
+     at the path's own ready (TRAINING.readyKeyFor), or a Sales ready given
+     before role courses had one (TRAINING.LEGACY_READY_BEFORE). */
   const { rows } = await pool.query(
     `SELECT s.id, s.name, s.email, s.perms, s.active, s.training_track, s.sales_role,
             COALESCE((SELECT array_agg(t.step_key) FROM staff_training t
-                       WHERE t.staff_id = s.id AND (t.step_key LIKE 'tip:%' OR t.step_key = $2)), '{}') AS flags
-       FROM staff s WHERE lower(s.email) = $1`, [email, TRAINING.READY_KEY]);
+                       WHERE t.staff_id = s.id AND (t.step_key LIKE 'tip:%' OR t.step_key LIKE 'signoff:%ready')), '{}') AS flags,
+            EXISTS (SELECT 1 FROM staff_training t WHERE t.staff_id = s.id AND t.step_key = $2
+                     AND t.done_at < $3::timestamptz) AS legacy_ready
+       FROM staff s WHERE lower(s.email) = $1`, [email, TRAINING.READY_KEY, TRAINING.LEGACY_READY_BEFORE]);
   const s = rows[0];
   if (!s || !s.active) return null;
   pool.query(`UPDATE staff SET last_seen_at = NOW()
@@ -3126,7 +3130,8 @@ async function staffByEmail(email) {
     .catch(() => {});
   const flags = s.flags || [];
   return { kind: 'staff', id: s.id, name: s.name, email: s.email, perms: s.perms || {},
-           inTraining: !flags.includes(TRAINING.READY_KEY), track: TRAINING.trackOf(s.training_track),
+           inTraining: !(s.legacy_ready || flags.includes(TRAINING.readyKeyFor(TRAINING.trackOf(s.training_track), TRAINING.salesRoleOf(s.sales_role)))),
+           track: TRAINING.trackOf(s.training_track),
            role: TRAINING.salesRoleOf(s.sales_role),
            tipsOff: new Set(flags.filter((f) => f.startsWith('tip:')).map((f) => f.slice(4))) };
 }
@@ -27836,7 +27841,7 @@ app.post('/admin/team/hours', requireAdmin, async (req, res) => {
    sign-off is later undone. */
 async function commissionStartsAt(staffId) {
   const { rows: [r] } = await pool.query(
-    'SELECT done_at FROM staff_training WHERE staff_id = $1 AND step_key = $2', [staffId, TRAINING.READY_KEY]);
+    `SELECT MIN(t.done_at) AS done_at FROM staff_training t WHERE t.staff_id = $1 AND ${readyRow('t', '$2')}`, [staffId, await readyKeyOf(staffId)]);
   return r ? r.done_at : null;
 }
 
@@ -27862,7 +27867,7 @@ async function commissionLines(staffId, rates) {
             (SELECT amount FROM commission_payouts c WHERE c.staff_id = $1 AND c.quote_code = q.code) AS paid_amount_c
        FROM quotes q JOIN quote_payments p ON p.quote_code = q.code
       WHERE q.credited_to = $1
-        AND (EXISTS (SELECT 1 FROM staff_training t WHERE t.staff_id = $1 AND t.step_key = $2
+        AND (EXISTS (SELECT 1 FROM staff_training t WHERE t.staff_id = $1 AND ${readyRow('t', '$2')}
                       AND q.created_at >= t.done_at)
              -- signed off earlier, then training restarted: that window still earns
              OR EXISTS (SELECT 1 FROM staff_training t WHERE t.staff_id = $1
@@ -27871,7 +27876,7 @@ async function commissionLines(staffId, rates) {
                       AND q.created_at < substring(t.step_key from 25)::timestamptz)
              OR EXISTS (SELECT 1 FROM commission_payouts c WHERE c.staff_id = $1 AND c.quote_code = q.code))
       GROUP BY q.id
-      ORDER BY MAX(p.created_at) DESC LIMIT 500`, [staffId, TRAINING.READY_KEY]);
+      ORDER BY MAX(p.created_at) DESC LIMIT 500`, [staffId, await readyKeyOf(staffId)]);
   return rows.map((r) => {
     const pct = CREDIT.rateFor(r.sale_type, rates || {});
     const c = TEAM.commissionFor({ collected: r.collected, total: r.total, tax: r.tax, pct });
@@ -29705,13 +29710,27 @@ async function pathFor(staffId) {
   return { track: TRAINING.trackOf(r && r.training_track), role: TRAINING.salesRoleOf(r && r.sales_role) };
 }
 
+/** The sign-off that ends this helper's training (TRAINING.readyKeyFor). */
+async function readyKeyOf(staffId) {
+  const path = await pathFor(staffId);
+  return TRAINING.readyKeyFor(path.track, path.role);
+}
+
+/* SQL for "this staff_training row ended training": the path's ready key
+   (the parameter named) or a Sales ready from before role courses had their
+   own. Only constants are written into the text. */
+function readyRow(alias, param) {
+  return `(${alias}.step_key = ${param} OR (${alias}.step_key = '${TRAINING.READY_KEY}' AND ${alias}.done_at < '${TRAINING.LEGACY_READY_BEFORE}'::timestamptz))`;
+}
+
 async function trainingFor(staffId) {
   const [ticks, facts, path, times] = await Promise.all([
     pool.query('SELECT step_key, done_at, signed_by FROM staff_training WHERE staff_id = $1', [staffId]),
     trainingFacts(staffId), pathFor(staffId),
     pool.query('SELECT step_key, started_at, done_at FROM staff_lesson_time WHERE staff_id = $1', [staffId])]);
   return { ...TRAINING.progress(new Map(ticks.rows.map((t) => [t.step_key, t])), facts, undefined, path.track, path.role,
-    new Map(times.rows.map((t) => [t.step_key, t]))), track: path.track, role: path.role };
+    new Map(times.rows.map((t) => [t.step_key, t]))), track: path.track, role: path.role,
+    readyKey: TRAINING.readyKeyFor(path.track, path.role) };
 }
 
 /** The owner's notes to a helper: written on /admin/training, or left when
@@ -29809,6 +29828,10 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
       [...stampRows.rows.filter((r) => r.kind === 'exam').map((r) => r.created_at), ...tries.flat().map((r) => r.created_at)]) : null;
     const articleId = new Map(arts.rows.map((a) => [a.title, a.id]));
     const mins = (n) => (n >= 60 ? `${Math.floor(n / 60)}h${n % 60 ? ` ${n % 60}m` : ''}` : `${n}m`);
+    /* The sign-off whose Undo can keep the commission window: this path's
+       ready, or a Sales ready from before role courses had their own. */
+    const endsTraining = (s) => s.key === p.readyKey
+      || (s.key === TRAINING.READY_KEY && s.doneAt && new Date(s.doneAt) < new Date(TRAINING.LEGACY_READY_BEFORE));
     const stepRow = (s) => {
       const lessonHref = s.type === 'lesson' ? `/admin/training/lesson/${encodeURIComponent(s.key.slice('lesson:'.length))}` : '';
       const link = s.locked && !owner ? escEmail(s.title)
@@ -29818,7 +29841,7 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
           : escEmail(s.title);
       let action = '';
       if (s.locked && !owner) {
-        action = pill('opens later', 'gray');
+        action = pill(s.waiting ? `after ${s.waiting}` : 'opens later', 'gray');
       } else if (s.type === 'lesson' && !s.done && !owner) {
         action = `<a class="btn" href="${lessonHref}">Start</a>`;
       } else if (s.type === 'read' && !s.done && !owner) {
@@ -29835,7 +29858,7 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
            first, like Restart: one stray tap used to clear a sign-off. */
         action = `<span class="muted" style="font-size:12px">You:</span><form method="post" action="/admin/training/signoff" style="margin:0;display:flex;gap:6px;align-items:center;flex-wrap:wrap" data-once>
           <input type="hidden" name="staff_id" value="${staffId}"><input type="hidden" name="key" value="${escEmail(s.key)}">
-          ${s.done ? `<input type="hidden" name="undo" value="1">${s.key === TRAINING.READY_KEY ? '<label style="display:flex;gap:4px;align-items:center;font-size:12px" title="Clear it if the sign-off was a mistake"><input type="checkbox" name="keep_window" value="1" checked style="width:auto"> keep commission already earned</label>' : ''}<label style="display:flex;gap:4px;align-items:center;font-size:12px"><input type="checkbox" name="confirm" value="1" required style="width:auto"> sure</label><button type="submit" class="btn btn-ghost">Undo</button>`
+          ${s.done ? `<input type="hidden" name="undo" value="1">${endsTraining(s) ? '<label style="display:flex;gap:4px;align-items:center;font-size:12px" title="Clear it if the sign-off was a mistake"><input type="checkbox" name="keep_window" value="1" checked style="width:auto"> keep commission already earned</label>' : ''}<label style="display:flex;gap:4px;align-items:center;font-size:12px"><input type="checkbox" name="confirm" value="1" required style="width:auto"> sure</label><button type="submit" class="btn btn-ghost">Undo</button>`
                    : s.locked ? `<button type="button" class="btn btn-ghost" disabled title="${s.waiting ? `Waits for ${escEmail(s.waiting)}` : 'Opens once they pass the quiz or exam before it'}">Not yet</button>${s.waiting ? `<span class="muted" style="font-size:12px">waits for ${escEmail(s.waiting)}</span>` : ''}`
                    : '<button type="submit" class="btn">Sign off</button>'}</form>`;
       }
@@ -30131,6 +30154,13 @@ async function quizOpenFor(actor, key) {
   return !!s && !s.locked;
 }
 
+/** Why a helper's quiz is still shut, in their words. */
+async function quizShutWhy(actor, key) {
+  const p = await trainingFor(actor.id).catch(() => null);
+  const s = p && p.steps.find((x) => x.type === 'quiz' && x.quiz === key);
+  return s && s.waiting ? `That quiz opens once you finish ${s.waiting} in this module.` : 'That quiz opens once you pass the module before it.';
+}
+
 /* ── The quote exam (tools/lib/quote-exam.js) ─────────────────────────────
    The Sales course's module 6. Each scenario is built in the real quote form
    in practice mode; the save route prices it, then hands it here to be
@@ -30228,7 +30258,7 @@ app.get('/admin/training/quiz/:key', requireAdmin, async (req, res) => {
   const z = quizStep(key, owner ? null : actor.track, owner ? null : actor.role) && TRAINING.QUIZZES[key];
   if (!z) return back(res, '/admin/training', 'err', 'No such quiz.');
   try {
-    if (!owner && !(await quizOpenFor(actor, key))) return back(res, '/admin/training', 'err', 'That quiz opens once you pass the module before it.');
+    if (!owner && !(await quizOpenFor(actor, key))) return back(res, '/admin/training', 'err', await quizShutWhy(actor, key));
     if (owner) {
       const roster = (await staffRoster({ activeOnly: true }))
         .filter((r) => TRAINING.visibleSteps(undefined, r.training_track, r.sales_role).some((x) => x.quiz === key));
@@ -30276,7 +30306,7 @@ app.post('/admin/training/quiz/:key', requireAdmin, async (req, res) => {
   const key = String(req.params.key || '');
   if (!actor || actor.kind !== 'staff') return res.redirect(`/admin/training/quiz/${encodeURIComponent(key)}`);
   if (!quizStep(key, actor.track, actor.role)) return back(res, '/admin/training', 'err', 'No such quiz.');
-  if (!(await quizOpenFor(actor, key).catch(() => false))) return back(res, '/admin/training', 'err', 'That quiz opens once you pass the module before it.');
+  if (!(await quizOpenFor(actor, key).catch(() => false))) return back(res, '/admin/training', 'err', await quizShutWhy(actor, key));
   const r = TRAINING.gradeQuiz(key, req.body || {});
   const log = JSON.stringify(TRAINING.answerLog(r.results));
   let id;
@@ -31435,9 +31465,12 @@ app.post('/admin/training/read', requireAdmin, async (req, res) => {
     if (s.type === 'lesson') {
       p = await trainingFor(actor.id);
       if (!TRAINING.stepOpen(p, key)) return back(res, '/admin/training', 'err', 'That lesson opens once you pass the quiz before it.');
-      await pool.query(
-        `INSERT INTO staff_lesson_time (staff_id, step_key, started_at, done_at) VALUES ($1, $2, NOW(), NOW())
-         ON CONFLICT (staff_id, step_key) DO UPDATE SET done_at = COALESCE(staff_lesson_time.done_at, NOW())`, [actor.id, key]);
+      /* Finished only once opened: opening the lesson writes started_at.
+         No minimum time (owner: "never block"), so a quick reader is fine. */
+      const { rowCount: opened } = await pool.query(
+        `UPDATE staff_lesson_time SET done_at = COALESCE(done_at, NOW())
+          WHERE staff_id = $1 AND step_key = $2 AND started_at IS NOT NULL`, [actor.id, key]);
+      if (!opened) return back(res, `/admin/training/lesson/${encodeURIComponent(key.slice('lesson:'.length))}`, 'err', 'Open the lesson and read it first.');
     }
     await pool.query(`INSERT INTO staff_training (staff_id, step_key) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [actor.id, key]);
     if (s.type === 'lesson') {
@@ -31482,12 +31515,12 @@ app.post('/admin/training/signoff', requireAdmin, async (req, res) => {
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
-        if (key === TRAINING.READY_KEY && String(b.keep_window || '') === '1') {
+        if (String(b.keep_window || '') === '1') {
           await client.query(
             `INSERT INTO staff_training (staff_id, step_key, done_at)
              SELECT staff_id, 'signoff:was-ready-until:' || to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), done_at
-               FROM staff_training WHERE staff_id = $1 AND step_key = $2
-             ON CONFLICT DO NOTHING`, [staffId, key]);
+               FROM staff_training t WHERE t.staff_id = $1 AND t.step_key = $3 AND ${readyRow('t', '$2')}
+             ON CONFLICT DO NOTHING`, [staffId, TRAINING.readyKeyFor(path.track, path.role), key]);
         }
         ({ rowCount: removed } = await client.query('DELETE FROM staff_training WHERE staff_id = $1 AND step_key = $2', [staffId, key]));
         await client.query('COMMIT');
@@ -31554,8 +31587,9 @@ app.post('/admin/training/restart', requireAdmin, async (req, res) => {
     await client.query(
       `INSERT INTO staff_training (staff_id, step_key, done_at)
        SELECT staff_id, 'signoff:was-ready-until:' || to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), done_at
-         FROM staff_training WHERE staff_id = $1 AND step_key = $2
-       ON CONFLICT DO NOTHING`, [staffId, TRAINING.READY_KEY]);
+         FROM staff_training t WHERE t.staff_id = $1 AND ${readyRow('t', '$2')}
+        ORDER BY t.done_at
+       ON CONFLICT DO NOTHING`, [staffId, await readyKeyOf(staffId)]);
     /* Nothing is lost: the ticks, sign-offs and lesson times cleared are
        snapshotted, and quiz and exam tries are only put aside, so the
        owner's answer log still lists them under the restart. */

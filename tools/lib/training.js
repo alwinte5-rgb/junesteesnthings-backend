@@ -70,6 +70,19 @@ const STEPS = [];
 
 const READY_KEY = 'signoff:ready';
 
+/* A Sales "ready" given before this time ends training even on a role path,
+   from before role courses had their own ready sign-off: nobody already
+   earning commission loses it. */
+const LEGACY_READY_BEFORE = '2026-10-13T09:00:00Z';
+
+/** The sign-off that ends training on a path: the last "ready" on it. On a
+ *  sales-role path that is the role course's (signoff:closer-ready and so
+ *  on); READY_KEY stays the Sales course milestone. */
+function readyKeyFor(track = DEFAULT_TRACK, role = null) {
+  const keys = visibleSteps(undefined, track, role).filter((s) => s.type === 'signoff' && (s.key === READY_KEY || /^signoff:[a-z]+-ready$/.test(s.key))).map((s) => s.key);
+  return keys.length ? keys[keys.length - 1] : READY_KEY;
+}
+
 /* A course as steps, in order. Each step carries its module, so the page can
    group them and progress() can keep later modules closed. A module's gate
    is its quiz, or its exam when it has no quiz; a module with neither (or
@@ -137,7 +150,8 @@ function mayTick(key, byOwner, features = FEATURES, track = DEFAULT_TRACK, role 
  * Buffer rows are time, not work: never counted in done/total, and shown
  * done once their module's gate is passed. Every step after the first
  * module whose gate is not passed is `locked`, and so is a course's closing
- * sign-off until its final exam and lessons are done (`waiting` says which).
+ * sign-off until its final exam and lessons are done, and a module quiz
+ * until its module's lessons are (`waiting` says which).
  */
 function progress(ticks, facts = {}, features = FEATURES, track = DEFAULT_TRACK, role = null, times = new Map()) {
   const raw = visibleSteps(features, track, role).map((s) => {
@@ -157,8 +171,14 @@ function progress(ticks, facts = {}, features = FEATURES, track = DEFAULT_TRACK,
   const openUpTo = order.findIndex((m) => gateDone.has(m) && !gateDone.get(m));
   /* A course's closing sign-offs (ready starts commission and ends training)
      share the final module with the final exam, so the module gate never
-     held them. They wait for that exam and for every lesson in the course. */
+     held them. They wait for that exam and for every lesson in the course.
+     A module quiz waits for that module's lessons. */
   const waitFor = (s) => {
+    /* A module quiz waits for its own module's lessons. */
+    if (s.type === 'quiz' && s.gate && s.course && s.module !== `${s.course}:final`) {
+      const n = raw.filter((x) => x.module === s.module && x.type === 'lesson' && !x.done).length;
+      return n ? `${n} lesson${n === 1 ? '' : 's'}` : '';
+    }
     if (s.type !== 'signoff' || !s.course || s.module !== `${s.course}:final`) return '';
     const exam = raw.find((x) => x.module === s.module && x.gate);
     const lessons = raw.filter((x) => x.course === s.course && x.type === 'lesson' && !x.done).length;
@@ -433,7 +453,7 @@ function fillGap(text, token, answer, nth) {
   return parts.slice(0, nth + 1).join(token) + a + parts.slice(nth + 1).join(token);
 }
 
-module.exports = { FEATURES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
+module.exports = { FEATURES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
   visibleSteps, stepByKey, mayTick, progress, stepOpen, placeholders, ownerGaps, fillGap, dayCount, passMark, courseSteps, lessonPages,
   COURSES: COURSES.COURSES, SALES_ROLES: COURSES.SALES_ROLES, salesRoleOf: COURSES.salesRoleOf,
   lessonArticles: COURSES.lessonArticles, glossary: COURSES.glossary };

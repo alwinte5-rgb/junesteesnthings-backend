@@ -245,9 +245,9 @@ test('every quiz question points at a playbook article that really exists', () =
 
 test('commission starts at the "ready" sign-off, and a recorded payout never disappears', () => {
   const fn = src.slice(src.indexOf('async function commissionLines('), src.indexOf('\n}\n', src.indexOf('async function commissionLines(')));
-  assert.match(fn, /t\.step_key = \$2\s+AND q\.created_at >= t\.done_at/, 'only quotes created after the sign-off earn');
+  assert.match(fn, /\$\{readyRow\('t', '\$2'\)\}\s+AND q\.created_at >= t\.done_at/, 'only quotes created after the sign-off earn');
   assert.match(fn, /OR EXISTS \(SELECT 1 FROM commission_payouts c WHERE c\.staff_id = \$1 AND c\.quote_code = q\.code\)/);
-  assert.match(fn, /\[staffId, TRAINING\.READY_KEY\]/);
+  assert.match(fn, /\[staffId, await readyKeyOf\(staffId\)\]/);
   assert.match(TRAINING.visibleSteps(undefined, 'sales').find((s) => s.key === TRAINING.READY_KEY).hint, /Commission starts here/);
 });
 

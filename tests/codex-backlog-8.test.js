@@ -30,7 +30,7 @@ test('#222 the ready sign-off waits for the gate before it', () => {
   // Undo asks for a tick, keeps the commission window of "ready", and is logged.
   const undo = r.slice(r.indexOf('if (b.undo)'), r.indexOf('if (!open || open.locked)'));
   assert.match(undo, /if \(String\(b\.confirm \|\| ''\) !== '1'\) return back/);
-  assert.match(undo, /if \(key === TRAINING\.READY_KEY && String\(b\.keep_window \|\| ''\) === '1'\)[\s\S]*'signoff:was-ready-until:'/,
+  assert.match(undo, /if \(String\(b\.keep_window \|\| ''\) === '1'\)[\s\S]*'signoff:was-ready-until:'[\s\S]*readyRow\('t', '\$2'\)/,
     'the window is kept only when the owner leaves "keep commission" ticked');
   assert.match(undo, /if \(removed\) log\('training sign-off undone'\)/, 'logged only when a row really went');
   assert.match(r, /if \(added\) log\('training signed off'\)/);
