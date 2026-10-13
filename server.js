@@ -1632,6 +1632,17 @@ async function initStaffTables() {
       at        TIMESTAMPTZ NOT NULL,
       PRIMARY KEY (staff_id, at)
     )`);
+  /* Which business a week's clock hours were approved under, and how many,
+     so approving again moves them rather than adding a second row. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_clock_approvals (
+      staff_id     INTEGER NOT NULL,
+      week_of      DATE NOT NULL,
+      business     TEXT NOT NULL,
+      hours        NUMERIC(6,2) NOT NULL,
+      approved_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (staff_id, week_of)
+    )`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS staff_timeproof (
       staff_id    INTEGER NOT NULL,
@@ -9538,7 +9549,8 @@ function catalogWithoutCosts(catalog) {
 }
 
 function quotePage(title, body) {
-  return htmlDocument(title, `<div class="wrap">${body}</div>`);
+  // clockScript() is empty for a customer; a helper on the clock in the quote editor still counts as working.
+  return htmlDocument(title, `<div class="wrap">${body}</div>${clockScript()}`);
 }
 
 /* ── Building blocks for the admin pages ────────────────────────────────────
@@ -28038,6 +28050,22 @@ function clockWeekParam(v) {
   return TEAM.weekOf(d ? new Date(`${d}T12:00:00Z`) : new Date());
 }
 
+/** Every lesson on any path, by key: its title and expected minutes. The
+ *  course catalogue is fixed at boot, so this is worked out once. */
+let lessonCat = null;
+function lessonCatalogue() {
+  if (lessonCat) return lessonCat;
+  const m = new Map();
+  for (const track of Object.keys(TRAINING.TRACKS)) {
+    for (const role of [null, ...Object.keys(TRAINING.SALES_ROLES)]) {
+      if (role && track !== 'sales') continue;
+      for (const st of TRAINING.visibleSteps(undefined, track, role)) if (st.type === 'lesson' && !m.has(st.key)) m.set(st.key, st);
+    }
+  }
+  lessonCat = m;
+  return m;
+}
+
 /** Everything the owner's week view needs for one helper. */
 async function clockWeek(staffId, week) {
   const from = TEAM.localMidnight(week);
@@ -28046,24 +28074,25 @@ async function clockWeek(staffId, week) {
   /* Activity in the week, and on past its end while a shift that started in
      it was still running. */
   const until = new Date(Math.max(Date.parse(to), ...shifts.rows.map((sh) => (sh.ended_at ? new Date(sh.ended_at) : new Date()).getTime())));
-  const [pings, times, tp, ips, hours, p] = await Promise.all([
+  const [pings, times, tp, ips, hours, covering, appr] = await Promise.all([
     pool.query(`SELECT at FROM staff_pings WHERE staff_id = $1 AND at >= $2 AND at < $3 ORDER BY at`, [staffId, from, until]),
     pool.query(`SELECT step_key, started_at, done_at FROM staff_lesson_time WHERE staff_id = $1 AND started_at >= $2 AND started_at < $3`, [staffId, from, to]),
     pool.query('SELECT minutes FROM staff_timeproof WHERE staff_id = $1 AND week_of = $2', [staffId, week]),
     pool.query(`SELECT DISTINCT start_ip FROM staff_shifts WHERE staff_id = $1 AND started_at < $2 AND start_ip IS NOT NULL`, [staffId, from]),
     pool.query(`SELECT business, hours::float AS hours, paid_at FROM staff_hours WHERE staff_id = $1 AND week_of = $2`, [staffId, week]),
-    trainingFor(staffId).catch(() => ({ steps: [] }))]);
-  const lessonInfo = new Map(p.steps.filter((s) => s.type === 'lesson').map((s) => [s.key, s]));
+    pool.query(`SELECT started_at, ended_at FROM staff_shifts WHERE staff_id = $1 AND started_at < $2 AND COALESCE(ended_at, NOW()) > $2`, [staffId, from]),
+    pool.query('SELECT business, hours::float AS hours, approved_at FROM staff_clock_approvals WHERE staff_id = $1 AND week_of = $2', [staffId, week])]);
+  const lessonInfo = lessonCatalogue();
   const lessons = times.rows.filter((t) => lessonInfo.has(t.step_key)).map((t) => ({
     title: lessonInfo.get(t.step_key).title, expected: Number(lessonInfo.get(t.step_key).minutes) || 0,
     started_at: t.started_at, done_at: t.done_at }));
   const timeproofMinutes = tp.rows[0] ? Number(tp.rows[0].minutes) : null;
   const pingTimes = pings.rows.map((r) => r.at);
   const flags = TIMECLOCK.flags({ shifts: shifts.rows, pings: pingTimes, lessons, timeproofMinutes,
-    knownIps: ips.rows.map((r) => r.start_ip) });
+    knownIps: ips.rows.map((r) => r.start_ip), coveringShifts: covering.rows });
   const minutes = shifts.rows.reduce((n, sh) => n + TIMECLOCK.shiftMinutes(sh), 0);
   return { week, from, to, shifts: shifts.rows, pings: pingTimes, flags, minutes, timeproofMinutes,
-    open: shifts.rows.some((sh) => !sh.ended_at), hours: hours.rows };
+    open: shifts.rows.some((sh) => !sh.ended_at), hours: hours.rows, approval: appr.rows[0] || null };
 }
 
 const clockTime = (d) => (d ? new Date(d).toLocaleString('en-US', { timeZone: SHOP_TZ, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—');
@@ -28166,8 +28195,11 @@ app.post('/admin/clock/ping', requireAdmin, (req, res) => res.status(204).end())
 app.get('/admin/timeclock', requireAdmin, async (req, res) => {
   try {
     const week = clockWeekParam(req.query.week);
-    const roster = await staffRoster({ activeOnly: true });
+    const everyone = await staffRoster();
     const staffId = intIn(req.query.staff);
+    /* Active helpers, plus the one asked for: someone disabled before their
+       last week was approved can still be reviewed. */
+    const roster = everyone.filter((r) => r.active || r.id === staffId);
     const chips = (id) => roster.map((r) => `<a class="btn ${r.id === id ? '' : 'btn-ghost'}" href="/admin/timeclock?staff=${r.id}&amp;week=${week}">${escEmail(r.name)}</a>`).join(' ');
     const weekNav = (id) => `<a class="btn btn-ghost" href="/admin/timeclock?${id ? `staff=${id}&amp;` : ''}week=${weekShift(week, -7)}">&larr; Earlier</a>
       ${week < TEAM.weekOf(new Date()) ? `<a class="btn btn-ghost" href="/admin/timeclock?${id ? `staff=${id}&amp;` : ''}week=${weekShift(week, 7)}">Later &rarr;</a>` : ''}`;
@@ -28195,7 +28227,7 @@ app.get('/admin/timeclock', requireAdmin, async (req, res) => {
       <div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:12px">${chips(who.id)}</div>
       ${flash(req.query)}
       <div class="card"><b>${TRAINING.hm(w.minutes)} on the clock</b> (${TIMECLOCK.hoursOf(w.minutes)} hours)${w.open ? ' &middot; a shift is still running' : ''}
-        ${w.hours.length ? `<p class="muted">Approved: ${approved}h${paid ? ' (paid, locked)' : ''}${Math.abs(approved - TIMECLOCK.hoursOf(w.minutes)) > 0.01 && !paid ? ' — differs from the clock now; approve again to update it' : ''}</p>` : ''}
+        ${w.hours.length ? `<p class="muted">${w.approval ? `Approved from the clock: ${w.approval.hours}h for ${escEmail(BUSINESSES[w.approval.business] || w.approval.business)}. ` : 'Typed on Team: '}On Team: ${approved}h${paid ? ' (paid, locked)' : ''}${Math.abs(approved - TIMECLOCK.hoursOf(w.minutes)) > 0.01 && !paid ? ' — differs from the clock now; approve again to update it' : ''}</p>` : ''}
         <form method="post" action="/admin/timeclock/timeproof" data-once class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px;align-items:end">
           <input type="hidden" name="staff_id" value="${who.id}"><input type="hidden" name="week_of" value="${week}">
           <label>TimeProof hours this week <input type="number" name="hours" min="0" max="80" step="0.01" style="width:100px" value="${w.timeproofMinutes != null ? TIMECLOCK.hoursOf(w.timeproofMinutes) : ''}"></label>
@@ -28204,6 +28236,8 @@ app.get('/admin/timeclock', requireAdmin, async (req, res) => {
         ${paid || !w.shifts.length ? '' : `<form method="post" action="/admin/timeclock/approve" data-once class="row" style="gap:8px;flex-wrap:wrap;margin-top:10px;align-items:end">
           <input type="hidden" name="staff_id" value="${who.id}"><input type="hidden" name="week_of" value="${week}">
           <label>For <select name="business">${Object.entries(BUSINESSES).map(([k, v]) => `<option value="${k}">${escEmail(v)}</option>`).join('')}</select></label>
+          ${w.hours.length && !w.approval ? `<label style="display:flex;gap:6px;align-items:center;font-size:12.5px"><input type="checkbox" name="replace" value="1" style="width:auto">
+            Replace the ${w.hours.reduce((n, h) => n + h.hours, 0)}h typed on Team for this week</label>` : ''}
           <button type="submit"${w.open ? ' disabled title="End the running shift first"' : ''}>Approve ${TIMECLOCK.hoursOf(w.minutes)} hours</button></form>`}</div>
       <div class="card"><b>To look at (${w.flags.length})</b>
         ${w.flags.length ? w.flags.map((f) => `<div class="row-i"><span class="row-main" style="white-space:normal;color:${tone[f.tone] || tone.neutral}">${escEmail(f.text)}</span>
@@ -28247,6 +28281,13 @@ async function shiftOverlaps(staffId, start, end, exceptId = 0) {
   return !!x;
 }
 
+/** Is any of these weeks' wages already paid for this helper? */
+async function weekPaid(staffId, weeks) {
+  const { rows: [x] } = await pool.query(
+    'SELECT 1 FROM staff_hours WHERE staff_id = $1 AND week_of = ANY($2::date[]) AND paid_at IS NOT NULL LIMIT 1', [staffId, weeks]);
+  return !!x;
+}
+
 const weekBack = (staffId, d) => `/admin/timeclock?staff=${Number(staffId)}&week=${TEAM.weekOf(d)}`;
 
 app.post('/admin/timeclock/shift', requireAdmin, async (req, res) => {
@@ -28261,6 +28302,7 @@ app.post('/admin/timeclock/shift', requireAdmin, async (req, res) => {
     const { rows: [s] } = await pool.query('SELECT id FROM staff WHERE id = $1', [staffId]);
     if (!s) return back(res, '/admin/timeclock', 'err', 'No such helper.');
     if (await shiftOverlaps(staffId, t.start, t.end)) return back(res, weekBack(staffId, t.start), 'err', 'That overlaps one of their shifts.');
+    if (await weekPaid(staffId, [TEAM.weekOf(t.start)])) return back(res, weekBack(staffId, t.start), 'err', 'That week is already paid, so its shifts are locked.');
     await pool.query(`INSERT INTO staff_shifts (staff_id, started_at, ended_at, ended_how, owner_note, edited_at)
                       VALUES ($1, $2, $3, 'owner', $4, NOW())`, [staffId, t.start, t.end, note]);
     logActivity(currentActor(), 'shift added', { type: 'staff', id: staffId }, { started: t.start, ended: t.end, note });
@@ -28294,10 +28336,7 @@ app.post('/admin/timeclock/shift/:id', requireAdmin, async (req, res) => {
     if (cut > length) return back(res, to, 'err', 'You cannot cut more than the shift.');
     if (await shiftOverlaps(sh.staff_id, t.start, t.end, id)) return back(res, to, 'err', 'That overlaps another of their shifts.');
     // A shift in a week whose wages are paid is locked, like its hours.
-    const { rows: [paid] } = await pool.query(
-      `SELECT 1 FROM staff_hours WHERE staff_id = $1 AND week_of = ANY($2::date[]) AND paid_at IS NOT NULL LIMIT 1`,
-      [sh.staff_id, [TEAM.weekOf(sh.started_at), TEAM.weekOf(t.start)]]);
-    if (paid) return back(res, to, 'err', 'That week is already paid, so its shifts are locked.');
+    if (await weekPaid(sh.staff_id, [TEAM.weekOf(sh.started_at), TEAM.weekOf(t.start)])) return back(res, to, 'err', 'That week is already paid, so its shifts are locked.');
     await pool.query(`UPDATE staff_shifts SET started_at = $2, ended_at = $3, cut_minutes = $4, owner_note = $5, edited_at = NOW(),
                         ended_how = CASE WHEN ended_at IS NULL AND $3::timestamptz IS NOT NULL THEN 'owner' ELSE ended_how END
                       WHERE id = $1`, [id, t.start, t.end, cut, note]);
@@ -28316,17 +28355,18 @@ app.post('/admin/timeclock/timeproof', requireAdmin, async (req, res) => {
   const staffId = intIn(b.staff_id);
   const week = isoDate(b.week_of);
   if (!staffId || !week) return back(res, '/admin/timeclock', 'err', 'Pick a helper and a week.');
-  const to = `/admin/timeclock?staff=${staffId}&week=${TEAM.weekOf(new Date(`${week}T12:00:00Z`))}`;
+  const monday = TEAM.weekOf(new Date(`${week}T12:00:00Z`));
+  const to = `/admin/timeclock?staff=${staffId}&week=${monday}`;
   try {
     if (String(b.hours ?? '').trim() === '') {
-      await pool.query('DELETE FROM staff_timeproof WHERE staff_id = $1 AND week_of = $2', [staffId, week]);
+      await pool.query('DELETE FROM staff_timeproof WHERE staff_id = $1 AND week_of = $2', [staffId, monday]);
       return back(res, to, 'ok', 'TimeProof hours cleared.');
     }
     const hours = Number(b.hours);
     if (!Number.isFinite(hours) || hours < 0 || hours > 80) return back(res, to, 'err', 'TimeProof hours must be 0–80.');
     await pool.query(`INSERT INTO staff_timeproof (staff_id, week_of, minutes) VALUES ($1, $2, $3)
                       ON CONFLICT (staff_id, week_of) DO UPDATE SET minutes = EXCLUDED.minutes, updated_at = NOW()`,
-      [staffId, TEAM.weekOf(new Date(`${week}T12:00:00Z`)), Math.round(hours * 60)]);
+      [staffId, monday, Math.round(hours * 60)]);
     return back(res, to, 'ok', 'TimeProof hours saved.');
   } catch (err) {
     console.error('timeproof save failed:', err.message);
@@ -28350,11 +28390,33 @@ app.post('/admin/timeclock/approve', requireAdmin, async (req, res) => {
     if (!w.shifts.length) return back(res, to, 'err', 'No shifts that week, so there is nothing to approve. Hours typed on Team stay as they are.');
     const hours = TIMECLOCK.hoursOf(w.minutes);
     if (hours > 80) return back(res, to, 'err', `${hours} hours is over 80. Check the shifts first.`);
-    const { rowCount } = await pool.query(
-      `INSERT INTO staff_hours (staff_id, week_of, business, hours) VALUES ($1, $2, $3, $4)
-       ON CONFLICT (staff_id, week_of, business) DO UPDATE SET hours = EXCLUDED.hours
-       WHERE staff_hours.paid_at IS NULL`, [staffId, monday, business, hours]);
-    if (!rowCount) return back(res, to, 'err', `The week of ${monday} is already paid, so its hours are locked.`);
+    if (w.hours.some((h) => h.paid_at)) return back(res, to, 'err', `The week of ${monday} is already paid, so its hours are locked.`);
+    /* Hours typed on Team before any clock approval are not replaced without
+       a tick; an earlier clock approval under another business is moved. */
+    if (!w.approval && w.hours.length && String(b.replace || '') !== '1') {
+      return back(res, to, 'err', `${w.hours.reduce((n, h) => n + h.hours, 0)}h were typed on Team for this week. Tick "Replace" to use the clock's ${hours}h instead.`);
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      if (w.approval && w.approval.business !== business) {
+        await client.query('DELETE FROM staff_hours WHERE staff_id = $1 AND week_of = $2 AND business = $3 AND paid_at IS NULL',
+          [staffId, monday, w.approval.business]);
+      }
+      if (!w.approval && w.hours.length) {
+        // Replacing typed hours: the clock's figure stands alone for the week.
+        await client.query('DELETE FROM staff_hours WHERE staff_id = $1 AND week_of = $2 AND paid_at IS NULL', [staffId, monday]);
+      }
+      const { rowCount } = await client.query(
+        `INSERT INTO staff_hours (staff_id, week_of, business, hours) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (staff_id, week_of, business) DO UPDATE SET hours = EXCLUDED.hours
+         WHERE staff_hours.paid_at IS NULL`, [staffId, monday, business, hours]);
+      if (!rowCount) { await client.query('ROLLBACK'); return back(res, to, 'err', `The week of ${monday} is already paid, so its hours are locked.`); }
+      await client.query(`INSERT INTO staff_clock_approvals (staff_id, week_of, business, hours) VALUES ($1, $2, $3, $4)
+                          ON CONFLICT (staff_id, week_of) DO UPDATE SET business = EXCLUDED.business, hours = EXCLUDED.hours, approved_at = NOW()`,
+        [staffId, monday, business, hours]);
+      await client.query('COMMIT');
+    } catch (e) { await client.query('ROLLBACK').catch(() => {}); throw e; } finally { client.release(); }
     logActivity(currentActor(), 'clock week approved', { type: 'staff', id: staffId }, { week: monday, business, hours });
     return back(res, to, 'ok', `Approved ${hours} hours for the week of ${weekLabel(monday)}. They are on Team for wages.`);
   } catch (err) {

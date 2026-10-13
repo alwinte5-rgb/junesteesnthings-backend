@@ -17,7 +17,7 @@
 
    tests/timeclock.test.js. */
 
-const TZ = 'America/Chicago';
+const TZ = process.env.JT_TZ || 'America/Chicago';
 const IDLE_MINUTES = 30;
 const PROMPT_MINUTES = 25;
 const LONG_SHIFT_HOURS = 10;
@@ -63,7 +63,9 @@ function shiftMinutes(shift, now = Date.now()) {
 /** Pings outside every shift, as minutes per Chicago day (days with at
  *  least OFF_CLOCK_MINUTES only). */
 function offClock(shifts, pings, now = Date.now()) {
-  const spans = shifts.map((s) => [ms(s.started_at), s.ended_at ? ms(s.ended_at) : ms(now)]);
+  /* From the start of the clock-in minute: the clock-in itself is noted as
+     activity at the top of its minute, a few seconds before started_at. */
+  const spans = shifts.map((s) => [Math.floor(ms(s.started_at) / 60000) * 60000, s.ended_at ? ms(s.ended_at) : ms(now)]);
   const byDay = new Map();
   for (const p of pings) {
     const t = ms(p);
@@ -78,7 +80,7 @@ function offClock(shifts, pings, now = Date.now()) {
  *  { title, expected, started_at, done_at }; `timeproofMinutes` is what the
  *  owner typed from TimeProof (null when not typed). Each flag is
  *  { kind, tone, text, at }. */
-function flags({ shifts = [], pings = [], lessons = [], timeproofMinutes = null, knownIps = [], now = Date.now() } = {}) {
+function flags({ shifts = [], pings = [], lessons = [], timeproofMinutes = null, knownIps = [], now = Date.now(), coveringShifts = [] } = {}) {
   const out = [];
   const fmt = (m) => (m >= 60 ? `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ''}` : `${m}m`);
   const sorted = [...shifts].sort((a, b) => ms(a.started_at) - ms(b.started_at));
@@ -104,8 +106,9 @@ function flags({ shifts = [], pings = [], lessons = [], timeproofMinutes = null,
       out.push({ kind: 'idle', tone: 'amber', at: g.from, text: `${fmt(g.minutes)} on the clock with no activity` });
     }
   }
-  for (const d of offClock(shifts, pings, now)) {
-    out.push({ kind: 'off-clock', tone: 'red', at: `${d.day}T12:00:00`, text: `${fmt(d.minutes)} of work on ${d.day} while clocked out` });
+  // `coveringShifts`: shifts from the week before still running into this one.
+  for (const d of offClock([...coveringShifts, ...shifts], pings, now)) {
+    out.push({ kind: 'off-clock', tone: 'red', at: fromLocalInput(`${d.day}T12:00`), text: `${fmt(d.minutes)} of work on ${d.day} while clocked out` });
   }
   for (const l of lessons) {
     if (!l.started_at || !l.done_at || !(l.expected > 0)) continue;

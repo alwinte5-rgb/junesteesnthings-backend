@@ -94,3 +94,18 @@ test('approval works the hours out from the shifts, and paid weeks stay locked',
   assert.match(src, /if \(isPersonActivity\(req\)\) notePing\(staff\.id\);/);
   assert.match(src, /CREATE UNIQUE INDEX IF NOT EXISTS staff_shifts_open ON staff_shifts \(staff_id\) WHERE ended_at IS NULL/);
 });
+
+test('the clock-in minute and a shift from the week before are not "clocked out"', () => {
+  // Pinged at the top of the clock-in minute, seconds before started_at.
+  const sh = { started_at: new Date('2026-10-13T14:30:40Z'), ended_at: new Date('2026-10-13T16:00:00Z') };
+  const before = [0, 1, 2, 3].map((m) => new Date(Date.parse('2026-10-13T14:20:00Z') + m * 60000));
+  assert.deepStrictEqual(C.offClock([sh], [...before, new Date('2026-10-13T14:30:00Z')]), []);
+  // Sunday 11pm to Monday 2am: Monday's pings are covered by last week's shift.
+  const cover = { started_at: T('23:00', '2026-10-11'), ended_at: T('02:00', '2026-10-12') };
+  const monday = [5, 6, 7, 8, 9, 10].map((m) => T(`00:${String(m).padStart(2, '0')}`, '2026-10-12'));
+  assert.ok(C.flags({ pings: monday }).some((f) => f.kind === 'off-clock'));
+  assert.ok(!C.flags({ pings: monday, coveringShifts: [cover] }).some((f) => f.kind === 'off-clock'));
+  // The off-clock flag sits at noon on the shop clock, not the server's.
+  const f = C.flags({ pings: monday }).find((x) => x.kind === 'off-clock');
+  assert.strictEqual(C.toLocalInput(f.at), '2026-10-12T12:00');
+});
