@@ -126,7 +126,7 @@ module.exports = {
     ] },
     { from: 'When not to upsell', checks: [
       q('Their budget is fixed. Which upsell is OK?', ['Hoodies for everyone', 'A price break that lowers their per-piece price', 'Rush'], 1, 'Only what saves them money.'),
-      q('Which is NEVER OK?', ['Offering it as an optional item', 'Promising a discount to close it', 'Mentioning it in a follow-up'], 1, 'Discounts are June\'s.'),
+      q('Which is NEVER OK?', ['Offering it as an optional item', 'Promising a discount to close it', 'Mentioning it in a follow-up'], 1, 'Discounts are June\'s, and never a way to close an upsell.'),
     ] },
   ],
   's8-prospect': [

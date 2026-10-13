@@ -12661,6 +12661,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
       : false;
     const gate = STAFF.quoteNeedsApproval(actor, {
       total: allTotal, customPriced, forStaff,
+      pieces: items.reduce((n, i) => n + (Number(i.qty) || 0), 0),
       discountPct: listGross > 0 ? Math.max(0, (1 - allNet / listGross) * 100) : 0,
     });
     /* EDIT LOCKS (tools/lib/fraud-signals.js): once the customer has the
@@ -27058,9 +27059,9 @@ function permsEditor(perms) {
           <span class="row-main">${escEmail(def.label)}</span>
           <select name="perm_${key}">${def.levels.map((l) =>
             `<option value="${l}"${cur.level === l ? ' selected' : ''}>${levelWords[l]}</option>`).join('')}</select>
-          ${def.limit ? `<label class="muted" style="font-size:12px">${escEmail(def.limit.label)}
-            <input name="limit_${key}" type="number" min="0" step="1" style="width:80px"
-              value="${cur[def.limit.key] != null ? escEmail(String(cur[def.limit.key])) : ''}" placeholder="no limit"></label>` : ''}
+          ${STAFF.limitsOf(def).map((lim) => `<label class="muted" style="font-size:12px">${escEmail(lim.label)}
+            <input name="${lim.field}${key}" type="number" min="0" step="1" style="width:80px"
+              value="${cur[lim.key] != null ? escEmail(String(cur[lim.key])) : ''}" placeholder="no limit"></label>`).join('')}
         </div>`;
       }).join('')}
     </div>`).join('');

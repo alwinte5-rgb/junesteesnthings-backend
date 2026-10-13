@@ -61,7 +61,7 @@ Your targets: [owner to fill in: Sales Closer targets for reply time, conversion
 
 **What stays June's**
 
-- Any discount, price match, free item or custom price
+- Any discount beyond your 5% on 48 pieces or more (see Objections), and every price match, free item or custom price
 - Taking tax off (a customer uploads their certificate and June approves it)
 - A delivery date you have not checked on the production board
 - Logos the customer does not own, refunds and reprints

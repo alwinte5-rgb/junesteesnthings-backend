@@ -66,6 +66,9 @@ const REWORDED = [
    "- Spent $140 of $150. 9 quote requests ($15.50 each), 3 orders worth $1,250\n- About $500 profit for $140 of ads, so it is paying for itself\n- 'Custom apparel' spent $35 with nothing, mostly people looking for wholesale blanks. I paused it and added those searches as negatives\n- Next week: I would move that $35 to 'team shirts chicago', our best keyword. OK?\n- Back-to-school campaign is built and paused, ready for July 1 at $8 a day. Say yes and I will switch it on.\""],
   ["Approving a quote emails it to the customer for you; only one that could not be emailed shows on My Day for you to send.",
    "Once approved it shows on My Day; then you copy the message and send it."],
+  /* 2026-10-13: a Closer may give up to 5% on 48+ pieces (owner). */
+  ['- Any discount beyond your 5% on 48 pieces or more (see Objections), and every price match, free item or custom price',
+   '- Any discount, price match, free item or custom price'],
   /* 2026-10-13: nothing works out a prospecting reply rate for you. */
   ["- Your messages and their replies are on record, so you and June can work out your reply rate (replies divided by first messages)",
    "- Your messages and replies are counted, which is how your reply rate is worked out"],

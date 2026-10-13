@@ -138,9 +138,12 @@ test('playbook gaps: only facts the owner knows, never the blanks in a ready-mad
   assert.strictEqual(gaps[1].line, '- Deadlines under [X] business days', 'the line it sits in, for context');
   assert.deepStrictEqual(gaps.map((g) => g.hint), ['Just the number, e.g. 7', 'Just the number, e.g. 7', '', ''],
     'a blank followed by "days" asks for the number alone');
-  // every course lesson's gap is found, long ones included
-  const lessonGaps = TRAINING.lessonArticles().flatMap((a) => TRAINING.ownerGaps(a.body));
-  assert.ok(lessonGaps.length >= 4, `only ${lessonGaps.length} lesson gaps found`);
+  // every course lesson's gap is found, long ones included: the unanswered
+  // wordings (`was`) still carry them, and since 2026-10-13 every one is answered
+  const arts = TRAINING.lessonArticles();
+  const wasGaps = arts.flatMap((a) => (a.was || []).flatMap((b) => TRAINING.ownerGaps(b)));
+  assert.ok(wasGaps.length >= 4, `only ${wasGaps.length} lesson gaps found`);
+  assert.deepStrictEqual(arts.flatMap((a) => TRAINING.ownerGaps(a.body).map((g) => `${a.title}: ${g.token}`)), []);
 });
 
 test('filling a gap replaces every copy of it, and an answer cannot plant a new placeholder', () => {

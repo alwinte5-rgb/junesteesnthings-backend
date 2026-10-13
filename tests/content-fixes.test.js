@@ -64,3 +64,18 @@ test('every reworded line still appears in a lesson, so a stale pair cannot hide
   const texts = COURSES.lessonArticles().flatMap((a) => [a.body, ...(a.was || [])]).join('\n\u0000\n');
   for (const [now] of REWORDED) assert.ok(texts.includes(now), `no lesson says: ${now.slice(0, 80)}`);
 });
+
+test('a discount limited to 48 pieces or more holds smaller quotes for the owner', () => {
+  const STAFF = require('../tools/lib/staff');
+  const closer = { kind: 'staff', perms: { 'quotes.send': 'on', 'quotes.discount': { level: 'on', maxPct: 5, minQty: 48 } } };
+  assert.strictEqual(STAFF.quoteNeedsApproval(closer, { total: 95, listTotal: 100, pieces: 12 }).held, true);
+  assert.strictEqual(STAFF.quoteNeedsApproval(closer, { total: 95, listTotal: 100 }).held, true, 'unknown pieces count as too few');
+  assert.strictEqual(STAFF.quoteNeedsApproval(closer, { total: 95, listTotal: 100, pieces: 48 }).held, false);
+  assert.strictEqual(STAFF.quoteNeedsApproval(closer, { total: 100, listTotal: 100, pieces: 12 }).held, false, 'no discount, no hold');
+  assert.deepStrictEqual(STAFF.permsFromForm({ 'perm_quotes.discount': 'on', 'limit_quotes.discount': '5', 'limit2_quotes.discount': '48' })['quotes.discount'],
+    { level: 'on', maxPct: 5, minQty: 48 });
+  // Trusted keeps its 10% with no piece rule.
+  assert.deepStrictEqual(STAFF.presetPerms('trusted')['quotes.discount'], { level: 'on', maxPct: 10 });
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'server.js'), 'utf8');
+  assert.match(src, /pieces: items\.reduce\(\(n, i\) => n \+ \(Number\(i\.qty\) \|\| 0\), 0\)/);
+});

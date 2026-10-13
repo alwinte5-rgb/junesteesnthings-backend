@@ -17,7 +17,7 @@ module.exports = {
       q('Where is your reply time shown?', ['My stats', 'Resources', 'Nowhere'], 0, 'My stats.'),
     ] },
     { from: 'What stays June\'s', checks: [
-      q('A discount is…', ['June\'s decision', 'Yours', 'The customer\'s'], 0, 'Always June\'s.'),
+      q('A discount is…', ['June\'s decision, apart from up to 5% on 48+ pieces', 'Yours, any size', 'The customer\'s'], 0, 'June\'s, apart from that one small allowance.'),
       q('While you ask June, the customer…', ['Gets a reply now with a time', 'Waits in silence', 'Is told to call June'], 0, 'Reply, give a time, keep it.'),
     ] },
   ],
