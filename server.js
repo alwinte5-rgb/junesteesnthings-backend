@@ -31716,6 +31716,10 @@ app.post('/admin/training/read', requireAdmin, async (req, res) => {
     if (s.type === 'lesson') {
       /* On to the next lesson or quiz, as the page promised. Back to this
          lesson's base URL was page 1 of what was just finished (Codex #202). */
+      /* Read again now this lesson is done: the module quiz waits for its
+         lessons, so the progress read before the tick still had it shut and
+         the last lesson of a module sent them back to Training. */
+      p = await trainingFor(actor.id).catch(() => p);
       const walk = p.steps.filter((x) => x.type === 'lesson' || x.type === 'quiz');
       const nx = walk[walk.findIndex((x) => x.key === key) + 1];
       const to = nx && !nx.locked

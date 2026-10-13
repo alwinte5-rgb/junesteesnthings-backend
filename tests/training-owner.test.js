@@ -87,3 +87,10 @@ test('the quiz form submits once', () => {
   assert.match(r, /action="\/admin\/training\/quiz\/\$\{escEmail\(key\)\}" data-once>/);
   assert.match(r, /\$\{SHIP_ONCE_JS\}/);
 });
+
+test('finishing a module\'s last lesson goes on to its quiz: progress is read again after the tick', () => {
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'server.js'), 'utf8');
+  const i = src.indexOf("app.post('/admin/training/read'");
+  const body = src.slice(i, i + 4000);
+  assert.ok(body.indexOf('INSERT INTO staff_training (staff_id, step_key)') < body.indexOf('p = await trainingFor(actor.id).catch(() => p);'));
+});
