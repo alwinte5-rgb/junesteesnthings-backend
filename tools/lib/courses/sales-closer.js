@@ -416,7 +416,7 @@ Check the production board and ask June. Only DTF can be rushed, and only when t
 
 **"That's below your minimum"**
 
-Screen printing starts at 50. For fewer, offer DTF: no minimum, full colour.
+Under 50 pieces, screen printing is charged as 50. For fewer, offer DTF: no minimum, full colour.
 
 **When they go quiet**
 

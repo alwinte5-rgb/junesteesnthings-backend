@@ -29618,6 +29618,9 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
                         WHERE a.kind = 'quote' AND a.status = 'approved' AND a.requested_by = $1
                           AND a.decided_at > NOW() - interval '7 days'
                           AND q.status IN ('sent', 'viewed') AND q.accepted_at IS NULL AND q.cancelled_at IS NULL
+                          -- Approving emails the quote (releaseHeldQuote); only one that did
+                          -- not go (no address, or the send failed) is left to send by hand.
+                          AND q.emailed_at IS NULL
                         ORDER BY a.decided_at DESC`, [me]) : Promise.resolve({ rows: [] }),
       can('quotes.view') ? liveJobs() : Promise.resolve([]),
     ]);
@@ -29686,7 +29689,7 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
       ${art.customer.length ? section(`Waiting on the customer (${art.customer.length})`, artQueueRows(art.customer)) : ''}
       ${art.questions.length ? section(`The designer has a question (${art.questions.length})`, artQueueRows(art.questions)) : ''}
       ${art.approve.length ? section(`Final art to approve (${art.approve.length})`, artQueueRows(art.approve)) : ''}
-      ${released.rows.length ? section('Approved — send these now', released.rows.map((q) => `
+      ${released.rows.length ? section('Approved, but not emailed: send these yourself', released.rows.map((q) => `
         <div class="row-i" style="flex-wrap:wrap"><span class="row-main"><b>${escEmail(q.code)}</b> ${escEmail(q.name || '')} &middot; ${money(q.total)}
           <div class="msg" id="rel-${escEmail(q.code)}" style="white-space:pre-wrap">${escEmail(quoteMessages(q).initial)}</div></span>
           <span class="row-end"><button type="button" class="btn btn-ghost" onclick="jtCopy('rel-${escEmail(q.code)}')">Copy</button></span></div>`).join('')) : ''}
@@ -32013,7 +32016,10 @@ const KB_SEED = [
   { kind: 'faq', shortcut: 'deposit', title: 'Do I pay up front?', tags: 'deposit, payment, pay, balance',
     body: `We take a 50% deposit to start your order, and the balance when it is ready. Orders under $100 are paid in full up front.\n\nYou can pay online from your quote link. Card payments carry a 4% card fee; other ways to pay are listed on the quote.` },
   { kind: 'faq', shortcut: 'minimums', title: 'Is there a minimum order?', tags: 'minimum, how many, quantity, small order',
-    body: `It depends on the decoration. Screen printing starts at 50 pieces, because each color needs its own screen. For smaller runs we print DTF (full color, no minimum) or embroider. Tell me how many you need and I will suggest the best-value option.` },
+    body: `It depends on the decoration. Screen printing is best from 50 pieces: each color needs its own screen, so a smaller run is charged as 50. For smaller runs we print DTF (full color, no minimum) or embroider (from 5 pieces). Tell me how many you need and I will suggest the best-value option.`,
+    /* 2026-10-13: a small screen run is charged as 50, not refused, and
+       embroidery starts at 5. An unedited live copy updates. */
+    was: [`It depends on the decoration. Screen printing starts at 50 pieces, because each color needs its own screen. For smaller runs we print DTF (full color, no minimum) or embroider. Tell me how many you need and I will suggest the best-value option.`] },
   { kind: 'faq', shortcut: 'artfiles', title: 'What artwork should I send?', tags: 'artwork, files, logo, vector, png, resolution',
     body: `The best file is a vector (AI, EPS, PDF or SVG). If you only have an image, send the largest PNG you have with a transparent background, ideally 300 dpi at the size you want it printed.\n\nNo file at all? No problem. Send a photo or sketch and we can redraw it (a design fee may apply; I will tell you before we start).` },
   { kind: 'faq', shortcut: 'quote', title: 'What do you need for a quote?', tags: 'quote, price, estimate, cost',
@@ -32032,10 +32038,12 @@ const KB_SEED = [
   { kind: 'artwork', decoration: 'dtf', title: 'DTF: artwork do\'s and don\'ts', tags: 'dtf, full color, transfer, png',
     body: `**Do**\n\n- Ask for a transparent PNG at 300 dpi at print size\n- Offer it for full-colour designs and small quantities\n\n**Don't**\n\n- Accept semi-transparent pixels, glows or soft shadows (they print as a haze)\n- Leave a white box behind the design\n\n**Always escalate**\n\n- Logos the customer does not own\n- Low-resolution files` },
   { kind: 'artwork', decoration: 'patches', title: 'Patches, vinyl and puff print: what to check', tags: 'patches, vinyl, puff',
-    body: `Confirm with the owner before quoting:\n\n- Minimum size and quantity [owner to fill in]\n- Color limits [owner to fill in]\n- Which garments each one works on [owner to fill in]` },
+    body: `Confirm with the owner before quoting:\n\n- Minimum size and quantity: puff print 12 pieces, art at least 2in tall, lines at least 1/8in; vinyl 1 piece and up, lines at least 1/8in; patches 25 pieces, 2in to 4in\n- Color limits: puff print 1 color; vinyl up to 3 colors, one layer each; patches up to 9 thread colors\n- Which garments each one works on: puff print on cotton and cotton-blend tees, hoodies and caps; vinyl on cotton, poly and blends, never nylon or rain jackets; patches on hats, jackets, bags and heavier tops`,
+    /* The owner's answers (2026-10-13), the same as the Design and Sales courses. */
+    was: [`Confirm with the owner before quoting:\n\n- Minimum size and quantity [owner to fill in]\n- Color limits [owner to fill in]\n- Which garments each one works on [owner to fill in]`] },
 
   { kind: 'sop', title: 'New lead: first reply to quote', tags: 'lead, reply, quote, process, sop',
-    body: `- Open My Day. Answer the oldest lead first\n- Reply within 15 minutes for chats and 1 hour for forms, during working hours\n- Log what you did on the lead (Call / Email / Text / Chat). That is what counts as answered\n- Get the details in the /admin/quote reply. Build the quote from the lead (the Quote button), so it links back\n- If your quote is held for approval, it shows on My Day once approved. Then copy the message and send it\n- Set a follow-up date on the lead` },
+    body: `- Open My Day. Answer the oldest lead first\n- Reply within 15 minutes for chats and 1 hour for forms, during working hours\n- Log what you did on the lead (Call / Email / Text / Chat). That is what counts as answered\n- Get the details with the /quote reply. Build the quote from the lead (the Quote button), so it links back\n- If your quote is held for approval, it shows on My Day once approved. Then copy the message and send it\n- Set a follow-up date on the lead` },
   { kind: 'sop', title: 'Proof approval', tags: 'proof, approval, production',
     body: `- Send the proof from the job page\n- Get approval in writing (email, text or chat), and log it as a note on the job\n- Do not tick "Proof approved" until you have it in writing` },
   { kind: 'sop', title: 'Chasing deposits and balances', tags: 'deposit, balance, reminder, money',
@@ -32194,7 +32202,7 @@ const KB_ADDED = [
 `- Notes for the customer: \`Thanks for choosing June's Tees! A proof comes before anything is printed.\`\n\n` +
 `**Step 5: check it, then save**\n\n` +
 `- A total shows under the items. Write it down\n` +
-`- No orange warning under the item. (Change Qty to 30 and look: the warning says screen printing starts at 50 and to quote DTF. Change it back to 50)\n` +
+`- No orange warning under the item. (Change Qty to 30 and look: the warning says under 50 screen printing is charged as 50, and that DTF may be the better quote. Change it back to 50)\n` +
 `- Press **Save as draft**, not Finish\n` +
 `- Tell the owner in Team chat: "Practice quote saved, total $___". The owner opens it, checks it, and signs off the step\n\n` +
 `**What the owner checks**\n\n` +
@@ -32685,6 +32693,10 @@ KB_ADDED.push({ kind: 'sop', title: PAY_GUIDE_TITLE,
     .split('(For you: never promise a date or a rush price before June confirms it. Only embroidery can be rushed: screen printing and DTF are made by our partner, who sells no rush. Reply the same day either way.)').join('(For you: never promise a date before June confirms it. Reply the same day either way.)')];
   if (r) { r.was.push(r.body); r.body = current; }
 }
+/* 2026-10-13: "/admin/quote reply" was a typo for the /quote reply. */
+{ const x = KB_SEED.find((y) => y.title === 'New lead: first reply to quote'); if (x && x.body.includes('- Get the details with the /quote reply. Build the quote')) x.was = [...(x.was || []), x.body.split('- Get the details with the /quote reply. Build the quote').join('- Get the details in the /admin/quote reply. Build the quote')]; }
+/* 2026-10-13: the practice quote's warning reads "charged as 50" now. */
+{ const x = KB_ADDED.find((y) => y.title === 'Practice quote: a basic screen print order'); if (x && x.body.includes('(Change Qty to 30 and look: the warning says under 50 screen printing is charged as 50, and that DTF may be the better quote. Change it back to 50)')) x.was = [...(x.was || []), x.body.split('(Change Qty to 30 and look: the warning says under 50 screen printing is charged as 50, and that DTF may be the better quote. Change it back to 50)').join('(Change Qty to 30 and look: the warning says screen printing starts at 50 and to quote DTF. Change it back to 50)')]; }
 /* Codex #159/#161: two SOP lines corrected; unedited live copies update. */
 { const x = KB_ADDED.find((y) => y.title === 'Reorders and replying to reviews'); if (x && x.body.includes('- Website reviews show on **Reviews**. Google reviews do not: check the Google Business profile each morning, paste a new one into **Reply to a Google review** on Reviews, then paste the reply back on Google. Reply to every one within two days')) x.was = [...(x.was || []), x.body.split('- Website reviews show on **Reviews**. Google reviews do not: check the Google Business profile each morning, paste a new one into **Reply to a Google review** on Reviews, then paste the reply back on Google. Reply to every one within two days').join('- New reviews show on **Reviews**. Reply to every one within two days')]; }
 { const x = KB_ADDED.find((y) => y.title === 'A quiet afternoon: a plan'); if (x && x.body.includes('1. **Follow-ups (first 30 minutes).** Every open quote whose next follow-up is due (or older than 3 days with none set) gets a short friendly note and a new follow-up date; a quote you already followed up waits for its date. Most sales are won here')) x.was = [...(x.was || []), x.body.split('1. **Follow-ups (first 30 minutes).** Every open quote whose next follow-up is due (or older than 3 days with none set) gets a short friendly note and a new follow-up date; a quote you already followed up waits for its date. Most sales are won here').join('1. **Follow-ups (first 30 minutes).** Every open quote older than 3 days gets a short friendly note, and every lead gets a next follow-up date. Most sales are won here')]; }

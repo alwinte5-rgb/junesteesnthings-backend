@@ -496,7 +496,7 @@ Keep it shorter than the opener.
 Log every message on the lead, and set the **follow up** date each time. Then:
 
 - The prospect comes back on My Day on the right day, so nothing is forgotten
-- Your messages and replies are counted, which is how your reply rate is worked out
+- Your messages and their replies are on record, so you and June can work out your reply rate (replies divided by first messages)
 - Anyone who opens the lead sees the whole story
 
 A message you did not log did not happen, as far as the shop can tell.
@@ -526,7 +526,7 @@ A message you did not log did not happen, as far as the shop can tell.
           choices: ['"Just checking in!"', '"Navy with a gold number on the back? Happy to send a mockup and a price."', 'Your opener again, word for word', '"Last chance!"'],
           answer: 1, article: A.cadence, why: 'Each follow-up adds something new.' },
         { id: 'log', q: 'Why log every message on the lead?',
-          choices: ['It is optional', 'It brings the lead back on My Day, counts toward your reply rate, and shows the whole story', 'It emails June', 'It changes the price'],
+          choices: ['It is optional', 'It brings the lead back on My Day, puts the message on record, and shows the whole story', 'It emails June', 'It changes the price'],
           answer: 1, article: A.cadence, why: 'An unlogged message did not happen, as far as the shop can tell.' },
         { id: 'date', q: 'After each message you also…',
           choices: ['Set the follow-up date on the lead', 'Add them to the newsletter', 'Send a text', 'Close the lead'],

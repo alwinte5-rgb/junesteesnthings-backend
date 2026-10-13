@@ -112,7 +112,7 @@ module.exports = {
     ] },
     { from: 'Step 4: dates and notes', checks: [
       q('Which button do you press at the end?', ['Finish', 'Save as draft', 'Duplicate'], 1, 'Save as draft, not Finish.'),
-      q('Change the Qty to 30. What does the orange warning say?', ['Nothing', 'Screen printing starts at 50: quote DTF', 'Add a rush'], 1, 'Then change it back to 50.'),
+      q('Change the Qty to 30. What does the orange warning say?', ['Nothing', 'Under 50 it is charged as 50: quote DTF', 'Add a rush'], 1, 'Then change it back to 50.'),
     ] },
   ],
   's7-upsell': [

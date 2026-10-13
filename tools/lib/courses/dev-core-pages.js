@@ -32,7 +32,7 @@ module.exports = {
       q('After deploying a page change you…', ['Open it on your phone', 'Assume it works'], 0, 'Try the thing you fixed.'),
     ] },
     { from: 'When not to deploy', checks: [
-      q('Deploy just before you stop for the day?', ['No: deploy when you can watch for an hour', 'Yes'], 0, 'Watch every deploy.'),
+      q('Merge just before June stops for the day?', ['No: when someone can watch it for an hour', 'Yes'], 0, 'Every deploy is watched.'),
       q('Before starting a task you check…', ['Nobody has an open pull request for it', 'Nothing'], 0, 'Two people, one repo.'),
     ] },
   ],

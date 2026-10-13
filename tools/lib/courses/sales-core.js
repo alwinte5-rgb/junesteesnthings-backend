@@ -33,7 +33,7 @@ const A = {
 };
 
 const GLOSSARY = {
-  'screen printing': 'Ink pushed through a mesh screen, one screen per colour. Cheapest per shirt on bigger runs; starts at 50 pieces.',
+  'screen printing': 'Ink pushed through a mesh screen, one screen per colour. Cheapest per shirt on bigger runs; a run under 50 pieces is charged as 50.',
   'DTF': 'Direct-to-film: the design is printed on a film and heat-pressed on. Full colour, no minimum, great for small runs.',
   'embroidery': 'The design is stitched in thread. Best for logos on polos, caps and jackets. Done in house.',
   'digitizing': 'Turning a logo into a stitch file for the embroidery machine. A one-time setup fee per design.',
@@ -232,7 +232,7 @@ Training is this course. My earnings shows your wage, commission and bonuses (mo
 
 **Your level, and why some things wait**
 
-You start at **Training**. At this level June sees your quotes and customer messages before the customer does, so a mistake costs nothing. Something that needs June shows as **waiting for approval**: that is normal, not an error. Once approved it shows on My Day; then you copy the message and send it. Later levels (Supervised, then Trusted) let you send more on your own. June decides when you move up.
+You start at **Training**. At this level June sees your quotes and customer messages before the customer does, so a mistake costs nothing. Something that needs June shows as **waiting for approval**: that is normal, not an error. Approving a quote emails it to the customer for you; only one that could not be emailed shows on My Day for you to send. Later levels (Supervised, then Trusted) let you send more on your own. June decides when you move up.
 
 **Page tips**
 
@@ -290,7 +290,7 @@ Some shop tools (social accounts, Canva, supplier sites) have shared logins. The
     goal: 'Recommend the right decoration for any order, and know what changes a price.',
     lessons: [{
       id: 's3-methods', article: A.methods, minutes: 20, tags: 'screen printing, dtf, embroidery, patches, vinyl, puff, minimum, colours, white base, which method',
-      goals: ['Choose between screen printing, DTF and embroidery for any order', 'Explain the 50-piece screen print minimum in a friendly way', 'Know what artwork each method needs'],
+      goals: ['Choose between screen printing, DTF and embroidery for any order', 'Explain, in a friendly way, why a screen print run under 50 is charged as 50', 'Know what artwork each method needs'],
       tryIt: [{ label: 'Search the Playbook for "artwork"', href: '/admin/playbook?q=artwork' }],
       body:
 `Customers rarely know which decoration they need. Your job is to recommend the best value for their order. Three methods cover almost everything.
@@ -300,7 +300,7 @@ Some shop tools (social accounts, Canva, supplier sites) have shared logins. The
 Ink is pushed through a fine mesh screen onto the garment. Each ink colour needs its own screen.
 
 - **Best for:** 50 pieces or more, designs with a few solid colours, the lowest price per shirt on bigger runs
-- **Minimum:** 50 pieces. Each screen is set up once and runs the whole job, so small runs are expensive. Under 50, the quote form shows an orange warning and suggests DTF
+- **Minimum:** a run under 50 pieces is charged as 50, with the shortfall on its own line. Each screen is set up once and runs the whole job, so small runs are expensive. Under 50, the quote form shows an orange warning and suggests DTF
 - **What changes the price:** the number of ink colours, the number of print places (front, back, each sleeve), and the quantity. Screens are a one-time charge: (ink colours + 1 for the white base) × print places
 - **The white base:** a layer of white printed under the colours so they stay bright. It goes on every garment and counts as one screen
 - **Artwork:** vector art, or 300 dpi at print size. Lines at least 1pt, text at least 6pt. Gradients and photos need halftones, so check with June before quoting them
@@ -319,6 +319,7 @@ The design is printed in full colour onto a film, then heat-pressed onto the gar
 The design is stitched in thread. We embroider in house.
 
 - **Best for:** logos on polos, caps, jackets, bags and workwear. It looks premium and lasts
+- **Minimum:** 5 pieces
 - **Digitizing:** the logo is turned into a stitch file once. That is a one-time setup fee per design; reorders reuse the file. If the customer supplies a usable stitch file, there is no fee (the quote form has a box for that)
 - **Artwork:** bold, simple shapes. Text at least 0.25 inch tall. No gradients, photos or fine detail. A left-chest logo is about 3.5 to 4 inches wide
 - **Never promise:** small text on caps
@@ -397,8 +398,8 @@ Customers can also design and pay online at jtees.net. Those show on **Orders**.
       key: 'sales-s3', title: 'Module 3 quiz: methods and products', minutes: 10,
       questions: [
         { id: 'small', q: 'A coach wants 30 shirts with a 2-colour logo. What do you suggest?',
-          choices: ['Screen printing, it is always cheapest', 'DTF (or embroidery), because screen printing starts at 50 pieces', 'Tell them 30 is too few', 'Ask them to order 50'],
-          answer: 1, article: A.methods, why: 'Screen printing starts at 50. DTF has no minimum. Offer the best-value option, never a refusal.' },
+          choices: ['Screen printing, it is always cheapest', 'DTF (or embroidery), because a screen print run under 50 is charged as 50', 'Tell them 30 is too few', 'Ask them to order 50'],
+          answer: 1, article: A.methods, why: 'Under 50, screen printing is charged as 50. DTF has no minimum. Offer the best-value option, never a refusal.' },
         { id: 'big', q: '300 staff shirts with a 1-colour logo. Usually the best value?',
           choices: ['DTF', 'Embroidery', 'Screen printing', 'Vinyl'],
           answer: 2, article: A.methods, why: 'Screens are a one-time charge, so on big runs with few colours screen printing is cheapest per shirt.' },
@@ -483,7 +484,7 @@ Every contact you make goes on the lead: Call, Email, Text or Chat, with a one-l
 
 **When they answer the five questions**
 
-Press **Quote** on the lead and build it (module 5). If your quote is waiting for June's approval, it shows on My Day once approved; then copy the message and send it.
+Press **Quote** on the lead and build it (module 5). If your quote is waiting for June's approval, approving it emails it to the customer for you. Only a quote that could not be emailed (no email address, or the email failed) shows on My Day for you to send yourself.
 
 **Spotting a bigger order**
 
@@ -525,8 +526,8 @@ Never guess. "Good question! Let me check and I'll get back to you by 2pm." Then
           choices: ['Quotes, New quote', 'The Quote button on their lead', 'Email them a price', 'Ask June to quote it'],
           answer: 1, article: A.leads, why: 'The Quote button links the quote to the lead.' },
         { id: 'held', q: 'Your quote is waiting for June\'s approval. When do you send it to the customer?',
-          choices: ['Right away, from your email', 'When it shows as approved on My Day: copy the message and send it', 'Never, June sends all quotes', 'After 24 hours'],
-          answer: 1, article: A.leads, why: 'Approved quotes show on My Day, ready to copy and send.' },
+          choices: ['Right away, from your email', 'You do not: approving it emails it to them. Only one that could not be emailed shows on My Day for you to send', 'Again from your own email after she approves', 'After 24 hours'],
+          answer: 1, article: A.leads, why: 'Approving a quote emails it; sending it again would give the customer two.' },
         { id: 'missed', q: 'You missed a call from a number on a lead. What now?',
           choices: ['Wait for them to call again', 'Call back the same shift and log it', 'Text them a price', 'Remove the lead'],
           answer: 1, article: A.leads, why: 'Missed calls get a call back the same shift, logged on the lead.' },
@@ -600,7 +601,7 @@ The quote shows the **Deposit to start**: 50% of the total, or the full amount f
 **Save as draft, or finish**
 
 - **Save as draft** keeps it private: the customer link does not open and nothing is sent. Use it while you are unsure or waiting on a detail
-- Finishing makes it ready to send. While you are in training it goes to June first; once approved it shows on My Day for you to send
+- Finishing makes it ready to send. While you are in training it goes to June first, and approving it emails it to the customer. Only one that could not be emailed shows on My Day for you to send
 
 **After it is sent**
 
@@ -998,7 +999,7 @@ ChatGPT and the image tools make you faster, but never put a customer's name, em
 
 **Your end-of-day note**
 
-Before you sign off: leads answered, quotes sent, follow-ups done, anything stuck and what you need, and the first thing you will do tomorrow.
+Before you sign off, post it in Team chat, as in Team basics: leads answered, quotes sent, follow-ups done, anything stuck and what you need, and the first thing you will do tomorrow.
 
 **How you are paid**
 
@@ -1016,8 +1017,6 @@ Before you sign off: leads answered, quotes sent, follow-ups done, anything stuc
     practice: [
       { key: 'do:message', type: 'do', fact: 'messages', minutes: 5,
         title: 'Write your first customer message', hint: 'Press Email them on a lead, or write from a job page. While you are in training it waits for June, and it counts as soon as you write it.' },
-      { key: 'do:eod', type: 'do', fact: 'eod', needs: 'eod', minutes: 0,
-        title: 'Send your first end-of-day note', hint: 'Use "Wrap up the day" on My Day.' },
     ],
     quiz: {
       key: 'sales-s10', title: 'Module 10 quiz: follow-ups, social posts and pay', minutes: 10,

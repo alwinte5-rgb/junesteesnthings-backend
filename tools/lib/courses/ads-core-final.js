@@ -120,7 +120,7 @@ module.exports = (A) => [
 
   // Weekly report
   f('f36', 'Which opening line is best for a weekly report?',
-    ['"Leveraged our funnel synergies"', '"Spent $140 of $150; 9 quote requests at $15.50 each; 3 orders worth $1,250"', '"All good"', '"See attached"'], 1, A.report,
+    ['"Leveraged our funnel synergies"', '"Spent $95 of $100; 7 quote requests at about $13.60 each; 2 orders worth $900"', '"All good"', '"See attached"'], 1, A.report,
     'Real numbers, plain words.'),
   f('f37', 'Quote requests halved this week. In the report you…',
     ['Leave it out', 'Say so, what you checked (tracking), what you think happened, and what you will do', 'Blame June', 'Double the budget'], 1, A.report,
