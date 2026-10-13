@@ -167,8 +167,9 @@ test('the lesson page: a known lesson id only, closed modules stay closed, and o
     'a lesson shows only the site\'s own images');
   assert.match(page, /x\.locked && !owner \? `<span class="btn btn-ghost"/, 'next past a closed module never links');
   const read = route("app.post('/admin/training/read', requireAdmin");
-  assert.match(read, /ON CONFLICT \(staff_id, step_key\) DO UPDATE SET done_at = COALESCE\(staff_lesson_time\.done_at, NOW\(\)\)/,
-    'finishing twice keeps the first finish time');
+  assert.match(read, /UPDATE staff_lesson_time SET done_at = COALESCE\(done_at, NOW\(\)\)\s+WHERE staff_id = \$1 AND step_key = \$2 AND started_at IS NOT NULL/,
+    'finishing twice keeps the first finish time, and only a lesson that was opened can be finished');
+  assert.match(read, /if \(!opened\) return back\(/);
   assert.match(src, /CREATE TABLE IF NOT EXISTS staff_lesson_time/);
 });
 
