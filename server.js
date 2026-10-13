@@ -29836,7 +29836,7 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
         action = `<span class="muted" style="font-size:12px">You:</span><form method="post" action="/admin/training/signoff" style="margin:0;display:flex;gap:6px;align-items:center;flex-wrap:wrap" data-once>
           <input type="hidden" name="staff_id" value="${staffId}"><input type="hidden" name="key" value="${escEmail(s.key)}">
           ${s.done ? `<input type="hidden" name="undo" value="1">${s.key === TRAINING.READY_KEY ? '<label style="display:flex;gap:4px;align-items:center;font-size:12px" title="Clear it if the sign-off was a mistake"><input type="checkbox" name="keep_window" value="1" checked style="width:auto"> keep commission already earned</label>' : ''}<label style="display:flex;gap:4px;align-items:center;font-size:12px"><input type="checkbox" name="confirm" value="1" required style="width:auto"> sure</label><button type="submit" class="btn btn-ghost">Undo</button>`
-                   : s.locked ? '<button type="button" class="btn btn-ghost" disabled title="Opens once they pass the quiz or exam before it">Not yet</button>'
+                   : s.locked ? `<button type="button" class="btn btn-ghost" disabled title="${s.waiting ? `Waits for ${escEmail(s.waiting)}` : 'Opens once they pass the quiz or exam before it'}">Not yet</button>${s.waiting ? `<span class="muted" style="font-size:12px">waits for ${escEmail(s.waiting)}</span>` : ''}`
                    : '<button type="submit" class="btn">Sign off</button>'}</form>`;
       }
       const kind = { read: 'Read', lesson: 'Lesson', do: 'Do', signoff: 'Owner signs off', quiz: 'Quiz', exam: 'Exam', buffer: 'Buffer' }[s.type];
@@ -31501,9 +31501,11 @@ app.post('/admin/training/signoff', requireAdmin, async (req, res) => {
       return back(res, to, 'ok', `Undone: ${s.title}.`);
     }
     /* Not before the gate in front of it: the ready sign-off starts commission
-       and ends training, so it waits for the final exam (Codex #222). */
-    if (!TRAINING.stepOpen(await trainingFor(staffId), key)) {
-      return back(res, to, 'err', `${s.title} opens once they pass the quiz or exam before it.`);
+       and ends training, so it waits for the final exam and every lesson
+       (Codex #222; TRAINING.progress sets locked and waiting). */
+    const open = (await trainingFor(staffId)).steps.find((x) => x.key === key);
+    if (!open || open.locked) {
+      return back(res, to, 'err', open && open.waiting ? `${s.title} waits for ${open.waiting}.` : `${s.title} opens once they pass the quiz or exam before it.`);
     }
     const { rowCount: added } = await pool.query(`INSERT INTO staff_training (staff_id, step_key, signed_by) VALUES ($1, $2, NULL) ON CONFLICT DO NOTHING`,
       [staffId, key]);
