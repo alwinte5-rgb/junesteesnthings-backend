@@ -3322,10 +3322,14 @@ async function seenCustomer({ email, phone }, { excludeLead = null } = {}) {
  *  of writing the link matches. */
 async function seenProfile(key, beforeId = null) {
   if (!key) return null;
+  /* Narrowed in SQL by the handle (LIKE wildcards escaped), then compared by
+     key, so a busy table never hides a recent match behind a row limit. */
+  const handle = key.split(/[/:]/).pop().replace(/[\\%_]/g, (c) => `\\${c}`);
   const { rows } = await pool.query(
     `SELECT id, created_at, profile_url FROM submissions
-      WHERE profile_url IS NOT NULL AND created_at > NOW() - make_interval(days => $1) AND ($2::int IS NULL OR id < $2)
-      ORDER BY id LIMIT 5000`, [CREDIT.KNOWN_LEAD_DAYS, beforeId]);
+      WHERE profile_url IS NOT NULL AND profile_url ILIKE '%' || $3 || '%'
+        AND created_at > NOW() - make_interval(days => $1) AND ($2::int IS NULL OR id < $2)
+      ORDER BY id LIMIT 200`, [CREDIT.KNOWN_LEAD_DAYS, beforeId, handle]);
   return rows.find((r) => CREDIT.profileKey(r.profile_url) === key) || null;
 }
 
@@ -10323,9 +10327,26 @@ function productGroupOf(name) {
         /* Only DTF can be rushed (tools/lib/rush.js): every decoration picked
            on the form has to be DTF, and something has to be picked. The save
            route makes a helper's rush 0 otherwise; the owner may type one. */
-        var picked = Array.prototype.filter.call(document.querySelectorAll('select[name^="method"], select[name^="pr_m_"]'),
-          function (el) { return el.value && el.selectedIndex >= 0; });
-        var dtfOnly = picked.length > 0 && picked.every(function (el) { return /\bDTF\b/i.test(el.options[el.selectedIndex].text); });
+        /* Line by line, like the save (tools/lib/rush.js): every required line
+           with a garment or a method needs a method, and every method is DTF.
+           The pattern comes from the server as a string: a regex literal in
+           this template would lose its backslashes. */
+        var rushable = new RegExp(${JSON.stringify(RUSH.RUSHABLE.source)}, 'i');
+        var lines = {};
+        Array.prototype.forEach.call(document.querySelectorAll('select[name], input[name^="product"]'), function (el) {
+          var m = /^(?:product|method2?|pr_m_[a-z]+?)([0-9]+)$/.exec(el.name || '');
+          if (!m) return;
+          var i = m[1], L = lines[i] || (lines[i] = { product: false, titles: [] });
+          if (/^product/.test(el.name)) { if (el.value) L.product = true; return; }
+          if (el.value && el.selectedIndex >= 0) L.titles.push(el.options[el.selectedIndex].text);
+        });
+        var real = Object.keys(lines).filter(function (i) {
+          var opt = document.querySelector('[name="optional' + i + '"]');
+          return !(opt && opt.checked) && (lines[i].product || lines[i].titles.length);
+        });
+        var dtfOnly = real.length > 0 && real.every(function (i) {
+          return lines[i].titles.length > 0 && lines[i].titles.every(function (t) { return rushable.test(t); });
+        });
         var pct = dtfOnly ? rushSuggest(days) : 0;
 
         row.style.display = days === null ? 'none' : '';
@@ -12506,9 +12527,16 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         const wantDate = String(b.needed_by || '').trim() || null;
         const code0 = String(req.params.code || '').toUpperCase();
         const was = QUOTE_CODE_RE.test(code0)
-          ? (await pool.query('SELECT rush_pct, needed_by::text AS needed_by FROM quotes WHERE code = $1', [code0])).rows[0] : null;
+          ? (await pool.query('SELECT rush_pct, needed_by::text AS needed_by, items FROM quotes WHERE code = $1', [code0])).rows[0] : null;
         const wasDate = was && was.needed_by ? String(was.needed_by).slice(0, 10) : null;
-        rushPct = (was && wasDate === wantDate)
+        /* A rush kept from before is dropped when this helper took the order
+           off DTF since: it was rushable then and is not now. An owner's
+           figure on an order that was never rushable stays. */
+        const wasRushOk = was ? RUSH.rushAllowed((Array.isArray(was.items) ? was.items : []).filter((it) => it && !it.optional).map((it) => ({
+          product: !!it.product_id,
+          titles: [...new Set([...(it.prints || []).map((pp) => pp.method_id), it.method_id, it.method2_id].filter(Boolean))].map(methodTitle),
+        }))) : false;
+        rushPct = (was && wasDate === wantDate && (rushOk || !wasRushOk))
           ? Math.max(0, Number(was.rush_pct || 0))
           : (wantDate && rushOk ? rushPctFor(wantDate) : 0);
       }
@@ -28585,13 +28613,25 @@ app.post('/admin/lead/:id/email', requireAdmin, async (req, res) => {
        shop. Approving it sends it through sendLeadEmail, credited to them. */
     const outside = actor && actor.kind === 'staff' ? FRAUD.mentionsOutsidePayment(`${m.subject}\n${m.text}`) : '';
     if (actor && actor.kind === 'staff' && (actorLevel('customers.message') === 'approval' || outside)) {
-      const { rowCount: queued } = await pool.query(
-        `INSERT INTO staff_approvals (kind, subject_id, payload, reasons, requested_by)
-         SELECT 'lead_email', $1, $2::jsonb, $3::jsonb, $4
-          WHERE NOT EXISTS (SELECT 1 FROM staff_approvals WHERE kind = 'lead_email' AND subject_id = $1
-                              AND requested_by = $4 AND status IN ('pending', 'processing') AND payload->>'text' = $5)`,
-        [String(id), JSON.stringify({ subject: m.subject, text: m.text }),
-         JSON.stringify([outside ? `Mentions being paid outside the shop: ${outside}` : 'Written in training']), actor.id, m.text]);
+      /* Under a per-lead lock, so two presses at once cannot both find
+         nothing waiting and queue the email twice. */
+      let queued = 0;
+      const qc = await pool.connect();
+      try {
+        await qc.query('BEGIN');
+        await qc.query('SELECT pg_advisory_xact_lock($1, $2)', [7304, id]);
+        ({ rowCount: queued } = await qc.query(
+          `INSERT INTO staff_approvals (kind, subject_id, payload, reasons, requested_by)
+           SELECT 'lead_email', $1, $2::jsonb, $3::jsonb, $4
+            WHERE NOT EXISTS (SELECT 1 FROM staff_approvals WHERE kind = 'lead_email' AND subject_id = $1
+                                AND requested_by = $4 AND status IN ('pending', 'processing') AND payload->>'text' = $5)`,
+          [String(id), JSON.stringify({ subject: m.subject, text: m.text }),
+           JSON.stringify([outside ? `Mentions being paid outside the shop: ${outside}` : 'Written in training']), actor.id, m.text]));
+        await qc.query('COMMIT');
+      } catch (e) {
+        await qc.query('ROLLBACK').catch(() => {});
+        throw e;
+      } finally { qc.release(); }
       if (outside) logActivity(actor, 'message held: outside payment', { type: 'lead', id: String(id) }, { what: outside }, clientIp(req)).catch(() => {});
       return res.redirect(`${backTo}${backTo.includes('?') ? '&' : '?'}ok=${encodeURIComponent(queued
         ? 'Saved for June to check. It is sent to the customer when she approves it.' : 'That email is already waiting for June.')}#lead-${id}`);
@@ -28725,7 +28765,8 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
     }
     const known = foundIt ? (CREDIT.knownReason(await seenCustomer({ email, phone }), fmtDate)
       || CREDIT.knownReason({ lead: await seenProfile(profileId) }, fmtDate)) : '';
-    const label = CREDIT.classifyLead({ by: isStaff ? 'staff' : 'owner', staffId: isStaff ? actor.id : null, foundIt, known });
+    const profileOnly = foundIt && !email && !FRAUD.phoneKey(phone) && !!profileId;
+    const label = CREDIT.classifyLead({ by: isStaff ? 'staff' : 'owner', staffId: isStaff ? actor.id : null, foundIt, known, profileOnly });
     const source = ['Facebook', 'Instagram', 'TikTok', 'Google'].includes(platform) ? 'social'
       : platform === 'Phone' ? 'phone' : 'manual';
     const { rows: [l] } = await pool.query(
@@ -28737,7 +28778,7 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
     /* Two helpers registering the same customer at the same moment both pass
        the check above. The first one saved wins: a later row that finds an
        earlier lead for this contact turns into a shop lead. */
-    if (label.sale_type === 'rep') {
+    if (label.sale_type === 'rep' || label.sale_type === 'pending') {
       const e = FRAUD.emailKey(email);
       const p = FRAUD.phoneKey(phone);
       const { rows: [first] } = await pool.query(
@@ -28756,10 +28797,12 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
       }
     }
     if (foundIt) {
-      logActivity(actor, label.sale_type === 'rep' ? 'lead registered as theirs' : 'found lead was already known',
+      logActivity(actor, label.sale_type === 'shop' ? 'found lead was already known' : 'lead registered as theirs',
         { type: 'lead', id: l.id }, { reason: label.reason });
-      return back(res, `/admin/leads#lead-${l.id}`, label.sale_type === 'rep' ? 'ok' : 'err',
-        label.sale_type === 'rep' ? 'Registered as your lead.' : `Saved as a shop lead: ${label.reason}.`);
+      return back(res, `/admin/leads#lead-${l.id}`, label.sale_type === 'shop' ? 'err' : 'ok',
+        label.sale_type === 'rep' ? 'Registered as your lead.'
+          : label.sale_type === 'pending' ? 'Saved as your lead, waiting for June to confirm: with only a profile, the shop cannot check its customers. Add their email or phone when you have it.'
+          : `Saved as a shop lead: ${label.reason}.`);
     }
     return res.redirect(`/admin/leads#lead-${l.id}`);
   } catch (err) {
@@ -30250,16 +30293,19 @@ function quizStep(key, track = null, role = null) {
 }
 
 /** A helper's quiz is open only once the module before it is passed. */
-async function quizOpenFor(actor, key) {
+/** The quiz's step for this helper, or null; `locked` and `waiting` say why it is shut. */
+async function quizStepFor(actor, key) {
   const p = await trainingFor(actor.id);
-  const s = p.steps.find((x) => x.type === 'quiz' && x.quiz === key);
+  return p.steps.find((x) => x.type === 'quiz' && x.quiz === key) || null;
+}
+
+async function quizOpenFor(actor, key) {
+  const s = await quizStepFor(actor, key);
   return !!s && !s.locked;
 }
 
 /** Why a helper's quiz is still shut, in their words. */
-async function quizShutWhy(actor, key) {
-  const p = await trainingFor(actor.id).catch(() => null);
-  const s = p && p.steps.find((x) => x.type === 'quiz' && x.quiz === key);
+function quizShutWhy(s) {
   return s && s.waiting ? `That quiz opens once you finish ${s.waiting} in this module.` : 'That quiz opens once you pass the module before it.';
 }
 
@@ -30360,7 +30406,10 @@ app.get('/admin/training/quiz/:key', requireAdmin, async (req, res) => {
   const z = quizStep(key, owner ? null : actor.track, owner ? null : actor.role) && TRAINING.QUIZZES[key];
   if (!z) return back(res, '/admin/training', 'err', 'No such quiz.');
   try {
-    if (!owner && !(await quizOpenFor(actor, key))) return back(res, '/admin/training', 'err', await quizShutWhy(actor, key));
+    if (!owner) {
+      const st = await quizStepFor(actor, key);
+      if (!st || st.locked) return back(res, '/admin/training', 'err', quizShutWhy(st));
+    }
     if (owner) {
       const roster = (await staffRoster({ activeOnly: true }))
         .filter((r) => TRAINING.visibleSteps(undefined, r.training_track, r.sales_role).some((x) => x.quiz === key));
@@ -30388,10 +30437,11 @@ app.get('/admin/training/quiz/:key', requireAdmin, async (req, res) => {
       ${pageHeader(view.title, `${view.questions.length} questions. Get ${view.pass} right to pass. No sums: pick what you would really do.`,
         `${lessonBefore ? `<a class="btn btn-ghost" href="/admin/training/lesson/${encodeURIComponent(lessonBefore.key.slice('lesson:'.length))}">&larr; Back to the lesson</a> ` : ''}<a class="btn btn-ghost" href="/admin/training">Back to training</a>`)}
       <form method="post" action="/admin/training/quiz/${escEmail(key)}" data-once>
+        <input type="hidden" name="_ord" value="${escEmail(TRAINING.signOrder(FORM_TOKEN_KEY, key, actor.id, Object.fromEntries(view.questions.map((x) => [x.id, x.order]))))}">
         ${view.questions.map((x, n) => `<fieldset class="card" style="border:0">
           <legend style="font-weight:700;white-space:normal">${n + 1}. ${withTips(escEmail(x.q))}</legend>
-          ${x.order.map((i) => `<label style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;cursor:pointer">
-            <input type="radio" name="${escEmail(x.id)}" value="${i}" required style="margin-top:3px"> <span>${escEmail(x.choices[i])}</span></label>`).join('')}
+          ${x.order.map((i, pos) => `<label style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;cursor:pointer">
+            <input type="radio" name="${escEmail(x.id)}" value="${pos}" required style="margin-top:3px"> <span>${escEmail(x.choices[i])}</span></label>`).join('')}
         </fieldset>`).join('')}
         <button type="submit" class="btn" data-busy="Marking…">Mark my answers</button>
       </form>${SHIP_ONCE_JS}`, 'training'));
@@ -30408,8 +30458,13 @@ app.post('/admin/training/quiz/:key', requireAdmin, async (req, res) => {
   const key = String(req.params.key || '');
   if (!actor || actor.kind !== 'staff') return res.redirect(`/admin/training/quiz/${encodeURIComponent(key)}`);
   if (!quizStep(key, actor.track, actor.role)) return back(res, '/admin/training', 'err', 'No such quiz.');
-  if (!(await quizOpenFor(actor, key).catch(() => false))) return back(res, '/admin/training', 'err', await quizShutWhy(actor, key));
-  const r = TRAINING.gradeQuiz(key, req.body || {});
+  const st = await quizStepFor(actor, key).catch(() => null);
+  if (!st || st.locked) return back(res, '/admin/training', 'err', quizShutWhy(st));
+  /* Each radio sent its position on the page; the signed order turns it back
+     into the choice it showed (TRAINING.signOrder). */
+  const orders = TRAINING.readOrder(FORM_TOKEN_KEY, (req.body || {})._ord, key, actor.id);
+  if (!orders) return back(res, `/admin/training/quiz/${encodeURIComponent(key)}`, 'err', 'This quiz page was out of date. Your answers were not marked: please answer it again.');
+  const r = TRAINING.gradeQuiz(key, TRAINING.picksFromPositions(orders, req.body || {}));
   const log = JSON.stringify(TRAINING.answerLog(r.results));
   let id;
   try {

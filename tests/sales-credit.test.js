@@ -202,5 +202,20 @@ test('a found lead\'s social profile: allowed hosts only, https, matched however
     'https://facebook.com/%E0%A4%A', 'javascript:alert(1)', 'x'.repeat(400)]) {
     assert.strictEqual(CREDIT.profileUrlIn(bad), null, bad);
   }
-  assert.strictEqual(CREDIT.profileKey('https://www.facebook.com/profile.php?id=123&ref=x'), 'facebook.com/profile.php?id=123');
+  assert.strictEqual(CREDIT.profileKey('https://www.facebook.com/profile.php?id=123&ref=x'), 'facebook.com/id:123');
+  // A post, reel, group or share link is not a person; the same person's links agree.
+  for (const notPerson of ['https://www.instagram.com/p/ABC/', 'https://instagram.com/reel/x', 'https://facebook.com/groups/xyz',
+    'https://facebook.com/share/abc', 'https://www.facebook.com/watch/?v=1', 'https://x.com/i/status/1']) {
+    assert.strictEqual(CREDIT.profileKey(notPerson), '', notPerson);
+  }
+  assert.strictEqual(CREDIT.profileKey('https://www.tiktok.com/@jane/video/123'), CREDIT.profileKey('https://tiktok.com/@jane'));
+  assert.strictEqual(CREDIT.profileKey('https://www.linkedin.com/in/jane-doe/'), 'linkedin.com/in/jane-doe');
+});
+
+test('a found lead known only by a profile waits for the owner: the shop\'s customers cannot be checked', () => {
+  const l = CREDIT.classifyLead({ by: 'staff', staffId: 4, foundIt: true, known: '', profileOnly: true });
+  assert.strictEqual(l.sale_type, 'pending');
+  assert.strictEqual(l.rep_id, 4);
+  assert.strictEqual(CREDIT.classifyLead({ by: 'staff', staffId: 4, foundIt: true, known: 'Already a customer', profileOnly: true }).sale_type, 'shop');
+  assert.strictEqual(CREDIT.classifyQuote({ lead: { sale_type: 'pending', rep_id: 4 } }).sale_type, 'pending', 'its quotes need the owner\'s OK');
 });

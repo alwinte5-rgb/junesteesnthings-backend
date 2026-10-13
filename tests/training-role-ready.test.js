@@ -51,5 +51,15 @@ test('a module quiz waits for its module\'s lessons; a lesson ticked makes it op
   q = p.steps.find((s) => s.key === quiz.key);
   assert.strictEqual(q.locked, false);
   // The routes say why it is shut.
-  assert.match(fnOf('async function quizShutWhy('), /That quiz opens once you finish \$\{s\.waiting\} in this module\./);
+  assert.match(fnOf('function quizShutWhy('), /That quiz opens once you finish \$\{s\.waiting\} in this module\./);
+});
+
+test('a step already done is never greyed out again by the newer waiting rules', () => {
+  const steps = TRAINING.visibleSteps(undefined, 'design');
+  const quiz = steps.find((s) => s.type === 'quiz' && s.gate && s.moduleIndex === 0);
+  const p = TRAINING.progress(new Map(), { quizzes: { [quiz.quiz]: 1 } }, undefined, 'design');
+  const q = p.steps.find((s) => s.key === quiz.key);
+  assert.strictEqual(q.done, true);
+  assert.strictEqual(q.locked, false, 'passed before lessons had to be finished, it stays open');
+  assert.strictEqual(q.waiting, '');
 });
