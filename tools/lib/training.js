@@ -325,14 +325,30 @@ function shuffledOrder(n) {
    random answers, and the page source says nothing about which is right
    (the stored index follows a fixed pattern per quiz, see balanced()).
    Bound to the helper and the quiz, so a token cannot be reused elsewhere. */
-function signOrder(secret, quizKey, staffId, orders) {
-  const body = Buffer.from(JSON.stringify({ k: String(quizKey), s: Number(staffId), o: orders })).toString('base64url');
+function signOrder(secret, quizKey, staffId, orders, now = Date.now()) {
+  const body = Buffer.from(JSON.stringify({ k: String(quizKey), s: Number(staffId), o: orders, t: Math.floor(Number(now) / 1000) })).toString('base64url');
   return `${body}.${require('crypto').createHmac('sha256', String(secret)).update(body).digest('base64url')}`;
 }
 
 /** The orders from a token signOrder made for this helper and quiz, or null
  *  when it is missing, altered, for someone else, or does not fit the quiz. */
 function readOrder(secret, token, quizKey, staffId) {
+  const d = readOrderToken(secret, token, quizKey, staffId);
+  return d ? d.o : null;
+}
+
+/** Seconds from the quiz page being shown to it being handed in, from the
+ *  same signed token, or null for a token from before the time was stamped
+ *  or one that does not check out. Capped at a day. */
+const QUIZ_SECONDS_MAX = 86400;
+function quizSeconds(secret, token, quizKey, staffId, now = Date.now()) {
+  const d = readOrderToken(secret, token, quizKey, staffId);
+  if (!d || !Number.isInteger(d.t)) return null;
+  const secs = Math.floor(Number(now) / 1000) - d.t;
+  return secs < 0 ? null : Math.min(secs, QUIZ_SECONDS_MAX);
+}
+
+function readOrderToken(secret, token, quizKey, staffId) {
   const t = String(token || '');
   if (t.length > 8000) return null;
   const [body, mac] = t.split('.');
@@ -347,7 +363,7 @@ function readOrder(secret, token, quizKey, staffId) {
     const o = d.o[x.id];
     if (!Array.isArray(o) || o.length !== x.choices.length || [...o].sort((a, b) => a - b).some((v, i) => v !== i)) return null;
   }
-  return d.o;
+  return d;
 }
 
 /** Turns positions picked on the page back into stored choice indexes. */
@@ -408,7 +424,7 @@ function answerLog(results) {
  *  tries, activity) used for active days and first/last day, counted in
  *  Chicago time. Nothing here blocks anyone. */
 const TIME_CAP = 3;
-function timeSpent(steps, times = new Map(), events = [], tz = 'America/Chicago') {
+function timeSpent(steps, times = new Map(), events = [], tz = 'America/Chicago', quizTries = []) {
   const day = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(d));
   const lessons = [];
   for (const s of steps) {
@@ -423,7 +439,25 @@ function timeSpent(steps, times = new Map(), events = [], tz = 'America/Chicago'
   for (const t of times.values()) { if (t.started_at) stamps.push(t.started_at); if (t.done_at) stamps.push(t.done_at); }
   const valid = stamps.map((d) => new Date(d)).filter((d) => !Number.isNaN(d.getTime())).sort((a, b) => a - b);
   const sum = (k) => lessons.reduce((n, l) => n + l[k], 0);
+  /* Quiz time: page shown to handed in, per try (quizSeconds), capped like
+     lessons. Tries from before the time was stamped have no seconds. */
+  const quizMins = new Map(steps.filter((s) => s.type === 'quiz').map((s) => [s.quiz, Number(s.minutes) || 0]));
+  const quizzes = new Map();
+  for (const q of quizTries) {
+    if (q.seconds == null || !quizMins.has(q.quiz_key)) continue;
+    const raw = Math.max(0, Math.round(Number(q.seconds) / 60));
+    const exp = quizMins.get(q.quiz_key);
+    const z = quizzes.get(q.quiz_key) || { quiz: q.quiz_key, tries: 0, raw: 0, capped: 0, expected: exp };
+    z.tries += 1; z.raw += raw; z.capped += exp ? Math.min(raw, exp * TIME_CAP) : raw;
+    quizzes.set(q.quiz_key, z);
+  }
+  const qsum = (k) => [...quizzes.values()].reduce((n, z) => n + z[k], 0);
+  /* What is still to do, with its expected time (buffers are slack, not work). */
+  const outstanding = steps.filter((s) => s.type !== 'buffer' && !s.done)
+    .map((s) => ({ key: s.key, type: s.type, title: s.title || s.key, minutes: Number(s.minutes) || 0, locked: !!s.locked, module: s.moduleTitle || '' }));
   return { lessons, rawMinutes: sum('raw'), cappedMinutes: sum('capped'), expectedMinutes: sum('expected'),
+    quizzes: [...quizzes.values()], quizMinutes: qsum('capped'), quizRawMinutes: qsum('raw'), quizExpectedMinutes: qsum('expected'),
+    outstanding, outstandingMinutes: outstanding.reduce((n, o) => n + o.minutes, 0),
     activeDays: new Set(valid.map(day)).size, first: valid.length ? valid[0] : null, last: valid.length ? valid[valid.length - 1] : null };
 }
 
@@ -506,7 +540,7 @@ function fillGap(text, token, answer, nth) {
   return parts.slice(0, nth + 1).join(token) + a + parts.slice(nth + 1).join(token);
 }
 
-module.exports = { FEATURES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, signOrder, readOrder, picksFromPositions, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
+module.exports = { FEATURES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, signOrder, readOrder, quizSeconds, picksFromPositions, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
   visibleSteps, stepByKey, mayTick, progress, stepOpen, placeholders, ownerGaps, fillGap, dayCount, passMark, courseSteps, lessonPages,
   COURSES: COURSES.COURSES, SALES_ROLES: COURSES.SALES_ROLES, salesRoleOf: COURSES.salesRoleOf,
   lessonArticles: COURSES.lessonArticles, glossary: COURSES.glossary };
