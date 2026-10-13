@@ -669,3 +669,15 @@ test('every preset opens the production schedule, and the schedule shows no mone
   const page = src.slice(src.indexOf("app.get('/admin/design/:code', requireAdmin"), src.indexOf('async function designNotesCard'));
   assert.doesNotMatch(page, /money\(|jobCostForm|creditCard/, 'no prices on the job page');
 });
+
+test('the schedule opens only the jobs it lists, and shows no money emails', () => {
+  const fn = src.slice(src.indexOf('async function designJobFor('), src.indexOf('function firstNameOf('));
+  assert.match(fn, /OR \(\$3::boolean AND \$\{SCHEDULED_JOB_SQL\}\)/, 'never a draft, held or unaccepted quote');
+  assert.match(src, /const SCHEDULED_JOB_SQL = `q\.accepted_at IS NOT NULL AND q\.delivered_at IS NULL AND COALESCE\(q\.status, ''\) NOT IN \('held', 'draft'\)`/);
+  assert.match(src, /const shown = design \? history\.filter\(designVisibleMessage\) : history;/);
+  for (const k of ['receipt', 'balance-reminder', 'deposit-reminder', 'accepted', 'follow-up', 'payment-received']) {
+    assert.ok(!src.match(/const DESIGN_MESSAGE_KINDS = new Set\(\[([^\]]+)\]/)[1].includes(`'${k}'`), `${k} stays off the design page`);
+  }
+  assert.match(src, /if \(e && kind === 'design' && !designVisibleMessage\(e\)\) return res\.status\(404\)/);
+  assert.match(src, /INSERT INTO staff_perm_grants \(grant_key\) VALUES \('jobs\.schedule:2026-10-13'\) ON CONFLICT DO NOTHING/, 'the switch-on runs once');
+});

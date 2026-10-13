@@ -1620,8 +1620,14 @@ async function initStaffTables() {
   /* Every helper gets the production schedule (owner, 2026-10-13: "give all
      employees access"). Once only: a saved Staff form stores every toggle, so
      an account the owner has since switched it off for already names it. */
-  await pool.query(`UPDATE staff SET perms = COALESCE(perms, '{}'::jsonb) || '{"jobs.schedule":"on"}'::jsonb
-                     WHERE NOT COALESCE(perms, '{}'::jsonb) ? 'jobs.schedule'`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS staff_perm_grants (
+                       grant_key TEXT PRIMARY KEY, granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+  const { rowCount: firstGrant } = await pool.query(
+    `INSERT INTO staff_perm_grants (grant_key) VALUES ('jobs.schedule:2026-10-13') ON CONFLICT DO NOTHING`);
+  if (firstGrant) {
+    await pool.query(`UPDATE staff SET perms = COALESCE(perms, '{}'::jsonb) || '{"jobs.schedule":"on"}'::jsonb
+                       WHERE NOT COALESCE(perms, '{}'::jsonb) ? 'jobs.schedule'`);
+  }
   /* The timeclock (tools/lib/timeclock.js). One open shift per helper at a
      time; pings are minutes with activity (a page opened, a form sent, or
      typing and scrolling reported by the page); TimeProof is the owner's
@@ -3463,12 +3469,12 @@ function safeAdminPath(raw, fallback = '/admin/dashboard') {
 
 function refuseStaff(req, res, actor) {
   const raw = STAFF.permForRoute(req.method, req.route && req.route.path);
-  const need = Array.isArray(raw) ? raw[raw.length - 1] : raw;
+  const needs = (Array.isArray(raw) ? raw : [raw]).filter((k) => k && STAFF.PERMISSIONS[k]);
   if (!wantsHtml(req)) return res.status(403).json({ error: 'Not allowed for your account' });
   return actorStore.run(actor, () => res.status(403).send(adminPage('Not available', `
     ${pageHeader('Not available to your account', '')}
-    <div class="card"><p>This needs ${escEmail(need && STAFF.PERMISSIONS[need]
-      ? `"${STAFF.PERMISSIONS[need].label}"` : 'the owner')}. Ask the owner if you should have it.</p>
+    <div class="card"><p>This needs ${escEmail(needs.length
+      ? needs.map((k) => `"${STAFF.PERMISSIONS[k].label}"`).join(' or ') : 'the owner')}. Ask the owner if you should have it.</p>
       <p style="margin-top:12px"><a class="btn" href="/admin/my-day">Back to My Day</a></p></div>`, '')));
 }
 
@@ -21220,7 +21226,8 @@ const sentFile = (kind) => async (req, res) => {
   if (!QUOTE_CODE_RE.test(code) || !id) return res.status(404).send('Not found.');
   if (kind === 'design' && !(await messageFileAllowed(kind, code).catch(() => false))) return res.status(403).send('Not available.');
   try {
-    const { rows: [e] } = await pool.query('SELECT attachments FROM client_emails WHERE id = $1 AND quote_code = $2', [id, code]);
+    const { rows: [e] } = await pool.query('SELECT attachments, kind, status FROM client_emails WHERE id = $1 AND quote_code = $2', [id, code]);
+    if (e && kind === 'design' && !designVisibleMessage(e)) return res.status(404).send('That file is not on this message.');
     const a = e && Array.isArray(e.attachments) ? e.attachments[n] : null;
     const src = a ? MSGFILES.parse(a.url, QPHOTOS.cloudName()) : null;
     if (!src) return res.status(404).send('That file is not on this message.');
@@ -21381,13 +21388,18 @@ const artworkZip = (kind) => async (req, res) => {
 };
 
 async function designJobFor(code, actor) {
-/* The schedule opens every open job; Design jobs alone, only the art with you. */
-const me = actor && actor.kind === 'staff' && STAFF.levelOf(actor, 'jobs.schedule') !== 'on' ? actor.id : null;
+/* A designer's own art jobs, and with the schedule (jobs.schedule) every job
+   the schedule lists: accepted, sent, not delivered. Never a draft, a held
+   quote or another designer's art otherwise. The owner reaches any. */
+const me = actor && actor.kind === 'staff' ? actor.id : null;
+const schedule = !!me && STAFF.levelOf(actor, 'jobs.schedule') === 'on';
 const { rows: [q] } = await pool.query(
   `SELECT q.* FROM quotes q
     WHERE q.code = $1 AND q.cancelled_at IS NULL
-      AND ($2::int IS NULL OR EXISTS (SELECT 1 FROM art_requests a WHERE a.quote_code = q.code
-                                      AND (a.assigned_to IS NULL OR a.assigned_to = $2)))`, [code, me]);
+      AND ($2::int IS NULL
+           OR EXISTS (SELECT 1 FROM art_requests a WHERE a.quote_code = q.code
+                       AND (a.assigned_to IS NULL OR a.assigned_to = $2))
+           OR ($3::boolean AND ${SCHEDULED_JOB_SQL}))`, [code, me, schedule]);
 return q || null;
 }
 
@@ -21433,6 +21445,13 @@ try {
 }
 });
 
+/* The jobs on the schedule, and so the jobs it opens (designJobFor). */
+const SCHEDULED_JOB_SQL = `q.accepted_at IS NOT NULL AND q.delivered_at IS NULL AND COALESCE(q.status, '') NOT IN ('held', 'draft')`;
+/* Where a refused design-page request goes: the helper's own list. */
+function designHome() {
+  return actorLevel('jobs.design') === 'on' ? '/admin/design' : '/admin/schedule';
+}
+
 /* The production schedule for every helper (owner, 2026-10-13): each open
    job's stage, next step and dates, soonest due first, opening the design job
    page. No prices, payments or costs: those stay on the production board. */
@@ -21440,9 +21459,8 @@ app.get('/admin/schedule', requireAdmin, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT q.*, a.status AS art_status FROM quotes q LEFT JOIN art_requests a ON a.quote_code = q.code
-        WHERE q.cancelled_at IS NULL AND q.delivered_at IS NULL AND q.accepted_at IS NOT NULL
-          AND COALESCE(q.status, '') NOT IN ('held', 'draft')
-        ORDER BY q.accepted_at DESC LIMIT 300`);
+        WHERE q.cancelled_at IS NULL AND ${SCHEDULED_JOB_SQL}
+        ORDER BY q.accepted_at LIMIT 500`);
     const jobs = rows.map((q) => ({ q, sched: quoteSchedule(q), cl: quoteChecklist(q), stage: JOB_STAGES[jobReachedIndex(q)] }))
       .sort((x, y) => (y.sched && y.sched.risks.length ? 1 : 0) - (x.sched && x.sched.risks.length ? 1 : 0)
         || (x.sched ? new Date(x.sched.ship_by) : Infinity) - (y.sched ? new Date(y.sched.ship_by) : Infinity));
@@ -21472,7 +21490,8 @@ app.get('/admin/design/:code', requireAdmin, async (req, res) => {
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/design');
   try {
     const q = await designJobFor(code, currentActor());
-    if (!q) return res.status(404).send(adminPage('Not found', '<div class="card"><div class="warn">That job is not with you.</div><a class="btn btn-ghost" href="/admin/design">Your design jobs</a></div>', 'design'));
+    if (!q) return res.status(404).send(adminPage('Not found', `<div class="card"><div class="warn">That job is not with you.</div><a class="btn btn-ghost" href="${designHome()}">${
+      designHome() === '/admin/design' ? 'Your design jobs' : 'The schedule'}</a></div>`, 'design'));
     const catalog = await getCatalog();
     const [art, proofs, messages, notes] = await Promise.all([
       jobArtCard(q, req.query).catch((e) => { console.error('art card failed:', e.message); return ''; }),
@@ -21483,8 +21502,9 @@ app.get('/admin/design/:code', requireAdmin, async (req, res) => {
     ]);
     const back = actorLevel('jobs.design') === 'on'
       ? '<a href="/admin/design" style="color:#1848B8">your design jobs</a>' : '';
-    const toSchedule = actorLevel('jobs.schedule') === 'on'
-      ? '<a href="/admin/schedule" style="color:#1848B8">the schedule</a>' : '';
+    const toSchedule = actorLevel('quotes.view') === 'on'
+      ? `<a href="/admin/production/${escEmail(code)}" style="color:#1848B8">the full job page</a>`
+      : actorLevel('jobs.schedule') === 'on' ? '<a href="/admin/schedule" style="color:#1848B8">the schedule</a>' : '';
     const sched = quoteSchedule(q);
     res.send(adminPage(`${code} — design`, `
       <h1>${escEmail(code)} &middot; ${escEmail(firstNameOf(q.name))}</h1>
@@ -21526,7 +21546,7 @@ app.post('/admin/design/:code/note', requireAdmin, async (req, res) => {
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/design');
   try {
     const actor = currentActor();
-    if (!(await designJobFor(code, actor))) return res.redirect('/admin/design');
+    if (!(await designJobFor(code, actor))) return res.redirect(designHome());
     if (body) {
       await pool.query(`INSERT INTO lead_notes (quote_code, kind, body, staff_id) VALUES ($1, 'note', $2, $3)`,
         [code, body, actor && actor.kind === 'staff' ? actor.id : null]);
@@ -21617,7 +21637,7 @@ app.post('/admin/quote/:code/proofs', requireAdmin, async (req, res) => {
   const b = req.body || {};
   const url = String(b.url || '');
   const to = (m) => res.redirect(`${jobPath(code)}?proof_msg=${m}#proofs`);
-  if (actorLevel('quotes.view') !== 'on' && !(await designJobFor(code, currentActor()))) return res.redirect('/admin/design');
+  if (actorLevel('quotes.view') !== 'on' && !(await designJobFor(code, currentActor()))) return res.redirect(designHome());
   if (!PROOFS.proofUrlOk(url, QPHOTOS.cloudName())) return to('bad');
   try {
     const { rows: [q] } = await pool.query('SELECT code FROM quotes WHERE code = $1', [code]);
@@ -21638,6 +21658,15 @@ app.post('/admin/quote/:code/proofs', requireAdmin, async (req, res) => {
 
 /* `design`: the designer's page. Proof messages only: no money in the quick
    replies, and no history (receipts and reminders carry amounts). */
+/* Message kinds with no amounts in them: what a person wrote and the order's
+   progress. Everything else (receipts, reminders, the quote) stays off the
+   design page. */
+const DESIGN_MESSAGE_KINDS = new Set(['manual', 'reply', 'tracking', 'milestone:production', 'milestone:ready',
+  'in-production', 'ready', 'shipped']);
+function designVisibleMessage(m) {
+  return m.status === 'received' || DESIGN_MESSAGE_KINDS.has(String(m.kind));
+}
+
 async function jobMessagesCard(q, query, { design = false, readOnly = false } = {}) {
   const code = q.code;
   const { rows: history } = await pool.query(
@@ -21722,12 +21751,16 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
                         font-weight:600;font-size:14px;color:${why ? '#9ca3af' : '#12203c'}">
             <input type="radio" name="channel" value="${value}" style="width:auto"${why ? ' disabled' : checked ? ' checked' : ''}>
             ${text}${why ? ` <span style="font-weight:400;font-size:12px">(${escEmail(why)})</span>` : ''}</label>`;
-  const list = history.length ? `<div class="rows">${history.map(row).join('')}</div>`
+  /* The design page shows the conversation, not the money: receipts,
+     reminders and quote emails carry amounts, so only written messages,
+     their replies and order updates are listed there. */
+  const shown = design ? history.filter(designVisibleMessage) : history;
+  const list = shown.length ? `<div class="rows">${shown.map(row).join('')}</div>`
     : emptyState('Nothing sent yet. Receipts, reminders and updates show here as they go out.');
   /* Someone on the schedule without messaging reads the conversation only. */
   if (readOnly) {
     return `<div class="card" id="messages" style="margin-top:14px">
-      <h2 class="card-title">Messages${first ? ' with ' + escEmail(first) : ''} <span class="muted">${history.length || ''}</span></h2>
+      <h2 class="card-title">Messages${first ? ' with ' + escEmail(first) : ''} <span class="muted">${shown.length || ''}</span></h2>
       <p class="muted" style="font-size:12.5px">Read only. To write to the customer, ask in Team chat or leave a note below.</p>
       ${list}</div>`;
   }
@@ -22096,7 +22129,7 @@ app.post('/admin/quote/:code/message', requireAdmin, async (req, res) => {
   const attachments = String(b.attachments || '[]').slice(0, 8000);
   const answer = (key, value) => res.redirect(`${jobPath(code)}?${key}=${encodeURIComponent(value)}#messages`);
   // A designer writes only to the customers of jobs that are with them.
-  if (actorLevel('quotes.view') !== 'on' && !(await designJobFor(code, currentActor()))) return res.redirect('/admin/design');
+  if (actorLevel('quotes.view') !== 'on' && !(await designJobFor(code, currentActor()))) return res.redirect(designHome());
   if (!text) return answer('msg_err', 'empty');
   if (text.length > (channel === 'text' ? 300 : 5000)) return answer('msg_err', 'too-long');
 
@@ -22168,7 +22201,7 @@ const UNANSWERED_REPLIES_SQL = `
 app.post('/admin/quote/:code/replies-handled', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/production');
-  if (actorLevel('quotes.view') !== 'on' && !(await designJobFor(code, currentActor()))) return res.redirect('/admin/design');
+  if (actorLevel('quotes.view') !== 'on' && !(await designJobFor(code, currentActor()))) return res.redirect(designHome());
   await pool.query('UPDATE quotes SET replies_handled_at = NOW() WHERE code = $1', [code])
     .catch((e) => console.error(`replies handled on ${code} failed:`, e.message));
   return res.redirect(`${jobPath(code)}#messages`);
