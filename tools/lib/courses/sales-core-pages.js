@@ -66,7 +66,7 @@ module.exports = {
     ] },
     { from: 'Turnaround', checks: [
       q('When does the turnaround clock start?', ['At the first message', 'When the proof is approved and the deposit paid', 'When you send the quote'], 1, 'Late artwork or approval moves the date.'),
-      q('Rush for next business day adds…', ['+10%', '+30%', '+80%'], 2, 'Next day +80%, 2 days +50%, 3 days +30%, 4 days +10%.'),
+      q('Rush on DTF for next business day adds…', ['+10%', '+30%', '+80%'], 2, 'Next day +80%, 2 days +50%, 3 days +30%, 4 days +10%. Only DTF can be rushed.'),
     ] },
     { from: 'Getting the order to the customer', checks: [
       q('Which is NOT one of the ways an order reaches the customer?', ['Free pickup', 'Shipping or local delivery', 'Dropped at any address for free'], 2, 'Pickup, shipping, or local delivery to nearby ZIPs.'),

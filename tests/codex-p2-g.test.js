@@ -15,7 +15,10 @@ test('#159 replies: unchecked ones hidden from helpers, staff notes never reach 
 test('#159 the rush reply promises no rush before the method is known', () => {
   const r = after("shortcut: 'rush'", 900);
   assert.doesNotMatch(r, /rush it for an extra fee/);
-  assert.match(r, /Only embroidery can be rushed/);
+  assert.match(r, /Only DTF can be rushed: screen printing, embroidery and cutouts cannot/);
+  // A live copy at the embroidery-only wording, or the first one, still updates.
+  const fix = after("const r = KB_ADDED.find((x) => x.shortcut === 'rush');", 2400);
+  assert.match(fix, /if \(r\) \{ r\.was\.push\(r\.body\); r\.body = current; \}/);
 });
 test('#159 a reply too long for a text says so when chosen', () => {
   assert.match(src, /and a text holds 300: shorten it, or send it as an email\./);

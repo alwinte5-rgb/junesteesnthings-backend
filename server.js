@@ -87,6 +87,7 @@ const CREDIT = require('./tools/lib/sales-credit');
 const TEAM = require('./tools/lib/team-metrics');
 const TRAINING = require('./tools/lib/training');
 const QEXAM = require('./tools/lib/quote-exam');
+const RUSH = require('./tools/lib/rush');
 const CHAN = require('./tools/lib/team-channels');
 const HIRING = require('./tools/lib/hiring');
 const HIRE_POSTING = require('./tools/lib/hiring-posting');
@@ -10319,7 +10320,13 @@ function productGroupOf(name) {
         if (!dateEl || !row || !box) return;
 
         var days = rushDaysUntil(dateEl.value);
-        var pct = rushSuggest(days);
+        /* Only DTF can be rushed (tools/lib/rush.js): every decoration picked
+           on the form has to be DTF, and something has to be picked. The save
+           route makes a helper's rush 0 otherwise; the owner may type one. */
+        var picked = Array.prototype.filter.call(document.querySelectorAll('select[name^="method"], select[name^="pr_m_"]'),
+          function (el) { return el.value && el.selectedIndex >= 0; });
+        var dtfOnly = picked.length > 0 && picked.every(function (el) { return /\bDTF\b/i.test(el.options[el.selectedIndex].text); });
+        var pct = dtfOnly ? rushSuggest(days) : 0;
 
         row.style.display = days === null ? 'none' : '';
         if (days === null) { box.value = ''; if (why) why.textContent = ''; calc(); return; }
@@ -10337,6 +10344,7 @@ function productGroupOf(name) {
           why.textContent = pct > 0
             ? (days === 0 ? 'today or earlier' : days + ' business day' + (days === 1 ? '' : 's'))
               + ' — ladder suggests ' + pct + '%'
+            : !dtfOnly && rushSuggest(days) > 0 ? 'only DTF can be rushed: ask June about the date'
             : days + ' business days — no rush at this lead time';
         }
         calc();
@@ -11542,6 +11550,11 @@ ${uploadStatusScript()}
           nb.dataset.rushBound = '1';
           nb.addEventListener('input',  function(){ rushSync(true); });
           nb.addEventListener('change', function(){ rushSync(true); });
+          /* So does the decoration: only DTF can be rushed. */
+          document.addEventListener('change', function (e) {
+            var n = e.target && e.target.name || '';
+            if (/^(method|pr_m_)/.test(n)) rushSync(true);
+          });
         }
         /* Remove clears the fee AND remembers that it was cleared, so editing
            the date afterwards does not quietly put it back. Typing a figure in
@@ -12474,6 +12487,13 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     let rushPct = Number(one(b.rush_pct));
     if (!Number.isFinite(rushPct) || rushPct < 0) rushPct = 0;
     rushPct = Math.min(rushPct, 100);
+    /* Only DTF can be rushed (tools/lib/rush.js). The owner may still type a
+       rush on anything; a helper's is 0 unless every required line is DTF. */
+    const methodTitle = (id) => ((catalog.methods || []).find((m) => String(m.id) === String(id)) || {}).title || '';
+    const rushOk = RUSH.rushAllowed(items.filter((it) => !it.optional).map((it) => ({
+      product: !!it.product_id,
+      titles: [...new Set([...(it.prints || []).map((p) => p.method_id), it.method_id, it.method2_id].filter(Boolean))].map(methodTitle),
+    })));
     /* RUSH IS LOCKED FOR HELPERS (owner, 2026-10-08: "lock rush. keep open for
        me to override"). Without quotes.price a helper's rush is what the
        needed-by date earns on the ladder; whatever was typed is replaced, not
@@ -12490,7 +12510,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         const wasDate = was && was.needed_by ? String(was.needed_by).slice(0, 10) : null;
         rushPct = (was && wasDate === wantDate)
           ? Math.max(0, Number(was.rush_pct || 0))
-          : (wantDate ? rushPctFor(wantDate) : 0);
+          : (wantDate && rushOk ? rushPctFor(wantDate) : 0);
       }
     }
     const rush = round2(subtotal * rushPct / 100);
@@ -31986,7 +32006,10 @@ function customerReplyText(body) {
    in [square brackets] is for the owner to fill in. */
 const KB_SEED = [
   { kind: 'faq', shortcut: 'turnaround', title: 'How long will my order take?', tags: 'turnaround, lead time, timing, when',
-    body: `Thanks for asking! Most orders are ready in [standard turnaround] business days after you approve the proof and pay the deposit.\n\nNeed it sooner? We offer rush turnaround for a fee: next business day (+80%), 2 days (+50%), 3 days (+30%) or 4 days (+10%), depending on what is on the press. Tell me your date and I will confirm what we can do.` },
+    body: `Thanks for asking! Most orders are ready in about 10 business days after you approve the proof and pay the deposit, plus shipping time if we ship it.\n\nNeed it sooner? On full-color DTF prints we offer rush turnaround for a fee: next business day (+80%), 2 days (+50%), 3 days (+30%) or 4 days (+10%). Screen printing, embroidery and cutouts cannot be rushed. Tell me your date and I will check what we can do.`,
+    /* 2026-10-13: the standard turnaround the owner approved, and rush on DTF
+       only (owner, 2026-10-12). An unedited live copy updates. */
+    was: [`Thanks for asking! Most orders are ready in [standard turnaround] business days after you approve the proof and pay the deposit.\n\nNeed it sooner? We offer rush turnaround for a fee: next business day (+80%), 2 days (+50%), 3 days (+30%) or 4 days (+10%), depending on what is on the press. Tell me your date and I will confirm what we can do.`] },
   { kind: 'faq', shortcut: 'deposit', title: 'Do I pay up front?', tags: 'deposit, payment, pay, balance',
     body: `We take a 50% deposit to start your order, and the balance when it is ready. Orders under $100 are paid in full up front.\n\nYou can pay online from your quote link. Card payments carry a 4% card fee; other ways to pay are listed on the quote.` },
   { kind: 'faq', shortcut: 'minimums', title: 'Is there a minimum order?', tags: 'minimum, how many, quantity, small order',
@@ -32353,7 +32376,7 @@ const KB_ADDED = [
     tags: 'rush, deadline, urgent, fast, by friday, need it soon, turnaround',
     body: `Hi [name], thanks! [Date] is tight. Let me check with the team what we can do for your date and I'll confirm today by [time].\n\n` +
 `To keep it quick, could you send [the details still missing: quantity, sizes, artwork]?\n\n` +
-`(For you: never promise a date or a rush price before June confirms it. Only embroidery can be rushed: screen printing and DTF are made by our partner, who sells no rush. Reply the same day either way.)` },
+`(For you: never promise a date or a rush price before June confirms it. Only DTF can be rushed: screen printing, embroidery and cutouts cannot. Reply the same day either way.)` },
   { kind: 'faq', shortcut: 'checking', title: 'Let me check and get back to you', needsReview: true,
     tags: 'not sure, checking, question, unknown, get back, follow up',
     body: `Good question! Let me check with our production team so I give you the right answer. I'll get back to you by [time].\n\n` +
@@ -32652,8 +32675,15 @@ KB_ADDED.push({ kind: 'sop', title: PAY_GUIDE_TITLE,
   /* Codex #159: rush is embroidery-only, so the reply no longer offers one
      before the method is known. A live copy still on the old wording updates. */
   const r = KB_ADDED.find((x) => x.shortcut === 'rush');
+  /* 2026-10-13: rush is DTF only now (owner, 2026-10-12). The older wordings
+     are rebuilt from the embroidery-only copy, which is itself kept in `was`. */
+  const dtfOnly = '(For you: never promise a date or a rush price before June confirms it. Only DTF can be rushed: screen printing, embroidery and cutouts cannot. Reply the same day either way.)';
+  const embroideryOnly = '(For you: never promise a date or a rush price before June confirms it. Only embroidery can be rushed: screen printing and DTF are made by our partner, who sells no rush. Reply the same day either way.)';
+  const current = r ? r.body : '';
+  if (r) r.body = r.body.split(dtfOnly).join(embroideryOnly);
   if (r) r.was = [...(r.was || []), r.body.split("Hi [name], thanks! [Date] is tight. Let me check with the team what we can do for your date and I'll confirm today by [time].").join("Hi [name], thanks! [Date] is tight but we may be able to rush it for an extra fee. Let me check what's on the press and I'll confirm today by [time], with the price for the rush.")
     .split('(For you: never promise a date or a rush price before June confirms it. Only embroidery can be rushed: screen printing and DTF are made by our partner, who sells no rush. Reply the same day either way.)').join('(For you: never promise a date before June confirms it. Reply the same day either way.)')];
+  if (r) { r.was.push(r.body); r.body = current; }
 }
 /* Codex #159/#161: two SOP lines corrected; unedited live copies update. */
 { const x = KB_ADDED.find((y) => y.title === 'Reorders and replying to reviews'); if (x && x.body.includes('- Website reviews show on **Reviews**. Google reviews do not: check the Google Business profile each morning, paste a new one into **Reply to a Google review** on Reviews, then paste the reply back on Google. Reply to every one within two days')) x.was = [...(x.was || []), x.body.split('- Website reviews show on **Reviews**. Google reviews do not: check the Google Business profile each morning, paste a new one into **Reply to a Google review** on Reviews, then paste the reply back on Google. Reply to every one within two days').join('- New reviews show on **Reviews**. Reply to every one within two days')]; }

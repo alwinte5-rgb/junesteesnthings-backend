@@ -54,7 +54,7 @@ const GLOSSARY = {
   'tax-exempt': 'A customer who does not pay Illinois sales tax, because of an exemption letter (E-number) or a resale certificate (CRT-61).',
   'E-number': 'The number on an Illinois tax-exemption letter. Schools, churches and charities usually have one.',
   'CRT-61': 'The Illinois resale certificate, for customers buying to resell.',
-  'rush': 'Faster turnaround for a fee: next day +80%, 2 days +50%, 3 days +30%, 4 days +10%. Only after checking the press.',
+  'rush': 'Faster turnaround for a fee, on DTF only: next day +80%, 2 days +50%, 3 days +30%, 4 days +10%. Only after checking with June.',
   'turnaround': 'How many business days an order takes after the proof is approved and the deposit is paid.',
   'proof': 'The picture of the design on the garment that the customer approves in writing before anything is printed.',
   'lead': 'Anyone who has asked about an order, on any channel. Every lead lives on the Leads page.',
@@ -371,16 +371,16 @@ Giant printed heads of players, graduates or family members, for games, parties 
 
 **Rush**
 
-Only **embroidery** can be rushed: it is the one thing we make in house. Screen printing and DTF are made for us by a partner in 7 to 10 business days, and they sell no rush at any price. So for a screen print, DTF, or a mix that includes either, the answer to "can you do it faster?" is "let me ask June", never a yes and never a price.
+Only **DTF** can be rushed. Screen printing, embroidery and cutouts cannot be rushed at any price. So for a screen print, embroidery, cutouts, or a mix that includes any of them, the answer to "can you do it faster?" is "let me ask June", never a yes and never a price.
 
-On embroidery, for a fee, depending on what is on the machine:
+On DTF, for a fee, depending on what is already in the queue:
 
 - Next business day: +80%
 - 2 business days: +50%
 - 3 business days: +30%
 - 4 business days: +10%
 
-The quote form sets the rush from the **Needed by** date you enter, so get the real date from the customer. Never promise a rush date before June confirms it can be done.
+The quote form sets the rush from the **Needed by** date you enter, and only when every item is DTF, so get the real date from the customer. Never promise a rush date before June confirms it can be done.
 
 **Getting the order to the customer**
 
@@ -414,9 +414,9 @@ Customers can also design and pay online at jtees.net. Those show on **Orders**.
         { id: 'captext', q: 'A customer wants a long, tiny slogan embroidered on a cap. What do you say?',
           choices: ['"No problem"', 'Embroidered text needs to be at least 0.25 inch tall, so suggest a shorter slogan or a bigger place', 'Switch to DTF without asking', 'Shrink it to fit'],
           answer: 1, article: A.methods, why: 'Small text fills in and cannot be read. Never promise small text on caps.' },
-        { id: 'rush', q: 'An embroidery order needs a 2-business-day rush. What does it add to the price?',
+        { id: 'rush', q: 'A DTF order needs a 2-business-day rush. What does it add to the price?',
           choices: ['+10%', '+30%', '+50%', '+80%'],
-          answer: 2, article: A.products, why: 'Next day +80%, 2 days +50%, 3 days +30%, 4 days +10%, on embroidery only, and only after June confirms.' },
+          answer: 2, article: A.products, why: 'Next day +80%, 2 days +50%, 3 days +30%, 4 days +10%, on DTF only, and only after June confirms.' },
         { id: 'clock', q: 'When does the turnaround clock start?',
           choices: ['When the customer first writes', 'When you send the quote', 'When the customer approves the proof and pays the deposit', 'When the blanks arrive'],
           answer: 2, article: A.products, why: 'Turnaround counts from proof approval and deposit, so late artwork moves the date.' },
@@ -699,7 +699,7 @@ On the quote form, a blue **Upsell ideas** box appears when the system spots a b
 - **Schools and PTOs:** a second colour of shirt for staff, spirit-wear hoodies, a field-day banner
 - **Businesses:** embroidered polos or jackets for front-of-house staff, hats, yard signs or a banner for an opening, a reorder plan for new hires
 - **Events and reunions:** a back print with the date, matching cutouts or a banner for photos
-- **Any order with a tight date:** rush, offered honestly, only after checking the press
+- **A DTF order with a tight date:** rush, offered honestly, only after checking with June. Nothing else can be rushed
 
 **When the timing is right**
 

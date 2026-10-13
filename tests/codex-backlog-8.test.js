@@ -43,11 +43,14 @@ test('#195 trainees see that a lesson is an unchecked draft', () => {
   assert.match(src, /!owner && a && a\.needs_review \? `<div class="warn">June has not checked this lesson yet/);
 });
 
-test('#195 rush is taught as embroidery only, and the saved lesson is updated', () => {
+test('#195, then 2026-10-12: rush is taught as DTF only, and a saved lesson at either older wording is updated', () => {
   const sales = COURSES.COURSES['sales-core'] || Object.values(COURSES.COURSES).find((c) => c.key === 'sales-core');
   const lessons = sales.modules.flatMap((m) => m.lessons);
-  const l = lessons.find((x) => typeof x.body === 'string' && x.body.includes('Only **embroidery** can be rushed'));
-  assert.ok(l && l.was && l.was.some((w) => w.includes('For a fee, depending on what is on the press:')));
+  const l = lessons.find((x) => typeof x.body === 'string' && x.body.includes('Only **DTF** can be rushed'));
+  assert.ok(l && l.was, 'the lesson teaches DTF only');
+  assert.ok(l.was.some((w) => w.includes('Only **embroidery** can be rushed')), 'the embroidery-only copy updates');
+  assert.ok(l.was.some((w) => w.includes('For a fee, depending on what is on the press:')), 'and the first wording');
+  assert.ok(!lessons.some((x) => typeof x.body === 'string' && x.body.includes('Only **embroidery** can be rushed')));
 });
 
 test('#224 content helpers hand leads to a channel they can see', () => {
