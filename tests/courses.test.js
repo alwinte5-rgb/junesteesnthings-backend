@@ -396,11 +396,27 @@ test('the Design course keeps the old checklist\'s keys, so a designer\'s ticks 
   for (const k of ['do:message', 'do:proof', 'quiz:design', 'signoff:art', 'signoff:handoff', 'signoff:ready']) assert.ok(keys.includes(k), k);
   assert.strictEqual(keys[keys.length - 1], TRAINING.READY_KEY);
   assert.strictEqual(TRAINING.visibleSteps(new Set(['proofs']), 'design').find((s) => s.key === 'do:proof').need, 3);
-  // What only the owner knows reaches her Playbook gaps card, and nothing else is a gap.
+  // June answered every Design blank (answers.js, 2026-10-13); none is left for her gaps card.
   const gaps = TRAINING.lessonArticles().filter((a) => /^Design course /.test(a.title)).flatMap((a) => TRAINING.ownerGaps(a.body));
-  assert.ok(gaps.length >= 6, `${gaps.length} gaps`);
-  for (const g of gaps) assert.match(g.token, /owner to fill in/);
+  assert.deepStrictEqual(gaps, []);
   // Lesson titles lose their "Design course 3a:" prefix on the page.
   assert.strictEqual(TRAINING.visibleSteps(undefined, 'design').find((s) => s.key === 'lesson:d3-dtf').title, 'DTF, embroidery and the rest');
   assert.strictEqual(TRAINING.visibleSteps(undefined, 'design').find((s) => s.key === 'lesson:team-chat').title, 'Team chat and working on your own');
+});
+
+test('the Design course never teaches a paid AI tool the shop does not pay for, and the live AI lesson is updated', () => {
+  const D = COURSES.COURSES['design-core'];
+  const lessons = D.modules.flatMap((m) => m.lessons);
+  for (const l of lessons) {
+    for (const line of String(l.body || '').split('\n').filter((x) => /ChatGPT|Firefly/.test(x))) {
+      assert.match(line, /without asking June|does not pay|Never paste|any AI tool/, `${l.id}: ${line}`);
+    }
+  }
+  for (const x of [...D.modules.map((m) => m.quiz), D.final.quiz].flatMap((z) => z.questions)) {
+    const text = JSON.stringify(x);
+    assert.doesNotMatch(text, /Firefly/, x.id);
+    if (/ChatGPT/.test(text)) assert.match(x.q, /paste/, `${x.id}: ChatGPT only as the privacy example`);
+  }
+  const ai = lessons.find((l) => l.id === 'd6-ai-when');
+  assert.ok(ai.was.some((w) => w.includes('**ChatGPT (images):**')), 'the live copy written before the change still matches, so it is replaced');
 });

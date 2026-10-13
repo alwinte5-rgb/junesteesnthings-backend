@@ -22,7 +22,7 @@ module.exports = (A) => [
   f('f4', 'You are off tomorrow and a proof is half done. Your handover says…',
     ['Nothing', 'What is done, what is open and on whom, any promise to the customer, and where the files are', 'Only "see you Monday"', 'The customer\'s phone number'], 1, TEAM.questions,
     'A handover nobody has to ask about.'),
-  f('f5', 'You want ChatGPT to tidy a proof message. What do you paste?',
+  f('f5', 'You want an AI tool to tidy a proof message. What do you paste?',
     ['The message with the customer\'s name and email', 'Your draft with "the customer" in place of their details', 'A screenshot of the job page', 'Their address'], 1, TEAM.customers,
     'Customer details never go into any AI tool.'),
 
@@ -95,7 +95,7 @@ module.exports = (A) => [
     ['Generate it with AI', 'Draw it yourself, so they can own it', 'Use a free logo site', 'Copy a similar one'], 1, A.aiWhen,
     'AI-only art cannot be copyrighted.'),
   f('f29', 'A prompt idea: "a Mickey Mouse style mascot". You…',
-    ['Use it', 'Never put characters or brands in a prompt', 'Use it in Firefly', 'Change one letter'], 1, A.aiWhen,
+    ['Use it', 'Never put characters or brands in a prompt', 'Use it in our AI designer', 'Change one letter'], 1, A.aiWhen,
     'Never brands, characters, teams or named artists.'),
   f('f30', 'Which tool for removing a car from a shop photo?',
     ['Vectorizer.ai', 'Photoshop Generative Fill', 'Canva', 'Illustrator Image Trace'], 1, A.aiWhen, 'Generative Fill edits photos.'),

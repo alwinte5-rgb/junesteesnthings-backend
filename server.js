@@ -29828,7 +29828,7 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
         action = `<a class="btn ${s.done || owner ? 'btn-ghost' : ''}" href="/admin/training/exam/${escEmail(s.exam)}${owner ? `?staff=${staffId}` : ''}">${
           owner ? 'See the scenarios' : s.done ? 'Practise again' : 'Start the exam'}</a>`;
       } else if (s.type === 'quiz') {
-        action = owner ? `${everTried.has(s.quiz) ? `<a class="btn btn-ghost" href="/admin/training/attempts?staff=${staffId}&amp;quiz=${encodeURIComponent(s.quiz)}">${escEmail(who.name)}'s answers</a> ` : ''}<a class="btn btn-ghost" href="/admin/training/quiz/${escEmail(s.quiz)}">Questions</a>`
+        action = owner ? `${everTried.has(s.quiz) ? `<a class="btn btn-ghost" href="/admin/training/attempts?staff=${staffId}&amp;quiz=${encodeURIComponent(s.quiz)}" title="${escEmail(who.name)}'s answers">Answers</a> ` : ''}<a class="btn btn-ghost" href="/admin/training/quiz/${escEmail(s.quiz)}">Questions</a>`
           : `<a class="btn ${s.done ? 'btn-ghost' : ''}" href="/admin/training/quiz/${escEmail(s.quiz)}">${s.done ? 'Take it again' : 'Take the quiz'}</a>`;
       } else if (s.type === 'signoff' && owner) {
         /* The owner's own action, labelled as such. Undo asks for a tick
@@ -29849,7 +29849,7 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
       return `<div class="row-i"${s.locked && !owner ? ' style="opacity:.6"' : ''}><span class="row-main"><b>${link}</b>
         <div class="row-sub" style="white-space:normal">${escEmail(kind)}${time}${s.hint ? ` &middot; ${escEmail(s.hint)}` : ''}${tried}${
           s.done && s.doneAt ? ` &middot; ${escEmail(whenShort(s.doneAt))}` : ''}</div></span>
-        <span class="row-end" style="display:flex;gap:8px;align-items:center">${
+        <span class="row-end" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end">${
           action || (s.done ? pill('done', 'green') : pill('to do', 'neutral'))}${s.done && action ? pill('done', 'green') : ''}</span></div>`;
     };
     /* Courses come in modules; the design path is one list. */
