@@ -527,7 +527,7 @@ My stats shows your quotes, accepted orders and activity. Your targets are in le
     }],
     practice: [
       { key: 'do:accounts-messages', type: 'do', fact: 'messages', need: 10, minutes: 20,
-        title: 'Send 10 customer messages', hint: 'Emails or texts to customers from the back office, reorder notes included. They are logged for you. This ticks itself at 10.' },
+        title: 'Send 10 customer messages', hint: 'Emails or texts to customers from the back office, reorder notes included, and DMs you log on a lead (Social DM). They are logged for you. This ticks itself at 10.' },
     ],
     quiz: {
       key: 'accounts-8', title: 'Module 8 quiz: quiet customers and your day', minutes: 10,

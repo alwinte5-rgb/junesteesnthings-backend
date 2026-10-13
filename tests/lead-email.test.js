@@ -39,11 +39,15 @@ test('what was typed is escaped for the email', () => {
   assert.strictEqual((html.match(/<p /g) || []).length, 2);
 });
 
-test('the send route: checked, claims before it sends, no double send, helpers need full messaging', () => {
+test('the send route: checked, claims before it sends, no double send, helpers in training wait for June', () => {
   assert.ok(route.length > 200, 'route found');
   assert.match(route, /LEADMAIL\.cleanEmail\(b\)/);
-  assert.match(route, /actorLevel\('customers\.message'\) !== 'on'/);
+  assert.match(route, /actorLevel\('customers\.message'\) === 'off' \|\| actorLevel\('leads\.view'\) !== 'on'/, 'no messaging, or no leads: refused');
   assert.match(route, /FRAUD\.mentionsOutsidePayment/);
+  /* At "Needs my OK", or mentioning outside payment, it is queued, never sent. */
+  const queue = route.indexOf("actorLevel('customers.message') === 'approval' || outside");
+  assert.ok(queue > 0 && queue < route.indexOf('await sendLeadEmail('), 'queued before any send');
+  assert.match(route.slice(queue, route.indexOf('await sendLeadEmail(')), /SELECT 'lead_email', \$1[\s\S]*WHERE NOT EXISTS[\s\S]*return res\.redirect/);
   assert.match(route, /INTERVAL '10 minutes'/, 'a second press sends nothing');
   /* The note is now the claim, written under a lock BEFORE the send and taken
      back out if the send fails (Codex #179): two presses could both pass a

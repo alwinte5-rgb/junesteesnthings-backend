@@ -1015,7 +1015,7 @@ Before you sign off: leads answered, quotes sent, follow-ups done, anything stuc
     }],
     practice: [
       { key: 'do:message', type: 'do', fact: 'messages', minutes: 5,
-        title: 'Write your first customer message', hint: 'From a job page. While you are in training it waits for June.' },
+        title: 'Write your first customer message', hint: 'Press Email them on a lead, or write from a job page. While you are in training it waits for June, and it counts as soon as you write it.' },
       { key: 'do:eod', type: 'do', fact: 'eod', needs: 'eod', minutes: 0,
         title: 'Send your first end-of-day note', hint: 'Use "Wrap up the day" on My Day.' },
     ],
