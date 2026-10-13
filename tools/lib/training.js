@@ -244,15 +244,45 @@ for (const c of Object.values(COURSES.COURSES)) {
     if (seenQuiz.has(z)) continue;
     seenQuiz.add(z);
     if (QUIZZES[z.key]) throw new Error(`quiz key ${z.key} is used twice`);
-    QUIZZES[z.key] = { title: z.title, pass: passMark(z.questions.length), questions: z.questions };
+    QUIZZES[z.key] = { title: z.title, pass: passMark(z.questions.length), questions: z.questions.map((x, i) => balanced(z.key, x, i)) };
   }
 }
 
-/** The quiz as a helper sees it: questions and choices, no answers. */
+/* Where the right answer sits. Most course questions were written with the
+   right answer second, so always picking B passed most quizzes. Each
+   question's choices are turned round (their order otherwise kept) so the
+   right one lands at a spot that steps along with the question's place in
+   the quiz (from a start fixed by the quiz key): spread evenly, and the same
+   on every deploy. The page also shuffles the order each time (quizForPage),
+   and the radio values stay these indexes. */
+function balanced(quizKey, x, i) {
+  const n = x.choices.length;
+  if (n < 2) return x;
+  const start = require('crypto').createHash('sha256').update(String(quizKey)).digest().readUInt32BE(0);
+  const target = (start + i) % n;
+  const shift = (target - x.answer + n) % n;
+  if (!shift) return x;
+  const choices = x.choices.map((_, i) => x.choices[(i - shift + n) % n]);
+  return { ...x, choices, answer: target };
+}
+
+/** A fresh random order of 0..n-1 (crypto, so it cannot be predicted). */
+function shuffledOrder(n) {
+  const order = Array.from({ length: n }, (_, i) => i);
+  for (let i = n - 1; i > 0; i--) {
+    const j = require('crypto').randomInt(i + 1);
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+  return order;
+}
+
+/** The quiz as a helper sees it: questions and choices, no answers. Each
+ *  question carries `order`, a new random order to show its choices in; the
+ *  value sent back for a choice is still its index in `choices`. */
 function quizForPage(key) {
   const z = Object.prototype.hasOwnProperty.call(QUIZZES, key) ? QUIZZES[key] : null;
   if (!z) return null;
-  return { title: z.title, pass: z.pass, questions: z.questions.map(({ id, q, choices }) => ({ id, q, choices })) };
+  return { title: z.title, pass: z.pass, questions: z.questions.map(({ id, q, choices }) => ({ id, q, choices, order: shuffledOrder(choices.length) })) };
 }
 
 /**

@@ -30258,8 +30258,8 @@ app.get('/admin/training/quiz/:key', requireAdmin, async (req, res) => {
       <form method="post" action="/admin/training/quiz/${escEmail(key)}" data-once>
         ${view.questions.map((x, n) => `<fieldset class="card" style="border:0">
           <legend style="font-weight:700;white-space:normal">${n + 1}. ${withTips(escEmail(x.q))}</legend>
-          ${x.choices.map((c, i) => `<label style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;cursor:pointer">
-            <input type="radio" name="${escEmail(x.id)}" value="${i}" required style="margin-top:3px"> <span>${escEmail(c)}</span></label>`).join('')}
+          ${x.order.map((i) => `<label style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;cursor:pointer">
+            <input type="radio" name="${escEmail(x.id)}" value="${i}" required style="margin-top:3px"> <span>${escEmail(x.choices[i])}</span></label>`).join('')}
         </fieldset>`).join('')}
         <button type="submit" class="btn" data-busy="Marking…">Mark my answers</button>
       </form>${SHIP_ONCE_JS}`, 'training'));
