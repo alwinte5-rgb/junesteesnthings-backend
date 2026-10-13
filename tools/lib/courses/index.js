@@ -61,7 +61,18 @@ const REWORDED = [
      developer is told the repo's self-merge rule is not theirs. */
   ['$100 a month at most to start, and never more than $5 on any one day. Google may spend up to twice the daily budget on a busy day, so set it to $2.50 a day (about $76 a month): then no day can pass $5. June raises it',
    '$100 a month to start (about $3 a day), and never more than $5 on any one day. June raises it'],
-  [' The repository rules tell Claude Code to merge its own finished pull request; you do not: tell it to stop at an open pull request, and GitHub keeps main locked until June approves.', ''],  /* 2026-10-13: the shop does not pay for ChatGPT or Firefly, so the design
+  [' The repository rules tell Claude Code to merge its own finished pull request; you do not: tell it to stop at an open pull request, and GitHub keeps main locked until June approves.', ''],  /* 2026-10-13: only DTF can be rushed (owner, 2026-10-12). */
+  ["Only **DTF** can be rushed. Screen printing, embroidery and cutouts cannot be rushed at any price. So for a screen print, embroidery, cutouts, or a mix that includes any of them, the answer to \"can you do it faster?\" is \"let me ask June\", never a yes and never a price.\n\nOn DTF, for a fee, depending on what is already in the queue:",
+   "Only **embroidery** can be rushed: it is the one thing we make in house. Screen printing and DTF are made for us by a partner in 7 to 10 business days, and they sell no rush at any price. So for a screen print, DTF, or a mix that includes either, the answer to \"can you do it faster?\" is \"let me ask June\", never a yes and never a price.\n\nOn embroidery, for a fee, depending on what is on the machine:"],
+  ["The quote form sets the rush from the **Needed by** date you enter, and only when every item is DTF, so get the real date from the customer. Never promise a rush date before June confirms it can be done.",
+   "The quote form sets the rush from the **Needed by** date you enter, so get the real date from the customer. Never promise a rush date before June confirms it can be done."],
+  ["- **A DTF order with a tight date:** rush, offered honestly, only after checking with June. Nothing else can be rushed",
+   "- **Any order with a tight date:** rush, offered honestly, only after checking the press"],
+  ["- Put in the needed-by date. The form adds rush if the date needs it and every item is DTF (nothing else can be rushed), and says why",
+   "- Put in the needed-by date. The form adds rush if the date needs it, and says why"],
+  ["Check the production board and ask June. Only DTF can be rushed, and only when there is room. Put the date in the quote and the form adds the rush fee on DTF.",
+   "Check the production board and ask June. Offer rush only when the press has room. Put the date in the quote and the form adds the rush fee."],
+  /* 2026-10-13: the shop does not pay for ChatGPT or Firefly, so the design
      AI lesson teaches our AI designer and Vectorizer.ai; Team basics says
      where a note goes for helpers who do not work on orders. */
   ["- **Our website's AI designer:** the AI image tool we use. Customers make designs with it on jtees.net, and you can use it for concepts and flat illustrations too. Ask for \"flat vector style, solid colors, no gradients, no shadows, plain white background\"; the Playbook has ready prompts (\"Print-ready design idea\"). You will mostly be fixing what it made (next lesson)\n- **Photoshop Generative Fill:** built into Photoshop, for editing photos and mockups: extending backgrounds, removing objects. Use only what comes with the shop's Photoshop\n- **Vectorizer.ai:** turns clean raster art into a vector. Good for AI concepts and simple logos; always clean the result by hand\n- Never sign up for, or pay for, another AI tool for shop work (ChatGPT, Midjourney, Firefly or any other) without asking June first",
@@ -78,13 +89,17 @@ const REWORDED = [
    matched too) is turned back to the old words. Team basics is one lesson
    object shared by every course, so each lesson is done once. */
 const reworded = new Set();
-for (const c of [SALES_CORE, DESIGN_CORE, CONTENT_CORE, ADS_CORE, DEV_CORE]) {
+for (const c of [SALES_CORE, SALES_CLOSER, DESIGN_CORE, CONTENT_CORE, ADS_CORE, DEV_CORE]) {
   for (const l of c.modules.flatMap((m) => m.lessons)) {
     if (reworded.has(l) || typeof l.body !== 'string' || !REWORDED.some(([now]) => l.body.includes(now))) continue;
     reworded.add(l);
     const back = (b) => REWORDED.reduce((t, [now, then]) => t.split(now).join(then), b);
     const was = new Set(l.was || []);
-    for (const b of [l.body, ...(l.was || [])]) was.add(back(b));
+    /* Back one wording at a time, keeping each: a lesson reworded twice (rush:
+       any method, then embroidery only, then DTF only) may be live at either. */
+    for (const b of [l.body, ...(l.was || [])]) {
+      for (let t = b, n = 0; n < 5; n++) { const prev = t; t = back(t); if (t === prev) break; was.add(t); }
+    }
     was.delete(l.body);
     l.was = [...was];
   }
