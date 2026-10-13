@@ -272,6 +272,21 @@ function gradeQuiz(key, picked = {}) {
   return { score, total: results.length, pass: z.pass, passed: score >= z.pass, results };
 }
 
+/** A short fingerprint of a quiz's questions, choices and answers, stored
+ *  with each attempt so an answer log read later can tell when the quiz has
+ *  been reworded or reordered since. */
+function quizHash(key) {
+  const z = Object.prototype.hasOwnProperty.call(QUIZZES, key) ? QUIZZES[key] : null;
+  if (!z) return null;
+  const body = JSON.stringify(z.questions.map(({ id, q, choices, answer }) => [id, q, choices, answer]));
+  return require('crypto').createHash('sha256').update(body).digest('hex').slice(0, 16);
+}
+
+/** What a helper picked, as stored in the answer log: one entry per question. */
+function answerLog(results) {
+  return results.map((x) => ({ id: x.id, picked: x.picked, pickedText: x.pickedText, right: x.right }));
+}
+
 /** How long a helper has spent on training, from what is recorded.
  *  Lesson time is wall clock from first open to finish, so a tab left open
  *  overnight counts; each lesson is capped at 3x its expected minutes and
@@ -377,7 +392,7 @@ function fillGap(text, token, answer, nth) {
   return parts.slice(0, nth + 1).join(token) + a + parts.slice(nth + 1).join(token);
 }
 
-module.exports = { FEATURES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, timeSpent, hm,
+module.exports = { FEATURES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
   visibleSteps, stepByKey, mayTick, progress, stepOpen, placeholders, ownerGaps, fillGap, dayCount, passMark, courseSteps, lessonPages,
   COURSES: COURSES.COURSES, SALES_ROLES: COURSES.SALES_ROLES, salesRoleOf: COURSES.salesRoleOf,
   lessonArticles: COURSES.lessonArticles, glossary: COURSES.glossary };

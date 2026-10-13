@@ -53,7 +53,7 @@ test('#181 product tools read the five MySQL fields and set a thumbnail on creat
   }
 });
 test('#195 the restart route connects inside its try', () => {
-  const r = after("app.post('/admin/training/restart'", 3000);
+  const r = after("app.post('/admin/training/restart'", 4500);
   assert.ok(r.indexOf('try {') < r.indexOf('client = await pool.connect()'));
   assert.match(r, /if \(client\) client\.release\(\)/);
 });

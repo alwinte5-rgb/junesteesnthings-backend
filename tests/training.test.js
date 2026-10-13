@@ -221,8 +221,16 @@ test('quiz routes: a helper hands in their own; answers stay off the helper page
   const helperView = page.slice(page.indexOf('TRAINING.quizForPage(key)'));
   assert.doesNotMatch(helperView, /\.answer\b|\.why\b/, 'the helper page never prints answers');
   assert.match(src, /CREATE TABLE IF NOT EXISTS staff_quiz_attempts/);
+  // What was picked is stored for the owner's answer log.
+  assert.match(post, /answers, quiz_hash\)/);
+  assert.match(post, /TRAINING\.answerLog\(r\.results\)/);
+  // A refresh re-reads the result, never posts another try.
+  assert.match(post, /res\.redirect\(303, `\/admin\/training\/quiz\/\$\{encodeURIComponent\(key\)\}\/result\/\$\{id\}`\)/);
+  assert.doesNotMatch(post, /res\.send\(adminPage\(/);
   // Retakes are allowed, so the marked page never gives the answers away.
-  const marked = post.slice(post.indexOf('res.send(adminPage('));
+  const result = route("app.get('/admin/training/quiz/:key/result/:id', requireAdmin");
+  assert.match(result, /if \(!a \|\| a\.staff_id !== actor\.id\) return back/, 'a helper reads only their own result');
+  const marked = result.slice(result.indexOf('res.send(adminPage('));
   assert.doesNotMatch(marked, /answerText|x\.why|pickedText/, 'the result never shows the answer, the reason or the pick');
   assert.match(marked, /Re-read/);
 });
