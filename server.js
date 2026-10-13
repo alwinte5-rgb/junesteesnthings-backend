@@ -85,6 +85,7 @@ const STAFF = require('./tools/lib/staff');
 const FRAUD = require('./tools/lib/fraud-signals');
 const CREDIT = require('./tools/lib/sales-credit');
 const TEAM = require('./tools/lib/team-metrics');
+const TIMECLOCK = require('./tools/lib/timeclock');
 const TRAINING = require('./tools/lib/training');
 const QEXAM = require('./tools/lib/quote-exam');
 const RUSH = require('./tools/lib/rush');
@@ -1605,6 +1606,40 @@ async function initStaffTables() {
        AND NOT perms ? 'jobs.design'`);
   await pool.query(`UPDATE staff SET perms = perms - 'certificates.decide' - 'finances'
                      WHERE perms ? 'certificates.decide' OR perms ? 'finances'`);
+  /* The timeclock (tools/lib/timeclock.js). One open shift per helper at a
+     time; pings are minutes with activity (a page opened, a form sent, or
+     typing and scrolling reported by the page); TimeProof is the owner's
+     weekly figure from OnlineJobs.ph, typed in to compare. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_shifts (
+      id           SERIAL PRIMARY KEY,
+      staff_id     INTEGER NOT NULL,
+      started_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      ended_at     TIMESTAMPTZ,
+      ended_how    TEXT,
+      start_ip     TEXT,
+      note         TEXT,
+      cut_minutes  INTEGER NOT NULL DEFAULT 0,
+      owner_note   TEXT,
+      edited_at    TIMESTAMPTZ,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS staff_shifts_open ON staff_shifts (staff_id) WHERE ended_at IS NULL');
+  await pool.query('CREATE INDEX IF NOT EXISTS staff_shifts_staff ON staff_shifts (staff_id, started_at)');
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_pings (
+      staff_id  INTEGER NOT NULL,
+      at        TIMESTAMPTZ NOT NULL,
+      PRIMARY KEY (staff_id, at)
+    )`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_timeproof (
+      staff_id    INTEGER NOT NULL,
+      week_of     DATE NOT NULL,
+      minutes     INTEGER NOT NULL,
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (staff_id, week_of)
+    )`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS staff_ips (
       staff_id    INTEGER NOT NULL,
@@ -3124,7 +3159,8 @@ async function staffByEmail(email) {
             COALESCE((SELECT array_agg(t.step_key) FROM staff_training t
                        WHERE t.staff_id = s.id AND (t.step_key LIKE 'tip:%' OR t.step_key LIKE 'signoff:%ready')), '{}') AS flags,
             EXISTS (SELECT 1 FROM staff_training t WHERE t.staff_id = s.id AND t.step_key = $2
-                     AND t.done_at < $3::timestamptz) AS legacy_ready
+                     AND t.done_at < $3::timestamptz) AS legacy_ready,
+            (SELECT started_at FROM staff_shifts h WHERE h.staff_id = s.id AND h.ended_at IS NULL LIMIT 1) AS on_clock
        FROM staff s WHERE lower(s.email) = $1`, [email, TRAINING.READY_KEY, TRAINING.LEGACY_READY_BEFORE]);
   const s = rows[0];
   if (!s || !s.active) return null;
@@ -3136,7 +3172,8 @@ async function staffByEmail(email) {
            inTraining: !(s.legacy_ready || flags.includes(TRAINING.readyKeyFor(TRAINING.trackOf(s.training_track), TRAINING.salesRoleOf(s.sales_role)))),
            track: TRAINING.trackOf(s.training_track),
            role: TRAINING.salesRoleOf(s.sales_role),
-           tipsOff: new Set(flags.filter((f) => f.startsWith('tip:')).map((f) => f.slice(4))) };
+           tipsOff: new Set(flags.filter((f) => f.startsWith('tip:')).map((f) => f.slice(4))),
+           onClock: s.on_clock || null };
 }
 
 /** May the signed-in person do this? For handlers that act differently by level. */
@@ -3174,6 +3211,24 @@ function noteStaffIp(staffId, ip) {
   pool.query(`INSERT INTO staff_ips (staff_id, ip) VALUES ($1, $2) ON CONFLICT (staff_id, ip) DO NOTHING`,
     [staffId, String(ip).slice(0, 64)])
     .catch((err) => { seenStaffIps.delete(key); console.error('staff ip note failed:', err.message); });
+}
+
+/* Activity for the timeclock: one row per helper per minute with any.
+   Only what a person does counts: opening a page (Sec-Fetch-Mode: navigate),
+   sending a form, or the page's own ping while they type or scroll
+   (/admin/clock/ping). Background fetches such as the menu counts do not,
+   or a tab left open would look busy all day. */
+const lastPingMinute = new Map();
+function notePing(staffId) {
+  const minute = Math.floor(Date.now() / 60000);
+  if (lastPingMinute.get(staffId) === minute) return;
+  lastPingMinute.set(staffId, minute);
+  pool.query('INSERT INTO staff_pings (staff_id, at) VALUES ($1, to_timestamp($2::bigint * 60)) ON CONFLICT DO NOTHING', [staffId, minute])
+    .catch((err) => { lastPingMinute.delete(staffId); console.error('staff ping failed:', err.message); });
+}
+function isPersonActivity(req) {
+  if (req.method === 'POST') return true;
+  return req.method === 'GET' && req.headers['sec-fetch-mode'] === 'navigate';
 }
 
 /* ONE-TIME REPAIR (2026-10-06). From 17:50 UTC that day until this fix,
@@ -3437,6 +3492,7 @@ async function requireAdmin(req, res, next) {
   if (!staff) return notOnTeam(req, res, email);
   staff.path = req.originalUrl;
   noteStaffIp(staff.id, clientIp(req));
+  if (isPersonActivity(req)) notePing(staff.id);
   if (!STAFF.mayUseRoute(staff, req.method, req.route && req.route.path)) return refuseStaff(req, res, staff);
   logMutationOnFinish(req, res, staff);
   return actorStore.run(staff, next);
@@ -9075,6 +9131,7 @@ const ADMIN_NAV = [
   { key: 'design',     href: '/admin/design',        label: 'Design jobs', icon: 'layers', staffOnly: true },
   { key: 'earnings',   href: '/admin/my-earnings',   label: 'My earnings', icon: 'dollar', staffOnly: true },
   { key: 'mystats',    href: '/admin/my-stats',      label: 'My stats',   icon: 'grid',   staffOnly: true },
+  { key: 'clock',      href: '/admin/clock',         label: 'My hours',   icon: 'clock',  staffOnly: true },
   { key: 'dashboard',  href: '/admin/dashboard',     label: 'Dashboard',  icon: 'grid' },
   { key: 'leads',      href: '/admin/leads',         label: 'Leads',      icon: 'inbox',  badge: 'leads' },
   { key: 'quotes',     href: '/admin/quotes',        label: 'Quotes',     icon: 'file' },
@@ -9093,6 +9150,7 @@ const ADMIN_NAV = [
   { key: 'training',   href: '/admin/training',      label: 'Training',   icon: 'learn' },
   { key: 'hiring',     href: '/admin/hiring',        label: 'Hiring',     icon: 'users' },
   { key: 'team',       href: '/admin/team',    label: 'Team',       icon: 'team',   badge: 'approvals' },
+  { key: 'timeclock',  href: '/admin/timeclock', label: 'Timeclock', icon: 'clock' },
 ];
 /* Ordered the way a shop is actually worked, not the way the routes grew: what
    needs you today, the enquiries that might become work, the work in hand, the
@@ -9236,6 +9294,15 @@ a.tile:hover{border-color:#c6d3ee;box-shadow:0 4px 14px rgba(12,28,60,.08)}
 .pill{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:700;padding:3px 10px;
   border-radius:100px;white-space:nowrap;line-height:1.4}
 .pill-neutral{background:#eef1f8;color:#46505f}
+.adm-clock-form{margin:0}.adm-top a.adm-clock,.adm-top .adm-clock-form{margin-left:auto}
+.adm-top a.adm-clock ~ .adm-top-new,.adm-top .adm-clock-form ~ .adm-top-new{margin-left:0}
+.adm-side-clock{padding:0 12px 10px}.adm-side-clock .adm-clock{display:inline-block}
+.adm-clock{font:inherit;font-size:13px;font-weight:700;border-radius:100px;padding:6px 12px;border:1px solid #f0c27a;
+  background:#fff4e0;color:#8a5a00;cursor:pointer;text-decoration:none;white-space:nowrap}
+.adm-clock.is-on{border-color:#a7dbb7;background:#e7f6ec;color:#166534}
+.adm-clock-ask{position:fixed;left:16px;right:16px;bottom:16px;z-index:50;max-width:520px;margin:0 auto;background:#0B1F4B;color:#fff;
+  border-radius:12px;padding:12px 14px;box-shadow:0 8px 24px rgba(0,0,0,.25);font-size:14px}
+.adm-clock-ask button{margin-left:6px}.adm-clock-ask a{color:#fff;margin-left:6px}
 .pill-blue{background:#e8efff;color:#1848B8}
 .pill-green{background:#e7f6ec;color:#166534}
 .pill-amber{background:#fff4e0;color:#8a5a00}
@@ -9362,6 +9429,7 @@ function adminNav(active) {
   return `<aside class="adm-side" aria-label="Admin menu">
     <a class="adm-brand" href="${home}"><span class="adm-mark">JT</span>
       <span>June's Tees<small>${staff ? escEmail(staff.name) : 'Back office'}</small></span></a>
+    ${staff ? `<div class="adm-side-clock">${clockChip()}</div>` : ''}
     <nav class="adm-nav">${items.map((n) => `
       <a class="adm-link${n.key === active ? ' is-active' : ''}" href="${n.href}"${
         n.key === active ? ' aria-current="page"' : ''}>${icon(n.icon)}<span>${n.label}</span>${
@@ -9420,6 +9488,7 @@ function adminPage(title, body, active) {
     <header class="adm-top">
       <label for="adm-menu" class="adm-burger" title="Menu">${icon('menu')}</label>
       <span class="adm-top-title">${escEmail(title)}</span>
+      ${clockChip()}
       ${(() => { const a = typeof currentActor === 'function' ? currentActor() : null;
         /* The same rule as the side menu's New quote: only for someone who may draft one. */
         return !a || a.kind !== 'staff' || STAFF.mayUseRoute(a, 'GET', '/admin/quote/new|/admin/quote/:code/edit')
@@ -9428,7 +9497,36 @@ function adminPage(title, body, active) {
     <main class="adm-page"><div class="wrap">${pageTip(key)}${body}</div></main>
   </div>
 </div>
-<script>${ADMIN_BADGE_JS}</script>`, { css: ADMIN_CSS, bodyClass: 'adm-body' });
+<script>${ADMIN_BADGE_JS}</script>${clockScript()}`, { css: ADMIN_CSS, bodyClass: 'adm-body' });
+}
+
+/* The helper's clock in the top bar: how long they have been on, or a
+   Clock in button. Owners see nothing; they are not on the clock. */
+function clockChip() {
+  const a = typeof currentActor === 'function' ? currentActor() : null;
+  if (!a || a.kind !== 'staff') return '';
+  if (a.onClock) {
+    const m = TIMECLOCK.shiftMinutes({ started_at: a.onClock });
+    return `<a class="adm-clock is-on" href="/admin/clock" title="On the clock since ${escEmail(whenShort(a.onClock))}">&#9679; ${escEmail(TRAINING.hm(m))}</a>`;
+  }
+  return `<form method="post" action="/admin/clock/in" class="adm-clock-form"><input type="hidden" name="back" value="${escEmail(safeAdminPath(a.path, '/admin/clock'))}">
+    <button type="submit" class="adm-clock">Clock in</button></form>`;
+}
+
+/* While a helper is on the clock, the page reports that someone is using it
+   (typing, clicking, scrolling) once a minute at most, and asks "Still
+   working?" after TIMECLOCK.PROMPT_MINUTES with none. */
+function clockScript() {
+  const a = typeof currentActor === 'function' ? currentActor() : null;
+  if (!a || a.kind !== 'staff' || !a.onClock) return '';
+  return `<script>(function(){var last=Date.now(),sent=0,warned=false,box=null;
+function ping(){sent=Date.now();try{fetch('/admin/clock/ping',{method:'POST',credentials:'same-origin'}).catch(function(){});}catch(e){}}
+function poke(){last=Date.now();if(box){box.remove();box=null;warned=false;ping();}}
+['keydown','mousedown','touchstart','scroll','wheel','mousemove'].forEach(function(e){addEventListener(e,poke,{passive:true,capture:true});});
+setInterval(function(){var now=Date.now();if(document.visibilityState==='visible'&&now-last<60000&&now-sent>=60000)ping();
+if(!warned&&now-last>=${TIMECLOCK.PROMPT_MINUTES}*60000){warned=true;box=document.createElement('div');box.className='adm-clock-ask';
+box.innerHTML='<b>Still working?<\/b> Nothing has happened here for ${TIMECLOCK.PROMPT_MINUTES} minutes. <button type="button">Yes, I am here<\/button> <a href="/admin/clock">Clock out<\/a>';
+box.querySelector('button').addEventListener('click',poke);document.body.appendChild(box);}},15000);})();</script>`;
 }
 
 /** The catalogue minus the shop's supplier costs, for a helper without
@@ -27923,6 +28021,345 @@ app.post('/admin/team/hours', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('hours save failed:', err.message);
     return back(res, '/admin/team', 'err', 'Could not save the hours.');
+  }
+});
+
+/* ── Timeclock ────────────────────────────────────────────────────────────────
+   Helpers clock in and out (top bar, /admin/clock); the owner reviews each
+   week on /admin/timeclock, cuts idle time she does not pay for, compares
+   TimeProof, and approves the week, which writes its hours to staff_hours,
+   the same row the Team page's hours form writes and wages are paid from.
+   tools/lib/timeclock.js has the rules. A shift belongs to the week it
+   started in. */
+
+/** Monday of a week from ?week=, or this week. */
+function clockWeekParam(v) {
+  const d = isoDate(v);
+  return TEAM.weekOf(d ? new Date(`${d}T12:00:00Z`) : new Date());
+}
+
+/** Everything the owner's week view needs for one helper. */
+async function clockWeek(staffId, week) {
+  const from = TEAM.localMidnight(week);
+  const to = TEAM.localMidnight(week, undefined, 7);
+  const shifts = await pool.query(`SELECT * FROM staff_shifts WHERE staff_id = $1 AND started_at >= $2 AND started_at < $3 ORDER BY started_at`, [staffId, from, to]);
+  /* Activity in the week, and on past its end while a shift that started in
+     it was still running. */
+  const until = new Date(Math.max(Date.parse(to), ...shifts.rows.map((sh) => (sh.ended_at ? new Date(sh.ended_at) : new Date()).getTime())));
+  const [pings, times, tp, ips, hours, p] = await Promise.all([
+    pool.query(`SELECT at FROM staff_pings WHERE staff_id = $1 AND at >= $2 AND at < $3 ORDER BY at`, [staffId, from, until]),
+    pool.query(`SELECT step_key, started_at, done_at FROM staff_lesson_time WHERE staff_id = $1 AND started_at >= $2 AND started_at < $3`, [staffId, from, to]),
+    pool.query('SELECT minutes FROM staff_timeproof WHERE staff_id = $1 AND week_of = $2', [staffId, week]),
+    pool.query(`SELECT DISTINCT start_ip FROM staff_shifts WHERE staff_id = $1 AND started_at < $2 AND start_ip IS NOT NULL`, [staffId, from]),
+    pool.query(`SELECT business, hours::float AS hours, paid_at FROM staff_hours WHERE staff_id = $1 AND week_of = $2`, [staffId, week]),
+    trainingFor(staffId).catch(() => ({ steps: [] }))]);
+  const lessonInfo = new Map(p.steps.filter((s) => s.type === 'lesson').map((s) => [s.key, s]));
+  const lessons = times.rows.filter((t) => lessonInfo.has(t.step_key)).map((t) => ({
+    title: lessonInfo.get(t.step_key).title, expected: Number(lessonInfo.get(t.step_key).minutes) || 0,
+    started_at: t.started_at, done_at: t.done_at }));
+  const timeproofMinutes = tp.rows[0] ? Number(tp.rows[0].minutes) : null;
+  const pingTimes = pings.rows.map((r) => r.at);
+  const flags = TIMECLOCK.flags({ shifts: shifts.rows, pings: pingTimes, lessons, timeproofMinutes,
+    knownIps: ips.rows.map((r) => r.start_ip) });
+  const minutes = shifts.rows.reduce((n, sh) => n + TIMECLOCK.shiftMinutes(sh), 0);
+  return { week, from, to, shifts: shifts.rows, pings: pingTimes, flags, minutes, timeproofMinutes,
+    open: shifts.rows.some((sh) => !sh.ended_at), hours: hours.rows };
+}
+
+const clockTime = (d) => (d ? new Date(d).toLocaleString('en-US', { timeZone: SHOP_TZ, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—');
+const clockHm = (d) => (d ? new Date(d).toLocaleString('en-US', { timeZone: SHOP_TZ, hour: 'numeric', minute: '2-digit' }) : 'now');
+const weekLabel = (w) => new Date(`${w}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' });
+const weekShift = (w, days) => new Date(Date.parse(`${w}T12:00:00Z`) + days * 86400000).toISOString().slice(0, 10);
+
+/** One shift as a row, for the helper or (with `owner`) with its edit form. */
+function shiftRow(sh, { owner = false, pings = [] } = {}) {
+  const gaps = TIMECLOCK.idleGaps(sh, pings);
+  const idle = gaps.reduce((n, g) => n + g.minutes, 0);
+  const counted = TIMECLOCK.shiftMinutes(sh);
+  return `<div class="row-i" style="display:block">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><b style="flex:1 1 220px">${escEmail(clockTime(sh.started_at))} – ${escEmail(clockHm(sh.ended_at))}</b>
+      ${sh.ended_at ? pill(TRAINING.hm(counted), 'neutral') : pill(`on now · ${TRAINING.hm(counted)}`, 'green')}
+      ${sh.cut_minutes ? pill(`${TRAINING.hm(sh.cut_minutes)} cut`, 'amber') : ''}</div>
+    ${sh.note ? `<div class="row-sub" style="white-space:pre-wrap">Their note: ${escEmail(sh.note)}</div>` : ''}
+    ${sh.owner_note ? `<div class="row-sub" style="white-space:pre-wrap">${owner ? 'Your' : 'June\'s'} note: ${escEmail(sh.owner_note)}</div>` : ''}
+    ${owner && gaps.length ? `<div class="row-sub" style="white-space:normal;color:#8a5a00">No activity: ${gaps.map((g) =>
+      `${escEmail(clockHm(g.from))}–${escEmail(clockHm(g.to))} (${TRAINING.hm(g.minutes)})`).join(', ')}</div>` : ''}
+    ${owner ? `<details style="margin-top:6px"><summary>Change this shift</summary>
+      <form method="post" action="/admin/timeclock/shift/${Number(sh.id)}" data-once class="row" style="gap:8px;flex-wrap:wrap;margin-top:6px;align-items:end">
+        <input type="hidden" name="action" value="edit">
+        <label>Started <input type="datetime-local" name="started" required value="${escEmail(TIMECLOCK.toLocalInput(sh.started_at))}"></label>
+        <label>Ended <input type="datetime-local" name="ended" value="${sh.ended_at ? escEmail(TIMECLOCK.toLocalInput(sh.ended_at)) : ''}"></label>
+        <label>Minutes not paid <input type="number" name="cut_minutes" min="0" max="1440" step="1" style="width:90px" value="${Number(sh.cut_minutes) || 0}"></label>
+        ${idle ? `<span class="muted" style="font-size:12px">No activity adds up to ${TRAINING.hm(idle)}</span>` : ''}
+        <label style="flex:1 1 220px">Why <input name="owner_note" maxlength="300" required placeholder="e.g. forgot to clock out; idle time not paid" value="${escEmail(sh.owner_note || '')}" style="width:100%"></label>
+        <button type="submit" class="btn btn-ghost">Save</button></form>
+      ${sh.ended_at ? '' : `<form method="post" action="/admin/timeclock/shift/${Number(sh.id)}" data-once style="margin-top:6px">
+        <input type="hidden" name="action" value="end"><button type="submit" class="btn btn-ghost">End it now</button></form>`}</details>` : ''}
+  </div>`;
+}
+
+app.get('/admin/clock', requireAdmin, async (req, res) => {
+  const actor = currentActor();
+  if (!actor || actor.kind !== 'staff') return res.redirect('/admin/timeclock');
+  try {
+    const week = clockWeekParam(req.query.week);
+    const w = await clockWeek(actor.id, week);
+    const open = w.shifts.find((sh) => !sh.ended_at)
+      || (await pool.query('SELECT * FROM staff_shifts WHERE staff_id = $1 AND ended_at IS NULL', [actor.id])).rows[0];
+    res.set('Cache-Control', 'no-store');
+    res.send(adminPage('My hours', `
+      ${pageHeader('My hours', 'Clock in when you start and out when you stop. June pays the hours she approves each week. Time with nothing happening on the site for 30 minutes is shown to her; if you were working away from the screen, say what in your clock-out note.')}
+      ${flash(req.query)}
+      <div class="card">${open ? `<b>On the clock since ${escEmail(clockTime(open.started_at))}</b> (${TRAINING.hm(TIMECLOCK.shiftMinutes(open))})
+        <form method="post" action="/admin/clock/out" data-once style="margin-top:8px">
+          <label style="display:block">What did you work on? (optional, June sees it)
+            <textarea name="note" rows="2" maxlength="500" style="width:100%" placeholder="e.g. leads 9–11, then 40 min of mockups in Photoshop"></textarea></label>
+          <button type="submit" style="margin-top:6px" data-busy="Clocking out…">Clock out</button></form>`
+        : `<b>You are not on the clock.</b>
+        <form method="post" action="/admin/clock/in" data-once style="margin-top:8px"><button type="submit">Clock in</button></form>`}</div>
+      <div class="card"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><b style="flex:1 1 200px">Week of ${escEmail(weekLabel(week))}: ${TRAINING.hm(w.minutes)}</b>
+        <a class="btn btn-ghost" href="/admin/clock?week=${weekShift(week, -7)}">&larr; Earlier</a>
+        ${week < TEAM.weekOf(new Date()) ? `<a class="btn btn-ghost" href="/admin/clock?week=${weekShift(week, 7)}">Later &rarr;</a>` : ''}</div>
+        ${w.hours.length ? `<p class="muted">Approved: ${w.hours.map((h) => `${escEmail(String(h.hours))}h${h.paid_at ? ' (paid)' : ''}`).join(', ')}</p>` : ''}
+        ${w.shifts.length ? w.shifts.map((sh) => shiftRow(sh)).join('') : emptyState('No shifts this week.')}</div>
+      ${SHIP_ONCE_JS}`, 'clock'));
+  } catch (err) {
+    console.error('clock page failed:', err.message);
+    res.status(500).send(adminPage('My hours', '<div class="card"><div class="warn">Could not load your hours.</div></div>', 'clock'));
+  }
+});
+
+app.post('/admin/clock/in', requireAdmin, async (req, res) => {
+  const actor = currentActor();
+  if (!actor || actor.kind !== 'staff') return res.redirect('/admin/timeclock');
+  const to = safeAdminPath((req.body || {}).back, '/admin/clock');
+  try {
+    await pool.query('INSERT INTO staff_shifts (staff_id, start_ip) VALUES ($1, $2)', [actor.id, String(clientIp(req) || '').slice(0, 64) || null]);
+    return back(res, to, 'ok', 'Clocked in.');
+  } catch (err) {
+    if (err.code === '23505') return back(res, to, 'ok', 'You are already on the clock.');
+    console.error('clock in failed:', err.message);
+    return back(res, to, 'err', 'Could not clock you in. Try again.');
+  }
+});
+
+app.post('/admin/clock/out', requireAdmin, async (req, res) => {
+  const actor = currentActor();
+  if (!actor || actor.kind !== 'staff') return res.redirect('/admin/timeclock');
+  const note = text((req.body || {}).note, 500);
+  try {
+    const { rows: [sh] } = await pool.query(
+      `UPDATE staff_shifts SET ended_at = NOW(), ended_how = 'staff', note = NULLIF($2, '')
+        WHERE staff_id = $1 AND ended_at IS NULL RETURNING started_at, ended_at`, [actor.id, note]);
+    if (!sh) return back(res, '/admin/clock', 'ok', 'You were not on the clock.');
+    return back(res, '/admin/clock', 'ok', `Clocked out after ${TRAINING.hm(TIMECLOCK.shiftMinutes(sh))}.`);
+  } catch (err) {
+    console.error('clock out failed:', err.message);
+    return back(res, '/admin/clock', 'err', 'Could not clock you out. Try again.');
+  }
+});
+
+// The page's "someone is here" signal. The sign-in step already noted the
+// minute (every POST is activity), so there is nothing left to do.
+app.post('/admin/clock/ping', requireAdmin, (req, res) => res.status(204).end());
+
+app.get('/admin/timeclock', requireAdmin, async (req, res) => {
+  try {
+    const week = clockWeekParam(req.query.week);
+    const roster = await staffRoster({ activeOnly: true });
+    const staffId = intIn(req.query.staff);
+    const chips = (id) => roster.map((r) => `<a class="btn ${r.id === id ? '' : 'btn-ghost'}" href="/admin/timeclock?staff=${r.id}&amp;week=${week}">${escEmail(r.name)}</a>`).join(' ');
+    const weekNav = (id) => `<a class="btn btn-ghost" href="/admin/timeclock?${id ? `staff=${id}&amp;` : ''}week=${weekShift(week, -7)}">&larr; Earlier</a>
+      ${week < TEAM.weekOf(new Date()) ? `<a class="btn btn-ghost" href="/admin/timeclock?${id ? `staff=${id}&amp;` : ''}week=${weekShift(week, 7)}">Later &rarr;</a>` : ''}`;
+    res.set('Cache-Control', 'no-store');
+    const who = staffId ? roster.find((r) => r.id === staffId) : null;
+    if (!who) {
+      const weeks = await Promise.all(roster.map((r) => clockWeek(r.id, week).catch(() => null)));
+      return res.send(adminPage('Timeclock', `
+        ${pageHeader(`Timeclock — week of ${weekLabel(week)}`, 'Clocked hours, what needs a look, and what you have approved. Approving a week writes its hours to Team, where wages are paid.', weekNav(null))}
+        ${flash(req.query)}
+        <div class="card">${roster.length ? roster.map((r, i) => {
+          const w = weeks[i];
+          return `<div class="row-i"><span class="row-main"><a href="/admin/timeclock?staff=${r.id}&amp;week=${week}"><b>${escEmail(r.name)}</b></a>
+            <div class="row-sub">${w ? `${TRAINING.hm(w.minutes)} on the clock${w.open ? ' · on now' : ''}${w.timeproofMinutes != null ? ` · TimeProof ${TRAINING.hm(w.timeproofMinutes)}` : ''}${
+              w.hours.length ? ` · approved ${w.hours.reduce((n, h) => n + h.hours, 0)}h` : ''}` : 'Could not load'}</div></span>
+            <span class="row-end">${w && w.flags.length ? pill(`${w.flags.length} to look at`, 'amber') : pill('nothing flagged', 'green')}</span></div>`;
+        }).join('') : emptyState('No active helpers.')}</div>`, 'timeclock'));
+    }
+    const w = await clockWeek(who.id, week);
+    const approved = w.hours.reduce((n, h) => n + h.hours, 0);
+    const paid = w.hours.some((h) => h.paid_at);
+    const tone = { red: '#b91c1c', amber: '#b45309', neutral: '#46505f' };
+    res.send(adminPage('Timeclock', `
+      ${pageHeader(`Timeclock — ${who.name}, week of ${weekLabel(week)}`, 'Cut time you do not pay for on each shift, then approve the week.', weekNav(who.id))}
+      <div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:12px">${chips(who.id)}</div>
+      ${flash(req.query)}
+      <div class="card"><b>${TRAINING.hm(w.minutes)} on the clock</b> (${TIMECLOCK.hoursOf(w.minutes)} hours)${w.open ? ' &middot; a shift is still running' : ''}
+        ${w.hours.length ? `<p class="muted">Approved: ${approved}h${paid ? ' (paid, locked)' : ''}${Math.abs(approved - TIMECLOCK.hoursOf(w.minutes)) > 0.01 && !paid ? ' — differs from the clock now; approve again to update it' : ''}</p>` : ''}
+        <form method="post" action="/admin/timeclock/timeproof" data-once class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px;align-items:end">
+          <input type="hidden" name="staff_id" value="${who.id}"><input type="hidden" name="week_of" value="${week}">
+          <label>TimeProof hours this week <input type="number" name="hours" min="0" max="80" step="0.01" style="width:100px" value="${w.timeproofMinutes != null ? TIMECLOCK.hoursOf(w.timeproofMinutes) : ''}"></label>
+          <button type="submit" class="btn btn-ghost">Save</button>
+          <span class="muted" style="font-size:12px">From their TimeProof page on OnlineJobs.ph</span></form>
+        ${paid || !w.shifts.length ? '' : `<form method="post" action="/admin/timeclock/approve" data-once class="row" style="gap:8px;flex-wrap:wrap;margin-top:10px;align-items:end">
+          <input type="hidden" name="staff_id" value="${who.id}"><input type="hidden" name="week_of" value="${week}">
+          <label>For <select name="business">${Object.entries(BUSINESSES).map(([k, v]) => `<option value="${k}">${escEmail(v)}</option>`).join('')}</select></label>
+          <button type="submit"${w.open ? ' disabled title="End the running shift first"' : ''}>Approve ${TIMECLOCK.hoursOf(w.minutes)} hours</button></form>`}</div>
+      <div class="card"><b>To look at (${w.flags.length})</b>
+        ${w.flags.length ? w.flags.map((f) => `<div class="row-i"><span class="row-main" style="white-space:normal;color:${tone[f.tone] || tone.neutral}">${escEmail(f.text)}</span>
+          <span class="row-end muted">${f.at ? escEmail(clockTime(f.at)) : ''}</span></div>`).join('') : '<p class="muted">Nothing flagged this week.</p>'}</div>
+      <div class="card"><b>Shifts</b>
+        ${w.shifts.length ? w.shifts.map((sh) => shiftRow(sh, { owner: true, pings: w.pings })).join('') : emptyState('No shifts this week.')}
+        <details style="margin-top:10px"><summary>Add a shift they forgot to clock</summary>
+          <form method="post" action="/admin/timeclock/shift" data-once class="row" style="gap:8px;flex-wrap:wrap;margin-top:6px;align-items:end">
+            <input type="hidden" name="staff_id" value="${who.id}">
+            <label>Started <input type="datetime-local" name="started" required></label>
+            <label>Ended <input type="datetime-local" name="ended" required></label>
+            <label style="flex:1 1 220px">Why <input name="owner_note" maxlength="300" required style="width:100%" placeholder="e.g. worked Saturday, forgot to clock in"></label>
+            <button type="submit" class="btn btn-ghost">Add</button></form></details></div>
+      ${SHIP_ONCE_JS}`, 'timeclock'));
+  } catch (err) {
+    console.error('timeclock page failed:', err.message);
+    res.status(500).send(adminPage('Timeclock', '<div class="card"><div class="warn">Could not load the timeclock.</div></div>', 'timeclock'));
+  }
+});
+
+/** A start and end from the owner's form, checked: end after start, under a
+ *  day long, not in the future. Returns { start, end, err }. */
+function shiftTimesFromForm(b, needEnd) {
+  const start = TIMECLOCK.fromLocalInput(b.started);
+  const end = String(b.ended || '') ? TIMECLOCK.fromLocalInput(b.ended) : null;
+  if (!start) return { err: 'Give a start time.' };
+  if (String(b.ended || '') && !end) return { err: 'That end time could not be read.' };
+  if (needEnd && !end) return { err: 'Give an end time.' };
+  if (end && end <= start) return { err: 'The end must be after the start.' };
+  if (end && end - start > 24 * 3600000) return { err: 'A shift cannot be longer than 24 hours.' };
+  if ((end || start) > new Date(Date.now() + 5 * 60000)) return { err: 'A shift cannot be in the future.' };
+  return { start, end };
+}
+
+/** Does this span overlap another of the helper's shifts? */
+async function shiftOverlaps(staffId, start, end, exceptId = 0) {
+  const { rows: [x] } = await pool.query(
+    `SELECT 1 FROM staff_shifts WHERE staff_id = $1 AND id <> $2
+        AND started_at < COALESCE($4::timestamptz, 'infinity') AND COALESCE(ended_at, NOW()) > $3 LIMIT 1`,
+    [staffId, exceptId, start, end]);
+  return !!x;
+}
+
+const weekBack = (staffId, d) => `/admin/timeclock?staff=${Number(staffId)}&week=${TEAM.weekOf(d)}`;
+
+app.post('/admin/timeclock/shift', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const staffId = intIn(b.staff_id);
+  const note = text(b.owner_note, 300);
+  if (!staffId) return back(res, '/admin/timeclock', 'err', 'No such helper.');
+  const t = shiftTimesFromForm(b, true);
+  if (t.err) return back(res, `/admin/timeclock?staff=${staffId}`, 'err', t.err);
+  if (!note) return back(res, weekBack(staffId, t.start), 'err', 'Say why the shift is being added.');
+  try {
+    const { rows: [s] } = await pool.query('SELECT id FROM staff WHERE id = $1', [staffId]);
+    if (!s) return back(res, '/admin/timeclock', 'err', 'No such helper.');
+    if (await shiftOverlaps(staffId, t.start, t.end)) return back(res, weekBack(staffId, t.start), 'err', 'That overlaps one of their shifts.');
+    await pool.query(`INSERT INTO staff_shifts (staff_id, started_at, ended_at, ended_how, owner_note, edited_at)
+                      VALUES ($1, $2, $3, 'owner', $4, NOW())`, [staffId, t.start, t.end, note]);
+    logActivity(currentActor(), 'shift added', { type: 'staff', id: staffId }, { started: t.start, ended: t.end, note });
+    return back(res, weekBack(staffId, t.start), 'ok', 'Shift added.');
+  } catch (err) {
+    console.error('shift add failed:', err.message);
+    return back(res, `/admin/timeclock?staff=${staffId}`, 'err', 'Could not add the shift.');
+  }
+});
+
+app.post('/admin/timeclock/shift/:id', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  const b = req.body || {};
+  try {
+    const { rows: [sh] } = id ? await pool.query('SELECT * FROM staff_shifts WHERE id = $1', [id]) : { rows: [] };
+    if (!sh) return back(res, '/admin/timeclock', 'err', 'No such shift.');
+    const to = weekBack(sh.staff_id, sh.started_at);
+    if (b.action === 'end') {
+      await pool.query(`UPDATE staff_shifts SET ended_at = NOW(), ended_how = 'owner', edited_at = NOW() WHERE id = $1 AND ended_at IS NULL`, [id]);
+      logActivity(currentActor(), 'shift ended by owner', { type: 'staff', id: sh.staff_id }, { shift: id });
+      return back(res, to, 'ok', 'Shift ended.');
+    }
+    if (b.action !== 'edit') return back(res, to, 'err', 'Unknown action.');
+    const note = text(b.owner_note, 300);
+    if (!note) return back(res, to, 'err', 'Say why the shift is being changed.');
+    const t = shiftTimesFromForm(b, !!sh.ended_at);
+    if (t.err) return back(res, to, 'err', t.err);
+    const cut = Number(b.cut_minutes);
+    if (!Number.isInteger(cut) || cut < 0) return back(res, to, 'err', 'Minutes not paid must be a whole number.');
+    const length = TIMECLOCK.shiftMinutes({ started_at: t.start, ended_at: t.end });
+    if (cut > length) return back(res, to, 'err', 'You cannot cut more than the shift.');
+    if (await shiftOverlaps(sh.staff_id, t.start, t.end, id)) return back(res, to, 'err', 'That overlaps another of their shifts.');
+    // A shift in a week whose wages are paid is locked, like its hours.
+    const { rows: [paid] } = await pool.query(
+      `SELECT 1 FROM staff_hours WHERE staff_id = $1 AND week_of = ANY($2::date[]) AND paid_at IS NOT NULL LIMIT 1`,
+      [sh.staff_id, [TEAM.weekOf(sh.started_at), TEAM.weekOf(t.start)]]);
+    if (paid) return back(res, to, 'err', 'That week is already paid, so its shifts are locked.');
+    await pool.query(`UPDATE staff_shifts SET started_at = $2, ended_at = $3, cut_minutes = $4, owner_note = $5, edited_at = NOW(),
+                        ended_how = CASE WHEN ended_at IS NULL AND $3::timestamptz IS NOT NULL THEN 'owner' ELSE ended_how END
+                      WHERE id = $1`, [id, t.start, t.end, cut, note]);
+    logActivity(currentActor(), 'shift changed', { type: 'staff', id: sh.staff_id },
+      { shift: id, was: { started: sh.started_at, ended: sh.ended_at, cut: sh.cut_minutes }, now: { started: t.start, ended: t.end, cut }, note });
+    return back(res, weekBack(sh.staff_id, t.start), 'ok', 'Shift saved.');
+  } catch (err) {
+    if (err.code === '23505') return back(res, '/admin/timeclock', 'err', 'They already have a running shift.');
+    console.error('shift change failed:', err.message);
+    return back(res, '/admin/timeclock', 'err', 'Could not save the shift.');
+  }
+});
+
+app.post('/admin/timeclock/timeproof', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const staffId = intIn(b.staff_id);
+  const week = isoDate(b.week_of);
+  if (!staffId || !week) return back(res, '/admin/timeclock', 'err', 'Pick a helper and a week.');
+  const to = `/admin/timeclock?staff=${staffId}&week=${TEAM.weekOf(new Date(`${week}T12:00:00Z`))}`;
+  try {
+    if (String(b.hours ?? '').trim() === '') {
+      await pool.query('DELETE FROM staff_timeproof WHERE staff_id = $1 AND week_of = $2', [staffId, week]);
+      return back(res, to, 'ok', 'TimeProof hours cleared.');
+    }
+    const hours = Number(b.hours);
+    if (!Number.isFinite(hours) || hours < 0 || hours > 80) return back(res, to, 'err', 'TimeProof hours must be 0–80.');
+    await pool.query(`INSERT INTO staff_timeproof (staff_id, week_of, minutes) VALUES ($1, $2, $3)
+                      ON CONFLICT (staff_id, week_of) DO UPDATE SET minutes = EXCLUDED.minutes, updated_at = NOW()`,
+      [staffId, TEAM.weekOf(new Date(`${week}T12:00:00Z`)), Math.round(hours * 60)]);
+    return back(res, to, 'ok', 'TimeProof hours saved.');
+  } catch (err) {
+    console.error('timeproof save failed:', err.message);
+    return back(res, to, 'err', 'Could not save the TimeProof hours.');
+  }
+});
+
+app.post('/admin/timeclock/approve', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const staffId = intIn(b.staff_id);
+  const week = isoDate(b.week_of);
+  const business = BUSINESSES[b.business] ? b.business : 'jtees';
+  if (!staffId || !week) return back(res, '/admin/timeclock', 'err', 'Pick a helper and a week.');
+  const monday = TEAM.weekOf(new Date(`${week}T12:00:00Z`));
+  const to = `/admin/timeclock?staff=${staffId}&week=${monday}`;
+  try {
+    // Worked out here from the shifts, never from a figure on the form.
+    const w = await clockWeek(staffId, monday);
+    if (w.open) return back(res, to, 'err', 'A shift is still running. End it first.');
+    // No shifts: nothing to approve, and a 0 would overwrite hours typed on Team.
+    if (!w.shifts.length) return back(res, to, 'err', 'No shifts that week, so there is nothing to approve. Hours typed on Team stay as they are.');
+    const hours = TIMECLOCK.hoursOf(w.minutes);
+    if (hours > 80) return back(res, to, 'err', `${hours} hours is over 80. Check the shifts first.`);
+    const { rowCount } = await pool.query(
+      `INSERT INTO staff_hours (staff_id, week_of, business, hours) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (staff_id, week_of, business) DO UPDATE SET hours = EXCLUDED.hours
+       WHERE staff_hours.paid_at IS NULL`, [staffId, monday, business, hours]);
+    if (!rowCount) return back(res, to, 'err', `The week of ${monday} is already paid, so its hours are locked.`);
+    logActivity(currentActor(), 'clock week approved', { type: 'staff', id: staffId }, { week: monday, business, hours });
+    return back(res, to, 'ok', `Approved ${hours} hours for the week of ${weekLabel(monday)}. They are on Team for wages.`);
+  } catch (err) {
+    console.error('clock approve failed:', err.message);
+    return back(res, to, 'err', 'Could not approve the week.');
   }
 });
 
