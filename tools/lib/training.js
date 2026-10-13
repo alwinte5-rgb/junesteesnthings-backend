@@ -272,6 +272,38 @@ function gradeQuiz(key, picked = {}) {
   return { score, total: results.length, pass: z.pass, passed: score >= z.pass, results };
 }
 
+/** How long a helper has spent on training, from what is recorded.
+ *  Lesson time is wall clock from first open to finish, so a tab left open
+ *  overnight counts; each lesson is capped at 3x its expected minutes and
+ *  both totals are given. `events` are any other timestamps (quiz and exam
+ *  tries, activity) used for active days and first/last day, counted in
+ *  Chicago time. Nothing here blocks anyone. */
+const TIME_CAP = 3;
+function timeSpent(steps, times = new Map(), events = [], tz = 'America/Chicago') {
+  const day = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(d));
+  const lessons = [];
+  for (const s of steps) {
+    if (s.type !== 'lesson') continue;
+    const t = times.get(s.key);
+    if (!t || !t.started_at || !t.done_at) continue;
+    const expected = Number(s.minutes) || 0;
+    const raw = Math.max(0, Math.round((new Date(t.done_at) - new Date(t.started_at)) / 60000));
+    lessons.push({ key: s.key, title: s.title || s.key, expected, raw, capped: expected ? Math.min(raw, expected * TIME_CAP) : raw });
+  }
+  const stamps = [...events];
+  for (const t of times.values()) { if (t.started_at) stamps.push(t.started_at); if (t.done_at) stamps.push(t.done_at); }
+  const valid = stamps.map((d) => new Date(d)).filter((d) => !Number.isNaN(d.getTime())).sort((a, b) => a - b);
+  const sum = (k) => lessons.reduce((n, l) => n + l[k], 0);
+  return { lessons, rawMinutes: sum('raw'), cappedMinutes: sum('capped'), expectedMinutes: sum('expected'),
+    activeDays: new Set(valid.map(day)).size, first: valid.length ? valid[0] : null, last: valid.length ? valid[valid.length - 1] : null };
+}
+
+/** "3h 20m" from minutes. */
+function hm(min) {
+  const m = Math.max(0, Math.round(Number(min) || 0));
+  return m >= 60 ? `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ''}` : `${m}m`;
+}
+
 /** Unfilled placeholders like "[standard turnaround]" or "[owner to fill in]"
  *  in a playbook article. Markdown links "[text](url)" are not placeholders. */
 function placeholders(text) {
@@ -345,7 +377,7 @@ function fillGap(text, token, answer, nth) {
   return parts.slice(0, nth + 1).join(token) + a + parts.slice(nth + 1).join(token);
 }
 
-module.exports = { FEATURES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz,
+module.exports = { FEATURES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, timeSpent, hm,
   visibleSteps, stepByKey, mayTick, progress, stepOpen, placeholders, ownerGaps, fillGap, dayCount, passMark, courseSteps, lessonPages,
   COURSES: COURSES.COURSES, SALES_ROLES: COURSES.SALES_ROLES, salesRoleOf: COURSES.salesRoleOf,
   lessonArticles: COURSES.lessonArticles, glossary: COURSES.glossary };
