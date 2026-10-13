@@ -7,6 +7,28 @@
    Playbook copy is replaced only where June has not edited it herself. */
 
 module.exports = {
+  // Design (owner, 2026-10-13: approved as suggested; the shop does not pay for ChatGPT or Firefly)
+  '[owner to fill in: the thread color chart we match to]':
+    'the Madeira Polyneon 40 chart. Write the Madeira number for each color on the proof.',
+  '[owner to fill in: minimum size and quantity for patches, vinyl and puff print]':
+    'puff print 12 pieces, art at least 2in tall, lines at least 1/8in; vinyl 1 piece and up, lines at least 1/8in; patches 25 pieces, 2in to 4in.',
+  '[owner to fill in: color limits for patches, vinyl and puff print]':
+    'puff print 1 color; vinyl up to 3 colors, one layer each; patches up to 9 thread colors.',
+  '[owner to fill in: which garments take patches, vinyl and puff print]':
+    'puff print on cotton and cotton-blend tees, hoodies and caps; vinyl on cotton, poly and blends, never nylon or rain jackets; patches on hats, jackets, bags and heavier tops.',
+  '[owner to fill in: the file type and settings we send to Signs365, and who uploads it]':
+    'a PDF at full size, CMYK, 150 dpi, fonts outlined. You save it to the job; June uploads it to Signs365.',
+  '[owner to fill in: the bleed Signs365 wants for each sign type]':
+    'Bleed is 0.125in on yard signs and rigid signs, and 1in on banners (for the hems and grommets). If the Signs365 template asks for more, follow the template.',
+  '[owner to fill in: which Adobe and Creative Fabrica accounts the designer uses, and where mockup templates and fonts are kept]':
+    'the shop\'s Adobe Creative Cloud seat and Creative Fabrica subscription, set up for you by June. Mockup templates and fonts are in the shared June\'s Tees – Design folder in Google Drive.',
+  '[owner to fill in: which AI tools and accounts the shop pays for, and which the designer may use]':
+    'our site\'s AI designer and Vectorizer.ai. The shop does not pay for ChatGPT or Firefly. Nothing else without asking June.',
+  '[owner to fill in: the Etsy shop, which downloads we sell, the file types and sizes each includes, and who publishes the listing]':
+    'June\'s Etsy shop sells digital downloads: an SVG, a PNG at 300 dpi, and a 4000px JPG preview. You make the files and the listing images; June publishes the listing.',
+  '[owner to fill in: how the designer signs in to COS Creator Studio]':
+    'June invites your email to the June\'s Tees brand in COS Creator Studio. Sign in with your own account, never hers.',
+
   // Ads
   '[owner to fill in: the cost per quote request we aim for]':
     'under $15 to start.',

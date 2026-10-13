@@ -425,7 +425,7 @@ We use Canva only for Etsy downloads (module 8). Customer orders are made in Ill
     key: 'd6', icon: '🤖', title: 'AI: when to use it, and cleaning it up',
     goal: 'Use AI where it saves time, never where it causes problems, and clean everything it makes before it prints.',
     lessons: [{
-      id: 'd6-ai-when', article: A.aiWhen, minutes: 20, tags: 'ai, chatgpt, firefly, generative fill, ai designer, vectorizer, copyright, when to use ai, rules',
+      id: 'd6-ai-when', article: A.aiWhen, minutes: 20, tags: 'ai, generative fill, ai designer, vectorizer, copyright, when to use ai, rules',
       goals: ['Name the jobs AI is good for and the ones it must never do', 'Pick the right AI tool for a task', 'Know why AI logos are a problem'],
       body:
 `AI image tools can save you hours. They can also hand a customer art with garbled letters, a stolen style, or a logo nobody can own. The rule: **AI makes drafts; you make the file.** Read the Playbook's "AI rules" too; everything in it applies here.
@@ -448,10 +448,10 @@ We use Canva only for Etsy downloads (module 8). Customer orders are made in Ill
 
 **Which tool for what**
 
-- **ChatGPT (images):** concepts and flat illustrations from a description. Ask for "flat vector style, solid colors, no gradients, no shadows, plain white background"; the Playbook has ready prompts ("Print-ready design idea")
-- **Photoshop Generative Fill and Firefly:** editing photos and mockups, extending backgrounds, removing objects. Firefly is trained on licensed images, so it is the safer choice for anything we publish
-- **Our website's AI designer:** customers make designs with it on jtees.net. You will mostly be fixing what it made (next lesson)
+- **Our website's AI designer:** the AI image tool we use. Customers make designs with it on jtees.net, and you can use it for concepts and flat illustrations too. Ask for "flat vector style, solid colors, no gradients, no shadows, plain white background"; the Playbook has ready prompts ("Print-ready design idea"). You will mostly be fixing what it made (next lesson)
+- **Photoshop Generative Fill:** built into Photoshop, for editing photos and mockups: extending backgrounds, removing objects. Use only what comes with the shop's Photoshop
 - **Vectorizer.ai:** turns clean raster art into a vector. Good for AI concepts and simple logos; always clean the result by hand
+- Never sign up for, or pay for, another AI tool for shop work (ChatGPT, Midjourney, Firefly or any other) without asking June first
 - Which AI accounts the shop pays for: [owner to fill in: which AI tools and accounts the shop pays for, and which the designer may use]
 
 **Labels and honesty**
@@ -511,17 +511,17 @@ If you have spent 20 minutes fixing what AI made, stop. Draw it yourself, or ask
       key: 'design-6', title: 'Module 6 quiz: AI, when to use it and how to clean it up', minutes: 10,
       questions: [
         { id: 'logo', q: 'A customer wants a new logo for their business. May you make it with AI?',
-          choices: ['Yes, it is faster', 'No. AI-only art cannot be copyrighted, so they could not own it. Draw it yourself', 'Only with ChatGPT', 'Only if they ask'],
+          choices: ['Yes, it is faster', 'No. AI-only art cannot be copyrighted, so they could not own it. Draw it yourself', 'Only with our AI designer', 'Only if they ask'],
           answer: 1, article: A.aiWhen, why: 'A business needs to own its logo; AI-only art cannot be copyrighted.' },
         { id: 'good', q: 'Which is a good use of AI?',
           choices: ['The words on a shirt', 'A background scene for a mockup or post', 'A team\'s logo', 'A photo of a customer'],
           answer: 1, article: A.aiWhen, why: 'Backgrounds, scenes and concepts are good uses.' },
         { id: 'brand', q: 'May you type "Chicago Bulls style" into a prompt?',
-          choices: ['Yes', 'No. Never brands, teams, characters or named artists', 'Only for kids\' shirts', 'Only in Firefly'],
+          choices: ['Yes', 'No. Never brands, teams, characters or named artists', 'Only for kids\' shirts', 'Only in our AI designer'],
           answer: 1, article: A.aiWhen, why: 'Never put brands, teams, characters or named artists in a prompt.' },
-        { id: 'firefly', q: 'Which tool is the safer choice for editing an image we will publish?',
-          choices: ['Any free site', 'Photoshop Generative Fill or Firefly', 'A screenshot', 'None'],
-          answer: 1, article: A.aiWhen, why: 'Firefly is trained on licensed images.' },
+        { id: 'tools', q: 'You want to try a new AI image app for a customer\'s design. You…',
+          choices: ['Sign up with the shop card', 'Ask June first: we use our AI designer, Photoshop Generative Fill and Vectorizer.ai', 'Use a free trial', 'Use your own account'],
+          answer: 1, article: A.aiWhen, why: 'Only the tools the shop already uses; ask June before any other.' },
         { id: 'label', q: 'A post uses a realistic AI-made scene. You…',
           choices: ['Hide that it is AI', 'Turn on the platform\'s AI label when it asks', 'Call it a real photo', 'Do not post it ever'],
           answer: 1, article: A.aiWhen, why: 'Label realistic AI images; never pass them off as real orders.' },

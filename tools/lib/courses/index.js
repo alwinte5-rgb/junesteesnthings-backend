@@ -61,12 +61,32 @@ const REWORDED = [
      developer is told the repo's self-merge rule is not theirs. */
   ['$100 a month at most to start, and never more than $5 on any one day. Google may spend up to twice the daily budget on a busy day, so set it to $2.50 a day (about $76 a month): then no day can pass $5. June raises it',
    '$100 a month to start (about $3 a day), and never more than $5 on any one day. June raises it'],
-  [' The repository rules tell Claude Code to merge its own finished pull request; you do not: tell it to stop at an open pull request, and GitHub keeps main locked until June approves.', ''],
+  [' The repository rules tell Claude Code to merge its own finished pull request; you do not: tell it to stop at an open pull request, and GitHub keeps main locked until June approves.', ''],  /* 2026-10-13: the shop does not pay for ChatGPT or Firefly, so the design
+     AI lesson teaches our AI designer and Vectorizer.ai; Team basics says
+     where a note goes for helpers who do not work on orders. */
+  ["- **Our website's AI designer:** the AI image tool we use. Customers make designs with it on jtees.net, and you can use it for concepts and flat illustrations too. Ask for \"flat vector style, solid colors, no gradients, no shadows, plain white background\"; the Playbook has ready prompts (\"Print-ready design idea\"). You will mostly be fixing what it made (next lesson)\n- **Photoshop Generative Fill:** built into Photoshop, for editing photos and mockups: extending backgrounds, removing objects. Use only what comes with the shop's Photoshop\n- **Vectorizer.ai:** turns clean raster art into a vector. Good for AI concepts and simple logos; always clean the result by hand\n- Never sign up for, or pay for, another AI tool for shop work (ChatGPT, Midjourney, Firefly or any other) without asking June first",
+   "- **ChatGPT (images):** concepts and flat illustrations from a description. Ask for \"flat vector style, solid colors, no gradients, no shadows, plain white background\"; the Playbook has ready prompts (\"Print-ready design idea\")\n- **Photoshop Generative Fill and Firefly:** editing photos and mockups, extending backgrounds, removing objects. Firefly is trained on licensed images, so it is the safer choice for anything we publish\n- **Our website's AI designer:** customers make designs with it on jtees.net. You will mostly be fixing what it made (next lesson)\n- **Vectorizer.ai:** turns clean raster art into a vector. Good for AI concepts and simple logos; always clean the result by hand"],
+  ["- **The job page** (if you work on orders): everything about one order. Notes about a job go on the job, not only in chat, so the next person finds them",
+   "- **The job page**: everything about one order. Notes about a job go on the job, not only in chat, so the next person finds them"],
+  ["ask for a quick call instead, then write down what was decided: on the job page if it is about an order, otherwise in the chat thread.",
+   "ask for a quick call instead, then write down what was decided on the job page."],
+  ["- If your job messages customers, send from the job page or the Playbook tools, not from your own email or phone.",
+   "- Send messages from the job page or the Playbook tools, not from your own email or phone."],
 ];
-for (const c of [SALES_CORE, CONTENT_CORE, ADS_CORE, DEV_CORE]) {
+/* Each earlier wording the live copy may still hold (the body and every
+   `was`, so a lesson whose blanks were unanswered when it went live is
+   matched too) is turned back to the old words. Team basics is one lesson
+   object shared by every course, so each lesson is done once. */
+const reworded = new Set();
+for (const c of [SALES_CORE, DESIGN_CORE, CONTENT_CORE, ADS_CORE, DEV_CORE]) {
   for (const l of c.modules.flatMap((m) => m.lessons)) {
-    if (typeof l.body !== 'string' || !REWORDED.some(([now]) => l.body.includes(now))) continue;
-    l.was = [...(l.was || []), REWORDED.reduce((b, [now, then]) => b.split(now).join(then), l.body)];
+    if (reworded.has(l) || typeof l.body !== 'string' || !REWORDED.some(([now]) => l.body.includes(now))) continue;
+    reworded.add(l);
+    const back = (b) => REWORDED.reduce((t, [now, then]) => t.split(now).join(then), b);
+    const was = new Set(l.was || []);
+    for (const b of [l.body, ...(l.was || [])]) was.add(back(b));
+    was.delete(l.body);
+    l.was = [...was];
   }
 }
 
