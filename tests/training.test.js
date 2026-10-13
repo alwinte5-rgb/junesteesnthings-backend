@@ -223,7 +223,7 @@ test('quiz routes: a helper hands in their own; answers stay off the helper page
   assert.doesNotMatch(helperView, /\.answer\b|\.why\b/, 'the helper page never prints answers');
   assert.match(src, /CREATE TABLE IF NOT EXISTS staff_quiz_attempts/);
   // What was picked is stored for the owner's answer log.
-  assert.match(post, /answers, quiz_hash\)/);
+  assert.match(post, /answers, quiz_hash, seconds\)/);
   assert.match(post, /TRAINING\.answerLog\(r\.results\)/);
   // A refresh re-reads the result, never posts another try.
   assert.match(post, /res\.redirect\(303, `\/admin\/training\/quiz\/\$\{encodeURIComponent\(key\)\}\/result\/\$\{id\}`\)/);

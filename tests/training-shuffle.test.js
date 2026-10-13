@@ -88,5 +88,5 @@ test('radio values are positions on the page; the signed order maps them back, a
   assert.ok(passes <= 2, `${passes} of 200 passed by always picking the top choice`);
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   assert.match(src, /x\.order\.map\(\(i, pos\) => `<label[\s\S]{0,200}value="\$\{pos\}"/);
-  assert.match(src, /const orders = TRAINING\.readOrder\(FORM_TOKEN_KEY, \(req\.body \|\| \{\}\)\._ord, key, actor\.id\);\n\s+if \(!orders\) return back\(/);
+  assert.match(src, /const tok = TRAINING\.readQuizToken\(FORM_TOKEN_KEY, \(req\.body \|\| \{\}\)\._ord, key, actor\.id\);\n\s+const orders = tok && tok\.orders;\n\s+if \(!orders\) return back\(/);
 });

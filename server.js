@@ -1410,6 +1410,8 @@ async function initStaffTables() {
   await pool.query(`ALTER TABLE staff_quiz_attempts ADD COLUMN IF NOT EXISTS answers JSONB`);
   await pool.query(`ALTER TABLE staff_quiz_attempts ADD COLUMN IF NOT EXISTS quiz_hash TEXT`);
   await pool.query(`ALTER TABLE staff_quiz_attempts ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`);
+  // Seconds from the quiz page being shown to handed in (TRAINING.quizSeconds); NULL before it was stamped.
+  await pool.query(`ALTER TABLE staff_quiz_attempts ADD COLUMN IF NOT EXISTS seconds INTEGER`);
   await pool.query(`ALTER TABLE staff_exam_attempts ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`);
   /* A restart's snapshot of the ticks, sign-offs and lesson times it cleared. */
   await pool.query(`
@@ -27113,6 +27115,9 @@ function cloudflareStepCard(name, email) {
 
 async function renderStaffPage(req, res, extra = '') {
   const roster = await staffRoster();
+  /* Active helpers only: a disabled helper has nothing left to do here. */
+  const training = new Map(await Promise.all(roster.filter((s) => s.active).map((s) => staffTrainingSummary(s.id)
+    .then((t) => [s.id, t]).catch((e) => { console.error('staff training summary failed:', e.message); return [s.id, null]; }))));
   /* A hire arriving from Hiring (?add_track=) starts on their path's preset. */
   const addPreset = STAFF.presetForTrack(TRAINING.trackOf((req.query || {}).add_track));
   const presetOptions = Object.entries(STAFF.PRESETS).map(([k, p]) => `<option value="${k}"${k === addPreset ? ' selected' : ''}>${escEmail(p.label)}</option>`).join('');
@@ -27122,6 +27127,7 @@ async function renderStaffPage(req, res, extra = '') {
       <div class="row-i"><span class="row-main"><b>${escEmail(s.name)}</b>
         <div class="row-sub">${escEmail(s.email)} &middot; last seen ${escEmail(whenShort(s.last_seen_at))}</div></span>
         <span class="row-end">${s.active ? pill(preset ? STAFF.PRESETS[preset].label : 'Custom', 'blue') : pill('Disabled', 'red')}</span></div>
+      ${s.active ? staffTrainingBlock(s, training.get(s.id)) : ''}
       <div class="row" style="margin-top:10px;gap:6px;flex-wrap:wrap">
         ${Object.entries(STAFF.PRESETS).map(([k, p]) => `
           <form method="post" action="/admin/staff/${s.id}" style="margin:0">
@@ -29813,7 +29819,7 @@ async function trainingFacts(staffId) {
 /** A helper's attempts at one quiz, oldest first. */
 async function quizAttempts(staffId, quizKey) {
   const { rows } = await pool.query(
-    `SELECT id, score, total, passed, missed, created_at FROM staff_quiz_attempts
+    `SELECT id, quiz_key, score, total, passed, missed, seconds, created_at FROM staff_quiz_attempts
       WHERE staff_id = $1 AND quiz_key = $2 AND archived_at IS NULL ORDER BY created_at, id`, [staffId, quizKey]);
   return rows;
 }
@@ -29870,7 +29876,66 @@ async function trainingFor(staffId) {
     pool.query('SELECT step_key, started_at, done_at FROM staff_lesson_time WHERE staff_id = $1', [staffId])]);
   return { ...TRAINING.progress(new Map(ticks.rows.map((t) => [t.step_key, t])), facts, undefined, path.track, path.role,
     new Map(times.rows.map((t) => [t.step_key, t]))), track: path.track, role: path.role,
-    readyKey: TRAINING.readyKeyFor(path.track, path.role) };
+    readyKey: TRAINING.readyKeyFor(path.track, path.role), times: new Map(times.rows.map((t) => [t.step_key, t])) };
+}
+
+/** A helper's training at a glance for their Staff card: progress, time
+ *  spent against expected (TRAINING.timeSpent) and what is still to do. */
+async function staffTrainingSummary(staffId) {
+  const [p, quiz, exam] = await Promise.all([trainingFor(staffId),
+    pool.query('SELECT quiz_key, seconds, created_at FROM staff_quiz_attempts WHERE staff_id = $1 AND archived_at IS NULL', [staffId]),
+    pool.query('SELECT created_at FROM staff_exam_attempts WHERE staff_id = $1 AND archived_at IS NULL', [staffId])]);
+  /* Only quizzes on their path, as /admin/training counts them, so the two
+     pages agree after a change of track. */
+  const onPath = new Set(p.steps.filter((x) => x.type === 'quiz').map((x) => x.quiz));
+  const tries = quiz.rows.filter((r) => onPath.has(r.quiz_key));
+  const spent = TRAINING.timeSpent(p.steps, p.times,
+    [...tries.map((r) => r.created_at), ...exam.rows.map((r) => r.created_at)], undefined, tries);
+  return { p, spent, untimedQuizTries: tries.filter((r) => r.seconds == null).length };
+}
+
+/** "Lessons 2h 58m (expected 3h 45m) · quizzes 40m (expected 1h)", from
+ *  TRAINING.timeSpent; shared by the Staff card and the owner's Training view. */
+function trainingTimeLine(spent) {
+  const parts = [];
+  if (spent.lessons.length) {
+    parts.push(`lessons ${TRAINING.hm(spent.cappedMinutes)} on ${spent.lessons.length} finished (expected ${TRAINING.hm(spent.expectedMinutes)})${
+      spent.rawMinutes > spent.cappedMinutes ? `, ${TRAINING.hm(spent.rawMinutes)} with pages left open` : ''}`);
+  }
+  if (spent.quizzes.length) {
+    const tries = spent.quizzes.reduce((n, z) => n + z.tries, 0);
+    parts.push(`quizzes ${TRAINING.hm(spent.quizMinutes)} over ${tries} timed ${tries === 1 ? 'try' : 'tries'} (expected ${TRAINING.hm(spent.quizExpectedMinutes)})`);
+  }
+  return parts.join(' &middot; ');
+}
+
+/** What is still to do, highlighted, each with its expected time. */
+function outstandingRows(spent, staffId) {
+  const kind = { read: 'Read', lesson: 'Lesson', do: 'Do', signoff: 'You sign off', quiz: 'Quiz', exam: 'Exam' };
+  return spent.outstanding.map((o) => `<div class="row-i" style="background:#fff8eb;border-left:3px solid #d97706;padding-left:8px">
+    <span class="row-main" style="white-space:normal"><b>${escEmail(o.title)}</b>
+      <div class="row-sub" style="white-space:normal">${escEmail(kind[o.type] || o.type)}${o.minutes ? ` &middot; ${TRAINING.hm(o.minutes)} expected` : ''}${
+        o.module ? ` &middot; ${escEmail(o.module)}` : ''}</div></span>
+    <span class="row-end">${o.locked ? pill('opens later', 'neutral') : pill('to do', 'amber')}</span></div>`).join('')
+    + `<p style="margin:6px 0 0"><a href="/admin/training?staff=${Number(staffId)}">Open their training &rarr;</a></p>`;
+}
+
+function staffTrainingBlock(s, t) {
+  if (!t) return '<div class="muted" style="margin-top:10px">Training could not be loaded.</div>';
+  const { p, spent } = t;
+  const label = TRAINING.TRACKS[p.track] ? TRAINING.TRACKS[p.track].label : p.track;
+  const time = trainingTimeLine(spent);
+  const left = spent.outstanding.length;
+  return `<div style="margin-top:10px;padding:10px 12px;border:1px solid #e3e8f2;border-radius:10px">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="flex:1 1 200px">Training: ${escEmail(label)}</b>
+      ${p.complete ? pill('complete', 'green') : pill(`${p.done} of ${p.total} done`, left ? 'amber' : 'green')}</div>
+    ${progressBar(p.done, p.total)}
+    <div class="muted" style="white-space:normal">${time ? `Time on training: ${time}.` : 'No lesson or quiz time recorded yet.'}${
+      spent.first ? ` Over ${spent.activeDays} day${spent.activeDays === 1 ? '' : 's'}, first ${escEmail(whenShort(spent.first))}, last ${escEmail(whenShort(spent.last))}.` : ''}
+      Whole course about ${TRAINING.hm(p.minutes.expected)}.${t.untimedQuizTries ? ` ${t.untimedQuizTries} older quiz ${t.untimedQuizTries === 1 ? 'try was' : 'tries were'} not timed (timing started ${escEmail(new Date(`${TRAINING.QUIZ_TIMING_SINCE}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }))}).` : ''}</div>
+    ${left ? `<details style="margin-top:8px"${p.done && left <= 12 ? ' open' : ''}><summary><b style="color:#8a5a00">Still to do: ${left} step${left === 1 ? '' : 's'}, about ${TRAINING.hm(spent.outstandingMinutes)}</b></summary>
+      ${outstandingRows(spent, s.id)}</details>` : ''}
+  </div>`;
 }
 
 /** The owner's notes to a helper: written on /admin/training, or left when
@@ -29946,11 +30011,10 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
     const { track, role } = p;
     const titles = p.steps.filter((s) => s.article && s.type === 'read').map((s) => s.article);
     const quizSteps = p.steps.filter((s) => s.type === 'quiz');
-    const [notes, arts, gaps, timeRows, stampRows, restarts, ...tries] = await Promise.all([
+    const [notes, arts, gaps, stampRows, restarts, ...tries] = await Promise.all([
       coachingNotes(staffId),
       pool.query('SELECT id, title FROM kb_articles WHERE published AND title = ANY($1)', [titles]),
       owner ? playbookGapRows() : Promise.resolve([]),
-      owner ? pool.query('SELECT step_key, started_at, done_at FROM staff_lesson_time WHERE staff_id = $1', [staffId]) : Promise.resolve({ rows: [] }),
       /* Exam try times for the time line, and which quizzes have any try at
          all (archived ones too), so the answer log stays one click away
          after a restart. Live quiz try times come from quizTries below. */
@@ -29964,8 +30028,9 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
     /* How long they have spent, for the owner (TRAINING.timeSpent: each
        lesson capped at 3x its expected time, since a tab left open counts). */
     const everTried = new Set(stampRows.rows.filter((r) => r.kind === 'quiz').map((r) => r.quiz_key));
-    const spent = owner ? TRAINING.timeSpent(p.steps, new Map(timeRows.rows.map((t) => [t.step_key, t])),
-      [...stampRows.rows.filter((r) => r.kind === 'exam').map((r) => r.created_at), ...tries.flat().map((r) => r.created_at)]) : null;
+    const spent = owner ? TRAINING.timeSpent(p.steps, p.times,
+      [...stampRows.rows.filter((r) => r.kind === 'exam').map((r) => r.created_at), ...tries.flat().map((r) => r.created_at)],
+      undefined, tries.flat()) : null;
     const articleId = new Map(arts.rows.map((a) => [a.title, a.id]));
     const mins = (n) => (n >= 60 ? `${Math.floor(n / 60)}h${n % 60 ? ` ${n % 60}m` : ''}` : `${n}m`);
     /* The sign-off whose Undo can keep the commission window: this path's
@@ -30003,17 +30068,21 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
                    : '<button type="submit" class="btn">Sign off</button>'}</form>`;
       }
       const kind = { read: 'Read', lesson: 'Lesson', do: 'Do', signoff: 'Owner signs off', quiz: 'Quiz', exam: 'Exam', buffer: 'Buffer' }[s.type];
-      const tried = s.type === 'quiz' ? ` &middot; ${escEmail(quizSummary(quizTries.get(s.key) || []))}` : '';
+      const qt = s.type === 'quiz' && spent ? spent.quizzes.find((z) => z.quiz === s.quiz) : null;
+      const tried = s.type === 'quiz' ? ` &middot; ${escEmail(quizSummary(quizTries.get(s.key) || []))}${qt ? ` &middot; took ${mins(qt.capped)} over ${qt.tries} timed ${qt.tries === 1 ? 'try' : 'tries'}` : ''}` : '';
       const time = s.minutes ? ` &middot; ${mins(s.minutes)}${s.took != null ? ` (took ${mins(s.took)})` : ''}` : '';
       if (s.type === 'buffer') {
         return `<div class="row-i" style="opacity:.75"><span class="row-main"><span class="muted">${escEmail(s.title)}</span>
           <div class="row-sub" style="white-space:normal">${mins(s.minutes)} &middot; ${escEmail(s.hint)}</div></span></div>`;
       }
-      return `<div class="row-i"${s.locked && !owner ? ' style="opacity:.6"' : ''}><span class="row-main"><b>${link}</b>
+      /* The owner sees what is still to do highlighted. */
+      const rowStyle = s.locked && !owner ? ' style="opacity:.6"'
+        : owner && !s.done ? ' style="background:#fff8eb;border-left:3px solid #d97706;padding-left:8px"' : '';
+      return `<div class="row-i"${rowStyle}><span class="row-main"><b>${link}</b>
         <div class="row-sub" style="white-space:normal">${escEmail(kind)}${time}${s.hint ? ` &middot; ${escEmail(s.hint)}` : ''}${tried}${
           s.done && s.doneAt ? ` &middot; ${escEmail(whenShort(s.doneAt))}` : ''}</div></span>
         <span class="row-end" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end">${
-          action || (s.done ? pill('done', 'green') : pill('to do', 'neutral'))}${s.done && action ? pill('done', 'green') : ''}</span></div>`;
+          action || (s.done ? pill('done', 'green') : pill('to do', owner ? 'amber' : 'neutral'))}${s.done && action ? pill('done', 'green') : ''}</span></div>`;
     };
     /* Courses come in modules; the design path is one list. */
     const modules = [];
@@ -30048,10 +30117,13 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
       ${owner ? `<div class="card" style="border-left:4px solid #1848B8"><b>You are viewing ${escEmail(who.name)}'s training.</b>
         <span class="muted">Nothing on this page acts as ${escEmail(who.name)}. Buttons marked "You:" are your own sign-offs; quiz answers open read-only.</span></div>` : ''}
       <div class="card"><b>${p.done} of ${p.total} done</b>${progressBar(p.done, p.total)}
-        ${spent && spent.first ? `<div class="muted">Time on training: ${mins(spent.cappedMinutes)} on ${spent.lessons.length} finished lesson${spent.lessons.length === 1 ? '' : 's'}${spent.rawMinutes > spent.cappedMinutes ? ` (${mins(spent.rawMinutes)} with pages left open)` : ''}, over ${spent.activeDays} day${spent.activeDays === 1 ? '' : 's'} &middot; first ${escEmail(whenShort(spent.first))}, last ${escEmail(whenShort(spent.last))}.</div>` : ''}
+        ${spent && spent.first ? `<div class="muted">Time on training: ${trainingTimeLine(spent) || 'nothing timed yet'}, over ${spent.activeDays} day${spent.activeDays === 1 ? '' : 's'} &middot; first ${escEmail(whenShort(spent.first))}, last ${escEmail(whenShort(spent.last))}.</div>` : ''}
         ${p.minutes.expected ? `<div class="muted">About ${mins(p.minutes.expected)} in all, buffers included${p.minutes.took && !owner ? ` &middot; time logged on lessons so far: ${mins(p.minutes.took)}` : ''}.</div>` : ''}
         ${p.complete ? `<p>Training complete.${owner ? ` <a href="/admin/staff#staff-${staffId}">Move ${escEmail(who.name)} up on Staff →</a>` : ''}</p>` : ''}
         ${!owner && p.next.length ? `<p style="margin-top:8px"><b>Next:</b> ${p.next.map((s) => escEmail(s.title)).join(' &middot; ')}</p>` : ''}</div>
+      ${owner && spent && spent.outstanding.length ? `<div class="card" style="border-left:4px solid #d97706"><details${spent.outstanding.length <= 12 ? ' open' : ''}>
+        <summary><b style="color:#8a5a00">Still to do: ${spent.outstanding.length} step${spent.outstanding.length === 1 ? '' : 's'}, about ${TRAINING.hm(spent.outstandingMinutes)}</b></summary>
+        ${outstandingRows(spent, staffId)}</details></div>` : ''}
       ${modules.map(moduleCard).join('')}
       <div class="card"><b>Coaching notes</b>
         ${owner ? `<form method="post" action="/admin/feedback" style="margin:8px 0">
@@ -30462,7 +30534,8 @@ app.post('/admin/training/quiz/:key', requireAdmin, async (req, res) => {
   if (!st || st.locked) return back(res, '/admin/training', 'err', quizShutWhy(st));
   /* Each radio sent its position on the page; the signed order turns it back
      into the choice it showed (TRAINING.signOrder). */
-  const orders = TRAINING.readOrder(FORM_TOKEN_KEY, (req.body || {})._ord, key, actor.id);
+  const tok = TRAINING.readQuizToken(FORM_TOKEN_KEY, (req.body || {})._ord, key, actor.id);
+  const orders = tok && tok.orders;
   if (!orders) return back(res, `/admin/training/quiz/${encodeURIComponent(key)}`, 'err', 'This quiz page was out of date. Your answers were not marked: please answer it again.');
   const r = TRAINING.gradeQuiz(key, TRAINING.picksFromPositions(orders, req.body || {}));
   const log = JSON.stringify(TRAINING.answerLog(r.results));
@@ -30474,11 +30547,20 @@ app.post('/admin/training/quiz/:key', requireAdmin, async (req, res) => {
       `SELECT id FROM staff_quiz_attempts WHERE staff_id = $1 AND quiz_key = $2 AND archived_at IS NULL
           AND created_at > NOW() - interval '30 seconds' AND answers = $3::jsonb ORDER BY id DESC LIMIT 1`, [actor.id, key, log]);
     if (dup) return res.redirect(303, `/admin/training/quiz/${encodeURIComponent(key)}/result/${dup.id}`);
+    /* A form handed in again after Back from its result reuses the page's
+       token: time that try from the last one, not from the page. */
+    let seconds = tok.seconds;
+    if (seconds != null) {
+      const { rows: [last] } = await pool.query(
+        `SELECT EXTRACT(EPOCH FROM (NOW() - MAX(created_at)))::int AS ago FROM staff_quiz_attempts
+          WHERE staff_id = $1 AND quiz_key = $2 AND archived_at IS NULL`, [actor.id, key]);
+      if (last && last.ago != null && last.ago < seconds) seconds = Math.max(0, last.ago);
+    }
     ({ rows: [{ id }] } = await pool.query(
-      `INSERT INTO staff_quiz_attempts (staff_id, quiz_key, score, total, passed, missed, answers, quiz_hash)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8) RETURNING id`,
+      `INSERT INTO staff_quiz_attempts (staff_id, quiz_key, score, total, passed, missed, answers, quiz_hash, seconds)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9) RETURNING id`,
       [actor.id, key, r.score, r.total, r.passed, r.results.filter((x) => !x.right).map((x) => x.id),
-        log, TRAINING.quizHash(key)]));
+        log, TRAINING.quizHash(key), seconds]));
   } catch (err) {
     console.error('quiz save failed:', err.message);
     return res.status(500).send(adminPage('Training', '<div class="card"><div class="warn">Your answers could not be saved. Please try again.</div></div>', 'training'));
