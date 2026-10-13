@@ -61,6 +61,10 @@ test('the route table names no route that does not exist', () => {
 
 test('every permission a route asks for is a real one', () => {
   for (const [k, need] of Object.entries(STAFF.ROUTES)) {
+    if (Array.isArray(need)) {
+      assert.ok(need.length && need.every((n) => STAFF.PERMISSIONS[n]), `${k} → ${need}`);
+      continue;
+    }
     assert.ok(need === 'owner' || need === 'any' || STAFF.PERMISSIONS[need], `${k} → ${need}`);
   }
 });
@@ -577,12 +581,14 @@ test('releasing a held quote starts the customer\'s clock then, keeping its days
 });
 
 /* Owner, 2026-10-09: content, ads, bookkeeping and development need chat, the
-   Playbook and their training without seeing jobs, prices or customers. */
-test('the Team preset opens chat, the Playbook and training, and nothing that shows work, prices or customers', () => {
+   Playbook and their training without seeing prices or customers. Since
+   2026-10-13 every helper also sees the production schedule (no money). */
+test('the Team preset opens chat, the Playbook, training and the schedule, and nothing that shows prices or customers', () => {
   const p = STAFF.presetPerms('team');
   assert.ok(p, 'the preset exists');
   for (const [k, v] of Object.entries(p)) {
     if (k === 'kb.edit') { assert.strictEqual(v.level, 'approval', 'Playbook suggestions wait for June'); continue; }
+    if (k === 'jobs.schedule') { assert.strictEqual(v.level, 'on', 'every helper sees the schedule'); continue; }
     // The lowest level each permission has: 'off', or 'approval' where off is not an option (quotes.send).
     const levels = STAFF.PERMISSIONS[k].levels || [];
     assert.strictEqual(v.level, levels.includes('off') || !levels.length ? 'off' : levels[0], `team → ${k}`);
@@ -593,8 +599,9 @@ test('the Team preset opens chat, the Playbook and training, and nothing that sh
   for (const [route, need] of Object.entries(STAFF.ROUTES)) {
     if (need === 'any') continue;
     if (need === 'owner') continue;
+    if (Array.isArray(need)) continue; // the schedule's job page: tested on its own
     const perm = typeof need === 'string' ? need : need.perm;
-    if (perm && perm !== 'kb.edit' && p[perm] && p[perm].level !== 'off') {
+    if (perm && perm !== 'kb.edit' && perm !== 'jobs.schedule' && p[perm] && p[perm].level !== 'off') {
       assert.ok(perm === 'quotes.send' && p['quotes.view'].level === 'off', `${route} stays shut`);
     }
   }
@@ -639,4 +646,26 @@ test('finances.view reads the Finances page and its reports, and can change noth
   assert.match(page, /\$\{canEdit \? `\s*<form method="POST" action="\/admin\/expenses"/);
   assert.match(page, /g\.entries\.map\(e => !canEdit \?/);
   assert.match(page, /!canEdit \? '<span class="muted">June settles this<\/span>'/);
+});
+
+/* Owner, 2026-10-13: "give all employees access to the production schedule so
+   that the designers can communicate with customers and see files". */
+test('every preset opens the production schedule, and the schedule shows no money', () => {
+  for (const name of Object.keys(STAFF.PRESETS)) {
+    assert.strictEqual(STAFF.presetPerms(name)['jobs.schedule'].level, 'on', name);
+  }
+  const team = { kind: 'staff', id: 9, perms: STAFF.presetPerms('team') };
+  for (const r of ['/admin/schedule', '/admin/design/:code', '/admin/design/:code/artwork/:n', '/admin/design/:code/sent-file/:id/:n']) {
+    assert.ok(STAFF.mayUseRoute(team, 'GET', r), r);
+  }
+  assert.ok(STAFF.mayUseRoute(team, 'POST', '/admin/design/:code/note'));
+  assert.ok(!STAFF.mayUseRoute(team, 'GET', '/admin/production/:code'), 'not the priced job page');
+  assert.ok(!STAFF.mayUseRoute(team, 'GET', '/admin/design'), 'not the design queue');
+  const off = { kind: 'staff', id: 9, perms: { ...STAFF.presetPerms('team'), 'jobs.schedule': { level: 'off' } } };
+  assert.ok(!STAFF.mayUseRoute(off, 'GET', '/admin/design/:code'), 'switched off, the job page shuts');
+  const fn = src.slice(src.indexOf("app.get('/admin/schedule'"), src.indexOf("app.get('/admin/production/:code/artwork/:n'"));
+  assert.ok(fn.length > 100);
+  assert.doesNotMatch(fn, /money\(|paid_amount|total\b|cost_/, 'no prices on the schedule');
+  const page = src.slice(src.indexOf("app.get('/admin/design/:code', requireAdmin"), src.indexOf('async function designNotesCard'));
+  assert.doesNotMatch(page, /money\(|jobCostForm|creditCard/, 'no prices on the job page');
 });

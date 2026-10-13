@@ -55,6 +55,12 @@ const PERMISSIONS = {
      customer's files and the notes. No prices, no payments, no contact
      details, and no other board (/admin/design). */
   'jobs.design':           { group: 'Production', label: 'Design jobs (no prices or contact details)', levels: ['off', 'on'] },
+  /* Every helper sees the schedule (owner, 2026-10-13: "give all employees
+     access to the production schedule so that the designers can communicate
+     with customers and see files"). It opens every open job on the design
+     job page: dates, what to make, the customer's files, the messages and
+     notes. Never prices, payments or job costs. */
+  'jobs.schedule':         { group: 'Production', label: 'Production schedule: every job, its files and messages (no prices or costs)', levels: ['off', 'on'] },
   'proofs.upload':         { group: 'Production', label: 'Upload proofs to jobs', levels: ['off', 'on'] },
   'art.request':           { group: 'Production', label: 'Send jobs to the designer, answer their questions', levels: ['off', 'on'] },
   'art.work':              { group: 'Production', label: 'Work on artwork: ask sales, upload and submit final art', levels: ['off', 'on'] },
@@ -119,7 +125,7 @@ const PRESETS = {
       'leads.view': 'on', 'quotes.view': 'on', 'quotes.draft': 'on',
       'quotes.send': 'approval', 'quotes.discount': 'approval',
       'customers.view': 'on', 'customers.message': 'approval',
-      'orders.view': 'on', 'art.request': 'on', 'kb.edit': 'approval',
+      'orders.view': 'on', 'art.request': 'on', 'kb.edit': 'approval', 'jobs.schedule': 'on',
     },
   },
   /* Designers see their design jobs and nothing else (owner, 2026-10-06: "no
@@ -131,7 +137,7 @@ const PRESETS = {
     label: 'Design training',
     note: 'Sees only their design jobs, uploads proofs and writes proof messages; you approve each message before it is sent.',
     perms: {
-      'jobs.design': 'on', 'customers.message': 'approval',
+      'jobs.design': 'on', 'jobs.schedule': 'on', 'customers.message': 'approval',
       'proofs.upload': 'on', 'art.work': 'on', 'kb.edit': 'approval',
     },
   },
@@ -139,7 +145,7 @@ const PRESETS = {
     label: 'Designer',
     note: 'Design training signed off: sends proofs to customers themselves. Still sees only their design jobs.',
     perms: {
-      'jobs.design': 'on', 'customers.message': 'on',
+      'jobs.design': 'on', 'jobs.schedule': 'on', 'customers.message': 'on',
       'proofs.upload': 'on', 'art.work': 'on', 'kb.edit': 'approval',
     },
   },
@@ -148,18 +154,19 @@ const PRESETS = {
      training without seeing jobs, prices or customers). Team chat, the
      Playbook, Resources, My Day and Training are open to every helper
      ('any' in ROUTES), so this preset switches everything else off and lets
-     them suggest Playbook edits for June to approve. */
+     them suggest Playbook edits for June to approve. The production schedule
+     is open to them too (owner, 2026-10-13: all employees), read only. */
   team: {
     label: 'Team (no back office)',
-    note: 'Team chat, the Playbook, Resources and their own training. No jobs, quotes, prices or customers.',
-    perms: { 'kb.edit': 'approval' },
+    note: 'Team chat, the Playbook, Resources, their own training and the production schedule (read only). No quotes, prices or customer list.',
+    perms: { 'kb.edit': 'approval', 'jobs.schedule': 'on' },
   },
   /* The Team preset plus read-only Finances: what a bookkeeper needs to
      close a month, and nothing that changes the books. */
   books: {
     label: 'Bookkeeper (read-only finances)',
     note: 'Team chat, the Playbook and training, plus the Finances page and its reports to read and download. Cannot change anything there.',
-    perms: { 'kb.edit': 'approval', 'finances.view': 'on' },
+    perms: { 'kb.edit': 'approval', 'finances.view': 'on', 'jobs.schedule': 'on' },
   },
   supervised: {
     label: 'Supervised',
@@ -169,7 +176,7 @@ const PRESETS = {
       'quotes.send': { level: 'on', maxTotal: 500 }, 'quotes.discount': 'approval',
       'customers.view': 'on', 'customers.message': 'on', 'production.stage': 'on',
       'orders.view': 'on', 'proofs.upload': 'on', 'art.request': 'on', 'certificates.prescreen': 'on', 'reviews.manage': 'on',
-      'kb.edit': 'approval',
+      'kb.edit': 'approval', 'jobs.schedule': 'on',
     },
   },
   trusted: {
@@ -180,7 +187,7 @@ const PRESETS = {
       'quotes.send': 'on', 'quotes.discount': { level: 'on', maxPct: 10 }, 'quotes.manage': 'on',
       'customers.view': 'on', 'customers.message': 'on', 'production.stage': 'on',
       'orders.view': 'on', 'proofs.upload': 'on', 'art.request': 'on', 'certificates.prescreen': 'on', 'reviews.manage': 'on',
-      'kb.edit': 'on',
+      'kb.edit': 'on', 'jobs.schedule': 'on',
     },
   },
 };
@@ -195,6 +202,7 @@ function presetForTrack(track) {
 /* Every admin route, and the permission a helper needs for it.
    'owner'  only the owner, whatever toggles are set.
    'any'    any signed-in helper (the menu counts, the sign-in redirect).
+   A list of permissions means any one of them opens the route.
    The key is "<METHOD> <route path as written in server.js>"; a route
    registered for several paths is keyed by the paths joined with "|". */
 const ROUTES = {
@@ -294,12 +302,16 @@ const ROUTES = {
   'POST /admin/quote/:code/restore-version': 'owner',
   'POST /admin/followups/:id/done': 'owner',
 
-  // A designer's own board and job page.
+  /* A designer's own board, and the job page with no money on it. The
+     schedule opens the same job page for any open job (designJobFor). */
   'GET /admin/design': 'jobs.design',
-  'GET /admin/design/:code': 'jobs.design',
-  'GET /admin/design/:code/artwork/:n': 'jobs.design',
-  'GET /admin/design/:code/artwork.zip': 'jobs.design',
-  'POST /admin/design/:code/note': 'jobs.design',
+  'GET /admin/schedule': 'jobs.schedule',
+  'GET /admin/design/:code': ['jobs.design', 'jobs.schedule'],
+  'GET /admin/design/:code/artwork/:n': ['jobs.design', 'jobs.schedule'],
+  'GET /admin/design/:code/artwork.zip': ['jobs.design', 'jobs.schedule'],
+  'GET /admin/design/:code/sent-file/:id/:n': ['jobs.design', 'jobs.schedule'],
+  'GET /admin/design/:code/reply-file/:id/:n': ['jobs.design', 'jobs.schedule'],
+  'POST /admin/design/:code/note': ['jobs.design', 'jobs.schedule'],
 
   'GET /admin/discounts': 'discounts.manage',
   'POST /admin/discounts': 'discounts.manage',
@@ -509,6 +521,7 @@ function mayUseRoute(actor, method, routePath) {
   const need = permForRoute(method, routePath);
   if (!need || need === 'owner') return false;
   if (need === 'any') return true;
+  if (Array.isArray(need)) return need.some((k) => levelOf(actor, k) !== 'off');
   return levelOf(actor, need) !== 'off';
 }
 

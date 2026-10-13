@@ -1285,6 +1285,17 @@ async function initStaffTables() {
       alerted_id    BIGINT NOT NULL DEFAULT 0,
       PRIMARY KEY (reader, convo)
     )`);
+  /* Read receipts with a time for channel messages (owner, 2026-10-13: "read
+     receipts ... and a time seen"). One row per message and reader, written
+     when the message is first on their screen. A direct message keeps its
+     own time in team_messages.read_at. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_channel_seen (
+      message_id  BIGINT NOT NULL,
+      reader      TEXT NOT NULL,
+      seen_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (message_id, reader)
+    )`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS team_chat_prefs (
       reader        TEXT PRIMARY KEY,
@@ -1606,6 +1617,11 @@ async function initStaffTables() {
        AND NOT perms ? 'jobs.design'`);
   await pool.query(`UPDATE staff SET perms = perms - 'certificates.decide' - 'finances'
                      WHERE perms ? 'certificates.decide' OR perms ? 'finances'`);
+  /* Every helper gets the production schedule (owner, 2026-10-13: "give all
+     employees access"). Once only: a saved Staff form stores every toggle, so
+     an account the owner has since switched it off for already names it. */
+  await pool.query(`UPDATE staff SET perms = COALESCE(perms, '{}'::jsonb) || '{"jobs.schedule":"on"}'::jsonb
+                     WHERE NOT COALESCE(perms, '{}'::jsonb) ? 'jobs.schedule'`);
   /* The timeclock (tools/lib/timeclock.js). One open shift per helper at a
      time; pings are minutes with activity (a page opened, a form sent, or
      typing and scrolling reported by the page); TimeProof is the owner's
@@ -3446,7 +3462,8 @@ function safeAdminPath(raw, fallback = '/admin/dashboard') {
 }
 
 function refuseStaff(req, res, actor) {
-  const need = STAFF.permForRoute(req.method, req.route && req.route.path);
+  const raw = STAFF.permForRoute(req.method, req.route && req.route.path);
+  const need = Array.isArray(raw) ? raw[raw.length - 1] : raw;
   if (!wantsHtml(req)) return res.status(403).json({ error: 'Not allowed for your account' });
   return actorStore.run(actor, () => res.status(403).send(adminPage('Not available', `
     ${pageHeader('Not available to your account', '')}
@@ -9140,6 +9157,7 @@ form:has(>.step-row){display:block}
 const ADMIN_NAV = [
   { key: 'myday',      href: '/admin/my-day',        label: 'My Day',     icon: 'check',  staffOnly: true },
   { key: 'design',     href: '/admin/design',        label: 'Design jobs', icon: 'layers', staffOnly: true },
+  { key: 'schedule',   href: '/admin/schedule',      label: 'Schedule',   icon: 'clock',  staffOnly: true },
   { key: 'earnings',   href: '/admin/my-earnings',   label: 'My earnings', icon: 'dollar', staffOnly: true },
   { key: 'mystats',    href: '/admin/my-stats',      label: 'My stats',   icon: 'grid',   staffOnly: true },
   { key: 'clock',      href: '/admin/clock',         label: 'My hours',   icon: 'clock',  staffOnly: true },
@@ -9434,7 +9452,8 @@ function adminNav(active) {
   const actor = typeof currentActor === 'function' ? currentActor() : null;
   const staff = actor && actor.kind === 'staff' ? actor : null;
   const items = ADMIN_NAV.filter((n) => staff
-    ? STAFF.mayUseRoute(staff, 'GET', n.href)
+    /* Schedule is the no-prices view; whoever has the Production board uses that. */
+    ? STAFF.mayUseRoute(staff, 'GET', n.href) && !(n.key === 'schedule' && STAFF.levelOf(staff, 'quotes.view') === 'on')
     : !n.staffOnly);
   const home = staff ? '/admin/my-day' : '/admin/dashboard';
   return `<aside class="adm-side" aria-label="Admin menu">
@@ -21157,12 +21176,17 @@ app.post('/admin/api/message-file-signature', requireAdmin, (req, res) => {
 });
 
 /* A file a customer's emailed reply carried, fetched from Brevo when clicked. */
-app.get('/admin/production/:code/reply-file/:id/:n', requireAdmin, async (req, res) => {
+/* The design job page reaches a message's files by its own path: the
+   production one needs the boards, the design one only that job (designJobFor). */
+const messageFileAllowed = async (kind, code) => kind === 'design'
+  ? !!(await designJobFor(code, currentActor()))
+  : actorLevel('quotes.view') === 'on';
+const replyFile = (kind) => async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   const id = /^\d{1,12}$/.test(String(req.params.id)) ? req.params.id : null;
   const n = /^\d{1,2}$/.test(String(req.params.n)) ? Number(req.params.n) : -1;
   if (!QUOTE_CODE_RE.test(code) || !id) return res.status(404).send('Not found.');
-  if (actorLevel('quotes.view') !== 'on') return res.status(403).send('Not available.');
+  if (!(await messageFileAllowed(kind, code).catch(() => false))) return res.status(403).send('Not available.');
   try {
     const { rows: [e] } = await pool.query(
       `SELECT attachments FROM client_emails WHERE id = $1 AND quote_code = $2 AND status = 'received'`, [id, code]);
@@ -21184,14 +21208,17 @@ app.get('/admin/production/:code/reply-file/:id/:n', requireAdmin, async (req, r
     console.error(`reply file on ${code} failed:`, err.message);
     return res.status(500).send('Could not fetch that file.');
   }
-});
+};
+app.get('/admin/production/:code/reply-file/:id/:n', requireAdmin, replyFile('production'));
+app.get('/admin/design/:code/reply-file/:id/:n', requireAdmin, replyFile('design'));
 
 /* A file an email carried, from the job page's message list. */
-app.get('/admin/production/:code/sent-file/:id/:n', requireAdmin, async (req, res) => {
+const sentFile = (kind) => async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   const id = /^\d{1,12}$/.test(String(req.params.id)) ? req.params.id : null;
   const n = /^\d{1,2}$/.test(String(req.params.n)) ? Number(req.params.n) : -1;
   if (!QUOTE_CODE_RE.test(code) || !id) return res.status(404).send('Not found.');
+  if (kind === 'design' && !(await messageFileAllowed(kind, code).catch(() => false))) return res.status(403).send('Not available.');
   try {
     const { rows: [e] } = await pool.query('SELECT attachments FROM client_emails WHERE id = $1 AND quote_code = $2', [id, code]);
     const a = e && Array.isArray(e.attachments) ? e.attachments[n] : null;
@@ -21213,7 +21240,9 @@ app.get('/admin/production/:code/sent-file/:id/:n', requireAdmin, async (req, re
     if (!res.headersSent) res.status(502).send('Could not fetch that file just now.');
     else res.destroy(err);
   }
-});
+};
+app.get('/admin/production/:code/sent-file/:id/:n', requireAdmin, sentFile('production'));
+app.get('/admin/design/:code/sent-file/:id/:n', requireAdmin, sentFile('design'));
 
 app.post('/admin/api/art-signature', requireAdmin, (req, res) => {
   const apiSecret = process.env.CLOUDINARY_API_SECRET || process.env.CLUDINARY_API_SECRET;
@@ -21352,7 +21381,8 @@ const artworkZip = (kind) => async (req, res) => {
 };
 
 async function designJobFor(code, actor) {
-const me = actor && actor.kind === 'staff' ? actor.id : null;
+/* The schedule opens every open job; Design jobs alone, only the art with you. */
+const me = actor && actor.kind === 'staff' && STAFF.levelOf(actor, 'jobs.schedule') !== 'on' ? actor.id : null;
 const { rows: [q] } = await pool.query(
   `SELECT q.* FROM quotes q
     WHERE q.code = $1 AND q.cancelled_at IS NULL
@@ -21403,6 +21433,36 @@ try {
 }
 });
 
+/* The production schedule for every helper (owner, 2026-10-13): each open
+   job's stage, next step and dates, soonest due first, opening the design job
+   page. No prices, payments or costs: those stay on the production board. */
+app.get('/admin/schedule', requireAdmin, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT q.*, a.status AS art_status FROM quotes q LEFT JOIN art_requests a ON a.quote_code = q.code
+        WHERE q.cancelled_at IS NULL AND q.delivered_at IS NULL AND q.accepted_at IS NOT NULL
+          AND COALESCE(q.status, '') NOT IN ('held', 'draft')
+        ORDER BY q.accepted_at DESC LIMIT 300`);
+    const jobs = rows.map((q) => ({ q, sched: quoteSchedule(q), cl: quoteChecklist(q), stage: JOB_STAGES[jobReachedIndex(q)] }))
+      .sort((x, y) => (y.sched && y.sched.risks.length ? 1 : 0) - (x.sched && x.sched.risks.length ? 1 : 0)
+        || (x.sched ? new Date(x.sched.ship_by) : Infinity) - (y.sched ? new Date(y.sched.ship_by) : Infinity));
+    const row = ({ q, sched, cl, stage }) => `<div class="row-i"><span class="row-main" style="white-space:normal">
+        <a href="/admin/design/${escEmail(q.code)}"><b>${escEmail(q.code)}</b></a> ${escEmail(firstNameOf(q.name))}
+        ${pill(stage ? stage.label : 'To start', 'blue')}${q.art_status && ART.STATES[q.art_status] ? ' ' + pill(`Art: ${ART.STATES[q.art_status].label}`, ART.STATES[q.art_status].tone) : ''}
+        <div class="row-sub" style="white-space:normal">${cl.next ? `Next: ${escEmail(cl.next.label)}` : 'Complete'}${
+          sched && sched.risks.length ? ` &middot; <span style="color:#b91c1c">behind on ${sched.risks.map((r) => escEmail(r.label)).join(', ')}</span>` : ''}</div></span>
+      <span class="row-end muted">${sched ? `${sched.isPickup ? 'ready' : 'ships'} ${escEmail(dayShort(sched.ship_by))}`
+        : q.needed_by ? `needed ${escEmail(dayShort(q.needed_by))}` : 'no date'}</span></div>`;
+    res.set('Cache-Control', 'no-store');
+    res.send(adminPage('Schedule', `
+      ${pageHeader('Production schedule', 'Every job in hand, the late ones first, then soonest due. Open one for its files, what to make and the messages.')}
+      <div class="card">${jobs.length ? `<div class="rows">${jobs.map(row).join('')}</div>` : emptyState('No jobs in production right now.')}</div>`, 'schedule'));
+  } catch (err) {
+    console.error('schedule failed:', err.message);
+    res.status(500).send(adminPage('Schedule', '<div class="card"><div class="warn">Could not load the schedule.</div></div>', 'schedule'));
+  }
+});
+
 app.get('/admin/production/:code/artwork/:n', requireAdmin, artworkFile('production'));
 app.get('/admin/production/:code/artwork.zip', requireAdmin, artworkZip('production'));
 app.get('/admin/design/:code/artwork/:n', requireAdmin, artworkFile('design'));
@@ -21417,12 +21477,20 @@ app.get('/admin/design/:code', requireAdmin, async (req, res) => {
     const [art, proofs, messages, notes] = await Promise.all([
       jobArtCard(q, req.query).catch((e) => { console.error('art card failed:', e.message); return ''; }),
       jobProofsCard(q, req.query).catch((e) => { console.error('proofs card failed:', e.message); return ''; }),
-      actorLevel('customers.message') !== 'off' ? jobMessagesCard(q, req.query, { design: true }).catch(() => '') : '',
+      jobMessagesCard(q, req.query, { design: true, readOnly: actorLevel('customers.message') === 'off' })
+        .catch((e) => { console.error('messages card failed:', e.message); return ''; }),
       designNotesCard(code),
     ]);
+    const back = actorLevel('jobs.design') === 'on'
+      ? '<a href="/admin/design" style="color:#1848B8">your design jobs</a>' : '';
+    const toSchedule = actorLevel('jobs.schedule') === 'on'
+      ? '<a href="/admin/schedule" style="color:#1848B8">the schedule</a>' : '';
+    const sched = quoteSchedule(q);
     res.send(adminPage(`${code} — design`, `
       <h1>${escEmail(code)} &middot; ${escEmail(firstNameOf(q.name))}</h1>
-      <div class="sub">${q.needed_by ? `Needed by ${escEmail(fmtDate(q.needed_by))} &middot; ` : ''}<a href="/admin/design" style="color:#1848B8">your design jobs</a></div>
+      <div class="sub">${q.needed_by ? `Needed by ${escEmail(fmtDate(q.needed_by))} &middot; ` : ''}${
+        sched ? `${sched.isPickup ? 'Ready by' : 'Ships by'} ${escEmail(dayShort(sched.ship_by))} &middot; ` : ''}${
+        [back, toSchedule].filter(Boolean).join(' &middot; ')}</div>
       ${flash(req.query)}
       ${designSpecCard(q, catalog)}
       ${jobPhotosCard(q, `/admin/design/${code}`)}
@@ -21570,7 +21638,7 @@ app.post('/admin/quote/:code/proofs', requireAdmin, async (req, res) => {
 
 /* `design`: the designer's page. Proof messages only: no money in the quick
    replies, and no history (receipts and reminders carry amounts). */
-async function jobMessagesCard(q, query, { design = false } = {}) {
+async function jobMessagesCard(q, query, { design = false, readOnly = false } = {}) {
   const code = q.code;
   const { rows: history } = await pool.query(
     `SELECT * FROM (
@@ -21643,7 +21711,7 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
               : `<a href="${escEmail(a.url)}" target="_blank" rel="noopener">&#128206; ${escEmail(a.name)}</a>`;
           }).join('')}</div>`
         : Array.isArray(m.attachments) && m.attachments.length ? `<div class="row-sub" style="white-space:normal">&#128206; ${
-          m.attachments.map((a, n) => `<a href="/admin/production/${escEmail(code)}/${inbound ? 'reply' : 'sent'}-file/${Number(m.id)}/${n}">${escEmail(a.name)}</a>`).join(' &middot; ')}</div>` : ''}${
+          m.attachments.map((a, n) => `<a href="/admin/${design ? 'design' : 'production'}/${escEmail(code)}/${inbound ? 'reply' : 'sent'}-file/${Number(m.id)}/${n}">${escEmail(a.name)}</a>`).join(' &middot; ')}</div>` : ''}${
         bad && m.error ? `<div class="row-sub" style="white-space:normal;color:#b91c1c">${escEmail(m.error)}</div>` : ''}</span>
       <span class="row-end msg-end">${pill(inbound ? 'reply' : m.status, tone(m.status))}
         <span class="muted msg-when">${m.channel === 'email' ? 'email' : 'text'} &middot; ${
@@ -21654,6 +21722,15 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
                         font-weight:600;font-size:14px;color:${why ? '#9ca3af' : '#12203c'}">
             <input type="radio" name="channel" value="${value}" style="width:auto"${why ? ' disabled' : checked ? ' checked' : ''}>
             ${text}${why ? ` <span style="font-weight:400;font-size:12px">(${escEmail(why)})</span>` : ''}</label>`;
+  const list = history.length ? `<div class="rows">${history.map(row).join('')}</div>`
+    : emptyState('Nothing sent yet. Receipts, reminders and updates show here as they go out.');
+  /* Someone on the schedule without messaging reads the conversation only. */
+  if (readOnly) {
+    return `<div class="card" id="messages" style="margin-top:14px">
+      <h2 class="card-title">Messages${first ? ' with ' + escEmail(first) : ''} <span class="muted">${history.length || ''}</span></h2>
+      <p class="muted" style="font-size:12.5px">Read only. To write to the customer, ask in Team chat or leave a note below.</p>
+      ${list}</div>`;
+  }
   return `
     <div class="card" id="messages" style="margin-top:14px">
       <h2 class="card-title">Messages${first ? ' with ' + escEmail(first) : ''} <span class="muted">${history.length || ''}</span></h2>
@@ -21720,9 +21797,9 @@ async function jobMessagesCard(q, query, { design = false } = {}) {
           <input type="hidden" name="back" value="${escEmail(jobPath(code))}#messages">
           <button type="submit" class="btn btn-ghost">Add</button>
         </form></details>
-      ${design ? '<p class="muted" style="font-size:12.5px">Your message goes to the customer from the shop. Their reply comes to the owner, who passes on anything for you.</p>'
-        : history.length ? `<div class="rows">${history.map(row).join('')}</div>`
-        : emptyState('Nothing sent yet. Receipts, reminders and updates show here as they go out.')}
+      ${design ? `<p class="muted" style="font-size:12.5px">Your message goes to the customer from the shop.${
+        inboundReady ? ' Their replies show in the list below.' : ' Their reply comes to the owner, who passes on anything for you.'}</p>` : ''}
+      ${list}
     </div>
     <script>
       (function(){
@@ -28502,7 +28579,7 @@ app.get('/admin/commission', requireAdmin, async (req, res) => {
       ${earningsTiles(e)}
       ${payNow > 0 ? `<form method="post" action="/admin/commission/pay" class="card">
         <input type="hidden" name="staff_id" value="${s.id}">
-        <b>Pay ${money(payNow)} through EasyPay, then record it here.</b>
+        <b>Pay ${money(payNow)} through Wise, then record it here.</b>
         <p class="muted">Recording it books one expense (Contract labor, vendor ${escEmail(s.name)}) and marks ${
           [openWeeks.length && e.wages.amount ? `${openWeeks.length} week${openWeeks.length === 1 ? '' : 's'} of hours` : '',
            payable.length ? `${payable.length} quote${payable.length === 1 ? '' : 's'}` : '',
@@ -28589,7 +28666,8 @@ app.post('/admin/commission/pay', requireAdmin, async (req, res) => {
     const total = round2(wages.amount + lines.reduce((a, l) => a + l.amount, 0) + bonuses.reduce((a, b) => a + Number(b.amount), 0));
     const note = [wages.amount > 0 ? `Wages: ${wages.hours} h at ${money(rate)}/h (weeks of ${weeks.map((w) => w.week_of).join(', ')})` : '',
                   lines.length ? `Commission: ${lines.map((l) => l.code).join(', ')}` : '',
-                  bonuses.length ? `Bonuses: ${bonuses.map((b) => b.reason).join('; ')}` : ''].filter(Boolean).join(' / ');
+                  bonuses.length ? `Bonuses: ${bonuses.map((b) => b.reason).join('; ')}` : '',
+                  'Paid by Wise'].filter(Boolean).join(' / ');
     const { rows: [e] } = await client.query(
       `INSERT INTO expenses (spent_on, category, amount, vendor, note) VALUES (CURRENT_DATE, 'Contract labor', $1, $2, $3)
        RETURNING id`, [total, s.name, note.slice(0, 500)]);
@@ -29718,6 +29796,7 @@ const TEAM_CHAT_CSS = `<style>
   overflow-wrap:anywhere;font-size:14px;line-height:1.45}
 .tc-line.me{align-self:flex-end;background:#0B1F4B;color:#fff}
 .tc-when{display:block;font-size:11px;opacity:.7;margin-top:2px}
+.tc-seen{display:block;font-size:11px;opacity:.75;margin-top:1px;font-style:italic}
 .tc-who{display:block;font-size:11.5px;opacity:.8;margin-bottom:2px}
 .tc-form{display:flex;gap:8px;align-items:flex-end;margin-top:12px}
 .tc-form textarea{flex:1;min-width:0}
@@ -29788,7 +29867,7 @@ function chatChannelFor(raw, channels, roster) {
 
 async function chatLines(staffId, after = 0) {
   const { rows } = await pool.query(
-    `SELECT id, from_owner, body, created_at FROM team_messages
+    `SELECT id, from_owner, body, created_at, read_at FROM team_messages
       WHERE staff_id = $1 AND id > $2 ORDER BY id DESC LIMIT 200`, [staffId, after]);
   return rows.reverse();
 }
@@ -29809,14 +29888,64 @@ function chatMarkRead(staffId) {
 }
 
 /** A channel is read up to the newest message this person has had on screen. */
-function channelMarkRead(channelId, upTo) {
-  if (!upTo) return Promise.resolve();
-  return pool.query(
-    `INSERT INTO team_chat_reads (reader, convo, last_read_id) VALUES ($1, $2, $3)
-     ON CONFLICT (reader, convo) DO UPDATE SET last_read_id = GREATEST(team_chat_reads.last_read_id, EXCLUDED.last_read_id)`,
-    [CHAN.readerKey(currentActor() || OWNER_ACTOR), `ch:${channelId}`, upTo])
-    .catch((e) => console.error('channel read mark failed:', e.message));
+async function channelMarkRead(channelId, upTo) {
+  if (!upTo) return;
+  const actor = currentActor() || OWNER_ACTOR;
+  const reader = CHAN.readerKey(actor);
+  try {
+    /* The time each newly read message was seen: those after what this
+       person had read before, written by someone else. */
+    await pool.query(
+      `INSERT INTO team_channel_seen (message_id, reader)
+       SELECT m.id, $2 FROM team_channel_messages m
+        WHERE m.channel_id = $1 AND m.id <= $3
+          AND m.id > COALESCE((SELECT last_read_id FROM team_chat_reads WHERE reader = $2 AND convo = $4), 0)
+          AND m.staff_id IS DISTINCT FROM $5
+       ON CONFLICT DO NOTHING`,
+      [channelId, reader, upTo, `ch:${channelId}`, actor.kind === 'staff' ? actor.id : null]);
+    await pool.query(
+      `INSERT INTO team_chat_reads (reader, convo, last_read_id) VALUES ($1, $2, $3)
+       ON CONFLICT (reader, convo) DO UPDATE SET last_read_id = GREATEST(team_chat_reads.last_read_id, EXCLUDED.last_read_id)`,
+      [reader, `ch:${channelId}`, upTo]);
+  } catch (e) { console.error('channel read mark failed:', e.message); }
 }
+
+/** Read receipts on this person's own recent messages: { id: "Seen Oct 13, 2:14 PM" }
+ *  in a direct chat, { id: "Seen by Cam Oct 13, 2:14 PM · Dee …" } in a channel.
+ *  A channel message read before times were kept says only who. */
+async function chatSeen({ staffId = null, channelId = null }, roster) {
+  const actor = currentActor() || OWNER_ACTOR;
+  const out = {};
+  if (channelId) {
+    const { rows: mine } = await pool.query(
+      `SELECT id FROM team_channel_messages WHERE channel_id = $1 AND staff_id IS NOT DISTINCT FROM $2
+        ORDER BY id DESC LIMIT 50`, [channelId, actor.kind === 'staff' ? actor.id : null]);
+    if (!mine.length) return out;
+    const me = CHAN.readerKey(actor);
+    const [{ rows: seen }, { rows: reads }] = await Promise.all([
+      pool.query('SELECT message_id, reader, seen_at FROM team_channel_seen WHERE message_id = ANY($1::bigint[])', [mine.map((m) => m.id)]),
+      pool.query('SELECT reader, last_read_id FROM team_chat_reads WHERE convo = $1', [`ch:${channelId}`]),
+    ]);
+    const nameOfReader = (k) => k === 'owner' ? 'June' : nameOf(roster, Number(String(k).slice(6)));
+    for (const m of mine) {
+      const id = Number(m.id);
+      const at = new Map(seen.filter((x) => Number(x.message_id) === id).map((x) => [x.reader, x.seen_at]));
+      const who = reads.filter((r) => r.reader !== me && Number(r.last_read_id) >= id).map((r) => r.reader);
+      for (const k of at.keys()) if (k !== me && !who.includes(k)) who.push(k);
+      out[id] = who.length
+        ? 'Seen by ' + who.sort((a, b) => new Date(at.get(a) || 0) - new Date(at.get(b) || 0))
+          .map((k) => nameOfReader(k) + (at.get(k) ? ' ' + whenShort(at.get(k)) : '')).join(' · ')
+        : 'Not seen yet';
+    }
+    return out;
+  }
+  const { rows } = await pool.query(
+    `SELECT id, read_at FROM team_messages WHERE staff_id = $1 AND from_owner = $2 ORDER BY id DESC LIMIT 50`,
+    [staffId, actor.kind !== 'staff']);
+  for (const m of rows) out[Number(m.id)] = m.read_at ? `Seen ${whenShort(m.read_at)}` : 'Not seen yet';
+  return out;
+}
+const seenSpan = (seen, id) => seen[id] ? `<span class="tc-seen" data-seen="${Number(id)}">${escEmail(seen[id])}</span>` : '';
 
 function chatLineJson(m) {
   const mine = (currentActor() || OWNER_ACTOR).kind === 'staff' ? !m.from_owner : m.from_owner;
@@ -29872,12 +30001,14 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
       dmChips = [{ label: 'June', href: '/admin/team-chat', on: !channel, count: u.n || null }];
     }
     let lines, lineHtml, canWrite, intro, placeholder, hidden, pollQuery;
+    let seen = {};
     if (channel) {
       lines = await channelLines(channel.id);
       const last = lines.length ? Number(lines[lines.length - 1].id) : 0;
       await channelMarkRead(channel.id, last);
+      seen = await chatSeen({ channelId: channel.id }, roster).catch(() => ({}));
       lineHtml = (m) => { const j = channelLineJson(m, roster);
-        return `<div class="tc-line${j.mine ? ' me' : ''}">${j.who ? `<b class="tc-who">${escEmail(j.who)}</b>` : ''}${escEmail(j.body)}<span class="tc-when">${escEmail(j.when)}</span></div>`; };
+        return `<div class="tc-line${j.mine ? ' me' : ''}">${j.who ? `<b class="tc-who">${escEmail(j.who)}</b>` : ''}${escEmail(j.body)}<span class="tc-when">${escEmail(j.when)}</span>${j.mine ? seenSpan(seen, j.id) : ''}</div>`; };
       canWrite = true;
       intro = `# ${escEmail(channel.name)}: ${channel.audience === 'all' ? 'everyone on the team' : `the ${escEmail(CHAN.AUDIENCES[channel.audience] || channel.audience)} team`} and June. Customers never see this.`;
       placeholder = `Message # ${channel.name}`;
@@ -29886,11 +30017,12 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
     } else {
       lines = await chatLines(staffId);
       await chatMarkRead(staffId);
+      seen = await chatSeen({ staffId }, roster).catch(() => ({}));
       const who = roster.find((r) => r.id === staffId);
       canWrite = !owner || (who && who.active);
       const other = !owner ? 'June' : nameOf(roster, staffId);
       lineHtml = (m) => { const j = chatLineJson(m);
-        return `<div class="tc-line${j.mine ? ' me' : ''}">${escEmail(j.body)}<span class="tc-when">${escEmail(j.when)}</span></div>`; };
+        return `<div class="tc-line${j.mine ? ' me' : ''}">${escEmail(j.body)}<span class="tc-when">${escEmail(j.when)}</span>${j.mine ? seenSpan(seen, j.id) : ''}</div>`; };
       intro = `Just you and ${escEmail(other)}. Customers never see this.`;
       placeholder = `Message ${other}`;
       hidden = `<input type="hidden" name="staff" value="${staffId}">`;
@@ -29949,6 +30081,10 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
             fetch('/admin/api/team-chat?' + q + '&after=' + encodeURIComponent(log.getAttribute('data-after')),
                   { credentials: 'same-origin', cache: 'no-store' })
               .then(function(r){ return r.ok ? r.json() : null; }).then(function(d){
+                if (d && d.seen) Object.keys(d.seen).forEach(function(id){
+                  var s = log.querySelector('[data-seen="' + Number(id) + '"]');
+                  if (s) s.textContent = d.seen[id];
+                });
                 if (!d || !d.lines || !d.lines.length) return;
                 var e = log.querySelector('[data-tcempty]'); if (e) e.remove();
                 var atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
@@ -29957,6 +30093,8 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
                   if (m.who) { var b = document.createElement('b'); b.className = 'tc-who'; b.textContent = m.who; el.appendChild(b); }
                   el.appendChild(document.createTextNode(m.body));
                   var w = document.createElement('span'); w.className = 'tc-when'; w.textContent = m.when; el.appendChild(w);
+                  if (m.mine) { var s = document.createElement('span'); s.className = 'tc-seen'; s.setAttribute('data-seen', String(Number(m.id)));
+                    s.textContent = (d.seen && d.seen[m.id]) || 'Not seen yet'; el.appendChild(s); }
                   log.appendChild(el); log.setAttribute('data-after', String(m.id));
                 });
                 if (atEnd) log.scrollTop = log.scrollHeight;
@@ -30065,13 +30203,15 @@ app.get('/admin/api/team-chat', requireAdmin, async (req, res) => {
       if (!ch) return res.status(404).json({ lines: [] });
       const lines = await channelLines(ch.id, after);
       if (lines.length) await channelMarkRead(ch.id, Number(lines[lines.length - 1].id));
-      return res.json({ lines: lines.map((m) => channelLineJson(m, roster)) });
+      const seen = await chatSeen({ channelId: ch.id }, roster).catch(() => ({}));
+      return res.json({ lines: lines.map((m) => channelLineJson(m, roster)), seen });
     }
     const staffId = chatThreadFor(req.query.staff, roster);
     if (!staffId) return res.status(404).json({ lines: [] });
     const lines = await chatLines(staffId, after);
     if (lines.length) await chatMarkRead(staffId);
-    res.json({ lines: lines.map(chatLineJson) });
+    const seen = await chatSeen({ staffId }, roster).catch(() => ({}));
+    res.json({ lines: lines.map(chatLineJson), seen });
   } catch (err) {
     console.error('team chat poll failed:', err.message);
     res.status(500).json({ lines: [] });
@@ -33234,7 +33374,7 @@ const PAY_GUIDE_BODY_10PCT = `Everything you do for June's Tees happens here, an
 `**A week, added up**\n` +
 `You work 30 hours at $15 = $450. A customer you found pays a $1,082.50 job in full; 14 days later, 10% of $1,000 = $100 is payable. You also closed a $600 shop-lead job: wage only. That payday: $450 + $100 = **$550**.\n\n` +
 `Something looks wrong? Ask in **Team chat** with the quote number. The owner can see exactly how every figure was worked out.`;
-const PAY_GUIDE_BODY = `Everything you do for June's Tees happens here, and everything you earn shows on **My earnings**. This guide explains both.\n\n` +
+const PAY_GUIDE_BODY_EASYPAY = `Everything you do for June's Tees happens here, and everything you earn shows on **My earnings**. This guide explains both.\n\n` +
 `## The platform\n\n` +
 `You sign in with your own email (through Cloudflare). Never share your sign-in; everything you do is recorded under your name.\n\n` +
 `**The menu**\n` +
@@ -33305,10 +33445,25 @@ const PAY_GUIDE_BODY = `Everything you do for June's Tees happens here, and ever
   cos.body = old.replace('[How the designer signs in to COS, owner to fill in]', '[How you sign in to COS, owner to fill in]');
   cos.was = [...(cos.was || []), old];
 }
+/* Owner, 2026-10-13: helpers clock in on the platform (the timeclock), keep
+   TimeProof running alongside it, and are paid by Wise. The menu gained
+   Schedule and My hours. The earlier text stays in `was`. */
+const PAY_GUIDE_BODY = PAY_GUIDE_BODY_EASYPAY
+  .replace("- **Design jobs** (designers): the jobs assigned to you, proofs and final art\n",
+    "- **Design jobs** (designers): the jobs assigned to you, proofs and final art\n" +
+    "- **Schedule**: every job in production, with its dates, files and messages. No prices\n" +
+    "- **My hours**: clock in and out, and see your week\n")
+  .replace("- Track your time in TimeProof. Each week the owner enters your hours from TimeProof\n",
+    "- **Clock in** when you start (the clock button at the top of the menu, or **My hours**) and **clock out** when you stop, with a short note of what you worked on\n" +
+    "- Keep **TimeProof** running at the same time: press Start when you clock in and Stop when you clock out\n" +
+    "- 30 minutes with nothing happening on the site shows to the owner as a gap. The page asks at 25 minutes if you are still there. Working away from the screen (Photoshop, a call)? Say so in your clock-out note\n" +
+    "- Each week the owner checks your clock hours against TimeProof and approves them. Approved hours are the hours you are paid\n")
+  .replace("together through EasyPay, then records it here.", "together by **Wise**, then records it here. Wise sends it to your bank or Wise account in your own currency; set up a free Wise account and send the owner the email or details it asks for.");
+// tests/sales-credit.test.js checks every line replaced above is in the old text.
 KB_ADDED.push({ kind: 'sop', title: PAY_GUIDE_TITLE,
-  tags: 'pay, wage, hourly, hours, commission, earnings, my earnings, how pay works, payday, timeproof, own lead, shop lead, reorder, platform, menu, getting started, rules',
+  tags: 'pay, wage, hourly, hours, commission, earnings, my earnings, how pay works, payday, timeproof, clock in, clock out, timeclock, my hours, wise, own lead, shop lead, reorder, platform, menu, getting started, rules',
   body: PAY_GUIDE_BODY,
-  was: [PAY_GUIDE_BODY_10PCT], });
+  was: [PAY_GUIDE_BODY_10PCT, PAY_GUIDE_BODY_EASYPAY], });
 
 /* Every course lesson (tools/lib/courses), added once by title like the rest,
    so the owner's edits are kept. */

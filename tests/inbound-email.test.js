@@ -69,7 +69,11 @@ test('a reply is kept once and its files are owner-or-quotes-view only', () => {
   assert.match(src, /ON CONFLICT \(inbound_id\) WHERE inbound_id IS NOT NULL DO NOTHING/);
   assert.match(src, /CREATE UNIQUE INDEX IF NOT EXISTS client_emails_inbound_once\s+ON client_emails \(inbound_id\) WHERE inbound_id IS NOT NULL/);
   assert.strictEqual(STAFF.ROUTES['GET /admin/production/:code/reply-file/:id/:n'], 'quotes.view');
-  const i = src.indexOf("app.get('/admin/production/:code/reply-file/:id/:n', requireAdmin");
+  assert.deepStrictEqual(STAFF.ROUTES['GET /admin/design/:code/reply-file/:id/:n'], ['jobs.design', 'jobs.schedule']);
+  assert.match(src, /app\.get\('\/admin\/production\/:code\/reply-file\/:id\/:n', requireAdmin, replyFile\('production'\)\)/);
+  const i = src.indexOf('const replyFile = (kind) =>');
   assert.ok(i > 0);
-  assert.match(src.slice(i, i + 1500), /AND quote_code = \$2 AND status = 'received'/);
+  const fn = src.slice(i, i + 1500);
+  assert.match(fn, /AND quote_code = \$2 AND status = 'received'/);
+  assert.match(fn, /messageFileAllowed\(kind, code\)/, 'the design path checks the job is open to them');
 });
