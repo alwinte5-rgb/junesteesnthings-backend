@@ -37,7 +37,9 @@ const PERMISSIONS = {
   'quotes.send':           { group: 'Quotes',     label: 'Send quotes to customers', levels: ['approval', 'on'],
                              limit: { key: 'maxTotal', label: 'Up to $', unit: '$' } },
   'quotes.discount':       { group: 'Quotes',     label: 'Discounts and prices below list', levels: ['off', 'approval', 'on'],
-                             limit: { key: 'maxPct', label: 'Up to %', unit: '%' } },
+                             limit: { key: 'maxPct', label: 'Up to %', unit: '%' },
+                             /* Owner, 2026-10-13: a Closer's 5% is only on 48 pieces or more. */
+                             limit2: { key: 'minQty', label: 'Only from pieces', unit: 'pcs' } },
   'quotes.manage':         { group: 'Quotes',     label: 'Cancel and restore quotes', levels: ['off', 'on'] },
   /* Full price access (owner, 2026-10-08: "no price changes only me unless I
      grant full access to the helper"). Without it a helper cannot type an each
@@ -432,6 +434,12 @@ function permForRoute(method, routePath) {
 
 /** A stored permission value → { level, ...limits }. Anything unrecognised is
  *  'off', so a typo in the database can only ever take access away. */
+/** A permission's limits, as [{ key, label, unit, field }]; `field` is the
+ *  form input's prefix (limit_, limit2_). */
+function limitsOf(def) {
+  return [[def.limit, 'limit_'], [def.limit2, 'limit2_']].filter(([l]) => l).map(([l, field]) => ({ ...l, field }));
+}
+
 function normalizePerm(key, raw) {
   const def = PERMISSIONS[key];
   if (!def) return { level: 'off' };
@@ -440,9 +448,9 @@ function normalizePerm(key, raw) {
   if (typeof raw === 'string') level = raw;
   else if (raw && typeof raw === 'object') {
     level = String(raw.level || 'off');
-    if (def.limit) {
-      const n = Number(raw[def.limit.key]);
-      if (Number.isFinite(n) && n >= 0) out[def.limit.key] = n;
+    for (const lim of limitsOf(def)) {
+      const n = Number(raw[lim.key]);
+      if (Number.isFinite(n) && n >= 0) out[lim.key] = n;
     }
   }
   if (!LEVELS.includes(level)) level = 'off';
@@ -498,7 +506,7 @@ function mayUseRoute(actor, method, routePath) {
    `quote` is the saved row's money: total, and the list price the lines were
    discounted from. Returns { held: bool, reasons: [..] } — every reason, so the
    helper is told all of them at once. */
-function quoteNeedsApproval(actor, { total, listTotal, discountPct, customPriced = 0, forStaff = false } = {}) {
+function quoteNeedsApproval(actor, { total, listTotal, discountPct, customPriced = 0, forStaff = false, pieces = null } = {}) {
   if (!actor || actor.kind === 'owner') return { held: false, reasons: [] };
   const reasons = [];
   /* A quote whose email or phone is a staff member's: a helper selling to
@@ -515,8 +523,14 @@ function quoteNeedsApproval(actor, { total, listTotal, discountPct, customPriced
     const disc = normalizePerm('quotes.discount', actor.perms && actor.perms['quotes.discount']);
     if (disc.level === 'off') reasons.push('Discounts and below-list prices need the owner.');
     else if (disc.level === 'approval') reasons.push('Discounts and below-list prices go to the owner first.');
-    else if (disc.maxPct != null && pct > disc.maxPct + 0.01) {
-      reasons.push(`The discount (${Math.round(pct)}%) is over your ${disc.maxPct}% limit.`);
+    else {
+      if (disc.maxPct != null && pct > disc.maxPct + 0.01) {
+        reasons.push(`The discount (${Math.round(pct)}%) is over your ${disc.maxPct}% limit.`);
+      }
+      // Unknown piece count is treated as too few: the owner sees it.
+      if (disc.minQty != null && !(Number(pieces) >= disc.minQty)) {
+        reasons.push(`Your discounts are only for ${disc.minQty} pieces or more; this quote has ${Number(pieces) || 0}.`);
+      }
     }
   }
   /* A line with no product and a typed price has no catalogue price, so how
@@ -622,9 +636,9 @@ function permsFromForm(body) {
   for (const [key, def] of Object.entries(PERMISSIONS)) {
     const level = String(b['perm_' + key] || 'off');
     const v = { level };
-    if (def.limit) {
-      const raw = String(b['limit_' + key] ?? '').trim();
-      if (raw !== '') v[def.limit.key] = Number(raw);
+    for (const lim of limitsOf(def)) {
+      const raw = String(b[lim.field + key] ?? '').trim();
+      if (raw !== '') v[lim.key] = Number(raw);
     }
     out[key] = normalizePerm(key, v);
   }
@@ -644,7 +658,7 @@ function presetMatching(perms) {
 
 const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,190}\.[a-z]{2,}$/i;
 
-module.exports = { presetForTrack,
+module.exports = { limitsOf, presetForTrack,
   LEVELS, PERMISSIONS, PRESETS, ROUTES, NEVER_STAFF, STAFF_SESSION_HOURS, MIN_PASSWORD, EMAIL_RE,
   routeKey, permForRoute, normalizePerm, presetPerms, effectivePerms, levelOf, mayUseRoute,
   quoteNeedsApproval, discountCodeCap, hashPassword, verifyPassword, generatePassword,

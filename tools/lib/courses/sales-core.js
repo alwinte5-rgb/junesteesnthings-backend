@@ -753,7 +753,7 @@ On the quote form, a blue **Upsell ideas** box appears when the system spots a b
           answer: 1, article: A.upsell, why: 'A pack can be cheaper per head than singles.' },
         { id: 'never', q: 'Which is NEVER OK when upselling?',
           choices: ['Offering it as an optional item', 'Mentioning it in a follow-up', 'Promising a discount to close it', 'Connecting it to their event'],
-          answer: 2, article: A.upsell, why: 'Discounts are June\'s, including to close an upsell.' },
+          answer: 2, article: A.upsell, why: 'Discounts are June\'s, including to close an upsell (a Closer\'s small 5% allowance is never a way to close one).' },
       ],
     },
     buffer: 5,

@@ -44,7 +44,7 @@ module.exports = {
     'schools, churches, family reunions and small businesses within 25 miles of the shop.',
   // Sales roles (owner, 2026-10-13: chose these from the suggestions)
   '[owner to fill in: which discounts or price matches a Closer may offer without asking, if any]':
-    'up to 5% off on orders of 48 pieces or more, once June has given you discounts on Staff (your limit there is 5%). Anything else, every order under 48 pieces and every price match, goes to June first.',
+    'up to 5% off on orders of 48 pieces or more, once June has given you discounts on Staff (set to up to 5%, only from 48 pieces). The quote form holds anything else for June, and every price match goes to June first.',
   '[owner to fill in: Sales Closer targets for reply time, conversion and average order value]':
     'reply to every quote request within 1 business hour, 30% of the quotes you send become orders, and a $350 average order. My stats shows all three.',
   '[owner to fill in: Account Manager targets for reorders a month, repeat revenue and reviews]':
