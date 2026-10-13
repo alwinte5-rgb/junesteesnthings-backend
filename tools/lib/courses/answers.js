@@ -42,6 +42,17 @@ module.exports = {
     '10 prospects registered and 10 first messages sent a day.',
   '[owner to fill in: which customer types and which neighborhoods or suburbs to prospect first]':
     'schools, churches, family reunions and small businesses within 25 miles of the shop.',
+  // Sales roles (owner, 2026-10-13: chose these from the suggestions)
+  '[owner to fill in: which discounts or price matches a Closer may offer without asking, if any]':
+    'up to 5% off on orders of 48 pieces or more, once June has given you discounts on Staff (your limit there is 5%). Anything else, every order under 48 pieces and every price match, goes to June first.',
+  '[owner to fill in: Sales Closer targets for reply time, conversion and average order value]':
+    'reply to every quote request within 1 business hour, 30% of the quotes you send become orders, and a $350 average order. My stats shows all three.',
+  '[owner to fill in: Account Manager targets for reorders a month, repeat revenue and reviews]':
+    '4 reorders a month, 25% of the shop\'s revenue from repeat customers, and 4 new reviews a month (every review answered within a day).',
+  '[owner to fill in: the reorder timing for each customer type]':
+    'schools and teams 6 weeks before each season; churches and nonprofits 3 weeks before each event, and once a year; businesses every 90 days; family reunions and events 10 months after their order, ready for next year.',
+  '[owner to fill in: how a quote request passes to a Closer, and whether the sale stays credited to you]':
+    'post the lead\'s link in # Sales and tag the Closer, with the five details already on the lead. The Closer builds and sends the quote. A lead you registered stays credited to you, whoever builds the quote; the Closer is paid their wage for closing it.',
 
   // Ads
   '[owner to fill in: the cost per quote request we aim for]':
