@@ -348,6 +348,18 @@ function quizSeconds(secret, token, quizKey, staffId, now = Date.now()) {
   return secs < 0 ? null : Math.min(secs, QUIZ_SECONDS_MAX);
 }
 
+/** One check of a quiz form's token: { orders, seconds } (seconds null when
+ *  the page predates timing), or null when it does not check out. */
+function readQuizToken(secret, token, quizKey, staffId, now = Date.now()) {
+  const d = readOrderToken(secret, token, quizKey, staffId);
+  if (!d) return null;
+  const secs = Number.isInteger(d.t) ? Math.floor(Number(now) / 1000) - d.t : null;
+  return { orders: d.o, seconds: secs == null || secs < 0 ? null : Math.min(secs, QUIZ_SECONDS_MAX) };
+}
+
+/** When quiz tries started being timed, for the owner's note on older tries. */
+const QUIZ_TIMING_SINCE = '2026-10-13';
+
 function readOrderToken(secret, token, quizKey, staffId) {
   const t = String(token || '');
   if (t.length > 8000) return null;
@@ -447,8 +459,8 @@ function timeSpent(steps, times = new Map(), events = [], tz = 'America/Chicago'
     if (q.seconds == null || !quizMins.has(q.quiz_key)) continue;
     const raw = Math.max(0, Math.round(Number(q.seconds) / 60));
     const exp = quizMins.get(q.quiz_key);
-    const z = quizzes.get(q.quiz_key) || { quiz: q.quiz_key, tries: 0, raw: 0, capped: 0, expected: exp };
-    z.tries += 1; z.raw += raw; z.capped += exp ? Math.min(raw, exp * TIME_CAP) : raw;
+    const z = quizzes.get(q.quiz_key) || { quiz: q.quiz_key, tries: 0, raw: 0, capped: 0, expected: 0 };
+    z.tries += 1; z.raw += raw; z.capped += exp ? Math.min(raw, exp * TIME_CAP) : raw; z.expected += exp;
     quizzes.set(q.quiz_key, z);
   }
   const qsum = (k) => [...quizzes.values()].reduce((n, z) => n + z[k], 0);
@@ -540,7 +552,7 @@ function fillGap(text, token, answer, nth) {
   return parts.slice(0, nth + 1).join(token) + a + parts.slice(nth + 1).join(token);
 }
 
-module.exports = { FEATURES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, signOrder, readOrder, quizSeconds, picksFromPositions, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
+module.exports = { FEATURES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, signOrder, readOrder, quizSeconds, readQuizToken, QUIZ_TIMING_SINCE, picksFromPositions, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
   visibleSteps, stepByKey, mayTick, progress, stepOpen, placeholders, ownerGaps, fillGap, dayCount, passMark, courseSteps, lessonPages,
   COURSES: COURSES.COURSES, SALES_ROLES: COURSES.SALES_ROLES, salesRoleOf: COURSES.salesRoleOf,
   lessonArticles: COURSES.lessonArticles, glossary: COURSES.glossary };

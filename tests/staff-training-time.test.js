@@ -46,7 +46,7 @@ test('a token from before timing, or from the future, has no seconds; a day is t
 test('quiz time is capped at 3x its expected minutes per try; untimed tries are skipped', () => {
   const t = TRAINING.timeSpent(steps, new Map(), [], undefined, [
     { quiz_key: 'x', seconds: 480 }, { quiz_key: 'x', seconds: 7200 }, { quiz_key: 'x', seconds: null }, { quiz_key: 'nope', seconds: 60 }]);
-  assert.deepStrictEqual(t.quizzes, [{ quiz: 'x', tries: 2, raw: 8 + 120, capped: 8 + 30, expected: 10 }]);
+  assert.deepStrictEqual(t.quizzes, [{ quiz: 'x', tries: 2, raw: 8 + 120, capped: 8 + 30, expected: 20 }]);
   assert.strictEqual(t.quizMinutes, 38);
 });
 
@@ -58,9 +58,19 @@ test('what is still to do lists every unfinished step but buffers, with expected
 
 test('the Staff card shows training; the quiz save stores the seconds', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  assert.match(src, /\$\{staffTrainingBlock\(s, training\.get\(s\.id\)\)\}/);
+  assert.match(src, /\$\{s\.active \? staffTrainingBlock\(s, training\.get\(s\.id\)\) : ''\}/);
   assert.match(src, /ADD COLUMN IF NOT EXISTS seconds INTEGER/);
-  assert.match(src, /TRAINING\.quizSeconds\(FORM_TOKEN_KEY, \(req\.body \|\| \{\}\)\._ord, key, actor\.id\)/);
+  assert.match(src, /TRAINING\.readQuizToken\(FORM_TOKEN_KEY, \(req\.body \|\| \{\}\)\._ord, key, actor\.id\)/);
+  assert.match(src, /quiz_hash, seconds\)[\s\S]{0,200}TRAINING\.quizHash\(key\), seconds\]/);
   // A summary that fails to load shows on that card, never breaks the Staff page.
   assert.match(src, /staffTrainingSummary\(s\.id\)\s*\n?\s*\.then\(\(t\) => \[s\.id, t\]\)\.catch/);
+});
+
+test('readQuizToken reads the order and the seconds in one check', () => {
+  const now = Date.parse('2026-10-13T15:00:00Z');
+  const tok = TRAINING.signOrder('k', 'design-2', 5, orderFor('design-2'), now - 90000);
+  const r = TRAINING.readQuizToken('k', tok, 'design-2', 5, now);
+  assert.strictEqual(r.seconds, 90);
+  assert.deepStrictEqual(r.orders, TRAINING.readOrder('k', tok, 'design-2', 5));
+  assert.strictEqual(TRAINING.readQuizToken('k', tok, 'design-2', 7, now), null);
 });
