@@ -29,6 +29,20 @@ module.exports = {
   '[owner to fill in: how the designer signs in to COS Creator Studio]':
     'June invites your email to the June\'s Tees brand in COS Creator Studio. Sign in with your own account, never hers.',
 
+  // Sales (owner, 2026-10-13: approved as suggested)
+  '[standard turnaround, owner to fill in]':
+    'about 10',
+  '[owner to fill in: which password manager, and which tools sales uses]':
+    'We use Bitwarden (free), with a shared June\'s Tees vault; June invites you. The tools you need are on the Resources page.',
+  '[owner to fill in: minimum size and quantity, colour limits, which garments each one works on]':
+    'puff print from 12 pieces, 1 color, art at least 2in tall, on cotton and cotton-blend tees, hoodies and caps; vinyl from 1 piece, up to 3 colors, on cotton, poly and blends but never nylon or rain jackets; patches from 25 pieces, 2in to 4in, up to 9 thread colors, on hats, jackets, bags and heavier tops',
+  '[owner to fill in: new prospects per quiet hour, and first messages per day]':
+    'Targets: 10 new prospects registered and 10 first messages sent a day.',
+  '[owner to fill in: prospects registered per day, and first messages sent per day, for Lead Generation]':
+    '10 prospects registered and 10 first messages sent a day.',
+  '[owner to fill in: which customer types and which neighborhoods or suburbs to prospect first]':
+    'schools, churches, family reunions and small businesses within 25 miles of the shop.',
+
   // Ads
   '[owner to fill in: the cost per quote request we aim for]':
     'under $15 to start.',
