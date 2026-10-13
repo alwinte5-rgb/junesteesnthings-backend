@@ -44,10 +44,11 @@ test('every quiz question names an article that really exists, by its exact titl
 test('a step waiting for a later feature stays hidden until it ships', () => {
   const now = TRAINING.visibleSteps(new Set());
   assert.ok(!now.some((s) => s.needs), 'nothing asks for work the workspace cannot do yet');
-  const later = TRAINING.visibleSteps(new Set(['eod', 'proofs']));
-  assert.ok(later.some((s) => s.key === 'do:eod'));
+  assert.ok(!TRAINING.visibleSteps(new Set(), 'design').some((s) => s.key === 'do:proof'), 'hidden until proofs ship');
   assert.ok(TRAINING.visibleSteps(new Set(['proofs']), 'design').some((s) => s.key === 'do:proof'), 'the proof step is the designer\'s');
-  assert.ok(!TRAINING.mayTick('do:eod', true, new Set()), 'a hidden step cannot be ticked');
+  assert.ok(!TRAINING.mayTick('do:proof', true, new Set(), 'design'), 'a hidden step cannot be ticked');
+  /* The end-of-day note is a Team chat post (2026-10-13), not a hidden step. */
+  for (const track of ['sales', 'design']) assert.ok(!TRAINING.visibleSteps(new Set(['eod', 'proofs']), track).some((s) => s.key === 'do:eod'));
 });
 
 test('work steps tick themselves from real work, never from a stored tick', () => {

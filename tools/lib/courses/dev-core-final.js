@@ -10,7 +10,7 @@ const f = (id, q, choices, answer, article, why) => ({ id, q, choices, answer, a
 
 module.exports = (A) => [
   // Team basics
-  f('f1', 'You are deploying a fix to the quote form. Where do you say so?',
+  f('f1', 'A fix to the quote form is going live today. Where do you say so?',
     ['Nowhere', 'Your team channel, so sales knows', 'A customer email', 'Your own social media'], 1, TEAM.chat,
     'Things more than one person needs go in a channel.'),
   f('f2', 'You said the feature would ship today; it will be tomorrow. You…',
@@ -34,8 +34,8 @@ module.exports = (A) => [
     'Database changes ship with the code and are safe to run every start.'),
   f('f8', 'Which runs on MySQL?',
     ['The backend', 'The design studio', 'Cloudflare', 'Brevo'], 1, A.stack, 'The PHP design studio.'),
-  f('f9', 'Your pull request is merged. What happens next?',
-    ['Nothing until you deploy by hand', 'Railway deploys main automatically; you watch it', 'It waits for June', 'It goes to the App Store'], 1, A.ship,
+  f('f9', 'June merges your pull request. What happens next?',
+    ['Nothing until you deploy by hand', 'Railway deploys main automatically; June watches it, then you check the page', 'It waits a week', 'It goes to the App Store'], 1, A.ship,
     'Merging is deploying.'),
   f('f10', 'radar-gate fails on your pull request. You…',
     ['Merge anyway', 'Read its comment and fix what it reports', 'Close the pull request', 'Push to main'], 1, A.ship,
@@ -46,7 +46,7 @@ module.exports = (A) => [
 
   // Incidents
   f('f12', 'The quote form fails since 10:05. The last deploy was 10:02. You…',
-    ['Debug on live for an hour', 'Tell June, then roll back the 10:02 deploy, then fix on a branch', 'Wait for customers to complain', 'Delete the form'], 1, A.incident,
+    ['Debug on live for an hour', 'Tell June the 10:02 deploy is the likely cause so she rolls it back, then fix on a branch', 'Wait for customers to complain', 'Delete the form'], 1, A.incident,
     'Roll back first.'),
   f('f13', 'Nothing was deployed, but emails stopped going out today. Most likely…',
     ['Code changed by itself', 'Something on the other side: Brevo, a key, an account setting', 'The CSS', 'Nothing'], 1, A.incident,

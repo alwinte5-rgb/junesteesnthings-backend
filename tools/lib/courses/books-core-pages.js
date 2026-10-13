@@ -56,7 +56,7 @@ module.exports = {
       q('Estimated job cost lines are…', ['Marked as estimated', 'Hidden'], 0, 'A starting point.'),
     ] },
     { from: 'Making them real', checks: [
-      q('You find a job by its…', ['Quote code', 'Customer phone'], 0, 'Then open its costs on the job page.'),
+      q('You find a job by its…', ['Quote code', 'Customer phone'], 0, 'Then list its real costs for June to enter.'),
       q('A substitute shirt on the invoice is…', ['Noted', 'Ignored'], 0, 'Note anything unusual.'),
     ] },
     { from: 'Reading the result', checks: [
@@ -137,7 +137,7 @@ module.exports = {
   'b6-recon': [
     { from: null, checks: [
       q('You start a bank reconciliation from…', ['Last month\'s reconciled closing balance', 'Zero'], 0, 'Then tick off every item.'),
-      q('An item on the statement but not in the books is…', ['Recorded, with a receipt if a cost', 'Ignored'], 0, 'Record it.'),
+      q('An item on the statement but not in the books is…', ['Listed for June to enter, with a receipt if a cost', 'Ignored'], 0, 'List it for June.'),
     ] },
     { from: 'Stripe to the bank', checks: [
       q('Each Stripe deposit matches…', ['One payout', 'One order'], 0, 'Payouts bundle payments.'),

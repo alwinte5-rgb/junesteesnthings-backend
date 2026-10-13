@@ -59,7 +59,7 @@ If you had to ask and the answer is not in the Playbook, say so. June may add it
 **Start and end of your day**
 
 - **Start:** open My Day and Team chat. Read anything new before you start your own work
-- **End:** write a short note in your channel: what you finished, what is waiting and on whom, and what you will do first next time. Someone else may need to pick it up before you are back`,
+- **End:** post your end-of-day note in Team chat, in your channel where June sees it: what you finished, what is waiting and on whom, and what you will do first next time. Someone else may need to pick it up before you are back`,
     pages: [
       { from: null, checks: [
         q('You want to tell the team the banner files are ready. Where?', ['Direct with June', 'Your team channel', 'An email to everyone'], 1, 'Things more than one person needs go in a channel.'),

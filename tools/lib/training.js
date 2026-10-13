@@ -253,7 +253,7 @@ const PAGE_TIPS = {
   shipping: 'Labels and tracking for orders going out. Double-check the address before buying a label; a label cannot be moved.',
   delivery: 'Local deliveries by day and window. Mark each one Out when it leaves and Delivered when it is handed over; moving one tells the customer.',
   customers: 'Everyone who has ordered or asked. Search by name, email or phone to see their whole history before you reply.',
-  reviews: 'Customer reviews waiting to go on the site. Approve real ones; anything rude or about an order problem goes to the owner first.',
+  reviews: 'New customer reviews. Approve real ones to show on the site; anything rude or about an order problem goes to June first. Draft a reply to each within two days: June approves replies before they go live.',
   certificates: 'Tax-exempt certificates. Check the name, the number and the date, leave a note, and let the owner approve or refuse.',
   discounts: 'Discount codes. Never offer one to win or keep a sale without the owner.',
   chat: 'Channels are for the whole team or your part of it; June sees them all. Direct with June is just the two of you. Ask whenever you are unsure; it is faster than guessing.',
