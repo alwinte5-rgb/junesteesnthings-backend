@@ -73,3 +73,17 @@ test('routes: channels chosen by the server, the owner manages them, alerts are 
   assert.match(sweep, /if \(off\.has\(reader\)\) continue;/);
   assert.match(src, /setInterval\(\(\) => step\('chat alerts', sendChatAlerts\)/);
 });
+
+/* Owner, 2026-10-13: read receipts on team chat, with the time seen. */
+test('read receipts: a time per channel reader, only on your own messages, escaped', () => {
+  assert.match(src, /CREATE TABLE IF NOT EXISTS team_channel_seen \(\s+message_id\s+BIGINT NOT NULL,\s+reader\s+TEXT NOT NULL,\s+seen_at\s+TIMESTAMPTZ NOT NULL DEFAULT NOW\(\),\s+PRIMARY KEY \(message_id, reader\)/);
+  const mark = src.slice(src.indexOf('async function channelMarkRead('), src.indexOf('async function chatSeen('));
+  assert.ok(mark.indexOf('INSERT INTO team_channel_seen') < mark.indexOf('INSERT INTO team_chat_reads'),
+    'times are written before the read mark moves, or nothing is new');
+  assert.match(mark, /m\.staff_id IS DISTINCT FROM \$5/, 'your own message is not "seen" by you');
+  const seen = src.slice(src.indexOf('async function chatSeen('), src.indexOf('const seenSpan'));
+  assert.match(seen, /staff_id IS NOT DISTINCT FROM \$2/, 'receipts only on the asker\'s own channel messages');
+  assert.match(seen, /from_owner = \$2/, 'and own direct messages');
+  assert.match(src, /const seenSpan = \(seen, id\) => seen\[id\] \? `<span class="tc-seen" data-seen="\$\{Number\(id\)\}">\$\{escEmail\(seen\[id\]\)\}<\/span>`/);
+  assert.match(src, /s\.textContent = \(d\.seen && d\.seen\[m\.id\]\) \|\| 'Not seen yet'/, 'the poll writes text, never HTML');
+});

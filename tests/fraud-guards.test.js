@@ -253,7 +253,7 @@ test('the designer\'s job page carries no money and no contact details', () => {
   assert.match(page, /designJobFor\(code, currentActor\(\)\)/, 'only a job that is with them');
   assert.doesNotMatch(page, /money\(|q\.email|q\.phone|jobCreditCard|jobHistoryCard|costs/);
   assert.match(page, /firstNameOf\(q\.name\)/);
-  assert.match(page, /jobMessagesCard\(q, req\.query, \{ design: true \}\)/);
+  assert.match(page, /jobMessagesCard\(q, req\.query, \{ design: true, readOnly: actorLevel\('customers\.message'\) === 'off' \}\)/);
   assert.doesNotMatch(fn('function designSpecCard('), /money\(|unit_price|line_total|addons/);
   const job = fn('async function designJobFor(');
   assert.match(job, /a\.assigned_to IS NULL OR a\.assigned_to = \$2/);

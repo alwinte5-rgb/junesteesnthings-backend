@@ -169,7 +169,7 @@ test('labels show wherever a lead or sale is listed', () => {
 test('the pay guide states the rules the code applies', () => {
   const title = src.indexOf("const PAY_GUIDE_TITLE = 'How the platform works and how you are paid';");
   assert.ok(title > 0, 'the guide has its title');
-  const at = src.indexOf('Everything you do for June\'s Tees happens here', src.indexOf('const PAY_GUIDE_BODY = '));
+  const at = src.indexOf('Everything you do for June\'s Tees happens here', src.indexOf('const PAY_GUIDE_BODY_EASYPAY = '));
   const guide = src.slice(at, src.indexOf('The owner can see exactly how every figure was worked out.', at));
   assert.ok(at > 0 && guide.length > 1000, 'and its text');
   assert.strictEqual(TEAM.HOLD_DAYS, 14);
@@ -189,7 +189,25 @@ test('the pay guide states the rules the code applies', () => {
 });
 
 test('a live guide that still says 10% is rewritten to 3%', () => {
-  assert.match(src, /body: PAY_GUIDE_BODY,\n  was: \[PAY_GUIDE_BODY_10PCT\]/);
+  assert.match(src, /body: PAY_GUIDE_BODY,\n  was: \[PAY_GUIDE_BODY_10PCT, PAY_GUIDE_BODY_EASYPAY\]/);
+});
+
+/* Owner, 2026-10-13: clock in on the platform, TimeProof alongside, paid by Wise. */
+test('the pay guide explains the clock, TimeProof and Wise, and no longer EasyPay', () => {
+  const i = src.indexOf('const PAY_GUIDE_BODY = PAY_GUIDE_BODY_EASYPAY');
+  const fix = src.slice(i, src.indexOf("KB_ADDED.push({ kind: 'sop', title: PAY_GUIDE_TITLE", i));
+  assert.match(fix, /\*\*Clock in\*\* when you start/);
+  assert.match(fix, /Keep \*\*TimeProof\*\* running/);
+  assert.match(fix, /by \*\*Wise\*\*/);
+  // Every replaced line is really in the old text, or the guide would silently keep it.
+  const old = src.slice(src.indexOf('const PAY_GUIDE_BODY_EASYPAY = '), src.indexOf('/* The practice quote said'));
+  const unescape = (x) => x.replace(/\\n/g, '\n');
+  const oldText = unescape(old);
+  const searches = [...fix.matchAll(/\.replace\("((?:[^"\\]|\\.)*)",/g)].map((m) => unescape(m[1]));
+  assert.strictEqual(searches.length, 3);
+  for (const x of searches) assert.ok(oldText.includes(x), `in the old guide: ${x}`);
+  assert.doesNotMatch(src.slice(src.indexOf("app.get('/admin/commission'")), /<b>Pay \$\{money\(payNow\)\} through EasyPay/);
+  assert.match(src, /'Paid by Wise'\]\.filter\(Boolean\)/);
 });
 
 test('a found lead\'s social profile: allowed hosts only, https, matched however it is written', () => {
