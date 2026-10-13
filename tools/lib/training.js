@@ -136,7 +136,8 @@ function mayTick(key, byOwner, features = FEATURES, track = DEFAULT_TRACK, role 
  *
  * Buffer rows are time, not work: never counted in done/total, and shown
  * done once their module's gate is passed. Every step after the first
- * module whose gate is not passed is `locked`.
+ * module whose gate is not passed is `locked`, and so is a course's closing
+ * sign-off until its final exam and lessons are done (`waiting` says which).
  */
 function progress(ticks, facts = {}, features = FEATURES, track = DEFAULT_TRACK, role = null, times = new Map()) {
   const raw = visibleSteps(features, track, role).map((s) => {
@@ -154,10 +155,20 @@ function progress(ticks, facts = {}, features = FEATURES, track = DEFAULT_TRACK,
   for (const s of raw) if (s.gate) gateDone.set(s.module, s.done);
   const order = [...new Set(raw.filter((s) => s.module).map((s) => s.module))];
   const openUpTo = order.findIndex((m) => gateDone.has(m) && !gateDone.get(m));
+  /* A course's closing sign-offs (ready starts commission and ends training)
+     share the final module with the final exam, so the module gate never
+     held them. They wait for that exam and for every lesson in the course. */
+  const waitFor = (s) => {
+    if (s.type !== 'signoff' || !s.course || s.module !== `${s.course}:final`) return '';
+    const exam = raw.find((x) => x.module === s.module && x.gate);
+    const lessons = raw.filter((x) => x.course === s.course && x.type === 'lesson' && !x.done).length;
+    return [exam && !exam.done ? 'the final exam' : '', lessons ? `${lessons} lesson${lessons === 1 ? '' : 's'}` : ''].filter(Boolean).join(' and ');
+  };
   const steps = raw.map((s) => {
     if (!s.module) return { ...s, locked: false };
-    const locked = openUpTo !== -1 && order.indexOf(s.module) > openUpTo;
-    return { ...s, locked, done: s.type === 'buffer' ? !!gateDone.get(s.module) : s.done };
+    const waiting = waitFor(s);
+    const locked = (openUpTo !== -1 && order.indexOf(s.module) > openUpTo) || !!waiting;
+    return { ...s, locked, waiting, done: s.type === 'buffer' ? !!gateDone.get(s.module) : s.done };
   });
   const work = steps.filter((s) => s.type !== 'buffer');
   const done = work.filter((s) => s.done).length;

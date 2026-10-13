@@ -25,10 +25,10 @@ test('#204 three bare owner gaps in one article are three questions, each filled
 
 test('#222 the ready sign-off waits for the gate before it', () => {
   const r = after("app.post('/admin/training/signoff'", 4000);
-  assert.ok(r.indexOf('TRAINING.stepOpen(await trainingFor(staffId), key)') > r.indexOf('if (b.undo)'), 'undo is always allowed');
-  assert.ok(r.indexOf('TRAINING.stepOpen(') < r.indexOf('INSERT INTO staff_training (staff_id, step_key, signed_by)'));
+  assert.ok(r.indexOf('if (!open || open.locked)') > r.indexOf('if (b.undo)'), 'undo is always allowed');
+  assert.ok(r.indexOf('if (!open || open.locked)') < r.indexOf('INSERT INTO staff_training (staff_id, step_key, signed_by)'));
   // Undo asks for a tick, keeps the commission window of "ready", and is logged.
-  const undo = r.slice(r.indexOf('if (b.undo)'), r.indexOf('TRAINING.stepOpen('));
+  const undo = r.slice(r.indexOf('if (b.undo)'), r.indexOf('if (!open || open.locked)'));
   assert.match(undo, /if \(String\(b\.confirm \|\| ''\) !== '1'\) return back/);
   assert.match(undo, /if \(key === TRAINING\.READY_KEY && String\(b\.keep_window \|\| ''\) === '1'\)[\s\S]*'signoff:was-ready-until:'/,
     'the window is kept only when the owner leaves "keep commission" ticked');
@@ -36,7 +36,7 @@ test('#222 the ready sign-off waits for the gate before it', () => {
   assert.match(r, /if \(added\) log\('training signed off'\)/);
   assert.match(src, /name="keep_window" value="1" checked/);
   assert.match(src, /<input type="checkbox" name="confirm" value="1" required style="width:auto"> sure<\/label><button type="submit" class="btn btn-ghost">Undo<\/button>/);
-  assert.match(src, /s\.locked \? '<button type="button" class="btn btn-ghost" disabled/);
+  assert.match(src, /s\.locked \? `<button type="button" class="btn btn-ghost" disabled/);
 });
 
 test('#195 trainees see that a lesson is an unchecked draft', () => {
