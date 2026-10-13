@@ -35,7 +35,13 @@ test('the save makes a helper\'s rush 0 unless the order is rushable; the owner\
 });
 
 test('the form suggests rush only when every picked decoration is DTF, and says why not', () => {
-  assert.match(src, /var dtfOnly = picked\.length > 0 && picked\.every\(function \(el\) \{ return \/\\bDTF\\b\/i\.test/);
+  /* The pattern is handed over as a string: a regex literal inside the page
+     template loses its backslashes (\b became a backspace and nothing matched). */
+  assert.match(src, /var rushable = new RegExp\(\$\{JSON\.stringify\(RUSH\.RUSHABLE\.source\)\}, 'i'\);/);
+  assert.match(src, /var dtfOnly = real\.length > 0 && real\.every\(function \(i\) \{\s+return lines\[i\]\.titles\.length > 0 && lines\[i\]\.titles\.every/);
+  // What the browser receives: the JSON-encoded source, rebuilt, still matches DTF and only DTF.
+  const sent = new RegExp(JSON.parse(JSON.stringify(RUSH.RUSHABLE.source)), 'i');
+  assert.ok(sent.test('DTF Transfer') && !sent.test('Screen Printing') && !sent.test('ADTFX'));
   assert.match(src, /var pct = dtfOnly \? rushSuggest\(days\) : 0;/);
   assert.match(src, /only DTF can be rushed: ask June about the date/);
   assert.match(src, /if \(\/\^\(method\|pr_m_\)\/\.test\(n\)\) rushSync\(true\);/);

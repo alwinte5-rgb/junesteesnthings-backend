@@ -26,4 +26,4 @@ function rushAllowed(lines) {
   return real.length > 0 && real.every((l) => (l.titles || []).length > 0 && l.titles.every(methodRushable));
 }
 
-module.exports = { methodRushable, rushAllowed };
+module.exports = { RUSHABLE, methodRushable, rushAllowed };

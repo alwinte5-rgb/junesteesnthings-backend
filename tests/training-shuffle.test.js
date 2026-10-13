@@ -62,5 +62,31 @@ test('the page shows every choice once, in a fresh order, and sends back the sto
   }
   assert.ok(seen.size > 1, 'the order changes between tries');
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  assert.match(src, /x\.order\.map\(\(i\) => `<label[\s\S]{0,200}value="\$\{i\}"[\s\S]{0,120}escEmail\(x\.choices\[i\]\)/);
+
+});
+
+test('radio values are positions on the page; the signed order maps them back, and picking one position everywhere fails', () => {
+  const key = Object.keys(TRAINING.QUIZZES).find((k) => TRAINING.QUIZZES[k].questions.length >= 10);
+  const view = TRAINING.quizForPage(key);
+  const orders = Object.fromEntries(view.questions.map((x) => [x.id, x.order]));
+  const token = TRAINING.signOrder('k', key, 7, orders);
+  assert.deepStrictEqual(TRAINING.readOrder('k', token, key, 7), orders);
+  for (const bad of [TRAINING.readOrder('other', token, key, 7), TRAINING.readOrder('k', token, key, 8),
+    TRAINING.readOrder('k', token, 'team-1' === key ? 'design' : 'team-1', 7), TRAINING.readOrder('k', token.slice(0, -2) + 'xx', key, 7),
+    TRAINING.readOrder('k', '', key, 7), TRAINING.readOrder('k', 'x'.repeat(9000), key, 7)]) assert.strictEqual(bad, null);
+  // Picking the position that shows the right answer passes.
+  const z = TRAINING.QUIZZES[key];
+  const right = Object.fromEntries(z.questions.map((x) => [x.id, String(orders[x.id].indexOf(x.answer))]));
+  assert.strictEqual(TRAINING.gradeQuiz(key, TRAINING.picksFromPositions(orders, right)).passed, true);
+  // The same position everywhere, over many fresh orders, essentially never passes.
+  let passes = 0;
+  for (let n = 0; n < 200; n++) {
+    const o = Object.fromEntries(TRAINING.quizForPage(key).questions.map((x) => [x.id, x.order]));
+    const same = Object.fromEntries(z.questions.map((x) => [x.id, '0']));
+    if (TRAINING.gradeQuiz(key, TRAINING.picksFromPositions(o, same)).passed) passes++;
+  }
+  assert.ok(passes <= 2, `${passes} of 200 passed by always picking the top choice`);
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  assert.match(src, /x\.order\.map\(\(i, pos\) => `<label[\s\S]{0,200}value="\$\{pos\}"/);
+  assert.match(src, /const orders = TRAINING\.readOrder\(FORM_TOKEN_KEY, \(req\.body \|\| \{\}\)\._ord, key, actor\.id\);\n\s+if \(!orders\) return back\(/);
 });

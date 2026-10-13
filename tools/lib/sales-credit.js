@@ -92,7 +92,7 @@ function knownReason(seen, fmt = (d) => new Date(d).toISOString().slice(0, 10)) 
  *   known     knownReason() for the contact, '' if new
  *   heardRep  { id|null, typed } when a website customer names a salesperson
  */
-function classifyLead({ by, staffId = null, foundIt = false, known = '', heardRep = null }) {
+function classifyLead({ by, staffId = null, foundIt = false, known = '', heardRep = null, profileOnly = false }) {
   if (by === 'public') {
     if (heardRep && (heardRep.id || heardRep.typed)) {
       return { sale_type: 'pending', rep_id: heardRep.id || null,
@@ -102,6 +102,9 @@ function classifyLead({ by, staffId = null, foundIt = false, known = '', heardRe
   }
   if (by === 'staff' && foundIt) {
     if (known) return { sale_type: 'shop', rep_id: null, reason: known };
+    /* Known only by a social profile: quotes and orders hold no profile, so
+       the shop's customers cannot be checked. The owner confirms it. */
+    if (profileOnly) return { sale_type: 'pending', rep_id: staffId, reason: 'Found by the salesperson, known only by a social profile; waiting for the owner to check the shop does not already know them' };
     return { sale_type: 'rep', rep_id: staffId, reason: 'Found by the salesperson and registered before anyone else' };
   }
   if (by === 'staff') return { sale_type: 'shop', rep_id: null, reason: 'Contacted the shop' };
@@ -161,19 +164,35 @@ function profileUrlIn(raw, platform = '') {
   return profileKey(v) ? v : null;
 }
 
-/** host/path of an allowed profile link, lower case, for matching; '' if not one. */
+/* The path segments that are a person or a business, per host. Anything
+   else (a post, reel, group, event, share or watch link) is not a profile:
+   two people found through one post must not look like the same person. */
+const NOT_A_PROFILE = new Set(['p', 'reel', 'reels', 'tv', 'stories', 'explore', 'groups', 'events', 'share', 'watch',
+  'photo', 'photos', 'posts', 'video', 'videos', 'hashtag', 'search', 'login', 'marketplace', 'permalink.php', 'story.php',
+  'status', 'i', 'intent', 'home', 'feed', 'jobs', 'shorts', 'results', 'playlist', 'tag', 'discover', 'music', 'pages']);
+
+/** host/handle of an allowed profile link, lower case, for matching; '' if not one. */
 function profileKey(url) {
   let u;
   try { u = new URL(String(url || '')); } catch { return ''; }
   if (u.protocol !== 'https:' || u.username || u.password || u.port) return '';
   const host = u.hostname.toLowerCase().replace(/^(www|m|mobile|web)\./, '');
   if (!PROFILE_HOSTS.includes(host)) return '';
-  let path;
-  try { path = decodeURIComponent(u.pathname).toLowerCase().replace(/\/+$/, ''); } catch { return ''; }
+  let segs;
+  try { segs = decodeURIComponent(u.pathname).toLowerCase().split('/').filter(Boolean); } catch { return ''; }
+  if (!segs.length) return '';
   /* profile.php?id= is the one place Facebook keeps who it is in the query. */
-  const id = host === 'facebook.com' && path === '/profile.php' ? u.searchParams.get('id') : '';
-  if (!path || path === '/' || (path === '/profile.php' && !/^\d+$/.test(id || ''))) return '';
-  return `${host}${path}${id ? `?id=${id}` : ''}`;
+  if (host === 'facebook.com' && segs[0] === 'profile.php') {
+    const id = u.searchParams.get('id') || '';
+    return /^\d+$/.test(id) ? `facebook.com/id:${id}` : '';
+  }
+  /* LinkedIn and YouTube name a person under a prefix: /in/jane, /company/x, /c/x, /channel/x. */
+  if ((host === 'linkedin.com' && ['in', 'company'].includes(segs[0])) || (host === 'youtube.com' && ['c', 'channel', 'user'].includes(segs[0]))) {
+    return segs[1] && /^[a-z0-9._-]{1,100}$/.test(segs[1]) ? `${host}/${segs[0]}/${segs[1]}` : '';
+  }
+  const handle = segs[0].replace(/^@/, '');
+  if (NOT_A_PROFILE.has(segs[0]) || !/^[a-z0-9._-]{1,100}$/.test(handle)) return '';
+  return `${host}/${handle}`;
 }
 
 module.exports = {

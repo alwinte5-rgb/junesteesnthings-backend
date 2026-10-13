@@ -175,9 +175,9 @@ test('the lesson page: a known lesson id only, closed modules stay closed, and o
 
 test('quizzes in a closed module cannot be opened or handed in', () => {
   const get = route("app.get('/admin/training/quiz/:key', requireAdmin");
-  assert.match(get, /if \(!owner && !\(await quizOpenFor\(actor, key\)\)\) return back/);
+  assert.match(get, /if \(!owner\) \{\s+const st = await quizStepFor\(actor, key\);\s+if \(!st \|\| st\.locked\) return back/);
   const post = route("app.post('/admin/training/quiz/:key', requireAdmin");
-  assert.match(post, /if \(!\(await quizOpenFor\(actor, key\)\.catch\(\(\) => false\)\)\) return back/);
+  assert.match(post, /const st = await quizStepFor\(actor, key\)\.catch\(\(\) => null\);\s+if \(!st \|\| st\.locked\) return back/);
   assert.match(post, /quizStep\(key, actor\.track, actor\.role\)/, 'the helper\'s own path, never one from the form');
 });
 
@@ -200,7 +200,7 @@ test('restart: the owner only, a ticked confirmation, one transaction, page tips
 test('prospects are counted from the leads they registered as found', () => {
   const fn = src.slice(src.indexOf('async function trainingFacts('), src.indexOf('\n}\n', src.indexOf('async function trainingFacts(')));
   assert.match(fn, /action IN \('lead registered as theirs', 'found lead was already known'\)\)::int AS prospects/);
-  assert.match(src, /logActivity\(actor, label\.sale_type === 'rep' \? 'lead registered as theirs' : 'found lead was already known'/,
+  assert.match(src, /logActivity\(actor, label\.sale_type === 'shop' \? 'found lead was already known' : 'lead registered as theirs'/,
     'the actions counted are the ones the Add a lead form really logs');
 });
 

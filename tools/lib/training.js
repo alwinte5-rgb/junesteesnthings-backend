@@ -78,7 +78,16 @@ const LEGACY_READY_BEFORE = '2026-10-13T09:00:00Z';
 /** The sign-off that ends training on a path: the last "ready" on it. On a
  *  sales-role path that is the role course's (signoff:closer-ready and so
  *  on); READY_KEY stays the Sales course milestone. */
+const readyKeys = new Map();
 function readyKeyFor(track = DEFAULT_TRACK, role = null) {
+  /* Read on every helper request (the session), and fixed per path. */
+  const memo = `${track}|${role}`;
+  if (readyKeys.has(memo)) return readyKeys.get(memo);
+  const key = readyKeyOfPath(track, role);
+  readyKeys.set(memo, key);
+  return key;
+}
+function readyKeyOfPath(track, role) {
   const keys = visibleSteps(undefined, track, role).filter((s) => s.type === 'signoff' && (s.key === READY_KEY || /^signoff:[a-z]+-ready$/.test(s.key))).map((s) => s.key);
   return keys.length ? keys[keys.length - 1] : READY_KEY;
 }
@@ -174,6 +183,9 @@ function progress(ticks, facts = {}, features = FEATURES, track = DEFAULT_TRACK,
      held them. They wait for that exam and for every lesson in the course.
      A module quiz waits for that module's lessons. */
   const waitFor = (s) => {
+    /* Done is done: a quiz passed or a sign-off given before these rules
+       stays open, never greyed out again. */
+    if (s.done) return '';
     /* A module quiz waits for its own module's lessons. */
     if (s.type === 'quiz' && s.gate && s.course && s.module !== `${s.course}:final`) {
       const n = raw.filter((x) => x.module === s.module && x.type === 'lesson' && !x.done).length;
@@ -305,6 +317,47 @@ function shuffledOrder(n) {
     [order[i], order[j]] = [order[j], order[i]];
   }
   return order;
+}
+
+/* The order each question's choices were shown in travels with the form,
+   signed, and each radio's value is its POSITION on the page, not the
+   choice's stored index. Picking the same position everywhere then gives
+   random answers, and the page source says nothing about which is right
+   (the stored index follows a fixed pattern per quiz, see balanced()).
+   Bound to the helper and the quiz, so a token cannot be reused elsewhere. */
+function signOrder(secret, quizKey, staffId, orders) {
+  const body = Buffer.from(JSON.stringify({ k: String(quizKey), s: Number(staffId), o: orders })).toString('base64url');
+  return `${body}.${require('crypto').createHmac('sha256', String(secret)).update(body).digest('base64url')}`;
+}
+
+/** The orders from a token signOrder made for this helper and quiz, or null
+ *  when it is missing, altered, for someone else, or does not fit the quiz. */
+function readOrder(secret, token, quizKey, staffId) {
+  const t = String(token || '');
+  if (t.length > 8000) return null;
+  const [body, mac] = t.split('.');
+  if (!body || !mac) return null;
+  const want = require('crypto').createHmac('sha256', String(secret)).update(body).digest('base64url');
+  if (mac.length !== want.length || !require('crypto').timingSafeEqual(Buffer.from(mac), Buffer.from(want))) return null;
+  let d;
+  try { d = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')); } catch { return null; }
+  const z = Object.prototype.hasOwnProperty.call(QUIZZES, quizKey) ? QUIZZES[quizKey] : null;
+  if (!z || !d || d.k !== String(quizKey) || d.s !== Number(staffId) || !d.o || typeof d.o !== 'object') return null;
+  for (const x of z.questions) {
+    const o = d.o[x.id];
+    if (!Array.isArray(o) || o.length !== x.choices.length || [...o].sort((a, b) => a - b).some((v, i) => v !== i)) return null;
+  }
+  return d.o;
+}
+
+/** Turns positions picked on the page back into stored choice indexes. */
+function picksFromPositions(orders, body = {}) {
+  const out = {};
+  for (const [id, o] of Object.entries(orders || {})) {
+    const p = Number.parseInt(String(body[id] ?? ''), 10);
+    if (Number.isInteger(p) && p >= 0 && p < o.length) out[id] = String(o[p]);
+  }
+  return out;
 }
 
 /** The quiz as a helper sees it: questions and choices, no answers. Each
@@ -453,7 +506,7 @@ function fillGap(text, token, answer, nth) {
   return parts.slice(0, nth + 1).join(token) + a + parts.slice(nth + 1).join(token);
 }
 
-module.exports = { FEATURES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
+module.exports = { FEATURES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, signOrder, readOrder, picksFromPositions, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
   visibleSteps, stepByKey, mayTick, progress, stepOpen, placeholders, ownerGaps, fillGap, dayCount, passMark, courseSteps, lessonPages,
   COURSES: COURSES.COURSES, SALES_ROLES: COURSES.SALES_ROLES, salesRoleOf: COURSES.salesRoleOf,
   lessonArticles: COURSES.lessonArticles, glossary: COURSES.glossary };
