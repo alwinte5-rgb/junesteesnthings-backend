@@ -1403,6 +1403,22 @@ async function initStaffTables() {
       done_at     TIMESTAMPTZ,
       PRIMARY KEY (staff_id, step_key)
     )`);
+  /* What a helper picked on each question (the owner's answer log), the
+     version of the question set it was marked against, and when a restart
+     put the attempt aside. A restart never deletes an attempt any more. */
+  await pool.query(`ALTER TABLE staff_quiz_attempts ADD COLUMN IF NOT EXISTS answers JSONB`);
+  await pool.query(`ALTER TABLE staff_quiz_attempts ADD COLUMN IF NOT EXISTS quiz_hash TEXT`);
+  await pool.query(`ALTER TABLE staff_quiz_attempts ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE staff_exam_attempts ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`);
+  /* A restart's snapshot of the ticks, sign-offs and lesson times it cleared. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_training_archive (
+      id            SERIAL PRIMARY KEY,
+      staff_id      INTEGER NOT NULL,
+      archived_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      ticks         JSONB NOT NULL DEFAULT '[]',
+      lesson_times  JSONB NOT NULL DEFAULT '[]'
+    )`);
   /* Applicant tests (tools/lib/hiring.js). One row per private link; only the
      link's SHA-256 is kept. Answers, the part-1 marks and the grader's result
      are stored as handed in, so a re-grade never needs the applicant again. */
@@ -29640,11 +29656,11 @@ async function trainingFacts(staffId) {
                 AND action IN ('lead registered as theirs', 'found lead was already known'))::int AS prospects`,
     [staffId]);
   const [{ rows: q }, { rows: [pr] }, { rows: ex }] = await Promise.all([
-    pool.query('SELECT quiz_key, COUNT(*)::int AS n FROM staff_quiz_attempts WHERE staff_id = $1 AND passed GROUP BY quiz_key', [staffId]),
+    pool.query('SELECT quiz_key, COUNT(*)::int AS n FROM staff_quiz_attempts WHERE staff_id = $1 AND passed AND archived_at IS NULL GROUP BY quiz_key', [staffId]),
     pool.query('SELECT COUNT(*)::int AS n FROM job_proofs WHERE uploaded_by = $1', [staffId]),
     /* An exam is passed once enough DIFFERENT scenarios have been built right. */
     pool.query(`SELECT exam_key, COUNT(DISTINCT scenario)::int AS n FROM staff_exam_attempts
-                 WHERE staff_id = $1 AND passed AND scenario = ANY($2) GROUP BY exam_key`, [staffId, QEXAM.SCENARIOS.map((x) => x.id)])]);
+                 WHERE staff_id = $1 AND passed AND archived_at IS NULL AND scenario = ANY($2) GROUP BY exam_key`, [staffId, QEXAM.SCENARIOS.map((x) => x.id)])]);
   return { ...(f || {}), proofs: pr ? pr.n : 0, quizzes: Object.fromEntries(q.map((r) => [r.quiz_key, r.n])),
     exams: Object.fromEntries(ex.map((r) => [r.exam_key, r.n >= QEXAM.passMark() ? 1 : 0])) };
 }
@@ -29652,8 +29668,8 @@ async function trainingFacts(staffId) {
 /** A helper's attempts at one quiz, oldest first. */
 async function quizAttempts(staffId, quizKey) {
   const { rows } = await pool.query(
-    `SELECT score, total, passed, missed, created_at FROM staff_quiz_attempts
-      WHERE staff_id = $1 AND quiz_key = $2 ORDER BY created_at, id`, [staffId, quizKey]);
+    `SELECT id, score, total, passed, missed, created_at FROM staff_quiz_attempts
+      WHERE staff_id = $1 AND quiz_key = $2 AND archived_at IS NULL ORDER BY created_at, id`, [staffId, quizKey]);
   return rows;
 }
 
@@ -29771,13 +29787,19 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
     const { track, role } = p;
     const titles = p.steps.filter((s) => s.article && s.type === 'read').map((s) => s.article);
     const quizSteps = p.steps.filter((s) => s.type === 'quiz');
-    const [notes, arts, gaps, ...tries] = await Promise.all([
+    const [notes, arts, gaps, timeRows, stampRows, ...tries] = await Promise.all([
       coachingNotes(staffId),
       pool.query('SELECT id, title FROM kb_articles WHERE published AND title = ANY($1)', [titles]),
       owner ? playbookGapRows() : Promise.resolve([]),
+      owner ? pool.query('SELECT step_key, started_at, done_at FROM staff_lesson_time WHERE staff_id = $1', [staffId]) : Promise.resolve({ rows: [] }),
+      owner ? pool.query(`SELECT created_at FROM staff_quiz_attempts WHERE staff_id = $1 AND archived_at IS NULL
+                          UNION ALL SELECT created_at FROM staff_exam_attempts WHERE staff_id = $1 AND archived_at IS NULL`, [staffId]) : Promise.resolve({ rows: [] }),
       ...quizSteps.map((s) => quizAttempts(staffId, s.quiz)),
     ]);
     const quizTries = new Map(quizSteps.map((s, i) => [s.key, tries[i]]));
+    /* How long they have spent, for the owner (TRAINING.timeSpent: each
+       lesson capped at 3x its expected time, since a tab left open counts). */
+    const spent = owner ? TRAINING.timeSpent(p.steps, new Map(timeRows.rows.map((t) => [t.step_key, t])), stampRows.rows.map((r) => r.created_at)) : null;
     const articleId = new Map(arts.rows.map((a) => [a.title, a.id]));
     const mins = (n) => (n >= 60 ? `${Math.floor(n / 60)}h${n % 60 ? ` ${n % 60}m` : ''}` : `${n}m`);
     const stepRow = (s) => {
@@ -29799,12 +29821,14 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
         action = `<a class="btn ${s.done || owner ? 'btn-ghost' : ''}" href="/admin/training/exam/${escEmail(s.exam)}${owner ? `?staff=${staffId}` : ''}">${
           owner ? 'See the scenarios' : s.done ? 'Practise again' : 'Start the exam'}</a>`;
       } else if (s.type === 'quiz') {
-        action = owner ? `<a class="btn btn-ghost" href="/admin/training/quiz/${escEmail(s.quiz)}">See the questions</a>`
+        action = owner ? `${(quizTries.get(s.key) || []).length ? `<a class="btn btn-ghost" href="/admin/training/attempts?staff=${staffId}&amp;quiz=${encodeURIComponent(s.quiz)}">${escEmail(who.name)}'s answers</a> ` : ''}<a class="btn btn-ghost" href="/admin/training/quiz/${escEmail(s.quiz)}">Questions</a>`
           : `<a class="btn ${s.done ? 'btn-ghost' : ''}" href="/admin/training/quiz/${escEmail(s.quiz)}">${s.done ? 'Take it again' : 'Take the quiz'}</a>`;
       } else if (s.type === 'signoff' && owner) {
-        action = `<form method="post" action="/admin/training/signoff" style="margin:0">
+        /* The owner's own action, labelled as such. Undo asks for a tick
+           first, like Restart: one stray tap used to clear a sign-off. */
+        action = `<span class="muted" style="font-size:12px">You:</span><form method="post" action="/admin/training/signoff" style="margin:0;display:flex;gap:6px;align-items:center;flex-wrap:wrap" data-once>
           <input type="hidden" name="staff_id" value="${staffId}"><input type="hidden" name="key" value="${escEmail(s.key)}">
-          ${s.done ? '<input type="hidden" name="undo" value="1"><button type="submit" class="btn btn-ghost">Undo</button>'
+          ${s.done ? '<input type="hidden" name="undo" value="1"><label style="display:flex;gap:4px;align-items:center;font-size:12px"><input type="checkbox" name="confirm" value="1" required style="width:auto"> sure</label><button type="submit" class="btn btn-ghost">Undo</button>'
                    : s.locked ? '<button type="button" class="btn btn-ghost" disabled title="Opens once they pass the quiz or exam before it">Not yet</button>'
                    : '<button type="submit" class="btn">Sign off</button>'}</form>`;
       }
@@ -29851,8 +29875,11 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
         owner ? [...(roster.length > 1 ? roster.map((r) => `<a class="btn ${r.id === staffId ? '' : 'btn-ghost'}" href="/admin/training?staff=${r.id}">${escEmail(r.name)}</a>`) : []),
           '<a class="btn btn-ghost" href="/admin/training/paths">Every role\'s training</a>'].join(' ') : '')}
       ${flash(req.query)}
+      ${owner ? `<div class="card" style="border-left:4px solid #1848B8"><b>You are viewing ${escEmail(who.name)}'s training.</b>
+        <span class="muted">Nothing on this page acts as ${escEmail(who.name)}. Buttons marked "You:" are your own sign-offs; quiz answers open read-only.</span></div>` : ''}
       <div class="card"><b>${p.done} of ${p.total} done</b>${progressBar(p.done, p.total)}
-        ${p.minutes.expected ? `<div class="muted">About ${mins(p.minutes.expected)} in all, buffers included${p.minutes.took ? ` &middot; time logged on lessons so far: ${mins(p.minutes.took)}` : ''}.</div>` : ''}
+        ${spent && spent.first ? `<div class="muted">Time on training: ${mins(spent.cappedMinutes)} on ${spent.lessons.length} finished lesson${spent.lessons.length === 1 ? '' : 's'}${spent.rawMinutes > spent.cappedMinutes ? ` (${mins(spent.rawMinutes)} with pages left open)` : ''}, over ${spent.activeDays} day${spent.activeDays === 1 ? '' : 's'} &middot; first ${escEmail(whenShort(spent.first))}, last ${escEmail(whenShort(spent.last))}.</div>` : ''}
+        ${p.minutes.expected ? `<div class="muted">About ${mins(p.minutes.expected)} in all, buffers included${p.minutes.took && !owner ? ` &middot; time logged on lessons so far: ${mins(p.minutes.took)}` : ''}.</div>` : ''}
         ${p.complete ? `<p>Training complete.${owner ? ` <a href="/admin/staff#staff-${staffId}">Move ${escEmail(who.name)} up on Staff →</a>` : ''}</p>` : ''}
         ${!owner && p.next.length ? `<p style="margin-top:8px"><b>Next:</b> ${p.next.map((s) => escEmail(s.title)).join(' &middot; ')}</p>` : ''}</div>
       ${modules.map(moduleCard).join('')}
@@ -29867,13 +29894,13 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
         <form method="post" action="/admin/training/tips-reset" style="margin:0"><input type="hidden" name="staff_id" value="${staffId}">
           <button type="submit" class="btn btn-ghost">Show all tips again</button></form></div>
       <details class="card"><summary><b>Restart ${escEmail(who.name)}'s training</b></summary>
-        <p class="muted">Clears every lesson, reading tick, sign-off, quiz attempt and lesson time, so they start the course from the beginning.
-          Real work they have done (leads answered, quotes built) still counts, because it is read from the work itself. This cannot be undone.</p>
+        <p class="muted">Clears every lesson, reading tick, sign-off and lesson time, so they start the course from the beginning.
+          Their quiz and exam tries are kept in the answer log, marked as before the restart. Real work they have done (leads answered, quotes built) still counts, because it is read from the work itself.</p>
         <form method="post" action="/admin/training/restart" style="margin:0;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
           <input type="hidden" name="staff_id" value="${staffId}">
           <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" name="confirm" value="1" required style="width:auto"> Yes, start ${escEmail(who.name)} again</label>
           <button type="submit" class="btn">Restart training</button></form></details>
-      ${playbookGapsCard(gapRows, staffId)}` : ''}`, 'training'));
+      ${playbookGapsCard(gapRows, staffId)}${SHIP_ONCE_JS}` : ''}`, 'training'));
   } catch (err) {
     console.error('training page failed:', err.message);
     res.status(500).send(adminPage('Training', '<div class="card"><div class="warn">Could not load training.</div></div>', 'training'));
@@ -30145,8 +30172,8 @@ app.get('/admin/training/exam/:key', requireAdmin, async (req, res) => {
     const staffId = owner ? (roster.some((r) => r.id === intIn(req.query.staff)) ? intIn(req.query.staff) : null) : actor.id;
     if (!owner && !(await examOpenFor(actor))) return back(res, '/admin/training', 'err', 'The quote exam opens once you pass the module before it.');
     const { rows } = staffId ? await pool.query(
-      `SELECT scenario, passed, checks, total, created_at FROM staff_exam_attempts
-        WHERE staff_id = $1 AND exam_key = $2 ORDER BY created_at, id`, [staffId, QUOTE_EXAM_KEY]) : { rows: [] };
+      `SELECT id, scenario, passed, checks, items, total, created_at FROM staff_exam_attempts
+        WHERE staff_id = $1 AND exam_key = $2 AND archived_at IS NULL ORDER BY created_at, id`, [staffId, QUOTE_EXAM_KEY]) : { rows: [] };
     const tries = (id) => rows.filter((x) => x.scenario === id);
     const passedN = QEXAM.SCENARIOS.filter((sc) => tries(sc.id).some((x) => x.passed)).length;
     const need = QEXAM.passMark();
@@ -30170,6 +30197,11 @@ app.get('/admin/training/exam/:key', requireAdmin, async (req, res) => {
           <p class="muted" style="margin:6px 0">"${escEmail(sc.brief)}"</p>
           ${off ? `<p style="margin:0 0 6px">Last try was off on: ${escEmail(off)}</p>` : ''}
           ${owner ? `<p style="margin:0 0 6px"><b>Answer:</b> ${escEmail(sc.why)}</p>` : ''}
+          ${owner && who && t.length ? `<details style="margin:0 0 8px"><summary>Every try by ${escEmail(who.name)}</summary>${t.map((x, n) => `
+            <div class="row-i"><span class="row-main" style="white-space:normal"><b>Try ${n + 1}</b> ${x.passed ? pill('right', 'green') : pill('off', 'red')}
+              <span class="muted"> &middot; ${escEmail(whenShort(x.created_at))}${x.total != null ? ` &middot; total $${escEmail(Number(x.total).toFixed(2))}` : ''}</span>
+              ${(x.checks || []).map((c) => `<div class="row-sub" style="white-space:normal">${c.ok ? '&#10003;' : '&#10007;'} ${escEmail(c.what)}: built ${escEmail(c.got)}${c.ok ? '' : `, wanted ${escEmail(c.want)}`}</div>`).join('')}
+            </span></div>`).join('')}</details>` : ''}
           <a class="btn ${ok ? 'btn-ghost' : ''}" href="/admin/quote/new?exam=${encodeURIComponent(sc.id)}">${owner ? 'Try it yourself' : ok ? 'Build it again' : 'Build this quote'}</a></div>`;
       }).join('')}
       <p><a class="muted" href="/admin/training${owner && staffId ? `?staff=${staffId}` : ''}">&larr; Training</a></p>`, 'training'));
@@ -30213,21 +30245,22 @@ app.get('/admin/training/quiz/:key', requireAdmin, async (req, res) => {
     res.send(adminPage('Training', `
       ${pageHeader(view.title, `${view.questions.length} questions. Get ${view.pass} right to pass. No sums: pick what you would really do.`,
         `${lessonBefore ? `<a class="btn btn-ghost" href="/admin/training/lesson/${encodeURIComponent(lessonBefore.key.slice('lesson:'.length))}">&larr; Back to the lesson</a> ` : ''}<a class="btn btn-ghost" href="/admin/training">Back to training</a>`)}
-      <form method="post" action="/admin/training/quiz/${escEmail(key)}">
+      <form method="post" action="/admin/training/quiz/${escEmail(key)}" data-once>
         ${view.questions.map((x, n) => `<fieldset class="card" style="border:0">
           <legend style="font-weight:700;white-space:normal">${n + 1}. ${withTips(escEmail(x.q))}</legend>
           ${x.choices.map((c, i) => `<label style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;cursor:pointer">
             <input type="radio" name="${escEmail(x.id)}" value="${i}" required style="margin-top:3px"> <span>${escEmail(c)}</span></label>`).join('')}
         </fieldset>`).join('')}
-        <button type="submit" class="btn">Mark my answers</button>
-      </form>`, 'training'));
+        <button type="submit" class="btn" data-busy="Marking…">Mark my answers</button>
+      </form>${SHIP_ONCE_JS}`, 'training'));
   } catch (err) {
     console.error('quiz page failed:', err.message);
     res.status(500).send(adminPage('Training', '<div class="card"><div class="warn">Could not load the quiz.</div></div>', 'training'));
   }
 });
 
-// A helper hands in the quiz. It is marked here and every attempt is kept.
+// A helper hands in the quiz. It is marked here and every attempt is kept,
+// with what they picked, so the owner can read each try later.
 app.post('/admin/training/quiz/:key', requireAdmin, async (req, res) => {
   const actor = currentActor();
   const key = String(req.params.key || '');
@@ -30235,32 +30268,113 @@ app.post('/admin/training/quiz/:key', requireAdmin, async (req, res) => {
   if (!quizStep(key, actor.track, actor.role)) return back(res, '/admin/training', 'err', 'No such quiz.');
   if (!(await quizOpenFor(actor, key).catch(() => false))) return back(res, '/admin/training', 'err', 'That quiz opens once you pass the module before it.');
   const r = TRAINING.gradeQuiz(key, req.body || {});
+  let id;
   try {
-    await pool.query(
-      `INSERT INTO staff_quiz_attempts (staff_id, quiz_key, score, total, passed, missed) VALUES ($1, $2, $3, $4, $5, $6)`,
-      [actor.id, key, r.score, r.total, r.passed, r.results.filter((x) => !x.right).map((x) => x.id)]);
+    ({ rows: [{ id }] } = await pool.query(
+      `INSERT INTO staff_quiz_attempts (staff_id, quiz_key, score, total, passed, missed, answers, quiz_hash)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8) RETURNING id`,
+      [actor.id, key, r.score, r.total, r.passed, r.results.filter((x) => !x.right).map((x) => x.id),
+        JSON.stringify(TRAINING.answerLog(r.results)), TRAINING.quizHash(key)]));
   } catch (err) {
     console.error('quiz save failed:', err.message);
     return res.status(500).send(adminPage('Training', '<div class="card"><div class="warn">Your answers could not be saved. Please try again.</div></div>', 'training'));
   }
-  /* Never the answers: a helper may retake it, so the result says only which
-     questions were wrong and which playbook article covers each one. */
-  const wrong = r.results.filter((x) => !x.right);
-  const arts = await pool.query('SELECT id, title FROM kb_articles WHERE published AND title = ANY($1)',
-    [[...new Set(wrong.map((x) => x.article).filter(Boolean))]]).catch(() => ({ rows: [] }));
-  const artId = new Map(arts.rows.map((a) => [a.title, a.id]));
-  const reread = (x) => (x.article && artId.has(x.article)
-    ? `Re-read: <a href="/admin/playbook/${artId.get(x.article)}">${escEmail(x.article)}</a>`
-    : x.article ? `Re-read: ${escEmail(x.article)}` : '');
-  res.send(adminPage('Training', `
-    ${pageHeader(r.passed ? `Passed: ${r.score} of ${r.total}` : `${r.score} of ${r.total}: not passed yet`,
-      r.passed ? 'Well done. The owner can see your result on Training.'
-        : `You need ${r.pass} to pass. Re-read the articles below, then take it again.`,
-      `<a class="btn btn-ghost" href="/admin/training">Back to training</a> <a class="btn ${r.passed ? 'btn-ghost' : ''}" href="/admin/training/quiz/${escEmail(key)}">Take it again</a>`)}
-    <div class="card">${wrong.length ? '' : '<p>Every answer right.</p>'}${r.results.map((x, n) => `<div class="row-i"><span class="row-main" style="white-space:normal">
-      <b>${n + 1}. ${escEmail(x.q)}</b>
-      <div class="row-sub" style="white-space:normal">${x.right ? pill('right', 'green') : `${pill('wrong', 'red')} ${reread(x)}`}</div>
-      </span></div>`).join('')}</div>`, 'training'));
+  /* To the result's own address: a refresh there re-reads it, never re-posts
+     the answers as another try. */
+  return res.redirect(303, `/admin/training/quiz/${encodeURIComponent(key)}/result/${id}`);
+});
+
+/** One stored attempt, question by question, against the quiz as it is now.
+ *  Rows from before the answer log have only the ids that were missed. */
+function attemptRows(z, a) {
+  const log = Array.isArray(a.answers) ? new Map(a.answers.map((x) => [x.id, x])) : null;
+  const missed = new Set(a.missed || []);
+  return z.questions.map((x) => {
+    const got = log ? log.get(x.id) : null;
+    return { id: x.id, q: x.q, article: x.article, answerText: x.choices[x.answer], why: x.why,
+      right: log ? !!(got && got.right) : !missed.has(x.id), logged: !!log,
+      pickedText: got ? got.pickedText : null };
+  });
+}
+
+// A helper's marked quiz. Never the answers: they may retake it, so it says
+// only which questions were wrong and which playbook article covers each.
+app.get('/admin/training/quiz/:key/result/:id', requireAdmin, async (req, res) => {
+  const actor = currentActor() || OWNER_ACTOR;
+  const key = String(req.params.key || '');
+  const id = intIn(req.params.id);
+  const z = Object.prototype.hasOwnProperty.call(TRAINING.QUIZZES, key) ? TRAINING.QUIZZES[key] : null;
+  if (!z || !id) return back(res, '/admin/training', 'err', 'No such quiz.');
+  try {
+    const { rows: [a] } = await pool.query(
+      'SELECT id, staff_id, score, total, passed, missed, answers FROM staff_quiz_attempts WHERE id = $1 AND quiz_key = $2', [id, key]);
+    if (actor.kind !== 'staff') {
+      return res.redirect(a ? `/admin/training/attempts?staff=${a.staff_id}&quiz=${encodeURIComponent(key)}#try-${a.id}` : '/admin/training');
+    }
+    // A helper reads only their own attempts.
+    if (!a || a.staff_id !== actor.id) return back(res, '/admin/training', 'err', 'No such result.');
+    const rows = attemptRows(z, a);
+    const wrong = rows.filter((x) => !x.right);
+    const arts = await pool.query('SELECT id, title FROM kb_articles WHERE published AND title = ANY($1)',
+      [[...new Set(wrong.map((x) => x.article).filter(Boolean))]]).catch(() => ({ rows: [] }));
+    const artId = new Map(arts.rows.map((t) => [t.title, t.id]));
+    const reread = (x) => (x.article && artId.has(x.article)
+      ? `Re-read: <a href="/admin/playbook/${artId.get(x.article)}">${escEmail(x.article)}</a>`
+      : x.article ? `Re-read: ${escEmail(x.article)}` : '');
+    res.set('Cache-Control', 'no-store');
+    res.send(adminPage('Training', `
+      ${pageHeader(a.passed ? `Passed: ${a.score} of ${a.total}` : `${a.score} of ${a.total}: not passed yet`,
+        a.passed ? 'Well done. The owner can see your result on Training.'
+          : `You need ${z.pass} to pass. Re-read the articles below, then take it again.`,
+        `<a class="btn btn-ghost" href="/admin/training">Back to training</a> <a class="btn ${a.passed ? 'btn-ghost' : ''}" href="/admin/training/quiz/${escEmail(key)}">Take it again</a>`)}
+      <div class="card">${wrong.length ? '' : '<p>Every answer right.</p>'}${rows.map((x, n) => `<div class="row-i"><span class="row-main" style="white-space:normal">
+        <b>${n + 1}. ${escEmail(x.q)}</b>
+        <div class="row-sub" style="white-space:normal">${x.right ? pill('right', 'green') : `${pill('wrong', 'red')} ${reread(x)}`}</div>
+        </span></div>`).join('')}</div>`, 'training'));
+  } catch (err) {
+    console.error('quiz result failed:', err.message);
+    res.status(500).send(adminPage('Training', '<div class="card"><div class="warn">Could not load the result.</div></div>', 'training'));
+  }
+});
+
+/* The owner's answer log: every try a helper made at one quiz, oldest first,
+   with what they picked against the right answer. Tries put aside by a
+   restart are listed too, under the restart. Owner only (ROUTES). */
+app.get('/admin/training/attempts', requireAdmin, async (req, res) => {
+  const key = String(req.query.quiz || '');
+  const z = Object.prototype.hasOwnProperty.call(TRAINING.QUIZZES, key) ? TRAINING.QUIZZES[key] : null;
+  const staffId = intIn(req.query.staff);
+  if (!z || !staffId) return back(res, '/admin/training', 'err', 'No such quiz.');
+  try {
+    const { rows: [who] } = await pool.query('SELECT id, name FROM staff WHERE id = $1', [staffId]);
+    if (!who) return back(res, '/admin/training', 'err', 'No such helper.');
+    const { rows } = await pool.query(
+      `SELECT id, score, total, passed, missed, answers, quiz_hash, archived_at, created_at FROM staff_quiz_attempts
+        WHERE staff_id = $1 AND quiz_key = $2 ORDER BY created_at, id`, [staffId, key]);
+    const hash = TRAINING.quizHash(key);
+    const tryCard = (a, n) => {
+      const qs = attemptRows(z, a);
+      const note = !Array.isArray(a.answers) ? 'What was picked was not recorded for this try (before October 2026). Only the questions missed are known.'
+        : a.quiz_hash && a.quiz_hash !== hash ? 'The quiz has been edited since this try, so a question may read differently now.' : '';
+      return `<details class="card" id="try-${a.id}"${n === rows.length - 1 ? ' open' : ''}><summary><b>Try ${n + 1}: ${a.score} of ${a.total}</b>
+          ${a.passed ? pill('passed', 'green') : pill('not passed', 'gray')}${a.archived_at ? ` ${pill(`before the restart on ${whenShort(a.archived_at)}`, 'neutral')}` : ''}
+          <span class="muted"> &middot; ${escEmail(whenShort(a.created_at))}</span></summary>
+        ${note ? `<p class="muted">${escEmail(note)}</p>` : ''}
+        ${qs.map((x, i) => `<div class="row-i"><span class="row-main" style="white-space:normal">
+          <b>${i + 1}. ${escEmail(x.q)}</b>
+          ${x.logged ? `<div class="row-sub" style="white-space:normal">${escEmail(who.name)} picked: ${x.pickedText == null ? '<i>no answer</i>' : escEmail(x.pickedText)}</div>` : ''}
+          ${x.right ? '' : `<div class="row-sub" style="white-space:normal">Right answer: <b>${escEmail(x.answerText)}</b></div>`}
+          </span><span class="row-end">${x.right ? pill('right', 'green') : pill('wrong', 'red')}</span></div>`).join('')}</details>`;
+    };
+    res.set('Cache-Control', 'no-store');
+    res.send(adminPage('Training', `
+      ${pageHeader(`${who.name}: ${z.title}`, `Every try, with what ${escEmail(who.name)} picked. Pass mark ${z.pass} of ${z.questions.length}.`,
+        `<a class="btn btn-ghost" href="/admin/training?staff=${staffId}">&larr; ${escEmail(who.name)}'s training</a> <a class="btn btn-ghost" href="/admin/training/quiz/${escEmail(key)}">The questions</a>`)}
+      ${rows.length ? rows.map(tryCard).join('') : `<div class="card">${emptyState(`${escEmail(who.name)} has not taken this quiz yet.`, '')}</div>`}`, 'training'));
+  } catch (err) {
+    console.error('quiz attempts page failed:', err.message);
+    res.status(500).send(adminPage('Training', '<div class="card"><div class="warn">Could not load the tries.</div></div>', 'training'));
+  }
 });
 
 /* ── Hiring: the applicant test (tools/lib/hiring.js) ─────────────────────────
@@ -31333,8 +31447,31 @@ app.post('/admin/training/signoff', requireAdmin, async (req, res) => {
     if (!staffId || !s || s.type !== 'signoff' || !TRAINING.mayTick(key, true, undefined, path.track, path.role)) return back(res, to, 'err', 'Unknown step.');
     const { rows: [st] } = await pool.query('SELECT id FROM staff WHERE id = $1', [staffId]);
     if (!st) return back(res, '/admin/training', 'err', 'No such helper.');
+    const log = (action) => logActivity(currentActor() || OWNER_ACTOR, action, { type: 'staff', id: staffId }, { step: key }, clientIp(req))
+      .catch((e) => console.error('sign-off log failed:', e.message));
     if (b.undo) {
-      await pool.query('DELETE FROM staff_training WHERE staff_id = $1 AND step_key = $2', [staffId, key]);
+      if (String(b.confirm || '') !== '1') return back(res, to, 'err', `Tick the box to confirm undoing ${s.title}.`);
+      /* Undoing "ready" keeps the window it was signed off for, the same way
+         a restart does, so commission already earned in it is still paid. */
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        if (key === TRAINING.READY_KEY) {
+          await client.query(
+            `INSERT INTO staff_training (staff_id, step_key, done_at)
+             SELECT staff_id, 'signoff:was-ready-until:' || to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), done_at
+               FROM staff_training WHERE staff_id = $1 AND step_key = $2
+             ON CONFLICT DO NOTHING`, [staffId, key]);
+        }
+        await client.query('DELETE FROM staff_training WHERE staff_id = $1 AND step_key = $2', [staffId, key]);
+        await client.query('COMMIT');
+      } catch (e) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw e;
+      } finally {
+        client.release();
+      }
+      log('training sign-off undone');
       return back(res, to, 'ok', `Undone: ${s.title}.`);
     }
     /* Not before the gate in front of it: the ready sign-off starts commission
@@ -31344,6 +31481,7 @@ app.post('/admin/training/signoff', requireAdmin, async (req, res) => {
     }
     await pool.query(`INSERT INTO staff_training (staff_id, step_key, signed_by) VALUES ($1, $2, NULL) ON CONFLICT DO NOTHING`,
       [staffId, key]);
+    log('training signed off');
     return back(res, to, 'ok', `Signed off: ${s.title}.`);
   } catch (err) {
     console.error('training sign-off failed:', err.message);
@@ -31364,8 +31502,9 @@ app.post('/admin/training/tip', requireAdmin, async (req, res) => {
   return res.redirect(to);
 });
 
-/* Start a helper's training again. Ticks, sign-offs, quiz attempts and
-   lesson times go; page-tip choices stay. Work steps read the work itself,
+/* Start a helper's training again. Ticks, sign-offs and lesson times are
+   cleared (a copy goes to staff_training_archive), quiz and exam tries are
+   archived, not deleted; page-tip choices stay. Work steps read the work itself,
    so a lead they really answered still counts. */
 app.post('/admin/training/restart', requireAdmin, async (req, res) => {
   const b = req.body || {};
@@ -31389,12 +31528,25 @@ app.post('/admin/training/restart', requireAdmin, async (req, res) => {
        SELECT staff_id, 'signoff:was-ready-until:' || to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), done_at
          FROM staff_training WHERE staff_id = $1 AND step_key = $2
        ON CONFLICT DO NOTHING`, [staffId, TRAINING.READY_KEY]);
+    /* Nothing is lost: the ticks, sign-offs and lesson times cleared are
+       snapshotted, and quiz and exam tries are only put aside, so the
+       owner's answer log still lists them under the restart. */
+    await client.query(
+      `INSERT INTO staff_training_archive (staff_id, ticks, lesson_times)
+       SELECT $1,
+              COALESCE((SELECT jsonb_agg(jsonb_build_object('step_key', step_key, 'done_at', done_at, 'signed_by', signed_by))
+                          FROM staff_training WHERE staff_id = $1 AND step_key NOT LIKE 'tip:%'
+                           AND step_key NOT LIKE 'signoff:was-ready-until:%'), '[]'::jsonb),
+              COALESCE((SELECT jsonb_agg(jsonb_build_object('step_key', step_key, 'started_at', started_at, 'done_at', done_at))
+                          FROM staff_lesson_time WHERE staff_id = $1), '[]'::jsonb)`, [staffId]);
     await client.query(`DELETE FROM staff_training WHERE staff_id = $1 AND step_key NOT LIKE 'tip:%'
                           AND step_key NOT LIKE 'signoff:was-ready-until:%'`, [staffId]);
-    await client.query('DELETE FROM staff_quiz_attempts WHERE staff_id = $1', [staffId]);
-    await client.query('DELETE FROM staff_exam_attempts WHERE staff_id = $1', [staffId]);
+    await client.query('UPDATE staff_quiz_attempts SET archived_at = NOW() WHERE staff_id = $1 AND archived_at IS NULL', [staffId]);
+    await client.query('UPDATE staff_exam_attempts SET archived_at = NOW() WHERE staff_id = $1 AND archived_at IS NULL', [staffId]);
     await client.query('DELETE FROM staff_lesson_time WHERE staff_id = $1', [staffId]);
     await client.query('COMMIT');
+    logActivity(currentActor() || OWNER_ACTOR, 'training restarted', { type: 'staff', id: staffId }, null, clientIp(req))
+      .catch((e) => console.error('restart log failed:', e.message));
     return back(res, `/admin/training?staff=${staffId}`, 'ok', `${st.name} starts training from the beginning.`);
   } catch (err) {
     if (client) await client.query('ROLLBACK').catch(() => {});

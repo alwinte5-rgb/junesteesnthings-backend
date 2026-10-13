@@ -367,6 +367,8 @@ const ROUTES = {
   'GET /admin/training/quiz/:key': 'any',
   'GET /admin/training/lesson/:id': 'any',
   'GET /admin/training/paths': 'owner',
+  'GET /admin/training/attempts': 'owner',
+  'GET /admin/training/quiz/:key/result/:id': 'any',
   'POST /admin/api/proof-signature': 'proofs.upload',
   'POST /admin/quote/:code/proofs': 'proofs.upload',
   'POST /admin/quote/:code/art/request': 'art.request',

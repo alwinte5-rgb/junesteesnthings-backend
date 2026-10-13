@@ -180,14 +180,19 @@ test('quizzes in a closed module cannot be opened or handed in', () => {
   assert.match(post, /quizStep\(key, actor\.track, actor\.role\)/, 'the helper\'s own path, never one from the form');
 });
 
-test('restart: the owner only, a ticked confirmation, one transaction, page tips kept', () => {
+test('restart: the owner only, a ticked confirmation, one transaction, page tips kept, tries archived not deleted', () => {
   assert.strictEqual(STAFF.ROUTES['POST /admin/training/restart'], 'owner');
   const r = route("app.post('/admin/training/restart', requireAdmin");
   assert.match(r, /if \(String\(b\.confirm \|\| ''\) !== '1'\) return back/);
   assert.match(r, /await client\.query\('BEGIN'\)/);
   assert.match(r, /DELETE FROM staff_training WHERE staff_id = \$1 AND step_key NOT LIKE 'tip:%'/);
-  assert.match(r, /DELETE FROM staff_quiz_attempts WHERE staff_id = \$1/);
+  assert.doesNotMatch(r, /DELETE FROM staff_(quiz|exam)_attempts/, 'a restart never deletes a try');
+  assert.match(r, /UPDATE staff_quiz_attempts SET archived_at = NOW\(\) WHERE staff_id = \$1 AND archived_at IS NULL/);
+  assert.match(r, /UPDATE staff_exam_attempts SET archived_at = NOW\(\) WHERE staff_id = \$1 AND archived_at IS NULL/);
+  assert.match(r, /INSERT INTO staff_training_archive/, 'cleared ticks and lesson times are snapshotted first');
+  assert.ok(r.indexOf('INSERT INTO staff_training_archive') < r.indexOf('DELETE FROM staff_lesson_time'));
   assert.match(r, /DELETE FROM staff_lesson_time WHERE staff_id = \$1/);
+  assert.match(r, /logActivity\(currentActor\(\) \|\| OWNER_ACTOR, 'training restarted'/);
   assert.match(r, /ROLLBACK/);
 });
 

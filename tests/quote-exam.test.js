@@ -98,5 +98,7 @@ test('exam routes: anyone signed in, a helper only their own attempts and only o
   assert.match(form, /const exam = !isEdit \? QEXAM\.byId/);
   assert.match(form, /if \(exam && !\(await examOpenFor\(currentActor\(\) \|\| OWNER_ACTOR\)\)\)/);
   assert.match(form, /const canDraft = \(!isEdit \|\| isDraft\) && !exam;/);
-  assert.match(src, /DELETE FROM staff_exam_attempts WHERE staff_id = \$1/, 'restarting training clears exam attempts');
+  assert.match(src, /UPDATE staff_exam_attempts SET archived_at = NOW\(\) WHERE staff_id = \$1 AND archived_at IS NULL/, 'restarting training puts exam attempts aside');
+  assert.match(page, /AND archived_at IS NULL ORDER BY created_at, id/, 'tries before a restart do not count');
+  assert.match(page, /owner && who && t\.length \? `<details/, 'the owner reads every try, check by check');
 });

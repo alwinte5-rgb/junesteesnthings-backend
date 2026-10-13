@@ -24,9 +24,16 @@ test('#204 three bare owner gaps in one article are three questions, each filled
 });
 
 test('#222 the ready sign-off waits for the gate before it', () => {
-  const r = after("app.post('/admin/training/signoff'", 1600);
+  const r = after("app.post('/admin/training/signoff'", 4000);
   assert.ok(r.indexOf('TRAINING.stepOpen(await trainingFor(staffId), key)') > r.indexOf('if (b.undo)'), 'undo is always allowed');
-  assert.ok(r.indexOf('TRAINING.stepOpen(') < r.indexOf('INSERT INTO staff_training'));
+  assert.ok(r.indexOf('TRAINING.stepOpen(') < r.indexOf('INSERT INTO staff_training (staff_id, step_key, signed_by)'));
+  // Undo asks for a tick, keeps the commission window of "ready", and is logged.
+  const undo = r.slice(r.indexOf('if (b.undo)'), r.indexOf('TRAINING.stepOpen('));
+  assert.match(undo, /if \(String\(b\.confirm \|\| ''\) !== '1'\) return back/);
+  assert.match(undo, /if \(key === TRAINING\.READY_KEY\)[\s\S]*'signoff:was-ready-until:'/);
+  assert.match(undo, /log\('training sign-off undone'\)/);
+  assert.match(r, /log\('training signed off'\)/);
+  assert.match(src, /<input type="checkbox" name="confirm" value="1" required style="width:auto"> sure<\/label><button type="submit" class="btn btn-ghost">Undo<\/button>/);
   assert.match(src, /s\.locked \? '<button type="button" class="btn btn-ghost" disabled/);
 });
 
