@@ -406,6 +406,9 @@ const ROUTES = {
   /* Claude reads a message for accuracy and tone before it is sent. */
   'POST /admin/api/quote/:code/review-message': 'customers.message',
   'POST /admin/quote/:code/art/decide': 'owner',
+  'POST /admin/quote/:code/art/ack': 'art.work',
+  'POST /admin/job-notes': 'any',
+  'POST /admin/job-notes/:id/address': 'any',
   'POST /admin/training/quiz/:key': 'any',
   'POST /admin/training/signoff': 'owner',
   'POST /admin/training/tips-reset': 'owner',
