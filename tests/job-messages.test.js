@@ -201,7 +201,8 @@ test('the dashboard lists replies waiting and the to-do list, and the routes are
   const d = src.slice(src.indexOf("app.get('/admin/dashboard'"), src.indexOf("app.get('/admin/dashboard'") + 20000);
   assert.match(d, /many\(UNANSWERED_REPLIES_SQL/);
   assert.match(d, /is waiting for a reply/);
-  assert.match(d, /id="todo"[\s\S]*action="\/admin\/tasks"/);
+  assert.match(d, /id="todo"[\s\S]*\$\{addTaskForm\}/);
+  assert.match(src.slice(src.indexOf('async function taskAddForm('), src.indexOf('async function taskAddForm(') + 400), /action="\/admin\/tasks"/);
   const STAFF = require('../tools/lib/staff');
   assert.strictEqual(STAFF.ROUTES['POST /admin/quote/:code/replies-handled'], 'customers.message');
   // Automatic emails are not an answer: only messages written from the job page count.
@@ -361,7 +362,7 @@ test('uploads go to Cloudinary as raw files for design files, with the 10 MB lim
   const fn = src.slice(src.indexOf('const CLD_UPLOAD_FN = `'), src.indexOf('`;', src.indexOf('const CLD_UPLOAD_FN')));
   assert.match(fn, /go\(img \? 'image' : 'raw'\)/);
   assert.match(fn, /\|\| !img \? d : go\('raw'\)/, 'a refused photo is not retried as a raw file');
-  assert.strictEqual((src.match(/\$\{CLD_UPLOAD_FN\}/g) || []).length, 5);
+  assert.strictEqual((src.match(/\$\{CLD_UPLOAD_FN\}/g) || []).length, 6);
   const html = await card();
   assert.match(html, /file\.size > 10485760/);
   assert.match(html, /did not upload' \+ \(e && e\.message/);
