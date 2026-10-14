@@ -379,6 +379,7 @@ async function inboundText({ from = '+13125550199', body = 'Can I add 2 XL?', ow
   const emails = [];
   const sent = [];
   const sql = [];
+  const callbacks = [];
   const ownerPics = [];
   let handler;
   const sandbox = {
@@ -394,6 +395,7 @@ async function inboundText({ from = '+13125550199', body = 'Can I add 2 XL?', ow
       if (/INSERT INTO sms_messages[\s\S]*RETURNING id/.test(q)) return { rows: [{ id: 1, quote_code: quote }] };
       return { rows: [] };
     } },
+    ownerCallCommand: async (t) => { const c = require('../tools/lib/voice').parseCallCommand(t); if (c) callbacks.push(c); return Boolean(c); },
     RELAY: require('../tools/lib/text-relay'), QUOTE_CODE_RE: /^(?:[A-Z0-9]{6}|[A-Z0-9]{10})$/,
     twilioSend: async (to, b) => { if (twilioFails) throw Object.assign(new Error('nope'), { twilioCode: twilioFails }); sent.push([to, b]); return { sid: 'SMx' }; },
     markLeadResponded: async () => {},
@@ -413,7 +415,7 @@ async function inboundText({ from = '+13125550199', body = 'Can I add 2 XL?', ow
   vm.runInContext(lift('relayOwnerReply') + '\n' + src.slice(start, src.indexOf('\n});', start) + 4), sandbox);
   const res = { type() { return this; }, send() {}, sendStatus() {} };
   await handler({ body: { From: from, Body: body, MessageSid: 'SM1', ...media }, get: () => 'sig' }, res);
-  return { ownerTexts, emails, sent, sql, ownerPics };
+  return { ownerTexts, emails, sent, sql, ownerPics, callbacks };
 }
 
 test('a customer\'s text comes to the owner\'s phone with who it is and a link to their job', async () => {
@@ -494,4 +496,15 @@ test('a message typed as "June\'s Tees: ..." does not go out with the brand twic
   const re = /^\s*june['’]?s\s+tees\s*(&\s*things\s*)?[:,-]\s*/i;
   for (const t of ["June's Tees: Hi Samantha", 'June’s Tees & Things - Hi', "june's tees, hi"]) assert.ok(!/^june/i.test(t.replace(re, '')), t);
   assert.strictEqual("June's Tees has your proof".replace(re, ''), "June's Tees has your proof", 'a sentence about the shop stays');
+});
+
+test('the owner texting CALL starts a callback and is never sent on to a customer', async () => {
+  const kim = { phone: '+13125550199', quote_code: 'AB12CD', name: 'Kim', created_at: new Date() };
+  const r = await inboundText({ from: '+17738491854', body: 'CALL', forwards: [kim] });
+  assert.deepEqual(r.callbacks, [{ number: '' }]);
+  assert.equal(r.sent.length, 0);
+  const n = await inboundText({ from: '+17738491854', body: 'call 312 555 0100', forwards: [kim] });
+  assert.deepEqual(n.callbacks, [{ number: '+13125550100' }]);
+  const c = await inboundText({ from: '+13125550199', body: 'CALL' });
+  assert.equal(c.callbacks.length, 0, 'a customer texting CALL is just a message');
 });
