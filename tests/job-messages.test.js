@@ -361,7 +361,7 @@ test('uploads go to Cloudinary as raw files for design files, with the 10 MB lim
   const fn = src.slice(src.indexOf('const CLD_UPLOAD_FN = `'), src.indexOf('`;', src.indexOf('const CLD_UPLOAD_FN')));
   assert.match(fn, /go\(img \? 'image' : 'raw'\)/);
   assert.match(fn, /\|\| !img \? d : go\('raw'\)/, 'a refused photo is not retried as a raw file');
-  assert.strictEqual((src.match(/\$\{CLD_UPLOAD_FN\}/g) || []).length, 4);
+  assert.strictEqual((src.match(/\$\{CLD_UPLOAD_FN\}/g) || []).length, 5);
   const html = await card();
   assert.match(html, /file\.size > 10485760/);
   assert.match(html, /did not upload' \+ \(e && e\.message/);

@@ -90,6 +90,7 @@ const TRAINING = require('./tools/lib/training');
 const QEXAM = require('./tools/lib/quote-exam');
 const RUSH = require('./tools/lib/rush');
 const CHAN = require('./tools/lib/team-channels');
+const CHATFILES = require('./tools/lib/team-chat-files');
 const HIRING = require('./tools/lib/hiring');
 const HIRE_POSTING = require('./tools/lib/hiring-posting');
 const PROOFS = require('./tools/lib/job-proofs');
@@ -1274,6 +1275,13 @@ async function initStaffTables() {
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
   await pool.query('CREATE INDEX IF NOT EXISTS team_channel_messages_idx ON team_channel_messages (channel_id, id)');
+  /* A file sent with a message (tools/lib/team-chat-files.js): its Cloudinary
+     address and the name it had on the sender's computer. body is '' when a
+     file goes on its own. */
+  for (const t of ['team_messages', 'team_channel_messages']) {
+    await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS file_url TEXT`);
+    await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS file_name TEXT`);
+  }
   /* Per reader ('owner' or 'staff:<id>') and conversation ('ch:<id>' or
      'dm:<staff id>'): what they have read in a channel, and the newest message
      an alert email has already been sent about. */
@@ -29833,6 +29841,13 @@ const TEAM_CHAT_CSS = `<style>
 .tc-who{display:block;font-size:11.5px;opacity:.8;margin-bottom:2px}
 .tc-form{display:flex;gap:8px;align-items:flex-end;margin-top:12px}
 .tc-form textarea{flex:1;min-width:0}
+.tc-attach{cursor:pointer;white-space:nowrap}
+.tc-filestat{font-size:13px;margin-top:6px}
+.tc-file{display:block;margin-top:6px;color:inherit}
+.tc-file img{display:block;max-width:min(260px,100%);max-height:260px;border-radius:10px}
+.tc-doc{text-decoration:underline;font-weight:600}
+.tc-tabs .chip-f .n{background:#dc2626;color:#fff;opacity:1;border-radius:100px;padding:1px 7px;min-width:18px;text-align:center}
+.tc-tabs .chip-f.has-new{border-color:#dc2626;font-weight:700}
 @media (max-width:640px){.tc-line{max-width:90%}.tc-form{flex-direction:column;align-items:stretch}}
 </style>`;
 
@@ -29900,14 +29915,14 @@ function chatChannelFor(raw, channels, roster) {
 
 async function chatLines(staffId, after = 0) {
   const { rows } = await pool.query(
-    `SELECT id, from_owner, body, created_at, read_at FROM team_messages
+    `SELECT id, from_owner, body, file_url, file_name, created_at, read_at FROM team_messages
       WHERE staff_id = $1 AND id > $2 ORDER BY id DESC LIMIT 200`, [staffId, after]);
   return rows.reverse();
 }
 
 async function channelLines(channelId, after = 0) {
   const { rows } = await pool.query(
-    `SELECT id, staff_id, body, created_at FROM team_channel_messages
+    `SELECT id, staff_id, body, file_url, file_name, created_at FROM team_channel_messages
       WHERE channel_id = $1 AND id > $2 ORDER BY id DESC LIMIT 200`, [channelId, after]);
   return rows.reverse();
 }
@@ -29982,13 +29997,50 @@ const seenSpan = (seen, id) => seen[id] ? `<span class="tc-seen" data-seen="${Nu
 
 function chatLineJson(m) {
   const mine = (currentActor() || OWNER_ACTOR).kind === 'staff' ? !m.from_owner : m.from_owner;
-  return { id: Number(m.id), mine, body: m.body, when: whenShort(m.created_at) };
+  return { id: Number(m.id), mine, body: m.body, file: chatFileJson(m, 'dm'), when: whenShort(m.created_at) };
+}
+
+/** A message's file for the page: pictures load from storage, anything else
+ *  opens through /admin/team-chat/file/, which checks the reader may see it. */
+function chatFileJson(m, kind) {
+  const f = CHATFILES.fileOf(m, QPHOTOS.cloudName());
+  if (!f) return null;
+  return { ...f, href: f.image ? f.url : `/admin/team-chat/file/${kind}/${Number(m.id)}` };
 }
 
 function channelLineJson(m, roster) {
   const a = currentActor() || OWNER_ACTOR;
   const mine = a.kind === 'staff' ? m.staff_id === a.id : m.staff_id == null;
-  return { id: Number(m.id), mine, body: m.body, when: whenShort(m.created_at), who: mine ? '' : (m.staff_id == null ? 'June' : nameOf(roster, m.staff_id)) };
+  return { id: Number(m.id), mine, body: m.body, file: chatFileJson(m, 'ch'), when: whenShort(m.created_at),
+    who: mine ? '' : (m.staff_id == null ? 'June' : nameOf(roster, m.staff_id)) };
+}
+
+/** One message as HTML: who, the words, the file, when, and (own lines) seen. */
+function chatLineHtml(j, seen) {
+  const f = j.file;
+  const file = !f ? '' : f.image
+    ? `<a class="tc-file" href="${escEmail(f.url)}" target="_blank" rel="noopener"><img src="${escEmail(f.url)}" alt="${escEmail(f.name)}" loading="lazy"></a>`
+    : `<a class="tc-file tc-doc" href="${escEmail(f.href)}">&#128206; ${escEmail(f.name)}</a>`;
+  return `<div class="tc-line${j.mine ? ' me' : ''}">${j.who ? `<b class="tc-who">${escEmail(j.who)}</b>` : ''}${
+    j.body ? escEmail(j.body) : ''}${file}<span class="tc-when">${escEmail(j.when)}</span>${j.mine ? seenSpan(seen, j.id) : ''}</div>`;
+}
+
+/** Unread messages per conversation tab for whoever is signed in, keyed by
+ *  the tab's link, so the page can mark every tab with something waiting. */
+async function chatTabCounts(actor, roster, allChannels) {
+  const tabs = {};
+  if (actor.kind === 'staff') {
+    const { rows: [u] } = await pool.query(
+      'SELECT COUNT(*)::int AS n FROM team_messages WHERE staff_id = $1 AND from_owner AND read_at IS NULL', [actor.id]);
+    if (u.n) tabs['/admin/team-chat'] = u.n;
+  } else {
+    const { rows } = await pool.query(
+      `SELECT staff_id, COUNT(*)::int AS n FROM team_messages WHERE NOT from_owner AND read_at IS NULL GROUP BY staff_id`);
+    for (const r of rows) if (roster.some((x) => x.id === r.staff_id)) tabs[`/admin/team-chat?staff=${r.staff_id}`] = r.n;
+  }
+  const mine = channelsFor(actor, allChannels, roster);
+  for (const [id, n] of await channelUnread(actor, mine.map((c) => c.id))) if (n) tabs[`/admin/team-chat?channel=${id}`] = n;
+  return tabs;
 }
 
 async function chatAlertsOn(actor) {
@@ -30040,8 +30092,7 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
       const last = lines.length ? Number(lines[lines.length - 1].id) : 0;
       await channelMarkRead(channel.id, last);
       seen = await chatSeen({ channelId: channel.id }, roster).catch(() => ({}));
-      lineHtml = (m) => { const j = channelLineJson(m, roster);
-        return `<div class="tc-line${j.mine ? ' me' : ''}">${j.who ? `<b class="tc-who">${escEmail(j.who)}</b>` : ''}${escEmail(j.body)}<span class="tc-when">${escEmail(j.when)}</span>${j.mine ? seenSpan(seen, j.id) : ''}</div>`; };
+      lineHtml = (m) => chatLineHtml(channelLineJson(m, roster), seen);
       canWrite = true;
       intro = `# ${escEmail(channel.name)}: ${channel.audience === 'all' ? 'everyone on the team' : `the ${escEmail(CHAN.AUDIENCES[channel.audience] || channel.audience)} team`} and June. Customers never see this.`;
       placeholder = `Message # ${channel.name}`;
@@ -30054,8 +30105,7 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
       const who = roster.find((r) => r.id === staffId);
       canWrite = !owner || (who && who.active);
       const other = !owner ? 'June' : nameOf(roster, staffId);
-      lineHtml = (m) => { const j = chatLineJson(m);
-        return `<div class="tc-line${j.mine ? ' me' : ''}">${escEmail(j.body)}<span class="tc-when">${escEmail(j.when)}</span>${j.mine ? seenSpan(seen, j.id) : ''}</div>`; };
+      lineHtml = (m) => chatLineHtml(chatLineJson(m), seen);
       intro = `Just you and ${escEmail(other)}. Customers never see this.`;
       placeholder = `Message ${other}`;
       hidden = `<input type="hidden" name="staff" value="${staffId}">`;
@@ -30063,20 +30113,26 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
     }
     const last = lines.length ? Number(lines[lines.length - 1].id) : 0;
     const alertsOn = await chatAlertsOn(actor);
+    const tabCounts = await chatTabCounts(actor, roster, allChannels).catch(() => null);
     res.set('Cache-Control', 'no-store');
     res.send(adminPage('Team chat', `${TEAM_CHAT_CSS}
       ${pageHeader('Team chat', intro)}
       ${flash(req.query)}
+      <div class="tc-tabs" data-tctabs>
       <div class="muted" style="font-size:12px;margin:4px 0">Channels</div>${filterChips(chanChips)}
       <div class="muted" style="font-size:12px;margin:8px 0 4px">${owner ? 'Direct' : 'Direct with June'}</div>${filterChips(dmChips)}
+      </div>
       <div class="card">
         <div class="tc-log" data-tclog data-after="${last}">${lines.length ? lines.map(lineHtml).join('')
           : '<p class="muted" data-tcempty>No messages yet. Say hello.</p>'}</div>
         ${canWrite ? `<form method="post" action="/admin/team-chat" class="tc-form" data-tcform>
-          ${hidden}
-          <textarea name="body" rows="2" maxlength="${TEAM_CHAT_MAX}" required placeholder="${escEmail(placeholder)}"></textarea>
-          <button type="submit" class="btn">Send</button>
-        </form>` : '<p class="muted">This helper is disabled, so the conversation is read-only.</p>'}
+          ${hidden}<input type="hidden" name="file_url"><input type="hidden" name="file_name">
+          <label class="btn btn-ghost tc-attach" title="Send a file">&#128206; File
+            <input type="file" accept="${CHATFILES.ACCEPT}" data-tcfile hidden></label>
+          <textarea name="body" rows="2" maxlength="${TEAM_CHAT_MAX}" placeholder="${escEmail(placeholder)}"></textarea>
+          <button type="submit" class="btn" data-tcsend>Send</button>
+        </form>
+        <div class="tc-filestat muted" data-tcfilestat hidden></div>` : '<p class="muted">This helper is disabled, so the conversation is read-only.</p>'}
       </div>
       <details class="card" id="alerts"><summary><b>Email alerts</b> <span class="muted">${alertsOn ? 'on' : 'off'}</span></summary>
         <p class="muted">When a message waits ${CHAN.ALERT_AFTER_MIN} minutes without you reading it, you get one email for that conversation. No more for it until you have read it.</p>
@@ -30101,19 +30157,94 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
           log.scrollTop = log.scrollHeight;
           var f = document.querySelector('[data-tcform]');
           if (f) {
-            var ta = f.querySelector('textarea');
+            var ta = f.querySelector('textarea'), send = f.querySelector('[data-tcsend]');
+            var fin = f.querySelector('[data-tcfile]'), fst = document.querySelector('[data-tcfilestat]');
+            var fu = f.querySelector('[name="file_url"]'), fn = f.querySelector('[name="file_name"]');
+            var uploading = false, seq = 0;
+            var EXTS = ${JSON.stringify(CHATFILES.EXTS)};
+            /* The status line, with a Remove button while a file is attached. */
+            function stat(t, removable){
+              fst.textContent = t; fst.hidden = !t;
+              if (removable) {
+                var x = document.createElement('button'); x.type = 'button'; x.className = 'btn btn-ghost'; x.textContent = 'Remove';
+                x.style.marginLeft = '8px';
+                x.addEventListener('click', function(){ seq++; fu.value = ''; fn.value = ''; fin.value = ''; uploading = false; send.disabled = false; stat(''); });
+                fst.appendChild(x);
+              }
+            }
             ta.addEventListener('keydown', function(e){
-              if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (ta.value.trim()) f.requestSubmit(); }
+              if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (ta.value.trim() || fu.value) f.requestSubmit(); }
             });
-            f.addEventListener('submit', function(){
-              var b = f.querySelector('button'); setTimeout(function(){ b.disabled = true; b.textContent = 'Sending…'; }, 0);
+            /* A file goes up to storage as soon as it is picked; Send then sends
+               it, with or without words. Send waits while it is uploading. */
+            fin.addEventListener('change', function(){
+              var file = fin.files && fin.files[0]; if (!file) return;
+              fu.value = ''; fn.value = '';
+              var mine = ++seq;
+              if (EXTS.indexOf(String(file.name.split('.').pop()).toLowerCase()) < 0 || file.name.indexOf('.') < 0) {
+                stat(file.name + ' is not a file type the chat takes. Send a PDF, a picture, a design file, an Office file or a ZIP.'); fin.value = ''; return; }
+              if (file.size > ${CLOUDINARY_UPLOAD_MAX}) { stat(file.name + ' is over 10 MB, the most our file storage takes. Send a smaller copy.'); fin.value = ''; return; }
+              uploading = true; send.disabled = true; stat('Uploading ' + file.name + '…', true);
+              fetch('/admin/api/chat-file-signature', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+                .then(function(r){ if (!r.ok) throw new Error('signature'); return r.json(); })
+                .then(function(sig){
+                  var fd = new FormData();
+                  fd.append('file', file); fd.append('api_key', sig.apiKey); fd.append('timestamp', sig.timestamp);
+                  fd.append('folder', sig.folder); fd.append('signature', sig.signature);
+                  ${CLD_UPLOAD_FN}
+                  return jtCldUpload(sig.cloud, fd, file.name);
+                })
+                .then(function(r){ return r.json(); })
+                .then(function(d){
+                  if (mine !== seq) return;   /* replaced or removed meanwhile */
+                  if (!d || !d.secure_url) throw new Error(d && d.error && d.error.message ? d.error.message : 'upload');
+                  fu.value = d.secure_url; fn.value = file.name;
+                  stat('Ready to send: ' + file.name + '. Add a message if you like, then press Send.', true);
+                })
+                .catch(function(e){ if (mine !== seq) return; fin.value = ''; stat('The file did not upload' + (e && e.message && e.message !== 'upload' && e.message !== 'signature' ? ' (' + e.message + ')' : '') + '. Try again.'); })
+                .then(function(){ if (mine === seq) { uploading = false; send.disabled = false; } });
+            });
+            f.addEventListener('submit', function(e){
+              if (uploading || (!ta.value.trim() && !fu.value)) { e.preventDefault(); if (!uploading) ta.focus(); return; }
+              setTimeout(function(){ send.disabled = true; send.textContent = 'Sending…'; }, 0);
             });
           }
+          /* Every tab with unread messages carries a red count, kept up to date
+             while the page is open, and the browser tab's title says how many
+             are waiting, so a message elsewhere is seen without clicking around. */
+          var baseTitle = document.title;
+          function tabs(t){
+            if (!t) return;
+            var total = 0;
+            document.querySelectorAll('[data-tctabs] .chip-f').forEach(function(a){
+              var n = Number(t[a.getAttribute('href')]) || 0;
+              var s = a.querySelector('.n');
+              if (n && !a.classList.contains('is-on')) {
+                if (!s) { s = document.createElement('span'); s.className = 'n'; a.appendChild(s); }
+                s.textContent = n > 99 ? '99+' : String(n); a.classList.add('has-new');
+              } else { if (s) s.remove(); a.classList.remove('has-new'); }
+            });
+            Object.keys(t).forEach(function(k){ total += Number(t[k]) || 0; });
+            document.title = total ? '(' + (total > 99 ? '99+' : total) + ') ' + baseTitle : baseTitle;
+            document.querySelectorAll('[data-badge="chat"]').forEach(function(b){
+              if (total) { b.textContent = total > 99 ? '99+' : String(total); b.hidden = false; } else b.hidden = true;
+            });
+          }
+          tabs(${JSON.stringify(tabCounts)});
+          var hiddenTicks = 0;
           function poll(){
-            if (document.hidden) return;
+            /* While the page is out of sight only the counts are fetched, which
+               marks nothing read, so the title can still say a message came. */
+            if (document.hidden) {
+              if (++hiddenTicks % 4) return;   /* once a minute while out of sight */
+              fetch('/admin/api/team-chat?counts=1', { credentials: 'same-origin', cache: 'no-store' })
+                .then(function(r){ return r.ok ? r.json() : null; }).then(function(d){ if (d) tabs(d.tabs); }).catch(function(){});
+              return;
+            }
             fetch('/admin/api/team-chat?' + q + '&after=' + encodeURIComponent(log.getAttribute('data-after')),
                   { credentials: 'same-origin', cache: 'no-store' })
               .then(function(r){ return r.ok ? r.json() : null; }).then(function(d){
+                if (d) tabs(d.tabs);
                 if (d && d.seen) Object.keys(d.seen).forEach(function(id){
                   var s = log.querySelector('[data-seen="' + Number(id) + '"]');
                   if (s) s.textContent = d.seen[id];
@@ -30124,7 +30255,15 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
                 d.lines.forEach(function(m){
                   var el = document.createElement('div'); el.className = 'tc-line' + (m.mine ? ' me' : '');
                   if (m.who) { var b = document.createElement('b'); b.className = 'tc-who'; b.textContent = m.who; el.appendChild(b); }
-                  el.appendChild(document.createTextNode(m.body));
+                  if (m.body) el.appendChild(document.createTextNode(m.body));
+                  if (m.file) {
+                    var fa = document.createElement('a'); fa.className = 'tc-file' + (m.file.image ? '' : ' tc-doc');
+                    fa.href = m.file.href;
+                    if (m.file.image) { fa.target = '_blank'; fa.rel = 'noopener'; }
+                    if (m.file.image) { var im = document.createElement('img'); im.src = m.file.url; im.alt = m.file.name; im.loading = 'lazy'; fa.appendChild(im); }
+                    else fa.textContent = '\u{1F4CE} ' + m.file.name;
+                    el.appendChild(fa);
+                  }
                   var w = document.createElement('span'); w.className = 'tc-when'; w.textContent = m.when; el.appendChild(w);
                   if (m.mine) { var s = document.createElement('span'); s.className = 'tc-seen'; s.setAttribute('data-seen', String(Number(m.id)));
                     s.textContent = (d.seen && d.seen[m.id]) || 'Not seen yet'; el.appendChild(s); }
@@ -30147,40 +30286,49 @@ app.post('/admin/team-chat', requireAdmin, async (req, res) => {
   const b = req.body || {};
   const actor = currentActor() || OWNER_ACTOR;
   const body = text(b.body, TEAM_CHAT_MAX + 1);
+  /* A file must be one this shop's storage holds in the chat folder; anything
+     else is refused rather than dropped, so nobody thinks it went. */
+  const fileUrl = String(b.file_url || '').trim();
+  const fileName = CHATFILES.cleanName(b.file_name) || 'File';
   try {
     const [roster, channels] = await Promise.all([staffRoster(), teamChannels()]);
+    const badFile = fileUrl && !CHATFILES.fileUrlOk(fileUrl, QPHOTOS.cloudName());
+    const FILE_ERR = 'That file could not be sent. Pick it again.';
+    const file = fileUrl ? [fileUrl, fileName] : [null, null];
     /* A channel message: only in a channel this person may use, which the
        server decides from their own track, never from the form. */
     if (String(b.channel || '').trim()) {
       const ch = chatChannelFor(b.channel, channels, roster);
       if (!ch) return back(res, '/admin/team-chat', 'err', 'That channel is not one of yours.');
       const backTo = `/admin/team-chat?channel=${ch.id}`;
-      if (!body) return back(res, backTo, 'err', 'Write something first.');
+      if (badFile) return back(res, backTo, 'err', FILE_ERR);
+      if (!body && !fileUrl) return back(res, backTo, 'err', 'Write something or pick a file first.');
       if (body.length > TEAM_CHAT_MAX) return back(res, backTo, 'err', `That is too long. Keep it under ${TEAM_CHAT_MAX} characters.`);
       const author = actor.kind === 'staff' ? actor.id : null;
       await pool.query(
-        `INSERT INTO team_channel_messages (channel_id, staff_id, body)
-         SELECT $1, $2, $3 WHERE NOT EXISTS (
+        `INSERT INTO team_channel_messages (channel_id, staff_id, body, file_url, file_name)
+         SELECT $1, $2, $3, $4::text, $5::text WHERE NOT EXISTS (
            SELECT 1 FROM team_channel_messages WHERE channel_id = $1 AND staff_id IS NOT DISTINCT FROM $2 AND body = $3
-              AND created_at > NOW() - interval '10 seconds')`,
-        [ch.id, author, body]);
+              AND file_url IS NOT DISTINCT FROM $4::text AND created_at > NOW() - interval '10 seconds')`,
+        [ch.id, author, body, ...file]);
       return res.redirect(backTo);
     }
     const staffId = chatThreadFor(b.staff, roster);
     const backTo = actor.kind === 'staff' || !staffId ? '/admin/team-chat' : `/admin/team-chat?staff=${staffId}`;
     if (!staffId) return back(res, '/admin/team-chat', 'err', 'Pick who to message.');
-    if (!body) return back(res, backTo, 'err', 'Write something first.');
+    if (badFile) return back(res, backTo, 'err', FILE_ERR);
+    if (!body && !fileUrl) return back(res, backTo, 'err', 'Write something or pick a file first.');
     if (body.length > TEAM_CHAT_MAX) return back(res, backTo, 'err', `That is too long. Keep it under ${TEAM_CHAT_MAX} characters.`);
     const who = roster.find((r) => r.id === staffId);
     if (actor.kind !== 'staff' && !(who && who.active)) return back(res, backTo, 'err', 'That helper is disabled.');
     /* A double-click or a resubmitted page sends the same line twice in a few
        seconds; the second is dropped rather than shown twice. */
     await pool.query(
-      `INSERT INTO team_messages (staff_id, from_owner, body)
-       SELECT $1, $2, $3 WHERE NOT EXISTS (
+      `INSERT INTO team_messages (staff_id, from_owner, body, file_url, file_name)
+       SELECT $1, $2, $3, $4::text, $5::text WHERE NOT EXISTS (
          SELECT 1 FROM team_messages WHERE staff_id = $1 AND from_owner = $2 AND body = $3
-            AND created_at > NOW() - interval '10 seconds')`,
-      [staffId, actor.kind !== 'staff', body]);
+            AND file_url IS NOT DISTINCT FROM $4::text AND created_at > NOW() - interval '10 seconds')`,
+      [staffId, actor.kind !== 'staff', body, ...file]);
     return res.redirect(backTo);
   } catch (err) {
     console.error('team chat send failed:', err.message);
@@ -30225,26 +30373,77 @@ app.post('/admin/team-chat/channels', requireAdmin, async (req, res) => {
   }
 });
 
+/* A signed upload into the chat folder for anyone signed in to the workspace.
+   The signature fixes the folder, so it cannot be used to write anywhere else. */
+app.post('/admin/api/chat-file-signature', requireAdmin, (req, res) => {
+  const apiSecret = process.env.CLOUDINARY_API_SECRET || process.env.CLUDINARY_API_SECRET;
+  const cloud = QPHOTOS.cloudName();
+  if (!apiSecret || !cloud || !process.env.CLOUDINARY_API_KEY) return res.status(503).json({ error: 'Uploads are not set up.' });
+  const timestamp = Math.round(Date.now() / 1000);
+  const signature = cloudinary.utils.api_sign_request({ folder: CHATFILES.FOLDER, timestamp }, apiSecret);
+  res.set('Cache-Control', 'no-store');
+  res.json({ signature, timestamp, folder: CHATFILES.FOLDER, cloud, apiKey: process.env.CLOUDINARY_API_KEY });
+});
+
+/* A file from a chat message, for someone who may read that conversation:
+   their own direct chat (any, for the owner) or a channel they belong to.
+   Fetched through Cloudinary's signed download, which works for PDFs and
+   ZIPs where the plain address is refused, and handed over as a download. */
+app.get('/admin/team-chat/file/:kind/:id', requireAdmin, async (req, res) => {
+  const kind = String(req.params.kind);
+  const id = /^\d{1,15}$/.test(String(req.params.id)) ? req.params.id : null;
+  if (!id || !['dm', 'ch'].includes(kind)) return res.status(404).send('Not found.');
+  try {
+    const actor = currentActor() || OWNER_ACTOR;
+    const roster = await staffRoster();
+    let m = null;
+    if (kind === 'dm') {
+      ({ rows: [m] } = await pool.query('SELECT staff_id, file_url, file_name FROM team_messages WHERE id = $1', [id]));
+      if (m && actor.kind === 'staff' && m.staff_id !== actor.id) m = null;
+    } else {
+      ({ rows: [m] } = await pool.query('SELECT channel_id, file_url, file_name FROM team_channel_messages WHERE id = $1', [id]));
+      if (m && !chatChannelFor(m.channel_id, await teamChannels(), roster)) m = null;
+    }
+    const src = m && m.file_url ? CHATFILES.downloadSource(m.file_url, QPHOTOS.cloudName()) : null;
+    if (!src) return res.status(404).send('That file is not in your chat.');
+    const r = await fetch(cloudinary.utils.private_download_url(src.publicId, src.format, { resource_type: src.resourceType, type: 'upload' }));
+    if (!r.ok || !r.body) throw new Error(`Cloudinary answered ${r.status}`);
+    const name = MSGFILES.cleanName(m.file_name, src.ext);
+    res.set('Content-Type', 'application/octet-stream');
+    res.set('Content-Disposition', `attachment; filename="${name.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(name)}`);
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.set('Cache-Control', 'private, no-store');
+    pipeline(Readable.fromWeb(r.body), res, (e) => { if (e) console.error('chat file stream cut off:', e.message); });
+  } catch (err) {
+    console.error(`chat file ${kind}/${req.params.id} failed:`, err.message);
+    if (!res.headersSent) res.status(502).send('Could not fetch that file just now. Try again.');
+    else res.destroy(err);
+  }
+});
+
 app.get('/admin/api/team-chat', requireAdmin, async (req, res) => {
   res.set('Cache-Control', 'no-store');
   try {
     const after0 = Number.parseInt(String(req.query.after || '0'), 10);
     const after = Number.isSafeInteger(after0) && after0 > 0 ? after0 : 0;
-    const roster = await staffRoster();
+    const actor = currentActor() || OWNER_ACTOR;
+    const [roster, allChannels] = await Promise.all([staffRoster(), teamChannels()]);
+    const counts = () => chatTabCounts(actor, roster, allChannels).catch(() => null);
+    if (req.query.counts === '1') return res.json({ tabs: await counts() });
     if (String(req.query.channel || '').trim()) {
-      const ch = chatChannelFor(req.query.channel, await teamChannels(), roster);
+      const ch = chatChannelFor(req.query.channel, allChannels, roster);
       if (!ch) return res.status(404).json({ lines: [] });
       const lines = await channelLines(ch.id, after);
       if (lines.length) await channelMarkRead(ch.id, Number(lines[lines.length - 1].id));
       const seen = await chatSeen({ channelId: ch.id }, roster).catch(() => ({}));
-      return res.json({ lines: lines.map((m) => channelLineJson(m, roster)), seen });
+      return res.json({ lines: lines.map((m) => channelLineJson(m, roster)), seen, tabs: await counts() });
     }
     const staffId = chatThreadFor(req.query.staff, roster);
     if (!staffId) return res.status(404).json({ lines: [] });
     const lines = await chatLines(staffId, after);
     if (lines.length) await chatMarkRead(staffId);
     const seen = await chatSeen({ staffId }, roster).catch(() => ({}));
-    res.json({ lines: lines.map(chatLineJson), seen });
+    res.json({ lines: lines.map(chatLineJson), seen, tabs: await counts() });
   } catch (err) {
     console.error('team chat poll failed:', err.message);
     res.status(500).json({ lines: [] });

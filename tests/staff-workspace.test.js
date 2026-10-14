@@ -474,10 +474,15 @@ test('team chat: a helper reaches only their own conversation', () => {
 
 test('team chat lines are text, never markup', () => {
   const page = route("app.get('/admin/team-chat', requireAdmin");
-  assert.match(page, /escEmail\(j\.body\)/);
+  const line = src.slice(src.indexOf('function chatLineHtml('), src.indexOf('\n}\n', src.indexOf('function chatLineHtml(')));
+  assert.match(line, /escEmail\(j\.body\)/);
+  assert.match(line, /escEmail\(j\.who\)/);
+  assert.match(line, /escEmail\(f\.url\)/, 'a file address is escaped');
+  assert.match(line, /escEmail\(f\.name\)/, 'a file name is escaped');
+  assert.match(page, /lineHtml = \(m\) => chatLineHtml\(/);
   assert.match(page, /el\.appendChild\(document\.createTextNode\(m\.body\)\)/);
   assert.match(page, /b\.textContent = m\.who/);
-  assert.match(page, /escEmail\(j\.who\)/);
+  assert.match(page, /fa\.textContent = '[^']*' \+ m\.file\.name/, 'a polled file name is text');
   assert.doesNotMatch(page, /innerHTML/);
   const send = route("app.post('/admin/team-chat', requireAdmin");
   assert.match(send, /body\.length > TEAM_CHAT_MAX/, 'length is capped');
