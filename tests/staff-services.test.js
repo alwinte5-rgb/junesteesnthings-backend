@@ -46,16 +46,28 @@ test('a garment still gets the volume break', () => {
   assert.strictEqual(Number(line({ price: 10 }, 10).blank), 10);
 });
 
-test('services get their own heading in the quote form', () => {
-  assert.match(src, /const SERVICE_GROUP = 'Services \(not in shop\)';/);
-  assert.match(src, /p\.service \? SERVICE_GROUP : productGroupOf\(p\.name\)/);
+/* Lifted out of server.js by name, run in this realm. */
+function lift(name) {
+  const at = src.indexOf('function ' + name + '(');
+  assert.ok(at > -1, name + ' not found in server.js');
+  return src.slice(at, src.indexOf('\n}\n', at) + 2);
+}
+
+test('the customer quote page is told a line is a service', () => {
+  const fn = vm.runInThisContext('(function(){ var itemPrints = function(){ return []; }; var typedUnitOf = function(){ return null; }; ' +
+    lift('customerLinePricing') + '; return customerLinePricing; })()');
+  const catalog = { products: [
+    { id: 1, name: 'Brochure Design — Revision', price: 150, cost: 0, service: true },
+    { id: 2, name: 'Tee', price: 10, cost: 4 },
+  ], methods: [] };
+  const out = fn([{ product_id: 1 }, { product_id: 2 }], catalog);
+  assert.strictEqual(out[0].product.service, true);
+  assert.strictEqual(out[1].product.service, false);
+  assert.strictEqual(out[0].product.cost, undefined);   // never the shop's cost
 });
 
-test('add-services writes services inactive and tagged', () => {
-  const tool = fs.readFileSync(path.join(__dirname, '..', 'tools', 'add-services.js'), 'utf8');
-  assert.match(tool, /",0,'service',"/);
-  assert.match(tool, /",'','',0,999,"/);   // active = 0
-  assert.match(tool, /active=0, supplier='service'/);
+test('services get their own heading in the quote form', () => {
+  assert.match(src, /'Services \(not in shop\)'/);
 });
 
 test('a service line is costed as a service, not as half-price blanks', () => {

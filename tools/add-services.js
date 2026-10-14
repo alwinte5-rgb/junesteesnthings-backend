@@ -22,7 +22,7 @@
  * work; folding is per brochure. Upserted by name, so re-running reprices.
  */
 const fs = require('fs');
-const { mysql, enjson, sq } = require('./lib/db');
+const { mysql, mysqlUrlFrom, enjson, sq } = require('./lib/db');
 
 const argv = process.argv.slice(2);
 const APPLY = argv.includes('--apply');
@@ -30,12 +30,15 @@ const varsFile = ((argv.find((a) => a.startsWith('--vars=')) || '').split('=').s
   .replace(/^~/, process.env.HOME);
 if (!varsFile) { console.error('usage: add-services.js --vars=<file> [--apply]'); process.exit(2); }
 const env = JSON.parse(fs.readFileSync(varsFile, 'utf8'));
-const url = env.MYSQL_PUBLIC_URL || env.MYSQL_URL;
+const url = mysqlUrlFrom(env);
+if (!url) { console.error('no MySQL connection in ' + varsFile); process.exit(2); }
 
 const SERVICES = [
-  { name: 'Trifold Brochure Folding (per brochure, $25 min)', price: '0.10',
-    description: 'Folding flat trifold brochures in house, per brochure. Minimum charge $25 ' +
-      '(250 brochures). Not needed when the printer delivers them folded.' },
+  /* No minimum: the quote engine cannot enforce one on a flat price, and a
+     minimum written only in the name is one nobody is held to. */
+  { name: 'Trifold Brochure Folding (per brochure)', price: '0.10',
+    description: 'Folding flat trifold brochures in house, per brochure. Not needed when ' +
+      'the printer delivers them folded.' },
   { name: 'Brochure Design — Trifold, New', price: '350.00',
     description: 'A new trifold brochure designed from scratch, both sides.' },
   { name: 'Brochure Design — Revision', price: '150.00',
@@ -56,7 +59,10 @@ for (const s of SERVICES) {
 
 const rows = mysql(url, "SELECT id,name,price,active,supplier FROM lumise_products WHERE name IN (" +
   SERVICES.map((s) => sq(s.name)).join(',') + ');', { rows: true });
-const have = new Map(rows.map((r) => [r.name, r]));
+/* Matched the way MySQL matched them: its collation ignores case, so a row
+   whose case was changed in the admin is still this service, not a new one. */
+const key = (n) => String(n).toLowerCase().trim();
+const have = new Map(rows.map((r) => [key(r.name), r]));
 
 /* A same-named product that is NOT a service is somebody's real product. */
 for (const r of rows) {
@@ -68,7 +74,7 @@ for (const r of rows) {
 
 console.log((APPLY ? 'APPLYING' : 'DRY RUN') + '\n');
 for (const s of SERVICES) {
-  const h = have.get(s.name);
+  const h = have.get(key(s.name));
   console.log('  ' + (h ? 'update #' + h.id + ' ($' + h.price + ' -> $' + s.price + ')' : 'create') +
     '  ' + s.name + '  $' + s.price);
 }
@@ -76,7 +82,7 @@ if (!APPLY) { console.log('\n  dry run — pass --apply to write'); process.exit
 
 const author = mysql(url, 'SELECT author FROM lumise_products WHERE active=1 LIMIT 1;', { rows: true })[0].author;
 for (const s of SERVICES) {
-  const h = have.get(s.name);
+  const h = have.get(key(s.name));
   if (h) {
     mysql(url, 'UPDATE lumise_products SET price=' + sq(s.price) + ', description=' + sq(s.description) +
       ", active=0, supplier='service', updated=NOW() WHERE id=" + Number(h.id) + ';');

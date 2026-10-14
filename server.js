@@ -11053,26 +11053,31 @@ ${quotePricingSource()}
           if (cutMeth) prod = null;
           /* A sign has no garment price, no sleeves and no decoration: hide
              them, and untick the print places so nothing is priced on it. */
-          var isSign = isSignProduct(prod) || !!signKindOf(prod);
+          /* A service (design fee, folding) is priced from the catalogue and
+             printed on nothing — checked before the sign test, whose name
+             match would take "Business Card Design" for a sign. */
+          var isService = !!(prod && prod.service);
+          var isSign = !isService && (isSignProduct(prod) || !!signKindOf(prod));
+          var noPrint = isSign || isService;
           var psec = L.querySelector('.psec');
-          if (psec) psec.style.display = (cutMeth || isSign) ? 'none' : '';
-          if (isSign) L.querySelectorAll('.pon').forEach(function(cb){ cb.checked = false; });
+          if (psec) psec.style.display = (cutMeth || noPrint) ? 'none' : '';
+          if (noPrint) L.querySelectorAll('.pon').forEach(function(cb){ cb.checked = false; });
           var garm = L.querySelector('.garm'), bpn = L.querySelector('.bpnote');
-          if (garm) garm.style.display = isSign ? 'none' : '';
-          if (bpn) bpn.style.display = isSign ? 'none' : '';
-          if (isSign) { var bpi = L.querySelector('.bp'); if (bpi) bpi.value = ''; }
+          if (garm) garm.style.display = noPrint ? 'none' : '';
+          if (bpn) bpn.style.display = noPrint ? 'none' : '';
+          if (noPrint) { var bpi = L.querySelector('.bp'); if (bpi) bpi.value = ''; }
           var signKind = signKindOf(prod);
           var sgn = L.querySelector('.signnote');
           if (sgn) sgn.style.display = isSign && !signKind ? '' : 'none';
           var prints = [];
           var firstM = '';
           L.querySelectorAll('.ploc[data-loc]').forEach(function(row){
-            var on = !cutMeth && !isSign && row.querySelector('.pon').checked;
+            var on = !cutMeth && !noPrint && row.querySelector('.pon').checked;
             var pm = row.querySelector('.pm');
             if (on && pm.value && !firstM) firstM = pm.value;
           });
           L.querySelectorAll('.ploc[data-loc]').forEach(function(row){
-            var on = !cutMeth && !isSign && row.querySelector('.pon').checked;
+            var on = !cutMeth && !noPrint && row.querySelector('.pon').checked;
             var pm = row.querySelector('.pm'), pc = row.querySelector('.pc');
             row.classList.toggle('on', on);
             pm.style.display = on ? '' : 'none';
@@ -12211,6 +12216,9 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
          real decoration prints nothing. Colours go through the same
          colourCount() the browser ran. */
       const prints = [];
+      /* A service (design fee, folding) is never printed on: the form hides
+         the print places for one, and a posted decoration is ignored here. */
+      const isService = !!(prod && prod.service);
       for (const loc of PRINT_LOCS) {
         if (!tickedBox(one(b[`pr_on_${loc}${i}`]))) continue;
         const pm = catalog.methods.find((m) => String(m.id) === String(one(b[`pr_m_${loc}${i}`])) &&
@@ -12218,14 +12226,15 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         if (!pm) continue;
         prints.push({ loc, method: pm, colours: colourCount(pm, one(b[`pr_c_${loc}${i}`])) });
       }
+      if (isService) prints.length = 0;
       const usePrints = prints.length > 0;
       /* Without locations, the line is priced the way it always was: a cutout
          pack (method alone), a plain typed line, or an older client. */
-      const method = usePrints ? prints[0].method
+      const method = isService ? undefined : usePrints ? prints[0].method
         : catalog.methods.find(m => String(m.id) === String(one(b['method' + i])));
       /* The second decoration on the same garment, for a line without
          locations. Resolved against the CATALOGUE like the first. */
-      const method2 = usePrints ? undefined : catalog.methods.find(m => String(m.id) === String(one(b['method2' + i])));
+      const method2 = (usePrints || isService) ? undefined : catalog.methods.find(m => String(m.id) === String(one(b['method2' + i])));
       /* Count a row as real if ANY field was filled in. Previously a line with
          only a price (or only a size mix) was silently dropped, which for a
          single-line quote produced "Add at least one item" and lost the work. */
@@ -13339,6 +13348,9 @@ function customerLinePricing(items, catalog) {
       product: p ? {
         price: Number(p.price) || 0,
         sizes: (p.sizes || []).map((z) => ({ size: z.size, upcharge: Number(z.upcharge) || 0 })),
+        /* Without it a customer nudging the quantity on a service line sees
+           the garment volume break the server will never give. */
+        service: !!p.service,
       } : null,
       method: slim(m),
       method2: slim(m2),
