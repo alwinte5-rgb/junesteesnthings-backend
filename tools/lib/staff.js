@@ -360,6 +360,10 @@ const ROUTES = {
   'POST /admin/quote/:code/note': 'quotes.view',
   'POST /admin/tasks': 'any',
   'POST /admin/tasks/:id/done': 'any',
+  'GET /admin/tasks/:id/file/:n': 'any',
+  'POST /admin/api/task-file-signature': 'any',
+  'GET /admin/work-schedule': 'any',
+  'POST /admin/work-schedule': 'owner',
   'POST /admin/tasks/:id/start': 'any',
   /* The tools the team works in: everyone reads the list; only the owner edits it. */
   'GET /admin/resources': 'any',

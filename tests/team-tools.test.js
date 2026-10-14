@@ -64,7 +64,7 @@ test('resources: links must be https, every field is capped, and the audience is
 test('tasks: a description and how-to, a Start that only the person doing it can press, then Completed', () => {
   assert.strictEqual(STAFF.ROUTES['POST /admin/tasks/:id/start'], 'any');
   const add = route("app.post('/admin/tasks', requireAdmin");
-  assert.match(add, /text\(b\.description, 2000\) \|\| null, text\(b\.how_to, 4000\) \|\| null/);
+  assert.match(add, /text\(b\.description, TASK_TEXT_MAX\) \|\| null, text\(b\.how_to, TASK_TEXT_MAX\) \|\| null/);
   const start = route("app.post('/admin/tasks/:id/start', requireAdmin");
   assert.match(start, /if \(!actor \|\| actor\.kind !== 'staff'\) return back/, 'the owner does not start a helper\'s task for them');
   assert.match(start, /AND \(assigned_to = \$2 OR assigned_to IS NULL\)/, 'someone else\'s task is refused');
@@ -76,11 +76,14 @@ test('tasks: a description and how-to, a Start that only the person doing it can
 
 test('My Day: task text is escaped, a helper sees Start then Mark completed, and sections fold away', () => {
   const page = route("app.get('/admin/my-day', requireAdmin");
-  assert.match(page, /\$\{escEmail\(t\.description\)\}/);
-  assert.match(page, /\$\{escEmail\(t\.how_to\)\}/);
+  const details = src.slice(src.indexOf('function taskDetailsHtml('), src.indexOf('\n}\n', src.indexOf('function taskDetailsHtml(')));
+  assert.match(page, /taskDetailsHtml\(t, actor, roster\)/);
+  assert.match(details, /\$\{escEmail\(t\.description\)\}/);
+  assert.match(details, /\$\{escEmail\(t\.how_to\)\}/);
+  assert.match(details, /\$\{escEmail\(t\.done_note\)\}/);
   assert.match(page, /me != null && !t\.started_at\s+\? `<form method="post" action="\/admin\/tasks\/\$\{t\.id\}\/start"/);
   assert.match(page, />Start: I accept this task</);
-  assert.match(page, /'Mark completed'/);
+  assert.match(src.slice(src.indexOf('function taskDoneForm('), src.indexOf('function taskDoneForm(') + 1200), />Mark completed</);
   assert.match(page, /Completed this week/);
   assert.match(page, /<details class="card md-sec" open data-sec=/);
   assert.match(page, /try\{localStorage\.setItem/, 'a browser that blocks storage still works');

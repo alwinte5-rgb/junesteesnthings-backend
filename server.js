@@ -92,6 +92,7 @@ const RUSH = require('./tools/lib/rush');
 const CHAN = require('./tools/lib/team-channels');
 const CHATFILES = require('./tools/lib/team-chat-files');
 const JOBNOTES = require('./tools/lib/job-notes');
+const SHIFTS = require('./tools/lib/work-shifts');
 const HIRING = require('./tools/lib/hiring');
 const HIRE_POSTING = require('./tools/lib/hiring-posting');
 const PROOFS = require('./tools/lib/job-proofs');
@@ -1170,7 +1171,10 @@ async function initStaffTables() {
   /* A task says what to do and, for something new, how; the person doing it
      presses Start (accepting it) and then Completed, so the owner sees where
      each one stands. */
-  for (const col of ['description TEXT', 'how_to TEXT', 'started_at TIMESTAMPTZ', 'started_by INTEGER']) {
+  /* files: [{ url, name, by, at }] in the task_files folder; done_note: what
+     the helper says they did when they close it (owner, 2026-10-14). */
+  for (const col of ['description TEXT', 'how_to TEXT', 'started_at TIMESTAMPTZ', 'started_by INTEGER',
+                     "files JSONB NOT NULL DEFAULT '[]'::jsonb", 'done_note TEXT']) {
     await pool.query(`ALTER TABLE staff_tasks ADD COLUMN IF NOT EXISTS ${col}`);
   }
   /* The tools the team works in (/admin/resources): links and how to get in,
@@ -1407,6 +1411,19 @@ async function initStaffTables() {
   /* Messages between the team about one job, each to one person, pinned on
      their pages until they mark it addressed. author and recipient are
      reader keys: 'owner' or 'staff:<id>'. */
+  /* Planned working hours (tools/lib/work-shifts.js): a weekday and a start
+     and end in the zone they were typed in. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_work_shifts (
+      id          SERIAL PRIMARY KEY,
+      staff_id    INTEGER NOT NULL,
+      weekday     SMALLINT NOT NULL,
+      start_min   SMALLINT NOT NULL,
+      end_min     SMALLINT NOT NULL,
+      zone        TEXT NOT NULL,
+      note        TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS job_notes (
       id            BIGSERIAL PRIMARY KEY,
@@ -9230,6 +9247,7 @@ const ADMIN_NAV = [
   { key: 'hiring',     href: '/admin/hiring',        label: 'Hiring',     icon: 'users' },
   { key: 'team',       href: '/admin/team',    label: 'Team',       icon: 'team',   badge: 'approvals' },
   { key: 'timeclock',  href: '/admin/timeclock', label: 'Timeclock', icon: 'clock' },
+  { key: 'shifts',     href: '/admin/work-schedule', label: 'Work hours', icon: 'clock' },
 ];
 /* Ordered the way a shop is actually worked, not the way the routes grew: what
    needs you today, the enquiries that might become work, the work in hand, the
@@ -23223,7 +23241,7 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
   const shipP = safe(shippingQueues().then(shippingWaiting), null, 'shipping');
   const me = (currentActor() || OWNER_ACTOR).kind === 'staff' ? currentActor().id : null;
   const [takings, owed, out, leads, jobs, reviewsWaiting, changes, disputes, unapplied, badTexts, recent, tax,
-         certsWaiting, deliveredOwing, ads, traffic, replies, tasks, roster] =
+         certsWaiting, deliveredOwing, ads, traffic, replies, tasks, tasksDone, roster] =
     await Promise.all([
       /* Quotes and everything else apart: the board's "Collected this month"
          and the Finances months count the quote ledger only, so the total here
@@ -23280,6 +23298,7 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
       /* The to-do list: the owner sees every open task, a helper theirs and anyone's. */
       many(`SELECT * FROM staff_tasks WHERE done_at IS NULL AND ($1::int IS NULL OR assigned_to = $1 OR assigned_to IS NULL)
              ORDER BY due_on NULLS LAST, created_at LIMIT 50`, 'tasks', [me]),
+      many(`SELECT * FROM staff_tasks WHERE done_at > NOW() - interval '7 days' ORDER BY done_at DESC LIMIT 50`, 'tasks done', []),
       safe(staffRoster(), [], 'roster'),
     ]);
 
@@ -23351,6 +23370,8 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
   const [lastSrc] = lastLead ? (LEAD_SOURCES[lastLead.source] || LEAD_SOURCES.form) : [''];
 
   res.set('Cache-Control', 'no-store');
+  const addTaskForm = await taskAddForm({ back: '/admin/dashboard#todo', roster, owner: isOwner() })
+    .catch((e) => { console.error('dashboard: task form failed:', e.message); return ''; });
   const notesPin = await jobNotesPinCard(currentActor() || OWNER_ACTOR, '/admin/dashboard')
     .catch((e) => { console.error('dashboard: job notes failed:', e.message); return ''; });
   res.send(adminPage('Dashboard', `
@@ -23393,24 +23414,23 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
         ${tasks.length ? `<div class="rows">${tasks.map((t) => {
           const due = t.due_on ? new Date(t.due_on).toISOString().slice(0, 10) : '';
           const todayIso = new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ });
-          return `<div class="row-i"><span class="row-main"><b>${escEmail(t.title)}</b>
+          return `<div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal"><b>${escEmail(t.title)}</b>
             <div class="row-sub">${due ? `due ${escEmail(fmtDate(t.due_on))}` : 'no date'}${
-              t.quote_code ? ` &middot; <a href="/admin/production/${escEmail(t.quote_code)}">${escEmail(t.quote_code)}</a>` : ''}${
-              t.assigned_to != null ? ` &middot; ${escEmail(nameOf(roster, t.assigned_to))}` : ''}</div></span>
+              t.assigned_to != null ? ` &middot; ${escEmail(nameOf(roster, t.assigned_to))}` : ' &middot; anyone'}${
+              t.started_at ? ` &middot; started ${escEmail(whenShort(t.started_at))}` : t.assigned_to != null ? ' &middot; <b style="color:#b45309">not started</b>' : ''}</div>
+            ${taskDetailsHtml(t, currentActor() || OWNER_ACTOR, roster)}</span>
             <span class="row-end">${due && due < todayIso ? pill('overdue', 'red') : due === todayIso ? pill('today', 'amber') : ''}
-              <form method="post" action="/admin/tasks/${Number(t.id)}/done" style="margin:0">
-                <input type="hidden" name="back" value="/admin/dashboard#todo">
-                <button type="submit" class="btn btn-ghost">Done</button></form></span></div>`;
+              ${taskDoneForm(t, '/admin/dashboard#todo', false)}</span></div>`;
         }).join('')}</div>` : emptyState('Nothing on the list.')}
-        <form method="post" action="/admin/tasks" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
-          <input name="title" required maxlength="200" placeholder="Add a to-do" style="flex:1 1 200px">
-          <input type="date" name="due_on" style="width:auto">
-          ${isOwner() && roster.some((r) => r.active) ? `<select name="assigned_to" style="width:auto"><option value="">Anyone</option>${
-            roster.filter((r) => r.active).map((r) => `<option value="${Number(r.id)}">${escEmail(r.name)}</option>`).join('')}</select>` : ''}
-          <input type="hidden" name="back" value="/admin/dashboard#todo">
-          <button type="submit" class="btn btn-ghost">Add</button>
-        </form>
-      </div>
+        ${tasksDone.length ? `<details style="margin-top:10px"${tasksDone.some((t) => Date.now() - new Date(t.done_at) < 864e5) ? ' open' : ''}>
+          <summary><b>Completed in the last 7 days (${tasksDone.length})</b></summary><div class="rows">${tasksDone.map((t) => `
+          <div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal"><b>${escEmail(t.title)}</b> ${pill('completed', 'green')}
+            <div class="row-sub">${t.done_by != null ? escEmail(nameOf(roster, t.done_by)) : 'You'} &middot; ${escEmail(whenShort(t.done_at))}${
+              t.started_at ? ` &middot; started ${escEmail(whenShort(t.started_at))}` : ''}</div>
+            ${taskDetailsHtml(t, currentActor() || OWNER_ACTOR, roster)}</span></div>`).join('')}</div></details>` : ''}
+        <details style="margin-top:10px"><summary><b>Add a task</b> <span class="muted">with the details, files and an order</span></summary>
+          ${addTaskForm}</details>
+      </div>${TASK_CSS}${TASK_UPLOAD_JS}
       <div class="card">
         <h2 class="card-title">Latest leads <a href="/admin/leads?status=all">all leads &rarr;</a></h2>
         ${leads.length ? `<div class="rows">${leads.slice(0, 5).map((l) => {
@@ -30040,12 +30060,25 @@ app.post('/admin/tasks', requireAdmin, async (req, res) => {
   if (!title) return back(res, backTo, 'err', 'A task needs a title.');
   const assignTo = actor && actor.kind === 'staff' ? actor.id : intIn(b.assigned_to);
   try {
+    /* An attached order must be one the person adding it can open, and the
+       files must be ones uploaded for tasks. Refused, not dropped, so nobody
+       thinks it was attached. */
+    const code = String(b.quote_code || '').trim().toUpperCase();
+    if (code && (!QUOTE_CODE_RE.test(code) || !(await canOpenJob(code, actor || OWNER_ACTOR)))) {
+      return back(res, backTo, 'err', `There is no order ${code.slice(0, 20)} you can open. Check the code.`);
+    }
+    const picked = CHATFILES.pickTaskFiles(b.files, QPHOTOS.cloudName());
+    if (picked.error) return back(res, backTo, 'err', 'A file did not upload properly. Pick it again.');
+    const by = actor && actor.kind === 'staff' ? actor.id : null;
+    const files = picked.files.map((f) => ({ ...f, by, at: new Date().toISOString() }));
     await pool.query(
-      `INSERT INTO staff_tasks (title, due_on, assigned_to, business, submission_id, quote_code, created_by, description, how_to)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      `INSERT INTO staff_tasks (title, due_on, assigned_to, business, submission_id, quote_code, created_by, description, how_to, files)
+       SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb
+        WHERE NOT EXISTS (SELECT 1 FROM staff_tasks WHERE title = $1 AND assigned_to IS NOT DISTINCT FROM $3
+                            AND created_at > NOW() - interval '10 seconds')`,
       [title, isoDate(b.due_on), assignTo, BUSINESSES[b.business] ? b.business : 'jtees',
-       intIn(b.submission_id), QUOTE_CODE_RE.test(String(b.quote_code || '').toUpperCase()) ? String(b.quote_code).toUpperCase() : null,
-       actor && actor.kind === 'staff' ? actor.id : null, text(b.description, 2000) || null, text(b.how_to, 4000) || null]);
+       intIn(b.submission_id), code || null,
+       by, text(b.description, TASK_TEXT_MAX) || null, text(b.how_to, TASK_TEXT_MAX) || null, JSON.stringify(files)]);
     return back(res, backTo, 'ok', 'Task added.');
   } catch (err) {
     console.error('task add failed:', err.message);
@@ -30082,15 +30115,323 @@ app.post('/admin/tasks/:id/done', requireAdmin, async (req, res) => {
        owner any. Done without Start skipped the accepting step the page asks
        for, by a direct post or a tab loaded before Start existed (Codex #201). */
     const staffId = actor && actor.kind === 'staff' ? actor.id : null;
+    /* A helper says what they did, and may attach what they made (owner,
+       2026-10-14: "I need to watch her"). The owner's Done needs neither. */
+    const note = text(req.body && req.body.done_note, TASK_TEXT_MAX);
+    if (staffId && note.length < 3) return back(res, backTo, 'err', 'Say what you did before marking it completed.');
+    const picked = CHATFILES.pickTaskFiles(req.body && req.body.files, QPHOTOS.cloudName());
+    if (picked.error) return back(res, backTo, 'err', 'A file did not upload properly. Pick it again.');
+    const added = picked.files.map((f) => ({ ...f, by: staffId, at: new Date().toISOString() }));
     const { rowCount } = await pool.query(
-      `UPDATE staff_tasks SET done_at = NOW(), done_by = $2
+      `UPDATE staff_tasks SET done_at = NOW(), done_by = $2, done_note = $3, files = files || $4::jsonb
         WHERE id = $1 AND done_at IS NULL AND ($2::int IS NULL OR (assigned_to = $2 AND started_at IS NOT NULL))`,
-      [id, staffId]);
+      [id, staffId, note || null, JSON.stringify(added)]);
     if (!rowCount) return back(res, backTo, 'err', staffId ? 'Press Start on the task first, then Done.' : 'That task is already closed.');
     return res.redirect(backTo);
   } catch (err) {
     console.error('task done failed:', err.message);
     return back(res, backTo, 'err', 'Could not close the task.');
+  }
+});
+
+/* ── Task details, files and orders (owner, 2026-10-14) ─────────────────────
+   "Allow the tasks to have more description and not just a title. I would
+   also like to upload on the tasks and attach customer orders to tasks." */
+
+const TASK_TEXT_MAX = 8000;
+
+/** May this person see a task, and so its files? The owner any; a helper
+ *  their own and anyone's. */
+function taskVisibleTo(t, actor) {
+  return !actor || actor.kind !== 'staff' || t.assigned_to == null || t.assigned_to === actor.id;
+}
+
+/** The upload box for task forms: files go straight to storage, and their
+ *  addresses ride in the form's hidden `files`. One script per page. */
+function taskUploadBox(label = 'Attach files') {
+  return `<div class="tu" data-taskup><input type="hidden" name="files" value="">
+    <label class="btn btn-ghost" style="cursor:pointer;display:inline-block">&#128206; ${escEmail(label)}
+      <input type="file" multiple accept="${CHATFILES.ACCEPT}" data-tufile hidden></label>
+    <span class="muted tu-stat" data-tustat style="font-size:12.5px;margin-left:6px">Up to 10 files, 10 MB each.</span>
+    <div class="tu-list" data-tulist></div></div>`;
+}
+const TASK_UPLOAD_JS = `<script>
+(function(){
+  var EXTS = ${JSON.stringify(CHATFILES.EXTS)};
+  document.querySelectorAll('[data-taskup]').forEach(function(box){
+    var form = box.closest('form'), inp = box.querySelector('[data-tufile]'), hid = box.querySelector('[name=files]');
+    var st = box.querySelector('[data-tustat]'), list = box.querySelector('[data-tulist]');
+    var files = [], busy = 0;
+    function draw(){
+      hid.value = files.length ? JSON.stringify(files) : '';
+      list.textContent = '';
+      files.forEach(function(f, i){
+        var row = document.createElement('div'); row.className = 'tu-file';
+        row.appendChild(document.createTextNode('\\u{1F4CE} ' + f.name + ' '));
+        var x = document.createElement('button'); x.type = 'button'; x.className = 'btn btn-ghost'; x.textContent = 'Remove';
+        x.style.padding = '2px 8px'; x.addEventListener('click', function(){ files.splice(i, 1); draw(); });
+        row.appendChild(x); list.appendChild(row);
+      });
+    }
+    function upload(file){
+      busy++; st.textContent = 'Uploading ' + file.name + '…';
+      return fetch('/admin/api/task-file-signature', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+        .then(function(r){ if (!r.ok) throw new Error('signature'); return r.json(); })
+        .then(function(sig){
+          var fd = new FormData();
+          fd.append('file', file); fd.append('api_key', sig.apiKey); fd.append('timestamp', sig.timestamp);
+          fd.append('folder', sig.folder); fd.append('signature', sig.signature);
+          ${CLD_UPLOAD_FN}
+          return jtCldUpload(sig.cloud, fd, file.name);
+        })
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+          if (!d || !d.secure_url) throw new Error(d && d.error && d.error.message ? d.error.message : 'upload');
+          if (files.length < 10) files.push({ url: d.secure_url, name: file.name }); draw();
+        })
+        .catch(function(e){ st.textContent = file.name + ' did not upload' + (e && e.message && e.message !== 'upload' && e.message !== 'signature' ? ' (' + e.message + ')' : '') + '. Try again.'; })
+        .then(function(){ busy--; if (!busy && !/did not/.test(st.textContent)) st.textContent = files.length + ' file' + (files.length === 1 ? '' : 's') + ' attached.'; });
+    }
+    inp.addEventListener('change', function(){
+      [].slice.call(inp.files || []).forEach(function(file){
+        var ext = String(file.name.split('.').pop()).toLowerCase();
+        if (file.name.indexOf('.') < 0 || EXTS.indexOf(ext) < 0) { st.textContent = file.name + ' is not a file type we take.'; return; }
+        if (file.size > ${CLOUDINARY_UPLOAD_MAX}) { st.textContent = file.name + ' is over 10 MB.'; return; }
+        if (files.length + busy >= 10) { st.textContent = 'Ten files at most.'; return; }
+        upload(file);
+      });
+      inp.value = '';
+    });
+    form.addEventListener('submit', function(e){ if (busy) { e.preventDefault(); st.textContent = 'Wait for the upload to finish.'; } });
+  });
+})();
+</script>`;
+
+/** The order picker: a code, with the recent orders offered to anyone who sees quotes. */
+async function taskOrderField(value = '') {
+  const list = actorLevel('quotes.view') === 'on' || isOwner()
+    ? (await pool.query(`SELECT code, name FROM quotes WHERE cancelled_at IS NULL ORDER BY created_at DESC LIMIT 150`).catch(() => ({ rows: [] }))).rows : [];
+  return `<label style="margin:0;flex:1 1 200px">Customer order (optional)
+    <input name="quote_code" list="task-orders" maxlength="20" value="${escEmail(value)}" placeholder="Order code, e.g. AB12CD34" style="text-transform:uppercase"></label>
+    ${list.length ? `<datalist id="task-orders">${list.map((q) => `<option value="${escEmail(q.code)}">${escEmail(q.name || '')}</option>`).join('')}</datalist>` : ''}`;
+}
+
+/** The full Add a task form: title, the task, how to do it, due date, who,
+ *  an order and files. */
+async function taskAddForm({ back: backTo, roster, owner }) {
+  return `<form method="post" action="/admin/tasks" class="task-form">
+    <input type="hidden" name="back" value="${escEmail(backTo)}">
+    <input name="title" placeholder="What needs doing (a short title)" required maxlength="200">
+    <textarea name="description" rows="4" maxlength="${TASK_TEXT_MAX}" placeholder="The task in full: what, for whom, and what done looks like"></textarea>
+    <textarea name="how_to" rows="4" maxlength="${TASK_TEXT_MAX}" placeholder="How to do it, step by step (optional)"></textarea>
+    <div class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
+      <label style="margin:0">Due <input type="date" name="due_on"></label>
+      <label style="margin:0">For which business <select name="business">${Object.entries(BUSINESSES).map(([k, v]) =>
+        `<option value="${escEmail(k)}">${escEmail(v)}</option>`).join('')}</select></label>
+      ${owner ? `<label style="margin:0">For <select name="assigned_to"><option value="">Anyone</option>${roster.filter((r) => r.active).map((r) =>
+        `<option value="${Number(r.id)}">${escEmail(r.name)}</option>`).join('')}</select></label>` : ''}
+      ${await taskOrderField()}
+    </div>
+    ${taskUploadBox()}
+    <button type="submit" class="btn" onclick="var b=this;setTimeout(function(){b.disabled=true},0)">Add task</button>
+  </form>`;
+}
+
+/** What a task carries beyond its title: the task, how-to, order, files and,
+ *  once done, what was done. */
+function taskDetailsHtml(t, actor, roster) {
+  const files = (Array.isArray(t.files) ? t.files : []).map((f, n) => ({ ...f, n }))
+    .filter((f) => CHATFILES.fileUrlOk(f.url, QPHOTOS.cloudName(), CHATFILES.TASK_FOLDER));
+  return `${t.description ? `<div style="white-space:pre-wrap;margin-top:4px">${escEmail(t.description)}</div>` : ''}
+    ${t.how_to ? `<details style="margin-top:4px"><summary class="muted" style="cursor:pointer">How to do it</summary>
+      <div style="white-space:pre-wrap;margin-top:4px;padding:8px 10px;background:#f7f8fb;border-radius:8px">${escEmail(t.how_to)}</div></details>` : ''}
+    ${t.quote_code ? `<div class="row-sub">Order: <a href="${escEmail(jobLinkFor(actor, t.quote_code))}"><b>${escEmail(t.quote_code)}</b></a></div>` : ''}
+    ${files.length ? `<div class="row-sub">${files.map((f) => `<a href="/admin/tasks/${Number(t.id)}/file/${f.n}">&#128206; ${escEmail(f.name || 'File')}</a>${
+      f.by != null && f.by === t.assigned_to && t.done_at ? ' <span class="muted">(with the work)</span>' : ''}`).join(' &nbsp; ')}</div>` : ''}
+    ${t.done_at && t.done_note ? `<div style="margin-top:4px;padding:6px 10px;background:#ecfdf5;border-radius:8px;white-space:pre-wrap"><b>What was done:</b> ${escEmail(t.done_note)}</div>` : ''}`;
+}
+
+/** The Mark completed form: a helper says what they did and may attach it. */
+function taskDoneForm(t, backTo, helper) {
+  if (!helper) {
+    return `<form method="post" action="/admin/tasks/${Number(t.id)}/done" style="margin:0">
+      <input type="hidden" name="back" value="${escEmail(backTo)}"><button type="submit" class="btn btn-ghost">Done</button></form>`;
+  }
+  return `<details class="task-done"><summary class="btn">Mark completed</summary>
+    <form method="post" action="/admin/tasks/${Number(t.id)}/done" style="margin-top:8px">
+      <input type="hidden" name="back" value="${escEmail(backTo)}">
+      <textarea name="done_note" rows="3" required minlength="3" maxlength="${TASK_TEXT_MAX}" placeholder="What you did, and anything the owner should know" style="width:100%"></textarea>
+      ${taskUploadBox('Attach what you made')}
+      <button type="submit" class="btn" style="margin-top:6px">Completed</button></form></details>`;
+}
+
+const TASK_CSS = `<style>
+.task-form{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.task-form textarea,.task-form input[name=title]{width:100%}
+.tu-file{font-size:13px;margin-top:4px}
+.task-done summary{list-style:none;display:inline-block;cursor:pointer}
+.task-done summary::-webkit-details-marker{display:none}
+.task-done[open]{flex:1 1 100%}
+</style>`;
+
+app.post('/admin/api/task-file-signature', requireAdmin, (req, res) => {
+  const apiSecret = process.env.CLOUDINARY_API_SECRET || process.env.CLUDINARY_API_SECRET;
+  const cloud = QPHOTOS.cloudName();
+  if (!apiSecret || !cloud || !process.env.CLOUDINARY_API_KEY) return res.status(503).json({ error: 'Uploads are not set up.' });
+  const timestamp = Math.round(Date.now() / 1000);
+  const signature = cloudinary.utils.api_sign_request({ folder: CHATFILES.TASK_FOLDER, timestamp }, apiSecret);
+  res.set('Cache-Control', 'no-store');
+  res.json({ signature, timestamp, folder: CHATFILES.TASK_FOLDER, cloud, apiKey: process.env.CLOUDINARY_API_KEY });
+});
+
+/* A task's file, for someone who may see the task, through the signed
+   download (plain PDF and ZIP links are refused on this account). */
+app.get('/admin/tasks/:id/file/:n', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  const n = /^\d{1,2}$/.test(String(req.params.n)) ? Number(req.params.n) : -1;
+  if (!id || n < 0) return res.status(404).send('Not found.');
+  try {
+    const { rows: [t] } = await pool.query('SELECT id, assigned_to, files FROM staff_tasks WHERE id = $1', [id]);
+    if (!t || !taskVisibleTo(t, currentActor())) return res.status(404).send('That file is not on one of your tasks.');
+    const f = Array.isArray(t.files) ? t.files[n] : null;
+    const src = f ? CHATFILES.downloadSource(f.url, QPHOTOS.cloudName(), CHATFILES.TASK_FOLDER) : null;
+    if (!src) return res.status(404).send('That file is not on one of your tasks.');
+    const r = await fetch(cloudinary.utils.private_download_url(src.publicId, src.format, { resource_type: src.resourceType, type: 'upload' }));
+    if (!r.ok || !r.body) throw new Error(`Cloudinary answered ${r.status}`);
+    const name = MSGFILES.cleanName(f.name, src.ext);
+    res.set('Content-Type', 'application/octet-stream');
+    res.set('Content-Disposition', `attachment; filename="${name.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(name)}`);
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.set('Cache-Control', 'private, no-store');
+    pipeline(Readable.fromWeb(r.body), res, (e) => { if (e) console.error('task file stream cut off:', e.message); });
+  } catch (err) {
+    console.error(`task file ${req.params.id}/${req.params.n} failed:`, err.message);
+    if (!res.headersSent) res.status(502).send('Could not fetch that file just now. Try again.');
+    else res.destroy(err);
+  }
+});
+
+/* ── Work hours (owner, 2026-10-14) ─────────────────────────────────────────
+   "Add a schedule for work for the helper. Convert the time and show in
+   Chicago time and Philippines time." The owner sets each helper's weekly
+   shifts, typed in either zone; everyone sees the week in both. */
+
+async function shiftRows(staffId = null) {
+  const { rows } = await pool.query(
+    `SELECT w.*, s.name FROM staff_work_shifts w JOIN staff s ON s.id = w.staff_id
+      WHERE s.active AND ($1::int IS NULL OR w.staff_id = $1) ORDER BY w.weekday, w.start_min`, [staffId]);
+  return rows;
+}
+
+/** One shift as two lines, Chicago then Philippines. */
+function shiftLines(o) {
+  const sp = SHIFTS.span(o);
+  return `<div><b>CT</b> ${escEmail(sp['America/Chicago'])}</div><div><b>PH</b> ${escEmail(sp['Asia/Manila'])}</div>`;
+}
+
+/** A helper's own week for My Day, with the next shift picked out. */
+async function myShiftsCard(staffId) {
+  const rows = await shiftRows(staffId);
+  if (!rows.length) return '';
+  const now = new Date();
+  const monday = SHIFTS.mondayOf(now, 'America/Chicago');
+  const occ = [...SHIFTS.occurrences(rows, monday), ...SHIFTS.occurrences(rows, SHIFTS.addDays(monday, 7))].filter((o) => o.end > now);
+  const next = occ[0];
+  const thisWeek = SHIFTS.occurrences(rows, monday);
+  return `<div class="card" id="my-shifts"><b>Your work hours</b> <a class="muted" href="/admin/work-schedule" style="float:right">The whole team →</a>
+    ${next ? `<div style="margin:8px 0;padding:8px 12px;background:#eef4ff;border-radius:10px">${next.start <= now ? '<b>On shift now</b>' : '<b>Next shift</b>'}${
+      shiftLines(next)}</div>` : ''}
+    <div class="rows">${thisWeek.map((o) => `<div class="row-i"><span class="row-main" style="white-space:normal">${shiftLines(o)}${
+      o.note ? `<div class="row-sub">${escEmail(o.note)}</div>` : ''}</span><span class="row-end muted">${SHIFTS.hoursOf(o)} h</span></div>`).join('')}</div></div>`;
+}
+
+app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
+  try {
+    const owner = isOwner();
+    const week = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.week || '')) ? SHIFTS.mondayOf(new Date(`${req.query.week}T12:00:00Z`), 'UTC')
+      : SHIFTS.mondayOf(new Date(), 'America/Chicago');
+    const [rows, roster] = await Promise.all([shiftRows(), staffRoster({ activeOnly: true })]);
+    const occ = SHIFTS.occurrences(rows, week);
+    const dayOf = (o) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(o.start);
+    const days = Array.from({ length: 7 }, (_, i) => SHIFTS.addDays(week, i));
+    const hours = new Map();
+    for (const o of occ) hours.set(o.staff_id, (hours.get(o.staff_id) || 0) + SHIFTS.hoursOf(o));
+    const dayCard = (d) => {
+      const list = occ.filter((o) => dayOf(o) === d);
+      const label = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'long', month: 'short', day: 'numeric' }).format(new Date(`${d}T12:00:00Z`));
+      return `<div class="ws-day"><div class="ws-head">${escEmail(label)} <span class="muted">(Chicago)</span></div>
+        ${list.map((o) => `<div class="ws-shift"><b>${escEmail(o.name)}</b> <span class="muted">${SHIFTS.hoursOf(o)} h</span>${shiftLines(o)}${
+          o.note ? `<div class="row-sub">${escEmail(o.note)}</div>` : ''}</div>`).join('') || '<div class="muted" style="font-size:13px">Nobody scheduled</div>'}</div>`;
+    };
+    const fmtTime = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+    const manage = owner ? `<details class="card" id="manage"${req.query.ok || req.query.err ? ' open' : ''}><summary><b>Set the hours</b> <span class="muted">add or remove a weekly shift</span></summary>
+      <form method="post" action="/admin/work-schedule" class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end;margin-top:10px">
+        <input type="hidden" name="action" value="add">
+        <label style="margin:0">Who <select name="staff_id" required><option value="">Pick</option>${roster.map((r) => `<option value="${Number(r.id)}">${escEmail(r.name)}</option>`).join('')}</select></label>
+        <label style="margin:0">Days ${SHIFTS.DAYS.map((d, i) => `<label style="display:inline-flex;gap:3px;margin:0 6px 0 0;font-weight:400"><input type="checkbox" name="days" value="${i + 1}"${i < 5 ? ' checked' : ''}>${d}</label>`).join('')}</label>
+        <label style="margin:0">Starts <input type="time" name="start" required value="09:00"></label>
+        <label style="margin:0">Ends <input type="time" name="end" required value="14:00"></label>
+        <label style="margin:0">In <select name="zone">${Object.entries(SHIFTS.ZONES).map(([z, v]) => `<option value="${z}">${escEmail(v.label)} time</option>`).join('')}</select></label>
+        <label style="margin:0;flex:1 1 180px">Note <input name="note" maxlength="${SHIFTS.NOTE_MAX}" placeholder="optional, e.g. training week"></label>
+        <button type="submit" class="btn">Add shifts</button>
+      </form>
+      <p class="muted" style="font-size:12.5px">Type the times in whichever zone you think in; the page shows both. An end before the start runs past midnight.</p>
+      <div class="rows">${rows.map((w) => `<div class="row-i"><span class="row-main"><b>${escEmail(w.name)}</b> &middot; ${SHIFTS.DAYS[w.weekday - 1]} ${fmtTime(w.start_min)}–${fmtTime(w.end_min)} ${escEmail(SHIFTS.ZONES[w.zone] ? SHIFTS.ZONES[w.zone].label : w.zone)} time${
+          w.note ? ` <span class="muted">&middot; ${escEmail(w.note)}</span>` : ''}</span>
+        <span class="row-end"><form method="post" action="/admin/work-schedule" style="margin:0"><input type="hidden" name="action" value="delete">
+          <input type="hidden" name="id" value="${Number(w.id)}"><button type="submit" class="btn btn-ghost">Remove</button></form></span></div>`).join('')
+        || '<p class="muted">No shifts yet.</p>'}</div></details>` : '';
+    res.set('Cache-Control', 'no-store');
+    res.send(adminPage('Work hours', `<style>
+      .ws-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}
+      .ws-day{background:#fff;border:1px solid #e3e8f2;border-radius:12px;padding:10px}
+      .ws-head{font-weight:700;color:#0B1F4B;margin-bottom:6px}
+      .ws-shift{border-top:1px solid #eef1f6;padding:6px 0;font-size:13px}
+      .ws-shift:first-of-type{border-top:0}
+    </style>
+      ${pageHeader('Work hours', 'Each shift in Chicago time (CT) and Philippines time (PH), for the real dates of the week, so daylight saving is already counted.',
+        `<a class="btn btn-ghost" href="/admin/work-schedule?week=${SHIFTS.addDays(week, -7)}">&larr; Week before</a><a class="btn btn-ghost" href="/admin/work-schedule?week=${SHIFTS.addDays(week, 7)}">Week after &rarr;</a>`)}
+      ${flash(req.query)}
+      <div class="card"><b>Hours this week</b> ${[...hours.entries()].map(([id, h]) => `<span class="muted" style="margin-left:10px">${escEmail(nameOf(roster, id))} ${Math.round(h * 10) / 10} h</span>`).join('') || '<span class="muted">none scheduled</span>'}</div>
+      <div class="ws-grid">${days.map(dayCard).join('')}</div>
+      ${manage}`, 'shifts'));
+  } catch (err) {
+    console.error('work schedule failed:', err.message);
+    res.status(500).send(adminPage('Work hours', '<div class="card"><div class="warn">Could not load the work hours.</div></div>', 'shifts'));
+  }
+});
+
+/* The owner adds shifts (one per ticked day) or removes one (ROUTES: owner). */
+app.post('/admin/work-schedule', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const to = '/admin/work-schedule#manage';
+  try {
+    if (b.action === 'delete') {
+      const id = intIn(b.id);
+      const { rowCount } = id ? await pool.query('DELETE FROM staff_work_shifts WHERE id = $1', [id]) : { rowCount: 0 };
+      return back(res, to, rowCount ? 'ok' : 'err', rowCount ? 'Shift removed.' : 'No such shift.');
+    }
+    const staffId = intIn(b.staff_id);
+    const roster = await staffRoster({ activeOnly: true });
+    if (!staffId || !roster.some((r) => r.id === staffId)) return back(res, to, 'err', 'Pick who the shift is for.');
+    const days = [...new Set([].concat(b.days || []).map(Number).filter((d) => Number.isInteger(d) && d >= 1 && d <= 7))];
+    if (!days.length) return back(res, to, 'err', 'Tick at least one day.');
+    const start = SHIFTS.minutesOf(b.start), end = SHIFTS.minutesOf(b.end);
+    if (start == null || end == null || start === end) return back(res, to, 'err', 'Give a start and an end time that differ.');
+    const zone = SHIFTS.ZONES[b.zone] ? b.zone : null;
+    if (!zone) return back(res, to, 'err', 'Pick the time zone the times are in.');
+    const note = SHIFTS.cleanNote(b.note) || null;
+    for (const d of days) {
+      await pool.query(
+        `INSERT INTO staff_work_shifts (staff_id, weekday, start_min, end_min, zone, note)
+         SELECT $1, $2, $3, $4, $5, $6 WHERE NOT EXISTS (
+           SELECT 1 FROM staff_work_shifts WHERE staff_id = $1 AND weekday = $2 AND start_min = $3 AND end_min = $4 AND zone = $5)`,
+        [staffId, d, start, end, zone, note]);
+    }
+    return back(res, to, 'ok', `Added ${days.length} shift${days.length === 1 ? '' : 's'}.`);
+  } catch (err) {
+    console.error('work schedule save failed:', err.message);
+    return back(res, to, 'err', 'Could not save that.');
   }
 });
 
@@ -30940,6 +31281,8 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
     const today = new Date().toISOString().slice(0, 10);
     // A helper's training until it is done, and the owner's latest note (two weeks).
     const art = await artQueues(actor);
+    const addTaskForm = await taskAddForm({ back: '/admin/my-day', roster, owner: actor.kind !== 'staff' });
+    const shiftsCard = me ? await myShiftsCard(me).catch((e) => { console.error('my day shifts failed:', e.message); return ''; }) : '';
     const pins = PIN_CSS + artPinCard(await artUnacked(actor).catch(() => []), '/admin/my-day')
       + await jobNotesPinCard(actor, '/admin/my-day').catch((e) => { console.error('my day job notes failed:', e.message); return ''; });
     const training = me ? await Promise.all([trainingFor(me), coachingNotes(me, 1)])
@@ -30955,17 +31298,14 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
     const taskRow = (t) => `
         <div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal"><b>${escEmail(t.title)}</b> ${taskStatus(t)}
           <div class="row-sub">${escEmail(BUSINESSES[t.business] || t.business)}${t.due_on ? ` &middot; due ${escEmail(fmtDate(t.due_on))}` : ''}${
-            t.quote_code ? ` &middot; <a href="/admin/production/${escEmail(t.quote_code)}">${escEmail(t.quote_code)}</a>` : ''}${
             t.assigned_to == null ? ' &middot; anyone' : me == null ? ` &middot; ${escEmail(nameOf(roster, t.assigned_to))}` : ''}${
             t.started_at ? ` &middot; started ${escEmail(whenShort(t.started_at))}${me == null ? ` by ${escEmail(startedBy(t))}` : ''}` : ''}${
             t.done_at ? ` &middot; completed ${escEmail(whenShort(t.done_at))}` : ''}</div>
-          ${t.description ? `<div style="white-space:pre-wrap;margin-top:4px">${escEmail(t.description)}</div>` : ''}
-          ${t.how_to ? `<details style="margin-top:4px"><summary class="muted" style="cursor:pointer">How to do it</summary>
-            <div style="white-space:pre-wrap;margin-top:4px;padding:8px 10px;background:#f7f8fb;border-radius:8px">${escEmail(t.how_to)}</div></details>` : ''}</span>
-          <span class="row-end" style="display:flex;gap:6px;align-items:center">${!t.done_at && t.due_on && String(t.due_on instanceof Date ? t.due_on.toISOString() : t.due_on).slice(0, 10) < today ? pill('overdue', 'red') : ''}
+          ${taskDetailsHtml(t, actor, roster)}</span>
+          <span class="row-end" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${!t.done_at && t.due_on && String(t.due_on instanceof Date ? t.due_on.toISOString() : t.due_on).slice(0, 10) < today ? pill('overdue', 'red') : ''}
             ${t.done_at ? '' : me != null && !t.started_at
               ? `<form method="post" action="/admin/tasks/${t.id}/start" style="margin:0"><button type="submit" class="btn">Start: I accept this task</button></form>`
-              : `<form method="post" action="/admin/tasks/${t.id}/done" style="margin:0"><button type="submit" class="btn ${me != null ? '' : 'btn-ghost'}">${me != null ? 'Mark completed' : 'Done'}</button></form>`}</span></div>`;
+              : taskDoneForm(t, '/admin/my-day', me != null)}</span></div>`;
     const leadRow = (l) => `<div class="row-i"><span class="row-main"><a href="/admin/leads#lead-${l.id}"><b>${escEmail(l.name || l.email || 'Lead')}</b></a>
       <div class="row-sub">${escEmail((LEAD_SOURCES[l.source] || [l.source || 'form'])[0])} &middot; waiting ${
         escEmail(fmtMins(TEAM.businessMinutesBetween(l.created_at, new Date())))} of working time</div></span>
@@ -30978,6 +31318,7 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
         '<a class="btn btn-ghost" href="/admin/playbook">Playbook</a>')}
       ${flash(req.query)}
       ${pins}
+      ${shiftsCard}
       ${training && !training.p.complete ? section(`Your training: ${training.p.done} of ${training.p.total}`,
         `<a class="muted" href="/admin/training" style="float:right">See it all →</a>${progressBar(training.p.done, training.p.total)}
         ${training.p.next.map((st) => `<div class="row-sub">Next: ${escEmail(st.title)}</div>`).join('')}`) : ''}
@@ -31005,17 +31346,7 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
         'No follow-ups due.') : ''}
       ${section(`Tasks (${tasks.rows.length})`, tasks.rows.map(taskRow).join(''), 'Nothing on your list.')}
       ${me == null && doneLately.length ? section(`Completed this week (${doneLately.length})`, doneLately.map(taskRow).join('')) : ''}
-      <details class="card"><summary><b>Add a task</b></summary>
-        <form method="post" action="/admin/tasks" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
-          <input name="title" placeholder="What needs doing" required maxlength="200" style="flex:1 1 240px">
-          <textarea name="description" rows="2" maxlength="2000" placeholder="The task: what, for whom, and what done looks like" style="flex:1 1 100%"></textarea>
-          <textarea name="how_to" rows="3" maxlength="4000" placeholder="How to do it, step by step (for something new; optional)" style="flex:1 1 100%"></textarea>
-          <input type="date" name="due_on">
-          <select name="business">${Object.entries(BUSINESSES).map(([k, v]) => `<option value="${k}">${escEmail(v)}</option>`).join('')}</select>
-          ${actor.kind === 'owner' ? `<select name="assigned_to"><option value="">Anyone</option>${roster.filter((r) => r.active).map((r) =>
-            `<option value="${r.id}">${escEmail(r.name)}</option>`).join('')}</select>` : ''}
-          <button type="submit" class="btn btn-ghost">Add</button>
-        </form></details>
+      <details class="card"><summary><b>Add a task</b></summary>${addTaskForm}</details>${TASK_CSS}${TASK_UPLOAD_JS}
       ${nextSteps.length ? section('Jobs with a next step', nextSteps.map(({ q, cl }) => `
         <div class="row-i"><span class="row-main"><a href="/admin/production/${escEmail(q.code)}"><b>${escEmail(q.code)}</b></a> ${escEmail(q.name || '')}
           <div class="row-sub">${escEmail(cl.next.label)}${cl.next.hint ? ` — ${escEmail(cl.next.hint)}` : ''}</div></span>
