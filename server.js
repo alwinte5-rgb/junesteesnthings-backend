@@ -1286,6 +1286,12 @@ async function initStaffTables() {
   for (const t of ['team_messages', 'team_channel_messages']) {
     await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS file_url TEXT`);
     await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS file_name TEXT`);
+    /* Edits (owner, 2026-10-14: "add an edit feature on the messages"): the
+       first wording is kept for the owner to see; and an order tagged on the
+       message ("tag an order when communicating with the team"). */
+    await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ`);
+    await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS original_body TEXT`);
+    await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS quote_code TEXT`);
   }
   /* Per reader ('owner' or 'staff:<id>') and conversation ('ch:<id>' or
      'dm:<staff id>'): what they have read in a channel, and the newest message
@@ -1438,6 +1444,10 @@ async function initStaffTables() {
     )`);
   await pool.query('CREATE INDEX IF NOT EXISTS job_notes_open_idx ON job_notes (recipient) WHERE addressed_at IS NULL');
   await pool.query('CREATE INDEX IF NOT EXISTS job_notes_job_idx ON job_notes (quote_code, id)');
+  /* The author may reword a job message until it is addressed; the first
+     wording is kept for the owner to see. */
+  await pool.query('ALTER TABLE job_notes ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ');
+  await pool.query('ALTER TABLE job_notes ADD COLUMN IF NOT EXISTS original_body TEXT');
   /* Quiz attempts (TRAINING.QUIZZES). Every attempt is kept, so the owner
      sees the first score as well as the pass. Marked on the server. */
   await pool.query(`
@@ -21538,8 +21548,26 @@ async function jobNotesPinCard(actor, backTo) {
         From <b>${escEmail(readerName(roster, n.author))}</b> about
         <a href="${escEmail(jobLinkFor(actor, n.quote_code))}#team-notes"><b>${escEmail(n.quote_code)}</b></a> ${escEmail(firstNameOf(n.name))}
         <span class="muted">&middot; ${escEmail(whenShort(n.created_at))}</span>
-        <div class="pin-body">${escEmail(n.body)}</div></span>
+        <div class="pin-body">${escEmail(n.body)}</div>${jobNoteEditedHtml(n, actor)}</span>
         <span class="pin-acts">${addressForm(n, backTo)}</span></div>`).join('')}</div>`;
+}
+
+/** "edited" on a reworded job message; the owner may read the first wording. */
+function jobNoteEditedHtml(n, actor) {
+  if (!n.edited_at) return '';
+  const owner = !actor || actor.kind !== 'staff';
+  return owner && n.original_body != null && n.author !== 'owner'
+    ? `<details class="muted" style="font-size:12px"><summary style="cursor:pointer">edited ${escEmail(whenShort(n.edited_at))}: see the first wording</summary><div class="pin-body">${escEmail(n.original_body)}</div></details>`
+    : `<div class="muted" style="font-size:12px;font-style:italic">edited ${escEmail(whenShort(n.edited_at))}</div>`;
+}
+
+/** The author's Edit box on a job message nobody has addressed yet. */
+function jobNoteEditForm(n, backTo) {
+  return `<details style="margin-top:4px"><summary class="muted" style="cursor:pointer;font-size:12.5px">Edit</summary>
+    <form method="post" action="/admin/job-notes/${Number(n.id)}/edit" style="margin-top:6px">
+      <input type="hidden" name="back" value="${escEmail(backTo)}">
+      <textarea name="body" maxlength="${JOBNOTES.BODY_MAX}" required style="width:100%">${escEmail(n.body)}</textarea>
+      <button type="submit" class="btn" style="margin-top:6px">Save</button></form></details>`;
 }
 
 /** The job's team messages, and a box to send one about it. */
@@ -21564,7 +21592,8 @@ async function teamJobNotesCard(q, backTo) {
   const line = (n) => `<div class="jn-line${n.addressed_at ? '' : ' open'}">
       <b>${escEmail(readerName(roster, n.author))}</b> &rarr; <b>${escEmail(readerName(roster, n.recipient))}</b>
       <span class="muted">&middot; ${escEmail(whenShort(n.created_at))}</span>
-      <div class="pin-body">${escEmail(n.body)}</div>
+      <div class="pin-body">${escEmail(n.body)}</div>${jobNoteEditedHtml(n, actor)}
+      ${n.author === me && !n.addressed_at ? jobNoteEditForm(n, backTo) : ''}
       <div class="row-sub">${n.addressed_at
         ? `${pill('addressed', 'green')} by ${escEmail(readerName(roster, n.addressed_by))} ${escEmail(whenShort(n.addressed_at))}`
         : `${pill(`waiting on ${readerName(roster, n.recipient)}`, 'amber')}`}</div>
@@ -21620,6 +21649,33 @@ app.post('/admin/job-notes', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error(`job note ${code} failed:`, err.message);
     return back(res, backTo, 'err', 'It did not send. Try again.');
+  }
+});
+
+/* The author rewords a job message until it is addressed (owner, 2026-10-14:
+   "add an edit feature on the messages"). After that the reader has acted on
+   it, so it stays as it was. The first wording is kept for the owner. */
+app.post('/admin/job-notes/:id/edit', requireAdmin, async (req, res) => {
+  const id = /^\d{1,15}$/.test(String(req.params.id)) ? req.params.id : null;
+  const actor = currentActor() || OWNER_ACTOR;
+  const me = JOBNOTES.readerOf(actor);
+  const backTo = safeAdminPath(req.body && req.body.back, isOwner() ? '/admin/dashboard' : '/admin/my-day');
+  if (!id) return back(res, backTo, 'err', 'No such message.');
+  try {
+    const body = JOBNOTES.cleanBody(req.body && req.body.body);
+    if (!body) return back(res, backTo, 'err', 'A message needs words. Leave it as it was, or write something.');
+    if (body.length > JOBNOTES.BODY_MAX) return back(res, backTo, 'err', `Keep it under ${JOBNOTES.BODY_MAX} characters.`);
+    const { rows: [n] } = await pool.query('SELECT id, quote_code, author, addressed_at FROM job_notes WHERE id = $1', [id]);
+    if (!n || n.author !== me) return back(res, backTo, 'err', 'You can edit only your own messages.');
+    if (n.addressed_at) return back(res, backTo, 'err', 'It has been addressed already, so it stays as it was. Send a new message instead.');
+    if (!(await canOpenJob(n.quote_code, actor))) return back(res, backTo, 'err', 'That job is not one you can open.');
+    await pool.query(
+      `UPDATE job_notes SET original_body = COALESCE(original_body, body), body = $3, edited_at = NOW()
+        WHERE id = $1 AND author = $2 AND addressed_at IS NULL AND body <> $3`, [id, me, body]);
+    return back(res, backTo, 'ok', 'Message edited.');
+  } catch (err) {
+    console.error(`job note edit ${id} failed:`, err.message);
+    return back(res, backTo, 'err', 'That did not save. Try again.');
   }
 });
 
@@ -27943,6 +27999,21 @@ function proofPreview(text) {
       style="width:140px;height:140px;object-fit:contain;border:1px solid #e3e8f2;border-radius:8px;background:#fff"></a>`).join('')}</div>` : '';
 }
 
+/** Edit a customer message still waiting for the owner (owner, 2026-10-14:
+ *  "add an edit feature on the messages"): the owner before approving, the
+ *  helper who wrote it while it waits. A text keeps the 300 limit. */
+function heldMessageEditForm(a, backTo) {
+  if (!['message', 'lead_email'].includes(a.kind) || a.status !== 'pending') return '';
+  const p = a.payload || {};
+  const isText = a.kind === 'message' && p.channel === 'text';
+  return `<details style="margin-top:8px"><summary class="muted" style="cursor:pointer">Edit the message</summary>
+    <form method="post" action="/admin/approvals/${Number(a.id)}/edit" style="margin-top:6px;display:flex;flex-direction:column;gap:6px">
+      <input type="hidden" name="back" value="${escEmail(backTo)}">
+      ${isText ? '' : `<input name="subject" maxlength="150" value="${escEmail(p.subject || '')}" placeholder="Subject">`}
+      <textarea name="text" required maxlength="${isText ? 300 : MESSAGE_MAX}">${escEmail(p.text || '')}</textarea>
+      <button type="submit" class="btn" style="align-self:flex-start">Save the changes</button></form></details>`;
+}
+
 function approvalBody(a, q) {
   const p = a.payload || {};
   if (a.kind === 'quote') {
@@ -28125,6 +28196,9 @@ app.get('/admin/approvals', requireAdmin, async (req, res) => {
         ${a.kind === 'message' ? 'Check the job\'s messages before approving again, or it may go twice.' : a.kind === 'lead_email' ? 'Check the lead\'s notes before approving again: an email sent in the last 10 minutes is not sent twice.' : 'Decide it again.'}</div>` : ''}
       ${approvalBody(a, a.kind === 'lead_email' ? leadBy[a.subject_id] : quoteBy[a.subject_id])}
       ${(a.reasons || []).length ? `<ul class="muted">${a.reasons.map((r) => `<li>${escEmail(r)}</li>`).join('')}</ul>` : ''}
+      ${a.payload && a.payload.edited_at ? `<div class="muted" style="font-size:12px;font-style:italic">edited ${escEmail(whenShort(a.payload.edited_at))}${
+        a.payload.original_text != null ? ` &middot; first wording: <span style="white-space:pre-wrap">${escEmail(a.payload.original_text)}</span>` : ''}</div>` : ''}
+      ${heldMessageEditForm(a, '/admin/approvals')}
       <form method="post" action="/admin/approvals/${a.id}" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
         <input name="note" placeholder="Note back to them (optional)" maxlength="500" style="flex:1 1 220px">
         <button type="submit" name="decision" value="approve">${['message', 'lead_email'].includes(a.kind) ? 'Approve and send' : 'Approve'}</button>
@@ -28194,6 +28268,41 @@ async function saveKbArticle(p, staffId) {
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`, fields);
   return r.id;
 }
+
+app.post('/admin/approvals/:id/edit', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  const actor = currentActor() || OWNER_ACTOR;
+  const staff = actor.kind === 'staff' ? actor.id : null;
+  const backTo = safeAdminPath(req.body && req.body.back, staff ? '/admin/my-day' : '/admin/approvals');
+  if (!id) return back(res, backTo, 'err', 'No such message.');
+  try {
+    const { rows: [a] } = await pool.query(
+      `SELECT * FROM staff_approvals WHERE id = $1 AND kind IN ('message', 'lead_email') AND ($2::int IS NULL OR requested_by = $2)`, [id, staff]);
+    if (!a) return back(res, backTo, 'err', 'That message is not one you can edit.');
+    if (a.status !== 'pending') return back(res, backTo, 'err', 'That message has been decided already, so it can no longer be edited.');
+    const p = a.payload || {};
+    const isText = a.kind === 'message' && p.channel === 'text';
+    const body = String((req.body && req.body.text) || '').replace(/\r\n?/g, '\n').trim();
+    const subject = isText ? (p.subject || '') : String((req.body && req.body.subject) || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 150);
+    if (!body) return back(res, backTo, 'err', 'Write the message first.');
+    if (body.length > (isText ? 300 : MESSAGE_MAX)) return back(res, backTo, 'err', isText ? 'A text is at most 300 characters.' : `Keep it under ${MESSAGE_MAX} characters.`);
+    if (a.kind === 'lead_email' && !subject) return back(res, backTo, 'err', 'Add a subject.');
+    /* A helper's edit is checked for outside-payment wording like a new message. */
+    const outside = staff ? FRAUD.mentionsOutsidePayment(`${subject}\n${body}`) : '';
+    const reasons = outside && !(a.reasons || []).some((r) => /paid outside/.test(r))
+      ? [...(a.reasons || []), `It mentions being paid outside the shop ("${outside.slice(0, 60)}").`] : (a.reasons || []);
+    const { rowCount } = await pool.query(
+      `UPDATE staff_approvals SET payload = payload || $2::jsonb, reasons = $3::jsonb WHERE id = $1 AND status = 'pending'`,
+      [id, JSON.stringify({ text: body, subject, edited_at: new Date().toISOString(), edited_by: staff,
+        original_text: p.original_text != null ? p.original_text : (p.text || '') }), JSON.stringify(reasons)]);
+    if (!rowCount) return back(res, backTo, 'err', 'That message has been decided already, so it can no longer be edited.');
+    if (outside) logActivity(actor, 'message held: outside payment', { type: 'quote', id: a.subject_id }, { phrase: outside.slice(0, 60) });
+    return back(res, backTo, 'ok', staff ? 'Saved. June sees the new wording.' : 'Saved. Approve it to send the new wording.');
+  } catch (err) {
+    console.error(`approval edit ${id} failed:`, err.message);
+    return back(res, backTo, 'err', 'That did not save. Try again.');
+  }
+});
 
 app.post('/admin/approvals/:id', requireAdmin, async (req, res) => {
   const id = intIn(req.params.id);
@@ -30681,6 +30790,20 @@ const TEAM_CHAT_CSS = `<style>
 .tc-doc{text-decoration:underline;font-weight:600}
 .tc-tabs .chip-f .n{background:#dc2626;color:#fff;opacity:1;border-radius:100px;padding:1px 7px;min-width:18px;text-align:center}
 .tc-tabs .chip-f.has-new{border-color:#dc2626;font-weight:700}
+.tc-tag{display:inline-block;margin-top:6px;padding:2px 9px;border-radius:100px;background:#fff3d6;color:#7a4b00;font-size:12.5px;font-weight:700;text-decoration:none}
+.tc-line.me .tc-tag{background:#f4a623;color:#0B1F4B}
+.tc-edited{font-size:11px;opacity:.75;font-style:italic}
+.tc-orig{font-size:12px;opacity:.85;margin-top:4px}
+.tc-orig summary{cursor:pointer}
+.tc-edit{margin-top:4px;font-size:12px}
+.tc-edit summary{cursor:pointer;opacity:.8;list-style:none;display:inline}
+.tc-edit summary::-webkit-details-marker{display:none}
+.tc-edit form{margin-top:6px;display:flex;flex-direction:column;gap:6px;white-space:normal}
+.tc-edit textarea{color:#12203c;background:#fff;font-size:14px;min-height:90px}
+.tc-edit button{align-self:flex-start;padding:6px 16px;font-size:13px}
+.tc-form{flex-wrap:wrap}
+.tc-form .tc-tagin{flex:1 1 100%;display:flex;gap:6px;align-items:center;margin:0;text-transform:none;letter-spacing:0;font-weight:600;color:#46505f;font-size:13px}
+.tc-form .tc-tagin input{flex:0 1 220px;padding:7px 10px;font-size:14px;text-transform:uppercase}
 @media (max-width:640px){.tc-line{max-width:90%}.tc-form{flex-direction:column;align-items:stretch}}
 </style>`;
 
@@ -30748,14 +30871,14 @@ function chatChannelFor(raw, channels, roster) {
 
 async function chatLines(staffId, after = 0) {
   const { rows } = await pool.query(
-    `SELECT id, from_owner, body, file_url, file_name, created_at, read_at FROM team_messages
+    `SELECT id, staff_id, from_owner, body, file_url, file_name, created_at, read_at, edited_at, original_body, quote_code FROM team_messages
       WHERE staff_id = $1 AND id > $2 ORDER BY id DESC LIMIT 200`, [staffId, after]);
   return rows.reverse();
 }
 
 async function channelLines(channelId, after = 0) {
   const { rows } = await pool.query(
-    `SELECT id, staff_id, body, file_url, file_name, created_at FROM team_channel_messages
+    `SELECT id, staff_id, body, file_url, file_name, created_at, edited_at, original_body, quote_code FROM team_channel_messages
       WHERE channel_id = $1 AND id > $2 ORDER BY id DESC LIMIT 200`, [channelId, after]);
   return rows.reverse();
 }
@@ -30830,7 +30953,19 @@ const seenSpan = (seen, id) => seen[id] ? `<span class="tc-seen" data-seen="${Nu
 
 function chatLineJson(m) {
   const mine = (currentActor() || OWNER_ACTOR).kind === 'staff' ? !m.from_owner : m.from_owner;
-  return { id: Number(m.id), mine, body: m.body, file: chatFileJson(m, 'dm'), when: whenShort(m.created_at) };
+  return { id: Number(m.id), kind: 'dm', mine, body: m.body, file: chatFileJson(m, 'dm'), when: whenShort(m.created_at), ...chatExtrasJson(m, mine) };
+}
+
+/** What an edit and an order tag add to a line. The first wording of an
+ *  edited message is shown to the owner only, who watches what helpers say;
+ *  the author sees their own edit as it is now. */
+function chatExtrasJson(m, mine) {
+  const actor = currentActor() || OWNER_ACTOR;
+  return {
+    edited: m.edited_at ? whenShort(m.edited_at) : '',
+    original: m.edited_at && m.original_body != null && !mine && actor.kind !== 'staff' ? m.original_body : '',
+    tag: m.quote_code && QUOTE_CODE_RE.test(m.quote_code) ? { code: m.quote_code, href: jobLinkFor(actor, m.quote_code) } : null,
+  };
 }
 
 /** A message's file for the page: pictures load from storage, anything else
@@ -30844,8 +30979,8 @@ function chatFileJson(m, kind) {
 function channelLineJson(m, roster) {
   const a = currentActor() || OWNER_ACTOR;
   const mine = a.kind === 'staff' ? m.staff_id === a.id : m.staff_id == null;
-  return { id: Number(m.id), mine, body: m.body, file: chatFileJson(m, 'ch'), when: whenShort(m.created_at),
-    who: mine ? '' : (m.staff_id == null ? 'June' : nameOf(roster, m.staff_id)) };
+  return { id: Number(m.id), kind: 'ch', mine, body: m.body, file: chatFileJson(m, 'ch'), when: whenShort(m.created_at),
+    who: mine ? '' : (m.staff_id == null ? 'June' : nameOf(roster, m.staff_id)), ...chatExtrasJson(m, mine) };
 }
 
 /** One message as HTML: who, the words, the file, when, and (own lines) seen. */
@@ -30854,8 +30989,13 @@ function chatLineHtml(j, seen) {
   const file = !f ? '' : f.image
     ? `<a class="tc-file" href="${escEmail(f.url)}" target="_blank" rel="noopener"><img src="${escEmail(f.url)}" alt="${escEmail(f.name)}" loading="lazy"></a>`
     : `<a class="tc-file tc-doc" href="${escEmail(f.href)}">&#128206; ${escEmail(f.name)}</a>`;
-  return `<div class="tc-line${j.mine ? ' me' : ''}">${j.who ? `<b class="tc-who">${escEmail(j.who)}</b>` : ''}${
-    j.body ? escEmail(j.body) : ''}${file}<span class="tc-when">${escEmail(j.when)}</span>${j.mine ? seenSpan(seen, j.id) : ''}</div>`;
+  const tag = j.tag ? `<a class="tc-tag" href="${escEmail(j.tag.href)}">&#127991; Order ${escEmail(j.tag.code)}</a>` : '';
+  const edited = !j.edited ? '' : j.original
+    ? `<details class="tc-orig"><summary>edited ${escEmail(j.edited)}: see the first wording</summary>${escEmail(j.original) || '<i>(no words)</i>'}</details>`
+    : `<span class="tc-edited">edited ${escEmail(j.edited)}</span>`;
+  const edit = !j.mine ? '' : `<details class="tc-edit"><summary>Edit</summary><form method="post" action="/admin/team-chat/edit"><input type="hidden" name="kind" value="${j.kind === 'ch' ? 'ch' : 'dm'}"><input type="hidden" name="id" value="${Number(j.id)}"><textarea name="body" maxlength="${TEAM_CHAT_MAX}">${escEmail(j.body || '')}</textarea><button type="submit" class="btn">Save</button></form></details>`;
+  return `<div class="tc-line${j.mine ? ' me' : ''}" data-line="${j.kind === 'ch' ? 'ch' : 'dm'}:${Number(j.id)}">${j.who ? `<b class="tc-who">${escEmail(j.who)}</b>` : ''}<span class="tc-body">${
+    j.body ? escEmail(j.body) : ''}</span>${tag}${file}<span class="tc-when">${escEmail(j.when)}</span>${edited}${j.mine ? seenSpan(seen, j.id) : ''}${edit}</div>`;
 }
 
 /** Unread messages per conversation tab for whoever is signed in, keyed by
@@ -30946,6 +31086,10 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
     }
     const last = lines.length ? Number(lines[lines.length - 1].id) : 0;
     const alertsOn = await chatAlertsOn(actor);
+    /* Orders to tag: offered by name to whoever sees quotes; anyone may type a code. */
+    const orderList = owner || actorLevel('quotes.view') === 'on'
+      ? (await pool.query(`SELECT code, name FROM quotes WHERE cancelled_at IS NULL ORDER BY created_at DESC LIMIT 150`).catch(() => ({ rows: [] }))).rows : [];
+    const since = (await pool.query('SELECT NOW() AS t')).rows[0].t.toISOString();
     const tabCounts = await chatTabCounts(actor, roster, allChannels).catch(() => null);
     res.set('Cache-Control', 'no-store');
     res.send(adminPage('Team chat', `${TEAM_CHAT_CSS}
@@ -30956,10 +31100,12 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
       <div class="muted" style="font-size:12px;margin:8px 0 4px">${owner ? 'Direct' : 'Direct with June'}</div>${filterChips(dmChips)}
       </div>
       <div class="card">
-        <div class="tc-log" data-tclog data-after="${last}">${lines.length ? lines.map(lineHtml).join('')
+        <div class="tc-log" data-tclog data-after="${last}" data-since="${escEmail(since)}">${lines.length ? lines.map(lineHtml).join('')
           : '<p class="muted" data-tcempty>No messages yet. Say hello.</p>'}</div>
         ${canWrite ? `<form method="post" action="/admin/team-chat" class="tc-form" data-tcform>
           ${hidden}<input type="hidden" name="file_url"><input type="hidden" name="file_name">
+          <label class="tc-tagin">&#127991; Tag an order <input name="quote_code" maxlength="12" list="chat-orders" placeholder="Order code (optional)" autocomplete="off"></label>
+          ${orderList.length ? `<datalist id="chat-orders">${orderList.map((o) => `<option value="${escEmail(o.code)}">${escEmail(o.name || '')}</option>`).join('')}</datalist>` : ''}
           <label class="btn btn-ghost tc-attach" title="Send a file">&#128206; File
             <input type="file" accept="${CHATFILES.ACCEPT}" data-tcfile hidden></label>
           <textarea name="body" rows="3" maxlength="${TEAM_CHAT_MAX}" placeholder="${escEmail(placeholder)}"></textarea>
@@ -31074,10 +31220,19 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
                 .then(function(r){ return r.ok ? r.json() : null; }).then(function(d){ if (d) tabs(d.tabs); }).catch(function(){});
               return;
             }
-            fetch('/admin/api/team-chat?' + q + '&after=' + encodeURIComponent(log.getAttribute('data-after')),
+            fetch('/admin/api/team-chat?' + q + '&after=' + encodeURIComponent(log.getAttribute('data-after')) + '&since=' + encodeURIComponent(log.getAttribute('data-since') || ''),
                   { credentials: 'same-origin', cache: 'no-store' })
               .then(function(r){ return r.ok ? r.json() : null; }).then(function(d){
                 if (d) tabs(d.tabs);
+                if (d && d.now) log.setAttribute('data-since', d.now);
+                /* A message reworded since this page loaded: its new words, marked edited. */
+                if (d && d.edits) d.edits.forEach(function(x){
+                  var el = log.querySelector('[data-line="' + x.kind + ':' + Number(x.id) + '"]'); if (!el) return;
+                  var b = el.querySelector('.tc-body'); if (b) b.textContent = x.body || '';
+                  var t = el.querySelector('.tc-edit textarea'); if (t && document.activeElement !== t) t.value = x.body || '';
+                  if (!el.querySelector('.tc-edited,.tc-orig')) { var e = document.createElement('span'); e.className = 'tc-edited'; e.textContent = 'edited ' + x.edited;
+                    var w = el.querySelector('.tc-when'); if (w) w.after(e); else el.appendChild(e); }
+                });
                 if (d && d.seen) Object.keys(d.seen).forEach(function(id){
                   var s = log.querySelector('[data-seen="' + Number(id) + '"]');
                   if (s) s.textContent = d.seen[id];
@@ -31087,8 +31242,10 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
                 var atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
                 d.lines.forEach(function(m){
                   var el = document.createElement('div'); el.className = 'tc-line' + (m.mine ? ' me' : '');
+                  el.setAttribute('data-line', m.kind + ':' + Number(m.id));
                   if (m.who) { var b = document.createElement('b'); b.className = 'tc-who'; b.textContent = m.who; el.appendChild(b); }
-                  if (m.body) el.appendChild(document.createTextNode(m.body));
+                  var bd = document.createElement('span'); bd.className = 'tc-body'; bd.textContent = m.body || ''; el.appendChild(bd);
+                  if (m.tag) { var tg = document.createElement('a'); tg.className = 'tc-tag'; tg.href = m.tag.href; tg.textContent = '\u{1F3F7} Order ' + m.tag.code; el.appendChild(tg); }
                   if (m.file) {
                     var fa = document.createElement('a'); fa.className = 'tc-file' + (m.file.image ? '' : ' tc-doc');
                     fa.href = m.file.href;
@@ -31098,6 +31255,7 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
                     el.appendChild(fa);
                   }
                   var w = document.createElement('span'); w.className = 'tc-when'; w.textContent = m.when; el.appendChild(w);
+                  if (m.edited) { var ed = document.createElement('span'); ed.className = 'tc-edited'; ed.textContent = 'edited ' + m.edited; el.appendChild(ed); }
                   if (m.mine) { var s = document.createElement('span'); s.className = 'tc-seen'; s.setAttribute('data-seen', String(Number(m.id)));
                     s.textContent = (d.seen && d.seen[m.id]) || 'Not seen yet'; el.appendChild(s); }
                   log.appendChild(el); log.setAttribute('data-after', String(m.id));
@@ -31128,6 +31286,14 @@ app.post('/admin/team-chat', requireAdmin, async (req, res) => {
     const badFile = fileUrl && !CHATFILES.fileUrlOk(fileUrl, QPHOTOS.cloudName());
     const FILE_ERR = 'That file could not be sent. Pick it again.';
     const file = fileUrl ? [fileUrl, fileName] : [null, null];
+    /* An order tagged on the message: one the sender can open. A wrong code
+       does not lose the message; it goes untagged and the page says so. */
+    const tagRaw = String(b.quote_code || '').trim().toUpperCase().slice(0, 20);
+    const tagOk = tagRaw && QUOTE_CODE_RE.test(tagRaw) && await canOpenJob(tagRaw, actor).catch(() => false);
+    const tag = tagOk ? tagRaw : null;
+    const sentTo = (backTo) => (tagRaw && !tag
+      ? back(res, backTo, 'err', `Sent, but NOT tagged: there is no order ${tagRaw} you can open. Codes are 6 or 10 letters and numbers.`)
+      : res.redirect(backTo));
     /* A channel message: only in a channel this person may use, which the
        server decides from their own track, never from the form. */
     if (String(b.channel || '').trim()) {
@@ -31139,12 +31305,12 @@ app.post('/admin/team-chat', requireAdmin, async (req, res) => {
       if (body.length > TEAM_CHAT_MAX) return back(res, backTo, 'err', `That is too long. Keep it under ${TEAM_CHAT_MAX} characters.`);
       const author = actor.kind === 'staff' ? actor.id : null;
       await pool.query(
-        `INSERT INTO team_channel_messages (channel_id, staff_id, body, file_url, file_name)
-         SELECT $1, $2, $3, $4::text, $5::text WHERE NOT EXISTS (
+        `INSERT INTO team_channel_messages (channel_id, staff_id, body, file_url, file_name, quote_code)
+         SELECT $1, $2, $3, $4::text, $5::text, $6::text WHERE NOT EXISTS (
            SELECT 1 FROM team_channel_messages WHERE channel_id = $1 AND staff_id IS NOT DISTINCT FROM $2 AND body = $3
               AND file_url IS NOT DISTINCT FROM $4::text AND created_at > NOW() - interval '10 seconds')`,
-        [ch.id, author, body, ...file]);
-      return res.redirect(backTo);
+        [ch.id, author, body, ...file, tag]);
+      return sentTo(backTo);
     }
     const staffId = chatThreadFor(b.staff, roster);
     const backTo = actor.kind === 'staff' || !staffId ? '/admin/team-chat' : `/admin/team-chat?staff=${staffId}`;
@@ -31157,15 +31323,56 @@ app.post('/admin/team-chat', requireAdmin, async (req, res) => {
     /* A double-click or a resubmitted page sends the same line twice in a few
        seconds; the second is dropped rather than shown twice. */
     await pool.query(
-      `INSERT INTO team_messages (staff_id, from_owner, body, file_url, file_name)
-       SELECT $1, $2, $3, $4::text, $5::text WHERE NOT EXISTS (
+      `INSERT INTO team_messages (staff_id, from_owner, body, file_url, file_name, quote_code)
+       SELECT $1, $2, $3, $4::text, $5::text, $6::text WHERE NOT EXISTS (
          SELECT 1 FROM team_messages WHERE staff_id = $1 AND from_owner = $2 AND body = $3
             AND file_url IS NOT DISTINCT FROM $4::text AND created_at > NOW() - interval '10 seconds')`,
-      [staffId, actor.kind !== 'staff', body, ...file]);
-    return res.redirect(backTo);
+      [staffId, actor.kind !== 'staff', body, ...file, tag]);
+    return sentTo(backTo);
   } catch (err) {
     console.error('team chat send failed:', err.message);
     return back(res, '/admin/team-chat', 'err', 'It did not send. Try again.');
+  }
+});
+
+/* The author rewords their own message (owner, 2026-10-14: "add an edit
+   feature on the messages"). Only the author: a helper their own lines, the
+   owner hers; in a channel still open to them. The first wording is kept
+   (original_body) and shown to the owner; everyone sees "edited". */
+app.post('/admin/team-chat/edit', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const actor = currentActor() || OWNER_ACTOR;
+  const staff = actor.kind === 'staff' ? actor.id : null;
+  const id = /^\d{1,15}$/.test(String(b.id || '')) ? String(b.id) : null;
+  const body = text(b.body, TEAM_CHAT_MAX + 1);
+  try {
+    if (!id) return back(res, '/admin/team-chat', 'err', 'No such message.');
+    if (b.kind === 'ch') {
+      const { rows: [m] } = await pool.query('SELECT id, channel_id, staff_id, file_url FROM team_channel_messages WHERE id = $1', [id]);
+      const [roster, channels] = await Promise.all([staffRoster(), teamChannels()]);
+      const ch = m && chatChannelFor(m.channel_id, channels, roster);
+      if (!m || !ch || m.staff_id !== staff) return back(res, '/admin/team-chat', 'err', 'You can edit only your own messages.');
+      const to = `/admin/team-chat?channel=${ch.id}`;
+      if (!body && !m.file_url) return back(res, to, 'err', 'A message needs words. Leave it as it was, or write something.');
+      if (body.length > TEAM_CHAT_MAX) return back(res, to, 'err', `That is too long. Keep it under ${TEAM_CHAT_MAX} characters.`);
+      await pool.query(
+        `UPDATE team_channel_messages SET original_body = COALESCE(original_body, body), body = $2, edited_at = NOW()
+          WHERE id = $1 AND staff_id IS NOT DISTINCT FROM $3 AND body <> $2`, [id, body, staff]);
+      return back(res, to, 'ok', 'Message edited.');
+    }
+    const { rows: [m] } = await pool.query('SELECT id, staff_id, from_owner, file_url FROM team_messages WHERE id = $1', [id]);
+    const own = m && (staff != null ? m.staff_id === staff && !m.from_owner : m.from_owner);
+    if (!own) return back(res, '/admin/team-chat', 'err', 'You can edit only your own messages.');
+    const to = staff != null ? '/admin/team-chat' : `/admin/team-chat?staff=${Number(m.staff_id)}`;
+    if (!body && !m.file_url) return back(res, to, 'err', 'A message needs words. Leave it as it was, or write something.');
+    if (body.length > TEAM_CHAT_MAX) return back(res, to, 'err', `That is too long. Keep it under ${TEAM_CHAT_MAX} characters.`);
+    await pool.query(
+      `UPDATE team_messages SET original_body = COALESCE(original_body, body), body = $2, edited_at = NOW()
+        WHERE id = $1 AND from_owner = $3 AND body <> $2`, [id, body, staff == null]);
+    return back(res, to, 'ok', 'Message edited.');
+  } catch (err) {
+    console.error('team chat edit failed:', err.message);
+    return back(res, '/admin/team-chat', 'err', 'That did not save. Try again.');
   }
 });
 
@@ -31263,20 +31470,30 @@ app.get('/admin/api/team-chat', requireAdmin, async (req, res) => {
     const [roster, allChannels] = await Promise.all([staffRoster(), teamChannels()]);
     const counts = () => chatTabCounts(actor, roster, allChannels).catch(() => null);
     if (req.query.counts === '1') return res.json({ tabs: await counts() });
+    /* Messages reworded since the page last asked (`since`, the server's own
+       clock as it handed it over), so an open page shows an edit. */
+    const since0 = String(req.query.since || '');
+    const since = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(since0) && !Number.isNaN(Date.parse(since0)) ? since0 : null;
+    const now = (await pool.query('SELECT NOW() AS t')).rows[0].t.toISOString();
+    const editsOf = async (table, where, arg, kind) => (since ? (await pool.query(
+      `SELECT id, body, edited_at FROM ${table} WHERE ${where} = $1 AND edited_at > $2::timestamptz ORDER BY edited_at LIMIT 50`, [arg, since])).rows : [])
+      .map((m) => ({ id: Number(m.id), kind, body: m.body, edited: whenShort(m.edited_at) }));
     if (String(req.query.channel || '').trim()) {
       const ch = chatChannelFor(req.query.channel, allChannels, roster);
       if (!ch) return res.status(404).json({ lines: [] });
       const lines = await channelLines(ch.id, after);
       if (lines.length) await channelMarkRead(ch.id, Number(lines[lines.length - 1].id));
       const seen = await chatSeen({ channelId: ch.id }, roster).catch(() => ({}));
-      return res.json({ lines: lines.map((m) => channelLineJson(m, roster)), seen, tabs: await counts() });
+      return res.json({ lines: lines.map((m) => channelLineJson(m, roster)), seen, tabs: await counts(), now,
+        edits: await editsOf('team_channel_messages', 'channel_id', ch.id, 'ch') });
     }
     const staffId = chatThreadFor(req.query.staff, roster);
     if (!staffId) return res.status(404).json({ lines: [] });
     const lines = await chatLines(staffId, after);
     if (lines.length) await chatMarkRead(staffId);
     const seen = await chatSeen({ staffId }, roster).catch(() => ({}));
-    res.json({ lines: lines.map(chatLineJson), seen, tabs: await counts() });
+    res.json({ lines: lines.map(chatLineJson), seen, tabs: await counts(), now,
+      edits: await editsOf('team_messages', 'staff_id', staffId, 'dm') });
   } catch (err) {
     console.error('team chat poll failed:', err.message);
     res.status(500).json({ lines: [] });
@@ -31453,8 +31670,10 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
         ${earningsTiles(earn.e)}
         ${earn.incentives.map((i) => incentiveRow(i)).join('')}`) : ''}
       ${mine.rows.length ? section('Waiting on the owner', mine.rows.map((a) => `
-        <div class="row-i"><span class="row-main">${escEmail(a.kind)} ${escEmail(a.subject_id)}${a.decision_note
-          ? `<div class="row-sub">Sent back: ${escEmail(a.decision_note)}</div>` : ''}</span>
+        <div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal">${escEmail(a.kind)} ${escEmail(a.subject_id)}${a.decision_note
+          ? `<div class="row-sub">Sent back: ${escEmail(a.decision_note)}</div>` : ''}${
+          ['message', 'lead_email'].includes(a.kind) && a.payload && a.payload.text ? `<div class="pin-body" style="white-space:pre-wrap">${escEmail(a.payload.text)}</div>` : ''}${
+          heldMessageEditForm(a, '/admin/my-day')}</span>
           <span class="row-end">${pill(a.status === 'rejected' ? 'sent back' : 'waiting', a.status === 'rejected' ? 'amber' : 'blue')}</span></div>`).join('')) : ''}
       ${can('leads.view') ? section(`Leads waiting for a reply (${waiting.length})`, waiting.slice(0, 25).map(leadRow).join(''), 'Nobody is waiting.') : ''}
       ${can('leads.view') ? section(`Follow-ups due (${followUps.length})`, followUps.map((l) => `
