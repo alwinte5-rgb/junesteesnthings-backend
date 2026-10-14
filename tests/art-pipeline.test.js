@@ -59,7 +59,7 @@ test('final files: our cloud, the art folder, production types only; signed behi
   }
   assert.ok(!ART.artUrlOk(ok, ''));
   assert.strictEqual(ART.cleanNote('a\u0000b\r\nc'), 'ab\nc');
-  assert.strictEqual(ART.cleanNote('x'.repeat(5000)).length, ART.NOTE_MAX);
+  assert.strictEqual(ART.cleanNote('x'.repeat(20000)).length, ART.NOTE_MAX);
   const sig = src.slice(src.indexOf("app.post('/admin/api/art-signature', requireAdmin"), src.indexOf('\n});', src.indexOf("app.post('/admin/api/art-signature', requireAdmin")));
   assert.match(sig, /api_sign_request\(\{ folder: ART\.FOLDER, timestamp \}, apiSecret\)/);
   assert.doesNotMatch(sig, /req\.body/);

@@ -39,7 +39,7 @@ const MOVES = {
 };
 const FILE_STATES = ['waiting', 'changes', 'needs_info'];
 
-const NOTE_MAX = 2000;
+const NOTE_MAX = 10000;
 const MAX_FILES = 30;
 const FOLDER = 'job_art';
 const ACCEPT = '.ai,.eps,.pdf,.svg,.png,.jpg,.jpeg,.psd,.tif,.tiff,.dst,.pes,.emb,.exp,.zip';

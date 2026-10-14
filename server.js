@@ -1286,6 +1286,12 @@ async function initStaffTables() {
   for (const t of ['team_messages', 'team_channel_messages']) {
     await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS file_url TEXT`);
     await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS file_name TEXT`);
+    /* Edits (owner, 2026-10-14: "add an edit feature on the messages"): the
+       first wording is kept for the owner to see; and an order tagged on the
+       message ("tag an order when communicating with the team"). */
+    await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ`);
+    await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS original_body TEXT`);
+    await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS quote_code TEXT`);
   }
   /* Per reader ('owner' or 'staff:<id>') and conversation ('ch:<id>' or
      'dm:<staff id>'): what they have read in a channel, and the newest message
@@ -1438,6 +1444,10 @@ async function initStaffTables() {
     )`);
   await pool.query('CREATE INDEX IF NOT EXISTS job_notes_open_idx ON job_notes (recipient) WHERE addressed_at IS NULL');
   await pool.query('CREATE INDEX IF NOT EXISTS job_notes_job_idx ON job_notes (quote_code, id)');
+  /* The author may reword a job message until it is addressed; the first
+     wording is kept for the owner to see. */
+  await pool.query('ALTER TABLE job_notes ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ');
+  await pool.query('ALTER TABLE job_notes ADD COLUMN IF NOT EXISTS original_body TEXT');
   /* Quiz attempts (TRAINING.QUIZZES). Every attempt is kept, so the owner
      sees the first score as well as the pass. Marked on the server. */
   await pool.query(`
@@ -6408,6 +6418,10 @@ const REVIEW_CSS = require('node:fs').readFileSync(
   require('node:path').join(__dirname, 'public', 'assets', 'css', 'review-strip.css'), 'utf8');
 
 const QUOTE_CODE_RE = /^(?:[A-Z0-9]{6}|[A-Z0-9]{10})$/;   // legacy 6, new 10 — see newQuoteCode
+/* The longest message any box takes: team chat, job messages, notes, feedback
+   and customer email (owner, 2026-10-14: "add a larger character limit").
+   A text to a customer stays at 300, a text message's own limit. */
+const MESSAGE_MAX = 10000;
 
 /* ── Guessing budget for quote codes ──────────────────────────────────────
    A code is crypto.randomBytes(3): 24 bits, six hex characters. That is short
@@ -9229,6 +9243,7 @@ const ADMIN_NAV = [
   { key: 'mystats',    href: '/admin/my-stats',      label: 'My stats',   icon: 'grid',   staffOnly: true },
   { key: 'clock',      href: '/admin/clock',         label: 'My hours',   icon: 'clock',  staffOnly: true },
   { key: 'dashboard',  href: '/admin/dashboard',     label: 'Dashboard',  icon: 'grid',   badge: 'jobnotes' },
+  { key: 'tasks',      href: '/admin/tasks',         label: 'Tasks',      icon: 'check' },
   { key: 'leads',      href: '/admin/leads',         label: 'Leads',      icon: 'inbox',  badge: 'leads' },
   { key: 'quotes',     href: '/admin/quotes',        label: 'Quotes',     icon: 'file' },
   { key: 'production', href: '/admin/production',    label: 'Production', icon: 'layers', badge: 'late' },
@@ -9246,8 +9261,7 @@ const ADMIN_NAV = [
   { key: 'training',   href: '/admin/training',      label: 'Training',   icon: 'learn' },
   { key: 'hiring',     href: '/admin/hiring',        label: 'Hiring',     icon: 'users' },
   { key: 'team',       href: '/admin/team',    label: 'Team',       icon: 'team',   badge: 'approvals' },
-  { key: 'timeclock',  href: '/admin/timeclock', label: 'Timeclock', icon: 'clock' },
-  { key: 'shifts',     href: '/admin/work-schedule', label: 'Work hours', icon: 'clock' },
+  { key: 'timeclock',  href: '/admin/timeclock', label: 'Hours',      icon: 'clock' },
 ];
 /* Ordered the way a shop is actually worked, not the way the routes grew: what
    needs you today, the enquiries that might become work, the work in hand, the
@@ -9355,6 +9369,9 @@ details.md-sec:not([open])>summary::before{transform:rotate(-90deg)}
   border-radius:10px;padding:10px 12px;font-weight:800;font-size:14px;text-decoration:none;margin-bottom:6px}
 .adm-new:hover{background:#ffb83d}
 .adm-main{flex:1 1 auto;min-width:0}
+/* Message boxes start roomy and grow with what is typed (owner, 2026-10-14:
+   "make the message box appear bigger across the whole website"). */
+.adm-main textarea{min-height:120px;max-height:65vh;line-height:1.45;resize:vertical;field-sizing:content}
 .adm-page{padding:26px 30px 64px}
 .adm-page .wrap{max-width:1280px;margin:0 auto}
 .adm-top,.adm-scrim{display:none}
@@ -21516,7 +21533,7 @@ async function openJobNotes(reader) {
 function addressForm(n, backTo) {
   return `<form method="post" action="/admin/job-notes/${Number(n.id)}/address">
     <input type="hidden" name="back" value="${escEmail(backTo)}">
-    <textarea name="reply" rows="1" maxlength="${JOBNOTES.BODY_MAX}" placeholder="Reply (optional)"></textarea>
+    <textarea name="reply" rows="3" maxlength="${JOBNOTES.BODY_MAX}" placeholder="Reply (optional)"></textarea>
     <button type="submit" class="btn">Mark addressed</button></form>`;
 }
 
@@ -21531,8 +21548,26 @@ async function jobNotesPinCard(actor, backTo) {
         From <b>${escEmail(readerName(roster, n.author))}</b> about
         <a href="${escEmail(jobLinkFor(actor, n.quote_code))}#team-notes"><b>${escEmail(n.quote_code)}</b></a> ${escEmail(firstNameOf(n.name))}
         <span class="muted">&middot; ${escEmail(whenShort(n.created_at))}</span>
-        <div class="pin-body">${escEmail(n.body)}</div></span>
+        <div class="pin-body">${escEmail(n.body)}</div>${jobNoteEditedHtml(n, actor)}</span>
         <span class="pin-acts">${addressForm(n, backTo)}</span></div>`).join('')}</div>`;
+}
+
+/** "edited" on a reworded job message; the owner may read the first wording. */
+function jobNoteEditedHtml(n, actor) {
+  if (!n.edited_at) return '';
+  const owner = !actor || actor.kind !== 'staff';
+  return owner && n.original_body != null && n.author !== 'owner'
+    ? `<details class="muted" style="font-size:12px"><summary style="cursor:pointer">edited ${escEmail(whenShort(n.edited_at))}: see the first wording</summary><div class="pin-body">${escEmail(n.original_body)}</div></details>`
+    : `<div class="muted" style="font-size:12px;font-style:italic">edited ${escEmail(whenShort(n.edited_at))}</div>`;
+}
+
+/** The author's Edit box on a job message nobody has addressed yet. */
+function jobNoteEditForm(n, backTo) {
+  return `<details style="margin-top:4px"><summary class="muted" style="cursor:pointer;font-size:12.5px">Edit</summary>
+    <form method="post" action="/admin/job-notes/${Number(n.id)}/edit" style="margin-top:6px">
+      <input type="hidden" name="back" value="${escEmail(backTo)}">
+      <textarea name="body" maxlength="${JOBNOTES.BODY_MAX}" required style="width:100%">${escEmail(n.body)}</textarea>
+      <button type="submit" class="btn" style="margin-top:6px">Save</button></form></details>`;
 }
 
 /** The job's team messages, and a box to send one about it. */
@@ -21557,7 +21592,8 @@ async function teamJobNotesCard(q, backTo) {
   const line = (n) => `<div class="jn-line${n.addressed_at ? '' : ' open'}">
       <b>${escEmail(readerName(roster, n.author))}</b> &rarr; <b>${escEmail(readerName(roster, n.recipient))}</b>
       <span class="muted">&middot; ${escEmail(whenShort(n.created_at))}</span>
-      <div class="pin-body">${escEmail(n.body)}</div>
+      <div class="pin-body">${escEmail(n.body)}</div>${jobNoteEditedHtml(n, actor)}
+      ${n.author === me && !n.addressed_at ? jobNoteEditForm(n, backTo) : ''}
       <div class="row-sub">${n.addressed_at
         ? `${pill('addressed', 'green')} by ${escEmail(readerName(roster, n.addressed_by))} ${escEmail(whenShort(n.addressed_at))}`
         : `${pill(`waiting on ${readerName(roster, n.recipient)}`, 'amber')}`}</div>
@@ -21569,7 +21605,7 @@ async function teamJobNotesCard(q, backTo) {
       <input type="hidden" name="code" value="${escEmail(q.code)}"><input type="hidden" name="back" value="${escEmail(backTo)}">
       <label style="margin:0">To <select name="to" required><option value="">Who?</option>${to.map((p) =>
         `<option value="${escEmail(p.key)}">${escEmail(p.name)}</option>`).join('')}</select></label>
-      <textarea name="body" rows="2" maxlength="${JOBNOTES.BODY_MAX}" required placeholder="What they need to know or do about ${escEmail(q.code)}" style="flex:1 1 100%"></textarea>
+      <textarea name="body" rows="4" maxlength="${JOBNOTES.BODY_MAX}" required placeholder="What they need to know or do about ${escEmail(q.code)}" style="flex:1 1 100%"></textarea>
       <button type="submit" class="btn" onclick="var b=this;setTimeout(function(){b.disabled=true},0)">Send about ${escEmail(q.code)}</button>
     </form>` : '<p class="muted">Nobody else can open this job yet.</p>'}</div>`;
 }
@@ -21613,6 +21649,43 @@ app.post('/admin/job-notes', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error(`job note ${code} failed:`, err.message);
     return back(res, backTo, 'err', 'It did not send. Try again.');
+  }
+});
+
+/* The author rewords a job message until it is addressed (owner, 2026-10-14:
+   "add an edit feature on the messages"). After that the reader has acted on
+   it, so it stays as it was. The first wording is kept for the owner. */
+app.post('/admin/job-notes/:id/edit', requireAdmin, async (req, res) => {
+  const id = /^\d{1,15}$/.test(String(req.params.id)) ? req.params.id : null;
+  const actor = currentActor() || OWNER_ACTOR;
+  const me = JOBNOTES.readerOf(actor);
+  const backTo = safeAdminPath(req.body && req.body.back, isOwner() ? '/admin/dashboard' : '/admin/my-day');
+  if (!id) return back(res, backTo, 'err', 'No such message.');
+  try {
+    const body = JOBNOTES.cleanBody(req.body && req.body.body);
+    if (!body) return back(res, backTo, 'err', 'A message needs words. Leave it as it was, or write something.');
+    if (body.length > JOBNOTES.BODY_MAX) return back(res, backTo, 'err', `Keep it under ${JOBNOTES.BODY_MAX} characters.`);
+    const { rows: [n] } = await pool.query('SELECT id, quote_code, author, recipient, body, addressed_at FROM job_notes WHERE id = $1', [id]);
+    if (!n || n.author !== me) return back(res, backTo, 'err', 'You can edit only your own messages.');
+    if (n.addressed_at) return back(res, backTo, 'err', 'It has been addressed already, so it stays as it was. Send a new message instead.');
+    if (!(await canOpenJob(n.quote_code, actor))) return back(res, backTo, 'err', 'That job is not one you can open.');
+    if (n.body === body) return back(res, backTo, 'ok', 'Nothing changed: the wording was the same.');
+    const { rowCount } = await pool.query(
+      `UPDATE job_notes SET original_body = COALESCE(original_body, body), body = $3, edited_at = NOW()
+        WHERE id = $1 AND author = $2 AND addressed_at IS NULL AND body <> $3`, [id, me, body]);
+    if (!rowCount) return back(res, backTo, 'err', 'It was addressed just now, so it stays as it was. Send a new message instead.');
+    /* The reader was emailed the first wording: tell them it changed. */
+    const roster = await staffRoster();
+    const readerActor = n.recipient === 'owner' ? OWNER_ACTOR : staffActorOf(roster.find((r) => r.id === JOBNOTES.staffIdOf(n.recipient)));
+    if (readerActor) {
+      pinEmail(emailOfReader(roster, n.recipient), readerName(roster, n.recipient), `Message about ${n.quote_code} was edited by ${readerName(roster, me)}`,
+        `${escEmail(readerName(roster, me))} changed their message about job <b>${escEmail(n.quote_code)}</b>. Read the new wording before you act on it.`,
+        `${jobLinkFor(readerActor, n.quote_code)}#team-notes`).catch((e) => console.error(`job note edit email ${n.quote_code} failed:`, e.message));
+    }
+    return back(res, backTo, 'ok', `Message edited. ${readerName(roster, n.recipient)} is emailed that it changed.`);
+  } catch (err) {
+    console.error(`job note edit ${id} failed:`, err.message);
+    return back(res, backTo, 'err', 'That did not save. Try again.');
   }
 });
 
@@ -21923,14 +21996,14 @@ async function designNotesCard(code) {
       <div class="row-sub">${escEmail(nameOf(roster, n.staff_id))} &middot; ${escEmail(whenShort(n.created_at))}</div></span></div>`).join('')
       || '<p class="muted">No notes yet.</p>'}
     <form method="post" action="/admin/design/${escEmail(code)}/note" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
-      <textarea name="body" rows="2" maxlength="2000" placeholder="A note for the team about this job" style="flex:1 1 260px" required></textarea>
+      <textarea name="body" rows="4" maxlength="${MESSAGE_MAX}" placeholder="A note for the team about this job" style="flex:1 1 260px" required></textarea>
       <button type="submit" class="btn btn-ghost">Add note</button>
     </form></div>`;
 }
 
 app.post('/admin/design/:code/note', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
-  const body = text(req.body && req.body.body, 2000);
+  const body = text(req.body && req.body.body, MESSAGE_MAX);
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/design');
   try {
     const actor = currentActor();
@@ -22186,7 +22259,7 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
         </div>
         <input name="subject" maxlength="150" value="${prefill ? `Your proof for order ${escEmail(code)}` : `About your order ${escEmail(code)}`}" data-subject
                style="margin-bottom:8px;padding:10px;font-size:14px">
-        <textarea name="body" rows="4" maxlength="5000" placeholder="Write to ${escEmail(first || 'them')}…"
+        <textarea name="body" rows="6" maxlength="${MESSAGE_MAX}" placeholder="Write to ${escEmail(first || 'them')}…"
                   style="font-size:14px;padding:10px">${escEmail(prefill)}</textarea>
         <div data-review style="display:none;margin:8px 0;padding:10px 12px;border-radius:10px;font-size:14px;line-height:1.45"></div>
         <div data-attach style="margin:8px 0;padding:8px 10px;border:1px dashed #c7d7fb;border-radius:8px;background:#fafcff">
@@ -22234,7 +22307,7 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
           var c = f.querySelector('input[name="channel"]:checked');
           var text = c && c.value === 'text';
           subj.style.display = text ? 'none' : '';
-          body.maxLength = text ? 300 : 5000;
+          body.maxLength = text ? 300 : ${MESSAGE_MAX};
           if (att) att.style.display = text ? 'none' : '';
         }
         /* Files: ticked ones already on the job, and uploads signed into the
@@ -22519,7 +22592,7 @@ app.post('/admin/quote/:code/message', requireAdmin, async (req, res) => {
   // A designer writes only to the customers of jobs that are with them.
   if (actorLevel('quotes.view') !== 'on' && !(await designJobFor(code, currentActor()))) return res.redirect(designHome());
   if (!text) return answer('msg_err', 'empty');
-  if (text.length > (channel === 'text' ? 300 : 5000)) return answer('msg_err', 'too-long');
+  if (text.length > (channel === 'text' ? 300 : MESSAGE_MAX)) return answer('msg_err', 'too-long');
 
   /* A helper in training writes the message; the owner sends it. So does any
      helper whose message asks to be paid outside the shop (Cash App, "pay me
@@ -22538,7 +22611,11 @@ app.post('/admin/quote/:code/message', requireAdmin, async (req, res) => {
         `INSERT INTO staff_approvals (kind, subject_id, payload, reasons, requested_by)
          SELECT 'message', $1, $2::jsonb, $3::jsonb, $4
           WHERE NOT EXISTS (SELECT 1 FROM staff_approvals WHERE kind = 'message' AND subject_id = $1
-                              AND status IN ('pending', 'processing') AND payload = $2::jsonb)`,
+                              AND status IN ('pending', 'processing')
+                              AND payload->>'channel' = $2::jsonb->>'channel' AND payload->>'subject' = $2::jsonb->>'subject'
+                              AND payload->>'attachments' IS NOT DISTINCT FROM $2::jsonb->>'attachments'
+                              /* an edited one still counts: its first wording is in original_text */
+                              AND $2::jsonb->>'text' IN (payload->>'text', payload->>'original_text'))`,
         [code, JSON.stringify({ channel, subject, text, attachments }),
          JSON.stringify(outside
            ? [`It mentions being paid outside the shop ("${outside.slice(0, 60)}").`]
@@ -23412,7 +23489,7 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
           : emptyState('All clear. Nothing is late, waiting or disputed.')}
       </div>
       <div class="card" id="todo">
-        <h2 class="card-title">To-do <span class="muted">${tasks.length || ''}</span></h2>
+        <h2 class="card-title">To-do <span class="muted">${tasks.length || ''}</span>${me == null ? ' <a href="/admin/tasks">all tasks &rarr;</a>' : ''}</h2>
         ${tasks.length ? `<div class="rows">${tasks.map((t) => {
           const due = t.due_on ? new Date(t.due_on).toISOString().slice(0, 10) : '';
           const todayIso = new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ });
@@ -27936,6 +28013,21 @@ function proofPreview(text) {
       style="width:140px;height:140px;object-fit:contain;border:1px solid #e3e8f2;border-radius:8px;background:#fff"></a>`).join('')}</div>` : '';
 }
 
+/** Edit a customer message still waiting for the owner (owner, 2026-10-14:
+ *  "add an edit feature on the messages"): the owner before approving, the
+ *  helper who wrote it while it waits. A text keeps the 300 limit. */
+function heldMessageEditForm(a, backTo) {
+  if (!['message', 'lead_email'].includes(a.kind) || a.status !== 'pending') return '';
+  const p = a.payload || {};
+  const isText = a.kind === 'message' && p.channel === 'text';
+  return `<details style="margin-top:8px"><summary class="muted" style="cursor:pointer">Edit the message</summary>
+    <form method="post" action="/admin/approvals/${Number(a.id)}/edit" style="margin-top:6px;display:flex;flex-direction:column;gap:6px">
+      <input type="hidden" name="back" value="${escEmail(backTo)}">
+      ${isText ? '' : `<input name="subject" maxlength="150" value="${escEmail(p.subject || '')}" placeholder="Subject">`}
+      <textarea name="text" required maxlength="${isText ? 300 : MESSAGE_MAX}">${escEmail(p.text || '')}</textarea>
+      <button type="submit" class="btn" style="align-self:flex-start">Save the changes</button></form></details>`;
+}
+
 function approvalBody(a, q) {
   const p = a.payload || {};
   if (a.kind === 'quote') {
@@ -28118,7 +28210,11 @@ app.get('/admin/approvals', requireAdmin, async (req, res) => {
         ${a.kind === 'message' ? 'Check the job\'s messages before approving again, or it may go twice.' : a.kind === 'lead_email' ? 'Check the lead\'s notes before approving again: an email sent in the last 10 minutes is not sent twice.' : 'Decide it again.'}</div>` : ''}
       ${approvalBody(a, a.kind === 'lead_email' ? leadBy[a.subject_id] : quoteBy[a.subject_id])}
       ${(a.reasons || []).length ? `<ul class="muted">${a.reasons.map((r) => `<li>${escEmail(r)}</li>`).join('')}</ul>` : ''}
+      ${a.payload && a.payload.edited_at ? `<div class="muted" style="font-size:12px;font-style:italic">edited ${escEmail(whenShort(a.payload.edited_at))}${
+        a.payload.original_text != null ? ` &middot; first wording: <span style="white-space:pre-wrap">${escEmail(a.payload.original_text)}</span>` : ''}</div>` : ''}
+      ${heldMessageEditForm(a, '/admin/approvals')}
       <form method="post" action="/admin/approvals/${a.id}" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
+        <input type="hidden" name="seen" value="${escEmail((a.payload && a.payload.edited_at) || '')}">
         <input name="note" placeholder="Note back to them (optional)" maxlength="500" style="flex:1 1 220px">
         <button type="submit" name="decision" value="approve">${['message', 'lead_email'].includes(a.kind) ? 'Approve and send' : 'Approve'}</button>
         <button type="submit" name="decision" value="reject" class="btn-ghost">Send back</button>
@@ -28188,6 +28284,41 @@ async function saveKbArticle(p, staffId) {
   return r.id;
 }
 
+app.post('/admin/approvals/:id/edit', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  const actor = currentActor() || OWNER_ACTOR;
+  const staff = actor.kind === 'staff' ? actor.id : null;
+  const backTo = safeAdminPath(req.body && req.body.back, staff ? '/admin/my-day' : '/admin/approvals');
+  if (!id) return back(res, backTo, 'err', 'No such message.');
+  try {
+    const { rows: [a] } = await pool.query(
+      `SELECT * FROM staff_approvals WHERE id = $1 AND kind IN ('message', 'lead_email') AND ($2::int IS NULL OR requested_by = $2)`, [id, staff]);
+    if (!a) return back(res, backTo, 'err', 'That message is not one you can edit.');
+    if (a.status !== 'pending') return back(res, backTo, 'err', 'That message has been decided already, so it can no longer be edited.');
+    const p = a.payload || {};
+    const isText = a.kind === 'message' && p.channel === 'text';
+    const body = String((req.body && req.body.text) || '').replace(/\r\n?/g, '\n').trim();
+    const subject = isText ? (p.subject || '') : String((req.body && req.body.subject) || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 150);
+    if (!body) return back(res, backTo, 'err', 'Write the message first.');
+    if (body.length > (isText ? 300 : MESSAGE_MAX)) return back(res, backTo, 'err', isText ? 'A text is at most 300 characters.' : `Keep it under ${MESSAGE_MAX} characters.`);
+    if (a.kind === 'lead_email' && !subject) return back(res, backTo, 'err', 'Add a subject.');
+    /* A helper's edit is checked for outside-payment wording like a new message. */
+    const outside = staff ? FRAUD.mentionsOutsidePayment(`${subject}\n${body}`) : '';
+    const reasons = outside && !(a.reasons || []).some((r) => /paid outside/.test(r))
+      ? [...(a.reasons || []), `It mentions being paid outside the shop ("${outside.slice(0, 60)}").`] : (a.reasons || []);
+    const { rowCount } = await pool.query(
+      `UPDATE staff_approvals SET payload = payload || $2::jsonb, reasons = $3::jsonb WHERE id = $1 AND status = 'pending'`,
+      [id, JSON.stringify({ text: body, subject, edited_at: new Date().toISOString(), edited_by: staff,
+        original_text: p.original_text != null ? p.original_text : (p.text || '') }), JSON.stringify(reasons)]);
+    if (!rowCount) return back(res, backTo, 'err', 'That message has been decided already, so it can no longer be edited.');
+    if (outside) logActivity(actor, 'message held: outside payment', { type: 'quote', id: a.subject_id }, { phrase: outside.slice(0, 60) });
+    return back(res, backTo, 'ok', staff ? 'Saved. June sees the new wording.' : 'Saved. Approve it to send the new wording.');
+  } catch (err) {
+    console.error(`approval edit ${id} failed:`, err.message);
+    return back(res, backTo, 'err', 'That did not save. Try again.');
+  }
+});
+
 app.post('/admin/approvals/:id', requireAdmin, async (req, res) => {
   const id = intIn(req.params.id);
   const decision = req.body && req.body.decision === 'approve' ? 'approve' : 'reject';
@@ -28202,6 +28333,13 @@ app.post('/admin/approvals/:id', requireAdmin, async (req, res) => {
   const finish = (status) => pool.query(
     `UPDATE staff_approvals SET status = $2, decided_at = NOW(), decision_note = $3 WHERE id = $1`, [id, status, note]);
   const unclaim = () => pool.query(`UPDATE staff_approvals SET status = 'pending' WHERE id = $1`, [id]).catch(() => {});
+  /* Approve sends the wording the owner read: a helper's edit after her page
+     loaded is refused here, and shown to her first. */
+  if (decision === 'approve' && ['message', 'lead_email'].includes(a.kind)
+      && String((req.body && req.body.seen) || '') !== String((a.payload || {}).edited_at || '')) {
+    await unclaim();
+    return back(res, '/admin/approvals', 'err', 'That message was edited after you opened this page. Read the new wording, then approve again.');
+  }
   try {
     if (decision === 'reject') {
       await finish('rejected');
@@ -28221,7 +28359,7 @@ app.post('/admin/approvals/:id', requireAdmin, async (req, res) => {
       /* Sent as the owner's decision, credited to the helper who wrote it. */
       const out = await actorStore.run({ ...OWNER_ACTOR, sentBy: a.requested_by }, () =>
         sendJobMessage({ code: a.subject_id, channel: p.channel === 'text' ? 'text' : 'email',
-                         subject: text(p.subject, 150) || `About your order ${a.subject_id}`, text: text(p.text, 5000),
+                         subject: text(p.subject, 150) || `About your order ${a.subject_id}`, text: text(p.text, MESSAGE_MAX),
                          attachments: typeof p.attachments === 'string' ? p.attachments : '[]' }));
       if (out !== 'sent') { await unclaim(); return back(res, '/admin/approvals', 'err', `Not sent: ${MESSAGE_ERRORS[out] || out}`); }
       await markProofsSent(a.subject_id, p.text);
@@ -28640,6 +28778,17 @@ function shiftRow(sh, { owner = false, pings = [] } = {}) {
   </div>`;
 }
 
+/* Clocked hours and the work schedule are one place (owner, 2026-10-14:
+   "merge work hours with my hours"): two tabs, one menu entry. */
+function hoursTabs(on) {
+  const staff = (currentActor() || OWNER_ACTOR).kind === 'staff';
+  return filterChips([
+    staff ? { label: 'My hours', href: '/admin/clock', on: on === 'clock' }
+      : { label: 'Clocked hours', href: '/admin/timeclock', on: on === 'clock' },
+    { label: 'Work schedule (CT + PH)', href: '/admin/work-schedule', on: on === 'schedule' },
+  ]);
+}
+
 app.get('/admin/clock', requireAdmin, async (req, res) => {
   const actor = currentActor();
   if (!actor || actor.kind !== 'staff') return res.redirect('/admin/timeclock');
@@ -28651,7 +28800,9 @@ app.get('/admin/clock', requireAdmin, async (req, res) => {
     res.set('Cache-Control', 'no-store');
     res.send(adminPage('My hours', `
       ${pageHeader('My hours', 'Clock in when you start and out when you stop. June pays the hours she approves each week. Time with nothing happening on the site for 30 minutes is shown to her; if you were working away from the screen, say what in your clock-out note.')}
+      ${hoursTabs('clock')}
       ${flash(req.query)}
+      ${await myShiftsCard(actor.id).catch((e) => { console.error('my hours shifts failed:', e.message); return ''; })}
       <div class="card">${open ? `<b>On the clock since ${escEmail(clockTime(open.started_at))}</b> (${TRAINING.hm(TIMECLOCK.shiftMinutes(open))})
         <form method="post" action="/admin/clock/out" data-once style="margin-top:8px">
           <label style="display:block">What did you work on? (optional, June sees it)
@@ -28721,7 +28872,8 @@ app.get('/admin/timeclock', requireAdmin, async (req, res) => {
     if (!who) {
       const weeks = await Promise.all(roster.map((r) => clockWeek(r.id, week).catch(() => null)));
       return res.send(adminPage('Timeclock', `
-        ${pageHeader(`Timeclock — week of ${weekLabel(week)}`, 'Clocked hours, what needs a look, and what you have approved. Approving a week writes its hours to Team, where wages are paid.', weekNav(null))}
+        ${pageHeader(`Hours — week of ${weekLabel(week)}`, 'Clocked hours, what needs a look, and what you have approved. Approving a week writes its hours to Team, where wages are paid.', weekNav(null))}
+        ${hoursTabs('clock')}
         ${flash(req.query)}
         <div class="card">${roster.length ? roster.map((r, i) => {
           const w = weeks[i];
@@ -28736,7 +28888,8 @@ app.get('/admin/timeclock', requireAdmin, async (req, res) => {
     const paid = w.hours.some((h) => h.paid_at);
     const tone = { red: '#b91c1c', amber: '#b45309', neutral: '#46505f' };
     res.send(adminPage('Timeclock', `
-      ${pageHeader(`Timeclock — ${who.name}, week of ${weekLabel(week)}`, 'Cut time you do not pay for on each shift, then approve the week.', weekNav(who.id))}
+      ${pageHeader(`Hours — ${who.name}, week of ${weekLabel(week)}`, 'Cut time you do not pay for on each shift, then approve the week.', weekNav(who.id))}
+      ${hoursTabs('clock')}
       <div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:12px">${chips(who.id)}</div>
       ${flash(req.query)}
       <div class="card"><b>${TRAINING.hm(w.minutes)} on the clock</b> (${TIMECLOCK.hoursOf(w.minutes)} hours)${w.open ? ' &middot; a shift is still running' : ''}
@@ -29582,7 +29735,7 @@ app.post('/admin/lead/:id/note', requireAdmin, async (req, res) => {
   const id = intIn(req.params.id);
   const b = req.body || {};
   const kind = NOTE_KINDS[b.kind] ? b.kind : 'note';
-  const body = text(b.body, 2000);
+  const body = text(b.body, MESSAGE_MAX);
   const backTo = safeAdminPath(b.back, '/admin/leads');
   if (!id || !body) return back(res, backTo, 'err', 'Write something first.');
   try {
@@ -29644,7 +29797,7 @@ app.post('/admin/lead/:id/email', requireAdmin, async (req, res) => {
           `INSERT INTO staff_approvals (kind, subject_id, payload, reasons, requested_by)
            SELECT 'lead_email', $1, $2::jsonb, $3::jsonb, $4
             WHERE NOT EXISTS (SELECT 1 FROM staff_approvals WHERE kind = 'lead_email' AND subject_id = $1
-                                AND requested_by = $4 AND status IN ('pending', 'processing') AND payload->>'text' = $5)`,
+                                AND requested_by = $4 AND status IN ('pending', 'processing') AND $5 IN (payload->>'text', payload->>'original_text'))`,
           [String(id), JSON.stringify({ subject: m.subject, text: m.text }),
            JSON.stringify([outside ? `Mentions being paid outside the shop: ${outside}` : 'Written in training']), actor.id, m.text]));
         await qc.query('COMMIT');
@@ -29833,7 +29986,7 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
 
 app.post('/admin/quote/:code/note', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
-  const body = text(req.body && req.body.body, 2000);
+  const body = text(req.body && req.body.body, MESSAGE_MAX);
   const kind = NOTE_KINDS[req.body && req.body.kind] ? req.body.kind : 'note';
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/quotes');
   if (!body) return res.redirect(`/admin/production/${code}#notes`);
@@ -29860,7 +30013,7 @@ async function jobNotesCard(code) {
       || '<p class="muted">No notes yet.</p>'}
     <form method="post" action="/admin/quote/${escEmail(code)}/note" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
       <select name="kind">${Object.entries(NOTE_KINDS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
-      <textarea name="body" rows="2" maxlength="2000" placeholder="What happened, or what should change" style="flex:1 1 260px" required></textarea>
+      <textarea name="body" rows="4" maxlength="${MESSAGE_MAX}" placeholder="What happened, or what should change" style="flex:1 1 260px" required></textarea>
       <button type="submit" class="btn btn-ghost">Add note</button>
     </form></div>`;
 }
@@ -29964,7 +30117,7 @@ function leadWorkPanel(l, notes, roster, actor) {
     <form method="post" action="/admin/lead/${l.id}/note" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
       <input type="hidden" name="back" value="/admin/leads">
       <select name="kind">${Object.entries(NOTE_KINDS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
-      <textarea name="body" rows="2" maxlength="2000" required placeholder="Call, message or note" style="flex:1 1 220px"></textarea>
+      <textarea name="body" rows="4" maxlength="${MESSAGE_MAX}" required placeholder="Call, message or note" style="flex:1 1 220px"></textarea>
       <label class="muted" style="font-size:12px">follow up <input type="date" name="follow_up"></label>
       <button type="submit" class="btn btn-ghost">Save</button>
     </form>
@@ -30351,6 +30504,60 @@ app.get('/admin/tasks/:id/file/:n', requireAdmin, async (req, res) => {
   }
 });
 
+/* ── Tasks, a page of its own (owner, 2026-10-14: "make a separate area for
+   tasks on my end, they are only on the dashboard"). Every open task, by
+   person, with what was done lately and the Add a task form. Owner only
+   (ROUTES); a helper's tasks are on My Day. */
+app.get('/admin/tasks', requireAdmin, async (req, res) => {
+  try {
+    const roster = await staffRoster();
+    const who = String(req.query.who || '');
+    const whoId = /^\d{1,9}$/.test(who) ? Number(who) : null;
+    const filter = who === 'anyone' ? 'AND assigned_to IS NULL' : whoId ? 'AND assigned_to = $1' : '';
+    const args = whoId ? [whoId] : [];
+    const [{ rows: open }, { rows: done }, { rows: counts }] = await Promise.all([
+      pool.query(`SELECT * FROM staff_tasks WHERE done_at IS NULL ${filter} ORDER BY due_on NULLS LAST, created_at LIMIT 300`, args),
+      pool.query(`SELECT * FROM staff_tasks WHERE done_at > NOW() - interval '30 days' ${filter} ORDER BY done_at DESC LIMIT 200`, args),
+      pool.query('SELECT assigned_to, COUNT(*)::int AS n FROM staff_tasks WHERE done_at IS NULL GROUP BY assigned_to'),
+    ]);
+    const countOf = (id) => (counts.find((c) => c.assigned_to === id) || {}).n || 0;
+    const chips = [
+      { label: 'Everyone', href: '/admin/tasks', on: !who, count: counts.reduce((a, c) => a + c.n, 0) || null },
+      ...roster.filter((r) => r.active || countOf(r.id)).map((r) => ({ label: r.name, href: `/admin/tasks?who=${r.id}`, on: whoId === r.id, count: countOf(r.id) || null })),
+      { label: 'Anyone (unassigned)', href: '/admin/tasks?who=anyone', on: who === 'anyone', count: countOf(null) || null },
+    ];
+    const backTo = `/admin/tasks${who ? `?who=${encodeURIComponent(who)}` : ''}`;
+    const todayIso = new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ });
+    const row = (t) => {
+      const due = t.due_on ? new Date(t.due_on).toISOString().slice(0, 10) : '';
+      return `<div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal"><b>${escEmail(t.title)}</b>
+        ${t.done_at ? pill('completed', 'green') : t.started_at ? pill('started', 'blue') : t.assigned_to != null ? pill('not started', 'amber') : ''}
+        <div class="row-sub">${escEmail(BUSINESSES[t.business] || t.business)}${due ? ` &middot; due ${escEmail(fmtDate(t.due_on))}` : ''}${
+          t.assigned_to != null ? ` &middot; ${escEmail(nameOf(roster, t.assigned_to))}` : ' &middot; anyone'}${
+          t.started_at ? ` &middot; started ${escEmail(whenShort(t.started_at))}` : ''}${
+          t.done_at ? ` &middot; completed ${escEmail(whenShort(t.done_at))} by ${t.done_by == null ? 'you' : escEmail(nameOf(roster, t.done_by))}` : ''}</div>
+        ${taskDetailsHtml(t, OWNER_ACTOR, roster)}</span>
+        <span class="row-end">${!t.done_at && due && due < todayIso ? pill('overdue', 'red') : !t.done_at && due === todayIso ? pill('today', 'amber') : ''}
+          ${taskActionForm(t, backTo, false)}</span></div>`;
+    };
+    res.set('Cache-Control', 'no-store');
+    res.send(adminPage('Tasks', `${TASK_CSS}
+      ${pageHeader('Tasks', 'Everything you have handed out. A helper presses Start to accept a task, and says what they did to complete it.')}
+      ${flash(req.query)}
+      ${filterChips(chips)}
+      <details class="card" id="add"${open.length ? '' : ' open'}><summary><b>Add a task</b> <span class="muted">with the details, files and an order</span></summary>
+        ${await taskAddForm({ back: backTo, roster, owner: true })}</details>
+      <div class="card"><h2 class="card-title">Open <span class="muted">${open.length || ''}</span></h2>
+        ${open.length ? `<div class="rows">${open.map(row).join('')}</div>` : emptyState('Nothing open.')}</div>
+      <div class="card"><h2 class="card-title">Completed in the last 30 days <span class="muted">${done.length || ''}</span></h2>
+        ${done.length ? `<div class="rows">${done.map(row).join('')}</div>` : emptyState('Nothing completed in the last 30 days.')}</div>
+      ${TASK_UPLOAD_JS}`, 'tasks'));
+  } catch (err) {
+    console.error('tasks page failed:', err.message);
+    res.status(500).send(adminPage('Tasks', '<div class="card"><div class="warn">Could not load the tasks.</div></div>', 'tasks'));
+  }
+});
+
 /* ── Work hours (owner, 2026-10-14) ─────────────────────────────────────────
    "Add a schedule for work for the helper. Convert the time and show in
    Chicago time and Philippines time." The owner sets each helper's weekly
@@ -30424,22 +30631,23 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
           <input type="hidden" name="id" value="${Number(w.id)}"><button type="submit" class="btn btn-ghost">Remove</button></form></span></div>`).join('')
         || '<p class="muted">No shifts yet.</p>'}</div></details>` : '';
     res.set('Cache-Control', 'no-store');
-    res.send(adminPage('Work hours', `<style>
+    res.send(adminPage('Work schedule', `<style>
       .ws-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}
       .ws-day{background:#fff;border:1px solid #e3e8f2;border-radius:12px;padding:10px}
       .ws-head{font-weight:700;color:#0B1F4B;margin-bottom:6px}
       .ws-shift{border-top:1px solid #eef1f6;padding:6px 0;font-size:13px}
       .ws-shift:first-of-type{border-top:0}
     </style>
-      ${pageHeader('Work hours', 'Each shift in Chicago time (CT) and Philippines time (PH), for the real dates of the week, so daylight saving is already counted.',
+      ${pageHeader('Work schedule', 'Each shift in Chicago time (CT) and Philippines time (PH), for the real dates of the week, so daylight saving is already counted.',
         `<a class="btn btn-ghost" href="/admin/work-schedule?week=${SHIFTS.addDays(week, -7)}">&larr; Week before</a><a class="btn btn-ghost" href="/admin/work-schedule?week=${SHIFTS.addDays(week, 7)}">Week after &rarr;</a>`)}
+      ${hoursTabs('schedule')}
       ${flash(req.query)}
       <div class="card"><b>Hours this week</b> ${[...hours.entries()].map(([id, h]) => `<span class="muted" style="margin-left:10px">${escEmail(nameOf(roster, id))} ${Math.round(h * 10) / 10} h</span>`).join('') || '<span class="muted">none scheduled</span>'}</div>
       <div class="ws-grid">${days.map(dayCard).join('')}</div>
-      ${manage}`, 'shifts'));
+      ${manage}`, owner ? 'timeclock' : 'clock'));
   } catch (err) {
     console.error('work schedule failed:', err.message);
-    res.status(500).send(adminPage('Work hours', '<div class="card"><div class="warn">Could not load the work hours.</div></div>', 'shifts'));
+    res.status(500).send(adminPage('Work schedule', '<div class="card"><div class="warn">Could not load the work schedule.</div></div>', 'clock'));
   }
 });
 
@@ -30586,7 +30794,7 @@ app.post('/admin/resources/:id', requireAdmin, async (req, res) => {
    reaches their own; the owner picks whose. Lines are text the team typed:
    escaped on the page, and built with textContent when new ones arrive by
    polling, never as markup. */
-const TEAM_CHAT_MAX = 2000;
+const TEAM_CHAT_MAX = MESSAGE_MAX;
 const TEAM_CHAT_CSS = `<style>
 .tc-log{display:flex;flex-direction:column;gap:8px;max-height:60vh;overflow-y:auto;padding:4px 2px}
 .tc-line{max-width:78%;padding:8px 12px;border-radius:14px;background:#eef2f9;color:#0B1F4B;white-space:pre-wrap;
@@ -30604,6 +30812,20 @@ const TEAM_CHAT_CSS = `<style>
 .tc-doc{text-decoration:underline;font-weight:600}
 .tc-tabs .chip-f .n{background:#dc2626;color:#fff;opacity:1;border-radius:100px;padding:1px 7px;min-width:18px;text-align:center}
 .tc-tabs .chip-f.has-new{border-color:#dc2626;font-weight:700}
+.tc-tag{display:inline-block;margin-top:6px;padding:2px 9px;border-radius:100px;background:#fff3d6;color:#7a4b00;font-size:12.5px;font-weight:700;text-decoration:none}
+.tc-line.me .tc-tag{background:#f4a623;color:#0B1F4B}
+.tc-edited{font-size:11px;opacity:.75;font-style:italic}
+.tc-orig{font-size:12px;opacity:.85;margin-top:4px}
+.tc-orig summary{cursor:pointer}
+.tc-edit{margin-top:4px;font-size:12px}
+.tc-edit summary{cursor:pointer;opacity:.8;list-style:none;display:inline}
+.tc-edit summary::-webkit-details-marker{display:none}
+.tc-edit form{margin-top:6px;display:flex;flex-direction:column;gap:6px;white-space:normal}
+.tc-edit textarea{color:#12203c;background:#fff;font-size:14px;min-height:90px}
+.tc-edit button{align-self:flex-start;padding:6px 16px;font-size:13px}
+.tc-form{flex-wrap:wrap}
+.tc-form .tc-tagin{flex:1 1 100%;display:flex;gap:6px;align-items:center;margin:0;text-transform:none;letter-spacing:0;font-weight:600;color:#46505f;font-size:13px}
+.tc-form .tc-tagin input{flex:0 1 220px;padding:7px 10px;font-size:14px;text-transform:uppercase}
 @media (max-width:640px){.tc-line{max-width:90%}.tc-form{flex-direction:column;align-items:stretch}}
 </style>`;
 
@@ -30671,14 +30893,14 @@ function chatChannelFor(raw, channels, roster) {
 
 async function chatLines(staffId, after = 0) {
   const { rows } = await pool.query(
-    `SELECT id, from_owner, body, file_url, file_name, created_at, read_at FROM team_messages
+    `SELECT id, staff_id, from_owner, body, file_url, file_name, created_at, read_at, edited_at, original_body, quote_code FROM team_messages
       WHERE staff_id = $1 AND id > $2 ORDER BY id DESC LIMIT 200`, [staffId, after]);
   return rows.reverse();
 }
 
 async function channelLines(channelId, after = 0) {
   const { rows } = await pool.query(
-    `SELECT id, staff_id, body, file_url, file_name, created_at FROM team_channel_messages
+    `SELECT id, staff_id, body, file_url, file_name, created_at, edited_at, original_body, quote_code FROM team_channel_messages
       WHERE channel_id = $1 AND id > $2 ORDER BY id DESC LIMIT 200`, [channelId, after]);
   return rows.reverse();
 }
@@ -30751,9 +30973,31 @@ async function chatSeen({ staffId = null, channelId = null }, roster) {
 }
 const seenSpan = (seen, id) => seen[id] ? `<span class="tc-seen" data-seen="${Number(id)}">${escEmail(seen[id])}</span>` : '';
 
-function chatLineJson(m) {
+function chatLineJson(m, open) {
   const mine = (currentActor() || OWNER_ACTOR).kind === 'staff' ? !m.from_owner : m.from_owner;
-  return { id: Number(m.id), mine, body: m.body, file: chatFileJson(m, 'dm'), when: whenShort(m.created_at) };
+  return { id: Number(m.id), kind: 'dm', mine, body: m.body, file: chatFileJson(m, 'dm'), when: whenShort(m.created_at), ...chatExtrasJson(m, mine, open) };
+}
+
+/** The tagged orders among these lines that the viewer can open: those are
+ *  links; any other tag shows as plain text. */
+async function openableTags(lines) {
+  const actor = currentActor() || OWNER_ACTOR;
+  const codes = [...new Set(lines.map((m) => m.quote_code).filter((c) => c && QUOTE_CODE_RE.test(c)))];
+  const ok = await Promise.all(codes.map((c) => canOpenJob(c, actor).catch(() => false)));
+  return new Set(codes.filter((_, i) => ok[i]));
+}
+
+/** What an edit and an order tag add to a line. The first wording of an
+ *  edited message is shown to the owner only, who watches what helpers say;
+ *  the author sees their own edit as it is now. */
+function chatExtrasJson(m, mine, open) {
+  const actor = currentActor() || OWNER_ACTOR;
+  return {
+    edited: m.edited_at ? whenShort(m.edited_at) : '',
+    original: m.edited_at && m.original_body != null && !mine && actor.kind !== 'staff' ? m.original_body : '',
+    tag: m.quote_code && QUOTE_CODE_RE.test(m.quote_code)
+      ? { code: m.quote_code, href: open && open.has(m.quote_code) ? jobLinkFor(actor, m.quote_code) : '' } : null,
+  };
 }
 
 /** A message's file for the page: pictures load from storage, anything else
@@ -30764,11 +31008,11 @@ function chatFileJson(m, kind) {
   return { ...f, href: f.image ? f.url : `/admin/team-chat/file/${kind}/${Number(m.id)}` };
 }
 
-function channelLineJson(m, roster) {
+function channelLineJson(m, roster, open) {
   const a = currentActor() || OWNER_ACTOR;
   const mine = a.kind === 'staff' ? m.staff_id === a.id : m.staff_id == null;
-  return { id: Number(m.id), mine, body: m.body, file: chatFileJson(m, 'ch'), when: whenShort(m.created_at),
-    who: mine ? '' : (m.staff_id == null ? 'June' : nameOf(roster, m.staff_id)) };
+  return { id: Number(m.id), kind: 'ch', mine, body: m.body, file: chatFileJson(m, 'ch'), when: whenShort(m.created_at),
+    who: mine ? '' : (m.staff_id == null ? 'June' : nameOf(roster, m.staff_id)), ...chatExtrasJson(m, mine, open) };
 }
 
 /** One message as HTML: who, the words, the file, when, and (own lines) seen. */
@@ -30777,8 +31021,14 @@ function chatLineHtml(j, seen) {
   const file = !f ? '' : f.image
     ? `<a class="tc-file" href="${escEmail(f.url)}" target="_blank" rel="noopener"><img src="${escEmail(f.url)}" alt="${escEmail(f.name)}" loading="lazy"></a>`
     : `<a class="tc-file tc-doc" href="${escEmail(f.href)}">&#128206; ${escEmail(f.name)}</a>`;
-  return `<div class="tc-line${j.mine ? ' me' : ''}">${j.who ? `<b class="tc-who">${escEmail(j.who)}</b>` : ''}${
-    j.body ? escEmail(j.body) : ''}${file}<span class="tc-when">${escEmail(j.when)}</span>${j.mine ? seenSpan(seen, j.id) : ''}</div>`;
+  const tag = !j.tag ? '' : j.tag.href ? `<a class="tc-tag" href="${escEmail(j.tag.href)}">&#127991; Order ${escEmail(j.tag.code)}</a>`
+    : `<span class="tc-tag">&#127991; Order ${escEmail(j.tag.code)}</span>`;
+  const edited = !j.edited ? '' : j.original
+    ? `<details class="tc-orig"><summary>edited ${escEmail(j.edited)}: see the first wording</summary>${escEmail(j.original) || '<i>(no words)</i>'}</details>`
+    : `<span class="tc-edited">edited ${escEmail(j.edited)}</span>`;
+  const edit = !j.mine ? '' : `<details class="tc-edit"><summary>Edit</summary><form method="post" action="/admin/team-chat/edit"><input type="hidden" name="kind" value="${j.kind === 'ch' ? 'ch' : 'dm'}"><input type="hidden" name="id" value="${Number(j.id)}"><textarea name="body" maxlength="${TEAM_CHAT_MAX}">${escEmail(j.body || '')}</textarea><button type="submit" class="btn">Save</button></form></details>`;
+  return `<div class="tc-line${j.mine ? ' me' : ''}" data-line="${j.kind === 'ch' ? 'ch' : 'dm'}:${Number(j.id)}">${j.who ? `<b class="tc-who">${escEmail(j.who)}</b>` : ''}<span class="tc-body">${
+    j.body ? escEmail(j.body) : ''}</span>${tag}${file}<span class="tc-when">${escEmail(j.when)}</span>${edited}${j.mine ? seenSpan(seen, j.id) : ''}${edit}</div>`;
 }
 
 /** Unread messages per conversation tab for whoever is signed in, keyed by
@@ -30841,14 +31091,18 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
         'SELECT COUNT(*)::int AS n FROM team_messages WHERE staff_id = $1 AND from_owner AND read_at IS NULL', [actor.id]);
       dmChips = [{ label: 'June', href: '/admin/team-chat', on: !channel, count: u.n || null }];
     }
+    /* Taken before the lines are read, so an edit made meanwhile reaches the
+       page on its first poll. */
+    const since = (await pool.query('SELECT NOW() AS t')).rows[0].t.toISOString();
     let lines, lineHtml, canWrite, intro, placeholder, hidden, pollQuery;
     let seen = {};
+    let open = new Set();
     if (channel) {
       lines = await channelLines(channel.id);
       const last = lines.length ? Number(lines[lines.length - 1].id) : 0;
       await channelMarkRead(channel.id, last);
       seen = await chatSeen({ channelId: channel.id }, roster).catch(() => ({}));
-      lineHtml = (m) => chatLineHtml(channelLineJson(m, roster), seen);
+      lineHtml = (m) => chatLineHtml(channelLineJson(m, roster, open), seen);
       canWrite = true;
       intro = `# ${escEmail(channel.name)}: ${channel.audience === 'all' ? 'everyone on the team' : `the ${escEmail(CHAN.AUDIENCES[channel.audience] || channel.audience)} team`} and June. Customers never see this.`;
       placeholder = `Message # ${channel.name}`;
@@ -30861,14 +31115,18 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
       const who = roster.find((r) => r.id === staffId);
       canWrite = !owner || (who && who.active);
       const other = !owner ? 'June' : nameOf(roster, staffId);
-      lineHtml = (m) => chatLineHtml(chatLineJson(m), seen);
+      lineHtml = (m) => chatLineHtml(chatLineJson(m, open), seen);
       intro = `Just you and ${escEmail(other)}. Customers never see this.`;
       placeholder = `Message ${other}`;
       hidden = `<input type="hidden" name="staff" value="${staffId}">`;
       pollQuery = `staff=${staffId}`;
     }
     const last = lines.length ? Number(lines[lines.length - 1].id) : 0;
+    open = await openableTags(lines);
     const alertsOn = await chatAlertsOn(actor);
+    /* Orders to tag: offered by name to whoever sees quotes; anyone may type a code. */
+    const orderList = owner || actorLevel('quotes.view') === 'on'
+      ? (await pool.query(`SELECT code, name FROM quotes WHERE cancelled_at IS NULL ORDER BY created_at DESC LIMIT 150`).catch(() => ({ rows: [] }))).rows : [];
     const tabCounts = await chatTabCounts(actor, roster, allChannels).catch(() => null);
     res.set('Cache-Control', 'no-store');
     res.send(adminPage('Team chat', `${TEAM_CHAT_CSS}
@@ -30879,13 +31137,15 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
       <div class="muted" style="font-size:12px;margin:8px 0 4px">${owner ? 'Direct' : 'Direct with June'}</div>${filterChips(dmChips)}
       </div>
       <div class="card">
-        <div class="tc-log" data-tclog data-after="${last}">${lines.length ? lines.map(lineHtml).join('')
+        <div class="tc-log" data-tclog data-after="${last}" data-since="${escEmail(since)}">${lines.length ? lines.map(lineHtml).join('')
           : '<p class="muted" data-tcempty>No messages yet. Say hello.</p>'}</div>
         ${canWrite ? `<form method="post" action="/admin/team-chat" class="tc-form" data-tcform>
           ${hidden}<input type="hidden" name="file_url"><input type="hidden" name="file_name">
+          <label class="tc-tagin">&#127991; Tag an order <input name="quote_code" maxlength="12" list="chat-orders" placeholder="Order code (optional)" autocomplete="off"></label>
+          ${orderList.length ? `<datalist id="chat-orders">${orderList.map((o) => `<option value="${escEmail(o.code)}">${escEmail(o.name || '')}</option>`).join('')}</datalist>` : ''}
           <label class="btn btn-ghost tc-attach" title="Send a file">&#128206; File
             <input type="file" accept="${CHATFILES.ACCEPT}" data-tcfile hidden></label>
-          <textarea name="body" rows="2" maxlength="${TEAM_CHAT_MAX}" placeholder="${escEmail(placeholder)}"></textarea>
+          <textarea name="body" rows="3" maxlength="${TEAM_CHAT_MAX}" placeholder="${escEmail(placeholder)}"></textarea>
           <button type="submit" class="btn" data-tcsend>Send</button>
         </form>
         <div class="tc-filestat muted" data-tcfilestat hidden></div>` : '<p class="muted">This helper is disabled, so the conversation is read-only.</p>'}
@@ -30987,6 +31247,17 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
             });
           }
           tabs(${JSON.stringify(tabCounts)});
+          /* The Edit box for one's own line that arrived by poll, as the server draws it. */
+          function editBox(m){
+            var dt = document.createElement('details'); dt.className = 'tc-edit';
+            var sm = document.createElement('summary'); sm.textContent = 'Edit'; dt.appendChild(sm);
+            var fm = document.createElement('form'); fm.method = 'post'; fm.action = '/admin/team-chat/edit';
+            [['kind', m.kind === 'ch' ? 'ch' : 'dm'], ['id', String(Number(m.id))]].forEach(function(p){
+              var h = document.createElement('input'); h.type = 'hidden'; h.name = p[0]; h.value = p[1]; fm.appendChild(h); });
+            var ta2 = document.createElement('textarea'); ta2.name = 'body'; ta2.maxLength = ${TEAM_CHAT_MAX}; ta2.value = m.body || ''; fm.appendChild(ta2);
+            var sv = document.createElement('button'); sv.type = 'submit'; sv.className = 'btn'; sv.textContent = 'Save'; fm.appendChild(sv);
+            dt.appendChild(fm); return dt;
+          }
           var hiddenTicks = 0;
           function poll(){
             /* While the page is out of sight only the counts are fetched, which
@@ -30997,10 +31268,24 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
                 .then(function(r){ return r.ok ? r.json() : null; }).then(function(d){ if (d) tabs(d.tabs); }).catch(function(){});
               return;
             }
-            fetch('/admin/api/team-chat?' + q + '&after=' + encodeURIComponent(log.getAttribute('data-after')),
+            fetch('/admin/api/team-chat?' + q + '&after=' + encodeURIComponent(log.getAttribute('data-after')) + '&since=' + encodeURIComponent(log.getAttribute('data-since') || ''),
                   { credentials: 'same-origin', cache: 'no-store' })
               .then(function(r){ return r.ok ? r.json() : null; }).then(function(d){
                 if (d) tabs(d.tabs);
+                if (d && d.now) log.setAttribute('data-since', d.now);
+                /* A message reworded since this page loaded: its new words, marked edited. */
+                if (d && d.edits) d.edits.forEach(function(x){
+                  var el = log.querySelector('[data-line="' + x.kind + ':' + Number(x.id) + '"]'); if (!el) return;
+                  var b = el.querySelector('.tc-body'); if (b) b.textContent = x.body || '';
+                  var t = el.querySelector('.tc-edit textarea'); if (t && document.activeElement !== t) t.value = x.body || '';
+                  if (!el.querySelector('.tc-edited,.tc-orig')) {
+                    var e;
+                    if (x.original) { e = document.createElement('details'); e.className = 'tc-orig';
+                      var su = document.createElement('summary'); su.textContent = 'edited ' + x.edited + ': see the first wording'; e.appendChild(su);
+                      e.appendChild(document.createTextNode(x.original)); }
+                    else { e = document.createElement('span'); e.className = 'tc-edited'; e.textContent = 'edited ' + x.edited; }
+                    var w = el.querySelector('.tc-when'); if (w) w.after(e); else el.appendChild(e); }
+                });
                 if (d && d.seen) Object.keys(d.seen).forEach(function(id){
                   var s = log.querySelector('[data-seen="' + Number(id) + '"]');
                   if (s) s.textContent = d.seen[id];
@@ -31010,8 +31295,10 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
                 var atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
                 d.lines.forEach(function(m){
                   var el = document.createElement('div'); el.className = 'tc-line' + (m.mine ? ' me' : '');
+                  el.setAttribute('data-line', m.kind + ':' + Number(m.id));
                   if (m.who) { var b = document.createElement('b'); b.className = 'tc-who'; b.textContent = m.who; el.appendChild(b); }
-                  if (m.body) el.appendChild(document.createTextNode(m.body));
+                  var bd = document.createElement('span'); bd.className = 'tc-body'; bd.textContent = m.body || ''; el.appendChild(bd);
+                  if (m.tag) { var tg = document.createElement(m.tag.href ? 'a' : 'span'); tg.className = 'tc-tag'; if (m.tag.href) tg.href = m.tag.href; tg.textContent = '\u{1F3F7} Order ' + m.tag.code; el.appendChild(tg); }
                   if (m.file) {
                     var fa = document.createElement('a'); fa.className = 'tc-file' + (m.file.image ? '' : ' tc-doc');
                     fa.href = m.file.href;
@@ -31021,8 +31308,10 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
                     el.appendChild(fa);
                   }
                   var w = document.createElement('span'); w.className = 'tc-when'; w.textContent = m.when; el.appendChild(w);
+                  if (m.edited) { var ed = document.createElement('span'); ed.className = 'tc-edited'; ed.textContent = 'edited ' + m.edited; el.appendChild(ed); }
                   if (m.mine) { var s = document.createElement('span'); s.className = 'tc-seen'; s.setAttribute('data-seen', String(Number(m.id)));
-                    s.textContent = (d.seen && d.seen[m.id]) || 'Not seen yet'; el.appendChild(s); }
+                    s.textContent = (d.seen && d.seen[m.id]) || 'Not seen yet'; el.appendChild(s);
+                    el.appendChild(editBox(m)); }
                   log.appendChild(el); log.setAttribute('data-after', String(m.id));
                 });
                 if (atEnd) log.scrollTop = log.scrollHeight;
@@ -31051,6 +31340,14 @@ app.post('/admin/team-chat', requireAdmin, async (req, res) => {
     const badFile = fileUrl && !CHATFILES.fileUrlOk(fileUrl, QPHOTOS.cloudName());
     const FILE_ERR = 'That file could not be sent. Pick it again.';
     const file = fileUrl ? [fileUrl, fileName] : [null, null];
+    /* An order tagged on the message: one the sender can open. A wrong code
+       does not lose the message; it goes untagged and the page says so. */
+    const tagRaw = String(b.quote_code || '').trim().toUpperCase().slice(0, 20);
+    const tagOk = tagRaw && QUOTE_CODE_RE.test(tagRaw) && await canOpenJob(tagRaw, actor).catch(() => false);
+    const tag = tagOk ? tagRaw : null;
+    const sentTo = (backTo) => (tagRaw && !tag
+      ? back(res, backTo, 'err', `Sent, but NOT tagged: there is no order ${tagRaw} you can open. Codes are 6 or 10 letters and numbers.`)
+      : res.redirect(backTo));
     /* A channel message: only in a channel this person may use, which the
        server decides from their own track, never from the form. */
     if (String(b.channel || '').trim()) {
@@ -31062,12 +31359,12 @@ app.post('/admin/team-chat', requireAdmin, async (req, res) => {
       if (body.length > TEAM_CHAT_MAX) return back(res, backTo, 'err', `That is too long. Keep it under ${TEAM_CHAT_MAX} characters.`);
       const author = actor.kind === 'staff' ? actor.id : null;
       await pool.query(
-        `INSERT INTO team_channel_messages (channel_id, staff_id, body, file_url, file_name)
-         SELECT $1, $2, $3, $4::text, $5::text WHERE NOT EXISTS (
+        `INSERT INTO team_channel_messages (channel_id, staff_id, body, file_url, file_name, quote_code)
+         SELECT $1, $2, $3, $4::text, $5::text, $6::text WHERE NOT EXISTS (
            SELECT 1 FROM team_channel_messages WHERE channel_id = $1 AND staff_id IS NOT DISTINCT FROM $2 AND body = $3
               AND file_url IS NOT DISTINCT FROM $4::text AND created_at > NOW() - interval '10 seconds')`,
-        [ch.id, author, body, ...file]);
-      return res.redirect(backTo);
+        [ch.id, author, body, ...file, tag]);
+      return sentTo(backTo);
     }
     const staffId = chatThreadFor(b.staff, roster);
     const backTo = actor.kind === 'staff' || !staffId ? '/admin/team-chat' : `/admin/team-chat?staff=${staffId}`;
@@ -31080,15 +31377,56 @@ app.post('/admin/team-chat', requireAdmin, async (req, res) => {
     /* A double-click or a resubmitted page sends the same line twice in a few
        seconds; the second is dropped rather than shown twice. */
     await pool.query(
-      `INSERT INTO team_messages (staff_id, from_owner, body, file_url, file_name)
-       SELECT $1, $2, $3, $4::text, $5::text WHERE NOT EXISTS (
+      `INSERT INTO team_messages (staff_id, from_owner, body, file_url, file_name, quote_code)
+       SELECT $1, $2, $3, $4::text, $5::text, $6::text WHERE NOT EXISTS (
          SELECT 1 FROM team_messages WHERE staff_id = $1 AND from_owner = $2 AND body = $3
             AND file_url IS NOT DISTINCT FROM $4::text AND created_at > NOW() - interval '10 seconds')`,
-      [staffId, actor.kind !== 'staff', body, ...file]);
-    return res.redirect(backTo);
+      [staffId, actor.kind !== 'staff', body, ...file, tag]);
+    return sentTo(backTo);
   } catch (err) {
     console.error('team chat send failed:', err.message);
     return back(res, '/admin/team-chat', 'err', 'It did not send. Try again.');
+  }
+});
+
+/* The author rewords their own message (owner, 2026-10-14: "add an edit
+   feature on the messages"). Only the author: a helper their own lines, the
+   owner hers; in a channel still open to them. The first wording is kept
+   (original_body) and shown to the owner; everyone sees "edited". */
+app.post('/admin/team-chat/edit', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const actor = currentActor() || OWNER_ACTOR;
+  const staff = actor.kind === 'staff' ? actor.id : null;
+  const id = /^\d{1,15}$/.test(String(b.id || '')) ? String(b.id) : null;
+  const body = text(b.body, TEAM_CHAT_MAX + 1);
+  try {
+    if (!id) return back(res, '/admin/team-chat', 'err', 'No such message.');
+    if (b.kind === 'ch') {
+      const { rows: [m] } = await pool.query('SELECT id, channel_id, staff_id, file_url FROM team_channel_messages WHERE id = $1', [id]);
+      const [roster, channels] = await Promise.all([staffRoster(), teamChannels()]);
+      const ch = m && chatChannelFor(m.channel_id, channels, roster);
+      if (!m || !ch || m.staff_id !== staff) return back(res, '/admin/team-chat', 'err', 'You can edit only your own messages.');
+      const to = `/admin/team-chat?channel=${ch.id}`;
+      if (!body && !m.file_url) return back(res, to, 'err', 'A message needs words. Leave it as it was, or write something.');
+      if (body.length > TEAM_CHAT_MAX) return back(res, to, 'err', `That is too long. Keep it under ${TEAM_CHAT_MAX} characters.`);
+      const { rowCount } = await pool.query(
+        `UPDATE team_channel_messages SET original_body = COALESCE(original_body, body), body = $2, edited_at = NOW()
+          WHERE id = $1 AND staff_id IS NOT DISTINCT FROM $3 AND body <> $2`, [id, body, staff]);
+      return back(res, to, 'ok', rowCount ? 'Message edited.' : 'Nothing changed: the wording was the same.');
+    }
+    const { rows: [m] } = await pool.query('SELECT id, staff_id, from_owner, file_url FROM team_messages WHERE id = $1', [id]);
+    const own = m && (staff != null ? m.staff_id === staff && !m.from_owner : m.from_owner);
+    if (!own) return back(res, '/admin/team-chat', 'err', 'You can edit only your own messages.');
+    const to = staff != null ? '/admin/team-chat' : `/admin/team-chat?staff=${Number(m.staff_id)}`;
+    if (!body && !m.file_url) return back(res, to, 'err', 'A message needs words. Leave it as it was, or write something.');
+    if (body.length > TEAM_CHAT_MAX) return back(res, to, 'err', `That is too long. Keep it under ${TEAM_CHAT_MAX} characters.`);
+    const { rowCount } = await pool.query(
+      `UPDATE team_messages SET original_body = COALESCE(original_body, body), body = $2, edited_at = NOW()
+        WHERE id = $1 AND from_owner = $3 AND body <> $2`, [id, body, staff == null]);
+    return back(res, to, 'ok', rowCount ? 'Message edited.' : 'Nothing changed: the wording was the same.');
+  } catch (err) {
+    console.error('team chat edit failed:', err.message);
+    return back(res, '/admin/team-chat', 'err', 'That did not save. Try again.');
   }
 });
 
@@ -31186,20 +31524,35 @@ app.get('/admin/api/team-chat', requireAdmin, async (req, res) => {
     const [roster, allChannels] = await Promise.all([staffRoster(), teamChannels()]);
     const counts = () => chatTabCounts(actor, roster, allChannels).catch(() => null);
     if (req.query.counts === '1') return res.json({ tabs: await counts() });
+    /* Messages reworded since the page last asked (`since`, the server's own
+       clock as it handed it over), so an open page shows an edit. */
+    const since0 = String(req.query.since || '');
+    const since = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(since0) && !Number.isNaN(Date.parse(since0)) ? since0 : null;
+    const now = (await pool.query('SELECT NOW() AS t')).rows[0].t.toISOString();
+    const viewerIsOwner = actor.kind !== 'staff';
+    /* The owner also gets the first wording of a helper's edit, as on the page. */
+    const editsOf = async (table, where, arg, kind) => (since ? (await pool.query(
+      `SELECT * FROM ${table} WHERE ${where} = $1 AND edited_at > $2::timestamptz ORDER BY edited_at LIMIT 50`, [arg, since])).rows : [])
+      .map((m) => ({ id: Number(m.id), kind, body: m.body, edited: whenShort(m.edited_at),
+        original: viewerIsOwner && (kind === 'dm' ? !m.from_owner : m.staff_id != null) && m.original_body != null ? m.original_body : '' }));
     if (String(req.query.channel || '').trim()) {
       const ch = chatChannelFor(req.query.channel, allChannels, roster);
       if (!ch) return res.status(404).json({ lines: [] });
       const lines = await channelLines(ch.id, after);
       if (lines.length) await channelMarkRead(ch.id, Number(lines[lines.length - 1].id));
       const seen = await chatSeen({ channelId: ch.id }, roster).catch(() => ({}));
-      return res.json({ lines: lines.map((m) => channelLineJson(m, roster)), seen, tabs: await counts() });
+      const open = await openableTags(lines);
+      return res.json({ lines: lines.map((m) => channelLineJson(m, roster, open)), seen, tabs: await counts(), now,
+        edits: await editsOf('team_channel_messages', 'channel_id', ch.id, 'ch') });
     }
     const staffId = chatThreadFor(req.query.staff, roster);
     if (!staffId) return res.status(404).json({ lines: [] });
     const lines = await chatLines(staffId, after);
     if (lines.length) await chatMarkRead(staffId);
     const seen = await chatSeen({ staffId }, roster).catch(() => ({}));
-    res.json({ lines: lines.map(chatLineJson), seen, tabs: await counts() });
+    const open = await openableTags(lines);
+    res.json({ lines: lines.map((m) => chatLineJson(m, open)), seen, tabs: await counts(), now,
+      edits: await editsOf('team_messages', 'staff_id', staffId, 'dm') });
   } catch (err) {
     console.error('team chat poll failed:', err.message);
     res.status(500).json({ lines: [] });
@@ -31376,8 +31729,10 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
         ${earningsTiles(earn.e)}
         ${earn.incentives.map((i) => incentiveRow(i)).join('')}`) : ''}
       ${mine.rows.length ? section('Waiting on the owner', mine.rows.map((a) => `
-        <div class="row-i"><span class="row-main">${escEmail(a.kind)} ${escEmail(a.subject_id)}${a.decision_note
-          ? `<div class="row-sub">Sent back: ${escEmail(a.decision_note)}</div>` : ''}</span>
+        <div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal">${escEmail(a.kind)} ${escEmail(a.subject_id)}${a.decision_note
+          ? `<div class="row-sub">Sent back: ${escEmail(a.decision_note)}</div>` : ''}${
+          ['message', 'lead_email'].includes(a.kind) && a.payload && a.payload.text ? `<div class="pin-body" style="white-space:pre-wrap">${escEmail(a.payload.text)}</div>` : ''}${
+          heldMessageEditForm(a, '/admin/my-day')}</span>
           <span class="row-end">${pill(a.status === 'rejected' ? 'sent back' : 'waiting', a.status === 'rejected' ? 'amber' : 'blue')}</span></div>`).join('')) : ''}
       ${can('leads.view') ? section(`Leads waiting for a reply (${waiting.length})`, waiting.slice(0, 25).map(leadRow).join(''), 'Nobody is waiting.') : ''}
       ${can('leads.view') ? section(`Follow-ups due (${followUps.length})`, followUps.map((l) => `
@@ -31747,7 +32102,7 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
       <div class="card"><b>Coaching notes</b>
         ${owner ? `<form method="post" action="/admin/feedback" style="margin:8px 0">
           <input type="hidden" name="staff_id" value="${staffId}">
-          <textarea name="body" rows="3" maxlength="2000" required placeholder="What they did well, and one thing to do differently" style="width:100%"></textarea>
+          <textarea name="body" rows="4" maxlength="${MESSAGE_MAX}" required placeholder="What they did well, and one thing to do differently" style="width:100%"></textarea>
           <button type="submit" class="btn btn-ghost" style="margin-top:6px">Add the note</button></form>` : ''}
         ${notes.length ? notes.map(coachingRow).join('') : '<p class="muted">No notes yet. Notes the owner leaves on your quotes and messages show here too.</p>'}</div>
       ${owner ? `<div class="card"><b>Page tips</b>
@@ -33540,7 +33895,7 @@ app.post('/admin/training/gap', requireAdmin, async (req, res) => {
 app.post('/admin/feedback', requireAdmin, async (req, res) => {
   const b = req.body || {};
   const staffId = intIn(b.staff_id);
-  const body = text(b.body, 2000);
+  const body = text(b.body, MESSAGE_MAX);
   const to = `/admin/training?staff=${staffId || ''}`;
   if (!staffId || !body) return back(res, to, 'err', 'Write the note first.');
   try {

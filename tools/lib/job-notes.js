@@ -11,7 +11,7 @@
    optionally with a reply, which goes back to the sender the same way. There
    is no dismiss. Kept apart from the SQL so the rules can be tested. */
 
-const BODY_MAX = 2000;
+const BODY_MAX = 10000;
 
 /* Art moves that hand work to the designer: each one needs a fresh "Got it".
    The designer's own moves count as having seen it. */

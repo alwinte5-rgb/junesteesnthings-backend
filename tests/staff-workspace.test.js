@@ -480,7 +480,11 @@ test('team chat lines are text, never markup', () => {
   assert.match(line, /escEmail\(f\.url\)/, 'a file address is escaped');
   assert.match(line, /escEmail\(f\.name\)/, 'a file name is escaped');
   assert.match(page, /lineHtml = \(m\) => chatLineHtml\(/);
-  assert.match(page, /el\.appendChild\(document\.createTextNode\(m\.body\)\)/);
+  assert.match(page, /bd\.textContent = m\.body \|\| ''/);
+  assert.match(page, /tg\.textContent = '[^']*' \+ m\.tag\.code/, 'a polled order tag is text');
+  assert.match(page, /b\.textContent = x\.body \|\| ''/, 'an edit arriving by poll is text');
+  assert.match(line, /escEmail\(j\.original\)/, 'the first wording is escaped');
+  assert.match(line, /escEmail\(j\.tag\.href\)/);
   assert.match(page, /b\.textContent = m\.who/);
   assert.match(page, /fa\.textContent = '[^']*' \+ m\.file\.name/, 'a polled file name is text');
   assert.doesNotMatch(page, /innerHTML/);

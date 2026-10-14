@@ -6,7 +6,7 @@
  * Plain text in, escaped HTML out: what was typed is what the customer reads.
  */
 
-const LIMITS = { subject: 150, body: 5000 };
+const LIMITS = { subject: 150, body: 10000 };
 
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
