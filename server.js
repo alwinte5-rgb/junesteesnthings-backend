@@ -4735,6 +4735,17 @@ async function ownerCallback(cmd) {
   }
   if (!to) return sendOwnerSms('Not calling: nobody has called or texted in the last week. Text CALL and their number, e.g. CALL 312 555 0199.');
   if (to === owner || to === shop) return sendOwnerSms('Not calling: that is your own number.');
+  /* Only numbers the shop already knows: a spoofed "owner" text must not be
+     able to make the shop dial any number (premium-rate toll fraud). */
+  if (cmd.number) {
+    const digits = to.slice(-10);
+    const same = `right(regexp_replace(COALESCE(phone, ''), '\\D', '', 'g'), 10) = $1`;
+    const { rows } = await pool.query(
+      `SELECT 1 FROM owner_text_forwards WHERE ${same}
+        UNION ALL SELECT 1 FROM submissions WHERE ${same}
+        UNION ALL SELECT 1 FROM quotes WHERE ${same} LIMIT 1`, [digits]);
+    if (!rows.length) return sendOwnerSms(`Not calling: ${VOICE.pretty(to)} is not a customer on file. Call them from your phone instead.`);
+  }
   await twilioCall(owner, VOICE.callbackTwiml({ to, shop }));
   return sendOwnerSms(`Calling you now, then ${VOICE.pretty(to)} from the shop number.`);
 }

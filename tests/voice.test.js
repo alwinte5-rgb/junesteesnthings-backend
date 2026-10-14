@@ -186,3 +186,11 @@ test('server: callbacks only from the owner, text-back once a day, transcript ro
   assert.match(back, /ON CONFLICT DO NOTHING RETURNING id/);
   assert.match(src, /app\.post\(VOICE\.PATHS\.transcript, async \(req, res\) => \{\n\s*if \(!twilioVoiceOk\(req, res\)\) return;/);
 });
+
+test('server: CALL with a number only dials a customer already on file', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const cb = src.slice(src.indexOf('async function ownerCallback'), src.indexOf('app.post(VOICE.PATHS.incoming'));
+  const check = cb.indexOf('is not a customer on file');
+  assert.ok(check > 0 && check < cb.indexOf('await twilioCall('), 'the on-file check runs before dialling');
+  assert.match(cb, /FROM owner_text_forwards[\s\S]*FROM submissions[\s\S]*FROM quotes/);
+});
