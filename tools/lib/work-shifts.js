@@ -69,6 +69,30 @@ function occurrences(shifts, monday) {
   }).sort((a, b) => a.start - b.start);
 }
 
+/** "YYYY-MM-DD" of an instant as a zone's calendar sees it. */
+function dateIn(d, zone) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+}
+
+/** The shifts that START in the seven days from `monday` as `zone` counts
+ *  them. A shift typed in another zone can land on the day before or after
+ *  (Mon 9 AM in Manila is Sun evening in Chicago), so the weeks either side
+ *  are worked out too and kept when they fall inside. */
+function weekOccurrences(shifts, monday, zone) {
+  const last = addDays(monday, 6);
+  return [-7, 0, 7].flatMap((n) => occurrences(shifts, addDays(monday, n)))
+    .filter((o) => { const d = dateIn(o.start, zone); return d >= monday && d <= last; })
+    .sort((a, b) => a.start - b.start);
+}
+
+/** A real calendar date "YYYY-MM-DD" (not 2026-02-31), else null. */
+function validDate(v) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v || ''));
+  if (!m) return null;
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  return d.toISOString().slice(0, 10) === m[0] ? m[0] : null;
+}
+
 /** "Mon Oct 13, 9:00 AM" in a zone. */
 function when(d, zone) {
   return new Intl.DateTimeFormat('en-US', { timeZone: zone, weekday: 'short', month: 'short', day: 'numeric',
@@ -99,4 +123,4 @@ function hoursOf(o) { return Math.round((o.end - o.start) / 360000) / 10; }
 
 function cleanNote(n) { return String(n || '').replace(/[\r\n\t]+/g, ' ').replace(/[\u0000-\u001f\u007f<>]/g, '').trim().slice(0, NOTE_MAX); }
 
-module.exports = { ZONES, DAYS, NOTE_MAX, minutesOf, offsetAt, instantOf, mondayOf, addDays, occurrences, when, clock, span, hoursOf, cleanNote };
+module.exports = { ZONES, DAYS, NOTE_MAX, minutesOf, offsetAt, instantOf, mondayOf, addDays, occurrences, dateIn, weekOccurrences, validDate, when, clock, span, hoursOf, cleanNote };

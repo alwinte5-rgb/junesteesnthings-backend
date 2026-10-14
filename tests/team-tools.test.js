@@ -81,8 +81,11 @@ test('My Day: task text is escaped, a helper sees Start then Mark completed, and
   assert.match(details, /\$\{escEmail\(t\.description\)\}/);
   assert.match(details, /\$\{escEmail\(t\.how_to\)\}/);
   assert.match(details, /\$\{escEmail\(t\.done_note\)\}/);
-  assert.match(page, /me != null && !t\.started_at\s+\? `<form method="post" action="\/admin\/tasks\/\$\{t\.id\}\/start"/);
-  assert.match(page, />Start: I accept this task</);
+  const action = src.slice(src.indexOf('function taskActionForm('), src.indexOf('function taskDoneForm('));
+  assert.match(page, /taskActionForm\(t, '\/admin\/my-day', me != null\)/);
+  assert.match(src, /taskActionForm\(t, '\/admin\/dashboard#todo', me != null\)/, 'the Dashboard gives a helper the same buttons');
+  assert.match(action, /if \(helper && !t\.started_at\)[\s\S]*action="\/admin\/tasks\/\$\{Number\(t\.id\)\}\/start"/);
+  assert.match(action, />Start: I accept this task</);
   assert.match(src.slice(src.indexOf('function taskDoneForm('), src.indexOf('function taskDoneForm(') + 1200), />Mark completed</);
   assert.match(page, /Completed this week/);
   assert.match(page, /<details class="card md-sec" open data-sec=/);

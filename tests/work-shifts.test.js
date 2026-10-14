@@ -56,3 +56,36 @@ test('routes: anyone sees the hours, only the owner changes them', () => {
   assert.strictEqual(STAFF.ROUTES['POST /admin/work-schedule'], 'owner');
   assert.strictEqual(STAFF.ROUTES['GET /admin/tasks/:id/file/:n'], 'any');
 });
+
+test('a Manila Monday shift lands on the Chicago Sunday before, in the right week', () => {
+  const ph = [{ staff_id: 1, weekday: 1, start_min: 9 * 60, end_min: 14 * 60, zone: 'Asia/Manila' }];
+  // Week of Mon 2026-10-12 (Chicago). PH Mon Oct 19 9 AM = CT Sun Oct 18 8 PM, so it belongs here.
+  const occ = W.weekOccurrences(ph, '2026-10-12', 'America/Chicago');
+  assert.strictEqual(occ.length, 1);
+  assert.strictEqual(W.dateIn(occ[0].start, 'America/Chicago'), '2026-10-18');
+  // PH Mon Oct 12 9 AM is CT Sun Oct 11: the week before, not this one twice.
+  assert.ok(occ.every((o) => W.dateIn(o.start, 'America/Chicago') >= '2026-10-12'));
+});
+
+test('a Chicago shift stays in its own week, once', () => {
+  const ct = [{ staff_id: 1, weekday: 3, start_min: 9 * 60, end_min: 14 * 60, zone: 'America/Chicago' }];
+  const occ = W.weekOccurrences(ct, '2026-10-12', 'America/Chicago');
+  assert.strictEqual(occ.length, 1);
+  assert.strictEqual(W.dateIn(occ[0].start, 'America/Chicago'), '2026-10-14');
+});
+
+test('an overnight Sunday shift from last week is found while still running', () => {
+  const night = [{ staff_id: 1, weekday: 7, start_min: 22 * 60, end_min: 6 * 60, zone: 'America/Chicago' }];
+  const now = W.instantOf('2026-10-19', 2 * 60, 'America/Chicago');   // Mon 2 AM
+  const prev = W.weekOccurrences(night, '2026-10-12', 'America/Chicago');
+  const live = prev.filter((o) => o.start <= now && o.end > now);
+  assert.strictEqual(live.length, 1);
+});
+
+test('validDate refuses impossible dates', () => {
+  assert.strictEqual(W.validDate('2026-10-12'), '2026-10-12');
+  assert.strictEqual(W.validDate('2026-02-31'), null);
+  assert.strictEqual(W.validDate('2026-13-45'), null);
+  assert.strictEqual(W.validDate('x'), null);
+  assert.strictEqual(W.validDate(undefined), null);
+});

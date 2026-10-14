@@ -23422,12 +23422,12 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
               t.started_at ? ` &middot; started ${escEmail(whenShort(t.started_at))}` : t.assigned_to != null ? ' &middot; <b style="color:#b45309">not started</b>' : ''}</div>
             ${taskDetailsHtml(t, currentActor() || OWNER_ACTOR, roster)}</span>
             <span class="row-end">${due && due < todayIso ? pill('overdue', 'red') : due === todayIso ? pill('today', 'amber') : ''}
-              ${taskDoneForm(t, '/admin/dashboard#todo', false)}</span></div>`;
+              ${taskActionForm(t, '/admin/dashboard#todo', me != null)}</span></div>`;
         }).join('')}</div>` : emptyState('Nothing on the list.')}
         ${tasksDone.length ? `<details style="margin-top:10px"${tasksDone.some((t) => Date.now() - new Date(t.done_at) < 864e5) ? ' open' : ''}>
           <summary><b>Completed in the last 7 days (${tasksDone.length})</b></summary><div class="rows">${tasksDone.map((t) => `
           <div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal"><b>${escEmail(t.title)}</b> ${pill('completed', 'green')}
-            <div class="row-sub">${t.done_by != null ? escEmail(nameOf(roster, t.done_by)) : 'You'} &middot; ${escEmail(whenShort(t.done_at))}${
+            <div class="row-sub">${t.done_by == null && me == null ? 'You' : escEmail(nameOf(roster, t.done_by))} &middot; ${escEmail(whenShort(t.done_at))}${
               t.started_at ? ` &middot; started ${escEmail(whenShort(t.started_at))}` : ''}</div>
             ${taskDetailsHtml(t, currentActor() || OWNER_ACTOR, roster)}</span></div>`).join('')}</div></details>` : ''}
         <details style="margin-top:10px"><summary><b>Add a task</b> <span class="muted">with the details, files and an order</span></summary>
@@ -30062,25 +30062,46 @@ app.post('/admin/tasks', requireAdmin, async (req, res) => {
   if (!title) return back(res, backTo, 'err', 'A task needs a title.');
   const assignTo = actor && actor.kind === 'staff' ? actor.id : intIn(b.assigned_to);
   try {
-    /* An attached order must be one the person adding it can open, and the
-       files must be ones uploaded for tasks. Refused, not dropped, so nobody
-       thinks it was attached. */
-    const code = String(b.quote_code || '').trim().toUpperCase();
+    /* An attached order must be one the person adding it can open. A wrong
+       code does not throw the task away (a long description and its files
+       would go with it): the task is saved without the order and the page
+       says so plainly, so nobody thinks it was attached. */
+    let code = String(b.quote_code || '').trim().toUpperCase();
+    let codeRefused = '';
     if (code && (!QUOTE_CODE_RE.test(code) || !(await canOpenJob(code, actor || OWNER_ACTOR)))) {
-      return back(res, backTo, 'err', `There is no order ${code.slice(0, 20)} you can open. Check the code.`);
+      codeRefused = code.slice(0, 20);
+      code = '';
     }
     const picked = CHATFILES.pickTaskFiles(b.files, QPHOTOS.cloudName());
     if (picked.error) return back(res, backTo, 'err', 'A file did not upload properly. Pick it again.');
     const by = actor && actor.kind === 'staff' ? actor.id : null;
     const files = picked.files.map((f) => ({ ...f, by, at: new Date().toISOString() }));
-    await pool.query(
-      `INSERT INTO staff_tasks (title, due_on, assigned_to, business, submission_id, quote_code, created_by, description, how_to, files)
-       SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb
-        WHERE NOT EXISTS (SELECT 1 FROM staff_tasks WHERE title = $1 AND assigned_to IS NOT DISTINCT FROM $3
-                            AND created_at > NOW() - interval '10 seconds')`,
-      [title, isoDate(b.due_on), assignTo, BUSINESSES[b.business] ? b.business : 'jtees',
-       intIn(b.submission_id), code || null,
-       by, text(b.description, TASK_TEXT_MAX) || null, text(b.how_to, TASK_TEXT_MAX) || null, JSON.stringify(files)]);
+    /* One add per title and person in ten seconds (a double-click or a
+       resend), held under a lock so two posts at once cannot both pass. */
+    const client = await pool.connect();
+    let rowCount = 0;
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`staff_task:${assignTo == null ? '' : assignTo}:${title}`]);
+      ({ rowCount } = await client.query(
+        `INSERT INTO staff_tasks (title, due_on, assigned_to, business, submission_id, quote_code, created_by, description, how_to, files)
+         SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb
+          WHERE NOT EXISTS (SELECT 1 FROM staff_tasks WHERE title = $1 AND assigned_to IS NOT DISTINCT FROM $3
+                              AND created_at > NOW() - interval '10 seconds')`,
+        [title, isoDate(b.due_on), assignTo, BUSINESSES[b.business] ? b.business : 'jtees',
+         intIn(b.submission_id), code || null,
+         by, text(b.description, TASK_TEXT_MAX) || null, text(b.how_to, TASK_TEXT_MAX) || null, JSON.stringify(files)]));
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+    if (!rowCount) return back(res, backTo, 'err', `"${title.slice(0, 80)}" was added a moment ago, so it was not added twice.`);
+    if (codeRefused) {
+      return back(res, backTo, 'err', `Task added, but WITHOUT an order: there is no order ${codeRefused} you can open. Codes are 6 or 10 letters and numbers.`);
+    }
     return back(res, backTo, 'ok', 'Task added.');
   } catch (err) {
     console.error('task add failed:', err.message);
@@ -30204,7 +30225,13 @@ const TASK_UPLOAD_JS = `<script>
       });
       inp.value = '';
     });
-    form.addEventListener('submit', function(e){ if (busy) { e.preventDefault(); st.textContent = 'Wait for the upload to finish.'; } });
+    /* Disable the button only on a submit that is really going, so a wait
+       for an upload never leaves it dead (the browser's own required-field
+       check stops the submit before this runs). */
+    form.addEventListener('submit', function(e){
+      if (busy) { e.preventDefault(); st.textContent = 'Wait for the upload to finish.'; return; }
+      var btn = form.querySelector('button[type=submit]'); if (btn) setTimeout(function(){ btn.disabled = true; }, 0);
+    });
   });
 })();
 </script>`;
@@ -30214,7 +30241,7 @@ async function taskOrderField(value = '') {
   const list = actorLevel('quotes.view') === 'on' || isOwner()
     ? (await pool.query(`SELECT code, name FROM quotes WHERE cancelled_at IS NULL ORDER BY created_at DESC LIMIT 150`).catch(() => ({ rows: [] }))).rows : [];
   return `<label style="margin:0;flex:1 1 200px">Customer order (optional)
-    <input name="quote_code" list="task-orders" maxlength="20" value="${escEmail(value)}" placeholder="Order code, e.g. AB12CD34" style="text-transform:uppercase"></label>
+    <input name="quote_code" list="task-orders" maxlength="20" value="${escEmail(value)}" placeholder="Order code, e.g. 7KQ2M9XW4D" style="text-transform:uppercase"></label>
     ${list.length ? `<datalist id="task-orders">${list.map((q) => `<option value="${escEmail(q.code)}">${escEmail(q.name || '')}</option>`).join('')}</datalist>` : ''}`;
 }
 
@@ -30235,7 +30262,7 @@ async function taskAddForm({ back: backTo, roster, owner }) {
       ${await taskOrderField()}
     </div>
     ${taskUploadBox()}
-    <button type="submit" class="btn" onclick="var b=this;setTimeout(function(){b.disabled=true},0)">Add task</button>
+    <button type="submit" class="btn">Add task</button>
   </form>`;
 }
 
@@ -30251,6 +30278,17 @@ function taskDetailsHtml(t, actor, roster) {
     ${files.length ? `<div class="row-sub">${files.map((f) => `<a href="/admin/tasks/${Number(t.id)}/file/${f.n}">&#128206; ${escEmail(f.name || 'File')}</a>${
       f.by != null && f.by === t.assigned_to && t.done_at ? ' <span class="muted">(with the work)</span>' : ''}`).join(' &nbsp; ')}</div>` : ''}
     ${t.done_at && t.done_note ? `<div style="margin-top:4px;padding:6px 10px;background:#ecfdf5;border-radius:8px;white-space:pre-wrap"><b>What was done:</b> ${escEmail(t.done_note)}</div>` : ''}`;
+}
+
+/** An open task's button: a helper Starts it first, then marks it completed;
+ *  the owner just closes it. The same on the Dashboard and My Day. */
+function taskActionForm(t, backTo, helper) {
+  if (t.done_at) return '';
+  if (helper && !t.started_at) {
+    return `<form method="post" action="/admin/tasks/${Number(t.id)}/start" style="margin:0">
+      <input type="hidden" name="back" value="${escEmail(backTo)}"><button type="submit" class="btn">Start: I accept this task</button></form>`;
+  }
+  return taskDoneForm(t, backTo, helper);
 }
 
 /** The Mark completed form: a helper says what they did and may attach it. */
@@ -30337,9 +30375,11 @@ async function myShiftsCard(staffId) {
   if (!rows.length) return '';
   const now = new Date();
   const monday = SHIFTS.mondayOf(now, 'America/Chicago');
-  const occ = [...SHIFTS.occurrences(rows, monday), ...SHIFTS.occurrences(rows, SHIFTS.addDays(monday, 7))].filter((o) => o.end > now);
+  const thisWeek = SHIFTS.weekOccurrences(rows, monday, 'America/Chicago');
+  /* Last week's too: an overnight shift that began Sunday is still on now. */
+  const occ = [...SHIFTS.weekOccurrences(rows, SHIFTS.addDays(monday, -7), 'America/Chicago'), ...thisWeek,
+    ...SHIFTS.weekOccurrences(rows, SHIFTS.addDays(monday, 7), 'America/Chicago')].filter((o) => o.end > now);
   const next = occ[0];
-  const thisWeek = SHIFTS.occurrences(rows, monday);
   return `<div class="card" id="my-shifts"><b>Your work hours</b> <a class="muted" href="/admin/work-schedule" style="float:right">The whole team →</a>
     ${next ? `<div style="margin:8px 0;padding:8px 12px;background:#eef4ff;border-radius:10px">${next.start <= now ? '<b>On shift now</b>' : '<b>Next shift</b>'}${
       shiftLines(next)}</div>` : ''}
@@ -30350,11 +30390,11 @@ async function myShiftsCard(staffId) {
 app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
   try {
     const owner = isOwner();
-    const week = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.week || '')) ? SHIFTS.mondayOf(new Date(`${req.query.week}T12:00:00Z`), 'UTC')
-      : SHIFTS.mondayOf(new Date(), 'America/Chicago');
+    const asked = SHIFTS.validDate(req.query.week);
+    const week = asked ? SHIFTS.mondayOf(new Date(`${asked}T12:00:00Z`), 'UTC') : SHIFTS.mondayOf(new Date(), 'America/Chicago');
     const [rows, roster] = await Promise.all([shiftRows(), staffRoster({ activeOnly: true })]);
-    const occ = SHIFTS.occurrences(rows, week);
-    const dayOf = (o) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(o.start);
+    const occ = SHIFTS.weekOccurrences(rows, week, 'America/Chicago');
+    const dayOf = (o) => SHIFTS.dateIn(o.start, 'America/Chicago');
     const days = Array.from({ length: 7 }, (_, i) => SHIFTS.addDays(week, i));
     const hours = new Map();
     for (const o of occ) hours.set(o.staff_id, (hours.get(o.staff_id) || 0) + SHIFTS.hoursOf(o));
@@ -31305,9 +31345,7 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
             t.done_at ? ` &middot; completed ${escEmail(whenShort(t.done_at))}` : ''}</div>
           ${taskDetailsHtml(t, actor, roster)}</span>
           <span class="row-end" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${!t.done_at && t.due_on && String(t.due_on instanceof Date ? t.due_on.toISOString() : t.due_on).slice(0, 10) < today ? pill('overdue', 'red') : ''}
-            ${t.done_at ? '' : me != null && !t.started_at
-              ? `<form method="post" action="/admin/tasks/${t.id}/start" style="margin:0"><button type="submit" class="btn">Start: I accept this task</button></form>`
-              : taskDoneForm(t, '/admin/my-day', me != null)}</span></div>`;
+            ${taskActionForm(t, '/admin/my-day', me != null)}</span></div>`;
     const leadRow = (l) => `<div class="row-i"><span class="row-main"><a href="/admin/leads#lead-${l.id}"><b>${escEmail(l.name || l.email || 'Lead')}</b></a>
       <div class="row-sub">${escEmail((LEAD_SOURCES[l.source] || [l.source || 'form'])[0])} &middot; waiting ${
         escEmail(fmtMins(TEAM.businessMinutesBetween(l.created_at, new Date())))} of working time</div></span>
