@@ -1389,8 +1389,21 @@ async function initStaffTables() {
   /* The designer's "Got it" on work handed to them (tools/lib/job-notes.js):
      cleared each time art comes to them, set when they press Got it or make
      a move of their own. Until then the job sits pinned on their pages. */
-  await pool.query('ALTER TABLE art_requests ADD COLUMN IF NOT EXISTS ack_at TIMESTAMPTZ');
-  await pool.query('ALTER TABLE art_requests ADD COLUMN IF NOT EXISTS ack_by INTEGER');
+  {
+    const { rows: had } = await pool.query(
+      `SELECT 1 FROM information_schema.columns WHERE table_name = 'art_requests' AND column_name = 'ack_at'`);
+    await pool.query('ALTER TABLE art_requests ADD COLUMN IF NOT EXISTS ack_at TIMESTAMPTZ');
+    await pool.query('ALTER TABLE art_requests ADD COLUMN IF NOT EXISTS ack_by INTEGER');
+    /* Once, when the column arrives: art the designer has already worked on
+       (a file uploaded, a question asked, art sent) counts as seen, so the
+       first day is not a wall of old jobs. Art nobody has touched stays
+       pinned: that is the work that was being missed. */
+    if (!had.length) {
+      await pool.query(`UPDATE art_requests SET ack_at = updated_at
+                         WHERE ack_at IS NULL AND (jsonb_array_length(files) > 0
+                           OR events @> '[{"action":"question"}]'::jsonb OR events @> '[{"action":"submit"}]'::jsonb)`);
+    }
+  }
   /* Messages between the team about one job, each to one person, pinned on
      their pages until they mark it addressed. author and recipient are
      reader keys: 'owner' or 'staff:<id>'. */
@@ -21460,7 +21473,9 @@ app.post('/admin/quote/:code/art/ack', requireAdmin, async (req, res) => {
   if (me == null) return back(res, backTo, 'err', 'Only the designer can mark this as seen.');
   try {
     const { rowCount } = await pool.query(
-      `UPDATE art_requests SET ack_at = NOW(), ack_by = $2
+      /* Art sent to any designer becomes the one who said Got it: otherwise
+         their Got it would clear it for designers who never saw it. */
+      `UPDATE art_requests SET ack_at = NOW(), ack_by = $2, assigned_to = COALESCE(assigned_to, $2)
         WHERE quote_code = $1 AND ack_at IS NULL AND status IN ('waiting', 'changes')
           AND (assigned_to IS NULL OR assigned_to = $2)`, [code, me]);
     if (rowCount) logActivity(actor, 'art: got it', { type: 'quote', id: code }, {});
@@ -21474,8 +21489,8 @@ app.post('/admin/quote/:code/art/ack', requireAdmin, async (req, res) => {
 /** Messages to this reader not yet addressed, oldest first. */
 async function openJobNotes(reader) {
   const { rows } = await pool.query(
-    `SELECT n.*, q.name FROM job_notes n LEFT JOIN quotes q ON q.code = n.quote_code
-      WHERE n.recipient = $1 AND n.addressed_at IS NULL ORDER BY n.id LIMIT 100`, [reader]);
+    `SELECT n.*, q.name FROM job_notes n JOIN quotes q ON q.code = n.quote_code
+      WHERE n.recipient = $1 AND n.addressed_at IS NULL AND q.cancelled_at IS NULL ORDER BY n.id LIMIT 100`, [reader]);
   return rows;
 }
 
@@ -21506,8 +21521,14 @@ async function jobNotesPinCard(actor, backTo) {
 async function teamJobNotesCard(q, backTo) {
   const actor = currentActor() || OWNER_ACTOR;
   const me = JOBNOTES.readerOf(actor);
+  /* Someone who cannot see quotes (a designer) sees only the messages they
+     sent or were sent: a note between the owner and sales may carry a price
+     or a phone number (owner, 2026-10-06: the designer sees only what
+     pertains to them). */
+  const own = actorLevel('quotes.view') !== 'on';
   const [{ rows }, roster] = await Promise.all([
-    pool.query('SELECT * FROM job_notes WHERE quote_code = $1 ORDER BY id LIMIT 200', [q.code]), staffRoster()]);
+    pool.query(`SELECT * FROM job_notes WHERE quote_code = $1 AND ($2::text IS NULL OR author = $2 OR recipient = $2)
+                 ORDER BY id LIMIT 200`, [q.code, own ? me : null]), staffRoster()]);
   /* Only people who can open the job are offered: a message must lead
      somewhere its reader can follow. */
   const people = [{ key: 'owner', name: SHOP_SIGNER, actor: OWNER_ACTOR },
@@ -21588,16 +21609,20 @@ app.post('/admin/job-notes/:id/address', requireAdmin, async (req, res) => {
   try {
     const reply = JOBNOTES.cleanBody(req.body && req.body.reply);
     if (reply.length > JOBNOTES.BODY_MAX) return back(res, backTo, 'err', `Keep the reply under ${JOBNOTES.BODY_MAX} characters.`);
-    const { rows: [n] } = await pool.query(
-      `UPDATE job_notes SET addressed_at = NOW(), addressed_by = $2
-        WHERE id = $1 AND recipient = $2 AND addressed_at IS NULL RETURNING *`, [id, me]);
-    if (!n) return back(res, backTo, 'err', 'That message is not waiting on you.');
-    let msg = 'Marked addressed.';
+    const { rows: [open] } = await pool.query(
+      'SELECT * FROM job_notes WHERE id = $1 AND recipient = $2 AND addressed_at IS NULL', [id, me]);
+    if (!open) return back(res, backTo, 'err', 'That message is not waiting on you.');
+    /* The reply goes first: one that cannot be sent leaves the message open,
+       so nothing is closed on a reply nobody received. */
     if (reply) {
-      const r = await sendJobNote({ code: n.quote_code, from: me, to: n.author, body: reply, replyTo: n.id });
-      msg = r.ok ? 'Marked addressed, and your reply was sent.' : `Marked addressed, but the reply did not send: ${r.msg}`;
+      const r = await sendJobNote({ code: open.quote_code, from: me, to: open.author, body: reply, replyTo: open.id });
+      if (!r.ok) return back(res, backTo, 'err', `Your reply did not send, so the message is still open: ${r.msg}`);
     }
-    return back(res, backTo, 'ok', msg);
+    const { rowCount } = await pool.query(
+      `UPDATE job_notes SET addressed_at = NOW(), addressed_by = $2
+        WHERE id = $1 AND recipient = $2 AND addressed_at IS NULL`, [id, me]);
+    if (!rowCount) return back(res, backTo, 'err', 'That message is not waiting on you.');
+    return back(res, backTo, 'ok', reply ? 'Marked addressed, and your reply was sent.' : 'Marked addressed.');
   } catch (err) {
     console.error(`job note address ${id} failed:`, err.message);
     return back(res, backTo, 'err', 'That did not save. Try again.');
@@ -21774,7 +21799,7 @@ app.get('/admin/schedule', requireAdmin, async (req, res) => {
       `SELECT q.*, a.status AS art_status FROM quotes q LEFT JOIN art_requests a ON a.quote_code = q.code
         WHERE q.cancelled_at IS NULL AND ${SCHEDULED_JOB_SQL}
         ORDER BY q.accepted_at LIMIT 500`);
-    const jobs = rows.map((q) => ({ q, sched: quoteSchedule(q), cl: quoteChecklist(q), stage: JOB_STAGES[jobReachedIndex(q)] }))
+    const jobs = rows.map((q) => ({ q, sched: quoteSchedule(q), cl: quoteChecklist(q) }))
       .sort((x, y) => (y.sched && y.sched.risks.length ? 1 : 0) - (x.sched && x.sched.risks.length ? 1 : 0)
         || (x.sched ? new Date(x.sched.ship_by) : Infinity) - (y.sched ? new Date(y.sched.ship_by) : Infinity));
     /* The same board as the owner's Production page (owner, 2026-10-14: "make
@@ -23019,10 +23044,6 @@ app.get('/admin/nav-counts', requireAdmin, async (_req, res) => {
   const out = { leads: 0, reviews: 0, late: 0, certificates: 0, approvals: 0, chat: 0, design: 0, jobnotes: 0, pinned: 0 };
   const me = currentActor() || OWNER_ACTOR;
   await Promise.all([
-    /* Pinned work: art not yet Got it, and job messages not yet addressed. */
-    artUnacked(me).then((l) => { out.design = l.length; }).catch(() => {}),
-    pool.query('SELECT COUNT(*)::int AS n FROM job_notes WHERE recipient = $1 AND addressed_at IS NULL', [JOBNOTES.readerOf(me)])
-      .then(({ rows }) => { out.jobnotes = rows[0].n; }).catch(() => {}),
     teamChatUnread().then((n) => { out.chat = n; }).catch(() => {}),
     unansweredLeads().then((l) => { out.leads = l.length; }).catch(() => {}),
     pool.query(REVIEWS_WAITING_SQL).then(({ rows }) => { out.reviews = rows[0].n; }).catch(() => {}),
@@ -23036,6 +23057,11 @@ app.get('/admin/nav-counts', requireAdmin, async (_req, res) => {
     }).catch(() => {}),
     /* Paid orders waiting to go out, as the morning email counts them. */
     shippingQueues().then((d) => { const w = shippingWaiting(d); out.shipping = w ? w.count : 0; }).catch(() => {}),
+    /* Pinned work: art not yet Got it, and job messages not yet addressed. */
+    artUnacked(me).then((l) => { out.design = l.length; }).catch(() => {}),
+    pool.query(`SELECT COUNT(*)::int AS n FROM job_notes n JOIN quotes q ON q.code = n.quote_code
+                 WHERE n.recipient = $1 AND n.addressed_at IS NULL AND q.cancelled_at IS NULL`, [JOBNOTES.readerOf(me)])
+      .then(({ rows }) => { out.jobnotes = rows[0].n; }).catch(() => {}),
   ]);
   out.pinned = out.design + out.jobnotes;
   res.json(out);
@@ -23184,7 +23210,7 @@ async function brokenLinksCheck() {
 /* What needs June today, and how the business is doing, on one screen. Every
    figure comes from the same place its own page reads it, and each panel fails
    on its own: a broken query shows a dash, never a blank dashboard. */
-app.get('/admin/dashboard', requireAdmin, async (_req, res) => {
+app.get('/admin/dashboard', requireAdmin, async (req, res) => {
   const safe = (p, fallback, what) => p.catch((e) => {
     console.error(`dashboard: ${what} failed:`, e.message);
     return fallback;
@@ -23330,6 +23356,7 @@ app.get('/admin/dashboard', requireAdmin, async (_req, res) => {
   res.send(adminPage('Dashboard', `
     ${pageHeader(hello + ', ' + SHOP_SIGNER, escEmail(today),
       '<a class="btn" href="/admin/quote/new">New quote</a><a class="btn btn-ghost" href="/admin/production">Production</a>')}
+    ${flash(req.query)}
     ${notesPin ? PIN_CSS + notesPin : ''}
     <form method="get" action="/admin/find" class="card" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:12px 14px">
       <label for="findq" style="margin:0;white-space:nowrap">Find an order</label>
