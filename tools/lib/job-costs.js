@@ -351,6 +351,14 @@ function estimateJob(items, catalog) {
       out.complete = false; out.missing.push(gone ? `${desc} (no longer in the catalogue)` : desc); return;
     }
 
+    /* A staff-only service (design fee, folding — see tools/add-services.js)
+       has no garment behind it. Costing it as one booked half a design fee as
+       blanks. What the designer charged is typed on the job, like any service. */
+    if (prod && prod.service && !places.length) {
+      out.lines.push({ ix, unit_cost: 0, basis: 'service: no supplier cost', estimated: false });
+      return;
+    }
+
     /* The garment, at S&S cost. A typed garment price is a SELL price (it
        replaces the catalogue price on the form), so it is costed at the same
        ratio the catalogue price is. */
