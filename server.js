@@ -91,6 +91,7 @@ const QEXAM = require('./tools/lib/quote-exam');
 const RUSH = require('./tools/lib/rush');
 const CHAN = require('./tools/lib/team-channels');
 const CHATFILES = require('./tools/lib/team-chat-files');
+const JOBNOTES = require('./tools/lib/job-notes');
 const HIRING = require('./tools/lib/hiring');
 const HIRE_POSTING = require('./tools/lib/hiring-posting');
 const PROOFS = require('./tools/lib/job-proofs');
@@ -1385,6 +1386,28 @@ async function initStaffTables() {
       updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
   await pool.query('CREATE INDEX IF NOT EXISTS art_requests_status ON art_requests (status, updated_at)');
+  /* The designer's "Got it" on work handed to them (tools/lib/job-notes.js):
+     cleared each time art comes to them, set when they press Got it or make
+     a move of their own. Until then the job sits pinned on their pages. */
+  await pool.query('ALTER TABLE art_requests ADD COLUMN IF NOT EXISTS ack_at TIMESTAMPTZ');
+  await pool.query('ALTER TABLE art_requests ADD COLUMN IF NOT EXISTS ack_by INTEGER');
+  /* Messages between the team about one job, each to one person, pinned on
+     their pages until they mark it addressed. author and recipient are
+     reader keys: 'owner' or 'staff:<id>'. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS job_notes (
+      id            BIGSERIAL PRIMARY KEY,
+      quote_code    TEXT NOT NULL,
+      author        TEXT NOT NULL,
+      recipient     TEXT NOT NULL,
+      body          TEXT NOT NULL,
+      reply_to      BIGINT,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      addressed_at  TIMESTAMPTZ,
+      addressed_by  TEXT
+    )`);
+  await pool.query('CREATE INDEX IF NOT EXISTS job_notes_open_idx ON job_notes (recipient) WHERE addressed_at IS NULL');
+  await pool.query('CREATE INDEX IF NOT EXISTS job_notes_job_idx ON job_notes (quote_code, id)');
   /* Quiz attempts (TRAINING.QUIZZES). Every attempt is kept, so the owner
      sees the first score as well as the pass. Marked on the server. */
   await pool.query(`
@@ -9169,13 +9192,13 @@ form:has(>.step-row){display:block}
    links in mail already in June's inbox for no gain. /admin, the old enquiries
    page, forwards to /admin/leads for the same reason. */
 const ADMIN_NAV = [
-  { key: 'myday',      href: '/admin/my-day',        label: 'My Day',     icon: 'check',  staffOnly: true },
-  { key: 'design',     href: '/admin/design',        label: 'Design jobs', icon: 'layers', staffOnly: true },
+  { key: 'myday',      href: '/admin/my-day',        label: 'My Day',     icon: 'check',  staffOnly: true, badge: 'pinned' },
+  { key: 'design',     href: '/admin/design',        label: 'Design jobs', icon: 'layers', staffOnly: true, badge: 'design' },
   { key: 'schedule',   href: '/admin/schedule',      label: 'Schedule',   icon: 'clock',  staffOnly: true },
   { key: 'earnings',   href: '/admin/my-earnings',   label: 'My earnings', icon: 'dollar', staffOnly: true },
   { key: 'mystats',    href: '/admin/my-stats',      label: 'My stats',   icon: 'grid',   staffOnly: true },
   { key: 'clock',      href: '/admin/clock',         label: 'My hours',   icon: 'clock',  staffOnly: true },
-  { key: 'dashboard',  href: '/admin/dashboard',     label: 'Dashboard',  icon: 'grid' },
+  { key: 'dashboard',  href: '/admin/dashboard',     label: 'Dashboard',  icon: 'grid',   badge: 'jobnotes' },
   { key: 'leads',      href: '/admin/leads',         label: 'Leads',      icon: 'inbox',  badge: 'leads' },
   { key: 'quotes',     href: '/admin/quotes',        label: 'Quotes',     icon: 'file' },
   { key: 'production', href: '/admin/production',    label: 'Production', icon: 'layers', badge: 'late' },
@@ -20680,6 +20703,8 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
     const messagesCard = await jobMessagesCard(q, req.query);
     const proofsCard = await jobProofsCard(q, req.query).catch((e) => { console.error('proofs card failed:', e.message); return ''; });
     const artCard = await jobArtCard(q, req.query).catch((e) => { console.error('art card failed:', e.message); return ''; });
+    const teamNotesCard = await teamJobNotesCard(q, `/admin/production/${q.code}#team-notes`)
+      .catch((e) => { console.error('team notes card failed:', e.message); return ''; });
     const certificateCard = await jobCertificateCard(q, req.query);
     const photosCard = jobPhotosCard(q);
     const notesCard = await jobNotesCard(q.code);
@@ -20782,6 +20807,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
       ${photosCard}
       ${certificateCard}
       ${artCard}
+      ${teamNotesCard}
       ${proofsCard}
       ${messagesCard}
       ${creditCard}
@@ -20996,23 +21022,30 @@ async function artMove(code, move, actor, { note = '', assignTo = null } = {}) {
        VALUES ($1, 'waiting', $2, $3, $4::jsonb)
        ON CONFLICT (quote_code) DO UPDATE SET status = 'waiting', requested_by = $2, assigned_to = $3, files = '[]'::jsonb,
          events = art_requests.events || jsonb_build_array(jsonb_set((($4::jsonb)->0), '{set_aside}', art_requests.files)),
-         updated_at = NOW()
+         ack_at = NULL, ack_by = NULL, updated_at = NOW()
        WHERE art_requests.status = 'approved'`, [code, me, assignTo, ev]);
-    return rowCount ? { ok: true, msg: 'Sent to the designer.' } : { ok: false, msg: 'The designer already has this job.' };
+    if (rowCount) notifyDesignersOfArt(code, move, assignTo).catch((e) => console.error(`art alert ${code} failed:`, e.message));
+    return rowCount ? { ok: true, msg: 'Sent to the designer. They have been emailed, and it stays at the top of their pages until they press Got it.' }
+      : { ok: false, msg: 'The designer already has this job.' };
   }
   const mineOnly = me != null && m.who === 'art.work';
   const { rows } = await pool.query(
-    `UPDATE art_requests SET status = $2, events = events || $3::jsonb, updated_at = NOW()
+    `UPDATE art_requests SET status = $2, events = events || $3::jsonb, updated_at = NOW(),
+            ack_at = CASE $7::text WHEN 'reset' THEN NULL WHEN 'ack' THEN COALESCE(ack_at, NOW()) ELSE ack_at END,
+            ack_by = CASE $7::text WHEN 'reset' THEN NULL WHEN 'ack' THEN COALESCE(ack_by, $8::int) ELSE ack_by END
       WHERE quote_code = $1 AND status = ANY($4::text[])
         AND ($5::int IS NULL OR assigned_to IS NULL OR assigned_to = $5)
         AND ($6::boolean = FALSE OR jsonb_array_length(files) > 0)
-      RETURNING quote_code`,
-    [code, m.to, ev, m.from.filter(Boolean), mineOnly ? me : null, move === 'submit']);
+      RETURNING quote_code, assigned_to`,
+    [code, m.to, ev, m.from.filter(Boolean), mineOnly ? me : null, move === 'submit', JOBNOTES.artAckEffect(move), me]);
   if (!rows.length) {
     return { ok: false, msg: move === 'submit' ? 'Upload the final files first.' : 'That step is not open right now. Reload the page.' };
   }
   if (move === 'approve') {
     await pool.query('UPDATE quotes SET artwork_at = COALESCE(artwork_at, NOW()) WHERE code = $1', [code]);
+  }
+  if (JOBNOTES.artAckEffect(move) === 'reset') {
+    notifyDesignersOfArt(code, move, rows[0].assigned_to).catch((e) => console.error(`art alert ${code} failed:`, e.message));
   }
   logActivity(actor || OWNER_ACTOR, `art: ${move}`, { type: 'quote', id: code }, {});
   return { ok: true, msg: { question: 'Question sent to sales.', answer: 'Answer sent to the designer.',
@@ -21084,6 +21117,12 @@ async function jobArtCard(q, query) {
         });
       })();
     </script>`;
+  }
+  if (mine && me != null && a.ack_at == null && ['waiting', 'changes'].includes(st)) {
+    actions += `<form method="post" action="/admin/quote/${escEmail(q.code)}/art/ack" style="margin:10px 0 0;padding:10px;border:2px solid #f59e0b;background:#fffbeb;border-radius:10px">
+      <input type="hidden" name="back" value="${escEmail(jobPath(q.code))}#art">
+      <b style="color:#92400e">New for you.</b> <span class="muted">Press this once you have seen it.</span>
+      <button type="submit" style="margin-left:8px">Got it, I'm on it</button></form>`;
   }
   if (mine && (ART.canMove('submit', st) || ART.canMove('question', st))) {
     actions += form('work', `${noteBox('A note for the owner (what is in the files), or your question for sales')}
@@ -21304,6 +21343,267 @@ function artQueueRows(list) {
   }).join('');
 }
 
+/* ── Pinned until addressed (owner, 2026-10-14) ─────────────────────────────
+   Two things that must not be missed, and so cannot be folded away or
+   dismissed: art handed to the designer, until they press "Got it" (or ask a
+   question, or send the art); and a message about a job sent to one person,
+   until they mark it addressed. Both are emailed when they arrive, counted on
+   the menu, and pinned at the top of the person's home page (My Day, or the
+   owner's Dashboard), their Design jobs page and the job itself. */
+
+const PIN_CSS = `<style>
+.pin{border:2px solid #f59e0b;background:#fffbeb}
+.pin-title{display:flex;align-items:center;gap:8px;font-weight:800;color:#92400e;font-size:15px;margin:0 0 6px}
+.pin .row-i{background:#fff;border:1px solid #fde68a;border-radius:10px;padding:10px 12px;margin-top:8px;flex-wrap:wrap;gap:8px}
+.pin-body{white-space:pre-wrap;margin-top:4px;color:#111827}
+.pin-acts{display:flex;gap:6px;flex-wrap:wrap;align-items:flex-start}
+.pin-acts form{margin:0;display:flex;gap:6px;flex-wrap:wrap;align-items:flex-start}
+.pin-acts textarea{min-width:0;flex:1 1 220px}
+.jn-line{border-left:3px solid #e3e8f2;padding:6px 10px;margin:8px 0}
+.jn-line.open{border-left-color:#f59e0b;background:#fffbeb;border-radius:0 8px 8px 0}
+</style>`;
+
+/** A helper as an actor, for asking what they may open. */
+function staffActorOf(row) {
+  return row ? { kind: 'staff', id: row.id, name: row.name, perms: row.perms || {} } : null;
+}
+
+/** Who a reader key is, by name. */
+function readerName(roster, key) {
+  const id = JOBNOTES.staffIdOf(key);
+  return id == null ? SHOP_SIGNER : nameOf(roster, id);
+}
+
+/** May this person open the job? The owner and anyone with quotes.view open
+ *  any job; everyone else the jobs designJobFor gives them. */
+async function canOpenJob(code, actor) {
+  if (!actor || actor.kind !== 'staff' || STAFF.levelOf(actor, 'quotes.view') === 'on') {
+    const { rows } = await pool.query('SELECT 1 FROM quotes WHERE code = $1 AND cancelled_at IS NULL', [code]);
+    return rows.length > 0;
+  }
+  return !!(await designJobFor(code, actor));
+}
+
+/** The page a person opens a job on. */
+function jobLinkFor(actor, code) {
+  return !actor || actor.kind !== 'staff' || STAFF.levelOf(actor, 'quotes.view') === 'on'
+    ? `/admin/production/${code}` : `/admin/design/${code}`;
+}
+
+/** Where to email a reader, or ''. */
+function emailOfReader(roster, key) {
+  const id = JOBNOTES.staffIdOf(key);
+  if (id == null) return String(process.env.OWNER_EMAILS || '').split(',').map((e) => e.trim()).find(isValidEmail) || NOTIFY_EMAIL || '';
+  const r = roster.find((x) => x.id === id);
+  return r && r.active && isValidEmail(r.email) ? r.email : '';
+}
+
+/** One plain alert email: who, what about, and the link. Never the message
+ *  itself, as with Team chat alerts. */
+function pinEmail(to, name, subject, line, href) {
+  if (!to) return Promise.resolve();
+  const link = `${PUBLIC_BASE_URL}${href}`;
+  return sendEmail({ to, subject,
+    html: `<p>Hi ${escEmail(name)},</p><p>${line}</p><p><a href="${escEmail(link)}">Open it</a></p>
+      <p style="color:#6b7280;font-size:12px">It stays at the top of your pages until you deal with it.</p>` });
+}
+
+/** Email the designer (or every designer, when it is anyone's) that art has
+ *  come to them. */
+async function notifyDesignersOfArt(code, move, assignedTo) {
+  const designers = (await designersOnRoster()).filter((d) => assignedTo == null || d.id === assignedTo);
+  const what = JOBNOTES.ART_NEWS[move] || 'Design work';
+  await Promise.all(designers.filter((d) => isValidEmail(d.email)).map((d) =>
+    pinEmail(d.email, d.name, `${what}: ${code}`, `${escEmail(what)} on job <b>${escEmail(code)}</b>. Press <b>Got it</b> on the job once you have seen it.`,
+      `/admin/design/${code}`).catch((e) => console.error(`art alert email ${code} failed:`, e.message))));
+}
+
+/** Art with this designer that they have not said Got it to. */
+async function artUnacked(actor) {
+  if (!actor || actor.kind !== 'staff' || STAFF.levelOf(actor, 'art.work') !== 'on') return [];
+  const { rows } = await pool.query(
+    `SELECT a.*, q.name, q.needed_by FROM art_requests a JOIN quotes q ON q.code = a.quote_code
+      WHERE q.cancelled_at IS NULL AND a.ack_at IS NULL AND a.status IN ('waiting', 'changes')
+        AND (a.assigned_to IS NULL OR a.assigned_to = $1)
+      ORDER BY a.updated_at`, [actor.id]);
+  return rows;
+}
+
+/** The pinned box of new art, with Got it on each. */
+function artPinCard(list, backTo) {
+  if (!list.length) return '';
+  return `<div class="card pin" id="pin-art"><div class="pin-title">&#128276; New design work for you (${list.length})</div>
+    <div class="muted" style="font-size:12.5px">Stays here until you press Got it, ask a question or send the art.</div>
+    ${list.map((a) => {
+      const last = [...(a.events || [])].reverse().find((e) => JOBNOTES.ART_TO_DESIGNER.includes(e.action)) || {};
+      return `<div class="row-i"><span class="row-main" style="white-space:normal">
+        <b>${escEmail(JOBNOTES.ART_NEWS[last.action] || 'Design work')}</b> &middot;
+        <a href="/admin/design/${escEmail(a.quote_code)}#art"><b>${escEmail(a.quote_code)}</b></a> ${escEmail(firstNameOf(a.name))}
+        <div class="row-sub">${a.needed_by ? `needed by ${escEmail(fmtDate(a.needed_by))} &middot; ` : ''}${escEmail(whenShort(a.updated_at))}</div>
+        ${last.note ? `<div class="pin-body">${escEmail(last.note)}</div>` : ''}</span>
+        <span class="pin-acts"><a class="btn btn-ghost" href="/admin/design/${escEmail(a.quote_code)}#art">Open job</a>
+          <form method="post" action="/admin/quote/${escEmail(a.quote_code)}/art/ack">
+            <input type="hidden" name="back" value="${escEmail(backTo)}">
+            <button type="submit" class="btn">Got it, I'm on it</button></form></span></div>`;
+    }).join('')}</div>`;
+}
+
+/* The designer says they have seen the art handed to them. */
+app.post('/admin/quote/:code/art/ack', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  const backTo = safeAdminPath(req.body && req.body.back, `/admin/design/${code}#art`);
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/design');
+  const actor = currentActor() || OWNER_ACTOR;
+  const me = actor.kind === 'staff' ? actor.id : null;
+  /* Only a designer says they have it: the owner pressing it would clear
+     the designer's pin without the designer ever seeing the work. */
+  if (me == null) return back(res, backTo, 'err', 'Only the designer can mark this as seen.');
+  try {
+    const { rowCount } = await pool.query(
+      `UPDATE art_requests SET ack_at = NOW(), ack_by = $2
+        WHERE quote_code = $1 AND ack_at IS NULL AND status IN ('waiting', 'changes')
+          AND (assigned_to IS NULL OR assigned_to = $2)`, [code, me]);
+    if (rowCount) logActivity(actor, 'art: got it', { type: 'quote', id: code }, {});
+    return back(res, backTo, rowCount ? 'ok' : 'err', rowCount ? `Got it: ${code} is yours.` : 'That one is already marked, or is not with you.');
+  } catch (err) {
+    console.error(`art ack ${code} failed:`, err.message);
+    return back(res, backTo, 'err', 'That did not save. Try again.');
+  }
+});
+
+/** Messages to this reader not yet addressed, oldest first. */
+async function openJobNotes(reader) {
+  const { rows } = await pool.query(
+    `SELECT n.*, q.name FROM job_notes n LEFT JOIN quotes q ON q.code = n.quote_code
+      WHERE n.recipient = $1 AND n.addressed_at IS NULL ORDER BY n.id LIMIT 100`, [reader]);
+  return rows;
+}
+
+/** The form that marks a note addressed, with an optional reply. */
+function addressForm(n, backTo) {
+  return `<form method="post" action="/admin/job-notes/${Number(n.id)}/address">
+    <input type="hidden" name="back" value="${escEmail(backTo)}">
+    <textarea name="reply" rows="1" maxlength="${JOBNOTES.BODY_MAX}" placeholder="Reply (optional)"></textarea>
+    <button type="submit" class="btn">Mark addressed</button></form>`;
+}
+
+/** The pinned box of job messages waiting on this person. */
+async function jobNotesPinCard(actor, backTo) {
+  const list = await openJobNotes(JOBNOTES.readerOf(actor));
+  if (!list.length) return '';
+  const roster = await staffRoster();
+  return `<div class="card pin" id="pin-notes"><div class="pin-title">&#128172; Job messages for you (${list.length})</div>
+    <div class="muted" style="font-size:12.5px">Each stays here until you mark it addressed. A reply goes back to the sender the same way.</div>
+    ${list.map((n) => `<div class="row-i"><span class="row-main" style="white-space:normal">
+        From <b>${escEmail(readerName(roster, n.author))}</b> about
+        <a href="${escEmail(jobLinkFor(actor, n.quote_code))}#team-notes"><b>${escEmail(n.quote_code)}</b></a> ${escEmail(firstNameOf(n.name))}
+        <span class="muted">&middot; ${escEmail(whenShort(n.created_at))}</span>
+        <div class="pin-body">${escEmail(n.body)}</div></span>
+        <span class="pin-acts">${addressForm(n, backTo)}</span></div>`).join('')}</div>`;
+}
+
+/** The job's team messages, and a box to send one about it. */
+async function teamJobNotesCard(q, backTo) {
+  const actor = currentActor() || OWNER_ACTOR;
+  const me = JOBNOTES.readerOf(actor);
+  const [{ rows }, roster] = await Promise.all([
+    pool.query('SELECT * FROM job_notes WHERE quote_code = $1 ORDER BY id LIMIT 200', [q.code]), staffRoster()]);
+  /* Only people who can open the job are offered: a message must lead
+     somewhere its reader can follow. */
+  const people = [{ key: 'owner', name: SHOP_SIGNER, actor: OWNER_ACTOR },
+    ...roster.filter((r) => r.active).map((r) => ({ key: `staff:${r.id}`, name: r.name, actor: staffActorOf(r) }))]
+    .filter((p) => p.key !== me);
+  const reach = await Promise.all(people.map((p) => canOpenJob(q.code, p.actor).catch(() => false)));
+  const to = people.filter((_, i) => reach[i]);
+  const line = (n) => `<div class="jn-line${n.addressed_at ? '' : ' open'}">
+      <b>${escEmail(readerName(roster, n.author))}</b> &rarr; <b>${escEmail(readerName(roster, n.recipient))}</b>
+      <span class="muted">&middot; ${escEmail(whenShort(n.created_at))}</span>
+      <div class="pin-body">${escEmail(n.body)}</div>
+      <div class="row-sub">${n.addressed_at
+        ? `${pill('addressed', 'green')} by ${escEmail(readerName(roster, n.addressed_by))} ${escEmail(whenShort(n.addressed_at))}`
+        : `${pill(`waiting on ${readerName(roster, n.recipient)}`, 'amber')}`}</div>
+      ${JOBNOTES.mayAddress(n, me) ? `<div class="pin-acts" style="margin-top:6px">${addressForm(n, backTo)}</div>` : ''}</div>`;
+  return `${PIN_CSS}<div class="card" id="team-notes"><h2 class="card-title">Team messages about this job</h2>
+    <div class="muted" style="font-size:12.5px">For the team only; customers never see these. Each one stays pinned for the person it is sent to until they mark it addressed.</div>
+    ${rows.length ? rows.map(line).join('') : '<p class="muted">No messages about this job yet.</p>'}
+    ${to.length ? `<form method="post" action="/admin/job-notes" class="row" style="gap:6px;flex-wrap:wrap;margin-top:10px">
+      <input type="hidden" name="code" value="${escEmail(q.code)}"><input type="hidden" name="back" value="${escEmail(backTo)}">
+      <label style="margin:0">To <select name="to" required><option value="">Who?</option>${to.map((p) =>
+        `<option value="${escEmail(p.key)}">${escEmail(p.name)}</option>`).join('')}</select></label>
+      <textarea name="body" rows="2" maxlength="${JOBNOTES.BODY_MAX}" required placeholder="What they need to know or do about ${escEmail(q.code)}" style="flex:1 1 100%"></textarea>
+      <button type="submit" class="btn" onclick="var b=this;setTimeout(function(){b.disabled=true},0)">Send about ${escEmail(q.code)}</button>
+    </form>` : '<p class="muted">Nobody else can open this job yet.</p>'}</div>`;
+}
+
+/** Save a job message and email its reader. Returns { ok, msg }. */
+async function sendJobNote({ code, from, to, body, replyTo = null }) {
+  const roster = await staffRoster();
+  const recipient = JOBNOTES.recipientFrom(to, roster, from);
+  if (!recipient) return { ok: false, msg: 'Pick who it is for.' };
+  const clean = JOBNOTES.cleanBody(body);
+  if (!clean) return { ok: false, msg: 'Write the message first.' };
+  if (clean.length > JOBNOTES.BODY_MAX) return { ok: false, msg: `Keep it under ${JOBNOTES.BODY_MAX} characters.` };
+  const recipientActor = recipient === 'owner' ? OWNER_ACTOR : staffActorOf(roster.find((r) => r.id === JOBNOTES.staffIdOf(recipient)));
+  if (!(await canOpenJob(code, recipientActor))) return { ok: false, msg: `${readerName(roster, recipient)} cannot open ${code}, so the message would lead nowhere.` };
+  /* A double click sends it once. */
+  const { rows: [n] } = await pool.query(
+    `INSERT INTO job_notes (quote_code, author, recipient, body, reply_to)
+     SELECT $1, $2, $3, $4, $5 WHERE NOT EXISTS (
+       SELECT 1 FROM job_notes WHERE quote_code = $1 AND author = $2 AND recipient = $3 AND body = $4
+          AND created_at > NOW() - interval '10 seconds')
+     RETURNING id`, [code, from, recipient, clean, replyTo]);
+  if (n) {
+    const name = readerName(roster, recipient);
+    pinEmail(emailOfReader(roster, recipient), name, `${replyTo ? 'Reply' : 'Message'} about ${code} from ${readerName(roster, from)}`,
+      `${escEmail(readerName(roster, from))} sent you ${replyTo ? 'a reply' : 'a message'} about job <b>${escEmail(code)}</b>.`,
+      `${jobLinkFor(recipientActor, code)}#team-notes`).catch((e) => console.error(`job note email ${code} failed:`, e.message));
+  }
+  return { ok: true, msg: `Sent to ${readerName(roster, recipient)}. It stays on their pages until they mark it addressed.` };
+}
+
+app.post('/admin/job-notes', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const code = String(b.code || '').toUpperCase();
+  const actor = currentActor() || OWNER_ACTOR;
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect(isOwner() ? '/admin/dashboard' : '/admin/my-day');
+  const backTo = safeAdminPath(b.back, `${jobLinkFor(actor, code)}#team-notes`);
+  try {
+    if (!(await canOpenJob(code, actor))) return back(res, backTo, 'err', 'That job is not one you can open.');
+    const r = await sendJobNote({ code, from: JOBNOTES.readerOf(actor), to: b.to, body: b.body });
+    return back(res, backTo, r.ok ? 'ok' : 'err', r.msg);
+  } catch (err) {
+    console.error(`job note ${code} failed:`, err.message);
+    return back(res, backTo, 'err', 'It did not send. Try again.');
+  }
+});
+
+/* The person a message was sent to marks it addressed, with an optional reply
+   that goes back to the sender, pinned for them in the same way. */
+app.post('/admin/job-notes/:id/address', requireAdmin, async (req, res) => {
+  const id = /^\d{1,15}$/.test(String(req.params.id)) ? req.params.id : null;
+  const actor = currentActor() || OWNER_ACTOR;
+  const me = JOBNOTES.readerOf(actor);
+  const backTo = safeAdminPath(req.body && req.body.back, isOwner() ? '/admin/dashboard' : '/admin/my-day');
+  if (!id) return back(res, backTo, 'err', 'No such message.');
+  try {
+    const reply = JOBNOTES.cleanBody(req.body && req.body.reply);
+    if (reply.length > JOBNOTES.BODY_MAX) return back(res, backTo, 'err', `Keep the reply under ${JOBNOTES.BODY_MAX} characters.`);
+    const { rows: [n] } = await pool.query(
+      `UPDATE job_notes SET addressed_at = NOW(), addressed_by = $2
+        WHERE id = $1 AND recipient = $2 AND addressed_at IS NULL RETURNING *`, [id, me]);
+    if (!n) return back(res, backTo, 'err', 'That message is not waiting on you.');
+    let msg = 'Marked addressed.';
+    if (reply) {
+      const r = await sendJobNote({ code: n.quote_code, from: me, to: n.author, body: reply, replyTo: n.id });
+      msg = r.ok ? 'Marked addressed, and your reply was sent.' : `Marked addressed, but the reply did not send: ${r.msg}`;
+    }
+    return back(res, backTo, 'ok', msg);
+  } catch (err) {
+    console.error(`job note address ${id} failed:`, err.message);
+    return back(res, backTo, 'err', 'That did not save. Try again.');
+  }
+});
+
 /* ── The designer's pages ──────────────────────────────────────────────────
    Owner, 2026-10-06: "Make sure the designer has no access to things that
    doesn't pertain to them." A designer (jobs.design, no quotes.view) sees the
@@ -21444,8 +21744,13 @@ try {
       <div class="row-sub">${escEmail(ART.STATES[a.status] ? ART.STATES[a.status].label : a.status)}${
         a.needed_by ? ` &middot; needed by ${escEmail(fmtDate(a.needed_by))}` : ''}</div></span>
     <span class="row-end muted">${escEmail(whenShort(a.updated_at))}</span></div>`;
+  const pins = PIN_CSS + artPinCard(await artUnacked(actor).catch(() => []), '/admin/design')
+    + await jobNotesPinCard(actor, '/admin/design').catch((e) => { console.error('design job notes failed:', e.message); return ''; });
+  res.set('Cache-Control', 'no-store');
   res.send(adminPage('Design jobs', `
     ${pageHeader('Design jobs', 'The jobs with you, soonest due first. Finished ones stay here for two weeks.')}
+    ${flash(req.query)}
+    ${pins}
     <div class="card">${rows.length ? `<div class="rows">${rows.map(row).join('')}</div>` : emptyState('No design jobs with you right now.')}</div>`, 'design'));
 } catch (err) {
   console.error('design board failed:', err.message);
@@ -21472,17 +21777,46 @@ app.get('/admin/schedule', requireAdmin, async (req, res) => {
     const jobs = rows.map((q) => ({ q, sched: quoteSchedule(q), cl: quoteChecklist(q), stage: JOB_STAGES[jobReachedIndex(q)] }))
       .sort((x, y) => (y.sched && y.sched.risks.length ? 1 : 0) - (x.sched && x.sched.risks.length ? 1 : 0)
         || (x.sched ? new Date(x.sched.ship_by) : Infinity) - (y.sched ? new Date(y.sched.ship_by) : Infinity));
-    const row = ({ q, sched, cl, stage }) => `<div class="row-i"><span class="row-main" style="white-space:normal">
-        <a href="/admin/design/${escEmail(q.code)}"><b>${escEmail(q.code)}</b></a> ${escEmail(firstNameOf(q.name))}
-        ${pill(stage ? stage.label : 'To start', 'blue')}${q.art_status && ART.STATES[q.art_status] ? ' ' + pill(`Art: ${ART.STATES[q.art_status].label}`, ART.STATES[q.art_status].tone) : ''}
-        <div class="row-sub" style="white-space:normal">${cl.next ? `Next: ${escEmail(cl.next.label)}` : 'Complete'}${
-          sched && sched.risks.length ? ` &middot; <span style="color:#b91c1c">behind on ${sched.risks.map((r) => escEmail(r.label)).join(', ')}</span>` : ''}</div></span>
-      <span class="row-end muted">${sched ? `${sched.isPickup ? 'ready' : 'ships'} ${escEmail(dayShort(sched.ship_by))}`
-        : q.needed_by ? `needed ${escEmail(dayShort(q.needed_by))}` : 'no date'}</span></div>`;
+    /* The same board as the owner's Production page (owner, 2026-10-14: "make
+       it like the production schedule that I have, show the progress"): a
+       column per stage, a card per job with its due date, what is behind,
+       the art, the next step and the progress bar. Read-only and without
+       money: moving a job and ticking steps stay on the owner's board. */
+    const today0 = new Date(new Date().toDateString());
+    const card = ({ q, sched, cl }) => {
+      const byDate = q.needed_by || q.target_date;
+      const days = byDate ? Math.round((new Date(byDate) - today0) / 86400000) : null;
+      const due = days === null ? '' : days < 0 ? `<b style="color:#b91c1c">${-days}d late</b>`
+        : days === 0 ? '<b style="color:#b45309">today</b>' : days <= 3 ? `<b style="color:#b45309">${days}d</b>` : `${days}d`;
+      const risk = sched && sched.risks.length;
+      const pct = Math.round((cl.done / cl.of) * 100);
+      const art = q.art_status && ART.STATES[q.art_status] ? ART.STATES[q.art_status] : null;
+      return `<article class="kcard${risk ? ' kcard-risk' : ''}">
+        <div class="kcard-top"><a href="/admin/design/${escEmail(q.code)}" class="kcard-name">${escEmail(firstNameOf(q.name))}</a>
+          ${due ? `<span class="kcard-due">${due}</span>` : ''}</div>
+        <div class="kcard-sub">${escEmail(q.code)}${sched ? ` &middot; ${sched.isPickup ? 'ready' : 'ships'} ${escEmail(dayShort(sched.ship_by))}` : ''}</div>
+        ${risk ? `<div class="kcard-risk-note">&#9888; ${escEmail(sched.risks[0].label)} was due ${escEmail(dayShort(sched.risks[0].by))}</div>` : ''}
+        ${art ? `<div style="margin-top:5px">${pill(`Art: ${art.label}`, art.tone)}</div>` : ''}
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;margin-top:7px;font-size:12px">
+          ${cl.next ? `<b style="color:#1848B8">Next: ${escEmail(cl.next.label)}</b>` : '<b style="color:#047857">Complete</b>'}
+          <span class="muted" style="white-space:nowrap">${cl.done}/${cl.of}</span></div>
+        <div style="height:5px;background:#e3e8f2;border-radius:3px;margin-top:5px;overflow:hidden" role="progressbar"
+          aria-valuemin="0" aria-valuemax="${cl.of}" aria-valuenow="${cl.done}" aria-label="${cl.done} of ${cl.of} steps done">
+          <div style="height:100%;width:${pct}%;background:${pct === 100 ? '#047857' : '#1848B8'}"></div></div>
+        <div class="kmove"><span></span><a class="kbtn kbtn-link" href="/admin/design/${escEmail(q.code)}">Open job</a></div>
+      </article>`;
+    };
+    const cols = JOB_STAGES.slice(0, -1).map((st, i) => ({ ...st, jobs: jobs.filter((x) => jobStageIndex(x.q) === i) }));
+    const late = jobs.filter((x) => x.sched && x.sched.risks.length).length;
     res.set('Cache-Control', 'no-store');
     res.send(adminPage('Schedule', `
-      ${pageHeader('Production schedule', 'Every job in hand, the late ones first, then soonest due. Open one for its files, what to make and the messages.')}
-      <div class="card">${jobs.length ? `<div class="rows">${jobs.map(row).join('')}</div>` : emptyState('No jobs in production right now.')}</div>`, 'schedule'));
+      ${pageHeader('Production schedule', `Every job in hand, by stage, the late ones first, then soonest due. ${jobs.length} job${jobs.length === 1 ? '' : 's'}${
+        late ? ` &middot; <b style="color:#b91c1c">${late} behind</b>` : ''}. Open one for its files, what to make and the messages.`)}
+      ${jobs.length ? `<div class="kanban">${cols.map((c) => `<section class="kcol">
+          <header class="kcol-head"><span>${escEmail(c.label)}</span><span class="kcount">${c.jobs.length}</span></header>
+          <div class="kcol-hint">${escEmail(c.hint)}</div>
+          ${c.jobs.map(card).join('') || '<div class="kempty">&mdash;</div>'}</section>`).join('')}</div>`
+        : `<div class="card">${emptyState('No jobs in production right now.')}</div>`}`, 'schedule'));
   } catch (err) {
     console.error('schedule failed:', err.message);
     res.status(500).send(adminPage('Schedule', '<div class="card"><div class="warn">Could not load the schedule.</div></div>', 'schedule'));
@@ -21508,6 +21842,8 @@ app.get('/admin/design/:code', requireAdmin, async (req, res) => {
         .catch((e) => { console.error('messages card failed:', e.message); return ''; }),
       designNotesCard(code),
     ]);
+    const teamNotes = await teamJobNotesCard(q, `/admin/design/${code}#team-notes`)
+      .catch((e) => { console.error('team notes card failed:', e.message); return ''; });
     const back = actorLevel('jobs.design') === 'on'
       ? '<a href="/admin/design" style="color:#1848B8">your design jobs</a>' : '';
     const toSchedule = actorLevel('quotes.view') === 'on'
@@ -21523,6 +21859,7 @@ app.get('/admin/design/:code', requireAdmin, async (req, res) => {
       ${designSpecCard(q, catalog)}
       ${jobPhotosCard(q, `/admin/design/${code}`)}
       ${art}
+      ${teamNotes}
       ${proofs}
       ${messages}
       ${notes}`, 'design'));
@@ -22679,8 +23016,13 @@ const REVIEWS_WAITING_SQL = `SELECT COUNT(*)::int AS n FROM reviews
    costs a badge rather than the lot. */
 app.get('/admin/nav-counts', requireAdmin, async (_req, res) => {
   res.set('Cache-Control', 'no-store');
-  const out = { leads: 0, reviews: 0, late: 0, certificates: 0, approvals: 0, chat: 0 };
+  const out = { leads: 0, reviews: 0, late: 0, certificates: 0, approvals: 0, chat: 0, design: 0, jobnotes: 0, pinned: 0 };
+  const me = currentActor() || OWNER_ACTOR;
   await Promise.all([
+    /* Pinned work: art not yet Got it, and job messages not yet addressed. */
+    artUnacked(me).then((l) => { out.design = l.length; }).catch(() => {}),
+    pool.query('SELECT COUNT(*)::int AS n FROM job_notes WHERE recipient = $1 AND addressed_at IS NULL', [JOBNOTES.readerOf(me)])
+      .then(({ rows }) => { out.jobnotes = rows[0].n; }).catch(() => {}),
     teamChatUnread().then((n) => { out.chat = n; }).catch(() => {}),
     unansweredLeads().then((l) => { out.leads = l.length; }).catch(() => {}),
     pool.query(REVIEWS_WAITING_SQL).then(({ rows }) => { out.reviews = rows[0].n; }).catch(() => {}),
@@ -22695,6 +23037,7 @@ app.get('/admin/nav-counts', requireAdmin, async (_req, res) => {
     /* Paid orders waiting to go out, as the morning email counts them. */
     shippingQueues().then((d) => { const w = shippingWaiting(d); out.shipping = w ? w.count : 0; }).catch(() => {}),
   ]);
+  out.pinned = out.design + out.jobnotes;
   res.json(out);
 });
 
@@ -22982,9 +23325,12 @@ app.get('/admin/dashboard', requireAdmin, async (_req, res) => {
   const [lastSrc] = lastLead ? (LEAD_SOURCES[lastLead.source] || LEAD_SOURCES.form) : [''];
 
   res.set('Cache-Control', 'no-store');
+  const notesPin = await jobNotesPinCard(currentActor() || OWNER_ACTOR, '/admin/dashboard')
+    .catch((e) => { console.error('dashboard: job notes failed:', e.message); return ''; });
   res.send(adminPage('Dashboard', `
     ${pageHeader(hello + ', ' + SHOP_SIGNER, escEmail(today),
       '<a class="btn" href="/admin/quote/new">New quote</a><a class="btn btn-ghost" href="/admin/production">Production</a>')}
+    ${notesPin ? PIN_CSS + notesPin : ''}
     <form method="get" action="/admin/find" class="card" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:12px 14px">
       <label for="findq" style="margin:0;white-space:nowrap">Find an order</label>
       <input id="findq" name="q" maxlength="120" placeholder="Quote code, name, phone or email" style="flex:1 1 220px;min-width:0" required>
@@ -30567,6 +30913,8 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
     const today = new Date().toISOString().slice(0, 10);
     // A helper's training until it is done, and the owner's latest note (two weeks).
     const art = await artQueues(actor);
+    const pins = PIN_CSS + artPinCard(await artUnacked(actor).catch(() => []), '/admin/my-day')
+      + await jobNotesPinCard(actor, '/admin/my-day').catch((e) => { console.error('my day job notes failed:', e.message); return ''; });
     const training = me ? await Promise.all([trainingFor(me), coachingNotes(me, 1)])
       .then(([p, n]) => ({ p, note: n[0] && Date.now() - new Date(n[0].created_at).getTime() < 14 * 864e5 ? n[0] : null }))
       .catch((err) => { console.error('my day training failed:', err.message); return null; }) : null;
@@ -30602,6 +30950,7 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
       ${pageHeader(`My Day${actor.kind === 'staff' ? ` — ${actor.name}` : ''}`, 'Oldest first. Answer leads, then follow-ups, then the jobs.',
         '<a class="btn btn-ghost" href="/admin/playbook">Playbook</a>')}
       ${flash(req.query)}
+      ${pins}
       ${training && !training.p.complete ? section(`Your training: ${training.p.done} of ${training.p.total}`,
         `<a class="muted" href="/admin/training" style="float:right">See it all →</a>${progressBar(training.p.done, training.p.total)}
         ${training.p.next.map((st) => `<div class="row-sub">Next: ${escEmail(st.title)}</div>`).join('')}`) : ''}
