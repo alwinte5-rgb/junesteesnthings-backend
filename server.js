@@ -28200,6 +28200,7 @@ app.get('/admin/approvals', requireAdmin, async (req, res) => {
         a.payload.original_text != null ? ` &middot; first wording: <span style="white-space:pre-wrap">${escEmail(a.payload.original_text)}</span>` : ''}</div>` : ''}
       ${heldMessageEditForm(a, '/admin/approvals')}
       <form method="post" action="/admin/approvals/${a.id}" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
+        <input type="hidden" name="seen" value="${escEmail((a.payload && a.payload.edited_at) || '')}">
         <input name="note" placeholder="Note back to them (optional)" maxlength="500" style="flex:1 1 220px">
         <button type="submit" name="decision" value="approve">${['message', 'lead_email'].includes(a.kind) ? 'Approve and send' : 'Approve'}</button>
         <button type="submit" name="decision" value="reject" class="btn-ghost">Send back</button>
@@ -28318,6 +28319,13 @@ app.post('/admin/approvals/:id', requireAdmin, async (req, res) => {
   const finish = (status) => pool.query(
     `UPDATE staff_approvals SET status = $2, decided_at = NOW(), decision_note = $3 WHERE id = $1`, [id, status, note]);
   const unclaim = () => pool.query(`UPDATE staff_approvals SET status = 'pending' WHERE id = $1`, [id]).catch(() => {});
+  /* Approve sends the wording the owner read: a helper's edit after her page
+     loaded is refused here, and shown to her first. */
+  if (decision === 'approve' && ['message', 'lead_email'].includes(a.kind)
+      && String((req.body && req.body.seen) || '') !== String((a.payload || {}).edited_at || '')) {
+    await unclaim();
+    return back(res, '/admin/approvals', 'err', 'That message was edited after you opened this page. Read the new wording, then approve again.');
+  }
   try {
     if (decision === 'reject') {
       await finish('rejected');
