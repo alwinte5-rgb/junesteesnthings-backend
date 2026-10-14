@@ -28,7 +28,7 @@ test('every email has its dates filled in and links only to jtees.net or design.
     const m = E.emailFor(ev);
     assert.doesNotMatch(m.subject + m.preview + m.html, /\{date\}|\{orderBy\}/, ev.key);
     for (const [, href] of m.html.matchAll(/href="([^"]+)"/g)) {
-      assert.match(href, /^(https:\/\/(www|design)\.jtees\.net\/|tel:\+17738491854$)/, `${ev.key} links to ${href}`);
+      assert.match(href, /^(https:\/\/(www|design)\.jtees\.net\/|tel:\+17739004592$)/, `${ev.key} links to ${href}`);
     }
     assert.match(m.html, /Order by /);
   }

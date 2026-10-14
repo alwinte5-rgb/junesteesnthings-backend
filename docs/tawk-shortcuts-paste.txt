@@ -3,7 +3,7 @@ TAWK.TO SHORTCUTS — copy each block into Dashboard > Administration > Shortcut
 
 ────────────────────────────────────────────────────────────
 SHORTCUT: hours
-MESSAGE:  Curbside pickup is Mon–Fri, 10:30 AM–6 PM in Chicago. Need a different time? Text us at (773) 849-1854 and we'll work something out!
+MESSAGE:  Curbside pickup is Mon–Fri, 10:30 AM–6 PM in Chicago. Need a different time? Text us at (773) 900-4592 and we'll work something out!
 
 ────────────────────────────────────────────────────────────
 SHORTCUT: quote
@@ -63,7 +63,7 @@ MESSAGE:  Happy to check! What's the name and phone/email on the order?
 
 ────────────────────────────────────────────────────────────
 SHORTCUT: location
-MESSAGE:  We're in Chicago — curbside pickup at 3047 N Lincoln Ave #435, Mon–Fri 10:30 AM–6 PM. Call/text (773) 849-1854 when you're outside!
+MESSAGE:  We're in Chicago — curbside pickup at 3047 N Lincoln Ave #435, Mon–Fri 10:30 AM–6 PM. Call/text (773) 900-4592 when you're outside!
 
 ────────────────────────────────────────────────────────────
 SHORTCUT: shipping

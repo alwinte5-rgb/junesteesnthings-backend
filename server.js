@@ -47,6 +47,7 @@ function pickupHowHtml() {
     <ol style="padding-left:20px;margin:6px 0 12px">${PICKUP_STEPS.map((st) => `<li>${escEmail(st)}.</li>`).join('')}</ol>`;
 }
 const { verifyTwilioSignature, classifyInbound } = require('./tools/lib/twilio-webhook');
+const VOICE = require('./tools/lib/voice');
 const TAXCERT = require('./tools/lib/tax-certificates');
 const QPHOTOS = require('./tools/lib/quote-photos');
 const ZIPSTREAM = require('./tools/lib/zip-stream');
@@ -2029,7 +2030,7 @@ const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || 'https://www.jtees.net')
 // templates, quote page and order emails can never drift apart.
 const SHOP_NAME = "June's Tees & Things";
 const SHOP_SIGNER = 'June';
-const SHOP_PHONE = '(773) 849-1854';
+const SHOP_PHONE = '(773) 900-4592';
 const SHOP_EMAIL = process.env.JT_SHOP_EMAIL || NOTIFY_EMAIL;
 
 
@@ -2629,7 +2630,7 @@ async function sendCustomerConfirmationEmail(s) {
         <p>We received your quote request and will get back to you within 1 business day.</p>
         <p><strong>What you submitted:</strong></p>
         <p style="background:#f9f9f9;padding:1rem;border-radius:8px;">${escEmail(s.description) || 'No description provided.'}</p>
-        <p>Questions? Call or text us at <a href="tel:+17738491854">(773) 849-1854</a></p>
+        <p>Questions? Call or text us at <a href="tel:+17739004592">(773) 900-4592</a></p>
         ${designerPromoBlock()}
         <p style="color:#999;font-size:12px;margin-top:24px;">June's Tees & Things · 3047 N Lincoln Ave #435, Chicago, IL 60657</p>
       </div>
@@ -2648,7 +2649,7 @@ async function sendPaymentReceivedEmail(s, amount) {
         <p>We received your payment of <strong>$${(amount / 100).toFixed(2)}</strong>. Your order is now in production.</p>
         <p><strong>Estimated delivery:</strong> 2–3 weeks from today.</p>
         <p>We'll reach out when your order is ready for pickup.</p>
-        <p>Questions? Call or text us at <a href="tel:+17738491854">(773) 849-1854</a></p>
+        <p>Questions? Call or text us at <a href="tel:+17739004592">(773) 900-4592</a></p>
         ${designerPromoBlock()}
         <p style="color:#999;font-size:12px;margin-top:24px;">June's Tees & Things · 3047 N Lincoln Ave #435, Chicago, IL 60657</p>
       </div>
@@ -4623,6 +4624,75 @@ async function recordSmsDelivery(p) {
   return { status, updated: rows.length };
 }
 
+// ── Twilio calls ──────────────────────────────────────────────────────────────
+// In the Twilio console, set the number's "A call comes in" webhook to exactly
+// https://www.jtees.net/webhooks/twilio/voice (HTTP POST). Calls ring
+// TWILIO_TO_NUMBER after a short menu (tools/lib/voice.js).
+const TWILIO_VOICE_BASE = (process.env.TWILIO_VOICE_BASE || 'https://www.jtees.net').trim().replace(/\/+$/, '');
+const ACCEPTED_CALLS = VOICE.acceptedCalls();
+
+/* Twilio signs the exact URL it requested, query string included. */
+function twilioVoiceOk(req, res) {
+  const token = String(process.env.TWILIO_AUTH_TOKEN || '').trim();
+  if (!token) { res.sendStatus(503); return false; }
+  if (!verifyTwilioSignature(token, TWILIO_VOICE_BASE + req.originalUrl, req.body || {}, req.get('x-twilio-signature'))) {
+    console.warn('twilio voice rejected — bad signature');
+    res.sendStatus(401);
+    return false;
+  }
+  return true;
+}
+
+const callOwner = () => normalizeUsPhone(process.env.TWILIO_TO_NUMBER || '');
+const sendTwiml = (res, body) => res.type('text/xml').send(body);
+
+app.post(VOICE.PATHS.incoming, (req, res) => {
+  if (!twilioVoiceOk(req, res)) return;
+  sendTwiml(res, VOICE.incomingTwiml({ base: TWILIO_VOICE_BASE }));
+});
+
+app.post(VOICE.PATHS.menu, (req, res) => {
+  if (!twilioVoiceOk(req, res)) return;
+  sendTwiml(res, VOICE.menuTwiml({
+    digits: req.body.Digits, from: normalizeUsPhone(req.body.From), owner: callOwner(), base: TWILIO_VOICE_BASE,
+  }));
+});
+
+app.post(VOICE.PATHS.screen, (req, res) => {
+  if (!twilioVoiceOk(req, res)) return;
+  sendTwiml(res, VOICE.screenTwiml({ base: TWILIO_VOICE_BASE, reason: String(req.query.r || '') }));
+});
+
+app.post(VOICE.PATHS.accept, (req, res) => {
+  if (!twilioVoiceOk(req, res)) return;
+  if (String(req.body.Digits || '').trim() === '1') ACCEPTED_CALLS.add(req.body.ParentCallSid);
+  sendTwiml(res, VOICE.acceptTwiml(req.body.Digits));
+});
+
+app.post(VOICE.PATHS.done, (req, res) => {
+  if (!twilioVoiceOk(req, res)) return;
+  const accepted = ACCEPTED_CALLS.take(req.body.CallSid) && req.body.DialCallStatus === 'completed';
+  sendTwiml(res, VOICE.doneTwiml({ accepted, base: TWILIO_VOICE_BASE }));
+});
+
+/* The caller hung up or finished a message: tell the owner and keep it as a
+   lead, so a missed call is followed up like a text. */
+app.post(VOICE.PATHS.voicemail, async (req, res) => {
+  if (!twilioVoiceOk(req, res)) return;
+  sendTwiml(res, '<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="Polly.Joanna">Thank you. Goodbye.</Say><Hangup/></Response>');
+  const from = normalizeUsPhone(req.body.From);
+  const note = VOICE.missedCallText({ from, recordingUrl: req.body.RecordingUrl, seconds: req.body.RecordingDuration });
+  const callSid = String(req.body.CallSid || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 64);
+  await sendOwnerSms(note).catch((e) => {
+    console.error('missed-call text failed:', e.message);
+    reportError('twilio:voicemail', e).catch(() => {});
+  });
+  if (from) await textToLead(from, note, callSid ? 'call-' + callSid : '').catch((e) => {
+    console.error('missed-call lead failed:', e.message);
+    reportError('twilio:voicemail-lead', e).catch(() => {});
+  });
+});
+
 app.post('/webhooks/twilio/status', async (req, res) => {
   const token = String(process.env.TWILIO_AUTH_TOKEN || '').trim();
   if (!token) return res.sendStatus(503);
@@ -5251,7 +5321,7 @@ async function sendGradOrderConfirmationEmail(order) {
       ${buildOrderEmailTable(order)}
       ${order.apparel?.design_notes ? `<h3 style="color:#0B1F4B;">Your Design Notes</h3><p style="background:#f9f9f9;padding:12px;border-radius:6px;">${escHtml(order.apparel.design_notes)}</p>` : ''}
       ${order.notes ? `<p><strong>Special Instructions:</strong> ${escHtml(order.notes)}</p>` : ''}
-      <p style="margin-top:24px;">Questions? Reply to this email or call/text us at <a href="tel:+17738491854">(773) 849-1854</a></p>
+      <p style="margin-top:24px;">Questions? Reply to this email or call/text us at <a href="tel:+17739004592">(773) 900-4592</a></p>
       ${designerPromoBlock()}
       <p style="color:#999;font-size:12px;">June's Tees &amp; Things · 3047 N Lincoln Ave #435, Chicago, IL 60657</p>
     </div>`,
@@ -5437,7 +5507,7 @@ app.post('/api/embroidery-quote', countFormFailures('embroidery'), orderRateLimi
             <h2 style="color:#1848B8;">Thanks, ${escEmail(name.split(' ')[0])}!</h2>
             <p>We received your embroidery request (${escEmail(size)}${qty ? ', qty ' + escEmail(qty) : ''}) and will confirm pricing and timing within 1 business day.</p>
             ${hasFile ? '' : '<p>Since you don\'t have a stitch file yet, we\'ll digitize your artwork — the one-time digitizing fee will be included in your quote.</p>'}
-            <p>Questions? Call or text <a href="tel:+17738491854">(773) 849-1854</a>.</p>
+            <p>Questions? Call or text <a href="tel:+17739004592">(773) 900-4592</a>.</p>
             ${designerPromoBlock()}
             <p style="color:#999;font-size:12px;margin-top:24px;">June's Tees &amp; Things · Chicago, IL</p>
           </div>`,
@@ -5446,7 +5516,7 @@ app.post('/api/embroidery-quote', countFormFailures('embroidery'), orderRateLimi
     res.json({ ok: true });
   } catch (err) {
     console.error('embroidery-quote error:', err.message);
-    res.status(500).json({ error: 'Something went wrong — please call or text (773) 849-1854.' });
+    res.status(500).json({ error: 'Something went wrong — please call or text (773) 900-4592.' });
   }
 });
 
@@ -5555,7 +5625,7 @@ app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 
           ${img}
           <p>${escEmail(product)}${summary ? '<br>' + escEmail(summary).replace(/\n/g, '<br>') : ''}${total ? `<br>Price: <b>$${total.toFixed(2)}</b>` : ''}</p>
           <p><a href="${escEmail(designUrl)}" style="display:inline-block;background:#1848B8;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none;font-weight:bold">Open my design</a></p>
-          <p>We’ll be in touch within 1 business day to help you finish it. Questions? Call or text <a href="tel:+17738491854">(773) 849-1854</a>.</p>
+          <p>We’ll be in touch within 1 business day to help you finish it. Questions? Call or text <a href="tel:+17739004592">(773) 900-4592</a>.</p>
           <p style="color:#999;font-size:12px;margin-top:24px;">June’s Tees &amp; Things · Chicago, IL</p></div>`,
       }).then(() => true).catch((err) => {
         /* They asked to be emailed; a failure must reach the error digest so
@@ -5568,7 +5638,7 @@ app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 
     res.json({ ok: true, id: savedId, emailed: email ? customerEmailed : null });
   } catch (err) {
     console.error('design-lead error:', err.message);
-    res.status(500).json({ error: 'Something went wrong — please call or text (773) 849-1854.' });
+    res.status(500).json({ error: 'Something went wrong — please call or text (773) 900-4592.' });
   }
 });
 
@@ -5814,7 +5884,7 @@ function textsPage({ email = '', first = '', phone = '', error = '', code = '', 
     .map(([img, label, cat]) => `<a href="${D}/products.php?category_id=${cat}"><img src="/assets/images/shop/${img}.jpg"
       alt="Custom ${label}" loading="lazy">${label}</a>`).join('');
   const top = `<div class="tx-top"><a href="/"><img src="/assets/images/brand/logo.png" alt="June's Tees &amp; Things"></a></div>`;
-  const foot = `<div class="tx-foot">June's Tees &amp; Things &middot; 3047 N Lincoln Ave, Chicago &middot; (773) 849-1854<br>
+  const foot = `<div class="tx-foot">June's Tees &amp; Things &middot; 3047 N Lincoln Ave, Chicago &middot; (773) 900-4592<br>
     <a href="/">jtees.net</a> &middot; <a href="${D}">Design Lab</a> &middot; <a href="/sms-terms">SMS terms</a> &middot;
     <a href="${D}/privacy.php">Privacy</a></div>`;
   const body = done ? `${top}
@@ -6350,7 +6420,7 @@ app.post('/api/abandoned-cart-email', requireInternalKey, capPerRecipient('aband
           <p style="text-align:center;margin:26px 0;">
             <a href="${escEmail(url)}" style="background:#1848B8;color:#fff;font-weight:800;text-decoration:none;padding:14px 30px;border-radius:100px;display:inline-block;">${c.cta}</a>
           </p>
-          <p style="color:#374151;">Questions or want a hand? Just reply, or call/text <a href="tel:+17738491854">(773) 849-1854</a>.</p>
+          <p style="color:#374151;">Questions or want a hand? Just reply, or call/text <a href="tel:+17739004592">(773) 900-4592</a>.</p>
           <p style="color:#999;font-size:12px;margin-top:24px;">June's Tees &amp; Things · Chicago, IL</p>
         </div>`,
     });
@@ -6465,7 +6535,7 @@ function tooManyQuoteLookups(res) {
     <div class="card"><h1>Too many attempts</h1>
     <p class="muted" style="margin-top:8px">Check the link in your text message, or call the shop
       and we will send it again.</p>
-    <p style="margin-top:14px"><a class="btn" href="tel:+17738491854">Call ${SHOP_SIGNER}</a></p></div>`));
+    <p style="margin-top:14px"><a class="btn" href="tel:+17739004592">Call ${SHOP_SIGNER}</a></p></div>`));
 }
 
 /* ── Quote money rules ────────────────────────────────────────────────────
@@ -8762,7 +8832,7 @@ async function emailQuote(q) {
         <p style="margin:0 0 6px;font-size:14px">On that page you can accept it, change sizes and quantities,
           upload your artwork, and pay the deposit.</p>
         <p style="margin:0;font-size:14px;color:#6b7280">Questions? Reply to this email or call/text
-          <a href="tel:+17738491854">${SHOP_PHONE}</a>.</p>
+          <a href="tel:+17739004592">${SHOP_PHONE}</a>.</p>
       </div>`,
     });
     await pool.query('UPDATE quotes SET emailed_at = NOW(), sent_to_customer_at = COALESCE(sent_to_customer_at, NOW()) WHERE id = $1', [q.id]).catch(() => {});
@@ -13392,7 +13462,7 @@ app.get('/q/:code', async (req, res) => {
   const friendly = (msg) => res.status(404).send(quotePage('Quote not found', `
     <div class="card"><h1>We couldn't find that quote</h1>
     <p class="muted" style="margin-top:8px">${msg}</p>
-    <p style="margin-top:14px"><a class="btn" href="tel:+17738491854">Call ${SHOP_SIGNER}</a></p></div>`));
+    <p style="margin-top:14px"><a class="btn" href="tel:+17739004592">Call ${SHOP_SIGNER}</a></p></div>`));
   if (quoteMissBudget.exhausted(req)) return tooManyQuoteLookups(res);
   if (!QUOTE_CODE_RE.test(code)) {
     quoteMissBudget.miss(req);
@@ -14083,7 +14153,7 @@ app.get('/q/:code', async (req, res) => {
       ${(paid && balanceDue <= 0) ? '' : reviewStrip()}
 
       <div class="card" style="text-align:center">
-        <p class="muted">Questions? <a href="tel:+17738491854">${SHOP_PHONE}</a> &middot; ${SHOP_SIGNER}</p>
+        <p class="muted">Questions? <a href="tel:+17739004592">${SHOP_PHONE}</a> &middot; ${SHOP_SIGNER}</p>
       </div>
 
       ${canEditQty ? `<script>
@@ -24687,7 +24757,7 @@ function orderShell({ heading, intro, orderId, items, total, shipping, tax, addr
     ${footer}
     <p style="color:#9ca3af;font-size:12px;margin-top:26px;border-top:1px solid #eee;padding-top:12px;">
       June&rsquo;s Tees &amp; Things &middot; 3047 N Lincoln Ave #435, Chicago, IL 60657<br>
-      Questions? Reply to this email or text (773) 849-1854.</p>
+      Questions? Reply to this email or text (773) 900-4592.</p>
   </div>`;
 }
 
@@ -26762,7 +26832,7 @@ app.post('/api/tax-certificates', requireInternalKey, async (req, res) => {
         reportError('studio:tax-certificate-cap', new Error('studio certificate uploads are over the daily cap'),
           `${load.n} certificates, ${load.bytes} bytes, none on a paid order`).catch(() => {});
         return res.status(429).json({ error: 'Tax-exempt checkout is busy right now. '
-          + 'Please text us at (773) 849-1854 and we will sort it out.' });
+          + 'Please text us at (773) 900-4592 and we will sort it out.' });
       }
     }
     const cert = await keepCertificate(v.cert, { source: 'studio', email });

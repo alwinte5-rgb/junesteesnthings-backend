@@ -23,11 +23,11 @@ const PICKUP = '3047 N Lincoln Ave, Mon-Fri 10:30am-6pm';
 const PICKUP_ADDRESS = '3047 N Lincoln Ave, Chicago, IL 60657';
 const PICKUP_HOURS = 'Mon-Fri 10:30am-6pm';
 const PICKUP_STEPS = [
-  'Call or text (773) 849-1854 an hour before you arrive, so we can confirm',
+  'Call or text (773) 900-4592 an hour before you arrive, so we can confirm',
   "Ring the intercom for June's Tees and we'll let you in",
   'Come up to the 4th floor and have a seat in the lobby',
 ];
-const PICKUP_SMS = `Call/text (773) 849-1854 an hour before to confirm. Ring the intercom for June's Tees, come up to the 4th floor and have a seat in the lobby.`;
+const PICKUP_SMS = `Call/text (773) 900-4592 an hour before to confirm. Ring the intercom for June's Tees, come up to the 4th floor and have a seat in the lobby.`;
 
 // Strip anything outside printable ASCII so a customer name or a pasted
 // tracking number cannot push the message out of GSM-7.
@@ -102,7 +102,7 @@ const T = {
   // Ready for pickup two working days and not collected (sendPickupReminders).
   pickupReminder: ({ code, first, link }) => ({
     template: 'pickup-reminder',
-    body: `${BRAND}: Hi${hi(first) ? ' ' + hi(first) : ''}, your order ${plain(code, 12)} is ready and waiting for you! ${PICKUP}, 4th floor. Call/text (773) 849-1854 an hour before you come. ${lnk(link)} ${STOP}`,
+    body: `${BRAND}: Hi${hi(first) ? ' ' + hi(first) : ''}, your order ${plain(code, 12)} is ready and waiting for you! ${PICKUP}, 4th floor. Call/text (773) 900-4592 an hour before you come. ${lnk(link)} ${STOP}`,
   }),
 
   // Marketing: the "your work is saved" popup. Two segments when a cart link is
@@ -140,7 +140,7 @@ const T = {
   }),
   deliveryOut: ({ ref, window }) => ({
     template: 'delivery-out',
-    body: `${BRAND}: Your order ${plain(ref, 12)} is out for delivery today, ${plain(window, 20)}! Questions? Text (773) 849-1854. ${short(SITE)} ${STOP}`,
+    body: `${BRAND}: Your order ${plain(ref, 12)} is out for delivery today, ${plain(window, 20)}! Questions? Text (773) 900-4592. ${short(SITE)} ${STOP}`,
   }),
   studioOrderShipped: ({ orderId, tracking }) => {
     const t = plain(tracking, 40);

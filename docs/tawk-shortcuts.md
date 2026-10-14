@@ -5,7 +5,7 @@ In a chat, type `/` + the shortcut name to insert the answer instantly.
 
 | # | Shortcut | Question it answers | Reply text |
 |---|----------|--------------------|------------|
-| 1 | `/hours` | What are your hours / pickup times? | Curbside pickup is Mon–Fri, 10:30 AM–6 PM in Chicago. Need a different time? Text us at (773) 849-1854 and we'll work something out! |
+| 1 | `/hours` | What are your hours / pickup times? | Curbside pickup is Mon–Fri, 10:30 AM–6 PM in Chicago. Need a different time? Text us at (773) 900-4592 and we'll work something out! |
 | 2 | `/quote` | How do I get a quote? | Easiest way: tell me right here what you need (item, quantity, and your design idea) and I'll get you a price. You can also design it yourself instantly at design.jtees.net! |
 | 3 | `/minimums` | Do you have minimums? | No minimums! Order a single shirt or hundreds — DTF printing lets us do one-offs at a great price. Bulk orders get volume discounts. |
 | 4 | `/turnaround` | How fast can you print? | Most orders turn around in about 7 days, and many are faster. Have a deadline? Tell me the date and I'll confirm we can hit it. |
@@ -20,7 +20,7 @@ In a chat, type `/` + the shortcut name to insert the answer instantly.
 | 13 | `/business` | Business/uniform orders | We outfit businesses with embroidered polos, branded tees, hats, and jackets. Send your logo once — we keep it on file for every reorder. Volume pricing applies. |
 | 14 | `/order` | How do I place an order? | Two ways: 1) Design it yourself at design.jtees.net and check out online, or 2) tell me what you need right here and we'll handle everything for you. |
 | 15 | `/status` | Where is my order? | Happy to check! What's the name and phone/email on the order? |
-| 16 | `/location` | Where are you located? | We're in Chicago — curbside pickup at 3047 N Lincoln Ave #435, Mon–Fri 10:30 AM–6 PM. Call/text (773) 849-1854 when you're outside! |
+| 16 | `/location` | Where are you located? | We're in Chicago — curbside pickup at 3047 N Lincoln Ave #435, Mon–Fri 10:30 AM–6 PM. Call/text (773) 900-4592 when you're outside! |
 | 17 | `/shipping` | Do you ship? | Yes, we ship nationwide. Local Chicago customers can also do curbside pickup. Shipping cost depends on the order — I'll include it in your quote. |
 | 18 | `/giftcard` | Do you sell gift cards? | Yes! Give the gift of custom made — gift cards are available in any amount. Want me to set one up for you? |
 | 19 | `/payment` | How do I pay? | Online orders check out on the site; for custom quotes we'll send you a secure invoice. Questions about a payment? Ask right here. |
