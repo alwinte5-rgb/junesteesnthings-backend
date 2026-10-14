@@ -1,0 +1,59 @@
+'use strict';
+
+/* Staff-only services: design fees and folding.
+ *
+ * They reach the quote form through the shop catalogue but are stored inactive
+ * (see jt-catalog.php and tools/add-services.js), so the storefront never shows
+ * them. Two things must hold here:
+ *
+ *   - a service is priced FLAT. The garment volume break (BLANK_TIERS) is a
+ *     margin rule for blanks; applied to 3,000 folded brochures it takes 18% off
+ *     the folding, and nobody would see it happen.
+ *   - a garment is still discounted exactly as before.
+ */
+
+const { test } = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+const m = src.match(/function quotePricingSource\(\) \{\s*return `([\s\S]*?)`;\s*\}/);
+const W = vm.runInThisContext('(function(){' + m[1] + ';return {priceLine:priceLine};})()');
+
+const TIERS = [{ min: 3000, pct: 18 }, { min: 1000, pct: 15 }, { min: 35, pct: 3 }];
+const line = (product, qty, extra) => W.priceLine(Object.assign({
+  qty, product, blankTiers: TIERS, addons: [], stage: 'front',
+}, extra || {}));
+
+test('folding 3,000 brochures is $0.10 each, not 18% off', () => {
+  const r = line({ price: 0.10, service: true }, 3000);
+  assert.strictEqual(Number(r.blank), 0.10);
+});
+
+test('a design fee at quantity 1 is its price', () => {
+  assert.strictEqual(Number(line({ price: 150, service: true }, 1).blank), 150);
+});
+
+test('a typed price on a service is not volume-discounted either', () => {
+  const r = line({ price: 0.10, service: true }, 3000, { blankOverride: '0.12' });
+  assert.strictEqual(Number(r.blank), 0.12);
+});
+
+test('a garment still gets the volume break', () => {
+  assert.strictEqual(Number(line({ price: 10 }, 3000).blank), 8.2);
+  assert.strictEqual(Number(line({ price: 10 }, 10).blank), 10);
+});
+
+test('services get their own heading in the quote form', () => {
+  assert.match(src, /const SERVICE_GROUP = 'Services \(not in shop\)';/);
+  assert.match(src, /p\.service \? SERVICE_GROUP : productGroupOf\(p\.name\)/);
+});
+
+test('add-services writes services inactive and tagged', () => {
+  const tool = fs.readFileSync(path.join(__dirname, '..', 'tools', 'add-services.js'), 'utf8');
+  assert.match(tool, /",0,'service',"/);
+  assert.match(tool, /",'','',0,999,"/);   // active = 0
+  assert.match(tool, /active=0, supplier='service'/);
+});

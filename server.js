@@ -8108,7 +8108,13 @@ function quotePricingSource() {
             parseFloat(o.blankOverride) > 0) {
           blankBase = parseFloat(o.blankOverride);
         }
-        var blank = blankBase ? blankPriceAt(blankBase, bandQty, o.blankTiers || []) : 0;
+        /* A staff-only service (a design fee, folding) is a flat price per
+           unit: the volume break above is a margin rule for garments, and on
+           3,000 folded brochures it would quietly take 18% off the folding. */
+        var isService = !!(o.product && o.product.service);
+        var blank = !blankBase ? 0
+          : isService ? Math.round(blankBase * 100) / 100
+          : blankPriceAt(blankBase, bandQty, o.blankTiers || []);
         /* PRINT LOCATIONS. A line is printed in up to four places — front,
            back, left sleeve, right sleeve — each with its own method and its
            own ink count. The form lists them that way, and \`o.prints\` carries
@@ -9829,6 +9835,9 @@ const PRODUCT_GROUPS = [
   ['Bags & Totes',            /tote|bags?\b|backpack|sackpack|drawstring/i],
 ];
 
+/** Staff-only services: design fees, folding. Never shown in the shop. */
+const SERVICE_GROUP = 'Services (not in shop)';
+
 /** Which group a product belongs to. Everything lands somewhere. */
 function productGroupOf(name) {
   for (const [label, re] of PRODUCT_GROUPS) if (re.test(String(name || ''))) return label;
@@ -9842,7 +9851,9 @@ function productGroupOf(name) {
 
     const bucket = new Map(PRODUCT_GROUPS.map(([label]) => [label, []]));
     bucket.set('Everything else', []);
-    for (const p of catalog.products) bucket.get(productGroupOf(p.name)).push(p);
+    /* Services by flag, not name: "Business Card Design" would land in Signs. */
+    bucket.set(SERVICE_GROUP, []);
+    for (const p of catalog.products) bucket.get(p.service ? SERVICE_GROUP : productGroupOf(p.name)).push(p);
 
     /* A group with nothing in it is not rendered — an empty heading is worse
        than no heading. Within a group the catalogue's own order is kept. */
