@@ -42,6 +42,7 @@ test('3 reads the hours and address, then the menu again', () => {
   assert.match(t, /we see customers by appointment/);
   assert.match(t, /ring the intercom for June&apos;s Tees and we&apos;ll buzz you right in/);
   assert.match(t, /give us a call before you head over to confirm your time/);
+  assert.match(t, /4th floor and have a seat in the lobby/);
   assert.match(t, /<Gather /);
   assert.doesNotMatch(t, /Thanks for calling/);
   assert.equal((t.match(/<Response>/g) || []).length, 1);
@@ -69,6 +70,26 @@ test('after the ring: accepted ends, anything else gets the voicemail', () => {
   assert.match(V.doneTwiml({ accepted: true, base }), /<Hangup\/>/);
   assert.doesNotMatch(V.doneTwiml({ accepted: true, base }), /Record/);
   assert.match(V.doneTwiml({ accepted: false, base }), /<Record /);
+});
+
+test('after hours, an order call goes to the closed greeting and voicemail, never the cell', () => {
+  const t = V.menuTwiml({ digits: '1', from, owner, base, open: false });
+  assert.match(t, /We&apos;re closed right now/);
+  assert.match(t, /<Record /);
+  assert.doesNotMatch(t, /<Dial/);
+  assert.doesNotMatch(V.menuTwiml({ digits: '', from, owner, base, open: false }), /<Dial/);
+  assert.match(V.menuTwiml({ digits: '3', from, owner, base, open: false }), /3047 North Lincoln/);
+});
+
+test('shop hours are Mon-Fri 10:30-6 Chicago time, across daylight saving', () => {
+  const at = (iso) => V.isOpen(new Date(iso));
+  assert.equal(at('2026-10-14T15:30:00Z'), true);    // Wed 10:30 CDT
+  assert.equal(at('2026-10-14T15:29:00Z'), false);   // Wed 10:29 CDT
+  assert.equal(at('2026-10-14T22:59:00Z'), true);    // Wed 5:59 PM CDT
+  assert.equal(at('2026-10-14T23:00:00Z'), false);   // Wed 6:00 PM CDT
+  assert.equal(at('2026-10-17T17:00:00Z'), false);   // Saturday noon
+  assert.equal(at('2026-12-16T16:30:00Z'), true);    // Wed 10:30 CST
+  assert.equal(at('2026-12-16T07:00:00Z'), false);   // Wed 1 AM CST
 });
 
 test('accepted calls are taken once and expire', () => {

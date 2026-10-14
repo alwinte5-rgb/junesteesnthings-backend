@@ -4670,7 +4670,7 @@ app.post(VOICE.PATHS.incoming, (req, res) => {
 app.post(VOICE.PATHS.menu, (req, res) => {
   if (!twilioVoiceOk(req, res)) return;
   sendTwiml(res, VOICE.menuTwiml({
-    digits: req.body.Digits, from: callerOf(req), owner: callOwner(), base: TWILIO_VOICE_BASE,
+    digits: req.body.Digits, from: callerOf(req), owner: callOwner(), base: TWILIO_VOICE_BASE, open: VOICE.isOpen(),
   }));
 });
 

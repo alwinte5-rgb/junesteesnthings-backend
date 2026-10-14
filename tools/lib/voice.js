@@ -44,7 +44,21 @@ const INFO = "You'll find us at 3047 North Lincoln Avenue, suite 4 35, in Chicag
   "We're a working studio, so we see customers by appointment. That way your order is ready " +
   "and you have our full attention. Just give us a call before you head over to confirm your time. " +
   "When you arrive, ring the intercom for June's Tees and we'll buzz you right in. " +
+  'Come up to the 4th floor and have a seat in the lobby, and we will be right with you. ' +
   'You can also start a quote any time at j tees dot net.';
+
+/* When calls ring the owner: the shop's pickup hours, Chicago time. Outside
+   them a call goes to voicemail. */
+const OPEN = { days: [1, 2, 3, 4, 5], from: 10 * 60 + 30, to: 18 * 60 };
+const DAYS = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+
+function isOpen(now = new Date(), tz = 'America/Chicago') {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: tz, weekday: 'short', hour: 'numeric', minute: 'numeric', hourCycle: 'h23',
+  }).formatToParts(now).map((p) => [p.type, p.value]));
+  const mins = (parseInt(parts.hour, 10) % 24) * 60 + parseInt(parts.minute, 10);
+  return OPEN.days.includes(DAYS[parts.weekday]) && mins >= OPEN.from && mins < OPEN.to;
+}
 
 function xml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
@@ -56,6 +70,13 @@ const say = (text) => `<Say voice="${VOICE}">${xml(text)}</Say>`;
 
 function recordTag(base) {
   return `<Record maxLength="${VOICEMAIL_SECONDS}" playBeep="true" timeout="5" action="${xml(base + PATHS.voicemail)}" method="POST"/>`;
+}
+
+function afterHoursTwiml(base) {
+  return twiml(
+    say(`Thanks for calling ${SHOP}. We're closed right now. Our hours are Monday through Friday, 10:30 AM to 6 PM. ` +
+      "Leave your name, number and what you need after the tone, or text this number, and we'll get back to you next business day.") +
+    recordTag(base) + '<Hangup/>');
 }
 
 function voicemailTwiml(base) {
@@ -82,7 +103,8 @@ function incomingTwiml({ base }) {
 }
 
 /* Ring the owner. `from` and `owner` are +1XXXXXXXXXX or ''. */
-function ringTwiml({ from, owner, base, reason = 'call' }) {
+function ringTwiml({ from, owner, base, reason = 'call', open = true }) {
+  if (!open) return afterHoursTwiml(base);
   if (!owner || (from && from === owner)) return voicemailTwiml(base);
   const r = Object.hasOwn(REASONS, reason) ? reason : 'call';
   const callerId = from ? ` callerId="${xml(from)}"` : '';
@@ -94,12 +116,12 @@ function ringTwiml({ from, owner, base, reason = 'call' }) {
 }
 
 /* What a menu key does. `digits` is '' when the caller pressed nothing. */
-function menuTwiml({ digits, from, owner, base }) {
+function menuTwiml({ digits, from, owner, base, open = true }) {
   const pick = MENU[String(digits || '').trim()];
-  if (!pick) return ringTwiml({ from, owner, base });
+  if (!pick) return ringTwiml({ from, owner, base, open });
   if (pick.info) return twiml(say(INFO) + menuInner({ base, again: true }));
   if (pick.voicemail) return twiml(say("Leave your name, number and what you need after the tone, and we'll get right back to you.") + recordTag(base) + '<Hangup/>');
-  return ringTwiml({ from, owner, base, reason: pick.reason });
+  return ringTwiml({ from, owner, base, reason: pick.reason, open });
 }
 
 /* What the owner hears on picking up. Hanging up here (no key, or a
@@ -168,5 +190,5 @@ function acceptedCalls(ttlMs = 2 * 60 * 60 * 1000) {
 
 module.exports = {
   PATHS, MENU, incomingTwiml, menuTwiml, ringTwiml, screenTwiml, acceptTwiml, doneTwiml,
-  voicemailTwiml, missedCallText, voicemailText, callerNumber, isAccept, THANKS, acceptedCalls, pretty,
+  voicemailTwiml, afterHoursTwiml, isOpen, missedCallText, voicemailText, callerNumber, isAccept, THANKS, acceptedCalls, pretty,
 };
