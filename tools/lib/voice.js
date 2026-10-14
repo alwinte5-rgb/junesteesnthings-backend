@@ -39,12 +39,12 @@ const MENU = {
    Twilio signs needs no escaping. */
 const REASONS = { new: 'new order', existing: 'existing order', call: 'customer call' };
 
-const INFO = 'We offer curbside pickup at 3047 North Lincoln Avenue, suite 4 35, in Chicago, ' +
-  'Monday through Friday, 10:30 AM to 6 PM. We are closed Saturday and Sunday. ' +
-  'Visits are by appointment only, so please call to confirm your appointment before you come. ' +
-  "When you arrive, ring the intercom for June's Tees and we'll let you in. " +
-  'Visitors without an appointment may not be let in. ' +
-  'You can also get a quote any time at j tees dot net.';
+const INFO = "You'll find us at 3047 North Lincoln Avenue, suite 4 35, in Chicago. " +
+  "We're open for pickups Monday through Friday, 10:30 AM to 6 PM, and closed on weekends. " +
+  "We're a working studio, so we see customers by appointment. That way your order is ready " +
+  "and you have our full attention. Just give us a call before you head over to confirm your time. " +
+  "When you arrive, ring the intercom for June's Tees and we'll buzz you right in. " +
+  'You can also start a quote any time at j tees dot net.';
 
 function xml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>

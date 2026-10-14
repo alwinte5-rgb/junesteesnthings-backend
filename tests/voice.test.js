@@ -38,10 +38,10 @@ test('no key pressed still rings a person', () => {
 test('3 reads the hours and address, then the menu again', () => {
   const t = V.menuTwiml({ digits: '3', from, owner, base });
   assert.match(t, /3047 North Lincoln Avenue/);
-  assert.match(t, /Monday through Friday, 10:30 AM to 6 PM/);
-  assert.match(t, /appointment only, so please call to confirm/);
-  assert.match(t, /ring the intercom for June&apos;s Tees/);
-  assert.match(t, /without an appointment may not be let in/);
+  assert.match(t, /Monday through Friday, 10:30 AM to 6 PM, and closed on weekends/);
+  assert.match(t, /we see customers by appointment/);
+  assert.match(t, /ring the intercom for June&apos;s Tees and we&apos;ll buzz you right in/);
+  assert.match(t, /give us a call before you head over to confirm your time/);
   assert.match(t, /<Gather /);
   assert.doesNotMatch(t, /Thanks for calling/);
   assert.equal((t.match(/<Response>/g) || []).length, 1);
