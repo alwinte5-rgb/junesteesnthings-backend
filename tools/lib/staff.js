@@ -358,6 +358,7 @@ const ROUTES = {
   'POST /admin/leads/add': 'leads.view',
   'POST /admin/leads/call': 'leads.view',
   'POST /admin/quote/:code/note': 'quotes.view',
+  'GET /admin/tasks': 'owner',
   'POST /admin/tasks': 'any',
   'POST /admin/tasks/:id/done': 'any',
   'GET /admin/tasks/:id/file/:n': 'any',

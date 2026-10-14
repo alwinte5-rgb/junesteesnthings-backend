@@ -67,6 +67,7 @@ function clientMail({ fail = null, unsubscribed = false, inbound = false } = {})
     attributedStaffId: () => null,
     console: { error() {} },
   };
+  sandbox.MESSAGE_MAX = 10000;
   vm.createContext(sandbox);
   vm.runInContext(lift('logClientEmail') + '\n' + lift('sendClientEmail'), sandbox);
   return { send: (m) => sandbox.sendClientEmail(m), rows, sent };
@@ -160,6 +161,7 @@ function card({ history = [], smsOn = true, consent = true, q = {} } = {}) {
     /* The shared browser upload helper (2026-10-06), as server.js defines it. */
     CLOUDINARY_UPLOAD_MAX: 10 * 1024 * 1024, CLD_UPLOAD_FN: 'function jtCldUpload(){}',
   };
+  sandbox.MESSAGE_MAX = 10000;
   vm.createContext(sandbox);
   vm.runInContext([grab('const MESSAGE_KINDS = {', '};'), grab('const MESSAGE_ERRORS = {', '};'),
     grab('const ADMIN_ICONS = {', '};'), lift('icon'), lift('escEmail'), lift('pill'), lift('emptyState'),
@@ -257,7 +259,7 @@ test('sending is admin only, and answers on the job page from a fixed list', () 
 test('an empty or over-long message is refused before anything is sent', () => {
   const r = msgRoute();
   assert.ok(r.indexOf("answer('msg_err', 'empty')") < r.indexOf('SELECT * FROM quotes'));
-  assert.match(r, /text\.length > \(channel === 'text' \? 300 : 5000\)/);
+  assert.match(r, /text\.length > \(channel === 'text' \? 300 : MESSAGE_MAX\)/);
   assert.match(r, /\.replace\(\/\[\\r\\n\]\+\/g, ' '\)/, 'a subject is one line');
 });
 
@@ -294,6 +296,7 @@ function messageRoute(o = {}) {
     jobFilesFor: async () => [], MSGFILES: require('../tools/lib/message-files'),
     QPHOTOS: { cloudName: () => 'demo' }, fetchAttachments: async () => [],
   };
+  sandbox.MESSAGE_MAX = 10000;
   vm.createContext(sandbox);
   vm.runInContext(lift('sendJobMessage') + '\n' + route("app.post('/admin/quote/:code/message', requireAdmin") + '\n});', sandbox);
   const send = async (body) => {
@@ -404,6 +407,7 @@ async function inboundText({ from = '+13125550199', body = 'Can I add 2 XL?', ow
     reportError: async () => {}, recordSmsConsent: async () => {}, joinByText: async () => {},
     console: { error() {}, warn() {}, log() {} }, String, Number, encodeURIComponent,
   };
+  sandbox.MESSAGE_MAX = 10000;
   vm.createContext(sandbox);
   const start = src.indexOf("app.post('/webhooks/twilio/sms'");
   vm.runInContext(lift('relayOwnerReply') + '\n' + src.slice(start, src.indexOf('\n});', start) + 4), sandbox);

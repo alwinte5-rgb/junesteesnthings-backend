@@ -6407,7 +6407,11 @@ function reviewStrip() {
 const REVIEW_CSS = require('node:fs').readFileSync(
   require('node:path').join(__dirname, 'public', 'assets', 'css', 'review-strip.css'), 'utf8');
 
-const QUOTE_CODE_RE = /^(?:[A-Z0-9]{6}|[A-Z0-9]{10})$/;   // legacy 6, new 10 — see newQuoteCode
+const QUOTE_CODE_RE = /^(?:[A-Z0-9]{6}|[A-Z0-9]{10})$/;
+/* The longest message any box takes: team chat, job messages, notes, feedback
+   and customer email (owner, 2026-10-14: "add a larger character limit").
+   A text to a customer stays at 300, a text message's own limit. */
+const MESSAGE_MAX = 10000;   // legacy 6, new 10 — see newQuoteCode
 
 /* ── Guessing budget for quote codes ──────────────────────────────────────
    A code is crypto.randomBytes(3): 24 bits, six hex characters. That is short
@@ -9229,6 +9233,7 @@ const ADMIN_NAV = [
   { key: 'mystats',    href: '/admin/my-stats',      label: 'My stats',   icon: 'grid',   staffOnly: true },
   { key: 'clock',      href: '/admin/clock',         label: 'My hours',   icon: 'clock',  staffOnly: true },
   { key: 'dashboard',  href: '/admin/dashboard',     label: 'Dashboard',  icon: 'grid',   badge: 'jobnotes' },
+  { key: 'tasks',      href: '/admin/tasks',         label: 'Tasks',      icon: 'check' },
   { key: 'leads',      href: '/admin/leads',         label: 'Leads',      icon: 'inbox',  badge: 'leads' },
   { key: 'quotes',     href: '/admin/quotes',        label: 'Quotes',     icon: 'file' },
   { key: 'production', href: '/admin/production',    label: 'Production', icon: 'layers', badge: 'late' },
@@ -9246,8 +9251,7 @@ const ADMIN_NAV = [
   { key: 'training',   href: '/admin/training',      label: 'Training',   icon: 'learn' },
   { key: 'hiring',     href: '/admin/hiring',        label: 'Hiring',     icon: 'users' },
   { key: 'team',       href: '/admin/team',    label: 'Team',       icon: 'team',   badge: 'approvals' },
-  { key: 'timeclock',  href: '/admin/timeclock', label: 'Timeclock', icon: 'clock' },
-  { key: 'shifts',     href: '/admin/work-schedule', label: 'Work hours', icon: 'clock' },
+  { key: 'timeclock',  href: '/admin/timeclock', label: 'Hours',      icon: 'clock' },
 ];
 /* Ordered the way a shop is actually worked, not the way the routes grew: what
    needs you today, the enquiries that might become work, the work in hand, the
@@ -9355,6 +9359,9 @@ details.md-sec:not([open])>summary::before{transform:rotate(-90deg)}
   border-radius:10px;padding:10px 12px;font-weight:800;font-size:14px;text-decoration:none;margin-bottom:6px}
 .adm-new:hover{background:#ffb83d}
 .adm-main{flex:1 1 auto;min-width:0}
+/* Message boxes start roomy and grow with what is typed (owner, 2026-10-14:
+   "make the message box appear bigger across the whole website"). */
+.adm-main textarea{min-height:120px;max-height:65vh;line-height:1.45;resize:vertical;field-sizing:content}
 .adm-page{padding:26px 30px 64px}
 .adm-page .wrap{max-width:1280px;margin:0 auto}
 .adm-top,.adm-scrim{display:none}
@@ -21516,7 +21523,7 @@ async function openJobNotes(reader) {
 function addressForm(n, backTo) {
   return `<form method="post" action="/admin/job-notes/${Number(n.id)}/address">
     <input type="hidden" name="back" value="${escEmail(backTo)}">
-    <textarea name="reply" rows="1" maxlength="${JOBNOTES.BODY_MAX}" placeholder="Reply (optional)"></textarea>
+    <textarea name="reply" rows="3" maxlength="${JOBNOTES.BODY_MAX}" placeholder="Reply (optional)"></textarea>
     <button type="submit" class="btn">Mark addressed</button></form>`;
 }
 
@@ -21569,7 +21576,7 @@ async function teamJobNotesCard(q, backTo) {
       <input type="hidden" name="code" value="${escEmail(q.code)}"><input type="hidden" name="back" value="${escEmail(backTo)}">
       <label style="margin:0">To <select name="to" required><option value="">Who?</option>${to.map((p) =>
         `<option value="${escEmail(p.key)}">${escEmail(p.name)}</option>`).join('')}</select></label>
-      <textarea name="body" rows="2" maxlength="${JOBNOTES.BODY_MAX}" required placeholder="What they need to know or do about ${escEmail(q.code)}" style="flex:1 1 100%"></textarea>
+      <textarea name="body" rows="4" maxlength="${JOBNOTES.BODY_MAX}" required placeholder="What they need to know or do about ${escEmail(q.code)}" style="flex:1 1 100%"></textarea>
       <button type="submit" class="btn" onclick="var b=this;setTimeout(function(){b.disabled=true},0)">Send about ${escEmail(q.code)}</button>
     </form>` : '<p class="muted">Nobody else can open this job yet.</p>'}</div>`;
 }
@@ -21923,14 +21930,14 @@ async function designNotesCard(code) {
       <div class="row-sub">${escEmail(nameOf(roster, n.staff_id))} &middot; ${escEmail(whenShort(n.created_at))}</div></span></div>`).join('')
       || '<p class="muted">No notes yet.</p>'}
     <form method="post" action="/admin/design/${escEmail(code)}/note" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
-      <textarea name="body" rows="2" maxlength="2000" placeholder="A note for the team about this job" style="flex:1 1 260px" required></textarea>
+      <textarea name="body" rows="4" maxlength="${MESSAGE_MAX}" placeholder="A note for the team about this job" style="flex:1 1 260px" required></textarea>
       <button type="submit" class="btn btn-ghost">Add note</button>
     </form></div>`;
 }
 
 app.post('/admin/design/:code/note', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
-  const body = text(req.body && req.body.body, 2000);
+  const body = text(req.body && req.body.body, MESSAGE_MAX);
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/design');
   try {
     const actor = currentActor();
@@ -22186,7 +22193,7 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
         </div>
         <input name="subject" maxlength="150" value="${prefill ? `Your proof for order ${escEmail(code)}` : `About your order ${escEmail(code)}`}" data-subject
                style="margin-bottom:8px;padding:10px;font-size:14px">
-        <textarea name="body" rows="4" maxlength="5000" placeholder="Write to ${escEmail(first || 'them')}…"
+        <textarea name="body" rows="6" maxlength="${MESSAGE_MAX}" placeholder="Write to ${escEmail(first || 'them')}…"
                   style="font-size:14px;padding:10px">${escEmail(prefill)}</textarea>
         <div data-review style="display:none;margin:8px 0;padding:10px 12px;border-radius:10px;font-size:14px;line-height:1.45"></div>
         <div data-attach style="margin:8px 0;padding:8px 10px;border:1px dashed #c7d7fb;border-radius:8px;background:#fafcff">
@@ -22234,7 +22241,7 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
           var c = f.querySelector('input[name="channel"]:checked');
           var text = c && c.value === 'text';
           subj.style.display = text ? 'none' : '';
-          body.maxLength = text ? 300 : 5000;
+          body.maxLength = text ? 300 : ${MESSAGE_MAX};
           if (att) att.style.display = text ? 'none' : '';
         }
         /* Files: ticked ones already on the job, and uploads signed into the
@@ -22519,7 +22526,7 @@ app.post('/admin/quote/:code/message', requireAdmin, async (req, res) => {
   // A designer writes only to the customers of jobs that are with them.
   if (actorLevel('quotes.view') !== 'on' && !(await designJobFor(code, currentActor()))) return res.redirect(designHome());
   if (!text) return answer('msg_err', 'empty');
-  if (text.length > (channel === 'text' ? 300 : 5000)) return answer('msg_err', 'too-long');
+  if (text.length > (channel === 'text' ? 300 : MESSAGE_MAX)) return answer('msg_err', 'too-long');
 
   /* A helper in training writes the message; the owner sends it. So does any
      helper whose message asks to be paid outside the shop (Cash App, "pay me
@@ -23412,7 +23419,7 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
           : emptyState('All clear. Nothing is late, waiting or disputed.')}
       </div>
       <div class="card" id="todo">
-        <h2 class="card-title">To-do <span class="muted">${tasks.length || ''}</span></h2>
+        <h2 class="card-title">To-do <span class="muted">${tasks.length || ''}</span>${me == null ? ' <a href="/admin/tasks">all tasks &rarr;</a>' : ''}</h2>
         ${tasks.length ? `<div class="rows">${tasks.map((t) => {
           const due = t.due_on ? new Date(t.due_on).toISOString().slice(0, 10) : '';
           const todayIso = new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ });
@@ -28221,7 +28228,7 @@ app.post('/admin/approvals/:id', requireAdmin, async (req, res) => {
       /* Sent as the owner's decision, credited to the helper who wrote it. */
       const out = await actorStore.run({ ...OWNER_ACTOR, sentBy: a.requested_by }, () =>
         sendJobMessage({ code: a.subject_id, channel: p.channel === 'text' ? 'text' : 'email',
-                         subject: text(p.subject, 150) || `About your order ${a.subject_id}`, text: text(p.text, 5000),
+                         subject: text(p.subject, 150) || `About your order ${a.subject_id}`, text: text(p.text, MESSAGE_MAX),
                          attachments: typeof p.attachments === 'string' ? p.attachments : '[]' }));
       if (out !== 'sent') { await unclaim(); return back(res, '/admin/approvals', 'err', `Not sent: ${MESSAGE_ERRORS[out] || out}`); }
       await markProofsSent(a.subject_id, p.text);
@@ -28640,6 +28647,17 @@ function shiftRow(sh, { owner = false, pings = [] } = {}) {
   </div>`;
 }
 
+/* Clocked hours and the work schedule are one place (owner, 2026-10-14:
+   "merge work hours with my hours"): two tabs, one menu entry. */
+function hoursTabs(on) {
+  const staff = (currentActor() || OWNER_ACTOR).kind === 'staff';
+  return filterChips([
+    staff ? { label: 'My hours', href: '/admin/clock', on: on === 'clock' }
+      : { label: 'Clocked hours', href: '/admin/timeclock', on: on === 'clock' },
+    { label: 'Work schedule (CT + PH)', href: '/admin/work-schedule', on: on === 'schedule' },
+  ]);
+}
+
 app.get('/admin/clock', requireAdmin, async (req, res) => {
   const actor = currentActor();
   if (!actor || actor.kind !== 'staff') return res.redirect('/admin/timeclock');
@@ -28651,7 +28669,9 @@ app.get('/admin/clock', requireAdmin, async (req, res) => {
     res.set('Cache-Control', 'no-store');
     res.send(adminPage('My hours', `
       ${pageHeader('My hours', 'Clock in when you start and out when you stop. June pays the hours she approves each week. Time with nothing happening on the site for 30 minutes is shown to her; if you were working away from the screen, say what in your clock-out note.')}
+      ${hoursTabs('clock')}
       ${flash(req.query)}
+      ${await myShiftsCard(actor.id).catch((e) => { console.error('my hours shifts failed:', e.message); return ''; })}
       <div class="card">${open ? `<b>On the clock since ${escEmail(clockTime(open.started_at))}</b> (${TRAINING.hm(TIMECLOCK.shiftMinutes(open))})
         <form method="post" action="/admin/clock/out" data-once style="margin-top:8px">
           <label style="display:block">What did you work on? (optional, June sees it)
@@ -28721,7 +28741,8 @@ app.get('/admin/timeclock', requireAdmin, async (req, res) => {
     if (!who) {
       const weeks = await Promise.all(roster.map((r) => clockWeek(r.id, week).catch(() => null)));
       return res.send(adminPage('Timeclock', `
-        ${pageHeader(`Timeclock — week of ${weekLabel(week)}`, 'Clocked hours, what needs a look, and what you have approved. Approving a week writes its hours to Team, where wages are paid.', weekNav(null))}
+        ${pageHeader(`Hours — week of ${weekLabel(week)}`, 'Clocked hours, what needs a look, and what you have approved. Approving a week writes its hours to Team, where wages are paid.', weekNav(null))}
+        ${hoursTabs('clock')}
         ${flash(req.query)}
         <div class="card">${roster.length ? roster.map((r, i) => {
           const w = weeks[i];
@@ -28736,7 +28757,8 @@ app.get('/admin/timeclock', requireAdmin, async (req, res) => {
     const paid = w.hours.some((h) => h.paid_at);
     const tone = { red: '#b91c1c', amber: '#b45309', neutral: '#46505f' };
     res.send(adminPage('Timeclock', `
-      ${pageHeader(`Timeclock — ${who.name}, week of ${weekLabel(week)}`, 'Cut time you do not pay for on each shift, then approve the week.', weekNav(who.id))}
+      ${pageHeader(`Hours — ${who.name}, week of ${weekLabel(week)}`, 'Cut time you do not pay for on each shift, then approve the week.', weekNav(who.id))}
+      ${hoursTabs('clock')}
       <div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:12px">${chips(who.id)}</div>
       ${flash(req.query)}
       <div class="card"><b>${TRAINING.hm(w.minutes)} on the clock</b> (${TIMECLOCK.hoursOf(w.minutes)} hours)${w.open ? ' &middot; a shift is still running' : ''}
@@ -29582,7 +29604,7 @@ app.post('/admin/lead/:id/note', requireAdmin, async (req, res) => {
   const id = intIn(req.params.id);
   const b = req.body || {};
   const kind = NOTE_KINDS[b.kind] ? b.kind : 'note';
-  const body = text(b.body, 2000);
+  const body = text(b.body, MESSAGE_MAX);
   const backTo = safeAdminPath(b.back, '/admin/leads');
   if (!id || !body) return back(res, backTo, 'err', 'Write something first.');
   try {
@@ -29833,7 +29855,7 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
 
 app.post('/admin/quote/:code/note', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
-  const body = text(req.body && req.body.body, 2000);
+  const body = text(req.body && req.body.body, MESSAGE_MAX);
   const kind = NOTE_KINDS[req.body && req.body.kind] ? req.body.kind : 'note';
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/quotes');
   if (!body) return res.redirect(`/admin/production/${code}#notes`);
@@ -29860,7 +29882,7 @@ async function jobNotesCard(code) {
       || '<p class="muted">No notes yet.</p>'}
     <form method="post" action="/admin/quote/${escEmail(code)}/note" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
       <select name="kind">${Object.entries(NOTE_KINDS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
-      <textarea name="body" rows="2" maxlength="2000" placeholder="What happened, or what should change" style="flex:1 1 260px" required></textarea>
+      <textarea name="body" rows="4" maxlength="${MESSAGE_MAX}" placeholder="What happened, or what should change" style="flex:1 1 260px" required></textarea>
       <button type="submit" class="btn btn-ghost">Add note</button>
     </form></div>`;
 }
@@ -29964,7 +29986,7 @@ function leadWorkPanel(l, notes, roster, actor) {
     <form method="post" action="/admin/lead/${l.id}/note" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
       <input type="hidden" name="back" value="/admin/leads">
       <select name="kind">${Object.entries(NOTE_KINDS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
-      <textarea name="body" rows="2" maxlength="2000" required placeholder="Call, message or note" style="flex:1 1 220px"></textarea>
+      <textarea name="body" rows="4" maxlength="${MESSAGE_MAX}" required placeholder="Call, message or note" style="flex:1 1 220px"></textarea>
       <label class="muted" style="font-size:12px">follow up <input type="date" name="follow_up"></label>
       <button type="submit" class="btn btn-ghost">Save</button>
     </form>
@@ -30351,6 +30373,60 @@ app.get('/admin/tasks/:id/file/:n', requireAdmin, async (req, res) => {
   }
 });
 
+/* ── Tasks, a page of its own (owner, 2026-10-14: "make a separate area for
+   tasks on my end, they are only on the dashboard"). Every open task, by
+   person, with what was done lately and the Add a task form. Owner only
+   (ROUTES); a helper's tasks are on My Day. */
+app.get('/admin/tasks', requireAdmin, async (req, res) => {
+  try {
+    const roster = await staffRoster();
+    const who = String(req.query.who || '');
+    const whoId = /^\d{1,9}$/.test(who) ? Number(who) : null;
+    const filter = who === 'anyone' ? 'AND assigned_to IS NULL' : whoId ? 'AND assigned_to = $1' : '';
+    const args = whoId ? [whoId] : [];
+    const [{ rows: open }, { rows: done }, { rows: counts }] = await Promise.all([
+      pool.query(`SELECT * FROM staff_tasks WHERE done_at IS NULL ${filter} ORDER BY due_on NULLS LAST, created_at LIMIT 300`, args),
+      pool.query(`SELECT * FROM staff_tasks WHERE done_at > NOW() - interval '30 days' ${filter} ORDER BY done_at DESC LIMIT 200`, args),
+      pool.query('SELECT assigned_to, COUNT(*)::int AS n FROM staff_tasks WHERE done_at IS NULL GROUP BY assigned_to'),
+    ]);
+    const countOf = (id) => (counts.find((c) => c.assigned_to === id) || {}).n || 0;
+    const chips = [
+      { label: 'Everyone', href: '/admin/tasks', on: !who, count: counts.reduce((a, c) => a + c.n, 0) || null },
+      ...roster.filter((r) => r.active || countOf(r.id)).map((r) => ({ label: r.name, href: `/admin/tasks?who=${r.id}`, on: whoId === r.id, count: countOf(r.id) || null })),
+      { label: 'Anyone (unassigned)', href: '/admin/tasks?who=anyone', on: who === 'anyone', count: countOf(null) || null },
+    ];
+    const back = `/admin/tasks${who ? `?who=${encodeURIComponent(who)}` : ''}`;
+    const todayIso = new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ });
+    const row = (t) => {
+      const due = t.due_on ? new Date(t.due_on).toISOString().slice(0, 10) : '';
+      return `<div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal"><b>${escEmail(t.title)}</b>
+        ${t.done_at ? pill('completed', 'green') : t.started_at ? pill('started', 'blue') : t.assigned_to != null ? pill('not started', 'amber') : ''}
+        <div class="row-sub">${escEmail(BUSINESSES[t.business] || t.business)}${due ? ` &middot; due ${escEmail(fmtDate(t.due_on))}` : ''}${
+          t.assigned_to != null ? ` &middot; ${escEmail(nameOf(roster, t.assigned_to))}` : ' &middot; anyone'}${
+          t.started_at ? ` &middot; started ${escEmail(whenShort(t.started_at))}` : ''}${
+          t.done_at ? ` &middot; completed ${escEmail(whenShort(t.done_at))} by ${t.done_by == null ? 'you' : escEmail(nameOf(roster, t.done_by))}` : ''}</div>
+        ${taskDetailsHtml(t, OWNER_ACTOR, roster)}</span>
+        <span class="row-end">${!t.done_at && due && due < todayIso ? pill('overdue', 'red') : !t.done_at && due === todayIso ? pill('today', 'amber') : ''}
+          ${taskActionForm(t, back, false)}</span></div>`;
+    };
+    res.set('Cache-Control', 'no-store');
+    res.send(adminPage('Tasks', `${TASK_CSS}
+      ${pageHeader('Tasks', 'Everything you have handed out. A helper presses Start to accept a task, and says what they did to complete it.')}
+      ${flash(req.query)}
+      ${filterChips(chips)}
+      <details class="card" id="add"${open.length ? '' : ' open'}><summary><b>Add a task</b> <span class="muted">with the details, files and an order</span></summary>
+        ${await taskAddForm({ back, roster, owner: true })}</details>
+      <div class="card"><h2 class="card-title">Open <span class="muted">${open.length || ''}</span></h2>
+        ${open.length ? `<div class="rows">${open.map(row).join('')}</div>` : emptyState('Nothing open.')}</div>
+      <div class="card"><h2 class="card-title">Completed in the last 30 days <span class="muted">${done.length || ''}</span></h2>
+        ${done.length ? `<div class="rows">${done.map(row).join('')}</div>` : emptyState('Nothing completed in the last 30 days.')}</div>
+      ${TASK_UPLOAD_JS}`, 'tasks'));
+  } catch (err) {
+    console.error('tasks page failed:', err.message);
+    res.status(500).send(adminPage('Tasks', '<div class="card"><div class="warn">Could not load the tasks.</div></div>', 'tasks'));
+  }
+});
+
 /* ── Work hours (owner, 2026-10-14) ─────────────────────────────────────────
    "Add a schedule for work for the helper. Convert the time and show in
    Chicago time and Philippines time." The owner sets each helper's weekly
@@ -30424,22 +30500,23 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
           <input type="hidden" name="id" value="${Number(w.id)}"><button type="submit" class="btn btn-ghost">Remove</button></form></span></div>`).join('')
         || '<p class="muted">No shifts yet.</p>'}</div></details>` : '';
     res.set('Cache-Control', 'no-store');
-    res.send(adminPage('Work hours', `<style>
+    res.send(adminPage('Work schedule', `<style>
       .ws-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}
       .ws-day{background:#fff;border:1px solid #e3e8f2;border-radius:12px;padding:10px}
       .ws-head{font-weight:700;color:#0B1F4B;margin-bottom:6px}
       .ws-shift{border-top:1px solid #eef1f6;padding:6px 0;font-size:13px}
       .ws-shift:first-of-type{border-top:0}
     </style>
-      ${pageHeader('Work hours', 'Each shift in Chicago time (CT) and Philippines time (PH), for the real dates of the week, so daylight saving is already counted.',
+      ${pageHeader('Work schedule', 'Each shift in Chicago time (CT) and Philippines time (PH), for the real dates of the week, so daylight saving is already counted.',
         `<a class="btn btn-ghost" href="/admin/work-schedule?week=${SHIFTS.addDays(week, -7)}">&larr; Week before</a><a class="btn btn-ghost" href="/admin/work-schedule?week=${SHIFTS.addDays(week, 7)}">Week after &rarr;</a>`)}
+      ${hoursTabs('schedule')}
       ${flash(req.query)}
       <div class="card"><b>Hours this week</b> ${[...hours.entries()].map(([id, h]) => `<span class="muted" style="margin-left:10px">${escEmail(nameOf(roster, id))} ${Math.round(h * 10) / 10} h</span>`).join('') || '<span class="muted">none scheduled</span>'}</div>
       <div class="ws-grid">${days.map(dayCard).join('')}</div>
-      ${manage}`, 'shifts'));
+      ${manage}`, owner ? 'timeclock' : 'clock'));
   } catch (err) {
     console.error('work schedule failed:', err.message);
-    res.status(500).send(adminPage('Work hours', '<div class="card"><div class="warn">Could not load the work hours.</div></div>', 'shifts'));
+    res.status(500).send(adminPage('Work schedule', '<div class="card"><div class="warn">Could not load the work schedule.</div></div>', 'clock'));
   }
 });
 
@@ -30586,7 +30663,7 @@ app.post('/admin/resources/:id', requireAdmin, async (req, res) => {
    reaches their own; the owner picks whose. Lines are text the team typed:
    escaped on the page, and built with textContent when new ones arrive by
    polling, never as markup. */
-const TEAM_CHAT_MAX = 2000;
+const TEAM_CHAT_MAX = MESSAGE_MAX;
 const TEAM_CHAT_CSS = `<style>
 .tc-log{display:flex;flex-direction:column;gap:8px;max-height:60vh;overflow-y:auto;padding:4px 2px}
 .tc-line{max-width:78%;padding:8px 12px;border-radius:14px;background:#eef2f9;color:#0B1F4B;white-space:pre-wrap;
@@ -30885,7 +30962,7 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
           ${hidden}<input type="hidden" name="file_url"><input type="hidden" name="file_name">
           <label class="btn btn-ghost tc-attach" title="Send a file">&#128206; File
             <input type="file" accept="${CHATFILES.ACCEPT}" data-tcfile hidden></label>
-          <textarea name="body" rows="2" maxlength="${TEAM_CHAT_MAX}" placeholder="${escEmail(placeholder)}"></textarea>
+          <textarea name="body" rows="3" maxlength="${TEAM_CHAT_MAX}" placeholder="${escEmail(placeholder)}"></textarea>
           <button type="submit" class="btn" data-tcsend>Send</button>
         </form>
         <div class="tc-filestat muted" data-tcfilestat hidden></div>` : '<p class="muted">This helper is disabled, so the conversation is read-only.</p>'}
@@ -31747,7 +31824,7 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
       <div class="card"><b>Coaching notes</b>
         ${owner ? `<form method="post" action="/admin/feedback" style="margin:8px 0">
           <input type="hidden" name="staff_id" value="${staffId}">
-          <textarea name="body" rows="3" maxlength="2000" required placeholder="What they did well, and one thing to do differently" style="width:100%"></textarea>
+          <textarea name="body" rows="4" maxlength="${MESSAGE_MAX}" required placeholder="What they did well, and one thing to do differently" style="width:100%"></textarea>
           <button type="submit" class="btn btn-ghost" style="margin-top:6px">Add the note</button></form>` : ''}
         ${notes.length ? notes.map(coachingRow).join('') : '<p class="muted">No notes yet. Notes the owner leaves on your quotes and messages show here too.</p>'}</div>
       ${owner ? `<div class="card"><b>Page tips</b>
@@ -33540,7 +33617,7 @@ app.post('/admin/training/gap', requireAdmin, async (req, res) => {
 app.post('/admin/feedback', requireAdmin, async (req, res) => {
   const b = req.body || {};
   const staffId = intIn(b.staff_id);
-  const body = text(b.body, 2000);
+  const body = text(b.body, MESSAGE_MAX);
   const to = `/admin/training?staff=${staffId || ''}`;
   if (!staffId || !body) return back(res, to, 'err', 'Write the note first.');
   try {
