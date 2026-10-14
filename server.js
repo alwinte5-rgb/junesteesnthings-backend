@@ -4627,9 +4627,8 @@ async function recordSmsDelivery(p) {
 // ── Twilio calls ──────────────────────────────────────────────────────────────
 // In the Twilio console, set the number's "A call comes in" webhook to exactly
 // https://www.jtees.net/webhooks/twilio/voice (HTTP POST). Calls ring
-// TWILIO_TO_NUMBER after a short menu (tools/lib/voice.js).
+// TWILIO_TO_NUMBER from the shop number after a short menu (tools/lib/voice.js).
 const TWILIO_VOICE_BASE = (process.env.TWILIO_VOICE_BASE || 'https://www.jtees.net').trim().replace(/\/+$/, '');
-const ACCEPTED_CALLS = VOICE.acceptedCalls();
 
 /* Twilio signs the exact URL it requested, query string included. */
 function twilioVoiceOk(req, res) {
@@ -4667,29 +4666,24 @@ app.post(VOICE.PATHS.incoming, (req, res) => {
   sendTwiml(res, VOICE.incomingTwiml({ base: TWILIO_VOICE_BASE }));
 });
 
-app.post(VOICE.PATHS.menu, (req, res) => {
+app.post(VOICE.PATHS.menu, async (req, res) => {
   if (!twilioVoiceOk(req, res)) return;
-  sendTwiml(res, VOICE.menuTwiml({
-    digits: req.body.Digits, from: callerOf(req), owner: callOwner(), base: TWILIO_VOICE_BASE, open: VOICE.isOpen(),
-  }));
-});
-
-app.post(VOICE.PATHS.screen, (req, res) => {
-  if (!twilioVoiceOk(req, res)) return;
-  sendTwiml(res, VOICE.screenTwiml({ base: TWILIO_VOICE_BASE, reason: String(req.query.r || '') }));
-});
-
-app.post(VOICE.PATHS.accept, (req, res) => {
-  if (!twilioVoiceOk(req, res)) return;
-  if (VOICE.isAccept(req.body.Digits)) ACCEPTED_CALLS.add(req.body.ParentCallSid);
-  sendTwiml(res, VOICE.acceptTwiml(req.body.Digits));
+  const call = {
+    digits: req.body.Digits, from: callerOf(req), owner: callOwner(), open: VOICE.isOpen(),
+    shop: normalizeUsPhone(process.env.TWILIO_PHONE_NUMBER || ''),
+  };
+  sendTwiml(res, VOICE.menuTwiml({ ...call, base: TWILIO_VOICE_BASE }));
+  /* The cell shows the shop number, so who is calling arrives as a text. */
+  const reason = VOICE.ringReason(call);
+  if (reason) await sendOwnerSms(VOICE.ringText({ from: call.from, reason, name: req.body.CallerName }))
+    .catch((e) => console.error('ring text failed:', e.message));
 });
 
 /* The ring ended. Not accepted = missed, reported now: a caller who hangs up
    here never reaches the voicemail route. */
 app.post(VOICE.PATHS.done, async (req, res) => {
   if (!twilioVoiceOk(req, res)) return;
-  const accepted = ACCEPTED_CALLS.take(req.body.CallSid) && req.body.DialCallStatus === 'completed';
+  const accepted = req.body.DialCallStatus === 'completed';
   sendTwiml(res, VOICE.doneTwiml({ accepted, base: TWILIO_VOICE_BASE }));
   if (accepted) return;
   const from = callerOf(req);

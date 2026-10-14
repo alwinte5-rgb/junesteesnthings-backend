@@ -2,13 +2,10 @@
 
 /* Calls to the shop's Twilio number.
 
-   The caller hears a short menu. Choosing an order option (or nothing) rings
-   the owner's cell (TWILIO_TO_NUMBER) showing the CUSTOMER's number, so it can
-   be saved or called back. Before it connects the owner hears "June's Tees,
-   new order. Press 1 to answer", which tells a shop call from a personal one
-   and keeps the cell's own voicemail from taking it: no 1 pressed means not
-   answered. Unanswered calls get the shop greeting and a voicemail, and the
-   owner gets a text either way.
+   The caller hears a short menu. An order option (or no key) rings the
+   owner's cell (TWILIO_TO_NUMBER) from the shop number, and a text names the
+   caller as it rings. Unanswered, or outside shop hours, the caller gets the
+   shop voicemail; the owner is texted about every missed call.
 
    Every URL here is absolute and fixed, because Twilio's signature covers the
    exact URL it requested (see twilio-webhook.js). */
@@ -16,15 +13,15 @@
 const PATHS = {
   incoming: '/webhooks/twilio/voice',
   menu: '/webhooks/twilio/voice/menu',
-  screen: '/webhooks/twilio/voice/screen',
-  accept: '/webhooks/twilio/voice/accept',
   done: '/webhooks/twilio/voice/done',
   voicemail: '/webhooks/twilio/voice/voicemail',
 };
 
 const SHOP = "June's Tees";
 const SHOP_FULL = "June's Tees and Things";
-const RING_SECONDS = 20;
+/* Under a cell's own voicemail pickup (usually 25s+), so an unanswered
+   call reaches the shop voicemail rather than the owner's personal one. */
+const RING_SECONDS = 18;
 const VOICEMAIL_SECONDS = 120;
 const VOICE = 'Polly.Joanna';
 
@@ -102,42 +99,45 @@ function incomingTwiml({ base }) {
   return twiml(menuInner({ base }));
 }
 
-/* Ring the owner. `from` and `owner` are +1XXXXXXXXXX or ''. */
-function ringTwiml({ from, owner, base, reason = 'call', open = true }) {
+/* Ring the owner. The cell shows the SHOP number (`shop`), so a call saved
+   as "June's Tees Customer" reads as one before it is answered and is never
+   held by unknown-caller screening; who is calling comes in a text
+   (ringText). `from`, `owner` and `shop` are +1XXXXXXXXXX or ''. */
+function ringTwiml({ from, owner, shop, base, open = true }) {
   if (!open) return afterHoursTwiml(base);
   if (!owner || (from && from === owner)) return voicemailTwiml(base);
-  const r = Object.hasOwn(REASONS, reason) ? reason : 'call';
-  const callerId = from ? ` callerId="${xml(from)}"` : '';
-  const screenUrl = `${base}${PATHS.screen}?r=${r}`;
+  const callerId = shop ? ` callerId="${xml(shop)}"` : '';
   return twiml(
     say('One moment while we connect you.') +
     `<Dial timeout="${RING_SECONDS}" answerOnBridge="true"${callerId} action="${xml(base + PATHS.done)}" method="POST">` +
-    `<Number url="${xml(screenUrl)}" method="POST">${xml(owner)}</Number></Dial>`);
+    `<Number>${xml(owner)}</Number></Dial>`);
+}
+
+/* Why a menu choice rings the owner, or null when it does not ring. */
+function ringReason({ digits, from, owner, open = true }) {
+  if (!open || !owner || (from && from === owner)) return null;
+  const pick = MENU[String(digits || '').trim()];
+  if (!pick) return 'call';
+  return pick.reason || null;
+}
+
+/* The text that lands on the owner's cell as it rings. */
+function ringText({ from, reason, name }) {
+  const what = REASONS[Object.hasOwn(REASONS, reason) ? reason : 'call'];
+  const who = name ? `${String(name).replace(/[^\w .,'&-]/g, '').trim().slice(0, 40)} ` : '';
+  return `\u{1F4DE} ${what.charAt(0).toUpperCase() + what.slice(1)} from ${who}${pretty(from)}. Ringing you now.`;
 }
 
 /* What a menu key does. `digits` is '' when the caller pressed nothing. */
-function menuTwiml({ digits, from, owner, base, open = true }) {
+function menuTwiml({ digits, from, owner, shop, base, open = true }) {
   const pick = MENU[String(digits || '').trim()];
-  if (!pick) return ringTwiml({ from, owner, base, open });
+  if (!pick) return ringTwiml({ from, owner, shop, base, open });
   if (pick.info) return twiml(say(INFO) + menuInner({ base, again: true }));
   if (pick.voicemail) return twiml(say("Leave your name, number and what you need after the tone, and we'll get right back to you.") + recordTag(base) + '<Hangup/>');
-  return ringTwiml({ from, owner, base, reason: pick.reason, open });
+  return ringTwiml({ from, owner, shop, base, open });
 }
 
-/* What the owner hears on picking up. Hanging up here (no key, or a
-   voicemail greeting) leaves the call unanswered. */
-function screenTwiml({ base, reason }) {
-  const r = REASONS[Object.hasOwn(REASONS, reason) ? reason : 'call'];
-  return twiml(
-    `<Gather numDigits="1" timeout="6" action="${xml(base + PATHS.accept)}" method="POST">` +
-    say(`${SHOP}, ${r}. Press 1 to answer.`) + '</Gather><Hangup/>');
-}
-
-function acceptTwiml(digits) {
-  return isAccept(digits) ? twiml('') : twiml('<Hangup/>');
-}
-
-/* After the ring. `accepted` = the owner pressed 1 on this call. */
+/* After the ring. `accepted` = the owner's cell picked up. */
 function doneTwiml({ accepted, base }) {
   return accepted ? twiml('<Hangup/>') : voicemailTwiml(base);
 }
@@ -173,22 +173,8 @@ function callerNumber(raw, normalizeUs) {
 }
 
 const THANKS = () => twiml(say('Thank you. Goodbye.') + '<Hangup/>');
-const isAccept = (digits) => String(digits || '').trim() === '1';
-
-/* Calls the owner accepted, by the customer's call id, until the ring's
-   `done` request reads them. In memory: a restart mid-call can only cost the
-   caller a voicemail prompt after the conversation already ended. */
-function acceptedCalls(ttlMs = 2 * 60 * 60 * 1000) {
-  const seen = new Map();
-  const sweep = (now) => { for (const [k, t] of seen) if (now - t > ttlMs) seen.delete(k); };
-  return {
-    add(sid, now = Date.now()) { if (sid) { sweep(now); seen.set(String(sid), now); } },
-    take(sid) { const had = seen.has(String(sid)); seen.delete(String(sid)); return had; },
-    size: () => seen.size,
-  };
-}
 
 module.exports = {
-  PATHS, MENU, incomingTwiml, menuTwiml, ringTwiml, screenTwiml, acceptTwiml, doneTwiml,
-  voicemailTwiml, afterHoursTwiml, isOpen, missedCallText, voicemailText, callerNumber, isAccept, THANKS, acceptedCalls, pretty,
+  PATHS, MENU, incomingTwiml, menuTwiml, ringTwiml, ringReason, ringText, doneTwiml,
+  voicemailTwiml, afterHoursTwiml, isOpen, missedCallText, voicemailText, callerNumber, THANKS, pretty,
 };

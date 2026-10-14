@@ -9,6 +9,7 @@ const { twilioSignature, verifyTwilioSignature } = require('../tools/lib/twilio-
 
 const base = 'https://www.jtees.net';
 const owner = '+17738491854';
+const shop = '+17739004592';
 const from = '+13125550199';
 
 test('a call opens on the menu, and silence falls through to the menu handler', () => {
@@ -19,20 +20,34 @@ test('a call opens on the menu, and silence falls through to the menu handler', 
   assert.match(t, /<\/Gather><Redirect method="POST">https:\/\/www\.jtees\.net\/webhooks\/twilio\/voice\/menu<\/Redirect>/);
 });
 
-test('1 and 2 ring the owner with the caller shown, and say why on pickup', () => {
-  for (const [digit, r] of [['1', 'new'], ['2', 'existing']]) {
-    const t = V.menuTwiml({ digits: digit, from, owner, base });
-    assert.match(t, new RegExp(`<Dial [^>]*callerId="\\${from}"`));
+test('1 and 2 ring the owner from the shop number, with no step that can be screened', () => {
+  for (const digit of ['1', '2']) {
+    const t = V.menuTwiml({ digits: digit, from, owner, shop, base });
+    assert.match(t, /<Dial [^>]*callerId="\+17739004592"/);
+    assert.match(t, /<Dial [^>]*timeout="18"/);
     assert.match(t, /action="https:\/\/www\.jtees\.net\/webhooks\/twilio\/voice\/done"/);
-    assert.match(t, new RegExp(`<Number url="https://www\\.jtees\\.net/webhooks/twilio/voice/screen\\?r=${r}" method="POST">\\${owner}</Number>`));
+    assert.match(t, /<Number>\+17738491854<\/Number>/);
+    assert.doesNotMatch(t, /url=|<Gather/);
   }
-  assert.match(V.screenTwiml({ base, reason: 'new' }), /June&apos;s Tees, new order\. Press 1 to answer/);
-  assert.match(V.screenTwiml({ base, reason: 'existing' }), /existing order/);
+});
+
+test('the owner is texted who is calling, only when the cell will ring', () => {
+  assert.equal(V.ringReason({ digits: '1', from, owner }), 'new');
+  assert.equal(V.ringReason({ digits: '2', from, owner }), 'existing');
+  assert.equal(V.ringReason({ digits: '', from, owner }), 'call');
+  assert.equal(V.ringReason({ digits: '3', from, owner }), null);
+  assert.equal(V.ringReason({ digits: '4', from, owner }), null);
+  assert.equal(V.ringReason({ digits: '1', from, owner, open: false }), null);
+  assert.equal(V.ringReason({ digits: '1', from: owner, owner }), null);
+  assert.equal(V.ringReason({ digits: '1', from, owner: '' }), null);
+  assert.equal(V.ringText({ from, reason: 'new' }), '\u{1F4DE} New order from (312) 555-0199. Ringing you now.');
+  assert.equal(V.ringText({ from, reason: 'existing', name: 'KIM LEE' }), '\u{1F4DE} Existing order from KIM LEE (312) 555-0199. Ringing you now.');
+  assert.doesNotMatch(V.ringText({ from, reason: 'call', name: '<b>x</b>\nhttp://evil' }), /[<>\n:\/]/);
 });
 
 test('no key pressed still rings a person', () => {
   assert.match(V.menuTwiml({ digits: '', from, owner, base }), /<Dial /);
-  assert.match(V.menuTwiml({ digits: '9', from, owner, base }), /screen\?r=call/);
+  assert.match(V.menuTwiml({ digits: '9', from, owner, shop, base }), /<Dial /);
 });
 
 test('3 reads the hours and address, then the menu again', () => {
@@ -60,18 +75,6 @@ test('no owner number, or the owner calling in, goes to voicemail rather than a 
   assert.match(V.menuTwiml({ digits: '1', from: owner, owner, base }), /<Record /);
 });
 
-test('the owner must press 1: anything else hangs up their leg', () => {
-  assert.doesNotMatch(V.acceptTwiml('1'), /Hangup/);
-  for (const d of ['', '2', '#', undefined]) assert.match(V.acceptTwiml(d), /<Hangup\/>/);
-  assert.match(V.screenTwiml({ base, reason: 'call' }), /<\/Gather><Hangup\/>/);
-});
-
-test('after the ring: accepted ends, anything else gets the voicemail', () => {
-  assert.match(V.doneTwiml({ accepted: true, base }), /<Hangup\/>/);
-  assert.doesNotMatch(V.doneTwiml({ accepted: true, base }), /Record/);
-  assert.match(V.doneTwiml({ accepted: false, base }), /<Record /);
-});
-
 test('after hours, an order call goes to the closed greeting and voicemail, never the cell', () => {
   const t = V.menuTwiml({ digits: '1', from, owner, base, open: false });
   assert.match(t, /We&apos;re closed right now/);
@@ -92,19 +95,6 @@ test('shop hours are Mon-Fri 10:30-6 Chicago time, across daylight saving', () =
   assert.equal(at('2026-12-16T07:00:00Z'), false);   // Wed 1 AM CST
 });
 
-test('accepted calls are taken once and expire', () => {
-  const a = V.acceptedCalls(1000);
-  a.add('CA1', 0);
-  assert.equal(a.take('CA1'), true);
-  assert.equal(a.take('CA1'), false);
-  a.add('CA2', 0);
-  a.add('CA3', 5000);
-  assert.equal(a.take('CA2'), false);
-  assert.equal(a.take('CA3'), true);
-  a.add(undefined);
-  assert.equal(a.size(), 0);
-});
-
 test('a missed call is texted at once, and a voicemail only when one was recorded', () => {
   assert.match(V.missedCallText({ from }), /^Missed call from \(312\) 555-0199\./);
   const rec = 'https://api.twilio.com/2010-04-01/Accounts/AC1/Recordings/RE1';
@@ -121,7 +111,7 @@ test('callers outside the US keep their number', () => {
   assert.equal(V.callerNumber('+442071234567', us), '+442071234567');
   assert.equal(V.callerNumber('anonymous', us), '');
   assert.equal(V.pretty('+442071234567'), '+442071234567');
-  assert.match(V.menuTwiml({ digits: '1', from: '+442071234567', owner, base }), /callerId="\+442071234567"/);
+  assert.match(V.missedCallText({ from: '+442071234567' }), /\+442071234567/);
 });
 
 test('the server reports missed calls from the ring result, and skips the owner', () => {
@@ -134,17 +124,15 @@ test('the server reports missed calls from the ring result, and skips the owner'
   assert.doesNotMatch(vm.split('reportCall(')[1] || '', /recordingUrl\s*[,)]/, 'the lead note never carries the link');
 });
 
+test('after the ring: answered ends, anything else gets the voicemail', () => {
+  assert.match(V.doneTwiml({ accepted: true, base }), /<Hangup\/>/);
+  assert.doesNotMatch(V.doneTwiml({ accepted: true, base }), /Record/);
+  assert.match(V.doneTwiml({ accepted: false, base }), /<Record /);
+});
+
 test('caller-controlled text is escaped in TwiML', () => {
   const t = V.menuTwiml({ digits: '1', from: '+1312"><Hangup/>', owner, base });
   assert.doesNotMatch(t, /"><Hangup\/>/);
-});
-
-test('the screen URL signs and verifies as Twilio requests it', () => {
-  const url = `${base}${V.PATHS.screen}?r=new`;
-  const params = { CallSid: 'CA9', From: owner };
-  const sig = twilioSignature('tok', url, params);
-  assert.ok(verifyTwilioSignature('tok', url, params, sig));
-  assert.ok(!verifyTwilioSignature('tok', `${base}${V.PATHS.screen}?r=existing`, params, sig));
 });
 
 test('every call route checks the Twilio signature first', () => {
