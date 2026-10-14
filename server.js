@@ -29997,13 +29997,21 @@ const seenSpan = (seen, id) => seen[id] ? `<span class="tc-seen" data-seen="${Nu
 
 function chatLineJson(m) {
   const mine = (currentActor() || OWNER_ACTOR).kind === 'staff' ? !m.from_owner : m.from_owner;
-  return { id: Number(m.id), mine, body: m.body, file: CHATFILES.fileOf(m, QPHOTOS.cloudName()), when: whenShort(m.created_at) };
+  return { id: Number(m.id), mine, body: m.body, file: chatFileJson(m, 'dm'), when: whenShort(m.created_at) };
+}
+
+/** A message's file for the page: pictures load from storage, anything else
+ *  opens through /admin/team-chat/file/, which checks the reader may see it. */
+function chatFileJson(m, kind) {
+  const f = CHATFILES.fileOf(m, QPHOTOS.cloudName());
+  if (!f) return null;
+  return { ...f, href: f.image ? f.url : `/admin/team-chat/file/${kind}/${Number(m.id)}` };
 }
 
 function channelLineJson(m, roster) {
   const a = currentActor() || OWNER_ACTOR;
   const mine = a.kind === 'staff' ? m.staff_id === a.id : m.staff_id == null;
-  return { id: Number(m.id), mine, body: m.body, file: CHATFILES.fileOf(m, QPHOTOS.cloudName()), when: whenShort(m.created_at),
+  return { id: Number(m.id), mine, body: m.body, file: chatFileJson(m, 'ch'), when: whenShort(m.created_at),
     who: mine ? '' : (m.staff_id == null ? 'June' : nameOf(roster, m.staff_id)) };
 }
 
@@ -30012,7 +30020,7 @@ function chatLineHtml(j, seen) {
   const f = j.file;
   const file = !f ? '' : f.image
     ? `<a class="tc-file" href="${escEmail(f.url)}" target="_blank" rel="noopener"><img src="${escEmail(f.url)}" alt="${escEmail(f.name)}" loading="lazy"></a>`
-    : `<a class="tc-file tc-doc" href="${escEmail(f.url)}" target="_blank" rel="noopener">&#128206; ${escEmail(f.name)}</a>`;
+    : `<a class="tc-file tc-doc" href="${escEmail(f.href)}">&#128206; ${escEmail(f.name)}</a>`;
   return `<div class="tc-line${j.mine ? ' me' : ''}">${j.who ? `<b class="tc-who">${escEmail(j.who)}</b>` : ''}${
     j.body ? escEmail(j.body) : ''}${file}<span class="tc-when">${escEmail(j.when)}</span>${j.mine ? seenSpan(seen, j.id) : ''}</div>`;
 }
@@ -30152,8 +30160,18 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
             var ta = f.querySelector('textarea'), send = f.querySelector('[data-tcsend]');
             var fin = f.querySelector('[data-tcfile]'), fst = document.querySelector('[data-tcfilestat]');
             var fu = f.querySelector('[name="file_url"]'), fn = f.querySelector('[name="file_name"]');
-            var uploading = false;
-            function stat(t){ fst.textContent = t; fst.hidden = !t; }
+            var uploading = false, seq = 0;
+            var EXTS = ${JSON.stringify(CHATFILES.EXTS)};
+            /* The status line, with a Remove button while a file is attached. */
+            function stat(t, removable){
+              fst.textContent = t; fst.hidden = !t;
+              if (removable) {
+                var x = document.createElement('button'); x.type = 'button'; x.className = 'btn btn-ghost'; x.textContent = 'Remove';
+                x.style.marginLeft = '8px';
+                x.addEventListener('click', function(){ seq++; fu.value = ''; fn.value = ''; fin.value = ''; uploading = false; send.disabled = false; stat(''); });
+                fst.appendChild(x);
+              }
+            }
             ta.addEventListener('keydown', function(e){
               if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (ta.value.trim() || fu.value) f.requestSubmit(); }
             });
@@ -30162,8 +30180,11 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
             fin.addEventListener('change', function(){
               var file = fin.files && fin.files[0]; if (!file) return;
               fu.value = ''; fn.value = '';
+              var mine = ++seq;
+              if (EXTS.indexOf(String(file.name.split('.').pop()).toLowerCase()) < 0 || file.name.indexOf('.') < 0) {
+                stat(file.name + ' is not a file type the chat takes. Send a PDF, a picture, a design file, an Office file or a ZIP.'); fin.value = ''; return; }
               if (file.size > ${CLOUDINARY_UPLOAD_MAX}) { stat(file.name + ' is over 10 MB, the most our file storage takes. Send a smaller copy.'); fin.value = ''; return; }
-              uploading = true; send.disabled = true; stat('Uploading ' + file.name + '…');
+              uploading = true; send.disabled = true; stat('Uploading ' + file.name + '…', true);
               fetch('/admin/api/chat-file-signature', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' })
                 .then(function(r){ if (!r.ok) throw new Error('signature'); return r.json(); })
                 .then(function(sig){
@@ -30175,12 +30196,13 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
                 })
                 .then(function(r){ return r.json(); })
                 .then(function(d){
+                  if (mine !== seq) return;   /* replaced or removed meanwhile */
                   if (!d || !d.secure_url) throw new Error(d && d.error && d.error.message ? d.error.message : 'upload');
                   fu.value = d.secure_url; fn.value = file.name;
-                  stat('Ready to send: ' + file.name + '. Add a message if you like, then press Send.');
+                  stat('Ready to send: ' + file.name + '. Add a message if you like, then press Send.', true);
                 })
-                .catch(function(e){ fin.value = ''; stat('The file did not upload' + (e && e.message && e.message !== 'upload' && e.message !== 'signature' ? ' (' + e.message + ')' : '') + '. Try again.'); })
-                .then(function(){ uploading = false; send.disabled = false; });
+                .catch(function(e){ if (mine !== seq) return; fin.value = ''; stat('The file did not upload' + (e && e.message && e.message !== 'upload' && e.message !== 'signature' ? ' (' + e.message + ')' : '') + '. Try again.'); })
+                .then(function(){ if (mine === seq) { uploading = false; send.disabled = false; } });
             });
             f.addEventListener('submit', function(e){
               if (uploading || (!ta.value.trim() && !fu.value)) { e.preventDefault(); if (!uploading) ta.focus(); return; }
@@ -30209,10 +30231,12 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
             });
           }
           tabs(${JSON.stringify(tabCounts)});
+          var hiddenTicks = 0;
           function poll(){
             /* While the page is out of sight only the counts are fetched, which
                marks nothing read, so the title can still say a message came. */
             if (document.hidden) {
+              if (++hiddenTicks % 4) return;   /* once a minute while out of sight */
               fetch('/admin/api/team-chat?counts=1', { credentials: 'same-origin', cache: 'no-store' })
                 .then(function(r){ return r.ok ? r.json() : null; }).then(function(d){ if (d) tabs(d.tabs); }).catch(function(){});
               return;
@@ -30234,7 +30258,8 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
                   if (m.body) el.appendChild(document.createTextNode(m.body));
                   if (m.file) {
                     var fa = document.createElement('a'); fa.className = 'tc-file' + (m.file.image ? '' : ' tc-doc');
-                    fa.href = m.file.url; fa.target = '_blank'; fa.rel = 'noopener';
+                    fa.href = m.file.href;
+                    if (m.file.image) { fa.target = '_blank'; fa.rel = 'noopener'; }
                     if (m.file.image) { var im = document.createElement('img'); im.src = m.file.url; im.alt = m.file.name; im.loading = 'lazy'; fa.appendChild(im); }
                     else fa.textContent = '\u{1F4CE} ' + m.file.name;
                     el.appendChild(fa);
@@ -30267,9 +30292,8 @@ app.post('/admin/team-chat', requireAdmin, async (req, res) => {
   const fileName = CHATFILES.cleanName(b.file_name) || 'File';
   try {
     const [roster, channels] = await Promise.all([staffRoster(), teamChannels()]);
-    if (fileUrl && !CHATFILES.fileUrlOk(fileUrl, QPHOTOS.cloudName())) {
-      return back(res, '/admin/team-chat', 'err', 'That file could not be sent. Pick it again.');
-    }
+    const badFile = fileUrl && !CHATFILES.fileUrlOk(fileUrl, QPHOTOS.cloudName());
+    const FILE_ERR = 'That file could not be sent. Pick it again.';
     const file = fileUrl ? [fileUrl, fileName] : [null, null];
     /* A channel message: only in a channel this person may use, which the
        server decides from their own track, never from the form. */
@@ -30277,6 +30301,7 @@ app.post('/admin/team-chat', requireAdmin, async (req, res) => {
       const ch = chatChannelFor(b.channel, channels, roster);
       if (!ch) return back(res, '/admin/team-chat', 'err', 'That channel is not one of yours.');
       const backTo = `/admin/team-chat?channel=${ch.id}`;
+      if (badFile) return back(res, backTo, 'err', FILE_ERR);
       if (!body && !fileUrl) return back(res, backTo, 'err', 'Write something or pick a file first.');
       if (body.length > TEAM_CHAT_MAX) return back(res, backTo, 'err', `That is too long. Keep it under ${TEAM_CHAT_MAX} characters.`);
       const author = actor.kind === 'staff' ? actor.id : null;
@@ -30291,6 +30316,7 @@ app.post('/admin/team-chat', requireAdmin, async (req, res) => {
     const staffId = chatThreadFor(b.staff, roster);
     const backTo = actor.kind === 'staff' || !staffId ? '/admin/team-chat' : `/admin/team-chat?staff=${staffId}`;
     if (!staffId) return back(res, '/admin/team-chat', 'err', 'Pick who to message.');
+    if (badFile) return back(res, backTo, 'err', FILE_ERR);
     if (!body && !fileUrl) return back(res, backTo, 'err', 'Write something or pick a file first.');
     if (body.length > TEAM_CHAT_MAX) return back(res, backTo, 'err', `That is too long. Keep it under ${TEAM_CHAT_MAX} characters.`);
     const who = roster.find((r) => r.id === staffId);
@@ -30357,6 +30383,42 @@ app.post('/admin/api/chat-file-signature', requireAdmin, (req, res) => {
   const signature = cloudinary.utils.api_sign_request({ folder: CHATFILES.FOLDER, timestamp }, apiSecret);
   res.set('Cache-Control', 'no-store');
   res.json({ signature, timestamp, folder: CHATFILES.FOLDER, cloud, apiKey: process.env.CLOUDINARY_API_KEY });
+});
+
+/* A file from a chat message, for someone who may read that conversation:
+   their own direct chat (any, for the owner) or a channel they belong to.
+   Fetched through Cloudinary's signed download, which works for PDFs and
+   ZIPs where the plain address is refused, and handed over as a download. */
+app.get('/admin/team-chat/file/:kind/:id', requireAdmin, async (req, res) => {
+  const kind = String(req.params.kind);
+  const id = /^\d{1,15}$/.test(String(req.params.id)) ? req.params.id : null;
+  if (!id || !['dm', 'ch'].includes(kind)) return res.status(404).send('Not found.');
+  try {
+    const actor = currentActor() || OWNER_ACTOR;
+    const roster = await staffRoster();
+    let m = null;
+    if (kind === 'dm') {
+      ({ rows: [m] } = await pool.query('SELECT staff_id, file_url, file_name FROM team_messages WHERE id = $1', [id]));
+      if (m && actor.kind === 'staff' && m.staff_id !== actor.id) m = null;
+    } else {
+      ({ rows: [m] } = await pool.query('SELECT channel_id, file_url, file_name FROM team_channel_messages WHERE id = $1', [id]));
+      if (m && !chatChannelFor(m.channel_id, await teamChannels(), roster)) m = null;
+    }
+    const src = m && m.file_url ? CHATFILES.downloadSource(m.file_url, QPHOTOS.cloudName()) : null;
+    if (!src) return res.status(404).send('That file is not in your chat.');
+    const r = await fetch(cloudinary.utils.private_download_url(src.publicId, src.format, { resource_type: src.resourceType, type: 'upload' }));
+    if (!r.ok || !r.body) throw new Error(`Cloudinary answered ${r.status}`);
+    const name = MSGFILES.cleanName(m.file_name, src.ext);
+    res.set('Content-Type', 'application/octet-stream');
+    res.set('Content-Disposition', `attachment; filename="${name.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(name)}`);
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.set('Cache-Control', 'private, no-store');
+    pipeline(Readable.fromWeb(r.body), res, (e) => { if (e) console.error('chat file stream cut off:', e.message); });
+  } catch (err) {
+    console.error(`chat file ${kind}/${req.params.id} failed:`, err.message);
+    if (!res.headersSent) res.status(502).send('Could not fetch that file just now. Try again.');
+    else res.destroy(err);
+  }
 });
 
 app.get('/admin/api/team-chat', requireAdmin, async (req, res) => {

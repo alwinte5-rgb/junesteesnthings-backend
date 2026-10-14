@@ -62,3 +62,23 @@ test('sending checks the file address before saving it', () => {
   const body = src.slice(at, at + 1500);
   assert.match(body, /CHATFILES\.fileUrlOk\(fileUrl, QPHOTOS\.cloudName\(\)\)/);
 });
+
+test('a file opens through the signed download, by its stored public id', () => {
+  assert.deepStrictEqual(F.downloadSource(url('raw', 'brief.pdf'), cloud),
+    { resourceType: 'raw', publicId: 'team_chat/brief.pdf', format: '', ext: 'pdf' });
+  assert.deepStrictEqual(F.downloadSource(url('image', 'p.png'), cloud),
+    { resourceType: 'image', publicId: 'team_chat/p', format: 'png', ext: 'png' });
+  assert.strictEqual(F.downloadSource('https://evil.example/team_chat/a.pdf', cloud), null);
+});
+
+test('the file route checks who may read the conversation before fetching', () => {
+  const at = src.indexOf("app.get('/admin/team-chat/file/:kind/:id'");
+  assert.ok(at > 0);
+  const body = src.slice(at, src.indexOf('\n});\n', at));
+  assert.match(body, /m\.staff_id !== actor\.id/, 'a helper only their own direct chat');
+  assert.match(body, /chatChannelFor\(m\.channel_id/, 'only a channel they belong to');
+  assert.match(body, /private_download_url/);
+  assert.match(body, /application\/octet-stream/);
+  assert.match(body, /nosniff/);
+  assert.strictEqual(require('../tools/lib/staff').ROUTES['GET /admin/team-chat/file/:kind/:id'], 'any');
+});

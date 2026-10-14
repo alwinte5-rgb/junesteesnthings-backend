@@ -417,6 +417,7 @@ const ROUTES = {
   'POST /admin/team-chat': 'any',
   'GET /admin/api/team-chat': 'any',
   'POST /admin/api/chat-file-signature': 'any',
+  'GET /admin/team-chat/file/:kind/:id': 'any',
   'POST /admin/team-chat/alerts': 'any',
   'POST /admin/team-chat/channels': 'owner',
   'GET /admin/staff': 'owner',

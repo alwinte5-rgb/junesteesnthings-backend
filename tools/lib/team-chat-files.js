@@ -41,4 +41,17 @@ function fileOf(row, cloud) {
     image: p.type === 'image' && IMAGE_EXTS.includes(p.ext) && !['heic', 'heif'].includes(p.ext) };
 }
 
-module.exports = { FOLDER, EXTS, ACCEPT, NAME_MAX, fileUrlOk, cleanName, fileOf };
+/** What Cloudinary's signed download API needs to hand back the file. The
+ *  plain delivery address is refused for PDFs and ZIPs on this account, so
+ *  anything that is not shown as a picture is opened through the server
+ *  (GET /admin/team-chat/file/...), as the job page's files are. */
+function downloadSource(url, cloud) {
+  const p = parse(url, cloud);
+  if (!p) return null;
+  const file = /\/upload\/(?:v\d+\/)?(.+)$/.exec(url)[1];
+  return p.type === 'raw'
+    ? { resourceType: 'raw', publicId: file, format: '', ext: p.ext }
+    : { resourceType: 'image', publicId: file.replace(/\.[A-Za-z0-9]+$/, ''), format: p.ext, ext: p.ext };
+}
+
+module.exports = { FOLDER, EXTS, ACCEPT, NAME_MAX, fileUrlOk, cleanName, fileOf, downloadSource };
