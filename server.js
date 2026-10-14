@@ -4644,7 +4644,23 @@ function twilioVoiceOk(req, res) {
 }
 
 const callOwner = () => normalizeUsPhone(process.env.TWILIO_TO_NUMBER || '');
+const callerOf = (req) => VOICE.callerNumber(req.body.From, normalizeUsPhone);
 const sendTwiml = (res, body) => res.type('text/xml').send(body);
+const callSidOf = (req) => String(req.body.CallSid || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 64);
+
+/* Tell the owner and keep the call as a lead, so it is followed up like a
+   text. The owner's own calls are neither. */
+async function reportCall(from, sid, ownerText, leadText, kind) {
+  if (from && from === callOwner()) return;
+  await sendOwnerSms(ownerText).catch((e) => {
+    console.error(`${kind} text failed:`, e.message);
+    reportError(`twilio:${kind}`, e).catch(() => {});
+  });
+  if (from && /^\+1\d{10}$/.test(from)) await textToLead(from, leadText, sid ? `${kind}-${sid}` : '').catch((e) => {
+    console.error(`${kind} lead failed:`, e.message);
+    reportError(`twilio:${kind}-lead`, e).catch(() => {});
+  });
+}
 
 app.post(VOICE.PATHS.incoming, (req, res) => {
   if (!twilioVoiceOk(req, res)) return;
@@ -4654,7 +4670,7 @@ app.post(VOICE.PATHS.incoming, (req, res) => {
 app.post(VOICE.PATHS.menu, (req, res) => {
   if (!twilioVoiceOk(req, res)) return;
   sendTwiml(res, VOICE.menuTwiml({
-    digits: req.body.Digits, from: normalizeUsPhone(req.body.From), owner: callOwner(), base: TWILIO_VOICE_BASE,
+    digits: req.body.Digits, from: callerOf(req), owner: callOwner(), base: TWILIO_VOICE_BASE,
   }));
 });
 
@@ -4665,32 +4681,31 @@ app.post(VOICE.PATHS.screen, (req, res) => {
 
 app.post(VOICE.PATHS.accept, (req, res) => {
   if (!twilioVoiceOk(req, res)) return;
-  if (String(req.body.Digits || '').trim() === '1') ACCEPTED_CALLS.add(req.body.ParentCallSid);
+  if (VOICE.isAccept(req.body.Digits)) ACCEPTED_CALLS.add(req.body.ParentCallSid);
   sendTwiml(res, VOICE.acceptTwiml(req.body.Digits));
 });
 
-app.post(VOICE.PATHS.done, (req, res) => {
+/* The ring ended. Not accepted = missed, reported now: a caller who hangs up
+   here never reaches the voicemail route. */
+app.post(VOICE.PATHS.done, async (req, res) => {
   if (!twilioVoiceOk(req, res)) return;
   const accepted = ACCEPTED_CALLS.take(req.body.CallSid) && req.body.DialCallStatus === 'completed';
   sendTwiml(res, VOICE.doneTwiml({ accepted, base: TWILIO_VOICE_BASE }));
+  if (accepted) return;
+  const from = callerOf(req);
+  const text = VOICE.missedCallText({ from });
+  await reportCall(from, callSidOf(req), text, 'Missed phone call (no answer).', 'missed-call');
 });
 
-/* The caller hung up or finished a message: tell the owner and keep it as a
-   lead, so a missed call is followed up like a text. */
+/* A message was left. The recording link goes to the owner only. */
 app.post(VOICE.PATHS.voicemail, async (req, res) => {
   if (!twilioVoiceOk(req, res)) return;
-  sendTwiml(res, '<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="Polly.Joanna">Thank you. Goodbye.</Say><Hangup/></Response>');
-  const from = normalizeUsPhone(req.body.From);
-  const note = VOICE.missedCallText({ from, recordingUrl: req.body.RecordingUrl, seconds: req.body.RecordingDuration });
-  const callSid = String(req.body.CallSid || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 64);
-  await sendOwnerSms(note).catch((e) => {
-    console.error('missed-call text failed:', e.message);
-    reportError('twilio:voicemail', e).catch(() => {});
-  });
-  if (from) await textToLead(from, note, callSid ? 'call-' + callSid : '').catch((e) => {
-    console.error('missed-call lead failed:', e.message);
-    reportError('twilio:voicemail-lead', e).catch(() => {});
-  });
+  sendTwiml(res, VOICE.THANKS());
+  const from = callerOf(req);
+  const text = VOICE.voicemailText({ from, recordingUrl: req.body.RecordingUrl, seconds: req.body.RecordingDuration });
+  if (!text) return;
+  const secs = Math.max(0, parseInt(req.body.RecordingDuration, 10) || 0);
+  await reportCall(from, callSidOf(req), text, `Left a ${secs}s voicemail by phone. The recording link is in the owner's text.`, 'voicemail');
 });
 
 app.post('/webhooks/twilio/status', async (req, res) => {

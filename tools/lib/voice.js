@@ -67,14 +67,18 @@ function voicemailTwiml(base) {
 
 /* The first answer to a call: the menu. No key pressed falls through to
    ringing the owner, so a caller who just waits still reaches a person. */
-function incomingTwiml({ base, again = false }) {
+function menuInner({ base, again = false }) {
   const greet = again ? '' : `Thanks for calling ${SHOP_FULL}. `;
-  return twiml(
+  return (
     `<Gather numDigits="1" timeout="5" action="${xml(base + PATHS.menu)}" method="POST">` +
     say(`${greet}For a new order or a quote, press 1. About an order you've already placed, press 2. ` +
       'For our hours and address, press 3. To leave a message, press 4.') +
     '</Gather>' +
     `<Redirect method="POST">${xml(base + PATHS.menu)}</Redirect>`);
+}
+
+function incomingTwiml({ base }) {
+  return twiml(menuInner({ base }));
 }
 
 /* Ring the owner. `from` and `owner` are +1XXXXXXXXXX or ''. */
@@ -93,7 +97,7 @@ function ringTwiml({ from, owner, base, reason = 'call' }) {
 function menuTwiml({ digits, from, owner, base }) {
   const pick = MENU[String(digits || '').trim()];
   if (!pick) return ringTwiml({ from, owner, base });
-  if (pick.info) return twiml(say(INFO) + incomingTwiml({ base, again: true }).replace(/^.*?<Response>|<\/Response>$/g, ''));
+  if (pick.info) return twiml(say(INFO) + menuInner({ base, again: true }));
   if (pick.voicemail) return twiml(say("Leave your name, number and what you need after the tone, and we'll get right back to you.") + recordTag(base) + '<Hangup/>');
   return ringTwiml({ from, owner, base, reason: pick.reason });
 }
@@ -108,7 +112,7 @@ function screenTwiml({ base, reason }) {
 }
 
 function acceptTwiml(digits) {
-  return String(digits || '').trim() === '1' ? twiml('') : twiml('<Hangup/>');
+  return isAccept(digits) ? twiml('') : twiml('<Hangup/>');
 }
 
 /* After the ring. `accepted` = the owner pressed 1 on this call. */
@@ -117,17 +121,37 @@ function doneTwiml({ accepted, base }) {
 }
 
 function pretty(e164) {
-  const d = String(e164 || '').replace(/\D/g, '').slice(-10);
-  return d.length === 10 ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}` : 'an unknown number';
+  const s = String(e164 || '');
+  if (/^\+1\d{10}$/.test(s)) return `(${s.slice(2, 5)}) ${s.slice(5, 8)}-${s.slice(8)}`;
+  return /^\+\d{8,15}$/.test(s) ? s : 'an unknown number';
 }
 
-/* The owner's text about a call nobody picked up. */
-function missedCallText({ from, recordingUrl, seconds }) {
-  const secs = Math.max(0, parseInt(seconds, 10) || 0);
-  const url = /^https:\/\/api\.twilio\.com\/[\w/.-]+$/.test(String(recordingUrl || '')) ? `${recordingUrl}.mp3` : '';
-  if (url && secs >= 2) return `Missed call from ${pretty(from)}. Voicemail (${secs}s): ${url}`;
-  return `Missed call from ${pretty(from)}. No voicemail left.`;
+/* The owner's text the moment a call goes unanswered: sent whether or not
+   the caller then leaves a message, so a hang-up is never lost. */
+function missedCallText({ from }) {
+  return `Missed call from ${pretty(from)}. They heard the voicemail greeting; any message follows in a separate text.`;
 }
+
+/* The owner's text when a message was recorded, or null when nothing was.
+   The link is Twilio's: it is sent only to the owner, never kept on the lead. */
+function voicemailText({ from, recordingUrl, seconds }) {
+  const secs = Math.max(0, parseInt(seconds, 10) || 0);
+  const ok = /^https:\/\/api\.twilio\.com\/[\w/.-]+$/.test(String(recordingUrl || ''));
+  if (!ok || secs < 2) return null;
+  return `Voicemail from ${pretty(from)} (${secs}s): ${recordingUrl}.mp3`;
+}
+
+/* A caller's number for display and callerId: US numbers normalised by the
+   caller, anything else kept if it is already E.164. */
+function callerNumber(raw, normalizeUs) {
+  const us = normalizeUs(raw);
+  if (us) return us;
+  const s = String(raw || '').trim();
+  return /^\+[1-9]\d{7,14}$/.test(s) ? s : '';
+}
+
+const THANKS = () => twiml(say('Thank you. Goodbye.') + '<Hangup/>');
+const isAccept = (digits) => String(digits || '').trim() === '1';
 
 /* Calls the owner accepted, by the customer's call id, until the ring's
    `done` request reads them. In memory: a restart mid-call can only cost the
@@ -144,5 +168,5 @@ function acceptedCalls(ttlMs = 2 * 60 * 60 * 1000) {
 
 module.exports = {
   PATHS, MENU, incomingTwiml, menuTwiml, ringTwiml, screenTwiml, acceptTwiml, doneTwiml,
-  voicemailTwiml, missedCallText, acceptedCalls, pretty,
+  voicemailTwiml, missedCallText, voicemailText, callerNumber, isAccept, THANKS, acceptedCalls, pretty,
 };

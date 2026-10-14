@@ -84,15 +84,33 @@ test('accepted calls are taken once and expire', () => {
   assert.equal(a.size(), 0);
 });
 
-test('the missed-call text names the caller and links only a real Twilio recording', () => {
+test('a missed call is texted at once, and a voicemail only when one was recorded', () => {
+  assert.match(V.missedCallText({ from }), /^Missed call from \(312\) 555-0199\./);
   const rec = 'https://api.twilio.com/2010-04-01/Accounts/AC1/Recordings/RE1';
-  assert.equal(V.missedCallText({ from, recordingUrl: rec, seconds: '14' }),
-    `Missed call from (312) 555-0199. Voicemail (14s): ${rec}.mp3`);
-  assert.equal(V.missedCallText({ from, recordingUrl: rec, seconds: '1' }),
-    'Missed call from (312) 555-0199. No voicemail left.');
-  assert.equal(V.missedCallText({ from, recordingUrl: 'https://evil.example/x', seconds: '30' }),
-    'Missed call from (312) 555-0199. No voicemail left.');
-  assert.match(V.missedCallText({ from: '', seconds: 0 }), /unknown number/);
+  assert.equal(V.voicemailText({ from, recordingUrl: rec, seconds: '14' }),
+    `Voicemail from (312) 555-0199 (14s): ${rec}.mp3`);
+  assert.equal(V.voicemailText({ from, recordingUrl: rec, seconds: '1' }), null);
+  assert.equal(V.voicemailText({ from, recordingUrl: 'https://evil.example/x', seconds: '30' }), null);
+  assert.match(V.missedCallText({ from: '' }), /unknown number/);
+});
+
+test('callers outside the US keep their number', () => {
+  const us = (raw) => (/^\+1\d{10}$/.test(raw) ? raw : '');
+  assert.equal(V.callerNumber('+13125550199', us), '+13125550199');
+  assert.equal(V.callerNumber('+442071234567', us), '+442071234567');
+  assert.equal(V.callerNumber('anonymous', us), '');
+  assert.equal(V.pretty('+442071234567'), '+442071234567');
+  assert.match(V.menuTwiml({ digits: '1', from: '+442071234567', owner, base }), /callerId="\+442071234567"/);
+});
+
+test('the server reports missed calls from the ring result, and skips the owner', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const done = src.slice(src.indexOf('app.post(VOICE.PATHS.done'), src.indexOf('app.post(VOICE.PATHS.voicemail'));
+  assert.match(done, /if \(accepted\) return;[\s\S]*reportCall\(/);
+  const report = src.slice(src.indexOf('async function reportCall'), src.indexOf('app.post(VOICE.PATHS.incoming'));
+  assert.match(report, /if \(from && from === callOwner\(\)\) return;/);
+  const vm = src.slice(src.indexOf('app.post(VOICE.PATHS.voicemail'), src.indexOf("app.post('/webhooks/twilio/status'"));
+  assert.doesNotMatch(vm.split('reportCall(')[1] || '', /recordingUrl\s*[,)]/, 'the lead note never carries the link');
 });
 
 test('caller-controlled text is escaped in TwiML', () => {
