@@ -16,6 +16,7 @@ const PATHS = {
   done: '/webhooks/twilio/voice/done',
   voicemail: '/webhooks/twilio/voice/voicemail',
   transcript: '/webhooks/twilio/voice/transcript',
+  connect: '/webhooks/twilio/voice/connect',
 };
 
 const SHOP = "June's Tees";
@@ -189,14 +190,27 @@ function parseCallCommand(text) {
   if (!rest) return { number: '' };
   const d = rest.replace(/\D/g, '');
   if (/^[\d\s().+-]+$/.test(rest) && (d.length === 10 || (d.length === 11 && d[0] === '1'))) return { number: '+1' + d.slice(-10) };
+  /* Starts like a number but is not one (a digit short, words after it):
+     tell the owner, never relay it to a customer as a message. */
+  if (/^[\d(+]/.test(rest)) return { error: 'number' };
   return null;
 }
 
-/* The owner's cell is rung first; on answer it dials the customer showing
-   the shop number. */
-function callbackTwiml({ to, shop }) {
-  return twiml(say(`Calling ${pretty(to).replace(/[()]/g, '')} from the shop number.`) +
-    `<Dial callerId="${xml(shop)}" timeout="30"><Number>${xml(to)}</Number></Dial>`);
+/* The owner's cell is rung first (from the shop number, a saved contact);
+   the customer is dialled only after the owner presses 1, so a voicemail
+   that picks up the owner's leg never reaches the customer. */
+function callbackTwiml({ to, shop, base }) {
+  const d = String(to || '').replace(/\D/g, '').slice(-10);
+  return twiml(
+    `<Gather numDigits="1" timeout="8" action="${xml(`${base}${PATHS.connect}?to=${d}`)}" method="POST">` +
+    say(`Press 1 to call ${pretty(to).replace(/[()]/g, '')} from the shop number.`) + '</Gather><Hangup/>');
+}
+
+/* After the owner's key: dial the customer, or end. `to` is 10 digits from
+   the signed URL. */
+function connectTwiml({ digits, to, shop }) {
+  if (String(digits || '').trim() !== '1' || !/^\d{10}$/.test(String(to || ''))) return twiml('<Hangup/>');
+  return twiml(`<Dial callerId="${xml(shop)}" timeout="30"><Number>+1${to}</Number></Dial>`);
 }
 
 /* What a voicemail said, for the owner and the lead. null when Twilio could
@@ -211,5 +225,5 @@ const THANKS = () => twiml(say('Thank you. Goodbye.') + '<Hangup/>');
 
 module.exports = {
   PATHS, MENU, incomingTwiml, menuTwiml, ringTwiml, ringReason, ringText, doneTwiml,
-  voicemailTwiml, afterHoursTwiml, isOpen, missedCallText, voicemailText, callerNumber, THANKS, pretty, textBackBody, parseCallCommand, callbackTwiml, transcriptText,
+  voicemailTwiml, afterHoursTwiml, isOpen, missedCallText, voicemailText, callerNumber, THANKS, pretty, textBackBody, parseCallCommand, callbackTwiml, connectTwiml, transcriptText,
 };

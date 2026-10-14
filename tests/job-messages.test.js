@@ -395,7 +395,7 @@ async function inboundText({ from = '+13125550199', body = 'Can I add 2 XL?', ow
       if (/INSERT INTO sms_messages[\s\S]*RETURNING id/.test(q)) return { rows: [{ id: 1, quote_code: quote }] };
       return { rows: [] };
     } },
-    VOICE: require('../tools/lib/voice'), ownerCallback: async (c) => { callbacks.push(c); },
+    ownerCallCommand: async (t) => { const c = require('../tools/lib/voice').parseCallCommand(t); if (c) callbacks.push(c); return Boolean(c); },
     RELAY: require('../tools/lib/text-relay'), QUOTE_CODE_RE: /^(?:[A-Z0-9]{6}|[A-Z0-9]{10})$/,
     twilioSend: async (to, b) => { if (twilioFails) throw Object.assign(new Error('nope'), { twilioCode: twilioFails }); sent.push([to, b]); return { sid: 'SMx' }; },
     markLeadResponded: async () => {},

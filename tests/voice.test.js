@@ -157,15 +157,23 @@ test('the owner texting CALL is a callback; anything else is a normal reply', ()
   assert.deepEqual(V.parseCallCommand(' call '), { number: '' });
   assert.deepEqual(V.parseCallCommand('Call 312-555-0199'), { number: '+13125550199' });
   assert.deepEqual(V.parseCallCommand('call: 1 (312) 555 0199'), { number: '+13125550199' });
-  for (const t of ['call me at 5', 'Calling you later', 'I will call tomorrow', 'call 555-0199', '']) {
+  for (const t of ['call me at 5', 'Calling you later', 'I will call tomorrow', '']) {
     assert.equal(V.parseCallCommand(t), null, t);
+  }
+  for (const t of ['call 555-0199', 'Call 312 555 019', 'CALL 312-555-0199 re order', 'call +44 20 7123 4567']) {
+    assert.deepEqual(V.parseCallCommand(t), { error: 'number' }, t);
   }
 });
 
-test('a callback dials the customer showing the shop number', () => {
-  const t = V.callbackTwiml({ to: '+13125550199', shop: '+17739004592' });
-  assert.match(t, /<Dial callerId="\+17739004592" timeout="30"><Number>\+13125550199<\/Number><\/Dial>/);
-  assert.match(t, /Calling 312 555-0199 from the shop number/);
+test('a callback asks the owner to press 1 before the customer is dialled', () => {
+  const t = V.callbackTwiml({ to: '+13125550199', shop: '+17739004592', base });
+  assert.match(t, /<Gather numDigits="1" timeout="8" action="https:\/\/www\.jtees\.net\/webhooks\/twilio\/voice\/connect\?to=3125550199"/);
+  assert.match(t, /Press 1 to call 312 555-0199 from the shop number/);
+  assert.doesNotMatch(t, /<Dial/);
+  assert.match(V.connectTwiml({ digits: '1', to: '3125550199', shop: '+17739004592' }),
+    /<Dial callerId="\+17739004592" timeout="30"><Number>\+13125550199<\/Number><\/Dial>/);
+  assert.match(V.connectTwiml({ digits: '', to: '3125550199', shop: '+17739004592' }), /^<\?xml[^>]*><Response><Hangup\/><\/Response>$/);
+  assert.match(V.connectTwiml({ digits: '1', to: '1900555', shop: '+17739004592' }), /<Hangup\/>/);
 });
 
 test('voicemail is transcribed, and only a finished transcript is sent on', () => {
@@ -176,15 +184,22 @@ test('voicemail is transcribed, and only a finished transcript is sent on', () =
   assert.equal(V.transcriptText({ from, text: '   ', status: 'completed' }), null);
 });
 
-test('server: callbacks only from the owner, text-back once a day, transcript route signed', () => {
+test('server: callbacks only from the owner, once per text; text-back respects consent and hours', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  const sms = src.slice(src.indexOf("app.post('/webhooks/twilio/sms'"), src.indexOf("app.post('/webhooks/twilio/sms'") + 3000);
+  const sms = src.slice(src.indexOf("app.post('/webhooks/twilio/sms'"), src.indexOf("app.post('/webhooks/twilio/sms'") + 3500);
   const ownerBranch = sms.indexOf('if (ownerDigits && from.replace');
-  assert.ok(ownerBranch > 0 && sms.indexOf('parseCallCommand') > ownerBranch, 'CALL is only read inside the owner branch');
-  const back = src.slice(src.indexOf('async function textBackCaller'), src.indexOf('async function twilioCall'));
-  assert.match(back, /'call:' \+ day/);
-  assert.match(back, /ON CONFLICT DO NOTHING RETURNING id/);
-  assert.match(src, /app\.post\(VOICE\.PATHS\.transcript, async \(req, res\) => \{\n\s*if \(!twilioVoiceOk\(req, res\)\) return;/);
+  assert.ok(ownerBranch > 0 && sms.indexOf('ownerCallCommand(text, req.body.MessageSid)') > ownerBranch, 'CALL is only read inside the owner branch');
+  const cmd = src.slice(src.indexOf('async function ownerCallCommand'), src.indexOf('async function ownerCallback'));
+  assert.match(cmd, /if \(!CALL_COMMANDS\.add\(messageSid\)\) return true;/);
+  assert.ok(cmd.indexOf('cmd.error') < cmd.indexOf('ownerCallback('), 'a bad number is never relayed or dialled');
+  const report = src.slice(src.indexOf('async function reportCall'), src.indexOf('async function keepCall'));
+  assert.match(report, /if \(!inTextingHours\(\)\) return;[\s\S]*sendCustomerSms\(\{[\s\S]*replyToContact: true/);
+  assert.match(report, /if \(told && lead/);
+  const never = src.slice(src.indexOf('async function neverAsked'), src.indexOf('async function sendCustomerSms'));
+  assert.match(never, /if \(kind === 'marketing'\) return false;[\s\S]*SELECT 1 FROM sms_consents WHERE phone = \$1 LIMIT 1/);
+  for (const k of ['transcript', 'connect']) {
+    assert.match(src, new RegExp(`app\\.post\\(VOICE\\.PATHS\\.${k}, (?:async )?\\(req, res\\) => \\{\\n\\s*if \\(!twilioVoiceOk\\(req, res\\)\\) return;`), k);
+  }
 });
 
 test('server: CALL with a number only dials a customer already on file', () => {

@@ -4133,12 +4133,20 @@ function inTextingHours(now = new Date()) {
   return h >= 9 && h < 18;
 }
 
-async function sendCustomerSms({ phone, kind, ref, msg, quote = null }) {
+/* replyToContact: one transactional reply to someone who just called the shop
+   is allowed with no consent on file, never after any recorded answer. */
+async function neverAsked(phone, kind) {
+  if (kind === 'marketing') return false;
+  const { rows } = await pool.query('SELECT 1 FROM sms_consents WHERE phone = $1 LIMIT 1', [phone]);
+  return !rows.length;
+}
+
+async function sendCustomerSms({ phone, kind, ref, msg, quote = null, replyToContact = false }) {
   const to = normalizeUsPhone(phone);
   if (!to) return 'no-phone';
   try {
     const c = await smsConsentFor(to);
-    if (!(kind === 'marketing' ? c.marketing : c.transactional)) return 'no-consent';
+    if (!(kind === 'marketing' ? c.marketing : c.transactional) && !(replyToContact && await neverAsked(to, kind))) return 'no-consent';
     if (!smsConfigured()) {
       console.log(`sendCustomerSms: skipped ${msg.template} for ${ref} — Twilio not configured`);
       return 'unconfigured';
@@ -4338,15 +4346,7 @@ app.post('/webhooks/twilio/sms', async (req, res) => {
      customer message. */
   const ownerDigits = String(process.env.TWILIO_TO_NUMBER || '').replace(/\D/g, '').slice(-10);
   if (ownerDigits && from.replace(/\D/g, '').slice(-10) === ownerDigits) {
-    const callCmd = VOICE.parseCallCommand(text);
-    if (callCmd) {
-      await ownerCallback(callCmd).catch((e) => {
-        console.error('owner callback failed:', e.message);
-        reportError('twilio:callback', e).catch(() => {});
-        sendOwnerSms('Could not start the call. Try again, or call from your phone.').catch(() => {});
-      });
-      return;
-    }
+    if (await ownerCallCommand(text, req.body.MessageSid)) return;
     const ownerSid = String(req.body.MessageSid || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 64);
     await relayOwnerReply(text, ownerSid, TMEDIA.mediaOf(req.body)).catch((e) => {
       console.error('owner reply relay failed:', e.message);
@@ -4651,58 +4651,66 @@ function twilioVoiceOk(req, res) {
   return true;
 }
 
+/* Owner CALL texts already acted on, by message id, for a day. */
+const CALL_COMMANDS = (() => {
+  const seen = new Map();
+  return { add(sid) {
+    const now = Date.now();
+    for (const [k, t] of seen) if (now - t > 864e5) seen.delete(k);
+    if (!sid) return true;
+    if (seen.has(sid)) return false;
+    seen.set(String(sid), now);
+    return true;
+  } };
+})();
 const callOwner = () => normalizeUsPhone(process.env.TWILIO_TO_NUMBER || '');
 const callerOf = (req) => VOICE.callerNumber(req.body.From, normalizeUsPhone);
 const sendTwiml = (res, body) => res.type('text/xml').send(body);
 const callSidOf = (req) => String(req.body.CallSid || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 64);
 
 /* Tell the owner and keep the call as a lead, so it is followed up like a
-   text. The owner's own calls are neither. A US caller is also put where the
-   owner's text replies go (owner_text_forwards), and gets one text a day
-   telling them to text the shop. */
+   text; a caller with a job gets it on the job's messages instead. The
+   owner's own calls are neither. When the owner was told, a US caller is also
+   put where the owner's text replies go (owner_text_forwards), and is texted
+   once a day, in texting hours, to text the shop. */
 async function reportCall(from, sid, ownerText, leadText, kind) {
   if (from && from === callOwner()) return;
-  await sendOwnerSms(ownerText).catch((e) => {
+  const told = await sendOwnerSms(ownerText).catch((e) => {
     console.error(`${kind} text failed:`, e.message);
     reportError(`twilio:${kind}`, e).catch(() => {});
+    return false;
   });
   if (!from || !/^\+1\d{10}$/.test(from)) return;
-  const lead = await textToLead(from, leadText, sid ? `${kind}-${sid}` : '').catch((e) => {
-    console.error(`${kind} lead failed:`, e.message);
-    reportError(`twilio:${kind}-lead`, e).catch(() => {});
-    return null;
-  });
-  if (lead && (lead.quote || lead.lead)) {
+  const lead = await keepCall(from, leadText, sid ? `${kind}-${sid}` : '', kind);
+  if (told && lead && (lead.quote || lead.lead)) {
     await pool.query(`INSERT INTO owner_text_forwards (phone, quote_code, lead_id, name) VALUES ($1, $2, $3, $4)`,
       [from, lead.quote || null, lead.quote ? null : Number(lead.lead), null])
       .catch((e) => console.error('call forward not recorded:', e.message));
   }
-  await textBackCaller(from);
+  if (!inTextingHours()) return;
+  const day = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+  await sendCustomerSms({
+    phone: from, kind: 'transactional', ref: 'call:' + day, quote: (lead && lead.quote) || null, replyToContact: true,
+    msg: { template: 'missed-call', body: VOICE.textBackBody({ open: VOICE.isOpen() }) },
+  }).catch((e) => console.error('text-back failed:', e.message));
 }
 
-/* "Sorry we missed your call", at most once a day per number: the unique
-   index on (phone, ref, template) holds the row, so a missed call and its
-   voicemail, or two calls, text once. */
-async function textBackCaller(phone) {
-  if (!smsConfigured()) return;
-  const day = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
-  const body = VOICE.textBackBody({ open: VOICE.isOpen() });
-  const { rows: [row] } = await pool.query(
-    `INSERT INTO sms_messages (phone, kind, ref, template, body, status)
-     VALUES ($1, 'transactional', $2, 'missed-call', $3, 'sending')
-     ON CONFLICT DO NOTHING RETURNING id`, [phone, 'call:' + day, body]).catch((e) => {
-    console.error('text-back not recorded:', e.message);
-    return { rows: [] };
+/* A call note: a new lead (or a note on the open one) from textToLead, or,
+   for a caller with a job, a message on that job, where staff read texts. */
+async function keepCall(from, text, ref, kind) {
+  const lead = await textToLead(from, text, ref).catch((e) => {
+    console.error(`${kind} lead failed:`, e.message);
+    reportError(`twilio:${kind}-lead`, e).catch(() => {});
+    return null;
   });
-  if (!row) return;
-  try {
-    const { sid } = await twilioSend(phone, body);
-    await pool.query(`UPDATE sms_messages SET status = 'sent', twilio_sid = $2 WHERE id = $1`, [row.id, sid]);
-  } catch (err) {
-    await pool.query(`UPDATE sms_messages SET status = 'failed', error = $2 WHERE id = $1`,
-      [row.id, String(err.message).slice(0, 300)]).catch(() => {});
-    if (err.twilioCode !== 21610 && err.twilioCode !== 21614) console.error('text-back failed:', err.message);
+  if (lead && lead.quote) {
+    await pool.query(
+      `INSERT INTO sms_messages (phone, kind, ref, template, body, status, quote_code)
+       VALUES ($1, 'inbound', $2, 'call', $3, 'received', $4) ON CONFLICT DO NOTHING`,
+      [from, ('call:' + (ref || Date.now())).slice(0, 80), String(text).slice(0, 1600), lead.quote])
+      .catch((e) => console.error('call not kept on job:', e.message));
   }
+  return lead;
 }
 
 /* One outbound call: Twilio rings `to` and runs `twimlBody` when answered. */
@@ -4718,8 +4726,31 @@ async function twilioCall(to, twimlBody) {
     signal: AbortSignal.timeout(15000),
   });
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(`Twilio ${r.status}${d.code ? ' ' + d.code : ''}: ${String(d.message || '').slice(0, 200)}`);
+  if (!r.ok) {
+    const e = new Error(`Twilio call ${r.status}${d.code ? ' ' + d.code : ''}: ${String(d.message || '').slice(0, 200)}`);
+    e.twilioCode = d.code;
+    throw e;
+  }
   return d.sid || null;
+}
+
+/* An owner text that is a CALL command: handled here (true), or false to
+   pass it on as a reply to a customer. */
+async function ownerCallCommand(text, messageSid) {
+  const cmd = VOICE.parseCallCommand(text);
+  if (!cmd) return false;
+  if (cmd.error) {
+    await sendOwnerSms('Not calling: that is not a full US number. Text CALL alone for the last caller, or CALL 312 555 0199.').catch(() => {});
+    return true;
+  }
+  /* Twilio can deliver one text twice: one call per text. */
+  if (!CALL_COMMANDS.add(messageSid)) return true;
+  await ownerCallback(cmd).catch((e) => {
+    console.error('owner callback failed:', e.message);
+    reportError('twilio:callback', e).catch(() => {});
+    sendOwnerSms('Could not start the call. Try again, or call from your phone.').catch(() => {});
+  });
+  return true;
 }
 
 /* The owner texted CALL: ring them, then the customer, from the shop number.
@@ -4729,11 +4760,18 @@ async function ownerCallback(cmd) {
   const shop = normalizeUsPhone(process.env.TWILIO_PHONE_NUMBER || '');
   let to = cmd.number;
   if (!to) {
+    /* The same window and clash rule as text replies (text-relay.js). */
     const { rows } = await pool.query(
-      `SELECT phone FROM owner_text_forwards WHERE created_at > NOW() - interval '7 days' ORDER BY created_at DESC LIMIT 1`);
-    to = rows.length ? normalizeUsPhone(rows[0].phone) : '';
+      `SELECT phone, quote_code, lead_id, name, created_at FROM owner_text_forwards
+        WHERE created_at > NOW() - interval '1 day' ORDER BY created_at DESC LIMIT 50`);
+    const pick = RELAY.pickTarget(rows, '', QUOTE_CODE_RE);
+    if (pick.ask) {
+      return sendOwnerSms('Not calling: ' + pick.ask.length + ' people got in touch just now. Text CALL and the number: ' +
+        pick.ask.map((f) => VOICE.pretty(normalizeUsPhone(f.phone))).join(', ') + '.');
+    }
+    to = pick.to ? normalizeUsPhone(pick.to.phone) : '';
   }
-  if (!to) return sendOwnerSms('Not calling: nobody has called or texted in the last week. Text CALL and their number, e.g. CALL 312 555 0199.');
+  if (!to) return sendOwnerSms('Not calling: nobody has called or texted today. Text CALL and their number, e.g. CALL 312 555 0199.');
   if (to === owner || to === shop) return sendOwnerSms('Not calling: that is your own number.');
   /* Only numbers the shop already knows: a spoofed "owner" text must not be
      able to make the shop dial any number (premium-rate toll fraud). */
@@ -4746,8 +4784,8 @@ async function ownerCallback(cmd) {
         UNION ALL SELECT 1 FROM quotes WHERE ${same} LIMIT 1`, [digits]);
     if (!rows.length) return sendOwnerSms(`Not calling: ${VOICE.pretty(to)} is not a customer on file. Call them from your phone instead.`);
   }
-  await twilioCall(owner, VOICE.callbackTwiml({ to, shop }));
-  return sendOwnerSms(`Calling you now, then ${VOICE.pretty(to)} from the shop number.`);
+  await twilioCall(owner, VOICE.callbackTwiml({ to, shop, base: TWILIO_VOICE_BASE }));
+  return sendOwnerSms(`Calling you now. Press 1 when you answer to ring ${VOICE.pretty(to)} from the shop number.`);
 }
 
 app.post(VOICE.PATHS.incoming, (req, res) => {
@@ -4791,6 +4829,14 @@ app.post(VOICE.PATHS.voicemail, async (req, res) => {
   await reportCall(from, callSidOf(req), text, `Left a ${secs}s voicemail by phone. The recording link is in the owner's text.`, 'voicemail');
 });
 
+/* The owner pressed a key on a CALL callback. */
+app.post(VOICE.PATHS.connect, (req, res) => {
+  if (!twilioVoiceOk(req, res)) return;
+  sendTwiml(res, VOICE.connectTwiml({
+    digits: req.body.Digits, to: String(req.query.to || ''), shop: normalizeUsPhone(process.env.TWILIO_PHONE_NUMBER || ''),
+  }));
+});
+
 /* What a voicemail said, once Twilio has transcribed it: to the owner, and
    onto the caller's lead. */
 app.post(VOICE.PATHS.transcript, async (req, res) => {
@@ -4801,8 +4847,7 @@ app.post(VOICE.PATHS.transcript, async (req, res) => {
   const text = VOICE.transcriptText({ from, text: req.body.TranscriptionText, status: req.body.TranscriptionStatus });
   if (!text) return;
   await sendOwnerSms(text).catch((e) => console.error('transcript text failed:', e.message));
-  if (/^\+1\d{10}$/.test(from)) await textToLead(from, text, 'transcript-' + callSidOf(req))
-    .catch((e) => console.error('transcript lead failed:', e.message));
+  if (/^\+1\d{10}$/.test(from)) await keepCall(from, text, 'transcript-' + callSidOf(req), 'transcript');
 });
 
 app.post('/webhooks/twilio/status', async (req, res) => {
