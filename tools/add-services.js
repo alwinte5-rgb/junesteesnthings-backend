@@ -51,6 +51,15 @@ const SERVICES = [
     description: 'A new menu or promo design for one TV screen.' },
   { name: 'TV Screen Design — Revision (per screen)', price: '40.00',
     description: 'Updating an existing TV screen design, per screen.' },
+  /* Outsourced print, priced by the owner's rule (2026-10-14): supplier cost
+     x1.75, plus shipping at cost + $25 rounded up to $5 (never marked up),
+     divided by the run and rounded up to the cent. The price is only right
+     for the run in the name, so the run is in the name.
+     SinaLite 3,000 trifold: $274.17 x1.75 = $479.80 + ($106.62 + $25 -> $135)
+     = $614.80 / 3,000 = $0.205 -> $0.21. */
+  { name: 'Trifold Brochures 8.5x11, folded — 3,000 run (per brochure)', price: '0.21',
+    description: '8.5 x 11 trifold brochures, 100lb gloss text, full color both sides, ' +
+      'folded, shipping included. Printed by SinaLite. Price is for a 3,000 run only.' },
 ];
 
 for (const s of SERVICES) {
