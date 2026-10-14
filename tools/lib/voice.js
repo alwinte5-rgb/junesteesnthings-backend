@@ -15,6 +15,7 @@ const PATHS = {
   menu: '/webhooks/twilio/voice/menu',
   done: '/webhooks/twilio/voice/done',
   voicemail: '/webhooks/twilio/voice/voicemail',
+  transcript: '/webhooks/twilio/voice/transcript',
 };
 
 const SHOP = "June's Tees";
@@ -66,7 +67,8 @@ const twiml = (inner) => `<?xml version="1.0" encoding="UTF-8"?><Response>${inne
 const say = (text) => `<Say voice="${VOICE}">${xml(text)}</Say>`;
 
 function recordTag(base) {
-  return `<Record maxLength="${VOICEMAIL_SECONDS}" playBeep="true" timeout="5" action="${xml(base + PATHS.voicemail)}" method="POST"/>`;
+  return `<Record maxLength="${VOICEMAIL_SECONDS}" playBeep="true" timeout="5" action="${xml(base + PATHS.voicemail)}" method="POST"` +
+    ` transcribe="true" transcribeCallback="${xml(base + PATHS.transcript)}"/>`;
 }
 
 function afterHoursTwiml(base) {
@@ -172,9 +174,42 @@ function callerNumber(raw, normalizeUs) {
   return /^\+[1-9]\d{7,14}$/.test(s) ? s : '';
 }
 
+/* The one text a caller we missed gets (once a day, see server.js). */
+function textBackBody({ open }) {
+  return "June's Tees: Sorry we missed your call! Text us here with what you need and we'll get right back to you." +
+    (open ? '' : ' We\'re open Mon-Fri 10:30am-6pm.') + ' Reply STOP to opt out.';
+}
+
+/* The owner texting CALL (the last caller) or CALL and a number. null when
+   the text is not a call command; number '' means "the last caller". */
+function parseCallCommand(text) {
+  const m = /^\s*call\b[\s:,-]*(.*)$/i.exec(String(text || ''));
+  if (!m) return null;
+  const rest = m[1].trim();
+  if (!rest) return { number: '' };
+  const d = rest.replace(/\D/g, '');
+  if (/^[\d\s().+-]+$/.test(rest) && (d.length === 10 || (d.length === 11 && d[0] === '1'))) return { number: '+1' + d.slice(-10) };
+  return null;
+}
+
+/* The owner's cell is rung first; on answer it dials the customer showing
+   the shop number. */
+function callbackTwiml({ to, shop }) {
+  return twiml(say(`Calling ${pretty(to).replace(/[()]/g, '')} from the shop number.`) +
+    `<Dial callerId="${xml(shop)}" timeout="30"><Number>${xml(to)}</Number></Dial>`);
+}
+
+/* What a voicemail said, for the owner and the lead. null when Twilio could
+   not transcribe it. */
+function transcriptText({ from, text, status }) {
+  const said = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 600);
+  if (status !== 'completed' || !said) return null;
+  return `Voicemail from ${pretty(from)} said: "${said}"`;
+}
+
 const THANKS = () => twiml(say('Thank you. Goodbye.') + '<Hangup/>');
 
 module.exports = {
   PATHS, MENU, incomingTwiml, menuTwiml, ringTwiml, ringReason, ringText, doneTwiml,
-  voicemailTwiml, afterHoursTwiml, isOpen, missedCallText, voicemailText, callerNumber, THANKS, pretty,
+  voicemailTwiml, afterHoursTwiml, isOpen, missedCallText, voicemailText, callerNumber, THANKS, pretty, textBackBody, parseCallCommand, callbackTwiml, transcriptText,
 };

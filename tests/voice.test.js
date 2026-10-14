@@ -142,3 +142,47 @@ test('every call route checks the Twilio signature first', () => {
     assert.ok(m, `${k} route verifies the signature`);
   }
 });
+
+test('a missed caller is texted to text the shop, with opt-out, and hours when closed', () => {
+  const open = V.textBackBody({ open: true });
+  assert.match(open, /^June's Tees: Sorry we missed your call!/);
+  assert.match(open, /Reply STOP to opt out\.$/);
+  assert.doesNotMatch(open, /open Mon-Fri/);
+  assert.match(V.textBackBody({ open: false }), /We're open Mon-Fri 10:30am-6pm\./);
+  assert.ok(open.length <= 160, 'one text segment');
+});
+
+test('the owner texting CALL is a callback; anything else is a normal reply', () => {
+  assert.deepEqual(V.parseCallCommand('CALL'), { number: '' });
+  assert.deepEqual(V.parseCallCommand(' call '), { number: '' });
+  assert.deepEqual(V.parseCallCommand('Call 312-555-0199'), { number: '+13125550199' });
+  assert.deepEqual(V.parseCallCommand('call: 1 (312) 555 0199'), { number: '+13125550199' });
+  for (const t of ['call me at 5', 'Calling you later', 'I will call tomorrow', 'call 555-0199', '']) {
+    assert.equal(V.parseCallCommand(t), null, t);
+  }
+});
+
+test('a callback dials the customer showing the shop number', () => {
+  const t = V.callbackTwiml({ to: '+13125550199', shop: '+17739004592' });
+  assert.match(t, /<Dial callerId="\+17739004592" timeout="30"><Number>\+13125550199<\/Number><\/Dial>/);
+  assert.match(t, /Calling 312 555-0199 from the shop number/);
+});
+
+test('voicemail is transcribed, and only a finished transcript is sent on', () => {
+  assert.match(V.voicemailTwiml(base), /transcribe="true" transcribeCallback="https:\/\/www\.jtees\.net\/webhooks\/twilio\/voice\/transcript"/);
+  assert.equal(V.transcriptText({ from, text: '  Hi, I need 40 shirts\n by Friday ', status: 'completed' }),
+    'Voicemail from (312) 555-0199 said: "Hi, I need 40 shirts by Friday"');
+  assert.equal(V.transcriptText({ from, text: 'x', status: 'failed' }), null);
+  assert.equal(V.transcriptText({ from, text: '   ', status: 'completed' }), null);
+});
+
+test('server: callbacks only from the owner, text-back once a day, transcript route signed', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const sms = src.slice(src.indexOf("app.post('/webhooks/twilio/sms'"), src.indexOf("app.post('/webhooks/twilio/sms'") + 3000);
+  const ownerBranch = sms.indexOf('if (ownerDigits && from.replace');
+  assert.ok(ownerBranch > 0 && sms.indexOf('parseCallCommand') > ownerBranch, 'CALL is only read inside the owner branch');
+  const back = src.slice(src.indexOf('async function textBackCaller'), src.indexOf('async function twilioCall'));
+  assert.match(back, /'call:' \+ day/);
+  assert.match(back, /ON CONFLICT DO NOTHING RETURNING id/);
+  assert.match(src, /app\.post\(VOICE\.PATHS\.transcript, async \(req, res\) => \{\n\s*if \(!twilioVoiceOk\(req, res\)\) return;/);
+});
