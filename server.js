@@ -23298,7 +23298,9 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
       /* The to-do list: the owner sees every open task, a helper theirs and anyone's. */
       many(`SELECT * FROM staff_tasks WHERE done_at IS NULL AND ($1::int IS NULL OR assigned_to = $1 OR assigned_to IS NULL)
              ORDER BY due_on NULLS LAST, created_at LIMIT 50`, 'tasks', [me]),
-      many(`SELECT * FROM staff_tasks WHERE done_at > NOW() - interval '7 days' ORDER BY done_at DESC LIMIT 50`, 'tasks done', []),
+      many(`SELECT * FROM staff_tasks WHERE done_at > NOW() - interval '7 days'
+               AND ($1::int IS NULL OR assigned_to = $1 OR assigned_to IS NULL)
+             ORDER BY done_at DESC LIMIT 50`, 'tasks done', [me]),
       safe(staffRoster(), [], 'roster'),
     ]);
 

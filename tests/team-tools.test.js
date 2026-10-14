@@ -88,3 +88,11 @@ test('My Day: task text is escaped, a helper sees Start then Mark completed, and
   assert.match(page, /<details class="card md-sec" open data-sec=/);
   assert.match(page, /try\{localStorage\.setItem/, 'a browser that blocks storage still works');
 });
+
+test('dashboard: a helper sees only their own and unassigned tasks, open AND completed', () => {
+  const at = src.indexOf("'tasks done', [me]");
+  assert.notStrictEqual(at, -1, 'the completed list must be scoped to the viewer');
+  const q = src.slice(src.lastIndexOf('many(`SELECT * FROM staff_tasks', at), at);
+  assert.match(q, /done_at > NOW\(\) - interval '7 days'/);
+  assert.match(q, /\$1::int IS NULL OR assigned_to = \$1 OR assigned_to IS NULL/);
+});
