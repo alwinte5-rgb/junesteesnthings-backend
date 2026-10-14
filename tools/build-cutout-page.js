@@ -317,7 +317,7 @@ const TITLE = 'Big Head Cutout Prices Chicago | June’s Tees & Things';
 const DESC = `Big head cutout prices in Chicago — ${SIZES.join(', ')} inch` +
   (singles.length ? ', by the single or by the full sheet' : ', sold by the full sheet') +
   `. Packs from ${money(Math.min(...packs.map((p) => p.bands[0].price)))}. ` +
-  `Send a photo, we print and contour cut it. Call (773) 849-1854.`;
+  `Send a photo, we print and contour cut it. Call (773) 900-4592.`;
 const CANON = 'https://www.jtees.net/services/big-head-cutouts.html';
 
 /* Swap the template's own SEO for this page's. Each of these is asserted to
@@ -360,8 +360,8 @@ const BODY = `<section class="hero">
        ${singles.length ? 'Buy one at a time, or a full sheet' : 'Sold by the full sheet'} &mdash; a sheet works out from ${cheapestEach.size}&Prime; at ${each(cheapestEach)} a head.
        Pack prices include standard delivery${singles.length ? `; single cutouts add ${money(DELIVERY)} delivery once per order` : ''}.</p>
     <div class="hero-btns">
-      <a href="sms:+17738491854?&amp;body=Hi%20June%27s%20Tees!%20I%27d%20like%20big%20head%20cutouts." class="btn btn-gold">Text a photo &rarr;</a>
-      <a href="tel:+17738491854" class="btn btn-outline-white">(773) 849-1854</a>
+      <a href="sms:+17739004592?&amp;body=Hi%20June%27s%20Tees!%20I%27d%20like%20big%20head%20cutouts." class="btn btn-gold">Text a photo &rarr;</a>
+      <a href="tel:+17739004592" class="btn btn-outline-white">(773) 900-4592</a>
     </div>
     <div class="hero-badges">
       <div class="hero-badge">Chicago &mdash; 3047 N Lincoln Ave</div>
@@ -442,7 +442,7 @@ ${!singles.length ? '' : `<section>
     </div>
     <div class="dl-bar">
       <a href="/downloads/big-head-cutout-pricing.pdf" class="btn btn-gold" download>Download this price list (PDF)</a>
-      <a href="sms:+17738491854?&amp;body=Hi%20June%27s%20Tees!%20I%27d%20like%20big%20head%20cutouts." class="btn" style="background:var(--navy);color:#fff">Text us a photo</a>
+      <a href="sms:+17739004592?&amp;body=Hi%20June%27s%20Tees!%20I%27d%20like%20big%20head%20cutouts." class="btn" style="background:var(--navy);color:#fff">Text us a photo</a>
     </div>
   </div>
 </section>
@@ -461,7 +461,7 @@ ${!singles.length ? '' : `<section>
     <h2>Got the photo? That is the hard part done.</h2>
     <p>Text it over and we will come back with a price and a date.</p>
     <div class="hero-btns" style="justify-content:center">
-      <a href="sms:+17738491854?&amp;body=Hi%20June%27s%20Tees!%20I%27d%20like%20big%20head%20cutouts." class="btn btn-gold">Text (773) 849-1854</a>
+      <a href="sms:+17739004592?&amp;body=Hi%20June%27s%20Tees!%20I%27d%20like%20big%20head%20cutouts." class="btn btn-gold">Text (773) 900-4592</a>
       <a href="/#contact" class="btn btn-outline-white">Email us</a>
     </div>
   </div>
@@ -503,7 +503,7 @@ const PRINT_HTML = `<!DOCTYPE html>
 </style></head><body>
   <div class="head">
     <h1>Big Head Cutouts</h1>
-    <div class="who"><b>June&rsquo;s Tees &amp; Things</b>3047 N Lincoln Ave #435, Chicago IL 60657<br />(773) 849-1854 &middot; jtees.net</div>
+    <div class="who"><b>June&rsquo;s Tees &amp; Things</b>3047 N Lincoln Ave #435, Chicago IL 60657<br />(773) 900-4592 &middot; jtees.net</div>
   </div>
   <p class="intro">Printed and cut around the outline on rigid 3/16&Prime; board, in ${SIZES.map((s) => s + '&Prime;').join(', ')}.
      Send us the photo and the size. The measurement is the height of the finished cutout.</p>

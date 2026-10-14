@@ -176,7 +176,7 @@ function helloEmail({ first, email }) {
     </table>
   </td></tr>
   <tr><td style="padding:14px 28px 24px">
-    <p style="line-height:1.6;margin:0 0 12px">Have something coming up? Just reply to this email or text (773) 849-1854.
+    <p style="line-height:1.6;margin:0 0 12px">Have something coming up? Just reply to this email or text (773) 900-4592.
       I'd love to make something with you again.</p>
     <p style="margin:0 0 14px">Thank you for being part of June's Tees,<br><b>June</b></p>
     <p style="text-align:center;margin:0">${btn(SITE, 'Visit jtees.net', '#0B1F4B')}</p>
