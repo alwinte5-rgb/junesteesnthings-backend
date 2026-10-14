@@ -57,3 +57,12 @@ test('add-services writes services inactive and tagged', () => {
   assert.match(tool, /",'','',0,999,"/);   // active = 0
   assert.match(tool, /active=0, supplier='service'/);
 });
+
+test('a service line is costed as a service, not as half-price blanks', () => {
+  const J = require('../tools/lib/job-costs');
+  const catalog = { products: [{ id: 900, name: 'Brochure Design — Revision', price: 150, cost: 0, service: true }], methods: [] };
+  const est = J.estimateJob([{ product_id: 900, qty: 1, unit_price: 150, description: 'Brochure Design — Revision' }], catalog);
+  assert.strictEqual(est.complete, true);
+  assert.strictEqual(est.lines[0].unit_cost, 0);
+  assert.strictEqual(est.lines[0].basis, 'service: no supplier cost');
+});
