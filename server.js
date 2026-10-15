@@ -35,6 +35,7 @@ const NUDGE = require('./tools/lib/lead-nudges');
 const SIGNAGE = require('./tools/lib/signage');
 const QSIGNS = require('./tools/lib/quote-signs');
 const SIGN_FAMILIES = require('./tools/lib/sign-families');
+const SINALITE = require('./tools/lib/sinalite');
 const LEADMAIL = require('./tools/lib/lead-email');
 const REINTRO = require('./tools/lib/reintro');
 const FUNNEL = require('./tools/lib/funnel-health');
@@ -6526,6 +6527,10 @@ app.get('/api/pricing-rules', requireInternalKey, (_req, res) => {
        stock ladders precomputed, area families as rates the designer runs
        through the one shared formula. */
     signs: SIGN_FAMILIES.signsTable(),
+    /* SinaLite items (tools/lib/sinalite.js): stock ladders in the same shape
+       as a sign family, shipping inside each price, each with its minimum and
+       the date SinaLite's (sale) prices were read. */
+    sinalite: SINALITE.table(),
     generated: new Date().toISOString(),
   });
 });
@@ -8028,6 +8033,14 @@ const HOLIDAY_EXTRA_DAYS = parseInt(process.env.JT_HOLIDAY_EXTRA_DAYS || '3', 10
    off until the tables are repriced. Read once, used by both surfaces. */
 const SCREEN_FEES_LIVE = String(process.env.JT_SCREEN_FEES || '') === '1';
 
+/* A SIZED item — a sign or a SinaLite item priced by quote-signs.js — has no
+   print method, and add-ons hang off print methods, so it was offered no
+   design charge at all. Its line offers add-ons under this stand-in title,
+   which only ANY_METHOD_RE (the design tiers) matches: never a supplier
+   freight, screens or banner hanging (owner, 2026-10-15: every item that needs
+   custom artwork carries the design charge). */
+const SIZED_ITEM_TITLE = 'Sized item';
+
 /** The add-ons available for a method, in the order they should be offered. */
 function addonsFor(methodTitle) {
   const t = String(methodTitle || '');
@@ -8921,8 +8934,20 @@ function customerLineFigures(item) {
   const shown = shownAddonTotalOf(item);
   const amount = round2(Number(item.line_total) - shown);
   const folded = round2(addonTotalOf(item) - shown);
-  const each = folded > 0 && qty > 0 ? round2(amount / qty) : Number(item.unit_price) || 0;
+  /* Four places, not two, when a supplier charge is folded in: 3,000 cards at
+     $0.10 plus $10 of Signs365 delivery is $310, and "$0.10 each" beside
+     $310 does not foot (CF929XEETA, 2026-10-14). moneyEach() shows it. */
+  const each = folded > 0 && qty > 0 ? Math.round((amount / qty) * 10000) / 10000 : Number(item.unit_price) || 0;
   return { amount, each, shown, folded };
+}
+
+/** A price EACH as the customer reads it: cents, unless the piece costs under
+ *  a dollar and the cents would round it away — then up to four places, so
+ *  qty x each = amount on 3,000 business cards. "$0.1033", "$0.25", "$4.50". */
+function moneyEach(n) {
+  const v = Number(n) || 0;
+  if (Math.abs(v) >= 1) return '$' + v.toFixed(2);
+  return '$' + (Math.round(v * 10000) / 10000).toFixed(4).replace(/0{1,2}$/, '');
 }
 
 /** The each-price a person actually TYPED on a hand-priced line.
@@ -10045,7 +10070,14 @@ const PRODUCT_GROUPS = [
      were wrong: "canvas" swept in the whole Bella+Canvas range and every
      canvas tote — thirteen shirts filed under Signs — because a brand name
      and a material share a word. Match on what only a sign is called. */
-  ['Signs, Print & Décor',    /banner|cutout|poster|magnet|acrylic|business card|flyer|window graphic|wall graphic|floor graphic|vehicle graphic|yard sign|rigid sign|photo panel|stretched canvas/i],
+  /* The first SUPPLIER_GROUP_COUNT groups are things BOUGHT PRINTED (Signs365,
+     SinaLite): the item is the product, with no garment under it. Split four
+     ways (owner, 2026-10-15) so the Category picker on a quote line keeps the
+     product list short. No bare "label": tee names carry "Tear Away Label". */
+  ['Signs & Display',         /banner|cutout|poster|magnet|acrylic|window graphic|wall graphic|floor graphic|vehicle graphic|yard sign|rigid sign|photo panel|stretched canvas|table cover|x-frame/i],
+  ['Print & Paper',           /business card|flyer|brochure|postcard|door hanger|calendar|rack card|tear card|notepad|envelope|booklet|presentation folder/i],
+  ['Labels, Stickers & Packaging', /roll labels?|stickers?\b|decals?\b|pouch/i],
+  ['Drinkware',               /\bmugs?\b|tumbler|\bbottles?\b/i],
   ['Youth, Toddler & Infant', /youth|toddler|infant|bodysuit|onesie/i],
   ['Scrubs',                  /scrub/i],
   /* Before Hoodies, because a "Quarter-Zip Pullover" is a quarter-zip and a
@@ -10061,6 +10093,12 @@ const PRODUCT_GROUPS = [
   ['Hats & Beanies',          /\bcap\b|\bhat\b|beanie|trucker|visor/i],
   ['Bags & Totes',            /tote|bags?\b|backpack|sackpack|drawstring/i],
 ];
+
+/** How many of PRODUCT_GROUPS, from the top, are bought-printed goods. */
+const SUPPLIER_GROUP_COUNT = 4;
+/** One pattern for "this is a bought-printed item", from those groups. */
+const SUPPLIER_GOODS_RE = new RegExp(PRODUCT_GROUPS.slice(0, SUPPLIER_GROUP_COUNT)
+  .map(([, re]) => '(?:' + re.source + ')').join('|'), 'i');
 
 /** Staff-only services: design fees, folding. Never shown in the shop. */
 const SERVICE_GROUP = 'Services (not in shop)';
@@ -10573,7 +10611,7 @@ function productGroupOf(name) {
       /* What a product IS decides what the item asks for. A sign is matched by
          the same rule that files it under Signs in the product list, so the
          two cannot disagree. A banner (not a banner stand) also gets the sizer. */
-      var SIGN_RE = new RegExp(${JSON.stringify(PRODUCT_GROUPS[0][1].source)}, 'i');
+      var SIGN_RE = new RegExp(${JSON.stringify(SUPPLIER_GOODS_RE.source)}, 'i');
       /* Each catalogue product's sign kind (quote-signs.js signKindOf), and what
          each kind's sizer offers. No prices here: /admin/api/sign-price asks
          the server, which is also what prices the save. */
@@ -10581,6 +10619,63 @@ function productGroupOf(name) {
         .map((p) => [String(p.id), QSIGNS.signKindOf(p.name)]).filter((x) => x[1])))};
       var SIGN_OPTS = ${JSON.stringify(QSIGNS.sizerOptions())};
       function isSignProduct(prod){ return !!(prod && SIGN_RE.test(String(prod.name || ''))); }
+
+      /* CATEGORY, THEN PRODUCT (owner, 2026-10-15). The product list is long,
+         so each line gets a Category box built from the list's own headed
+         sections (PRODUCT_GROUPS). Picking one hides the other sections; the
+         options stay in the list, so a copied line or a restored quote can
+         still set any product, and "All categories" shows everything again.
+         Delegated, because addLine() clones lines without their listeners. */
+      function pcatGroupOf(sel){
+        var o = sel.options[sel.selectedIndex];
+        return o && o.parentNode && o.parentNode.tagName === 'OPTGROUP' ? o.parentNode.label : '';
+      }
+      function pcatApply(sel, label){
+        Array.prototype.forEach.call(sel.querySelectorAll('optgroup'), function(g){
+          g.hidden = !!label && g.label !== label;
+          g.style.display = g.hidden ? 'none' : '';
+        });
+      }
+      function pcatEnsure(sel){
+        var box = sel.previousElementSibling;
+        if (!box || !box.classList.contains('pcat')) {
+          box = document.createElement('select');
+          box.className = 'pcat';
+          box.setAttribute('aria-label', 'Category');
+          box.style.marginBottom = '6px';
+          var all = document.createElement('option');
+          all.value = ''; all.textContent = 'All categories';
+          box.appendChild(all);
+          Array.prototype.forEach.call(sel.querySelectorAll('optgroup'), function(g){
+            var o = document.createElement('option');
+            o.value = g.label; o.textContent = g.label;
+            box.appendChild(o);
+          });
+          sel.parentNode.insertBefore(box, sel);
+        }
+        box.value = pcatGroupOf(sel);
+        pcatApply(sel, box.value);
+      }
+      document.addEventListener('change', function(e){
+        var t = e.target;
+        if (t && t.classList && t.classList.contains('pcat')) {
+          var sel = t.nextElementSibling;
+          if (!sel || !sel.classList.contains('p')) return;
+          pcatApply(sel, t.value);
+          /* A product from another category no longer belongs on this line. */
+          if (t.value && sel.value && pcatGroupOf(sel) !== t.value) {
+            sel.value = '';
+            sel.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        } else if (t && t.classList && t.classList.contains('p')) {
+          var box = t.previousElementSibling;
+          if (box && box.classList.contains('pcat') && !box.value) return;
+          if (box && box.classList.contains('pcat') && pcatGroupOf(t) && pcatGroupOf(t) !== box.value) {
+            box.value = pcatGroupOf(t); pcatApply(t, box.value);
+          }
+        }
+      });
+      Array.prototype.forEach.call(document.querySelectorAll('#lines .line select.p'), pcatEnsure);
       function signKindOf(prod){ return prod ? (SIGN_KIND[String(prod.id)] || null) : null; }
       /* ── Upsell ideas (the owner, 2026-10-06) ─────────────────────────────
          Worked out from the same priceLine() the totals use, on every calc():
@@ -10891,7 +10986,9 @@ ${quotePricingSource()}
               '</select></label>';
           };
           var html = '<div style="padding:10px;background:#f6f8fd;border:1px solid #e3e8f2;border-radius:8px">' +
-            '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#1848B8;font-weight:700">' + esc(o.label) + ' size &amp; options</div>';
+            '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#1848B8;font-weight:700">' + esc(o.label) + ' size &amp; options' +
+            /* The minimum, before anyone types a quantity (owner, 2026-10-15). */
+            (o.min > 1 ? ' <span style="color:#b45309;text-transform:none;letter-spacing:0">· minimum ' + o.min + '</span>' : '') + '</div>';
           if (kind === 'banner') {
             var ft = []; for (var i = 1; i <= o.max.long; i++) ft.push([i, i + ' ft']);
             html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
@@ -11337,6 +11434,9 @@ ${quotePricingSource()}
           (cutMeth ? [cutMeth] : prints.map(function(p){ return p.method; })).forEach(function(m){
             if (lineTitles.indexOf(m.title) === -1) lineTitles.push(m.title);
           });
+          /* A sized item has no print method; it still takes the design tiers
+             (SIZED_ITEM_TITLE on the server, which prices the save). */
+          if (!lineTitles.length && signKind) lineTitles.push(${JSON.stringify(SIZED_ITEM_TITLE)});
           var u    = L.querySelector('.u');
           var qEl  = L.querySelector('.q');
           buildColours(L, prod);
@@ -11811,6 +11911,9 @@ ${quotePricingSource()}
         /* cloneNode copies attributes but not listeners: a copied "already
            bound" mark would leave the new item's selects with none. */
         tpl.querySelectorAll('[data-qty-bound]').forEach(function(el){ delete el.dataset.qtyBound; });
+        /* The copied item's Category filter is cleared above (its box reads
+           "All categories"); show every section of its product list again. */
+        tpl.querySelectorAll('select.p optgroup').forEach(function(g){ g.hidden = false; g.style.display = ''; });
         var oh = tpl.querySelector('.opthelp');
         if (oh) oh.open = false;
         tpl.querySelector('.lt').textContent = '—';
@@ -12525,7 +12628,8 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
       /* Every method on the line offers its add-ons and attaches its
          automatic ones (screens), not just the first: a DTF front with a
          screen-printed back burns screens. */
-      const addonTitles = usePrints ? [...new Set(prints.map((p) => String(p.method.title || '')))] : [methodTitle];
+      let addonTitles = usePrints ? [...new Set(prints.map((p) => String(p.method.title || '')))] : [methodTitle];
+      if (signKind && !addonTitles.some(Boolean)) addonTitles = [SIZED_ITEM_TITLE];
       /* Both halves: on a DTF-front/screen-back line the screen print is the
          SECOND method, and reading only the first drops its screen fee. */
       const method2Title = usePrints ? null : catalog.methods.find(m => String(m.id) === String(one(b['method2' + i])));
@@ -14024,8 +14128,8 @@ app.get('/q/:code', async (req, res) => {
                       name="qty_${ix}" value="${parseInt(i.qty, 10) || 0}"
                       style="width:64px;padding:5px;font-size:14px;text-align:right">`}</td>
         <td class="num" data-each="${ix}">${cut
-          ? `<span style="color:#9aa3b2;text-decoration:line-through">${money(i.qty > 0 ? goodsList / i.qty : 0)}</span><br>${money(fig.each)}`
-          : money(fig.each)}</td>
+          ? `<span style="color:#9aa3b2;text-decoration:line-through">${moneyEach(i.qty > 0 ? goodsList / i.qty : 0)}</span><br>${moneyEach(fig.each)}`
+          : moneyEach(fig.each)}${fig.folded > 0 ? `<div class="muted" style="font-size:11px">incl. ${money(fig.folded)} supplier delivery</div>` : ''}</td>
         <td class="num" data-amount="${ix}">${cut
           ? `<span style="color:#9aa3b2;text-decoration:line-through">${money(goodsList)}</span><br>
              <b style="color:#166534">${money(goods)}</b>`
@@ -14361,6 +14465,10 @@ ${quotePricingSource()}
          figure the shop would not charge. */
       var RUSH_PCT = ${Number(q.rush_pct) || 0};
       function m2(v){ return '$' + (Math.round(v*100)/100).toFixed(2); }
+      /* moneyEach() on the server: four places under a dollar, so 3,000 cards
+         read $0.1033 each and the line still foots. */
+      function mEach(v){ v = Number(v) || 0; return Math.abs(v) >= 1 ? '$' + v.toFixed(2)
+        : '$' + (Math.round(v*10000)/10000).toFixed(4).replace(/0{1,2}$/, ''); }
 
       /* Order-level charges (freight) are paid once an order: two options each
          carrying their own copy were both added once a quantity changed
@@ -14406,8 +14514,8 @@ ${quotePricingSource()}
           var same = qty === (QITEMS[ix] ? QITEMS[ix].qty : 0);
           if (each) each.innerHTML = same ? each.dataset.orig
             : '<span style="color:#9aa3b2;text-decoration:line-through">' +
-              m2(QITEMS[ix].unit_price) + '</span><br><b style="color:#b45309">' +
-              m2(qty > 0 ? (r.lineTotal - shownExtras(r)) / qty : 0) + '</b>';
+              mEach(QITEMS[ix].unit_price) + '</span><br><b style="color:#b45309">' +
+              mEach(qty > 0 ? (r.lineTotal - shownExtras(r)) / qty : 0) + '</b>';
           /* The Amount column is the SHIRTS, matching the split rows below it —
              the extras have their own amounts and must not be counted twice. */
           var goodsNow  = Math.round((r.lineTotal - shownExtras(r)) * 100) / 100;
@@ -14470,6 +14578,8 @@ ${applyOptionChoice.toString()}
         })};
         function r2(v){ return Math.round(Number(v || 0) * 100) / 100; }
         function m(v){ return '$' + r2(v).toFixed(2); }
+        function mEach(v){ v = Number(v) || 0; return Math.abs(v) >= 1 ? '$' + v.toFixed(2)
+          : '$' + (Math.round(v*10000)/10000).toFixed(4).replace(/0{1,2}$/, ''); }
         function set(id, html){ var el = document.getElementById(id); if (el) el.innerHTML = html; }
         function show(id, on){ var el = document.getElementById(id); if (el) el.style.display = on ? '' : 'none'; }
         var boxes = Array.prototype.slice.call(document.querySelectorAll('input.opt'));
@@ -14529,7 +14639,7 @@ ${applyOptionChoice.toString()}
             var each = document.querySelector('[data-each="' + ix + '"]');
             [amt, each].forEach(function(el){ if (el && el.dataset.optOrig === undefined) el.dataset.optOrig = el.innerHTML; });
             var a2 = cut > 0 ? m(it.amount - cut) : (amt ? amt.dataset.optOrig : '');
-            var e2 = cut > 0 ? m(it.qty > 0 ? (it.amount - cut) / it.qty : 0) : (each ? each.dataset.optOrig : '');
+            var e2 = cut > 0 ? mEach(it.qty > 0 ? (it.amount - cut) / it.qty : 0) : (each ? each.dataset.optOrig : '');
             /* dataset.orig is what the quantity estimate restores a cell to. */
             if (amt) { amt.innerHTML = a2; amt.dataset.orig = a2; }
             if (each) { each.innerHTML = e2; each.dataset.orig = e2; }

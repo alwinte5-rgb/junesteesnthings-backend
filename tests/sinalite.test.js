@@ -1,0 +1,113 @@
+/* SinaLite items: priced from SinaLite's own cost by the owner rule, with a
+ * real minimum (owner, 2026-10-14/15). */
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const SL = require('../tools/lib/sinalite');
+
+const FIXTURE = {
+  captured: '2026-10-15T12:00:00Z',
+  ship_to: 'Chicago IL 60657',
+  products: {
+    calendar: {
+      name: 'Wall Calendars', label: 'Wall Calendars', group: 'Print & Paper', design: 'calendar',
+      materials: [{ key: '28pg', label: '28 pages, self cover' }],
+      sizes: [{ key: '8.5x11', label: '8.5" x 11"' }],
+      rows: [
+        { mat: '28pg', size: '8.5x11', qty: 25, cost: 120, ship: 20 },
+        { mat: '28pg', size: '8.5x11', qty: 50, cost: 180, ship: 28 },
+        { mat: '28pg', size: '8.5x11', qty: 100, cost: 300, ship: 41.2 },
+      ],
+    },
+  },
+};
+
+test('the owner rule: cost x2, shipping + $25 rounded up to $5, over the quantity, up to the cent', () => {
+  /* The 3,000 brochure run tools/add-services.js priced by hand:
+     $274.17 x2 + ($106.62 + $25 -> $135) = $683.34 / 3,000 = $0.2278 -> $0.23 */
+  assert.strictEqual(SL.priceEach(274.17, 106.62, 3000), 0.23);
+  assert.strictEqual(SL.shipBilled(106.62), 135);
+  assert.strictEqual(SL.shipBilled(0), 25);
+  assert.strictEqual(SL.shipBilled(20), 45, 'exactly on a $5 step is not rounded further');
+  assert.strictEqual(SL.priceEach(0, 10, 100), null, 'no cost, no price');
+});
+
+test('the ladder is floor-keyed from the smallest SinaLite tier', () => {
+  const lad = SL.ladderFrom(FIXTURE.products.calendar.rows);
+  assert.deepStrictEqual(lad.map((r) => r[0]), [25, 50, 100]);
+  assert.strictEqual(lad[0][1], SL.priceEach(120, 20, 25));
+});
+
+test('a calendar under its minimum of 25 is refused in words; 25 is priced', () => {
+  SL._setData(JSON.parse(JSON.stringify(FIXTURE)));
+  delete require.cache[require.resolve('../tools/lib/quote-signs')];
+  const QS = require('../tools/lib/quote-signs');
+  assert.strictEqual(QS.signKindOf('Wall Calendars'), 'calendar');
+  const spec = { size: '8.5x11', mat: '28pg' };
+  const under = QS.priceSign('calendar', spec, 24, true);
+  assert.strictEqual(under.ok, false);
+  assert.strictEqual(under.min, 25);
+  assert.match(under.error, /minimum of 25/);
+  const at = QS.priceSign('calendar', spec, 25, true);
+  assert.ok(at.ok);
+  assert.strictEqual(at.each, SL.priceEach(120, 20, 25));
+  assert.strictEqual(at.freight, 0, 'shipping is inside a SinaLite price, never charged again');
+  const between = QS.priceSign('calendar', spec, 70, true);
+  assert.strictEqual(between.each, SL.priceEach(180, 28, 50), '70 pays the 50 tier each');
+  const opts = QS.sizerOptions().calendar;
+  assert.strictEqual(opts.min, 25, 'the form can say "min 25" before a quantity is typed');
+  assert.strictEqual(opts.supplier, 'sinalite');
+});
+
+test('the published table carries the minimum, the group and the capture date', () => {
+  SL._setData(JSON.parse(JSON.stringify(FIXTURE)));
+  const t = SL.table();
+  assert.strictEqual(t.families.calendar.min, 25);
+  assert.strictEqual(t.families.calendar.group, 'Print & Paper');
+  assert.strictEqual(t.captured, FIXTURE.captured);
+  assert.strictEqual(SL.stale(Date.parse('2026-10-20')), false);
+  assert.strictEqual(SL.stale(Date.parse('2026-12-20')), true, 'a sale price read two months ago is stale');
+});
+
+const SERVER = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+function extract(anchor, end) {
+  const i = SERVER.indexOf(anchor);
+  assert.ok(i >= 0, 'not found in server.js: ' + anchor);
+  const j = SERVER.indexOf(end, i);
+  return SERVER.slice(i, j + end.length);
+}
+
+test('an each-price under a dollar shows enough places for qty x each to foot', () => {
+  const src = extract('function moneyEach(n) {', '\n}');
+  const moneyEach = vm.runInThisContext('(' + src + ')');
+  assert.strictEqual(moneyEach(310 / 3000), '$0.1033', '3,000 cards with $10 of delivery folded in');
+  assert.strictEqual(moneyEach(0.1), '$0.10');
+  assert.strictEqual(moneyEach(0.25), '$0.25');
+  assert.strictEqual(moneyEach(4.5), '$4.50');
+  assert.strictEqual(moneyEach(0), '$0.00');
+});
+
+test('quote categories: bought-printed goods are split four ways and never swallow a tee', () => {
+  const src = extract('const PRODUCT_GROUPS = [', '\n];');
+  const PRODUCT_GROUPS = vm.runInThisContext('(() => {' + src + '; return PRODUCT_GROUPS; })()');
+  const groupOf = (n) => (PRODUCT_GROUPS.find(([, re]) => re.test(n)) || ['Everything else'])[0];
+  assert.strictEqual(groupOf('Wall Calendars'), 'Print & Paper');
+  assert.strictEqual(groupOf('Trifold Brochures 8.5x11'), 'Print & Paper');
+  assert.strictEqual(groupOf('Business Cards — single or double-sided'), 'Print & Paper');
+  assert.strictEqual(groupOf('Roll Labels'), 'Labels, Stickers & Packaging');
+  assert.strictEqual(groupOf('Cut-to-Shape Stickers'), 'Labels, Stickers & Packaging');
+  assert.strictEqual(groupOf('Stand-Up Pouches'), 'Labels, Stickers & Packaging');
+  assert.strictEqual(groupOf('11oz Ceramic Mugs'), 'Drinkware');
+  assert.strictEqual(groupOf('20oz Tumblers'), 'Drinkware');
+  assert.strictEqual(groupOf('Table Covers'), 'Signs & Display');
+  assert.strictEqual(groupOf('X-Frame Banners'), 'Signs & Display');
+  assert.strictEqual(groupOf('Gildan Softstyle Tee - Tear Away Label'), 'T-Shirts', 'a tee label is not a roll label');
+  assert.strictEqual(groupOf('Bella+Canvas 3001 Unisex Jersey Tee'), 'T-Shirts');
+});
+
+test('a sized item is offered the design tiers on the form and on the save', () => {
+  assert.match(SERVER, /if \(signKind && !addonTitles\.some\(Boolean\)\) addonTitles = \[SIZED_ITEM_TITLE\];/);
+  assert.match(SERVER, /if \(!lineTitles\.length && signKind\) lineTitles\.push/);
+});

@@ -183,7 +183,7 @@ test('the save route reads the four places, real non-cutout methods, and stores 
   assert.match(src, /prints: usePrints \? prints\.map\(\(p\) => \(\{ loc: p\.loc, method_id: p\.method\.id,/);
   /* Every method on the line brings its own add-ons — a DTF front with a
      screen-printed back still burns screens. */
-  assert.match(src, /const addonTitles = usePrints \? \[\.\.\.new Set\(prints\.map/);
+  assert.match(src, /let addonTitles = usePrints \? \[\.\.\.new Set\(prints\.map/);
 });
 
 test('job costs: every place is costed, DTF extra places at the second-location rate', () => {

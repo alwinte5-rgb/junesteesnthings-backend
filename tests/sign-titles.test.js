@@ -13,7 +13,7 @@ const SP = require('../tools/add-sign-products');
 const BN = require('../tools/add-banner-product');
 
 const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-const m = server.match(/\['Signs, Print & Décor',\s*\/(.+?)\/i\]/);
+const m = server.match(/\['Signs & Display',\s*\/(.+?)\/i\]/);
 const SIGNS_GROUP = m && new RegExp(m[1], 'i');
 
 test('every sign title gives its own family to the quote form', () => {
