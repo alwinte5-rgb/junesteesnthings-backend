@@ -4,6 +4,8 @@
    Tawk agent shortcuts), chat-bubble style. "Chat with a real person" opens
    the live Tawk chat and tags the last question for the agent.
 
+   The name and email form is the first thing in the panel when it opens
+   (owner, 2026-10-15), above the quick answers, which still work without it.
    Before a live chat starts, the visitor gives their name and email, however
    they open it (this button, the Tawk bubble, a "Text us" link): Tawk's
    onChatMaximized is caught, the chat closed again and this panel's form
@@ -123,8 +125,8 @@
 
   var lastQ = '';
 
-  function openTawk() {
-    if (!detailsGiven() && !chatOngoing() && gate) { gate(); return; }
+  function openTawk(nudge) {
+    if (!detailsGiven() && !chatOngoing() && gate) { gate(nudge); return; }
     try {
       if (window.Tawk_API && Tawk_API.maximize) {
         if (lastQ && Tawk_API.setAttributes) Tawk_API.setAttributes({ 'quick-question': lastQ }, function () {});
@@ -165,11 +167,15 @@
 
     var panel = el('div',
       'position:fixed;bottom:96px;right:18px;z-index:2147482999;display:none;flex-direction:column;' +
-      'width:min(340px,calc(100vw - 36px));height:min(480px,calc(100vh - 140px));' +
+      'width:min(340px,calc(100vw - 36px));height:min(560px,calc(100vh - 120px));' +
       'background:#fff;border:1px solid #e5e7eb;border-radius:16px;overflow:hidden;' +
       'box-shadow:0 16px 44px rgba(15,23,42,.28);' +
       'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;');
 
+    /* The visible screen, not the one behind a phone's address bar, so the
+       header and its close button are never under the browser's own bar.
+       A browser without dvh keeps the vh height set above. */
+    panel.style.height = phoneBar ? 'min(560px,calc(100dvh - 150px))' : 'min(560px,calc(100dvh - 120px))';
     if (phoneBar) {
       launcher.style.right = 'auto'; launcher.style.left = '12px'; launcher.style.bottom = '84px';
       panel.style.right = 'auto'; panel.style.left = '12px'; panel.style.bottom = '84px';
@@ -194,7 +200,6 @@
     panel.appendChild(head);
 
     var feed = el('div', 'flex:1 1 auto;overflow-y:auto;padding:14px;background:#f6f8fc;');
-    feed.appendChild(agentBubble('Hi! 👋 Tap a question below for an instant answer — or chat with a real person anytime.'));
     panel.appendChild(feed);
 
     function agentBubble(text) {
@@ -232,14 +237,21 @@
       'font-size:13px;font-weight:800;cursor:pointer;font-family:inherit;');
     human.type = 'button';
     human.textContent = 'Chat with a real person 💬';
-    human.onclick = function () { toggle(false); openTawk(); };
+    /* Details typed in the card, then this button pressed instead of Start
+       chat: the same as Start chat. */
+    human.onclick = function () {
+      if (needsForm() && !checkDetails(nameIn.value, emailIn.value)) { form.onsubmit({ preventDefault: function () {} }); return; }
+      toggle(false); openTawk(true);
+    };
     panel.appendChild(human);
 
-    /* The name/email form, shown in place of the questions. */
-    var form = el('form', 'display:none;flex:0 0 auto;flex-direction:column;gap:8px;padding:12px;background:#fff;border-top:1px solid #e5e7eb;');
+    /* The name/email form: a card at the top of the conversation, there from
+       the moment the panel opens until the details are given. */
+    var form = el('form', 'display:none;flex-direction:column;gap:8px;margin:0 0 12px;padding:12px;background:#fff;' +
+      'border:1px solid #dbe3f8;border-radius:14px;');
     form.setAttribute('novalidate', '');
-    var intro = el('div', 'font-size:12.5px;color:#374151;line-height:1.45;');
-    intro.textContent = 'Before we connect you, what’s your name and email? If you step away, we’ll reply by email.';
+    var intro = el('div', 'font-size:13px;color:#1f2937;line-height:1.45;');
+    intro.textContent = 'Hi! 👋 What’s your name and email? If you step away, we’ll reply by email.';
     function field(type, label, auto) {
       var i = el('input', 'width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #cbd5e1;border-radius:10px;font-size:14px;font-family:inherit;');
       i.type = type; i.required = true; i.setAttribute('aria-label', label); i.placeholder = label; i.autocomplete = auto;
@@ -253,19 +265,23 @@
     var go = el('button', 'padding:11px;border:0;border-radius:100px;background:#1848B8;color:#fff;font-size:13px;font-weight:800;cursor:pointer;font-family:inherit;');
     go.type = 'submit';
     go.textContent = 'Start chat 💬';
-    var back = el('button', 'border:0;background:none;color:#1848B8;font-size:12px;cursor:pointer;font-family:inherit;');
-    back.type = 'button';
-    back.textContent = '← Back to quick answers';
-    [intro, nameIn, emailIn, err, go, back].forEach(function (n) { form.appendChild(n); });
-    panel.appendChild(form);
+    [intro, nameIn, emailIn, err, go].forEach(function (n) { form.appendChild(n); });
+    feed.appendChild(form);
+    feed.appendChild(agentBubble('Tap a question below for an instant answer — or chat with a real person anytime.'));
 
+    /* The questions take less room while the form is up, so Start chat is
+       on screen without scrolling, phones included. */
     function showForm(on) {
       form.style.display = on ? 'flex' : 'none';
-      chipWrap.style.display = on ? 'none' : 'block';
-      human.style.display = on ? 'none' : 'block';
+      var short = (window.innerHeight || 800) < 700;   // a small phone: one row of questions
+      chipWrap.style.maxHeight = on ? (short ? '52px' : '104px') : '150px';
       err.style.display = 'none';
     }
-    back.onclick = function () { showForm(false); };
+    /* Not while a chat is going (an agent may have written first). */
+    function needsForm() { return !detailsGiven() && !chatOngoing() && !agentSpoke; }
+    showForm(needsForm());
+    /* A hint goes once they start fixing what it asked for. */
+    nameIn.oninput = emailIn.oninput = function () { err.style.display = 'none'; };
     form.onsubmit = function (e) {
       e.preventDefault();
       var problem = checkDetails(nameIn.value, emailIn.value);
@@ -294,15 +310,21 @@
         openTawk();
       });
     };
-    gate = function () { toggle(true); showForm(true); setTimeout(function () { try { nameIn.focus(); } catch (x) {} }, 50); };
+    /* Asked for a live chat without details: back to the form, at the top. */
+    gate = function (nudge) {
+      toggle(true); showForm(true); feed.scrollTop = 0;
+      if (nudge) { err.textContent = 'Add your name and email to start the chat.'; err.style.display = 'block'; }
+      setTimeout(function () { try { nameIn.focus(); } catch (x) {} }, 50);
+    };
 
     function toggle(show) {
       open = show;
       panel.style.display = show ? 'flex' : 'none';
       launcher.style.display = show ? 'none' : 'block';
     }
-    launcher.onclick = function () { toggle(true); };
-    closeB.onclick = function () { toggle(false); showForm(false); };
+    /* No focus on open: on a phone the keyboard would cover the panel. */
+    launcher.onclick = function () { toggle(true); showForm(needsForm()); };
+    closeB.onclick = function () { toggle(false); };
 
     document.body.appendChild(launcher);
     document.body.appendChild(panel);

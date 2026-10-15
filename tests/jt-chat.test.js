@@ -60,7 +60,8 @@ function page({ tawk = {}, storage = {}, ongoing = false } = {}) {
     inputs[0].value = name; inputs[1].value = email;
     form.onsubmit({ preventDefault() {} });
   };
-  return { window, T, calls, form, err, submit, storage };
+  const button = (label) => nodes.find((n) => n.tagName === 'BUTTON' && ((n.textContent || '') + (n.innerHTML || '')).includes(label));
+  return { window, T, calls, form, err, submit, storage, inputs, button, nodes };
 }
 
 test('name and email are checked before a chat starts', () => {
@@ -160,4 +161,48 @@ test('the FAQ covers quotes, ordering, groups, pickup by appointment, and care',
   }
   assert.match(SRC, /ring the intercom for June's Tees, come up to the 4th floor, and have a seat in the lobby/);
   assert.doesNotMatch(SRC, /can also do curbside pickup/, 'no answer promises walk-up pickup');
+});
+
+test('the name and email form is the first thing in the panel when it opens (2026-10-15)', () => {
+  const p = page();
+  assert.equal(p.form.style.display, 'flex', 'there before any button is pressed');
+  const feed = p.nodes.find((n) => (n.children || []).includes(p.form));
+  assert.equal(feed.children[0], p.form, 'at the top, above the greeting and answers');
+  assert.match(text(p.form), /What’s your name and email\?/);
+  assert.ok(text(p.form).includes('Start chat'), 'its own button, in the card');
+  const done = page({ storage: { 'jt-chat-details': '1' } });
+  assert.equal(done.form.style.display, 'none', 'not asked again once given');
+});
+
+test('a quick answer never sends what was typed: only Start chat does', () => {
+  const p = page();
+  p.inputs[0].value = 'Kim Lee'; p.inputs[1].value = 'kim@example.com';
+  p.button('How do I order?').onclick();
+  assert.equal(p.calls.attrs.length, 0);
+  assert.equal(p.calls.maximize, 0);
+});
+
+test('details typed in the card, then the big button: same as Start chat', () => {
+  const p = page();
+  p.inputs[0].value = 'Kim Lee'; p.inputs[1].value = 'kim@example.com';
+  p.button('Chat with a real person').onclick();
+  assert.deepEqual(p.calls.attrs[0], { name: 'Kim Lee', email: 'kim@example.com' });
+  assert.equal(p.calls.maximize, 1);
+});
+
+test('a chat already going is never asked for details when the panel opens', () => {
+  const p = page();
+  p.T.onChatMessageAgent();
+  p.button('Chat with us').onclick();
+  assert.equal(p.form.style.display, 'none');
+});
+
+test('"Chat with a real person" without details points at the form instead of opening Tawk', () => {
+  const p = page();
+  p.button('Chat with a real person').onclick();
+  assert.equal(p.calls.maximize, 0);
+  assert.match(p.err.textContent, /name and email to start/);
+  p.submit('Kim Lee', 'kim@example.com');
+  assert.equal(p.calls.maximize, 1);
+  assert.equal(p.form.style.display, 'none');
 });
