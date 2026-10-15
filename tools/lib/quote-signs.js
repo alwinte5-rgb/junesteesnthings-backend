@@ -135,7 +135,12 @@ function priceSign(kind, spec, qty, takeFreight) {
     const sheetLabels = combo ? combo.split('+').map((k) => fam.sheet_upgrades[k].label) : [];
     text = [size.label, mat.label, ...sheetLabels, ...ups.map((u) => u.label)].join(' · ');
     outSpec = { kind, size: size.key, mat: mat.key, up: [...(combo ? combo.split('+') : []), ...ups.map((u) => u.key)] };
-    return { ok: true, piece, freight, oversized: oversized != null, each: ceil2(piece + freight / q), text, spec: outSpec };
+    /* A quantity SinaLite does not sell, where a run next to it is the
+       better buy: say so, so the shop offers that instead (owner,
+       2026-10-15: "if it'll jump that much just recommend the 2500 not
+       3000"). */
+    const hint = fam.supplier === 'sinalite' && !fam.any_qty ? runHint(ladder, q, upEach) : null;
+    return { ok: true, piece, freight, oversized: oversized != null, each: ceil2(piece + freight / q), text, spec: outSpec, ...(hint ? { hint } : {}) };
   }
 
   const w = num(spec.w), h = num(spec.h);
@@ -150,6 +155,34 @@ function priceSign(kind, spec, qty, takeFreight) {
   text = [`${w}" wide × ${h}" tall`, mat.label, ...ups.map((u) => u.label)].join(' · ');
   outSpec = { kind, w, h, mat: mat.key, up: ups.map((u) => u.key) };
   return { ok: true, piece, freight, each: ceil2(piece + freight / q), text, spec: outSpec };
+}
+
+const money2 = (n) => '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/** For a quantity between set runs: the run below when this quantity costs
+ *  over 10% more per piece than it, and the run above when that costs no more
+ *  in total than this quantity. { qty, options: [{ qty, each, total }], text }
+ *  or null; `qty` is the first option. Prices are the sell prices the line
+ *  shows (run each plus per-piece upgrades). */
+function runHint(ladder, q, upEach = 0) {
+  if (!Array.isArray(ladder) || !ladder.length || ladder.some(([rq]) => rq === q)) return null;
+  const thisEach = SL.eachFor(ladder, q, false);
+  if (!(thisEach > 0)) return null;
+  const piece = (each) => round2(each + upEach);
+  const thisTotal = round2(piece(thisEach) * q);
+  const opt = ([rq, each]) => ({ qty: rq, each: piece(each), total: round2(piece(each) * rq) });
+  const options = [];
+  const below = ladder.filter(([rq]) => rq < q).pop();
+  if (below && piece(thisEach) > piece(below[1]) * 1.1) options.push(opt(below));
+  const above = ladder.find(([rq]) => rq > q);
+  if (above && opt(above).total <= thisTotal) options.push(opt(above));
+  if (!options.length) return null;
+  const n = (x) => x.toLocaleString('en-US');
+  const say = (o) => o.qty > q
+    ? `${n(o.qty)}: ${money2(o.total)} (${money2(o.each)} each), ${o.total < thisTotal ? 'less money' : 'the same money'} for ${n(o.qty - q)} more`
+    : `${n(o.qty)}: ${money2(o.total)} (${money2(o.each)} each)`;
+  return { qty: options[0].qty, options,
+    text: `${n(q)} is not a SinaLite run, so it costs ${money2(piece(thisEach))} each (${money2(thisTotal)}). Recommend ${options.map(say).join(', or ')}.` };
 }
 
 /** What the form needs to draw a sizer for each kind (no prices: the server prices). */
@@ -183,4 +216,4 @@ function sizerOptions() {
   return out;
 }
 
-module.exports = { signKindOf, priceSign, sizerOptions, ladderPrice, MAX_QTY };
+module.exports = { signKindOf, priceSign, sizerOptions, ladderPrice, runHint, MAX_QTY };
