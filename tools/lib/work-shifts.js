@@ -121,6 +121,30 @@ function span(o) {
 /** Hours in a shift, to one decimal. */
 function hoursOf(o) { return Math.round((o.end - o.start) / 360000) / 10; }
 
+/** Minutes past local midnight of an instant, as a zone's clock reads it. */
+function localMinutes(d, zone) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: zone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    .formatToParts(d).map((x) => [x.type, x.value]));
+  return Number(p.hour) * 60 + Number(p.minute);
+}
+
+/** A shift cut at each midnight of `zone`, for a calendar: one piece per day
+ *  it touches, [{ date: "YYYY-MM-DD", from, to }] in minutes past that day's
+ *  midnight (to = 1440 for a piece that runs to midnight). */
+function daySegments(o, zone) {
+  const out = [];
+  let at = new Date(o.start);
+  const end = new Date(o.end);
+  for (let guard = 0; at < end && guard < 3; guard++) {
+    const date = dateIn(at, zone);
+    const nextMidnight = instantOf(addDays(date, 1), 0, zone);
+    const stop = end < nextMidnight ? end : nextMidnight;
+    out.push({ date, from: localMinutes(at, zone), to: stop === end ? (localMinutes(end, zone) || 1440) : 1440 });
+    at = stop;
+  }
+  return out;
+}
+
 function cleanNote(n) { return String(n || '').replace(/[\r\n\t]+/g, ' ').replace(/[\u0000-\u001f\u007f<>]/g, '').trim().slice(0, NOTE_MAX); }
 
-module.exports = { ZONES, DAYS, NOTE_MAX, minutesOf, offsetAt, instantOf, mondayOf, addDays, occurrences, dateIn, weekOccurrences, validDate, when, clock, span, hoursOf, cleanNote };
+module.exports = { ZONES, DAYS, NOTE_MAX, localMinutes, daySegments, minutesOf, offsetAt, instantOf, mondayOf, addDays, occurrences, dateIn, weekOccurrences, validDate, when, clock, span, hoursOf, cleanNote };

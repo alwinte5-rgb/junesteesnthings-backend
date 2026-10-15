@@ -29773,6 +29773,48 @@ function shiftRow(sh, { owner = false, pings = [] } = {}) {
   </div>`;
 }
 
+/** A week of clocked time day by day (Chicago days, like the pay week): each
+ *  day's total and the week's (owner, 2026-10-15: "it should be daily and
+ *  weekly"). A shift counts on the day it started. */
+function clockDays(w) {
+  const days = Array.from({ length: 7 }, (_, i) => SHIFTS.addDays(w.week, i));
+  const by = new Map(days.map((d) => [d, 0]));
+  for (const sh of w.shifts) {
+    const d = TIMECLOCK.dayOf(sh.started_at);
+    if (by.has(d)) by.set(d, by.get(d) + TIMECLOCK.shiftMinutes(sh));
+  }
+  return days.map((d) => ({ date: d, minutes: by.get(d) }));
+}
+
+function dailyHoursHtml(w) {
+  const today = TIMECLOCK.dayOf(new Date());
+  const cells = clockDays(w).map((d) => {
+    const label = new Date(`${d.date}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' });
+    return `<div class="hd-day${d.date === today ? ' hd-today' : ''}${d.minutes ? '' : ' hd-none'}">
+      <div class="hd-l">${escEmail(label)}</div><div class="hd-v">${d.minutes ? TRAINING.hm(d.minutes) : '—'}</div></div>`;
+  }).join('');
+  return `<style>
+    .hd-grid{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:6px;margin:10px 0 4px}
+    .hd-day{background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:7px 8px;text-align:center}
+    .hd-today{border-color:#1848B8;background:#eef3ff}.hd-none .hd-v{color:#9aa3b2}
+    .hd-l{font-size:11.5px;color:#6b7280}.hd-v{font-weight:700;font-size:14px}
+    .hd-week{background:#0B1F4B;border-color:#0B1F4B;color:#fff}.hd-week .hd-l{color:#c9d3ea}
+    @media (max-width:640px){.hd-grid{grid-template-columns:repeat(4,minmax(0,1fr))}}
+  </style><div class="hd-grid">${cells}<div class="hd-day hd-week"><div class="hd-l">Week</div><div class="hd-v">${TRAINING.hm(w.minutes)}</div></div></div>
+  <div class="muted" style="font-size:11.5px">Days are Chicago days; a shift counts on the day it started.</div>`;
+}
+
+/** The shifts of a week under a heading per day, with that day's total. */
+function shiftsByDayHtml(w, rowOf) {
+  const days = clockDays(w).filter((d) => d.minutes || w.shifts.some((sh) => TIMECLOCK.dayOf(sh.started_at) === d.date));
+  return days.map((d) => {
+    const label = new Date(`${d.date}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'long', month: 'short', day: 'numeric' });
+    return `<div style="display:flex;justify-content:space-between;gap:10px;margin:14px 0 2px;padding-bottom:4px;border-bottom:2px solid #e3e8f2">
+        <b>${escEmail(label)}</b><b>${TRAINING.hm(d.minutes)}</b></div>
+      ${w.shifts.filter((sh) => TIMECLOCK.dayOf(sh.started_at) === d.date).map(rowOf).join('')}`;
+  }).join('');
+}
+
 /* Clocked hours and the work schedule are one place (owner, 2026-10-14:
    "merge work hours with my hours"): two tabs, one menu entry. */
 function hoursTabs(on) {
@@ -29780,7 +29822,7 @@ function hoursTabs(on) {
   return filterChips([
     staff ? { label: 'My hours', href: '/admin/clock', on: on === 'clock' }
       : { label: 'Clocked hours', href: '/admin/timeclock', on: on === 'clock' },
-    { label: 'Work schedule (CT + PH)', href: '/admin/work-schedule', on: on === 'schedule' },
+    { label: staff ? 'My schedule' : 'Work schedule (CT + PH)', href: '/admin/work-schedule', on: on === 'schedule' },
   ]);
 }
 
@@ -29808,8 +29850,9 @@ app.get('/admin/clock', requireAdmin, async (req, res) => {
       <div class="card"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><b style="flex:1 1 200px">Week of ${escEmail(weekLabel(week))}: ${TRAINING.hm(w.minutes)}</b>
         <a class="btn btn-ghost" href="/admin/clock?week=${weekShift(week, -7)}">&larr; Earlier</a>
         ${week < TEAM.weekOf(new Date()) ? `<a class="btn btn-ghost" href="/admin/clock?week=${weekShift(week, 7)}">Later &rarr;</a>` : ''}</div>
+        ${dailyHoursHtml(w)}
         ${w.hours.length ? `<p class="muted">Approved: ${w.hours.map((h) => `${escEmail(String(h.hours))}h${h.paid_at ? ' (paid)' : ''}`).join(', ')}</p>` : ''}
-        ${w.shifts.length ? w.shifts.map((sh) => shiftRow(sh)).join('') : emptyState('No shifts this week.')}</div>
+        ${w.shifts.length ? shiftsByDayHtml(w, (sh) => shiftRow(sh)) : emptyState('No shifts this week.')}</div>
       ${SHIP_ONCE_JS}`, 'clock'));
   } catch (err) {
     console.error('clock page failed:', err.message);
@@ -29873,7 +29916,7 @@ app.get('/admin/timeclock', requireAdmin, async (req, res) => {
         <div class="card">${roster.length ? roster.map((r, i) => {
           const w = weeks[i];
           return `<div class="row-i"><span class="row-main"><a href="/admin/timeclock?staff=${r.id}&amp;week=${week}"><b>${escEmail(r.name)}</b></a>
-            <div class="row-sub">${w ? `${TRAINING.hm(w.minutes)} on the clock${w.open ? ' · on now' : ''}${w.timeproofMinutes != null ? ` · TimeProof ${TRAINING.hm(w.timeproofMinutes)}` : ''}${
+            <div class="row-sub">${w ? `${(() => { const t = clockDays(w).find((d) => d.date === TIMECLOCK.dayOf(new Date())); return t ? `today ${TRAINING.hm(t.minutes)} · ` : ''; })()}week ${TRAINING.hm(w.minutes)} on the clock${w.open ? ' · on now' : ''}${w.timeproofMinutes != null ? ` · TimeProof ${TRAINING.hm(w.timeproofMinutes)}` : ''}${
               w.hours.length ? ` · approved ${w.hours.reduce((n, h) => n + h.hours, 0)}h` : ''}` : 'Could not load'}</div></span>
             <span class="row-end">${w && w.flags.length ? pill(`${w.flags.length} to look at`, 'amber') : pill('nothing flagged', 'green')}</span></div>`;
         }).join('') : emptyState('No active helpers.')}</div>`, 'timeclock'));
@@ -29887,7 +29930,8 @@ app.get('/admin/timeclock', requireAdmin, async (req, res) => {
       ${hoursTabs('clock')}
       <div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:12px">${chips(who.id)}</div>
       ${flash(req.query)}
-      <div class="card"><b>${TRAINING.hm(w.minutes)} on the clock</b> (${TIMECLOCK.hoursOf(w.minutes)} hours)${w.open ? ' &middot; a shift is still running' : ''}
+      <div class="card"><b>${TRAINING.hm(w.minutes)} on the clock this week</b> (${TIMECLOCK.hoursOf(w.minutes)} hours)${w.open ? ' &middot; a shift is still running' : ''}
+        ${dailyHoursHtml(w)}
         ${w.hours.length ? `<p class="muted">${w.approval ? `Approved from the clock: ${w.approval.hours}h for ${escEmail(BUSINESSES[w.approval.business] || w.approval.business)}. ` : 'Typed on Team: '}On Team: ${approved}h${paid ? ' (paid, locked)' : ''}${Math.abs(approved - TIMECLOCK.hoursOf(w.minutes)) > 0.01 && !paid ? ' — differs from the clock now; approve again to update it' : ''}</p>` : ''}
         <form method="post" action="/admin/timeclock/timeproof" data-once class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px;align-items:end">
           <input type="hidden" name="staff_id" value="${who.id}"><input type="hidden" name="week_of" value="${week}">
@@ -29904,7 +29948,7 @@ app.get('/admin/timeclock', requireAdmin, async (req, res) => {
         ${w.flags.length ? w.flags.map((f) => `<div class="row-i"><span class="row-main" style="white-space:normal;color:${tone[f.tone] || tone.neutral}">${escEmail(f.text)}</span>
           <span class="row-end muted">${f.at ? escEmail(clockTime(f.at)) : ''}</span></div>`).join('') : '<p class="muted">Nothing flagged this week.</p>'}</div>
       <div class="card"><b>Shifts</b>
-        ${w.shifts.length ? w.shifts.map((sh) => shiftRow(sh, { owner: true, pings: w.pings })).join('') : emptyState('No shifts this week.')}
+        ${w.shifts.length ? shiftsByDayHtml(w, (sh) => shiftRow(sh, { owner: true, pings: w.pings })) : emptyState('No shifts this week.')}
         <details style="margin-top:10px"><summary>Add a shift they forgot to clock</summary>
           <form method="post" action="/admin/timeclock/shift" data-once class="row" style="gap:8px;flex-wrap:wrap;margin-top:6px;align-items:end">
             <input type="hidden" name="staff_id" value="${who.id}">
@@ -31582,20 +31626,72 @@ async function myShiftsCard(staffId) {
   const occ = [...SHIFTS.weekOccurrences(rows, SHIFTS.addDays(monday, -7), 'America/Chicago'), ...thisWeek,
     ...SHIFTS.weekOccurrences(rows, SHIFTS.addDays(monday, 7), 'America/Chicago')].filter((o) => o.end > now);
   const next = occ[0];
-  return `<div class="card" id="my-shifts"><b>Your work hours</b> <a class="muted" href="/admin/work-schedule" style="float:right">The whole team →</a>
+  return `<div class="card" id="my-shifts"><b>Your work hours</b> <a class="muted" href="/admin/work-schedule" style="float:right">Calendar →</a>
     ${next ? `<div style="margin:8px 0;padding:8px 12px;background:#eef4ff;border-radius:10px">${next.start <= now ? '<b>On shift now</b>' : '<b>Next shift</b>'}${
       shiftLines(next)}</div>` : ''}
     <div class="rows">${thisWeek.map((o) => `<div class="row-i"><span class="row-main" style="white-space:normal">${shiftLines(o)}${
       o.note ? `<div class="row-sub">${escEmail(o.note)}</div>` : ''}</span><span class="row-end muted">${SHIFTS.hoursOf(o)} h</span></div>`).join('')}</div></div>`;
 }
 
+/** The week as a calendar: a column per day, a block per shift placed at its
+ *  hours, in one zone (owner, 2026-10-15: "add a calendar view of your
+ *  schedule because it's confusing"). A shift past midnight is drawn on both
+ *  days. Hours shown run from the earliest start to the latest end. */
+function scheduleCalendarHtml(occ, days, zone, colorOf, { names = true } = {}) {
+  const segs = [];
+  for (const o of occ) for (const sg of SHIFTS.daySegments(o, zone)) if (days.includes(sg.date)) segs.push({ ...sg, o });
+  const lo = segs.length ? Math.max(0, Math.floor(Math.min(...segs.map((x) => x.from)) / 60) - 1) : 8;
+  const hi = segs.length ? Math.min(24, Math.ceil(Math.max(...segs.map((x) => x.to)) / 60) + 1) : 18;
+  const PX = 34;                                     // one hour
+  const hourLabel = (h) => (h % 24 === 0 ? '12 AM' : h === 12 ? '12 PM' : h < 12 ? `${h} AM` : `${h - 12} PM`);
+  const today = SHIFTS.dateIn(new Date(), zone);
+  const col = (d) => {
+    const label = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' }).format(new Date(`${d}T12:00:00Z`));
+    const blocks = segs.filter((x) => x.date === d).map((x) => {
+      const top = (x.from / 60 - lo) * PX, h = Math.max(18, ((x.to - x.from) / 60) * PX - 2);
+      const c = colorOf(x.o.staff_id);
+      const t = `${SHIFTS.clock(x.o.start, zone)} – ${SHIFTS.clock(x.o.end, zone)}`;
+      return `<div class="cal-b" style="top:${top}px;height:${h}px;background:${c.bg};border-color:${c.fg};color:${c.fg}"
+          title="${escEmail((names ? x.o.name + ': ' : '') + t + (x.o.note ? ' — ' + x.o.note : ''))}">
+        ${names ? `<b>${escEmail(x.o.name)}</b>` : ''}<span>${escEmail(t)}</span>${x.o.note ? `<em>${escEmail(x.o.note)}</em>` : ''}</div>`;
+    }).join('');
+    return `<div class="cal-col${d === today ? ' cal-today' : ''}"><div class="cal-h">${escEmail(label)}</div>
+      <div class="cal-body" style="height:${(hi - lo) * PX}px">${blocks}</div></div>`;
+  };
+  const ruler = Array.from({ length: hi - lo }, (_, i) => `<div style="height:${PX}px">${hourLabel(lo + i)}</div>`).join('');
+  return `<style>
+    .cal-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid #e3e8f2;border-radius:12px;background:#fff}
+    .cal{display:grid;grid-template-columns:52px repeat(7,minmax(104px,1fr));min-width:780px}
+    .cal-ruler{padding-top:34px;font-size:10.5px;color:#8b95a5;text-align:right;padding-right:6px}
+    .cal-ruler div{border-top:1px solid transparent;transform:translateY(-6px)}
+    .cal-col{border-left:1px solid #eef1f6}
+    .cal-h{height:34px;display:flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:700;color:#0B1F4B;border-bottom:1px solid #e3e8f2}
+    .cal-today .cal-h{background:#eef3ff;color:#1848B8}
+    .cal-body{position:relative;background:repeating-linear-gradient(#fff 0 ${PX - 1}px,#f0f2f7 ${PX - 1}px ${PX}px)}
+    .cal-b{position:absolute;left:3px;right:3px;border:1px solid;border-left-width:4px;border-radius:7px;padding:3px 5px;font-size:11.5px;line-height:1.25;overflow:hidden}
+    .cal-b b,.cal-b span,.cal-b em{display:block}.cal-b em{font-style:normal;opacity:.8}
+  </style><div class="cal-wrap"><div class="cal"><div class="cal-ruler">${ruler}</div>${days.map(col).join('')}</div></div>`;
+}
+
 app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
   try {
     const owner = isOwner();
+    const actor = currentActor() || OWNER_ACTOR;
     const asked = SHIFTS.validDate(req.query.week);
     const week = asked ? SHIFTS.mondayOf(new Date(`${asked}T12:00:00Z`), 'UTC') : SHIFTS.mondayOf(new Date(), 'America/Chicago');
-    const [rows, roster] = await Promise.all([shiftRows(), staffRoster({ activeOnly: true })]);
+    /* A helper sees their own shifts only (owner, 2026-10-15: "each helper
+       should only see their own hours"); the owner sees everyone's. */
+    const [rows, roster] = await Promise.all([shiftRows(owner ? null : actor.id), staffRoster({ activeOnly: true })]);
     const occ = SHIFTS.weekOccurrences(rows, week, 'America/Chicago');
+    /* The calendar is drawn in one zone: the owner's Chicago by default, a
+       helper's Philippines; a chip switches. The list shows both. */
+    const zone = req.query.zone === 'ct' ? 'America/Chicago' : req.query.zone === 'ph' ? 'Asia/Manila' : owner ? 'America/Chicago' : 'Asia/Manila';
+    const view = req.query.view === 'list' ? 'list' : 'calendar';
+    const calOcc = SHIFTS.weekOccurrences(rows, week, zone);
+    const PALETTE = [['#e8f0ff', '#1848B8'], ['#e7f6ec', '#166534'], ['#fff1e6', '#9a3412'], ['#f3e8ff', '#6b21a8'], ['#fdf2f8', '#9d174d'], ['#ecfeff', '#155e75']];
+    const colorOf = (id) => { const ix = roster.findIndex((r) => r.id === id); const c = PALETTE[(ix < 0 ? 0 : ix) % PALETTE.length]; return { bg: c[0], fg: c[1] }; };
+    const q = (o) => { const p = new URLSearchParams({ week, ...(req.query.zone ? { zone: req.query.zone } : {}), ...(view === 'list' ? { view } : {}), ...o });
+      for (const [k, v] of [...p]) if (v === '') p.delete(k); return `/admin/work-schedule?${p.toString().replace(/&/g, '&amp;')}`; };
     const dayOf = (o) => SHIFTS.dateIn(o.start, 'America/Chicago');
     const days = Array.from({ length: 7 }, (_, i) => SHIFTS.addDays(week, i));
     const hours = new Map();
@@ -31633,12 +31729,22 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
       .ws-shift{border-top:1px solid #eef1f6;padding:6px 0;font-size:13px}
       .ws-shift:first-of-type{border-top:0}
     </style>
-      ${pageHeader('Work schedule', 'Each shift in Chicago time (CT) and Philippines time (PH), for the real dates of the week, so daylight saving is already counted.',
-        `<a class="btn btn-ghost" href="/admin/work-schedule?week=${SHIFTS.addDays(week, -7)}">&larr; Week before</a><a class="btn btn-ghost" href="/admin/work-schedule?week=${SHIFTS.addDays(week, 7)}">Week after &rarr;</a>`)}
+      ${pageHeader(owner ? 'Work schedule' : 'My schedule', owner ? 'Each shift in Chicago time (CT) and Philippines time (PH), for the real dates of the week, so daylight saving is already counted.'
+        : 'Your shifts this week, in Philippines time (PH) or Chicago time (CT). Switch the zone or show the list below.',
+        `<a class="btn btn-ghost" href="${q({ week: SHIFTS.addDays(week, -7) })}">&larr; Week before</a><a class="btn btn-ghost" href="${q({ week: SHIFTS.addDays(week, 7) })}">Week after &rarr;</a>`)}
       ${hoursTabs('schedule')}
       ${flash(req.query)}
-      <div class="card"><b>Hours this week</b> ${[...hours.entries()].map(([id, h]) => `<span class="muted" style="margin-left:10px">${escEmail(nameOf(roster, id))} ${Math.round(h * 10) / 10} h</span>`).join('') || '<span class="muted">none scheduled</span>'}</div>
-      <div class="ws-grid">${days.map(dayCard).join('')}</div>
+      <div class="card"><b>${owner ? 'Hours this week' : 'Your scheduled hours this week'}</b> ${[...hours.entries()].map(([id, h]) => `<span class="muted" style="margin-left:10px">${owner ? escEmail(nameOf(roster, id)) + ' ' : ''}${Math.round(h * 10) / 10} h</span>`).join('') || '<span class="muted">none scheduled</span>'}</div>
+      ${filterChips([
+        { label: 'Calendar', href: q({ view: '' }), on: view === 'calendar' },
+        { label: 'List', href: q({ view: 'list' }), on: view === 'list' },
+      ])}
+      ${view === 'calendar' ? `${filterChips([
+          { label: 'Philippines time (PH)', href: q({ zone: 'ph' }), on: zone === 'Asia/Manila' },
+          { label: 'Chicago time (CT)', href: q({ zone: 'ct' }), on: zone === 'America/Chicago' },
+        ])}
+        ${scheduleCalendarHtml(calOcc, Array.from({ length: 7 }, (_, i) => SHIFTS.addDays(week, i)), zone, colorOf, { names: owner })}`
+        : `<div class="ws-grid">${days.map(dayCard).join('')}</div>`}
       ${manage}`, owner ? 'timeclock' : 'clock'));
   } catch (err) {
     console.error('work schedule failed:', err.message);
