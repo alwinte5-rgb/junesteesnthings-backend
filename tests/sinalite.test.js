@@ -358,3 +358,23 @@ test('final review: optional lines keep their own date, garment each-prices stay
   assert.ok(!(SL.table().error || '').includes(SL.DATA_FILE), 'no server path published');
   assert.ok(!fs.readFileSync(path.join(__dirname, '..', 'tools', 'lib', 'sinalite.js'), 'utf8').includes("loadError = 'SinaLite prices unreadable (' + DATA_FILE"));
 });
+
+test('a renamed product keeps pricing under its former name until its row is renamed', () => {
+  assert.strictEqual(SL.kindOf('Trifold Brochures — 8.5x11, score and fold'), 'brochure');
+  assert.strictEqual(SL.kindOf('Trifold Brochures — 8.5x11, folded', { aliases: true }), 'brochure');
+  /* A product not tagged SinaLite under a retired name is not priced as one. */
+  assert.strictEqual(SL.kindOf('Trifold Brochures — 8.5x11, folded'), null);
+  assert.strictEqual(require('../tools/lib/quote-signs').signKindOf('Trifold Brochures — 8.5x11, folded'), null);
+  assert.strictEqual(SL.kindOf('Trifold Brochures'), null);
+  assert.strictEqual(SL.table().families.brochure.label, 'Trifold Brochures');
+  assert.ok(SERVER.includes("SINALITE.kindOf(prod.name, { aliases: true })"));
+});
+
+test('the sizer lists the SinaLite runs and says shipping is included; the internal note names SinaLite', () => {
+  const o = require('../tools/lib/quote-signs').sizerOptions();
+  assert.deepStrictEqual(o.brochure.runs.slice(0, 3), [25, 50, 75]);
+  assert.strictEqual(o.pouch.any_qty, true);
+  assert.strictEqual(o.banner.runs, undefined);
+  assert.ok(SERVER.includes('Shipping to the shop is included in the price.'));
+  assert.ok(SERVER.includes("'priced from SinaLite: each run bought is cost x2"));
+});

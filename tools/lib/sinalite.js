@@ -165,6 +165,7 @@ const stale = (now) => { const a = ageDays(now); return a === null || a > STALE_
 function familyOf(key, p) {
   const prices = {};
   let min = Infinity;
+  const runs = new Set();
   for (const mat of p.materials) {
     prices[mat.key] = {};
     for (const size of p.sizes) {
@@ -173,6 +174,7 @@ function familyOf(key, p) {
       if (!lad.length) continue;
       prices[mat.key][size.key] = { '': lad };
       min = Math.min(min, lad[0][0]);
+      for (const [q] of lad) runs.add(q);
     }
   }
   return {
@@ -184,6 +186,8 @@ function familyOf(key, p) {
     any_qty: !!p.any_qty,
     turnaround: p.turnaround || null, url: p.url || null,
     min: Number.isFinite(min) ? min : null,
+    /* Every quantity SinaLite sells (or prices) this item at, for the sizer. */
+    runs: [...runs].sort((a, b) => a - b),
     markup: MARKUP, freight: 0, freight_by_size: {},
     materials: p.materials.map((m) => ({ key: m.key, label: m.label })),
     sizes: p.sizes.map((s) => ({ key: s.key, label: s.label, step: 1 })),
@@ -208,10 +212,14 @@ function table() {
 
 /* Product name -> family, first match wins. The names are the ones
    tools/add-sinalite-products.js writes, so a quote line finds its ladder. */
-function kindOf(name) {
+function kindOf(name, { aliases = false } = {}) {
   const n = String(name || '');
   for (const [key, p] of Object.entries(load().products || {})) {
-    if (p.name && n.toLowerCase() === String(p.name).toLowerCase()) return key;
+    /* Former names count only for a row already tagged supplier='sinalite'
+       (server.js sizedKindOf): any other product under a retired name must not
+       be priced off a SinaLite ladder (code review on #296). */
+    const names = [p.name, ...(aliases && Array.isArray(p.aliases) ? p.aliases : [])].filter(Boolean);
+    if (names.some((x) => n.toLowerCase() === String(x).toLowerCase())) return key;
   }
   return null;
 }

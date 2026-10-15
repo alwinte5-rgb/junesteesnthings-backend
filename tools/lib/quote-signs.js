@@ -122,7 +122,9 @@ function priceSign(kind, spec, qty, takeFreight) {
     if (!ladder) return { ok: false, error: `${size.label} is not made in that material.` };
     if (q < ladder[0][0]) return { ok: false, min: ladder[0][0], error: `${size.label} ${fam.label.toLowerCase()} have a minimum of ${ladder[0][0]}.` };
     /* SinaLite sells set runs only: a quantity between runs is bought as the
-       next run up (sinalite.js eachFor). Signs365 stock ladders are bands. */
+       cheapest mix of runs that covers it; an any-quantity item never costs
+       more than the next run's total (sinalite.js eachFor). Signs365 stock
+       ladders are bands. */
     const base = fam.supplier === 'sinalite' ? SL.eachFor(ladder, q, fam.any_qty) : ladderPrice(ladder, q);
     /* Never arithmetic on a missing price: null is "cannot price", not $0
        (Codex on #293: a quantity past the run cap priced free). */
@@ -168,7 +170,10 @@ function sizerOptions() {
       /* SinaLite only: the date its prices were read, and whether that is
          past STALE_DAYS, so the sizer can say so. */
       ...(fam.supplier === 'sinalite' ? (() => { const t = SL.table();
-        return { stale: !!(t.stale || t.error), captured: t.captured ? String(t.captured).slice(0, 10) : null }; })() : {}),
+        /* The quantities SinaLite sells, shown under the sizer so nobody has
+           to guess a run (owner, 2026-10-15: "there are no quantities"). */
+        return { stale: !!(t.stale || t.error), captured: t.captured ? String(t.captured).slice(0, 10) : null,
+          runs: fam.runs || [], any_qty: !!fam.any_qty }; })() : {}),
       limits: fam.limits || null, sizes: fam.sizes || null,
       materials: fam.materials.map((m) => ({ key: m.key, label: m.label })),
       sheet_upgrades: fam.sheet_upgrades || {},

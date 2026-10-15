@@ -4,9 +4,12 @@
   "source": "tools/sinalite-capture.js, logged-in SinaLite trade prices (sale prices included)",
   "products": {
     "brochure": {
-      "name": "Trifold Brochures — 8.5x11, folded",
+      "name": "Trifold Brochures — 8.5x11, score and fold",
       "label": "Trifold Brochures",
       "group": "Print & Paper",
+      "aliases": [
+        "Trifold Brochures — 8.5x11, folded"
+      ],
       "design": "brochure",
       "online": false,
       "url": "https://sinalite.com/en_us/print-products/brochures/100lb-gloss-text.html",
