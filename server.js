@@ -30200,7 +30200,12 @@ app.get('/admin/timeclock', requireAdmin, async (req, res) => {
        looked like nothing happened (owner, 2026-10-15). It comes back, as
        "Approve again", only when the clock no longer matches. */
     const clockHours = TIMECLOCK.hoursOf(w.minutes);
-    const upToDate = !!w.approval && Math.abs(approved - clockHours) <= 0.01;
+    /* The approved business's own row, not every business's hours added up:
+       hours typed on Team for the other business would otherwise bring the
+       button back forever, and pressing it could move the hours (review). */
+    const mine = w.approval && w.hours.find((h) => h.business === w.approval.business);
+    const upToDate = !!mine && Math.abs(Number(mine.hours) - clockHours) <= 0.01
+      && Math.abs(Number(w.approval.hours) - clockHours) <= 0.01;
     const tone = { red: '#b91c1c', amber: '#b45309', neutral: '#46505f' };
     res.send(adminPage('Timeclock', `
       ${pageHeader(`Hours — ${who.name}, week of ${weekLabel(week)}`, 'Cut time you do not pay for on each shift, then approve the week.', weekNav(who.id))}
@@ -30215,7 +30220,7 @@ app.get('/admin/timeclock', requireAdmin, async (req, res) => {
           <label>TimeProof hours this week <input type="number" name="hours" min="0" max="80" step="0.01" style="width:100px" value="${w.timeproofMinutes != null ? TIMECLOCK.hoursOf(w.timeproofMinutes) : ''}"></label>
           <button type="submit" class="btn btn-ghost">Save</button>
           <span class="muted" style="font-size:12px">From their TimeProof page on OnlineJobs.ph</span></form>
-        ${upToDate && !paid ? `<div class="ok" style="margin-top:10px">&#10003; This week is approved: ${approved} hours for ${escEmail(BUSINESSES[w.approval.business] || w.approval.business)}. Nothing more to do unless a shift changes.</div>` : ''}
+        ${upToDate && !paid ? `<div class="ok" style="margin-top:10px">&#10003; This week is approved: ${Number(mine.hours)} hours for ${escEmail(BUSINESSES[w.approval.business] || w.approval.business)}. Nothing more to do unless a shift changes.</div>` : ''}
         ${paid || !w.shifts.length || upToDate ? '' : `<form method="post" action="/admin/timeclock/approve" data-once class="row" style="gap:8px;flex-wrap:wrap;margin-top:10px;align-items:end">
           <input type="hidden" name="staff_id" value="${who.id}"><input type="hidden" name="week_of" value="${week}">
           <label>For <select name="business">${Object.entries(BUSINESSES).map(([k, v]) => `<option value="${k}">${escEmail(v)}</option>`).join('')}</select></label>
