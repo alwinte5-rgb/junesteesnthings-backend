@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /* Write tools/data/sinalite-costs.json from what tools/sinalite-capture.js read.
  *
- *   node tools/sinalite-assemble.js <captured.json>
+ *   node tools/sinalite-assemble.js <captured.json> [--captured=2026-10-15]
  *
  * <captured.json> is { "<key>": { rows: [...] }, ... } — the capture results
  * keyed by family. Several captures can feed one family (the 6 ft and 8 ft
@@ -36,11 +36,18 @@ const META = {
     sizes: [{ key: '8.5x11', label: '8.5" x 11"' }],
   },
   table_cover: {
-    name: 'Table Covers — printed polyester', label: 'Table Covers', group: 'Signs & Display',
+    name: 'Table Covers — front panel printed', label: 'Table Covers (front panel printed)', group: 'Signs & Display',
     design: 'table_cover', online: true, from: ['table_cover_6', 'table_cover_8'],
     url: 'https://sinalite.com/en_us/large-format/table-covers.html',
-    note: 'Full-color printed polyester table cover, machine washable.',
-    materials: [{ key: '3sided', label: '3-sided (open back)' }, { key: '4sided', label: '4-sided (closed back)' }],
+    /* SinaLite's only stock on these pages is "Polyester Printed 1 Side (4/0)":
+       the design goes on the FRONT PANEL. "3/4 Sided" is how the cloth is cut
+       (open or closed back), not how much of it is printed — their product
+       photo shows an all-over print, which this item is not (SinaLite support
+       to the owner, 2026-10-15). Say so on every label so no quote promises
+       the photo. */
+    note: 'Polyester table cover, machine washable. Full-color design printed on the front panel; the ends and back are plain.',
+    materials: [{ key: '3sided', label: '3-sided (open back), front panel printed' },
+      { key: '4sided', label: '4-sided (closed back), front panel printed' }],
     sizes: [{ key: '6ft', label: 'Fits a 6 ft table' }, { key: '8ft', label: 'Fits an 8 ft table' }],
   },
   xframe: {
@@ -93,12 +100,20 @@ function assemble(captured, meta = META) {
 module.exports = { META, assemble };
 
 if (require.main === module) {
-  const file = process.argv[2];
+  const file = process.argv.slice(2).find((a) => !a.startsWith('--'));
   if (!file) { console.error('usage: sinalite-assemble.js <captured.json>'); process.exit(2); }
   const captured = JSON.parse(fs.readFileSync(file, 'utf8'));
   const products = assemble(captured);
+  /* The date is when SinaLite's prices were READ, not when this ran: re-running
+     it to change a label must not make old (sale) prices look fresh. A new
+     capture passes --captured=<date>; otherwise the existing file's date stays. */
+  const flag = (process.argv.find((a) => a.startsWith('--captured=')) || '').slice(11);
+  let prev = null;
+  try { prev = JSON.parse(fs.readFileSync(OUT, 'utf8')).captured; } catch { /* first run */ }
+  const when = flag ? new Date(flag) : prev ? new Date(prev) : null;
+  if (!when || isNaN(when)) { console.error('pass --captured=<date the prices were read>'); process.exit(2); }
   const out = {
-    captured: new Date().toISOString(),
+    captured: when.toISOString(),
     ship_to: 'Chicago IL 60657 (the shop), cheapest rate SinaLite offers',
     source: 'tools/sinalite-capture.js, logged-in SinaLite trade prices (sale prices included)',
     products,
