@@ -21377,6 +21377,9 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
     const creditCard = await jobCreditCard(q).catch((e) => { console.error('credit card failed:', e.message); return ''; });
     const historyCard = await jobHistoryCard(q).catch((e) => { console.error('history card failed:', e.message); return ''; });
     const upsellCard = await jobUpsellCard(q).catch((e) => { console.error('upsell card failed:', e.message); return ''; });
+    /* A failed catalogue still lists the lines, without their print places. */
+    const orderCard = await getCatalog().then((c) => jobOrderCard(q, c), () => jobOrderCard(q, null))
+      .catch((e) => { console.error('order card failed:', e.message); return ''; });
     res.send(adminPage(`${q.code} — production`, `
       <h1>${escEmail(q.name || q.code)}</h1>
       <div class="sub">${escEmail(q.code)} · ${money(q.total)} ·
@@ -21446,10 +21449,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
           <button type="submit" class="kbtn kbtn-go" style="font-size:12px">Set</button>
           <button type="submit" name="flexible" value="1" class="kbtn" style="font-size:12px">No fixed date</button>
         </form>` : ''}
-        ${sched ? `<div class="muted" style="font-size:12px;margin-bottom:10px">
-          ${q.needed_by ? `Needed ${dayShort(q.needed_by)}` : `Working to ${dayShort(q.target_date)}`} · ${sched.isPickup ? 'ready by' : 'ship by'} ${dayShort(sched.ship_by)}
-          · order blanks by ${dayShort(sched.blanks_order_by)}
-          ${sched.risks.length ? `<span style="color:#b91c1c"> · behind on ${sched.risks.map(r=>escEmail(r.label)).join(', ')}</span>` : ''}</div>` : ''}
+        ${jobScheduleHtml(q, sched)}
         <div data-next style="font-size:13px;margin-bottom:6px">
           ${cl.next ? `<b style="color:#1848B8">Next: ${escEmail(cl.next.label)}</b>
             <span class="muted" style="font-size:12px"> — ${escEmail(cl.next.hint)}</span>`
@@ -21466,6 +21466,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
           ${cancelOrderForm(q, 'production')}
         </div>`}
       </div>
+      ${orderCard}
       ${actorLevel('finances') === 'on' ? `<div class="card" id="costs" style="margin-top:14px">
         <h2 class="card-title">Costs</h2>
         ${jobCostForm(q, costBook, true)}
@@ -21526,6 +21527,98 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
     res.redirect('/admin/production');
   }
 });
+
+/** What was ordered, on the job page: every line as the customer's quote
+ *  shows it (product, color, print places, sizes, size and material of a
+ *  sized item, notes, files) with its quantity and price, so production does
+ *  not have to open the customer's page to see what to make (owner,
+ *  2026-10-15). An optional line still flagged was not taken: shown struck
+ *  out, never as part of the job. */
+function jobOrderCard(q, catalog) {
+  const items = Array.isArray(q.items) ? q.items : [];
+  if (!items.length) return '';
+  const cat = catalog || {};
+  const rows = items.map((i, ix) => {
+    const notTaken = !!i.optional && !!q.accepted_at;
+    const fig = customerLineFigures(i);
+    const sizes = orderedSizeKeys(i, cat)
+      .map((sz) => [sz, parseInt((i.size_mix || {})[sz], 10) || 0]).filter(([, n]) => n > 0);
+    const deco = (() => { try { return decorationSummary(i, cat); } catch { return []; } })();
+    const imgs = (i.images || []).filter((u) => /^https:\/\//.test(u));
+    return `
+      <tr style="vertical-align:top${notTaken ? ';opacity:.55' : ''}">
+        <td style="vertical-align:top">
+          ${i.optional ? `<div style="font-size:11px;font-weight:700;color:#1848B8;letter-spacing:.04em">${
+            notTaken ? 'OPTIONAL — NOT TAKEN' : 'OPTIONAL — CUSTOMER CHOOSES'}</div>` : ''}
+          <b${notTaken ? ' style="text-decoration:line-through"' : ''}>${escEmail(oneSizeList(i.description))}</b>
+          ${i.colour ? `<div style="display:flex;align-items:center;gap:6px;margin-top:3px;font-size:13px">
+              <span style="width:13px;height:13px;border-radius:3px;flex:0 0 13px;border:1px solid rgba(0,0,0,.25);
+                    background:${/^#[0-9a-fA-F]{6}$/.test(String(i.colour_hex || '')) ? i.colour_hex : 'transparent'}"></span>
+              <span>${escEmail(i.colour)}</span></div>` : ''}
+          ${deco.length ? `<div style="margin-top:4px;font-size:13px;color:#24457f">${
+            deco.map((d) => '<div>&#9656; ' + escEmail(d) + '</div>').join('')}</div>` : ''}
+          ${sizes.length ? `<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:6px">${sizes.map(([sz, n]) =>
+            `<span style="background:#eef3ff;border:1px solid #d6e2fb;border-radius:6px;padding:2px 7px;font-size:12.5px">
+               <b>${escEmail(sz)}</b> ${n}</span>`).join('')}</div>` : ''}
+          ${i.details ? `<div class="muted" style="font-size:13px;margin-top:4px">${escEmail(i.details)}</div>` : ''}
+          ${(Array.isArray(i.files) ? i.files : []).filter((f) => f && f.kind !== 'image' && /^https:\/\//.test(String(f.url || ''))).map((f) =>
+            `<div style="font-size:12.5px;margin-top:3px">&#128206;
+               <a href="${escEmail(f.url)}" target="_blank" rel="noopener">${escEmail(f.name || 'file')}</a></div>`).join('')}
+          ${imgs.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${imgs.map((u) =>
+            `<a href="${escEmail(u)}" target="_blank" rel="noopener"><img src="${escEmail(u)}" alt="" loading="lazy"
+               style="width:64px;height:64px;object-fit:cover;border-radius:8px;border:1px solid #e3e8f2;background:#fff"></a>`).join('')}</div>` : ''}
+        </td>
+        <td class="num">${parseInt(i.qty, 10) || 0}</td>
+        <td class="num">${eachText(fig, i)}</td>
+        <td class="num">${money(fig.amount)}</td>
+      </tr>${addonRowsFor(i, ix)}`;
+  }).join('');
+  return `
+    <div class="card" id="ordered" style="margin-top:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+        <h2 class="card-title" style="margin:0">What was ordered</h2>
+        <a href="/q/${encodeURIComponent(q.code)}" target="_blank" rel="noopener" style="font-size:13px;color:#1848B8">the customer's quote page &rarr;</a>
+      </div>
+      <div style="overflow-x:auto;margin-top:8px">
+        <table class="dt" style="width:100%;border-collapse:collapse;font-size:14px">
+          <thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Each</th><th class="num">Amount</th></tr></thead>
+          <tbody>${rows}</tbody>
+          <tfoot>${Number(q.tax) > 0 ? `<tr><td colspan="3" class="num muted">Illinois sales tax</td><td class="num muted">${money(q.tax)}</td></tr>` : ''}
+            <tr><td colspan="3" class="num"><b>Total</b> <span class="muted" style="font-weight:400;font-size:12px">(any discount, rush or delivery is itemised on the customer's quote page)</span></td>
+              <td class="num"><b>${money(q.total)}</b></td></tr></tfoot>
+        </table>
+      </div>
+    </div>`;
+}
+
+/** The job's dates. With a deadline: every latest-safe date, step by step.
+ *  Without one: what the job takes from today, so there is still a schedule
+ *  to look at while the date is being asked for (owner, 2026-10-15). */
+function jobScheduleHtml(q, sched) {
+  const row = (label, d, done) => `<div style="display:flex;justify-content:space-between;gap:10px;padding:3px 0;border-bottom:1px solid #f0f2f7">
+      <span${done ? ' style="color:#6b7280;text-decoration:line-through"' : ''}>${label}</span><b>${dayShort(d)}</b></div>`;
+  if (sched) {
+    return `<div style="font-size:13px;margin-bottom:12px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:9px;padding:8px 11px">
+      <div style="font-weight:700;margin-bottom:4px">Production schedule <span class="muted" style="font-weight:400">· latest safe dates</span></div>
+      ${[ /* In date order: blanks are ordered before the artwork is due. */
+        ['Order blanks', sched.blanks_order_by, !!q.production_at],
+        ['Artwork in', sched.artwork_by, !!q.production_at],
+        ['Proof approved', sched.proof_by, !!q.production_at],
+        ['On the press', sched.press_by, !!q.shipped_at],
+        [sched.isLocal ? 'Ready for delivery' : sched.isPickup ? 'Ready for pickup' : 'Shipped', sched.ship_by, !!q.shipped_at],
+        [q.needed_by ? 'Needed by the customer' : 'Our working date', q.needed_by || q.target_date, !!q.delivered_at],
+      ].map((x, n) => [x, n]).sort((a, b) => (new Date(a[0][1]) - new Date(b[0][1])) || (a[1] - b[1]))
+        .map(([x]) => row(x[0], x[1], x[2])).join('')}
+      ${sched.risks.length ? `<div style="color:#b91c1c;margin-top:4px">Behind on ${sched.risks.map((r) => escEmail(r.label)).join(', ')}</div>` : ''}
+    </div>`;
+  }
+  if (q.cancelled_at || q.shipped_at) return '';
+  const est = deliveryEstimate(new Date(), { items: (q.items || []).filter((i) => !(i && i.optional && q.accepted_at)), pickup: true });
+  return `<div style="font-size:13px;margin-bottom:12px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:9px;padding:8px 11px">
+      <b>Production schedule</b> <span class="muted">· no date yet</span>
+      <div style="margin-top:3px">Started today, this job takes ${est.production_days[0]}–${est.production_days[1]} business days:
+        ready about <b>${dayShort(est.ready)}</b>. Set a date above for the step-by-step dates.</div></div>`;
+}
 
 /* ── Tax exemption on the job page ────────────────────────────────────────────
    For an untaxed quote: why it charges no tax, what is on file, its review,
