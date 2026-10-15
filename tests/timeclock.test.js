@@ -109,3 +109,12 @@ test('the clock-in minute and a shift from the week before are not "clocked out"
   const f = C.flags({ pings: monday }).find((x) => x.kind === 'off-clock');
   assert.strictEqual(C.toLocalInput(f.at), '2026-10-12T12:00');
 });
+
+test('an approved week says so instead of offering the same Approve again (owner, 2026-10-15)', () => {
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'server.js'), 'utf8');
+  // The approved business's own row, never the sum across businesses.
+  assert.match(src, /const mine = w\.approval && w\.hours\.find\(\(h\) => h\.business === w\.approval\.business\);/);
+  assert.match(src, /const upToDate = !!mine && Math\.abs\(Number\(mine\.hours\) - clockHours\) <= 0\.01/);
+  assert.match(src, /paid \|\| !w\.shifts\.length \|\| upToDate \? '' : `<form method="post" action="\/admin\/timeclock\/approve"/);
+  assert.match(src, /\$\{w\.approval \? 'Approve again' : 'Approve'\} \$\{clockHours\} hours/);
+});
