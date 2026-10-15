@@ -19067,6 +19067,52 @@ app.post('/admin/quote/:code/uncancel', requireAdmin, async (req, res) => {
   res.redirect(String((req.body && req.body.back) || '') === 'orders' ? '/admin/orders' : '/admin/quotes');
 });
 
+/** An expired quote, not accepted and not cancelled: Reinstate puts it back. */
+function quoteIsExpired(q) {
+  return !!q && !q.accepted_at && !q.cancelled_at && !['held', 'draft'].includes(q.status) &&
+    (q.status === 'expired' || (!!q.valid_until && new Date(q.valid_until) < new Date(new Date().toDateString())));
+}
+
+/** The Reinstate button for an expired quote (`back`: 'job' returns to its
+ *  job page, otherwise the expired list on the board). */
+function reinstateForm(q, back = '') {
+  if (!quoteIsExpired(q)) return '';
+  return `<form method="POST" action="/admin/quote/${escEmail(q.code)}/reinstate" style="display:inline;margin:0"
+      onsubmit="return confirm('Reinstate ${escEmail(q.code)} at the same prices, good for 14 more days?')">
+    <input type="hidden" name="back" value="${back === 'job' ? 'job' : ''}">
+    <button type="submit" class="btn btn-ghost" style="padding:8px 16px;font-size:13px">Reinstate (14 days)</button></form>`;
+}
+
+/* Bring an expired quote back (owner, 2026-10-15): the same lines and prices,
+   good for 14 more days from today, back to sent (or viewed, if they had
+   opened it), and out of "lost" on the deal. Editing and re-saving did this
+   too, but re-priced every line on the way. Never a held or draft quote, an
+   accepted or a cancelled one (Restore is for those). */
+app.post('/admin/quote/:code/reinstate', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/quotes');
+  const toJob = String((req.body && req.body.back) || '') === 'job';
+  const where = toJob ? `/admin/production/${code}` : '/admin/quotes?expired=1';
+  try {
+    const { rows: [q0] } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
+    if (!quoteIsExpired(q0)) return back(res, where, 'err', 'That quote is not expired, so there is nothing to reinstate.');
+    await snapshotQuote(code, 'reinstate', clientIp(req));
+    const { rows } = await pool.query(
+      `UPDATE quotes SET valid_until = CURRENT_DATE + 14,
+              status = CASE WHEN viewed_at IS NOT NULL THEN 'viewed' ELSE 'sent' END
+        WHERE code = $1 AND accepted_at IS NULL AND cancelled_at IS NULL AND status NOT IN ('held', 'draft')
+        RETURNING *`, [code]);
+    if (!rows.length) return back(res, where, 'err', 'That quote could not be reinstated.');
+    syncDealStage(rows[0]).catch(() => {});
+    console.log(`quote ${code}: reinstated until ${rows[0].valid_until && new Date(rows[0].valid_until).toISOString().slice(0, 10)}`);
+    return back(res, toJob ? where : `/admin/production/${code}`, 'ok',
+      `Reinstated: good until ${dayShort(rows[0].valid_until)} at the same prices. Send them the link again so they know.`);
+  } catch (err) {
+    console.error('reinstate failed:', err.message);
+    return back(res, where, 'err', 'Could not reinstate it. Please try again.');
+  }
+});
+
 app.post('/admin/quote/:code/settle', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/quotes');
@@ -20548,6 +20594,7 @@ async function renderBoard(VIEW, req, res) {
              onclick="document.getElementById('mp-${q.code}').style.display='block';var a=document.getElementById('ap-${q.code}');if(a)a.style.display='block';this.style.display='none'">Record a payment</button>` : ''}
           ${outstanding > 0 && q.accepted_at ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
              onclick="document.getElementById('st-${q.code}').style.display='block';this.style.display='none'">Settle &mdash; no more owed</button>` : ''}
+          ${reinstateForm(q)}
           ${q.cancelled_at ? `
           <form method="POST" action="/admin/quote/${q.code}/uncancel" style="display:inline"
                 onsubmit="return confirm('Put ${q.code} back on the board?')">
@@ -20908,7 +20955,7 @@ async function renderBoard(VIEW, req, res) {
       group('Waiting on the customer', 'sent, not accepted yet', gQuotes) +
       group('Delivered, still owed', 'collect it, record a payment taken at pickup, or settle it', gOwedDone,
             null, { accent: '#b45309' }) +
-      (showExpired ? group('Expired', 'not accepted in time — edit one to send it again', gExpired) : '') +
+      (showExpired ? group('Expired', 'not accepted in time — Reinstate one to give them 14 more days at the same prices', gExpired) : '') +
       (gExpired.length ? `<p class="muted" style="margin:4px 0 0;font-size:12.5px">${showExpired
         ? `<a href="?">Hide the ${gExpired.length} expired quote${gExpired.length === 1 ? '' : 's'}</a>`
         : `${gExpired.length} expired quote${gExpired.length === 1 ? ' is' : 's are'} off the board &middot;
@@ -21416,6 +21463,10 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
           <button type="submit" style="background:none;border:0;padding:0;color:#1848B8;font:inherit;cursor:pointer;text-decoration:underline">email the quote to them</button></form>${
             q.emailed_at ? ` <span class="muted">(last emailed ${escEmail(new Date(q.emailed_at).toLocaleString('en-US', { timeZone: 'America/Chicago', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))})</span>` : ''}` : ''}</div>
       ${flash(req.query)}
+      ${quoteIsExpired(q) ? `
+      <div class="card" style="border-color:#e5e7eb;background:#f9fafb"><b>This quote expired${q.valid_until ? ' on ' + dayShort(q.valid_until) : ''}.</b>
+        <span class="muted">Reinstate it to give them 14 more days at the same prices.</span>
+        <div style="margin-top:8px">${reinstateForm(q, 'job')}</div></div>` : ''}
       ${q.change_request && !q.cancelled_at ? `
       <div class="card" style="border-color:#c7d7fb;background:#f7faff"><b>They asked for a change</b>
         <div style="margin:6px 0 10px;white-space:pre-wrap">&ldquo;${escEmail(String(q.change_request).slice(0, 2000))}&rdquo;</div>
