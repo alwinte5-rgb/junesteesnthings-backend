@@ -258,21 +258,21 @@
       ]
     },
     "table_cover": {
-      "name": "Table Covers — front panel printed",
-      "label": "Table Covers (front panel printed)",
+      "name": "Table Covers — full-color, printed all over",
+      "label": "Table Covers",
       "group": "Signs & Display",
       "design": "table_cover",
       "online": true,
       "url": "https://sinalite.com/en_us/large-format/table-covers.html",
-      "note": "Polyester table cover, machine washable. Full-color design printed on the front panel; the ends and back are plain.",
+      "note": "Polyester table cover, machine washable. One full-color design printed edge to edge over the top, front and ends (and the back on the closed-back cover); leave panels plain for a front-only look at the same price.",
       "materials": [
         {
           "key": "3sided",
-          "label": "3-sided (open back), front panel printed"
+          "label": "3-sided (open back), printed all over"
         },
         {
           "key": "4sided",
-          "label": "4-sided (closed back), front panel printed"
+          "label": "4-sided (closed back), printed all over"
         }
       ],
       "sizes": [
@@ -285,7 +285,7 @@
           "label": "Fits an 8 ft table"
         }
       ],
-      "description": "Polyester table cover, machine washable. Full-color design printed on the front panel; the ends and back are plain.",
+      "description": "Polyester table cover, machine washable. One full-color design printed edge to edge over the top, front and ends (and the back on the closed-back cover); leave panels plain for a front-only look at the same price.",
       "turnaround": "7 Business Days",
       "rows": [
         {

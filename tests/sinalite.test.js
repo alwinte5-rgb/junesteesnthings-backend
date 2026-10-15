@@ -134,14 +134,15 @@ test('a sized item is offered the design tiers on the form and on the save', () 
   assert.match(SERVER, /if \(!lineTitles\.length && signKind\) lineTitles\.push/);
 });
 
-test('table covers say the design is on the front panel only', () => {
-  /* SinaLite sells these "Printed 1 Side": the product photo's all-over print is
-     not what arrives (support reply to the owner, 2026-10-15). */
+test('table covers say the whole outside is printed (SinaLite templates, not the support reply)', () => {
+  /* "Printed 1 Side (4/0)" is one face of the fabric: SinaLite's 3- and
+     4-sided templates are single full-cover artworks (2026-10-15). */
   const { META } = require('../tools/sinalite-assemble');
   const tc = META.table_cover;
-  assert.match(tc.name, /front panel/i);
-  assert.match(tc.note, /front panel/i);
-  for (const m of tc.materials) assert.match(m.label, /front panel printed/i, m.key);
+  assert.match(tc.name, /printed all over/i);
+  assert.match(tc.note, /edge to edge/i);
+  for (const m of tc.materials) assert.match(m.label, /printed all over/i, m.key);
+  assert.doesNotMatch(JSON.stringify(tc), /front panel printed/i);
 });
 
 test('stale is worked out on every call, not frozen when the table is first built', () => {

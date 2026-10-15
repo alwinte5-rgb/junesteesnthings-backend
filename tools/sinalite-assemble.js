@@ -36,18 +36,21 @@ const META = {
     sizes: [{ key: '8.5x11', label: '8.5" x 11"' }],
   },
   table_cover: {
-    name: 'Table Covers — front panel printed', label: 'Table Covers (front panel printed)', group: 'Signs & Display',
+    name: 'Table Covers — full-color, printed all over', label: 'Table Covers', group: 'Signs & Display',
     design: 'table_cover', online: true, from: ['table_cover_6', 'table_cover_8'],
     url: 'https://sinalite.com/en_us/large-format/table-covers.html',
-    /* SinaLite's only stock on these pages is "Polyester Printed 1 Side (4/0)":
-       the design goes on the FRONT PANEL. "3/4 Sided" is how the cloth is cut
-       (open or closed back), not how much of it is printed — their product
-       photo shows an all-over print, which this item is not (SinaLite support
-       to the owner, 2026-10-15). Say so on every label so no quote promises
-       the photo. */
-    note: 'Polyester table cover, machine washable. Full-color design printed on the front panel; the ends and back are plain.',
-    materials: [{ key: '3sided', label: '3-sided (open back), front panel printed' },
-      { key: '4sided', label: '4-sided (closed back), front panel printed' }],
+    /* WHAT IS PRINTED (checked 2026-10-15). SinaLite's only stock here is
+       "Polyester Printed 1 Side (4/0)", and its support told the owner that
+       means one side of the cover. Their own file-prep templates say
+       otherwise: 6-feet-table-3-sided.pdf is ONE 127" x 60" artwork over the
+       top, front and both ends, and the 4-sided one 128" x 86" over all four
+       sides — "fill with art". "1 Side (4/0)" is one FACE of the fabric, the
+       outside, so the whole visible cover prints, as in their photo. A
+       front-only design is the same item at the same price, so there is no
+       second product. "3/4 Sided" is the cut: open or closed back. */
+    note: 'Polyester table cover, machine washable. One full-color design printed edge to edge over the top, front and ends (and the back on the closed-back cover); leave panels plain for a front-only look at the same price.',
+    materials: [{ key: '3sided', label: '3-sided (open back), printed all over' },
+      { key: '4sided', label: '4-sided (closed back), printed all over' }],
     sizes: [{ key: '6ft', label: 'Fits a 6 ft table' }, { key: '8ft', label: 'Fits an 8 ft table' }],
   },
   xframe: {

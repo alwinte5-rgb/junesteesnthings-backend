@@ -68,7 +68,7 @@ const SERVICES = [
   { name: 'Pouch Design — Revision', price: '60.00',
     description: 'Updating an existing pouch design.' },
   { name: 'Table Cover Design — New', price: '95.00',
-    description: 'A new table cover design for the front panel, set up on the printer\'s template.' },
+    description: 'A new table cover design laid out on the printer\'s full-cover template (top, front and ends).' },
   { name: 'Table Cover Design — Revision', price: '45.00',
     description: 'Updating an existing table cover design.' },
   /* Outsourced print, priced by the owner's rule (2026-10-14): supplier cost
