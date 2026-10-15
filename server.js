@@ -1944,7 +1944,80 @@ async function syncPaidAmount(code) {
             paid_method = COALESCE($4, paid_method)
       WHERE code = $1`,
     [code, paid, rows[0]?.last_at || null, rows[0]?.last_method || null]);
+  /* The first deposit starts the clock (owner, 2026-10-15). Never fails the
+     payment it rides on. */
+  if (paid > 0) await anchorScheduleOnDeposit(code).catch((e) => {
+    console.error(`schedule from deposit for ${code} failed:`, e.message);
+    reportError('schedule-from-deposit', e, `quote ${code}`).catch(() => {});
+  });
   return paid;
+}
+
+/* THE DEADLINE STARTS WITH THE DEPOSIT (owner, 2026-10-15: "The deadline
+   should move based on when a deposit is made"). A job with no date counted
+   "Started today, this job takes 7-10 days" from whatever day the page was
+   opened, so its ready date slid forward every day and paying changed
+   nothing. Now the first deposit sets the shop's working date: the deposit
+   day plus the job's production time (deliveryEstimate, the same window the
+   customer was quoted), plus transit when it ships. Written once, only where
+   no date exists, in one guarded UPDATE so a second payment or a racing
+   webhook cannot move it. A date the customer gave (needed_by) is theirs and
+   a date the shop typed (target_date) is the shop's: neither is touched. */
+async function anchorScheduleOnDeposit(code) {
+  const { rows: [q] } = await pool.query(
+    `SELECT q.code, q.items, q.ship_method, q.needed_by, q.target_date, q.cancelled_at, q.shipped_at, q.delivered_at,
+            (SELECT MIN(created_at) FROM quote_payments p WHERE p.quote_code = q.code AND p.amount > 0) AS deposit_at
+       FROM quotes q WHERE q.code = $1`, [code]);
+  if (!q || !q.deposit_at || q.needed_by || q.target_date || q.cancelled_at || q.shipped_at || q.delivered_at) return null;
+  /* A local delivery booked at Accept already promised a day: the delivery
+     sets that job's ready date (setReadyBy), never a later working date. */
+  if (await DELIVERY.byRef('quote:' + code).catch(() => null)) return null;
+  const ymd = depositWorkingDate(q);
+  const { rowCount } = await pool.query(
+    `UPDATE quotes SET target_date = $2::date
+      WHERE code = $1 AND target_date IS NULL AND needed_by IS NULL`, [code, ymd]);
+  if (rowCount) logActivity(OWNER_ACTOR, 'working date set from deposit', { type: 'quote', id: code },
+    { target_date: ymd, deposit_at: new Date(q.deposit_at).toISOString() });
+  return rowCount ? ymd : null;
+}
+
+/** The working date a deposit sets: the far end of the production window
+ *  from the deposit day, plus transit when the job ships (no method, pickup
+ *  and local delivery are all made ready at the shop, as quoteSchedule reads
+ *  them). Optional lines the customer did not take do not count.
+ *  Counted on the SHOP's calendar: the server runs UTC, so an evening deposit
+ *  in Chicago is already tomorrow there, and counting server days stored a
+ *  Sunday (review). The deposit's Chicago date at noon UTC has that date's
+ *  weekday on any server; after the cutoff or at a weekend it starts the next
+ *  business day, as productionStart does. */
+function depositWorkingDate(q) {
+  const method = String(q.ship_method || '').toLowerCase();
+  const pickup = !method || method === 'pickup' || method === 'local';
+  const items = (Array.isArray(q.items) ? q.items : []).filter((i) => i && !i.optional);
+  const at = new Date(q.deposit_at);
+  const est = deliveryEstimate(at, { items, pickup });
+  const transit = pickup ? 0 : parseInt(process.env.JT_SHIP_MAX || '5', 10);
+  let start = new Date(DELIV.toYmd(at) + 'T12:00:00Z');
+  const dow = start.getUTCDay();
+  if (dow === 0 || dow === 6 || shopMinutes(at) >= CUTOFF_MIN) start = addBusinessDays(start, 1);
+  return addBusinessDays(start, est.production_days[1] + transit).toISOString().slice(0, 10);
+}
+
+/* Jobs paid before the deposit set the date: same rule, after boot. Only
+   deposits from the last 14 days: an older one would be given a date already
+   past and turn up as "behind" on deploy, often for work that is done but
+   never marked (review), the opposite of what this is for. Those keep no date
+   until the owner sets one. Idempotent: the UPDATE only fills an empty date. */
+async function anchorUndatedPaidJobs() {
+  const { rows } = await pool.query(
+    `SELECT q.code FROM quotes q WHERE q.paid_amount > 0 AND q.needed_by IS NULL AND q.target_date IS NULL
+        AND q.cancelled_at IS NULL AND q.shipped_at IS NULL AND q.delivered_at IS NULL
+        AND (SELECT MIN(created_at) FROM quote_payments p WHERE p.quote_code = q.code AND p.amount > 0) > NOW() - INTERVAL '14 days'
+      LIMIT 200`);
+  let n = 0;
+  for (const { code } of rows) if (await anchorScheduleOnDeposit(code).catch(() => null)) n++;
+  if (n) console.log(`working dates set from the deposit on ${n} paid job${n === 1 ? '' : 's'}`);
+  return n;
 }
 
 /**
@@ -7246,7 +7319,12 @@ function quoteSchedule(q) {
   const artBy    = back(proofBy, 1);
 
   const today = new Date(new Date().toDateString());
-  const late = (d, done) => !done && d < today;
+  /* Only work in hand can be behind (owner, 2026-10-15: "9 behind schedule
+     when I only have 4 orders"). A quote nobody has paid a deposit on has not
+     started, so its dates are what it WOULD need, not steps already missed;
+     the dates still show, the warnings do not. Cancelled work is not work. */
+  const inHand = Number(q.paid_amount || 0) > 0 && !q.cancelled_at;
+  const late = (d, done) => inHand && !done && d < today;
 
   return {
     ship_by: shipBy, qc_by: qcBy, press_by: pressBy,
@@ -7431,7 +7509,9 @@ async function notifyQuoteMilestone(before, after) {
     text = SMS.inProduction({ code, first, link: quoteLink(code) });
     subject = `Your order is in production — ${code}`;
     heading = "We've started on your order";
-    const sched = quoteSchedule(after);
+    /* Never a date already past (a working date set from an old deposit). */
+    const sched0 = quoteSchedule(after);
+    const sched = sched0 && sched0.ship_by >= new Date(new Date().toDateString()) ? sched0 : null;
     inner = `${hello}<p>Good news: your order (${what}) is in production now.${sched
       ? ` It's on track to be ${sched.isPickup ? 'ready' : 'on its way'} by ${escEmail(dayShort(sched.ship_by))}.` : ''}
       We'll let you know the moment it's ready.</p>`;
@@ -21779,14 +21859,20 @@ function jobScheduleHtml(q, sched, { canSetDate = true } = {}) {
     </div>`;
   }
   if (q.cancelled_at || q.shipped_at) return '';
-  /* From the day production started, once it has; otherwise from today. */
-  const from = q.production_at ? new Date(q.production_at) : new Date();
-  const est = deliveryEstimate(from, { items: (q.items || []).filter((i) => i && !(i.optional && q.accepted_at)), pickup: true });
+  /* No date yet. Unpaid, the clock has not started: the deposit sets the
+     date (anchorScheduleOnDeposit), so the page says so rather than counting
+     from whatever day it is opened. Paid with no date (the anchor failed) or
+     already in production: from that day. */
+  const paid = Number(q.paid_amount || 0) > 0;
+  const est = deliveryEstimate(q.production_at ? new Date(q.production_at) : new Date(),
+    { items: (q.items || []).filter((i) => i && !(i.optional && q.accepted_at)), pickup: true });
   return `<div style="font-size:13px;margin-bottom:12px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:9px;padding:8px 11px">
       <b>Production schedule</b> <span class="muted">· no date yet</span>
-      <div style="margin-top:3px">${q.production_at ? `In production since ${dayShort(q.production_at)}; this job takes`
-        : 'Started today, this job takes'} ${est.production_days[0]}–${est.production_days[1]} business days:
-        ready about <b>${dayShort(est.ready)}</b>.${canSetDate ? ' Set a date above for the step-by-step dates.' : ''}</div></div>`;
+      <div style="margin-top:3px">${q.production_at ? `In production since ${dayShort(q.production_at)}; this job takes
+        ${est.production_days[0]}–${est.production_days[1]} business days: ready about <b>${dayShort(est.ready)}</b>.`
+        : paid ? `This job takes ${est.production_days[0]}–${est.production_days[1]} business days: ready about <b>${dayShort(est.ready)}</b> if it starts today.`
+        : `The clock starts when the deposit is paid: this job takes ${est.production_days[0]}–${est.production_days[1]} business days from then, and the working date is set on its own.`}${
+        canSetDate ? ' Set a date above for the step-by-step dates.' : ''}</div></div>`;
 }
 
 /* ── Tax exemption on the job page ────────────────────────────────────────────
@@ -37498,7 +37584,11 @@ validateEnv();
 
 const PORT = process.env.PORT || 3000;
 initDB()
-  .then(() => app.listen(PORT, () => console.log(`Listening on port ${PORT}`)))
+  .then(() => app.listen(PORT, () => {
+    console.log(`Listening on port ${PORT}`);
+    /* After listening, so it never holds up a deploy. */
+    anchorUndatedPaidJobs().catch((e) => console.error('working dates from deposits:', e.message));
+  }))
   .catch(err => {
     console.error('DB init failed, exiting:', err.message);
     process.exit(1);
