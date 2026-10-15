@@ -74,7 +74,10 @@ async function runReminders(rows, env = {}) {
     ZELLE_HANDLE: 'pay@jtees.net', ZELLE_NAME: "June's Tees", SHOP_PHONE: '(773) 849-1854',
     SHOP_NAME: "June's Tees", SHOP_SIGNER: 'June',
   };
-  const fn = vm.runInNewContext(`(${liftFn('sendDepositReminders').replace(/^async function sendDepositReminders/, 'async function')})`, ctx);
+  /* The delays are read in one place since 2026-10-15 (the job page lists them too). */
+  vm.createContext(ctx);
+  vm.runInContext(liftFn('reminderDelays'), ctx);
+  const fn = vm.runInContext(`(${liftFn('sendDepositReminders').replace(/^async function sendDepositReminders/, 'async function')})`, ctx);
   await fn();
   return calls;
 }

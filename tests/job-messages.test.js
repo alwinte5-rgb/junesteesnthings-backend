@@ -152,7 +152,7 @@ test('a customer text reply is kept on their latest quote, matched by phone', ()
 
 /* ── The card ───────────────────────────────────────────────────────────── */
 
-function card({ history = [], smsOn = true, consent = true, q = {}, due = 0, refunded = false, opts = {} } = {}) {
+function card({ history = [], smsOn = true, consent = true, q = {}, due = 0, refunded = false, opts = {}, unsubscribed = false, messageLevel = 'on' } = {}) {
   const sandbox = {
     pool: { query: async (sql) => (/quote_payments|stripe_disputes/.test(sql)
       ? { rows: refunded && /quote_payments/.test(sql) ? [{ x: 1 }] : [] } : { rows: history }) },
@@ -170,6 +170,7 @@ function card({ history = [], smsOn = true, consent = true, q = {}, due = 0, ref
     CLOUDINARY_UPLOAD_MAX: 10 * 1024 * 1024, CLD_UPLOAD_FN: 'function jtCldUpload(){}',
     /* The reminders still to come (2026-10-15). */
     FOLLOWUPS: require('../tools/lib/followups'), process: { env: {} },
+    isUnsubscribed: async () => unsubscribed, actorLevel: (k) => (k === 'customers.message' ? messageLevel : 'on'),
   };
   sandbox.MESSAGE_MAX = 10000;
   vm.createContext(sandbox);
@@ -190,6 +191,11 @@ test('reminders still to come are listed with a Skip each, never on the design p
   const accepted = new Date(Date.now() - 3600e3).toISOString();
   assert.match(await card({ q: { accepted_at: accepted, paid_amount: 0 } }), /Deposit reminder/);
   assert.doesNotMatch(await card({ q: { accepted_at: accepted, paid_amount: 0 }, refunded: true }), /Deposit reminder/);
+  assert.doesNotMatch(await card({ q: { shipped_at: shipped }, messageLevel: 'off' }), /skip-reminder/,
+    'no Skip for someone the route would refuse');
+  assert.match(await card({ q: { shipped_at: shipped }, consent: false }), /Pickup reminder[\s\S]*by email</,
+    'no text promised without their consent');
+  assert.match(await card({ q: { shipped_at: shipped }, smsOn: false }), /by email</);
 });
 
 test('the card lists what was sent, how it went, and what they replied', async () => {

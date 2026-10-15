@@ -103,3 +103,48 @@ test('Skip stamps only a column from the fixed list, never one named by the requ
   assert.match(r, /if \(!r\) return res\.redirect/);
   assert.match(r, /COALESCE\(\$\{r\.stamp\}, NOW\(\)\)/, 'a reminder already sent keeps its real time');
 });
+
+test('valid_until as node-postgres hands it over (a Date) still lists the follow-up', () => {
+  const q = { ...base, status: 'viewed', created_at: '2026-10-14T15:00:00Z' };
+  assert.deepStrictEqual(keys({ ...q, valid_until: new Date(2026, 9, 30) }), ['follow-up']);
+  assert.deepStrictEqual(keys({ ...q, valid_until: new Date(2026, 9, 16) }), [], 'expires before it would go');
+  assert.deepStrictEqual(keys({ ...q, valid_until: 'not a date' }), [], 'unreadable: says nothing');
+});
+
+test('channels are the ones that will really go', () => {
+  const q = { ...base, phone: '7735550100', status: 'viewed', created_at: '2026-10-14T15:00:00Z' };
+  assert.deepStrictEqual(F.upcomingReminders(q, { now: NOW, textOk: false })[0].channels, ['email']);
+  assert.deepStrictEqual(F.upcomingReminders(q, { now: NOW, textOk: true, unsubscribed: true })[0].channels, ['text']);
+  assert.deepStrictEqual(keys(q, { textOk: false, unsubscribed: true }), [], 'nothing would go, so nothing is listed');
+  /* The pickup sweep does not check the opt-out list: its email still goes. */
+  assert.deepStrictEqual(F.upcomingReminders({ ...base, shipped_at: '2026-10-14T15:00:00Z' },
+    { now: NOW, textOk: false, unsubscribed: true })[0].channels, ['email']);
+});
+
+test('the sweeps and the page read the delays from one place, and 0 means the minimum', () => {
+  for (const fn of ['sendQuoteFollowUps', 'sendDepositReminders', 'sendBalanceReminders', 'sendPickupReminders']) {
+    const at = src.indexOf(`async function ${fn}(`);
+    assert.match(src.slice(at, at + 200), /reminderDelays\(\)\./, fn);
+  }
+  const vm = require('node:vm');
+  const at = src.indexOf('function reminderDelays(');
+  const fn = src.slice(at, src.indexOf('\n}\n', at) + 2);
+  const sb = { process: { env: { JT_QUOTE_FOLLOWUP_DAYS: '0', JT_PICKUP_NUDGE_DAYS: 'x' } } };
+  vm.createContext(sb);
+  vm.runInContext(fn, sb);
+  const d = vm.runInContext('reminderDelays()', sb);
+  assert.strictEqual(d.followup, 1);
+  assert.strictEqual(d.pickup, 2);
+  assert.strictEqual(d.deposit, 12);
+});
+
+test('a skipped reminder is recorded as skipped, and the boards do not call it reminded', () => {
+  const at = src.indexOf("app.post('/admin/quote/:code/skip-reminder'");
+  const r = src.slice(at, src.indexOf('\n});', at));
+  assert.match(r, /array_append\(COALESCE\(reminders_skipped, '\{\}'\), \$2::text\)/);
+  assert.match(r, /CASE WHEN \$\{r\.stamp\} IS NULL/, 'one already sent is not marked skipped');
+  assert.match(src, /"reminders_skipped TEXT\[\] DEFAULT '\{\}'"/);
+  assert.match(src, /reminderSkipped\(q, 'deposit-reminder'\) \? ' · reminder skipped'/);
+  assert.match(src, /q\.followed_up_at && !q\.accepted_at && !reminderSkipped\(q, 'follow-up'\)/);
+  assert.match(src, /q\.deposit_nudged_at && !reminderSkipped\(q, 'deposit-reminder'\)/);
+});

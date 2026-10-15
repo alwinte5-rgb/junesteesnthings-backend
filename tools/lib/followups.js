@@ -25,7 +25,9 @@ function hourIn(d) {
   return Number(new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: 'numeric', hourCycle: 'h23' }).format(d)) % 24;
 }
 
-/* The first moment at or after `d` when the sweeps run (on the hour). */
+/* Roughly when the sweeps will pick it up: the first daytime hour at or
+   after `d`. They run about hourly from when the server started, not on the
+   hour, and 20 a time, so the page says "around". */
 function nextSendTime(d) {
   let t = new Date(Math.ceil(d.getTime() / 3600e3) * 3600e3);
   for (let i = 0; i < 48; i++) {
@@ -37,6 +39,21 @@ function nextSendTime(d) {
 }
 
 const at = (v) => (v ? new Date(v) : null);
+
+/* Sweeps that leave out an unsubscribed email address (isUnsubscribed);
+   the deposit and pickup ones do not check it. */
+const HONOURS_UNSUB = new Set(['follow-up', 'balance-reminder']);
+
+/* valid_until is a DATE: node-postgres hands it over as a Date at local
+   midnight, a test as 'YYYY-MM-DD'. Either way, the last moment of that day
+   in Chicago (the sweep compares it with CURRENT_DATE). */
+function endOfDay(v) {
+  const ymd = v instanceof Date
+    ? `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}`
+    : String(v).slice(0, 10);
+  const d = new Date(`${ymd}T23:59:59-05:00`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
 const num = (v) => Number(v) || 0;
 
 /**
@@ -46,9 +63,12 @@ const num = (v) => Number(v) || 0;
  * @param o.balanceDue  balanceOf(q), the figure the balance sweep checks
  * @param o.refunded / o.disputed  whether a refund or dispute exists
  * @param o.days  { followup, deposit (hours), balance, pickup } from the same env settings
+ * @param o.textOk   a text would really go (phone, texting on, their consent)
+ * @param o.unsubscribed  their email is on the opt-out list
  * @returns [{ key, label, what, when: Date, overdue: bool, channels: ['email','text'] }]
  */
-function upcomingReminders(q, { now = new Date(), balanceDue = 0, refunded = false, disputed = false, days = {} } = {}) {
+function upcomingReminders(q, { now = new Date(), balanceDue = 0, refunded = false, disputed = false, days = {},
+  textOk = Boolean(String(q.phone || '').trim()), unsubscribed = false } = {}) {
   const d = { followup: 3, deposit: 12, balance: 7, pickup: 2, ...days };
   const reachable = Boolean(String(q.email || '').trim() || String(q.phone || '').trim());
   if (!reachable || q.cancelled_at) return [];
@@ -56,8 +76,10 @@ function upcomingReminders(q, { now = new Date(), balanceDue = 0, refunded = fal
   const add = (key, due) => {
     const when = nextSendTime(due < now ? now : due);
     const channels = [];
-    if (String(q.email || '').trim()) channels.push('email');
-    if (String(q.phone || '').trim()) channels.push('text');
+    if (String(q.email || '').trim() && !(unsubscribed && HONOURS_UNSUB.has(key))) channels.push('email');
+    if (textOk) channels.push('text');
+    /* The sweep would stamp it and send nothing: not worth listing. */
+    if (!channels.length) return;
     out.push({ key, ...REMINDERS[key], when, overdue: due < now, channels });
   };
 
@@ -66,8 +88,9 @@ function upcomingReminders(q, { now = new Date(), balanceDue = 0, refunded = fal
       && (q.sent_to_customer_at || q.status === 'viewed') && q.created_at) {
     const due = new Date(at(q.created_at).getTime() + d.followup * 864e5);
     /* valid_until is a date: the sweep requires valid_until >= today when it runs. */
-    const lastDay = q.valid_until ? new Date(`${String(q.valid_until).slice(0, 10)}T23:59:59-05:00`) : null;
-    if (!lastDay || nextSendTime(due < now ? now : due) <= lastDay) add('follow-up', due);
+    const lastDay = q.valid_until ? endOfDay(q.valid_until) : null;
+    /* An unreadable date lists nothing rather than guess. */
+    if (!q.valid_until || (lastDay && nextSendTime(due < now ? now : due) <= lastDay)) add('follow-up', due);
   }
 
   /* sendDepositReminders */

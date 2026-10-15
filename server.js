@@ -474,6 +474,10 @@ async function initDB() {
     'balance_nudged_at TIMESTAMPTZ',  // deposit in, balance still outstanding
     'reorder_nudged_at TIMESTAMPTZ',  // paid in full months ago, worth asking again
     'pickup_nudged_at TIMESTAMPTZ',   // ready for pickup two days and not collected
+    /* Reminders the shop skipped from the job page (2026-10-15): their
+       *_nudged_at / followed_up_at is stamped so the sweep passes them by,
+       and this says nothing was actually sent. */
+    "reminders_skipped TEXT[] DEFAULT '{}'",
     /* Job milestones. These exist so the intake checklist can be DERIVED rather
        than written down somewhere nobody opens — the steps the database can
        already answer (contact, job, deadline, quote, deposit, balance) are
@@ -20117,8 +20121,8 @@ async function renderBoard(VIEW, req, res) {
       const wantsChange = !paid && !!q.change_request;
       const needsText = !paid && !expired && q.phone && (
         (noEmail && ageDays >= 2 && !q.accepted_at) ||
-        (q.followed_up_at && !q.accepted_at) ||
-        (q.accepted_at && q.deposit_nudged_at)
+        (q.followed_up_at && !q.accepted_at && !reminderSkipped(q, 'follow-up')) ||
+        (q.accepted_at && q.deposit_nudged_at && !reminderSkipped(q, 'deposit-reminder'))
       );
       const textReason = !needsText ? '' :
         (q.accepted_at ? 'accepted but deposit unpaid'
@@ -20788,7 +20792,8 @@ async function renderBoard(VIEW, req, res) {
                   Number(q.paid_amount||0) < Number(q.total||0) ? ` · <span style="color:#b45309">${money(round2(q.total - (q.paid_amount||0)))} due</span>` : ''}</div>
                 ${risk ? `<div class="kcard-risk-note">⚠ ${escEmail(q._sched.risks[0].label)} was due ${dayShort(q._sched.risks[0].by)}</div>` : ''}
                 ${awaitingDeposit(q) ? `<div class="kcard-deposit">💳 Awaiting deposit${
-                  q.deposit_nudged_at ? ` · reminded ${dayShort(q.deposit_nudged_at)}` : ''}</div>` : ''}
+                  !q.deposit_nudged_at ? '' : reminderSkipped(q, 'deposit-reminder') ? ' · reminder skipped'
+                    : ` · reminded ${dayShort(q.deposit_nudged_at)}`}</div>` : ''}
                 ${disputes.byQuote.has(q.code) ? `<div style="margin-top:4px">${disputeChip(disputes.byQuote.get(q.code))}</div>` : ''}
                 ${act ? `
                 <form method="POST" action="/admin/quote/${q.code}/stage" data-stageform class="knext"${
@@ -22487,19 +22492,30 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
      Skip each. Not on the design page: they are about money. */
   let comingUp = '';
   if (!design) {
-    const [{ rows: [rf] }, { rows: [dp] }] = await Promise.all([
-      pool.query(`SELECT 1 AS x FROM quote_payments WHERE quote_code = $1 AND kind = 'refund' LIMIT 1`, [code]).catch(() => ({ rows: [] })),
-      pool.query('SELECT 1 AS x FROM stripe_disputes WHERE quote_code = $1 LIMIT 1', [code]).catch(() => ({ rows: [] })),
-    ]);
-    const upcoming = FOLLOWUPS.upcomingReminders(q, {
-      balanceDue: due, refunded: Boolean(rf), disputed: Boolean(dp), days: reminderDelays() });
+    /* Their own figures: the sweeps read balanceOf(q) on the stored total,
+       the opt-out list for the follow-up and balance emails, and only text
+       where textWhyNot is blank. */
+    const opts = { balanceDue: balanceOf(q), days: reminderDelays(), textOk: !textWhyNot,
+                   unsubscribed: q.email ? await isUnsubscribed(q.email).catch(() => false) : false };
+    let upcoming = FOLLOWUPS.upcomingReminders(q, opts);
+    /* Refunds and disputes only stop the money ones: look only when one is listed. */
+    if (upcoming.some((r) => r.key === 'deposit-reminder' || r.key === 'balance-reminder')) {
+      const [{ rows: [rf] }, { rows: [dp] }] = await Promise.all([
+        pool.query(`SELECT 1 AS x FROM quote_payments WHERE quote_code = $1 AND kind = 'refund' LIMIT 1`, [code]).catch(() => ({ rows: [] })),
+        pool.query('SELECT 1 AS x FROM stripe_disputes WHERE quote_code = $1 LIMIT 1', [code]).catch(() => ({ rows: [] })),
+      ]);
+      if (rf || dp) upcoming = FOLLOWUPS.upcomingReminders(q, { ...opts, refunded: Boolean(rf), disputed: Boolean(dp) });
+    }
+    /* Skip is a customers.message action (tools/lib/staff.js): no button for
+       someone the route would refuse. */
+    const canSkip = !readOnly && actorLevel('customers.message') !== 'off';
     if (upcoming.length) {
       comingUp = `<div style="margin:0 0 12px;padding:10px 12px;border:1px solid #fde68a;border-radius:10px;background:#fffbeb">
         <b style="font-size:14px;color:#78350f">Coming up automatically</b>
         <div class="rows" style="margin-top:6px">${upcoming.map((r) => `<div class="row-i">
           <span class="ico ico-blue">${icon('mail')}</span>
           <span class="row-main"><b>${escEmail(r.label)}</b><div class="row-sub" style="white-space:normal">${escEmail(r.what)} &middot; by ${escEmail(r.channels.join(' and '))}</div></span>
-          <span class="row-end msg-end"><span class="muted msg-when">${r.overdue ? 'next time reminders run, ' : ''}${escEmail(when(r.when))}</span>${readOnly ? '' : `
+          <span class="row-end msg-end"><span class="muted msg-when">${r.overdue ? 'due now, goes within the hour' : 'around ' + escEmail(when(r.when))}</span>${!canSkip ? '' : `
             <form method="POST" action="/admin/quote/${code}/skip-reminder" style="margin:0">
               <input type="hidden" name="key" value="${escEmail(r.key)}">
               <button type="submit" class="btn btn-ghost" style="padding:4px 10px;font-size:12.5px">Skip</button></form>`}</span></div>`).join('')}</div>
@@ -22665,7 +22681,12 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
              with the shop's instruction ("make it shorter"). The draft stays
              editable in place, and Use this reply takes whatever is in it. */
           var shownSubject = '';
+          /* One at a time: a second request answering late would replace the
+             draft, edits and all. */
+          var busy = false;
           function ask(note, draft, btn){
+            if (busy) return;
+            busy = true;
             var c = f.querySelector('input[name="channel"]:checked');
             btn.disabled = true; st.textContent = draft ? 'Claude is rewriting it…' : 'Claude is reading the job…';
             return fetch('/admin/api/quote/${code}/suggest-reply', { method: 'POST', credentials: 'same-origin',
@@ -22675,7 +22696,7 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
               .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(d){ if (!r.ok) throw new Error(d.error || 'No suggestion this time. Try again.'); return d; }); })
               .then(function(d){ show(d, c); st.textContent = 'Check every fact before sending. Claude can be wrong.'; })
               .catch(function(e){ st.textContent = e.message || 'No suggestion this time. Try again.'; })
-              .then(function(){ btn.disabled = false; });
+              .then(function(){ btn.disabled = false; busy = false; });
           }
           function show(d, c){
             var isText = c && c.value === 'text';
@@ -22982,11 +23003,23 @@ const UNANSWERED_REPLIES_SQL = `
      AND t.last_in > COALESCE(t.last_out, 'epoch') AND t.last_in > COALESCE(q.replies_handled_at, 'epoch')
    ORDER BY t.last_in LIMIT 20`;
 
-/* The reminder delays, read the way each sweep reads them. */
+/* The reminder delays: the sweeps and the job page's Coming up list both
+   read them here, so the page cannot say a different time from the sweep.
+   A setting below the minimum is raised to it; one that is not a number
+   falls back to the default. */
 function reminderDelays() {
-  const n = (k, d, min) => Math.max(min, parseInt(process.env[k] || String(d), 10) || d);
+  const n = (k, d, min) => {
+    const v = parseInt(process.env[k] || String(d), 10);
+    return Number.isFinite(v) ? Math.max(min, v) : d;
+  };
   return { followup: n('JT_QUOTE_FOLLOWUP_DAYS', 3, 1), deposit: n('JT_DEPOSIT_NUDGE_HOURS', 12, 1),
            balance: n('JT_BALANCE_NUDGE_DAYS', 7, 1), pickup: n('JT_PICKUP_NUDGE_DAYS', 2, 1) };
+}
+
+/** Whether the shop skipped this reminder from the job page, so its stamp
+ *  means "not sent", not "sent". */
+function reminderSkipped(q, key) {
+  return Array.isArray(q.reminders_skipped) && q.reminders_skipped.includes(key);
 }
 
 /* Skip one automatic reminder on this job: stamp the column its sweep
@@ -22999,7 +23032,11 @@ app.post('/admin/quote/:code/skip-reminder', requireAdmin, async (req, res) => {
   const key = String((req.body || {}).key || '');
   const r = Object.hasOwn(FOLLOWUPS.REMINDERS, key) ? FOLLOWUPS.REMINDERS[key] : null;
   if (!r) return res.redirect(`${jobPath(code)}#messages`);
-  await pool.query(`UPDATE quotes SET ${r.stamp} = COALESCE(${r.stamp}, NOW()) WHERE code = $1`, [code])
+  /* Recorded as skipped too, so the boards do not read the stamp as "reminded". */
+  await pool.query(`UPDATE quotes SET ${r.stamp} = COALESCE(${r.stamp}, NOW()),
+      reminders_skipped = CASE WHEN ${r.stamp} IS NULL
+        THEN array_append(COALESCE(reminders_skipped, '{}'), $2::text) ELSE reminders_skipped END
+     WHERE code = $1`, [code, key])
     .catch((e) => console.error(`skip reminder on ${code} failed:`, e.message));
   return res.redirect(`${jobPath(code)}#messages`);
 });
@@ -25292,7 +25329,7 @@ app.post('/api/order-shipped', requireInternalKey, capPerRecipient('order-shippe
    valid, and never to someone who has opted out. June still texts personally;
    this is the safety net for the ones she does not get back to. */
 async function sendQuoteFollowUps() {
-  const days = Math.max(1, parseInt(process.env.JT_QUOTE_FOLLOWUP_DAYS || '3', 10));
+  const days = reminderDelays().followup;
   try {
     const { rows } = await pool.query(
       `SELECT * FROM quotes
@@ -25353,7 +25390,7 @@ async function sendQuoteFollowUps() {
    one can delay the order. Sent in texting hours only, so 12 hours after an
    evening acceptance lands at 9am. */
 async function sendDepositReminders() {
-  const hours = Math.max(1, parseInt(process.env.JT_DEPOSIT_NUDGE_HOURS || '12', 10));
+  const hours = reminderDelays().deposit;
   try {
     /* Not after a refund. Paid and then refunded in full reads as never paid,
        and this would ask that customer for a deposit on a job the shop had
@@ -25419,7 +25456,7 @@ async function sendDepositReminders() {
    balance is not a surprise on pickup day — and so it is not still outstanding
    after the goods have gone, which is the hardest money to collect. */
 async function sendBalanceReminders() {
-  const days = Math.max(1, parseInt(process.env.JT_BALANCE_NUDGE_DAYS || '7', 10));
+  const days = reminderDelays().balance;
   try {
     /* Not after a refund, for the deposit nudge's reason: a partial refund
        leaves paid below total, and this would email the customer a
@@ -25483,7 +25520,7 @@ async function sendBalanceReminders() {
    email and text, with the way in; a job with a delivery method is the
    delivery board's to chase, and no method means pickup (quoteSchedule). */
 async function sendPickupReminders() {
-  const days = Math.max(1, parseInt(process.env.JT_PICKUP_NUDGE_DAYS || '2', 10));
+  const days = reminderDelays().pickup;
   try {
     const { rows } = await pool.query(
       `SELECT * FROM quotes
