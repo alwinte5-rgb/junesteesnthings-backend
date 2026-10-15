@@ -164,7 +164,7 @@ function card({ stopped = false, history = [], smsOn = true, consent = true, q =
     SHOP_TZ: 'America/Chicago', console: { error() {} },
     intIn: () => null, PROOFS: require('../tools/lib/job-proofs'),
     /* The owner's "they agreed elsewhere" button (2026-10-15). */
-    isOwner: () => true, lastSaidNoToTexts: async () => stopped,
+    isOwner: () => true, lastSaidNoToTexts: async () => { if (stopped === null) throw new Error('db down'); return stopped; },
     /* Files on the job an email may carry (2026-10-06): none here. */
     jobFilesFor: async () => [], MSGFILES: require('../tools/lib/message-files'), inboundReady: false,
     jobPath: (c) => '/admin/production/' + c, TMEDIA: require('../tools/lib/text-media'),
@@ -289,7 +289,7 @@ test('sending is admin only, and answers on the job page from a fixed list', () 
 test('an empty or over-long message is refused before anything is sent', () => {
   const r = msgRoute();
   assert.ok(r.indexOf("answer('msg_err', 'empty')") < r.indexOf('SELECT * FROM quotes'));
-  assert.match(r, /\(channel === 'text' \? await textLength\(code, text\) : text\.length\) > \(channel === 'text' \? 300 : MESSAGE_MAX\)/);
+  assert.match(r, /len = await textLength\(code, text\)[\s\S]*if \(len > \(channel === 'text' \? 300 : MESSAGE_MAX\)\)/);
   assert.match(r, /\.replace\(\/\[\\r\\n\]\+\/g, ' '\)/, 'a subject is one line');
 });
 
@@ -311,7 +311,7 @@ function messageRoute(o = {}) {
     app: { post: (_path, _gate, fn) => { handler = fn; } }, requireAdmin: null,
     QUOTE_CODE_RE: vm.runInThisContext(grab('const QUOTE_CODE_RE = ', ';').slice('const QUOTE_CODE_RE = '.length, -1)),
     crypto: require('node:crypto'), recentJobMessages: new Map(),
-    pool: { query: async (sql) => (/FROM job_proofs/.test(sql) ? { rows: opts.proofs || [] }
+    pool: { query: async (sql) => (/FROM job_proofs/.test(sql) ? (opts.proofsFail ? Promise.reject(new Error('db down')) : { rows: opts.proofs || [] })
       : { rows: [{ code: 'AB12CD', email: 'ada@example.com', phone: '(773) 555-0100', ...opts.q }] }) },
     normalizeUsPhone: (p) => { const d = String(p || '').replace(/\D/g, ''); return d.length >= 10 ? '+1' + d.slice(-10) : null; },
     smsConfigured: () => opts.smsOn,
@@ -373,11 +373,11 @@ test('a refused text does not hold the message back once it can go', async () =>
 test('a text keeps the shape every customer text has', () => {
   const r = msgRoute();
   // `words`: the message with this job's proof links taken out (they go as pictures).
-  assert.match(r, /body: `June's Tees: \$\{smsPlain\(words\.replace\([^\n]*, ''\), 260\)\}\$\{/);
+  assert.match(r, /body: `June's Tees: \$\{smsPlain\(words\.replace\(\/\\s\+\/g, ' '\)\.replace\([^\n]*, ''\), 300\)\}\$\{/);
   assert.match(r, /' ' \+ smsShort\(quoteLink\(code\)\)\} Reply STOP to opt out\.`/, 'their order page goes on every text, short and branded');
   assert.match(r, /kind: 'transactional'/);
   const { plain } = require('../tools/lib/sms-templates');
-  const body = `June's Tees: ${plain('x'.repeat(300), 260)} https://www.jtees.net/q/ABCDEFGHIJ Reply STOP to opt out.`;
+  const body = `June's Tees: ${plain('x'.repeat(400), 300)} https://www.jtees.net/q/ABCDEFGHIJ Reply STOP to opt out.`;
   assert.ok(body.length <= 459, 'three segments at most');
 });
 
@@ -564,8 +564,12 @@ test('by text, this job\'s proof links leave the words and go as pictures; other
   assert.ok(out.text.includes('https://example.com/x.jpg'), 'a link that is not a proof stays');
   assert.ok(out.text.length <= 300, 'the proof message now fits a text: ' + out.text.length);
   assert.strictEqual(out.media.length, 2);
-  assert.match(out.media[0].url, /\/image\/upload\/c_limit,w_1600,h_1600,q_auto:good,f_jpg\/v1760543820\/job_proofs\/.*\.jpg$/);
-  assert.match(out.media[1].url, /,pg_1,f_jpg\/.*\.jpg$/, 'a PDF goes as its first page');
+  assert.strictEqual(out.media[0].url, PROOF_A, 'the job keeps the proof itself');
+  assert.match(out.media[0].mms, /\/image\/upload\/c_limit,w_1200,h_1200,q_auto,f_jpg\/v1760543820\/job_proofs\/.*\.jpg$/);
+  assert.match(out.media[1].mms, /,pg_1,f_jpg\/.*\.jpg$/, 'a PDF goes as its first page');
+  // In the order the message lists them, whatever order the job holds them in.
+  const rev = P.proofsForText(msg, [{ url: PROOF_B, name: 'Front' }, { url: PROOF_A, name: 'Mockup' }], 'demo');
+  assert.deepStrictEqual(rev.media.map((m) => m.url), [PROOF_A, PROOF_B]);
   // A proof of another job, or another account, is not this job's: it stays a link.
   assert.strictEqual(P.proofsForText(PROOF_A, [], 'demo').media.length, 0);
   assert.strictEqual(P.proofsForText(PROOF_A, [{ url: PROOF_A }], 'other').media.length, 0);
@@ -582,6 +586,12 @@ test('the proof message goes by text with the proofs as pictures, not refused as
   assert.strictEqual(r.sent.length, 1);
   assert.ok(!r.sent[0].msg.body.includes('job_proofs'), 'the link is not in the words');
   assert.strictEqual(r.sent[0].media.length, 1);
+  // A failed proof lookup fails the send, never sends the links glued into the words.
+  assert.match(await messageRoute({ proofsFail: true }).send({ channel: 'text', body: 'Hi Walter\n' + PROOF_A }), /msg_err=failed/);
+  // Line breaks reach the text as spaces, not glued words.
+  const nl = messageRoute();
+  await nl.send({ channel: 'text', body: 'Hi Walter\nhttps://example.com/a\nthanks' });
+  assert.match(nl.sent[0].msg.body, /Hi Walter https:\/\/example\.com\/a thanks/);
   // Without the proof on this job the same words are too long, as before.
   assert.match(await messageRoute().send({ channel: 'text', body: text }), /msg_err=too-long/);
 });
@@ -599,6 +609,8 @@ test('the owner can turn on texts for a customer who agreed elsewhere; never ove
   assert.match(off, /action="\/admin\/quote\/AB12CD\/text-consent"/);
   assert.match(off, /name="confirm" value="1" required/);
   assert.doesNotMatch(await card({ consent: true }), /text-consent/, 'nothing to turn on');
+  assert.doesNotMatch(await card({ consent: false, stopped: null }), /text-consent"|texted STOP/,
+    'a failed lookup shows neither the form nor a STOP that may not have happened');
   const stopped = await card({ consent: false, stopped: true });
   assert.doesNotMatch(stopped, /text-consent"/);
   assert.match(stopped, /texted STOP/);

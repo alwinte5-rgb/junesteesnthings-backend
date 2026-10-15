@@ -4209,11 +4209,11 @@ async function sendCustomerSms({ phone, kind, ref, msg, quote = null, replyToCon
        ON CONFLICT DO NOTHING RETURNING id`,
       [to, kind, String(ref).slice(0, 80), msg.template.slice(0, 80), msg.body, quote, attributedStaffId(),
        /* Pictures sent with it (a proof by text), shown on the job like theirs. */
-       media.length ? JSON.stringify(media) : null]);
+       media.length ? JSON.stringify(media.map(({ url, name }) => ({ url, name }))) : null]);
     if (!rows.length) return 'duplicate';
     const id = rows[0].id;
     try {
-      const { sid } = await twilioSend(to, msg.body, media.map((m) => m.url));
+      const { sid } = await twilioSend(to, msg.body, media.map((m) => m.mms || m.url));
       await pool.query(`UPDATE sms_messages SET status='sent', twilio_sid=$2 WHERE id=$1`, [id, sid]);
       console.log(`customer sms sent: ${msg.template} for ${ref}`);
       return 'sent';
@@ -23093,11 +23093,17 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
     const c = await smsConsentFor(phone).catch(() => ({ transactional: false }));
     if (!c.transactional) {
       textWhyNot = 'they have not agreed to texts';
-      textOptedOut = await lastSaidNoToTexts(phone).catch(() => true);
+      /* Unknown on a failed lookup: neither the form nor a STOP it may not
+         have been, which would send the owner the wrong way. */
+      textOptedOut = await lastSaidNoToTexts(phone).catch(() => null);
     }
   }
   const emailWhyNot = q.email ? '' : 'no email address on this quote';
   const jobFiles = await jobFilesFor(q).catch(() => []);
+  /* This job's proof links, for the page's text counter: they go as pictures,
+     so the counter leaves them out exactly as the server does. */
+  const proofUrls = (await pool.query('SELECT url FROM job_proofs WHERE quote_code = $1', [code])
+    .catch(() => ({ rows: [] }))).rows.map((r) => r.url).filter((u) => typeof u === 'string' && u);
   const first = String(q.name || '').trim().split(/\s+/)[0];
   const hi = `Hi${first ? ' ' + first : ''}`;
   const due = balanceOf(q, quoteTotals(q).total);
@@ -23222,7 +23228,7 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
       ${String(query.sent) === 'held' ? `<div class="ok">Saved for the owner to approve. It goes out when they send it.</div>` : ''}
       ${failed ? `<div class="warn">${escEmail(failed)}</div>` : ''}
       ${String(query.consent) === 'saved' ? `<div class="ok">Saved: ${escEmail(first || 'they')} agreed to order texts. Text is on below.</div>` : ''}
-      ${textWhyNot === 'they have not agreed to texts' && isOwner() ? (textOptedOut
+      ${textWhyNot === 'they have not agreed to texts' && isOwner() && textOptedOut !== null ? (textOptedOut
         ? `<p class="muted" style="font-size:12.5px;margin:0 0 10px">${escEmail(first || 'They')} texted STOP to the shop number, so texts stay off until they text START to ${escEmail(SHOP_PHONE)}.</p>`
         : `<details style="margin:0 0 12px"><summary style="font-size:13px">They agreed to texts on my other number</summary>
         <form method="POST" action="/admin/quote/${code}/text-consent" style="margin-top:8px;padding:10px 12px;border:1px solid #e3e8f2;border-radius:10px;background:#fafcff">
@@ -23257,7 +23263,7 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
         </div>
         <div data-cout style="display:none;margin-top:10px;font-size:14px;line-height:1.45"></div>
       </div>
-      <form method="POST" action="/admin/quote/${code}/message" data-msgform style="margin:0 0 12px">
+      <form method="POST" action="/admin/quote/${code}/message" data-msgform data-proofurls="${escEmail(JSON.stringify(proofUrls))}" style="margin:0 0 12px">
         <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px">
           ${radio('email', 'Email', emailWhyNot, true)}
           ${radio('text', 'Text', textWhyNot, !!emailWhyNot)}
@@ -23303,6 +23309,7 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
     <script>
       (function(){
         var f = document.querySelector('form[data-msgform]'); if (!f) return;
+        var proofUrls = []; try { proofUrls = JSON.parse(f.getAttribute('data-proofurls') || '[]'); } catch (e) {}
         var body = f.querySelector('textarea[name="body"]'), subj = f.querySelector('[data-subject]');
         f.querySelectorAll('[data-fill]').forEach(function(b){
           b.addEventListener('click', function(){ body.value = b.getAttribute('data-fill'); body.focus(); });
@@ -23314,8 +23321,9 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
           subj.style.display = text ? 'none' : '';
           /* A proof link goes by text as a picture, so it does not count
              toward the 300 (the server counts the same way). */
-          var links = text ? body.value.split(/\\s+/).filter(function(w){ return w.indexOf('https://res.cloudinary.com/') === 0 && w.indexOf('/${PROOFS.FOLDER}/') > 0; }) : [];
-          body.maxLength = text ? 300 + links.join('').length : ${MESSAGE_MAX};
+          var proofLen = 0;
+          if (text) proofUrls.forEach(function(u){ proofLen += (body.value.split(u).length - 1) * u.length; });
+          body.maxLength = text ? 300 + proofLen : ${MESSAGE_MAX};
           if (att) att.style.display = text ? 'none' : '';
         }
         /* Files: ticked ones already on the job, and uploads signed into the
@@ -23548,14 +23556,11 @@ const recentJobMessages = new Map();
    and by /admin/approvals, which sends a helper's held message once the owner
    says yes. Returns 'sent' or the reason it did not go. */
 /** A text's words and pictures: this job's proof links leave the words and
-    go as pictures (PROOFS.proofsForText). A failed lookup sends the words as
-    typed, links and all, which is what a text did before. */
+    go as pictures (PROOFS.proofsForText). A failed lookup throws, so the send
+    fails and says so rather than going out with the links glued in the words. */
 async function proofsForText(code, text) {
   const { rows } = await pool.query('SELECT url, name FROM job_proofs WHERE quote_code = $1 ORDER BY created_at DESC LIMIT $2',
-    [code, PROOFS.MAX_PER_JOB]).catch((e) => {
-    console.error(`proofs for a text on ${code} failed:`, e.message);
-    return { rows: [] };
-  });
+    [code, PROOFS.MAX_PER_JOB]);
   return PROOFS.proofsForText(text, rows, QPHOTOS.cloudName());
 }
 
@@ -23627,7 +23632,10 @@ async function sendJobMessage({ code, channel, subject, text, attachments = '[]'
          page, unless the message already has a link in it. */
       /* The brand once: a message typed (or suggested) as "June's Tees: ..."
          went out as "June's Tees: June's Tees: ..." (2026-10-06). */
-      msg: { template: 'manual', body: `June's Tees: ${smsPlain(words.replace(/^\s*june['\u2019]?s\s+tees\s*(&\s*things\s*)?[:,-]\s*/i, ''), 260)}${
+      /* Line breaks become spaces first: smsPlain drops them, which glued a
+         link to the word before it. 300, the limit the page and route check:
+         260 cut a 290-character text short after it had been accepted. */
+      msg: { template: 'manual', body: `June's Tees: ${smsPlain(words.replace(/\s+/g, ' ').replace(/^\s*june['\u2019]?s\s+tees\s*(&\s*things\s*)?[:,-]\s*/i, ''), 300)}${
         /https?:\/\/|jtees\.net/i.test(words) ? '' : ' ' + smsShort(quoteLink(code))} Reply STOP to opt out.` } });
     if (status === 'sent') { console.log(`message to ${code} by text`); return 'sent'; }
     recentJobMessages.delete(key);
@@ -23687,7 +23695,15 @@ app.post('/admin/quote/:code/message', requireAdmin, async (req, res) => {
   // A designer writes only to the customers of jobs that are with them.
   if (actorLevel('quotes.view') !== 'on' && !(await designJobFor(code, currentActor()))) return res.redirect(designHome());
   if (!text) return answer('msg_err', 'empty');
-  if ((channel === 'text' ? await textLength(code, text) : text.length) > (channel === 'text' ? 300 : MESSAGE_MAX)) return answer('msg_err', 'too-long');
+  let len = text.length;
+  if (channel === 'text') {
+    try { len = await textLength(code, text); } catch (err) {
+      console.error(`proofs for a text on ${code} failed:`, err.message);
+      reportError('job-message', err, `proof lookup for ${code}`).catch(() => {});
+      return answer('msg_err', 'failed');
+    }
+  }
+  if (len > (channel === 'text' ? 300 : MESSAGE_MAX)) return answer('msg_err', 'too-long');
 
   /* A helper in training writes the message; the owner sends it. So does any
      helper whose message asks to be paid outside the shop (Cash App, "pay me

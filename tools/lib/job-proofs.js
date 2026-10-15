@@ -54,30 +54,35 @@ function proofMessage({ first = '', code, url, urls }) {
     '\n\n' + list.join('\n');
 }
 
-/** The proof as a picture a phone can take by text (MMS): a JPG under
-    Twilio's 5 MB, a PDF as its first page. '' when it is not our proof. */
+/** The proof as a picture a phone can take by text (MMS): a PDF as its first
+    page. 1200px at q_auto keeps a mockup near 200 KB, so even ten stay well
+    under Twilio's 5 MB for the whole message. '' when it is not our proof. */
 function mmsUrlOf(url, cloud) {
   const p = parse(url, cloud);
   if (!p) return '';
-  return url.replace('/image/upload/', `/image/upload/c_limit,w_1600,h_1600,q_auto:good${p.ext === 'pdf' ? ',pg_1' : ''},f_jpg/`)
+  return url.replace('/image/upload/', `/image/upload/c_limit,w_1200,h_1200,q_auto${p.ext === 'pdf' ? ',pg_1' : ''},f_jpg/`)
     .replace(/\.[A-Za-z0-9]+$/, '.jpg');
 }
 
 const MAX_MMS = 10; // Twilio's limit on pictures in one text
 
 /** A text that carries this job's proof links: the links come out of the
-    words and go as pictures instead. `proofs` are the job's rows ({ url, name }).
-    Returns { text, media: [{ url, name }] }; a link not in `proofs` stays. */
+    words and go as pictures instead, in the order the message lists them.
+    `proofs` are the job's rows ({ url, name }). Returns { text, media }, each
+    media { url: the proof itself (what the job page shows and opens), mms: the
+    picture Twilio fetches, name }. A link not in `proofs` stays in the words. */
 function proofsForText(text, proofs, cloud) {
-  let words = String(text || '');
-  const media = [];
+  const original = String(text || '');
+  let words = original;
+  const found = [];
   for (const r of proofs || []) {
-    if (media.length >= MAX_MMS || !r || !words.includes(r.url)) continue;
-    const pic = mmsUrlOf(r.url, cloud);
-    if (!pic) continue;
-    words = words.split(r.url).join('');
-    media.push({ url: pic, name: cleanName(r.name) || 'Proof' });
+    if (!r || !r.url || !original.includes(r.url) || found.some((f) => f.url === r.url)) continue;
+    const mms = mmsUrlOf(r.url, cloud);
+    if (mms) found.push({ at: original.indexOf(r.url), url: r.url, mms, name: cleanName(r.name) || 'Proof' });
   }
+  found.sort((a, b) => a.at - b.at);
+  const media = found.slice(0, MAX_MMS).map(({ url, mms, name }) => ({ url, mms, name }));
+  for (const m of media) words = words.split(m.url).join('');
   if (media.length) words = words.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   return { text: words, media };
 }
