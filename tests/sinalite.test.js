@@ -247,3 +247,27 @@ test('a typed-quantity item (pouches) never prices 700 above 1,000, nor under th
   assert.strictEqual(SL.eachFor(L, 3000, true), 1.31, 'above the top tier: its each');
   assert.strictEqual(SL.eachFor(L, 400, true), null, 'under the minimum: nothing');
 });
+
+test('a price file with a malformed product keeps the last good table (and a huge quantity is refused, not free)', () => {
+  const real = fs.readFileSync(SL.DATA_FILE, 'utf8');
+  const said = []; const orig = console.error; console.error = (m) => said.push(String(m));
+  try {
+    SL._setData(null);
+    fs.utimesSync(SL.DATA_FILE, new Date(), new Date(Date.now() - 5000));
+    const good = SL.table();
+    assert.ok(good.families.calendar, 'the real file loads');
+    const bad = JSON.parse(real); delete bad.products.calendar.materials;
+    fs.writeFileSync(SL.DATA_FILE, JSON.stringify(bad));
+    fs.utimesSync(SL.DATA_FILE, new Date(), new Date(Date.now() + 5000));
+    const t = SL.table();
+    assert.ok(t.families.calendar, 'still the last good table');
+    assert.match(t.error || '', /calendar is missing materials/);
+  } finally {
+    fs.writeFileSync(SL.DATA_FILE, real);
+    console.error = orig;
+  }
+  const QS = require('../tools/lib/quote-signs');
+  const r = QS.priceSign('calendar', { mat: '28pg', size: '8.5x11' }, 2000000, true);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.error, /cannot be priced/);
+});

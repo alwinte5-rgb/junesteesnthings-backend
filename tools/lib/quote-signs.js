@@ -117,7 +117,11 @@ function priceSign(kind, spec, qty, takeFreight) {
     if (q < ladder[0][0]) return { ok: false, min: ladder[0][0], error: `${size.label} ${fam.label.toLowerCase()} have a minimum of ${ladder[0][0]}.` };
     /* SinaLite sells set runs only: a quantity between runs is bought as the
        next run up (sinalite.js eachFor). Signs365 stock ladders are bands. */
-    piece = round2((fam.supplier === 'sinalite' ? SL.eachFor(ladder, q, fam.any_qty) : ladderPrice(ladder, q)) + upEach);
+    const base = fam.supplier === 'sinalite' ? SL.eachFor(ladder, q, fam.any_qty) : ladderPrice(ladder, q);
+    /* Never arithmetic on a missing price: null is "cannot price", not $0
+       (Codex on #293: a quantity past the run cap priced free). */
+    if (!(base > 0)) return { ok: false, error: `${size.label} ${fam.label.toLowerCase()} cannot be priced at ${q.toLocaleString('en-US')}; quote it by hand.` };
+    piece = round2(base + upEach);
     const oversized = fam.freight_by_size[`${size.key}:${mat.key}`];
     freight = oversized != null ? oversized : (takeFreight ? fam.freight : 0);
     const sheetLabels = combo ? combo.split('+').map((k) => fam.sheet_upgrades[k].label) : [];

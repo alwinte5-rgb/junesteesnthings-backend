@@ -123,6 +123,13 @@ function load() {
   try {
     const d = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
     if (!d || typeof d.products !== 'object' || !Object.keys(d.products).length) throw new Error('no products in it');
+    /* Build every family from it BEFORE it replaces the last good table: a
+       product missing its materials must fail here, not in every quote
+       request after (Codex on #293). */
+    for (const [k, p] of Object.entries(d.products)) {
+      if (!p || !Array.isArray(p.materials) || !Array.isArray(p.sizes) || !Array.isArray(p.rows)) throw new Error(k + ' is missing materials, sizes or rows');
+      familyOf(k, p);
+    }
     cache = d;
     loadError = null;
   } catch (e) {
