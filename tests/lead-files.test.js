@@ -23,9 +23,12 @@ const PDF = `https://res.cloudinary.com/${C}/raw/upload/v1700000002/job_messages
 
 test('only our own files, in the enquiry folders, are taken', () => {
   assert.deepStrictEqual(L.sourceOf(IMG, C, L.LEAD_FOLDERS),
-    { url: IMG, type: 'image', format: 'jpg', publicId: 'quote_requests/abc123' });
+    { url: IMG, type: 'image', ext: 'jpg', format: 'jpg', publicId: 'quote_requests/abc123' });
   assert.deepStrictEqual(L.sourceOf(PDF, C, [L.TEXT_FOLDER]),
-    { url: PDF, type: 'raw', format: 'pdf', publicId: 'job_messages/f00d.pdf' }, 'raw ids keep their extension');
+    { url: PDF, type: 'raw', ext: 'pdf', format: '', publicId: 'job_messages/f00d.pdf' },
+    'raw ids keep their extension, and the download takes no format (QPHOTOS.downloadSource)');
+  assert.strictEqual(L.sourceOf(PDF.replace('f00d.pdf', 'clip.mp4'), C, [L.TEXT_FOLDER]), null,
+    'a video would be copied and never shown');
   assert.strictEqual(L.sourceOf(IMG.replace(C, 'someoneelse'), C, L.LEAD_FOLDERS), null, 'another account');
   assert.strictEqual(L.sourceOf(IMG.replace('quote_requests', 'grad_orders'), C, L.LEAD_FOLDERS), null, 'another folder');
   assert.strictEqual(L.sourceOf(IMG.replace('/upload/', '/upload/c_fill,w_9/'), C, L.LEAD_FOLDERS), null, 'a transformed copy');
@@ -47,6 +50,9 @@ test('files only go to the same customer, by email or phone', () => {
   assert.ok(L.samePerson({ phone: '(773) 555-0100', email: '' }, { phone: '+1 773 555 0100', email: '' }));
   assert.ok(!L.samePerson({ email: 'kim@example.com', phone: '7735550100' }, { email: 'lee@example.com', phone: '3125550100' }));
   assert.ok(!L.samePerson({ email: '', phone: '' }, { email: '', phone: '' }), 'two blanks are not a match');
+  assert.strictEqual(L.samePhone({ phone: '(773) 555-0100' }, { phone: '7735550100' }), '7735550100');
+  assert.strictEqual(L.samePhone({ email: 'k@x.co', phone: '3125550199' }, { email: 'k@x.co', phone: '7735550100' }), '',
+    'matched on email only: their texts are not matched by a phone that may be someone else\'s');
 });
 
 /* carryLeadFiles against a fake pool, Cloudinary and download. */
@@ -61,39 +67,47 @@ function lift(name) {
   throw new Error('unbalanced ' + name);
 }
 
-async function carry({ lead, quote, texts = [], failFetch = false }) {
+async function carry({ lead, quote, texts = [], failFetch = false, full = false }) {
   const sql = [];
+  const args = [];
+  const destroyed = [];
   const added = [];
   const uploads = [];
+  const fetched = [];
   const sandbox = {
     LEADFILES: L, QPHOTOS: { ...require('../tools/lib/quote-photos'), cloudName: () => C },
-    pool: { query: async (q, args) => {
-      sql.push(q);
+    pool: { query: async (q, a) => {
+      sql.push(q); args.push(a);
       if (/FROM submissions/.test(q)) return { rows: lead ? [lead] : [] };
       if (/FROM quotes WHERE code/.test(q)) return { rows: quote ? [quote] : [] };
       if (/FROM sms_messages/.test(q)) return { rows: texts.map((media) => ({ media })) };
-      if (/UPDATE quotes SET customer_photos/.test(q)) { added.push(args); return { rows: [] }; }
+      if (/UPDATE quotes SET customer_photos/.test(q)) { if (full) return { rows: [], rowCount: 0 }; added.push(a); return { rows: [], rowCount: 1 }; }
       return { rows: [] };
     } },
     cloudinary: {
       utils: { private_download_url: (id, fmt, o) => `https://api.cloudinary.com/dl?${id}.${fmt}&${o.resource_type}` },
-      uploader: { upload_stream: (opts, cb) => ({ end: () => { uploads.push(opts); cb(null, { secure_url:
+      uploader: { destroy: async (id, o) => { destroyed.push([id, o.resource_type]); }, upload_stream: (opts, cb) => ({ end: () => { uploads.push(opts); cb(null, { public_id: 'quote_photos/x' + uploads.length, secure_url:
         `https://res.cloudinary.com/${C}/${opts.resource_type}/upload/v1/quote_photos/${opts.public_id || 'new' + uploads.length + '.jpg'}` }); } }) },
     },
-    fetch: async (url) => (failFetch ? { ok: false, status: 404 } : { ok: true, arrayBuffer: async () => new ArrayBuffer(8), url }),
+    fetch: async (url) => { fetched.push(url); return failFetch ? { ok: false, status: 404 }
+      : { ok: true, headers: { get: () => '8' }, arrayBuffer: async () => new ArrayBuffer(8) }; },
     AbortSignal, Buffer, crypto: require('node:crypto'),
     reportError: async () => {}, console: { error() {} },
   };
   vm.createContext(sandbox);
-  vm.runInContext(lift('addCustomerFile') + '\n' + lift('carryLeadFiles'), sandbox);
+  const upl = src.slice(src.indexOf('function uploadBuffer('), src.indexOf('\n}\n', src.indexOf('function uploadBuffer(')) + 2);
+  vm.runInContext(lift('addCustomerFile') + '\n' + upl + '\n' + lift('carryLeadFiles'), sandbox);
   const n = await sandbox.carryLeadFiles('AB12CD', 7);
-  return { n, sql, added, uploads };
+  return { n, sql, args, added, uploads, destroyed, fetched };
 }
 
 test('the enquiry photo and texted files are copied onto the quote', async () => {
   const r = await carry({ lead: { photo_url: IMG, phone: '7735550100', email: 'kim@example.com', created_at: '2026-10-14' },
-    quote: { phone: '', email: 'kim@example.com' }, texts: [[{ url: PDF, name: 'logo.pdf' }]] });
+    quote: { phone: '(773) 555-0100', email: 'kim@example.com' }, texts: [[{ url: PDF, name: 'logo.pdf' }]] });
   assert.strictEqual(r.n, 2);
+  const textQ = r.sql.findIndex((q) => /FROM sms_messages/.test(q));
+  assert.strictEqual(r.args[textQ][0], '+17735550100', 'as Twilio stores the number');
+  assert.match(r.fetched[1], /job_messages\/f00d\.pdf\.&raw$/, 'a raw file is downloaded with no format');
   assert.deepStrictEqual(r.uploads.map((u) => [u.folder, u.resource_type]), [['quote_photos', 'image'], ['quote_photos', 'raw']]);
   assert.match(r.uploads[1].public_id, /^[0-9a-f]{20}\.pdf$/);
   assert.deepStrictEqual(r.added.map((a) => [a[0], a[2]]), [['AB12CD', 'Photo sent with the enquiry.jpg'], ['AB12CD', 'logo.pdf']]);
@@ -111,6 +125,16 @@ test('another customer\'s lead gives nothing; a failed copy is skipped, not fata
     quote: { phone: '', email: 'kim@example.com' }, failFetch: true });
   assert.strictEqual(failed.n, 0);
   assert.ok(!failed.sql.some((q) => /sms_messages/.test(q)), 'no phone, no text lookup');
+  const emailOnly = await carry({ lead: { photo_url: '', phone: '3125550199', email: 'kim@example.com', created_at: '2026-10-14' },
+    quote: { phone: '7735550100', email: 'kim@example.com' }, texts: [[{ url: PDF, name: 'x.pdf' }]] });
+  assert.ok(!emailOnly.sql.some((q) => /sms_messages/.test(q)), 'texts only when the quote has the lead\'s number');
+});
+
+test('a copy the job cannot take is deleted again and reported, never left orphaned', async () => {
+  const r = await carry({ lead: { photo_url: IMG, phone: '', email: 'kim@example.com', created_at: '2026-10-14' },
+    quote: { phone: '', email: 'kim@example.com' }, full: true });
+  assert.strictEqual(r.n, 0);
+  assert.deepStrictEqual(r.destroyed, [['quote_photos/x1', 'image']]);
 });
 
 test('it runs once, for a new quote made from a lead, without holding up the save', () => {
@@ -119,8 +143,6 @@ test('it runs once, for a new quote made from a lead, without holding up the sav
   const before = src.slice(at - 200, at);
   assert.match(before, /if \(!QUOTE_CODE_RE\.test\(editing\) && q\.from_submission_id\) \{\s*$/);
   assert.doesNotMatch(src.slice(at - 10, at), /await/, 'in the background');
-  /* The texts query, as Postgres receives it: the backslash must arrive. */
-  const fn = lift('carryLeadFiles');
-  const lit = fn.slice(fn.indexOf('`SELECT media'), fn.indexOf('LIMIT 20`') + 'LIMIT 20`'.length);
-  assert.ok(vm.runInThisContext(lit).includes("regexp_replace(phone, '\\D', '', 'g')"));
+  /* Texts by the number as stored, so no reformatting of every row. */
+  assert.match(lift('carryLeadFiles'), /WHERE phone = \$1 AND quote_code IS NULL AND status = 'received'/);
 });

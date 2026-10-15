@@ -4271,10 +4271,8 @@ async function saveTextMedia(list, quoteCode) {
       if (!r.ok) throw new Error(`Twilio media ${r.status}`);
       const buf = Buffer.from(await r.arrayBuffer());
       if (buf.length > TMEDIA.MAX_BYTES) throw new Error(`media too big (${buf.length} bytes)`);
-      const up = await new Promise((resolve, reject) => cloudinary.uploader.upload_stream(
-        { folder: quoteCode ? QPHOTOS.FOLDER : MSGFILES.FOLDER, resource_type: TMEDIA.isPicture(m.type) ? 'image' : 'raw',
-          ...(TMEDIA.isPicture(m.type) ? {} : { public_id: crypto.randomBytes(10).toString('hex') + '.' + m.ext }) },
-        (err, res) => (err ? reject(new Error(err.message || 'upload failed')) : resolve(res))).end(buf));
+      const up = await uploadBuffer(buf, { folder: quoteCode ? QPHOTOS.FOLDER : MSGFILES.FOLDER,
+        image: TMEDIA.isPicture(m.type), ext: m.ext });
       out.push({ url: up.secure_url, name: TMEDIA.nameFor(i, m.ext, day), type: m.type });
     } catch (err) {
       console.error('text media not kept:', err.message);
@@ -4290,14 +4288,24 @@ async function saveTextMedia(list, quoteCode) {
 }
 
 /** Add one file in the quote-photos folder to a job's customer files, once,
- *  up to the limit. */
+ *  up to the limit. Whether it was added (false: no such job, full, or there). */
 async function addCustomerFile(code, url, name) {
-  await pool.query(
+  const { rowCount } = await pool.query(
     `UPDATE quotes SET customer_photos = COALESCE(customer_photos, '[]'::jsonb)
                                        || jsonb_build_array(jsonb_build_object('url', $2::text, 'at', NOW(), 'name', $3::text))
       WHERE code = $1 AND jsonb_array_length(COALESCE(customer_photos, '[]'::jsonb)) < $4
         AND NOT COALESCE(customer_photos, '[]'::jsonb) @> jsonb_build_array(jsonb_build_object('url', $2::text))`,
     [code, url, name, QPHOTOS.MAX_PHOTOS]);
+  return rowCount > 0;
+}
+
+/** Upload bytes into one Cloudinary folder: a picture as an image, anything
+ *  else as a raw file under a random name that keeps its extension. */
+function uploadBuffer(buf, { folder, image, ext }) {
+  return new Promise((resolve, reject) => cloudinary.uploader.upload_stream(
+    { folder, resource_type: image ? 'image' : 'raw',
+      ...(image ? {} : { public_id: crypto.randomBytes(10).toString('hex') + '.' + ext }) },
+    (err, res) => (err ? reject(new Error(err.message || 'upload failed')) : resolve(res))).end(buf));
 }
 
 /** The photo sent with an enquiry, and anything they texted before there was
@@ -4314,28 +4322,33 @@ async function carryLeadFiles(code, leadId) {
   if (!lead || !q) return 0;
   /* The customer sees these on their quote page: only the same person's files. */
   if (!LEADFILES.samePerson(lead, q)) return 0;
-  const digits = String(lead.phone || '').replace(/\D/g, '').slice(-10);
-  /* Texts from their number with no job, from the day before the enquiry on. */
-  const { rows: texts } = digits.length === 10 ? await pool.query(
+  /* Texts from that number with no job, from the day before the enquiry on;
+     only when the quote has the lead's own number. Inbound texts keep the
+     number as Twilio sends it, +1 and ten digits. */
+  const digits = LEADFILES.samePhone(lead, q);
+  const { rows: texts } = digits ? await pool.query(
     `SELECT media FROM sms_messages
-      WHERE quote_code IS NULL AND status = 'received' AND media IS NOT NULL
-        AND right(regexp_replace(phone, '\\D', '', 'g'), 10) = $1
+      WHERE phone = $1 AND quote_code IS NULL AND status = 'received' AND media IS NOT NULL
         AND created_at >= $2::timestamptz - INTERVAL '1 day'
-      ORDER BY created_at LIMIT 20`, [digits, lead.created_at]) : { rows: [] };
+      ORDER BY created_at LIMIT 20`, ['+1' + digits, lead.created_at]) : { rows: [] };
+  if (lead.photo_url && !LEADFILES.sourceOf(lead.photo_url, cloud, LEADFILES.LEAD_FOLDERS)) {
+    console.error(`lead ${leadId} photo not carried to ${code} (not a kind the job's files take):`, String(lead.photo_url).slice(0, 200));
+  }
   let n = 0;
   for (const f of LEADFILES.leadFiles({ lead, texts: texts.map((t) => t.media), cloud })) {
     try {
       const r = await fetch(cloudinary.utils.private_download_url(f.publicId, f.format, { resource_type: f.type, type: 'upload' }),
         { signal: AbortSignal.timeout(20000) });
       if (!r.ok) throw new Error(`Cloudinary ${r.status}`);
+      /* Refused before it is read, when the size is given. */
+      if (Number(r.headers.get('content-length')) > QPHOTOS.MAX_FILE_BYTES) throw new Error('too big');
       const buf = Buffer.from(await r.arrayBuffer());
       if (buf.length > QPHOTOS.MAX_FILE_BYTES) throw new Error(`too big (${buf.length} bytes)`);
-      const up = await new Promise((resolve, reject) => cloudinary.uploader.upload_stream(
-        { folder: QPHOTOS.FOLDER, resource_type: f.type,
-          ...(f.type === 'raw' ? { public_id: crypto.randomBytes(10).toString('hex') + '.' + f.format } : {}) },
-        (err, res) => (err ? reject(new Error(err.message || 'upload failed')) : resolve(res))).end(buf));
-      await addCustomerFile(code, up.secure_url, f.name);
-      n++;
+      const up = await uploadBuffer(buf, { folder: QPHOTOS.FOLDER, image: f.type === 'image', ext: f.ext });
+      if (await addCustomerFile(code, up.secure_url, f.name)) { n++; continue; }
+      /* Not added (job gone or full): the copy would be unreachable. */
+      await cloudinary.uploader.destroy(up.public_id, { resource_type: f.type }).catch(() => {});
+      throw new Error('not added: the job is gone or its files are full');
     } catch (err) {
       console.error(`lead file not carried to ${code}:`, err.message);
       reportError('lead-files', err, code).catch(() => {});
