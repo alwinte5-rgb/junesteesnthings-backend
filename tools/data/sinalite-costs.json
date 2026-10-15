@@ -725,6 +725,329 @@
           "ship_assumed": true
         }
       ]
+    },
+    "roll_label": {
+      "name": "Roll Labels — white gloss BOPP",
+      "label": "Roll Labels",
+      "group": "Labels, Stickers & Packaging",
+      "design": "label",
+      "online": false,
+      "url": "https://sinalite.com/en_us/packaging/roll-labels/bopp-labels.html",
+      "note": "Waterproof white gloss BOPP product labels on a roll, gloss laminated, full color.",
+      "materials": [
+        {
+          "key": "white_bopp",
+          "label": "White gloss BOPP, gloss laminated"
+        }
+      ],
+      "sizes": [
+        {
+          "key": "circle2",
+          "label": "2\" circle"
+        },
+        {
+          "key": "circle3",
+          "label": "3\" circle"
+        },
+        {
+          "key": "rect2x3",
+          "label": "2\" x 3\" rectangle"
+        },
+        {
+          "key": "rect3x4",
+          "label": "3\" x 4\" rectangle"
+        }
+      ],
+      "description": "Waterproof white gloss BOPP product labels on a roll, gloss laminated, full color.",
+      "turnaround": "2 - 4 Business Days",
+      "rows": [
+        {
+          "mat": "white_bopp",
+          "size": "circle2",
+          "qty": 25,
+          "cost": 52.25,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "circle2",
+          "qty": 50,
+          "cost": 52.72,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "circle2",
+          "qty": 100,
+          "cost": 53.67,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "circle2",
+          "qty": 250,
+          "cost": 61.48,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "circle2",
+          "qty": 500,
+          "cost": 86.08,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "circle2",
+          "qty": 1000,
+          "cost": 95.04,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "circle3",
+          "qty": 25,
+          "cost": 52.78,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "circle3",
+          "qty": 50,
+          "cost": 54.01,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "circle3",
+          "qty": 100,
+          "cost": 56.62,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "circle3",
+          "qty": 250,
+          "cost": 69.24,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "circle3",
+          "qty": 500,
+          "cost": 101.7,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "circle3",
+          "qty": 1000,
+          "cost": 126.18,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "rect2x3",
+          "qty": 25,
+          "cost": 52.32,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "rect2x3",
+          "qty": 50,
+          "cost": 53.13,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "rect2x3",
+          "qty": 100,
+          "cost": 54.72,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "rect2x3",
+          "qty": 250,
+          "cost": 64.1,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "rect2x3",
+          "qty": 500,
+          "cost": 91.27,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "rect2x3",
+          "qty": 1000,
+          "cost": 105.32,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "rect3x4",
+          "qty": 25,
+          "cost": 53.24,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "rect3x4",
+          "qty": 50,
+          "cost": 54.9,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "rect3x4",
+          "qty": 100,
+          "cost": 58.39,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "rect3x4",
+          "qty": 250,
+          "cost": 73.59,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "rect3x4",
+          "qty": 500,
+          "cost": 110.32,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "rect3x4",
+          "qty": 1000,
+          "cost": 143.12,
+          "ship": 19.96
+        }
+      ]
+    },
+    "pouch": {
+      "name": "Stand-Up Pouches — white, zipper",
+      "label": "Stand-Up Pouches",
+      "group": "Labels, Stickers & Packaging",
+      "design": "pouch",
+      "online": false,
+      "any_qty": true,
+      "url": "https://sinalite.com/en_us/packaging/flexible-packaging/stand-up-pouches-2.html",
+      "note": "Custom printed stand-up pouches: gloss laminated, white inside, resealable zipper and tear notch, full color. Minimum 500.",
+      "materials": [
+        {
+          "key": "white_zip",
+          "label": "White, gloss, zipper and tear notch"
+        }
+      ],
+      "sizes": [
+        {
+          "key": "4.375x6x2",
+          "label": "4.375\" x 6\" x 2\" gusset"
+        },
+        {
+          "key": "5x8x3",
+          "label": "5\" x 8\" x 3\" gusset"
+        },
+        {
+          "key": "7x9x3",
+          "label": "7\" x 9\" x 3\" gusset"
+        }
+      ],
+      "description": "Custom printed stand-up pouches: gloss laminated, white inside, resealable zipper and tear notch, full color. Minimum 500.",
+      "turnaround": "10 - 12 Business Days",
+      "rows": [
+        {
+          "mat": "white_zip",
+          "size": "4.375x6x2",
+          "qty": 500,
+          "cost": 1138.41,
+          "ship": 75.87
+        },
+        {
+          "mat": "white_zip",
+          "size": "4.375x6x2",
+          "qty": 1000,
+          "cost": 1206.61,
+          "ship": 76.82
+        },
+        {
+          "mat": "white_zip",
+          "size": "4.375x6x2",
+          "qty": 2500,
+          "cost": 1419.92,
+          "ship": 114.58
+        },
+        {
+          "mat": "white_zip",
+          "size": "4.375x6x2",
+          "qty": 5000,
+          "cost": 1769.64,
+          "ship": 152.47
+        },
+        {
+          "mat": "white_zip",
+          "size": "5x8x3",
+          "qty": 500,
+          "cost": 1148.64,
+          "ship": 76.82
+        },
+        {
+          "mat": "white_zip",
+          "size": "5x8x3",
+          "qty": 1000,
+          "cost": 1223.94,
+          "ship": 76.89
+        },
+        {
+          "mat": "white_zip",
+          "size": "5x8x3",
+          "qty": 2500,
+          "cost": 1459.05,
+          "ship": 114.68
+        },
+        {
+          "mat": "white_zip",
+          "size": "5x8x3",
+          "qty": 5000,
+          "cost": 1849.24,
+          "ship": 171.36
+        },
+        {
+          "mat": "white_zip",
+          "size": "7x9x3",
+          "qty": 500,
+          "cost": 1182.09,
+          "ship": 76.82
+        },
+        {
+          "mat": "white_zip",
+          "size": "7x9x3",
+          "qty": 1000,
+          "cost": 1284.8,
+          "ship": 95.7
+        },
+        {
+          "mat": "white_zip",
+          "size": "7x9x3",
+          "qty": 2500,
+          "cost": 1588.56,
+          "ship": 133.57
+        },
+        {
+          "mat": "white_zip",
+          "size": "7x9x3",
+          "qty": 5000,
+          "cost": 2097.86,
+          "ship": 209.15
+        }
+      ]
     }
   }
 }

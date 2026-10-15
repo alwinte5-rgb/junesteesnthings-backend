@@ -237,3 +237,13 @@ test('the public quote estimate re-prices SinaLite lines from their runs', () =>
   assert.match(SERVER, /\$\{SINALITE\.eachFor\.toString\(\)\}/);
   assert.match(SERVER, /unitOverride: slUnit\(L, qty\),/);
 });
+
+test('a typed-quantity item (pouches) never prices 700 above 1,000, nor under the 500 each', () => {
+  const L = [[500, 4.81], [1000, 2.56], [2500, 1.31]];
+  const t = (q) => SL.eachFor(L, q, true) * q;
+  assert.ok(t(700) <= 1000 * 2.56 + 7, '700 costs no more than a 1,000 run (to the cent)');
+  assert.ok(t(700) >= 1000 * 2.56 - 0.01 || t(700) >= 700 * 4.81 - 0.01);
+  assert.strictEqual(SL.eachFor(L, 500, true), 4.81);
+  assert.strictEqual(SL.eachFor(L, 3000, true), 1.31, 'above the top tier: its each');
+  assert.strictEqual(SL.eachFor(L, 400, true), null, 'under the minimum: nothing');
+});

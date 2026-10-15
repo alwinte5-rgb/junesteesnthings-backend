@@ -13785,7 +13785,7 @@ function sinaliteRunsOf(it) {
   const fam = sg && sg.kind ? SINALITE.table().families[sg.kind] : null;
   if (!fam) return null;
   const lad = ((fam.prices[sg.mat] || {})[sg.size] || {})[''];
-  return Array.isArray(lad) && lad.length ? lad : null;
+  return Array.isArray(lad) && lad.length ? { ladder: lad, any: !!fam.any_qty } : null;
 }
 
 app.get('/q/:code', async (req, res) => {
@@ -14553,8 +14553,8 @@ ${quotePricingSource()}
       ${SINALITE.eachFor.toString()}
       function slUnit(L, qty){
         if (!L.runs || !(qty > 0)) return L.unitOverride;
-        var min = L.runs[0][0];
-        return qty >= min ? eachFor(L.runs, qty) : Math.ceil(min * L.runs[0][1] / qty * 100) / 100;
+        var lad = L.runs.ladder, min = lad[0][0];
+        return qty >= min ? eachFor(lad, qty, L.runs.any) : Math.ceil(min * lad[0][1] / qty * 100) / 100;
       }
       function estimate(){
         var moved = false, sub = 0, sharedSeen = {};

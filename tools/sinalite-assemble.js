@@ -82,6 +82,8 @@ const META = {
   pouch: {
     name: 'Stand-Up Pouches — white, zipper', label: 'Stand-Up Pouches', group: 'Labels, Stickers & Packaging',
     design: 'pouch', online: false,
+    /* Any quantity from 500 is typed in, not picked from set runs. */
+    any_qty: true,
     url: 'https://sinalite.com/en_us/packaging/flexible-packaging/stand-up-pouches-2.html',
     note: 'Custom printed stand-up pouches: gloss laminated, white inside, resealable zipper and tear notch, full color. Minimum 500.',
     materials: [{ key: 'white_zip', label: 'White, gloss, zipper and tear notch' }],

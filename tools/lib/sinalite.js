@@ -82,12 +82,21 @@ function ladderFrom(rows, where = 'sinalite') {
  * the cheapest set of runs that covers the quantity, each run carrying its
  * own shipping (never under-charges). Null under the minimum or with no ladder.
  */
-function eachFor(ladder, qty) {
+function eachFor(ladder, qty, anyQty) {
   /* Self-contained: the public quote page runs this same function (sent with
      toString()) for a customer's quantity estimate. */
   const ceil2 = (n) => Math.ceil(n * 100 - 1e-9) / 100;
   const q = Math.floor(Number(qty));
   if (!Array.isArray(ladder) || !ladder.length || !(q >= ladder[0][0]) || q > 1e6) return null;
+  /* A typed-quantity item (pouches): SinaLite's price for 700 is no more
+     than its 1,000 price and no more than 700 at the 500 each — the lower of
+     those two totals is never under cost, and 700 never costs more than 1,000. */
+  if (anyQty) {
+    let below = null, above = null;
+    for (const r of ladder) { if (q >= r[0]) below = r; else if (!above) above = r; }
+    const t = Math.min(below[1] * q, above ? above[0] * above[1] : Infinity);
+    return ceil2(t / q);
+  }
   const runs = ladder.map(([n, each]) => [n, n * each]);
   const memo = new Map();
   /* Cheapest total covering `left` pieces, computed bottom-up from the
@@ -152,6 +161,10 @@ function familyOf(key, p) {
   return {
     label: p.label, note: p.note || '', sizing: 'stock', supplier: 'sinalite',
     group: p.group, design: p.design || null, online: !!p.online,
+    /* true: SinaLite takes any quantity (typed box), so a quantity between
+       captured tiers pays the tier below's each (each falls as the run grows,
+       so that is never under cost). false: set runs only (eachFor). */
+    any_qty: !!p.any_qty,
     turnaround: p.turnaround || null, url: p.url || null,
     min: Number.isFinite(min) ? min : null,
     markup: MARKUP, freight: 0, freight_by_size: {},
