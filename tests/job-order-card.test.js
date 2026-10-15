@@ -21,6 +21,9 @@ test('the schedule ticks each step by its own record and never tells a helper to
   assert.match(s, /'Artwork in', sched\.artwork_by, !!\(q\.artwork_at \|\| q\.production_at\)/);
   assert.match(s, /'Proof approved', sched\.proof_by, !!\(q\.proof_ok_at \|\| q\.production_at\)/);
   assert.match(s, /'On the press', sched\.press_by, !!\(q\.production_at \|\| q\.shipped_at\)/);
-  assert.match(s, /const from = q\.production_at \? new Date\(q\.production_at\) : new Date\(\);/);
+  assert.match(s, /deliveryEstimate\(q\.production_at \? new Date\(q\.production_at\) : new Date\(\),/);
+  // Unpaid, the clock has not started: the page never says "Started today".
+  assert.doesNotMatch(s, /Started today/);
+  assert.match(s, /The clock starts when the deposit is paid/);
   assert.match(s, /canSetDate \? ' Set a date above/);
 });
