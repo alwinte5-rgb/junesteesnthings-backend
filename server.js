@@ -28701,23 +28701,26 @@ const isoDate = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) 
 /** A pay rate typed on the Staff page: 0 to `max`, to the cent. */
 const staffRate = (v, max) => Math.round(Math.min(max, Math.max(0, Number(v) || 0)) * 100) / 100;
 
-/* Names of archived helpers, kept so old records still say who did what
-   (nameOf), though the helpers themselves are off every list. */
-const ARCHIVED_NAMES = new Map();
-
-/** The helpers. Archived ones are left out unless `includeArchived` (only the
- *  Staff page's Archived tab and a direct look-up of one person ask). */
-async function staffRoster({ activeOnly = false, includeArchived = false } = {}) {
+/** The helpers, archived ones included: old records (credit, messages,
+ *  hours) still look their people up by id. Lists people pick from or browse
+ *  go through listedStaff(). activeOnly never includes an archived helper,
+ *  who is always inactive. */
+async function staffRoster({ activeOnly = false } = {}) {
   const { rows } = await pool.query(
     `SELECT id, name, email, active, perms, commission_pct, shop_commission_pct, hourly_rate, training_track, sales_role, last_seen_at, created_at, archived_at FROM staff
       ${activeOnly ? 'WHERE active' : ''} ORDER BY active DESC, name`);
-  for (const r of rows) if (r.archived_at) ARCHIVED_NAMES.set(r.id, r.name);
-  return includeArchived ? rows : rows.filter((r) => !r.archived_at);
+  return rows;
+}
+/** A roster for a list on screen: archived helpers left out (owner,
+ *  2026-10-15: "keep the info in the backend but not visible"), except the
+ *  one person the page is already about (`keep`). */
+function listedStaff(roster, keep = null) {
+  return roster.filter((r) => !r.archived_at || (keep != null && r.id === keep));
 }
 function nameOf(roster, id) {
   if (id == null) return 'Owner';
   const s = roster.find((r) => r.id === id);
-  return s ? s.name : ARCHIVED_NAMES.get(id) || `Helper #${id}`;
+  return s ? s.name : `Helper #${id}`;
 }
 function whenShort(d) {
   return d ? new Date(d).toLocaleString('en-US', { timeZone: SHOP_TZ, month: 'short', day: 'numeric',
@@ -28820,8 +28823,8 @@ function cloudflareStepCard(name, email) {
 }
 
 async function renderStaffPage(req, res, extra = '') {
-  const everyone = await staffRoster({ includeArchived: true });
-  const roster = everyone.filter((s) => !s.archived_at);
+  const everyone = await staffRoster();
+  const roster = listedStaff(everyone);
   const archived = everyone.filter((s) => s.archived_at);
   const showArchived = String((req.query || {}).archived || '') === '1';
   const tabs = filterChips([
@@ -28840,7 +28843,7 @@ async function renderStaffPage(req, res, extra = '') {
           <div class="row-sub">${escEmail(s.email)} &middot; ${escEmail(TRAINING.TRACKS[TRAINING.trackOf(s.training_track)].label)} path
             &middot; ${money(Number(s.hourly_rate || 0))}/h &middot; added ${escEmail(whenShort(s.created_at))}
             &middot; last seen ${escEmail(whenShort(s.last_seen_at))} &middot; archived ${escEmail(whenShort(s.archived_at))}</div>
-          <div class="row-sub"><a href="/admin/timeclock?staff=${s.id}">Their clocked hours</a></div></span>
+          <div class="row-sub"><a href="/admin/timeclock?staff=${s.id}">Their clocked hours</a> &middot; <a href="/admin/commission?staff=${s.id}">Their pay</a></div></span>
         <span class="row-end"><form method="post" action="/admin/staff/${s.id}" style="margin:0" data-once>
           <input type="hidden" name="action" value="unarchive"><button type="submit" class="btn btn-ghost">Restore</button></form></span></div>`).join('')
         : emptyState('Nobody is archived. Disable a helper on the Team tab, then Archive them.')}</div>${SHIP_ONCE_JS}`, 'team'));
@@ -28866,8 +28869,8 @@ async function renderStaffPage(req, res, extra = '') {
         <form method="post" action="/admin/staff/${s.id}" style="margin:0">
           <input type="hidden" name="action" value="${s.active ? 'disable' : 'enable'}">
           <button type="submit" class="btn btn-ghost">${s.active ? 'Disable now' : 'Enable'}</button></form>
-        ${s.active ? '' : `<form method="post" action="/admin/staff/${s.id}" style="margin:0" data-once
-            onsubmit="return confirm('Archive ${escEmail(s.name).replace(/'/g, '&#39;')}? They leave every list; their hours, pay and messages are kept.')">
+        ${s.active ? '' : `<form method="post" action="/admin/staff/${s.id}" style="margin:0" data-once data-archive-name="${escEmail(s.name)}"
+            onsubmit="return confirm('Archive ' + this.dataset.archiveName + '? They leave every list; their hours, pay and messages are kept.')">
           <input type="hidden" name="action" value="archive">
           <button type="submit" class="btn btn-ghost" style="color:#b91c1c">Archive</button></form>`}
       </div>
@@ -28969,7 +28972,13 @@ app.post('/admin/staff', requireAdmin, async (req, res) => {
     return renderStaffPage({ query: mailErr ? { ok: okMsg, err: mailErr } : { ok: okMsg } }, res,
       cloudflareStepCard(name, email));
   } catch (err) {
-    if (err.code === '23505') return back(res, '/admin/staff', 'err', 'Someone already has that email.');
+    if (err.code === '23505') {
+      /* Often an archived helper coming back: say so, rather than point at
+         nobody on the Team tab. */
+      const { rows: [old] } = await pool.query('SELECT name, archived_at FROM staff WHERE lower(email) = $1', [email]).catch(() => ({ rows: [] }));
+      if (old && old.archived_at) return back(res, '/admin/staff?archived=1', 'err', `${old.name} already has that email and is archived. Restore them here, then Enable them.`);
+      return back(res, '/admin/staff', 'err', 'Someone already has that email.');
+    }
     console.error('add staff failed:', err.message);
     return back(res, '/admin/staff', 'err', 'Could not add them. Try again.');
   }
@@ -29006,25 +29015,52 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
       }
       case 'archive': {
         /* Disabled first, and nothing still owed or open: archiving must never
-           hide wages to pay or work in hand. */
+           hide wages or commission to pay, or work in hand. */
+        if (s.archived_at) return back(res, '/admin/staff?archived=1', 'ok', `${s.name} is already archived.`);
         if (s.active) return back(res, `/admin/staff#staff-${id}`, 'err', `Disable ${s.name} before archiving them.`);
-        const [{ rows: [hrs] }, { rows: [tasks] }, { rows: [art] }] = await Promise.all([
+        const [{ rows: [hrs] }, { rows: [clock] }, { rows: [bonus] }, { rows: [tasks] }, { rows: [art] }, lines] = await Promise.all([
           pool.query('SELECT COALESCE(SUM(hours), 0)::float AS h FROM staff_hours WHERE staff_id = $1 AND paid_at IS NULL', [id]),
+          /* Clocked weeks not yet approved (no staff_hours row), or a shift still running. */
+          pool.query(`SELECT COUNT(*) FILTER (WHERE ended_at IS NULL)::int AS running,
+                             COUNT(DISTINCT date_trunc('week', started_at AT TIME ZONE 'America/Chicago'))
+                               FILTER (WHERE ended_at IS NOT NULL AND NOT EXISTS (
+                                 SELECT 1 FROM staff_hours h WHERE h.staff_id = sh.staff_id
+                                   AND h.week_of = (date_trunc('week', sh.started_at AT TIME ZONE 'America/Chicago'))::date))::int AS unapproved
+                        FROM staff_shifts sh WHERE staff_id = $1`, [id]),
+          pool.query('SELECT COALESCE(SUM(amount), 0)::float AS a FROM staff_bonuses WHERE staff_id = $1 AND paid_at IS NULL', [id]),
           pool.query('SELECT COUNT(*)::int AS n FROM staff_tasks WHERE assigned_to = $1 AND done_at IS NULL', [id]),
           pool.query(`SELECT COUNT(*)::int AS n FROM art_requests WHERE assigned_to = $1 AND status <> 'approved'`, [id]),
+          (async () => { const { rows: [rates] } = await pool.query('SELECT commission_pct, shop_commission_pct FROM staff WHERE id = $1', [id]);
+            return commissionLines(id, rates); })(),
         ]);
-        const left = [hrs.h > 0 ? `${hrs.h} approved hours not yet paid (pay them on Team)` : '',
+        const owedCommission = lines.filter((l) => !['paid', 'wage only'].includes(l.state) && l.amount > 0);
+        const left = [
+          hrs.h > 0 ? `${hrs.h} approved hours not yet paid (pay them on Team)` : '',
+          clock.running ? 'a shift still running (end it on Hours)' : '',
+          clock.unapproved ? `${clock.unapproved} clocked week${clock.unapproved === 1 ? '' : 's'} not yet approved (approve or adjust on Hours)` : '',
+          bonus.a > 0 ? `${money(bonus.a)} in bonuses not yet paid` : '',
+          owedCommission.length ? `commission on ${owedCommission.length} sale${owedCommission.length === 1 ? '' : 's'} not yet paid (see their Pay page)` : '',
           tasks.n ? `${tasks.n} open task${tasks.n === 1 ? '' : 's'} (reassign or close them on Tasks)` : '',
-          art.n ? `${art.n} design job${art.n === 1 ? '' : 's'} assigned to them` : ''].filter(Boolean);
+          art.n ? `${art.n} design job${art.n === 1 ? '' : 's'} assigned to them` : '',
+        ].filter(Boolean);
         if (left.length) return back(res, `/admin/staff#staff-${id}`, 'err', `Not archived: ${s.name} still has ${left.join('; ')}.`);
-        await pool.query('UPDATE staff SET archived_at = NOW(), active = FALSE WHERE id = $1 AND archived_at IS NULL', [id]);
+        /* The checks repeated in the write, so work added in between stops it. */
+        const { rowCount } = await pool.query(
+          `UPDATE staff SET archived_at = NOW(), active = FALSE
+            WHERE id = $1 AND archived_at IS NULL AND NOT active
+              AND NOT EXISTS (SELECT 1 FROM staff_hours WHERE staff_id = $1 AND paid_at IS NULL)
+              AND NOT EXISTS (SELECT 1 FROM staff_tasks WHERE assigned_to = $1 AND done_at IS NULL)
+              AND NOT EXISTS (SELECT 1 FROM staff_shifts WHERE staff_id = $1 AND ended_at IS NULL)`, [id]);
+        if (!rowCount) return back(res, `/admin/staff#staff-${id}`, 'err', `${s.name} changed while archiving; nothing was archived. Try again.`);
         logActivity(currentActor(), 'helper archived', { type: 'staff', id }, { name: s.name });
         return back(res, '/admin/staff?archived=1', 'ok', `${s.name} is archived: off every list, records kept.`);
       }
-      case 'unarchive':
-        await pool.query('UPDATE staff SET archived_at = NULL WHERE id = $1', [id]);
+      case 'unarchive': {
+        const { rowCount } = await pool.query('UPDATE staff SET archived_at = NULL WHERE id = $1 AND archived_at IS NOT NULL', [id]);
+        if (!rowCount) return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is not archived.`);
         logActivity(currentActor(), 'helper restored', { type: 'staff', id }, { name: s.name });
         return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is back on the Team tab, still disabled. Enable them if they are coming back.`);
+      }
       case 'enable':
         if (s.archived_at) return back(res, '/admin/staff?archived=1', 'err', `Restore ${s.name} from Archived first.`);
         await pool.query('UPDATE staff SET active = TRUE WHERE id = $1', [id]);
@@ -29478,7 +29514,7 @@ app.get('/admin/activity', requireAdmin, async (req, res) => {
       ${pageHeader('Activity', 'Every change made in the back office, and who made it. Page views are not recorded.')}
       ${filterChips([{ label: 'Everyone', href: link({ who: 'all' }), on: who === 'all' },
                      { label: 'Owner', href: link({ who: 'owner' }), on: who === 'owner' },
-                     ...roster.map((s) => ({ label: s.name, href: link({ who: String(s.id) }), on: who === String(s.id) }))])}
+                     ...listedStaff(roster, Number(who)).map((s) => ({ label: s.name, href: link({ who: String(s.id) }), on: who === String(s.id) }))])}
       ${filterChips([1, 7, 30, 90].map((d) => ({ label: d === 1 ? 'Today' : `${d} days`, href: link({ days: String(d) }), on: days === d })))}
       <div class="card">${rows.length ? `<table class="dt" style="width:100%"><tbody>${rows.map((r) => `
         <tr><td class="muted" style="white-space:nowrap">${escEmail(whenShort(r.created_at))}</td>
@@ -29678,7 +29714,7 @@ app.get('/admin/my-stats', requireAdmin, async (req, res) => {
     res.send(adminPage('My stats', `
       ${pageHeader(owner ? `Stats — ${who.name || ''}` : 'My stats', owner ? 'What this helper sees on their own My stats page.'
         : 'Your own numbers, worked out from your work. Nobody else on the team sees them; June does.',
-        owner && roster.length > 1 ? roster.map((r) => `<a class="btn ${r.id === staffId ? '' : 'btn-ghost'}" href="/admin/my-stats?staff=${r.id}&period=${period}">${escEmail(r.name)}</a>`).join(' ') : '')}
+        owner && roster.length > 1 ? listedStaff(roster, staffId).map((r) => `<a class="btn ${r.id === staffId ? '' : 'btn-ghost'}" href="/admin/my-stats?staff=${r.id}&period=${period}">${escEmail(r.name)}</a>`).join(' ') : '')}
       ${filterChips([{ label: 'This week', href: `/admin/my-stats?period=week${q('')}`, on: period === 'week' },
                      { label: 'Last week', href: `/admin/my-stats?period=last${q('')}`, on: period === 'last' },
                      { label: 'This month', href: `/admin/my-stats?period=month${q('')}`, on: period === 'month' }])}
@@ -29967,7 +30003,7 @@ app.get('/admin/timeclock', requireAdmin, async (req, res) => {
     const week = clockWeekParam(req.query.week);
     /* An archived helper is reachable only when asked for by id (their old
        weeks, from the Archived tab); they are on no list. */
-    const everyone = await staffRoster({ includeArchived: true });
+    const everyone = await staffRoster();
     const staffId = intIn(req.query.staff);
     /* Active helpers, plus the one asked for: someone disabled before their
        last week was approved can still be reviewed. */
@@ -30259,7 +30295,9 @@ async function commissionLines(staffId, rates) {
 app.get('/admin/commission', requireAdmin, async (req, res) => {
   try {
     const roster = await staffRoster();
-    const s = roster.find((r) => r.id === intIn(req.query.staff)) || roster[0];
+    /* An archived helper opens by id (their pay history, from Archived); the
+       default is the first listed one. */
+    const s = roster.find((r) => r.id === intIn(req.query.staff)) || listedStaff(roster)[0];
     if (!s) return res.redirect('/admin/staff');
     const [e, incentives] = await Promise.all([earningsFor(s), incentivesFor(s.id, { includeEnded: true })]);
     const { pct, lines } = e;
@@ -30272,7 +30310,7 @@ app.get('/admin/commission', requireAdmin, async (req, res) => {
     res.send(adminPage('Commission', `
       ${pageHeader(`Pay — ${s.name}`, `${money(e.wages.rate)} an hour for the hours on the Team page. On their own leads, ${pct}% of the price as well: the job's total before sales tax, less any refund. Shop leads pay the wage only. Commission is payable ${TEAM.HOLD_DAYS} days after the job is paid in full.`)}
       ${flash(req.query)}
-      ${filterChips(roster.map((r) => ({ label: r.name, href: `/admin/commission?staff=${r.id}`, on: r.id === s.id })))}
+      ${filterChips(listedStaff(roster, s.id).map((r) => ({ label: r.name, href: `/admin/commission?staff=${r.id}`, on: r.id === s.id })))}
       ${commissionStartNote(e, true)}
       ${earningsTiles(e)}
       ${payNow > 0 ? `<form method="post" action="/admin/commission/pay" class="card">
@@ -30423,7 +30461,7 @@ function creditField(q, roster, { bare = false } = {}) {
   const pick = cur != null ? cur : actor.kind === 'staff' ? actor.id : null;
   const opts = [
     ...(actor.kind === 'staff' ? [] : [`<option value="owner"${pick === CREDIT_OWNER || pick == null ? ' selected' : ''}>No one — my own sale</option>`]),
-    ...roster.map((r) => `<option value="${r.id}"${r.id === pick ? ' selected' : ''}>${escEmail(r.name)}${
+    ...listedStaff(roster, pick).map((r) => `<option value="${r.id}"${r.id === pick ? ' selected' : ''}>${escEmail(r.name)}${
       actor.kind === 'staff' && r.id === actor.id ? ' (me)' : ''}</option>`),
   ];
   /* Credited to a helper no longer on the active roster: keep them selected,
@@ -31632,7 +31670,7 @@ app.get('/admin/tasks', requireAdmin, async (req, res) => {
     const countOf = (id) => (counts.find((c) => c.assigned_to === id) || {}).n || 0;
     const chips = [
       { label: 'Everyone', href: '/admin/tasks', on: !who, count: counts.reduce((a, c) => a + c.n, 0) || null },
-      ...roster.filter((r) => r.active || countOf(r.id)).map((r) => ({ label: r.name, href: `/admin/tasks?who=${r.id}`, on: whoId === r.id, count: countOf(r.id) || null })),
+      ...roster.filter((r) => !r.archived_at && (r.active || countOf(r.id))).map((r) => ({ label: r.name, href: `/admin/tasks?who=${r.id}`, on: whoId === r.id, count: countOf(r.id) || null })),
       { label: 'Anyone (unassigned)', href: '/admin/tasks?who=anyone', on: who === 'anyone', count: countOf(null) || null },
     ];
     const backTo = `/admin/tasks${who ? `?who=${encodeURIComponent(who)}` : ''}`;
@@ -31789,7 +31827,7 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
     const manage = owner ? `<details class="card" id="manage"${req.query.ok || req.query.err ? ' open' : ''}><summary><b>Set the hours</b> <span class="muted">add or remove a weekly shift</span></summary>
       <form method="post" action="/admin/work-schedule" class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end;margin-top:10px">
         <input type="hidden" name="action" value="add">
-        <label style="margin:0">Who <select name="staff_id" required><option value="">Pick</option>${roster.map((r) => `<option value="${Number(r.id)}">${escEmail(r.name)}</option>`).join('')}</select></label>
+        <label style="margin:0">Who <select name="staff_id" required><option value="">Pick</option>${listedStaff(roster).map((r) => `<option value="${Number(r.id)}">${escEmail(r.name)}</option>`).join('')}</select></label>
         <label style="margin:0">Days ${SHIFTS.DAYS.map((d, i) => `<label style="display:inline-flex;gap:3px;margin:0 6px 0 0;font-weight:400"><input type="checkbox" name="days" value="${i + 1}"${i < 5 ? ' checked' : ''}>${d}</label>`).join('')}</label>
         <label style="margin:0">Starts <input type="time" name="start" required value="09:00"></label>
         <label style="margin:0">Ends <input type="time" name="end" required value="14:00"></label>
@@ -32270,7 +32308,7 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
            FROM team_messages GROUP BY staff_id`);
       const by = new Map(counts.map((c) => [c.staff_id, c]));
       // Disabled helpers stay listed only while there is a conversation to read.
-      people = roster.filter((r) => r.active || by.has(r.id)).sort((x, y) => {
+      people = roster.filter((r) => !r.archived_at && (r.active || by.has(r.id))).sort((x, y) => {
         const a = by.get(x.id) || {}, b = by.get(y.id) || {};
         return (b.unread || 0) - (a.unread || 0) || new Date(b.last_at || 0) - new Date(a.last_at || 0);
       });
@@ -32769,7 +32807,7 @@ async function sendChatAlerts() {
   const ownerTo = String(process.env.OWNER_EMAILS || '').split(',').map((e) => e.trim()).find(isValidEmail) || NOTIFY_EMAIL;
   const readers = [
     ...(ownerTo ? [{ actor: OWNER_ACTOR, to: ownerTo, name: 'June' }] : []),
-    ...roster.filter((r) => isValidEmail(r.email)).map((r) => ({ actor: { kind: 'staff', id: r.id }, to: r.email, name: r.name, row: r })),
+    ...roster.filter((r) => !r.archived_at && isValidEmail(r.email)).map((r) => ({ actor: { kind: 'staff', id: r.id }, to: r.email, name: r.name, row: r })),
   ];
   let sent = 0;
   for (const rd of readers) {
@@ -33281,7 +33319,7 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
       ${pageHeader(owner ? `Training — ${who.name} (${pathLabel})` : `My training: ${pathLabel}`,
         owner ? 'Lessons and reading they tick, work ticks itself, quizzes are marked here, and you sign off the rest. Moving them up stays your call on Staff.'
               : 'Work through it in order. Each module opens when you pass the quiz before it. Times are a guide, not a limit.',
-        owner ? [...(roster.length > 1 ? roster.map((r) => `<a class="btn ${r.id === staffId ? '' : 'btn-ghost'}" href="/admin/training?staff=${r.id}">${escEmail(r.name)}</a>`) : []),
+        owner ? [...(roster.length > 1 ? listedStaff(roster, staffId).map((r) => `<a class="btn ${r.id === staffId ? '' : 'btn-ghost'}" href="/admin/training?staff=${r.id}">${escEmail(r.name)}</a>`) : []),
           '<a class="btn btn-ghost" href="/admin/training/paths">Every role\'s training</a>'].join(' ') : '')}
       ${flash(req.query)}
       ${owner ? `<div class="card" style="border-left:4px solid #1848B8"><b>You are viewing ${escEmail(who.name)}'s training.</b>
@@ -33612,7 +33650,7 @@ app.get('/admin/training/exam/:key', requireAdmin, async (req, res) => {
     res.send(adminPage('Quote exam', `
       ${pageHeader(owner ? `Quote exam${who ? ` — ${who.name}` : ''}` : 'Quote exam',
         `Build each request in the real quote form. Nothing is sent or saved as a quote. Get ${need} of ${QEXAM.SCENARIOS.length} right to pass; try each as often as you need.`,
-        owner && roster.length ? roster.map((r) => `<a class="btn ${r.id === staffId ? '' : 'btn-ghost'}" href="/admin/training/exam/${QUOTE_EXAM_KEY}?staff=${r.id}">${escEmail(r.name)}</a>`).join(' ') : '')}
+        owner && roster.length ? listedStaff(roster, staffId).map((r) => `<a class="btn ${r.id === staffId ? '' : 'btn-ghost'}" href="/admin/training/exam/${QUOTE_EXAM_KEY}?staff=${r.id}">${escEmail(r.name)}</a>`).join(' ') : '')}
       ${flash(req.query)}
       ${staffId ? `<div class="card"><b>${passedN} of ${QEXAM.SCENARIOS.length} right</b>${progressBar(passedN, QEXAM.SCENARIOS.length)}
         <div class="muted">${passedN >= need ? 'Passed.' : `${need - passedN} more to pass.`}</div></div>` : ''}

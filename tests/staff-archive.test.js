@@ -3,24 +3,28 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-const fn = (name) => src.slice(src.indexOf(`function ${name}(`), src.indexOf('\n}\n', src.indexOf(`function ${name}(`)));
+const fn = (name) => src.slice(src.indexOf(`function ${name}(`), src.indexOf('\n}\n', src.indexOf(`function ${name}(`)) + 2);
 
-test('the roster leaves archived helpers out unless asked, and old records keep their names', () => {
-  const r = fn('staffRoster');
-  assert.match(r, /return includeArchived \? rows : rows\.filter\(\(r\) => !r\.archived_at\);/);
-  assert.match(r, /if \(r\.archived_at\) ARCHIVED_NAMES\.set\(r\.id, r\.name\)/);
-  assert.match(fn('nameOf'), /ARCHIVED_NAMES\.get\(id\)/);
-  assert.match(src, /ALTER TABLE staff ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ/);
+test('listedStaff leaves archived helpers off a list, except the one the page is about', () => {
+  const listedStaff = vm.runInNewContext(`(${fn('listedStaff')})`);
+  const roster = [{ id: 1, archived_at: null }, { id: 2, archived_at: new Date() }, { id: 3, archived_at: null }];
+  assert.deepStrictEqual(listedStaff(roster).map((r) => r.id), [1, 3]);
+  assert.deepStrictEqual(listedStaff(roster, 2).map((r) => r.id), [1, 2, 3]);
+  assert.match(fn('staffRoster'), /archived_at FROM staff/, 'the roster still carries archived helpers, for old records');
 });
 
-test('archive only a disabled helper with nothing owed or open; enable waits for Restore', () => {
+test('archive: never with wages, commission, bonuses, clocked time or work outstanding; nothing deleted', () => {
   const a = src.slice(src.indexOf("case 'archive': {"), src.indexOf("case 'enable':"));
-  assert.match(a, /if \(s\.active\) return back\(/);
-  assert.match(a, /FROM staff_hours WHERE staff_id = \$1 AND paid_at IS NULL/);
-  assert.match(a, /FROM staff_tasks WHERE assigned_to = \$1 AND done_at IS NULL/);
-  assert.match(a, /FROM art_requests WHERE assigned_to = \$1 AND status <> 'approved'/);
-  assert.match(a, /SET archived_at = NOW\(\), active = FALSE/);
-  assert.doesNotMatch(a, /DELETE/, 'nothing is deleted');
-  assert.match(src, /if \(s\.archived_at\) return back\(res, '\/admin\/staff\?archived=1', 'err', `Restore/);
+  for (const t of ['staff_hours', 'staff_shifts', 'staff_bonuses', 'commissionLines(', 'staff_tasks', 'art_requests']) assert.ok(a.includes(t), t);
+  assert.ok(a.includes('NOT EXISTS (SELECT 1 FROM staff_shifts WHERE staff_id = $1 AND ended_at IS NULL)'), 'checks repeated in the write');
+  assert.ok(a.includes('if (!rowCount)'));
+  assert.doesNotMatch(a, /DELETE/);
+});
+
+test('the Archive confirm never puts a name inside script text', () => {
+  const page = fn('renderStaffPage');
+  assert.ok(page.includes('data-archive-name="${escEmail(s.name)}"'));
+  assert.ok(page.includes("this.dataset.archiveName"));
 });
