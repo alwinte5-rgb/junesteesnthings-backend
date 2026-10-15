@@ -45,8 +45,15 @@ test('team chat: only the author edits, in a channel still theirs, and the write
 test('team chat: the first wording is for the owner only, and a tag links only for whoever can open the job', () => {
   const x = fn('chatExtrasJson');
   assert.match(x, /!mine && actor\.kind !== 'staff' \? m\.original_body : ''/);
-  assert.match(x, /open && open\.has\(m\.quote_code\) \? jobLinkFor\(actor, m\.quote_code\) : ''/);
-  assert.match(fn('openableTags'), /canOpenJob\(c, actor\)/);
+  assert.match(x, /href: \(open && open\.get\(m\.quote_code\)\) \|\| ''/);
+  assert.match(fn('openableTags'), /if \(!\(await canOpenJob\(c, actor\)\)\) return '';/);
+  assert.match(fn('openableTags'), /await ownerTaggedCodes\(codes, actor\)/, 'one batched lookup per page');
+  /* An owner's tag shares the job; a helper's own tag grants nothing. */
+  const tagged = fn('ownerTaggedCodes');
+  assert.match(tagged, /cancelled_at IS NULL AND delivered_at IS NULL/, 'only while the job is open');
+  assert.match(tagged, /WHERE staff_id = \$1 AND from_owner AND quote_code = ANY\(\$2\)/);
+  assert.match(tagged, /WHERE staff_id IS NULL AND quote_code = ANY\(\$1\)/);
+  assert.match(tagged, /channelsFor\(actor, await teamChannels\(\), await staffRoster\(\)\)/);
   const send = route("app.post('/admin/team-chat', requireAdmin");
   assert.match(send, /QUOTE_CODE_RE\.test\(tagRaw\) && await canOpenJob\(tagRaw, actor\)/, 'a sender tags only a job they can open');
   assert.match(send, /Sent, but NOT tagged/, 'a refused tag never loses the message');
