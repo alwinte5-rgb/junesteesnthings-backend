@@ -379,13 +379,19 @@ test('the sizer lists the SinaLite runs and says shipping is included; the inter
   assert.ok(SERVER.includes("'priced from SinaLite: each run bought is cost x2"));
 });
 
-test('a quantity between runs that jumps in price recommends the run below', () => {
-  const Q = require('../tools/lib/quote-signs');
-  const r = Q.priceSign('brochure', { size: '8.5x11', mat: '1s' }, 3000, false);
-  assert.ok(r.ok && r.hint && r.hint.qty === 2500, JSON.stringify(r.hint));
-  assert.match(r.hint.text, /Recommend 2,500/);
-  assert.strictEqual(Q.priceSign('brochure', { size: '8.5x11', mat: '1s' }, 2500, false).hint, undefined, 'a real run needs no tip');
-  assert.strictEqual(Q.priceSign('pouch', { size: Object.keys(SL.table().families.pouch.prices[Object.keys(SL.table().families.pouch.prices)[0]])[0],
-    mat: Object.keys(SL.table().families.pouch.prices)[0] }, 700, false).hint, undefined, 'any-quantity items never jump');
+test('a quantity between runs recommends the better run next to it', () => {
+  const { runHint } = require('../tools/lib/quote-signs');
+  /* A fixed ladder, so a recapture of SinaLite prices cannot move the test. */
+  const L = [[500, 0.55], [1000, 0.36], [2500, 0.25], [5000, 0.19]];
+  const at3000 = runHint(L, 3000);
+  assert.deepStrictEqual(at3000.options.map((o) => o.qty), [2500], 'the run below when the jump is big');
+  assert.match(at3000.text, /Recommend 2,500: \$625\.00 \(\$0\.25 each\)/);
+  const at2350 = runHint(L, 2350);
+  assert.deepStrictEqual(at2350.options.map((o) => o.qty), [2500], 'the run above when it costs no more');
+  assert.match(at2350.text, /2,500: \$625\.00 \(\$0\.25 each\), less money for 150 more/);
+  assert.strictEqual(runHint(L, 2500), null, 'a real run needs no tip');
+  assert.match(runHint([[100, 20], [200, 15]], 101).text, /Recommend 100: \$2,000\.00 \(\$20\.00 each\)/, 'money has its separators');
+  assert.strictEqual(runHint(L, 3000, 0.05).options[0].each, 0.3, 'upgrades are in the each it quotes');
   assert.ok(SERVER.includes("data-useqty="), 'the form offers a one-tap switch');
+  assert.ok(SERVER.includes("L.querySelector('.q').readOnly ? '' :"), 'no switch where sizes set the quantity');
 });
