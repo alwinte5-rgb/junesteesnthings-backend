@@ -138,4 +138,58 @@ async function slCapture(spec) {
   return { key: spec.key, rows };
 }
 
-if (typeof module !== 'undefined') module.exports = { slCapture };
+/* Drinkware (mugs, tumblers, bottles) are Magento pages of another kind: a
+ * typed quantity box (custom_qty[<id>]) with a bulk discount and a "Total
+ * Cost" box showing the regular and the sale total. Run on the product page:
+ *
+ *   await dwCapture({ qtySel: 'input[name="custom_qty[711]"]', mat: '1side',
+ *     size: '11oz', tiers: [1, 12, 36, 72, 144] })
+ *
+ * The price includes ONE printed side; the page's "2 sides" option does not
+ * move its total, so it is not captured. Shipping comes from the same
+ * "Calculate shipping cost" estimate as slCapture. */
+async function dwCapture(spec) {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const vis = (s) => [...document.querySelectorAll(s)].find((e) => e.offsetParent);
+  const q = document.querySelector(spec.qtySel);
+  if (!q) throw new Error('no quantity box ' + spec.qtySel);
+  const sale = () => {
+    const e = [...document.querySelectorAll('*')].find((x) => /^Total Cost/.test(x.textContent.trim()) && x.textContent.length < 60);
+    const m = e ? e.parentElement.innerText.match(/\$[\d,]+\.\d\d/g) : null;
+    return m ? Number(m[m.length - 1].replace(/[$,]/g, '')) : null;
+  };
+  const open = [...document.querySelectorAll('button')].find((b) => /calculate shipping cost/i.test(b.textContent));
+  if (open && !vis('.btn-shipping-quote')) { open.click(); await sleep(1500); }
+  const region = vis('select[name=region]');
+  region.value = [...region.options].find((o) => o.text === 'Illinois').value;
+  region.dispatchEvent(new Event('change', { bubbles: true }));
+  const city = vis('input[name=city]'); city.value = 'Chicago'; city.dispatchEvent(new Event('change', { bubbles: true }));
+  const zip = vis('input[name=postcode]') || vis('input[name=postal_code]'); zip.value = '60657'; zip.dispatchEvent(new Event('change', { bubbles: true }));
+  if (!window.__slOrigPost) {
+    window.__slOrigPost = window.jQuery.post;
+    window.jQuery.post = function (u, d, cb) {
+      if (!/shipping\/product\/estimate/.test(String(u))) return window.__slOrigPost.apply(this, arguments);
+      return window.__slOrigPost.call(this, u, d, function (res) { window.__slShipRes = res; return cb && cb.apply(this, arguments); })
+        .fail(function (x) { window.__slShipRes = { failed: x.status }; });
+    };
+  }
+  const rows = [];
+  for (const n of spec.tiers) {
+    q.value = String(n);
+    ['input', 'change', 'keyup', 'blur'].forEach((t) => q.dispatchEvent(new Event(t, { bubbles: true })));
+    window.jQuery(q).trigger('change').trigger('keyup');
+    await sleep(2000);
+    const cost = sale();
+    window.__slShipRes = null;
+    vis('.btn-shipping-quote').click();
+    for (let i = 0; i < 60 && !window.__slShipRes; i++) await sleep(250);
+    const res = window.__slShipRes;
+    const rates = res && !res.failed ? (String(res.html || '').match(/\$\s?[\d,]+\.\d\d/g) || []).map((x) => Number(x.replace(/[$,\s]/g, ''))) : [];
+    if (!(cost > 0) || !rates.length) throw new Error('tier ' + n + ': no ' + (cost > 0 ? 'shipping rate' : 'price'));
+    rows.push({ mat: spec.mat, size: spec.size, qty: n, cost, ship: Math.min(...rates) });
+    await sleep(spec.pace || 1200);
+  }
+  return { rows };
+}
+
+if (typeof module !== 'undefined') module.exports = { slCapture, dwCapture };

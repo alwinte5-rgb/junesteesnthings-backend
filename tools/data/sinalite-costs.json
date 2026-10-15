@@ -47,6 +47,13 @@
         {
           "mat": "1s",
           "size": "8.5x11",
+          "qty": 75,
+          "cost": 73.34,
+          "ship": 16.26
+        },
+        {
+          "mat": "1s",
+          "size": "8.5x11",
           "qty": 100,
           "cost": 75.05,
           "ship": 18.16
@@ -64,6 +71,13 @@
           "qty": 500,
           "cost": 105.15,
           "ship": 30.57
+        },
+        {
+          "mat": "1s",
+          "size": "8.5x11",
+          "qty": 750,
+          "cost": 122.96,
+          "ship": 35.13
         },
         {
           "mat": "1s",
@@ -87,6 +101,20 @@
           "ship": 176.44
         },
         {
+          "mat": "1s",
+          "size": "8.5x11",
+          "qty": 7500,
+          "cost": 406.38,
+          "ship": 132.72
+        },
+        {
+          "mat": "1s",
+          "size": "8.5x11",
+          "qty": 10000,
+          "cost": 527.87,
+          "ship": 333.92
+        },
+        {
           "mat": "2s",
           "size": "8.5x11",
           "qty": 25,
@@ -98,6 +126,13 @@
           "size": "8.5x11",
           "qty": 50,
           "cost": 74.1,
+          "ship": 16.26
+        },
+        {
+          "mat": "2s",
+          "size": "8.5x11",
+          "qty": 75,
+          "cost": 76.62,
           "ship": 16.26
         },
         {
@@ -124,6 +159,13 @@
         {
           "mat": "2s",
           "size": "8.5x11",
+          "qty": 750,
+          "cost": 149.32,
+          "ship": 35.13
+        },
+        {
+          "mat": "2s",
+          "size": "8.5x11",
           "qty": 1000,
           "cost": 177.15,
           "ship": 44.03
@@ -141,6 +183,20 @@
           "qty": 5000,
           "cost": 369.36,
           "ship": 176.44
+        },
+        {
+          "mat": "2s",
+          "size": "8.5x11",
+          "qty": 7500,
+          "cost": 429.51,
+          "ship": 132.72
+        },
+        {
+          "mat": "2s",
+          "size": "8.5x11",
+          "qty": 10000,
+          "cost": 553.43,
+          "ship": 333.92
         }
       ]
     },
@@ -1046,6 +1102,128 @@
           "qty": 5000,
           "cost": 2097.86,
           "ship": 209.15
+        }
+      ]
+    },
+    "mug": {
+      "name": "Ceramic Mugs — 11oz, printed",
+      "label": "Ceramic Mugs",
+      "group": "Drinkware",
+      "design": null,
+      "online": true,
+      "any_qty": true,
+      "url": "https://sinalite.com/en_us/promotional-products/mugs/11oz-ceramic-mug.html",
+      "note": "White 11oz ceramic mug, full-color sublimation print on one side. No minimum.",
+      "materials": [
+        {
+          "key": "1side",
+          "label": "Printed one side"
+        }
+      ],
+      "sizes": [
+        {
+          "key": "11oz",
+          "label": "11 oz"
+        }
+      ],
+      "description": "White 11oz ceramic mug, full-color sublimation print on one side. No minimum.",
+      "turnaround": "2 - 5 Business Days",
+      "rows": [
+        {
+          "mat": "1side",
+          "size": "11oz",
+          "qty": 1,
+          "cost": 6.18,
+          "ship": 19.96
+        },
+        {
+          "mat": "1side",
+          "size": "11oz",
+          "qty": 12,
+          "cost": 59.76,
+          "ship": 29.73
+        },
+        {
+          "mat": "1side",
+          "size": "11oz",
+          "qty": 36,
+          "cost": 177.84,
+          "ship": 58.05
+        },
+        {
+          "mat": "1side",
+          "size": "11oz",
+          "qty": 72,
+          "cost": 345.6,
+          "ship": 96.31
+        },
+        {
+          "mat": "1side",
+          "size": "11oz",
+          "qty": 144,
+          "cost": 691.2,
+          "ship": 186.78
+        }
+      ]
+    },
+    "tumbler": {
+      "name": "Tumblers — 20oz stainless, printed",
+      "label": "Tumblers",
+      "group": "Drinkware",
+      "design": null,
+      "online": true,
+      "any_qty": true,
+      "url": "https://sinalite.com/en_us/promotional-products/tumblers/20-oz-tumbler.html",
+      "note": "20oz stainless steel tumbler with clear lid and steel straw, full-color print on one side. No minimum.",
+      "materials": [
+        {
+          "key": "1side",
+          "label": "Printed one side"
+        }
+      ],
+      "sizes": [
+        {
+          "key": "20oz",
+          "label": "20 oz"
+        }
+      ],
+      "description": "20oz stainless steel tumbler with clear lid and steel straw, full-color print on one side. No minimum.",
+      "turnaround": "2 - 5 Business Days",
+      "rows": [
+        {
+          "mat": "1side",
+          "size": "20oz",
+          "qty": 1,
+          "cost": 12.5,
+          "ship": 19.96
+        },
+        {
+          "mat": "1side",
+          "size": "20oz",
+          "qty": 12,
+          "cost": 129.72,
+          "ship": 29.73
+        },
+        {
+          "mat": "1side",
+          "size": "20oz",
+          "qty": 36,
+          "cost": 374.76,
+          "ship": 60.33
+        },
+        {
+          "mat": "1side",
+          "size": "20oz",
+          "qty": 72,
+          "cost": 722.88,
+          "ship": 101.72
+        },
+        {
+          "mat": "1side",
+          "size": "20oz",
+          "qty": 144,
+          "cost": 1373.76,
+          "ship": 197.56
         }
       ]
     }

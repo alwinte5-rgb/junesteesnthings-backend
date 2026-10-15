@@ -90,6 +90,34 @@ const META = {
     sizes: [{ key: '4.375x6x2', label: '4.375" x 6" x 2" gusset' }, { key: '5x8x3', label: '5" x 8" x 3" gusset' },
       { key: '7x9x3', label: '7" x 9" x 3" gusset' }],
   },
+  /* Drinkware: SinaLite sells any quantity from 1 with a bulk discount, and
+     the price includes ONE printed side. Their "2 sides" option (+$7.02 on
+     mugs, +$6.29 on tumblers) does not show in the page's total, so it is
+     not in these prices — a two-sided job needs that added by hand. */
+  mug: {
+    name: 'Ceramic Mugs — 11oz, printed', label: 'Ceramic Mugs', group: 'Drinkware',
+    design: null, online: true, any_qty: true,
+    url: 'https://sinalite.com/en_us/promotional-products/mugs/11oz-ceramic-mug.html',
+    note: 'White 11oz ceramic mug, full-color sublimation print on one side. No minimum.',
+    materials: [{ key: '1side', label: 'Printed one side' }],
+    sizes: [{ key: '11oz', label: '11 oz' }],
+  },
+  tumbler: {
+    name: 'Tumblers — 20oz stainless, printed', label: 'Tumblers', group: 'Drinkware',
+    design: null, online: true, any_qty: true,
+    url: 'https://sinalite.com/en_us/promotional-products/tumblers/20-oz-tumbler.html',
+    note: '20oz stainless steel tumbler with clear lid and steel straw, full-color print on one side. No minimum.',
+    materials: [{ key: '1side', label: 'Printed one side' }],
+    sizes: [{ key: '20oz', label: '20 oz' }],
+  },
+  bottle: {
+    name: 'Water Bottles — 17oz stainless, printed', label: 'Water Bottles', group: 'Drinkware',
+    design: null, online: true, any_qty: true,
+    url: 'https://sinalite.com/en_us/promotional-products/bottles/17oz-stainless-steel-bottle.html',
+    note: '17oz stainless steel water bottle, full-color print on one side. No minimum.',
+    materials: [{ key: '1side', label: 'Printed one side' }],
+    sizes: [{ key: '17oz', label: '17 oz' }],
+  },
 };
 
 function assemble(captured, meta = META) {
