@@ -115,5 +115,5 @@ function downloadName(photo) {
   return n;
 }
 
-module.exports = { FOLDER, MAX_PHOTOS, MAX_FILE_BYTES, ACCEPT, cloudName, photoUrlOk, publicIdOf, cleanName, describe, photosOf,
+module.exports = { FOLDER, MAX_PHOTOS, MAX_FILE_BYTES, ACCEPT, EXTENSIONS: ALL, cloudName, photoUrlOk, publicIdOf, cleanName, describe, photosOf,
   downloadSource, downloadName };
