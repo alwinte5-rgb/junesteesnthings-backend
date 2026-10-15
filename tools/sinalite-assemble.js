@@ -110,14 +110,9 @@ const META = {
     materials: [{ key: '1side', label: 'Printed one side' }],
     sizes: [{ key: '20oz', label: '20 oz' }],
   },
-  bottle: {
-    name: 'Water Bottles — 17oz stainless, printed', label: 'Water Bottles', group: 'Drinkware',
-    design: null, online: true, any_qty: true,
-    url: 'https://sinalite.com/en_us/promotional-products/bottles/17oz-stainless-steel-bottle.html',
-    note: '17oz stainless steel water bottle, full-color print on one side. No minimum.',
-    materials: [{ key: '1side', label: 'Printed one side' }],
-    sizes: [{ key: '17oz', label: '17 oz' }],
-  },
+  /* Bottles (17oz stainless, https://sinalite.com/en_us/promotional-products/
+     bottles/17oz-stainless-steel-bottle.html) go here once captured with
+     dwCapture — left out until then, because a declared item must have prices. */
 };
 
 function assemble(captured, meta = META) {
@@ -126,7 +121,9 @@ function assemble(captured, meta = META) {
     const sources = m.from || [key];
     const rows = [];
     for (const src of sources) for (const r of ((captured[src] || {}).rows || [])) rows.push(r);
-    if (!rows.length) continue;
+    /* Every declared item must have prices: a silent skip left a declared
+       item out of the catalogue with nothing saying so (Codex on #293). */
+    if (!rows.length) throw new Error(key + ' is declared but has no captured rows — capture it, or take it out of META');
     const { from, ...rest } = m;
     products[key] = {
       ...rest,

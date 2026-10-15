@@ -310,3 +310,17 @@ test('a re-capture missing one offered size/material is refused; huge quantities
   assert.match(SERVER, /if \(!L\.runs \|\| !\(qty > 0\) \|\| qty === L\.runs\.qty\) return L\.unitOverride;/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'tools', 'sinalite-assemble.js'), 'utf8'), /these products would be dropped/);
 });
+
+test('a SinaLite-tagged row is priced only by its exact SinaLite name, never by Signs365 words', () => {
+  const src = extract('function sizedKindOf(prod) {', '\n}');
+  const fn = vm.runInThisContext('(function(SINALITE, QSIGNS){ return ' + src + '; })')(
+    { kindOf: () => null }, { signKindOf: () => 'wall_floor' });
+  assert.strictEqual(fn({ name: 'Wall Calendars — 8.5x11', supplier: 'sinalite' }), null, 'no table: not Signs365 wall graphics');
+  assert.strictEqual(fn({ name: 'Wall Graphics', supplier: '' }), 'wall_floor', 'other rows unchanged');
+  assert.match(SERVER, /const signKind = prod \? sizedKindOf\(prod\) : null;/);
+});
+
+test('assembling refuses a declared item with no captured rows', () => {
+  const { assemble } = require('../tools/sinalite-assemble');
+  assert.throws(() => assemble({}, { thing: { name: 'X', materials: [], sizes: [] } }), /thing is declared but has no captured rows/);
+});

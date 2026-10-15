@@ -10634,7 +10634,7 @@ function productGroupOf(name) {
          each kind's sizer offers. No prices here: /admin/api/sign-price asks
          the server, which is also what prices the save. */
       var SIGN_KIND = ${JSON.stringify(Object.fromEntries(catalog.products
-        .map((p) => [String(p.id), QSIGNS.signKindOf(p.name)]).filter((x) => x[1])))};
+        .map((p) => [String(p.id), sizedKindOf(p)]).filter((x) => x[1])))};
       var SIGN_OPTS = ${JSON.stringify(QSIGNS.sizerOptions())};
       function isSignProduct(prod){ return !!(prod && SIGN_RE.test(String(prod.name || ''))); }
 
@@ -12656,7 +12656,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
       const q = sizeQty > 0 ? sizeQty : (qty || 1);
 
       let rawUnit = one(b['unit_price' + i]);
-      const signKind = prod ? QSIGNS.signKindOf(prod.name) : null;
+      const signKind = prod ? sizedKindOf(prod) : null;
       let sign = null;
       if (signKind && String(one(b['sgm' + i]) || '').trim()) {
         const r = QSIGNS.priceSign(signKind, {
@@ -13788,6 +13788,17 @@ function customerLinePricing(items, catalog) {
       runs: sinaliteRunsOf(it),
     };
   });
+}
+
+/** A catalogue product's sized kind. A row tagged supplier = 'sinalite' is
+ *  priced ONLY by its exact SinaLite name: on a cold start without the table,
+ *  or after a rename, "Wall Calendars" would otherwise fall through to the
+ *  Signs365 wall-graphic pricing (Codex on #293). Null then, and the save
+ *  refuses it. */
+function sizedKindOf(prod) {
+  if (!prod) return null;
+  if (prod.supplier === 'sinalite') return SINALITE.kindOf(prod.name);
+  return QSIGNS.signKindOf(prod.name);
 }
 
 /** The SinaLite [runQty, each] ladder a saved line was priced from, or null. */
