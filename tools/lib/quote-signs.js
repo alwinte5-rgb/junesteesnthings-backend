@@ -28,6 +28,9 @@ const SIGNS = SF.signsTable().families;
    SinaLite's prices reaches the next quote without a restart of this module. */
 const familyOf = (kind) => SIGNS[kind] || SL.table().families[kind] || null;
 
+/** The largest quantity a sized line is priced at (preview and save). */
+const MAX_QTY = 100000;
+
 /* Name -> kind. First match wins, so the specific names come first. */
 const KINDS = [
   ['banner',          /banner/i, /stand|retractable/i],
@@ -73,6 +76,9 @@ function ladderPrice(ladder, qty) {
  */
 function priceSign(kind, spec, qty, takeFreight) {
   const q = Math.max(1, parseInt(qty, 10) || 1);
+  /* One ceiling for every sized item, here where the save prices it, and the
+     same one /admin/api/sign-price refuses above (Codex on #293). */
+  if (q > MAX_QTY) return { ok: false, error: `More than ${MAX_QTY.toLocaleString('en-US')}: quote it by hand.` };
   const up = Array.isArray(spec.up) ? spec.up.map(String) : [];
 
   if (kind === 'banner') {
@@ -172,4 +178,4 @@ function sizerOptions() {
   return out;
 }
 
-module.exports = { signKindOf, priceSign, sizerOptions, ladderPrice };
+module.exports = { signKindOf, priceSign, sizerOptions, ladderPrice, MAX_QTY };

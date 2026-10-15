@@ -12406,7 +12406,7 @@ app.post('/admin/api/sign-price', requireAdmin, (req, res) => {
   /* Refused, not clamped: a clamped preview priced 100,001 roll labels at the
      100,000 rate while the save priced the real quantity (Codex on #293). */
   const qty = Math.max(1, parseInt(b.qty, 10) || 1);
-  if (qty > 100000) return res.status(400).json({ ok: false, error: 'More than 100,000: quote it by hand.' });
+  if (qty > QSIGNS.MAX_QTY) return res.status(400).json({ ok: false, error: 'More than 100,000: quote it by hand.' });
   res.json(QSIGNS.priceSign(kind, {
     w: sp.w, h: sp.h, size: String(sp.size || '').slice(0, 20), mat: String(sp.mat || '').slice(0, 30),
     hang: String(sp.hang || '').slice(0, 30),
@@ -13798,7 +13798,9 @@ function sinaliteRunsOf(it) {
   const fam = sg && sg.kind ? SINALITE.table().families[sg.kind] : null;
   if (!fam) return null;
   const lad = ((fam.prices[sg.mat] || {})[sg.size] || {})[''];
-  return Array.isArray(lad) && lad.length ? { ladder: lad, any: !!fam.any_qty } : null;
+  /* `qty`: the quantity it was priced at. At that quantity the saved price
+     stands, even if SinaLite's table has moved since (Codex on #293). */
+  return Array.isArray(lad) && lad.length ? { ladder: lad, any: !!fam.any_qty, qty: Number(it.qty) || 0 } : null;
 }
 
 app.get('/q/:code', async (req, res) => {
@@ -14565,7 +14567,7 @@ ${quotePricingSource()}
          for the minimum run. Every other line keeps its saved price. */
       ${SINALITE.eachFor.toString()}
       function slUnit(L, qty){
-        if (!L.runs || !(qty > 0)) return L.unitOverride;
+        if (!L.runs || !(qty > 0) || qty === L.runs.qty) return L.unitOverride;
         var lad = L.runs.ladder, min = lad[0][0];
         return qty >= min ? eachFor(lad, qty, L.runs.any) : Math.ceil(min * lad[0][1] / qty * 100) / 100;
       }

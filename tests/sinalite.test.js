@@ -269,7 +269,7 @@ test('a price file with a malformed product keeps the last good table (and a hug
   const QS = require('../tools/lib/quote-signs');
   const r = QS.priceSign('calendar', { mat: '28pg', size: '8.5x11' }, 2000000, true);
   assert.strictEqual(r.ok, false);
-  assert.match(r.error, /cannot be priced/);
+  assert.match(r.error, /More than 100,000/);
 });
 
 test('SinaLite lead time (their turnaround + inbound shipping) sets the ready date', () => {
@@ -300,6 +300,13 @@ test('a re-capture missing one offered size/material is refused; huge quantities
   assert.ok(SL.eachFor(L, 100000) > 0, 'the cap prices');
   assert.strictEqual(SL.eachFor(L, 100001), null, 'past the cap: not priced');
   /* The preview refuses past the same cap rather than clamping to it. */
-  assert.match(SERVER, /if \(qty > 100000\) return res\.status\(400\)/);
+  assert.match(SERVER, /if \(qty > QSIGNS\.MAX_QTY\) return res\.status\(400\)/);
+  /* ...and the save refuses past it for every sized kind, not only SinaLite. */
+  const QS = require('../tools/lib/quote-signs');
+  const yard = QS.priceSign('yard_sign', { size: '24x18', mat: '4s' }, 100001, true);
+  assert.strictEqual(yard.ok, false);
+  assert.match(yard.error, /More than 100,000/);
+  /* An untouched SinaLite line keeps its saved price in the customer estimate. */
+  assert.match(SERVER, /if \(!L\.runs \|\| !\(qty > 0\) \|\| qty === L\.runs\.qty\) return L\.unitOverride;/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'tools', 'sinalite-assemble.js'), 'utf8'), /these products would be dropped/);
 });
