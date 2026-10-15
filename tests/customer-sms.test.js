@@ -206,7 +206,7 @@ test('sendCustomerSms checks consent for the right kind before sending', () => {
   const start = server.indexOf('async function sendCustomerSms(');
   const body = server.slice(start, server.indexOf('\n}\n', start));
   const consentAt = body.indexOf('smsConsentFor(to)');
-  const sendAt = body.indexOf('twilioSend(to, msg.body)');
+  const sendAt = body.indexOf('twilioSend(to, msg.body');
   assert.ok(consentAt > 0 && consentAt < sendAt);
   assert.match(body, /kind === 'marketing' \? c\.marketing : c\.transactional/);
   assert.match(body, /ON CONFLICT DO NOTHING RETURNING id/);
