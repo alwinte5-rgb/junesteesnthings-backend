@@ -87,7 +87,14 @@ test('the record keeps the message itself when the caller names it, and the mail
   await d.send({ quote: 'AB12CD', kind: 'manual', to: 'a@b.co', subject: 's', preview: 'Hi Ada,\nSee   you Saturday',
                  html: '<h2>A note about your order</h2><p>Hi Ada,<br>See you Saturday</p><a href="https://x">View</a>' });
   assert.strictEqual(d.sent[0].preview, undefined);
-  assert.strictEqual(d.rows[0][4], 'Hi Ada, See you Saturday');
+  assert.strictEqual(d.rows[0][4], 'Hi Ada,\nSee you Saturday', 'line breaks kept, runs of spaces folded');
+});
+
+test('the whole message is kept, not its first 600 characters (2026-10-15)', async () => {
+  const d = clientMail();
+  const long = 'word '.repeat(400).trim();
+  await d.send({ quote: 'AB12CD', kind: 'manual', to: 'a@b.co', subject: 's', preview: long, html: '<p>x</p>' });
+  assert.strictEqual(d.rows[0][4], long);
 });
 
 test('an email that fails is recorded as failed, and still throws', async () => {
@@ -145,12 +152,13 @@ test('a customer text reply is kept on their latest quote, matched by phone', ()
 
 /* ── The card ───────────────────────────────────────────────────────────── */
 
-function card({ history = [], smsOn = true, consent = true, q = {} } = {}) {
+function card({ history = [], smsOn = true, consent = true, q = {}, due = 0, refunded = false, opts = {} } = {}) {
   const sandbox = {
-    pool: { query: async () => ({ rows: history }) },
+    pool: { query: async (sql) => (/quote_payments|stripe_disputes/.test(sql)
+      ? { rows: refunded && /quote_payments/.test(sql) ? [{ x: 1 }] : [] } : { rows: history }) },
     normalizeUsPhone: (p) => (p ? '+1' + String(p).replace(/\D/g, '').slice(-10) : null),
     smsConfigured: () => smsOn, smsConsentFor: async () => ({ transactional: consent }),
-    balanceOf: () => 0, quoteTotals: () => ({ total: 0 }), money: (n) => '$' + Number(n).toFixed(2),
+    balanceOf: () => due, quoteTotals: () => ({ total: 0 }), money: (n) => '$' + Number(n).toFixed(2),
     quoteLink: (c) => 'https://www.jtees.net/q/' + c, SMS_PICKUP: '3047 N Lincoln Ave', SHOP_PHONE: '(773) 849-1854',
     ...(({ PICKUP_ADDRESS, PICKUP_HOURS, PICKUP_STEPS }) => ({ PICKUP_ADDRESS, PICKUP_HOURS, PICKUP_STEPS }))(require('../tools/lib/sms-templates')),
     SHOP_TZ: 'America/Chicago', console: { error() {} },
@@ -160,15 +168,29 @@ function card({ history = [], smsOn = true, consent = true, q = {} } = {}) {
     jobPath: (c) => '/admin/production/' + c, TMEDIA: require('../tools/lib/text-media'),
     /* The shared browser upload helper (2026-10-06), as server.js defines it. */
     CLOUDINARY_UPLOAD_MAX: 10 * 1024 * 1024, CLD_UPLOAD_FN: 'function jtCldUpload(){}',
+    /* The reminders still to come (2026-10-15). */
+    FOLLOWUPS: require('../tools/lib/followups'), process: { env: {} },
   };
   sandbox.MESSAGE_MAX = 10000;
   vm.createContext(sandbox);
   vm.runInContext([grab('const MESSAGE_KINDS = {', '};'), grab('const MESSAGE_ERRORS = {', '};'),
     grab('const ADMIN_ICONS = {', '};'), lift('icon'), lift('escEmail'), lift('pill'), lift('emptyState'),
-    lift('jobMessagesCard')].join('\n'), sandbox);
+    lift('reminderDelays'), lift('designVisibleMessage'), lift('jobMessagesCard')].join('\n'), sandbox);
   return sandbox.jobMessagesCard({ code: 'AB12CD', name: 'Ada Brooks', email: 'ada@example.com',
-                                   phone: '(773) 555-0100', ...q }, {});
+                                   phone: '(773) 555-0100', ...q }, {}, opts);
 }
+
+test('reminders still to come are listed with a Skip each, never on the design page, and not after a refund', async () => {
+  const shipped = new Date(Date.now() - 864e5).toISOString();
+  const html = await card({ q: { shipped_at: shipped } });
+  assert.match(html, /Coming up automatically[\s\S]*Pickup reminder[\s\S]*by email and text/);
+  assert.match(html, /action="\/admin\/quote\/AB12CD\/skip-reminder"[\s\S]*name="key" value="pickup-reminder"/);
+  assert.doesNotMatch(await card({ q: { shipped_at: shipped }, opts: { design: true } }), /Coming up automatically/);
+  assert.doesNotMatch(await card({ q: { shipped_at: shipped }, opts: { readOnly: true } }), /skip-reminder/, 'read-only shows no Skip');
+  const accepted = new Date(Date.now() - 3600e3).toISOString();
+  assert.match(await card({ q: { accepted_at: accepted, paid_amount: 0 } }), /Deposit reminder/);
+  assert.doesNotMatch(await card({ q: { accepted_at: accepted, paid_amount: 0 }, refunded: true }), /Deposit reminder/);
+});
 
 test('the card lists what was sent, how it went, and what they replied', async () => {
   const html = await card({ history: [

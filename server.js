@@ -22982,7 +22982,6 @@ const UNANSWERED_REPLIES_SQL = `
      AND t.last_in > COALESCE(t.last_out, 'epoch') AND t.last_in > COALESCE(q.replies_handled_at, 'epoch')
    ORDER BY t.last_in LIMIT 20`;
 
-/* "No reply needed" from the job page: the reply stops showing as waiting. */
 /* The reminder delays, read the way each sweep reads them. */
 function reminderDelays() {
   const n = (k, d, min) => Math.max(min, parseInt(process.env[k] || String(d), 10) || d);
@@ -22997,13 +22996,15 @@ app.post('/admin/quote/:code/skip-reminder', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/production');
   if (actorLevel('quotes.view') !== 'on') return res.redirect(`${jobPath(code)}#messages`);
-  const r = FOLLOWUPS.REMINDERS[String((req.body || {}).key || '')];
+  const key = String((req.body || {}).key || '');
+  const r = Object.hasOwn(FOLLOWUPS.REMINDERS, key) ? FOLLOWUPS.REMINDERS[key] : null;
   if (!r) return res.redirect(`${jobPath(code)}#messages`);
   await pool.query(`UPDATE quotes SET ${r.stamp} = COALESCE(${r.stamp}, NOW()) WHERE code = $1`, [code])
     .catch((e) => console.error(`skip reminder on ${code} failed:`, e.message));
   return res.redirect(`${jobPath(code)}#messages`);
 });
 
+/* "No reply needed" from the job page: the reply stops showing as waiting. */
 app.post('/admin/quote/:code/replies-handled', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/production');
