@@ -4147,6 +4147,14 @@ async function sendOwnerSms(body, media = []) {
   return true;
 }
 
+/* Whether a phone's latest answer was no: STOP, the carrier's 21610, or an
+   unticked form. The owner's "they agreed" button does not override that. */
+async function lastSaidNoToTexts(phone) {
+  const { rows: [r] } = await pool.query(
+    `SELECT transactional, marketing FROM sms_consents WHERE phone = $1 ORDER BY created_at DESC, id DESC LIMIT 1`, [phone]);
+  return !!r && !r.transactional && !r.marketing;
+}
+
 // The current answer for a phone, folded from its whole history.
 async function smsConsentFor(phone) {
   const { rows } = await pool.query(
@@ -4177,7 +4185,7 @@ async function neverAsked(phone, kind) {
   return !rows.length;
 }
 
-async function sendCustomerSms({ phone, kind, ref, msg, quote = null, replyToContact = false }) {
+async function sendCustomerSms({ phone, kind, ref, msg, quote = null, replyToContact = false, media = [] }) {
   const to = normalizeUsPhone(phone);
   if (!to) return 'no-phone';
   try {
@@ -4196,14 +4204,16 @@ async function sendCustomerSms({ phone, kind, ref, msg, quote = null, replyToCon
           AND created_at < NOW() - INTERVAL '5 minutes'`,
       [to, String(ref).slice(0, 80), msg.template.slice(0, 80)]);
     const { rows } = await pool.query(
-      `INSERT INTO sms_messages (phone, kind, ref, template, body, status, quote_code, sent_by)
-       VALUES ($1,$2,$3,$4,$5,'sending',$6,$7)
+      `INSERT INTO sms_messages (phone, kind, ref, template, body, status, quote_code, sent_by, media)
+       VALUES ($1,$2,$3,$4,$5,'sending',$6,$7,$8)
        ON CONFLICT DO NOTHING RETURNING id`,
-      [to, kind, String(ref).slice(0, 80), msg.template.slice(0, 80), msg.body, quote, attributedStaffId()]);
+      [to, kind, String(ref).slice(0, 80), msg.template.slice(0, 80), msg.body, quote, attributedStaffId(),
+       /* Pictures sent with it (a proof by text), shown on the job like theirs. */
+       media.length ? JSON.stringify(media.map(({ url, name }) => ({ url, name }))) : null]);
     if (!rows.length) return 'duplicate';
     const id = rows[0].id;
     try {
-      const { sid } = await twilioSend(to, msg.body);
+      const { sid } = await twilioSend(to, msg.body, media.map((m) => m.mms || m.url));
       await pool.query(`UPDATE sms_messages SET status='sent', twilio_sid=$2 WHERE id=$1`, [id, sid]);
       console.log(`customer sms sent: ${msg.template} for ${ref}`);
       return 'sent';
@@ -21873,6 +21883,9 @@ const MESSAGE_ERRORS = {
   'attach-bad': 'One of the files could not be attached. Nothing was sent. Pick the files again.',
   'attach-big': 'Those files are too big for one email (25 MB in all). Nothing was sent. Send fewer at a time.',
   'attach-fetch': 'One of the files could not be fetched just now. Nothing was sent. Try again in a minute.',
+  'consent-empty': 'Nothing was saved. Write how they agreed and tick the box.',
+  'consent-stop': 'They texted STOP, so texts stay off. Only they can turn them back on, by texting START to the shop number.',
+  'consent-owner': 'Only the owner can turn on texts for a customer.',
 };
 
 /* Every file on a job an email may carry: the customer's artwork and the
@@ -22957,7 +22970,9 @@ async function jobProofsCard(q, query) {
       <span class="row-end">${r.sent_at ? pill('sent', 'green') : ''}${canMessage && live
         ? ` <a class="btn btn-ghost" href="${escEmail(jobPath(q.code))}?proof=${r.id}#messages">Send this proof</a>` : ''}</span></div>`;
   return `<div class="card" id="proofs" style="margin-top:14px">
-    <h2 class="card-title">Proofs <span class="muted">${rows.length || ''}</span></h2>
+    <h2 class="card-title" style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+      <span>Proofs <span class="muted">${rows.length || ''}</span></span>${rows.length > 1 && canMessage && live
+        ? `<a class="btn btn-ghost" href="${escEmail(jobPath(q.code))}?proof=all#messages">Send all ${Math.min(rows.length, PROOFS.MAX_MMS)} proofs</a>` : ''}</h2>
     ${flashMsg ? `<div class="${query.proof_msg === 'added' ? 'ok' : 'warn'}">${escEmail(flashMsg)}</div>` : ''}
     ${canUpload ? `<form method="POST" action="/admin/quote/${escEmail(q.code)}/proofs" data-proofform style="margin:0 0 10px">
       <input type="hidden" name="url"><input type="hidden" name="name">
@@ -23071,12 +23086,24 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
   const phone = normalizeUsPhone(q.phone);
   let textWhyNot = !phone ? 'no phone number on this quote'
     : !smsConfigured() ? 'texting is not switched on yet' : '';
+  /* Their last answer was no (STOP, or a carrier block): the owner's button
+     never turns that back on; only they can, by texting START. */
+  let textOptedOut = false;
   if (!textWhyNot) {
     const c = await smsConsentFor(phone).catch(() => ({ transactional: false }));
-    if (!c.transactional) textWhyNot = 'they have not agreed to texts';
+    if (!c.transactional) {
+      textWhyNot = 'they have not agreed to texts';
+      /* Unknown on a failed lookup: neither the form nor a STOP it may not
+         have been, which would send the owner the wrong way. */
+      textOptedOut = await lastSaidNoToTexts(phone).catch(() => null);
+    }
   }
   const emailWhyNot = q.email ? '' : 'no email address on this quote';
   const jobFiles = await jobFilesFor(q).catch(() => []);
+  /* This job's proof links, for the page's text counter: they go as pictures,
+     so the counter leaves them out exactly as the server does. */
+  const proofUrls = (await pool.query('SELECT url FROM job_proofs WHERE quote_code = $1', [code])
+    .catch(() => ({ rows: [] }))).rows.map((r) => r.url).filter((u) => typeof u === 'string' && u);
   const first = String(q.name || '').trim().split(/\s+/)[0];
   const hi = `Hi${first ? ' ' + first : ''}`;
   const due = balanceOf(q, quoteTotals(q).total);
@@ -23095,6 +23122,13 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
     const { rows: [pf] } = await pool.query('SELECT url FROM job_proofs WHERE id = $1 AND quote_code = $2', [proofId, code])
       .catch(() => ({ rows: [] }));
     if (pf) prefill = PROOFS.proofMessage({ first, code, url: pf.url });
+  } else if (String(query.proof) === 'all') {
+    /* "Send all proofs": every proof on the job in one message, oldest first
+       (the order they were made), as many as one text can carry. */
+    const { rows: all } = await pool.query(
+      `SELECT url FROM (SELECT url, created_at, id FROM job_proofs WHERE quote_code = $1 ORDER BY created_at DESC, id DESC LIMIT $2) p
+        ORDER BY created_at, id`, [code, PROOFS.MAX_MMS]).catch(() => ({ rows: [] }));
+    if (all.length) prefill = PROOFS.proofMessage({ first, code, urls: all.map((r) => r.url) });
   }
   const sent = ['email', 'text'].includes(String(query.sent)) ? String(query.sent) : '';
   const failed = MESSAGE_ERRORS[String(query.msg_err || '')];
@@ -23193,6 +23227,21 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
       ${sent ? `<div class="ok">Sent by ${sent}. It is in the list below.</div>` : ''}
       ${String(query.sent) === 'held' ? `<div class="ok">Saved for the owner to approve. It goes out when they send it.</div>` : ''}
       ${failed ? `<div class="warn">${escEmail(failed)}</div>` : ''}
+      ${String(query.consent) === 'saved' ? `<div class="ok">Saved: ${escEmail(first || 'they')} agreed to order texts. Text is on below.</div>` : ''}
+      ${textWhyNot === 'they have not agreed to texts' && isOwner() && textOptedOut !== null ? (textOptedOut
+        ? `<p class="muted" style="font-size:12.5px;margin:0 0 10px">${escEmail(first || 'They')} texted STOP to the shop number, so texts stay off until they text START to ${escEmail(SHOP_PHONE)}.</p>`
+        : `<details style="margin:0 0 12px"><summary style="font-size:13px">They agreed to texts on my other number</summary>
+        <form method="POST" action="/admin/quote/${code}/text-consent" style="margin-top:8px;padding:10px 12px;border:1px solid #e3e8f2;border-radius:10px;background:#fafcff">
+          <p class="muted" style="font-size:12.5px;margin:0 0 8px">For a customer who agreed to order texts somewhere this system cannot see, like your old phone number.
+            It is saved as your word, with today's date and your note, and turns on order texts only, never promotions.
+            They can still text STOP at any time.</p>
+          <input name="note" maxlength="200" required placeholder="How they agreed, e.g. we have been texting on my old number since Sept"
+                 style="padding:9px;font-size:14px;margin-bottom:8px">
+          <label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;font-weight:400;text-transform:none;letter-spacing:0;margin:0 0 8px">
+            <input type="checkbox" name="confirm" value="1" required style="width:auto;margin-top:2px">
+            <span>${escEmail(first || 'This customer')} agreed to get texts about this order from June's Tees.</span></label>
+          <button type="submit" class="btn" style="padding:8px 16px;font-size:14px">Turn on texts</button>
+        </form></details>`) : ''}
       ${waitingReply ? `<div class="warn" style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
         <span>${escEmail(first || 'They')} wrote ${escEmail(when(waitingReply.created_at))} and has not had an answer yet.</span>
         <form method="POST" action="/admin/quote/${code}/replies-handled" style="margin:0">
@@ -23214,12 +23263,12 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
         </div>
         <div data-cout style="display:none;margin-top:10px;font-size:14px;line-height:1.45"></div>
       </div>
-      <form method="POST" action="/admin/quote/${code}/message" data-msgform style="margin:0 0 12px">
+      <form method="POST" action="/admin/quote/${code}/message" data-msgform data-proofurls="${escEmail(JSON.stringify(proofUrls))}" style="margin:0 0 12px">
         <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px">
           ${radio('email', 'Email', emailWhyNot, true)}
           ${radio('text', 'Text', textWhyNot, !!emailWhyNot)}
         </div>
-        <input name="subject" maxlength="150" value="${prefill ? `Your proof for order ${escEmail(code)}` : `About your order ${escEmail(code)}`}" data-subject
+        <input name="subject" maxlength="150" value="${prefill ? `Your proof${String(query.proof) === 'all' ? 's' : ''} for order ${escEmail(code)}` : `About your order ${escEmail(code)}`}" data-subject
                style="margin-bottom:8px;padding:10px;font-size:14px">
         <textarea name="body" rows="6" maxlength="${MESSAGE_MAX}" placeholder="Write to ${escEmail(first || 'them')}…"
                   style="font-size:14px;padding:10px">${escEmail(prefill)}</textarea>
@@ -23260,6 +23309,7 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
     <script>
       (function(){
         var f = document.querySelector('form[data-msgform]'); if (!f) return;
+        var proofUrls = []; try { proofUrls = JSON.parse(f.getAttribute('data-proofurls') || '[]'); } catch (e) {}
         var body = f.querySelector('textarea[name="body"]'), subj = f.querySelector('[data-subject]');
         f.querySelectorAll('[data-fill]').forEach(function(b){
           b.addEventListener('click', function(){ body.value = b.getAttribute('data-fill'); body.focus(); });
@@ -23269,7 +23319,11 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
           var c = f.querySelector('input[name="channel"]:checked');
           var text = c && c.value === 'text';
           subj.style.display = text ? 'none' : '';
-          body.maxLength = text ? 300 : ${MESSAGE_MAX};
+          /* A proof link goes by text as a picture, so it does not count
+             toward the 300 (the server counts the same way). */
+          var proofLen = 0;
+          if (text) proofUrls.forEach(function(u){ proofLen += (body.value.split(u).length - 1) * u.length; });
+          body.maxLength = text ? 300 + proofLen : ${MESSAGE_MAX};
           if (att) att.style.display = text ? 'none' : '';
         }
         /* Files: ticked ones already on the job, and uploads signed into the
@@ -23318,6 +23372,7 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
           upInput.value = '';
         });
         f.querySelectorAll('input[name="channel"]').forEach(function(r){ r.addEventListener('change', sync); });
+        body.addEventListener('input', sync);
         sync();
         /* Ask Claude. The answer is drawn with textContent only: it is model
            output built partly from what the customer wrote. */
@@ -23500,6 +23555,20 @@ const recentJobMessages = new Map();
 /* Sends one message the shop wrote on the job page. Shared by the page itself
    and by /admin/approvals, which sends a helper's held message once the owner
    says yes. Returns 'sent' or the reason it did not go. */
+/** A text's words and pictures: this job's proof links leave the words and
+    go as pictures (PROOFS.proofsForText). A failed lookup throws, so the send
+    fails and says so rather than going out with the links glued in the words. */
+async function proofsForText(code, text) {
+  const { rows } = await pool.query('SELECT url, name FROM job_proofs WHERE quote_code = $1 ORDER BY created_at DESC LIMIT $2',
+    [code, PROOFS.MAX_PER_JOB]);
+  return PROOFS.proofsForText(text, rows, QPHOTOS.cloudName());
+}
+
+/** How long a text is once its proof links have become pictures. */
+async function textLength(code, text) {
+  return (await proofsForText(code, text)).text.length;
+}
+
 /** Proofs whose link went out in a message that was really sent. */
 async function markProofsSent(code, text) {
   await pool.query(
@@ -23554,15 +23623,20 @@ async function sendJobMessage({ code, channel, subject, text, attachments = '[]'
     /* A text keeps the shape every other customer text has: the brand first,
        the opt-out last, plain characters only (one curly quote makes it cost
        three times as much). */
+    /* This job's proof links go as pictures, out of the words (2026-10-15). */
+    const { text: words, media } = await proofsForText(code, text);
     recentJobMessages.set(key, now);
     const status = await sendCustomerSms({ phone: q.phone, kind: 'transactional', quote: code,
-      ref: 'manual:' + key.slice(0, 32),
+      ref: 'manual:' + key.slice(0, 32), media,
       /* Every text carries a link to the website (2026-10-05): their order
          page, unless the message already has a link in it. */
       /* The brand once: a message typed (or suggested) as "June's Tees: ..."
          went out as "June's Tees: June's Tees: ..." (2026-10-06). */
-      msg: { template: 'manual', body: `June's Tees: ${smsPlain(text.replace(/^\s*june['\u2019]?s\s+tees\s*(&\s*things\s*)?[:,-]\s*/i, ''), 260)}${
-        /https?:\/\/|jtees\.net/i.test(text) ? '' : ' ' + smsShort(quoteLink(code))} Reply STOP to opt out.` } });
+      /* Line breaks become spaces first: smsPlain drops them, which glued a
+         link to the word before it. 300, the limit the page and route check:
+         260 cut a 290-character text short after it had been accepted. */
+      msg: { template: 'manual', body: `June's Tees: ${smsPlain(words.replace(/\s+/g, ' ').replace(/^\s*june['\u2019]?s\s+tees\s*(&\s*things\s*)?[:,-]\s*/i, ''), 300)}${
+        /https?:\/\/|jtees\.net/i.test(words) ? '' : ' ' + smsShort(quoteLink(code))} Reply STOP to opt out.` } });
     if (status === 'sent') { console.log(`message to ${code} by text`); return 'sent'; }
     recentJobMessages.delete(key);
     return { duplicate: 'duplicate', 'no-consent': 'no-consent', unconfigured: 'texting-off',
@@ -23574,6 +23648,39 @@ async function sendJobMessage({ code, channel, subject, text, attachments = '[]'
     return 'failed';
   }
 }
+
+/* The owner's word that a customer agreed to order texts where this system
+   could not see it (owner, 2026-10-15: a customer who had been texting her
+   old number showed "they have not agreed to texts"). Owner only (staff.js
+   NEVER_STAFF). Kept like every other consent: a new row, never an edit, with
+   the owner's note as the wording they agreed to. Order texts only, never
+   promotions, and never over a STOP. */
+app.post('/admin/quote/:code/text-consent', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/production');
+  const back = (q) => res.redirect(`${jobPath(code)}?${q}#messages`);
+  if (!isOwner()) return back('msg_err=consent-owner');
+  const b = req.body || {};
+  const note = String(b.note || '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 200);
+  if (String(b.confirm) !== '1' || !note) return back('msg_err=consent-empty');
+  try {
+    const { rows: [q] } = await pool.query('SELECT phone FROM quotes WHERE code = $1', [code]);
+    const phone = q && normalizeUsPhone(q.phone);
+    if (!phone) return back('msg_err=no-phone');
+    if (await lastSaidNoToTexts(phone)) return back('msg_err=consent-stop');
+    await pool.query(
+      `INSERT INTO sms_consents (phone, transactional, marketing, source, consent_version, consent_text, ip, user_agent)
+       VALUES ($1, true, false, 'owner:agreed-elsewhere', $2, $3, $4, $5)`,
+      [phone, CONSENT_VERSION, `Recorded by the owner on order ${code}: the customer agreed to order texts elsewhere. Owner's note: ${note}`,
+       String(clientIp(req) || '').slice(0, 64) || null, String(req.get('user-agent') || '').slice(0, 300) || null]);
+    logActivity(currentActor(), 'text consent recorded', { type: 'quote', id: code }, { note }, clientIp(req));
+    return back('consent=saved');
+  } catch (err) {
+    console.error(`text consent for ${code} failed:`, err.message);
+    reportError('text-consent', err, `quote ${code}`).catch(() => {});
+    return back('msg_err=failed');
+  }
+});
 
 app.post('/admin/quote/:code/message', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
@@ -23588,7 +23695,15 @@ app.post('/admin/quote/:code/message', requireAdmin, async (req, res) => {
   // A designer writes only to the customers of jobs that are with them.
   if (actorLevel('quotes.view') !== 'on' && !(await designJobFor(code, currentActor()))) return res.redirect(designHome());
   if (!text) return answer('msg_err', 'empty');
-  if (text.length > (channel === 'text' ? 300 : MESSAGE_MAX)) return answer('msg_err', 'too-long');
+  let len = text.length;
+  if (channel === 'text') {
+    try { len = await textLength(code, text); } catch (err) {
+      console.error(`proofs for a text on ${code} failed:`, err.message);
+      reportError('job-message', err, `proof lookup for ${code}`).catch(() => {});
+      return answer('msg_err', 'failed');
+    }
+  }
+  if (len > (channel === 'text' ? 300 : MESSAGE_MAX)) return answer('msg_err', 'too-long');
 
   /* A helper in training writes the message; the owner sends it. So does any
      helper whose message asks to be paid outside the shop (Cash App, "pay me
@@ -29442,7 +29557,7 @@ app.post('/admin/approvals/:id/edit', requireAdmin, async (req, res) => {
     const body = String((req.body && req.body.text) || '').replace(/\r\n?/g, '\n').trim();
     const subject = isText ? (p.subject || '') : String((req.body && req.body.subject) || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 150);
     if (!body) return back(res, backTo, 'err', 'Write the message first.');
-    if (body.length > (isText ? 300 : MESSAGE_MAX)) return back(res, backTo, 'err', isText ? 'A text is at most 300 characters.' : `Keep it under ${MESSAGE_MAX} characters.`);
+    if ((isText ? await textLength(a.subject_id, body) : body.length) > (isText ? 300 : MESSAGE_MAX)) return back(res, backTo, 'err', isText ? 'A text is at most 300 characters.' : `Keep it under ${MESSAGE_MAX} characters.`);
     if (a.kind === 'lead_email' && !subject) return back(res, backTo, 'err', 'Add a subject.');
     /* A helper's edit is checked for outside-payment wording like a new message. */
     const outside = staff ? FRAUD.mentionsOutsidePayment(`${subject}\n${body}`) : '';

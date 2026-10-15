@@ -90,6 +90,7 @@ const NEVER_STAFF = [
   'POST /admin/certificates/:id/review',
   'POST /admin/quotes/:code/exemption',
   'POST /admin/quote/:code/correct-payment',
+  'POST /admin/quote/:code/text-consent',
   'POST /admin/quote/:code/settle',
   'POST /admin/quote/:code/confirm-payment',
   'POST /admin/unlinked/:id/apply',
@@ -269,6 +270,9 @@ const ROUTES = {
   'POST /admin/quote/:code/message': 'customers.message',
   /* "No reply needed" on a customer's message (2026-10-06). */
   'POST /admin/quote/:code/replies-handled': 'customers.message',
+  /* The owner records that a customer agreed to texts somewhere the shop's
+     number could not see (2026-10-15). Consent is the owner's word, never a helper's. */
+  'POST /admin/quote/:code/text-consent': 'owner',
   /* Skip one automatic reminder on a job (2026-10-15): it stops a message, so the same permission. */
   'POST /admin/quote/:code/skip-reminder': 'customers.message',
   'POST /admin/quote/:code/email': 'customers.message',

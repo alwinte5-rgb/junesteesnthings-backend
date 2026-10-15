@@ -91,7 +91,8 @@ test('a resubmitted held message is still caught after an edit', () => {
 test('limits: one 10,000 character limit for messages; texts stay 300', () => {
   assert.match(src, /const MESSAGE_MAX = 10000;/);
   assert.match(src, /const TEAM_CHAT_MAX = MESSAGE_MAX;/);
-  assert.match(src, /text\.length > \(channel === 'text' \? 300 : MESSAGE_MAX\)/);
+  // A text's proof links go as pictures, so its length is counted without them.
+  assert.match(src, /len = await textLength\(code, text\)[\s\S]*if \(len > \(channel === 'text' \? 300 : MESSAGE_MAX\)\)/);
   assert.strictEqual(require('../tools/lib/job-notes').BODY_MAX, 10000);
   assert.match(src, /\.adm-main textarea\{min-height:120px/);
 });

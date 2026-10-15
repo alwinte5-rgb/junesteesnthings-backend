@@ -41,11 +41,50 @@ function thumbOf(url, cloud) {
   return p.ext === 'pdf' ? t.replace(/\.pdf$/i, '.jpg') : t;
 }
 
-/** The text that goes to the customer with the proof link. */
-function proofMessage({ first = '', code, url }) {
+/** The text that goes to the customer with the proof links. The links come
+    last, each on its own line, so a text can send them as pictures and drop
+    them from the words without leaving a sentence hanging (owner, 2026-10-15:
+    the 340-character proof message could never go by text). */
+function proofMessage({ first = '', code, url, urls }) {
+  const list = (urls || [url]).filter(Boolean);
   const hi = `Hi${first ? ' ' + first : ''}`;
-  return `${hi}! Your proof for order ${code} is ready, and we're excited for you to see it: ${url}\n\n` +
-    'Take a look at the spelling, colors, size and placement. Reply "approved" and we\'ll get it printing, or just tell us what you\'d like changed.';
+  const many = list.length > 1;
+  return `${hi}! Your ${many ? `${list.length} proofs` : 'proof'} for order ${code} ${many ? 'are' : 'is'} ready, and we're excited for you to see ${many ? 'them' : 'it'}. ` +
+    'Take a look at the spelling, colors, size and placement. Reply "approved" and we\'ll get it printing, or just tell us what you\'d like changed.' +
+    '\n\n' + list.join('\n');
 }
 
-module.exports = { FOLDER, MAX_PER_JOB, MAX_FILE_BYTES, ACCEPT, proofUrlOk, cleanName, thumbOf, proofMessage };
+/** The proof as a picture a phone can take by text (MMS): a PDF as its first
+    page. 1200px at q_auto keeps a mockup near 200 KB, so even ten stay well
+    under Twilio's 5 MB for the whole message. '' when it is not our proof. */
+function mmsUrlOf(url, cloud) {
+  const p = parse(url, cloud);
+  if (!p) return '';
+  return url.replace('/image/upload/', `/image/upload/c_limit,w_1200,h_1200,q_auto${p.ext === 'pdf' ? ',pg_1' : ''},f_jpg/`)
+    .replace(/\.[A-Za-z0-9]+$/, '.jpg');
+}
+
+const MAX_MMS = 10; // Twilio's limit on pictures in one text
+
+/** A text that carries this job's proof links: the links come out of the
+    words and go as pictures instead, in the order the message lists them.
+    `proofs` are the job's rows ({ url, name }). Returns { text, media }, each
+    media { url: the proof itself (what the job page shows and opens), mms: the
+    picture Twilio fetches, name }. A link not in `proofs` stays in the words. */
+function proofsForText(text, proofs, cloud) {
+  const original = String(text || '');
+  let words = original;
+  const found = [];
+  for (const r of proofs || []) {
+    if (!r || !r.url || !original.includes(r.url) || found.some((f) => f.url === r.url)) continue;
+    const mms = mmsUrlOf(r.url, cloud);
+    if (mms) found.push({ at: original.indexOf(r.url), url: r.url, mms, name: cleanName(r.name) || 'Proof' });
+  }
+  found.sort((a, b) => a.at - b.at);
+  const media = found.slice(0, MAX_MMS).map(({ url, mms, name }) => ({ url, mms, name }));
+  for (const m of media) words = words.split(m.url).join('');
+  if (media.length) words = words.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  return { text: words, media };
+}
+
+module.exports = { FOLDER, MAX_PER_JOB, MAX_FILE_BYTES, ACCEPT, MAX_MMS, proofUrlOk, cleanName, thumbOf, proofMessage, mmsUrlOf, proofsForText };
