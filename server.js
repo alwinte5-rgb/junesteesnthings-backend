@@ -88,6 +88,7 @@ const CLD_UPLOAD_FN = `function jtCldUpload(cloud, fd, name){
 const STAFF = require('./tools/lib/staff');
 const FRAUD = require('./tools/lib/fraud-signals');
 const CREDIT = require('./tools/lib/sales-credit');
+const QFORM = require('./tools/lib/quote-form-key');
 const TEAM = require('./tools/lib/team-metrics');
 const TIMECLOCK = require('./tools/lib/timeclock');
 const TRAINING = require('./tools/lib/training');
@@ -3312,6 +3313,24 @@ function logActivity(actor, action, subject = {}, detail = null, ip = null) {
      subject.type || null, subject.id != null ? String(subject.id).slice(0, 80) : null,
      detail ? JSON.stringify(detail) : null, ip ? String(ip).slice(0, 64) : null])
     .catch((err) => console.error('activity log failed:', err.message));
+}
+
+/* Saves of one new-quote form, one at a time (see the quote save route). The
+   lock is let go when the response ends, whichever way it ends. In memory, so
+   it covers one server process: the double click it is for lands on one. */
+const quoteFormLocks = new Map();
+const QUOTE_FORM_WAIT_MS = 20000;
+async function holdQuoteForm(key, res) {
+  const before = quoteFormLocks.get(key);
+  let release;
+  const mine = new Promise((r) => { release = r; });
+  quoteFormLocks.set(key, mine);
+  const done = () => { release(); if (quoteFormLocks.get(key) === mine) quoteFormLocks.delete(key); };
+  res.once('finish', done);
+  res.once('close', done);
+  /* Capped: a save stuck on something slow must not freeze the next one for
+     minutes. Past the cap the next save runs, as it did before the lock. */
+  if (before) await Promise.race([before, new Promise((r) => setTimeout(r, QUOTE_FORM_WAIT_MS).unref())]);
 }
 
 /* Where each helper signs in from. A helper's first visit from an address it
@@ -10604,6 +10623,7 @@ function productGroupOf(name) {
         <span class="muted">The customer cannot see this quote yet. <b>Finish &amp; get the message</b> at the
         bottom sends it; <b>Save as draft</b> keeps it private.</span></div>` : ''}
       ${lead ? `<input type="hidden" name="from_submission_id" value="${lead.id}">` : ''}
+      ${!isEdit && !exam ? `<input type="hidden" name="form_key" value="${crypto.randomUUID()}">` : ''}
       ${exam ? `<input type="hidden" name="exam_scenario" value="${escEmail(exam.id)}">
       <div class="card" style="border-left:4px solid #1848B8;background:#f7faff">
         <b>Quote exam: ${escEmail(exam.title)}</b> <span class="muted">&middot; practice. Nothing is saved as a quote or sent to anyone.</span>
@@ -12624,6 +12644,24 @@ app.get('/admin/api/quotes/prior', requireAdmin, async (req, res) => {
 app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (req, res) => {
   try {
     const b = req.body || {};
+    /* ONE FORM, ONE QUOTE (tools/lib/quote-form-key.js): a new-quote form
+       saved a second time (Back, add a detail, Save) updates the quote its
+       first save made instead of inserting another. Saves of one form run one
+       at a time, so a double click cannot race two inserts past the lookup. */
+    const formKey = (req.params.code || one(b.exam_scenario)) ? '' : QFORM.formKeyOf(b.form_key);
+    if (formKey) {
+      await holdQuoteForm(formKey, res);
+      const { rows: earlier } = await pool.query(
+        `SELECT q.code, q.name, q.email, q.phone FROM staff_activity a JOIN quotes q ON q.code = a.subject_id
+          WHERE a.action = $1 AND a.detail->>'form_key' = $2 AND a.created_at > NOW() - INTERVAL '2 days'
+            AND q.cancelled_at IS NULL AND COALESCE(q.status, '') <> 'cancelled'
+            AND q.accepted_at IS NULL AND COALESCE(q.paid_amount, 0) = 0
+          ORDER BY a.id DESC LIMIT 10`, [QFORM.QUOTE_FORM_ACTION, formKey]);
+      const postedName = [String(b.first_name || '').trim(), String(b.last_name || '').trim()].filter(Boolean).join(' ')
+        || String(b.name || '');
+      const again = QFORM.pickQuoteForKey(earlier, { name: postedName, email: b.email, phone: b.phone });
+      if (again) req.params.code = again;
+    }
     const name = [String(b.first_name || '').trim(), String(b.last_name || '').trim()]
       .filter(Boolean).join(' ').slice(0, 120)
       || String(b.name || '').trim().slice(0, 120);
@@ -13568,6 +13606,16 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
 
     const q = rows[0];
     const code = q.code;
+    /* Awaited, so the form's next save (held behind this one) finds it. */
+    if (formKey && !QUOTE_CODE_RE.test(editing)) {
+      /* Not logActivity, which swallows a failure: a lost row here is the
+         duplicate coming back on the next save, so it is reported. The quote
+         itself is saved either way. */
+      await pool.query(
+        `INSERT INTO staff_activity (staff_id, action, subject_type, subject_id, detail) VALUES ($1, $2, 'quote', $3, $4)`,
+        [actor.kind === 'staff' ? actor.id : null, QFORM.QUOTE_FORM_ACTION, code, JSON.stringify({ form_key: formKey })])
+        .catch((err) => { console.error(`form key for ${code} not kept:`, err.message); reportError('quote-form-key', err, code).catch(() => {}); });
+    }
     /* Kept on the quote: the ideas for the follow-up, and every upsell applied.
        A failure is reported but never loses the save it rides on. */
     try {
