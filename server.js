@@ -14434,11 +14434,7 @@ app.get('/q/:code', async (req, res) => {
                       style="width:64px;padding:5px;font-size:14px;text-align:right">`}</td>
         <td class="num"><span data-each="${ix}">${cut
           ? `<span style="color:#9aa3b2;text-decoration:line-through">${(fig.folded > 0 ? moneyEach : money)(i.qty > 0 ? goodsList / i.qty : 0)}</span><br>${eachText(fig, i)}`
-          : eachText(fig, i)}</span>${
-          /* Outside the data-each span: the quantity estimate and the optional
-             items rewrite that span, and the delivery inside the price must
-             stay said while they do. */
-          fig.folded > 0 ? `<div class="muted" style="font-size:11px">incl. ${money(fig.folded)} supplier delivery</div>` : ''}</td>
+          : eachText(fig, i)}</span></td>
         <td class="num" data-amount="${ix}">${cut
           ? `<span style="color:#9aa3b2;text-decoration:line-through">${money(goodsList)}</span><br>
              <b style="color:#166534">${money(goods)}</b>`
