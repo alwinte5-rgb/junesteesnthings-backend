@@ -29778,13 +29778,21 @@ function shiftRow(sh, { owner = false, pings = [] } = {}) {
  *  weekly"). A shift counts on the day it started. */
 function clockDays(w) {
   const days = Array.from({ length: 7 }, (_, i) => SHIFTS.addDays(w.week, i));
-  const by = new Map(days.map((d) => [d, 0]));
+  const by = new Map(days.map((d) => [d, { date: d, minutes: 0, shifts: [] }]));
+  /* A shift whose day falls outside the seven (a zone setting that differs
+     from the pay week's) is still listed, under the nearest end of the week,
+     so no shift and no edit form ever goes missing. */
   for (const sh of w.shifts) {
     const d = TIMECLOCK.dayOf(sh.started_at);
-    if (by.has(d)) by.set(d, by.get(d) + TIMECLOCK.shiftMinutes(sh));
+    const slot = by.get(d) || by.get(d < days[0] ? days[0] : days[6]);
+    slot.minutes += TIMECLOCK.shiftMinutes(sh);
+    slot.shifts.push(sh);
   }
-  return days.map((d) => ({ date: d, minutes: by.get(d) }));
+  return days.map((d) => by.get(d));
 }
+
+/** Clocked minutes on one day of the week. */
+const minutesOn = (w, day) => (clockDays(w).find((d) => d.date === day) || { minutes: 0 }).minutes;
 
 function dailyHoursHtml(w) {
   const today = TIMECLOCK.dayOf(new Date());
@@ -29806,12 +29814,11 @@ function dailyHoursHtml(w) {
 
 /** The shifts of a week under a heading per day, with that day's total. */
 function shiftsByDayHtml(w, rowOf) {
-  const days = clockDays(w).filter((d) => d.minutes || w.shifts.some((sh) => TIMECLOCK.dayOf(sh.started_at) === d.date));
-  return days.map((d) => {
+  return clockDays(w).filter((d) => d.shifts.length).map((d) => {
     const label = new Date(`${d.date}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'long', month: 'short', day: 'numeric' });
     return `<div style="display:flex;justify-content:space-between;gap:10px;margin:14px 0 2px;padding-bottom:4px;border-bottom:2px solid #e3e8f2">
         <b>${escEmail(label)}</b><b>${TRAINING.hm(d.minutes)}</b></div>
-      ${w.shifts.filter((sh) => TIMECLOCK.dayOf(sh.started_at) === d.date).map(rowOf).join('')}`;
+      ${d.shifts.map(rowOf).join('')}`;
   }).join('');
 }
 
@@ -29916,7 +29923,7 @@ app.get('/admin/timeclock', requireAdmin, async (req, res) => {
         <div class="card">${roster.length ? roster.map((r, i) => {
           const w = weeks[i];
           return `<div class="row-i"><span class="row-main"><a href="/admin/timeclock?staff=${r.id}&amp;week=${week}"><b>${escEmail(r.name)}</b></a>
-            <div class="row-sub">${w ? `${(() => { const t = clockDays(w).find((d) => d.date === TIMECLOCK.dayOf(new Date())); return t ? `today ${TRAINING.hm(t.minutes)} · ` : ''; })()}week ${TRAINING.hm(w.minutes)} on the clock${w.open ? ' · on now' : ''}${w.timeproofMinutes != null ? ` · TimeProof ${TRAINING.hm(w.timeproofMinutes)}` : ''}${
+            <div class="row-sub">${w ? `today ${TRAINING.hm(minutesOn(w, TIMECLOCK.dayOf(new Date())))} · week ${TRAINING.hm(w.minutes)} on the clock${w.open ? ' · on now' : ''}${w.timeproofMinutes != null ? ` · TimeProof ${TRAINING.hm(w.timeproofMinutes)}` : ''}${
               w.hours.length ? ` · approved ${w.hours.reduce((n, h) => n + h.hours, 0)}h` : ''}` : 'Could not load'}</div></span>
             <span class="row-end">${w && w.flags.length ? pill(`${w.flags.length} to look at`, 'amber') : pill('nothing flagged', 'green')}</span></div>`;
         }).join('') : emptyState('No active helpers.')}</div>`, 'timeclock'));
@@ -31647,11 +31654,21 @@ function scheduleCalendarHtml(occ, days, zone, colorOf, { names = true } = {}) {
   const today = SHIFTS.dateIn(new Date(), zone);
   const col = (d) => {
     const label = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' }).format(new Date(`${d}T12:00:00Z`));
-    const blocks = segs.filter((x) => x.date === d).map((x) => {
+    /* Shifts at the same time sit side by side, each in its own lane. */
+    const mine = segs.filter((x) => x.date === d).sort((a, b) => a.from - b.from);
+    const laneEnds = [];
+    for (const x of mine) {
+      let l = laneEnds.findIndex((e) => e <= x.from);
+      if (l < 0) { l = laneEnds.length; laneEnds.push(0); }
+      laneEnds[l] = x.to; x.lane = l;
+    }
+    const lanes = Math.max(1, laneEnds.length);
+    const blocks = mine.map((x) => {
       const top = (x.from / 60 - lo) * PX, h = Math.max(18, ((x.to - x.from) / 60) * PX - 2);
+      const lane = `left:calc(${(x.lane * 100 / lanes).toFixed(3)}% + 3px);width:calc(${(100 / lanes).toFixed(3)}% - 6px);`;
       const c = colorOf(x.o.staff_id);
       const t = `${SHIFTS.clock(x.o.start, zone)} – ${SHIFTS.clock(x.o.end, zone)}`;
-      return `<div class="cal-b" style="top:${top}px;height:${h}px;background:${c.bg};border-color:${c.fg};color:${c.fg}"
+      return `<div class="cal-b" style="${lane}top:${top}px;height:${h}px;background:${c.bg};border-color:${c.fg};color:${c.fg}"
           title="${escEmail((names ? x.o.name + ': ' : '') + t + (x.o.note ? ' — ' + x.o.note : ''))}">
         ${names ? `<b>${escEmail(x.o.name)}</b>` : ''}<span>${escEmail(t)}</span>${x.o.note ? `<em>${escEmail(x.o.note)}</em>` : ''}</div>`;
     }).join('');
@@ -31668,26 +31685,28 @@ function scheduleCalendarHtml(occ, days, zone, colorOf, { names = true } = {}) {
     .cal-h{height:34px;display:flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:700;color:#0B1F4B;border-bottom:1px solid #e3e8f2}
     .cal-today .cal-h{background:#eef3ff;color:#1848B8}
     .cal-body{position:relative;background:repeating-linear-gradient(#fff 0 ${PX - 1}px,#f0f2f7 ${PX - 1}px ${PX}px)}
-    .cal-b{position:absolute;left:3px;right:3px;border:1px solid;border-left-width:4px;border-radius:7px;padding:3px 5px;font-size:11.5px;line-height:1.25;overflow:hidden}
+    .cal-b{position:absolute;border:1px solid;border-left-width:4px;border-radius:7px;padding:3px 5px;font-size:11.5px;line-height:1.25;overflow:hidden}
     .cal-b b,.cal-b span,.cal-b em{display:block}.cal-b em{font-style:normal;opacity:.8}
   </style><div class="cal-wrap"><div class="cal"><div class="cal-ruler">${ruler}</div>${days.map(col).join('')}</div></div>`;
 }
 
 app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
   try {
-    const owner = isOwner();
-    const actor = currentActor() || OWNER_ACTOR;
-    const asked = SHIFTS.validDate(req.query.week);
-    const week = asked ? SHIFTS.mondayOf(new Date(`${asked}T12:00:00Z`), 'UTC') : SHIFTS.mondayOf(new Date(), 'America/Chicago');
     /* A helper sees their own shifts only (owner, 2026-10-15: "each helper
-       should only see their own hours"); the owner sees everyone's. */
-    const [rows, roster] = await Promise.all([shiftRows(owner ? null : actor.id), staffRoster({ activeOnly: true })]);
-    const occ = SHIFTS.weekOccurrences(rows, week, 'America/Chicago');
+       should only see their own hours"); the owner sees everyone's. Decided
+       from the signed-in actor, failing closed: no actor sees nothing. */
+    const actor = currentActor();
+    const owner = !!actor && actor.kind !== 'staff';
     /* The calendar is drawn in one zone: the owner's Chicago by default, a
        helper's Philippines; a chip switches. The list shows both. */
     const zone = req.query.zone === 'ct' ? 'America/Chicago' : req.query.zone === 'ph' ? 'Asia/Manila' : owner ? 'America/Chicago' : 'Asia/Manila';
     const view = req.query.view === 'list' ? 'list' : 'calendar';
-    const calOcc = SHIFTS.weekOccurrences(rows, week, zone);
+    const asked = SHIFTS.validDate(req.query.week);
+    /* This week as the viewer's zone counts it: a helper's Monday morning in
+       Manila is still Sunday in Chicago. */
+    const week = asked ? SHIFTS.mondayOf(new Date(`${asked}T12:00:00Z`), 'UTC') : SHIFTS.mondayOf(new Date(), zone);
+    const [rows, roster] = await Promise.all([shiftRows(owner ? null : (actor && actor.id) || -1), staffRoster({ activeOnly: true })]);
+    const occ = SHIFTS.weekOccurrences(rows, week, 'America/Chicago');
     const PALETTE = [['#e8f0ff', '#1848B8'], ['#e7f6ec', '#166534'], ['#fff1e6', '#9a3412'], ['#f3e8ff', '#6b21a8'], ['#fdf2f8', '#9d174d'], ['#ecfeff', '#155e75']];
     const colorOf = (id) => { const ix = roster.findIndex((r) => r.id === id); const c = PALETTE[(ix < 0 ? 0 : ix) % PALETTE.length]; return { bg: c[0], fg: c[1] }; };
     const q = (o) => { const p = new URLSearchParams({ week, ...(req.query.zone ? { zone: req.query.zone } : {}), ...(view === 'list' ? { view } : {}), ...o });
@@ -31743,7 +31762,10 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
           { label: 'Philippines time (PH)', href: q({ zone: 'ph' }), on: zone === 'Asia/Manila' },
           { label: 'Chicago time (CT)', href: q({ zone: 'ct' }), on: zone === 'America/Chicago' },
         ])}
-        ${scheduleCalendarHtml(calOcc, Array.from({ length: 7 }, (_, i) => SHIFTS.addDays(week, i)), zone, colorOf, { names: owner })}`
+        ${scheduleCalendarHtml(
+          /* Every occurrence of the weeks either side too, not only those that
+             start in this one: a Sunday-night shift runs into this Monday. */
+          [-7, 0, 7].flatMap((n) => SHIFTS.occurrences(rows, SHIFTS.addDays(week, n))), days, zone, colorOf, { names: owner })}`
         : `<div class="ws-grid">${days.map(dayCard).join('')}</div>`}
       ${manage}`, owner ? 'timeclock' : 'clock'));
   } catch (err) {

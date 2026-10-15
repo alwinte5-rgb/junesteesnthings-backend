@@ -23,7 +23,7 @@ test('a Manila morning lands on the Chicago evening before, across daylight savi
 
 test('helpers see their own schedule only; hours show per day and per week', () => {
   const page = src.slice(src.indexOf("app.get('/admin/work-schedule'"), src.indexOf("app.post('/admin/work-schedule'"));
-  assert.match(page, /shiftRows\(owner \? null : actor\.id\)/);
+  assert.match(page, /const owner = !!actor && actor.kind !== 'staff';/, 'fails closed');
   assert.match(page, /names: owner/);
   assert.match(src, /function clockDays\(w\)/);
   assert.match(src, /\$\{dailyHoursHtml\(w\)\}[\s\S]{0,400}shiftsByDayHtml\(w, \(sh\) => shiftRow\(sh\)\)/, 'the helper page');
