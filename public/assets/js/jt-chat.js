@@ -125,8 +125,8 @@
 
   var lastQ = '';
 
-  function openTawk() {
-    if (!detailsGiven() && !chatOngoing() && gate) { gate(); return; }
+  function openTawk(nudge) {
+    if (!detailsGiven() && !chatOngoing() && gate) { gate(nudge); return; }
     try {
       if (window.Tawk_API && Tawk_API.maximize) {
         if (lastQ && Tawk_API.setAttributes) Tawk_API.setAttributes({ 'quick-question': lastQ }, function () {});
@@ -172,6 +172,10 @@
       'box-shadow:0 16px 44px rgba(15,23,42,.28);' +
       'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;');
 
+    /* The visible screen, not the one behind a phone's address bar, so the
+       header and its close button are never under the browser's own bar.
+       A browser without dvh keeps the vh height set above. */
+    panel.style.height = phoneBar ? 'min(560px,calc(100dvh - 150px))' : 'min(560px,calc(100dvh - 120px))';
     if (phoneBar) {
       launcher.style.right = 'auto'; launcher.style.left = '12px'; launcher.style.bottom = '84px';
       panel.style.right = 'auto'; panel.style.left = '12px'; panel.style.bottom = '84px';
@@ -219,7 +223,6 @@
       chip.type = 'button';
       chip.textContent = qa[0];
       chip.onclick = function () {
-        keepTyped();
         lastQ = qa[0].replace(/^[^ ]+ /, '');
         feed.appendChild(visitorBubble(lastQ));
         feed.appendChild(agentBubble(qa[1]));
@@ -234,9 +237,11 @@
       'font-size:13px;font-weight:800;cursor:pointer;font-family:inherit;');
     human.type = 'button';
     human.textContent = 'Chat with a real person 💬';
+    /* Details typed in the card, then this button pressed instead of Start
+       chat: the same as Start chat. */
     human.onclick = function () {
-      if (!detailsGiven() && !chatOngoing()) { gate(true); return; }
-      toggle(false); openTawk();
+      if (needsForm() && !checkDetails(nameIn.value, emailIn.value)) { form.onsubmit({ preventDefault: function () {} }); return; }
+      toggle(false); openTawk(true);
     };
     panel.appendChild(human);
 
@@ -268,16 +273,15 @@
        on screen without scrolling, phones included. */
     function showForm(on) {
       form.style.display = on ? 'flex' : 'none';
-      chipWrap.style.maxHeight = on ? '104px' : '150px';
+      var short = (window.innerHeight || 800) < 700;   // a small phone: one row of questions
+      chipWrap.style.maxHeight = on ? (short ? '52px' : '104px') : '150px';
       err.style.display = 'none';
     }
-    showForm(!detailsGiven());
-    /* Typed in, then a quick question tapped instead of Start chat: the
-       details still reach Tawk, so the shop has them either way. */
-    function keepTyped() {
-      if (detailsGiven() || checkDetails(nameIn.value, emailIn.value)) return;
-      sendDetails({ name: nameIn.value.trim(), email: emailIn.value.trim() }, function (ok) { if (ok) rememberDetails(); });
-    }
+    /* Not while a chat is going (an agent may have written first). */
+    function needsForm() { return !detailsGiven() && !chatOngoing() && !agentSpoke; }
+    showForm(needsForm());
+    /* A hint goes once they start fixing what it asked for. */
+    nameIn.oninput = emailIn.oninput = function () { err.style.display = 'none'; };
     form.onsubmit = function (e) {
       e.preventDefault();
       var problem = checkDetails(nameIn.value, emailIn.value);
@@ -319,7 +323,7 @@
       launcher.style.display = show ? 'none' : 'block';
     }
     /* No focus on open: on a phone the keyboard would cover the panel. */
-    launcher.onclick = function () { toggle(true); showForm(!detailsGiven()); };
+    launcher.onclick = function () { toggle(true); showForm(needsForm()); };
     closeB.onclick = function () { toggle(false); };
 
     document.body.appendChild(launcher);

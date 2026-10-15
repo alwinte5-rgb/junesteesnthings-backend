@@ -60,7 +60,7 @@ function page({ tawk = {}, storage = {}, ongoing = false } = {}) {
     inputs[0].value = name; inputs[1].value = email;
     form.onsubmit({ preventDefault() {} });
   };
-  const button = (label) => nodes.find((n) => n.tagName === 'BUTTON' && (n.textContent || '').includes(label));
+  const button = (label) => nodes.find((n) => n.tagName === 'BUTTON' && ((n.textContent || '') + (n.innerHTML || '')).includes(label));
   return { window, T, calls, form, err, submit, storage, inputs, button, nodes };
 }
 
@@ -174,15 +174,27 @@ test('the name and email form is the first thing in the panel when it opens (202
   assert.equal(done.form.style.display, 'none', 'not asked again once given');
 });
 
-test('quick answers still work without details, and details typed first still reach Tawk', () => {
+test('a quick answer never sends what was typed: only Start chat does', () => {
   const p = page();
-  p.button('How do I order?').onclick();
-  assert.equal(p.calls.attrs.length, 0, 'nothing typed, nothing sent');
   p.inputs[0].value = 'Kim Lee'; p.inputs[1].value = 'kim@example.com';
   p.button('How do I order?').onclick();
+  assert.equal(p.calls.attrs.length, 0);
+  assert.equal(p.calls.maximize, 0);
+});
+
+test('details typed in the card, then the big button: same as Start chat', () => {
+  const p = page();
+  p.inputs[0].value = 'Kim Lee'; p.inputs[1].value = 'kim@example.com';
+  p.button('Chat with a real person').onclick();
   assert.deepEqual(p.calls.attrs[0], { name: 'Kim Lee', email: 'kim@example.com' });
-  assert.equal(p.storage['jt-chat-details'], '1');
-  assert.equal(p.calls.maximize, 0, 'a quick answer never opens the live chat');
+  assert.equal(p.calls.maximize, 1);
+});
+
+test('a chat already going is never asked for details when the panel opens', () => {
+  const p = page();
+  p.T.onChatMessageAgent();
+  p.button('Chat with us').onclick();
+  assert.equal(p.form.style.display, 'none');
 });
 
 test('"Chat with a real person" without details points at the form instead of opening Tawk', () => {
