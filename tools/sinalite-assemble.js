@@ -20,7 +20,7 @@ const OUT = path.join(__dirname, 'data', 'sinalite-costs.json');
 
 const META = {
   brochure: {
-    name: 'Trifold Brochures — 8.5x11, score and fold', label: 'Trifold Brochures — score and fold', group: 'Print & Paper',
+    name: 'Trifold Brochures — 8.5x11, score and fold', label: 'Trifold Brochures', group: 'Print & Paper',
     /* Former names: the catalogue row is found (and renamed) by these, and a
        row still under one keeps pricing until it is renamed (owner, 2026-10-15). */
     aliases: ['Trifold Brochures — 8.5x11, folded'],

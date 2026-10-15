@@ -11142,9 +11142,9 @@ ${quotePricingSource()}
             /* SinaLite: the runs it sells, and that its shipping to the shop is
                already in the price (owner asked both, 2026-10-15). */
             (o.supplier === 'sinalite' && o.runs && o.runs.length ? '<div class="slruns" style="font-size:12px;color:#3f4a5f;margin:4px 0 0">' +
-              (o.any_qty ? 'Any quantity from ' + o.min.toLocaleString() + '; price breaks at ' : 'SinaLite runs: ') +
+              (o.any_qty ? 'Any quantity from ' + o.min.toLocaleString() + '. SinaLite prices: ' : 'SinaLite runs: ') +
               o.runs.map(function(q){ return q.toLocaleString(); }).join(' · ') +
-              (o.any_qty ? '' : ' (other quantities are priced as the cheapest mix of runs)') +
+              (o.any_qty ? ' (in between, never more than the next one up)' : ' (other quantities are priced as the cheapest mix of runs)') +
               '. Shipping to the shop is included in the price.</div>' : '') +
             /* Stale SinaLite prices (read over STALE_DAYS ago, sale may be over):
                said where the price is made, not only in the morning email. */
@@ -11902,7 +11902,7 @@ ${quotePricingSource()}
               costNote.innerHTML = '<b>Internal:</b> ' + (u.value
                 ? 'your typed price is used — line bills ' + m2(lt)
                 : (SIGN_OPTS[signKind] && SIGN_OPTS[signKind].supplier === 'sinalite'
-                  ? 'priced from SinaLite, cost x2 plus their shipping and $25 handling (rounded up to $5)'
+                  ? 'priced from SinaLite: each run bought is cost x2 plus its shipping and $25 handling (rounded up to $5)'
                   : 'priced from the Signs365 sign list, cost x2 plus shop time'));
               costNote.style.display = 'block';
             }
@@ -13932,7 +13932,7 @@ function customerLinePricing(items, catalog) {
  *  refuses it. */
 function sizedKindOf(prod) {
   if (!prod) return null;
-  if (prod.supplier === 'sinalite') return SINALITE.kindOf(prod.name);
+  if (prod.supplier === 'sinalite') return SINALITE.kindOf(prod.name, { aliases: true });
   return QSIGNS.signKindOf(prod.name);
 }
 

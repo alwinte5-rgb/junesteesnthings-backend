@@ -23,6 +23,13 @@
  *
  * Upserted by name; the price column stays 0 because the size and quantity
  * carry the price.
+ *
+ * RENAMING A PRODUCT
+ *   Change its name in sinalite-assemble.js META and move the old name to
+ *   `aliases`; the row is found by the old name and renamed by --apply. Merge
+ *   and let the backend DEPLOY first: until then the live server only knows
+ *   the old name, and a row renamed early stops pricing. Keep the alias after:
+ *   it is what lets a rolled-back row still price.
  */
 const fs = require('fs');
 const { mysql, mysqlUrlFrom, enjson, sq } = require('./lib/db');
@@ -61,7 +68,13 @@ const have = new Map();
 for (const p of PRODUCTS) {
   const found = [p.name, ...p.aliases].map((n) => byName.get(key(n))).filter(Boolean);
   if (found.length > 1) { console.error('!! ' + p.name + ' has ' + found.length + ' rows (#' + found.map((r) => r.id).join(', #') + ') — refusing'); process.exit(1); }
-  if (found.length) have.set(p.key, found[0]);
+  if (found.length) {
+    /* One row, one product: a name shared between two products' names or
+       aliases would rename the same row twice (code review on #296). */
+    const other = [...have].find(([, r]) => r.id === found[0].id);
+    if (other) { console.error('!! row #' + found[0].id + ' matches both ' + other[0] + ' and ' + p.key + ' — refusing'); process.exit(1); }
+    have.set(p.key, found[0]);
+  }
 }
 /* A same-named row that is not ours is somebody's real product. */
 for (const r of rows) {
