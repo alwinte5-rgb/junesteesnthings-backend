@@ -20,7 +20,7 @@
     ['👕 Do you have minimums?', 'No minimums! Order a single shirt or hundreds — DTF printing lets us do one-offs at a great price. Bulk orders get volume discounts with big breaks at 12, 24, 48, and 100+.'],
     ['🎨 Can you help me with my design?', 'Yes — free design help is included! You can also build it yourself in our online Design Studio (jtees.net) with uploads, fonts, graphics, and an AI designer.'],
     ['🧵 Do you do embroidery?', 'We do! Embroidery is priced by size: small left-chest from $12/ea up to full-back from $65/ea, and prices drop with quantity. No stitch file? One-time digitizing is $25–$65 and reorders never pay it again.'],
-    ['📦 Do you ship?', "Yes, we ship nationwide. Local Chicago customers can also do curbside pickup at 3047 N Lincoln Ave #435, Mon–Fri 10:30 AM–6 PM."],
+    ['📦 Do you ship?', "Yes, we ship nationwide. Local Chicago customers can also pick up at 3047 N Lincoln Ave #435, Mon–Fri 10:30 AM–6 PM, by appointment — call or text (773) 900-4592 to set a time."],
     ['🏢 Business & team orders?', 'We outfit businesses and teams with embroidered polos, branded tees, hats, and jackets. Send your logo once — we keep it on file for every reorder. Volume pricing applies.'],
     ['🖼️ What files work best?', "Best: vector files (AI, EPS, SVG) or high-res PNG (300 DPI at print size). For embroidery: DST, PES, EXP, JEF, VP3, XXX, or EMB — or send regular art and we'll digitize it."],
     ['📝 How do I get a quote?', "Tell us the item, quantity, and your idea — in chat, through the form, or by text at (773) 900-4592 — and we'll price it, usually within 1 business day. Or design it yourself at design.jtees.net and see your price instantly."],
@@ -45,7 +45,7 @@
   function chatOngoing() {
     try { var t = window.Tawk_API; return Boolean(t && t.isChatOngoing && t.isChatOngoing()); } catch (e) { return false; }
   }
-  var EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,190}\.[A-Za-z]{2,24}$/;
+  var EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,190}\.[A-Za-z0-9-]{2,63}$/;
   /** '' when fine, else what to fix. Exported for tests. */
   function checkDetails(name, email) {
     name = String(name || '').trim();
@@ -56,16 +56,67 @@
     return '';
   }
   window.__jtChatCheckDetails = checkDetails;
+  /* site-nav.js opens chat through this, so "Text us" links get the same step. */
+  window.jtOpenChat = function () { openTawk(); };
+  window.__jtChatState = function () { return { given: detailsGiven(), pending: pending, shown: tawkShown }; };
 
-  /* Set when this script opens the chat itself after the form, so its own
-     maximize is not caught again. */
-  var passing = false;
   var gate = null;   // set once the panel exists: function () that shows the form
   window.Tawk_API = window.Tawk_API || {};
+
+  /* Tawk's own bubble stays hidden until the visitor chooses a live chat:
+     its greeting ("I have a question") was the first thing people saw, and
+     most tapped it and left without a name or email. This panel is the way
+     in. The bubble comes back for a chat under way, or when an agent writes
+     first, so no conversation is ever hidden. */
+  var tawkShown = false;
+  function showTawk(on) {
+    var t = window.Tawk_API;
+    tawkShown = on;
+    try { if (on) t.showWidget(); else t.hideWidget(); } catch (e) {}
+    if (placeLauncher) placeLauncher();
+  }
+  var placeLauncher = null;   // set once the panel exists
+  function chain(name, fn) {
+    var prior = window.Tawk_API[name];
+    window.Tawk_API[name] = function () {
+      if (typeof prior === 'function') { try { prior.apply(this, arguments); } catch (e) {} }
+      fn.apply(this, arguments);
+    };
+  }
+  /* Details typed before Tawk finished loading, sent to it once it has. */
+  var pending = null;
+  function sendDetails(details, done) {
+    var t = window.Tawk_API;
+    if (!t || typeof t.setAttributes !== 'function') { pending = details; done(false); return; }
+    var settled = false;
+    var end = function (ok) { if (!settled) { settled = true; done(ok); } };
+    /* Tawk may never answer (reconnecting): stop waiting, keep the details
+       to send again, and let the visitor chat anyway. */
+    setTimeout(function () { if (!settled) { pending = details; end(false); } }, 4000);
+    try {
+      t.setAttributes(details, function (error) {
+        if (error) { console.warn('chat details not set:', error); pending = details; end(false); return; }
+        pending = null;
+        end(true);
+      });
+    } catch (e) { pending = details; end(false); }
+  }
+  chain('onLoad', function () {
+    showTawk(chatOngoing());
+    if (pending) sendDetails(pending, function (ok) { if (ok) rememberDetails(); });
+  });
+  chain('onChatStarted', function () { showTawk(true); });
+  /* An agent writing first opens the chat for a visitor with no details yet;
+     that chat is never closed on them. */
+  var agentSpoke = false;
+  chain('onChatMessageAgent', function () { agentSpoke = true; showTawk(true); });
+  chain('onChatMinimized', function () { if (!chatOngoing()) showTawk(false); });
+  chain('onChatEnded', function () { showTawk(false); });
+
   var priorMax = window.Tawk_API.onChatMaximized;
   window.Tawk_API.onChatMaximized = function () {
     if (typeof priorMax === 'function') { try { priorMax.apply(this, arguments); } catch (e) {} }
-    if (passing || detailsGiven() || chatOngoing() || !gate) return;
+    if (detailsGiven() || chatOngoing() || agentSpoke || !gate) return;
     try { window.Tawk_API.minimize(); } catch (e) {}
     gate();
   };
@@ -76,10 +127,9 @@
     if (!detailsGiven() && !chatOngoing() && gate) { gate(); return; }
     try {
       if (window.Tawk_API && Tawk_API.maximize) {
-        passing = true;
-        setTimeout(function () { passing = false; }, 3000);
         if (lastQ && Tawk_API.setAttributes) Tawk_API.setAttributes({ 'quick-question': lastQ }, function () {});
         if (lastQ && Tawk_API.addEvent) Tawk_API.addEvent('quick-question', { question: lastQ }, function () {});
+        showTawk(true);
         Tawk_API.maximize();
       }
     } catch (e) {}
@@ -105,8 +155,9 @@
       'background:#1848B8;color:#fff;font-weight:800;font-size:13px;padding:10px 16px;' +
       'border-radius:100px;box-shadow:0 8px 24px rgba(15,23,42,.28);' +
       'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;',
-      '💬 Quick answers');
+      '💬 Chat with us');
     launcher.type = 'button';
+    launcher.setAttribute('aria-label', 'Chat with us: quick answers or a real person');
     /* On a phone with the sticky action bar, sit on the LEFT above it: on the
        right this button and the live-chat bubble stacked over the bar's
        "Call" button (2026-10-08). The panel opens from the same side. */
@@ -123,6 +174,14 @@
       launcher.style.right = 'auto'; launcher.style.left = '12px'; launcher.style.bottom = '84px';
       panel.style.right = 'auto'; panel.style.left = '12px'; panel.style.bottom = '84px';
     }
+    /* With Tawk's bubble hidden this button takes its corner; it moves up
+       above the bubble when that is showing. The phone layout keeps its spot. */
+    placeLauncher = function () {
+      if (phoneBar) return;
+      var b = tawkShown ? '96px' : '18px';
+      launcher.style.bottom = b; panel.style.bottom = b;
+    };
+    placeLauncher();
 
     var head = el('div',
       'background:#1848B8;color:#fff;padding:13px 16px;display:flex;align-items:center;justify-content:space-between;flex:0 0 auto;',
@@ -212,23 +271,28 @@
       var problem = checkDetails(nameIn.value, emailIn.value);
       if (problem) { err.textContent = problem; err.style.display = 'block'; return; }
       go.disabled = true;
-      var finish = function () {
-        rememberDetails();
+      sendDetails({ name: nameIn.value.trim(), email: emailIn.value.trim() }, function (ok) {
         go.disabled = false;
+        /* Remembered only once Tawk has them; otherwise this page view goes
+           on to the chat and the details are sent again when Tawk loads. */
+        if (ok) rememberDetails(); else givenHere = true;
+        var t = window.Tawk_API;
+        if (!t || typeof t.maximize !== 'function') {
+          givenHere = false;
+          err.textContent = '';
+          err.appendChild(document.createTextNode('Live chat could not load right now. Please text or call us at '));
+          var a = el('a', 'color:#1848B8;font-weight:700;');
+          a.href = 'sms:+17739004592';
+          a.textContent = '(773) 900-4592';
+          err.appendChild(a);
+          err.appendChild(document.createTextNode(' and we will reply quickly.'));
+          err.style.display = 'block';
+          return;
+        }
         showForm(false);
         toggle(false);
         openTawk();
-      };
-      try {
-        if (window.Tawk_API && Tawk_API.setAttributes) {
-          Tawk_API.setAttributes({ name: nameIn.value.trim(), email: emailIn.value.trim() }, function (error) {
-            if (error) console.warn('chat details not set:', error);
-            finish();
-          });
-          return;
-        }
-      } catch (x) {}
-      finish();
+      });
     };
     gate = function () { toggle(true); showForm(true); setTimeout(function () { try { nameIn.focus(); } catch (x) {} }, 50); };
 
