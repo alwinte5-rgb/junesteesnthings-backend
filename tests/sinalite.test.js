@@ -403,7 +403,7 @@ test('captures read SinaLite REGULAR prices, never a sale price', () => {
      using the real prices and we can put on sale ourselfs as needed." Roll
      labels, mugs and tumblers had been saved at sale prices. */
   const cap = fs.readFileSync(path.join(__dirname, '..', 'tools', 'sinalite-capture.js'), 'utf8');
-  assert.match(cap, /const cost = regular\(await settled\(\)\);/);
+  assert.match(cap, /const cost = await regular\(await settled\(\)\);/);
   assert.match(cap, /\/regular price\/i/);
   assert.match(cap, /return m \? Number\(m\[0\]/, 'drinkware reads the first (regular) total');
   const data = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'tools', 'data', 'sinalite-costs.json'), 'utf8'));
