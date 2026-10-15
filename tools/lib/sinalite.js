@@ -71,6 +71,40 @@ function ladderFrom(rows, where = 'sinalite') {
 /* Re-read when the file changes, so a fresh capture reaches the next quote
    without a restart. A file that cannot be read is reported (and published
    as `error`), not mistaken for "no SinaLite items". */
+/**
+ * The price EACH for `qty` pieces, from a family's [runQty, each] ladder.
+ *
+ * SinaLite sells only the quantities in its dropdown (1, 2, 3, 5, 10 table
+ * covers; 25, 50, 100 calendars), so a quantity between runs has to be BOUGHT
+ * as runs, and the customer pays what those runs cost. Four table covers are
+ * a 5-run, not 4 x the 3-run price (Codex on #293: that undercharged
+ * $168.10); 3,000 brochures are 2,500 + 500 when that beats a 5,000 run. So:
+ * the cheapest set of runs that covers the quantity, each run carrying its
+ * own shipping (never under-charges). Null under the minimum or with no ladder.
+ */
+function eachFor(ladder, qty) {
+  /* Self-contained: the public quote page runs this same function (sent with
+     toString()) for a customer's quantity estimate. */
+  const ceil2 = (n) => Math.ceil(n * 100 - 1e-9) / 100;
+  const q = Math.floor(Number(qty));
+  if (!Array.isArray(ladder) || !ladder.length || !(q >= ladder[0][0]) || q > 1e6) return null;
+  const runs = ladder.map(([n, each]) => [n, n * each]);
+  const memo = new Map();
+  /* Cheapest total covering `left` pieces, computed bottom-up from the
+     smallest remainders so deep quantities cannot overflow the stack. */
+  const best = (left) => {
+    if (left <= 0) return 0;
+    if (memo.has(left)) return memo.get(left);
+    let m = Infinity;
+    for (const [n, total] of runs) m = Math.min(m, total + best(left - n));
+    memo.set(left, m);
+    return m;
+  };
+  const step = runs[0][0];
+  for (let k = step; k < q; k += step) best(k);
+  return ceil2(best(q) / q);
+}
+
 let cache = null, cacheMtime = null, loadError = null;
 function load() {
   let mtime = null;
@@ -78,12 +112,18 @@ function load() {
   if (cache && mtime === cacheMtime) return cache;
   cacheMtime = mtime;
   try {
-    cache = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    const d = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    if (!d || typeof d.products !== 'object' || !Object.keys(d.products).length) throw new Error('no products in it');
+    cache = d;
     loadError = null;
   } catch (e) {
+    /* Keep the last good table: a half-written or broken file must not turn
+       every SinaLite item into an unknown, $0 catalogue row (Codex on #293).
+       With no good table ever loaded, the quote save refuses SinaLite rows
+       (server.js, by the catalogue's supplier tag). */
     loadError = 'SinaLite prices unreadable (' + DATA_FILE + '): ' + e.message;
-    console.error('[sinalite] ' + loadError);
-    cache = { captured: null, products: {} };
+    console.error('[sinalite] ' + loadError + (cache && Object.keys(cache.products || {}).length ? ' — still using the last good table' : ''));
+    if (!cache) cache = { captured: null, products: {} };
   }
   return cache;
 }
@@ -149,4 +189,4 @@ function kindOf(name) {
 /** For tests: swap the data in. */
 function _setData(d) { cache = d; cacheMtime = (() => { try { return fs.statSync(DATA_FILE).mtimeMs; } catch { return null; } })(); loadError = null; }
 
-module.exports = { priceEach, shipBilled, ladderFrom, table, kindOf, ageDays, stale, familyOf, _setData, DATA_FILE, STALE_DAYS };
+module.exports = { priceEach, shipBilled, ladderFrom, eachFor, table, kindOf, ageDays, stale, familyOf, _setData, DATA_FILE, STALE_DAYS };

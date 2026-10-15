@@ -79,6 +79,15 @@ const META = {
     sizes: [{ key: 'circle2', label: '2" circle' }, { key: 'circle3', label: '3" circle' },
       { key: 'rect2x3', label: '2" x 3" rectangle' }, { key: 'rect3x4', label: '3" x 4" rectangle' }],
   },
+  pouch: {
+    name: 'Stand-Up Pouches — white, zipper', label: 'Stand-Up Pouches', group: 'Labels, Stickers & Packaging',
+    design: 'pouch', online: false,
+    url: 'https://sinalite.com/en_us/packaging/flexible-packaging/stand-up-pouches-2.html',
+    note: 'Custom printed stand-up pouches: gloss laminated, white inside, resealable zipper and tear notch, full color. Minimum 500.',
+    materials: [{ key: 'white_zip', label: 'White, gloss, zipper and tear notch' }],
+    sizes: [{ key: '4.375x6x2', label: '4.375" x 6" x 2" gusset' }, { key: '5x8x3', label: '5" x 8" x 3" gusset' },
+      { key: '7x9x3', label: '7" x 9" x 3" gusset' }],
+  },
 };
 
 function assemble(captured, meta = META) {

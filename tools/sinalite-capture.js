@@ -10,6 +10,8 @@
  *     sizes: [{ key: '8.5x11', label: '8.5" x 11"', set: { size: '8.5 x 11' } }],
  *     tiers: ['25', '50', '100'] })
  *
+ * A page with a typed quantity box (pouches) takes `qtyInput: 'item_qty'`.
+ *
  * It returns { rows: [{ mat, size, qty, cost, ship, turnaround }] }, which is
  * pasted into that product's entry in the JSON file. For each tier it:
  *   - sets the page's own option boxes and waits for SinaLite's price to stop
@@ -105,9 +107,18 @@ async function slCapture(spec) {
       for (const [n, t] of Object.entries(spec.fixed || {})) await pick(n, t);
       await typeIn({ ...(mat.inputs || {}), ...(size.inputs || {}) });
       for (const tier of spec.tiers) {
-        const qbox = sel(qtyName);
-        if (!qbox || ![...qbox.options].some((o) => o.text.trim() === tier)) continue;
-        await pick(qtyName, tier);
+        if (spec.qtyInput) {
+          /* A typed quantity (flexible packaging): the page snaps anything
+             under its minimum back up, so a tier it did not keep is skipped. */
+          await typeIn({ [spec.qtyInput]: tier });
+          await sleep(1500);
+          const box = document.querySelector('#productForm input[name="' + spec.qtyInput + '"]');
+          if (!box || box.value !== String(tier)) continue;
+        } else {
+          const qbox = sel(qtyName);
+          if (!qbox || ![...qbox.options].some((o) => o.text.trim() === tier)) continue;
+          await pick(qtyName, tier);
+        }
         if (spec.turnaroundSlowest !== false && sel('Turnaround')) {
           const t = sel('Turnaround');
           const days = (x) => /next/i.test(x) ? 1 : (parseInt(x, 10) || 0);
@@ -117,9 +128,10 @@ async function slCapture(spec) {
         const cost = await settled();
         await sleep(spec.pace || 1200);
         const shipping = await ship();
+        const ta = sel('Turnaround') || sel('turnaround');
         rows.push({ mat: mat.key, size: size.key, qty: Number(tier), cost, ship: shipping,
           ...(hasEstimator ? {} : { ship_assumed: true }),
-          turnaround: sel('Turnaround') ? sel('Turnaround').selectedOptions[0].text.trim() : null });
+          turnaround: ta ? ta.selectedOptions[0].text.trim() : null });
       }
     }
   }

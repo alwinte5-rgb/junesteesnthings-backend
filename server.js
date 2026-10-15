@@ -12656,6 +12656,12 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
           sign = r;
           if (r.freight && !r.oversized && !optional) signFreightTaken = true;
         }
+      } else if (!signKind && prod && prod.supplier === 'sinalite') {
+        /* A SinaLite row (catalogue price 0) the price table does not know —
+           the table failed to load, or the row was renamed. Refused, never
+           saved free (Codex on #293). */
+        signErrors.push({ line: i + 1, what: desc || prod.name,
+          error: 'SinaLite prices are unavailable for this item right now; nothing was priced.' });
       } else if (signKind && SINALITE.table().families[signKind]) {
         /* A SinaLite row's catalogue price is 0 — its size and quantity carry
            the price — so a line posted without a material would save at $0
@@ -13763,8 +13769,23 @@ function customerLinePricing(items, catalog) {
          so a customer nudging one line's quantity saw every OTHER hand-priced
          line silently inflate in the estimate total. */
       unitOverride: typedUnitOf(it),
+      /* A SinaLite line's runs ([qty, each], sell prices only): a customer
+         moving 25 calendars to 100 must see the 100-run price, not the saved
+         25-run each (Codex on #293). Re-priced by sinalite.js eachFor(). */
+      runs: sinaliteRunsOf(it),
     };
   });
+}
+
+/** The SinaLite [runQty, each] ladder a saved line was priced from, or null. */
+function sinaliteRunsOf(it) {
+  /* Only a line the server priced from its size: a price the owner typed
+     over it stays the price. */
+  const sg = it && it.sign_priced && it.sign;
+  const fam = sg && sg.kind ? SINALITE.table().families[sg.kind] : null;
+  if (!fam) return null;
+  const lad = ((fam.prices[sg.mat] || {})[sg.size] || {})[''];
+  return Array.isArray(lad) && lad.length ? lad : null;
 }
 
 app.get('/q/:code', async (req, res) => {
@@ -14526,6 +14547,15 @@ ${quotePricingSource()}
          carrying their own copy were both added once a quantity changed
          (Codex #127), though applyOptionChoice counts them once. */
       var EST_SHARED = ${JSON.stringify(ORDER_SHARED_CODES)};
+      /* SinaLite lines re-price from their runs (sinalite.js eachFor, the
+         server's own function); under the minimum the customer still pays
+         for the minimum run. Every other line keeps its saved price. */
+      ${SINALITE.eachFor.toString()}
+      function slUnit(L, qty){
+        if (!L.runs || !(qty > 0)) return L.unitOverride;
+        var min = L.runs[0][0];
+        return qty >= min ? eachFor(L.runs, qty) : Math.ceil(min * L.runs[0][1] / qty * 100) / 100;
+      }
       function estimate(){
         var moved = false, sub = 0, sharedSeen = {};
         LINES.forEach(function(L, ix){
@@ -14551,7 +14581,7 @@ ${quotePricingSource()}
             sleeves: L.sleeves, sleeveColours: L.sleeveColours, backColours: L.backColours,
             noBase: L.noBase, colours: L.colours, addons: L.addons,
             sizeMix: mix, blankTiers: BLANK_TIERS,
-            blankOverride: L.blankOverride, unitOverride: L.unitOverride,
+            blankOverride: L.blankOverride, unitOverride: slUnit(L, qty),
           });
           if (counts(ix)) {
             sub += r.lineTotal;

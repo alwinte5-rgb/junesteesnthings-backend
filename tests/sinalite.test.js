@@ -55,7 +55,11 @@ test('a calendar under its minimum of 25 is refused in words; 25 is priced', () 
   assert.strictEqual(at.each, SL.priceEach(120, 20, 25));
   assert.strictEqual(at.freight, 0, 'shipping is inside a SinaLite price, never charged again');
   const between = QS.priceSign('calendar', spec, 70, true);
-  assert.strictEqual(between.each, SL.priceEach(180, 28, 50), '70 pays the 50 tier each');
+  /* 70 is not a SinaLite run: it is bought as runs (50 + 25, or 100),
+     never at the 50-run each (Codex on #293). */
+  const lad = SL.table().families.calendar.prices['28pg']['8.5x11'][''];
+  assert.strictEqual(between.each, SL.eachFor(lad, 70));
+  assert.ok(between.each * 70 >= Math.min(50 * lad[1][1] + 25 * lad[0][1], 100 * lad[2][1]) - 0.7, '70 costs at least the runs that cover it');
   const opts = QS.sizerOptions().calendar;
   assert.strictEqual(opts.min, 25, 'the form can say "min 25" before a quantity is typed');
   assert.strictEqual(opts.supplier, 'sinalite');
@@ -205,4 +209,31 @@ test('switching Category clears the old product BEFORE filtering, so its section
   const blank = SERVER.indexOf("sel.value = '';", clear);
   const apply = SERVER.indexOf('pcatApply(sel, t.value);', clear);
   assert.ok(blank > 0 && apply > blank, 'the product is cleared before the filter is applied');
+});
+
+test('a quantity between SinaLite runs is bought as runs: the cheapest set that covers it', () => {
+  const L = [[1, 316.18], [2, 217.33], [3, 214.09], [5, 204.9], [10, 198.5]];
+  assert.strictEqual(SL.eachFor(L, 3), 214.09, 'an exact run is its own price');
+  assert.ok(SL.eachFor(L, 4) * 4 >= 2 * 217.33 * 2 - 0.01, 'four covers cost at least two 2-runs');
+  assert.ok(SL.eachFor(L, 4) > 214.09, 'never the 3-run price for four (Codex: $168.10 short)');
+  assert.strictEqual(SL.eachFor(L, 0), null);
+  const B = [[25, 7.53], [500, 0.62], [2500, 0.27], [5000, 0.19]];
+  assert.ok(Math.abs(SL.eachFor(B, 3000) * 3000 - 950) < 30, '3,000 brochures: a 5,000 run beats 2,500 + 500');
+  assert.ok(SL.eachFor(B, 12000) > 0, 'above the largest run it still prices');
+  /* The public quote runs the same function from its source. */
+  const copy = vm.runInThisContext('(' + SL.eachFor.toString() + ')');
+  assert.strictEqual(copy(L, 4), SL.eachFor(L, 4));
+});
+
+test('a broken price file keeps the last good table instead of emptying it', () => {
+  SL._setData(JSON.parse(JSON.stringify(FIXTURE)));
+  assert.ok(SL.table().families.calendar);
+  assert.match(SERVER, /prod\.supplier === 'sinalite'\) \{/, 'an unknown SinaLite row is refused on save');
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'tools', 'lib', 'sinalite.js'), 'utf8'), /if \(!cache\) cache = \{ captured: null, products: \{\} \};/);
+});
+
+test('the public quote estimate re-prices SinaLite lines from their runs', () => {
+  assert.match(SERVER, /runs: sinaliteRunsOf\(it\),/);
+  assert.match(SERVER, /\$\{SINALITE\.eachFor\.toString\(\)\}/);
+  assert.match(SERVER, /unitOverride: slUnit\(L, qty\),/);
 });

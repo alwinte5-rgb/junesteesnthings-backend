@@ -54,7 +54,7 @@ function lift(name) {
 }
 
 test('the customer quote page is told a line is a service', () => {
-  const fn = vm.runInThisContext('(function(){ var itemPrints = function(){ return []; }; var typedUnitOf = function(){ return null; }; ' +
+  const fn = vm.runInThisContext('(function(){ var itemPrints = function(){ return []; }; var typedUnitOf = function(){ return null; }; var sinaliteRunsOf = function(){ return null; }; ' +
     lift('customerLinePricing') + '; return customerLinePricing; })()');
   const catalog = { products: [
     { id: 1, name: 'Brochure Design — Revision', price: 150, cost: 0, service: true },
