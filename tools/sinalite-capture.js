@@ -22,7 +22,13 @@
  *     the cheapest rate;
  *   - waits between requests: SinaLite answers 503 to a fast burst.
  *
- * Prices include whatever sale SinaLite is running, so re-run this monthly
+ * REGULAR PRICES, NEVER SALE PRICES (owner, 2026-10-15: "those are
+ * sinalites sale prices. make sure we are using the real prices and we can
+ * put on sale ourselfs as needed"). A sale is SinaLite's, for a limited time;
+ * the shop's prices are built on what the job costs without it. On a sale,
+ * some pages move window.product.price to the sale figure (roll labels) and
+ * some leave it regular (calendars), so the price is read from the page's own
+ * "Regular Price" box whenever it shows one. Re-run monthly
  * (tools/lib/sinalite.js marks the file stale after STALE_DAYS).
  */
 /* eslint-disable no-undef */
@@ -41,6 +47,17 @@ async function slCapture(spec) {
     let a = window.product.price;
     for (let i = 0; i < 10; i++) { await sleep(200); const b = window.product.price; if (a === b) return Number(a); a = b; }
     throw new Error('price never settled');
+  };
+  /* The "Regular Price" box beside a sale price. No box (no sale running,
+     or a page that only shows "Price") leaves the settled price. A regular
+     price below the settled one means the page was misread, so it stops. */
+  const regular = (settledPrice) => {
+    const label = [...document.querySelectorAll('.priceLabel')].find((e) => e.offsetParent && /regular price/i.test(e.textContent));
+    const box = label && label.querySelector('.price');
+    if (!box) return settledPrice;
+    const r = Number(box.textContent.replace(/[$,\s]/g, ''));
+    if (!(r > 0) || r + 0.005 < settledPrice) throw new Error('regular price ' + box.textContent + ' unreadable or below ' + settledPrice);
+    return r;
   };
   /* Some pages (cut-to-shape decals) have no shipping estimator. Those take
      spec.shipFallback — a measured rate for a parcel of the same size — and
@@ -125,7 +142,7 @@ async function slCapture(spec) {
           const slow = [...t.options].filter((o) => !o.disabled && o.value).sort((a, b) => days(b.text) - days(a.text))[0];
           if (slow && t.value !== slow.value) { t.value = slow.value; t.dispatchEvent(new Event('change', { bubbles: true })); await sleep(500); }
         }
-        const cost = await settled();
+        const cost = regular(await settled());
         await sleep(spec.pace || 1200);
         const shipping = await ship();
         const ta = sel('Turnaround') || sel('turnaround');
@@ -153,10 +170,11 @@ async function dwCapture(spec) {
   const vis = (s) => [...document.querySelectorAll(s)].find((e) => e.offsetParent);
   const q = document.querySelector(spec.qtySel);
   if (!q) throw new Error('no quantity box ' + spec.qtySel);
-  const sale = () => {
+  const regularTotal = () => {
     const e = [...document.querySelectorAll('*')].find((x) => /^Total Cost/.test(x.textContent.trim()) && x.textContent.length < 60);
     const m = e ? e.parentElement.innerText.match(/\$[\d,]+\.\d\d/g) : null;
-    return m ? Number(m[m.length - 1].replace(/[$,]/g, '')) : null;
+    /* Regular first, then the sale total when one is running: the FIRST. */
+    return m ? Number(m[0].replace(/[$,]/g, '')) : null;
   };
   const open = [...document.querySelectorAll('button')].find((b) => /calculate shipping cost/i.test(b.textContent));
   if (open && !vis('.btn-shipping-quote')) { open.click(); await sleep(1500); }
@@ -178,8 +196,10 @@ async function dwCapture(spec) {
     q.value = String(n);
     ['input', 'change', 'keyup', 'blur'].forEach((t) => q.dispatchEvent(new Event(t, { bubbles: true })));
     window.jQuery(q).trigger('change').trigger('keyup');
-    await sleep(2000);
-    const cost = sale();
+    /* The box answers a beat late, and a fixed wait read the PREVIOUS
+       quantity's total (2026-10-15): read until two reads agree. */
+    let cost = regularTotal();
+    for (let i = 0, prev = null; i < 12 && (i < 3 || prev !== cost); i++) { await sleep(1000); prev = cost; cost = regularTotal(); }
     window.__slShipRes = null;
     vis('.btn-shipping-quote').click();
     for (let i = 0; i < 60 && !window.__slShipRes; i++) await sleep(250);
