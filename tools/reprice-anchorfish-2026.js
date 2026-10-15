@@ -4,6 +4,8 @@
  *   railway variables --service MySQL --json | node tools/reprice-anchorfish-2026.js
  *   railway variables --service MySQL --json | node tools/reprice-anchorfish-2026.js --apply
  *
+ *   railway run -s MySQL node tools/reprice-anchorfish-2026.js --apply --only-dtf
+ *
  * Dry run by default: prints every price and every statement, writes nothing.
  * `--apply` snapshots lumise_printings to ~/jtees-backups/ first and aborts if
  * that snapshot fails — the backup is the only undo for live pricing.
@@ -37,8 +39,11 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { colorTable } = require('./lib/screenprint');
-const { urlFromStdinJson, mysql, enjson, sq } = require('./lib/db');
+const { urlFromStdinJson, mysqlUrlFrom, mysql, enjson, sq } = require('./lib/db');
 const APPLY = process.argv.includes('--apply');
+/* `--only-dtf` writes method #1 alone, so a DTF band change cannot also move
+   embroidery or screen print. */
+const ONLY_DTF = process.argv.includes('--only-dtf');
 const BACKUP_DIR = path.join(os.homedir(), 'jtees-backups');
 
 /** Snapshot lumise_printings before writing. This is live pricing; there is no
@@ -174,9 +179,14 @@ const SP_INSERTS = [
    The split is what makes that possible at all: bands are CEILINGS, so cutting
    the ≤11 band alone would have handed the discount to single-piece orders
    too. */
+/* Re-cut to 1-4 / 5-11 (owner, 2026-10-15). Four pieces keep the $23.20 they
+   were already quoted, so 1-3 also drops to it, and 5-11 is the owner's own
+   price, halfway to 12-24. `fix` holds those typed prices by column: one markup
+   cannot give $20.75 on the main print AND $5.90 on the additional location
+   (the markup that hits $20.75 puts it at $5.30, under 12-24's $5.85). */
 const DTF = {
-    1: { ceil:   3, mk: 3.70, v: [5.00, 7.03, 9.38, 1.80] },
-    4: { ceil:  11, mk: 3.30, v: [5.00, 7.03, 9.38, 1.80] },
+    1: { ceil:   4, mk: 3.30, v: [5.00, 7.03, 9.38, 1.80] },
+    5: { ceil:  11, mk: 3.30, v: [5.00, 7.03, 9.38, 1.80], fix: { 1: 20.75, 3: 5.90 } },
    /* 3.60 -> 3.25. With 4-11 cut to 3.30, leaving this at 3.60 made the
       ADDITIONAL-LOCATION price climb from $5.95 to $6.50 as the order grew —
       one markup drives every column in a band, and the tool refuses a ladder
@@ -522,7 +532,8 @@ for (const m of SP_INSERTS) {
 /* ── DTF ────────────────────────────────────────────────────────────────── */
 
 const DF = Object.keys(DTF).map(Number).sort((a, b) => a - b);
-const dtfSide = (col) => DF.map((f) => [DTF[f].ceil, up05(DTF[f].v[col] * DTF[f].mk)]);
+const dtfSide = (col) => DF.map((f) => [DTF[f].ceil,
+  DTF[f].fix && DTF[f].fix[col] != null ? DTF[f].fix[col] : up05(DTF[f].v[col] * DTF[f].mk)]);
 
 console.log('\n\nDTF — method #1 "Printing", the only ACTIVE method, so this is live on the store.');
 console.log('Stage 1 is the main print (132 sq in), stage 2 an additional location.');
@@ -562,16 +573,16 @@ console.log('  Above 25k stitches there is still no rate — Anchorfish quotes t
 
 /* ── Apply ──────────────────────────────────────────────────────────────── */
 
+if (ONLY_DTF) {
+  const dtf = stmts.filter((q) => / WHERE id=1;$/.test(q));
+  if (dtf.length !== 1) { console.error('  --only-dtf found ' + dtf.length + ' DTF statements, expected 1'); process.exit(3); }
+  stmts.splice(0, stmts.length, ...dtf);
+}
+
 console.log('\n\n' + stmts.length + ' UPDATE statements' + (APPLY ? ' — APPLYING' : ' — dry run, pass --apply to write'));
 if (!APPLY) { console.log('\n' + stmts.join('\n')); process.exit(0); }
 
-let buf = '';
-process.stdin.on('data', (d) => (buf += d));
-process.stdin.on('end', () => {
-  let url;
-  try { url = urlFromStdinJson(buf); }
-  catch (e) { console.error(e.message); process.exit(2); }
-
+const run = (url) => {
   /* Snapshot BEFORE the transaction, and let a failure here stop the run. The
      backup is the only undo; writing prices we cannot roll back is worse than
      not repricing today. */
@@ -583,5 +594,20 @@ process.stdin.on('end', () => {
   try { mysql(url, sql); }
   catch (e) { console.error(e.message); process.exit(1); }
   console.log('\n  TO UNDO: restore `calculate` from the backup named above.');
-});
-if (!process.stdin.isTTY) process.stdin.resume();
+};
+
+/* `railway run -s MySQL` puts the URL in the environment; otherwise it comes
+   from the variables JSON on stdin, as the usage lines above show. */
+const envUrl = mysqlUrlFrom();
+if (envUrl) run(envUrl);
+else {
+  let buf = '';
+  process.stdin.on('data', (d) => (buf += d));
+  process.stdin.on('end', () => {
+    let url;
+    try { url = urlFromStdinJson(buf); }
+    catch (e) { console.error(e.message); process.exit(2); }
+    run(url);
+  });
+  if (!process.stdin.isTTY) process.stdin.resume();
+}
