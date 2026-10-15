@@ -15,7 +15,7 @@ test('#124 a Cloudflare key-fetch failure names the service, route and reason', 
   assert.match(cf, /timed out/);
 });
 test('#123 the job page shows only the controls this account may use', () => {
-  const p = after("app.get('/admin/production/:code'", 9000);
+  const p = after("app.get('/admin/production/:code'", 12000);
   assert.match(p, /const may = \(route\) => STAFF\.mayUseRoute\(currentActor\(\) \|\| OWNER_ACTOR, 'POST', route\);/);
   for (const g of ['st.manual && mayStep', '!mayStage ?', '!q.needed_by && mayTarget', 'q.email && mayEmail']) assert.ok(p.includes(g), g);
 });
