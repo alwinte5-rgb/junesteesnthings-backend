@@ -87,6 +87,12 @@ test('an each-price under a dollar shows enough places for qty x each to foot', 
   assert.strictEqual(moneyEach(0.25), '$0.25');
   assert.strictEqual(moneyEach(4.5), '$4.50');
   assert.strictEqual(moneyEach(0), '$0.00');
+  assert.strictEqual(moneyEach(310 / 300), '$1.0333', '300 signs with $10 of delivery: over a dollar still foots');
+  assert.strictEqual(moneyEach(12.5), '$12.50');
+  assert.strictEqual(moneyEach(0.105), '$0.105');
+  /* One copy: the quote page's scripts get the server's own function. */
+  assert.doesNotMatch(SERVER, /function mEach\(/);
+  assert.strictEqual((SERVER.match(/\$\{moneyEach\.toString\(\)\}/g) || []).length, 2);
 });
 
 test('quote categories: bought-printed goods are split four ways and never swallow a tee', () => {
@@ -105,6 +111,22 @@ test('quote categories: bought-printed goods are split four ways and never swall
   assert.strictEqual(groupOf('X-Frame Banners'), 'Signs & Display');
   assert.strictEqual(groupOf('Gildan Softstyle Tee - Tear Away Label'), 'T-Shirts', 'a tee label is not a roll label');
   assert.strictEqual(groupOf('Bella+Canvas 3001 Unisex Jersey Tee'), 'T-Shirts');
+  assert.strictEqual(groupOf('Independent Pullover Hood with Pouch Pocket'), 'Hoodies & Sweatshirts', 'a pouch pocket is not packaging');
+  assert.strictEqual(groupOf('Sport Backpack with Bottle Pocket'), 'Bags & Totes', 'a bottle pocket is not drinkware');
+});
+
+test('only sign and paper names get the sizer by name; mugs and stickers need the exact SinaLite name', () => {
+  /* The shop decorates its own mugs and stickers in-house: matching "mug" by
+     word would hide their print methods and quote the blank (code review,
+     2026-10-15). A SinaLite mug is found by quote-signs.js signKindOf. */
+  const src = extract('const PRODUCT_GROUPS = [', '\n];') + ';' +
+    extract('const SIZED_BY_NAME_RE =', ";\n");
+  const RE = vm.runInThisContext('(() => {' + src + '; return SIZED_BY_NAME_RE; })()');
+  assert.match('X-Frame Banners — 23.6x63', RE);
+  assert.match('Wall Calendars — 8.5x11', RE);
+  assert.doesNotMatch('11oz Ceramic Mug', RE);
+  assert.doesNotMatch('Custom Stickers', RE);
+  assert.doesNotMatch('Gildan Heavy Blend Hood', RE);
 });
 
 test('a sized item is offered the design tiers on the form and on the save', () => {
@@ -120,4 +142,35 @@ test('table covers say the design is on the front panel only', () => {
   assert.match(tc.name, /front panel/i);
   assert.match(tc.note, /front panel/i);
   for (const m of tc.materials) assert.match(m.label, /front panel printed/i, m.key);
+});
+
+test('stale is worked out on every call, not frozen when the table is first built', () => {
+  SL._setData(JSON.parse(JSON.stringify({ ...FIXTURE, captured: new Date(Date.now() - 86400000).toISOString() })));
+  assert.strictEqual(SL.table().stale, false);
+  SL._setData(JSON.parse(JSON.stringify({ ...FIXTURE, captured: new Date(Date.now() - (SL.STALE_DAYS + 2) * 86400000).toISOString() })));
+  assert.strictEqual(SL.table().stale, true);
+});
+
+test('an unpriceable cost row is reported by name, not skipped in silence', () => {
+  const said = [];
+  const orig = console.error;
+  console.error = (m) => said.push(String(m));
+  try { SL.ladderFrom([{ qty: 25, cost: 0, ship: 10 }, { qty: 50, cost: 90, ship: 10 }], 'calendar 28pg/8.5x11'); }
+  finally { console.error = orig; }
+  assert.strictEqual(said.length, 1);
+  assert.match(said[0], /calendar 28pg\/8\.5x11/);
+});
+
+test('a SinaLite line saved without a size and material is refused, not priced at the $0 catalogue price', () => {
+  assert.match(SERVER, /else if \(signKind && SINALITE\.table\(\)\.families\[signKind\]\) \{/);
+});
+
+test('the supplier-delivery note sits outside the each-price the quote page rewrites', () => {
+  assert.match(SERVER, /<td class="num"><span data-each="\$\{ix\}">/);
+  assert.match(SERVER, /<\/span>\$\{\s*\/\*[\s\S]{0,200}?\*\/\s*fig\.folded > 0 \?/);
+});
+
+test('the category box is re-synced from code-set products and filtered sections are disabled for phones', () => {
+  assert.match(SERVER, /function calc\(\)\{\s*pcatSyncAll\(\);/);
+  assert.match(SERVER, /g\.disabled = off;/);
 });

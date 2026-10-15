@@ -8941,13 +8941,16 @@ function customerLineFigures(item) {
   return { amount, each, shown, folded };
 }
 
-/** A price EACH as the customer reads it: cents, unless the piece costs under
- *  a dollar and the cents would round it away — then up to four places, so
- *  qty x each = amount on 3,000 business cards. "$0.1033", "$0.25", "$4.50". */
+/** A price EACH as the customer reads it: cents, unless cents would round
+ *  money away — then up to four places, so qty x each = amount: 3,000 cards
+ *  read "$0.1033" and 300 signs with $10 of delivery "$1.0333" (code review,
+ *  2026-10-15: the old under-a-dollar rule still printed "$1.03" beside $310).
+ *  "$0.25", "$4.50" stay as they were. Sent to the quote page's scripts with
+ *  toString(), so it is written in plain ES5 and there is one copy of it. */
 function moneyEach(n) {
-  const v = Number(n) || 0;
-  if (Math.abs(v) >= 1) return '$' + v.toFixed(2);
-  return '$' + (Math.round(v * 10000) / 10000).toFixed(4).replace(/0{1,2}$/, '');
+  var v = Math.round((Number(n) || 0) * 10000) / 10000;
+  if (Math.round(v * 100) / 100 === v) return '$' + v.toFixed(2);
+  return '$' + v.toFixed(4).replace(/0+$/, '');
 }
 
 /** The each-price a person actually TYPED on a hand-priced line.
@@ -10070,14 +10073,19 @@ const PRODUCT_GROUPS = [
      were wrong: "canvas" swept in the whole Bella+Canvas range and every
      canvas tote — thirteen shirts filed under Signs — because a brand name
      and a material share a word. Match on what only a sign is called. */
-  /* The first SUPPLIER_GROUP_COUNT groups are things BOUGHT PRINTED (Signs365,
-     SinaLite): the item is the product, with no garment under it. Split four
-     ways (owner, 2026-10-15) so the Category picker on a quote line keeps the
-     product list short. No bare "label": tee names carry "Tear Away Label". */
-  ['Signs & Display',         /banner|cutout|poster|magnet|acrylic|window graphic|wall graphic|floor graphic|vehicle graphic|yard sign|rigid sign|photo panel|stretched canvas|table cover|x-frame/i],
-  ['Print & Paper',           /business card|flyer|brochure|postcard|door hanger|calendar|rack card|tear card|notepad|envelope|booklet|presentation folder/i],
-  ['Labels, Stickers & Packaging', /roll labels?|stickers?\b|decals?\b|pouch/i],
-  ['Drinkware',               /\bmugs?\b|tumbler|\bbottles?\b/i],
+  /* Things BOUGHT PRINTED (Signs365, SinaLite) come first, split four ways
+     (owner, 2026-10-15) so the Category picker on a quote line keeps the
+     product list short. A group marked 'sized' is one whose NAMES are only ever
+     bought-printed goods, so the quote form gives them the sizer by name
+     (SIZED_BY_NAME_RE). Labels and drinkware are not: the shop decorates its
+     own mugs and stickers, so a SinaLite one is recognised by its exact
+     catalogue name instead (quote-signs.js signKindOf). No bare "label": tee
+     names carry "Tear Away Label"; no bare "pouch" or "bottle": hoodies have a
+     "Pouch Pocket" and bags a "Bottle Pocket". */
+  ['Signs & Display',         /banner|cutout|poster|magnet|acrylic|window graphic|wall graphic|floor graphic|vehicle graphic|yard sign|rigid sign|photo panel|stretched canvas|table cover|x-frame/i, 'sized'],
+  ['Print & Paper',           /business card|flyer|brochure|postcard|door hanger|calendar|rack card|tear card|notepad|envelope|booklet|presentation folder/i, 'sized'],
+  ['Labels, Stickers & Packaging', /roll labels?|stickers?\b|decals?\b|\bpouch(?:es)?\b(?!\s*pocket)/i],
+  ['Drinkware',               /\bmugs?\b|tumbler|\bbottles?\b(?!\s*(?:pocket|holder|sleeve))/i],
   ['Youth, Toddler & Infant', /youth|toddler|infant|bodysuit|onesie/i],
   ['Scrubs',                  /scrub/i],
   /* Before Hoodies, because a "Quarter-Zip Pullover" is a quarter-zip and a
@@ -10094,10 +10102,10 @@ const PRODUCT_GROUPS = [
   ['Bags & Totes',            /tote|bags?\b|backpack|sackpack|drawstring/i],
 ];
 
-/** How many of PRODUCT_GROUPS, from the top, are bought-printed goods. */
-const SUPPLIER_GROUP_COUNT = 4;
-/** One pattern for "this is a bought-printed item", from those groups. */
-const SUPPLIER_GOODS_RE = new RegExp(PRODUCT_GROUPS.slice(0, SUPPLIER_GROUP_COUNT)
+/** One pattern for "this name is a sized, bought-printed item", from the
+ *  groups marked SIZED — a flag, not a position, so reordering the list
+ *  cannot turn youth tees into signs. */
+const SIZED_BY_NAME_RE = new RegExp(PRODUCT_GROUPS.filter((g) => g[2] === 'sized')
   .map(([, re]) => '(?:' + re.source + ')').join('|'), 'i');
 
 /** Staff-only services: design fees, folding. Never shown in the shop. */
@@ -10611,7 +10619,7 @@ function productGroupOf(name) {
       /* What a product IS decides what the item asks for. A sign is matched by
          the same rule that files it under Signs in the product list, so the
          two cannot disagree. A banner (not a banner stand) also gets the sizer. */
-      var SIGN_RE = new RegExp(${JSON.stringify(SUPPLIER_GOODS_RE.source)}, 'i');
+      var SIGN_RE = new RegExp(${JSON.stringify(SIZED_BY_NAME_RE.source)}, 'i');
       /* Each catalogue product's sign kind (quote-signs.js signKindOf), and what
          each kind's sizer offers. No prices here: /admin/api/sign-price asks
          the server, which is also what prices the save. */
@@ -10631,9 +10639,27 @@ function productGroupOf(name) {
         return o && o.parentNode && o.parentNode.tagName === 'OPTGROUP' ? o.parentNode.label : '';
       }
       function pcatApply(sel, label){
+        /* hidden + display:none filters the list on desktop; iOS Safari and some
+           Android pickers ignore both inside a native select, so the other
+           sections are also DISABLED there (greyed, not pickable). The
+           selected product's own section is never disabled. */
+        var mine = pcatGroupOf(sel);
         Array.prototype.forEach.call(sel.querySelectorAll('optgroup'), function(g){
-          g.hidden = !!label && g.label !== label;
-          g.style.display = g.hidden ? 'none' : '';
+          var off = !!label && g.label !== label && g.label !== mine;
+          g.hidden = off;
+          g.style.display = off ? 'none' : '';
+          g.disabled = off;
+        });
+      }
+      /* A product set by code (a restored quote, a copied line) fires no change
+         event, so calc() — which runs on every change and on load — brings each
+         line's Category box back in line with its product. */
+      function pcatSyncAll(){
+        Array.prototype.forEach.call(document.querySelectorAll('#lines .line select.p'), function(sel){
+          var box = sel.previousElementSibling;
+          if (!box || !box.classList.contains('pcat') || !box.value || !sel.value) return;
+          var g = pcatGroupOf(sel);
+          if (g && g !== box.value) { box.value = g; pcatApply(sel, g); }
         });
       }
       function pcatEnsure(sel){
@@ -11287,6 +11313,7 @@ ${quotePricingSource()}
       }
 
       function calc(){
+        pcatSyncAll();
         var sub = 0;
         /* Screens across every line, so the totals can show them on their own
            row. Counted from the addon line's own count field rather than
@@ -11913,7 +11940,7 @@ ${quotePricingSource()}
         tpl.querySelectorAll('[data-qty-bound]').forEach(function(el){ delete el.dataset.qtyBound; });
         /* The copied item's Category filter is cleared above (its box reads
            "All categories"); show every section of its product list again. */
-        tpl.querySelectorAll('select.p optgroup').forEach(function(g){ g.hidden = false; g.style.display = ''; });
+        tpl.querySelectorAll('select.p optgroup').forEach(function(g){ g.hidden = false; g.style.display = ''; g.disabled = false; });
         var oh = tpl.querySelector('.opthelp');
         if (oh) oh.open = false;
         tpl.querySelector('.lt').textContent = '—';
@@ -12613,6 +12640,12 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
           sign = r;
           if (r.freight && !r.oversized && !optional) signFreightTaken = true;
         }
+      } else if (signKind && SINALITE.table().families[signKind]) {
+        /* A SinaLite row's catalogue price is 0 — its size and quantity carry
+           the price — so a line posted without a material would save at $0
+           and skip the minimum, typed price or not (code review, 2026-10-15). */
+        signErrors.push({ line: i + 1, what: desc || prod.name,
+          error: `Pick the ${SINALITE.table().families[signKind].label.toLowerCase()} size and material.` });
       }
       if (priceTyped) typedPrices.push({ kind: 'unit', value: round2(Number(rawUnit)), what: desc || (prod ? prod.name : `Line ${i + 1}`) });
       /* No price typed: the sign's own price is the line's price. */
@@ -12994,7 +13027,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     if (signErrors.length) {
       return res.status(400).send(quotePage('A sign size cannot be made', `
         <div class="card">
-          <div class="warn">Nothing was saved — ${signErrors.length === 1 ? 'a sign' : 'some signs'} could not be priced.</div>
+          <div class="warn">Nothing was saved — ${signErrors.length === 1 ? 'a sized item' : 'some sized items'} could not be priced.</div>
           <ul class="muted" style="margin:8px 0 0;padding-left:18px">
             ${signErrors.map((o) => `<li>Line ${o.line} — ${escEmail(String(o.what))}: ${escEmail(o.error)}</li>`).join('')}
           </ul>
@@ -14127,9 +14160,13 @@ app.get('/q/:code', async (req, res) => {
                       class="cq" data-line="${ix}"
                       name="qty_${ix}" value="${parseInt(i.qty, 10) || 0}"
                       style="width:64px;padding:5px;font-size:14px;text-align:right">`}</td>
-        <td class="num" data-each="${ix}">${cut
+        <td class="num"><span data-each="${ix}">${cut
           ? `<span style="color:#9aa3b2;text-decoration:line-through">${moneyEach(i.qty > 0 ? goodsList / i.qty : 0)}</span><br>${moneyEach(fig.each)}`
-          : moneyEach(fig.each)}${fig.folded > 0 ? `<div class="muted" style="font-size:11px">incl. ${money(fig.folded)} supplier delivery</div>` : ''}</td>
+          : moneyEach(fig.each)}</span>${
+          /* Outside the data-each span: the quantity estimate and the optional
+             items rewrite that span, and the delivery inside the price must
+             stay said while they do. */
+          fig.folded > 0 ? `<div class="muted" style="font-size:11px">incl. ${money(fig.folded)} supplier delivery</div>` : ''}</td>
         <td class="num" data-amount="${ix}">${cut
           ? `<span style="color:#9aa3b2;text-decoration:line-through">${money(goodsList)}</span><br>
              <b style="color:#166534">${money(goods)}</b>`
@@ -14465,10 +14502,9 @@ ${quotePricingSource()}
          figure the shop would not charge. */
       var RUSH_PCT = ${Number(q.rush_pct) || 0};
       function m2(v){ return '$' + (Math.round(v*100)/100).toFixed(2); }
-      /* moneyEach() on the server: four places under a dollar, so 3,000 cards
-         read $0.1033 each and the line still foots. */
-      function mEach(v){ v = Number(v) || 0; return Math.abs(v) >= 1 ? '$' + v.toFixed(2)
-        : '$' + (Math.round(v*10000)/10000).toFixed(4).replace(/0{1,2}$/, ''); }
+      /* The server's own moneyEach(), so 3,000 cards read $0.1033 each here too. */
+      ${moneyEach.toString()}
+      var mEach = moneyEach;
 
       /* Order-level charges (freight) are paid once an order: two options each
          carrying their own copy were both added once a quantity changed
@@ -14578,8 +14614,8 @@ ${applyOptionChoice.toString()}
         })};
         function r2(v){ return Math.round(Number(v || 0) * 100) / 100; }
         function m(v){ return '$' + r2(v).toFixed(2); }
-        function mEach(v){ v = Number(v) || 0; return Math.abs(v) >= 1 ? '$' + v.toFixed(2)
-          : '$' + (Math.round(v*10000)/10000).toFixed(4).replace(/0{1,2}$/, ''); }
+        ${moneyEach.toString()}
+        var mEach = moneyEach;
         function set(id, html){ var el = document.getElementById(id); if (el) el.innerHTML = html; }
         function show(id, on){ var el = document.getElementById(id); if (el) el.style.display = on ? '' : 'none'; }
         var boxes = Array.prototype.slice.call(document.querySelectorAll('input.opt'));

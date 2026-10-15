@@ -53,17 +53,35 @@ function priceEach(cost, ship, qty) {
  * SinaLite's own table sometimes charges more per piece at a bigger tier; the
  * ladder keeps that tier's real price rather than undercutting its cost.
  */
-function ladderFrom(rows) {
-  return (rows || [])
-    .filter((r) => r && Number(r.qty) > 0 && Number(r.cost) > 0)
-    .sort((a, b) => a.qty - b.qty)
+function ladderFrom(rows, where = 'sinalite') {
+  /* A row that cannot be priced is SAID, never skipped quietly: a missing tier
+     reads as a gap nobody sees until a job is quoted from the wrong one. */
+  const ok = [];
+  for (const r of rows || []) {
+    if (r && Number(r.qty) > 0 && Number(r.cost) > 0) ok.push(r);
+    else console.error('[sinalite] ' + where + ': unpriceable row skipped ' + JSON.stringify(r));
+  }
+  return ok.sort((a, b) => a.qty - b.qty)
     .map((r) => [Number(r.qty), priceEach(r.cost, r.ship, r.qty)]);
 }
 
-let cache = null;
+/* Re-read when the file changes, so a fresh capture reaches the next quote
+   without a restart. A file that cannot be read is reported (and published
+   as `error`), not mistaken for "no SinaLite items". */
+let cache = null, cacheMtime = null, loadError = null;
 function load() {
-  if (cache) return cache;
-  try { cache = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); } catch { cache = { captured: null, products: {} }; }
+  let mtime = null;
+  try { mtime = fs.statSync(DATA_FILE).mtimeMs; } catch { /* reported below */ }
+  if (cache && mtime === cacheMtime) return cache;
+  cacheMtime = mtime;
+  try {
+    cache = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    loadError = null;
+  } catch (e) {
+    loadError = 'SinaLite prices unreadable (' + DATA_FILE + '): ' + e.message;
+    console.error('[sinalite] ' + loadError);
+    cache = { captured: null, products: {} };
+  }
   return cache;
 }
 
@@ -82,7 +100,7 @@ function familyOf(key, p) {
     prices[mat.key] = {};
     for (const size of p.sizes) {
       const rows = (p.rows || []).filter((r) => r.mat === mat.key && r.size === size.key);
-      const lad = ladderFrom(rows);
+      const lad = ladderFrom(rows, key + ' ' + mat.key + '/' + size.key);
       if (!lad.length) continue;
       prices[mat.key][size.key] = { '': lad };
       min = Math.min(min, lad[0][0]);
@@ -104,12 +122,15 @@ function familyOf(key, p) {
 let built = null, builtFrom = null;
 function table() {
   const d = load();
-  if (built && builtFrom === d) return built;
-  const families = {};
-  for (const [key, p] of Object.entries(d.products || {})) families[key] = familyOf(key, p);
-  built = { families, captured: d.captured || null, stale: stale(), ship_to: d.ship_to || null };
-  builtFrom = d;
-  return built;
+  if (!built || builtFrom !== d) {
+    const families = {};
+    for (const [key, p] of Object.entries(d.products || {})) families[key] = familyOf(key, p);
+    built = { families, captured: d.captured || null, ship_to: d.ship_to || null };
+    builtFrom = d;
+  }
+  /* Worked out on every call: a long-running server must start saying
+     "stale" the day the prices pass STALE_DAYS, not at its next restart. */
+  return { ...built, stale: stale(), ...(loadError ? { error: loadError } : {}) };
 }
 
 /* Product name -> family, first match wins. The names are the ones
@@ -123,6 +144,6 @@ function kindOf(name) {
 }
 
 /** For tests: swap the data in. */
-function _setData(d) { cache = d; }
+function _setData(d) { cache = d; cacheMtime = (() => { try { return fs.statSync(DATA_FILE).mtimeMs; } catch { return null; } })(); loadError = null; }
 
 module.exports = { priceEach, shipBilled, ladderFrom, table, kindOf, ageDays, stale, familyOf, _setData, DATA_FILE, STALE_DAYS };
