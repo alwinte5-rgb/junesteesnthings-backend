@@ -23020,7 +23020,13 @@ app.post('/admin/quote/:code/proofs', requireAdmin, async (req, res) => {
   const b = req.body || {};
   const url = String(b.url || '');
   const to = (m) => res.redirect(`${jobPath(code)}?proof_msg=${m}#proofs`);
-  if (actorLevel('quotes.view') !== 'on' && !(await designJobFor(code, currentActor()))) return res.redirect(designHome());
+  /* Whoever the job page shows the upload to: the quote boards, the job's
+     designer, or a helper the owner tagged the order for in Team chat. The
+     tag was left out, so a tagged helper's proof uploaded to Cloudinary and
+     the save then bounced them to Design jobs with nothing kept (owner,
+     2026-10-15). */
+  if (actorLevel('quotes.view') !== 'on' && !(await designJobFor(code, currentActor()))
+      && !(await ownerTaggedFor(code, currentActor()).catch(() => false))) return res.redirect(designHome());
   if (!PROOFS.proofUrlOk(url, QPHOTOS.cloudName())) return to('bad');
   try {
     const { rows: [q] } = await pool.query('SELECT code FROM quotes WHERE code = $1', [code]);

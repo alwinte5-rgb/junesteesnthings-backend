@@ -95,3 +95,12 @@ test('limits: one 10,000 character limit for messages; texts stay 300', () => {
   assert.strictEqual(require('../tools/lib/job-notes').BODY_MAX, 10000);
   assert.match(src, /\.adm-main textarea\{min-height:120px/);
 });
+
+test('a helper the owner tagged an order for can save a proof on it, as the job page offers', () => {
+  /* 2026-10-15: the upload reached Cloudinary, then the save refused the
+     tagged helper and sent them to Design jobs with nothing kept. */
+  const at = src.indexOf("app.post('/admin/quote/:code/proofs'");
+  assert.ok(at > 0, 'proof save route not found');
+  const head = src.slice(at, src.indexOf('proofUrlOk', at));
+  assert.match(head, /ownerTaggedFor\(code, currentActor\(\)\)/);
+});
