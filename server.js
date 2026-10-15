@@ -1376,6 +1376,9 @@ async function initStaffTables() {
      NULL until the owner assigns one, and everyone does all of it until then.
      The role adds its own course after the consolidated Sales course. */
   await pool.query('ALTER TABLE staff ADD COLUMN IF NOT EXISTS sales_role TEXT');
+  /* Archived helpers (owner, 2026-10-15: "purge them from the system, keep the
+     info in the backend but not visible"): off every list, records kept. */
+  await pool.query('ALTER TABLE staff ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ');
   /* Proofs uploaded on a job (tools/lib/job-proofs.js). uploaded_by is the
      helper, or NULL for the owner; sent_at is set when a message carrying its
      link actually goes to the customer. */
@@ -28698,16 +28701,23 @@ const isoDate = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) 
 /** A pay rate typed on the Staff page: 0 to `max`, to the cent. */
 const staffRate = (v, max) => Math.round(Math.min(max, Math.max(0, Number(v) || 0)) * 100) / 100;
 
-async function staffRoster({ activeOnly = false } = {}) {
+/* Names of archived helpers, kept so old records still say who did what
+   (nameOf), though the helpers themselves are off every list. */
+const ARCHIVED_NAMES = new Map();
+
+/** The helpers. Archived ones are left out unless `includeArchived` (only the
+ *  Staff page's Archived tab and a direct look-up of one person ask). */
+async function staffRoster({ activeOnly = false, includeArchived = false } = {}) {
   const { rows } = await pool.query(
-    `SELECT id, name, email, active, perms, commission_pct, shop_commission_pct, hourly_rate, training_track, sales_role, last_seen_at, created_at FROM staff
+    `SELECT id, name, email, active, perms, commission_pct, shop_commission_pct, hourly_rate, training_track, sales_role, last_seen_at, created_at, archived_at FROM staff
       ${activeOnly ? 'WHERE active' : ''} ORDER BY active DESC, name`);
-  return rows;
+  for (const r of rows) if (r.archived_at) ARCHIVED_NAMES.set(r.id, r.name);
+  return includeArchived ? rows : rows.filter((r) => !r.archived_at);
 }
 function nameOf(roster, id) {
   if (id == null) return 'Owner';
   const s = roster.find((r) => r.id === id);
-  return s ? s.name : `Helper #${id}`;
+  return s ? s.name : ARCHIVED_NAMES.get(id) || `Helper #${id}`;
 }
 function whenShort(d) {
   return d ? new Date(d).toLocaleString('en-US', { timeZone: SHOP_TZ, month: 'short', day: 'numeric',
@@ -28810,7 +28820,31 @@ function cloudflareStepCard(name, email) {
 }
 
 async function renderStaffPage(req, res, extra = '') {
-  const roster = await staffRoster();
+  const everyone = await staffRoster({ includeArchived: true });
+  const roster = everyone.filter((s) => !s.archived_at);
+  const archived = everyone.filter((s) => s.archived_at);
+  const showArchived = String((req.query || {}).archived || '') === '1';
+  const tabs = filterChips([
+    { label: 'Team', href: '/admin/staff', on: !showArchived, count: roster.length || null },
+    { label: 'Archived', href: '/admin/staff?archived=1', on: showArchived, count: archived.length || null },
+  ]);
+  if (showArchived) {
+    /* Archived helpers: their record stays (hours, pay, messages, work), off
+       every list and unable to sign in. Restore brings them back, disabled. */
+    return res.send(adminPage('Staff', `
+      ${pageHeader('Staff', 'Archived helpers: kept for the records, hidden everywhere else. They cannot sign in.',
+        '<a class="btn btn-ghost" href="/admin/team">Team</a> <a class="btn btn-ghost" href="/admin/approvals">Approvals</a>')}
+      ${tabs}
+      ${flash(req.query)}
+      <div class="card">${archived.length ? archived.map((s) => `<div class="row-i" id="staff-${s.id}"><span class="row-main"><b>${escEmail(s.name)}</b>
+          <div class="row-sub">${escEmail(s.email)} &middot; ${escEmail(TRAINING.TRACKS[TRAINING.trackOf(s.training_track)].label)} path
+            &middot; ${money(Number(s.hourly_rate || 0))}/h &middot; added ${escEmail(whenShort(s.created_at))}
+            &middot; last seen ${escEmail(whenShort(s.last_seen_at))} &middot; archived ${escEmail(whenShort(s.archived_at))}</div>
+          <div class="row-sub"><a href="/admin/timeclock?staff=${s.id}">Their clocked hours</a></div></span>
+        <span class="row-end"><form method="post" action="/admin/staff/${s.id}" style="margin:0" data-once>
+          <input type="hidden" name="action" value="unarchive"><button type="submit" class="btn btn-ghost">Restore</button></form></span></div>`).join('')
+        : emptyState('Nobody is archived. Disable a helper on the Team tab, then Archive them.')}</div>${SHIP_ONCE_JS}`, 'team'));
+  }
   /* Active helpers only: a disabled helper has nothing left to do here. */
   const training = new Map(await Promise.all(roster.filter((s) => s.active).map((s) => staffTrainingSummary(s.id)
     .then((t) => [s.id, t]).catch((e) => { console.error('staff training summary failed:', e.message); return [s.id, null]; }))));
@@ -28832,6 +28866,10 @@ async function renderStaffPage(req, res, extra = '') {
         <form method="post" action="/admin/staff/${s.id}" style="margin:0">
           <input type="hidden" name="action" value="${s.active ? 'disable' : 'enable'}">
           <button type="submit" class="btn btn-ghost">${s.active ? 'Disable now' : 'Enable'}</button></form>
+        ${s.active ? '' : `<form method="post" action="/admin/staff/${s.id}" style="margin:0" data-once
+            onsubmit="return confirm('Archive ${escEmail(s.name).replace(/'/g, '&#39;')}? They leave every list; their hours, pay and messages are kept.')">
+          <input type="hidden" name="action" value="archive">
+          <button type="submit" class="btn btn-ghost" style="color:#b91c1c">Archive</button></form>`}
       </div>
       <details style="margin-top:10px"><summary>Every permission, one by one</summary>
         <form method="post" action="/admin/staff/${s.id}">
@@ -28872,6 +28910,7 @@ async function renderStaffPage(req, res, extra = '') {
   res.send(adminPage('Staff', `
     ${pageHeader('Staff', 'Each helper signs in through Cloudflare with their own email. Switch what they can do at any time; it applies on their next click.',
       '<a class="btn btn-ghost" href="/admin/team">Team</a> <a class="btn btn-ghost" href="/admin/approvals">Approvals</a>')}
+    ${tabs}
     ${flash(req.query)}${extra}
     ${cfAccess ? '' : `<div class="warn">Sign-in is switched off until CF_ACCESS_TEAM_DOMAIN, CF_ACCESS_AUD and OWNER_EMAILS
       are set on the backend service in Railway.</div>`}
@@ -28941,7 +28980,7 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
   const b = req.body || {};
   if (!id) return res.redirect('/admin/staff');
   try {
-    const { rows: [s] } = await pool.query('SELECT id, name, email, active, training_track, hourly_rate FROM staff WHERE id = $1', [id]);
+    const { rows: [s] } = await pool.query('SELECT id, name, email, active, training_track, hourly_rate, archived_at FROM staff WHERE id = $1', [id]);
     if (!s) return back(res, '/admin/staff', 'err', 'No such helper.');
     switch (String(b.action)) {
       case 'preset': {
@@ -28965,7 +29004,29 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
         const mailErr = await sendStaffWelcome(s, b, w.details);
         return back(res, `/admin/staff#staff-${id}`, mailErr ? 'err' : 'ok', mailErr || `Welcome email sent to ${s.email}.`);
       }
+      case 'archive': {
+        /* Disabled first, and nothing still owed or open: archiving must never
+           hide wages to pay or work in hand. */
+        if (s.active) return back(res, `/admin/staff#staff-${id}`, 'err', `Disable ${s.name} before archiving them.`);
+        const [{ rows: [hrs] }, { rows: [tasks] }, { rows: [art] }] = await Promise.all([
+          pool.query('SELECT COALESCE(SUM(hours), 0)::float AS h FROM staff_hours WHERE staff_id = $1 AND paid_at IS NULL', [id]),
+          pool.query('SELECT COUNT(*)::int AS n FROM staff_tasks WHERE assigned_to = $1 AND done_at IS NULL', [id]),
+          pool.query(`SELECT COUNT(*)::int AS n FROM art_requests WHERE assigned_to = $1 AND status <> 'approved'`, [id]),
+        ]);
+        const left = [hrs.h > 0 ? `${hrs.h} approved hours not yet paid (pay them on Team)` : '',
+          tasks.n ? `${tasks.n} open task${tasks.n === 1 ? '' : 's'} (reassign or close them on Tasks)` : '',
+          art.n ? `${art.n} design job${art.n === 1 ? '' : 's'} assigned to them` : ''].filter(Boolean);
+        if (left.length) return back(res, `/admin/staff#staff-${id}`, 'err', `Not archived: ${s.name} still has ${left.join('; ')}.`);
+        await pool.query('UPDATE staff SET archived_at = NOW(), active = FALSE WHERE id = $1 AND archived_at IS NULL', [id]);
+        logActivity(currentActor(), 'helper archived', { type: 'staff', id }, { name: s.name });
+        return back(res, '/admin/staff?archived=1', 'ok', `${s.name} is archived: off every list, records kept.`);
+      }
+      case 'unarchive':
+        await pool.query('UPDATE staff SET archived_at = NULL WHERE id = $1', [id]);
+        logActivity(currentActor(), 'helper restored', { type: 'staff', id }, { name: s.name });
+        return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is back on the Team tab, still disabled. Enable them if they are coming back.`);
       case 'enable':
+        if (s.archived_at) return back(res, '/admin/staff?archived=1', 'err', `Restore ${s.name} from Archived first.`);
         await pool.query('UPDATE staff SET active = TRUE WHERE id = $1', [id]);
         return back(res, '/admin/staff', 'ok', `${s.name} can sign in again.`);
       case 'track': {
@@ -29904,11 +29965,13 @@ app.post('/admin/clock/ping', requireAdmin, (req, res) => res.status(204).end())
 app.get('/admin/timeclock', requireAdmin, async (req, res) => {
   try {
     const week = clockWeekParam(req.query.week);
-    const everyone = await staffRoster();
+    /* An archived helper is reachable only when asked for by id (their old
+       weeks, from the Archived tab); they are on no list. */
+    const everyone = await staffRoster({ includeArchived: true });
     const staffId = intIn(req.query.staff);
     /* Active helpers, plus the one asked for: someone disabled before their
        last week was approved can still be reviewed. */
-    const roster = everyone.filter((r) => r.active || r.id === staffId);
+    const roster = everyone.filter((r) => (r.active && !r.archived_at) || r.id === staffId);
     const chips = (id) => roster.map((r) => `<a class="btn ${r.id === id ? '' : 'btn-ghost'}" href="/admin/timeclock?staff=${r.id}&amp;week=${week}">${escEmail(r.name)}</a>`).join(' ');
     const weekNav = (id) => `<a class="btn btn-ghost" href="/admin/timeclock?${id ? `staff=${id}&amp;` : ''}week=${weekShift(week, -7)}">&larr; Earlier</a>
       ${week < TEAM.weekOf(new Date()) ? `<a class="btn btn-ghost" href="/admin/timeclock?${id ? `staff=${id}&amp;` : ''}week=${weekShift(week, 7)}">Later &rarr;</a>` : ''}`;
@@ -31990,7 +32053,7 @@ async function teamChatUnread() {
     ? await pool.query(`SELECT COUNT(*)::int AS n FROM team_messages
                          WHERE staff_id = $1 AND from_owner AND read_at IS NULL`, [a.id])
     : await pool.query(`SELECT COUNT(*)::int AS n FROM team_messages m JOIN staff s ON s.id = m.staff_id
-                         WHERE NOT m.from_owner AND m.read_at IS NULL`);
+                         WHERE NOT m.from_owner AND m.read_at IS NULL AND s.archived_at IS NULL`);
   const [roster, channels] = await Promise.all([staffRoster(), teamChannels()]);
   const mine = channelsFor(a, channels, roster);
   const per = await channelUnread(a, mine.map((c) => c.id));
