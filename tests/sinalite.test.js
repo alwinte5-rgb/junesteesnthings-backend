@@ -199,6 +199,9 @@ test('stale SinaLite prices are said on the quote sizer and in the morning email
 });
 
 test('switching Category clears the old product BEFORE filtering, so its section closes', () => {
-  const i = SERVER.indexOf("sel.value = '';\n            sel.dispatchEvent(new Event('change', { bubbles: true }));\n          }\n          pcatApply(sel, t.value);");
-  assert.ok(i > 0);
+  const clear = SERVER.indexOf("Cleared FIRST: pcatApply keeps");
+  assert.ok(clear > 0, 'category switch handler not found');
+  const blank = SERVER.indexOf("sel.value = '';", clear);
+  const apply = SERVER.indexOf('pcatApply(sel, t.value);', clear);
+  assert.ok(blank > 0 && apply > blank, 'the product is cleared before the filter is applied');
 });
