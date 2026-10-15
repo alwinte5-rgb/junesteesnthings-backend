@@ -7487,7 +7487,7 @@ function quoteStage(q) {
  * `amount` is the quote TOTAL. It used to be written as `subtotal`, so every
  * deal understated the job by the tax.
  */
-async function syncDealStage(q) {
+async function syncDealStage(q, { closeDate = false } = {}) {
   if (!q || !q.brevo_deal_id) return;
   const stage = quoteStage(q);
   try {
@@ -7496,6 +7496,8 @@ async function syncDealStage(q) {
         pipeline: BREVO_PIPELINE,
         deal_stage: BREVO_STAGE[stage],
         amount: parseFloat(Number(q.total || 0).toFixed(2)),
+        /* A reinstated quote has a new valid-until: its deal closes then. */
+        ...(closeDate && q.valid_until ? { close_date: new Date(q.valid_until).toISOString() } : {}),
       },
     });
   } catch (e) {
@@ -19077,8 +19079,10 @@ function quoteIsExpired(q) {
  *  job page, otherwise the expired list on the board). */
 function reinstateForm(q, back = '') {
   if (!quoteIsExpired(q)) return '';
+  /* Only for an account that may use it, like every other control. */
+  if (!STAFF.mayUseRoute(currentActor() || OWNER_ACTOR, 'POST', '/admin/quote/:code/reinstate')) return '';
   return `<form method="POST" action="/admin/quote/${escEmail(q.code)}/reinstate" style="display:inline;margin:0"
-      onsubmit="return confirm('Reinstate ${escEmail(q.code)} at the same prices, good for 14 more days?')">
+      onsubmit="if(!confirm('Reinstate ${escEmail(q.code)} at the same prices, good for 14 more days?'))return false;var b=this.querySelector('button');b.disabled=true;b.textContent='Reinstating…';return true">
     <input type="hidden" name="back" value="${back === 'job' ? 'job' : ''}">
     <button type="submit" class="btn btn-ghost" style="padding:8px 16px;font-size:13px">Reinstate (14 days)</button></form>`;
 }
@@ -19097,15 +19101,23 @@ app.post('/admin/quote/:code/reinstate', requireAdmin, async (req, res) => {
     const { rows: [q0] } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
     if (!quoteIsExpired(q0)) return back(res, where, 'err', 'That quote is not expired, so there is nothing to reinstate.');
     await snapshotQuote(code, 'reinstate', clientIp(req));
+    /* CURRENT_DATE is the shop's day: database sessions run on Chicago time.
+       An open change request comes back as one. The automatic follow-up is
+       marked done: the owner is told to send the link themselves, and the
+       customer should not get a second message an hour later. The WHERE
+       repeats the expiry test, so a quote saved in the meantime is left be. */
     const { rows } = await pool.query(
       `UPDATE quotes SET valid_until = CURRENT_DATE + 14,
-              status = CASE WHEN viewed_at IS NOT NULL THEN 'viewed' ELSE 'sent' END
+              status = CASE WHEN change_request IS NOT NULL AND change_request <> '' THEN 'changes'
+                            WHEN viewed_at IS NOT NULL THEN 'viewed' ELSE 'sent' END,
+              followed_up_at = COALESCE(followed_up_at, NOW())
         WHERE code = $1 AND accepted_at IS NULL AND cancelled_at IS NULL AND status NOT IN ('held', 'draft')
+          AND (status = 'expired' OR valid_until < CURRENT_DATE)
         RETURNING *`, [code]);
     if (!rows.length) return back(res, where, 'err', 'That quote could not be reinstated.');
-    syncDealStage(rows[0]).catch(() => {});
+    syncDealStage(rows[0], { closeDate: true }).catch(() => {});
     console.log(`quote ${code}: reinstated until ${rows[0].valid_until && new Date(rows[0].valid_until).toISOString().slice(0, 10)}`);
-    return back(res, toJob ? where : `/admin/production/${code}`, 'ok',
+    return back(res, where, 'ok',
       `Reinstated: good until ${dayShort(rows[0].valid_until)} at the same prices. Send them the link again so they know.`);
   } catch (err) {
     console.error('reinstate failed:', err.message);
