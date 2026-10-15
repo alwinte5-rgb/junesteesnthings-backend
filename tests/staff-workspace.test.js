@@ -287,7 +287,10 @@ test('without Cloudflare configured, every staff page is refused, never opened',
 test('the owner is named by OWNER_EMAILS, a helper by an active staff row, anyone else is refused', () => {
   assert.ok(requireAdminSrc.indexOf('cfAccess.owners.includes(email)') < requireAdminSrc.indexOf('staffByEmail(email)'));
   assert.match(requireAdminSrc, /if \(!staff\) return notOnTeam\(req, res, email\);/);
-  assert.match(requireAdminSrc, /if \(!STAFF\.mayUseRoute\(staff, req\.method, req\.route && req\.route\.path\)\) return refuseStaff/);
+  assert.match(requireAdminSrc, /if \(!STAFF\.mayUseRoute\(staff, req\.method, req\.route && req\.route\.path\)\) \{/);
+  /* The one exception: viewing a job the owner tagged for this helper. */
+  assert.match(requireAdminSrc, /req\.method === 'GET' && req\.route && String\(req\.route\.path\)\.startsWith\('\/admin\/production\/:code'\) &&\s*await ownerTaggedFor\(/);
+  assert.match(requireAdminSrc, /if \(!taggedJob\) return refuseStaff\(req, res, staff\);/);
   const lookup = src.slice(src.indexOf('async function staffByEmail('), src.indexOf('\n}\n', src.indexOf('async function staffByEmail(')));
   assert.match(lookup, /WHERE lower\(s\.email\) = \$1/);
   assert.match(lookup, /if \(!s \|\| !s\.active\) return null;/);

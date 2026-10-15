@@ -3606,7 +3606,14 @@ async function requireAdmin(req, res, next) {
   staff.path = req.originalUrl;
   noteStaffIp(staff.id, clientIp(req));
   if (isPersonActivity(req)) notePing(staff.id);
-  if (!STAFF.mayUseRoute(staff, req.method, req.route && req.route.path)) return refuseStaff(req, res, staff);
+  if (!STAFF.mayUseRoute(staff, req.method, req.route && req.route.path)) {
+    /* One exception: the job page of an order the owner tagged for this
+       helper in Team chat (ownerTaggedFor). Viewing only; every control on it
+       is still checked against their own permissions. */
+    const taggedJob = req.method === 'GET' && req.route && String(req.route.path).startsWith('/admin/production/:code') &&
+      await ownerTaggedFor(String(req.params.code || '').toUpperCase(), staff).catch(() => false);
+    if (!taggedJob) return refuseStaff(req, res, staff);
+  }
   logMutationOnFinish(req, res, staff);
   return actorStore.run(staff, next);
 }
@@ -22159,16 +22166,36 @@ function readerName(roster, key) {
 /** May this person open the job? The owner and anyone with quotes.view open
  *  any job; everyone else the jobs designJobFor gives them. */
 async function canOpenJob(code, actor) {
-  if (!actor || actor.kind !== 'staff' || STAFF.levelOf(actor, 'quotes.view') === 'on') {
+  if (!actor || actor.kind !== 'staff' || STAFF.levelOf(actor, 'quotes.view') === 'on' || await ownerTaggedFor(code, actor)) {
     const { rows } = await pool.query('SELECT 1 FROM quotes WHERE code = $1 AND cancelled_at IS NULL', [code]);
     return rows.length > 0;
   }
   return !!(await designJobFor(code, actor));
 }
 
-/** The page a person opens a job on. */
-function jobLinkFor(actor, code) {
-  return !actor || actor.kind !== 'staff' || STAFF.levelOf(actor, 'quotes.view') === 'on'
+/** A job the OWNER tagged in a message this helper can read: one sent to
+ *  them, or posted in a channel they are in. The tag is the owner sharing that
+ *  one job, so the helper may open its job page without the quote boards
+ *  (owner, 2026-10-15: "the tagged quotes in the messages dont open ... for
+ *  the helper"). A tag a helper puts on their own message opens nothing new. */
+async function ownerTaggedFor(code, actor) {
+  if (!actor || actor.kind !== 'staff' || !QUOTE_CODE_RE.test(String(code || ''))) return false;
+  const { rows: [dm] } = await pool.query(
+    'SELECT 1 FROM team_messages WHERE staff_id = $1 AND from_owner AND quote_code = $2 LIMIT 1', [actor.id, code]);
+  if (dm) return true;
+  const { rows: chans } = await pool.query(
+    'SELECT DISTINCT channel_id FROM team_channel_messages WHERE staff_id IS NULL AND quote_code = $1', [code]);
+  if (!chans.length) return false;
+  const ids = new Set(chans.map((r) => Number(r.channel_id)));
+  const channels = (await teamChannels()).filter((c) => ids.has(Number(c.id)));
+  return channelsFor(actor, channels, await staffRoster()).length > 0;
+}
+
+/** The page a person opens a job on. A helper without the quote boards opens
+ *  the design page of their own art job, and the job page of one the owner
+ *  tagged for them (`tagged`). */
+function jobLinkFor(actor, code, tagged = false) {
+  return !actor || actor.kind !== 'staff' || STAFF.levelOf(actor, 'quotes.view') === 'on' || tagged
     ? `/admin/production/${code}` : `/admin/design/${code}`;
 }
 
@@ -31841,8 +31868,15 @@ function chatLineJson(m, open) {
 async function openableTags(lines) {
   const actor = currentActor() || OWNER_ACTOR;
   const codes = [...new Set(lines.map((m) => m.quote_code).filter((c) => c && QUOTE_CODE_RE.test(c)))];
-  const ok = await Promise.all(codes.map((c) => canOpenJob(c, actor).catch(() => false)));
-  return new Set(codes.filter((_, i) => ok[i]));
+  /* code -> the page it opens: the job page for the owner, a helper with the
+     boards, or one the owner tagged it for; else their own design page. */
+  const hrefs = await Promise.all(codes.map(async (c) => {
+    try {
+      if (!(await canOpenJob(c, actor))) return '';
+      return jobLinkFor(actor, c, await ownerTaggedFor(c, actor));
+    } catch { return ''; }
+  }));
+  return new Map(codes.map((c, i) => [c, hrefs[i]]).filter(([, h]) => h));
 }
 
 /** What an edit and an order tag add to a line. The first wording of an
@@ -31854,7 +31888,7 @@ function chatExtrasJson(m, mine, open) {
     edited: m.edited_at ? whenShort(m.edited_at) : '',
     original: m.edited_at && m.original_body != null && !mine && actor.kind !== 'staff' ? m.original_body : '',
     tag: m.quote_code && QUOTE_CODE_RE.test(m.quote_code)
-      ? { code: m.quote_code, href: open && open.has(m.quote_code) ? jobLinkFor(actor, m.quote_code) : '' } : null,
+      ? { code: m.quote_code, href: (open && open.get(m.quote_code)) || '' } : null,
   };
 }
 
