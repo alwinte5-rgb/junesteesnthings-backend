@@ -170,9 +170,11 @@ test('a SinaLite line saved without a size and material is refused, not priced a
   assert.match(SERVER, /else if \(signKind && SINALITE\.table\(\)\.families\[signKind\]\) \{/);
 });
 
-test('the supplier-delivery note sits outside the each-price the quote page rewrites', () => {
+test('the quote never tells the customer the supplier delivery inside a price', () => {
+  /* Owner, 2026-10-15: "incl. $10.00 supplier delivery this shouldnt show up
+     on the quote." The delivery stays inside the price; it is just not said. */
   assert.match(SERVER, /<td class="num"><span data-each="\$\{ix\}">/);
-  assert.match(SERVER, /<\/span>\$\{\s*\/\*[\s\S]{0,200}?\*\/\s*fig\.folded > 0 \?/);
+  assert.doesNotMatch(SERVER, /supplier delivery<\/div>/);
 });
 
 test('the category box is re-synced from code-set products and filtered sections are disabled for phones', () => {
