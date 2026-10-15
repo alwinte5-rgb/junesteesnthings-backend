@@ -3610,7 +3610,7 @@ async function requireAdmin(req, res, next) {
     /* One exception: the job page of an order the owner tagged for this
        helper in Team chat (ownerTaggedFor). Viewing only; every control on it
        is still checked against their own permissions. */
-    const taggedJob = req.method === 'GET' && req.route && String(req.route.path).startsWith('/admin/production/:code') &&
+    const taggedJob = req.method === 'GET' && req.route && TAGGED_JOB_ROUTES.has(req.route.path) &&
       await ownerTaggedFor(String(req.params.code || '').toUpperCase(), staff).catch(() => false);
     if (!taggedJob) return refuseStaff(req, res, staff);
   }
@@ -21376,22 +21376,28 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
         : `<div class="step-row step-auto" title="set automatically from your data — nothing to tap">${inner}<span class="step-auto-tag">auto</span></div>`;
     }).join('');
 
-    const messagesCard = await jobMessagesCard(q, req.query);
+    /* Someone without the quote boards is here by an owner's tag: what to make,
+       the art and the proofs, and the customer's messages as a designer sees
+       them. No prices, payments, certificates, credit or history. */
+    const actorNow = currentActor() || OWNER_ACTOR;
+    const boards = actorNow.kind !== 'staff' || STAFF.levelOf(actorNow, 'quotes.view') === 'on';
+    const messagesCard = boards ? await jobMessagesCard(q, req.query)
+      : await jobMessagesCard(q, req.query, { design: true, readOnly: actorLevel('customers.message') === 'off' })
+        .catch((e) => { console.error('messages card failed:', e.message); return ''; });
     const proofsCard = await jobProofsCard(q, req.query).catch((e) => { console.error('proofs card failed:', e.message); return ''; });
     const artCard = await jobArtCard(q, req.query).catch((e) => { console.error('art card failed:', e.message); return ''; });
     const teamNotesCard = await teamJobNotesCard(q, `/admin/production/${q.code}#team-notes`)
       .catch((e) => { console.error('team notes card failed:', e.message); return ''; });
-    const certificateCard = await jobCertificateCard(q, req.query);
+    const certificateCard = boards ? await jobCertificateCard(q, req.query) : '';
     const photosCard = jobPhotosCard(q);
     const notesCard = await jobNotesCard(q.code);
-    const creditCard = await jobCreditCard(q).catch((e) => { console.error('credit card failed:', e.message); return ''; });
-    const historyCard = await jobHistoryCard(q).catch((e) => { console.error('history card failed:', e.message); return ''; });
-    const upsellCard = await jobUpsellCard(q).catch((e) => { console.error('upsell card failed:', e.message); return ''; });
+    const creditCard = !boards ? '' : await jobCreditCard(q).catch((e) => { console.error('credit card failed:', e.message); return ''; });
+    const historyCard = !boards ? '' : await jobHistoryCard(q).catch((e) => { console.error('history card failed:', e.message); return ''; });
+    const upsellCard = !boards ? '' : await jobUpsellCard(q).catch((e) => { console.error('upsell card failed:', e.message); return ''; });
     /* A failed catalogue (or one that trips a line) still lists the lines,
        without their print places. Prices only for whoever sees the boards: a
        helper reaching a job by an owner's tag gets what to make. */
-    const actorNow = currentActor() || OWNER_ACTOR;
-    const showMoney = actorNow.kind !== 'staff' || STAFF.levelOf(actorNow, 'quotes.view') === 'on';
+    const showMoney = boards;
     const catalog = await catalogP;
     let orderCard = '';
     try { orderCard = jobOrderCard(q, catalog, { money: showMoney }); }
@@ -21402,8 +21408,9 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
     res.send(adminPage(`${q.code} — production`, `
       <h1>${escEmail(q.name || q.code)}</h1>
       <div class="sub">${escEmail(q.code)}${showMoney ? ` · ${money(q.total)}` : ''} ·
-        <a href="/admin/production" style="color:#1848B8">back to the board</a> ·
-        <a href="/admin/customer?q=${encodeURIComponent(q.email || q.phone || '')}" style="color:#1848B8">customer</a>${
+        ${boards ? `<a href="/admin/production" style="color:#1848B8">back to the board</a> ·
+        <a href="/admin/customer?q=${encodeURIComponent(q.email || q.phone || '')}" style="color:#1848B8">customer</a>`
+          : '<a href="/admin/team-chat" style="color:#1848B8">back to Team chat</a>'}${
           q.email && mayEmail && !['held', 'draft'].includes(q.status) && !q.cancelled_at ? ` ·
         <form method="POST" action="/admin/quote/${escEmail(q.code)}/email" style="display:inline;margin:0">
           <button type="submit" style="background:none;border:0;padding:0;color:#1848B8;font:inherit;cursor:pointer;text-decoration:underline">email the quote to them</button></form>${
@@ -22164,7 +22171,15 @@ function readerName(roster, key) {
 }
 
 /** May this person open the job? The owner and anyone with quotes.view open
- *  any job; everyone else the jobs designJobFor gives them. */
+ *  any job; everyone else the jobs designJobFor gives them, and an open job
+ *  the owner tagged for them in Team chat (ownerTaggedFor) — which also lets
+ *  them post team notes and attach tasks on it, as on their own art jobs. */
+/* What an owner's tag opens to a helper without the quote boards: the job page
+   and the customer's artwork for it. Never the customer's email attachments
+   or anything added under the job later — each route is named here on purpose
+   (code review on #298). */
+const TAGGED_JOB_ROUTES = new Set(['/admin/production/:code', '/admin/production/:code/artwork/:n', '/admin/production/:code/artwork.zip']);
+
 async function canOpenJob(code, actor) {
   if (!actor || actor.kind !== 'staff' || STAFF.levelOf(actor, 'quotes.view') === 'on' || await ownerTaggedFor(code, actor)) {
     const { rows } = await pool.query('SELECT 1 FROM quotes WHERE code = $1 AND cancelled_at IS NULL', [code]);
@@ -22179,16 +22194,32 @@ async function canOpenJob(code, actor) {
  *  (owner, 2026-10-15: "the tagged quotes in the messages dont open ... for
  *  the helper"). A tag a helper puts on their own message opens nothing new. */
 async function ownerTaggedFor(code, actor) {
-  if (!actor || actor.kind !== 'staff' || !QUOTE_CODE_RE.test(String(code || ''))) return false;
-  const { rows: [dm] } = await pool.query(
-    'SELECT 1 FROM team_messages WHERE staff_id = $1 AND from_owner AND quote_code = $2 LIMIT 1', [actor.id, code]);
-  if (dm) return true;
+  return (await ownerTaggedCodes([code], actor)).has(String(code || '').toUpperCase());
+}
+
+/** The codes among these that the owner tagged for this helper, in one pass.
+ *  Only while the job is OPEN (not cancelled, not delivered): the share ends
+ *  with the job, so a tag is not a key kept for ever (code review on #298).
+ *  A channel tag reaches whoever is in that channel. */
+async function ownerTaggedCodes(codes, actor) {
+  const want = [...new Set((codes || []).map((c) => String(c || '').toUpperCase()).filter((c) => QUOTE_CODE_RE.test(c)))];
+  if (!actor || actor.kind !== 'staff' || !want.length) return new Set();
+  const { rows: open } = await pool.query(
+    'SELECT code FROM quotes WHERE code = ANY($1) AND cancelled_at IS NULL AND delivered_at IS NULL', [want]);
+  const live = open.map((r) => r.code);
+  if (!live.length) return new Set();
+  const out = new Set();
+  const { rows: dms } = await pool.query(
+    'SELECT DISTINCT quote_code FROM team_messages WHERE staff_id = $1 AND from_owner AND quote_code = ANY($2)', [actor.id, live]);
+  for (const r of dms) out.add(r.quote_code);
+  const rest = live.filter((c) => !out.has(c));
+  if (!rest.length) return out;
   const { rows: chans } = await pool.query(
-    'SELECT DISTINCT channel_id FROM team_channel_messages WHERE staff_id IS NULL AND quote_code = $1', [code]);
-  if (!chans.length) return false;
-  const ids = new Set(chans.map((r) => Number(r.channel_id)));
-  const channels = (await teamChannels()).filter((c) => ids.has(Number(c.id)));
-  return channelsFor(actor, channels, await staffRoster()).length > 0;
+    'SELECT DISTINCT channel_id, quote_code FROM team_channel_messages WHERE staff_id IS NULL AND quote_code = ANY($1)', [rest]);
+  if (!chans.length) return out;
+  const mine = new Set(channelsFor(actor, await teamChannels(), await staffRoster()).map((c) => Number(c.id)));
+  for (const r of chans) if (mine.has(Number(r.channel_id))) out.add(r.quote_code);
+  return out;
 }
 
 /** The page a person opens a job on. A helper without the quote boards opens
@@ -22709,6 +22740,9 @@ app.get('/admin/design/:code', requireAdmin, async (req, res) => {
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/design');
   try {
     const q = await designJobFor(code, currentActor());
+    /* A job the owner tagged for them opens on its job page (links built
+       without knowing that land here). */
+    if (!q && await ownerTaggedFor(code, currentActor()).catch(() => false)) return res.redirect(`/admin/production/${code}`);
     if (!q) return res.status(404).send(adminPage('Not found', `<div class="card"><div class="warn">That job is not with you.</div><a class="btn btn-ghost" href="${designHome()}">${
       designHome() === '/admin/design' ? 'Your design jobs' : 'The schedule'}</a></div>`, 'design'));
     const catalog = await getCatalog();
@@ -31870,10 +31904,13 @@ async function openableTags(lines) {
   const codes = [...new Set(lines.map((m) => m.quote_code).filter((c) => c && QUOTE_CODE_RE.test(c)))];
   /* code -> the page it opens: the job page for the owner, a helper with the
      boards, or one the owner tagged it for; else their own design page. */
+  const boards = actor.kind !== 'staff' || STAFF.levelOf(actor, 'quotes.view') === 'on';
+  const tagged = boards ? new Set() : await ownerTaggedCodes(codes, actor).catch(() => new Set());
   const hrefs = await Promise.all(codes.map(async (c) => {
     try {
+      if (tagged.has(c)) return jobLinkFor(actor, c, true);
       if (!(await canOpenJob(c, actor))) return '';
-      return jobLinkFor(actor, c, await ownerTaggedFor(c, actor));
+      return jobLinkFor(actor, c);
     } catch { return ''; }
   }));
   return new Map(codes.map((c, i) => [c, hrefs[i]]).filter(([, h]) => h));

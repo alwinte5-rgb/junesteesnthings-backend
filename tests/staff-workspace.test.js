@@ -289,7 +289,8 @@ test('the owner is named by OWNER_EMAILS, a helper by an active staff row, anyon
   assert.match(requireAdminSrc, /if \(!staff\) return notOnTeam\(req, res, email\);/);
   assert.match(requireAdminSrc, /if \(!STAFF\.mayUseRoute\(staff, req\.method, req\.route && req\.route\.path\)\) \{/);
   /* The one exception: viewing a job the owner tagged for this helper. */
-  assert.match(requireAdminSrc, /req\.method === 'GET' && req\.route && String\(req\.route\.path\)\.startsWith\('\/admin\/production\/:code'\) &&\s*await ownerTaggedFor\(/);
+  assert.match(requireAdminSrc, /req\.method === 'GET' && req\.route && TAGGED_JOB_ROUTES\.has\(req\.route\.path\) &&\s*await ownerTaggedFor\(/);
+  assert.match(src, /const TAGGED_JOB_ROUTES = new Set\(\['\/admin\/production\/:code', '\/admin\/production\/:code\/artwork\/:n', '\/admin\/production\/:code\/artwork\.zip'\]\);/);
   assert.match(requireAdminSrc, /if \(!taggedJob\) return refuseStaff\(req, res, staff\);/);
   const lookup = src.slice(src.indexOf('async function staffByEmail('), src.indexOf('\n}\n', src.indexOf('async function staffByEmail(')));
   assert.match(lookup, /WHERE lower\(s\.email\) = \$1/);
