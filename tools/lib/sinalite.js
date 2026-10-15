@@ -211,6 +211,10 @@ function kindOf(name) {
 
 /* Inbound shipping, SinaLite (New York) to the shop, business days. */
 const INBOUND_DAYS = [2, 5];
+/* A saved SinaLite line whose family the table does not have right now (no
+   table on a cold start, a family dropped): the slowest lead any SinaLite item
+   has (pouches, 10-12 days + inbound), never the in-house window. */
+const FALLBACK_LEAD = [12, 17];
 
 /**
  * [min, max] business days before a SinaLite item is AT THE SHOP: SinaLite's
@@ -220,7 +224,7 @@ const INBOUND_DAYS = [2, 5];
  */
 function leadDays(kind) {
   const fam = table().families[kind];
-  if (!fam) return null;
+  if (!fam) return null;  // not a SinaLite kind here; deliveryEstimate decides (FALLBACK_LEAD)
   const t = String(fam.turnaround || '');
   const n = (t.match(/\d+/g) || []).map(Number);
   const prod = /next/i.test(t) ? [1, 1] : n.length ? [n[0], n[n.length - 1]] : [10, 10];
@@ -230,4 +234,4 @@ function leadDays(kind) {
 /** For tests: swap the data in. */
 function _setData(d) { cache = d; cacheMtime = (() => { try { return fs.statSync(DATA_FILE).mtimeMs; } catch { return null; } })(); loadError = null; }
 
-module.exports = { priceEach, shipBilled, ladderFrom, eachFor, leadDays, table, kindOf, ageDays, stale, familyOf, _setData, DATA_FILE, STALE_DAYS };
+module.exports = { priceEach, shipBilled, ladderFrom, eachFor, leadDays, FALLBACK_LEAD, table, kindOf, ageDays, stale, familyOf, _setData, DATA_FILE, STALE_DAYS };

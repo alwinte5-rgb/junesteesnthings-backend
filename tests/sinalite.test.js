@@ -278,7 +278,8 @@ test('SinaLite lead time (their turnaround + inbound shipping) sets the ready da
   assert.deepStrictEqual(lead, [12, 17], 'pouches: 10-12 business days at SinaLite, then 2-5 to the shop');
   assert.deepStrictEqual(SL.leadDays('xframe'), [3, 6], '"Next Business Day" reads as one day');
   assert.strictEqual(SL.leadDays('yard_sign'), null);
-  assert.match(SERVER, /const lead = i && i\.sign && i\.sign\.kind \? SINALITE\.leadDays\(i\.sign\.kind\) : null;/);
+  assert.match(SERVER, /: \(SINALITE\.leadDays\(kind\) \|\| SINALITE\.FALLBACK_LEAD\);/, 'an unavailable SinaLite family still takes the slowest SinaLite lead');
+  assert.deepStrictEqual(SL.FALLBACK_LEAD, [12, 17]);
 });
 
 test('a re-capture missing one offered size/material is refused; huge quantities do not blow the stack', () => {
@@ -332,4 +333,11 @@ test('codex round: saved price for untouched lines, slowest turnaround, honest e
   assert.strictEqual(me(310 / 3000, 3000, 310), '≈$0.1033', 'does not foot: says so');
   assert.strictEqual(me(0.25, 100, 25), '$0.25', 'foots: plain');
   assert.strictEqual(me(310 / 3000), '$0.1033', 'no line given: plain');
+});
+
+test('live estimates mark a non-footing each-price too; the customer quantity box allows the sized ceiling', () => {
+  assert.match(SERVER, /mEach\(qty > 0 \? \(r\.lineTotal - shownExtras\(r\)\) \/ qty : 0, qty, r\.lineTotal - shownExtras\(r\)\)/);
+  assert.match(SERVER, /mEach\(it\.qty > 0 \? \(it\.amount - cut\) \/ it\.qty : 0, it\.qty, it\.amount - cut\)/);
+  assert.match(SERVER, /type="number" min="0" max="\$\{QSIGNS\.MAX_QTY\}" step="1"/);
+  assert.match(SERVER, /Math\.min\(QSIGNS\.MAX_QTY, parseInt\(raw, 10\) \|\| 0\)/);
 });

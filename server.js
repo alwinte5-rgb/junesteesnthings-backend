@@ -7605,7 +7605,12 @@ function deliveryEstimate(from = new Date(), opts = {}) {
      the page promised 7). */
   let lo = pmin + extra + dig, hi = pmax + extra + dig;
   for (const i of items) {
-    const lead = i && i.sign && i.sign.kind ? SINALITE.leadDays(i.sign.kind) : null;
+    const kind = i && i.sign && i.sign.kind;
+    /* Signs365 kinds (banner + sign-families.js) are on the in-house window;
+       any other sized kind is SinaLite's, and with its family unavailable it
+       still takes the slowest SinaLite lead rather than none (Codex on #293). */
+    const lead = !kind || kind === 'banner' || SIGN_FAMILIES.FAMILIES[kind] ? null
+      : (SINALITE.leadDays(kind) || SINALITE.FALLBACK_LEAD);
     if (lead) { lo = Math.max(lo, lead[0] + extra); hi = Math.max(hi, lead[1] + extra); }
   }
 
@@ -14224,7 +14229,7 @@ app.get('/q/:code', async (req, res) => {
           : orderedSizeKeys(i, catalog).length
             ? `<div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end">${sizeInputs(i, ix)}</div>
                <div class="muted" style="font-size:11px;margin-top:4px">now ${i.qty}</div>`
-            : `<input form="changeform" type="number" min="0" max="10000" step="1"
+            : `<input form="changeform" type="number" min="0" max="${QSIGNS.MAX_QTY}" step="1"
                       class="cq" data-line="${ix}"
                       name="qty_${ix}" value="${parseInt(i.qty, 10) || 0}"
                       style="width:64px;padding:5px;font-size:14px;text-align:right">`}</td>
@@ -14631,7 +14636,7 @@ ${quotePricingSource()}
           if (each) each.innerHTML = same ? each.dataset.orig
             : '<span style="color:#9aa3b2;text-decoration:line-through">' +
               mEach(QITEMS[ix].unit_price) + '</span><br><b style="color:#b45309">' +
-              mEach(qty > 0 ? (r.lineTotal - shownExtras(r)) / qty : 0) + '</b>';
+              mEach(qty > 0 ? (r.lineTotal - shownExtras(r)) / qty : 0, qty, r.lineTotal - shownExtras(r)) + '</b>';
           /* The Amount column is the SHIRTS, matching the split rows below it —
              the extras have their own amounts and must not be counted twice. */
           var goodsNow  = Math.round((r.lineTotal - shownExtras(r)) * 100) / 100;
@@ -14755,7 +14760,7 @@ ${applyOptionChoice.toString()}
             var each = document.querySelector('[data-each="' + ix + '"]');
             [amt, each].forEach(function(el){ if (el && el.dataset.optOrig === undefined) el.dataset.optOrig = el.innerHTML; });
             var a2 = cut > 0 ? m(it.amount - cut) : (amt ? amt.dataset.optOrig : '');
-            var e2 = cut > 0 ? mEach(it.qty > 0 ? (it.amount - cut) / it.qty : 0) : (each ? each.dataset.optOrig : '');
+            var e2 = cut > 0 ? mEach(it.qty > 0 ? (it.amount - cut) / it.qty : 0, it.qty, it.amount - cut) : (each ? each.dataset.optOrig : '');
             /* dataset.orig is what the quantity estimate restores a cell to. */
             if (amt) { amt.innerHTML = a2; amt.dataset.orig = a2; }
             if (each) { each.innerHTML = e2; each.dataset.orig = e2; }
@@ -17095,9 +17100,11 @@ app.post('/q/:code/changes', orderRateLimit, async (req, res) => {
           return { qty: total, sizes };
         }
         const raw = one(b['qty' + '_' + ix]);
+        /* A single-quantity line (signs, SinaLite runs) goes to the sized-item
+           ceiling; per-size garment boxes above keep 10,000 each (Codex on #293). */
         const n = raw === undefined || String(raw).trim() === ''
           ? (parseInt(it.qty, 10) || 0)
-          : Math.max(0, Math.min(10000, parseInt(raw, 10) || 0));
+          : Math.max(0, Math.min(QSIGNS.MAX_QTY, parseInt(raw, 10) || 0));
         return { qty: n, sizes: null };
       });
 
