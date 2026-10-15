@@ -397,3 +397,17 @@ test('a quantity between runs recommends the better run next to it', () => {
   assert.ok(SERVER.includes("data-useqty="), 'the form offers a one-tap switch');
   assert.ok(SERVER.includes("L.querySelector('.q').readOnly ? '' :"), 'no switch where sizes set the quantity');
 });
+
+test('captures read SinaLite REGULAR prices, never a sale price', () => {
+  /* Owner, 2026-10-15: "those are sinalites sale prices. make sure we are
+     using the real prices and we can put on sale ourselfs as needed." Roll
+     labels, mugs and tumblers had been saved at sale prices. */
+  const cap = fs.readFileSync(path.join(__dirname, '..', 'tools', 'sinalite-capture.js'), 'utf8');
+  assert.match(cap, /const cost = regular\(await settled\(\)\);/);
+  assert.match(cap, /\/regular price\/i/);
+  assert.match(cap, /return m \? Number\(m\[0\]/, 'drinkware reads the first (regular) total');
+  const data = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'tools', 'data', 'sinalite-costs.json'), 'utf8'));
+  assert.doesNotMatch(data.source, /sale prices included/);
+  const each = (k, q) => data.products[k].rows.find((r) => r.qty === q).cost / q;
+  assert.ok(each('mug', 1) >= 8.58 && each('tumbler', 1) >= 19.23, 'drinkware at regular price');
+});

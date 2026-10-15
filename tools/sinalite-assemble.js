@@ -173,7 +173,7 @@ if (require.main === module) {
   const out = {
     captured: when.toISOString(),
     ship_to: 'Chicago IL 60657 (the shop), cheapest rate SinaLite offers',
-    source: 'tools/sinalite-capture.js, logged-in SinaLite trade prices (sale prices included)',
+    source: 'tools/sinalite-capture.js, logged-in SinaLite trade prices at REGULAR price (SinaLite sales left out; the shop runs its own)',
     products,
   };
   fs.writeFileSync(OUT, JSON.stringify(out, null, 2) + '\n');

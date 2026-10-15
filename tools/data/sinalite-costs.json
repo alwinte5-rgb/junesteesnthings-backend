@@ -1,7 +1,7 @@
 {
-  "captured": "2026-10-15T05:36:14.651Z",
+  "captured": "2026-10-15T16:00:00.000Z",
   "ship_to": "Chicago IL 60657 (the shop), cheapest rate SinaLite offers",
-  "source": "tools/sinalite-capture.js, logged-in SinaLite trade prices (sale prices included)",
+  "source": "tools/sinalite-capture.js, logged-in SinaLite trade prices at REGULAR price (SinaLite sales left out; the shop runs its own)",
   "products": {
     "brochure": {
       "name": "Trifold Brochures — 8.5x11, score and fold",
@@ -824,168 +824,168 @@
           "mat": "white_bopp",
           "size": "circle2",
           "qty": 25,
-          "cost": 52.25,
+          "cost": 117.25,
           "ship": 19.96
         },
         {
           "mat": "white_bopp",
           "size": "circle2",
           "qty": 50,
-          "cost": 52.72,
+          "cost": 117.72,
           "ship": 19.96
         },
         {
           "mat": "white_bopp",
           "size": "circle2",
           "qty": 100,
-          "cost": 53.67,
+          "cost": 118.67,
           "ship": 19.96
         },
         {
           "mat": "white_bopp",
           "size": "circle2",
           "qty": 250,
-          "cost": 61.48,
+          "cost": 121.48,
           "ship": 19.96
         },
         {
           "mat": "white_bopp",
           "size": "circle2",
           "qty": 500,
-          "cost": 86.08,
+          "cost": 126.08,
           "ship": 19.96
         },
         {
           "mat": "white_bopp",
           "size": "circle2",
           "qty": 1000,
-          "cost": 95.04,
+          "cost": 135.04,
           "ship": 19.96
         },
         {
           "mat": "white_bopp",
           "size": "circle3",
           "qty": 25,
-          "cost": 52.78,
+          "cost": 117.78,
           "ship": 19.96
         },
         {
           "mat": "white_bopp",
           "size": "circle3",
           "qty": 50,
-          "cost": 54.01,
+          "cost": 119.01,
           "ship": 19.96
         },
         {
           "mat": "white_bopp",
           "size": "circle3",
           "qty": 100,
-          "cost": 56.62,
+          "cost": 121.62,
           "ship": 19.96
         },
         {
           "mat": "white_bopp",
           "size": "circle3",
           "qty": 250,
-          "cost": 69.24,
+          "cost": 129.24,
           "ship": 19.96
         },
         {
           "mat": "white_bopp",
           "size": "circle3",
           "qty": 500,
-          "cost": 101.7,
+          "cost": 141.7,
           "ship": 19.96
         },
         {
           "mat": "white_bopp",
           "size": "circle3",
           "qty": 1000,
-          "cost": 126.18,
+          "cost": 166.18,
           "ship": 19.96
         },
         {
           "mat": "white_bopp",
           "size": "rect2x3",
           "qty": 25,
-          "cost": 52.32,
+          "cost": 117.32,
           "ship": 19.96
         },
         {
           "mat": "white_bopp",
           "size": "rect2x3",
           "qty": 50,
-          "cost": 53.13,
+          "cost": 118.13,
           "ship": 19.96
         },
         {
           "mat": "white_bopp",
           "size": "rect2x3",
           "qty": 100,
-          "cost": 54.72,
+          "cost": 119.72,
           "ship": 19.96
         },
         {
           "mat": "white_bopp",
           "size": "rect2x3",
           "qty": 250,
-          "cost": 64.1,
+          "cost": 124.1,
           "ship": 19.96
         },
         {
           "mat": "white_bopp",
           "size": "rect2x3",
           "qty": 500,
-          "cost": 91.27,
+          "cost": 131.27,
           "ship": 19.96
         },
         {
           "mat": "white_bopp",
           "size": "rect2x3",
           "qty": 1000,
-          "cost": 105.32,
+          "cost": 145.32,
           "ship": 19.96
         },
         {
           "mat": "white_bopp",
           "size": "rect3x4",
           "qty": 25,
-          "cost": 53.24,
+          "cost": 118.24,
           "ship": 19.96
         },
         {
           "mat": "white_bopp",
           "size": "rect3x4",
           "qty": 50,
-          "cost": 54.9,
+          "cost": 119.9,
           "ship": 19.96
         },
         {
           "mat": "white_bopp",
           "size": "rect3x4",
           "qty": 100,
-          "cost": 58.39,
+          "cost": 123.39,
           "ship": 19.96
         },
         {
           "mat": "white_bopp",
           "size": "rect3x4",
           "qty": 250,
-          "cost": 73.59,
+          "cost": 133.59,
           "ship": 19.96
         },
         {
           "mat": "white_bopp",
           "size": "rect3x4",
           "qty": 500,
-          "cost": 110.32,
+          "cost": 150.32,
           "ship": 19.96
         },
         {
           "mat": "white_bopp",
           "size": "rect3x4",
           "qty": 1000,
-          "cost": 143.12,
+          "cost": 183.12,
           "ship": 19.96
         }
       ]
@@ -1136,35 +1136,35 @@
           "mat": "1side",
           "size": "11oz",
           "qty": 1,
-          "cost": 6.18,
+          "cost": 8.58,
           "ship": 19.96
         },
         {
           "mat": "1side",
           "size": "11oz",
           "qty": 12,
-          "cost": 59.76,
+          "cost": 102.96,
           "ship": 29.73
         },
         {
           "mat": "1side",
           "size": "11oz",
           "qty": 36,
-          "cost": 177.84,
+          "cost": 308.88,
           "ship": 58.05
         },
         {
           "mat": "1side",
           "size": "11oz",
           "qty": 72,
-          "cost": 345.6,
+          "cost": 617.76,
           "ship": 96.31
         },
         {
           "mat": "1side",
           "size": "11oz",
           "qty": 144,
-          "cost": 691.2,
+          "cost": 1235.52,
           "ship": 186.78
         }
       ]
@@ -1197,35 +1197,35 @@
           "mat": "1side",
           "size": "20oz",
           "qty": 1,
-          "cost": 12.5,
+          "cost": 19.23,
           "ship": 19.96
         },
         {
           "mat": "1side",
           "size": "20oz",
           "qty": 12,
-          "cost": 129.72,
+          "cost": 230.76,
           "ship": 29.73
         },
         {
           "mat": "1side",
           "size": "20oz",
           "qty": 36,
-          "cost": 374.76,
+          "cost": 692.28,
           "ship": 60.33
         },
         {
           "mat": "1side",
           "size": "20oz",
           "qty": 72,
-          "cost": 722.88,
+          "cost": 1384.56,
           "ship": 101.72
         },
         {
           "mat": "1side",
           "size": "20oz",
           "qty": 144,
-          "cost": 1373.76,
+          "cost": 2769.12,
           "ship": 197.56
         }
       ]
