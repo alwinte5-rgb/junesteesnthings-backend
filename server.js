@@ -50,6 +50,7 @@ const { verifyTwilioSignature, classifyInbound } = require('./tools/lib/twilio-w
 const VOICE = require('./tools/lib/voice');
 const TAXCERT = require('./tools/lib/tax-certificates');
 const QPHOTOS = require('./tools/lib/quote-photos');
+const LEADFILES = require('./tools/lib/lead-files');
 const ZIPSTREAM = require('./tools/lib/zip-stream');
 const { Readable, pipeline } = require('node:stream');
 const REVREPLY = require('./tools/lib/review-replies');
@@ -4282,15 +4283,65 @@ async function saveTextMedia(list, quoteCode) {
   }
   if (quoteCode && out.length) {
     for (const f of out) {
-      await pool.query(
-        `UPDATE quotes SET customer_photos = COALESCE(customer_photos, '[]'::jsonb)
-                                           || jsonb_build_array(jsonb_build_object('url', $2::text, 'at', NOW(), 'name', $3::text))
-          WHERE code = $1 AND jsonb_array_length(COALESCE(customer_photos, '[]'::jsonb)) < $4
-            AND NOT COALESCE(customer_photos, '[]'::jsonb) @> jsonb_build_array(jsonb_build_object('url', $2::text))`,
-        [quoteCode, f.url, f.name, QPHOTOS.MAX_PHOTOS]).catch((e) => console.error('text photo not added to job:', e.message));
+      await addCustomerFile(quoteCode, f.url, f.name).catch((e) => console.error('text photo not added to job:', e.message));
     }
   }
   return out;
+}
+
+/** Add one file in the quote-photos folder to a job's customer files, once,
+ *  up to the limit. */
+async function addCustomerFile(code, url, name) {
+  await pool.query(
+    `UPDATE quotes SET customer_photos = COALESCE(customer_photos, '[]'::jsonb)
+                                       || jsonb_build_array(jsonb_build_object('url', $2::text, 'at', NOW(), 'name', $3::text))
+      WHERE code = $1 AND jsonb_array_length(COALESCE(customer_photos, '[]'::jsonb)) < $4
+        AND NOT COALESCE(customer_photos, '[]'::jsonb) @> jsonb_build_array(jsonb_build_object('url', $2::text))`,
+    [code, url, name, QPHOTOS.MAX_PHOTOS]);
+}
+
+/** The photo sent with an enquiry, and anything they texted before there was
+ *  a job, copied onto the quote made from it (tools/lib/lead-files.js), so it
+ *  is with the job's files on the quote, the job page and in production.
+ *  Runs once, when the quote is first saved; a file that cannot be copied is
+ *  reported and stays on the lead. */
+async function carryLeadFiles(code, leadId) {
+  const cloud = QPHOTOS.cloudName();
+  if (!cloud || !leadId) return 0;
+  const [{ rows: [lead] }, { rows: [q] }] = await Promise.all([
+    pool.query('SELECT photo_url, phone, email, created_at FROM submissions WHERE id = $1', [leadId]),
+    pool.query('SELECT phone, email FROM quotes WHERE code = $1', [code])]);
+  if (!lead || !q) return 0;
+  /* The customer sees these on their quote page: only the same person's files. */
+  if (!LEADFILES.samePerson(lead, q)) return 0;
+  const digits = String(lead.phone || '').replace(/\D/g, '').slice(-10);
+  /* Texts from their number with no job, from the day before the enquiry on. */
+  const { rows: texts } = digits.length === 10 ? await pool.query(
+    `SELECT media FROM sms_messages
+      WHERE quote_code IS NULL AND status = 'received' AND media IS NOT NULL
+        AND right(regexp_replace(phone, '\\D', '', 'g'), 10) = $1
+        AND created_at >= $2::timestamptz - INTERVAL '1 day'
+      ORDER BY created_at LIMIT 20`, [digits, lead.created_at]) : { rows: [] };
+  let n = 0;
+  for (const f of LEADFILES.leadFiles({ lead, texts: texts.map((t) => t.media), cloud })) {
+    try {
+      const r = await fetch(cloudinary.utils.private_download_url(f.publicId, f.format, { resource_type: f.type, type: 'upload' }),
+        { signal: AbortSignal.timeout(20000) });
+      if (!r.ok) throw new Error(`Cloudinary ${r.status}`);
+      const buf = Buffer.from(await r.arrayBuffer());
+      if (buf.length > QPHOTOS.MAX_FILE_BYTES) throw new Error(`too big (${buf.length} bytes)`);
+      const up = await new Promise((resolve, reject) => cloudinary.uploader.upload_stream(
+        { folder: QPHOTOS.FOLDER, resource_type: f.type,
+          ...(f.type === 'raw' ? { public_id: crypto.randomBytes(10).toString('hex') + '.' + f.format } : {}) },
+        (err, res) => (err ? reject(new Error(err.message || 'upload failed')) : resolve(res))).end(buf));
+      await addCustomerFile(code, up.secure_url, f.name);
+      n++;
+    } catch (err) {
+      console.error(`lead file not carried to ${code}:`, err.message);
+      reportError('lead-files', err, code).catch(() => {});
+    }
+  }
+  return n;
 }
 
 /** Send the owner's reply to the customer it was meant for (RELAY), record it
@@ -13275,6 +13326,13 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     } catch (err) {
       console.error(`upsells on ${code} not kept:`, err.message);
       reportError('quote-upsells', err, code).catch(() => {});
+    }
+    /* The enquiry's photo and texted pictures onto the new quote (2026-10-15).
+       In the background: copying through Cloudinary takes seconds a file, and
+       the save must not wait on it. Failures are reported in carryLeadFiles. */
+    if (!QUOTE_CODE_RE.test(editing) && q.from_submission_id) {
+      carryLeadFiles(code, q.from_submission_id)
+        .catch((err) => { console.error(`lead files for ${code} failed:`, err.message); reportError('lead-files', err, code).catch(() => {}); });
     }
     /* SHOP OR REP, decided once when the quote is first saved
        (tools/lib/sales-credit.js): a salesperson's customer reordering within
