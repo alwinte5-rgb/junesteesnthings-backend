@@ -211,7 +211,8 @@ function table() {
 function kindOf(name) {
   const n = String(name || '');
   for (const [key, p] of Object.entries(load().products || {})) {
-    if (p.name && n.toLowerCase() === String(p.name).toLowerCase()) return key;
+    const names = [p.name, ...(Array.isArray(p.aliases) ? p.aliases : [])].filter(Boolean);
+    if (names.some((x) => n.toLowerCase() === String(x).toLowerCase())) return key;
   }
   return null;
 }

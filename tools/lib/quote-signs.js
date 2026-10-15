@@ -168,7 +168,13 @@ function sizerOptions() {
       /* SinaLite only: the date its prices were read, and whether that is
          past STALE_DAYS, so the sizer can say so. */
       ...(fam.supplier === 'sinalite' ? (() => { const t = SL.table();
-        return { stale: !!(t.stale || t.error), captured: t.captured ? String(t.captured).slice(0, 10) : null }; })() : {}),
+        /* The quantities SinaLite sells, shown under the sizer so nobody has
+           to guess a run (owner, 2026-10-15: "there are no quantities"). */
+        const runs = new Set();
+        for (const bySize of Object.values(fam.prices || {})) for (const byUp of Object.values(bySize || {}))
+          for (const ladder of Object.values(byUp || {})) for (const [q] of ladder || []) runs.add(q);
+        return { stale: !!(t.stale || t.error), captured: t.captured ? String(t.captured).slice(0, 10) : null,
+          runs: [...runs].sort((a, b) => a - b), any_qty: !!fam.any_qty }; })() : {}),
       limits: fam.limits || null, sizes: fam.sizes || null,
       materials: fam.materials.map((m) => ({ key: m.key, label: m.label })),
       sheet_upgrades: fam.sheet_upgrades || {},

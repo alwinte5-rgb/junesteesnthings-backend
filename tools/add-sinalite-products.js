@@ -29,7 +29,8 @@ const { mysql, mysqlUrlFrom, enjson, sq } = require('./lib/db');
 const SL = require('./lib/sinalite');
 
 const PRODUCTS = Object.entries(JSON.parse(fs.readFileSync(SL.DATA_FILE, 'utf8')).products || {})
-  .map(([key, p]) => ({ key, name: p.name, description: p.description || p.note || p.label }));
+  .map(([key, p]) => ({ key, name: p.name, aliases: Array.isArray(p.aliases) ? p.aliases : [],
+    description: p.description || p.note || p.label }));
 
 module.exports = { PRODUCTS };
 if (require.main !== module) return;
@@ -51,9 +52,17 @@ for (const p of PRODUCTS) {
 }
 
 const rows = PRODUCTS.length ? mysql(url, 'SELECT id,name,active,supplier FROM lumise_products WHERE name IN (' +
-  PRODUCTS.map((p) => sq(p.name)).join(',') + ');', { rows: true }) : [];
+  PRODUCTS.flatMap((p) => [p.name, ...p.aliases]).map(sq).join(',') + ');', { rows: true }) : [];
 const key = (n) => String(n).toLowerCase().trim();
-const have = new Map(rows.map((r) => [key(r.name), r]));
+const byName = new Map(rows.map((r) => [key(r.name), r]));
+/* A product's row under its current name, else under a former one (renamed
+   on --apply). Two rows for one product would be two catalogue items. */
+const have = new Map();
+for (const p of PRODUCTS) {
+  const found = [p.name, ...p.aliases].map((n) => byName.get(key(n))).filter(Boolean);
+  if (found.length > 1) { console.error('!! ' + p.name + ' has ' + found.length + ' rows (#' + found.map((r) => r.id).join(', #') + ') — refusing'); process.exit(1); }
+  if (found.length) have.set(p.key, found[0]);
+}
 /* A same-named row that is not ours is somebody's real product. */
 for (const r of rows) {
   if (r.supplier !== 'sinalite') {
@@ -65,17 +74,18 @@ for (const r of rows) {
 console.log((APPLY ? 'APPLYING' : 'DRY RUN') + '  —  SinaLite costs read ' + (SL.table().captured || 'never') +
   (SL.stale() ? '  (STALE: re-run tools/sinalite-capture.js)' : '') + '\n');
 for (const p of PRODUCTS) {
-  const h = have.get(key(p.name));
+  const h = have.get(p.key);
   const fam = SL.table().families[p.key];
-  console.log('  ' + (h ? 'update #' + h.id : 'create') + '  ' + p.name + '  (min ' + fam.min + ')');
+  console.log('  ' + (h ? 'update #' + h.id + (key(h.name) !== key(p.name) ? ' (rename from "' + h.name + '")' : '') : 'create') +
+    '  ' + p.name + '  (min ' + fam.min + ')');
 }
 if (!APPLY) { console.log('\n  dry run — pass --apply to write'); process.exit(0); }
 
 const author = mysql(url, 'SELECT author FROM lumise_products WHERE active=1 LIMIT 1;', { rows: true })[0].author;
 for (const p of PRODUCTS) {
-  const h = have.get(key(p.name));
+  const h = have.get(p.key);
   if (h) {
-    mysql(url, 'UPDATE lumise_products SET description=' + sq(p.description) +
+    mysql(url, 'UPDATE lumise_products SET name=' + sq(p.name) + ', description=' + sq(p.description) +
       ", supplier='sinalite', price=0, updated=NOW() WHERE id=" + Number(h.id) + ';');
   } else {
     mysql(url, 'INSERT INTO lumise_products (name,description,price,supplier_cost,supplier,stages,attributes,' +

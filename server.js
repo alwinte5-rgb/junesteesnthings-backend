@@ -11139,6 +11139,13 @@ ${quotePricingSource()}
             '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#1848B8;font-weight:700">' + esc(o.label) + ' size &amp; options' +
             /* The minimum, before anyone types a quantity (owner, 2026-10-15). */
             (o.min > 1 ? ' <span style="color:#b45309;text-transform:none;letter-spacing:0">· minimum ' + o.min + '</span>' : '') + '</div>' +
+            /* SinaLite: the runs it sells, and that its shipping to the shop is
+               already in the price (owner asked both, 2026-10-15). */
+            (o.supplier === 'sinalite' && o.runs && o.runs.length ? '<div class="slruns" style="font-size:12px;color:#3f4a5f;margin:4px 0 0">' +
+              (o.any_qty ? 'Any quantity from ' + o.min.toLocaleString() + '; price breaks at ' : 'SinaLite runs: ') +
+              o.runs.map(function(q){ return q.toLocaleString(); }).join(' · ') +
+              (o.any_qty ? '' : ' (other quantities are priced as the cheapest mix of runs)') +
+              '. Shipping to the shop is included in the price.</div>' : '') +
             /* Stale SinaLite prices (read over STALE_DAYS ago, sale may be over):
                said where the price is made, not only in the morning email. */
             (o.stale ? '<div style="font-size:12px;color:#b45309;margin:4px 0 6px">Supplier prices last read ' + esc(o.captured || 'on an unknown date') +
@@ -11891,10 +11898,12 @@ ${quotePricingSource()}
             if ((!prod && !makeIt) || qty <= 0) { costNote.style.display = 'none'; }
             else if (signKind) {
               /* A sign has no garment or printing split: the server prices it
-                 from the Signs365 list (quote-signs.js). */
+                 from the Signs365 or SinaLite list (quote-signs.js). */
               costNote.innerHTML = '<b>Internal:</b> ' + (u.value
                 ? 'your typed price is used — line bills ' + m2(lt)
-                : 'priced from the Signs365 sign list, cost x2 plus shop time');
+                : (SIGN_OPTS[signKind] && SIGN_OPTS[signKind].supplier === 'sinalite'
+                  ? 'priced from SinaLite, cost x2 plus their shipping and $25 handling (rounded up to $5)'
+                  : 'priced from the Signs365 sign list, cost x2 plus shop time'));
               costNote.style.display = 'block';
             }
             else if (!prod) {
