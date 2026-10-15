@@ -27,6 +27,7 @@
   document.addEventListener('click', function (e) {
     var a = e.target.closest && e.target.closest('a[href^="sms:"]');
     if (!a || e.defaultPrevented) return;
+    if (typeof window.jtOpenChat === 'function') { e.preventDefault(); window.jtOpenChat(); return; }
     var tawk = window.Tawk_API;
     if (!tawk || typeof tawk.maximize !== 'function') return;
     e.preventDefault();
