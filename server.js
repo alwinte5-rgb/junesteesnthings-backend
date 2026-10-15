@@ -11215,7 +11215,18 @@ ${quotePricingSource()}
               L.dataset.signEach = String(r.each);
               L.dataset.signFreight = r.freight && !r.oversized ? '1' : '';
               note.innerHTML = '<b>$' + r.each.toFixed(2) + ' each</b>' +
-                (r.freight ? ' <span class="muted">(Signs365 delivery included' + (qty > 1 ? ', spread over ' + qty : '') + ')</span>' : '');
+                (r.freight ? ' <span class="muted">(Signs365 delivery included' + (qty > 1 ? ', spread over ' + qty : '') + ')</span>' : '') +
+                /* A quantity between SinaLite runs that jumps in price: offer
+                   the run below, one tap to switch (quote-signs.js hint). */
+                (r.hint && r.hint.qty > 0 ? '<div class="slhint" style="margin-top:6px;padding:7px 9px;background:#fff8ed;border:1px solid #fde3c0;border-radius:8px;color:#8a5a00">' +
+                  String(r.hint.text || '').replace(/[<>&"]/g, '') +
+                  ' <button type="button" class="kbtn" data-useqty="' + (parseInt(r.hint.qty, 10) || 0) + '" style="font-size:12px;margin-left:4px">Use ' +
+                  (parseInt(r.hint.qty, 10) || 0).toLocaleString() + '</button></div>' : '');
+              var use = note.querySelector('[data-useqty]');
+              if (use) use.addEventListener('click', function(){
+                var qb = L.querySelector('.q'); qb.value = use.getAttribute('data-useqty');
+                qb.dispatchEvent(new Event('input', { bubbles: true })); qb.dispatchEvent(new Event('change', { bubbles: true }));
+              });
             } else {
               delete L.dataset.signEach;
               note.innerHTML = '<b style="color:#b45309">' + String((r && r.error) || 'Could not price this size.').replace(/[<>&]/g, '') + '</b>';

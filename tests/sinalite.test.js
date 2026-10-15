@@ -378,3 +378,14 @@ test('the sizer lists the SinaLite runs and says shipping is included; the inter
   assert.ok(SERVER.includes('Shipping to the shop is included in the price.'));
   assert.ok(SERVER.includes("'priced from SinaLite: each run bought is cost x2"));
 });
+
+test('a quantity between runs that jumps in price recommends the run below', () => {
+  const Q = require('../tools/lib/quote-signs');
+  const r = Q.priceSign('brochure', { size: '8.5x11', mat: '1s' }, 3000, false);
+  assert.ok(r.ok && r.hint && r.hint.qty === 2500, JSON.stringify(r.hint));
+  assert.match(r.hint.text, /Recommend 2,500/);
+  assert.strictEqual(Q.priceSign('brochure', { size: '8.5x11', mat: '1s' }, 2500, false).hint, undefined, 'a real run needs no tip');
+  assert.strictEqual(Q.priceSign('pouch', { size: Object.keys(SL.table().families.pouch.prices[Object.keys(SL.table().families.pouch.prices)[0]])[0],
+    mat: Object.keys(SL.table().families.pouch.prices)[0] }, 700, false).hint, undefined, 'any-quantity items never jump');
+  assert.ok(SERVER.includes("data-useqty="), 'the form offers a one-tap switch');
+});

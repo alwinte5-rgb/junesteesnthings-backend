@@ -135,7 +135,24 @@ function priceSign(kind, spec, qty, takeFreight) {
     const sheetLabels = combo ? combo.split('+').map((k) => fam.sheet_upgrades[k].label) : [];
     text = [size.label, mat.label, ...sheetLabels, ...ups.map((u) => u.label)].join(' · ');
     outSpec = { kind, size: size.key, mat: mat.key, up: [...(combo ? combo.split('+') : []), ...ups.map((u) => u.key)] };
-    return { ok: true, piece, freight, oversized: oversized != null, each: ceil2(piece + freight / q), text, spec: outSpec };
+    /* A quantity SinaLite does not sell, priced well above the run below it
+       per piece: say what the run below costs, so the shop offers that
+       instead (owner, 2026-10-15: "if it'll jump that much just recommend
+       the 2500 not 3000"). */
+    let hint = null;
+    if (fam.supplier === 'sinalite' && !fam.any_qty && !ladder.some(([rq]) => rq === q)) {
+      const below = ladder.filter(([rq]) => rq < q).pop();
+      if (below) {
+        const belowTotal = round2(below[0] * below[1]);
+        const thisEach = base;
+        if (thisEach > below[1] * 1.1) {
+          hint = { qty: below[0], each: below[1], total: belowTotal,
+            text: `${q.toLocaleString('en-US')} is not a SinaLite run, so it costs ${'$' + thisEach.toFixed(2)} each. ` +
+              `Recommend ${below[0].toLocaleString('en-US')}: ${'$' + belowTotal.toFixed(2)} (${'$' + below[1].toFixed(2)} each).` };
+        }
+      }
+    }
+    return { ok: true, piece, freight, oversized: oversized != null, each: ceil2(piece + freight / q), text, spec: outSpec, ...(hint ? { hint } : {}) };
   }
 
   const w = num(spec.w), h = num(spec.h);
