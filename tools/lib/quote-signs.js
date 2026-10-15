@@ -18,9 +18,18 @@
 
 const SG = require('./signage');
 const SF = require('./sign-families');
+const SL = require('./sinalite');
 
 const BANNER = SG.bannerTable();
 const SIGNS = SF.signsTable().families;
+/* SinaLite items (tools/lib/sinalite.js) are stock families too — a ladder by
+   quantity for each size and material — with shipping already inside every
+   price. They are read on each call rather than once, so a fresh capture of
+   SinaLite's prices reaches the next quote without a restart of this module. */
+const familyOf = (kind) => SIGNS[kind] || SL.table().families[kind] || null;
+
+/** The largest quantity a sized line is priced at (preview and save). */
+const MAX_QTY = SL.MAX_QTY;
 
 /* Name -> kind. First match wins, so the specific names come first. */
 const KINDS = [
@@ -39,6 +48,11 @@ const KINDS = [
 /** The sign kind of a product name, or null for anything that is not sized. */
 function signKindOf(name) {
   const n = String(name || '');
+  /* A SinaLite product is matched by its exact catalogue name first: its names
+     ("Wall Calendars", "Table Covers") would otherwise be read by the
+     Signs365 patterns below, or by none of them. */
+  const sl = SL.kindOf(n);
+  if (sl) return sl;
   for (const [kind, re, not] of KINDS) if (re.test(n) && !(not && not.test(n))) return kind;
   return null;
 }
@@ -62,6 +76,9 @@ function ladderPrice(ladder, qty) {
  */
 function priceSign(kind, spec, qty, takeFreight) {
   const q = Math.max(1, parseInt(qty, 10) || 1);
+  /* One ceiling for every sized item, here where the save prices it, and the
+     same one /admin/api/sign-price refuses above (Codex on #293). */
+  if (q > MAX_QTY) return { ok: false, error: `More than ${MAX_QTY.toLocaleString('en-US')}: quote it by hand.` };
   const up = Array.isArray(spec.up) ? spec.up.map(String) : [];
 
   if (kind === 'banner') {
@@ -86,9 +103,10 @@ function priceSign(kind, spec, qty, takeFreight) {
     };
   }
 
-  const fam = SIGNS[kind];
+  const fam = familyOf(kind);
   const famDef = SF.FAMILIES[kind];
-  if (!fam || !famDef) return { ok: false, error: 'That item is not priced by size.' };
+  /* A SinaLite family is stock-only and has no Signs365 definition. */
+  if (!fam || (!famDef && fam.supplier !== 'sinalite')) return { ok: false, error: 'That item is not priced by size.' };
   const mat = fam.materials.find((m) => m.key === String(spec.mat));
   if (!mat) return { ok: false, error: `Pick the ${fam.label.toLowerCase()} material.` };
   /* Per-piece upgrades offered on this material; anything else posted is ignored. */
@@ -102,8 +120,14 @@ function priceSign(kind, spec, qty, takeFreight) {
     const combo = Object.keys(fam.sheet_upgrades || {}).filter((k) => up.includes(k)).sort().join('+');
     const ladder = ((fam.prices[mat.key] || {})[size.key] || {})[combo];
     if (!ladder) return { ok: false, error: `${size.label} is not made in that material.` };
-    if (q < ladder[0][0]) return { ok: false, error: `${size.label} ${fam.label.toLowerCase()} have a minimum of ${ladder[0][0]}.` };
-    piece = round2(ladderPrice(ladder, q) + upEach);
+    if (q < ladder[0][0]) return { ok: false, min: ladder[0][0], error: `${size.label} ${fam.label.toLowerCase()} have a minimum of ${ladder[0][0]}.` };
+    /* SinaLite sells set runs only: a quantity between runs is bought as the
+       next run up (sinalite.js eachFor). Signs365 stock ladders are bands. */
+    const base = fam.supplier === 'sinalite' ? SL.eachFor(ladder, q, fam.any_qty) : ladderPrice(ladder, q);
+    /* Never arithmetic on a missing price: null is "cannot price", not $0
+       (Codex on #293: a quantity past the run cap priced free). */
+    if (!(base > 0)) return { ok: false, error: `${size.label} ${fam.label.toLowerCase()} cannot be priced at ${q.toLocaleString('en-US')}; quote it by hand.` };
+    piece = round2(base + upEach);
     const oversized = fam.freight_by_size[`${size.key}:${mat.key}`];
     freight = oversized != null ? oversized : (takeFreight ? fam.freight : 0);
     const sheetLabels = combo ? combo.split('+').map((k) => fam.sheet_upgrades[k].label) : [];
@@ -135,9 +159,16 @@ function sizerOptions() {
       upgrades: [{ key: 'wind_slits', label: 'Wind slits' }],
     },
   };
-  for (const [key, fam] of Object.entries(SIGNS)) {
+  for (const [key, fam] of Object.entries({ ...SIGNS, ...SL.table().families })) {
     out[key] = {
       label: fam.label, sizing: fam.sizing, unit: fam.sizing === 'area' ? 'in' : null,
+      /* The smallest quantity any size can be bought at, so the form can say
+         "min 25" before anyone types a quantity (owner, 2026-10-15). */
+      min: fam.min || null, supplier: fam.supplier || 'signs365',
+      /* SinaLite only: the date its prices were read, and whether that is
+         past STALE_DAYS, so the sizer can say so. */
+      ...(fam.supplier === 'sinalite' ? (() => { const t = SL.table();
+        return { stale: !!(t.stale || t.error), captured: t.captured ? String(t.captured).slice(0, 10) : null }; })() : {}),
       limits: fam.limits || null, sizes: fam.sizes || null,
       materials: fam.materials.map((m) => ({ key: m.key, label: m.label })),
       sheet_upgrades: fam.sheet_upgrades || {},
@@ -147,4 +178,4 @@ function sizerOptions() {
   return out;
 }
 
-module.exports = { signKindOf, priceSign, sizerOptions, ladderPrice };
+module.exports = { signKindOf, priceSign, sizerOptions, ladderPrice, MAX_QTY };

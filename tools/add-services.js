@@ -51,6 +51,26 @@ const SERVICES = [
     description: 'A new menu or promo design for one TV screen.' },
   { name: 'TV Screen Design — Revision (per screen)', price: '40.00',
     description: 'Updating an existing TV screen design, per screen.' },
+  /* Design work for the SinaLite items (owner's prices, 2026-10-15). Mugs,
+     tumblers, bottles, canvas and X-frames take the general design tiers on
+     the quote form (tweak / setup / commission) instead of a service of
+     their own. */
+  { name: 'Calendar Design — New (13 pages)', price: '250.00',
+    description: 'A new wall calendar laid out from your photos and dates: cover plus twelve months.' },
+  { name: 'Calendar Design — Revision', price: '75.00',
+    description: 'Updating an existing calendar: new year, dates, photos or wording.' },
+  { name: 'Label or Sticker Design — New', price: '95.00',
+    description: 'A new product label or sticker design, set up for the cut shape.' },
+  { name: 'Label or Sticker Design — Revision', price: '45.00',
+    description: 'Updating an existing label or sticker.' },
+  { name: 'Pouch Design — New', price: '150.00',
+    description: 'A new stand-up or lay-flat pouch design, front and back, laid out on the printer\'s template.' },
+  { name: 'Pouch Design — Revision', price: '60.00',
+    description: 'Updating an existing pouch design.' },
+  { name: 'Table Cover Design — New', price: '95.00',
+    description: 'A new table cover design laid out on the printer\'s full-cover template (top, front and ends).' },
+  { name: 'Table Cover Design — Revision', price: '45.00',
+    description: 'Updating an existing table cover design.' },
   /* Outsourced print, priced by the owner's rule (2026-10-14): supplier cost
      x2, plus shipping at cost + $25 rounded up to $5 (never marked up),
      divided by the run and rounded up to the cent. The price is only right

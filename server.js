@@ -35,6 +35,7 @@ const NUDGE = require('./tools/lib/lead-nudges');
 const SIGNAGE = require('./tools/lib/signage');
 const QSIGNS = require('./tools/lib/quote-signs');
 const SIGN_FAMILIES = require('./tools/lib/sign-families');
+const SINALITE = require('./tools/lib/sinalite');
 const LEADMAIL = require('./tools/lib/lead-email');
 const REINTRO = require('./tools/lib/reintro');
 const FUNNEL = require('./tools/lib/funnel-health');
@@ -6604,6 +6605,10 @@ app.get('/api/pricing-rules', requireInternalKey, (_req, res) => {
        stock ladders precomputed, area families as rates the designer runs
        through the one shared formula. */
     signs: SIGN_FAMILIES.signsTable(),
+    /* SinaLite items (tools/lib/sinalite.js): stock ladders in the same shape
+       as a sign family, shipping inside each price, each with its minimum and
+       the date SinaLite's (sale) prices were read. */
+    sinalite: SINALITE.table(),
     generated: new Date().toISOString(),
   });
 });
@@ -7675,11 +7680,29 @@ function deliveryEstimate(from = new Date(), opts = {}) {
     : items.some((i) => /digitiz/i.test(String(i && i.description || '')));
   const dig = needsDigitizing ? DIGITIZING_DAYS : 0;
 
+  /* Bought-printed SinaLite lines are made by SinaLite, on SinaLite's clock:
+     the order is one parcel, so the slowest one sets the ready date (Codex on
+     #293: pouches take 10-12 business days before shipping to the shop, and
+     the page promised 7). */
+  let lo = pmin + extra + dig, hi = pmax + extra + dig;
+  for (const i of items) {
+    /* An optional line the customer has not taken is not being made: it must
+       not move the date of the job it sits on (accepting removes the flag from
+       the ones they take). */
+    const kind = i && !i.optional && i.sign && i.sign.kind;
+    /* Signs365 kinds (banner + sign-families.js) are on the in-house window;
+       any other sized kind is SinaLite's, and with its family unavailable it
+       still takes the slowest SinaLite lead rather than none (Codex on #293). */
+    const lead = !kind || kind === 'banner' || SIGN_FAMILIES.FAMILIES[kind] ? null
+      : (SINALITE.leadDays(kind) || SINALITE.FALLBACK_LEAD);
+    if (lead) { lo = Math.max(lo, lead[0] + extra); hi = Math.max(hi, lead[1] + extra); }
+  }
+
   return {
-    ready: addBusinessDays(start, pmin + extra + dig),
-    deliver_from: addBusinessDays(start, pmin + extra + dig + smin),
-    deliver_to: addBusinessDays(start, pmax + extra + dig + smax),
-    production_days: [pmin + extra + dig, pmax + extra + dig],
+    ready: addBusinessDays(start, lo),
+    deliver_from: addBusinessDays(start, lo + smin),
+    deliver_to: addBusinessDays(start, hi + smax),
+    production_days: [lo, hi],
     digitizing_days: dig,
     beyond_sheet: pieces > SHEET_PIECE_CEILING,
   };
@@ -8108,6 +8131,14 @@ const HOLIDAY_EXTRA_DAYS = parseInt(process.env.JT_HOLIDAY_EXTRA_DAYS || '3', 10
    to the Lumise database. So this is the switch that joins them, and it stays
    off until the tables are repriced. Read once, used by both surfaces. */
 const SCREEN_FEES_LIVE = String(process.env.JT_SCREEN_FEES || '') === '1';
+
+/* A SIZED item — a sign or a SinaLite item priced by quote-signs.js — has no
+   print method, and add-ons hang off print methods, so it was offered no
+   design charge at all. Its line offers add-ons under this stand-in title,
+   which only ANY_METHOD_RE (the design tiers) matches: never a supplier
+   freight, screens or banner hanging (owner, 2026-10-15: every item that needs
+   custom artwork carries the design charge). */
+const SIZED_ITEM_TITLE = 'Sized item';
 
 /** The add-ons available for a method, in the order they should be offered. */
 function addonsFor(methodTitle) {
@@ -9002,8 +9033,36 @@ function customerLineFigures(item) {
   const shown = shownAddonTotalOf(item);
   const amount = round2(Number(item.line_total) - shown);
   const folded = round2(addonTotalOf(item) - shown);
-  const each = folded > 0 && qty > 0 ? round2(amount / qty) : Number(item.unit_price) || 0;
+  /* Four places, not two, when a supplier charge is folded in: 3,000 cards at
+     $0.10 plus $10 of Signs365 delivery is $310, and "$0.10 each" beside
+     $310 does not foot (CF929XEETA, 2026-10-14). moneyEach() shows it. */
+  const each = folded > 0 && qty > 0 ? Math.round((amount / qty) * 10000) / 10000 : Number(item.unit_price) || 0;
   return { amount, each, shown, folded };
+}
+
+/** A price EACH as the customer reads it: cents, unless cents would round
+ *  money away — then up to four places, so qty x each = amount: 3,000 cards
+ *  read "$0.1033" and 300 signs with $10 of delivery "$1.0333" (code review,
+ *  2026-10-15: the old under-a-dollar rule still printed "$1.03" beside $310).
+ *  "$0.25", "$4.50" stay as they were. Sent to the quote page's scripts with
+ *  toString(), so it is written in plain ES5 and there is one copy of it. */
+function moneyEach(n, qty, amount) {
+  var v = Math.round((Number(n) || 0) * 10000) / 10000;
+  var s = Math.round(v * 100) / 100 === v ? '$' + v.toFixed(2) : '$' + v.toFixed(4).replace(/0+$/, '');
+  /* Given the line it belongs to: if even four places do not multiply back to
+     the amount ($310 / 3,000 = $0.1033, x 3,000 = $309.90), say it is rounded
+     rather than print a figure that does not foot (Codex on #293). */
+  if (qty > 0 && amount != null && Math.round(v * qty * 100) !== Math.round(Number(amount) * 100)) s = '≈' + s;
+  return s;
+}
+
+/** The each-price cell's figure. Cents, as always, on an ordinary line: a
+ *  mixed-size garment line's each is a blend that never multiplied back to
+ *  the amount, and four places or "≈" there would only confuse (code review,
+ *  2026-10-15). Only a line with a supplier charge folded in gets moneyEach's
+ *  extra places and its "≈". */
+function eachText(fig, item) {
+  return fig.folded > 0 ? moneyEach(fig.each, item.qty, fig.amount) : money(fig.each);
 }
 
 /** The each-price a person actually TYPED on a hand-priced line.
@@ -10126,7 +10185,19 @@ const PRODUCT_GROUPS = [
      were wrong: "canvas" swept in the whole Bella+Canvas range and every
      canvas tote — thirteen shirts filed under Signs — because a brand name
      and a material share a word. Match on what only a sign is called. */
-  ['Signs, Print & Décor',    /banner|cutout|poster|magnet|acrylic|business card|flyer|window graphic|wall graphic|floor graphic|vehicle graphic|yard sign|rigid sign|photo panel|stretched canvas/i],
+  /* Things BOUGHT PRINTED (Signs365, SinaLite) come first, split four ways
+     (owner, 2026-10-15) so the Category picker on a quote line keeps the
+     product list short. A group marked 'sized' is one whose NAMES are only ever
+     bought-printed goods, so the quote form gives them the sizer by name
+     (SIZED_BY_NAME_RE). Labels and drinkware are not: the shop decorates its
+     own mugs and stickers, so a SinaLite one is recognised by its exact
+     catalogue name instead (quote-signs.js signKindOf). No bare "label": tee
+     names carry "Tear Away Label"; no bare "pouch" or "bottle": hoodies have a
+     "Pouch Pocket" and bags a "Bottle Pocket". */
+  ['Signs & Display',         /banner|cutout|poster|magnet|acrylic|window graphic|wall graphic|floor graphic|vehicle graphic|yard sign|rigid sign|photo panel|stretched canvas|table cover|x-frame/i, 'sized'],
+  ['Print & Paper',           /business card|flyer|brochure|postcard|door hanger|calendar|rack card|tear card|notepad|envelope|booklet|presentation folder/i, 'sized'],
+  ['Labels, Stickers & Packaging', /roll labels?|stickers?\b|decals?\b|\bpouch(?:es)?\b(?![\s-]*pocket)/i],
+  ['Drinkware',               /\bmugs?\b|tumbler|\bbottles?\b(?![\s-]*(?:pocket|holder|sleeve))/i],
   ['Youth, Toddler & Infant', /youth|toddler|infant|bodysuit|onesie/i],
   ['Scrubs',                  /scrub/i],
   /* Before Hoodies, because a "Quarter-Zip Pullover" is a quarter-zip and a
@@ -10142,6 +10213,12 @@ const PRODUCT_GROUPS = [
   ['Hats & Beanies',          /\bcap\b|\bhat\b|beanie|trucker|visor/i],
   ['Bags & Totes',            /tote|bags?\b|backpack|sackpack|drawstring/i],
 ];
+
+/** One pattern for "this name is a sized, bought-printed item", from the
+ *  groups marked SIZED — a flag, not a position, so reordering the list
+ *  cannot turn youth tees into signs. */
+const SIZED_BY_NAME_RE = new RegExp(PRODUCT_GROUPS.filter((g) => g[2] === 'sized')
+  .map(([, re]) => '(?:' + re.source + ')').join('|'), 'i');
 
 /** Staff-only services: design fees, folding. Never shown in the shop. */
 const SERVICE_GROUP = 'Services (not in shop)';
@@ -10654,14 +10731,101 @@ function productGroupOf(name) {
       /* What a product IS decides what the item asks for. A sign is matched by
          the same rule that files it under Signs in the product list, so the
          two cannot disagree. A banner (not a banner stand) also gets the sizer. */
-      var SIGN_RE = new RegExp(${JSON.stringify(PRODUCT_GROUPS[0][1].source)}, 'i');
+      var SIGN_RE = new RegExp(${JSON.stringify(SIZED_BY_NAME_RE.source)}, 'i');
       /* Each catalogue product's sign kind (quote-signs.js signKindOf), and what
          each kind's sizer offers. No prices here: /admin/api/sign-price asks
          the server, which is also what prices the save. */
       var SIGN_KIND = ${JSON.stringify(Object.fromEntries(catalog.products
-        .map((p) => [String(p.id), QSIGNS.signKindOf(p.name)]).filter((x) => x[1])))};
+        .map((p) => [String(p.id), sizedKindOf(p)]).filter((x) => x[1])))};
       var SIGN_OPTS = ${JSON.stringify(QSIGNS.sizerOptions())};
       function isSignProduct(prod){ return !!(prod && SIGN_RE.test(String(prod.name || ''))); }
+
+      /* CATEGORY, THEN PRODUCT (owner, 2026-10-15). The product list is long,
+         so each line gets a Category box built from the list's own headed
+         sections (PRODUCT_GROUPS). Picking one hides the other sections; the
+         options stay in the list, so a copied line or a restored quote can
+         still set any product, and "All categories" shows everything again.
+         Delegated, because addLine() clones lines without their listeners. */
+      function pcatGroupOf(sel){
+        var o = sel.options[sel.selectedIndex];
+        return o && o.parentNode && o.parentNode.tagName === 'OPTGROUP' ? o.parentNode.label : '';
+      }
+      function pcatApply(sel, label){
+        /* hidden + display:none filters the list on desktop; iOS Safari and some
+           Android pickers ignore both inside a native select, so the other
+           sections are also DISABLED there (greyed, not pickable). The
+           selected product's own section is never disabled. */
+        var mine = pcatGroupOf(sel);
+        Array.prototype.forEach.call(sel.querySelectorAll('optgroup'), function(g){
+          var off = !!label && g.label !== label && g.label !== mine;
+          g.hidden = off;
+          g.style.display = off ? 'none' : '';
+          g.disabled = off;
+        });
+      }
+      /* A product set by code (a restored quote, a copied line) fires no change
+         event, so calc() — which runs on every change and on load — brings each
+         line's Category box back in line with its product. Only when the
+         PRODUCT moved since the box last saw it (dataset.for): calc() also runs
+         on the Category box's own change, before the handler below, and must
+         not undo the category the owner just picked. */
+      function pcatSyncAll(){
+        Array.prototype.forEach.call(document.querySelectorAll('#lines .line select.p'), function(sel){
+          var box = sel.previousElementSibling;
+          if (!box || !box.classList.contains('pcat')) return;
+          if (box.dataset.for === sel.value) return;
+          box.dataset.for = sel.value;
+          if (!box.value || !sel.value) return;
+          var g = pcatGroupOf(sel);
+          if (g && g !== box.value) { box.value = g; pcatApply(sel, g); }
+        });
+      }
+      function pcatEnsure(sel){
+        var box = sel.previousElementSibling;
+        if (!box || !box.classList.contains('pcat')) {
+          box = document.createElement('select');
+          box.className = 'pcat';
+          box.setAttribute('aria-label', 'Category');
+          box.style.marginBottom = '6px';
+          var all = document.createElement('option');
+          all.value = ''; all.textContent = 'All categories';
+          box.appendChild(all);
+          Array.prototype.forEach.call(sel.querySelectorAll('optgroup'), function(g){
+            var o = document.createElement('option');
+            o.value = g.label; o.textContent = g.label;
+            box.appendChild(o);
+          });
+          sel.parentNode.insertBefore(box, sel);
+        }
+        box.value = pcatGroupOf(sel);
+        box.dataset.for = sel.value;
+        pcatApply(sel, box.value);
+      }
+      document.addEventListener('change', function(e){
+        var t = e.target;
+        if (t && t.classList && t.classList.contains('pcat')) {
+          var sel = t.nextElementSibling;
+          if (!sel || !sel.classList.contains('p')) return;
+          /* A product from another category no longer belongs on this line.
+             Cleared FIRST: pcatApply keeps the selected product's own section
+             open, so filtering before the clear left the old section pickable
+             (Codex on #293). */
+          if (t.value && sel.value && pcatGroupOf(sel) !== t.value) {
+            sel.value = '';
+            sel.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+          t.dataset.for = sel.value;
+          pcatApply(sel, t.value);
+        } else if (t && t.classList && t.classList.contains('p')) {
+          var box = t.previousElementSibling;
+          if (box && box.classList.contains('pcat')) box.dataset.for = t.value;
+          if (box && box.classList.contains('pcat') && !box.value) return;
+          if (box && box.classList.contains('pcat') && pcatGroupOf(t) && pcatGroupOf(t) !== box.value) {
+            box.value = pcatGroupOf(t); pcatApply(t, box.value);
+          }
+        }
+      });
+      Array.prototype.forEach.call(document.querySelectorAll('#lines .line select.p'), pcatEnsure);
       function signKindOf(prod){ return prod ? (SIGN_KIND[String(prod.id)] || null) : null; }
       /* ── Upsell ideas (the owner, 2026-10-06) ─────────────────────────────
          Worked out from the same priceLine() the totals use, on every calc():
@@ -10972,7 +11136,13 @@ ${quotePricingSource()}
               '</select></label>';
           };
           var html = '<div style="padding:10px;background:#f6f8fd;border:1px solid #e3e8f2;border-radius:8px">' +
-            '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#1848B8;font-weight:700">' + esc(o.label) + ' size &amp; options</div>';
+            '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#1848B8;font-weight:700">' + esc(o.label) + ' size &amp; options' +
+            /* The minimum, before anyone types a quantity (owner, 2026-10-15). */
+            (o.min > 1 ? ' <span style="color:#b45309;text-transform:none;letter-spacing:0">· minimum ' + o.min + '</span>' : '') + '</div>' +
+            /* Stale SinaLite prices (read over STALE_DAYS ago, sale may be over):
+               said where the price is made, not only in the morning email. */
+            (o.stale ? '<div style="font-size:12px;color:#b45309;margin:4px 0 6px">Supplier prices last read ' + esc(o.captured || 'on an unknown date') +
+              ' — check SinaLite before sending.</div>' : '');
           if (kind === 'banner') {
             var ft = []; for (var i = 1; i <= o.max.long; i++) ft.push([i, i + ' ft']);
             html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
@@ -11271,6 +11441,8 @@ ${quotePricingSource()}
       }
 
       function calc(){
+        pcatSyncAll();
+        if (window.__etaReady) etaSync();
         var sub = 0;
         /* Screens across every line, so the totals can show them on their own
            row. Counted from the addon line's own count field rather than
@@ -11418,6 +11590,9 @@ ${quotePricingSource()}
           (cutMeth ? [cutMeth] : prints.map(function(p){ return p.method; })).forEach(function(m){
             if (lineTitles.indexOf(m.title) === -1) lineTitles.push(m.title);
           });
+          /* A sized item has no print method; it still takes the design tiers
+             (SIZED_ITEM_TITLE on the server, which prices the save). */
+          if (!lineTitles.length && signKind) lineTitles.push(${JSON.stringify(SIZED_ITEM_TITLE)});
           var u    = L.querySelector('.u');
           var qEl  = L.querySelector('.q');
           buildColours(L, prod);
@@ -11892,6 +12067,9 @@ ${quotePricingSource()}
         /* cloneNode copies attributes but not listeners: a copied "already
            bound" mark would leave the new item's selects with none. */
         tpl.querySelectorAll('[data-qty-bound]').forEach(function(el){ delete el.dataset.qtyBound; });
+        /* The copied item's Category filter is cleared above (its box reads
+           "All categories"); show every section of its product list again. */
+        tpl.querySelectorAll('select.p optgroup').forEach(function(g){ g.hidden = false; g.style.display = ''; g.disabled = false; });
         var oh = tpl.querySelector('.opthelp');
         if (oh) oh.open = false;
         tpl.querySelector('.lt').textContent = '—';
@@ -12164,10 +12342,25 @@ ${uploadStatusScript()}
       bind(); rushSync(false); calc();
       // Delivery estimate hint
       var eta = ${JSON.stringify(deliveryEstimate())};
-      document.getElementById('eta').textContent =
-        'Typical turnaround: ready about ' + new Date(eta.ready).toLocaleDateString('en-US',{month:'short',day:'numeric'}) +
-        ', delivered ' + new Date(eta.deliver_from).toLocaleDateString('en-US',{month:'short',day:'numeric'}) +
-        '–' + new Date(eta.deliver_to).toLocaleDateString('en-US',{month:'short',day:'numeric'}) + '.';
+      /* The same estimate with each SinaLite item on the order, so the hint
+         moves when a pouch (10-12 days at SinaLite) is added, as the
+         customer's page does. Optional lines do not count. */
+      var ETA_SL = ${JSON.stringify(Object.fromEntries(Object.keys(SINALITE.table().families)
+        .map((k) => [k, deliveryEstimate(new Date(), { items: [{ sign: { kind: k } }] })])))};
+      function etaSync(){
+        var e = eta, slow = null;
+        Array.prototype.forEach.call(document.querySelectorAll('#lines .line'), function(L){
+          var opt = L.querySelector('.opt'); if (opt && opt.checked) return;
+          var p = L.querySelector('.p'); var k = p && SIGN_KIND[String(p.value)];
+          if (k && ETA_SL[k] && (!slow || ETA_SL[k].deliver_to > slow.deliver_to)) slow = ETA_SL[k];
+        });
+        if (slow && slow.deliver_to > e.deliver_to) e = slow;
+        var d = function(x){ return new Date(x).toLocaleDateString('en-US',{month:'short',day:'numeric'}); };
+        document.getElementById('eta').textContent = (e === eta ? 'Typical turnaround' : 'With SinaLite items') +
+          ': ready about ' + d(e.ready) + ', delivered ' + d(e.deliver_from) + '–' + d(e.deliver_to) + '.';
+      }
+      window.__etaReady = true;
+      etaSync();
       // Prior pricing for a returning customer
       var t;
       function lookup(){
@@ -12328,7 +12521,9 @@ app.post('/admin/api/sign-price', requireAdmin, (req, res) => {
     return res.status(400).json({ ok: false, error: 'That item is not priced by size.' });
   }
   const sp = b.spec && typeof b.spec === 'object' ? b.spec : {};
-  const qty = Math.min(100000, Math.max(1, parseInt(b.qty, 10) || 1));
+  /* Refused, not clamped: a clamped preview priced 100,001 roll labels at the
+     100,000 rate while the save priced the real quantity (Codex on #293). */
+  const qty = Math.max(1, parseInt(b.qty, 10) || 1);
   res.json(QSIGNS.priceSign(kind, {
     w: sp.w, h: sp.h, size: String(sp.size || '').slice(0, 20), mat: String(sp.mat || '').slice(0, 30),
     hang: String(sp.hang || '').slice(0, 30),
@@ -12578,7 +12773,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
       const q = sizeQty > 0 ? sizeQty : (qty || 1);
 
       let rawUnit = one(b['unit_price' + i]);
-      const signKind = prod ? QSIGNS.signKindOf(prod.name) : null;
+      const signKind = prod ? sizedKindOf(prod) : null;
       let sign = null;
       if (signKind && String(one(b['sgm' + i]) || '').trim()) {
         const r = QSIGNS.priceSign(signKind, {
@@ -12591,6 +12786,18 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
           sign = r;
           if (r.freight && !r.oversized && !optional) signFreightTaken = true;
         }
+      } else if (!signKind && prod && prod.supplier === 'sinalite') {
+        /* A SinaLite row (catalogue price 0) the price table does not know —
+           the table failed to load, or the row was renamed. Refused, never
+           saved free (Codex on #293). */
+        signErrors.push({ line: i + 1, what: desc || prod.name,
+          error: 'SinaLite prices are unavailable for this item right now; nothing was priced.' });
+      } else if (signKind && SINALITE.table().families[signKind]) {
+        /* A SinaLite row's catalogue price is 0 — its size and quantity carry
+           the price — so a line posted without a material would save at $0
+           and skip the minimum, typed price or not (code review, 2026-10-15). */
+        signErrors.push({ line: i + 1, what: desc || prod.name,
+          error: `Pick the ${SINALITE.table().families[signKind].label.toLowerCase()} size and material.` });
       }
       if (priceTyped) typedPrices.push({ kind: 'unit', value: round2(Number(rawUnit)), what: desc || (prod ? prod.name : `Line ${i + 1}`) });
       /* No price typed: the sign's own price is the line's price. */
@@ -12606,7 +12813,8 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
       /* Every method on the line offers its add-ons and attaches its
          automatic ones (screens), not just the first: a DTF front with a
          screen-printed back burns screens. */
-      const addonTitles = usePrints ? [...new Set(prints.map((p) => String(p.method.title || '')))] : [methodTitle];
+      let addonTitles = usePrints ? [...new Set(prints.map((p) => String(p.method.title || '')))] : [methodTitle];
+      if (signKind && !addonTitles.some(Boolean)) addonTitles = [SIZED_ITEM_TITLE];
       /* Both halves: on a DTF-front/screen-back line the screen print is the
          SECOND method, and reading only the first drops its screen fee. */
       const method2Title = usePrints ? null : catalog.methods.find(m => String(m.id) === String(one(b['method2' + i])));
@@ -12971,7 +13179,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     if (signErrors.length) {
       return res.status(400).send(quotePage('A sign size cannot be made', `
         <div class="card">
-          <div class="warn">Nothing was saved — ${signErrors.length === 1 ? 'a sign' : 'some signs'} could not be priced.</div>
+          <div class="warn">Nothing was saved — ${signErrors.length === 1 ? 'a sized item' : 'some sized items'} could not be priced.</div>
           <ul class="muted" style="margin:8px 0 0;padding-left:18px">
             ${signErrors.map((o) => `<li>Line ${o.line} — ${escEmail(String(o.what))}: ${escEmail(o.error)}</li>`).join('')}
           </ul>
@@ -13698,8 +13906,39 @@ function customerLinePricing(items, catalog) {
          so a customer nudging one line's quantity saw every OTHER hand-priced
          line silently inflate in the estimate total. */
       unitOverride: typedUnitOf(it),
+      /* A SinaLite line's runs ([qty, each], sell prices only): a customer
+         moving 25 calendars to 100 must see the 100-run price, not the saved
+         25-run each (Codex on #293). Re-priced by sinalite.js eachFor(). */
+      runs: sinaliteRunsOf(it),
+      /* Supplier charge folded in: the estimate shows its each like the page. */
+      precise: customerLineFigures(it).folded > 0,
     };
   });
+}
+
+/** A catalogue product's sized kind. A row tagged supplier = 'sinalite' is
+ *  priced ONLY by its exact SinaLite name: on a cold start without the table,
+ *  or after a rename, "Wall Calendars" would otherwise fall through to the
+ *  Signs365 wall-graphic pricing (Codex on #293). Null then, and the save
+ *  refuses it. */
+function sizedKindOf(prod) {
+  if (!prod) return null;
+  if (prod.supplier === 'sinalite') return SINALITE.kindOf(prod.name);
+  return QSIGNS.signKindOf(prod.name);
+}
+
+/** The SinaLite [runQty, each] ladder a saved line was priced from, or null. */
+function sinaliteRunsOf(it) {
+  /* Only a line the server priced from its size: a price the owner typed
+     over it stays the price. */
+  const sg = it && it.sign_priced && it.sign;
+  const fam = sg && sg.kind ? SINALITE.table().families[sg.kind] : null;
+  if (!fam) return null;
+  const lad = ((fam.prices[sg.mat] || {})[sg.size] || {})[''];
+  /* `qty`: the quantity it was priced at. At that quantity the saved price
+     stands, even if SinaLite's table has moved since (Codex on #293). */
+  return Array.isArray(lad) && lad.length
+    ? { ladder: lad, any: !!fam.any_qty, qty: Number(it.qty) || 0, saved: Number(it.unit_price) || null } : null;
 }
 
 app.get('/q/:code', async (req, res) => {
@@ -14107,13 +14346,17 @@ app.get('/q/:code', async (req, res) => {
           : orderedSizeKeys(i, catalog).length
             ? `<div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end">${sizeInputs(i, ix)}</div>
                <div class="muted" style="font-size:11px;margin-top:4px">now ${i.qty}</div>`
-            : `<input form="changeform" type="number" min="0" max="10000" step="1"
+            : `<input form="changeform" type="number" min="0" max="${QSIGNS.MAX_QTY}" step="1"
                       class="cq" data-line="${ix}"
                       name="qty_${ix}" value="${parseInt(i.qty, 10) || 0}"
                       style="width:64px;padding:5px;font-size:14px;text-align:right">`}</td>
-        <td class="num" data-each="${ix}">${cut
-          ? `<span style="color:#9aa3b2;text-decoration:line-through">${money(i.qty > 0 ? goodsList / i.qty : 0)}</span><br>${money(fig.each)}`
-          : money(fig.each)}</td>
+        <td class="num"><span data-each="${ix}">${cut
+          ? `<span style="color:#9aa3b2;text-decoration:line-through">${(fig.folded > 0 ? moneyEach : money)(i.qty > 0 ? goodsList / i.qty : 0)}</span><br>${eachText(fig, i)}`
+          : eachText(fig, i)}</span>${
+          /* Outside the data-each span: the quantity estimate and the optional
+             items rewrite that span, and the delivery inside the price must
+             stay said while they do. */
+          fig.folded > 0 ? `<div class="muted" style="font-size:11px">incl. ${money(fig.folded)} supplier delivery</div>` : ''}</td>
         <td class="num" data-amount="${ix}">${cut
           ? `<span style="color:#9aa3b2;text-decoration:line-through">${money(goodsList)}</span><br>
              <b style="color:#166534">${money(goods)}</b>`
@@ -14449,11 +14692,30 @@ ${quotePricingSource()}
          figure the shop would not charge. */
       var RUSH_PCT = ${Number(q.rush_pct) || 0};
       function m2(v){ return '$' + (Math.round(v*100)/100).toFixed(2); }
+      /* The server's own moneyEach(), so 3,000 cards read $0.1033 each here too. */
+      ${moneyEach.toString()}
+      var mEach = moneyEach;
 
       /* Order-level charges (freight) are paid once an order: two options each
          carrying their own copy were both added once a quantity changed
          (Codex #127), though applyOptionChoice counts them once. */
       var EST_SHARED = ${JSON.stringify(ORDER_SHARED_CODES)};
+      /* SinaLite lines re-price from their runs (sinalite.js eachFor, the
+         server's own function); under the minimum the customer still pays
+         for the minimum run. Every other line keeps its saved price. */
+      ${SINALITE.eachFor.toString()}
+      /* Under a SinaLite minimum: the server cannot save it, so the estimate
+         says "Minimum 25" instead of an each-price, and prices the minimum
+         run (what they would have to buy). */
+      function slUnder(L, qty){ return !!(L.runs && qty > 0 && qty < L.runs.ladder[0][0]); }
+      function slUnit(L, qty){
+        if (!L.runs || !(qty > 0)) return L.unitOverride;
+        /* Untouched: the price it was saved at (a server price is not a typed
+           one, so unitOverride is null here and would fall to the $0 row). */
+        if (qty === L.runs.qty) return L.runs.saved != null ? L.runs.saved : L.unitOverride;
+        var lad = L.runs.ladder, min = lad[0][0];
+        return qty >= min ? eachFor(lad, qty, L.runs.any) : Math.ceil(min * lad[0][1] / qty * 100) / 100;
+      }
       function estimate(){
         var moved = false, sub = 0, sharedSeen = {};
         LINES.forEach(function(L, ix){
@@ -14479,7 +14741,7 @@ ${quotePricingSource()}
             sleeves: L.sleeves, sleeveColours: L.sleeveColours, backColours: L.backColours,
             noBase: L.noBase, colours: L.colours, addons: L.addons,
             sizeMix: mix, blankTiers: BLANK_TIERS,
-            blankOverride: L.blankOverride, unitOverride: L.unitOverride,
+            blankOverride: L.blankOverride, unitOverride: slUnit(L, qty),
           });
           if (counts(ix)) {
             sub += r.lineTotal;
@@ -14494,8 +14756,10 @@ ${quotePricingSource()}
           var same = qty === (QITEMS[ix] ? QITEMS[ix].qty : 0);
           if (each) each.innerHTML = same ? each.dataset.orig
             : '<span style="color:#9aa3b2;text-decoration:line-through">' +
-              m2(QITEMS[ix].unit_price) + '</span><br><b style="color:#b45309">' +
-              m2(qty > 0 ? (r.lineTotal - shownExtras(r)) / qty : 0) + '</b>';
+              (L.precise ? mEach(QITEMS[ix].unit_price) : m2(QITEMS[ix].unit_price)) + '</span><br><b style="color:#b45309">' +
+              (slUnder(L, qty) ? 'Minimum ' + L.runs.ladder[0][0]
+                : L.precise ? mEach(qty > 0 ? (r.lineTotal - shownExtras(r)) / qty : 0, qty, r.lineTotal - shownExtras(r))
+                : m2(qty > 0 ? (r.lineTotal - shownExtras(r)) / qty : 0)) + '</b>';
           /* The Amount column is the SHIRTS, matching the split rows below it —
              the extras have their own amounts and must not be counted twice. */
           var goodsNow  = Math.round((r.lineTotal - shownExtras(r)) * 100) / 100;
@@ -14548,6 +14812,7 @@ ${applyOptionChoice.toString()}
           line_total: Number(i.line_total) || 0,
           list_total: i.list_total == null ? null : Number(i.list_total),
           amount: customerLineFigures(i).amount,
+          precise: customerLineFigures(i).folded > 0,
           addons: (i.addons || []).map((a) => ({ code: a.code, total: Number(a.total) || 0 })),
         })))};
         var SHARED = ${JSON.stringify(ORDER_SHARED_CODES)};
@@ -14558,6 +14823,8 @@ ${applyOptionChoice.toString()}
         })};
         function r2(v){ return Math.round(Number(v || 0) * 100) / 100; }
         function m(v){ return '$' + r2(v).toFixed(2); }
+        ${moneyEach.toString()}
+        var mEach = moneyEach;
         function set(id, html){ var el = document.getElementById(id); if (el) el.innerHTML = html; }
         function show(id, on){ var el = document.getElementById(id); if (el) el.style.display = on ? '' : 'none'; }
         var boxes = Array.prototype.slice.call(document.querySelectorAll('input.opt'));
@@ -14617,7 +14884,8 @@ ${applyOptionChoice.toString()}
             var each = document.querySelector('[data-each="' + ix + '"]');
             [amt, each].forEach(function(el){ if (el && el.dataset.optOrig === undefined) el.dataset.optOrig = el.innerHTML; });
             var a2 = cut > 0 ? m(it.amount - cut) : (amt ? amt.dataset.optOrig : '');
-            var e2 = cut > 0 ? m(it.qty > 0 ? (it.amount - cut) / it.qty : 0) : (each ? each.dataset.optOrig : '');
+            var e2 = cut > 0 ? (it.precise ? mEach(it.qty > 0 ? (it.amount - cut) / it.qty : 0, it.qty, it.amount - cut)
+              : m(it.qty > 0 ? (it.amount - cut) / it.qty : 0)) : (each ? each.dataset.optOrig : '');
             /* dataset.orig is what the quantity estimate restores a cell to. */
             if (amt) { amt.innerHTML = a2; amt.dataset.orig = a2; }
             if (each) { each.innerHTML = e2; each.dataset.orig = e2; }
@@ -16957,9 +17225,11 @@ app.post('/q/:code/changes', orderRateLimit, async (req, res) => {
           return { qty: total, sizes };
         }
         const raw = one(b['qty' + '_' + ix]);
+        /* A single-quantity line (signs, SinaLite runs) goes to the sized-item
+           ceiling; per-size garment boxes above keep 10,000 each (Codex on #293). */
         const n = raw === undefined || String(raw).trim() === ''
           ? (parseInt(it.qty, 10) || 0)
-          : Math.max(0, Math.min(10000, parseInt(raw, 10) || 0));
+          : Math.max(0, Math.min(QSIGNS.MAX_QTY, parseInt(raw, 10) || 0));
         return { qty: n, sizes: null };
       });
 
@@ -25842,8 +26112,22 @@ async function siteHealthHtml() {
   const extra = FUNNEL.problemLines({ waiting, problems,
     problemNames: require('./tools/lib/google-analytics').PROBLEM_EVENTS });
   const health = SITEHEALTH.siteHealthDigestHtml({ formFails, notFound, extra, esc: escEmail, base: PUBLIC_BASE_URL });
-  return health + (monday ? await funnelHealthSection(tz).catch((e) => {
+  return health + sinaliteStaleHtml() + (monday ? await funnelHealthSection(tz).catch((e) => {
     console.error('funnel health failed:', e.message); return ''; }) : '');
+}
+
+/** Every morning while SinaLite's prices are older than STALE_DAYS (or the
+ *  file cannot be read): the quote form keeps pricing from them, and they
+ *  include a sale that may have ended (Codex on #293). */
+function sinaliteStaleHtml() {
+  const t = SINALITE.table();
+  if (!t.stale && !t.error) return '';
+  const age = SINALITE.ageDays();
+  const why = t.error ? escEmail(t.error)
+    : `SinaLite prices were read ${age === null ? 'at an unknown date' : age + ' days ago'} and may include a sale that has ended.`;
+  return `<h3 style="margin:18px 0 6px;font-size:15px;color:#b45309">SinaLite prices need re-reading</h3>
+    <p style="margin:0 0 6px;font-size:14px">${why} Quotes for brochures, calendars, table covers and the other SinaLite items still price from them.
+    Re-run tools/sinalite-capture.js in the logged-in SinaLite tab, then tools/sinalite-assemble.js --captured=&lt;date&gt;.</p>`;
 }
 
 /** Monday's Funnel health (tools/lib/funnel-health.js): the website steps

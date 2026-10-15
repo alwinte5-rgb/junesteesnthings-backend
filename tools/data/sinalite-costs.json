@@ -1,0 +1,1231 @@
+{
+  "captured": "2026-10-15T05:36:14.651Z",
+  "ship_to": "Chicago IL 60657 (the shop), cheapest rate SinaLite offers",
+  "source": "tools/sinalite-capture.js, logged-in SinaLite trade prices (sale prices included)",
+  "products": {
+    "brochure": {
+      "name": "Trifold Brochures — 8.5x11, folded",
+      "label": "Trifold Brochures",
+      "group": "Print & Paper",
+      "design": "brochure",
+      "online": false,
+      "url": "https://sinalite.com/en_us/print-products/brochures/100lb-gloss-text.html",
+      "note": "100lb gloss text, full color, scored and tri-folded (scoring stops the fold cracking). Opens to 8.5\" x 11\".",
+      "materials": [
+        {
+          "key": "1s",
+          "label": "Printed one side"
+        },
+        {
+          "key": "2s",
+          "label": "Printed both sides"
+        }
+      ],
+      "sizes": [
+        {
+          "key": "8.5x11",
+          "label": "8.5\" x 11\" (folds to 3.67\" x 8.5\")"
+        }
+      ],
+      "description": "100lb gloss text, full color, scored and tri-folded (scoring stops the fold cracking). Opens to 8.5\" x 11\".",
+      "turnaround": "4 - 5 Business Days",
+      "rows": [
+        {
+          "mat": "1s",
+          "size": "8.5x11",
+          "qty": 25,
+          "cost": 69.94,
+          "ship": 16.26
+        },
+        {
+          "mat": "1s",
+          "size": "8.5x11",
+          "qty": 50,
+          "cost": 71.64,
+          "ship": 16.26
+        },
+        {
+          "mat": "1s",
+          "size": "8.5x11",
+          "qty": 75,
+          "cost": 73.34,
+          "ship": 16.26
+        },
+        {
+          "mat": "1s",
+          "size": "8.5x11",
+          "qty": 100,
+          "cost": 75.05,
+          "ship": 18.16
+        },
+        {
+          "mat": "1s",
+          "size": "8.5x11",
+          "qty": 250,
+          "cost": 85.78,
+          "ship": 20.19
+        },
+        {
+          "mat": "1s",
+          "size": "8.5x11",
+          "qty": 500,
+          "cost": 105.15,
+          "ship": 30.57
+        },
+        {
+          "mat": "1s",
+          "size": "8.5x11",
+          "qty": 750,
+          "cost": 122.96,
+          "ship": 35.13
+        },
+        {
+          "mat": "1s",
+          "size": "8.5x11",
+          "qty": 1000,
+          "cost": 142.33,
+          "ship": 44.03
+        },
+        {
+          "mat": "1s",
+          "size": "8.5x11",
+          "qty": 2500,
+          "cost": 243.66,
+          "ship": 98.26
+        },
+        {
+          "mat": "1s",
+          "size": "8.5x11",
+          "qty": 5000,
+          "cost": 348.48,
+          "ship": 176.44
+        },
+        {
+          "mat": "1s",
+          "size": "8.5x11",
+          "qty": 7500,
+          "cost": 406.38,
+          "ship": 132.72
+        },
+        {
+          "mat": "1s",
+          "size": "8.5x11",
+          "qty": 10000,
+          "cost": 527.87,
+          "ship": 333.92
+        },
+        {
+          "mat": "2s",
+          "size": "8.5x11",
+          "qty": 25,
+          "cost": 71.57,
+          "ship": 16.26
+        },
+        {
+          "mat": "2s",
+          "size": "8.5x11",
+          "qty": 50,
+          "cost": 74.1,
+          "ship": 16.26
+        },
+        {
+          "mat": "2s",
+          "size": "8.5x11",
+          "qty": 75,
+          "cost": 76.62,
+          "ship": 16.26
+        },
+        {
+          "mat": "2s",
+          "size": "8.5x11",
+          "qty": 100,
+          "cost": 79.14,
+          "ship": 18.16
+        },
+        {
+          "mat": "2s",
+          "size": "8.5x11",
+          "qty": 250,
+          "cost": 95.07,
+          "ship": 20.19
+        },
+        {
+          "mat": "2s",
+          "size": "8.5x11",
+          "qty": 500,
+          "cost": 122.91,
+          "ship": 30.57
+        },
+        {
+          "mat": "2s",
+          "size": "8.5x11",
+          "qty": 750,
+          "cost": 149.32,
+          "ship": 35.13
+        },
+        {
+          "mat": "2s",
+          "size": "8.5x11",
+          "qty": 1000,
+          "cost": 177.15,
+          "ship": 44.03
+        },
+        {
+          "mat": "2s",
+          "size": "8.5x11",
+          "qty": 2500,
+          "cost": 270.21,
+          "ship": 98.26
+        },
+        {
+          "mat": "2s",
+          "size": "8.5x11",
+          "qty": 5000,
+          "cost": 369.36,
+          "ship": 176.44
+        },
+        {
+          "mat": "2s",
+          "size": "8.5x11",
+          "qty": 7500,
+          "cost": 429.51,
+          "ship": 132.72
+        },
+        {
+          "mat": "2s",
+          "size": "8.5x11",
+          "qty": 10000,
+          "cost": 553.43,
+          "ship": 333.92
+        }
+      ]
+    },
+    "calendar": {
+      "name": "Wall Calendars — 8.5x11",
+      "label": "Wall Calendars",
+      "group": "Print & Paper",
+      "design": "calendar",
+      "online": true,
+      "url": "https://sinalite.com/en_us/print-products/calendars/100lb-gloss-text.html",
+      "note": "Saddle-stitched wall calendar on 100lb gloss text, full color, cover plus twelve months.",
+      "materials": [
+        {
+          "key": "28pg",
+          "label": "28 pages, self cover"
+        },
+        {
+          "key": "24pg_cover",
+          "label": "24 pages plus a heavier cover"
+        }
+      ],
+      "sizes": [
+        {
+          "key": "8.5x11",
+          "label": "8.5\" x 11\""
+        }
+      ],
+      "description": "Saddle-stitched wall calendar on 100lb gloss text, full color, cover plus twelve months.",
+      "turnaround": "4 - 6 Business Days",
+      "rows": [
+        {
+          "mat": "28pg",
+          "size": "8.5x11",
+          "qty": 25,
+          "cost": 354.79,
+          "ship": 21.99
+        },
+        {
+          "mat": "28pg",
+          "size": "8.5x11",
+          "qty": 50,
+          "cost": 398.45,
+          "ship": 21.98
+        },
+        {
+          "mat": "28pg",
+          "size": "8.5x11",
+          "qty": 100,
+          "cost": 540.37,
+          "ship": 48.6
+        },
+        {
+          "mat": "28pg",
+          "size": "8.5x11",
+          "qty": 250,
+          "cost": 813.3,
+          "ship": 90.49
+        },
+        {
+          "mat": "28pg",
+          "size": "8.5x11",
+          "qty": 500,
+          "cost": 1407.15,
+          "ship": 179.67
+        },
+        {
+          "mat": "28pg",
+          "size": "8.5x11",
+          "qty": 1000,
+          "cost": 1864.9,
+          "ship": 343.16
+        },
+        {
+          "mat": "24pg_cover",
+          "size": "8.5x11",
+          "qty": 25,
+          "cost": 393,
+          "ship": 21.99
+        },
+        {
+          "mat": "24pg_cover",
+          "size": "8.5x11",
+          "qty": 50,
+          "cost": 447.58,
+          "ship": 21.98
+        },
+        {
+          "mat": "24pg_cover",
+          "size": "8.5x11",
+          "qty": 100,
+          "cost": 605.88,
+          "ship": 48.6
+        },
+        {
+          "mat": "24pg_cover",
+          "size": "8.5x11",
+          "qty": 250,
+          "cost": 922.45,
+          "ship": 90.49
+        },
+        {
+          "mat": "24pg_cover",
+          "size": "8.5x11",
+          "qty": 500,
+          "cost": 1413.7,
+          "ship": 179.67
+        },
+        {
+          "mat": "24pg_cover",
+          "size": "8.5x11",
+          "qty": 1000,
+          "cost": 2380.4,
+          "ship": 343.16
+        }
+      ]
+    },
+    "table_cover": {
+      "name": "Table Covers — full-color, printed all over",
+      "label": "Table Covers",
+      "group": "Signs & Display",
+      "design": "table_cover",
+      "online": true,
+      "url": "https://sinalite.com/en_us/large-format/table-covers.html",
+      "note": "Polyester table cover, machine washable. One full-color design printed edge to edge over the top, front and ends (and the back on the closed-back cover); leave panels plain for a front-only look at the same price.",
+      "materials": [
+        {
+          "key": "3sided",
+          "label": "3-sided (open back), printed all over"
+        },
+        {
+          "key": "4sided",
+          "label": "4-sided (closed back), printed all over"
+        }
+      ],
+      "sizes": [
+        {
+          "key": "6ft",
+          "label": "Fits a 6 ft table"
+        },
+        {
+          "key": "8ft",
+          "label": "Fits an 8 ft table"
+        }
+      ],
+      "description": "Polyester table cover, machine washable. One full-color design printed edge to edge over the top, front and ends (and the back on the closed-back cover); leave panels plain for a front-only look at the same price.",
+      "turnaround": "7 Business Days",
+      "rows": [
+        {
+          "mat": "3sided",
+          "size": "6ft",
+          "qty": 1,
+          "cost": 135.59,
+          "ship": 18.16
+        },
+        {
+          "mat": "3sided",
+          "size": "6ft",
+          "qty": 2,
+          "cost": 189.83,
+          "ship": 27.4
+        },
+        {
+          "mat": "3sided",
+          "size": "6ft",
+          "qty": 3,
+          "cost": 288.63,
+          "ship": 38.17
+        },
+        {
+          "mat": "3sided",
+          "size": "6ft",
+          "qty": 5,
+          "cost": 469.73,
+          "ship": 59.72
+        },
+        {
+          "mat": "3sided",
+          "size": "6ft",
+          "qty": 10,
+          "cost": 922.48,
+          "ship": 113.62
+        },
+        {
+          "mat": "4sided",
+          "size": "6ft",
+          "qty": 1,
+          "cost": 151.86,
+          "ship": 18.16
+        },
+        {
+          "mat": "4sided",
+          "size": "6ft",
+          "qty": 2,
+          "cost": 254.9,
+          "ship": 27.4
+        },
+        {
+          "mat": "4sided",
+          "size": "6ft",
+          "qty": 3,
+          "cost": 373.51,
+          "ship": 38.17
+        },
+        {
+          "mat": "4sided",
+          "size": "6ft",
+          "qty": 5,
+          "cost": 588.55,
+          "ship": 59.72
+        },
+        {
+          "mat": "4sided",
+          "size": "6ft",
+          "qty": 10,
+          "cost": 1126.17,
+          "ship": 113.62
+        },
+        {
+          "mat": "3sided",
+          "size": "8ft",
+          "qty": 1,
+          "cost": 140.07,
+          "ship": 19.55
+        },
+        {
+          "mat": "3sided",
+          "size": "8ft",
+          "qty": 2,
+          "cost": 211.51,
+          "ship": 28.95
+        },
+        {
+          "mat": "3sided",
+          "size": "8ft",
+          "qty": 3,
+          "cost": 322.58,
+          "ship": 40.52
+        },
+        {
+          "mat": "3sided",
+          "size": "8ft",
+          "qty": 5,
+          "cost": 526.31,
+          "ship": 63.64
+        },
+        {
+          "mat": "3sided",
+          "size": "8ft",
+          "qty": 10,
+          "cost": 1035.63,
+          "ship": 121.44
+        },
+        {
+          "mat": "4sided",
+          "size": "8ft",
+          "qty": 1,
+          "cost": 162.71,
+          "ship": 19.55
+        },
+        {
+          "mat": "4sided",
+          "size": "8ft",
+          "qty": 2,
+          "cost": 254.67,
+          "ship": 28.95
+        },
+        {
+          "mat": "4sided",
+          "size": "8ft",
+          "qty": 3,
+          "cost": 373.52,
+          "ship": 40.52
+        },
+        {
+          "mat": "4sided",
+          "size": "8ft",
+          "qty": 5,
+          "cost": 611.21,
+          "ship": 63.64
+        },
+        {
+          "mat": "4sided",
+          "size": "8ft",
+          "qty": 10,
+          "cost": 1205.43,
+          "ship": 121.44
+        }
+      ]
+    },
+    "xframe": {
+      "name": "X-Frame Banners — 23.6x63",
+      "label": "X-Frame Banners",
+      "group": "Signs & Display",
+      "design": null,
+      "online": true,
+      "url": "https://sinalite.com/en_us/large-format/x-frame-banners/13oz-matte-vinyl.html",
+      "note": "13oz matte vinyl banner with grommets in all four corners, with or without the X-frame stand.",
+      "materials": [
+        {
+          "key": "banner",
+          "label": "Banner only"
+        },
+        {
+          "key": "stand",
+          "label": "Banner and X-frame stand"
+        }
+      ],
+      "sizes": [
+        {
+          "key": "23.6x63",
+          "label": "23.6\" x 63\""
+        }
+      ],
+      "description": "13oz matte vinyl banner with grommets in all four corners, with or without the X-frame stand.",
+      "turnaround": "Next Business Day",
+      "rows": [
+        {
+          "mat": "banner",
+          "size": "23.6x63",
+          "qty": 1,
+          "cost": 40.73,
+          "ship": 22.53
+        },
+        {
+          "mat": "banner",
+          "size": "23.6x63",
+          "qty": 2,
+          "cost": 81.46,
+          "ship": 32.87
+        },
+        {
+          "mat": "banner",
+          "size": "23.6x63",
+          "qty": 3,
+          "cost": 122.18,
+          "ship": 42.87
+        },
+        {
+          "mat": "banner",
+          "size": "23.6x63",
+          "qty": 5,
+          "cost": 203.64,
+          "ship": 67.55
+        },
+        {
+          "mat": "banner",
+          "size": "23.6x63",
+          "qty": 10,
+          "cost": 407.28,
+          "ship": 129.25
+        },
+        {
+          "mat": "stand",
+          "size": "23.6x63",
+          "qty": 1,
+          "cost": 62.65,
+          "ship": 22.53
+        },
+        {
+          "mat": "stand",
+          "size": "23.6x63",
+          "qty": 2,
+          "cost": 125.3,
+          "ship": 32.87
+        },
+        {
+          "mat": "stand",
+          "size": "23.6x63",
+          "qty": 3,
+          "cost": 187.94,
+          "ship": 42.87
+        },
+        {
+          "mat": "stand",
+          "size": "23.6x63",
+          "qty": 5,
+          "cost": 313.24,
+          "ship": 67.55
+        },
+        {
+          "mat": "stand",
+          "size": "23.6x63",
+          "qty": 10,
+          "cost": 626.48,
+          "ship": 129.25
+        }
+      ]
+    },
+    "sticker": {
+      "name": "Cut-to-Shape Stickers — white vinyl",
+      "label": "Cut-to-Shape Stickers",
+      "group": "Labels, Stickers & Packaging",
+      "design": "label",
+      "online": true,
+      "url": "https://sinalite.com/en_us/decals/cut-to-shape/white-vinyl-permanent.html",
+      "note": "Permanent white vinyl stickers, full color, cut to the shape.",
+      "materials": [
+        {
+          "key": "white_perm",
+          "label": "White vinyl, permanent"
+        }
+      ],
+      "sizes": [
+        {
+          "key": "circle2",
+          "label": "2\" circle"
+        },
+        {
+          "key": "circle3",
+          "label": "3\" circle"
+        },
+        {
+          "key": "rect2x3",
+          "label": "2\" x 3\" rectangle"
+        },
+        {
+          "key": "rect3x4",
+          "label": "3\" x 4\" rectangle"
+        }
+      ],
+      "description": "Permanent white vinyl stickers, full color, cut to the shape.",
+      "turnaround": null,
+      "rows": [
+        {
+          "mat": "white_perm",
+          "size": "circle2",
+          "qty": 10,
+          "cost": 35.7,
+          "ship": 17.69,
+          "ship_assumed": true
+        },
+        {
+          "mat": "white_perm",
+          "size": "circle2",
+          "qty": 25,
+          "cost": 55.59,
+          "ship": 17.69,
+          "ship_assumed": true
+        },
+        {
+          "mat": "white_perm",
+          "size": "circle2",
+          "qty": 50,
+          "cost": 62.18,
+          "ship": 17.69,
+          "ship_assumed": true
+        },
+        {
+          "mat": "white_perm",
+          "size": "circle2",
+          "qty": 100,
+          "cost": 73.29,
+          "ship": 17.69,
+          "ship_assumed": true
+        },
+        {
+          "mat": "white_perm",
+          "size": "circle2",
+          "qty": 250,
+          "cost": 102.91,
+          "ship": 17.69,
+          "ship_assumed": true
+        },
+        {
+          "mat": "white_perm",
+          "size": "circle3",
+          "qty": 10,
+          "cost": 36.9,
+          "ship": 17.69,
+          "ship_assumed": true
+        },
+        {
+          "mat": "white_perm",
+          "size": "circle3",
+          "qty": 25,
+          "cost": 62,
+          "ship": 17.69,
+          "ship_assumed": true
+        },
+        {
+          "mat": "white_perm",
+          "size": "circle3",
+          "qty": 50,
+          "cost": 71.18,
+          "ship": 17.69,
+          "ship_assumed": true
+        },
+        {
+          "mat": "white_perm",
+          "size": "circle3",
+          "qty": 100,
+          "cost": 90.11,
+          "ship": 17.69,
+          "ship_assumed": true
+        },
+        {
+          "mat": "white_perm",
+          "size": "circle3",
+          "qty": 250,
+          "cost": 136.32,
+          "ship": 17.69,
+          "ship_assumed": true
+        },
+        {
+          "mat": "white_perm",
+          "size": "rect2x3",
+          "qty": 10,
+          "cost": 35.88,
+          "ship": 17.69,
+          "ship_assumed": true
+        },
+        {
+          "mat": "white_perm",
+          "size": "rect2x3",
+          "qty": 25,
+          "cost": 57.49,
+          "ship": 17.69,
+          "ship_assumed": true
+        },
+        {
+          "mat": "white_perm",
+          "size": "rect2x3",
+          "qty": 50,
+          "cost": 66.03,
+          "ship": 17.69,
+          "ship_assumed": true
+        },
+        {
+          "mat": "white_perm",
+          "size": "rect2x3",
+          "qty": 100,
+          "cost": 80.44,
+          "ship": 17.69,
+          "ship_assumed": true
+        },
+        {
+          "mat": "white_perm",
+          "size": "rect2x3",
+          "qty": 250,
+          "cost": 116.37,
+          "ship": 17.69,
+          "ship_assumed": true
+        },
+        {
+          "mat": "white_perm",
+          "size": "rect3x4",
+          "qty": 10,
+          "cost": 37.02,
+          "ship": 17.69,
+          "ship_assumed": true
+        },
+        {
+          "mat": "white_perm",
+          "size": "rect3x4",
+          "qty": 25,
+          "cost": 62.47,
+          "ship": 17.69,
+          "ship_assumed": true
+        },
+        {
+          "mat": "white_perm",
+          "size": "rect3x4",
+          "qty": 50,
+          "cost": 76.38,
+          "ship": 17.69,
+          "ship_assumed": true
+        },
+        {
+          "mat": "white_perm",
+          "size": "rect3x4",
+          "qty": 100,
+          "cost": 99.77,
+          "ship": 17.69,
+          "ship_assumed": true
+        },
+        {
+          "mat": "white_perm",
+          "size": "rect3x4",
+          "qty": 250,
+          "cost": 156.22,
+          "ship": 17.69,
+          "ship_assumed": true
+        }
+      ]
+    },
+    "roll_label": {
+      "name": "Roll Labels — white gloss BOPP",
+      "label": "Roll Labels",
+      "group": "Labels, Stickers & Packaging",
+      "design": "label",
+      "online": false,
+      "url": "https://sinalite.com/en_us/packaging/roll-labels/bopp-labels.html",
+      "note": "Waterproof white gloss BOPP product labels on a roll, gloss laminated, full color.",
+      "materials": [
+        {
+          "key": "white_bopp",
+          "label": "White gloss BOPP, gloss laminated"
+        }
+      ],
+      "sizes": [
+        {
+          "key": "circle2",
+          "label": "2\" circle"
+        },
+        {
+          "key": "circle3",
+          "label": "3\" circle"
+        },
+        {
+          "key": "rect2x3",
+          "label": "2\" x 3\" rectangle"
+        },
+        {
+          "key": "rect3x4",
+          "label": "3\" x 4\" rectangle"
+        }
+      ],
+      "description": "Waterproof white gloss BOPP product labels on a roll, gloss laminated, full color.",
+      "turnaround": "2 - 4 Business Days",
+      "rows": [
+        {
+          "mat": "white_bopp",
+          "size": "circle2",
+          "qty": 25,
+          "cost": 52.25,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "circle2",
+          "qty": 50,
+          "cost": 52.72,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "circle2",
+          "qty": 100,
+          "cost": 53.67,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "circle2",
+          "qty": 250,
+          "cost": 61.48,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "circle2",
+          "qty": 500,
+          "cost": 86.08,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "circle2",
+          "qty": 1000,
+          "cost": 95.04,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "circle3",
+          "qty": 25,
+          "cost": 52.78,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "circle3",
+          "qty": 50,
+          "cost": 54.01,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "circle3",
+          "qty": 100,
+          "cost": 56.62,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "circle3",
+          "qty": 250,
+          "cost": 69.24,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "circle3",
+          "qty": 500,
+          "cost": 101.7,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "circle3",
+          "qty": 1000,
+          "cost": 126.18,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "rect2x3",
+          "qty": 25,
+          "cost": 52.32,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "rect2x3",
+          "qty": 50,
+          "cost": 53.13,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "rect2x3",
+          "qty": 100,
+          "cost": 54.72,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "rect2x3",
+          "qty": 250,
+          "cost": 64.1,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "rect2x3",
+          "qty": 500,
+          "cost": 91.27,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "rect2x3",
+          "qty": 1000,
+          "cost": 105.32,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "rect3x4",
+          "qty": 25,
+          "cost": 53.24,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "rect3x4",
+          "qty": 50,
+          "cost": 54.9,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "rect3x4",
+          "qty": 100,
+          "cost": 58.39,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "rect3x4",
+          "qty": 250,
+          "cost": 73.59,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "rect3x4",
+          "qty": 500,
+          "cost": 110.32,
+          "ship": 19.96
+        },
+        {
+          "mat": "white_bopp",
+          "size": "rect3x4",
+          "qty": 1000,
+          "cost": 143.12,
+          "ship": 19.96
+        }
+      ]
+    },
+    "pouch": {
+      "name": "Stand-Up Pouches — white, zipper",
+      "label": "Stand-Up Pouches",
+      "group": "Labels, Stickers & Packaging",
+      "design": "pouch",
+      "online": false,
+      "any_qty": true,
+      "url": "https://sinalite.com/en_us/packaging/flexible-packaging/stand-up-pouches-2.html",
+      "note": "Custom printed stand-up pouches: gloss laminated, white inside, resealable zipper and tear notch, full color. Minimum 500.",
+      "materials": [
+        {
+          "key": "white_zip",
+          "label": "White, gloss, zipper and tear notch"
+        }
+      ],
+      "sizes": [
+        {
+          "key": "4.375x6x2",
+          "label": "4.375\" x 6\" x 2\" gusset"
+        },
+        {
+          "key": "5x8x3",
+          "label": "5\" x 8\" x 3\" gusset"
+        },
+        {
+          "key": "7x9x3",
+          "label": "7\" x 9\" x 3\" gusset"
+        }
+      ],
+      "description": "Custom printed stand-up pouches: gloss laminated, white inside, resealable zipper and tear notch, full color. Minimum 500.",
+      "turnaround": "10 - 12 Business Days",
+      "rows": [
+        {
+          "mat": "white_zip",
+          "size": "4.375x6x2",
+          "qty": 500,
+          "cost": 1138.41,
+          "ship": 75.87
+        },
+        {
+          "mat": "white_zip",
+          "size": "4.375x6x2",
+          "qty": 1000,
+          "cost": 1206.61,
+          "ship": 76.82
+        },
+        {
+          "mat": "white_zip",
+          "size": "4.375x6x2",
+          "qty": 2500,
+          "cost": 1419.92,
+          "ship": 114.58
+        },
+        {
+          "mat": "white_zip",
+          "size": "4.375x6x2",
+          "qty": 5000,
+          "cost": 1769.64,
+          "ship": 152.47
+        },
+        {
+          "mat": "white_zip",
+          "size": "5x8x3",
+          "qty": 500,
+          "cost": 1148.64,
+          "ship": 76.82
+        },
+        {
+          "mat": "white_zip",
+          "size": "5x8x3",
+          "qty": 1000,
+          "cost": 1223.94,
+          "ship": 76.89
+        },
+        {
+          "mat": "white_zip",
+          "size": "5x8x3",
+          "qty": 2500,
+          "cost": 1459.05,
+          "ship": 114.68
+        },
+        {
+          "mat": "white_zip",
+          "size": "5x8x3",
+          "qty": 5000,
+          "cost": 1849.24,
+          "ship": 171.36
+        },
+        {
+          "mat": "white_zip",
+          "size": "7x9x3",
+          "qty": 500,
+          "cost": 1182.09,
+          "ship": 76.82
+        },
+        {
+          "mat": "white_zip",
+          "size": "7x9x3",
+          "qty": 1000,
+          "cost": 1284.8,
+          "ship": 95.7
+        },
+        {
+          "mat": "white_zip",
+          "size": "7x9x3",
+          "qty": 2500,
+          "cost": 1588.56,
+          "ship": 133.57
+        },
+        {
+          "mat": "white_zip",
+          "size": "7x9x3",
+          "qty": 5000,
+          "cost": 2097.86,
+          "ship": 209.15
+        }
+      ]
+    },
+    "mug": {
+      "name": "Ceramic Mugs — 11oz, printed",
+      "label": "Ceramic Mugs",
+      "group": "Drinkware",
+      "design": null,
+      "online": true,
+      "any_qty": true,
+      "url": "https://sinalite.com/en_us/promotional-products/mugs/11oz-ceramic-mug.html",
+      "note": "White 11oz ceramic mug, full-color sublimation print on one side. No minimum.",
+      "materials": [
+        {
+          "key": "1side",
+          "label": "Printed one side"
+        }
+      ],
+      "sizes": [
+        {
+          "key": "11oz",
+          "label": "11 oz"
+        }
+      ],
+      "description": "White 11oz ceramic mug, full-color sublimation print on one side. No minimum.",
+      "turnaround": "2 - 5 Business Days",
+      "rows": [
+        {
+          "mat": "1side",
+          "size": "11oz",
+          "qty": 1,
+          "cost": 6.18,
+          "ship": 19.96
+        },
+        {
+          "mat": "1side",
+          "size": "11oz",
+          "qty": 12,
+          "cost": 59.76,
+          "ship": 29.73
+        },
+        {
+          "mat": "1side",
+          "size": "11oz",
+          "qty": 36,
+          "cost": 177.84,
+          "ship": 58.05
+        },
+        {
+          "mat": "1side",
+          "size": "11oz",
+          "qty": 72,
+          "cost": 345.6,
+          "ship": 96.31
+        },
+        {
+          "mat": "1side",
+          "size": "11oz",
+          "qty": 144,
+          "cost": 691.2,
+          "ship": 186.78
+        }
+      ]
+    },
+    "tumbler": {
+      "name": "Tumblers — 20oz stainless, printed",
+      "label": "Tumblers",
+      "group": "Drinkware",
+      "design": null,
+      "online": true,
+      "any_qty": true,
+      "url": "https://sinalite.com/en_us/promotional-products/tumblers/20-oz-tumbler.html",
+      "note": "20oz stainless steel tumbler with clear lid and steel straw, full-color print on one side. No minimum.",
+      "materials": [
+        {
+          "key": "1side",
+          "label": "Printed one side"
+        }
+      ],
+      "sizes": [
+        {
+          "key": "20oz",
+          "label": "20 oz"
+        }
+      ],
+      "description": "20oz stainless steel tumbler with clear lid and steel straw, full-color print on one side. No minimum.",
+      "turnaround": "2 - 5 Business Days",
+      "rows": [
+        {
+          "mat": "1side",
+          "size": "20oz",
+          "qty": 1,
+          "cost": 12.5,
+          "ship": 19.96
+        },
+        {
+          "mat": "1side",
+          "size": "20oz",
+          "qty": 12,
+          "cost": 129.72,
+          "ship": 29.73
+        },
+        {
+          "mat": "1side",
+          "size": "20oz",
+          "qty": 36,
+          "cost": 374.76,
+          "ship": 60.33
+        },
+        {
+          "mat": "1side",
+          "size": "20oz",
+          "qty": 72,
+          "cost": 722.88,
+          "ship": 101.72
+        },
+        {
+          "mat": "1side",
+          "size": "20oz",
+          "qty": 144,
+          "cost": 1373.76,
+          "ship": 197.56
+        }
+      ]
+    }
+  }
+}

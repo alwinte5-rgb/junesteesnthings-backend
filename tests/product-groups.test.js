@@ -32,7 +32,7 @@ test('a brand name is not a category', () => {
   assert.equal(groupOf('Liberty Bags 8861R — Recycled Canvas Tote'), 'Bags & Totes');
   assert.equal(groupOf('Q-Tees S800 Sustainable Canvas Tote Bag'), 'Bags & Totes');
   /* And the actual canvas product still lands in signage, via "acrylic". */
-  assert.equal(groupOf('Acrylic & Canvas'), 'Signs, Print & Décor');
+  assert.equal(groupOf('Acrylic & Canvas'), 'Signs & Display');
 });
 
 test('the zip decides, so quarter-zips are asked about before sweatshirts', () => {
@@ -54,11 +54,14 @@ test('infant and youth win over the garment type', () => {
 });
 
 test('every signage product reaches signage, and nothing else does', () => {
+  /* Split four ways on 2026-10-15 (owner: category, then product); paper
+     moved to its own Print & Paper section. */
   for (const n of ['Vinyl Banners', 'Posters & Prints', 'Window & Wall Graphics',
-                   'Vehicle Magnets', 'Business Cards & Flyers', 'Big Head Cutouts',
+                   'Vehicle Magnets', 'Big Head Cutouts',
                    'Full Body Cutouts', 'Acrylic & Canvas']) {
-    assert.equal(groupOf(n), 'Signs, Print & Décor', n + ' left the signage group');
+    assert.equal(groupOf(n), 'Signs & Display', n + ' left the signage group');
   }
+  assert.equal(groupOf('Business Cards & Flyers'), 'Print & Paper');
 });
 
 test('anything unmatched still gets a home', () => {
