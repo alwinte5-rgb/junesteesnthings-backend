@@ -29,7 +29,7 @@ const SIGNS = SF.signsTable().families;
 const familyOf = (kind) => SIGNS[kind] || SL.table().families[kind] || null;
 
 /** The largest quantity a sized line is priced at (preview and save). */
-const MAX_QTY = 100000;
+const MAX_QTY = SL.MAX_QTY;
 
 /* Name -> kind. First match wins, so the specific names come first. */
 const KINDS = [

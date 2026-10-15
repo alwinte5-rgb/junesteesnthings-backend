@@ -112,7 +112,12 @@ function eachFor(ladder, qty, anyQty) {
 }
 
 let cache = null, cacheMtime = null, loadError = null;
+let checkedAt = 0;
 function load() {
+  /* The file is looked at most once a second: kindOf() runs for every
+     catalogue product on each quote-form render (code review, 2026-10-15). */
+  if (cache && Date.now() - checkedAt < 1000) return cache;
+  checkedAt = Date.now();
   let mtime = null;
   try { mtime = fs.statSync(DATA_FILE).mtimeMs; } catch { /* reported below */ }
   if (cache && mtime === cacheMtime) return cache;
@@ -140,8 +145,10 @@ function load() {
        every SinaLite item into an unknown, $0 catalogue row (Codex on #293).
        With no good table ever loaded, the quote save refuses SinaLite rows
        (server.js, by the catalogue's supplier tag). */
-    loadError = 'SinaLite prices unreadable (' + DATA_FILE + '): ' + e.message;
-    console.error('[sinalite] ' + loadError + (cache && Object.keys(cache.products || {}).length ? ' — still using the last good table' : ''));
+    /* Published (pricing-rules, the digest) without the server's file path;
+       the log keeps the full detail. */
+    loadError = 'SinaLite prices unreadable: ' + e.message;
+    console.error('[sinalite] ' + DATA_FILE + ': ' + loadError + (cache && Object.keys(cache.products || {}).length ? ' — still using the last good table' : ''));
     if (!cache) cache = { captured: null, products: {} };
   }
   return cache;
@@ -209,6 +216,11 @@ function kindOf(name) {
   return null;
 }
 
+/* The largest quantity any sized line is priced at (quote-signs.js MAX_QTY
+   is this). eachFor() repeats the literal because it is sent to the browser
+   as source; a test holds the two together. */
+const MAX_QTY = 100000;
+
 /* Inbound shipping, SinaLite (New York) to the shop, business days. */
 const INBOUND_DAYS = [2, 5];
 /* A saved SinaLite line whose family the table does not have right now (no
@@ -232,6 +244,9 @@ function leadDays(kind) {
 }
 
 /** For tests: swap the data in. */
-function _setData(d) { cache = d; cacheMtime = (() => { try { return fs.statSync(DATA_FILE).mtimeMs; } catch { return null; } })(); loadError = null; }
+/** For tests: look at the file again on the next call. */
+function _recheck() { checkedAt = 0; }
 
-module.exports = { priceEach, shipBilled, ladderFrom, eachFor, leadDays, FALLBACK_LEAD, table, kindOf, ageDays, stale, familyOf, _setData, DATA_FILE, STALE_DAYS };
+function _setData(d) { checkedAt = 0; cache = d; cacheMtime = (() => { try { return fs.statSync(DATA_FILE).mtimeMs; } catch { return null; } })(); loadError = null; }
+
+module.exports = { _recheck, priceEach, shipBilled, ladderFrom, eachFor, leadDays, FALLBACK_LEAD, MAX_QTY, table, kindOf, ageDays, stale, familyOf, _setData, DATA_FILE, STALE_DAYS };

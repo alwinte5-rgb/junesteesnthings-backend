@@ -7605,7 +7605,10 @@ function deliveryEstimate(from = new Date(), opts = {}) {
      the page promised 7). */
   let lo = pmin + extra + dig, hi = pmax + extra + dig;
   for (const i of items) {
-    const kind = i && i.sign && i.sign.kind;
+    /* An optional line the customer has not taken is not being made: it must
+       not move the date of the job it sits on (accepting removes the flag from
+       the ones they take). */
+    const kind = i && !i.optional && i.sign && i.sign.kind;
     /* Signs365 kinds (banner + sign-families.js) are on the in-house window;
        any other sized kind is SinaLite's, and with its family unavailable it
        still takes the slowest SinaLite lead rather than none (Codex on #293). */
@@ -8972,6 +8975,15 @@ function moneyEach(n, qty, amount) {
   return s;
 }
 
+/** The each-price cell's figure. Cents, as always, on an ordinary line: a
+ *  mixed-size garment line's each is a blend that never multiplied back to
+ *  the amount, and four places or "≈" there would only confuse (code review,
+ *  2026-10-15). Only a line with a supplier charge folded in gets moneyEach's
+ *  extra places and its "≈". */
+function eachText(fig, item) {
+  return fig.folded > 0 ? moneyEach(fig.each, item.qty, fig.amount) : money(fig.each);
+}
+
 /** The each-price a person actually TYPED on a hand-priced line.
  *
  *  Not the same figure as `unit_price`, and the difference is a live bug when
@@ -10103,8 +10115,8 @@ const PRODUCT_GROUPS = [
      "Pouch Pocket" and bags a "Bottle Pocket". */
   ['Signs & Display',         /banner|cutout|poster|magnet|acrylic|window graphic|wall graphic|floor graphic|vehicle graphic|yard sign|rigid sign|photo panel|stretched canvas|table cover|x-frame/i, 'sized'],
   ['Print & Paper',           /business card|flyer|brochure|postcard|door hanger|calendar|rack card|tear card|notepad|envelope|booklet|presentation folder/i, 'sized'],
-  ['Labels, Stickers & Packaging', /roll labels?|stickers?\b|decals?\b|\bpouch(?:es)?\b(?!\s*pocket)/i],
-  ['Drinkware',               /\bmugs?\b|tumbler|\bbottles?\b(?!\s*(?:pocket|holder|sleeve))/i],
+  ['Labels, Stickers & Packaging', /roll labels?|stickers?\b|decals?\b|\bpouch(?:es)?\b(?![\s-]*pocket)/i],
+  ['Drinkware',               /\bmugs?\b|tumbler|\bbottles?\b(?![\s-]*(?:pocket|holder|sleeve))/i],
   ['Youth, Toddler & Infant', /youth|toddler|infant|bodysuit|onesie/i],
   ['Scrubs',                  /scrub/i],
   /* Before Hoodies, because a "Quarter-Zip Pullover" is a quarter-zip and a
@@ -11349,6 +11361,7 @@ ${quotePricingSource()}
 
       function calc(){
         pcatSyncAll();
+        if (window.__etaReady) etaSync();
         var sub = 0;
         /* Screens across every line, so the totals can show them on their own
            row. Counted from the addon line's own count field rather than
@@ -12248,10 +12261,25 @@ ${uploadStatusScript()}
       bind(); rushSync(false); calc();
       // Delivery estimate hint
       var eta = ${JSON.stringify(deliveryEstimate())};
-      document.getElementById('eta').textContent =
-        'Typical turnaround: ready about ' + new Date(eta.ready).toLocaleDateString('en-US',{month:'short',day:'numeric'}) +
-        ', delivered ' + new Date(eta.deliver_from).toLocaleDateString('en-US',{month:'short',day:'numeric'}) +
-        '–' + new Date(eta.deliver_to).toLocaleDateString('en-US',{month:'short',day:'numeric'}) + '.';
+      /* The same estimate with each SinaLite item on the order, so the hint
+         moves when a pouch (10-12 days at SinaLite) is added, as the
+         customer's page does. Optional lines do not count. */
+      var ETA_SL = ${JSON.stringify(Object.fromEntries(Object.keys(SINALITE.table().families)
+        .map((k) => [k, deliveryEstimate(new Date(), { items: [{ sign: { kind: k } }] })])))};
+      function etaSync(){
+        var e = eta, slow = null;
+        Array.prototype.forEach.call(document.querySelectorAll('#lines .line'), function(L){
+          var opt = L.querySelector('.opt'); if (opt && opt.checked) return;
+          var p = L.querySelector('.p'); var k = p && SIGN_KIND[String(p.value)];
+          if (k && ETA_SL[k] && (!slow || ETA_SL[k].deliver_to > slow.deliver_to)) slow = ETA_SL[k];
+        });
+        if (slow && slow.deliver_to > e.deliver_to) e = slow;
+        var d = function(x){ return new Date(x).toLocaleDateString('en-US',{month:'short',day:'numeric'}); };
+        document.getElementById('eta').textContent = (e === eta ? 'Typical turnaround' : 'With SinaLite items') +
+          ': ready about ' + d(e.ready) + ', delivered ' + d(e.deliver_from) + '–' + d(e.deliver_to) + '.';
+      }
+      window.__etaReady = true;
+      etaSync();
       // Prior pricing for a returning customer
       var t;
       function lookup(){
@@ -12415,7 +12443,6 @@ app.post('/admin/api/sign-price', requireAdmin, (req, res) => {
   /* Refused, not clamped: a clamped preview priced 100,001 roll labels at the
      100,000 rate while the save priced the real quantity (Codex on #293). */
   const qty = Math.max(1, parseInt(b.qty, 10) || 1);
-  if (qty > QSIGNS.MAX_QTY) return res.status(400).json({ ok: false, error: 'More than 100,000: quote it by hand.' });
   res.json(QSIGNS.priceSign(kind, {
     w: sp.w, h: sp.h, size: String(sp.size || '').slice(0, 20), mat: String(sp.mat || '').slice(0, 30),
     hang: String(sp.hang || '').slice(0, 30),
@@ -13795,6 +13822,8 @@ function customerLinePricing(items, catalog) {
          moving 25 calendars to 100 must see the 100-run price, not the saved
          25-run each (Codex on #293). Re-priced by sinalite.js eachFor(). */
       runs: sinaliteRunsOf(it),
+      /* Supplier charge folded in: the estimate shows its each like the page. */
+      precise: customerLineFigures(it).folded > 0,
     };
   });
 }
@@ -14234,8 +14263,8 @@ app.get('/q/:code', async (req, res) => {
                       name="qty_${ix}" value="${parseInt(i.qty, 10) || 0}"
                       style="width:64px;padding:5px;font-size:14px;text-align:right">`}</td>
         <td class="num"><span data-each="${ix}">${cut
-          ? `<span style="color:#9aa3b2;text-decoration:line-through">${moneyEach(i.qty > 0 ? goodsList / i.qty : 0)}</span><br>${moneyEach(fig.each, i.qty, fig.amount)}`
-          : moneyEach(fig.each, i.qty, fig.amount)}</span>${
+          ? `<span style="color:#9aa3b2;text-decoration:line-through">${(fig.folded > 0 ? moneyEach : money)(i.qty > 0 ? goodsList / i.qty : 0)}</span><br>${eachText(fig, i)}`
+          : eachText(fig, i)}</span>${
           /* Outside the data-each span: the quantity estimate and the optional
              items rewrite that span, and the delivery inside the price must
              stay said while they do. */
@@ -14587,6 +14616,10 @@ ${quotePricingSource()}
          server's own function); under the minimum the customer still pays
          for the minimum run. Every other line keeps its saved price. */
       ${SINALITE.eachFor.toString()}
+      /* Under a SinaLite minimum: the server cannot save it, so the estimate
+         says "Minimum 25" instead of an each-price, and prices the minimum
+         run (what they would have to buy). */
+      function slUnder(L, qty){ return !!(L.runs && qty > 0 && qty < L.runs.ladder[0][0]); }
       function slUnit(L, qty){
         if (!L.runs || !(qty > 0)) return L.unitOverride;
         /* Untouched: the price it was saved at (a server price is not a typed
@@ -14635,8 +14668,10 @@ ${quotePricingSource()}
           var same = qty === (QITEMS[ix] ? QITEMS[ix].qty : 0);
           if (each) each.innerHTML = same ? each.dataset.orig
             : '<span style="color:#9aa3b2;text-decoration:line-through">' +
-              mEach(QITEMS[ix].unit_price) + '</span><br><b style="color:#b45309">' +
-              mEach(qty > 0 ? (r.lineTotal - shownExtras(r)) / qty : 0, qty, r.lineTotal - shownExtras(r)) + '</b>';
+              (L.precise ? mEach(QITEMS[ix].unit_price) : m2(QITEMS[ix].unit_price)) + '</span><br><b style="color:#b45309">' +
+              (slUnder(L, qty) ? 'Minimum ' + L.runs.ladder[0][0]
+                : L.precise ? mEach(qty > 0 ? (r.lineTotal - shownExtras(r)) / qty : 0, qty, r.lineTotal - shownExtras(r))
+                : m2(qty > 0 ? (r.lineTotal - shownExtras(r)) / qty : 0)) + '</b>';
           /* The Amount column is the SHIRTS, matching the split rows below it —
              the extras have their own amounts and must not be counted twice. */
           var goodsNow  = Math.round((r.lineTotal - shownExtras(r)) * 100) / 100;
@@ -14689,6 +14724,7 @@ ${applyOptionChoice.toString()}
           line_total: Number(i.line_total) || 0,
           list_total: i.list_total == null ? null : Number(i.list_total),
           amount: customerLineFigures(i).amount,
+          precise: customerLineFigures(i).folded > 0,
           addons: (i.addons || []).map((a) => ({ code: a.code, total: Number(a.total) || 0 })),
         })))};
         var SHARED = ${JSON.stringify(ORDER_SHARED_CODES)};
@@ -14760,7 +14796,8 @@ ${applyOptionChoice.toString()}
             var each = document.querySelector('[data-each="' + ix + '"]');
             [amt, each].forEach(function(el){ if (el && el.dataset.optOrig === undefined) el.dataset.optOrig = el.innerHTML; });
             var a2 = cut > 0 ? m(it.amount - cut) : (amt ? amt.dataset.optOrig : '');
-            var e2 = cut > 0 ? mEach(it.qty > 0 ? (it.amount - cut) / it.qty : 0, it.qty, it.amount - cut) : (each ? each.dataset.optOrig : '');
+            var e2 = cut > 0 ? (it.precise ? mEach(it.qty > 0 ? (it.amount - cut) / it.qty : 0, it.qty, it.amount - cut)
+              : m(it.qty > 0 ? (it.amount - cut) / it.qty : 0)) : (each ? each.dataset.optOrig : '');
             /* dataset.orig is what the quantity estimate restores a cell to. */
             if (amt) { amt.innerHTML = a2; amt.dataset.orig = a2; }
             if (each) { each.innerHTML = e2; each.dataset.orig = e2; }

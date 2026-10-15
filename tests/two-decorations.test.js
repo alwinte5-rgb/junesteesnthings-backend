@@ -31,7 +31,7 @@ function lift(body) {
   const tuBody = tu.slice(0, tu.indexOf('\n}\n') + 2);
   /* sinaliteRunsOf() reads the SinaLite table; these lines carry no sign, so
      it answers null, exactly as the real one would for them. */
-  return vm.runInThisContext('(function(){ var sinaliteRunsOf = function(){ return null; };' + tuBody + '\nreturn (' + body + ');})()');
+  return vm.runInThisContext('(function(){ var sinaliteRunsOf = function(){ return null; }; var customerLineFigures = function(){ return { folded: 0 }; };' + tuBody + '\nreturn (' + body + ');})()');
 }
 
 function engine() {

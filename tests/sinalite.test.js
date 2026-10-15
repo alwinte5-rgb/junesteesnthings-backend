@@ -259,6 +259,7 @@ test('a price file with a malformed product keeps the last good table (and a hug
     const bad = JSON.parse(real); delete bad.products.calendar.materials;
     fs.writeFileSync(SL.DATA_FILE, JSON.stringify(bad));
     fs.utimesSync(SL.DATA_FILE, new Date(), new Date(Date.now() + 5000));
+    SL._recheck();
     const t = SL.table();
     assert.ok(t.families.calendar, 'still the last good table');
     assert.match(t.error || '', /calendar is missing materials/);
@@ -293,6 +294,7 @@ test('a re-capture missing one offered size/material is refused; huge quantities
     bad.products.calendar.rows = bad.products.calendar.rows.filter((r) => r.mat !== '24pg_cover');
     fs.writeFileSync(SL.DATA_FILE, JSON.stringify(bad));
     fs.utimesSync(SL.DATA_FILE, new Date(), new Date(Date.now() + 9000));
+    SL._recheck();
     const t = SL.table();
     assert.match(t.error || '', /calendar has no prices for 24pg_cover/);
     assert.ok(t.families.calendar.prices['24pg_cover']['8.5x11'][''].length, 'the last good table still prices it');
@@ -301,7 +303,8 @@ test('a re-capture missing one offered size/material is refused; huge quantities
   assert.ok(SL.eachFor(L, 100000) > 0, 'the cap prices');
   assert.strictEqual(SL.eachFor(L, 100001), null, 'past the cap: not priced');
   /* The preview refuses past the same cap rather than clamping to it. */
-  assert.match(SERVER, /if \(qty > QSIGNS\.MAX_QTY\) return res\.status\(400\)/);
+  assert.strictEqual(require('../tools/lib/quote-signs').MAX_QTY, SL.MAX_QTY, 'one cap');
+  assert.match(SL.eachFor.toString(), new RegExp('q > ' + SL.MAX_QTY + '\\)'), 'eachFor repeats the same cap');
   /* ...and the save refuses past it for every sized kind, not only SinaLite. */
   const QS = require('../tools/lib/quote-signs');
   const yard = QS.priceSign('yard_sign', { size: '24x18', mat: '4s' }, 100001, true);
@@ -340,4 +343,18 @@ test('live estimates mark a non-footing each-price too; the customer quantity bo
   assert.match(SERVER, /mEach\(it\.qty > 0 \? \(it\.amount - cut\) \/ it\.qty : 0, it\.qty, it\.amount - cut\)/);
   assert.match(SERVER, /type="number" min="0" max="\$\{QSIGNS\.MAX_QTY\}" step="1"/);
   assert.match(SERVER, /Math\.min\(QSIGNS\.MAX_QTY, parseInt\(raw, 10\) \|\| 0\)/);
+});
+
+test('final review: optional lines keep their own date, garment each-prices stay in cents, hyphenated pockets', () => {
+  assert.match(SERVER, /const kind = i && !i\.optional && i\.sign && i\.sign\.kind;/);
+  assert.match(SERVER, /return fig\.folded > 0 \? moneyEach\(fig\.each, item\.qty, fig\.amount\) : money\(fig\.each\);/);
+  assert.match(SERVER, /if \(window\.__etaReady\) etaSync\(\);/);
+  assert.match(SERVER, /'Minimum ' \+ L\.runs\.ladder\[0\]\[0\]/);
+  const src = extract('const PRODUCT_GROUPS = [', '\n];');
+  const G = vm.runInThisContext('(() => {' + src + '; return PRODUCT_GROUPS; })()');
+  const groupOf = (n) => (G.find(([, re]) => re.test(n)) || ['Everything else'])[0];
+  assert.strictEqual(groupOf('Heavy Blend Pouch-Pocket Hoodie'), 'Hoodies & Sweatshirts');
+  assert.strictEqual(groupOf('Hydration Backpack with Bottle-Holder'), 'Bags & Totes');
+  assert.ok(!(SL.table().error || '').includes(SL.DATA_FILE), 'no server path published');
+  assert.ok(!fs.readFileSync(path.join(__dirname, '..', 'tools', 'lib', 'sinalite.js'), 'utf8').includes("loadError = 'SinaLite prices unreadable (' + DATA_FILE"));
 });
