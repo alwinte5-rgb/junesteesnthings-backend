@@ -271,3 +271,31 @@ test('a price file with a malformed product keeps the last good table (and a hug
   assert.strictEqual(r.ok, false);
   assert.match(r.error, /cannot be priced/);
 });
+
+test('SinaLite lead time (their turnaround + inbound shipping) sets the ready date', () => {
+  SL._setData(null);
+  const lead = SL.leadDays('pouch');
+  assert.deepStrictEqual(lead, [12, 17], 'pouches: 10-12 business days at SinaLite, then 2-5 to the shop');
+  assert.deepStrictEqual(SL.leadDays('xframe'), [3, 6], '"Next Business Day" reads as one day');
+  assert.strictEqual(SL.leadDays('yard_sign'), null);
+  assert.match(SERVER, /const lead = i && i\.sign && i\.sign\.kind \? SINALITE\.leadDays\(i\.sign\.kind\) : null;/);
+});
+
+test('a re-capture missing one offered size/material is refused; huge quantities do not blow the stack', () => {
+  const real = fs.readFileSync(SL.DATA_FILE, 'utf8');
+  const orig = console.error; console.error = () => {};
+  try {
+    SL._setData(null);
+    fs.utimesSync(SL.DATA_FILE, new Date(), new Date(Date.now() - 9000));
+    assert.ok(SL.table().families.calendar, 'the real file loads first');
+    const bad = JSON.parse(real);
+    bad.products.calendar.rows = bad.products.calendar.rows.filter((r) => r.mat !== '24pg_cover');
+    fs.writeFileSync(SL.DATA_FILE, JSON.stringify(bad));
+    fs.utimesSync(SL.DATA_FILE, new Date(), new Date(Date.now() + 9000));
+    const t = SL.table();
+    assert.match(t.error || '', /calendar has no prices for 24pg_cover/);
+    assert.ok(t.families.calendar.prices['24pg_cover']['8.5x11'][''].length, 'the last good table still prices it');
+  } finally { fs.writeFileSync(SL.DATA_FILE, real); console.error = orig; }
+  const L = [[25, 30.39], [50, 16.94], [100, 11.56]];
+  assert.ok(SL.eachFor(L, 999999) > 0);
+});

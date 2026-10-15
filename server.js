@@ -7599,11 +7599,21 @@ function deliveryEstimate(from = new Date(), opts = {}) {
     : items.some((i) => /digitiz/i.test(String(i && i.description || '')));
   const dig = needsDigitizing ? DIGITIZING_DAYS : 0;
 
+  /* Bought-printed SinaLite lines are made by SinaLite, on SinaLite's clock:
+     the order is one parcel, so the slowest one sets the ready date (Codex on
+     #293: pouches take 10-12 business days before shipping to the shop, and
+     the page promised 7). */
+  let lo = pmin + extra + dig, hi = pmax + extra + dig;
+  for (const i of items) {
+    const lead = i && i.sign && i.sign.kind ? SINALITE.leadDays(i.sign.kind) : null;
+    if (lead) { lo = Math.max(lo, lead[0] + extra); hi = Math.max(hi, lead[1] + extra); }
+  }
+
   return {
-    ready: addBusinessDays(start, pmin + extra + dig),
-    deliver_from: addBusinessDays(start, pmin + extra + dig + smin),
-    deliver_to: addBusinessDays(start, pmax + extra + dig + smax),
-    production_days: [pmin + extra + dig, pmax + extra + dig],
+    ready: addBusinessDays(start, lo),
+    deliver_from: addBusinessDays(start, lo + smin),
+    deliver_to: addBusinessDays(start, hi + smax),
+    production_days: [lo, hi],
     digitizing_days: dig,
     beyond_sheet: pieces > SHEET_PIECE_CEILING,
   };

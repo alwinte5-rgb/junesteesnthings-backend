@@ -98,20 +98,15 @@ function eachFor(ladder, qty, anyQty) {
     return ceil2(t / q);
   }
   const runs = ladder.map(([n, each]) => [n, n * each]);
-  const memo = new Map();
-  /* Cheapest total covering `left` pieces, computed bottom-up from the
-     smallest remainders so deep quantities cannot overflow the stack. */
-  const best = (left) => {
-    if (left <= 0) return 0;
-    if (memo.has(left)) return memo.get(left);
+  /* Iterative over every remainder (Codex on #293: the recursive version ran
+     out of stack near the cap). best[x] = cheapest runs covering x pieces. */
+  const best = new Float64Array(q + 1);
+  for (let x = 1; x <= q; x++) {
     let m = Infinity;
-    for (const [n, total] of runs) m = Math.min(m, total + best(left - n));
-    memo.set(left, m);
-    return m;
-  };
-  const step = runs[0][0];
-  for (let k = step; k < q; k += step) best(k);
-  return ceil2(best(q) / q);
+    for (const [n, total] of runs) { const t = total + best[x > n ? x - n : 0]; if (t < m) m = t; }
+    best[x] = m;
+  }
+  return ceil2(best[q] / q);
 }
 
 let cache = null, cacheMtime = null, loadError = null;
@@ -128,7 +123,13 @@ function load() {
        request after (Codex on #293). */
     for (const [k, p] of Object.entries(d.products)) {
       if (!p || !Array.isArray(p.materials) || !Array.isArray(p.sizes) || !Array.isArray(p.rows)) throw new Error(k + ' is missing materials, sizes or rows');
-      familyOf(k, p);
+      /* Every material x size the item offers must price: a re-capture that
+         missed one would otherwise publish an option the quote cannot price
+         (Codex on #293). */
+      const f = familyOf(k, p);
+      for (const m of p.materials) for (const z of p.sizes) {
+        if (!(((f.prices[m.key] || {})[z.key] || {})[''] || []).length) throw new Error(k + ' has no prices for ' + m.key + ' / ' + z.key);
+      }
     }
     cache = d;
     loadError = null;
@@ -206,7 +207,25 @@ function kindOf(name) {
   return null;
 }
 
+/* Inbound shipping, SinaLite (New York) to the shop, business days. */
+const INBOUND_DAYS = [2, 5];
+
+/**
+ * [min, max] business days before a SinaLite item is AT THE SHOP: SinaLite's
+ * own turnaround ("10 - 12 Business Days", "Next Business Day") plus inbound
+ * shipping. Null for a kind that is not SinaLite. An unreadable turnaround
+ * fails closed to two weeks, never to "ready tomorrow".
+ */
+function leadDays(kind) {
+  const fam = table().families[kind];
+  if (!fam) return null;
+  const t = String(fam.turnaround || '');
+  const n = (t.match(/\d+/g) || []).map(Number);
+  const prod = /next/i.test(t) ? [1, 1] : n.length ? [n[0], n[n.length - 1]] : [10, 10];
+  return [prod[0] + INBOUND_DAYS[0], prod[1] + INBOUND_DAYS[1]];
+}
+
 /** For tests: swap the data in. */
 function _setData(d) { cache = d; cacheMtime = (() => { try { return fs.statSync(DATA_FILE).mtimeMs; } catch { return null; } })(); loadError = null; }
 
-module.exports = { priceEach, shipBilled, ladderFrom, eachFor, table, kindOf, ageDays, stale, familyOf, _setData, DATA_FILE, STALE_DAYS };
+module.exports = { priceEach, shipBilled, ladderFrom, eachFor, leadDays, table, kindOf, ageDays, stale, familyOf, _setData, DATA_FILE, STALE_DAYS };
