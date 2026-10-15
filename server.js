@@ -8957,10 +8957,14 @@ function customerLineFigures(item) {
  *  2026-10-15: the old under-a-dollar rule still printed "$1.03" beside $310).
  *  "$0.25", "$4.50" stay as they were. Sent to the quote page's scripts with
  *  toString(), so it is written in plain ES5 and there is one copy of it. */
-function moneyEach(n) {
+function moneyEach(n, qty, amount) {
   var v = Math.round((Number(n) || 0) * 10000) / 10000;
-  if (Math.round(v * 100) / 100 === v) return '$' + v.toFixed(2);
-  return '$' + v.toFixed(4).replace(/0+$/, '');
+  var s = Math.round(v * 100) / 100 === v ? '$' + v.toFixed(2) : '$' + v.toFixed(4).replace(/0+$/, '');
+  /* Given the line it belongs to: if even four places do not multiply back to
+     the amount ($310 / 3,000 = $0.1033, x 3,000 = $309.90), say it is rounded
+     rather than print a figure that does not foot (Codex on #293). */
+  if (qty > 0 && amount != null && Math.round(v * qty * 100) !== Math.round(Number(amount) * 100)) s = '≈' + s;
+  return s;
 }
 
 /** The each-price a person actually TYPED on a hand-priced line.
@@ -13811,7 +13815,8 @@ function sinaliteRunsOf(it) {
   const lad = ((fam.prices[sg.mat] || {})[sg.size] || {})[''];
   /* `qty`: the quantity it was priced at. At that quantity the saved price
      stands, even if SinaLite's table has moved since (Codex on #293). */
-  return Array.isArray(lad) && lad.length ? { ladder: lad, any: !!fam.any_qty, qty: Number(it.qty) || 0 } : null;
+  return Array.isArray(lad) && lad.length
+    ? { ladder: lad, any: !!fam.any_qty, qty: Number(it.qty) || 0, saved: Number(it.unit_price) || null } : null;
 }
 
 app.get('/q/:code', async (req, res) => {
@@ -14224,8 +14229,8 @@ app.get('/q/:code', async (req, res) => {
                       name="qty_${ix}" value="${parseInt(i.qty, 10) || 0}"
                       style="width:64px;padding:5px;font-size:14px;text-align:right">`}</td>
         <td class="num"><span data-each="${ix}">${cut
-          ? `<span style="color:#9aa3b2;text-decoration:line-through">${moneyEach(i.qty > 0 ? goodsList / i.qty : 0)}</span><br>${moneyEach(fig.each)}`
-          : moneyEach(fig.each)}</span>${
+          ? `<span style="color:#9aa3b2;text-decoration:line-through">${moneyEach(i.qty > 0 ? goodsList / i.qty : 0)}</span><br>${moneyEach(fig.each, i.qty, fig.amount)}`
+          : moneyEach(fig.each, i.qty, fig.amount)}</span>${
           /* Outside the data-each span: the quantity estimate and the optional
              items rewrite that span, and the delivery inside the price must
              stay said while they do. */
@@ -14578,7 +14583,10 @@ ${quotePricingSource()}
          for the minimum run. Every other line keeps its saved price. */
       ${SINALITE.eachFor.toString()}
       function slUnit(L, qty){
-        if (!L.runs || !(qty > 0) || qty === L.runs.qty) return L.unitOverride;
+        if (!L.runs || !(qty > 0)) return L.unitOverride;
+        /* Untouched: the price it was saved at (a server price is not a typed
+           one, so unitOverride is null here and would fall to the $0 row). */
+        if (qty === L.runs.qty) return L.runs.saved != null ? L.runs.saved : L.unitOverride;
         var lad = L.runs.ladder, min = lad[0][0];
         return qty >= min ? eachFor(lad, qty, L.runs.any) : Math.ceil(min * lad[0][1] / qty * 100) / 100;
       }

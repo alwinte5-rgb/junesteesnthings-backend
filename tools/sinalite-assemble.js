@@ -115,6 +115,12 @@ const META = {
      dwCapture — left out until then, because a declared item must have prices. */
 };
 
+/** The slowest of SinaLite's turnaround texts, by their largest day count. */
+function slowest(list) {
+  const days = (t) => /next/i.test(t) ? 1 : Math.max(0, ...((String(t).match(/\d+/g) || []).map(Number)));
+  return list.filter(Boolean).sort((a, b) => days(b) - days(a))[0] || null;
+}
+
 function assemble(captured, meta = META) {
   const products = {};
   for (const [key, m] of Object.entries(meta)) {
@@ -128,7 +134,10 @@ function assemble(captured, meta = META) {
     products[key] = {
       ...rest,
       description: m.note,
-      turnaround: rows.map((r) => r.turnaround).find(Boolean) || null,
+      /* The SLOWEST tier's turnaround: brochures take 4 days up to 1,000 and
+         4-5 from 2,500, and a ready date must hold for the big run (Codex on
+         #293). */
+      turnaround: slowest(rows.map((r) => r.turnaround)),
       rows: rows.map(({ mat, size, qty, cost, ship, ship_assumed }) =>
         ({ mat, size, qty, cost, ship, ...(ship_assumed ? { ship_assumed: true } : {}) })),
     };

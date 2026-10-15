@@ -84,7 +84,7 @@ function extract(anchor, end) {
 }
 
 test('an each-price under a dollar shows enough places for qty x each to foot', () => {
-  const src = extract('function moneyEach(n) {', '\n}');
+  const src = extract('function moneyEach(n, qty, amount) {', '\n}');
   const moneyEach = vm.runInThisContext('(' + src + ')');
   assert.strictEqual(moneyEach(310 / 3000), '$0.1033', '3,000 cards with $10 of delivery folded in');
   assert.strictEqual(moneyEach(0.1), '$0.10');
@@ -306,8 +306,6 @@ test('a re-capture missing one offered size/material is refused; huge quantities
   const yard = QS.priceSign('yard_sign', { size: '24x18', mat: '4s' }, 100001, true);
   assert.strictEqual(yard.ok, false);
   assert.match(yard.error, /More than 100,000/);
-  /* An untouched SinaLite line keeps its saved price in the customer estimate. */
-  assert.match(SERVER, /if \(!L\.runs \|\| !\(qty > 0\) \|\| qty === L\.runs\.qty\) return L\.unitOverride;/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'tools', 'sinalite-assemble.js'), 'utf8'), /these products would be dropped/);
 });
 
@@ -323,4 +321,15 @@ test('a SinaLite-tagged row is priced only by its exact SinaLite name, never by 
 test('assembling refuses a declared item with no captured rows', () => {
   const { assemble } = require('../tools/sinalite-assemble');
   assert.throws(() => assemble({}, { thing: { name: 'X', materials: [], sizes: [] } }), /thing is declared but has no captured rows/);
+});
+
+test('codex round: saved price for untouched lines, slowest turnaround, honest each-price', () => {
+  assert.match(SERVER, /if \(qty === L\.runs\.qty\) return L\.runs\.saved != null \? L\.runs\.saved : L\.unitOverride;/);
+  const d = JSON.parse(fs.readFileSync(SL.DATA_FILE, 'utf8'));
+  assert.strictEqual(d.products.brochure.turnaround, '4 - 5 Business Days', 'the big runs set the family turnaround');
+  const src = extract('function moneyEach(n, qty, amount) {', '\n}');
+  const me = vm.runInThisContext('(' + src + ')');
+  assert.strictEqual(me(310 / 3000, 3000, 310), '≈$0.1033', 'does not foot: says so');
+  assert.strictEqual(me(0.25, 100, 25), '$0.25', 'foots: plain');
+  assert.strictEqual(me(310 / 3000), '$0.1033', 'no line given: plain');
 });
