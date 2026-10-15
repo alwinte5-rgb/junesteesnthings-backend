@@ -87,7 +87,9 @@ function eachFor(ladder, qty, anyQty) {
      toString()) for a customer's quantity estimate. */
   const ceil2 = (n) => Math.ceil(n * 100 - 1e-9) / 100;
   const q = Math.floor(Number(qty));
-  if (!Array.isArray(ladder) || !ladder.length || !(q >= ladder[0][0]) || q > 1e6) return null;
+  /* 100,000: the same ceiling /admin/api/sign-price refuses above, so the
+     preview and the save can never price one quantity two ways. */
+  if (!Array.isArray(ladder) || !ladder.length || !(q >= ladder[0][0]) || q > 100000) return null;
   /* A typed-quantity item (pouches): SinaLite's price for 700 is no more
      than its 1,000 price and no more than 700 at the 500 each — the lower of
      those two totals is never under cost, and 700 never costs more than 1,000. */

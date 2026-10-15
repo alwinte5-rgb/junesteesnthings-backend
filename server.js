@@ -12403,7 +12403,10 @@ app.post('/admin/api/sign-price', requireAdmin, (req, res) => {
     return res.status(400).json({ ok: false, error: 'That item is not priced by size.' });
   }
   const sp = b.spec && typeof b.spec === 'object' ? b.spec : {};
-  const qty = Math.min(100000, Math.max(1, parseInt(b.qty, 10) || 1));
+  /* Refused, not clamped: a clamped preview priced 100,001 roll labels at the
+     100,000 rate while the save priced the real quantity (Codex on #293). */
+  const qty = Math.max(1, parseInt(b.qty, 10) || 1);
+  if (qty > 100000) return res.status(400).json({ ok: false, error: 'More than 100,000: quote it by hand.' });
   res.json(QSIGNS.priceSign(kind, {
     w: sp.w, h: sp.h, size: String(sp.size || '').slice(0, 20), mat: String(sp.mat || '').slice(0, 30),
     hang: String(sp.hang || '').slice(0, 30),

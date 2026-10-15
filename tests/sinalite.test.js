@@ -297,5 +297,9 @@ test('a re-capture missing one offered size/material is refused; huge quantities
     assert.ok(t.families.calendar.prices['24pg_cover']['8.5x11'][''].length, 'the last good table still prices it');
   } finally { fs.writeFileSync(SL.DATA_FILE, real); console.error = orig; }
   const L = [[25, 30.39], [50, 16.94], [100, 11.56]];
-  assert.ok(SL.eachFor(L, 999999) > 0);
+  assert.ok(SL.eachFor(L, 100000) > 0, 'the cap prices');
+  assert.strictEqual(SL.eachFor(L, 100001), null, 'past the cap: not priced');
+  /* The preview refuses past the same cap rather than clamping to it. */
+  assert.match(SERVER, /if \(qty > 100000\) return res\.status\(400\)/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'tools', 'sinalite-assemble.js'), 'utf8'), /these products would be dropped/);
 });

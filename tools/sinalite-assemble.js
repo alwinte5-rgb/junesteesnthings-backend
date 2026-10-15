@@ -146,6 +146,13 @@ if (require.main === module) {
   if (!file) { console.error('usage: sinalite-assemble.js <captured.json>'); process.exit(2); }
   const captured = JSON.parse(fs.readFileSync(file, 'utf8'));
   const products = assemble(captured);
+  /* A capture that lost a whole product must not drop it from the file: its
+     catalogue row would stop pricing and every quote with it would be refused
+     (Codex on #293). Adding new products is fine; losing one is not. */
+  let before = {};
+  try { before = JSON.parse(fs.readFileSync(OUT, 'utf8')).products || {}; } catch { /* first run */ }
+  const lost = Object.keys(before).filter((k) => !products[k]);
+  if (lost.length) { console.error('refusing: these products would be dropped: ' + lost.join(', ') + ' — capture them again'); process.exit(1); }
   /* The date is when SinaLite's prices were READ, not when this ran: re-running
      it to change a label must not make old (sale) prices look fresh. A new
      capture passes --captured=<date>; otherwise the existing file's date stays. */
