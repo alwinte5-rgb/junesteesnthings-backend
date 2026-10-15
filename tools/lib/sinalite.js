@@ -58,7 +58,10 @@ function ladderFrom(rows, where = 'sinalite') {
      reads as a gap nobody sees until a job is quoted from the wrong one. */
   const ok = [];
   for (const r of rows || []) {
-    if (r && Number(r.qty) > 0 && Number(r.cost) > 0) ok.push(r);
+    /* Shipping too: a missing or negative `ship` would become $0 in
+       shipBilled() and quote only the $25 handling (Codex on #293). */
+    if (r && Number(r.qty) > 0 && Number(r.cost) > 0 && r.ship !== null && r.ship !== '' &&
+        Number.isFinite(Number(r.ship)) && Number(r.ship) >= 0) ok.push(r);
     else console.error('[sinalite] ' + where + ': unpriceable row skipped ' + JSON.stringify(r));
   }
   return ok.sort((a, b) => a.qty - b.qty)

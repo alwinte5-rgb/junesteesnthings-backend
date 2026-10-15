@@ -153,6 +153,10 @@ function sizerOptions() {
       /* The smallest quantity any size can be bought at, so the form can say
          "min 25" before anyone types a quantity (owner, 2026-10-15). */
       min: fam.min || null, supplier: fam.supplier || 'signs365',
+      /* SinaLite only: the date its prices were read, and whether that is
+         past STALE_DAYS, so the sizer can say so. */
+      ...(fam.supplier === 'sinalite' ? (() => { const t = SL.table();
+        return { stale: !!(t.stale || t.error), captured: t.captured ? String(t.captured).slice(0, 10) : null }; })() : {}),
       limits: fam.limits || null, sizes: fam.sizes || null,
       materials: fam.materials.map((m) => ({ key: m.key, label: m.label })),
       sheet_upgrades: fam.sheet_upgrades || {},

@@ -10653,11 +10653,17 @@ function productGroupOf(name) {
       }
       /* A product set by code (a restored quote, a copied line) fires no change
          event, so calc() — which runs on every change and on load — brings each
-         line's Category box back in line with its product. */
+         line's Category box back in line with its product. Only when the
+         PRODUCT moved since the box last saw it (dataset.for): calc() also runs
+         on the Category box's own change, before the handler below, and must
+         not undo the category the owner just picked. */
       function pcatSyncAll(){
         Array.prototype.forEach.call(document.querySelectorAll('#lines .line select.p'), function(sel){
           var box = sel.previousElementSibling;
-          if (!box || !box.classList.contains('pcat') || !box.value || !sel.value) return;
+          if (!box || !box.classList.contains('pcat')) return;
+          if (box.dataset.for === sel.value) return;
+          box.dataset.for = sel.value;
+          if (!box.value || !sel.value) return;
           var g = pcatGroupOf(sel);
           if (g && g !== box.value) { box.value = g; pcatApply(sel, g); }
         });
@@ -10680,6 +10686,7 @@ function productGroupOf(name) {
           sel.parentNode.insertBefore(box, sel);
         }
         box.value = pcatGroupOf(sel);
+        box.dataset.for = sel.value;
         pcatApply(sel, box.value);
       }
       document.addEventListener('change', function(e){
@@ -10687,14 +10694,19 @@ function productGroupOf(name) {
         if (t && t.classList && t.classList.contains('pcat')) {
           var sel = t.nextElementSibling;
           if (!sel || !sel.classList.contains('p')) return;
-          pcatApply(sel, t.value);
-          /* A product from another category no longer belongs on this line. */
+          /* A product from another category no longer belongs on this line.
+             Cleared FIRST: pcatApply keeps the selected product's own section
+             open, so filtering before the clear left the old section pickable
+             (Codex on #293). */
           if (t.value && sel.value && pcatGroupOf(sel) !== t.value) {
             sel.value = '';
             sel.dispatchEvent(new Event('change', { bubbles: true }));
           }
+          t.dataset.for = sel.value;
+          pcatApply(sel, t.value);
         } else if (t && t.classList && t.classList.contains('p')) {
           var box = t.previousElementSibling;
+          if (box && box.classList.contains('pcat')) box.dataset.for = t.value;
           if (box && box.classList.contains('pcat') && !box.value) return;
           if (box && box.classList.contains('pcat') && pcatGroupOf(t) && pcatGroupOf(t) !== box.value) {
             box.value = pcatGroupOf(t); pcatApply(t, box.value);
@@ -11014,7 +11026,11 @@ ${quotePricingSource()}
           var html = '<div style="padding:10px;background:#f6f8fd;border:1px solid #e3e8f2;border-radius:8px">' +
             '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#1848B8;font-weight:700">' + esc(o.label) + ' size &amp; options' +
             /* The minimum, before anyone types a quantity (owner, 2026-10-15). */
-            (o.min > 1 ? ' <span style="color:#b45309;text-transform:none;letter-spacing:0">· minimum ' + o.min + '</span>' : '') + '</div>';
+            (o.min > 1 ? ' <span style="color:#b45309;text-transform:none;letter-spacing:0">· minimum ' + o.min + '</span>' : '') + '</div>' +
+            /* Stale SinaLite prices (read over STALE_DAYS ago, sale may be over):
+               said where the price is made, not only in the morning email. */
+            (o.stale ? '<div style="font-size:12px;color:#b45309;margin:4px 0 6px">Supplier prices last read ' + esc(o.captured || 'on an unknown date') +
+              ' — check SinaLite before sending.</div>' : '');
           if (kind === 'banner') {
             var ft = []; for (var i = 1; i <= o.max.long; i++) ft.push([i, i + ' ft']);
             html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
@@ -25788,8 +25804,22 @@ async function siteHealthHtml() {
   const extra = FUNNEL.problemLines({ waiting, problems,
     problemNames: require('./tools/lib/google-analytics').PROBLEM_EVENTS });
   const health = SITEHEALTH.siteHealthDigestHtml({ formFails, notFound, extra, esc: escEmail, base: PUBLIC_BASE_URL });
-  return health + (monday ? await funnelHealthSection(tz).catch((e) => {
+  return health + sinaliteStaleHtml() + (monday ? await funnelHealthSection(tz).catch((e) => {
     console.error('funnel health failed:', e.message); return ''; }) : '');
+}
+
+/** Every morning while SinaLite's prices are older than STALE_DAYS (or the
+ *  file cannot be read): the quote form keeps pricing from them, and they
+ *  include a sale that may have ended (Codex on #293). */
+function sinaliteStaleHtml() {
+  const t = SINALITE.table();
+  if (!t.stale && !t.error) return '';
+  const age = SINALITE.ageDays();
+  const why = t.error ? escEmail(t.error)
+    : `SinaLite prices were read ${age === null ? 'at an unknown date' : age + ' days ago'} and may include a sale that has ended.`;
+  return `<h3 style="margin:18px 0 6px;font-size:15px;color:#b45309">SinaLite prices need re-reading</h3>
+    <p style="margin:0 0 6px;font-size:14px">${why} Quotes for brochures, calendars, table covers and the other SinaLite items still price from them.
+    Re-run tools/sinalite-capture.js in the logged-in SinaLite tab, then tools/sinalite-assemble.js --captured=&lt;date&gt;.</p>`;
 }
 
 /** Monday's Funnel health (tools/lib/funnel-health.js): the website steps

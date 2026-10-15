@@ -174,3 +174,31 @@ test('the category box is re-synced from code-set products and filtered sections
   assert.match(SERVER, /function calc\(\)\{\s*pcatSyncAll\(\);/);
   assert.match(SERVER, /g\.disabled = off;/);
 });
+
+test('a tier with no usable shipping is reported, not priced with $0 freight', () => {
+  const said = [];
+  const orig = console.error;
+  console.error = (m) => said.push(String(m));
+  let lad;
+  try { lad = SL.ladderFrom([{ qty: 25, cost: 90 }, { qty: 50, cost: 90, ship: null }, { qty: 75, cost: 90, ship: -1 },
+    { qty: 100, cost: 90, ship: 'x' }, { qty: 250, cost: 90, ship: 0 }], 'x'); }
+  finally { console.error = orig; }
+  assert.deepStrictEqual(lad.map((r) => r[0]), [250], 'only the row with a real (zero) shipping figure is priced');
+  assert.strictEqual(said.length, 4);
+});
+
+test('stale SinaLite prices are said on the quote sizer and in the morning email', () => {
+  const QS = require('../tools/lib/quote-signs');
+  SL._setData(JSON.parse(JSON.stringify({ ...FIXTURE, captured: new Date(Date.now() - (SL.STALE_DAYS + 2) * 86400000).toISOString() })));
+  const o = QS.sizerOptions().calendar;
+  assert.strictEqual(o.stale, true);
+  assert.match(o.captured, /^\d{4}-\d{2}-\d{2}$/);
+  assert.strictEqual(QS.sizerOptions().yard_sign && QS.sizerOptions().yard_sign.stale, undefined, 'Signs365 families carry no SinaLite date');
+  assert.match(SERVER, /return health \+ sinaliteStaleHtml\(\) \+/);
+  assert.ok(SERVER.includes("(o.stale ? '<div") && SERVER.includes(">Supplier prices last read '"));
+});
+
+test('switching Category clears the old product BEFORE filtering, so its section closes', () => {
+  const i = SERVER.indexOf("sel.value = '';\n            sel.dispatchEvent(new Event('change', { bubbles: true }));\n          }\n          pcatApply(sel, t.value);");
+  assert.ok(i > 0);
+});
