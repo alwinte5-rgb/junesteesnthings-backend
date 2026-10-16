@@ -14370,7 +14370,9 @@ app.get('/q/:code', async (req, res) => {
 
     /* Items go in for the piece count only — a run past the contract sheet's
        stated ceiling gets a caveat rather than a date presented as a promise. */
-    const eta = deliveryEstimate(q.accepted_at ? new Date(q.accepted_at) : new Date(),
+    /* Unpaid, from today: the clock starts with the deposit, so an accepted
+       quote nobody has paid on is "if you pay today", not "since you accepted". */
+    const eta = deliveryEstimate(paid && q.accepted_at ? new Date(q.accepted_at) : new Date(),
       { items: q.items });
     /* A DATE column has no time, so converting it through a timezone shifts it
        a day backwards (2026-08-20 rendered as Aug 19). Format the calendar date
@@ -14637,8 +14639,16 @@ app.get('/q/:code', async (req, res) => {
             ? `<p style="margin:0 0 8px"><b>Delivery:</b> ${escEmail(DELIV.bookingPhrase(delivBooking))} to
                 ${escEmail(DELIV.addressLine(delivBooking.address))}.
                 <a href="/q/${q.code}/delivery">Change the time</a></p>`
+            : paid && q.target_date && !q.needed_by ? `<p class="muted"><b>Ready by:</b> ${dayFmt(q.target_date)}, counted from the day your deposit came in.</p>`
+            : paid ? `<p class="muted"><b>Estimated:</b> ready ${dayFmt(eta.ready)}, delivered ${dayFmt(eta.deliver_from)}–${dayFmt(eta.deliver_to)}.</p>`
+            /* The clock starts with the deposit (owner, 2026-10-15): accepting
+               holds nothing, so these dates are "if you pay today", and a
+               later deposit moves them later. */
             : `<p class="muted"><b>Estimated:</b> ready ${dayFmt(eta.ready)}, delivered ${dayFmt(eta.deliver_from)}–${dayFmt(eta.deliver_to)}
-            ${accepted ? '' : ' once the deposit is in'}.</p>`}
+              if your deposit is paid today.</p>
+              <p class="muted" style="font-size:12.5px"><b>When we start:</b> your order takes ${eta.production_days[0]}–${eta.production_days[1]}
+              business days to make, and that time starts the day your deposit is paid${accepted ? '' : ', not the day you accept'}.
+              Paying later moves these dates later by the same number of days.</p>`}
           ${eta.beyond_sheet ? `<p class="muted">This is a large run, so those dates are an
             estimate rather than a commitment — we confirm the schedule with the press before
             you pay.</p>` : ''}
@@ -14767,7 +14777,8 @@ app.get('/q/:code', async (req, res) => {
           <input type="hidden" name="rev" value="${Number(q.revision) || 1}">` : ''}
           <button type="submit" id="qaccept" style="width:100%;margin-top:14px">Accept &amp; choose payment</button>
         </form>
-        <p class="muted" style="margin-top:10px;text-align:center">Nothing is charged yet — you'll pick how to pay next.</p>
+        <p class="muted" style="margin-top:10px;text-align:center">Nothing is charged yet — you'll pick how to pay next.
+          Your order goes into production the day your deposit is paid.</p>
 
         <!-- Shown BEFORE accepting: how they pay changes what they pay, so
              hiding this until afterwards meant the cheaper option arrived too
