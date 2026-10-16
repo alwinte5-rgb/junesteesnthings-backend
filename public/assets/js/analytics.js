@@ -83,7 +83,9 @@
   // Money events go to Meta as its STANDARD events (fbq 'track'), which is
   // what ad optimisation reads; the designer's analytics.php maps the same.
   // Never put an email, phone or name in params — ids and amounts only.
-  var META_STANDARD = { purchase: 'Purchase', add_to_cart: 'AddToCart', begin_checkout: 'InitiateCheckout' };
+  // A sent quote is this site's lead: Meta's 'Lead' is what a leads campaign
+  // optimises for (the designer maps its generate_lead the same way).
+  var META_STANDARD = { purchase: 'Purchase', add_to_cart: 'AddToCart', begin_checkout: 'InitiateCheckout', quote_submitted: 'Lead' };
   window.jtTrack = function (name, params) {
     params = params || {};
     if (gaOn && window.gtag) window.gtag('event', name, params);
