@@ -445,6 +445,70 @@ ${howToApply('Red Squeegee', [
 ])}`,
   },
 
+  software: {
+    prefix: 'Software',
+    gem: ['Making short demo or explainer videos', 'Social media content or community building with results', 'Customer support or onboarding for an app',
+      'Knowing a niche we sell to: salons, contractors, food creators', 'Email campaigns or CRM setup'],
+    code: 'Silver Cursor',
+    title: 'Part-Time Software Sales Agent – Sell Simple Apps to Small Businesses & Creators (Hourly + Commission)',
+    type: 'Part Time', wage: '3.5', hours: '20', skills: ['Sales', 'Lead Generation', 'Appointment Setting'],
+    payNote: 'Owner\'s rate (2026-10-16): $3.50 an hour, 20 hours, plus 10% of a new customer\'s payments for their first 6 months. The apps are $5.99–$99 a month at about a 50% margin, so per-deal bonuses of $25–$125 seen on OLJ SaaS posts would cost more than a sale earns.',
+    lookFor: [
+      'Real sales results in numbers: contacts, demos, sign-ups or revenue, ideally software or subscriptions to small businesses or individuals',
+      'Personal, researched outreach (social media DMs, email, calls), not mass messaging or bought lists',
+      'Keeps a tracker or CRM and follows up on a schedule',
+      'The sample message is short, personal and asks a question, not a feature list',
+      'A speed test of at least 25 Mbps',
+    ],
+    body: `Good at starting conversations and helping people say yes? Sell simple, useful apps to small businesses and creators, part-time, hourly plus commission.
+
+About us
+We're a small US business that builds its own software: COS Creator Studio (plans and posts social media content and helps write captions and graphics with AI), CartBook (turns a food creator's recipes into a cookbook app their followers subscribe to), and a business dashboard for contractors and salons. Our customers are small business owners and creators who do everything themselves. We're hiring a dependable, long-term sales agent, part-time, to find the right customers and sign them up.
+
+What you'll do
+1. Find good-fit small businesses and creators (Instagram, Facebook groups, local businesses, creator communities)
+2. Start real conversations with short, personal messages: no spam, no bought lists
+3. Run short demos (or book them with the owner) that show each person the part that solves their problem
+4. Follow up on a schedule and log every lead, reply and next step in our tracker
+5. Share what customers ask for and what's working, so we can improve the apps
+
+You'll do great here if you are
+- Curious: you ask questions before you pitch
+- Honest: you never promise a feature or discount we don't have
+- Organised and persistent: every lead gets a follow-up
+- A self-starter who tries new places to find customers when it's quiet
+
+Tools you'll use
+Instagram, Facebook, Gmail, Google Sheets, Zoom or Google Meet, and our own apps and staff dashboard. We'll train you on the apps, the customers and our offers.
+
+Nice to have: experience selling software or subscriptions; short demo videos (for example Loom); knowing salons, contractors or food creators; social media content.
+
+Schedule
+- Monday–Friday, 10:00am–2:00pm US Central Time (20 hours/week)
+- That's 11:00pm–3:00am Philippine time while the US is on daylight saving time (mid-March to early November), 12:00am–4:00am the rest of the year. Fixed hours: you work while our customers are awake.
+
+Pay
+- $3.50 USD/hour ($70/week, about $303/month), paid weekly
+- Plus 10% of every payment a customer you signed up makes in their first 6 months, once your training is signed off. Commission follows the customer's payments, so customers who stay earn you more.
+- Commission is paid with your weekly pay after the customer's payment clears, and your dashboard shows it live.
+- Pay reviews every 6 months, with more hours as your sales grow
+${PAY_TERMS}
+
+${TIME_OFF}
+
+Training
+You start by learning the apps, the customers they're for, and our approved offers and free trials. The owner reviews your first messages and demos before you go solo.
+
+Career path
+As the apps grow, strong performers get more hours, raises and more responsibility.
+
+${howToApply('Silver Cursor', [
+  'A short summary of something you sold: what it was, how you found customers, and your results in numbers',
+  'A screenshot of your internet speed test (speedtest.net)',
+  'The first message you\'d send to this prospect, as you\'d really write it:\n   A small Chicago bakery posts great photos on Instagram, but only twice a month. Write your first message about an app that schedules their posts and helps write captions.',
+])}`,
+  },
+
   bookkeeper: {
     prefix: 'Books',
     code: 'Blue Ledger',
