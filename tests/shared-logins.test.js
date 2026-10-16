@@ -51,8 +51,20 @@ test('one view: taken and erased in one statement, by its helper only', () => {
   assert.ok(route.indexOf('SHARELOGIN.open(') < route.indexOf("SET sealed = NULL, viewed_at = NOW()"));
   assert.match(route, /actor\.kind !== 'staff'\) return res\.status\(403\)/);
   assert.match(route, /res\.set\('Cache-Control', 'no-store'\)/);
+  // Only the staff site's own page: no Origin, another origin or a form post is refused (security pass).
+  assert.match(route, /req\.get\('origin'\) !== new URL\(PUBLIC_BASE_URL\)\.origin \|\| !req\.is\('application\/json'\)/);
+  assert.ok(route.indexOf("req.is('application/json')") < route.indexOf('loginOpens.get'), 'refused before it counts as a try');
   assert.strictEqual(STAFF.ROUTES['POST /admin/shared-logins'], 'owner');
   assert.strictEqual(STAFF.ROUTES['POST /admin/shared-logins/:id/cancel'], 'owner');
   assert.strictEqual(STAFF.ROUTES['POST /admin/shared-logins/:id/open'], 'any');
   assert.match(src, /UPDATE shared_logins SET sealed = NULL WHERE sealed IS NOT NULL AND expires_at <= NOW\(\)/, 'expired ones are erased');
+});
+
+test('the helper is told what to do once it is shown, and a playbook article explains it', () => {
+  const card = src.slice(src.indexOf('async function sharedLoginsCard'), src.indexOf("app.post('/admin/shared-logins'"));
+  assert.match(card, /This login is now erased from the back office/);
+  assert.match(card, /Save the username and password in your password manager now/);
+  assert.match(card, /beforeunload/);
+  assert.doesNotMatch(card.slice(card.indexOf('Got it.') - 400, card.indexOf('beforeunload')), /innerHTML/, 'built from text, never HTML');
+  assert.match(src, /title: 'Logins June shares with you'/);
 });
