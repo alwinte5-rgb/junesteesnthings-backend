@@ -32227,7 +32227,12 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
        end date. I dont like that"). Shifts are added to ONE week, the week on
        screen unless another is picked; repeating is a box ticked on purpose. */
     const thisMonday = SHIFTS.mondayOf(new Date(), 'America/Chicago');
-    const weekChoices = [...new Set([week, ...SHIFTS.weeksFrom(thisMonday, 12)])].sort();
+    /* The Monday of the week a shift starts in, for its Change form. */
+    const startMon = (w) => (w.starts_on ? SHIFTS.mondayOf(new Date(`${w.starts_on}T12:00:00Z`), 'UTC') : null);
+    /* Every week a listed shift starts or ends in is a choice too, so its
+       Change form opens on its own weeks, never silently on another (review). */
+    const weekChoices = [...new Set([week, ...SHIFTS.weeksFrom(thisMonday, 12),
+      ...rows.flatMap((w) => [startMon(w), w.ends_on ? SHIFTS.mondayOf(new Date(`${w.ends_on}T12:00:00Z`), 'UTC') : null]).filter(Boolean)])].sort();
     const weekName = (m) => (m === thisMonday ? 'This week' : m === SHIFTS.addDays(thisMonday, 7) ? 'Next week' : 'Week') + ' of ' + shortDay(m);
     const weekOptions = (sel) => weekChoices.map((m) => `<option value="${m}"${m === sel ? ' selected' : ''}>${escEmail(weekName(m))}</option>`).join('');
     const rangeText = (w) => w.starts_on && w.ends_on && w.ends_on === SHIFTS.addDays(w.starts_on, 6) ? `Week of ${shortDay(w.starts_on)} only`
@@ -32256,8 +32261,11 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
           <details style="margin-top:4px"><summary style="font-size:12.5px">Change the week</summary>
             <form method="post" action="/admin/work-schedule" class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end;margin-top:6px">
               <input type="hidden" name="action" value="week"><input type="hidden" name="ids" value="${ids}">
-              <label style="margin:0">Week of <select name="week_of">${weekOptions(w.starts_on || week)}</select></label>
-              <label style="margin:0;display:flex;gap:6px;align-items:center;font-weight:400;text-transform:none;letter-spacing:0"><input type="checkbox" name="repeat" value="1"${every ? ' checked' : ''} style="width:auto"> Repeat every week after</label>
+              <label style="margin:0">Week of <select name="week_of">${weekOptions(startMon(w) || week)}</select></label>
+              <label style="margin:0">Until <select name="until">
+                <option value=""${w.ends_on && w.starts_on && w.ends_on === SHIFTS.addDays(w.starts_on, 6) ? ' selected' : ''}>That week only</option>
+                <option value="repeat"${every ? ' selected' : ''}>Every week after</option>
+                ${weekChoices.map((m) => `<option value="${m}"${w.ends_on && w.ends_on === SHIFTS.addDays(m, 6) && !(w.starts_on && w.ends_on === SHIFTS.addDays(w.starts_on, 6)) ? ' selected' : ''}>Through the week of ${escEmail(shortDay(m))}</option>`).join('')}</select></label>
               <button type="submit" class="btn btn-ghost">Save</button></form></details></span>
         <span class="row-end"><form method="post" action="/admin/work-schedule" style="margin:0"><input type="hidden" name="action" value="delete">
           <input type="hidden" name="ids" value="${ids}"><button type="submit" class="btn btn-ghost">Remove${g.rows.length > 1 ? ` all ${g.rows.length}` : ''}</button></form></span></div>`;
@@ -32319,19 +32327,26 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
 });
 
 /* One shift per person per day (owner, 2026-10-16: "Only one shift allowed
-   per day"). The shifts that person already has on any of `weekdays` in weeks
-   overlapping [startsOn, endsOn] (null is open-ended), leaving out `except`
-   (the shifts being moved). Read as "Mon 09:00-14:00, every week". */
-async function shiftClashes(staffId, weekdays, startsOn, endsOn, except = []) {
-  const { rows } = await pool.query(
-    `SELECT weekday, start_min, end_min, to_char(starts_on, 'YYYY-MM-DD') AS starts_on, to_char(ends_on, 'YYYY-MM-DD') AS ends_on
+   per day"). The shifts that person already has, in weeks overlapping
+   [startsOn, endsOn] (null is open-ended), that start on the same Chicago
+   day as one of `wanted` ({ weekday, start_min, end_min, zone }), leaving
+   out `except` (the shifts being moved). Days are compared in Chicago time,
+   so "Mon 9 AM Philippines" and "Sun 8 PM Chicago" are the same day (review).
+   Read as "Mon 09:00-14:00 Chicago time, every week". */
+async function shiftClashes(staffId, wanted, startsOn, endsOn, except = [], db = pool) {
+  const { rows } = await db.query(
+    `SELECT weekday, start_min, end_min, zone, to_char(starts_on, 'YYYY-MM-DD') AS starts_on, to_char(ends_on, 'YYYY-MM-DD') AS ends_on
        FROM staff_work_shifts
-      WHERE staff_id = $1 AND weekday = ANY($2::int[]) AND NOT (id = ANY($5::int[]))
-        AND COALESCE(starts_on, '-infinity'::date) <= COALESCE($4::date, 'infinity'::date)
-        AND COALESCE(ends_on, 'infinity'::date) >= COALESCE($3::date, '-infinity'::date)
-      ORDER BY weekday`, [staffId, weekdays, startsOn, endsOn, except]);
+      WHERE staff_id = $1 AND NOT (id = ANY($4::int[]))
+        AND COALESCE(starts_on, '-infinity'::date) <= COALESCE($3::date, 'infinity'::date)
+        AND COALESCE(ends_on, 'infinity'::date) >= COALESCE($2::date, '-infinity'::date)
+      ORDER BY weekday`, [staffId, startsOn, endsOn, except]);
+  const ref = startsOn ? SHIFTS.mondayOf(new Date(`${startsOn}T12:00:00Z`), 'UTC') : SHIFTS.mondayOf(new Date(), 'America/Chicago');
+  const day = (x) => SHIFTS.weekdayIn(x, ref, 'America/Chicago');
+  const want = new Set(wanted.map(day));
   const hm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
-  return rows.map((r) => `${SHIFTS.DAYS[r.weekday - 1]} ${hm(r.start_min)}–${hm(r.end_min)}${
+  return rows.filter((r) => want.has(day(r))).map((r) => `${SHIFTS.DAYS[r.weekday - 1]} ${hm(r.start_min)}–${hm(r.end_min)} ${
+    SHIFTS.ZONES[r.zone] ? SHIFTS.ZONES[r.zone].label : r.zone} time${
     r.starts_on && r.ends_on ? ` (${r.starts_on} to ${r.ends_on})` : r.starts_on ? ` (every week from ${r.starts_on})` : ' (every week)'}`);
 }
 
@@ -32351,16 +32366,23 @@ app.post('/admin/work-schedule', requireAdmin, async (req, res) => {
     }
     if (b.action === 'week') {
       if (!ids.length || !monday) return back(res, to, 'err', 'Pick a week.');
-      const newEnd = b.repeat === '1' ? null : SHIFTS.addDays(monday, 6);
-      const { rows: moving } = await pool.query('SELECT staff_id, weekday FROM staff_work_shifts WHERE id = ANY($1::int[])', [ids]);
+      /* until: '' that week only, 'repeat' every week after, or a Monday:
+         every week through the end of that week (review: a repeating shift
+         could otherwise never be given a last week). */
+      const untilMon = SHIFTS.validDate(String(b.until || ''));
+      const newEnd = b.until === 'repeat' || b.repeat === '1' ? null
+        : untilMon ? SHIFTS.addDays(SHIFTS.mondayOf(new Date(`${untilMon}T12:00:00Z`), 'UTC'), 6) : SHIFTS.addDays(monday, 6);
+      if (newEnd && newEnd < monday) return back(res, to, 'err', 'The last week is before the first.');
+      const { rows: moving } = await pool.query('SELECT staff_id, weekday, start_min, end_min, zone FROM staff_work_shifts WHERE id = ANY($1::int[])', [ids]);
       for (const sid of new Set(moving.map((m) => m.staff_id))) {
-        const clash = await shiftClashes(sid, moving.filter((m) => m.staff_id === sid).map((m) => m.weekday), monday, newEnd, ids);
-        if (clash.length) return back(res, to, 'err', `Only one shift a day: that week already has ${clash.join(', ')}. Remove or move that one first.`);
+        const clash = await shiftClashes(sid, moving.filter((m) => m.staff_id === sid), monday, newEnd, ids);
+        if (clash.length) return back(res, to, 'err', `Only one shift a day: they already have ${clash.join(', ')} then. Remove or move that one first.`);
       }
       const { rowCount } = await pool.query('UPDATE staff_work_shifts SET starts_on = $2::date, ends_on = $3::date WHERE id = ANY($1::int[])',
-        [ids, monday, b.repeat === '1' ? null : SHIFTS.addDays(monday, 6)]);
+        [ids, monday, newEnd]);
       to = `/admin/work-schedule?week=${monday}#manage`;
-      return back(res, to, rowCount ? 'ok' : 'err', rowCount ? (b.repeat === '1' ? `Every week from ${monday}.` : `Moved to the week of ${monday} only.`) : 'No such shift.');
+      return back(res, to, rowCount ? 'ok' : 'err', !rowCount ? 'No such shift.'
+        : !newEnd ? `Every week from ${monday}.` : newEnd === SHIFTS.addDays(monday, 6) ? `Moved to the week of ${monday} only.` : `Every week from ${monday} to ${newEnd}.`);
     }
     /* The days a shift runs: a real date or empty, and the last never
        before the first. */
@@ -32376,6 +32398,8 @@ app.post('/admin/work-schedule', requireAdmin, async (req, res) => {
         [ids, startsOn, endsOn]) : { rowCount: 0 };
       return back(res, to, rowCount ? 'ok' : 'err', rowCount ? 'Dates saved.' : 'No such shift.');
     }
+    /* The add form always names a week; without one nothing is guessed. */
+    if (!monday) return back(res, to, 'err', 'Pick a week.');
     const staffId = intIn(b.staff_id);
     const roster = await staffRoster({ activeOnly: true });
     if (!staffId || !roster.some((r) => r.id === staffId)) return back(res, to, 'err', 'Pick who the shift is for.');
@@ -32389,20 +32413,36 @@ app.post('/admin/work-schedule', requireAdmin, async (req, res) => {
     /* The same shift already running on any of those days is not added
        again: two rows would draw two blocks and count the hours twice
        (review). The owner changes the existing one's dates instead. */
-    const clash = await shiftClashes(staffId, days, startsOn, endsOn);
     if (monday) to = `/admin/work-schedule?week=${monday}#manage`;
-    if (clash.length) return back(res, to, 'err', `Only one shift a day: they already have ${clash.join(', ')}. Remove or move that one first.`);
-    let added = 0;
-    for (const d of days) {
-      const { rowCount } = await pool.query(
-        `INSERT INTO staff_work_shifts (staff_id, weekday, start_min, end_min, zone, note, starts_on, ends_on)
-         SELECT $1, $2, $3, $4, $5, $6, $7::date, $8::date WHERE NOT EXISTS (
-           SELECT 1 FROM staff_work_shifts WHERE staff_id = $1 AND weekday = $2 AND start_min = $3 AND end_min = $4 AND zone = $5
-              AND COALESCE(starts_on, '-infinity'::date) <= COALESCE($8::date, 'infinity'::date)
-              AND COALESCE(ends_on, 'infinity'::date) >= COALESCE($7::date, '-infinity'::date))`,
-        [staffId, d, start, end, zone, note, startsOn, endsOn]);
-      added += rowCount;
+    /* Checked and written under one lock per person, so two tabs or a double
+       press cannot each find the day free and both add (review). */
+    const wanted = days.map((d) => ({ weekday: d, start_min: start, end_min: end, zone }));
+    const client = await pool.connect();
+    let added = 0, clash = [];
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock($1, $2)', [7311, staffId]);
+      clash = await shiftClashes(staffId, wanted, startsOn, endsOn, [], client);
+      if (!clash.length) {
+        for (const d of days) {
+          const { rowCount } = await client.query(
+            `INSERT INTO staff_work_shifts (staff_id, weekday, start_min, end_min, zone, note, starts_on, ends_on)
+             SELECT $1, $2, $3, $4, $5, $6, $7::date, $8::date WHERE NOT EXISTS (
+               SELECT 1 FROM staff_work_shifts WHERE staff_id = $1 AND weekday = $2 AND start_min = $3 AND end_min = $4 AND zone = $5
+                  AND COALESCE(starts_on, '-infinity'::date) <= COALESCE($8::date, 'infinity'::date)
+                  AND COALESCE(ends_on, 'infinity'::date) >= COALESCE($7::date, '-infinity'::date))`,
+            [staffId, d, start, end, zone, note, startsOn, endsOn]);
+          added += rowCount;
+        }
+      }
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally {
+      client.release();
     }
+    if (clash.length) return back(res, to, 'err', `Only one shift a day: they already have ${clash.join(', ')} then. Remove or move that one first.`);
     const skipped = days.length - added;
     /* Back on the week the shifts went on, so the owner sees them land. */
     if (monday) to = `/admin/work-schedule?week=${monday}#manage`;
