@@ -89,3 +89,29 @@ test('validDate refuses impossible dates', () => {
   assert.strictEqual(W.validDate('x'), null);
   assert.strictEqual(W.validDate(undefined), null);
 });
+
+/* The weeks a shift runs (owner, 2026-10-15: "I added another schedule, but
+   it just added to this week's date. Can we send those to next week"). */
+test('a shift runs only between its first and last day; no dates is every week', () => {
+  const S = require('../tools/lib/work-shifts');
+  const mon = { staff_id: 1, weekday: 1, start_min: 540, end_min: 840, zone: 'America/Chicago' };
+  const days = (rows, m) => S.occurrences(rows, m).map((o) => S.dateIn(o.start, 'America/Chicago'));
+  assert.deepStrictEqual(days([mon], '2026-10-12'), ['2026-10-12'], 'no dates: every week');
+  const next = { ...mon, starts_on: '2026-10-19' };
+  assert.deepStrictEqual(days([next], '2026-10-12'), [], 'not before its first day');
+  assert.deepStrictEqual(days([next], '2026-10-19'), ['2026-10-19']);
+  const ending = { ...mon, ends_on: '2026-10-18' };
+  assert.deepStrictEqual(days([ending], '2026-10-12'), ['2026-10-12']);
+  assert.deepStrictEqual(days([ending], '2026-10-19'), [], 'not after its last day');
+  assert.strictEqual(S.inRange({ starts_on: 'junk' }, '2026-10-12'), true, 'an unreadable date limits nothing');
+  assert.deepStrictEqual(S.weeksFrom('2026-10-12', 3), ['2026-10-12', '2026-10-19', '2026-10-26']);
+});
+
+test('shift dates are Chicago weeks: a Monday-morning Manila shift belongs to the Chicago Sunday before', () => {
+  const S = require('../tools/lib/work-shifts');
+  const manila = { staff_id: 2, weekday: 1, start_min: 540, end_min: 840, zone: 'Asia/Manila', starts_on: '2026-10-19' };
+  const inChicago = (m) => S.occurrences([manila], m).map((o) => S.dateIn(o.start, 'America/Chicago'));
+  // Manila Mon Oct 19 9 AM is Chicago Sun Oct 18: before the first Chicago day, so not shown.
+  assert.deepStrictEqual(inChicago('2026-10-19'), []);
+  assert.deepStrictEqual(inChicago('2026-10-26'), ['2026-10-25'], 'its first run is in the Chicago week of Oct 19');
+});
