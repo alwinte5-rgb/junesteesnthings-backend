@@ -104,6 +104,7 @@ const PROOFS = require('./tools/lib/job-proofs');
 const ART = require('./tools/lib/art-pipeline');
 const WELCOME = require('./tools/lib/staff-welcome');
 const MSGFILES = require('./tools/lib/message-files');
+const SHARELOGIN = require('./tools/lib/shared-logins');
 const GOOGLE_ADS = require('./tools/lib/google-ads').createClient();
 const GOOGLE_ANALYTICS = require('./tools/lib/google-analytics').createClient();
 
@@ -1192,6 +1193,22 @@ async function initStaffTables() {
      empty brought the starters back after the owner removed the last one
      (Codex #201). */
   const { rows: [resTable] } = await pool.query(`SELECT to_regclass('public.staff_resources') IS NOT NULL AS had`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS shared_logins (
+      id            TEXT PRIMARY KEY,
+      staff_id      INTEGER NOT NULL,
+      site          TEXT NOT NULL,
+      note          TEXT NOT NULL DEFAULT '',
+      sealed        TEXT,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at    TIMESTAMPTZ NOT NULL,
+      viewed_at     TIMESTAMPTZ,
+      cancelled_at  TIMESTAMPTZ
+    )`);
+  /* One view each, then erased (tools/lib/shared-logins.js; owner, 2026-10-16,
+     with written OK for the table). sealed is NULL once opened, cancelled or
+     expired; the row stays as the record of who was sent what, and when. */
+  await pool.query(`CREATE INDEX IF NOT EXISTS shared_logins_staff_idx ON shared_logins (staff_id, created_at DESC)`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS staff_resources (
       id          SERIAL PRIMARY KEY,
@@ -32593,6 +32610,157 @@ app.post('/admin/work-schedule', requireAdmin, async (req, res) => {
   }
 });
 
+/* ── Shared logins, one view each ─────────────────────────────────────────── */
+
+/** Erases every sealed login past its time. Run on every read of the list
+ *  and hourly, so an unopened share never outlives its expiry for long. */
+async function purgeExpiredLogins() {
+  await pool.query(`UPDATE shared_logins SET sealed = NULL WHERE sealed IS NOT NULL AND expires_at <= NOW()`);
+}
+setInterval(() => { purgeExpiredLogins().catch((e) => console.error('shared login purge failed:', e.message)); }, 3600e3).unref();
+
+/** The Resources page's Shared logins card: the owner's form and list, or a
+ *  helper's waiting shares with a Show-once button. */
+async function sharedLoginsCard(actor, owner, roster) {
+  await purgeExpiredLogins().catch((e) => console.error('shared login purge failed:', e.message));
+  const on = !!SHARELOGIN.keyFrom();
+  const when = (d) => new Date(d).toLocaleString('en-US', { timeZone: owner ? SHOP_TZ : SHIFTS.staffZoneOf(actor.timeZone),
+    month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  if (!owner) {
+    const { rows } = await pool.query(
+      `SELECT id, site, note, expires_at FROM shared_logins
+        WHERE staff_id = $1 AND sealed IS NOT NULL AND viewed_at IS NULL AND cancelled_at IS NULL AND expires_at > NOW()
+        ORDER BY created_at DESC LIMIT 20`, [actor.id]);
+    if (!rows.length) return '';
+    return `<div class="card" id="shared-logins" style="border-left:4px solid #1848B8"><b>Logins June shared with you</b>
+      <p class="muted" style="font-size:12.5px;margin:4px 0 8px">Each one shows <b>once</b>. Save it in your own password manager right away: after you leave this page it is gone, and June has to share it again.</p>
+      ${rows.map((r) => `<div class="row-i" data-sl="${escEmail(r.id)}" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal"><b>${escEmail(r.site)}</b>${
+        r.note ? `<div class="row-sub" style="white-space:normal">${escEmail(r.note)}</div>` : ''}
+        <div class="row-sub">Open by ${escEmail(when(r.expires_at))}</div><div data-slout style="margin-top:6px"></div></span>
+        <span class="row-end"><button type="button" class="btn" data-slshow>Show once</button></span></div>`).join('')}
+      <script>(function(){
+        document.querySelectorAll('[data-sl]').forEach(function(row){
+          var b = row.querySelector('[data-slshow]'), out = row.querySelector('[data-slout]');
+          b.addEventListener('click', function(){
+            b.disabled = true; b.textContent = 'Opening...';
+            fetch('/admin/shared-logins/' + encodeURIComponent(row.getAttribute('data-sl')) + '/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+              .then(function(r){ return r.json().then(function(d){ return { ok: r.ok, d: d }; }); })
+              .then(function(x){
+                out.textContent = '';
+                if (!x.ok) { b.textContent = 'Gone'; var e = document.createElement('div'); e.className = 'warn'; e.textContent = x.d.error || 'It could not be opened.'; out.appendChild(e); return; }
+                b.style.display = 'none';
+                [['Username', x.d.username], ['Password', x.d.password]].forEach(function(f){
+                  if (!f[1]) return;
+                  var line = document.createElement('div'); line.style.cssText = 'display:flex;gap:6px;align-items:center;margin:3px 0;flex-wrap:wrap';
+                  var lab = document.createElement('b'); lab.textContent = f[0] + ':'; lab.style.minWidth = '80px';
+                  var val = document.createElement('code'); val.textContent = f[1]; val.style.cssText = 'padding:3px 6px;background:#f3f5f9;border-radius:6px;word-break:break-all';
+                  var cp = document.createElement('button'); cp.type = 'button'; cp.className = 'btn btn-ghost'; cp.textContent = 'Copy'; cp.style.cssText = 'padding:3px 10px;font-size:12px';
+                  cp.addEventListener('click', function(){ try { navigator.clipboard.writeText(f[1]); cp.textContent = 'Copied'; } catch (e) {} });
+                  line.appendChild(lab); line.appendChild(val); line.appendChild(cp); out.appendChild(line);
+                });
+                var w = document.createElement('div'); w.className = 'muted'; w.style.fontSize = '12.5px';
+                w.textContent = 'Shown once and now erased from the back office. Save it in your password manager before you leave this page.';
+                out.appendChild(w);
+              })
+              .catch(function(){ b.disabled = false; b.textContent = 'Show once'; var e = document.createElement('div'); e.className = 'warn'; e.textContent = 'Could not reach the server. Try again.'; out.appendChild(e); });
+          });
+        });
+      })();</script></div>`;
+  }
+  const { rows } = await pool.query(
+    `SELECT id, staff_id, site, note, created_at, expires_at, viewed_at, cancelled_at FROM shared_logins
+      ORDER BY created_at DESC LIMIT 30`);
+  const helpers = listedStaff(roster).filter((r) => r.active);
+  const tone = { waiting: 'blue', opened: 'green', expired: 'neutral', cancelled: 'neutral' };
+  const label = (r, st) => st === 'opened' ? `opened ${when(r.viewed_at)}` : st === 'waiting' ? `waiting, until ${when(r.expires_at)}` : st;
+  return `<div class="card" id="shared-logins"><b>Shared logins</b> <span class="muted">shown once, then erased</span>
+    <p class="muted" style="font-size:12.5px;margin:4px 0 8px">Send a helper a login without putting it in chat or email. They open it once, save it in their own password manager, and it is erased. Only who, which site and when are kept.</p>
+    ${on ? `<form method="post" action="/admin/shared-logins" class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end" autocomplete="off">
+      <label style="margin:0">For <select name="staff_id" required><option value="">Pick</option>${helpers.map((r) => `<option value="${Number(r.id)}">${escEmail(r.name)}</option>`).join('')}</select></label>
+      <label style="margin:0;flex:1 1 160px">Site or tool <input name="site" required maxlength="${SHARELOGIN.LIMITS.site}" placeholder="e.g. Canva"></label>
+      <label style="margin:0;flex:1 1 160px">Username <input name="username" maxlength="${SHARELOGIN.LIMITS.username}" autocomplete="off"></label>
+      <label style="margin:0;flex:1 1 160px">Password <input name="password" type="password" required maxlength="${SHARELOGIN.LIMITS.password}" autocomplete="new-password"></label>
+      <label style="margin:0;flex:1 1 220px">Note <input name="note" maxlength="${SHARELOGIN.LIMITS.note}" placeholder="optional, e.g. use the shop account"></label>
+      <label style="margin:0">Open within <select name="expiry">${Object.entries(SHARELOGIN.EXPIRY).map(([k, v]) => `<option value="${k}"${k === SHARELOGIN.DEFAULT_EXPIRY ? ' selected' : ''}>${escEmail(v.label)}</option>`).join('')}</select></label>
+      <button type="submit" class="btn">Share once</button></form>`
+      : `<div class="warn">Shared logins are switched off: the server's SHARED_LOGIN_KEY is not set yet.</div>`}
+    <div class="rows" style="margin-top:8px">${rows.map((r) => { const st = SHARELOGIN.statusOf(r); return `<div class="row-i"><span class="row-main" style="white-space:normal"><b>${escEmail(r.site)}</b> &middot; ${escEmail(nameOf(roster, r.staff_id))}
+        <div class="row-sub">${escEmail(label(r, st))} &middot; shared ${escEmail(when(r.created_at))}</div></span>
+      <span class="row-end">${pill(st, tone[st])}${st === 'waiting' ? ` <form method="post" action="/admin/shared-logins/${escEmail(r.id)}/cancel" style="display:inline;margin:0"><button type="submit" class="btn btn-ghost">Cancel</button></form>` : ''}</span></div>`; }).join('')
+      || '<p class="muted" style="font-size:13px">Nothing shared yet.</p>'}</div></div>`;
+}
+
+app.post('/admin/shared-logins', requireAdmin, async (req, res) => {
+  const to = '/admin/resources#shared-logins';
+  if (!isOwner()) return res.status(403).send('Only the owner shares logins.');
+  const key = SHARELOGIN.keyFrom();
+  if (!key) return back(res, to, 'err', 'Shared logins are switched off: SHARED_LOGIN_KEY is not set on the server.');
+  const b = req.body || {};
+  const f = SHARELOGIN.fromForm(b);
+  if (f.error) return back(res, to, 'err', f.error);
+  const staffId = intIn(b.staff_id);
+  try {
+    const roster = await staffRoster({ activeOnly: true });
+    const who = roster.find((r) => r.id === staffId);
+    if (!who) return back(res, to, 'err', 'Pick who it is for.');
+    const id = crypto.randomUUID();
+    await pool.query(
+      `INSERT INTO shared_logins (id, staff_id, site, note, sealed, expires_at) VALUES ($1, $2, $3, $4, $5, NOW() + ($6::bigint * interval '1 millisecond'))`,
+      [id, staffId, f.site, f.note, SHARELOGIN.seal(f, key, id), SHARELOGIN.EXPIRY[f.expiry].ms]);
+    logActivity(currentActor(), 'login shared', { type: 'staff', id: String(staffId) }, { site: f.site, expiry: f.expiry }, clientIp(req));
+    return back(res, to, 'ok', `Shared ${f.site} with ${who.name}. They can open it once in the next ${SHARELOGIN.EXPIRY[f.expiry].label}.`);
+  } catch (err) {
+    console.error('share login failed:', err.message);
+    reportError('shared-login', err, 'share').catch(() => {});
+    return back(res, to, 'err', 'Could not share it. Try again.');
+  }
+});
+
+app.post('/admin/shared-logins/:id/cancel', requireAdmin, async (req, res) => {
+  const to = '/admin/resources#shared-logins';
+  if (!isOwner()) return res.status(403).send('Only the owner shares logins.');
+  const id = String(req.params.id || '');
+  if (!/^[0-9a-f-]{36}$/.test(id)) return back(res, to, 'err', 'No such share.');
+  const { rowCount } = await pool.query(
+    `UPDATE shared_logins SET sealed = NULL, cancelled_at = NOW() WHERE id = $1 AND viewed_at IS NULL AND cancelled_at IS NULL`, [id])
+    .catch((e) => { console.error('cancel share failed:', e.message); return { rowCount: 0 }; });
+  return back(res, to, rowCount ? 'ok' : 'err', rowCount ? 'Cancelled and erased.' : 'That one was already opened, cancelled or gone.');
+});
+
+/* A helper opens a login shared with them: once. The sealed copy is taken
+   and erased in one statement, so a second press, a second tab or a replay
+   gets nothing. JSON, never cached. */
+const loginOpens = new Map();
+app.post('/admin/shared-logins/:id/open', requireAdmin, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const actor = currentActor();
+  if (!actor || actor.kind !== 'staff') return res.status(403).json({ error: 'Only the helper it was shared with can open it.' });
+  const id = String(req.params.id || '');
+  if (!/^[0-9a-f-]{36}$/.test(id)) return res.status(404).json({ error: 'That login is gone.' });
+  const now = Date.now();
+  const recent = (loginOpens.get(actor.id) || []).filter((t) => now - t < 60e3);
+  if (recent.length >= 10) return res.status(429).json({ error: 'Too many tries. Wait a minute.' });
+  loginOpens.set(actor.id, [...recent, now]);
+  const key = SHARELOGIN.keyFrom();
+  if (!key) return res.status(503).json({ error: 'Shared logins are switched off right now. Ask June.' });
+  try {
+    const { rows: [r] } = await pool.query(
+      `UPDATE shared_logins s SET sealed = NULL, viewed_at = NOW()
+         FROM (SELECT id, sealed FROM shared_logins WHERE id = $1 FOR UPDATE) old
+        WHERE s.id = old.id AND s.staff_id = $2 AND s.sealed IS NOT NULL AND s.viewed_at IS NULL
+          AND s.cancelled_at IS NULL AND s.expires_at > NOW()
+        RETURNING s.site, old.sealed`, [id, actor.id]);
+    if (!r) return res.status(410).json({ error: 'That login was already opened, cancelled or has expired. Ask June to share it again.' });
+    const secret = SHARELOGIN.open(r.sealed, key, id);
+    logActivity(actor, 'shared login opened', { type: 'staff', id: String(actor.id) }, { site: r.site }, clientIp(req));
+    return res.json({ site: r.site, username: secret.username, password: secret.password });
+  } catch (err) {
+    console.error('open shared login failed:', err.message);
+    reportError('shared-login', err, 'open').catch(() => {});
+    return res.status(500).json({ error: 'It could not be opened. Ask June to share it again.' });
+  }
+});
+
 /* ── Resources ────────────────────────────────────────────────────────────────
    The tools the team works in (COS, Google Drive folders, Canva…), one list
    the owner keeps. Links and how to get in only: logins live in the team
@@ -32634,10 +32802,11 @@ app.get('/admin/resources', requireAdmin, async (req, res) => {
     res.set('Cache-Control', 'no-store');
     res.send(adminPage('Resources', `
       ${pageHeader('Resources', owner ? 'The tools the team works in. Helpers see the ones for everyone and for their own path.'
-        : 'The tools you work in. Your logins are in the team password manager; ask June if one is missing.')}
+        : 'The tools you work in. June shares any login you need below, one view each; ask her if one is missing.')}
       ${flash(req.query)}
-      <div class="card" style="border-left:4px solid #F4A623"><b>🔐 Logins never go here, or in chat, email or texts.</b>
-        <div class="row-sub" style="white-space:normal">They live in the team password manager, which June invites you to.</div></div>
+      <div class="card" style="border-left:4px solid #F4A623"><b>🔐 Logins never go in chat, email or texts.</b>
+        <div class="row-sub" style="white-space:normal">June shares them below, one view each. Save each one in your own password manager.</div></div>
+      ${await sharedLoginsCard(actor, owner, await staffRoster()).catch((e) => { console.error('shared logins card failed:', e.message); return ''; })}
       ${rows.length ? rows.map(card).join('') : `<div class="card">${emptyState(owner ? 'No tools listed yet. Add the first one below.' : 'No tools listed yet. Ask June.')}</div>`}
       ${owner ? `<details class="card"><summary><b>Add a tool</b></summary>
         <form method="post" action="/admin/resources" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">

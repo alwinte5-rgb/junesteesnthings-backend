@@ -270,7 +270,7 @@ const PAGE_TIPS = {
   discounts: 'Discount codes. Never offer one to win or keep a sale without the owner.',
   chat: 'Channels are for the whole team or your part of it; June sees them all. Direct with June is just the two of you. Ask whenever you are unsure; it is faster than guessing.',
   playbook: 'Ready-made replies and how we do things. Type a question in plain words, or a /shortcut. Copy a reply and adjust it to the customer.',
-  resources: 'The tools you work in, with a link to each and how to get in. Logins are never here: they are in the team password manager.',
+  resources: 'The tools you work in, with a link to each and how to get in. June shares any login you need here, one view each: save it in your own password manager.',
   training: 'Your training path. Reading steps you tick yourself, work steps tick when you do the work, and the owner signs off the rest.',
 };
 
