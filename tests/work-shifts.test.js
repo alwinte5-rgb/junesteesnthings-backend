@@ -142,6 +142,19 @@ test('past days are the record; helpers see Philippines time only (owner, 2026-1
   assert.match(src, /SET ends_on = \$\{zt\} - 1\s+WHERE id = ANY\(\$1::int\[\]\) AND \(starts_on IS NULL OR starts_on < \$\{zt\}\)/, 'a started one is stopped, its past kept');
   assert.match(src, /CASE zone WHEN 'Asia\/Manila' THEN \$2::date ELSE \$3::date END/, "each shift's today in its own zone");
   assert.match(src, /const firstDayOf = \(d\) => \(!endsOn && gonePast\.includes\(d\) \? SHIFTS\.addDays\(monday, 7\) : startsOn\);/, 'an every-week day already passed starts next week, not lost');
-  assert.match(src, /const zone = !owner \? 'Asia\/Manila' :/);
-  assert.match(src, /shiftLines\(next, \{ phOnly: true \}\)/);
+  assert.match(src, /const zone = !owner \? helperZone :/, 'a helper sees their own zone only');
+  assert.match(src, /shiftLines\(next, \{ zone \}\)/);
+});
+
+test('helper time zones: a short list, the Philippines until asked (owner, 2026-10-16)', () => {
+  const S = require('../tools/lib/work-shifts');
+  assert.strictEqual(S.staffZoneOf(null), 'Asia/Manila');
+  assert.strictEqual(S.staffZoneOf('America/New_York'), 'America/New_York');
+  assert.strictEqual(S.staffZoneOf('Europe/Paris'), 'Asia/Manila', 'only zones on the list');
+  assert.strictEqual(S.staffZoneLabel('America/Chicago'), 'US Central (Chicago)');
+  assert.deepStrictEqual(Object.keys(S.span({ start: new Date('2026-10-19T14:00:00Z'), end: new Date('2026-10-19T19:00:00Z') }, ['America/New_York'])), ['America/New_York']);
+  const STAFF = require('../tools/lib/staff');
+  assert.strictEqual(STAFF.ROUTES['POST /admin/my-time-zone'], 'any');
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'server.js'), 'utf8');
+  assert.match(src, /UPDATE staff SET time_zone = \$2 WHERE id = \$1 AND time_zone IS NULL/, 'a helper answers once; then it is the owner\'s');
 });
