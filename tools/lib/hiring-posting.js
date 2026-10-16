@@ -104,7 +104,7 @@ const SCREENING = {
 
 /* Pay terms every job shares, added under each post's Pay lines and repeated
    on round 2, where a passing applicant confirms the pay. */
-const PAY_TERMS = `- 13th-month pay starts only after 12 months of service
+const PAY_TERMS = `- 13th-month pay, prorated from your start date and paid out every 6 months
 - Hours can be adjusted up or down based on performance`;
 
 /* Shared parts of every post: written once so every role says the same thing

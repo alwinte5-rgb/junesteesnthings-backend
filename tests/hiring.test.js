@@ -366,7 +366,7 @@ test('round 2 confirms the pay: read from the job post, with the shared terms', 
   for (const k of Object.keys(H.ROLES)) {
     const lines = POSTING.payLines(k);
     assert.ok(lines.length >= 3 && /\$\d/.test(lines[0]), `${k} pay lines`);
-    assert.ok(lines.includes('13th-month pay starts only after 12 months of service'), `${k} 13th month`);
+    assert.ok(lines.includes('13th-month pay, prorated from your start date and paid out every 6 months'), `${k} 13th month`);
     assert.ok(lines.includes('Hours can be adjusted up or down based on performance'), `${k} hours`);
     assert.ok(POSTING.POSTS[k].body.includes(POSTING.PAY_TERMS), `${k} post says it too`);
   }
