@@ -3295,6 +3295,7 @@ if (!cfAccess) {
   console.error('Cloudflare Access is not configured (CF_ACCESS_TEAM_DOMAIN, CF_ACCESS_AUD, OWNER_EMAILS) — every staff page is refused until it is.');
 }
 const STAFF_HOST = new URL(PUBLIC_BASE_URL).hostname;
+const STAFF_ORIGIN = new URL(PUBLIC_BASE_URL).origin;
 
 const signPayload = (payload, key) =>
   crypto.createHmac('sha256', key).update(String(payload)).digest('hex');
@@ -32648,10 +32649,10 @@ async function sharedLoginsCard(actor, owner, roster) {
           b.addEventListener('click', function(){
             b.disabled = true; b.textContent = 'Opening...';
             fetch('/admin/shared-logins/' + encodeURIComponent(row.getAttribute('data-sl')) + '/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-              .then(function(r){ return r.json().then(function(d){ return { ok: r.ok, d: d }; }); })
+              .then(function(r){ return r.json().catch(function(){ return { error: r.status === 401 ? 'Your sign-in has run out. Reload the page, sign in again, then press Show once.' : 'It could not be opened. Try again.' }; }).then(function(d){ return { ok: r.ok, status: r.status, d: d }; }); })
               .then(function(x){
                 out.textContent = '';
-                if (!x.ok) { b.textContent = 'Gone'; var e = document.createElement('div'); e.className = 'warn'; e.textContent = x.d.error || 'It could not be opened.'; out.appendChild(e); return; }
+                if (!x.ok) { if (x.status === 410) b.textContent = 'Gone'; else { b.disabled = false; b.textContent = 'Show once'; } var e = document.createElement('div'); e.className = 'warn'; e.textContent = x.d.error || 'It could not be opened.'; out.appendChild(e); return; }
                 b.style.display = 'none';
                 [['Username', x.d.username], ['Password', x.d.password]].forEach(function(f){
                   if (!f[1]) return;
@@ -32662,9 +32663,21 @@ async function sharedLoginsCard(actor, owner, roster) {
                   cp.addEventListener('click', function(){ try { navigator.clipboard.writeText(f[1]); cp.textContent = 'Copied'; } catch (e) {} });
                   line.appendChild(lab); line.appendChild(val); line.appendChild(cp); out.appendChild(line);
                 });
-                var w = document.createElement('div'); w.className = 'muted'; w.style.fontSize = '12.5px';
-                w.textContent = 'Shown once and now erased from the back office. Save it in your password manager before you leave this page.';
-                out.appendChild(w);
+                /* What to do now (owner, 2026-10-16: "a message on their end
+                   when they collect the password"). Built with textContent. */
+                var w = document.createElement('div');
+                w.style.cssText = 'margin-top:8px;padding:10px 12px;border:1px solid #F4A623;border-left:4px solid #F4A623;border-radius:8px;background:#fff8ec;font-size:13px;white-space:normal';
+                var wt = document.createElement('b'); wt.textContent = 'Got it. This login is now erased from the back office.'; w.appendChild(wt);
+                var ol = document.createElement('ol'); ol.style.cssText = 'margin:6px 0 0 18px;padding:0';
+                ['Save the username and password in your password manager now. Refreshing or leaving this page will not bring them back.',
+                 'Sign in to ' + (x.d.site || 'the site') + ' once to check it works.',
+                 'Keep it to yourself: never in chat, email, a note, a screenshot or an AI tool, and never passed to another helper.',
+                 'Saved it wrong, or it does not work? Ask June to share it again.'].forEach(function(t){
+                  var li = document.createElement('li'); li.textContent = t; li.style.margin = '2px 0'; ol.appendChild(li);
+                });
+                w.appendChild(ol); out.appendChild(w);
+                /* One reminder before leaving, however many are opened. */
+                if (!window.__slWarn) { window.__slWarn = true; window.addEventListener('beforeunload', function(ev){ ev.preventDefault(); ev.returnValue = ''; }); }
               })
               .catch(function(){ b.disabled = false; b.textContent = 'Show once'; var e = document.createElement('div'); e.className = 'warn'; e.textContent = 'Could not reach the server. Try again; if it says it was already opened, ask June to share it again.'; out.appendChild(e); });
           });
@@ -32739,6 +32752,13 @@ app.post('/admin/shared-logins/:id/open', requireAdmin, async (req, res) => {
   res.set('Cache-Control', 'no-store');
   const actor = currentActor();
   if (!actor || actor.kind !== 'staff') return res.status(403).json({ error: 'Only the helper it was shared with can open it.' });
+  /* Only the Resources page's own button: the staff site's Origin and a JSON body,
+     which a browser always sends from it. The site-wide guard lets a request
+     with no Origin through; this one does not (security pass, 2026-10-16). */
+  if (req.get('origin') !== STAFF_ORIGIN || !req.is('application/json')
+    || !['same-origin', undefined].includes(req.get('sec-fetch-site'))) {
+    return res.status(403).json({ error: 'Open it from your Resources page.' });
+  }
   const id = String(req.params.id || '');
   if (!/^[0-9a-f-]{36}$/.test(id)) return res.status(404).json({ error: 'That login is gone.' });
   const now = Date.now();
@@ -36753,6 +36773,25 @@ const KB_ADDED = [
 `4. **A summary for June (last 20 minutes).** Who you followed up, the leads you added, and anything waiting on her decision, so she starts with a clear list\n\n` +
 `Other good jobs: replying to Google reviews that have no reply yet (draft, then June approves), tidying lead records, learning a product you are unsure about.\n\n` +
 `"I waited for instructions" is never the answer. When unsure what matters most, follow-ups first.` },
+  /* Shared logins (owner, 2026-10-16: "add to playbook"). The helper's side of
+     the Resources page's one-view shares. */
+  { kind: 'sop', title: 'Logins June shares with you', needsReview: true,
+    tags: 'login, password, account, sign in, shared login, show once, password manager, resources',
+    body: `Logins never go in chat, email or texts. When you need one, June shares it on the **Resources** page, and you can open it **once**.\n\n` +
+`**When a login is shared with you**\n` +
+`1. Open **Resources**. The box at the top, **Logins June shared with you**, lists each one with the site and an "Open by" time\n` +
+`2. Have your password manager open first. Then press **Show once**\n` +
+`3. The username and password appear, each with a **Copy** button. Save them in your password manager straight away\n` +
+`4. Sign in to the site once to check it works, then leave the page\n\n` +
+`**It shows once**\n` +
+`- The moment it appears, it is erased from the back office. Refreshing, leaving the page or opening it in another tab will not bring it back\n` +
+`- If you do not open it by the "Open by" time, it is erased anyway\n` +
+`- "Already opened, cancelled or has expired" means it is gone. Ask June to share it again; that is quick and normal\n\n` +
+`**Keeping it safe**\n` +
+`- Keep it in your password manager only. Never in a note, a screenshot, a document, chat, email or an AI tool\n` +
+`- Never pass it to anyone else, even another helper. June shares it with each person who needs it\n` +
+`- Never turn on or change two-factor sign-in, or change the password, on a shared account: June and others use it too. If a site asks for a code, ask June\n` +
+`- If you think a password was seen by someone else, tell June straight away so it can be changed` },
 ];
 
 /* The worker's guide to the platform and to pay (owner, 2026-10-06: "create a
