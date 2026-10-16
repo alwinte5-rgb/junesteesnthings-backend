@@ -115,3 +115,15 @@ test('shift dates are Chicago weeks: a Monday-morning Manila shift belongs to th
   assert.deepStrictEqual(inChicago('2026-10-19'), []);
   assert.deepStrictEqual(inChicago('2026-10-26'), ['2026-10-25'], 'its first run is in the Chicago week of Oct 19');
 });
+
+test('one week at a time and one shift a day (owner, 2026-10-16)', () => {
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'server.js'), 'utf8');
+  // The add form names a week; ends that week unless Repeat is ticked.
+  assert.match(src, /const endsOn = monday \? \(b\.repeat === '1' \? null : SHIFTS\.addDays\(monday, 6\)\) : dateOrNull\(b\.ends_on\);/);
+  // Any shift that person already has that day, at any time, refuses the add and the move.
+  assert.match(src, /const clash = await shiftClashes\(staffId, days, startsOn, endsOn\);/);
+  assert.match(src, /const clash = await shiftClashes\(sid, moving\.filter/);
+  const at = src.indexOf('async function shiftClashes(');
+  const fn = src.slice(at, src.indexOf('\n}\n', at));
+  assert.doesNotMatch(fn, /start_min = \$|end_min = \$/, 'a different time the same day still clashes');
+});
