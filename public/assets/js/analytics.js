@@ -25,6 +25,7 @@
 
   var GA4_ID = 'G-E65381594C';           // June's Tees & Things — ONE GA4 property across both domains (cross-domain funnel)
   var META_PIXEL_ID = '348199180594218'; // June's Tees Meta Pixel (same on both domains)
+  var ADS_ID = 'AW-433023263';           // Google Ads conversion/remarketing tag
 
   /* A quote page's address IS its password (/q/<code> shows the customer's
      name, email, phone and address). On it: GA4 gets the address with the
@@ -51,6 +52,10 @@
       gcfg.page_title = 'Quote';
     }
     window.gtag('config', GA4_ID, gcfg);
+    // Google Ads tag (account 396-866-5737) rides the same gtag.js: lets Ads
+    // see ad visitors for conversions and remarketing. Quote pages skip it —
+    // it would send the private /q/<code> address.
+    if (!QUOTE_PAGE) window.gtag('config', ADS_ID);
   }
 
   // ── Meta (Facebook) Pixel ─────────────────────────────────────────────
