@@ -4,15 +4,14 @@
    as the sales one in hiring.js (see ROLES there). Everything else is shared by
    every role.
 
-   What the job is: finding and signing up paying customers for the owner's own
-   apps — COS Creator Studio (social media posting and AI content for creators
-   and small businesses: Free, Pro $19, Platinum $39, Studio $99 a month),
-   CartBook (cookbooks for food creators) and a business dashboard for
-   contractors and salons. Low-priced monthly subscriptions, so the work is
-   volume: find the right small businesses and creators, start a conversation,
-   book or run a short demo, follow up, and sign them up honestly. Pay is
-   $3.50 an hour plus 10% of a new customer's payments for their first 6
-   months (owner, 2026-10-16) — the margin cannot carry more. */
+   What the job is: selling the TOP plans of the owner's own apps to the
+   customers who get the most from them — COS Creator Studio Agency ($129 a
+   month: several client brands, AI video, the most platforms) to social media
+   and marketing agencies and freelancers managing several clients; CartBook's
+   top creator plan to established food creators; the business dashboard's
+   Everything package to contractors and salons with teams. The low end of the
+   market is won with ads, not agents (owner, 2026-10-16). Pay is $3.50 an hour
+   plus 10% of a new customer's payments for their first 6 months. */
 
 const MINUTES = 30;
 
@@ -31,10 +30,10 @@ const PARTS = {
 const WEIGHTS = { choice: 25, craft: 50, initiative: 25 };
 
 const MULTIPLE_CHOICE = [
-  { id: 'fit', q: 'Who is the best first prospect for COS Creator Studio, our social media posting and AI content app?',
-    choices: ['A large company with its own marketing team', 'A small business or creator who posts on social media but irregularly, and does it all themselves',
+  { id: 'fit', q: 'Who is the best prospect for COS Creator Studio\'s Agency plan ($129 a month, several client brands, AI video)?',
+    choices: ['A single café that posts once a month', 'A small social media agency or freelancer posting for 5 to 15 client businesses',
       'Someone who does not use social media', 'Anyone with an email address'],
-    answer: 1, why: 'COS saves time for people doing their own posting. Big teams already have tools; people who do not post do not need it.' },
+    answer: 1, why: 'The Agency plan saves the most time for people posting for many clients. A single small business fits the cheaper plans, which we sell with ads.' },
   { id: 'spam', q: 'You found 500 business emails online. What do you do with them?',
     choices: ['Send all 500 the same message today', 'Buy another list to make it 5,000',
       'Pick the ones who clearly fit, look at each one first, and send a short personal message that mentions something real about them',
@@ -73,14 +72,14 @@ const MULTIPLE_CHOICE = [
 
 const WRITTEN = [
   { id: 'outreach', part: 'craft', minutes: 5, label: 'First message',
-    prompt: 'You found a small Chicago bakery on Instagram. They post twice a month, the photos are good but the captions are short, and their last post was 3 weeks ago. Write the first direct message you would send them to start a conversation about COS Creator Studio (it schedules posts to several platforms and helps write captions and make graphics with AI).',
-    rubric: 'Short (a few lines), personal and specific to this bakery (mentions something real: their photos, the gap in posting), leads with their problem (time, consistency) rather than a feature list, no pressure, no false claims, ends with one easy question or a low-effort next step (a 10-minute look, a free account). Long, generic, pushy or copy-paste pitches score 2 or lower.',
-    model: "Hi! Your croissant photos are gorgeous, honestly some of the best I've seen from a Chicago bakery. I noticed posts come every couple of weeks, which I'm guessing is because there's no time between bakes. I work with COS Creator Studio: you can plan a month of posts in one sitting, and it helps write the captions. Would a free account be useful, or a 10-minute look at how it would work for you?",
+    prompt: 'You found a 3-person social media agency in Texas on LinkedIn. Their website lists 12 local clients (dentists, gyms and restaurants), and their founder recently posted that "scheduling for 12 clients eats our Mondays". Write the first message you would send the founder about COS Creator Studio (it plans and schedules posts for many client brands, helps write captions and make graphics and short videos with AI).',
+    rubric: 'Short (a few lines), personal and specific (mentions their post about Mondays, the 12 clients), leads with their problem (hours lost scheduling across clients) not a feature list, no pressure, no false claims, ends with one easy question or low-effort next step (a 15-minute look, a free trial). Long, generic, pushy or copy-paste pitches score 2 or lower.',
+    model: "Hi Dana, your post about scheduling eating your Mondays stuck with me. With 12 clients across dentists, gyms and restaurants, that's a lot of logging in and out. COS Creator Studio lets your team plan every client's month from one place, with captions and graphics drafted for each brand. Would it be worth 15 minutes to see if it could give you your Mondays back? A 14-day free trial is also an option if you'd rather try it yourself.",
   },
   { id: 'objection', part: 'craft', minutes: 5, label: 'Handle the objection',
-    prompt: 'After a demo, a hair salon owner says: "It looks nice, but I already use Canva and post from my phone. And $39 a month is a lot for a small salon." Write your reply exactly as you would say it.',
-    rubric: 'Acknowledges and agrees where fair (Canva is good; budget matters), asks or uses what they learned in discovery, shows the specific value over Canva and the phone (scheduling ahead to several platforms, captions, time saved, consistency that brings bookings), offers a cheaper fitting plan (Pro $19 or Free) instead of a discount, no pressure and no false claims, ends with a clear, easy next step. Arguing, discounting without approval or ignoring the price concern scores low.',
-    model: "That makes sense, and Canva is great, so keep using it for designs. The difference is time: right now each post means opening Canva, then your phone, writing the caption and posting it, on a busy day. With COS you plan a whole week in one sitting and it posts for you, to Instagram and Facebook at the same time. You said posting is the first thing that slips when you're busy, and that's exactly what it fixes.\n\nOn price: you don't need Platinum. Pro is $19 a month and covers what you showed me you need. Or start on the free plan this week, schedule next week's posts, and see if it saves you the time. Want me to help you set up the first week now?",
+    prompt: 'After a demo, the agency founder says: "It looks good, but we already use Later for all our clients, and moving 12 clients over sounds like a lot of work. $129 a month isn\'t nothing either." Write your reply exactly as you would say it.',
+    rubric: 'Acknowledges and agrees where fair (Later works; switching takes effort; cost matters), uses what they learned in discovery, shows specific value for an agency (time saved per client, AI captions/graphics/video per brand, client count vs per-seat or per-channel costs), lowers the switching risk (start with 2 or 3 clients on the 14-day trial, help setting up), mentions the yearly option honestly, no unapproved discount and no false claims, ends with a clear easy next step. Arguing, discounting without approval or ignoring the switching worry scores low.',
+    model: "That's fair. Later works, and switching 12 clients isn't something to do lightly. You told me the real cost is the hours writing captions and making graphics for each brand, and that's the part COS takes on.\n\nYou don't have to move everyone at once. Start the 14-day free trial with your two busiest clients, and I'll help you set them up. If it saves time on those two, move the rest. If it doesn't, you've lost nothing.\n\nOn cost: $129 covers all your client brands, and the yearly plan gives you two months free. Want me to set up the trial with those two clients this week?",
   },
   { id: 'followup', part: 'craft', minutes: 4, label: 'Follow up',
     prompt: 'A food blogger had a demo of CartBook (it turns their recipes into a cookbook app their followers can subscribe to) 5 days ago. They said "sounds great, let me think about it" and have not replied since. Write your follow-up message.',
@@ -88,9 +87,9 @@ const WRITTEN = [
     model: "Hi Maria, I hope the week's going well! I keep thinking about your soup series. Those 40 recipes would make a lovely first cookbook, and your followers keep asking for them in one place. If it helps, I can set up a draft with 5 of them so you can see how it looks before deciding anything. Want me to? If now's not the right time, no problem at all, just tell me and I'll check back next month.",
   },
   { id: 'plan', part: 'craft', minutes: 3, label: 'Your week',
-    prompt: 'You have 20 hours this week to find new customers for COS Creator Studio. Tell us where you would look, how many people you would contact and how, and how you would track it. Be specific.',
-    rubric: 'Concrete and realistic: names specific places to find good-fit prospects (Instagram and Facebook local businesses, creator communities, groups where small owners ask about posting), personal outreach rather than mass messages, realistic numbers (for example 15-30 personal messages a day), time for follow-ups and demos, and logging every contact and next step in a tracker. Measures replies, demos and sign-ups. Vague "use social media" or "send many emails" scores 1-2.',
-    model: "Mon-Tue (8 h): build a list of 80 good fits: Chicago salons, bakeries, gyms and boutiques on Instagram that post irregularly, plus creators in small-business Facebook groups. Write down one real detail for each.\nWed-Thu (8 h): 25 personal messages a day, each mentioning that detail. Reply to every answer the same day and book short demos.\nFri (4 h): run demos, follow up with everyone from last week, and update the tracker: contacted, replied, demo, signed up, next step and date.\nGoal for the week: 50+ messages, 8-10 replies, 3-4 demos, 1-2 sign-ups, and I'd share what worked.",
+    prompt: 'You have 20 hours this week to find agencies for COS Creator Studio\'s Agency plan. Tell us where you would look, how many people you would contact and how, and how you would track it. Be specific.',
+    rubric: 'Concrete and realistic: names specific places to find agencies and freelancers who manage several clients (Clutch, LinkedIn, agency directories and Facebook groups), personal outreach rather than mass messages, realistic numbers (for example 15-30 personal messages a day), time for follow-ups and demos, and logging every contact and next step in a tracker. Measures replies, demos and sign-ups. Vague "use social media" or "send many emails" scores 1-2.',
+    model: "Mon-Tue (8 h): build a list of 60 good fits: small social media and marketing agencies and freelancers managing several clients, from Clutch, LinkedIn and agency Facebook groups. Write down one real detail for each (client count, a recent post).\nWed-Thu (8 h): 20 personal messages a day, each mentioning that detail. Reply to every answer the same day and book 15-minute demos.\nFri (4 h): run demos, follow up with everyone from last week, and update the tracker: contacted, replied, demo, trial, signed up, next step and date.\nGoal for the week: 40+ messages, 6-8 replies, 2-3 demos, 1 trial, and I'd share what worked.",
   },
   { id: 'results', part: 'craft', minutes: 3, label: 'Your results',
     prompt: 'Tell us about a time you sold something (software, a subscription, a service or a product) to small businesses or individuals. What did you sell, how did you find customers, and what were your results in numbers?',
@@ -100,7 +99,7 @@ const WRITTEN = [
   { id: 'quiet', part: 'initiative', minutes: 4, label: 'Slow week',
     prompt: 'It is a slow week: few replies and no demos booked. Tell us exactly what you would do, and why.',
     rubric: 'Self-starter who diagnoses before working harder: reviews the tracker (who replied, which messages worked), rewrites or tests the first message, tries a new group of prospects or a new place to find them, follows up with old leads and free users, asks happy customers for referrals or testimonials, and tells the owner what they learned. "I would wait" or "send more of the same" scores low.',
-    model: "1. Look at the numbers: which message and which type of business replied at all.\n2. Test two new first messages, 20 each, and keep the better one.\n3. Try a new group: if salons are quiet, try bakeries or fitness coaches.\n4. Follow up with old \"let me think\" leads and free-plan users who never upgraded.\n5. Ask our happiest customers for a referral or a short testimonial I can use.\n6. Send June a short note with what I found and what I changed.",
+    model: "1. Look at the numbers: which message and which type of agency replied at all.\n2. Test two new first messages, 20 each, and keep the better one.\n3. Try a new group: if social media agencies are quiet, try web design agencies that also post for clients, or freelancers.\n4. Follow up with old \"let me think\" leads and free-plan users who never upgraded.\n5. Ask our happiest customers for a referral or a short testimonial I can use.\n6. Send June a short note with what I found and what I changed.",
   },
   { id: 'bonus', part: 'bonus', minutes: 3, optional: true, label: 'Bonus: a skill we did not ask about',
     prompt: 'Is there a skill we did not ask about that could help us sell more? For example making short demo videos, social media content, running a webinar, email campaigns, a CRM, or knowing a niche like salons, contractors or food creators. Tell us what you have done with it and one result you are proud of.',
@@ -121,10 +120,10 @@ const INTERVIEW_GUIDE = [
     { q: 'What was a month when you missed your target, and what did you change?',
       listen: 'An honest miss and a concrete change.' }] },
   { section: 'Role play (8 min)', questions: [
-    { q: 'I am a salon owner who posts on Instagram when I remember. You have 5 minutes: find out what I need and get me to a next step.',
-      listen: 'Asks questions before pitching, listens, connects COS to what was said, honest about limits, ends with a clear next step.' },
-    { q: 'Now I say: "It is too expensive." Go.',
-      listen: 'Stays calm, checks the real concern, offers a cheaper fitting plan or the free plan, no unapproved discount.' }] },
+    { q: 'I run a 4-person agency posting for 10 clients. You have 5 minutes: find out what I need and get me to a next step.',
+      listen: 'Asks about client count, current tools and where the hours go before pitching, connects COS to what was said, honest about limits, ends with a clear next step.' },
+    { q: 'Now I say: "We already use Hootsuite and $129 is too much." Go.',
+      listen: 'Stays calm, checks the real concern, lowers the switching risk with the 14-day trial on a few clients, mentions yearly honestly, no unapproved discount.' }] },
   { section: 'How we work (4 min)', questions: [
     { q: 'You are paid $3.50 an hour plus 10% of a new customer\'s payments for their first 6 months. How do you feel about that, and how would you make it work for you?',
       listen: 'Understands commission follows customers who stay, so they aim for good-fit customers, not quick sign-ups that cancel.' },
@@ -141,8 +140,8 @@ const INTERVIEW_GUIDE = [
 module.exports = {
   key: 'software',
   label: 'Software sales agent (part-time)',
-  job: 'a part-time remote sales agent who finds and signs up small businesses and creators for our own low-priced subscription apps (COS Creator Studio, CartBook and a business dashboard) through personal outreach, short demos and follow-up',
-  reward: 'Reward agents who find good-fit customers rather than mass-messaging, ask before they pitch, handle objections honestly without unapproved discounts or false promises, follow up and track every lead, and show real sales results in numbers.',
+  job: 'a part-time remote sales agent who sells the top plans of our own subscription apps (COS Creator Studio Agency to social media agencies and freelancers with several clients, CartBook to established food creators, the business dashboard to contractors and salons with teams) through personal outreach, short demos, free trials and follow-up',
+  reward: 'Reward agents who find good-fit agencies and teams rather than mass-messaging, ask before they pitch, handle objections honestly without unapproved discounts or false promises, follow up and track every lead, and show real sales results in numbers.',
   minutes: MINUTES,
   intro: INTRO, parts: PARTS, weights: WEIGHTS, choice: MULTIPLE_CHOICE, written: WRITTEN, guide: INTERVIEW_GUIDE,
 };
