@@ -32077,9 +32077,12 @@ async function shiftRows(staffId = null) {
   return rows;
 }
 
-/** One shift as two lines, Chicago then Philippines. */
-function shiftLines(o) {
+/** One shift as two lines, Chicago then Philippines; a helper sees only
+ *  Philippines time (owner, 2026-10-16: "The employees who work in the
+ *  philippines should only see philipino time"). */
+function shiftLines(o, { phOnly = false } = {}) {
   const sp = SHIFTS.span(o);
+  if (phOnly) return `<div>${escEmail(sp['Asia/Manila'])}</div>`;
   return `<div><b>CT</b> ${escEmail(sp['America/Chicago'])}</div><div><b>PH</b> ${escEmail(sp['Asia/Manila'])}</div>`;
 }
 
@@ -32094,11 +32097,19 @@ async function myShiftsCard(staffId) {
   const occ = [...SHIFTS.weekOccurrences(rows, SHIFTS.addDays(monday, -7), 'America/Chicago'), ...thisWeek,
     ...SHIFTS.weekOccurrences(rows, SHIFTS.addDays(monday, 7), 'America/Chicago')].filter((o) => o.end > now);
   const next = occ[0];
-  return `<div class="card" id="my-shifts"><b>Your work hours</b> <a class="muted" href="/admin/work-schedule" style="float:right">Calendar →</a>
+  /* Their week as a calendar on My Day, in Philippines time (owner,
+     2026-10-16: "add their weekly schedule to their My day"). The week is
+     Manila's: their Monday morning is still Sunday in Chicago. */
+  const phMonday = SHIFTS.mondayOf(now, 'Asia/Manila');
+  const phDays = Array.from({ length: 7 }, (_, i) => SHIFTS.addDays(phMonday, i));
+  const phWeek = SHIFTS.weekOccurrences(rows, phMonday, 'Asia/Manila');
+  const hours = Math.round(phWeek.reduce((n, o) => n + SHIFTS.hoursOf(o), 0) * 10) / 10;
+  return `<div class="card" id="my-shifts"><b>Your work schedule this week</b> <span class="muted">${hours} h, Philippines time</span>
+    <a class="muted" href="/admin/work-schedule" style="float:right">Full schedule →</a>
     ${next ? `<div style="margin:8px 0;padding:8px 12px;background:#eef4ff;border-radius:10px">${next.start <= now ? '<b>On shift now</b>' : '<b>Next shift</b>'}${
-      shiftLines(next)}</div>` : ''}
-    <div class="rows">${thisWeek.map((o) => `<div class="row-i"><span class="row-main" style="white-space:normal">${shiftLines(o)}${
-      o.note ? `<div class="row-sub">${escEmail(o.note)}</div>` : ''}</span><span class="row-end muted">${SHIFTS.hoursOf(o)} h</span></div>`).join('')}</div></div>`;
+      shiftLines(next, { phOnly: true })}</div>` : ''}
+    ${phWeek.length ? scheduleCalendarHtml([-7, 0, 7].flatMap((n) => SHIFTS.occurrences(rows, SHIFTS.addDays(phMonday, n))), phDays, 'Asia/Manila',
+      () => ({ bg: '#e8f0ff', fg: '#1848B8' }), { names: false }) : '<p class="muted">No shifts this week.</p>'}</div>`;
 }
 
 /** The week as a calendar: a column per day, a block per shift placed at its
@@ -32106,12 +32117,20 @@ async function myShiftsCard(staffId) {
  *  schedule because it's confusing"). A shift past midnight is drawn on both
  *  days. Hours shown run from the earliest start to the latest end. */
 function scheduleCalendarHtml(occ, days, zone, colorOf, { names = true } = {}) {
+  /* One block per shift, on the day it starts, running on past midnight
+     when it does (owner, 2026-10-16: "this looks confusing. only one shift
+     per day"): a 9 PM - 3 AM shift is one block, not two halves. */
   const segs = [];
-  for (const o of occ) for (const sg of SHIFTS.daySegments(o, zone)) if (days.includes(sg.date)) segs.push({ ...sg, o });
+  for (const o of occ) {
+    const date = SHIFTS.dateIn(o.start, zone);
+    if (!days.includes(date)) continue;
+    const from = SHIFTS.localMinutes(o.start, zone);
+    segs.push({ date, from, to: from + Math.round((o.end - o.start) / 60000), o });
+  }
   const lo = segs.length ? Math.max(0, Math.floor(Math.min(...segs.map((x) => x.from)) / 60) - 1) : 8;
-  const hi = segs.length ? Math.min(24, Math.ceil(Math.max(...segs.map((x) => x.to)) / 60) + 1) : 18;
+  const hi = segs.length ? Math.min(48, Math.ceil(Math.max(...segs.map((x) => x.to)) / 60) + 1) : 18;
   const PX = 34;                                     // one hour
-  const hourLabel = (h) => (h % 24 === 0 ? '12 AM' : h === 12 ? '12 PM' : h < 12 ? `${h} AM` : `${h - 12} PM`);
+  const hourLabel = (h0) => { const h = h0 % 24; return h === 0 ? '12 AM' : h === 12 ? '12 PM' : h < 12 ? `${h} AM` : `${h - 12} PM`; };
   const today = SHIFTS.dateIn(new Date(), zone);
   const col = (d) => {
     const label = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' }).format(new Date(`${d}T12:00:00Z`));
@@ -32128,7 +32147,7 @@ function scheduleCalendarHtml(occ, days, zone, colorOf, { names = true } = {}) {
       const top = (x.from / 60 - lo) * PX, h = Math.max(18, ((x.to - x.from) / 60) * PX - 2);
       const lane = `left:calc(${(x.lane * 100 / lanes).toFixed(3)}% + 3px);width:calc(${(100 / lanes).toFixed(3)}% - 6px);`;
       const c = colorOf(x.o.staff_id);
-      const t = `${SHIFTS.clock(x.o.start, zone)} – ${SHIFTS.clock(x.o.end, zone)}`;
+      const t = `${SHIFTS.clock(x.o.start, zone)} – ${SHIFTS.clock(x.o.end, zone)}${SHIFTS.dateIn(x.o.end, zone) !== x.date ? ' (next day)' : ''}`;
       return `<div class="cal-b" style="${lane}top:${top}px;height:${h}px;background:${c.bg};border-color:${c.fg};color:${c.fg}"
           title="${escEmail((names ? x.o.name + ': ' : '') + t + (x.o.note ? ' — ' + x.o.note : ''))}">
         ${names ? `<b>${escEmail(x.o.name)}</b>` : ''}<span>${escEmail(t)}</span>${x.o.note ? `<em>${escEmail(x.o.note)}</em>` : ''}</div>`;
@@ -32197,27 +32216,29 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
     const owner = !!actor && actor.kind !== 'staff';
     /* The calendar is drawn in one zone: the owner's Chicago by default, a
        helper's Philippines; a chip switches. The list shows both. */
-    const zone = req.query.zone === 'ct' ? 'America/Chicago' : req.query.zone === 'ph' ? 'Asia/Manila' : owner ? 'America/Chicago' : 'Asia/Manila';
+    /* A helper sees Philippines time only, no switch (owner, 2026-10-16). */
+    const zone = !owner ? 'Asia/Manila' : req.query.zone === 'ph' ? 'Asia/Manila' : 'America/Chicago';
+    const listZone = owner ? 'America/Chicago' : 'Asia/Manila';
     const view = req.query.view === 'list' ? 'list' : req.query.view === 'month' ? 'month' : 'calendar';
     const asked = SHIFTS.validDate(req.query.week);
     /* This week as the viewer's zone counts it: a helper's Monday morning in
        Manila is still Sunday in Chicago. */
     const week = asked ? SHIFTS.mondayOf(new Date(`${asked}T12:00:00Z`), 'UTC') : SHIFTS.mondayOf(new Date(), zone);
     const [rows, roster] = await Promise.all([shiftRows(owner ? null : (actor && actor.id) || -1), staffRoster({ activeOnly: true })]);
-    const occ = SHIFTS.weekOccurrences(rows, week, 'America/Chicago');
+    const occ = SHIFTS.weekOccurrences(rows, week, listZone);
     const PALETTE = [['#e8f0ff', '#1848B8'], ['#e7f6ec', '#166534'], ['#fff1e6', '#9a3412'], ['#f3e8ff', '#6b21a8'], ['#fdf2f8', '#9d174d'], ['#ecfeff', '#155e75']];
     const colorOf = (id) => { const ix = roster.findIndex((r) => r.id === id); const c = PALETTE[(ix < 0 ? 0 : ix) % PALETTE.length]; return { bg: c[0], fg: c[1] }; };
     const q = (o) => { const p = new URLSearchParams({ week, ...(req.query.zone ? { zone: req.query.zone } : {}), ...(view !== 'calendar' ? { view } : {}), ...o });
       for (const [k, v] of [...p]) if (v === '') p.delete(k); return `/admin/work-schedule?${p.toString().replace(/&/g, '&amp;')}`; };
-    const dayOf = (o) => SHIFTS.dateIn(o.start, 'America/Chicago');
+    const dayOf = (o) => SHIFTS.dateIn(o.start, listZone);
     const days = Array.from({ length: 7 }, (_, i) => SHIFTS.addDays(week, i));
     const hours = new Map();
     for (const o of occ) hours.set(o.staff_id, (hours.get(o.staff_id) || 0) + SHIFTS.hoursOf(o));
     const dayCard = (d) => {
       const list = occ.filter((o) => dayOf(o) === d);
       const label = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'long', month: 'short', day: 'numeric' }).format(new Date(`${d}T12:00:00Z`));
-      return `<div class="ws-day"><div class="ws-head">${escEmail(label)} <span class="muted">(Chicago)</span></div>
-        ${list.map((o) => `<div class="ws-shift"><b>${escEmail(o.name)}</b> <span class="muted">${SHIFTS.hoursOf(o)} h</span>${shiftLines(o)}${
+      return `<div class="ws-day"><div class="ws-head">${escEmail(label)} <span class="muted">(${owner ? 'Chicago' : 'Philippines'})</span></div>
+        ${list.map((o) => `<div class="ws-shift">${owner ? `<b>${escEmail(o.name)}</b> ` : ''}<span class="muted">${SHIFTS.hoursOf(o)} h</span>${shiftLines(o, { phOnly: !owner })}${
           o.note ? `<div class="row-sub">${escEmail(o.note)}</div>` : ''}</div>`).join('') || '<div class="muted" style="font-size:13px">Nobody scheduled</div>'}</div>`;
     };
     const fmtTime = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
@@ -32234,7 +32255,15 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
     const weekChoices = [...new Set([week, ...SHIFTS.weeksFrom(thisMonday, 12),
       ...rows.flatMap((w) => [startMon(w), w.ends_on ? SHIFTS.mondayOf(new Date(`${w.ends_on}T12:00:00Z`), 'UTC') : null]).filter(Boolean)])].sort();
     const weekName = (m) => (m === thisMonday ? 'This week' : m === SHIFTS.addDays(thisMonday, 7) ? 'Next week' : 'Week') + ' of ' + shortDay(m);
-    const weekOptions = (sel) => weekChoices.map((m) => `<option value="${m}"${m === sel ? ' selected' : ''}>${escEmail(weekName(m))}</option>`).join('');
+    const weekOptions = (sel, { future = false } = {}) => weekChoices.filter((m) => !future || m >= thisMonday)
+      .map((m) => `<option value="${m}"${m === sel ? ' selected' : ''}>${escEmail(weekName(m))}</option>`).join('');
+    /* Weeks that are over are the record (owner, 2026-10-16): nothing is
+       added to, moved in or removed from a day that has passed. */
+    /* Each shift's dates are days in its own zone, so "today" is too: Monday
+       morning in Manila is still Sunday in Chicago (review). */
+    const todayIn = (w) => SHIFTS.dateIn(new Date(), w.zone);
+    const ended = (w) => !!w.ends_on && w.ends_on < todayIn(w);
+    const started = (w) => !w.starts_on || w.starts_on < todayIn(w);
     const rangeText = (w) => w.starts_on && w.ends_on && w.ends_on === SHIFTS.addDays(w.starts_on, 6) ? `Week of ${shortDay(w.starts_on)} only`
       : w.starts_on && w.ends_on ? `${shortDay(w.starts_on)} to ${shortDay(w.ends_on)}`
       : w.starts_on ? `Every week from ${shortDay(w.starts_on)}` : w.ends_on ? `Every week until ${shortDay(w.ends_on)}` : 'Every week, no dates';
@@ -32255,26 +32284,32 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
       const w = g.rows[0];
       const ids = g.rows.map((x) => Number(x.id)).join(',');
       const every = !w.ends_on;
+      if (ended(w)) {
+        return `<div class="row-i"><span class="row-main" style="white-space:normal;opacity:.7"><b>${escEmail(w.name)}</b> &middot; ${daysText(g.rows)} ${fmtTime(w.start_min)}–${fmtTime(w.end_min)} ${escEmail(SHIFTS.ZONES[w.zone] ? SHIFTS.ZONES[w.zone].label : w.zone)} time${
+          w.note ? ` <span class="muted">&middot; ${escEmail(w.note)}</span>` : ''}
+          <div class="row-sub">${escEmail(rangeText(w))} &middot; past, kept as it was</div></span></div>`;
+      }
       return `<div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal"><b>${escEmail(w.name)}</b> &middot; ${daysText(g.rows)} ${fmtTime(w.start_min)}–${fmtTime(w.end_min)} ${escEmail(SHIFTS.ZONES[w.zone] ? SHIFTS.ZONES[w.zone].label : w.zone)} time${
           w.note ? ` <span class="muted">&middot; ${escEmail(w.note)}</span>` : ''}
           <div class="row-sub"${every ? ' style="color:#8a5a00;font-weight:600"' : ''}>${escEmail(rangeText(w))}</div>
           <details style="margin-top:4px"><summary style="font-size:12.5px">Change the week</summary>
             <form method="post" action="/admin/work-schedule" class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end;margin-top:6px">
               <input type="hidden" name="action" value="week"><input type="hidden" name="ids" value="${ids}">
-              <label style="margin:0">Week of <select name="week_of">${weekOptions(startMon(w) || week)}</select></label>
+              ${started(w) ? `<input type="hidden" name="week_of" value="${escEmail(startMon(w) || thisMonday)}"><span class="muted" style="font-size:12.5px">Already started, so only its last week can change.</span>`
+                : `<label style="margin:0">Week of <select name="week_of">${weekOptions(startMon(w) || week, { future: true })}</select></label>`}
               <label style="margin:0">Until <select name="until">
-                <option value=""${w.ends_on && w.starts_on && w.ends_on === SHIFTS.addDays(w.starts_on, 6) ? ' selected' : ''}>That week only</option>
+                <option value=""${w.ends_on && w.starts_on && w.ends_on === SHIFTS.addDays(w.starts_on, 6) ? ' selected' : ''}>${started(w) ? 'Stop after this week' : 'That week only'}</option>
                 <option value="repeat"${every ? ' selected' : ''}>Every week after</option>
-                ${weekChoices.map((m) => `<option value="${m}"${w.ends_on && w.ends_on === SHIFTS.addDays(m, 6) && !(w.starts_on && w.ends_on === SHIFTS.addDays(w.starts_on, 6)) ? ' selected' : ''}>Through the week of ${escEmail(shortDay(m))}</option>`).join('')}</select></label>
+                ${weekChoices.filter((m) => m >= thisMonday).map((m) => `<option value="${m}"${w.ends_on && w.ends_on === SHIFTS.addDays(m, 6) && !(w.starts_on && w.ends_on === SHIFTS.addDays(w.starts_on, 6)) ? ' selected' : ''}>Through the week of ${escEmail(shortDay(m))}</option>`).join('')}</select></label>
               <button type="submit" class="btn btn-ghost">Save</button></form></details></span>
         <span class="row-end"><form method="post" action="/admin/work-schedule" style="margin:0"><input type="hidden" name="action" value="delete">
-          <input type="hidden" name="ids" value="${ids}"><button type="submit" class="btn btn-ghost">Remove${g.rows.length > 1 ? ` all ${g.rows.length}` : ''}</button></form></span></div>`;
+          <input type="hidden" name="ids" value="${ids}"><button type="submit" class="btn btn-ghost">${started(w) ? 'Stop from today' : `Remove${g.rows.length > 1 ? ` all ${g.rows.length}` : ''}`}</button></form></span></div>`;
     };
     const manage = owner ? `<details class="card" id="manage"${req.query.ok || req.query.err ? ' open' : ''}><summary><b>Set the hours</b> <span class="muted">for the week of ${escEmail(shortDay(week))}, or another week</span></summary>
       <form method="post" action="/admin/work-schedule" class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end;margin-top:10px">
         <input type="hidden" name="action" value="add">
         <label style="margin:0">Who <select name="staff_id" required><option value="">Pick</option>${listedStaff(roster).map((r) => `<option value="${Number(r.id)}">${escEmail(r.name)}</option>`).join('')}</select></label>
-        <label style="margin:0">Week of <select name="week_of">${weekOptions(week)}</select></label>
+        <label style="margin:0">Week of <select name="week_of">${weekOptions(week >= thisMonday ? week : thisMonday, { future: true })}</select></label>
         <label style="margin:0">Days ${SHIFTS.DAYS.map((d, i) => `<label style="display:inline-flex;gap:3px;margin:0 6px 0 0;font-weight:400"><input type="checkbox" name="days" value="${i + 1}"${i < 5 ? ' checked' : ''}>${d}</label>`).join('')}</label>
         <label style="margin:0">Starts <input type="time" name="start" required value="09:00"></label>
         <label style="margin:0">Ends <input type="time" name="end" required value="14:00"></label>
@@ -32294,7 +32329,7 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
       .ws-shift:first-of-type{border-top:0}
     </style>
       ${pageHeader(owner ? 'Work schedule' : 'My schedule', owner ? 'Each shift in Chicago time (CT) and Philippines time (PH), for the real dates of the week, so daylight saving is already counted.'
-        : 'Your shifts this week, in Philippines time (PH) or Chicago time (CT). Switch the zone or show the list below.',
+        : 'Your shifts, in Philippines time.',
         view === 'month'
           ? `<a class="btn btn-ghost" href="${q({ week: SHIFTS.addDays(week, -28) })}">&larr; Earlier</a><a class="btn btn-ghost" href="${q({ week: SHIFTS.addDays(week, 28) })}">Later &rarr;</a>`
           : `<a class="btn btn-ghost" href="${q({ week: SHIFTS.addDays(week, -7) })}">&larr; Week before</a><a class="btn btn-ghost" href="${q({ week: SHIFTS.addDays(week, 7) })}">Week after &rarr;</a>`)}
@@ -32306,14 +32341,14 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
         { label: 'List', href: q({ view: 'list' }), on: view === 'list' },
         { label: '30 days', href: q({ view: 'month' }), on: view === 'month' },
       ])}
-      ${view === 'month' ? `${filterChips([
+      ${view === 'month' ? `${owner ? filterChips([
           { label: 'Philippines time (PH)', href: q({ zone: 'ph' }), on: zone === 'Asia/Manila' },
           { label: 'Chicago time (CT)', href: q({ zone: 'ct' }), on: zone === 'America/Chicago' },
-        ])}${monthScheduleHtml(rows, week, zone, colorOf, { names: owner })}`
-        : view === 'calendar' ? `${filterChips([
+        ]) : ''}${monthScheduleHtml(rows, week, zone, colorOf, { names: owner })}`
+        : view === 'calendar' ? `${owner ? filterChips([
           { label: 'Philippines time (PH)', href: q({ zone: 'ph' }), on: zone === 'Asia/Manila' },
           { label: 'Chicago time (CT)', href: q({ zone: 'ct' }), on: zone === 'America/Chicago' },
-        ])}
+        ]) : ''}
         ${scheduleCalendarHtml(
           /* Every occurrence of the weeks either side too, not only those that
              start in this one: a Sunday-night shift runs into this Monday. */
@@ -32359,10 +32394,28 @@ app.post('/admin/work-schedule', requireAdmin, async (req, res) => {
   /* A week picked on the form: its Monday, Chicago weeks. */
   const weekOf = SHIFTS.validDate(String(b.week_of || '').trim());
   const monday = weekOf ? SHIFTS.mondayOf(new Date(`${weekOf}T12:00:00Z`), 'UTC') : null;
+  /* Past days are the record (owner, 2026-10-16: lock dates that passed). */
+  const today = SHIFTS.dateIn(new Date(), 'America/Chicago');
+  const yesterday = SHIFTS.addDays(today, -1);
   try {
     if (b.action === 'delete') {
-      const { rowCount } = ids.length ? await pool.query('DELETE FROM staff_work_shifts WHERE id = ANY($1::int[])', [ids]) : { rowCount: 0 };
-      return back(res, to, rowCount ? 'ok' : 'err', rowCount ? `Removed ${rowCount} shift${rowCount === 1 ? '' : 's'}.` : 'No such shift.');
+      if (!ids.length) return back(res, to, 'err', 'No such shift.');
+      /* Not started yet: removed. Started: stopped from today, its past days
+         kept. Over: left alone. */
+      /* Each row's "today" in its own zone. Starting today or later: removed
+         (a shift removed on its first morning leaves nothing behind). */
+      /* Today per zone from the server's clock (the same one every page uses). */
+      const zt = `(CASE zone WHEN 'Asia/Manila' THEN $2::date ELSE $3::date END)`;
+      const todays = [ids, SHIFTS.dateIn(new Date(), 'Asia/Manila'), SHIFTS.dateIn(new Date(), 'America/Chicago')];
+      const { rowCount: gone } = await pool.query(
+        `DELETE FROM staff_work_shifts WHERE id = ANY($1::int[]) AND starts_on >= ${zt}`, todays);
+      const { rowCount: stopped } = await pool.query(
+        `UPDATE staff_work_shifts SET ends_on = ${zt} - 1
+          WHERE id = ANY($1::int[]) AND (starts_on IS NULL OR starts_on < ${zt})
+            AND (ends_on IS NULL OR ends_on >= ${zt})`, todays);
+      if (!gone && !stopped) return back(res, to, 'err', 'Those days have passed, so the shift stays as it was.');
+      return back(res, to, 'ok', [gone ? `Removed ${gone} shift${gone === 1 ? '' : 's'}` : '',
+        stopped ? `Stopped ${stopped} from today; the days already worked stay on the record` : ''].filter(Boolean).join('. ') + '.');
     }
     if (b.action === 'week') {
       if (!ids.length || !monday) return back(res, to, 'err', 'Pick a week.');
@@ -32370,17 +32423,41 @@ app.post('/admin/work-schedule', requireAdmin, async (req, res) => {
          every week through the end of that week (review: a repeating shift
          could otherwise never be given a last week). */
       const untilMon = SHIFTS.validDate(String(b.until || ''));
-      const newEnd = b.until === 'repeat' || b.repeat === '1' ? null
+      let newEnd = b.until === 'repeat' || b.repeat === '1' ? null
         : untilMon ? SHIFTS.addDays(SHIFTS.mondayOf(new Date(`${untilMon}T12:00:00Z`), 'UTC'), 6) : SHIFTS.addDays(monday, 6);
       if (newEnd && newEnd < monday) return back(res, to, 'err', 'The last week is before the first.');
-      const { rows: moving } = await pool.query('SELECT staff_id, weekday, start_min, end_min, zone FROM staff_work_shifts WHERE id = ANY($1::int[])', [ids]);
+      const { rows: moving } = await pool.query(`SELECT staff_id, weekday, start_min, end_min, zone,
+          to_char(starts_on, 'YYYY-MM-DD') AS starts_on, to_char(ends_on, 'YYYY-MM-DD') AS ends_on
+          FROM staff_work_shifts WHERE id = ANY($1::int[])`, [ids]);
+      if (!moving.length) return back(res, to, 'err', 'No such shift.');
+      /* Over: kept. Started: its first week stays, only the last can change,
+         and never to before today. Not started: never onto a week gone by. */
+      const tz = (m) => SHIFTS.dateIn(new Date(), m.zone);
+      if (moving.some((m) => m.ends_on && m.ends_on < tz(m))) return back(res, to, 'err', 'Those days have passed, so the shift stays as it was.');
+      const begun = moving.some((m) => !m.starts_on || m.starts_on < tz(m));
+      /* "Stop after this week" on a shift already running: the end of the
+         current week, not of the week it began (that is long past). */
+      if (begun && !untilMon && b.until !== 'repeat' && b.repeat !== '1') {
+        newEnd = SHIFTS.addDays(SHIFTS.mondayOf(new Date(), 'America/Chicago'), 6);
+      }
+      /* Never onto a day already gone (review: moving to this week on a
+         Thursday put shifts on Mon-Wed). */
+      if (!begun && moving.some((m) => SHIFTS.addDays(monday, m.weekday - 1) < tz(m))) {
+        return back(res, to, 'err', 'Some of those days have passed that week. Pick a later week, or add the remaining days on their own.');
+      }
+      if (begun && newEnd && newEnd < yesterday) return back(res, to, 'err', 'Its last week cannot end before today.');
       for (const sid of new Set(moving.map((m) => m.staff_id))) {
         const clash = await shiftClashes(sid, moving.filter((m) => m.staff_id === sid), monday, newEnd, ids);
         if (clash.length) return back(res, to, 'err', `Only one shift a day: they already have ${clash.join(', ')} then. Remove or move that one first.`);
       }
-      const { rowCount } = await pool.query('UPDATE staff_work_shifts SET starts_on = $2::date, ends_on = $3::date WHERE id = ANY($1::int[])',
-        [ids, monday, newEnd]);
-      to = `/admin/work-schedule?week=${monday}#manage`;
+      /* A shift already running keeps its own first day (even none, for an
+         old every-week shift); only its last day moves. */
+      const { rowCount } = begun
+        ? await pool.query('UPDATE staff_work_shifts SET ends_on = $2::date WHERE id = ANY($1::int[])', [ids, newEnd])
+        : await pool.query('UPDATE staff_work_shifts SET starts_on = $2::date, ends_on = $3::date WHERE id = ANY($1::int[])', [ids, monday, newEnd]);
+      to = `/admin/work-schedule?week=${begun ? SHIFTS.mondayOf(new Date(), 'America/Chicago') : monday}#manage`;
+      if (begun) return back(res, to, rowCount ? 'ok' : 'err', !rowCount ? 'No such shift.'
+        : newEnd ? `It now ends ${newEnd}; the days already worked stay on the record.` : 'It now runs every week, with no end.');
       return back(res, to, rowCount ? 'ok' : 'err', !rowCount ? 'No such shift.'
         : !newEnd ? `Every week from ${monday}.` : newEnd === SHIFTS.addDays(monday, 6) ? `Moved to the week of ${monday} only.` : `Every week from ${monday} to ${newEnd}.`);
     }
@@ -32394,6 +32471,10 @@ app.post('/admin/work-schedule', requireAdmin, async (req, res) => {
     if (startsOn === false || endsOn === false) return back(res, to, 'err', 'Pick real dates.');
     if (startsOn && endsOn && endsOn < startsOn) return back(res, to, 'err', 'The last day is before the first.');
     if (b.action === 'dates') {
+      if ((startsOn && startsOn < today) || (endsOn && endsOn < yesterday)) return back(res, to, 'err', 'Those days have passed. Pick today or later.');
+      const { rows: [old] } = ids.length ? await pool.query(
+        `SELECT 1 FROM staff_work_shifts WHERE id = ANY($1::int[]) AND (starts_on IS NULL OR starts_on <= $2::date) LIMIT 1`, [ids, today]) : { rows: [] };
+      if (old) return back(res, to, 'err', 'That shift has already started, so its first week stays. Change only its last week.');
       const { rowCount } = ids.length ? await pool.query('UPDATE staff_work_shifts SET starts_on = $2::date, ends_on = $3::date WHERE id = ANY($1::int[])',
         [ids, startsOn, endsOn]) : { rowCount: 0 };
       return back(res, to, rowCount ? 'ok' : 'err', rowCount ? 'Dates saved.' : 'No such shift.');
@@ -32416,6 +32497,16 @@ app.post('/admin/work-schedule', requireAdmin, async (req, res) => {
     if (monday) to = `/admin/work-schedule?week=${monday}#manage`;
     /* Checked and written under one lock per person, so two tabs or a double
        press cannot each find the day free and both add (review). */
+    /* Nothing goes on a day that has passed. */
+    /* Days already gone that week are skipped and named; all gone is refused. */
+    /* In the shift's own zone. One week: passed days are skipped and named.
+       Every week: a passed day starts the week after instead, so it is not
+       lost from every later week (review). */
+    const zoneToday = SHIFTS.dateIn(new Date(), zone);
+    const gonePast = days.filter((d) => SHIFTS.addDays(monday, d - 1) < zoneToday);
+    if (endsOn && gonePast.length === days.length) return back(res, to, 'err', 'Those days have passed that week. Pick this week\'s remaining days or a later week.');
+    if (endsOn && gonePast.length) days.splice(0, days.length, ...days.filter((d) => !gonePast.includes(d)));
+    const firstDayOf = (d) => (!endsOn && gonePast.includes(d) ? SHIFTS.addDays(monday, 7) : startsOn);
     const wanted = days.map((d) => ({ weekday: d, start_min: start, end_min: end, zone }));
     const client = await pool.connect();
     let added = 0, clash = [];
@@ -32431,7 +32522,7 @@ app.post('/admin/work-schedule', requireAdmin, async (req, res) => {
                SELECT 1 FROM staff_work_shifts WHERE staff_id = $1 AND weekday = $2 AND start_min = $3 AND end_min = $4 AND zone = $5
                   AND COALESCE(starts_on, '-infinity'::date) <= COALESCE($8::date, 'infinity'::date)
                   AND COALESCE(ends_on, 'infinity'::date) >= COALESCE($7::date, '-infinity'::date))`,
-            [staffId, d, start, end, zone, note, startsOn, endsOn]);
+            [staffId, d, start, end, zone, note, firstDayOf(d), endsOn]);
           added += rowCount;
         }
       }
@@ -32447,7 +32538,7 @@ app.post('/admin/work-schedule', requireAdmin, async (req, res) => {
     /* Back on the week the shifts went on, so the owner sees them land. */
     if (monday) to = `/admin/work-schedule?week=${monday}#manage`;
     if (!added) return back(res, to, 'err', 'Those shifts are already on that week. To move them, use Change the week on the shift in the list below.');
-    return back(res, to, 'ok', `Added ${added} shift${added === 1 ? '' : 's'}${monday ? (endsOn ? ` for the week of ${monday} only` : `, every week from ${monday}`) : ''}.${
+    return back(res, to, 'ok', `${gonePast.length ? `${gonePast.map((d) => SHIFTS.DAYS[d - 1]).join(', ')} had passed this week${endsOn ? ` and ${gonePast.length === 1 ? 'was' : 'were'} skipped` : ', so they start next week'}. ` : ''}Added ${added} shift${added === 1 ? '' : 's'}${monday ? (endsOn ? ` for the week of ${monday} only` : `, every week from ${monday}`) : ''}.${
       skipped ? ` ${skipped} were already on that week and were left as they are.` : ''}`);
   } catch (err) {
     console.error('work schedule save failed:', err.message);
