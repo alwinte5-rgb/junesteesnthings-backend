@@ -40,6 +40,25 @@
 
 const COURSES = require('./courses');
 
+/* A lesson's title without its course prefix ("Ads course 3a: "). The
+   prefixes are read from the courses: a prefix counts only when at least
+   three lessons are numbered under it (every course has more), so a single
+   title like "Step 1: Pick the blank" never becomes one. Collecting and
+   stripping use the same numbering pattern. */
+const LESSON_NUMBER = '[0-9]+[a-z]?';
+const LESSON_PREFIXES = (() => {
+  const seen = new Map();
+  for (const c of Object.values(COURSES.COURSES)) {
+    for (const l of c.modules.flatMap((m) => m.lessons || [])) {
+      const m = new RegExp(`^(.+?) ${LESSON_NUMBER}: `).exec(l.article);
+      if (m) seen.set(m[1], (seen.get(m[1]) || new Set()).add(l.article));
+    }
+  }
+  return [...seen].filter(([, arts]) => arts.size >= 3).map(([p]) => p);
+})();
+const LESSON_PREFIX = new RegExp(`^(${LESSON_PREFIXES.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')}) ${LESSON_NUMBER}: `);
+const lessonTitle = (article) => article.replace(LESSON_PREFIX, '');
+
 /* Every quiz and exam passes at 80%, rounded up to a whole question. */
 const PASS_SHARE = 0.8;
 const passMark = (n) => Math.ceil(n * PASS_SHARE - 1e-9);
@@ -48,15 +67,8 @@ const passMark = (n) => Math.ceil(n * PASS_SHARE - 1e-9);
    that wait for it appear. */
 const FEATURES = new Set(['proofs', 'resources', 'quoteexam']);
 
-const TRACKS = {
-  sales:  { label: 'Sales', note: 'Leads, quotes, follow-ups and finding new customers.' },
-  design: { label: 'Design', note: 'Print-ready artwork, signs, proofs, AI and its cleanup, site and blog images, and social graphics.' },
-  content: { label: 'Content (video)', note: 'Shot lists, editing shorts and longer videos, music and permission rules, posting, comments and the Friday numbers.' },
-  ads: { label: 'Ads', note: 'Conversion tracking, Google Search, negatives and the $40 rule, Meta retargeting, seasonal campaigns and the weekly report.' },
-  bookkeeper: { label: 'Bookkeeper', note: 'Sales and fees, expenses and receipts, job costs, refunds and disputes, Illinois sales tax, the month-end close and the summary for June.' },
-  developer: { label: 'Developer', note: 'The stack, shipping through pull requests, outages and roll-backs, secrets and safe code, payment code, tests and Claude Code, apps.' },
-  software: { label: 'Software sales', note: 'Our apps and their top plans, finding agencies, first messages and follow-ups, discovery and the demo, objections and approved offers, trials and setup, pay and the weekly report.' },
-};
+/* Label and note per track (tracks.js, the one list of jobs). */
+const { TRACKS } = require('./tracks');
 const DEFAULT_TRACK = 'sales';
 
 /** A track name from anywhere (a form, a row), or the default. */
@@ -114,7 +126,7 @@ function courseSteps(course, features = FEATURES) {
     }
     for (const l of m.lessons) {
       push({ key: `lesson:${l.id}`, type: 'lesson', article: l.article, minutes: l.minutes, goals: l.goals || [],
-        checks: l.checks || [], pages: l.pages || [], tryIt: l.tryIt || [], images: l.images || [], title: l.article.replace(/^(Sales course|Lead Generation|Sales Closer|Account Manager|Design course|Content course|Ads course|Bookkeeper course|Developer course|Software sales course|Team basics) [0-9a-z]+: /, '') });
+        checks: l.checks || [], pages: l.pages || [], tryIt: l.tryIt || [], images: l.images || [], title: lessonTitle(l.article) });
     }
     for (const x of m.practice || []) push(!m.quiz && x.type === 'exam' ? { ...x, gate: true } : x);
     if (m.quiz) {
@@ -553,7 +565,7 @@ function fillGap(text, token, answer, nth) {
   return parts.slice(0, nth + 1).join(token) + a + parts.slice(nth + 1).join(token);
 }
 
-module.exports = { FEATURES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, signOrder, readOrder, quizSeconds, readQuizToken, QUIZ_TIMING_SINCE, picksFromPositions, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
+module.exports = { FEATURES, LESSON_PREFIXES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, signOrder, readOrder, quizSeconds, readQuizToken, QUIZ_TIMING_SINCE, picksFromPositions, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
   visibleSteps, stepByKey, mayTick, progress, stepOpen, placeholders, ownerGaps, fillGap, dayCount, passMark, courseSteps, lessonPages,
   COURSES: COURSES.COURSES, SALES_ROLES: COURSES.SALES_ROLES, salesRoleOf: COURSES.salesRoleOf,
   lessonArticles: COURSES.lessonArticles, glossary: COURSES.glossary };

@@ -45,7 +45,7 @@ test('resources: a helper sees only the tools for everyone and for their own pat
 test('resources: links must be https, every field is capped, and the audience is a known one', () => {
   const start = src.indexOf('const RESOURCE_AUDIENCES = ');
   const code = src.slice(start, src.indexOf("app.get('/admin/resources'", start));
-  const ctx = { text: (v, max) => String(v == null ? '' : v).trim().slice(0, max) };
+  const ctx = { text: (v, max) => String(v == null ? '' : v).trim().slice(0, max), CHAN: require('../tools/lib/team-channels') };
   vm.runInNewContext(`${code}\nthis.f = resourceFromForm;`, ctx);
   const f = ctx.f;
   assert.strictEqual(f({ name: 'COS', url: 'https://coscreatorstudio.com' }).urlOk, true);

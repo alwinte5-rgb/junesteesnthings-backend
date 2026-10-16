@@ -29,11 +29,12 @@ const ADS_CORE = require('./ads-core');
 const BOOKS_CORE = require('./books-core');
 const DEV_CORE = require('./dev-core');
 const SOFTWARE_CORE = require('./software-core');
+const ALL = [SALES_CORE, SALES_LEADGEN, SALES_CLOSER, SALES_ACCOUNTS, DESIGN_CORE, CONTENT_CORE, ADS_CORE, BOOKS_CORE, DEV_CORE, SOFTWARE_CORE];
 
 /* June's answers to the blanks in each lesson (answers.js). The unanswered
    body joins `was`, so a live copy she has not edited is replaced. */
 const ANSWERS = require('./answers');
-for (const c of [SALES_CORE, SALES_LEADGEN, SALES_CLOSER, SALES_ACCOUNTS, DESIGN_CORE, CONTENT_CORE, ADS_CORE, BOOKS_CORE, DEV_CORE, SOFTWARE_CORE]) {
+for (const c of ALL) {
   for (const l of c.modules.flatMap((m) => m.lessons)) {
     if (!l.body) continue;
     let b = l.body;
@@ -148,7 +149,7 @@ const REWORDED = [
    matched too) is turned back to the old words. Team basics is one lesson
    object shared by every course, so each lesson is done once. */
 const reworded = new Set();
-for (const c of [SALES_CORE, SALES_LEADGEN, SALES_CLOSER, DESIGN_CORE, CONTENT_CORE, ADS_CORE, BOOKS_CORE, DEV_CORE, SOFTWARE_CORE]) {
+for (const c of ALL) {
   for (const l of c.modules.flatMap((m) => m.lessons)) {
     if (reworded.has(l) || typeof l.body !== 'string' || !REWORDED.some(([now]) => l.body.includes(now))) continue;
     reworded.add(l);
