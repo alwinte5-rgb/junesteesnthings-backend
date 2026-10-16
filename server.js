@@ -14370,7 +14370,12 @@ app.get('/q/:code', async (req, res) => {
 
     /* Items go in for the piece count only — a run past the contract sheet's
        stated ceiling gets a caveat rather than a date presented as a promise. */
-    const eta = deliveryEstimate(q.accepted_at ? new Date(q.accepted_at) : new Date(),
+    /* Unpaid, from today: the clock starts with the deposit, so an accepted
+       quote nobody has paid on is "if you pay today", not "since you accepted". */
+    const firstPaid = paid ? (await pool.query(
+      'SELECT MIN(created_at) AS t FROM quote_payments WHERE quote_code = $1 AND amount > 0', [q.code])
+      .catch(() => ({ rows: [{}] }))).rows[0].t : null;
+    const eta = deliveryEstimate(paid ? new Date(firstPaid || q.paid_at || q.accepted_at || Date.now()) : new Date(),
       { items: q.items });
     /* A DATE column has no time, so converting it through a timezone shifts it
        a day backwards (2026-08-20 rendered as Aug 19). Format the calendar date
@@ -14637,8 +14642,17 @@ app.get('/q/:code', async (req, res) => {
             ? `<p style="margin:0 0 8px"><b>Delivery:</b> ${escEmail(DELIV.bookingPhrase(delivBooking))} to
                 ${escEmail(DELIV.addressLine(delivBooking.address))}.
                 <a href="/q/${q.code}/delivery">Change the time</a></p>`
+            : q.cancelled_at || (!accepted && expired) ? ''
+            : paid && q.target_date && !q.needed_by ? `<p class="muted"><b>Expected by:</b> ${dayFmt(q.target_date)}.</p>`
+            : paid ? `<p class="muted"><b>Estimated:</b> ready ${dayFmt(eta.ready)}, delivered ${dayFmt(eta.deliver_from)}–${dayFmt(eta.deliver_to)}.</p>`
+            /* The clock starts with the deposit (owner, 2026-10-15): accepting
+               holds nothing, so these dates are "if you pay today", and a
+               later deposit moves them later. */
             : `<p class="muted"><b>Estimated:</b> ready ${dayFmt(eta.ready)}, delivered ${dayFmt(eta.deliver_from)}–${dayFmt(eta.deliver_to)}
-            ${accepted ? '' : ' once the deposit is in'}.</p>`}
+              if your deposit is paid today.</p>
+              <p class="muted" style="font-size:12.5px"><b>When we start:</b> your order takes ${eta.production_days[0]}–${eta.production_days[1]}
+              business days to make, and that time starts the day your deposit is paid${accepted ? '' : ', not the day you accept'}.
+              Paying later moves these dates later by the same number of days.</p>`}
           ${eta.beyond_sheet ? `<p class="muted">This is a large run, so those dates are an
             estimate rather than a commitment — we confirm the schedule with the press before
             you pay.</p>` : ''}
@@ -14767,7 +14781,8 @@ app.get('/q/:code', async (req, res) => {
           <input type="hidden" name="rev" value="${Number(q.revision) || 1}">` : ''}
           <button type="submit" id="qaccept" style="width:100%;margin-top:14px">Accept &amp; choose payment</button>
         </form>
-        <p class="muted" style="margin-top:10px;text-align:center">Nothing is charged yet — you'll pick how to pay next.</p>
+        <p class="muted" style="margin-top:10px;text-align:center">Nothing is charged yet — you'll pick how to pay next.
+          Your order goes into production the day your deposit is paid.</p>
 
         <!-- Shown BEFORE accepting: how they pay changes what they pay, so
              hiding this until afterwards meant the cheaper option arrived too
@@ -24006,6 +24021,58 @@ async function claudeJobContext(code, ask, fullView) {
 }
 
 app.post('/admin/api/quote/:code/suggest-reply', requireAdmin, claudeRoute('suggest'));
+
+/* A follow-up for a lead the shop wrote to and has not heard back from
+   (owner, 2026-10-15). The same coach as the job page, shown the enquiry as
+   what they said and every note and email on the lead as what the shop did.
+   Suggests only: the page puts it in the box and a person sends it. */
+app.post('/admin/api/lead/:id/suggest-followup', requireAdmin, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const id = intIn(req.params.id);
+  if (!id) return res.status(404).json({ error: 'No such enquiry.' });
+  const actor = currentActor() || OWNER_ACTOR;
+  /* The same two checks as sending a lead email: a helper who may message
+     customers but not see leads (the designer preset) must not read one
+     through Claude either (review; Codex #179 on the send route). */
+  if (actor.kind === 'staff' && (actorLevel('customers.message') === 'off' || actorLevel('leads.view') !== 'on')) {
+    return res.status(403).json({ error: 'Leads go through the owner for now.' });
+  }
+  const who = actor.kind === 'staff' ? 's' + actor.id : 'owner';
+  const now = Date.now();
+  const recent = (replyAsks.get(who) || []).filter((t) => now - t < 60 * 1000);
+  if (recent.length >= 10) return res.status(429).json({ error: 'That is a lot of Claude requests in a minute. Wait a moment.' });
+  replyAsks.set(who, [...recent, now]);
+  try {
+    const { rows: [l] } = await pool.query('SELECT id, name, description, photo_url, created_at FROM submissions WHERE id = $1', [id]);
+    if (!l) return res.status(404).json({ error: 'No such enquiry.' });
+    const { rows: notes } = await pool.query(
+      `SELECT kind, body, created_at FROM lead_notes WHERE submission_id = $1 ORDER BY created_at DESC LIMIT 20`, [id]);
+    const when = (d) => new Date(d).toLocaleString('en-US', { timeZone: SHOP_TZ, month: 'short', day: 'numeric',
+                                                              hour: 'numeric', minute: '2-digit' });
+    const history = [
+      ...notes.map((n) => ({ channel: CONTACT_KINDS.includes(n.kind) ? n.kind : 'internal note (not sent)', body: n.body, inbound: false, when: when(n.created_at) })),
+      { channel: 'website form', body: l.description || '(no details)', inbound: true, when: when(l.created_at) },
+    ];
+    /* The last time the shop reached them, not the last internal note. */
+    const lastOut = notes.find((n) => CONTACT_KINDS.includes(n.kind));
+    const days = lastOut ? Math.max(0, Math.round((now - new Date(lastOut.created_at)) / 86400000)) : null;
+    const { ask } = REPLYCOACH.validateAsk({ channel: 'email', draft: (req.body || {}).draft,
+      note: `This is a lead, not an order yet: no quote has been made. The shop wrote to them${days != null ? ` ${days} day${days === 1 ? '' : 's'} ago` : ''} and they have not replied. `
+        + 'Write a short, warm follow-up email that asks if they still need it and gives one easy next step. '
+        + 'Ask only for details their enquiry is still missing. No prices, no dates promised, no pressure.' });
+    const pictures = /^https:\/\/res\.cloudinary\.com\//.test(String(l.photo_url || '')) ? [l.photo_url] : [];
+    const out = await REPLYCOACH.suggestReply({
+      job: { code: 'enquiry #' + l.id, name: l.name, status: 'enquiry, contacted, waiting on them',
+             today: new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ }), items: [], files: [], pictures: pictures.length },
+      history, playbook: [], ask, money: false, pictures,
+      shop: { phone: SHOP_PHONE, pickup: `free at ${PICKUP_ADDRESS} (${PICKUP_HOURS})` } });
+    return res.json({ subject: out.subject, reply: out.reply });
+  } catch (err) {
+    console.error(`lead follow-up suggestion for ${id} failed:`, err.message);
+    if (err.code !== 'refusal') reportError('claude-lead-followup', err, `lead ${id}`).catch(() => {});
+    return res.status(502).json({ error: REPLYCOACH.failureMessage(err) });
+  }
+});
 app.post('/admin/api/quote/:code/review-message', requireAdmin, claudeRoute('review'));
 
 app.get('/admin/quotes',     requireAdmin, (req, res) => renderBoard('money', req, res));
@@ -24215,7 +24282,10 @@ function leadCardHtml(l, { back = '/admin/quotes', roster = null } = {}) {
 /** Email a lead from their card: opens on the "a few more details" message,
  *  editable. Below it, one press records an email sent from your own inbox. */
 function leadEmailBox(l, backField) {
-  const m = LEADMAIL.infoRequest(l, { signer: SHOP_SIGNER, shop: SHOP_NAME });
+  /* Already written to and waiting on them: the box opens on a follow-up,
+     with Claude a press away (owner, 2026-10-15). */
+  const contacted = l.lead_status === 'contacted';
+  const m = (contacted ? LEADMAIL.followUp : LEADMAIL.infoRequest)(l, { signer: SHOP_SIGNER, shop: SHOP_NAME });
   // In training it goes to the owner first (POST /admin/lead/:id/email).
   const actor = currentActor();
   const held = !!actor && actor.kind === 'staff' && actorLevel('customers.message') === 'approval';
@@ -24225,6 +24295,9 @@ function leadEmailBox(l, backField) {
         <p class="muted" style="margin:0 0 8px;font-size:12.5px">To ${escEmail(l.email)}. ${held ? 'June checks it first and it is sent when she approves it. ' : ''}Their reply comes to the shop's email.</p>
         <input name="subject" maxlength="${LEADMAIL.LIMITS.subject}" required value="${escEmail(m.subject)}" style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">
         <textarea name="body" rows="14" maxlength="${LEADMAIL.LIMITS.body}" required style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">${escEmail(m.body)}</textarea>${backField}
+        ${contacted ? `<div style="margin:0 0 8px">
+          <button type="button" class="btn" data-lsug="${l.id}" style="padding:6px 14px;font-size:12.5px;background:#5b3fb0">Suggest a follow-up with Claude</button>
+          <span class="muted" data-lsugst style="font-size:12px;margin-left:6px">Reads their enquiry and what was sent. Replaces the message; you edit and send.</span></div>` : ''}
         <button type="submit" class="btn" style="padding:7px 16px;font-size:13px">${held ? 'Send to June to check' : 'Send email'}</button>
       </form>
       <script>/* A send that fails comes back with the stock message; the draft typed
@@ -24232,7 +24305,14 @@ function leadEmailBox(l, backField) {
       (function(){var k='jt-lead-draft-${l.id}',box=document.getElementById('em-${l.id}'),f=box&&box.querySelector('form');if(!f)return;
       try{var p=new URLSearchParams(location.search),d=JSON.parse(sessionStorage.getItem(k)||'null');
         if(d&&p.get('err')){f.subject.value=d.s;f.body.value=d.b;box.style.display='block';}else if(p.get('ok'))sessionStorage.removeItem(k);}catch(e){}
-      f.addEventListener('submit',function(){try{sessionStorage.setItem(k,JSON.stringify({s:f.subject.value,b:f.body.value}));}catch(e){}});})();</script>
+      f.addEventListener('submit',function(){try{sessionStorage.setItem(k,JSON.stringify({s:f.subject.value,b:f.body.value}));}catch(e){}});
+      var sg=f.querySelector('[data-lsug]'),st=f.querySelector('[data-lsugst]');
+      if(sg)sg.addEventListener('click',function(){sg.disabled=true;st.textContent='Asking Claude...';
+        fetch('/admin/api/lead/${l.id}/suggest-followup',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({draft:f.body.value})}).then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d};});})
+        .then(function(x){sg.disabled=false;if(!x.ok||!x.d.reply){st.textContent=(x.d&&x.d.error)||'No suggestion this time.';return;}
+          if(x.d.subject)f.subject.value=x.d.subject;f.body.value=x.d.reply;st.textContent='Suggested. Read it, change anything, then send.';})
+        .catch(function(){sg.disabled=false;st.textContent='Could not reach the server. Try again.';});});})();</script>
       <form method="POST" action="/admin/lead/${l.id}/note" style="margin-top:10px">
         <input type="hidden" name="kind" value="email"><input type="hidden" name="body" value="Emailed them from my own inbox.">${backField}
         <button type="submit" class="btn btn-ghost" style="padding:6px 14px;font-size:12.5px">I already emailed them</button>
