@@ -95,6 +95,7 @@ const TRAINING = require('./tools/lib/training');
 const QEXAM = require('./tools/lib/quote-exam');
 const RUSH = require('./tools/lib/rush');
 const CHAN = require('./tools/lib/team-channels');
+const { NEXT_PRESET, CHANNEL_TRACKS, TRACKS: JOB_TRACKS } = require('./tools/lib/tracks');
 const CHATFILES = require('./tools/lib/team-chat-files');
 const JOBNOTES = require('./tools/lib/job-notes');
 const SHIFTS = require('./tools/lib/work-shifts');
@@ -1350,10 +1351,13 @@ async function initStaffTables() {
   await pool.query(`INSERT INTO team_channels (name, audience)
                     SELECT x.name, x.audience FROM (VALUES ('Everyone', 'all'), ('Sales', 'sales')) AS x(name, audience)
                      WHERE NOT EXISTS (SELECT 1 FROM team_channels)`);
-  /* The software sales agent's channel, made once (an archived one counts). */
-  await pool.query(`INSERT INTO team_channels (name, audience)
-                    SELECT 'Software sales', 'software'
-                     WHERE NOT EXISTS (SELECT 1 FROM team_channels WHERE audience = 'software')`);
+  /* A channel for each track that gets one (tracks.js), made once: an
+     archived one counts. */
+  for (const k of CHANNEL_TRACKS) {
+    await pool.query(`INSERT INTO team_channels (name, audience)
+                      SELECT $1::text, $2::text
+                       WHERE NOT EXISTS (SELECT 1 FROM team_channels WHERE audience = $2::text)`, [CHAN.AUDIENCES[k], k]);
+  }
   /* Bonuses the owner adds by hand or awards for an incentive, and the
      incentives themselves: a target over a period, for one helper or all. */
   await pool.query(`
@@ -32807,7 +32811,7 @@ app.post('/admin/shared-logins/:id/open', requireAdmin, async (req, res) => {
    the owner keeps. Links and how to get in only: logins live in the team
    password manager, never here. A helper sees the tools for everyone and for
    their own path; the owner sees and edits all of them (ROUTES). */
-const RESOURCE_AUDIENCES = require('./tools/lib/tracks').AUDIENCES;
+const RESOURCE_AUDIENCES = CHAN.AUDIENCES; // the same audiences as channels (tracks.js)
 
 function resourceFromForm(b) {
   const url = text(b.url, 500);
@@ -33937,8 +33941,8 @@ function quizSummary(attempts) {
   return parts.join(' · ');
 }
 
-/* Where a helper goes once training is signed off, by the preset they trained on. */
-const NEXT_PRESET = { training: 'supervised', design: 'designer' };
+/* Where a helper goes once training is signed off, by the preset they
+   trained on: NEXT_PRESET (tracks.js `trained`). */
 /* The preset a helper moves up to once trained. "Supervised" is the sales and
    production step: a content, ads, books or developer trainee on the default
    Training preset goes to their own track's preset instead (Codex #224). */
@@ -33946,7 +33950,7 @@ function nextPresetFor(s) {
   const cur = STAFF.presetMatching(s.perms);
   if (cur === 'training') {
     const track = TRAINING.trackOf(s.training_track);
-    const own = track === 'sales' ? 'supervised' : STAFF.presetForTrack(track);
+    const own = JOB_TRACKS[track].preset !== 'training' ? JOB_TRACKS[track].preset : JOB_TRACKS[track].trained;
     return own && own !== 'training' && STAFF.PRESETS[own] ? own : null;
   }
   return NEXT_PRESET[cur] || null;

@@ -41,11 +41,22 @@
 const COURSES = require('./courses');
 
 /* A lesson's title without its course prefix ("Ads course 3a: "). The
-   prefixes are read from the courses themselves, so a new course needs no
-   edit here. */
-const LESSON_PREFIX = new RegExp(`^(${[...new Set(Object.values(COURSES.COURSES)
-  .flatMap((c) => c.modules.flatMap((m) => (m.lessons || []).map((l) => (/^(.+?) [0-9]+[a-z]?: /.exec(l.article) || [])[1]))).filter(Boolean))]
-  .map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')}) [0-9a-z]+: `);
+   prefixes are read from the courses: a prefix counts only when at least
+   three lessons are numbered under it (every course has more), so a single
+   title like "Step 1: Pick the blank" never becomes one. Collecting and
+   stripping use the same numbering pattern. */
+const LESSON_NUMBER = '[0-9]+[a-z]?';
+const LESSON_PREFIXES = (() => {
+  const seen = new Map();
+  for (const c of Object.values(COURSES.COURSES)) {
+    for (const l of c.modules.flatMap((m) => m.lessons || [])) {
+      const m = new RegExp(`^(.+?) ${LESSON_NUMBER}: `).exec(l.article);
+      if (m) seen.set(m[1], (seen.get(m[1]) || new Set()).add(l.article));
+    }
+  }
+  return [...seen].filter(([, arts]) => arts.size >= 3).map(([p]) => p);
+})();
+const LESSON_PREFIX = new RegExp(`^(${LESSON_PREFIXES.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')}) ${LESSON_NUMBER}: `);
 const lessonTitle = (article) => article.replace(LESSON_PREFIX, '');
 
 /* Every quiz and exam passes at 80%, rounded up to a whole question. */
@@ -57,7 +68,7 @@ const passMark = (n) => Math.ceil(n * PASS_SHARE - 1e-9);
 const FEATURES = new Set(['proofs', 'resources', 'quoteexam']);
 
 /* Label and note per track (tracks.js, the one list of jobs). */
-const TRACKS = Object.fromEntries(Object.entries(require('./tracks').TRACKS).map(([k, t]) => [k, { label: t.label, note: t.note }]));
+const { TRACKS } = require('./tracks');
 const DEFAULT_TRACK = 'sales';
 
 /** A track name from anywhere (a form, a row), or the default. */
@@ -554,7 +565,7 @@ function fillGap(text, token, answer, nth) {
   return parts.slice(0, nth + 1).join(token) + a + parts.slice(nth + 1).join(token);
 }
 
-module.exports = { FEATURES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, signOrder, readOrder, quizSeconds, readQuizToken, QUIZ_TIMING_SINCE, picksFromPositions, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
+module.exports = { FEATURES, LESSON_PREFIXES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, signOrder, readOrder, quizSeconds, readQuizToken, QUIZ_TIMING_SINCE, picksFromPositions, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
   visibleSteps, stepByKey, mayTick, progress, stepOpen, placeholders, ownerGaps, fillGap, dayCount, passMark, courseSteps, lessonPages,
   COURSES: COURSES.COURSES, SALES_ROLES: COURSES.SALES_ROLES, salesRoleOf: COURSES.salesRoleOf,
   lessonArticles: COURSES.lessonArticles, glossary: COURSES.glossary };

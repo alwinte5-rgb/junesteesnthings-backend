@@ -10,12 +10,16 @@
    short   the name of its chat channel audience and Resources audience
    role    the job title in the welcome email when the owner leaves it blank
    preset  the permission preset a new hire on this track starts on
+   trained the preset they move up to once training is signed off, when the
+           start preset is a training one (sales and design); none otherwise
+   channel true when the track gets its own chat channel at startup (made
+           once; an archived one counts). Sales has had # Sales from day one
    note    what the course covers, shown on the paths page */
 
 const TRACKS = {
-  sales: { label: 'Sales', short: 'Sales', role: 'Sales & Customer Service Assistant', preset: 'training',
+  sales: { label: 'Sales', short: 'Sales', role: 'Sales & Customer Service Assistant', preset: 'training', trained: 'supervised',
     note: 'Leads, quotes, follow-ups and finding new customers.' },
-  design: { label: 'Design', short: 'Design', role: 'Graphic Designer', preset: 'design',
+  design: { label: 'Design', short: 'Design', role: 'Graphic Designer', preset: 'design', trained: 'designer',
     note: 'Print-ready artwork, signs, proofs, AI and its cleanup, site and blog images, and social graphics.' },
   content: { label: 'Content (video)', short: 'Content', role: 'Content Editor', preset: 'team',
     note: 'Shot lists, editing shorts and longer videos, music and permission rules, posting, comments and the Friday numbers.' },
@@ -25,7 +29,7 @@ const TRACKS = {
     note: 'Sales and fees, expenses and receipts, job costs, refunds and disputes, Illinois sales tax, the month-end close and the summary for June.' },
   developer: { label: 'Developer', short: 'Developer', role: 'Developer', preset: 'team',
     note: 'The stack, shipping through pull requests, outages and roll-backs, secrets and safe code, payment code, tests and Claude Code, apps.' },
-  software: { label: 'Software sales', short: 'Software sales', role: 'Software Sales Agent', preset: 'team',
+  software: { label: 'Software sales', short: 'Software sales', role: 'Software Sales Agent', preset: 'team', channel: true,
     note: 'Our apps and their top plans, finding agencies, first messages and follow-ups, discovery and the demo, objections and approved offers, trials and setup, pay and the weekly report.' },
 };
 
@@ -34,4 +38,10 @@ const pick = (field) => Object.fromEntries(Object.entries(TRACKS).map(([k, t]) =
 /* Channel and Resources audiences: everyone, or one track. */
 const AUDIENCES = { all: 'Everyone', ...pick('short') };
 
-module.exports = { TRACKS, AUDIENCES, ROLE_FOR_TRACK: pick('role'), PRESET_FOR_TRACK: pick('preset') };
+/* Where a helper goes once training is signed off, by the preset they trained on. */
+const NEXT_PRESET = Object.fromEntries(Object.values(TRACKS).filter((t) => t.trained).map((t) => [t.preset, t.trained]));
+
+/* Tracks whose channel is made at startup. */
+const CHANNEL_TRACKS = Object.keys(TRACKS).filter((k) => TRACKS[k].channel);
+
+module.exports = { TRACKS, AUDIENCES, ROLE_FOR_TRACK: pick('role'), PRESET_FOR_TRACK: pick('preset'), NEXT_PRESET, CHANNEL_TRACKS };
