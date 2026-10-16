@@ -52,7 +52,7 @@ test('one view: taken and erased in one statement, by its helper only', () => {
   assert.match(route, /actor\.kind !== 'staff'\) return res\.status\(403\)/);
   assert.match(route, /res\.set\('Cache-Control', 'no-store'\)/);
   // Only the staff site's own page: no Origin, another origin or a form post is refused (security pass).
-  assert.match(route, /req\.get\('origin'\) !== new URL\(PUBLIC_BASE_URL\)\.origin \|\| !req\.is\('application\/json'\)/);
+  assert.ok(route.includes('STAFF_ORIGIN') && route.includes("req.is('application/json')"), 'staff Origin and JSON required (behavior: run-sharedlogins-sec.cjs)');
   assert.ok(route.indexOf("req.is('application/json')") < route.indexOf('loginOpens.get'), 'refused before it counts as a try');
   assert.strictEqual(STAFF.ROUTES['POST /admin/shared-logins'], 'owner');
   assert.strictEqual(STAFF.ROUTES['POST /admin/shared-logins/:id/cancel'], 'owner');

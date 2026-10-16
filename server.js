@@ -3295,6 +3295,7 @@ if (!cfAccess) {
   console.error('Cloudflare Access is not configured (CF_ACCESS_TEAM_DOMAIN, CF_ACCESS_AUD, OWNER_EMAILS) — every staff page is refused until it is.');
 }
 const STAFF_HOST = new URL(PUBLIC_BASE_URL).hostname;
+const STAFF_ORIGIN = new URL(PUBLIC_BASE_URL).origin;
 
 const signPayload = (payload, key) =>
   crypto.createHmac('sha256', key).update(String(payload)).digest('hex');
@@ -32648,10 +32649,10 @@ async function sharedLoginsCard(actor, owner, roster) {
           b.addEventListener('click', function(){
             b.disabled = true; b.textContent = 'Opening...';
             fetch('/admin/shared-logins/' + encodeURIComponent(row.getAttribute('data-sl')) + '/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-              .then(function(r){ return r.json().then(function(d){ return { ok: r.ok, d: d }; }); })
+              .then(function(r){ return r.json().catch(function(){ return { error: r.status === 401 ? 'Your sign-in has run out. Reload the page, sign in again, then press Show once.' : 'It could not be opened. Try again.' }; }).then(function(d){ return { ok: r.ok, status: r.status, d: d }; }); })
               .then(function(x){
                 out.textContent = '';
-                if (!x.ok) { b.textContent = 'Gone'; var e = document.createElement('div'); e.className = 'warn'; e.textContent = x.d.error || 'It could not be opened.'; out.appendChild(e); return; }
+                if (!x.ok) { if (x.status === 410) b.textContent = 'Gone'; else { b.disabled = false; b.textContent = 'Show once'; } var e = document.createElement('div'); e.className = 'warn'; e.textContent = x.d.error || 'It could not be opened.'; out.appendChild(e); return; }
                 b.style.display = 'none';
                 [['Username', x.d.username], ['Password', x.d.password]].forEach(function(f){
                   if (!f[1]) return;
@@ -32675,7 +32676,8 @@ async function sharedLoginsCard(actor, owner, roster) {
                   var li = document.createElement('li'); li.textContent = t; li.style.margin = '2px 0'; ol.appendChild(li);
                 });
                 w.appendChild(ol); out.appendChild(w);
-                window.addEventListener('beforeunload', function(ev){ ev.preventDefault(); ev.returnValue = ''; });
+                /* One reminder before leaving, however many are opened. */
+                if (!window.__slWarn) { window.__slWarn = true; window.addEventListener('beforeunload', function(ev){ ev.preventDefault(); ev.returnValue = ''; }); }
               })
               .catch(function(){ b.disabled = false; b.textContent = 'Show once'; var e = document.createElement('div'); e.className = 'warn'; e.textContent = 'Could not reach the server. Try again; if it says it was already opened, ask June to share it again.'; out.appendChild(e); });
           });
@@ -32753,7 +32755,7 @@ app.post('/admin/shared-logins/:id/open', requireAdmin, async (req, res) => {
   /* Only the Resources page's own button: the staff site's Origin and a JSON body,
      which a browser always sends from it. The site-wide guard lets a request
      with no Origin through; this one does not (security pass, 2026-10-16). */
-  if (req.get('origin') !== new URL(PUBLIC_BASE_URL).origin || !req.is('application/json')
+  if (req.get('origin') !== STAFF_ORIGIN || !req.is('application/json')
     || !['same-origin', undefined].includes(req.get('sec-fetch-site'))) {
     return res.status(403).json({ error: 'Open it from your Resources page.' });
   }
@@ -36788,7 +36790,7 @@ const KB_ADDED = [
 `**Keeping it safe**\n` +
 `- Keep it in your password manager only. Never in a note, a screenshot, a document, chat, email or an AI tool\n` +
 `- Never pass it to anyone else, even another helper. June shares it with each person who needs it\n` +
-`- Turn on two-factor sign-in when the site offers it, and tell June if a site asks for a code you do not have\n` +
+`- Never turn on or change two-factor sign-in, or change the password, on a shared account: June and others use it too. If a site asks for a code, ask June\n` +
 `- If you think a password was seen by someone else, tell June straight away so it can be changed` },
 ];
 
