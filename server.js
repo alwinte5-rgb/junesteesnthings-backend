@@ -1350,6 +1350,10 @@ async function initStaffTables() {
   await pool.query(`INSERT INTO team_channels (name, audience)
                     SELECT x.name, x.audience FROM (VALUES ('Everyone', 'all'), ('Sales', 'sales')) AS x(name, audience)
                      WHERE NOT EXISTS (SELECT 1 FROM team_channels)`);
+  /* The software sales agent's channel, made once (an archived one counts). */
+  await pool.query(`INSERT INTO team_channels (name, audience)
+                    SELECT 'Software sales', 'software'
+                     WHERE NOT EXISTS (SELECT 1 FROM team_channels WHERE audience = 'software')`);
   /* Bonuses the owner adds by hand or awards for an incentive, and the
      incentives themselves: a target over a period, for one helper or all. */
   await pool.query(`
@@ -32783,7 +32787,7 @@ app.post('/admin/shared-logins/:id/open', requireAdmin, async (req, res) => {
    the owner keeps. Links and how to get in only: logins live in the team
    password manager, never here. A helper sees the tools for everyone and for
    their own path; the owner sees and edits all of them (ROUTES). */
-const RESOURCE_AUDIENCES = { all: 'Everyone', sales: 'Sales', design: 'Design', content: 'Content', ads: 'Ads', bookkeeper: 'Bookkeeper', developer: 'Developer' };
+const RESOURCE_AUDIENCES = { all: 'Everyone', sales: 'Sales', design: 'Design', content: 'Content', ads: 'Ads', bookkeeper: 'Bookkeeper', developer: 'Developer', software: 'Software sales' };
 
 function resourceFromForm(b) {
   const url = text(b.url, 500);
@@ -34240,6 +34244,7 @@ const TRAINING_PATHS = [
   { key: 'ads', track: 'ads', role: null, label: 'Ads', note: TRAINING.TRACKS.ads.note },
   { key: 'bookkeeper', track: 'bookkeeper', role: null, label: 'Bookkeeper', note: TRAINING.TRACKS.bookkeeper.note },
   { key: 'developer', track: 'developer', role: null, label: 'Developer', note: TRAINING.TRACKS.developer.note },
+  { key: 'software', track: 'software', role: null, label: 'Software sales', note: TRAINING.TRACKS.software.note },
 ];
 
 app.get('/admin/training/paths', requireAdmin, async (req, res) => {

@@ -14,7 +14,8 @@
    course adds up to eight hours with at least an hour of buffer.
 
    Every other job has one course of its own (design-core.js for designers,
-   content-core.js for the content (video) person, ads-core.js for ads, books-core.js for the bookkeeper, dev-core.js for the developer).
+   content-core.js for the content (video) person, ads-core.js for ads, books-core.js for the bookkeeper, dev-core.js for the developer,
+   software-core.js for the software sales agent).
    Each opens with the Team basics module (shared-team.js), the same module
    object in every course: its quiz and lessons are registered once. */
 
@@ -27,11 +28,12 @@ const CONTENT_CORE = require('./content-core');
 const ADS_CORE = require('./ads-core');
 const BOOKS_CORE = require('./books-core');
 const DEV_CORE = require('./dev-core');
+const SOFTWARE_CORE = require('./software-core');
 
 /* June's answers to the blanks in each lesson (answers.js). The unanswered
    body joins `was`, so a live copy she has not edited is replaced. */
 const ANSWERS = require('./answers');
-for (const c of [SALES_CORE, SALES_LEADGEN, SALES_CLOSER, SALES_ACCOUNTS, DESIGN_CORE, CONTENT_CORE, ADS_CORE, BOOKS_CORE, DEV_CORE]) {
+for (const c of [SALES_CORE, SALES_LEADGEN, SALES_CLOSER, SALES_ACCOUNTS, DESIGN_CORE, CONTENT_CORE, ADS_CORE, BOOKS_CORE, DEV_CORE, SOFTWARE_CORE]) {
   for (const l of c.modules.flatMap((m) => m.lessons)) {
     if (!l.body) continue;
     let b = l.body;
@@ -146,7 +148,7 @@ const REWORDED = [
    matched too) is turned back to the old words. Team basics is one lesson
    object shared by every course, so each lesson is done once. */
 const reworded = new Set();
-for (const c of [SALES_CORE, SALES_LEADGEN, SALES_CLOSER, DESIGN_CORE, CONTENT_CORE, ADS_CORE, BOOKS_CORE, DEV_CORE]) {
+for (const c of [SALES_CORE, SALES_LEADGEN, SALES_CLOSER, DESIGN_CORE, CONTENT_CORE, ADS_CORE, BOOKS_CORE, DEV_CORE, SOFTWARE_CORE]) {
   for (const l of c.modules.flatMap((m) => m.lessons)) {
     if (reworded.has(l) || typeof l.body !== 'string' || !REWORDED.some(([now]) => l.body.includes(now))) continue;
     reworded.add(l);
@@ -176,10 +178,10 @@ for (const c of [SALES_CORE, SALES_LEADGEN, SALES_CLOSER, DESIGN_CORE, CONTENT_C
 const COURSES = { [SALES_CORE.key]: SALES_CORE, [SALES_LEADGEN.key]: SALES_LEADGEN, [SALES_CLOSER.key]: SALES_CLOSER,
   [SALES_ACCOUNTS.key]: SALES_ACCOUNTS, [DESIGN_CORE.key]: DESIGN_CORE, [CONTENT_CORE.key]: CONTENT_CORE,
   [ADS_CORE.key]: ADS_CORE, [BOOKS_CORE.key]: BOOKS_CORE,
-  [DEV_CORE.key]: DEV_CORE };
+  [DEV_CORE.key]: DEV_CORE, [SOFTWARE_CORE.key]: SOFTWARE_CORE };
 
 /* The course each non-sales track walks. */
-const TRACK_COURSES = { design: [DESIGN_CORE], content: [CONTENT_CORE], ads: [ADS_CORE], bookkeeper: [BOOKS_CORE], developer: [DEV_CORE] };
+const TRACK_COURSES = { design: [DESIGN_CORE], content: [CONTENT_CORE], ads: [ADS_CORE], bookkeeper: [BOOKS_CORE], developer: [DEV_CORE], software: [SOFTWARE_CORE] };
 
 /* The three sales jobs. Until all three are filled, everyone does all of it. */
 const SALES_ROLES = {

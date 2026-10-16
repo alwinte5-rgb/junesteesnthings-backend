@@ -195,7 +195,7 @@ const PRESETS = {
 
 /* The preset a new helper starts on for each training path: the path's own
    training preset, or Training for sales. */
-const TRACK_PRESET = { design: 'design', content: 'team', ads: 'team', bookkeeper: 'books', developer: 'team' };
+const TRACK_PRESET = { design: 'design', content: 'team', ads: 'team', bookkeeper: 'books', developer: 'team', software: 'team' };
 function presetForTrack(track) {
   return Object.prototype.hasOwnProperty.call(TRACK_PRESET, track) ? TRACK_PRESET[track] : 'training';
 }

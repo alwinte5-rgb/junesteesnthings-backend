@@ -421,3 +421,34 @@ test('the Design course never teaches a paid AI tool the shop does not pay for, 
   const ai = lessons.find((l) => l.id === 'd6-ai-when');
   assert.ok(ai.was.some((w) => w.includes('**ChatGPT (images):**')), 'the live copy written before the change still matches, so it is replaced');
 });
+
+test('the Software sales course is the software track\'s path, and a hired software agent lands on it', () => {
+  assert.ok(TRAINING.TRACKS.software);
+  assert.strictEqual(TRAINING.trackOf('software'), 'software', 'the hiring role name is the track name');
+  assert.deepStrictEqual(COURSES.coursesFor('software').map((c) => c.key), ['software-core']);
+  const keys = TRAINING.visibleSteps(undefined, 'software').map((s) => s.key);
+  for (const k of ['quiz:team-1', 'signoff:software-list', 'signoff:software-demo', 'signoff:software-trial', 'signoff:software-report', 'quiz:software-final', 'signoff:handoff']) assert.ok(keys.includes(k), k);
+  assert.strictEqual(keys[keys.length - 1], TRAINING.READY_KEY);
+  assert.ok(!TRAINING.stepOpen(TRAINING.progress(new Map(), {}, undefined, 'software'), 'lesson:w2-apps'));
+  assert.ok(TRAINING.stepOpen(TRAINING.progress(new Map(), { quizzes: { 'team-1': 1 } }, undefined, 'software'), 'lesson:w2-apps'));
+  const arts = TRAINING.lessonArticles().filter((a) => /^Software sales course /.test(a.title));
+  assert.strictEqual(arts.length, 14);
+  // What the agent may offer and what they are paid are taught as decided (owner, 2026-10-16).
+  const all = arts.map((a) => a.body).join('\n');
+  assert.match(all, /\$129 a month, or \$1,290 a year/);
+  assert.match(all, /10% of every payment a customer you signed up makes in their first 6 months/);
+  assert.match(all, /\*\*The free plan:\*\*[\s\S]*14-day free trial[\s\S]*\*\*The yearly plan:\*\*/);
+  assert.strictEqual(TRAINING.visibleSteps(undefined, 'software').find((s) => s.key === 'lesson:w5-demo').title, 'The 15-minute demo');
+  const list = src.slice(src.indexOf('const TRAINING_PATHS = ['), src.indexOf('];', src.indexOf('const TRAINING_PATHS = [')));
+  assert.match(list, /key: 'software', track: 'software'/);
+  assert.strictEqual(require('../tools/lib/team-channels').audienceOf('software'), 'software');
+});
+
+test('the Software sales course keeps one person\'s wage out of the shared Playbook, and promises no tool that is not built', () => {
+  const all = TRAINING.lessonArticles().filter((a) => /^Software sales course /.test(a.title)).map((a) => a.body).join('\n');
+  assert.doesNotMatch(all, /\$3\.50|an hour, 20 hours/, 'every helper can read the Playbook; the wage lives on the Staff page');
+  assert.doesNotMatch(all, /password manager/, 'logins are shared once from Resources');
+  assert.doesNotMatch(all, /sign up from your link/, 'agent links are not built yet; the board credits the sale');
+  assert.strictEqual(require('../tools/lib/staff-welcome').ROLE_FOR_TRACK.software, 'Software Sales Agent');
+  assert.match(src, /SELECT 'Software sales', 'software'\s+WHERE NOT EXISTS \(SELECT 1 FROM team_channels WHERE audience = 'software'\)/, 'the agent has a channel of their own from day one');
+});
