@@ -622,7 +622,7 @@ test('the Team preset opens chat, the Playbook, training and the schedule, and n
 });
 
 test('a new helper starts on their training path\'s preset', () => {
-  for (const t of ['content', 'ads', 'developer']) assert.strictEqual(STAFF.presetForTrack(t), 'team', t);
+  for (const t of ['content', 'ads', 'developer', 'software']) assert.strictEqual(STAFF.presetForTrack(t), 'team', t);
   assert.strictEqual(STAFF.presetForTrack('bookkeeper'), 'books', 'a bookkeeper can read the books');
   assert.strictEqual(STAFF.presetForTrack('design'), 'design');
   assert.strictEqual(STAFF.presetForTrack('sales'), 'training');
