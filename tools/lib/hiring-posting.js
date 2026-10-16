@@ -491,7 +491,7 @@ Schedule
 Pay
 - $3.50 USD/hour ($70/week, about $303/month), paid weekly
 - Plus 10% of every payment a customer you signed up makes in their first 6 months, once your training is signed off. Commission follows the customer's payments, so customers who stay earn you more.
-- Commission is paid with your weekly pay after the customer's payment clears, and your dashboard shows it live.
+- Commission is paid with your weekly pay after the customer's payment clears.
 - Pay reviews every 6 months, with more hours as your sales grow
 ${PAY_TERMS}
 

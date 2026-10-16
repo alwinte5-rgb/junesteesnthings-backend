@@ -32807,7 +32807,7 @@ app.post('/admin/shared-logins/:id/open', requireAdmin, async (req, res) => {
    the owner keeps. Links and how to get in only: logins live in the team
    password manager, never here. A helper sees the tools for everyone and for
    their own path; the owner sees and edits all of them (ROUTES). */
-const RESOURCE_AUDIENCES = { all: 'Everyone', sales: 'Sales', design: 'Design', content: 'Content', ads: 'Ads', bookkeeper: 'Bookkeeper', developer: 'Developer', software: 'Software sales' };
+const RESOURCE_AUDIENCES = require('./tools/lib/tracks').AUDIENCES;
 
 function resourceFromForm(b) {
   const url = text(b.url, 500);
@@ -34259,12 +34259,7 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
 const TRAINING_PATHS = [
   { key: 'sales', track: 'sales', role: null, label: 'Sales: all sales work', note: 'Everyone in sales until a role is assigned.' },
   ...Object.entries(TRAINING.SALES_ROLES).map(([k, r]) => ({ key: `sales-${k}`, track: 'sales', role: k, label: `Sales: ${r.label}`, note: r.goal })),
-  { key: 'design', track: 'design', role: null, label: 'Design', note: TRAINING.TRACKS.design.note },
-  { key: 'content', track: 'content', role: null, label: 'Content (video)', note: TRAINING.TRACKS.content.note },
-  { key: 'ads', track: 'ads', role: null, label: 'Ads', note: TRAINING.TRACKS.ads.note },
-  { key: 'bookkeeper', track: 'bookkeeper', role: null, label: 'Bookkeeper', note: TRAINING.TRACKS.bookkeeper.note },
-  { key: 'developer', track: 'developer', role: null, label: 'Developer', note: TRAINING.TRACKS.developer.note },
-  { key: 'software', track: 'software', role: null, label: 'Software sales', note: TRAINING.TRACKS.software.note },
+  ...Object.entries(TRAINING.TRACKS).filter(([k]) => k !== 'sales').map(([k, t]) => ({ key: k, track: k, role: null, label: t.label, note: t.note })),
 ];
 
 app.get('/admin/training/paths', requireAdmin, async (req, res) => {

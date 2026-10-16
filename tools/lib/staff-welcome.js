@@ -125,9 +125,6 @@ ${steps.map((s) => `<li>${s}</li>`).join('\n')}
 }
 
 /** Job title for a training path, used when the owner leaves it blank. */
-const ROLE_FOR_TRACK = {
-  sales: 'Sales & Customer Service Assistant', design: 'Graphic Designer', content: 'Content Editor',
-  ads: 'Ads Specialist', bookkeeper: 'Bookkeeper', developer: 'Developer', software: 'Software Sales Agent',
-};
+const { ROLE_FOR_TRACK } = require('./tracks');
 
 module.exports = { welcomeEmail, detailsFromForm, safeLink, niceDate, ROLE_FOR_TRACK };

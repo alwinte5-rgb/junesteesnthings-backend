@@ -40,6 +40,14 @@
 
 const COURSES = require('./courses');
 
+/* A lesson's title without its course prefix ("Ads course 3a: "). The
+   prefixes are read from the courses themselves, so a new course needs no
+   edit here. */
+const LESSON_PREFIX = new RegExp(`^(${[...new Set(Object.values(COURSES.COURSES)
+  .flatMap((c) => c.modules.flatMap((m) => (m.lessons || []).map((l) => (/^(.+?) [0-9]+[a-z]?: /.exec(l.article) || [])[1]))).filter(Boolean))]
+  .map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')}) [0-9a-z]+: `);
+const lessonTitle = (article) => article.replace(LESSON_PREFIX, '');
+
 /* Every quiz and exam passes at 80%, rounded up to a whole question. */
 const PASS_SHARE = 0.8;
 const passMark = (n) => Math.ceil(n * PASS_SHARE - 1e-9);
@@ -48,15 +56,8 @@ const passMark = (n) => Math.ceil(n * PASS_SHARE - 1e-9);
    that wait for it appear. */
 const FEATURES = new Set(['proofs', 'resources', 'quoteexam']);
 
-const TRACKS = {
-  sales:  { label: 'Sales', note: 'Leads, quotes, follow-ups and finding new customers.' },
-  design: { label: 'Design', note: 'Print-ready artwork, signs, proofs, AI and its cleanup, site and blog images, and social graphics.' },
-  content: { label: 'Content (video)', note: 'Shot lists, editing shorts and longer videos, music and permission rules, posting, comments and the Friday numbers.' },
-  ads: { label: 'Ads', note: 'Conversion tracking, Google Search, negatives and the $40 rule, Meta retargeting, seasonal campaigns and the weekly report.' },
-  bookkeeper: { label: 'Bookkeeper', note: 'Sales and fees, expenses and receipts, job costs, refunds and disputes, Illinois sales tax, the month-end close and the summary for June.' },
-  developer: { label: 'Developer', note: 'The stack, shipping through pull requests, outages and roll-backs, secrets and safe code, payment code, tests and Claude Code, apps.' },
-  software: { label: 'Software sales', note: 'Our apps and their top plans, finding agencies, first messages and follow-ups, discovery and the demo, objections and approved offers, trials and setup, pay and the weekly report.' },
-};
+/* Label and note per track (tracks.js, the one list of jobs). */
+const TRACKS = Object.fromEntries(Object.entries(require('./tracks').TRACKS).map(([k, t]) => [k, { label: t.label, note: t.note }]));
 const DEFAULT_TRACK = 'sales';
 
 /** A track name from anywhere (a form, a row), or the default. */
@@ -114,7 +115,7 @@ function courseSteps(course, features = FEATURES) {
     }
     for (const l of m.lessons) {
       push({ key: `lesson:${l.id}`, type: 'lesson', article: l.article, minutes: l.minutes, goals: l.goals || [],
-        checks: l.checks || [], pages: l.pages || [], tryIt: l.tryIt || [], images: l.images || [], title: l.article.replace(/^(Sales course|Lead Generation|Sales Closer|Account Manager|Design course|Content course|Ads course|Bookkeeper course|Developer course|Software sales course|Team basics) [0-9a-z]+: /, '') });
+        checks: l.checks || [], pages: l.pages || [], tryIt: l.tryIt || [], images: l.images || [], title: lessonTitle(l.article) });
     }
     for (const x of m.practice || []) push(!m.quiz && x.type === 'exam' ? { ...x, gate: true } : x);
     if (m.quiz) {

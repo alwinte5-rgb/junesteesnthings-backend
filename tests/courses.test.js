@@ -227,7 +227,8 @@ test('every role\'s training: owner only, a known path or the first one, and eve
   const list = src.slice(src.indexOf('const TRAINING_PATHS = ['), src.indexOf('];', src.indexOf('const TRAINING_PATHS = [')));
   assert.match(list, /key: 'sales', track: 'sales', role: null/);
   assert.match(list, /Object\.entries\(TRAINING\.SALES_ROLES\)\.map/, 'one path per sales role');
-  assert.match(list, /key: 'design', track: 'design'/);
+  assert.match(list, /Object\.entries\(TRAINING\.TRACKS\)\.filter\(\(\[k\]\) => k !== 'sales'\)\.map/, 'every other track is a path');
+  assert.ok(TRAINING.TRACKS['design']);
   assert.match(src, /href="\/admin\/training\/paths">Every role\\'s training<\/a>/);
 });
 
@@ -318,7 +319,8 @@ test('the Content course is the content track\'s path: its own sign-offs, the ow
   assert.strictEqual(TRAINING.visibleSteps(undefined, 'content').find((s) => s.key === 'lesson:c4-edit').title, 'Editing a short');
   // The path is listed for the owner, and a hired content editor lands on it.
   const list = src.slice(src.indexOf('const TRAINING_PATHS = ['), src.indexOf('];', src.indexOf('const TRAINING_PATHS = [')));
-  assert.match(list, /key: 'content', track: 'content'/);
+  assert.match(list, /Object\.entries\(TRAINING\.TRACKS\)\.filter\(\(\[k\]\) => k !== 'sales'\)\.map/, 'every other track is a path');
+  assert.ok(TRAINING.TRACKS['content']);
   assert.match(src, /add_track: r\.role === 'designer' \? 'design' : TRAINING\.trackOf\(r\.role\)/);
   assert.strictEqual(TRAINING.trackOf('content'), 'content');
   assert.strictEqual(require('../tools/lib/team-channels').audienceOf('content'), 'content');
@@ -342,7 +344,8 @@ test('the Ads course is the ads track\'s path: its own sign-offs, the owner\'s g
   // Ads never send anyone to the back office.
   for (const a of arts) assert.doesNotMatch(a.body.replace(/\*\*jtees\.net\/quote:\*\*/, ''), /jtees\.net\/quote\b/, a.title);
   const list = src.slice(src.indexOf('const TRAINING_PATHS = ['), src.indexOf('];', src.indexOf('const TRAINING_PATHS = [')));
-  assert.match(list, /key: 'ads', track: 'ads'/);
+  assert.match(list, /Object\.entries\(TRAINING\.TRACKS\)\.filter\(\(\[k\]\) => k !== 'sales'\)\.map/, 'every other track is a path');
+  assert.ok(TRAINING.TRACKS['ads']);
   assert.strictEqual(TRAINING.trackOf('ads'), 'ads', 'a hired ads specialist lands on the ads path');
   assert.strictEqual(require('../tools/lib/team-channels').audienceOf('ads'), 'ads');
 });
@@ -364,7 +367,8 @@ test('the Bookkeeper course is the bookkeeper track\'s path, and a hired bookkee
   for (const a of answered) assert.ok(a.was.some((w) => /owner to fill in/.test(w)), `${a.title} keeps its unanswered body`);
   assert.strictEqual(TRAINING.visibleSteps(undefined, 'bookkeeper').find((s) => s.key === 'lesson:b5-tax').title, 'Illinois sales tax');
   const list = src.slice(src.indexOf('const TRAINING_PATHS = ['), src.indexOf('];', src.indexOf('const TRAINING_PATHS = [')));
-  assert.match(list, /key: 'bookkeeper', track: 'bookkeeper'/);
+  assert.match(list, /Object\.entries\(TRAINING\.TRACKS\)\.filter\(\(\[k\]\) => k !== 'sales'\)\.map/, 'every other track is a path');
+  assert.ok(TRAINING.TRACKS['bookkeeper']);
   assert.strictEqual(require('../tools/lib/team-channels').audienceOf('bookkeeper'), 'bookkeeper');
 });
 
@@ -387,7 +391,8 @@ test('the Developer course is the developer track\'s path, and a hired developer
   assert.ok(arts.some((a) => /Your own Claude Pro or Max subscription/.test(a.body)), 'the lesson says which Claude account the developer uses');
   assert.ok(fs.existsSync(path.join(__dirname, '..', 'CLAUDE.md')) && /@AGENTS\.md/.test(fs.readFileSync(path.join(__dirname, '..', 'CLAUDE.md'), 'utf8')), 'CLAUDE.md loads AGENTS.md');
   const list = src.slice(src.indexOf('const TRAINING_PATHS = ['), src.indexOf('];', src.indexOf('const TRAINING_PATHS = [')));
-  assert.match(list, /key: 'developer', track: 'developer'/);
+  assert.match(list, /Object\.entries\(TRAINING\.TRACKS\)\.filter\(\(\[k\]\) => k !== 'sales'\)\.map/, 'every other track is a path');
+  assert.ok(TRAINING.TRACKS['developer']);
   // Every non-sales hiring role now has a course of its own.
   for (const role of ['content', 'ads', 'bookkeeper', 'developer']) assert.strictEqual(COURSES.coursesFor(TRAINING.trackOf(role)).length, 1, role);
 });
@@ -440,7 +445,8 @@ test('the Software sales course is the software track\'s path, and a hired softw
   assert.match(all, /\*\*The free plan:\*\*[\s\S]*14-day free trial[\s\S]*\*\*The yearly plan:\*\*/);
   assert.strictEqual(TRAINING.visibleSteps(undefined, 'software').find((s) => s.key === 'lesson:w5-demo').title, 'The 15-minute demo');
   const list = src.slice(src.indexOf('const TRAINING_PATHS = ['), src.indexOf('];', src.indexOf('const TRAINING_PATHS = [')));
-  assert.match(list, /key: 'software', track: 'software'/);
+  assert.match(list, /Object\.entries\(TRAINING\.TRACKS\)\.filter\(\(\[k\]\) => k !== 'sales'\)\.map/, 'every other track is a path');
+  assert.ok(TRAINING.TRACKS['software']);
   assert.strictEqual(require('../tools/lib/team-channels').audienceOf('software'), 'software');
 });
 
@@ -451,4 +457,23 @@ test('the Software sales course keeps one person\'s wage out of the shared Playb
   assert.doesNotMatch(all, /sign up from your link/, 'agent links are not built yet; the board credits the sale');
   assert.strictEqual(require('../tools/lib/staff-welcome').ROLE_FOR_TRACK.software, 'Software Sales Agent');
   assert.match(src, /SELECT 'Software sales', 'software'\s+WHERE NOT EXISTS \(SELECT 1 FROM team_channels WHERE audience = 'software'\)/, 'the agent has a channel of their own from day one');
+});
+
+test('every job comes from one list (tracks.js): a new track gets its channel, preset, welcome title, path and lesson titles without other edits', () => {
+  const TR = require('../tools/lib/tracks');
+  const keys = Object.keys(TR.TRACKS);
+  assert.deepStrictEqual(Object.keys(TRAINING.TRACKS), keys);
+  assert.deepStrictEqual(Object.keys(require('../tools/lib/team-channels').AUDIENCES), ['all', ...keys]);
+  for (const k of keys) {
+    for (const f of ['label', 'short', 'role', 'preset', 'note']) assert.ok(TR.TRACKS[k][f], `${k}.${f}`);
+    assert.strictEqual(require('../tools/lib/staff').presetForTrack(k), TR.TRACKS[k].preset, k);
+    assert.ok(require('../tools/lib/staff').PRESETS[TR.TRACKS[k].preset], `${k}'s preset exists`);
+    assert.strictEqual(require('../tools/lib/staff-welcome').ROLE_FOR_TRACK[k], TR.TRACKS[k].role, k);
+    if (k !== 'sales') assert.ok(COURSES.coursesFor(k).length, `${k} has a course`);
+  }
+  assert.match(src, /const RESOURCE_AUDIENCES = require\('\.\/tools\/lib\/tracks'\)\.AUDIENCES;/);
+  // No step title keeps a course prefix, and a title that merely has a colon keeps its words.
+  const titles = keys.flatMap((k) => TRAINING.visibleSteps(undefined, k)).filter((s) => s.type === 'lesson').map((s) => s.title);
+  assert.ok(titles.every((t) => !/^[A-Z][A-Za-z ]+ [0-9]+[a-z]?: /.test(t)), titles.find((t) => /^[A-Z][A-Za-z ]+ [0-9]+[a-z]?: /.test(t)));
+  assert.ok(titles.includes('Practice quote: a basic screen print order'));
 });
