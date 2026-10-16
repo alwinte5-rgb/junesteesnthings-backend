@@ -32416,7 +32416,7 @@ app.post('/admin/work-schedule', requireAdmin, async (req, res) => {
          every week through the end of that week (review: a repeating shift
          could otherwise never be given a last week). */
       const untilMon = SHIFTS.validDate(String(b.until || ''));
-      const newEnd = b.until === 'repeat' || b.repeat === '1' ? null
+      let newEnd = b.until === 'repeat' || b.repeat === '1' ? null
         : untilMon ? SHIFTS.addDays(SHIFTS.mondayOf(new Date(`${untilMon}T12:00:00Z`), 'UTC'), 6) : SHIFTS.addDays(monday, 6);
       if (newEnd && newEnd < monday) return back(res, to, 'err', 'The last week is before the first.');
       const { rows: moving } = await pool.query(`SELECT staff_id, weekday, start_min, end_min, zone,
@@ -32427,6 +32427,11 @@ app.post('/admin/work-schedule', requireAdmin, async (req, res) => {
          and never to before today. Not started: never onto a week gone by. */
       if (moving.some((m) => m.ends_on && m.ends_on < today)) return back(res, to, 'err', 'Those days have passed, so the shift stays as it was.');
       const begun = moving.some((m) => !m.starts_on || m.starts_on <= today);
+      /* "Stop after this week" on a shift already running: the end of the
+         current week, not of the week it began (that is long past). */
+      if (begun && !untilMon && b.until !== 'repeat' && b.repeat !== '1') {
+        newEnd = SHIFTS.addDays(SHIFTS.mondayOf(new Date(), 'America/Chicago'), 6);
+      }
       if (!begun && SHIFTS.addDays(monday, 6) < today) return back(res, to, 'err', 'That week has passed. Pick this week or a later one.');
       if (begun && newEnd && newEnd < yesterday) return back(res, to, 'err', 'Its last week cannot end before today.');
       for (const sid of new Set(moving.map((m) => m.staff_id))) {
