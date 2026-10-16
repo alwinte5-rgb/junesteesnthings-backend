@@ -107,11 +107,31 @@ test('a shift runs only between its first and last day; no dates is every week',
   assert.deepStrictEqual(S.weeksFrom('2026-10-12', 3), ['2026-10-12', '2026-10-19', '2026-10-26']);
 });
 
-test('shift dates are Chicago weeks: a Monday-morning Manila shift belongs to the Chicago Sunday before', () => {
+test('a shift\'s weeks count in its own zone: "week of Oct 19 only" in Manila is Mon Oct 19 to Sun Oct 25 there', () => {
   const S = require('../tools/lib/work-shifts');
-  const manila = { staff_id: 2, weekday: 1, start_min: 540, end_min: 840, zone: 'Asia/Manila', starts_on: '2026-10-19' };
-  const inChicago = (m) => S.occurrences([manila], m).map((o) => S.dateIn(o.start, 'America/Chicago'));
-  // Manila Mon Oct 19 9 AM is Chicago Sun Oct 18: before the first Chicago day, so not shown.
-  assert.deepStrictEqual(inChicago('2026-10-19'), []);
-  assert.deepStrictEqual(inChicago('2026-10-26'), ['2026-10-25'], 'its first run is in the Chicago week of Oct 19');
+  const manila = { staff_id: 2, weekday: 1, start_min: 540, end_min: 840, zone: 'Asia/Manila', starts_on: '2026-10-19', ends_on: '2026-10-25' };
+  const inManila = (m) => S.occurrences([manila], m).map((o) => S.dateIn(o.start, 'Asia/Manila'));
+  assert.deepStrictEqual(inManila('2026-10-19'), ['2026-10-19'], 'its Monday is kept (it is Sunday in Chicago)');
+  assert.deepStrictEqual(inManila('2026-10-26'), [], 'and the next Monday is not');
+});
+
+test('one shift a day is judged in Chicago days, whatever zone each was typed in', () => {
+  const S = require('../tools/lib/work-shifts');
+  const m = '2026-10-19';
+  assert.strictEqual(S.weekdayIn({ weekday: 1, start_min: 540, end_min: 840, zone: 'Asia/Manila' }, m, 'America/Chicago'), 7, 'Mon 9 AM PH is a Chicago Sunday');
+  assert.strictEqual(S.weekdayIn({ weekday: 7, start_min: 1200, end_min: 60, zone: 'America/Chicago' }, m, 'America/Chicago'), 7);
+  assert.strictEqual(S.weekdayIn({ weekday: 1, start_min: 1200, end_min: 1260, zone: 'America/Chicago' }, m, 'America/Chicago'), 1, 'Mon 8 PM CT stays Monday');
+});
+
+test('one week at a time and one shift a day (owner, 2026-10-16)', () => {
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'server.js'), 'utf8');
+  // The add form names a week; ends that week unless Repeat is ticked.
+  assert.match(src, /const endsOn = monday \? \(b\.repeat === '1' \? null : SHIFTS\.addDays\(monday, 6\)\) : dateOrNull\(b\.ends_on\);/);
+  // Any shift that person already has that day, at any time, refuses the add and the move.
+  assert.match(src, /clash = await shiftClashes\(staffId, wanted, startsOn, endsOn, \[\], client\);/);
+  assert.match(src, /const clash = await shiftClashes\(sid, moving\.filter/);
+  assert.match(src, /pg_advisory_xact_lock\(\$1, \$2\)', \[7311, staffId\]/, 'checked and written under one lock');
+  const at = src.indexOf('async function shiftClashes(');
+  const fn = src.slice(at, src.indexOf('\n}\n', at));
+  assert.doesNotMatch(fn, /start_min = \$|end_min = \$/, 'a different time the same day still clashes');
 });

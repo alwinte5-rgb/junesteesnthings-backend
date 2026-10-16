@@ -66,13 +66,20 @@ function occurrences(shifts, monday) {
     const date = addDays(monday, Number(s.weekday) - 1);
     const end = Number(s.end_min) <= Number(s.start_min) ? Number(s.end_min) + 1440 : Number(s.end_min);
     return { ...s, start: instantOf(date, Number(s.start_min), s.zone), end: instantOf(date, end, s.zone) };
-  /* The dates are the owner's Chicago weeks: a Monday-morning Manila shift is
-     Sunday evening in Chicago, so it belongs to the Chicago week it lands in
-     (review: "next week" otherwise put one on this week's Sunday). */
-  }).filter((o) => inRange(o, dateIn(o.start, RANGE_ZONE))).sort((a, b) => a.start - b.start);
+  /* A shift's weeks are counted in the zone it was typed in, the way it was
+     written: "Mon-Fri 9 AM Philippines, week of Oct 19 only" is Mon Oct 19 to
+     Fri Oct 23 in Manila (review: counting Chicago days dropped that Monday,
+     which is still Sunday in Chicago, and added the next one). */
+  }).filter((o) => inRange(o, dateIn(o.start, o.zone))).sort((a, b) => a.start - b.start);
 }
 
-const RANGE_ZONE = 'America/Chicago';
+/** The weekday (1 = Monday ... 7 = Sunday) a shift starts on in `zone`, in
+ *  the week of `monday`: "Mon 9 AM Philippines" is a Sunday in Chicago. */
+function weekdayIn(shift, monday, zone) {
+  const [o] = occurrences([{ ...shift, starts_on: null, ends_on: null }], monday);
+  const d = new Date(`${dateIn(o.start, zone)}T12:00:00Z`).getUTCDay();
+  return d === 0 ? 7 : d;
+}
 
 /** Whether a weekly shift runs on `date` ("YYYY-MM-DD", in the shift's own
  *  zone): on or after its first day and, when it has one, on or before its
@@ -167,4 +174,4 @@ function daySegments(o, zone) {
 
 function cleanNote(n) { return String(n || '').replace(/[\r\n\t]+/g, ' ').replace(/[\u0000-\u001f\u007f<>]/g, '').trim().slice(0, NOTE_MAX); }
 
-module.exports = { inRange, weeksFrom, ZONES, DAYS, NOTE_MAX, localMinutes, daySegments, minutesOf, offsetAt, instantOf, mondayOf, addDays, occurrences, dateIn, weekOccurrences, validDate, when, clock, span, hoursOf, cleanNote };
+module.exports = { weekdayIn, inRange, weeksFrom, ZONES, DAYS, NOTE_MAX, localMinutes, daySegments, minutesOf, offsetAt, instantOf, mondayOf, addDays, occurrences, dateIn, weekOccurrences, validDate, when, clock, span, hoursOf, cleanNote };
