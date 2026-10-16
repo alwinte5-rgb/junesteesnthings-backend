@@ -32128,7 +32128,7 @@ function scheduleCalendarHtml(occ, days, zone, colorOf, { names = true } = {}) {
     segs.push({ date, from, to: from + Math.round((o.end - o.start) / 60000), o });
   }
   const lo = segs.length ? Math.max(0, Math.floor(Math.min(...segs.map((x) => x.from)) / 60) - 1) : 8;
-  const hi = segs.length ? Math.min(36, Math.ceil(Math.max(...segs.map((x) => x.to)) / 60) + 1) : 18;
+  const hi = segs.length ? Math.min(48, Math.ceil(Math.max(...segs.map((x) => x.to)) / 60) + 1) : 18;
   const PX = 34;                                     // one hour
   const hourLabel = (h0) => { const h = h0 % 24; return h === 0 ? '12 AM' : h === 12 ? '12 PM' : h < 12 ? `${h} AM` : `${h - 12} PM`; };
   const today = SHIFTS.dateIn(new Date(), zone);
@@ -32259,9 +32259,11 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
       .map((m) => `<option value="${m}"${m === sel ? ' selected' : ''}>${escEmail(weekName(m))}</option>`).join('');
     /* Weeks that are over are the record (owner, 2026-10-16): nothing is
        added to, moved in or removed from a day that has passed. */
-    const todayCt = SHIFTS.dateIn(new Date(), 'America/Chicago');
-    const ended = (w) => !!w.ends_on && w.ends_on < todayCt;
-    const started = (w) => !w.starts_on || w.starts_on <= todayCt;
+    /* Each shift's dates are days in its own zone, so "today" is too: Monday
+       morning in Manila is still Sunday in Chicago (review). */
+    const todayIn = (w) => SHIFTS.dateIn(new Date(), w.zone);
+    const ended = (w) => !!w.ends_on && w.ends_on < todayIn(w);
+    const started = (w) => !w.starts_on || w.starts_on < todayIn(w);
     const rangeText = (w) => w.starts_on && w.ends_on && w.ends_on === SHIFTS.addDays(w.starts_on, 6) ? `Week of ${shortDay(w.starts_on)} only`
       : w.starts_on && w.ends_on ? `${shortDay(w.starts_on)} to ${shortDay(w.ends_on)}`
       : w.starts_on ? `Every week from ${shortDay(w.starts_on)}` : w.ends_on ? `Every week until ${shortDay(w.ends_on)}` : 'Every week, no dates';
@@ -32400,12 +32402,17 @@ app.post('/admin/work-schedule', requireAdmin, async (req, res) => {
       if (!ids.length) return back(res, to, 'err', 'No such shift.');
       /* Not started yet: removed. Started: stopped from today, its past days
          kept. Over: left alone. */
+      /* Each row's "today" in its own zone. Starting today or later: removed
+         (a shift removed on its first morning leaves nothing behind). */
+      /* Today per zone from the server's clock (the same one every page uses). */
+      const zt = `(CASE zone WHEN 'Asia/Manila' THEN $2::date ELSE $3::date END)`;
+      const todays = [ids, SHIFTS.dateIn(new Date(), 'Asia/Manila'), SHIFTS.dateIn(new Date(), 'America/Chicago')];
       const { rowCount: gone } = await pool.query(
-        `DELETE FROM staff_work_shifts WHERE id = ANY($1::int[]) AND starts_on > $2::date`, [ids, today]);
+        `DELETE FROM staff_work_shifts WHERE id = ANY($1::int[]) AND starts_on >= ${zt}`, todays);
       const { rowCount: stopped } = await pool.query(
-        `UPDATE staff_work_shifts SET ends_on = $2::date
-          WHERE id = ANY($1::int[]) AND (starts_on IS NULL OR starts_on <= $3::date) AND (ends_on IS NULL OR ends_on >= $3::date)`,
-        [ids, yesterday, today]);
+        `UPDATE staff_work_shifts SET ends_on = ${zt} - 1
+          WHERE id = ANY($1::int[]) AND (starts_on IS NULL OR starts_on < ${zt})
+            AND (ends_on IS NULL OR ends_on >= ${zt})`, todays);
       if (!gone && !stopped) return back(res, to, 'err', 'Those days have passed, so the shift stays as it was.');
       return back(res, to, 'ok', [gone ? `Removed ${gone} shift${gone === 1 ? '' : 's'}` : '',
         stopped ? `Stopped ${stopped} from today; the days already worked stay on the record` : ''].filter(Boolean).join('. ') + '.');
@@ -32425,14 +32432,19 @@ app.post('/admin/work-schedule', requireAdmin, async (req, res) => {
       if (!moving.length) return back(res, to, 'err', 'No such shift.');
       /* Over: kept. Started: its first week stays, only the last can change,
          and never to before today. Not started: never onto a week gone by. */
-      if (moving.some((m) => m.ends_on && m.ends_on < today)) return back(res, to, 'err', 'Those days have passed, so the shift stays as it was.');
-      const begun = moving.some((m) => !m.starts_on || m.starts_on <= today);
+      const tz = (m) => SHIFTS.dateIn(new Date(), m.zone);
+      if (moving.some((m) => m.ends_on && m.ends_on < tz(m))) return back(res, to, 'err', 'Those days have passed, so the shift stays as it was.');
+      const begun = moving.some((m) => !m.starts_on || m.starts_on < tz(m));
       /* "Stop after this week" on a shift already running: the end of the
          current week, not of the week it began (that is long past). */
       if (begun && !untilMon && b.until !== 'repeat' && b.repeat !== '1') {
         newEnd = SHIFTS.addDays(SHIFTS.mondayOf(new Date(), 'America/Chicago'), 6);
       }
-      if (!begun && SHIFTS.addDays(monday, 6) < today) return back(res, to, 'err', 'That week has passed. Pick this week or a later one.');
+      /* Never onto a day already gone (review: moving to this week on a
+         Thursday put shifts on Mon-Wed). */
+      if (!begun && moving.some((m) => SHIFTS.addDays(monday, m.weekday - 1) < tz(m))) {
+        return back(res, to, 'err', 'Some of those days have passed that week. Pick a later week, or add the remaining days on their own.');
+      }
       if (begun && newEnd && newEnd < yesterday) return back(res, to, 'err', 'Its last week cannot end before today.');
       for (const sid of new Set(moving.map((m) => m.staff_id))) {
         const clash = await shiftClashes(sid, moving.filter((m) => m.staff_id === sid), monday, newEnd, ids);
@@ -32443,7 +32455,9 @@ app.post('/admin/work-schedule', requireAdmin, async (req, res) => {
       const { rowCount } = begun
         ? await pool.query('UPDATE staff_work_shifts SET ends_on = $2::date WHERE id = ANY($1::int[])', [ids, newEnd])
         : await pool.query('UPDATE staff_work_shifts SET starts_on = $2::date, ends_on = $3::date WHERE id = ANY($1::int[])', [ids, monday, newEnd]);
-      to = `/admin/work-schedule?week=${monday}#manage`;
+      to = `/admin/work-schedule?week=${begun ? SHIFTS.mondayOf(new Date(), 'America/Chicago') : monday}#manage`;
+      if (begun) return back(res, to, rowCount ? 'ok' : 'err', !rowCount ? 'No such shift.'
+        : newEnd ? `It now ends ${newEnd}; the days already worked stay on the record.` : 'It now runs every week, with no end.');
       return back(res, to, rowCount ? 'ok' : 'err', !rowCount ? 'No such shift.'
         : !newEnd ? `Every week from ${monday}.` : newEnd === SHIFTS.addDays(monday, 6) ? `Moved to the week of ${monday} only.` : `Every week from ${monday} to ${newEnd}.`);
     }
@@ -32485,9 +32499,14 @@ app.post('/admin/work-schedule', requireAdmin, async (req, res) => {
        press cannot each find the day free and both add (review). */
     /* Nothing goes on a day that has passed. */
     /* Days already gone that week are skipped and named; all gone is refused. */
-    const gonePast = days.filter((d) => SHIFTS.addDays(monday, d - 1) < today);
-    if (gonePast.length === days.length) return back(res, to, 'err', 'Those days have passed that week. Pick this week\'s remaining days or a later week.');
-    if (gonePast.length) days.splice(0, days.length, ...days.filter((d) => !gonePast.includes(d)));
+    /* In the shift's own zone. One week: passed days are skipped and named.
+       Every week: a passed day starts the week after instead, so it is not
+       lost from every later week (review). */
+    const zoneToday = SHIFTS.dateIn(new Date(), zone);
+    const gonePast = days.filter((d) => SHIFTS.addDays(monday, d - 1) < zoneToday);
+    if (endsOn && gonePast.length === days.length) return back(res, to, 'err', 'Those days have passed that week. Pick this week\'s remaining days or a later week.');
+    if (endsOn && gonePast.length) days.splice(0, days.length, ...days.filter((d) => !gonePast.includes(d)));
+    const firstDayOf = (d) => (!endsOn && gonePast.includes(d) ? SHIFTS.addDays(monday, 7) : startsOn);
     const wanted = days.map((d) => ({ weekday: d, start_min: start, end_min: end, zone }));
     const client = await pool.connect();
     let added = 0, clash = [];
@@ -32503,7 +32522,7 @@ app.post('/admin/work-schedule', requireAdmin, async (req, res) => {
                SELECT 1 FROM staff_work_shifts WHERE staff_id = $1 AND weekday = $2 AND start_min = $3 AND end_min = $4 AND zone = $5
                   AND COALESCE(starts_on, '-infinity'::date) <= COALESCE($8::date, 'infinity'::date)
                   AND COALESCE(ends_on, 'infinity'::date) >= COALESCE($7::date, '-infinity'::date))`,
-            [staffId, d, start, end, zone, note, startsOn, endsOn]);
+            [staffId, d, start, end, zone, note, firstDayOf(d), endsOn]);
           added += rowCount;
         }
       }
@@ -32519,7 +32538,7 @@ app.post('/admin/work-schedule', requireAdmin, async (req, res) => {
     /* Back on the week the shifts went on, so the owner sees them land. */
     if (monday) to = `/admin/work-schedule?week=${monday}#manage`;
     if (!added) return back(res, to, 'err', 'Those shifts are already on that week. To move them, use Change the week on the shift in the list below.');
-    return back(res, to, 'ok', `${gonePast.length ? `${gonePast.map((d) => SHIFTS.DAYS[d - 1]).join(', ')} had passed and ${gonePast.length === 1 ? 'was' : 'were'} skipped. ` : ''}Added ${added} shift${added === 1 ? '' : 's'}${monday ? (endsOn ? ` for the week of ${monday} only` : `, every week from ${monday}`) : ''}.${
+    return back(res, to, 'ok', `${gonePast.length ? `${gonePast.map((d) => SHIFTS.DAYS[d - 1]).join(', ')} had passed this week${endsOn ? ` and ${gonePast.length === 1 ? 'was' : 'were'} skipped` : ', so they start next week'}. ` : ''}Added ${added} shift${added === 1 ? '' : 's'}${monday ? (endsOn ? ` for the week of ${monday} only` : `, every week from ${monday}`) : ''}.${
       skipped ? ` ${skipped} were already on that week and were left as they are.` : ''}`);
   } catch (err) {
     console.error('work schedule save failed:', err.message);

@@ -138,9 +138,10 @@ test('one week at a time and one shift a day (owner, 2026-10-16)', () => {
 
 test('past days are the record; helpers see Philippines time only (owner, 2026-10-16)', () => {
   const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'server.js'), 'utf8');
-  assert.match(src, /DELETE FROM staff_work_shifts WHERE id = ANY\(\$1::int\[\]\) AND starts_on > \$2::date/, 'only a shift not yet started is deleted');
-  assert.match(src, /UPDATE staff_work_shifts SET ends_on = \$2::date\s+WHERE id = ANY\(\$1::int\[\]\) AND \(starts_on IS NULL OR starts_on <= \$3::date\)/, 'a started one is stopped, its past kept');
-  assert.match(src, /const gonePast = days\.filter\(\(d\) => SHIFTS\.addDays\(monday, d - 1\) < today\);/);
+  assert.match(src, /DELETE FROM staff_work_shifts WHERE id = ANY\(\$1::int\[\]\) AND starts_on >= \$\{zt\}/, 'a shift starting today or later is deleted');
+  assert.match(src, /SET ends_on = \$\{zt\} - 1\s+WHERE id = ANY\(\$1::int\[\]\) AND \(starts_on IS NULL OR starts_on < \$\{zt\}\)/, 'a started one is stopped, its past kept');
+  assert.match(src, /CASE zone WHEN 'Asia\/Manila' THEN \$2::date ELSE \$3::date END/, "each shift's today in its own zone");
+  assert.match(src, /const firstDayOf = \(d\) => \(!endsOn && gonePast\.includes\(d\) \? SHIFTS\.addDays\(monday, 7\) : startsOn\);/, 'an every-week day already passed starts next week, not lost');
   assert.match(src, /const zone = !owner \? 'Asia\/Manila' :/);
   assert.match(src, /shiftLines\(next, \{ phOnly: true \}\)/);
 });
