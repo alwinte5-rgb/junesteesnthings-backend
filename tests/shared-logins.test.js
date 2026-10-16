@@ -46,8 +46,9 @@ test('the form: site and password required, capped, expiry from a fixed list', (
 test('one view: taken and erased in one statement, by its helper only', () => {
   const at = src.indexOf("app.post('/admin/shared-logins/:id/open'");
   const route = src.slice(at, src.indexOf('\n});', at));
-  assert.match(route, /SET sealed = NULL, viewed_at = NOW\(\)/);
-  assert.match(route, /s\.staff_id = \$2 AND s\.sealed IS NOT NULL AND s\.viewed_at IS NULL/);
+  assert.match(route, /WHERE id = \$1 AND staff_id = \$2 AND sealed IS NOT NULL AND viewed_at IS NULL[\s\S]*FOR UPDATE/);
+  // Opened first, erased after: a share that cannot be decrypted is not burned.
+  assert.ok(route.indexOf('SHARELOGIN.open(') < route.indexOf("SET sealed = NULL, viewed_at = NOW()"));
   assert.match(route, /actor\.kind !== 'staff'\) return res\.status\(403\)/);
   assert.match(route, /res\.set\('Cache-Control', 'no-store'\)/);
   assert.strictEqual(STAFF.ROUTES['POST /admin/shared-logins'], 'owner');

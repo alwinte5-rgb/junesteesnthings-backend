@@ -32662,7 +32662,7 @@ async function sharedLoginsCard(actor, owner, roster) {
                 w.textContent = 'Shown once and now erased from the back office. Save it in your password manager before you leave this page.';
                 out.appendChild(w);
               })
-              .catch(function(){ b.disabled = false; b.textContent = 'Show once'; var e = document.createElement('div'); e.className = 'warn'; e.textContent = 'Could not reach the server. Try again.'; out.appendChild(e); });
+              .catch(function(){ b.disabled = false; b.textContent = 'Show once'; var e = document.createElement('div'); e.className = 'warn'; e.textContent = 'Could not reach the server. Try again; if it says it was already opened, ask June to share it again.'; out.appendChild(e); });
           });
         });
       })();</script></div>`;
@@ -32679,7 +32679,7 @@ async function sharedLoginsCard(actor, owner, roster) {
       <label style="margin:0">For <select name="staff_id" required><option value="">Pick</option>${helpers.map((r) => `<option value="${Number(r.id)}">${escEmail(r.name)}</option>`).join('')}</select></label>
       <label style="margin:0;flex:1 1 160px">Site or tool <input name="site" required maxlength="${SHARELOGIN.LIMITS.site}" placeholder="e.g. Canva"></label>
       <label style="margin:0;flex:1 1 160px">Username <input name="username" maxlength="${SHARELOGIN.LIMITS.username}" autocomplete="off"></label>
-      <label style="margin:0;flex:1 1 160px">Password <input name="password" type="password" required maxlength="${SHARELOGIN.LIMITS.password}" autocomplete="new-password"></label>
+      <label style="margin:0;flex:1 1 160px">Password <input name="password" type="password" required maxlength="${SHARELOGIN.LIMITS.password}" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore></label>
       <label style="margin:0;flex:1 1 220px">Note <input name="note" maxlength="${SHARELOGIN.LIMITS.note}" placeholder="optional, e.g. use the shop account"></label>
       <label style="margin:0">Open within <select name="expiry">${Object.entries(SHARELOGIN.EXPIRY).map(([k, v]) => `<option value="${k}"${k === SHARELOGIN.DEFAULT_EXPIRY ? ' selected' : ''}>${escEmail(v.label)}</option>`).join('')}</select></label>
       <button type="submit" class="btn">Share once</button></form>`
@@ -32743,21 +32743,38 @@ app.post('/admin/shared-logins/:id/open', requireAdmin, async (req, res) => {
   loginOpens.set(actor.id, [...recent, now]);
   const key = SHARELOGIN.keyFrom();
   if (!key) return res.status(503).json({ error: 'Shared logins are switched off right now. Ask June.' });
+  /* Read under a row lock, opened, and only then erased, in one
+     transaction: a share that cannot be opened (a changed key) is not
+     destroyed and reported as delivered (review). */
+  const client = await pool.connect();
   try {
-    const { rows: [r] } = await pool.query(
-      `UPDATE shared_logins s SET sealed = NULL, viewed_at = NOW()
-         FROM (SELECT id, sealed FROM shared_logins WHERE id = $1 FOR UPDATE) old
-        WHERE s.id = old.id AND s.staff_id = $2 AND s.sealed IS NOT NULL AND s.viewed_at IS NULL
-          AND s.cancelled_at IS NULL AND s.expires_at > NOW()
-        RETURNING s.site, old.sealed`, [id, actor.id]);
-    if (!r) return res.status(410).json({ error: 'That login was already opened, cancelled or has expired. Ask June to share it again.' });
-    const secret = SHARELOGIN.open(r.sealed, key, id);
+    await client.query('BEGIN');
+    const { rows: [r] } = await client.query(
+      `SELECT site, sealed FROM shared_logins
+        WHERE id = $1 AND staff_id = $2 AND sealed IS NOT NULL AND viewed_at IS NULL
+          AND cancelled_at IS NULL AND expires_at > NOW() FOR UPDATE`, [id, actor.id]);
+    if (!r) {
+      await client.query('ROLLBACK');
+      return res.status(410).json({ error: 'That login was already opened, cancelled or has expired. Ask June to share it again.' });
+    }
+    let secret;
+    try { secret = SHARELOGIN.open(r.sealed, key, id); } catch (e) {
+      await client.query('ROLLBACK');
+      console.error('shared login could not be decrypted:', e.message);
+      reportError('shared-login', e, 'decrypt').catch(() => {});
+      return res.status(500).json({ error: 'It could not be opened. Ask June to share it again.' });
+    }
+    await client.query('UPDATE shared_logins SET sealed = NULL, viewed_at = NOW() WHERE id = $1', [id]);
+    await client.query('COMMIT');
     logActivity(actor, 'shared login opened', { type: 'staff', id: String(actor.id) }, { site: r.site }, clientIp(req));
     return res.json({ site: r.site, username: secret.username, password: secret.password });
   } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
     console.error('open shared login failed:', err.message);
     reportError('shared-login', err, 'open').catch(() => {});
     return res.status(500).json({ error: 'It could not be opened. Ask June to share it again.' });
+  } finally {
+    client.release();
   }
 });
 
