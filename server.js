@@ -22964,7 +22964,12 @@ app.get('/admin/design/:code', requireAdmin, async (req, res) => {
     const q = await designJobFor(code, currentActor());
     /* A job the owner tagged for them opens on its job page (links built
        without knowing that land here). */
-    if (!q && await ownerTaggedFor(code, currentActor()).catch(() => false)) return res.redirect(`/admin/production/${code}`);
+    if (!q && await ownerTaggedFor(code, currentActor()).catch(() => false)) {
+      /* Carry the proof flash along, so "Proof added" (or why it was refused)
+         is still said on the job page (code review, 2026-10-15). */
+      const pm = String(req.query.proof_msg || '');
+      return res.redirect(`/admin/production/${code}${/^[a-z]{1,12}$/.test(pm) ? '?proof_msg=' + pm + '#proofs' : ''}`);
+    }
     if (!q) return res.status(404).send(adminPage('Not found', `<div class="card"><div class="warn">That job is not with you.</div><a class="btn btn-ghost" href="${designHome()}">${
       designHome() === '/admin/design' ? 'Your design jobs' : 'The schedule'}</a></div>`, 'design'));
     const catalog = await getCatalog();
@@ -23123,7 +23128,11 @@ app.post('/admin/quote/:code/proofs', requireAdmin, async (req, res) => {
      the save then bounced them to Design jobs with nothing kept (owner,
      2026-10-15). */
   if (actorLevel('quotes.view') !== 'on' && !(await designJobFor(code, currentActor()))
-      && !(await ownerTaggedFor(code, currentActor()).catch(() => false))) return res.redirect(designHome());
+      && !(await ownerTaggedFor(code, currentActor()).catch((err) => {
+        console.error(`tag check for a proof on ${code} failed:`, err.message);
+        reportError('proof-tag-check', err, code).catch(() => {});
+        return false;
+      }))) return res.redirect(designHome());
   if (!PROOFS.proofUrlOk(url, QPHOTOS.cloudName())) return to('bad');
   try {
     const { rows: [q] } = await pool.query('SELECT code FROM quotes WHERE code = $1', [code]);

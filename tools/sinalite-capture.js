@@ -51,10 +51,20 @@ async function slCapture(spec) {
   /* The "Regular Price" box beside a sale price. No box (no sale running,
      or a page that only shows "Price") leaves the settled price. A regular
      price below the settled one means the page was misread, so it stops. */
-  const regular = (settledPrice) => {
+  const regularBox = () => {
     const label = [...document.querySelectorAll('.priceLabel')].find((e) => e.offsetParent && /regular price/i.test(e.textContent));
     const box = label && label.querySelector('.price');
-    if (!box) return settledPrice;
+    return box ? box.textContent : null;
+  };
+  /* The box can update a beat after window.product.price, and showed the
+     previous size's price when read at once (code review): read it until two
+     reads a second apart agree. */
+  const regular = async (settledPrice) => {
+    let text = regularBox(), prev = null;
+    for (let i = 0; i < 10 && (i < 2 || text !== prev); i++) { await sleep(500); prev = text; text = regularBox(); }
+    if (text !== prev) throw new Error('the regular price never settled');
+    if (!text) return settledPrice;
+    const box = { textContent: text };
     const r = Number(box.textContent.replace(/[$,\s]/g, ''));
     if (!(r > 0) || r + 0.005 < settledPrice) throw new Error('regular price ' + box.textContent + ' unreadable or below ' + settledPrice);
     return r;
@@ -142,7 +152,7 @@ async function slCapture(spec) {
           const slow = [...t.options].filter((o) => !o.disabled && o.value).sort((a, b) => days(b.text) - days(a.text))[0];
           if (slow && t.value !== slow.value) { t.value = slow.value; t.dispatchEvent(new Event('change', { bubbles: true })); await sleep(500); }
         }
-        const cost = regular(await settled());
+        const cost = await regular(await settled());
         await sleep(spec.pace || 1200);
         const shipping = await ship();
         const ta = sel('Turnaround') || sel('turnaround');
@@ -199,7 +209,9 @@ async function dwCapture(spec) {
     /* The box answers a beat late, and a fixed wait read the PREVIOUS
        quantity's total (2026-10-15): read until two reads agree. */
     let cost = regularTotal();
-    for (let i = 0, prev = null; i < 12 && (i < 3 || prev !== cost); i++) { await sleep(1000); prev = cost; cost = regularTotal(); }
+    let steady = false;
+    for (let i = 0, prev = null; i < 12 && !steady; i++) { await sleep(1000); prev = cost; cost = regularTotal(); steady = i >= 2 && prev === cost; }
+    if (!steady) throw new Error('tier ' + n + ': the total never settled');
     window.__slShipRes = null;
     vis('.btn-shipping-quote').click();
     for (let i = 0; i < 60 && !window.__slShipRes; i++) await sleep(250);
