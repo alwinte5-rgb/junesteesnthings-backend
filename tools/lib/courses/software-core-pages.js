@@ -108,7 +108,7 @@ module.exports = {
   ],
   'w5-demo': [
     { from: null, checks: [
-      q('A demo is booked…', ['From your booking page', 'By guessing a time'], 0, 'So it lands on your calendar and is credited to you.'),
+      q('Once a demo time is agreed, you…', ['Mark the lead "Demo booked" on the board the same day', 'Keep it in your head'], 0, 'The board is how the lead is credited to you.'),
       q('You demo from…', ['The demo account', 'A customer\'s account'], 0, 'Never a real customer\'s.'),
     ] },
     { from: 'The order', checks: [
@@ -178,7 +178,7 @@ module.exports = {
   ],
   'w8-pay': [
     { from: null, checks: [
-      q('Your wage is paid…', ['Weekly by Wise', 'Yearly'], 0, '$3.50 an hour, 20 hours a week.'),
+      q('Your wage is paid…', ['Weekly by Wise', 'Yearly'], 0, 'The wage and hours in your offer.'),
       q('Hours count when you…', ['Clock in and out on the Timeclock', 'Remember them'], 0, 'Every hour on the Timeclock.'),
     ] },
     { from: 'Your commission', checks: [

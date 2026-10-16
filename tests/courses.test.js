@@ -443,3 +443,12 @@ test('the Software sales course is the software track\'s path, and a hired softw
   assert.match(list, /key: 'software', track: 'software'/);
   assert.strictEqual(require('../tools/lib/team-channels').audienceOf('software'), 'software');
 });
+
+test('the Software sales course keeps one person\'s wage out of the shared Playbook, and promises no tool that is not built', () => {
+  const all = TRAINING.lessonArticles().filter((a) => /^Software sales course /.test(a.title)).map((a) => a.body).join('\n');
+  assert.doesNotMatch(all, /\$3\.50|an hour, 20 hours/, 'every helper can read the Playbook; the wage lives on the Staff page');
+  assert.doesNotMatch(all, /password manager/, 'logins are shared once from Resources');
+  assert.doesNotMatch(all, /sign up from your link/, 'agent links are not built yet; the board credits the sale');
+  assert.strictEqual(require('../tools/lib/staff-welcome').ROLE_FOR_TRACK.software, 'Software Sales Agent');
+  assert.match(src, /SELECT 'Software sales', 'software'\s+WHERE NOT EXISTS \(SELECT 1 FROM team_channels WHERE audience = 'software'\)/, 'the agent has a channel of their own from day one');
+});

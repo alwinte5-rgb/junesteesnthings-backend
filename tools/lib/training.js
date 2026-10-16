@@ -54,8 +54,8 @@ const TRACKS = {
   content: { label: 'Content (video)', note: 'Shot lists, editing shorts and longer videos, music and permission rules, posting, comments and the Friday numbers.' },
   ads: { label: 'Ads', note: 'Conversion tracking, Google Search, negatives and the $40 rule, Meta retargeting, seasonal campaigns and the weekly report.' },
   bookkeeper: { label: 'Bookkeeper', note: 'Sales and fees, expenses and receipts, job costs, refunds and disputes, Illinois sales tax, the month-end close and the summary for June.' },
-  software: { label: 'Software sales', note: 'Our apps and their top plans, finding agencies, first messages and follow-ups, discovery and the demo, objections and approved offers, trials and setup, pay and the weekly report.' },
   developer: { label: 'Developer', note: 'The stack, shipping through pull requests, outages and roll-backs, secrets and safe code, payment code, tests and Claude Code, apps.' },
+  software: { label: 'Software sales', note: 'Our apps and their top plans, finding agencies, first messages and follow-ups, discovery and the demo, objections and approved offers, trials and setup, pay and the weekly report.' },
 };
 const DEFAULT_TRACK = 'sales';
 

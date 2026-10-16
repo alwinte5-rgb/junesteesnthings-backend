@@ -217,7 +217,7 @@ Until the software leads board is in the staff workspace, June gives you a share
 - **New:** researched, not contacted yet
 - **Contacted:** first message sent
 - **Replied:** they answered, yes or no
-- **Demo booked:** a time is set on your booking page
+- **Demo booked:** a time is agreed and on your calendar
 - **Trial:** they started the 14-day free trial
 - **Won:** they paid. Note the plan and monthly or yearly
 - **Lost:** they said no, or went quiet after your last follow-up. Write why
@@ -422,12 +422,12 @@ If they post for one brand, need a feature we do not have, or really need an ad 
       id: 'w5-demo', article: A.demo, minutes: 20, tags: 'software sales, demo, screen share, demo account, booking page, next step',
       goals: ['Run a 15-minute demo from the demo account', 'Show only what solves their problem', 'End every demo with a next step'],
       body:
-`A demo is 15 minutes: 5 of questions, 8 of showing, 2 of next steps. It is booked from your booking page, so the time lands on your calendar and the lead is credited to you.
+`A demo is 15 minutes: 5 of questions, 8 of showing, 2 of next steps. Book it on your booking page once June has set one up for you (until then, agree a time in your messages and send a Google Meet invite). Either way, mark the lead "Demo booked" on the board the same day, because the board is how the lead is credited to you.
 
 **Before the call**
 
 - Re-read your notes and their detail
-- Sign in to the demo account, never a customer's. June gives you its login: keep it in your password manager and never share it
+- Sign in to the demo account, never a customer's. June shares its login with you once, from Resources: keep it safe and never share it
 - Pick the two or three things you will show, based on what they told you
 - Close other tabs and silence notifications: you will share your screen
 
@@ -615,7 +615,7 @@ Your commission is 10% of what the customer pays. A discount cuts it, and a cust
 
 Book the start as a short call where you can. Together:
 
-- They sign up from your link, so the customer is credited to you
+- They sign up while they are already on the board as your lead (and from your agent link, once June gives you one), so the customer is credited to you
 - They create two client brands and connect those clients' accounts themselves. You never take their passwords
 - They plan one week of posts for one client, and see the captions and graphics
 
@@ -672,7 +672,7 @@ Send June what customers ask for and what confused them, in your weekly report. 
     }],
     practice: [
       { key: 'signoff:software-trial', type: 'signoff', minutes: 5,
-        title: 'Starts a trial the right way', hint: 'Walk June through a trial start: signed up from your link, two brands added and connected by the customer, a week planned, check-ins set on days 2, 7 and 12.' },
+        title: 'Starts a trial the right way', hint: 'Walk June through a trial start: the lead on the board as yours before signing up, two brands added and connected by the customer, a week planned, check-ins set on days 2, 7 and 12.' },
     ],
     quiz: {
       key: 'software-7', title: 'Module 7 quiz: trials, setup help and handing over', minutes: 8,
@@ -680,9 +680,9 @@ Send June what customers ask for and what confused them, in your weekly report. 
         { id: 'won', q: 'A trial is usually won or lost…',
           choices: ['In the first two days', 'On the last day', 'After a year', 'Never'],
           answer: 0, article: A.trial, why: 'Connected clients and a planned week make them stay.' },
-        { id: 'link', q: 'Why must they sign up from your link?',
+        { id: 'link', q: 'Why must they be on the board as your lead before they sign up?',
           choices: ['It is faster', 'So the customer is credited to you', 'It gives a discount', 'No reason'],
-          answer: 1, article: A.trial, why: 'Your link is how the sale is yours.' },
+          answer: 1, article: A.trial, why: 'The board (and your agent link, once you have one) is how the sale is yours.' },
         { id: 'passwords', q: 'Who connects the client accounts?',
           choices: ['You, with their passwords', 'The customer, themselves', 'June', 'Nobody'],
           answer: 1, article: A.trial, why: 'You never take a customer\'s passwords.' },
@@ -724,7 +724,7 @@ Send June what customers ask for and what confused them, in your weekly report. 
 
 **Your wage**
 
-$3.50 an hour, 20 hours a week (Monday to Friday, 10:00am to 2:00pm US Central), paid weekly by Wise. Clock in and out on the Timeclock so every hour counts.
+The hourly wage and hours in your offer, paid weekly by Wise. Clock in and out on the Timeclock so every hour counts.
 
 **Your commission**
 
@@ -734,7 +734,7 @@ $3.50 an hour, 20 hours a week (Monday to Friday, 10:00am to 2:00pm US Central),
 - A customer on monthly Agency pays $129 a month: you earn $12.90 a month for 6 months, $77.40 in all
 - A customer on yearly Agency pays $1,290 at once, in their first 6 months: you earn $129
 - If they cancel, commission stops with their payments. A refund takes back the commission on that payment
-- The customer is yours if they signed up from your link or are on the board as your lead before they signed up Until referral links are built, June confirms which customers are yours from the board.
+- The customer is yours if they signed up from your link or are on the board as your lead before they signed up. Until agent links are built, June confirms which customers are yours from the board.
 
 **Why customers who stay matter**
 
@@ -746,7 +746,7 @@ The customer saves two months. We get the payment up front. You get all your com
 
 **Your dashboard**
 
-My earnings shows your hours, your wage and your commission as it builds. If a number looks wrong, ask June directly, not in a team channel.`,
+My earnings shows your hours and your wage. Your software commission is not on it yet: June works it out from the board and the customer's payments, and adds it to your weekly pay. If a number looks wrong, ask June directly, not in a team channel.`,
     }, {
       id: 'w8-report', article: A.report, minutes: 15, tags: 'software sales, rules, privacy, honesty, weekly report, numbers',
       goals: ['Follow the rules that protect customers', 'Send a five-line weekly report', 'Read your numbers and change what is not working'],

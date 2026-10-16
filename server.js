@@ -1350,6 +1350,10 @@ async function initStaffTables() {
   await pool.query(`INSERT INTO team_channels (name, audience)
                     SELECT x.name, x.audience FROM (VALUES ('Everyone', 'all'), ('Sales', 'sales')) AS x(name, audience)
                      WHERE NOT EXISTS (SELECT 1 FROM team_channels)`);
+  /* The software sales agent's channel, made once (an archived one counts). */
+  await pool.query(`INSERT INTO team_channels (name, audience)
+                    SELECT 'Software sales', 'software'
+                     WHERE NOT EXISTS (SELECT 1 FROM team_channels WHERE audience = 'software')`);
   /* Bonuses the owner adds by hand or awards for an incentive, and the
      incentives themselves: a target over a period, for one helper or all. */
   await pool.query(`
