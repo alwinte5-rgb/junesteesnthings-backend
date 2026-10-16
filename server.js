@@ -32137,8 +32137,8 @@ function askTimeZoneCard() {
     <b>Which time zone do you work from?</b>
     <p class="muted" style="font-size:13px;margin:4px 0 8px">Your work schedule is shown in your own time. You can ask June to change it later.</p>
     <form method="post" action="/admin/my-time-zone" class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
-      <label style="margin:0">Time zone <select name="time_zone">${Object.entries(SHIFTS.STAFF_ZONES).map(([z, l]) =>
-        `<option value="${escEmail(z)}"${z === SHIFTS.DEFAULT_STAFF_ZONE ? ' selected' : ''}>${escEmail(l)}</option>`).join('')}</select></label>
+      <label style="margin:0">Time zone <select name="time_zone" required><option value="" selected>Choose your time zone</option>${Object.entries(SHIFTS.STAFF_ZONES).map(([z, l]) =>
+        `<option value="${escEmail(z)}">${escEmail(l)}</option>`).join('')}</select></label>
       <button type="submit" class="btn">Save</button></form></div>`;
 }
 
@@ -32149,7 +32149,8 @@ app.post('/admin/my-time-zone', requireAdmin, async (req, res) => {
   if (!Object.hasOwn(SHIFTS.STAFF_ZONES, z)) return back(res, '/admin/my-day', 'err', 'Pick a time zone from the list.');
   try {
     /* Their own answer, once: after that it is the owner's to change. */
-    await pool.query('UPDATE staff SET time_zone = $2 WHERE id = $1 AND time_zone IS NULL', [actor.id, z]);
+    const { rowCount } = await pool.query('UPDATE staff SET time_zone = $2 WHERE id = $1 AND time_zone IS NULL', [actor.id, z]);
+    if (!rowCount) return back(res, '/admin/my-day', 'err', 'Your time zone is already set. Ask June to change it.');
     return back(res, '/admin/my-day', 'ok', `Saved: ${SHIFTS.STAFF_ZONES[z]} time.`);
   } catch (err) {
     console.error('time zone save failed:', err.message);

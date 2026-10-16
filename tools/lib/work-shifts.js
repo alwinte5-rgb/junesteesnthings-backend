@@ -134,8 +134,6 @@ function dayLabel(d, zone) {
   return new Intl.DateTimeFormat('en-US', { timeZone: zone, weekday: 'short', month: 'short', day: 'numeric' }).format(d);
 }
 
-/** A shift as one line per zone: { 'America/Chicago': 'Mon Oct 13, 9:00 AM – 2:00 PM', ... }.
- *  The end carries its own day when it falls on another one. */
 /* The zones a helper can work from (owner, 2026-10-16: "when new hires
    please ask them their time zones"). A helper sees their schedule in theirs;
    not yet asked reads as the Philippines, where the team has been. */
@@ -151,6 +149,8 @@ const DEFAULT_STAFF_ZONE = 'Asia/Manila';
 function staffZoneOf(v) { return Object.hasOwn(STAFF_ZONES, String(v || '')) ? String(v) : DEFAULT_STAFF_ZONE; }
 function staffZoneLabel(z) { return STAFF_ZONES[staffZoneOf(z)]; }
 
+/** A shift as one line per zone: { 'America/Chicago': 'Mon Oct 13, 9:00 AM – 2:00 PM', ... }.
+ *  The end carries its own day when it falls on another one. */
 function span(o, zones = Object.keys(ZONES)) {
   const out = {};
   for (const z of zones) {
