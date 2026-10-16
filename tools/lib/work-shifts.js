@@ -136,9 +136,24 @@ function dayLabel(d, zone) {
 
 /** A shift as one line per zone: { 'America/Chicago': 'Mon Oct 13, 9:00 AM – 2:00 PM', ... }.
  *  The end carries its own day when it falls on another one. */
-function span(o) {
+/* The zones a helper can work from (owner, 2026-10-16: "when new hires
+   please ask them their time zones"). A helper sees their schedule in theirs;
+   not yet asked reads as the Philippines, where the team has been. */
+const STAFF_ZONES = {
+  'Asia/Manila': 'Philippines',
+  'America/Chicago': 'US Central (Chicago)',
+  'America/New_York': 'US Eastern (New York)',
+  'America/Denver': 'US Mountain (Denver)',
+  'America/Phoenix': 'Arizona',
+  'America/Los_Angeles': 'US Pacific (Los Angeles)',
+};
+const DEFAULT_STAFF_ZONE = 'Asia/Manila';
+function staffZoneOf(v) { return Object.hasOwn(STAFF_ZONES, String(v || '')) ? String(v) : DEFAULT_STAFF_ZONE; }
+function staffZoneLabel(z) { return STAFF_ZONES[staffZoneOf(z)]; }
+
+function span(o, zones = Object.keys(ZONES)) {
   const out = {};
-  for (const z of Object.keys(ZONES)) {
+  for (const z of zones) {
     const sameDay = dayLabel(o.start, z) === dayLabel(o.end, z);
     out[z] = `${when(o.start, z)} – ${sameDay ? clock(o.end, z) : when(o.end, z)}`;
   }
@@ -174,4 +189,4 @@ function daySegments(o, zone) {
 
 function cleanNote(n) { return String(n || '').replace(/[\r\n\t]+/g, ' ').replace(/[\u0000-\u001f\u007f<>]/g, '').trim().slice(0, NOTE_MAX); }
 
-module.exports = { weekdayIn, inRange, weeksFrom, ZONES, DAYS, NOTE_MAX, localMinutes, daySegments, minutesOf, offsetAt, instantOf, mondayOf, addDays, occurrences, dateIn, weekOccurrences, validDate, when, clock, span, hoursOf, cleanNote };
+module.exports = { STAFF_ZONES, DEFAULT_STAFF_ZONE, staffZoneOf, staffZoneLabel, weekdayIn, inRange, weeksFrom, ZONES, DAYS, NOTE_MAX, localMinutes, daySegments, minutesOf, offsetAt, instantOf, mondayOf, addDays, occurrences, dateIn, weekOccurrences, validDate, when, clock, span, hoursOf, cleanNote };

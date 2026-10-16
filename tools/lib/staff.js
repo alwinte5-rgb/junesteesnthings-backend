@@ -353,6 +353,8 @@ const ROUTES = {
 
   // The staff workspace itself.
   'GET /admin/my-day': 'any',
+  /* A helper answers which time zone they work from, once (owner, 2026-10-16). */
+  'POST /admin/my-time-zone': 'any',
   'GET /admin/playbook': 'any',
   'GET /admin/playbook/:id': 'any',
   'POST /admin/playbook': 'kb.edit',

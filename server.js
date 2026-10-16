@@ -1380,6 +1380,10 @@ async function initStaffTables() {
   /* Archived helpers (owner, 2026-10-15: "purge them from the system, keep the
      info in the backend but not visible"): off every list, records kept. */
   await pool.query('ALTER TABLE staff ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ');
+  /* The zone a helper works from (owner, 2026-10-16, written OK for the
+     column): asked at first sign-in, changed on the Team page; empty is not
+     asked yet and reads as the Philippines. */
+  await pool.query('ALTER TABLE staff ADD COLUMN IF NOT EXISTS time_zone TEXT');
   /* Proofs uploaded on a job (tools/lib/job-proofs.js). uploaded_by is the
      helper, or NULL for the owner; sent_at is set when a message carrying its
      link actually goes to the customer. */
@@ -3348,7 +3352,7 @@ async function staffByEmail(email) {
      at the path's own ready (TRAINING.readyKeyFor), or a Sales ready given
      before role courses had one (TRAINING.LEGACY_READY_BEFORE). */
   const { rows } = await pool.query(
-    `SELECT s.id, s.name, s.email, s.perms, s.active, s.training_track, s.sales_role,
+    `SELECT s.id, s.name, s.email, s.perms, s.active, s.training_track, s.sales_role, s.time_zone,
             COALESCE((SELECT array_agg(t.step_key) FROM staff_training t
                        WHERE t.staff_id = s.id AND (t.step_key LIKE 'tip:%' OR t.step_key LIKE 'signoff:%ready')), '{}') AS flags,
             EXISTS (SELECT 1 FROM staff_training t WHERE t.staff_id = s.id AND t.step_key = $2
@@ -3366,6 +3370,7 @@ async function staffByEmail(email) {
            track: TRAINING.trackOf(s.training_track),
            role: TRAINING.salesRoleOf(s.sales_role),
            tipsOff: new Set(flags.filter((f) => f.startsWith('tip:')).map((f) => f.slice(4))),
+           timeZone: s.time_zone ? SHIFTS.staffZoneOf(s.time_zone) : null,
            onClock: s.on_clock || null };
 }
 
@@ -29051,7 +29056,7 @@ const staffRate = (v, max) => Math.round(Math.min(max, Math.max(0, Number(v) || 
  *  who is always inactive. */
 async function staffRoster({ activeOnly = false } = {}) {
   const { rows } = await pool.query(
-    `SELECT id, name, email, active, perms, commission_pct, shop_commission_pct, hourly_rate, training_track, sales_role, last_seen_at, created_at, archived_at FROM staff
+    `SELECT id, name, email, active, perms, commission_pct, shop_commission_pct, hourly_rate, training_track, sales_role, time_zone, last_seen_at, created_at, archived_at FROM staff
       ${activeOnly ? 'WHERE active' : ''} ORDER BY active DESC, name`);
   return rows;
 }
@@ -29229,6 +29234,12 @@ async function renderStaffPage(req, res, extra = '') {
         <input type="hidden" name="action" value="track">
         <label>Training path <select name="training_track">${Object.entries(TRAINING.TRACKS).map(([k, t]) =>
           `<option value="${k}"${TRAINING.trackOf(s.training_track) === k ? ' selected' : ''}>${escEmail(t.label)}</option>`).join('')}</select></label>
+        <button type="submit" class="btn btn-ghost">Save</button>
+      </form>
+      <form method="post" action="/admin/staff/${s.id}" class="row" style="margin-top:10px;gap:6px;align-items:center">
+        <input type="hidden" name="action" value="zone">
+        <label>Time zone <select name="time_zone">${s.time_zone ? '' : '<option value="" selected>Not asked yet (shown in Philippines time)</option>'}${Object.entries(SHIFTS.STAFF_ZONES).map(([z, l]) =>
+          `<option value="${escEmail(z)}"${s.time_zone === z ? ' selected' : ''}>${escEmail(l)}</option>`).join('')}</select></label>
         <button type="submit" class="btn btn-ghost">Save</button>
       </form>
       ${TRAINING.trackOf(s.training_track) === 'sales' ? `<form method="post" action="/admin/staff/${s.id}" class="row" style="margin-top:10px;gap:6px;align-items:center">
@@ -29413,6 +29424,12 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
         const track = TRAINING.trackOf(b.training_track);
         await pool.query('UPDATE staff SET training_track = $2 WHERE id = $1', [id, track]);
         return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is on the ${TRAINING.TRACKS[track].label} training path.`);
+      }
+      case 'zone': {
+        const z = String(b.time_zone || '');
+        if (!Object.hasOwn(SHIFTS.STAFF_ZONES, z)) return back(res, `/admin/staff#staff-${id}`, 'err', 'Pick a time zone from the list.');
+        await pool.query('UPDATE staff SET time_zone = $2 WHERE id = $1', [id, z]);
+        return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} works in ${SHIFTS.STAFF_ZONES[z]} time.`);
       }
       case 'role': {
         const role = TRAINING.salesRoleOf(String(b.sales_role || ''));
@@ -30287,7 +30304,7 @@ app.get('/admin/clock', requireAdmin, async (req, res) => {
       ${pageHeader('My hours', 'Clock in when you start and out when you stop. June pays the hours she approves each week. Time with nothing happening on the site for 30 minutes is shown to her; if you were working away from the screen, say what in your clock-out note.')}
       ${hoursTabs('clock')}
       ${flash(req.query)}
-      ${await myShiftsCard(actor.id).catch((e) => { console.error('my hours shifts failed:', e.message); return ''; })}
+      ${await myShiftsCard(actor.id, actor.timeZone || SHIFTS.DEFAULT_STAFF_ZONE).catch((e) => { console.error('my hours shifts failed:', e.message); return ''; })}
       <div class="card">${open ? `<b>On the clock since ${escEmail(clockTime(open.started_at))}</b> (${TRAINING.hm(TIMECLOCK.shiftMinutes(open))})
         <form method="post" action="/admin/clock/out" data-once style="margin-top:8px">
           <label style="display:block">What did you work on? (optional, June sees it)
@@ -32080,14 +32097,14 @@ async function shiftRows(staffId = null) {
 /** One shift as two lines, Chicago then Philippines; a helper sees only
  *  Philippines time (owner, 2026-10-16: "The employees who work in the
  *  philippines should only see philipino time"). */
-function shiftLines(o, { phOnly = false } = {}) {
+function shiftLines(o, { zone = null } = {}) {
+  if (zone) return `<div>${escEmail(SHIFTS.span(o, [zone])[zone])}</div>`;
   const sp = SHIFTS.span(o);
-  if (phOnly) return `<div>${escEmail(sp['Asia/Manila'])}</div>`;
   return `<div><b>CT</b> ${escEmail(sp['America/Chicago'])}</div><div><b>PH</b> ${escEmail(sp['Asia/Manila'])}</div>`;
 }
 
 /** A helper's own week for My Day, with the next shift picked out. */
-async function myShiftsCard(staffId) {
+async function myShiftsCard(staffId, zone = SHIFTS.DEFAULT_STAFF_ZONE) {
   const rows = await shiftRows(staffId);
   if (!rows.length) return '';
   const now = new Date();
@@ -32097,20 +32114,48 @@ async function myShiftsCard(staffId) {
   const occ = [...SHIFTS.weekOccurrences(rows, SHIFTS.addDays(monday, -7), 'America/Chicago'), ...thisWeek,
     ...SHIFTS.weekOccurrences(rows, SHIFTS.addDays(monday, 7), 'America/Chicago')].filter((o) => o.end > now);
   const next = occ[0];
-  /* Their week as a calendar on My Day, in Philippines time (owner,
-     2026-10-16: "add their weekly schedule to their My day"). The week is
-     Manila's: their Monday morning is still Sunday in Chicago. */
-  const phMonday = SHIFTS.mondayOf(now, 'Asia/Manila');
-  const phDays = Array.from({ length: 7 }, (_, i) => SHIFTS.addDays(phMonday, i));
-  const phWeek = SHIFTS.weekOccurrences(rows, phMonday, 'Asia/Manila');
-  const hours = Math.round(phWeek.reduce((n, o) => n + SHIFTS.hoursOf(o), 0) * 10) / 10;
-  return `<div class="card" id="my-shifts"><b>Your work schedule this week</b> <span class="muted">${hours} h, Philippines time</span>
+  /* Their week as a calendar on My Day, in their own time zone (owner,
+     2026-10-16: "add their weekly schedule to their My day"; "ask them their
+     time zones"). The week is theirs: a Manila Monday morning is still
+     Sunday in Chicago. */
+  const myMonday = SHIFTS.mondayOf(now, zone);
+  const myDays = Array.from({ length: 7 }, (_, i) => SHIFTS.addDays(myMonday, i));
+  const myWeek = SHIFTS.weekOccurrences(rows, myMonday, zone);
+  const hours = Math.round(myWeek.reduce((n, o) => n + SHIFTS.hoursOf(o), 0) * 10) / 10;
+  return `<div class="card" id="my-shifts"><b>Your work schedule this week</b> <span class="muted">${hours} h, ${escEmail(SHIFTS.staffZoneLabel(zone))} time</span>
     <a class="muted" href="/admin/work-schedule" style="float:right">Full schedule →</a>
     ${next ? `<div style="margin:8px 0;padding:8px 12px;background:#eef4ff;border-radius:10px">${next.start <= now ? '<b>On shift now</b>' : '<b>Next shift</b>'}${
-      shiftLines(next, { phOnly: true })}</div>` : ''}
-    ${phWeek.length ? scheduleCalendarHtml([-7, 0, 7].flatMap((n) => SHIFTS.occurrences(rows, SHIFTS.addDays(phMonday, n))), phDays, 'Asia/Manila',
+      shiftLines(next, { zone })}</div>` : ''}
+    ${myWeek.length ? scheduleCalendarHtml([-7, 0, 7].flatMap((n) => SHIFTS.occurrences(rows, SHIFTS.addDays(myMonday, n))), myDays, zone,
       () => ({ bg: '#e8f0ff', fg: '#1848B8' }), { names: false }) : '<p class="muted">No shifts this week.</p>'}</div>`;
 }
+
+/** Asked once, on My Day, until they answer (owner, 2026-10-16: "when new
+ *  hires please ask them their time zones"). */
+function askTimeZoneCard() {
+  return `<div class="card" id="my-zone" style="border-left:4px solid #1848B8">
+    <b>Which time zone do you work from?</b>
+    <p class="muted" style="font-size:13px;margin:4px 0 8px">Your work schedule is shown in your own time. You can ask June to change it later.</p>
+    <form method="post" action="/admin/my-time-zone" class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
+      <label style="margin:0">Time zone <select name="time_zone">${Object.entries(SHIFTS.STAFF_ZONES).map(([z, l]) =>
+        `<option value="${escEmail(z)}"${z === SHIFTS.DEFAULT_STAFF_ZONE ? ' selected' : ''}>${escEmail(l)}</option>`).join('')}</select></label>
+      <button type="submit" class="btn">Save</button></form></div>`;
+}
+
+app.post('/admin/my-time-zone', requireAdmin, async (req, res) => {
+  const actor = currentActor();
+  if (!actor || actor.kind !== 'staff') return res.redirect('/admin/my-day');
+  const z = String((req.body || {}).time_zone || '');
+  if (!Object.hasOwn(SHIFTS.STAFF_ZONES, z)) return back(res, '/admin/my-day', 'err', 'Pick a time zone from the list.');
+  try {
+    /* Their own answer, once: after that it is the owner's to change. */
+    await pool.query('UPDATE staff SET time_zone = $2 WHERE id = $1 AND time_zone IS NULL', [actor.id, z]);
+    return back(res, '/admin/my-day', 'ok', `Saved: ${SHIFTS.STAFF_ZONES[z]} time.`);
+  } catch (err) {
+    console.error('time zone save failed:', err.message);
+    return back(res, '/admin/my-day', 'err', 'Could not save that. Try again.');
+  }
+});
 
 /** The week as a calendar: a column per day, a block per shift placed at its
  *  hours, in one zone (owner, 2026-10-15: "add a calendar view of your
@@ -32217,8 +32262,9 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
     /* The calendar is drawn in one zone: the owner's Chicago by default, a
        helper's Philippines; a chip switches. The list shows both. */
     /* A helper sees Philippines time only, no switch (owner, 2026-10-16). */
-    const zone = !owner ? 'Asia/Manila' : req.query.zone === 'ph' ? 'Asia/Manila' : 'America/Chicago';
-    const listZone = owner ? 'America/Chicago' : 'Asia/Manila';
+    const helperZone = (actor && actor.timeZone) || SHIFTS.DEFAULT_STAFF_ZONE;
+    const zone = !owner ? helperZone : req.query.zone === 'ph' ? 'Asia/Manila' : 'America/Chicago';
+    const listZone = owner ? 'America/Chicago' : helperZone;
     const view = req.query.view === 'list' ? 'list' : req.query.view === 'month' ? 'month' : 'calendar';
     const asked = SHIFTS.validDate(req.query.week);
     /* This week as the viewer's zone counts it: a helper's Monday morning in
@@ -32237,8 +32283,8 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
     const dayCard = (d) => {
       const list = occ.filter((o) => dayOf(o) === d);
       const label = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'long', month: 'short', day: 'numeric' }).format(new Date(`${d}T12:00:00Z`));
-      return `<div class="ws-day"><div class="ws-head">${escEmail(label)} <span class="muted">(${owner ? 'Chicago' : 'Philippines'})</span></div>
-        ${list.map((o) => `<div class="ws-shift">${owner ? `<b>${escEmail(o.name)}</b> ` : ''}<span class="muted">${SHIFTS.hoursOf(o)} h</span>${shiftLines(o, { phOnly: !owner })}${
+      return `<div class="ws-day"><div class="ws-head">${escEmail(label)} <span class="muted">(${owner ? 'Chicago' : escEmail(SHIFTS.staffZoneLabel(helperZone))})</span></div>
+        ${list.map((o) => `<div class="ws-shift">${owner ? `<b>${escEmail(o.name)}</b> ` : ''}<span class="muted">${SHIFTS.hoursOf(o)} h</span>${shiftLines(o, { zone: owner ? null : helperZone })}${
           o.note ? `<div class="row-sub">${escEmail(o.note)}</div>` : ''}</div>`).join('') || '<div class="muted" style="font-size:13px">Nobody scheduled</div>'}</div>`;
     };
     const fmtTime = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
@@ -32329,7 +32375,7 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
       .ws-shift:first-of-type{border-top:0}
     </style>
       ${pageHeader(owner ? 'Work schedule' : 'My schedule', owner ? 'Each shift in Chicago time (CT) and Philippines time (PH), for the real dates of the week, so daylight saving is already counted.'
-        : 'Your shifts, in Philippines time.',
+        : `Your shifts, in ${escEmail(SHIFTS.staffZoneLabel(helperZone))} time.`,
         view === 'month'
           ? `<a class="btn btn-ghost" href="${q({ week: SHIFTS.addDays(week, -28) })}">&larr; Earlier</a><a class="btn btn-ghost" href="${q({ week: SHIFTS.addDays(week, 28) })}">Later &rarr;</a>`
           : `<a class="btn btn-ghost" href="${q({ week: SHIFTS.addDays(week, -7) })}">&larr; Week before</a><a class="btn btn-ghost" href="${q({ week: SHIFTS.addDays(week, 7) })}">Week after &rarr;</a>`)}
@@ -33548,7 +33594,7 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
     // A helper's training until it is done, and the owner's latest note (two weeks).
     const art = await artQueues(actor);
     const addTaskForm = await taskAddForm({ back: '/admin/my-day', roster, owner: actor.kind !== 'staff' });
-    const shiftsCard = me ? await myShiftsCard(me).catch((e) => { console.error('my day shifts failed:', e.message); return ''; }) : '';
+    const shiftsCard = me ? (actor.timeZone ? '' : askTimeZoneCard()) + await myShiftsCard(me, actor.timeZone || SHIFTS.DEFAULT_STAFF_ZONE).catch((e) => { console.error('my day shifts failed:', e.message); return ''; }) : '';
     const pins = PIN_CSS + artPinCard(await artUnacked(actor).catch(() => []), '/admin/my-day')
       + await jobNotesPinCard(actor, '/admin/my-day').catch((e) => { console.error('my day job notes failed:', e.message); return ''; });
     const training = me ? await Promise.all([trainingFor(me), coachingNotes(me, 1)])
