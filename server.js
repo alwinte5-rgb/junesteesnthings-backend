@@ -32070,7 +32070,7 @@ async function shiftRows(staffId = null) {
   const { rows } = await pool.query(
     /* Dates as text: a DATE read as a JS Date moves a day in a zone west of UTC. */
     `SELECT w.id, w.staff_id, w.weekday, w.start_min, w.end_min, w.zone, w.note,
-            w.starts_on::text AS starts_on, w.ends_on::text AS ends_on, s.name
+            to_char(w.starts_on, 'YYYY-MM-DD') AS starts_on, to_char(w.ends_on, 'YYYY-MM-DD') AS ends_on, s.name
        FROM staff_work_shifts w JOIN staff s ON s.id = w.staff_id
       WHERE s.active AND ($1::int IS NULL OR w.staff_id = $1)
       ORDER BY w.starts_on NULLS FIRST, w.weekday, w.start_min`, [staffId]);
@@ -32256,7 +32256,7 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
           <form method="post" action="/admin/work-schedule" style="margin:0"><input type="hidden" name="action" value="delete">
           <input type="hidden" name="id" value="${Number(w.id)}"><button type="submit" class="btn btn-ghost">Remove</button></form></span></div>`).join('')
         || '<p class="muted">No shifts yet.</p>'}</div>
-      <p class="muted" style="font-size:12.5px">Leave a date empty for no limit: no first day runs from now on, no last day runs every week.</p></details>` : '';
+      <p class="muted" style="font-size:12.5px">Leave a date empty for no limit: no first day runs from now on, no last day runs every week. Dates are Chicago days, so a Monday-morning Philippines shift (Sunday evening in Chicago) belongs to the Chicago week it falls in.</p></details>` : '';
     res.set('Cache-Control', 'no-store');
     res.send(adminPage('Work schedule', `<style>
       .ws-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}
@@ -32278,7 +32278,10 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
         { label: 'List', href: q({ view: 'list' }), on: view === 'list' },
         { label: '30 days', href: q({ view: 'month' }), on: view === 'month' },
       ])}
-      ${view === 'month' ? monthScheduleHtml(rows, week, zone, colorOf, { names: owner, q })
+      ${view === 'month' ? `${filterChips([
+          { label: 'Philippines time (PH)', href: q({ zone: 'ph' }), on: zone === 'Asia/Manila' },
+          { label: 'Chicago time (CT)', href: q({ zone: 'ct' }), on: zone === 'America/Chicago' },
+        ])}${monthScheduleHtml(rows, week, zone, colorOf, { names: owner })}`
         : view === 'calendar' ? `${filterChips([
           { label: 'Philippines time (PH)', href: q({ zone: 'ph' }), on: zone === 'Asia/Manila' },
           { label: 'Chicago time (CT)', href: q({ zone: 'ct' }), on: zone === 'America/Chicago' },
@@ -32327,15 +32330,24 @@ app.post('/admin/work-schedule', requireAdmin, async (req, res) => {
     const zone = SHIFTS.ZONES[b.zone] ? b.zone : null;
     if (!zone) return back(res, to, 'err', 'Pick the time zone the times are in.');
     const note = SHIFTS.cleanNote(b.note) || null;
+    /* The same shift already running on any of those days is not added
+       again: two rows would draw two blocks and count the hours twice
+       (review). The owner changes the existing one's dates instead. */
+    let added = 0;
     for (const d of days) {
-      await pool.query(
+      const { rowCount } = await pool.query(
         `INSERT INTO staff_work_shifts (staff_id, weekday, start_min, end_min, zone, note, starts_on, ends_on)
          SELECT $1, $2, $3, $4, $5, $6, $7::date, $8::date WHERE NOT EXISTS (
            SELECT 1 FROM staff_work_shifts WHERE staff_id = $1 AND weekday = $2 AND start_min = $3 AND end_min = $4 AND zone = $5
-              AND starts_on IS NOT DISTINCT FROM $7::date AND ends_on IS NOT DISTINCT FROM $8::date)`,
+              AND COALESCE(starts_on, '-infinity'::date) <= COALESCE($8::date, 'infinity'::date)
+              AND COALESCE(ends_on, 'infinity'::date) >= COALESCE($7::date, '-infinity'::date))`,
         [staffId, d, start, end, zone, note, startsOn, endsOn]);
+      added += rowCount;
     }
-    return back(res, to, 'ok', `Added ${days.length} shift${days.length === 1 ? '' : 's'}${startsOn ? `, starting ${startsOn}` : ''}.`);
+    const skipped = days.length - added;
+    if (!added) return back(res, to, 'err', 'Those shifts already run on those dates. To move them, change the dates on the shift in the list below.');
+    return back(res, to, 'ok', `Added ${added} shift${added === 1 ? '' : 's'}${startsOn ? `, starting ${startsOn}` : ''}.${
+      skipped ? ` ${skipped} already ran then and were left as they are; change their dates in the list below.` : ''}`);
   } catch (err) {
     console.error('work schedule save failed:', err.message);
     return back(res, to, 'err', 'Could not save that.');

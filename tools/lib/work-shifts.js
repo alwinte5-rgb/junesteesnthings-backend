@@ -62,12 +62,17 @@ function addDays(date, n) {
 /** Each shift's start and end instants in the week starting `monday` (a date
  *  in the shift's own zone's calendar). weekday: 1 = Monday … 7 = Sunday. */
 function occurrences(shifts, monday) {
-  return shifts.filter((s) => inRange(s, addDays(monday, Number(s.weekday) - 1))).map((s) => {
+  return shifts.map((s) => {
     const date = addDays(monday, Number(s.weekday) - 1);
     const end = Number(s.end_min) <= Number(s.start_min) ? Number(s.end_min) + 1440 : Number(s.end_min);
     return { ...s, start: instantOf(date, Number(s.start_min), s.zone), end: instantOf(date, end, s.zone) };
-  }).sort((a, b) => a.start - b.start);
+  /* The dates are the owner's Chicago weeks: a Monday-morning Manila shift is
+     Sunday evening in Chicago, so it belongs to the Chicago week it lands in
+     (review: "next week" otherwise put one on this week's Sunday). */
+  }).filter((o) => inRange(o, dateIn(o.start, RANGE_ZONE))).sort((a, b) => a.start - b.start);
 }
+
+const RANGE_ZONE = 'America/Chicago';
 
 /** Whether a weekly shift runs on `date` ("YYYY-MM-DD", in the shift's own
  *  zone): on or after its first day and, when it has one, on or before its
