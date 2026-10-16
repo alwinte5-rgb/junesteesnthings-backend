@@ -379,6 +379,11 @@ const ROUTES = {
   'GET /admin/resources': 'any',
   'POST /admin/resources': 'owner',
   'POST /admin/resources/:id': 'owner',
+  /* Shared logins (owner, 2026-10-16): the owner shares and cancels; a helper
+     opens only their own, once (checked in the handler). */
+  'POST /admin/shared-logins': 'owner',
+  'POST /admin/shared-logins/:id/cancel': 'owner',
+  'POST /admin/shared-logins/:id/open': 'any',
   'POST /admin/quote/:code/credit': 'owner',
   // Shop lead or rep lead: decided by the records; only the owner relabels (tools/lib/sales-credit.js).
   'POST /admin/quote/:code/sale-type': 'owner',
