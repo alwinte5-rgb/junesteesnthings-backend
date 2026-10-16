@@ -32,7 +32,9 @@ test('the suggestion route: same permission as emailing a lead, rate-limited, no
   assert.strictEqual(STAFF.ROUTES['POST /admin/api/lead/:id/suggest-followup'], 'customers.message');
   const at = src.indexOf("app.post('/admin/api/lead/:id/suggest-followup'");
   const route = src.slice(at, src.indexOf('\n});', at));
-  assert.match(route, /if \(actorLevel\('customers\.message'\) === 'off'\) return res\.status\(403\)/);
+  // A helper who may not see leads (the designer preset) cannot read one through Claude.
+  assert.match(route, /actor\.kind === 'staff' && \(actorLevel\('customers\.message'\) === 'off' \|\| actorLevel\('leads\.view'\) !== 'on'\)\) \{\s*return res\.status\(403\)/);
+  assert.ok(route.indexOf("actorLevel('leads.view')") < route.indexOf('FROM submissions'), 'checked before anything is read');
   assert.match(route, /if \(recent\.length >= 10\) return res\.status\(429\)/);
   assert.match(route, /money: false/);
   assert.match(route, /WHERE submission_id = \$1/);

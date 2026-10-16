@@ -14372,7 +14372,10 @@ app.get('/q/:code', async (req, res) => {
        stated ceiling gets a caveat rather than a date presented as a promise. */
     /* Unpaid, from today: the clock starts with the deposit, so an accepted
        quote nobody has paid on is "if you pay today", not "since you accepted". */
-    const eta = deliveryEstimate(paid && q.accepted_at ? new Date(q.accepted_at) : new Date(),
+    const firstPaid = paid ? (await pool.query(
+      'SELECT MIN(created_at) AS t FROM quote_payments WHERE quote_code = $1 AND amount > 0', [q.code])
+      .catch(() => ({ rows: [{}] }))).rows[0].t : null;
+    const eta = deliveryEstimate(paid ? new Date(firstPaid || q.paid_at || q.accepted_at || Date.now()) : new Date(),
       { items: q.items });
     /* A DATE column has no time, so converting it through a timezone shifts it
        a day backwards (2026-08-20 rendered as Aug 19). Format the calendar date
@@ -14639,7 +14642,8 @@ app.get('/q/:code', async (req, res) => {
             ? `<p style="margin:0 0 8px"><b>Delivery:</b> ${escEmail(DELIV.bookingPhrase(delivBooking))} to
                 ${escEmail(DELIV.addressLine(delivBooking.address))}.
                 <a href="/q/${q.code}/delivery">Change the time</a></p>`
-            : paid && q.target_date && !q.needed_by ? `<p class="muted"><b>Ready by:</b> ${dayFmt(q.target_date)}, counted from the day your deposit came in.</p>`
+            : q.cancelled_at || (!accepted && expired) ? ''
+            : paid && q.target_date && !q.needed_by ? `<p class="muted"><b>Expected by:</b> ${dayFmt(q.target_date)}.</p>`
             : paid ? `<p class="muted"><b>Estimated:</b> ready ${dayFmt(eta.ready)}, delivered ${dayFmt(eta.deliver_from)}–${dayFmt(eta.deliver_to)}.</p>`
             /* The clock starts with the deposit (owner, 2026-10-15): accepting
                holds nothing, so these dates are "if you pay today", and a
@@ -24026,8 +24030,13 @@ app.post('/admin/api/lead/:id/suggest-followup', requireAdmin, async (req, res) 
   res.set('Cache-Control', 'no-store');
   const id = intIn(req.params.id);
   if (!id) return res.status(404).json({ error: 'No such enquiry.' });
-  if (actorLevel('customers.message') === 'off') return res.status(403).json({ error: 'You cannot message customers.' });
   const actor = currentActor() || OWNER_ACTOR;
+  /* The same two checks as sending a lead email: a helper who may message
+     customers but not see leads (the designer preset) must not read one
+     through Claude either (review; Codex #179 on the send route). */
+  if (actor.kind === 'staff' && (actorLevel('customers.message') === 'off' || actorLevel('leads.view') !== 'on')) {
+    return res.status(403).json({ error: 'Leads go through the owner for now.' });
+  }
   const who = actor.kind === 'staff' ? 's' + actor.id : 'owner';
   const now = Date.now();
   const recent = (replyAsks.get(who) || []).filter((t) => now - t < 60 * 1000);
@@ -24041,10 +24050,11 @@ app.post('/admin/api/lead/:id/suggest-followup', requireAdmin, async (req, res) 
     const when = (d) => new Date(d).toLocaleString('en-US', { timeZone: SHOP_TZ, month: 'short', day: 'numeric',
                                                               hour: 'numeric', minute: '2-digit' });
     const history = [
-      ...notes.map((n) => ({ channel: n.kind === 'email' ? 'email' : n.kind, body: n.body, inbound: false, when: when(n.created_at) })),
+      ...notes.map((n) => ({ channel: CONTACT_KINDS.includes(n.kind) ? n.kind : 'internal note (not sent)', body: n.body, inbound: false, when: when(n.created_at) })),
       { channel: 'website form', body: l.description || '(no details)', inbound: true, when: when(l.created_at) },
     ];
-    const lastOut = notes[0];
+    /* The last time the shop reached them, not the last internal note. */
+    const lastOut = notes.find((n) => CONTACT_KINDS.includes(n.kind));
     const days = lastOut ? Math.max(0, Math.round((now - new Date(lastOut.created_at)) / 86400000)) : null;
     const { ask } = REPLYCOACH.validateAsk({ channel: 'email', draft: (req.body || {}).draft,
       note: `This is a lead, not an order yet: no quote has been made. The shop wrote to them${days != null ? ` ${days} day${days === 1 ? '' : 's'} ago` : ''} and they have not replied. `
