@@ -1442,6 +1442,10 @@ async function initStaffTables() {
       note        TEXT,
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
+  /* The weeks a shift runs (owner, 2026-10-15, with written OK for the
+     columns): from starts_on, until ends_on; empty is every week. */
+  await pool.query('ALTER TABLE staff_work_shifts ADD COLUMN IF NOT EXISTS starts_on DATE');
+  await pool.query('ALTER TABLE staff_work_shifts ADD COLUMN IF NOT EXISTS ends_on DATE');
   await pool.query(`
     CREATE TABLE IF NOT EXISTS job_notes (
       id            BIGSERIAL PRIMARY KEY,
@@ -32064,8 +32068,12 @@ app.get('/admin/tasks', requireAdmin, async (req, res) => {
 
 async function shiftRows(staffId = null) {
   const { rows } = await pool.query(
-    `SELECT w.*, s.name FROM staff_work_shifts w JOIN staff s ON s.id = w.staff_id
-      WHERE s.active AND ($1::int IS NULL OR w.staff_id = $1) ORDER BY w.weekday, w.start_min`, [staffId]);
+    /* Dates as text: a DATE read as a JS Date moves a day in a zone west of UTC. */
+    `SELECT w.id, w.staff_id, w.weekday, w.start_min, w.end_min, w.zone, w.note,
+            w.starts_on::text AS starts_on, w.ends_on::text AS ends_on, s.name
+       FROM staff_work_shifts w JOIN staff s ON s.id = w.staff_id
+      WHERE s.active AND ($1::int IS NULL OR w.staff_id = $1)
+      ORDER BY w.starts_on NULLS FIRST, w.weekday, w.start_min`, [staffId]);
   return rows;
 }
 
@@ -32143,6 +32151,43 @@ function scheduleCalendarHtml(occ, days, zone, colorOf, { names = true } = {}) {
   </style><div class="cal-wrap"><div class="cal"><div class="cal-ruler">${ruler}</div>${days.map(col).join('')}</div></div>`;
 }
 
+/** Thirty days and more at a glance (owner, 2026-10-15: "can we give a full
+ *  30 day calendar view of the schedule"): five weeks from `monday`, a box per
+ *  day with each shift that starts that day, in `zone`. */
+function monthScheduleHtml(rows, monday, zone, colorOf, { names = true } = {}) {
+  const today = SHIFTS.dateIn(new Date(), zone);
+  const weeks = SHIFTS.weeksFrom(monday, 5);
+  const occ = weeks.flatMap((m) => SHIFTS.weekOccurrences(rows, m, zone));
+  const head = SHIFTS.DAYS.map((d) => `<div class="mo-h">${d}</div>`).join('');
+  const cell = (d) => {
+    const mine = occ.filter((o) => SHIFTS.dateIn(o.start, zone) === d);
+    const label = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' }).format(new Date(`${d}T12:00:00Z`));
+    return `<div class="mo-d${d === today ? ' mo-today' : ''}${d < today ? ' mo-past' : ''}"><div class="mo-n">${escEmail(label)}</div>${mine.map((o) => {
+      const c = colorOf(o.staff_id);
+      return `<div class="mo-s" style="background:${c.bg};border-color:${c.fg};color:${c.fg}"
+        title="${escEmail((names ? o.name + ': ' : '') + SHIFTS.clock(o.start, zone) + ' – ' + SHIFTS.clock(o.end, zone) + (o.note ? ' — ' + o.note : ''))}">${
+        names ? `<b>${escEmail(String(o.name).split(' ')[0])}</b> ` : ''}${escEmail(SHIFTS.clock(o.start, zone))}–${escEmail(SHIFTS.clock(o.end, zone))}</div>`;
+    }).join('')}</div>`;
+  };
+  const zoneLabel = SHIFTS.ZONES[zone] ? `${SHIFTS.ZONES[zone].label} time` : zone;
+  return `<style>
+    .mo-wrap{overflow-x:auto;border:1px solid #e3e8f2;border-radius:12px;background:#fff}
+    .mo{display:grid;grid-template-columns:repeat(7,minmax(96px,1fr));min-width:700px}
+    .mo-h{font-size:12px;font-weight:700;color:#0B1F4B;text-align:center;padding:6px 0;border-bottom:1px solid #e3e8f2}
+    .mo-d{min-height:84px;border-right:1px solid #eef1f6;border-bottom:1px solid #eef1f6;padding:4px}
+    .mo-n{font-size:11.5px;color:#46505f;margin-bottom:3px}
+    .mo-today{background:#eef3ff}.mo-today .mo-n{color:#1848B8;font-weight:700}
+    .mo-past{opacity:.55}
+    .mo-s{border:1px solid;border-left-width:3px;border-radius:5px;padding:1px 4px;font-size:11px;line-height:1.3;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  </style>
+  <p class="muted" style="font-size:12.5px;margin:0 0 6px">${escEmail(shortRange(weeks[0], SHIFTS.addDays(weeks[4], 6)))}, in ${escEmail(zoneLabel)}.</p>
+  <div class="mo-wrap"><div class="mo">${head}${weeks.flatMap((m) => Array.from({ length: 7 }, (_, i) => cell(SHIFTS.addDays(m, i)))).join('')}</div></div>`;
+}
+const shortRange = (a, b) => {
+  const f = (d) => new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' }).format(new Date(`${d}T12:00:00Z`));
+  return `${f(a)} to ${f(b)}`;
+};
+
 app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
   try {
     /* A helper sees their own shifts only (owner, 2026-10-15: "each helper
@@ -32153,7 +32198,7 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
     /* The calendar is drawn in one zone: the owner's Chicago by default, a
        helper's Philippines; a chip switches. The list shows both. */
     const zone = req.query.zone === 'ct' ? 'America/Chicago' : req.query.zone === 'ph' ? 'Asia/Manila' : owner ? 'America/Chicago' : 'Asia/Manila';
-    const view = req.query.view === 'list' ? 'list' : 'calendar';
+    const view = req.query.view === 'list' ? 'list' : req.query.view === 'month' ? 'month' : 'calendar';
     const asked = SHIFTS.validDate(req.query.week);
     /* This week as the viewer's zone counts it: a helper's Monday morning in
        Manila is still Sunday in Chicago. */
@@ -32162,7 +32207,7 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
     const occ = SHIFTS.weekOccurrences(rows, week, 'America/Chicago');
     const PALETTE = [['#e8f0ff', '#1848B8'], ['#e7f6ec', '#166534'], ['#fff1e6', '#9a3412'], ['#f3e8ff', '#6b21a8'], ['#fdf2f8', '#9d174d'], ['#ecfeff', '#155e75']];
     const colorOf = (id) => { const ix = roster.findIndex((r) => r.id === id); const c = PALETTE[(ix < 0 ? 0 : ix) % PALETTE.length]; return { bg: c[0], fg: c[1] }; };
-    const q = (o) => { const p = new URLSearchParams({ week, ...(req.query.zone ? { zone: req.query.zone } : {}), ...(view === 'list' ? { view } : {}), ...o });
+    const q = (o) => { const p = new URLSearchParams({ week, ...(req.query.zone ? { zone: req.query.zone } : {}), ...(view !== 'calendar' ? { view } : {}), ...o });
       for (const [k, v] of [...p]) if (v === '') p.delete(k); return `/admin/work-schedule?${p.toString().replace(/&/g, '&amp;')}`; };
     const dayOf = (o) => SHIFTS.dateIn(o.start, 'America/Chicago');
     const days = Array.from({ length: 7 }, (_, i) => SHIFTS.addDays(week, i));
@@ -32176,6 +32221,14 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
           o.note ? `<div class="row-sub">${escEmail(o.note)}</div>` : ''}</div>`).join('') || '<div class="muted" style="font-size:13px">Nobody scheduled</div>'}</div>`;
     };
     const fmtTime = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+    const shortDay = (d) => new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' }).format(new Date(`${d}T12:00:00Z`));
+    /* The weeks a new shift can start in, this week first; next week chosen,
+       since a schedule is usually set ahead (owner, 2026-10-15). */
+    const thisMonday = SHIFTS.mondayOf(new Date(), 'America/Chicago');
+    const nextMonday = SHIFTS.addDays(thisMonday, 7);
+    const weekChoices = SHIFTS.weeksFrom(thisMonday, 12);
+    const rangeText = (w) => w.starts_on && w.ends_on ? `${shortDay(w.starts_on)} to ${shortDay(w.ends_on)}`
+      : w.starts_on ? `From ${shortDay(w.starts_on)}, every week` : w.ends_on ? `Every week until ${shortDay(w.ends_on)}` : 'Every week';
     const manage = owner ? `<details class="card" id="manage"${req.query.ok || req.query.err ? ' open' : ''}><summary><b>Set the hours</b> <span class="muted">add or remove a weekly shift</span></summary>
       <form method="post" action="/admin/work-schedule" class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end;margin-top:10px">
         <input type="hidden" name="action" value="add">
@@ -32185,14 +32238,25 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
         <label style="margin:0">Ends <input type="time" name="end" required value="14:00"></label>
         <label style="margin:0">In <select name="zone">${Object.entries(SHIFTS.ZONES).map(([z, v]) => `<option value="${z}">${escEmail(v.label)} time</option>`).join('')}</select></label>
         <label style="margin:0;flex:1 1 180px">Note <input name="note" maxlength="${SHIFTS.NOTE_MAX}" placeholder="optional, e.g. training week"></label>
+        <label style="margin:0">Starting <select name="starts_on">${weekChoices.map((m, i) => `<option value="${m}"${m === nextMonday ? ' selected' : ''}>${i === 0 ? 'This week' : i === 1 ? 'Next week' : 'Week'} of ${escEmail(shortDay(m))}</option>`).join('')}</select></label>
+        <label style="margin:0">Until <select name="ends_on"><option value="">No end, every week</option>${weekChoices.map((m) => `<option value="${SHIFTS.addDays(m, 6)}">End of week of ${escEmail(shortDay(m))}</option>`).join('')}</select></label>
         <button type="submit" class="btn">Add shifts</button>
       </form>
       <p class="muted" style="font-size:12.5px">Type the times in whichever zone you think in; the page shows both. An end before the start runs past midnight.</p>
-      <div class="rows">${rows.map((w) => `<div class="row-i"><span class="row-main"><b>${escEmail(w.name)}</b> &middot; ${SHIFTS.DAYS[w.weekday - 1]} ${fmtTime(w.start_min)}–${fmtTime(w.end_min)} ${escEmail(SHIFTS.ZONES[w.zone] ? SHIFTS.ZONES[w.zone].label : w.zone)} time${
-          w.note ? ` <span class="muted">&middot; ${escEmail(w.note)}</span>` : ''}</span>
-        <span class="row-end"><form method="post" action="/admin/work-schedule" style="margin:0"><input type="hidden" name="action" value="delete">
+      <div class="rows">${rows.map((w) => `<div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal"><b>${escEmail(w.name)}</b> &middot; ${SHIFTS.DAYS[w.weekday - 1]} ${fmtTime(w.start_min)}–${fmtTime(w.end_min)} ${escEmail(SHIFTS.ZONES[w.zone] ? SHIFTS.ZONES[w.zone].label : w.zone)} time${
+          w.note ? ` <span class="muted">&middot; ${escEmail(w.note)}</span>` : ''}
+          <div class="row-sub">${escEmail(rangeText(w))}</div></span>
+        <span class="row-end" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+          <form method="post" action="/admin/work-schedule" style="margin:0;display:flex;gap:4px;align-items:center;flex-wrap:wrap">
+            <input type="hidden" name="action" value="dates"><input type="hidden" name="id" value="${Number(w.id)}">
+            <input type="date" name="starts_on" value="${escEmail(w.starts_on || '')}" aria-label="First day" style="width:auto;padding:5px">
+            <span class="muted">to</span>
+            <input type="date" name="ends_on" value="${escEmail(w.ends_on || '')}" aria-label="Last day" style="width:auto;padding:5px">
+            <button type="submit" class="btn btn-ghost">Save dates</button></form>
+          <form method="post" action="/admin/work-schedule" style="margin:0"><input type="hidden" name="action" value="delete">
           <input type="hidden" name="id" value="${Number(w.id)}"><button type="submit" class="btn btn-ghost">Remove</button></form></span></div>`).join('')
-        || '<p class="muted">No shifts yet.</p>'}</div></details>` : '';
+        || '<p class="muted">No shifts yet.</p>'}</div>
+      <p class="muted" style="font-size:12.5px">Leave a date empty for no limit: no first day runs from now on, no last day runs every week.</p></details>` : '';
     res.set('Cache-Control', 'no-store');
     res.send(adminPage('Work schedule', `<style>
       .ws-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}
@@ -32203,15 +32267,19 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
     </style>
       ${pageHeader(owner ? 'Work schedule' : 'My schedule', owner ? 'Each shift in Chicago time (CT) and Philippines time (PH), for the real dates of the week, so daylight saving is already counted.'
         : 'Your shifts this week, in Philippines time (PH) or Chicago time (CT). Switch the zone or show the list below.',
-        `<a class="btn btn-ghost" href="${q({ week: SHIFTS.addDays(week, -7) })}">&larr; Week before</a><a class="btn btn-ghost" href="${q({ week: SHIFTS.addDays(week, 7) })}">Week after &rarr;</a>`)}
+        view === 'month'
+          ? `<a class="btn btn-ghost" href="${q({ week: SHIFTS.addDays(week, -28) })}">&larr; Earlier</a><a class="btn btn-ghost" href="${q({ week: SHIFTS.addDays(week, 28) })}">Later &rarr;</a>`
+          : `<a class="btn btn-ghost" href="${q({ week: SHIFTS.addDays(week, -7) })}">&larr; Week before</a><a class="btn btn-ghost" href="${q({ week: SHIFTS.addDays(week, 7) })}">Week after &rarr;</a>`)}
       ${hoursTabs('schedule')}
       ${flash(req.query)}
       <div class="card"><b>${owner ? 'Hours this week' : 'Your scheduled hours this week'}</b> ${[...hours.entries()].map(([id, h]) => `<span class="muted" style="margin-left:10px">${owner ? escEmail(nameOf(roster, id)) + ' ' : ''}${Math.round(h * 10) / 10} h</span>`).join('') || '<span class="muted">none scheduled</span>'}</div>
       ${filterChips([
         { label: 'Calendar', href: q({ view: '' }), on: view === 'calendar' },
         { label: 'List', href: q({ view: 'list' }), on: view === 'list' },
+        { label: '30 days', href: q({ view: 'month' }), on: view === 'month' },
       ])}
-      ${view === 'calendar' ? `${filterChips([
+      ${view === 'month' ? monthScheduleHtml(rows, week, zone, colorOf, { names: owner, q })
+        : view === 'calendar' ? `${filterChips([
           { label: 'Philippines time (PH)', href: q({ zone: 'ph' }), on: zone === 'Asia/Manila' },
           { label: 'Chicago time (CT)', href: q({ zone: 'ct' }), on: zone === 'America/Chicago' },
         ])}
@@ -32237,6 +32305,18 @@ app.post('/admin/work-schedule', requireAdmin, async (req, res) => {
       const { rowCount } = id ? await pool.query('DELETE FROM staff_work_shifts WHERE id = $1', [id]) : { rowCount: 0 };
       return back(res, to, rowCount ? 'ok' : 'err', rowCount ? 'Shift removed.' : 'No such shift.');
     }
+    /* The days a shift runs: a real date or empty, and the last never
+       before the first. */
+    const dateOrNull = (v) => (String(v || '').trim() === '' ? null : SHIFTS.validDate(String(v).trim()) || false);
+    const startsOn = dateOrNull(b.starts_on), endsOn = dateOrNull(b.ends_on);
+    if (startsOn === false || endsOn === false) return back(res, to, 'err', 'Pick real dates.');
+    if (startsOn && endsOn && endsOn < startsOn) return back(res, to, 'err', 'The last day is before the first.');
+    if (b.action === 'dates') {
+      const id = intIn(b.id);
+      const { rowCount } = id ? await pool.query('UPDATE staff_work_shifts SET starts_on = $2::date, ends_on = $3::date WHERE id = $1',
+        [id, startsOn, endsOn]) : { rowCount: 0 };
+      return back(res, to, rowCount ? 'ok' : 'err', rowCount ? 'Dates saved.' : 'No such shift.');
+    }
     const staffId = intIn(b.staff_id);
     const roster = await staffRoster({ activeOnly: true });
     if (!staffId || !roster.some((r) => r.id === staffId)) return back(res, to, 'err', 'Pick who the shift is for.');
@@ -32249,12 +32329,13 @@ app.post('/admin/work-schedule', requireAdmin, async (req, res) => {
     const note = SHIFTS.cleanNote(b.note) || null;
     for (const d of days) {
       await pool.query(
-        `INSERT INTO staff_work_shifts (staff_id, weekday, start_min, end_min, zone, note)
-         SELECT $1, $2, $3, $4, $5, $6 WHERE NOT EXISTS (
-           SELECT 1 FROM staff_work_shifts WHERE staff_id = $1 AND weekday = $2 AND start_min = $3 AND end_min = $4 AND zone = $5)`,
-        [staffId, d, start, end, zone, note]);
+        `INSERT INTO staff_work_shifts (staff_id, weekday, start_min, end_min, zone, note, starts_on, ends_on)
+         SELECT $1, $2, $3, $4, $5, $6, $7::date, $8::date WHERE NOT EXISTS (
+           SELECT 1 FROM staff_work_shifts WHERE staff_id = $1 AND weekday = $2 AND start_min = $3 AND end_min = $4 AND zone = $5
+              AND starts_on IS NOT DISTINCT FROM $7::date AND ends_on IS NOT DISTINCT FROM $8::date)`,
+        [staffId, d, start, end, zone, note, startsOn, endsOn]);
     }
-    return back(res, to, 'ok', `Added ${days.length} shift${days.length === 1 ? '' : 's'}.`);
+    return back(res, to, 'ok', `Added ${days.length} shift${days.length === 1 ? '' : 's'}${startsOn ? `, starting ${startsOn}` : ''}.`);
   } catch (err) {
     console.error('work schedule save failed:', err.message);
     return back(res, to, 'err', 'Could not save that.');
