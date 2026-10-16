@@ -34717,7 +34717,7 @@ app.get('/apply/test/:token', hireRateLimit, async (req, res) => {
     <form id="hire-form" method="post" action="/apply/test/${escEmail(token)}">
       ${Object.keys(view.parts).map((k) => k === 'choice' ? part(k) + choice : part(k) + written(k)).join('')}
       <div class="card"><label class="hire-q" for="paypal">Your $${HIRING.TEST_FEE} test fee</label>
-        <p style="white-space:normal">We pay for this test by PayPal within ${HIRING.FEE_DAYS} days of hand-in. Your PayPal email:</p>
+        <p style="white-space:normal">We pay for this test by Wise within ${HIRING.FEE_DAYS} days of hand-in. Your Wise email:</p>
         <input id="paypal" name="paypal" type="email" maxlength="${HIRING.LIMITS.paypal}" autocomplete="email" placeholder="name@example.com" style="width:100%"></div>
       <div class="card"><p>Check your answers, then hand the test in. You can only send it once.</p>
         <button type="submit" class="btn">Hand in my test</button></div>
@@ -34729,15 +34729,15 @@ app.get('/apply/test/:token', hireRateLimit, async (req, res) => {
 function hireFeeCard(first, token, q = {}) {
   if (!first || first.fee_skip) return '';
   if (first.fee_paid_at) {
-    return `<div class="card"><b>Your $${HIRING.TEST_FEE} test fee</b><p>Sent by PayPal to ${escEmail(first.fee_paypal || '')}. Thank you!</p></div>`;
+    return `<div class="card"><b>Your $${HIRING.TEST_FEE} test fee</b><p>Sent by Wise to ${escEmail(first.fee_paypal || '')}. Thank you!</p></div>`;
   }
   const err = q.fee === 'bad' ? '<div class="warn">That does not look like an email address. Please check it.</div>' : '';
   const ok = q.fee === 'saved' ? '<p style="color:#15803d"><b>Saved.</b></p>' : '';
   return `<div class="card"><b>Your $${HIRING.TEST_FEE} test fee</b>
-    <p>${first.fee_paypal ? `We will send it by PayPal to <b>${escEmail(first.fee_paypal)}</b> within ${HIRING.FEE_DAYS} days. Wrong address? Change it here.`
-      : `We pay for this test by PayPal within ${HIRING.FEE_DAYS} days. Where should we send it?`}</p>${ok}${err}
+    <p>${first.fee_paypal ? `We will send it by Wise to <b>${escEmail(first.fee_paypal)}</b> within ${HIRING.FEE_DAYS} days. Wrong address? Change it here.`
+      : `We pay for this test by Wise within ${HIRING.FEE_DAYS} days. Where should we send it?`}</p>${ok}${err}
     <form method="post" action="/apply/test/${escEmail(token)}/paypal" style="display:flex;gap:8px;flex-wrap:wrap">
-      <input name="paypal" type="email" required maxlength="${HIRING.LIMITS.paypal}" autocomplete="email" placeholder="Your PayPal email"
+      <input name="paypal" type="email" required maxlength="${HIRING.LIMITS.paypal}" autocomplete="email" placeholder="Your Wise email"
         value="${escEmail(first.fee_paypal || '')}" style="flex:1;min-width:220px">
       <button class="btn" type="submit">${first.fee_paypal ? 'Update' : 'Save'}</button></form></div>`;
 }
@@ -34935,7 +34935,7 @@ async function tellOwnerHiring(firstId, { unfinished = false } = {}) {
           ${g2 ? `<p>${escEmail(g2.summary)}</p>${g2.strengths.length ? `<p><b>Strengths</b></p>${li(g2.strengths)}` : ''}${
             g2.concerns.length ? `<p><b>Concerns</b></p>${li(g2.concerns)}` : ''}${
             g2.video_questions.length ? `<p><b>Questions still open for the video call</b></p>${li(g2.video_questions.map((q) => q.question))}` : ''}` : ''}` : ''}
-        <p><b>Test fee:</b> $${HIRING.TEST_FEE} ${first.fee_paid_at ? 'paid' : first.fee_paypal ? `to pay by PayPal to ${escEmail(first.fee_paypal)}` : 'to pay: no PayPal email yet'}
+        <p><b>Test fee:</b> $${HIRING.TEST_FEE} ${first.fee_paid_at ? 'paid' : first.fee_paypal ? `to pay by Wise to ${escEmail(first.fee_paypal)}` : 'to pay: no Wise email yet'}
           (<a href="${PUBLIC_BASE_URL}/admin/hiring">Test fees to pay</a>)</p>
         <p><a href="${PUBLIC_BASE_URL}/admin/hiring/${first.id}">See every answer</a></p>`,
     });
@@ -35027,7 +35027,7 @@ app.get('/admin/hiring', requireAdmin, async (req, res) => {
         ORDER BY submitted_at LIMIT 100`);
     const fees = owed.length ? `<div class="card" style="border-left:4px solid #F4A623"><b>Test fees to pay</b>
       ${pill(`${owed.length} · $${owed.length * HIRING.TEST_FEE}`, 'gold')}
-      <p class="muted">$${HIRING.TEST_FEE} each by PayPal (<a href="https://www.paypal.com/myaccount/transfer/homepage/pay" target="_blank" rel="noopener noreferrer">Send money</a>, as a payment for a service).
+      <p class="muted">$${HIRING.TEST_FEE} each by Wise (<a href="https://wise.com/send" target="_blank" rel="noopener noreferrer">Send money</a> to their email).
       Mark each one paid here and it goes on Finances as contract labor.</p>
       ${owed.map((f) => hireFeeRow(f)).join('')}</div>` : '';
     const { rows: [n] } = await pool.query(
@@ -35067,7 +35067,7 @@ function hireLinkCard(name, token, { round2 = false, role } = {}) {
     ? `Hi ${first}, thank you for your test: you are through to round 2! It is a few short questions about your answers (about ${HIRING.ROUND2_MINUTES} minutes). Open this private link when you have ${HIRING.ROUND2_MINUTES} quiet minutes; the clock starts when you press Start:
 ${escEmail(link)}
 Please write your own answers without AI tools. Thank you!`
-    : `Hi ${first}, thank you for applying to June's Tees! The next step for the ${escEmail(HIRING.roleOf(role).label.toLowerCase())} job is a short paid test ($15) in two parts: about ${mins} minutes now, then a ${HIRING.ROUND2_MINUTES}-minute round 2 on the same link a few minutes later. Please set aside about an hour. Open this private link when you have that time and a stable connection; the clock starts when you press Start:
+    : `Hi ${first}, thank you for applying to June's Tees! The next step for the ${escEmail(HIRING.roleOf(role).label.toLowerCase())} job is a short paid test ($${HIRING.TEST_FEE}) in two parts: about ${mins} minutes now, then a ${HIRING.ROUND2_MINUTES}-minute round 2 on the same link a few minutes later. Please set aside about an hour. Open this private link when you have that time and a stable connection; the clock starts when you press Start:
 ${escEmail(link)}
 The link works for ${HIRING.LINK_DAYS} days. Please write your own answers without AI tools. Thank you!`;
   return `<div class="card" style="border-left:4px solid #16a34a">
@@ -35249,11 +35249,11 @@ app.get('/admin/hiring/:id', requireAdmin, async (req, res) => {
 function hireFeeRow(f, from = 'list') {
   return `<div class="row-i"><span class="row-main" style="white-space:normal">
     <a href="/admin/hiring/${f.id}"><b>${escEmail(f.name)}</b></a> ${pill(HIRING.roleOf(f.role).label, 'neutral')}
-    <div class="row-sub">${f.fee_paypal ? `PayPal: <input readonly value="${escEmail(f.fee_paypal)}" onclick="this.select()" style="width:260px">`
-      : '<span class="muted">No PayPal email yet: they are asked for it on their thank-you page.</span>'}</div>
+    <div class="row-sub">${f.fee_paypal ? `Wise: <input readonly value="${escEmail(f.fee_paypal)}" onclick="this.select()" style="width:260px">`
+      : '<span class="muted">No Wise email yet: they are asked for it on their thank-you page.</span>'}</div>
     <form method="post" action="/admin/hiring/${f.id}/fee" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
       <input type="hidden" name="from" value="${from === 'page' ? 'page' : 'list'}">
-      <input name="ref" maxlength="${HIRING.LIMITS.ref}" placeholder="PayPal transaction ID (optional)" style="width:240px">
+      <input name="ref" maxlength="${HIRING.LIMITS.ref}" placeholder="Wise transfer ID (optional)" style="width:240px">
       <button class="btn" type="submit" name="action" value="paid">Mark $${HIRING.TEST_FEE} paid</button>
       <button class="btn btn-ghost" type="submit" name="action" value="skip">Don't pay</button></form></span></div>`;
 }
@@ -35263,7 +35263,7 @@ function hireFeeCard2(r) {
   if (!r.submitted_at) return '';
   const st = r.fee_paid_at ? pill(`Paid ${whenShort(r.fee_paid_at)}`, 'green') : r.fee_skip ? pill('Not paying', 'gray') : pill('To pay', 'gold');
   return `<div class="card"><b>Test fee ($${HIRING.TEST_FEE})</b> ${st}
-    <p class="muted">PayPal: ${escEmail(r.fee_paypal || 'not given yet')}${r.fee_ref ? ` · ref ${escEmail(r.fee_ref)}` : ''}</p>
+    <p class="muted">Wise: ${escEmail(r.fee_paypal || 'not given yet')}${r.fee_ref ? ` · ref ${escEmail(r.fee_ref)}` : ''}</p>
     ${!r.fee_paid_at && !r.fee_skip ? hireFeeRow(r, 'page') : ''}
     ${r.fee_skip && !r.fee_paid_at ? `<form method="post" action="/admin/hiring/${r.id}/fee"><button class="btn btn-ghost" name="action" value="unskip" type="submit">Pay it after all</button></form>` : ''}</div>`;
 }
@@ -35272,8 +35272,8 @@ function hireFeeCard2(r) {
  *  how far they got, and it mentions the test fee when one is paid or owed. */
 function hireRejectionBox(r, r2 = r._r2) {
   const kind = r2 && r2.grade && r2.grade.recommendation === 'interview' ? 'interview' : r.submitted_at ? 'test' : 'screening';
-  const fee = !r.submitted_at || r.fee_skip ? '' : r.fee_paid_at ? `Your $${HIRING.TEST_FEE} test fee has been sent by PayPal.`
-    : `Your $${HIRING.TEST_FEE} test fee will be sent by PayPal within ${HIRING.FEE_DAYS} days.`;
+  const fee = !r.submitted_at || r.fee_skip ? '' : r.fee_paid_at ? `Your $${HIRING.TEST_FEE} test fee has been sent by Wise.`
+    : `Your $${HIRING.TEST_FEE} test fee will be sent by Wise within ${HIRING.FEE_DAYS} days.`;
   const job = HIRING.roleOf(r.role).label.replace(/ \(.*\)$/, '').toLowerCase();
   const box = (k) => `<textarea readonly style="width:100%;min-height:96px" onclick="this.select()">${escEmail(HIRE_POSTING.rejectionMessage(k, { name: r.name, job, fee }))}</textarea>`;
   return `<p><b>Message to send them on OnlineJobs.ph</b> (${escEmail(HIRE_POSTING.REJECTIONS[kind].label.toLowerCase())}):</p>${box(kind)}
@@ -35405,7 +35405,7 @@ app.post('/admin/hiring/:id/fee', requireAdmin, async (req, res) => {
       await client.query(
         `INSERT INTO expenses (spent_on, category, amount, vendor, note, ext_ref)
          VALUES (CURRENT_DATE, 'Contract labor', $1, $2, $3, $4) ON CONFLICT DO NOTHING`,
-        [HIRING.TEST_FEE, r.name, `Applicant test fee (PayPal${r.fee_paypal ? ` to ${r.fee_paypal}` : ''}${ref ? `, ref ${ref}` : ''})`.slice(0, 500), `hire-fee:${r.id}`]);
+        [HIRING.TEST_FEE, r.name, `Applicant test fee (Wise${r.fee_paypal ? ` to ${r.fee_paypal}` : ''}${ref ? `, ref ${ref}` : ''})`.slice(0, 500), `hire-fee:${r.id}`]);
       await client.query('UPDATE hiring_tests SET fee_paid_at = NOW(), fee_ref = $2, fee_skip = false WHERE id = $1', [id, ref]);
     } else {
       await client.query('UPDATE hiring_tests SET fee_skip = $2 WHERE id = $1', [id, action === 'skip']);
