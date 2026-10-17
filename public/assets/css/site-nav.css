@@ -2,7 +2,26 @@
    page's own header CSS can reach it, and it reaches nothing of theirs. */
 .jtn-bar{background:#0B1F4B;color:#fff;text-align:center;font:600 .8rem/1.4 Inter,system-ui,sans-serif;padding:.55rem 1rem;}
 .jtn-bar a{color:#fff;text-decoration:underline;}
-.jtn-bar span{opacity:.6;margin:0 .45rem;}
+.jtn-bar span[aria-hidden]{opacity:.6;margin:0 .45rem;}
+/* Blue bar, services ticker and menu stick to the top together (owner,
+   2026-10-17). One sticky box, so the three can never overlap or drift. */
+.jtn-sticky{position:sticky;top:0;z-index:1000;}
+.jtn-sticky .jtn{position:relative;}
+/* In-page links (#contact, #shop) land below the pinned top, not under it. */
+html{scroll-padding-top:140px;}
+@media(max-width:640px){html{scroll-padding-top:120px;}}
+/* "Design Studio" mentions in page text link to the designer; pages reset
+   a{color:inherit;text-decoration:none}, so give them a look of their own. */
+a.jt-studio{color:#1848B8;font-weight:700;text-decoration:underline;text-underline-offset:3px;}
+.jtn-tick{background:#FFF8EF;border-bottom:1px solid #E7E3DB;overflow:hidden;font-family:Inter,system-ui,sans-serif;}
+.jtn-tick-track{display:flex;width:max-content;animation:jtn-tick 40s linear infinite;}
+.jtn-tick:hover .jtn-tick-track{animation-play-state:paused;}
+.jtn-tick-i{white-space:nowrap;padding:.4rem 1.6rem;font-size:.74rem;font-weight:700;color:#0B1F4B;text-transform:uppercase;letter-spacing:.08em;}
+.jtn-tick-i b{color:#F0275A;margin-right:.35rem;}
+@media(max-width:1100px){.jtn-bar-x{display:none;}}
+@media(max-width:640px){.jtn-bar{font-size:.74rem;padding:.4rem .75rem;}.jtn-tick-i{padding:.32rem 1.1rem;font-size:.68rem;}}
+@keyframes jtn-tick{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+@media(prefers-reduced-motion:reduce){.jtn-tick-track{animation:none;}}
 .jtn{position:sticky;top:0;z-index:1000;background:#fff;border-bottom:1px solid #E5E7EB;font-family:Inter,system-ui,sans-serif;}
 .jtn-in{max-width:1280px;margin:0 auto;padding:.6rem 1.25rem;display:flex;align-items:center;gap:1rem;}
 .jtn a{text-decoration:none;}
@@ -15,7 +34,7 @@
 .jtn-menu>a:hover,.jtn-dd-t:hover,.jtn-dd.open .jtn-dd-t{background:#EFF4FF;color:#1848B8;}
 .jtn-dd{position:relative;}
 .jtn-dd-t::after{content:"";display:inline-block;margin-left:.35rem;border:4px solid transparent;border-top-color:currentColor;transform:translateY(2px);}
-.jtn-dd-m{display:none;position:absolute;top:100%;left:0;min-width:230px;background:#fff;border:1px solid #E5E7EB;border-radius:12px;box-shadow:0 14px 34px rgba(11,31,75,.14);padding:.45rem;z-index:1001;max-height:calc(100vh - 90px);overflow-y:auto;overscroll-behavior:contain;}
+.jtn-dd-m{display:none;position:absolute;top:100%;left:0;min-width:230px;background:#fff;border:1px solid #E5E7EB;border-radius:12px;box-shadow:0 14px 34px rgba(11,31,75,.14);padding:.45rem;z-index:1001;max-height:calc(100vh - 150px);overflow-y:auto;overscroll-behavior:contain;}
 .jtn-dd:hover .jtn-dd-m,.jtn-dd:focus-within .jtn-dd-m,.jtn-dd.open .jtn-dd-m{display:block;}
 .jtn-dd-m a{display:block;color:#374151;font:500 .9rem Inter,system-ui,sans-serif;padding:.5rem .7rem;border-radius:8px;}
 .jtn-dd-m a:hover{background:#F7F6F3;color:#0B1F4B;}
