@@ -76,6 +76,7 @@ test('the ad pages make no promise the owner has taken back', () => {
     assert.doesNotMatch(body, /\b12\+/, rel);
     assert.doesNotMatch(body, /Grab it curbside/, rel);
     assert.doesNotMatch(body, /24.48 hour/, rel);
+    assert.doesNotMatch(body, /fast turnaround|rush options|same[- ]day|1–2 days|week of graduation/i, rel);
   }
   // the announcement bar is on every page: no rush promise there
   const nav = JSON.parse(read('assets/data/site-nav.json'));
