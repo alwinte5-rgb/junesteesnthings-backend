@@ -49,7 +49,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { urlFromStdinJson, mysql, enjson, dejson, encodePrintings, decodePrintings, sq } = require('./lib/db');
-const { classify, ROLES, DECORATIONS, resolveRoles } = require('./lib/garments');
+const { classify, ROLES, decorationsFor, OPTIONAL_ROLES, resolveRoles } = require('./lib/garments');
 const { colorTable } = require('./lib/screenprint');
 
 const APPLY = process.argv.includes('--apply');
@@ -177,7 +177,7 @@ function main(url) {
   /* ── 2. Which methods are switched on ────────────────────────────────── */
 
   const { ids: roleId, missing } = resolveRoles(methods);
-  const blocking = missing.filter((r) => r !== 'screen');
+  const blocking = missing.filter((r) => r !== 'screen' && !OPTIONAL_ROLES.includes(r));
   if (blocking.length) {
     throw new Error('these decoration roles have no matching method:\n    ' + blocking.join('\n    ') +
       '\n\n  Run  railway variables --service MySQL --json | node tools/reprice-anchorfish-2026.js --apply' +
@@ -241,7 +241,7 @@ function main(url) {
     const id = Number(p.id);
     if (QUOTE_ONLY.includes(id)) continue;
     const cls = classify(p.name);
-    const roles = DECORATIONS[cls];
+    const roles = decorationsFor(p.name);
     if (!roles) { unknown.push(p); continue; }
 
     const wantIds = roles.map(idFor).filter((n) => Number.isFinite(n)).sort((a, b) => a - b);

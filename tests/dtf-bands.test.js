@@ -1,4 +1,5 @@
-/* The DTF bands the owner set on 2026-10-15: 1-4, 5-11, 12-24. Read from the
+/* The DTF bands the owner set on 2026-10-15: 1-4, 5-11, 12-24 (1-4 main
+   print lowered to $20.75 on 2026-10-17). Read from the
    generator's own dry run, so the statement it would write is what is checked. */
 const test = require('node:test');
 const assert = require('node:assert');
@@ -20,7 +21,7 @@ test('small-run DTF bands are 1-4, 5-11, 12-24 at the owner\'s prices', () => {
   const v = dejson(stmt).values;
   const main = Object.fromEntries(Object.entries(v.id).map(([q, p]) => [q, p.price]));
   const add = Object.fromEntries(Object.entries(v.mr8a5dlx).map(([q, p]) => [q, p.price]));
-  assert.deepStrictEqual([main['4'], main['11'], main['24']], ['23.20', '20.75', '18.30']);
+  assert.deepStrictEqual([main['4'], main['11'], main['24']], ['20.75', '20.75', '18.30']);
   assert.deepStrictEqual([add['4'], add['11'], add['24']], ['5.95', '5.90', '5.85']);
   assert.strictEqual(main['3'], undefined, 'the old 1-3 band is gone');
 });
