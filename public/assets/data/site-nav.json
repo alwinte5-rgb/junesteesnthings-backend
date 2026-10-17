@@ -113,7 +113,7 @@
         },
         {
           "label": "Get Design Help →",
-          "href": "/#contact",
+          "href": "/contact",
           "strong": true
         }
       ]
@@ -184,7 +184,7 @@
   "instagram": "https://www.instagram.com/jtees228",
   "quote": {
     "label": "Get a Quote",
-    "href": "/#contact"
+    "href": "/contact"
   },
   "design": {
     "label": "Start Designing",

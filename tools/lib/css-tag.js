@@ -31,4 +31,16 @@ function cssTag(href) {
   return { href, v, tag, put };
 }
 
-module.exports = { cssTag };
+/* The same stamp for a deferred script, for pages that already load it: an
+ * existing <script src="…" defer> is re-stamped where it stands, and a page
+ * without one is left alone. Used for /assets/js/quote-form.js, whose markup
+ * hooks must match the page's HTML (which is never cached). */
+function scriptTag(src) {
+  const v = crypto.createHash('sha1').update(fs.readFileSync(path.join(PUBLIC, src))).digest('hex').slice(0, 8);
+  const tag = `<script src="${src}?v=${v}" defer></script>`;
+  const any = new RegExp(`<script src="${src.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}(?:\\?v=[0-9a-f]+)?" defer><\\/script>`, 'g');
+  const put = (html) => html.replace(any, tag);
+  return { src, v, tag, put };
+}
+
+module.exports = { cssTag, scriptTag };

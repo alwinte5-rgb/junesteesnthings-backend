@@ -50,8 +50,12 @@ test('every menu link goes somewhere real', () => {
     } else if (href.startsWith('/#')) {
       assert.match(read('index.html'), new RegExp(`id="${href.slice(2)}"`), 'homepage has ' + href);
     } else {
-      const file = href.endsWith('/') ? href + 'index.html' : href;
+      // An extensionless page (/contact) is a file plus its own route in server.js.
+      const bare = !href.endsWith('/') && !path.extname(href);
+      const file = href.endsWith('/') ? href + 'index.html' : bare ? href + '.html' : href;
       assert.ok(fs.existsSync(path.join(PUBLIC, file)), 'page exists: ' + href);
+      if (bare) assert.match(fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8'),
+        new RegExp(`app\\.get\\('${href.replace(/[/]/g, '\\/')}'`), 'server.js serves ' + href);
     }
   }
   assert.ok(!links.includes('https://design.jtees.net/'), "never the designer's front page, which will redirect home");

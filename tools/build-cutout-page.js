@@ -386,7 +386,7 @@ const BODY = `<section class="hero">
     </div>
     <div class="hero-badges">
       <div class="hero-badge">Chicago &mdash; 3047 N Lincoln Ave</div>
-      <div class="hero-badge">Curbside pickup</div>
+      <div class="hero-badge">Pickup by appointment</div>
       <div class="hero-badge">Any photo, any face</div>
     </div>
   </div>
@@ -483,7 +483,7 @@ ${!singles.length ? '' : `<section>
     <p>Text it over and we will come back with a price and a date.</p>
     <div class="hero-btns" style="justify-content:center">
       <a href="sms:+17739004592?&amp;body=Hi%20June%27s%20Tees!%20I%27d%20like%20big%20head%20cutouts." class="btn btn-gold">Text (773) 900-4592</a>
-      <a href="/#contact" class="btn btn-outline-white">Email us</a>
+      <!--email_off--><a href="mailto:support@jtees.net" class="btn btn-outline-white">Email us</a><!--/email_off-->
     </div>
   </div>
 </div>
