@@ -40,6 +40,7 @@ const DATA = path.join(PUBLIC, 'assets', 'data', 'page-blocks.json');
 const REVIEWS = path.join(PUBLIC, 'assets', 'data', 'reviews.json');
 // Hash-stamped (tools/lib/css-tag.js), like site-nav.css.
 const BLOCKS_CSS = require('./lib/css-tag').cssTag('/assets/css/page-blocks.css');
+const { assetStamp } = require('./lib/css-tag');
 const FEED_TAG = '<script src="/assets/js/shop-feed.js?v=20261017" defer></script>';
 const PHONE = { tel: '+17739004592', display: '(773) 900-4592' };
 const EMAIL = 'support@jtees.net';
@@ -59,11 +60,20 @@ const studioLink = (html, from) => html.replace(/Design Studio/, `<a href="${STU
 
 function fromTag(rel) {
   const [dir, file] = rel.split('/');
-  const pre = { services: 'svc', areas: 'area', blog: 'blog' }[dir] || 'page';
+  const pre = { services: 'svc', areas: 'area', blog: 'blog', occasions: 'occ' }[dir] || 'page';
   return `${pre}_${file.replace(/\.html$/, '').replace(/[^a-z0-9]+/gi, '_')}`;
 }
 
 function workImg(key) { return `/assets/images/work/${key}.jpg`; }
+/* The address a page uses: stamped with the photo's own hash, so a photo
+   replaced under the same name (a rotation, a tighter crop) is fetched fresh
+   instead of served from a cache (owner, 2026-10-17: the rotated photo still
+   showed upside down). */
+const stamp = new Map();
+function workSrc(key) {
+  if (!stamp.has(key)) stamp.set(key, assetStamp(workImg(key)));
+  return `${workImg(key)}?v=${stamp.get(key)}`;
+}
 
 /* A JPEG's own width and height, from its frame header, so the photos are
    shown at their real shape (never cropped) and the page keeps their space
@@ -88,7 +98,7 @@ function heroBlock(data, page) {
   if (!page.hero) return '';
   const [s, e] = mark('pb-hero');
   return `${s}
-<figure class="pb-hero-img"><img src="${workImg(page.hero)}" alt="${esc(data.work[page.hero])} by June's Tees &amp; Things, Chicago" ${dims(page.hero)} fetchpriority="high" /></figure>
+<figure class="pb-hero-img"><img src="${workSrc(page.hero)}" alt="${esc(data.work[page.hero])} by June's Tees &amp; Things, Chicago" ${dims(page.hero)} fetchpriority="high" /></figure>
 ${e}`;
 }
 
@@ -174,7 +184,11 @@ ${e}`;
 function workBlock(data, page) {
   if (!page.work || !page.work.length) return '';
   const [s, e] = mark('pb-work');
-  const items = page.work.map((k) => `<figure><img src="${workImg(k)}" alt="${esc(data.work[k])}" loading="lazy" ${dims(k)} /><figcaption>${esc(data.work[k])}</figcaption></figure>`).join('\n    ');
+  /* A photo wider than its 3:4 tile sits whole on a blurred copy of itself:
+     a second lazy <img>, not a CSS background, so it still waits for the
+     scroll like the photo does (and comes from the same cached file). */
+  const backdrop = (k) => { const d = jpegSize(path.join(PUBLIC, workImg(k))); return d.w / d.h > 0.8 ? `<img class="pb-bd" src="${workSrc(k)}" alt="" aria-hidden="true" loading="lazy" ${dims(k)} />` : ''; };
+  const items = page.work.map((k) => `<figure>${backdrop(k)}<img src="${workSrc(k)}" alt="${esc(data.work[k])}" loading="lazy" ${dims(k)} /><figcaption>${esc(data.work[k])}</figcaption></figure>`).join('\n    ');
   return `${s}
 <section class="pb-work" aria-labelledby="pb-work-h">
   <div class="pb-wrap">
@@ -290,11 +304,19 @@ function apply(html, rel, data, reviews) {
   return html;
 }
 
+/* The holiday, event and new service pages (assets/data/occasion-pages.json,
+   tools/occasion-pages.js) list their own photos and cards there, so one
+   file describes each of those pages; they join the list here. */
+const OCCASION_DATA = path.join(PUBLIC, 'assets', 'data', 'occasion-pages.json');
+
 function load() {
-  return {
-    data: JSON.parse(fs.readFileSync(DATA, 'utf8')),
-    reviews: JSON.parse(fs.readFileSync(REVIEWS, 'utf8')),
-  };
+  const data = JSON.parse(fs.readFileSync(DATA, 'utf8'));
+  if (fs.existsSync(OCCASION_DATA)) {
+    for (const o of JSON.parse(fs.readFileSync(OCCASION_DATA, 'utf8')).pages) {
+      data.pages[o.path] = { heading: o.heading, products: o.products, hero: o.hero, work: o.work, ...(o.short_gallery ? { short_gallery: o.short_gallery } : {}) };
+    }
+  }
+  return { data, reviews: JSON.parse(fs.readFileSync(REVIEWS, 'utf8')) };
 }
 
 /* Every id, link and photo in the data file must be real before any page is
@@ -310,7 +332,7 @@ function validate(data) {
   }
   for (const k of Object.keys(data.work)) if (!fs.existsSync(path.join(PUBLIC, workImg(k)))) bad.push(`work photo missing: ${k}`);
   for (const [rel, p] of Object.entries(data.pages)) {
-    if (!fs.existsSync(path.join(PUBLIC, rel))) bad.push(`${rel}: no such page`);
+    if (!fs.existsSync(path.join(PUBLIC, rel))) bad.push(`${rel}: no such page`); // a new occasion page: run tools/occasion-pages.js --write first
     for (const id of p.products || []) if (!data.catalog[id]) bad.push(`${rel}: unknown product ${id}`);
     for (const k of [p.hero, ...(p.work || [])].filter(Boolean)) if (!data.work[k]) bad.push(`${rel}: unknown work photo ${k}`);
     if (!p.heading || !(p.products || []).length) bad.push(`${rel}: needs a heading and products`);

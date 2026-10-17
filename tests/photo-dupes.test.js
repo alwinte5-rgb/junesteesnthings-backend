@@ -34,7 +34,8 @@ function shown() {
   const where = new Map();
   for (const rel of NAV.pages()) {
     const html = read(rel);
-    for (const m of html.matchAll(/<img[^>]+src="(\/assets\/images\/(?:work|occasions)\/[^"]+)"/g)) {
+    // class="pb-bd" is a gallery photo's own blurred backdrop, not a second showing.
+    for (const m of html.matchAll(/<img(?![^>]*class="pb-bd")[^>]+src="(\/assets\/images\/(?:work|occasions)\/[^"?]+)(?:\?[^"]*)?"/g)) {
       if (!where.has(m[1])) where.set(m[1], []);
       where.get(m[1]).push(rel);
     }

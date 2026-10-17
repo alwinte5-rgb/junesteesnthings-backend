@@ -43,7 +43,8 @@ test("the Design Studio's copy has only absolute links, plus cart and account", 
 
 test('every menu link goes somewhere real', () => {
   const nav = JSON.parse(read('assets/data/site-nav.json'));
-  const links = nav.menu.flatMap((m) => m.items ? m.items : [m]).map((i) => i.href);
+  const flat = (list) => list.flatMap((i) => (i.items ? flat(i.items) : [i]));
+  const links = flat(nav.menu).map((i) => i.href);
   for (const href of links) {
     if (href.startsWith('https://design.jtees.net/')) {
       assert.match(href, /^https:\/\/design\.jtees\.net\/(products\.php(\?category_id=\d+)?|collection\.php\?c=[a-z-]+|editor\.php\?product_base=\d+)$/, href);
@@ -72,7 +73,7 @@ test('no page keeps a header script that throws without the old header', () => {
 });
 
 test('the review strip sits above the footer on pages without their own reviews block', () => {
-  const blockPages = new Set(Object.keys(JSON.parse(read('assets/data/page-blocks.json')).pages));
+  const blockPages = new Set(Object.keys(require('../tools/page-blocks').load().data.pages));
   for (const rel of NAV.pages()) {
     const html = read(rel);
     if (NAV.NO_REVIEWS.has(rel) || blockPages.has(rel)) {

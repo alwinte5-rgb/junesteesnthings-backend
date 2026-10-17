@@ -1,12 +1,19 @@
 {
  "_about": "dHash of every site photo (tools/photo-dupes.py). Regenerate after adding or replacing a photo.",
  "photos": {
-  "/assets/images/work/agent-d-healing-shirt.jpg": {
+  "/assets/images/work/africa-map-shirt.jpg": {
    "h": [
-    "c10a1a0e20000063",
-    "2d3596c300000042"
+    "e4a46d06c6edf9c3",
+    "84e88e0303c6ccf9"
    ],
-   "sha1": "5d247eca30b4be04acbb844c7ffc103392850ac2"
+   "sha1": "782ba65c37968b49e8eb2e4fc7b83b11fd27e0f6"
+  },
+  "/assets/images/work/afrolicious-design.jpg": {
+   "h": [
+    "e6d6b6c6d3db9aae",
+    "b7728ea5d1d14a48"
+   ],
+   "sha1": "f7a63ab6bbabf1547c048582f19ee2e7dec0c362"
   },
   "/assets/images/work/aint-no-family-reunion-shirt.jpg": {
    "h": [
@@ -29,6 +36,13 @@
    ],
    "sha1": "6d7370211133fbc547c74ad1f363efb2e3a451be"
   },
+  "/assets/images/work/anniversary-60-shirt.jpg": {
+   "h": [
+    "33e4d4a669516327",
+    "56555b4b6ddcb4a1"
+   ],
+   "sha1": "8c275ea7d48ef478c222a681186b084c2e8b3c60"
+  },
   "/assets/images/work/artist-event-banner.jpg": {
    "h": [
     "1d0b078e791b181c",
@@ -43,12 +57,26 @@
    ],
    "sha1": "fdbba018ef078f2cd51ad2ccb672c3b7a8a80108"
   },
+  "/assets/images/work/baby-shower-bear-tee.jpg": {
+   "h": [
+    "b23d1b930b0bc0c0",
+    "6f092911292c0c80"
+   ],
+   "sha1": "4ab5aa14f97c966a9a6a0c9bcbdad4b462219290"
+  },
   "/assets/images/work/bachelorette-sashes.jpg": {
    "h": [
     "9318193838383b33",
     "3638383db838b8a9"
    ],
    "sha1": "d8347f5d224619437753712bad53fe2df9257e15"
+  },
+  "/assets/images/work/bachelorette-trip-design.jpg": {
+   "h": [
+    "2129c0f8b0d08c69",
+    "15e88ad8693212c9"
+   ],
+   "sha1": "ea0d08a933d587498a00739854d5291c22188c3c"
   },
   "/assets/images/work/barber-business-shirts.jpg": {
    "h": [
@@ -57,12 +85,26 @@
    ],
    "sha1": "40b41de3bbc5b54af8264925892346dda1fb136c"
   },
+  "/assets/images/work/be-mine-wine-gift-set.jpg": {
+   "h": [
+    "1c325c5999bea767",
+    "331a9a9e18794c65"
+   ],
+   "sha1": "d903e95e9e167c3036f9cff4fb159a1d48339a7d"
+  },
   "/assets/images/work/best-dad-photo-mug.jpg": {
    "h": [
     "72ccf9f930b8525b",
     "b6ac2cd4747818b9"
    ],
    "sha1": "899ddd499aa14b9a3cc2012de87267791b3860c5"
+  },
+  "/assets/images/work/bewitched-shirt.jpg": {
+   "h": [
+    "8c1b391706100401",
+    "59d8d03787380202"
+   ],
+   "sha1": "b6d58016fe2abd27b8a7e89107a7ccf42518f842"
   },
   "/assets/images/work/big-head-cutouts-being-cut.jpg": {
    "h": [
@@ -85,26 +127,12 @@
    ],
    "sha1": "ce37b10f2a95e20a3cfb5078870b53b935630272"
   },
-  "/assets/images/work/birdman-graphic-tee.jpg": {
-   "h": [
-    "53f4fcf068ece407",
-    "206eb6c4ec8c46eb"
-   ],
-   "sha1": "751aaada52afd6e2d1c481ecc8cd6b9b94528784"
-  },
   "/assets/images/work/birthday-crew-matching-shirts.jpg": {
    "h": [
     "ccce073b333b232b",
     "9f132fdb79715d55"
    ],
    "sha1": "2bf34ca2b50cf0648178d05a5e10bfb0df10a081"
-  },
-  "/assets/images/work/birthday-gma-shirt.jpg": {
-   "h": [
-    "7464e7c94b4b0550",
-    "d6d6d994d2cd85a4"
-   ],
-   "sha1": "e01cfd3adcf9d8bb2d3395e50ab7d87d0f964982"
   },
   "/assets/images/work/birthday-party-flyer.jpg": {
    "h": [
@@ -113,12 +141,47 @@
    ],
    "sha1": "b8785d0e932b0cf550d558e0d0d74057948ba91a"
   },
+  "/assets/images/work/black-king-facts-design.jpg": {
+   "h": [
+    "2665c9d635787931",
+    "566aaab24af4b8f8"
+   ],
+   "sha1": "0ac3945bd51de92c8e9295efa0ba8ab4644f5690"
+  },
+  "/assets/images/work/black-king-print.jpg": {
+   "h": [
+    "47c3c1e0f0f0c4ef",
+    "c3d8e0e4b8e9c895"
+   ],
+   "sha1": "df8ade48e496536b32481a3d162f5d73209bf763"
+  },
+  "/assets/images/work/blacknificent-design.jpg": {
+   "h": [
+    "8206df9a9aeab200",
+    "03da559998a4fa75"
+   ],
+   "sha1": "66a137d4cc7b0cb026fa2b59aa1de8ab8d31717e"
+  },
+  "/assets/images/work/boo-bees-shirt.jpg": {
+   "h": [
+    "4dbee8c8bf9f4bef",
+    "b24d88aaffff0f97"
+   ],
+   "sha1": "f4bb778b0bbb7df4d54f6700d2d7b4845b492534"
+  },
   "/assets/images/work/brain-heart-graphic-tee.jpg": {
    "h": [
     "dace4e98b8114282",
     "8eced91c7930b811"
    ],
    "sha1": "125bc73572b3582e2e24d26f153349494856e2d2"
+  },
+  "/assets/images/work/bridesmaid-glitter-caps.jpg": {
+   "h": [
+    "006d6de9b2323673",
+    "c644ed4d30713333"
+   ],
+   "sha1": "94b23811e16b11fe78e626111dca9dc1d49fa2b0"
   },
   "/assets/images/work/bridesmaid-wine-glass.jpg": {
    "h": [
@@ -155,6 +218,13 @@
    ],
    "sha1": "101d99a14707d249c2b190018beb0aeeccae37a8"
   },
+  "/assets/images/work/chi-town-flag-tee.jpg": {
+   "h": [
+    "eaf0b2923bbb9b9e",
+    "e0743911392c2d2d"
+   ],
+   "sha1": "7184aa45b3d0461563444ae5826bc2af5e2443fe"
+  },
   "/assets/images/work/chicago-2023-tank.jpg": {
    "h": [
     "cecc33230f808080",
@@ -169,12 +239,26 @@
    ],
    "sha1": "86f4b86ab1ad99a08c5df945291c5029441f8cf0"
   },
+  "/assets/images/work/christmas-photo-gift-wrap.jpg": {
+   "h": [
+    "c363e8eac3e3688a",
+    "d0cd51cdcb92d8dc"
+   ],
+   "sha1": "4bfb08217885bfc5f75ba11317e565784c1cee4b"
+  },
+  "/assets/images/work/christmas-photo-socks.jpg": {
+   "h": [
+    "53676c1e731009ed",
+    "c3c61eb4d1d25888"
+   ],
+   "sha1": "6d73bc0ac1ed16e5a59eb923b146afeaa387bc2c"
+  },
   "/assets/images/work/class-reunion-screen-print.jpg": {
    "h": [
-    "6b7333b33333373b",
-    "5532b333333333b3"
+    "20376b3333755d1c",
+    "37c971333333aabe"
    ],
-   "sha1": "edc4e2611584a802662e75e247bb83a58304a0c0"
+   "sha1": "90a8b3b628c42f8fe814b104abb3ba70d68e5349"
   },
   "/assets/images/work/cleaning-business-sign.jpg": {
    "h": [
@@ -203,6 +287,13 @@
     "6c5555cd2925cc6a"
    ],
    "sha1": "57fb313aa884f2518eb5e865ac5676edfdbec9d9"
+  },
+  "/assets/images/work/crest-logo-tee.jpg": {
+   "h": [
+    "e8cb8e06b6fff7ff",
+    "890e0f4353ffffe7"
+   ],
+   "sha1": "b320d78c20254edbb10b54b24434066773f658c8"
   },
   "/assets/images/work/crushers-shirt.jpg": {
    "h": [
@@ -246,12 +337,33 @@
    ],
    "sha1": "d14ac8a76677f78073ba37f7c3528749de09ea53"
   },
+  "/assets/images/work/dance-mom-shirt.jpg": {
+   "h": [
+    "71c1d8d4dcfcbc0f",
+    "8080d4d6de2e7e3e"
+   ],
+   "sha1": "8e017b81eb829b144c1587956d9ed3a57b2821ef"
+  },
+  "/assets/images/work/dear-mommy-ultrasound-shirt.jpg": {
+   "h": [
+    "00c3d4d4ccb494df",
+    "a19eb6069b997436"
+   ],
+   "sha1": "453c874838f8c6b531c01481a7e7350347747a9c"
+  },
   "/assets/images/work/design-studio-live.jpg": {
    "h": [
     "c14c9c9a1c181c1c",
     "9e9ab4b49e9a9a9a"
    ],
    "sha1": "884e844aba833f514ef5b8afc835a526ddfdc89e"
+  },
+  "/assets/images/work/doctor-title-mug.jpg": {
+   "h": [
+    "3f9c0793838b1387",
+    "1612173121090811"
+   ],
+   "sha1": "78c941504537b05efb824bdb897bfdf94b4552ff"
   },
   "/assets/images/work/dp-productions-shirt.jpg": {
    "h": [
@@ -274,13 +386,6 @@
    ],
    "sha1": "a17da357c315a363bea639cccb7a20aa79817174"
   },
-  "/assets/images/work/embroidered-company-hoodie.jpg": {
-   "h": [
-    "232779f3f3f39f1f",
-    "57def8f1f1e1333f"
-   ],
-   "sha1": "43b9765395a8d7156226120bdfc90926b2acffb0"
-  },
   "/assets/images/work/embroidered-company-quarter-zip.jpg": {
    "h": [
     "2c19314c1180c0e0",
@@ -288,19 +393,26 @@
    ],
    "sha1": "43e14b596a0255f761739df053d6ca6d43b1318e"
   },
-  "/assets/images/work/embroidered-jj-goods-jacket.jpg": {
+  "/assets/images/work/embroidered-eagle-logo-cap.jpg": {
    "h": [
-    "090c3e3f1f0f5f5f",
-    "5b6f3f371f0fdf9f"
+    "6ed3aa26fcdbfbf1",
+    "90686de76e9cbcfc"
    ],
-   "sha1": "6af5477cd8c8f51641bc89bfe13e1e9ec0b3d34b"
+   "sha1": "c5fb20d23be3ae4b9c24d302011a4ff91a267c40"
+  },
+  "/assets/images/work/embroidered-jesus-is-lord-cap.jpg": {
+   "h": [
+    "38e09bc3e6ee872e",
+    "81141480c3e79f01"
+   ],
+   "sha1": "65ef34b898797e94d5a009a9929fb06b37c5c526"
   },
   "/assets/images/work/embroidered-logo-vests.jpg": {
    "h": [
-    "0c1c66624849e8f8",
-    "3e42e16925ccd868"
+    "211c1c625868f8f0",
+    "2e3e63612dd8c8a8"
    ],
-   "sha1": "89e0f5d136c250e9c920efde2c97fda7f413030a"
+   "sha1": "25f8a1c6298547f80330bb286b8a7ab7e4d4bc88"
   },
   "/assets/images/work/embroidered-music-patch.jpg": {
    "h": [
@@ -309,13 +421,6 @@
    ],
    "sha1": "89623c431f9d19522bca4676929e4494ea224fca"
   },
-  "/assets/images/work/embroidered-name-hoodie.jpg": {
-   "h": [
-    "ccb6531f37939248",
-    "7393332552393431"
-   ],
-   "sha1": "b90e35e299c1f8233bde01d0dc6555ba7088d1a2"
-  },
   "/assets/images/work/embroidered-purple-polo.jpg": {
    "h": [
     "225c130563606080",
@@ -323,7 +428,14 @@
    ],
    "sha1": "90cfe9c68883aecb868c3833d36dbbdd8d1aecdb"
   },
-  "/assets/images/work/embroidered-skate-hoodie.jpg": {
+  "/assets/images/work/embroidered-skate-cap.jpg": {
+   "h": [
+    "f09cb0b0f49e8ef0",
+    "1f1b6958e8930f0f"
+   ],
+   "sha1": "51e66b9640ee11da5a90703b69b2a72f46bc37ef"
+  },
+  "/assets/images/work/embroidered-stay-focus-polo.jpg": {
    "h": [
     "e0f81697712e84e9",
     "1c2f372214d42b0c"
@@ -344,13 +456,6 @@
    ],
    "sha1": "4bfc447f45500df59151103b15d806faec72dcc3"
   },
-  "/assets/images/work/embroidery-skates-in-hoop.jpg": {
-   "h": [
-    "03010e078fcc63e0",
-    "084e0321079e9881"
-   ],
-   "sha1": "cf3c75904be67ee50493ba514719ca1161c141ef"
-  },
   "/assets/images/work/engraved-flasks.jpg": {
    "h": [
     "c022158c98948802",
@@ -365,12 +470,26 @@
    ],
    "sha1": "7178e7b5620090b10062bea5d757548d6fbf11fe"
   },
+  "/assets/images/work/etched-partner-glass.jpg": {
+   "h": [
+    "fc9c1e1f9fad6f0e",
+    "0b3f5b3fad1646c6"
+   ],
+   "sha1": "0cff665663f346d17e72186e2da9f7e8576e7ddf"
+  },
   "/assets/images/work/event-decor-party.jpg": {
    "h": [
     "854d2d3133323276",
     "8a4e5e6169715171"
    ],
    "sha1": "aa8ba1034fafba7600b47cc70f5195e7a1727bce"
+  },
+  "/assets/images/work/family-christmas-2022-shirts.jpg": {
+   "h": [
+    "907133272bd1d0fd",
+    "e0d5d5d2e4481810"
+   ],
+   "sha1": "e475f9ba449c7dd658c35018f1b9dfe0449b5dd2"
   },
   "/assets/images/work/family-puzzle-keepsakes.jpg": {
    "h": [
@@ -385,6 +504,20 @@
     "3c1c19ba7c7c7e5f"
    ],
    "sha1": "c00c96e5d25fe7c2e9189f4fa68ddeb7fb8846d3"
+  },
+  "/assets/images/work/family-reunion-roots-tee.jpg": {
+   "h": [
+    "1ffafafad2cac8c8",
+    "d2aadad53169d5dc"
+   ],
+   "sha1": "e88f886c06c330eaa363c8e7ffa4345f16ccfa60"
+  },
+  "/assets/images/work/fifty-never-looked-so-good-tee.jpg": {
+   "h": [
+    "c8a88c8c8ecee6cc",
+    "722e8e1f0b0d0f6d"
+   ],
+   "sha1": "89d41608388fe5ed8bd5463560545e58eb0fbe26"
   },
   "/assets/images/work/forgiven-shirt.jpg": {
    "h": [
@@ -442,6 +575,13 @@
    ],
    "sha1": "82bd07778854d2a0c6c02e77ffe96bfd45b44733"
   },
+  "/assets/images/work/glitter-name-mom-shirt.jpg": {
+   "h": [
+    "e49a1a22b32bc6cf",
+    "292ded6b69696ec5"
+   ],
+   "sha1": "a29d19e6598c84c9f2e4a7a6ac0e037cbc0dcd31"
+  },
   "/assets/images/work/goat-shirt.jpg": {
    "h": [
     "9cb60b0f9692a080",
@@ -455,6 +595,13 @@
     "3133b371797c4e04"
    ],
    "sha1": "ee0fa382ad5f233280bca2d86843349cfe0d49b6"
+  },
+  "/assets/images/work/good-witch-shirt.jpg": {
+   "h": [
+    "114e4f1f2e4d7532",
+    "4f8e1f1f5955aeea"
+   ],
+   "sha1": "136c0b822eb40012b2f34c9379a9b03ccdeda332"
   },
   "/assets/images/work/graduate-yard-sign.jpg": {
    "h": [
@@ -483,6 +630,13 @@
     "1717a7936cd65676"
    ],
    "sha1": "c9cb30caf5a2b235f9da09ca039cc6a6b92b253b"
+  },
+  "/assets/images/work/happy-valentines-wine-bag-set.jpg": {
+   "h": [
+    "0e1edececeec0c38",
+    "1fbf9f1f0eecd486"
+   ],
+   "sha1": "9286bd8ed3b5f8f2d219aee096725a93696d12d4"
   },
   "/assets/images/work/heritage-countries-tee.jpg": {
    "h": [
@@ -526,12 +680,61 @@
    ],
    "sha1": "4851312d8873f4a3caeb25ca76190557fb2f2b31"
   },
+  "/assets/images/work/juice-hoodie.jpg": {
+   "h": [
+    "71e89617aa8adccc",
+    "f0213729659dd555"
+   ],
+   "sha1": "c0d84295fb8f783c49c077b4f4dc74a83cbab746"
+  },
+  "/assets/images/work/juneteenth-1865-portrait-shirt.jpg": {
+   "h": [
+    "4c17f1f4cccc8e8e",
+    "33e0f0660c8c962e"
+   ],
+   "sha1": "c79ab6c499b94749b2747f6e6036606fd87d6e7f"
+  },
+  "/assets/images/work/juneteenth-definition-shirt.jpg": {
+   "h": [
+    "20e3c7c081800000",
+    "6149850080000000"
+   ],
+   "sha1": "e54ebac764f70c931e909f6ad4834aa2d1f37bab"
+  },
   "/assets/images/work/juneteenth-graphic-design.jpg": {
    "h": [
     "43b0a8e2f4d0d478",
     "306c6961b3b33373"
    ],
    "sha1": "d9225db3703b087c049470c1847660f48aac3cab"
+  },
+  "/assets/images/work/juneteenth-greek-letter-shirts.jpg": {
+   "h": [
+    "0e4d1c9e3d376302",
+    "cd9c1b5f5637366f"
+   ],
+   "sha1": "5c199a0ed4b31a719423941ef506d693fb9f7dda"
+  },
+  "/assets/images/work/juneteenth-independence-day-shirt.jpg": {
+   "h": [
+    "d451cac8cccccec6",
+    "8f314dd68e8fcc4e"
+   ],
+   "sha1": "a1bcc46d17269596db3f253fb0218e8e256fa37e"
+  },
+  "/assets/images/work/juneteenth-since-1865-shirt.jpg": {
+   "h": [
+    "533569d4b0e0eaa3",
+    "37cca23307e1e9d2"
+   ],
+   "sha1": "53e5c3b00c6fbbf2bd8e65f97955c937141d8265"
+  },
+  "/assets/images/work/just-here-for-the-boos-shirt.jpg": {
+   "h": [
+    "ecce173363ff5f06",
+    "d217a9c921f4ff3f"
+   ],
+   "sha1": "c4eb65f8684b23444b406d06c33432157488fd61"
   },
   "/assets/images/work/k9-police-shirt.jpg": {
    "h": [
@@ -556,10 +759,17 @@
   },
   "/assets/images/work/king-duke-birthday-sign.jpg": {
    "h": [
-    "b5b19d2569696969",
-    "5a6bcf4b298a6865"
+    "7149b5bd69691133",
+    "8cd2536b2becc838"
    ],
-   "sha1": "e4860434163c740d2bd80f22ffe89df34df07c86"
+   "sha1": "fa0af9a22c5164e51c216f91232f5d09a2f73de8"
+  },
+  "/assets/images/work/king-queen-paint-kit.jpg": {
+   "h": [
+    "65653515161d3130",
+    "a6b63794171716f2"
+   ],
+   "sha1": "ea9eb4e9bd952873fca78159bb264cbc9c03a137"
   },
   "/assets/images/work/koa-fuego-jersey-shirt.jpg": {
    "h": [
@@ -582,12 +792,33 @@
    ],
    "sha1": "c41dc57a70d634ae8ae644b9510a5a4cd01d3d60"
   },
+  "/assets/images/work/lips-glitter-tumbler.jpg": {
+   "h": [
+    "d8c8c4e0cc8c0d4d",
+    "8386c2d2c6868726"
+   ],
+   "sha1": "c761c41329101472d90e23c456be12f9aeadc5d4"
+  },
   "/assets/images/work/lips-graphic-tee.jpg": {
    "h": [
     "fc724e4678fcfefe",
     "e19607e3fcf8feb7"
    ],
    "sha1": "c3fa3c19a09d5924bf859fedc67bb956fc2d858c"
+  },
+  "/assets/images/work/little-witch-shirt.jpg": {
+   "h": [
+    "7343073f8d410b3f",
+    "c75755292dce4489"
+   ],
+   "sha1": "dc7500320099cc5f012e12b7003f87fd1eea9ed7"
+  },
+  "/assets/images/work/lock-and-key-paint-kit.jpg": {
+   "h": [
+    "64c6c9cbcdc9d999",
+    "839a9c8996968084"
+   ],
+   "sha1": "d6dfa63f02132991cf1034c8bae228c67f527ec4"
   },
   "/assets/images/work/logo-tee-and-cap-set.jpg": {
    "h": [
@@ -610,6 +841,13 @@
    ],
    "sha1": "2c7071a76919308ba45bf5d5ce074d648887ee39"
   },
+  "/assets/images/work/midknight-trucking-jacket.jpg": {
+   "h": [
+    "ebf8b2767913327b",
+    "e832f3f37eb03337"
+   ],
+   "sha1": "50429a146f1d55e55cd7951b4dafcba4ecd9cc03"
+  },
   "/assets/images/work/mirror-me-shirt.jpg": {
    "h": [
     "d8d9e1416d754000",
@@ -624,6 +862,13 @@
    ],
    "sha1": "aaf3b458b3bbced7017d1d26758f1a2c30ed4362"
   },
+  "/assets/images/work/mr-mrs-champagne-flutes.jpg": {
+   "h": [
+    "07919352c29d8d4c",
+    "543031b9d4112667"
+   ],
+   "sha1": "51d58609bc51c27a2f285fcc633feec24e77c420"
+  },
   "/assets/images/work/nablys-trucking-shirt.jpg": {
    "h": [
     "344e0e0f0bcc4961",
@@ -631,12 +876,26 @@
    ],
    "sha1": "7d10adc008542a43f757ebfeaa2adf334d780099"
   },
+  "/assets/images/work/name-phone-case.jpg": {
+   "h": [
+    "9627030200402038",
+    "0125101220008060"
+   ],
+   "sha1": "5bdb00e61226ca2ee6259c2eaf6af432bc75607b"
+  },
+  "/assets/images/work/name-shot-glass.jpg": {
+   "h": [
+    "8532b29696cd2048",
+    "75311313139a8ea2"
+   ],
+   "sha1": "d0638c3fddd134cd7ba06107e5dfcda9ef651e19"
+  },
   "/assets/images/work/npl-embroidered-polos.jpg": {
    "h": [
-    "07111858545878e0",
-    "303098d89a3239f8"
+    "585a585a5a5a5a78",
+    "59dc999919191898"
    ],
-   "sha1": "47caa6e2b5c1564814883f2a6b40b111cfe206bd"
+   "sha1": "4421f1dbfc09c2ad64f9fb4eaa15417f8febd610"
   },
   "/assets/images/work/nurses-hoodie.jpg": {
    "h": [
@@ -645,19 +904,54 @@
    ],
    "sha1": "0cb0760be65487819305ca128dab6855d553f91a"
   },
-  "/assets/images/work/opinionated-witch-shirt.jpg": {
+  "/assets/images/work/omega-juneteenth-shirt.jpg": {
    "h": [
-    "132dce0f4f3b3546",
-    "26ce1f1d26cd757a"
+    "37e9cc06cd434673",
+    "c80a330b0a0a2187"
    ],
-   "sha1": "7c2833e93bd6baad2bb9b35087330ec29744ea83"
+   "sha1": "bbbfbfb1bc25b739c89fa025526b6c013ad98cb3"
   },
   "/assets/images/work/paint-party-canvases.jpg": {
    "h": [
     "8d8eeee5a5b3b2b1",
     "cf4de76663733373"
    ],
-   "sha1": "564ed313ccd8ebe18ac70bfb92eb87dad011e8f0"
+   "sha1": "fd224d81a9a629d3689ac4cc2e89a388ae849baf"
+  },
+  "/assets/images/work/peace-love-juneteenth-shirt.jpg": {
+   "h": [
+    "429737296965274d",
+    "3333e4ccccd4c6e2"
+   ],
+   "sha1": "f97389f82cbedfd3988037d73b3f8880f51e1db3"
+  },
+  "/assets/images/work/personalized-santa-sack.jpg": {
+   "h": [
+    "4c363632174f270d",
+    "37337941530f8fc7"
+   ],
+   "sha1": "4c3ed9e0d6d995bcc2929eeba743c9dd7c202f56"
+  },
+  "/assets/images/work/pet-bowl-mat.jpg": {
+   "h": [
+    "992673d5b563c88c",
+    "d7e1b2962562c98c"
+   ],
+   "sha1": "92a1b654c7c61ed69ef26b4cea8ae7c803a063f6"
+  },
+  "/assets/images/work/pet-name-bowl.jpg": {
+   "h": [
+    "0c2361631636369c",
+    "c0e080c19b3352d5"
+   ],
+   "sha1": "97fb745b2d7daf59b10bf0c0e8badb01f2ba842b"
+  },
+  "/assets/images/work/photo-collage-blanket.jpg": {
+   "h": [
+    "0f653d39396d644b",
+    "c4655a5e5a58e4e4"
+   ],
+   "sha1": "a2d5d32817a21a4787256031e49c32cea618e26e"
   },
   "/assets/images/work/photo-collage-tee.jpg": {
    "h": [
@@ -680,6 +974,13 @@
    ],
    "sha1": "f8803ea0d2966c1d2cfec9dcee6d308860e92de4"
   },
+  "/assets/images/work/racing-flags-hoodie.jpg": {
+   "h": [
+    "1433616d35353517",
+    "f0d0cc8632626666"
+   ],
+   "sha1": "72252fa0db5da3c964174ce515598634be907b31"
+  },
   "/assets/images/work/resilience-butterfly-shirt.jpg": {
    "h": [
     "2e6dcffbccc6e3f8",
@@ -701,6 +1002,13 @@
    ],
    "sha1": "397823581c6f8697134586e6fdfa10e7dd705c1b"
   },
+  "/assets/images/work/roses-paint-kit.jpg": {
+   "h": [
+    "743131240a313070",
+    "7568424718783434"
+   ],
+   "sha1": "98317571140d8c92e32c549dea62615b58322b89"
+  },
   "/assets/images/work/rustik-75-jersey.jpg": {
    "h": [
     "8793c8e8ca9a2c01",
@@ -715,6 +1023,13 @@
    ],
    "sha1": "79a003d4c15465636de9fb521c3ebbd107cc996f"
   },
+  "/assets/images/work/santa-came-twice-shirt.jpg": {
+   "h": [
+    "f817510e93330f86",
+    "37b0cf9f27d15b1b"
+   ],
+   "sha1": "eea88198c444a60d0423f89e66fc5a6872d1b7e7"
+  },
   "/assets/images/work/save-4-ring-podcast-shirt.jpg": {
    "h": [
     "105f3171f0c47106",
@@ -728,6 +1043,20 @@
     "cce8647818200000"
    ],
    "sha1": "bc3a60b292803753cba14851901b76cacdb2df2d"
+  },
+  "/assets/images/work/science-grandma-shirt.jpg": {
+   "h": [
+    "d8334f4bc6373762",
+    "79afad04cb1b6335"
+   ],
+   "sha1": "0e21644182c551af61470b97449ff31d988297ec"
+  },
+  "/assets/images/work/science-mom-shirt.jpg": {
+   "h": [
+    "c8333717c73723c0",
+    "f34b232f93536525"
+   ],
+   "sha1": "594d1a321ead3d0b076d7f444b676eaecf495240"
   },
   "/assets/images/work/screen-printing-press.jpg": {
    "h": [
@@ -757,12 +1086,12 @@
    ],
    "sha1": "b7f65b8c86fb5f8beea65ec116768466bc43f989"
   },
-  "/assets/images/work/sleeve-print-hoodie.jpg": {
+  "/assets/images/work/skeleton-hands-crop-top.jpg": {
    "h": [
-    "6cdff77fff2fbfef",
-    "bbf3efeef96f6e9f"
+    "07072361d8dc69f9",
+    "cb37e9c8121da4e4"
    ],
-   "sha1": "6081e2e2337e3a4c8515dba1d49d0aa1782f4d2b"
+   "sha1": "e863505b11292406d178eca567280c14aa796669"
   },
   "/assets/images/work/spaulding-83-shirt.jpg": {
    "h": [
@@ -778,6 +1107,20 @@
    ],
    "sha1": "4c4a5f8452d52f66fda29113a95591186878ad3a"
   },
+  "/assets/images/work/stop-staring-at-my-boos-shirt.jpg": {
+   "h": [
+    "23e89416e8f10000",
+    "c8a6368c84e06001"
+   ],
+   "sha1": "e1d384453ede52c3492216b6889baab48315e988"
+  },
+  "/assets/images/work/super-mom-shirt.jpg": {
+   "h": [
+    "e2e08c8ad3d7af7f",
+    "aa46260db1b34917"
+   ],
+   "sha1": "e0249dc38ea1bb8dc133509d240b9e9aee531372"
+  },
   "/assets/images/work/tae-0-shirt.jpg": {
    "h": [
     "73b3312929300c00",
@@ -791,6 +1134,13 @@
     "8b13cd2b2bc84b6b"
    ],
    "sha1": "f8b9ae20eeed1d85b269367aa69922660ab680ca"
+  },
+  "/assets/images/work/talented-kreative-black-shirt.jpg": {
+   "h": [
+    "6c70014d89230380",
+    "f019c484aa8aa888"
+   ],
+   "sha1": "68ee668d87b8b42232fef85c0a8ac0a4027edf3d"
   },
   "/assets/images/work/team-decal-sheet.jpg": {
    "h": [
@@ -806,12 +1156,12 @@
    ],
    "sha1": "212c76e1d57404a0f0ebcd6ad1acd7aa9af0c542"
   },
-  "/assets/images/work/tie-dye-hoodie.jpg": {
+  "/assets/images/work/tie-dye-graphic-tee.jpg": {
    "h": [
-    "13b0a892e6600a02",
-    "606d794bc1c1c649"
+    "2d1786c39b82c2c0",
+    "373743a1385b0189"
    ],
-   "sha1": "33fb28284089b8b7ceaeca52fe33ea2d6485c6a7"
+   "sha1": "d7d0ee32868af518a0b0fa5c1fa0a7b67fb01109"
   },
   "/assets/images/work/trucking-company-screen.jpg": {
    "h": [
@@ -834,6 +1184,13 @@
    ],
    "sha1": "c54a68c8bbec674d73f3d3afc9428d98dff0a506"
   },
+  "/assets/images/work/valentine-wine-gift-box.jpg": {
+   "h": [
+    "14083030b1313347",
+    "1a68316969697971"
+   ],
+   "sha1": "c144100bb11aa8f8c1008ad9c40ef21fb1d28102"
+  },
   "/assets/images/work/valentine-wine-glass-set.jpg": {
    "h": [
     "b2b6b6f6fa6a4f36",
@@ -843,10 +1200,10 @@
   },
   "/assets/images/work/vegan-hoodie.jpg": {
    "h": [
-    "0b13b10181018d83",
-    "103060000020100c"
+    "173342e0e8f05734",
+    "a181c3e0acf032b6"
    ],
-   "sha1": "31ec5c6fc2e493961294604636055e3b46f8bfc5"
+   "sha1": "3c2963be0cc8a7b092c827591475b052afeca48a"
   },
   "/assets/images/work/vegan-life-v-neck.jpg": {
    "h": [
@@ -854,6 +1211,13 @@
     "12103100c0c0c0f8"
    ],
    "sha1": "278fab8dee0f17e5b00889b110499660553ed290"
+  },
+  "/assets/images/work/volleyball-mom-senior-shirt.jpg": {
+   "h": [
+    "850686464f030340",
+    "0333c64b4b012303"
+   ],
+   "sha1": "d4c0ab9c01a7c39aad2814d0cc9a2dcfd380ddd6"
   },
   "/assets/images/work/waters-family-picnic-shirt.jpg": {
    "h": [
@@ -871,10 +1235,10 @@
   },
   "/assets/images/work/where-there-is-light-design.jpg": {
    "h": [
-    "0e062a0b0f0f0ba7",
-    "2b69494d0d4f4d4d"
+    "330e862a0b87072b",
+    "9f2b6b4d4d452587"
    ],
-   "sha1": "aec65df2743fb277d04074b8ec9ebf40873f7336"
+   "sha1": "fb1c4f0473cfcfc91b9d4f665b5313dae8c2e332"
   },
   "/assets/images/work/written-lips-shirt.jpg": {
    "h": [

@@ -54,11 +54,15 @@
 
 /* Recent work */
 .pb-work h2{margin-bottom:1.3rem}
-/* Whole photos, never cropped (owner, 2026-10-17): masonry columns, each
-   photo at its own shape. */
-.pb-gallery{columns:3 220px;column-gap:.9rem}
-.pb-gallery figure{margin:0 0 .9rem;position:relative;border-radius:14px;overflow:hidden;background:#F3F4F6;break-inside:avoid}
-.pb-gallery img{width:100%;height:auto;display:block;transition:transform .35s}
+/* Whole photos, never cropped (owner, 2026-10-17), in even rows: every tile is
+   the same 3:4 shape (most shop photos are 3:4, so they fill it exactly); a
+   wide photo sits whole on a blurred copy of itself (img.pb-bd) instead of leaving the
+   ragged gaps masonry columns did. A short last row is centred. */
+.pb-gallery{display:flex;flex-wrap:wrap;justify-content:center;gap:.9rem}
+.pb-gallery figure{flex:0 0 calc((100% - 1.8rem)/3);aspect-ratio:3/4;margin:0;position:relative;border-radius:14px;overflow:hidden;background:#F3F4F6}
+.pb-gallery img{position:relative;width:100%;height:100%;object-fit:contain;display:block;transition:transform .35s}
+.pb-gallery img.pb-bd{position:absolute;inset:-24px;width:calc(100% + 48px);height:calc(100% + 48px);object-fit:cover;filter:blur(18px) brightness(.85);transition:none}
+.pb-gallery figure:hover img.pb-bd{transform:none}
 .pb-gallery figure:hover img{transform:scale(1.04)}
 .pb-gallery figcaption{position:absolute;left:0;right:0;bottom:0;padding:1.6rem .9rem .7rem;background:linear-gradient(transparent,rgba(11,31,75,.82));color:#fff;font:600 .85rem Inter,system-ui,sans-serif}
 
@@ -82,6 +86,7 @@
    (assets/js/jt-chat.js, about 130px wide at the bottom right). */
 .pb-sticky{display:none}
 @media (max-width:900px){
+  .pb-gallery figure{flex-basis:calc((100% - .9rem)/2)}
   .pb-grid{grid-template-columns:repeat(3,1fr)}
   /* A row you swipe, not a grid that hides the third review. */
   .pb-rvs{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;gap:.8rem;padding-bottom:.4rem;scrollbar-width:none}
@@ -96,7 +101,7 @@
   .pb-grid{grid-template-columns:repeat(2,1fr);gap:.7rem}
   .pb-bd{padding:.7rem .75rem .8rem}
   .pb-nm{font-size:.9rem}
-  .pb-gallery{columns:2;column-gap:.6rem}.pb-gallery figure{margin-bottom:.6rem}
+  .pb-gallery{gap:.6rem}.pb-gallery figure{flex-basis:calc((100% - .6rem)/2)}
   .pb-sticky{display:flex;position:fixed;left:12px;right:156px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:900;gap:8px;font-family:Inter,system-ui,sans-serif}
   .pb-sticky a{flex:1;text-align:center;padding:.8rem .5rem;border-radius:999px;font-weight:700;font-size:.95rem;text-decoration:none;box-shadow:0 8px 20px rgba(11,31,75,.25)}
   .pb-sticky-go{background:#F0275A;color:#fff}

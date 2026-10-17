@@ -128,5 +128,6 @@ html{overflow-x:clip;}
 .jtf-col{display:flex;flex-direction:column;gap:.45rem;}
 .jtf-col h2{margin:0 0 .3rem;font:700 .78rem Inter,system-ui,sans-serif;letter-spacing:.12em;text-transform:uppercase;color:#fff;}
 .jtf-col span{color:rgba(255,255,255,.6);font-size:.86rem;}
+.jtf-legal a{color:rgba(255,255,255,.7)!important;}
 .jtf-bottom{max-width:1200px;margin:2.4rem auto 0;padding:1.2rem 1.5rem 0;border-top:1px solid rgba(255,255,255,.14);display:flex;flex-wrap:wrap;justify-content:space-between;gap:.6rem;font-size:.82rem;color:rgba(255,255,255,.55);}
 @media(max-width:700px){.jtf-in{grid-template-columns:1fr 1fr;}.jtf-brand{grid-column:1/-1;}.jtf{padding-bottom:6rem!important;}}

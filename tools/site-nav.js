@@ -193,9 +193,9 @@ function renderFooter(nav, site = '') {
     ${col('Groups & Events', plain(groups))}${subs}
     ${col('Neighborhoods', f.areas)}
     ${col('Company', f.company)}
-    <div class="jtf-col"><h2>Contact</h2><a href="${abs(nav.quote.href)}">${esc(nav.quote.label)}</a><a href="${tel}">${esc(nav.phone.display)}</a><!--email_off--><a href="mailto:${esc(f.email)}">${esc(f.email)}</a><!--/email_off--><a href="${abs('/contact')}">Location &amp; hours</a><span>${esc(f.hours)}</span><a href="${abs('/sms-terms')}">SMS Terms</a></div>
+    <div class="jtf-col"><h2>Contact</h2><a href="${abs(nav.quote.href)}">${esc(nav.quote.label)}</a><a href="${tel}">${esc(nav.phone.display)}</a><!--email_off--><a href="mailto:${esc(f.email)}">${esc(f.email)}</a><!--/email_off--><a href="${abs('/contact')}">Location &amp; hours</a><span>${esc(f.hours)}</span></div>
   </div>
-  <div class="jtf-bottom"><span>&copy; June's Tees &amp; Things. All rights reserved.</span><span>${esc(f.bottom)}</span></div>
+  <div class="jtf-bottom"><span>&copy; June's Tees &amp; Things. All rights reserved.</span><span>${esc(f.bottom)}</span><span class="jtf-legal">${(f.legal || []).map(link).join(' &middot; ')}</span></div>
 </footer>
 ${FEND}`;
 }
@@ -246,7 +246,7 @@ const OLD = [
 /* Pages with the reviews block from tools/page-blocks.js show reviews there,
    once (owner, 2026-10-17: "do we need reviews on the page twice?"). */
 let blockPages = null;
-const BLOCK_PAGES = () => blockPages || (blockPages = new Set(Object.keys(JSON.parse(fs.readFileSync(path.join(PUBLIC, 'assets', 'data', 'page-blocks.json'), 'utf8')).pages)));
+const BLOCK_PAGES = () => blockPages || (blockPages = new Set(Object.keys(require('./page-blocks').load().data.pages)));
 
 function applyReviews(html, rel) {
   if (NO_REVIEWS.has(rel) || BLOCK_PAGES().has(rel)) {
@@ -359,7 +359,14 @@ function run(mode) {
   return drifted;
 }
 
-module.exports = { render, renderFooter, apply, applyFooter, applyReviews, pages, run, START, END, FSTART, FEND, RS, NO_REVIEWS, CSS_V };
+/* Menu, footer and review strip for one page, exactly as --write leaves it
+   (tools/occasion-pages.js builds pages with this). */
+function finish(html, rel) {
+  const nav = JSON.parse(fs.readFileSync(NAV, 'utf8'));
+  return applyReviews(applyFooter(apply(html, render(nav)), renderFooter(nav)), rel);
+}
+
+module.exports = { finish, render, renderFooter, apply, applyFooter, applyReviews, pages, run, START, END, FSTART, FEND, RS, NO_REVIEWS, CSS_V };
 
 if (require.main === module) {
   const mode = process.argv.includes('--write') ? 'write' : 'check';

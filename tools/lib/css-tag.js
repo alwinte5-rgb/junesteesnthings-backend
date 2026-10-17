@@ -18,8 +18,11 @@ const crypto = require('node:crypto');
 
 const PUBLIC = path.join(__dirname, '..', '..', 'public');
 
+/* The stamp itself: the first 8 hex of the file's sha1. Photos use it too. */
+const assetStamp = (rel) => crypto.createHash('sha1').update(fs.readFileSync(path.join(PUBLIC, rel))).digest('hex').slice(0, 8);
+
 function cssTag(href) {
-  const v = crypto.createHash('sha1').update(fs.readFileSync(path.join(PUBLIC, href))).digest('hex').slice(0, 8);
+  const v = assetStamp(href);
   const tag = `<link rel="stylesheet" href="${href}?v=${v}" />`;
   const any = new RegExp(`<link rel="stylesheet" href="${href.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}(?:\\?v=[0-9a-f]+)?" \\/>`, 'g');
   const put = (html) => {
@@ -36,11 +39,11 @@ function cssTag(href) {
  * without one is left alone. Used for /assets/js/quote-form.js, whose markup
  * hooks must match the page's HTML (which is never cached). */
 function scriptTag(src) {
-  const v = crypto.createHash('sha1').update(fs.readFileSync(path.join(PUBLIC, src))).digest('hex').slice(0, 8);
+  const v = assetStamp(src);
   const tag = `<script src="${src}?v=${v}" defer></script>`;
   const any = new RegExp(`<script src="${src.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}(?:\\?v=[0-9a-f]+)?" defer><\\/script>`, 'g');
   const put = (html) => html.replace(any, tag);
   return { src, v, tag, put };
 }
 
-module.exports = { cssTag, scriptTag };
+module.exports = { cssTag, scriptTag, assetStamp };
