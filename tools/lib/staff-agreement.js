@@ -13,6 +13,7 @@ const { escHtml: esc } = require('./html-escape');
 
 const VERSION = '2026-10-16';
 const COMPANY = "June's Tees and Things LLC";
+const TITLE = 'Staff Confidentiality & Ownership Agreement';
 
 /* Each section: a title and blocks. A block is { p, lead? } (a paragraph,
    `lead` set in bold before it), { ul: [...] } or { ol: [...] }. */
@@ -109,8 +110,11 @@ const SECTIONS = [
   ] },
 ];
 
+/* The wording as stored with each signature: the signed copy is rebuilt from
+   the row, never from today's text, so it survives a later VERSION. */
+const WORDING = JSON.stringify({ title: TITLE, sections: SECTIONS });
 /** sha256 of the wording, stored with each signature as proof of what was signed. */
-const TEXT_HASH = crypto.createHash('sha256').update(VERSION + '\n' + JSON.stringify(SECTIONS)).digest('hex');
+const TEXT_HASH = crypto.createHash('sha256').update(VERSION + '\n' + WORDING).digest('hex');
 
 function blockHtml(b) {
   if (b.ul) return `<ul>${b.ul.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>`;
@@ -118,16 +122,25 @@ function blockHtml(b) {
   return `<p>${b.lead ? `<b>${esc(b.lead)}</b> ` : ''}${esc(b.p)}</p>`;
 }
 
-/** The agreement's wording as HTML, every section in order. */
-function agreementHtml() {
-  return `<div class="agreement">${SECTIONS.map((s) => `<h3>${esc(s.title)}</h3>${s.blocks.map(blockHtml).join('')}`).join('')}</div>`;
+/** The agreement as HTML: today's wording, or a stored WORDING string from a
+ *  signature row. A stored wording that cannot be read says so, never
+ *  silently shows today's text in its place. */
+function agreementHtml(stored = null) {
+  let w = { title: TITLE, sections: SECTIONS };
+  if (stored != null) {
+    try { w = JSON.parse(stored); if (!Array.isArray(w.sections)) throw new Error('no sections'); }
+    catch { return '<div class="agreement"><p class="warn">The wording stored with this signature could not be read.</p></div>'; }
+  }
+  return `<div class="agreement"><h2 style="margin-top:0">${esc(w.title)}</h2>${w.sections.map((s) =>
+    `<h3>${esc(s.title)}</h3>${(s.blocks || []).map(blockHtml).join('')}`).join('')}</div>`;
 }
 
 const clip = (v, n) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, n + 1);
 
 /**
- * Reads the signing form. A full name is two or more words with letters in
- * them; the place is where they work from. Every problem is listed at once.
+ * Reads the signing form. The name is whatever their legal name is (some
+ * people have one name only), at least two letters; the place is where they
+ * work from. Every problem is listed at once.
  * @returns {{signature: {name: string, location: string}|null, problems: string[]}}
  */
 function signatureFromForm(b = {}) {
@@ -135,11 +148,11 @@ function signatureFromForm(b = {}) {
   const name = clip(b.signed_name, 100);
   const location = clip(b.location, 100);
   if (name.length > 100) problems.push('Your name must be 100 characters or fewer.');
-  else if (name.split(' ').filter((w) => /\p{L}/u.test(w)).length < 2) problems.push('Type your full legal name: first and last name.');
+  else if ((name.match(/\p{L}/gu) || []).length < 2) problems.push('Type your full legal name.');
   if (location.length > 100) problems.push('The city and province must be 100 characters or fewer.');
   else if (location.length < 2 || !/\p{L}/u.test(location)) problems.push('Type the city and province you work from.');
   if (String(b.agree || '') !== '1') problems.push('Tick the box to say you have read and agree to the agreement.');
   return { signature: problems.length ? null : { name, location }, problems };
 }
 
-module.exports = { VERSION, COMPANY, SECTIONS, TEXT_HASH, agreementHtml, signatureFromForm };
+module.exports = { VERSION, COMPANY, TITLE, SECTIONS, WORDING, TEXT_HASH, agreementHtml, signatureFromForm };
