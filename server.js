@@ -8360,13 +8360,30 @@ function quotePricingSource() {
            the first table), and reading "back" as "second" under-quoted every
            back-only and sleeve-only DTF job. A single-table method such as
            screen printing charges its one table at every place either way. */
+        /* The DTF methods are ONE family for this: standard and Oversized
+           (2026-10-17) are the same Anchorfish transfer, so a 12x18 Oversized
+           back with a standard 4x4 chest is one main print plus one additional
+           location — not two main prints. The Oversized print takes the main
+           table wherever it sits, so the chest on the front still reads the
+           additional-location rate. Every other method is its own family. */
+        function familyOf(m) {
+          var t = String(m.title || '').toLowerCase();
+          return t.indexOf('dtf') === 0 ? 'dtf' : 'm' + String(m.id);
+        }
+        var familyMain = {};
+        for (var fi = 0; fi < prints.length; fi++) {
+          var fam = familyOf(prints[fi].method);
+          var big = String(prints[fi].method.title || '').toLowerCase().indexOf('oversized') !== -1;
+          if (!(fam in familyMain) || (big && !familyMain[fam].big)) familyMain[fam] = { i: fi, big: big };
+        }
         var seenMethod = {};
         function keyOf(p) {
           if (p.key !== undefined) return p.key;
           var pk = Object.keys(p.method.positions || {});
-          var mid = String(p.method.id);
-          var later = !!seenMethod[mid];
-          seenMethod[mid] = true;
+          var fam = familyOf(p.method);
+          if (fam === 'dtf') return prints[familyMain.dtf.i] === p ? '' : (pk[1] || pk[0]);
+          var later = !!seenMethod[fam];
+          seenMethod[fam] = true;
           return later ? (pk[1] || pk[0]) : '';
         }
 

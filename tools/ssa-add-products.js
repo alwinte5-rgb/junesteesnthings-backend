@@ -23,7 +23,7 @@
 
 const { mysql, sq } = require('./lib/db');
 const { sellPrice, sizeUpcharge } = require('./lib/markup');
-const { CORE_SIZES, classify, DECORATIONS, resolveRoles } = require('./lib/garments');
+const { CORE_SIZES, classify, decorationsFor, OPTIONAL_ROLES, resolveRoles } = require('./lib/garments');
 
 const APPLY = process.argv.includes('--apply');
 const ONLY = (process.argv.find((a) => a.startsWith('--only=')) || '').slice(7)
@@ -417,7 +417,7 @@ function defaultColourImage(rows) {
  */
 function buildPrintings(name, roleIds, subId, isPoly) {
   const cls = classify(name);
-  const roles = DECORATIONS[cls];
+  const roles = decorationsFor(name);
   if (!roles) return null;
   const ids = roles.map((r) => roleIds[r]).filter((n) => Number.isFinite(n));
   if (!ids.length) return null;
@@ -458,7 +458,8 @@ async function run(env) {
      set built from a half-resolved map is a product nobody will notice is
      wrong until a customer cannot pick screen printing on it. */
   const methods = mysql(dbUrl, 'SELECT id, title FROM lumise_printings ORDER BY id;', { rows: true });
-  const { ids: roleIds, missing } = resolveRoles(methods);
+  const { ids: roleIds, missing: missingAll } = resolveRoles(methods);
+  const missing = missingAll.filter((r) => !OPTIONAL_ROLES.includes(r));
   if (missing.length) {
     console.error('these decoration roles match no live method:\n    ' + missing.join('\n    ') +
       '\n\n  lib/garments.js ROLES is keyed on method TITLES. If one was renamed,' +

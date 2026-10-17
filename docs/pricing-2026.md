@@ -105,10 +105,24 @@ Live bands stopped at 175, so every larger order quoted at the 175 rate.
 
   stage                   1-4       5-11      12-24      25-49      50-99    100-249    250-499    500-999  1000-2499  2500-7000
   --------------------------------------------------------------------------------------------------------------------------------
-  main print           $23.20     $20.75     $18.30     $15.75     $11.90      $9.50      $7.55      $6.10      $4.90      $4.00
+  main print           $20.75     $20.75     $18.30     $15.75     $11.90      $9.50      $7.55      $6.10      $4.90      $4.00
   add. location         $5.95      $5.90      $5.85      $5.25      $4.95      $4.20      $3.50      $3.10      $2.75      $2.55
 
   1-4 / 5-11 set by the owner 2026-10-15 (was 1-3 $26.05 / 4-11 $23.20).
+  1-4 main print lowered $23.20 -> $20.75 by the owner 2026-10-17.
+
+DTF Printing — Oversized (up to 252 sq in), added 2026-10-17 by
+tools/add-dtf-oversized.js. A print over the standard 132 sq in (a 12x18 or
+14x18 full back); larger is by quote. Main print = standard + 1.75 x Anchorfish's
+extra cost for their 252 sq in column, rounded up to 5c (50-99 = the $14.00 the
+owner set on the Ink Theory order). The second location is the standard one.
+Offered on adult garments only (lib/garments.js decorationsFor). Derived from
+method #1, so re-run the tool after any change to method #1's prices.
+
+  stage                   1-4       5-11      12-24      25-49      50-99    100-249    250-499    500-999  1000-2499  2500-7000
+  --------------------------------------------------------------------------------------------------------------------------------
+  oversized main       $24.90     $24.90     $21.60     $18.40     $14.00     $11.30      $9.10      $7.40      $6.05      $4.95
+  add. location         $5.95      $5.90      $5.85      $5.25      $4.95      $4.20      $3.50      $3.10      $2.75      $2.55
   5-11 is a typed price (`fix` in the generator), not markup x cost.
 
   Every stitch count from 0 to 25k now has a price. The 14k-22k band is flat $60,

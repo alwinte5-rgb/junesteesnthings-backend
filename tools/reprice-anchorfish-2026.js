@@ -183,9 +183,12 @@ const SP_INSERTS = [
    were already quoted, so 1-3 also drops to it, and 5-11 is the owner's own
    price, halfway to 12-24. `fix` holds those typed prices by column: one markup
    cannot give $20.75 on the main print AND $5.90 on the additional location
-   (the markup that hits $20.75 puts it at $5.30, under 12-24's $5.85). */
+   (the markup that hits $20.75 puts it at $5.30, under 12-24's $5.85).
+   1-4 main print $23.20 -> $20.75 (owner, 2026-10-17): $34.27 for a 4-piece
+   front + back Gildan 5000 sat above the Chicago shops that list a price. The
+   additional location keeps its $5.95. */
 const DTF = {
-    1: { ceil:   4, mk: 3.30, v: [5.00, 7.03, 9.38, 1.80] },
+    1: { ceil:   4, mk: 3.30, v: [5.00, 7.03, 9.38, 1.80], fix: { 1: 20.75 } },
     5: { ceil:  11, mk: 3.30, v: [5.00, 7.03, 9.38, 1.80], fix: { 1: 20.75, 3: 5.90 } },
    /* 3.60 -> 3.25. With 4-11 cut to 3.30, leaving this at 3.60 made the
       ADDITIONAL-LOCATION price climb from $5.95 to $6.50 as the order grew —
