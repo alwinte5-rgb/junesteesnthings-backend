@@ -33,7 +33,7 @@ const LINKS = {
   church: `${DESIGN}/collection.php?c=church-groups`,
   memorial: `${DESIGN}/collection.php?c=memorial`,
   bulk: `${DESIGN}/collection.php?c=bulk-orders`,
-  quote: `${SITE}/#contact`,
+  quote: `${SITE}/contact`,
 };
 const PHONE = '(773) 900-4592';
 const LOGO = `${SITE}/assets/images/brand/logo.png`;

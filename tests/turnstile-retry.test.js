@@ -19,29 +19,32 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
+/* The form's code lives in public/assets/js/quote-form.js (shared by the
+   homepage, /contact and the designer's occasion pages since 2026-10-17). */
+const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'assets', 'js', 'quote-form.js'), 'utf8');
 const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
 const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 
-const handlerAt = html.indexOf("quoteForm.addEventListener('submit'");
-assert.notStrictEqual(handlerAt, -1, 'the quote form submit handler was not found in index.html');
-const handler = html.slice(handlerAt, html.indexOf('\n    });', handlerAt));
+const handlerAt = js.indexOf("form.addEventListener('submit'");
+assert.notStrictEqual(handlerAt, -1, 'the quote form submit handler was not found in quote-form.js');
+const handler = js.slice(handlerAt, js.indexOf('\n    });', handlerAt));
 
-/* ── the page's own token helpers, run against a fake widget ─────────────── */
+/* ── the script's own token helpers, run against a fake widget ───────────── */
 
 function helpers(turnstile) {
-  const start = html.indexOf('let tsWidget = null;');
-  const end = html.indexOf('// Quote form submission');
-  assert.ok(start !== -1 && end > start, 'the Turnstile block was not found in index.html');
   const sandbox = {
-    window: { turnstile }, document: { getElementById: () => null },
+    window: { turnstile }, location: { href: 'https://www.jtees.net/', origin: 'https://www.jtees.net' },
+    document: { currentScript: null, readyState: 'complete', getElementById: () => null, querySelectorAll: () => [] },
     fetch: () => new Promise(() => {}),        // /api/config never answers here
-    setTimeout, Promise, Date,
+    setTimeout, Promise, Date, URL,
   };
   vm.createContext(sandbox);
-  vm.runInContext(html.slice(start, end), sandbox);
-  return vm.runInContext(
-    '({ turnstileReady, renewTurnstile, turnstileToken, mount: (id) => { tsWidget = id; }, '
-    + 'fail: () => { tsFailed = true; } })', sandbox);
+  vm.runInContext(js, sandbox);
+  const t = sandbox.window.JTQuoteForm._turnstile(null);
+  return {
+    turnstileReady: t.ready, renewTurnstile: t.renew, turnstileToken: t.token,
+    mount: t._mount, fail: t._fail,
+  };
 }
 
 function fakeWidget({ token = '', expired = false, tokenAfterReset = 'fresh' } = {}) {
@@ -100,29 +103,35 @@ test('renewing asks the widget for a new token', () => {
 /* ── the submit handler uses them ─────────────────────────────────────────── */
 
 test('the widget is rendered explicitly, so the page holds its id', () => {
-  assert.match(html, /turnstile\/v0\/api\.js\?render=explicit&onload=jtTurnstileReady/);
+  assert.match(js, /turnstile\/v0\/api\.js\?render=explicit&onload=jtTurnstileReady/);
+  assert.match(html, /<script src="\/assets\/js\/quote-form\.js\?v=[0-9a-f]{8}" defer><\/script>/, 'the homepage loads the shared form script');
+  assert.doesNotMatch(html, /let tsWidget = null;/, 'no second copy of the form code left in the page');
 });
 
 test('the token is waited for before the enquiry is posted', () => {
-  const waitAt = handler.indexOf('turnstileReady(');
-  assert.ok(waitAt !== -1 && waitAt < handler.indexOf('fetch(quoteForm.action'),
+  const waitAt = handler.indexOf('ts.ready(');
+  assert.ok(waitAt !== -1 && waitAt < handler.indexOf("fetch(API + '/submit'"),
     'posting without a token is a guaranteed refusal');
 });
 
 test('nobody is stopped by the check: the enquiry is sent whatever it says', () => {
-  const between = handler.slice(handler.indexOf('turnstileReady('), handler.indexOf('fetch(quoteForm.action'));
-  assert.doesNotMatch(between, /\breturn\b/,
+  const between = handler.slice(handler.indexOf('ts.ready('), handler.indexOf("fetch(API + '/submit'"));
+  // The wait's answer is never read, so nothing between it and the post can
+  // turn the enquiry away.
+  assert.match(between, /^ts\.ready\(\d+\)\.then\(function \(\) \{/,
+    'a browser that cannot run the check must still reach the shop (allowMissingTurnstile)');
+  assert.doesNotMatch(between, /\breturn;|throw\b/,
     'a browser that cannot run the check must still reach the shop (allowMissingTurnstile)');
 });
 
 test('every attempt is followed by a fresh token, failed ones included', () => {
-  const fin = handler.slice(handler.lastIndexOf('finally'));
-  assert.match(fin, /renewTurnstile\(\)/, 'the server spends the token on every attempt');
+  const fin = handler.slice(handler.lastIndexOf('.catch('));
+  assert.match(fin, /\}\)\.then\(function \(\) \{[\s\S]*ts\.renew\(\)/, 'the server spends the token on every attempt');
 });
 
 test('the form token is fetched fresh at send time, not only at page load', () => {
-  const at = handler.indexOf("fetch('/api/form-token')");
-  assert.ok(at !== -1 && at < handler.indexOf('fetch(quoteForm.action'),
+  const at = handler.indexOf("getJSON('/api/form-token')");
+  assert.ok(at !== -1 && at < handler.indexOf("fetch(API + '/submit'"),
     'a token from page load is refused after 30-60 minutes');
 });
 

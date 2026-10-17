@@ -57,11 +57,30 @@ function fromTag(rel) {
 
 function workImg(key) { return `/assets/images/work/${key}.jpg`; }
 
+/* A JPEG's own width and height, from its frame header, so the photos are
+   shown at their real shape (never cropped) and the page keeps their space
+   while they load. Falls back to 4:3 if the header cannot be read. */
+function jpegSize(file) {
+  try {
+    const b = fs.readFileSync(file);
+    for (let i = 2; i + 9 < b.length;) {
+      if (b[i] !== 0xFF) { i++; continue; }
+      const m = b[i + 1];
+      if (m >= 0xC0 && m <= 0xCF && m !== 0xC4 && m !== 0xC8 && m !== 0xCC) {
+        return { w: b.readUInt16BE(i + 7), h: b.readUInt16BE(i + 5) };
+      }
+      i += 2 + b.readUInt16BE(i + 2);
+    }
+  } catch { /* fall through */ }
+  return { w: 400, h: 300 };
+}
+const dims = (key) => { const d = jpegSize(path.join(PUBLIC, workImg(key))); return `width="${d.w}" height="${d.h}"`; };
+
 function heroBlock(data, page) {
   if (!page.hero) return '';
   const [s, e] = mark('pb-hero');
   return `${s}
-<figure class="pb-hero-img"><img src="${workImg(page.hero)}" alt="${esc(data.work[page.hero])} by June's Tees &amp; Things, Chicago" width="560" height="420" loading="lazy" /></figure>
+<figure class="pb-hero-img"><img src="${workImg(page.hero)}" alt="${esc(data.work[page.hero])} by June's Tees &amp; Things, Chicago" ${dims(page.hero)} loading="lazy" /></figure>
 ${e}`;
 }
 
@@ -86,7 +105,7 @@ function productsBlock(data, page, rel) {
     <div class="pb-grid">
     ${cards}
     </div>
-    <p class="pb-note">Pick a product, add your text, photo or logo, and see the price as you go. Prefer help? <a href="/#contact">Send us your idea</a>, call <a href="tel:${PHONE.tel}">${PHONE.display}</a> or email <a href="mailto:${EMAIL}">${EMAIL}</a>.</p>
+    <p class="pb-note">Pick a product, add your text, photo or logo, and see the price as you go. Prefer help? <a href="/contact">Send us your idea</a>, call <a href="tel:${PHONE.tel}">${PHONE.display}</a> or email <!--email_off--><a href="mailto:${EMAIL}">${EMAIL}</a><!--/email_off-->.</p>
   </div>
 </section>
 <div class="pb-sticky" aria-label="Quick actions"><a href="${STUDIO}" class="pb-sticky-go" data-from="${from}_sticky">Design yours</a><a href="tel:${PHONE.tel}" class="pb-sticky-call" aria-label="Call ${PHONE.display}">📞</a></div>
@@ -120,7 +139,7 @@ ${e}`;
 function workBlock(data, page) {
   if (!page.work || !page.work.length) return '';
   const [s, e] = mark('pb-work');
-  const items = page.work.map((k) => `<figure><img src="${workImg(k)}" alt="${esc(data.work[k])}" loading="lazy" width="400" height="300" /><figcaption>${esc(data.work[k])}</figcaption></figure>`).join('\n    ');
+  const items = page.work.map((k) => `<figure><img src="${workImg(k)}" alt="${esc(data.work[k])}" loading="lazy" ${dims(k)} /><figcaption>${esc(data.work[k])}</figcaption></figure>`).join('\n    ');
   return `${s}
 <section class="pb-work" aria-labelledby="pb-work-h">
   <div class="pb-wrap">

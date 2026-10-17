@@ -79,7 +79,9 @@ test("nothing links to the designer's front page, which will redirect here", () 
 });
 
 test('the quote path is kept: hero button, form, and quote bar', () => {
-  assert.match(page, /href="#contact" class="btn btn-secondary" data-from="hero">Get a Free Quote/);
+  // Straight to the form, not the heading above it (owner, 2026-10-17).
+  assert.match(page, /href="#quote-form" class="btn btn-secondary" data-from="hero">Get a Free Quote/);
+  assert.match(page, /#quote-form, #contact \{ scroll-margin-top: 150px; \}/, 'clear of the sticky header');
   assert.match(page, /<form id="quote-form" action="\/submit" method="POST">/);
   assert.match(page, /id="quote-bar"/);
 });

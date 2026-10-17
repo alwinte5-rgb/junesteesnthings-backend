@@ -6626,6 +6626,12 @@ app.post('/admin/campaign/email', requireAdmin, async (req, res) => {
 app.get('/sms-terms', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'sms-terms.html'));
 });
+/* The quote form on a page of its own. Every "Get a Quote" and "Contact" link
+   on both sites points here: /#contact landed on the heading above the
+   homepage form, or in the middle of the long homepage (owner, 2026-10-17). */
+app.get('/contact', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'contact.html'));
+});
 // The opt-in as a customer sees it, with a screenshot: what A2P 10DLC campaign
 // vetting asks for, and what a carrier reviewer reads against the description.
 app.get('/sms-consent', (_req, res) => {

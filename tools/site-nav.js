@@ -29,6 +29,8 @@ const END = '<!-- site-header:end -->';
 // Stamped with the file's hash (tools/lib/css-tag.js), so a change is never held in a cache.
 const NAV_CSS = require('./lib/css-tag').cssTag('/assets/css/site-nav.css');
 const CSS_V = NAV_CSS.v;
+// The shared quote form, re-stamped wherever a page loads it (homepage, /contact).
+const QUOTE_JS = require('./lib/css-tag').scriptTag('/assets/js/quote-form.js');
 
 /* The review strip, above the footer on every page but these: the homepage
    has the full Reviews section, and a 404 should get the visitor moving. */
@@ -217,6 +219,7 @@ function apply(html, block) {
     }
   }
   html = NAV_CSS.put(html);
+  html = QUOTE_JS.put(html);
   return html;
 }
 
