@@ -159,7 +159,11 @@ test('the FAQ covers quotes, ordering, groups, pickup by appointment, and care',
   for (const q of ['How do I get a quote?', 'How do I order?', 'Family reunion, church & group orders?', 'Where are you, and can I pick up?', 'How do I care for my shirt?']) {
     assert.ok(SRC.includes(q), q);
   }
-  assert.match(SRC, /ring the intercom for June's Tees, come up to the 4th floor, and have a seat in the lobby/);
+  // Working shop (owner, 2026-10-16): visits by appointment; door directions go
+  // out with the pickup instructions by email or text, never in the public chat.
+  assert.match(SRC, /visits are by appointment only/);
+  assert.match(SRC, /pickup instructions by email or text/);
+  assert.doesNotMatch(SRC, /ring the intercom/);
   assert.doesNotMatch(SRC, /can also do curbside pickup/, 'no answer promises walk-up pickup');
 });
 

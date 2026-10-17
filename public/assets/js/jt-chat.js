@@ -28,7 +28,7 @@
     ['📝 How do I get a quote?', "Tell us the item, quantity, and your idea — in chat, through the form, or by text at (773) 900-4592 — and we'll price it, usually within 1 business day. Or design it yourself at design.jtees.net and see your price instantly."],
     ['🛒 How do I order?', "Two ways: design it yourself at design.jtees.net and check out online, or tell us what you need and we'll handle everything — we send a proof before anything is printed."],
     ['👨‍👩‍👧 Family reunion, church & group orders?', "Yes — reunions, teams, churches, schools, and events are our specialty. Any quantity, sizes from toddler to 5XL, and per-piece prices drop as your group gets bigger."],
-    ['📍 Where are you, and can I pick up?', "We're at 3047 N Lincoln Ave #435 in Chicago. Pickups are Monday–Friday, 10:30 AM–6 PM, by appointment, so please call or text (773) 900-4592 to confirm your time before you come. When you arrive, ring the intercom for June's Tees, come up to the 4th floor, and have a seat in the lobby."],
+    ['📍 Where are you, and can I pick up?', "We're at 3047 N Lincoln Ave #435 in Chicago's Lakeview neighborhood. We're a working print shop, so visits are by appointment only. It keeps our presses running and means you get our full attention when you stop in. To book a time, call or text (773) 900-4592. Picking up an order? When your order is complete, we'll send pickup instructions by email or text. Please follow them so your order is ready and waiting when you arrive."],
     ['🧺 How do I care for my shirt?', 'Machine wash cold, inside-out, and tumble dry low. Skip bleach and high heat, and your print will last for years.']
   ];
 
