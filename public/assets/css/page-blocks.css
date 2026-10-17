@@ -1,0 +1,92 @@
+/* Product cards, top reviews, shop photos and the hero photo on the service,
+   area and blog pages (tools/page-blocks.js writes the markup). Class names
+   are pb- so no page's own CSS can restyle them. */
+/* Same width and gutter as the service pages' .container, so the blocks line
+   up with the text around them. */
+.pb-wrap{max-width:1100px;margin:0 auto;padding:0 2rem}
+@media (max-width:640px){.pb-wrap{padding:0 1rem}}
+.pb-products,.pb-reviews,.pb-work{font-family:Inter,system-ui,sans-serif;padding:3rem 0}
+.pb-products{background:#fff;border-bottom:1px solid #E7E3DB}
+.pb-reviews{background:#F7F6F3}
+.pb-work{background:#fff}
+.pb-head{display:flex;align-items:flex-end;justify-content:space-between;gap:1rem;margin-bottom:1.4rem}
+.pb-tag{font-size:.75rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#F0275A;margin-bottom:.4rem}
+.pb-products h2,.pb-reviews h2,.pb-work h2{font-size:clamp(1.45rem,3.2vw,2rem);font-weight:800;color:#0B1F4B;line-height:1.15;margin:0}
+.pb-all{color:#1848B8;font-weight:700;font-size:.92rem;text-decoration:none;white-space:nowrap}
+.pb-all:hover{text-decoration:underline}
+
+/* Product cards: the homepage's card look. */
+.pb-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1.1rem}
+.pb-card{display:flex;flex-direction:column;background:#fff;border:1px solid #E7E3DB;border-radius:14px;overflow:hidden;text-decoration:none;color:inherit;transition:box-shadow .2s,transform .2s}
+.pb-card:hover{box-shadow:0 10px 24px rgba(11,31,75,.12);transform:translateY(-2px)}
+.pb-im{aspect-ratio:1/1;background:#F3F4F6;display:flex;align-items:center;justify-content:center}
+.pb-im img{width:100%;height:100%;object-fit:contain}
+.pb-bd{padding:.85rem 1rem 1rem;display:flex;flex-direction:column;gap:.25rem;flex:1}
+.pb-nm{font-weight:700;color:#0B1F4B;font-size:.98rem;line-height:1.3}
+.pb-pr{color:#0B1F4B;font-weight:600;font-size:.88rem}
+.pb-go{color:#1848B8;font-weight:700;font-size:.88rem;margin-top:auto;padding-top:.35rem}
+.pb-note{margin:1.3rem 0 0;color:#4B5563;font-size:.95rem}
+.pb-note a{color:#1848B8;font-weight:600}
+
+/* Top reviews */
+.pb-stars{color:#F4A623;letter-spacing:1px}
+.pb-reviews .pb-tag{color:#0B1F4B}
+.pb-rvs{display:grid;grid-template-columns:repeat(3,1fr);gap:1.1rem}
+.pb-rv{margin:0;background:#fff;border:1px solid #E7E3DB;border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
+.pb-rv img{display:block;width:100%;height:190px;object-fit:cover}
+.pb-rv figcaption{padding:1rem 1.1rem 1.15rem;display:flex;flex-direction:column;gap:.35rem}
+.pb-rv b{color:#0B1F4B;font-size:1rem}
+.pb-rv p{margin:0;color:#374151;font-size:.92rem;line-height:1.55}
+.pb-rv span{color:#6B7280;font-size:.8rem;margin-top:auto}
+
+/* Recent work */
+.pb-work h2{margin-bottom:1.3rem}
+.pb-gallery{display:grid;grid-template-columns:repeat(3,1fr);gap:.9rem}
+.pb-gallery figure{margin:0;position:relative;border-radius:14px;overflow:hidden;aspect-ratio:4/3;background:#F3F4F6}
+.pb-gallery img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .35s}
+.pb-gallery figure:hover img{transform:scale(1.04)}
+.pb-gallery figcaption{position:absolute;left:0;right:0;bottom:0;padding:1.6rem .9rem .7rem;background:linear-gradient(transparent,rgba(11,31,75,.82));color:#fff;font:600 .85rem Inter,system-ui,sans-serif}
+
+/* Hero photo: the hero's text keeps the left column, the photo takes the
+   right one. Phones hide it; the product photos follow straight after. */
+.hero:has(.pb-hero-img) .container{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);column-gap:3rem;align-items:center}
+.hero:has(.pb-hero-img) .container>*{grid-column:1}
+.hero .pb-hero-img{grid-column:2!important;grid-row:1/span 8;margin:0;border-radius:18px;overflow:hidden;box-shadow:0 18px 40px rgba(11,31,75,.18);aspect-ratio:4/3}
+.pb-hero-img img{width:100%;height:100%;object-fit:cover;display:block}
+
+/* The pages' checklists were display:flex, which split a line holding a link
+   ("Design your own online in our Design Studio…") into columns. Block
+   layout with the tick hung in the margin reads as one sentence. */
+.two-col li{display:block;position:relative;padding-left:1.4rem}
+.two-col li::before{position:absolute;left:0;top:0}
+
+/* "What Chicago Orders Most" tiles: a photo where the emoji used to be. */
+.card .card-photo{display:block;width:100%;aspect-ratio:4/3;height:auto;object-fit:cover;border-radius:10px;margin-bottom:.9rem;background:#F3F4F6}
+
+/* Phone action bar: it stops short of the "Chat with us" button
+   (assets/js/jt-chat.js, about 130px wide at the bottom right). */
+.pb-sticky{display:none}
+@media (max-width:900px){
+  .pb-grid{grid-template-columns:repeat(3,1fr)}
+  .pb-rvs{grid-template-columns:1fr 1fr}
+  .pb-rv:nth-child(3){display:none}
+  .hero:has(.pb-hero-img) .container{display:block}
+  .hero .pb-hero-img{display:none}
+}
+@media (max-width:640px){
+  .pb-products,.pb-reviews,.pb-work{padding:2.2rem 0}
+  .pb-head{flex-direction:column;align-items:flex-start;gap:.5rem}
+  .pb-grid{grid-template-columns:repeat(2,1fr);gap:.7rem}
+  .pb-bd{padding:.7rem .75rem .8rem}
+  .pb-nm{font-size:.9rem}
+  .pb-rvs{grid-template-columns:1fr}
+  .pb-rv:nth-child(3){display:flex}
+  .pb-rv img{height:170px}
+  .pb-gallery{grid-template-columns:repeat(2,1fr);gap:.6rem}
+  .pb-sticky{display:flex;position:fixed;left:12px;right:156px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:900;gap:8px;font-family:Inter,system-ui,sans-serif}
+  .pb-sticky a{flex:1;text-align:center;padding:.8rem .5rem;border-radius:999px;font-weight:700;font-size:.95rem;text-decoration:none;box-shadow:0 8px 20px rgba(11,31,75,.25)}
+  .pb-sticky-go{background:#F0275A;color:#fff}
+  .pb-sticky-call{background:#0B1F4B;color:#fff;flex:0 0 48px!important;padding:.8rem 0!important}
+  body:has(.pb-sticky){padding-bottom:72px}
+}
+@media (prefers-reduced-motion:reduce){.pb-card,.pb-gallery img{transition:none}}
