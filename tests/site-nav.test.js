@@ -113,3 +113,28 @@ test('product search is in the menu on every page and the phone drawer', () => {
   const css = read('assets/css/site-nav.css');
   assert.match(css, /\.jtn-ico-search\{display:flex!important;\}/, 'the icon stays on phones');
 });
+
+/* The menu is position:sticky. overflow-x:hidden on <html> or <body> makes
+   that element the scroll box and the menu scrolls away with the page (owner,
+   2026-10-17: "make the top menu sticky" — the homepage and blog had it).
+   overflow-x:clip stops sideways scroll the same way and keeps sticky. */
+test('no page hides overflow on html or body, so the menu stays sticky', () => {
+  const pages = [];
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.name.endsWith('.html')) pages.push(p);
+    }
+  };
+  walk(PUBLIC);
+  const bad = [];
+  for (const p of pages) {
+    const html = fs.readFileSync(p, 'utf8');
+    if (!html.includes('class="jtn"')) continue;
+    for (const m of html.matchAll(/(?<![\w-])(?:html|body)\s*(?:,\s*(?:html|body)\s*)?\{[^}]*\}/g)) {
+      if (/overflow(?:-[xy])?\s*:\s*(?:hidden|auto|scroll)/.test(m[0])) bad.push(path.relative(PUBLIC, p));
+    }
+  }
+  assert.deepStrictEqual(bad, []);
+});
