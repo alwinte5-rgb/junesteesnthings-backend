@@ -17,6 +17,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const NAV = require('../tools/site-nav');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
@@ -45,7 +46,7 @@ test('every photo on the site has a current hash', () => {
   for (const src of shown().keys()) {
     const h = HASHES[src];
     assert.ok(h, `${src}: no hash; run python3 tools/photo-dupes.py`);
-    assert.strictEqual(h.bytes, fs.statSync(path.join(PUBLIC, src)).size, `${src}: hash is stale; run python3 tools/photo-dupes.py`);
+    assert.strictEqual(h.sha1, crypto.createHash('sha1').update(fs.readFileSync(path.join(PUBLIC, src))).digest('hex'), `${src}: hash is stale; run python3 tools/photo-dupes.py`);
   }
 });
 

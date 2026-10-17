@@ -5,7 +5,11 @@
   var dds = document.querySelectorAll('.jtn-dd');
   function closeAll(except) {
     Array.prototype.forEach.call(dds, function (d) {
-      if (d !== except) { d.classList.remove('open'); d.querySelector('.jtn-dd-t').setAttribute('aria-expanded', 'false'); }
+      if (d !== except) {
+        d.classList.remove('open'); d.querySelector('.jtn-dd-t').setAttribute('aria-expanded', 'false');
+        // Its submenus close with it, so it opens fresh next time.
+        Array.prototype.forEach.call(d.querySelectorAll('.jtn-sub.open'), function (s) { s.classList.remove('open'); s.querySelector('.jtn-sub-t').setAttribute('aria-expanded', 'false'); });
+      }
     });
   }
   Array.prototype.forEach.call(dds, function (d) {

@@ -137,13 +137,16 @@ ${e}`;
    walk the list of all three-review combinations in a stride coprime with
    its length, so no combination repeats until every one is used.
    pb-reviews.js then re-draws three at random on every visit. */
+const COMBOS = new Map();
 function pickThree(index, n) {
+  if (COMBOS.has(n)) return new Set(COMBOS.get(n)[index % COMBOS.get(n).length]);
   const combos = [];
   for (let a = 0; a < n; a++) for (let b = a + 1; b < n; b++) for (let c = b + 1; c < n; c++) combos.push([a, b, c]);
   let stride = 37;
   const gcd = (x, y) => (y ? gcd(y, x % y) : x);
   while (gcd(stride, combos.length) !== 1) stride++;
-  return new Set(combos[(index * stride) % combos.length]);
+  COMBOS.set(n, combos.map((_, i) => combos[(i * stride) % combos.length]));
+  return new Set(COMBOS.get(n)[index % combos.length]);
 }
 
 function reviewsBlock(reviews, index) {
@@ -248,7 +251,8 @@ const where = {
     const h = html.indexOf('<section class="hero"');
     if (h === -1) return -1;
     const h1 = html.indexOf('<h1', h);
-    const p = html.indexOf('<p', h1);
+    const m = /<p[\s>]/.exec(html.slice(h1));
+    const p = m ? h1 + m.index : -1;
     if (h1 === -1 || p === -1 || p > elementEnd(html, h)) return -1;
     return lineAfter(html, elementEnd(html, p) - 1);
   },
@@ -270,14 +274,16 @@ const where = {
   reviews: afterBlock('pb-products'),
 };
 
+let ORDER = null;
 function apply(html, rel, data, reviews) {
   const page = data.pages[rel];
+  if (!ORDER || ORDER.data !== data) ORDER = { data, list: Object.keys(data.pages).sort() };
   for (const name of BLOCKS) html = drop(html, name);
   html = put(html, 'pb-hero', heroBlock(data, page), where.hero);
   if (html.includes('<section class="hero"')) html = put(html, 'pb-rating', ratingBlock(reviews), where.rating);
   html = put(html, 'pb-work', workBlock(data, page), where.work);
   html = put(html, 'pb-products', productsBlock(data, page, rel), where.products);
-  html = put(html, 'pb-reviews', reviewsBlock(reviews, Object.keys(data.pages).sort().indexOf(rel)), where.reviews);
+  html = put(html, 'pb-reviews', reviewsBlock(reviews, ORDER.list.indexOf(rel)), where.reviews);
   html = BLOCKS_CSS.put(html);
   if (!html.includes('/assets/js/shop-feed.js')) html = html.replace('</body>', `${FEED_TAG}\n</body>`);
   if (!html.includes('/assets/js/pb-reviews.js')) html = html.replace('</body>', `${REVIEWS_JS}\n</body>`);

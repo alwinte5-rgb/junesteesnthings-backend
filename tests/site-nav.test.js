@@ -230,3 +230,8 @@ test('every page has the one shared footer, with a working Instagram link', () =
     for (const i of m.items.filter((x) => !x.items && !/→$/.test(x.label))) assert.ok(foot.includes(`href="${i.href}"`), i.label);
   }
 });
+
+test('a footer whose end marker was lost fails loudly instead of being spliced', () => {
+  const broken = `<html><body>${NAV.FSTART}<footer class="jtf"></footer></body></html>`;
+  assert.throws(() => NAV.applyFooter(broken, 'X'), /start marker without an end marker/);
+});

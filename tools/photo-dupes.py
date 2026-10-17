@@ -15,7 +15,7 @@ tests/photo-dupes.test.js reads the hash file and fails if two photos shown on
 the site are near-matches, or if a shown photo has no current hash.
 Needs Pillow (a dev tool only, not a runtime dependency).
 """
-import json, os, sys
+import hashlib, json, os, sys
 from PIL import Image, ImageOps
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
@@ -65,7 +65,7 @@ def main():
         for f in sorted(os.listdir(full)):
             if f.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
                 p = os.path.join(full, f)
-                out['/' + d + '/' + f] = {'bytes': os.path.getsize(p), 'h': hashes(p)}
+                out['/' + d + '/' + f] = {'sha1': hashlib.sha1(open(p, 'rb').read()).hexdigest(), 'h': hashes(p)}
     extra = {}
     if '--designer' in sys.argv:
         base = os.path.expanduser(sys.argv[sys.argv.index('--designer') + 1])

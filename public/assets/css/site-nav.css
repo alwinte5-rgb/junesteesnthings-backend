@@ -45,7 +45,7 @@ a.jt-studio{color:#1848B8;font-weight:700;text-decoration:underline;text-underli
 .jtn-sub-t:hover,.jtn-sub.open .jtn-sub-t{background:#F7F6F3;color:#0B1F4B;}
 .jtn-sub.open .jtn-sub-t::after{border-left-color:transparent;border-top-color:currentColor;transform:translateY(2px);}
 .jtn-sub-m{display:none;margin:.1rem 0 .3rem .6rem;padding-left:.4rem;border-left:2px solid #F0EEE9;}
-.jtn-sub.open .jtn-sub-m,.jtn-sub:focus-within .jtn-sub-m{display:block;}
+.jtn-sub.open .jtn-sub-m{display:block;}
 @media(hover:hover) and (pointer:fine){.jtn-sub:hover .jtn-sub-m{display:block;}}
 .jtn .jtn-strong{color:#1848B8;font-weight:700;}
 .jtn-act{display:flex;align-items:center;gap:.6rem;flex-shrink:0;}

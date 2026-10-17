@@ -195,7 +195,7 @@ function renderFooter(nav, site = '') {
     ${col('Company', f.company)}
     <div class="jtf-col"><h2>Contact</h2><a href="${abs(nav.quote.href)}">${esc(nav.quote.label)}</a><a href="${tel}">${esc(nav.phone.display)}</a><!--email_off--><a href="mailto:${esc(f.email)}">${esc(f.email)}</a><!--/email_off--><a href="${abs('/contact')}">Location &amp; hours</a><span>${esc(f.hours)}</span><a href="${abs('/sms-terms')}">SMS Terms</a></div>
   </div>
-  <div class="jtf-bottom"><span>&copy; ${new Date().getFullYear()} June's Tees &amp; Things. All rights reserved.</span><span>${esc(f.bottom)}</span></div>
+  <div class="jtf-bottom"><span>&copy; June's Tees &amp; Things. All rights reserved.</span><span>${esc(f.bottom)}</span></div>
 </footer>
 ${FEND}`;
 }
@@ -204,8 +204,11 @@ ${FEND}`;
    </body> on a page that had none. */
 function applyFooter(html, block) {
   if (html.includes(FSTART)) {
-    const a = html.indexOf(FSTART), b = html.indexOf(FEND, a) + FEND.length;
-    return html.slice(0, a) + block + html.slice(b);
+    const a = html.indexOf(FSTART), z = html.indexOf(FEND, a);
+    // A start marker without its end means a hand edit or a merge broke the
+    // page; splicing anyway would paste the footer over the wrong text.
+    if (z === -1) throw new Error('site-footer: start marker without an end marker');
+    return html.slice(0, a) + block + html.slice(z + FEND.length);
   }
   const f = html.search(/<footer\b/i);
   if (f !== -1) {
@@ -242,13 +245,16 @@ const OLD = [
 
 /* Pages with the reviews block from tools/page-blocks.js show reviews there,
    once (owner, 2026-10-17: "do we need reviews on the page twice?"). */
-const BLOCK_PAGES = new Set(Object.keys(JSON.parse(fs.readFileSync(path.join(PUBLIC, 'assets', 'data', 'page-blocks.json'), 'utf8')).pages));
+let blockPages = null;
+const BLOCK_PAGES = () => blockPages || (blockPages = new Set(Object.keys(JSON.parse(fs.readFileSync(path.join(PUBLIC, 'assets', 'data', 'page-blocks.json'), 'utf8')).pages)));
 
 function applyReviews(html, rel) {
-  if (NO_REVIEWS.has(rel) || BLOCK_PAGES.has(rel)) {
+  if (NO_REVIEWS.has(rel) || BLOCK_PAGES().has(rel)) {
     const a = html.indexOf(RS);
     if (a === -1) return html;
-    const b = html.indexOf(RE, a) + RE.length;
+    const z = html.indexOf(RE, a);
+    if (z === -1) throw new Error('review-strip: start marker without an end marker');
+    const b = z + RE.length;
     html = html.slice(0, html.lastIndexOf('\n', a - 1) + 1) + html.slice(b).replace(/^\n/, '');
     if (!html.includes('id="jt-reviews"')) html = html.replace(new RegExp(`[ \\t]*${REVIEW_CSS_TAG.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}\\n`), '');
     return html;
@@ -318,7 +324,7 @@ function dropOldTicker(html) {
   if (m === -1 || !/^(?:\s|<!--(?:(?!-->)[\s\S])*-->)*$/.test(html.slice(after, m))) return html;
   html = html.slice(0, after) + '\n' + html.slice(elementEnd(html, m)).replace(/^[ \t]*\n+/, '');
   // Its styles go with it, unless another marquee is still on the page.
-  return html.includes('<div class="marquee-strip"') ? html : html.replace(/^[ \t]*(\.marquee-|@keyframes marquee-scroll)[^\n]*\n/gm, '');
+  return html.includes('<div class="marquee-strip"') ? html : html.replace(/^[ \t]*(\.marquee-|@keyframes marquee-scroll)[^\n]*\}[ \t]*\n/gm, '');
 }
 
 function run(mode) {
