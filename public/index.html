@@ -20,8 +20,6 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 
-
-
   <style>
     /* ============================
        CSS VARIABLES & RESET
@@ -736,7 +734,6 @@
       border-radius: var(--radius-lg);
       overflow: hidden;
       aspect-ratio: 4/3;
-      cursor: pointer;
     }
 
     .portfolio-item img {
@@ -1258,7 +1255,6 @@
       .design-gallery { grid-template-columns: repeat(2, 1fr); }
     }
 
-
     .packages-promo-img {
       margin-top: 3rem;
       border-radius: var(--radius-lg);
@@ -1383,7 +1379,6 @@
     }
 
     .review-quote { display: none; }
-
 
     /* ============================
        CONTACT
@@ -1775,7 +1770,6 @@
     article,article p,article li{color:#374151;}
     article h1,article h2,article h3{color:#0B1F4B;}
 
-
     /* footer stays navy — force readable light text (logo-text override made it navy-on-navy) */
     footer .logo-text{color:#fff!important;}
     footer .logo-text span{color:rgba(255,255,255,.55)!important;}
@@ -1982,6 +1976,9 @@
       .hero-tags{margin-bottom:.8rem;}
       .hero-tags span{font-size:.72rem;padding:.25rem .65rem;}
     }
+    /* Homepage order (owner, #345): sections alternate white and warm grey. */
+    #shop,#reviews,#how-it-works{background:#F7F6F3!important;}
+    #portfolio,#design-lab,#occasions,#contact{background:#fff!important;}
   </style>
   <script src="/assets/js/analytics.js"></script>
   <link rel="stylesheet" href="/assets/css/site-nav.css?v=d741b795" />
@@ -2046,9 +2043,6 @@
 <script src="/assets/js/site-nav.js" defer></script>
 <!-- site-header:end -->
 
-
-
-
   
 
   <!-- ============================
@@ -2074,7 +2068,6 @@
     </div>
     <div class="hero-scroll">Scroll</div>
   </section>
-
 
   <!-- ============================
        TRUST BAR
@@ -2102,8 +2095,8 @@
       </div>
 
       <div class="portfolio-grid">
-        <div class="portfolio-item fade-left" style="transition-delay:0.05s">
-          <img src="/assets/images/work/screen-printing-press.jpg" alt="Shirt on a screen printing press mid-print" loading="lazy" />
+        <div class="portfolio-item fade-in" style="transition-delay:0.05s">
+          <img src="/assets/images/work/screen-printing-press.jpg" alt="Shirt on a screen printing press mid-print" loading="lazy" width="400" height="300" />
           <div class="portfolio-overlay">
             <div>
               <div class="portfolio-tag">Screen Printing</div>
@@ -2111,8 +2104,8 @@
             </div>
           </div>
         </div>
-        <div class="portfolio-item fade-right" style="transition-delay:0.1s">
-          <img src="/assets/images/work/kindergarten-back-to-school-tee.jpg" alt=""Watch Out! Kindergarten Here I Come" back-to-school shirt" loading="lazy" />
+        <div class="portfolio-item fade-in" style="transition-delay:0.1s">
+          <img src="/assets/images/work/kindergarten-back-to-school-tee.jpg" alt="&quot;Watch Out! Kindergarten Here I Come&quot; back-to-school shirt" loading="lazy" width="400" height="300" />
           <div class="portfolio-overlay">
             <div>
               <div class="portfolio-tag">Custom Designs</div>
@@ -2120,8 +2113,8 @@
             </div>
           </div>
         </div>
-        <div class="portfolio-item fade-left" style="transition-delay:0.15s">
-          <img src="/assets/images/work/full-color-team-logo-print.jpg" alt="Full-color Northville Night Owls team logo print" loading="lazy" />
+        <div class="portfolio-item fade-in" style="transition-delay:0.15s">
+          <img src="/assets/images/work/full-color-team-logo-print.jpg" alt="Full-color Northville Night Owls team logo print" loading="lazy" width="400" height="300" />
           <div class="portfolio-overlay">
             <div>
               <div class="portfolio-tag">DTF Transfers</div>
@@ -2129,8 +2122,8 @@
             </div>
           </div>
         </div>
-        <div class="portfolio-item fade-right" style="transition-delay:0.2s">
-          <img src="/assets/images/work/embroidery-machine-polos.jpg" alt="Multi-head embroidery machines stitching polos" loading="lazy" />
+        <div class="portfolio-item fade-in" style="transition-delay:0.2s">
+          <img src="/assets/images/work/embroidery-machine-polos.jpg" alt="Multi-head embroidery machines stitching polos" loading="lazy" width="400" height="300" />
           <div class="portfolio-overlay">
             <div>
               <div class="portfolio-tag">Embroidery</div>
@@ -2138,8 +2131,8 @@
             </div>
           </div>
         </div>
-        <div class="portfolio-item fade-left" style="transition-delay:0.25s">
-          <img src="/assets/images/work/company-zip-hoodies.jpg" alt="A.J. Kennedy Group company zip hoodies with printed sleeves" loading="lazy" />
+        <div class="portfolio-item fade-in" style="transition-delay:0.25s">
+          <img src="/assets/images/work/company-zip-hoodies.jpg" alt="A.J. Kennedy Group company zip hoodies with printed sleeves" loading="lazy" width="400" height="300" />
           <div class="portfolio-overlay">
             <div>
               <div class="portfolio-tag">Business Apparel</div>
@@ -2147,8 +2140,8 @@
             </div>
           </div>
         </div>
-        <div class="portfolio-item fade-right" style="transition-delay:0.3s">
-          <img src="/assets/images/work/family-reunion-bulk-order.jpg" alt="Box of Family Reunion 2023 shirts ready for pickup" loading="lazy" />
+        <div class="portfolio-item fade-in" style="transition-delay:0.3s">
+          <img src="/assets/images/work/family-reunion-bulk-order.jpg" alt="Box of Family Reunion 2023 shirts ready for pickup" loading="lazy" width="400" height="300" />
           <div class="portfolio-overlay">
             <div>
               <div class="portfolio-tag">Bulk Orders</div>
@@ -2156,8 +2149,8 @@
             </div>
           </div>
         </div>
-        <div class="portfolio-item fade-left" style="transition-delay:0.35s">
-          <img src="/assets/images/work/logo-tee-and-cap-set.jpg" alt="Custom MEAQ logo tee with a matching cap" loading="lazy" />
+        <div class="portfolio-item fade-in" style="transition-delay:0.35s">
+          <img src="/assets/images/work/logo-tee-and-cap-set.jpg" alt="Custom MEAQ logo tee with a matching cap" loading="lazy" width="400" height="300" />
           <div class="portfolio-overlay">
             <div>
               <div class="portfolio-tag">Custom Designs</div>
@@ -2165,8 +2158,8 @@
             </div>
           </div>
         </div>
-        <div class="portfolio-item fade-right" style="transition-delay:0.4s">
-          <img src="/assets/images/work/ghost-graphic-tee.jpg" alt=""I'm Too Old For This Sheet" ghost graphic tee" loading="lazy" />
+        <div class="portfolio-item fade-in" style="transition-delay:0.4s">
+          <img src="/assets/images/work/ghost-graphic-tee.jpg" alt="&quot;I'm Too Old For This Sheet&quot; ghost graphic tee" loading="lazy" width="400" height="300" />
           <div class="portfolio-overlay">
             <div>
               <div class="portfolio-tag">Graphic Tees</div>
@@ -2174,8 +2167,8 @@
             </div>
           </div>
         </div>
-        <div class="portfolio-item fade-left" style="transition-delay:0.45s">
-          <img src="/assets/images/work/corporate-anniversary-shirts.jpg" alt="Bulk screen-printed 75th anniversary company shirts" loading="lazy" />
+        <div class="portfolio-item fade-in" style="transition-delay:0.45s">
+          <img src="/assets/images/work/corporate-anniversary-shirts.jpg" alt="Bulk screen-printed 75th anniversary company shirts" loading="lazy" width="400" height="300" />
           <div class="portfolio-overlay">
             <div>
               <div class="portfolio-tag">Bulk Orders</div>
@@ -2183,8 +2176,8 @@
             </div>
           </div>
         </div>
-        <div class="portfolio-item fade-right" style="transition-delay:0.5s">
-          <img src="/assets/images/work/youth-team-shirts.jpg" alt="Custom youth basketball team t-shirt" loading="lazy" />
+        <div class="portfolio-item fade-in" style="transition-delay:0.5s">
+          <img src="/assets/images/work/youth-team-shirts.jpg" alt="Custom youth basketball team t-shirt" loading="lazy" width="400" height="300" />
           <div class="portfolio-overlay">
             <div>
               <div class="portfolio-tag">Team Gear</div>
@@ -2192,8 +2185,8 @@
             </div>
           </div>
         </div>
-        <div class="portfolio-item fade-left" style="transition-delay:0.55s">
-          <img src="/assets/images/work/embroidered-purple-polo.jpg" alt="Purple polo with an embroidered company logo" loading="lazy" />
+        <div class="portfolio-item fade-in" style="transition-delay:0.55s">
+          <img src="/assets/images/work/embroidered-purple-polo.jpg" alt="Purple polo with an embroidered company logo" loading="lazy" width="400" height="300" />
           <div class="portfolio-overlay">
             <div>
               <div class="portfolio-tag">Small Business</div>
@@ -2201,8 +2194,8 @@
             </div>
           </div>
         </div>
-        <div class="portfolio-item fade-right" style="transition-delay:0.6s">
-          <img src="/assets/images/work/custom-journals.jpg" alt="Custom printed journals for an author launch" loading="lazy" />
+        <div class="portfolio-item fade-in" style="transition-delay:0.6s">
+          <img src="/assets/images/work/custom-journals.jpg" alt="Custom printed journals for an author launch" loading="lazy" width="400" height="300" />
           <div class="portfolio-overlay">
             <div>
               <div class="portfolio-tag">&amp; Things</div>
@@ -2991,7 +2984,7 @@
         <details><summary>Do you have minimums?</summary><div class="jt-faq-a">No minimums! Order a single shirt or hundreds — DTF printing lets us do one-offs at a great price, and bulk orders get volume discounts.</div></details>
         <details><summary>How much does a custom shirt cost?</summary><div class="jt-faq-a">Pricing depends on the product, the number of ink colors, and how many you order — the more you buy, the lower the price per piece. In the <a href="https://design.jtees.net/products.php" class="jt-studio" data-from="home">Design Studio</a> you see your total before checkout; for a quote we price it for you.</div></details>
         <details><summary>How fast can you get my order done?</summary><div class="jt-faq-a">Most orders take 7–14 business days, depending on the project. Faster turnaround is available on request. Have a deadline? Tell us the date. Rush fees may apply.</div></details>
-        <details><summary>How do I get a quote?</summary><div class="jt-faq-a">Tell us the item, quantity, and your idea — through the form below, live chat, or a quick text — and we'll price it. Or design it yourself instantly in our <a href="https://design.jtees.net/products.php" class="jt-studio" data-from="home">Design Studio</a>.</div></details>
+        <details><summary>How do I get a quote?</summary><div class="jt-faq-a">Tell us the item, quantity, and your idea — through the quote form above, live chat, or a quick text — and we'll price it. Or design it yourself instantly in our <a href="https://design.jtees.net/products.php" class="jt-studio" data-from="home">Design Studio</a>.</div></details>
         <details><summary>I don't have a design — can you help?</summary><div class="jt-faq-a">Yes — free design help is included. If your image is low-resolution or you have a complex idea, a real person will make it print-ready. You can also build it yourself in our online <a href="https://design.jtees.net/products.php" class="jt-studio" data-from="home">Design Studio</a> with uploads, fonts, graphics, and a built-in AI designer.</div></details>
         <details><summary>What file types do you need?</summary><div class="jt-faq-a">Designing online: upload PNG, JPG, or WEBP, 300 DPI or higher. Getting a quote: we take vector files (AI, EPS, SVG), high-res PNG, PSD, embroidery files (DST, PES, EXP, JEF, VP3, XXX, EMB) and ZIPs. Not sure? Send it and we'll check.</div></details>
         <details><summary>Can I order for a group or business?</summary><div class="jt-faq-a">Yes — family reunions, teams, events, churches, and business uniforms are our specialty. Order any quantity, from one to bulk.</div></details>
@@ -3038,8 +3031,6 @@
     </div>
   </div>
 
-
-
   <!-- Cloudinary Upload Widget -->
   <script src="/assets/js/quote-form.js?v=1d25fe79" defer></script>
 
@@ -3073,8 +3064,6 @@
     }, { threshold: 0.1, rootMargin: '0px 0px -60px 0px' });
 
     animatedEls.forEach(el => observer.observe(el));
-
-
 
     // ============================
     // Stagger testimonial slides

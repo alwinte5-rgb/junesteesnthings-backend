@@ -104,3 +104,11 @@ test('the Google Ads tag loads with GA4, but never on a private quote page', () 
   assert.match(js, /var ADS_ID = 'AW-433023263'/);
   assert.match(js, /if \(!QUOTE_PAGE\) window\.gtag\('config', ADS_ID\)/);
 });
+
+test('the homepage keeps the service-page order and never slides photos sideways (#345)', () => {
+  const at = (id) => { const i = page.indexOf(`id="${id}"`); assert.ok(i !== -1, id); return i; };
+  const order = ['home', 'portfolio', 'shop', 'design-lab', 'reviews', 'contact', 'faq'];
+  for (let i = 1; i < order.length; i++) assert.ok(at(order[i - 1]) < at(order[i]), `${order[i - 1]} before ${order[i]}`);
+  assert.doesNotMatch(page, /splide/i, 'no carousel library');
+  assert.doesNotMatch(page, /alt=""[^\s>]/, 'no alt cut short by a stray quote');
+});
