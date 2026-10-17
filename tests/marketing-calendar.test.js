@@ -56,6 +56,10 @@ test('a season-long occasion stays open through its busy weeks', () => {
   const w = CAL.datesFor(CAL.OCCASIONS.find((o) => o.id === 'weddings'), 2027);
   assert.strictEqual(CAL.status(w, new Date(Date.UTC(2027, 5, 1))), 'in season'); // Jun 1
   assert.strictEqual(CAL.status(w, new Date(Date.UTC(2027, 7, 1))), 'in season'); // Aug 1
+  const g = CAL.datesFor(CAL.OCCASIONS.find((o) => o.id === 'graduation'), 2027);
+  assert.strictEqual(CAL.status(g, new Date(Date.UTC(2027, 4, 10))), 'in season'); // May 10
+  assert.strictEqual(CAL.status(g, new Date(Date.UTC(2027, 4, 20))), 'orders closed'); // too late even for Jun 15
+  assert.strictEqual(CAL.ymd(g.orderBy), '2027-05-18'); // 4 weeks before Jun 15, the season's last day
   const bhm = CAL.datesFor(CAL.OCCASIONS.find((o) => o.id === 'black-history-month'), 2027);
   assert.strictEqual(CAL.status(bhm, new Date(Date.UTC(2027, 0, 20))), 'in season');
 });

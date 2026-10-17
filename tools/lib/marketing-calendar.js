@@ -47,7 +47,7 @@ const OCCASIONS = [
   { id: 'senior-night-winter', name: 'Senior night (winter sports)', event: (y) => d(y, 2, 1), season: (y) => d(y - 1, 12, 1), page: '/services/big-head-cutouts.html', push: 'Big head cutouts, senior posters, parent shirts' },
   { id: 'valentines', note: "Valentine's Day is February 14.", name: "Valentine's Day", event: (y) => d(y, 2, 14), season: (y) => d(y - 1, 12, 15), page: '/occasions/valentines-day-gifts-chicago.html', push: 'Wine glass gift sets, couples paint kits, couples shirts' },
   { id: 'easter', name: 'Easter', event: easter, season: (y) => addDays(easter(y), -56), page: '', push: 'Family Easter shirts, kids tees, baskets and bags' },
-  { id: 'graduation', name: 'Graduation and prom', event: (y) => d(y, 5, 31), season: (y) => d(y, 4, 1), page: 'https://design.jtees.net/collection.php?c=graduation', push: 'Big head cutouts, grad family shirts, senior jeans, yard signs, prom send-offs' },
+  { id: 'graduation', name: 'Graduation and prom', event: (y) => d(y, 5, 29), end: (y) => d(y, 6, 15), season: (y) => d(y, 3, 15), page: 'https://design.jtees.net/collection.php?c=graduation', push: 'Big head cutouts, grad family shirts, senior jeans, yard signs, prom send-offs' },
   { id: 'senior-night-spring', name: 'Senior night (spring sports)', event: (y) => d(y, 5, 1), season: (y) => d(y, 3, 1), page: '/services/big-head-cutouts.html', push: 'Big head cutouts, senior posters, parent shirts' },
   { id: 'mothers-day', note: "Mother's Day is the second Sunday in May.", name: "Mother's Day", event: (y) => nthWeekday(y, 5, 0, 2), season: (y) => d(y, 3, 15), page: '/occasions/mothers-day-gifts-chicago.html', push: 'Mom and grandma shirts, photo gifts, mugs, totes' },
   { id: 'fathers-day', name: "Father's Day", event: (y) => nthWeekday(y, 6, 0, 3), season: (y) => d(y, 5, 1), page: '', push: 'Dad shirts, photo mugs, engraved flasks and tumblers' },
@@ -62,13 +62,16 @@ const OCCASIONS = [
   { id: 'christmas', note: 'Christmas is December 25.', name: 'Christmas', event: (y) => d(y, 12, 25), season: (y) => d(y, 11, 1), page: '/occasions/christmas-shirts-chicago.html', push: 'Family Christmas shirts, photo gifts, Santa sacks' },
 ];
 
-/* `end` marks an occasion that is a whole season, not one day (weddings run
-   May to September, reunions all summer, Black History Month all February):
-   orders stay open until 4 weeks before the end, so it never reads "orders
-   closed" in its busiest weeks. Without one, the event day is the end.
-   A season opens at least 2 weeks before its last order day; datesFor refuses
-   any occasion that breaks that. Seasons that cross New Year start in the
-   year before the event (y - 1). */
+/* `end` marks an occasion that is a whole season, not one day: weddings run
+   May to September, reunions all summer, Black History Month all February,
+   and graduation and prom May into mid-June (owner, 2026-10-17: "graduation
+   should be a season too"; its event is the late-May peak, the same date the
+   email campaign in tools/lib/events.js counts from). Orders stay open until
+   4 weeks before the season's LAST day, so a season reads "orders closed"
+   only once even its last date can no longer be made. Without `end`, the
+   event day is the end. A season opens at least 2 weeks before its last
+   order day; datesFor refuses any occasion that breaks that. Seasons that
+   cross New Year start in the year before the event (y - 1). */
 
 /* Lead times in weeks before the season start. adsWeeks may be raised per
    occasion; it may never go under MIN_ADS_WEEKS. */
