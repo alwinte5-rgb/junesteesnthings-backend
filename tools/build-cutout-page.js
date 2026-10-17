@@ -61,7 +61,7 @@ const parse = (r) => {
     .map((q) => ({ upTo: q, price: Number(f[q].price) }));
   const size = Number((r.title.match(/(\d+)\s*in/i) || [])[1]);
   const pack = Number((r.title.match(/(\d+)-pack/i) || [])[1]) || 0;
-  return { id: r.id, title: r.title, description: r.description, size, pack, bands };
+  return { id: r.id, title: r.title, description: r.description, size, pack, bands, min: Math.max(1, parseInt(c.min_qty, 10) || 1) };
 };
 
 const all = rows.map(parse);
@@ -84,9 +84,10 @@ const each = (m) => '$' + (m.bands[0].price / m.pack).toFixed(2);
    above band i-1's ceiling. The last band is open-ended. */
 function ranges(m) {
   const out = [];
-  let from = 1;
-  m.bands.forEach((b, i) => {
-    const last = i === m.bands.length - 1;
+  let from = m.min || 1;    // a row with a minimum (24in singles: 2) starts there
+  const bands = m.bands.filter((b) => b.upTo >= from);   // a band wholly under the minimum is never sold
+  bands.forEach((b, i) => {
+    const last = i === bands.length - 1;
     out.push({ label: last ? `${from} or more` : (from === b.upTo ? `${from}` : `${from}–${b.upTo}`), price: b.price });
     from = b.upTo + 1;
   });
@@ -222,7 +223,13 @@ const singleTables = singles.map((m) => `
           const atPack = priceAt(m, p.pack);
           return `<p class="ladder-note">A full sheet of ${p.pack} is ${money(p.bands[0].price)} with delivery &mdash;
             ${money(atPack * p.pack + DELIVERY)} for the same ${p.pack} bought one at a time, with delivery.
-            Once you are near a dozen, ask about the pack.</p>`;
+            ${(() => {
+              /* Where the sheet starts winning, worked out, not "near a dozen"
+                 (which was wrong for an 8-pack). */
+              let n = m.min || 1;
+              while (n <= p.pack && priceAt(m, n) * n + DELIVERY <= p.bands[0].price) n++;
+              return n <= p.pack ? `From ${n} heads the sheet costs less, and you get ${p.pack}.` : 'Close to a full sheet? Ask about the pack.';
+            })()}</p>`;
         })()}
       </div>`).join('');
 
@@ -234,11 +241,15 @@ const packCards = packs.map((m) => `
 
 const FAQ = [
   ['What is a big head cutout?',
-   `A photo of a face, printed and cut around the outline on 3/16 inch board, so it stands up on its own or gets held up at the event. People bring them to graduations, birthdays, weddings, send-offs and games.`],
+   `A photo of a face, printed on rigid board and cut around the outline, so it stands up on its own or gets held up at the event. People bring them to graduations, birthdays, weddings, send-offs and games.`],
   ['What photo do you need from me?',
    `The clearest one you have &mdash; a straight-on shot of the face, as large in the frame as possible. Phone photos are fine. Send it by text or email and we will tell you before we print if it is not going to hold up at the size you want.`],
-  ['Why are the 24 and 36 inch sold only by the sheet?',
-   `A 24 inch head is about 22 inches across, which is wider than the board a single is cut from, so there is no smaller way to make one. It comes ${packs.find((p) => p.size === 24) ? packs.find((p) => p.size === 24).pack : 8} to a sheet and that sheet is the smallest order.`],
+  /* Built from what is actually on sale (packOnly), like the lead lines: it
+     said the 24in was sheet-only after 24in singles went on sale. */
+  ...(packOnly.length ? [[`Why ${packOnly.length > 1 ? 'are' : 'is'} the ${packOnly.map((x) => x + ' inch').join(' and ')} sold only by the sheet?`,
+   `A ${packOnly[0]} inch head is wider than the board a single is cut from, so there is no smaller way to make one. It comes ${packs.find((p) => p.size === packOnly[0]).pack} to a sheet and that sheet is the smallest order.`]] : []),
+  ...singles.filter((m) => m.min > 1).map((m) => [`Can I order just one ${m.size} inch?`,
+   `The ${m.size} inch is sold ${m.min} or more at a time, at ${money(m.bands[0].price)} each. Each one is printed, mounted and cut out by hand.`]),
   ['Can I mix sizes in one order?',
    `Yes. Each size is quoted on its own line, and the quantity across the order is what sets the price on each one.`],
   ['Can every cutout be a different face?',
@@ -264,7 +275,7 @@ const faqLd = JSON.stringify({
 const offersLd = JSON.stringify({
   '@context': 'https://schema.org', '@type': 'Product',
   name: 'Big Head Cutouts', brand: { '@type': 'Brand', name: "June's Tees & Things" },
-  description: `Custom big head cutouts printed and contour cut on 3/16 inch board, in ${SIZES.join(', ')} inch sizes. Chicago.`,
+  description: `Custom big head cutouts printed on rigid board and cut to the outline, in ${SIZES.join(', ')} inch sizes. Chicago.`,
   url: 'https://www.jtees.net/services/big-head-cutouts.html',
   offers: packs.map((m) => ({
     '@type': 'Offer', name: `${m.size} inch, ${m.pack}-pack`, price: m.bands[0].price.toFixed(2),
@@ -322,9 +333,12 @@ const TEMPLATE = path.join(ROOT, 'public/services/event-decor.html');
 const chrome = fs.readFileSync(TEMPLATE, 'utf8');
 
 const heroAt = chrome.indexOf('<section class="hero">');
-const footAt = chrome.indexOf('<footer>');
+/* The footer is the shared block tools/site-nav.js writes (since 2026-10-17,
+   #339); the bare <footer> it replaced is the fallback. */
+const footMark = chrome.indexOf('<!-- site-footer:start');
+const footAt = footMark >= 0 ? footMark : chrome.indexOf('<footer>');
 if (heroAt < 0 || footAt < 0) {
-  console.error('the services template has moved — expected <section class="hero"> and <footer> in ' + TEMPLATE);
+  console.error('the services template has moved — expected <section class="hero"> and the site-footer block in ' + TEMPLATE);
   process.exit(1);
 }
 let top = chrome.slice(0, heroAt);
@@ -377,7 +391,7 @@ const BODY = `<section class="hero">
   <div class="container">
     <div class="hero-eyebrow">Big Head Cutouts &mdash; Chicago</div>
     <h1>Send us a face.<br />We&rsquo;ll make it <em>enormous</em>.</h1>
-    <p>Printed and cut around the outline on rigid ${'3/16'}&Prime; board, in ${SIZES.map((s) => s + '&Prime;').join(', ')}.
+    <p>Printed and cut around the outline on rigid board, in ${SIZES.map((s) => s + '&Prime;').join(', ')}.
        ${singles.length ? 'Buy one at a time, or a full sheet' : 'Sold by the full sheet'} &mdash; a sheet works out from ${cheapestEach.size}&Prime; at ${each(cheapestEach)} a head.
        Pack prices include standard delivery${singles.length ? `; single cutouts add ${money(DELIVERY)} delivery once per order` : ''}.</p>
     <div class="hero-btns">
@@ -434,7 +448,7 @@ ${!singles.length ? '' : `<section>
   <div class="container">
     <div class="section-tag">By the single</div>
     <h2>Just need a few?</h2>
-    <p class="lead">The ${bothWays.map((s) => s + '&Prime;').join(' and ')} are also sold one at a time, for orders
+    <p class="lead">The ${bothWays.map((s) => s + '&Prime;').join(', ').replace(/, ([^,]*)$/, ' and $1')} are also sold one at a time${singles.some((m) => m.min > 1) ? ' (the ' + singles.filter((m) => m.min > 1).map((m) => m.size + '&Prime; ' + m.min + ' or more at a time').join(', ') + ')' : ''}, for orders
        too small to want a whole sheet.
        Single cutouts add ${money(DELIVERY)} standard delivery once per order.</p>
     <div class="ladders">${singleTables}
@@ -536,7 +550,7 @@ const PRINT_HTML = `<!DOCTYPE html>
     <h1>Big Head Cutouts</h1>
     <div class="who"><b>June&rsquo;s Tees &amp; Things</b>3047 N Lincoln Ave #435, Chicago IL 60657<br />(773) 900-4592 &middot; jtees.net</div>
   </div>
-  <p class="intro">Printed and cut around the outline on rigid 3/16&Prime; board, in ${SIZES.map((s) => s + '&Prime;').join(', ')}.
+  <p class="intro">Printed and cut around the outline on rigid board, in ${SIZES.map((s) => s + '&Prime;').join(', ')}.
      Send us the photo and the size. The measurement is the height of the finished cutout.</p>
   <div class="scale">${scaleDrawing(SIZES)}</div>
 

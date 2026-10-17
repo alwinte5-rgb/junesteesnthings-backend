@@ -2934,54 +2934,6 @@ async function syncTawkContactToBrevo({ name, email }) {
   });
 }
 
-// ─── Grad order pricing ───────────────────────────────────────────────────────
-
-const GRAD_PRICES = {
-  tee_1to4:      { name: 'Custom Grad Tee (1–4)',            price: 25  },
-  tee_5to9:      { name: 'Custom Grad Tee (5–9)',            price: 20  },
-  family_1to4:   { name: 'Family Matching Tee (1–4)',        price: 25  },
-  family_5to9:   { name: 'Family Matching Tee (5–9)',        price: 20  },
-  hoodie:        { name: 'Custom Hoodie',                    price: 45  },
-  stole:         { name: 'Graduation Stole',                 price: 45  },
-  yard_sign:     { name: 'Yard Sign (18"×12")',              price: 25  },
-  banner_4x2:    { name: "Banner (4'×2')",                   price: 45  },
-  banner_6x3:    { name: "Banner (6'×3')",                   price: 80  },
-  bighead_single:{ name: 'Big Head Cutout — Single',         price: 25  },
-  bighead_5pk:   { name: 'Big Head 5-Pack',                  price: 100 },
-  mini_standee:  { name: 'Mini Standee (24")',               price: 35  },
-  standee:       { name: 'Life-Size Standee (up to 6ft)',    price: 125 },
-  arch:          { name: 'Corroplast Arch',                  price: 250 },
-  backdrop:      { name: "Vinyl Backdrop Banner (6'×6')",    price: 150 },
-  button_4pk:    { name: 'Photo Buttons (set of 4)',         price: 28  },
-  button_10pk:   { name: 'Photo Buttons (set of 10)',        price: 60  },
-  magnet:        { name: 'Custom Photo Magnets (set of 6)',  price: 25  },
-  sticker:       { name: 'Custom Sticker Sheet (10-pack)',   price: 20  },
-  chipbag_6:     { name: 'Custom Chip Bags (set of 6)',      price: 18  },
-  chipbag_12:    { name: 'Custom Chip Bags (set of 12)',     price: 35  },
-  gable_box:     { name: 'Custom Gable Boxes (set of 6)',    price: 22  },
-  tumbler:       { name: 'Custom Photo Tumbler',             price: 28  },
-  cup_4pk:       { name: 'Custom Cup (set of 4)',            price: 36  },
-  can_cooler:    { name: 'Custom Can Coolers (6-Pack)',       price: 60  },
-  koozie:        { name: 'Koozies (set of 6)',               price: 35  },
-  step_repeat:   { name: "Step-and-Repeat Banner (8'×8')",  price: 200 },
-  prom_arch:     { name: 'Prom Arch',                        price: 250 },
-  photo_props:   { name: 'Photo Props',                      price: 89  },
-  prom_decal:    { name: 'Prom Decal',                       price: 80  },
-};
-
-function buildGradLineItems(order) {
-  const items = [];
-  for (const [key, { name, price }] of Object.entries(GRAD_PRICES)) {
-    const qty = order.products[key] || 0;
-    if (qty > 0) items.push({ name, price, quantity: qty });
-  }
-  const shirtQty = order.apparel?.shirt_qty || 0;
-  if (shirtQty > 0) {
-    const shirtPrice = shirtQty >= 100 ? 9.75 : shirtQty >= 50 ? 14.00 : 18.50;
-    items.push({ name: `Custom Shirts (qty: ${shirtQty})`, price: shirtPrice, quantity: shirtQty });
-  }
-  return items;
-}
 
 // ─── HubSpot ──────────────────────────────────────────────────────────────────
 
@@ -3153,136 +3105,6 @@ async function getCloverPayment(paymentId) {
   return res.data;
 }
 
-async function syncGradToBrevo(order) {
-  const [first, ...rest] = (order.parent_name || '').trim().split(' ');
-
-  // 1. Create / update contact
-  await brevo.post('/contacts', {
-    email:          order.email,
-    attributes:     { FIRSTNAME: first || '', LASTNAME: rest.join(' ') || '', SMS: order.phone || '' },
-    listIds:        process.env.BREVO_LIST_ID ? [parseInt(process.env.BREVO_LIST_ID)] : [],
-    updateEnabled:  true,
-  });
-
-  // 2. Get the contact's numeric ID for deal linking
-  const contactRes = await brevo.get(`/contacts/${encodeURIComponent(order.email)}`);
-  const contactId  = contactRes.data.id;
-
-  // 3. Build order summary
-  const lineItems      = buildGradLineItems(order);
-  const estimatedTotal = lineItems.reduce((sum, i) => sum + i.price * i.quantity, 0);
-  const itemSummary    = lineItems.map(i =>
-    `• ${i.name} × ${i.quantity} @ $${i.price.toFixed(2)} = $${(i.price * i.quantity).toFixed(2)}`
-  ).join('\n');
-
-  // 4. Design selections
-  const eventTypes  = (order.event_type || '').split(',').map(s => s.trim()).filter(Boolean);
-  const designMap   = { 'senior-night': 'senior_night', graduation: 'graduation', prom: 'prom' };
-  const designLines = eventTypes.map(evt => {
-    const key  = designMap[evt] || evt;
-    const name = order.designs?.[`${key}_name`] || order.designs?.[key] || '—';
-    const img  = order.designs?.[`${key}_img`]  || '';
-    return `  ${evt.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}: ${name}${img ? `\n  Image: ${img}` : ''}`;
-  }).join('\n');
-
-  // 5. Build full note
-  const photoLines = (order.photos || []).length
-    ? `\nUPLOADED PHOTOS (${order.photos.length}):\n${order.photos.map((u, i) => `  Photo ${i + 1}: ${u}`).join('\n')}`
-    : '\n  No photos uploaded.';
-
-  const noteText = [
-    `============================`,
-    `GRAD ORDER — ${order.order_ref}`,
-    `============================`,
-    ``,
-    `CUSTOMER`,
-    `  Name:    ${order.parent_name}`,
-    `  Student: ${order.student_name || '—'}`,
-    `  Email:   ${order.email}`,
-    `  Phone:   ${order.phone || '—'}`,
-    `  Address: ${order.address || '—'}`,
-    ``,
-    `EVENT`,
-    `  Type:      ${order.event_type}`,
-    `  Date:      ${order.event_date || '—'}`,
-    `  Needed By: ${order.needed_by || '—'}`,
-    `  School:    ${order.school || '—'}`,
-    `  Colors:    ${order.school_colors || '—'}`,
-    ``,
-    `DESIGN SELECTED`,
-    designLines || '  —',
-    ``,
-    `ORDER ITEMS`,
-    `  ${itemSummary.replace(/\n/g, '\n  ') || 'None'}`,
-    ``,
-    `  ESTIMATED TOTAL: $${estimatedTotal.toFixed(2)}`,
-    `  * Final price confirmed after design review`,
-    ``,
-    `PAYMENT METHOD: ${order.payment_method || '—'}`,
-    ``,
-    `PROOF AGREEMENT`,
-    `  Signed By: ${order.signature || '—'}`,
-    `  Date:      ${order.sign_date || '—'}`,
-    order.apparel?.design_notes ? `\nDESIGN NOTES:\n  ${order.apparel.design_notes}` : null,
-    order.notes ? `\nSPECIAL INSTRUCTIONS:\n  ${order.notes}` : null,
-    photoLines,
-  ].filter(l => l !== null).join('\n');
-
-  // 6. Create deal
-  const dealRes = await brevo.post('/crm/deals', {
-    name:       `Grad Order — ${order.parent_name} (${order.order_ref})`,
-    attributes: {
-      amount:     parseFloat(estimatedTotal.toFixed(2)),
-      close_date: order.needed_by ? new Date(order.needed_by).toISOString() : new Date().toISOString(),
-    },
-  });
-  const dealId = dealRes.data.id;
-  console.log('Brevo deal created:', dealId);
-
-  // 7. Link contact to deal
-  await brevo.patch(`/crm/deals/${dealId}`, { linkedContactsIds: [contactId] })
-    .catch(err => console.error('Brevo contact→deal link failed:', JSON.stringify(err.response?.data || err.message)));
-
-  // 8. Create note linked to contact + deal
-  await brevo.post('/crm/notes', {
-    text:       noteText,
-    contactIds: [contactId],
-    dealIds:    [dealId],
-  }).then(() => console.log('Brevo note created OK'))
-    .catch(err => console.error('Brevo note failed:', JSON.stringify(err.response?.data || err.message)));
-
-  return { contactId, dealId };
-}
-
-async function createGradCloverCustomerAndOrder(order) {
-  console.log('Clover MID:', MID(), 'Token set:', !!process.env.CLOVER_API_TOKEN);
-  try {
-    const customerRes = await clover.post(`/v3/merchants/${MID()}/customers`, {
-      firstName:      (order.parent_name || '').split(' ')[0],
-      lastName:       (order.parent_name || '').split(' ').slice(1).join(' ') || '',
-      emailAddresses: [{ emailAddress: order.email }],
-      phoneNumbers:   [{ phoneNumber: order.phone }],
-    });
-    const cloverCustomerId = customerRes.data.id;
-    const orderRes = await clover.post(`/v3/merchants/${MID()}/orders`, {
-      title:     `Grad Order ${order.order_ref}`,
-      customers: [{ id: cloverCustomerId }],
-    });
-    const cloverOrderId = orderRes.data.id;
-    const lineItems = buildGradLineItems(order);
-    await Promise.all(lineItems.map(item =>
-      clover.post(`/v3/merchants/${MID()}/orders/${cloverOrderId}/line_items`, {
-        name:    `${item.name}${item.quantity > 1 ? ` (×${item.quantity})` : ''}`,
-        price:   Math.round(item.price * item.quantity * 100), // total in cents
-        unitQty: 1000, // 1 unit in Clover milliUnits
-      })
-    ));
-    return { cloverCustomerId, cloverOrderId };
-  } catch (err) {
-    console.error('Clover error:', err.response?.status, JSON.stringify(err.response?.data || err.message));
-    throw err;
-  }
-}
 
 // ─── Auth (admin routes) ──────────────────────────────────────────────────────
 
@@ -5549,13 +5371,6 @@ function requireGradAdmin(req, res, next) {
   next();
 }
 
-function generateGradRef() {
-  const d = new Date();
-  const yy = String(d.getFullYear()).slice(-2);
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const rand = crypto.randomBytes(3).toString('hex').toUpperCase();
-  return `ORD-${yy}${mm}-${rand}`;
-}
 
 function escHtml(str) {
   if (str == null) return '';
@@ -5567,172 +5382,6 @@ function escHtml(str) {
     .replace(/'/g, '&#x27;');
 }
 
-function validateGradOrder(body) {
-  const errors = [];
-  if (!body.parent_name || !String(body.parent_name).trim()) errors.push('parent_name is required');
-  if (String(body.parent_name || '').length > 100) errors.push('parent_name too long');
-  if (!isValidEmail(body.email)) errors.push('valid email is required');
-  if (!body.event_type || !String(body.event_type).trim()) errors.push('event_type is required');
-  if (String(body.student_name || '').length > 100) errors.push('student_name too long');
-  if (String(body.phone || '').length > 30) errors.push('phone too long');
-  if (String(body.school || '').length > 200) errors.push('school too long');
-  if (String(body.address || '').length > 300) errors.push('address too long');
-  if (String(body.notes || '').length > 2000) errors.push('notes too long');
-  if (String(body.upload_link || '').length > 500) errors.push('upload_link too long');
-  return errors;
-}
-
-function buildOrderEmailTable(order) {
-  const lineItems = buildGradLineItems(order);
-  if (!lineItems.length) return '<p>No items selected.</p>';
-  let total = 0;
-  const rows = lineItems.map(({ name, price, quantity }) => {
-    const subtotal = price * quantity;
-    total += subtotal;
-    return `<tr>
-      <td style="padding:8px 12px;border-bottom:1px solid #eee;">${escHtml(name)}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #eee;text-align:center;">${quantity}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #eee;text-align:right;">$${price.toFixed(2)}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #eee;text-align:right;">$${subtotal.toFixed(2)}</td>
-    </tr>`;
-  }).join('');
-  return `<table style="width:100%;border-collapse:collapse;font-size:14px;">
-    <thead>
-      <tr style="background:#0B1F4B;color:#fff;">
-        <th style="padding:8px 12px;text-align:left;">Item</th>
-        <th style="padding:8px 12px;text-align:center;">Qty</th>
-        <th style="padding:8px 12px;text-align:right;">Unit Price</th>
-        <th style="padding:8px 12px;text-align:right;">Subtotal</th>
-      </tr>
-    </thead>
-    <tbody>${rows}</tbody>
-    <tfoot>
-      <tr style="background:#f9f9f9;font-weight:bold;">
-        <td colspan="3" style="padding:10px 12px;text-align:right;">Estimated Total</td>
-        <td style="padding:10px 12px;text-align:right;color:#0B1F4B;">$${total.toFixed(2)}</td>
-      </tr>
-    </tfoot>
-  </table>
-  <!-- This line used to name a surcharge for faster turnaround as something
-       the total excluded. The shop sells no such thing, so the note was quietly
-       telling customers one existed to be asked for. -->
-  <p style="font-size:12px;color:#999;margin-top:6px;">* Final price confirmed after design review. Does not include applicable taxes.</p>`;
-}
-
-async function sendGradOrderEmail(order) {
-  if (!process.env.BREVO_API_KEY && !process.env.RESEND_API_KEY) return;
-
-  const sec = (title, content) =>
-    `<div style="margin-bottom:28px;">
-      <div style="background:#0B1F4B;color:#fff;padding:8px 16px;border-radius:6px 6px 0 0;font-weight:800;font-size:.9rem;letter-spacing:.04em;text-transform:uppercase;">${title}</div>
-      <div style="border:1px solid #E5E7EB;border-top:none;border-radius:0 0 6px 6px;padding:16px;">${content}</div>
-    </div>`;
-
-  const row = (label, value) =>
-    `<tr><td style="padding:5px 8px 5px 0;font-weight:700;white-space:nowrap;vertical-align:top;width:160px;color:#374151;">${label}</td><td style="padding:5px 0;">${value || '—'}</td></tr>`;
-
-  // Design selections
-  const eventTypes = (order.event_type || '').split(',').map(s => s.trim()).filter(Boolean);
-  const designMap = { 'senior-night': 'senior_night', 'graduation': 'graduation', 'prom': 'prom' };
-  const designSection = eventTypes.map(evt => {
-    const key = designMap[evt] || evt.replace('-', '_');
-    const name = order.designs?.[`${key}_name`];
-    const img  = order.designs?.[`${key}_img`];
-    const label = evt.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-    return `<div style="margin-bottom:12px;">
-      <strong>${label}:</strong> ${escHtml(name || order.designs?.[key] || '—')}
-      ${img ? `<br/><img src="${escHtml(img)}" alt="${escHtml(name || '')}" style="max-width:220px;margin-top:8px;border-radius:6px;border:1px solid #E5E7EB;" />` : ''}
-    </div>`;
-  }).join('');
-
-  // Uploaded photos
-  const photoHtml = (order.photos || []).length
-    ? (order.photos.map((url, i) =>
-        `<div style="margin-bottom:10px;">
-          <div style="font-size:.82rem;color:#6B7280;margin-bottom:4px;">Photo ${i + 1}: <a href="${escHtml(url)}">${escHtml(url)}</a></div>
-          <img src="${escHtml(url)}" alt="Uploaded photo ${i + 1}" style="max-width:300px;border-radius:6px;border:1px solid #E5E7EB;display:block;" />
-        </div>`
-      ).join(''))
-    : '<p style="color:#6B7280;">No photos uploaded.</p>';
-
-  await sendEmail({
-    to:      NOTIFY_EMAIL,
-    replyTo: order.email || NOTIFY_EMAIL,
-    subject: `New Grad Order ${order.order_ref} — ${order.parent_name}`,
-    html: `<div style="font-family:sans-serif;max-width:700px;margin:0 auto;color:#1C1C2E;">
-      <div style="background:#0B1F4B;padding:20px 24px;border-radius:10px 10px 0 0;margin-bottom:24px;">
-        <div style="color:#F4A623;font-size:.8rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;">New Grad Order</div>
-        <h1 style="color:#fff;font-size:1.4rem;margin:4px 0 0;">${escHtml(order.order_ref)} &mdash; ${escHtml(order.parent_name)}</h1>
-      </div>
-
-      ${sec('Customer Info', `<table style="width:100%;border-collapse:collapse;">
-        ${row('Parent / Guardian', escHtml(order.parent_name))}
-        ${row('Student', escHtml(order.student_name))}
-        ${row('Email', `<a href="mailto:${escHtml(order.email)}">${escHtml(order.email)}</a>`)}
-        ${row('Phone', `<a href="tel:${escHtml(order.phone)}">${escHtml(order.phone)}</a>`)}
-        ${row('Delivery Address', escHtml(order.address))}
-      </table>`)}
-
-      ${sec('Event Info', `<table style="width:100%;border-collapse:collapse;">
-        ${row('Event Type', escHtml(order.event_type))}
-        ${row('Event Date', escHtml(order.event_date))}
-        ${row('Order Needed By', escHtml(order.needed_by))}
-        ${row('School', escHtml(order.school))}
-        ${row('School Colors', escHtml(order.school_colors))}
-      </table>`)}
-
-      ${sec('Design Selected', designSection || '<p style="color:#6B7280;">No design selected.</p>')}
-
-      ${sec('Design Notes & Personalization', order.apparel?.design_notes
-        ? `<p style="white-space:pre-wrap;margin:0;">${escHtml(order.apparel.design_notes)}</p>`
-        : '<p style="color:#6B7280;">None provided.</p>')}
-
-      ${sec('Items Ordered', buildOrderEmailTable(order))}
-
-      ${order.apparel?.shirt_qty > 0 ? sec('Apparel', `<table style="width:100%;border-collapse:collapse;">
-        ${row('Total Shirt Qty', String(order.apparel.shirt_qty))}
-      </table>`) : ''}
-
-      ${sec('Payment & Proof Agreement', `<table style="width:100%;border-collapse:collapse;">
-        ${row('Payment Method', escHtml(order.payment_method))}
-        ${row('Signed By', escHtml(order.signature))}
-        ${row('Date Signed', escHtml(order.sign_date))}
-      </table>
-      <p style="margin-top:12px;font-size:.85rem;color:#6B7280;">Customer agreed to: digital proof within 2 business days, 24-hour approval window, 50% deposit invoice via Clover, 7–14 business day production after deposit.</p>`)}
-
-      ${order.notes ? sec('Special Instructions', `<p style="white-space:pre-wrap;margin:0;">${escHtml(order.notes)}</p>`) : ''}
-
-      ${sec(`Uploaded Photos (${(order.photos || []).length})`, photoHtml)}
-
-    </div>`,
-  });
-}
-
-async function sendGradOrderConfirmationEmail(order) {
-  if ((!process.env.BREVO_API_KEY && !process.env.RESEND_API_KEY) || !order.email) return;
-  await sendEmail({
-    to:      order.email,
-    subject: `Your Grad Order is Confirmed — ${order.order_ref}`,
-    html: `<div style="font-family:sans-serif;max-width:680px;margin:0 auto;">
-      <h2 style="color:#0B1F4B;">Thanks, ${escHtml(order.parent_name.split(' ')[0])}! 🎓</h2>
-      <p>We've received your grad order and will be in touch soon to confirm your design and next steps.</p>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
-        <tr><td style="padding:6px 0;font-weight:bold;width:140px;">Order Ref</td><td>${escHtml(order.order_ref)}</td></tr>
-        <tr><td style="padding:6px 0;font-weight:bold;">Student</td><td>${escHtml(order.student_name) || '—'}</td></tr>
-        <tr><td style="padding:6px 0;font-weight:bold;">Event</td><td>${escHtml(order.event_type)} — ${escHtml(order.event_date) || '—'}</td></tr>
-        <tr><td style="padding:6px 0;font-weight:bold;">Needed By</td><td>${escHtml(order.needed_by) || '—'}</td></tr>
-        <tr><td style="padding:6px 0;font-weight:bold;">Payment</td><td>${escHtml(order.payment_method) || '—'}</td></tr>
-      </table>
-      <h3 style="color:#0B1F4B;">Your Order Summary</h3>
-      ${buildOrderEmailTable(order)}
-      ${order.apparel?.design_notes ? `<h3 style="color:#0B1F4B;">Your Design Notes</h3><p style="background:#f9f9f9;padding:12px;border-radius:6px;">${escHtml(order.apparel.design_notes)}</p>` : ''}
-      ${order.notes ? `<p><strong>Special Instructions:</strong> ${escHtml(order.notes)}</p>` : ''}
-      <p style="margin-top:24px;">Questions? Reply to this email or call/text us at <a href="tel:+17739004592">(773) 900-4592</a></p>
-      ${designerPromoBlock()}
-      <p style="color:#999;font-size:12px;">June's Tees &amp; Things · 3047 N Lincoln Ave #435, Chicago, IL 60657</p>
-    </div>`,
-  });
-}
 
 // Cloudinary public config
 app.get('/api/config', signatureRateLimit, (req, res) => {
@@ -5783,9 +5432,13 @@ app.post('/api/cloudinary-signature', signatureRateLimit, (req, res) => {
   const body = (req.body && typeof req.body === 'object') ? req.body : {};
 
   // The folder is chosen by the server from a fixed list — never echoed back.
-  const ALLOWED_FOLDERS = ['grad_orders', 'quote_requests', 'embroidery_quotes', 'review_photos', QPHOTOS.FOLDER];
+  /* grad_orders went with grad ordering (2026-10-17). Every caller names its
+     folder, so a request that names none, or an unknown one, is refused rather
+     than signed into a default nobody reads. */
+  const ALLOWED_FOLDERS = ['quote_requests', 'embroidery_quotes', 'review_photos', QPHOTOS.FOLDER];
   const requestedFolder = typeof body.folder === 'string' ? body.folder : '';
-  const folder = ALLOWED_FOLDERS.includes(requestedFolder) ? requestedFolder : 'grad_orders';
+  if (!ALLOWED_FOLDERS.includes(requestedFolder)) return res.status(400).json({ error: 'Unknown upload folder' });
+  const folder = requestedFolder;
 
   /* Use the widget's timestamp — overwriting it causes a mismatch, since the
      widget sends its own with the actual upload. But bound it: a signature
@@ -9118,7 +8771,6 @@ function totalsForItems(q, items) {
 }
 
 
-
 /* What is still owed, everywhere. One definition so the board, the customer
    page, the payment routes and the books cannot disagree — a balance shown in
    one place and not another is how a customer gets chased for money the shop has
@@ -9408,7 +9060,7 @@ function toE164(phone) {
 }
 
 /** Mirror a quote into Brevo: contact -> deal -> note, same shape as
- *  syncGradToBrevo(). Every call is guarded; the Postgres row already holds the
+ *  the old grad-order sync. Every call is guarded; the Postgres row already holds the
  *  truth, so a Brevo outage must never surface as a failed quote.
  *
  *  A quote has ONE deal. Once it has one (q.brevo_deal_id), a later call updates
@@ -11103,21 +10755,28 @@ function productGroupOf(name) {
             var packs = CAT.methods.filter(function(m){
               return m.active !== false && m.use_for_quoting !== false &&
                 m.title.indexOf('Big Head Cutout') === 0 && upNum(m.title, 'in,') === size &&
-                upNum(m.title, '-pack') > x.qty;
+                upNum(m.title, '-pack') > 0;
             }).sort(function(a, b){ return upNum(a.title, '-pack') - upNum(b.title, '-pack'); });
             if (!packs.length) return;
-            var pk = packs[0], heads = upNum(pk.title, '-pack');
-            var pr = priceLine(Object.assign({}, x.args, { method: pk, qty: 1, unitOverride: '' }));
+            /* The smallest pack that holds them all; at or past a pack's size
+               (eight 24in singles, 2026-10-17), as many packs as it takes,
+               offered only when that is cheaper than the singles. */
+            var fits = packs.filter(function(m){ return upNum(m.title, '-pack') > x.qty; });
+            var pk = fits[0] || packs[packs.length - 1], heads = upNum(pk.title, '-pack');
+            var nPk = fits.length ? 1 : Math.ceil(x.qty / heads);
+            var pr = priceLine(Object.assign({}, x.args, { method: pk, qty: nPk, unitOverride: '' }));
             var more = Math.round((pr.lineTotal - x.lt) * 100) / 100;
+            if (!fits.length && more >= 0) return;
+            var got = heads * nPk;
             ideas.push({ key: 'pack' + n, label: 'Item ' + n + ': ' + size + 'in singles to the ' + heads + '-pack',
-              text: tag + 'the ' + size + 'in ' + heads + '-pack is ' + m2(pr.lineTotal) + ' against ' + m2(x.lt) +
-                ' for these ' + x.qty + ' singles: ' + (heads - x.qty) + ' more heads for ' +
-                (more >= 0 ? m2(more) + ' more' : m2(-more) + ' less') + ' (' + m2(pr.lineTotal / heads) + ' a head).',
+              text: tag + (nPk > 1 ? nPk + ' x ' : '') + 'the ' + size + 'in ' + heads + '-pack is ' + m2(pr.lineTotal) + ' against ' + m2(x.lt) +
+                ' for these ' + x.qty + ' singles: ' + (got > x.qty ? (got - x.qty) + ' more heads for ' : 'the same heads for ') +
+                (more >= 0 ? m2(more) + ' more' : m2(-more) + ' less') + ' (' + m2(pr.lineTotal / got) + ' a head).',
               apply: function(){
                 var sel = x.L.querySelector('.p');
                 sel.value = 'cut:' + pk.id;
                 if (sel.value !== 'cut:' + pk.id) return false;
-                x.L.querySelector('.q').value = '1';
+                x.L.querySelector('.q').value = String(nPk);
                 x.L.querySelector('.u').value = '';
               } });
             return;
@@ -28914,161 +28573,11 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
     Math.max(5000, Number(process.env.JT_CHAT_ALERT_EVERY_MS) || 5 * 60 * 1000));
 }
 
-// Submit grad order
-app.post('/api/submit-order', orderRateLimit, rejectBots, async (req, res) => {
-  // Grad ordering is retired — delete this early return to reactivate the
-  // handler below, which is kept intact in case the program returns.
-  if (!process.env.GRAD_ORDERS_ENABLED) {
-    return res.status(410).json({ success: false, error: 'Grad ordering has ended. Visit https://www.jtees.net/ to place a custom order.' });
-  }
-  try {
-    const body = req.body;
-    const errors = validateGradOrder(body);
-    if (errors.length) return res.status(400).json({ success: false, error: errors.join('; ') });
-
-    let photos = [];
-    try {
-      const raw = Array.isArray(body.photos) ? body.photos : (body.photos_json ? JSON.parse(body.photos_json) : []);
-      photos = Array.isArray(raw) ? raw.filter(u => typeof u === 'string' && u.startsWith('https://res.cloudinary.com/')).slice(0, 20) : [];
-    } catch { photos = []; }
-
-    const orderRef = generateGradRef();
-    // Clamp quantities to a sane range so junk input can't produce
-    // negative or absurd totals in emails and CRM records.
-    const gradQty = (v) => {
-      const n = parseInt(v, 10);
-      return Number.isInteger(n) && n > 0 ? Math.min(n, 10000) : 0;
-    };
-    const products = {
-      // Apparel
-      tee_1to4: gradQty(body.qty_tee_1to4),
-      tee_5to9: gradQty(body.qty_tee_5to9),
-      family_1to4: gradQty(body.qty_family_1to4),
-      family_5to9: gradQty(body.qty_family_5to9),
-      hoodie: gradQty(body.qty_hoodie),
-      stole: gradQty(body.qty_stole),
-      // Signs & Banners
-      yard_sign: gradQty(body.qty_yard_sign),
-      banner_4x2: gradQty(body.qty_banner_4x2),
-      banner_6x3: gradQty(body.qty_banner_6x3),
-      // Cutouts & Standees
-      bighead_single: gradQty(body.qty_bighead_single),
-      bighead_5pk: gradQty(body.qty_bighead_5pk),
-      mini_standee: gradQty(body.qty_mini_standee),
-      standee: gradQty(body.qty_standee),
-      // Arches & Backdrops
-      arch: gradQty(body.qty_arch),
-      backdrop: gradQty(body.qty_backdrop),
-      // Party Favors
-      button_4pk: gradQty(body.qty_button_4pk),
-      button_10pk: gradQty(body.qty_button_10pk),
-      magnet: gradQty(body.qty_magnet),
-      sticker: gradQty(body.qty_sticker),
-      chipbag_6: gradQty(body.qty_chipbag_6),
-      chipbag_12: gradQty(body.qty_chipbag_12),
-      gable_box: gradQty(body.qty_gable_box),
-      // Drinkware
-      tumbler: gradQty(body.qty_tumbler),
-      cup_4pk: gradQty(body.qty_cup_4pk),
-      can_cooler: gradQty(body.qty_can_cooler),
-      koozie: gradQty(body.qty_koozie),
-      // Prom Night
-      step_repeat: gradQty(body.qty_step_repeat),
-      prom_arch: gradQty(body.qty_prom_arch),
-      photo_props: gradQty(body.qty_photo_props),
-      prom_decal: gradQty(body.qty_prom_decal),
-    };
-    const apparel = {
-      shirt_qty: gradQty(body.shirt_qty), print_method: body.print_method || '',
-      sizes: {
-        youth_s: parseInt(body.size_ys) || 0, youth_m: parseInt(body.size_ym) || 0,
-        youth_l: parseInt(body.size_yl) || 0, youth_xl: parseInt(body.size_yxl) || 0,
-        adult_s: parseInt(body.size_as) || 0, adult_m: parseInt(body.size_am) || 0,
-        adult_l: parseInt(body.size_al) || 0, adult_xl: parseInt(body.size_axl) || 0,
-        '2xl': parseInt(body.size_2xl) || 0, '3xl': parseInt(body.size_3xl) || 0,
-        '4xl': parseInt(body.size_4xl) || 0, '5xl': parseInt(body.size_5xl) || 0,
-      },
-      design_notes: body.design_notes || '',
-    };
-    const designs = {
-      senior_night: body['design_senior-night'] || '',
-      graduation:   body.design_graduation || '',
-      prom:         body.design_prom || '',
-      senior_night_name: body['design_name_senior-night'] || '',
-      graduation_name:   body.design_name_graduation || '',
-      prom_name:         body.design_name_prom || '',
-      senior_night_img:  body['design_img_senior-night'] || '',
-      graduation_img:    body.design_img_graduation || '',
-      prom_img:          body.design_img_prom || '',
-    };
-    const order = {
-      order_ref: orderRef, parent_name: String(body.parent_name).trim(),
-      student_name: (body.student_name || '').trim(), email: String(body.email).trim().toLowerCase(),
-      phone: (body.phone || '').trim(), school: (body.school || '').trim(),
-      event_date: body.event_date || '', needed_by: body.needed_by || '',
-      address: (body.address || '').trim(), event_type: String(body.event_type).trim(),
-      products, apparel, designs,
-      upload_method: body.upload_method || '', upload_link: body.upload_link || '',
-      payment_method: body.payment_method || '', notes: (body.notes || '').trim(),
-      signature: (body.signature || '').trim(), sign_date: (body.sign_date || '').trim(),
-      school_colors: (body.school_colors || '').trim(), photos,
-    };
-
-    const rawData = {
-      school_colors: order.school_colors,
-      sign_date: order.sign_date,
-      design_selection: designs,
-    };
-
-    await pool.query(
-      `INSERT INTO grad_orders
-        (order_ref, parent_name, student_name, email, phone, school,
-         event_date, needed_by, address, event_type, products, apparel,
-         designs, upload_method, upload_link, payment_method, notes, signature, photos, raw_data)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
-      [order.order_ref, order.parent_name, order.student_name, order.email,
-       order.phone, order.school, order.event_date, order.needed_by,
-       order.address, order.event_type,
-       JSON.stringify(order.products), JSON.stringify(order.apparel), JSON.stringify(order.designs),
-       order.upload_method, order.upload_link, order.payment_method,
-       order.notes, order.signature, JSON.stringify(order.photos), JSON.stringify(rawData)]
-    );
-
-    const [emailResult, confirmResult, hubspotResult, cloverResult] = await Promise.allSettled([
-      sendGradOrderEmail(order),
-      sendGradOrderConfirmationEmail(order),
-      syncGradToBrevo(order),
-      createGradCloverCustomerAndOrder(order),
-    ]);
-    if (emailResult.status   === 'rejected') console.error('Grad notification email failed:', emailResult.reason?.message);
-    if (confirmResult.status === 'rejected') console.error('Grad confirmation email failed:',  confirmResult.reason?.message);
-    if (hubspotResult.status === 'rejected') console.error('Grad Brevo sync failed:',          hubspotResult.reason?.message, JSON.stringify(hubspotResult.reason?.response?.data));
-    if (cloverResult.status  === 'rejected') console.error('Grad Clover sync failed:',         cloverResult.reason?.message, JSON.stringify(cloverResult.reason?.response?.data));
-
-    const idUpdates = [];
-    const idValues  = [];
-    let   idx       = 1;
-    if (hubspotResult.status === 'fulfilled') {
-      idUpdates.push(`hubspot_contact_id=$${idx++}`, `hubspot_deal_id=$${idx++}`);
-      idValues.push(hubspotResult.value.contactId, hubspotResult.value.dealId);
-    }
-    if (cloverResult.status === 'fulfilled') {
-      idUpdates.push(`clover_customer_id=$${idx++}`, `clover_order_id=$${idx++}`);
-      idValues.push(cloverResult.value.cloverCustomerId, cloverResult.value.cloverOrderId);
-    }
-    if (idUpdates.length) {
-      idValues.push(orderRef);
-      pool.query(
-        `UPDATE grad_orders SET ${idUpdates.join(', ')} WHERE order_ref=$${idx}`,
-        idValues
-      ).catch(err => console.error('Grad ID update failed:', err.message));
-    }
-
-    res.json({ success: true, orderRef });
-  } catch (err) {
-    console.error('Grad order error:', err);
-    res.status(500).json({ success: false, error: 'Failed to save order. Please try again.' });
-  }
+/* Grad ordering ended, and its old price list (a $25 big head single among
+   it) was removed on 2026-10-17 at the owner's request. Old links still get a
+   clear answer. Past grad orders stay readable below. */
+app.post('/api/submit-order', (_req, res) => {
+  res.status(410).json({ success: false, error: 'Grad ordering has ended. Visit https://www.jtees.net/ to place a custom order.' });
 });
 
 // Grad orders admin

@@ -31,6 +31,18 @@ const BOARD = 3.00;               // one 20x30 board per head
 const SHEET = 44.00;              // 48x96 coroplast, printed by Signs365 (the owner, 2026-10-06); she cuts it
 const SHOP_RATE = 50;             // $/hour
 const MINUTES_PER_HEAD = 5;       // timed by the owner 2026-10-06: about 5 minutes a head
+/* A 24" head one at a time (owner, 2026-10-17): buy only the printed sticker
+   from Signs365 and mount it on a coroplast piece bought separately, $8 each;
+   the owner cuts it out by hand ("I would cut"), so there is no contour-cut
+   charge. Sticker 22.6 x 24 bills as 2 ft x 2 ft = 4 sqft x $2.49 = $9.96,
+   + $8.00 coro + 5 minutes ($4.17) = $22.13 a head, about $44.26 at x2.
+   Flat per head: nothing gets cheaper at volume on this route, so the
+   full-sheet 8-pack wins well before 8 heads (from 5 at the owner's prices,
+   PACK_WINS_24 in tools/add-cutouts.js), and the quote form says so. */
+const CORO_PIECE = { 24: 8.00 };
+/* Sold two at a time at the least (owner, 2026-10-17: "make the 24 inch singles
+   minimum of two for purchase"). */
+const SINGLE_MIN = { 24: 2 };
 /* Per head, on a PACK. The sheet arrives contour cut, so none of the cutting
    is ours — but the sticks still have to be glued on, and one minute a head is
    almost certainly short for that. It is the number the pack price is most
@@ -90,7 +102,9 @@ function costEach(size, n) {
   const sheet = SHEET * Math.ceil(n / PER_SHEET[size]) + n * labour(MINUTES_HANDLING);
   const inHouse = fitsBoard(size)
     ? n * (printCost(size) + BOARD + labour(MINUTES_PER_HEAD))
-    : Infinity;
+    : CORO_PIECE[size]
+      ? n * (printCost(size) + CORO_PIECE[size] + labour(MINUTES_PER_HEAD))
+      : Infinity;
   /* FREIGHT IS NOT IN HERE, and an attempt to put it here was reverted on
      2026-09-23 within the hour. It is charged once an ORDER, and a per-piece
      cost is per METHOD: with it folded in, a job with a 12in pack and 18in
@@ -147,7 +161,7 @@ function singlesLadder(size, bands) {
 }
 
 /** Smallest run worth selling: one sheet, where there is no in-house route. */
-const minimumFor = (size) => (fitsBoard(size) ? 1 : PER_SHEET[size]);
+const minimumFor = (size) => (fitsBoard(size) ? 1 : CORO_PIECE[size] ? (SINGLE_MIN[size] || 1) : PER_SHEET[size]);
 
 /* ── PACKS ────────────────────────────────────────────────────────────────
  *
@@ -241,7 +255,7 @@ const CUTOUT_CATEGORY = { name: 'Big Head Cutouts', slug: 'custom-big-head-cutou
 
 module.exports = {
   CUTOUT_METHOD, cutoutPrintings, cutoutStages, CUTOUT_CATEGORY,
-  VINYL_SQFT, LAMINATE_AND_CUT, BOARD, SHEET, SHOP_RATE, MINUTES_PER_HEAD,
+  VINYL_SQFT, LAMINATE_AND_CUT, BOARD, SHEET, SHOP_RATE, MINUTES_PER_HEAD, CORO_PIECE, SINGLE_MIN,
   MINUTES_HANDLING, MARKUP, PER_SHEET, BANDS,
   boxOf, sqftOf, fitsBoard, labour, costEach, ladderFor, minimumFor,
   packSizeFor, packCost, packPrice, SHIPPING_WEEKDAY, singlesLadder,
