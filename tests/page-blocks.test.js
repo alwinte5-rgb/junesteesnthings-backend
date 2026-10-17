@@ -75,7 +75,11 @@ test('the ad pages make no promise the owner has taken back', () => {
     assert.doesNotMatch(body, /about a week/, rel);
     assert.doesNotMatch(body, /\b12\+/, rel);
     assert.doesNotMatch(body, /Grab it curbside/, rel);
+    assert.doesNotMatch(body, /24.48 hour/, rel);
   }
+  // the announcement bar is on every page: no rush promise there
+  const nav = JSON.parse(read('assets/data/site-nav.json'));
+  for (const a of nav.announcement) assert.doesNotMatch(a.text, /rush/i);
 });
 
 test('page cards are refreshed from the feed by link, built with DOM calls only', () => {
