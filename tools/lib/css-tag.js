@@ -1,0 +1,34 @@
+'use strict';
+
+/* A stylesheet link stamped with a hash of the file (?v=<sha1, 8 chars>), so a
+ * style change reaches every browser at once instead of after the hour
+ * Cloudflare lets them keep the old copy (max-age=3600). On 2026-10-17 the new
+ * services ticker showed as flat text until that copy expired.
+ *
+ *   const css = cssTag('/assets/css/site-nav.css');
+ *   css.tag            the <link> to write
+ *   css.v              the stamp
+ *   css.put(html)      the link in place: an older link (stamped or not) is
+ *                      replaced where it stands, so styles after it still win;
+ *                      a page with none gets it at the end of <head>
+ */
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+
+const PUBLIC = path.join(__dirname, '..', '..', 'public');
+
+function cssTag(href) {
+  const v = crypto.createHash('sha1').update(fs.readFileSync(path.join(PUBLIC, href))).digest('hex').slice(0, 8);
+  const tag = `<link rel="stylesheet" href="${href}?v=${v}" />`;
+  const any = new RegExp(`<link rel="stylesheet" href="${href.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}(?:\\?v=[0-9a-f]+)?" \\/>`, 'g');
+  const put = (html) => {
+    if (html.includes(tag)) return html;
+    let first = true;
+    const out = html.replace(any, () => (first ? ((first = false), tag) : ''));
+    return first ? out.replace('</head>', `  ${tag}\n</head>`) : out;
+  };
+  return { href, v, tag, put };
+}
+
+module.exports = { cssTag };

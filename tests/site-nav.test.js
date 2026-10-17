@@ -177,3 +177,14 @@ test('every Design Studio mention links to the designer', () => {
   }
   assert.deepStrictEqual(bad, []);
 });
+
+test('a stamped stylesheet replaces the old link where it stood, so later styles still win', () => {
+  const { cssTag } = require('../tools/lib/css-tag');
+  const css = cssTag('/assets/css/site-nav.css');
+  const page = '<head>\n  <link rel="stylesheet" href="/assets/css/site-nav.css" />\n  <style>.jtn{color:red}</style>\n</head>';
+  const out = css.put(page);
+  assert.ok(out.indexOf(css.tag) > -1 && out.indexOf(css.tag) < out.indexOf('<style>'), 'the link stays before the page style');
+  assert.strictEqual(out.split('site-nav.css').length - 1, 1, 'one link, not two');
+  assert.strictEqual(css.put(out), out, 'already current: unchanged');
+  assert.match(css.put('<head>\n</head>'), /site-nav\.css\?v=[0-9a-f]{8}" \/>\n<\/head>/, 'no link yet: added before </head>');
+});
