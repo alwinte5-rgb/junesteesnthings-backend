@@ -123,7 +123,7 @@ ${sections}
     <div class="section-tag">Common questions</div>
     <h2>${esc(strip(page.h1).replace(/ in Chicago$/, ''))} FAQs</h2>
     <div class="faq-list">
-      ${page.faq.map((f) => `<div class="faq-item"><div class="faq-q">${esc(f.q)}</div><div class="faq-a">${esc(f.a)}</div></div>`).join('\n      ')}
+      ${page.faq.map((f) => `<details class="faq-item"><summary class="faq-q">${esc(f.q)}</summary><div class="faq-a">${esc(f.a)}</div></details>`).join('\n      ')}
     </div>
   </div>
 </section>

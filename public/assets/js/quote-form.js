@@ -445,7 +445,18 @@
   function init() {
     var home = document.getElementById('quote-form');
     if (home) wire(home);
-    Array.prototype.forEach.call(document.querySelectorAll('[data-jt-quote-form]'), build);
+    /* A mount is drawn when it comes near the screen, not on load: the form
+       sits at the foot of most pages, and drawing it costs two calls against
+       the 60-an-hour limit /api/config and /api/form-token share with the
+       shop feed and uploads, plus Cloudflare's Turnstile script. Someone
+       reading 30 pages would otherwise use the limit up and then be unable
+       to send. Without IntersectionObserver every mount is drawn at once. */
+    var mounts = document.querySelectorAll('[data-jt-quote-form]');
+    if (!('IntersectionObserver' in window)) { Array.prototype.forEach.call(mounts, build); return; }
+    var io = new IntersectionObserver(function (seen) {
+      seen.forEach(function (s) { if (s.isIntersecting) { io.unobserve(s.target); build(s.target); } });
+    }, { rootMargin: '800px 0px' });
+    Array.prototype.forEach.call(mounts, function (m) { io.observe(m); });
   }
 
   window.JTQuoteForm = { wire: wire, build: build, _turnstile: turnstile };
