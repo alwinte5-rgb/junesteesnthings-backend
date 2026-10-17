@@ -150,3 +150,27 @@ test('no page hides overflow on html or body, so the menu stays sticky', () => {
   assert.ok(checked > 20, `pages and stylesheets checked (${checked})`);
   assert.deepStrictEqual(bad, []);
 });
+
+/* Every mention of the Design Studio takes you there (owner, 2026-10-17:
+   "make sure any mention of the designer takes you there in the link"), and
+   the blue bar's "Design your own apparel online" opens the designer. */
+test('every Design Studio mention links to the designer', () => {
+  const nav = JSON.parse(read('assets/data/site-nav.json'));
+  assert.match(nav.announcement[0].href, /^https:\/\/design\.jtees\.net\//, 'the blue bar opens the designer');
+  const bad = [];
+  const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) return /^(admin|staff|downloads)$/.test(e.name) ? [] : walk(p);
+    return e.name.endsWith('.html') ? [p] : [];
+  });
+  for (const p of walk(PUBLIC)) {
+    let html = fs.readFileSync(p, 'utf8').replace(/<head>[\s\S]*?<\/head>/i, '')
+      .replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, '').replace(/<!--[\s\S]*?-->/g, '');
+    for (const m of html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)) {
+      if (/Design Studio/.test(m[2]) && !/href="https:\/\/design\.jtees\.net\//.test(m[1])) bad.push(`${path.relative(PUBLIC, p)}: link "${m[2].replace(/<[^>]+>/g, '').trim().slice(0, 40)}" goes elsewhere`);
+    }
+    html = html.replace(/<a\b[\s\S]*?<\/a>/gi, '').replace(/<figcaption[\s\S]*?<\/figcaption>/gi, '').replace(/<[^>]+>/g, ' ');
+    if (/Design Studio/.test(html)) bad.push(`${path.relative(PUBLIC, p)}: "Design Studio" with no link`);
+  }
+  assert.deepStrictEqual(bad, []);
+});

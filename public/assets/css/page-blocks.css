@@ -10,6 +10,7 @@
 .pb-reviews{background:#F7F6F3}
 .pb-work{background:#fff}
 .pb-head{display:flex;align-items:flex-end;justify-content:space-between;gap:1rem;margin-bottom:1.4rem}
+.pb-tag a,.pb-head h2 a{color:inherit;text-decoration:underline;text-underline-offset:3px}
 .pb-tag{font-size:.75rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#F0275A;margin-bottom:.4rem}
 .pb-products h2,.pb-reviews h2,.pb-work h2{font-size:clamp(1.45rem,3.2vw,2rem);font-weight:800;color:#0B1F4B;line-height:1.15;margin:0}
 .pb-all{color:#1848B8;font-weight:700;font-size:.92rem;text-decoration:none;white-space:nowrap}

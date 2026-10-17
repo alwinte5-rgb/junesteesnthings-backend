@@ -43,6 +43,11 @@ const { escHtml: esc } = require('./lib/html-escape');
 
 /* data-from names the page in GA4's designer_open event (analytics.js):
    services/embroidery.html -> svc_embroidery, blog/x.html -> blog_x. */
+/* Every mention of the Design Studio is a link to it (owner, 2026-10-17:
+   "make sure any mention of the designer takes you there"). */
+const STUDIO = 'https://design.jtees.net/products.php';
+const studioLink = (html, from) => html.replace(/Design Studio/, `<a href="${STUDIO}" data-from="${from}">Design Studio</a>`);
+
 function fromTag(rel) {
   const [dir, file] = rel.split('/');
   const pre = { services: 'svc', areas: 'area', blog: 'blog' }[dir] || 'page';
@@ -74,7 +79,7 @@ function productsBlock(data, page, rel) {
 <section class="pb-products" aria-labelledby="pb-products-h">
   <div class="pb-wrap">
     <div class="pb-head">
-      <div><div class="pb-tag">Design Studio &middot; see it before you buy</div><h2 id="pb-products-h">${esc(page.heading)}</h2></div>
+      <div><div class="pb-tag"><a href="${STUDIO}" data-from="${from}">Design Studio</a> &middot; see it before you buy</div><h2 id="pb-products-h">${studioLink(esc(page.heading), from)}</h2></div>
       <a class="pb-all" href="https://design.jtees.net/products.php" data-from="${from}">All products &rarr;</a>
     </div>
     <div class="pb-grid">

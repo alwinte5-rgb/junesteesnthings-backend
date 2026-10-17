@@ -3,7 +3,7 @@
   "announcement": [
     {
       "text": "🎨 NEW — Design your own apparel online",
-      "href": "/#shop"
+      "href": "https://design.jtees.net/editor.php?product_base=14"
     },
     {
       "text": "Visits by appointment only · Pickups: follow the instructions we email or text you"
@@ -198,5 +198,20 @@
   "account": {
     "label": "My Account",
     "href": "https://design.jtees.net/account.php"
-  }
+  },
+  "ticker": [
+    "Screen Printing",
+    "Custom Embroidery",
+    "DTF Transfers",
+    "Banners & Signs",
+    "Event Décor",
+    "Graphic Design",
+    "Custom Tees",
+    "Team & Group Orders",
+    "Yard Signs",
+    "Step & Repeat Backdrops",
+    "Big Head Cutouts",
+    "Black-Owned",
+    "Women-Owned"
+  ]
 }

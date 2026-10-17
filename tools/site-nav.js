@@ -80,7 +80,16 @@ function render(nav, site = '') {
   const drawer = nav.menu.map((m) => m.items
     ? `<details><summary>${esc(m.label)}</summary>${m.items.map((i) => link(i, i.strong ? 'jtn-strong' : '')).join('')}</details>`
     : link(m)).join('\n    ');
-  const bar = nav.announcement.map((a) => a.href ? `<a href="${esc(abs(a.href))}">${esc(a.text)}</a>` : esc(a.text)).join(' <span aria-hidden="true">|</span> ');
+  /* Only the first note shows on phones, so the sticky top stays one line. */
+  const bar = nav.announcement.map((a, i) => {
+    const t = a.href ? `<a href="${esc(abs(a.href))}">${esc(a.text)}</a>` : esc(a.text);
+    return i ? `<span class="jtn-bar-x"><span aria-hidden="true">|</span> ${t}</span>` : t;
+  }).join(' ');
+  /* The services ticker under the blue bar, on every page (owner, 2026-10-17).
+     Written twice so the scroll loops without a gap; decoration only, so
+     hidden from screen readers. */
+  const tick = (nav.ticker || []).map((t) => `<span class="jtn-tick-i"><b aria-hidden="true">✦</b> ${esc(t)}</span>`).join('');
+  const ticker = tick ? `<div class="jtn-tick" aria-hidden="true"><div class="jtn-tick-track">${tick}${tick}</div></div>` : '';
   const tel = `tel:${nav.phone.tel}`;
   const sms = `sms:${nav.phone.tel}?&body=Hi%20June%27s%20Tees!%20I%20have%20a%20question%20about%20a%20custom%20order.`;
   /* Product search: a plain GET form to the Design Studio's product list
@@ -95,7 +104,9 @@ function render(nav, site = '') {
 <link rel="stylesheet" href="${site}/assets/css/site-nav.css" />
 ` : '';
   return `${START}
-${head}<div class="jtn-bar">${bar}</div>
+${head}<div class="jtn-sticky">
+<div class="jtn-bar">${bar}</div>
+${ticker}
 <div class="jtn" role="banner">
   <div class="jtn-in">
     <a href="${abs('/')}" class="jtn-logo"><img src="${abs('/assets/images/brand/logo-mark.png')}" alt="June's Tees &amp; Things logo" width="40" height="44" /><span>June's Tees &amp; Things<small>Chicago Custom Printing</small></span></a>
@@ -115,6 +126,7 @@ ${head}<div class="jtn-bar">${bar}</div>
     </div>
   </div>
   ${sform('jtn-search', 'jtn-search').replace('class="jtn-search"', 'class="jtn-search" hidden')}
+</div>
 </div>
 <div class="jtn-shade" hidden></div>
 <div class="jtn-drawer" id="jtn-drawer" hidden>
