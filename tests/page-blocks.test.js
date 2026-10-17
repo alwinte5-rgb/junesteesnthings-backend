@@ -26,7 +26,7 @@ const NAV = require('../tools/site-nav');
 const PUBLIC = path.join(__dirname, '..', 'public');
 const read = (rel) => fs.readFileSync(path.join(PUBLIC, rel), 'utf8');
 const { data } = PB.load();
-const marketing = NAV.pages().filter((p) => /^(services|areas|blog)\//.test(p));
+const marketing = NAV.pages().filter((p) => /^(services|areas|blog|occasions)\//.test(p));
 
 test('every page has the current blocks (else: node tools/page-blocks.js --write)', () => {
   assert.deepStrictEqual(PB.validate(data), []);
@@ -46,7 +46,7 @@ test('each page runs hero, photos, products, reviews, then its copy, FAQ, call t
     assert.ok((html.match(/class="pb-card"/g) || []).length >= 4, rel + ': at least four cards');
     assert.match(html, /\/assets\/css\/page-blocks\.css/, rel + ': styles linked');
     assert.match(html, /\/assets\/js\/shop-feed\.js/, rel + ': live refresh loaded');
-    if (/^(services|areas)\//.test(rel)) {
+    if (/^(services|areas|occasions)\//.test(rel)) {
       const hero = html.indexOf('<section class="hero"');
       assert.ok(at('pb-hero') > hero, rel + ': hero photo inside the hero');
       assert.ok(at('pb-rating') > hero && at('pb-rating') < at('pb-hero'), rel + ': rating under the pitch');
@@ -93,14 +93,14 @@ test('every card opens the Design Studio and every photo is on disk', () => {
       assert.strictEqual(u.host, 'design.jtees.net', `${rel}: ${m[1]}`);
       assert.strictEqual(u.protocol, 'https:');
     }
-    for (const m of html.matchAll(/<img src="(\/assets\/[^"]+)"/g)) {
+    for (const m of html.matchAll(/<img src="(\/assets\/[^"?]+)/g)) {
       assert.ok(fs.existsSync(path.join(PUBLIC, m[1])), `${rel}: missing ${m[1]}`);
     }
   }
 });
 
 test('the ad pages make no promise the owner has taken back', () => {
-  for (const rel of marketing.filter((p) => /^(services|areas)\//.test(p))) {
+  for (const rel of marketing.filter((p) => /^(services|areas|occasions)\//.test(p))) {
     const body = read(rel).split('<!-- site-header:end -->')[1];
     assert.doesNotMatch(body, /Rush Available/, rel);
     assert.doesNotMatch(body, /about a week/, rel);

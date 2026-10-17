@@ -112,6 +112,39 @@
           "href": "https://design.jtees.net/collection.php?c=bulk-orders"
         },
         {
+          "label": "Weddings & Bachelorette",
+          "href": "/occasions/wedding-bachelorette-chicago.html"
+        },
+        {
+          "label": "Holidays",
+          "items": [
+            {
+              "label": "Valentine's Day",
+              "href": "/occasions/valentines-day-gifts-chicago.html"
+            },
+            {
+              "label": "Black History Month",
+              "href": "/occasions/black-history-month-shirts-chicago.html"
+            },
+            {
+              "label": "Mother's Day",
+              "href": "/occasions/mothers-day-gifts-chicago.html"
+            },
+            {
+              "label": "Juneteenth",
+              "href": "/occasions/juneteenth-shirts-chicago.html"
+            },
+            {
+              "label": "Halloween",
+              "href": "/occasions/halloween-shirts-chicago.html"
+            },
+            {
+              "label": "Christmas",
+              "href": "/occasions/christmas-shirts-chicago.html"
+            }
+          ]
+        },
+        {
           "label": "Get Design Help →",
           "href": "/contact",
           "strong": true
@@ -144,6 +177,14 @@
         {
           "label": "Banners & Signs",
           "href": "/services/banners-signs.html"
+        },
+        {
+          "label": "Sublimation",
+          "href": "/services/sublimation.html"
+        },
+        {
+          "label": "Custom Glassware",
+          "href": "/services/custom-glassware.html"
         },
         {
           "label": "Event Decor & Favors",
@@ -279,6 +320,20 @@
     ],
     "hours": "Mon–Fri 10:30 AM – 6 PM, by appointment",
     "email": "support@jtees.net",
-    "bottom": "Chicago, IL · Black-Owned · Women-Owned · LGBTQ+ Friendly"
+    "bottom": "Chicago, IL · Black-Owned · Women-Owned · LGBTQ+ Friendly",
+    "legal": [
+      {
+        "label": "Privacy Policy",
+        "href": "https://design.jtees.net/privacy.php"
+      },
+      {
+        "label": "Terms & Conditions",
+        "href": "https://design.jtees.net/terms.php"
+      },
+      {
+        "label": "SMS Terms",
+        "href": "/sms-terms"
+      }
+    ]
   }
 }

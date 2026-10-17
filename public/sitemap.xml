@@ -17,6 +17,18 @@
 
   <!-- Services -->
   <url>
+    <loc>https://www.jtees.net/services/sublimation.html</loc>
+    <lastmod>2026-10-17</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://www.jtees.net/services/custom-glassware.html</loc>
+    <lastmod>2026-10-17</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
     <loc>https://www.jtees.net/services/custom-tshirts-chicago.html</loc>
     <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
@@ -204,6 +216,50 @@
   <url>
     <loc>https://www.jtees.net/blog/sports-team-shirts-chicago.html</loc>
     <lastmod>2026-07-29</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+
+  <!-- Holidays & events -->
+  <url>
+    <loc>https://www.jtees.net/occasions/christmas-shirts-chicago.html</loc>
+    <lastmod>2026-10-17</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://www.jtees.net/occasions/valentines-day-gifts-chicago.html</loc>
+    <lastmod>2026-10-17</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://www.jtees.net/occasions/mothers-day-gifts-chicago.html</loc>
+    <lastmod>2026-10-17</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://www.jtees.net/occasions/juneteenth-shirts-chicago.html</loc>
+    <lastmod>2026-10-17</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://www.jtees.net/occasions/black-history-month-shirts-chicago.html</loc>
+    <lastmod>2026-10-17</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://www.jtees.net/occasions/halloween-shirts-chicago.html</loc>
+    <lastmod>2026-10-17</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://www.jtees.net/occasions/wedding-bachelorette-chicago.html</loc>
+    <lastmod>2026-10-17</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
