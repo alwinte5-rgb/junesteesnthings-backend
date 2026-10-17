@@ -22,9 +22,10 @@
     "personalized-santa-sack",
     "santa-came-twice-shirt",
     "christmas-photo-socks",
-    "christmas-photo-gift-wrap"
+    "christmas-photo-gift-wrap",
+    "reindeer-paint-party-canvas",
+    "family-drawing-red-tees"
    ],
-   "short_gallery": "Few Christmas photos in the library yet (2026-10-17)",
    "products": [
     "c52",
     "c53",
@@ -166,9 +167,9 @@
     "valentine-wine-gift-box",
     "king-queen-paint-kit",
     "roses-paint-kit",
-    "lock-and-key-paint-kit"
+    "lock-and-key-paint-kit",
+    "heart-inside-mug"
    ],
-   "short_gallery": "Few Valentine's photos in the library yet (2026-10-17)",
    "products": [
     "c52",
     "c54",
@@ -662,9 +663,9 @@
     "black-king-print",
     "black-king-facts-design",
     "blacknificent-design",
-    "afrolicious-design"
+    "afrolicious-design",
+    "portrait-art-painting"
    ],
-   "short_gallery": "Few Black History Month photos in the library yet (2026-10-17)",
    "products": [
     "c52",
     "c53",
@@ -1022,9 +1023,11 @@
    "work": [
     "bridesmaid-glitter-caps",
     "bachelorette-trip-design",
-    "anniversary-60-shirt"
+    "anniversary-60-shirt",
+    "we-are-family-reunion-shirt",
+    "family-reunion-2023-shirts",
+    "wedding-date-keepsake-box"
    ],
-   "short_gallery": "Few wedding photos in the library yet (2026-10-17)",
    "products": [
     "c52",
     "c54",
@@ -1206,7 +1209,8 @@
     "lips-glitter-tumbler",
     "pet-name-bowl",
     "pet-bowl-mat",
-    "name-phone-case"
+    "name-phone-case",
+    "birthday-vacay-sublimated-tee"
    ],
    "products": [
     "c52",
@@ -1350,8 +1354,7 @@
      "label": "Mother's Day Gifts",
      "href": "/occasions/mothers-day-gifts-chicago.html"
     }
-   ],
-   "short_gallery": "The title mug is on the Mother's Day page; owner to send more sublimation photos (2026-10-17)"
+   ]
   },
   {
    "path": "services/custom-glassware.html",
@@ -1372,7 +1375,11 @@
    "hero": "bridesmaid-wine-glass",
    "work": [
     "name-shot-glass",
-    "etched-partner-glass"
+    "etched-partner-glass",
+    "celebration-cruise-tee",
+    "funny-birthday-card",
+    "pink-business-cards",
+    "custom-logo-decal"
    ],
    "products": [
     "c72",
@@ -1526,8 +1533,7 @@
      "label": "Event Decor & Party Favors",
      "href": "/services/event-decor.html"
     }
-   ],
-   "short_gallery": "Few glassware photos the event decor page does not already show (2026-10-17)"
+   ]
   }
  ]
 }
