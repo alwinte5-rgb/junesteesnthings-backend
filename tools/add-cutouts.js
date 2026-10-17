@@ -126,6 +126,8 @@ const SINGLES = {
   12: { 1000: '18.00' },
   18: { 1: '33.00', 3: '30.00', 1000: '25.00' },
 };
+/* 24in singles, the owner's price (2026-10-17): 2 for $80, $40 each, minimum 2. */
+const SINGLE_24 = { 1000: '40.00' };
 /* Flat: one band covering everything, because cost per pack does not move.
    The price is the owner's own where she has set one (PACK_PRICES, below). */
 const packLadder = (size) => ({ 1000: (PACK_PRICES[size] || packPrice(size)).toFixed(2) });
@@ -213,6 +215,17 @@ const METHODS = [
     offered: true, unit: 'piece',
     description: 'An 18 inch tall big head cutout on 3/16 inch board, printed and contour cut. Priced per cutout — a full sheet of 10 works out cheaper.' },
 
+  /* 24in one at a time (owner, 2026-10-17): the printed sticker from Signs365
+     mounted on an $8 coroplast piece and cut out by hand here. Priced from
+     tools/lib/cutouts.js (costEach's coro route); minimum 2.
+     THE OWNER'S PRICE: 2 for $80, so $40 a head at any quantity ("Let's do two
+     for 80 on the 24 inch", 2026-10-17). Cost is $22.13 a head, so this is
+     under the usual x2 ($44.26) by her choice; tests hold it above cost.
+     From 8 heads the full-sheet 8-pack is cheaper, and the quote form says so. */
+  { title: 'Big Head Cutout — 24in, singles', bands: SINGLE_24, min: minimumFor(24),
+    offered: true, unit: 'piece',
+    description: 'A 24 inch tall big head cutout, printed and mounted on coroplast, cut out by hand one at a time. Minimum 2: two for $80. 8 or more? The full sheet 8-pack works out cheaper.' },
+
   /* Replaced by the packs above on 2026-09-22. A 24" or 36" sold by the piece
      could only ever be a whole sheet priced as one head, which is how the first
      version of these came out at $155 each. `offered: false` keeps the rows and
@@ -226,8 +239,8 @@ const METHODS = [
 const NAME = 'Big Head Cutouts';
 const DESCRIPTION =
   'Custom big head cutouts, printed and contour cut on 3/16" board. Choose a ' +
-  'size — 12, 18, 24 or 36 inches tall — and send the photo. The 24 and 36 ' +
-  'inch come ' + packSizeFor(24) + ' and ' + packSizeFor(36) + ' to a sheet, so those are the smallest runs. ' +
+  'size — 12, 18, 24 or 36 inches tall — and send the photo. The 24 inch ' +
+  'comes two or more at a time or ' + packSizeFor(24) + ' to a sheet; the 36 inch comes ' + packSizeFor(36) + ' to a sheet. ' +
   'Bigger runs cost less each.';
 
 const have = new Map(mysql(url, "SELECT id,title FROM lumise_printings WHERE title LIKE 'Big Head Cutout%';", { rows: true })
