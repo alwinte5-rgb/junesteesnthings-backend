@@ -38,6 +38,7 @@ const SIGN_FAMILIES = require('./tools/lib/sign-families');
 const SINALITE = require('./tools/lib/sinalite');
 const LEADMAIL = require('./tools/lib/lead-email');
 const REINTRO = require('./tools/lib/reintro');
+const MKT_CAL = require('./tools/lib/marketing-calendar');
 const FUNNEL = require('./tools/lib/funnel-health');
 const METACAPI = require('./tools/lib/meta-capi');
 let metaCapiReportedAt = 0;
@@ -6479,6 +6480,46 @@ async function sendCampaignTexts() {
   }
 }
 
+/* Marketing calendar (owner, 2026-10-17): every occasion's next date, and when
+   to start getting ready, turn ads and email on, and stop taking orders.
+   Dates come from tools/lib/marketing-calendar.js, the same list the holiday
+   pages read. "Today" is the shop's day in Chicago, not the server's UTC one. */
+app.get('/admin/marketing-calendar', requireAdmin, (req, res) => {
+  if (!isOwner()) return res.redirect('/admin/dashboard');
+  const [y, m, d] = new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ }).split('-').map(Number);
+  const now = new Date(Date.UTC(y, m - 1, d));
+  const rows = MKT_CAL.upcoming(now).map((r) => ({ ...r, status: MKT_CAL.status(r, now) }));
+  const lead = MKT_CAL.DEFAULT_LEAD;
+  const tone = { 'prep now': '#fef3c7;color:#78350f', 'ads now': '#dcfce7;color:#14532d', 'in season': '#dbeafe;color:#1e3a8a', 'orders closed': '#fee2e2;color:#7f1d1d', upcoming: '#f3f4f6;color:#374151', past: '#f3f4f6;color:#6b7280' };
+  const pill = (st) => `<span style="display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:700;background:${tone[st] || tone.upcoming}">${escHtml(st)}</span>`;
+  const date = (t) => `<span style="white-space:nowrap">${escHtml(MKT_CAL.shortDate(t))}</span>`;
+  const link = (r) => !r.page ? '<span style="color:#9ca3af">no page yet</span>'
+    : `<a href="${escHtml(r.page.startsWith('/') ? PUBLIC_BASE_URL + r.page : r.page)}" target="_blank" rel="noopener">page</a>`;
+  const due = rows.filter((r) => r.status === 'prep now' || r.status === 'ads now');
+  const dueBox = due.length
+    ? `<div class="card" style="border:1px solid #fde68a;background:#fffbeb"><h2 style="margin-top:0">Needs you now</h2><ul style="margin:0;padding-left:18px">${due.map((r) =>
+        `<li><b>${escHtml(r.name)}</b>: ${r.status === 'ads now' ? 'turn on the Google Ads campaign and send the Brevo email' : 'pick designs and photos and update the page'}. Push: ${escHtml(r.push)}.</li>`).join('')}</ul></div>`
+    : '<div class="card"><b>Nothing needs starting today.</b> The next prep date is below.</div>';
+  const body = `
+<div class="card">
+  <p style="margin:0 0 6px">Each occasion counts back from its <b>season start</b>, the day customers begin ordering:
+  <b>prep</b> ${lead.prepWeeks} weeks before (designs, photos, page), <b>ads and email</b> ${lead.adsWeeks} weeks before. <b>Last day to order</b> is
+  ${Math.round(lead.orderByDays / 7)} weeks before the event (or the end of a season-long occasion), since standard turnaround is 7 to 14 business days
+  after proof approval. An occasion can set its own lead times; the table always shows its real dates. Nothing here is sent automatically.</p>
+</div>
+${dueBox}
+<div class="card" style="overflow-x:auto">
+<table class="tbl" style="width:100%;border-collapse:collapse;font-size:14px">
+  <thead><tr style="text-align:left"><th>Occasion</th><th>Status</th><th>Prep</th><th>Ads + email</th><th>Season starts</th><th>Last day to order</th><th>Event</th><th>Push</th><th></th></tr></thead>
+  <tbody>${rows.map((r) => `<tr style="border-top:1px solid #e5e7eb">
+    <td style="padding:8px 6px"><b>${escHtml(r.name)}</b></td><td>${pill(r.status)}</td>
+    <td>${date(r.prep)}</td><td>${date(r.ads)}</td><td>${date(r.season)}</td><td>${date(r.orderBy)}</td><td>${date(r.event)}${r.end > r.event ? ` to ${date(r.end)}` : ''}</td>
+    <td style="min-width:200px">${escHtml(r.push)}</td><td>${link(r)}</td></tr>`).join('')}</tbody>
+</table>
+</div>`;
+  res.send(adminPage('Marketing calendar', body, 'calendar'));
+});
+
 app.get('/admin/campaign', requireAdmin, async (req, res) => {
   if (!isOwner()) return res.redirect('/admin/dashboard');
   try {
@@ -9812,6 +9853,7 @@ const ADMIN_NAV = [
   { key: 'money',      href: FINANCES_PATH,    label: 'Finances',   icon: 'dollar' },
   { key: 'certificates', href: '/admin/certificates', label: 'Certificates', icon: 'cert', badge: 'certificates' },
   { key: 'discounts',  href: '/admin/discounts',     label: 'Discounts',  icon: 'tag' },
+  { key: 'calendar',   href: '/admin/marketing-calendar', label: 'Marketing calendar', icon: 'clock' },
   { key: 'chat',       href: '/admin/team-chat',     label: 'Team chat',  icon: 'chat',   badge: 'chat' },
   { key: 'playbook',   href: '/admin/playbook',      label: 'Playbook',   icon: 'book' },
   { key: 'resources',  href: '/admin/resources',     label: 'Resources',  icon: 'key' },
