@@ -3,7 +3,7 @@
   "announcement": [
     {
       "text": "🎨 NEW — Design your own apparel online",
-      "href": "/#shop"
+      "href": "https://design.jtees.net/editor.php?product_base=14"
     },
     {
       "text": "Visits by appointment only · Pickups: follow the instructions we email or text you"
@@ -112,8 +112,41 @@
           "href": "https://design.jtees.net/collection.php?c=bulk-orders"
         },
         {
+          "label": "Weddings & Bachelorette",
+          "href": "/occasions/wedding-bachelorette-chicago.html"
+        },
+        {
+          "label": "Holidays",
+          "items": [
+            {
+              "label": "Valentine's Day",
+              "href": "/occasions/valentines-day-gifts-chicago.html"
+            },
+            {
+              "label": "Black History Month",
+              "href": "/occasions/black-history-month-shirts-chicago.html"
+            },
+            {
+              "label": "Mother's Day",
+              "href": "/occasions/mothers-day-gifts-chicago.html"
+            },
+            {
+              "label": "Juneteenth",
+              "href": "/occasions/juneteenth-shirts-chicago.html"
+            },
+            {
+              "label": "Halloween",
+              "href": "/occasions/halloween-shirts-chicago.html"
+            },
+            {
+              "label": "Christmas",
+              "href": "/occasions/christmas-shirts-chicago.html"
+            }
+          ]
+        },
+        {
           "label": "Get Design Help →",
-          "href": "/#contact",
+          "href": "/contact",
           "strong": true
         }
       ]
@@ -124,6 +157,10 @@
         {
           "label": "Custom T-Shirts Chicago",
           "href": "/services/custom-tshirts-chicago.html"
+        },
+        {
+          "label": "Custom Hoodies Chicago",
+          "href": "/services/custom-hoodies-chicago.html"
         },
         {
           "label": "Screen Printing",
@@ -140,6 +177,14 @@
         {
           "label": "Banners & Signs",
           "href": "/services/banners-signs.html"
+        },
+        {
+          "label": "Sublimation",
+          "href": "/services/sublimation.html"
+        },
+        {
+          "label": "Custom Glassware",
+          "href": "/services/custom-glassware.html"
         },
         {
           "label": "Event Decor & Favors",
@@ -180,7 +225,7 @@
   "instagram": "https://www.instagram.com/jtees228",
   "quote": {
     "label": "Get a Quote",
-    "href": "/#contact"
+    "href": "/contact"
   },
   "design": {
     "label": "Start Designing",
@@ -198,5 +243,97 @@
   "account": {
     "label": "My Account",
     "href": "https://design.jtees.net/account.php"
+  },
+  "ticker": [
+    "Screen Printing",
+    "Custom Embroidery",
+    "DTF Transfers",
+    "Banners & Signs",
+    "Event Décor",
+    "Graphic Design",
+    "Custom Tees",
+    "Team & Group Orders",
+    "Yard Signs",
+    "Step & Repeat Backdrops",
+    "Big Head Cutouts",
+    "Black-Owned",
+    "Women-Owned"
+  ],
+  "footer": {
+    "tagline": "Chicago's custom print shop for the culture. Shirts, signs, standees, party favors — if you can dream it, we can print it. Black-owned. Women-owned. Built for the community.",
+    "texts": {
+      "label": "Get 10% off: join our texts →",
+      "href": "/texts?src=site"
+    },
+    "areas_note": "Proudly serving Lakeview, Lincoln Park, North Center, Roscoe Village, Logan Square, Wicker Park, Wrigleyville & all of Chicagoland. Pickup by appointment.",
+    "areas": [
+      {
+        "label": "Lakeview",
+        "href": "/areas/custom-tshirts-lakeview.html"
+      },
+      {
+        "label": "Lincoln Park",
+        "href": "/areas/custom-apparel-lincoln-park.html"
+      },
+      {
+        "label": "North Center & Roscoe Village",
+        "href": "/areas/custom-apparel-north-center.html"
+      },
+      {
+        "label": "Logan Square",
+        "href": "/areas/custom-apparel-logan-square.html"
+      },
+      {
+        "label": "Ravenswood",
+        "href": "/areas/custom-apparel-ravenswood.html"
+      },
+      {
+        "label": "All Chicago",
+        "href": "/services/custom-tshirts-chicago.html"
+      }
+    ],
+    "company": [
+      {
+        "label": "All Products",
+        "href": "https://design.jtees.net/products.php"
+      },
+      {
+        "label": "Design Studio",
+        "href": "https://design.jtees.net/editor.php?product_base=14"
+      },
+      {
+        "label": "Our Work",
+        "href": "/#portfolio"
+      },
+      {
+        "label": "Reviews",
+        "href": "/#reviews"
+      },
+      {
+        "label": "About Us",
+        "href": "/#about"
+      },
+      {
+        "label": "Blog",
+        "href": "/blog/"
+      }
+    ],
+    "hours": "Mon–Fri 10:30 AM – 6 PM, by appointment",
+    "email": "support@jtees.net",
+    "bottom": "Chicago, IL · Black-Owned · Women-Owned · LGBTQ+ Friendly",
+    "legal": [
+      {
+        "label": "Privacy Policy",
+        "href": "https://design.jtees.net/privacy.php"
+      },
+      {
+        "label": "Terms & Conditions",
+        "href": "https://design.jtees.net/terms.php"
+      },
+      {
+        "label": "SMS Terms",
+        "href": "/sms-terms"
+      }
+    ]
   }
 }

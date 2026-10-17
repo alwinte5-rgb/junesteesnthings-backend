@@ -613,7 +613,7 @@ const FINAL = {
 
 const W = (f) => `/assets/images/work/${f}.jpg`;
 const LESSON_EXTRAS = {
-  'am1-job': { images: [{ src: W('storefront-lincoln-ave'), alt: 'The June\'s Tees shop on Lincoln Avenue' }] },
+  'am1-job': { images: [{ src: W('screen-printing-press'), alt: 'The June\'s Tees shop in Lakeview' }] },
   'am2-calendar': { images: [{ src: W('kindergarten-back-to-school-tee'), alt: 'A back-to-school class shirt' }] },
   'am3-history': { images: [{ src: W('embroidered-business-apparel'), alt: 'Embroidered business apparel: a classic reorder' }] },
   'am4-reorder': { images: [{ src: W('youth-team-shirts'), alt: 'A youth team in their custom shirts' }] },

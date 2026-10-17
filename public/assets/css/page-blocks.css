@@ -5,18 +5,21 @@
    up with the text around them. */
 .pb-wrap{max-width:1100px;margin:0 auto;padding:0 2rem}
 @media (max-width:640px){.pb-wrap{padding:0 1rem}}
-.pb-products,.pb-reviews,.pb-work{font-family:Inter,system-ui,sans-serif;padding:3rem 0}
+.pb-products,.pb-reviews,.pb-work{font-family:Inter,system-ui,sans-serif;padding:2.6rem 0}
 .pb-products{background:#fff;border-bottom:1px solid #E7E3DB}
 .pb-reviews{background:#F7F6F3}
 .pb-work{background:#fff}
 .pb-head{display:flex;align-items:flex-end;justify-content:space-between;gap:1rem;margin-bottom:1.4rem}
+.pb-tag a,.pb-head h2 a{color:inherit;text-decoration:underline;text-underline-offset:3px}
 .pb-tag{font-size:.75rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#F0275A;margin-bottom:.4rem}
 .pb-products h2,.pb-reviews h2,.pb-work h2{font-size:clamp(1.45rem,3.2vw,2rem);font-weight:800;color:#0B1F4B;line-height:1.15;margin:0}
 .pb-all{color:#1848B8;font-weight:700;font-size:.92rem;text-decoration:none;white-space:nowrap}
 .pb-all:hover{text-decoration:underline}
 
-/* Product cards: the homepage's card look. */
+/* Product cards: the homepage's card look. Six cards sit three to a row,
+   so no row is left half empty. */
 .pb-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1.1rem}
+.pb-grid:has(>.pb-card:nth-child(6):last-child),.pb-grid:has(>.pb-card:nth-child(3):last-child){grid-template-columns:repeat(3,1fr)}
 .pb-card{display:flex;flex-direction:column;background:#fff;border:1px solid #E7E3DB;border-radius:14px;overflow:hidden;text-decoration:none;color:inherit;transition:box-shadow .2s,transform .2s}
 .pb-card:hover{box-shadow:0 10px 24px rgba(11,31,75,.12);transform:translateY(-2px)}
 .pb-im{aspect-ratio:1/1;background:#F3F4F6;display:flex;align-items:center;justify-content:center}
@@ -33,17 +36,33 @@
 .pb-reviews .pb-tag{color:#0B1F4B}
 .pb-rvs{display:grid;grid-template-columns:repeat(3,1fr);gap:1.1rem}
 .pb-rv{margin:0;background:#fff;border:1px solid #E7E3DB;border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
-.pb-rv img{display:block;width:100%;height:190px;object-fit:cover}
+.pb-rv[hidden]{display:none!important}
+/* A review's own photo is a small square beside its stars, so cards with
+   and without one line up in the same row. */
+.pb-rv{position:relative}
+.pb-rv img{position:absolute;top:1rem;right:1.1rem;width:64px;height:64px;object-fit:cover;border-radius:10px}
+.pb-rv:has(img) figcaption{min-height:96px}
+.pb-rv:has(img) .pb-stars,.pb-rv:has(img) b{margin-right:76px}
 .pb-rv figcaption{padding:1rem 1.1rem 1.15rem;display:flex;flex-direction:column;gap:.35rem}
 .pb-rv b{color:#0B1F4B;font-size:1rem}
 .pb-rv p{margin:0;color:#374151;font-size:.92rem;line-height:1.55}
 .pb-rv span{color:#6B7280;font-size:.8rem;margin-top:auto}
 
+/* The Google rating under the hero's pitch. */
+.pb-rating{display:inline-flex;align-items:center;gap:.4rem;margin:.2rem 0 1.4rem;font:600 .95rem Inter,system-ui,sans-serif;color:#0B1F4B;text-decoration:none}
+.pb-rating:hover{text-decoration:underline}
+
 /* Recent work */
 .pb-work h2{margin-bottom:1.3rem}
-.pb-gallery{display:grid;grid-template-columns:repeat(3,1fr);gap:.9rem}
-.pb-gallery figure{margin:0;position:relative;border-radius:14px;overflow:hidden;aspect-ratio:4/3;background:#F3F4F6}
-.pb-gallery img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .35s}
+/* Whole photos, never cropped (owner, 2026-10-17), in even rows: every tile is
+   the same 3:4 shape (most shop photos are 3:4, so they fill it exactly); a
+   wide photo sits whole on a blurred copy of itself (img.pb-bd) instead of leaving the
+   ragged gaps masonry columns did. A short last row is centred. */
+.pb-gallery{display:flex;flex-wrap:wrap;justify-content:center;gap:.9rem}
+.pb-gallery figure{flex:0 0 calc((100% - 1.8rem)/3);aspect-ratio:3/4;margin:0;position:relative;border-radius:14px;overflow:hidden;background:#F3F4F6}
+.pb-gallery img{position:relative;width:100%;height:100%;object-fit:contain;display:block;transition:transform .35s}
+.pb-gallery img.pb-bd{position:absolute;inset:-24px;width:calc(100% + 48px);height:calc(100% + 48px);object-fit:cover;filter:blur(18px) brightness(.85);transition:none}
+.pb-gallery figure:hover img.pb-bd{transform:none}
 .pb-gallery figure:hover img{transform:scale(1.04)}
 .pb-gallery figcaption{position:absolute;left:0;right:0;bottom:0;padding:1.6rem .9rem .7rem;background:linear-gradient(transparent,rgba(11,31,75,.82));color:#fff;font:600 .85rem Inter,system-ui,sans-serif}
 
@@ -51,8 +70,8 @@
    right one. Phones hide it; the product photos follow straight after. */
 .hero:has(.pb-hero-img) .container{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);column-gap:3rem;align-items:center}
 .hero:has(.pb-hero-img) .container>*{grid-column:1}
-.hero .pb-hero-img{grid-column:2!important;grid-row:1/span 8;margin:0;border-radius:18px;overflow:hidden;box-shadow:0 18px 40px rgba(11,31,75,.18);aspect-ratio:4/3}
-.pb-hero-img img{width:100%;height:100%;object-fit:cover;display:block}
+.hero .pb-hero-img{grid-column:2!important;grid-row:1/span 8;margin:0;justify-self:center;border-radius:18px;overflow:hidden;box-shadow:0 18px 40px rgba(11,31,75,.18)}
+.pb-hero-img img{display:block;max-width:100%;width:auto;height:auto;max-height:520px}
 
 /* The pages' checklists were display:flex, which split a line holding a link
    ("Design your own online in our Design Studio…") into columns. Block
@@ -67,9 +86,12 @@
    (assets/js/jt-chat.js, about 130px wide at the bottom right). */
 .pb-sticky{display:none}
 @media (max-width:900px){
+  .pb-gallery figure{flex-basis:calc((100% - .9rem)/2)}
   .pb-grid{grid-template-columns:repeat(3,1fr)}
-  .pb-rvs{grid-template-columns:1fr 1fr}
-  .pb-rv:nth-child(3){display:none}
+  /* A row you swipe, not a grid that hides the third review. */
+  .pb-rvs{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;gap:.8rem;padding-bottom:.4rem;scrollbar-width:none}
+  .pb-rvs::-webkit-scrollbar{display:none}
+  .pb-rv{flex:0 0 min(78%,320px);scroll-snap-align:start}
   .hero:has(.pb-hero-img) .container{display:block}
   .hero .pb-hero-img{display:none}
 }
@@ -79,10 +101,7 @@
   .pb-grid{grid-template-columns:repeat(2,1fr);gap:.7rem}
   .pb-bd{padding:.7rem .75rem .8rem}
   .pb-nm{font-size:.9rem}
-  .pb-rvs{grid-template-columns:1fr}
-  .pb-rv:nth-child(3){display:flex}
-  .pb-rv img{height:170px}
-  .pb-gallery{grid-template-columns:repeat(2,1fr);gap:.6rem}
+  .pb-gallery{gap:.6rem}.pb-gallery figure{flex-basis:calc((100% - .6rem)/2)}
   .pb-sticky{display:flex;position:fixed;left:12px;right:156px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:900;gap:8px;font-family:Inter,system-ui,sans-serif}
   .pb-sticky a{flex:1;text-align:center;padding:.8rem .5rem;border-radius:999px;font-weight:700;font-size:.95rem;text-decoration:none;box-shadow:0 8px 20px rgba(11,31,75,.25)}
   .pb-sticky-go{background:#F0275A;color:#fff}

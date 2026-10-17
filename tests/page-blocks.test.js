@@ -26,7 +26,7 @@ const NAV = require('../tools/site-nav');
 const PUBLIC = path.join(__dirname, '..', 'public');
 const read = (rel) => fs.readFileSync(path.join(PUBLIC, rel), 'utf8');
 const { data } = PB.load();
-const marketing = NAV.pages().filter((p) => /^(services|areas|blog)\//.test(p));
+const marketing = NAV.pages().filter((p) => /^(services|areas|blog|occasions)\//.test(p));
 
 test('every page has the current blocks (else: node tools/page-blocks.js --write)', () => {
   assert.deepStrictEqual(PB.validate(data), []);
@@ -37,21 +37,52 @@ test('every service, area and blog page is listed, so none is left without produ
   assert.deepStrictEqual(marketing.filter((p) => !data.pages[p]), []);
 });
 
-test('each page shows products after its opening and reviews after the products', () => {
+test('each page runs hero, photos, products, reviews, then its copy, FAQ, call to action and related reading', () => {
   for (const rel of marketing) {
     const html = read(rel);
     const at = (n) => html.indexOf(PB.mark(n)[0]);
     assert.ok(at('pb-products') > 0, rel + ': product cards');
     assert.ok(at('pb-reviews') > at('pb-products'), rel + ': reviews follow the products');
-    assert.ok(at('pb-reviews') < html.indexOf('<!-- review-strip:start'), rel + ': above the footer strip');
     assert.ok((html.match(/class="pb-card"/g) || []).length >= 4, rel + ': at least four cards');
     assert.match(html, /\/assets\/css\/page-blocks\.css/, rel + ': styles linked');
     assert.match(html, /\/assets\/js\/shop-feed\.js/, rel + ': live refresh loaded');
-    if (/^(services|areas)\//.test(rel)) {
-      assert.ok(at('pb-hero') > html.indexOf('<section class="hero"'), rel + ': hero photo inside the hero');
-      assert.ok(at('pb-work') > at('pb-reviews'), rel + ': recent work further down');
+    if (/^(services|areas|occasions)\//.test(rel)) {
+      const hero = html.indexOf('<section class="hero"');
+      assert.ok(at('pb-hero') > hero, rel + ': hero photo inside the hero');
+      assert.ok(at('pb-rating') > hero && at('pb-rating') < at('pb-hero'), rel + ': rating under the pitch');
+      assert.ok(at('pb-work') > hero && at('pb-work') < at('pb-products'), rel + ': shop photos straight after the hero');
+      const rest = html.slice(html.indexOf(PB.mark('pb-reviews')[1]));
+      const faq = rest.search(/<h2>[^<]*(FAQ|Questions)/i);
+      const cta = rest.search(/<(section|div) class="cta-band"/);
+      const related = rest.indexOf('Related Reading');
+      const footer = rest.search(/<footer\b/i);
+      assert.ok(cta !== -1 && footer > cta, rel + ': call to action before the footer');
+      if (faq !== -1) assert.ok(faq < cta, rel + ': FAQ before the call to action');
+      if (related !== -1) {
+        assert.ok(related > cta, rel + ': related reading after the call to action');
+        assert.ok(!/<section\b/i.test(rest.slice(rest.indexOf('</section>', related), footer)), rel + ': related reading is the last section');
+      }
     }
   }
+});
+
+test('reviews show once per page, three at a time, a different three on every page', () => {
+  const reviews = JSON.parse(read('assets/data/reviews.json')).reviews;
+  const seen = new Map();
+  for (const rel of marketing) {
+    const html = read(rel);
+    assert.ok(!html.includes('<!-- review-strip:start'), rel + ': no second reviews strip');
+    assert.strictEqual((html.match(/class="pb-reviews"/g) || []).length, 1, rel + ': one reviews section');
+    const cards = [...html.matchAll(/<figure class="pb-rv"( hidden)?>[\s\S]*?<b>([^<]*)<\/b>/g)];
+    assert.strictEqual(cards.length, reviews.length, rel + ': every review is in the page for the shuffle');
+    const shown = cards.filter((c) => !c[1]).map((c) => c[2]).join('|');
+    assert.strictEqual(shown.split('|').length, 3, rel + ': three showing before any script');
+    assert.ok(!seen.has(shown), `${rel} shows the same three as ${seen.get(shown)}`);
+    seen.set(shown, rel);
+    assert.match(html, /\/assets\/js\/pb-reviews\.js/, rel + ': shuffle loaded');
+  }
+  const js = read('assets/js/pb-reviews.js');
+  assert.doesNotMatch(js, /innerHTML|fetch\(/, 'the shuffle only toggles cards already in the page');
 });
 
 test('every card opens the Design Studio and every photo is on disk', () => {
@@ -62,20 +93,21 @@ test('every card opens the Design Studio and every photo is on disk', () => {
       assert.strictEqual(u.host, 'design.jtees.net', `${rel}: ${m[1]}`);
       assert.strictEqual(u.protocol, 'https:');
     }
-    for (const m of html.matchAll(/<img src="(\/assets\/[^"]+)"/g)) {
+    for (const m of html.matchAll(/<img src="(\/assets\/[^"?]+)/g)) {
       assert.ok(fs.existsSync(path.join(PUBLIC, m[1])), `${rel}: missing ${m[1]}`);
     }
   }
 });
 
 test('the ad pages make no promise the owner has taken back', () => {
-  for (const rel of marketing.filter((p) => /^(services|areas)\//.test(p))) {
+  for (const rel of marketing.filter((p) => /^(services|areas|occasions)\//.test(p))) {
     const body = read(rel).split('<!-- site-header:end -->')[1];
     assert.doesNotMatch(body, /Rush Available/, rel);
     assert.doesNotMatch(body, /about a week/, rel);
     assert.doesNotMatch(body, /\b12\+/, rel);
     assert.doesNotMatch(body, /Grab it curbside/, rel);
     assert.doesNotMatch(body, /24.48 hour/, rel);
+    assert.doesNotMatch(body, /fast (local )?turnaround|rush options|same[- ]day|1–2 days|week of graduation/i, rel);
   }
   // the announcement bar is on every page: no rush promise there
   const nav = JSON.parse(read('assets/data/site-nav.json'));
@@ -100,4 +132,23 @@ test('a page whose end marker was lost fails loudly instead of being spliced', (
   const rel = 'services/embroidery.html';
   const broken = read(rel).replace(PB.mark('pb-products')[1], '');
   assert.throws(() => PB.apply(broken, rel, data, reviews), /start marker without an end marker/);
+});
+
+test('a gallery never repeats its main photo and fills its rows', () => {
+  const { data } = PB.load();
+  const page = (over) => ({ ...data, pages: { 'services/embroidery.html': { ...data.pages['services/embroidery.html'], ...over } } });
+  const w = data.pages['services/embroidery.html'].work;
+  assert.match(PB.validate(page({ hero: w[0] })).join('\n'), /main photo repeated/);
+  assert.match(PB.validate(page({ work: w.slice(0, 5) })).join('\n'), /gallery has 5 photos/);
+  assert.deepStrictEqual(PB.validate(page({ work: w.slice(0, 5), short_gallery: 'testing' })), []);
+  assert.deepStrictEqual(PB.validate(data), []);
+});
+
+test('a blog page with a gallery shows it after the article, before the cards', () => {
+  const html = read('blog/church-group-shirts-chicago.html');
+  const main = html.indexOf('</main>');
+  const work = html.indexOf('<!-- pb-work:start');
+  const cards = html.indexOf('<!-- pb-products:start');
+  assert.ok(main !== -1 && work > main && cards > work, 'order: article, gallery, cards');
+  assert.ok(html.includes('/assets/images/work/church-fire-of-praise.jpg'));
 });
