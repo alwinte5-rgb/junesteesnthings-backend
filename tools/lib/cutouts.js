@@ -36,8 +36,9 @@ const MINUTES_PER_HEAD = 5;       // timed by the owner 2026-10-06: about 5 minu
    the owner cuts it out by hand ("I would cut"), so there is no contour-cut
    charge. Sticker 22.6 x 24 bills as 2 ft x 2 ft = 4 sqft x $2.49 = $9.96,
    + $8.00 coro + 5 minutes ($4.17) = $22.13 a head, about $44.26 at x2.
-   Flat per head: nothing gets cheaper at volume on this route, so from 8
-   heads the full-sheet 8-pack wins, and the quote form says so. */
+   Flat per head: nothing gets cheaper at volume on this route, so the
+   full-sheet 8-pack wins well before 8 heads (from 5 at the owner's prices,
+   PACK_WINS_24 in tools/add-cutouts.js), and the quote form says so. */
 const CORO_PIECE = { 24: 8.00 };
 /* Sold two at a time at the least (owner, 2026-10-17: "make the 24 inch singles
    minimum of two for purchase"). */

@@ -5432,9 +5432,13 @@ app.post('/api/cloudinary-signature', signatureRateLimit, (req, res) => {
   const body = (req.body && typeof req.body === 'object') ? req.body : {};
 
   // The folder is chosen by the server from a fixed list — never echoed back.
-  const ALLOWED_FOLDERS = ['grad_orders', 'quote_requests', 'embroidery_quotes', 'review_photos', QPHOTOS.FOLDER];
+  /* grad_orders went with grad ordering (2026-10-17). Every caller names its
+     folder, so a request that names none, or an unknown one, is refused rather
+     than signed into a default nobody reads. */
+  const ALLOWED_FOLDERS = ['quote_requests', 'embroidery_quotes', 'review_photos', QPHOTOS.FOLDER];
   const requestedFolder = typeof body.folder === 'string' ? body.folder : '';
-  const folder = ALLOWED_FOLDERS.includes(requestedFolder) ? requestedFolder : 'grad_orders';
+  if (!ALLOWED_FOLDERS.includes(requestedFolder)) return res.status(400).json({ error: 'Unknown upload folder' });
+  const folder = requestedFolder;
 
   /* Use the widget's timestamp — overwriting it causes a mismatch, since the
      widget sends its own with the actual upload. But bound it: a signature
