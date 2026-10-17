@@ -61,7 +61,7 @@ const parse = (r) => {
     .map((q) => ({ upTo: q, price: Number(f[q].price) }));
   const size = Number((r.title.match(/(\d+)\s*in/i) || [])[1]);
   const pack = Number((r.title.match(/(\d+)-pack/i) || [])[1]) || 0;
-  return { id: r.id, title: r.title, description: r.description, size, pack, bands };
+  return { id: r.id, title: r.title, description: r.description, size, pack, bands, min: Math.max(1, parseInt(c.min_qty, 10) || 1) };
 };
 
 const all = rows.map(parse);
@@ -84,7 +84,7 @@ const each = (m) => '$' + (m.bands[0].price / m.pack).toFixed(2);
    above band i-1's ceiling. The last band is open-ended. */
 function ranges(m) {
   const out = [];
-  let from = 1;
+  let from = m.min || 1;    // a row with a minimum (24in singles: 2) starts there
   m.bands.forEach((b, i) => {
     const last = i === m.bands.length - 1;
     out.push({ label: last ? `${from} or more` : (from === b.upTo ? `${from}` : `${from}–${b.upTo}`), price: b.price });
@@ -222,7 +222,13 @@ const singleTables = singles.map((m) => `
           const atPack = priceAt(m, p.pack);
           return `<p class="ladder-note">A full sheet of ${p.pack} is ${money(p.bands[0].price)} with delivery &mdash;
             ${money(atPack * p.pack + DELIVERY)} for the same ${p.pack} bought one at a time, with delivery.
-            Once you are near a dozen, ask about the pack.</p>`;
+            ${(() => {
+              /* Where the sheet starts winning, worked out, not "near a dozen"
+                 (which was wrong for an 8-pack). */
+              let n = m.min || 1;
+              while (n < p.pack && priceAt(m, n) * n + DELIVERY <= p.bands[0].price) n++;
+              return n < p.pack ? `From ${n} heads the sheet costs less, and you get ${p.pack}.` : 'Close to a full sheet? Ask about the pack.';
+            })()}</p>`;
         })()}
       </div>`).join('');
 
@@ -322,9 +328,12 @@ const TEMPLATE = path.join(ROOT, 'public/services/event-decor.html');
 const chrome = fs.readFileSync(TEMPLATE, 'utf8');
 
 const heroAt = chrome.indexOf('<section class="hero">');
-const footAt = chrome.indexOf('<footer>');
+/* The footer is the shared block tools/site-nav.js writes (since 2026-10-17,
+   #339); the bare <footer> it replaced is the fallback. */
+const footMark = chrome.indexOf('<!-- site-footer:start');
+const footAt = footMark >= 0 ? footMark : chrome.indexOf('<footer>');
 if (heroAt < 0 || footAt < 0) {
-  console.error('the services template has moved — expected <section class="hero"> and <footer> in ' + TEMPLATE);
+  console.error('the services template has moved — expected <section class="hero"> and the site-footer block in ' + TEMPLATE);
   process.exit(1);
 }
 let top = chrome.slice(0, heroAt);
@@ -434,7 +443,7 @@ ${!singles.length ? '' : `<section>
   <div class="container">
     <div class="section-tag">By the single</div>
     <h2>Just need a few?</h2>
-    <p class="lead">The ${bothWays.map((s) => s + '&Prime;').join(' and ')} are also sold one at a time, for orders
+    <p class="lead">The ${bothWays.map((s) => s + '&Prime;').join(', ').replace(/, ([^,]*)$/, ' and $1')} are also sold one at a time${singles.some((m) => m.min > 1) ? ' (the ' + singles.filter((m) => m.min > 1).map((m) => m.size + '&Prime; two or more at a time').join(', ') + ')' : ''}, for orders
        too small to want a whole sheet.
        Single cutouts add ${money(DELIVERY)} standard delivery once per order.</p>
     <div class="ladders">${singleTables}
