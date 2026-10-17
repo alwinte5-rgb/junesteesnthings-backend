@@ -121,28 +121,49 @@ const headPath = (w, h) => {
 };
 
 /* Every size at once, drawn to the same scale, so "18 inch" means something. */
+/* A real head, gray, drawn at the same scale and first in the row: a number of
+   inches means little until it stands next to a face. An adult head is about
+   9" chin to crown and about 0.68 as wide as it is tall (a cutout, RATIO, is
+   wider because it keeps the hair). The dashed line marks 9" across every
+   cutout (owner, 2026-10-17: "add something to compare it to"). Labels carry
+   classes so the page can enlarge them on phones, where the figure is scaled
+   to about half size. */
+const REAL_HEAD = 9, REAL_RATIO = 0.68;
 function scaleDrawing(sizes) {
-  const S = 6.2, GAP = 26, PAD = 18, LABEL = 52;
-  const tallest = Math.max(...sizes);
-  const w = sizes.reduce((a, t) => a + t * RATIO * S, 0) + GAP * (sizes.length - 1) + PAD * 2;
+  const S = 6.2, GAP = 26, PAD = 18, LABEL = 66, LABEL_HALF = 34;
+  const tallest = Math.max(...sizes, REAL_HEAD);
+  const rw = REAL_HEAD * REAL_RATIO * S;
+  // The real head sits wide enough from the edge that its label is never cut.
+  const lead = Math.max(0, LABEL_HALF - rw / 2);
+  const w = lead + rw + GAP + sizes.reduce((a, t) => a + t * RATIO * S, 0) + GAP * (sizes.length - 1) + PAD * 2;
   const h = tallest * S + LABEL + PAD;
   const base = PAD + tallest * S;
-  let x = PAD, parts = '';
+  const label = (cx, big, small) =>
+    `<text class="sl-big" x="${cx.toFixed(1)}" y="${(base + 28).toFixed(1)}" text-anchor="middle" ` +
+      `font-family="Inter,sans-serif" font-size="17" font-weight="800" fill="#0B1F4B">${big}</text>` +
+    `<text class="sl-small" x="${cx.toFixed(1)}" y="${(base + 50).toFixed(1)}" text-anchor="middle" ` +
+      `font-family="Inter,sans-serif" font-size="11.5" font-weight="600" fill="#6B7280">${small}</text>`;
+  const line = base - REAL_HEAD * S;
+  let x = PAD + lead;
+  let parts =
+    `<g transform="translate(${x.toFixed(1)},${line.toFixed(1)})">` +
+      `<path d="${headPath(rw, REAL_HEAD * S)}" fill="#CBD5E1" stroke="#ffffff" stroke-width="3" stroke-linejoin="round"/>` +
+    `</g>` + label(x + rw / 2, `${REAL_HEAD}"`, 'real head');
+  x += rw + GAP;
   for (const t of sizes) {
     const hw = t * RATIO * S, hh = t * S;
     parts +=
       `<g transform="translate(${x.toFixed(1)},${(base - hh).toFixed(1)})">` +
         `<path d="${headPath(hw, hh)}" fill="url(#cut)" stroke="#ffffff" stroke-width="3" stroke-linejoin="round"/>` +
         `<path d="${headPath(hw, hh)}" fill="none" stroke="#0B1F4B" stroke-width="1" stroke-linejoin="round" opacity=".25"/>` +
-      `</g>` +
-      `<text x="${(x + hw / 2).toFixed(1)}" y="${(base + 26).toFixed(1)}" text-anchor="middle" ` +
-        `font-family="Inter,sans-serif" font-size="17" font-weight="800" fill="#0B1F4B">${t}"</text>` +
-      `<text x="${(x + hw / 2).toFixed(1)}" y="${(base + 43).toFixed(1)}" text-anchor="middle" ` +
-        `font-family="Inter,sans-serif" font-size="11.5" font-weight="600" fill="#6B7280">tall</text>`;
+      `</g>` + label(x + hw / 2, `${t}"`, 'tall');
     x += hw + GAP;
   }
+  // Drawn last, so it shows across the cutouts and not only in the gaps.
+  parts += `<line x1="${PAD}" x2="${(w - PAD).toFixed(1)}" y1="${line.toFixed(1)}" y2="${line.toFixed(1)}" ` +
+    `stroke="#F4A623" stroke-width="1.6" stroke-dasharray="7 5"/>`;
   return `<svg viewBox="0 0 ${Math.round(w)} ${Math.round(h)}" width="100%" role="img" ` +
-    `aria-label="The ${sizes.join(', ')} inch big head cutouts drawn to the same scale for comparison" ` +
+    `aria-label="The ${sizes.join(', ')} inch big head cutouts drawn to the same scale beside a real head, which is about ${REAL_HEAD} inches tall" ` +
     `xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="cut" x1="0" y1="0" x2="0" y2="1">` +
     `<stop offset="0%" stop-color="#1b3a78"/><stop offset="100%" stop-color="#0B1F4B"/></linearGradient></defs>` +
     `${parts}</svg>`;
@@ -291,7 +312,7 @@ const EXTRA_CSS = `
     .ladder h3{font-size:1.05rem;font-weight:800;color:var(--navy);}
     .ladder-note{font-size:.85rem;color:var(--muted);margin-top:.9rem;line-height:1.6;}
     .note-band{background:var(--off-white);border-left:3px solid var(--gold);border-radius:0 var(--radius) var(--radius) 0;padding:1.1rem 1.25rem;margin-top:2rem;font-size:.9rem;color:var(--text);line-height:1.7;}
-    @media(max-width:768px){.ladders{gap:2rem;}.scale-figure{padding:1.25rem .75rem 1rem;}}
+    @media(max-width:768px){.ladders{gap:2rem;}.scale-figure{padding:1.25rem .75rem 1rem;}.scale-figure .sl-big{font-size:30px;}.scale-figure .sl-small{font-size:22px;}}
     @media print{header,.announcement-bar,.marquee-strip,.mobile-drawer,.drawer-overlay,footer,.cta-band,.dl-bar,.hero-btns{display:none!important;}section{padding:1.25rem 0!important;}}
 `;
 
@@ -379,7 +400,7 @@ const BODY = `<section class="hero">
        before you order. The measurement is the <b>height</b> of the finished cutout.</p>
     <figure class="scale-figure">
       ${scaleDrawing(SIZES)}
-      <figcaption>The ${SIZES.map((s) => s + '&Prime;').join(', ')} cutouts, shown in proportion to one another.</figcaption>
+      <figcaption>The ${SIZES.map((s) => s + '&Prime;').join(', ')} cutouts beside a real head (gray), all to the same scale. The dashed gold line marks real-head height.</figcaption>
     </figure>
   </div>
 </section>

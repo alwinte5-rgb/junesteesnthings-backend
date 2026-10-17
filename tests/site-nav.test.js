@@ -113,3 +113,40 @@ test('product search is in the menu on every page and the phone drawer', () => {
   const css = read('assets/css/site-nav.css');
   assert.match(css, /\.jtn-ico-search\{display:flex!important;\}/, 'the icon stays on phones');
 });
+
+/* The menu is position:sticky. overflow-x:hidden on <html> or <body> makes
+   that element the scroll box and the menu scrolls away with the page (owner,
+   2026-10-17: "make the top menu sticky" — the homepage and blog had it).
+   overflow-x:clip stops sideways scroll and keeps sticky; a rule may write
+   hidden first as a fallback for browsers without clip (Safari < 16), as long
+   as clip follows it in the same rule. Pages with the menu and every shared
+   stylesheet are checked, for any selector that targets html or body. */
+test('no page hides overflow on html or body, so the menu stays sticky', () => {
+  const files = [];
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (/\.(html|css)$/.test(e.name)) files.push(p);
+    }
+  };
+  walk(PUBLIC);
+  const targetsRoot = (sel) => sel.split(',').some((one) =>
+    /(^|[\s>+~])(html|body)(?![\w-])/.test(' ' + one.trim().replace(/[.#:[][^\s>+~]*/g, (m) => m)));
+  const bad = [];
+  let checked = 0;
+  for (const p of files) {
+    const text = fs.readFileSync(p, 'utf8');
+    if (p.endsWith('.html') && !/class="[^"]*\bjtn\b|site-nav\.css/.test(text)) continue;
+    checked++;
+    for (const m of text.matchAll(/([^{}]*)\{([^{}]*)\}/g)) {
+      const sel = m[1].replace(/\/\*[\s\S]*?\*\//g, '').split(/[;>]\s*(?=[^;]*$)/).pop();
+      if (!targetsRoot(sel.replace(/<[^>]*>/g, ''))) continue;
+      const decls = m[2].split(';').map((d) => d.trim()).filter((d) => /^overflow(-x|-y)?\s*:/.test(d));
+      const last = decls[decls.length - 1];
+      if (last && /:\s*(hidden|auto|scroll)\b/.test(last)) bad.push(`${path.relative(PUBLIC, p)}: ${m[1].trim().slice(-40)} {${last}}`);
+    }
+  }
+  assert.ok(checked > 20, `pages and stylesheets checked (${checked})`);
+  assert.deepStrictEqual(bad, []);
+});
