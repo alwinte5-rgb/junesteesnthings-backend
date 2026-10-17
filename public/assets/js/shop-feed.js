@@ -1,10 +1,9 @@
 /*
  * Product cards on the homepage and the service, area and blog pages (all
- * written by tools/page-blocks.js): a card the designer's live feed
- * (/api/shop-feed) also lists, by the same link, takes the feed's photo and
- * price. The feed lists the categories and a few best sellers, so most shelf
- * cards keep the price written into page-blocks.json. Anything short of a
- * good answer leaves the built-in cards alone.
+ * written by tools/page-blocks.js): every card the designer's live feed
+ * (/api/shop-feed) lists, by the same link, takes the feed's photo and price,
+ * and a product switched off there is hidden. Anything short of a good answer
+ * leaves the built-in cards alone.
  *
  * Cards are built with DOM calls and textContent, never innerHTML: the names
  * and links come from another service.
@@ -14,15 +13,20 @@
   var pageCards = document.querySelectorAll('a.pb-card');
   if (!window.fetch || !pageCards.length) return;
 
-  /* Page cards keep their place and name; only a card the feed still lists,
-     by the same link, gets the feed's photo and price. A card the feed no
-     longer lists keeps its built-in photo, so a page never loses a card. */
+  /* Page cards keep their place and name. A card the feed lists, by the same
+     link, takes the feed's photo and price. A product card the feed no longer
+     lists (switched off in the Design Studio) is hidden, but only when the
+     feed carries a full product list, so an outage never empties a shelf. */
   function refresh(d) {
     var byLink = {};
-    (d.categories || []).concat(d.best || []).forEach(function (it) { byLink[it.link] = it; });
+    var products = d.products || [];
+    (d.categories || []).concat(d.best || [], products).forEach(function (it) { byLink[it.link] = it; });
     Array.prototype.forEach.call(pageCards, function (a) {
       var it = byLink[a.href];
-      if (!it) return;
+      if (!it) {
+        if (products.length >= 20 && /\/product\.php\?product_id=\d+$/.test(a.href)) a.hidden = true;
+        return;
+      }
       var img = a.querySelector('.pb-im img');
       if (img && it.image) img.src = it.image;
       var pr = a.querySelector('.pb-pr');
@@ -33,7 +37,7 @@
   /* The landing pages share /api/shop-feed's per-visitor limit with the quote
      form's token and photo uploads, so one answer is kept per tab for 10
      minutes: browsing twenty service pages asks once, not twenty times. */
-  var KEY = 'jt_shop_feed', TTL = 10 * 60 * 1000;
+  var KEY = 'jt_shop_feed2', TTL = 10 * 60 * 1000;
   function cached() {
     try {
       var c = JSON.parse(sessionStorage.getItem(KEY) || 'null');

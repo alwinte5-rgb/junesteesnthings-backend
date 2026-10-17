@@ -86,3 +86,24 @@ test('server.js keeps the last good copy and reports a failure', () => {
   assert.match(fn, /reportError\('shop-feed'/, 'failures reach the error digest');
   assert.match(fn, /return _shopCache\.data;\s*\}\s*$/, 'a failure answers with the last good copy');
 });
+
+test('every product price passes through for the page cards; only designer product links survive', () => {
+  const d = cleanShopFeed({ ...good, products: [
+    { link: D + 'product.php?product_id=21', image: 'http://cdn.example/h.jpg', from_price: 20.184 },
+    { link: D + 'product.php?product_id=22', image: null, from_price: 0 },
+    { link: 'https://evil.example/product.php?product_id=1', image: 'https://cdn.example/x.jpg', from_price: 1 },
+    { link: D + 'products.php?category_id=52', from_price: 5 },
+  ] });
+  assert.deepStrictEqual(d.products, [
+    { link: D + 'product.php?product_id=21', image: 'https://cdn.example/h.jpg', from_price: 20.18 },
+    { link: D + 'product.php?product_id=22', image: '', from_price: null },
+  ]);
+  assert.deepStrictEqual(cleanShopFeed(good).products, [], 'an older designer sends none');
+});
+
+test('the page script prices every card it can match and hides a switched-off product only with a full list', () => {
+  const js = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'public', 'assets', 'js', 'shop-feed.js'), 'utf8');
+  assert.match(js, /concat\(d\.best \|\| \[\], products\)/);
+  assert.ok(js.includes('products.length >= 20 && /\\/product\\.php'), 'hide only with a full list');
+  assert.doesNotMatch(js, /\.innerHTML\s*=/);
+});
