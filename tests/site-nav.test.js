@@ -71,16 +71,39 @@ test('no page keeps a header script that throws without the old header', () => {
   }
 });
 
-test('the review strip sits above the footer on every page but the homepage and 404', () => {
+test('the review strip sits above the footer on pages without their own reviews block', () => {
+  const blockPages = new Set(Object.keys(JSON.parse(read('assets/data/page-blocks.json')).pages));
   for (const rel of NAV.pages()) {
     const html = read(rel);
-    if (NAV.NO_REVIEWS.has(rel)) { assert.ok(!html.includes(NAV.RS), rel); continue; }
+    if (NAV.NO_REVIEWS.has(rel) || blockPages.has(rel)) {
+      assert.ok(!html.includes(NAV.RS), rel + ': reviews once, not twice');
+      assert.ok(!html.includes('review-strip.css'), rel + ': no unused strip styles');
+      continue;
+    }
     if (!/<footer\b/i.test(html)) continue;
     assert.ok(html.indexOf(NAV.RS) < html.search(/<footer\b/i), rel + ': strip before the footer');
     assert.match(html, /href="\/assets\/css\/review-strip\.css"/, rel);
   }
 });
 
+test('one ticker: no page keeps its old marquee under the menu', () => {
+  for (const rel of NAV.pages()) {
+    const html = read(rel);
+    const end = html.indexOf(NAV.END);
+    if (end === -1) continue;
+    const next = html.slice(end).search(/<(section|main|article)\b/i);
+    const head = next === -1 ? html.slice(end) : html.slice(end, end + next);
+    assert.ok(!head.includes('class="marquee-strip"'), rel + ': second ticker under the menu');
+  }
+});
+
+test('a dropdown item with items renders a submenu, on desktop and in the drawer', () => {
+  const nav = { ...JSON.parse(read('assets/data/site-nav.json')) };
+  nav.menu = [{ label: 'Groups', items: [{ label: 'Birthday', href: '/b' }, { label: 'Holidays', items: [{ label: 'Christmas', href: '/c' }] }] }];
+  const html = NAV.render(nav);
+  assert.match(html, /<div class="jtn-sub"><button type="button" class="jtn-sub-t" aria-expanded="false">Holidays<\/button><div class="jtn-sub-m"><a href="\/c">Christmas<\/a><\/div><\/div>/);
+  assert.match(html, /<details class="jtn-sub-d"><summary>Holidays<\/summary><a href="\/c">Christmas<\/a><\/details>/);
+});
 test('one review list: valid, photos exist, and the quote page reads it', () => {
   const d = JSON.parse(read('assets/data/reviews.json'));
   assert.ok(d.reviews.length >= 6);
@@ -191,4 +214,19 @@ test('a stamped stylesheet replaces the old link where it stood, so later styles
   assert.strictEqual(out.split('site-nav.css').length - 1, 1, 'one link, not two');
   assert.strictEqual(css.put(out), out, 'already current: unchanged');
   assert.match(css.put('<head>\n</head>'), /site-nav\.css\?v=[0-9a-f]{8}" \/>\n<\/head>/, 'no link yet: added before </head>');
+});
+
+test('every page has the one shared footer, with a working Instagram link', () => {
+  const nav = JSON.parse(read('assets/data/site-nav.json'));
+  for (const rel of NAV.pages()) {
+    const html = read(rel);
+    assert.strictEqual((html.match(/<footer\b/gi) || []).length, 1, rel + ': exactly one footer');
+    assert.ok(html.includes(NAV.FSTART), rel + ': the shared footer');
+    assert.ok(html.includes(`href="${nav.instagram}" target="_blank" rel="noopener noreferrer"`), rel + ': Instagram');
+  }
+  // Every service and group in the menu is in the footer.
+  const foot = NAV.renderFooter(nav);
+  for (const m of nav.menu.filter((x) => x.label === 'Services' || x.label === 'Groups & Events')) {
+    for (const i of m.items.filter((x) => !x.items && !/→$/.test(x.label))) assert.ok(foot.includes(`href="${i.href}"`), i.label);
+  }
 });

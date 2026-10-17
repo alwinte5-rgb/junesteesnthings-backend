@@ -806,7 +806,7 @@ const FINAL = {
    questions are in sales-leadgen-pages.js. */
 const W = (f) => `/assets/images/work/${f}.jpg`;
 const LESSON_EXTRAS = {
-  'lg1-job': { images: [{ src: W('storefront-lincoln-ave'), alt: 'The June\'s Tees shop on Lincoln Avenue' }] },
+  'lg1-job': { images: [{ src: W('screen-printing-press'), alt: 'The June\'s Tees shop in Lakeview' }] },
   'lg2-calendar': { images: [{ src: W('kindergarten-back-to-school-tee'), alt: 'A back-to-school class shirt' }, { src: W('family-reunion-bulk-order'), alt: 'A family reunion order' }] },
   'lg3-research': { images: [{ src: W('youth-team-shirts'), alt: 'A youth team in their custom shirts' }] },
   'lg4-decider': { images: [{ src: W('barber-business-shirts'), alt: 'Staff shirts for a local business' }] },

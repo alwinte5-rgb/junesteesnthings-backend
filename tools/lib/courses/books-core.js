@@ -53,7 +53,7 @@ const MODULES = [
     lessons: [{
       id: 'b2-money', article: A.money, minutes: 20, tags: 'bookkeeping, sales, gross, fees, stripe, paypal, cash, deposits, payouts, accounts',
       goals: ['List the ways customers pay us', 'Record sales gross and fees as an expense', 'Follow one order from payment to the bank'],
-      images: [{ src: '/assets/images/work/storefront-lincoln-ave.jpg', alt: 'Our shop: the books follow every order made here' }],
+      images: [{ src: '/assets/images/work/screen-printing-press.jpg', alt: 'Our Lakeview shop: the books follow every order made here' }],
       body:
 `You keep the record of every dollar that comes in and goes out, so June knows what the business really makes and the state gets exactly what it is owed.
 

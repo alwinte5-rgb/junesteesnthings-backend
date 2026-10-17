@@ -217,5 +217,68 @@
     "Big Head Cutouts",
     "Black-Owned",
     "Women-Owned"
-  ]
+  ],
+  "footer": {
+    "tagline": "Chicago's custom print shop for the culture. Shirts, signs, standees, party favors — if you can dream it, we can print it. Black-owned. Women-owned. Built for the community.",
+    "texts": {
+      "label": "Get 10% off: join our texts →",
+      "href": "/texts?src=site"
+    },
+    "areas_note": "Proudly serving Lakeview, Lincoln Park, North Center, Roscoe Village, Logan Square, Wicker Park, Wrigleyville & all of Chicagoland. Pickup by appointment.",
+    "areas": [
+      {
+        "label": "Lakeview",
+        "href": "/areas/custom-tshirts-lakeview.html"
+      },
+      {
+        "label": "Lincoln Park",
+        "href": "/areas/custom-apparel-lincoln-park.html"
+      },
+      {
+        "label": "North Center & Roscoe Village",
+        "href": "/areas/custom-apparel-north-center.html"
+      },
+      {
+        "label": "Logan Square",
+        "href": "/areas/custom-apparel-logan-square.html"
+      },
+      {
+        "label": "Ravenswood",
+        "href": "/areas/custom-apparel-ravenswood.html"
+      },
+      {
+        "label": "All Chicago",
+        "href": "/services/custom-tshirts-chicago.html"
+      }
+    ],
+    "company": [
+      {
+        "label": "All Products",
+        "href": "https://design.jtees.net/products.php"
+      },
+      {
+        "label": "Design Studio",
+        "href": "https://design.jtees.net/editor.php?product_base=14"
+      },
+      {
+        "label": "Our Work",
+        "href": "/#portfolio"
+      },
+      {
+        "label": "Reviews",
+        "href": "/#reviews"
+      },
+      {
+        "label": "About Us",
+        "href": "/#about"
+      },
+      {
+        "label": "Blog",
+        "href": "/blog/"
+      }
+    ],
+    "hours": "Mon–Fri 10:30 AM – 6 PM, by appointment",
+    "email": "support@jtees.net",
+    "bottom": "Chicago, IL · Black-Owned · Women-Owned · LGBTQ+ Friendly"
+  }
 }

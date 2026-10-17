@@ -5,7 +5,7 @@
    up with the text around them. */
 .pb-wrap{max-width:1100px;margin:0 auto;padding:0 2rem}
 @media (max-width:640px){.pb-wrap{padding:0 1rem}}
-.pb-products,.pb-reviews,.pb-work{font-family:Inter,system-ui,sans-serif;padding:3rem 0}
+.pb-products,.pb-reviews,.pb-work{font-family:Inter,system-ui,sans-serif;padding:2.6rem 0}
 .pb-products{background:#fff;border-bottom:1px solid #E7E3DB}
 .pb-reviews{background:#F7F6F3}
 .pb-work{background:#fff}
@@ -16,8 +16,10 @@
 .pb-all{color:#1848B8;font-weight:700;font-size:.92rem;text-decoration:none;white-space:nowrap}
 .pb-all:hover{text-decoration:underline}
 
-/* Product cards: the homepage's card look. */
+/* Product cards: the homepage's card look. Six cards sit three to a row,
+   so no row is left half empty. */
 .pb-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1.1rem}
+.pb-grid:has(>.pb-card:nth-child(6):last-child),.pb-grid:has(>.pb-card:nth-child(3):last-child){grid-template-columns:repeat(3,1fr)}
 .pb-card{display:flex;flex-direction:column;background:#fff;border:1px solid #E7E3DB;border-radius:14px;overflow:hidden;text-decoration:none;color:inherit;transition:box-shadow .2s,transform .2s}
 .pb-card:hover{box-shadow:0 10px 24px rgba(11,31,75,.12);transform:translateY(-2px)}
 .pb-im{aspect-ratio:1/1;background:#F3F4F6;display:flex;align-items:center;justify-content:center}
@@ -34,11 +36,16 @@
 .pb-reviews .pb-tag{color:#0B1F4B}
 .pb-rvs{display:grid;grid-template-columns:repeat(3,1fr);gap:1.1rem}
 .pb-rv{margin:0;background:#fff;border:1px solid #E7E3DB;border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
+.pb-rv[hidden]{display:none!important}
 .pb-rv img{display:block;width:100%;height:190px;object-fit:cover}
 .pb-rv figcaption{padding:1rem 1.1rem 1.15rem;display:flex;flex-direction:column;gap:.35rem}
 .pb-rv b{color:#0B1F4B;font-size:1rem}
 .pb-rv p{margin:0;color:#374151;font-size:.92rem;line-height:1.55}
 .pb-rv span{color:#6B7280;font-size:.8rem;margin-top:auto}
+
+/* The Google rating under the hero's pitch. */
+.pb-rating{display:inline-flex;align-items:center;gap:.4rem;margin:.2rem 0 1.4rem;font:600 .95rem Inter,system-ui,sans-serif;color:#0B1F4B;text-decoration:none}
+.pb-rating:hover{text-decoration:underline}
 
 /* Recent work */
 .pb-work h2{margin-bottom:1.3rem}
@@ -71,8 +78,10 @@
 .pb-sticky{display:none}
 @media (max-width:900px){
   .pb-grid{grid-template-columns:repeat(3,1fr)}
-  .pb-rvs{grid-template-columns:1fr 1fr}
-  .pb-rv:nth-child(3){display:none}
+  /* A row you swipe, not a grid that hides the third review. */
+  .pb-rvs{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;gap:.8rem;padding-bottom:.4rem;scrollbar-width:none}
+  .pb-rvs::-webkit-scrollbar{display:none}
+  .pb-rv{flex:0 0 min(78%,320px);scroll-snap-align:start}
   .hero:has(.pb-hero-img) .container{display:block}
   .hero .pb-hero-img{display:none}
 }
@@ -82,8 +91,6 @@
   .pb-grid{grid-template-columns:repeat(2,1fr);gap:.7rem}
   .pb-bd{padding:.7rem .75rem .8rem}
   .pb-nm{font-size:.9rem}
-  .pb-rvs{grid-template-columns:1fr}
-  .pb-rv:nth-child(3){display:flex}
   .pb-rv img{height:170px}
   .pb-gallery{columns:2;column-gap:.6rem}.pb-gallery figure{margin-bottom:.6rem}
   .pb-sticky{display:flex;position:fixed;left:12px;right:156px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:900;gap:8px;font-family:Inter,system-ui,sans-serif}
