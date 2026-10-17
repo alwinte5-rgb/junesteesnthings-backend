@@ -164,3 +164,10 @@ test('every page shows the Design Lab, then three category shelves of real produ
     assert.doesNotMatch(box, /\.svg"/, `${rel}: no drawn placeholder cards`);
   }
 });
+
+test('a sign page still opens each sign designer, as plain links (no drawn cards)', () => {
+  const html = read('services/banners-signs.html');
+  const row = html.slice(html.indexOf('<p class="pb-links">'), html.indexOf('</p>', html.indexOf('<p class="pb-links">')));
+  for (const c of [67, 68, 69, 70, 71, 72]) assert.match(row, new RegExp(`products\\.php\\?category_id=${c}"`));
+  assert.ok(PB.shelvesFor(data, data.pages['services/banners-signs.html'], 'services/banners-signs.html').length === 3);
+});

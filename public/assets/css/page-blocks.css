@@ -16,10 +16,7 @@
 .pb-all{color:#1848B8;font-weight:700;font-size:.92rem;text-decoration:none;white-space:nowrap}
 .pb-all:hover{text-decoration:underline}
 
-/* Product cards: the homepage's card look. Six cards sit three to a row,
-   so no row is left half empty. */
-.pb-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1.1rem}
-.pb-grid:has(>.pb-card:nth-child(6):last-child),.pb-grid:has(>.pb-card:nth-child(3):last-child){grid-template-columns:repeat(3,1fr)}
+/* Product cards, on the category shelves below. */
 .pb-card{display:flex;flex-direction:column;background:#fff;border:1px solid #E7E3DB;border-radius:14px;overflow:hidden;text-decoration:none;color:inherit;transition:box-shadow .2s,transform .2s}
 .pb-card:hover{box-shadow:0 10px 24px rgba(11,31,75,.12);transform:translateY(-2px)}
 .pb-im{aspect-ratio:1/1;background:#F3F4F6;display:flex;align-items:center;justify-content:center}
@@ -104,13 +101,15 @@
 .pb-shelf-h a:hover{text-decoration:underline}
 .pb-row{display:grid;grid-template-columns:repeat(4,1fr);gap:1.1rem}
 .pb-shelves .pb-shelf:last-child{margin-bottom:0}
+.pb-links{margin:0 0 1.4rem;font-weight:600;color:#0B1F4B}
+.pb-links a{color:#1848B8;font-weight:700}
 
 /* Phone action bar: it stops short of the "Chat with us" button
    (assets/js/jt-chat.js, about 130px wide at the bottom right). */
 .pb-sticky{display:none}
 @media (max-width:900px){
   .pb-gallery figure{flex-basis:calc((100% - .9rem)/2)}
-  .pb-grid{grid-template-columns:repeat(3,1fr)}
+  .pb-row{grid-template-columns:repeat(2,1fr)}
   /* A row you swipe, not a grid that hides the third review. */
   .pb-rvs{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;gap:.8rem;padding-bottom:.4rem;scrollbar-width:none}
   .pb-rvs::-webkit-scrollbar{display:none}
@@ -123,7 +122,6 @@
   .pb-lab-in{grid-template-columns:1fr;gap:1.2rem}
   .pb-row{grid-template-columns:repeat(2,1fr);gap:.7rem}
   .pb-head{flex-direction:column;align-items:flex-start;gap:.5rem}
-  .pb-grid{grid-template-columns:repeat(2,1fr);gap:.7rem}
   .pb-bd{padding:.7rem .75rem .8rem}
   .pb-nm{font-size:.9rem}
   .pb-gallery{gap:.6rem}.pb-gallery figure{flex-basis:calc((100% - .6rem)/2)}
