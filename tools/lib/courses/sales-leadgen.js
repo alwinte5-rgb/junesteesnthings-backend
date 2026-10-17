@@ -496,7 +496,7 @@ Keep it shorter than the opener.
 Log every message on the lead, and set the **follow up** date each time. Then:
 
 - The prospect comes back on My Day on the right day, so nothing is forgotten
-- Your messages and replies are counted, which is how your reply rate is worked out
+- Your messages and their replies are on record, so you and June can work out your reply rate (replies divided by first messages)
 - Anyone who opens the lead sees the whole story
 
 A message you did not log did not happen, as far as the shop can tell.
@@ -526,7 +526,7 @@ A message you did not log did not happen, as far as the shop can tell.
           choices: ['"Just checking in!"', '"Navy with a gold number on the back? Happy to send a mockup and a price."', 'Your opener again, word for word', '"Last chance!"'],
           answer: 1, article: A.cadence, why: 'Each follow-up adds something new.' },
         { id: 'log', q: 'Why log every message on the lead?',
-          choices: ['It is optional', 'It brings the lead back on My Day, counts toward your reply rate, and shows the whole story', 'It emails June', 'It changes the price'],
+          choices: ['It is optional', 'It brings the lead back on My Day, puts the message on record, and shows the whole story', 'It emails June', 'It changes the price'],
           answer: 1, article: A.cadence, why: 'An unlogged message did not happen, as far as the shop can tell.' },
         { id: 'date', q: 'After each message you also…',
           choices: ['Set the follow-up date on the lead', 'Add them to the newsletter', 'Send a text', 'Close the lead'],
@@ -590,7 +590,7 @@ When something about credit looks wrong, ask June. Never change a lead's owner y
     }],
     practice: [
       { key: 'do:leadgen-message', type: 'do', fact: 'messages', need: 5, minutes: 10,
-        title: 'Send 5 messages from the back office', hint: 'Emails or texts to customers sent from a lead or a quote count. Sent from the back office, they are logged for you. This ticks itself at 5.' },
+        title: 'Send 5 messages from the back office', hint: 'Emails or texts sent from a lead or a quote count, and so does a DM you log on a lead (add a note, type Social DM). While you are in training an email waits for June and still counts. This ticks itself at 5.' },
     ],
     quiz: {
       key: 'leadgen-7', title: 'Module 7 quiz: reply to quote request', minutes: 10,
@@ -806,7 +806,7 @@ const FINAL = {
    questions are in sales-leadgen-pages.js. */
 const W = (f) => `/assets/images/work/${f}.jpg`;
 const LESSON_EXTRAS = {
-  'lg1-job': { images: [{ src: W('storefront-lincoln-ave'), alt: 'The June\'s Tees shop on Lincoln Avenue' }] },
+  'lg1-job': { images: [{ src: W('screen-printing-press'), alt: 'The June\'s Tees shop in Lakeview' }] },
   'lg2-calendar': { images: [{ src: W('kindergarten-back-to-school-tee'), alt: 'A back-to-school class shirt' }, { src: W('family-reunion-bulk-order'), alt: 'A family reunion order' }] },
   'lg3-research': { images: [{ src: W('youth-team-shirts'), alt: 'A youth team in their custom shirts' }] },
   'lg4-decider': { images: [{ src: W('barber-business-shirts'), alt: 'Staff shirts for a local business' }] },

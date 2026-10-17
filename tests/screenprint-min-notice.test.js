@@ -1,3 +1,4 @@
+const { designerPath } = require('./designer-dir');
 /* ONE popup per shortfall.
  *
  * enforce_min() switches a below-minimum order off screen print and says so.
@@ -16,8 +17,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const APP = path.join(__dirname,
-  '../Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/core/assets/js/app.js');
+const APP = designerPath('core/assets/js/app.js');
 
 /* Slice the function body out by matching braces, skipping strings and comments
    so a `{` inside either cannot end the block early. */

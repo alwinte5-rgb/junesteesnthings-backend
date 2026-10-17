@@ -37,7 +37,9 @@ const PERMISSIONS = {
   'quotes.send':           { group: 'Quotes',     label: 'Send quotes to customers', levels: ['approval', 'on'],
                              limit: { key: 'maxTotal', label: 'Up to $', unit: '$' } },
   'quotes.discount':       { group: 'Quotes',     label: 'Discounts and prices below list', levels: ['off', 'approval', 'on'],
-                             limit: { key: 'maxPct', label: 'Up to %', unit: '%' } },
+                             limit: { key: 'maxPct', label: 'Up to %', unit: '%' },
+                             /* Owner, 2026-10-13: a Closer's 5% is only on 48 pieces or more. */
+                             limit2: { key: 'minQty', label: 'Only from pieces', unit: 'pcs' } },
   'quotes.manage':         { group: 'Quotes',     label: 'Cancel and restore quotes', levels: ['off', 'on'] },
   /* Full price access (owner, 2026-10-08: "no price changes only me unless I
      grant full access to the helper"). Without it a helper cannot type an each
@@ -53,6 +55,12 @@ const PERMISSIONS = {
      customer's files and the notes. No prices, no payments, no contact
      details, and no other board (/admin/design). */
   'jobs.design':           { group: 'Production', label: 'Design jobs (no prices or contact details)', levels: ['off', 'on'] },
+  /* Every helper sees the schedule (owner, 2026-10-13: "give all employees
+     access to the production schedule so that the designers can communicate
+     with customers and see files"). It opens every open job on the design
+     job page: dates, what to make, the customer's files, the messages and
+     notes. Never prices, payments or job costs. */
+  'jobs.schedule':         { group: 'Production', label: 'Production schedule: every job, its files and messages (no prices or costs)', levels: ['off', 'on'] },
   'proofs.upload':         { group: 'Production', label: 'Upload proofs to jobs', levels: ['off', 'on'] },
   'art.request':           { group: 'Production', label: 'Send jobs to the designer, answer their questions', levels: ['off', 'on'] },
   'art.work':              { group: 'Production', label: 'Work on artwork: ask sales, upload and submit final art', levels: ['off', 'on'] },
@@ -82,6 +90,7 @@ const NEVER_STAFF = [
   'POST /admin/certificates/:id/review',
   'POST /admin/quotes/:code/exemption',
   'POST /admin/quote/:code/correct-payment',
+  'POST /admin/quote/:code/text-consent',
   'POST /admin/quote/:code/settle',
   'POST /admin/quote/:code/confirm-payment',
   'POST /admin/unlinked/:id/apply',
@@ -117,7 +126,7 @@ const PRESETS = {
       'leads.view': 'on', 'quotes.view': 'on', 'quotes.draft': 'on',
       'quotes.send': 'approval', 'quotes.discount': 'approval',
       'customers.view': 'on', 'customers.message': 'approval',
-      'orders.view': 'on', 'art.request': 'on', 'kb.edit': 'approval',
+      'orders.view': 'on', 'art.request': 'on', 'kb.edit': 'approval', 'jobs.schedule': 'on',
     },
   },
   /* Designers see their design jobs and nothing else (owner, 2026-10-06: "no
@@ -129,7 +138,7 @@ const PRESETS = {
     label: 'Design training',
     note: 'Sees only their design jobs, uploads proofs and writes proof messages; you approve each message before it is sent.',
     perms: {
-      'jobs.design': 'on', 'customers.message': 'approval',
+      'jobs.design': 'on', 'jobs.schedule': 'on', 'customers.message': 'approval',
       'proofs.upload': 'on', 'art.work': 'on', 'kb.edit': 'approval',
     },
   },
@@ -137,7 +146,7 @@ const PRESETS = {
     label: 'Designer',
     note: 'Design training signed off: sends proofs to customers themselves. Still sees only their design jobs.',
     perms: {
-      'jobs.design': 'on', 'customers.message': 'on',
+      'jobs.design': 'on', 'jobs.schedule': 'on', 'customers.message': 'on',
       'proofs.upload': 'on', 'art.work': 'on', 'kb.edit': 'approval',
     },
   },
@@ -146,18 +155,19 @@ const PRESETS = {
      training without seeing jobs, prices or customers). Team chat, the
      Playbook, Resources, My Day and Training are open to every helper
      ('any' in ROUTES), so this preset switches everything else off and lets
-     them suggest Playbook edits for June to approve. */
+     them suggest Playbook edits for June to approve. The production schedule
+     is open to them too (owner, 2026-10-13: all employees), read only. */
   team: {
     label: 'Team (no back office)',
-    note: 'Team chat, the Playbook, Resources and their own training. No jobs, quotes, prices or customers.',
-    perms: { 'kb.edit': 'approval' },
+    note: 'Team chat, the Playbook, Resources, their own training and the production schedule (read only). No quotes, prices or customer list.',
+    perms: { 'kb.edit': 'approval', 'jobs.schedule': 'on' },
   },
   /* The Team preset plus read-only Finances: what a bookkeeper needs to
      close a month, and nothing that changes the books. */
   books: {
     label: 'Bookkeeper (read-only finances)',
     note: 'Team chat, the Playbook and training, plus the Finances page and its reports to read and download. Cannot change anything there.',
-    perms: { 'kb.edit': 'approval', 'finances.view': 'on' },
+    perms: { 'kb.edit': 'approval', 'finances.view': 'on', 'jobs.schedule': 'on' },
   },
   supervised: {
     label: 'Supervised',
@@ -167,7 +177,7 @@ const PRESETS = {
       'quotes.send': { level: 'on', maxTotal: 500 }, 'quotes.discount': 'approval',
       'customers.view': 'on', 'customers.message': 'on', 'production.stage': 'on',
       'orders.view': 'on', 'proofs.upload': 'on', 'art.request': 'on', 'certificates.prescreen': 'on', 'reviews.manage': 'on',
-      'kb.edit': 'approval',
+      'kb.edit': 'approval', 'jobs.schedule': 'on',
     },
   },
   trusted: {
@@ -178,14 +188,14 @@ const PRESETS = {
       'quotes.send': 'on', 'quotes.discount': { level: 'on', maxPct: 10 }, 'quotes.manage': 'on',
       'customers.view': 'on', 'customers.message': 'on', 'production.stage': 'on',
       'orders.view': 'on', 'proofs.upload': 'on', 'art.request': 'on', 'certificates.prescreen': 'on', 'reviews.manage': 'on',
-      'kb.edit': 'on',
+      'kb.edit': 'on', 'jobs.schedule': 'on',
     },
   },
 };
 
 /* The preset a new helper starts on for each training path: the path's own
    training preset, or Training for sales. */
-const TRACK_PRESET = { design: 'design', content: 'team', ads: 'team', bookkeeper: 'books', developer: 'team' };
+const TRACK_PRESET = require('./tracks').PRESET_FOR_TRACK;
 function presetForTrack(track) {
   return Object.prototype.hasOwnProperty.call(TRACK_PRESET, track) ? TRACK_PRESET[track] : 'training';
 }
@@ -193,6 +203,7 @@ function presetForTrack(track) {
 /* Every admin route, and the permission a helper needs for it.
    'owner'  only the owner, whatever toggles are set.
    'any'    any signed-in helper (the menu counts, the sign-in redirect).
+   A list of permissions means any one of them opens the route.
    The key is "<METHOD> <route path as written in server.js>"; a route
    registered for several paths is keyed by the paths joined with "|". */
 const ROUTES = {
@@ -224,6 +235,7 @@ const ROUTES = {
   'POST /admin/api/quotes|/admin/api/quotes/:code': 'quotes.draft',
   'POST /admin/quote/:code/cancel': 'quotes.manage',
   'POST /admin/quote/:code/uncancel': 'quotes.manage',
+  'POST /admin/quote/:code/reinstate': 'quotes.manage',
 
   'POST /admin/quote/:code/step': 'production.stage',
   'POST /admin/quote/:code/stage': 'production.stage',
@@ -258,6 +270,11 @@ const ROUTES = {
   'POST /admin/quote/:code/message': 'customers.message',
   /* "No reply needed" on a customer's message (2026-10-06). */
   'POST /admin/quote/:code/replies-handled': 'customers.message',
+  /* The owner records that a customer agreed to texts somewhere the shop's
+     number could not see (2026-10-15). Consent is the owner's word, never a helper's. */
+  'POST /admin/quote/:code/text-consent': 'owner',
+  /* Skip one automatic reminder on a job (2026-10-15): it stops a message, so the same permission. */
+  'POST /admin/quote/:code/skip-reminder': 'customers.message',
   'POST /admin/quote/:code/email': 'customers.message',
   /* Marks a quote as sent by text or by hand (2026-10-06): sending, so the same permission. */
   'POST /admin/quote/:code/delivered': 'customers.message',
@@ -292,17 +309,23 @@ const ROUTES = {
   'POST /admin/quote/:code/restore-version': 'owner',
   'POST /admin/followups/:id/done': 'owner',
 
-  // A designer's own board and job page.
+  /* A designer's own board, and the job page with no money on it. The
+     schedule opens the same job page for any open job (designJobFor). */
   'GET /admin/design': 'jobs.design',
-  'GET /admin/design/:code': 'jobs.design',
-  'GET /admin/design/:code/artwork/:n': 'jobs.design',
-  'GET /admin/design/:code/artwork.zip': 'jobs.design',
-  'POST /admin/design/:code/note': 'jobs.design',
+  'GET /admin/schedule': 'jobs.schedule',
+  'GET /admin/design/:code': ['jobs.design', 'jobs.schedule'],
+  'GET /admin/design/:code/artwork/:n': ['jobs.design', 'jobs.schedule'],
+  'GET /admin/design/:code/artwork.zip': ['jobs.design', 'jobs.schedule'],
+  'GET /admin/design/:code/sent-file/:id/:n': ['jobs.design', 'jobs.schedule'],
+  'GET /admin/design/:code/reply-file/:id/:n': ['jobs.design', 'jobs.schedule'],
+  'POST /admin/design/:code/note': ['jobs.design', 'jobs.schedule'],
 
   'GET /admin/discounts': 'discounts.manage',
   'POST /admin/discounts': 'discounts.manage',
   // The reintroduction campaign texts and emails the whole list: the owner's call.
   'GET /admin/campaign': 'owner',
+  // When to prep, advertise and stop orders for each occasion: the owner's plan.
+  'GET /admin/marketing-calendar': 'owner',
   'GET /admin/campaign/sign': 'owner',
   'POST /admin/campaign/test': 'owner',
   'POST /admin/campaign/text': 'owner',
@@ -332,6 +355,8 @@ const ROUTES = {
 
   // The staff workspace itself.
   'GET /admin/my-day': 'any',
+  /* A helper answers which time zone they work from, once (owner, 2026-10-16). */
+  'POST /admin/my-time-zone': 'any',
   'GET /admin/playbook': 'any',
   'GET /admin/playbook/:id': 'any',
   'POST /admin/playbook': 'kb.edit',
@@ -344,18 +369,38 @@ const ROUTES = {
   'POST /admin/leads/add': 'leads.view',
   'POST /admin/leads/call': 'leads.view',
   'POST /admin/quote/:code/note': 'quotes.view',
+  'GET /admin/tasks': 'owner',
   'POST /admin/tasks': 'any',
   'POST /admin/tasks/:id/done': 'any',
+  'GET /admin/tasks/:id/file/:n': 'any',
+  'POST /admin/api/task-file-signature': 'any',
+  'GET /admin/work-schedule': 'any',
+  'POST /admin/work-schedule': 'owner',
   'POST /admin/tasks/:id/start': 'any',
   /* The tools the team works in: everyone reads the list; only the owner edits it. */
   'GET /admin/resources': 'any',
   'POST /admin/resources': 'owner',
   'POST /admin/resources/:id': 'owner',
+  /* Shared logins (owner, 2026-10-16): the owner shares and cancels; a helper
+     opens only their own, once (checked in the handler). */
+  'POST /admin/shared-logins': 'owner',
+  'POST /admin/shared-logins/:id/cancel': 'owner',
+  'POST /admin/shared-logins/:id/open': 'any',
   'POST /admin/quote/:code/credit': 'owner',
   // Shop lead or rep lead: decided by the records; only the owner relabels (tools/lib/sales-credit.js).
   'POST /admin/quote/:code/sale-type': 'owner',
   'GET /admin/my-earnings': 'any',
   'GET /admin/my-stats': 'any',
+  // Timeclock (tools/lib/timeclock.js): a helper's own clock; the owner reviews and approves.
+  'GET /admin/clock': 'any',
+  'POST /admin/clock/in': 'any',
+  'POST /admin/clock/out': 'any',
+  'POST /admin/clock/ping': 'any',
+  'GET /admin/timeclock': 'owner',
+  'POST /admin/timeclock/shift': 'owner',
+  'POST /admin/timeclock/shift/:id': 'owner',
+  'POST /admin/timeclock/timeproof': 'owner',
+  'POST /admin/timeclock/approve': 'owner',
   'POST /admin/bonuses': 'owner',
   'POST /admin/bonuses/:id/delete': 'owner',
   'POST /admin/incentives': 'owner',
@@ -367,6 +412,8 @@ const ROUTES = {
   'GET /admin/training/quiz/:key': 'any',
   'GET /admin/training/lesson/:id': 'any',
   'GET /admin/training/paths': 'owner',
+  'GET /admin/training/attempts': 'owner',
+  'GET /admin/training/quiz/:key/result/:id': 'any',
   'POST /admin/api/proof-signature': 'proofs.upload',
   'POST /admin/quote/:code/proofs': 'proofs.upload',
   'POST /admin/quote/:code/art/request': 'art.request',
@@ -377,9 +424,14 @@ const ROUTES = {
   'POST /admin/api/message-file-signature': 'customers.message',
   /* Ask Claude for a suggested reply on the job page (2026-10-06). */
   'POST /admin/api/quote/:code/suggest-reply': 'customers.message',
+  'POST /admin/api/lead/:id/suggest-followup': 'customers.message',
   /* Claude reads a message for accuracy and tone before it is sent. */
   'POST /admin/api/quote/:code/review-message': 'customers.message',
   'POST /admin/quote/:code/art/decide': 'owner',
+  'POST /admin/quote/:code/art/ack': 'art.work',
+  'POST /admin/job-notes': 'any',
+  'POST /admin/job-notes/:id/address': 'any',
+  'POST /admin/job-notes/:id/edit': 'any',
   'POST /admin/training/quiz/:key': 'any',
   'POST /admin/training/signoff': 'owner',
   'POST /admin/training/tips-reset': 'owner',
@@ -389,7 +441,10 @@ const ROUTES = {
   'POST /admin/feedback': 'owner',
   'GET /admin/team-chat': 'any',
   'POST /admin/team-chat': 'any',
+  'POST /admin/team-chat/edit': 'any',
   'GET /admin/api/team-chat': 'any',
+  'POST /admin/api/chat-file-signature': 'any',
+  'GET /admin/team-chat/file/:kind/:id': 'any',
   'POST /admin/team-chat/alerts': 'any',
   'POST /admin/team-chat/channels': 'owner',
   'GET /admin/staff': 'owner',
@@ -397,6 +452,7 @@ const ROUTES = {
   'POST /admin/staff/:id': 'owner',
   'GET /admin/approvals': 'owner',
   'POST /admin/approvals/:id': 'owner',
+  'POST /admin/approvals/:id/edit': 'any',
   'GET /admin/activity': 'owner',
   'GET /admin/team': 'owner',
   'POST /admin/team/hours': 'owner',
@@ -430,6 +486,12 @@ function permForRoute(method, routePath) {
 
 /** A stored permission value → { level, ...limits }. Anything unrecognised is
  *  'off', so a typo in the database can only ever take access away. */
+/** A permission's limits, as [{ key, label, unit, field }]; `field` is the
+ *  form input's prefix (limit_, limit2_). */
+function limitsOf(def) {
+  return [[def.limit, 'limit_'], [def.limit2, 'limit2_']].filter(([l]) => l).map(([l, field]) => ({ ...l, field }));
+}
+
 function normalizePerm(key, raw) {
   const def = PERMISSIONS[key];
   if (!def) return { level: 'off' };
@@ -438,9 +500,9 @@ function normalizePerm(key, raw) {
   if (typeof raw === 'string') level = raw;
   else if (raw && typeof raw === 'object') {
     level = String(raw.level || 'off');
-    if (def.limit) {
-      const n = Number(raw[def.limit.key]);
-      if (Number.isFinite(n) && n >= 0) out[def.limit.key] = n;
+    for (const lim of limitsOf(def)) {
+      const n = Number(raw[lim.key]);
+      if (Number.isFinite(n) && n >= 0) out[lim.key] = n;
     }
   }
   if (!LEVELS.includes(level)) level = 'off';
@@ -489,6 +551,7 @@ function mayUseRoute(actor, method, routePath) {
   const need = permForRoute(method, routePath);
   if (!need || need === 'owner') return false;
   if (need === 'any') return true;
+  if (Array.isArray(need)) return need.some((k) => levelOf(actor, k) !== 'off');
   return levelOf(actor, need) !== 'off';
 }
 
@@ -496,7 +559,7 @@ function mayUseRoute(actor, method, routePath) {
    `quote` is the saved row's money: total, and the list price the lines were
    discounted from. Returns { held: bool, reasons: [..] } — every reason, so the
    helper is told all of them at once. */
-function quoteNeedsApproval(actor, { total, listTotal, discountPct, customPriced = 0, forStaff = false } = {}) {
+function quoteNeedsApproval(actor, { total, listTotal, discountPct, customPriced = 0, forStaff = false, pieces = null } = {}) {
   if (!actor || actor.kind === 'owner') return { held: false, reasons: [] };
   const reasons = [];
   /* A quote whose email or phone is a staff member's: a helper selling to
@@ -513,8 +576,14 @@ function quoteNeedsApproval(actor, { total, listTotal, discountPct, customPriced
     const disc = normalizePerm('quotes.discount', actor.perms && actor.perms['quotes.discount']);
     if (disc.level === 'off') reasons.push('Discounts and below-list prices need the owner.');
     else if (disc.level === 'approval') reasons.push('Discounts and below-list prices go to the owner first.');
-    else if (disc.maxPct != null && pct > disc.maxPct + 0.01) {
-      reasons.push(`The discount (${Math.round(pct)}%) is over your ${disc.maxPct}% limit.`);
+    else {
+      if (disc.maxPct != null && pct > disc.maxPct + 0.01) {
+        reasons.push(`The discount (${Math.round(pct)}%) is over your ${disc.maxPct}% limit.`);
+      }
+      // Unknown piece count is treated as too few: the owner sees it.
+      if (disc.minQty != null && !(Number(pieces) >= disc.minQty)) {
+        reasons.push(`Your discounts are only for ${disc.minQty} pieces or more; this quote has ${Number(pieces) || 0}.`);
+      }
     }
   }
   /* A line with no product and a typed price has no catalogue price, so how
@@ -620,9 +689,9 @@ function permsFromForm(body) {
   for (const [key, def] of Object.entries(PERMISSIONS)) {
     const level = String(b['perm_' + key] || 'off');
     const v = { level };
-    if (def.limit) {
-      const raw = String(b['limit_' + key] ?? '').trim();
-      if (raw !== '') v[def.limit.key] = Number(raw);
+    for (const lim of limitsOf(def)) {
+      const raw = String(b[lim.field + key] ?? '').trim();
+      if (raw !== '') v[lim.key] = Number(raw);
     }
     out[key] = normalizePerm(key, v);
   }
@@ -642,7 +711,7 @@ function presetMatching(perms) {
 
 const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,190}\.[a-z]{2,}$/i;
 
-module.exports = { presetForTrack,
+module.exports = { limitsOf, presetForTrack,
   LEVELS, PERMISSIONS, PRESETS, ROUTES, NEVER_STAFF, STAFF_SESSION_HOURS, MIN_PASSWORD, EMAIL_RE,
   routeKey, permForRoute, normalizePerm, presetPerms, effectivePerms, levelOf, mayUseRoute,
   quoteNeedsApproval, discountCodeCap, hashPassword, verifyPassword, generatePassword,

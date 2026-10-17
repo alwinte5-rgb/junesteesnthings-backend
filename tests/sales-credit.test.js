@@ -152,7 +152,9 @@ test('a helper must say where a hand-added lead came from, and the records decid
   const r = route("app.post('/admin/leads/add', requireAdmin");
   assert.match(r, /if \(isStaff && !\['shop', 'found'\]\.includes\(origin\)\)/);
   assert.match(r, /CREDIT\.knownReason\(await seenCustomer\(\{ email, phone \}\), fmtDate\)/);
-  assert.match(r, /A lead you found needs their email or phone/, 'nothing to check means nothing to claim');
+  assert.match(r, /CREDIT\.knownReason\(\{ lead: await seenProfile\(profileId\) \}, fmtDate\)/, 'a profile is checked too');
+  assert.match(r, /A lead you found needs their email, phone or profile link/, 'nothing to check means nothing to claim');
+  assert.match(r, /if \(foundIt && !email && !FRAUD\.phoneKey\(phone\) && !profileId\)/);
 });
 
 test('labels show wherever a lead or sale is listed', () => {
@@ -167,7 +169,7 @@ test('labels show wherever a lead or sale is listed', () => {
 test('the pay guide states the rules the code applies', () => {
   const title = src.indexOf("const PAY_GUIDE_TITLE = 'How the platform works and how you are paid';");
   assert.ok(title > 0, 'the guide has its title');
-  const at = src.indexOf('Everything you do for June\'s Tees happens here', src.indexOf('const PAY_GUIDE_BODY = '));
+  const at = src.indexOf('Everything you do for June\'s Tees happens here', src.indexOf('const PAY_GUIDE_BODY_EASYPAY = '));
   const guide = src.slice(at, src.indexOf('The owner can see exactly how every figure was worked out.', at));
   assert.ok(at > 0 && guide.length > 1000, 'and its text');
   assert.strictEqual(TEAM.HOLD_DAYS, 14);
@@ -187,5 +189,51 @@ test('the pay guide states the rules the code applies', () => {
 });
 
 test('a live guide that still says 10% is rewritten to 3%', () => {
-  assert.match(src, /body: PAY_GUIDE_BODY,\n  was: \[PAY_GUIDE_BODY_10PCT\]/);
+  assert.match(src, /body: PAY_GUIDE_BODY,\n  was: \[PAY_GUIDE_BODY_10PCT, PAY_GUIDE_BODY_EASYPAY\]/);
+});
+
+/* Owner, 2026-10-13: clock in on the platform, TimeProof alongside, paid by Wise. */
+test('the pay guide explains the clock, TimeProof and Wise, and no longer EasyPay', () => {
+  const i = src.indexOf('const PAY_GUIDE_BODY = PAY_GUIDE_BODY_EASYPAY');
+  const fix = src.slice(i, src.indexOf("KB_ADDED.push({ kind: 'sop', title: PAY_GUIDE_TITLE", i));
+  assert.match(fix, /\*\*Clock in\*\* when you start/);
+  assert.match(fix, /Keep \*\*TimeProof\*\* running/);
+  assert.match(fix, /by \*\*Wise\*\*/);
+  // Every replaced line is really in the old text, or the guide would silently keep it.
+  const old = src.slice(src.indexOf('const PAY_GUIDE_BODY_EASYPAY = '), src.indexOf('/* The practice quote said'));
+  const unescape = (x) => x.replace(/\\n/g, '\n');
+  const oldText = unescape(old);
+  const searches = [...fix.matchAll(/\.replace\("((?:[^"\\]|\\.)*)",/g)].map((m) => unescape(m[1]));
+  assert.strictEqual(searches.length, 3);
+  for (const x of searches) assert.ok(oldText.includes(x), `in the old guide: ${x}`);
+  assert.doesNotMatch(src.slice(src.indexOf("app.get('/admin/commission'")), /<b>Pay \$\{money\(payNow\)\} through EasyPay/);
+  assert.match(src, /'Paid by Wise'\]\.filter\(Boolean\)/);
+});
+
+test('a found lead\'s social profile: allowed hosts only, https, matched however it is written', () => {
+  const same = ['https://www.facebook.com/JaneDoe', 'https://m.facebook.com/janedoe/', 'https://facebook.com/janedoe?ref=share'];
+  for (const u of same) assert.strictEqual(CREDIT.profileKey(u), 'facebook.com/janedoe', u);
+  assert.strictEqual(CREDIT.profileUrlIn('@jane.d', 'Instagram'), 'https://www.instagram.com/jane.d');
+  assert.strictEqual(CREDIT.profileUrlIn('@jane', 'Phone'), null, 'a handle needs a platform');
+  for (const bad of ['http://facebook.com/x', 'https://facebook.com.evil.com/x', 'https://evil.com/facebook.com/x',
+    'https://user@facebook.com/x', 'https://facebook.com:8443/x', 'https://facebook.com/', 'https://facebook.com/profile.php',
+    'https://facebook.com/%E0%A4%A', 'javascript:alert(1)', 'x'.repeat(400)]) {
+    assert.strictEqual(CREDIT.profileUrlIn(bad), null, bad);
+  }
+  assert.strictEqual(CREDIT.profileKey('https://www.facebook.com/profile.php?id=123&ref=x'), 'facebook.com/id:123');
+  // A post, reel, group or share link is not a person; the same person's links agree.
+  for (const notPerson of ['https://www.instagram.com/p/ABC/', 'https://instagram.com/reel/x', 'https://facebook.com/groups/xyz',
+    'https://facebook.com/share/abc', 'https://www.facebook.com/watch/?v=1', 'https://x.com/i/status/1']) {
+    assert.strictEqual(CREDIT.profileKey(notPerson), '', notPerson);
+  }
+  assert.strictEqual(CREDIT.profileKey('https://www.tiktok.com/@jane/video/123'), CREDIT.profileKey('https://tiktok.com/@jane'));
+  assert.strictEqual(CREDIT.profileKey('https://www.linkedin.com/in/jane-doe/'), 'linkedin.com/in/jane-doe');
+});
+
+test('a found lead known only by a profile waits for the owner: the shop\'s customers cannot be checked', () => {
+  const l = CREDIT.classifyLead({ by: 'staff', staffId: 4, foundIt: true, known: '', profileOnly: true });
+  assert.strictEqual(l.sale_type, 'pending');
+  assert.strictEqual(l.rep_id, 4);
+  assert.strictEqual(CREDIT.classifyLead({ by: 'staff', staffId: 4, foundIt: true, known: 'Already a customer', profileOnly: true }).sale_type, 'shop');
+  assert.strictEqual(CREDIT.classifyQuote({ lead: { sale_type: 'pending', rep_id: 4 } }).sale_type, 'pending', 'its quotes need the owner\'s OK');
 });

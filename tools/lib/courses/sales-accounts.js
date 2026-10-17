@@ -527,7 +527,7 @@ My stats shows your quotes, accepted orders and activity. Your targets are in le
     }],
     practice: [
       { key: 'do:accounts-messages', type: 'do', fact: 'messages', need: 10, minutes: 20,
-        title: 'Send 10 customer messages', hint: 'Emails or texts to customers from the back office, reorder notes included. They are logged for you. This ticks itself at 10.' },
+        title: 'Send 10 customer messages', hint: 'Emails or texts to customers from the back office, reorder notes included, and DMs you log on a lead (Social DM). They are logged for you. This ticks itself at 10.' },
     ],
     quiz: {
       key: 'accounts-8', title: 'Module 8 quiz: quiet customers and your day', minutes: 10,
@@ -613,7 +613,7 @@ const FINAL = {
 
 const W = (f) => `/assets/images/work/${f}.jpg`;
 const LESSON_EXTRAS = {
-  'am1-job': { images: [{ src: W('storefront-lincoln-ave'), alt: 'The June\'s Tees shop on Lincoln Avenue' }] },
+  'am1-job': { images: [{ src: W('screen-printing-press'), alt: 'The June\'s Tees shop in Lakeview' }] },
   'am2-calendar': { images: [{ src: W('kindergarten-back-to-school-tee'), alt: 'A back-to-school class shirt' }] },
   'am3-history': { images: [{ src: W('embroidered-business-apparel'), alt: 'Embroidered business apparel: a classic reorder' }] },
   'am4-reorder': { images: [{ src: W('youth-team-shirts'), alt: 'A youth team in their custom shirts' }] },

@@ -67,6 +67,7 @@ function clientMail({ fail = null, unsubscribed = false, inbound = false } = {})
     attributedStaffId: () => null,
     console: { error() {} },
   };
+  sandbox.MESSAGE_MAX = 10000;
   vm.createContext(sandbox);
   vm.runInContext(lift('logClientEmail') + '\n' + lift('sendClientEmail'), sandbox);
   return { send: (m) => sandbox.sendClientEmail(m), rows, sent };
@@ -86,7 +87,14 @@ test('the record keeps the message itself when the caller names it, and the mail
   await d.send({ quote: 'AB12CD', kind: 'manual', to: 'a@b.co', subject: 's', preview: 'Hi Ada,\nSee   you Saturday',
                  html: '<h2>A note about your order</h2><p>Hi Ada,<br>See you Saturday</p><a href="https://x">View</a>' });
   assert.strictEqual(d.sent[0].preview, undefined);
-  assert.strictEqual(d.rows[0][4], 'Hi Ada, See you Saturday');
+  assert.strictEqual(d.rows[0][4], 'Hi Ada,\nSee you Saturday', 'line breaks kept, runs of spaces folded');
+});
+
+test('the whole message is kept, not its first 600 characters (2026-10-15)', async () => {
+  const d = clientMail();
+  const long = 'word '.repeat(400).trim();
+  await d.send({ quote: 'AB12CD', kind: 'manual', to: 'a@b.co', subject: 's', preview: long, html: '<p>x</p>' });
+  assert.strictEqual(d.rows[0][4], long);
 });
 
 test('an email that fails is recorded as failed, and still throws', async () => {
@@ -125,7 +133,7 @@ test('the record is a table of its own, keyed on the quote', () => {
     assert.ok(ddl.includes(col), col);
   }
   assert.match(src, /ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS quote_code TEXT/);
-  assert.match(lift('sendCustomerSms'), /VALUES \(\$1,\$2,\$3,\$4,\$5,'sending',\$6,\$7\)/, 'a text carries its quote, and who sent it');
+  assert.match(lift('sendCustomerSms'), /VALUES \(\$1,\$2,\$3,\$4,\$5,'sending',\$6,\$7,\$8\)/, 'a text carries its quote, who sent it, and its pictures');
 });
 
 /* ── Replies ────────────────────────────────────────────────────────────── */
@@ -144,29 +152,53 @@ test('a customer text reply is kept on their latest quote, matched by phone', ()
 
 /* ── The card ───────────────────────────────────────────────────────────── */
 
-function card({ history = [], smsOn = true, consent = true, q = {} } = {}) {
+function card({ stopped = false, history = [], smsOn = true, consent = true, q = {}, due = 0, refunded = false, opts = {}, unsubscribed = false, messageLevel = 'on' } = {}) {
   const sandbox = {
-    pool: { query: async () => ({ rows: history }) },
+    pool: { query: async (sql) => (/quote_payments|stripe_disputes/.test(sql)
+      ? { rows: refunded && /quote_payments/.test(sql) ? [{ x: 1 }] : [] } : { rows: history }) },
     normalizeUsPhone: (p) => (p ? '+1' + String(p).replace(/\D/g, '').slice(-10) : null),
     smsConfigured: () => smsOn, smsConsentFor: async () => ({ transactional: consent }),
-    balanceOf: () => 0, quoteTotals: () => ({ total: 0 }), money: (n) => '$' + Number(n).toFixed(2),
+    balanceOf: () => due, quoteTotals: () => ({ total: 0 }), money: (n) => '$' + Number(n).toFixed(2),
     quoteLink: (c) => 'https://www.jtees.net/q/' + c, SMS_PICKUP: '3047 N Lincoln Ave', SHOP_PHONE: '(773) 849-1854',
     ...(({ PICKUP_ADDRESS, PICKUP_HOURS, PICKUP_STEPS }) => ({ PICKUP_ADDRESS, PICKUP_HOURS, PICKUP_STEPS }))(require('../tools/lib/sms-templates')),
     SHOP_TZ: 'America/Chicago', console: { error() {} },
     intIn: () => null, PROOFS: require('../tools/lib/job-proofs'),
+    /* The owner's "they agreed elsewhere" button (2026-10-15). */
+    isOwner: () => true, lastSaidNoToTexts: async () => { if (stopped === null) throw new Error('db down'); return stopped; },
     /* Files on the job an email may carry (2026-10-06): none here. */
     jobFilesFor: async () => [], MSGFILES: require('../tools/lib/message-files'), inboundReady: false,
     jobPath: (c) => '/admin/production/' + c, TMEDIA: require('../tools/lib/text-media'),
     /* The shared browser upload helper (2026-10-06), as server.js defines it. */
     CLOUDINARY_UPLOAD_MAX: 10 * 1024 * 1024, CLD_UPLOAD_FN: 'function jtCldUpload(){}',
+    /* The reminders still to come (2026-10-15). */
+    FOLLOWUPS: require('../tools/lib/followups'), process: { env: {} },
+    isUnsubscribed: async () => unsubscribed, actorLevel: (k) => (k === 'customers.message' ? messageLevel : 'on'),
   };
+  sandbox.MESSAGE_MAX = 10000;
   vm.createContext(sandbox);
   vm.runInContext([grab('const MESSAGE_KINDS = {', '};'), grab('const MESSAGE_ERRORS = {', '};'),
     grab('const ADMIN_ICONS = {', '};'), lift('icon'), lift('escEmail'), lift('pill'), lift('emptyState'),
-    lift('jobMessagesCard')].join('\n'), sandbox);
+    lift('reminderDelays'), lift('designVisibleMessage'), lift('jobMessagesCard')].join('\n'), sandbox);
   return sandbox.jobMessagesCard({ code: 'AB12CD', name: 'Ada Brooks', email: 'ada@example.com',
-                                   phone: '(773) 555-0100', ...q }, {});
+                                   phone: '(773) 555-0100', ...q }, {}, opts);
 }
+
+test('reminders still to come are listed with a Skip each, never on the design page, and not after a refund', async () => {
+  const shipped = new Date(Date.now() - 864e5).toISOString();
+  const html = await card({ q: { shipped_at: shipped } });
+  assert.match(html, /Coming up automatically[\s\S]*Pickup reminder[\s\S]*by email and text/);
+  assert.match(html, /action="\/admin\/quote\/AB12CD\/skip-reminder"[\s\S]*name="key" value="pickup-reminder"/);
+  assert.doesNotMatch(await card({ q: { shipped_at: shipped }, opts: { design: true } }), /Coming up automatically/);
+  assert.doesNotMatch(await card({ q: { shipped_at: shipped }, opts: { readOnly: true } }), /skip-reminder/, 'read-only shows no Skip');
+  const accepted = new Date(Date.now() - 3600e3).toISOString();
+  assert.match(await card({ q: { accepted_at: accepted, paid_amount: 0 } }), /Deposit reminder/);
+  assert.doesNotMatch(await card({ q: { accepted_at: accepted, paid_amount: 0 }, refunded: true }), /Deposit reminder/);
+  assert.doesNotMatch(await card({ q: { shipped_at: shipped }, messageLevel: 'off' }), /skip-reminder/,
+    'no Skip for someone the route would refuse');
+  assert.match(await card({ q: { shipped_at: shipped }, consent: false }), /Pickup reminder[\s\S]*by email</,
+    'no text promised without their consent');
+  assert.match(await card({ q: { shipped_at: shipped }, smsOn: false }), /by email</);
+});
 
 test('the card lists what was sent, how it went, and what they replied', async () => {
   const html = await card({ history: [
@@ -201,7 +233,8 @@ test('the dashboard lists replies waiting and the to-do list, and the routes are
   const d = src.slice(src.indexOf("app.get('/admin/dashboard'"), src.indexOf("app.get('/admin/dashboard'") + 20000);
   assert.match(d, /many\(UNANSWERED_REPLIES_SQL/);
   assert.match(d, /is waiting for a reply/);
-  assert.match(d, /id="todo"[\s\S]*action="\/admin\/tasks"/);
+  assert.match(d, /id="todo"[\s\S]*\$\{addTaskForm\}/);
+  assert.match(src.slice(src.indexOf('async function taskAddForm('), src.indexOf('async function taskAddForm(') + 400), /action="\/admin\/tasks"/);
   const STAFF = require('../tools/lib/staff');
   assert.strictEqual(STAFF.ROUTES['POST /admin/quote/:code/replies-handled'], 'customers.message');
   // Automatic emails are not an answer: only messages written from the job page count.
@@ -256,7 +289,7 @@ test('sending is admin only, and answers on the job page from a fixed list', () 
 test('an empty or over-long message is refused before anything is sent', () => {
   const r = msgRoute();
   assert.ok(r.indexOf("answer('msg_err', 'empty')") < r.indexOf('SELECT * FROM quotes'));
-  assert.match(r, /text\.length > \(channel === 'text' \? 300 : 5000\)/);
+  assert.match(r, /len = await textLength\(code, text\)[\s\S]*if \(len > \(channel === 'text' \? 300 : MESSAGE_MAX\)\)/);
   assert.match(r, /\.replace\(\/\[\\r\\n\]\+\/g, ' '\)/, 'a subject is one line');
 });
 
@@ -278,7 +311,8 @@ function messageRoute(o = {}) {
     app: { post: (_path, _gate, fn) => { handler = fn; } }, requireAdmin: null,
     QUOTE_CODE_RE: vm.runInThisContext(grab('const QUOTE_CODE_RE = ', ';').slice('const QUOTE_CODE_RE = '.length, -1)),
     crypto: require('node:crypto'), recentJobMessages: new Map(),
-    pool: { query: async () => ({ rows: [{ code: 'AB12CD', email: 'ada@example.com', phone: '(773) 555-0100', ...opts.q }] }) },
+    pool: { query: async (sql) => (/FROM job_proofs/.test(sql) ? (opts.proofsFail ? Promise.reject(new Error('db down')) : { rows: opts.proofs || [] })
+      : { rows: [{ code: 'AB12CD', email: 'ada@example.com', phone: '(773) 555-0100', ...opts.q }] }) },
     normalizeUsPhone: (p) => { const d = String(p || '').replace(/\D/g, ''); return d.length >= 10 ? '+1' + d.slice(-10) : null; },
     smsConfigured: () => opts.smsOn,
     sendCustomerSms: async (m) => { if (!opts.consent) return 'no-consent'; sent.push(m); return 'sent'; },
@@ -292,9 +326,11 @@ function messageRoute(o = {}) {
     /* Attachments (2026-10-06): none on the job, none posted. */
     jobFilesFor: async () => [], MSGFILES: require('../tools/lib/message-files'),
     QPHOTOS: { cloudName: () => 'demo' }, fetchAttachments: async () => [],
+    PROOFS: require('../tools/lib/job-proofs'),
   };
+  sandbox.MESSAGE_MAX = 10000;
   vm.createContext(sandbox);
-  vm.runInContext(lift('sendJobMessage') + '\n' + route("app.post('/admin/quote/:code/message', requireAdmin") + '\n});', sandbox);
+  vm.runInContext(lift('proofsForText') + '\n' + lift('textLength') + '\n' + lift('sendJobMessage') + '\n' + route("app.post('/admin/quote/:code/message', requireAdmin") + '\n});', sandbox);
   const send = async (body) => {
     let location = null;
     await handler({ params: { code: 'AB12CD' }, body }, { redirect: (u) => { location = u; } });
@@ -336,11 +372,12 @@ test('a refused text does not hold the message back once it can go', async () =>
 
 test('a text keeps the shape every customer text has', () => {
   const r = msgRoute();
-  assert.match(r, /body: `June's Tees: \$\{smsPlain\(text\.replace\([^\n]*, ''\), 260\)\}\$\{/);
+  // `words`: the message with this job's proof links taken out (they go as pictures).
+  assert.match(r, /body: `June's Tees: \$\{smsPlain\(words\.replace\(\/\\s\+\/g, ' '\)\.replace\([^\n]*, ''\), 300\)\}\$\{/);
   assert.match(r, /' ' \+ smsShort\(quoteLink\(code\)\)\} Reply STOP to opt out\.`/, 'their order page goes on every text, short and branded');
   assert.match(r, /kind: 'transactional'/);
   const { plain } = require('../tools/lib/sms-templates');
-  const body = `June's Tees: ${plain('x'.repeat(300), 260)} https://www.jtees.net/q/ABCDEFGHIJ Reply STOP to opt out.`;
+  const body = `June's Tees: ${plain('x'.repeat(400), 300)} https://www.jtees.net/q/ABCDEFGHIJ Reply STOP to opt out.`;
   assert.ok(body.length <= 459, 'three segments at most');
 });
 
@@ -361,7 +398,7 @@ test('uploads go to Cloudinary as raw files for design files, with the 10 MB lim
   const fn = src.slice(src.indexOf('const CLD_UPLOAD_FN = `'), src.indexOf('`;', src.indexOf('const CLD_UPLOAD_FN')));
   assert.match(fn, /go\(img \? 'image' : 'raw'\)/);
   assert.match(fn, /\|\| !img \? d : go\('raw'\)/, 'a refused photo is not retried as a raw file');
-  assert.strictEqual((src.match(/\$\{CLD_UPLOAD_FN\}/g) || []).length, 4);
+  assert.strictEqual((src.match(/\$\{CLD_UPLOAD_FN\}/g) || []).length, 6);
   const html = await card();
   assert.match(html, /file\.size > 10485760/);
   assert.match(html, /did not upload' \+ \(e && e\.message/);
@@ -375,6 +412,7 @@ async function inboundText({ from = '+13125550199', body = 'Can I add 2 XL?', ow
   const emails = [];
   const sent = [];
   const sql = [];
+  const callbacks = [];
   const ownerPics = [];
   let handler;
   const sandbox = {
@@ -390,6 +428,7 @@ async function inboundText({ from = '+13125550199', body = 'Can I add 2 XL?', ow
       if (/INSERT INTO sms_messages[\s\S]*RETURNING id/.test(q)) return { rows: [{ id: 1, quote_code: quote }] };
       return { rows: [] };
     } },
+    ownerCallCommand: async (t) => { const c = require('../tools/lib/voice').parseCallCommand(t); if (c) callbacks.push(c); return Boolean(c); },
     RELAY: require('../tools/lib/text-relay'), QUOTE_CODE_RE: /^(?:[A-Z0-9]{6}|[A-Z0-9]{10})$/,
     twilioSend: async (to, b) => { if (twilioFails) throw Object.assign(new Error('nope'), { twilioCode: twilioFails }); sent.push([to, b]); return { sid: 'SMx' }; },
     markLeadResponded: async () => {},
@@ -403,12 +442,13 @@ async function inboundText({ from = '+13125550199', body = 'Can I add 2 XL?', ow
     reportError: async () => {}, recordSmsConsent: async () => {}, joinByText: async () => {},
     console: { error() {}, warn() {}, log() {} }, String, Number, encodeURIComponent,
   };
+  sandbox.MESSAGE_MAX = 10000;
   vm.createContext(sandbox);
   const start = src.indexOf("app.post('/webhooks/twilio/sms'");
   vm.runInContext(lift('relayOwnerReply') + '\n' + src.slice(start, src.indexOf('\n});', start) + 4), sandbox);
   const res = { type() { return this; }, send() {}, sendStatus() {} };
   await handler({ body: { From: from, Body: body, MessageSid: 'SM1', ...media }, get: () => 'sig' }, res);
-  return { ownerTexts, emails, sent, sql, ownerPics };
+  return { ownerTexts, emails, sent, sql, ownerPics, callbacks };
 }
 
 test('a customer\'s text comes to the owner\'s phone with who it is and a link to their job', async () => {
@@ -484,9 +524,135 @@ test('a texted picture shows on the job page as a picture', async () => {
 });
 
 test('a message typed as "June\'s Tees: ..." does not go out with the brand twice', () => {
-  const at = src.indexOf("msg: { template: 'manual', body: `June's Tees: ${smsPlain(text.replace(");
+  const at = src.indexOf("msg: { template: 'manual', body: `June's Tees: ${smsPlain(words.replace(");
   assert.ok(at > 0, 'the manual text strips a leading brand');
   const re = /^\s*june['’]?s\s+tees\s*(&\s*things\s*)?[:,-]\s*/i;
   for (const t of ["June's Tees: Hi Samantha", 'June’s Tees & Things - Hi', "june's tees, hi"]) assert.ok(!/^june/i.test(t.replace(re, '')), t);
   assert.strictEqual("June's Tees has your proof".replace(re, ''), "June's Tees has your proof", 'a sentence about the shop stays');
+});
+
+test('the owner texting CALL starts a callback and is never sent on to a customer', async () => {
+  const kim = { phone: '+13125550199', quote_code: 'AB12CD', name: 'Kim', created_at: new Date() };
+  const r = await inboundText({ from: '+17738491854', body: 'CALL', forwards: [kim] });
+  assert.deepEqual(r.callbacks, [{ number: '' }]);
+  assert.equal(r.sent.length, 0);
+  const n = await inboundText({ from: '+17738491854', body: 'call 312 555 0100', forwards: [kim] });
+  assert.deepEqual(n.callbacks, [{ number: '+13125550100' }]);
+  const c = await inboundText({ from: '+13125550199', body: 'CALL' });
+  assert.equal(c.callbacks.length, 0, 'a customer texting CALL is just a message');
+});
+
+/* ── Proofs by text, and the owner's "they agreed elsewhere" (2026-10-15) ── */
+
+const PROOF_A = 'https://res.cloudinary.com/demo/image/upload/v1760543820/job_proofs/36ABC5-Mockup_a1b2c3d4e5f6g7h8i9j0.jpg';
+const PROOF_B = 'https://res.cloudinary.com/demo/image/upload/v1760543821/job_proofs/Proof_36ABC5-front_k1l2m3n4o5p6q7r8.pdf';
+
+test('a proof message lists its links last; several proofs make one message', () => {
+  const P = require('../tools/lib/job-proofs');
+  const one = P.proofMessage({ first: 'Walter', code: '36ABC5', url: PROOF_A });
+  assert.ok(one.endsWith('\n\n' + PROOF_A));
+  const two = P.proofMessage({ first: 'Walter', code: '36ABC5', urls: [PROOF_A, PROOF_B] });
+  assert.match(two, /^Hi Walter! Your 2 proofs for order 36ABC5 are ready, and we're excited for you to see them\./);
+  assert.ok(two.endsWith('\n\n' + PROOF_A + '\n' + PROOF_B));
+});
+
+test('by text, this job\'s proof links leave the words and go as pictures; other links stay', () => {
+  const P = require('../tools/lib/job-proofs');
+  const msg = P.proofMessage({ first: 'Walter', code: '36ABC5', urls: [PROOF_A, PROOF_B] }) + '\nhttps://example.com/x.jpg';
+  const out = P.proofsForText(msg, [{ url: PROOF_A, name: 'Mockup' }, { url: PROOF_B, name: 'Front' }], 'demo');
+  assert.ok(!out.text.includes('job_proofs'), 'no proof link left in the words');
+  assert.ok(out.text.includes('https://example.com/x.jpg'), 'a link that is not a proof stays');
+  assert.ok(out.text.length <= 300, 'the proof message now fits a text: ' + out.text.length);
+  assert.strictEqual(out.media.length, 2);
+  assert.strictEqual(out.media[0].url, PROOF_A, 'the job keeps the proof itself');
+  assert.match(out.media[0].mms, /\/image\/upload\/c_limit,w_1200,h_1200,q_auto,f_jpg\/v1760543820\/job_proofs\/.*\.jpg$/);
+  assert.match(out.media[1].mms, /,pg_1,f_jpg\/.*\.jpg$/, 'a PDF goes as its first page');
+  // In the order the message lists them, whatever order the job holds them in.
+  const rev = P.proofsForText(msg, [{ url: PROOF_B, name: 'Front' }, { url: PROOF_A, name: 'Mockup' }], 'demo');
+  assert.deepStrictEqual(rev.media.map((m) => m.url), [PROOF_A, PROOF_B]);
+  // A proof of another job, or another account, is not this job's: it stays a link.
+  assert.strictEqual(P.proofsForText(PROOF_A, [], 'demo').media.length, 0);
+  assert.strictEqual(P.proofsForText(PROOF_A, [{ url: PROOF_A }], 'other').media.length, 0);
+  const many = Array.from({ length: 12 }, (_, i) => ({ url: PROOF_A.replace('a1b2', 'z' + i) }));
+  assert.strictEqual(P.proofsForText(many.map((r) => r.url).join('\n'), many, 'demo').media.length, P.MAX_MMS);
+});
+
+test('the proof message goes by text with the proofs as pictures, not refused as too long', async () => {
+  const r = messageRoute({ proofs: [{ url: PROOF_A, name: '36ABC5-Mockup.jpg' }] });
+  const text = require('../tools/lib/job-proofs').proofMessage({ first: 'Walter', code: 'AB12CD', url: PROOF_A });
+  assert.ok(text.length > 300, 'the case that used to be refused');
+  const where = await r.send({ channel: 'text', body: text });
+  assert.match(where, /sent=text/);
+  assert.strictEqual(r.sent.length, 1);
+  assert.ok(!r.sent[0].msg.body.includes('job_proofs'), 'the link is not in the words');
+  assert.strictEqual(r.sent[0].media.length, 1);
+  // A failed proof lookup fails the send, never sends the links glued into the words.
+  assert.match(await messageRoute({ proofsFail: true }).send({ channel: 'text', body: 'Hi Walter\n' + PROOF_A }), /msg_err=failed/);
+  // Line breaks reach the text as spaces, not glued words.
+  const nl = messageRoute();
+  await nl.send({ channel: 'text', body: 'Hi Walter\nhttps://example.com/a\nthanks' });
+  assert.match(nl.sent[0].msg.body, /Hi Walter https:\/\/example\.com\/a thanks/);
+  // Without the proof on this job the same words are too long, as before.
+  assert.match(await messageRoute().send({ channel: 'text', body: text }), /msg_err=too-long/);
+});
+
+test('"Send all proofs" fills one message with every proof, and the card offers it from two', () => {
+  const card = lift('jobProofsCard');
+  assert.match(card, /\?proof=all#messages">Send all \$\{Math\.min\(rows\.length, PROOFS\.MAX_MMS\)\} proofs/);
+  assert.match(card, /rows\.length > 1 && canMessage && live/);
+  const msgs = lift('jobMessagesCard');
+  assert.match(msgs, /String\(query\.proof\) === 'all'[\s\S]{0,900}PROOFS\.proofMessage\(\{ first, code, urls: all\.map/);
+});
+
+test('the owner can turn on texts for a customer who agreed elsewhere; never over a STOP', async () => {
+  const off = await card({ consent: false });
+  assert.match(off, /action="\/admin\/quote\/AB12CD\/text-consent"/);
+  assert.match(off, /name="confirm" value="1" required/);
+  assert.doesNotMatch(await card({ consent: true }), /text-consent/, 'nothing to turn on');
+  assert.doesNotMatch(await card({ consent: false, stopped: null }), /text-consent"|texted STOP/,
+    'a failed lookup shows neither the form nor a STOP that may not have happened');
+  const stopped = await card({ consent: false, stopped: true });
+  assert.doesNotMatch(stopped, /text-consent"/);
+  assert.match(stopped, /texted STOP/);
+  const STAFF = require('../tools/lib/staff');
+  assert.strictEqual(STAFF.ROUTES['POST /admin/quote/:code/text-consent'], 'owner');
+});
+
+function consentRoute({ owner = true, stopped = false, phone = '(773) 555-0100' } = {}) {
+  let handler;
+  const writes = [];
+  const sandbox = {
+    app: { post: (_p, _g, fn) => { handler = fn; } }, requireAdmin: null,
+    QUOTE_CODE_RE: vm.runInThisContext(grab('const QUOTE_CODE_RE = ', ';').slice('const QUOTE_CODE_RE = '.length, -1)),
+    jobPath: (c) => `/admin/production/${c}`, isOwner: () => owner, currentActor: () => null,
+    pool: { query: async (sql, args) => { if (/INSERT INTO sms_consents/.test(sql)) writes.push(args); return { rows: [{ phone }] }; } },
+    normalizeUsPhone: (p) => { const d = String(p || '').replace(/\D/g, ''); return d.length >= 10 ? '+1' + d.slice(-10) : null; },
+    lastSaidNoToTexts: async () => stopped, CONSENT_VERSION: 'v', clientIp: () => '1.2.3.4',
+    logActivity: () => {}, reportError: async () => {}, console: { error() {} },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(route("app.post('/admin/quote/:code/text-consent', requireAdmin") + '\n});', sandbox);
+  const send = async (body) => {
+    let location = null;
+    await handler({ params: { code: 'AB12CD' }, body, get: () => 'ua' }, { redirect: (u) => { location = u; } });
+    return location;
+  };
+  return { send, writes };
+}
+
+test('the consent route: owner only, needs the box and a note, order texts only, never after STOP', async () => {
+  const ok = consentRoute();
+  assert.match(await ok.send({ confirm: '1', note: 'texting on my old number since Sept' }), /consent=saved/);
+  assert.strictEqual(ok.writes.length, 1);
+  assert.strictEqual(ok.writes[0][0], '+17735550100');
+  assert.match(ok.writes[0][2], /Owner's note: texting on my old number since Sept/);
+  const sql = route("app.post('/admin/quote/:code/text-consent', requireAdmin");
+  assert.match(sql, /VALUES \(\$1, true, false, 'owner:agreed-elsewhere'/, 'order texts only, never promotions');
+  for (const [o, body, err] of [[{ owner: false }, { confirm: '1', note: 'x' }, 'consent-owner'],
+    [{}, { note: 'x' }, 'consent-empty'], [{}, { confirm: '1', note: '  ' }, 'consent-empty'],
+    [{ stopped: true }, { confirm: '1', note: 'x' }, 'consent-stop'], [{ phone: '' }, { confirm: '1', note: 'x' }, 'no-phone']]) {
+    const r = consentRoute(o);
+    assert.match(await r.send(body), new RegExp('msg_err=' + err));
+    assert.strictEqual(r.writes.length, 0, err + ' saves nothing');
+  }
 });

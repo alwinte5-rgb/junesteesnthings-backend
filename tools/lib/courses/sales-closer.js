@@ -61,7 +61,7 @@ Your targets: [owner to fill in: Sales Closer targets for reply time, conversion
 
 **What stays June's**
 
-- Any discount, price match, free item or custom price
+- Any discount beyond your 5% on 48 pieces or more (see Objections), and every price match, free item or custom price
 - Taking tax off (a customer uploads their certificate and June approves it)
 - A delivery date you have not checked on the production board
 - Logos the customer does not own, refunds and reprints
@@ -262,7 +262,7 @@ Before you build the quote, read the order back in one message: "So that's about
 - Enter the size mix, so bigger sizes are priced correctly
 - Tick each print place and its method; enter ink colours for screen printing
 - Leave the price boxes empty. Prices are June's: if something needs a special price, save it as a draft and leave June a note on the job
-- Put in the needed-by date. The form adds rush if the date needs it, and says why
+- Put in the needed-by date. The form adds rush if the date needs it and every item is DTF (nothing else can be rushed), and says why
 - Tax is added automatically. A tax-exempt customer uploads their certificate on their quote page, and June approves it
 
 **Notes the customer reads**
@@ -297,7 +297,7 @@ Read every orange warning under an item. Read the total the way the customer wil
         { id: 'price', q: 'An item needs a special price. You…',
           choices: ['Type it in the price box', 'Save as draft and leave June a note on the job', 'Use the discount box', 'Skip the item'], answer: 1, article: A.quote, why: 'Prices are June\'s.' },
         { id: 'rush', q: 'How is rush added?',
-          choices: ['You type a percentage', 'The form adds it from the needed-by date', 'June adds it later', 'It never is'], answer: 1, article: A.quote, why: 'Put in the date; the form does the rest.' },
+          choices: ['You type a percentage', 'The form adds it from the needed-by date', 'June adds it later', 'It never is'], answer: 1, article: A.quote, why: 'Put in the date; the form adds it, on DTF orders only.' },
         { id: 'notes', q: 'What belongs in the customer notes?',
           choices: ['Internal comments about the customer', 'One or two short lines in their words, plus the next step', 'Our costs', 'Nothing'], answer: 1, article: A.quote, why: 'They read it on their quote.' },
         { id: 'valid', q: 'A customer wants to accept a 20-day-old quote. You…',
@@ -412,11 +412,11 @@ Ask what they are deciding between, answer that, and set a follow-up date. "Of c
 
 **"We need it sooner"**
 
-Check the production board and ask June. Offer rush only when the press has room. Put the date in the quote and the form adds the rush fee.
+Check the production board and ask June. Only DTF can be rushed, and only when there is room. Put the date in the quote and the form adds the rush fee on DTF.
 
 **"That's below your minimum"**
 
-Screen printing starts at 50. For fewer, offer DTF: no minimum, full colour.
+Under 50 pieces, screen printing is charged as 50. For fewer, offer DTF: no minimum, full colour.
 
 **When they go quiet**
 
@@ -437,7 +437,7 @@ Follow up twice: about 3 days, then about 10 days, each time with something usef
         { id: 'think', q: '"We need to think about it." Best reply?',
           choices: ['"OK bye"', 'Ask what they are deciding between, answer it, set a follow-up date', 'Offer a discount', 'Follow up daily'], answer: 1, article: A.objection, why: 'Help them decide.' },
         { id: 'sooner', q: '"We need it sooner." You…',
-          choices: ['Promise it', 'Check the production board and June; offer rush only with room', 'Say no', 'Skip the proof'], answer: 1, article: A.objection, why: 'Check before promising.' },
+          choices: ['Promise it', 'Check the production board and June; offer rush only on DTF and only with room', 'Say no', 'Skip the proof'], answer: 1, article: A.objection, why: 'Check before promising.' },
         { id: 'min', q: '30 shirts, they asked for screen printing. You suggest…',
           choices: ['Screen printing anyway', 'DTF: no minimum', 'Embroidery', 'Waiting until 50'], answer: 1, article: A.objection, why: 'Screens start at 50.' },
         { id: 'quiet', q: 'A customer went quiet after the quote. How many follow-ups?',
@@ -599,7 +599,7 @@ const FINAL = {
       { id: 'f10', q: 'Alternatives go on as…', choices: ['Optional items', 'Required items', 'A second quote', 'Nothing'], answer: 0, article: A.quote, why: 'They tick what they want.' },
       { id: 'f11', q: 'Optional hoodie colours share a price band through…', choices: ['A Run number', 'A discount', 'Typed prices', 'Notes'], answer: 0, article: A.quote, why: 'Run numbers pool the quantity.' },
       { id: 'f12', q: 'A line needs a special price. You…', choices: ['Type it', 'Save as draft and leave June a note', 'Use the discount box', 'Delete it'], answer: 1, article: A.quote, why: 'Prices are June\'s.' },
-      { id: 'f13', q: 'The order is needed in 2 business days. You…', choices: ['Type 50%', 'Put in the date; the form adds rush; check the press with June', 'Ignore it', 'Promise it'], answer: 1, article: A.quote, why: 'The date drives rush; check before promising.' },
+      { id: 'f13', q: 'A DTF order is needed in 2 business days. You…', choices: ['Type 50%', 'Put in the date; the form adds rush; check the press with June', 'Ignore it', 'Promise it'], answer: 1, article: A.quote, why: 'The date drives rush; check before promising.' },
       { id: 'f14', q: 'An orange warning says screen printing is under 50. You…', choices: ['Send anyway', 'Switch to DTF or explain the minimum', 'Hide it', 'Add a discount'], answer: 1, article: A.quote, why: 'Read every warning.' },
       { id: 'f15', q: 'A 17-day-old quote is accepted. You…', choices: ['Re-check it first', 'Accept as is', 'Add 20%', 'Cancel'], answer: 0, article: A.quote, why: 'Good for 14 days.' },
       { id: 'f16', q: 'The best upsell sentence…', choices: ['"Buy more!"', '"At 48, every shirt drops to $9.20, so 6 extra cost about $31"', '"Upgrade?"', 'A list'], answer: 1, article: A.upsell, why: 'One sentence, in money.' },

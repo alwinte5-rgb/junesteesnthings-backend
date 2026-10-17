@@ -16,7 +16,9 @@ test('#123 an incentive ended early stops counting at that moment', () => {
   assert.match(after('function incentiveWindow(inc)', 900), /if \(inc\.ended_at\)/);
 });
 test('#123 identical held messages queue one approval; a cut-off claim comes back', () => {
-  assert.match(src, /WHERE NOT EXISTS \(SELECT 1 FROM staff_approvals WHERE kind = 'message' AND subject_id = \$1\s*AND status IN \('pending', 'processing'\) AND payload = \$2::jsonb\)/);
+  /* Matched on channel, subject, files and wording (first or edited), not the
+     whole payload, which an edit adds keys to (2026-10-14). */
+  assert.match(src, /WHERE NOT EXISTS \(SELECT 1 FROM staff_approvals WHERE kind = 'message' AND subject_id = \$1\s*AND status IN \('pending', 'processing'\)\s*AND payload->>'channel' = \$2::jsonb->>'channel' AND payload->>'subject' = \$2::jsonb->>'subject'/);
   assert.match(after("app.get('/admin/approvals'", 900), /OR \(status = 'processing' AND COALESCE\(claimed_at, created_at\) < NOW\(\) - INTERVAL '10 minutes'\)/);
 });
 test('#124 the retired /account address goes to /admin, not a 404', () => {

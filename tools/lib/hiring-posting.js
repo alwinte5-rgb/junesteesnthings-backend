@@ -104,7 +104,7 @@ const SCREENING = {
 
 /* Pay terms every job shares, added under each post's Pay lines and repeated
    on round 2, where a passing applicant confirms the pay. */
-const PAY_TERMS = `- 13th-month pay starts only after 12 months of service
+const PAY_TERMS = `- 13th-month pay, prorated from your start date and paid out every 6 months
 - Hours can be adjusted up or down based on performance`;
 
 /* Shared parts of every post: written once so every role says the same thing
@@ -442,6 +442,71 @@ ${howToApply('Red Squeegee', [
   'One ad account you managed: the business, monthly budget, goal, and results in numbers (cost per lead or sale, return on ad spend)',
   'A screenshot of your internet speed test (speedtest.net)',
   'Your answer to this, as you\'d really write it:\n   "Our Google Ads campaign got 3,000 clicks last month but only 2 quote requests. What are the first three things you check?"',
+])}`,
+  },
+
+  software: {
+    prefix: 'Software',
+    gem: ['Making short demo or explainer videos', 'Social media content or community building with results', 'Customer support or onboarding for an app',
+      'Knowing a niche we sell to: salons, contractors, food creators', 'Email campaigns or CRM setup'],
+    code: 'Silver Cursor',
+    title: 'Part-Time Software Sales Agent – Sell Our Agency Plans to Marketing Agencies & Growing Teams (Hourly + Commission)',
+    type: 'Part Time', wage: '3.5', hours: '20', skills: ['Sales', 'Lead Generation', 'Appointment Setting'],
+    payNote: 'Owner\'s rate (2026-10-16): $3.50 an hour, 20 hours, plus 10% of a new customer\'s payments for their first 6 months. Agents sell the TOP plans (COS Agency $129/month); the low end is won with ads. At about a 50% margin, flat per-deal bonuses of $25–$125 seen on OLJ SaaS posts would cost more than a sale earns.',
+    lookFor: [
+      'Real sales results in numbers: contacts, demos, sign-ups or revenue, ideally software or subscriptions sold to agencies or business owners',
+      'Personal, researched outreach (social media DMs, email, calls), not mass messaging or bought lists',
+      'Keeps a tracker or CRM and follows up on a schedule',
+      'The sample message is short, personal, mentions the agency\'s real situation and asks a question, not a feature list',
+      'Bonus: has sold to or worked in a marketing or social media agency',
+      'A speed test of at least 25 Mbps',
+    ],
+    body: `Good at starting conversations with business owners and helping them say yes? Sell our top-tier software plans to marketing agencies and growing teams, part-time, hourly plus commission.
+
+About us
+We're a small US business that builds its own software: COS Creator Studio (plans and posts social media content and helps write captions and graphics with AI), CartBook (turns a food creator's recipes into a cookbook app their followers subscribe to), and a business dashboard for contractors and salons. Our everyday customers find us through ads. We're hiring a dependable, long-term sales agent, part-time, to sell our top plans to the customers who get the most from them: social media and marketing agencies and freelancers managing several clients, established food creators, and contractors and salons with teams.
+
+What you'll do
+1. Find good-fit agencies and teams (LinkedIn, Clutch and agency directories, Facebook groups, creator communities)
+2. Start real conversations with short, personal messages: no spam, no bought lists
+3. Run short demos and set up 14-day free trials that show each agency how much time it saves across their clients
+4. Follow up on a schedule and log every lead, reply and next step in our tracker
+5. Share what customers ask for and what's working, so we can improve the apps
+
+You'll do great here if you are
+- Curious: you ask questions before you pitch
+- Honest: you never promise a feature or discount we don't have
+- Organised and persistent: every lead gets a follow-up
+- A self-starter who tries new places to find customers when it's quiet
+
+Tools you'll use
+Instagram, Facebook, Gmail, Google Sheets, Zoom or Google Meet, and our own apps and staff dashboard. We'll train you on the apps, the customers and our offers.
+
+Nice to have: experience selling software or subscriptions; working at or selling to a marketing agency; short demo videos (for example Loom); LinkedIn outreach; knowing salons, contractors or food creators.
+
+Schedule
+- Monday–Friday, 10:00am–2:00pm US Central Time (20 hours/week)
+- That's 11:00pm–3:00am Philippine time while the US is on daylight saving time (mid-March to early November), 12:00am–4:00am the rest of the year. Fixed hours: you work while our customers are awake.
+
+Pay
+- $3.50 USD/hour ($70/week, about $303/month), paid weekly
+- Plus 10% of every payment a customer you signed up makes in their first 6 months, once your training is signed off. Commission follows the customer's payments, so customers who stay earn you more.
+- Commission is paid with your weekly pay after the customer's payment clears.
+- Pay reviews every 6 months, with more hours as your sales grow
+${PAY_TERMS}
+
+${TIME_OFF}
+
+Training
+You start by learning the apps, the customers they're for, and our approved offers and free trials. The owner reviews your first messages and demos before you go solo.
+
+Career path
+As the apps grow, strong performers get more hours, raises and more responsibility.
+
+${howToApply('Silver Cursor', [
+  'A short summary of something you sold: what it was, how you found customers, and your results in numbers',
+  'A screenshot of your internet speed test (speedtest.net)',
+  'The first message you\'d send to this prospect, as you\'d really write it:\n   A 3-person social media agency posts for 12 local clients. Their founder wrote on LinkedIn that "scheduling for 12 clients eats our Mondays". Write your first message about an app that plans and schedules posts for many client brands and helps write captions and graphics.',
 ])}`,
   },
 

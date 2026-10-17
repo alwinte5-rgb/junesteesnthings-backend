@@ -9,7 +9,7 @@ biggest ranking lever. On-site technical SEO (schema, sitemap, blog) is already 
 
 > **Name:** June's Tees & Things
 > **Address:** 3047 N Lincoln Ave #435, Chicago, IL 60657
-> **Phone:** (773) 849-1854
+> **Phone:** (773) 900-4592
 > **Website:** https://www.jtees.net
 
 Rules: identical spelling, punctuation, and suite format on every site. "Name / Address / Phone"
@@ -129,7 +129,7 @@ Create/claim these with the exact NAP block above. Prioritized:
 
 > **Subject:** Custom shirts for [Org/Team/Event] — from a local Black-owned shop
 >
-> Hi [Name], I run June's Tees & Things, a Black-owned, women-owned custom print shop in Lakeview. I'd love to make shirts/apparel for [team/school/church/event] — and I'm happy to offer [X% off / free setup] for [org]. If it's a fit, a link to jtees.net from your site or sponsor page would mean a lot. Either way, happy to help! — [Name], (773) 849-1854, jtees.net
+> Hi [Name], I run June's Tees & Things, a Black-owned, women-owned custom print shop in Lakeview. I'd love to make shirts/apparel for [team/school/church/event] — and I'm happy to offer [X% off / free setup] for [org]. If it's a fit, a link to jtees.net from your site or sponsor page would mean a lot. Either way, happy to help! — [Name], (773) 900-4592, jtees.net
 
 Targets: local sports leagues, PTAs, churches, 5K/charity events, neighborhood festivals, and Block Club Chicago / local blogs (pitch the "Black-owned, women-owned Chicago print shop" story).
 

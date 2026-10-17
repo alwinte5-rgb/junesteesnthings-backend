@@ -41,7 +41,7 @@ const SCREEN_COST = 20;         // per screen
 const SCREEN_FEE = 25;          // what a screen is billed at (server.js SCREEN_FEE_RATE)
 const DTF = {                   // [16sq, 132sq (the standard print), 252sq, additional location]
      1: [5.00, 7.03, 9.38, 1.80],
-     4: [5.00, 7.03, 9.38, 1.80],
+     5: [5.00, 7.03, 9.38, 1.80],   // 5-11, as #308 split the small runs (1-4, 5-11); same Anchorfish cost
     12: [3.23, 5.63, 7.50, 1.80],
     25: [2.58, 4.50, 6.00, 1.50],
     50: [2.73, 3.60, 4.80, 1.50],
@@ -349,6 +349,14 @@ function estimateJob(items, catalog) {
       const w = fromWording(it, catalog, bandQty);
       if (w) { out.lines.push({ ix, unit_cost: r2(w.each + ad.perLine / qty), basis: w.basis, estimated: true }); return; }
       out.complete = false; out.missing.push(gone ? `${desc} (no longer in the catalogue)` : desc); return;
+    }
+
+    /* A staff-only service (design fee, folding — see tools/add-services.js)
+       has no garment behind it. Costing it as one booked half a design fee as
+       blanks. What the designer charged is typed on the job, like any service. */
+    if (prod && prod.service && !places.length) {
+      out.lines.push({ ix, unit_cost: 0, basis: 'service: no supplier cost', estimated: false });
+      return;
     }
 
     /* The garment, at S&S cost. A typed garment price is a SELL price (it

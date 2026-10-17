@@ -105,7 +105,7 @@ A separate PHP app on MySQL, in its own repository, where customers design shirt
 - Who may open a route: the ROUTES map in tools/lib/staff.js`,
     }, {
       id: 'v2-ship', article: A.ship, minutes: 20, tags: 'developer, git, branch, pull request, radar-gate, merge, deploy, railway, main',
-      goals: ['Ship a change through a pull request', 'Know what happens when you merge', 'Check a deploy is healthy'],
+      goals: ['Ship a change through a pull request', 'Know what happens when June merges', 'Check your change once it is live'],
       body:
 `Every change takes the same path. There are no shortcuts to live, because live is where the customers are.
 
@@ -122,22 +122,21 @@ Use your own accounts with two-factor sign-in. Never a shared login.
 3. Run the tests: node --test tests/*.test.js. Compare failures with main: a change must not add any
 4. **Pull request** against main. Say what changed, why, what you did not do, and what to check by hand
 5. The **radar-gate** check runs on every pull request. Read its comment if it fails; it is usually right
-6. **Squash-merge** when it is ready
-7. Merging to main **deploys automatically** on Railway. Watch it
+6. **Stop at the open pull request.** June reviews it and merges it; GitHub keeps main locked until she approves
+7. Merging to main **deploys automatically** on Railway. June watches the deploy, and tells you when it is live
 
 Never push straight to main, and never deploy by hand over a live deploy someone else made.
 
 **Watching a deploy**
 
-- Wait for Railway to show the deploy as successful
-- Read the start of its logs: the database is ready and the server is listening, with no errors
-- Open the page you changed, on your phone, and try the thing you fixed
-- For anything touching payments, make a real small test (Module 5)
+- You start without Railway access, so June checks the deploy succeeded and its logs start clean: the database is ready and the server is listening, with no errors. Ask her for the logs if you need them
+- Once she says it is live, open the page you changed, on your phone, and try the thing you fixed
+- For anything touching payments, ask June to make a real small test (Module 5)
 
 **When not to deploy**
 
 - During the busiest hours for orders, unless it is a fix for something broken: [owner to fill in: hours the developer should avoid deploying]
-- Just before you stop for the day. Deploy when you can watch it for an hour
+- Just before June stops for the day. Ask her to merge when someone can watch it for an hour
 - With failing tests you do not understand
 
 **Two people, one repo**
@@ -203,6 +202,8 @@ Try it yourself, the way a customer would, with the browser's console and networ
 
 **Read the logs**
 
+You start without Railway or Sentry access: ask June for the logs and errors below (a copy or a screenshot), with the time it started.
+
 - **Railway:** the backend's logs around the time it started, and whether the last deploy succeeded
 - **Sentry:** new errors, with the line they came from
 - **Stripe:** failed API calls and failed webhook deliveries (an expired key or a webhook secret that no longer matches looks exactly like broken code)
@@ -217,7 +218,7 @@ Something worked yesterday and not today. Check, in order:
 
 **Roll back first**
 
-If a deploy caused it, put the previous working version back live (redeploy it on Railway, or revert the merge so main deploys the old code). Customers can pay again in minutes. Then fix it properly on a branch, with a test, without customers waiting on you.
+If a deploy caused it, the previous working version goes back live first. Open a pull request that reverts the merge, and tell June which deploy to roll back on Railway; she does it, since you have no Railway access. Customers can pay again in minutes. Then fix it properly on a branch, with a test, without customers waiting on you.
 
 Never fix forward under pressure on the live site. A rushed fix is how one outage becomes two.
 
@@ -266,7 +267,7 @@ Short, plain English, the same day:
     }],
     practice: [
       { key: 'signoff:dev-rollback', type: 'signoff', minutes: 5,
-        title: 'Can roll back a bad deploy', hint: 'Walk June through rolling the backend back to the previous deploy on Railway, and how you would then fix it on a branch. No need to break anything to show it.' },
+        title: 'Can write the rollback note', hint: 'Write June the note you would send if a deploy broke something: which deploy to roll back on Railway and why, the revert pull request, and how you would then fix it on a branch. No need to break anything to show it.' },
     ],
     quiz: {
       key: 'dev-3', title: 'Module 3 quiz: when something breaks', minutes: 10,

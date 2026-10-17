@@ -24,7 +24,7 @@ test('#180 the docs name the setting the code reads', () => {
   assert.doesNotMatch(read('docs/brevo-workflows.md'), /^JT_DEPOSIT_NUDGE_DAYS=/m, 'only named as the old, unread setting');
 });
 test('#179 a lead email is claimed under a lock before the provider is called, and un-claimed if it fails', () => {
-  const r = after("app.post('/admin/lead/:id/email'", 4000);
+  const r = after('async function sendLeadEmail(', 3000);
   const claim = r.indexOf('pg_advisory_xact_lock($1, $2)'), send = r.indexOf('await sendEmail(');
   assert.ok(claim > -1 && send > claim, 'claim before send');
   assert.match(r, /WHERE NOT EXISTS \(SELECT 1 FROM lead_notes/);
@@ -53,7 +53,7 @@ test('#181 product tools read the five MySQL fields and set a thumbnail on creat
   }
 });
 test('#195 the restart route connects inside its try', () => {
-  const r = after("app.post('/admin/training/restart'", 3000);
+  const r = after("app.post('/admin/training/restart'", 4500);
   assert.ok(r.indexOf('try {') < r.indexOf('client = await pool.connect()'));
   assert.match(r, /if \(client\) client\.release\(\)/);
 });
@@ -70,7 +70,8 @@ test('#198 the homepage fallback shows signs and limits no-minimums to apparel',
   assert.match(html, /No minimums on apparel\./);
 });
 test('#198 the Shop menu scrolls inside the viewport', () => {
-  assert.match(read('public/assets/css/site-nav.css'), /\.jtn-dd-m\{[^}]*max-height:calc\(100vh - 90px\);overflow-y:auto/);
+  // 150px since 2026-10-17: the blue bar and the services ticker stick above the menu.
+  assert.match(read('public/assets/css/site-nav.css'), /\.jtn-dd-m\{[^}]*max-height:calc\(100vh - 150px\);overflow-y:auto/);
 });
 test('#200/#203 only the homepage, which has the action bar, moves Tawk', () => {
   const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
@@ -86,7 +87,7 @@ test('#201 starter resources are seeded only by the run that creates the table',
   assert.doesNotMatch(src, /SELECT COUNT\(\*\)::int AS n FROM staff_resources/);
 });
 test('#201 a helper finishes only a started task; the week starts on the shop\'s Monday', () => {
-  assert.match(after("app.post('/admin/tasks/:id/done'", 900), /assigned_to = \$2 AND started_at IS NOT NULL/);
+  assert.match(after("app.post('/admin/tasks/:id/done'", 2000), /assigned_to = \$2 AND started_at IS NOT NULL/);
   assert.match(src, /done_at >= \(\$1::date::timestamp AT TIME ZONE \$2\)/);
 });
 test('#201/#204 removing a resource needs a tick; the notice promises no listed manager', () => {

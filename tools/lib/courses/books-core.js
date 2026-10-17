@@ -53,7 +53,7 @@ const MODULES = [
     lessons: [{
       id: 'b2-money', article: A.money, minutes: 20, tags: 'bookkeeping, sales, gross, fees, stripe, paypal, cash, deposits, payouts, accounts',
       goals: ['List the ways customers pay us', 'Record sales gross and fees as an expense', 'Follow one order from payment to the bank'],
-      images: [{ src: '/assets/images/work/storefront-lincoln-ave.jpg', alt: 'Our shop: the books follow every order made here' }],
+      images: [{ src: '/assets/images/work/screen-printing-press.jpg', alt: 'Our Lakeview shop: the books follow every order made here' }],
       body:
 `You keep the record of every dollar that comes in and goes out, so June knows what the business really makes and the state gets exactly what it is owed.
 
@@ -153,12 +153,16 @@ The Finances page is not the bank statement. It shows what our system recorded. 
   /* ── 3 ── */
   {
     key: 'b3', icon: '🧾', title: 'Expenses, receipts and job costs',
-    goal: 'Record every cost once, in the right category, with a receipt, and keep job costs honest.',
+    goal: 'Prepare every cost once, in the right category, with a receipt, for June to enter, and keep job costs honest.',
     lessons: [{
       id: 'b3-expenses', article: A.expenses, minutes: 20, tags: 'bookkeeping, expenses, receipts, categories, contract labor, personal card, recurring',
-      goals: ['Record an expense with a receipt and a category', 'Handle a cost paid on a personal card', 'Record contractor pay correctly'],
+      goals: ['Prepare an expense with a receipt and a category', 'Handle a cost paid on a personal card', 'Prepare contractor pay correctly'],
       body:
 `An expense without a receipt is a guess, and a guess is what an auditor or the tax office will question first.
+
+**You prepare, June enters**
+
+Your access to the books is read-only. You prepare each entry, with everything below, on your list for June, and she enters it. That keeps one person changing the books and a second checking them.
 
 **Every expense needs**
 
@@ -188,18 +192,18 @@ Never guess an amount or invent a receipt. A cost you cannot prove is listed as 
 
 **Paid on a personal card**
 
-A business cost paid on someone's own card is still a business cost. Record it with a note of who paid, so June can pay them back or treat it as money she put in.
+A business cost paid on someone's own card is still a business cost. List it with a note of who paid, so June can pay them back or treat it as money she put in.
 
 **Monthly costs**
 
-Rent, software and the phone repeat. Tick them as monthly once, and they copy themselves into each new month. Each month, check every copy was really paid at that amount. A price rise or a cancelled subscription must be changed, not left to roll forward.
+Rent, software and the phone repeat. June ticks them as monthly once, and they copy themselves into each new month. Each month, check every copy was really paid at that amount, and tell June about a price rise or a cancelled subscription so she changes it, rather than letting it roll forward.
 
 **Never twice**
 
-Before adding an expense, check it is not already there: a monthly copy, a supplier invoice already entered, or a cost someone else recorded. Two entries for one cost make profit look smaller than it is.`,
+Before you list an expense, check it is not already in the books: a monthly copy, a supplier invoice already entered, or a cost someone else recorded. Two entries for one cost make profit look smaller than it is.`,
     }, {
       id: 'b3-jobcosts', article: A.jobcosts, minutes: 20, tags: 'bookkeeping, job costs, estimated, supplier invoices, s&s, anchorfish, margin',
-      goals: ['Read a job\'s costs and how they were worked out', 'Replace estimates with real invoice amounts', 'Spot a job that lost money'],
+      goals: ['Read a job\'s costs and how they were worked out', 'List the real invoice amounts for June to replace the estimates', 'Spot a job that lost money'],
       images: [{ src: '/assets/images/work/screen-printing-press.jpg', alt: 'The press: each job\'s cost is blanks, printing and setup' }],
       body:
 `Sales tell June what came in. Job costs tell her whether each job made money. Without them, a busy month can still be a losing one.
@@ -221,12 +225,12 @@ The estimate is a starting point, not the real cost.
 
 When the supplier's invoice arrives:
 
-1. Find the job (by its quote code) and open its costs on the job page
+1. Note the job's quote code from the invoice
 2. Compare each line with the invoice
-3. Change the amounts to what we actually paid
+3. List the job, each line and what we actually paid, for June to enter
 4. Note anything unusual: a substitute shirt, a reprint, extra shipping
 
-Jobs the system could not cost at all are listed on the Finances page. Fill those in from the invoices.
+Jobs the system could not cost at all are listed on the Finances page. List their real costs from the invoices the same way.
 
 **Reading the result**
 
@@ -240,7 +244,7 @@ You do not change prices or quotes. You show June the numbers; she decides.`,
     }],
     practice: [
       { key: 'signoff:books-receipts', type: 'signoff', minutes: 5,
-        title: 'Records expenses with receipts and the right category', hint: 'June checks a week of your entries: every one with a receipt, the right category, no duplicates, and personal-card costs noted.' },
+        title: 'Prepares expenses with receipts and the right category', hint: 'June checks a week of the entries you prepared for her: every one with a receipt, the right category, no duplicates, and personal-card costs noted.' },
     ],
     quiz: {
       key: 'books-3', title: 'Module 3 quiz: expenses, receipts and job costs', minutes: 10,
@@ -261,7 +265,7 @@ You do not change prices or quotes. You show June the numbers; she decides.`,
           choices: ['Guess what it was', 'Search email and the supplier account, then ask June', 'Delete it', 'Record it as Other'],
           answer: 1, article: A.expenses, why: 'Never guess or invent a receipt.' },
         { id: 'personal', q: 'June paid for ink on her own card. You…',
-          choices: ['Leave it out', 'Record it as a business cost, noting who paid', 'Record it as a sale', 'Ask the supplier'],
+          choices: ['Leave it out', 'List it as a business cost, noting who paid', 'Record it as a sale', 'Ask the supplier'],
           answer: 1, article: A.expenses, why: 'Still a business cost.' },
         { id: 'roll', q: 'A software subscription went up from $20 to $25. The monthly copy says $20. You…',
           choices: ['Leave it', 'Change it to what was really paid', 'Delete it', 'Add a second one'],
@@ -377,8 +381,8 @@ At month end, every payment not linked to an order needs one: find the order, or
           choices: ['You', 'June', 'Sales', 'Stripe support'],
           answer: 1, article: A.outside, why: 'Tell June the same day.' },
         { id: 'link', q: 'A phone order charged in Stripe shows as a payment with no order. You…',
-          choices: ['Type a new payment on the order', 'Link that payment to its order', 'Delete it', 'Record it as Other'],
-          answer: 1, article: A.outside, why: 'Linking, not retyping, avoids counting it twice.' },
+          choices: ['Type a new payment on the order', 'Tell June which order it belongs to, so she links it', 'Delete it', 'Record it as Other'],
+          answer: 1, article: A.outside, why: 'Linking, not retyping, avoids counting it twice; June links it.' },
         { id: 'over', q: 'An order shows more paid than its total. You…',
           choices: ['Fix it quietly', 'Flag it to June', 'Refund the difference', 'Ignore it'],
           answer: 1, article: A.outside, why: 'Recorded twice or overpaid: June decides.' },
@@ -558,7 +562,7 @@ If something stops you closing in three days (a statement not available, a big u
 
 1. Start from last month's reconciled closing balance
 2. Tick off every deposit and withdrawal in the books against the statement
-3. For each item on the statement but not in the books, record it (with a receipt and category if it is a cost)
+3. For each item on the statement but not in the books, list it for June to enter (with a receipt and category if it is a cost)
 4. For each item in the books but not on the statement, find out why: in transit, entered twice, or wrong
 5. The books' closing balance, plus or minus items in transit, must equal the statement's
 

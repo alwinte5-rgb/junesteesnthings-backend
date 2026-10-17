@@ -44,10 +44,11 @@ test('every quiz question names an article that really exists, by its exact titl
 test('a step waiting for a later feature stays hidden until it ships', () => {
   const now = TRAINING.visibleSteps(new Set());
   assert.ok(!now.some((s) => s.needs), 'nothing asks for work the workspace cannot do yet');
-  const later = TRAINING.visibleSteps(new Set(['eod', 'proofs']));
-  assert.ok(later.some((s) => s.key === 'do:eod'));
+  assert.ok(!TRAINING.visibleSteps(new Set(), 'design').some((s) => s.key === 'do:proof'), 'hidden until proofs ship');
   assert.ok(TRAINING.visibleSteps(new Set(['proofs']), 'design').some((s) => s.key === 'do:proof'), 'the proof step is the designer\'s');
-  assert.ok(!TRAINING.mayTick('do:eod', true, new Set()), 'a hidden step cannot be ticked');
+  assert.ok(!TRAINING.mayTick('do:proof', true, new Set(), 'design'), 'a hidden step cannot be ticked');
+  /* The end-of-day note is a Team chat post (2026-10-13), not a hidden step. */
+  for (const track of ['sales', 'design']) assert.ok(!TRAINING.visibleSteps(new Set(['eod', 'proofs']), track).some((s) => s.key === 'do:eod'));
 });
 
 test('work steps tick themselves from real work, never from a stored tick', () => {
@@ -137,9 +138,12 @@ test('playbook gaps: only facts the owner knows, never the blanks in a ready-mad
   assert.strictEqual(gaps[1].line, '- Deadlines under [X] business days', 'the line it sits in, for context');
   assert.deepStrictEqual(gaps.map((g) => g.hint), ['Just the number, e.g. 7', 'Just the number, e.g. 7', '', ''],
     'a blank followed by "days" asks for the number alone');
-  // every course lesson's gap is found, long ones included
-  const lessonGaps = TRAINING.lessonArticles().flatMap((a) => TRAINING.ownerGaps(a.body));
-  assert.ok(lessonGaps.length >= 4, `only ${lessonGaps.length} lesson gaps found`);
+  // every course lesson's gap is found, long ones included: the unanswered
+  // wordings (`was`) still carry them, and since 2026-10-13 every one is answered
+  const arts = TRAINING.lessonArticles();
+  const wasGaps = arts.flatMap((a) => (a.was || []).flatMap((b) => TRAINING.ownerGaps(b)));
+  assert.ok(wasGaps.length >= 4, `only ${wasGaps.length} lesson gaps found`);
+  assert.deepStrictEqual(arts.flatMap((a) => TRAINING.ownerGaps(a.body).map((g) => `${a.title}: ${g.token}`)), []);
 });
 
 test('filling a gap replaces every copy of it, and an answer cannot plant a new placeholder', () => {
@@ -221,8 +225,16 @@ test('quiz routes: a helper hands in their own; answers stay off the helper page
   const helperView = page.slice(page.indexOf('TRAINING.quizForPage(key)'));
   assert.doesNotMatch(helperView, /\.answer\b|\.why\b/, 'the helper page never prints answers');
   assert.match(src, /CREATE TABLE IF NOT EXISTS staff_quiz_attempts/);
+  // What was picked is stored for the owner's answer log.
+  assert.match(post, /answers, quiz_hash, seconds\)/);
+  assert.match(post, /TRAINING\.answerLog\(r\.results\)/);
+  // A refresh re-reads the result, never posts another try.
+  assert.match(post, /res\.redirect\(303, `\/admin\/training\/quiz\/\$\{encodeURIComponent\(key\)\}\/result\/\$\{id\}`\)/);
+  assert.doesNotMatch(post, /res\.send\(adminPage\(/);
   // Retakes are allowed, so the marked page never gives the answers away.
-  const marked = post.slice(post.indexOf('res.send(adminPage('));
+  const result = route("app.get('/admin/training/quiz/:key/result/:id', requireAdmin");
+  assert.match(result, /if \(!a \|\| a\.staff_id !== actor\.id\) return back/, 'a helper reads only their own result');
+  const marked = result.slice(result.indexOf('res.send(adminPage('));
   assert.doesNotMatch(marked, /answerText|x\.why|pickedText/, 'the result never shows the answer, the reason or the pick');
   assert.match(marked, /Re-read/);
 });
@@ -237,9 +249,9 @@ test('every quiz question points at a playbook article that really exists', () =
 
 test('commission starts at the "ready" sign-off, and a recorded payout never disappears', () => {
   const fn = src.slice(src.indexOf('async function commissionLines('), src.indexOf('\n}\n', src.indexOf('async function commissionLines(')));
-  assert.match(fn, /t\.step_key = \$2\s+AND q\.created_at >= t\.done_at/, 'only quotes created after the sign-off earn');
+  assert.match(fn, /\$\{readyRow\('t', '\$2'\)\}\s+AND q\.created_at >= t\.done_at/, 'only quotes created after the sign-off earn');
   assert.match(fn, /OR EXISTS \(SELECT 1 FROM commission_payouts c WHERE c\.staff_id = \$1 AND c\.quote_code = q\.code\)/);
-  assert.match(fn, /\[staffId, TRAINING\.READY_KEY\]/);
+  assert.match(fn, /\[staffId, await readyKeyOf\(staffId\)\]/);
   assert.match(TRAINING.visibleSteps(undefined, 'sales').find((s) => s.key === TRAINING.READY_KEY).hint, /Commission starts here/);
 });
 
@@ -284,7 +296,7 @@ test('proofs: our cloud, the proofs folder, a picture or PDF only; uploads signe
   }
   assert.ok(!P.proofUrlOk(ok, ''), 'no cloud configured accepts nothing');
   assert.match(P.thumbOf(ok.replace('.png', '.pdf'), 'jtees'), /pg_1\/.*\.jpg$/);
-  assert.match(P.proofMessage({ first: 'Ada', code: 'AB12CD', url: ok }), /^Hi Ada! Your proof for order AB12CD is ready, and we're excited for you to see it: https:/);
+  assert.match(P.proofMessage({ first: 'Ada', code: 'AB12CD', url: ok }), /^Hi Ada! Your proof for order AB12CD is ready, and we're excited for you to see it\. .*\n\nhttps:\S+$/s);
 
   assert.strictEqual(STAFF.ROUTES['POST /admin/api/proof-signature'], 'proofs.upload');
   assert.strictEqual(STAFF.ROUTES['POST /admin/quote/:code/proofs'], 'proofs.upload');

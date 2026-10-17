@@ -163,7 +163,7 @@ test('only a size that fits a board can be sold as a single', () => {
   assert.match(tool, /const SINGLES = \{/, 'the singles ladders moved');
   assert.match(tool, /packLadder\(12\)/, 'the packs are not built from the cost model');
   /* A size deliberately switched off must survive a re-run. */
-  assert.match(tool, /\(m\.offered \? ', active=1' : ''\)/, 'the update path ignores offered');
+  assert.match(tool, /if \(m\.offered\) mysql\(url, 'UPDATE lumise_printings SET calculate=[^\n]*\n\s*', active=1/, 'the update path ignores offered');
 });
 
 test('labour is in the price, and one number controls it', () => {
@@ -236,4 +236,29 @@ test('the singles ladder moves when the shop rate does', () => {
   assert.ok(parseFloat(cheap[6]) > 0);
   /* And it must never be the stale literal that was there before. */
   assert.notStrictEqual(cheap[6], '24.00', 'the 12in single is back to its hardcoded $35/hr price');
+});
+
+test('24in singles: sticker on an $8 coro piece, hand cut, 2 for $80 (owner, 2026-10-17)', () => {
+  // The worked example: 4 billable sqft x $2.49 + $8 coro + 5 minutes at $50/hr.
+  assert.strictEqual(CUT.sqftOf(24), 4);
+  assert.strictEqual(CUT.costEach(24, 1).toFixed(2), '22.13');
+  assert.strictEqual(CUT.minimumFor(24), 2, 'sold two at a time at the least');
+  assert.strictEqual(CUT.minimumFor(36), CUT.PER_SHEET[36], '36in is still sheet-only');
+  const tool = fs.readFileSync(path.join(root, 'tools', 'add-cutouts.js'), 'utf8');
+  const price = parseFloat(tool.match(/const SINGLE_24 = \{ 1000: '([\d.]+)' \}/)[1]);
+  assert.strictEqual(price, 40, "the owner's 2 for $80");
+  assert.ok(price > CUT.costEach(24, 2), 'never under cost');
+  assert.match(tool, /title: 'Big Head Cutout — 24in, singles', bands: SINGLE_24, min: minimumFor\(24\),\s*offered: true/);
+  // Against the pack price customers are actually charged (PACK_PRICES), not
+  // the computed one: the sheet wins from PACK_WINS_24 heads, and the stored
+  // description says that number.
+  const pack24 = Number(tool.match(/const PACK_PRICES = \{[^}]*\b24: (\d+)/)[1]);
+  let n = 2; while (n * price <= pack24 && n < 8) n++;
+  assert.strictEqual(n, 5, 'at $40 a head the $185 8-pack wins from 5');
+  assert.match(tool, /Ordering ' \+ PACK_WINS_24 \+ ' or more\? The full sheet 8-pack costs less/);
+});
+
+test('the catalog tool never reprices a row that is not on sale', () => {
+  const tool = fs.readFileSync(path.join(root, 'tools', 'add-cutouts.js'), 'utf8');
+  assert.match(tool, /if \(m\.offered\) mysql\(url, 'UPDATE lumise_printings SET calculate=/);
 });

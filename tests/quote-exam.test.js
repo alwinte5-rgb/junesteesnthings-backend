@@ -39,7 +39,7 @@ test('every scenario is well formed, unique, and free of customer details', () =
     assert.ok(s.title && s.brief && s.why && s.businessDays > 0, s.id);
     assert.ok(['dtf', 'screen', 'embroidery', 'cutout'].includes(s.expect.line.method), s.id);
     assert.doesNotMatch(s.brief, /@|\d{3}[\s.-]\d{3}[\s.-]\d{4}/, `${s.id}: no email or phone in a brief`);
-    assert.strictEqual(s.expect.rush, s.businessDays <= 3, `${s.id}: rush follows the date`);
+    assert.strictEqual(s.expect.rush, s.businessDays <= 3 && s.expect.line.method === 'dtf', `${s.id}: rush follows the date, and only DTF can be rushed`);
   }
   assert.ok(QEXAM.SCENARIOS.filter((s) => s.real).length >= 4, 'the newest real quotes are in it');
 });
@@ -61,8 +61,9 @@ test('the owner\'s quote passes; a wrong method, quantity, place or date fails a
 
 test('cutouts are marked by size and pack; ink colours by place, from the line or the method title', () => {
   const pack = QEXAM.byId('cutouts-rush');
-  assert.strictEqual(QEXAM.grade(pack, [{ qty: 1, method_id: 31 }], 30, CATALOG).passed, true);
-  assert.strictEqual(QEXAM.grade(pack, [{ qty: 8, method_id: 34 }], 30, CATALOG).passed, false, 'eight singles is not the pack');
+  assert.strictEqual(QEXAM.grade(pack, [{ qty: 1, method_id: 31 }], 0, CATALOG).passed, true);
+  assert.strictEqual(QEXAM.grade(pack, [{ qty: 1, method_id: 31 }], 30, CATALOG).passed, false, 'cutouts are never rushed');
+  assert.strictEqual(QEXAM.grade(pack, [{ qty: 8, method_id: 34 }], 0, CATALOG).passed, false, 'eight singles is not the pack');
   const two = QEXAM.byId('tees-screen-two-places');
   const line = { product_id: 12, size_mix: { S: 20, M: 20, L: 20 }, prints: [{ loc: 'front', method_id: 2, colours: 2 }, { loc: 'back', method_id: 2, colours: 1 }] };
   assert.strictEqual(QEXAM.grade(two, [line], 0, CATALOG).passed, true);
@@ -98,5 +99,8 @@ test('exam routes: anyone signed in, a helper only their own attempts and only o
   assert.match(form, /const exam = !isEdit \? QEXAM\.byId/);
   assert.match(form, /if \(exam && !\(await examOpenFor\(currentActor\(\) \|\| OWNER_ACTOR\)\)\)/);
   assert.match(form, /const canDraft = \(!isEdit \|\| isDraft\) && !exam;/);
-  assert.match(src, /DELETE FROM staff_exam_attempts WHERE staff_id = \$1/, 'restarting training clears exam attempts');
+  assert.match(src, /UPDATE staff_exam_attempts SET archived_at = NOW\(\) WHERE staff_id = \$1 AND archived_at IS NULL/, 'restarting training puts exam attempts aside');
+  assert.match(page, /\$\{owner \? '' : ' AND archived_at IS NULL'\} ORDER BY created_at, id/, 'a helper never sees tries from before a restart');
+  assert.match(page, /const tries = \(id\) => everyTry\(id\)\.filter\(\(x\) => !x\.archived_at\)/, 'and they never count');
+  assert.match(page, /owner && who && everyTry\(sc\.id\)\.length \? `<details/, 'the owner reads every try, check by check');
 });

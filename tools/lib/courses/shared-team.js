@@ -51,7 +51,7 @@ If you said a time, keep it, even if the news is "not done yet, here is why, new
 Before you ask, look where the answer lives:
 
 - **The Playbook**: how we do things, ready-made replies, and these lessons. Type a question in plain words
-- **The job page**: everything about one order. Notes about a job go on the job, not only in chat, so the next person finds them
+- **The job page** (if you work on orders): everything about one order. Notes about a job go on the job, not only in chat, so the next person finds them
 - **Resources**: the tools we use and where each login is
 
 If you had to ask and the answer is not in the Playbook, say so. June may add it, so the next person does not have to ask.
@@ -59,7 +59,7 @@ If you had to ask and the answer is not in the Playbook, say so. June may add it
 **Start and end of your day**
 
 - **Start:** open My Day and Team chat. Read anything new before you start your own work
-- **End:** write a short note in your channel: what you finished, what is waiting and on whom, and what you will do first next time. Someone else may need to pick it up before you are back`,
+- **End:** post your end-of-day note in Team chat, in your channel where June sees it: what you finished, what is waiting and on whom, and what you will do first next time. Someone else may need to pick it up before you are back`,
     pages: [
       { from: null, checks: [
         q('You want to tell the team the banner files are ready. Where?', ['Direct with June', 'Your team channel', 'An email to everyone'], 1, 'Things more than one person needs go in a channel.'),
@@ -93,7 +93,7 @@ Write it so June does not have to ask you anything back:
 
 Bad: "Hey, quick question about the shirts?". Good: "Job 4F2K: the customer sent a 300px logo for a 12-inch back print. I asked for the original; they do not have one. Redraw it as a $30 setup, or ask sales to quote that first? Proof is due tomorrow at noon."
 
-If a question goes back and forth three times in chat, ask for a quick call instead, then write down what was decided on the job page.
+If a question goes back and forth three times in chat, ask for a quick call instead, then write down what was decided: on the job page if it is about an order, otherwise in the chat thread.
 
 **Handing work over**
 
@@ -121,7 +121,7 @@ If a customer is waiting, tell them you are checking and when you will reply, th
     pages: [
       { from: null, checks: [
         q('Which question can June answer in one reply?', ['"Quick question about the shirts?"', 'The job number, what you checked, what you think, and when you need it', '"Can you call me?"'], 1, 'Give her everything she needs to answer once.'),
-        q('A question has gone back and forth three times in chat. Next?', ['Keep typing', 'Ask for a quick call, then write the decision on the job page', 'Give up'], 1, 'Long threads become a short call, and the decision gets written down.'),
+        q('A question has gone back and forth three times in chat. Next?', ['Keep typing', 'Ask for a quick call, then write the decision down (on the job page if it is about an order)', 'Give up'], 1, 'Long threads become a short call, and the decision gets written down.'),
       ] },
       { from: 'Handing work over', checks: [
         q('A good handover includes…', ['Only the files', 'What is done, what is open and on whom, promises made, and where the files are', 'Nothing; they can work it out'], 1, 'Nobody should have to ask what you meant.'),
@@ -168,7 +168,7 @@ Those are June's. "Let me check that for you and reply by 4pm" is always a good 
 **Their details and their photos**
 
 - Customers' names, emails, phones and addresses stay in our system. Never paste them into ChatGPT or any AI tool, and never copy them to your own files
-- Send messages from the job page or the Playbook tools, not from your own email or phone. That keeps a record, and while you are in training June checks them first
+- If your job messages customers, send from the job page or the Playbook tools, not from your own email or phone. That keeps a record, and while you are in training June checks them first
 - A customer's photo, name or design is never posted anywhere without their written permission. Children's faces need a parent's OK
 - If a customer messages you somewhere unexpected (your own social account, your own email), do not carry on there. Point them to jtees.net and tell June`,
     pages: [

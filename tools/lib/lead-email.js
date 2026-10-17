@@ -6,7 +6,7 @@
  * Plain text in, escaped HTML out: what was typed is what the customer reads.
  */
 
-const LIMITS = { subject: 150, body: 5000 };
+const LIMITS = { subject: 150, body: 10000 };
 
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -37,6 +37,28 @@ ${shop}`,
   };
 }
 
+/** The follow-up for a lead the shop already wrote to and has not heard
+ *  back from (owner, 2026-10-15: "suggest a followup reply. add that to the
+ *  contacted leads"). Short, warm, one easy next step; editable. */
+function followUp(lead, { signer = 'June', shop = "June's Tees" } = {}) {
+  const l = lead || {};
+  const first = String(l.name || '').trim().split(/\s+/)[0];
+  const asked = String(l.description || '').replace(/\s+/g, ' ').trim();
+  const about = asked ? ` for ${asked.length > 70 ? asked.slice(0, 67).trimEnd() + '...' : asked}` : '';
+  return {
+    subject: `Following up on your enquiry with ${shop}`,
+    body: `Hi${first ? ' ' + first : ''},
+
+I wanted to follow up on your request${about}. Are you still looking to get these made?
+
+If so, just reply with anything you have so far (quantities, sizes, colors, your artwork and the date you need them) and I'll put your quote together right away. If your plans have changed, no problem at all, a quick note lets me know.
+
+Thank you,
+${signer}
+${shop}`,
+  };
+}
+
 /** The subject and message from the form, cleaned; or an error to show. */
 function cleanEmail(body) {
   const b = body && typeof body === 'object' ? body : {};
@@ -54,4 +76,4 @@ function toHtml(text) {
     `<p style="margin:0 0 12px;line-height:1.55">${esc(p).replace(/\n/g, '<br>')}</p>`).join('');
 }
 
-module.exports = { LIMITS, infoRequest, cleanEmail, toHtml };
+module.exports = { followUp, LIMITS, infoRequest, cleanEmail, toHtml };

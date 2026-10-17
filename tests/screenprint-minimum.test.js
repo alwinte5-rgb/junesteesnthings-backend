@@ -1,3 +1,4 @@
+const { readDesigner } = require('./designer-dir');
 /* The 50-piece screen-print minimum, and the clamp that made it necessary.
  *
  * Screen printing's cheapest band has ceiling 99 at $8.45 for one colour. Both
@@ -162,8 +163,7 @@ test('the ceiling travels in the method, like the minimum', () => {
 
 /* ── Over the colour ceiling goes to DTF ─────────────────────────────────── */
 
-const cartPhp = require('node:fs').readFileSync(require('node:path').join(__dirname, '..',
-  'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/core/cart.php'), 'utf8');
+const cartPhp = readDesigner('core/cart.php');
 
 test('a design past the ceiling is switched to DTF, not refused', () => {
   /* The same shape the quantity minimum already uses: the customer keeps their
@@ -302,8 +302,7 @@ test('the refusal points at DTF, the way the designer already does', () => {
  * catalogue edit, not a deploy — nothing would announce it.
  */
 
-const appJs = require('node:fs').readFileSync(require('node:path').join(__dirname, '..',
-  'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise/core/assets/js/app.js'), 'utf8');
+const appJs = readDesigner('core/assets/js/app.js');
 
 test('the editor scales to the minimum when nothing else qualifies', () => {
   assert.match(appJs, /var min = lumise\.cart\.printing\.min_qty_of\(lumise\.cart\.printing\.current_method\(\)\);\s*\n\s*if \(min > 0 && q < min\) price = price \* \(min \/ q\);/,

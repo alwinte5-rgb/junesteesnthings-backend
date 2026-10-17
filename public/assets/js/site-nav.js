@@ -5,7 +5,11 @@
   var dds = document.querySelectorAll('.jtn-dd');
   function closeAll(except) {
     Array.prototype.forEach.call(dds, function (d) {
-      if (d !== except) { d.classList.remove('open'); d.querySelector('.jtn-dd-t').setAttribute('aria-expanded', 'false'); }
+      if (d !== except) {
+        d.classList.remove('open'); d.querySelector('.jtn-dd-t').setAttribute('aria-expanded', 'false');
+        // Its submenus close with it, so it opens fresh next time.
+        Array.prototype.forEach.call(d.querySelectorAll('.jtn-sub.open'), function (s) { s.classList.remove('open'); s.querySelector('.jtn-sub-t').setAttribute('aria-expanded', 'false'); });
+      }
     });
   }
   Array.prototype.forEach.call(dds, function (d) {
@@ -18,6 +22,17 @@
     });
   });
   document.addEventListener('click', function (e) { if (!e.target.closest('.jtn-dd')) closeAll(); });
+  /* Submenus inside a dropdown open on tap (and stay open while the
+     dropdown is), and do not close the dropdown they sit in. */
+  Array.prototype.forEach.call(document.querySelectorAll('.jtn-sub'), function (s) {
+    var t = s.querySelector('.jtn-sub-t');
+    t.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var open = !s.classList.contains('open');
+      s.classList.toggle('open', open);
+      t.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+  });
 
   /* Every "Text us" link opens the Tawk messenger, on phones too (owner,
      2026-10-02): conversations there are tracked, a text from the phone's
@@ -27,6 +42,7 @@
   document.addEventListener('click', function (e) {
     var a = e.target.closest && e.target.closest('a[href^="sms:"]');
     if (!a || e.defaultPrevented) return;
+    if (typeof window.jtOpenChat === 'function') { e.preventDefault(); window.jtOpenChat(); return; }
     var tawk = window.Tawk_API;
     if (!tawk || typeof tawk.maximize !== 'function') return;
     e.preventDefault();

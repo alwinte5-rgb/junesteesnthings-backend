@@ -27,7 +27,7 @@ Write the reply June would post under the review:
   the occasion, refer to it; do not invent details they did not give.
 - 4 or 5 stars: thank them and, where it fits, invite them back. No sales pitch.
 - 1 to 3 stars: thank them for the feedback, acknowledge the problem without
-  arguing or making excuses, and ask them to call or text (773) 849-1854 so
+  arguing or making excuses, and ask them to call or text (773) 900-4592 so
   June can make it right. Never offer refunds, discounts or anything else.
 - Never mention other customers, prices, order numbers or private details.
 - No hashtags, no emoji, no quotation marks around the reply.

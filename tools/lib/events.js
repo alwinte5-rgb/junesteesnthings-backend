@@ -7,7 +7,7 @@
  *
  * Each event knows how to find its date in any year, how many days ahead to
  * start selling it (`lead`), and how many days before the event an order has
- * to be in to be made in time (`orderBy`). Everything else - the homepage
+ * to be in to be made in time (`orderBy`, 4 weeks unless an event says more). Everything else - the homepage
  * strip, the email, the ad text, the dashboard - reads from here, so moving a
  * date or a deadline is one edit.
  *
@@ -33,16 +33,21 @@ const LINKS = {
   church: `${DESIGN}/collection.php?c=church-groups`,
   memorial: `${DESIGN}/collection.php?c=memorial`,
   bulk: `${DESIGN}/collection.php?c=bulk-orders`,
-  quote: `${SITE}/#contact`,
+  quote: `${SITE}/contact`,
 };
-const PHONE = '(773) 849-1854';
+const PHONE = '(773) 900-4592';
 const LOGO = `${SITE}/assets/images/brand/logo.png`;
 /* Each event's picture: the shop's own work photos on jtees.net (`photo`),
    chosen per event. Swap in a better one by changing `photo`. */
 const PHOTOS = `${SITE}/assets/images/`;
-/* At least five weeks of selling before every event (owner, 2026-10-06:
-   "at least a month in advance"); longer where an event's own lead says so. */
-const MIN_LEAD = 35;
+/* Orders close 4 weeks before every event (owner, 2026-10-17: "bring those in
+   line at 4 weeks no 3 days"): standard turnaround is 7 to 14 business days
+   after proof approval, so a shorter deadline is a rush promise. */
+const MIN_ORDER_BY = 28;
+/* At least four weeks of selling before the order-by date (owner, 2026-10-06:
+   "at least a month in advance"), so 8 weeks before the event; longer where an
+   event's own lead says so. */
+const MIN_LEAD = MIN_ORDER_BY + 28;
 /* Two emails a week, on these days (0 = Sunday). */
 const SEND_DAYS = [2, 4];
 
@@ -71,12 +76,14 @@ const saturdayBefore = (dt) => new Date(dt.getTime() - ((dt.getUTCDay() + 1) % 7
 
 /* ── The events ────────────────────────────────────────────────────────── */
 
-/* `when(y)` gives the date in year y. `lead`: days ahead the selling starts.
-   `orderBy`: days before the date an order must be in. `email` is what goes
+/* `when(y)` gives the date in year y. `lead` (optional): days ahead the
+   selling starts, only where it is more than MIN_LEAD. `orderBy` (optional):
+   days before the date an order must be in, only where it is more than
+   MIN_ORDER_BY - shorter is a rush promise and is refused. `email` is what goes
    to the list; `ads` is the search ad text and keywords. */
 const EVENTS = [
   {
-    key: 'chicago-marathon', weight: 2, photo: 'blog/sports-team-shirts-chicago.jpg', name: 'Chicago Marathon', when: (y) => nthWeekday(y, 10, 0, 2), lead: 21, orderBy: 3,
+    key: 'chicago-marathon', weight: 2, photo: 'blog/sports-team-shirts-chicago.jpg', name: 'Chicago Marathon', when: (y) => nthWeekday(y, 10, 0, 2),
     products: ['Big head cutouts of your runner', 'Race-day shirts with their face and name', 'Signs and banners for the course'],
     link: LINKS.bigHeads, cta: 'Order big heads',
     email: {
@@ -90,7 +97,7 @@ const EVENTS = [
            keywords: ['marathon big head cutout', 'chicago marathon signs', 'marathon cheer shirts', 'big head cutout chicago'] },
   },
   {
-    key: 'halloween', photo: 'email/hallow-boos.jpg', name: 'Halloween', when: (y) => ymd(y, 10, 31), lead: 30, orderBy: 10,
+    key: 'halloween', photo: 'email/hallow-boos.jpg', name: 'Halloween', when: (y) => ymd(y, 10, 31),
     products: ['Matching family and group costume shirts', 'Kids’ Halloween tees', 'Party banners and signs'],
     link: LINKS.tees, cta: 'Design your shirts',
     email: {
@@ -104,7 +111,7 @@ const EVENTS = [
            keywords: ['matching halloween shirts', 'custom halloween shirts chicago', 'group costume shirts'] },
   },
   {
-    key: 'thanksgiving', photo: 'email/family-aint.jpg', name: 'Thanksgiving & Friendsgiving', when: (y) => nthWeekday(y, 11, 4, 4), lead: 35, orderBy: 12,
+    key: 'thanksgiving', photo: 'email/family-aint.jpg', name: 'Thanksgiving & Friendsgiving', when: (y) => nthWeekday(y, 11, 4, 4),
     products: ['Family gathering shirts', 'Friendsgiving tees', 'Table signs and banners'],
     link: LINKS.reunion, cta: 'Make family shirts',
     email: {
@@ -118,7 +125,7 @@ const EVENTS = [
            keywords: ['thanksgiving family shirts', 'matching family shirts chicago', 'friendsgiving shirts'] },
   },
   {
-    key: 'christmas', weight: 2, photo: 'email/xmas-family.jpg', name: 'Christmas & holiday gifts', when: (y) => ymd(y, 12, 25), lead: 55, orderBy: 13,
+    key: 'christmas', weight: 2, photo: 'email/xmas-family.jpg', name: 'Christmas & holiday gifts', when: (y) => ymd(y, 12, 25),
     products: ['Matching Christmas pajama-style family shirts', 'Gifts with their photo: hoodies, totes, baby onesies', 'Holiday party shirts for the office', 'Custom mugs and ornaments (call or text us)'],
     link: LINKS.hoodies, cta: 'Make a gift',
     email: {
@@ -132,7 +139,7 @@ const EVENTS = [
            keywords: ['custom christmas shirts', 'personalized photo gifts chicago', 'matching family christmas shirts', 'custom hoodie gift'] },
   },
   {
-    key: 'black-history-month', photo: 'blog/church-group-shirts-and-hats-chicago.jpg', name: 'Black History Month', when: (y) => ymd(y, 2, 1), lead: 28, orderBy: 10,
+    key: 'black-history-month', photo: 'blog/church-group-shirts-and-hats-chicago.jpg', name: 'Black History Month', when: (y) => ymd(y, 2, 1),
     products: ['Heritage and pride tees', 'School and church program shirts', 'Event banners'],
     link: LINKS.church, cta: 'Make your shirts',
     email: {
@@ -146,7 +153,7 @@ const EVENTS = [
            keywords: ['black history month shirts', 'black history month t-shirts bulk', 'black owned custom shirts chicago'] },
   },
   {
-    key: 'valentines', photo: 'email/designer-hoodie.jpg', name: 'Valentine’s Day', when: (y) => ymd(y, 2, 14), lead: 28, orderBy: 8,
+    key: 'valentines', photo: 'email/designer-hoodie.jpg', name: 'Valentine’s Day', when: (y) => ymd(y, 2, 14),
     products: ['Couples’ matching shirts', 'Photo gifts: hoodies and totes', 'Galentine’s group tees'],
     link: LINKS.hoodies, cta: 'Make a gift',
     email: {
@@ -160,7 +167,7 @@ const EVENTS = [
            keywords: ['valentines custom shirt', 'couples matching shirts', 'personalized valentines gift chicago'] },
   },
   {
-    key: 'st-patricks', photo: 'blog/group-matching-custom-shirts-chicago.jpg', name: 'St. Patrick’s Day parade', when: (y) => saturdayBefore(ymd(y, 3, 17)), lead: 30, orderBy: 9,
+    key: 'st-patricks', photo: 'blog/group-matching-custom-shirts-chicago.jpg', name: 'St. Patrick’s Day parade', when: (y) => saturdayBefore(ymd(y, 3, 17)),
     products: ['Group parade shirts', 'Bar crawl tees', 'Green team shirts'],
     link: LINKS.tees, cta: 'Design your shirts',
     email: {
@@ -174,7 +181,7 @@ const EVENTS = [
            keywords: ['st patricks day group shirts', 'chicago st patricks day shirts', 'bar crawl shirts custom'] },
   },
   {
-    key: 'easter', photo: 'blog/kids-birthday-party-shirts-chicago.jpg', name: 'Easter', when: (y) => easter(y), lead: 30, orderBy: 9,
+    key: 'easter', photo: 'blog/kids-birthday-party-shirts-chicago.jpg', name: 'Easter', when: (y) => easter(y),
     products: ['Family Easter shirts', 'Kids’ and baby Easter tees', 'Church group shirts'],
     link: LINKS.kids, cta: 'Make Easter shirts',
     email: {
@@ -188,7 +195,7 @@ const EVENTS = [
            keywords: ['custom easter shirts', 'kids easter shirt personalized', 'family easter shirts'] },
   },
   {
-    key: 'prom', weight: 2, photo: 'blog/prom-shirts-chicago.jpg', name: 'Prom', when: (y) => ymd(y, 5, 1), lead: 45, orderBy: 12,
+    key: 'prom', weight: 2, photo: 'blog/prom-shirts-chicago.jpg', name: 'Prom', when: (y) => ymd(y, 5, 1),
     products: ['Prom squad shirts', 'Big head cutouts for send-offs', 'Send-off banners and signs'],
     link: LINKS.graduation, cta: 'Plan the send-off',
     email: {
@@ -202,7 +209,7 @@ const EVENTS = [
            keywords: ['prom send off ideas', 'prom banner custom', 'prom big head cutout', 'prom squad shirts'] },
   },
   {
-    key: 'teacher-appreciation', photo: 'email/school-2035.jpg', name: 'Teacher Appreciation Week', when: (y) => nthWeekday(y, 5, 1, 1), lead: 28, orderBy: 9,
+    key: 'teacher-appreciation', photo: 'email/school-2035.jpg', name: 'Teacher Appreciation Week', when: (y) => nthWeekday(y, 5, 1, 1),
     products: ['Staff shirts for the week', 'Thank-you totes', 'School banners'],
     link: LINKS.bulk, cta: 'Order staff shirts',
     email: {
@@ -216,7 +223,7 @@ const EVENTS = [
            keywords: ['teacher appreciation shirts', 'school staff shirts bulk', 'pto shirts chicago'] },
   },
   {
-    key: 'mothers-day', photo: 'work/gift-cards.jpg', name: 'Mother’s Day', when: (y) => nthWeekday(y, 5, 0, 2), lead: 28, orderBy: 9,
+    key: 'mothers-day', photo: 'work/gift-cards.jpg', name: 'Mother’s Day', when: (y) => nthWeekday(y, 5, 0, 2),
     products: ['Photo hoodies and tees for Mom', 'Kids’ "I love Mom" tees', 'Personalized totes'],
     link: LINKS.hoodies, cta: 'Make Mom’s gift',
     email: {
@@ -230,7 +237,10 @@ const EVENTS = [
            keywords: ['mothers day custom shirt', 'mothers day photo gift', 'personalized gift for mom chicago'] },
   },
   {
-    key: 'graduation', weight: 2, photo: 'work/custom-printed-banner.jpg', name: 'Graduation', when: (y) => ymd(y, 5, 29), lead: 60, orderBy: 14,
+    /* The emails aim at the late-May peak (orders by about May 1); the admin
+       marketing calendar treats graduation as a May-June season and shows the
+       last day for mid-June ceremonies. Both are 4 weeks before a ceremony. */
+    key: 'graduation', weight: 2, photo: 'work/custom-printed-banner.jpg', name: 'Graduation', when: (y) => ymd(y, 5, 29), lead: 60,
     products: ['Big head cutouts of the graduate', 'Graduation shirts for the whole family', 'Yard signs and banners', 'Stoles'],
     link: LINKS.graduation, cta: 'Celebrate your grad',
     email: {
@@ -244,7 +254,7 @@ const EVENTS = [
            keywords: ['graduation big head cutout', 'graduation shirts for family', 'graduation banner custom', 'graduation party chicago'] },
   },
   {
-    key: 'fathers-day', photo: 'work/logo-tee-and-cap-set.jpg', name: 'Father’s Day', when: (y) => nthWeekday(y, 6, 0, 3), lead: 28, orderBy: 9,
+    key: 'fathers-day', photo: 'work/logo-tee-and-cap-set.jpg', name: 'Father’s Day', when: (y) => nthWeekday(y, 6, 0, 3),
     products: ['Photo tees and hoodies for Dad', 'Hats with his name', 'Kids’ "my dad" tees'],
     link: LINKS.tees, cta: 'Make Dad’s gift',
     email: {
@@ -258,7 +268,7 @@ const EVENTS = [
            keywords: ['fathers day custom shirt', 'personalized hat for dad', 'fathers day photo gift'] },
   },
   {
-    key: 'juneteenth', photo: 'work/juneteenth-graphic-design.jpg', name: 'Juneteenth', when: (y) => ymd(y, 6, 19), lead: 30, orderBy: 9,
+    key: 'juneteenth', photo: 'work/juneteenth-graphic-design.jpg', name: 'Juneteenth', when: (y) => ymd(y, 6, 19),
     products: ['Juneteenth tees for family and community', 'Church and block party shirts', 'Event banners'],
     link: LINKS.church, cta: 'Make your shirts',
     email: {
@@ -272,7 +282,7 @@ const EVENTS = [
            keywords: ['juneteenth shirts', 'juneteenth family shirts', 'black owned t shirt printing chicago'] },
   },
   {
-    key: 'pride', photo: 'blog/group-matching-custom-shirts-chicago.jpg', name: 'Chicago Pride', when: (y) => nthWeekday(y, 6, 0, -1), lead: 30, orderBy: 9,
+    key: 'pride', photo: 'blog/group-matching-custom-shirts-chicago.jpg', name: 'Chicago Pride', when: (y) => nthWeekday(y, 6, 0, -1),
     products: ['Group and parade shirts', 'Business and float shirts', 'Signs for the route'],
     link: LINKS.tees, cta: 'Design your shirts',
     email: {
@@ -286,7 +296,7 @@ const EVENTS = [
            keywords: ['pride parade shirts chicago', 'custom pride shirts group', 'pride float shirts'] },
   },
   {
-    key: 'family-reunion', weight: 2, photo: 'email/family-reunion.jpg', name: 'Family reunion season', when: (y) => ymd(y, 7, 11), lead: 75, orderBy: 18,
+    key: 'family-reunion', weight: 2, photo: 'email/family-reunion.jpg', name: 'Family reunion season', when: (y) => ymd(y, 7, 11), lead: 75,
     products: ['Family reunion shirts with the family name', 'Kids’ and baby sizes', 'Banners for the picnic'],
     link: LINKS.reunion, cta: 'Make reunion shirts',
     email: {
@@ -300,7 +310,7 @@ const EVENTS = [
            keywords: ['family reunion shirts', 'family reunion t shirts bulk', 'family reunion shirts chicago'] },
   },
   {
-    key: 'bud-billiken', photo: 'blog/sports-team-shirts-chicago.jpg', name: 'Bud Billiken Parade', when: (y) => nthWeekday(y, 8, 6, 2), lead: 35, orderBy: 10,
+    key: 'bud-billiken', photo: 'blog/sports-team-shirts-chicago.jpg', name: 'Bud Billiken Parade', when: (y) => nthWeekday(y, 8, 6, 2),
     products: ['Group and float shirts', 'Back-to-school shirts for kids', 'Banners for the route'],
     link: LINKS.sports, cta: 'Make parade shirts',
     email: {
@@ -314,7 +324,7 @@ const EVENTS = [
            keywords: ['bud billiken parade shirts', 'parade group shirts chicago', 'dance team shirts custom'] },
   },
   {
-    key: 'back-to-school', photo: 'email/school-kinder.jpg', name: 'Back to school', when: (y) => nthWeekday(y, 8, 1, 3), lead: 35, orderBy: 10,
+    key: 'back-to-school', photo: 'email/school-kinder.jpg', name: 'Back to school', when: (y) => nthWeekday(y, 8, 1, 3),
     products: ['First-day shirts with their grade', 'Teacher and staff shirts', 'Spirit wear and team shirts'],
     link: LINKS.kids, cta: 'Make first-day shirts',
     email: {
@@ -328,7 +338,7 @@ const EVENTS = [
            keywords: ['first day of school shirt', 'school spirit wear custom', 'teacher shirts bulk chicago'] },
   },
   {
-    key: 'homecoming', weight: 2, photo: 'email/designer-print.jpg', name: 'Homecoming & fall sports', when: (y) => nthWeekday(y, 9, 5, 4), lead: 35, orderBy: 10,
+    key: 'homecoming', weight: 2, photo: 'email/designer-print.jpg', name: 'Homecoming & fall sports', when: (y) => nthWeekday(y, 9, 5, 4),
     products: ['Homecoming shirts', 'Team and fan shirts', 'Big heads for senior night'],
     link: LINKS.sports, cta: 'Order team shirts',
     email: {
@@ -342,7 +352,7 @@ const EVENTS = [
            keywords: ['homecoming shirts custom', 'senior night big head cutout', 'team fan shirts chicago'] },
   },
   {
-    key: 'breast-cancer-awareness', photo: 'email/print-press.jpg', name: 'Breast Cancer Awareness Month', when: (y) => ymd(y, 10, 1), lead: 35, orderBy: 10,
+    key: 'breast-cancer-awareness', photo: 'email/print-press.jpg', name: 'Breast Cancer Awareness Month', when: (y) => ymd(y, 10, 1),
     products: ['Pink team shirts for walks', 'Survivor and support shirts', 'Signs for the walk'],
     link: LINKS.bulk, cta: 'Order walk shirts',
     email: {
@@ -369,9 +379,9 @@ const midnight = (d) => Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDa
 function occurrence(e, t0) {
   let date = e.when(new Date(t0).getUTCFullYear());
   if (date.getTime() < t0) date = e.when(new Date(t0).getUTCFullYear() + 1);
-  const lead = Math.max(e.lead, MIN_LEAD);
+  const lead = Math.max(e.lead || 0, MIN_LEAD);
   const start = new Date(date.getTime() - lead * DAY);
-  const orderByDate = new Date(date.getTime() - e.orderBy * DAY);
+  const orderByDate = new Date(date.getTime() - Math.max(e.orderBy || 0, MIN_ORDER_BY) * DAY);
   const daysTo = Math.round((date.getTime() - t0) / DAY);
   const phase = t0 < start.getTime() ? 'later' : t0 <= orderByDate.getTime() ? 'selling' : 'last-call';
   return { ...e, date, start, orderByDate, daysTo, phase, image: PHOTOS + e.photo };
@@ -425,12 +435,17 @@ function schedule(from = new Date(), days = 365) {
         const id = o.key + iso(o.date);
         const st = seen[id] || (seen[id] = { n: 0, lastweek: false, lastcall: false });
         const toOrderBy = Math.round((o.orderByDate.getTime() - t) / DAY);
-        /* The last send day on or before the order-by date is the last call,
-           wherever in the week the deadline falls. */
-        let next = t + DAY;
-        while (!SEND_DAYS.includes(new Date(next).getUTCDay())) next += DAY;
+        /* The last call goes on one of the last TWO send days on or before
+           the order-by date, wherever in the week the deadline falls: with
+           every deadline 4 weeks out, two events often close in the same
+           week, and one slot each would leave one of them with no last call.
+           The last week's email likewise has the last ten days. */
+        const after = (from) => { let n = from + DAY; while (!SEND_DAYS.includes(new Date(n).getUTCDay())) n += DAY; return n; };
+        const next = after(t);
         const finalSlot = next > o.orderByDate.getTime();
-        const urgent = finalSlot && !st.lastcall ? 'lastcall' : toOrderBy <= 7 && !st.lastweek && !st.lastcall ? 'lastweek' : '';
+        const lastTwo = finalSlot || after(next) > o.orderByDate.getTime();
+        const urgent = lastTwo && !st.lastcall && (finalSlot || st.lastweek) ? 'lastcall'
+          : toOrderBy <= 10 && !st.lastweek && !st.lastcall ? 'lastweek' : '';
         return { o, st, toOrderBy, urgent };
       });
     if (!live.length) continue;
@@ -535,7 +550,7 @@ function emailFor(send) {
     <ul style="margin:0 0 16px;padding-left:20px">${w.list.map((p) => `<li style="margin:5px 0">${esc(p)}</li>`).join('')}</ul>` : ''}
     ${showDeadline ? `<p style="margin:0 0 18px;padding:11px 14px;background:#fff1f5;border-left:4px solid ${PINK};border-radius:6px"><b>Order by ${esc(nice(ev.orderByDate))}</b> to have it in hand for ${esc(ev.name)}.</p>` : ''}
     <p style="margin:0 0 20px;text-align:center"><a href="${esc(ev.link)}" style="display:inline-block;background:${BLUE};color:#ffffff;text-decoration:none;padding:13px 26px;border-radius:8px;font-weight:700;font-size:16px">${esc(ev.cta)}</a></p>
-    <p style="margin:0 0 6px">Questions, or want us to design it? Call or text <a href="tel:+17738491854" style="color:${BLUE}">${PHONE}</a> or reply to this email. Free pickup in Lakeview.</p>
+    <p style="margin:0 0 6px">Questions, or want us to design it? Call or text <a href="tel:+17739004592" style="color:${BLUE}">${PHONE}</a> or reply to this email. Free pickup in Lakeview.</p>
     ${s.beat === 'announce' && ev.email.ps ? `<p style="margin:16px 0 0;color:#4b5563"><b>P.S.</b> ${esc(fill(ev.email.ps, ev))}</p>` : ''}
     ${s.also ? `<div style="margin-top:22px;padding-top:14px;border-top:1px solid #e5e8f0;font-size:14px;color:#4b5563"><b style="color:${INK}">Also coming up:</b> ${esc(s.also.name)}, ${esc(nice(s.also.date))}. Order by ${esc(nice(s.also.orderByDate))}. <a href="${esc(s.also.link)}" style="color:${BLUE}">${esc(s.also.cta)}</a></div>` : ''}
   </div>
@@ -550,4 +565,4 @@ function emailFor(send) {
   return { subject: w.subject, preview: w.preview, html, text };
 }
 
-module.exports = { EVENTS, LINKS, LOGO, MIN_LEAD, SEND_DAYS, upcoming, sellingNow, schedule, beatFor, emailFor, words, fill, nice, short, iso, nthWeekday, easter };
+module.exports = { EVENTS, LINKS, LOGO, MIN_LEAD, MIN_ORDER_BY, SEND_DAYS, upcoming, sellingNow, schedule, beatFor, emailFor, words, fill, nice, short, iso, nthWeekday, easter };

@@ -24,21 +24,33 @@ test('#204 three bare owner gaps in one article are three questions, each filled
 });
 
 test('#222 the ready sign-off waits for the gate before it', () => {
-  const r = after("app.post('/admin/training/signoff'", 1600);
-  assert.ok(r.indexOf('TRAINING.stepOpen(await trainingFor(staffId), key)') > r.indexOf('if (b.undo)'), 'undo is always allowed');
-  assert.ok(r.indexOf('TRAINING.stepOpen(') < r.indexOf('INSERT INTO staff_training'));
-  assert.match(src, /s\.locked \? '<button type="button" class="btn btn-ghost" disabled/);
+  const r = after("app.post('/admin/training/signoff'", 4000);
+  assert.ok(r.indexOf('if (!open || open.locked)') > r.indexOf('if (b.undo)'), 'undo is always allowed');
+  assert.ok(r.indexOf('if (!open || open.locked)') < r.indexOf('INSERT INTO staff_training (staff_id, step_key, signed_by)'));
+  // Undo asks for a tick, keeps the commission window of "ready", and is logged.
+  const undo = r.slice(r.indexOf('if (b.undo)'), r.indexOf('if (!open || open.locked)'));
+  assert.match(undo, /if \(String\(b\.confirm \|\| ''\) !== '1'\) return back/);
+  assert.match(undo, /if \(String\(b\.keep_window \|\| ''\) === '1'\)[\s\S]*'signoff:was-ready-until:'[\s\S]*readyRow\('t', '\$2'\)/,
+    'the window is kept only when the owner leaves "keep commission" ticked');
+  assert.match(undo, /if \(removed\) log\('training sign-off undone'\)/, 'logged only when a row really went');
+  assert.match(r, /if \(added\) log\('training signed off'\)/);
+  assert.match(src, /name="keep_window" value="1" checked/);
+  assert.match(src, /<input type="checkbox" name="confirm" value="1" required style="width:auto"> sure<\/label><button type="submit" class="btn btn-ghost">Undo<\/button>/);
+  assert.match(src, /s\.locked \? `<button type="button" class="btn btn-ghost" disabled/);
 });
 
 test('#195 trainees see that a lesson is an unchecked draft', () => {
   assert.match(src, /!owner && a && a\.needs_review \? `<div class="warn">June has not checked this lesson yet/);
 });
 
-test('#195 rush is taught as embroidery only, and the saved lesson is updated', () => {
+test('#195, then 2026-10-12: rush is taught as DTF only, and a saved lesson at either older wording is updated', () => {
   const sales = COURSES.COURSES['sales-core'] || Object.values(COURSES.COURSES).find((c) => c.key === 'sales-core');
   const lessons = sales.modules.flatMap((m) => m.lessons);
-  const l = lessons.find((x) => typeof x.body === 'string' && x.body.includes('Only **embroidery** can be rushed'));
-  assert.ok(l && l.was && l.was.some((w) => w.includes('For a fee, depending on what is on the press:')));
+  const l = lessons.find((x) => typeof x.body === 'string' && x.body.includes('Only **DTF** can be rushed'));
+  assert.ok(l && l.was, 'the lesson teaches DTF only');
+  assert.ok(l.was.some((w) => w.includes('Only **embroidery** can be rushed')), 'the embroidery-only copy updates');
+  assert.ok(l.was.some((w) => w.includes('For a fee, depending on what is on the press:')), 'and the first wording');
+  assert.ok(!lessons.some((x) => typeof x.body === 'string' && x.body.includes('Only **embroidery** can be rushed')));
 });
 
 test('#224 content helpers hand leads to a channel they can see', () => {

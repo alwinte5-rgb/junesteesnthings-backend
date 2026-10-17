@@ -61,7 +61,7 @@ const parse = (r) => {
     .map((q) => ({ upTo: q, price: Number(f[q].price) }));
   const size = Number((r.title.match(/(\d+)\s*in/i) || [])[1]);
   const pack = Number((r.title.match(/(\d+)-pack/i) || [])[1]) || 0;
-  return { id: r.id, title: r.title, description: r.description, size, pack, bands };
+  return { id: r.id, title: r.title, description: r.description, size, pack, bands, min: Math.max(1, parseInt(c.min_qty, 10) || 1) };
 };
 
 const all = rows.map(parse);
@@ -84,9 +84,10 @@ const each = (m) => '$' + (m.bands[0].price / m.pack).toFixed(2);
    above band i-1's ceiling. The last band is open-ended. */
 function ranges(m) {
   const out = [];
-  let from = 1;
-  m.bands.forEach((b, i) => {
-    const last = i === m.bands.length - 1;
+  let from = m.min || 1;    // a row with a minimum (24in singles: 2) starts there
+  const bands = m.bands.filter((b) => b.upTo >= from);   // a band wholly under the minimum is never sold
+  bands.forEach((b, i) => {
+    const last = i === bands.length - 1;
     out.push({ label: last ? `${from} or more` : (from === b.upTo ? `${from}` : `${from}–${b.upTo}`), price: b.price });
     from = b.upTo + 1;
   });
@@ -121,28 +122,49 @@ const headPath = (w, h) => {
 };
 
 /* Every size at once, drawn to the same scale, so "18 inch" means something. */
+/* A real head, gray, drawn at the same scale and first in the row: a number of
+   inches means little until it stands next to a face. An adult head is about
+   9" chin to crown and about 0.68 as wide as it is tall (a cutout, RATIO, is
+   wider because it keeps the hair). The dashed line marks 9" across every
+   cutout (owner, 2026-10-17: "add something to compare it to"). Labels carry
+   classes so the page can enlarge them on phones, where the figure is scaled
+   to about half size. */
+const REAL_HEAD = 9, REAL_RATIO = 0.68;
 function scaleDrawing(sizes) {
-  const S = 6.2, GAP = 26, PAD = 18, LABEL = 52;
-  const tallest = Math.max(...sizes);
-  const w = sizes.reduce((a, t) => a + t * RATIO * S, 0) + GAP * (sizes.length - 1) + PAD * 2;
+  const S = 6.2, GAP = 26, PAD = 18, LABEL = 66, LABEL_HALF = 34;
+  const tallest = Math.max(...sizes, REAL_HEAD);
+  const rw = REAL_HEAD * REAL_RATIO * S;
+  // The real head sits wide enough from the edge that its label is never cut.
+  const lead = Math.max(0, LABEL_HALF - rw / 2);
+  const w = lead + rw + GAP + sizes.reduce((a, t) => a + t * RATIO * S, 0) + GAP * (sizes.length - 1) + PAD * 2;
   const h = tallest * S + LABEL + PAD;
   const base = PAD + tallest * S;
-  let x = PAD, parts = '';
+  const label = (cx, big, small) =>
+    `<text class="sl-big" x="${cx.toFixed(1)}" y="${(base + 28).toFixed(1)}" text-anchor="middle" ` +
+      `font-family="Inter,sans-serif" font-size="17" font-weight="800" fill="#0B1F4B">${big}</text>` +
+    `<text class="sl-small" x="${cx.toFixed(1)}" y="${(base + 50).toFixed(1)}" text-anchor="middle" ` +
+      `font-family="Inter,sans-serif" font-size="11.5" font-weight="600" fill="#6B7280">${small}</text>`;
+  const line = base - REAL_HEAD * S;
+  let x = PAD + lead;
+  let parts =
+    `<g transform="translate(${x.toFixed(1)},${line.toFixed(1)})">` +
+      `<path d="${headPath(rw, REAL_HEAD * S)}" fill="#CBD5E1" stroke="#ffffff" stroke-width="3" stroke-linejoin="round"/>` +
+    `</g>` + label(x + rw / 2, `${REAL_HEAD}"`, 'real head');
+  x += rw + GAP;
   for (const t of sizes) {
     const hw = t * RATIO * S, hh = t * S;
     parts +=
       `<g transform="translate(${x.toFixed(1)},${(base - hh).toFixed(1)})">` +
         `<path d="${headPath(hw, hh)}" fill="url(#cut)" stroke="#ffffff" stroke-width="3" stroke-linejoin="round"/>` +
         `<path d="${headPath(hw, hh)}" fill="none" stroke="#0B1F4B" stroke-width="1" stroke-linejoin="round" opacity=".25"/>` +
-      `</g>` +
-      `<text x="${(x + hw / 2).toFixed(1)}" y="${(base + 26).toFixed(1)}" text-anchor="middle" ` +
-        `font-family="Inter,sans-serif" font-size="17" font-weight="800" fill="#0B1F4B">${t}"</text>` +
-      `<text x="${(x + hw / 2).toFixed(1)}" y="${(base + 43).toFixed(1)}" text-anchor="middle" ` +
-        `font-family="Inter,sans-serif" font-size="11.5" font-weight="600" fill="#6B7280">tall</text>`;
+      `</g>` + label(x + hw / 2, `${t}"`, 'tall');
     x += hw + GAP;
   }
+  // Drawn last, so it shows across the cutouts and not only in the gaps.
+  parts += `<line x1="${PAD}" x2="${(w - PAD).toFixed(1)}" y1="${line.toFixed(1)}" y2="${line.toFixed(1)}" ` +
+    `stroke="#F4A623" stroke-width="1.6" stroke-dasharray="7 5"/>`;
   return `<svg viewBox="0 0 ${Math.round(w)} ${Math.round(h)}" width="100%" role="img" ` +
-    `aria-label="The ${sizes.join(', ')} inch big head cutouts drawn to the same scale for comparison" ` +
+    `aria-label="The ${sizes.join(', ')} inch big head cutouts drawn to the same scale beside a real head, which is about ${REAL_HEAD} inches tall" ` +
     `xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="cut" x1="0" y1="0" x2="0" y2="1">` +
     `<stop offset="0%" stop-color="#1b3a78"/><stop offset="100%" stop-color="#0B1F4B"/></linearGradient></defs>` +
     `${parts}</svg>`;
@@ -201,7 +223,13 @@ const singleTables = singles.map((m) => `
           const atPack = priceAt(m, p.pack);
           return `<p class="ladder-note">A full sheet of ${p.pack} is ${money(p.bands[0].price)} with delivery &mdash;
             ${money(atPack * p.pack + DELIVERY)} for the same ${p.pack} bought one at a time, with delivery.
-            Once you are near a dozen, ask about the pack.</p>`;
+            ${(() => {
+              /* Where the sheet starts winning, worked out, not "near a dozen"
+                 (which was wrong for an 8-pack). */
+              let n = m.min || 1;
+              while (n <= p.pack && priceAt(m, n) * n + DELIVERY <= p.bands[0].price) n++;
+              return n <= p.pack ? `From ${n} heads the sheet costs less, and you get ${p.pack}.` : 'Close to a full sheet? Ask about the pack.';
+            })()}</p>`;
         })()}
       </div>`).join('');
 
@@ -213,11 +241,15 @@ const packCards = packs.map((m) => `
 
 const FAQ = [
   ['What is a big head cutout?',
-   `A photo of a face, printed and cut around the outline on 3/16 inch board, so it stands up on its own or gets held up at the event. People bring them to graduations, birthdays, weddings, send-offs and games.`],
+   `A photo of a face, printed on rigid board and cut around the outline, so it stands up on its own or gets held up at the event. People bring them to graduations, birthdays, weddings, send-offs and games.`],
   ['What photo do you need from me?',
    `The clearest one you have &mdash; a straight-on shot of the face, as large in the frame as possible. Phone photos are fine. Send it by text or email and we will tell you before we print if it is not going to hold up at the size you want.`],
-  ['Why are the 24 and 36 inch sold only by the sheet?',
-   `A 24 inch head is about 22 inches across, which is wider than the board a single is cut from, so there is no smaller way to make one. It comes ${packs.find((p) => p.size === 24) ? packs.find((p) => p.size === 24).pack : 8} to a sheet and that sheet is the smallest order.`],
+  /* Built from what is actually on sale (packOnly), like the lead lines: it
+     said the 24in was sheet-only after 24in singles went on sale. */
+  ...(packOnly.length ? [[`Why ${packOnly.length > 1 ? 'are' : 'is'} the ${packOnly.map((x) => x + ' inch').join(' and ')} sold only by the sheet?`,
+   `A ${packOnly[0]} inch head is wider than the board a single is cut from, so there is no smaller way to make one. It comes ${packs.find((p) => p.size === packOnly[0]).pack} to a sheet and that sheet is the smallest order.`]] : []),
+  ...singles.filter((m) => m.min > 1).map((m) => [`Can I order just one ${m.size} inch?`,
+   `The ${m.size} inch is sold ${m.min} or more at a time, at ${money(m.bands[0].price)} each. Each one is printed, mounted and cut out by hand.`]),
   ['Can I mix sizes in one order?',
    `Yes. Each size is quoted on its own line, and the quantity across the order is what sets the price on each one.`],
   ['Can every cutout be a different face?',
@@ -243,7 +275,7 @@ const faqLd = JSON.stringify({
 const offersLd = JSON.stringify({
   '@context': 'https://schema.org', '@type': 'Product',
   name: 'Big Head Cutouts', brand: { '@type': 'Brand', name: "June's Tees & Things" },
-  description: `Custom big head cutouts printed and contour cut on 3/16 inch board, in ${SIZES.join(', ')} inch sizes. Chicago.`,
+  description: `Custom big head cutouts printed on rigid board and cut to the outline, in ${SIZES.join(', ')} inch sizes. Chicago.`,
   url: 'https://www.jtees.net/services/big-head-cutouts.html',
   offers: packs.map((m) => ({
     '@type': 'Offer', name: `${m.size} inch, ${m.pack}-pack`, price: m.bands[0].price.toFixed(2),
@@ -291,7 +323,7 @@ const EXTRA_CSS = `
     .ladder h3{font-size:1.05rem;font-weight:800;color:var(--navy);}
     .ladder-note{font-size:.85rem;color:var(--muted);margin-top:.9rem;line-height:1.6;}
     .note-band{background:var(--off-white);border-left:3px solid var(--gold);border-radius:0 var(--radius) var(--radius) 0;padding:1.1rem 1.25rem;margin-top:2rem;font-size:.9rem;color:var(--text);line-height:1.7;}
-    @media(max-width:768px){.ladders{gap:2rem;}.scale-figure{padding:1.25rem .75rem 1rem;}}
+    @media(max-width:768px){.ladders{gap:2rem;}.scale-figure{padding:1.25rem .75rem 1rem;}.scale-figure .sl-big{font-size:30px;}.scale-figure .sl-small{font-size:22px;}}
     @media print{header,.announcement-bar,.marquee-strip,.mobile-drawer,.drawer-overlay,footer,.cta-band,.dl-bar,.hero-btns{display:none!important;}section{padding:1.25rem 0!important;}}
 `;
 
@@ -301,9 +333,12 @@ const TEMPLATE = path.join(ROOT, 'public/services/event-decor.html');
 const chrome = fs.readFileSync(TEMPLATE, 'utf8');
 
 const heroAt = chrome.indexOf('<section class="hero">');
-const footAt = chrome.indexOf('<footer>');
+/* The footer is the shared block tools/site-nav.js writes (since 2026-10-17,
+   #339); the bare <footer> it replaced is the fallback. */
+const footMark = chrome.indexOf('<!-- site-footer:start');
+const footAt = footMark >= 0 ? footMark : chrome.indexOf('<footer>');
 if (heroAt < 0 || footAt < 0) {
-  console.error('the services template has moved — expected <section class="hero"> and <footer> in ' + TEMPLATE);
+  console.error('the services template has moved — expected <section class="hero"> and the site-footer block in ' + TEMPLATE);
   process.exit(1);
 }
 let top = chrome.slice(0, heroAt);
@@ -317,7 +352,7 @@ const TITLE = 'Big Head Cutout Prices Chicago | June’s Tees & Things';
 const DESC = `Big head cutout prices in Chicago — ${SIZES.join(', ')} inch` +
   (singles.length ? ', by the single or by the full sheet' : ', sold by the full sheet') +
   `. Packs from ${money(Math.min(...packs.map((p) => p.bands[0].price)))}. ` +
-  `Send a photo, we print and contour cut it. Call (773) 849-1854.`;
+  `Send a photo, we print and contour cut it. Call (773) 900-4592.`;
 const CANON = 'https://www.jtees.net/services/big-head-cutouts.html';
 
 /* Swap the template's own SEO for this page's. Each of these is asserted to
@@ -356,16 +391,16 @@ const BODY = `<section class="hero">
   <div class="container">
     <div class="hero-eyebrow">Big Head Cutouts &mdash; Chicago</div>
     <h1>Send us a face.<br />We&rsquo;ll make it <em>enormous</em>.</h1>
-    <p>Printed and cut around the outline on rigid ${'3/16'}&Prime; board, in ${SIZES.map((s) => s + '&Prime;').join(', ')}.
+    <p>Printed and cut around the outline on rigid board, in ${SIZES.map((s) => s + '&Prime;').join(', ')}.
        ${singles.length ? 'Buy one at a time, or a full sheet' : 'Sold by the full sheet'} &mdash; a sheet works out from ${cheapestEach.size}&Prime; at ${each(cheapestEach)} a head.
        Pack prices include standard delivery${singles.length ? `; single cutouts add ${money(DELIVERY)} delivery once per order` : ''}.</p>
     <div class="hero-btns">
-      <a href="sms:+17738491854?&amp;body=Hi%20June%27s%20Tees!%20I%27d%20like%20big%20head%20cutouts." class="btn btn-gold">Text a photo &rarr;</a>
-      <a href="tel:+17738491854" class="btn btn-outline-white">(773) 849-1854</a>
+      <a href="sms:+17739004592?&amp;body=Hi%20June%27s%20Tees!%20I%27d%20like%20big%20head%20cutouts." class="btn btn-gold">Text a photo &rarr;</a>
+      <a href="tel:+17739004592" class="btn btn-outline-white">(773) 900-4592</a>
     </div>
     <div class="hero-badges">
       <div class="hero-badge">Chicago &mdash; 3047 N Lincoln Ave</div>
-      <div class="hero-badge">Curbside pickup</div>
+      <div class="hero-badge">Pickup by appointment</div>
       <div class="hero-badge">Any photo, any face</div>
     </div>
   </div>
@@ -379,7 +414,7 @@ const BODY = `<section class="hero">
        before you order. The measurement is the <b>height</b> of the finished cutout.</p>
     <figure class="scale-figure">
       ${scaleDrawing(SIZES)}
-      <figcaption>The ${SIZES.map((s) => s + '&Prime;').join(', ')} cutouts, shown in proportion to one another.</figcaption>
+      <figcaption>The ${SIZES.map((s) => s + '&Prime;').join(', ')} cutouts beside a real head (gray), all to the same scale. The dashed gold line marks real-head height.</figcaption>
     </figure>
   </div>
 </section>
@@ -413,7 +448,7 @@ ${!singles.length ? '' : `<section>
   <div class="container">
     <div class="section-tag">By the single</div>
     <h2>Just need a few?</h2>
-    <p class="lead">The ${bothWays.map((s) => s + '&Prime;').join(' and ')} are also sold one at a time, for orders
+    <p class="lead">The ${bothWays.map((s) => s + '&Prime;').join(', ').replace(/, ([^,]*)$/, ' and $1')} are also sold one at a time${singles.some((m) => m.min > 1) ? ' (the ' + singles.filter((m) => m.min > 1).map((m) => m.size + '&Prime; ' + m.min + ' or more at a time').join(', ') + ')' : ''}, for orders
        too small to want a whole sheet.
        Single cutouts add ${money(DELIVERY)} standard delivery once per order.</p>
     <div class="ladders">${singleTables}
@@ -442,7 +477,7 @@ ${!singles.length ? '' : `<section>
     </div>
     <div class="dl-bar">
       <a href="/downloads/big-head-cutout-pricing.pdf" class="btn btn-gold" download>Download this price list (PDF)</a>
-      <a href="sms:+17738491854?&amp;body=Hi%20June%27s%20Tees!%20I%27d%20like%20big%20head%20cutouts." class="btn" style="background:var(--navy);color:#fff">Text us a photo</a>
+      <a href="sms:+17739004592?&amp;body=Hi%20June%27s%20Tees!%20I%27d%20like%20big%20head%20cutouts." class="btn" style="background:var(--navy);color:#fff">Text us a photo</a>
     </div>
   </div>
 </section>
@@ -461,16 +496,26 @@ ${!singles.length ? '' : `<section>
     <h2>Got the photo? That is the hard part done.</h2>
     <p>Text it over and we will come back with a price and a date.</p>
     <div class="hero-btns" style="justify-content:center">
-      <a href="sms:+17738491854?&amp;body=Hi%20June%27s%20Tees!%20I%27d%20like%20big%20head%20cutouts." class="btn btn-gold">Text (773) 849-1854</a>
-      <a href="/#contact" class="btn btn-outline-white">Email us</a>
+      <a href="sms:+17739004592?&amp;body=Hi%20June%27s%20Tees!%20I%27d%20like%20big%20head%20cutouts." class="btn btn-gold">Text (773) 900-4592</a>
+      <!--email_off--><a href="mailto:support@jtees.net" class="btn btn-outline-white">Email us</a><!--/email_off-->
     </div>
   </div>
 </div>
 
 `;
 
-fs.writeFileSync(OUT, top + BODY + bottom);
-console.log('wrote ' + path.relative(ROOT, OUT) + '  (' + (top + BODY + bottom).length + ' bytes)');
+/* Product cards, reviews and photos (tools/page-blocks.js) go back in, so a
+   price rebuild never strips them from the page. */
+const pageBlocks = require('./page-blocks');
+const { data: PB_DATA, reviews: PB_REVIEWS } = pageBlocks.load();
+const pbBad = pageBlocks.validate(PB_DATA);
+if (pbBad.length) {
+  console.error('page-blocks.json:\n  ' + pbBad.join('\n  '));
+  process.exit(1);
+}
+const PAGE = pageBlocks.apply(top + BODY + bottom, 'services/big-head-cutouts.html', PB_DATA, PB_REVIEWS);
+fs.writeFileSync(OUT, PAGE);
+console.log('wrote ' + path.relative(ROOT, OUT) + '  (' + PAGE.length + ' bytes)');
 
 /* ── The downloadable ─────────────────────────────────────────────────────── */
 
@@ -503,9 +548,9 @@ const PRINT_HTML = `<!DOCTYPE html>
 </style></head><body>
   <div class="head">
     <h1>Big Head Cutouts</h1>
-    <div class="who"><b>June&rsquo;s Tees &amp; Things</b>3047 N Lincoln Ave #435, Chicago IL 60657<br />(773) 849-1854 &middot; jtees.net</div>
+    <div class="who"><b>June&rsquo;s Tees &amp; Things</b>3047 N Lincoln Ave #435, Chicago IL 60657<br />(773) 900-4592 &middot; jtees.net</div>
   </div>
-  <p class="intro">Printed and cut around the outline on rigid 3/16&Prime; board, in ${SIZES.map((s) => s + '&Prime;').join(', ')}.
+  <p class="intro">Printed and cut around the outline on rigid board, in ${SIZES.map((s) => s + '&Prime;').join(', ')}.
      Send us the photo and the size. The measurement is the height of the finished cutout.</p>
   <div class="scale">${scaleDrawing(SIZES)}</div>
 

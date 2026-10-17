@@ -55,7 +55,7 @@ const MODULES = [
     lessons: [{
       id: 'a2-judge', article: A.judge, minutes: 20, tags: 'ads, cost per quote request, profit, conversions, clicks, budget, approval',
       goals: ['Judge an ad on quote requests, orders and profit', 'Work out whether ads are paying for themselves', 'Know which changes need June first'],
-      images: [{ src: '/assets/images/work/storefront-lincoln-ave.jpg', alt: 'Our shop: ads bring Chicago-area customers to it' }],
+      images: [{ src: '/assets/images/work/screen-printing-press.jpg', alt: 'Our Lakeview shop: ads bring Chicago-area customers to it' }],
       body:
 `We spend a small amount on ads, and every dollar has to come back as orders. Your job is to make that true, and to show June it is true.
 
@@ -71,7 +71,7 @@ An ad works when one of them asks for a quote or places an order. That is it. Cl
 - **Orders and their value:** how many quote requests became paid orders
 - **Profit:** roughly 40% of an order's value is left after the shirts and printing. So $1,000 of orders is about $400 of profit to set against what the ads cost
 
-Example: $140 spent, 9 quote requests ($15.50 each), 3 orders worth $1,250. About $500 profit for $140 of ads: it is paying for itself.
+Example: $95 spent in a month, 7 quote requests (about $13.60 each, under our $15 target), 2 orders worth $900. About $360 profit for $95 of ads: it is paying for itself.
 
 Our target: [owner to fill in: the cost per quote request we aim for]
 
@@ -437,7 +437,7 @@ Careful: a negative that is too broad blocks good searches. "Cheap" might block 
 
 **The $40 rule**
 
-Anything (a keyword, an ad group, an ad) that has spent about **$40 with no quote request** gets paused. That is roughly what one quote request should cost; when something has spent that and brought none, it is unlikely to start.
+Anything (a keyword, an ad group, an ad) that has spent about **$40 with no quote request** gets paused. Our target is under $15 a quote request, so $40 with none is more than two and a half times what one should cost; when something has spent that and brought none, it is unlikely to start. On a $100 month, $40 is a big share, so check spend twice a week.
 
 - Check that tracking works first (Module 3). A $40 keyword with "no conversions" while tracking is broken may be fine
 - Pause, do not delete, so the history stays
@@ -732,11 +732,11 @@ Every week, on the same day, in your team channel or Direct with June:
 
 "Hi June, this week's ads:
 
-- Spent $140 of $150. 9 quote requests ($15.50 each), 3 orders worth $1,250
-- About $500 profit for $140 of ads, so it is paying for itself
-- 'Custom apparel' spent $35 with nothing, mostly people looking for wholesale blanks. I paused it and added those searches as negatives
-- Next week: I would move that $35 to 'team shirts chicago', our best keyword. OK?
-- Back-to-school campaign is built and paused, ready for July 1 at $8 a day. Say yes and I will switch it on."
+- Spent $22 of about $23. 2 quote requests ($11 each, under our $15 target), 1 order worth $450
+- About $180 profit for $22 of ads, so it is paying for itself
+- 'Custom apparel' spent $8 with nothing, mostly people looking for wholesale blanks. I paused it and added those searches as negatives
+- Next week: I would move that $8 to 'team shirts chicago', our best keyword. OK?
+- Back-to-school campaign is built and paused, ready for July 1 at $2.50 a day. Say yes and I will switch it on."
 
 Five lines, real numbers, plain words. No screenshots of dashboards, no words like "optimise", "leverage" or "synergy".
 

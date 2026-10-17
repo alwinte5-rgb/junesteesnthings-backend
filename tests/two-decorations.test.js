@@ -29,7 +29,9 @@ const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 function lift(body) {
   const tu = src.slice(src.indexOf('function typedUnitOf('));
   const tuBody = tu.slice(0, tu.indexOf('\n}\n') + 2);
-  return vm.runInThisContext('(function(){' + tuBody + '\nreturn (' + body + ');})()');
+  /* sinaliteRunsOf() reads the SinaLite table; these lines carry no sign, so
+     it answers null, exactly as the real one would for them. */
+  return vm.runInThisContext('(function(){ var sinaliteRunsOf = function(){ return null; }; var customerLineFigures = function(){ return { folded: 0 }; };' + tuBody + '\nreturn (' + body + ');})()');
 }
 
 function engine() {

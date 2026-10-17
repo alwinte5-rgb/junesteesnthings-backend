@@ -15,13 +15,28 @@ test('#159 replies: unchecked ones hidden from helpers, staff notes never reach 
 test('#159 the rush reply promises no rush before the method is known', () => {
   const r = after("shortcut: 'rush'", 900);
   assert.doesNotMatch(r, /rush it for an extra fee/);
-  assert.match(r, /Only embroidery can be rushed/);
+  assert.match(r, /Only DTF can be rushed: screen printing, embroidery and cutouts cannot/);
+  // A live copy at the embroidery-only wording, or the first one, still updates.
+  const fix = after("const r = KB_ADDED.find((x) => x.shortcut === 'rush');", 2400);
+  assert.match(fix, /if \(r\) \{ r\.was\.push\(r\.body\); r\.body = current; \}/);
 });
 test('#159 a reply too long for a text says so when chosen', () => {
   assert.match(src, /and a text holds 300: shorten it, or send it as an email\./);
 });
 test('#224 a trained helper moves to their own track\'s preset', () => {
-  assert.match(after('function nextPresetFor(s)', 600), /track === 'sales' \? 'supervised' : STAFF\.presetForTrack\(track\)/);
+  // Run the real function: each track's trainee on the default Training preset, and a Design trainee.
+  const vm = require('node:vm');
+  const STAFF = require('../tools/lib/staff');
+  const { NEXT_PRESET, TRACKS: JOB_TRACKS } = require('../tools/lib/tracks');
+  const ctx = { STAFF, TRAINING: require('../tools/lib/training'), NEXT_PRESET, JOB_TRACKS };
+  vm.runInNewContext(`${after('function nextPresetFor(s)', 600).slice(0, after('function nextPresetFor(s)', 600).indexOf('\n}\n') + 2)}\nthis.f = nextPresetFor;`, ctx);
+  const on = (preset, track) => ctx.f({ perms: STAFF.presetPerms(preset), training_track: track });
+  assert.strictEqual(on('training', 'sales'), 'supervised');
+  assert.strictEqual(on('training', 'design'), 'design');
+  for (const t of ['content', 'ads', 'developer', 'software']) assert.strictEqual(on('training', t), 'team', t);
+  assert.strictEqual(on('training', 'bookkeeper'), 'books');
+  assert.strictEqual(on('design', 'design'), 'designer');
+  assert.strictEqual(on('team', 'content'), null, 'Team is the last step');
 });
 test('#177/#161 hiring: questions kept after the decision, prompts snapshotted, fresh name on round 2', () => {
   assert.match(after('function hireVideoCallCard(', 2600), /kept for the record/);

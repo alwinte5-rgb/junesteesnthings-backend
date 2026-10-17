@@ -1,0 +1,1539 @@
+{
+ "_about": "The holiday, event and new service pages, built by tools/occasion-pages.js. Edit this file, then run: node tools/occasion-pages.js --write (it also runs the page blocks and the menu).",
+ "pages": [
+  {
+   "path": "occasions/christmas-shirts-chicago.html",
+   "calendar": "christmas",
+   "kind": "holiday",
+   "keyword": "custom christmas shirts",
+   "eyebrow": "Christmas &amp; Holiday Gifts · Chicago, IL",
+   "title": "Custom Christmas Shirts & Gifts Chicago | June's Tees",
+   "meta": "Custom Christmas shirts in Chicago: matching family Christmas tees, pajama-party shirts, photo socks, Santa sacks and personalized gifts. Order early.",
+   "h1": "Custom Christmas Shirts &amp; <em>Holiday Gifts</em> in Chicago",
+   "pitch": "Matching family Christmas shirts, ugly-sweater-party tees, photo socks, personalized Santa sacks and gifts with a photo, printed in our Lakeview shop.",
+   "badges": [
+    "🎄 Family Sets",
+    "📸 Photo Gifts",
+    "✦ No Minimum with DTF",
+    "🚗 Pickup by Appointment"
+   ],
+   "hero": "family-christmas-2022-shirts",
+   "work": [
+    "personalized-santa-sack",
+    "santa-came-twice-shirt",
+    "christmas-photo-socks",
+    "christmas-photo-gift-wrap",
+    "reindeer-paint-party-canvas",
+    "family-drawing-red-tees"
+   ],
+   "products": [
+    "c52",
+    "c53",
+    "c55",
+    "c56",
+    "c58",
+    "c71"
+   ],
+   "heading": "Start designing your Christmas shirts",
+   "sections": [
+    {
+     "h2": "Matching family Christmas shirts",
+     "p": [
+      "Custom Christmas shirts are a family tradition in our shop. The most requested design puts the family name and the year under a Santa hat or a tree, in the same color for everyone from the baby to the grandparents, so the holiday photo and the video call look like one team. Families add a role on each shirt (Mom, Dad, Nana, Elf in Training) or a running joke from the year.",
+      "Matching pajama-party shirts, office holiday party tees, and \"Christmas crew\" shirts for friends' gift exchanges are just as popular. We print every size from onesies and toddler tees to 5XL, in Christmas red, green, black or white."
+     ]
+    },
+    {
+     "h2": "Personalized Christmas gifts",
+     "p": [
+      "Beyond shirts, we print gifts that people keep: Santa sacks with a child's name, socks printed with family photos, custom gift wrap with a face on it, photo panels and canvases, totes, and hoodies with a name or a photo. For grandparents, a hoodie or blanket with every grandchild's photo is always a hit.",
+      "Teachers, coaches, staff and clients get logo hoodies, caps and totes as holiday gifts, and churches and nonprofits order shirts for holiday giveaways and toy drives."
+     ]
+    },
+    {
+     "h2": "Christmas shirt ideas",
+     "p": [
+      "Funny lines like \"I'm So Good Santa Came Twice\" for the adults, \"Santa's Favorite\" for the kids, the family's last name with \"Christmas\" and the year, a skyline of Chicago in the snow, or a photo from last year's holiday. If you want something nobody else has, send us the idea and our designer will draw it for you."
+     ]
+    },
+    {
+     "h2": "Holiday shirts for offices, teams and churches",
+     "p": [
+      "Companies order holiday party shirts and ugly-sweater-style tees for the whole office, teams order Christmas practice shirts, and churches order shirts for Christmas programs, toy drives and community dinners. We print the same design in several colors so each department or group can have its own, and bulk orders get price breaks at 12, 24, 48 and 100 or more pieces.",
+      "Nonprofits running coat drives and holiday giveaways order volunteer shirts and banners together, so the whole event looks organized and easy to find."
+     ]
+    },
+    {
+     "h2": "Gifts for teachers, coaches and clients",
+     "p": [
+      "Personalized gifts for the people who helped all year: a tote with a teacher's name, a hoodie with the team logo for the coach, a branded cap or tumbler for clients and staff. Order a set with one design and a different name on each, and we pack them ready to hand out."
+     ]
+    },
+    {
+     "h2": "Christmas sizes, colors and fabrics",
+     "p": [
+      "We print on soft cotton and cotton blends in Christmas red, kelly green, forest, black, white and heather gray, from newborn onesies to adult 5XL, plus hoodies, crewnecks, long sleeves and kids' pajama-style tees. Glitter and metallic inks add sparkle to names and snowflakes."
+     ]
+    },
+    {
+     "h2": "Christmas in Chicago, made in Lakeview",
+     "p": [
+      "Our shop is on North Lincoln Avenue in Lakeview, close to Lincoln Park, North Center, Roscoe Village, Ravenswood and Logan Square. Chicago families like seeing a proof before anything prints, picking up by appointment on the way to a holiday party, and working with one small team from the first idea to the finished shirts. If you are out of town, we ship to your door or straight to the relative hosting Christmas this year."
+     ]
+    },
+    {
+     "h2": "When to order Christmas shirts",
+     "p": [
+      "December is our busiest month. Order by mid-November for the best choice of colors and sizes, and no later than about four weeks before your party or trip; our standard turnaround is 7 to 14 business days after you approve the proof. Pick up at our Lakeview shop by appointment, or we ship anywhere in the US."
+     ]
+    }
+   ],
+   "faq": [
+    {
+     "q": "When should I order custom Christmas shirts?",
+     "a": "Order by mid-November for the best selection, and at least four weeks before your event. Our turnaround is 7 to 14 business days after proof approval."
+    },
+    {
+     "q": "Can you print our family photo on a Christmas shirt?",
+     "a": "Yes. Full-color DTF printing reproduces photos with no minimum, so one shirt or forty can carry the same family photo."
+    },
+    {
+     "q": "Do you make matching shirts for the whole family?",
+     "a": "Yes, from onesies and toddler sizes to adult 5XL in the same color and design."
+    },
+    {
+     "q": "Can I order personalized Christmas gifts besides shirts?",
+     "a": "Yes: Santa sacks, photo socks, totes, hoodies, photo panels and gift wrap. Tell us what you have in mind and we will quote it."
+    },
+    {
+     "q": "Do you ship Christmas orders?",
+     "a": "Yes, anywhere in the US. Allow extra shipping time in December."
+    },
+    {
+     "q": "Can you design it for me?",
+     "a": "Yes. Send the idea, names and photos and we design it and send a proof before printing."
+    },
+    {
+     "q": "Can you make a different name on each Christmas shirt?",
+     "a": "Yes, one design with a different name or role on each shirt."
+    },
+    {
+     "q": "Do you print on hoodies and long sleeves for winter?",
+     "a": "Yes, hoodies, crewnecks and long sleeves in every size."
+    },
+    {
+     "q": "Can our company order holiday party shirts in bulk?",
+     "a": "Yes, with price breaks at 12, 24, 48 and 100 or more."
+    }
+   ],
+   "cta": {
+    "h2": "Get Your Christmas Shirts Started",
+    "p": "Send us your idea, sizes and date and we will reply with a design and a price."
+   },
+   "related": [
+    {
+     "label": "Custom T-Shirts in Chicago",
+     "href": "/services/custom-tshirts-chicago.html"
+    },
+    {
+     "label": "DTF Printing for Photos",
+     "href": "/services/dtf-transfers.html"
+    },
+    {
+     "label": "Sublimation Gifts",
+     "href": "/services/sublimation.html"
+    }
+   ]
+  },
+  {
+   "path": "occasions/valentines-day-gifts-chicago.html",
+   "calendar": "valentines",
+   "kind": "holiday",
+   "keyword": "custom valentine's day gifts",
+   "eyebrow": "Valentine's Day Gifts · Chicago, IL",
+   "title": "Custom Valentine's Day Gifts Chicago | June's Tees",
+   "meta": "Custom Valentine's Day gifts in Chicago: personalized wine glasses and gift sets, couples paint kits, matching shirts and photo gifts. Order early.",
+   "h1": "Custom <em>Valentine's Day</em> Gifts in Chicago",
+   "pitch": "Personalized wine glasses and gift sets, couples paint-and-sip kits, matching couples shirts and photo gifts, made in our Lakeview shop.",
+   "badges": [
+    "💝 Personalized",
+    "🍷 Glassware",
+    "🎨 Paint Kits",
+    "🚗 Pickup by Appointment"
+   ],
+   "hero": "be-mine-wine-gift-set",
+   "work": [
+    "happy-valentines-wine-bag-set",
+    "valentine-wine-gift-box",
+    "king-queen-paint-kit",
+    "roses-paint-kit",
+    "lock-and-key-paint-kit",
+    "heart-inside-mug"
+   ],
+   "products": [
+    "c52",
+    "c54",
+    "c53",
+    "c71",
+    "c58",
+    "c57"
+   ],
+   "heading": "Design a Valentine's shirt or gift",
+   "sections": [
+    {
+     "h2": "Personalized Valentine's gifts people keep",
+     "p": [
+      "Custom Valentine's Day gifts feel personal because they are: a wine glass with \"Be Mine\" and their name, a wine bag and glass set wrapped with roses, a wooden wine gift box with an inside joke on the front, or a photo panel of the two of you. We make each one to order in our Lakeview, Chicago shop, so it says exactly what you want it to say.",
+      "Gift sets for Galentine's Day, for the whole friend group or for coworkers, are just as popular: matching glasses or tumblers with each name, ready to hand out."
+     ]
+    },
+    {
+     "h2": "Couples paint-and-sip kits",
+     "p": [
+      "Our couples paint kits come with pre-drawn canvases that fit together (King and Queen, a lock and key, roses and a toast), brushes, paint and matching glasses, so date night at home becomes a painting party. They make a gift and an activity in one, and we can personalize the canvases with names and a date."
+     ]
+    },
+    {
+     "h2": "Matching couples and Galentine's shirts",
+     "p": [
+      "Matching couples shirts (\"Mr. and Mrs.\", \"His and Hers\", or a design with your anniversary date), lips and heart designs, and Galentine's crew shirts for a girls' night out are all printed with no minimum. Add a photo, your names or a date, in red, pink, black or white."
+     ]
+    },
+    {
+     "h2": "Valentine's gifts for him",
+     "p": [
+      "For him, engraved flasks and stainless tumblers with his initials, a hoodie with a private joke or your photo, a couples paint kit for a night in, or a wine and glass gift set with his name. Matching \"His\" and \"Hers\" shirts for a Valentine's trip are always popular."
+     ]
+    },
+    {
+     "h2": "Valentine's gifts for her",
+     "p": [
+      "For her, a wine glass gift set with roses and her name, a glitter \"Wifey\" or \"Bae\" shirt, a photo panel or canvas of a favorite picture, a tumbler with her name, or a Galentine's set to share with her friends. Every piece is made to order, so it can say exactly what you would say."
+     ]
+    },
+    {
+     "h2": "Valentine's for classrooms and businesses",
+     "p": [
+      "Teachers order Valentine treat bags and shirts for classroom parties, and salons, restaurants and boutiques order Valentine's staff shirts, gift card sleeves and window decals. Small businesses use custom wine glasses and gift boxes as Valentine's promotions and raffle prizes."
+     ]
+    },
+    {
+     "h2": "Ideas for what to write",
+     "p": [
+      "Short lines work best: \"Be Mine\", \"Cupid's Favorite\", \"Mine Forever\", your names with a heart between them, the date you met, or a nickname only the two of you understand. On wine glasses and flutes, a first name and a small heart look elegant; on shirts, bold lettering and a photo make a statement."
+     ]
+    },
+    {
+     "h2": "How to order a Valentine's gift",
+     "p": [
+      "Tell us who the gift is for, what you want it to say, and the date you need it. We suggest a design, send a proof you can change as many times as you need, then make it in our Lakeview shop. Gift sets can be wrapped and ready to hand over, and you can pick up by appointment or have it shipped to you or straight to them. Ordering early leaves room to add a second gift, like matching glasses for a Galentine's brunch."
+     ]
+    },
+    {
+     "h2": "Valentine's Day in Chicago",
+     "p": [
+      "From a dinner in Lincoln Park to a night in, a personalized gift makes the evening. Chicago customers pick up by appointment at our Lakeview shop, a short ride from Lincoln Park, North Center, Roscoe Village and Logan Square, so a last look at the finished gift is easy. Gifts can also ship anywhere in the US for long-distance couples."
+     ]
+    },
+    {
+     "h2": "When to order Valentine's gifts",
+     "p": [
+      "Order by the end of January for the best timing; our standard turnaround is 7 to 14 business days after proof approval, and February 14 arrives quickly. Pick up at our Lakeview shop by appointment, or we ship."
+     ]
+    }
+   ],
+   "faq": [
+    {
+     "q": "When should I order Valentine's Day gifts?",
+     "a": "By the end of January. Turnaround is 7 to 14 business days after you approve the proof."
+    },
+    {
+     "q": "Can you put names on wine glasses?",
+     "a": "Yes, names, dates and short messages on wine glasses, flutes, shot glasses and tumblers."
+    },
+    {
+     "q": "What comes in a couples paint kit?",
+     "a": "Pre-drawn canvases, paint, brushes and a palette, with matching glasses when you choose the gift set."
+    },
+    {
+     "q": "Can I order just one gift?",
+     "a": "Yes. There is no minimum on personalized gifts."
+    },
+    {
+     "q": "Do you make Galentine's Day gifts for a group?",
+     "a": "Yes, matching glasses, tumblers or shirts with each friend's name."
+    },
+    {
+     "q": "Can I add a photo?",
+     "a": "Yes, on shirts, photo panels and many gifts. Send the clearest photo you have."
+    },
+    {
+     "q": "Do you make Valentine's gifts for men?",
+     "a": "Yes: engraved flasks, tumblers, hoodies, shirts and gift sets."
+    },
+    {
+     "q": "Can you make classroom Valentine's shirts?",
+     "a": "Yes, for teachers and whole classes, in youth sizes."
+    },
+    {
+     "q": "Can I get a gift box with a message?",
+     "a": "Yes, a wooden wine gift box printed with your message."
+    },
+    {
+     "q": "Can you ship the gift directly to them?",
+     "a": "Yes, anywhere in the US, with your message inside."
+    },
+    {
+     "q": "Can I see the design first?",
+     "a": "Yes, every order gets a proof before it is made."
+    }
+   ],
+   "cta": {
+    "h2": "Make Your Valentine's Gift",
+    "p": "Tell us who it is for, what you want it to say and your date."
+   },
+   "related": [
+    {
+     "label": "Custom Glassware",
+     "href": "/services/custom-glassware.html"
+    },
+    {
+     "label": "Event Decor & Party Favors",
+     "href": "/services/event-decor.html"
+    },
+    {
+     "label": "Weddings & Bachelorette",
+     "href": "/occasions/wedding-bachelorette-chicago.html"
+    }
+   ]
+  },
+  {
+   "path": "occasions/mothers-day-gifts-chicago.html",
+   "calendar": "mothers-day",
+   "kind": "holiday",
+   "keyword": "custom mother's day gifts",
+   "eyebrow": "Mother's Day Gifts · Chicago, IL",
+   "title": "Custom Mother's Day Gifts & Shirts Chicago | June's Tees",
+   "meta": "Custom Mother's Day gifts in Chicago: shirts with her name or her kids' names, photo shirts, mugs, totes and matching mom and grandma sets.",
+   "h1": "Custom <em>Mother's Day</em> Gifts &amp; Shirts in Chicago",
+   "pitch": "Shirts with her kids' names, photo gifts, mugs, totes and matching mom and grandma sets, made in our Lakeview shop.",
+   "badges": [
+    "💐 For Mom &amp; Grandma",
+    "📸 Photo Gifts",
+    "✦ No Minimum",
+    "🚗 Pickup by Appointment"
+   ],
+   "hero": "science-mom-shirt",
+   "work": [
+    "dance-mom-shirt",
+    "super-mom-shirt",
+    "glitter-name-mom-shirt",
+    "science-grandma-shirt",
+    "dear-mommy-ultrasound-shirt",
+    "doctor-title-mug"
+   ],
+   "products": [
+    "c52",
+    "c53",
+    "c54",
+    "c58",
+    "c71",
+    "c57"
+   ],
+   "heading": "Design something for Mom",
+   "sections": [
+    {
+     "h2": "Mother's Day shirt ideas",
+     "p": [
+      "Custom Mother's Day gifts that get worn: a \"Mom\" shirt in gold glitter with her kids' names down the sleeve, a \"Dance Mom\", \"Soccer Mom\" or \"Science Mom\" shirt that celebrates what she does, a \"Super Mom\" design, or a photo shirt with all the grandchildren. Matching sets for mom, grandma and great-grandma make a beautiful family photo.",
+      "For moms-to-be, an ultrasound photo shirt (\"Dear Mommy, I can't wait to meet you\") is one of the most touching gifts we make."
+     ]
+    },
+    {
+     "h2": "Gifts beyond shirts",
+     "p": [
+      "Mugs with her title or a photo, totes for the farmers market, hoodies with her name, photo panels and canvases, and caps for the mom who coaches. Grandparents love a blanket or a canvas with every grandchild's photo. We can also put her favorite saying or a message from the kids on almost anything we print."
+     ]
+    },
+    {
+     "h2": "Gifts from a team, a class or a church",
+     "p": [
+      "Teams, classrooms, daycares and churches order Mother's Day gifts for every mom: matching totes or mugs with a short message, or shirts for a Mother's Day brunch or service. Send us the list of names and we personalize each one."
+     ]
+    },
+    {
+     "h2": "Ideas for what to put on a Mother's Day shirt",
+     "p": [
+      "Popular wording includes \"Mama\" with the year she became one, \"Blessed Mama\", \"Mom Life\", \"Grandma Est. 2026\" style designs, the kids' names in a heart, or a list of what she is to the family. For grandmothers, \"Nana\", \"Gigi\" or \"Glam-ma\" with every grandchild's name on the back is a favorite, and great-grandmothers love a four-generation photo shirt."
+     ]
+    },
+    {
+     "h2": "Matching family shirts for Mother's Day brunch",
+     "p": [
+      "Families planning a Mother's Day brunch, church service or photo session order matching shirts for everyone: \"Her Favorite Daughter\", \"Her Favorite Son\", \"Proud Grandkid\" and a special shirt for the guest of honor. We print every size from toddler to 5XL in the same color."
+     ]
+    },
+    {
+     "h2": "Gifts for new moms and moms-to-be",
+     "p": [
+      "A first Mother's Day deserves something special: a shirt with the baby's name and birth date, an ultrasound photo shirt for a mom-to-be, a matching mommy-and-me set with a onesie, or a blanket with the baby's first photos. We can match the colors to the nursery or the baby shower theme."
+     ]
+    },
+    {
+     "h2": "Why order from a local Chicago shop",
+     "p": [
+      "Ordering from our Lakeview shop means you see a proof before anything is made, you can pick up by appointment instead of waiting on a delivery, and you work with a real person who can help with the design and the wording. We are a Black-owned, women-owned business and Mother's Day is one of our favorite seasons."
+     ]
+    },
+    {
+     "h2": "How to order",
+     "p": [
+      "Send us her name, the names of the kids or grandkids, any photos and your date. We design it, send a proof you can change, and make it in our Lakeview shop. Pick up by appointment or we ship anywhere in the US, including straight to Mom if she lives out of town. For a whole family ordering matching shirts, one person can collect the sizes and we bag each shirt with a name."
+     ]
+    },
+    {
+     "h2": "Mother's Day gifts that last",
+     "p": [
+      "We print with methods made to last: full-color DTF prints that stay bright through washing, embroidery that never fades, and sublimated mugs and blankets where the image becomes part of the material. A shirt with her kids' names or a blanket of family photos becomes something she keeps for years."
+     ]
+    },
+    {
+     "h2": "When to order for Mother's Day",
+     "p": [
+      "Mother's Day is the second Sunday in May. Order by mid-April to be safe; our standard turnaround is 7 to 14 business days after proof approval. Pick up at our Lakeview shop by appointment, or we ship."
+     ]
+    }
+   ],
+   "faq": [
+    {
+     "q": "When should I order Mother's Day gifts?",
+     "a": "By mid-April. Mother's Day is the second Sunday in May and our turnaround is 7 to 14 business days after proof approval."
+    },
+    {
+     "q": "Can you add all the kids' or grandkids' names?",
+     "a": "Yes, on the front, down a sleeve, or on the back."
+    },
+    {
+     "q": "Can you print a photo of the grandchildren?",
+     "a": "Yes, in full color with no minimum."
+    },
+    {
+     "q": "Do you make matching mom and grandma shirts?",
+     "a": "Yes, in the same design and color, every size."
+    },
+    {
+     "q": "Do you make mugs and totes?",
+     "a": "Yes, with a name, a photo or a message. Ask us for a quote."
+    },
+    {
+     "q": "Can you design it for me?",
+     "a": "Yes. Send the names, photos and idea, and we send a proof first."
+    },
+    {
+     "q": "Can you make a mommy-and-me matching set?",
+     "a": "Yes, an adult shirt with a matching kids tee or onesie."
+    },
+    {
+     "q": "Can you add the year she became a mom?",
+     "a": "Yes, any names, dates or years you want."
+    },
+    {
+     "q": "Do you make Mother's Day gifts for a whole church or class?",
+     "a": "Yes, with each mom's name and bulk pricing."
+    },
+    {
+     "q": "Can you ship it straight to my mom?",
+     "a": "Yes, anywhere in the US."
+    },
+    {
+     "q": "Can one person order for the whole family?",
+     "a": "Yes, send the sizes and names and we bag each one."
+    }
+   ],
+   "cta": {
+    "h2": "Make Mom's Gift",
+    "p": "Send us her name, the kids' names, any photos and your date."
+   },
+   "related": [
+    {
+     "label": "Custom T-Shirts in Chicago",
+     "href": "/services/custom-tshirts-chicago.html"
+    },
+    {
+     "label": "Sublimation Gifts",
+     "href": "/services/sublimation.html"
+    },
+    {
+     "label": "Custom Glassware",
+     "href": "/services/custom-glassware.html"
+    }
+   ]
+  },
+  {
+   "path": "occasions/juneteenth-shirts-chicago.html",
+   "calendar": "juneteenth",
+   "kind": "holiday",
+   "keyword": "juneteenth shirts",
+   "eyebrow": "Juneteenth · Chicago, IL",
+   "title": "Juneteenth Shirts Chicago | Black-Owned Shop | June's Tees",
+   "meta": "Custom Juneteenth shirts in Chicago from a Black-owned print shop: family and group sets, Greek organization shirts, kids' tees and celebration designs.",
+   "h1": "Custom <em>Juneteenth</em> Shirts in Chicago",
+   "pitch": "Juneteenth shirts for families, festivals, churches and Greek organizations, designed and printed by a Black-owned, women-owned shop in Lakeview.",
+   "badges": [
+    "✊ Black-Owned",
+    "♀️ Women-Owned",
+    "✦ No Minimum",
+    "🚗 Pickup by Appointment"
+   ],
+   "hero": "juneteenth-independence-day-shirt",
+   "work": [
+    "juneteenth-since-1865-shirt",
+    "juneteenth-1865-portrait-shirt",
+    "juneteenth-definition-shirt",
+    "juneteenth-greek-letter-shirts",
+    "peace-love-juneteenth-shirt",
+    "omega-juneteenth-shirt"
+   ],
+   "products": [
+    "c52",
+    "c53",
+    "c55",
+    "c57",
+    "c58",
+    "c54"
+   ],
+   "heading": "Design your Juneteenth shirt",
+   "sections": [
+    {
+     "h2": "Juneteenth shirt designs",
+     "p": [
+      "Juneteenth shirts celebrate June 19, 1865, the day freedom reached Galveston, and the holiday we celebrate today. Our customers' favorite designs say \"Juneteenth Is My Independence Day\", \"Since 1865\" or \"Free-ish Since 1865\", carry the definition of the word, or use a portrait in red, gold and green. As a Black-owned shop, these designs mean something to us, and we love helping families and groups make their own."
+     ]
+    },
+    {
+     "h2": "Family, festival and church Juneteenth shirts",
+     "p": [
+      "Family reunions and cookouts on Juneteenth weekend order matching shirts with the family name and the year; festivals, block parties and community organizations order event shirts with sponsors on the back; churches order shirts for Juneteenth services and celebrations. We print every size from toddler to 5XL."
+     ]
+    },
+    {
+     "h2": "Shirts for Greek organizations",
+     "p": [
+      "Fraternities and sororities order Juneteenth shirts in their colors with their letters, for service projects, parades and step shows. We match colors closely and can add chapter names and line numbers."
+     ]
+    },
+    {
+     "h2": "Juneteenth festival and community event shirts",
+     "p": [
+      "Block clubs, park districts, nonprofits and businesses hosting Juneteenth festivals order event shirts with the name, the date and sponsor logos on the back, plus volunteer shirts in a second color so helpers are easy to spot. We also print the banners, yard signs and step-and-repeat backdrops for the stage and the photo area."
+     ]
+    },
+    {
+     "h2": "Kids' Juneteenth shirts",
+     "p": [
+      "Kids' Juneteenth shirts with bright colors and encouraging words (\"Proud\", \"Free\", \"Brilliant\") are perfect for school celebrations, camps and family cookouts. We print youth and toddler sizes and onesies in the same designs as the adults, so the whole family can match."
+     ]
+    },
+    {
+     "h2": "The meaning behind the colors",
+     "p": [
+      "Many Juneteenth designs use red, black and green from the Pan-African flag, or the red, white and blue of the Juneteenth flag with its star and burst, created in 1997 to represent a new freedom for all African Americans. We are happy to help you choose a palette that fits your message and your event."
+     ]
+    },
+    {
+     "h2": "Business and employee Juneteenth shirts",
+     "p": [
+      "Companies and employee resource groups order Juneteenth shirts for volunteer days, heritage events and parade groups. We match your company colors, add your logo on the sleeve, and sort orders by team or location."
+     ]
+    },
+    {
+     "h2": "Designs we can create for you",
+     "p": [
+      "Our designer creates original Juneteenth artwork: portraits, typography, family crests, and designs that include your family name or your organization. Send us your ideas and we send a proof before printing."
+     ]
+    },
+    {
+     "h2": "How to order Juneteenth shirts",
+     "p": [
+      "Send us your design idea or choose one of ours, the colors, the sizes and your date. We send a proof you can change, then print in our Lakeview shop. Pick up by appointment or we ship anywhere in the US, which is handy for families traveling to a reunion in another state."
+     ]
+    },
+    {
+     "h2": "Juneteenth family reunion shirts",
+     "p": [
+      "Juneteenth weekend is a favorite time for family reunions and cookouts. Reunion shirts that pair the family name with \"Juneteenth\" and the year, or a family tree in red, black and green, celebrate both freedom and family. We print every size from toddler to 5XL and can list each branch of the family on the back, so everyone sees their name.",
+      "Many families keep the design and order again each year with the new year on the front."
+     ]
+    },
+    {
+     "h2": "When to order Juneteenth shirts",
+     "p": [
+      "Order in May for the best timing; our standard turnaround is 7 to 14 business days after proof approval. Pick up at our Lakeview shop by appointment, or we ship anywhere in the US."
+     ]
+    }
+   ],
+   "faq": [
+    {
+     "q": "When should I order Juneteenth shirts?",
+     "a": "In May. Turnaround is 7 to 14 business days after you approve the proof."
+    },
+    {
+     "q": "Are you a Black-owned business?",
+     "a": "Yes, June's Tees & Things is Black-owned and women-owned, in Lakeview, Chicago."
+    },
+    {
+     "q": "Can you make Juneteenth shirts for our family reunion?",
+     "a": "Yes, with your family name and the year, in every size."
+    },
+    {
+     "q": "Do you print for Greek organizations?",
+     "a": "Yes, in your colors with your letters, chapter and line details."
+    },
+    {
+     "q": "Is there a minimum?",
+     "a": "No. Full-color DTF printing has no minimum; bigger orders get price breaks."
+    },
+    {
+     "q": "Can you design a Juneteenth shirt for us?",
+     "a": "Yes. Send the idea and we send a proof before printing."
+    },
+    {
+     "q": "Can you print Juneteenth event shirts with sponsor logos?",
+     "a": "Yes, sponsors on the back and your event on the front."
+    },
+    {
+     "q": "Do you make kids' Juneteenth shirts?",
+     "a": "Yes, youth, toddler and onesies in the same designs."
+    },
+    {
+     "q": "Can you match our company colors?",
+     "a": "Yes, and we can add your logo to the sleeve."
+    },
+    {
+     "q": "Do you print banners and backdrops for Juneteenth events?",
+     "a": "Yes, banners, yard signs and step-and-repeat backdrops."
+    },
+    {
+     "q": "Can you ship to our reunion location?",
+     "a": "Yes, anywhere in the US."
+    },
+    {
+     "q": "Do you have ready-made Juneteenth designs?",
+     "a": "Yes, and we can change the wording or colors to make it yours."
+    }
+   ],
+   "cta": {
+    "h2": "Order Your Juneteenth Shirts",
+    "p": "Tell us the design, the sizes and your date."
+   },
+   "related": [
+    {
+     "label": "Black History Month Shirts",
+     "href": "/occasions/black-history-month-shirts-chicago.html"
+    },
+    {
+     "label": "Family Reunion Shirts",
+     "href": "https://design.jtees.net/collection.php?c=family-reunion"
+    },
+    {
+     "label": "Graphic Design",
+     "href": "/services/graphic-design.html"
+    }
+   ]
+  },
+  {
+   "path": "occasions/black-history-month-shirts-chicago.html",
+   "calendar": "black-history-month",
+   "kind": "holiday",
+   "keyword": "black history month shirts",
+   "eyebrow": "Black History Month · Chicago, IL",
+   "title": "Black History Month Shirts Chicago | June's Tees",
+   "meta": "Custom Black History Month shirts in Chicago from a Black-owned print shop: school and church shirts, family tees, empowering designs and custom artwork.",
+   "h1": "Custom <em>Black History Month</em> Shirts in Chicago",
+   "pitch": "Empowering shirts for schools, churches, families and organizations, designed and printed by a Black-owned, women-owned shop in Lakeview.",
+   "badges": [
+    "✊ Black-Owned",
+    "♀️ Women-Owned",
+    "🎨 Custom Artwork",
+    "🚗 Pickup by Appointment"
+   ],
+   "hero": "talented-kreative-black-shirt",
+   "work": [
+    "africa-map-shirt",
+    "black-king-print",
+    "black-king-facts-design",
+    "blacknificent-design",
+    "afrolicious-design",
+    "portrait-art-painting"
+   ],
+   "products": [
+    "c52",
+    "c53",
+    "c55",
+    "c57",
+    "c58",
+    "c67"
+   ],
+   "heading": "Design your Black History Month shirt",
+   "sections": [
+    {
+     "h2": "Black History Month shirt ideas",
+     "p": [
+      "Black History Month shirts celebrate pride, history and excellence. Popular designs carry words like \"Talented, Kreative, Black\", a map of Africa in red, gold and green, portraits, \"Black King\" and \"Black Queen\" designs, or the names of the leaders and inventors a school is studying. As a Black-owned shop, we design many of these ourselves and love creating something new with you."
+     ]
+    },
+    {
+     "h2": "Shirts for schools, churches and organizations",
+     "p": [
+      "Schools order Black History Month shirts for every class and staff member, often with a theme for the month; churches order shirts for Black History programs; companies and employee groups order shirts for heritage events. We sort and bag by class or group, and bulk orders get price breaks at 12, 24, 48 and 100 or more."
+     ]
+    },
+    {
+     "h2": "Custom artwork and banners",
+     "p": [
+      "Need a design that is yours alone? Our graphic designer creates custom artwork for programs, events and fundraisers, and we print it on shirts, hoodies, banners and posters so everything matches."
+     ]
+    },
+    {
+     "h2": "Classroom and school-wide shirts",
+     "p": [
+      "Many schools choose one design for the whole school with each class in its own color, or let each class design a shirt around a leader they studied. We print youth and adult sizes, sort and bag by class, and can add the school name and year. Teachers often order a staff shirt in a matching design."
+     ]
+    },
+    {
+     "h2": "Church Black History programs",
+     "p": [
+      "Churches order shirts for Black History Month programs, youth presentations, choir performances and Sunday services, along with banners and programs for the event. A theme verse, the church name and the year make the shirts a keepsake for the congregation."
+     ]
+    },
+    {
+     "h2": "Companies and employee groups",
+     "p": [
+      "Employee resource groups and companies order Black History Month shirts for heritage events, volunteer days and lunch-and-learns. We match company colors, place the logo where it fits, and can print each team's name on the sleeve."
+     ]
+    },
+    {
+     "h2": "Empowering words and designs",
+     "p": [
+      "Words like \"Excellence\", \"Legacy\", \"Unapologetically Black\", \"Melanin\", \"Black History Is American History\" and \"Dream Big\" are popular, as are designs that honor inventors, authors, athletes and civil rights leaders. Our designer can build a design around your theme, your school or your family."
+     ]
+    },
+    {
+     "h2": "Year-round pride and heritage apparel",
+     "p": [
+      "Many customers order heritage designs to wear all year, not just in February: family reunion shirts with African prints, Juneteenth shirts, and shirts celebrating HBCUs and Greek organizations. We are proud to be a Black-owned, women-owned Chicago print shop."
+     ]
+    },
+    {
+     "h2": "How to order",
+     "p": [
+      "Send the theme, the design idea or the leaders you want to honor, the sizes and your date. Our designer sends a proof you can change, and we print in our Lakeview shop. Schools and churches can pay by invoice, and we sort and bag orders by class or group so handing them out takes minutes. Pick up by appointment or we ship anywhere in the US."
+     ]
+    },
+    {
+     "h2": "Posters, banners and program materials",
+     "p": [
+      "Black History Month programs often need more than shirts: posters of the leaders a class is studying, a banner for the stage, programs for the audience, and photo backdrops for families. Our graphic designer can create a matching set from one theme, and we print the banners, posters and shirts together so the program looks unified from the first slide to the final bow."
+     ]
+    },
+    {
+     "h2": "When to order",
+     "p": [
+      "Order in early January for February events; our standard turnaround is 7 to 14 business days after proof approval. Pick up at our Lakeview shop by appointment, or we ship."
+     ]
+    }
+   ],
+   "faq": [
+    {
+     "q": "When should I order Black History Month shirts?",
+     "a": "In early January for February. Turnaround is 7 to 14 business days after proof approval."
+    },
+    {
+     "q": "Can you design something original for our school?",
+     "a": "Yes. Our designer creates custom artwork and sends a proof first."
+    },
+    {
+     "q": "Do you print for whole schools?",
+     "a": "Yes, sorted and bagged by class, with bulk price breaks."
+    },
+    {
+     "q": "Do you make youth sizes?",
+     "a": "Yes, youth and toddler through adult 5XL."
+    },
+    {
+     "q": "Are you Black-owned?",
+     "a": "Yes, Black-owned and women-owned, in Lakeview, Chicago."
+    },
+    {
+     "q": "Can you print banners for the event too?",
+     "a": "Yes, banners, posters and yard signs to match."
+    },
+    {
+     "q": "Can each class have its own color?",
+     "a": "Yes, one design in several shirt colors, sorted by class."
+    },
+    {
+     "q": "Do you make staff shirts to match?",
+     "a": "Yes, adult sizes in the same design."
+    },
+    {
+     "q": "Can you print our church's theme verse?",
+     "a": "Yes, with the church name and year."
+    },
+    {
+     "q": "Do you make heritage shirts year-round?",
+     "a": "Yes, any time of year."
+    },
+    {
+     "q": "Can schools pay by invoice?",
+     "a": "Yes, ask us for an invoice with your quote."
+    },
+    {
+     "q": "Can you sort the order by class?",
+     "a": "Yes, sorted and bagged by class or group."
+    },
+    {
+     "q": "Do you offer bulk pricing?",
+     "a": "Yes, price breaks at 12, 24, 48 and 100 or more pieces."
+    },
+    {
+     "q": "Can you include the names of leaders our class studied?",
+     "a": "Yes, on the back or the sleeve, or as part of the main design."
+    },
+    {
+     "q": "What shirt colors do schools choose?",
+     "a": "Black, red, gold and green are popular, or each class in its own color."
+    }
+   ],
+   "cta": {
+    "h2": "Start Your Black History Month Order",
+    "p": "Send the theme, the sizes and your date."
+   },
+   "related": [
+    {
+     "label": "Juneteenth Shirts",
+     "href": "/occasions/juneteenth-shirts-chicago.html"
+    },
+    {
+     "label": "Graphic Design",
+     "href": "/services/graphic-design.html"
+    },
+    {
+     "label": "Banners & Signs",
+     "href": "/services/banners-signs.html"
+    }
+   ]
+  },
+  {
+   "path": "occasions/halloween-shirts-chicago.html",
+   "calendar": "halloween",
+   "kind": "holiday",
+   "keyword": "custom halloween shirts",
+   "eyebrow": "Halloween · Chicago, IL",
+   "title": "Custom Halloween Shirts Chicago | Group Shirts | June's Tees",
+   "meta": "Custom Halloween shirts in Chicago: matching witch squad and family shirts, group costume tees, kids' shirts and party shirts. No minimum.",
+   "h1": "Custom <em>Halloween</em> Shirts in Chicago",
+   "pitch": "Witch squad shirts, matching family and group costume tees, kids' Halloween shirts and party shirts, printed in our Lakeview shop.",
+   "badges": [
+    "🎃 Group Sets",
+    "👻 Kids &amp; Adults",
+    "✦ No Minimum",
+    "🚗 Pickup by Appointment"
+   ],
+   "hero": "good-witch-shirt",
+   "work": [
+    "just-here-for-the-boos-shirt",
+    "boo-bees-shirt",
+    "little-witch-shirt",
+    "bewitched-shirt",
+    "stop-staring-at-my-boos-shirt",
+    "skeleton-hands-crop-top"
+   ],
+   "products": [
+    "c52",
+    "c55",
+    "c56",
+    "c53",
+    "c54",
+    "c58"
+   ],
+   "heading": "Design your Halloween shirt",
+   "sections": [
+    {
+     "h2": "Witch squad and group Halloween shirts",
+     "p": [
+      "Custom Halloween shirts are the easiest group costume there is. Witch squad sets give everyone their own witch (Good Witch, Bossy Witch, Quiet Witch, Crazy Witch, Little Witch), ghost designs like \"I'm Just Here for the Boos\" and \"Boo Bees\" are made for parties, and skeleton hands crop tops are a favorite for nights out. Send us the list of names or titles and we print one for each person."
+     ]
+    },
+    {
+     "h2": "Family and kids Halloween shirts",
+     "p": [
+      "Families order matching shirts for trick-or-treating, school parades and fall festivals, with a pumpkin, a ghost or a funny line for each person. We print youth and toddler sizes and onesies, and glow-style and metallic inks for something extra."
+     ]
+    },
+    {
+     "h2": "Halloween party and event shirts",
+     "p": [
+      "Bars, haunted houses, trunk-or-treats and office parties order staff and event shirts; teams order Halloween practice shirts. Bulk orders get price breaks at 12, 24, 48 and 100 or more."
+     ]
+    },
+    {
+     "h2": "Halloween shirt ideas for adults",
+     "p": [
+      "Adults love Halloween shirts with a wink: \"I'm Just Here for the Boos\", \"Stop Staring at My Boos\", \"Resting Witch Face\", \"Hocus Pocus I Need Coffee to Focus\", or a skeleton hands crop top for a night out. Group sets with a different witch, ghost or monster for each friend make the easiest costume at any party."
+     ]
+    },
+    {
+     "h2": "Couples and family costume shirts",
+     "p": [
+      "Couples order matching pairs (\"He's My Treat\" and \"She's My Trick\", skeleton hands, a pumpkin and a seed), and families order a theme with a role for every person, like a witch coven, a ghost family or a haunted house crew. We print every size from onesies to 5XL so even the baby can match."
+     ]
+    },
+    {
+     "h2": "Trunk-or-treat and fall festival shirts",
+     "p": [
+      "Schools, churches and park districts running trunk-or-treats, fall festivals and haunted houses order volunteer and staff shirts with the event name and date, plus banners and yard signs to point families in the right direction. Bulk pricing starts at 12 pieces."
+     ]
+    },
+    {
+     "h2": "Fabrics and inks for Halloween",
+     "p": [
+      "Black, orange, charcoal and purple shirts are the Halloween favorites, and white or glow-style inks make designs pop at night. We print on tees, hoodies, crewnecks and crop tops, and on totes and pillowcase-style bags for trick-or-treating."
+     ]
+    },
+    {
+     "h2": "Why order Halloween shirts early",
+     "p": [
+      "October is one of our busiest months for group orders. Ordering by late September gives you time to collect names and sizes, approve your proof, and still pick up with time to spare before parties start the weekend before Halloween."
+     ]
+    },
+    {
+     "h2": "How to order Halloween shirts",
+     "p": [
+      "Pick a design or send us your idea, then send the names or titles for each person and their sizes. We send a proof you can change and print in our Lakeview shop. Pick up by appointment or we ship. For groups, one person can collect everyone's choice and we bag each shirt with a name so handing them out at the party is easy."
+     ]
+    },
+    {
+     "h2": "Halloween shirts for businesses",
+     "p": [
+      "Bars, restaurants, salons and boutiques order Halloween staff shirts to get into the spirit, and haunted houses and escape rooms order staff and scare-actor shirts in black with glow-style prints. Businesses also order Halloween window decals, yard signs and banners to bring in customers through October. Ask us for a quote on the whole set."
+     ]
+    },
+    {
+     "h2": "When to order Halloween shirts",
+     "p": [
+      "Order by late September or the first week of October; our standard turnaround is 7 to 14 business days after proof approval. Pick up at our Lakeview shop by appointment, or we ship."
+     ]
+    }
+   ],
+   "faq": [
+    {
+     "q": "When should I order Halloween shirts?",
+     "a": "By the first week of October. Turnaround is 7 to 14 business days after proof approval."
+    },
+    {
+     "q": "Can each person get a different witch name?",
+     "a": "Yes, one design with a different name or title for each shirt."
+    },
+    {
+     "q": "Do you make kids' Halloween shirts?",
+     "a": "Yes, toddler and youth sizes and onesies."
+    },
+    {
+     "q": "Is there a minimum?",
+     "a": "No, full-color DTF printing has no minimum."
+    },
+    {
+     "q": "Can you print for a whole office or bar staff?",
+     "a": "Yes, with bulk price breaks."
+    },
+    {
+     "q": "Can you design a group costume shirt for us?",
+     "a": "Yes. Send the idea and we send a proof first."
+    },
+    {
+     "q": "Do you make couples Halloween shirts?",
+     "a": "Yes, matching pairs and family themes."
+    },
+    {
+     "q": "Can you print trick-or-treat bags?",
+     "a": "Yes, totes and treat bags with names."
+    },
+    {
+     "q": "Do you make shirts for trunk-or-treat volunteers?",
+     "a": "Yes, with the event name and bulk pricing."
+    },
+    {
+     "q": "What shirt colors work best for Halloween?",
+     "a": "Black, orange, charcoal and purple, with white or glow-style inks."
+    },
+    {
+     "q": "Can one person order for the whole group?",
+     "a": "Yes, and we bag each shirt with a name."
+    },
+    {
+     "q": "Do you offer bulk pricing for Halloween events?",
+     "a": "Yes, from 12 pieces."
+    },
+    {
+     "q": "Can you print glow-in-the-dark style designs?",
+     "a": "Yes, we offer glow-style and bright white inks that stand out at night."
+    },
+    {
+     "q": "Do you print Halloween crop tops?",
+     "a": "Yes, crop tops, tanks, tees and hoodies in one order."
+    }
+   ],
+   "cta": {
+    "h2": "Order Your Halloween Shirts",
+    "p": "Send the design idea, the names and sizes, and your date."
+   },
+   "related": [
+    {
+     "label": "Custom T-Shirts in Chicago",
+     "href": "/services/custom-tshirts-chicago.html"
+    },
+    {
+     "label": "Bulk Custom Shirts",
+     "href": "https://design.jtees.net/collection.php?c=bulk-orders"
+    },
+    {
+     "label": "Event Decor & Party Favors",
+     "href": "/services/event-decor.html"
+    }
+   ]
+  },
+  {
+   "path": "occasions/wedding-bachelorette-chicago.html",
+   "calendar": "weddings",
+   "kind": "event",
+   "keyword": "custom wedding and bachelorette gifts",
+   "eyebrow": "Weddings &amp; Bachelorette · Chicago, IL",
+   "title": "Custom Wedding & Bachelorette Gifts Chicago | June's Tees",
+   "meta": "Custom wedding and bachelorette gifts in Chicago: Mr and Mrs glasses and tumblers, bridesmaid caps, bachelorette shirts and sashes, signs and favors.",
+   "h1": "Custom <em>Wedding &amp; Bachelorette</em> Gifts in Chicago",
+   "pitch": "Mr and Mrs glasses and tumblers, bridesmaid caps and gifts, bachelorette shirts, signs and favors, made in our Lakeview shop.",
+   "badges": [
+    "💍 Bridal Party",
+    "🥂 Glassware",
+    "🏷️ Signs &amp; Decals",
+    "🚗 Pickup by Appointment"
+   ],
+   "hero": "mr-mrs-champagne-flutes",
+   "work": [
+    "bridesmaid-glitter-caps",
+    "bachelorette-trip-design",
+    "anniversary-60-shirt",
+    "we-are-family-reunion-shirt",
+    "family-reunion-2023-shirts",
+    "wedding-date-keepsake-box"
+   ],
+   "products": [
+    "c52",
+    "c54",
+    "c57",
+    "c53",
+    "c67",
+    "c71"
+   ],
+   "heading": "Design your bridal party shirts",
+   "sections": [
+    {
+     "h2": "Gifts for the couple",
+     "p": [
+      "Custom wedding and bachelorette gifts start with the couple: \"Mr\" and \"Mrs\" champagne flutes for the toast, engraved monogram tumblers, a wine gift box with the wedding date, or matching shirts for the honeymoon. Anniversary shirts and gifts (\"Married 25 Years\", \"Love 60\") celebrate the milestones that come after."
+     ]
+    },
+    {
+     "h2": "Bridesmaid and groomsmen gifts",
+     "p": [
+      "Bridesmaid proposal gifts and getting-ready outfits are some of our favorite orders: glitter \"Bridesmaid\" and \"Maid of Honor\" caps, wine glasses with each name, tote bags and shirts. For groomsmen, engraved flasks, tumblers and caps with each name or initial."
+     ]
+    },
+    {
+     "h2": "Bachelorette party shirts and sashes",
+     "p": [
+      "Bachelorette trip shirts with the destination and the date, \"Bride\" and \"Bride Squad\" shirts, \"Bride or Die\" sashes, and trip designs for Cabo, Vegas or a Chicago weekend make the photos. We print every size and several styles (tees, tanks and crop tops) in one order."
+     ]
+    },
+    {
+     "h2": "Wedding signs, decals and decor",
+     "p": [
+      "Welcome signs, mirror and window decals, banners and table signs finish the day, all matched to your colors and fonts. Order everything together and it looks like one set."
+     ]
+    },
+    {
+     "h2": "Bridal shower and engagement party gifts",
+     "p": [
+      "Bridal showers and engagement parties call for glasses and tumblers with the couple's names, \"Bride to Be\" shirts and sashes, favors with the date, and a welcome sign for the door. We match everything to your colors so the photos look planned."
+     ]
+    },
+    {
+     "h2": "Groomsmen and bachelor party",
+     "p": [
+      "Groomsmen get engraved flasks, tumblers, caps or shirts with each name or role (Best Man, Groomsman, Father of the Groom). Bachelor party shirts with the destination and a crew name keep the group together on the trip."
+     ]
+    },
+    {
+     "h2": "Rehearsal dinner, reception and favors",
+     "p": [
+      "Personalized champagne flutes for the head table, wine glasses as favors with each guest's name, table signs, a mirror decal for the welcome display, and banners for the venue all come from the same proofs and colors."
+     ]
+    },
+    {
+     "h2": "Anniversaries and vow renewals",
+     "p": [
+      "Couples celebrating 25, 50 or 60 years order matching shirts for the party, family shirts with the couple's photo, and engraved glasses for the toast. Vow renewals often include \"Still Mr & Mrs\" designs with the original wedding date."
+     ]
+    },
+    {
+     "h2": "How to order wedding and bachelorette items",
+     "p": [
+      "Send us the date, your colors and fonts if you have them, the names and roles, and what you want made. We design everything to match and send proofs you can change, then make it in our Lakeview shop. Pick up by appointment or we ship, including straight to the destination for a bachelorette trip. Ordering everything at once keeps the colors consistent and saves on shipping."
+     ]
+    },
+    {
+     "h2": "Bachelorette trip ideas",
+     "p": [
+      "Popular bachelorette themes include \"Final Fiesta\" for Mexico, \"Last Splash\" for a beach or a pool weekend, \"Bride's Last Rodeo\" for Nashville, and a Chicago weekend with the skyline and the bride's name. Shirts, tanks, sashes, caps, tumblers and matching tote bags with each friend's name make the group easy to spot and the photos easy to love.",
+      "We can print different styles in one order, so everyone wears what they are comfortable in."
+     ]
+    },
+    {
+     "h2": "When to order",
+     "p": [
+      "Order bachelorette items four to six weeks before the trip and wedding gifts and signs at least a month before the date; our standard turnaround is 7 to 14 business days after proof approval. Pick up at our Lakeview shop by appointment, or we ship."
+     ]
+    }
+   ],
+   "faq": [
+    {
+     "q": "When should I order bachelorette shirts?",
+     "a": "Four to six weeks before the trip. Turnaround is 7 to 14 business days after proof approval."
+    },
+    {
+     "q": "Can each bridesmaid's gift have her name?",
+     "a": "Yes, on glasses, caps, totes or shirts."
+    },
+    {
+     "q": "Do you make welcome signs and decals?",
+     "a": "Yes, matched to your colors and fonts."
+    },
+    {
+     "q": "Do you engrave tumblers and flasks?",
+     "a": "Yes, with names, initials or a monogram."
+    },
+    {
+     "q": "Can you print different styles in one order?",
+     "a": "Yes, tees, tanks and crop tops in the same design."
+    },
+    {
+     "q": "Do you ship wedding orders?",
+     "a": "Yes, anywhere in the US."
+    },
+    {
+     "q": "Can you make welcome sign decals for a mirror?",
+     "a": "Yes, sized to your mirror or board, in your colors."
+    },
+    {
+     "q": "Can every bridesmaid gift be different?",
+     "a": "Yes, a different name, role or color on each."
+    },
+    {
+     "q": "Do you make anniversary party shirts?",
+     "a": "Yes, with the couple's names, photo and years together."
+    },
+    {
+     "q": "Can you match our wedding colors and fonts?",
+     "a": "Yes, send your invitation or color palette."
+    },
+    {
+     "q": "Can you ship to our bachelorette destination?",
+     "a": "Yes, anywhere in the US."
+    },
+    {
+     "q": "How early should we order wedding signs?",
+     "a": "At least a month before the date."
+    },
+    {
+     "q": "Do you make bride and bride squad shirts?",
+     "a": "Yes, in tees, tanks and crop tops, with each name if you like."
+    },
+    {
+     "q": "Can you make matching tote bags for the bridal party?",
+     "a": "Yes, with each name or role."
+    },
+    {
+     "q": "Do you print sashes?",
+     "a": "Yes, \"Bride\", \"Bride or Die\" and custom wording."
+    }
+   ],
+   "cta": {
+    "h2": "Plan Your Wedding Gifts",
+    "p": "Tell us the date, the colors and who the gifts are for."
+   },
+   "related": [
+    {
+     "label": "Custom Glassware",
+     "href": "/services/custom-glassware.html"
+    },
+    {
+     "label": "Valentine's Day Gifts",
+     "href": "/occasions/valentines-day-gifts-chicago.html"
+    },
+    {
+     "label": "Banners & Signs",
+     "href": "/services/banners-signs.html"
+    }
+   ]
+  },
+  {
+   "path": "services/sublimation.html",
+   "calendar": null,
+   "kind": "service",
+   "keyword": "sublimation printing",
+   "eyebrow": "Sublimation Printing · Chicago, IL",
+   "title": "Sublimation Printing Chicago | Blankets & Mugs | June's Tees",
+   "meta": "Sublimation printing in Chicago: photo blankets, mugs, tumblers, phone cases, pet bowls and all-over polyester shirts. Full color that never cracks.",
+   "h1": "<em>Sublimation</em> Printing in Chicago",
+   "pitch": "Photo blankets, mugs, tumblers, phone cases, pet bowls and all-over shirts in full color that never cracks or peels, printed in our Lakeview shop.",
+   "badges": [
+    "📸 Full-Color Photos",
+    "🧵 Never Cracks",
+    "✦ No Minimum",
+    "🚗 Pickup by Appointment"
+   ],
+   "hero": "photo-collage-blanket",
+   "work": [
+    "best-dad-photo-mug",
+    "lips-glitter-tumbler",
+    "pet-name-bowl",
+    "pet-bowl-mat",
+    "name-phone-case",
+    "birthday-vacay-sublimated-tee"
+   ],
+   "products": [
+    "c52",
+    "c55",
+    "c56",
+    "c71",
+    "c58",
+    "c54"
+   ],
+   "heading": "Design something to sublimate",
+   "sections": [
+    {
+     "h2": "What is sublimation printing?",
+     "p": [
+      "Sublimation printing turns ink into a gas with heat and pressure, and the gas bonds into polyester fibers and specially coated surfaces. Instead of sitting on top like a print, the image becomes part of the material, so it never cracks, peels or fades in the wash, and you cannot feel it. It reproduces photos and every color, edge to edge."
+     ]
+    },
+    {
+     "h2": "What we sublimate",
+     "p": [
+      "Photo collage and memorial blankets, mugs with a photo or a title, full-wrap tumblers, phone cases, pet bowls and mats, mouse pads, puzzles, keepsake plaques, ornaments and all-over-print polyester shirts and jerseys. If a blank is made for sublimation, we can usually print it; ask us about anything you have in mind."
+     ]
+    },
+    {
+     "h2": "Sublimation vs. DTF vs. screen printing",
+     "p": [
+      "Sublimation is best for photos and all-over designs on white or light polyester and coated gifts. DTF (direct to film) is best for full-color designs on cotton and dark garments with no minimum. Screen printing is best for larger orders with a few colors, at the lowest price per shirt. We will recommend the right method for your design and your item."
+     ]
+    },
+    {
+     "h2": "Gifts for every occasion",
+     "p": [
+      "Sublimated gifts are the heart of Mother's Day, Father's Day, Christmas, memorials and birthdays in our shop: a blanket of grandchildren's photos, a \"Best Dad\" mug, a tumbler with her name, a memorial blanket the family will keep. Send us your photos and we lay it out and send a proof."
+     ]
+    },
+    {
+     "h2": "Sublimated shirts and jerseys",
+     "p": [
+      "All-over sublimated polyester shirts and jerseys carry a design from collar to hem and seam to seam, perfect for teams, events and brands that want a bold look. Because the ink is part of the fabric, the shirt stays breathable and soft, and the design survives seasons of games and washes."
+     ]
+    },
+    {
+     "h2": "Photo quality and file tips",
+     "p": [
+      "Sublimation shows every detail of a photo, so use the largest, clearest version you have, ideally straight from the phone or camera rather than a screenshot. We adjust brightness, remove backgrounds and lay out collages for you, and the proof shows exactly how it will look."
+     ]
+    },
+    {
+     "h2": "Sublimation gift ideas",
+     "p": [
+      "A blanket made from a year of family photos, a mug with the grandkids' faces, a tumbler with a name in her favorite colors, a phone case with a pet's portrait, pet bowls with a name, a puzzle made from a vacation photo, or a memorial blanket for the family to keep. Sublimation is how we make most of the photo gifts in our shop, and every one starts with your photos and a proof."
+     ]
+    },
+    {
+     "h2": "Sublimation for businesses, schools and teams",
+     "p": [
+      "Businesses order sublimated mugs, mouse pads, coasters and lanyards with their logo as client gifts and giveaways, and salons and restaurants use sublimated aprons and signs in their space. Schools and coaches order full-color jerseys, spirit towels and photo keepsakes for senior night, and families order matching photo gifts for reunions and memorials. Tell us how many you need and we will suggest the items that print best."
+     ]
+    },
+    {
+     "h2": "Sublimation near me in Chicago",
+     "p": [
+      "Our shop is in Lakeview, Chicago, near Lincoln Park, North Center, Roscoe Village, Ravenswood and Logan Square. Local customers pick up by appointment, and we ship sublimated gifts anywhere in the US. Because sublimation needs specific blanks, tell us what you want to make and we will confirm the best item, size and price before you order, with a proof of the design."
+     ]
+    },
+    {
+     "h2": "Turnaround and pickup",
+     "p": [
+      "Most sublimation orders are ready in 7 to 14 business days after proof approval. Pick up at our Lakeview shop by appointment, or we ship anywhere in the US."
+     ]
+    }
+   ],
+   "faq": [
+    {
+     "q": "What can be sublimated?",
+     "a": "Polyester and poly-blend fabrics in white or light colors, plus coated mugs, tumblers, blankets, phone cases, mouse pads, puzzles and other sublimation blanks."
+    },
+    {
+     "q": "Will a sublimated print crack or fade?",
+     "a": "No. The ink bonds into the material, so it does not crack, peel or wash out."
+    },
+    {
+     "q": "Can you sublimate on a black cotton shirt?",
+     "a": "No. Sublimation needs light polyester. For dark cotton we use DTF printing instead."
+    },
+    {
+     "q": "Can you make a photo collage blanket?",
+     "a": "Yes. Send the photos and we design the collage and send a proof."
+    },
+    {
+     "q": "Is there a minimum?",
+     "a": "No, one item is welcome."
+    },
+    {
+     "q": "How long does it take?",
+     "a": "7 to 14 business days after you approve the proof."
+    },
+    {
+     "q": "Can you sublimate a team jersey?",
+     "a": "Yes, all-over sublimated polyester jerseys with names and numbers."
+    },
+    {
+     "q": "What photo file should I send?",
+     "a": "The largest original photo you have; we prepare it for print."
+    },
+    {
+     "q": "Can you make a pet bowl with my pet's name?",
+     "a": "Yes, sublimated pet bowls and mats."
+    },
+    {
+     "q": "Can you make a photo puzzle?",
+     "a": "Yes, from any clear photo."
+    },
+    {
+     "q": "Can I see the layout before you print?",
+     "a": "Yes, every order gets a proof."
+    },
+    {
+     "q": "Do you sublimate on cotton?",
+     "a": "No. Cotton needs DTF or screen printing; sublimation is for polyester and coated items."
+    },
+    {
+     "q": "Can you make a memorial blanket?",
+     "a": "Yes, a photo collage blanket the family can keep."
+    }
+   ],
+   "cta": {
+    "h2": "Start a Sublimation Order",
+    "p": "Send your photos, the item you want and your date."
+   },
+   "related": [
+    {
+     "label": "DTF Transfers",
+     "href": "/services/dtf-transfers.html"
+    },
+    {
+     "label": "Custom Glassware",
+     "href": "/services/custom-glassware.html"
+    },
+    {
+     "label": "Mother's Day Gifts",
+     "href": "/occasions/mothers-day-gifts-chicago.html"
+    }
+   ]
+  },
+  {
+   "path": "services/custom-glassware.html",
+   "calendar": null,
+   "kind": "service",
+   "keyword": "custom glassware",
+   "eyebrow": "Custom Glassware &amp; Drinkware · Chicago, IL",
+   "title": "Custom Glassware & Tumblers Chicago | June's Tees",
+   "meta": "Custom glassware in Chicago: personalized wine glasses, champagne flutes, shot glasses, engraved tumblers and flasks for weddings, parties and gifts.",
+   "h1": "<em>Custom Glassware</em> &amp; Drinkware in Chicago",
+   "pitch": "Personalized wine glasses, champagne flutes, shot glasses, engraved tumblers and flasks for weddings, birthdays, parties and gifts.",
+   "badges": [
+    "🥂 Names &amp; Dates",
+    "💍 Wedding Party",
+    "🎁 Gift Ready",
+    "🚗 Pickup by Appointment"
+   ],
+   "hero": "bridesmaid-wine-glass",
+   "work": [
+    "name-shot-glass",
+    "etched-partner-glass",
+    "celebration-cruise-tee",
+    "funny-birthday-card",
+    "pink-business-cards",
+    "custom-logo-decal"
+   ],
+   "products": [
+    "c72",
+    "c71",
+    "c67",
+    "c68",
+    "c58",
+    "c52"
+   ],
+   "heading": "Design the rest of the celebration",
+   "sections": [
+    {
+     "h2": "Personalized glasses for every occasion",
+     "p": [
+      "Custom glassware turns a toast into a keepsake. We personalize wine glasses, stemless glasses, champagne flutes, shot glasses, beer glasses and rocks glasses with names, dates, monograms and short messages, in vinyl or etched finishes. Bridal parties, birthdays, anniversaries, Valentine's Day and corporate gifts are our most common glassware orders."
+     ]
+    },
+    {
+     "h2": "Engraved tumblers and flasks",
+     "p": [
+      "Stainless steel tumblers with an engraved monogram or name keep drinks cold and last for years, and engraved flasks make classic groomsmen gifts. We also make full-color photo tumblers with sublimation for something more personal."
+     ]
+    },
+    {
+     "h2": "Party glassware and favors",
+     "p": [
+      "Shot glasses with the birthday year, \"Bride Squad\" wine glasses, custom cups for a milestone party, and etched glasses as client or partner gifts make favors people take home. Order a set for everyone, each with their own name."
+     ]
+    },
+    {
+     "h2": "Gift sets",
+     "p": [
+      "We put glasses together with wine bags, gift boxes, roses and signs to make ready-to-give sets for Valentine's Day, Mother's Day, weddings and retirements. Tell us the budget and the person, and we will suggest a set."
+     ]
+    },
+    {
+     "h2": "Glassware for birthdays and milestones",
+     "p": [
+      "Milestone birthdays (21st, 30th, 40th, 50th) are perfect for shot glasses and wine glasses with the year and the guest of honor's name, or a different name on each glass for the whole party. Pair them with matching shirts and a banner for a complete celebration."
+     ]
+    },
+    {
+     "h2": "Corporate and client gifts",
+     "p": [
+      "Etched glasses, engraved tumblers and branded drinkware make lasting client and employee gifts, especially for the holidays, closings and anniversaries. We add your logo, a short message and each recipient's name, and pack every gift ready to hand out."
+     ]
+    },
+    {
+     "h2": "Caring for your custom glassware",
+     "p": [
+      "Vinyl lettering lasts longest when glasses are washed by hand and not soaked; etched and engraved designs are permanent and dishwasher safe on most glass. We include care notes with every order."
+     ]
+    },
+    {
+     "h2": "Wedding and bridal party glassware",
+     "p": [
+      "Weddings are where glassware shines: Mr and Mrs champagne flutes for the toast, wine glasses with each bridesmaid's name, \"Bride Squad\" tumblers for the bachelorette trip, engraved flasks for the groomsmen, and etched glasses with the date as guest favors. We match your wedding colors and fonts and can make the welcome sign and table signs to go with them, so the whole day looks like one set."
+     ]
+    },
+    {
+     "h2": "Engraving, etching and vinyl: what is the difference?",
+     "p": [
+      "Engraving cuts the design into stainless steel or coated tumblers and flasks, so it never wears off. Etching frosts the surface of the glass for an elegant, permanent look that is dishwasher safe on most glass. Vinyl lettering comes in many colors and fonts, including glitter and metallic, and is ideal for party glasses and gifts that will be washed by hand. We will recommend the right finish for how the glasses will be used."
+     ]
+    },
+    {
+     "h2": "Glassware for the holidays",
+     "p": [
+      "Personalized glassware is one of our most requested holiday gifts: Christmas wine glasses and mugs with each family member's name, Valentine's champagne flutes for couples, Mother's Day and Father's Day tumblers, and New Year's Eve flutes for a party. We can match a set to your theme colors and wrap it as a gift set, ready to hand over."
+     ]
+    },
+    {
+     "h2": "How to order custom glassware",
+     "p": [
+      "Glassware is quoted rather than designed online. Send us the names or wording, the type of glass, the quantity and your date, and we reply with a proof and a price. Our standard turnaround is 7 to 14 business days after proof approval; pick up at our Lakeview shop by appointment, or we ship carefully packed."
+     ]
+    }
+   ],
+   "faq": [
+    {
+     "q": "Can you put a different name on each glass?",
+     "a": "Yes, every glass in a set can carry its own name."
+    },
+    {
+     "q": "Is the lettering dishwasher safe?",
+     "a": "Hand washing is best for vinyl lettering. Etched and engraved finishes are permanent."
+    },
+    {
+     "q": "Do you engrave stainless steel tumblers?",
+     "a": "Yes, names, initials and monograms."
+    },
+    {
+     "q": "What is the minimum for glassware?",
+     "a": "There is no minimum on most items; sets of the same design cost less per piece."
+    },
+    {
+     "q": "Can you make a gift set?",
+     "a": "Yes, with glasses, a wine bag or box, and a sign or card."
+    },
+    {
+     "q": "How do I order?",
+     "a": "Send the wording, the glass type, the quantity and your date, and we quote it with a proof."
+    },
+    {
+     "q": "Do you make glasses for a 21st or 50th birthday?",
+     "a": "Yes, with the name, the age and the date."
+    },
+    {
+     "q": "Can you add our company logo to tumblers?",
+     "a": "Yes, engraved or printed with your logo."
+    },
+    {
+     "q": "Do you ship glassware?",
+     "a": "Yes, carefully packed, anywhere in the US."
+    },
+    {
+     "q": "Do you make Mr and Mrs champagne flutes?",
+     "a": "Yes, with your names or the wedding date."
+    },
+    {
+     "q": "Can you make wedding favors for every guest?",
+     "a": "Yes, glasses or shot glasses with each guest's name or the date."
+    },
+    {
+     "q": "Can you match our wedding colors?",
+     "a": "Yes, send your colors and fonts."
+    },
+    {
+     "q": "Can you put a logo on wine glasses?",
+     "a": "Yes, etched or in vinyl, for events and client gifts."
+    },
+    {
+     "q": "Do you make shot glasses for a party?",
+     "a": "Yes, with the name, the year or a fun line for every guest."
+    }
+   ],
+   "cta": {
+    "h2": "Get a Glassware Quote",
+    "p": "Send the wording, the glass type, the quantity and your date."
+   },
+   "related": [
+    {
+     "label": "Weddings & Bachelorette",
+     "href": "/occasions/wedding-bachelorette-chicago.html"
+    },
+    {
+     "label": "Valentine's Day Gifts",
+     "href": "/occasions/valentines-day-gifts-chicago.html"
+    },
+    {
+     "label": "Event Decor & Party Favors",
+     "href": "/services/event-decor.html"
+    }
+   ]
+  }
+ ]
+}

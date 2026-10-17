@@ -246,7 +246,7 @@ test('helpers learn the job from the playbook, written for customers, never as t
 const POSTING = require('../tools/lib/hiring-posting');
 
 test('every job role is complete: test, model answers, guide, job post and screening', () => {
-  assert.deepStrictEqual(Object.keys(H.ROLES).sort(), ['ads', 'bookkeeper', 'content', 'designer', 'developer', 'sales']);
+  assert.deepStrictEqual(Object.keys(H.ROLES).sort(), ['ads', 'bookkeeper', 'content', 'designer', 'developer', 'sales', 'software']);
   for (const role of Object.values(H.ROLES)) {
     const k = role.key;
     assert.ok(role.label && role.job && role.reward && role.intro, k);
@@ -277,7 +277,7 @@ test('every job role is complete: test, model answers, guide, job post and scree
     assert.ok(Array.isArray(post.gem) && post.gem.length >= 5, `${k} has a Gem list`);
     assert.ok(POSTING.labelsFor(post.prefix).includes(`Gem · ${post.prefix}`), `${k} has its own Gem label`);
   }
-  assert.strictEqual(new Set(Object.values(POSTING.POSTS).map((p) => p.code)).size, 6, 'code words differ per job');
+  assert.strictEqual(new Set(Object.values(POSTING.POSTS).map((p) => p.code)).size, 7, 'code words differ per job');
 });
 
 test('roles change the grading, not the engine', () => {
@@ -335,8 +335,8 @@ test('hired is not on Team yet: the card offers Add to Team, and the Staff form 
   assert.match(src, /name="name" placeholder="Name" required maxlength="80" value="\$\{escEmail\(text\(\(req\.query \|\| \{\}\)\.add_name, 80\)\)\}"/, 'escaped and capped');
 });
 
-test('the test fee: PayPal email checked, paid once, booked on Finances', () => {
-  assert.strictEqual(H.TEST_FEE, 15);
+test('the test fee: Wise email checked, paid once, booked on Finances', () => {
+  assert.strictEqual(H.TEST_FEE, 5);
   assert.strictEqual(H.cleanPaypal(' Ana@Example.COM '), 'ana@example.com');
   assert.strictEqual(H.cleanPaypal(''), '');
   for (const bad of ['ana', 'ana@', 'a<b>@x.com', `${'a'.repeat(260)}@x.com`]) assert.strictEqual(H.cleanPaypal(bad), null, bad);
@@ -353,9 +353,9 @@ test('the test fee: PayPal email checked, paid once, booked on Finances', () => 
 
 test('rejection messages: filled in, kind, and the fee line only when a fee is due', () => {
   assert.deepStrictEqual(Object.keys(POSTING.REJECTIONS), ['screening', 'test', 'interview']);
-  const m = POSTING.rejectionMessage('test', { name: 'Ana Cruz', job: 'graphic designer', fee: 'Your $15 test fee has been sent by PayPal.' });
+  const m = POSTING.rejectionMessage('test', { name: 'Ana Cruz', job: 'graphic designer', fee: 'Your $5 test fee has been sent by Wise.' });
   assert.match(m, /^Hi Ana, thank you for taking our test for the graphic designer position/);
-  assert.match(m, /this time\. Your \$15 test fee has been sent by PayPal\. We will keep/);
+  assert.match(m, /this time\. Your \$5 test fee has been sent by Wise\. We will keep/);
   assert.doesNotMatch(POSTING.rejectionMessage('screening', { name: 'Bo' }), /\{|\}|fee/);
   assert.doesNotMatch(POSTING.rejectionMessage('interview', { name: 'Bo', job: 'x' }), /\{fee\}|  /);
   assert.ok(!POSTING.SHARED_LABELS.some((l) => /^Gem/.test(l.name)), 'Gem labels are per job now');
@@ -366,7 +366,7 @@ test('round 2 confirms the pay: read from the job post, with the shared terms', 
   for (const k of Object.keys(H.ROLES)) {
     const lines = POSTING.payLines(k);
     assert.ok(lines.length >= 3 && /\$\d/.test(lines[0]), `${k} pay lines`);
-    assert.ok(lines.includes('13th-month pay starts only after 12 months of service'), `${k} 13th month`);
+    assert.ok(lines.includes('13th-month pay, prorated from your start date and paid out every 6 months'), `${k} 13th month`);
     assert.ok(lines.includes('Hours can be adjusted up or down based on performance'), `${k} hours`);
     assert.ok(POSTING.POSTS[k].body.includes(POSTING.PAY_TERMS), `${k} post says it too`);
   }

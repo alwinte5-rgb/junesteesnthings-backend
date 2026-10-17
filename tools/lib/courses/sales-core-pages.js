@@ -66,7 +66,7 @@ module.exports = {
     ] },
     { from: 'Turnaround', checks: [
       q('When does the turnaround clock start?', ['At the first message', 'When the proof is approved and the deposit paid', 'When you send the quote'], 1, 'Late artwork or approval moves the date.'),
-      q('Rush for next business day adds…', ['+10%', '+30%', '+80%'], 2, 'Next day +80%, 2 days +50%, 3 days +30%, 4 days +10%.'),
+      q('Rush on DTF for next business day adds…', ['+10%', '+30%', '+80%'], 2, 'Next day +80%, 2 days +50%, 3 days +30%, 4 days +10%. Only DTF can be rushed.'),
     ] },
     { from: 'Getting the order to the customer', checks: [
       q('Which is NOT one of the ways an order reaches the customer?', ['Free pickup', 'Shipping or local delivery', 'Dropped at any address for free'], 2, 'Pickup, shipping, or local delivery to nearby ZIPs.'),
@@ -112,7 +112,7 @@ module.exports = {
     ] },
     { from: 'Step 4: dates and notes', checks: [
       q('Which button do you press at the end?', ['Finish', 'Save as draft', 'Duplicate'], 1, 'Save as draft, not Finish.'),
-      q('Change the Qty to 30. What does the orange warning say?', ['Nothing', 'Screen printing starts at 50: quote DTF', 'Add a rush'], 1, 'Then change it back to 50.'),
+      q('Change the Qty to 30. What does the orange warning say?', ['Nothing', 'Under 50 it is charged as 50: quote DTF', 'Add a rush'], 1, 'Then change it back to 50.'),
     ] },
   ],
   's7-upsell': [
@@ -126,7 +126,7 @@ module.exports = {
     ] },
     { from: 'When not to upsell', checks: [
       q('Their budget is fixed. Which upsell is OK?', ['Hoodies for everyone', 'A price break that lowers their per-piece price', 'Rush'], 1, 'Only what saves them money.'),
-      q('Which is NEVER OK?', ['Offering it as an optional item', 'Promising a discount to close it', 'Mentioning it in a follow-up'], 1, 'Discounts are June\'s.'),
+      q('Which is NEVER OK?', ['Offering it as an optional item', 'Promising a discount to close it', 'Mentioning it in a follow-up'], 1, 'Discounts are June\'s, and never a way to close an upsell.'),
     ] },
   ],
   's8-prospect': [

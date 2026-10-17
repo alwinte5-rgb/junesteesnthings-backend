@@ -187,7 +187,9 @@ def forbidden_in_diff(base, head, repo):
         # names and no values, and the name alone cannot tell you which it is.
         try:
             text = git_out(["show", "%s:%s" % (head, rel)], repo)
-        except RuntimeError:
+        except (RuntimeError, UnicodeDecodeError):
+            # Deleted, unreadable, or binary (a .jpg is not text): judged on
+            # its path alone, like a file that cannot be read.
             text = None
         what = boundary.forbidden_reason(rel, text)
         if what:

@@ -34,12 +34,13 @@ const MINUTES = 30;
 const GRACE_MINUTES = 5;
 const LINK_DAYS = 7;
 const LIMITS = { name: 80, note: 300, answer: 3000, paypal: 254, ref: 80 };
-/* What a finished round 1 is paid, by PayPal (the post promises a paid test:
+/* What a finished round 1 is paid, by Wise (to the email they give; the
+   field is still called paypal) (the post promises a paid test:
    no unpaid trial work). One fee per applicant, round 2 included. */
-const TEST_FEE = 15;
+const TEST_FEE = 5;
 const FEE_DAYS = 7;
 
-/** A PayPal email from a form: '' when blank, null when it is not an email. */
+/** A Wise (formerly PayPal) email from a form: '' when blank, null when it is not an email. */
 function cleanPaypal(v) {
   const s = String(v == null ? '' : v).trim().toLowerCase();
   if (!s) return '';
@@ -198,6 +199,7 @@ const ROLES = {
   content: require('./hiring-content'),
   ads: require('./hiring-ads'),
   bookkeeper: require('./hiring-bookkeeper'),
+  software: require('./hiring-software'),
 };
 /* Every video call ends with the same identity and reliability check
    (hiring-posting.js TRUST_CALL), whatever the job. */

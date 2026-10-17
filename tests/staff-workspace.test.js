@@ -61,6 +61,10 @@ test('the route table names no route that does not exist', () => {
 
 test('every permission a route asks for is a real one', () => {
   for (const [k, need] of Object.entries(STAFF.ROUTES)) {
+    if (Array.isArray(need)) {
+      assert.ok(need.length && need.every((n) => STAFF.PERMISSIONS[n]), `${k} → ${need}`);
+      continue;
+    }
     assert.ok(need === 'owner' || need === 'any' || STAFF.PERMISSIONS[need], `${k} → ${need}`);
   }
 });
@@ -283,7 +287,11 @@ test('without Cloudflare configured, every staff page is refused, never opened',
 test('the owner is named by OWNER_EMAILS, a helper by an active staff row, anyone else is refused', () => {
   assert.ok(requireAdminSrc.indexOf('cfAccess.owners.includes(email)') < requireAdminSrc.indexOf('staffByEmail(email)'));
   assert.match(requireAdminSrc, /if \(!staff\) return notOnTeam\(req, res, email\);/);
-  assert.match(requireAdminSrc, /if \(!STAFF\.mayUseRoute\(staff, req\.method, req\.route && req\.route\.path\)\) return refuseStaff/);
+  assert.match(requireAdminSrc, /if \(!STAFF\.mayUseRoute\(staff, req\.method, req\.route && req\.route\.path\)\) \{/);
+  /* The one exception: viewing a job the owner tagged for this helper. */
+  assert.match(requireAdminSrc, /req\.method === 'GET' && req\.route && TAGGED_JOB_ROUTES\.has\(req\.route\.path\) &&\s*await ownerTaggedFor\(/);
+  assert.match(src, /const TAGGED_JOB_ROUTES = new Set\(\['\/admin\/production\/:code', '\/admin\/production\/:code\/artwork\/:n', '\/admin\/production\/:code\/artwork\.zip'\]\);/);
+  assert.match(requireAdminSrc, /if \(!taggedJob\) return refuseStaff\(req, res, staff\);/);
   const lookup = src.slice(src.indexOf('async function staffByEmail('), src.indexOf('\n}\n', src.indexOf('async function staffByEmail(')));
   assert.match(lookup, /WHERE lower\(s\.email\) = \$1/);
   assert.match(lookup, /if \(!s \|\| !s\.active\) return null;/);
@@ -470,10 +478,19 @@ test('team chat: a helper reaches only their own conversation', () => {
 
 test('team chat lines are text, never markup', () => {
   const page = route("app.get('/admin/team-chat', requireAdmin");
-  assert.match(page, /escEmail\(j\.body\)/);
-  assert.match(page, /el\.appendChild\(document\.createTextNode\(m\.body\)\)/);
+  const line = src.slice(src.indexOf('function chatLineHtml('), src.indexOf('\n}\n', src.indexOf('function chatLineHtml(')));
+  assert.match(line, /escEmail\(j\.body\)/);
+  assert.match(line, /escEmail\(j\.who\)/);
+  assert.match(line, /escEmail\(f\.url\)/, 'a file address is escaped');
+  assert.match(line, /escEmail\(f\.name\)/, 'a file name is escaped');
+  assert.match(page, /lineHtml = \(m\) => chatLineHtml\(/);
+  assert.match(page, /bd\.textContent = m\.body \|\| ''/);
+  assert.match(page, /tg\.textContent = '[^']*' \+ m\.tag\.code/, 'a polled order tag is text');
+  assert.match(page, /b\.textContent = x\.body \|\| ''/, 'an edit arriving by poll is text');
+  assert.match(line, /escEmail\(j\.original\)/, 'the first wording is escaped');
+  assert.match(line, /escEmail\(j\.tag\.href\)/);
   assert.match(page, /b\.textContent = m\.who/);
-  assert.match(page, /escEmail\(j\.who\)/);
+  assert.match(page, /fa\.textContent = '[^']*' \+ m\.file\.name/, 'a polled file name is text');
   assert.doesNotMatch(page, /innerHTML/);
   const send = route("app.post('/admin/team-chat', requireAdmin");
   assert.match(send, /body\.length > TEAM_CHAT_MAX/, 'length is capped');
@@ -577,12 +594,14 @@ test('releasing a held quote starts the customer\'s clock then, keeping its days
 });
 
 /* Owner, 2026-10-09: content, ads, bookkeeping and development need chat, the
-   Playbook and their training without seeing jobs, prices or customers. */
-test('the Team preset opens chat, the Playbook and training, and nothing that shows work, prices or customers', () => {
+   Playbook and their training without seeing prices or customers. Since
+   2026-10-13 every helper also sees the production schedule (no money). */
+test('the Team preset opens chat, the Playbook, training and the schedule, and nothing that shows prices or customers', () => {
   const p = STAFF.presetPerms('team');
   assert.ok(p, 'the preset exists');
   for (const [k, v] of Object.entries(p)) {
     if (k === 'kb.edit') { assert.strictEqual(v.level, 'approval', 'Playbook suggestions wait for June'); continue; }
+    if (k === 'jobs.schedule') { assert.strictEqual(v.level, 'on', 'every helper sees the schedule'); continue; }
     // The lowest level each permission has: 'off', or 'approval' where off is not an option (quotes.send).
     const levels = STAFF.PERMISSIONS[k].levels || [];
     assert.strictEqual(v.level, levels.includes('off') || !levels.length ? 'off' : levels[0], `team → ${k}`);
@@ -593,8 +612,9 @@ test('the Team preset opens chat, the Playbook and training, and nothing that sh
   for (const [route, need] of Object.entries(STAFF.ROUTES)) {
     if (need === 'any') continue;
     if (need === 'owner') continue;
+    if (Array.isArray(need)) continue; // the schedule's job page: tested on its own
     const perm = typeof need === 'string' ? need : need.perm;
-    if (perm && perm !== 'kb.edit' && p[perm] && p[perm].level !== 'off') {
+    if (perm && perm !== 'kb.edit' && perm !== 'jobs.schedule' && p[perm] && p[perm].level !== 'off') {
       assert.ok(perm === 'quotes.send' && p['quotes.view'].level === 'off', `${route} stays shut`);
     }
   }
@@ -602,7 +622,7 @@ test('the Team preset opens chat, the Playbook and training, and nothing that sh
 });
 
 test('a new helper starts on their training path\'s preset', () => {
-  for (const t of ['content', 'ads', 'developer']) assert.strictEqual(STAFF.presetForTrack(t), 'team', t);
+  for (const t of ['content', 'ads', 'developer', 'software']) assert.strictEqual(STAFF.presetForTrack(t), 'team', t);
   assert.strictEqual(STAFF.presetForTrack('bookkeeper'), 'books', 'a bookkeeper can read the books');
   assert.strictEqual(STAFF.presetForTrack('design'), 'design');
   assert.strictEqual(STAFF.presetForTrack('sales'), 'training');
@@ -639,4 +659,38 @@ test('finances.view reads the Finances page and its reports, and can change noth
   assert.match(page, /\$\{canEdit \? `\s*<form method="POST" action="\/admin\/expenses"/);
   assert.match(page, /g\.entries\.map\(e => !canEdit \?/);
   assert.match(page, /!canEdit \? '<span class="muted">June settles this<\/span>'/);
+});
+
+/* Owner, 2026-10-13: "give all employees access to the production schedule so
+   that the designers can communicate with customers and see files". */
+test('every preset opens the production schedule, and the schedule shows no money', () => {
+  for (const name of Object.keys(STAFF.PRESETS)) {
+    assert.strictEqual(STAFF.presetPerms(name)['jobs.schedule'].level, 'on', name);
+  }
+  const team = { kind: 'staff', id: 9, perms: STAFF.presetPerms('team') };
+  for (const r of ['/admin/schedule', '/admin/design/:code', '/admin/design/:code/artwork/:n', '/admin/design/:code/sent-file/:id/:n']) {
+    assert.ok(STAFF.mayUseRoute(team, 'GET', r), r);
+  }
+  assert.ok(STAFF.mayUseRoute(team, 'POST', '/admin/design/:code/note'));
+  assert.ok(!STAFF.mayUseRoute(team, 'GET', '/admin/production/:code'), 'not the priced job page');
+  assert.ok(!STAFF.mayUseRoute(team, 'GET', '/admin/design'), 'not the design queue');
+  const off = { kind: 'staff', id: 9, perms: { ...STAFF.presetPerms('team'), 'jobs.schedule': { level: 'off' } } };
+  assert.ok(!STAFF.mayUseRoute(off, 'GET', '/admin/design/:code'), 'switched off, the job page shuts');
+  const fn = src.slice(src.indexOf("app.get('/admin/schedule'"), src.indexOf("app.get('/admin/production/:code/artwork/:n'"));
+  assert.ok(fn.length > 100);
+  assert.doesNotMatch(fn, /money\(|paid_amount|total\b|cost_/, 'no prices on the schedule');
+  const page = src.slice(src.indexOf("app.get('/admin/design/:code', requireAdmin"), src.indexOf('async function designNotesCard'));
+  assert.doesNotMatch(page, /money\(|jobCostForm|creditCard/, 'no prices on the job page');
+});
+
+test('the schedule opens only the jobs it lists, and shows no money emails', () => {
+  const fn = src.slice(src.indexOf('async function designJobFor('), src.indexOf('function firstNameOf('));
+  assert.match(fn, /OR \(\$3::boolean AND \$\{SCHEDULED_JOB_SQL\}\)/, 'never a draft, held or unaccepted quote');
+  assert.match(src, /const SCHEDULED_JOB_SQL = `q\.accepted_at IS NOT NULL AND q\.delivered_at IS NULL AND COALESCE\(q\.status, ''\) NOT IN \('held', 'draft'\)`/);
+  assert.match(src, /const shown = design \? history\.filter\(designVisibleMessage\) : history;/);
+  for (const k of ['receipt', 'balance-reminder', 'deposit-reminder', 'accepted', 'follow-up', 'payment-received']) {
+    assert.ok(!src.match(/const DESIGN_MESSAGE_KINDS = new Set\(\[([^\]]+)\]/)[1].includes(`'${k}'`), `${k} stays off the design page`);
+  }
+  assert.match(src, /if \(e && kind === 'design' && !designVisibleMessage\(e\)\) return res\.status\(404\)/);
+  assert.match(src, /INSERT INTO staff_perm_grants \(grant_key\) VALUES \('jobs\.schedule:2026-10-13'\) ON CONFLICT DO NOTHING/, 'the switch-on runs once');
 });

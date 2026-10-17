@@ -55,7 +55,7 @@ test('an old product that matches nothing goes to all products, never a 404', ()
 });
 
 test('old store pages land on their equivalent', () => {
-  assert.strictEqual(legacyRedirect('/pages/contact'), '/#contact');
+  assert.strictEqual(legacyRedirect('/pages/contact'), '/contact');
   assert.strictEqual(legacyRedirect('/pages/seller-profile'), '/#about');
   assert.strictEqual(legacyRedirect('/pages/products'), `${D}/products.php`);
   assert.strictEqual(legacyRedirect('/pages/ccpa-opt-out'), `${D}/privacy.php`);
@@ -63,7 +63,7 @@ test('old store pages land on their equivalent', () => {
   assert.strictEqual(legacyRedirect('/blogs/news'), '/blog/');
   assert.strictEqual(legacyRedirect('/blogs/news/some-old-post'), '/blog/');
   assert.strictEqual(legacyRedirect('/pages/anything-else'), '/');
-  assert.strictEqual(legacyRedirect('/PAGES/Contact/'), '/#contact', 'case and trailing slash do not matter');
+  assert.strictEqual(legacyRedirect('/PAGES/Contact/'), '/contact', 'case and trailing slash do not matter');
 });
 
 test('nothing outside the old store paths is touched', () => {

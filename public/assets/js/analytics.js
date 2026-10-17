@@ -25,6 +25,7 @@
 
   var GA4_ID = 'G-E65381594C';           // June's Tees & Things — ONE GA4 property across both domains (cross-domain funnel)
   var META_PIXEL_ID = '348199180594218'; // June's Tees Meta Pixel (same on both domains)
+  var ADS_ID = 'AW-433023263';           // Google Ads conversion/remarketing tag
 
   /* A quote page's address IS its password (/q/<code> shows the customer's
      name, email, phone and address). On it: GA4 gets the address with the
@@ -51,6 +52,10 @@
       gcfg.page_title = 'Quote';
     }
     window.gtag('config', GA4_ID, gcfg);
+    // Google Ads tag (account 396-866-5737) rides the same gtag.js: lets Ads
+    // see ad visitors for conversions and remarketing. Quote pages skip it —
+    // it would send the private /q/<code> address.
+    if (!QUOTE_PAGE) window.gtag('config', ADS_ID);
   }
 
   // ── Meta (Facebook) Pixel ─────────────────────────────────────────────
@@ -83,9 +88,18 @@
   // Money events go to Meta as its STANDARD events (fbq 'track'), which is
   // what ad optimisation reads; the designer's analytics.php maps the same.
   // Never put an email, phone or name in params — ids and amounts only.
-  var META_STANDARD = { purchase: 'Purchase', add_to_cart: 'AddToCart', begin_checkout: 'InitiateCheckout' };
+  // A sent quote is this site's lead: Meta's 'Lead' is what a leads campaign
+  // optimises for (the designer maps its generate_lead the same way).
+  var META_STANDARD = { purchase: 'Purchase', add_to_cart: 'AddToCart', begin_checkout: 'InitiateCheckout', quote_submitted: 'Lead' };
+  // params.meta_event_id: the id the server sent the same event under
+  // (Conversions API), so Meta counts it once. Meta only; GA never sees it.
   window.jtTrack = function (name, params) {
     params = params || {};
+    var metaEventId = params.meta_event_id;
+    if (metaEventId !== undefined) {
+      params = Object.assign({}, params);
+      delete params.meta_event_id;
+    }
     if (gaOn && window.gtag) window.gtag('event', name, params);
     if (fbOn && window.fbq) {
       var std = META_STANDARD[name];
@@ -93,7 +107,8 @@
         var fb = {};
         if (params.value !== undefined) fb.value = params.value;
         if (params.currency) fb.currency = params.currency;
-        window.fbq('track', std, fb, params.transaction_id ? { eventID: String(params.transaction_id) } : undefined);
+        var eid = metaEventId || params.transaction_id;
+        window.fbq('track', std, fb, eid ? { eventID: String(eid) } : undefined);
       } else {
         window.fbq('trackCustom', name, params);
       }

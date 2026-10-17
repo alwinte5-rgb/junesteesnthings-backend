@@ -103,10 +103,13 @@ DTF — method #1 "Printing", the only ACTIVE method, so this is live on the sto
 Stage 1 is the main print (132 sq in), stage 2 an additional location.
 Live bands stopped at 175, so every larger order quoted at the 175 rate.
 
-  stage                  1-11      12-24      25-49      50-99    100-249    250-499    500-999  1000-2499  2500-7000
-  ---------------------------------------------------------------------------------------------------------------------
-  main print           $26.05     $20.30     $15.75     $11.90      $9.50      $7.55      $6.10      $4.90      $4.00
-  add. location         $6.70      $6.50      $5.25      $4.95      $4.20      $3.50      $3.10      $2.75      $2.55
+  stage                   1-4       5-11      12-24      25-49      50-99    100-249    250-499    500-999  1000-2499  2500-7000
+  --------------------------------------------------------------------------------------------------------------------------------
+  main print           $23.20     $20.75     $18.30     $15.75     $11.90      $9.50      $7.55      $6.10      $4.90      $4.00
+  add. location         $5.95      $5.90      $5.85      $5.25      $4.95      $4.20      $3.50      $3.10      $2.75      $2.55
+
+  1-4 / 5-11 set by the owner 2026-10-15 (was 1-3 $26.05 / 4-11 $23.20).
+  5-11 is a typed price (`fix` in the generator), not markup x cost.
 
   Every stitch count from 0 to 25k now has a price. The 14k-22k band is flat $60,
   which also covers the 18k-20k gap Anchorfish leaves unpriced on their own sheet.

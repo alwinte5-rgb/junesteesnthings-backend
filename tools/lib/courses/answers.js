@@ -7,6 +7,53 @@
    Playbook copy is replaced only where June has not edited it herself. */
 
 module.exports = {
+  // Design (owner, 2026-10-13: approved as suggested; the shop does not pay for ChatGPT or Firefly)
+  '[owner to fill in: the thread color chart we match to]':
+    'the Madeira Polyneon 40 chart. Write the Madeira number for each color on the proof.',
+  '[owner to fill in: minimum size and quantity for patches, vinyl and puff print]':
+    'puff print 12 pieces, art at least 2in tall, lines at least 1/8in; vinyl 1 piece and up, lines at least 1/8in; patches 25 pieces, 2in to 4in.',
+  '[owner to fill in: color limits for patches, vinyl and puff print]':
+    'puff print 1 color; vinyl up to 3 colors, one layer each; patches up to 9 thread colors.',
+  '[owner to fill in: which garments take patches, vinyl and puff print]':
+    'puff print on cotton and cotton-blend tees, hoodies and caps; vinyl on cotton, poly and blends, never nylon or rain jackets; patches on hats, jackets, bags and heavier tops.',
+  '[owner to fill in: the file type and settings we send to Signs365, and who uploads it]':
+    'a PDF at full size, CMYK, 150 dpi, fonts outlined. You save it to the job; June uploads it to Signs365.',
+  '[owner to fill in: the bleed Signs365 wants for each sign type]':
+    'Bleed is 0.125in on yard signs and rigid signs, and 1in on banners (for the hems and grommets). If the Signs365 template asks for more, follow the template.',
+  '[owner to fill in: which Adobe and Creative Fabrica accounts the designer uses, and where mockup templates and fonts are kept]':
+    'the shop\'s Adobe Creative Cloud seat and Creative Fabrica subscription, set up for you by June. Mockup templates and fonts are in the shared June\'s Tees – Design folder in Google Drive.',
+  '[owner to fill in: which AI tools and accounts the shop pays for, and which the designer may use]':
+    'our site\'s AI designer and Vectorizer.ai. The shop does not pay for ChatGPT or Firefly. Nothing else without asking June.',
+  '[owner to fill in: the Etsy shop, which downloads we sell, the file types and sizes each includes, and who publishes the listing]':
+    'June\'s Etsy shop sells digital downloads: an SVG, a PNG at 300 dpi, and a 4000px JPG preview. You make the files and the listing images; June publishes the listing.',
+  '[owner to fill in: how the designer signs in to COS Creator Studio]':
+    'June invites your email to the June\'s Tees brand in COS Creator Studio. Sign in with your own account, never hers.',
+
+  // Sales (owner, 2026-10-13: approved as suggested)
+  '[standard turnaround, owner to fill in]':
+    'about 10',
+  '[owner to fill in: which password manager, and which tools sales uses]':
+    'We use Bitwarden (free), with a shared June\'s Tees vault; June invites you. The tools you need are on the Resources page.',
+  '[owner to fill in: minimum size and quantity, colour limits, which garments each one works on]':
+    'puff print from 12 pieces, 1 color, art at least 2in tall, on cotton and cotton-blend tees, hoodies and caps; vinyl from 1 piece, up to 3 colors, on cotton, poly and blends but never nylon or rain jackets; patches from 25 pieces, 2in to 4in, up to 9 thread colors, on hats, jackets, bags and heavier tops',
+  '[owner to fill in: new prospects per quiet hour, and first messages per day]':
+    'Targets: 10 new prospects registered and 10 first messages sent a day.',
+  '[owner to fill in: prospects registered per day, and first messages sent per day, for Lead Generation]':
+    '10 prospects registered and 10 first messages sent a day.',
+  '[owner to fill in: which customer types and which neighborhoods or suburbs to prospect first]':
+    'schools, churches, family reunions and small businesses within 25 miles of the shop.',
+  // Sales roles (owner, 2026-10-13: chose these from the suggestions)
+  '[owner to fill in: which discounts or price matches a Closer may offer without asking, if any]':
+    'up to 5% off on orders of 48 pieces or more, once June has given you discounts on Staff (set to up to 5%, only from 48 pieces). The quote form holds anything else for June, and every price match goes to June first.',
+  '[owner to fill in: Sales Closer targets for reply time, conversion and average order value]':
+    'reply to every quote request within 1 business hour, 30% of the quotes you send become orders, and a $350 average order. My stats shows all three.',
+  '[owner to fill in: Account Manager targets for reorders a month, repeat revenue and reviews]':
+    '4 reorders a month, 25% of the shop\'s revenue from repeat customers, and 4 new reviews a month (every review answered within a day).',
+  '[owner to fill in: the reorder timing for each customer type]':
+    'schools and teams 6 weeks before each season; churches and nonprofits 3 weeks before each event, and once a year; businesses every 90 days; family reunions and events 10 months after their order, ready for next year.',
+  '[owner to fill in: how a quote request passes to a Closer, and whether the sale stays credited to you]':
+    'post the lead\'s link in # Sales and tag the Closer, with the five details already on the lead. The Closer builds and sends the quote. A lead you registered stays credited to you, whoever builds the quote; the Closer is paid their wage for closing it.',
+
   // Ads
   '[owner to fill in: the cost per quote request we aim for]':
     'under $15 to start.',

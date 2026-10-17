@@ -1,4 +1,5 @@
 'use strict';
+const { designerDir } = require('./designer-dir');
 
 /* Does picking a colour actually change the garment on the canvas?
  *
@@ -27,7 +28,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
-const DESIGNER = path.join(ROOT, 'Lumise/Lumise-Product-Designer-PHP-ver2.0/lumise');
+const DESIGNER = designerDir();
 const appjs = fs.readFileSync(path.join(DESIGNER, 'core/assets/js/app.js'), 'utf8');
 const fx = JSON.parse(fs.readFileSync(
   path.join(__dirname, 'fixtures', 'product-164-variations.json'), 'utf8'));
