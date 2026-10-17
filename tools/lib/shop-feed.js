@@ -1,8 +1,8 @@
 'use strict';
 
-/* The homepage's Shop section: categories and "Ready to Customize" best sellers,
- * read from the designer (jt-shop-feed.php) so a product switched off there
- * disappears here too.
+/* The product cards on jtees.net: categories, best sellers and every active
+ * product's price and photo, read from the designer (jt-shop-feed.php) so the
+ * cards show live prices and a product switched off there disappears here.
  *
  * The designer's answer is cleaned before it reaches a browser. These cards are
  * written into the page, so every link must stay on design.jtees.net and every
@@ -13,6 +13,7 @@
 
 const MAX_CATEGORIES = 16;
 const MAX_BEST = 8;
+const MAX_PRODUCTS = 2000;
 
 function text(v, max) {
   if (typeof v !== 'string') return '';
@@ -62,7 +63,20 @@ function cleanShopFeed(d) {
     from_price: price(p && p.from_price),
   })).filter((p) => p.name && p.image && p.link).slice(0, MAX_BEST);
 
-  return { categories, best };
+  /* Every active product's live price and photo, matched to the page cards by
+     link. Optional: an older designer sends none, and the cards keep theirs. */
+  const raw = Array.isArray(d.products) ? d.products : [];
+  const products = raw.slice(0, MAX_PRODUCTS).map((p) => ({
+    link: designerLink(p && p.link),
+    image: imageUrl(p && p.image),
+    from_price: price(p && p.from_price),
+  })).filter((p) => /^https:\/\/design\.jtees\.net\/product\.php\?product_id=\d+$/.test(p.link));
+
+  /* Complete only when the designer says so and nothing was cut here: the
+     page hides a product card missing from the list only then. */
+  const products_complete = d.products_complete === true && raw.length > 0 && raw.length <= MAX_PRODUCTS;
+
+  return { categories, best, products, products_complete };
 }
 
 module.exports = { cleanShopFeed };
