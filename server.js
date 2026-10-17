@@ -106,6 +106,7 @@ const HIRE_POSTING = require('./tools/lib/hiring-posting');
 const PROOFS = require('./tools/lib/job-proofs');
 const ART = require('./tools/lib/art-pipeline');
 const WELCOME = require('./tools/lib/staff-welcome');
+const AGREEMENT = require('./tools/lib/staff-agreement');
 const MSGFILES = require('./tools/lib/message-files');
 const SHARELOGIN = require('./tools/lib/shared-logins');
 const GOOGLE_ADS = require('./tools/lib/google-ads').createClient();
@@ -1212,6 +1213,22 @@ async function initStaffTables() {
      with written OK for the table). sealed is NULL once opened, cancelled or
      expired; the row stays as the record of who was sent what, and when. */
   await pool.query(`CREATE INDEX IF NOT EXISTS shared_logins_staff_idx ON shared_logins (staff_id, created_at DESC)`);
+  /* The staff agreement each helper signs before the workspace opens for
+     them (tools/lib/staff-agreement.js; owner, 2026-10-16). One row per
+     helper per wording; text_sha256 is the wording they were shown. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_agreements (
+      id           SERIAL PRIMARY KEY,
+      staff_id     INTEGER NOT NULL,
+      version      TEXT NOT NULL,
+      text_sha256  TEXT NOT NULL,
+      signed_name  TEXT NOT NULL,
+      location     TEXT NOT NULL,
+      ip           TEXT,
+      user_agent   TEXT,
+      signed_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (staff_id, version)
+    )`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS staff_resources (
       id          SERIAL PRIMARY KEY,
@@ -3385,8 +3402,9 @@ async function staffByEmail(email) {
                        WHERE t.staff_id = s.id AND (t.step_key LIKE 'tip:%' OR t.step_key LIKE 'signoff:%ready')), '{}') AS flags,
             EXISTS (SELECT 1 FROM staff_training t WHERE t.staff_id = s.id AND t.step_key = $2
                      AND t.done_at < $3::timestamptz) AS legacy_ready,
-            (SELECT started_at FROM staff_shifts h WHERE h.staff_id = s.id AND h.ended_at IS NULL LIMIT 1) AS on_clock
-       FROM staff s WHERE lower(s.email) = $1`, [email, TRAINING.READY_KEY, TRAINING.LEGACY_READY_BEFORE]);
+            (SELECT started_at FROM staff_shifts h WHERE h.staff_id = s.id AND h.ended_at IS NULL LIMIT 1) AS on_clock,
+            EXISTS (SELECT 1 FROM staff_agreements a WHERE a.staff_id = s.id AND a.version = $4) AS agreement_signed
+       FROM staff s WHERE lower(s.email) = $1`, [email, TRAINING.READY_KEY, TRAINING.LEGACY_READY_BEFORE, AGREEMENT.VERSION]);
   const s = rows[0];
   if (!s || !s.active) return null;
   pool.query(`UPDATE staff SET last_seen_at = NOW()
@@ -3399,7 +3417,8 @@ async function staffByEmail(email) {
            role: TRAINING.salesRoleOf(s.sales_role),
            tipsOff: new Set(flags.filter((f) => f.startsWith('tip:')).map((f) => f.slice(4))),
            timeZone: s.time_zone ? SHIFTS.staffZoneOf(s.time_zone) : null,
-           onClock: s.on_clock || null };
+           onClock: s.on_clock || null,
+           agreementSigned: Boolean(s.agreement_signed) };
 }
 
 /** May the signed-in person do this? For handlers that act differently by level. */
@@ -3738,6 +3757,12 @@ async function requireAdmin(req, res, next) {
   staff.path = req.originalUrl;
   noteStaffIp(staff.id, clientIp(req));
   if (isPersonActivity(req)) notePing(staff.id);
+  /* Nothing opens until the staff agreement is signed: no passwords, no
+     artwork, no customers (owner, 2026-10-16). Only the agreement itself. */
+  if (!staff.agreementSigned && !AGREEMENT_ROUTES.has(STAFF.routeKey(req.method, req.route && req.route.path))) {
+    if (wantsHtml(req)) return res.redirect('/admin/agreement');
+    return res.status(403).json({ error: 'Sign the staff agreement first: open /admin/agreement' });
+  }
   if (!STAFF.mayUseRoute(staff, req.method, req.route && req.route.path)) {
     /* One exception: the job page of an order the owner tagged for this
        helper in Team chat (ownerTaggedFor). Viewing only; every control on it
@@ -29245,6 +29270,9 @@ async function renderStaffPage(req, res, extra = '') {
           <input type="hidden" name="action" value="unarchive"><button type="submit" class="btn btn-ghost">Restore</button></form></span></div>`).join('')
         : emptyState('Nobody is archived. Disable a helper on the Team tab, then Archive them.')}</div>${SHIP_ONCE_JS}`, 'team'));
   }
+  /* Signed the current staff agreement, and when (/admin/agreement). */
+  const signed = new Map((await pool.query('SELECT staff_id, signed_at FROM staff_agreements WHERE version = $1', [AGREEMENT.VERSION])
+    .catch((e) => { console.error('staff agreements lookup failed:', e.message); return { rows: null }; })).rows?.map((r) => [r.staff_id, r.signed_at]) || []);
   /* Active helpers only: a disabled helper has nothing left to do here. */
   const training = new Map(await Promise.all(roster.filter((s) => s.active).map((s) => staffTrainingSummary(s.id)
     .then((t) => [s.id, t]).catch((e) => { console.error('staff training summary failed:', e.message); return [s.id, null]; }))));
@@ -29255,7 +29283,9 @@ async function renderStaffPage(req, res, extra = '') {
     const preset = STAFF.presetMatching(s.perms);
     return `<div class="card" id="staff-${s.id}">
       <div class="row-i"><span class="row-main"><b>${escEmail(s.name)}</b>
-        <div class="row-sub">${escEmail(s.email)} &middot; last seen ${escEmail(whenShort(s.last_seen_at))}</div></span>
+        <div class="row-sub">${escEmail(s.email)} &middot; last seen ${escEmail(whenShort(s.last_seen_at))}</div>
+        <div class="row-sub">${signed.has(s.id) ? `Staff agreement signed ${escEmail(whenShort(signed.get(s.id)))} &middot; <a href="/admin/agreement/${s.id}">signed copy</a>`
+          : '<b style="color:#b91c1c">Staff agreement not signed yet</b>: they sign it the first time they sign in, before anything else opens.'}</div></span>
         <span class="row-end">${s.active ? pill(preset ? STAFF.PRESETS[preset].label : 'Custom', 'blue') : pill('Disabled', 'red')}</span></div>
       ${s.active ? staffTrainingBlock(s, training.get(s.id)) : ''}
       <div class="row" style="margin-top:10px;gap:6px;flex-wrap:wrap">
@@ -32206,6 +32236,121 @@ app.post('/admin/my-time-zone', requireAdmin, async (req, res) => {
   }
 });
 
+/* ── Staff agreement (tools/lib/staff-agreement.js) ─────────────────────────
+   Every helper signs it before anything else opens (requireAdmin sends them
+   here). The owner sees who signed, and opens each signed copy to print. */
+const AGREEMENT_ROUTES = new Set(['GET /admin/agreement', 'POST /admin/agreement']);
+const AGREEMENT_CSS = `.agreement h3{font-size:16px;margin:18px 0 6px}.agreement p{margin:0 0 8px;line-height:1.5}
+  .agreement ul,.agreement ol{margin:0 0 8px;padding-left:22px;line-height:1.5}
+  @media print{.adm-side,.adm-top,.adm-burger,.np{display:none!important}.adm-main{margin:0!important;padding:0!important}.card{box-shadow:none!important;border:0!important}}`;
+
+/** The signature under a signed copy: who, where, when, and which wording. */
+function agreementSignatureHtml(row, email) {
+  const when = new Date(row.signed_at).toLocaleString('en-US', { timeZone: SHOP_TZ, dateStyle: 'long', timeStyle: 'short' });
+  return `<div style="margin-top:18px;padding:12px 14px;border:1px solid #ccc;border-radius:10px">
+    <b>Signed electronically</b>
+    <div>${escEmail(row.signed_name)}${email ? ` (${escEmail(email)})` : ''}, ${escEmail(row.location)}</div>
+    <div class="muted" style="font-size:13px">${escEmail(when)} US Central &middot; wording of ${escEmail(row.version)}${
+      row.ip ? ` &middot; from ${escEmail(row.ip)}` : ''}</div>
+    <div class="muted" style="font-size:13px">For ${escEmail(AGREEMENT.COMPANY)}: accepted by its owner.</div></div>`;
+}
+
+app.get('/admin/agreement', requireAdmin, async (req, res) => {
+  const actor = currentActor();
+  try {
+    if (actor.kind === 'owner') {
+      const { rows } = await pool.query(
+        `SELECT s.id, s.name, s.email, s.active, a.signed_at, a.signed_name
+           FROM staff s LEFT JOIN staff_agreements a ON a.staff_id = s.id AND a.version = $1
+          WHERE s.archived_at IS NULL ORDER BY s.active DESC, s.name`, [AGREEMENT.VERSION]);
+      const list = rows.length ? rows.map((r) => `<div class="row-i"><span class="row-main"><b>${escEmail(r.name)}</b>
+          <div class="row-sub">${escEmail(r.email)}${r.active ? '' : ' &middot; disabled'}</div></span>
+          <span class="row-end">${r.signed_at
+            ? `${pill('Signed ' + whenShort(r.signed_at), 'green')} <a class="btn btn-ghost" href="/admin/agreement/${r.id}">Signed copy</a>`
+            : pill('Not signed yet', 'red')}</span></div>`).join('') : emptyState('Nobody on the team yet.');
+      return res.send(adminPage('Staff agreement', `<style>${AGREEMENT_CSS}</style>
+        ${pageHeader('Staff agreement', 'Every helper signs this the first time they sign in. Until they do, every other page sends them back here.',
+          '<a class="btn btn-ghost" href="/admin/staff">Staff</a>')}
+        ${flash(req.query)}
+        <div class="card np"><b>Who has signed</b>${list}</div>
+        <div class="card">${AGREEMENT.agreementHtml()}</div>`, 'team'));
+    }
+    const { rows: [mine] } = await pool.query(
+      'SELECT * FROM staff_agreements WHERE staff_id = $1 AND version = $2', [actor.id, AGREEMENT.VERSION]);
+    if (mine) {
+      return res.send(adminPage('Staff agreement', `<style>${AGREEMENT_CSS}</style>
+        ${pageHeader('Your staff agreement', 'Your signed copy. To keep one, use your browser\'s Print and choose Save as PDF.')}
+        ${flash(req.query)}
+        <div class="card"><h2 style="margin-top:0">Staff Confidentiality &amp; Ownership Agreement</h2>
+          ${AGREEMENT.agreementHtml()}${agreementSignatureHtml(mine, actor.email)}</div>`, ''));
+    }
+    /* Not signed: the page stands alone, with no menu, because every other
+       page would only send them back here. */
+    return res.send(htmlDocument('Staff agreement', `<div class="wrap" style="max-width:760px;margin:24px auto;padding:0 16px">
+      <div class="card"><h1 style="font-size:22px;margin-top:0">Welcome to June's Tees, ${escEmail(String(actor.name || '').split(' ')[0] || 'there')}</h1>
+        <p>Before you can use the workspace, please read and sign our staff agreement. It covers who owns the work you make, how to keep passwords and customer information safe, and what happens when the work ends.</p>
+        <p class="muted" style="font-size:13px">You only do this once. You can open your signed copy later from Resources.</p></div>
+      ${flash(req.query)}
+      <div class="card"><h2 style="margin-top:0">Staff Confidentiality &amp; Ownership Agreement</h2>${AGREEMENT.agreementHtml()}</div>
+      <div class="card" id="sign"><h2 style="margin-top:0">Sign</h2>
+        <form method="post" action="/admin/agreement" data-once>
+          <label style="display:block;margin-bottom:10px">Your full legal name
+            <input name="signed_name" required maxlength="100" autocomplete="name" style="width:100%"></label>
+          <label style="display:block;margin-bottom:10px">City and province you work from
+            <input name="location" required maxlength="100" placeholder="e.g. Quezon City, Metro Manila" style="width:100%"></label>
+          <label style="display:flex;gap:8px;align-items:flex-start;margin-bottom:12px"><input type="checkbox" name="agree" value="1" required style="margin-top:4px">
+            <span>I have read this agreement, I understand it, and I agree to it. Typing my name and pressing Sign is my electronic signature.</span></label>
+          <button type="submit" class="btn">Sign the agreement</button>
+        </form></div></div>${SHIP_ONCE_JS}`, { css: AGREEMENT_CSS }));
+  } catch (err) {
+    console.error('staff agreement page failed:', err.message);
+    return res.status(500).send(adminPage('Staff agreement', `${pageHeader('Staff agreement', '')}
+      <div class="card"><p>This page could not load. Refresh to try again.</p></div>`, ''));
+  }
+});
+
+app.post('/admin/agreement', requireAdmin, async (req, res) => {
+  const actor = currentActor();
+  if (!actor || actor.kind !== 'staff') return res.redirect('/admin/agreement');
+  const { signature, problems } = AGREEMENT.signatureFromForm(req.body || {});
+  if (!signature) return back(res, '/admin/agreement#sign', 'err', problems.join(' '));
+  try {
+    /* Once per wording: a second press (or a second tab) changes nothing. */
+    await pool.query(
+      `INSERT INTO staff_agreements (staff_id, version, text_sha256, signed_name, location, ip, user_agent)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (staff_id, version) DO NOTHING`,
+      [actor.id, AGREEMENT.VERSION, AGREEMENT.TEXT_HASH, signature.name, signature.location,
+       String(clientIp(req) || '').slice(0, 64), String(req.get('user-agent') || '').slice(0, 300)]);
+    const { rows: [done] } = await pool.query(
+      'SELECT 1 FROM staff_agreements WHERE staff_id = $1 AND version = $2', [actor.id, AGREEMENT.VERSION]);
+    if (!done) return back(res, '/admin/agreement#sign', 'err', 'Your signature could not be saved. Try again.');
+    return back(res, '/admin/my-day', 'ok', 'Thank you. Your staff agreement is signed, and the workspace is open.');
+  } catch (err) {
+    console.error('staff agreement sign failed:', err.message);
+    return back(res, '/admin/agreement#sign', 'err', 'Your signature could not be saved. Try again.');
+  }
+});
+
+/* One helper's signed copy, for the owner to read or print (ROUTES: owner). */
+app.get('/admin/agreement/:id', requireAdmin, async (req, res) => {
+  const id = /^\d{1,9}$/.test(String(req.params.id)) ? Number(req.params.id) : 0;
+  if (!id) return back(res, '/admin/agreement', 'err', 'No such helper.');
+  try {
+    const { rows: [row] } = await pool.query(
+      `SELECT a.*, s.name, s.email FROM staff_agreements a JOIN staff s ON s.id = a.staff_id
+        WHERE a.staff_id = $1 AND a.version = $2`, [id, AGREEMENT.VERSION]);
+    if (!row) return back(res, '/admin/agreement', 'err', 'That helper has not signed the agreement yet.');
+    return res.send(adminPage('Staff agreement', `<style>${AGREEMENT_CSS}</style>
+      ${pageHeader(`${row.name}'s staff agreement`, 'To keep a PDF, use your browser\'s Print and choose Save as PDF.',
+        '<a class="btn btn-ghost" href="/admin/agreement">Everyone</a>')}
+      <div class="card"><h2 style="margin-top:0">Staff Confidentiality &amp; Ownership Agreement</h2>
+        ${AGREEMENT.agreementHtml()}${agreementSignatureHtml(row, row.email)}</div>`, 'team'));
+  } catch (err) {
+    console.error('signed agreement page failed:', err.message);
+    return back(res, '/admin/agreement', 'err', 'That copy could not load. Try again.');
+  }
+});
+
 /** The week as a calendar: a column per day, a block per shift placed at its
  *  hours, in one zone (owner, 2026-10-15: "add a calendar view of your
  *  schedule because it's confusing"). A shift past midnight is drawn on both
@@ -32873,6 +33018,9 @@ app.get('/admin/resources', requireAdmin, async (req, res) => {
       ${flash(req.query)}
       <div class="card" style="border-left:4px solid #F4A623"><b>🔐 Logins never go in chat, email or texts.</b>
         <div class="row-sub" style="white-space:normal">June shares them below, one view each. Save each one in your own password manager.</div></div>
+      <div class="card"><b>📄 Staff agreement</b> <a href="/admin/agreement" style="float:right">${owner ? 'Who has signed →' : 'Your signed copy →'}</a>
+        <div class="row-sub" style="white-space:normal">${owner ? 'Every helper signs it before the workspace opens for them.'
+          : 'What you agreed to about passwords, artwork and customer information.'}</div></div>
       ${await sharedLoginsCard(actor, owner, await staffRoster()).catch((e) => { console.error('shared logins card failed:', e.message); return ''; })}
       ${rows.length ? rows.map(card).join('') : `<div class="card">${emptyState(owner ? 'No tools listed yet. Add the first one below.' : 'No tools listed yet. Ask June.')}</div>`}
       ${owner ? `<details class="card"><summary><b>Add a tool</b></summary>
