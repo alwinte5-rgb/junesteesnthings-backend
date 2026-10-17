@@ -101,9 +101,53 @@ test('every product price passes through for the page cards; only designer produ
   assert.deepStrictEqual(cleanShopFeed(good).products, [], 'an older designer sends none');
 });
 
-test('the page script prices every card it can match and hides a switched-off product only with a full list', () => {
-  const js = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'public', 'assets', 'js', 'shop-feed.js'), 'utf8');
-  assert.match(js, /concat\(d\.best \|\| \[\], products\)/);
-  assert.ok(js.includes('products.length >= 20 && /\\/product\\.php'), 'hide only with a full list');
-  assert.doesNotMatch(js, /\.innerHTML\s*=/);
+function runPageScript(feed) {
+  const vm = require('node:vm');
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'public', 'assets', 'js', 'shop-feed.js'), 'utf8');
+  const card = (href, price) => {
+    const img = { src: 'built-in.jpg' }, pr = { textContent: price };
+    return { href, hidden: false, img, pr, querySelector: (q) => (q === '.pb-im img' ? img : q === '.pb-pr' ? pr : null) };
+  };
+  const cards = [card(D + 'product.php?product_id=21', 'From $1.00 + printing'),
+    card(D + 'product.php?product_id=22', 'From $2.00 + printing'),
+    card(D + 'product.php?product_id=99', 'From $3.00 + printing'),
+    card(D + 'products.php?category_id=52', 'From $4.00 + printing')];
+  const store = { jt_shop_feed3: JSON.stringify({ at: Date.now(), d: feed }) };
+  vm.runInNewContext(src, {
+    window: { fetch: () => { throw new Error('should use the cached feed'); } },
+    document: { querySelectorAll: () => cards },
+    sessionStorage: { getItem: (k) => store[k] || null, setItem() {} },
+    JSON, Date,
+  });
+  return cards;
+}
+
+test('the page script reprices every listed card and hides a switched-off product only with a complete list', () => {
+  const products = [
+    { link: D + 'product.php?product_id=21', image: 'https://cdn.example/h.jpg', from_price: 20.18 },
+    { link: D + 'product.php?product_id=22', image: '', from_price: null },
+  ];
+  let c = runPageScript({ categories: [], best: [], products, products_complete: true });
+  assert.strictEqual(c[0].pr.textContent, 'From $20.18 + printing');
+  assert.strictEqual(c[0].img.src, 'https://cdn.example/h.jpg');
+  assert.strictEqual(c[1].pr.textContent, 'Priced as you design', 'a product with no set price drops its old price');
+  assert.strictEqual(c[1].img.src, 'built-in.jpg', 'no photo in the feed keeps the built-in one');
+  assert.strictEqual(c[2].hidden, true, 'a product missing from a complete list is switched off');
+  assert.strictEqual(c[3].hidden, false, 'a category card is never hidden');
+
+  c = runPageScript({ categories: [], best: [], products, products_complete: false });
+  assert.strictEqual(c[2].hidden, false, 'a list not marked complete hides nothing');
+  assert.strictEqual(c[0].pr.textContent, 'From $20.18 + printing');
+});
+
+test('a hidden card is really hidden: the card style cannot override it', () => {
+  const css = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'public', 'assets', 'css', 'page-blocks.css'), 'utf8');
+  assert.match(css, /\.pb-card\[hidden\]\{display:none!important\}/);
+});
+
+test('the list counts as complete only when the designer says so and nothing was cut', () => {
+  const products = [{ link: D + 'product.php?product_id=21', from_price: 5 }];
+  assert.strictEqual(cleanShopFeed({ ...good, products, products_complete: true }).products_complete, true);
+  assert.strictEqual(cleanShopFeed({ ...good, products }).products_complete, false);
+  assert.strictEqual(cleanShopFeed({ ...good, products: [], products_complete: true }).products_complete, false);
 });

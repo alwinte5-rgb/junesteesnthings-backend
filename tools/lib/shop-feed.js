@@ -13,7 +13,7 @@
 
 const MAX_CATEGORIES = 16;
 const MAX_BEST = 8;
-const MAX_PRODUCTS = 600;
+const MAX_PRODUCTS = 2000;
 
 function text(v, max) {
   if (typeof v !== 'string') return '';
@@ -65,13 +65,18 @@ function cleanShopFeed(d) {
 
   /* Every active product's live price and photo, matched to the page cards by
      link. Optional: an older designer sends none, and the cards keep theirs. */
-  const products = (Array.isArray(d.products) ? d.products : []).slice(0, MAX_PRODUCTS).map((p) => ({
+  const raw = Array.isArray(d.products) ? d.products : [];
+  const products = raw.slice(0, MAX_PRODUCTS).map((p) => ({
     link: designerLink(p && p.link),
     image: imageUrl(p && p.image),
     from_price: price(p && p.from_price),
   })).filter((p) => /^https:\/\/design\.jtees\.net\/product\.php\?product_id=\d+$/.test(p.link));
 
-  return { categories, best, products };
+  /* Complete only when the designer says so and nothing was cut here: the
+     page hides a product card missing from the list only then. */
+  const products_complete = d.products_complete === true && raw.length > 0 && raw.length <= MAX_PRODUCTS;
+
+  return { categories, best, products, products_complete };
 }
 
 module.exports = { cleanShopFeed };

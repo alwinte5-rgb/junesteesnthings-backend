@@ -14,9 +14,11 @@
   if (!window.fetch || !pageCards.length) return;
 
   /* Page cards keep their place and name. A card the feed lists, by the same
-     link, takes the feed's photo and price. A product card the feed no longer
-     lists (switched off in the Design Studio) is hidden, but only when the
-     feed carries a full product list, so an outage never empties a shelf. */
+     link, takes the feed's photo and price ("Priced as you design" when the
+     product has no set price). A product card missing from the list is hidden
+     (switched off in the Design Studio), but only when the feed says the list
+     is the whole catalogue, so an outage or partial answer never empties a
+     shelf. */
   function refresh(d) {
     var byLink = {};
     var products = d.products || [];
@@ -24,20 +26,20 @@
     Array.prototype.forEach.call(pageCards, function (a) {
       var it = byLink[a.href];
       if (!it) {
-        if (products.length >= 20 && /\/product\.php\?product_id=\d+$/.test(a.href)) a.hidden = true;
+        if (d.products_complete === true && /\/product\.php\?product_id=\d+$/.test(a.href)) a.hidden = true;
         return;
       }
       var img = a.querySelector('.pb-im img');
       if (img && it.image) img.src = it.image;
       var pr = a.querySelector('.pb-pr');
-      if (pr && typeof it.from_price === 'number') pr.textContent = 'From $' + it.from_price.toFixed(2) + ' + printing';
+      if (pr) pr.textContent = typeof it.from_price === 'number' ? 'From $' + it.from_price.toFixed(2) + ' + printing' : 'Priced as you design';
     });
   }
 
   /* The landing pages share /api/shop-feed's per-visitor limit with the quote
      form's token and photo uploads, so one answer is kept per tab for 10
      minutes: browsing twenty service pages asks once, not twenty times. */
-  var KEY = 'jt_shop_feed2', TTL = 10 * 60 * 1000;
+  var KEY = 'jt_shop_feed3', TTL = 10 * 60 * 1000;
   function cached() {
     try {
       var c = JSON.parse(sessionStorage.getItem(KEY) || 'null');
