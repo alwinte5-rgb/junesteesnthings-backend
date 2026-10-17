@@ -96,3 +96,9 @@ test('clicks are tracked by one document listener, so live cards count too', () 
   assert.match(js, /jtTrack\('shop_card_click'/);
   assert.match(js, /jtTrack\('designer_open', \{ href: href, from: whereFrom\(a\) \}\)/);
 });
+
+test('the Google Ads tag loads with GA4, but never on a private quote page', () => {
+  const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'assets', 'js', 'analytics.js'), 'utf8');
+  assert.match(js, /var ADS_ID = 'AW-433023263'/);
+  assert.match(js, /if \(!QUOTE_PAGE\) window\.gtag\('config', ADS_ID\)/);
+});
