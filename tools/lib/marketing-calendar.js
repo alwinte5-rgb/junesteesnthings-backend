@@ -16,8 +16,9 @@
  *              business days after proof approval, so 2 weeks could miss it
  *
  * Social posts run from the ads date to the order-by date. The holiday pages
- * print their "order by" line from here (tools/occasion-pages.js), and the
- * admin's marketing calendar and dashboard read the same list, so they agree.
+ * print their "when to order" line from here (tools/occasion-pages.js), and
+ * the admin's marketing calendar (/admin/marketing-calendar) reads the same
+ * list, so they agree.
  *
  * Dates are plain calendar days (UTC midnight), so no timezone can move one.
  */
@@ -42,24 +43,32 @@ function easter(y) {
    live: a page exists for it (the rest are on the calendar so the owner knows
    when to collect photos for them). */
 const OCCASIONS = [
-  { id: 'black-history-month', note: 'Black History Month runs through February.', name: 'Black History Month', event: (y) => d(y, 2, 1), season: (y) => d(y, 1, 5), page: '/occasions/black-history-month-shirts-chicago.html', push: 'School and church shirts, custom artwork' },
-  { id: 'senior-night-winter', name: 'Senior night (winter sports)', event: (y) => d(y, 2, 1), season: (y) => d(y, 1, 5), page: '/services/big-head-cutouts.html', push: 'Big head cutouts, senior posters, parent shirts' },
-  { id: 'valentines', note: "Valentine's Day is February 14.", name: "Valentine's Day", event: (y) => d(y, 2, 14), season: (y) => d(y, 1, 15), page: '/occasions/valentines-day-gifts-chicago.html', push: 'Wine glass gift sets, couples paint kits, couples shirts' },
-  { id: 'easter', name: 'Easter', event: easter, season: (y) => addDays(easter(y), -35), page: '', push: 'Family Easter shirts, kids tees, baskets and bags' },
+  { id: 'black-history-month', note: 'Black History Month runs through February.', name: 'Black History Month', event: (y) => d(y, 2, 1), end: (y) => d(y, 2, 28), season: (y) => d(y - 1, 12, 1), page: '/occasions/black-history-month-shirts-chicago.html', push: 'School and church shirts, custom artwork' },
+  { id: 'senior-night-winter', name: 'Senior night (winter sports)', event: (y) => d(y, 2, 1), season: (y) => d(y - 1, 12, 1), page: '/services/big-head-cutouts.html', push: 'Big head cutouts, senior posters, parent shirts' },
+  { id: 'valentines', note: "Valentine's Day is February 14.", name: "Valentine's Day", event: (y) => d(y, 2, 14), season: (y) => d(y - 1, 12, 15), page: '/occasions/valentines-day-gifts-chicago.html', push: 'Wine glass gift sets, couples paint kits, couples shirts' },
+  { id: 'easter', name: 'Easter', event: easter, season: (y) => addDays(easter(y), -56), page: '', push: 'Family Easter shirts, kids tees, baskets and bags' },
   { id: 'graduation', name: 'Graduation and prom', event: (y) => d(y, 5, 31), season: (y) => d(y, 4, 1), page: 'https://design.jtees.net/collection.php?c=graduation', push: 'Big head cutouts, grad family shirts, senior jeans, yard signs, prom send-offs' },
-  { id: 'senior-night-spring', name: 'Senior night (spring sports)', event: (y) => d(y, 5, 1), season: (y) => d(y, 4, 1), page: '/services/big-head-cutouts.html', push: 'Big head cutouts, senior posters, parent shirts' },
-  { id: 'mothers-day', note: "Mother's Day is the second Sunday in May.", name: "Mother's Day", event: (y) => nthWeekday(y, 5, 0, 2), season: (y) => d(y, 4, 1), page: '/occasions/mothers-day-gifts-chicago.html', push: 'Mom and grandma shirts, photo gifts, mugs, totes' },
-  { id: 'fathers-day', name: "Father's Day", event: (y) => nthWeekday(y, 6, 0, 3), season: (y) => d(y, 5, 15), page: '', push: 'Dad shirts, photo mugs, engraved flasks and tumblers' },
-  { id: 'juneteenth', note: 'Juneteenth is June 19.', name: 'Juneteenth', event: (y) => d(y, 6, 19), season: (y) => d(y, 5, 15), page: '/occasions/juneteenth-shirts-chicago.html', push: 'Juneteenth family, festival and Greek organization shirts' },
-  { id: 'weddings', note: 'Wedding season is busiest from May through September.', name: 'Wedding season', event: (y) => d(y, 6, 15), season: (y) => d(y, 4, 1), page: '/occasions/wedding-bachelorette-chicago.html', push: 'Mr and Mrs glassware, bridesmaid gifts, bachelorette shirts' },
-  { id: 'july-4', name: 'Fourth of July', event: (y) => d(y, 7, 4), season: (y) => d(y, 6, 1), page: '', push: 'Family cookout and reunion shirts' },
-  { id: 'family-reunions', name: 'Family reunion season', event: (y) => d(y, 7, 15), season: (y) => d(y, 5, 1), page: 'https://design.jtees.net/collection.php?c=family-reunion', push: 'Family reunion shirts, banners, bulk orders' },
-  { id: 'back-to-school', name: 'Back to school', event: (y) => d(y, 8, 20), season: (y) => d(y, 7, 20), page: '', push: 'First day shirts, teacher shirts, school spirit wear' },
+  { id: 'senior-night-spring', name: 'Senior night (spring sports)', event: (y) => d(y, 5, 1), season: (y) => d(y, 3, 1), page: '/services/big-head-cutouts.html', push: 'Big head cutouts, senior posters, parent shirts' },
+  { id: 'mothers-day', note: "Mother's Day is the second Sunday in May.", name: "Mother's Day", event: (y) => nthWeekday(y, 5, 0, 2), season: (y) => d(y, 3, 15), page: '/occasions/mothers-day-gifts-chicago.html', push: 'Mom and grandma shirts, photo gifts, mugs, totes' },
+  { id: 'fathers-day', name: "Father's Day", event: (y) => nthWeekday(y, 6, 0, 3), season: (y) => d(y, 5, 1), page: '', push: 'Dad shirts, photo mugs, engraved flasks and tumblers' },
+  { id: 'juneteenth', note: 'Juneteenth is June 19.', name: 'Juneteenth', event: (y) => d(y, 6, 19), season: (y) => d(y, 5, 1), page: '/occasions/juneteenth-shirts-chicago.html', push: 'Juneteenth family, festival and Greek organization shirts' },
+  { id: 'weddings', note: 'Wedding season is busiest from May through September.', name: 'Wedding season', event: (y) => d(y, 6, 15), end: (y) => d(y, 9, 30), season: (y) => d(y, 4, 1), page: '/occasions/wedding-bachelorette-chicago.html', push: 'Mr and Mrs glassware, bridesmaid gifts, bachelorette shirts' },
+  { id: 'july-4', name: 'Fourth of July', event: (y) => d(y, 7, 4), season: (y) => d(y, 5, 15), page: '', push: 'Family cookout and reunion shirts' },
+  { id: 'family-reunions', name: 'Family reunion season', event: (y) => d(y, 7, 15), end: (y) => d(y, 8, 31), season: (y) => d(y, 5, 1), page: 'https://design.jtees.net/collection.php?c=family-reunion', push: 'Family reunion shirts, banners, bulk orders' },
+  { id: 'back-to-school', name: 'Back to school', event: (y) => d(y, 8, 20), season: (y) => d(y, 7, 1), page: '', push: 'First day shirts, teacher shirts, school spirit wear' },
   { id: 'senior-night-fall', name: 'Senior night (fall sports)', event: (y) => d(y, 10, 1), season: (y) => d(y, 8, 15), page: '/services/big-head-cutouts.html', push: 'Big head cutouts, senior posters, parent shirts' },
-  { id: 'chicago-marathon', name: 'Chicago Marathon', event: (y) => nthWeekday(y, 10, 0, 2), season: (y) => d(y, 9, 1), page: '/services/big-head-cutouts.html', push: 'Big head cutouts, runner support shirts, race signs' },
-  { id: 'halloween', note: 'Halloween is October 31.', name: 'Halloween', event: (y) => d(y, 10, 31), season: (y) => d(y, 10, 1), page: '/occasions/halloween-shirts-chicago.html', push: 'Witch squad and group costume shirts, kids shirts' },
+  { id: 'chicago-marathon', name: 'Chicago Marathon', event: (y) => nthWeekday(y, 10, 0, 2), season: (y) => d(y, 8, 15), page: '/services/big-head-cutouts.html', push: 'Big head cutouts, runner support shirts, race signs' },
+  { id: 'halloween', note: 'Halloween is October 31.', name: 'Halloween', event: (y) => d(y, 10, 31), season: (y) => d(y, 9, 1), page: '/occasions/halloween-shirts-chicago.html', push: 'Witch squad and group costume shirts, kids shirts' },
   { id: 'christmas', note: 'Christmas is December 25.', name: 'Christmas', event: (y) => d(y, 12, 25), season: (y) => d(y, 11, 1), page: '/occasions/christmas-shirts-chicago.html', push: 'Family Christmas shirts, photo gifts, Santa sacks' },
 ];
+
+/* `end` marks an occasion that is a whole season, not one day (weddings run
+   May to September, reunions all summer, Black History Month all February):
+   orders stay open until 4 weeks before the end, so it never reads "orders
+   closed" in its busiest weeks. Without one, the event day is the end.
+   A season opens at least 2 weeks before its last order day; datesFor refuses
+   any occasion that breaks that. Seasons that cross New Year start in the
+   year before the event (y - 1). */
 
 /* Lead times in weeks before the season start. adsWeeks may be raised per
    occasion; it may never go under MIN_ADS_WEEKS. */
@@ -69,35 +78,38 @@ const LEAD = {};
 function datesFor(o, y) {
   const lead = { ...DEFAULT_LEAD, ...(LEAD[o.id] || {}) };
   if (lead.adsWeeks < MIN_ADS_WEEKS) throw new Error(`${o.id}: ads must start at least ${MIN_ADS_WEEKS} weeks before the season`);
-  const event = o.event(y), season = o.season(y);
+  const event = o.event(y), season = o.season(y), end = o.end ? o.end(y) : event;
+  const orderBy = addDays(end, -lead.orderByDays);
+  if ((orderBy - season) / DAY < 14) throw new Error(`${o.id} ${y}: the season must open at least 2 weeks before the last order day`);
   return {
     id: o.id, name: o.name, note: o.note || '', year: y, page: o.page, push: o.push, live: !!o.page,
-    event, season,
+    event, end, season, orderBy,
     prep: addDays(season, -7 * lead.prepWeeks),
     ads: addDays(season, -7 * lead.adsWeeks),
-    orderBy: addDays(event, -lead.orderByDays),
   };
 }
 
 const today = (now) => d(now.getUTCFullYear(), now.getUTCMonth() + 1, now.getUTCDate());
 
-/* Status on a given day: prep now, ads now, in season, upcoming, or past. */
+/* Status on a given day: upcoming, prep now, ads now, in season, orders closed
+   (past the last order day, before the end), or past. */
 function status(e, now = new Date()) {
   const t = today(now);
-  if (t > e.event) return 'past';
+  if (t > e.end) return 'past';
+  if (t > e.orderBy) return 'orders closed';
   if (t >= e.season) return 'in season';
   if (t >= e.ads) return 'ads now';
   if (t >= e.prep) return 'prep now';
   return 'upcoming';
 }
 
-/* Every occasion's next occurrence (the one whose event has not passed),
+/* Every occasion's next occurrence (the one that has not ended),
    in order of its prep date. */
 function upcoming(now = new Date()) {
   const t = today(now), y = t.getUTCFullYear();
   return OCCASIONS.map((o) => {
     const cur = datesFor(o, y);
-    return cur.event >= t ? cur : datesFor(o, y + 1);
+    return cur.end >= t ? cur : datesFor(o, y + 1);
   }).sort((a, b) => a.prep - b.prep);
 }
 
