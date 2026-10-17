@@ -80,9 +80,9 @@ function render(nav, site = '') {
   const drawer = nav.menu.map((m) => m.items
     ? `<details><summary>${esc(m.label)}</summary>${m.items.map((i) => link(i, i.strong ? 'jtn-strong' : '')).join('')}</details>`
     : link(m)).join('\n    ');
-  /* Only the first note shows on phones, so the sticky top stays one line. */
+  /* Only the first note shows up to 1100px, so the sticky top stays one line. */
   const bar = nav.announcement.map((a, i) => {
-    const t = a.href ? `<a href="${esc(abs(a.href))}">${esc(a.text)}</a>` : esc(a.text);
+    const t = a.href ? `<a href="${esc(abs(a.href))}"${/design\.jtees\.net/.test(a.href) ? ' data-from="bar"' : ''}>${esc(a.text)}</a>` : esc(a.text);
     return i ? `<span class="jtn-bar-x"><span aria-hidden="true">|</span> ${t}</span>` : t;
   }).join(' ');
   /* The services ticker under the blue bar, on every page (owner, 2026-10-17).

@@ -165,12 +165,14 @@ test('every Design Studio mention links to the designer', () => {
   });
   for (const p of walk(PUBLIC)) {
     let html = fs.readFileSync(p, 'utf8').replace(/<head>[\s\S]*?<\/head>/i, '')
-      .replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, '').replace(/<!--[\s\S]*?-->/g, '');
+      .replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, '')
+      // The Recent work gallery's photo captions name what is pictured, not a place to go.
+      .replace(/<!-- pb-work:start[\s\S]*?<!-- pb-work:end -->/g, '').replace(/<!--[\s\S]*?-->/g, '');
     for (const m of html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)) {
-      if (/Design Studio/.test(m[2]) && !/href="https:\/\/design\.jtees\.net\//.test(m[1])) bad.push(`${path.relative(PUBLIC, p)}: link "${m[2].replace(/<[^>]+>/g, '').trim().slice(0, 40)}" goes elsewhere`);
+      if (/Design (Studio|Lab)/.test(m[2]) && !/href="https:\/\/design\.jtees\.net\//.test(m[1])) bad.push(`${path.relative(PUBLIC, p)}: link "${m[2].replace(/<[^>]+>/g, '').trim().slice(0, 40)}" goes elsewhere`);
     }
-    html = html.replace(/<a\b[\s\S]*?<\/a>/gi, '').replace(/<figcaption[\s\S]*?<\/figcaption>/gi, '').replace(/<[^>]+>/g, ' ');
-    if (/Design Studio/.test(html)) bad.push(`${path.relative(PUBLIC, p)}: "Design Studio" with no link`);
+    html = html.replace(/<a\b[\s\S]*?<\/a>/gi, '').replace(/<[^>]+>/g, ' ');
+    for (const m of html.matchAll(/Design (Studio|Lab)/g)) bad.push(`${path.relative(PUBLIC, p)}: "${m[0]}" with no link`);
   }
   assert.deepStrictEqual(bad, []);
 });

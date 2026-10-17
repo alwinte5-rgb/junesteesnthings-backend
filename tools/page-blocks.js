@@ -80,7 +80,7 @@ function productsBlock(data, page, rel) {
   <div class="pb-wrap">
     <div class="pb-head">
       <div><div class="pb-tag"><a href="${STUDIO}" data-from="${from}">Design Studio</a> &middot; see it before you buy</div><h2 id="pb-products-h">${studioLink(esc(page.heading), from)}</h2></div>
-      <a class="pb-all" href="https://design.jtees.net/products.php" data-from="${from}">All products &rarr;</a>
+      <a class="pb-all" href="${STUDIO}" data-from="${from}">All products &rarr;</a>
     </div>
     <div class="pb-grid">
     ${cards}
@@ -88,7 +88,7 @@ function productsBlock(data, page, rel) {
     <p class="pb-note">Pick a product, add your text, photo or logo, and see the price as you go. Prefer help? <a href="/#contact">Send us your idea</a>, call <a href="tel:${PHONE.tel}">${PHONE.display}</a> or email <a href="mailto:${EMAIL}">${EMAIL}</a>.</p>
   </div>
 </section>
-<div class="pb-sticky" aria-label="Quick actions"><a href="https://design.jtees.net/products.php" class="pb-sticky-go" data-from="${from}_sticky">Design yours</a><a href="tel:${PHONE.tel}" class="pb-sticky-call" aria-label="Call ${PHONE.display}">📞</a></div>
+<div class="pb-sticky" aria-label="Quick actions"><a href="${STUDIO}" class="pb-sticky-go" data-from="${from}_sticky">Design yours</a><a href="tel:${PHONE.tel}" class="pb-sticky-call" aria-label="Call ${PHONE.display}">📞</a></div>
 ${e}`;
 }
 
