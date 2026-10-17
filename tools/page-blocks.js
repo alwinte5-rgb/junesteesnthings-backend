@@ -31,7 +31,11 @@ const path = require('node:path');
 const PUBLIC = path.join(__dirname, '..', 'public');
 const DATA = path.join(PUBLIC, 'assets', 'data', 'page-blocks.json');
 const REVIEWS = path.join(PUBLIC, 'assets', 'data', 'reviews.json');
-const CSS_TAG = '<link rel="stylesheet" href="/assets/css/page-blocks.css" />';
+// Hash-stamped, like site-nav.css, so a style change is not held in caches.
+const CSS_V = require('crypto').createHash('sha1')
+  .update(fs.readFileSync(path.join(PUBLIC, 'assets', 'css', 'page-blocks.css'))).digest('hex').slice(0, 8);
+const CSS_TAG = `<link rel="stylesheet" href="/assets/css/page-blocks.css?v=${CSS_V}" />`;
+const CSS_ANY = /[ \t]*<link rel="stylesheet" href="\/assets\/css\/page-blocks\.css(?:\?v=[0-9a-f]+)?" \/>\n?/g;
 const FEED_TAG = '<script src="/assets/js/shop-feed.js?v=20261017" defer></script>';
 const PHONE = { tel: '+17739004592', display: '(773) 900-4592' };
 const EMAIL = 'support@jtees.net';
@@ -208,7 +212,7 @@ function apply(html, rel, data, reviews) {
   html = put(html, 'pb-products', productsBlock(data, page, rel), where.products);
   html = put(html, 'pb-reviews', reviewsBlock(reviews), where.reviews);
   html = put(html, 'pb-work', workBlock(data, page), where.work);
-  if (!html.includes(CSS_TAG)) html = html.replace('</head>', `  ${CSS_TAG}\n</head>`);
+  if (!html.includes(CSS_TAG)) html = html.replace(CSS_ANY, '').replace('</head>', `  ${CSS_TAG}\n</head>`);
   if (!html.includes('/assets/js/shop-feed.js')) html = html.replace('</body>', `${FEED_TAG}\n</body>`);
   return html;
 }
