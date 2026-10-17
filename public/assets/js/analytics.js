@@ -86,8 +86,15 @@
   // A sent quote is this site's lead: Meta's 'Lead' is what a leads campaign
   // optimises for (the designer maps its generate_lead the same way).
   var META_STANDARD = { purchase: 'Purchase', add_to_cart: 'AddToCart', begin_checkout: 'InitiateCheckout', quote_submitted: 'Lead' };
+  // params.meta_event_id: the id the server sent the same event under
+  // (Conversions API), so Meta counts it once. Meta only; GA never sees it.
   window.jtTrack = function (name, params) {
     params = params || {};
+    var metaEventId = params.meta_event_id;
+    if (metaEventId !== undefined) {
+      params = Object.assign({}, params);
+      delete params.meta_event_id;
+    }
     if (gaOn && window.gtag) window.gtag('event', name, params);
     if (fbOn && window.fbq) {
       var std = META_STANDARD[name];
@@ -95,7 +102,8 @@
         var fb = {};
         if (params.value !== undefined) fb.value = params.value;
         if (params.currency) fb.currency = params.currency;
-        window.fbq('track', std, fb, params.transaction_id ? { eventID: String(params.transaction_id) } : undefined);
+        var eid = metaEventId || params.transaction_id;
+        window.fbq('track', std, fb, eid ? { eventID: String(eid) } : undefined);
       } else {
         window.fbq('trackCustom', name, params);
       }

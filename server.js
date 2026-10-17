@@ -39,6 +39,7 @@ const SINALITE = require('./tools/lib/sinalite');
 const LEADMAIL = require('./tools/lib/lead-email');
 const REINTRO = require('./tools/lib/reintro');
 const FUNNEL = require('./tools/lib/funnel-health');
+const METACAPI = require('./tools/lib/meta-capi');
 const { T: SMS, plain: smsPlain, short: smsShort, PICKUP: SMS_PICKUP, PICKUP_ADDRESS, PICKUP_HOURS, PICKUP_STEPS } = require('./tools/lib/sms-templates');
 
 /** Where and how to pick up, for an email: the address, the hours and the
@@ -4025,7 +4026,20 @@ app.post('/submit', countFormFailures('quote'), makeRateLimit(4, 60 * 60 * 1000)
     ).catch(err => console.error('Clover ID update failed:', err.message));
   }
 
-  res.json({ ok: true });
+  /* The quote as a Meta Lead from the server (tools/lib/meta-capi.js). The
+     page sends the pixel's Lead with this same id, so Meta keeps one. Not
+     awaited: Meta being slow must not hold up the customer's "We got it".
+     An unverified (no human check) enquiry is not a lead to optimise for. */
+  const leadEventId = 'quote-' + submissionId;
+  if (!unverified) {
+    METACAPI.sendEvents([METACAPI.buildLeadEvent({
+      eventId: leadEventId, email: s.email, phone: s.phone,
+      ip: clientIp(req), userAgent: req.get('user-agent'),
+      sourceUrl: req.get('referer'), cookie: req.headers.cookie,
+    })], { post: axios.post }).catch(err => reportError('submit:meta-capi', err).catch(() => {}));
+  }
+
+  res.json({ ok: true, lead_event_id: unverified ? undefined : leadEventId });
 });
 
 // ── Create Clover order (called when you approve a quote) ─────────────────────
