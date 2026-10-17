@@ -82,6 +82,29 @@
 /* "What Chicago Orders Most" tiles: a photo where the emoji used to be. */
 .card .card-photo{display:block;width:100%;aspect-ratio:4/3;height:auto;object-fit:cover;border-radius:10px;margin-bottom:.9rem;background:#F3F4F6}
 
+/* Design Lab, before the products on every page: the editor screenshot
+   beside a short pitch, stacked on phones. */
+.pb-lab{font-family:Inter,system-ui,sans-serif;padding:2.6rem 0;background:#F7F6F3}
+.pb-lab-in{display:grid;grid-template-columns:1fr 1fr;gap:2rem;align-items:center}
+.pb-lab-shot img{display:block;width:100%;height:auto;border-radius:14px;box-shadow:0 10px 24px rgba(11,31,75,.12)}
+.pb-lab h2 a{color:inherit;text-decoration:underline;text-underline-offset:3px}
+.pb-lab h2{font-size:clamp(1.45rem,3.2vw,2rem);font-weight:800;color:#0B1F4B;line-height:1.15;margin:0 0 .7rem}
+.pb-lab p{color:#374151;line-height:1.65;margin:0 0 1rem}
+.pb-lab-feats{display:flex;flex-wrap:wrap;gap:.5rem;list-style:none;padding:0;margin:0 0 1.2rem}
+.pb-lab-feats li{background:#fff;border:1px solid #E7E3DB;border-radius:999px;padding:.35rem .8rem;font-size:.88rem;font-weight:600;color:#0B1F4B}
+.pb-lab-go{display:inline-block;background:#F0275A;color:#fff;font-weight:700;padding:.8rem 1.4rem;border-radius:999px;text-decoration:none}
+.pb-lab-go:hover{background:#d81f4e}
+
+/* Product shelves: one category per row, its products side by side (four
+   across; two by two on phones, so nothing scrolls sideways). */
+.pb-shelf{margin:0 0 1.8rem;font-family:Inter,system-ui,sans-serif}
+.pb-shelf-h{display:flex;align-items:baseline;justify-content:space-between;gap:1rem;margin:0 0 .7rem}
+.pb-shelf-h h3{font-size:1.15rem;font-weight:800;color:#0B1F4B;margin:0}
+.pb-shelf-h a{color:#1848B8;font-weight:700;font-size:.9rem;text-decoration:none;white-space:nowrap}
+.pb-shelf-h a:hover{text-decoration:underline}
+.pb-row{display:grid;grid-template-columns:repeat(4,1fr);gap:1.1rem}
+.pb-shelves .pb-shelf:last-child{margin-bottom:0}
+
 /* Phone action bar: it stops short of the "Chat with us" button
    (assets/js/jt-chat.js, about 130px wide at the bottom right). */
 .pb-sticky{display:none}
@@ -96,7 +119,9 @@
   .hero .pb-hero-img{display:none}
 }
 @media (max-width:640px){
-  .pb-products,.pb-reviews,.pb-work{padding:2.2rem 0}
+  .pb-products,.pb-reviews,.pb-work,.pb-lab{padding:2.2rem 0}
+  .pb-lab-in{grid-template-columns:1fr;gap:1.2rem}
+  .pb-row{grid-template-columns:repeat(2,1fr);gap:.7rem}
   .pb-head{flex-direction:column;align-items:flex-start;gap:.5rem}
   .pb-grid{grid-template-columns:repeat(2,1fr);gap:.7rem}
   .pb-bd{padding:.7rem .75rem .8rem}

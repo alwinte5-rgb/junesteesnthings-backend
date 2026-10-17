@@ -28,8 +28,10 @@ test('every section from both old homepages is still here', () => {
     'Give the Gift of Custom Made', 'What Our Customers Say', 'Frequently Asked Questions',
     'Ready To Bring Your Vision To Life?',
     // design.jtees.net
-    'Custom T-Shirts & Apparel', 'Ready to Customize', 'Custom Apparel for Every Occasion',
-    'The Design Lab makes it fun & easy', 'How to Order Custom Apparel',
+    // "Ready to Customize" and "How to Order" left on 2026-10-17 (owner): the
+    // shop is category shelves now, and the Design Lab section shows the steps.
+    'Custom T-Shirts & Apparel', 'Custom Apparel for Every Occasion',
+    'The Design Lab makes it fun & easy',
     'Ideas & Tips for Your Custom Apparel', 'Product Experts, 7 Days a Week',
     'Custom T-Shirts, Hoodies & More in Chicago', 'Real Human Support', 'No Minimums',
   ];
@@ -60,15 +62,18 @@ test("the owner's turnaround and file-type wording, and none of the old", () => 
   for (const old of [/about 7 days/i, /7-Day Delivery/i, /5–10/]) assert.doesNotMatch(text, old);
 });
 
-test('the Shop works without the feed: built-in cards, all into the designer', () => {
-  for (const id of ['shop-categories', 'shop-best']) {
-    const box = page.slice(page.indexOf(`id="${id}"`), page.indexOf('</div>\n    </div>', page.indexOf(`id="${id}"`)));
-    const links = [...box.matchAll(/<a class="jt-card" href="([^"]+)"/g)].map((m) => m[1]);
-    assert.ok(links.length >= 4, id + ' has built-in cards');
-    for (const l of links) assert.match(l, /^https:\/\/design\.jtees\.net\/product/);
-    // Every card shows a price line, so the two grids read the same (owner, 2026-10-02).
-    assert.strictEqual((box.match(/class="pr">(From \$\d+\.\d\d \+ printing|Custom pricing)</g) || []).length, links.length, id + ': a price on every card');
-  }
+test('the Shop is three category shelves of real products, all into the designer', () => {
+  const PB = require('../tools/page-blocks');
+  const { data } = PB.load();
+  const box = page.slice(page.indexOf('<!-- pb-shelves:start'), page.indexOf('<!-- pb-shelves:end'));
+  assert.strictEqual((box.match(/class="pb-shelf"/g) || []).length, 3, 'three categories');
+  const links = [...box.matchAll(/<a class="pb-card" href="([^"]+)"/g)].map((m) => m[1]);
+  assert.strictEqual(links.length, 12, 'four products per category');
+  for (const l of links) assert.match(l, /^https:\/\/design\.jtees\.net\/product\.php\?product_id=\d+$/);
+  assert.doesNotMatch(box, /\.svg"/, 'no drawn placeholders (signs)');
+  assert.strictEqual((box.match(/class="pb-pr">From \$\d+\.\d\d \+ printing</g) || []).length, 12, 'a price on every card');
+  assert.deepStrictEqual(PB.run('check'), [], 'shelves match page-blocks.json');
+  assert.ok(data.home.shelves.length === 3);
   /* A ?v= cache-buster is allowed (Codex #198); the tag itself must stay. */
   assert.match(page, /<script src="\/assets\/js\/shop-feed\.js(\?v=[\w.-]+)?" defer><\/script>/);
   assert.match(page, /id="shop"/, 'design.jtees.net/ will redirect to /#shop');
@@ -105,9 +110,9 @@ test('the Google Ads tag loads with GA4, but never on a private quote page', () 
   assert.match(js, /if \(!QUOTE_PAGE\) window\.gtag\('config', ADS_ID\)/);
 });
 
-test('the homepage keeps the service-page order and never slides photos sideways (#345)', () => {
+test('the homepage keeps the service-page order and never slides photos sideways (#345); Design Lab before the products', () => {
   const at = (id) => { const i = page.indexOf(`id="${id}"`); assert.ok(i !== -1, id); return i; };
-  const order = ['home', 'portfolio', 'shop', 'design-lab', 'reviews', 'contact', 'faq'];
+  const order = ['home', 'portfolio', 'design-lab', 'shop', 'reviews', 'contact', 'faq'];
   for (let i = 1; i < order.length; i++) assert.ok(at(order[i - 1]) < at(order[i]), `${order[i - 1]} before ${order[i]}`);
   assert.doesNotMatch(page, /splide/i, 'no carousel library');
   assert.doesNotMatch(page, /alt=""[^\s>]/, 'no alt cut short by a stray quote');

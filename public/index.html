@@ -1977,11 +1977,12 @@
       .hero-tags span{font-size:.72rem;padding:.25rem .65rem;}
     }
     /* Homepage order (owner, #345): sections alternate white and warm grey. */
-    #shop,#reviews,#how-it-works{background:#F7F6F3!important;}
-    #portfolio,#design-lab,#occasions,#contact{background:#fff!important;}
+    #design-lab,#reviews{background:#F7F6F3!important;}
+    #portfolio,#shop,#occasions,#contact{background:#fff!important;}
   </style>
   <script src="/assets/js/analytics.js"></script>
   <link rel="stylesheet" href="/assets/css/site-nav.css?v=d741b795" />
+  <link rel="stylesheet" href="/assets/css/page-blocks.css?v=37f0440d" />
 </head>
 
 <body>
@@ -2208,94 +2209,6 @@
   </section>
 
   <!-- ============================
-       SHOP — categories + ready to customize.
-       These cards are the fallback; /api/shop-feed swaps in the designer's
-       live ones (script at the bottom), so a product switched off there
-       disappears here too.
-  ============================ -->
-  <section class="jt-sec" id="shop" aria-labelledby="shop-h">
-    <div class="container">
-      <div class="jt-head">
-        <div>
-          <div class="section-tag">Shop by Category</div>
-          <h2 id="shop-h">Custom Apparel, Banners &amp; Signs</h2>
-          <p>Pick a product, design it online, and check out. No minimums on apparel.</p>
-        </div>
-        <a class="jt-see" href="https://design.jtees.net/products.php" data-from="home_shop">View all products &rarr;</a>
-      </div>
-      <div class="jt-grid" id="shop-categories">
-          <a class="jt-card" href="https://design.jtees.net/products.php?category_id=52" data-from="home_shop" data-card="category">
-            <div class="im"><img src="/assets/images/shop/ssa-33929_f_fm.jpg" alt="Custom T-Shirts by June's Tees" loading="lazy" /></div>
-            <div class="bd"><div class="nm">T-Shirts</div><div class="pr">From $5.02 + printing</div><span class="go">Design This &rarr;</span></div>
-          </a>
-          <a class="jt-card" href="https://design.jtees.net/products.php?category_id=53" data-from="home_shop" data-card="category">
-            <div class="im"><img src="/assets/images/shop/ssa-107784_f_fm.jpg" alt="Custom Hoodies &amp; Sweatshirts by June's Tees" loading="lazy" /></div>
-            <div class="bd"><div class="nm">Hoodies &amp; Sweatshirts</div><div class="pr">From $14.84 + printing</div><span class="go">Design This &rarr;</span></div>
-          </a>
-          <a class="jt-card" href="https://design.jtees.net/products.php?category_id=54" data-from="home_shop" data-card="category">
-            <div class="im"><img src="/assets/images/shop/ssa-18365_f_fm.jpg" alt="Custom Tank Tops by June's Tees" loading="lazy" /></div>
-            <div class="bd"><div class="nm">Tank Tops</div><div class="pr">From $8.84 + printing</div><span class="go">Design This &rarr;</span></div>
-          </a>
-          <a class="jt-card" href="https://design.jtees.net/products.php?category_id=55" data-from="home_shop" data-card="category">
-            <div class="im"><img src="/assets/images/shop/ssa-113683_f_fm.jpg" alt="Custom Kids &amp; Youth by June's Tees" loading="lazy" /></div>
-            <div class="bd"><div class="nm">Kids &amp; Youth</div><div class="pr">From $5.32 + printing</div><span class="go">Design This &rarr;</span></div>
-          </a>
-          <a class="jt-card" href="https://design.jtees.net/products.php?category_id=56" data-from="home_shop" data-card="category">
-            <div class="im"><img src="/assets/images/shop/ssa-36262_f_fm.jpg" alt="Custom Baby &amp; Onesies by June's Tees" loading="lazy" /></div>
-            <div class="bd"><div class="nm">Baby &amp; Onesies</div><div class="pr">From $8.14 + printing</div><span class="go">Design This &rarr;</span></div>
-          </a>
-          <a class="jt-card" href="https://design.jtees.net/products.php?category_id=57" data-from="home_shop" data-card="category">
-            <div class="im"><img src="/assets/images/shop/ssa-97052_f_fm.jpg" alt="Custom Hats &amp; Caps by June's Tees" loading="lazy" /></div>
-            <div class="bd"><div class="nm">Hats &amp; Caps</div><div class="pr">From $7.00 + printing</div><span class="go">Design This &rarr;</span></div>
-          </a>
-          <a class="jt-card" href="https://design.jtees.net/products.php?category_id=58" data-from="home_shop" data-card="category">
-            <div class="im"><img src="/assets/images/shop/ssa-127766_f_fm.jpg" alt="Custom Tote Bags by June's Tees" loading="lazy" /></div>
-            <div class="bd"><div class="nm">Tote Bags</div><div class="pr">From $3.30 + printing</div><span class="go">Design This &rarr;</span></div>
-          </a>
-          <a class="jt-card" href="https://design.jtees.net/products.php?category_id=59" data-from="home_shop" data-card="category">
-            <div class="im"><img src="/assets/images/shop/ssa-130179_f_fm.jpg" alt="Custom Polos &amp; Business by June's Tees" loading="lazy" /></div>
-            <div class="bd"><div class="nm">Polos &amp; Business</div><div class="pr">From $12.26 + printing</div><span class="go">Design This &rarr;</span></div>
-          </a>
-          <!-- The heading promises signs, so the no-script / feed-down fallback shows them too (Codex #198). -->
-          <a class="jt-card" href="https://design.jtees.net/products.php?category_id=67" data-from="home_shop" data-card="category">
-            <div class="im"><img src="/assets/images/products/vinyl-banners.svg" alt="Custom Vinyl Banners by June's Tees" loading="lazy" /></div>
-            <div class="bd"><div class="nm">Banners</div><div class="pr">Custom pricing</div><span class="go">Design This &rarr;</span></div>
-          </a>
-          <a class="jt-card" href="https://design.jtees.net/products.php?category_id=68" data-from="home_shop" data-card="category">
-            <div class="im"><img src="/assets/images/products/yard-signs.svg" alt="Custom Yard &amp; Rigid Signs by June's Tees" loading="lazy" /></div>
-            <div class="bd"><div class="nm">Yard &amp; Rigid Signs</div><div class="pr">Custom pricing</div><span class="go">Design This &rarr;</span></div>
-          </a>
-      </div>
-
-      <div class="jt-head jt-sub" id="best-sellers">
-        <div>
-          <div class="section-tag">Most Loved</div>
-          <h2>Ready to Customize</h2>
-        </div>
-        <a class="jt-see" href="https://design.jtees.net/products.php" data-from="home_best">Browse all products &rarr;</a>
-      </div>
-      <div class="jt-grid" id="shop-best">
-          <a class="jt-card" href="https://design.jtees.net/product.php?product_id=12" data-from="home_best" data-card="product">
-            <div class="im"><img src="/assets/images/shop/ssa-33476_f_fm.jpg" alt="Custom Gildan 5000 Unisex Heavy Cotton Tee by June's Tees" loading="lazy" /></div>
-            <div class="bd"><div class="nm">Gildan 5000 Unisex Heavy Cotton Tee</div><div class="bl">Premium blank, vivid print.</div><div class="pr">From $5.12 + printing</div><span class="go">Design This &rarr;</span></div>
-          </a>
-          <a class="jt-card" href="https://design.jtees.net/product.php?product_id=125" data-from="home_best" data-card="product">
-            <div class="im"><img src="/assets/images/shop/ssa-86980_f_fm.jpg" alt="Custom Independent Trading IND5000P Legend Pullover by June's Tees" loading="lazy" /></div>
-            <div class="bd"><div class="nm">Independent Trading IND5000P Legend Pullover</div><div class="bl">Cozy fleece and a large print area.</div><div class="pr">From $61.20 + printing</div><span class="go">Design This &rarr;</span></div>
-          </a>
-          <a class="jt-card" href="https://design.jtees.net/product.php?product_id=91" data-from="home_best" data-card="product">
-            <div class="im"><img src="/assets/images/shop/ssa-36262_f_fm.jpg" alt="Custom Rabbit Skins RS4400 — Infant Short Sleeve Bodysuit by June's Tees" loading="lazy" /></div>
-            <div class="bd"><div class="nm">Rabbit Skins RS4400 — Infant Short Sleeve Bodysuit</div><div class="bl">Soft and snug for the littlest ones.</div><div class="pr">From $8.34 + printing</div><span class="go">Design This &rarr;</span></div>
-          </a>
-          <a class="jt-card" href="https://design.jtees.net/product.php?product_id=115" data-from="home_best" data-card="product">
-            <div class="im"><img src="/assets/images/shop/ssa-20491_f_fm.jpg" alt="Custom Valucap VC300A Bio-Washed Dad Hat by June's Tees" loading="lazy" /></div>
-            <div class="bd"><div class="nm">Valucap VC300A Bio-Washed Dad Hat</div><div class="bl">Structured cap — embroidery or print.</div><div class="pr">From $7.72 + printing</div><span class="go">Design This &rarr;</span></div>
-          </a>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============================
        DESIGN LAB (was "Introducing the Design Studio" here and "Design Lab"
        on design.jtees.net — merged)
   ============================ -->
@@ -2325,6 +2238,91 @@
           <a href="https://design.jtees.net/editor.php?product_base=14" class="btn btn-primary" data-from="home_lab">Start Designing &rarr;</a>
         </div>
       </div>
+    </div>
+  </section>
+
+  <!-- ============================
+       SHOP — three category shelves of real products (owner, 2026-10-17),
+       written by tools/page-blocks.js from assets/data/page-blocks.json
+       ("home"). Signs stay off: their pictures are drawings.
+  ============================ -->
+  <section class="jt-sec" id="shop" aria-labelledby="shop-h">
+    <div class="container">
+      <div class="jt-head">
+        <div>
+          <div class="section-tag">Shop by Category</div>
+          <h2 id="shop-h">Custom T-Shirts, Hoodies &amp; Hats</h2>
+          <p>Pick a product, design it online, and check out. No minimums on apparel.</p>
+        </div>
+        <a class="jt-see" href="https://design.jtees.net/products.php" data-from="home_shop">View all products &rarr;</a>
+      </div>
+<!-- pb-shelves:start — generated by tools/page-blocks.js from assets/data/page-blocks.json -->
+<div class="pb-shelves">
+    <div class="pb-shelf">
+      <div class="pb-shelf-h"><h3>T-Shirts</h3><a href="https://design.jtees.net/products.php?category_id=52" data-from="home_shop">See all &rarr;</a></div>
+      <div class="pb-row">
+      <a class="pb-card" href="https://design.jtees.net/product.php?product_id=12" data-from="home_shop" data-card="product">
+      <div class="pb-im"><img src="/assets/images/shop/ssa-33476_f_fm.jpg" alt="Custom Gildan 5000 Unisex Heavy Cotton Tee by June's Tees" loading="lazy" width="300" height="300" /></div>
+      <div class="pb-bd"><div class="pb-nm">Gildan 5000 Unisex Heavy Cotton Tee</div><div class="pb-pr">From $5.12 + printing</div><span class="pb-go">Design This &rarr;</span></div>
+    </a>
+      <a class="pb-card" href="https://design.jtees.net/product.php?product_id=13" data-from="home_shop" data-card="product">
+      <div class="pb-im"><img src="/assets/images/shop/ssa-33310_f_fm.jpg" alt="Custom Gildan 64000 Unisex Softstyle Tee by June's Tees" loading="lazy" width="300" height="300" /></div>
+      <div class="pb-bd"><div class="pb-nm">Gildan 64000 Unisex Softstyle Tee</div><div class="pb-pr">From $6.28 + printing</div><span class="pb-go">Design This &rarr;</span></div>
+    </a>
+      <a class="pb-card" href="https://design.jtees.net/product.php?product_id=59" data-from="home_shop" data-card="product">
+      <div class="pb-im"><img src="/assets/images/shop/ssa-27220_f_fm.jpg" alt="Custom Hanes 5280 Essential-T T-Shirt by June's Tees" loading="lazy" width="300" height="300" /></div>
+      <div class="pb-bd"><div class="pb-nm">Hanes 5280 Essential-T T-Shirt</div><div class="pb-pr">From $5.02 + printing</div><span class="pb-go">Design This &rarr;</span></div>
+    </a>
+      <a class="pb-card" href="https://design.jtees.net/product.php?product_id=17" data-from="home_shop" data-card="product">
+      <div class="pb-im"><img src="/assets/images/shop/ssa-114524_f_fm.jpg" alt="Custom Gildan 5000L Women&#39;s Heavy Cotton Tee by June's Tees" loading="lazy" width="300" height="300" /></div>
+      <div class="pb-bd"><div class="pb-nm">Gildan 5000L Women&#39;s Heavy Cotton Tee</div><div class="pb-pr">From $7.52 + printing</div><span class="pb-go">Design This &rarr;</span></div>
+    </a>
+      </div>
+    </div>
+    <div class="pb-shelf">
+      <div class="pb-shelf-h"><h3>Hoodies &amp; Sweatshirts</h3><a href="https://design.jtees.net/products.php?category_id=53" data-from="home_shop">See all &rarr;</a></div>
+      <div class="pb-row">
+      <a class="pb-card" href="https://design.jtees.net/product.php?product_id=21" data-from="home_shop" data-card="product">
+      <div class="pb-im"><img src="/assets/images/shop/ssa-33306_f_fm.jpg" alt="Custom Gildan 18500 Unisex Heavy Blend Hoodie by June's Tees" loading="lazy" width="300" height="300" /></div>
+      <div class="pb-bd"><div class="pb-nm">Gildan 18500 Unisex Heavy Blend Hoodie</div><div class="pb-pr">From $20.18 + printing</div><span class="pb-go">Design This &rarr;</span></div>
+    </a>
+      <a class="pb-card" href="https://design.jtees.net/product.php?product_id=24" data-from="home_shop" data-card="product">
+      <div class="pb-im"><img src="/assets/images/shop/ssa-33297_f_fm.jpg" alt="Custom Gildan 18000 Heavy Blend Crewneck Sweatshirt by June's Tees" loading="lazy" width="300" height="300" /></div>
+      <div class="pb-bd"><div class="pb-nm">Gildan 18000 Heavy Blend Crewneck Sweatshirt</div><div class="pb-pr">From $14.84 + printing</div><span class="pb-go">Design This &rarr;</span></div>
+    </a>
+      <a class="pb-card" href="https://design.jtees.net/product.php?product_id=148" data-from="home_shop" data-card="product">
+      <div class="pb-im"><img src="/assets/images/shop/ssa-137696_f_fm.jpg" alt="Custom Gildan 18810 Heavy Blend Quarter-Zip by June's Tees" loading="lazy" width="300" height="300" /></div>
+      <div class="pb-bd"><div class="pb-nm">Gildan 18810 Heavy Blend Quarter-Zip</div><div class="pb-pr">From $22.44 + printing</div><span class="pb-go">Design This &rarr;</span></div>
+    </a>
+      <a class="pb-card" href="https://design.jtees.net/product.php?product_id=125" data-from="home_shop" data-card="product">
+      <div class="pb-im"><img src="/assets/images/shop/ssa-86980_f_fm.jpg" alt="Custom Independent Trading IND5000P Legend Pullover by June's Tees" loading="lazy" width="300" height="300" /></div>
+      <div class="pb-bd"><div class="pb-nm">Independent Trading IND5000P Legend Pullover</div><div class="pb-pr">From $61.20 + printing</div><span class="pb-go">Design This &rarr;</span></div>
+    </a>
+      </div>
+    </div>
+    <div class="pb-shelf">
+      <div class="pb-shelf-h"><h3>Hats &amp; Caps</h3><a href="https://design.jtees.net/products.php?category_id=57" data-from="home_shop">See all &rarr;</a></div>
+      <div class="pb-row">
+      <a class="pb-card" href="https://design.jtees.net/product.php?product_id=115" data-from="home_shop" data-card="product">
+      <div class="pb-im"><img src="/assets/images/shop/ssa-20491_f_fm.jpg" alt="Custom Valucap VC300A Bio-Washed Dad Hat by June's Tees" loading="lazy" width="300" height="300" /></div>
+      <div class="pb-bd"><div class="pb-nm">Valucap VC300A Bio-Washed Dad Hat</div><div class="pb-pr">From $7.72 + printing</div><span class="pb-go">Design This &rarr;</span></div>
+    </a>
+      <a class="pb-card" href="https://design.jtees.net/product.php?product_id=155" data-from="home_shop" data-card="product">
+      <div class="pb-im"><img src="/assets/images/shop/ssa-29425_f_fm.jpg" alt="Custom Valucap 8804H Five-Panel Trucker Cap by June's Tees" loading="lazy" width="300" height="300" /></div>
+      <div class="pb-bd"><div class="pb-nm">Valucap 8804H Five-Panel Trucker Cap</div><div class="pb-pr">From $7.00 + printing</div><span class="pb-go">Design This &rarr;</span></div>
+    </a>
+      <a class="pb-card" href="https://design.jtees.net/product.php?product_id=154" data-from="home_shop" data-card="product">
+      <div class="pb-im"><img src="/assets/images/shop/ssa-71023_f_fm.jpg" alt="Custom YP Classics 1500KC Cuffed Beanie by June's Tees" loading="lazy" width="300" height="300" /></div>
+      <div class="pb-bd"><div class="pb-nm">YP Classics 1500KC Cuffed Beanie</div><div class="pb-pr">From $7.42 + printing</div><span class="pb-go">Design This &rarr;</span></div>
+    </a>
+      <a class="pb-card" href="https://design.jtees.net/product.php?product_id=164" data-from="home_shop" data-card="product">
+      <div class="pb-im"><img src="/assets/images/shop/ssa-97052_f_fm.jpg" alt="Custom Richardson 112RE Sustainable Trucker Cap by June's Tees" loading="lazy" width="300" height="300" /></div>
+      <div class="pb-bd"><div class="pb-nm">Richardson 112RE Sustainable Trucker Cap</div><div class="pb-pr">From $15.44 + printing</div><span class="pb-go">Design This &rarr;</span></div>
+    </a>
+      </div>
+    </div>
+</div>
+<!-- pb-shelves:end -->
     </div>
   </section>
 
@@ -2610,21 +2608,6 @@
     </div>
   </section>
 
-  <!-- ============================
-       HOW IT WORKS
-  ============================ -->
-  <section class="jt-sec alt" id="how-it-works" aria-labelledby="hiw-h">
-    <div class="container">
-      <div class="jt-head center"><div><div class="section-tag">Simple Process</div><h2 id="hiw-h">How to Order Custom Apparel</h2></div></div>
-      <div class="jt-steps">
-        <div><h3>Pick your product</h3><p>Browse t-shirts, hoodies, hats, and more, then choose your color and size.</p></div>
-        <div><h3>Customize it</h3><p>Open the <a href="https://design.jtees.net/editor.php?product_base=14" class="jt-studio" data-from="home">Design Lab</a> to upload art, add text, or use AI design help, and preview it.</p></div>
-        <div><h3>Pick sizes &amp; quantities</h3><p>Order one piece or a full group run — no minimums, all-inclusive pricing.</p></div>
-        <div><h3>Checkout &amp; we print it</h3><p>Review your proof and place the order. We print in Chicago, usually in 7–14 business days.</p></div>
-      </div>
-      <p class="jt-aside">Rather we handle it? <a href="#quote-form" data-from="home_steps">Get a free quote</a> and we'll take it from there.</p>
-    </div>
-  </section>
   <!-- ============================
        MARQUEE SEPARATOR
   ============================ -->

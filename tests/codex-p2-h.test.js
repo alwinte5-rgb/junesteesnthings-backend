@@ -62,11 +62,10 @@ test('#197 the spelling update compares both sides normalised, and `was` is spel
   assert.match(f, /= regexp_replace\(\$2::text, '\(\[Cc\]\)olour'/);
   assert.match(f, /FROM unnest\(\$4::text\[\]\) AS w/);
 });
-test('#198 the homepage fallback shows signs and limits no-minimums to apparel', () => {
+test('#198 superseded 2026-10-17: the homepage shelves carry no sign drawings; no-minimums stays apparel-only', () => {
   const html = read('public/index.html');
-  const sec = html.slice(html.indexOf('id="shop-categories"'), html.indexOf('id="best-sellers"'));
-  assert.match(sec, /category_id=67/);
-  assert.match(sec, /category_id=68/);
+  const sec = html.slice(html.indexOf('<!-- pb-shelves:start'), html.indexOf('<!-- pb-shelves:end'));
+  assert.doesNotMatch(sec, /images\/products\/[^"]+\.svg/);
   assert.match(html, /No minimums on apparel\./);
 });
 test('#198 the Shop menu scrolls inside the viewport', () => {

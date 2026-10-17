@@ -103,32 +103,85 @@ function heroBlock(data, page) {
 ${e}`;
 }
 
-function card(item, from) {
-  return `<a class="pb-card" href="${esc(item.link)}" data-from="${from}" data-card="service">
+function card(item, from, kind = 'service') {
+  return `<a class="pb-card" href="${esc(item.link)}" data-from="${from}" data-card="${kind}">
       <div class="pb-im"><img src="${esc(item.image)}" alt="Custom ${esc(item.name)} by June's Tees" loading="lazy" width="300" height="300" /></div>
       <div class="pb-bd"><div class="pb-nm">${esc(item.name)}</div><div class="pb-pr">${esc(item.price)}</div><span class="pb-go">Design This &rarr;</span></div>
     </a>`;
 }
 
-function productsBlock(data, page, rel) {
+/* Product shelves (owner, 2026-10-17): three categories, each one row of
+   its most-ordered products with real photos, not one grid of categories.
+   Signs have no shelf: their pictures are drawings. A page's "products" name
+   its categories in order of fit; the first three with a shelf are used, and
+   a page short of three is topped up from SHELF_ORDER, starting at a place
+   set by the page, so the extra categories differ from page to page. */
+const SHELF_ORDER = ['c52', 'c53', 'c57', 'c55', 'c59', 'c58', 'c54'];
+function shelvesFor(data, page, index) {
+  const out = [...new Set((page.products || []).filter((id) => data.rows[id]))].slice(0, 3);
+  for (let i = 0; out.length < 3 && i < SHELF_ORDER.length; i++) {
+    const id = SHELF_ORDER[(index + i) % SHELF_ORDER.length];
+    if (!out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+function shelves(data, cats, from) {
+  return cats.map((c) => `<div class="pb-shelf">
+      <div class="pb-shelf-h"><h3>${esc(data.catalog[c].name)}</h3><a href="${esc(data.catalog[c].link)}" data-from="${from}">See all &rarr;</a></div>
+      <div class="pb-row">
+      ${data.rows[c].map((id) => card(data.catalog[id], from, 'product')).join('\n      ')}
+      </div>
+    </div>`).join('\n    ');
+}
+
+/* The Design Lab, before the products on every page (owner, 2026-10-17). */
+const EDITOR = 'https://design.jtees.net/editor.php?product_base=14';
+const LAB_IMG = '/assets/images/brand/design-lab-live.jpg';
+function labSection(from) {
+  return `<section class="pb-lab" aria-labelledby="pb-lab-h">
+  <div class="pb-wrap pb-lab-in">
+    <a class="pb-lab-shot" href="${EDITOR}" data-from="${from}_lab" aria-label="Open the Design Lab"><img src="${LAB_IMG}?v=${assetStamp(LAB_IMG)}" alt="The June's Tees Design Lab: a custom tee being designed online" loading="lazy" width="800" height="674" /></a>
+    <div>
+      <div class="pb-tag">Built into the <a href="${STUDIO}" data-from="${from}">Design Studio</a></div>
+      <h2 id="pb-lab-h">The <a href="${EDITOR}" data-from="${from}_lab">Design Lab</a> makes it fun &amp; easy</h2>
+      <p>Upload your logo or photo, add text, or describe your idea and let the built-in AI design help start it for you. See it on the product as you go, with live pricing.</p>
+      <ul class="pb-lab-feats"><li>⬆️ Upload your logo</li><li>🔤 Hundreds of fonts</li><li>✨ AI design help</li></ul>
+      <a class="pb-lab-go" href="${EDITOR}" data-from="${from}_lab">Start Designing &rarr;</a>
+    </div>
+  </div>
+</section>`;
+}
+
+function productsBlock(data, page, rel, index) {
   const [s, e] = mark('pb-products');
   const from = fromTag(rel);
-  const cards = page.products.map((id) => card(data.catalog[id], from)).join('\n    ');
   return `${s}
+${labSection(from)}
 <section class="pb-products" aria-labelledby="pb-products-h">
   <div class="pb-wrap">
     <div class="pb-head">
       <div><div class="pb-tag"><a href="${STUDIO}" data-from="${from}">Design Studio</a> &middot; see it before you buy</div><h2 id="pb-products-h">${studioLink(esc(page.heading), from)}</h2></div>
       <a class="pb-all" href="${STUDIO}" data-from="${from}">All products &rarr;</a>
     </div>
-    <div class="pb-grid">
-    ${cards}
-    </div>
+    ${shelves(data, shelvesFor(data, page, index), from)}
     <p class="pb-note">Pick a product, add your text, photo or logo, and see the price as you go. Prefer help? <a href="/contact">Send us your idea</a>, call <a href="tel:${PHONE.tel}">${PHONE.display}</a> or email <!--email_off--><a href="mailto:${EMAIL}">${EMAIL}</a><!--/email_off-->.</p>
   </div>
 </section>
 <div class="pb-sticky" aria-label="Quick actions"><a href="${STUDIO}" class="pb-sticky-go" data-from="${from}_sticky">Design yours</a><a href="tel:${PHONE.tel}" class="pb-sticky-call" aria-label="Call ${PHONE.display}">📞</a></div>
 ${e}`;
+}
+
+/* The homepage keeps its own layout; only its shop shelves are written here,
+   between markers it already carries. */
+function applyHome(html, data) {
+  const [s, e] = mark('pb-shelves');
+  const block = `${s}
+<div class="pb-shelves">
+    ${shelves(data, data.home.shelves, 'home_shop')}
+</div>
+${e}`;
+  return BLOCKS_CSS.put(put(html, 'pb-shelves', block, () => -1));
 }
 
 function stars(n) { return '★★★★★'.slice(0, Math.round(n)); }
@@ -299,7 +352,7 @@ function apply(html, rel, data, reviews) {
   html = put(html, 'pb-hero', heroBlock(data, page), where.hero);
   if (html.includes('<section class="hero"')) html = put(html, 'pb-rating', ratingBlock(reviews), where.rating);
   html = put(html, 'pb-work', workBlock(data, page), where.work);
-  html = put(html, 'pb-products', productsBlock(data, page, rel), where.products);
+  html = put(html, 'pb-products', productsBlock(data, page, rel, ORDER.list.indexOf(rel)), where.products);
   html = put(html, 'pb-reviews', reviewsBlock(reviews, ORDER.list.indexOf(rel)), where.reviews);
   html = BLOCKS_CSS.put(html);
   if (!html.includes('/assets/js/shop-feed.js')) html = html.replace('</body>', `${FEED_TAG}\n</body>`);
@@ -334,6 +387,16 @@ function validate(data) {
     if (!fs.existsSync(path.join(PUBLIC, c.image))) bad.push(`${id}: no photo at ${c.image}`);
   }
   for (const k of Object.keys(data.work)) if (!fs.existsSync(path.join(PUBLIC, workImg(k)))) bad.push(`work photo missing: ${k}`);
+  // A shelf is a category's own products, each with a real photo (no drawings).
+  for (const [c, ids] of Object.entries(data.rows || {})) {
+    if (!data.catalog[c]) bad.push(`rows: unknown category ${c}`);
+    if (ids.length !== 4) bad.push(`rows.${c}: ${ids.length} products, not 4`);
+    for (const id of ids) {
+      if (!data.catalog[id]) bad.push(`rows.${c}: unknown product ${id}`);
+      else if (!/\.jpe?g$/i.test(data.catalog[id].image)) bad.push(`rows.${c}: ${id} has no photo`);
+    }
+  }
+  for (const c of (data.home || {}).shelves || []) if (!(data.rows || {})[c]) bad.push(`home: no shelf for ${c}`);
   for (const [rel, p] of Object.entries(data.pages)) {
     if (!fs.existsSync(path.join(PUBLIC, rel))) bad.push(`${rel}: no such page`); // a new occasion page: run tools/occasion-pages.js --write first
     for (const id of p.products || []) if (!data.catalog[id]) bad.push(`${rel}: unknown product ${id}`);
@@ -363,10 +426,19 @@ function run(mode) {
       if (mode === 'write') fs.writeFileSync(file, after);
     }
   }
+  if (data.home) {
+    const file = path.join(PUBLIC, 'index.html');
+    const before = fs.readFileSync(file, 'utf8');
+    const after = applyHome(before, data);
+    if (after !== before) {
+      drifted.push('index.html');
+      if (mode === 'write') fs.writeFileSync(file, after);
+    }
+  }
   return drifted;
 }
 
-module.exports = { apply, load, validate, run, mark, BLOCKS, fromTag };
+module.exports = { apply, applyHome, load, validate, run, mark, BLOCKS, fromTag, shelvesFor };
 
 if (require.main === module) {
   const mode = process.argv.includes('--write') ? 'write' : 'check';

@@ -152,3 +152,15 @@ test('a blog page with a gallery shows it after the article, before the cards', 
   assert.ok(main !== -1 && work > main && cards > work, 'order: article, gallery, cards');
   assert.ok(html.includes('/assets/images/work/church-fire-of-praise.jpg'));
 });
+
+test('every page shows the Design Lab, then three category shelves of real products (owner, 2026-10-17)', () => {
+  for (const rel of Object.keys(data.pages)) {
+    const html = read(rel);
+    const lab = html.indexOf('<section class="pb-lab"');
+    const prod = html.indexOf('<section class="pb-products"');
+    assert.ok(lab !== -1 && prod > lab, `${rel}: Design Lab before the products`);
+    const box = html.slice(prod, html.indexOf('</section>', prod));
+    assert.strictEqual((box.match(/class="pb-shelf"/g) || []).length, 3, `${rel}: three shelves`);
+    assert.doesNotMatch(box, /\.svg"/, `${rel}: no drawn placeholder cards`);
+  }
+});
