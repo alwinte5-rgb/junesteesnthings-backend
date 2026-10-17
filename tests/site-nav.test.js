@@ -29,7 +29,8 @@ test('every page has the current menu (else: node tools/site-nav.js --write)', (
     const html = read(rel);
     assert.strictEqual(html.split(NAV.START).length - 1, 1, rel + ': exactly one menu');
     assert.doesNotMatch(html, /<div class="announcement-bar"|<header\b|class="mobile-drawer"/, rel + ': an old menu piece is left');
-    assert.match(html, /href="\/assets\/css\/site-nav\.css"/, rel + ': menu stylesheet');
+    // Stamped with the stylesheet's hash so a change is never held in a browser cache.
+    assert.ok(html.includes(`href="/assets/css/site-nav.css?v=${NAV.CSS_V}"`), rel + ': menu stylesheet, current version');
   }
 });
 
