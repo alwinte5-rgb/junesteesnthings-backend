@@ -196,7 +196,7 @@ test('FAQs are closed until clicked: <details> with a <summary> question', () =>
     assert.ok(!/<details class="faq-item" open/.test(html), rel + ': FAQs start closed');
   }
   const css = read('assets/css/page-blocks.css');
-  assert.match(css, /summary\.faq-q\{list-style:none\}/);
+  assert.match(css, /summary\.faq-q\{list-style:none;cursor:pointer\}/);
 });
 
 test('photos the owner pulled from the site stay off it', () => {
@@ -205,6 +205,9 @@ test('photos the owner pulled from the site stay off it', () => {
   for (const k of pulled) {
     assert.ok(!fs.existsSync(path.join(PUBLIC, 'assets/images/work', k + '.jpg')), k + ': file still served');
     assert.ok(!(k in data.work), k + ': still listed in page-blocks.json');
-    for (const rel of ['index.html', ...marketing]) assert.ok(!read(rel).includes(k), rel + ': shows ' + k);
+    // git grep exits 1 when nothing matches, which is the pass.
+    const r = require('node:child_process').spawnSync('git', ['grep', '-l', k, '--', 'public', 'Lumise'], { cwd: path.join(PUBLIC, '..'), encoding: 'utf8' });
+    const all = (r.stdout || '').trim();
+    assert.strictEqual(all, '', k + ' still named in: ' + all);
   }
 });

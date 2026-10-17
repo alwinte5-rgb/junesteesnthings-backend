@@ -373,7 +373,8 @@ const where = {
 /* The form the contact page carries, drawn by quote-form.js into the
    data-jt-quote-form mount. The text inside the mount shows until the script
    runs, so the page still says how to reach us without it. */
-function quoteBlock() {
+function quoteBlock(html) {
+  if (where.quote(html) === -1) return '';
   const [s, e] = mark('pb-quote');
   return `${s}
 <section class="pb-quote" id="get-quote" aria-labelledby="pb-quote-h">
@@ -385,7 +386,7 @@ function quoteBlock() {
       <p>Prefer to talk? Call or text <a href="tel:${PHONE.tel}">${PHONE.display}</a>.</p>
     </div>
     <div class="pb-quote-form" data-jt-quote-form>
-      <p>Call or text <a href="tel:${PHONE.tel}">${PHONE.display}</a> or email <!--email_off--><a href="mailto:${EMAIL}">${EMAIL}</a><!--/email_off--> &mdash; the form is loading.</p>
+      <p>For a free quote, call or text <a href="tel:${PHONE.tel}">${PHONE.display}</a> or email <!--email_off--><a href="mailto:${EMAIL}">${EMAIL}</a><!--/email_off-->.</p>
     </div>
   </div>
 </section>
@@ -402,12 +403,15 @@ function apply(html, rel, data, reviews) {
   html = put(html, 'pb-work', workBlock(data, page), where.work);
   html = put(html, 'pb-products', productsBlock(data, page, rel), where.products);
   html = put(html, 'pb-reviews', reviewsBlock(reviews, ORDER.list.indexOf(rel)), where.reviews);
-  const quote = where.quote(html) !== -1;
-  html = put(html, 'pb-quote', quote ? quoteBlock() : '', where.quote);
+  html = put(html, 'pb-quote', quoteBlock(html), where.quote);
+  const quote = html.includes(mark('pb-quote')[0]);
   html = BLOCKS_CSS.put(html);
   html = FEED_ANY.test(html) ? html.replace(FEED_ANY, FEED_TAG) : html.replace('</body>', `${FEED_TAG}\n</body>`);
   if (!html.includes('/assets/js/pb-reviews.js')) html = html.replace('</body>', `${REVIEWS_JS}\n</body>`);
-  if (quote && !html.includes('/assets/js/quote-form.js')) html = html.replace('</body>', `${QUOTE_JS.tag}\n</body>`);
+  // The script goes in with the form and comes out with it.
+  // Re-stamped where it stands, so site-nav.js's own tags around it stay put.
+  if (!quote) html = html.replace(/<script src="\/assets\/js\/quote-form\.js(?:\?v=[0-9a-f]+)?" defer><\/script>\n?/g, '');
+  else if (!html.includes('/assets/js/quote-form.js')) html = html.replace('</body>', `${QUOTE_JS.tag}\n</body>`);
   html = QUOTE_JS.put(html);
   return html;
 }
