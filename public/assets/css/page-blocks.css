@@ -133,3 +133,19 @@
   body:has(.pb-sticky){padding-bottom:72px}
 }
 @media (prefers-reduced-motion:reduce){.pb-card,.pb-gallery img{transition:none}}
+
+/* The quote form after the call to action (tools/page-blocks.js pb-quote);
+   quote-form.js styles the form itself. */
+.pb-quote{font-family:Inter,system-ui,sans-serif;background:#F7F6F3;padding:3rem 0;scroll-margin-top:7rem}
+.pb-quote-in{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);gap:2.5rem;align-items:start}
+.pb-quote h2{font-size:clamp(1.45rem,3.2vw,2rem);font-weight:800;color:#0B1F4B;line-height:1.15;margin:0 0 .8rem}
+.pb-quote-copy p{color:#374151;line-height:1.7;margin:0 0 .8rem}
+.pb-quote-copy a{color:#1848B8;font-weight:700}
+.pb-quote-form{background:#fff;border:1px solid #E5E7EB;border-radius:16px;padding:28px}
+@media (max-width:820px){.pb-quote-in{grid-template-columns:1fr;gap:1.2rem}.pb-quote-form{padding:20px}}
+
+/* FAQs stay closed until a question is clicked (<details>); the pages' own
+   .faq-q styles draw the row and its "+". */
+summary.faq-q{list-style:none}
+summary.faq-q::-webkit-details-marker{display:none}
+details.faq-item[open]>summary.faq-q::after{content:'\2212'}

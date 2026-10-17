@@ -259,10 +259,10 @@ const FAQ = [
 ];
 
 const faqHtml = FAQ.map(([q, a]) => `
-        <div class="faq-item">
-          <div class="faq-q">${q}</div>
+        <details class="faq-item">
+          <summary class="faq-q">${q}</summary>
           <div class="faq-a">${a}</div>
-        </div>`).join('');
+        </details>`).join('');
 
 const faqLd = JSON.stringify({
   '@context': 'https://schema.org', '@type': 'FAQPage',

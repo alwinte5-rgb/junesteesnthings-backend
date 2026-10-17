@@ -171,3 +171,40 @@ test('a sign page still opens each sign designer, as plain links (no drawn cards
   for (const c of [67, 68, 69, 70, 71, 72]) assert.match(row, new RegExp(`products\\.php\\?category_id=${c}"`));
   assert.ok(PB.shelvesFor(data, data.pages['services/banners-signs.html'], 'services/banners-signs.html').length === 3);
 });
+
+/* Owner, 2026-10-17: "is the quote form on all the pages" and "collapse the
+   faq's, they are long". */
+test('every page with a call to action carries the quote form right after it', () => {
+  const v = require('../tools/lib/css-tag').scriptTag('/assets/js/quote-form.js').v;
+  for (const rel of marketing) {
+    const html = read(rel);
+    const cta = html.search(/<(section|div) class="cta-band"/);
+    assert.ok(cta !== -1, rel + ': call to action');
+    const q = html.indexOf(PB.mark('pb-quote')[0]);
+    assert.ok(q > cta, rel + ': quote form after the call to action');
+    assert.strictEqual((html.match(/data-jt-quote-form/g) || []).length, 1, rel + ': one form mount');
+    assert.ok(html.includes(`<script src="/assets/js/quote-form.js?v=${v}" defer></script>`), rel + ': current quote-form.js');
+  }
+});
+
+test('FAQs are closed until clicked: <details> with a <summary> question', () => {
+  for (const rel of marketing) {
+    const html = read(rel);
+    assert.ok(!/<div class="faq-(item|q)"/.test(html), rel + ': an FAQ that cannot be closed');
+    const items = (html.match(/<details class="faq-item">/g) || []).length;
+    assert.strictEqual((html.match(/<summary class="faq-q">/g) || []).length, items, rel + ': every FAQ has a question to click');
+    assert.ok(!/<details class="faq-item" open/.test(html), rel + ': FAQs start closed');
+  }
+  const css = read('assets/css/page-blocks.css');
+  assert.match(css, /summary\.faq-q\{list-style:none\}/);
+});
+
+test('photos the owner pulled from the site stay off it', () => {
+  // Numbalums (Northwestern band alumni) polo: not cleared for public posting.
+  const pulled = ['embroidered-purple-polo'];
+  for (const k of pulled) {
+    assert.ok(!fs.existsSync(path.join(PUBLIC, 'assets/images/work', k + '.jpg')), k + ': file still served');
+    assert.ok(!(k in data.work), k + ': still listed in page-blocks.json');
+    for (const rel of ['index.html', ...marketing]) assert.ok(!read(rel).includes(k), rel + ': shows ' + k);
+  }
+});
