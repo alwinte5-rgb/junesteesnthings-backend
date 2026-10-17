@@ -2,7 +2,26 @@
    page's own header CSS can reach it, and it reaches nothing of theirs. */
 .jtn-bar{background:#0B1F4B;color:#fff;text-align:center;font:600 .8rem/1.4 Inter,system-ui,sans-serif;padding:.55rem 1rem;}
 .jtn-bar a{color:#fff;text-decoration:underline;}
-.jtn-bar span{opacity:.6;margin:0 .45rem;}
+.jtn-bar span[aria-hidden]{opacity:.6;margin:0 .45rem;}
+/* Blue bar, services ticker and menu stick to the top together (owner,
+   2026-10-17). One sticky box, so the three can never overlap or drift. */
+.jtn-sticky{position:sticky;top:0;z-index:1000;}
+.jtn-sticky .jtn{position:relative;}
+/* In-page links (#contact, #shop) land below the pinned top, not under it. */
+html{scroll-padding-top:140px;}
+@media(max-width:640px){html{scroll-padding-top:120px;}}
+/* "Design Studio" mentions in page text link to the designer; pages reset
+   a{color:inherit;text-decoration:none}, so give them a look of their own. */
+a.jt-studio{color:#1848B8;font-weight:700;text-decoration:underline;text-underline-offset:3px;}
+.jtn-tick{background:#FFF8EF;border-bottom:1px solid #E7E3DB;overflow:hidden;font-family:Inter,system-ui,sans-serif;}
+.jtn-tick-track{display:flex;width:max-content;animation:jtn-tick 40s linear infinite;}
+.jtn-tick:hover .jtn-tick-track{animation-play-state:paused;}
+.jtn-tick-i{white-space:nowrap;padding:.4rem 1.6rem;font-size:.74rem;font-weight:700;color:#0B1F4B;text-transform:uppercase;letter-spacing:.08em;}
+.jtn-tick-i b{color:#F0275A;margin-right:.35rem;}
+@media(max-width:1100px){.jtn-bar-x{display:none;}}
+@media(max-width:640px){.jtn-bar{font-size:.74rem;padding:.4rem .75rem;}.jtn-tick-i{padding:.32rem 1.1rem;font-size:.68rem;}}
+@keyframes jtn-tick{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+@media(prefers-reduced-motion:reduce){.jtn-tick-track{animation:none;}}
 .jtn{position:sticky;top:0;z-index:1000;background:#fff;border-bottom:1px solid #E5E7EB;font-family:Inter,system-ui,sans-serif;}
 .jtn-in{max-width:1280px;margin:0 auto;padding:.6rem 1.25rem;display:flex;align-items:center;gap:1rem;}
 .jtn a{text-decoration:none;}
@@ -15,10 +34,19 @@
 .jtn-menu>a:hover,.jtn-dd-t:hover,.jtn-dd.open .jtn-dd-t{background:#EFF4FF;color:#1848B8;}
 .jtn-dd{position:relative;}
 .jtn-dd-t::after{content:"";display:inline-block;margin-left:.35rem;border:4px solid transparent;border-top-color:currentColor;transform:translateY(2px);}
-.jtn-dd-m{display:none;position:absolute;top:100%;left:0;min-width:230px;background:#fff;border:1px solid #E5E7EB;border-radius:12px;box-shadow:0 14px 34px rgba(11,31,75,.14);padding:.45rem;z-index:1001;max-height:calc(100vh - 90px);overflow-y:auto;overscroll-behavior:contain;}
+.jtn-dd-m{display:none;position:absolute;top:100%;left:0;min-width:230px;background:#fff;border:1px solid #E5E7EB;border-radius:12px;box-shadow:0 14px 34px rgba(11,31,75,.14);padding:.45rem;z-index:1001;max-height:calc(100vh - 150px);overflow-y:auto;overscroll-behavior:contain;}
 .jtn-dd:hover .jtn-dd-m,.jtn-dd:focus-within .jtn-dd-m,.jtn-dd.open .jtn-dd-m{display:block;}
 .jtn-dd-m a{display:block;color:#374151;font:500 .9rem Inter,system-ui,sans-serif;padding:.5rem .7rem;border-radius:8px;}
 .jtn-dd-m a:hover{background:#F7F6F3;color:#0B1F4B;}
+/* A submenu inside a dropdown (Groups & Events > Holidays) opens in place,
+   under its label, so the dropdown's own scrolling never clips it. */
+.jtn-sub-t{display:flex;width:100%;justify-content:space-between;align-items:center;background:none;border:0;cursor:pointer;color:#374151;font:600 .9rem Inter,system-ui,sans-serif;padding:.5rem .7rem;border-radius:8px;text-align:left;}
+.jtn-sub-t::after{content:"";border:4px solid transparent;border-left-color:currentColor;margin-left:.5rem;}
+.jtn-sub-t:hover,.jtn-sub.open .jtn-sub-t{background:#F7F6F3;color:#0B1F4B;}
+.jtn-sub.open .jtn-sub-t::after{border-left-color:transparent;border-top-color:currentColor;transform:translateY(2px);}
+.jtn-sub-m{display:none;margin:.1rem 0 .3rem .6rem;padding-left:.4rem;border-left:2px solid #F0EEE9;}
+.jtn-sub.open .jtn-sub-m{display:block;}
+@media(hover:hover) and (pointer:fine){.jtn-sub:hover .jtn-sub-m{display:block;}}
 .jtn .jtn-strong{color:#1848B8;font-weight:700;}
 .jtn-act{display:flex;align-items:center;gap:.6rem;flex-shrink:0;}
 .jtn-icon{display:flex;align-items:center;}
@@ -41,6 +69,8 @@
 .jtn-drawer-nav summary::after{content:"+";float:right;color:#6B7280;}
 .jtn-drawer-nav details[open] summary::after{content:"–";}
 .jtn-drawer-nav details a{display:block;color:#374151;padding:.55rem .9rem;text-decoration:none;}
+.jtn-drawer-nav .jtn-sub-d summary{font-weight:600;color:#374151;padding:.55rem .9rem;border-bottom:0;}
+.jtn-drawer-nav .jtn-sub-d a{padding-left:1.8rem;}
 .jtn-drawer-cta{display:grid;gap:.55rem;margin-top:1.2rem;}
 .jtn-btn{display:block;text-align:center;background:#1848B8;color:#fff;font-weight:700;padding:.8rem;border-radius:999px;text-decoration:none;}
 .jtn-btn-2{background:#F7F6F3;color:#0B1F4B;}
@@ -79,3 +109,25 @@ html{overflow-x:clip;}
 .jtn-ico-search svg{fill:#0B1F4B;}
 @media(max-width:1120px){.jtn-ico-search{display:flex!important;}}
 @media(max-width:480px){.jtn-search{padding:.2rem .75rem .6rem;}}
+
+/* The shared footer (tools/site-nav.js). Every property is set here so no
+   page's own footer styles leak in. */
+.jtf{background:#0B1F4B!important;color:rgba(255,255,255,.78)!important;font:400 .92rem/1.6 Inter,system-ui,sans-serif!important;padding:3.2rem 0 1.4rem!important;margin:0!important;border:0!important;text-align:left!important;}
+.jtf-in{max-width:1200px;margin:0 auto;padding:0 1.5rem;display:grid;grid-template-columns:minmax(0,1.6fr) repeat(auto-fit,minmax(150px,1fr));gap:2rem 1.6rem;}
+.jtf a{color:rgba(255,255,255,.82);text-decoration:none;}
+.jtf a:hover{color:#fff;text-decoration:underline;}
+.jtf p{margin:0 0 .8rem;color:rgba(255,255,255,.72);font-size:.9rem;max-width:34rem;}
+.jtf-logo{display:flex;align-items:center;gap:.6rem;margin-bottom:.9rem;color:#fff!important;font:800 1.05rem Inter,system-ui,sans-serif;text-decoration:none!important;}
+.jtf-logo img{width:40px;height:44px;object-fit:contain;}
+.jtf-logo small{display:block;font:600 .68rem Inter,system-ui,sans-serif;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.6);}
+.jtf-texts{color:#F4A623!important;font-weight:700;}
+.jtf-social{display:flex;flex-wrap:wrap;gap:.6rem;margin-top:.4rem;}
+.jtf-social a{display:inline-flex;align-items:center;gap:.45rem;background:rgba(255,255,255,.1);padding:.5rem .85rem;border-radius:999px;font-weight:600;font-size:.88rem;color:#fff!important;}
+.jtf-social a:hover{background:rgba(255,255,255,.18);text-decoration:none;}
+.jtf-social svg{width:18px;height:18px;fill:#fff;flex-shrink:0;}
+.jtf-col{display:flex;flex-direction:column;gap:.45rem;}
+.jtf-col h2{margin:0 0 .3rem;font:700 .78rem Inter,system-ui,sans-serif;letter-spacing:.12em;text-transform:uppercase;color:#fff;}
+.jtf-col span{color:rgba(255,255,255,.6);font-size:.86rem;}
+.jtf-legal a{color:rgba(255,255,255,.7)!important;}
+.jtf-bottom{max-width:1200px;margin:2.4rem auto 0;padding:1.2rem 1.5rem 0;border-top:1px solid rgba(255,255,255,.14);display:flex;flex-wrap:wrap;justify-content:space-between;gap:.6rem;font-size:.82rem;color:rgba(255,255,255,.55);}
+@media(max-width:700px){.jtf-in{grid-template-columns:1fr 1fr;}.jtf-brand{grid-column:1/-1;}.jtf{padding-bottom:6rem!important;}}

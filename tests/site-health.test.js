@@ -72,7 +72,8 @@ test('server: counted on both forms before the limiter, 404 endpoint guarded, em
 });
 
 test('pages: the quote form reports its failures, the 404 page reports itself', () => {
-  const index = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8');
+  // The form's code is the shared public/assets/js/quote-form.js (homepage, /contact, designer).
+  const index = fs.readFileSync(path.join(ROOT, 'public', 'assets', 'js', 'quote-form.js'), 'utf8');
   for (const r of ['phone', 'email', 'rate_limit', 'network_or_server']) assert.ok(index.includes(`formError('${r}')`), r);
   assert.match(index, /res\.status === 429\)[\s\S]{0,400}call or text us at \(773\) 900-4592/);
   const nf = fs.readFileSync(path.join(ROOT, 'public', '404.html'), 'utf8');

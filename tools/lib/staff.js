@@ -324,6 +324,8 @@ const ROUTES = {
   'POST /admin/discounts': 'discounts.manage',
   // The reintroduction campaign texts and emails the whole list: the owner's call.
   'GET /admin/campaign': 'owner',
+  // When to prep, advertise and stop orders for each occasion: the owner's plan.
+  'GET /admin/marketing-calendar': 'owner',
   'GET /admin/campaign/sign': 'owner',
   'POST /admin/campaign/test': 'owner',
   'POST /admin/campaign/text': 'owner',

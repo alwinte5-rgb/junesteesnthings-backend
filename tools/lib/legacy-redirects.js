@@ -45,8 +45,8 @@ const PRODUCT_RULES = [
 
 /* Whole old pages, by exact path (lower-cased, no trailing slash). */
 const PAGE_RULES = {
-  '/pages/contact': '/#contact',
-  '/pages/contact-us': '/#contact',
+  '/pages/contact': '/contact',
+  '/pages/contact-us': '/contact',
   '/pages/about': '/#about',
   '/pages/about-us': '/#about',
   '/pages/seller-profile': '/#about',

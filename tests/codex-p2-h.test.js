@@ -70,7 +70,8 @@ test('#198 the homepage fallback shows signs and limits no-minimums to apparel',
   assert.match(html, /No minimums on apparel\./);
 });
 test('#198 the Shop menu scrolls inside the viewport', () => {
-  assert.match(read('public/assets/css/site-nav.css'), /\.jtn-dd-m\{[^}]*max-height:calc\(100vh - 90px\);overflow-y:auto/);
+  // 150px since 2026-10-17: the blue bar and the services ticker stick above the menu.
+  assert.match(read('public/assets/css/site-nav.css'), /\.jtn-dd-m\{[^}]*max-height:calc\(100vh - 150px\);overflow-y:auto/);
 });
 test('#200/#203 only the homepage, which has the action bar, moves Tawk', () => {
   const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
