@@ -20,7 +20,8 @@
  *                 three at random, so pages and visits differ
  *   ...           the page's own copy, FAQ, call to action, related reading
  *
- * Blog pages have no hero or work: products and reviews follow the article.
+ * Blog pages have no hero: a gallery, when listed, then products and reviews
+ * follow the article.
  *
  * assets/js/shop-feed.js refreshes the cards' photos and prices from the
  * Design Studio when it answers. A sticky "Design yours / Call" bar rides
@@ -251,8 +252,8 @@ const afterBlock = (name) => (html) => { const [, e] = mark(name); const i = htm
 
 /* Service and area pages: the photo is the hero .container's last child and
    the rating follows the pitch under the H1; work follows the hero section,
-   products follow work, reviews follow products. Blog: products follow the
-   article's </main>, or the post grid on the index. */
+   products follow work, reviews follow products. Blog: work (if any), then
+   products, follow the article's </main>, or the post grid on the index. */
 const where = {
   hero(html) {
     const h = html.indexOf('<section class="hero"');
@@ -272,7 +273,9 @@ const where = {
   },
   work(html) {
     const h = html.indexOf('<section class="hero"');
-    return h === -1 ? -1 : lineAfter(html, elementEnd(html, h) - 1);
+    if (h !== -1) return lineAfter(html, elementEnd(html, h) - 1);
+    const m = html.indexOf('</main>');
+    return m === -1 ? -1 : lineAfter(html, m);
   },
   products(html) {
     const w = afterBlock('pb-work')(html);

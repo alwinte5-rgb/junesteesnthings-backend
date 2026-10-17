@@ -143,3 +143,12 @@ test('a gallery never repeats its main photo and fills its rows', () => {
   assert.deepStrictEqual(PB.validate(page({ work: w.slice(0, 5), short_gallery: 'testing' })), []);
   assert.deepStrictEqual(PB.validate(data), []);
 });
+
+test('a blog page with a gallery shows it after the article, before the cards', () => {
+  const html = read('blog/church-group-shirts-chicago.html');
+  const main = html.indexOf('</main>');
+  const work = html.indexOf('<!-- pb-work:start');
+  const cards = html.indexOf('<!-- pb-products:start');
+  assert.ok(main !== -1 && work > main && cards > work, 'order: article, gallery, cards');
+  assert.ok(html.includes('/assets/images/work/church-fire-of-praise.jpg'));
+});
