@@ -37,17 +37,21 @@ test('a non-US phone and a non-address email are left out, not guessed', () => {
 });
 
 test('pixel cookies pass only in their documented shape', () => {
-  const good = CAPI.buildLeadEvent({ eventId: 'q', cookie: 'a=1; _fbp=fb.1.1700000000000.123456789; _fbc=fb.1.1700000000000.AbC_d-1' });
+  const good = CAPI.buildLeadEvent({ eventId: 'q', cookie: 'a=1; _fbp=fb.1.1700000000000.123456789; _fbc=fb.1.1700000000000.IwAR0abc.def_-1' });
   assert.strictEqual(good.user_data.fbp, 'fb.1.1700000000000.123456789');
-  assert.strictEqual(good.user_data.fbc, 'fb.1.1700000000000.AbC_d-1');
+  assert.strictEqual(good.user_data.fbc, 'fb.1.1700000000000.IwAR0abc.def_-1');
   const bad = CAPI.buildLeadEvent({ eventId: 'q', cookie: '_fbp=<script>; _fbc=fb.1.x.y' });
   assert.strictEqual(bad.user_data.fbp, undefined);
   assert.strictEqual(bad.user_data.fbc, undefined);
 });
 
-test('only a jtees.net page is sent as the source URL', () => {
-  assert.strictEqual(CAPI.buildLeadEvent({ eventId: 'q', sourceUrl: 'https://www.jtees.net/#quote' }).event_source_url, 'https://www.jtees.net/#quote');
-  assert.strictEqual(CAPI.buildLeadEvent({ eventId: 'q', sourceUrl: 'https://evil.example/jtees.net/' }).event_source_url, undefined);
+test('the source URL is a jtees.net page without its query, else the homepage', () => {
+  const url = (r) => CAPI.buildLeadEvent({ eventId: 'q', sourceUrl: r }).event_source_url;
+  assert.strictEqual(url('https://www.jtees.net/services/embroidery.html#quote'), 'https://www.jtees.net/services/embroidery.html');
+  assert.strictEqual(url('https://jtees.net/?email=pat%40example.com&utm_source=brevo'), 'https://jtees.net/');
+  assert.strictEqual(url('https://evil.example/jtees.net/'), 'https://www.jtees.net/');
+  assert.strictEqual(url('https://jtees.net.evil.example/'), 'https://www.jtees.net/');
+  assert.strictEqual(url(undefined), 'https://www.jtees.net/');
 });
 
 test('without a token nothing is sent', async () => {
@@ -60,7 +64,7 @@ test('without a token nothing is sent', async () => {
 test('with a token it posts to the June\'s Tees pixel, test code when set', async () => {
   let seen;
   const post = async (url, body, opts) => { seen = { url, body, opts }; return { data: { events_received: 1 } }; };
-  const out = await CAPI.sendEvents([{ event_name: 'Lead' }], { post, env: { META_CAPI_ACCESS_TOKEN: 'tok', META_CAPI_TEST_CODE: 'TEST1' } });
+  const out = await CAPI.sendEvents([{ event_name: 'Lead' }], { post, env: { META_CAPI_ACCESS_TOKEN: 'tok', META_CAPI_TEST_CODE: 'TEST1', META_PIXEL_ID: '1111111111' } });
   assert.deepStrictEqual(out, { sent: true, received: 1 });
   assert.match(seen.url, /^https:\/\/graph\.facebook\.com\/v\d+\.\d+\/348199180594218\/events$/);
   assert.strictEqual(seen.body.access_token, 'tok');
@@ -88,7 +92,8 @@ test('a failed send never carries the access token in its error', async () => {
 test('the quote form sends Meta one Lead, under the server\'s id', () => {
   const html = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8');
   assert.strictEqual(html.includes("fbq('track', 'Lead')"), false, 'a direct fbq Lead doubles the jtTrack one');
-  assert.match(html, /jtTrack\('quote_submitted', saved\.lead_event_id \? \{ meta_event_id: saved\.lead_event_id \}/);
+  // No id (resubmit, no human check) = the server sent nothing, so nor does the page.
+  assert.match(html, /if \(window\.jtTrack && saved\.lead_event_id\) jtTrack\('quote_submitted', \{ meta_event_id: saved\.lead_event_id \}\)/);
   const server = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
   assert.match(server, /const leadEventId = 'quote-' \+ submissionId;/);
   assert.match(server, /lead_event_id: unverified \? undefined : leadEventId/);
@@ -113,4 +118,15 @@ test('jtTrack passes meta_event_id to the pixel as eventID and not to GA', () =>
   const ga = gtag.find((a) => a[0] === 'event' && a[1] === 'quote_submitted');
   assert.ok(ga, 'GA still gets quote_submitted');
   assert.strictEqual('meta_event_id' in ga[2], false);
+});
+
+test('server and browser send to the same pixel', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'public', 'assets', 'js', 'analytics.js'), 'utf8');
+  const browser = src.match(/var META_PIXEL_ID = '(\d+)'/)[1];
+  assert.strictEqual(browser, CAPI.DEFAULT_PIXEL_ID);
+});
+
+test('a duplicate resubmit answers without an event id', () => {
+  const server = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
+  assert.match(server, /return res\.json\(\{ ok: true, duplicate: true \}\);/);
 });

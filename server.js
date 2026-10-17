@@ -40,6 +40,7 @@ const LEADMAIL = require('./tools/lib/lead-email');
 const REINTRO = require('./tools/lib/reintro');
 const FUNNEL = require('./tools/lib/funnel-health');
 const METACAPI = require('./tools/lib/meta-capi');
+let metaCapiReportedAt = 0;
 const { T: SMS, plain: smsPlain, short: smsShort, PICKUP: SMS_PICKUP, PICKUP_ADDRESS, PICKUP_HOURS, PICKUP_STEPS } = require('./tools/lib/sms-templates');
 
 /** Where and how to pick up, for an email: the address, the hours and the
@@ -4036,7 +4037,14 @@ app.post('/submit', countFormFailures('quote'), makeRateLimit(4, 60 * 60 * 1000)
       eventId: leadEventId, email: s.email, phone: s.phone,
       ip: clientIp(req), userAgent: req.get('user-agent'),
       sourceUrl: req.get('referer'), cookie: req.headers.cookie,
-    })], { post: axios.post }).catch(err => reportError('submit:meta-capi', err).catch(() => {}));
+    })], { post: axios.post }).catch(err => {
+      console.error('Meta CAPI lead failed:', err.message);
+      // A dead token fails every quote; once an hour is enough to be told.
+      if (Date.now() - metaCapiReportedAt > 60 * 60 * 1000) {
+        metaCapiReportedAt = Date.now();
+        reportError('submit:meta-capi', err).catch(() => {});
+      }
+    });
   }
 
   res.json({ ok: true, lead_event_id: unverified ? undefined : leadEventId });

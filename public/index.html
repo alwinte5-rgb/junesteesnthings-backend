@@ -3445,9 +3445,11 @@
           // Conversion tracking — fires only on a confirmed save. Meta's Lead
           // comes from jtTrack('quote_submitted') alone (a direct fbq Lead here
           // counted every quote twice), under the id the server sent it with.
+          // No id = a resubmit or an enquiry without the human check: the
+          // server sent Meta nothing, and neither does the page.
           const saved = await res.json().catch(() => ({}));
           if (window.gtag) gtag('event', 'generate_lead');
-          if (window.jtTrack) jtTrack('quote_submitted', saved.lead_event_id ? { meta_event_id: saved.lead_event_id } : {});
+          if (window.jtTrack && saved.lead_event_id) jtTrack('quote_submitted', { meta_event_id: saved.lead_event_id });
           quoteForm.reset();
           document.getElementById('photo-url-field').value = '';
           document.getElementById('preview-img').src = '';

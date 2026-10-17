@@ -37,13 +37,27 @@ function hashPhone(phone) {
 /* The pixel's own cookies tie a server event to the browser that made it.
    They are the visitor's to edit, so only the documented shape is passed on. */
 const FBP_RE = /^fb\.\d\.\d{10,13}\.\d{1,20}$/;
-const FBC_RE = /^fb\.\d\.\d{10,13}\.[A-Za-z0-9_-]{1,500}$/;
+const FBC_RE = /^fb\.\d\.\d{10,13}\.[A-Za-z0-9_.-]{1,500}$/;
 function readCookie(header, name) {
   for (const part of String(header || '').split(';')) {
     const i = part.indexOf('=');
     if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim();
   }
   return '';
+}
+
+/* The page the form was sent from: origin and path only. A query string can
+   carry an email address (mail links), which must not leave unhashed. A
+   website event needs a URL, so anything else is the homepage. */
+const HOME = 'https://www.jtees.net/';
+function sourcePage(referer) {
+  try {
+    const u = new URL(String(referer || ''));
+    if (u.protocol === 'https:' && /^(www\.)?jtees\.net$/.test(u.hostname)) {
+      return (u.origin + u.pathname).slice(0, 500);
+    }
+  } catch (_) { /* not a URL */ }
+  return HOME;
 }
 
 /**
@@ -69,10 +83,8 @@ function buildLeadEvent({ eventId, email, phone, ip, userAgent, sourceUrl, cooki
     event_id: String(eventId),
     action_source: 'website',
     user_data,
+    event_source_url: sourcePage(sourceUrl),
   };
-  if (sourceUrl && /^https:\/\/(www\.)?jtees\.net\//.test(sourceUrl)) {
-    event.event_source_url = String(sourceUrl).slice(0, 500);
-  }
   return event;
 }
 
@@ -83,7 +95,10 @@ function buildLeadEvent({ eventId, email, phone, ip, userAgent, sourceUrl, cooki
 async function sendEvents(events, { post, env = process.env } = {}) {
   const token = env.META_CAPI_ACCESS_TOKEN;
   if (!token) return { sent: false, reason: 'not-configured' };
-  const pixelId = /^\d{10,20}$/.test(env.META_PIXEL_ID || '') ? env.META_PIXEL_ID : DEFAULT_PIXEL_ID;
+  /* Not overridable: the browser's pixel is fixed in analytics.js, and a
+     server sending to a different dataset silently ends the dedupe.
+     tests/meta-capi.test.js holds the two equal. */
+  const pixelId = DEFAULT_PIXEL_ID;
   const body = { data: events, access_token: token };
   // Events Manager → Test events shows these live without counting them.
   if (env.META_CAPI_TEST_CODE) body.test_event_code = String(env.META_CAPI_TEST_CODE).slice(0, 40);
