@@ -1,7 +1,7 @@
 {
   "_about": "The shop's Google reviews, shown on quote pages (server.js reviewStrip) and at the bottom of every site page (assets/js/review-strip.js). One list, so they can never disagree. photo is optional.",
   "rating": 4.8,
-  "count_on_google": 21,
+  "count_on_google": 23,
   "google_url": "/#reviews",
   "reviews": [
     {

@@ -469,8 +469,18 @@ ${!singles.length ? '' : `<section>
 
 `;
 
-fs.writeFileSync(OUT, top + BODY + bottom);
-console.log('wrote ' + path.relative(ROOT, OUT) + '  (' + (top + BODY + bottom).length + ' bytes)');
+/* Product cards, reviews and photos (tools/page-blocks.js) go back in, so a
+   price rebuild never strips them from the page. */
+const pageBlocks = require('./page-blocks');
+const { data: PB_DATA, reviews: PB_REVIEWS } = pageBlocks.load();
+const pbBad = pageBlocks.validate(PB_DATA);
+if (pbBad.length) {
+  console.error('page-blocks.json:\n  ' + pbBad.join('\n  '));
+  process.exit(1);
+}
+const PAGE = pageBlocks.apply(top + BODY + bottom, 'services/big-head-cutouts.html', PB_DATA, PB_REVIEWS);
+fs.writeFileSync(OUT, PAGE);
+console.log('wrote ' + path.relative(ROOT, OUT) + '  (' + PAGE.length + ' bytes)');
 
 /* ── The downloadable ─────────────────────────────────────────────────────── */
 
