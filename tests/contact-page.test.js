@@ -47,8 +47,9 @@ test('no page sends anyone to /#contact any more', () => {
 
 test('the homepage\'s own quote links land on the form, clear of the sticky header', () => {
   const home = read('index.html');
-  // Only "Location & Hours" still points at the section, where the address and hours are.
-  assert.deepStrictEqual([...home.matchAll(/href="#contact"[^>]*>([^<]*)/g)].map((m) => m[1]), ['Location & Hours']);
+  // Nothing points at the old section any more: the shared footer's
+  // "Location & hours" opens /contact, where the address and hours are.
+  assert.deepStrictEqual([...home.matchAll(/href="#contact"[^>]*>([^<]*)/g)].map((m) => m[1]), []);
   assert.match(home, /href="#quote-form"/);
   assert.match(home, /#quote-form, #contact \{ scroll-margin-top: 150px; \}/);
 });

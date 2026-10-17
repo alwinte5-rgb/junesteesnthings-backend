@@ -55,7 +55,7 @@ const MODULES = [
     lessons: [{
       id: 'a2-judge', article: A.judge, minutes: 20, tags: 'ads, cost per quote request, profit, conversions, clicks, budget, approval',
       goals: ['Judge an ad on quote requests, orders and profit', 'Work out whether ads are paying for themselves', 'Know which changes need June first'],
-      images: [{ src: '/assets/images/work/storefront-lincoln-ave.jpg', alt: 'Our shop: ads bring Chicago-area customers to it' }],
+      images: [{ src: '/assets/images/work/screen-printing-press.jpg', alt: 'Our Lakeview shop: ads bring Chicago-area customers to it' }],
       body:
 `We spend a small amount on ads, and every dollar has to come back as orders. Your job is to make that true, and to show June it is true.
 
