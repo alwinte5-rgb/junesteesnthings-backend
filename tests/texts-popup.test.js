@@ -153,10 +153,17 @@ test('a visitor who signed up is never asked', () => {
 
 test('the sign-up page sends "Design Lab" and "Start designing" to the designer, not the studio home', () => {
   const server = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
-  assert.match(server, /const LAB = `\$\{D\}\/editor\.php\?product_base=14`;/);
-  assert.match(server, /<a class="tx-btn" href="\$\{LAB\}">Start designing<\/a>/);
-  assert.match(server, /<a href="\$\{LAB\}">Design Lab<\/a>/);
-  assert.ok(!/href="\$\{D\}">(Start designing|Design Lab)</.test(server), 'no link to the studio home page');
-  // A repeat sign-up is shown the code from before; nothing new was texted.
-  assert.match(server, /again \? 'This is the code we sent you when you signed up\.'/);
+  // The sign-up page's own code, from its function to its route.
+  const page = server.slice(server.indexOf('function textsPage('), server.indexOf('app.get(REINTRO.SIGNUP_PATH'));
+  assert.ok(page.includes('/editor.php?product_base=14'), 'links to the designer');
+  assert.ok(!/href="\$\{D\}"|href="https:\/\/design\.jtees\.net\/?"/.test(page), 'no link to the studio home page');
+  // The discount email's button opens the product list, never the studio home.
+  const mail = server.slice(server.lastIndexOf('<a href=', server.indexOf('Start designing &rarr;')), server.indexOf('Start designing &rarr;'));
+  assert.match(mail, /products\.php/);
+});
+
+test('a repeat sign-up only sees the code when phone AND email match, and is told the truth', () => {
+  const server = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
+  assert.match(server, /had\[0\]\.phone === consent\.phone && String\(had\[0\]\.email \|\| ''\)\.toLowerCase\(\) === email/);
+  assert.ok(!server.includes("This is the code we sent you when you signed up"), 'no claim it was sent');
 });

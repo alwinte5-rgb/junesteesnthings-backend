@@ -5940,7 +5940,7 @@ function textsPage({ email = '', first = '', phone = '', error = '', code = '', 
   const D = 'https://design.jtees.net';
   // "Design Lab" and "Start designing" open the designer itself, not the
   // studio's home page (owner, 2026-10-18), like every other Design Lab link.
-  const LAB = `${D}/editor.php?product_base=14`;
+  const LAB = `${STUDIO_BASE}/editor.php?product_base=14`;
   const garments = [['ssa-33929_f_fm', 'T-shirts', 52], ['ssa-107784_f_fm', 'Hoodies', 53], ['ssa-18365_f_fm', 'Tanks', 54],
     ['ssa-113683_f_fm', 'Kids', 55], ['ssa-36262_f_fm', 'Baby', 56], ['ssa-97052_f_fm', 'Hats', 57]]
     .map(([img, label, cat]) => `<a href="${D}/products.php?category_id=${cat}"><img src="/assets/images/shop/${img}.jpg"
@@ -5951,13 +5951,14 @@ function textsPage({ email = '', first = '', phone = '', error = '', code = '', 
     <a href="${D}/privacy.php">Privacy</a></div>`;
   const body = done ? `${top}
     <div class="tx-hero"><h1>${again ? "You're already <span>on the list!</span>" : "You're in. <span>Thank you!</span>"}</h1>
-      <p>${!code ? 'Your code is on its way.' : again ? 'This is the code we sent you when you signed up.'
-        : "Here's your code. We've texted it to you too."}</p></div>
+      <p>${again ? (code ? 'Here is your code from when you signed up.' : 'Thanks for being with us.')
+        : code ? "Here's your code. We've texted it to you too." : 'Your code is on its way.'}</p></div>
     <div class="tx-wrap"><div class="tx-card" style="text-align:center">
       ${code ? `<div style="font-weight:700;color:#0B1F4B">Your ${REINTRO.PCT}% off code</div>
         <div class="tx-code">${escEmail(code)}</div>
         <p class="tx-small">Use it at checkout in the Design Lab, or mention it when you get a quote.
-          Good once, for ${REINTRO.CODE_DAYS} days.</p>`
+          Good once, for ${REINTRO.CODE_DAYS} days${again ? ' from when you signed up. Used or run out? Call or text us at (773) 900-4592' : ''}.</p>`
+      : again ? `<p>Can't find your ${REINTRO.PCT}% off code? Call or text us at <a href="tel:+17739004592">(773) 900-4592</a> and we'll sort it out.</p>`
       : `<p>June will send your ${REINTRO.PCT}% off code to you shortly.</p>`}
       <a class="tx-btn" href="${LAB}">Start designing</a>
       <div class="tx-garments">${garments}</div>
@@ -6014,8 +6015,14 @@ app.post(REINTRO.SIGNUP_PATH, makeRateLimit(6, 60 * 60 * 1000), async (req, res)
   try {
     await recordSmsConsent(consent, { source: 'signup:' + src, ip: clientIp(req), userAgent: req.get('user-agent') });
     const { rows: had } = await pool.query(
-      `SELECT code FROM text_signups WHERE phone = $1 OR email = $2 ORDER BY created_at LIMIT 1`, [consent.phone, email]);
-    if (had.length) return res.send(textsPage({ done: true, again: true, code: had[0].code }));
+      `SELECT code, phone, email FROM text_signups WHERE phone = $1 OR email = $2 ORDER BY created_at LIMIT 1`, [consent.phone, email]);
+    /* Already signed up. Their code is shown again only when BOTH the phone
+       and the email are the ones they signed up with: typing someone else's
+       email alone must not reveal that person's code. */
+    if (had.length) {
+      const mine = had[0].phone === consent.phone && String(had[0].email || '').toLowerCase() === email;
+      return res.send(textsPage({ done: true, again: true, code: mine ? had[0].code : '' }));
+    }
     if (!signupAllowed()) return again('Lots of sign-ups right now! Please try again in a few minutes.');
     let code = null;
     try { code = await mintSignupCode(email); }
@@ -6030,8 +6037,8 @@ app.post(REINTRO.SIGNUP_PATH, makeRateLimit(6, 60 * 60 * 1000), async (req, res)
       sendEmail({ to: email, subject: `Your ${REINTRO.PCT}% off code: ${code}`, promo: false,
         html: customerEmailHtml(`Here's your ${REINTRO.PCT}% off`,
           `<p>Hi${first ? ' ' + escEmail(first) : ''}, thanks for signing up for our texts!</p>
-           <p>Your code is <b style="font-size:18px;letter-spacing:1px">${escEmail(code)}</b>. Use it at checkout on
-             <a href="https://www.jtees.net">jtees.net</a>, or mention it when you get a quote. It's good for
+           <p>Your code is <b style="font-size:18px;letter-spacing:1px">${escEmail(code)}</b>. Use it at checkout in the
+             <a href="${STUDIO_BASE}/editor.php?product_base=14">Design Lab</a>, or mention it when you get a quote. It's good for
              ${REINTRO.CODE_DAYS} days, once.</p>`, null) })
         .catch((e) => console.error('sign-up code email failed:', e.message));
     } else {
@@ -19633,7 +19640,7 @@ async function sendDiscountEmail(code, email, extra) {
           border-radius:10px;padding:14px 26px;font-size:26px;font-weight:800;
           letter-spacing:2px;color:#0B1F4B;font-family:ui-monospace,Menlo,monospace">${escEmail(c.code)}</span></p>
         <p style="color:#374151">Enter it at checkout${rules ? ' — ' + escEmail(rules) : ''}.</p>
-        <p style="margin-top:18px"><a href="${STUDIO_BASE}/editor.php?product_base=14"
+        <p style="margin-top:18px"><a href="${STUDIO_BASE}/products.php"
            style="background:#1848B8;color:#fff;padding:12px 24px;border-radius:100px;
            text-decoration:none;font-weight:700">Start designing &rarr;</a></p>
         <p style="color:#6b7280;font-size:13px;margin-top:18px">${escEmail(SHOP_SIGNER)} &middot;
