@@ -126,3 +126,12 @@ test('a reorder carries only a sane code from the designer', () => {
   assert.strictEqual(P.reorderPromo({ code: 'REORDER5', kind: 'percent', value: -5 }), null);
   assert.strictEqual(P.reorderPromo({ code: 'REORDER5', kind: 'bogus', value: 5 }), null);
 });
+
+test('the sitemap lists /partners only while the program is on, once', () => {
+  const xml = '<?xml version="1.0"?>\n<urlset>\n  <url><loc>https://www.jtees.net/</loc></url>\n</urlset>\n';
+  assert.strictEqual(P.sitemapXml(xml, {}), xml);
+  const onXml = P.sitemapXml(xml, { JT_PARTNERS: 'on' });
+  assert.ok(onXml.includes('<loc>https://www.jtees.net/partners</loc>'));
+  assert.ok(onXml.trimEnd().endsWith('</urlset>'));
+  assert.strictEqual(P.sitemapXml(onXml, { JT_PARTNERS: 'on' }), onXml);
+});

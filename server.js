@@ -264,6 +264,14 @@ app.get(['/partners', '/partners.html', '/mail15', '/mail15.html'], (req, res) =
   res.sendFile(path.join(__dirname, 'public', file));
 });
 
+// sitemap.xml: the static file, plus /partners while the program is on.
+app.get('/sitemap.xml', (_req, res, next) => {
+  require('node:fs').readFile(path.join(__dirname, 'public', 'sitemap.xml'), 'utf8', (err, xml) => {
+    if (err) return next();
+    res.type('application/xml').send(PARTNERS.sitemapXml(xml));
+  });
+});
+
 // Serve frontend
 /* Browser caching for static files. Images and fonts rarely change: 30 days.
    Scripts and styles are NOT versioned by filename (/assets/js/jt-chat.js is
