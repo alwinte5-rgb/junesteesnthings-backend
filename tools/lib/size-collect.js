@@ -43,4 +43,23 @@ function tally(entries, sizesByLine) {
   return { byLine: out, stale };
 }
 
-module.exports = { MAX_ENTRIES, newToken, TOKEN_RE, cleanName, tally };
+/** The shop's view: every size asked for, per line, with no names. Unlike
+ *  tally() it keeps sizes the line no longer offers, so nothing a person asked
+ *  for goes missing. `rank(size)` orders sizes (unknown sizes go last).
+ *  Returns [{ line_index, sizes: [[size, n], ...], total }]. */
+function listTotals(entries, rank) {
+  const byLine = new Map();
+  for (const e of entries || []) {
+    const ix = Number(e.line_index);
+    if (!byLine.has(ix)) byLine.set(ix, new Map());
+    const m = byLine.get(ix);
+    m.set(e.size, (m.get(e.size) || 0) + (Number(e.qty) || 1));
+  }
+  const r = (s) => { const n = rank(s); return n < 0 ? Infinity : n; };
+  return [...byLine.keys()].sort((a, b) => a - b).map((ix) => {
+    const sizes = [...byLine.get(ix)].sort((a, b) => r(a[0]) - r(b[0]) || String(a[0]).localeCompare(String(b[0])));
+    return { line_index: ix, sizes, total: sizes.reduce((t, [, n]) => t + n, 0) };
+  });
+}
+
+module.exports = { MAX_ENTRIES, newToken, TOKEN_RE, cleanName, tally, listTotals };

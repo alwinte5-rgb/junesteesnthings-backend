@@ -22907,19 +22907,24 @@ function jobScheduleHtml(q, sched, { canSetDate = true } = {}) {
         canSetDate ? ' Set a date above for the step-by-step dates.' : ''}</div></div>`;
 }
 
-/** Who asked for which size through the team size link, for packing and
- *  name labels. Nothing when the quote has no link. */
+/** The sizes the customer's team asked for through the team size link, as
+ *  plain totals per item: the customer sees who asked for what on their own
+ *  quote page. Nothing when the quote has no link. */
 async function jobTeamSizesCard(q) {
   const { rows } = await pool.query(
-    `SELECT e.name, e.line_index, e.size FROM size_entries e JOIN size_collections c ON c.id = e.collection_id
-      WHERE c.quote_code = $1 ORDER BY e.line_index, e.size, e.name`, [q.code]);
+    `SELECT e.line_index, e.size, e.qty FROM size_entries e JOIN size_collections c ON c.id = e.collection_id
+      WHERE c.quote_code = $1`, [q.code]);
   if (!rows.length) return '';
   const lineName = (ix) => ((q.items || [])[ix] || {}).description || `Item ${ix + 1}`;
-  return `<div class="card" id="team-sizes"><h2 class="card-title">Team sizes (${rows.length})</h2>
-    <p class="muted" style="font-size:13px">From the customer's size link. Their totals reach the quote only when they send them as a change.</p>
-    <table style="width:100%;border-collapse:collapse;font-size:14px">${rows.map((r) =>
-      `<tr><td style="padding:4px 6px">${escEmail(r.name)}</td><td style="padding:4px 6px"><b>${escEmail(r.size)}</b></td>
-        <td style="padding:4px 6px" class="muted">${escEmail(lineName(r.line_index))}</td></tr>`).join('')}</table></div>`;
+  const lines = SIZES.listTotals(rows, (sz) => SIZE_ORDER.indexOf(sz));
+  const people = lines.reduce((t, l) => t + l.total, 0);
+  return `<div class="card" id="team-sizes"><h2 class="card-title">Team sizes (${people})</h2>
+    ${lines.map((l) => `<div style="margin:8px 0">
+      ${lines.length > 1 || (q.items || []).length > 1 ? `<div style="font-weight:600;font-size:14px">${escEmail(lineName(l.line_index))}</div>` : ''}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">${l.sizes.map(([sz, n]) =>
+        `<span style="border:1px solid #e3e8f2;border-radius:8px;padding:6px 12px;font-size:15px"><b>${escEmail(sz)}</b> ${n}</span>`).join('')}
+        <span class="muted" style="padding:6px 4px;font-size:14px">${l.total} total</span></div></div>`).join('')}
+    <p class="muted" style="font-size:12.5px;margin:6px 0 0">From the customer's size link. They see who asked for each size.</p></div>`;
 }
 
 /** The customer's Business Partner brand files, on their job page, so the

@@ -199,3 +199,16 @@ test('team size link: unguessable tokens, clean names, and totals only for sizes
   assert.deepStrictEqual(Object.keys(r.byLine[0]), ['S', 'L']);
   assert.strictEqual(r.stale, 2);
 });
+
+test('team sizes for the shop: plain totals per item in size order, nothing dropped', () => {
+  const order = ['S', 'M', 'L', 'XL'];
+  const out = SIZES.listTotals([
+    { line_index: 1, size: 'M' }, { line_index: 0, size: 'XL' }, { line_index: 0, size: 'S' },
+    { line_index: 0, size: 'XL' }, { line_index: 0, size: 'Youth M' }, { line_index: 0, size: 'S', qty: 2 },
+  ], (s) => order.indexOf(s));
+  assert.deepStrictEqual(out, [
+    { line_index: 0, sizes: [['S', 3], ['XL', 2], ['Youth M', 1]], total: 6 },
+    { line_index: 1, sizes: [['M', 1]], total: 1 },
+  ]);
+  assert.deepStrictEqual(SIZES.listTotals([], () => 0), []);
+});
