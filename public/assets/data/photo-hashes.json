@@ -435,13 +435,6 @@
    ],
    "sha1": "c5fb20d23be3ae4b9c24d302011a4ff91a267c40"
   },
-  "/assets/images/work/embroidered-jesus-is-lord-cap.jpg": {
-   "h": [
-    "38e09bc3e6ee872e",
-    "81141480c3e79f01"
-   ],
-   "sha1": "65ef34b898797e94d5a009a9929fb06b37c5c526"
-  },
   "/assets/images/work/embroidered-logo-vests.jpg": {
    "h": [
     "211c1c625868f8f0",
@@ -455,6 +448,13 @@
     "8c2e51d58b8f0c1a"
    ],
    "sha1": "89623c431f9d19522bca4676929e4494ea224fca"
+  },
+  "/assets/images/work/embroidered-name-work-shirt.jpg": {
+   "h": [
+    "68a9e12160c0d858",
+    "6de8e0e0c0808010"
+   ],
+   "sha1": "9bd3e9a443b2efccb71bc7755b0365d12bbaa08c"
   },
   "/assets/images/work/embroidered-skate-cap.jpg": {
    "h": [
@@ -966,6 +966,13 @@
     "59dc999919191898"
    ],
    "sha1": "4421f1dbfc09c2ad64f9fb4eaa15417f8febd610"
+  },
+  "/assets/images/work/npl-navy-embroidered-polo.jpg": {
+   "h": [
+    "29d0d6d40cd8dce4",
+    "293321114b5b1014"
+   ],
+   "sha1": "37dab13899f9d2a38c27426043035781320cccde"
   },
   "/assets/images/work/nurses-hoodie.jpg": {
    "h": [
