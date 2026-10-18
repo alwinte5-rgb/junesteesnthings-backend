@@ -37,11 +37,13 @@
     set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) { /* private mode: ask again next visit */ } },
   };
   var track = function (name) {
+    if (PREVIEW) return;
     try { if (window.jtTrack) window.jtTrack(name, { page: location.pathname }); } catch (e) { /* never block */ }
   };
 
-  /* ?popup=preview opens it straight away, past every rule below, and leaves
-     no trace: for the owner to look at it (2026-10-18). */
+  /* ?popup=preview opens it straight away, past every rule below, without
+     marking it seen or counting it in analytics: for the owner to look at it
+     (2026-10-18). A sign-up sent from it is still a real sign-up. */
   var PREVIEW = /[?&]popup=preview\b/.test(location.search);
   if (!PREVIEW) {
     if (store.get(KEY_JOINED)) return;
@@ -112,7 +114,7 @@
   }
 
   function show() {
-    if (shown || !armed || busy()) return;
+    if (shown || !armed || (!PREVIEW && busy())) return;
     shown = true;
     if (!PREVIEW) store.set(KEY_SEEN, String(Date.now()));
     opener = document.activeElement;
@@ -187,14 +189,24 @@
 
   var hover = window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches;
   if (hover) {
-    /* Leaving through the top. Safari reports the last point INSIDE the
-       page (often a few pixels down) rather than a negative one, so the
-       first version, which waited for clientY <= 0, never opened there
-       (owner, 2026-10-18). mouseleave on the root fires as the pointer
-       leaves the page; mouseout with no target is the fallback. */
-    var exit = function (e) { if (e.clientY < 50) show(); };
-    document.documentElement.addEventListener('mouseleave', exit);
-    document.addEventListener('mouseout', function (e) { if (!e.relatedTarget) exit(e); });
+    /* Leaving through the top, toward the tabs or the address bar. Browsers
+       report the last point they sampled INSIDE the page, and Safari's can be
+       well below the edge on a quick flick, so the first version, which
+       waited for clientY <= 0, never opened there (owner, 2026-10-18). A
+       leave counts when it is near the top, or when the pointer was heading
+       up through the top quarter; one that leaves by a side edge does not.
+       mouseleave on the root only fires when the pointer leaves the page,
+       not when it moves onto an embedded map or widget. */
+    var lastY = null, rising = false;
+    document.addEventListener('mousemove', function (e) {
+      if (lastY !== null && e.clientY !== lastY) rising = e.clientY < lastY;
+      lastY = e.clientY;
+    }, { passive: true });
+    document.documentElement.addEventListener('mouseleave', function (e) {
+      var w = window.innerWidth || document.documentElement.clientWidth;
+      if (e.clientX <= 0 || e.clientX >= w - 1) return;
+      if (e.clientY < 50 || (rising && e.clientY < window.innerHeight / 4)) show();
+    });
   } else {
     var start = Date.now();
     var check = function () {
