@@ -1,5 +1,7 @@
 {
-  "13536": { "_why": "#316 Lane Seven LS16001 — hood photographed up, shoulder reads at the hood's base", "front": { "dy": -4 }, "left_chest": { "dy": -4 } },
-  "12404": { "_why": "#325 LAT 3536 — hood photographed up, front and back sit low", "front": { "dy": -3.5 }, "left_chest": { "dy": -3.5 }, "back": { "dy": -4.5 } },
-  "17212": { "_why": "#318 Lane Seven LS86000GD — cropped tee, a full-length box reaches the hem", "front": { "scale": 0.75, "dy": -0.5 }, "left_chest": { "dy": -0.5 }, "back": { "scale": 0.75, "dy": -0.5 } }
+  "13536": {"_why": "#316 Lane Seven LS16001 — hood photographed up, shoulder reads at the hood's base", "front": {"dy": -4}, "left_chest": {"dy": -4}},
+  "12404": {"_why": "#325 LAT 3536 — hood photographed up, front and back sit low", "front": {"dy": -3.5}, "left_chest": {"dy": -3.5}, "back": {"dy": -4.5}},
+  "17212": {"_why": "#318 Lane Seven LS86000GD — cropped tee, a full-length box reaches the hem", "front": {"scale": 0.75, "dy": -0.5}, "left_chest": {"dy": -0.5}, "back": {"scale": 0.75, "dy": -0.5}},
+  "6536": {"_why": "#78 Bella+Canvas 6008 racerback — the racerback straps read as the shoulder on the back photo, so the back box sat at the hem", "back": {"dy": -14.5}},
+  "2030": {"_why": "#99 Bella+Canvas 8800 flowy racerback — the flared hem reads as the armpit, so every box sat at the hem", "front": {"dy": -16}, "left_chest": {"dy": -16}, "back": {"dy": -16}}
 }

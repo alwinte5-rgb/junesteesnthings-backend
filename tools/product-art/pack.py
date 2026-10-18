@@ -69,7 +69,10 @@ def main():
         for side in sides:
             path = c.get(side) or ''
             web = os.path.join(a.outdir, f"{sl}-{side}.webp")
-            if os.path.exists(web) and not a.force:
+            # A 0-byte .webp is a run killed mid-write (#65's heather soft
+            # cream, 2026-10-18): kept, it was re-sent to Cloudinary on every
+            # run and refused as "Empty file". Only a real image is reused.
+            if os.path.exists(web) and os.path.getsize(web) > 0 and not a.force:
                 rec[side + '_web'] = web
                 total += os.path.getsize(web)
                 continue

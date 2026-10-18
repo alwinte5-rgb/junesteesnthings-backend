@@ -255,22 +255,7 @@ const SUBLIMATION_RE = /^sublimation/i;
 /* ── S&S ── tools/lib/ssa-client.js (shared with publish-staged.js). */
 const { makeClient } = require('./lib/ssa-client');
 
-/* What this account PAYS (customerPrice), not S&S's list price, and the MEDIAN
-   colour per size: the same figures tools/ssa-sync.js keeps the catalogue on.
-   Built from the list price and the cheapest colour, a new style's extended-size
-   prices were wrong for good, because the hourly sync corrects the base price
-   but never rebuilds the size options (Codex #223). */
-const pieceCost = (r) => Number(r.customerPrice || r.piecePrice || r.casePrice || 0);
-function costBySize(rows) {
-  const per = {};
-  for (const r of rows) { const c = pieceCost(r); if (r.sizeName && c) (per[r.sizeName] = per[r.sizeName] || []).push(c); }
-  const out = {};
-  for (const [size, xs] of Object.entries(per)) {
-    const a = xs.slice().sort((x, y) => x - y); const m = a.length >> 1;
-    out[size] = a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
-  }
-  return out;
-}
+const { pieceCost, costBySize, baseCostOf, sizeOptions } = require('./lib/ssa-costs');
 
 function buildStages(type) {
   const t = TYPES[type];
@@ -318,7 +303,10 @@ function buildAttributes(rows, baseCost) {
      renders the field with a bare ": " for a caption. */
   const attrs = {
     QTYS: { id: 'QTYS', name: 'Quantity per Size', type: 'quantity', title: '',
-      values: JSON.stringify({ multiple_options }) },
+      /* sizeOptions adds type:'multiple' and each size's `value`: without them
+         the designer drew one quantity box and no size was ever recorded (146
+         products, found 2026-10-18). */
+      values: JSON.stringify(sizeOptions({ multiple_options }, sizeCost, baseCost)) },
   };
   if (colours.size) {
     /* Every swatch value must be UNIQUE, because it is not only the colour
@@ -485,7 +473,7 @@ async function run(env) {
     const seenSizes = new Set(), seenCols = new Set();
     const bySize = costBySize(rows);
     /* Cheapest CORE size of the typical colour, as ssa-sync's baseCost(). */
-    const baseCost = Math.min(...CORE.filter((z) => bySize[z]).map((z) => bySize[z]), Infinity);
+    const baseCost = baseCostOf(bySize);
     for (const r of rows) {
       const c = pieceCost(r);
       if (!r.sizeName || !c) continue;

@@ -31,7 +31,8 @@
    and they had already drifted: the local row parser called .trim() on the whole
    result, which strips leading whitespace from the first column as well as the
    trailing newline. That is the drift lib/db exists to prevent. */
-const { mysql, sq, mysqlUrlFrom } = require('./lib/db');
+const { mysql, sq, mysqlUrlFrom, dejson, enjson } = require('./lib/db');
+const { pieceCost, sizeOptions } = require('./lib/ssa-costs');
 const { sellPrice } = require('./lib/markup');
 const { CORE_SIZES } = require('./lib/garments');
 
@@ -158,7 +159,8 @@ async function sizeCosts(ssa, styleId) {
    * salePrice is deliberately NOT used even when it is lower. A sale ends, and
    * a price set from one silently loses its margin the day it does.
    */
-  const pieceCost = (r) => Number(r.customerPrice || r.piecePrice || r.casePrice || 0);
+  /* pieceCost is lib/ssa-costs': what the account pays, sale included unless
+     the sale ends within SALE_BUFFER_DAYS (then list). */
 
   /* COLOURS ARE NOT ALL THE SAME PRICE, and the cheapest is not the typical
    * one. On that same hoodie, White is $14.92 and the other FIFTEEN colours
@@ -249,7 +251,7 @@ process.stdin.on('end', async () => {
   const products = mysql(dbUrl,
     "SELECT id, name, IFNULL(supplier,'') supplier, IFNULL(supplier_cost,0) cost, price, " +
     "IFNULL(thumbnail_url,'') thumb, IFNULL(supplier_style_id,0) sid, " +
-    "IFNULL(DATE_FORMAT(ssa_seen_at,'%Y-%m-%d'),'') seen " +
+    "IFNULL(DATE_FORMAT(ssa_seen_at,'%Y-%m-%d'),'') seen, IFNULL(attributes,'') attributes " +
     /* Staged blanks (supplier='ssa-staged', switched off, quote form only) are
        re-costed too: the quote form sells them, and publish-staged.js would
        otherwise put one live at the cost it had the day it was added. */
@@ -259,6 +261,10 @@ process.stdin.on('end', async () => {
 
   const stmts = [];
   const repriced = [], unchanged = [], suspicious = [], missing = [], unresolved = [];
+  /* Size fields rebuilt from today's per-size cost: the upcharges were set once
+     when a product was added and never again, so 34 products sold 2XL+ under
+     cost on 2026-10-18, and 146 lacked the size list entirely. */
+  const resized = [];
   /* The shop's own products — no supplier, no S&S style (banners, buttons,
      cutouts, cards). They will never match a style, and reporting them every
      night as NOT ON S&S sent the "needs a look" email daily for nothing: the
@@ -305,6 +311,22 @@ process.stdin.on('end', async () => {
       suspicious.push({ p, cost, price, move });
       stmts.push(`UPDATE lumise_products SET ${sets.join(', ')} WHERE id=${p.id};`);
       continue;                                    // tag it, but never reprice it
+    }
+
+    const attrs = dejson(p.attributes);
+    const qk = attrs && Object.keys(attrs).find((k) => attrs[k] && attrs[k].type === 'quantity');
+    if (qk) {
+      let vals = attrs[qk].values;
+      const asString = typeof vals === 'string';
+      if (asString) { try { vals = JSON.parse(vals); } catch { vals = null; } }
+      if (vals && Array.isArray(vals.multiple_options)) {
+        const next = sizeOptions(vals, bySize.bySize, cost);
+        if (JSON.stringify(next) !== JSON.stringify(vals)) {
+          attrs[qk] = { ...attrs[qk], values: asString ? JSON.stringify(next) : next };
+          sets.push('attributes=' + sq(enjson(attrs)));
+          resized.push({ p, before: vals, after: next });
+        }
+      }
     }
 
     if (Math.abs(cost - was) >= 0.01) {
@@ -367,6 +389,16 @@ process.stdin.on('end', async () => {
     }
     console.log();
   }
+  if (resized.length) {
+    console.log('SIZES REBUILT (' + resized.length + ') — size list and extra charges from today\'s cost');
+    for (const r of resized) {
+      const fmt = (v) => (v.multiple_options || []).filter((o) => Number(o.price) > 0)
+        .map((o) => (o.title || o.value) + ' +' + Number(o.price).toFixed(2)).join(' ') || 'no extra charges';
+      console.log('  #' + String(r.p.id).padStart(3) + '  ' + r.p.name.slice(0, 44).padEnd(46) +
+        (r.before.type !== 'multiple' && r.after.type === 'multiple' ? '[now a size list] ' : '') + fmt(r.after));
+    }
+    console.log();
+  }
   if (suspicious.length) {
     console.log('SKIPPED — cost moved more than ' + Math.round(PRICE_JUMP_GUARD * 100) + '% (' +
       suspicious.length + '). Tagged, never repriced; check these by hand.');
@@ -425,7 +457,7 @@ process.stdin.on('end', async () => {
     console.log();
   }
 
-  console.log(unchanged.length + ' already correct · ' + repriced.length + ' repriced · ' +
+  console.log(unchanged.length + ' already correct · ' + repriced.length + ' repriced · ' + resized.length + ' sizes rebuilt · ' +
     stale.length + ' deactivating · ' + revived.length + ' reactivating');
   console.log('\n' + stmts.length + ' statements' + (APPLY ? ' — APPLYING' : ' — dry run, pass --apply to write'));
 
