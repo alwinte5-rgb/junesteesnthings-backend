@@ -1,0 +1,64 @@
+/* Business Partners look: the mailer's black, hot pink and darker baby
+   blue. Pink/blue text sits only on black or at display size; body copy
+   on white stays dark for contrast. */
+*,*::before,*::after{box-sizing:border-box}
+:root{--bp-black:#0d0d12;--bp-pink:#ff1f8f;--bp-pink-dk:#c8106c;--bp-blue:#2aa7e6;--bp-blue-dk:#0f6fa3;--bp-ink:#1f2330;--bp-line:#e6e3ea}
+body{margin:0;font-family:'Inter',system-ui,sans-serif;color:var(--bp-ink);background:#f7f6f3;line-height:1.6}
+a{color:var(--bp-blue-dk)}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+.bp-hero{background:var(--bp-black);color:#fff;padding:52px 0 46px;overflow:hidden;position:relative}
+.bp-hero::before,.bp-hero::after{content:"";position:absolute;border-radius:40px;transform:rotate(-8deg);opacity:.9}
+.bp-hero::before{width:340px;height:70px;background:var(--bp-pink);right:-60px;top:38px}
+.bp-hero::after{width:260px;height:46px;background:var(--bp-blue);left:-70px;bottom:30px}
+.bp-hero .wrap{position:relative;z-index:1;text-align:center}
+.bp-kicker{display:inline-block;font-weight:800;font-size:.8rem;letter-spacing:.14em;text-transform:uppercase;color:var(--bp-blue);margin-bottom:10px}
+.bp-hero h1{font-size:clamp(2.2rem,5.5vw,3.6rem);font-weight:900;line-height:1.02;margin:0 0 16px;letter-spacing:-.02em}
+.bp-hero h1 span{display:inline-block;color:var(--bp-pink);font-style:italic}
+.bp-hero p{max-width:640px;margin:0 auto;font-size:1.08rem;color:#d9d7e0}
+.bp-offer{display:inline-flex;align-items:center;gap:14px;margin:24px 0 4px;background:var(--bp-pink);color:#fff;border-radius:14px;padding:12px 22px;transform:rotate(-1.5deg);box-shadow:6px 6px 0 var(--bp-blue)}
+.bp-offer b{font-size:2.1rem;font-weight:900;line-height:1;font-style:italic}
+.bp-offer span{text-align:left;font-weight:800;font-size:.86rem;line-height:1.25;text-transform:uppercase}
+.bp-cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin:26px 0 8px}
+.bp-btn{display:inline-block;background:var(--bp-pink);color:#fff;font-weight:800;padding:14px 28px;border-radius:30px;text-decoration:none;font-size:1rem}
+.bp-btn:hover,.bp-btn:focus-visible{background:var(--bp-pink-dk)}
+.bp-btn.alt{background:transparent;color:#fff;border:2px solid var(--bp-blue)}
+.bp-hero .bp-small{font-size:.92rem;color:#bdbac6}
+.bp-hero .bp-small a{color:var(--bp-blue)}
+.bp-photos{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;max-width:760px;margin:-22px auto 0;position:relative;z-index:2}
+.bp-photos figure{margin:0;border-radius:12px;overflow:hidden;border:3px solid #fff;box-shadow:0 6px 18px rgba(13,13,18,.18);background:#fff}
+.bp-photos img{display:block;width:100%;aspect-ratio:1;object-fit:cover}
+.bp-photo-note{text-align:center;font-size:.85rem;color:#6b6877;margin:10px 0 0}
+.bp-h2{font-size:1.6rem;font-weight:900;margin:44px 0 6px;letter-spacing:-.01em}
+.bp-h2 span{color:var(--bp-pink-dk)}
+.bp-lead{margin:0 0 18px;color:#4b4858;max-width:680px}
+.bp-perks{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.bp-perk{background:var(--bp-black);color:#fff;border-radius:18px;padding:22px 22px 20px;position:relative;overflow:hidden}
+.bp-perk::after{content:"";position:absolute;left:0;right:0;bottom:0;height:6px;background:var(--bp-pink)}
+.bp-perk:nth-child(2)::after{background:var(--bp-blue)}
+.bp-big{font-size:2.5rem;font-weight:900;font-style:italic;line-height:1;color:var(--bp-pink);margin-bottom:8px}
+.bp-perk:nth-child(2) .bp-big{color:var(--bp-blue)}
+.bp-perk h3{font-size:1.05rem;font-weight:800;margin:0 0 6px}
+.bp-perk p{margin:0;color:#d9d7e0;font-size:.96rem}
+.bp-auto{display:inline-flex;align-items:center;gap:6px;margin-top:12px;font-size:.8rem;font-weight:800;color:var(--bp-black);background:#fff;border-radius:999px;padding:4px 12px}
+.bp-auto::before{content:"\2713";color:var(--bp-pink-dk)}
+.bp-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.bp-card{background:#fff;border:1px solid var(--bp-line);border-radius:16px;padding:20px;border-top:4px solid var(--bp-blue)}
+.bp-card:nth-child(odd){border-top-color:var(--bp-pink)}
+.bp-card h3{font-size:1.02rem;font-weight:800;margin:0 0 6px;color:var(--bp-black)}
+.bp-card p{margin:0;font-size:.95rem;color:#4b4858}
+.bp-steps{background:var(--bp-black);color:#fff;border-radius:20px;padding:28px 28px 26px;margin:44px 0 24px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:20px;align-items:center}
+.bp-steps h2{font-size:1.5rem;font-weight:900;margin:0 0 14px}
+.bp-steps ol{margin:0;padding:0;list-style:none;counter-reset:s;display:grid;gap:12px}
+.bp-steps li{counter-increment:s;display:grid;grid-template-columns:2.2rem minmax(0,1fr);gap:10px;color:#d9d7e0}
+.bp-steps li::before{content:counter(s);display:grid;place-items:center;width:2.2rem;height:2.2rem;border-radius:50%;background:var(--bp-pink);color:#fff;font-weight:900}
+.bp-steps li b{color:#fff}
+.bp-steps a{color:var(--bp-blue)}
+.bp-fine{font-size:.88rem;color:#4b4858;padding:0 0 48px}
+.bp-fine h2{font-size:1rem;color:var(--bp-black);margin:0 0 6px}
+.bp-fine ul{padding-left:20px;margin:0}
+@media(max-width:900px){.bp-perks,.bp-grid{grid-template-columns:minmax(0,1fr)}.bp-steps{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:560px){.bp-hero::before{width:200px;height:44px;right:-80px;top:16px}.bp-hero::after{display:none}.bp-offer b{font-size:1.7rem}.bp-photos{gap:8px}}
+/* /mail15: the mailer's code, shown as what they scanned for */
+.bp-code{display:inline-flex;align-items:center;gap:12px;margin:18px 0 0;background:#fff;color:var(--bp-black);border-radius:12px;padding:8px 10px 8px 18px;font-weight:800;font-size:.8rem;text-transform:uppercase;letter-spacing:.08em}
+.bp-code b{background:var(--bp-black);color:var(--bp-blue);font-size:1.5rem;font-weight:900;letter-spacing:.12em;padding:4px 14px;border-radius:8px}
+.bp-code-note{margin:8px 0 0;font-size:.9rem;color:#bdbac6}
