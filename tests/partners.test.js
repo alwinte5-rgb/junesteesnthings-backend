@@ -118,7 +118,8 @@ test('the invite links to jtees.net only and names the codes', () => {
 
 test('a reorder carries only a sane code from the designer', () => {
   assert.deepStrictEqual(P.reorderPromo({ code: 'reorder5', kind: 'percent', value: 5 }),
-    { code: 'REORDER5', kind: 'percent', value: 5, max_discount: 0 });
+    { code: 'REORDER5', kind: 'percent', value: 5, max_discount: 0, min_order: 0, min_items: 0 });
+  assert.strictEqual(P.reorderPromo({ code: 'REORDER5', kind: 'percent', value: 5, min_order: '100' }).min_order, 100);
   assert.strictEqual(P.reorderPromo(null), null);
   assert.strictEqual(P.reorderPromo({ code: 'X', kind: 'percent', value: 5 }), null);
   assert.strictEqual(P.reorderPromo({ code: 'REORDER5', kind: 'percent', value: 500 }), null);

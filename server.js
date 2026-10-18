@@ -6568,6 +6568,19 @@ app.post('/q/:code/promo', orderRateLimit, async (req, res) => {
       return back('generic');
     }
     if (!check || !check.ok) return back(PARTNERS.promoReasonKey(check && check.reason));
+    /* A one-time code is spent when a quote is paid, so until then it could sit
+       on two quotes at once. Kept off a second OPEN quote of the same person or
+       business; a quote cancelled or older than two weeks stops counting. */
+    if (check.one_time) {
+      const { rows: other } = await pool.query(
+        `SELECT 1 FROM quotes WHERE code <> $1 AND promo_code = $2 AND COALESCE(paid_amount, 0) = 0
+            AND cancelled_at IS NULL AND created_at > NOW() - INTERVAL '14 days'
+            AND (lower(trim(email)) = lower(trim($3::text)) OR ($4::int IS NOT NULL AND promo_business_id = $4::int))
+          LIMIT 1`,
+        [code, String(check.code).toUpperCase(), String(q.email || ''),
+         Number.isInteger(check.business_id) ? check.business_id : null]);
+      if (other.length) return back('held');
+    }
     const base = quoteTotals({ ...q, discount_value: 0 });
     const d = PARTNERS.discountForCode(check, base.gross);
     const tt = quoteWithDiscount(q, d);
@@ -6725,8 +6738,8 @@ app.post('/api/reorder', requireInternalKey, async (req, res) => {
     if (!items.length) return res.status(422).json({ error: 'nothing to reorder' });
     /* One open reorder per job: a second press returns the first. */
     const { rows: open } = await pool.query(
-      `SELECT code, status FROM quotes WHERE reorder_of = $1 AND accepted_at IS NULL AND cancelled_at IS NULL
-          AND COALESCE(paid_amount, 0) = 0 ORDER BY id DESC LIMIT 1`, [src]);
+      `SELECT code, status FROM quotes WHERE reorder_of = $1 AND lower(trim(email)) = $2 AND accepted_at IS NULL
+          AND cancelled_at IS NULL AND COALESCE(paid_amount, 0) = 0 ORDER BY id DESC LIMIT 1`, [src, email]);
     if (open.length) {
       return res.json({ ok: true, code: open[0].code, held: open[0].status === 'held', url: quoteLink(open[0].code), existing: true });
     }
@@ -6745,7 +6758,9 @@ app.post('/api/reorder', requireInternalKey, async (req, res) => {
        loop between the two. */
     let disc = { kind: 'amt', value: 0, note: null }, promo = null;
     const check = PARTNERS.reorderPromo(b.promo);
-    if (check) {
+    const pieces = items.reduce((a, i) => a + (Number(i.qty) || 0), 0);
+    /* The code's own minimums, which only this side can measure. */
+    if (check && quoteTotals(draft).subtotal >= check.min_order && pieces >= check.min_items) {
       disc = PARTNERS.discountForCode(check, quoteTotals(draft).gross);
       promo = check.code;
     }
@@ -6766,7 +6781,9 @@ app.post('/api/reorder', requireInternalKey, async (req, res) => {
                            tax_certificate_id, ship_method, ship_to, promo_code, reorder_of, held_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,0,$16,$17,$18,$19,$20,$21,$22,$23,
                CASE WHEN $11 = 'held' THEN NOW() END)`,
-      [code, o.name, o.phone, email, JSON.stringify(items), tt.subtotal, tt.tax, tt.total, tt.deposit, note,
+      /* Someone else on the business: their email, not the original buyer's
+         name and phone, so texts and the quote reach the person who asked. */
+      [code, sameBuyer ? o.name : null, sameBuyer ? o.phone : null, email, JSON.stringify(items), tt.subtotal, tt.tax, tt.total, tt.deposit, note,
        locked ? 'sent' : 'held', validUntil, disc.kind, disc.value, disc.note, sameBuyer ? quoteTaxable(o) : true,
        sameBuyer ? o.tax_exempt_ref || null : null, sameBuyer ? o.tax_exempt_reason || null : null,
        sameBuyer ? o.tax_certificate_id || null : null,
@@ -6774,8 +6791,8 @@ app.post('/api/reorder', requireInternalKey, async (req, res) => {
     if (NOTIFY_EMAIL) {
       sendEmail({
         to: NOTIFY_EMAIL, promo: false,
-        subject: `${locked ? 'Reorder' : 'Reorder to re-price'}: ${o.name || email} (${code})`,
-        html: `<p><b>${escEmail(o.name || email)}</b> reordered <b>${escEmail(src)}</b> from their Business Partners account.</p>
+        subject: `${locked ? 'Reorder' : 'Reorder to re-price'}: ${(sameBuyer && o.name) || email} (${code})`,
+        html: `<p><b>${escEmail((sameBuyer && o.name) || email)}</b> reordered <b>${escEmail(src)}</b> from their Business Partners account.</p>
           <p>${locked
             ? `Within the 60-day price, so the new quote <b>${escEmail(code)}</b> went to them at the original prices${promo ? ` with ${escEmail(promo)}` : ''}.`
             : `The 60-day price has run out, so <b>${escEmail(code)}</b> is <b>held</b>: check the prices on the quote form and approve it to send.`}</p>
@@ -20318,6 +20335,12 @@ app.post('/admin/partners/action', requireAdmin, async (req, res) => {
     const r = await studioFetch(BIZ_ADMIN(), { method: 'POST', body: form });
     const d = await r.json().catch(() => ({}));
     if (!r.ok || !d.ok) throw new Error(d.error || `designer answered ${r.status}`);
+    /* Codes on unpaid quotes follow the merge, so they are recorded against
+       the business that remains (the studio moves its own holds). */
+    if (action === 'merge' && Number.isInteger(into) && into > 0) {
+      await pool.query('UPDATE quotes SET promo_business_id = $2 WHERE promo_business_id = $1 AND promo_recorded_at IS NULL',
+        [id, into]).catch((e) => reportError('partner-merge-quotes', e, `#${id} -> #${into}`).catch(() => {}));
+    }
     logActivity(currentActor() || OWNER_ACTOR, `partner ${action}`, { type: 'business', id: String(id) }, action === 'merge' ? { into } : null);
     const said = { remove: 'Switched off.', restore: 'Switched back on.', merge: 'Merged.' }[action];
     res.redirect('/admin/partners?msg=' + encodeURIComponent(said));

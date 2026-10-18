@@ -49,8 +49,10 @@ function reorderPromo(p) {
   const code = String(p.code || '').toUpperCase();
   const value = Number(p.value);
   if (!/^[A-Z0-9]{3,32}$/.test(code) || !Number.isFinite(value) || value <= 0) return null;
-  if (p.kind === 'percent' && value <= 100) return { code, kind: 'percent', value, max_discount: Math.max(0, Number(p.max_discount) || 0) };
-  if (p.kind === 'amount' && value <= 1000) return { code, kind: 'amount', value };
+  const min_order = Math.max(0, Number(p.min_order) || 0);
+  const min_items = Math.max(0, parseInt(p.min_items, 10) || 0);
+  if (p.kind === 'percent' && value <= 100) return { code, kind: 'percent', value, max_discount: Math.max(0, Number(p.max_discount) || 0), min_order, min_items };
+  if (p.kind === 'amount' && value <= 1000) return { code, kind: 'amount', value, min_order, min_items };
   return null;
 }
 
@@ -90,6 +92,7 @@ const PROMO_MESSAGES = {
   usedemail: 'Looks like you have already used a discount like this one. Thanks for coming back!',
   min: 'This quote is under that code\'s minimum order.',
   returning: 'This code is for reorders: it works once you have a paid order with us.',
+  held: 'This code is already on another open quote of yours. Use it there, or text us and we will move it.',
   stack: 'This quote already has a discount, and codes cannot be added on top of one. Text us if you think the code would save you more.',
   notnow: 'A code can be added only before anything has been paid.',
   generic: 'That code could not be added just now. Please try again, or text us and we will sort it out.',
