@@ -40,11 +40,16 @@
     try { if (window.jtTrack) window.jtTrack(name, { page: location.pathname }); } catch (e) { /* never block */ }
   };
 
-  if (store.get(KEY_JOINED)) return;
-  var seen = parseInt(store.get(KEY_SEEN) || '0', 10) || 0;
-  if (Date.now() - seen < AGAIN_MS) return;
-  // Arrived from our texts, emails, shop sign or the sign-up page: they know.
-  if (/[?&]src=(sms|texts|email|shop|receipt)\b/.test(location.search)) return;
+  /* ?popup=preview opens it straight away, past every rule below, and leaves
+     no trace: for the owner to look at it (2026-10-18). */
+  var PREVIEW = /[?&]popup=preview\b/.test(location.search);
+  if (!PREVIEW) {
+    if (store.get(KEY_JOINED)) return;
+    var seen = parseInt(store.get(KEY_SEEN) || '0', 10) || 0;
+    if (Date.now() - seen < AGAIN_MS) return;
+    // Arrived from our texts, emails, shop sign or the sign-up page: they know.
+    if (/[?&]src=(sms|texts|email|shop|receipt)\b/.test(location.search)) return;
+  }
 
   var TRANSACTIONAL = "Text me about my order (quotes, order status, pickup and delivery updates) from June's Tees &amp; Things. " +
     'Msg frequency varies. Msg &amp; data rates may apply. Reply STOP to opt out, HELP for help.';
@@ -109,7 +114,7 @@
   function show() {
     if (shown || !armed || busy()) return;
     shown = true;
-    store.set(KEY_SEEN, String(Date.now()));
+    if (!PREVIEW) store.set(KEY_SEEN, String(Date.now()));
     opener = document.activeElement;
     // The page behind stays put while the dialog is open (phones scroll-chain).
     var root = document.documentElement, overflow = root.style.overflow;
@@ -172,13 +177,24 @@
     track('texts_popup_shown');
   }
 
+  if (PREVIEW) {
+    armed = true;
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', show);
+    else show();
+    return;
+  }
   setTimeout(function () { armed = true; }, ARM_MS);
 
   var hover = window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches;
   if (hover) {
-    document.addEventListener('mouseout', function (e) {
-      if (!e.relatedTarget && e.clientY <= 0) show();
-    });
+    /* Leaving through the top. Safari reports the last point INSIDE the
+       page (often a few pixels down) rather than a negative one, so the
+       first version, which waited for clientY <= 0, never opened there
+       (owner, 2026-10-18). mouseleave on the root fires as the pointer
+       leaves the page; mouseout with no target is the fallback. */
+    var exit = function (e) { if (e.clientY < 50) show(); };
+    document.documentElement.addEventListener('mouseleave', exit);
+    document.addEventListener('mouseout', function (e) { if (!e.relatedTarget) exit(e); });
   } else {
     var start = Date.now();
     var check = function () {

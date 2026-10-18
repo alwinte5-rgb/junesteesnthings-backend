@@ -56,6 +56,10 @@ test('it waits, asks once a fortnight, and never after a sign-up or mid-quote', 
   assert.match(JS, /if \(store\.get\(KEY_JOINED\)\) return;/);
   assert.match(JS, /if \(shown \|\| !armed \|\| busy\(\)\) return;/);
   assert.doesNotThrow(() => new Function(JS), 'the script parses');
+  // Safari reports a point a few pixels inside the page on exit, not <= 0.
+  assert.ok(!/e\.clientY <= 0/.test(JS), 'exit is not limited to clientY <= 0');
+  assert.match(JS, /addEventListener\('mouseleave', exit\)/);
+  assert.match(JS, /popup=preview/, 'the owner preview link');
 });
 
 test('it is on the site pages, not contact, SMS or 404, and not in the shared snippets', () => {
