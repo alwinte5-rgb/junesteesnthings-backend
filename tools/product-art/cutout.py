@@ -28,7 +28,7 @@ def backdrop_level(mn):
     return int(np.median(border))
 
 
-def cutout(path, out, tolerance=4, floor=200, feather=1.0, pad=0.02):
+def cutout(path, out, tolerance=4, floor=234, feather=1.0, pad=0.02):
     im = Image.open(path).convert('RGB')
     a = np.asarray(im).astype(np.int16)
     h, w, _ = a.shape
@@ -36,6 +36,9 @@ def cutout(path, out, tolerance=4, floor=200, feather=1.0, pad=0.02):
     # Near the backdrop's own shade AND near-neutral: a pale garment colour,
     # and white fabric's shading, are not background.
     mx, mn = a.max(2), a.min(2)
+    # The floor keeps the old 238 cut's reach as the limit: when a close-up's
+    # border is mostly GARMENT, its median is the garment's shade (an Ash tee
+    # near 215), and taking that as the backdrop would erase the garment.
     white = max(floor, backdrop_level(mn) - tolerance)
     whiteish = (mn >= white) & ((mx - mn) <= 10)
 

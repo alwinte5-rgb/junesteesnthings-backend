@@ -59,3 +59,8 @@ test('a garment word in the S&S title must be in the name (the #143 apron)', () 
   assert.strictEqual(ssaChecks({ ...p, name: 'Gildan 18500 Heavy Blend Hoodie' }, { title: 'Unisex Heavy Blend™ Hooded Sweatshirt' }, []).naming, 'ok');
   assert.notStrictEqual(ssaChecks({ ...p, name: 'Independent Trading IND5000P Legend Pullover' }, { title: 'Legend Hooded Sweatshirt' }, []).naming, 'ok');
 });
+
+test('a size field that cannot be read is reported, not passed', () => {
+  const attributes = enjson({ QTYS: { id: 'QTYS', type: 'quantity', values: '{"multiple_options":[{"title":"S"' } });
+  assert.strictEqual(localChecks({ name: 'Gildan 5000 Tee', attributes }).sizes, 'size field unreadable');
+});

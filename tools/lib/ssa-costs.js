@@ -40,8 +40,14 @@ function costBySize(rows, now = Date.now()) {
   return out;
 }
 
-/** Cheapest CORE size, as ssa-sync's baseCost(); Infinity when none is priced. */
-const baseCostOf = (bySize) => Math.min(...CORE_SIZES.filter((z) => bySize[z]).map((z) => bySize[z]), Infinity);
+/** The cost the markup applies to: the cheapest CORE size, so a stocked-out
+ *  medium cannot reprice a product off its 4XL; with no core size priced at
+ *  all, the cheapest size. Infinity when nothing is priced. */
+function baseCostOf(bySize) {
+  const core = CORE_SIZES.map((z) => bySize[z]).filter((n) => n > 0);
+  const all = Object.values(bySize).filter((n) => n > 0);
+  return core.length ? Math.min(...core) : all.length ? Math.min(...all) : Infinity;
+}
 
 /** The size field's `values`, rebuilt: every size keeps its place and default,
  *  gets `value` (what the designer and core/cart.php match a quantity on) and

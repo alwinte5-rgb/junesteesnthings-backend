@@ -51,3 +51,21 @@ test('a light grey backdrop is still removed around a dark garment', { skip: !ok
   assert.deepStrictEqual([r.h, r.w], [60, 60], 'cropped to the garment, so the grey backdrop was cut away');
   assert.ok(r.opaque > 0.98);
 });
+
+test('a light garment filling the border is not read as the backdrop', { skip: !ok && 'python3 numpy/Pillow missing' }, () => {
+  /* Border all garment (Ash, 215): the backdrop guess is 215, but the floor
+     keeps the cut at 234+, so nothing is erased. */
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'cut-'));
+  const r = py(`
+import numpy as np
+from PIL import Image
+from cutout import cutout
+a = np.full((100, 100, 3), 215, np.uint8)
+Image.fromarray(a).save('${d}/in.png')
+cutout('${d}/in.png', '${d}/out.png', pad=0, feather=0)
+full = np.asarray(Image.open('${d}/out.png'))
+print(int((full[:, :, 3] > 200).mean() * 1000))
+`);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(Number(r.stdout.trim().split('\n').pop()), 1000);
+});

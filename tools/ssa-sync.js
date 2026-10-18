@@ -32,11 +32,13 @@
    result, which strips leading whitespace from the first column as well as the
    trailing newline. That is the drift lib/db exists to prevent. */
 const { mysql, sq, mysqlUrlFrom, dejson, enjson } = require('./lib/db');
-const { pieceCost, sizeOptions } = require('./lib/ssa-costs');
+const { pieceCost, costBySize, baseCostOf, sizeOptions } = require('./lib/ssa-costs');
 const { sellPrice } = require('./lib/markup');
 const { CORE_SIZES } = require('./lib/garments');
 
 const APPLY = process.argv.includes('--apply');
+/* --json=<file>: the run's decisions as data, for the owner's review page. */
+const JSON_OUT = (process.argv.find((a) => a.startsWith('--json=')) || '').slice(7);
 
 /* Days a product may go without live S&S pricing before it is deactivated.
    Two weeks covers an ordinary restock; a genuinely dead style never returns. */
@@ -156,8 +158,12 @@ async function sizeCosts(ssa, styleId) {
    * the catalogue sold at about 2.5x cost while the rule says 2x. A full-zip
    * hoodie listed at $37.34 that should be $31.62.
    *
-   * salePrice is deliberately NOT used even when it is lower. A sale ends, and
-   * a price set from one silently loses its margin the day it does.
+   * SALES. customerPrice already IS the sale price while a sale runs (the
+   * 18600 figures above were a sale), and the list price otherwise: this
+   * account has no standing discount (25 live styles checked, 2026-10-18).
+   * The owner wants sales passed on, so they are — except inside the last
+   * SALE_BUFFER_DAYS of a sale, where lib/ssa-costs pieceCost() costs the row
+   * at list, so an order taken at the sale price is not bought after it ends.
    */
   /* pieceCost is lib/ssa-costs': what the account pays, sale included unless
      the sale ends within SALE_BUFFER_DAYS (then list). */
@@ -165,44 +171,36 @@ async function sizeCosts(ssa, styleId) {
   /* COLOURS ARE NOT ALL THE SAME PRICE, and the cheapest is not the typical
    * one. On that same hoodie, White is $14.92 and the other FIFTEEN colours
    * are $15.81 — so pricing the style off its cheapest colour prices 15 of 16
-   * garments off one the customer is not buying.
+   * garments off one the customer is not buying. The MEDIAN colour per size is
+   * the typical garment: lib/ssa-costs costBySize(), shared with
+   * ssa-add-products and the catalogue audit.
    *
-   * The MEDIAN colour is the typical garment. White buyers pay a few cents
-   * over, everyone else is priced off what their own shirt costs, and one
-   * unusually cheap or dear colour cannot drag the whole style.
+   * listBySize is the same at S&S's list price, sale ignored: the jump guard
+   * reads it, so the return to list when a sale ends is not mistaken for a
+   * feed glitch.
    */
-  const median = (xs) => {
-    const a = xs.slice().sort((x, y) => x - y);
-    const m = a.length >> 1;
-    return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
-  };
-
-  const perSize = {};
   let homeQty = 0, farQty = 0;
   for (const r of rows) {
-    const size = r.sizeName;
-    const cost = pieceCost(r);
-    if (!size || !cost) continue;
-    (perSize[size] = perSize[size] || []).push(cost);
     /* Stock is judged on CORE sizes only: a style with nothing but 4XL in
        Illinois is not locally stocked for any order a customer will place. */
-    if (!CORE_SIZES.includes(size)) continue;
+    if (!CORE_SIZES.includes(r.sizeName) || !pieceCost(r)) continue;
     for (const w of r.warehouses || []) {
       if (w.warehouseAbbr === HOME_WAREHOUSE) homeQty += w.qty;
       else if (!NON_STOCK.includes(w.warehouseAbbr)) farQty += w.qty;
     }
   }
-  const bySize = {};
-  for (const [size, costs] of Object.entries(perSize)) bySize[size] = median(costs);
+  const bySize = costBySize(rows);
   if (!Object.keys(bySize).length) return null;
-  return { bySize, homeQty, farQty };
+  const listBySize = costBySize(rows.map((r) => ({ ...r, customerPrice: r.piecePrice, saleExpiration: null })));
+  /* The earliest end date of any core-size sale, for the report. */
+  const ends = rows.filter((r) => CORE_SIZES.includes(r.sizeName) && r.saleExpiration)
+    .map((r) => String(r.saleExpiration).slice(0, 10)).sort()[0] || null;
+  return { bySize, listBySize, homeQty, farQty, saleEnds: ends };
 }
 
-/** The base cost the markup applies to: cheapest CORE size, not cheapest size. */
-function baseCost(bySize) {
-  const core = CORE_SIZES.map((s) => bySize[s]).filter((n) => n > 0);
-  return core.length ? Math.min(...core) : Math.min(...Object.values(bySize));
-}
+/* The base cost the markup applies to — cheapest CORE size, else cheapest size —
+   is lib/ssa-costs baseCostOf(), shared with ssa-add-products and the audit. */
+const baseCost = baseCostOf;
 
 /* ── SQL plumbing ────────────────────────────────────────────────────────── */
 
@@ -299,6 +297,12 @@ process.stdin.on('end', async () => {
     const price = sellPrice(cost);
     const was = Number(p.cost);
     const move = was > 0 ? Math.abs(cost - was) / was : 0;
+    /* A move TO the list price is S&S's own price, not a glitch: without this
+       a sale deeper than ~29% went in when it started and its end was then
+       blocked as a >40% jump, leaving the product at the sale price for good
+       (code review, 2026-10-18). */
+    const listCost = money(baseCost(bySize.listBySize));
+    const offList = listCost > 0 ? Math.abs(cost - listCost) / listCost : 1;
 
     /* Every product with live pricing gets its tag and its seen-date, whether or
        not the cost moved — that timestamp is what the staleness rule reads. */
@@ -307,8 +311,8 @@ process.stdin.on('end', async () => {
     const sets = [p.supplier === 'ssa-staged' ? `supplier='ssa-staged'` : `supplier='ssa'`,
       `supplier_style_id=${style.id}`, 'ssa_seen_at=NOW()'];
 
-    if (was > 0 && move > PRICE_JUMP_GUARD) {
-      suspicious.push({ p, cost, price, move });
+    if (was > 0 && move > PRICE_JUMP_GUARD && offList > PRICE_JUMP_GUARD) {
+      suspicious.push({ p, cost, price, move, saleEnds: bySize.saleEnds });
       stmts.push(`UPDATE lumise_products SET ${sets.join(', ')} WHERE id=${p.id};`);
       continue;                                    // tag it, but never reprice it
     }
@@ -330,7 +334,7 @@ process.stdin.on('end', async () => {
     }
 
     if (Math.abs(cost - was) >= 0.01) {
-      repriced.push({ p, cost, price });
+      repriced.push({ p, cost, price, saleEnds: bySize.saleEnds });
       sets.push(`supplier_cost=${cost}`, `price=${price}`, 'cost_updated=NOW()');
     } else {
       unchanged.push(p);
@@ -461,6 +465,14 @@ process.stdin.on('end', async () => {
     stale.length + ' deactivating · ' + revived.length + ' reactivating');
   console.log('\n' + stmts.length + ' statements' + (APPLY ? ' — APPLYING' : ' — dry run, pass --apply to write'));
 
+  if (JSON_OUT) {
+    const row = (p) => ({ id: Number(p.id), name: p.name, cost: Number(p.cost), price: Number(p.price) });
+    require('fs').writeFileSync(JSON_OUT, JSON.stringify({
+      repriced: repriced.map((r) => ({ ...row(r.p), newCost: r.cost, newPrice: r.price, saleEnds: r.saleEnds || null })),
+      resized: resized.map((r) => ({ ...row(r.p), before: r.before, after: r.after })),
+      suspicious: suspicious.map((s) => ({ ...row(s.p), newCost: s.cost, newPrice: s.price, move: s.move, saleEnds: s.saleEnds || null })),
+    }, null, 1));
+  }
   if (!APPLY || !stmts.length) process.exit(0);
   mysql(dbUrl, 'START TRANSACTION;\n' + stmts.join('\n') + '\nCOMMIT;');
   console.log('done.');

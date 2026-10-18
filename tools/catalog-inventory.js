@@ -39,11 +39,10 @@
 const fs = require('fs');
 const { mysql, urlFromStdinJson, dejson } = require('./lib/db');
 const { makeClient } = require('./lib/ssa-client');
-const { sellPrice } = require('./lib/markup');
+const { sellPrice, sizeUpcharge } = require('./lib/markup');
 const { classify, decorationsFor, resolveRoles } = require('./lib/garments');
 const { placementSet, SETS } = require('./lib/placements');
 const { decodeStages, photoCoverage } = require('./lib/canvas');
-const { sizeUpcharge } = require('./lib/markup');
 const { costBySize, baseCostOf } = require('./lib/ssa-costs');
 
 /* Garment words that must survive from S&S's title into the product's name. A
@@ -58,8 +57,10 @@ function sizeValues(attrs) {
   const q = Object.values(attrs || {}).find((a) => a && a.type === 'quantity');
   if (!q) return null;
   let v = q.values;
-  if (typeof v === 'string') { try { v = JSON.parse(v); } catch { v = null; } }
-  return v && typeof v === 'object' ? v : {};
+  /* Unreadable is its own answer: read as {} it had no sizes to fault and the
+     audit called a corrupt field "ok" (code review, 2026-10-18). */
+  if (typeof v === 'string') { try { v = JSON.parse(v); } catch { return { unreadable: true }; } }
+  return v && typeof v === 'object' ? v : { unreadable: true };
 }
 
 /** S&S-side checks for one product, from its style record and product rows.
@@ -126,7 +127,8 @@ function localChecks(p, { roleIds = {} } = {}) {
 
   const sv = sizeValues(attrs);
   const n = ((sv && sv.multiple_options) || []).length;
-  out.sizes = !sv ? 'no size field' : n > 1 && sv.type !== 'multiple' ? n + ' sizes drawn as one quantity box' : 'ok';
+  out.sizes = !sv ? 'no size field' : sv.unreadable ? 'size field unreadable'
+    : n > 1 && sv.type !== 'multiple' ? n + ' sizes drawn as one quantity box' : 'ok';
   const desc = String(p.description || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   out.copy = desc.length < 200 ? 'description ' + desc.length + ' chars' : 'ok';
   const roles = decorationsFor(p.name) || [];

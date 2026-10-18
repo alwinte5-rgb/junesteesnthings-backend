@@ -58,3 +58,19 @@ test('the daily sync rebuilds size fields, and add-products writes the full form
   const add = fs.readFileSync(path.join(__dirname, '..', 'tools', 'ssa-add-products.js'), 'utf8');
   assert.match(add, /values: JSON\.stringify\(sizeOptions\(\{ multiple_options \}, sizeCost, baseCost\)\)/);
 });
+
+test('one base-cost rule everywhere: cheapest core size, else cheapest size', () => {
+  const { baseCostOf } = require('../tools/lib/ssa-costs');
+  assert.strictEqual(baseCostOf({ S: 5, M: 4.5, '2XL': 7 }), 4.5);
+  assert.strictEqual(baseCostOf({ '2XL': 7, '3XL': 8 }), 7, 'no core size: the cheapest size, as the sync always did');
+  assert.strictEqual(baseCostOf({}), Infinity);
+  const sync = fs.readFileSync(path.join(__dirname, '..', 'tools', 'ssa-sync.js'), 'utf8');
+  assert.match(sync, /const baseCost = baseCostOf;/);
+  assert.match(sync, /const bySize = costBySize\(rows\);/, 'the sync uses the shared median-per-size helper');
+});
+
+test('a return to list price passes the jump guard; only a move off both the old cost and list is held', () => {
+  const sync = fs.readFileSync(path.join(__dirname, '..', 'tools', 'ssa-sync.js'), 'utf8');
+  assert.match(sync, /move > PRICE_JUMP_GUARD && offList > PRICE_JUMP_GUARD/);
+  assert.match(sync, /listBySize = costBySize\(rows\.map\(\(r\) => \(\{ \.\.\.r, customerPrice: r\.piecePrice, saleExpiration: null \}\)\)\)/);
+});
