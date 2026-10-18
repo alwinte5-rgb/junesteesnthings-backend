@@ -135,3 +135,8 @@ test('the sitemap lists /partners only while the program is on, once', () => {
   assert.ok(onXml.trimEnd().endsWith('</urlset>'));
   assert.strictEqual(P.sitemapXml(onXml, { JT_PARTNERS: 'on' }), onXml);
 });
+
+test('the static sitemap never lists /partners itself (it would 404 while the program is off)', () => {
+  const xml = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'public', 'sitemap.xml'), 'utf8');
+  assert.ok(!/jtees\.net\/(partners|mail15)/.test(xml));
+});

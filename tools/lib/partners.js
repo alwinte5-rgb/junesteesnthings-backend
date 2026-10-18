@@ -141,7 +141,7 @@ const SITEMAP_ENTRY = `  <!-- Business Partners Program -->
 `;
 
 function sitemapXml(xml, env = process.env) {
-  if (!on(env) || xml.includes('https://www.jtees.net/partners<')) return xml;
+  if (!on(env) || xml.includes('<loc>https://www.jtees.net/partners</loc>')) return xml;
   const end = xml.lastIndexOf('</urlset>');
   return end < 0 ? xml : xml.slice(0, end) + SITEMAP_ENTRY + xml.slice(end);
 }
