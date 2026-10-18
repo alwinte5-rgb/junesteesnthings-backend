@@ -61,11 +61,13 @@
   var STYLE = '' +
     '.jttx-bg{position:fixed;inset:0;z-index:2147483000;background:rgba(8,16,40,.6);display:flex;align-items:center;justify-content:center;padding:16px;font-family:Inter,system-ui,sans-serif}' +
     '.jttx{overscroll-behavior:contain;background:#fff;border-radius:18px;max-width:420px;width:100%;max-height:92vh;overflow-y:auto;position:relative;box-shadow:0 20px 50px rgba(0,0,0,.3);color:#374151;text-align:left}' +
-    '.jttx-top{background:#0B1F4B;color:#fff;border-radius:18px 18px 0 0;padding:28px 40px 20px;text-align:center}' +
+    '.jttx-logo{background:#fff;border-radius:18px 18px 0 0;border-bottom:4px solid #F0275A;text-align:center;padding:14px 44px 12px}' +
+    '.jttx-logo img{height:40px;width:auto;max-width:100%;display:inline-block}' +
+    '.jttx-top{background:#0B1F4B;color:#fff;padding:22px 24px 20px;text-align:center}' +
     '.jttx-top h2{margin:0 0 6px;font-size:1.65rem;line-height:1.15;font-weight:800;color:#fff}' +
     '.jttx-top h2 span{color:#F0275A}' +
     '.jttx-top p{margin:0;font-size:.95rem;line-height:1.5;color:#dbe2f1}' +
-    '.jttx-x{position:absolute;top:8px;right:10px;border:0;background:none;color:#fff;font-size:26px;line-height:1;cursor:pointer;padding:6px;opacity:.8}' +
+    '.jttx-x{position:absolute;top:8px;right:10px;border:0;background:none;color:#6B7280;font-size:26px;line-height:1;cursor:pointer;padding:6px;opacity:.8}' +
     '.jttx-x:hover,.jttx-x:focus-visible{opacity:1}' +
     '.jttx form{padding:18px 22px 20px;margin:0}' +
     '.jttx label.l{display:block;font-size:13px;font-weight:700;color:#0B1F4B;margin:10px 0 4px}' +
@@ -84,6 +86,7 @@
     return '' +
       '<div class="jttx" role="dialog" aria-modal="true" aria-labelledby="jttx-h">' +
       '<button type="button" class="jttx-x" aria-label="Close">&times;</button>' +
+      '<div class="jttx-logo"><img src="/assets/images/brand/logo.png" alt="June\'s Tees &amp; Things" width="205" height="40"></div>' +
       '<div class="jttx-top"><h2 id="jttx-h">Get <span>' + PCT + '% off</span> your next order</h2>' +
       '<p>Join June\'s Tees texts for new products and seasonal deals. Your code comes right away.</p></div>' +
       '<form method="POST" action="/texts">' +
