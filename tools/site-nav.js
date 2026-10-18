@@ -31,6 +31,19 @@ const NAV_CSS = require('./lib/css-tag').cssTag('/assets/css/site-nav.css');
 const CSS_V = NAV_CSS.v;
 // The shared quote form, re-stamped wherever a page loads it (homepage, /contact).
 const QUOTE_JS = require('./lib/css-tag').scriptTag('/assets/js/quote-form.js');
+/* The "10% off for joining our texts" popup (assets/js/texts-popup.js) goes on
+   every page but these: the contact page carries the quote form's own SMS
+   boxes, the SMS pages are where the terms are read, and a 404 is no place
+   to sell. Only jtees.net pages: design.jtees.net has its own cart popup and
+   takes the menu and footer snippets, never this tag. */
+const POPUP_JS = require('./lib/css-tag').scriptTag('/assets/js/texts-popup.js');
+// Any tag for it, however written, so a hand-edited one is replaced, not kept.
+const POPUP_ANY = /<script\b[^>]*\bsrc="\/assets\/js\/texts-popup\.js[^"]*"[^>]*>\s*<\/script>\n?/g;
+const NO_POPUP = new Set(['contact.html', 'sms-consent.html', '404.html']);
+function applyPopup(html, rel) {
+  const out = html.replace(POPUP_ANY, '');
+  return NO_POPUP.has(rel) ? out : out.replace('</body>', `${POPUP_JS.tag}\n</body>`);
+}
 
 /* The review strip, above the footer on every page but these: the homepage
    has the full Reviews section, and a 404 should get the visitor moving. */
@@ -354,7 +367,7 @@ function run(mode) {
   for (const rel of pages()) {
     const file = path.join(PUBLIC, rel);
     const before = fs.readFileSync(file, 'utf8');
-    const after = applyReviews(applyFooter(apply(before, block), footer), rel);
+    const after = applyPopup(applyReviews(applyFooter(apply(before, block), footer), rel), rel);
     if (after !== before) {
       drifted.push(rel);
       if (mode === 'write') fs.writeFileSync(file, after);
@@ -367,10 +380,10 @@ function run(mode) {
    (tools/occasion-pages.js builds pages with this). */
 function finish(html, rel) {
   const nav = JSON.parse(fs.readFileSync(NAV, 'utf8'));
-  return applyReviews(applyFooter(apply(html, render(nav)), renderFooter(nav)), rel);
+  return applyPopup(applyReviews(applyFooter(apply(html, render(nav)), renderFooter(nav)), rel), rel);
 }
 
-module.exports = { finish, render, renderFooter, apply, applyFooter, applyReviews, pages, run, START, END, FSTART, FEND, RS, NO_REVIEWS, CSS_V };
+module.exports = { finish, render, renderFooter, apply, applyFooter, applyReviews, applyPopup, NO_POPUP, pages, run, START, END, FSTART, FEND, RS, NO_REVIEWS, CSS_V };
 
 if (require.main === module) {
   const mode = process.argv.includes('--write') ? 'write' : 'check';
