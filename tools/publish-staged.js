@@ -5,7 +5,6 @@
  *     node tools/publish-staged.js                      # dry run: ready / not ready, and why
  *   ... node tools/publish-staged.js --apply            # publish every READY product
  *   ... node tools/publish-staged.js --apply --only=358,374
- *   ... --accept-standin                                # also publish stand-in canvas art
  *
  * tools/ssa-add-products.js --staged adds a style switched off with
  * supplier='ssa-staged': the quote form can sell it (jt-catalog.php lists it),
@@ -15,13 +14,11 @@
  * rest to the daily S&S sync.
  *
  * READY means every one of these holds; the dry run names the one that fails:
- *   - the design canvas is the right garment (tools/lib/canvas.js, the same
- *     verdict canvas-audit prints). Stand-in art — a beanie or trucker drawn on
- *     the dad hat — is held back unless --accept-standin, because the customer
- *     designs against that canvas. A JACKET or VEST is worse than a stand-in:
- *     there is no jacket art at all, so it is drawn on the sweatshirt, which
- *     canvas-audit calls mismatched. --accept-standin does not cover it; those
- *     stay quote-only until jacket art is uploaded and their stages point at it;
+ *   - EVERY colour has its real-photo canvas (tools/product-art, wired by
+ *     wire.js with the garment's placements). Owner, 2026-10-18: "dont hold
+ *     back unless they dont have product images" — so this is the canvas test.
+ *     A real photo is the right garment by construction, jackets and caps
+ *     included; a colour without one would open the designer on base art;
  *   - it has at least one decoration method, a size list and a price;
  *   - it has an https catalogue photo;
  *   - S&S still prices it (the sync has not marked it ssa_auto_off);
@@ -32,8 +29,9 @@
  * Prices: the daily S&S sync re-costs staged rows too (tools/ssa-sync.js), so a
  * product published after weeks in staging goes live at today's cost.
  */
-const { mysql, mysqlUrlFrom, sq } = require('./lib/db');
-const { canvasVerdict } = require('./lib/canvas');
+const { mysql, mysqlUrlFrom, sq, dejson } = require('./lib/db');
+const { photoCoverage } = require('./lib/canvas');
+const { localChecks } = require('./catalog-inventory');
 const { makeClient } = require('./lib/ssa-client');
 const { STAGED_SUPPLIER, parseIds } = require('./lib/ssa-staged');
 
@@ -60,13 +58,17 @@ const decodePrintings = (v) => {
 
 /** Why a staged product is not ready, or null when it is. `desc` is the
  *  description it WILL have (the stored one, or the one S&S supplied). */
-function notReady(p, { acceptStandin = false, desc = p.description } = {}) {
-  const c = canvasVerdict(p);
-  if (c.verdict === 'unusable') return 'canvas: ' + c.why;
-  if (c.verdict === 'bad') return 'canvas: a ' + c.cls + ' drawn on ' + c.art;
-  if (c.verdict === 'borrowed' && !acceptStandin) return 'stand-in canvas: drawn as ' + c.sub.looks;
+function notReady(p, { desc = p.description } = {}) {
+  const cov = photoCoverage(dejson(p.attributes) || {}, dejson(p.variations) || {});
+  if (!cov.colours) return 'no colours';
+  if (cov.withPhotos < cov.colours) return 'no product images for ' + (cov.colours - cov.withPhotos) + ' of ' + cov.colours + ' colour(s)';
+  /* The same checks the catalogue inventory reports, so "ready" here and
+     "ok" there cannot disagree: the garment's full placement set on the
+     product AND every colourway, and a size attribute beside the colours. */
+  const lc = localChecks(p);
+  if (lc.placements !== 'ok') return 'placements: ' + lc.placements;
   if (!decodePrintings(p.printings).length) return 'no decoration methods';
-  if (!String(p.attributes || '').trim()) return 'no sizes';
+  if (lc.price === 'no sizes') return 'no sizes';
   if (!(parseFloat(p.price) > 0)) return 'no price';
   if (!/^https:\/\//.test(String(p.thumbnail_url || ''))) return 'no catalogue photo';
   if (!String(desc || '').trim()) return 'no description (S&S had none, or no SSA credentials)';
@@ -76,7 +78,6 @@ function notReady(p, { acceptStandin = false, desc = p.description } = {}) {
 
 async function main() {
   const APPLY = process.argv.includes('--apply');
-  const ACCEPT = process.argv.includes('--accept-standin');
   /* --only must name real ids. A typo that parsed to nothing used to mean
      "no filter" — i.e. publish everything ready. */
   let ONLY = null;
@@ -87,7 +88,7 @@ async function main() {
   if (!url) { console.error('no MySQL connection — run under `railway run -s MySQL`'); process.exit(2); }
   const { SSA_ACCOUNT: acct, SSA_API_KEY: key } = process.env;
 
-  let rows = mysql(url, "SELECT id, name, price, stages, printings, attributes, thumbnail_url, " +
+  let rows = mysql(url, "SELECT id, name, price, stages, printings, attributes, variations, thumbnail_url, " +
     "IFNULL(description,'') description, IFNULL(supplier_style_id,0) sid, " +
     "IFNULL(DATE_FORMAT(ssa_auto_off,'%Y-%m-%d'),'') auto_off FROM lumise_products " +
     'WHERE supplier=' + sq(STAGED_SUPPLIER) + ' ORDER BY name;', { rows: true });
@@ -98,7 +99,7 @@ async function main() {
     rows = rows.filter((p) => ONLY.has(Number(p.id)));
   }
   console.log((APPLY ? 'APPLYING' : 'DRY RUN') + ' — ' + rows.length + ' staged product(s)' +
-    (ACCEPT ? ', stand-in canvas accepted' : '') + '\n');
+    '\n');
 
   /* Descriptions from S&S, only for rows that have none AND would otherwise
      be ready — a jacket held for its canvas does not cost an API call on every
@@ -106,7 +107,7 @@ async function main() {
      fails is reported and held back, never fatal to the run. */
   const fetched = {}, fetchFailed = [];
   const need = rows.filter((p) => !String(p.description).trim() && Number(p.sid) &&
-    !notReady(p, { acceptStandin: ACCEPT, desc: 'x' }));
+    !notReady(p, { desc: 'x' }));
   if (need.length && acct && key) {
     const ssa = makeClient(acct, key);
     for (const p of need) {
@@ -123,7 +124,7 @@ async function main() {
   const ready = [], held = [];
   for (const p of rows) {
     const desc = String(p.description).trim() ? p.description : (fetched[p.id] || '');
-    const why = notReady(p, { acceptStandin: ACCEPT, desc });
+    const why = notReady(p, { desc });
     (why ? held : ready).push({ p, why, desc, fill: !String(p.description).trim() && desc });
   }
   console.log('  READY (' + ready.length + ')');

@@ -40,8 +40,14 @@ const argv = process.argv.slice(2);
 const APPLY = argv.includes('--apply');
 const ALL = argv.includes('--all');
 const LIST = argv.includes('--list');
+/* Every staged product (supplier='ssa-staged', quote form only — see
+   tools/lib/ssa-staged.js). They get real-photo canvases BEFORE they go live,
+   so they are taken whether or not their base art is already their own. */
+const STAGED = argv.includes('--staged');
 const opt = (n, d) => { const a = argv.find((x) => x.startsWith('--' + n + '=')); return a ? a.split('=').slice(1).join('=') : d; };
 const OUTDIR = opt('outdir', path.join(process.env.TMPDIR || '/tmp', 'jtees-product-art'));
+/* Collect each product's placements for tools/product-art/placement-sheet.py. */
+const SHEET = opt('sheet', '');
 const ids = argv.filter((a) => /^\d+$/.test(a)).map(Number);
 
 /* Credentials come in on stdin, or from a file named with --vars=<path>.
@@ -73,8 +79,9 @@ function run(buf) {
   catch (e) { console.error(e.message); process.exit(1); }
 
   const rows = mysql(url,
-    'SELECT id, name, stages, attributes, variations, supplier_style_id, printings ' +
-    'FROM lumise_products WHERE active=1 ORDER BY id;', { rows: true });
+    'SELECT id, name, stages, attributes, variations, supplier_style_id, printings, ' +
+    "IFNULL(supplier,'') supplier FROM lumise_products " +
+    "WHERE active=1 OR supplier='ssa-staged' ORDER BY id;", { rows: true });
 
   /* The decision itself is in ./plan.js, where it can be tested without a
      database. This loop only decodes the columns and hands them over. */
@@ -87,28 +94,31 @@ function run(buf) {
       variations: dejson(p.variations) || {},
     /* Only for ids typed on the command line. --all stays the borrower backlog,
        so nothing sweeps a photograph under every tee by accident. */
-    }, { includeOwnArt: !ALL && ids.length > 0 });
+    }, { includeOwnArt: (!ALL && ids.length > 0) || (STAGED && p.supplier === 'ssa-staged') });
     if (!x) continue;
+    x.staged = p.supplier === 'ssa-staged';
     x.dir = path.join(OUTDIR, String(x.id) + '-' + slug(x.name));
     plan.push(x);
   }
 
-  const want = ALL ? plan.filter((x) => !x.done && !x.blocked.length)
+  const want = ALL ? plan.filter((x) => !x.staged && !x.done && !x.blocked.length)
+    : STAGED ? plan.filter((x) => x.staged && !x.done && !x.blocked.length)
     : plan.filter((x) => ids.includes(x.id));
 
-  if (LIST || (!ALL && !ids.length)) {
-    console.log('PRODUCT ART — ' + plan.length + ' products borrowing stand-in art\n');
-    for (const x of plan) {
+  if (LIST || (!ALL && !STAGED && !ids.length)) {
+    const shown = STAGED ? plan.filter((x) => x.staged) : plan;
+    console.log('PRODUCT ART — ' + shown.length + (STAGED ? ' staged products' : ' products borrowing stand-in art') + '\n');
+    for (const x of shown) {
       const state = x.done ? 'done   ' : x.blocked.length ? 'BLOCKED' : x.wired ? 'partial' : 'to do  ';
       console.log('  ' + state + ' #' + String(x.id).padStart(3) + '  ' + x.name.slice(0, 44).padEnd(46) +
         String(x.cols).padStart(3) + 'c × ' + x.sides.length + '  ' + String(x.images).padStart(3) + ' images');
       for (const b of x.blocked) console.log('            ↳ ' + b);
     }
-    const todo = plan.filter((x) => !x.done && !x.blocked.length);
+    const todo = shown.filter((x) => !x.done && !x.blocked.length);
     console.log('\n  ' + todo.length + ' runnable · ' +
       todo.reduce((s, x) => s + x.cols, 0) + ' colourways · ' +
       todo.reduce((s, x) => s + x.images, 0) + ' images');
-    const bl = plan.filter((x) => x.blocked.length);
+    const bl = shown.filter((x) => x.blocked.length);
     if (bl.length) console.log('  ' + bl.length + ' blocked, listed above');
     if (!LIST) console.log('\n  pass product ids, or --all, to run');
     return;
@@ -158,7 +168,7 @@ function run(buf) {
       step('upload', 'node', [path.join(HERE, 'upload.js'), path.join(x.dir, 'manifest.json'),
         x.folder, '--sides=' + x.sides.join(',')], buf);
       step('wire', 'node', [path.join(HERE, 'wire.js'), String(x.id), path.join(x.dir, 'manifest.json')]
-        .concat(APPLY ? ['--apply'] : []), buf);
+        .concat(APPLY ? ['--apply'] : []).concat(SHEET ? ['--sheet=' + SHEET] : []), buf);
     } catch (e) {
       failures.push('#' + x.id + '  ' + x.name + ' — ' + e.message);
       console.error('  SKIPPED — ' + e.message);
