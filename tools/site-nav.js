@@ -180,13 +180,17 @@ function renderFooter(nav, site = '') {
 <footer class="jtf">
   <div class="jtf-in">
     <div class="jtf-brand">
+      <div class="jtf-brand-l">
       <a href="${abs('/')}" class="jtf-logo"><img src="${abs('/assets/images/brand/logo-mark.png')}" alt="" width="40" height="44" loading="lazy" /><span>June's Tees &amp; Things<small>Chicago Custom Printing</small></span></a>
       <p>${esc(f.tagline)}</p>
       <p><a class="jtf-texts" href="${esc(abs(f.texts.href))}">${esc(f.texts.label)}</a></p>
+      </div>
+      <div class="jtf-brand-r">
       <p>${esc(f.areas_note)}</p>
       <div class="jtf-social">
         <a href="${esc(nav.instagram)}" target="_blank" rel="noopener noreferrer">${ICON.ig}<span>Instagram @${esc(nav.instagram.replace(/\/+$/, '').split('/').pop())}</span></a>
         <a href="${tel}">${ICON.phone}<span>${esc(nav.phone.display)}</span></a>
+      </div>
       </div>
     </div>
     ${col('Services', plain(menu('Services')))}

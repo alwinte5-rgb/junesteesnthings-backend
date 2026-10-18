@@ -236,3 +236,21 @@ test('a footer whose end marker was lost fails loudly instead of being spliced',
   const broken = `<html><body>${NAV.FSTART}<footer class="jtf"></footer></body></html>`;
   assert.throws(() => NAV.applyFooter(broken, 'X'), /start marker without an end marker/);
 });
+
+/* Owner, 2026-10-18: "the menu seems squished". The brand block sat in one
+   narrow grid column beside six link columns and wrapped a word per line. It
+   is now a full-width row whose two halves are their own elements, so the
+   layout does not hang on the order of its paragraphs. */
+test('footer brand block is a full-width row with its own left and right halves', () => {
+  const foot = NAV.renderFooter(JSON.parse(read('assets/data/site-nav.json')));
+  const brand = foot.slice(foot.indexOf('<div class="jtf-brand">'), foot.indexOf('<div class="jtf-col">'));
+  const l = brand.indexOf('<div class="jtf-brand-l">'), r = brand.indexOf('<div class="jtf-brand-r">');
+  assert.ok(l > 0 && r > l, 'left half, then right half');
+  assert.ok(brand.indexOf('class="jtf-logo"') > l && brand.indexOf('class="jtf-logo"') < r, 'logo on the left');
+  assert.ok(brand.indexOf('class="jtf-texts"') < r, 'texts link on the left');
+  assert.ok(brand.indexOf('class="jtf-social"') > r, 'buttons on the right');
+  const css = read('assets/css/site-nav.css');
+  assert.match(css, /\.jtf-brand\{grid-column:1\/-1;display:flex;flex-wrap:wrap/, 'brand spans the row');
+  assert.match(css, /\.jtf-in\{[^}]*grid-template-columns:repeat\(6,minmax\(0,1fr\)\)/, 'six even link columns');
+  assert.ok(!/\.jtf-brand>p:nth-of-type/.test(css), 'no layout tied to paragraph order');
+});
