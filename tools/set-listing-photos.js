@@ -26,29 +26,36 @@
  */
 const crypto = require('crypto'), fs = require('fs'), os = require('os'), path = require('path');
 const { spawnSync } = require('child_process');
-const { urlFromStdinJson, mysql, sq } = require('./lib/db');
+const { mysqlUrlFrom, mysql, sq } = require('./lib/db');
 
 const FOLDER = 'jtees/listing';
 const argv = process.argv.slice(2);
 const APPLY = argv.includes('--apply');
 const dir = argv.find((a) => !a.startsWith('--'));
 
-/** {id, file, styles} for each image in `dir`; styles are the name tokens
- *  holding a digit (the style number), which the product's name must carry. */
+/** {id, file, styles, brand} for each image in `dir`: styles are the name
+ *  tokens holding a digit (the style number), brand the words before the
+ *  first of them — the product's name must carry both. */
 function readDir(d) {
   return fs.readdirSync(d).filter((f) => /^\d{1,5}-.+\.(webp|png|jpe?g)$/i.test(f)).sort().map((f) => {
     const [idTok, ...rest] = f.replace(/\.[a-z]+$/i, '').split('-');
-    return { id: Number(idTok), file: path.join(d, f), styles: rest.filter((t) => /\d/.test(t)) };
+    const first = rest.findIndex((t) => /\d/.test(t));
+    return { id: Number(idTok), file: path.join(d, f), styles: rest.filter((t) => /\d/.test(t)),
+      brand: first > 0 ? rest.slice(0, first) : [] };
   });
 }
 
 /** Why `name` is not the product a file says it is, or null. */
-function mismatch(name, styles) {
+/* The brand too: style numbers repeat across brands (Bella's 3001, Next
+   Level's 3001), so a misnumbered file must not pass on the number alone. */
+function mismatch(name, styles, brand = []) {
   const norm = String(name || '').toUpperCase().replace(/[^A-Z0-9]/g, ' ');
   const words = new Set(norm.split(/\s+/));
   const missing = styles.filter((s) => !words.has(s.toUpperCase()));
+  const noBrand = brand.filter((b) => !words.has(b.toUpperCase()));
   return !styles.length ? 'no style number in the file name'
-    : missing.length ? 'style ' + missing.join(', ') + ' is not in "' + name + '"' : null;
+    : missing.length ? 'style ' + missing.join(', ') + ' is not in "' + name + '"'
+    : noBrand.length ? 'brand ' + noBrand.join(' ') + ' is not in "' + name + '"' : null;
 }
 
 function upload(file, publicId, e) {
@@ -64,6 +71,9 @@ function upload(file, publicId, e) {
     const out = spawnSync('curl', a, { encoding: 'utf8', maxBuffer: 1 << 24 });
     let d = null; try { d = JSON.parse(out.stdout); } catch { /* retry */ }
     if (d && d.secure_url) return d.secure_url;
+    /* Cloudinary's own refusal (bad signature, bad file, quota) does not get
+       better on a retry — only a dropped connection does. */
+    if (d && d.error) throw new Error('Cloudinary refused ' + publicId + ': ' + d.error.message);
     if (attempt === 3) throw new Error('upload failed: ' + String(out.stdout || out.stderr).slice(0, 160));
     spawnSync('sleep', [String(attempt * 2)]);
   }
@@ -72,36 +82,56 @@ function upload(file, publicId, e) {
 function main(buf) {
   if (!dir || !fs.existsSync(dir)) { console.error('usage: <vars json> | set-listing-photos.js <dir> [--apply]'); process.exit(2); }
   let e; try { e = JSON.parse(buf); } catch { console.error('stdin is not JSON'); process.exit(2); }
-  const url = urlFromStdinJson(buf);
+  const url = mysqlUrlFrom(e);
+  if (!url) { console.error('no MySQL connection in the piped variables'); process.exit(2); }
   const files = readDir(dir);
   if (!files.length) { console.error('no NNN-*.webp|png|jpg files in ' + dir); process.exit(2); }
-  const rows = mysql(url, 'SELECT id, name, IFNULL(thumbnail_url,\'\') thumb FROM lumise_products WHERE id IN (' +
+  const rows = mysql(url, 'SELECT id, name, thumbnail_url thumb, IFNULL(supplier_style_id,0) sid FROM lumise_products WHERE id IN (' +
     files.map((f) => f.id).join(',') + ');', { rows: true });
   const byId = new Map(rows.map((r) => [Number(r.id), r]));
 
-  const plan = [], bad = [];
+  const plan = [], bad = [], seen = new Map();
+  for (const f of files) seen.set(f.id, (seen.get(f.id) || 0) + 1);
   for (const f of files) {
     const p = byId.get(f.id);
-    const why = !p ? 'no product #' + f.id : mismatch(p.name, f.styles);
+    const was = p && p.thumb !== 'NULL' ? p.thumb : null;     // mysql -B prints NULL
+    /* ssa-sync resolves a row with no supplier_style_id from a '/Style/<id>_'
+       thumbnail; replacing it would cut that row off from its price. */
+    const why = seen.get(f.id) > 1 ? 'more than one file for product #' + f.id
+      : !p ? 'no product #' + f.id
+      : (!Number(p.sid) && /\/Style\/\d+_/.test(was || '')) ? 'no supplier_style_id — its thumbnail is how ssa-sync finds its S&S style'
+      : mismatch(p.name, f.styles, f.brand);
     if (why) bad.push('#' + f.id + '  ' + path.basename(f.file) + ' — ' + why);
-    else plan.push({ ...f, name: p.name, was: p.thumb });
+    else plan.push({ ...f, name: p.name, was });
   }
   console.log((APPLY ? 'APPLYING' : 'DRY RUN') + ' — ' + plan.length + ' listing photo(s)\n');
   for (const x of plan) console.log('  #' + String(x.id).padStart(3) + '  ' + x.name.slice(0, 50).padEnd(52) + path.basename(x.file));
   if (bad.length) { console.log('\n  REFUSED:'); for (const b of bad) console.log('    ' + b); }
-  if (!APPLY) { console.log('\n  report only — pass --apply to upload and write'); return; }
+  if (!APPLY) { console.log('\n  report only — pass --apply to upload and write'); if (bad.length) process.exitCode = 1; return; }
   if (bad.length) { console.error('\n  fix the refused files first — nothing written'); process.exit(1); }
 
   const bdir = path.join(os.homedir(), 'jtees-backups'); fs.mkdirSync(bdir, { recursive: true });
   const bfile = path.join(bdir, 'listing-photos-' + new Date().toISOString().replace(/[:.]/g, '-') + '.json');
   fs.writeFileSync(bfile, JSON.stringify(plan.map((x) => ({ id: x.id, thumbnail_url: x.was })), null, 1));
   console.log('\n  backup ' + bfile);
-  for (const x of plan) {
-    const hash = crypto.createHash('sha256').update(fs.readFileSync(x.file)).digest('hex').slice(0, 10);
-    const secure = upload(x.file, 'p' + x.id + '-' + hash, e);
-    if (!/^https:\/\/res\.cloudinary\.com\//.test(secure)) throw new Error('unexpected upload URL for #' + x.id);
-    mysql(url, 'UPDATE lumise_products SET thumbnail_url=' + sq(secure) + ', updated=NOW() WHERE id=' + Number(x.id) + ';');
-    console.log('  #' + x.id + '  ' + secure);
+  /* Each row is written as soon as its upload lands, so a failure part-way
+     says exactly which products changed — the backup covers them all, and a
+     re-run redoes only the rest (same bytes, same public_id). */
+  const done = [];
+  try {
+    for (const x of plan) {
+      const hash = crypto.createHash('sha256').update(fs.readFileSync(x.file)).digest('hex').slice(0, 10);
+      const secure = upload(x.file, 'p' + x.id + '-' + hash, e);
+      if (!/^https:\/\/res\.cloudinary\.com\//.test(secure)) throw new Error('unexpected upload URL for #' + x.id);
+      mysql(url, 'UPDATE lumise_products SET thumbnail_url=' + sq(secure) + ', updated=NOW() WHERE id=' + Number(x.id) + ';');
+      done.push(x.id);
+      console.log('  #' + x.id + '  ' + secure);
+    }
+  } catch (err) {
+    console.error('\n  STOPPED: ' + err.message);
+    console.error('  written: ' + (done.join(', ') || 'none'));
+    console.error('  not written: ' + plan.filter((x) => !done.includes(x.id)).map((x) => x.id).join(', '));
+    process.exit(1);
   }
   console.log('\n  ' + plan.length + ' listing photo(s) written');
 }

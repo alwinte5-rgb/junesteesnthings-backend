@@ -103,8 +103,8 @@ test('both fallbacks validate the URL before using it', () => {
 test('previously auto-filled art is dropped so it can re-derive', () => {
   const m = src.match(/images = images\.filter\([\s\S]*?\);/);
   assert.ok(m, 'nothing strips the previous auto-filled art');
-  assert.match(m[0], /jtees\\\/product-art/,
-    'it must target the art folder, not uploads');
+  assert.match(m[0], /jtees\\\/\(product-art\|listing\)/,
+    'it must target the art and listing folders, not uploads');
 });
 
 test('a real upload is NOT stripped', () => {
@@ -114,4 +114,8 @@ test('a real upload is NOT stripped', () => {
     true, 'a customer upload must survive');
   assert.strictEqual(pred('https://res.cloudinary.com/dhjtzewsx/image/upload/v1/jtees/product-art/25-x/black-front.webp'),
     false, 'previously auto-filled art must be dropped');
+  /* The catalogue thumbnail moved onto Cloudinary (tools/set-listing-photos.js,
+     2026-10-18): a saved line must not keep that "your design here" mockup. */
+  assert.strictEqual(pred('https://res.cloudinary.com/dhjtzewsx/image/upload/v1/jtees/listing/p12-52d8155e2c.webp'),
+    false, 'a previously auto-filled listing photo must be dropped too');
 });

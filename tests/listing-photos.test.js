@@ -15,7 +15,7 @@ test('files are read by their id prefix, with the style number as the check', ()
   for (const f of ['012-Gildan-5000-Unisex-Heavy-Cotton-Tee.webp', '091-Rabbit-Skins-RS4400-Infant-Bodysuit.png', 'notes.txt', 'x-foo.webp'])
     fs.writeFileSync(path.join(d, f), 'x');
   const got = readDir(d);
-  assert.deepStrictEqual(got.map((g) => [g.id, g.styles]), [[12, ['5000']], [91, ['RS4400']]]);
+  assert.deepStrictEqual(got.map((g) => [g.id, g.styles, g.brand]), [[12, ['5000'], ['Gildan']], [91, ['RS4400'], ['Rabbit', 'Skins']]]);
 });
 
 test('a misnumbered file is refused rather than put on the wrong garment', () => {
@@ -23,4 +23,9 @@ test('a misnumbered file is refused rather than put on the wrong garment', () =>
   assert.strictEqual(mismatch('Bella+Canvas BC3001CVC — Unisex Heather CVC T-Shirt', ['BC3001CVC']), null);
   assert.match(mismatch('Gildan 5000L Women\'s Heavy Cotton Tee', ['5000']), /style 5000 is not in/, '5000 is not 5000L');
   assert.match(mismatch('Gildan 5000 Tee', []), /no style number/);
+});
+
+test('the brand must match too — style numbers repeat across brands', () => {
+  assert.strictEqual(mismatch('Bella+Canvas 3001 Unisex Jersey Tee', ['3001'], ['Bella', 'Canvas']), null);
+  assert.match(mismatch('Next Level 3001 Cotton Tee', ['3001'], ['Bella', 'Canvas']), /brand Bella Canvas is not in/);
 });
