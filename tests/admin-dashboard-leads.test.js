@@ -51,7 +51,8 @@ function route(signature) {
 
 /* The shell, rendered: the menu, the document and both page shells. */
 function shell() {
-  const sandbox = { FINANCES_PATH: '/admin/finances', QUOTE_CSS: '', REVIEW_CSS: '', process: { env: {} } };
+  const sandbox = { FINANCES_PATH: '/admin/finances', QUOTE_CSS: '', REVIEW_CSS: '', process: { env: {} },
+    PARTNERS: require('../tools/lib/partners') };
   vm.createContext(sandbox);
   vm.runInContext([
     grab('const ADMIN_NAV = [', '];'),
