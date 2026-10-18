@@ -104,7 +104,7 @@ function ssaChecks(p, style, prods) {
 
 /** The keys a garment's stages should have, in order. */
 function expectedKeys(set) {
-  if (set === 'cap') return ['front'];
+  if (set === 'cap' || set === 'beanie') return ['front'];
   if (set === 'bag') return ['front', 'back'];
   return (SETS[set] || []).map((p) => p.key);
 }

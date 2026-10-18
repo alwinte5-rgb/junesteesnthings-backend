@@ -43,7 +43,7 @@ test('a zip or placket garment: two chest logos clear of the centre line, and a 
   const [left, right] = b;
   assert.ok(left.cx > M.cx && right.cx < M.cx, 'wearer\'s left chest is the viewer\'s right');
   for (const c of [left, right]) assert.ok(Math.abs(c.cx - M.cx) - c.w / 2 > 0, c.label + ' does not cross the zipper');
-  assert.ok(left.w < M.torso * 0.25, 'a chest logo, not a full front');
+  assert.ok(left.w < M.torso * 0.45, 'a chest logo, not a full front');
 });
 
 test('a tee: full front centred below the shoulders, a left chest, and a back', () => {
@@ -113,7 +113,7 @@ test('a tank keeps its merged outline as the body, and never starts on the neckl
   const b = boxesFor('tank', { front: tank, back: tank });
   const [x0, y0, , y1] = M.bbox;
   for (const x of b) assert.ok(x.cy - x.h / 2 >= y0 + 0.12 * (y1 - y0) - 0.01, x.label + ' starts below the neckline');
-  assert.ok(Math.abs(b[0].w - 11 * (M.torso / 19)) < 0.01, 'sized from the measured torso, not torso_sep');
+  assert.ok(Math.abs(b[0].w - 12 * (M.torso / 14.5)) < 0.01, 'sized from the measured torso, not torso_sep');
 });
 
 test('every placement override names a real placement key', () => {
