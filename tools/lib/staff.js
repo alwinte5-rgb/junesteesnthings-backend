@@ -330,6 +330,12 @@ const ROUTES = {
   'POST /admin/campaign/test': 'owner',
   'POST /admin/campaign/text': 'owner',
   'POST /admin/campaign/email': 'owner',
+  // Business Partners: the invite emails the whole list, and switching a
+  // business off or merging one changes what discounts it gets.
+  'POST /admin/campaign/partners/test': 'owner',
+  'POST /admin/campaign/partners/email': 'owner',
+  'GET /admin/partners': 'owner',
+  'POST /admin/partners/action': 'owner',
   'POST /admin/discounts/send': 'discounts.manage',
   'POST /admin/discounts/off': 'discounts.manage',
   'POST /admin/discounts/on': 'discounts.manage',

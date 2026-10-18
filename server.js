@@ -38,6 +38,8 @@ const SIGN_FAMILIES = require('./tools/lib/sign-families');
 const SINALITE = require('./tools/lib/sinalite');
 const LEADMAIL = require('./tools/lib/lead-email');
 const REINTRO = require('./tools/lib/reintro');
+const PARTNERS = require('./tools/lib/partners');
+const PARTNERS_INVITE = require('./tools/lib/partners-invite');
 const MKT_CAL = require('./tools/lib/marketing-calendar');
 const FUNNEL = require('./tools/lib/funnel-health');
 const METACAPI = require('./tools/lib/meta-capi');
@@ -252,6 +254,14 @@ app.get('/design-ideas.html', (_req, res) => res.redirect(301, 'https://design.j
 app.get(LEGACY_PATHS, (req, res, next) => {
   const to = legacyRedirect(req.path);
   return to ? res.redirect(301, to) : next();
+});
+
+/* Business Partners Program pages. Until JT_PARTNERS=on they do not exist at
+   either address — express.static below would otherwise serve the .html. */
+app.get(['/partners', '/partners.html', '/mail15', '/mail15.html'], (req, res) => {
+  const file = /mail15/i.test(req.path) ? 'mail15.html' : 'partners.html';
+  if (!PARTNERS.on()) return res.status(404).sendFile(path.join(__dirname, 'public', '404.html'));
+  res.sendFile(path.join(__dirname, 'public', file));
 });
 
 // Serve frontend
@@ -549,6 +559,18 @@ async function initDB() {
     'photos_notified_at TIMESTAMPTZ',
     /* When the quote link was last emailed to the customer (emailQuote). */
     'emailed_at TIMESTAMPTZ',
+    /* Business Partners Program (tools/lib/partners.js). promo_code is a code
+       the CUSTOMER entered on the quote page (MAIL15, REORDER5): the discount
+       itself is the ordinary discount_* fields above, so every total reads it
+       the same way; this says where it came from. The use is recorded on the
+       designer once the quote is paid — promo_recorded_at, retried hourly with
+       promo_attempts as the cap. promo_business_id is the business the code
+       was checked against. reorder_of is the paid job a portal reorder copied. */
+    'promo_code TEXT',
+    'promo_business_id INT',
+    'promo_recorded_at TIMESTAMPTZ',
+    'promo_attempts INT NOT NULL DEFAULT 0',
+    'reorder_of TEXT',
   ]) {
     await pool.query(`ALTER TABLE quotes ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
@@ -1986,6 +2008,10 @@ async function syncPaidAmount(code) {
     console.error(`schedule from deposit for ${code} failed:`, e.message);
     reportError('schedule-from-deposit', e, `quote ${code}`).catch(() => {});
   });
+  /* A code entered on the quote is spent now that money is in (every payment,
+     card or hand-recorded, comes through here). In the background: the
+     payment never waits on the designer, and the hourly sweep retries. */
+  if (paid > 0) recordQuotePromo(code).catch(() => {});
   return paid;
 }
 
@@ -6080,32 +6106,65 @@ async function joinByText(phone) {
 
 /** The email half: once started, up to the daily cap each hour-sweep, so the
  *  Brevo plan's daily allowance is never used up by the campaign alone. */
+/* Every email campaign the owner can start from /admin/campaign. Each has an
+   id (its campaign_emails / campaign_runs key), who it goes to, and the email.
+   One sender for all of them, so the once-per-address guarantee, the owner's
+   Start switch, the daily cap and the unsubscribe handling are written once. */
+const EMAIL_CAMPAIGNS = [
+  { id: REINTRO.CAMPAIGN,
+    audience: async () => REINTRO.emailAudience(...await Promise.all([brevoAllContacts(), campaignTextPhones()])),
+    email: (c) => REINTRO.helloEmail(c) },
+  /* Business Partners invite: everyone, minus anyone already on a business.
+     If the designer cannot say who that is, nobody is sent to this run —
+     inviting a partner to join would read as a mistake. */
+  { id: PARTNERS_INVITE.CAMPAIGN, when: () => PARTNERS.on(),
+    audience: async () => {
+      const { businesses, error } = await fetchPartners();
+      if (error) throw new Error(`partner list unavailable: ${error}`);
+      const members = new Set(businesses.flatMap((b) => (b.members || []).map((m) => String(m.email).toLowerCase())));
+      return PARTNERS_INVITE.audience(await brevoAllContacts(), members);
+    },
+    email: (c) => PARTNERS_INVITE.inviteEmail(c) },
+];
+
+/** Send the next batch of every started email campaign, within ONE daily cap
+ *  shared by all of them (it protects the sending account, which does not
+ *  care which campaign a message belongs to). */
 async function sendCampaignEmails() {
+  const out = [];
+  for (const camp of EMAIL_CAMPAIGNS) {
+    if (camp.when && !camp.when()) continue;
+    const said = await sendCampaignEmailsFor(camp);
+    if (said) out.push(`${camp.id}: ${said}`);
+  }
+  return out.join('; ');
+}
+
+async function sendCampaignEmailsFor(camp) {
   const { rows: run } = await pool.query(
-    `SELECT 1 FROM campaign_runs WHERE campaign = $1 AND channel = 'email'`, [REINTRO.CAMPAIGN]);
+    `SELECT 1 FROM campaign_runs WHERE campaign = $1 AND channel = 'email'`, [camp.id]);
   if (!run.length) return '';
   const cap = Math.max(0, parseInt(process.env.JT_CAMPAIGN_EMAILS_PER_DAY || '200', 10));
   const { rows: today } = await pool.query(
-    `SELECT COUNT(*)::int AS n FROM campaign_emails WHERE campaign = $1
-        AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'America/Chicago') AT TIME ZONE 'America/Chicago'`,
-    [REINTRO.CAMPAIGN]);
+    `SELECT COUNT(*)::int AS n FROM campaign_emails
+      WHERE created_at >= date_trunc('day', NOW() AT TIME ZONE 'America/Chicago') AT TIME ZONE 'America/Chicago'`);
   let room = cap - today[0].n;
   if (room <= 0) return '';
-  const [contacts, phones, { rows: done }] = await Promise.all([
-    brevoAllContacts(), campaignTextPhones(),
-    pool.query(`SELECT email FROM campaign_emails WHERE campaign = $1`, [REINTRO.CAMPAIGN])]);
+  const [people, { rows: done }] = await Promise.all([
+    camp.audience(),
+    pool.query(`SELECT email FROM campaign_emails WHERE campaign = $1`, [camp.id])]);
   const sent = new Set(done.map((r) => r.email));
   let n = 0;
-  for (const c of REINTRO.emailAudience(contacts, phones)) {
+  for (const c of people) {
     if (room <= 0) break;
     if (sent.has(c.email)) continue;
     const { rows } = await pool.query(
       `INSERT INTO campaign_emails (campaign, email, status) VALUES ($1, $2, 'sending')
-       ON CONFLICT (campaign, email) DO NOTHING RETURNING id`, [REINTRO.CAMPAIGN, c.email]);
+       ON CONFLICT (campaign, email) DO NOTHING RETURNING id`, [camp.id, c.email]);
     if (!rows.length) continue;
     room--;
     try {
-      const m = REINTRO.helloEmail(c);
+      const m = camp.email(c);
       await sendEmail({ to: c.email, subject: m.subject, html: m.html, marketing: true, promo: false });
       await pool.query(`UPDATE campaign_emails SET status = 'sent' WHERE id = $1`, [rows[0].id]);
       n++;
@@ -6186,6 +6245,37 @@ ${dueBox}
   res.send(adminPage('Marketing calendar', body, 'calendar'));
 });
 
+/** The Business Partners invite, as a card on /admin/campaign. Only while
+ *  the program is on. Counts come from campaign_emails like the hello email's. */
+async function partnersInviteCard(contacts, brevoErr, cap) {
+  if (!PARTNERS.on()) return '';
+  const [{ rows: em }, { rows: runs }, { businesses, error: bizErr }] = await Promise.all([
+    pool.query(`SELECT status, COUNT(*)::int AS n FROM campaign_emails WHERE campaign = $1 GROUP BY status`, [PARTNERS_INVITE.CAMPAIGN]),
+    pool.query(`SELECT started_at FROM campaign_runs WHERE campaign = $1 AND channel = 'email'`, [PARTNERS_INVITE.CAMPAIGN]),
+    fetchPartners(),
+  ]);
+  const members = new Set(businesses.flatMap((b) => (b.members || []).map((m) => String(m.email).toLowerCase())));
+  const people = PARTNERS_INVITE.audience(contacts, members);
+  const n = (st) => em.filter((r) => st.includes(r.status)).reduce((a, r) => a + r.n, 0);
+  const mail = PARTNERS_INVITE.inviteEmail({ first: 'Tom', email: 'tom@example.com' });
+  return `<div class="card" style="margin-top:14px" id="partners">
+    <h2 class="card-title">Business Partners invite</h2>
+    <p class="muted">Past customers are not added to the program; this asks them to join if they order for a business.
+      ${brevoErr ? '' : `<b>${people.length}</b> people on the Brevo list who have not joined. Shares the ${cap}-a-day limit with the hello email.`}</p>
+    ${bizErr ? `<div class="warn">Could not read who has already joined (${escEmail(bizErr)}), so it cannot be started right now.</div>` : ''}
+    <form method="POST" action="/admin/campaign/partners/test" style="margin:0 0 10px" onsubmit="this.querySelector('button').disabled=true">
+      <button type="submit" class="btn btn-ghost">Send me a test</button>
+      <a href="/partners?src=invite" target="_blank" style="color:#1848B8;margin-left:10px">See the /partners page</a></form>
+    <p><b>Subject:</b> ${escEmail(mail.subject)}</p>
+    <div style="border:1px solid #e3e8f2;border-radius:10px;padding:12px">${mail.html}</div>
+    <p>Emailed: <b>${n(['sent'])}</b>${n(['failed']) ? ` · failed: ${n(['failed'])}` : ''}</p>
+    ${runs.length ? `<p class="muted">Started ${fmtDate(runs[0].started_at)}. It carries on by itself each day until everyone has it.</p>`
+      : brevoErr || bizErr || !people.length ? '' : `
+    <form method="POST" action="/admin/campaign/partners/email" onsubmit="this.querySelector('button').disabled=true">
+      <button type="submit" class="btn">Start the invite to ${people.length} people</button></form>`}
+  </div>`;
+}
+
 app.get('/admin/campaign', requireAdmin, async (req, res) => {
   if (!isOwner()) return res.redirect('/admin/dashboard');
   try {
@@ -6255,7 +6345,8 @@ app.get('/admin/campaign', requireAdmin, async (req, res) => {
           <li>The sign-up page: <a href="${REINTRO.SIGNUP_PATH}?src=site" target="_blank" style="color:#1848B8">${escEmail(PUBLIC_BASE_URL + REINTRO.SIGNUP_PATH)}</a>, linked from the website's footer</li>
           <li>Already asking: the website quote form, accepting a quote, and checkout and "save your design" in the Design Lab</li>
         </ul>
-      </div>`, 'discounts'));
+      </div>
+      ${await partnersInviteCard(contacts, brevoErr, cap)}`, 'discounts'));
   } catch (e) {
     console.error('campaign page failed:', e.message);
     res.status(500).send(adminPage('Campaign', '<div class="card"><div class="warn">Could not load the campaign.</div></div>', 'discounts'));
@@ -6330,6 +6421,28 @@ app.post('/admin/campaign/email', requireAdmin, async (req, res) => {
   res.redirect('/admin/campaign?msg=' + encodeURIComponent(`Started. The first batch is going out now, then up to the daily limit each day.`));
 });
 
+/* The Business Partners invite: a test to the owner, and Start. Nothing is
+   sent until Start; the hourly sweep then sends within the shared daily cap. */
+app.post('/admin/campaign/partners/test', requireAdmin, async (req, res) => {
+  if (!isOwner()) return res.redirect('/admin/dashboard');
+  const to = String(process.env.OWNER_EMAILS || '').split(',').map((e) => e.trim()).find(isValidEmail) || NOTIFY_EMAIL;
+  try {
+    const m = PARTNERS_INVITE.inviteEmail({ first: 'June', email: to });
+    await sendEmail({ to, subject: '[TEST] ' + m.subject, html: m.html, marketing: true, promo: false });
+    res.redirect('/admin/campaign?msg=' + encodeURIComponent(`Test sent to ${to}.`) + '#partners');
+  } catch (e) {
+    res.redirect('/admin/campaign?err=' + encodeURIComponent(`The test could not be sent (${e.message}).`) + '#partners');
+  }
+});
+
+app.post('/admin/campaign/partners/email', requireAdmin, async (req, res) => {
+  if (!isOwner()) return res.redirect('/admin/dashboard');
+  if (!PARTNERS.on()) return res.redirect('/admin/campaign?err=' + encodeURIComponent('Switch the Business Partners Program on first (JT_PARTNERS=on).'));
+  await pool.query(`INSERT INTO campaign_runs (campaign, channel) VALUES ($1, 'email') ON CONFLICT DO NOTHING`, [PARTNERS_INVITE.CAMPAIGN]);
+  sendCampaignEmails().catch((e) => { console.error('campaign emails failed:', e.message); reportError('partners:invite', e).catch(() => {}); });
+  res.redirect('/admin/campaign?msg=' + encodeURIComponent('Started. The first batch is going out now, then up to the daily limit each day.') + '#partners');
+});
+
 app.get('/sms-terms', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'sms-terms.html'));
 });
@@ -6368,6 +6481,340 @@ app.post('/api/send-login-code', requireInternalKey, capPerRecipient('send-login
   } catch (err) {
     console.error('send-login-code error:', err.message);
     res.status(500).json({ error: 'send failed' });
+  }
+});
+
+/* ── Business Partners Program: codes on quotes, past jobs, reorders ─────────
+ *
+ * Businesses, logins and codes live on the designer (jt-partners.php,
+ * jt-auth.php): that is where customers already sign in and where checkout
+ * checks codes. A quote is this side's, so a code typed on a quote is checked
+ * by the designer's own rules (jt-promo-check.php) and then written into the
+ * quote's ORDINARY discount fields, so every total, deposit and Stripe charge
+ * reads it exactly as it reads a discount the shop typed. tools/lib/partners.js
+ * holds the pure parts. All of it is off until JT_PARTNERS=on.
+ */
+function studioPost(file, fields, timeoutMs) {
+  return studioFetch(`${STUDIO_BASE}/${file}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams(fields).toString(),
+    timeoutMs,
+  });
+}
+
+/** Up to 20 distinct, valid, lower-cased emails from a request body. */
+function partnerEmails(list) {
+  return [...new Set([].concat(list || []).map((e) => String(e || '').trim().toLowerCase()))]
+    .filter((e) => e.length <= 190 && isValidEmail(e)).slice(0, 20);
+}
+
+/** Has any of these emails paid for a quote? (REORDER5's "returning" rule.) */
+async function quotePaidBefore(emails) {
+  const list = partnerEmails(emails);
+  if (!list.length) return false;
+  const { rows } = await pool.query(
+    `SELECT 1 FROM quotes WHERE lower(trim(email)) = ANY($1::text[])
+        AND COALESCE(paid_amount, 0) > 0 AND cancelled_at IS NULL LIMIT 1`, [list]);
+  return rows.length > 0;
+}
+
+/** Ask the designer whether `code` may go on quote `q`. Throws when it cannot
+ *  be asked; the caller tells the customer to try again rather than guessing. */
+async function studioPromoCheck(q, code) {
+  const paidBefore = await quotePaidBefore([q.email]);
+  const r = await studioPost('jt-promo-check.php', {
+    action: 'check', code, email: String(q.email || ''),
+    subtotal: String(quoteTotals(q).subtotal), paid_before: paidBefore ? '1' : '0',
+  });
+  if (!r.ok) throw new Error(`designer jt-promo-check.php answered ${r.status}`);
+  return r.json();
+}
+
+/** The quote's figures with discount fields `d` applied, tax worked out again
+ *  on the discounted amount (totalsForItems), as one UPDATE's parameters. */
+function quoteWithDiscount(q, d) {
+  const next = { ...q, discount_kind: d.kind, discount_value: d.value };
+  return totalsForItems(next, q.items);
+}
+
+/** Forget the quote's card page, THEN close it (AGENTS.md: the processor
+ *  reports our own expiry like a customer walking away). */
+async function dropQuoteCheckout(code, session) {
+  if (!session) return;
+  await pool.query('UPDATE quotes SET stripe_session = NULL WHERE code = $1 AND stripe_session = $2', [code, session]).catch(() => {});
+  await expireCheckoutSession(session).catch(() => {});
+}
+
+app.post('/q/:code/promo', orderRateLimit, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!PARTNERS.on() || !QUOTE_CODE_RE.test(code)) return res.status(404).send('Not found');
+  const back = (k) => res.redirect(303, `/q/${code}?promo=${k}#promo`);
+  const given = String((req.body && req.body.promo) || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 32);
+  try {
+    const { rows } = await pool.query(`SELECT * FROM quotes WHERE code = $1 AND status NOT IN ('held', 'draft')`, [code]);
+    const q = rows[0];
+    if (!q) return res.status(404).send('Not found');
+    if (req.body && req.body.remove) {
+      if (!PARTNERS.canEnterCode(q) || !q.promo_code) return back('notnow');
+      const tt = quoteWithDiscount(q, { kind: 'amt', value: 0 });
+      const { rows: up } = await pool.query(
+        `UPDATE quotes SET discount_kind = 'amt', discount_value = 0, discount_note = NULL,
+                promo_code = NULL, promo_business_id = NULL,
+                subtotal = $2, tax = $3, total = $4, deposit = $5
+          WHERE code = $1 AND promo_code IS NOT NULL AND COALESCE(paid_amount, 0) = 0
+          RETURNING stripe_session`,
+        [code, tt.subtotal, tt.tax, tt.total, tt.deposit]);
+      if (up.length) await dropQuoteCheckout(code, up[0].stripe_session);
+      return back('removed');
+    }
+    if (given.length < 3) return back('invalid');
+    if (!PARTNERS.canEnterCode(q)) return back('notnow');
+    if (Number(q.discount_value) > 0 && !q.promo_code) return back('stack');
+    let check;
+    try { check = await studioPromoCheck(q, given); }
+    catch (e) {
+      console.error(`promo check for ${code} failed:`, e.message);
+      reportError('partner-code-check', e, `quote ${code}`).catch(() => {});
+      return back('generic');
+    }
+    if (!check || !check.ok) return back(PARTNERS.promoReasonKey(check && check.reason));
+    /* A one-time code is spent when a quote is paid, so until then it could sit
+       on two quotes at once. Kept off a second OPEN quote of the same person or
+       business; a quote cancelled or older than two weeks stops counting. */
+    if (check.one_time) {
+      const { rows: other } = await pool.query(
+        `SELECT 1 FROM quotes WHERE code <> $1 AND promo_code = $2 AND COALESCE(paid_amount, 0) = 0
+            AND cancelled_at IS NULL AND created_at > NOW() - INTERVAL '14 days'
+            AND (lower(trim(email)) = lower(trim($3::text)) OR ($4::int IS NOT NULL AND promo_business_id = $4::int))
+          LIMIT 1`,
+        [code, String(check.code).toUpperCase(), String(q.email || ''),
+         Number.isInteger(check.business_id) ? check.business_id : null]);
+      if (other.length) return back('held');
+    }
+    const base = quoteTotals({ ...q, discount_value: 0 });
+    const d = PARTNERS.discountForCode(check, base.gross);
+    const tt = quoteWithDiscount(q, d);
+    /* Guarded on the same conditions the page checked: no money in, and either
+       no discount or one that is itself a code (a code replaces a code). */
+    const { rows: up } = await pool.query(
+      `UPDATE quotes SET discount_kind = $2, discount_value = $3, discount_note = $4,
+              promo_code = $5, promo_business_id = $6,
+              subtotal = $7, tax = $8, total = $9, deposit = $10
+        WHERE code = $1 AND COALESCE(paid_amount, 0) = 0 AND cancelled_at IS NULL
+          AND (promo_code IS NOT NULL OR COALESCE(discount_value, 0) = 0)
+        RETURNING stripe_session`,
+      [code, d.kind, d.value, d.note, String(check.code).toUpperCase(),
+       Number.isInteger(check.business_id) ? check.business_id : null,
+       tt.subtotal, tt.tax, tt.total, tt.deposit]);
+    if (!up.length) return back('notnow');
+    await dropQuoteCheckout(code, up[0].stripe_session);
+    console.log(`quote ${code}: code ${check.code} applied (${d.kind} ${d.value})`);
+    return back('ok');
+  } catch (err) {
+    console.error('quote promo failed:', err.message);
+    reportError('partner-code', err, `quote ${code}`).catch(() => {});
+    return back('generic');
+  }
+});
+
+/** Record on the designer that a paid quote spent its code: the once-per-
+ *  business ledger, the once-per-email cap, the use count. Called from
+ *  syncPaidAmount on every payment and retried hourly; gives up (and reports)
+ *  after 24 tries so one quote the designer keeps refusing cannot report
+ *  itself every hour forever. */
+const PROMO_RECORD_TRIES = 24;
+async function recordQuotePromo(code) {
+  if (!PARTNERS.on()) return false;
+  const { rows } = await pool.query(
+    `UPDATE quotes SET promo_attempts = promo_attempts + 1
+      WHERE code = $1 AND promo_code IS NOT NULL AND promo_recorded_at IS NULL
+        AND COALESCE(paid_amount, 0) > 0 AND promo_attempts < $2
+      RETURNING code, email, promo_code, promo_business_id, promo_attempts`, [code, PROMO_RECORD_TRIES]);
+  const q = rows[0];
+  if (!q) return false;
+  try {
+    const r = await studioPost('jt-promo-check.php', {
+      action: 'record', code: q.promo_code, email: String(q.email || ''),
+      business_id: q.promo_business_id ? String(q.promo_business_id) : '', ref: 'quote:' + q.code,
+    });
+    if (!r.ok) throw new Error(`designer jt-promo-check.php answered ${r.status}`);
+    const d = await r.json();
+    if (!d || !d.ok) throw new Error(`designer refused the record: ${(d && (d.error || d.reason)) || 'no reason given'}`);
+    await pool.query('UPDATE quotes SET promo_recorded_at = NOW() WHERE code = $1', [q.code]);
+    if (d.result === 'twice') {
+      reportError('partner-code-twice',
+        new Error(`${q.promo_code} was used a second time by business #${q.promo_business_id}; quote ${q.code} was paid with it and honoured`),
+        `quote ${q.code}`).catch(() => {});
+    }
+    return true;
+  } catch (e) {
+    console.error(`recording code ${q.promo_code} for ${q.code} failed (try ${q.promo_attempts}):`, e.message);
+    if (q.promo_attempts >= PROMO_RECORD_TRIES) {
+      reportError('partner-code-record', e, `quote ${q.code}: gave up after ${PROMO_RECORD_TRIES} tries`).catch(() => {});
+    }
+    return false;
+  }
+}
+
+/** The hourly retry for recordQuotePromo. Throws when any failed, so the sweep
+ *  reports it (AGENTS.md: a partly failed job must not read as fine). */
+async function recordQuotePromos() {
+  if (!PARTNERS.on()) return '';
+  const { rows } = await pool.query(
+    `SELECT code FROM quotes WHERE promo_code IS NOT NULL AND promo_recorded_at IS NULL
+        AND COALESCE(paid_amount, 0) > 0 AND promo_attempts < $1 ORDER BY id LIMIT 50`, [PROMO_RECORD_TRIES]);
+  let ok = 0;
+  for (const r of rows) if (await recordQuotePromo(r.code)) ok++;
+  if (ok < rows.length) throw new Error(`${rows.length - ok} of ${rows.length} code uses not recorded yet`);
+  return rows.length ? `${ok} recorded` : '';
+}
+
+/* Server to server: the designer's account page asks these on behalf of a
+   signed-in customer, sending the emails of everyone on their business (it
+   owns the membership). The internal key is the authority; every query is
+   limited to those emails. */
+app.post('/api/paid-history', requireInternalKey, async (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    res.json({ paid: await quotePaidBefore(req.body && req.body.emails) });
+  } catch (err) {
+    console.error('paid-history failed:', err.message);
+    res.status(500).json({ error: 'failed' });
+  }
+});
+
+/** Paid jobs for these emails, newest first, with the 60-day price state. */
+async function partnerJobs(emails) {
+  const list = partnerEmails(emails);
+  if (!list.length) return [];
+  const { rows } = await pool.query(
+    `SELECT q.code, q.items, q.total, q.created_at, q.reorder_of, q.delivered_at,
+            (SELECT MIN(p.created_at) FROM quote_payments p
+              WHERE p.quote_code = q.code AND p.amount > 0) AS first_paid_at
+       FROM quotes q
+      WHERE lower(trim(q.email)) = ANY($1::text[]) AND COALESCE(q.paid_amount, 0) > 0
+        AND q.cancelled_at IS NULL
+      ORDER BY first_paid_at DESC NULLS LAST LIMIT 30`, [list]);
+  const now = new Date();
+  return rows.map((q) => ({
+    code: q.code,
+    summary: quoteSummary(q.items) || 'Custom order',
+    total: Number(q.total || 0),
+    paid_at: q.first_paid_at,
+    delivered: !!q.delivered_at,
+    reorder_of: q.reorder_of || null,
+    price_held: PARTNERS.lockOpen(q.first_paid_at, now),
+    price_days_left: PARTNERS.lockDaysLeft(q.first_paid_at, now),
+    url: quoteLink(q.code),
+  }));
+}
+
+app.post('/api/customer-jobs', requireInternalKey, async (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    if (!PARTNERS.on()) return res.json({ jobs: [] });
+    res.json({ jobs: await partnerJobs(req.body && req.body.emails) });
+  } catch (err) {
+    console.error('customer-jobs failed:', err.message);
+    res.status(500).json({ error: 'failed' });
+  }
+});
+
+/* Reorder a paid job. Within 60 days of its first payment the copy keeps the
+   original's prices and is sent straight to the customer to accept and pay
+   (the ordinary 50% deposit); after that it is held for the shop to re-price,
+   because pricing a garment job is the quote form's work, not this route's.
+   Either way REORDER5's 5% goes on, checked by the designer's own rules. */
+app.post('/api/reorder', requireInternalKey, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  if (!PARTNERS.on()) return res.status(404).json({ error: 'off' });
+  const b = req.body || {};
+  const emails = partnerEmails(b.emails);
+  const email = String(b.email || '').trim().toLowerCase();
+  const src = String(b.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(src) || !emails.includes(email)) return res.status(400).json({ error: 'bad input' });
+  try {
+    const { rows } = await pool.query(
+      `SELECT q.*, (SELECT MIN(p.created_at) FROM quote_payments p
+                     WHERE p.quote_code = q.code AND p.amount > 0) AS first_paid_at
+         FROM quotes q WHERE q.code = $1`, [src]);
+    const o = rows[0];
+    /* Object-level check: the job must belong to someone on this business. */
+    if (!o || !emails.includes(String(o.email || '').trim().toLowerCase())
+        || !(Number(o.paid_amount || 0) > 0) || o.cancelled_at) {
+      return res.status(404).json({ error: 'not found' });
+    }
+    const items = PARTNERS.reorderItems(o.items);
+    if (!items.length) return res.status(422).json({ error: 'nothing to reorder' });
+    /* One open reorder per job: a second press returns the first. */
+    const { rows: open } = await pool.query(
+      `SELECT code, status FROM quotes WHERE reorder_of = $1 AND lower(trim(email)) = $2 AND accepted_at IS NULL
+          AND cancelled_at IS NULL AND COALESCE(paid_amount, 0) = 0 ORDER BY id DESC LIMIT 1`, [src, email]);
+    if (open.length) {
+      return res.json({ ok: true, code: open[0].code, held: open[0].status === 'held', url: quoteLink(open[0].code), existing: true });
+    }
+    const locked = PARTNERS.lockOpen(o.first_paid_at);
+    /* A tax exemption is the certificate holder's, so it carries over only
+       when the same person reorders; anyone else on the business is quoted
+       with tax, and the shop can apply their certificate if they have one. */
+    const sameBuyer = String(o.email || '').trim().toLowerCase() === email;
+    const draft = {
+      ...o, items, rush_pct: 0, delivery_fee: 0, discount_kind: 'amt', discount_value: 0, email,
+      ...(sameBuyer ? {} : { taxable: true, tax: 0 }),
+    };
+    /* REORDER5, as the designer checked it for this customer and sent with
+       the request (jt_biz_reorder_promo). Not asked for again from here: the
+       designer is waiting on this answer, and calling back into it would be a
+       loop between the two. */
+    let disc = { kind: 'amt', value: 0, note: null }, promo = null;
+    const check = PARTNERS.reorderPromo(b.promo);
+    const pieces = items.reduce((a, i) => a + (Number(i.qty) || 0), 0);
+    /* The code's own minimums, which only this side can measure. */
+    if (check && quoteTotals(draft).subtotal >= check.min_order && pieces >= check.min_items) {
+      disc = PARTNERS.discountForCode(check, quoteTotals(draft).gross);
+      promo = check.code;
+    }
+    const tt = quoteWithDiscount(draft, disc);
+    let code = newQuoteCode();
+    for (let i = 0; i < 5; i++) {
+      const { rows: dup } = await pool.query('SELECT 1 FROM quotes WHERE code = $1', [code]);
+      if (!dup.length) break;
+      code = newQuoteCode();
+    }
+    const validUntil = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const note = locked
+      ? `Reorder of ${src} at the same price (held for 60 days from your first payment). Same artwork, approved on the original.`
+      : `Reorder of ${src}. We are checking today's prices and will send your updated quote shortly.`;
+    await pool.query(
+      `INSERT INTO quotes (code, name, phone, email, items, subtotal, tax, total, deposit, notes, status, valid_until,
+                           discount_kind, discount_value, discount_note, rush_pct, taxable, tax_exempt_ref, tax_exempt_reason,
+                           tax_certificate_id, ship_method, ship_to, promo_code, reorder_of, held_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,0,$16,$17,$18,$19,$20,$21,$22,$23,
+               CASE WHEN $11 = 'held' THEN NOW() END)`,
+      /* Someone else on the business: their email, not the original buyer's
+         name and phone, so texts and the quote reach the person who asked. */
+      [code, sameBuyer ? o.name : null, sameBuyer ? o.phone : null, email, JSON.stringify(items), tt.subtotal, tt.tax, tt.total, tt.deposit, note,
+       locked ? 'sent' : 'held', validUntil, disc.kind, disc.value, disc.note, sameBuyer ? quoteTaxable(o) : true,
+       sameBuyer ? o.tax_exempt_ref || null : null, sameBuyer ? o.tax_exempt_reason || null : null,
+       sameBuyer ? o.tax_certificate_id || null : null,
+       o.ship_method || null, o.ship_to ? JSON.stringify(o.ship_to) : null, promo, src]);
+    if (NOTIFY_EMAIL) {
+      sendEmail({
+        to: NOTIFY_EMAIL, promo: false,
+        subject: `${locked ? 'Reorder' : 'Reorder to re-price'}: ${(sameBuyer && o.name) || email} (${code})`,
+        html: `<p><b>${escEmail((sameBuyer && o.name) || email)}</b> reordered <b>${escEmail(src)}</b> from their Business Partners account.</p>
+          <p>${locked
+            ? `Within the 60-day price, so the new quote <b>${escEmail(code)}</b> went to them at the original prices${promo ? ` with ${escEmail(promo)}` : ''}.`
+            : `The 60-day price has run out, so <b>${escEmail(code)}</b> is <b>held</b>: check the prices on the quote form and approve it to send.`}</p>
+          <p><a href="${PUBLIC_BASE_URL}/admin/production/${encodeURIComponent(code)}">Open the job</a></p>`,
+      }).catch((e) => console.error('reorder notice failed:', e.message));
+    }
+    res.json({ ok: true, code, held: !locked, url: quoteLink(code) });
+  } catch (err) {
+    console.error('reorder failed:', err.message);
+    reportError('partner-reorder', err, `reorder of ${src}`).catch(() => {});
+    res.status(500).json({ error: 'failed' });
   }
 });
 
@@ -9535,6 +9982,7 @@ const ADMIN_NAV = [
   { key: 'money',      href: FINANCES_PATH,    label: 'Finances',   icon: 'dollar' },
   { key: 'certificates', href: '/admin/certificates', label: 'Certificates', icon: 'cert', badge: 'certificates' },
   { key: 'discounts',  href: '/admin/discounts',     label: 'Discounts',  icon: 'tag' },
+  { key: 'partners',   href: '/admin/partners',      label: 'Partners',   icon: 'users', when: () => PARTNERS.on() },
   { key: 'calendar',   href: '/admin/marketing-calendar', label: 'Marketing calendar', icon: 'clock' },
   { key: 'chat',       href: '/admin/team-chat',     label: 'Team chat',  icon: 'chat',   badge: 'chat' },
   { key: 'playbook',   href: '/admin/playbook',      label: 'Playbook',   icon: 'book' },
@@ -9817,10 +10265,10 @@ function adminNav(active) {
      server enforces, so the menu cannot offer a page that would refuse them. */
   const actor = typeof currentActor === 'function' ? currentActor() : null;
   const staff = actor && actor.kind === 'staff' ? actor : null;
-  const items = ADMIN_NAV.filter((n) => staff
+  const items = ADMIN_NAV.filter((n) => (!n.when || n.when()) && (staff
     /* Schedule is the no-prices view; whoever has the Production board uses that. */
     ? STAFF.mayUseRoute(staff, 'GET', n.href) && !(n.key === 'schedule' && STAFF.levelOf(staff, 'quotes.view') === 'on')
-    : !n.staffOnly);
+    : !n.staffOnly));
   const home = staff ? '/admin/my-day' : '/admin/dashboard';
   return `<aside class="adm-side" aria-label="Admin menu">
     <a class="adm-brand" href="${home}"><span class="adm-mark">JT</span>
@@ -14036,6 +14484,33 @@ app.get('/q/:code', async (req, res) => {
             <button type="button" data-qp-remove="${escEmail(d.url)}" aria-label="Remove ${escEmail(d.name)}"
                     style="position:absolute;top:-6px;right:-6px;width:24px;height:24px;border-radius:12px;border:0;background:#0B1F4B;color:#fff;font-size:14px;line-height:24px;padding:0;cursor:pointer">&times;</button>
           </div>`;
+    /* Business Partners: a code box (MAIL15, REORDER5) while nothing is paid.
+       POST /q/:code/promo checks it with the designer and writes it into the
+       ordinary discount fields; ?promo= carries back only a known key, never
+       text (PARTNERS.promoMessage). Not offered on a quote the shop already
+       discounted: codes never stack. */
+    const promoKey = String(req.query.promo || '').replace(/[^a-z]/g, '').slice(0, 20);
+    const promoNote = promoKey === 'ok' ? '<p style="margin:8px 0 0;color:#166534;font-weight:600">Code added. Your total is updated above.</p>'
+      : promoKey === 'removed' ? '<p style="margin:8px 0 0" class="muted">Code removed.</p>'
+      : promoKey ? `<p style="margin:8px 0 0;color:#b91c1c">${escEmail(PARTNERS.promoMessage(promoKey))}</p>` : '';
+    const promoCard = (!PARTNERS.on() || stopAsking || !PARTNERS.canEnterCode(q)
+                       || (Number(q.discount_value) > 0 && !q.promo_code)) ? '' : `
+      <div class="card" id="promo">
+        ${q.promo_code ? `
+        <form method="POST" action="/q/${q.code}/promo" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0">
+          <span><b>Code ${escEmail(q.promo_code)}</b> is on this quote.</span>
+          <input type="hidden" name="remove" value="1">
+          <button type="submit" class="btn-ghost" style="padding:6px 12px">Remove</button>
+        </form>` : `
+        <form method="POST" action="/q/${q.code}/promo" style="display:flex;gap:10px;flex-wrap:wrap;margin:0"
+              onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Checking…'">
+          <label for="promo-in" style="flex-basis:100%;font-weight:700">Have a code?</label>
+          <input id="promo-in" name="promo" maxlength="32" autocomplete="off" autocapitalize="characters"
+                 placeholder="MAIL15" style="flex:1;min-width:140px;text-transform:uppercase">
+          <button type="submit" class="btn" style="width:auto;padding:10px 18px">Apply</button>
+        </form>`}
+        ${promoNote}
+      </div>`;
     const photosCard = (q.cancelled_at || !qpCloud) ? '' : `
       <div class="card" id="photos">
         <h1 style="font-size:18px">Upload artwork</h1>
@@ -14453,6 +14928,8 @@ app.get('/q/:code', async (req, res) => {
           ${q.valid_until ? `<p class="muted">Quote good through ${fmtDate(q.valid_until)}.</p>` : ''}
         </div>
       </div>
+
+      ${promoCard}
 
       ${/* Right under the items, above the contact and payment boxes (the
            owner, 2026-10-02): artwork is the next thing a job needs. */ photosCard}
@@ -19269,6 +19746,9 @@ app.get('/admin/discounts', requireAdmin, async (req, res) => {
             c.min_items > 0 ? c.min_items + '+ items' : '',
             c.once_per_customer ? 'one per customer' : '',
             c.locked_to_customer ? 'that customer only' : '',
+            c.partner_only ? 'Business Partners only' : '',
+            c.once_per_business ? 'one per business' : '',
+            c.returning_only ? 'returning customers only' : '',
             c.starts_at ? 'from ' + fmtDate(c.starts_at) : '',
           ].filter(Boolean);
           return r.length ? `<div class="muted" style="font-size:11.5px">${r.join(' &middot; ')}</div>` : '';
@@ -19291,6 +19771,8 @@ app.get('/admin/discounts', requireAdmin, async (req, res) => {
             once_per_customer: !!c.once_per_customer, assigned_to: c.assigned_to || '',
             starts_at: c.starts_at || '', min_items: c.min_items || '',
             max_discount: c.max_discount || '', locked_to_customer: !!c.locked_to_customer,
+            partner_only: !!c.partner_only, once_per_business: !!c.once_per_business,
+            returning_only: !!c.returning_only,
           })).replace(/"/g, '&quot;')})">Edit</button>
         ${live(c) ? `
         <button type="button" class="btn btn-ghost" style="padding:5px 10px;font-size:12.5px"
@@ -19427,6 +19909,18 @@ app.get('/admin/discounts', requireAdmin, async (req, res) => {
             <input type="checkbox" name="locked_to_customer" value="1" style="width:auto">
             Only the person it is sent to can use it
           </label>
+          <label style="flex:0 1 220px;font-size:13px;display:flex;align-items:center;gap:6px;padding-bottom:8px">
+            <input type="checkbox" name="partner_only" value="1" style="width:auto">
+            Business Partners only
+          </label>
+          <label style="flex:0 1 190px;font-size:13px;display:flex;align-items:center;gap:6px;padding-bottom:8px">
+            <input type="checkbox" name="once_per_business" value="1" style="width:auto">
+            One per business
+          </label>
+          <label style="flex:0 1 250px;font-size:13px;display:flex;align-items:center;gap:6px;padding-bottom:8px">
+            <input type="checkbox" name="returning_only" value="1" style="width:auto">
+            Only customers who have paid before
+          </label>
         </div>
         <div style="margin-top:10px">
           <label style="font-size:12px">Who it is for / what it is for <span class="muted">(only you see this)</span></label>
@@ -19454,6 +19948,9 @@ app.get('/admin/discounts', requireAdmin, async (req, res) => {
           f.max_uses.value = c.max_uses || '';
           f.once_per_customer.checked = !!c.once_per_customer;
           f.locked_to_customer.checked = !!c.locked_to_customer;
+          if (f.partner_only) f.partner_only.checked = !!c.partner_only;
+          if (f.once_per_business) f.once_per_business.checked = !!c.once_per_business;
+          if (f.returning_only) f.returning_only.checked = !!c.returning_only;
           f.starts_at.value = c.starts_at ? String(c.starts_at).slice(0,10) : '';
           f.min_items.value = c.min_items || '';
           f.max_discount.value = c.max_discount || '';
@@ -19556,6 +20053,9 @@ app.post('/admin/discounts', requireAdmin, async (req, res) => {
   form.set('min_items', String(b.min_items || ''));
   form.set('max_discount', String(b.max_discount || ''));
   if (b.locked_to_customer) form.set('locked_to_customer', '1');
+  if (b.partner_only) form.set('partner_only', '1');
+  if (b.once_per_business) form.set('once_per_business', '1');
+  if (b.returning_only) form.set('returning_only', '1');
   try {
     const r = await studioFetch(PROMO_ADMIN(), { method: 'POST', body: form });
     const d = await r.json().catch(() => ({}));
@@ -19766,6 +20266,100 @@ async function allCustomers() {
   return { people: [...byEmail.values()].sort((a, b) =>
     Number(b.spent) - Number(a.spent) || Number(b.quoted) - Number(a.quoted)), studio };
 }
+
+/* ── Business Partners: the owner's list ─────────────────────────────────────
+   Businesses live on the designer (jt-partners.php); this page reads and
+   manages them through jt-business-admin.php, the same shared-key client
+   pattern as the discount codes above. Joining is instant, so this is where
+   the owner looks AFTER: who joined, from where, whether they have used
+   MAIL15, and any sign-up that looks like a business already on file. A
+   failed fetch says so; it never renders as "no partners yet". */
+const BIZ_ADMIN = () => `${STUDIO_BASE}/jt-business-admin.php`;
+
+async function fetchPartners() {
+  try {
+    const r = await studioFetch(BIZ_ADMIN());
+    if (!r.ok) throw new Error(`designer jt-business-admin.php answered ${r.status}`);
+    const d = await r.json();
+    return { businesses: Array.isArray(d.businesses) ? d.businesses : [], error: null };
+  } catch (e) {
+    console.error('partners fetch failed:', e.message);
+    return { businesses: [], error: e.message };
+  }
+}
+
+app.get('/admin/partners', requireAdmin, async (req, res) => {
+  if (!isOwner()) return res.redirect('/admin/dashboard');
+  if (!PARTNERS.on()) return res.redirect('/admin/discounts');
+  const { businesses, error } = await fetchPartners();
+  const byId = new Map(businesses.map((b) => [b.id, b]));
+  const msg = String(req.query.msg || ''), err = String(req.query.err || '');
+  const site = (u) => /^https?:\/\//i.test(String(u || ''))
+    ? `<a href="${escEmail(u)}" target="_blank" rel="noopener noreferrer nofollow">${escEmail(String(u).replace(/^https?:\/\/(www\.)?/i, '').slice(0, 40))}</a>` : '';
+  const SOURCE = { mail15: 'Mailer (MAIL15)', partners: '/partners page', invite: 'Invite email', account: 'Account page' };
+  const rows = businesses.map((b) => {
+    const dup = b.dup_of && byId.get(b.dup_of);
+    const mail15 = (b.uses || []).find((u) => u.code === 'MAIL15');
+    return `<tr style="border-top:1px solid #eef1f8${b.status === 'removed' ? ';opacity:.6' : ''}">
+      <td style="padding:9px 6px"><b>${escEmail(b.name)}</b>
+        <div class="muted" style="font-size:12.5px">${[escEmail(b.type || ''), escEmail(b.phone || ''), site(b.website)].filter(Boolean).join(' &middot; ')}</div>
+        ${dup ? `<div style="font-size:12.5px;color:#b45309">Looks like <b>${escEmail(dup.name)}</b> (#${dup.id}).
+          <form method="POST" action="/admin/partners/action" style="display:inline" onsubmit="return confirm('Merge into ${escEmail(dup.name)}? Its people move across.')">
+            <input type="hidden" name="action" value="merge"><input type="hidden" name="id" value="${b.id}">
+            <input type="hidden" name="into" value="${dup.id}"><button class="btn btn-ghost" style="padding:2px 8px;font-size:12px">Merge</button></form></div>` : ''}
+        ${b.status === 'removed' && b.note ? `<div class="muted" style="font-size:12.5px">Switched off: ${escEmail(b.note)}</div>` : ''}</td>
+      <td style="padding:9px 6px;font-size:13px">${(b.members || []).map((m) =>
+        `${escEmail(m.email)}${m.role === 'owner' ? ' <span class="muted">(owner)</span>' : ''}${m.signed_in ? '' : ' <span class="muted">(not signed in yet)</span>'}`).join('<br>')}</td>
+      <td style="padding:9px 6px;font-size:13px;white-space:nowrap">${b.created ? fmtDate(b.created) : ''}
+        <div class="muted" style="font-size:12px">${escEmail(SOURCE[b.source] || b.source || '')}</div></td>
+      <td style="padding:9px 6px;font-size:13px">${mail15 ? `used ${fmtDate(mail15.created)}<div class="muted" style="font-size:12px">${escEmail(mail15.ref)}</div>` : '<span class="muted">not yet</span>'}</td>
+      <td style="padding:9px 6px;text-align:right;white-space:nowrap">${b.status === 'removed' ? `
+        <form method="POST" action="/admin/partners/action"><input type="hidden" name="action" value="restore">
+          <input type="hidden" name="id" value="${b.id}"><button class="btn btn-ghost" style="padding:5px 10px;font-size:12.5px">Switch back on</button></form>` : `
+        <form method="POST" action="/admin/partners/action" onsubmit="var n=prompt('Why? (only you see this)');if(n===null)return false;this.note.value=n;return true;">
+          <input type="hidden" name="action" value="remove"><input type="hidden" name="id" value="${b.id}"><input type="hidden" name="note" value="">
+          <button class="btn btn-ghost" style="padding:5px 10px;font-size:12.5px">Switch off</button></form>`}</td>
+    </tr>`;
+  }).join('');
+  const active = businesses.filter((b) => b.status === 'active').length;
+  res.send(adminPage('Partners', `<h1>Business Partners</h1>
+    <div class="sub">${error ? '<b style="color:#b91c1c">Could not reach the designer, so this list is unavailable right now. Nothing has been lost; reload in a minute.</b>'
+      : `${active} active &middot; joining is instant; switch off any that are not real. Codes are on <a href="/admin/discounts" style="color:#1848B8">Discounts</a>.`}</div>
+    ${msg ? `<div class="card" style="color:#166534">${escEmail(msg)}</div>` : ''}
+    ${err ? `<div class="card"><div class="warn">${escEmail(err)}</div></div>` : ''}
+    ${error ? '' : businesses.length ? `<div class="card" style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:14px">
+      <thead><tr style="text-align:left"><th style="padding:6px">Business</th><th style="padding:6px">People</th>
+        <th style="padding:6px">Joined</th><th style="padding:6px">MAIL15</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`
+      : `<div class="card"><p class="muted">No businesses have joined yet. The sign-up link is <b>${escEmail(PUBLIC_BASE_URL)}/partners</b>; the mailer's QR goes to /mail15.</p></div>`}`, 'partners'));
+});
+
+app.post('/admin/partners/action', requireAdmin, async (req, res) => {
+  if (!isOwner()) return res.redirect('/admin/dashboard');
+  const b = req.body || {};
+  const action = ['remove', 'restore', 'merge'].includes(b.action) ? b.action : '';
+  const id = parseInt(b.id, 10), into = parseInt(b.into, 10);
+  if (!action || !Number.isInteger(id) || id <= 0) return res.redirect('/admin/partners?err=' + encodeURIComponent('That did not work. Please try again.'));
+  const form = new URLSearchParams({ action, id: String(id), note: String(b.note || '').trim().slice(0, 255) });
+  if (action === 'merge' && Number.isInteger(into) && into > 0) form.set('into', String(into));
+  try {
+    const r = await studioFetch(BIZ_ADMIN(), { method: 'POST', body: form });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) throw new Error(d.error || `designer answered ${r.status}`);
+    /* Codes on unpaid quotes follow the merge, so they are recorded against
+       the business that remains (the studio moves its own holds). */
+    if (action === 'merge' && Number.isInteger(into) && into > 0) {
+      await pool.query('UPDATE quotes SET promo_business_id = $2 WHERE promo_business_id = $1 AND promo_recorded_at IS NULL',
+        [id, into]).catch((e) => reportError('partner-merge-quotes', e, `#${id} -> #${into}`).catch(() => {}));
+    }
+    logActivity(currentActor() || OWNER_ACTOR, `partner ${action}`, { type: 'business', id: String(id) }, action === 'merge' ? { into } : null);
+    const said = { remove: 'Switched off.', restore: 'Switched back on.', merge: 'Merged.' }[action];
+    res.redirect('/admin/partners?msg=' + encodeURIComponent(said));
+  } catch (e) {
+    console.error('partner action failed:', e.message);
+    res.redirect('/admin/partners?err=' + encodeURIComponent('That did not save: the designer could not be reached. Please try again.'));
+  }
+});
 
 app.get('/admin/customers', requireAdmin, async (_req, res) => {
   try {
@@ -28560,6 +29154,7 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
       await step('reintro emails', sendCampaignEmails);
     }
     await step('reorder nudges', sendReorderNudges);
+    await step('partner code uses', recordQuotePromos);
     await step('expire quotes', expireOldQuotes);
     await step('monthly costs', rollRecurringExpenses);
     await step('job costs', async () => {
