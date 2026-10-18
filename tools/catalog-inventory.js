@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 /* Is every garment in the catalogue what it says it is, and ready to design on?
  *
- *   railway run -s junesteesnthings-backend -- railway run -s MySQL -- \
- *     node tools/catalog-inventory.js [--json=<file>] [ids...]
+ *   <vars json> | node tools/catalog-inventory.js [--json=<file>] [ids...]
+ *
+ * The vars JSON carries MYSQL_PUBLIC_URL and, for the checks against S&S,
+ * SSA_ACCOUNT / SSA_API_KEY — the same object tools/product-art/run.js reads.
  *
  * Read-only. One line per product, live and staged (supplier='ssa-staged'),
  * and a verdict per check — the owner asked on 2026-10-18 for every product to
@@ -24,7 +26,7 @@
  * judged against S&S.
  */
 const fs = require('fs');
-const { mysql, mysqlUrlFrom, dejson } = require('./lib/db');
+const { mysql, urlFromStdinJson, dejson } = require('./lib/db');
 const { makeClient } = require('./lib/ssa-client');
 const { sellPrice } = require('./lib/markup');
 const { classify, decorationsFor, resolveRoles } = require('./lib/garments');
@@ -80,13 +82,16 @@ function localChecks(p, { roleIds = {} } = {}) {
   return out;
 }
 
-async function main() {
-  const url = mysqlUrlFrom(process.env);
-  if (!url) { console.error('no MySQL connection'); process.exit(2); }
+/* Credentials come in on stdin as one JSON object, as for
+   tools/product-art/run.js — never on the command line, where `ps` shows them. */
+async function main(buf) {
+  let e = {};
+  try { e = JSON.parse(buf || '{}'); } catch { console.error('stdin is not JSON'); process.exit(2); }
+  const url = urlFromStdinJson(buf);
   const argv = process.argv.slice(2);
   const ids = argv.filter((a) => /^\d+$/.test(a)).map(Number);
   const jsonOut = (argv.find((a) => a.startsWith('--json=')) || '').slice(7);
-  const ssa = process.env.SSA_ACCOUNT && process.env.SSA_API_KEY ? makeClient(process.env.SSA_ACCOUNT, process.env.SSA_API_KEY) : null;
+  const ssa = e.SSA_ACCOUNT && e.SSA_API_KEY ? makeClient(e.SSA_ACCOUNT, e.SSA_API_KEY) : null;
   if (!ssa) console.log('no SSA credentials — identity and colour checks against S&S are skipped\n');
 
   const methods = mysql(url, 'SELECT id, title FROM lumise_printings ORDER BY id;', { rows: true });
@@ -135,5 +140,9 @@ async function main() {
   if (jsonOut) fs.writeFileSync(jsonOut, JSON.stringify(report, null, 1));
 }
 
-if (require.main === module) main().catch((e) => { console.error(e.message); process.exit(1); });
+if (require.main === module) {
+  let buf = '';
+  process.stdin.on('data', (d) => (buf += d));
+  process.stdin.on('end', () => main(buf).catch((e) => { console.error(e.message); process.exit(1); }));
+}
 module.exports = { localChecks, expectedKeys };
