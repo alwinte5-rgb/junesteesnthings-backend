@@ -52,7 +52,7 @@ function codeText({ code }) {
 }
 
 /** Where a sign-up came from, for the campaign page's count. */
-const SOURCES = { email: 'The hello email', receipt: 'Other emails (quotes, orders)', shop: 'Shop sign (QR)', site: 'Website', sms: 'Texted JOIN' };
+const SOURCES = { email: 'The hello email', receipt: 'Other emails (quotes, orders)', shop: 'Shop sign (QR)', site: 'Website', popup: 'Website popup', sms: 'Texted JOIN' };
 function cleanSource(s) { return Object.prototype.hasOwnProperty.call(SOURCES, s) ? s : 'site'; }
 
 /** A fresh single-use code: TEXTS plus five characters nobody misreads. */
