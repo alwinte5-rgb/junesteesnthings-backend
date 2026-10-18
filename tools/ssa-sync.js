@@ -250,7 +250,10 @@ process.stdin.on('end', async () => {
     "SELECT id, name, IFNULL(supplier,'') supplier, IFNULL(supplier_cost,0) cost, price, " +
     "IFNULL(thumbnail_url,'') thumb, IFNULL(supplier_style_id,0) sid, " +
     "IFNULL(DATE_FORMAT(ssa_seen_at,'%Y-%m-%d'),'') seen " +
-    'FROM lumise_products WHERE active=1 ORDER BY id;', { rows: true });
+    /* Staged blanks (supplier='ssa-staged', switched off, quote form only) are
+       re-costed too: the quote form sells them, and publish-staged.js would
+       otherwise put one live at the cost it had the day it was added. */
+    "FROM lumise_products WHERE active=1 OR supplier='ssa-staged' ORDER BY id;", { rows: true });
 
   console.log((APPLY ? 'APPLYING' : 'DRY RUN') + ' — ' + products.length + ' active products\n');
 
@@ -293,7 +296,10 @@ process.stdin.on('end', async () => {
 
     /* Every product with live pricing gets its tag and its seen-date, whether or
        not the cost moved — that timestamp is what the staleness rule reads. */
-    const sets = [`supplier='ssa'`, `supplier_style_id=${style.id}`, 'ssa_seen_at=NOW()'];
+    /* A staged row keeps its tag: turning it into 'ssa' here would make it an
+       ordinary product without publish-staged.js's designer checks. */
+    const sets = [p.supplier === 'ssa-staged' ? `supplier='ssa-staged'` : `supplier='ssa'`,
+      `supplier_style_id=${style.id}`, 'ssa_seen_at=NOW()'];
 
     if (was > 0 && move > PRICE_JUMP_GUARD) {
       suspicious.push({ p, cost, price, move });

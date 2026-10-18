@@ -96,7 +96,10 @@ test('both S&S clients tell a missing style apart from a refused request', () =>
      returned null for ALL of them, which its caller reads as "no such style
      at S&S", printed once per style, and exited 0. A dead credential is not
      a catalogue fact, and a tool must not report one as the other. */
-  for (const f of ['ssa-sync.js', 'ssa-add-products.js']) {
+  /* ssa-add-products' client moved to tools/lib/ssa-client.js (2026-10-17),
+     shared with publish-staged.js; the tool must still use it. */
+  assert.match(read('tools/ssa-add-products.js'), /require\('\.\/lib\/ssa-client'\)/);
+  for (const f of ['ssa-sync.js', 'lib/ssa-client.js']) {
     const src = read(path.join('tools', f));
     const fn = src.slice(src.indexOf('function makeClient('));
     const body = fn.slice(0, fn.indexOf('\n}\n'));

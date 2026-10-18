@@ -16,17 +16,26 @@
  *
  * READY means every one of these holds; the dry run names the one that fails:
  *   - the design canvas is the right garment (tools/lib/canvas.js, the same
- *     verdict canvas-audit prints). Stand-in art — a jacket drawn on the
- *     sweatshirt, a beanie on the dad hat — is held back unless
- *     --accept-standin, because the customer designs against that canvas;
+ *     verdict canvas-audit prints). Stand-in art — a beanie or trucker drawn on
+ *     the dad hat — is held back unless --accept-standin, because the customer
+ *     designs against that canvas. A JACKET or VEST is worse than a stand-in:
+ *     there is no jacket art at all, so it is drawn on the sweatshirt, which
+ *     canvas-audit calls mismatched. --accept-standin does not cover it; those
+ *     stay quote-only until jacket art is uploaded and their stages point at it;
  *   - it has at least one decoration method, a size list and a price;
  *   - it has an https catalogue photo;
+ *   - S&S still prices it (the sync has not marked it ssa_auto_off);
  *   - it has a description. An empty one is filled from S&S's own text as
  *     plain lines (product.php prints descriptions escaped, not as HTML), which
  *     needs SSA_ACCOUNT / SSA_API_KEY in the environment.
+ *
+ * Prices: the daily S&S sync re-costs staged rows too (tools/ssa-sync.js), so a
+ * product published after weeks in staging goes live at today's cost.
  */
 const { mysql, mysqlUrlFrom, sq } = require('./lib/db');
 const { canvasVerdict } = require('./lib/canvas');
+const { makeClient } = require('./lib/ssa-client');
+const { STAGED_SUPPLIER, parseIds } = require('./lib/ssa-staged');
 
 /* S&S descriptions are HTML lists. Bullet lines, entities decoded, capped. */
 function htmlToLines(html) {
@@ -34,9 +43,11 @@ function htmlToLines(html) {
   const items = [...s.matchAll(/<li[^>]*>([\s\S]*?)<\/li>/gi)].map((m) => m[1]);
   const parts = items.length ? items : [s];
   const clean = (t) => t.replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"').replace(/&#39;|&rsquo;|&lsquo;/g, "'").replace(/&#174;|&reg;/g, '®')
-    .replace(/&#8482;|&trade;/g, '™').replace(/&[a-z#0-9]+;/gi, ' ')
+    .replace(/&#8482;|&trade;/g, '™').replace(/&(?!amp;)[a-z#0-9]+;/gi, ' ')
+    /* &amp; last, so "&amp;lt;" stays the literal text "&lt;" S&S meant. */
+    .replace(/&amp;/g, '&')
     .replace(/\s+/g, ' ').trim();
   const lines = parts.map(clean).filter(Boolean);
   return (items.length ? lines.map((l) => '• ' + l) : lines).join('\n').slice(0, 2000);
@@ -59,41 +70,52 @@ function notReady(p, { acceptStandin = false, desc = p.description } = {}) {
   if (!(parseFloat(p.price) > 0)) return 'no price';
   if (!/^https:\/\//.test(String(p.thumbnail_url || ''))) return 'no catalogue photo';
   if (!String(desc || '').trim()) return 'no description (S&S had none, or no SSA credentials)';
+  if (p.auto_off) return 'S&S stopped pricing it (ssa-sync switched it off ' + p.auto_off + ')';
   return null;
 }
 
 async function main() {
   const APPLY = process.argv.includes('--apply');
   const ACCEPT = process.argv.includes('--accept-standin');
-  const ONLY = new Set((process.argv.find((a) => a.startsWith('--only=')) || '').slice(7)
-    .split(',').filter(Boolean).map(Number).filter(Number.isFinite));
+  /* --only must name real ids. A typo that parsed to nothing used to mean
+     "no filter" — i.e. publish everything ready. */
+  let ONLY = null;
+  const onlyArg = process.argv.find((a) => a.startsWith('--only'));
+  try { ONLY = onlyArg ? parseIds(onlyArg.replace(/^--only=?/, '')) : null; }
+  catch (e) { console.error(e.message); process.exit(2); }
   const url = mysqlUrlFrom(process.env);
   if (!url) { console.error('no MySQL connection — run under `railway run -s MySQL`'); process.exit(2); }
   const { SSA_ACCOUNT: acct, SSA_API_KEY: key } = process.env;
 
   let rows = mysql(url, "SELECT id, name, price, stages, printings, attributes, thumbnail_url, " +
-    "IFNULL(description,'') description, IFNULL(supplier_style_id,0) sid FROM lumise_products " +
-    "WHERE supplier='ssa-staged' ORDER BY name;", { rows: true });
-  if (ONLY.size) rows = rows.filter((p) => ONLY.has(Number(p.id)));
+    "IFNULL(description,'') description, IFNULL(supplier_style_id,0) sid, " +
+    "IFNULL(DATE_FORMAT(ssa_auto_off,'%Y-%m-%d'),'') auto_off FROM lumise_products " +
+    'WHERE supplier=' + sq(STAGED_SUPPLIER) + ' ORDER BY name;', { rows: true });
+  if (ONLY) {
+    const found = new Set(rows.map((p) => Number(p.id)));
+    const absent = [...ONLY].filter((id) => !found.has(id));
+    if (absent.length) { console.error('not staged products: #' + absent.join(', #')); process.exit(2); }
+    rows = rows.filter((p) => ONLY.has(Number(p.id)));
+  }
   console.log((APPLY ? 'APPLYING' : 'DRY RUN') + ' — ' + rows.length + ' staged product(s)' +
     (ACCEPT ? ', stand-in canvas accepted' : '') + '\n');
 
-  /* Descriptions from S&S, only for rows that have none. One call per style,
-     spaced like ssa-add-products (S&S throttles bursts); a failed call leaves
-     the row without one, which holds it back rather than inventing text. */
-  const fetched = {};
-  const need = rows.filter((p) => !String(p.description).trim() && Number(p.sid));
+  /* Descriptions from S&S, only for rows that have none AND would otherwise
+     be ready — a jacket held for its canvas does not cost an API call on every
+     dry run. Through the shared client (spacing, retries); a style that still
+     fails is reported and held back, never fatal to the run. */
+  const fetched = {}, fetchFailed = [];
+  const need = rows.filter((p) => !String(p.description).trim() && Number(p.sid) &&
+    !notReady(p, { acceptStandin: ACCEPT, desc: 'x' }));
   if (need.length && acct && key) {
-    const H = { Authorization: 'Basic ' + Buffer.from(acct + ':' + key).toString('base64') };
+    const ssa = makeClient(acct, key);
     for (const p of need) {
-      for (let i = 0; i < 4; i++) {
-        const r = await fetch('https://api.ssactivewear.com/v2/styles/' + Number(p.sid), { headers: H });
-        if (r.ok) { const j = await r.json(); fetched[p.id] = htmlToLines((Array.isArray(j) ? j[0] : j || {}).description); break; }
-        if (r.status !== 429 && r.status < 500) break;
-        await new Promise((z) => setTimeout(z, 1200 * (i + 1) ** 2));
-      }
-      await new Promise((z) => setTimeout(z, 1000));
+      try {
+        const j = await ssa('styles/' + Number(p.sid));
+        fetched[p.id] = htmlToLines(((Array.isArray(j) ? j[0] : j) || {}).description);
+      } catch (e) { fetchFailed.push('#' + p.id + ' ' + e.message.slice(0, 60)); }
     }
+    if (fetchFailed.length) console.log('  S&S descriptions not fetched (held back):\n    ' + fetchFailed.join('\n    ') + '\n');
   } else if (need.length) {
     console.log('  no SSA credentials: ' + need.length + ' product(s) without a description stay staged\n');
   }
@@ -115,8 +137,8 @@ async function main() {
   /* One transaction. The WHERE re-checks 'ssa-staged' so a row published or
      changed since it was read is left alone. */
   const stmts = ready.map((r) => 'UPDATE lumise_products SET supplier=\'ssa\', active=1, ' +
-    (r.fill ? 'description=' + sq(r.desc) + ', ' : '') + 'ssa_seen_at=NOW(), updated=NOW() ' +
-    "WHERE id=" + Number(r.p.id) + " AND supplier='ssa-staged';");
+    (r.fill ? 'description=' + sq(r.desc) + ', ' : '') + 'updated=NOW() ' +
+    'WHERE id=' + Number(r.p.id) + ' AND supplier=' + sq(STAGED_SUPPLIER) + ';');
   mysql(url, 'START TRANSACTION;\n' + stmts.join('\n') + '\nCOMMIT;');
   const live = mysql(url, 'SELECT COUNT(*) n FROM lumise_products WHERE active=1 AND supplier=\'ssa\' AND id IN (' +
     ready.map((r) => Number(r.p.id)).join(',') + ');', { rows: true })[0].n;

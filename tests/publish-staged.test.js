@@ -9,6 +9,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { notReady, htmlToLines } = require('../tools/publish-staged');
+const { selectWanted, productInsertSql, parseIds } = require('../tools/lib/ssa-staged');
 const { classify } = require('../tools/lib/garments');
 
 const enc = (o) => Buffer.from(encodeURIComponent(JSON.stringify(o))).toString('base64');
@@ -50,12 +51,46 @@ test('S&S HTML becomes plain bullet lines', () => {
     '• 7.5 oz. 100% cotton\n• Drop shoulder & boxy');
   assert.strictEqual(htmlToLines('<p>Heavyweight tee.</p>'), 'Heavyweight tee.');
   assert.strictEqual(htmlToLines(''), '');
+  assert.strictEqual(htmlToLines('<p>Use &amp;lt;b&amp;gt; tags</p>'), 'Use &lt;b&gt; tags', 'double-escaped text decodes once');
 });
 
-test('--staged writes the product switched off and tagged ssa-staged', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'tools', 'ssa-add-products.js'), 'utf8');
-  assert.match(src, /\(STAGED \? 0 : 1\)/);
-  assert.match(src, /\(STAGED \? "'ssa-staged'" : "'ssa'"\)/);
+test('--staged writes the product switched off and tagged ssa-staged; plain runs write it live', () => {
+  const row = { name: "Shaka Wear SHMHO Unisex Max Heavyweight Oversized Tee", price: 13.36, thumb: 'https://x/a.jpg',
+    stages: 'st', attributes: 'at', printings: 'pr', styleID: 9161, cost: 6.68 };
+  const staged = productInsertSql({ ...row, staged: true });
+  assert.match(staged, /, 1, 0, '', NOW\(\), NOW\(\), 'ssa-staged', 9161, 6\.68, NOW\(\)/);
+  const live = productInsertSql({ ...row, staged: false });
+  assert.match(live, /, 1, 1, '', NOW\(\), NOW\(\), 'ssa', 9161, 6\.68, NOW\(\)/);
+  assert.match(staged, /WHERE supplier_style_id=9161\) AS t\);$/, 'a re-run adds nothing twice');
+  assert.throws(() => productInsertSql({ ...row, styleID: 'x' }), /bad style id/);
+});
+
+test('the streetwear batch is only ever added --staged', () => {
+  const core = [['5000', 'tee', 'Gildan', 'Gildan 5000 Tee']];
+  const batch = [['SHMHO', 'tee', 'Shaka Wear', 'Shaka Wear SHMHO Tee']];
+  assert.deepStrictEqual(selectWanted(core, batch), core, 'a plain --apply never sees the batch');
+  assert.deepStrictEqual(selectWanted(core, batch, { staged: true }), [...core, ...batch]);
+  assert.throws(() => selectWanted(core, batch, { only: ['SHMHO'] }), /add it with --staged/);
+  assert.deepStrictEqual(selectWanted(core, batch, { staged: true, only: ['shmho'] }), batch);
+  assert.throws(() => selectWanted(core, batch, { only: ['NOPE'] }), /matched no style/);
+});
+
+test('--only takes real ids or refuses — never "all of them"', () => {
+  assert.deepStrictEqual([...parseIds('358,374')], [358, 374]);
+  assert.strictEqual(parseIds(undefined), null, 'no flag: no filter');
+  for (const bad of ['', 'SHMHO', '358;374', '0', '12,abc', ' , '])
+    assert.throws(() => parseIds(bad), /--only takes product ids/, JSON.stringify(bad));
+});
+
+test('a staged row S&S stopped pricing is held back', () => {
+  assert.match(notReady({ ...tee, auto_off: '2026-11-01' }), /S&S stopped pricing it/);
+});
+
+test('the daily sync re-costs staged rows and keeps their tag', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'tools', 'ssa-sync.js'), 'utf8');
+  assert.ok(src.includes("WHERE active=1 OR supplier='ssa-staged' ORDER BY id"), 'staged rows are synced');
+  assert.ok(src.includes("p.supplier === 'ssa-staged' ? `supplier='ssa-staged'` : `supplier='ssa'`"), 'and never retagged live');
+  assert.ok(src.includes("WHERE active=0 AND supplier='ssa' AND ssa_auto_off IS NOT NULL"), 'auto-reactivation never wakes a staged row');
 });
 
 test('the streetwear rows are unique and each name is the garment its type says', () => {
