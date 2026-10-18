@@ -13432,8 +13432,10 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
          Uploads from this form go to `quote_requests`; the art lives under
          `jtees/product-art`. Anything from that folder is a previous
          fallback, not something a person chose, so it is re-derived rather
-         than kept. */
-      images = images.filter((u) => !/\/jtees\/product-art\//.test(u));
+         than kept. So is `jtees/listing` (tools/set-listing-photos.js): the
+         catalogue thumbnail moved onto Cloudinary there, and a saved line
+         would otherwise keep a "your design here" mockup for good. */
+      images = images.filter((u) => !/\/jtees\/(product-art|listing)\//.test(u));
 
       /* Everything attached, with the name the customer gave it. Same origin
          rule as the images — these are linked from the customer's page, so an
@@ -13448,7 +13450,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
           files = parsed
             .filter((f) => f && typeof f.url === 'string' &&
               /^https:\/\/res\.cloudinary\.com\//.test(f.url) &&
-              !/\/jtees\/product-art\//.test(f.url))
+              !/\/jtees\/(product-art|listing)\//.test(f.url))
             .slice(0, 12)
             .map((f) => ({
               url: f.url,
