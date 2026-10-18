@@ -30,6 +30,8 @@
 
   var PCT = 10;
   var KEY_SEEN = 'jt_tx_pop_seen', KEY_JOINED = 'jt_tx_joined';
+  // A 410x80 copy of brand/logo.png (7 KB, not the 107 KB master), loaded while it waits.
+  var LOGO = '/assets/images/brand/logo-popup.png';
   var AGAIN_MS = 14 * 86400000, ARM_MS = 6000, PHONE_MS = 30000, PHONE_DEPTH = 0.35;
 
   var store = {
@@ -60,15 +62,18 @@
 
   var STYLE = '' +
     '.jttx-bg{position:fixed;inset:0;z-index:2147483000;background:rgba(8,16,40,.6);display:flex;align-items:center;justify-content:center;padding:16px;font-family:Inter,system-ui,sans-serif}' +
-    '.jttx{overscroll-behavior:contain;background:#fff;border-radius:18px;max-width:420px;width:100%;max-height:92vh;overflow-y:auto;position:relative;box-shadow:0 20px 50px rgba(0,0,0,.3);color:#374151;text-align:left}' +
+    '.jttx-w{position:relative;max-width:420px;width:100%}' +
+    '.jttx{overscroll-behavior:contain;background:#fff;border-radius:18px;width:100%;max-height:92vh;overflow-y:auto;box-shadow:0 20px 50px rgba(0,0,0,.3);color:#374151;text-align:left}' +
     '.jttx-logo{background:#fff;border-radius:18px 18px 0 0;border-bottom:4px solid #F0275A;text-align:center;padding:14px 44px 12px}' +
-    '.jttx-logo img{height:40px;width:auto;max-width:100%;display:inline-block}' +
+    '.jttx-logo img{max-height:40px;height:auto;width:auto;max-width:100%;display:inline-block}' +
     '.jttx-top{background:#0B1F4B;color:#fff;padding:22px 24px 20px;text-align:center}' +
     '.jttx-top h2{margin:0 0 6px;font-size:1.65rem;line-height:1.15;font-weight:800;color:#fff}' +
     '.jttx-top h2 span{color:#F0275A}' +
     '.jttx-top p{margin:0;font-size:.95rem;line-height:1.5;color:#dbe2f1}' +
-    '.jttx-x{position:absolute;top:8px;right:10px;border:0;background:none;color:#6B7280;font-size:26px;line-height:1;cursor:pointer;padding:6px;opacity:.8}' +
+    '.jttx-x{position:absolute;z-index:1;top:8px;right:10px;border:0;background:none;color:#6B7280;font-size:26px;line-height:1;cursor:pointer;padding:6px;opacity:.8}' +
     '.jttx-x:hover,.jttx-x:focus-visible{opacity:1}' +
+    // Short screens (small phones, landscape): a slimmer top so the button stays in view.
+    '@media(max-height:700px){.jttx-logo{padding:8px 44px 7px}.jttx-logo img{max-height:28px}.jttx-top{padding:14px 20px 12px}.jttx-top h2{font-size:1.35rem}}' +
     '.jttx form{padding:18px 22px 20px;margin:0}' +
     '.jttx label.l{display:block;font-size:13px;font-weight:700;color:#0B1F4B;margin:10px 0 4px}' +
     '.jttx input[type=tel],.jttx input[type=email]{width:100%;box-sizing:border-box;padding:12px 13px;font:inherit;font-size:16px;border:1.5px solid #E5E7EB;border-radius:10px;background:#fff;color:#111827}' +
@@ -84,9 +89,11 @@
 
   function markup() {
     return '' +
-      '<div class="jttx" role="dialog" aria-modal="true" aria-labelledby="jttx-h">' +
+      // The close button sits outside the scrolling card, so it never scrolls away.
+      '<div class="jttx-w" role="dialog" aria-modal="true" aria-labelledby="jttx-h">' +
       '<button type="button" class="jttx-x" aria-label="Close">&times;</button>' +
-      '<div class="jttx-logo"><img src="/assets/images/brand/logo.png" alt="June\'s Tees &amp; Things" width="205" height="40"></div>' +
+      '<div class="jttx">' +
+      '<div class="jttx-logo"><img src="' + LOGO + '" alt="June\'s Tees &amp; Things" width="205" height="40"></div>' +
       '<div class="jttx-top"><h2 id="jttx-h">Get <span>' + PCT + '% off</span> your next order</h2>' +
       '<p>Join June\'s Tees texts for new products and seasonal deals. Your code comes right away.</p></div>' +
       '<form method="POST" action="/texts">' +
@@ -102,7 +109,7 @@
       '<p class="e" role="alert"></p>' +
       '<button type="submit">Get my ' + PCT + '% off</button>' +
       '<button type="button" class="no">No thanks</button>' +
-      '</form></div>';
+      '</form></div></div>';
   }
 
   var shown = false, armed = false, opener = null;
@@ -178,7 +185,10 @@
       form.querySelector('button[type=submit]').disabled = false;
     });
     var phone = bg.querySelector('#jttx-phone');
-    if (phone && phone.focus) phone.focus();
+    // On a computer the cursor goes to the number; on a phone that would open
+    // the keyboard over the button before they have read the offer.
+    var fine = window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+    if (fine && phone && phone.focus) phone.focus();
     track('texts_popup_shown');
   }
 
@@ -188,7 +198,10 @@
     else show();
     return;
   }
-  setTimeout(function () { armed = true; }, ARM_MS);
+  setTimeout(function () {
+    armed = true;
+    if (window.Image) new window.Image().src = LOGO;
+  }, ARM_MS);
 
   var hover = window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches;
   if (hover) {

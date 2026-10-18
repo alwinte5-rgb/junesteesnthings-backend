@@ -60,6 +60,11 @@ test('it waits, asks once a fortnight, and never after a sign-up or mid-quote', 
   assert.ok(!/e\.clientY <= 0/.test(JS), 'exit is not limited to clientY <= 0');
   assert.ok(!/addEventListener\('mouseout'/.test(JS), 'no mouseout trigger: moving onto an embedded map is not leaving');
   assert.match(JS, /popup=preview/, 'the owner preview link');
+  // The logo it shows is a real, small file.
+  const logo = JS.match(/var LOGO = '([^']+)'/)[1];
+  const file = path.join(PUBLIC, logo);
+  assert.ok(fs.existsSync(file), logo + ' exists');
+  assert.ok(fs.statSync(file).size < 20 * 1024, logo + ' is small');
 });
 
 test('it is on the site pages, not contact, SMS or 404, and not in the shared snippets', () => {
