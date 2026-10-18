@@ -37,14 +37,21 @@
     set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) { /* private mode: ask again next visit */ } },
   };
   var track = function (name) {
+    if (PREVIEW) return;
     try { if (window.jtTrack) window.jtTrack(name, { page: location.pathname }); } catch (e) { /* never block */ }
   };
 
-  if (store.get(KEY_JOINED)) return;
-  var seen = parseInt(store.get(KEY_SEEN) || '0', 10) || 0;
-  if (Date.now() - seen < AGAIN_MS) return;
-  // Arrived from our texts, emails, shop sign or the sign-up page: they know.
-  if (/[?&]src=(sms|texts|email|shop|receipt)\b/.test(location.search)) return;
+  /* ?popup=preview opens it straight away, past every rule below, without
+     marking it seen or counting it in analytics: for the owner to look at it
+     (2026-10-18). A sign-up sent from it is still a real sign-up. */
+  var PREVIEW = /[?&]popup=preview\b/.test(location.search);
+  if (!PREVIEW) {
+    if (store.get(KEY_JOINED)) return;
+    var seen = parseInt(store.get(KEY_SEEN) || '0', 10) || 0;
+    if (Date.now() - seen < AGAIN_MS) return;
+    // Arrived from our texts, emails, shop sign or the sign-up page: they know.
+    if (/[?&]src=(sms|texts|email|shop|receipt)\b/.test(location.search)) return;
+  }
 
   var TRANSACTIONAL = "Text me about my order (quotes, order status, pickup and delivery updates) from June's Tees &amp; Things. " +
     'Msg frequency varies. Msg &amp; data rates may apply. Reply STOP to opt out, HELP for help.';
@@ -107,9 +114,9 @@
   }
 
   function show() {
-    if (shown || !armed || busy()) return;
+    if (shown || !armed || (!PREVIEW && busy())) return;
     shown = true;
-    store.set(KEY_SEEN, String(Date.now()));
+    if (!PREVIEW) store.set(KEY_SEEN, String(Date.now()));
     opener = document.activeElement;
     // The page behind stays put while the dialog is open (phones scroll-chain).
     var root = document.documentElement, overflow = root.style.overflow;
@@ -172,12 +179,33 @@
     track('texts_popup_shown');
   }
 
+  if (PREVIEW) {
+    armed = true;
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', show);
+    else show();
+    return;
+  }
   setTimeout(function () { armed = true; }, ARM_MS);
 
   var hover = window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches;
   if (hover) {
-    document.addEventListener('mouseout', function (e) {
-      if (!e.relatedTarget && e.clientY <= 0) show();
+    /* Leaving through the top, toward the tabs or the address bar. Browsers
+       report the last point they sampled INSIDE the page, and Safari's can be
+       well below the edge on a quick flick, so the first version, which
+       waited for clientY <= 0, never opened there (owner, 2026-10-18). A
+       leave counts when it is near the top, or when the pointer was heading
+       up through the top quarter; one that leaves by a side edge does not.
+       mouseleave on the root only fires when the pointer leaves the page,
+       not when it moves onto an embedded map or widget. */
+    var lastY = null, rising = false;
+    document.addEventListener('mousemove', function (e) {
+      if (lastY !== null && e.clientY !== lastY) rising = e.clientY < lastY;
+      lastY = e.clientY;
+    }, { passive: true });
+    document.documentElement.addEventListener('mouseleave', function (e) {
+      var w = window.innerWidth || document.documentElement.clientWidth;
+      if (e.clientX <= 0 || e.clientX >= w - 1) return;
+      if (e.clientY < 50 || (rising && e.clientY < window.innerHeight / 4)) show();
     });
   } else {
     var start = Date.now();
