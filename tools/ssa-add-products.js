@@ -5,6 +5,13 @@
  *   node tools/ssa-add-products.js < vars.json           # dry run
  *   node tools/ssa-add-products.js --apply < vars.json   # write
  *   node tools/ssa-add-products.js --only=112,6606 ...   # just these styles
+ *   node tools/ssa-add-products.js --staged ...          # quote form only
+ *
+ * --staged writes the product switched OFF (active=0) with supplier='ssa-staged':
+ * the designer feed (jt-catalog.php) still lists it, so the QUOTE FORM can sell
+ * it, but no storefront page, search or the designer shows it, and the daily
+ * S&S sync leaves it alone. tools/publish-staged.js checks the designer setup
+ * and turns it into an ordinary live 'ssa' product.
  *
  * For each style this pulls live S&S data and writes a product with:
  *   - price      cheapest core-size piece cost x 2 (the shop's rule)
@@ -26,6 +33,7 @@ const { sellPrice, sizeUpcharge } = require('./lib/markup');
 const { CORE_SIZES, classify, decorationsFor, OPTIONAL_ROLES, resolveRoles } = require('./lib/garments');
 
 const APPLY = process.argv.includes('--apply');
+const STAGED = process.argv.includes('--staged');
 const ONLY = (process.argv.find((a) => a.startsWith('--only=')) || '').slice(7)
   .split(',').filter(Boolean).map((s) => s.toUpperCase());
 const HOME = 'IL';
@@ -230,6 +238,8 @@ const WANTED = [
   ['SS4500',   'hoodie',  'Independent', 'Independent Trading SS4500 Midweight Hooded Sweatshirt'],
   ['18500',    'hoodie',  'Gildan',      'Gildan 18500 Heavy Blend Hooded Sweatshirt'],
   ['3483',     'tank',    'BELLA',       'BELLA + CANVAS 3483 Jersey Muscle Tank'],
+  /* Streetwear, 2026-10-17: 180 styles, generated — see the file's header. */
+  ...require('./data/ssa-streetwear-2026-10'),
 ];
 
 /* Sublimation needs a poly garment, so it is added only where the fabric
@@ -471,7 +481,8 @@ async function run(env) {
 
   const list = ONLY.length ? WANTED.filter((w) => ONLY.includes(w[0].toUpperCase())) : WANTED;
   const seenIds = new Set();
-  console.log((APPLY ? 'APPLYING' : 'DRY RUN') + ' — ' + list.length + ' styles\n');
+  console.log((APPLY ? 'APPLYING' : 'DRY RUN') + ' — ' + list.length + ' styles' +
+    (STAGED ? ' — STAGED: quote form only (active=0, supplier=ssa-staged)' : '') + '\n');
   console.log('  style      name                                         price   sizes col  IL      type');
   console.log('  ' + '-'.repeat(96));
 
@@ -561,7 +572,7 @@ async function run(env) {
       'created, updated, supplier, supplier_style_id, supplier_cost, ssa_seen_at)\n' +
       "  SELECT " + sq(name) + ', ' + price + ", 0, '', " + sq(thumb) + ", '', '', " +
       sq(buildStages(type)) + ", '', " + sq(attributes) + ', ' + sq(prt.encoded) +
-      ", 1, 1, '', NOW(), NOW(), 'ssa', " + s.styleID + ', ' + money(baseCost) + ', NOW()\n' +
+      ', 1, ' + (STAGED ? 0 : 1) + ", '', NOW(), NOW(), " + (STAGED ? "'ssa-staged'" : "'ssa'") + ', ' + s.styleID + ', ' + money(baseCost) + ', NOW()\n' +
       '  FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM (SELECT id FROM lumise_products ' +
       'WHERE supplier_style_id=' + s.styleID + ') AS t);');
     added++;

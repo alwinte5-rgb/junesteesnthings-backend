@@ -61,3 +61,15 @@ test('standard DTF alone still prices as before', () => {
   const two = priceLine({ ...base, prints: [{ loc: 'front', method: DTF }, { loc: 'back', method: DTF }] });
   assert.equal(money(two.decoration), 16.85, 'front main + back additional');
 });
+
+/* The Ink Theory quote end to end, on the staged Shaka Wear blanks (2026-10-17):
+   catalogue price = S&S cost x 2, less the 3% blank break at 35+. */
+const TIERS = [{ min: 3000, pct: 18 }, { min: 1000, pct: 15 }, { min: 500, pct: 12 },
+  { min: 250, pct: 9 }, { min: 100, pct: 6 }, { min: 35, pct: 3 }];
+test('Ink Theory: 70 Shaka tees, oversized back + chest', () => {
+  const prints = [{ loc: 'front', method: DTF }, { loc: 'back', method: BIG }];
+  const shmho = priceLine({ ...base, product: { price: 13.36, sizes: [] }, blankTiers: TIERS, prints });
+  assert.equal(money(shmho.unit), 31.91, 'SHMHO $12.96 blank + $18.95 printing');
+  const shgdd = priceLine({ ...base, product: { price: 15.02, sizes: [] }, blankTiers: TIERS, prints });
+  assert.equal(money(shgdd.unit), 33.52, 'SHGDD $14.57 blank + $18.95 printing');
+});

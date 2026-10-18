@@ -22,36 +22,14 @@
  * wrong silhouette the moment someone opens the editor.
  *
  * Read-only. Prints a verdict per product; writes nothing. */
-const { CLASSIFY, standin } = require('./lib/garments');
+const { canvasVerdict } = require('./lib/canvas');
 const { mysql: rawMysql } = require('./lib/db');
 
 /* This tool only ever reads rows. */
 const mysql = (url, sql) => rawMysql(url, sql, { rows: true });
 
-const dec = (b) => { try { return JSON.parse(decodeURIComponent(Buffer.from(b, 'base64').toString('utf8'))); }
-  catch { return null; } };
-
-/* Which garment a product is comes from tools/lib/garments.js — the same list
-   the decoration tool classifies with, so a product cannot be a hoodie to one
-   and a tee to the other. */
-
-/* Which base-art files are ACCEPTABLE for each garment class. A tee drawn on
-   the women's tee art is fine; a cap drawn on a tee is not. */
-const OK_ART = {
-  cap:     [/hat/],
-  bag:     [/bag/],
-  vest:    [/vest/],
-  jacket:  [/jacket|windbreak/],
-  qzip:    [/hoodie|sweatshirt|premium/],
-  hoodie:  [/hoodie|sweatshirt/],
-  polo:    [/polo/],
-  woven:   [/premium|woven|twill|polo/],
-  onesie:  [/onesie|kids_babies/],
-  kids:    [/kids_babies|basic_tshirt|onesie/],
-  tank:    [/tank/],
-  longslv: [/long_sleeve/],
-  tee:     [/basic_tshirt|women_tshirt|premium|v_neck/],
-};
+/* The verdict itself is tools/lib/canvas.js — shared with publish-staged.js,
+   and classified by tools/lib/garments.js like every other tool. */
 
 let buf = '';
 process.stdin.on('data', (d) => (buf += d));
@@ -63,27 +41,11 @@ process.stdin.on('end', () => {
 
   const bad = [], noArt = [], ok = [], borrowed = [];
   for (const p of rows) {
-    const st = dec(p.stages);
-    if (!st || !Object.keys(st).length) { noArt.push({ p, why: 'no stages at all' }); continue; }
-    const art = Object.values(st).map((s) => String(s.url || '')).join(' ');
-    if (!art.trim()) { noArt.push({ p, why: 'stages carry no artwork url' }); continue; }
-
-    const cls = (CLASSIFY.find(([, re]) => re.test(p.name)) || ['unknown'])[0];
-    if (cls === 'unknown') { noArt.push({ p, why: 'cannot tell what garment this is' }); continue; }
-
-    const allowed = OK_ART[cls] || [];
-    if (allowed.some((re) => re.test(art))) {
-      /* The family is right. That is not the same as the garment being right:
-         one hat.png stands in for every beanie, visor and trucker, and a vest
-         is drawn with sleeves. Reported separately because it is not a
-         configuration mistake to fix in SQL — it is artwork that does not
-         exist yet. */
-      const sub = standin(p.name);
-      if (sub) borrowed.push({ p, cls, sub });
-      else ok.push({ p, cls });
-      continue;
-    }
-    bad.push({ p, cls, art: art.replace(/products\//g, '').replace(/\.png/g, '') });
+    const v = canvasVerdict(p);
+    if (v.verdict === 'unusable') noArt.push({ p, why: v.why });
+    else if (v.verdict === 'borrowed') borrowed.push({ p, cls: v.cls, sub: v.sub });
+    else if (v.verdict === 'ok') ok.push({ p, cls: v.cls });
+    else bad.push({ p, cls: v.cls, art: v.art });
   }
 
   console.log('CANVAS AUDIT — ' + rows.length + ' active products\n');
