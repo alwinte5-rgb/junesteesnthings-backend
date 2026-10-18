@@ -5957,7 +5957,9 @@ function textsPage({ email = '', first = '', phone = '', error = '', code = '', 
       : `<p>June will send your ${REINTRO.PCT}% off code to you shortly.</p>`}
       <a class="tx-btn" href="${D}">Start designing</a>
       <div class="tx-garments">${garments}</div>
-    </div></div>${foot}` : `${top}
+    </div></div>${foot}
+    <script>/* Signed up: jtees.net's texts popup (assets/js/texts-popup.js) stops asking. */
+      try { localStorage.setItem('jt_tx_joined', String(Date.now())); } catch (e) {}</script>` : `${top}
     <div class="tx-hero"><h1>Get <span>${REINTRO.PCT}% off</span><br>your next order</h1>
       <p>Join June's Tees texts for new products, seasonal deals and first dibs on specials. Your code is yours right away.</p></div>
     <div class="tx-wrap"><div class="tx-card">

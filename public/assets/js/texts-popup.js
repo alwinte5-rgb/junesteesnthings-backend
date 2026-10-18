@@ -11,7 +11,9 @@
  *     for the tabs or the address bar), after a few seconds on the page;
  *   - phones (no hover, so no exit to see): once they have read a while,
  *     30 seconds on the page and some way down it;
- *   - once a fortnight at most, never again after a sign-up, never while
+ *   - once a fortnight at most, never again after a sign-up (the /texts
+ *     thank-you page sets jt_tx_joined, so only a sign-up the server accepted
+ *     counts, whichever way they joined), never while
  *     someone is typing in the quote form, never on a page that has no
  *     marker for it (tools/site-nav.js adds the script, not to the contact,
  *     SMS or legal pages).
@@ -41,8 +43,8 @@
   if (store.get(KEY_JOINED)) return;
   var seen = parseInt(store.get(KEY_SEEN) || '0', 10) || 0;
   if (Date.now() - seen < AGAIN_MS) return;
-  // Arrived from a text or the sign-up page itself: they already know.
-  if (/[?&]src=(sms|texts)\b/.test(location.search)) return;
+  // Arrived from our texts, emails, shop sign or the sign-up page: they know.
+  if (/[?&]src=(sms|texts|email|shop|receipt)\b/.test(location.search)) return;
 
   var TRANSACTIONAL = "Text me about my order (quotes, order status, pickup and delivery updates) from June's Tees &amp; Things. " +
     'Msg frequency varies. Msg &amp; data rates may apply. Reply STOP to opt out, HELP for help.';
@@ -51,7 +53,7 @@
 
   var STYLE = '' +
     '.jttx-bg{position:fixed;inset:0;z-index:2147483000;background:rgba(8,16,40,.6);display:flex;align-items:center;justify-content:center;padding:16px;font-family:Inter,system-ui,sans-serif}' +
-    '.jttx{background:#fff;border-radius:18px;max-width:420px;width:100%;max-height:92vh;overflow-y:auto;position:relative;box-shadow:0 20px 50px rgba(0,0,0,.3);color:#374151;text-align:left}' +
+    '.jttx{overscroll-behavior:contain;background:#fff;border-radius:18px;max-width:420px;width:100%;max-height:92vh;overflow-y:auto;position:relative;box-shadow:0 20px 50px rgba(0,0,0,.3);color:#374151;text-align:left}' +
     '.jttx-top{background:#0B1F4B;color:#fff;border-radius:18px 18px 0 0;padding:28px 40px 20px;text-align:center}' +
     '.jttx-top h2{margin:0 0 6px;font-size:1.65rem;line-height:1.15;font-weight:800;color:#fff}' +
     '.jttx-top h2 span{color:#F0275A}' +
@@ -98,7 +100,7 @@
   // Someone mid-way through the quote form is not interrupted.
   function busy() {
     var a = document.activeElement;
-    if (a && a.closest && a.closest('form') && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return true;
+    if (a && a.closest && a.closest('#quote-form, .jtqf')) return true;
     var fields = document.querySelectorAll('#quote-form textarea, .jtqf textarea, #quote-form input[name=name], .jtqf input[name=name]');
     for (var i = 0; i < fields.length; i++) if (fields[i].value) return true;
     return false;
@@ -109,6 +111,9 @@
     shown = true;
     store.set(KEY_SEEN, String(Date.now()));
     opener = document.activeElement;
+    // The page behind stays put while the dialog is open (phones scroll-chain).
+    var root = document.documentElement, overflow = root.style.overflow;
+    root.style.overflow = 'hidden';
     if (!document.getElementById('jttx-style')) {
       var st = document.createElement('style');
       st.id = 'jttx-style';
@@ -124,6 +129,7 @@
     var close = function () {
       if (!bg.parentNode) return;
       bg.parentNode.removeChild(bg);
+      root.style.overflow = overflow;
       document.removeEventListener('keydown', onKey);
       if (opener && opener.focus) try { opener.focus(); } catch (e) { /* gone */ }
     };
@@ -151,8 +157,15 @@
       if (form.jtSending) { e.preventDefault(); return; }
       form.jtSending = true;
       form.querySelector('button[type=submit]').disabled = true;
-      store.set(KEY_JOINED, String(Date.now()));
+      // A submit, not a sign-up: /texts may still refuse the number. Sign-ups
+      // are counted from text_signups (source 'popup').
       track('texts_popup_submit');
+    });
+    // Back from the /texts page (bfcache): let them fix the number and resend.
+    window.addEventListener('pageshow', function (e) {
+      if (!e.persisted) return;
+      form.jtSending = false;
+      form.querySelector('button[type=submit]').disabled = false;
     });
     var phone = bg.querySelector('#jttx-phone');
     if (phone && phone.focus) phone.focus();
@@ -169,15 +182,15 @@
   } else {
     var start = Date.now();
     var check = function () {
+      if (shown || Date.now() - start < PHONE_MS) return;
       var max = document.documentElement.scrollHeight - window.innerHeight;
       var depth = max > 0 ? window.scrollY / max : 1;
-      if (Date.now() - start >= PHONE_MS && depth >= PHONE_DEPTH) {
-        window.removeEventListener('scroll', check);
-        clearInterval(timer);
-        show();
-      }
+      if (depth < PHONE_DEPTH) return;
+      show();
+      // Only stop listening once it has actually opened (busy() may defer it).
+      if (shown) window.removeEventListener('scroll', check);
     };
     window.addEventListener('scroll', check, { passive: true });
-    var timer = setInterval(check, 5000);
+    setTimeout(check, PHONE_MS);
   }
 })();

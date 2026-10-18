@@ -37,12 +37,12 @@ const QUOTE_JS = require('./lib/css-tag').scriptTag('/assets/js/quote-form.js');
    to sell. Only jtees.net pages: design.jtees.net has its own cart popup and
    takes the menu and footer snippets, never this tag. */
 const POPUP_JS = require('./lib/css-tag').scriptTag('/assets/js/texts-popup.js');
-const POPUP_ANY = /<script src="\/assets\/js\/texts-popup\.js(?:\?v=[0-9a-f]+)?" defer><\/script>\n?/g;
+// Any tag for it, however written, so a hand-edited one is replaced, not kept.
+const POPUP_ANY = /<script\b[^>]*\bsrc="\/assets\/js\/texts-popup\.js[^"]*"[^>]*>\s*<\/script>\n?/g;
 const NO_POPUP = new Set(['contact.html', 'sms-consent.html', '404.html']);
 function applyPopup(html, rel) {
-  if (NO_POPUP.has(rel)) return html.replace(POPUP_ANY, '');
-  if (!html.includes('/assets/js/texts-popup.js')) return html.replace('</body>', `${POPUP_JS.tag}\n</body>`);
-  return POPUP_JS.put(html);
+  const out = html.replace(POPUP_ANY, '');
+  return NO_POPUP.has(rel) ? out : out.replace('</body>', `${POPUP_JS.tag}\n</body>`);
 }
 
 /* The review strip, above the footer on every page but these: the homepage

@@ -44,6 +44,10 @@ test('it posts the /texts form the server reads, from a counted source', () => {
   assert.strictEqual(REINTRO.cleanSource('popup'), 'popup', 'popup sign-ups are counted as their own source');
   const server = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
   assert.match(server, /app\.post\(REINTRO\.SIGNUP_PATH,/, 'the /texts handler it posts to');
+  // Only a sign-up the server accepted turns the popup off: the thank-you page
+  // sets the flag, the popup's own submit does not.
+  assert.match(server, /localStorage\.setItem\('jt_tx_joined'/);
+  assert.ok(!/setItem\(KEY_JOINED|store\.set\(KEY_JOINED/.test(JS), 'popup submit does not mark them joined');
 });
 
 test('it waits, asks once a fortnight, and never after a sign-up or mid-quote', () => {
