@@ -5938,24 +5938,28 @@ body{margin:0;background:#f7f6f3;font-family:Inter,system-ui,-apple-system,Segoe
 function textsPage({ email = '', first = '', phone = '', error = '', code = '', done = false, again = false, src = 'site' } = {}) {
   const v = (x) => escEmail(String(x || '').slice(0, 254));
   const D = 'https://design.jtees.net';
+  // "Design Lab" and "Start designing" open the designer itself, not the
+  // studio's home page (owner, 2026-10-18), like every other Design Lab link.
+  const LAB = `${D}/editor.php?product_base=14`;
   const garments = [['ssa-33929_f_fm', 'T-shirts', 52], ['ssa-107784_f_fm', 'Hoodies', 53], ['ssa-18365_f_fm', 'Tanks', 54],
     ['ssa-113683_f_fm', 'Kids', 55], ['ssa-36262_f_fm', 'Baby', 56], ['ssa-97052_f_fm', 'Hats', 57]]
     .map(([img, label, cat]) => `<a href="${D}/products.php?category_id=${cat}"><img src="/assets/images/shop/${img}.jpg"
       alt="Custom ${label}" loading="lazy">${label}</a>`).join('');
   const top = `<div class="tx-top"><a href="/"><img src="/assets/images/brand/logo.png" alt="June's Tees &amp; Things"></a></div>`;
   const foot = `<div class="tx-foot">June's Tees &amp; Things &middot; 3047 N Lincoln Ave, Chicago &middot; (773) 900-4592<br>
-    <a href="/">jtees.net</a> &middot; <a href="${D}">Design Lab</a> &middot; <a href="/sms-terms">SMS terms</a> &middot;
+    <a href="/">jtees.net</a> &middot; <a href="${LAB}">Design Lab</a> &middot; <a href="/sms-terms">SMS terms</a> &middot;
     <a href="${D}/privacy.php">Privacy</a></div>`;
   const body = done ? `${top}
     <div class="tx-hero"><h1>${again ? "You're already <span>on the list!</span>" : "You're in. <span>Thank you!</span>"}</h1>
-      <p>${code ? "Here's your code. We've texted it to you too." : "Your code is on its way."}</p></div>
+      <p>${!code ? 'Your code is on its way.' : again ? 'This is the code we sent you when you signed up.'
+        : "Here's your code. We've texted it to you too."}</p></div>
     <div class="tx-wrap"><div class="tx-card" style="text-align:center">
       ${code ? `<div style="font-weight:700;color:#0B1F4B">Your ${REINTRO.PCT}% off code</div>
         <div class="tx-code">${escEmail(code)}</div>
         <p class="tx-small">Use it at checkout in the Design Lab, or mention it when you get a quote.
           Good once, for ${REINTRO.CODE_DAYS} days.</p>`
       : `<p>June will send your ${REINTRO.PCT}% off code to you shortly.</p>`}
-      <a class="tx-btn" href="${D}">Start designing</a>
+      <a class="tx-btn" href="${LAB}">Start designing</a>
       <div class="tx-garments">${garments}</div>
     </div></div>${foot}
     <script>/* Signed up: jtees.net's texts popup (assets/js/texts-popup.js) stops asking. */
@@ -19629,7 +19633,7 @@ async function sendDiscountEmail(code, email, extra) {
           border-radius:10px;padding:14px 26px;font-size:26px;font-weight:800;
           letter-spacing:2px;color:#0B1F4B;font-family:ui-monospace,Menlo,monospace">${escEmail(c.code)}</span></p>
         <p style="color:#374151">Enter it at checkout${rules ? ' — ' + escEmail(rules) : ''}.</p>
-        <p style="margin-top:18px"><a href="${STUDIO_BASE}"
+        <p style="margin-top:18px"><a href="${STUDIO_BASE}/editor.php?product_base=14"
            style="background:#1848B8;color:#fff;padding:12px 24px;border-radius:100px;
            text-decoration:none;font-weight:700">Start designing &rarr;</a></p>
         <p style="color:#6b7280;font-size:13px;margin-top:18px">${escEmail(SHOP_SIGNER)} &middot;
