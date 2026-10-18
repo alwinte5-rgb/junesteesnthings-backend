@@ -113,7 +113,14 @@ html{overflow-x:clip;}
 /* The shared footer (tools/site-nav.js). Every property is set here so no
    page's own footer styles leak in. */
 .jtf{background:#0B1F4B!important;color:rgba(255,255,255,.78)!important;font:400 .92rem/1.6 Inter,system-ui,sans-serif!important;padding:3.2rem 0 1.4rem!important;margin:0!important;border:0!important;text-align:left!important;}
-.jtf-in{max-width:1200px;margin:0 auto;padding:0 1.5rem;display:grid;grid-template-columns:minmax(0,1.6fr) repeat(auto-fit,minmax(150px,1fr));gap:2rem 1.6rem;}
+.jtf-in{max-width:1200px;margin:0 auto;padding:0 1.5rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:2rem 1.6rem;}
+/* The brand block is a full-width top row (logo, pitch and texts on the left;
+   service area and buttons on the right): squeezed into a column beside six
+   link columns it wrapped a word per line (owner, 2026-10-18: "squished"). */
+.jtf-brand{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);column-gap:2.5rem;align-items:start;padding-bottom:1.6rem;border-bottom:1px solid rgba(255,255,255,.14);}
+.jtf-brand>.jtf-logo{grid-area:1/1;}.jtf-brand>p:nth-of-type(1){grid-area:2/1;}.jtf-brand>p:nth-of-type(2){grid-area:3/1;}
+.jtf-brand>p:nth-of-type(3){grid-area:1/2;}.jtf-brand>.jtf-social{grid-area:2/2;}
+@media(max-width:1100px){.jtf-brand{grid-template-columns:1fr;}.jtf-brand>*{grid-area:auto!important;}}
 .jtf a{color:rgba(255,255,255,.82);text-decoration:none;}
 .jtf a:hover{color:#fff;text-decoration:underline;}
 .jtf p{margin:0 0 .8rem;color:rgba(255,255,255,.72);font-size:.9rem;max-width:34rem;}
