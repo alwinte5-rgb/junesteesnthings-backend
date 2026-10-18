@@ -13,37 +13,63 @@ const { selectWanted, productInsertSql, parseIds } = require('../tools/lib/ssa-s
 const { classify } = require('../tools/lib/garments');
 
 const enc = (o) => Buffer.from(encodeURIComponent(JSON.stringify(o))).toString('base64');
+/* Two colours; `wired` lists which of them have a real-photo canvas. */
+const attrs = enc({ COL: { type: 'product_color', values: { options: [{ title: 'Black', value: '#000001' }, { title: 'White', value: '#fffffe' }] } },
+  QTYS: { type: 'quantity' } });
+/* What wire.js writes: each placement of the garment's set, on that colour's photo. */
+const KEYS = { closed: ['front', 'left_chest', 'back'], open: ['front', 'right_chest', 'back'], cap: ['front'] };
+const st = (keys, v = '000001') => Object.fromEntries(keys.map((k) => [k,
+  { label: k, image: 'https://res.cloudinary.com/x/' + v + '-' + (k === 'back' ? 'back' : 'front') + '.webp' }]));
+const photo = (v, keys = KEYS.closed) => ({ cfgstages: true, conditions: { COL: v }, stages: st(keys, v.slice(1)) });
+const vars = (...vals) => enc({ variations: Object.fromEntries(vals.map((v, i) => [String(i + 1), photo(v)])) });
+const varsFor = (keys, ...vals) => enc({ variations: Object.fromEntries(vals.map((v, i) => [String(i + 1), photo(v, keys)])) });
 const tee = {
   name: 'Shaka Wear SHMHO Unisex Max Heavyweight Oversized Tee', price: '13.36',
-  stages: enc({ front: { url: 'products/basic_tshirt_front.png' }, back: { url: 'products/basic_tshirt_back.png' } }),
+  stages: enc(st(KEYS.closed)),
   printings: encodeURIComponent(JSON.stringify({ _1: 'A3', _64: 'A3' })),
-  attributes: 'xyz', thumbnail_url: 'https://cdn.ssactivewear.com/a.jpg', description: '• 7.5 oz cotton',
+  attributes: attrs, variations: vars('#000001', '#fffffe'),
+  thumbnail_url: 'https://cdn.ssactivewear.com/a.jpg', description: '• 7.5 oz cotton',
 };
 
-test('a fully set-up tee is ready', () => {
+test('a tee with a real photo for every colour is ready', () => {
   assert.strictEqual(notReady(tee), null);
 });
 
-test('each missing piece holds it back, and says which', () => {
-  assert.match(notReady({ ...tee, stages: '' }), /canvas: no stages/);
+test('owner, 2026-10-18: held back only for missing product images (or a broken basic)', () => {
+  assert.match(notReady({ ...tee, variations: vars('#000001') }), /no product images for 1 of 2/);
+  assert.match(notReady({ ...tee, variations: '' }), /no product images for 2 of 2/);
   assert.match(notReady({ ...tee, printings: '' }), /no decoration/);
-  assert.match(notReady({ ...tee, attributes: '' }), /no sizes/);
   assert.match(notReady({ ...tee, price: '0' }), /no price/);
   assert.match(notReady({ ...tee, thumbnail_url: 'http://x/a.jpg' }), /no catalogue photo/);
   assert.match(notReady({ ...tee, description: '' }), /no description/);
   assert.strictEqual(notReady({ ...tee, description: '' }, { desc: '• from S&S' }), null, 'a description S&S supplied counts');
 });
 
-test('a jacket on the sweatshirt canvas is the wrong garment', () => {
-  const jacket = { ...tee, name: 'Shaka Wear SHCJ Unisex Coaches Jacket',
-    stages: enc({ front: { url: 'products/hoodies_sweatshirt_front.png' } }) };
-  assert.match(notReady(jacket), /canvas: a jacket drawn on/);
+test('jackets and caps with real photos and their own placements go live too', () => {
+  for (const [name, keys] of [['Shaka Wear SHCJ Unisex Coaches Jacket', KEYS.open], ['Yupoong 1501KC Cuffed Beanie', KEYS.cap]])
+    assert.strictEqual(notReady({ ...tee, name, stages: enc(st(keys)), variations: varsFor(keys, '#000001', '#fffffe') }), null, name);
 });
 
-test('stand-in canvas art is held back unless accepted', () => {
-  const beanie = { ...tee, name: 'Yupoong 1501KC Cuffed Beanie', stages: enc({ front: { url: 'products/hat_front.png' } }) };
-  assert.match(notReady(beanie), /stand-in canvas/);
-  assert.strictEqual(notReady(beanie, { acceptStandin: true }), null);
+/* Code review 2026-10-18: "ready" used to mean only "every colour has a
+   photo", so a product wire.js wired through its copy-the-box fallback — one
+   full front over a jacket's zipper — would have gone live. */
+test('a product, or any one colourway, without the garment\'s full placement set is held back', () => {
+  const jacket = { ...tee, name: 'Shaka Wear SHCJ Unisex Coaches Jacket' };
+  assert.match(notReady({ ...jacket, stages: enc(st(['front', 'back'])), variations: varsFor(['front', 'back'], '#000001', '#fffffe') }),
+    /placements: has front \/ back, wants Left chest \/ Right chest \/ Back/);
+  const mixed = enc({ variations: { 1: photo('#000001', KEYS.open), 2: photo('#fffffe', ['front', 'back']) } });
+  assert.match(notReady({ ...jacket, stages: enc(st(KEYS.open)), variations: mixed }), /1 colourway\(s\) without the full placement set/);
+});
+
+test('a colour counts as photographed only when EVERY placement shows its photo', () => {
+  const half = enc({ variations: { 1: photo('#000001'), 2: { ...photo('#fffffe'),
+    stages: { ...st(KEYS.closed, 'fffffe'), back: { label: 'back', url: 'products/basic_tshirt_back.png' } } } } });
+  assert.match(notReady({ ...tee, variations: half }), /no product images for 1 of 2/);
+});
+
+test('a staged product with colours but no size list is held back', () => {
+  const colourOnly = enc({ COL: { type: 'product_color', values: { options: [{ title: 'Black', value: '#000001' }, { title: 'White', value: '#fffffe' }] } } });
+  assert.match(notReady({ ...tee, attributes: colourOnly }), /no sizes/);
 });
 
 test('S&S HTML becomes plain bullet lines', () => {

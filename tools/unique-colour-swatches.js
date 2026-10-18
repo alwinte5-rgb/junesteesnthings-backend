@@ -55,7 +55,8 @@ process.stdin.on('data', (d) => (buf += d));
 process.stdin.on('end', () => {
   const url = urlFromStdinJson(buf);
   const rows = mysql(url,
-    'SELECT id, name, attributes FROM lumise_products WHERE active=1 ORDER BY id;', { rows: true });
+    /* Staged products too: wire.js refuses a product whose swatches repeat. */
+    "SELECT id, name, attributes FROM lumise_products WHERE active=1 OR supplier='ssa-staged' ORDER BY id;", { rows: true });
 
   const stmts = [];
   let touched = 0, colours = 0;

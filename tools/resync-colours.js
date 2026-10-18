@@ -4,6 +4,7 @@
  *   node tools/resync-colours.js --vars=<file>            # report only
  *   node tools/resync-colours.js --vars=<file> --apply
  *   node tools/resync-colours.js --vars=<file> 97 --apply # one product
+ *   railway run ... -- node tools/resync-colours.js --from-env [--apply]
  *
  * WHY
  * ---
@@ -36,9 +37,12 @@ const argv = process.argv.slice(2);
 const APPLY = argv.includes('--apply');
 const only = argv.filter((a) => /^\d+$/.test(a)).map(Number);
 const varsFile = (argv.find((a) => a.startsWith('--vars=')) || '').split('=').slice(1).join('=');
-if (!varsFile) { console.error('usage: resync-colours.js --vars=<file> [productId...] [--apply]'); process.exit(2); }
+const FROM_ENV = argv.includes('--from-env');
+if (!varsFile && !FROM_ENV) { console.error('usage: resync-colours.js --vars=<file>|--from-env [productId...] [--apply]'); process.exit(2); }
 
-const env = JSON.parse(fs.readFileSync(varsFile, 'utf8'));
+/* --from-env: under `railway run` (app service for S&S, MySQL service for the
+   database) the values reach this process's environment and nowhere else. */
+const env = FROM_ENV ? process.env : JSON.parse(fs.readFileSync(varsFile, 'utf8'));
 const url = env.MYSQL_PUBLIC_URL || env.MYSQL_URL;
 const auth = 'Basic ' + Buffer.from(env.SSA_ACCOUNT + ':' + env.SSA_API_KEY).toString('base64');
 
@@ -80,7 +84,10 @@ async function ssaColours(styleId) {
   const where = only.length ? ' AND id IN (' + only.join(',') + ')' : '';
   const rows = mysql(url,
     'SELECT id, name, attributes, variations, supplier_style_id FROM lumise_products ' +
-    'WHERE active=1' + where + ' ORDER BY id;', { rows: true });
+    /* Staged products (quote form only, tools/lib/ssa-staged.js) are checked
+       too: they get real-photo art before they go live, and wire.js keys that
+       art on the colour list. */
+    "WHERE (active=1 OR supplier='ssa-staged')" + where + ' ORDER BY id;', { rows: true });
 
   console.log((APPLY ? 'APPLYING' : 'REPORT ONLY — nothing is written') +
     '  ·  ' + rows.length + ' active products\n');
@@ -154,13 +161,23 @@ async function ssaColours(styleId) {
     const key = colKey || 'COL';
     next[key] = { id: key, name: (colKey && attrs[colKey].name) || 'Color', type: 'product_color',
       title: '', values: { options } };
-    writes.push({ id: pid, blob: enjson(next) });
+    writes.push({ id: pid, blob: enjson(next), was: p.attributes });
   }
 
   console.log('\n  ' + clean + ' already correct · ' + changed + ' differ · ' + failed + ' could not be checked');
   if (orphanTotal) console.log('  ' + orphanTotal + ' wired colourway(s) would lose their colour — their art is orphaned, not deleted');
 
   if (!APPLY) { console.log('\n  report only — pass --apply to write'); return; }
+  /* The attribute blobs being replaced, saved first. A colour that S&S has
+     dropped leaves the product with this write, and once it is gone nothing
+     else in the shop remembers its title or its hex. */
+  if (writes.length) {
+    const dir = require('path').join(require('os').homedir(), 'jtees-backups');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = require('path').join(dir, 'resync-colours-' + new Date().toISOString().replace(/[:.]/g, '-') + '.json');
+    fs.writeFileSync(file, JSON.stringify(writes.map((w) => ({ id: w.id, attributes: w.was })), null, 1));
+    console.log('  backup ' + file);
+  }
   for (const w of writes) mysql(url, 'UPDATE lumise_products SET attributes=' + sq(w.blob) + ' WHERE id=' + w.id + ';');
   console.log('  ' + writes.length + ' products rewritten.');
 })();

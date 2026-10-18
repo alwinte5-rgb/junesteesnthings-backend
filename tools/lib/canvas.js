@@ -35,6 +35,11 @@ const decodeStages = (b) => { try { return JSON.parse(decodeURIComponent(Buffer.
 function canvasVerdict(p) {
   const st = decodeStages(p.stages);
   if (!st || !Object.keys(st).length) return { verdict: 'unusable', why: 'no stages at all' };
+  /* The REAL photograph (tools/product-art: an https `image`, drawn under the
+     design) is the garment itself, whatever its file is called — the right
+     garment by construction. */
+  const real = Object.values(st).filter((s) => s && /^https:\/\//.test(String(s.image || '')));
+  if (real.length && real.length === Object.keys(st).length) return { verdict: 'ok', cls: classify(p.name), real: true };
   const art = Object.values(st).map((s) => String((s && s.url) || '')).join(' ');
   if (!art.trim()) return { verdict: 'unusable', why: 'stages carry no artwork url' };
   const cls = classify(p.name);
@@ -49,4 +54,17 @@ function canvasVerdict(p) {
   return { verdict: 'bad', cls, art: art.replace(/products\//g, '').replace(/\.png/g, '') };
 }
 
-module.exports = { OK_ART, canvasVerdict, decodeStages };
+/** How many of a product's colours have a real-photo canvas (a cfgstages
+ *  variation carrying an https image), from its decoded attributes and
+ *  variations. { colours, withPhotos } — equal when every colour has one. */
+function photoCoverage(attrs, vars) {
+  const col = Object.values(attrs || {}).find((a) => a && a.type === 'product_color');
+  const opts = (col && col.values && col.values.options) || [];
+  const wired = new Set(Object.values((vars && vars.variations) || {})
+    .filter((v) => v && v.cfgstages && v.stages &&
+      Object.values(v.stages).every((s) => /^https:\/\//.test(String((s && s.image) || ''))))
+    .map((v) => Object.values(v.conditions || {})[0]));
+  return { colours: opts.length, withPhotos: opts.filter((o) => wired.has(o.value)).length };
+}
+
+module.exports = { OK_ART, canvasVerdict, decodeStages, photoCoverage };
