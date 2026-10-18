@@ -6731,8 +6731,13 @@ app.post('/api/reorder', requireInternalKey, async (req, res) => {
       return res.json({ ok: true, code: open[0].code, held: open[0].status === 'held', url: quoteLink(open[0].code), existing: true });
     }
     const locked = PARTNERS.lockOpen(o.first_paid_at);
+    /* A tax exemption is the certificate holder's, so it carries over only
+       when the same person reorders; anyone else on the business is quoted
+       with tax, and the shop can apply their certificate if they have one. */
+    const sameBuyer = String(o.email || '').trim().toLowerCase() === email;
     const draft = {
       ...o, items, rush_pct: 0, delivery_fee: 0, discount_kind: 'amt', discount_value: 0, email,
+      ...(sameBuyer ? {} : { taxable: true, tax: 0 }),
     };
     /* REORDER5, as the designer checked it for this customer and sent with
        the request (jt_biz_reorder_promo). Not asked for again from here: the
@@ -6762,8 +6767,9 @@ app.post('/api/reorder', requireInternalKey, async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,0,$16,$17,$18,$19,$20,$21,$22,$23,
                CASE WHEN $11 = 'held' THEN NOW() END)`,
       [code, o.name, o.phone, email, JSON.stringify(items), tt.subtotal, tt.tax, tt.total, tt.deposit, note,
-       locked ? 'sent' : 'held', validUntil, disc.kind, disc.value, disc.note, quoteTaxable(o),
-       o.tax_exempt_ref || null, o.tax_exempt_reason || null, o.tax_certificate_id || null,
+       locked ? 'sent' : 'held', validUntil, disc.kind, disc.value, disc.note, sameBuyer ? quoteTaxable(o) : true,
+       sameBuyer ? o.tax_exempt_ref || null : null, sameBuyer ? o.tax_exempt_reason || null : null,
+       sameBuyer ? o.tax_certificate_id || null : null,
        o.ship_method || null, o.ship_to ? JSON.stringify(o.ship_to) : null, promo, src]);
     if (NOTIFY_EMAIL) {
       sendEmail({
