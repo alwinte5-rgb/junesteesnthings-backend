@@ -125,8 +125,11 @@ test('the quote save refuses a locked change before writing anything', () => {
 
 test('sales tax is automatic for a helper: the form cannot take it off', () => {
   const save = route("app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin");
-  assert.match(save, /const taxable = staffTax\s*\? !\(prior && prior\.taxable === false\)/);
-  assert.match(save, /: staffTax \? \(prior\.tax_exempt_ref \|\| null\)/, 'a helper keeps the owner\'s exemption note, never their own');
+  /* basis is the quote being edited, or (2026-10-19) the same customer's job
+     a reorder copies: either way an exemption the owner set, never the form's. */
+  assert.match(save, /const basis = prior \|\| reorderOf;/);
+  assert.match(save, /const taxable = staffTax\s*\? !\(basis && basis\.taxable === false\)/);
+  assert.match(save, /: staffTax \? \(basis\.tax_exempt_ref \|\| null\)/, 'a helper keeps the owner\'s exemption note, never their own');
   assert.match(src, /isOwner\(\) \? '' : ' disabled title="Tax is set automatically"'/, 'the box is locked on the form');
 });
 
