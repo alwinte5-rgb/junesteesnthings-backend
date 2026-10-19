@@ -331,7 +331,8 @@ test('the owner marks video call, hired or rejected; rejecting closes open tests
 test('hired is not on Team yet: the card offers Add to Team, and the Staff form takes the name', () => {
   const card = src.slice(src.indexOf('function hireDecisionCard'), src.indexOf('function hireRound2Card'));
   assert.match(card, /href="\/admin\/staff\?\$\{new URLSearchParams\(\{ add_name: r\.name/, 'hired links to the add form, pre-filled');
-  assert.match(src, /<div class="card" id="add"><b>Add a helper<\/b>/);
+  assert.match(src, /<details class="fold" id="add"\$\{\(req\.query \|\| \{\}\)\.add_track \|\| \(req\.query \|\| \{\}\)\.add_name/,
+    'the add form opens itself when Hiring sends a name');
   assert.match(src, /name="name" placeholder="Name" required maxlength="80" value="\$\{escEmail\(text\(\(req\.query \|\| \{\}\)\.add_name, 80\)\)\}"/, 'escaped and capped');
 });
 
