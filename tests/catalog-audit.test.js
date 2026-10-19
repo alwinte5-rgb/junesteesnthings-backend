@@ -72,3 +72,40 @@ test('a size field that cannot be read is reported, not passed', () => {
   const attributes = enjson({ QTYS: { id: 'QTYS', type: 'quantity', values: '{"multiple_options":[{"title":"S"' } });
   assert.strictEqual(localChecks({ name: 'Gildan 5000 Tee', attributes }).sizes, 'size field unreadable');
 });
+
+/* 2026-10-19 checks, each from a fault the owner found by eye that day. */
+const encS = (o) => Buffer.from(encodeURIComponent(JSON.stringify(o))).toString('base64');
+const colours = (...t) => enjson({ COL: { type: 'product_color', values: { options: t.map((x, i) => ({ title: x, value: '#00000' + i })) } } });
+const drawn = (art) => encS({ front: { url: 'products/' + art + '_front.png' }, back: { url: 'products/' + art + '_back.png' } });
+
+test('naming: a fit word S&S uses is kept (oversized, cropped, muscle, pocket)', () => {
+  assert.match(ssaChecks({ name: 'Shaka Wear SHMHO Unisex Heavyweight Tee', thumb: '' }, { title: 'Unisex Max Heavyweight Oversized Tee' }, []).naming, /S&S calls it/);
+  assert.strictEqual(ssaChecks({ name: 'Shaka Wear SHMHO Unisex Max Heavyweight Oversized Tee', thumb: '' }, { title: 'Unisex Max Heavyweight Oversized Tee' }, []).naming, 'ok');
+  assert.match(ssaChecks({ name: 'Artisan Collection RP144 Annex Oxford Shirt', thumb: '' }, { title: 'Annex Oxford Bib Apron' }, []).naming, /Bib Apron/);
+});
+
+test('description: a fabric weight we state must be S&S\'s', () => {
+  assert.strictEqual(ssaChecks({ name: 'X 1 Tee', thumb: '', description: '• 6.1 oz cotton' }, { title: 'Tee', description: '<li>5.3 oz./yd²</li>' }, []).description, 'says 6.1 oz, S&S says 5.3 oz');
+  assert.strictEqual(ssaChecks({ name: 'X 1 Tee', thumb: '', description: '• 5.3 oz cotton' }, { title: 'Tee', description: '5.3 oz' }, []).description, 'ok');
+});
+
+test('canvas: a fit or pattern a drawing cannot show is flagged (#365 muscle, #357 cropped, #251 dip dye)', () => {
+  assert.match(localChecks({ name: 'Shaka Wear SHGMT Unisex Garment-Dyed Muscle Tee', attributes: colours('Black'), stages: drawn('basic_tshirt') }).canvas, /wrong garment drawing/);
+  assert.match(localChecks({ name: 'Shaka Wear SHMCS Unisex Max Heavyweight Cropped Tee', attributes: colours('Black'), stages: drawn('basic_tshirt') }).canvas, /generic drawing for a Cropped garment/);
+  assert.match(localChecks({ name: 'Champion CD100D Unisex Classic Jersey Dip Dye T-Shirt', attributes: colours('Army Ombre'), stages: drawn('basic_tshirt') }).canvas, /cannot show its pattern/);
+  assert.match(localChecks({ name: 'Gildan 5000 Tee', attributes: colours('Black'), stages: drawn('basic_tshirt') }).canvas, /^drawing/);
+});
+
+test('category: filed exactly where the tree says', () => {
+  const { treeSlugs } = require('../tools/categorise-products');
+  const p = { name: 'Gildan 18500 Heavy Blend Hooded Sweatshirt', attributes: colours('Black') };
+  assert.strictEqual(localChecks(p, { cats: ['custom-hoodies-sweatshirts', 'custom-pullover-hoodies'], treeSlugs }).category, 'ok');
+  assert.match(localChecks(p, { cats: ['custom-hoodies-sweatshirts'], treeSlugs }).category, /missing pullover-hoodies/);
+  assert.match(localChecks(p, { cats: [], treeSlugs }).category, /missing/);
+});
+
+test('swatch photos: a colour with no photo of its own is counted', () => {
+  const vars = enjson({ variations: { 1: { cfgstages: true, conditions: { COL: '#000000' }, stages: { front: { image: 'https://res.cloudinary.com/x/a.webp' } } } },
+    jt_listing: { '#000001': 'https://cdn.ssactivewear.com/m.jpg' } });
+  assert.strictEqual(localChecks({ name: 'Gildan 5000 Tee', attributes: colours('Black', 'White', 'Red'), variations: vars }).swatchPhotos, '1/3 colours show another colour\'s photo');
+});

@@ -42,7 +42,19 @@ const { makeClient } = require('./lib/ssa-client');
 const { sellPrice, sizeUpcharge } = require('./lib/markup');
 const { classify, decorationsFor, resolveRoles } = require('./lib/garments');
 const { placementSet, SETS } = require('./lib/placements');
-const { decodeStages, photoCoverage } = require('./lib/canvas');
+const { decodeStages, photoCoverage, canvasVerdict } = require('./lib/canvas');
+/* publish-staged requires this file, so its pattern rule is loaded on use. */
+const patterned = (p) => require('./publish-staged').patterned(p);
+
+/* Fit and pattern words: a name may drop the fabric, not the cut a shopper is
+   choosing (owner, 2026-10-19: the oversized tee, muscle tee and cropped tee
+   all reached the designer as a plain tee). */
+const FIT_WORDS = ['cropped', 'crop', 'oversized', 'boxy', 'muscle', 'pocket', 'v-neck', 'raglan', 'tie-dyed', 'tie-dye',
+  'dip', 'camo', 'ombre', 'colorblast', 'tall', 'youth', 'toddler', 'infant', 'women\'s', 'zip', 'full-zip', 'quarter-zip'];
+/* The garment's shape that a drawing cannot show: a fit word on a drawn canvas. */
+const DRAWN_FIT = /\b(crop(ped)?|oversized|boxy|muscle|pocket|raglan|dip.?dye|tie.?dye|ombr[eé]|colou?rblast|camo)\b/i;
+/* A fabric weight a description states, in oz. */
+const ozOf = (t) => { const m = String(t || '').match(/(\d+(?:\.\d+)?)\s*oz/i); return m ? Number(m[1]) : null; };
 const { costBySize, baseCostOf, readSizes } = require('./lib/ssa-costs');
 
 /* Garment words that must survive from S&S's title into the product's name. A
@@ -94,7 +106,12 @@ function ssaChecks(p, style, prods) {
   /* "Hoodie" is how a shopper says S&S's "Hooded Sweatshirt". */
   if (have.has('hoodie')) have.add('hooded');
   const lost = GARMENT_WORDS.filter((w) => title.has(w) && !have.has(w));
-  out.naming = lost.length ? 'S&S calls it "' + style.title + '"' : 'ok';
+  const lostFit = FIT_WORDS.filter((w) => title.has(w) && !have.has(w) && !(w === 'crop' && have.has('cropped')));
+  out.naming = lost.length || lostFit.length ? 'S&S calls it "' + style.title + '"' : 'ok';
+  /* description: a fabric weight we state must be S&S's. */
+  const ours = ozOf(String(p.description || '').replace(/<[^>]+>/g, ' ')), theirs = ozOf(String((style && style.description) || '').replace(/<[^>]+>/g, ' '));
+  out.description = ours != null && theirs != null && Math.abs(ours - theirs) > 0.05
+    ? 'says ' + ours + ' oz, S&S says ' + theirs + ' oz' : 'ok';
   return out;
 }
 
@@ -107,7 +124,7 @@ function expectedKeys(set) {
 }
 
 /** Every check for one product that needs no network. Exported for tests. */
-function localChecks(p, { roleIds = {} } = {}) {
+function localChecks(p, { roleIds = {}, cats = null, treeSlugs = null } = {}) {
   const out = {};
   const attrs = dejson(p.attributes) || {};
   const col = Object.values(attrs).find((a) => a && a.type === 'product_color');
@@ -152,6 +169,34 @@ function localChecks(p, { roleIds = {} } = {}) {
     : same(keys) ? 'ok'
       : 'has ' + (keys.map((k) => (st[k] && st[k].label) || k).join(' / ') || 'none') + ', wants ' +
         exp.map((k) => ((SETS[set] || []).find((s) => s.key === k) || { label: k }).label).join(' / ');
+  /* canvas: what the designer draws under a customer's design. */
+  const v = canvasVerdict(p);
+  const pat = (Number(cov.withPhotos) === 0) ? patterned(p) : null;
+  out.canvas = v.verdict === 'bad' ? 'wrong garment drawing (' + v.art + ')'
+    : v.verdict === 'unusable' ? 'unusable: ' + v.why
+    : v.verdict === 'borrowed' ? 'drawn as ' + v.sub.looks
+    : v.real ? 'ok'
+    : pat ? 'drawing cannot show its pattern (' + pat + ')'
+    : DRAWN_FIT.test(p.name) ? 'generic drawing for a ' + p.name.match(DRAWN_FIT)[0] + ' garment'
+    : 'drawing (no real photo)';
+  /* category: filed exactly where the tree says. */
+  if (cats && treeSlugs) {
+    const want = new Set(treeSlugs(p.name)), have = new Set(cats);
+    const missing = [...want].filter((x) => !have.has(x)), extra = [...have].filter((x) => x.startsWith('custom-') && !want.has(x) && x !== 'custom-sustainable-apparel' && !/banners|signs|graphics|panels|cutouts|displays/.test(x));
+    out.category = !want.size && !have.size ? 'in no category'
+      : missing.length || extra.length ? (missing.length ? 'missing ' + missing.join(', ').replace(/custom-/g, '') : '') + (extra.length ? ' extra ' + extra.join(', ').replace(/custom-/g, '') : '') : 'ok';
+  }
+  /* swatch photos: every colour shows its own photo on the product page. */
+  const vars = dejson(p.variations) || {};
+  const photoKeys = new Set();
+  for (const vv of Object.values(vars.variations || {})) {
+    if (!vv || !vv.cfgstages || !vv.conditions) continue;
+    const hex = String(Object.values(vv.conditions)[0] || '').toLowerCase();
+    if (Object.values(vv.stages || {}).some((x) => /^https:\/\//.test(String((x && x.image) || '')))) photoKeys.add(hex);
+  }
+  for (const k of Object.keys(vars.jt_listing || {})) photoKeys.add(String(k).toLowerCase());
+  const noPhoto = opts.filter((o) => !photoKeys.has(String(o.value).toLowerCase())).map((o) => o.title);
+  out.swatchPhotos = opts.length < 2 ? 'ok' : noPhoto.length ? noPhoto.length + '/' + opts.length + ' colours show another colour\'s photo' : 'ok';
   return out;
 }
 
@@ -174,10 +219,17 @@ async function main(buf) {
     "IFNULL(description,'') description FROM lumise_products " +
     "WHERE active=1 OR supplier='ssa-staged' ORDER BY id;", { rows: true });
   if (ids.length) rows = rows.filter((r) => ids.includes(Number(r.id)));
+  const { treeSlugs } = require('./categorise-products');
+  const catsBy = {};
+  for (const c of mysql(url, "SELECT r.item_id id, c.slug FROM lumise_categories_reference r JOIN lumise_categories c ON c.id=r.category_id WHERE r.type='products';", { rows: true }))
+    (catsBy[c.id] = catsBy[c.id] || []).push(c.slug);
 
   const report = [];
   for (const p of rows) {
-    const r = { id: Number(p.id), name: p.name, staged: p.supplier === 'ssa-staged', ...localChecks(p, { roleIds }) };
+    /* A staged style is filed when it is published (publish-staged.js), so
+       only a live product's categories are judged. */
+    const staged = p.supplier === 'ssa-staged';
+    const r = { id: Number(p.id), name: p.name, staged, ...localChecks(p, { roleIds, cats: staged ? null : catsBy[p.id] || [], treeSlugs }) };
     if (!Number(p.sid)) {
       /* Shop-made: nothing to compare with S&S, but it is still judged — the
          owner switched signs off on 2026-10-18 for having no sizes, shape,
@@ -209,8 +261,8 @@ async function main(buf) {
     report.push(r);
   }
 
-  const CHECKS = ['identity', 'naming', 'colours', 'swatches', 'price', 'sizes', 'upcharges', 'decoration',
-    'photos', 'placements', 'listing', 'copy', 'shopmade'];
+  const CHECKS = ['identity', 'naming', 'description', 'colours', 'swatches', 'swatchPhotos', 'price', 'sizes', 'upcharges', 'decoration',
+    'photos', 'placements', 'canvas', 'category', 'listing', 'copy', 'shopmade'];
   const bad = (r) => CHECKS.filter((k) => r[k] && r[k] !== 'ok' && r[k] !== '-' && !String(r[k]).startsWith('shop-made'));
   console.log('CATALOGUE INVENTORY — ' + report.length + ' products (' + report.filter((r) => r.staged).length + ' staged)\n');
   for (const r of report) {
