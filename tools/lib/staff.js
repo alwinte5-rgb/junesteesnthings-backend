@@ -468,6 +468,12 @@ const ROUTES = {
   'POST /admin/mailbox/:id/status': 'any',
   'POST /admin/mailbox/:id/edit': 'any',
   'GET /admin/mailbox/file/:id': 'any',
+  /* Notifications: each route reads and writes only the caller's own rows. */
+  'GET /admin/notifications': 'any',
+  'POST /admin/notifications/:id/open': 'any',
+  'POST /admin/notifications/read-all': 'any',
+  'GET /admin/notifications/settings': 'any',
+  'POST /admin/notifications/settings': 'any',
   'GET /admin/staff': 'owner',
   'POST /admin/staff': 'owner',
   'POST /admin/staff/:id': 'owner',

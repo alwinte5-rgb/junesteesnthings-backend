@@ -104,6 +104,7 @@ const QEXAM = require('./tools/lib/quote-exam');
 const RUSH = require('./tools/lib/rush');
 const CHAN = require('./tools/lib/team-channels');
 const MB = require('./tools/lib/mailbox');
+const NOTIFY = require('./tools/lib/notifications');
 const { NEXT_PRESET, CHANNEL_TRACKS, TRACKS: JOB_TRACKS } = require('./tools/lib/tracks');
 const CHATFILES = require('./tools/lib/team-chat-files');
 const JOBNOTES = require('./tools/lib/job-notes');
@@ -1462,6 +1463,34 @@ async function initStaffTables() {
       reader      TEXT NOT NULL,
       seen_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       PRIMARY KEY (message_id, reader)
+    )`);
+  /* Notifications (tools/lib/notifications.js): one row per thing the bell
+     shows a person. Made by notifySweep() from the records the shop already
+     keeps; UNIQUE (recipient, kind, ref) is what makes a second sweep, or a
+     retried webhook behind a record, add nothing. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id          BIGSERIAL PRIMARY KEY,
+      recipient   TEXT NOT NULL,
+      kind        TEXT NOT NULL,
+      title       TEXT NOT NULL,
+      link        TEXT NOT NULL,
+      ref         TEXT NOT NULL,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      read_at     TIMESTAMPTZ,
+      emailed_at  TIMESTAMPTZ,
+      UNIQUE (recipient, kind, ref)
+    )`);
+  await pool.query('CREATE INDEX IF NOT EXISTS notifications_recipient_idx ON notifications (recipient, created_at DESC)');
+  await pool.query('CREATE INDEX IF NOT EXISTS notifications_unread_idx ON notifications (recipient) WHERE read_at IS NULL');
+  /* Which kinds also send an email, per person; a kind with no row uses its
+     default (NOTIFY.KINDS). Message kinds use team_chat_prefs instead. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS notification_prefs (
+      reader  TEXT NOT NULL,
+      kind    TEXT NOT NULL,
+      email   BOOLEAN NOT NULL,
+      PRIMARY KEY (reader, kind)
     )`);
   /* The two channels the team starts with, made once. */
   await pool.query(`INSERT INTO team_channels (name, audience)
@@ -10578,6 +10607,8 @@ const ADMIN_NAV = [
   { key: 'partners',   href: '/admin/partners',      label: 'Partners',   icon: 'users', when: () => PARTNERS.on() },
   { key: 'calendar',   href: '/admin/marketing-calendar', label: 'Marketing calendar', icon: 'clock' },
   { key: 'campaign',   href: '/admin/campaign',      label: 'Reintro campaign', icon: 'mail' },
+  /* No badge here: the bell carries the count, and a Today total would count messages twice. */
+  { key: 'notifications', href: '/admin/notifications', label: 'Notifications', icon: 'bell' },
   { key: 'mailbox',    href: '/admin/mailbox',       label: 'Mailbox',    icon: 'mail',   badge: 'mail' },
   { key: 'chat',       href: '/admin/team-chat',     label: 'Team chat',  icon: 'chat',   badge: 'chat' },
   { key: 'playbook',   href: '/admin/playbook',      label: 'Playbook',   icon: 'book' },
@@ -10604,7 +10635,7 @@ const ADMIN_NAV = [
    tests/admin-nav-sections.test.js fails when a page or an entry has no home. */
 const ADMIN_SECTIONS = [
   { key: 'mine',      label: 'My work',   icon: 'check',  items: ['myday', 'design', 'schedule', 'earnings', 'mystats', 'clock', 'myschedule'] },
-  { key: 'today',     label: 'Today',     icon: 'grid',   items: ['dashboard', 'tasks', 'mailbox', 'chat'] },
+  { key: 'today',     label: 'Today',     icon: 'grid',   items: ['dashboard', 'notifications', 'tasks', 'mailbox', 'chat'] },
   { key: 'sales',     label: 'Sales',     icon: 'inbox',  items: ['leads', 'quotes', 'customers'] },
   { key: 'jobs',      label: 'Jobs',      icon: 'layers', items: ['production', 'orders', 'shipping', 'delivery', 'deliveryset'] },
   { key: 'marketing', label: 'Marketing', icon: 'star',   items: ['reviews', 'discounts', 'partners', 'calendar', 'campaign'] },
@@ -10655,6 +10686,7 @@ const ADMIN_ICONS = {
   key:    '<circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3L21 2"/><path d="M16 7l3 3"/><path d="M14 9l2 2"/>',
   book:   '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
   team:   '<circle cx="9" cy="7" r="4"/><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/><path d="M21 21v-2a4 4 0 0 0-3-3.85"/>',
+  bell:   '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
   mail:   '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>',
 };
 function icon(name) {
@@ -10700,6 +10732,16 @@ details.md-sec:not([open])>summary::before{transform:rotate(-90deg)}
   font-size:15.5px;padding:2px 8px 20px;line-height:1.15}
 .adm-brand small{display:block;font-size:10.5px;font-weight:700;color:#8e9fc5;letter-spacing:.07em;
   text-transform:uppercase;margin-top:3px}
+.adm-brand-row{display:flex;align-items:flex-start;justify-content:space-between;gap:6px}
+.adm-brand-row .adm-brand{flex:1 1 auto;min-width:0}
+.adm-bell{position:relative;display:grid;place-items:center;width:36px;height:36px;flex:0 0 36px;border-radius:10px;color:#c7d2e8;text-decoration:none}
+.adm-bell:hover{background:rgba(255,255,255,.07);color:#fff}
+.adm-bell svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.adm-bell .adm-badge{position:absolute;top:-2px;right:-4px;margin:0;min-width:18px;padding:0 5px;line-height:17px;font-size:10.5px}
+.adm-top .adm-bell{color:#0B1F4B;background:#eef1f8;width:38px;height:38px;flex:0 0 38px}
+.adm-top .adm-bell:hover{background:#e3e8f2;color:#0B1F4B}
+.adm-top .adm-bell{margin-left:auto}
+.adm-top .adm-bell ~ .adm-top-new,.adm-top a.adm-clock ~ .adm-bell,.adm-top .adm-clock-form ~ .adm-bell{margin-left:0}
 .adm-mark{width:34px;height:34px;border-radius:10px;background:#A52429;color:#fff;display:grid;place-items:center;
   font-size:13px;font-weight:800;flex:0 0 34px}
 .adm-nav{display:flex;flex-direction:column;gap:2px}
@@ -10954,8 +10996,8 @@ function adminNav(active) {
       <div class="adm-subs">${s.items.map((n) => link(n, 'adm-sub')).join('')}</div></details>`;
   };
   return `<aside class="adm-side" aria-label="Admin menu">
-    <a class="adm-brand" href="${home}"><span class="adm-mark">JT</span>
-      <span>June's Tees<small>${staff ? escEmail(staff.name) : 'Back office'}</small></span></a>
+    <div class="adm-brand-row"><a class="adm-brand" href="${home}"><span class="adm-mark">JT</span>
+      <span>June's Tees<small>${staff ? escEmail(staff.name) : 'Back office'}</small></span></a>${notifyBell()}</div>
     ${staff ? `<div class="adm-side-clock">${clockChip()}</div>` : ''}
     <form class="adm-go" method="get" action="/admin/go" role="search">
       <input type="search" name="q" list="adm-pages" maxlength="120" autocomplete="off"
@@ -10972,6 +11014,11 @@ function adminNav(active) {
         icon('out')}<span>Sign out</span></button></form>
     </div>
   </aside>`;
+}
+
+/** The bell: unread notifications, filled in by the menu's counts. */
+function notifyBell() {
+  return `<a class="adm-bell" href="/admin/notifications" title="Notifications" aria-label="Notifications">${icon('bell')}<span class="adm-badge" data-badge="notify" hidden></span></a>`;
 }
 
 /** The tabs across the top of a page: every page in its section, by name, so
@@ -11030,6 +11077,7 @@ function adminPage(title, body, active) {
       <label for="adm-menu" class="adm-burger" title="Menu">${icon('menu')}</label>
       <span class="adm-top-title">${escEmail(title)}</span>
       ${clockChip()}
+      ${notifyBell()}
       ${(() => { const a = typeof currentActor === 'function' ? currentActor() : null;
         /* The same rule as the side menu's New quote: only for someone who may draft one. */
         return !a || a.kind !== 'staff' || STAFF.mayUseRoute(a, 'GET', '/admin/quote/new|/admin/quote/:code/edit')
@@ -25818,9 +25866,11 @@ const REVIEWS_WAITING_SQL = `SELECT COUNT(*)::int AS n FROM reviews
    costs a badge rather than the lot. */
 app.get('/admin/nav-counts', requireAdmin, async (_req, res) => {
   res.set('Cache-Control', 'no-store');
-  const out = { leads: 0, reviews: 0, late: 0, certificates: 0, approvals: 0, chat: 0, mail: 0, design: 0, jobnotes: 0, pinned: 0 };
+  const out = { leads: 0, reviews: 0, late: 0, certificates: 0, approvals: 0, chat: 0, mail: 0, notify: 0, design: 0, jobnotes: 0, pinned: 0 };
   const me = currentActor() || OWNER_ACTOR;
+  notifySoon();
   await Promise.all([
+    notifyUnread(me).then((n) => { out.notify = n; }).catch(() => {}),
     teamChatUnread().then((n) => { out.chat = n; }).catch(() => {}),
     mailUnreadCount(me).then((n) => { out.mail = n; }).catch(() => {}),
     unansweredLeads().then((l) => { out.leads = l.length; }).catch(() => {}),
@@ -30173,6 +30223,9 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
      15 minutes before its email goes. */
   setInterval(() => step('chat alerts', sendChatAlerts),
     Math.max(5000, Number(process.env.JT_CHAT_ALERT_EVERY_MS) || 5 * 60 * 1000));
+  /* The notifications bell: 20 seconds after boot, then every 2 minutes. */
+  setTimeout(() => step('notifications', notifySweep), 20 * 1000);
+  setInterval(() => step('notifications', notifySweep), 2 * 60 * 1000);
 }
 
 /* Grad ordering ended, and its old price list (a $25 big head single among
@@ -34388,10 +34441,12 @@ async function channelLines(channelId, after = 0) {
 
 /** The other side's lines are read once this person has had them on screen. */
 function chatMarkRead(staffId) {
-  const theirsFromOwner = (currentActor() || OWNER_ACTOR).kind === 'staff';
+  const actor = currentActor() || OWNER_ACTOR;
+  const theirsFromOwner = actor.kind === 'staff';
   return pool.query(
     `UPDATE team_messages SET read_at = NOW() WHERE staff_id = $1 AND from_owner = $2 AND read_at IS NULL`,
-    [staffId, theirsFromOwner]).catch((e) => console.error('team chat read mark failed:', e.message));
+    [staffId, theirsFromOwner]).then(() => notifyConvoRead(CHAN.readerKey(actor), `dm:${staffId}`))
+    .catch((e) => console.error('team chat read mark failed:', e.message));
 }
 
 /** A channel is read up to the newest message this person has had on screen. */
@@ -34414,6 +34469,7 @@ async function channelMarkRead(channelId, upTo) {
       `INSERT INTO team_chat_reads (reader, convo, last_read_id) VALUES ($1, $2, $3)
        ON CONFLICT (reader, convo) DO UPDATE SET last_read_id = GREATEST(team_chat_reads.last_read_id, EXCLUDED.last_read_id)`,
       [reader, `ch:${channelId}`, upTo]);
+    await notifyConvoRead(reader, `ch:${channelId}`);
   } catch (e) { console.error('channel read mark failed:', e.message); }
 }
 
@@ -35466,6 +35522,7 @@ app.get('/admin/mailbox/:id', requireAdmin, async (req, res) => {
     await pool.query(
       `INSERT INTO mail_seen (message_id, reader) SELECT id, $2 FROM mail_messages WHERE thread_id = $1 AND author <> $2
        ON CONFLICT DO NOTHING`, [t.id, reader]);
+    await notifyConvoRead(reader, `mb:${t.id}`);
     const [roster, { msgs, seen }] = await Promise.all([staffRoster(), mailDetails([t.id])]);
     const m = msgs.get(t.id);
     const tasksById = new Map(t.task_id ? (await pool.query('SELECT id, title FROM staff_tasks WHERE id = $1', [t.task_id])).rows.map((r) => [r.id, r]) : []);
@@ -35620,57 +35677,78 @@ app.get('/admin/mailbox/file/:id', requireAdmin, async (req, res) => {
    conversation whose oldest unread message from someone else is at least
    ALERT_AFTER_MIN minutes old gets ONE email, unless one has already been
    sent since they last read it. */
+/** Everyone who reads Team chat and the Mailbox: the owner and each working
+ *  helper (`roster` is the active one). `to` is where their email goes, ''
+ *  when there is nowhere. */
+function chatReaders(roster) {
+  return [
+    { actor: OWNER_ACTOR, to: emailOfReader(roster, 'owner'), name: 'June' },
+    ...roster.filter((r) => !r.archived_at).map((r) => ({ actor: { kind: 'staff', id: r.id }, to: isValidEmail(r.email) ? r.email : '', name: r.name, row: r })),
+  ];
+}
+
+/** The read state Team chat keeps per reader and conversation, keyed 'reader|convo'. */
+async function chatReadState() {
+  const { rows } = await pool.query('SELECT reader, convo, alerted_id, last_read_id FROM team_chat_reads');
+  return new Map(rows.map((r) => [`${r.reader}|${r.convo}`, r]));
+}
+
+/** Each conversation (direct chat, channel, mailbox) with something from
+ *  someone else this reader has not read, whose oldest such message is at
+ *  least `minAge` minutes old: [{ convo, first, last, n, where, href, mail }].
+ *  The chat alert emails and the notifications bell both read this, so they
+ *  cannot disagree about what is unread. */
+async function unreadConversations(rd, roster, channels, state, minAge) {
+  const reader = CHAN.readerKey(rd.actor);
+  const due = [];
+  /* Direct conversations. */
+  const { rows: dms } = rd.actor.kind === 'staff'
+    ? await pool.query(`SELECT staff_id, MIN(id) AS first, MAX(id) AS last, COUNT(*)::int AS n FROM team_messages
+                         WHERE staff_id = $1 AND from_owner AND read_at IS NULL
+                           AND created_at < NOW() - make_interval(mins => $2) GROUP BY staff_id`, [rd.actor.id, minAge])
+    : await pool.query(`SELECT staff_id, MIN(id) AS first, MAX(id) AS last, COUNT(*)::int AS n FROM team_messages
+                         WHERE NOT from_owner AND read_at IS NULL
+                           AND created_at < NOW() - make_interval(mins => $1) GROUP BY staff_id`, [minAge]);
+  for (const d of dms) {
+    due.push({ convo: `dm:${d.staff_id}`, first: d.first, last: d.last, n: d.n,
+      where: rd.actor.kind === 'staff' ? 'your chat with June' : `your chat with ${nameOf(roster, d.staff_id)}`,
+      href: rd.actor.kind === 'staff' ? '/admin/team-chat' : `/admin/team-chat?staff=${d.staff_id}` });
+  }
+  /* Channels. */
+  const mine = channels.filter((c) => (rd.actor.kind === 'staff' ? CHAN.isMember(c, rd.row, TRAINING.trackOf) : true));
+  for (const c of mine) {
+    const st = state.get(`${reader}|ch:${c.id}`);
+    const { rows: [u] } = await pool.query(
+      `SELECT MIN(id) AS first, MAX(id) AS last, COUNT(*)::int AS n FROM team_channel_messages
+        WHERE channel_id = $1 AND id > $2 AND staff_id IS DISTINCT FROM $3
+          AND created_at < NOW() - make_interval(mins => $4)`,
+      [c.id, st ? st.last_read_id : 0, rd.actor.kind === 'staff' ? rd.actor.id : null, minAge]);
+    if (u && u.n) due.push({ convo: `ch:${c.id}`, first: u.first, last: u.last, n: u.n, where: `# ${c.name}`, href: `/admin/team-chat?channel=${c.id}` });
+  }
+  /* Mailbox conversations with something this reader has not seen, Done or
+     not: someone else marking it Done does not mean this reader read it. */
+  const { rows: mbs } = await pool.query(
+    `SELECT m.thread_id, MIN(m.id) AS first, MAX(m.id) AS last, COUNT(*)::int AS n, MAX(t.subject) AS subject
+       FROM mail_messages m JOIN mail_threads t ON t.id = m.thread_id
+      WHERE ${MAIL_MINE_SQL} AND ${MAIL_UNSEEN_SQL} AND m.created_at < NOW() - make_interval(mins => $2)
+      GROUP BY m.thread_id`, [reader, minAge]).catch((e) => { console.error('mailbox alerts query failed:', e.message); due.mailFailed = true; return { rows: [] }; });
+  for (const d of mbs) {
+    due.push({ convo: `mb:${d.thread_id}`, first: d.first, last: d.last, n: d.n, mail: true,
+      where: `"${d.subject}"`, href: `/admin/mailbox/${d.thread_id}` });
+  }
+  return due;
+}
+
 async function sendChatAlerts() {
   const [roster, channels] = await Promise.all([staffRoster({ activeOnly: true }), teamChannels()]);
   const { rows: prefs } = await pool.query('SELECT reader, email_alerts FROM team_chat_prefs');
   const off = new Set(prefs.filter((p) => !p.email_alerts).map((p) => p.reader));
-  const { rows: alerted } = await pool.query('SELECT reader, convo, alerted_id, last_read_id FROM team_chat_reads');
-  const state = new Map(alerted.map((r) => [`${r.reader}|${r.convo}`, r]));
-  const ownerTo = String(process.env.OWNER_EMAILS || '').split(',').map((e) => e.trim()).find(isValidEmail) || NOTIFY_EMAIL;
-  const readers = [
-    ...(ownerTo ? [{ actor: OWNER_ACTOR, to: ownerTo, name: 'June' }] : []),
-    ...roster.filter((r) => !r.archived_at && isValidEmail(r.email)).map((r) => ({ actor: { kind: 'staff', id: r.id }, to: r.email, name: r.name, row: r })),
-  ];
+  const state = await chatReadState();
   let sent = 0;
-  for (const rd of readers) {
+  for (const rd of chatReaders(roster).filter((r) => r.to)) {
     const reader = CHAN.readerKey(rd.actor);
     if (off.has(reader)) continue;
-    const due = [];
-    /* Direct conversations. */
-    const { rows: dms } = rd.actor.kind === 'staff'
-      ? await pool.query(`SELECT staff_id, MIN(id) AS first, MAX(id) AS last, COUNT(*)::int AS n FROM team_messages
-                           WHERE staff_id = $1 AND from_owner AND read_at IS NULL
-                             AND created_at < NOW() - make_interval(mins => $2) GROUP BY staff_id`, [rd.actor.id, CHAN.ALERT_AFTER_MIN])
-      : await pool.query(`SELECT staff_id, MIN(id) AS first, MAX(id) AS last, COUNT(*)::int AS n FROM team_messages
-                           WHERE NOT from_owner AND read_at IS NULL
-                             AND created_at < NOW() - make_interval(mins => $1) GROUP BY staff_id`, [CHAN.ALERT_AFTER_MIN]);
-    for (const d of dms) {
-      due.push({ convo: `dm:${d.staff_id}`, first: d.first, last: d.last, n: d.n,
-        where: rd.actor.kind === 'staff' ? 'your chat with June' : `your chat with ${nameOf(roster, d.staff_id)}`,
-        href: rd.actor.kind === 'staff' ? '/admin/team-chat' : `/admin/team-chat?staff=${d.staff_id}` });
-    }
-    /* Channels. */
-    const mine = channels.filter((c) => (rd.actor.kind === 'staff' ? CHAN.isMember(c, rd.row, TRAINING.trackOf) : true));
-    for (const c of mine) {
-      const st = state.get(`${reader}|ch:${c.id}`);
-      const { rows: [u] } = await pool.query(
-        `SELECT MIN(id) AS first, MAX(id) AS last, COUNT(*)::int AS n FROM team_channel_messages
-          WHERE channel_id = $1 AND id > $2 AND staff_id IS DISTINCT FROM $3
-            AND created_at < NOW() - make_interval(mins => $4)`,
-        [c.id, st ? st.last_read_id : 0, rd.actor.kind === 'staff' ? rd.actor.id : null, CHAN.ALERT_AFTER_MIN]);
-      if (u && u.n) due.push({ convo: `ch:${c.id}`, first: u.first, last: u.last, n: u.n, where: `# ${c.name}`, href: `/admin/team-chat?channel=${c.id}` });
-    }
-    /* Mailbox conversations with something this reader has not seen, Done or
-       not: someone else marking it Done does not mean this reader read it. */
-    const { rows: mbs } = await pool.query(
-      `SELECT m.thread_id, MIN(m.id) AS first, MAX(m.id) AS last, COUNT(*)::int AS n, MAX(t.subject) AS subject
-         FROM mail_messages m JOIN mail_threads t ON t.id = m.thread_id
-        WHERE ${MAIL_MINE_SQL} AND ${MAIL_UNSEEN_SQL} AND m.created_at < NOW() - make_interval(mins => $2)
-        GROUP BY m.thread_id`, [reader, CHAN.ALERT_AFTER_MIN]).catch((e) => { console.error('mailbox alerts query failed:', e.message); return { rows: [] }; });
-    for (const d of mbs) {
-      due.push({ convo: `mb:${d.thread_id}`, first: d.first, last: d.last, n: d.n, mail: true,
-        where: `"${d.subject}"`, href: `/admin/mailbox/${d.thread_id}` });
-    }
+    const due = await unreadConversations(rd, roster, channels, state, CHAN.ALERT_AFTER_MIN);
     for (const d of due) {
       const st = state.get(`${reader}|${d.convo}`);
       if (!CHAN.alertDue(d.first, st && st.alerted_id)) continue;
@@ -35695,6 +35773,393 @@ async function sendChatAlerts() {
   }
   return sent ? `${sent} sent` : '';
 }
+
+/* ── Notifications ──────────────────────────────────────────────────────────
+   The bell (tools/lib/notifications.js). notifySweep() reads the records the
+   shop already keeps and adds one notification per thing per person; it runs
+   every 2 minutes and, at most every 30 seconds, when someone loads a page.
+   Record-based kinds look back NOTIFY_LOOKBACK, so the first run after a
+   deploy does not bring up months of history. */
+const NOTIFY_LOOKBACK_DAYS = 3;
+const APPROVAL_WORDS = { quote: 'a quote', message: 'a message to a customer', lead_email: 'an email to a lead', kb: 'a playbook change' };
+let notifyRunning = false;
+let notifyLastAt = 0;
+let notifyLateAt = 0;
+
+/** Add notifications; one already there (same person, kind and ref) is left
+ *  as it is. */
+async function notifyAdd(list) {
+  const rows = list.filter((n) => n && n.recipient && NOTIFY.kindOf(n.kind) && n.ref);
+  if (!rows.length) return 0;
+  const { rowCount } = await pool.query(
+    `INSERT INTO notifications (recipient, kind, title, link, ref)
+     SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[])
+     ON CONFLICT (recipient, kind, ref) DO NOTHING`,
+    [rows.map((n) => n.recipient), rows.map((n) => n.kind), rows.map((n) => NOTIFY.cleanTitle(n.title) || 'Something new'),
+      rows.map((n) => NOTIFY.safeLink(n.link)), rows.map((n) => String(n.ref).slice(0, 200))]);
+  return rowCount;
+}
+
+/** Notifications whose thing has been dealt with (the lead answered, the
+ *  approval decided, the review moderated) are read: the bell counts only
+ *  what is still waiting. `live` is every ref of that kind still waiting for
+ *  that person, from an unlimited read, so nothing waiting is cleared. */
+async function notifyClearResolved(recipient, kind, live) {
+  await pool.query(
+    `UPDATE notifications SET read_at = NOW()
+      WHERE recipient = $1 AND kind = $2 AND read_at IS NULL AND NOT (ref = ANY($3::text[]))`, [recipient, kind, live]);
+}
+
+/** A conversation read where it lives clears its bell notification at once,
+ *  rather than at the next sweep (code review, 2026-10-19). */
+function notifyConvoRead(reader, convo) {
+  return pool.query(
+    `UPDATE notifications SET read_at = NOW() WHERE recipient = $1 AND kind IN ('chat', 'mail') AND read_at IS NULL AND ref LIKE $2`,
+    [reader, `${convo}:%`]).catch((e) => console.error('notification read mark failed:', e.message));
+}
+
+/** Email the recent unread notifications whose kind this person has email on
+ *  for. Message kinds never: Team chat's own alert emails already cover them.
+ *  Each is claimed (emailed_at) before it is sent, and the claim is undone if
+ *  the send fails, so a later sweep tries again for the next 30 minutes. */
+async function notifyEmails(roster) {
+  const kinds = NOTIFY.KIND_KEYS.filter((k) => !NOTIFY.KINDS[k].chatEmail);
+  const { rows: want } = await pool.query(
+    `SELECT id, recipient, kind, title, link FROM notifications
+      WHERE emailed_at IS NULL AND read_at IS NULL AND kind = ANY($1::text[]) AND created_at > NOW() - interval '30 minutes'
+      ORDER BY id LIMIT 200`, [kinds]);
+  if (!want.length) return 0;
+  const { rows } = await pool.query('SELECT reader, kind, email FROM notification_prefs WHERE reader = ANY($1)', [[...new Set(want.map((n) => n.recipient))]]);
+  const prefs = {};
+  for (const r of rows) (prefs[r.reader] = prefs[r.reader] || {})[r.kind] = r.email;
+  let sent = 0;
+  for (const n of want) {
+    if (!NOTIFY.emailOn(n.kind, prefs[n.recipient])) continue;
+    const to = emailOfReader(roster, n.recipient);
+    if (!to) continue;
+    const { rowCount } = await pool.query('UPDATE notifications SET emailed_at = NOW() WHERE id = $1 AND emailed_at IS NULL', [n.id]);
+    if (!rowCount) continue;
+    try {
+      await pinEmail(to, mailNameOf(roster, n.recipient), n.title, escEmail(n.title), n.link);
+      sent++;
+    } catch (e) {
+      console.error(`notification email ${n.id} failed:`, e.message);
+      await pool.query('UPDATE notifications SET emailed_at = NULL WHERE id = $1', [n.id]).catch(() => {});
+    }
+  }
+  return sent;
+}
+
+/** Each source on its own: one that fails is logged and skipped, and the
+ *  others still count. */
+const notifyPart = (name, p) => p.catch((e) => { console.error(`notifications (${name}) failed:`, e.message); return null; });
+
+/** The owner's notifications from the shop's records, and the ones dealt with
+ *  since cleared. `leads` is unansweredLeads(), read once per sweep. */
+async function ownerNotices(roster, leads) {
+  const since = Date.now() - NOTIFY_LOOKBACK_DAYS * 86400000;
+  const [appr, art, revs, pays] = await Promise.all([
+    notifyPart('approvals', pool.query(`SELECT id, kind, requested_by FROM staff_approvals WHERE status = 'pending' ORDER BY id DESC`)),
+    notifyPart('art', pool.query(
+      `SELECT a.quote_code, a.updated_at FROM art_requests a JOIN quotes q ON q.code = a.quote_code
+        WHERE a.status = 'submitted' AND q.cancelled_at IS NULL`)),
+    notifyPart('reviews', pool.query(
+      `SELECT id, name, rating, submitted_at FROM reviews
+        WHERE submitted_at IS NOT NULL AND deleted_at IS NULL AND moderated_at IS NULL AND approved IS NOT TRUE`)),
+    notifyPart('payments', pool.query(
+      `SELECT id, quote_code, amount, method FROM quote_payments
+        WHERE kind = 'payment' AND amount > 0 AND source <> 'backfill' AND created_at > NOW() - make_interval(days => $1)
+        ORDER BY id DESC LIMIT 200`, [NOTIFY_LOOKBACK_DAYS])),
+  ]);
+  const out = [];
+  if (leads) {
+    for (const l of leads) {
+      if (new Date(l.created_at).getTime() < since) continue;
+      out.push({ recipient: 'owner', kind: 'lead', ref: String(l.id), link: '/admin/leads', title: `New lead: ${l.name || 'no name given'}` });
+    }
+    await notifyClearResolved('owner', 'lead', leads.map((l) => String(l.id)));
+  }
+  if (appr && art) {
+    for (const a of appr.rows) {
+      out.push({ recipient: 'owner', kind: 'approval', ref: String(a.id), link: '/admin/approvals',
+        title: `Approval waiting: ${APPROVAL_WORDS[a.kind] || 'a request'} from ${nameOf(roster, a.requested_by)}` });
+    }
+    const artRef = (a) => `art:${a.quote_code}:${new Date(a.updated_at).getTime()}`;
+    for (const a of art.rows) {
+      out.push({ recipient: 'owner', kind: 'approval', ref: artRef(a), link: '/admin/approvals', title: `Art to approve on ${a.quote_code}` });
+    }
+    await notifyClearResolved('owner', 'approval', [...appr.rows.map((a) => String(a.id)), ...art.rows.map(artRef)]);
+  }
+  if (revs) {
+    for (const r of revs.rows) {
+      if (new Date(r.submitted_at).getTime() < since) continue;
+      out.push({ recipient: 'owner', kind: 'review', ref: String(r.id), link: '/admin/reviews',
+        title: `Review to approve${r.rating ? `: ${r.rating} stars` : ''} from ${r.name || 'a customer'}` });
+    }
+    await notifyClearResolved('owner', 'review', revs.rows.map((r) => String(r.id)));
+  }
+  if (pays) {
+    for (const p of pays.rows) {
+      out.push({ recipient: 'owner', kind: 'payment', ref: String(p.id), link: `/admin/production/${encodeURIComponent(p.quote_code)}`,
+        title: `Payment received: ${money(Number(p.amount))} on ${p.quote_code}${p.method ? ` (${p.method})` : ''}` });
+    }
+  }
+  /* Late jobs, once per spell of being late: the schedule check is the
+     heaviest, so every 10 minutes, and the clock only moves once it worked.
+     A job back on time has its notification read and its ref retired, so
+     running late again is a new notification. */
+  if (Date.now() - notifyLateAt > 10 * 60 * 1000) {
+    const jobs = await notifyPart('late jobs', liveJobs());
+    if (jobs) {
+      const late = [];
+      for (const q of jobs) {
+        let sch = null;
+        try { sch = quoteSchedule(q); } catch (e) { console.error(`notifications: schedule of ${q.code} failed:`, e.message); continue; }
+        if (!sch || !sch.risks.length) continue;
+        late.push(String(q.code));
+        out.push({ recipient: 'owner', kind: 'late', ref: String(q.code), link: `/admin/production/${encodeURIComponent(q.code)}`,
+          title: `Running late: ${q.code}${q.name ? ` (${q.name})` : ''}` });
+      }
+      await pool.query(
+        `UPDATE notifications SET read_at = COALESCE(read_at, NOW()), ref = ref || ':done:' || id
+          WHERE recipient = 'owner' AND kind = 'late' AND ref NOT LIKE '%:done:%' AND NOT (ref = ANY($1::text[]))`, [late]);
+      notifyLateAt = Date.now();
+    }
+  }
+  return out;
+}
+
+/** A helper's notifications from the shop's records: their requests decided,
+ *  and recent leads given to them that are still waiting (a lead answered or
+ *  given to someone else is cleared). */
+async function staffNotices(roster, leads) {
+  const out = [];
+  const active = new Map(roster.filter((r) => r.active && !r.archived_at).map((r) => [r.id, r]));
+  const dec = await notifyPart('decisions', pool.query(
+    `SELECT id, kind, requested_by, status, decision_note FROM staff_approvals
+      WHERE status IN ('approved', 'rejected') AND decided_at > NOW() - make_interval(days => $1) ORDER BY id DESC LIMIT 200`, [NOTIFY_LOOKBACK_DAYS]));
+  for (const a of dec ? dec.rows : []) {
+    if (!active.has(a.requested_by)) continue;
+    out.push({ recipient: `staff:${a.requested_by}`, kind: 'decided', ref: String(a.id), link: '/admin/my-day',
+      title: `June ${a.status === 'approved' ? 'approved' : 'sent back'} ${APPROVAL_WORDS[a.kind] || 'your request'}${
+        a.status === 'rejected' && a.decision_note ? `: ${a.decision_note}` : ''}` });
+  }
+  if (leads) {
+    const since = Date.now() - NOTIFY_LOOKBACK_DAYS * 86400000;
+    const theirs = new Map([...active.keys()].map((id) => [id, []]));
+    for (const l of leads) {
+      const r = l.assigned_to != null && active.get(Number(l.assigned_to));
+      if (!r) continue;
+      theirs.get(r.id).push(String(l.id));
+      if (new Date(l.created_at).getTime() < since) continue;
+      const helper = { kind: 'staff', id: r.id, perms: r.perms };
+      out.push({ recipient: `staff:${r.id}`, kind: 'lead', ref: String(l.id),
+        link: STAFF.mayUseRoute(helper, 'GET', '/admin/leads') ? '/admin/leads' : '/admin/my-day',
+        title: `A lead for you: ${l.name || 'no name given'}` });
+    }
+    for (const [id, refs] of theirs) await notifyClearResolved(`staff:${id}`, 'lead', refs);
+  }
+  return out;
+}
+
+/** One message notification per conversation with something unread, for
+ *  every reader; and the ones whose conversation has since been read are
+ *  marked read, so the bell clears itself. A reader whose read fails is
+ *  skipped, never cleared, and the next reader still runs. */
+async function messageNotices(roster) {
+  const [channels, state] = await Promise.all([teamChannels(), chatReadState()]);
+  for (const rd of chatReaders(roster)) {
+    const reader = CHAN.readerKey(rd.actor);
+    try {
+      const due = await unreadConversations(rd, roster, channels, state, 0);
+      const now = due.map((d) => ({ kind: d.mail ? 'mail' : 'chat', ref: NOTIFY.messageRef(d.convo, d.first), title: NOTIFY.messageTitle(d.n, d.where), link: d.href }));
+      if (now.length) {
+        await pool.query(
+          `INSERT INTO notifications (recipient, kind, title, link, ref)
+           SELECT $1, * FROM unnest($2::text[], $3::text[], $4::text[], $5::text[])
+           ON CONFLICT (recipient, kind, ref) DO UPDATE SET title = EXCLUDED.title WHERE notifications.read_at IS NULL`,
+          [reader, now.map((x) => x.kind), now.map((x) => x.title), now.map((x) => NOTIFY.safeLink(x.link)), now.map((x) => x.ref)]);
+      }
+      /* A failed mailbox read says nothing about what was read: leave those be. */
+      await pool.query(
+        `UPDATE notifications SET read_at = NOW()
+          WHERE recipient = $1 AND kind = ANY($3::text[]) AND read_at IS NULL AND NOT (ref = ANY($2::text[]))`,
+        [reader, now.map((x) => x.ref), due.mailFailed ? ['chat'] : ['chat', 'mail']]);
+    } catch (e) {
+      console.error(`notifications (messages for ${reader}) failed:`, e.message);
+    }
+  }
+}
+
+/** Bring everyone's notifications up to date. One at a time; a part that
+ *  fails is logged and the rest still run. */
+async function notifySweep() {
+  if (notifyRunning) return '';
+  notifyRunning = true;
+  notifyLastAt = Date.now();
+  try {
+    const roster = await staffRoster({ activeOnly: true });
+    const leads = await notifyPart('leads', unansweredLeads());
+    const parts = await Promise.all([
+      notifyPart('owner', ownerNotices(roster, leads)),
+      notifyPart('helpers', staffNotices(roster, leads)),
+    ]);
+    const added = await notifyAdd(parts.flat().filter(Boolean));
+    await notifyPart('messages', messageNotices(roster));
+    const emailed = await notifyPart('emails', notifyEmails(roster));
+    return added ? `${added} new${emailed ? `, ${emailed} emailed` : ''}` : '';
+  } finally {
+    notifyRunning = false;
+  }
+}
+
+/** A page load asks for a sweep; at most one every 30 seconds, never waited on. */
+function notifySoon() {
+  if (notifyRunning || Date.now() - notifyLastAt < 30 * 1000) return;
+  notifySweep().catch((e) => console.error('notification sweep failed:', e.message));
+}
+
+/** How many unread notifications this person has: the bell. */
+async function notifyUnread(actor) {
+  const { rows: [r] } = await pool.query(
+    'SELECT COUNT(*)::int AS n FROM notifications WHERE recipient = $1 AND read_at IS NULL', [CHAN.readerKey(actor)]);
+  return r ? r.n : 0;
+}
+
+const NOTIFY_CSS = `<style>
+.nt-row{display:flex;gap:12px;align-items:flex-start;width:100%;text-align:left;background:none;border:0;border-top:1px solid #eef1f8;
+  padding:12px 4px;font:inherit;color:inherit;cursor:pointer}
+.nt-row:first-child{border-top:0}
+.nt-row:hover{background:#f7f9ff}
+.nt-row .nt-main{flex:1 1 auto;min-width:0}
+.nt-row .nt-title{overflow-wrap:anywhere}
+.nt-row.is-unread .nt-title{font-weight:700;color:#0B1F4B}
+.nt-row.is-unread::before{content:'';width:8px;height:8px;border-radius:50%;background:#1848B8;flex:0 0 8px;margin-top:7px}
+.nt-row:not(.is-unread)::before{content:'';width:8px;flex:0 0 8px}
+.nt-form{margin:0}
+@media (max-width:640px){.nt-row{flex-wrap:wrap}.nt-row .row-end{flex:1 0 100%;padding-left:20px}}
+</style>`;
+
+app.get('/admin/notifications', requireAdmin, async (req, res) => {
+  const actor = currentActor() || OWNER_ACTOR;
+  const reader = CHAN.readerKey(actor);
+  const unreadOnly = req.query.show === 'unread';
+  const page = Math.min(Math.max(intIn(req.query.page) || 1, 1), 200);
+  try {
+    const [{ rows }, { rows: [c] }] = await Promise.all([
+      pool.query(
+        `SELECT id, kind, title, created_at, read_at FROM notifications
+          WHERE recipient = $1 AND ($2::boolean IS NOT TRUE OR read_at IS NULL)
+          ORDER BY created_at DESC, id DESC LIMIT $3 OFFSET $4`, [reader, unreadOnly, NOTIFY.PAGE + 1, (page - 1) * NOTIFY.PAGE]),
+      pool.query('SELECT COUNT(*) FILTER (WHERE read_at IS NULL)::int AS unread, COUNT(*)::int AS total FROM notifications WHERE recipient = $1', [reader]),
+    ]);
+    const more = rows.length > NOTIFY.PAGE;
+    const list = rows.slice(0, NOTIFY.PAGE).map((n) => `<form method="post" action="/admin/notifications/${n.id}/open" class="nt-form">
+        <button type="submit" class="nt-row${n.read_at ? '' : ' is-unread'}"><span class="nt-main"><span class="nt-title">${escEmail(n.title)}</span>
+          <div class="row-sub">${escEmail((NOTIFY.KINDS[n.kind] || {}).label || n.kind)} &middot; ${escEmail(whenShort(n.created_at))}</div></span>
+          <span class="row-end">${n.read_at ? '' : pill('New', 'blue')}</span></button></form>`).join('');
+    const qs = (p) => `/admin/notifications?${unreadOnly ? 'show=unread&' : ''}page=${p}`;
+    res.set('Cache-Control', 'no-store');
+    res.send(adminPage('Notifications', `${NOTIFY_CSS}
+      ${pageHeader('Notifications', 'Messages, approvals, leads, late jobs, payments and reviews, newest first. Open one and it is read. Message ones clear by themselves once you read the conversation.',
+        `${c && c.unread ? `<form method="post" action="/admin/notifications/read-all" data-once style="margin:0"><button type="submit" class="btn">Mark all read</button></form>` : ''}
+         <a class="btn btn-ghost" href="/admin/notifications/settings">Email settings</a>`)}
+      ${flash(req.query)}
+      ${filterChips([
+        { label: 'All', href: '/admin/notifications', on: !unreadOnly, count: c ? c.total : 0 },
+        { label: 'Unread', href: '/admin/notifications?show=unread', on: unreadOnly, count: c ? c.unread : 0 },
+      ])}
+      <div class="card">${list || emptyState(unreadOnly ? 'Nothing unread.' : 'Nothing yet. New leads, approvals, payments, reviews, late jobs and messages show up here.')}</div>
+      ${page > 1 || more ? `<div class="row" style="gap:8px">${page > 1 ? `<a class="btn btn-ghost" href="${qs(page - 1)}">&larr; Newer</a>` : ''}${
+        more ? `<a class="btn btn-ghost" href="${qs(page + 1)}">Older &rarr;</a>` : ''}</div>` : ''}${SHIP_ONCE_JS}`, 'notifications'));
+  } catch (err) {
+    console.error('notifications page failed:', err.message);
+    res.status(500).send(adminPage('Notifications', '<div class="card"><div class="warn">Could not load your notifications. Refresh to try again.</div></div>', 'notifications'));
+  }
+});
+
+/* Open one: it is read, and its link opens. Only the caller's own. */
+app.post('/admin/notifications/:id/open', requireAdmin, async (req, res) => {
+  const id = /^\d{1,15}$/.test(String(req.params.id)) ? req.params.id : null;
+  if (!id) return back(res, '/admin/notifications', 'err', 'That notification is not one of yours.');
+  try {
+    const { rows: [n] } = await pool.query(
+      'UPDATE notifications SET read_at = COALESCE(read_at, NOW()) WHERE id = $1 AND recipient = $2 RETURNING link',
+      [id, CHAN.readerKey(currentActor() || OWNER_ACTOR)]);
+    if (!n) return back(res, '/admin/notifications', 'err', 'That notification is not one of yours.');
+    return res.redirect(303, NOTIFY.safeLink(n.link));
+  } catch (err) {
+    console.error(`notification ${id} open failed:`, err.message);
+    return back(res, '/admin/notifications', 'err', 'That did not open. Try again.');
+  }
+});
+
+app.post('/admin/notifications/read-all', requireAdmin, async (_req, res) => {
+  try {
+    const { rowCount } = await pool.query(
+      'UPDATE notifications SET read_at = NOW() WHERE recipient = $1 AND read_at IS NULL', [CHAN.readerKey(currentActor() || OWNER_ACTOR)]);
+    return back(res, '/admin/notifications', 'ok', rowCount ? `${rowCount} marked read.` : 'Nothing was unread.');
+  } catch (err) {
+    console.error('notifications read-all failed:', err.message);
+    return back(res, '/admin/notifications', 'err', 'That did not save. Try again.');
+  }
+});
+
+/* Which kinds also send an email. Message emails are Team chat's alert switch,
+   shown here too so there is one place to look. */
+app.get('/admin/notifications/settings', requireAdmin, async (req, res) => {
+  const reader = CHAN.readerKey(currentActor() || OWNER_ACTOR);
+  try {
+    const [{ rows }, { rows: [chat] }] = await Promise.all([
+      pool.query('SELECT kind, email FROM notification_prefs WHERE reader = $1', [reader]),
+      pool.query('SELECT email_alerts FROM team_chat_prefs WHERE reader = $1', [reader]),
+    ]);
+    const prefs = Object.fromEntries(rows.map((r) => [r.kind, r.email]));
+    const kinds = NOTIFY.kindsFor(reader).filter((k) => !NOTIFY.KINDS[k].chatEmail);
+    const box = (name, label, on) => `<label style="display:flex;gap:8px;align-items:center;text-transform:none;letter-spacing:0;font-weight:600;margin:0 0 10px">
+        <input type="checkbox" name="${name}" value="1"${on ? ' checked' : ''} style="width:auto;margin:0">${escEmail(label)}</label>`;
+    res.set('Cache-Control', 'no-store');
+    res.send(adminPage('Notification emails', `
+      ${pageHeader('Notification emails', 'Everything shows on the bell. Tick the ones you also want by email.',
+        '<a class="btn btn-ghost" href="/admin/notifications">Notifications</a>')}
+      ${flash(req.query)}
+      <form method="post" action="/admin/notifications/settings" class="card" data-once>
+        ${box('chat', 'Team chat and Mailbox messages (one email per conversation until you read it)', !chat || chat.email_alerts)}
+        ${kinds.map((k) => box(k, NOTIFY.KINDS[k].label, NOTIFY.emailOn(k, prefs))).join('')}
+        <button type="submit" style="margin-top:6px">Save</button>
+      </form>${SHIP_ONCE_JS}`, 'notifications'));
+  } catch (err) {
+    console.error('notification settings failed:', err.message);
+    res.status(500).send(adminPage('Notification emails', '<div class="card"><div class="warn">Could not load your settings. Refresh to try again.</div></div>', 'notifications'));
+  }
+});
+
+app.post('/admin/notifications/settings', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const reader = CHAN.readerKey(currentActor() || OWNER_ACTOR);
+  const kinds = NOTIFY.kindsFor(reader).filter((k) => !NOTIFY.KINDS[k].chatEmail);
+  const client = await pool.connect().catch(() => null);
+  if (!client) return back(res, '/admin/notifications/settings', 'err', 'That did not save. Try again.');
+  try {
+    await client.query('BEGIN');
+    for (const k of kinds) {
+      await client.query(
+        `INSERT INTO notification_prefs (reader, kind, email) VALUES ($1, $2, $3)
+         ON CONFLICT (reader, kind) DO UPDATE SET email = EXCLUDED.email`, [reader, k, String(b[k] || '') === '1']);
+    }
+    await client.query(
+      `INSERT INTO team_chat_prefs (reader, email_alerts) VALUES ($1, $2)
+       ON CONFLICT (reader) DO UPDATE SET email_alerts = EXCLUDED.email_alerts`, [reader, String(b.chat || '') === '1']);
+    await client.query('COMMIT');
+    return back(res, '/admin/notifications/settings', 'ok', 'Saved.');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('notification settings save failed:', err.message);
+    return back(res, '/admin/notifications/settings', 'err', 'That did not save. Try again.');
+  } finally { client.release(); }
+});
+
+/* ── end Notifications ───────────────────────────────────────────────────── */
 
 /* ── My Day ───────────────────────────────────────────────────────────────── */
 

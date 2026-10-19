@@ -132,7 +132,9 @@ test('a helper in a conversation the owner started about an order may open that 
 });
 
 test('mailbox emails ride on the chat alerts: one per conversation until read, the same off switch', () => {
-  const alerts = src.slice(src.indexOf('async function sendChatAlerts('), src.indexOf('\n}\n', src.indexOf('async function sendChatAlerts(')));
+  /* The unread conversations are worked out once, for the alert emails and the bell alike. */
+  const unread = src.slice(src.indexOf('async function unreadConversations('), src.indexOf('\n}\n', src.indexOf('async function unreadConversations(')));
+  const alerts = unread + src.slice(src.indexOf('async function sendChatAlerts('), src.indexOf('\n}\n', src.indexOf('async function sendChatAlerts(')));
   assert.match(alerts, /convo: `mb:\$\{d\.thread_id\}`/);
   assert.match(alerts, /WHERE \$\{MAIL_MINE_SQL\} AND \$\{MAIL_UNSEEN_SQL\}/, 'unseen messages in your conversations, never your own');
   assert.doesNotMatch(alerts, /status = 'open'/, 'Done by someone else does not stop your alert');
