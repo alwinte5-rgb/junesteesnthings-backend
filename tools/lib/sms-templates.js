@@ -84,6 +84,12 @@ const T = {
         ` Details: ${lnk(link)} ${STOP}`,
     };
   },
+  // The quote itself, texted from the job page or the save page (2026-10-19).
+  quote: ({ first, what, until, link }) => ({
+    template: 'quote',
+    body: `${BRAND}: Hi${hi(first) ? ' ' + hi(first) : ''}, your quote for ${plain(what, 120) || 'your order'} is ready: ${lnk(link)}` +
+      (until ? ` Good through ${plain(until, 12)}.` : '') + ` Tap Accept when you're ready, or text us any changes. ${STOP}`,
+  }),
   // The one follow-up on a quote that has gone quiet (sendQuoteFollowUps).
   quoteFollowup: ({ code, first, link }) => ({
     template: 'quote-followup',
