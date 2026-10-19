@@ -50,13 +50,18 @@ function price(v) {
  *  feed (and each tab's saved copy) many times larger (code review, 2026-10-18). */
 const HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 const SHOWN_COLORS = 8;
+/* A colour's photo, for the card dot that shows it (2026-10-19): https on the
+   two hosts the catalogue's photos come from, nothing else. */
+const PHOTO = /^https:\/\/(?:res\.cloudinary\.com|cdn\.ssactivewear\.com)\/[^\s"'<>()\\]{1,300}$/;
 function colors(v) {
   const seen = new Set(), out = [];
   for (const c of Array.isArray(v) ? v.slice(0, 500) : []) {
     const name = text(c && c.name, 40), hex = typeof (c && c.hex) === 'string' && HEX.test(c.hex) ? c.hex : '';
     const key = name.toLowerCase() + hex.toLowerCase();
     if (!name || !hex || seen.has(key)) continue;
-    seen.add(key); out.push({ name, hex });
+    seen.add(key);
+    const photo = typeof (c && c.photo) === 'string' && PHOTO.test(c.photo) ? c.photo : '';
+    out.push(photo ? { name, hex, photo } : { name, hex });
   }
   return { colors: out.slice(0, SHOWN_COLORS), color_count: out.length };
 }
@@ -99,4 +104,4 @@ function cleanShopFeed(d) {
   return { categories, best, products, products_complete };
 }
 
-module.exports = { cleanShopFeed, HEX };
+module.exports = { PHOTO, cleanShopFeed, HEX };
