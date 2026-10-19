@@ -73,7 +73,3 @@ a{color:var(--bp-blue-dk)}
 @media(max-width:900px){.bp-work{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:900px){.bp-perks,.bp-grid{grid-template-columns:minmax(0,1fr)}.bp-steps{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:560px){.bp-hero{padding-top:64px}.bp-hero::before{width:200px;height:40px;right:-80px;top:8px}.bp-hero::after{display:none}.bp-offer b{font-size:1.7rem}.bp-photos{gap:8px}}
-/* /mail15: the mailer's code, shown as what they scanned for */
-.bp-code{display:inline-flex;align-items:center;gap:12px;margin:18px 0 0;background:#fff;color:var(--bp-black);border-radius:12px;padding:8px 10px 8px 18px;font-weight:800;font-size:.8rem;text-transform:uppercase;letter-spacing:.08em}
-.bp-code b{background:var(--bp-black);color:var(--bp-blue);font-size:1.5rem;font-weight:900;letter-spacing:.12em;padding:4px 14px;border-radius:8px}
-.bp-code-note{margin:8px 0 0;font-size:.9rem;color:#bdbac6}

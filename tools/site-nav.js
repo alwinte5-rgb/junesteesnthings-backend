@@ -34,13 +34,13 @@ const QUOTE_JS = require('./lib/css-tag').scriptTag('/assets/js/quote-form.js');
 /* The "10% off for joining our texts" popup (assets/js/texts-popup.js) goes on
    every page but these: the contact page carries the quote form's own SMS
    boxes, the SMS pages are where the terms are read, and a 404 is no place
-   to sell; the Business Partners pages (/partners, /mail15) carry their own
+   to sell; the Business Partners pages (/partners) carry their own
    offer, and a second code on top would read as a mix-up. Only jtees.net pages: design.jtees.net has its own cart popup and
    takes the menu and footer snippets, never this tag. */
 const POPUP_JS = require('./lib/css-tag').scriptTag('/assets/js/texts-popup.js');
 // Any tag for it, however written, so a hand-edited one is replaced, not kept.
 const POPUP_ANY = /<script\b[^>]*\bsrc="\/assets\/js\/texts-popup\.js[^"]*"[^>]*>\s*<\/script>\n?/g;
-const NO_POPUP = new Set(['contact.html', 'sms-consent.html', '404.html', 'partners.html', 'mail15.html']);
+const NO_POPUP = new Set(['contact.html', 'sms-consent.html', '404.html', 'partners.html']);
 function applyPopup(html, rel) {
   const out = html.replace(POPUP_ANY, '');
   return NO_POPUP.has(rel) ? out : out.replace('</body>', `${POPUP_JS.tag}\n</body>`);
