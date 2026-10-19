@@ -141,7 +141,20 @@ test('a side with no photo keeps its stand-in stage instead of vanishing (#170 t
   const open = keepUncovered(base, [{ key: 'front', side: 'front' }, { key: 'right_chest', side: 'front' }, { key: 'back', side: 'back' }],
     { front: { label: 'Left chest' }, right_chest: { label: 'Right chest' }, back: { label: 'Back' } });
   assert.deepStrictEqual(Object.keys(open), ['front', 'right_chest', 'back']);
-  assert.match(require('fs').readFileSync(require('path').join(__dirname, '..', 'tools', 'product-art', 'wire.js'), 'utf8'),
-    /keepUncovered\(stages, boxes, stagesFor\(/);
+});
+
+test('the stand-in comes from a drawing, never from another colour\'s photo', () => {
+  const { standins, keepUncovered } = require('../tools/lib/placements');
+  /* A re-run: the product's back is the default colour's PHOTO; an old
+     colourway still holds the drawing. */
+  const stages = { front: { image: 'https://res.cloudinary.com/x/white-front.webp' }, back: { image: 'https://res.cloudinary.com/x/white-back.webp' } };
+  const old = { variations: { 1: { stages: { back: { image: 'https://res.cloudinary.com/x/white-back.webp' } } }, 2: { stages: { back: { image: 'products/bag_back.png' } } } } };
+  const s = standins(stages, old);
+  assert.strictEqual(s.back.image, 'products/bag_back.png');
+  assert.strictEqual(s.front, undefined, 'no drawing anywhere: nothing to keep');
+  const st = keepUncovered(s, [{ key: 'front', side: 'front' }], { front: { image: 'https://res.cloudinary.com/x/navy-front.webp' } });
+  assert.strictEqual(st.back.image, 'products/bag_back.png', 'navy gets the drawing, not white\'s photo');
+  /* Photos only: the side is left off rather than borrowing a colour. */
+  assert.deepStrictEqual(Object.keys(keepUncovered(standins(stages, {}), [{ key: 'front', side: 'front' }], { front: {} })), ['front']);
 });
 

@@ -36,7 +36,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { urlFromStdinJson, mysql, dejson, enjson, sq } = require('./../lib/db');
-const { placementSet, boxesFor, stagesFor, keepUncovered } = require('./../lib/placements');
+const { placementSet, boxesFor, stagesFor, keepUncovered, standins } = require('./../lib/placements');
 
 const SHEET = (process.argv.find((a) => a.startsWith('--sheet=')) || '').slice(8);
 const OVERRIDES = (() => {
@@ -100,6 +100,10 @@ process.stdin.on('end', () => {
     else console.log('  could not measure the photos — keeping the single copied box');
   }
   let productStages = null, sheetItem = null;
+  const STANDIN = standins(stages, dejson(p.variations));
+  if (stages && stages.back && !STANDIN.back) {
+    console.log('  no stand-in Back left on this product or its colourways — a colour without a back photo gets no Back; restore stages from ~/jtees-backups');
+  }
   const stagesByValue = new Map();
   /* One colour's photo that cannot be measured borrows the first measurable
      colour's measurements (same style, same photo set), so every colourway
@@ -129,7 +133,7 @@ process.stdin.on('end', () => {
     }
     const boxes = set && mm.front ? boxesFor(set, mm, ov) : [];
     if (boxes.length) {
-      const st = keepUncovered(stages, boxes, stagesFor(stages, boxes, { front: c.front_url, back: c.back_url }, sizes));
+      const st = keepUncovered(STANDIN, boxes, stagesFor(stages, boxes, { front: c.front_url, back: c.back_url }, sizes));
       variations[String(n)] = {
         id: String(n), conditions: { [colKey]: value }, price: '', sku: '',
         minqty: '', maxqty: '', description: '',
@@ -142,7 +146,8 @@ process.stdin.on('end', () => {
       if (!productStages) {
         productStages = st;
         sheetItem = { title: '#' + p.id + ' [' + set + '] ' + p.name, files,
-          boxes: Object.entries(st).map(([key, s]) => ({ key, label: s.label, side: (boxes.find((b) => b.key === key) || { side: key }).side,   // a kept stand-in side has no box
+          /* A kept stand-in may carry no edit zone; the sheet cannot draw one. */
+          boxes: Object.entries(st).filter(([, s]) => s.edit_zone).map(([key, s]) => ({ key, label: s.label, side: (boxes.find((b) => b.key === key) || { side: key }).side,   // a kept stand-in side has no box
             ez: s.edit_zone, pw: s.product_width })) };
       }
       console.log('  ' + c.name.padEnd(26) + value + '  ' + Object.values(st).map((s) => s.label).join(' · '));
