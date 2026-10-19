@@ -168,3 +168,24 @@ test('a slash in a style name is not a pattern ("50/50")', () => {
   const plain = { ...tee, variations: '', stages: drawn('basic_tshirt_front', 'basic_tshirt_back') };
   assert.strictEqual(notReady({ ...plain, name: 'Gildan 8000 50/50 Blend Tee' }, { standin: true }), null);
 });
+
+test('the 2026-10-19 expansion rows are unique, capped per brand, and each name is the garment its type says', () => {
+  const rows = require('../tools/data/ssa-expansion-2026-10');
+  const T = { tee: 'tee', longslv: 'longslv', tank: 'tank', hoodie: 'hoodie', qzip: 'hoodie', cap: 'cap', bag: 'bag',
+    kids: 'kids', onesie: 'kids', polo: 'polo', woven: 'premium', jacket: 'jacket', vest: 'vest' };
+  const seen = new Set();
+  const street = new Set(require('../tools/data/ssa-streetwear-2026-10').map((r) => (r[2] + '|' + r[0]).toUpperCase()));
+  for (const [style, type, brand, name] of rows) {
+    const k = (brand + '|' + style).toUpperCase();
+    assert.ok(!seen.has(k) && !street.has(k), 'duplicate ' + k); seen.add(k);
+    assert.strictEqual(T[classify(name)], type, name);
+    assert.ok(name.startsWith(brand), name);
+    assert.ok(!/\b(tall|pant|short|jogger|legging|sock|apron)\b/i.test(name), 'tops only: ' + name);
+  }
+  assert.strictEqual(rows.length, 110);
+});
+
+test('ssa-add-products has every helper it calls (enjson was lost in #352 and the tool crashed on its first style)', () => {
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'tools', 'ssa-add-products.js'), 'utf8');
+  assert.match(src, /const \{[^}]*\benjson\b[^}]*\} = require\('\.\/lib\/db'\)/);
+});
