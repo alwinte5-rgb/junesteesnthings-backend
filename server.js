@@ -11201,6 +11201,33 @@ function emptyState(html, action) {
   return `<div class="empty">${html}${action ? `<div style="margin-top:12px">${action}</div>` : ''}</div>`;
 }
 
+/* "What they sent" at the top of the quote form: the enquiry's picture and its
+   full text, and the customer's files already on the job, so the quote is
+   built looking at them (owner, 2026-10-19). Once a quote is saved the lead's
+   picture is copied onto the job (carryLeadFiles); the lead's own copy shows
+   only while the job has none, so the same picture is not there twice. */
+function quoteReferenceCard({ lead, quote }) {
+  const cloud = QPHOTOS.cloudName();
+  const files = quote ? QPHOTOS.photosOf(quote, cloud) : [];
+  const leadPhoto = lead && /^https:\/\/res\.cloudinary\.com\//.test(String(lead.photo_url || '')) ? String(lead.photo_url) : '';
+  const text = lead && lead.description ? String(lead.description).slice(0, 2000) : '';
+  if (!files.length && !leadPhoto && !text) return '';
+  const tile = (href, thumb, label) => `
+    <a href="${escEmail(href)}" target="_blank" rel="noopener" title="${escEmail(label)}" style="text-decoration:none">${thumb
+      ? `<img src="${escEmail(thumb)}" alt="${escEmail(label)}" loading="lazy" style="width:120px;height:120px;object-fit:contain;background:#fff;border-radius:8px;border:1px solid #e3e8f2;display:block">`
+      : `<div style="width:120px;height:120px;border-radius:8px;border:1px solid #e3e8f2;background:#eef3ff;display:flex;align-items:center;justify-content:center;font-weight:700;color:#1848B8;text-align:center;padding:6px;font-size:12px;word-break:break-all">${escEmail(label)}</div>`}</a>`;
+  const tiles = files.length
+    ? files.map((p) => tile(p.view, p.kind === 'image' ? p.thumb : '', p.kind === 'image' ? p.name : p.ext.toUpperCase()))
+    : leadPhoto ? [tile(leadPhoto, leadPhoto, 'Photo sent with the enquiry')] : [];
+  return `
+    <div class="card" id="what-they-sent" style="border-left:4px solid #1848B8">
+      <b>What they sent</b>${lead ? ` <span class="muted" style="font-size:13px">&middot; enquiry of ${fmtDate(lead.created_at)}</span>` : ''}
+      ${text ? `<div style="margin-top:6px;white-space:pre-wrap;font-size:14px">&ldquo;${escEmail(text)}&rdquo;</div>` : ''}
+      ${tiles.length ? `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">${tiles.join('')}</div>
+      <div class="muted" style="font-size:12.5px;margin-top:4px">Tap a picture to open it full size in a new tab.</div>` : ''}
+    </div>`;
+}
+
 /* The form June opens on her phone. Also serves /admin/quote/:code/edit, pre-filled,
    so editing is the same screen rather than a second thing to maintain. */
 app.get(['/admin/quote/new', '/admin/quote/:code/edit'], requireAdmin, async (req, res) => {
@@ -11673,14 +11700,23 @@ function productGroupOf(name) {
     </div>`;
   };
 
+  /* The enquiry a saved quote was made from, so its picture and request are
+     on the form while it is edited, not one page away on the lead. */
+  let sourceLead = lead;
+  if (!sourceLead && isEdit && existing.from_submission_id) {
+    sourceLead = (await pool.query('SELECT id, name, description, photo_url, created_at FROM submissions WHERE id = $1',
+      [existing.from_submission_id]).catch(() => ({ rows: [] }))).rows[0] || null;
+  }
+  const refCard = quoteReferenceCard({ lead: sourceLead, quote: isEdit ? existing : null });
+
   res.send(quotePage('New quote', `
     <h1>${isEdit ? 'Edit quote ' + escEmail(existing.code)
         : lead ? 'New quote for ' + escEmail(lead.name || 'this enquiry') : 'New quote'}</h1>
-    ${lead ? `<div class="sub">From the website enquiry on ${fmtDate(lead.created_at)}${
-      lead.description ? ` — “${escEmail(String(lead.description).slice(0, 160))}”` : ''}</div>` : ''}
+    ${lead ? `<div class="sub">From the website enquiry on ${fmtDate(lead.created_at)}</div>` : ''}
     <div class="sub">${existing
       ? 'Their link stays the same — it updates the moment you save.'
       : 'Fills in the message for you — you still send it from your phone.'}</div>
+    ${refCard}
     ${(() => {
       /* What the customer asked for, if anything — the note they typed and the
          numbers they moved, shown before the form so it is read before the
@@ -14892,10 +14928,13 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     const emailed = null;
 
     const msgs = quoteMessages(q);
-    const digits = phone.replace(/[^0-9+]/g, '');
-    const smsHref = digits
-      ? `sms:${digits}${/iPhone|iPad|Mac/.test(req.get('user-agent') || '') ? '&' : '?'}body=${encodeURIComponent(msgs.initial)}`
-      : '';
+    const smsHref = quoteSmsHref(q, req.get('user-agent'));
+    /* From the shop's number when they agreed to texts (2026-10-19); the
+       Messages link stays for everyone else. */
+    const mayText = STAFF.mayUseRoute(actor, 'POST', '/admin/quote/:code/text');
+    const textByShop = mayText && (await quoteTextWay(q).catch(() => '')) === 'shop';
+    const textForm = (cls) => textByShop ? `<form method="POST" action="/admin/quote/${code}/text" style="margin:0 0 8px">
+            <button type="submit"${cls} style="width:100%">Text it to ${escEmail(q.phone)}</button></form>` : '';
 
     res.send(quotePage('Quote ready', `
       <h1>Quote ${escEmail(code)}${q.revision > 1 ? ` <span class="muted" style="font-size:14px">rev ${q.revision}</span>` : ''}</h1>
@@ -14911,14 +14950,15 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
             later from the job page.</p>
           ${q.email ? `<form method="POST" action="/admin/quote/${code}/email" style="margin:0 0 8px">
             <button type="submit" style="width:100%">Email it to ${escEmail(q.email)}</button></form>` : ''}
+          ${textForm(' class="btn-ghost"')}
           ${smsHref ? `<a class="btn btn-ghost" style="display:block;text-align:center;margin-bottom:8px" href="${escEmail(smsHref)}"
-            onclick="markSent()">Text it (opens Messages)</a>` : ''}
+            onclick="markSent()">${textByShop ? 'Text it from my phone instead' : 'Text it (opens Messages)'}</a>` : ''}
           <form method="POST" action="/admin/quote/${code}/delivered" style="margin:0 0 8px">
             <button type="submit" class="btn-ghost" style="width:100%">I sent it another way</button></form>
           <a class="btn btn-ghost" style="display:block;text-align:center" href="/admin/production/${code}">Not yet</a>
-        </div>` : q.email ? `<div class="card"><form method="POST" action="/admin/quote/${code}/email" style="margin:0">
+        </div>` : (q.email || textByShop || smsHref) ? `<div class="card">${q.email ? `<form method="POST" action="/admin/quote/${code}/email" style="margin:0 0 8px">
           <button type="submit" class="btn btn-ghost" style="width:100%">Email ${existingQuote ? 'the updated quote' : 'it'} to ${escEmail(q.email)}</button>
-        </form></div>` : ''}
+        </form>` : ''}${textForm(' class="btn-ghost"')}${!textByShop && smsHref ? `<a class="btn btn-ghost" style="display:block;text-align:center" href="${escEmail(smsHref)}">Text ${existingQuote ? 'the updated quote' : 'it'} (opens Messages)</a>` : ''}</div>` : ''}
       <div class="card">
         <div class="msg" id="m">${escEmail(msgs.initial)}</div>
         <div class="row">
@@ -20345,6 +20385,91 @@ app.post('/admin/quote/:code/email', requireAdmin, async (req, res) => {
   }
 });
 
+/* Text the quote from the shop's number: the email's twin (owner,
+   2026-10-19: "I want email and text"). The same refusals as the email, then
+   the customer's text rules: they must have agreed to order texts. Without
+   that, the page offers the phone's Messages instead (quoteTextWay). */
+function quoteTextBody(q) {
+  const first = String(q.name || '').trim().split(/\s+/)[0];
+  const until = fmtDate(q.valid_until);
+  const what = smsPlain(quoteSummary(q.items) || 'your order', 120);
+  return `June's Tees: Hi${first ? ' ' + smsPlain(first, 30) : ''}, your quote for ${what} is ready: ${smsShort(quoteLink(q.code))}${
+    until ? ` Good through ${until}.` : ''} Tap Accept when you're ready, or text us any changes. Reply STOP to opt out.`;
+}
+
+/* How the quote can go by text, for the buttons: 'shop' (sent from the shop's
+   number by the server), 'phone' (opens Messages on this device; the server
+   cannot send it), or '' when there is no usable number. */
+async function quoteTextWay(q) {
+  const phone = normalizeUsPhone(q.phone);
+  if (!phone) return '';
+  if (!smsConfigured()) return 'phone';
+  const c = await smsConsentFor(phone).catch(() => ({ transactional: false }));
+  return c.transactional ? 'shop' : 'phone';
+}
+
+/* sms: link that opens Messages with the quote's message in it. iPhones and
+   Macs want '&' before body, everything else '?'. */
+function quoteSmsHref(q, ua) {
+  const digits = String(q.phone || '').replace(/[^0-9+]/g, '');
+  if (!digits) return '';
+  return `sms:${digits}${/iPhone|iPad|Mac/.test(ua || '') ? '&' : '?'}body=${encodeURIComponent(quoteMessages(q).initial)}`;
+}
+
+/* The text control beside an email one on the job page: a button that sends
+   from the shop's number, or a Messages link that marks the quote sent as it
+   opens. `look` is 'link' (the header line) or 'button' (the not-sent card). */
+function quoteTextControl(q, way, smsHref, look) {
+  const code = escEmail(q.code);
+  const asLink = look === 'link';
+  if (way === 'shop') {
+    return `<form method="POST" action="/admin/quote/${code}/text" style="${asLink ? 'display:inline;' : ''}margin:0">
+      <button type="submit"${asLink ? ' style="background:none;border:0;padding:0;color:#1848B8;font:inherit;cursor:pointer;text-decoration:underline"' : ''}>${
+        asLink ? 'text the quote to them' : 'Text it to ' + escEmail(q.phone)}</button></form>`;
+  }
+  if (way !== 'phone' || !smsHref) return '';
+  return `<a href="${escEmail(smsHref)}"${asLink ? ' style="color:#1848B8"' : ' class="btn"'}
+    onclick="try{fetch('/admin/quote/${code}/delivered',{method:'POST',keepalive:true,credentials:'same-origin',headers:{'X-Requested-With':'fetch'}})}catch(e){}">${
+      asLink ? 'text the quote from your phone' : 'Text it from your phone'}</a>`;
+}
+
+app.post('/admin/quote/:code/text', requireAdmin, async (req, res) => {
+  if (actorLevel('quotes.view') !== 'on') return res.status(403).send('Not available to your account.');
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/quotes');
+  const back = `/admin/production/${code}`;
+  const err = (m) => res.redirect(`${back}?err=${encodeURIComponent(m)}`);
+  try {
+    const { rows: [q] } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
+    if (!q) return res.redirect('/admin/quotes');
+    if (q.status === 'held' || q.status === 'draft' || q.cancelled_at) return err('That quote is not with the customer, so it was not texted.');
+    if (Number(q.paid_amount) > 0) {
+      return err('This job already has a payment on it, so the "accept and pay" quote text was not sent. Send a message from the job instead.');
+    }
+    /* A double tap inside the same minute is one text (the dedupe key); a
+       re-send of an updated quote a minute later is a new one. */
+    const status = await sendCustomerSms({ phone: q.phone, kind: 'transactional', quote: code,
+      ref: `quote-text:${code}:${Math.floor(Date.now() / 60000)}`,
+      msg: { template: 'quote', body: quoteTextBody(q) } });
+    if (status === 'sent') {
+      await pool.query('UPDATE quotes SET sent_to_customer_at = COALESCE(sent_to_customer_at, NOW()) WHERE id = $1', [q.id]);
+      if (q.from_submission_id) await markLeadResponded(q.from_submission_id, currentActor()).catch(() => {});
+      logActivity(currentActor() || OWNER_ACTOR, 'quote texted', { type: 'quote', id: code }, {});
+      return res.redirect(`${back}?ok=${encodeURIComponent('Quote texted to ' + q.phone + '.')}`);
+    }
+    return err({
+      'no-phone': 'There is no usable phone number on this quote, so it was not texted.',
+      'no-consent': 'They have not agreed to texts, so it was not sent from the shop number. Use "text it from your phone" instead.',
+      unconfigured: 'Texting is not switched on, so it was not sent. Use "text it from your phone" instead.',
+      duplicate: 'That text went out a moment ago, so it was not sent twice.',
+    }[status] || 'The text did not go, and the error has been logged. Try again, or email it.');
+  } catch (e) {
+    console.error('quote text route failed:', e.message);
+    reportError('quote-text', e, `quote ${code}`).catch(() => {});
+    return err('The text did not go. Please try again.');
+  }
+});
+
 /* Marks a quote as with the customer: sent by text or some other way the
    server cannot see (2026-10-06). Only a quote whose link works; never undone
    here. Answers a fetch with 204, a form with the job page. */
@@ -22938,7 +23063,9 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
     const may = (route) => STAFF.mayUseRoute(currentActor() || OWNER_ACTOR, 'POST', route);
     const mayStep = may('/admin/quote/:code/step'), mayStage = may('/admin/quote/:code/stage'),
           mayTarget = may('/admin/quote/:code/target'), mayEmail = may('/admin/quote/:code/email'),
-          maySent = may('/admin/quote/:code/delivered');
+          maySent = may('/admin/quote/:code/delivered'), mayText = may('/admin/quote/:code/text');
+    const textWay = mayText ? await quoteTextWay(q).catch(() => '') : '';
+    const textAs = (look) => quoteTextControl(q, textWay, maySent ? quoteSmsHref(q, req.get('user-agent')) : '', look);
     const stepRows = cl.steps.map((st) => {
       const inner = `<span class="step-tick" style="color:${st.done ? '#047857' : '#9ca3af'}">${st.done ? '☑' : '☐'}</span>
         <span class="step-label" style="color:${st.done ? '#6b7280' : '#111827'};${st.done ? 'text-decoration:line-through' : 'font-weight:600'}">${st.label}</span>
@@ -23002,7 +23129,8 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
           q.email && mayEmail && !['held', 'draft'].includes(q.status) && !q.cancelled_at ? ` ·
         <form method="POST" action="/admin/quote/${escEmail(q.code)}/email" style="display:inline;margin:0">
           <button type="submit" style="background:none;border:0;padding:0;color:#1848B8;font:inherit;cursor:pointer;text-decoration:underline">email the quote to them</button></form>${
-            q.emailed_at ? ` <span class="muted">(last emailed ${escEmail(new Date(q.emailed_at).toLocaleString('en-US', { timeZone: 'America/Chicago', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))})</span>` : ''}` : ''}</div>
+            q.emailed_at ? ` <span class="muted">(last emailed ${escEmail(new Date(q.emailed_at).toLocaleString('en-US', { timeZone: 'America/Chicago', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))})</span>` : ''}` : ''}${
+          !['held', 'draft'].includes(q.status) && !q.cancelled_at && textAs('link') ? ` · ${textAs('link')}` : ''}</div>
       ${flash(req.query)}
       ${quoteIsExpired(q) ? `
       <div class="card" style="border-color:#e5e7eb;background:#f9fafb"><b>This quote expired${q.valid_until ? ' on ' + dayShort(q.valid_until) : ''}.</b>
@@ -23012,12 +23140,13 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
       <div class="card" style="border-color:#c7d7fb;background:#f7faff"><b>They asked for a change</b>
         <div style="margin:6px 0 10px;white-space:pre-wrap">&ldquo;${escEmail(String(q.change_request).slice(0, 2000))}&rdquo;</div>
         <a class="btn" href="/admin/quote/${escEmail(q.code)}/edit">Edit the quote &rarr;</a></div>` : ''}
-      ${!q.sent_to_customer_at && (mayEmail || maySent) && !['held', 'draft'].includes(q.status) && !q.cancelled_at && !q.accepted_at ? `
+      ${!q.sent_to_customer_at && (mayEmail || maySent || textAs('button')) && !['held', 'draft'].includes(q.status) && !q.cancelled_at && !q.accepted_at ? `
       <div class="card" style="border-color:#f5d48a;background:#fffbeb"><b>Not sent to the customer yet.</b>
         <span class="muted">Saving a quote does not send it.</span>
         <div class="row" style="gap:8px;margin-top:8px;flex-wrap:wrap">
           ${q.email && mayEmail ? `<form method="POST" action="/admin/quote/${escEmail(q.code)}/email" style="margin:0">
             <button type="submit">Email it to ${escEmail(q.email)}</button></form>` : ''}
+          ${textAs('button')}
           ${maySent ? `<form method="POST" action="/admin/quote/${escEmail(q.code)}/delivered" style="margin:0">
             <button type="submit" class="btn-ghost">I sent it another way</button></form>` : ''}
         </div></div>` : ''}
@@ -23417,7 +23546,7 @@ const MESSAGE_KINDS = {
   'deposit-reminder': 'Deposit reminder', 'balance-reminder': 'Balance reminder', reorder: 'Reorder nudge',
   'pickup-reminder': 'Pickup reminder', 'quote-followup': 'Follow-up', 'missed-call': 'Missed-call text', call: 'Phone call',
   tracking: 'Tracking number', 'milestone:production': 'In production', 'milestone:ready': 'Ready / shipped',
-  manual: 'From you', 'review-ask': 'Review ask', 'review-followup': 'Review reminder',
+  manual: 'From you', quote: 'Quote', 'review-ask': 'Review ask', 'review-followup': 'Review reminder',
   /* texts, by template */
   'payment-received': 'Payment receipt', 'in-production': 'In production', ready: 'Ready',
   shipped: 'Shipped', reply: 'Their reply',

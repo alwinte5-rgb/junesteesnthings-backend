@@ -279,6 +279,8 @@ const ROUTES = {
   /* Skip one automatic reminder on a job (2026-10-15): it stops a message, so the same permission. */
   'POST /admin/quote/:code/skip-reminder': 'customers.message',
   'POST /admin/quote/:code/email': 'customers.message',
+  /* Text the quote link from the shop's number (2026-10-19): the email's twin. */
+  'POST /admin/quote/:code/text': 'customers.message',
   /* Marks a quote as sent by text or by hand (2026-10-06): sending, so the same permission. */
   'POST /admin/quote/:code/delivered': 'customers.message',
   'POST /admin/quote/:code/receipt': 'customers.message',
