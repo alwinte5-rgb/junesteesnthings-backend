@@ -7377,6 +7377,7 @@ app.post('/api/reorder', requireInternalKey, async (req, res) => {
     /* One open reorder per job: a second press returns the first. */
     const { rows: open } = await pool.query(
       `SELECT code, status FROM quotes WHERE reorder_of = $1 AND lower(trim(email)) = $2 AND accepted_at IS NULL
+          AND status <> 'draft'   -- the shop's unfinished reorder (2026-10-19) is not theirs to open
           AND cancelled_at IS NULL AND COALESCE(paid_amount, 0) = 0 ORDER BY id DESC LIMIT 1`, [src, email]);
     if (open.length) {
       return res.json({ ok: true, code: open[0].code, held: open[0].status === 'held', url: quoteLink(open[0].code), existing: true });
@@ -11252,6 +11253,27 @@ function quoteReferenceCard({ lead, quote }) {
     </div>`;
 }
 
+/* From a customer's page (owner, 2026-10-19: "If I click new quote inside a
+   customer it doesnt fill their details"): ?customer= carries who they are,
+   and ?reorder=<code> a past job's lines as well, the way the partners' own
+   reorder copies them. Shaped like a saved quote with no code, as the lead
+   prefill is. Nothing is saved until the form is. */
+async function quoteFormFromCustomer(query) {
+  const reorderCode = String(query.reorder || '').toUpperCase();
+  const customerKey = String(query.customer || '').trim().slice(0, 200);
+  const blank = { notes: '', items: [], code: null, discount_kind: 'amt', discount_value: 0, tax: 0 };
+  if (QUOTE_CODE_RE.test(reorderCode)) {
+    const { rows: [src] } = await pool.query('SELECT * FROM quotes WHERE code = $1', [reorderCode]);
+    if (!src) return { existing: null, reorderOf: null };
+    return { reorderOf: src, existing: { ...blank, name: src.name || '', email: src.email || '', phone: src.phone || '',
+      items: PARTNERS.reorderItems(src.items),
+      /* A tax exemption is the same customer's, so it carries with the job. */
+      taxable: src.taxable, tax_exempt_ref: src.tax_exempt_ref, tax_exempt_reason: src.tax_exempt_reason } };
+  }
+  const h = customerKey ? await customerHistory(customerKey).catch(() => null) : null;
+  return { reorderOf: null, existing: h ? { ...blank, name: h.name || '', email: h.email || '', phone: h.phone || '' } : null };
+}
+
 /* The form June opens on her phone. Also serves /admin/quote/:code/edit, pre-filled,
    so editing is the same screen rather than a second thing to maintain. */
 app.get(['/admin/quote/new', '/admin/quote/:code/edit'], requireAdmin, async (req, res) => {
@@ -11305,6 +11327,8 @@ app.get(['/admin/quote/new', '/admin/quote/:code/edit'], requireAdmin, async (re
       };
     }
   }
+  let reorderOf = null;
+  if (!existing) ({ existing, reorderOf } = await quoteFormFromCustomer(req.query));
   const E = existing || {};
   /* `existing` now covers two things: a saved quote being edited, and a blank
      quote prefilled from a website enquiry. Only the first has a code, and only
@@ -11735,9 +11759,12 @@ function productGroupOf(name) {
 
   res.send(quotePage('New quote', `
     <h1>${isEdit ? 'Edit quote ' + escEmail(existing.code)
-        : lead ? 'New quote for ' + escEmail(lead.name || 'this enquiry') : 'New quote'}</h1>
+        : lead ? 'New quote for ' + escEmail(lead.name || 'this enquiry')
+        : reorderOf ? 'Reorder of ' + escEmail(reorderOf.code) : 'New quote'}</h1>
     ${lead ? `<div class="sub">From the website enquiry on ${fmtDate(lead.created_at)}</div>` : ''}
-    <div class="sub">${existing
+    ${reorderOf ? `<div class="sub">The lines from <a href="/admin/production/${escEmail(reorderOf.code)}">${escEmail(reorderOf.code)}</a>
+      (${fmtDate(reorderOf.created_at)}), copied across. Lines priced from the price list use today's prices, so check sizes, quantities and the total, then save.</div>` : ''}
+    <div class="sub">${isEdit
       ? 'Their link stays the same — it updates the moment you save.'
       : 'Fills in the message for you — you still send it from your phone.'}</div>
     ${refCard}
@@ -11784,6 +11811,7 @@ function productGroupOf(name) {
         <span class="muted">The customer cannot see this quote yet. <b>Finish &amp; get the message</b> at the
         bottom sends it; <b>Save as draft</b> keeps it private.</span></div>` : ''}
       ${lead ? `<input type="hidden" name="from_submission_id" value="${lead.id}">` : ''}
+      ${reorderOf ? `<input type="hidden" name="reorder_of" value="${escEmail(reorderOf.code)}">` : ''}
       ${!isEdit && !exam ? `<input type="hidden" name="form_key" value="${crypto.randomUUID()}">` : ''}
       ${exam ? `<input type="hidden" name="exam_scenario" value="${escEmail(exam.id)}">
       <div class="card" style="border-left:4px solid #1848B8;background:#f7faff">
@@ -11857,7 +11885,7 @@ function productGroupOf(name) {
             </div></td>
             <td class="num" id="disc" style="color:#166534">—</td></tr>
           <tr><td class="muted"><label style="display:inline;margin:0;text-transform:none;letter-spacing:0;font-size:14px;font-weight:400">
-            <input type="checkbox" name="taxable" value="1" ${!isEdit || quoteTaxable(E) ? 'checked' : ''} style="width:auto;margin-right:6px" onchange="calc()"${
+            <input type="checkbox" name="taxable" value="1" ${(!isEdit && !reorderOf) || quoteTaxable(E) ? 'checked' : ''} style="width:auto;margin-right:6px" onchange="calc()"${
               isOwner() ? '' : ' disabled title="Tax is set automatically"'}> Illinois sales tax</label>
             ${isOwner() ? '' : `<div class="muted" style="font-size:11px;margin-top:3px;text-transform:none;letter-spacing:0">
               Set automatically. If the customer is tax-exempt, attach their certificate on the job page and the owner will take the tax off.</div>`}
@@ -14567,6 +14595,19 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     const priorCode = String(req.params.code || '').toUpperCase();
     const prior = QUOTE_CODE_RE.test(priorCode)
       ? ((await pool.query('SELECT * FROM quotes WHERE code = $1', [priorCode])).rows[0] || null) : null;
+    /* A reorder (2026-10-19) starts from the job it copies, as an edit starts
+       from itself: its prices are not a helper's change and its exemption
+       stays. Only for the same customer (email, or the phone's last ten
+       digits), so naming someone else's job carries nothing across. */
+    const reorderCode = String(one(b.reorder_of) || '').toUpperCase();
+    const reorderSrc = !prior && QUOTE_CODE_RE.test(reorderCode)
+      ? await pool.query('SELECT * FROM quotes WHERE code = $1', [reorderCode]).then((r) => r.rows[0] || null) : null;
+    const sameCustomer = (a, x) => {
+      const em = (v) => String(v || '').trim().toLowerCase(), ph = (v) => String(v || '').replace(/\D/g, '').slice(-10);
+      return Boolean((em(a.email) && em(a.email) === em(x.email)) || (ph(a.phone).length === 10 && ph(a.phone) === ph(x.phone)));
+    };
+    const reorderOf = reorderSrc && sameCustomer(reorderSrc, { email, phone }) ? reorderSrc : null;
+    const basis = prior || reorderOf;
     /* PRICE LOCK (owner, 2026-10-08: "no price changes only me unless I grant
        full access to the helper"). Without quotes.price a helper cannot type
        an each price, change the garment cost or give a discount. Re-saving a
@@ -14574,7 +14615,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
        anything else is refused before a thing is written. Sign prices are
        worked out above from the size, so a helper never needs to type one. */
     if (saver.kind === 'staff' && STAFF.levelOf(saver, 'quotes.price') !== 'on') {
-      const priorItems = (prior && Array.isArray(prior.items)) ? prior.items : [];
+      const priorItems = (basis && Array.isArray(basis.items)) ? basis.items : [];
       const had = { unit: new Set(), blank: new Set() };
       for (const it of priorItems) {
         const tu = typedUnitOf(it);
@@ -14605,7 +14646,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
        is kept as it was. Only the owner takes tax off. */
     const staffTax = saver.kind === 'staff';
     const taxable = staffTax
-      ? !(prior && prior.taxable === false)
+      ? !(basis && basis.taxable === false)
       : (b.taxable === '1' || b.taxable === 'on' || b.taxable === true);
     /* Kept only when the sale is actually untaxed. A reference sitting on a
        taxable quote is a contradiction the export would have to interpret, and
@@ -14613,12 +14654,12 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
        nobody claimed. */
     const exemptRef = taxable
       ? null
-      : staffTax ? (prior.tax_exempt_ref || null)
+      : staffTax ? (basis.tax_exempt_ref || null)
       : (String(one(b.tax_exempt_ref) || '').trim().slice(0, 60) || null);
     /* Why it is untaxed, which decides the evidence it needs
        (tools/lib/tax-certificates.js). Kept on an untaxed quote only, for the
        same reason as the note; anything not on the list is no answer. */
-    const reasonIn = staffTax ? String((prior && prior.tax_exempt_reason) || '') : String(one(b.tax_exempt_reason) || '').trim();
+    const reasonIn = staffTax ? String((basis && basis.tax_exempt_reason) || '') : String(one(b.tax_exempt_reason) || '').trim();
     const exemptReason = taxable ? null : (TAXCERT.EXEMPT_REASONS[reasonIn] ? reasonIn : null);
     const tax = quoteTax(net, taxable);
     /* A delivery the customer booked at Accept stays on the job when the shop
@@ -14784,15 +14825,18 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
            to catch it, which it only does when the details match exactly. */
         `INSERT INTO quotes (code,name,phone,email,items,subtotal,tax,total,deposit,notes,status,valid_until,needed_by,
                              discount_kind,discount_value,discount_note,rush_pct,taxable,tax_exempt_ref,tax_exempt_reason,
-                             from_submission_id, created_by, sent_by, held_at)
+                             from_submission_id, created_by, sent_by, held_at, reorder_of, tax_certificate_id)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$23,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,
-                 CASE WHEN $23 = 'held' THEN NOW() END) RETURNING *`,
+                 CASE WHEN $23 = 'held' THEN NOW() END, $24, $25) RETURNING *`,
         [code, name, phone, email, JSON.stringify(items), subtotal, tax, total, deposit,
          String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy,
          discountKind, discountValue, discountNote || null, rushPct, taxable, exemptRef, exemptReason,
          (Number.isFinite(parseInt(one(b.from_submission_id), 10))
            ? parseInt(one(b.from_submission_id), 10) : null),
-         staffId, (gate.held || draft) ? null : staffId, draft ? 'draft' : gate.held ? 'held' : 'sent']));
+         staffId, (gate.held || draft) ? null : staffId, draft ? 'draft' : gate.held ? 'held' : 'sent',
+         reorderOf ? reorderOf.code : null,
+         /* The certificate behind the job's exemption comes with it. */
+         reorderOf && !taxable && reorderOf.tax_certificate_id ? reorderOf.tax_certificate_id : null]));
     }
 
     const q = rows[0];
@@ -21566,6 +21610,10 @@ app.get('/admin/customer', requireAdmin, async (req, res) => {
       [h.quotes.map(r => r.code)]);
     const payTotal = round2(payHistory.reduce((a, r) => a + Number(r.amount), 0));
 
+    /* Only a job they actually ordered (accepted or paid, not cancelled) is
+       offered as a reorder; a quote that expired unanswered is not one. */
+    const isOrdered = (r) => !r.cancelled_at && (r.accepted_at || Number(r.paid_amount || 0) > 0);
+    const lastOrder = h.quotes.find(isOrdered);
     const rows = h.quotes.map(r => {
       const paid = Number(r.paid_amount || 0);
       const total = Number(r.total || r.subtotal || 0);
@@ -21576,6 +21624,7 @@ app.get('/admin/customer', requireAdmin, async (req, res) => {
       return `
         <tr>
           <td><a href="/admin/production/${r.code}">${escEmail(r.code)}</a> <a class="muted" style="font-size:12px" href="/q/${r.code}?staff=1" target="_blank" rel="noopener">customer view</a>
+            ${isOrdered(r) ? `&middot; <a style="font-size:12px" href="/admin/quote/new?reorder=${encodeURIComponent(r.code)}">reorder</a>` : ''}
             <div class="muted" style="font-size:12px">${escEmail(quoteSummary(r.items))}</div></td>
           <td class="num">${fmtDate(r.created_at)}</td>
           <td class="num">${money(total)}</td>
@@ -21605,6 +21654,10 @@ app.get('/admin/customer', requireAdmin, async (req, res) => {
       <div class="sub">
         ${h.email ? `<a href="mailto:${escEmail(h.email)}">${escEmail(h.email)}</a> &middot; ` : ''}
         ${h.phone ? `<a href="tel:${escEmail(String(h.phone).replace(/[^0-9+]/g,''))}">${escEmail(h.phone)}</a>` : ''}
+      </div>
+      <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:10px">
+        <a class="btn" href="/admin/quote/new?customer=${encodeURIComponent(q)}">New quote for them</a>
+        ${lastOrder ? `<a class="btn btn-ghost" href="/admin/quote/new?reorder=${encodeURIComponent(lastOrder.code)}">Reorder ${escEmail(lastOrder.code)}</a>` : ''}
       </div>
 
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin:14px 0">
@@ -21681,7 +21734,7 @@ app.get('/admin/customer', requireAdmin, async (req, res) => {
       </div>
 
       <p><a class="btn btn-ghost" href="/admin/quotes">← All quotes</a>
-         <a class="btn btn-ghost" href="/admin/quote/new">New quote</a></p>
+         <a class="btn btn-ghost" href="/admin/quote/new?customer=${encodeURIComponent(q)}">New quote for them</a></p>
     `, 'customers'));
   } catch (err) {
     console.error('customer page failed:', err.message);
@@ -22176,9 +22229,17 @@ async function renderBoard(VIEW, req, res) {
     const taxPos = await taxPositionByMonth(24);
 
     const { rows: openAgg } = await pool.query(
+      /* Money owed: jobs the customer said yes to or paid on, not cancelled
+         (owner, 2026-10-19: "how do I have 13,000 in owed?"). It summed every
+         unpaid quote, including cancelled ones and ones never accepted. */
       `SELECT COUNT(*) AS n, COALESCE(SUM(total - COALESCE(paid_amount,0)),0) AS due
          FROM quotes
-        WHERE status NOT IN ('expired', 'held', 'draft') AND COALESCE(paid_amount,0) < total`);
+        WHERE status NOT IN ('expired', 'held', 'draft', 'cancelled') AND cancelled_at IS NULL
+          AND (accepted_at IS NOT NULL OR COALESCE(paid_amount,0) > 0)
+          AND COALESCE(paid_amount,0) < total
+          -- refunded or disputed: the shop chases those by hand (as gOwedDone)
+          AND NOT EXISTS (SELECT 1 FROM quote_payments p WHERE p.quote_code = quotes.code AND p.kind = 'refund')
+          AND NOT EXISTS (SELECT 1 FROM stripe_disputes d WHERE d.quote_code = quotes.code AND d.status NOT IN ('won', 'warning_closed'))`);
 
     const { rows: quotedAgg } = await pool.query(
       `SELECT to_char(date_trunc('month', created_at), 'Mon YYYY') AS label,
@@ -22625,11 +22686,21 @@ async function renderBoard(VIEW, req, res) {
           Clear ${staleLeads.length} over 30 days old</button>
       </form>`;
 
+    /* Left: everything not paid yet — enquiries, carts and the quotes still
+       waiting on a yes or a deposit. Right: only jobs with money in (owner,
+       2026-10-19: "I only want to see whats paid on the order side"). */
     const laneLeft =
       group('New enquiries', 'from the website — no quote raised yet', leads, leadCard,
             { accent: '#b45309', action: clearOld }) +
       group('Unfinished carts', 'started a design, never checked out', carts, cartCard,
-            { accent: '#1848B8' });
+            { accent: '#1848B8' }) +
+      group('Accepted, waiting on deposit', 'they said yes — nothing paid yet', gAccepted, null, { accent: '#8a5a00' }) +
+      group('Waiting on the customer', 'sent, not accepted yet', gQuotes) +
+      (showExpired ? group('Expired', 'not accepted in time — Reinstate one to give them 14 more days at the same prices', gExpired) : '') +
+      (gExpired.length ? `<p class="muted" style="margin:4px 0 0;font-size:12.5px">${showExpired
+        ? `<a href="?">Hide the ${gExpired.length} expired quote${gExpired.length === 1 ? '' : 's'}</a>`
+        : `${gExpired.length} expired quote${gExpired.length === 1 ? ' is' : 's are'} off the board &middot;
+           <a href="?expired=1">show ${gExpired.length === 1 ? 'it' : 'them'}</a>`}</p>` : '');
 
     /* Cancelled work is not on the working board at all. It was a group here,
        which meant cancelling relabelled a job rather than clearing it — the
@@ -22637,15 +22708,8 @@ async function renderBoard(VIEW, req, res) {
        to look something up. */
     const laneRight =
       group('Orders', 'deposit in — work in hand', gOrders) +
-      group('Accepted, waiting on deposit', 'they said yes — nothing paid yet', gAccepted, null, { accent: '#8a5a00' }) +
-      group('Waiting on the customer', 'sent, not accepted yet', gQuotes) +
       group('Delivered, still owed', 'collect it, record a payment taken at pickup, or settle it', gOwedDone,
-            null, { accent: '#b45309' }) +
-      (showExpired ? group('Expired', 'not accepted in time — Reinstate one to give them 14 more days at the same prices', gExpired) : '') +
-      (gExpired.length ? `<p class="muted" style="margin:4px 0 0;font-size:12.5px">${showExpired
-        ? `<a href="?">Hide the ${gExpired.length} expired quote${gExpired.length === 1 ? '' : 's'}</a>`
-        : `${gExpired.length} expired quote${gExpired.length === 1 ? ' is' : 's are'} off the board &middot;
-           <a href="?expired=1">show ${gExpired.length === 1 ? 'it' : 'them'}</a>`}</p>` : '');
+            null, { accent: '#b45309' });
 
     /* Both lanes empty means an empty board; one empty lane is normal and still
        renders, so the two columns do not jump around as work moves between
@@ -22653,9 +22717,9 @@ async function renderBoard(VIEW, req, res) {
     const body = (laneLeft || laneRight) ? `
       <div class="board-lanes">
         <div class="board-lane"><div class="quote-grid">${laneLeft ||
-          '<p class="muted" style="margin:0">No new enquiries or unfinished carts.</p>'}</div></div>
+          '<p class="muted" style="margin:0">No new enquiries, carts or open quotes.</p>'}</div></div>
         <div class="board-lane"><div class="quote-grid">${laneRight ||
-          '<p class="muted" style="margin:0">No open work.</p>'}</div></div>
+          '<p class="muted" style="margin:0">No paid orders in hand.</p>'}</div></div>
       </div>` : '';
 
     /* Folding, remembered. localStorage rather than a cookie: it is a per-browser
@@ -22739,11 +22803,11 @@ async function renderBoard(VIEW, req, res) {
       <div class="card" style="margin-bottom:16px">
         <div style="display:flex;gap:26px;flex-wrap:wrap;align-items:baseline;margin-bottom:4px">
           <div>
-            <div class="muted" style="font-size:11px;letter-spacing:.06em;text-transform:uppercase">Open orders</div>
+            <div class="muted" style="font-size:11px;letter-spacing:.06em;text-transform:uppercase">Jobs owing</div>
             <div style="font-size:24px;font-weight:700">${openAgg[0].n}</div>
           </div>
           <div>
-            <div class="muted" style="font-size:11px;letter-spacing:.06em;text-transform:uppercase">Outstanding</div>
+            <div class="muted" style="font-size:11px;letter-spacing:.06em;text-transform:uppercase" title="Balances on accepted or paid jobs. Quotes not accepted yet and cancelled jobs are not counted.">Owed to you</div>
             <div style="font-size:24px;font-weight:700;color:${Number(openAgg[0].due) > 0 ? '#b45309' : '#047857'}">${money(openAgg[0].due)}</div>
           </div>
           <div>
@@ -23149,7 +23213,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
       <h1>${escEmail(q.name || q.code)}</h1>
       <div class="sub">${escEmail(q.code)}${showMoney ? ` · ${money(q.total)}` : ''} ·
         ${boards ? `<a href="/admin/production" style="color:#1848B8">back to the board</a> ·
-        <a href="/admin/customer?q=${encodeURIComponent(q.email || q.phone || '')}" style="color:#1848B8">customer</a>`
+        <a href="/admin/customer?q=${encodeURIComponent(q.email || q.phone || '')}" style="color:#1848B8">customer</a>${!q.cancelled_at && (q.accepted_at || Number(q.paid_amount || 0) > 0) ? ` · <a href="/admin/quote/new?reorder=${escEmail(q.code)}" style="color:#1848B8">reorder</a>` : ''}`
           : '<a href="/admin/team-chat" style="color:#1848B8">back to Team chat</a>'}${
           q.email && mayEmail && !['held', 'draft'].includes(q.status) && !q.cancelled_at ? ` ·
         <form method="POST" action="/admin/quote/${escEmail(q.code)}/email" style="display:inline;margin:0">

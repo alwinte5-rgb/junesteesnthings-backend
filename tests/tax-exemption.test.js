@@ -132,7 +132,8 @@ test('the form asks for the reason exactly when there is a zero to explain', () 
   assert.match(src, /name="tax_exempt_ref"/, 'no field, no reason, no deduction');
   assert.match(src, /exbox\.style\.display = taxable \? 'none' : ''/,
     'the reason appears when tax comes off, so it cannot be quietly skipped');
-  assert.match(src, /\$\{!isEdit \|\| quoteTaxable\(E\) \? 'checked' : ''\}/,
+  /* A reorder (2026-10-19) keeps the job's own flag, as an edit does. */
+  assert.match(src, /\$\{\(!isEdit && !reorderOf\) \|\| quoteTaxable\(E\) \? 'checked' : ''\}/,
     'the checkbox must read the stored flag, not re-derive it from the amount');
 });
 

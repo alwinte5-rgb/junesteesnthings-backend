@@ -90,8 +90,14 @@ test('the three groups are rendered in working order', () => {
   const a = board.indexOf("group('Accepted, waiting on deposit'");
   const j = board.indexOf("group('Waiting on the customer'");
   assert.ok(e > -1 && i > -1 && a > -1 && j > -1, 'all the live groups must be rendered');
-  assert.ok(e < i && i < a && a < j,
-    'order must be New enquiries, Orders, Accepted waiting on deposit, then Waiting on the customer');
+  /* Owner, 2026-10-19: "I only want to see whats paid on the order side".
+     Unpaid quotes sit on the left with enquiries; the right lane is Orders. */
+  const left = board.slice(board.indexOf('const laneLeft ='), board.indexOf('const laneRight ='));
+  const right = board.slice(board.indexOf('const laneRight ='), board.indexOf('const body ='));
+  assert.ok(e < a && a < j && left.includes("group('Accepted, waiting on deposit'") && left.includes("group('Waiting on the customer'"),
+    'left: New enquiries, then Accepted waiting on deposit, then Waiting on the customer');
+  assert.ok(right.includes("group('Orders'") && !right.includes("group('Accepted") && !right.includes("group('Waiting"),
+    'right: paid work only');
   /* Expired quotes are shown only when asked for (?expired=1). */
   assert.match(board, /showExpired \? group\('Expired'/);
   /* Neither delivered nor cancelled work belongs on a working board. Cancelled
@@ -168,6 +174,6 @@ test('one empty lane still renders, so the columns do not jump', () => {
      back as work moved between them. */
   assert.ok(board.includes('${laneLeft ||'), 'the left lane needs an empty fallback');
   assert.ok(board.includes('${laneRight ||'), 'and so does the right');
-  assert.ok(board.includes('No new enquiries or unfinished carts.'));
-  assert.ok(board.includes('No open work.'));
+  assert.ok(board.includes('No new enquiries, carts or open quotes.'));
+  assert.ok(board.includes('No paid orders in hand.'));
 });
