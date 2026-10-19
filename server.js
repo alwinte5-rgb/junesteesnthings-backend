@@ -15008,8 +15008,8 @@ app.get('/q/:code', async (req, res) => {
     const canFill = !paid && !q.requested_items && Object.keys(collTally.byLine).length > 0;
     const sizesCard = (!sizeLines.length || q.cancelled_at || q.production_at) ? '' : !coll ? `
       <div class="card" id="sizes">
-        <h1 style="font-size:18px">Ordering for a team?</h1>
-        <p class="muted" style="margin:6px 0 12px">Get a link to share. Each person types their name and picks their size, and the totals fill in here for you.</p>
+        <h1 style="font-size:18px">Ordering for a group?</h1>
+        <p class="muted" style="margin:6px 0 12px">Family reunion, team or staff? Get a link to share. Each person types their name and picks their size, and the totals fill in here for you.</p>
         <form method="POST" action="/q/${q.code}/sizes/start" onsubmit="this.querySelector('button').disabled=true">
           <button type="submit" class="btn-ghost" style="padding:9px 16px">Make a size link</button></form>
       </div>` : `
@@ -22628,7 +22628,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
     const certificateCard = boards ? await jobCertificateCard(q, req.query) : '';
     const photosCard = jobPhotosCard(q);
     const brandCard = await jobBrandFilesCard(q).catch((e) => { console.error('brand files card failed:', e.message); return ''; });
-    const teamSizesCard = await jobTeamSizesCard(q).catch((e) => { console.error('team sizes card failed:', e.message); return ''; });
+    const teamSizesCard = await jobTeamSizesCard(q, await catalogP, { canEdit: boards }).catch((e) => { console.error('team sizes card failed:', e.message); return ''; });
     const notesCard = await jobNotesCard(q.code);
     const creditCard = !boards ? '' : await jobCreditCard(q).catch((e) => { console.error('credit card failed:', e.message); return ''; });
     const historyCard = !boards ? '' : await jobHistoryCard(q).catch((e) => { console.error('history card failed:', e.message); return ''; });
@@ -22907,25 +22907,67 @@ function jobScheduleHtml(q, sched, { canSetDate = true } = {}) {
         canSetDate ? ' Set a date above for the step-by-step dates.' : ''}</div></div>`;
 }
 
-/** The sizes the customer's team asked for through the team size link, as
- *  plain totals per item: the customer sees who asked for what on their own
- *  quote page. Nothing when the quote has no link. */
-async function jobTeamSizesCard(q) {
-  const { rows } = await pool.query(
-    `SELECT e.line_index, e.size, e.qty FROM size_entries e JOIN size_collections c ON c.id = e.collection_id
-      WHERE c.quote_code = $1`, [q.code]);
-  if (!rows.length) return '';
+/** The team size link on the job page: the shop can make it here and send it
+ *  to whoever is gathering sizes (a family reunion, a team, a staff order),
+ *  then sees plain totals per item. Who picked what stays on the customer's
+ *  quote page. Nothing when the quote has no sized items and no link. */
+async function jobTeamSizesCard(q, catalog, { canEdit = true } = {}) {
+  const sizedLines = (q.items || []).filter((it) => it && !it.optional && orderedSizeKeys(it, catalog).length);
+  const { rows: [coll] } = await pool.query('SELECT id, token, closed_at FROM size_collections WHERE quote_code = $1', [q.code]);
+  const open = !q.cancelled_at && !q.production_at;
+  if (!coll) {
+    if (!canEdit || !open || !sizedLines.length || ['held', 'draft'].includes(q.status)) return '';
+    return `<div class="card" id="team-sizes"><h2 class="card-title">Team sizes</h2>
+      <p class="muted" style="font-size:13px;margin:0 0 10px">Collecting sizes for a family reunion, team or staff order? Make a link and send it to whoever is gathering them. Each person types their name and picks a size; the totals show up here.</p>
+      <form method="POST" action="/admin/production/${q.code}/sizes/start" style="margin:0" onsubmit="this.querySelector('button').disabled=true">
+        <button type="submit" class="btn" style="padding:8px 16px;font-size:14px">Make a size link</button></form></div>`;
+  }
+  const { rows } = await pool.query('SELECT line_index, size, qty FROM size_entries WHERE collection_id = $1', [coll.id]);
   const lineName = (ix) => ((q.items || [])[ix] || {}).description || `Item ${ix + 1}`;
   const lines = SIZES.listTotals(rows, (sz) => SIZE_ORDER.indexOf(sz));
   const people = lines.reduce((t, l) => t + l.total, 0);
-  return `<div class="card" id="team-sizes"><h2 class="card-title">Team sizes (${people})</h2>
-    ${lines.map((l) => `<div style="margin:8px 0">
+  const link = PUBLIC_BASE_URL + '/s/' + coll.token;
+  return `<div class="card" id="team-sizes"><h2 class="card-title">Team sizes (${people})${coll.closed_at ? ' <span class="muted" style="font-size:13px;font-weight:600">closed</span>' : ''}</h2>
+    ${canEdit ? `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 6px">
+      <input id="team-size-link" readonly value="${escEmail(link)}" style="flex:1;min-width:200px;font-size:14px">
+      <button type="button" class="btn-ghost" style="padding:7px 14px" onclick="var i=document.getElementById('team-size-link');i.select();try{navigator.clipboard.writeText(i.value).then(function(){},function(){})}catch(e){}this.textContent='Copied'">Copy link</button></div>` : ''}
+    ${lines.length ? lines.map((l) => `<div style="margin:8px 0">
       ${lines.length > 1 || (q.items || []).length > 1 ? `<div style="font-weight:600;font-size:14px">${escEmail(lineName(l.line_index))}</div>` : ''}
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">${l.sizes.map(([sz, n]) =>
         `<span style="border:1px solid #e3e8f2;border-radius:8px;padding:6px 12px;font-size:15px"><b>${escEmail(sz)}</b> ${n}</span>`).join('')}
-        <span class="muted" style="padding:6px 4px;font-size:14px">${l.total} total</span></div></div>`).join('')}
-    <p class="muted" style="font-size:12.5px;margin:6px 0 0">From the customer's size link. They see who asked for each size.</p></div>`;
+        <span class="muted" style="padding:6px 4px;font-size:14px">${l.total} total</span></div></div>`).join('')
+      : '<p class="muted" style="font-size:14px;margin:6px 0">Nobody has picked a size yet.</p>'}
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:6px">
+      ${canEdit && open ? `<form method="POST" action="/admin/production/${q.code}/sizes/close" style="margin:0"><input type="hidden" name="to" value="${coll.closed_at ? 'open' : 'closed'}"><button type="submit" class="btn-ghost" style="padding:7px 14px">${coll.closed_at ? 'Reopen the link' : 'Close the link'}</button></form>` : ''}
+      <span class="muted" style="font-size:12.5px">The customer sees who picked each size on their quote page.</span></div></div>`;
 }
+
+/* The shop's side of the size link: make it (once per quote) and close or
+   reopen it, from the job page. Same table and token as the customer's own
+   button on their quote page. */
+app.post(['/admin/production/:code/sizes/start', '/admin/production/:code/sizes/close'], requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/production');
+  const actor = currentActor() || OWNER_ACTOR;
+  if (actor.kind === 'staff' && STAFF.levelOf(actor, 'quotes.view') !== 'on') return res.status(403).send('Not allowed');
+  try {
+    const q = await sizeQuote(code);
+    if (q && !q.production_at) {
+      if (req.path.endsWith('/start')) {
+        await pool.query('INSERT INTO size_collections (quote_code, token) VALUES ($1, $2) ON CONFLICT (quote_code) DO NOTHING',
+          [code, SIZES.newToken()]);
+      } else {
+        const reopen = String((req.body && req.body.to) || '') === 'open';
+        await pool.query(reopen ? 'UPDATE size_collections SET closed_at = NULL WHERE quote_code = $1'
+          : 'UPDATE size_collections SET closed_at = COALESCE(closed_at, NOW()) WHERE quote_code = $1', [code]);
+      }
+    }
+  } catch (err) {
+    console.error('job size link failed:', err.message);
+    reportError('size-link', err, `job ${code}`).catch(() => {});
+  }
+  res.redirect(303, `/admin/production/${code}#team-sizes`);
+});
 
 /** The customer's Business Partner brand files, on their job page, so the
  *  shop never asks for a logo the business already gave. Nothing when the
