@@ -58,3 +58,30 @@ test('a colour with no swatch hex is reported, not guessed', () => {
   assert.strictEqual(p.c.name, 'Mystery');
   assert.match(p.skip, /no swatch/);
 });
+
+/* Front and back are separate edits and came back up to 32 apart. MATCH moves
+   the side farther from the swatch onto the other; a near-zero channel (Fan
+   Marine Green, #003A40) once divided by zero and wrote garbage pixels. */
+const { spawnSync } = require('child_process');
+const { py, MATCH, SIDE_GAP } = require('../tools/product-art/recolor');
+const hasNumpy = spawnSync('python3', ['-c', 'import numpy, PIL']).status === 0;
+
+function swatchPng(dir, name, rgb) {
+  const p = path.join(dir, name);
+  py(`import sys\nfrom PIL import Image\nImage.new('RGBA', (40, 40), tuple(int(v) for v in sys.argv[2:5]) + (255,)).save(sys.argv[1])`,
+    [p, ...rgb.map(String)]);
+  return p;
+}
+const pixel = (p) => py(`import sys\nfrom PIL import Image\nprint(*Image.open(sys.argv[1]).getpixel((20, 20))[:3])`, [p]).split(' ').map(Number);
+
+test('the side farther from the swatch is matched to the other, even with a zero channel', { skip: !hasNumpy && 'needs numpy + Pillow' }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'recolor-match-'));
+  const front = swatchPng(dir, 'f.png', [0, 38, 41]), back = swatchPng(dir, 'b.png', [23, 53, 53]);
+  const gap = Number(py(MATCH, [front, back, '#003A40', String(SIDE_GAP)]));
+  assert.ok(gap > SIDE_GAP);
+  /* Back is nearer #003A40, so the back is kept and the front moves onto it. */
+  assert.deepStrictEqual(pixel(back), [23, 53, 53]);
+  assert.deepStrictEqual(pixel(front), [23, 53, 53]);
+  /* Already matched: nothing changes. */
+  assert.strictEqual(py(MATCH, [front, back, '#003A40', String(SIDE_GAP)]), '0');
+});

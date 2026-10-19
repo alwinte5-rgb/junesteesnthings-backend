@@ -72,6 +72,29 @@ from PIL import Image
 got, out, w, h = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
 s = max(w, h); im = Image.open(got).convert('RGBA').resize((s, s), Image.LANCZOS)
 im.crop(((s - w) // 2, (s - h) // 2, (s - w) // 2 + w, (s - h) // 2 + h)).save(out)`;
+/* S&S's own front/back pairs: median 4 apart, 90% within 8. */
+const SIDE_GAP = 8;
+/* Front and back are separate edits, so they come back different shades (up to
+   32 apart, against 4 for S&S's own pairs; owner, 2026-10-19: "the front and
+   back dont match"). The side nearer the swatch is kept and the other is moved
+   onto it: scaled per channel, which keeps folds and shading, or shifted where
+   a channel is near zero and a scale would divide by it. */
+const MATCH = `
+import sys, math
+import numpy as np
+from PIL import Image
+a, b, hexs = sys.argv[1], sys.argv[2], sys.argv[3]
+sw = np.array([int(hexs[i:i + 2], 16) for i in (1, 3, 5)], float)
+im = {p: np.array(Image.open(p).convert('RGBA')).astype(float) for p in (a, b)}
+med = {p: np.median(im[p][..., :3][im[p][..., 3] > 200], axis=0) for p in im}
+gap = math.dist(med[a], med[b])
+if gap <= float(sys.argv[4]):
+    print(0); sys.exit()
+keep = min(im, key=lambda p: math.dist(med[p], sw)); fix = b if keep == a else a
+x = im[fix]; m, t = med[fix], med[keep]
+x[..., :3] = np.clip(np.where(m >= 16, x[..., :3] * (t / np.maximum(m, 1)), x[..., :3] + (t - m)), 0, 255)
+Image.fromarray(np.rint(x).astype("uint8")).save(fix)
+print(round(gap))`;
 const WEBP = `
 import sys
 from PIL import Image
@@ -155,6 +178,12 @@ async function make(dir, key) {
         for (const f of [tmp, got]) if (fs.existsSync(f)) fs.unlinkSync(f);
       }
     }
+    if (rec.sides.front && rec.sides.back) {
+      try {
+        const gap = Number(py(MATCH, [path.join(rdir, rec.sides.front), path.join(rdir, rec.sides.back), p.c.c1, String(SIDE_GAP)]));
+        if (gap) console.log('  ' + p.c.name.padEnd(26) + 'front and back were ' + gap + ' apart — matched');
+      } catch (e) { console.log('  ' + p.c.name.padEnd(26) + 'could not match front and back — ' + e.message); }
+    }
     log[sl] = rec;
     fs.writeFileSync(logPath, JSON.stringify(log, null, 1));   // after each colour: a killed run keeps what it paid for
   }
@@ -202,4 +231,4 @@ else {
   });
 }
 
-module.exports = { plan, prompt };
+module.exports = { plan, prompt, py, MATCH, SIDE_GAP };
