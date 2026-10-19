@@ -241,6 +241,9 @@ test('colours: pointing at a dot shows its colour on the card, leaving puts it b
   assert.strictEqual(c[0].img.src, P + 'blue.jpg', 'a tapped colour stays');
   assert.ok(blue.classList.on.has('is-on') && !red.classList.on.has('is-on'), 'the shown colour is marked');
   c.on.click({ target: c[0].pr, preventDefault() { throw new Error('a click elsewhere on the card must open it'); } });
+  c.on.mouseover({ target: red });
+  c[0].img.onerror();
+  assert.strictEqual(c[0].img.src, P + 'base.jpg', 'a colour photo that fails to load puts the card photo back');
 });
 
 test('colours: the page draws up to 8 dots after the price, then "+N more"', () => {

@@ -62,6 +62,8 @@
   function showDot(d, pin) {
     var img = cardImg(d); if (!img) return;
     if (!img.getAttribute('data-orig')) img.setAttribute('data-orig', img.currentSrc || img.src);
+    /* A colour photo that fails to load puts the card's own photo back. */
+    img.onerror = function () { img.onerror = null; img.removeAttribute('data-pin'); img.src = img.getAttribute('data-orig'); mark(d.parentNode, null); };
     img.src = d.getAttribute('data-photo');
     if (pin) img.setAttribute('data-pin', img.src);
     mark(d.parentNode, img.src);
