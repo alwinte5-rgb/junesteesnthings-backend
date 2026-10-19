@@ -261,12 +261,17 @@ app.get(LEGACY_PATHS, (req, res, next) => {
   return to ? res.redirect(301, to) : next();
 });
 
-/* Business Partners Program pages. Until JT_PARTNERS=on they do not exist at
-   either address — express.static below would otherwise serve the .html. */
-app.get(['/partners', '/partners.html', '/mail15', '/mail15.html'], (req, res) => {
-  const file = /mail15/i.test(req.path) ? 'mail15.html' : 'partners.html';
+/* Business Partners Program page. Until JT_PARTNERS=on it does not exist —
+   express.static below would otherwise serve the .html. /mail15 was the first
+   mailer's address (printed on it, and in its QR): it now forwards here, so
+   the discount code is never the name of a page. */
+app.get(['/partners', '/partners.html'], (req, res) => {
   if (!PARTNERS.on()) return res.status(404).sendFile(path.join(__dirname, 'public', '404.html'));
-  res.sendFile(path.join(__dirname, 'public', file));
+  res.sendFile(path.join(__dirname, 'public', 'partners.html'));
+});
+app.get(['/mail15', '/mail15.html'], (req, res) => {
+  if (!PARTNERS.on()) return res.status(404).sendFile(path.join(__dirname, 'public', '404.html'));
+  res.redirect(301, '/partners?src=mailer');
 });
 
 /* sitemap.xml: the static file, plus /partners while the program is on. Both
@@ -21147,7 +21152,7 @@ app.get('/admin/partners', requireAdmin, async (req, res) => {
   const msg = String(req.query.msg || ''), err = String(req.query.err || '');
   const site = (u) => /^https?:\/\//i.test(String(u || ''))
     ? `<a href="${escEmail(u)}" target="_blank" rel="noopener noreferrer nofollow">${escEmail(String(u).replace(/^https?:\/\/(www\.)?/i, '').slice(0, 40))}</a>` : '';
-  const SOURCE = { mail15: 'Mailer (MAIL15)', partners: '/partners page', invite: 'Invite email', account: 'Account page' };
+  const SOURCE = { mailer: 'Mailer', mail15: 'Mailer', partners: '/partners page', invite: 'Invite email', account: 'Account page' };
   const rows = businesses.map((b) => {
     const dup = b.dup_of && byId.get(b.dup_of);
     const mail15 = (b.uses || []).find((u) => u.code === 'MAIL15');
@@ -21182,7 +21187,7 @@ app.get('/admin/partners', requireAdmin, async (req, res) => {
       <thead><tr style="text-align:left"><th style="padding:6px">Business</th><th style="padding:6px">People</th>
         <th style="padding:6px">Joined</th><th style="padding:6px">MAIL15</th><th></th></tr></thead>
       <tbody>${rows}</tbody></table></div>`
-      : `<div class="card"><p class="muted">No businesses have joined yet. The sign-up link is <b>${escEmail(PUBLIC_BASE_URL)}/partners</b>; the mailer's QR goes to /mail15.</p></div>`}`, 'partners'));
+      : `<div class="card"><p class="muted">No businesses have joined yet. The sign-up link is <b>${escEmail(PUBLIC_BASE_URL)}/partners</b>; the mailer's QR goes to /partners?src=mailer.</p></div>`}`, 'partners'));
 });
 
 app.post('/admin/partners/action', requireAdmin, async (req, res) => {

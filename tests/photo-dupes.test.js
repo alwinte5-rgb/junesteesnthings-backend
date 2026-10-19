@@ -25,7 +25,7 @@ const NAV = require('../tools/site-nav');
 const PUBLIC = path.join(__dirname, '..', 'public');
 const read = (rel) => fs.readFileSync(path.join(PUBLIC, rel), 'utf8');
 const HASHES = JSON.parse(read('assets/data/photo-hashes.json')).photos;
-const LISTINGS = new Set(['blog/index.html', 'partners.html', 'mail15.html']);
+const LISTINGS = new Set(['blog/index.html', 'partners.html']);
 
 const dist = (a, b) => { let x = BigInt('0x' + a) ^ BigInt('0x' + b), n = 0; while (x) { n += Number(x & 1n); x >>= 1n; } return n; };
 // Same rule as tools/photo-dupes.py: whole photos and centres both close,
