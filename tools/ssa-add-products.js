@@ -438,7 +438,7 @@ async function run(env) {
   console.log('  style      name                                         price   sizes col  IL      type');
   console.log('  ' + '-'.repeat(96));
 
-  const stmts = [];
+  const stmts = [], styleIds = [];
   let added = 0, skipped = 0, apiErrors = 0;
   for (const [token, type, brand, name] of list) {
     let s, rows;
@@ -520,6 +520,7 @@ async function run(env) {
 
     stmts.push(productInsertSql({ name, price, thumb, stages: buildStages(type), attributes,
       printings: prt.encoded, styleID: s.styleID, cost: baseCost, staged: STAGED }));
+    styleIds.push(Number(s.styleID));
     added++;
   }
 
@@ -547,6 +548,19 @@ async function run(env) {
   if (cat.status !== 0) {
     console.error('\n  products added, but filing them into categories FAILED: run tools/categorise-products.js --apply');
     process.exit(1);
+  }
+  /* A product added live skips publish-staged's audit gate, so the catalogue
+     audit reports on it here (owner, 2026-10-19: keep the audit for future
+     products). Report only — the rows are written; fix what it names. A
+     staged add is audited when publish-staged.js puts it live. */
+  if (!STAGED) {
+    const ids = mysql(dbUrl, 'SELECT id FROM lumise_products WHERE supplier_style_id IN (' +
+      styleIds.filter(Number.isFinite).join(',') + ") AND supplier='ssa';", { rows: true }).map((r) => String(Number(r.id)));
+    if (ids.length) {
+      console.log('\n  audit of the new products:');
+      require('child_process').spawnSync(process.execPath, [require('path').join(__dirname, 'catalog-inventory.js'), ...ids],
+        { input: JSON.stringify({ MYSQL_PUBLIC_URL: dbUrl, SSA_ACCOUNT: env.SSA_ACCOUNT, SSA_API_KEY: env.SSA_API_KEY }), stdio: ['pipe', 'inherit', 'inherit'] });
+    }
   }
   process.exit(apiErrors ? 1 : 0);
 }

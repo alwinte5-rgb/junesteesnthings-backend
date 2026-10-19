@@ -200,6 +200,35 @@ function localChecks(p, { roleIds = {}, cats = null, treeSlugs = null } = {}) {
   return out;
 }
 
+/** The checks against S&S's live record, written onto the report row `r`.
+ *  Shared with tools/publish-staged.js, so a product is audited the same way
+ *  before it goes live as in the whole-catalogue run (owner, 2026-10-19: keep
+ *  the audit for future products). */
+async function compareWithSsa(r, p, ssa) {
+  try {
+    const st = await ssa('styles/' + Number(p.sid));
+    const s = Array.isArray(st) ? st[0] : st;
+    const name = String(p.name).toUpperCase();
+    r.identity = !s ? 'style ' + p.sid + ' not at S&S'
+      : !name.includes(String(s.styleName).toUpperCase()) ? 'name lacks style ' + s.styleName
+        : !name.includes(String(s.brandName).split(/\s+/)[0].toUpperCase()) ? 'name lacks brand ' + s.brandName : 'ok';
+    const prods = await ssa('products/?styleid=' + Number(p.sid)) || [];
+    const ssaCols = new Set(prods.map((x) => x.colorName).filter(Boolean));
+    const attrs = dejson(p.attributes) || {};
+    const col = Object.values(attrs).find((a) => a && a.type === 'product_color');
+    const mine = new Set(((col && col.values && col.values.options) || []).map((o) => o.title));
+    const gone = [...mine].filter((c) => !ssaCols.has(c)), added = [...ssaCols].filter((c) => !mine.has(c));
+    r.colours = gone.length || added.length ? (gone.length ? '-' + gone.length : '') + (added.length ? ' +' + added.length : '') + ' vs S&S' : 'ok';
+    Object.assign(r, ssaChecks(p, s, prods));
+  } catch (e) { r.identity = r.identity || 'S&S unreachable: ' + e.message.slice(0, 40); r.colours = r.colours || '?'; }
+  return r;
+}
+
+const CHECKS = ['identity', 'naming', 'description', 'colours', 'swatches', 'swatchPhotos', 'price', 'sizes', 'upcharges', 'decoration',
+  'photos', 'placements', 'canvas', 'category', 'listing', 'copy', 'shopmade'];
+/** The checks a report row fails. */
+const bad = (r) => CHECKS.filter((k) => r[k] && r[k] !== 'ok' && r[k] !== '-' && !String(r[k]).startsWith('shop-made'));
+
 /* Credentials come in on stdin as one JSON object, as for
    tools/product-art/run.js — never on the command line, where `ps` shows them. */
 async function main(buf) {
@@ -240,30 +269,10 @@ async function main(buf) {
       r.shopmade = lacks.length ? 'needs ' + lacks.join(', ') : 'ok';
       report.push(r); continue;
     }
-    if (ssa) {
-      try {
-        const st = await ssa('styles/' + Number(p.sid));
-        const s = Array.isArray(st) ? st[0] : st;
-        const name = String(p.name).toUpperCase();
-        r.identity = !s ? 'style ' + p.sid + ' not at S&S'
-          : !name.includes(String(s.styleName).toUpperCase()) ? 'name lacks style ' + s.styleName
-            : !name.includes(String(s.brandName).split(/\s+/)[0].toUpperCase()) ? 'name lacks brand ' + s.brandName : 'ok';
-        const prods = await ssa('products/?styleid=' + Number(p.sid)) || [];
-        const ssaCols = new Set(prods.map((x) => x.colorName).filter(Boolean));
-        const attrs = dejson(p.attributes) || {};
-        const col = Object.values(attrs).find((a) => a && a.type === 'product_color');
-        const mine = new Set(((col && col.values && col.values.options) || []).map((o) => o.title));
-        const gone = [...mine].filter((c) => !ssaCols.has(c)), added = [...ssaCols].filter((c) => !mine.has(c));
-        r.colours = gone.length || added.length ? (gone.length ? '-' + gone.length : '') + (added.length ? ' +' + added.length : '') + ' vs S&S' : 'ok';
-        Object.assign(r, ssaChecks(p, s, prods));
-      } catch (e) { r.identity = r.identity || 'S&S unreachable: ' + e.message.slice(0, 40); r.colours = r.colours || '?'; }
-    }
+    if (ssa) await compareWithSsa(r, p, ssa);
     report.push(r);
   }
 
-  const CHECKS = ['identity', 'naming', 'description', 'colours', 'swatches', 'swatchPhotos', 'price', 'sizes', 'upcharges', 'decoration',
-    'photos', 'placements', 'canvas', 'category', 'listing', 'copy', 'shopmade'];
-  const bad = (r) => CHECKS.filter((k) => r[k] && r[k] !== 'ok' && r[k] !== '-' && !String(r[k]).startsWith('shop-made'));
   console.log('CATALOGUE INVENTORY — ' + report.length + ' products (' + report.filter((r) => r.staged).length + ' staged)\n');
   for (const r of report) {
     const b = bad(r);
@@ -282,4 +291,4 @@ if (require.main === module) {
   process.stdin.on('data', (d) => (buf += d));
   process.stdin.on('end', () => main(buf).catch((e) => { console.error(e.message); process.exit(1); }));
 }
-module.exports = { localChecks, ssaChecks, expectedKeys };
+module.exports = { localChecks, ssaChecks, compareWithSsa, bad, CHECKS, expectedKeys };

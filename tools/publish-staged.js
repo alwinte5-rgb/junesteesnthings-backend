@@ -35,12 +35,21 @@
  * with SOME photos is not a stand-in case — its missing colours are made by
  * tools/product-art/recolor.js instead.
  *
+ * AUDIT: a product that passes the list above is then run through the whole
+ * catalogue audit (tools/catalog-inventory.js) — its name against S&S's title,
+ * the fabric weight its description states, its colours, size upcharges,
+ * price, decoration methods and listing photo — and is held back on any fault
+ * (owner, 2026-10-19: keep the audit for future products; #143 went live as a
+ * shirt and six descriptions stated the wrong weight). That needs SSA_ACCOUNT /
+ * SSA_API_KEY: without them --apply publishes nothing.
+ *
  * Prices: the daily S&S sync re-costs staged rows too (tools/ssa-sync.js), so a
  * product published after weeks in staging goes live at today's cost.
  */
 const { mysql, mysqlUrlFrom, sq, dejson } = require('./lib/db');
 const { photoCoverage, canvasVerdict } = require('./lib/canvas');
-const { localChecks } = require('./catalog-inventory');
+const { localChecks, compareWithSsa, bad } = require('./catalog-inventory');
+const { resolveRoles } = require('./lib/garments');
 const { makeClient } = require('./lib/ssa-client');
 const { STAGED_SUPPLIER, parseIds } = require('./lib/ssa-staged');
 
@@ -109,6 +118,21 @@ function notReady(p, { desc = p.description, standin = false } = {}) {
   return null;
 }
 
+/* Audit findings that are reported but do not hold a product back: a short
+   description is filled later (jt-product-copy.php), categories are filed by
+   this script, photos are notReady's test, and a stand-in's colours share its
+   one drawing by design. */
+const ADVISORY = new Set(['copy', 'category', 'photos', 'swatchPhotos']);
+
+/** The audit faults that hold back a product: [[check, finding]]. Exported
+ *  for tests. */
+function auditFaults(r, { standin = false } = {}) {
+  return bad(r).filter((k) => !ADVISORY.has(k))
+    /* notReady already judged a stand-in's drawing to be the garment itself. */
+    .filter((k) => !(standin && k === 'canvas' && r.canvas === 'drawing (no real photo)'))
+    .map((k) => [k, r[k]]);
+}
+
 async function main() {
   const APPLY = process.argv.includes('--apply');
   const STANDIN = process.argv.includes('--standin');
@@ -124,6 +148,7 @@ async function main() {
 
   let rows = mysql(url, "SELECT id, name, price, stages, printings, attributes, variations, thumbnail_url, " +
     "IFNULL(description,'') description, IFNULL(supplier_style_id,0) sid, " +
+    "IFNULL(supplier_cost,0) cost, IFNULL(thumbnail_url,'') thumb, " +
     "IFNULL(DATE_FORMAT(ssa_auto_off,'%Y-%m-%d'),'') auto_off FROM lumise_products " +
     'WHERE supplier=' + sq(STAGED_SUPPLIER) + ' ORDER BY name;', { rows: true });
   if (ONLY) {
@@ -155,16 +180,34 @@ async function main() {
     console.log('  no SSA credentials: ' + need.length + ' product(s) without a description stay staged\n');
   }
 
-  const ready = [], held = [];
+  const ready = [], held = [], warned = [];
+  const candidates = [];
   for (const p of rows) {
     const desc = String(p.description).trim() ? p.description : (fetched[p.id] || '');
     const why = notReady(p, { desc, standin: STANDIN });
-    (why ? held : ready).push({ p, why, desc, fill: !String(p.description).trim() && desc });
+    (why ? held : candidates).push({ p, why, desc, fill: !String(p.description).trim() && desc });
+  }
+  /* The catalogue audit, on the description each product WILL have. */
+  if (candidates.length) {
+    const { ids: roleIds } = resolveRoles(mysql(url, 'SELECT id, title FROM lumise_printings ORDER BY id;', { rows: true }));
+    const ssa = acct && key ? makeClient(acct, key) : null;
+    for (const c of candidates) {
+      const p = { ...c.p, description: c.desc };
+      const r = localChecks(p, { roleIds });
+      if (ssa) await compareWithSsa(r, p, ssa);
+      else r.identity = 'not audited against S&S (no SSA credentials)';
+      const faults = auditFaults(r, { standin: STANDIN });
+      if (faults.length) held.push({ ...c, why: 'audit: ' + faults.map(([k, v]) => k + ' ' + v).join(' · ') });
+      else ready.push(c);
+      const notes = bad(r).filter((k) => ADVISORY.has(k) && k !== 'photos');
+      if (!faults.length && notes.length) warned.push('#' + c.p.id + ' ' + notes.map((k) => k + ': ' + r[k]).join(' · '));
+    }
   }
   console.log('  READY (' + ready.length + ')');
   for (const r of ready) console.log('    #' + String(r.p.id).padStart(3) + '  ' + r.p.name.slice(0, 70));
   console.log('\n  HELD BACK (' + held.length + ')');
   for (const h of held) console.log('    #' + String(h.p.id).padStart(3) + '  ' + h.p.name.slice(0, 50).padEnd(52) + h.why);
+  if (warned.length) console.log('\n  READY, WITH AUDIT NOTES (fix after publishing)\n    ' + warned.join('\n    '));
 
   if (!APPLY) { console.log('\n  dry run — pass --apply to publish the ' + ready.length + ' ready product(s)'); return; }
   if (!ready.length) { console.log('\n  nothing ready to publish'); return; }
@@ -191,4 +234,4 @@ async function main() {
 
 if (require.main === module) main().catch((e) => { console.error(e.message); process.exit(1); });
 
-module.exports = { notReady, htmlToLines, decodePrintings, patterned };
+module.exports = { notReady, auditFaults, htmlToLines, decodePrintings, patterned };

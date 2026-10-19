@@ -109,3 +109,26 @@ test('swatch photos: a colour with no photo of its own is counted', () => {
     jt_listing: { '#000001': 'https://cdn.ssactivewear.com/m.jpg' } });
   assert.strictEqual(localChecks({ name: 'Gildan 5000 Tee', attributes: colours('Black', 'White', 'Red'), variations: vars }).swatchPhotos, '1/3 colours show another colour\'s photo');
 });
+
+/* Publishing runs the same audit (owner, 2026-10-19: keep it for future products). */
+const { auditFaults } = require('../tools/publish-staged');
+
+test('publishing holds back a product the audit faults, not one with only notes', () => {
+  const clean = { identity: 'ok', naming: 'ok', description: 'ok', colours: 'ok', price: 'ok', canvas: 'ok' };
+  assert.deepStrictEqual(auditFaults(clean), []);
+  assert.deepStrictEqual(auditFaults({ ...clean, naming: 'S&S calls it "Bib Apron"' }), [['naming', 'S&S calls it "Bib Apron"']]);
+  assert.deepStrictEqual(auditFaults({ ...clean, description: 'says 7 oz, S&S says 11.7 oz' }).map(([k]) => k), ['description']);
+  /* A short description, a swatch sharing a photo and an unfiled category are fixed after publishing. */
+  assert.deepStrictEqual(auditFaults({ ...clean, copy: 'description 80 chars', swatchPhotos: '2/5 colours show another colour\'s photo', category: 'in no category' }), []);
+});
+
+test('no S&S audit means no publish', () => {
+  assert.deepStrictEqual(auditFaults({ identity: 'not audited against S&S (no SSA credentials)' }).map(([k]) => k), ['identity']);
+  assert.deepStrictEqual(auditFaults({ identity: 'S&S unreachable: timeout' }).map(([k]) => k), ['identity']);
+});
+
+test('a stand-in drawing is allowed only with --standin, and never a generic drawing of a cropped cut', () => {
+  assert.deepStrictEqual(auditFaults({ canvas: 'drawing (no real photo)' }).map(([k]) => k), ['canvas']);
+  assert.deepStrictEqual(auditFaults({ canvas: 'drawing (no real photo)' }, { standin: true }), []);
+  assert.deepStrictEqual(auditFaults({ canvas: 'generic drawing for a cropped garment' }, { standin: true }).map(([k]) => k), ['canvas']);
+});
