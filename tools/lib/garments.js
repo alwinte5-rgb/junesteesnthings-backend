@@ -45,7 +45,9 @@ const CLASSIFY = [
   ['woven',   /\b(twill|oxford|broadcloth|flannel|button|dress shirt|work shirt|scrub|utility|shoreline)\b/i],
   ['onesie',  /\b(bodysuit|onesie|infant)\b/i],
   ['kids',    /\b(youth|toddler|baby)\b/i],
-  ['tank',    /\btank\b/i],
+  /* A muscle tee has no sleeves: drawn and placed as a tank (owner, 2026-10-19:
+     "tank is in designer as tshirt", #365). */
+  ['tank',    /\b(tank|muscle)\b/i],
   ['longslv', /\blong.?sleeve\b/i],
   ['tee',     /\b(tee|t-shirt|shirt)\b/i],
 ];

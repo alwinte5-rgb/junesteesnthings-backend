@@ -65,12 +65,30 @@ const decodePrintings = (v) => {
   catch { return []; }
 };
 
+/* A drawing is one tinted colour, so a dip-dye, Colorblast, tie-dye or camo
+   style, or a two-tone raglan, would open the designer as a plain shirt
+   (owner, 2026-10-19: "this is an ombre shirt not solid green"). Read from the
+   name and from every colour's name; "Black/ White" is two colours. */
+const PATTERN_RE = /camo|plaid|buffalo|tie.?dye|dip.?dye|ombr[eé]|colou?rblast|marble|acid|crystal|stripe|gingham|tartan|floral|raglan|\//i;
+function patterned(p) {
+  if (PATTERN_RE.test(p.name)) return p.name.match(PATTERN_RE)[0];
+  const a = dejson(p.attributes) || {};
+  const c = Object.values(a).find((x) => x && x.type === 'product_color');
+  let v = c && c.values;
+  if (typeof v === 'string') { try { v = JSON.parse(v); } catch { v = null; } }
+  const hit = ((v && v.options) || []).map((o) => String((o && o.title) || '')).filter((t) => PATTERN_RE.test(t));
+  /* One camo colour among nine plain ones is that colour's problem, not the style's. */
+  return hit.length * 2 > ((v && v.options) || []).length ? 'colours ' + hit.slice(0, 3).join(', ') : null;
+}
+
 /** Why a staged product is not ready, or null when it is. `desc` is the
  *  description it WILL have (the stored one, or the one S&S supplied). */
 function notReady(p, { desc = p.description, standin = false } = {}) {
   const cov = photoCoverage(dejson(p.attributes) || {}, dejson(p.variations) || {});
   if (!cov.colours) return 'no colours';
   if (standin && cov.withPhotos === 0) {
+    const pat = patterned(p);
+    if (pat) return 'stand-in cannot show a pattern: ' + pat;
     const v = canvasVerdict(p);
     if (v.verdict === 'borrowed') return 'stand-in is not this garment: drawn as ' + v.sub.looks;
     if (v.verdict !== 'ok') return 'stand-in is the wrong garment' + (v.art ? ' (' + v.art + ')' : v.why ? ' (' + v.why + ')' : '');
@@ -171,4 +189,4 @@ async function main() {
 
 if (require.main === module) main().catch((e) => { console.error(e.message); process.exit(1); });
 
-module.exports = { notReady, htmlToLines, decodePrintings };
+module.exports = { notReady, htmlToLines, decodePrintings, patterned };

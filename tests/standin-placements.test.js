@@ -27,3 +27,10 @@ test('a drawing is measured on its garment, not its white surround', { skip: !ha
   assert.deepStrictEqual(m.bbox, [50, 40, 150, 220]);
   assert.strictEqual(m.torso, 100);
 });
+
+test('a muscle tee is a tank: no sleeves to draw or place around (#365)', () => {
+  const { classify } = require('../tools/lib/garments');
+  assert.strictEqual(classify('Shaka Wear SHGMT Unisex Garment-Dyed Muscle Tee'), 'tank');
+  assert.strictEqual(classify('BELLA + CANVAS 3483 Jersey Muscle Tank'), 'tank');
+  assert.strictEqual(classify('Shaka Wear SHMHSS Unisex Max Heavyweight Tee'), 'tee');
+});

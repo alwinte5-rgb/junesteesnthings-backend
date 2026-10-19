@@ -150,7 +150,16 @@ test('--standin never accepts the wrong garment, or a style with SOME photos', (
   assert.match(notReady(jacket, { standin: true }), /stand-in is the wrong garment/);
   const flannel = { ...tee, name: 'Shaka Wear SHHFS Unisex Plaid Flannel Overshirt', variations: '',
     stages: drawn('women_tshirt_front', 'women_tshirt_back', KEYS.open) };
-  assert.match(notReady(flannel, { standin: true }), /stand-in is (not this|the wrong) garment/);
+  assert.match(notReady(flannel, { standin: true }), /stand-in (is not this|is the wrong) garment|cannot show a pattern/);
   /* One colour photographed: its other colours are recolor.js's job, not a stand-in's. */
   assert.match(notReady({ ...tee, variations: vars('#000001') }, { standin: true }), /no product images for 1 of 2/);
+});
+
+test('--standin refuses a patterned style: a drawing is one plain colour', () => {
+  const plain = { ...tee, variations: '', stages: drawn('basic_tshirt_front', 'basic_tshirt_back') };
+  assert.match(notReady({ ...plain, name: 'Champion CD100D Unisex Classic Jersey Dip Dye T-Shirt' }, { standin: true }), /pattern/);
+  assert.match(notReady({ ...plain, name: 'Comfort Colors 6045 Unisex Colorblast™ Long Sleeve T-Shirt' }, { standin: true }), /pattern/);
+  const twoTone = enc({ COL: { type: 'product_color', values: { options: [{ title: 'Heather Grey/ Black', value: '#000001' }, { title: 'Heather Grey/ Navy', value: '#fffffe' }] } }, QTYS: { type: 'quantity' } });
+  assert.match(notReady({ ...plain, name: 'Shaka Wear SHRAGY Youth Tee', attributes: twoTone }, { standin: true }), /pattern/);
+  assert.strictEqual(notReady(plain, { standin: true }), null, 'a plain tee is still fine');
 });
