@@ -109,3 +109,52 @@ test('swatch photos: a colour with no photo of its own is counted', () => {
     jt_listing: { '#000001': 'https://cdn.ssactivewear.com/m.jpg' } });
   assert.strictEqual(localChecks({ name: 'Gildan 5000 Tee', attributes: colours('Black', 'White', 'Red'), variations: vars }).swatchPhotos, '1/3 colours show another colour\'s photo');
 });
+
+/* Publishing runs the same audit (owner, 2026-10-19: keep it for future products). */
+const { auditFaults } = require('../tools/publish-staged');
+
+test('publishing holds back a product the audit faults, not one with only notes', () => {
+  const clean = { identity: 'ok', naming: 'ok', description: 'ok', colours: 'ok', price: 'ok', canvas: 'ok' };
+  assert.deepStrictEqual(auditFaults(clean), []);
+  assert.deepStrictEqual(auditFaults({ ...clean, naming: 'S&S calls it "Bib Apron"' }), [['naming', 'S&S calls it "Bib Apron"']]);
+  assert.deepStrictEqual(auditFaults({ ...clean, description: 'says 7 oz, S&S says 11.7 oz' }).map(([k]) => k), ['description']);
+  /* A short description, a swatch sharing a photo and an unfiled category are fixed after publishing. */
+  assert.deepStrictEqual(auditFaults({ ...clean, copy: 'description 80 chars', swatchPhotos: '2/5 colours show another colour\'s photo', category: 'in no category' }), []);
+});
+
+test('no S&S audit means no publish', () => {
+  assert.deepStrictEqual(auditFaults({ identity: 'not audited against S&S (no SSA credentials)' }).map(([k]) => k), ['identity']);
+  assert.deepStrictEqual(auditFaults({ identity: 'S&S unreachable: timeout' }).map(([k]) => k), ['identity']);
+});
+
+test('a stand-in drawing is allowed only with --standin, and never a generic drawing of a cropped cut', () => {
+  assert.deepStrictEqual(auditFaults({ canvas: 'drawing (no real photo)' }).map(([k]) => k), ['canvas']);
+  assert.deepStrictEqual(auditFaults({ canvas: 'drawing (no real photo)' }, { standin: true }), []);
+  assert.deepStrictEqual(auditFaults({ canvas: 'generic drawing for a cropped garment' }, { standin: true }).map(([k]) => k), ['canvas']);
+});
+
+const { compareWithSsa } = require('../tools/catalog-inventory');
+const colourAttr = (...names) => enjson({ C: { id: 'C', type: 'product_color', values: { options: names.map((n) => ({ title: n, value: '#' + n })) } } });
+
+test('an S&S colour with no price is not one the product should have', async () => {
+  const p = { sid: 1, name: 'Gildan 5000 Tee', thumb: '', attributes: colourAttr('Black') };
+  const ssa = async (path) => path.startsWith('styles/') ? [{ styleName: '5000', brandName: 'Gildan', title: 'Tee' }]
+    : [{ colorName: 'Black', sizeName: 'S', customerPrice: 3 }, { colorName: 'Neon', sizeName: 'S', customerPrice: 0 }];
+  assert.strictEqual((await compareWithSsa({}, p, ssa)).colours, 'ok');
+});
+
+test('an S&S audit that fails part-way holds the product back', async () => {
+  const p = { sid: 1, name: 'Gildan 5000 Tee', attributes: '{' };
+  const ssa = async (path) => { if (path.startsWith('styles/')) return [{ styleName: '5000', brandName: 'Gildan', title: 'Tee' }]; throw new Error('boom'); };
+  const r = await compareWithSsa({}, p, ssa);
+  assert.match(r.identity, /^S&S audit incomplete/);
+  assert.deepStrictEqual(auditFaults(r).map(([k]) => k), ['identity', 'colours']);
+});
+
+test('a SubliVie tee wants its sublimation method; another tee does not', () => {
+  const printings = (ids) => encodeURIComponent(JSON.stringify(Object.fromEntries(ids.map((i) => ['_' + i, 'A3']))));
+  const roleIds = Object.fromEntries(require('../tools/lib/garments').decorationsFor('SubliVie 1910 Tee').map((r, i) => [r, i + 1]));
+  const base = Object.values(roleIds);
+  assert.strictEqual(localChecks({ name: 'SubliVie 1910 Tee', printings: printings([...base, 99]) }, { roleIds, subId: 99 }).decoration, 'ok');
+  assert.match(localChecks({ name: 'Gildan 5000 Tee', printings: printings([...base, 99]) }, { roleIds, subId: 99 }).decoration, /extra 99/);
+});
