@@ -41,15 +41,18 @@ test('membership needs an explicit claim, not just the supplier flag', () => {
 });
 
 test('every garment class is either filed or knowingly left out', () => {
-  const filed = new Set();
-  const block = src.slice(src.indexOf('const FILE_UNDER'), src.indexOf('async function'));
-  for (const m of block.matchAll(/(\w+):\s*'custom-/g)) filed.add(m[1]);
-  /* Vests and jackets have no category on purpose: there is no outerwear tab,
-     and every vest is held for artwork, so creating one makes an empty tab. */
-  const deliberate = new Set(['vest', 'jacket']);
+  /* Since the category tree (2026-10-19) every class has a home: jackets and
+     vests went under Polos & Workwear. A plain product of each class must land
+     in at least one tree category. */
+  const { treeSlugs } = require('../tools/categorise-products');
+  const { classify } = require('../tools/lib/garments');
+  const sample = { cap: 'Richardson 112 Cap', bag: 'Q-Tees Q800 Tote', vest: 'Port Authority Vest', jacket: 'Port Authority Jacket',
+    qzip: 'Gildan 18810 Quarter Zip', hoodie: 'Gildan 18500 Hooded Sweatshirt', polo: 'Sport-Tek Polo', woven: 'Red Kap Work Shirt',
+    onesie: 'Rabbit Skins Infant Bodysuit', kids: 'Gildan Youth Tee', tank: 'Next Level Tank', longslv: 'Gildan Long Sleeve Tee', tee: 'Gildan Tee' };
   for (const [cls] of CLASSIFY) {
-    assert.ok(filed.has(cls) || deliberate.has(cls),
-      cls + ' has nowhere to go — a product of this type would be unbrowsable');
+    assert.ok(sample[cls], 'no sample name for ' + cls);
+    assert.strictEqual(classify(sample[cls]), cls, sample[cls]);
+    assert.ok(treeSlugs(sample[cls]).length, cls + ' has nowhere to go — a product of this type would be unbrowsable');
   }
 });
 
