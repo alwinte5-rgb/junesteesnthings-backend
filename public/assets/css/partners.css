@@ -26,7 +26,12 @@ a{color:var(--bp-blue-dk)}
 .bp-hero .bp-small a{color:var(--bp-blue)}
 .bp-photos{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;max-width:760px;margin:-22px auto 0;position:relative;z-index:2}
 .bp-photos figure{margin:0;border-radius:12px;overflow:hidden;border:3px solid #fff;box-shadow:0 6px 18px rgba(13,13,18,.18);background:#fff}
-.bp-photos img{display:block;width:100%;height:auto;aspect-ratio:1;object-fit:cover}
+/* Whole photos, never cropped (owner rule, as on page-blocks.css): each photo
+   sits whole in its tile on a blurred copy of itself (img.pb-bd). */
+.bp-ph{position:relative;overflow:hidden;background:#f3f4f6}
+.bp-ph img{position:relative;display:block;width:100%;height:100%;object-fit:contain}
+.bp-ph img.pb-bd{position:absolute;inset:-24px;width:calc(100% + 48px);height:calc(100% + 48px);object-fit:cover;filter:blur(18px) brightness(.85)}
+.bp-photos .bp-ph{aspect-ratio:4/3}
 .bp-photo-note{text-align:center;font-size:.85rem;color:#6b6877;margin:10px 0 0}
 .bp-h2{font-size:1.6rem;font-weight:900;margin:44px 0 6px;letter-spacing:-.01em}
 .bp-h2 span{color:var(--bp-pink-dk)}
@@ -59,7 +64,7 @@ a{color:var(--bp-blue-dk)}
 .bp-fine ul{padding-left:20px;margin:0}
 .bp-work{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
 .bp-work figure{margin:0;background:#fff;border-radius:16px;overflow:hidden;border:1px solid var(--bp-line)}
-.bp-work img{display:block;width:100%;height:auto;aspect-ratio:4/3;object-fit:cover}
+.bp-work .bp-ph{aspect-ratio:3/4}
 .bp-work figcaption{padding:12px 14px 14px;font-size:.92rem;color:#4b4858}
 .bp-work figcaption b{display:block;color:var(--bp-black);font-size:1rem;font-weight:800}
 .bp-links a.bp-card{text-decoration:none;display:block;transition:transform .15s,box-shadow .15s}
