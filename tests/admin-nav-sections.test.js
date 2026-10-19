@@ -68,6 +68,7 @@ const NOT_A_MENU_PAGE = {
   '/admin/delivery/new': 'booking for one job, opened from that job',
   '/admin/hiring/test': 'a role guide, opened from Hiring',
   '/admin/tax.csv': 'a download on Exports',
+  '/admin/mailbox/new': 'the New conversation button on Mailbox and on each order and task',
   '/admin/training/attempts': "one helper's tries at one quiz, opened from Training",
 };
 const isData = (p) => /^\/admin\/api\//.test(p) || /\.(csv|json)$/.test(p);
@@ -116,7 +117,8 @@ test('the open section is the one holding the page, and a section sums its badge
   const open = html.match(/<details class="adm-sec" open>/g) || [];
   assert.strictEqual(open.length, 1, 'one section open');
   assert.match(html, /<details class="adm-sec" open><summary class="adm-link is-here">.*?<span>Team<\/span>/s);
-  assert.match(html, /data-badge-group="chat,approvals"/, 'a closed Team section still shows waiting approvals and chat');
+  assert.match(html, /data-badge-group="approvals"/, 'a closed Team section still shows waiting approvals');
+  assert.match(html, /data-badge-group="jobnotes,mail,chat"/, 'and a closed Today section shows mail and chat');
 });
 
 test('every page in a section shows the section as tabs, with this one lit', () => {
