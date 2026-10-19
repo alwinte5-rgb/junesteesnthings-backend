@@ -36,7 +36,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { urlFromStdinJson, mysql, dejson, enjson, sq } = require('./../lib/db');
-const { placementSet, boxesFor, stagesFor } = require('./../lib/placements');
+const { placementSet, boxesFor, stagesFor, keepUncovered } = require('./../lib/placements');
 
 const SHEET = (process.argv.find((a) => a.startsWith('--sheet=')) || '').slice(8);
 const OVERRIDES = (() => {
@@ -129,7 +129,7 @@ process.stdin.on('end', () => {
     }
     const boxes = set && mm.front ? boxesFor(set, mm, ov) : [];
     if (boxes.length) {
-      const st = stagesFor(stages, boxes, { front: c.front_url, back: c.back_url }, sizes);
+      const st = keepUncovered(stages, boxes, stagesFor(stages, boxes, { front: c.front_url, back: c.back_url }, sizes));
       variations[String(n)] = {
         id: String(n), conditions: { [colKey]: value }, price: '', sku: '',
         minqty: '', maxqty: '', description: '',
@@ -142,7 +142,7 @@ process.stdin.on('end', () => {
       if (!productStages) {
         productStages = st;
         sheetItem = { title: '#' + p.id + ' [' + set + '] ' + p.name, files,
-          boxes: Object.entries(st).map(([key, s]) => ({ key, label: s.label, side: boxes.find((b) => b.key === key).side,
+          boxes: Object.entries(st).map(([key, s]) => ({ key, label: s.label, side: (boxes.find((b) => b.key === key) || { side: key }).side,   // a kept stand-in side has no box
             ez: s.edit_zone, pw: s.product_width })) };
       }
       console.log('  ' + c.name.padEnd(26) + value + '  ' + Object.values(st).map((s) => s.label).join(' · '));

@@ -124,3 +124,24 @@ test('every placement override names a real placement key', () => {
     for (const k of Object.keys(o)) assert.ok(keys.has(k), sid + ': unknown key ' + k);
   }
 });
+
+test('a side with no photo keeps its stand-in stage instead of vanishing (#170 tote, #177 tee)', () => {
+  const { keepUncovered } = require('../tools/lib/placements');
+  const base = { front: { label: 'Front', image: 'products/bag_front.png' }, back: { label: 'Back', image: 'products/bag_back.png' } };
+  /* Only the front was photographed: the back stays the drawing it was. */
+  const st = keepUncovered(base, [{ key: 'front', side: 'front' }], { front: { label: 'Front', image: 'https://x/front.webp' } });
+  assert.deepStrictEqual(Object.keys(st), ['front', 'back']);
+  assert.strictEqual(st.back.image, 'products/bag_back.png');
+  assert.notStrictEqual(st.back, base.back, 'a copy, not the shared object');
+  /* A photographed back is not overwritten. */
+  const both = keepUncovered(base, [{ key: 'front', side: 'front' }, { key: 'back', side: 'back' }],
+    { front: { image: 'f' }, back: { image: 'b' } });
+  assert.strictEqual(both.back.image, 'b');
+  /* An open garment's front side is covered by its chest boxes, so no stray Front stage is added. */
+  const open = keepUncovered(base, [{ key: 'front', side: 'front' }, { key: 'right_chest', side: 'front' }, { key: 'back', side: 'back' }],
+    { front: { label: 'Left chest' }, right_chest: { label: 'Right chest' }, back: { label: 'Back' } });
+  assert.deepStrictEqual(Object.keys(open), ['front', 'right_chest', 'back']);
+  assert.match(require('fs').readFileSync(require('path').join(__dirname, '..', 'tools', 'product-art', 'wire.js'), 'utf8'),
+    /keepUncovered\(stages, boxes, stagesFor\(/);
+});
+
