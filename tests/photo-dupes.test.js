@@ -9,6 +9,8 @@
  *   - one photo is shown on two pages, or twice on one page;
  *   - two different photos on the site are near-matches.
  * The blog index is a list of its posts' covers, so it may repeat them.
+ * The Business Partners pages may show work from elsewhere on the site
+ * (owner, 2026-10-18: "you can reuse but pick better ones").
  *
  * Run: node --test tests/*.test.js
  */
@@ -23,7 +25,7 @@ const NAV = require('../tools/site-nav');
 const PUBLIC = path.join(__dirname, '..', 'public');
 const read = (rel) => fs.readFileSync(path.join(PUBLIC, rel), 'utf8');
 const HASHES = JSON.parse(read('assets/data/photo-hashes.json')).photos;
-const LISTINGS = new Set(['blog/index.html']);
+const LISTINGS = new Set(['blog/index.html', 'partners.html', 'mail15.html']);
 
 const dist = (a, b) => { let x = BigInt('0x' + a) ^ BigInt('0x' + b), n = 0; while (x) { n += Number(x & 1n); x >>= 1n; } return n; };
 // Same rule as tools/photo-dupes.py: whole photos and centres both close,
