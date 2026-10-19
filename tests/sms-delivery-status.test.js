@@ -102,16 +102,21 @@ test("Twilio's own signing scheme accepts a real report and refuses a forged one
 function smsDesk(texts = {}) {
   const errors = [];
   const sql = [];
+  const unsent = [];
   const pool = {
     query(text, args = []) {
       const s = text.replace(/\s+/g, ' ').trim();
       sql.push(s);
-      if (/^UPDATE sms_messages SET status = \$2, error = COALESCE\(\$3, error\) WHERE twilio_sid = \$1 AND status IN \('sending', 'sent'\) RETURNING template, ref$/.test(s)) {
+      if (/^UPDATE sms_messages SET status = \$2, error = COALESCE\(\$3, error\) WHERE twilio_sid = \$1 AND status IN \('sending', 'sent'\) RETURNING template, ref, quote_code$/.test(s)) {
         const t = texts[args[0]];
         if (!t || !['sending', 'sent'].includes(t.status)) return Promise.resolve({ rows: [] });
         t.status = args[1];
         if (args[2] != null) t.error = args[2];
-        return Promise.resolve({ rows: [{ template: t.template, ref: t.ref }] });
+        return Promise.resolve({ rows: [{ template: t.template, ref: t.ref, quote_code: t.quote_code || null }] });
+      }
+      if (/^UPDATE quotes SET sent_to_customer_at = NULL WHERE code = \$1 AND emailed_at IS NULL AND accepted_at IS NULL AND NOT EXISTS/.test(s)) {
+        unsent.push(args[0]);
+        return Promise.resolve({ rowCount: 1 });
       }
       if (/^SELECT 1 FROM sms_messages WHERE twilio_sid = \$1$/.test(s)) {
         return Promise.resolve({ rows: texts[args[0]] ? [{ '?column?': 1 }] : [] });
@@ -126,7 +131,7 @@ function smsDesk(texts = {}) {
   };
   vm.createContext(sandbox);
   vm.runInContext(FAILURES + '\n' + lift('recordSmsDelivery'), sandbox);
-  return { record: (p) => sandbox.recordSmsDelivery(p), texts, errors, sql };
+  return { record: (p) => sandbox.recordSmsDelivery(p), texts, errors, sql, unsent };
 }
 
 const SID = 'SM' + 'd'.repeat(32);
@@ -227,4 +232,17 @@ test('failures of one kind group into one digest line, whoever they were sent to
   const one = 'payment-received text to …0123 was not delivered. Twilio 30034: the sending number is not registered for business texting';
   const two = 'payment-received text to …9876 was not delivered. Twilio 30034: the sending number is not registered for business texting';
   assert.strictEqual(fp(one), fp(two));
+});
+
+test('an undelivered quote text un-sends its quote; a delivered one, or another kind of text, does not', async () => {
+  const quoteText = { status: 'sent', template: 'quote', ref: 'quote-text:AB12CD:r1:1', quote_code: 'AB12CD', error: null };
+  let d = smsDesk({ [SID]: { ...quoteText } });
+  await d.record({ MessageSid: SID, MessageStatus: 'undelivered', ErrorCode: '30006' });
+  assert.deepStrictEqual(d.unsent, ['AB12CD']);
+  d = smsDesk({ [SID]: { ...quoteText } });
+  await d.record({ MessageSid: SID, MessageStatus: 'delivered' });
+  assert.deepStrictEqual(d.unsent, []);
+  d = smsDesk({ [SID]: { ...sentText(), quote_code: 'AB12CD' } });
+  await d.record({ MessageSid: SID, MessageStatus: 'failed', ErrorCode: '30006' });
+  assert.deepStrictEqual(d.unsent, []);
 });

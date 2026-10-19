@@ -4893,8 +4893,18 @@ async function recordSmsDelivery(p) {
   const { rows } = await pool.query(
     `UPDATE sms_messages SET status = $2, error = COALESCE($3, error)
       WHERE twilio_sid = $1 AND status IN ('sending', 'sent')
-      RETURNING template, ref`, [sid, status, why]);
+      RETURNING template, ref, quote_code`, [sid, status, why]);
   if (status === 'delivered') return { status, updated: rows.length };
+  /* A quote that went only by this text never reached them: it is not sent,
+     so the job page asks again and the follow-up leaves it alone. Not when it
+     was emailed, accepted, or another quote text got through. */
+  if (rows.length && rows[0].template === 'quote' && rows[0].quote_code) {
+    await pool.query(
+      `UPDATE quotes SET sent_to_customer_at = NULL
+        WHERE code = $1 AND emailed_at IS NULL AND accepted_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM sms_messages WHERE quote_code = $1 AND template = 'quote' AND status IN ('sent', 'delivered'))`,
+      [rows[0].quote_code]).catch((e) => console.error('quote un-send after a failed text:', e.message));
+  }
   if (!rows.length) {
     /* A report repeated for a text already recorded is not a second failure. */
     const { rows: had } = await pool.query('SELECT 1 FROM sms_messages WHERE twilio_sid = $1', [sid]);
@@ -11204,21 +11214,35 @@ function emptyState(html, action) {
 /* "What they sent" at the top of the quote form: the enquiry's picture and its
    full text, and the customer's files already on the job, so the quote is
    built looking at them (owner, 2026-10-19). Once a quote is saved the lead's
-   picture is copied onto the job (carryLeadFiles); the lead's own copy shows
-   only while the job has none, so the same picture is not there twice. */
+   picture is copied onto the job (carryLeadFiles, under the name "Photo sent
+   with the enquiry"); the lead's own copy shows until that copy is there, so
+   the same picture is not shown twice and a copy that failed still shows it. */
+function leadPhotoTile(url, cloud) {
+  /* Only this shop's Cloudinary. A picture gets a small thumbnail; anything
+     else (a PDF, a raw file) a labelled tile that opens it. */
+  const m = cloud && new RegExp('^https://res\\.cloudinary\\.com/' + cloud.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
+    '/(image|raw)/upload/(.+)\\.([A-Za-z0-9]{2,5})$').exec(String(url || ''));
+  if (!m || String(url).length > 400) return null;
+  const ext = m[3].toLowerCase();
+  const web = m[1] === 'image' && ['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'heic', 'heif'].includes(ext);
+  return { href: url, label: 'Photo sent with the enquiry', ext,
+    thumb: web ? url.replace('/image/upload/', '/image/upload/c_fit,w_240,h_240,q_auto,f_auto/').replace(/\.(heic|heif)$/i, '.jpg') : '' };
+}
+
 function quoteReferenceCard({ lead, quote }) {
   const cloud = QPHOTOS.cloudName();
   const files = quote ? QPHOTOS.photosOf(quote, cloud) : [];
-  const leadPhoto = lead && /^https:\/\/res\.cloudinary\.com\//.test(String(lead.photo_url || '')) ? String(lead.photo_url) : '';
+  const carried = files.some((p) => /^Photo sent with the enquiry/.test(String(p.name || '')));
+  const leadPhoto = lead && !carried ? leadPhotoTile(lead.photo_url, cloud) : null;
   const text = lead && lead.description ? String(lead.description).slice(0, 2000) : '';
   if (!files.length && !leadPhoto && !text) return '';
   const tile = (href, thumb, label) => `
     <a href="${escEmail(href)}" target="_blank" rel="noopener" title="${escEmail(label)}" style="text-decoration:none">${thumb
       ? `<img src="${escEmail(thumb)}" alt="${escEmail(label)}" loading="lazy" style="width:120px;height:120px;object-fit:contain;background:#fff;border-radius:8px;border:1px solid #e3e8f2;display:block">`
       : `<div style="width:120px;height:120px;border-radius:8px;border:1px solid #e3e8f2;background:#eef3ff;display:flex;align-items:center;justify-content:center;font-weight:700;color:#1848B8;text-align:center;padding:6px;font-size:12px;word-break:break-all">${escEmail(label)}</div>`}</a>`;
-  const tiles = files.length
-    ? files.map((p) => tile(p.view, p.kind === 'image' ? p.thumb : '', p.kind === 'image' ? p.name : p.ext.toUpperCase()))
-    : leadPhoto ? [tile(leadPhoto, leadPhoto, 'Photo sent with the enquiry')] : [];
+  const tiles = [
+    ...(leadPhoto ? [tile(leadPhoto.href, leadPhoto.thumb, leadPhoto.thumb ? leadPhoto.label : leadPhoto.ext.toUpperCase())] : []),
+    ...files.map((p) => tile(p.view, p.kind === 'image' ? p.thumb : '', p.kind === 'image' ? p.name : p.ext.toUpperCase()))];
   return `
     <div class="card" id="what-they-sent" style="border-left:4px solid #1848B8">
       <b>What they sent</b>${lead ? ` <span class="muted" style="font-size:13px">&middot; enquiry of ${fmtDate(lead.created_at)}</span>` : ''}
@@ -14933,7 +14957,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
        Messages link stays for everyone else. */
     const mayText = STAFF.mayUseRoute(actor, 'POST', '/admin/quote/:code/text');
     const textByShop = mayText && (await quoteTextWay(q).catch(() => '')) === 'shop';
-    const textForm = (cls) => textByShop ? `<form method="POST" action="/admin/quote/${code}/text" style="margin:0 0 8px">
+    const textForm = (cls) => textByShop ? `<form method="POST" action="/admin/quote/${code}/text" style="margin:0 0 8px" onsubmit="this.querySelector('button').disabled=true">
             <button type="submit"${cls} style="width:100%">Text it to ${escEmail(q.phone)}</button></form>` : '';
 
     res.send(quotePage('Quote ready', `
@@ -20389,12 +20413,9 @@ app.post('/admin/quote/:code/email', requireAdmin, async (req, res) => {
    2026-10-19: "I want email and text"). The same refusals as the email, then
    the customer's text rules: they must have agreed to order texts. Without
    that, the page offers the phone's Messages instead (quoteTextWay). */
-function quoteTextBody(q) {
-  const first = String(q.name || '').trim().split(/\s+/)[0];
-  const until = fmtDate(q.valid_until);
-  const what = smsPlain(quoteSummary(q.items) || 'your order', 120);
-  return `June's Tees: Hi${first ? ' ' + smsPlain(first, 30) : ''}, your quote for ${what} is ready: ${smsShort(quoteLink(q.code))}${
-    until ? ` Good through ${until}.` : ''} Tap Accept when you're ready, or text us any changes. Reply STOP to opt out.`;
+function quoteTextMsg(q) {
+  return SMS.quote({ first: String(q.name || '').trim().split(/\s+/)[0], what: quoteSummary(q.items),
+    until: fmtDate(q.valid_until), link: quoteLink(q.code) });
 }
 
 /* How the quote can go by text, for the buttons: 'shop' (sent from the shop's
@@ -20402,7 +20423,8 @@ function quoteTextBody(q) {
    cannot send it), or '' when there is no usable number. */
 async function quoteTextWay(q) {
   const phone = normalizeUsPhone(q.phone);
-  if (!phone) return '';
+  /* The route refuses a held, draft, cancelled or paid quote: no button for it. */
+  if (!phone || ['held', 'draft'].includes(q.status) || q.cancelled_at || Number(q.paid_amount) > 0) return '';
   if (!smsConfigured()) return 'phone';
   const c = await smsConsentFor(phone).catch(() => ({ transactional: false }));
   return c.transactional ? 'shop' : 'phone';
@@ -20423,7 +20445,7 @@ function quoteTextControl(q, way, smsHref, look) {
   const code = escEmail(q.code);
   const asLink = look === 'link';
   if (way === 'shop') {
-    return `<form method="POST" action="/admin/quote/${code}/text" style="${asLink ? 'display:inline;' : ''}margin:0">
+    return `<form method="POST" action="/admin/quote/${code}/text" style="${asLink ? 'display:inline;' : ''}margin:0" onsubmit="this.querySelector('button').disabled=true">
       <button type="submit"${asLink ? ' style="background:none;border:0;padding:0;color:#1848B8;font:inherit;cursor:pointer;text-decoration:underline"' : ''}>${
         asLink ? 'text the quote to them' : 'Text it to ' + escEmail(q.phone)}</button></form>`;
   }
@@ -20446,17 +20468,19 @@ app.post('/admin/quote/:code/text', requireAdmin, async (req, res) => {
     if (Number(q.paid_amount) > 0) {
       return err('This job already has a payment on it, so the "accept and pay" quote text was not sent. Send a message from the job instead.');
     }
-    /* A double tap inside the same minute is one text (the dedupe key); a
-       re-send of an updated quote a minute later is a new one. */
+    /* The button disables itself on the tap; behind that, one text per
+       revision a minute (the dedupe key), so an edited quote can go again
+       straight away. */
     const status = await sendCustomerSms({ phone: q.phone, kind: 'transactional', quote: code,
-      ref: `quote-text:${code}:${Math.floor(Date.now() / 60000)}`,
-      msg: { template: 'quote', body: quoteTextBody(q) } });
+      ref: `quote-text:${code}:r${q.revision || 1}:${Math.floor(Date.now() / 60000)}`, msg: quoteTextMsg(q) });
     if (status === 'sent') {
       await pool.query('UPDATE quotes SET sent_to_customer_at = COALESCE(sent_to_customer_at, NOW()) WHERE id = $1', [q.id]);
       if (q.from_submission_id) await markLeadResponded(q.from_submission_id, currentActor()).catch(() => {});
       logActivity(currentActor() || OWNER_ACTOR, 'quote texted', { type: 'quote', id: code }, {});
       return res.redirect(`${back}?ok=${encodeURIComponent('Quote texted to ' + q.phone + '.')}`);
     }
+    /* sendCustomerSms only logs a failure: the digest has to hear of it here. */
+    if (status === 'failed') reportError('quote-text', new Error(`quote text to ${code} was not accepted by Twilio`), `quote ${code}`).catch(() => {});
     return err({
       'no-phone': 'There is no usable phone number on this quote, so it was not texted.',
       'no-consent': 'They have not agreed to texts, so it was not sent from the shop number. Use "text it from your phone" instead.',
@@ -23065,7 +23089,8 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
           mayTarget = may('/admin/quote/:code/target'), mayEmail = may('/admin/quote/:code/email'),
           maySent = may('/admin/quote/:code/delivered'), mayText = may('/admin/quote/:code/text');
     const textWay = mayText ? await quoteTextWay(q).catch(() => '') : '';
-    const textAs = (look) => quoteTextControl(q, textWay, maySent ? quoteSmsHref(q, req.get('user-agent')) : '', look);
+    const textSms = maySent ? quoteSmsHref(q, req.get('user-agent')) : '';
+    const textLink = quoteTextControl(q, textWay, textSms, 'link'), textButton = quoteTextControl(q, textWay, textSms, 'button');
     const stepRows = cl.steps.map((st) => {
       const inner = `<span class="step-tick" style="color:${st.done ? '#047857' : '#9ca3af'}">${st.done ? '☑' : '☐'}</span>
         <span class="step-label" style="color:${st.done ? '#6b7280' : '#111827'};${st.done ? 'text-decoration:line-through' : 'font-weight:600'}">${st.label}</span>
@@ -23130,7 +23155,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
         <form method="POST" action="/admin/quote/${escEmail(q.code)}/email" style="display:inline;margin:0">
           <button type="submit" style="background:none;border:0;padding:0;color:#1848B8;font:inherit;cursor:pointer;text-decoration:underline">email the quote to them</button></form>${
             q.emailed_at ? ` <span class="muted">(last emailed ${escEmail(new Date(q.emailed_at).toLocaleString('en-US', { timeZone: 'America/Chicago', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))})</span>` : ''}` : ''}${
-          !['held', 'draft'].includes(q.status) && !q.cancelled_at && textAs('link') ? ` · ${textAs('link')}` : ''}</div>
+          textLink ? ` · ${textLink}` : ''}</div>
       ${flash(req.query)}
       ${quoteIsExpired(q) ? `
       <div class="card" style="border-color:#e5e7eb;background:#f9fafb"><b>This quote expired${q.valid_until ? ' on ' + dayShort(q.valid_until) : ''}.</b>
@@ -23140,13 +23165,13 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
       <div class="card" style="border-color:#c7d7fb;background:#f7faff"><b>They asked for a change</b>
         <div style="margin:6px 0 10px;white-space:pre-wrap">&ldquo;${escEmail(String(q.change_request).slice(0, 2000))}&rdquo;</div>
         <a class="btn" href="/admin/quote/${escEmail(q.code)}/edit">Edit the quote &rarr;</a></div>` : ''}
-      ${!q.sent_to_customer_at && (mayEmail || maySent || textAs('button')) && !['held', 'draft'].includes(q.status) && !q.cancelled_at && !q.accepted_at ? `
+      ${!q.sent_to_customer_at && (mayEmail || maySent || textButton) && !['held', 'draft'].includes(q.status) && !q.cancelled_at && !q.accepted_at ? `
       <div class="card" style="border-color:#f5d48a;background:#fffbeb"><b>Not sent to the customer yet.</b>
         <span class="muted">Saving a quote does not send it.</span>
         <div class="row" style="gap:8px;margin-top:8px;flex-wrap:wrap">
           ${q.email && mayEmail ? `<form method="POST" action="/admin/quote/${escEmail(q.code)}/email" style="margin:0">
             <button type="submit">Email it to ${escEmail(q.email)}</button></form>` : ''}
-          ${textAs('button')}
+          ${textButton}
           ${maySent ? `<form method="POST" action="/admin/quote/${escEmail(q.code)}/delivered" style="margin:0">
             <button type="submit" class="btn-ghost">I sent it another way</button></form>` : ''}
         </div></div>` : ''}
