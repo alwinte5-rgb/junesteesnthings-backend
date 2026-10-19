@@ -8158,6 +8158,17 @@ function quoteSchedule(q) {
   const proofBy  = back(pressBy, lt.proof);   // approval before the press
   const artBy    = back(proofBy, 1);
 
+  /** True when every garment line carries the own_blanks add-on: the customer
+   *  sends the garments, so there is nothing to order, only a date they must
+   *  be here by (sched.blanks_in_by). */
+  function quoteOwnBlanks(q) {
+    let items;
+    try { items = typeof q.items === 'string' ? JSON.parse(q.items) : q.items; } catch { return false; }
+    const garments = (Array.isArray(items) ? items : []).filter((it) => it && it.product_id != null);
+    return garments.length > 0 && garments.every((it) =>
+      (it.addons || []).some((a) => a && a.code === 'own_blanks'));
+  }
+
   const today = new Date(new Date().toDateString());
   /* Only work in hand can be behind (owner, 2026-10-15: "9 behind schedule
      when I only have 4 orders"). A quote nobody has paid a deposit on has not
@@ -8170,7 +8181,7 @@ function quoteSchedule(q) {
     ship_by: shipBy, qc_by: qcBy, press_by: pressBy,
     blanks_in_by: blanksBy, blanks_order_by: orderBy,
     proof_by: proofBy, artwork_by: artBy,
-    isPickup, isLocal,
+    isPickup, isLocal, ownBlanks: quoteOwnBlanks(q),
     /* A step is "at risk" when its latest safe date has passed and it has not
        happened. Reported per step so the digest can name the actual slip. */
     /* Two warnings, one per move that has a date. Starting is due when the
@@ -8217,7 +8228,8 @@ function quoteChecklist(q) {
   const steps = [
     { key: 'production', label: 'In production', done: !!q.production_at, manual: true,
       hint: sched && !q.production_at
-        ? `start by ${dayShort(sched.blanks_order_by)}, when the blanks have to be ordered`
+        ? (sched.ownBlanks ? `the customer's blanks must be here by ${dayShort(sched.blanks_in_by)}`
+          : `start by ${dayShort(sched.blanks_order_by)}, when the blanks have to be ordered`)
         : 'artwork, proof, blanks and printing' },
     { key: 'shipped', label: sched && sched.isLocal ? 'Ready for delivery' : sched && sched.isPickup ? 'Ready for pickup' : 'Ready / Shipped',
       done: !!q.shipped_at, manual: true,
@@ -8794,7 +8806,7 @@ const EMBROIDERY_METHOD_RE = /embroider/i;
    printed — the artwork has to exist before any of them can run. */
 const ANY_METHOD_RE = /./;
 /* Decoration that goes on a garment the shop would otherwise supply. */
-const GARMENT_METHOD_RE = /screen\s*print|\bdtf\b|embroider/i;
+const GARMENT_METHOD_RE = new RegExp([SCREEN_METHOD_RE.source, '\\bdtf\\b', EMBROIDERY_METHOD_RE.source].join('|'), 'i');
 /* Cutouts are bought in from Signs365, so a job carries that supplier's
    freight and the shop does not absorb it. Matches the four size ladders. */
 const CUTOUT_METHOD_RE = /big head cutout/i;
@@ -12049,8 +12061,10 @@ function productGroupOf(name) {
               /* A REAL break only: 50 cents a piece or 3%, whichever is more.
                  1-4 and 5-11 DTF once sat a nickel apart and this offered
                  "2 more pieces" to save 5 cents (owner, 2026-10-19). A
-                 smaller drop keeps looking for the next real one. */
-              if (e1 <= e0 - Math.max(0.5, e0 * 0.03)) {
+                 smaller drop keeps looking for the next real one. Under a
+                 screen minimum the customer already pays for those pieces,
+                 so any drop there is worth saying. */
+              if (c === minQ ? e1 < e0 - 0.01 : e1 <= e0 - Math.max(0.5, e0 * 0.03)) {
                 var qc = c;
                 ideas.push({ key: 'qty' + n, label: 'Item ' + n + ': ' + x.qty + ' to ' + c + ' pieces',
                   text: tag + 'at ' + c + ' pieces (' + (c - x.qty) + ' more) the price drops to ' + m2(e1) +
@@ -14055,6 +14069,9 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
          positive so a stray minus cannot invert a line. */
       let blankOverride = Number(one(b['blank_price' + i]));
       if (!Number.isFinite(blankOverride) || blankOverride <= 0) blankOverride = null;
+      /* The customer's own garments have no price to correct: a figure left in
+         the box would ask for sign-off over nothing and feed job costs. */
+      if (lineAddons.some((a) => a.code === 'own_blanks')) blankOverride = null;
       if (blankOverride != null) typedPrices.push({ kind: 'blank', value: round2(blankOverride), what: desc || (prod ? prod.name : `Line ${i + 1}`) });
 
       /* THE price calculation — the same source the browser ran. */
@@ -23202,7 +23219,9 @@ function jobScheduleHtml(q, sched, { canSetDate = true } = {}) {
       ${[ /* In date order: blanks are ordered before the artwork is due. */
         /* Each step is done by its own record, or by a later step having
            happened (production started means the earlier ones are behind it). */
-        ['Order blanks', sched.blanks_order_by, !!(q.blanks_ordered_at || q.production_at)],
+        sched.ownBlanks
+          ? ["Customer's blanks in", sched.blanks_in_by, !!(q.blanks_ordered_at || q.production_at)]
+          : ['Order blanks', sched.blanks_order_by, !!(q.blanks_ordered_at || q.production_at)],
         ['Artwork in', sched.artwork_by, !!(q.artwork_at || q.production_at)],
         ['Proof approved', sched.proof_by, !!(q.proof_ok_at || q.production_at)],
         ['On the press', sched.press_by, !!(q.production_at || q.shipped_at)],
@@ -28083,7 +28102,8 @@ async function sendDailyDigest() {
       const shipLine = sched && !sched.risks.length && !q.shipped_at
         ? `<div style="color:#6b7280;font-size:11.5px;margin-top:3px">${
             sched.isLocal ? 'ready for delivery by' : sched.isPickup ? 'ready for pickup by' : 'must ship by'} ${dayShort(sched.ship_by)}${
-            q.blanks_ordered_at ? '' : ` · order blanks by ${dayShort(sched.blanks_order_by)}`}</div>`
+            q.blanks_ordered_at ? '' : sched.ownBlanks ? ` · customer's blanks in by ${dayShort(sched.blanks_in_by)}`
+              : ` · order blanks by ${dayShort(sched.blanks_order_by)}`}</div>`
         : '';
       return `<tr>
         <td style="padding:8px 0;border-bottom:1px solid #eef1f6">

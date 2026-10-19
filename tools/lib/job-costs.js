@@ -365,7 +365,10 @@ function estimateJob(items, catalog) {
        ratio the catalogue price is. */
     let garmentEach = 0, garmentSellEach = 0;
     const basis = [];
-    if (prod && num(prod.price) > 0) {
+    /* The customer sent the garments (own_blanks): nothing was bought. */
+    const ownBlanks = (it.addons || []).some((a) => a && a.code === 'own_blanks');
+    if (ownBlanks) basis.push("customer's blanks");
+    else if (prod && num(prod.price) > 0) {
       const ratio = num(prod.cost) > 0 ? num(prod.cost) / num(prod.price) : 1 / SHOP_MARKUP;
       garmentSellEach = (num(it.blank_price) > 0 ? num(it.blank_price) : num(prod.price)) + num(it.size_upcharge) / qty;
       garmentEach = garmentSellEach * ratio;

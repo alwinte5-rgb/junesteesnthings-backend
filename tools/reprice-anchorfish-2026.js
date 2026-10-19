@@ -545,7 +545,7 @@ const dtfSide = (col) => DF.map((f) => [DTF[f].ceil,
 
 console.log('\n\nDTF — method #1 "Printing", the only ACTIVE method, so this is live on the store.');
 console.log('Stage 1 is the main print (132 sq in), stage 2 an additional location.');
-console.log('Live bands stopped at 175, so every larger order quoted at the 175 rate.\n');
+console.log('Bands run to 7,000 pieces; 1-11 and 25-49 are split for real price breaks.\n');
 let dh = '  stage           ';
 for (const f of DF) dh += (f + '-' + DTF[f].ceil).padStart(11);
 console.log(dh);

@@ -111,6 +111,22 @@ Applied with `tools/reprice-anchorfish-2026.js --only-dtf --apply`, then
   main print           $20.75     $18.75     $16.75     $14.75     $13.00     $11.00      $9.50      $7.55      $6.10      $4.90      $4.00
   add. location         $5.95      $5.50      $5.25      $5.00      $4.80      $4.60      $4.20      $3.50      $3.10      $2.75      $2.55
 
+  History: 1-4 / 5-11 set by the owner 2026-10-15 (was 1-3 $26.05 / 4-11 $23.20);
+  1-4 main $23.20 -> $20.75 2026-10-17; the 2026-10-19 re-cut above (was
+  5-11 $20.75/$5.90, 12-24 $18.30/$5.85, 25-49 $15.75/$5.25, 50-99 $11.90/$4.95).
+
+DTF Printing — Oversized (up to 252 sq in), added 2026-10-17 by
+tools/add-dtf-oversized.js. A print over the standard 132 sq in (a 12x18 or
+14x18 full back); larger is by quote. Main print = standard + 1.75 x Anchorfish's
+extra cost for their 252 sq in column, rounded up to 5c. Derived from method #1,
+so it follows the 2026-10-19 cut: 50-99 went $14.00 -> $13.10. The second
+location is the standard one. Adult garments only (lib/garments.js decorationsFor).
+
+  stage                   1-4       5-11      12-24      25-35      36-49      50-99    100-249    250-499    500-999  1000-2499  2500-7000
+  -------------------------------------------------------------------------------------------------------------------------------------------
+  oversized main       $24.90     $22.90     $20.05     $17.40     $15.65     $13.10     $11.30      $9.10      $7.40      $6.05      $4.95
+  add. location         $5.95      $5.50      $5.25      $5.00      $4.80      $4.60      $4.20      $3.50      $3.10      $2.75      $2.55
+
   Customer-supplied blanks: the `own_blanks` add-on ($1.50 a piece) drops the
   blank and its size upcharges, so the line is printing plus handling.
 

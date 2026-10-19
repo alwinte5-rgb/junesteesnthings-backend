@@ -7,8 +7,9 @@
  *
  * Owner's rule, 2026-10-17: oversized = today's standard price + 1.75 x what
  * Anchorfish charges extra for the bigger print, rounded UP to the next 5
- * cents. 1.75 is the factor that lands 50-99 pieces on $14.00, the price the
- * owner set on the Ink Theory order. Up to 252 sq in; larger is by quote.
+ * cents. 1.75 is the factor that landed 50-99 pieces on $14.00, the price the
+ * owner set on the Ink Theory order; with the standard 50-99 cut to $11.00
+ * (2026-10-19) it follows to $13.10. Up to 252 sq in; larger is by quote.
  *
  * Derived, not typed, so a change to the standard ladder carries through when
  * the tool is re-run, and the gap between the two always tracks real cost.

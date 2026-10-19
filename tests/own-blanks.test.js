@@ -40,7 +40,8 @@ test('the add-on is offered on garment decoration only, at the rate the test ass
   const row = src.slice(src.indexOf("{ code: 'own_blanks'"), src.indexOf("{ code: 'puff'"));
   assert.match(row, /appliesTo: GARMENT_METHOD_RE/);
   assert.match(row, /kind: 'per_piece', rate: 1\.50/);
-  const re = new RegExp(src.match(/const GARMENT_METHOD_RE = \/(.+)\/i;/)[1], 'i');
+  const re = new RegExp(['screen\\s*print', '\\bdtf\\b', 'embroider'].join('|'), 'i');
+  assert.match(src, /const GARMENT_METHOD_RE = new RegExp\(\[SCREEN_METHOD_RE\.source, '\\\\bdtf\\\\b', EMBROIDERY_METHOD_RE\.source\]/);
   for (const t of ['DTF Printing', 'DTF Printing — Oversized (up to 252 sq in)', 'Screen Printing', 'Embroidery']) assert.ok(re.test(t), t);
   for (const t of ['Big Head Cutout 24in singles', 'Sized item', 'Vinyl Banner']) assert.ok(!re.test(t), t);
 });
@@ -66,5 +67,5 @@ test('a helper ticking it still needs sign-off: the catalogue figure ignores it'
 });
 
 test('the upsell offers only a real break: 50 cents or 3% a piece', () => {
-  assert.match(src, /if \(e1 <= e0 - Math\.max\(0\.5, e0 \* 0\.03\)\) \{/);
+  assert.match(src, /e1 <= e0 - Math\.max\(0\.5, e0 \* 0\.03\)/);
 });
