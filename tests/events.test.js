@@ -62,7 +62,7 @@ test('every campaign email has the logo, a picture with alt text, the order link
   for (const x of E.schedule(new Date('2026-10-06T12:00:00Z'), 365)) {
     const m = E.emailFor(x);
     assert.ok(m.subject && m.preview && m.text, x.event.key);
-    assert.match(m.html, /assets\/images\/brand\/logo\.png" width="260" alt="June/);
+    assert.match(m.html, /assets\/images\/brand\/logo-2026-900\.png" width="260" alt="June/);
     assert.match(m.html, new RegExp(`<img src="https://www\\.jtees\\.net/assets/images/${x.event.photo.replace(/[.]/g, '\\.')}"[^>]* alt="[^"]+"`));
     assert.match(m.html, /You are getting this because/);
     assert.match(m.text, /https:\/\/(www|design)\.jtees\.net\//);

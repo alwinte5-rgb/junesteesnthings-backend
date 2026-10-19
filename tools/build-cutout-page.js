@@ -141,7 +141,7 @@ function scaleDrawing(sizes) {
   const base = PAD + tallest * S;
   const label = (cx, big, small) =>
     `<text class="sl-big" x="${cx.toFixed(1)}" y="${(base + 28).toFixed(1)}" text-anchor="middle" ` +
-      `font-family="Inter,sans-serif" font-size="17" font-weight="800" fill="#0B1F4B">${big}</text>` +
+      `font-family="Inter,sans-serif" font-size="17" font-weight="800" fill="#0D0D12">${big}</text>` +
     `<text class="sl-small" x="${cx.toFixed(1)}" y="${(base + 50).toFixed(1)}" text-anchor="middle" ` +
       `font-family="Inter,sans-serif" font-size="11.5" font-weight="600" fill="#6B7280">${small}</text>`;
   const line = base - REAL_HEAD * S;
@@ -156,7 +156,7 @@ function scaleDrawing(sizes) {
     parts +=
       `<g transform="translate(${x.toFixed(1)},${(base - hh).toFixed(1)})">` +
         `<path d="${headPath(hw, hh)}" fill="url(#cut)" stroke="#ffffff" stroke-width="3" stroke-linejoin="round"/>` +
-        `<path d="${headPath(hw, hh)}" fill="none" stroke="#0B1F4B" stroke-width="1" stroke-linejoin="round" opacity=".25"/>` +
+        `<path d="${headPath(hw, hh)}" fill="none" stroke="#0D0D12" stroke-width="1" stroke-linejoin="round" opacity=".25"/>` +
       `</g>` + label(x + hw / 2, `${t}"`, 'tall');
     x += hw + GAP;
   }
@@ -166,7 +166,7 @@ function scaleDrawing(sizes) {
   return `<svg viewBox="0 0 ${Math.round(w)} ${Math.round(h)}" width="100%" role="img" ` +
     `aria-label="The ${sizes.join(', ')} inch big head cutouts drawn to the same scale beside a real head, which is about ${REAL_HEAD} inches tall" ` +
     `xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="cut" x1="0" y1="0" x2="0" y2="1">` +
-    `<stop offset="0%" stop-color="#1b3a78"/><stop offset="100%" stop-color="#0B1F4B"/></linearGradient></defs>` +
+    `<stop offset="0%" stop-color="#1b3a78"/><stop offset="100%" stop-color="#0D0D12"/></linearGradient></defs>` +
     `${parts}</svg>`;
 }
 
@@ -184,7 +184,7 @@ function packDrawing(m) {
     for (let c = 0; c < cols && k < n; c++, k++) {
       const cx = PADX + c * cw + (cw - hw) / 2, cy = PADY + r * ch + (ch - hh) / 2;
       parts += `<g transform="translate(${cx.toFixed(1)},${cy.toFixed(1)})">` +
-        `<path d="${headPath(hw, hh)}" fill="#0B1F4B" opacity=".82"/></g>`;
+        `<path d="${headPath(hw, hh)}" fill="#0D0D12" opacity=".82"/></g>`;
     }
   }
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" ` +
@@ -526,24 +526,24 @@ const PRINT_HTML = `<!DOCTYPE html>
   @page{size:letter;margin:12mm 15mm;}
   *{box-sizing:border-box;margin:0;padding:0;}
   body{font:13px/1.55 -apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif;color:#374151;}
-  .head{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #0B1F4B;padding-bottom:10px;}
-  .head h1{font-size:23px;font-weight:900;color:#0B1F4B;letter-spacing:-.01em;}
+  .head{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #0D0D12;padding-bottom:10px;}
+  .head h1{font-size:23px;font-weight:900;color:#0D0D12;letter-spacing:-.01em;}
   .head .who{text-align:right;font-size:11px;color:#6B7280;line-height:1.5;}
-  .head .who b{color:#0B1F4B;font-size:12.5px;display:block;}
+  .head .who b{color:#0D0D12;font-size:12.5px;display:block;}
   .intro{margin:14px 0 4px;font-size:12.5px;color:#374151;max-width:76%;}
-  h2{font-size:12px;font-weight:800;color:#0B1F4B;text-transform:uppercase;letter-spacing:.09em;margin:20px 0 2px;}
+  h2{font-size:12px;font-weight:800;color:#0D0D12;text-transform:uppercase;letter-spacing:.09em;margin:20px 0 2px;}
   /* Capped so the whole sheet stays ONE page — it is a handout, and a
      second page that holds only a footer gets thrown away or, worse, printed. */
   .scale{margin:10px 0 2px;text-align:center;}
   .scale svg{height:188px;width:auto;max-width:100%;}
   table{width:100%;border-collapse:collapse;margin-top:8px;font-size:12.5px;}
-  th{text-align:left;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#6B7280;padding:0 8px 5px;border-bottom:1.5px solid #0B1F4B;}
+  th{text-align:left;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#6B7280;padding:0 8px 5px;border-bottom:1.5px solid #0D0D12;}
   td{padding:6px 8px;border-bottom:1px solid #E5E7EB;}
-  td.p{font-weight:800;color:#0B1F4B;text-align:right;white-space:nowrap;}
+  td.p{font-weight:800;color:#0D0D12;text-align:right;white-space:nowrap;}
   td.m{color:#6B7280;text-align:right;white-space:nowrap;}
   .cols{display:flex;gap:26px;}
   .cols>div{flex:1;}
-  .note{margin-top:14px;padding:9px 11px;background:#f7f6f3;border-left:3px solid #F0275A;font-size:11.5px;line-height:1.6;}
+  .note{margin-top:14px;padding:9px 11px;background:#f7f6f3;border-left:3px solid #E0107A;font-size:11.5px;line-height:1.6;}
   .foot{margin-top:18px;padding-top:9px;border-top:1px solid #E5E7EB;font-size:10.5px;color:#6B7280;display:flex;justify-content:space-between;}
 </style></head><body>
   <div class="head">

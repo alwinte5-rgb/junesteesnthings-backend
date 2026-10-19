@@ -139,7 +139,7 @@ ${sections}
   <div class="container">
     <div class="section-tag">Helpful guides</div>
     <h2 style="margin-bottom:1.5rem;">Related Reading</h2>
-    <div style="display:flex;flex-wrap:wrap;gap:1rem 3rem;">${page.related.map((r) => `<a href="${esc(r.href)}" style="color:#1848B8;font-weight:600;">&rarr; ${esc(r.label)}</a>`).join('')}</div>
+    <div style="display:flex;flex-wrap:wrap;gap:1rem 3rem;">${page.related.map((r) => `<a href="${esc(r.href)}" style="color:#0E78B8;font-weight:600;">&rarr; ${esc(r.label)}</a>`).join('')}</div>
   </div>
 </section>
 <!--Start of Tawk.to Script-->
