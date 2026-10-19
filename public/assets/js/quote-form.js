@@ -180,10 +180,10 @@
           maxFileSize: 10000000,
           styles: {
             palette: {
-              window: '#0B1F4B', windowBorder: '#162a5e', tabIcon: '#F0275A',
+              window: '#0D0D12', windowBorder: '#23232B', tabIcon: '#E0107A',
               menuIcons: '#aab4c8', textDark: '#000000', textLight: '#ffffff',
-              link: '#F0275A', action: '#F0275A', inactiveTabIcon: '#6B7280',
-              error: '#f87171', inProgress: '#F0275A', complete: '#4ade80', sourceBg: '#162a5e',
+              link: '#E0107A', action: '#E0107A', inactiveTabIcon: '#6B7280',
+              error: '#f87171', inProgress: '#E0107A', complete: '#4ade80', sourceBg: '#23232B',
             },
           },
         }, function (error, result) {
@@ -362,7 +362,7 @@
   // ============================
   var STYLE = '' +
     '.jtqf{font-family:inherit;color:#1f2937;text-align:left}' +
-    '.jtqf h3{font-size:1.15rem;font-weight:800;color:#0B1F4B;margin:0 0 1.1rem}' +
+    '.jtqf h3{font-size:1.15rem;font-weight:800;color:#0D0D12;margin:0 0 1.1rem}' +
     '.jtqf .form-group{margin-bottom:1rem}' +
     '.jtqf .form-row{display:grid;grid-template-columns:1fr 1fr;gap:1rem}' +
     '.jtqf label.l{display:block;font-size:.78rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#4B5563;margin-bottom:.4rem}' +
@@ -381,7 +381,7 @@
     '.jtqf .upload-preview img{width:100%;max-height:160px;object-fit:contain;border-radius:8px;background:#f3f4f6}' +
     '.jtqf .remove-upload{position:absolute;top:6px;right:6px;background:rgba(0,0,0,.7);border:0;color:#fff;border-radius:50%;width:26px;height:26px;cursor:pointer}' +
     '.jtqf .row-end{display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin-top:.4rem}' +
-    '.jtqf button[type=submit]{background:#F4A623;color:#0B1F4B;font-weight:800;border:0;border-radius:10px;padding:.85rem 1.8rem;font-size:1rem;cursor:pointer}' +
+    '.jtqf button[type=submit]{background:#F4A623;color:#0D0D12;font-weight:800;border:0;border-radius:10px;padding:.85rem 1.8rem;font-size:1rem;cursor:pointer}' +
     '.jtqf button[type=submit]:disabled{opacity:.6;cursor:wait}' +
     '.jtqf .form-status{font-size:.9rem;font-weight:600}' +
     '.jtqf .form-status.success{color:#15803d}.jtqf .form-status.error{color:#b91c1c}' +

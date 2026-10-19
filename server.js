@@ -6045,7 +6045,7 @@ function textsPage({ email = '', first = '', phone = '', error = '', code = '', 
     ['ssa-113683_f_fm', 'Kids', 55], ['ssa-36262_f_fm', 'Baby', 56], ['ssa-97052_f_fm', 'Hats', 57]]
     .map(([img, label, cat]) => `<a href="${D}/products.php?category_id=${cat}"><img src="/assets/images/shop/${img}.jpg"
       alt="Custom ${label}" loading="lazy">${label}</a>`).join('');
-  const top = `<div class="tx-top"><a href="/"><img src="/assets/images/brand/logo.png" alt="June's Tees &amp; Things"></a></div>`;
+  const top = `<div class="tx-top"><a href="/"><img src="/assets/images/brand/logo-2026-900.png" alt="June's Tees &amp; Things"></a></div>`;
   const foot = `<div class="tx-foot">June's Tees &amp; Things &middot; 3047 N Lincoln Ave, Chicago &middot; (773) 900-4592<br>
     <a href="/">jtees.net</a> &middot; <a href="${LAB}">Design Lab</a> &middot; <a href="/sms-terms">SMS terms</a> &middot;
     <a href="${D}/privacy.php">Privacy</a></div>`;
@@ -6420,10 +6420,10 @@ app.get('/admin/campaign', requireAdmin, async (req, res) => {
           <li>Already asking: the website quote form, accepting a quote, and checkout and "save your design" in the Design Lab</li>
         </ul>
       </div>
-      ${await partnersInviteCard(contacts, brevoErr, cap)}`, 'discounts'));
+      ${await partnersInviteCard(contacts, brevoErr, cap)}`, 'campaign'));
   } catch (e) {
     console.error('campaign page failed:', e.message);
-    res.status(500).send(adminPage('Campaign', '<div class="card"><div class="warn">Could not load the campaign.</div></div>', 'discounts'));
+    res.status(500).send(adminPage('Campaign', '<div class="card"><div class="warn">Could not load the campaign.</div></div>', 'campaign'));
   }
 });
 
@@ -6447,7 +6447,7 @@ app.get('/admin/campaign/sign', requireAdmin, (req, res) => {
       .k{font-size:30px;font-weight:800;margin:18px 0}.k b{background:#12203c;color:#fff;padding:2px 12px;border-radius:8px}
       img.qr{width:300px;height:300px}.f{font-size:13px;color:#4b5563;line-height:1.5;margin-top:22px}
       @media print{.np{display:none}}</style></head><body><div class="s">
-    <img src="${PUBLIC_BASE_URL}/assets/images/brand/logo.png" alt="June's Tees" style="width:220px">
+    <img src="${PUBLIC_BASE_URL}/assets/images/brand/logo-2026-900.png" alt="June's Tees" style="width:220px">
     <h1>Get ${REINTRO.PCT}% off</h1>
     <p style="font-size:22px;margin:0">your next order when you join our texts</p>
     <img class="qr" src="${escEmail(qr)}" alt="QR code to sign up">
@@ -10468,6 +10468,7 @@ const ADMIN_NAV = [
   { key: 'earnings',   href: '/admin/my-earnings',   label: 'My earnings', icon: 'dollar', staffOnly: true },
   { key: 'mystats',    href: '/admin/my-stats',      label: 'My stats',   icon: 'grid',   staffOnly: true },
   { key: 'clock',      href: '/admin/clock',         label: 'My hours',   icon: 'clock',  staffOnly: true },
+  { key: 'myschedule', href: '/admin/work-schedule', label: 'My schedule', icon: 'clock', staffOnly: true },
   { key: 'dashboard',  href: '/admin/dashboard',     label: 'Dashboard',  icon: 'grid',   badge: 'jobnotes' },
   { key: 'tasks',      href: '/admin/tasks',         label: 'Tasks',      icon: 'check' },
   { key: 'leads',      href: '/admin/leads',         label: 'Leads',      icon: 'inbox',  badge: 'leads' },
@@ -10476,20 +10477,48 @@ const ADMIN_NAV = [
   { key: 'orders',     href: '/admin/orders',        label: 'Orders',     icon: 'box' },
   { key: 'shipping',   href: '/admin/shipping',      label: 'Shipping',   icon: 'truck',  badge: 'shipping' },
   { key: 'delivery',   href: '/admin/delivery',      label: 'Delivery',   icon: 'clock' },
+  { key: 'deliveryset', href: '/admin/delivery/settings', label: 'Delivery settings', icon: 'edit' },
   { key: 'customers',  href: '/admin/customers',     label: 'Customers',  icon: 'users' },
   { key: 'reviews',    href: '/admin/reviews', label: 'Reviews',    icon: 'star',   badge: 'reviews' },
   { key: 'money',      href: FINANCES_PATH,    label: 'Finances',   icon: 'dollar' },
   { key: 'certificates', href: '/admin/certificates', label: 'Certificates', icon: 'cert', badge: 'certificates' },
+  { key: 'exports',    href: '/admin/exports',       label: 'Exports',    icon: 'file' },
+  { key: 'pay',        href: '/admin/commission',    label: 'Staff pay',  icon: 'card' },
   { key: 'discounts',  href: '/admin/discounts',     label: 'Discounts',  icon: 'tag' },
   { key: 'partners',   href: '/admin/partners',      label: 'Partners',   icon: 'users', when: () => PARTNERS.on() },
   { key: 'calendar',   href: '/admin/marketing-calendar', label: 'Marketing calendar', icon: 'clock' },
+  { key: 'campaign',   href: '/admin/campaign',      label: 'Reintro campaign', icon: 'mail' },
   { key: 'chat',       href: '/admin/team-chat',     label: 'Team chat',  icon: 'chat',   badge: 'chat' },
   { key: 'playbook',   href: '/admin/playbook',      label: 'Playbook',   icon: 'book' },
   { key: 'resources',  href: '/admin/resources',     label: 'Resources',  icon: 'key' },
   { key: 'training',   href: '/admin/training',      label: 'Training',   icon: 'learn' },
+  { key: 'paths',      href: '/admin/training/paths', label: 'Training paths', icon: 'learn' },
   { key: 'hiring',     href: '/admin/hiring',        label: 'Hiring',     icon: 'users' },
-  { key: 'team',       href: '/admin/team',    label: 'Team',       icon: 'team',   badge: 'approvals' },
+  { key: 'team',       href: '/admin/team',    label: 'Team',       icon: 'team' },
+  { key: 'approvals',  href: '/admin/approvals',     label: 'Approvals',  icon: 'check',  badge: 'approvals' },
+  { key: 'activity',   href: '/admin/activity',      label: 'Activity',   icon: 'clock' },
+  { key: 'staff',      href: '/admin/staff',         label: 'Staff and permissions', icon: 'key' },
   { key: 'timeclock',  href: '/admin/timeclock', label: 'Hours',      icon: 'clock' },
+  { key: 'workschedule', href: '/admin/work-schedule', label: 'Work schedule', icon: 'clock', ownerOnly: true },
+];
+/* The menu's sections (owner, 2026-10-18: "too many tabs ... most of these can
+   become one. I just don't wanna lose them"). Twenty-eight entries became eight
+   sections, and the nine pages that had no entry at all (Approvals, Activity,
+   Staff, Pay, Exports, the campaign, Delivery settings, Work schedule and
+   Training paths) each got one, so nothing is reachable only by a link.
+   A section opens in the menu without loading a page, and every page shows its
+   section's other pages as tabs (sectionTabs), in the order listed here, so a
+   page folded into a section is never out of sight.
+   tests/admin-nav-sections.test.js fails when a page or an entry has no home. */
+const ADMIN_SECTIONS = [
+  { key: 'mine',      label: 'My work',   icon: 'check',  items: ['myday', 'design', 'schedule', 'earnings', 'mystats', 'clock', 'myschedule'] },
+  { key: 'today',     label: 'Today',     icon: 'grid',   items: ['dashboard', 'tasks'] },
+  { key: 'sales',     label: 'Sales',     icon: 'inbox',  items: ['leads', 'quotes', 'customers'] },
+  { key: 'jobs',      label: 'Jobs',      icon: 'layers', items: ['production', 'orders', 'shipping', 'delivery', 'deliveryset'] },
+  { key: 'marketing', label: 'Marketing', icon: 'star',   items: ['reviews', 'discounts', 'partners', 'calendar', 'campaign'] },
+  { key: 'money',     label: 'Money',     icon: 'dollar', items: ['money', 'certificates', 'exports', 'pay'] },
+  { key: 'team',      label: 'Team',      icon: 'team',   items: ['chat', 'team', 'approvals', 'activity', 'timeclock', 'workschedule', 'staff', 'hiring'] },
+  { key: 'learn',     label: 'Knowledge', icon: 'book',   items: ['playbook', 'resources', 'training', 'paths'] },
 ];
 /* Ordered the way a shop is actually worked, not the way the routes grew: what
    needs you today, the enquiries that might become work, the work in hand, the
@@ -10592,6 +10621,35 @@ details.md-sec:not([open])>summary::before{transform:rotate(-90deg)}
 .adm-badge{margin-left:auto;background:#F4A623;color:#0B1F4B;border-radius:100px;font-size:11px;font-weight:800;
   padding:0 7px;min-width:21px;text-align:center;line-height:19px}
 .adm-badge[hidden]{display:none}
+.adm-sec{margin:0}
+.adm-sec > summary{list-style:none;cursor:pointer;user-select:none}
+.adm-sec > summary::-webkit-details-marker{display:none}
+.adm-sec > summary > span:first-of-type{flex:1 1 auto}
+.adm-sec > summary::after{content:'';width:7px;height:7px;flex:0 0 7px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;
+  transform:rotate(45deg);opacity:.55;margin:0 4px 3px 8px;transition:transform .15s}
+.adm-sec[open] > summary::after{transform:rotate(-135deg);margin-bottom:-3px}
+.adm-sec > summary.is-here{color:#fff}
+.adm-sec[open] > summary .adm-badge-sec{display:none}
+.adm-subs{display:flex;flex-direction:column;gap:1px;margin:2px 0 6px 21px;padding-left:10px;border-left:1px solid rgba(199,210,232,.18)}
+.adm-sub{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;color:#aebbd6;text-decoration:none;font-size:13.5px;font-weight:600}
+.adm-sub:hover{background:rgba(255,255,255,.07);color:#fff}
+.adm-sub.is-active{background:#1848B8;color:#fff;box-shadow:inset 3px 0 0 #F4A623}
+.adm-go{margin:0 2px 14px}
+.adm-go input{width:100%;box-sizing:border-box;background:rgba(255,255,255,.08);border:1px solid rgba(199,210,232,.22);color:#fff;
+  border-radius:10px;padding:9px 11px;font-size:13.5px}
+.adm-go input::placeholder{color:#8e9fc5}
+.sec-tabs{display:flex;gap:6px;margin:0 0 18px;padding:0 0 2px;overflow-x:auto;scrollbar-width:thin;border-bottom:1px solid #e3e8f2}
+.sec-tab{display:inline-flex;align-items:center;gap:7px;white-space:nowrap;padding:9px 14px 10px;font-size:14px;font-weight:700;
+  color:#46505f;text-decoration:none;border-bottom:3px solid transparent;margin-bottom:-1px}
+.sec-tab:hover{color:#0B1F4B;border-bottom-color:#c6d3ee}
+.sec-tab.is-active{color:#1848B8;border-bottom-color:#1848B8}
+.sec-tab .adm-badge{margin-left:0}
+@media (max-width:900px){
+  /* Tabs that run off a phone screen fade at the edge, so it is plain there are more. */
+  .sec-tabs{-webkit-mask-image:linear-gradient(90deg,#000 85%,transparent);mask-image:linear-gradient(90deg,#000 85%,transparent);
+    margin:-4px -14px 14px;padding:0 40px 2px 14px}
+  .sec-tab{padding:9px 12px 10px;font-size:13.5px}
+}
 .adm-foot{margin-top:auto;padding-top:16px;display:flex;flex-direction:column;gap:4px}
 .adm-new{display:flex;align-items:center;justify-content:center;gap:8px;background:#F4A623;color:#0B1F4B;
   border-radius:10px;padding:10px 12px;font-weight:800;font-size:14px;text-decoration:none;margin-bottom:6px}
@@ -10751,32 +10809,68 @@ details.fold[open] > summary::after{transform:rotate(-135deg)}
 
 /* The menu's counts arrive after the page has loaded, from /admin/nav-counts,
    so a slow count never holds a page up and a failed one shows no badge rather
-   than a wrong one. */
+   than a wrong one. A section's badge is the sum of its pages' badges, so a
+   count is never hidden inside a closed section. */
 const ADMIN_BADGE_JS = `(function(){try{fetch('/admin/nav-counts',{credentials:'same-origin',cache:'no-store'})
 .then(function(r){return r.ok?r.json():null}).then(function(c){if(!c)return;
 document.querySelectorAll('[data-badge]').forEach(function(el){var n=Number(c[el.getAttribute('data-badge')])||0;
-if(n>0){el.textContent=n>99?'99+':String(n);el.hidden=false;}});}).catch(function(){});}catch(e){}})();`;
+if(n>0){el.textContent=n>99?'99+':String(n);el.hidden=false;}});
+document.querySelectorAll('[data-badge-group]').forEach(function(el){var n=0;
+el.getAttribute('data-badge-group').split(',').forEach(function(k){n+=Number(c[k])||0;});
+if(n>0){el.textContent=n>99?'99+':String(n);el.hidden=false;}});}).catch(function(){});}catch(e){}})();
+(function(){try{var t=document.querySelector('.sec-tabs .is-active');if(t&&t.parentNode.scrollWidth>t.parentNode.clientWidth)
+t.parentNode.scrollLeft=t.offsetLeft-t.parentNode.offsetLeft-24;}catch(e){}})();`;
+
+/** The menu entries this person may open, in menu order. A helper sees only
+ *  what their permissions open; the owner sees everything but the helper-only
+ *  entries. Worked out from the same route table the server enforces, so the
+ *  menu cannot offer a page that would refuse them. */
+function navItemsFor(actor) {
+  const staff = actor && actor.kind === 'staff' ? actor : null;
+  return ADMIN_NAV.filter((n) => (!n.when || n.when()) && (staff
+    /* Schedule is the no-prices view; whoever has the Production board uses that. */
+    ? !n.ownerOnly && STAFF.mayUseRoute(staff, 'GET', n.href) && !(n.key === 'schedule' && STAFF.levelOf(staff, 'quotes.view') === 'on')
+    : !n.staffOnly));
+}
+
+/** The sections with something in them for this person: [{ ...section, items }]. */
+function navSectionsFor(actor) {
+  const items = navItemsFor(actor);
+  return ADMIN_SECTIONS.map((s) => ({ ...s, items: s.items.map((k) => items.find((n) => n.key === k)).filter(Boolean) }))
+    .filter((s) => s.items.length);
+}
 
 /** The side menu. `active` is an ADMIN_NAV key. */
 function adminNav(active) {
-  /* A helper sees only what their permissions open; the owner sees everything
-     but the helper-only entries. Worked out from the same route table the
-     server enforces, so the menu cannot offer a page that would refuse them. */
   const actor = typeof currentActor === 'function' ? currentActor() : null;
   const staff = actor && actor.kind === 'staff' ? actor : null;
-  const items = ADMIN_NAV.filter((n) => (!n.when || n.when()) && (staff
-    /* Schedule is the no-prices view; whoever has the Production board uses that. */
-    ? STAFF.mayUseRoute(staff, 'GET', n.href) && !(n.key === 'schedule' && STAFF.levelOf(staff, 'quotes.view') === 'on')
-    : !n.staffOnly));
   const home = staff ? '/admin/my-day' : '/admin/dashboard';
+  const sections = navSectionsFor(actor);
+  const offered = sections.flatMap((x) => x.items);
+  const link = (n, cls) => `<a class="${cls}${n.key === active ? ' is-active' : ''}" href="${n.href}"${
+    n.key === active ? ' aria-current="page"' : ''}>${cls === 'adm-link' ? icon(n.icon) : ''}<span>${n.label}</span>${
+    n.badge ? `<span class="adm-badge" data-badge="${n.badge}" hidden></span>` : ''}</a>`;
+  /* A section of one page is just that page. Otherwise it is a fold that opens
+     in place, no page load, and the section holding this page starts open. */
+  const section = (s) => {
+    if (s.items.length === 1) return link(s.items[0], 'adm-link');
+    const open = s.items.some((n) => n.key === active);
+    const badges = s.items.map((n) => n.badge).filter(Boolean);
+    return `<details class="adm-sec"${open ? ' open' : ''}><summary class="adm-link${open ? ' is-here' : ''}">${
+      icon(s.icon)}<span>${s.label}</span>${badges.length
+        ? `<span class="adm-badge adm-badge-sec" data-badge-group="${badges.join(',')}" hidden></span>` : ''}</summary>
+      <div class="adm-subs">${s.items.map((n) => link(n, 'adm-sub')).join('')}</div></details>`;
+  };
   return `<aside class="adm-side" aria-label="Admin menu">
     <a class="adm-brand" href="${home}"><span class="adm-mark">JT</span>
       <span>June's Tees<small>${staff ? escEmail(staff.name) : 'Back office'}</small></span></a>
     ${staff ? `<div class="adm-side-clock">${clockChip()}</div>` : ''}
-    <nav class="adm-nav">${items.map((n) => `
-      <a class="adm-link${n.key === active ? ' is-active' : ''}" href="${n.href}"${
-        n.key === active ? ' aria-current="page"' : ''}>${icon(n.icon)}<span>${n.label}</span>${
-        n.badge ? `<span class="adm-badge" data-badge="${n.badge}" hidden></span>` : ''}</a>`).join('')}
+    <form class="adm-go" method="get" action="/admin/go" role="search">
+      <input type="search" name="q" list="adm-pages" maxlength="120" autocomplete="off"
+        placeholder="${!staff || STAFF.mayUseRoute(staff, 'GET', '/admin/find') ? 'Find a page or order' : 'Find a page'}" aria-label="Go to">
+      <datalist id="adm-pages">${offered.map((n) => `<option value="${escEmail(n.label)}">`).join('')}</datalist>
+    </form>
+    <nav class="adm-nav">${sections.map(section).join('')}
     </nav>
     <div class="adm-foot">
       ${!staff || STAFF.mayUseRoute(staff, 'GET', '/admin/quote/new|/admin/quote/:code/edit')
@@ -10786,6 +10880,18 @@ function adminNav(active) {
         icon('out')}<span>Sign out</span></button></form>
     </div>
   </aside>`;
+}
+
+/** The tabs across the top of a page: every page in its section, by name, so
+ *  a page folded into a section is one tap away and never only a URL. Nothing
+ *  for a page outside the menu or a section of one. */
+function sectionTabs(active) {
+  const actor = typeof currentActor === 'function' ? currentActor() : null;
+  const s = navSectionsFor(actor).find((x) => x.items.some((n) => n.key === active));
+  if (!s || s.items.length < 2) return '';
+  return `<nav class="sec-tabs" aria-label="${escEmail(s.label)}">${s.items.map((n) => `<a class="sec-tab${
+    n.key === active ? ' is-active' : ''}" href="${n.href}"${n.key === active ? ' aria-current="page"' : ''}>${n.label}${
+    n.badge ? `<span class="adm-badge" data-badge="${n.badge}" hidden></span>` : ''}</a>`).join('')}</nav>`;
 }
 
 /* One document for every page this app renders by hand, so the customer shell
@@ -10837,7 +10943,7 @@ function adminPage(title, body, active) {
         return !a || a.kind !== 'staff' || STAFF.mayUseRoute(a, 'GET', '/admin/quote/new|/admin/quote/:code/edit')
           ? `<a class="adm-top-new" href="/admin/quote/new" title="New quote">${icon('plus')}</a>` : ''; })()}
     </header>
-    <main class="adm-page"><div class="wrap">${pageTip(key)}${body}</div></main>
+    <main class="adm-page"><div class="wrap">${sectionTabs(key)}${pageTip(key)}${body}</div></main>
   </div>
 </div>
 <script>${ADMIN_BADGE_JS}</script>${clockScript()}`, { css: ADMIN_CSS, bodyClass: 'adm-body' });
@@ -18802,6 +18908,25 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
         <span>${years.map(y => y.y === year
         ? `<b>${y.y}</b>` : `<a href="${FINANCES_PATH}?year=${y.y}&amp;month=all" style="color:#1848B8">${y.y}</a>`).join(' &middot; ')}
         &middot; <a href="/admin/quotes" style="color:#1848B8">back to jobs</a></span></div>
+      <nav class="chips" data-jump aria-label="Jump to" style="display:none;margin:12px 0 0"><span class="muted" style="align-self:center;font-size:13px">Jump to:</span></nav>
+      <script>
+      /* The page's own headings as a Jump to row (owner, 2026-10-18: nine
+         sections on one page and no way between them but scrolling). Built from
+         what this view actually shows, so a section that is hidden this month
+         never gets a dead link. */
+      document.addEventListener('DOMContentLoaded', function(){
+        var nav = document.querySelector('[data-jump]'); if (!nav) return;
+        var n = 0;
+        document.querySelectorAll('.adm-page h2').forEach(function(h, i){
+          var t = h.textContent.trim(); if (!t || !h.getClientRects().length) return;
+          if (!h.id) h.id = 'fin-' + i;
+          h.style.scrollMarginTop = '70px';
+          var a = document.createElement('a'); a.className = 'chip-f'; a.href = '#' + h.id; a.textContent = t;
+          nav.appendChild(a); n++;
+        });
+        if (n > 1) nav.style.display = 'flex';
+      });
+      </script>
 
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin:14px 0">
         ${tile('Sales (ex tax)', money(S.sales), '#111827', `${S.jobs} accepted job${S.jobs === 1 ? '' : 's'}${
@@ -19553,8 +19678,8 @@ app.get('/admin/exports', requireAdmin, async (_req, res) => {
       </tr>`;
     }).join('');
 
-    res.send(adminPage('Records', `<h1>Records</h1>
-      <div class="sub">Download a month, keep it somewhere that is not this app</div>
+    res.send(adminPage('Exports', `<h1>Exports</h1>
+      <div class="sub">Your records as spreadsheets: download a month, keep it somewhere that is not this app</div>
 
       <div class="card" style="margin-bottom:14px">
         <b style="color:#0B1F4B">Why bother downloading</b>
@@ -19569,6 +19694,7 @@ app.get('/admin/exports', requireAdmin, async (_req, res) => {
       </div>
 
       <div class="card">
+        <div style="overflow-x:auto">
         <table style="width:100%;border-collapse:collapse">
           <thead><tr style="text-align:left;border-bottom:1px solid #e3e8f2">
             <th style="padding:6px 4px">Month</th>
@@ -19580,6 +19706,7 @@ app.get('/admin/exports', requireAdmin, async (_req, res) => {
           </tr></thead>
           <tbody>${rows || '<tr><td colspan="6" class="muted" style="padding:10px 4px">Nothing recorded yet.</td></tr>'}</tbody>
         </table>
+        </div>
         <p class="muted" style="margin-top:12px;font-size:13px">Everything, all months:
           <a href="/admin/exports/quotes.csv">quotes</a> &middot;
           <a href="/admin/exports/payments.csv">payments</a> &middot;
@@ -19590,7 +19717,7 @@ app.get('/admin/exports', requireAdmin, async (_req, res) => {
           that no quote claimed — mostly design studio orders, which keep their own ledger on
           design.jtees.net. A <b>*</b> means the sales tax inside some of it has not been worked out
           yet, so that month's tax figure is a floor rather than a total.</p>
-      </div>`, 'money'));
+      </div>`, 'exports'));
   } catch (err) {
     console.error('exports page failed:', err.message);
     res.status(500).send('Could not load records.');
@@ -21035,6 +21162,27 @@ app.get('/admin/customers', requireAdmin, async (_req, res) => {
 /* The dashboard's Find an order box (2026-10-06). A quote code goes straight
    to its job page; anything else is a customer search, whose page lists every
    job for that person with a link to each. */
+/* The menu's Go to box (2026-10-18). A page name the person may open goes
+   straight there, matched against the same menu they see; anything else is
+   handed to Find (an order code or a customer) when they may search, and
+   otherwise back to their home page with a note. */
+app.get('/admin/go', requireAdmin, (req, res) => {
+  const q = String(req.query.q || '').trim().slice(0, 120);
+  const actor = currentActor();
+  const staff = actor && actor.kind === 'staff';
+  const home = staff ? '/admin/my-day' : '/admin/dashboard';
+  if (!q) return res.redirect(home);
+  /* Whole page names only: a partial match would send a customer called Mark
+     to the Marketing calendar. The box's suggestions offer the exact names. */
+  const want = q.toLowerCase();
+  const page = navItemsFor(actor).find((n) => n.label.toLowerCase() === want);
+  if (page) return res.redirect(page.href);
+  if (!staff || STAFF.mayUseRoute(actor, 'GET', '/admin/find')) {
+    return res.redirect(`/admin/find?q=${encodeURIComponent(q)}`);
+  }
+  res.redirect(`${home}?err=${encodeURIComponent(`No page called "${q}".`)}`);
+});
+
 app.get('/admin/find', requireAdmin, async (req, res) => {
   const q = String(req.query.q || '').trim().slice(0, 120);
   if (!q) return res.redirect('/admin/dashboard');
@@ -30124,8 +30272,7 @@ async function renderStaffPage(req, res, extra = '') {
     /* Archived helpers: their record stays (hours, pay, messages, work), off
        every list and unable to sign in. Restore brings them back, disabled. */
     return res.send(adminPage('Staff', `
-      ${pageHeader('Staff', 'Archived helpers: kept for the records, hidden everywhere else. They cannot sign in.',
-        '<a class="btn btn-ghost" href="/admin/team">Team</a> <a class="btn btn-ghost" href="/admin/approvals">Approvals</a>')}
+      ${pageHeader('Staff', 'Archived helpers: kept for the records, hidden everywhere else. They cannot sign in.')}
       ${tabs}
       ${flash(req.query)}
       <div class="card">${archived.length ? archived.map((s) => `<div class="row-i" id="staff-${s.id}"><span class="row-main"><b>${escEmail(s.name)}</b>
@@ -30135,7 +30282,7 @@ async function renderStaffPage(req, res, extra = '') {
           <div class="row-sub"><a href="/admin/timeclock?staff=${s.id}">Their clocked hours</a> &middot; <a href="/admin/commission?staff=${s.id}">Their pay</a></div></span>
         <span class="row-end"><form method="post" action="/admin/staff/${s.id}" style="margin:0" data-once>
           <input type="hidden" name="action" value="unarchive"><button type="submit" class="btn btn-ghost">Restore</button></form></span></div>`).join('')
-        : emptyState('Nobody is archived. Disable a helper on the Team tab, then Archive them.')}</div>${SHIP_ONCE_JS}`, 'team'));
+        : emptyState('Nobody is archived. Disable a helper on the Team tab, then Archive them.')}</div>${SHIP_ONCE_JS}`, 'staff'));
   }
   /* Active helpers only: a disabled helper has nothing left to do here. */
   const training = new Map(await Promise.all(roster.filter((s) => s.active).map((s) => staffTrainingSummary(s.id)
@@ -30206,8 +30353,7 @@ async function renderStaffPage(req, res, extra = '') {
     </div>`;
   }).join('');
   res.send(adminPage('Staff', `
-    ${pageHeader('Staff', 'Each helper signs in through Cloudflare with their own email. Switch what they can do at any time; it applies on their next click.',
-      '<a class="btn btn-ghost" href="/admin/team">Team</a> <a class="btn btn-ghost" href="/admin/approvals">Approvals</a>')}
+    ${pageHeader('Staff', 'Each helper signs in through Cloudflare with their own email. Switch what they can do at any time; it applies on their next click.')}
     ${tabs}
     ${flash(req.query)}${extra}
     ${cfAccess ? '' : `<div class="warn">Sign-in is switched off until CF_ACCESS_TEAM_DOMAIN, CF_ACCESS_AUD and OWNER_EMAILS
@@ -30229,14 +30375,14 @@ async function renderStaffPage(req, res, extra = '') {
         `<b>${escEmail(p.label)}</b>: ${escEmail(p.note)}`).join('<br>')}<br>Training paths: ${Object.values(TRAINING.TRACKS).map((t) =>
         `<b>${escEmail(t.label)}</b> (${escEmail(t.note)})`).join(', ')}</p>
     </div>
-    ${cards || emptyState('No helpers yet.')}${SHIP_ONCE_JS}`, 'team'));
+    ${cards || emptyState('No helpers yet.')}${SHIP_ONCE_JS}`, 'staff'));
 }
 
 app.get('/admin/staff', requireAdmin, async (req, res) => {
   try { await renderStaffPage(req, res); }
   catch (err) {
     console.error('staff page failed:', err.message);
-    res.status(500).send(adminPage('Staff', '<div class="card"><div class="warn">Could not load staff.</div></div>', 'team'));
+    res.status(500).send(adminPage('Staff', '<div class="card"><div class="warn">Could not load staff.</div></div>', 'staff'));
   }
 });
 
@@ -30613,8 +30759,7 @@ app.get('/admin/approvals', requireAdmin, async (req, res) => {
         <button type="submit" name="decision" value="reject" class="btn-ghost">Send back</button>
       </form></div>`;
     res.send(adminPage('Approvals', `
-      ${pageHeader('Waiting for you', 'What helpers have asked to send. Nothing here has reached a customer.',
-        '<a class="btn btn-ghost" href="/admin/team">Team</a>')}
+      ${pageHeader('Waiting for you', 'What helpers have asked to send. Nothing here has reached a customer.')}
       ${flash(req.query)}
       ${await (async () => { const { approve } = await artQueues(OWNER_ACTOR);
         return approve.length ? `<div class="card"><b>Final art to approve (${approve.length})</b>${artQueueRows(approve)}</div>` : ''; })()}
@@ -30628,10 +30773,10 @@ app.get('/admin/approvals', requireAdmin, async (req, res) => {
         <div class="row-i"><span class="row-main">${escEmail(a.kind)} ${escEmail(a.subject_id)} &middot; ${
           escEmail(nameOf(roster, a.requested_by))}${a.decision_note ? ` <span class="muted">— ${escEmail(a.decision_note)}</span>` : ''}</span>
           <span class="row-end">${pill(a.status, a.status === 'approved' ? 'green' : a.status === 'rejected' ? 'amber' : 'neutral')}
-          <span class="muted">${escEmail(whenShort(a.decided_at))}</span></span></div>`).join('')}</div>` : ''}`, 'team'));
+          <span class="muted">${escEmail(whenShort(a.decided_at))}</span></span></div>`).join('')}</div>` : ''}`, 'approvals'));
   } catch (err) {
     console.error('approvals page failed:', err.message);
-    res.status(500).send(adminPage('Approvals', '<div class="card"><div class="warn">Could not load approvals.</div></div>', 'team'));
+    res.status(500).send(adminPage('Approvals', '<div class="card"><div class="warn">Could not load approvals.</div></div>', 'approvals'));
   }
 });
 
@@ -30823,10 +30968,10 @@ app.get('/admin/activity', requireAdmin, async (req, res) => {
           <td>${escEmail(r.action)}${r.subject_id ? ` <b>${r.subject_type === 'quote'
             ? `<a href="/admin/production/${escEmail(r.subject_id)}">${escEmail(r.subject_id)}</a>` : escEmail(r.subject_id)}</b>` : ''}</td>
           <td class="muted">${escEmail(describe(r))}</td></tr>`).join('')}</tbody></table>`
-        : emptyState('Nothing in this period.')}</div>`, 'team'));
+        : emptyState('Nothing in this period.')}</div>`, 'activity'));
   } catch (err) {
     console.error('activity page failed:', err.message);
-    res.status(500).send(adminPage('Activity', '<div class="card"><div class="warn">Could not load activity.</div></div>', 'team'));
+    res.status(500).send(adminPage('Activity', '<div class="card"><div class="warn">Could not load activity.</div></div>', 'activity'));
   }
 });
 
@@ -30916,9 +31061,9 @@ app.get('/admin/team', requireAdmin, async (req, res) => {
             trainings[i] ? ` &middot; <a href="/admin/training?staff=${s.id}">training ${trainings[i].done}/${trainings[i].total}</a>` : ''}${
             trainings[i] && trainings[i].complete && nextPresetFor(s)
               ? ` <a href="/admin/staff#staff-${s.id}">${pill(`Ready for ${STAFF.PRESETS[nextPresetFor(s)].label} →`, 'green')}</a>` : ''}</div></span>
-          <span class="row-end"><a class="btn btn-ghost" href="/admin/my-stats?staff=${s.id}">Stats</a>
+          <span class="row-end" style="display:flex;flex-wrap:wrap;gap:6px;white-space:normal"><a class="btn btn-ghost" href="/admin/my-stats?staff=${s.id}">Stats</a>
             <a class="btn btn-ghost" href="/admin/activity?who=${s.id}">Activity</a>
-            <a class="btn btn-ghost" href="/admin/commission?staff=${s.id}">Commission</a></span></div>
+            <a class="btn btn-ghost" href="/admin/commission?staff=${s.id}">Pay</a></span></div>
         ${statTiles([
           { label: 'Leads answered', value: String(x.answered), tone: 'blue' },
           { label: 'Median first reply', value: fmtMins(x.medianReply), tone: x.medianReply == null ? 'gray' : x.medianReply <= 60 ? 'green' : 'amber',
@@ -30944,10 +31089,7 @@ app.get('/admin/team', requireAdmin, async (req, res) => {
       </div>`;
     }).join('');
     res.send(adminPage('Team', `
-      ${pageHeader('Team', 'How each helper is doing, from the work itself.',
-        `<a class="btn" href="/admin/approvals">Approvals${counts.approvals ? ` (${counts.approvals})` : ''}</a>
-         <a class="btn btn-ghost" href="/admin/activity">Activity</a>
-         <a class="btn btn-ghost" href="/admin/staff">Staff and permissions</a>`)}
+      ${pageHeader('Team', 'How each helper is doing, from the work itself.')}
       ${flash(req.query)}
       ${filterChips([{ label: 'This week', href: '/admin/team', on: period === 'week' },
                      { label: 'Last week', href: '/admin/team?period=last', on: period === 'last' },
@@ -31221,15 +31363,9 @@ function shiftsByDayHtml(w, rowOf) {
 }
 
 /* Clocked hours and the work schedule are one place (owner, 2026-10-14:
-   "merge work hours with my hours"): two tabs, one menu entry. */
-function hoursTabs(on) {
-  const staff = (currentActor() || OWNER_ACTOR).kind === 'staff';
-  return filterChips([
-    staff ? { label: 'My hours', href: '/admin/clock', on: on === 'clock' }
-      : { label: 'Clocked hours', href: '/admin/timeclock', on: on === 'clock' },
-    { label: staff ? 'My schedule' : 'Work schedule (CT + PH)', href: '/admin/work-schedule', on: on === 'schedule' },
-  ]);
-}
+   "merge work hours with my hours"): since 2026-10-18 the menu's section tabs
+   carry the pair — My hours + My schedule for a helper, Hours + Work schedule
+   for the owner — so the pages no longer draw their own strip. */
 
 app.get('/admin/clock', requireAdmin, async (req, res) => {
   const actor = currentActor();
@@ -31242,7 +31378,6 @@ app.get('/admin/clock', requireAdmin, async (req, res) => {
     res.set('Cache-Control', 'no-store');
     res.send(adminPage('My hours', `
       ${pageHeader('My hours', 'Clock in when you start and out when you stop. June pays the hours she approves each week. Time with nothing happening on the site for 30 minutes is shown to her; if you were working away from the screen, say what in your clock-out note.')}
-      ${hoursTabs('clock')}
       ${flash(req.query)}
       ${await myShiftsCard(actor.id, actor.timeZone || SHIFTS.DEFAULT_STAFF_ZONE).catch((e) => { console.error('my hours shifts failed:', e.message); return ''; })}
       <div class="card">${open ? `<b>On the clock since ${escEmail(clockTime(open.started_at))}</b> (${TRAINING.hm(TIMECLOCK.shiftMinutes(open))})
@@ -31318,7 +31453,6 @@ app.get('/admin/timeclock', requireAdmin, async (req, res) => {
       const weeks = await Promise.all(roster.map((r) => clockWeek(r.id, week).catch(() => null)));
       return res.send(adminPage('Timeclock', `
         ${pageHeader(`Hours — week of ${weekLabel(week)}`, 'Clocked hours, what needs a look, and what you have approved. Approving a week writes its hours to Team, where wages are paid.', weekNav(null))}
-        ${hoursTabs('clock')}
         ${flash(req.query)}
         <div class="card">${roster.length ? roster.map((r, i) => {
           const w = weeks[i];
@@ -31345,7 +31479,6 @@ app.get('/admin/timeclock', requireAdmin, async (req, res) => {
     const tone = { red: '#b91c1c', amber: '#b45309', neutral: '#46505f' };
     res.send(adminPage('Timeclock', `
       ${pageHeader(`Hours — ${who.name}, week of ${weekLabel(week)}`, 'Cut time you do not pay for on each shift, then approve the week.', weekNav(who.id))}
-      ${hoursTabs('clock')}
       <div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:12px">${chips(who.id)}</div>
       ${flash(req.query)}
       <div class="card"><b>${TRAINING.hm(w.minutes)} on the clock this week</b> (${TIMECLOCK.hoursOf(w.minutes)} hours)${w.open ? ' &middot; a shift is still running' : ''}
@@ -31671,10 +31804,10 @@ app.get('/admin/commission', requireAdmin, async (req, res) => {
           <td>${escEmail(l.name || '')}</td><td>${saleTypePill(l.sale_type)} <span class="muted">${l.pct}%</span></td><td>${money(l.collected)}</td>
           <td>${money(l.base)}</td>
           <td>${money(l.state === 'paid' ? l.paid_amount_c : l.amount)}</td><td>${pill(l.state, tone[l.state])}</td></tr>`).join('')}
-        </tbody></table>` : emptyState('No money has come in on their quotes yet.')}</div>`, 'team'));
+        </tbody></table>` : emptyState('No money has come in on their quotes yet.')}</div>`, 'pay'));
   } catch (err) {
     console.error('commission page failed:', err.message);
-    res.status(500).send(adminPage('Commission', '<div class="card"><div class="warn">Could not load commission.</div></div>', 'team'));
+    res.status(500).send(adminPage('Commission', '<div class="card"><div class="warn">Could not load commission.</div></div>', 'pay'));
   }
 });
 
@@ -33320,7 +33453,6 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
         view === 'month'
           ? `<a class="btn btn-ghost" href="${q({ week: SHIFTS.addDays(week, -28) })}">&larr; Earlier</a><a class="btn btn-ghost" href="${q({ week: SHIFTS.addDays(week, 28) })}">Later &rarr;</a>`
           : `<a class="btn btn-ghost" href="${q({ week: SHIFTS.addDays(week, -7) })}">&larr; Week before</a><a class="btn btn-ghost" href="${q({ week: SHIFTS.addDays(week, 7) })}">Week after &rarr;</a>`)}
-      ${hoursTabs('schedule')}
       ${flash(req.query)}
       <div class="card"><b>${owner ? 'Hours this week' : 'Your scheduled hours this week'}</b> ${[...hours.entries()].map(([id, h]) => `<span class="muted" style="margin-left:10px">${owner ? escEmail(nameOf(roster, id)) + ' ' : ''}${Math.round(h * 10) / 10} h</span>`).join('') || '<span class="muted">none scheduled</span>'}</div>
       ${filterChips([
@@ -33341,10 +33473,10 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
              start in this one: a Sunday-night shift runs into this Monday. */
           [-7, 0, 7].flatMap((n) => SHIFTS.occurrences(rows, SHIFTS.addDays(week, n))), days, zone, colorOf, { names: owner })}`
         : `<div class="ws-grid">${days.map(dayCard).join('')}</div>`}
-      ${manage}`, owner ? 'timeclock' : 'clock'));
+      ${manage}`, owner ? 'workschedule' : 'myschedule'));
   } catch (err) {
     console.error('work schedule failed:', err.message);
-    res.status(500).send(adminPage('Work schedule', '<div class="card"><div class="warn">Could not load the work schedule.</div></div>', 'clock'));
+    res.status(500).send(adminPage('Work schedule', '<div class="card"><div class="warn">Could not load the work schedule.</div></div>', (currentActor() || OWNER_ACTOR).kind === 'staff' ? 'myschedule' : 'workschedule'));
   }
 });
 
@@ -35222,10 +35354,10 @@ app.get('/admin/training/paths', requireAdmin, async (req, res) => {
           : '<span class="muted">nobody yet. Set a helper\'s path and sales role on <a href="/admin/staff">Staff</a>.</span>'}</p></div>
       ${groups.map((g) => g.key ? `<div class="card"><b>${g.title === 'Final exam and sign-off' ? 'Final' : `Module ${g.index + 1}`}: ${escEmail(g.title)}</b>
         <span class="muted"> &middot; ${mins(g.steps.reduce((n, st) => n + (Number(st.minutes) || 0), 0))}</span>${g.steps.map(row).join('')}</div>`
-        : `<div class="card">${g.steps.map(row).join('')}</div>`).join('')}`, 'training'));
+        : `<div class="card">${g.steps.map(row).join('')}</div>`).join('')}`, 'paths'));
   } catch (err) {
     console.error('training paths failed:', err.message);
-    res.status(500).send(adminPage('Training', '<div class="card"><div class="warn">Could not load the training paths.</div></div>', 'training'));
+    res.status(500).send(adminPage('Training', '<div class="card"><div class="warn">Could not load the training paths.</div></div>', 'paths'));
   }
 });
 
@@ -38952,10 +39084,10 @@ app.get('/admin/delivery/settings', requireAdmin, async (req, res) => {
             ${cfg.zones.map((z) => `<div class="row"><div style="padding-top:10px">${escEmail(z.name)} <span class="muted">(you charge ${money(DELIV.zoneFee(z))})</span></div>
               <div><input name="cost_${z.id}" inputmode="decimal" value="${p.costs && p.costs[z.id] != null ? Number(p.costs[z.id]).toFixed(2) : ''}" placeholder="e.g. 12.00"></div></div>`).join('')}` : '<p class="muted">Add zones first, then their price per zone.</p>'}
           <button type="submit" class="btn" style="margin-top:10px">Save courier partner</button></form></div>`;
-    res.send(adminPage('Delivery settings', body, 'delivery'));
+    res.send(adminPage('Delivery settings', body, 'deliveryset'));
   } catch (e) {
     console.error('delivery settings failed:', e.message);
-    res.status(500).send(adminPage('Delivery settings', `${pageHeader('Delivery settings')}<div class="card"><div class="warn">Settings could not be loaded. Refresh to try again.</div></div>`, 'delivery'));
+    res.status(500).send(adminPage('Delivery settings', `${pageHeader('Delivery settings')}<div class="card"><div class="warn">Settings could not be loaded. Refresh to try again.</div></div>`, 'deliveryset'));
   }
 });
 

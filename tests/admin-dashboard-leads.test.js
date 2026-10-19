@@ -56,11 +56,12 @@ function shell() {
   vm.createContext(sandbox);
   vm.runInContext([
     grab('const ADMIN_NAV = [', '];'),
+    grab('const ADMIN_SECTIONS = [', '];'),
     grab('const STUDIO_ADMIN = ', "'/admin.php';"),
     grab('const ADMIN_ICONS = {', '};'),
     grab('const ADMIN_CSS = `', '\n`;'),
     grab('const ADMIN_BADGE_JS = `', '`;'),
-    lift('escEmail'), lift('icon'), lift('adminNav'), lift('clockChip'), lift('clockScript'), lift('pageTip'), lift('htmlDocument'), lift('adminPage'), lift('quotePage'),
+    lift('escEmail'), lift('icon'), lift('navItemsFor'), lift('navSectionsFor'), lift('adminNav'), lift('sectionTabs'), lift('clockChip'), lift('clockScript'), lift('pageTip'), lift('htmlDocument'), lift('adminPage'), lift('quotePage'),
   ].join('\n'), sandbox);
   return sandbox;
 }
@@ -70,9 +71,11 @@ function shell() {
 test('every admin page carries the side menu, with its own entry lit', () => {
   const html = shell().adminPage('Leads', '<p>body</p>', 'leads');
   assert.match(html, /<aside class="adm-side"/);
-  const active = html.match(/<a class="adm-link is-active" href="([^"]+)" aria-current="page">/g) || [];
-  assert.strictEqual(active.length, 1, 'exactly one entry is the current page');
+  const active = html.match(/<a class="adm-sub is-active" href="([^"]+)" aria-current="page">/g) || [];
+  assert.strictEqual(active.length, 1, 'exactly one menu entry is the current page');
   assert.match(active[0], /href="\/admin\/leads"/);
+  assert.match(html, /<details class="adm-sec" open><summary class="adm-link is-here">.*?<span>Sales<\/span>/s,
+    'the section holding the page starts open');
   for (const href of ['/admin/dashboard', '/admin/leads', '/admin/quotes', '/admin/production', '/admin/orders', '/admin/customers',
                       '/admin/reviews', '/admin/finances', '/admin/discounts', '/admin/quote/new']) {
     assert.ok(html.includes(`href="${href}"`), `the menu links ${href}`);
@@ -84,7 +87,7 @@ test('every admin page carries the side menu, with its own entry lit', () => {
 
 test('a page still passing the old "jobs" key lights Quotes', () => {
   const html = shell().adminPage('Quotes', '', 'jobs');
-  assert.match(html, /<a class="adm-link is-active" href="\/admin\/quotes"/);
+  assert.match(html, /<a class="adm-sub is-active" href="\/admin\/quotes"/);
 });
 
 test('the badges start hidden and are filled in after the page loads', () => {

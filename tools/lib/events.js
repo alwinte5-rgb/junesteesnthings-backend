@@ -36,7 +36,7 @@ const LINKS = {
   quote: `${SITE}/contact`,
 };
 const PHONE = '(773) 900-4592';
-const LOGO = `${SITE}/assets/images/brand/logo.png`;
+const LOGO = `${SITE}/assets/images/brand/logo-2026-900.png`;
 /* Each event's picture: the shop's own work photos on jtees.net (`photo`),
    chosen per event. Swap in a better one by changing `photo`. */
 const PHOTOS = `${SITE}/assets/images/`;
