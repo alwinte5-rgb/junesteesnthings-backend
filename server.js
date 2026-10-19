@@ -29441,10 +29441,13 @@ async function staffRoster({ activeOnly = false } = {}) {
   return rows;
 }
 /** A roster for a list on screen: archived helpers left out (owner,
- *  2026-10-15: "keep the info in the backend but not visible"), except the
- *  one person the page is already about (`keep`). */
-function listedStaff(roster, keep = null) {
-  return roster.filter((r) => !r.archived_at || (keep != null && r.id === keep));
+ *  2026-10-15: "keep the info in the backend but not visible"), and disabled
+ *  ones too (owner, 2026-10-18: "remove disabled employees"), except the one
+ *  person the page is already about (`keep`). `withDisabled` keeps disabled
+ *  helpers who are not archived yet, for the pages where they are settled up:
+ *  Staff, and Pay while money is still owed to them. */
+function listedStaff(roster, keep = null, { withDisabled = false } = {}) {
+  return roster.filter((r) => (!r.archived_at && (r.active || withDisabled)) || (keep != null && r.id === keep));
 }
 function nameOf(roster, id) {
   if (id == null) return 'Owner';
@@ -29551,13 +29554,79 @@ function cloudflareStepCard(name, email) {
   </div>`;
 }
 
+/** What still ties a disabled helper to the shop: hours, pay, bonuses or
+ *  commission owed, a shift running, open tasks or design jobs. Archiving must
+ *  never hide any of these, so nothing is archived while the list is not empty. */
+async function helperOutstanding(id) {
+  const [{ rows: [hrs] }, { rows: [clock] }, { rows: [bonus] }, { rows: [tasks] }, { rows: [art] }, lines] = await Promise.all([
+    pool.query('SELECT COALESCE(SUM(hours), 0)::float AS h FROM staff_hours WHERE staff_id = $1 AND paid_at IS NULL', [id]),
+    /* Clocked weeks not yet approved (no staff_hours row), or a shift still running. */
+    pool.query(`SELECT COUNT(*) FILTER (WHERE ended_at IS NULL)::int AS running,
+                       COUNT(DISTINCT date_trunc('week', started_at AT TIME ZONE 'America/Chicago'))
+                         FILTER (WHERE ended_at IS NOT NULL AND NOT EXISTS (
+                           SELECT 1 FROM staff_hours h WHERE h.staff_id = sh.staff_id
+                             AND h.week_of = (date_trunc('week', sh.started_at AT TIME ZONE 'America/Chicago'))::date))::int AS unapproved
+                  FROM staff_shifts sh WHERE staff_id = $1`, [id]),
+    pool.query('SELECT COALESCE(SUM(amount), 0)::float AS a FROM staff_bonuses WHERE staff_id = $1 AND paid_at IS NULL', [id]),
+    pool.query('SELECT COUNT(*)::int AS n FROM staff_tasks WHERE assigned_to = $1 AND done_at IS NULL', [id]),
+    pool.query(`SELECT COUNT(*)::int AS n FROM art_requests WHERE assigned_to = $1 AND status <> 'approved'`, [id]),
+    (async () => { const { rows: [rates] } = await pool.query('SELECT commission_pct, shop_commission_pct FROM staff WHERE id = $1', [id]);
+      return commissionLines(id, rates); })(),
+  ]);
+  const owedCommission = lines.filter((l) => !['paid', 'wage only'].includes(l.state) && l.amount > 0);
+  return [
+    hrs.h > 0 ? `${hrs.h} approved hours not yet paid (pay them on Team)` : '',
+    clock.running ? 'a shift still running (end it on Hours)' : '',
+    clock.unapproved ? `${clock.unapproved} clocked week${clock.unapproved === 1 ? '' : 's'} not yet approved (approve or adjust on Hours)` : '',
+    bonus.a > 0 ? `${money(bonus.a)} in bonuses not yet paid` : '',
+    owedCommission.length ? `commission on ${owedCommission.length} sale${owedCommission.length === 1 ? '' : 's'} not yet paid (see their Pay page)` : '',
+    tasks.n ? `${tasks.n} open task${tasks.n === 1 ? '' : 's'} (reassign or close them on Tasks)` : '',
+    art.n ? `${art.n} design job${art.n === 1 ? '' : 's'} assigned to them` : '',
+  ].filter(Boolean);
+}
+
+/** Archive a disabled helper, with the checks repeated in the write so work
+ *  added in between stops it. Returns the number of rows archived (0 or 1). */
+async function archiveHelper(id) {
+  const { rowCount } = await pool.query(
+    `UPDATE staff SET archived_at = NOW(), active = FALSE
+      WHERE id = $1 AND archived_at IS NULL AND NOT active
+        AND NOT EXISTS (SELECT 1 FROM staff_hours WHERE staff_id = $1 AND paid_at IS NULL)
+        AND NOT EXISTS (SELECT 1 FROM staff_tasks WHERE assigned_to = $1 AND done_at IS NULL)
+        AND NOT EXISTS (SELECT 1 FROM staff_shifts WHERE staff_id = $1 AND ended_at IS NULL)`, [id]);
+  return rowCount;
+}
+
+/* Disabled helpers off every list (owner, 2026-10-18: "remove disabled
+   employees"). Disabling now archives at once when nothing is owed or open;
+   this catches the ones disabled before that, and those whose last debt has
+   since been paid. A helper the owner restored by hand is left alone. */
+async function archiveSettledHelpers() {
+  const { rows } = await pool.query(
+    `SELECT id, name FROM staff s WHERE NOT active AND archived_at IS NULL
+        /* A Restore by hand holds until the helper is disabled again. */
+        AND NOT EXISTS (SELECT 1 FROM staff_activity a WHERE a.action = 'helper restored'
+                          AND a.subject_type = 'staff' AND a.subject_id = s.id::text
+                          AND a.created_at > COALESCE((SELECT MAX(d.created_at) FROM staff_activity d
+                            WHERE d.action = 'helper disabled' AND d.subject_type = 'staff' AND d.subject_id = s.id::text), '-infinity'))`);
+  for (const h of rows) {
+    try {
+      if ((await helperOutstanding(h.id)).length) continue;
+      if (await archiveHelper(h.id)) {
+        logActivity(null, 'helper archived', { type: 'staff', id: h.id }, { name: h.name, auto: true });
+      }
+    } catch (e) { console.error(`archiving settled helper ${h.id}:`, e.message); }
+  }
+  return rows.length;
+}
+
 async function renderStaffPage(req, res, extra = '') {
   const everyone = await staffRoster();
-  const roster = listedStaff(everyone);
+  const roster = listedStaff(everyone, null, { withDisabled: true });
   const archived = everyone.filter((s) => s.archived_at);
   const showArchived = String((req.query || {}).archived || '') === '1';
   const tabs = filterChips([
-    { label: 'Team', href: '/admin/staff', on: !showArchived, count: roster.length || null },
+    { label: 'Team', href: '/admin/staff', on: !showArchived, count: roster.filter((s) => s.active).length || null },
     { label: 'Archived', href: '/admin/staff?archived=1', on: showArchived, count: archived.length || null },
   ]);
   if (showArchived) {
@@ -29582,7 +29651,7 @@ async function renderStaffPage(req, res, extra = '') {
   /* A hire arriving from Hiring (?add_track=) starts on their path's preset. */
   const addPreset = STAFF.presetForTrack(TRAINING.trackOf((req.query || {}).add_track));
   const presetOptions = Object.entries(STAFF.PRESETS).map(([k, p]) => `<option value="${k}"${k === addPreset ? ' selected' : ''}>${escEmail(p.label)}</option>`).join('');
-  const cards = roster.map((s) => {
+  const card = (s) => {
     const preset = STAFF.presetMatching(s.perms);
     return `<div class="card" id="staff-${s.id}">
       <div class="row-i"><span class="row-main"><b>${escEmail(s.name)}</b>
@@ -29643,14 +29712,22 @@ async function renderStaffPage(req, res, extra = '') {
         </form>
       </details>` : ''}
     </div>`;
-  }).join('');
+  };
+  /* Working helpers on the page; disabled ones still being settled fold away
+     below with what is holding them, so they are out of the way but nothing
+     owed to them is hidden. */
+  const settling = roster.filter((s) => !s.active);
+  const left = new Map(await Promise.all(settling.map((s) => helperOutstanding(s.id)
+    .then((l) => [s.id, l]).catch((e) => { console.error('helper outstanding failed:', e.message); return [s.id, []]; }))));
+  const cards = roster.filter((s) => s.active).map(card).join('');
   res.send(adminPage('Staff', `
     ${pageHeader('Staff', 'Each helper signs in through Cloudflare with their own email. Switch what they can do at any time; it applies on their next click.')}
     ${tabs}
     ${flash(req.query)}${extra}
     ${cfAccess ? '' : `<div class="warn">Sign-in is switched off until CF_ACCESS_TEAM_DOMAIN, CF_ACCESS_AUD and OWNER_EMAILS
       are set on the backend service in Railway.</div>`}
-    <div class="card" id="add"><b>Add a helper</b>
+    <details class="fold" id="add"${(req.query || {}).add_track || (req.query || {}).add_name || (req.query || {}).err || !roster.some((s) => s.active) ? ' open' : ''}>
+      <summary>Add a helper <span class="muted fold-hint">name, email, starting permissions and pay</span></summary><div class="fold-body">
       <form method="post" action="/admin/staff" class="row" data-once style="gap:8px;flex-wrap:wrap;margin-top:8px">
         <input name="name" placeholder="Name" required maxlength="80" value="${escEmail(text((req.query || {}).add_name, 80))}">
         <input name="email" type="email" placeholder="Their email (what they sign in with)" required maxlength="254">
@@ -29666,8 +29743,15 @@ async function renderStaffPage(req, res, extra = '') {
       <p class="muted" style="margin-top:8px">${Object.values(STAFF.PRESETS).map((p) =>
         `<b>${escEmail(p.label)}</b>: ${escEmail(p.note)}`).join('<br>')}<br>Training paths: ${Object.values(TRAINING.TRACKS).map((t) =>
         `<b>${escEmail(t.label)}</b> (${escEmail(t.note)})`).join(', ')}</p>
-    </div>
-    ${cards || emptyState('No helpers yet.')}${SHIP_ONCE_JS}`, 'staff'));
+    </div></details>
+    <script>if(location.hash==='#add'){var d=document.getElementById('add');if(d)d.open=true;}</script>
+    ${cards || emptyState('No helpers yet.')}${settling.length ? `
+    <details class="fold"><summary>Disabled, still settling up <span class="n">${settling.length}</span>
+      <span class="muted fold-hint">They cannot sign in and are off every other list. Each is archived once nothing is owed or open, unless you restored them by hand.</span></summary>
+      <div class="fold-body">${settling.map((s) => `${(left.get(s.id) || []).length
+        ? `<div class="warn" style="margin:0 0 6px">${escEmail(s.name)} still has ${escEmail(left.get(s.id).join('; '))}.
+          <a href="/admin/timeclock?staff=${s.id}">Their hours</a> &middot; <a href="/admin/commission?staff=${s.id}">Their pay</a> &middot; <a href="/admin/tasks">Tasks</a></div>` : ''}${card(s)}`).join('')}</div>
+    </details>` : ''}${SHIP_ONCE_JS}`, 'staff'));
 }
 
 app.get('/admin/staff', requireAdmin, async (req, res) => {
@@ -29738,7 +29822,17 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
         /* Every request looks the helper up, so this locks them out on their next click.
            Remove them from the Cloudflare policy too. */
         await pool.query('UPDATE staff SET active = FALSE WHERE id = $1', [id]);
-        return back(res, '/admin/staff', 'ok', `${s.name} is disabled. Also remove ${s.email} from the Cloudflare policy.`);
+        logActivity(currentActor(), 'helper disabled', { type: 'staff', id }, { name: s.name });
+        {
+          /* Off every list straight away when nothing is owed or open; otherwise
+             they stay on Staff and Pay until it is settled. */
+          const left = await helperOutstanding(id).catch((e) => { console.error('helper outstanding failed:', e.message); return ['an unchecked balance']; });
+          if (!left.length && await archiveHelper(id)) {
+            logActivity(currentActor(), 'helper archived', { type: 'staff', id }, { name: s.name, onDisable: true });
+            return back(res, '/admin/staff', 'ok', `${s.name} is disabled and archived: off every list, records kept. Also remove ${s.email} from the Cloudflare policy.`);
+          }
+          return back(res, '/admin/staff', 'ok', `${s.name} is disabled and off every list except Staff and Pay, because they still have ${left.join('; ')}. They are archived once that is settled. Also remove ${s.email} from the Cloudflare policy.`);
+        }
       case 'welcome': {
         if (!s.active) return back(res, `/admin/staff#staff-${id}`, 'err', `${s.name} is disabled. Enable them before sending a welcome.`);
         const w = WELCOME.detailsFromForm(b, Number(s.hourly_rate || 0));
@@ -29751,39 +29845,9 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
            hide wages or commission to pay, or work in hand. */
         if (s.archived_at) return back(res, '/admin/staff?archived=1', 'ok', `${s.name} is already archived.`);
         if (s.active) return back(res, `/admin/staff#staff-${id}`, 'err', `Disable ${s.name} before archiving them.`);
-        const [{ rows: [hrs] }, { rows: [clock] }, { rows: [bonus] }, { rows: [tasks] }, { rows: [art] }, lines] = await Promise.all([
-          pool.query('SELECT COALESCE(SUM(hours), 0)::float AS h FROM staff_hours WHERE staff_id = $1 AND paid_at IS NULL', [id]),
-          /* Clocked weeks not yet approved (no staff_hours row), or a shift still running. */
-          pool.query(`SELECT COUNT(*) FILTER (WHERE ended_at IS NULL)::int AS running,
-                             COUNT(DISTINCT date_trunc('week', started_at AT TIME ZONE 'America/Chicago'))
-                               FILTER (WHERE ended_at IS NOT NULL AND NOT EXISTS (
-                                 SELECT 1 FROM staff_hours h WHERE h.staff_id = sh.staff_id
-                                   AND h.week_of = (date_trunc('week', sh.started_at AT TIME ZONE 'America/Chicago'))::date))::int AS unapproved
-                        FROM staff_shifts sh WHERE staff_id = $1`, [id]),
-          pool.query('SELECT COALESCE(SUM(amount), 0)::float AS a FROM staff_bonuses WHERE staff_id = $1 AND paid_at IS NULL', [id]),
-          pool.query('SELECT COUNT(*)::int AS n FROM staff_tasks WHERE assigned_to = $1 AND done_at IS NULL', [id]),
-          pool.query(`SELECT COUNT(*)::int AS n FROM art_requests WHERE assigned_to = $1 AND status <> 'approved'`, [id]),
-          (async () => { const { rows: [rates] } = await pool.query('SELECT commission_pct, shop_commission_pct FROM staff WHERE id = $1', [id]);
-            return commissionLines(id, rates); })(),
-        ]);
-        const owedCommission = lines.filter((l) => !['paid', 'wage only'].includes(l.state) && l.amount > 0);
-        const left = [
-          hrs.h > 0 ? `${hrs.h} approved hours not yet paid (pay them on Team)` : '',
-          clock.running ? 'a shift still running (end it on Hours)' : '',
-          clock.unapproved ? `${clock.unapproved} clocked week${clock.unapproved === 1 ? '' : 's'} not yet approved (approve or adjust on Hours)` : '',
-          bonus.a > 0 ? `${money(bonus.a)} in bonuses not yet paid` : '',
-          owedCommission.length ? `commission on ${owedCommission.length} sale${owedCommission.length === 1 ? '' : 's'} not yet paid (see their Pay page)` : '',
-          tasks.n ? `${tasks.n} open task${tasks.n === 1 ? '' : 's'} (reassign or close them on Tasks)` : '',
-          art.n ? `${art.n} design job${art.n === 1 ? '' : 's'} assigned to them` : '',
-        ].filter(Boolean);
+        const left = await helperOutstanding(id);
         if (left.length) return back(res, `/admin/staff#staff-${id}`, 'err', `Not archived: ${s.name} still has ${left.join('; ')}.`);
-        /* The checks repeated in the write, so work added in between stops it. */
-        const { rowCount } = await pool.query(
-          `UPDATE staff SET archived_at = NOW(), active = FALSE
-            WHERE id = $1 AND archived_at IS NULL AND NOT active
-              AND NOT EXISTS (SELECT 1 FROM staff_hours WHERE staff_id = $1 AND paid_at IS NULL)
-              AND NOT EXISTS (SELECT 1 FROM staff_tasks WHERE assigned_to = $1 AND done_at IS NULL)
-              AND NOT EXISTS (SELECT 1 FROM staff_shifts WHERE staff_id = $1 AND ended_at IS NULL)`, [id]);
+        const rowCount = await archiveHelper(id);
         if (!rowCount) return back(res, `/admin/staff#staff-${id}`, 'err', `${s.name} changed while archiving; nothing was archived. Try again.`);
         logActivity(currentActor(), 'helper archived', { type: 'staff', id }, { name: s.name });
         return back(res, '/admin/staff?archived=1', 'ok', `${s.name} is archived: off every list, records kept.`);
@@ -29792,7 +29856,7 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
         const { rowCount } = await pool.query('UPDATE staff SET archived_at = NULL WHERE id = $1 AND archived_at IS NOT NULL', [id]);
         if (!rowCount) return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is not archived.`);
         logActivity(currentActor(), 'helper restored', { type: 'staff', id }, { name: s.name });
-        return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is back on the Team tab, still disabled. Enable them if they are coming back.`);
+        return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is back on Staff under Disabled, kept there until you enable them or archive them again.`);
       }
       case 'enable':
         if (s.archived_at) return back(res, '/admin/staff?archived=1', 'err', `Restore ${s.name} from Archived first.`);
@@ -30252,7 +30316,7 @@ app.get('/admin/activity', requireAdmin, async (req, res) => {
       ${pageHeader('Activity', 'Every change made in the back office, and who made it. Page views are not recorded.')}
       ${filterChips([{ label: 'Everyone', href: link({ who: 'all' }), on: who === 'all' },
                      { label: 'Owner', href: link({ who: 'owner' }), on: who === 'owner' },
-                     ...listedStaff(roster, Number(who)).map((s) => ({ label: s.name, href: link({ who: String(s.id) }), on: who === String(s.id) }))])}
+                     ...listedStaff(roster, Number(who), { withDisabled: true }).map((s) => ({ label: s.name + (s.active ? '' : ' (disabled)'), href: link({ who: String(s.id) }), on: who === String(s.id) }))])}
       ${filterChips([1, 7, 30, 90].map((d) => ({ label: d === 1 ? 'Today' : `${d} days`, href: link({ days: String(d) }), on: days === d })))}
       <div class="card">${rows.length ? `<table class="dt" style="width:100%"><tbody>${rows.map((r) => `
         <tr><td class="muted" style="white-space:nowrap">${escEmail(whenShort(r.created_at))}</td>
@@ -30735,8 +30799,9 @@ app.get('/admin/timeclock', requireAdmin, async (req, res) => {
     const staffId = intIn(req.query.staff);
     /* Active helpers, plus the one asked for: someone disabled before their
        last week was approved can still be reviewed. */
-    const roster = everyone.filter((r) => (r.active && !r.archived_at) || r.id === staffId);
-    const chips = (id) => roster.map((r) => `<a class="btn ${r.id === id ? '' : 'btn-ghost'}" href="/admin/timeclock?staff=${r.id}&amp;week=${week}">${escEmail(r.name)}</a>`).join(' ');
+    /* Disabled helpers stay here until archived: their last weeks still need approving. */
+    const roster = listedStaff(everyone, staffId, { withDisabled: true });
+    const chips = (id) => roster.map((r) => `<a class="btn ${r.id === id ? '' : 'btn-ghost'}" href="/admin/timeclock?staff=${r.id}&amp;week=${week}">${escEmail(r.name)}${r.active ? '' : ' (disabled)'}</a>`).join(' ');
     const weekNav = (id) => `<a class="btn btn-ghost" href="/admin/timeclock?${id ? `staff=${id}&amp;` : ''}week=${weekShift(week, -7)}">&larr; Earlier</a>
       ${week < TEAM.weekOf(new Date()) ? `<a class="btn btn-ghost" href="/admin/timeclock?${id ? `staff=${id}&amp;` : ''}week=${weekShift(week, 7)}">Later &rarr;</a>` : ''}`;
     res.set('Cache-Control', 'no-store');
@@ -31035,7 +31100,7 @@ app.get('/admin/commission', requireAdmin, async (req, res) => {
     const roster = await staffRoster();
     /* An archived helper opens by id (their pay history, from Archived); the
        default is the first listed one. */
-    const s = roster.find((r) => r.id === intIn(req.query.staff)) || listedStaff(roster)[0];
+    const s = roster.find((r) => r.id === intIn(req.query.staff)) || listedStaff(roster, null, { withDisabled: true })[0];
     if (!s) return res.redirect('/admin/staff');
     const [e, incentives] = await Promise.all([earningsFor(s), incentivesFor(s.id, { includeEnded: true })]);
     const { pct, lines } = e;
@@ -31048,7 +31113,7 @@ app.get('/admin/commission', requireAdmin, async (req, res) => {
     res.send(adminPage('Commission', `
       ${pageHeader(`Pay — ${s.name}`, `${money(e.wages.rate)} an hour for the hours on the Team page. On their own leads, ${pct}% of the price as well: the job's total before sales tax, less any refund. Shop leads pay the wage only. Commission is payable ${TEAM.HOLD_DAYS} days after the job is paid in full.`)}
       ${flash(req.query)}
-      ${filterChips(listedStaff(roster, s.id).map((r) => ({ label: r.name, href: `/admin/commission?staff=${r.id}`, on: r.id === s.id })))}
+      ${filterChips(listedStaff(roster, s.id, { withDisabled: true }).map((r) => ({ label: r.name + (r.active ? '' : ' (disabled)'), href: `/admin/commission?staff=${r.id}`, on: r.id === s.id })))}
       ${commissionStartNote(e, true)}
       ${earningsTiles(e)}
       ${payNow > 0 ? `<form method="post" action="/admin/commission/pay" class="card">
@@ -33029,7 +33094,7 @@ async function sharedLoginsCard(actor, owner, roster) {
   const { rows } = await pool.query(
     `SELECT id, staff_id, site, note, created_at, expires_at, viewed_at, cancelled_at FROM shared_logins
       ORDER BY created_at DESC LIMIT 30`);
-  const helpers = listedStaff(roster).filter((r) => r.active);
+  const helpers = listedStaff(roster);
   const tone = { waiting: 'blue', opened: 'green', expired: 'neutral', cancelled: 'neutral' };
   const label = (r, st) => st === 'opened' ? `opened ${when(r.viewed_at)}` : st === 'waiting' ? `waiting, until ${when(r.expires_at)}` : st;
   return `<div class="card" id="shared-logins"><b>Shared logins</b> <span class="muted">shown once, then erased</span>
@@ -33543,8 +33608,9 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
                 MAX(created_at) AS last_at
            FROM team_messages GROUP BY staff_id`);
       const by = new Map(counts.map((c) => [c.staff_id, c]));
-      // Disabled helpers stay listed only while there is a conversation to read.
-      people = roster.filter((r) => !r.archived_at && (r.active || by.has(r.id))).sort((x, y) => {
+      /* Disabled helpers are off the list (owner, 2026-10-18), unless a message
+         from them is still unread; their history stays at ?staff=<id>. */
+      people = roster.filter((r) => !r.archived_at && (r.active || ((by.get(r.id) || {}).unread || 0) > 0)).sort((x, y) => {
         const a = by.get(x.id) || {}, b = by.get(y.id) || {};
         return (b.unread || 0) - (a.unread || 0) || new Date(b.last_at || 0) - new Date(a.last_at || 0);
       });
@@ -34156,7 +34222,7 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
 
     /* Every section folds away; the browser remembers which, per section. */
     const secKey = (title) => String(title).replace(/<[^>]*>|\([^)]*\)|[^a-z ]/gi, '').trim().toLowerCase().replace(/ +/g, '-').slice(0, 40);
-    const section = (title, inner, empty) => `<details class="card md-sec" open data-sec="${escEmail(secKey(title))}">
+    const section = (title, inner, empty) => `<details class="card md-sec" open data-sec="${escEmail(secKey(title))}" id="sec-${escEmail(secKey(title))}">
       <summary><b>${title}</b></summary>${inner || `<p class="muted">${empty}</p>`}</details>`;
     const startedBy = (t) => nameOf(roster, t.started_by);
     const taskStatus = (t) => (t.done_at ? pill('completed', 'green') : t.started_at ? pill('started', 'blue') : pill('not started', 'neutral'));
@@ -34182,44 +34248,71 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
       ${flash(req.query)}
       ${pins}
       ${shiftsCard}
-      ${training && !training.p.complete ? section(`Your training: ${training.p.done} of ${training.p.total}`,
-        `<a class="muted" href="/admin/training" style="float:right">See it all →</a>${progressBar(training.p.done, training.p.total)}
-        ${training.p.next.map((st) => `<div class="row-sub">Next: ${escEmail(st.title)}</div>`).join('')}`) : ''}
-      ${training && training.note ? section('Latest note from the owner', coachingRow(training.note)) : ''}
-      ${art.todo.length || STAFF.levelOf(actor, 'art.work') === 'on' && me != null ? section(`Artwork to do (${art.todo.length})`, artQueueRows(art.todo), 'No artwork waiting for you.') : ''}
-      ${art.customer.length ? section(`Waiting on the customer (${art.customer.length})`, artQueueRows(art.customer)) : ''}
-      ${art.questions.length ? section(`The designer has a question (${art.questions.length})`, artQueueRows(art.questions)) : ''}
-      ${art.approve.length ? section(`Final art to approve (${art.approve.length})`, artQueueRows(art.approve)) : ''}
-      ${released.rows.length ? section('Approved, but not emailed: send these yourself', released.rows.map((q) => `
+      ${(() => {
+        /* Ordered by what needs doing first (owner, 2026-10-18: "make sure
+           employee dashboards are optimized"): people waiting on you, then
+           work to hand back, then your own list, then the information. An
+           empty section is one word in the "Nothing waiting" line rather than
+           a card, and the counts across the top jump to each section. */
+        const blocks = [
+          { title: 'Latest note from the owner', show: !!(training && training.note), inner: () => coachingRow(training.note) },
+          { title: `Leads waiting for a reply (${waiting.length})`, short: 'Leads', n: waiting.length, show: can('leads.view'),
+            inner: () => waiting.slice(0, 25).map(leadRow).join('') },
+          { title: `Follow-ups due (${followUps.length})`, short: 'Follow-ups', n: followUps.length, show: can('leads.view'),
+            inner: () => followUps.map((l) => `
+        <div class="row-i"><span class="row-main"><a href="/admin/leads?status=all#lead-${l.id}"><b>${escEmail(l.name || l.email || 'Lead')}</b></a>
+          <div class="row-sub">due ${escEmail(fmtDate(l.next_follow_up_on))}${l.assigned_to ? ` &middot; ${escEmail(nameOf(roster, l.assigned_to))}` : ''}</div></span></div>`).join('') },
+          { title: `The designer has a question (${art.questions.length})`, short: 'Designer questions', n: art.questions.length,
+            show: STAFF.levelOf(actor, 'art.request') === 'on',
+            inner: () => artQueueRows(art.questions) },
+          { title: `Final art to approve (${art.approve.length})`, short: 'Art to approve', n: art.approve.length, show: me == null,
+            inner: () => artQueueRows(art.approve) },
+          { title: `Artwork to do (${art.todo.length})`, short: 'Artwork', n: art.todo.length,
+            show: art.todo.length > 0 || (STAFF.levelOf(actor, 'art.work') === 'on' && me != null), inner: () => artQueueRows(art.todo) },
+          { title: 'Approved, but not emailed: send these yourself', short: 'To send', n: released.rows.length, show: me != null,
+            inner: () => released.rows.map((q) => `
         <div class="row-i" style="flex-wrap:wrap"><span class="row-main"><b>${escEmail(q.code)}</b> ${escEmail(q.name || '')} &middot; ${money(q.total)}
           <div class="msg" id="rel-${escEmail(q.code)}" style="white-space:pre-wrap">${escEmail(quoteMessages(q).initial)}</div></span>
-          <span class="row-end"><button type="button" class="btn btn-ghost" onclick="jtCopy('rel-${escEmail(q.code)}')">Copy</button></span></div>`).join('')) : ''}
-      ${earn ? section('My earnings', `<a class="muted" href="/admin/my-earnings" style="float:right">See every sale →</a>
-        <a class="muted" href="${earn.guide}" style="float:right;margin-right:14px">How pay works</a>
-        ${earningsTiles(earn.e)}
-        ${earn.incentives.map((i) => incentiveRow(i)).join('')}`) : ''}
-      ${mine.rows.length ? section('Waiting on the owner', mine.rows.map((a) => `
+          <span class="row-end"><button type="button" class="btn btn-ghost" onclick="jtCopy('rel-${escEmail(q.code)}')">Copy</button></span></div>`).join('') },
+          { title: `Tasks (${tasks.rows.length})`, short: 'Tasks', n: tasks.rows.length, show: true, inner: () => tasks.rows.map(taskRow).join('') },
+          { title: 'Jobs with a next step', short: 'Jobs', n: nextSteps.length, show: can('quotes.view'), inner: () => nextSteps.map(({ q, cl }) => `
+        <div class="row-i"><span class="row-main"><a href="/admin/production/${escEmail(q.code)}"><b>${escEmail(q.code)}</b></a> ${escEmail(q.name || '')}
+          <div class="row-sub">${escEmail(cl.next.label)}${cl.next.hint ? ` — ${escEmail(cl.next.hint)}` : ''}</div></span>
+          <span class="row-end muted">${cl.done}/${cl.of}</span></div>`).join('') },
+          { title: `Waiting on the customer (${art.customer.length})`, n: art.customer.length, show: true, inner: () => artQueueRows(art.customer) },
+          { title: 'Waiting on the owner', n: mine.rows.length, show: true, inner: () => mine.rows.map((a) => `
         <div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal">${escEmail(a.kind)} ${escEmail(a.subject_id)}${a.decision_note
           ? `<div class="row-sub">Sent back: ${escEmail(a.decision_note)}</div>` : ''}${
           ['message', 'lead_email'].includes(a.kind) && a.payload && a.payload.text ? `<div class="pin-body" style="white-space:pre-wrap">${escEmail(a.payload.text)}</div>` : ''}${
           heldMessageEditForm(a, '/admin/my-day')}</span>
-          <span class="row-end">${pill(a.status === 'rejected' ? 'sent back' : 'waiting', a.status === 'rejected' ? 'amber' : 'blue')}</span></div>`).join('')) : ''}
-      ${can('leads.view') ? section(`Leads waiting for a reply (${waiting.length})`, waiting.slice(0, 25).map(leadRow).join(''), 'Nobody is waiting.') : ''}
-      ${can('leads.view') ? section(`Follow-ups due (${followUps.length})`, followUps.map((l) => `
-        <div class="row-i"><span class="row-main"><a href="/admin/leads?status=all#lead-${l.id}"><b>${escEmail(l.name || l.email || 'Lead')}</b></a>
-          <div class="row-sub">due ${escEmail(fmtDate(l.next_follow_up_on))}${l.assigned_to ? ` &middot; ${escEmail(nameOf(roster, l.assigned_to))}` : ''}</div></span></div>`).join(''),
-        'No follow-ups due.') : ''}
-      ${section(`Tasks (${tasks.rows.length})`, tasks.rows.map(taskRow).join(''), 'Nothing on your list.')}
-      ${me == null && doneLately.length ? section(`Completed this week (${doneLately.length})`, doneLately.map(taskRow).join('')) : ''}
+          <span class="row-end">${pill(a.status === 'rejected' ? 'sent back' : 'waiting', a.status === 'rejected' ? 'amber' : 'blue')}</span></div>`).join('') },
+          { title: `Completed this week (${doneLately.length})`, n: doneLately.length, show: me == null, inner: () => doneLately.map(taskRow).join('') },
+          { title: 'My earnings', show: !!earn, inner: () => `<div style="display:flex;gap:14px;justify-content:flex-end;flex-wrap:wrap;margin:0 0 8px">
+          <a class="muted" href="${earn.guide}">How pay works</a><a class="muted" href="/admin/my-earnings">See every sale →</a></div>
+        ${earningsTiles(earn.e)}
+        ${earn.incentives.map((i) => incentiveRow(i)).join('')}` },
+          { title: training ? `Your training: ${training.p.done} of ${training.p.total}` : '', show: !!(training && !training.p.complete),
+            inner: () => `<a class="muted" href="/admin/training" style="float:right">See it all →</a>${progressBar(training.p.done, training.p.total)}
+        ${training.p.next.map((st) => `<div class="row-sub">Next: ${escEmail(st.title)}</div>`).join('')}` },
+        ].filter((x) => x.show);
+        /* A block with a count shows only when it has something in it; one with
+           a `short` name is also listed in "Nothing waiting" and the counts. */
+        const full = blocks.filter((x) => x.n == null || x.n > 0);
+        const nothing = blocks.filter((x) => x.n === 0 && x.short);
+        const needs = full.filter((x) => x.short && x.n > 0);
+        return `${needs.length ? `<div class="chips md-needs" aria-label="Needs you now"><span class="muted" style="align-self:center;font-weight:700">Needs you now:</span>${
+          needs.map((x) => `<a class="chip-f" href="#sec-${escEmail(secKey(x.title))}">${escEmail(x.short)}<span class="n">${x.n}</span></a>`).join('')}</div>` : ''}
+      ${nothing.length ? `<div class="card muted md-quiet" style="padding:12px 16px">Nothing waiting: ${escEmail(nothing.map((x) => x.short).join(', '))}.</div>` : ''}
+      ${full.map((x) => section(x.title, x.inner(), '')).join('')}`;
+      })()}
       <details class="card"><summary><b>Add a task</b></summary>${addTaskForm}</details>${TASK_CSS}${TASK_UPLOAD_JS}
-      ${nextSteps.length ? section('Jobs with a next step', nextSteps.map(({ q, cl }) => `
-        <div class="row-i"><span class="row-main"><a href="/admin/production/${escEmail(q.code)}"><b>${escEmail(q.code)}</b></a> ${escEmail(q.name || '')}
-          <div class="row-sub">${escEmail(cl.next.label)}${cl.next.hint ? ` — ${escEmail(cl.next.hint)}` : ''}</div></span>
-          <span class="row-end muted">${cl.done}/${cl.of}</span></div>`).join('')) : ''}
       ${copyJs}
       <script>(function(){try{document.querySelectorAll('details.md-sec').forEach(function(d){
         var k='md:'+d.getAttribute('data-sec');if(localStorage.getItem(k)==='0')d.open=false;
-        d.addEventListener('toggle',function(){try{localStorage.setItem(k,d.open?'1':'0');}catch(e){}});});}catch(e){}})();</script>`, 'myday'));
+        d.addEventListener('toggle',function(){try{localStorage.setItem(k,d.open?'1':'0');}catch(e){}});});
+        /* A count at the top opens its section even if it was folded away. */
+        document.querySelectorAll('.md-needs a').forEach(function(a){a.addEventListener('click',function(){
+          var d=document.getElementById(a.getAttribute('href').slice(1));if(d)d.open=true;});});}catch(e){}})();</script>`, 'myday'));
   } catch (err) {
     console.error('my day failed:', err.message);
     res.status(500).send(adminPage('My Day', '<div class="card"><div class="warn">Could not load your day.</div></div>', 'myday'));
@@ -38576,6 +38669,7 @@ initDB()
     console.log(`Listening on port ${PORT}`);
     /* After listening, so it never holds up a deploy. */
     anchorUndatedPaidJobs().catch((e) => console.error('working dates from deposits:', e.message));
+    archiveSettledHelpers().catch((e) => console.error('archiving settled helpers:', e.message));
   }))
   .catch(err => {
     console.error('DB init failed, exiting:', err.message);
