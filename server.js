@@ -6703,6 +6703,7 @@ app.post('/api/send-login-code', requireInternalKey, capPerRecipient('send-login
     await sendEmail({
       to: email,
       subject: `${code} is your June's Tees sign-in code`, promo: false,
+      urgent: true,   // a 15-minute code: never held for the shop's daily summary
       html: `
         <div style="font-family:sans-serif;max-width:480px;margin:0 auto;text-align:center;">
           <h2 style="color:#1848B8;">Your sign-in code</h2>
@@ -39836,7 +39837,7 @@ async function seedPlaybook() {
 app.get('/admin/api/test-email', requireAdmin, async (_req, res) => {
   try {
     await sendEmail({
-      to:      NOTIFY_EMAIL,
+      to:      NOTIFY_EMAIL, urgent: true,   // a held test would say "sent" and arrive tomorrow
       subject: 'Email Test — June\'s Tees',
       html:    '<p>Email sending is working correctly.</p>',
     });

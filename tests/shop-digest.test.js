@@ -75,3 +75,15 @@ test('team chat alerts: at most two a person a day, one email for all their conv
   assert.ok(f.indexOf('if (!allowed) continue;') < f.indexOf('INSERT INTO team_chat_reads'), 'nothing is claimed past the limit');
   assert.strictEqual((f.match(/await sendEmail\(/g) || []).length, 1, 'one email per person per run');
 });
+
+test('a long item is cut as plain text, never through a tag', () => {
+  const html = '<table><tr><td>' + 'y'.repeat(D.MAX_ITEM_HTML) + '<a href="https://x">link</a></td></tr></table>';
+  const m = D.build([{ subject: 'big', html, created_at: 0 }], { esc, when: () => '' });
+  assert.ok(m.html.includes('(cut short here)'));
+  assert.ok(!m.html.includes('<table>') && !m.html.includes('<a href="https://x"'));
+});
+
+test('sign-in codes and the email test are never held', () => {
+  assert.ok(/sign-in code`, promo: false,\s*urgent: true/.test(src));
+  assert.ok(/to:\s+NOTIFY_EMAIL, urgent: true,[^\n]*\n\s+subject: 'Email Test/.test(src));
+});

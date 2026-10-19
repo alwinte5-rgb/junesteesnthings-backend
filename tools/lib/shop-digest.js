@@ -36,6 +36,13 @@ function dueHour(env = process.env) {
   return Number.isInteger(h) && h >= 0 && h <= 23 ? h : 7;
 }
 
+/* A cut through the middle of a tag would break every item below it, so a
+   long one is shown as its plain text instead. */
+function cutShort(html) {
+  const text = html.replace(/<[^>]*>/g, ' ').replace(/<[^>]*$/, '').replace(/\s+/g, ' ').trim();
+  return `<p>${text.slice(0, MAX_ITEM_HTML)}</p><p><i>(cut short here)</i></p>`;
+}
+
 /**
  * The day's email from the held items, oldest first.
  * @param items [{ subject, html, reply_to, created_at }]
@@ -56,7 +63,7 @@ function build(items, { esc, when }) {
       <div style="font-weight:700;color:#0B1F4B">${esc(it.subject || '(no subject)')}</div>
       <div style="color:#6b7280;font-size:12px;margin-bottom:8px">${esc(when(it.created_at))}${
         it.reply_to ? ` &middot; reply to <a href="mailto:${esc(it.reply_to)}">${esc(it.reply_to)}</a>` : ''}</div>
-      ${body.length > MAX_ITEM_HTML ? body.slice(0, MAX_ITEM_HTML) + '<p><i>(cut short here)</i></p>' : body}
+      ${body.length > MAX_ITEM_HTML ? cutShort(body) : body}
     </div>`;
   }).join('');
   return {
