@@ -549,7 +549,9 @@ test('a custom line with a typed price goes to the owner unless discounts are fu
 });
 
 test('a helper\'s discount is measured against catalogue price, not a typed garment price', () => {
-  assert.match(src, /catalogueSum \+= priceLine\(\{ \.\.\.priceArgs, blankOverride: null, unitOverride: null \}\)\.lineTotal/);
+  assert.match(src, /catalogueSum \+= priceLine\(\{ \.\.\.priceArgs, blankOverride: null, unitOverride: null,\n\s+addons: lineAddons\.filter\(\(a\) => a\.code !== 'own_blanks'\) \}\)\.lineTotal/);
+  /* Customer-supplied blanks lower the line too, so they are measured the same way. */
+  assert.match(src, /if \(prod && \(blankOverride != null \|\| typedUnit \|\| ownBlanks\)\) \{/);
   assert.match(src, /const listSubtotal = round2\(Math\.max\(catalogueSum,/);
 });
 

@@ -44,6 +44,7 @@ const DTF = {                   // [16sq, 132sq (the standard print), 252sq, add
      5: [5.00, 7.03, 9.38, 1.80],   // 5-11, as #308 split the small runs (1-4, 5-11); same Anchorfish cost
     12: [3.23, 5.63, 7.50, 1.80],
     25: [2.58, 4.50, 6.00, 1.50],
+    36: [2.58, 4.50, 6.00, 1.50],   // 36-49, split 2026-10-19 for a real price break; same Anchorfish cost
     50: [2.73, 3.60, 4.80, 1.50],
    100: [1.65, 3.06, 4.08, 1.35],
    250: [1.47, 2.60, 3.47, 1.20],

@@ -187,17 +187,22 @@ const SP_INSERTS = [
    1-4 main print $23.20 -> $20.75 (owner, 2026-10-17): $34.27 for a 4-piece
    front + back Gildan 5000 sat above the Chicago shops that list a price. The
    additional location keeps its $5.95. */
+/* REAL BREAKS (owner, 2026-10-19). After the 1-4 cut, 1-4 and 5-11 sat a
+   nickel apart ($20.75 / $20.75 main, $5.95 / $5.90 additional), so the quote
+   form told a customer "2 more and it drops 5 cents", and 25-49 to 50-99 was
+   a $3.85 cliff. The main print now steps about $2 a band and 25-49 is split
+   at 36 so the cliff is two steps. 50-99 drops $11.90 -> $11.00 (owner: the
+   Ink Theory job showed it high for 70 pieces). These are typed prices, not
+   markups: one markup cannot hold both columns on a $2 / 25-cent ladder.
+   Anchorfish's cost is the same across 1-11 and across 25-49, so the splits
+   are pricing decisions; tools/lib/dtf-oversized.js keys the same ceilings. */
 const DTF = {
     1: { ceil:   4, mk: 3.30, v: [5.00, 7.03, 9.38, 1.80], fix: { 1: 20.75 } },
-    5: { ceil:  11, mk: 3.30, v: [5.00, 7.03, 9.38, 1.80], fix: { 1: 20.75, 3: 5.90 } },
-   /* 3.60 -> 3.25. With 4-11 cut to 3.30, leaving this at 3.60 made the
-      ADDITIONAL-LOCATION price climb from $5.95 to $6.50 as the order grew —
-      one markup drives every column in a band, and the tool refuses a ladder
-      that rises. Lowering it keeps every column falling and gives 12-24 a real
-      break rather than a penalty. */
-   12: { ceil:  24, mk: 3.25, v: [3.23, 5.63, 7.50, 1.80] },
-   25: { ceil:  49, mk: 3.50, v: [2.58, 4.50, 6.00, 1.50] },
-   50: { ceil:  99, mk: 3.30, v: [2.73, 3.60, 4.80, 1.50] },
+    5: { ceil:  11, mk: 3.30, v: [5.00, 7.03, 9.38, 1.80], fix: { 1: 18.75, 3: 5.50 } },
+   12: { ceil:  24, mk: 3.25, v: [3.23, 5.63, 7.50, 1.80], fix: { 1: 16.75, 3: 5.25 } },
+   25: { ceil:  35, mk: 3.50, v: [2.58, 4.50, 6.00, 1.50], fix: { 1: 14.75, 3: 5.00 } },
+   36: { ceil:  49, mk: 3.50, v: [2.58, 4.50, 6.00, 1.50], fix: { 1: 13.00, 3: 4.80 } },
+   50: { ceil:  99, mk: 3.30, v: [2.73, 3.60, 4.80, 1.50], fix: { 1: 11.00, 3: 4.60 } },
   100: { ceil: 249, mk: 3.10, v: [1.65, 3.06, 4.08, 1.35] },
   250: { ceil: 499, mk: 2.90, v: [1.47, 2.60, 3.47, 1.20] },
   500: { ceil: 999, mk: 2.75, v: [1.32, 2.21, 2.95, 1.11] },
