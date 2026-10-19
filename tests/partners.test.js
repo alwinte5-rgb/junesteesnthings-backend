@@ -200,6 +200,31 @@ test('team size link: unguessable tokens, clean names, and totals only for sizes
   assert.strictEqual(r.stale, 2);
 });
 
+test('team size link: one person can ask for several sizes, youth sizes too', () => {
+  assert.deepStrictEqual(SIZES.offeredSizes(['S', 'M', 'L', '2XL']).youth, ['YXS', 'YS', 'YM', 'YL', 'YXL']);
+  assert.deepStrictEqual(SIZES.offeredSizes(['OSFA']).youth, []);
+  assert.deepStrictEqual(SIZES.offeredSizes(['YS', 'YM', 'YL']).youth, []);
+  const lines = [{ ix: 0, sizes: ['S', 'M', 'L'] }, { ix: 2, sizes: ['OSFA'] }];
+  const keys = { sizes_0: 'S|M|L|YXS|YS|YM|YL|YXL', sizes_2: 'OSFA' };
+  assert.strictEqual(SIZES.sizesKey(['S', 'M', 'L']), keys.sizes_0);
+  // A page built before the shop added XS must not shift its counts onto the wrong size.
+  assert.deepStrictEqual(SIZES.parsePicks({ ...keys, q_0_1: '1' }, [{ ix: 0, sizes: ['XS', 'S', 'M', 'L'] }, lines[1]]), { error: 'changed' });
+  // q_<line>_<n>: n counts the line's own sizes, then the youth sizes (S M L YXS YS YM ...).
+  assert.deepStrictEqual(SIZES.parsePicks({ ...keys, q_0_2: '1', q_0_5: '2', q_2_0: '1', q_0_0: '0', q_0_1: 'x', q_0_99: '3' }, lines), [
+    { ix: 0, size: 'L', qty: 1 }, { ix: 0, size: 'YM', qty: 2 }, { ix: 2, size: 'OSFA', qty: 1 },
+  ]);
+  assert.deepStrictEqual(SIZES.parsePicks({ ...keys, q_0_0: '999' }, lines), [{ ix: 0, size: 'S', qty: SIZES.MAX_PER_SIZE }]);
+  assert.deepStrictEqual(SIZES.parsePicks(keys, lines), { error: 'none' });
+  assert.deepStrictEqual(SIZES.parsePicks({ ...keys, q_0_0: '20', q_0_1: '20', q_0_2: '1' }, lines), { error: 'too_many' });
+  // Youth sizes the line does not carry are listed apart, never filled into its boxes.
+  const r = SIZES.tally([{ line_index: 0, size: 'L', qty: 1 }, { line_index: 0, size: 'YM', qty: 2 },
+    { line_index: 0, size: 'YS' }, { line_index: 0, size: 'YM' }], { 0: ['S', 'M', 'L'] });
+  assert.deepStrictEqual(r.byLine, { 0: { L: 1 } });
+  assert.deepStrictEqual(r.youth, { 0: { YS: 1, YM: 3 } });
+  assert.deepStrictEqual(Object.keys(r.youth[0]), ['YS', 'YM']);
+  assert.strictEqual(r.stale, 0);
+});
+
 test('team sizes for the shop: plain totals per item in size order, nothing dropped', () => {
   const order = ['S', 'M', 'L', 'XL'];
   const out = SIZES.listTotals([

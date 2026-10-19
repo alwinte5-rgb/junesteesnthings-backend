@@ -6782,15 +6782,22 @@ function sizeLinkPage(link, note) {
         Add your name and size and we will put you on the order.</p>
       ${note}
       ${!open ? '<div class="warn" style="margin-top:12px">This size list is closed. Ask the person who sent you the link.</div>' : `
-      <form method="POST" style="margin-top:14px;display:grid;gap:12px" onsubmit="this.querySelector('button').disabled=true">
+      <form method="POST" style="margin-top:14px;display:grid;gap:12px" onsubmit="this.querySelector('button[type=submit]').disabled=true">
         <label>Your name<input name="name" maxlength="60" required autocomplete="name" style="display:block;width:100%;margin-top:4px"></label>
-        ${link.lines.map((l) => `<fieldset style="border:1px solid #e3e8f2;border-radius:10px;padding:10px 12px">
+        <p class="muted" style="margin:0;font-size:14px">Type how many you need of each size. Ordering for your kids too? Add their youth sizes on the same form.</p>
+        ${link.lines.map((l) => {
+          const { own, youth } = SIZES.offeredSizes(l.sizes);
+          const box = (sz, n) => `<label style="display:flex;flex-direction:column;align-items:center;gap:4px;border:1px solid #d5dbe6;border-radius:8px;padding:6px 4px;width:64px;font-weight:700">
+            ${escEmail(sz)}<input type="number" name="q_${l.ix}_${n}" min="0" max="${SIZES.MAX_PER_SIZE}" step="1" inputmode="numeric" placeholder="0" aria-label="How many ${escEmail(sz)}"
+              style="width:48px;text-align:center;font-size:16px;padding:4px"></label>`;
+          const row = (list, from) => `<div style="display:flex;flex-wrap:wrap;gap:8px">${list.map((sz, k) => box(sz, from + k)).join('')}</div>`;
+          return `<fieldset style="border:1px solid #e3e8f2;border-radius:10px;padding:10px 12px">
+          <input type="hidden" name="sizes_${l.ix}" value="${escEmail(SIZES.sizesKey(l.sizes))}">
           <legend style="font-weight:700;padding:0 4px">${escEmail(l.it.description || 'Item ' + (l.ix + 1))}</legend>
-          <div style="display:flex;flex-wrap:wrap;gap:8px">${l.sizes.map((sz) => `<label style="display:inline-flex;align-items:center;gap:4px;border:1px solid #d5dbe6;border-radius:8px;padding:6px 10px">
-            <input type="radio" name="size_${l.ix}" value="${escEmail(sz)}"${link.lines.length === 1 ? ' required' : ''}> ${escEmail(sz)}</label>`).join('')}
-            ${link.lines.length > 1 ? `<label style="display:inline-flex;align-items:center;gap:4px;padding:6px 10px;color:#6b7280">
-              <input type="radio" name="size_${l.ix}" value="" checked> Not for me</label>` : ''}</div>
-        </fieldset>`).join('')}
+          ${youth.length ? '<div class="muted" style="font-size:13px;margin:0 0 6px">Adult sizes</div>' : ''}${row(own, 0)}
+          ${youth.length ? `<div class="muted" style="font-size:13px;margin:12px 0 6px">Youth sizes</div>${row(youth, own.length)}` : ''}
+        </fieldset>`;
+        }).join('')}
         <button type="submit" class="btn">Add me to the order</button>
       </form>`}
     </div>`);
@@ -6815,20 +6822,28 @@ app.post('/s/:token', sizeRateLimit, async (req, res) => {
     const link = await sizeLink(token);
     if (!link || !link.lines.length || link.q.closed_at || link.q.production_at) return res.redirect(303, `/s/${encodeURIComponent(token)}`);
     const name = SIZES.cleanName(req.body && req.body.name);
-    /* Sizes are looked up from the line's own list, never taken as typed. */
-    const picks = link.lines.map((l) => ({ ix: l.ix, size: String((req.body || {})['size_' + l.ix] || '') }))
-      .filter((p) => link.lines.find((l) => l.ix === p.ix).sizes.includes(p.size));
-    if (name.length < 2 || !picks.length) {
-      return res.status(400).send(sizeLinkPage(link, '<div class="warn" style="margin-top:12px">Please type your name and pick a size.</div>'));
+    /* Sizes are looked up from the line's own list by position, never taken as typed. */
+    const picks = SIZES.parsePicks(req.body, link.lines);
+    if (picks.error === 'changed') {
+      return res.status(409).send(sizeLinkPage(link, '<div class="warn" style="margin-top:12px">The sizes for this order just changed. Please type your sizes again.</div>'));
     }
-    const { rows: [{ n }] } = await pool.query('SELECT COUNT(*)::int AS n FROM size_entries WHERE collection_id = $1', [link.q.coll_id]);
-    if (n + picks.length > SIZES.MAX_ENTRIES) {
+    if (name.length < 2 || picks.error === 'none') {
+      return res.status(400).send(sizeLinkPage(link, '<div class="warn" style="margin-top:12px">Please type your name and how many of at least one size.</div>'));
+    }
+    if (picks.error === 'too_many') {
+      return res.status(400).send(sizeLinkPage(link, `<div class="warn" style="margin-top:12px">That is more than ${SIZES.MAX_PER_ANSWER} shirts for one person. Please send the rest to the person who sent you the link.</div>`));
+    }
+    const { rows: [{ n }] } = await pool.query('SELECT COALESCE(SUM(qty), 0)::int AS n FROM size_entries WHERE collection_id = $1', [link.q.coll_id]);
+    if (n + picks.reduce((t, p) => t + p.qty, 0) > SIZES.MAX_ENTRIES) {
       return res.status(409).send(sizeLinkPage(link, '<div class="warn" style="margin-top:12px">This list is full. Ask the person who sent you the link.</div>'));
     }
+    /* One statement, so a person's answer lands whole (and shares one created_at). */
+    const vals = []; const args = [link.q.coll_id, name];
     for (const p of picks) {
-      await pool.query('INSERT INTO size_entries (collection_id, name, line_index, size) VALUES ($1, $2, $3, $4)',
-        [link.q.coll_id, name, p.ix, p.size]);
+      args.push(p.ix, p.size, p.qty);
+      vals.push(`($1, $2, $${args.length - 2}, $${args.length - 1}, $${args.length})`);
     }
+    await pool.query(`INSERT INTO size_entries (collection_id, name, line_index, size, qty) VALUES ${vals.join(', ')}`, args);
     res.redirect(303, `/s/${encodeURIComponent(token)}?added=1`);
   } catch (err) {
     console.error('size entry failed:', err.message);
@@ -15111,11 +15126,14 @@ app.get('/q/:code', async (req, res) => {
       .catch(() => ({ rows: [] }))).rows : [];
     const sizesByLine = {}; sizeLines.forEach((l) => { sizesByLine[l.ix] = l.sizes; });
     const collTally = SIZES.tally(collEntries, sizesByLine);
+    /* One answer is one INSERT, so its rows share a name and created_at. */
+    const collPeople = new Set(collEntries.map((e) => `${e.name}|${new Date(e.created_at).getTime()}`)).size;
+    const collShirts = collEntries.reduce((t, e) => t + (Number(e.qty) || 1), 0);
     const canFill = !paid && !q.requested_items && Object.keys(collTally.byLine).length > 0;
     const sizesCard = (!sizeLines.length || q.cancelled_at || q.production_at) ? '' : !coll ? `
       <div class="card" id="sizes">
         <h1 style="font-size:18px">Ordering for a group?</h1>
-        <p class="muted" style="margin:6px 0 12px">Family reunion, team or staff? Get a link to share. Each person types their name and picks their size, and the totals fill in here for you.</p>
+        <p class="muted" style="margin:6px 0 12px">Family reunion, team or staff? Get a link to share. Each person types their name and how many of each size, kids' youth sizes too, and the totals fill in here for you.</p>
         <form method="POST" action="/q/${q.code}/sizes/start" onsubmit="this.querySelector('button').disabled=true">
           <button type="submit" class="btn-ghost" style="padding:9px 16px">Make a size link</button></form>
       </div>` : `
@@ -15126,13 +15144,17 @@ app.get('/q/:code', async (req, res) => {
           <input id="size-link" readonly value="${escEmail(PUBLIC_BASE_URL + '/s/' + coll.token)}" style="flex:1;min-width:200px;font-size:14px">
           <button type="button" class="btn-ghost" style="padding:8px 14px" onclick="var i=document.getElementById('size-link');i.select();try{navigator.clipboard.writeText(i.value).then(function(){},function(){})}catch(e){}this.textContent='Copied'">Copy</button>
         </div>
-        <p style="margin:12px 0 6px"><b>${collEntries.length}</b> ${collEntries.length === 1 ? 'person has' : 'people have'} answered.</p>
+        <p style="margin:12px 0 6px"><b>${collPeople}</b> ${collPeople === 1 ? 'person has' : 'people have'} answered, for <b>${collShirts}</b> ${collShirts === 1 ? 'shirt' : 'shirts'}.</p>
         ${sizeLines.filter((l) => collTally.byLine[l.ix]).map((l) => `<p style="margin:0 0 4px;font-size:14px">${escEmail(l.it.description || 'Item ' + (l.ix + 1))}: ${
           Object.entries(collTally.byLine[l.ix]).map(([sz, n]) => `${escEmail(sz)} ${n}`).join(' · ')}</p>`).join('')}
+        ${Object.keys(collTally.youth).length ? `<div class="warn" style="margin:8px 0;font-size:14px">Youth sizes asked for: ${
+          Object.entries(collTally.youth).map(([ix, m]) => `${sizeLines.length > 1 ? escEmail(((q.items || [])[ix] || {}).description || '') + ': ' : ''}${
+            Object.entries(m).map(([sz, n]) => `${escEmail(sz)} ${n}`).join(' · ')}`).join('; ')}.
+          These are not on your quote yet. We will add a youth shirt and send you the new price.</div>` : ''}
         ${collEntries.length ? `<details style="margin:8px 0"><summary style="cursor:pointer;color:#1848B8;font-weight:600">See who answered</summary>
           <ul style="margin:8px 0 0;padding-left:18px;font-size:14px">${collEntries.map((e) => {
             const l = sizeLines.find((x) => x.ix === e.line_index);
-            return `<li>${escEmail(e.name)}: ${escEmail(e.size)}${sizeLines.length > 1 && l ? ` <span class="muted">(${escEmail(l.it.description || '')})</span>` : ''}
+            return `<li>${escEmail(e.name)}: ${escEmail(e.size)}${Number(e.qty) > 1 ? ' &times; ' + Number(e.qty) : ''}${sizeLines.length > 1 && l ? ` <span class="muted">(${escEmail(l.it.description || '')})</span>` : ''}
               <form method="POST" action="/q/${q.code}/sizes/remove" style="display:inline"><input type="hidden" name="id" value="${e.id}">
               <button type="submit" style="background:none;border:0;color:#b91c1c;cursor:pointer;font-size:12px">remove</button></form></li>`;
           }).join('')}</ul></details>` : ''}
@@ -23066,16 +23088,17 @@ async function jobTeamSizesCard(q, catalog, { canEdit = true } = {}) {
   if (!coll) {
     if (!canEdit || !open || !sizedLines.length || ['held', 'draft'].includes(q.status)) return '';
     return `<div class="card" id="team-sizes"><h2 class="card-title">Team sizes</h2>
-      <p class="muted" style="font-size:13px;margin:0 0 10px">Collecting sizes for a family reunion, team or staff order? Make a link and send it to whoever is gathering them. Each person types their name and picks a size; the totals show up here.</p>
+      <p class="muted" style="font-size:13px;margin:0 0 10px">Collecting sizes for a family reunion, team or staff order? Make a link and send it to whoever is gathering them. Each person types their name and how many of each size (youth sizes too); the totals show up here.</p>
       <form method="POST" action="/admin/production/${q.code}/sizes/start" style="margin:0" onsubmit="this.querySelector('button').disabled=true">
         <button type="submit" class="btn" style="padding:8px 16px;font-size:14px">Make a size link</button></form></div>`;
   }
   const { rows } = await pool.query('SELECT line_index, size, qty FROM size_entries WHERE collection_id = $1', [coll.id]);
   const lineName = (ix) => ((q.items || [])[ix] || {}).description || `Item ${ix + 1}`;
-  const lines = SIZES.listTotals(rows, (sz) => SIZE_ORDER.indexOf(sz));
-  const people = lines.reduce((t, l) => t + l.total, 0);
+  const order = [...SIZES.YOUTH_SIZES, ...SIZE_ORDER];
+  const lines = SIZES.listTotals(rows, (sz) => order.indexOf(sz));
+  const shirts = lines.reduce((t, l) => t + l.total, 0);
   const link = PUBLIC_BASE_URL + '/s/' + coll.token;
-  return `<div class="card" id="team-sizes"><h2 class="card-title">Team sizes (${people})${coll.closed_at ? ' <span class="muted" style="font-size:13px;font-weight:600">closed</span>' : ''}</h2>
+  return `<div class="card" id="team-sizes"><h2 class="card-title">Team sizes (${shirts} ${shirts === 1 ? 'shirt' : 'shirts'})${coll.closed_at ? ' <span class="muted" style="font-size:13px;font-weight:600">closed</span>' : ''}</h2>
     ${canEdit ? `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 6px">
       <input id="team-size-link" readonly value="${escEmail(link)}" style="flex:1;min-width:200px;font-size:14px">
       <button type="button" class="btn-ghost" style="padding:7px 14px" onclick="var i=document.getElementById('team-size-link');i.select();try{navigator.clipboard.writeText(i.value).then(function(){},function(){})}catch(e){}this.textContent='Copied'">Copy link</button></div>` : ''}
@@ -23083,7 +23106,9 @@ async function jobTeamSizesCard(q, catalog, { canEdit = true } = {}) {
       ${lines.length > 1 || (q.items || []).length > 1 ? `<div style="font-weight:600;font-size:14px">${escEmail(lineName(l.line_index))}</div>` : ''}
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">${l.sizes.map(([sz, n]) =>
         `<span style="border:1px solid #e3e8f2;border-radius:8px;padding:6px 12px;font-size:15px"><b>${escEmail(sz)}</b> ${n}</span>`).join('')}
-        <span class="muted" style="padding:6px 4px;font-size:14px">${l.total} total</span></div></div>`).join('')
+        <span class="muted" style="padding:6px 4px;font-size:14px">${l.total} total</span></div>
+      ${l.sizes.some(([sz]) => SIZES.YOUTH_SIZES.includes(sz) && !orderedSizeKeys((q.items || [])[l.line_index], catalog).includes(sz))
+        ? '<div class="muted" style="font-size:12.5px;margin-top:4px">Youth sizes are not on this item: add a youth line to the quote for them.</div>' : ''}</div>`).join('')
       : '<p class="muted" style="font-size:14px;margin:6px 0">Nobody has picked a size yet.</p>'}
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:6px">
       ${canEdit && open ? `<form method="POST" action="/admin/production/${q.code}/sizes/close" style="margin:0"><input type="hidden" name="to" value="${coll.closed_at ? 'open' : 'closed'}"><button type="submit" class="btn-ghost" style="padding:7px 14px">${coll.closed_at ? 'Reopen the link' : 'Close the link'}</button></form>` : ''}
