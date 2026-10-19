@@ -210,3 +210,12 @@ test('upcharges, signs, jeans, jerseys and sublimation are half their price, mar
     assert.strictEqual(r.lines[0].basis, 'rough: half the price', d);
   }
 });
+
+test('customer-supplied blanks (own_blanks): the job books no garment the shop never bought', () => {
+  const line = { product_id: 10, method_id: 22, colours: 1, stage: 'both', garment_dark: true, qty: 100,
+    unit_price: 13.83, addons: [{ code: 'screens', count: 4, total: 100 }] };
+  const ours = one(line);
+  const theirs = one({ ...line, addons: [...line.addons, { code: 'own_blanks', total: 150 }] });
+  assert.strictEqual(r2(ours.lines[0].unit_cost - theirs.lines[0].unit_cost), 2.82);
+  assert.match(theirs.lines[0].basis, /customer's blanks/);
+});

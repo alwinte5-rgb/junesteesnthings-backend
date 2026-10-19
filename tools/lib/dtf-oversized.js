@@ -7,8 +7,9 @@
  *
  * Owner's rule, 2026-10-17: oversized = today's standard price + 1.75 x what
  * Anchorfish charges extra for the bigger print, rounded UP to the next 5
- * cents. 1.75 is the factor that lands 50-99 pieces on $14.00, the price the
- * owner set on the Ink Theory order. Up to 252 sq in; larger is by quote.
+ * cents. 1.75 is the factor that landed 50-99 pieces on $14.00, the price the
+ * owner set on the Ink Theory order; with the standard 50-99 cut to $11.00
+ * (2026-10-19) it follows to $13.10. Up to 252 sq in; larger is by quote.
  *
  * Derived, not typed, so a change to the standard ladder carries through when
  * the tool is re-run, and the gap between the two always tracks real cost.
@@ -17,13 +18,14 @@
 /* Anchorfish DTF cost per piece, by band CEILING (the same convention as the
    `printings` tables, opposite to BLANK_TIERS). [132 sq in, 252 sq in], from
    the 2026 contractor sheet. The 1-4 and 5-11 bands both sit inside their
-   1-11 column. These are the same figures as DTF[].v[1] and v[2] in
+   1-11 column, and 25-35 / 36-49 (2026-10-19) inside their 25-49 one. These are the same figures as DTF[].v[1] and v[2] in
    reprice-anchorfish-2026.js; tests/dtf-oversized.test.js fails if the two
    ever differ. */
 const ANCHORFISH_DTF_COST = {
      4: [7.03, 9.38],
     11: [7.03, 9.38],
     24: [5.63, 7.50],
+    35: [4.50, 6.00],
     49: [4.50, 6.00],
     99: [3.60, 4.80],
    249: [3.06, 4.08],

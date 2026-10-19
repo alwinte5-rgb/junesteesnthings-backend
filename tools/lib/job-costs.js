@@ -44,6 +44,7 @@ const DTF = {                   // [16sq, 132sq (the standard print), 252sq, add
      5: [5.00, 7.03, 9.38, 1.80],   // 5-11, as #308 split the small runs (1-4, 5-11); same Anchorfish cost
     12: [3.23, 5.63, 7.50, 1.80],
     25: [2.58, 4.50, 6.00, 1.50],
+    36: [2.58, 4.50, 6.00, 1.50],   // 36-49, split 2026-10-19 for a real price break; same Anchorfish cost
     50: [2.73, 3.60, 4.80, 1.50],
    100: [1.65, 3.06, 4.08, 1.35],
    250: [1.47, 2.60, 3.47, 1.20],
@@ -364,7 +365,10 @@ function estimateJob(items, catalog) {
        ratio the catalogue price is. */
     let garmentEach = 0, garmentSellEach = 0;
     const basis = [];
-    if (prod && num(prod.price) > 0) {
+    /* The customer sent the garments (own_blanks): nothing was bought. */
+    const ownBlanks = (it.addons || []).some((a) => a && a.code === 'own_blanks');
+    if (ownBlanks) basis.push("customer's blanks");
+    else if (prod && num(prod.price) > 0) {
       const ratio = num(prod.cost) > 0 ? num(prod.cost) / num(prod.price) : 1 / SHOP_MARKUP;
       garmentSellEach = (num(it.blank_price) > 0 ? num(it.blank_price) : num(prod.price)) + num(it.size_upcharge) / qty;
       garmentEach = garmentSellEach * ratio;

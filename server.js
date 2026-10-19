@@ -8158,6 +8158,17 @@ function quoteSchedule(q) {
   const proofBy  = back(pressBy, lt.proof);   // approval before the press
   const artBy    = back(proofBy, 1);
 
+  /** True when every garment line carries the own_blanks add-on: the customer
+   *  sends the garments, so there is nothing to order, only a date they must
+   *  be here by (sched.blanks_in_by). */
+  function quoteOwnBlanks(q) {
+    let items;
+    try { items = typeof q.items === 'string' ? JSON.parse(q.items) : q.items; } catch { return false; }
+    const garments = (Array.isArray(items) ? items : []).filter((it) => it && it.product_id != null);
+    return garments.length > 0 && garments.every((it) =>
+      (it.addons || []).some((a) => a && a.code === 'own_blanks'));
+  }
+
   const today = new Date(new Date().toDateString());
   /* Only work in hand can be behind (owner, 2026-10-15: "9 behind schedule
      when I only have 4 orders"). A quote nobody has paid a deposit on has not
@@ -8170,7 +8181,7 @@ function quoteSchedule(q) {
     ship_by: shipBy, qc_by: qcBy, press_by: pressBy,
     blanks_in_by: blanksBy, blanks_order_by: orderBy,
     proof_by: proofBy, artwork_by: artBy,
-    isPickup, isLocal,
+    isPickup, isLocal, ownBlanks: quoteOwnBlanks(q),
     /* A step is "at risk" when its latest safe date has passed and it has not
        happened. Reported per step so the digest can name the actual slip. */
     /* Two warnings, one per move that has a date. Starting is due when the
@@ -8217,7 +8228,8 @@ function quoteChecklist(q) {
   const steps = [
     { key: 'production', label: 'In production', done: !!q.production_at, manual: true,
       hint: sched && !q.production_at
-        ? `start by ${dayShort(sched.blanks_order_by)}, when the blanks have to be ordered`
+        ? (sched.ownBlanks ? `the customer's blanks must be here by ${dayShort(sched.blanks_in_by)}`
+          : `start by ${dayShort(sched.blanks_order_by)}, when the blanks have to be ordered`)
         : 'artwork, proof, blanks and printing' },
     { key: 'shipped', label: sched && sched.isLocal ? 'Ready for delivery' : sched && sched.isPickup ? 'Ready for pickup' : 'Ready / Shipped',
       done: !!q.shipped_at, manual: true,
@@ -8793,6 +8805,8 @@ const EMBROIDERY_METHOD_RE = /embroider/i;
 /* Matches any decoration method. Design work is not tied to how the thing is
    printed — the artwork has to exist before any of them can run. */
 const ANY_METHOD_RE = /./;
+/* Decoration that goes on a garment the shop would otherwise supply. */
+const GARMENT_METHOD_RE = new RegExp([SCREEN_METHOD_RE.source, '\\bdtf\\b', EMBROIDERY_METHOD_RE.source].join('|'), 'i');
 /* Cutouts are bought in from Signs365, so a job carries that supplier's
    freight and the shop does not absorb it. Matches the four size ladders. */
 const CUTOUT_METHOD_RE = /big head cutout/i;
@@ -8892,6 +8906,15 @@ const ADDONS = [
   { code: 'unbagging', label: 'Unbagging', appliesTo: SCREEN_METHOD_RE,
     kind: 'per_piece', rate: 0.50,
     note: 'Charged when the blanks arrive individually bagged and have to be taken out.' },
+  /* The customer sends their own garments (owner, 2026-10-19, the Ink Theory
+     job). priceLine() drops the blank and its size upcharges on a line that
+     carries this, so the line is printing only; the fee is the receiving,
+     counting and press-ready handling, and the risk of pressing a garment the
+     shop cannot replace. Ticking it lowers the line, so a helper's quote
+     with it needs the owner's sign-off like a typed price. */
+  { code: 'own_blanks', label: 'Customer supplies the blanks', appliesTo: GARMENT_METHOD_RE,
+    kind: 'per_piece', rate: 1.50,
+    note: 'You send the garments; the price is printing only. Send 3 extra per size for misprints — we cannot replace a garment we did not supply.' },
   { code: 'puff', label: 'Puff / 3D foam', appliesTo: EMBROIDERY_METHOD_RE,
     kind: 'per_piece', rate: 4.50 },
   { code: 'jumbo_hoop', label: 'Jumbo hoop (design over 11")', appliesTo: EMBROIDERY_METHOD_RE,
@@ -9412,6 +9435,9 @@ function quotePricingSource() {
            unit: the volume break above is a margin rule for garments, and on
            3,000 folded brochures it would quietly take 18% off the folding. */
         var isService = !!(o.product && o.product.service);
+        /* The customer brought the garments: no blank, no size upcharge. */
+        var ownBlanks = (o.addons || []).some(function(a){ return a && a.code === 'own_blanks'; });
+        if (ownBlanks) blankBase = 0;
         var blank = !blankBase ? 0
           : isService ? Math.round(blankBase * 100) / 100
           : blankPriceAt(blankBase, bandQty, o.blankTiers || []);
@@ -9602,7 +9628,7 @@ function quotePricingSource() {
         /* Extended sizes carry an upcharge that applies only to the pieces in
            those sizes — 24 shirts of which 4 are 2XL is not 24 mediums. */
         var sizeUpcharge = 0;
-        if (o.sizeMix && o.product && o.product.sizes) {
+        if (o.sizeMix && o.product && o.product.sizes && !ownBlanks) {
           for (var sz in o.sizeMix) {
             var n = parseInt(o.sizeMix[sz], 10) || 0;
             if (n <= 0) continue;
@@ -11960,6 +11986,13 @@ function productGroupOf(name) {
         });
         return q > 0 ? (r.lineTotal - once) / q : 0;
       }
+      /* "garment $X + printing $Y", plus per-piece extras (handling, ink)
+         when there are any, so the parts add up to the each price shown. */
+      function upParts(r, each){
+        var extra = Math.round((each - r.blank - r.decoration) * 100) / 100;
+        return 'garment ' + m2(r.blank) + ' + printing ' + m2(r.decoration) +
+          (extra > 0.004 ? ' + extras ' + m2(extra) : '');
+      }
       function upTickPlace(L, loc, method, col){
         var row = L.querySelector('.ploc[data-loc="' + loc + '"]');
         if (!row) return false;
@@ -12032,11 +12065,20 @@ function productGroupOf(name) {
               if (c > Math.max(x.qty * 2, x.qty + 12) && c !== minQ) continue;
               var rc = priceLine(Object.assign({}, x.args, { qty: c, sizeMix: null }));
               var e1 = upEach(rc, c);
-              if (e1 < e0 - 0.01) {
+              /* A REAL break only: 50 cents a piece or 3%, whichever is more.
+                 1-4 and 5-11 DTF once sat a nickel apart and this offered
+                 "2 more pieces" to save 5 cents (owner, 2026-10-19). A
+                 smaller drop keeps looking for the next real one. Under a
+                 screen minimum the customer already pays for those pieces,
+                 so any drop there is worth saying. */
+              if (c === minQ ? e1 < e0 - 0.01 : e1 <= e0 - Math.max(0.5, e0 * 0.03)) {
                 var qc = c;
                 ideas.push({ key: 'qty' + n, label: 'Item ' + n + ': ' + x.qty + ' to ' + c + ' pieces',
+                  /* Garment and printing named, so the owner sees which one
+                     got cheaper (owner, 2026-10-19). */
                   text: tag + 'at ' + c + ' pieces (' + (c - x.qty) + ' more) the price drops to ' + m2(e1) +
-                    ' each from ' + m2(e0) + ' — ' + m2(rc.lineTotal) + ' for the item, ' + m2(rc.lineTotal - x.lt) + ' more.' +
+                    ' each (' + upParts(rc, e1) + ') from ' + m2(e0) + ' (' + upParts(base, e0) + ') — ' +
+                    m2(rc.lineTotal) + ' for the item, ' + m2(rc.lineTotal - x.lt) + ' more.' +
                     (x.sizeQty ? ' Add the extra sizes on the item to take it.' : ''),
                   apply: x.sizeQty ? null : function(){ x.L.querySelector('.q').value = String(qc); } });
                 break;
@@ -14037,6 +14079,9 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
          positive so a stray minus cannot invert a line. */
       let blankOverride = Number(one(b['blank_price' + i]));
       if (!Number.isFinite(blankOverride) || blankOverride <= 0) blankOverride = null;
+      /* The customer's own garments have no price to correct: a figure left in
+         the box would ask for sign-off over nothing and feed job costs. */
+      if (lineAddons.some((a) => a.code === 'own_blanks')) blankOverride = null;
       if (blankOverride != null) typedPrices.push({ kind: 'blank', value: round2(blankOverride), what: desc || (prod ? prod.name : `Line ${i + 1}`) });
 
       /* THE price calculation — the same source the browser ran. */
@@ -14094,8 +14139,10 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
       const priced = priceLine(priceArgs);
       if (measureForStaff) {
         const typedUnit = rawUnit != null && String(rawUnit).trim() !== '' && Number.isFinite(Number(rawUnit));
-        if (prod && (blankOverride != null || typedUnit)) {
-          catalogueSum += priceLine({ ...priceArgs, blankOverride: null, unitOverride: null }).lineTotal;
+        const ownBlanks = lineAddons.some((a) => a.code === 'own_blanks');
+        if (prod && (blankOverride != null || typedUnit || ownBlanks)) {
+          catalogueSum += priceLine({ ...priceArgs, blankOverride: null, unitOverride: null,
+            addons: lineAddons.filter((a) => a.code !== 'own_blanks') }).lineTotal;
         } else {
           catalogueSum += priced.lineTotal;
           /* A custom line with its price left blank prices at $0: it needs the
@@ -23182,7 +23229,9 @@ function jobScheduleHtml(q, sched, { canSetDate = true } = {}) {
       ${[ /* In date order: blanks are ordered before the artwork is due. */
         /* Each step is done by its own record, or by a later step having
            happened (production started means the earlier ones are behind it). */
-        ['Order blanks', sched.blanks_order_by, !!(q.blanks_ordered_at || q.production_at)],
+        sched.ownBlanks
+          ? ["Customer's blanks in", sched.blanks_in_by, !!(q.blanks_ordered_at || q.production_at)]
+          : ['Order blanks', sched.blanks_order_by, !!(q.blanks_ordered_at || q.production_at)],
         ['Artwork in', sched.artwork_by, !!(q.artwork_at || q.production_at)],
         ['Proof approved', sched.proof_by, !!(q.proof_ok_at || q.production_at)],
         ['On the press', sched.press_by, !!(q.production_at || q.shipped_at)],
@@ -28063,7 +28112,8 @@ async function sendDailyDigest() {
       const shipLine = sched && !sched.risks.length && !q.shipped_at
         ? `<div style="color:#6b7280;font-size:11.5px;margin-top:3px">${
             sched.isLocal ? 'ready for delivery by' : sched.isPickup ? 'ready for pickup by' : 'must ship by'} ${dayShort(sched.ship_by)}${
-            q.blanks_ordered_at ? '' : ` · order blanks by ${dayShort(sched.blanks_order_by)}`}</div>`
+            q.blanks_ordered_at ? '' : sched.ownBlanks ? ` · customer's blanks in by ${dayShort(sched.blanks_in_by)}`
+              : ` · order blanks by ${dayShort(sched.blanks_order_by)}`}</div>`
         : '';
       return `<tr>
         <td style="padding:8px 0;border-bottom:1px solid #eef1f6">
