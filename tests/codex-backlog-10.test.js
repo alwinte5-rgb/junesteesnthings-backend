@@ -11,7 +11,8 @@ test('#161 the designer has a queue for jobs waiting on the customer, and the SO
   assert.match(q, /a\.status = 'needs_info' OR \(q\.proof_sent_at IS NOT NULL AND q\.proof_ok_at IS NULL\)/);
   assert.match(q, /ORDER BY q\.needed_by NULLS LAST/);
   assert.match(q, /return \{ todo, questions, approve, customer \}/);
-  assert.match(src, /art\.customer\.length \? section\(`Waiting on the customer \(\$\{art\.customer\.length\}\)`/);
+  assert.match(src, /title: `Waiting on the customer \(\$\{art\.customer\.length\}\)`, n: art\.customer\.length,/,
+    'My Day shows the queue whenever it has a job in it');
   assert.match(src, /- Each morning, check Waiting on the customer on My Day/);
   assert.match(src, /KB_ADDED\.find\(\(x\) => x\.title === 'Chasing late artwork and approvals'\)/, 'the live SOP is brought up to date');
 });

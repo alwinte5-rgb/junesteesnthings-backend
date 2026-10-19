@@ -103,6 +103,7 @@ const TRAINING = require('./tools/lib/training');
 const QEXAM = require('./tools/lib/quote-exam');
 const RUSH = require('./tools/lib/rush');
 const CHAN = require('./tools/lib/team-channels');
+const MB = require('./tools/lib/mailbox');
 const { NEXT_PRESET, CHANNEL_TRACKS, TRACKS: JOB_TRACKS } = require('./tools/lib/tracks');
 const CHATFILES = require('./tools/lib/team-chat-files');
 const JOBNOTES = require('./tools/lib/job-notes');
@@ -112,6 +113,7 @@ const HIRE_POSTING = require('./tools/lib/hiring-posting');
 const PROOFS = require('./tools/lib/job-proofs');
 const ART = require('./tools/lib/art-pipeline');
 const WELCOME = require('./tools/lib/staff-welcome');
+const AGREEMENT = require('./tools/lib/staff-agreement');
 const MSGFILES = require('./tools/lib/message-files');
 const SHARELOGIN = require('./tools/lib/shared-logins');
 const GOOGLE_ADS = require('./tools/lib/google-ads').createClient();
@@ -1261,6 +1263,23 @@ async function initStaffTables() {
      with written OK for the table). sealed is NULL once opened, cancelled or
      expired; the row stays as the record of who was sent what, and when. */
   await pool.query(`CREATE INDEX IF NOT EXISTS shared_logins_staff_idx ON shared_logins (staff_id, created_at DESC)`);
+  /* The staff agreement each helper signs before the workspace opens for
+     them (tools/lib/staff-agreement.js; owner, 2026-10-16). One row per
+     helper per wording; text_sha256 is the wording they were shown. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_agreements (
+      id           SERIAL PRIMARY KEY,
+      staff_id     INTEGER NOT NULL,
+      version      TEXT NOT NULL,
+      text_sha256  TEXT NOT NULL,
+      wording      TEXT NOT NULL,
+      signed_name  TEXT NOT NULL,
+      location     TEXT NOT NULL,
+      ip           TEXT,
+      user_agent   TEXT,
+      signed_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (staff_id, version)
+    )`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS staff_resources (
       id          SERIAL PRIMARY KEY,
@@ -1397,6 +1416,52 @@ async function initStaffTables() {
     CREATE TABLE IF NOT EXISTS team_chat_prefs (
       reader        TEXT PRIMARY KEY,
       email_alerts  BOOLEAN NOT NULL DEFAULT TRUE
+    )`);
+  /* The Mailbox (tools/lib/mailbox.js): conversations about one order or one
+     task, beside Team chat. Readers are 'owner' or 'staff:<id>', as in chat.
+     Nothing here is ever deleted; Done is a status, and a reply reopens it. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mail_threads (
+      id               SERIAL PRIMARY KEY,
+      subject          TEXT NOT NULL,
+      quote_code       TEXT,
+      task_id          INTEGER,
+      created_by       TEXT NOT NULL,
+      status           TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'done')),
+      done_at          TIMESTAMPTZ,
+      done_by          TEXT,
+      last_message_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query('CREATE INDEX IF NOT EXISTS mail_threads_status_idx ON mail_threads (status, last_message_at DESC)');
+  await pool.query('CREATE INDEX IF NOT EXISTS mail_threads_quote_idx ON mail_threads (quote_code) WHERE quote_code IS NOT NULL');
+  await pool.query('CREATE INDEX IF NOT EXISTS mail_threads_task_idx ON mail_threads (task_id) WHERE task_id IS NOT NULL');
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mail_participants (
+      thread_id  INTEGER NOT NULL,
+      reader     TEXT NOT NULL,
+      PRIMARY KEY (thread_id, reader)
+    )`);
+  await pool.query('CREATE INDEX IF NOT EXISTS mail_participants_reader_idx ON mail_participants (reader)');
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mail_messages (
+      id             BIGSERIAL PRIMARY KEY,
+      thread_id      INTEGER NOT NULL,
+      author         TEXT NOT NULL,
+      body           TEXT NOT NULL,
+      file_url       TEXT,
+      file_name      TEXT,
+      edited_at      TIMESTAMPTZ,
+      original_body  TEXT,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query('CREATE INDEX IF NOT EXISTS mail_messages_thread_idx ON mail_messages (thread_id, id)');
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mail_seen (
+      message_id  BIGINT NOT NULL,
+      reader      TEXT NOT NULL,
+      seen_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (message_id, reader)
     )`);
   /* The two channels the team starts with, made once. */
   await pool.query(`INSERT INTO team_channels (name, audience)
@@ -3302,8 +3367,9 @@ async function staffByEmail(email) {
                        WHERE t.staff_id = s.id AND (t.step_key LIKE 'tip:%' OR t.step_key LIKE 'signoff:%ready')), '{}') AS flags,
             EXISTS (SELECT 1 FROM staff_training t WHERE t.staff_id = s.id AND t.step_key = $2
                      AND t.done_at < $3::timestamptz) AS legacy_ready,
-            (SELECT started_at FROM staff_shifts h WHERE h.staff_id = s.id AND h.ended_at IS NULL LIMIT 1) AS on_clock
-       FROM staff s WHERE lower(s.email) = $1`, [email, TRAINING.READY_KEY, TRAINING.LEGACY_READY_BEFORE]);
+            (SELECT started_at FROM staff_shifts h WHERE h.staff_id = s.id AND h.ended_at IS NULL LIMIT 1) AS on_clock,
+            EXISTS (SELECT 1 FROM staff_agreements a WHERE a.staff_id = s.id AND a.version = $4) AS agreement_signed
+       FROM staff s WHERE lower(s.email) = $1`, [email, TRAINING.READY_KEY, TRAINING.LEGACY_READY_BEFORE, AGREEMENT.VERSION]);
   const s = rows[0];
   if (!s || !s.active) return null;
   pool.query(`UPDATE staff SET last_seen_at = NOW()
@@ -3316,7 +3382,8 @@ async function staffByEmail(email) {
            role: TRAINING.salesRoleOf(s.sales_role),
            tipsOff: new Set(flags.filter((f) => f.startsWith('tip:')).map((f) => f.slice(4))),
            timeZone: s.time_zone ? SHIFTS.staffZoneOf(s.time_zone) : null,
-           onClock: s.on_clock || null };
+           onClock: s.on_clock || null,
+           agreementSigned: Boolean(s.agreement_signed) };
 }
 
 /** May the signed-in person do this? For handlers that act differently by level. */
@@ -3655,6 +3722,14 @@ async function requireAdmin(req, res, next) {
   staff.path = req.originalUrl;
   noteStaffIp(staff.id, clientIp(req));
   if (isPersonActivity(req)) notePing(staff.id);
+  /* Nothing opens until the staff agreement is signed: no passwords, no
+     artwork, no customers (owner, 2026-10-16). Only the agreement itself. */
+  if (!staff.agreementSigned && !AGREEMENT_ROUTES.has(STAFF.routeKey(req.method, req.route && req.route.path))) {
+    /* A page, or a form posted from a page left open, goes to the agreement
+       (303: a form's POST becomes a GET there); a script gets the reason. */
+    if (wantsHtml(req) || /text\/html/.test(String(req.headers.accept || ''))) return res.redirect(303, '/admin/agreement');
+    return res.status(403).json({ error: 'Sign the staff agreement first: open /admin/agreement' });
+  }
   if (!STAFF.mayUseRoute(staff, req.method, req.route && req.route.path)) {
     /* One exception: the job page of an order the owner tagged for this
        helper in Team chat (ownerTaggedFor). Viewing only; every control on it
@@ -10503,6 +10578,7 @@ const ADMIN_NAV = [
   { key: 'partners',   href: '/admin/partners',      label: 'Partners',   icon: 'users', when: () => PARTNERS.on() },
   { key: 'calendar',   href: '/admin/marketing-calendar', label: 'Marketing calendar', icon: 'clock' },
   { key: 'campaign',   href: '/admin/campaign',      label: 'Reintro campaign', icon: 'mail' },
+  { key: 'mailbox',    href: '/admin/mailbox',       label: 'Mailbox',    icon: 'mail',   badge: 'mail' },
   { key: 'chat',       href: '/admin/team-chat',     label: 'Team chat',  icon: 'chat',   badge: 'chat' },
   { key: 'playbook',   href: '/admin/playbook',      label: 'Playbook',   icon: 'book' },
   { key: 'resources',  href: '/admin/resources',     label: 'Resources',  icon: 'key' },
@@ -10515,6 +10591,7 @@ const ADMIN_NAV = [
   { key: 'staff',      href: '/admin/staff',         label: 'Staff and permissions', icon: 'key' },
   { key: 'timeclock',  href: '/admin/timeclock', label: 'Hours',      icon: 'clock' },
   { key: 'workschedule', href: '/admin/work-schedule', label: 'Work schedule', icon: 'clock', ownerOnly: true },
+  { key: 'agreement',  href: '/admin/agreement',     label: 'Agreements', icon: 'file',   ownerOnly: true },
 ];
 /* The menu's sections (owner, 2026-10-18: "too many tabs ... most of these can
    become one. I just don't wanna lose them"). Twenty-eight entries became eight
@@ -10527,12 +10604,12 @@ const ADMIN_NAV = [
    tests/admin-nav-sections.test.js fails when a page or an entry has no home. */
 const ADMIN_SECTIONS = [
   { key: 'mine',      label: 'My work',   icon: 'check',  items: ['myday', 'design', 'schedule', 'earnings', 'mystats', 'clock', 'myschedule'] },
-  { key: 'today',     label: 'Today',     icon: 'grid',   items: ['dashboard', 'tasks'] },
+  { key: 'today',     label: 'Today',     icon: 'grid',   items: ['dashboard', 'tasks', 'mailbox', 'chat'] },
   { key: 'sales',     label: 'Sales',     icon: 'inbox',  items: ['leads', 'quotes', 'customers'] },
   { key: 'jobs',      label: 'Jobs',      icon: 'layers', items: ['production', 'orders', 'shipping', 'delivery', 'deliveryset'] },
   { key: 'marketing', label: 'Marketing', icon: 'star',   items: ['reviews', 'discounts', 'partners', 'calendar', 'campaign'] },
   { key: 'money',     label: 'Money',     icon: 'dollar', items: ['money', 'certificates', 'exports', 'pay'] },
-  { key: 'team',      label: 'Team',      icon: 'team',   items: ['chat', 'team', 'approvals', 'activity', 'timeclock', 'workschedule', 'staff', 'hiring'] },
+  { key: 'team',      label: 'Team',      icon: 'team',   items: ['team', 'approvals', 'activity', 'timeclock', 'workschedule', 'staff', 'agreement', 'hiring'] },
   { key: 'learn',     label: 'Knowledge', icon: 'book',   items: ['playbook', 'resources', 'training', 'paths'] },
 ];
 /* Ordered the way a shop is actually worked, not the way the routes grew: what
@@ -22795,6 +22872,8 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
     const artCard = await jobArtCard(q, req.query).catch((e) => { console.error('art card failed:', e.message); return ''; });
     const teamNotesCard = await teamJobNotesCard(q, `/admin/production/${q.code}#team-notes`)
       .catch((e) => { console.error('team notes card failed:', e.message); return ''; });
+    const mailCard = await mailOrderCard(q.code, currentActor() || OWNER_ACTOR)
+      .catch((e) => { console.error('mailbox card failed:', e.message); return ''; });
     const certificateCard = boards ? await jobCertificateCard(q, req.query) : '';
     const photosCard = jobPhotosCard(q);
     const brandCard = await jobBrandFilesCard(q).catch((e) => { console.error('brand files card failed:', e.message); return ''; });
@@ -22917,6 +22996,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
       ${certificateCard}
       ${artCard}
       ${teamNotesCard}
+      ${mailCard}
       ${proofsCard}
       ${messagesCard}
       ${creditCard}
@@ -23722,6 +23802,11 @@ async function ownerTaggedCodes(codes, actor) {
   const { rows: dms } = await pool.query(
     'SELECT DISTINCT quote_code FROM team_messages WHERE staff_id = $1 AND from_owner AND quote_code = ANY($2)', [actor.id, live]);
   for (const r of dms) out.add(r.quote_code);
+  /* A mailbox conversation the owner started about the order, with this helper in it. */
+  const { rows: mails } = await pool.query(
+    `SELECT DISTINCT t.quote_code FROM mail_threads t JOIN mail_participants p ON p.thread_id = t.id
+      WHERE p.reader = $1 AND t.created_by = 'owner' AND t.quote_code = ANY($2)`, [`staff:${actor.id}`, live]);
+  for (const r of mails) out.add(r.quote_code);
   const rest = live.filter((c) => !out.has(c));
   if (!rest.length) return out;
   const { rows: chans } = await pool.query(
@@ -25733,10 +25818,11 @@ const REVIEWS_WAITING_SQL = `SELECT COUNT(*)::int AS n FROM reviews
    costs a badge rather than the lot. */
 app.get('/admin/nav-counts', requireAdmin, async (_req, res) => {
   res.set('Cache-Control', 'no-store');
-  const out = { leads: 0, reviews: 0, late: 0, certificates: 0, approvals: 0, chat: 0, design: 0, jobnotes: 0, pinned: 0 };
+  const out = { leads: 0, reviews: 0, late: 0, certificates: 0, approvals: 0, chat: 0, mail: 0, design: 0, jobnotes: 0, pinned: 0 };
   const me = currentActor() || OWNER_ACTOR;
   await Promise.all([
     teamChatUnread().then((n) => { out.chat = n; }).catch(() => {}),
+    mailUnreadCount(me).then((n) => { out.mail = n; }).catch(() => {}),
     unansweredLeads().then((l) => { out.leads = l.length; }).catch(() => {}),
     pool.query(REVIEWS_WAITING_SQL).then(({ rows }) => { out.reviews = rows[0].n; }).catch(() => {}),
     pool.query(CERTS_WAITING_SQL).then(({ rows }) => { out.certificates = rows[0].n; }).catch(() => {}),
@@ -26050,6 +26136,8 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
     .catch((e) => { console.error('dashboard: task form failed:', e.message); return ''; });
   const notesPin = await jobNotesPinCard(currentActor() || OWNER_ACTOR, '/admin/dashboard')
     .catch((e) => { console.error('dashboard: job notes failed:', e.message); return ''; });
+  const mail = await mailDashboard(currentActor() || OWNER_ACTOR)
+    .catch((e) => { console.error('dashboard mailbox failed:', e.message); return null; });
   res.send(adminPage('Dashboard', `
     ${pageHeader(hello + ', ' + SHOP_SIGNER, escEmail(today),
       '<a class="btn" href="/admin/quote/new">New quote</a><a class="btn btn-ghost" href="/admin/production">Production</a>')}
@@ -26107,6 +26195,10 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
         <details style="margin-top:10px"><summary><b>Add a task</b> <span class="muted">with the details, files and an order</span></summary>
           ${addTaskForm}</details>
       </div>${TASK_CSS}${TASK_UPLOAD_JS}
+      ${mail ? `<div class="card" id="mailbox">
+        <h2 class="card-title">Mailbox <span class="muted">${mail.unread ? `${mail.unread} with something new` : mail.open ? `${mail.open} open` : ''}</span> <a href="/admin/mailbox">all conversations &rarr;</a></h2>
+        ${mail.rows ? `<div class="rows">${mail.rows}</div>` : emptyState('No open conversations. Mark one Done and it leaves here.', '<a class="btn btn-ghost" href="/admin/mailbox/new">New conversation</a>')}
+      </div>` : ''}
       <div class="card">
         <h2 class="card-title">Latest leads <a href="/admin/leads?status=all">all leads &rarr;</a></h2>
         ${leads.length ? `<div class="rows">${leads.slice(0, 5).map((l) => {
@@ -30176,10 +30268,13 @@ async function staffRoster({ activeOnly = false } = {}) {
   return rows;
 }
 /** A roster for a list on screen: archived helpers left out (owner,
- *  2026-10-15: "keep the info in the backend but not visible"), except the
- *  one person the page is already about (`keep`). */
-function listedStaff(roster, keep = null) {
-  return roster.filter((r) => !r.archived_at || (keep != null && r.id === keep));
+ *  2026-10-15: "keep the info in the backend but not visible"), and disabled
+ *  ones too (owner, 2026-10-18: "remove disabled employees"), except the one
+ *  person the page is already about (`keep`). `withDisabled` keeps disabled
+ *  helpers who are not archived yet, for the pages where they are settled up:
+ *  Staff, and Pay while money is still owed to them. */
+function listedStaff(roster, keep = null, { withDisabled = false } = {}) {
+  return roster.filter((r) => (!r.archived_at && (r.active || withDisabled)) || (keep != null && r.id === keep));
 }
 function nameOf(roster, id) {
   if (id == null) return 'Owner';
@@ -30286,13 +30381,79 @@ function cloudflareStepCard(name, email) {
   </div>`;
 }
 
+/** What still ties a disabled helper to the shop: hours, pay, bonuses or
+ *  commission owed, a shift running, open tasks or design jobs. Archiving must
+ *  never hide any of these, so nothing is archived while the list is not empty. */
+async function helperOutstanding(id) {
+  const [{ rows: [hrs] }, { rows: [clock] }, { rows: [bonus] }, { rows: [tasks] }, { rows: [art] }, lines] = await Promise.all([
+    pool.query('SELECT COALESCE(SUM(hours), 0)::float AS h FROM staff_hours WHERE staff_id = $1 AND paid_at IS NULL', [id]),
+    /* Clocked weeks not yet approved (no staff_hours row), or a shift still running. */
+    pool.query(`SELECT COUNT(*) FILTER (WHERE ended_at IS NULL)::int AS running,
+                       COUNT(DISTINCT date_trunc('week', started_at AT TIME ZONE 'America/Chicago'))
+                         FILTER (WHERE ended_at IS NOT NULL AND NOT EXISTS (
+                           SELECT 1 FROM staff_hours h WHERE h.staff_id = sh.staff_id
+                             AND h.week_of = (date_trunc('week', sh.started_at AT TIME ZONE 'America/Chicago'))::date))::int AS unapproved
+                  FROM staff_shifts sh WHERE staff_id = $1`, [id]),
+    pool.query('SELECT COALESCE(SUM(amount), 0)::float AS a FROM staff_bonuses WHERE staff_id = $1 AND paid_at IS NULL', [id]),
+    pool.query('SELECT COUNT(*)::int AS n FROM staff_tasks WHERE assigned_to = $1 AND done_at IS NULL', [id]),
+    pool.query(`SELECT COUNT(*)::int AS n FROM art_requests WHERE assigned_to = $1 AND status <> 'approved'`, [id]),
+    (async () => { const { rows: [rates] } = await pool.query('SELECT commission_pct, shop_commission_pct FROM staff WHERE id = $1', [id]);
+      return commissionLines(id, rates); })(),
+  ]);
+  const owedCommission = lines.filter((l) => !['paid', 'wage only'].includes(l.state) && l.amount > 0);
+  return [
+    hrs.h > 0 ? `${hrs.h} approved hours not yet paid (pay them on Team)` : '',
+    clock.running ? 'a shift still running (end it on Hours)' : '',
+    clock.unapproved ? `${clock.unapproved} clocked week${clock.unapproved === 1 ? '' : 's'} not yet approved (approve or adjust on Hours)` : '',
+    bonus.a > 0 ? `${money(bonus.a)} in bonuses not yet paid` : '',
+    owedCommission.length ? `commission on ${owedCommission.length} sale${owedCommission.length === 1 ? '' : 's'} not yet paid (see their Pay page)` : '',
+    tasks.n ? `${tasks.n} open task${tasks.n === 1 ? '' : 's'} (reassign or close them on Tasks)` : '',
+    art.n ? `${art.n} design job${art.n === 1 ? '' : 's'} assigned to them` : '',
+  ].filter(Boolean);
+}
+
+/** Archive a disabled helper, with the checks repeated in the write so work
+ *  added in between stops it. Returns the number of rows archived (0 or 1). */
+async function archiveHelper(id) {
+  const { rowCount } = await pool.query(
+    `UPDATE staff SET archived_at = NOW(), active = FALSE
+      WHERE id = $1 AND archived_at IS NULL AND NOT active
+        AND NOT EXISTS (SELECT 1 FROM staff_hours WHERE staff_id = $1 AND paid_at IS NULL)
+        AND NOT EXISTS (SELECT 1 FROM staff_tasks WHERE assigned_to = $1 AND done_at IS NULL)
+        AND NOT EXISTS (SELECT 1 FROM staff_shifts WHERE staff_id = $1 AND ended_at IS NULL)`, [id]);
+  return rowCount;
+}
+
+/* Disabled helpers off every list (owner, 2026-10-18: "remove disabled
+   employees"). Disabling now archives at once when nothing is owed or open;
+   this catches the ones disabled before that, and those whose last debt has
+   since been paid. A helper the owner restored by hand is left alone. */
+async function archiveSettledHelpers() {
+  const { rows } = await pool.query(
+    `SELECT id, name FROM staff s WHERE NOT active AND archived_at IS NULL
+        /* A Restore by hand holds until the helper is disabled again. */
+        AND NOT EXISTS (SELECT 1 FROM staff_activity a WHERE a.action = 'helper restored'
+                          AND a.subject_type = 'staff' AND a.subject_id = s.id::text
+                          AND a.created_at > COALESCE((SELECT MAX(d.created_at) FROM staff_activity d
+                            WHERE d.action = 'helper disabled' AND d.subject_type = 'staff' AND d.subject_id = s.id::text), '-infinity'))`);
+  for (const h of rows) {
+    try {
+      if ((await helperOutstanding(h.id)).length) continue;
+      if (await archiveHelper(h.id)) {
+        logActivity(null, 'helper archived', { type: 'staff', id: h.id }, { name: h.name, auto: true });
+      }
+    } catch (e) { console.error(`archiving settled helper ${h.id}:`, e.message); }
+  }
+  return rows.length;
+}
+
 async function renderStaffPage(req, res, extra = '') {
   const everyone = await staffRoster();
-  const roster = listedStaff(everyone);
+  const roster = listedStaff(everyone, null, { withDisabled: true });
   const archived = everyone.filter((s) => s.archived_at);
   const showArchived = String((req.query || {}).archived || '') === '1';
   const tabs = filterChips([
-    { label: 'Team', href: '/admin/staff', on: !showArchived, count: roster.length || null },
+    { label: 'Team', href: '/admin/staff', on: !showArchived, count: roster.filter((s) => s.active).length || null },
     { label: 'Archived', href: '/admin/staff?archived=1', on: showArchived, count: archived.length || null },
   ]);
   if (showArchived) {
@@ -30311,17 +30472,22 @@ async function renderStaffPage(req, res, extra = '') {
           <input type="hidden" name="action" value="unarchive"><button type="submit" class="btn btn-ghost">Restore</button></form></span></div>`).join('')
         : emptyState('Nobody is archived. Disable a helper on the Team tab, then Archive them.')}</div>${SHIP_ONCE_JS}`, 'staff'));
   }
+  /* Signed the current staff agreement, and when (/admin/agreement). */
+  const signed = new Map((await pool.query('SELECT staff_id, signed_at FROM staff_agreements WHERE version = $1', [AGREEMENT.VERSION])
+    .catch((e) => { console.error('staff agreements lookup failed:', e.message); return { rows: null }; })).rows?.map((r) => [r.staff_id, r.signed_at]) || []);
   /* Active helpers only: a disabled helper has nothing left to do here. */
   const training = new Map(await Promise.all(roster.filter((s) => s.active).map((s) => staffTrainingSummary(s.id)
     .then((t) => [s.id, t]).catch((e) => { console.error('staff training summary failed:', e.message); return [s.id, null]; }))));
   /* A hire arriving from Hiring (?add_track=) starts on their path's preset. */
   const addPreset = STAFF.presetForTrack(TRAINING.trackOf((req.query || {}).add_track));
   const presetOptions = Object.entries(STAFF.PRESETS).map(([k, p]) => `<option value="${k}"${k === addPreset ? ' selected' : ''}>${escEmail(p.label)}</option>`).join('');
-  const cards = roster.map((s) => {
+  const card = (s) => {
     const preset = STAFF.presetMatching(s.perms);
     return `<div class="card" id="staff-${s.id}">
       <div class="row-i"><span class="row-main"><b>${escEmail(s.name)}</b>
-        <div class="row-sub">${escEmail(s.email)} &middot; last seen ${escEmail(whenShort(s.last_seen_at))}</div></span>
+        <div class="row-sub">${escEmail(s.email)} &middot; last seen ${escEmail(whenShort(s.last_seen_at))}</div>
+        <div class="row-sub">${signed.has(s.id) ? `Staff agreement signed ${escEmail(whenShort(signed.get(s.id)))} &middot; <a href="/admin/agreement/${s.id}">signed copy</a>`
+          : '<b style="color:#b91c1c">Staff agreement not signed yet</b>: they sign it the first time they sign in, before anything else opens.'}</div></span>
         <span class="row-end">${s.active ? pill(preset ? STAFF.PRESETS[preset].label : 'Custom', 'blue') : pill('Disabled', 'red')}</span></div>
       ${s.active ? staffTrainingBlock(s, training.get(s.id)) : ''}
       <div class="row" style="margin-top:10px;gap:6px;flex-wrap:wrap">
@@ -30378,14 +30544,22 @@ async function renderStaffPage(req, res, extra = '') {
         </form>
       </details>` : ''}
     </div>`;
-  }).join('');
+  };
+  /* Working helpers on the page; disabled ones still being settled fold away
+     below with what is holding them, so they are out of the way but nothing
+     owed to them is hidden. */
+  const settling = roster.filter((s) => !s.active);
+  const left = new Map(await Promise.all(settling.map((s) => helperOutstanding(s.id)
+    .then((l) => [s.id, l]).catch((e) => { console.error('helper outstanding failed:', e.message); return [s.id, []]; }))));
+  const cards = roster.filter((s) => s.active).map(card).join('');
   res.send(adminPage('Staff', `
     ${pageHeader('Staff', 'Each helper signs in through Cloudflare with their own email. Switch what they can do at any time; it applies on their next click.')}
     ${tabs}
     ${flash(req.query)}${extra}
     ${cfAccess ? '' : `<div class="warn">Sign-in is switched off until CF_ACCESS_TEAM_DOMAIN, CF_ACCESS_AUD and OWNER_EMAILS
       are set on the backend service in Railway.</div>`}
-    <div class="card" id="add"><b>Add a helper</b>
+    <details class="fold" id="add"${(req.query || {}).add_track || (req.query || {}).add_name || (req.query || {}).err || !roster.some((s) => s.active) ? ' open' : ''}>
+      <summary>Add a helper <span class="muted fold-hint">name, email, starting permissions and pay</span></summary><div class="fold-body">
       <form method="post" action="/admin/staff" class="row" data-once style="gap:8px;flex-wrap:wrap;margin-top:8px">
         <input name="name" placeholder="Name" required maxlength="80" value="${escEmail(text((req.query || {}).add_name, 80))}">
         <input name="email" type="email" placeholder="Their email (what they sign in with)" required maxlength="254">
@@ -30401,8 +30575,15 @@ async function renderStaffPage(req, res, extra = '') {
       <p class="muted" style="margin-top:8px">${Object.values(STAFF.PRESETS).map((p) =>
         `<b>${escEmail(p.label)}</b>: ${escEmail(p.note)}`).join('<br>')}<br>Training paths: ${Object.values(TRAINING.TRACKS).map((t) =>
         `<b>${escEmail(t.label)}</b> (${escEmail(t.note)})`).join(', ')}</p>
-    </div>
-    ${cards || emptyState('No helpers yet.')}${SHIP_ONCE_JS}`, 'staff'));
+    </div></details>
+    <script>if(location.hash==='#add'){var d=document.getElementById('add');if(d)d.open=true;}</script>
+    ${cards || emptyState('No helpers yet.')}${settling.length ? `
+    <details class="fold"><summary>Disabled, still settling up <span class="n">${settling.length}</span>
+      <span class="muted fold-hint">They cannot sign in and are off every other list. Each is archived once nothing is owed or open, unless you restored them by hand.</span></summary>
+      <div class="fold-body">${settling.map((s) => `${(left.get(s.id) || []).length
+        ? `<div class="warn" style="margin:0 0 6px">${escEmail(s.name)} still has ${escEmail(left.get(s.id).join('; '))}.
+          <a href="/admin/timeclock?staff=${s.id}">Their hours</a> &middot; <a href="/admin/commission?staff=${s.id}">Their pay</a> &middot; <a href="/admin/tasks">Tasks</a></div>` : ''}${card(s)}`).join('')}</div>
+    </details>` : ''}${SHIP_ONCE_JS}`, 'staff'));
 }
 
 app.get('/admin/staff', requireAdmin, async (req, res) => {
@@ -30473,7 +30654,17 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
         /* Every request looks the helper up, so this locks them out on their next click.
            Remove them from the Cloudflare policy too. */
         await pool.query('UPDATE staff SET active = FALSE WHERE id = $1', [id]);
-        return back(res, '/admin/staff', 'ok', `${s.name} is disabled. Also remove ${s.email} from the Cloudflare policy.`);
+        logActivity(currentActor(), 'helper disabled', { type: 'staff', id }, { name: s.name });
+        {
+          /* Off every list straight away when nothing is owed or open; otherwise
+             they stay on Staff and Pay until it is settled. */
+          const left = await helperOutstanding(id).catch((e) => { console.error('helper outstanding failed:', e.message); return ['an unchecked balance']; });
+          if (!left.length && await archiveHelper(id)) {
+            logActivity(currentActor(), 'helper archived', { type: 'staff', id }, { name: s.name, onDisable: true });
+            return back(res, '/admin/staff', 'ok', `${s.name} is disabled and archived: off every list, records kept. Also remove ${s.email} from the Cloudflare policy.`);
+          }
+          return back(res, '/admin/staff', 'ok', `${s.name} is disabled and off every list except Staff and Pay, because they still have ${left.join('; ')}. They are archived once that is settled. Also remove ${s.email} from the Cloudflare policy.`);
+        }
       case 'welcome': {
         if (!s.active) return back(res, `/admin/staff#staff-${id}`, 'err', `${s.name} is disabled. Enable them before sending a welcome.`);
         const w = WELCOME.detailsFromForm(b, Number(s.hourly_rate || 0));
@@ -30486,39 +30677,9 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
            hide wages or commission to pay, or work in hand. */
         if (s.archived_at) return back(res, '/admin/staff?archived=1', 'ok', `${s.name} is already archived.`);
         if (s.active) return back(res, `/admin/staff#staff-${id}`, 'err', `Disable ${s.name} before archiving them.`);
-        const [{ rows: [hrs] }, { rows: [clock] }, { rows: [bonus] }, { rows: [tasks] }, { rows: [art] }, lines] = await Promise.all([
-          pool.query('SELECT COALESCE(SUM(hours), 0)::float AS h FROM staff_hours WHERE staff_id = $1 AND paid_at IS NULL', [id]),
-          /* Clocked weeks not yet approved (no staff_hours row), or a shift still running. */
-          pool.query(`SELECT COUNT(*) FILTER (WHERE ended_at IS NULL)::int AS running,
-                             COUNT(DISTINCT date_trunc('week', started_at AT TIME ZONE 'America/Chicago'))
-                               FILTER (WHERE ended_at IS NOT NULL AND NOT EXISTS (
-                                 SELECT 1 FROM staff_hours h WHERE h.staff_id = sh.staff_id
-                                   AND h.week_of = (date_trunc('week', sh.started_at AT TIME ZONE 'America/Chicago'))::date))::int AS unapproved
-                        FROM staff_shifts sh WHERE staff_id = $1`, [id]),
-          pool.query('SELECT COALESCE(SUM(amount), 0)::float AS a FROM staff_bonuses WHERE staff_id = $1 AND paid_at IS NULL', [id]),
-          pool.query('SELECT COUNT(*)::int AS n FROM staff_tasks WHERE assigned_to = $1 AND done_at IS NULL', [id]),
-          pool.query(`SELECT COUNT(*)::int AS n FROM art_requests WHERE assigned_to = $1 AND status <> 'approved'`, [id]),
-          (async () => { const { rows: [rates] } = await pool.query('SELECT commission_pct, shop_commission_pct FROM staff WHERE id = $1', [id]);
-            return commissionLines(id, rates); })(),
-        ]);
-        const owedCommission = lines.filter((l) => !['paid', 'wage only'].includes(l.state) && l.amount > 0);
-        const left = [
-          hrs.h > 0 ? `${hrs.h} approved hours not yet paid (pay them on Team)` : '',
-          clock.running ? 'a shift still running (end it on Hours)' : '',
-          clock.unapproved ? `${clock.unapproved} clocked week${clock.unapproved === 1 ? '' : 's'} not yet approved (approve or adjust on Hours)` : '',
-          bonus.a > 0 ? `${money(bonus.a)} in bonuses not yet paid` : '',
-          owedCommission.length ? `commission on ${owedCommission.length} sale${owedCommission.length === 1 ? '' : 's'} not yet paid (see their Pay page)` : '',
-          tasks.n ? `${tasks.n} open task${tasks.n === 1 ? '' : 's'} (reassign or close them on Tasks)` : '',
-          art.n ? `${art.n} design job${art.n === 1 ? '' : 's'} assigned to them` : '',
-        ].filter(Boolean);
+        const left = await helperOutstanding(id);
         if (left.length) return back(res, `/admin/staff#staff-${id}`, 'err', `Not archived: ${s.name} still has ${left.join('; ')}.`);
-        /* The checks repeated in the write, so work added in between stops it. */
-        const { rowCount } = await pool.query(
-          `UPDATE staff SET archived_at = NOW(), active = FALSE
-            WHERE id = $1 AND archived_at IS NULL AND NOT active
-              AND NOT EXISTS (SELECT 1 FROM staff_hours WHERE staff_id = $1 AND paid_at IS NULL)
-              AND NOT EXISTS (SELECT 1 FROM staff_tasks WHERE assigned_to = $1 AND done_at IS NULL)
-              AND NOT EXISTS (SELECT 1 FROM staff_shifts WHERE staff_id = $1 AND ended_at IS NULL)`, [id]);
+        const rowCount = await archiveHelper(id);
         if (!rowCount) return back(res, `/admin/staff#staff-${id}`, 'err', `${s.name} changed while archiving; nothing was archived. Try again.`);
         logActivity(currentActor(), 'helper archived', { type: 'staff', id }, { name: s.name });
         return back(res, '/admin/staff?archived=1', 'ok', `${s.name} is archived: off every list, records kept.`);
@@ -30527,7 +30688,7 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
         const { rowCount } = await pool.query('UPDATE staff SET archived_at = NULL WHERE id = $1 AND archived_at IS NOT NULL', [id]);
         if (!rowCount) return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is not archived.`);
         logActivity(currentActor(), 'helper restored', { type: 'staff', id }, { name: s.name });
-        return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is back on the Team tab, still disabled. Enable them if they are coming back.`);
+        return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is back on Staff under Disabled, kept there until you enable them or archive them again.`);
       }
       case 'enable':
         if (s.archived_at) return back(res, '/admin/staff?archived=1', 'err', `Restore ${s.name} from Archived first.`);
@@ -30987,7 +31148,7 @@ app.get('/admin/activity', requireAdmin, async (req, res) => {
       ${pageHeader('Activity', 'Every change made in the back office, and who made it. Page views are not recorded.')}
       ${filterChips([{ label: 'Everyone', href: link({ who: 'all' }), on: who === 'all' },
                      { label: 'Owner', href: link({ who: 'owner' }), on: who === 'owner' },
-                     ...listedStaff(roster, Number(who)).map((s) => ({ label: s.name, href: link({ who: String(s.id) }), on: who === String(s.id) }))])}
+                     ...listedStaff(roster, Number(who), { withDisabled: true }).map((s) => ({ label: s.name + (s.active ? '' : ' (disabled)'), href: link({ who: String(s.id) }), on: who === String(s.id) }))])}
       ${filterChips([1, 7, 30, 90].map((d) => ({ label: d === 1 ? 'Today' : `${d} days`, href: link({ days: String(d) }), on: days === d })))}
       <div class="card">${rows.length ? `<table class="dt" style="width:100%"><tbody>${rows.map((r) => `
         <tr><td class="muted" style="white-space:nowrap">${escEmail(whenShort(r.created_at))}</td>
@@ -31470,8 +31631,9 @@ app.get('/admin/timeclock', requireAdmin, async (req, res) => {
     const staffId = intIn(req.query.staff);
     /* Active helpers, plus the one asked for: someone disabled before their
        last week was approved can still be reviewed. */
-    const roster = everyone.filter((r) => (r.active && !r.archived_at) || r.id === staffId);
-    const chips = (id) => roster.map((r) => `<a class="btn ${r.id === id ? '' : 'btn-ghost'}" href="/admin/timeclock?staff=${r.id}&amp;week=${week}">${escEmail(r.name)}</a>`).join(' ');
+    /* Disabled helpers stay here until archived: their last weeks still need approving. */
+    const roster = listedStaff(everyone, staffId, { withDisabled: true });
+    const chips = (id) => roster.map((r) => `<a class="btn ${r.id === id ? '' : 'btn-ghost'}" href="/admin/timeclock?staff=${r.id}&amp;week=${week}">${escEmail(r.name)}${r.active ? '' : ' (disabled)'}</a>`).join(' ');
     const weekNav = (id) => `<a class="btn btn-ghost" href="/admin/timeclock?${id ? `staff=${id}&amp;` : ''}week=${weekShift(week, -7)}">&larr; Earlier</a>
       ${week < TEAM.weekOf(new Date()) ? `<a class="btn btn-ghost" href="/admin/timeclock?${id ? `staff=${id}&amp;` : ''}week=${weekShift(week, 7)}">Later &rarr;</a>` : ''}`;
     res.set('Cache-Control', 'no-store');
@@ -31770,7 +31932,7 @@ app.get('/admin/commission', requireAdmin, async (req, res) => {
     const roster = await staffRoster();
     /* An archived helper opens by id (their pay history, from Archived); the
        default is the first listed one. */
-    const s = roster.find((r) => r.id === intIn(req.query.staff)) || listedStaff(roster)[0];
+    const s = roster.find((r) => r.id === intIn(req.query.staff)) || listedStaff(roster, null, { withDisabled: true })[0];
     if (!s) return res.redirect('/admin/staff');
     const [e, incentives] = await Promise.all([earningsFor(s), incentivesFor(s.id, { includeEnded: true })]);
     const { pct, lines } = e;
@@ -31783,7 +31945,7 @@ app.get('/admin/commission', requireAdmin, async (req, res) => {
     res.send(adminPage('Commission', `
       ${pageHeader(`Pay — ${s.name}`, `${money(e.wages.rate)} an hour for the hours on the Team page. On their own leads, ${pct}% of the price as well: the job's total before sales tax, less any refund. Shop leads pay the wage only. Commission is payable ${TEAM.HOLD_DAYS} days after the job is paid in full.`)}
       ${flash(req.query)}
-      ${filterChips(listedStaff(roster, s.id).map((r) => ({ label: r.name, href: `/admin/commission?staff=${r.id}`, on: r.id === s.id })))}
+      ${filterChips(listedStaff(roster, s.id, { withDisabled: true }).map((r) => ({ label: r.name + (r.active ? '' : ' (disabled)'), href: `/admin/commission?staff=${r.id}`, on: r.id === s.id })))}
       ${commissionStartNote(e, true)}
       ${earningsTiles(e)}
       ${payNow > 0 ? `<form method="post" action="/admin/commission/pay" class="card">
@@ -33048,6 +33210,7 @@ function taskDetailsHtml(t, actor, roster) {
     ${t.how_to ? `<details style="margin-top:4px"><summary class="muted" style="cursor:pointer">How to do it</summary>
       <div style="white-space:pre-wrap;margin-top:4px;padding:8px 10px;background:#f7f8fb;border-radius:8px">${escEmail(t.how_to)}</div></details>` : ''}
     ${t.quote_code ? `<div class="row-sub">Order: <a href="${escEmail(jobLinkFor(actor, t.quote_code))}"><b>${escEmail(t.quote_code)}</b></a></div>` : ''}
+    <div class="row-sub"><a href="/admin/mailbox/new?task=${Number(t.id)}">Message about this task →</a></div>
     ${files.length ? `<div class="row-sub">${files.map((f) => `<a href="/admin/tasks/${Number(t.id)}/file/${f.n}">&#128206; ${escEmail(f.name || 'File')}</a>${
       f.by != null && f.by === t.assigned_to && t.done_at ? ' <span class="muted">(with the work)</span>' : ''}`).join(' &nbsp; ')}</div>` : ''}
     ${t.done_at && t.done_note ? `<div style="margin-top:4px;padding:6px 10px;background:#ecfdf5;border-radius:8px;white-space:pre-wrap"><b>What was done:</b> ${escEmail(t.done_note)}</div>` : ''}`;
@@ -33150,7 +33313,7 @@ app.get('/admin/tasks', requireAdmin, async (req, res) => {
     const todayIso = new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ });
     const row = (t) => {
       const due = t.due_on ? new Date(t.due_on).toISOString().slice(0, 10) : '';
-      return `<div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal"><b>${escEmail(t.title)}</b>
+      return `<div class="row-i" id="task-${Number(t.id)}" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal"><b>${escEmail(t.title)}</b>
         ${t.done_at ? pill('completed', 'green') : t.started_at ? pill('started', 'blue') : t.assigned_to != null ? pill('not started', 'amber') : ''}
         <div class="row-sub">${escEmail(BUSINESSES[t.business] || t.business)}${due ? ` &middot; due ${escEmail(fmtDate(t.due_on))}` : ''}${
           t.assigned_to != null ? ` &middot; ${escEmail(nameOf(roster, t.assigned_to))}` : ' &middot; anyone'}${
@@ -33255,6 +33418,126 @@ app.post('/admin/my-time-zone', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('time zone save failed:', err.message);
     return back(res, '/admin/my-day', 'err', 'Could not save that. Try again.');
+  }
+});
+
+/* ── Staff agreement (tools/lib/staff-agreement.js) ─────────────────────────
+   Every helper signs it before anything else opens (requireAdmin sends them
+   here). The owner sees who signed, and opens each signed copy to print. */
+/* Open before signing: the agreement, and ending a shift already running
+   (a helper clocked in when a new wording lands must still clock out). */
+const AGREEMENT_ROUTES = new Set(['GET /admin/agreement', 'POST /admin/agreement', 'POST /admin/clock/out', 'POST /admin/clock/ping']);
+const AGREEMENT_CSS = `.agreement h3{font-size:16px;margin:18px 0 6px}.agreement p{margin:0 0 8px;line-height:1.5}
+  .agreement ul,.agreement ol{margin:0 0 8px;padding-left:22px;line-height:1.5}
+  @media print{.adm-side,.adm-top,.adm-burger,.np{display:none!important}.adm-main{margin:0!important;padding:0!important}.card{box-shadow:none!important;border:0!important}}`;
+
+/** The signature under a signed copy: who, where, when, and which wording. */
+function agreementSignatureHtml(row, email) {
+  const when = new Date(row.signed_at).toLocaleString('en-US', { timeZone: SHOP_TZ, dateStyle: 'long', timeStyle: 'short' });
+  return `<div style="margin-top:18px;padding:12px 14px;border:1px solid #ccc;border-radius:10px">
+    <b>Signed electronically</b>
+    <div>${escEmail(row.signed_name)}${email ? ` (${escEmail(email)})` : ''}, ${escEmail(row.location)}</div>
+    <div class="muted" style="font-size:13px">${escEmail(when)} US Central &middot; wording of ${escEmail(row.version)}${
+      row.ip ? ` &middot; from ${escEmail(row.ip)}` : ''}</div>
+    <div class="muted" style="font-size:13px">For ${escEmail(AGREEMENT.COMPANY)}: accepted by its owner.</div></div>`;
+}
+
+app.get('/admin/agreement', requireAdmin, async (req, res) => {
+  const actor = currentActor();
+  try {
+    if (actor.kind === 'owner') {
+      const { rows } = await pool.query(
+        `SELECT s.id, s.name, s.email, s.active, a.signed_at,
+                EXISTS (SELECT 1 FROM staff_agreements o WHERE o.staff_id = s.id) AS any_signed
+           FROM staff s LEFT JOIN staff_agreements a ON a.staff_id = s.id AND a.version = $1
+          WHERE s.archived_at IS NULL ORDER BY s.active DESC, s.name`, [AGREEMENT.VERSION]);
+      const list = rows.length ? rows.map((r) => `<div class="row-i"><span class="row-main"><b>${escEmail(r.name)}</b>
+          <div class="row-sub">${escEmail(r.email)}${r.active ? '' : ' &middot; disabled'}</div></span>
+          <span class="row-end">${r.signed_at
+            ? `${pill('Signed ' + whenShort(r.signed_at), 'green')} <a class="btn btn-ghost" href="/admin/agreement/${r.id}">Signed copy</a>`
+            : `${pill(r.any_signed ? 'Not signed the new wording' : 'Not signed yet', 'red')}${r.any_signed
+              ? ` <a class="btn btn-ghost" href="/admin/agreement/${r.id}">Earlier copy</a>` : ''}`}</span></div>`).join('') : emptyState('Nobody on the team yet.');
+      return res.send(adminPage('Staff agreement', `<style>${AGREEMENT_CSS}</style>
+        ${pageHeader('Staff agreement', 'Every helper signs this the first time they sign in. Until they do, every other page sends them back here.',
+          '<a class="btn btn-ghost" href="/admin/staff">Staff</a>')}
+        ${flash(req.query)}
+        <div class="card np"><b>Who has signed</b>${list}</div>
+        <div class="card">${AGREEMENT.agreementHtml()}</div>`, 'agreement'));
+    }
+    const { rows: [mine] } = await pool.query(
+      'SELECT * FROM staff_agreements WHERE staff_id = $1 AND version = $2', [actor.id, AGREEMENT.VERSION]);
+    if (mine) {
+      return res.send(adminPage('Staff agreement', `<style>${AGREEMENT_CSS}</style>
+        ${pageHeader('Your staff agreement', 'Your signed copy. To keep one, use your browser\'s Print and choose Save as PDF.')}
+        ${flash(req.query)}
+        <div class="card">${AGREEMENT.agreementHtml(mine.wording)}${agreementSignatureHtml(mine, actor.email)}</div>`, ''));
+    }
+    /* Not signed: the page stands alone, with no menu, because every other
+       page would only send them back here. */
+    return res.send(htmlDocument('Staff agreement', `<div class="wrap" style="max-width:760px;margin:24px auto;padding:0 16px">
+      <div class="card"><h1 style="font-size:22px;margin-top:0">Welcome to June's Tees, ${escEmail(String(actor.name || '').split(' ')[0] || 'there')}</h1>
+        <p>Before you can use the workspace, please read and sign our staff agreement. It covers who owns the work you make, how to keep passwords and customer information safe, and what happens when the work ends.</p>
+        <p class="muted" style="font-size:13px">You only do this once. You can open your signed copy later from Resources.</p></div>
+      ${flash(req.query)}
+      <div class="card">${AGREEMENT.agreementHtml()}</div>
+      <div class="card" id="sign"><h2 style="margin-top:0">Sign</h2>
+        <form method="post" action="/admin/agreement" data-once>
+          <label style="display:block;margin-bottom:10px">Your full legal name
+            <input name="signed_name" required maxlength="100" autocomplete="name" style="width:100%"></label>
+          <label style="display:block;margin-bottom:10px">City and province you work from
+            <input name="location" required maxlength="100" placeholder="e.g. Quezon City, Metro Manila" style="width:100%"></label>
+          <label style="display:flex;gap:8px;align-items:flex-start;margin-bottom:12px"><input type="checkbox" name="agree" value="1" required style="margin-top:4px">
+            <span>I have read this agreement, I understand it, and I agree to it. Typing my name and pressing Sign is my electronic signature.</span></label>
+          <button type="submit" class="btn">Sign the agreement</button>
+        </form></div></div>${SHIP_ONCE_JS}`, { css: AGREEMENT_CSS }));
+  } catch (err) {
+    console.error('staff agreement page failed:', err.message);
+    return res.status(500).send(adminPage('Staff agreement', `${pageHeader('Staff agreement', '')}
+      <div class="card"><p>This page could not load. Refresh to try again.</p></div>`, ''));
+  }
+});
+
+app.post('/admin/agreement', requireAdmin, async (req, res) => {
+  const actor = currentActor();
+  if (!actor || actor.kind !== 'staff') return res.redirect('/admin/agreement');
+  const { signature, problems } = AGREEMENT.signatureFromForm(req.body || {});
+  if (!signature) return back(res, '/admin/agreement#sign', 'err', problems.join(' '));
+  try {
+    /* Once per wording: a second press (or a second tab) changes nothing. */
+    const { rowCount } = await pool.query(
+      `INSERT INTO staff_agreements (staff_id, version, text_sha256, wording, signed_name, location, ip, user_agent)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (staff_id, version) DO NOTHING RETURNING id`,
+      [actor.id, AGREEMENT.VERSION, AGREEMENT.TEXT_HASH, AGREEMENT.WORDING, signature.name, signature.location,
+       String(clientIp(req) || '').slice(0, 64), String(req.get('user-agent') || '').slice(0, 300)]);
+    /* Nothing inserted = signed already (a second tab); confirm that row. */
+    const done = rowCount || (await pool.query(
+      'SELECT 1 FROM staff_agreements WHERE staff_id = $1 AND version = $2', [actor.id, AGREEMENT.VERSION])).rowCount;
+    if (!done) return back(res, '/admin/agreement#sign', 'err', 'Your signature could not be saved. Try again.');
+    return back(res, '/admin/my-day', 'ok', 'Thank you. Your staff agreement is signed, and the workspace is open.');
+  } catch (err) {
+    console.error('staff agreement sign failed:', err.message);
+    return back(res, '/admin/agreement#sign', 'err', 'Your signature could not be saved. Try again.');
+  }
+});
+
+/* One helper's signed copy, for the owner to read or print (ROUTES: owner):
+   their newest signature, shown in the wording stored with it. */
+app.get('/admin/agreement/:id', requireAdmin, async (req, res) => {
+  const id = /^\d{1,9}$/.test(String(req.params.id)) ? Number(req.params.id) : 0;
+  if (!id) return back(res, '/admin/agreement', 'err', 'No such helper.');
+  try {
+    const { rows: [row] } = await pool.query(
+      `SELECT a.*, s.name, s.email FROM staff_agreements a JOIN staff s ON s.id = a.staff_id
+        WHERE a.staff_id = $1 ORDER BY a.signed_at DESC LIMIT 1`, [id]);
+    if (!row) return back(res, '/admin/agreement', 'err', 'That helper has not signed the agreement yet.');
+    return res.send(adminPage('Staff agreement', `<style>${AGREEMENT_CSS}</style>
+      ${pageHeader(`${row.name}'s staff agreement`, 'To keep a PDF, use your browser\'s Print and choose Save as PDF.',
+        '<a class="btn btn-ghost" href="/admin/agreement">Everyone</a>')}
+      ${row.version === AGREEMENT.VERSION ? '' : `<div class="card warn np">This is the wording of ${escEmail(row.version)}. They have not signed the current wording yet.</div>`}
+      <div class="card">${AGREEMENT.agreementHtml(row.wording)}${agreementSignatureHtml(row, row.email)}</div>`, 'agreement'));
+  } catch (err) {
+    console.error('signed agreement page failed:', err.message);
+    return back(res, '/admin/agreement', 'err', 'That copy could not load. Try again.');
   }
 });
 
@@ -33764,7 +34047,7 @@ async function sharedLoginsCard(actor, owner, roster) {
   const { rows } = await pool.query(
     `SELECT id, staff_id, site, note, created_at, expires_at, viewed_at, cancelled_at FROM shared_logins
       ORDER BY created_at DESC LIMIT 30`);
-  const helpers = listedStaff(roster).filter((r) => r.active);
+  const helpers = listedStaff(roster);
   const tone = { waiting: 'blue', opened: 'green', expired: 'neutral', cancelled: 'neutral' };
   const label = (r, st) => st === 'opened' ? `opened ${when(r.viewed_at)}` : st === 'waiting' ? `waiting, until ${when(r.expires_at)}` : st;
   return `<div class="card" id="shared-logins"><b>Shared logins</b> <span class="muted">shown once, then erased</span>
@@ -33924,6 +34207,9 @@ app.get('/admin/resources', requireAdmin, async (req, res) => {
       ${flash(req.query)}
       <div class="card" style="border-left:4px solid #F4A623"><b>🔐 Logins never go in chat, email or texts.</b>
         <div class="row-sub" style="white-space:normal">June shares them below, one view each. Save each one in your own password manager.</div></div>
+      <div class="card"><b>📄 Staff agreement</b> <a href="/admin/agreement" style="float:right">${owner ? 'Who has signed →' : 'Your signed copy →'}</a>
+        <div class="row-sub" style="white-space:normal">${owner ? 'Every helper signs it before the workspace opens for them.'
+          : 'What you agreed to about passwords, artwork and customer information.'}</div></div>
       ${await sharedLoginsCard(actor, owner, await staffRoster()).catch((e) => { console.error('shared logins card failed:', e.message); return ''; })}
       ${rows.length ? rows.map(card).join('') : `<div class="card">${emptyState(owner ? 'No tools listed yet. Add the first one below.' : 'No tools listed yet. Ask June.')}</div>`}
       ${owner ? `<details class="card"><summary><b>Add a tool</b></summary>
@@ -34278,8 +34564,9 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
                 MAX(created_at) AS last_at
            FROM team_messages GROUP BY staff_id`);
       const by = new Map(counts.map((c) => [c.staff_id, c]));
-      // Disabled helpers stay listed only while there is a conversation to read.
-      people = roster.filter((r) => !r.archived_at && (r.active || by.has(r.id))).sort((x, y) => {
+      /* Disabled helpers are off the list (owner, 2026-10-18), unless a message
+         from them is still unread; their history stays at ?staff=<id>. */
+      people = roster.filter((r) => !r.archived_at && (r.active || ((by.get(r.id) || {}).unread || 0) > 0)).sort((x, y) => {
         const a = by.get(x.id) || {}, b = by.get(y.id) || {};
         return (b.unread || 0) - (a.unread || 0) || new Date(b.last_at || 0) - new Date(a.last_at || 0);
       });
@@ -34381,52 +34668,13 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
             var ta = f.querySelector('textarea'), send = f.querySelector('[data-tcsend]');
             var fin = f.querySelector('[data-tcfile]'), fst = document.querySelector('[data-tcfilestat]');
             var fu = f.querySelector('[name="file_url"]'), fn = f.querySelector('[name="file_name"]');
-            var uploading = false, seq = 0;
-            var EXTS = ${JSON.stringify(CHATFILES.EXTS)};
-            /* The status line, with a Remove button while a file is attached. */
-            function stat(t, removable){
-              fst.textContent = t; fst.hidden = !t;
-              if (removable) {
-                var x = document.createElement('button'); x.type = 'button'; x.className = 'btn btn-ghost'; x.textContent = 'Remove';
-                x.style.marginLeft = '8px';
-                x.addEventListener('click', function(){ seq++; fu.value = ''; fn.value = ''; fin.value = ''; uploading = false; send.disabled = false; stat(''); });
-                fst.appendChild(x);
-              }
-            }
             ta.addEventListener('keydown', function(e){
               if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (ta.value.trim() || fu.value) f.requestSubmit(); }
             });
-            /* A file goes up to storage as soon as it is picked; Send then sends
-               it, with or without words. Send waits while it is uploading. */
-            fin.addEventListener('change', function(){
-              var file = fin.files && fin.files[0]; if (!file) return;
-              fu.value = ''; fn.value = '';
-              var mine = ++seq;
-              if (EXTS.indexOf(String(file.name.split('.').pop()).toLowerCase()) < 0 || file.name.indexOf('.') < 0) {
-                stat(file.name + ' is not a file type the chat takes. Send a PDF, a picture, a design file, an Office file or a ZIP.'); fin.value = ''; return; }
-              if (file.size > ${CLOUDINARY_UPLOAD_MAX}) { stat(file.name + ' is over 10 MB, the most our file storage takes. Send a smaller copy.'); fin.value = ''; return; }
-              uploading = true; send.disabled = true; stat('Uploading ' + file.name + '…', true);
-              fetch('/admin/api/chat-file-signature', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-                .then(function(r){ if (!r.ok) throw new Error('signature'); return r.json(); })
-                .then(function(sig){
-                  var fd = new FormData();
-                  fd.append('file', file); fd.append('api_key', sig.apiKey); fd.append('timestamp', sig.timestamp);
-                  fd.append('folder', sig.folder); fd.append('signature', sig.signature);
-                  ${CLD_UPLOAD_FN}
-                  return jtCldUpload(sig.cloud, fd, file.name);
-                })
-                .then(function(r){ return r.json(); })
-                .then(function(d){
-                  if (mine !== seq) return;   /* replaced or removed meanwhile */
-                  if (!d || !d.secure_url) throw new Error(d && d.error && d.error.message ? d.error.message : 'upload');
-                  fu.value = d.secure_url; fn.value = file.name;
-                  stat('Ready to send: ' + file.name + '. Add a message if you like, then press Send.', true);
-                })
-                .catch(function(e){ if (mine !== seq) return; fin.value = ''; stat('The file did not upload' + (e && e.message && e.message !== 'upload' && e.message !== 'signature' ? ' (' + e.message + ')' : '') + '. Try again.'); })
-                .then(function(){ if (mine === seq) { uploading = false; send.disabled = false; } });
-            });
+            ${CHAT_FILE_PICKER_FN}
+            var pick = jtFilePicker({ fin: fin, fu: fu, fn: fn, fst: fst, send: send, where: 'the chat' });
             f.addEventListener('submit', function(e){
-              if (uploading || (!ta.value.trim() && !fu.value)) { e.preventDefault(); if (!uploading) ta.focus(); return; }
+              if (pick.uploading || (!ta.value.trim() && !fu.value)) { e.preventDefault(); if (!pick.uploading) ta.focus(); return; }
               setTimeout(function(){ send.disabled = true; send.textContent = 'Sending…'; }, 0);
             });
           }
@@ -34672,6 +34920,72 @@ app.post('/admin/team-chat/channels', requireAdmin, async (req, res) => {
   }
 });
 
+/* The file picker Team chat and the Mailbox share. A file goes up to storage
+   as soon as it is picked; Send then sends it, with or without words, and
+   waits while it is uploading. Returns { uploading } for the form's submit
+   check. `o.ready` names a file already attached (a form shown again after an
+   error). No backticks or dollar-brace in the client code: it is pasted into
+   template literals. */
+const CHAT_FILE_PICKER_FN = `function jtFilePicker(o){
+              var fin = o.fin, fu = o.fu, fn = o.fn, fst = o.fst, send = o.send;
+              var st = { uploading: false }, seq = 0;
+              var EXTS = ${JSON.stringify(CHATFILES.EXTS)};
+              /* The status line, with a Remove button while a file is attached. */
+              function stat(t, removable){
+                fst.textContent = t; fst.hidden = !t;
+                if (removable) {
+                  var x = document.createElement('button'); x.type = 'button'; x.className = 'btn btn-ghost'; x.textContent = 'Remove';
+                  x.style.marginLeft = '8px';
+                  x.addEventListener('click', function(){ seq++; fu.value = ''; fn.value = ''; fin.value = ''; st.uploading = false; send.disabled = false; stat(''); });
+                  fst.appendChild(x);
+                }
+              }
+              if (o.ready && fu.value) stat('Ready to send: ' + o.ready + '.', true);
+              fin.addEventListener('change', function(){
+                var file = fin.files && fin.files[0]; if (!file) return;
+                fu.value = ''; fn.value = '';
+                var mine = ++seq;
+                if (EXTS.indexOf(String(file.name.split('.').pop()).toLowerCase()) < 0 || file.name.indexOf('.') < 0) {
+                  stat(file.name + ' is not a file type ' + o.where + ' takes. Send a PDF, a picture, a design file, an Office file or a ZIP.'); fin.value = ''; return; }
+                if (file.size > ${CLOUDINARY_UPLOAD_MAX}) { stat(file.name + ' is over 10 MB, the most our file storage takes. Send a smaller copy.'); fin.value = ''; return; }
+                st.uploading = true; send.disabled = true; stat('Uploading ' + file.name + '…', true);
+                fetch('/admin/api/chat-file-signature', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+                  .then(function(r){ if (!r.ok) throw new Error('signature'); return r.json(); })
+                  .then(function(sig){
+                    var fd = new FormData();
+                    fd.append('file', file); fd.append('api_key', sig.apiKey); fd.append('timestamp', sig.timestamp);
+                    fd.append('folder', sig.folder); fd.append('signature', sig.signature);
+                    ${CLD_UPLOAD_FN}
+                    return jtCldUpload(sig.cloud, fd, file.name);
+                  })
+                  .then(function(r){ return r.json(); })
+                  .then(function(d){
+                    if (mine !== seq) return;   /* replaced or removed meanwhile */
+                    if (!d || !d.secure_url) throw new Error(d && d.error && d.error.message ? d.error.message : 'upload');
+                    fu.value = d.secure_url; fn.value = file.name;
+                    stat('Ready to send: ' + file.name + '. Add a message if you like, then press Send.', true);
+                  })
+                  .catch(function(e){ if (mine !== seq) return; fin.value = ''; stat('The file did not upload' + (e && e.message && e.message !== 'upload' && e.message !== 'signature' ? ' (' + e.message + ')' : '') + '. Try again.'); })
+                  .then(function(){ if (mine === seq) { st.uploading = false; send.disabled = false; } });
+              });
+              return st;
+            }`;
+
+/* Hand over a file from Team chat or the Mailbox as a download, through
+   Cloudinary's signed download, which works for PDFs and ZIPs where the plain
+   address is refused. The caller has already checked the reader may see it;
+   `src` is CHATFILES.downloadSource of the stored address. */
+async function sendChatFile(res, src, fileName, label) {
+  const r = await fetch(cloudinary.utils.private_download_url(src.publicId, src.format, { resource_type: src.resourceType, type: 'upload' }));
+  if (!r.ok || !r.body) throw new Error(`Cloudinary answered ${r.status}`);
+  const name = MSGFILES.cleanName(fileName, src.ext);
+  res.set('Content-Type', 'application/octet-stream');
+  res.set('Content-Disposition', `attachment; filename="${name.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(name)}`);
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('Cache-Control', 'private, no-store');
+  pipeline(Readable.fromWeb(r.body), res, (e) => { if (e) console.error(`${label} file stream cut off:`, e.message); });
+}
+
 /* A signed upload into the chat folder for anyone signed in to the workspace.
    The signature fixes the folder, so it cannot be used to write anywhere else. */
 app.post('/admin/api/chat-file-signature', requireAdmin, (req, res) => {
@@ -34705,14 +35019,7 @@ app.get('/admin/team-chat/file/:kind/:id', requireAdmin, async (req, res) => {
     }
     const src = m && m.file_url ? CHATFILES.downloadSource(m.file_url, QPHOTOS.cloudName()) : null;
     if (!src) return res.status(404).send('That file is not in your chat.');
-    const r = await fetch(cloudinary.utils.private_download_url(src.publicId, src.format, { resource_type: src.resourceType, type: 'upload' }));
-    if (!r.ok || !r.body) throw new Error(`Cloudinary answered ${r.status}`);
-    const name = MSGFILES.cleanName(m.file_name, src.ext);
-    res.set('Content-Type', 'application/octet-stream');
-    res.set('Content-Disposition', `attachment; filename="${name.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(name)}`);
-    res.set('X-Content-Type-Options', 'nosniff');
-    res.set('Cache-Control', 'private, no-store');
-    pipeline(Readable.fromWeb(r.body), res, (e) => { if (e) console.error('chat file stream cut off:', e.message); });
+    await sendChatFile(res, src, m.file_name, 'chat');
   } catch (err) {
     console.error(`chat file ${kind}/${req.params.id} failed:`, err.message);
     if (!res.headersSent) res.status(502).send('Could not fetch that file just now. Try again.');
@@ -34764,6 +35071,550 @@ app.get('/admin/api/team-chat', requireAdmin, async (req, res) => {
   }
 });
 
+/* ── Mailbox ────────────────────────────────────────────────────────────────
+   Conversations about one order or one task (tools/lib/mailbox.js), beside
+   Team chat (owner, 2026-10-18: "we need the mailbox for jobs and tasks").
+   Every conversation is loaded through mailThreadFor(), which lets the owner
+   read them all and a helper only the ones they are in. Nothing is deleted:
+   Done is a status, and any new message reopens it. */
+
+/** A reader key's name on screen: June for the owner, else the helper's. */
+function mailNameOf(roster, key) {
+  return key === 'owner' ? 'June' : nameOf(roster, Number(String(key).slice(6)));
+}
+
+/** The conversation `id` if this person may read it: { t, parts, reader }, else null. */
+async function mailThreadFor(id, actor) {
+  const n = intIn(id);
+  if (!n) return null;
+  const reader = CHAN.readerKey(actor);
+  const { rows: [t] } = await pool.query('SELECT * FROM mail_threads WHERE id = $1', [n]);
+  if (!t) return null;
+  const { rows } = await pool.query('SELECT reader FROM mail_participants WHERE thread_id = $1 ORDER BY reader', [n]);
+  const parts = rows.map((r) => r.reader);
+  return MB.mayRead(reader, parts) ? { t, parts, reader } : null;
+}
+
+/* SQL pieces, with the reader as $1: the conversation is theirs (the owner's
+   are all of them), and a message is one they have not seen. Unread counts
+   do not look at Done: Done is one person finishing, and someone else in the
+   conversation may not have read it yet (code review, 2026-10-18). */
+const MAIL_MINE_SQL = `($1 = 'owner' OR EXISTS (SELECT 1 FROM mail_participants p WHERE p.thread_id = t.id AND p.reader = $1))`;
+const MAIL_UNSEEN_SQL = `m.author <> $1 AND NOT EXISTS (SELECT 1 FROM mail_seen s WHERE s.message_id = m.id AND s.reader = $1)`;
+
+/** The people in each of a set of conversations: Map id → [reader]. */
+async function mailParts(ids) {
+  const parts = new Map(ids.map((id) => [id, []]));
+  if (!ids.length) return parts;
+  const { rows } = await pool.query('SELECT thread_id, reader FROM mail_participants WHERE thread_id = ANY($1) ORDER BY reader', [ids]);
+  for (const r of rows) parts.get(r.thread_id).push(r.reader);
+  return parts;
+}
+
+/** For a set of conversations: their people, their messages oldest first, and
+ *  who has seen which message ({ [message id]: { [reader]: seen_at } }). */
+async function mailDetails(ids) {
+  const msgs = new Map(ids.map((id) => [id, []]));
+  const seen = {};
+  if (!ids.length) return { parts: new Map(), msgs, seen };
+  const [parts, { rows: m }] = await Promise.all([
+    mailParts(ids),
+    pool.query(`SELECT id, thread_id, author, body, file_url, file_name, edited_at, original_body, created_at
+                  FROM mail_messages WHERE thread_id = ANY($1) ORDER BY id`, [ids]),
+  ]);
+  for (const r of m) msgs.get(r.thread_id).push(r);
+  if (m.length) {
+    const { rows: s } = await pool.query('SELECT message_id, reader, seen_at FROM mail_seen WHERE message_id = ANY($1)', [m.map((r) => r.id)]);
+    for (const r of s) (seen[r.message_id] = seen[r.message_id] || {})[r.reader] = r.seen_at;
+  }
+  return { parts, msgs, seen };
+}
+
+/** Conversations with something this person has not seen, Open or Done: the
+ *  menu badge. */
+async function mailUnreadCount(actor) {
+  const reader = CHAN.readerKey(actor);
+  const { rows: [r] } = await pool.query(
+    `SELECT COUNT(DISTINCT m.thread_id)::int AS n FROM mail_messages m JOIN mail_threads t ON t.id = m.thread_id
+      WHERE ${MAIL_MINE_SQL} AND ${MAIL_UNSEEN_SQL}`, [reader]);
+  return r ? r.n : 0;
+}
+
+/** Add one message. The same words from the same person in the same
+ *  conversation within 10 seconds is a double-click and is dropped. A file must
+ *  be one this shop's chat storage holds, or the message is refused rather
+ *  than sent without it. Returns { error } or { id }. */
+async function addMailMessage(db, { threadId, author, body, fileUrl, fileName }) {
+  if (fileUrl && !CHATFILES.fileUrlOk(fileUrl, QPHOTOS.cloudName())) return { error: 'That file could not be sent. Pick it again.' };
+  if (!body && !fileUrl) return { error: 'Write something or pick a file first.' };
+  if (body.length > TEAM_CHAT_MAX) return { error: `That is too long. Keep it under ${TEAM_CHAT_MAX} characters.` };
+  const { rows } = await db.query(
+    `INSERT INTO mail_messages (thread_id, author, body, file_url, file_name)
+     SELECT $1, $2, $3, $4::text, $5::text WHERE NOT EXISTS (
+       SELECT 1 FROM mail_messages WHERE thread_id = $1 AND author = $2 AND body = $3
+          AND file_url IS NOT DISTINCT FROM $4::text AND created_at > NOW() - interval '10 seconds')
+     RETURNING id`,
+    [threadId, author, body, fileUrl || null, fileUrl ? fileName : null]);
+  return { id: rows[0] ? rows[0].id : null };
+}
+
+/* The mailbox forms: the file picker Team chat uses (same signed upload into
+   the chat folder, so the server's file check is the same one), a recipient
+   check on the owner's new-conversation form, and Sending… while it posts. */
+const MAIL_UPLOAD_JS = `<script>(function(){
+  ${CHAT_FILE_PICKER_FN}
+  document.querySelectorAll('form[data-mailform]').forEach(function(f){
+    var fin = f.querySelector('[data-file]'), fu = f.querySelector('[name=file_url]'), fn = f.querySelector('[name=file_name]'),
+        fst = f.querySelector('[data-fstat]'), send = f.querySelector('button[type=submit]'), ta = f.querySelector('textarea'),
+        tostat = f.querySelector('[data-tostat]');
+    var pick = fin ? jtFilePicker({ fin: fin, fu: fu, fn: fn, fst: fst, send: send, where: 'the mailbox', ready: fn.value }) : { uploading: false };
+    f.addEventListener('submit', function(e){
+      if (pick.uploading || (ta && !ta.value.trim() && !fu.value)) { e.preventDefault(); if (ta && !pick.uploading) ta.focus(); return; }
+      if (f.hasAttribute('data-needto') && !f.querySelector('input[name=to]:checked')) {
+        e.preventDefault(); if (tostat) { tostat.hidden = false; tostat.scrollIntoView({ block: 'center' }); } return; }
+      setTimeout(function(){ send.disabled = true; send.textContent = 'Sending…'; }, 0);
+    });
+  });
+})();</script>`;
+
+const MAIL_CSS = `<style>
+.mb-row{align-items:flex-start}
+.mb-row.is-unread .row-main b{color:#0B1F4B}
+.mb-row.is-unread::before{content:'';width:8px;height:8px;border-radius:50%;background:#1848B8;flex:0 0 8px;margin-top:7px}
+.mb-states{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end}
+.mb-msg{border-top:1px solid #eef1f8;padding:12px 2px}
+.mb-msg:first-child{border-top:0}
+.mb-msg.is-mine{background:#f7f9ff;border-radius:10px;padding:12px}
+.mb-who{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.mb-body{white-space:pre-wrap;line-height:1.5;margin:6px 0 0;overflow-wrap:anywhere}
+.mb-seen{font-size:12px;margin-top:6px}
+@media (max-width:640px){.mb-row{flex-wrap:wrap}.mb-row .row-end{flex:1 0 100%;padding-left:20px}.mb-states{justify-content:flex-start}}
+</style>`;
+
+/** The reply/read pills for a conversation, from `reader`'s side. */
+function mailStatePills(roster, reader, parts, msgs, seen) {
+  return MB.replyState(reader, parts, msgs, seen).map((s) => s.state === 'replied'
+    ? pill(`${mailNameOf(roster, s.reader)} replied`, 'green')
+    : s.state === 'read' ? pill(`${mailNameOf(roster, s.reader)} read ${whenShort(s.at)}`, 'blue')
+      : pill(`${mailNameOf(roster, s.reader)}: not read yet`, 'amber')).join('');
+}
+
+/** What a conversation is about, as plain words: the list's rows. */
+function mailAboutText(t, tasksById) {
+  if (t.quote_code) return `order ${t.quote_code}`;
+  if (t.task_id) { const task = tasksById.get(t.task_id); return `task ${task ? task.title : `#${t.task_id}`}`; }
+  return '';
+}
+
+/** What a conversation is about, as a link the reader can open. An order is
+ *  linked only while they can open it: a share ends when the job is delivered
+ *  or cancelled, and a teammate added to a helper's conversation about their
+ *  own design job cannot open that job at all (code review, 2026-10-18). */
+async function mailAboutHtml(t, actor, tasksById) {
+  if (t.quote_code) {
+    if (!await canOpenJob(t.quote_code, actor).catch(() => false)) return `order ${escEmail(t.quote_code)}`;
+    const tagged = actor.kind === 'staff' ? await ownerTaggedFor(t.quote_code, actor).catch(() => false) : false;
+    return `order <a href="${jobLinkFor(actor, t.quote_code, tagged)}">${escEmail(t.quote_code)}</a>`;
+  }
+  if (t.task_id) {
+    const task = tasksById.get(t.task_id);
+    /* A helper's tasks are on My Day; the owner's list is Tasks. */
+    return `task <a href="${actor.kind === 'staff' ? '/admin/my-day' : `/admin/tasks#task-${t.task_id}`}">${escEmail(task ? task.title : `#${t.task_id}`)}</a>`;
+  }
+  return '';
+}
+
+/** The conversations about one order, for its job page: every one, Open and Done. */
+async function mailForOrder(code, actor) {
+  const reader = CHAN.readerKey(actor);
+  const { rows } = await pool.query(
+    `SELECT t.* FROM mail_threads t WHERE t.quote_code = $2 AND ${MAIL_MINE_SQL}
+      ORDER BY t.status, t.last_message_at DESC LIMIT 50`, [reader, code]);
+  return rows;
+}
+
+/** The job page's mailbox card: its conversations and a button to start one. */
+async function mailOrderCard(code, actor) {
+  const [threads, roster] = await Promise.all([mailForOrder(code, actor), staffRoster()]);
+  const parts = await mailParts(threads.map((t) => t.id));
+  const reader = CHAN.readerKey(actor);
+  return `<div class="card" id="mailbox"><div class="card-title">Mailbox <span class="muted">conversations about this order</span>
+      <a href="/admin/mailbox/new?code=${encodeURIComponent(code)}">${actor.kind === 'staff' ? 'Message June about this order' : 'Message a helper about this order'} →</a></div>
+    ${threads.length ? `<div class="rows">${threads.map((t) => `<a class="row-i" href="/admin/mailbox/${t.id}"><span class="row-main"><b>${escEmail(t.subject)}</b>
+      <div class="row-sub">with ${escEmail(MB.others(reader, parts.get(t.id)).map((k) => mailNameOf(roster, k)).join(', ') || 'nobody else')} &middot; ${escEmail(whenShort(t.last_message_at))}</div></span>
+      <span class="row-end">${t.status === 'done' ? pill('Done', 'neutral') : pill('Open', 'blue')}</span></a>`).join('')}</div>`
+      : '<p class="muted" style="margin:0">No conversations about this order yet.</p>'}</div>`;
+}
+
+/** The dashboards' mailbox: open conversations, and Done ones with something
+ *  this person has not seen (someone else marked it Done before they read
+ *  it), ones with something new first. Unread counts come from one query; only
+ *  the rows shown load their messages, for the read/replied pills.
+ *  { rows: html, unread: conversations with something new, open }. */
+async function mailDashboard(actor, limit = 8) {
+  const reader = CHAN.readerKey(actor);
+  const { rows: threads } = await pool.query(
+    `WITH mine AS (
+       SELECT t.*, (SELECT COUNT(*)::int FROM mail_messages m WHERE m.thread_id = t.id AND ${MAIL_UNSEEN_SQL}) AS unread
+         FROM mail_threads t WHERE ${MAIL_MINE_SQL})
+     SELECT * FROM mine WHERE status = 'open' OR unread > 0
+      ORDER BY (unread > 0) DESC, last_message_at DESC LIMIT 100`, [reader]);
+  const shown = threads.slice(0, limit);
+  const [{ parts, msgs, seen }, roster] = await Promise.all([mailDetails(shown.map((t) => t.id)), staffRoster()]);
+  const rows = shown.map((t) => `<a class="row-i" href="/admin/mailbox/${t.id}"><span class="row-main"><b>${escEmail(t.subject)}</b>
+      <div class="row-sub">with ${escEmail(MB.others(reader, parts.get(t.id)).map((k) => mailNameOf(roster, k)).join(', ') || 'nobody else')}${
+        t.quote_code ? ` &middot; order ${escEmail(t.quote_code)}` : ''} &middot; ${escEmail(whenShort(t.last_message_at))}</div></span>
+      <span class="row-end">${t.status === 'done' ? pill('Done', 'neutral') : ''}${t.unread ? pill(`${t.unread} new`, 'red') : mailStatePills(roster, reader, parts.get(t.id), msgs.get(t.id), seen)}</span></a>`).join('');
+  return { rows, unread: threads.filter((t) => t.unread).length, open: threads.filter((t) => t.status === 'open').length };
+}
+
+app.get('/admin/mailbox', requireAdmin, async (req, res) => {
+  const actor = currentActor() || OWNER_ACTOR;
+  const reader = CHAN.readerKey(actor);
+  const folder = MB.folderOf(req.query.folder);
+  const q = text(req.query.q, 80);
+  const like = `%${q.replace(/[\\%_]/g, '\\$&')}%`;
+  try {
+    const [{ rows: threads }, { rows: counts }, roster] = await Promise.all([
+      pool.query(
+        `SELECT t.* FROM mail_threads t WHERE t.status = $2 AND ${MAIL_MINE_SQL}
+            AND ($3 = '' OR t.subject ILIKE $4 OR t.quote_code = UPPER($3))
+          ORDER BY t.last_message_at DESC LIMIT 200`, [reader, folder, q, like]),
+      pool.query(`SELECT t.status, COUNT(*)::int AS n FROM mail_threads t WHERE ${MAIL_MINE_SQL} GROUP BY t.status`, [reader]),
+      staffRoster(),
+    ]);
+    const n = Object.fromEntries(counts.map((c) => [c.status, c.n]));
+    const { parts, msgs, seen } = await mailDetails(threads.map((t) => t.id));
+    const taskIds = threads.map((t) => t.task_id).filter(Boolean);
+    const tasksById = new Map(taskIds.length
+      ? (await pool.query('SELECT id, title FROM staff_tasks WHERE id = ANY($1)', [taskIds])).rows.map((r) => [r.id, r]) : []);
+    const rows = threads.map((t) => {
+      const m = msgs.get(t.id);
+      const last = m[m.length - 1];
+      const unread = MB.unreadFor(reader, m, seen);
+      const about = mailAboutText(t, tasksById);
+      return `<a class="row-i mb-row${unread ? ' is-unread' : ''}" href="/admin/mailbox/${t.id}"><span class="row-main"><b>${escEmail(t.subject)}</b>
+        <div class="row-sub">with ${escEmail(MB.others(reader, parts.get(t.id)).map((k) => mailNameOf(roster, k)).join(', ') || 'nobody else')}${
+          about ? ` &middot; ${escEmail(about)}` : ''} &middot; ${escEmail(whenShort(t.last_message_at))}</div>
+        ${last ? `<div class="row-sub">${escEmail(mailNameOf(roster, last.author))}: ${escEmail((last.body || (last.file_name ? `sent ${last.file_name}` : '')).slice(0, 140))}</div>` : ''}</span>
+        <span class="row-end"><span class="mb-states">${unread ? pill(`${unread} new`, 'red') : ''}${mailStatePills(roster, reader, parts.get(t.id), m, seen)}</span></span></a>`;
+    });
+    res.set('Cache-Control', 'no-store');
+    res.send(adminPage('Mailbox', `${MAIL_CSS}
+      ${pageHeader('Mailbox', 'One conversation per order or task. Mark one Done when it is finished: it leaves this list and your dashboard, and a reply brings it back. Nothing is ever deleted. Quick check-ins go in Team chat.',
+        '<a class="btn" href="/admin/mailbox/new">New conversation</a>')}
+      ${flash(req.query)}
+      ${filterChips([
+        { label: 'Open', href: '/admin/mailbox', on: folder === 'open', count: n.open || 0 },
+        { label: 'Done', href: '/admin/mailbox?folder=done', on: folder === 'done', count: n.done || 0 },
+      ])}
+      <form class="search" method="get" action="/admin/mailbox" role="search">
+        ${folder === 'done' ? '<input type="hidden" name="folder" value="done">' : ''}
+        <input type="search" name="q" value="${escEmail(q)}" maxlength="80" placeholder="Search subjects or an order code" aria-label="Search the mailbox">
+        <button type="submit" class="btn btn-ghost">Search</button></form>
+      <div class="card">${rows.length ? `<div class="rows">${rows.join('')}</div>`
+        : emptyState(q ? `Nothing in ${folder === 'done' ? 'Done' : 'Open'} matches "${escEmail(q)}".`
+          : folder === 'done' ? 'Nothing is Done yet.' : 'No open conversations.',
+          folder === 'open' && !q ? '<a class="btn" href="/admin/mailbox/new">Start one</a>' : '')}</div>`, 'mailbox'));
+  } catch (err) {
+    console.error('mailbox failed:', err.message);
+    res.status(500).send(adminPage('Mailbox', '<div class="card"><div class="warn">Could not load the mailbox. Refresh to try again.</div></div>', 'mailbox'));
+  }
+});
+
+/** The new-conversation form. `v` is what to fill it with: from the link
+ *  (?code=, ?task=, ?to=) or, after a refused send, everything that was typed
+ *  and attached, so nothing has to be done twice (code review, 2026-10-18). */
+async function mailNewPage(res, actor, v, status = 200) {
+  const staff = actor.kind === 'staff';
+  const roster = await staffRoster();
+  const helpers = listedStaff(roster).filter((r) => !staff || r.id !== actor.id);
+  const codeRaw = String(v.code || '').trim().toUpperCase().replace(/^#/, '').slice(0, 20);
+  const code = QUOTE_CODE_RE.test(codeRaw) && await canOpenJob(codeRaw, actor).catch(() => false) ? codeRaw : '';
+  const { rows: [q] } = code ? await pool.query('SELECT name FROM quotes WHERE code = $1', [code]) : { rows: [] };
+  const taskId = intIn(v.task);
+  const { rows: [task] } = taskId ? await pool.query(
+    'SELECT id, title, assigned_to FROM staff_tasks WHERE id = $1 AND ($2::int IS NULL OR assigned_to = $2 OR assigned_to IS NULL)',
+    [taskId, staff ? actor.id : null]) : { rows: [] };
+  const subject = v.subject != null ? v.subject : code ? `Order ${code}${q && q.name ? ` — ${q.name}` : ''}` : task ? `Task: ${task.title}` : '';
+  const picked = new Set(v.to && v.to.length ? v.to : task && task.assigned_to ? [task.assigned_to] : []);
+  const fileUrl = v.fileUrl && CHATFILES.fileUrlOk(v.fileUrl, QPHOTOS.cloudName()) ? v.fileUrl : '';
+  res.status(status).set('Cache-Control', 'no-store');
+  res.send(adminPage('New conversation', `${MAIL_CSS}
+    ${pageHeader('New conversation', staff ? 'It goes to June. Add a teammate if they should see it too.' : 'Pick who it is for. Each one you start is its own conversation.')}
+    ${v.err ? `<div class="warn">${escEmail(v.err)}</div>` : ''}
+    ${codeRaw && !code && !v.err ? `<div class="warn">There is no order ${escEmail(codeRaw)} you can open, so it is not attached.</div>` : ''}
+    <form method="post" action="/admin/mailbox" class="card" data-mailform${staff ? '' : ' data-needto'}>
+      <label>To</label>
+      ${staff ? '<p style="margin:4px 0 8px"><b>June</b></p>' : ''}
+      ${helpers.length ? `<div class="row" style="gap:6px 14px;flex-wrap:wrap;margin:4px 0 12px">${helpers.map((r) => `
+        <label style="text-transform:none;letter-spacing:0;font-weight:600;margin:0"><input type="checkbox" name="to" value="${r.id}"${picked.has(r.id) ? ' checked' : ''} style="width:auto;margin:0 6px 0 0">${escEmail(r.name)}</label>`).join('')}</div>`
+        : staff ? '' : '<p class="muted">No helpers yet. Add one on Staff and permissions.</p>'}
+      ${staff ? '' : '<div class="warn" data-tostat hidden>Tick who it is for.</div>'}
+      <label for="mb-subject">Subject</label>
+      <input id="mb-subject" name="subject" required maxlength="${MB.SUBJECT_MAX}" value="${escEmail(subject)}">
+      <label for="mb-code">Order code <span class="muted">(optional)</span></label>
+      <input id="mb-code" name="quote_code" maxlength="20" value="${escEmail(code || (v.err ? codeRaw : ''))}" placeholder="e.g. AB12CD" style="max-width:220px">
+      ${task ? `<input type="hidden" name="task_id" value="${task.id}"><p class="muted" style="margin:8px 0 0">About the task <b>${escEmail(task.title)}</b></p>` : ''}
+      <label for="mb-body">Message</label>
+      <textarea id="mb-body" name="body" rows="6" maxlength="${TEAM_CHAT_MAX}" placeholder="What do you need?">${escEmail(v.body || '')}</textarea>
+      <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+        <input type="file" data-file accept="${CHATFILES.ACCEPT}" style="width:auto;max-width:100%;box-sizing:border-box" aria-label="Attach a file">
+        <input type="hidden" name="file_url" value="${escEmail(fileUrl)}"><input type="hidden" name="file_name" value="${escEmail(fileUrl ? v.fileName || 'File' : '')}">
+        <span class="muted" data-fstat hidden></span></div>
+      <button type="submit" style="margin-top:12px">Send</button>
+      <a class="btn btn-ghost" href="/admin/mailbox" style="margin-top:12px">Cancel</a>
+    </form>${MAIL_UPLOAD_JS}`, 'mailbox'));
+}
+
+app.get('/admin/mailbox/new', requireAdmin, async (req, res) => {
+  const actor = currentActor() || OWNER_ACTOR;
+  try {
+    const to = intIn(req.query.to);
+    await mailNewPage(res, actor, { code: req.query.code, task: req.query.task, to: to ? [to] : [], err: text(req.query.err, 200) });
+  } catch (err) {
+    console.error('mailbox new failed:', err.message);
+    res.status(500).send(adminPage('New conversation', '<div class="card"><div class="warn">Could not open the form. Refresh to try again.</div></div>', 'mailbox'));
+  }
+});
+
+app.post('/admin/mailbox', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const actor = currentActor() || OWNER_ACTOR;
+  const staff = actor.kind === 'staff';
+  const author = CHAN.readerKey(actor);
+  const subject = MB.cleanSubject(b.subject);
+  const body = text(b.body, TEAM_CHAT_MAX + 1);
+  const fileUrl = String(b.file_url || '').trim().slice(0, 400);
+  const fileName = CHATFILES.cleanName(b.file_name) || 'File';
+  const ids = MB.pickRecipients(b.to);
+  const code = String(b.quote_code || '').trim().toUpperCase().replace(/^#/, '').slice(0, 20);
+  const taskId = intIn(b.task_id);
+  /* A refused send shows the form again with everything as it was. */
+  const again = (err) => mailNewPage(res, actor, { code, task: taskId, to: ids || [], subject: String(b.subject || '').slice(0, MB.SUBJECT_MAX), body, fileUrl, fileName, err }, 400)
+    .catch((e) => { console.error('mailbox form failed:', e.message); return back(res, '/admin/mailbox/new', 'err', err); });
+  try {
+    if (!subject) return await again('Give it a subject.');
+    if (ids === null) return await again(`Pick at most ${MB.MAX_RECIPIENTS} people.`);
+    const roster = await staffRoster();
+    /* Only working helpers can be written to, and never yourself. */
+    const to = ids.filter((id) => roster.some((r) => r.id === id && r.active && !r.archived_at) && !(staff && id === actor.id));
+    if (!staff && !to.length) return await again('Pick who it is for.');
+    if (code && !(QUOTE_CODE_RE.test(code) && await canOpenJob(code, actor))) {
+      return await again(`There is no order ${code} you can open. Codes are 6 or 10 letters and numbers.`);
+    }
+    if (taskId) {
+      const { rows } = await pool.query(
+        'SELECT 1 FROM staff_tasks WHERE id = $1 AND ($2::int IS NULL OR assigned_to = $2 OR assigned_to IS NULL)', [taskId, staff ? actor.id : null]);
+      if (!rows.length) return await again('That task is not one of yours.');
+    }
+    const readers = [...new Set(['owner', author, ...to.map((id) => `staff:${id}`)])];
+    const client = await pool.connect();
+    let threadId = null;
+    let refused = null;
+    let repeat = false;
+    try {
+      await client.query('BEGIN');
+      /* A double submit (no script yet, a retried request) is the same start
+         twice: one person's starts take turns, and the same subject and words
+         within 10 seconds open the first one instead of making another. */
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`mail-start:${author}`]);
+      const { rows: [dup] } = await client.query(
+        `SELECT t.id FROM mail_threads t JOIN mail_messages m ON m.thread_id = t.id
+          WHERE t.created_by = $1 AND t.subject = $2 AND t.created_at > NOW() - interval '10 seconds'
+            AND m.author = $1 AND m.body = $3 AND m.file_url IS NOT DISTINCT FROM $4::text
+          ORDER BY t.id LIMIT 1`, [author, subject, body, fileUrl || null]);
+      if (dup) {
+        threadId = dup.id;
+        repeat = true;
+        await client.query('ROLLBACK');
+      } else {
+        /* Every start is its own conversation, even about the same order. */
+        const { rows: [t] } = await client.query(
+          `INSERT INTO mail_threads (subject, quote_code, task_id, created_by) VALUES ($1, $2, $3, $4) RETURNING id`,
+          [subject, code || null, taskId, author]);
+        threadId = t.id;
+        for (const r of readers) {
+          await client.query('INSERT INTO mail_participants (thread_id, reader) VALUES ($1, $2) ON CONFLICT DO NOTHING', [threadId, r]);
+        }
+        const added = await addMailMessage(client, { threadId, author, body, fileUrl, fileName });
+        if (added.error) { refused = added.error; await client.query('ROLLBACK'); } else await client.query('COMMIT');
+      }
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally { client.release(); }
+    if (refused) return await again(refused);
+    if (!repeat) logActivity(actor, 'mailbox started', { type: 'mail', id: threadId }, { subject, quote_code: code || null, task_id: taskId });
+    return res.redirect(303, `/admin/mailbox/${threadId}`);
+  } catch (err) {
+    console.error('mailbox start failed:', err.message);
+    return again('It did not send. Try again.');
+  }
+});
+
+app.get('/admin/mailbox/:id', requireAdmin, async (req, res) => {
+  const actor = currentActor() || OWNER_ACTOR;
+  try {
+    const found = await mailThreadFor(req.params.id, actor);
+    if (!found) {
+      return res.status(404).send(adminPage('Mailbox', `<div class="card">${emptyState('That conversation is not one of yours.',
+        '<a class="btn" href="/admin/mailbox">Mailbox</a>')}</div>`, 'mailbox'));
+    }
+    const { t, parts, reader } = found;
+    /* Seen as soon as it is on screen; the writer sees when. */
+    await pool.query(
+      `INSERT INTO mail_seen (message_id, reader) SELECT id, $2 FROM mail_messages WHERE thread_id = $1 AND author <> $2
+       ON CONFLICT DO NOTHING`, [t.id, reader]);
+    const [roster, { msgs, seen }] = await Promise.all([staffRoster(), mailDetails([t.id])]);
+    const m = msgs.get(t.id);
+    const tasksById = new Map(t.task_id ? (await pool.query('SELECT id, title FROM staff_tasks WHERE id = $1', [t.task_id])).rows.map((r) => [r.id, r]) : []);
+    const about = await mailAboutHtml(t, actor, tasksById);
+    const owner = reader === 'owner';
+    const msgHtml = m.map((x) => {
+      const mine = x.author === reader;
+      const seenBy = MB.others(x.author, parts).map((p) => {
+        const at = seen[x.id] && seen[x.id][p];
+        return at ? `seen by ${escEmail(mailNameOf(roster, p))} ${escEmail(whenShort(at))}` : `not yet seen by ${escEmail(mailNameOf(roster, p))}`;
+      });
+      return `<div class="mb-msg${mine ? ' is-mine' : ''}" id="m-${x.id}">
+        <div class="mb-who"><b>${escEmail(mine ? 'You' : mailNameOf(roster, x.author))}</b>
+          <span class="muted" style="font-size:12.5px">${escEmail(whenShort(x.created_at))}${x.edited_at ? ' &middot; edited' : ''}</span></div>
+        ${x.body ? `<div class="mb-body">${escEmail(x.body)}</div>` : ''}
+        ${x.file_url ? `<div style="margin-top:6px"><a href="/admin/mailbox/file/${x.id}">${escEmail(x.file_name || 'File')}</a></div>` : ''}
+        ${owner && x.original_body && x.original_body !== x.body ? `<details class="muted" style="margin-top:6px;font-size:12.5px"><summary>First wording</summary>
+          <div class="mb-body">${escEmail(x.original_body)}</div></details>` : ''}
+        ${mine ? `<div class="mb-seen muted">${seenBy.join(' &middot; ')}</div>
+          <details style="margin-top:6px;font-size:13px"><summary>Edit</summary>
+            <form method="post" action="/admin/mailbox/${t.id}/edit" data-once style="margin-top:6px">
+              <input type="hidden" name="message_id" value="${x.id}">
+              <textarea name="body" rows="3" maxlength="${TEAM_CHAT_MAX}" required>${escEmail(x.body)}</textarea>
+              <button type="submit" class="btn btn-ghost" style="margin-top:6px">Save</button></form></details>` : ''}
+      </div>`;
+    }).join('');
+    res.set('Cache-Control', 'no-store');
+    res.send(adminPage(t.subject, `${MAIL_CSS}
+      ${pageHeader(t.subject, `With ${escEmail(MB.others(reader, parts).map((k) => mailNameOf(roster, k)).join(', ') || 'nobody else')}${
+        about ? ` &middot; about ${about}` : ''} &middot; started by ${escEmail(t.created_by === reader ? 'you' : mailNameOf(roster, t.created_by))} ${escEmail(whenShort(t.created_at))}`,
+        `<form method="post" action="/admin/mailbox/${t.id}/status" data-once style="margin:0">
+          <input type="hidden" name="status" value="${t.status === 'done' ? 'open' : 'done'}">
+          <button type="submit" class="btn${t.status === 'done' ? ' btn-ghost' : ''}">${t.status === 'done' ? 'Reopen' : 'Mark Done'}</button></form>
+         <a class="btn btn-ghost" href="/admin/mailbox${t.status === 'done' ? '?folder=done' : ''}">Mailbox</a>`)}
+      ${flash(req.query)}
+      ${t.status === 'done' ? `<div class="ok">Done ${escEmail(whenShort(t.done_at))}${t.done_by ? ` by ${escEmail(t.done_by === reader ? 'you' : mailNameOf(roster, t.done_by))}` : ''}. A reply reopens it.</div>` : ''}
+      <div class="card">${msgHtml || emptyState('No messages yet.')}</div>
+      <form method="post" action="/admin/mailbox/${t.id}/reply" class="card" data-mailform id="reply">
+        <label for="mb-reply">Reply</label>
+        <textarea id="mb-reply" name="body" rows="4" maxlength="${TEAM_CHAT_MAX}"></textarea>
+        <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+          <input type="file" data-file accept="${CHATFILES.ACCEPT}" style="width:auto;max-width:100%;box-sizing:border-box" aria-label="Attach a file">
+          <input type="hidden" name="file_url"><input type="hidden" name="file_name">
+          <span class="muted" data-fstat hidden></span></div>
+        <button type="submit" style="margin-top:10px">Send reply</button>
+      </form>${MAIL_UPLOAD_JS}${SHIP_ONCE_JS}`, 'mailbox'));
+  } catch (err) {
+    console.error('mailbox thread failed:', err.message);
+    res.status(500).send(adminPage('Mailbox', '<div class="card"><div class="warn">Could not load the conversation. Refresh to try again.</div></div>', 'mailbox'));
+  }
+});
+
+app.post('/admin/mailbox/:id/reply', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const actor = currentActor() || OWNER_ACTOR;
+  try {
+    const found = await mailThreadFor(req.params.id, actor);
+    if (!found) return back(res, '/admin/mailbox', 'err', 'That conversation is not one of yours.');
+    const { t, reader } = found;
+    /* The message and the reopen are one step: a reply is never saved while
+       the conversation stays Done, and never reported unsent once saved. The
+       row lock makes a Mark Done at the same moment wait its turn. */
+    const client = await pool.connect();
+    let added;
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT 1 FROM mail_threads WHERE id = $1 FOR UPDATE', [t.id]);
+      added = await addMailMessage(client, { threadId: t.id, author: reader, body: text(b.body, TEAM_CHAT_MAX + 1),
+        fileUrl: String(b.file_url || '').trim().slice(0, 400), fileName: CHATFILES.cleanName(b.file_name) || 'File' });
+      /* A new message reopens a Done conversation (owner: "when it's over
+         possibly remove it from my dashboard"; it comes back if anyone writes). */
+      if (added.id) {
+        await client.query(`UPDATE mail_threads SET status = 'open', done_at = NULL, done_by = NULL, last_message_at = NOW() WHERE id = $1`, [t.id]);
+      }
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally { client.release(); }
+    if (added.error) return back(res, `/admin/mailbox/${t.id}#reply`, 'err', added.error);
+    return res.redirect(`/admin/mailbox/${t.id}${added.id ? `#m-${added.id}` : ''}`);
+  } catch (err) {
+    console.error('mailbox reply failed:', err.message);
+    return back(res, `/admin/mailbox/${intIn(req.params.id) || ''}`, 'err', 'It did not send. Try again.');
+  }
+});
+
+app.post('/admin/mailbox/:id/status', requireAdmin, async (req, res) => {
+  const actor = currentActor() || OWNER_ACTOR;
+  const want = String((req.body || {}).status || '') === 'open' ? 'open' : 'done';
+  try {
+    const found = await mailThreadFor(req.params.id, actor);
+    if (!found) return back(res, '/admin/mailbox', 'err', 'That conversation is not one of yours.');
+    const { t, reader } = found;
+    if (want === 'done') {
+      await pool.query(`UPDATE mail_threads SET status = 'done', done_at = NOW(), done_by = $2 WHERE id = $1 AND status = 'open'`, [t.id, reader]);
+      return back(res, '/admin/mailbox', 'ok', `"${t.subject}" is Done. It is in the Done folder, and a reply brings it back.`);
+    }
+    await pool.query(`UPDATE mail_threads SET status = 'open', done_at = NULL, done_by = NULL WHERE id = $1`, [t.id]);
+    return back(res, `/admin/mailbox/${t.id}`, 'ok', 'Reopened.');
+  } catch (err) {
+    console.error('mailbox status failed:', err.message);
+    return back(res, `/admin/mailbox/${intIn(req.params.id) || ''}`, 'err', 'That did not save. Try again.');
+  }
+});
+
+/* The author rewords their own message, as in Team chat: the first wording is
+   kept and shown to the owner; everyone sees "edited". */
+app.post('/admin/mailbox/:id/edit', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const actor = currentActor() || OWNER_ACTOR;
+  try {
+    const found = await mailThreadFor(req.params.id, actor);
+    if (!found) return back(res, '/admin/mailbox', 'err', 'That conversation is not one of yours.');
+    const { t, reader } = found;
+    const id = /^\d{1,15}$/.test(String(b.message_id || '')) ? String(b.message_id) : null;
+    const body = text(b.body, TEAM_CHAT_MAX + 1);
+    if (!id || !body) return back(res, `/admin/mailbox/${t.id}`, 'err', 'Write something first.');
+    if (body.length > TEAM_CHAT_MAX) return back(res, `/admin/mailbox/${t.id}`, 'err', `Keep it under ${TEAM_CHAT_MAX} characters.`);
+    const { rowCount } = await pool.query(
+      `UPDATE mail_messages SET original_body = COALESCE(original_body, body), body = $3, edited_at = NOW()
+        WHERE id = $1 AND thread_id = $2 AND author = $4 AND body IS DISTINCT FROM $3`, [id, t.id, body, reader]);
+    return res.redirect(`/admin/mailbox/${t.id}${rowCount ? `#m-${id}` : ''}`);
+  } catch (err) {
+    console.error('mailbox edit failed:', err.message);
+    return back(res, `/admin/mailbox/${intIn(req.params.id) || ''}`, 'err', 'That did not save. Try again.');
+  }
+});
+
+/* A file sent in the mailbox, to someone in that conversation only. */
+app.get('/admin/mailbox/file/:id', requireAdmin, async (req, res) => {
+  const id = /^\d{1,15}$/.test(String(req.params.id)) ? req.params.id : null;
+  if (!id) return res.status(404).send('Not found.');
+  try {
+    const actor = currentActor() || OWNER_ACTOR;
+    const { rows: [m] } = await pool.query('SELECT thread_id, file_url, file_name FROM mail_messages WHERE id = $1', [id]);
+    const ok = m && await mailThreadFor(m.thread_id, actor);
+    const src = ok && m.file_url ? CHATFILES.downloadSource(m.file_url, QPHOTOS.cloudName()) : null;
+    if (!src) return res.status(404).send('That file is not in your mailbox.');
+    await sendChatFile(res, src, m.file_name, 'mailbox');
+  } catch (err) {
+    console.error(`mailbox file ${req.params.id} failed:`, err.message);
+    if (!res.headersSent) res.status(502).send('Could not fetch that file just now. Try again.');
+    else res.destroy(err);
+  }
+});
+
+/* ── end Mailbox ─────────────────────────────────────────────────────────── */
+
 /* ── Team chat email alerts ──────────────────────────────────────────────
    Every 5 minutes (with the sweeps). For each person with alerts on, each
    conversation whose oldest unread message from someone else is at least
@@ -34809,6 +35660,17 @@ async function sendChatAlerts() {
         [c.id, st ? st.last_read_id : 0, rd.actor.kind === 'staff' ? rd.actor.id : null, CHAN.ALERT_AFTER_MIN]);
       if (u && u.n) due.push({ convo: `ch:${c.id}`, first: u.first, last: u.last, n: u.n, where: `# ${c.name}`, href: `/admin/team-chat?channel=${c.id}` });
     }
+    /* Mailbox conversations with something this reader has not seen, Done or
+       not: someone else marking it Done does not mean this reader read it. */
+    const { rows: mbs } = await pool.query(
+      `SELECT m.thread_id, MIN(m.id) AS first, MAX(m.id) AS last, COUNT(*)::int AS n, MAX(t.subject) AS subject
+         FROM mail_messages m JOIN mail_threads t ON t.id = m.thread_id
+        WHERE ${MAIL_MINE_SQL} AND ${MAIL_UNSEEN_SQL} AND m.created_at < NOW() - make_interval(mins => $2)
+        GROUP BY m.thread_id`, [reader, CHAN.ALERT_AFTER_MIN]).catch((e) => { console.error('mailbox alerts query failed:', e.message); return { rows: [] }; });
+    for (const d of mbs) {
+      due.push({ convo: `mb:${d.thread_id}`, first: d.first, last: d.last, n: d.n, mail: true,
+        where: `"${d.subject}"`, href: `/admin/mailbox/${d.thread_id}` });
+    }
     for (const d of due) {
       const st = state.get(`${reader}|${d.convo}`);
       if (!CHAN.alertDue(d.first, st && st.alerted_id)) continue;
@@ -34822,10 +35684,10 @@ async function sendChatAlerts() {
       const link = `${PUBLIC_BASE_URL}${d.href}`;
       await sendEmail({
         to: rd.to,
-        subject: `Team chat: ${d.n === 1 ? 'a new message' : `${d.n} new messages`} in ${d.where}`,
+        subject: `${d.mail ? 'Mailbox' : 'Team chat'}: ${d.n === 1 ? 'a new message' : `${d.n} new messages`} in ${d.where}`,
         html: `<p>Hi ${escEmail(rd.name)},</p>
-          <p>You have ${d.n === 1 ? 'a message' : `${d.n} messages`} waiting in ${escEmail(d.where)} on June's Tees Team chat.</p>
-          <p><a href="${escEmail(link)}">Open Team chat</a></p>
+          <p>You have ${d.n === 1 ? 'a message' : `${d.n} messages`} waiting in ${escEmail(d.where)} on June's Tees ${d.mail ? 'Mailbox' : 'Team chat'}.</p>
+          <p><a href="${escEmail(link)}">Open ${d.mail ? 'the conversation' : 'Team chat'}</a></p>
           <p style="color:#6b7280;font-size:12px">You get one email per conversation until you read it.
             Turn these emails off on the Team chat page, under Email alerts.</p>`,
       }).then(() => { sent++; }).catch((e) => console.error('chat alert email failed:', e.message));
@@ -34889,9 +35751,10 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
       .then(([p, n]) => ({ p, note: n[0] && Date.now() - new Date(n[0].created_at).getTime() < 14 * 864e5 ? n[0] : null }))
       .catch((err) => { console.error('my day training failed:', err.message); return null; }) : null;
 
+    const mail = await mailDashboard(actor, 6).catch((e) => { console.error('my day mailbox failed:', e.message); return null; });
     /* Every section folds away; the browser remembers which, per section. */
     const secKey = (title) => String(title).replace(/<[^>]*>|\([^)]*\)|[^a-z ]/gi, '').trim().toLowerCase().replace(/ +/g, '-').slice(0, 40);
-    const section = (title, inner, empty) => `<details class="card md-sec" open data-sec="${escEmail(secKey(title))}">
+    const section = (title, inner, empty) => `<details class="card md-sec" open data-sec="${escEmail(secKey(title))}" id="sec-${escEmail(secKey(title))}">
       <summary><b>${title}</b></summary>${inner || `<p class="muted">${empty}</p>`}</details>`;
     const startedBy = (t) => nameOf(roster, t.started_by);
     const taskStatus = (t) => (t.done_at ? pill('completed', 'green') : t.started_at ? pill('started', 'blue') : pill('not started', 'neutral'));
@@ -34917,44 +35780,73 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
       ${flash(req.query)}
       ${pins}
       ${shiftsCard}
-      ${training && !training.p.complete ? section(`Your training: ${training.p.done} of ${training.p.total}`,
-        `<a class="muted" href="/admin/training" style="float:right">See it all →</a>${progressBar(training.p.done, training.p.total)}
-        ${training.p.next.map((st) => `<div class="row-sub">Next: ${escEmail(st.title)}</div>`).join('')}`) : ''}
-      ${training && training.note ? section('Latest note from the owner', coachingRow(training.note)) : ''}
-      ${art.todo.length || STAFF.levelOf(actor, 'art.work') === 'on' && me != null ? section(`Artwork to do (${art.todo.length})`, artQueueRows(art.todo), 'No artwork waiting for you.') : ''}
-      ${art.customer.length ? section(`Waiting on the customer (${art.customer.length})`, artQueueRows(art.customer)) : ''}
-      ${art.questions.length ? section(`The designer has a question (${art.questions.length})`, artQueueRows(art.questions)) : ''}
-      ${art.approve.length ? section(`Final art to approve (${art.approve.length})`, artQueueRows(art.approve)) : ''}
-      ${released.rows.length ? section('Approved, but not emailed: send these yourself', released.rows.map((q) => `
+      ${(() => {
+        /* Ordered by what needs doing first (owner, 2026-10-18: "make sure
+           employee dashboards are optimized"): people waiting on you, then
+           work to hand back, then your own list, then the information. An
+           empty section is one word in the "Nothing waiting" line rather than
+           a card, and the counts across the top jump to each section. */
+        const blocks = [
+          { title: 'Latest note from the owner', show: !!(training && training.note), inner: () => coachingRow(training.note) },
+          { title: `Mailbox (${mail ? mail.unread : 0})`, short: 'Mailbox', n: mail ? mail.unread : 0, show: !!mail,
+            inner: () => `<a class="muted" href="/admin/mailbox" style="display:block;text-align:right;margin:0 0 6px">All conversations →</a><div class="rows">${mail.rows}</div>` },
+          { title: `Leads waiting for a reply (${waiting.length})`, short: 'Leads', n: waiting.length, show: can('leads.view'),
+            inner: () => waiting.slice(0, 25).map(leadRow).join('') },
+          { title: `Follow-ups due (${followUps.length})`, short: 'Follow-ups', n: followUps.length, show: can('leads.view'),
+            inner: () => followUps.map((l) => `
+        <div class="row-i"><span class="row-main"><a href="/admin/leads?status=all#lead-${l.id}"><b>${escEmail(l.name || l.email || 'Lead')}</b></a>
+          <div class="row-sub">due ${escEmail(fmtDate(l.next_follow_up_on))}${l.assigned_to ? ` &middot; ${escEmail(nameOf(roster, l.assigned_to))}` : ''}</div></span></div>`).join('') },
+          { title: `The designer has a question (${art.questions.length})`, short: 'Designer questions', n: art.questions.length,
+            show: STAFF.levelOf(actor, 'art.request') === 'on',
+            inner: () => artQueueRows(art.questions) },
+          { title: `Final art to approve (${art.approve.length})`, short: 'Art to approve', n: art.approve.length, show: me == null,
+            inner: () => artQueueRows(art.approve) },
+          { title: `Artwork to do (${art.todo.length})`, short: 'Artwork', n: art.todo.length,
+            show: art.todo.length > 0 || (STAFF.levelOf(actor, 'art.work') === 'on' && me != null), inner: () => artQueueRows(art.todo) },
+          { title: 'Approved, but not emailed: send these yourself', short: 'To send', n: released.rows.length, show: me != null,
+            inner: () => released.rows.map((q) => `
         <div class="row-i" style="flex-wrap:wrap"><span class="row-main"><b>${escEmail(q.code)}</b> ${escEmail(q.name || '')} &middot; ${money(q.total)}
           <div class="msg" id="rel-${escEmail(q.code)}" style="white-space:pre-wrap">${escEmail(quoteMessages(q).initial)}</div></span>
-          <span class="row-end"><button type="button" class="btn btn-ghost" onclick="jtCopy('rel-${escEmail(q.code)}')">Copy</button></span></div>`).join('')) : ''}
-      ${earn ? section('My earnings', `<a class="muted" href="/admin/my-earnings" style="float:right">See every sale →</a>
-        <a class="muted" href="${earn.guide}" style="float:right;margin-right:14px">How pay works</a>
-        ${earningsTiles(earn.e)}
-        ${earn.incentives.map((i) => incentiveRow(i)).join('')}`) : ''}
-      ${mine.rows.length ? section('Waiting on the owner', mine.rows.map((a) => `
+          <span class="row-end"><button type="button" class="btn btn-ghost" onclick="jtCopy('rel-${escEmail(q.code)}')">Copy</button></span></div>`).join('') },
+          { title: `Tasks (${tasks.rows.length})`, short: 'Tasks', n: tasks.rows.length, show: true, inner: () => tasks.rows.map(taskRow).join('') },
+          { title: 'Jobs with a next step', short: 'Jobs', n: nextSteps.length, show: can('quotes.view'), inner: () => nextSteps.map(({ q, cl }) => `
+        <div class="row-i"><span class="row-main"><a href="/admin/production/${escEmail(q.code)}"><b>${escEmail(q.code)}</b></a> ${escEmail(q.name || '')}
+          <div class="row-sub">${escEmail(cl.next.label)}${cl.next.hint ? ` — ${escEmail(cl.next.hint)}` : ''}</div></span>
+          <span class="row-end muted">${cl.done}/${cl.of}</span></div>`).join('') },
+          { title: `Waiting on the customer (${art.customer.length})`, n: art.customer.length, show: true, inner: () => artQueueRows(art.customer) },
+          { title: 'Waiting on the owner', n: mine.rows.length, show: true, inner: () => mine.rows.map((a) => `
         <div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal">${escEmail(a.kind)} ${escEmail(a.subject_id)}${a.decision_note
           ? `<div class="row-sub">Sent back: ${escEmail(a.decision_note)}</div>` : ''}${
           ['message', 'lead_email'].includes(a.kind) && a.payload && a.payload.text ? `<div class="pin-body" style="white-space:pre-wrap">${escEmail(a.payload.text)}</div>` : ''}${
           heldMessageEditForm(a, '/admin/my-day')}</span>
-          <span class="row-end">${pill(a.status === 'rejected' ? 'sent back' : 'waiting', a.status === 'rejected' ? 'amber' : 'blue')}</span></div>`).join('')) : ''}
-      ${can('leads.view') ? section(`Leads waiting for a reply (${waiting.length})`, waiting.slice(0, 25).map(leadRow).join(''), 'Nobody is waiting.') : ''}
-      ${can('leads.view') ? section(`Follow-ups due (${followUps.length})`, followUps.map((l) => `
-        <div class="row-i"><span class="row-main"><a href="/admin/leads?status=all#lead-${l.id}"><b>${escEmail(l.name || l.email || 'Lead')}</b></a>
-          <div class="row-sub">due ${escEmail(fmtDate(l.next_follow_up_on))}${l.assigned_to ? ` &middot; ${escEmail(nameOf(roster, l.assigned_to))}` : ''}</div></span></div>`).join(''),
-        'No follow-ups due.') : ''}
-      ${section(`Tasks (${tasks.rows.length})`, tasks.rows.map(taskRow).join(''), 'Nothing on your list.')}
-      ${me == null && doneLately.length ? section(`Completed this week (${doneLately.length})`, doneLately.map(taskRow).join('')) : ''}
+          <span class="row-end">${pill(a.status === 'rejected' ? 'sent back' : 'waiting', a.status === 'rejected' ? 'amber' : 'blue')}</span></div>`).join('') },
+          { title: `Completed this week (${doneLately.length})`, n: doneLately.length, show: me == null, inner: () => doneLately.map(taskRow).join('') },
+          { title: 'My earnings', show: !!earn, inner: () => `<div style="display:flex;gap:14px;justify-content:flex-end;flex-wrap:wrap;margin:0 0 8px">
+          <a class="muted" href="${earn.guide}">How pay works</a><a class="muted" href="/admin/my-earnings">See every sale →</a></div>
+        ${earningsTiles(earn.e)}
+        ${earn.incentives.map((i) => incentiveRow(i)).join('')}` },
+          { title: training ? `Your training: ${training.p.done} of ${training.p.total}` : '', show: !!(training && !training.p.complete),
+            inner: () => `<a class="muted" href="/admin/training" style="float:right">See it all →</a>${progressBar(training.p.done, training.p.total)}
+        ${training.p.next.map((st) => `<div class="row-sub">Next: ${escEmail(st.title)}</div>`).join('')}` },
+        ].filter((x) => x.show);
+        /* A block with a count shows only when it has something in it; one with
+           a `short` name is also listed in "Nothing waiting" and the counts. */
+        const full = blocks.filter((x) => x.n == null || x.n > 0);
+        const nothing = blocks.filter((x) => x.n === 0 && x.short);
+        const needs = full.filter((x) => x.short && x.n > 0);
+        return `${needs.length ? `<div class="chips md-needs" aria-label="Needs you now"><span class="muted" style="align-self:center;font-weight:700">Needs you now:</span>${
+          needs.map((x) => `<a class="chip-f" href="#sec-${escEmail(secKey(x.title))}">${escEmail(x.short)}<span class="n">${x.n}</span></a>`).join('')}</div>` : ''}
+      ${nothing.length ? `<div class="card muted md-quiet" style="padding:12px 16px">Nothing waiting: ${escEmail(nothing.map((x) => x.short).join(', '))}.</div>` : ''}
+      ${full.map((x) => section(x.title, x.inner(), '')).join('')}`;
+      })()}
       <details class="card"><summary><b>Add a task</b></summary>${addTaskForm}</details>${TASK_CSS}${TASK_UPLOAD_JS}
-      ${nextSteps.length ? section('Jobs with a next step', nextSteps.map(({ q, cl }) => `
-        <div class="row-i"><span class="row-main"><a href="/admin/production/${escEmail(q.code)}"><b>${escEmail(q.code)}</b></a> ${escEmail(q.name || '')}
-          <div class="row-sub">${escEmail(cl.next.label)}${cl.next.hint ? ` — ${escEmail(cl.next.hint)}` : ''}</div></span>
-          <span class="row-end muted">${cl.done}/${cl.of}</span></div>`).join('')) : ''}
       ${copyJs}
       <script>(function(){try{document.querySelectorAll('details.md-sec').forEach(function(d){
         var k='md:'+d.getAttribute('data-sec');if(localStorage.getItem(k)==='0')d.open=false;
-        d.addEventListener('toggle',function(){try{localStorage.setItem(k,d.open?'1':'0');}catch(e){}});});}catch(e){}})();</script>`, 'myday'));
+        d.addEventListener('toggle',function(){try{localStorage.setItem(k,d.open?'1':'0');}catch(e){}});});
+        /* A count at the top opens its section even if it was folded away. */
+        document.querySelectorAll('.md-needs a').forEach(function(a){a.addEventListener('click',function(){
+          var d=document.getElementById(a.getAttribute('href').slice(1));if(d)d.open=true;});});}catch(e){}})();</script>`, 'myday'));
   } catch (err) {
     console.error('my day failed:', err.message);
     res.status(500).send(adminPage('My Day', '<div class="card"><div class="warn">Could not load your day.</div></div>', 'myday'));
@@ -39311,6 +40203,7 @@ initDB()
     console.log(`Listening on port ${PORT}`);
     /* After listening, so it never holds up a deploy. */
     anchorUndatedPaidJobs().catch((e) => console.error('working dates from deposits:', e.message));
+    archiveSettledHelpers().catch((e) => console.error('archiving settled helpers:', e.message));
   }))
   .catch(err => {
     console.error('DB init failed, exiting:', err.message);

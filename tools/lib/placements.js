@@ -29,14 +29,15 @@
  * A placement that the review finds wrong for one style is corrected in
  * tools/data/placement-overrides.json, never by editing the rule for everyone.
  */
-const { classify } = require('./garments');
+const { classify, subtype } = require('./garments');
 
 const ZIP_FRONT_RE = /\b(full.?zip|zip.?up|zip hood|zip-front|zip front)\b/i;
 
 /** Which placement set a product gets. */
 function placementSet(name) {
   const cls = classify(name);
-  if (cls === 'cap') return 'cap';
+  /* A beanie is decorated on its folded cuff, not its crown (owner, 2026-10-18). */
+  if (cls === 'cap') return subtype(name) === 'beanie' ? 'beanie' : 'cap';
   if (cls === 'bag') return 'bag';
   if (cls === 'kids') return 'kids';
   if (cls === 'onesie') return 'onesie';
@@ -50,35 +51,47 @@ function placementSet(name) {
    WEARER's left (the viewer's right) when positive; `top` is the box's top
    edge below the shoulder line, or `cy` its centre. Body width in inches by
    set: what the measured torso width stands for. */
-const BODY_IN = { closed: 20, tank: 19, open: 20, kids: 16, onesie: 10 };
+/* What the MEASURED torso width stands for, in inches. measure.py's torso
+   reads about a quarter narrower than the real garment on S&S photos (the
+   first boxes, sized against 20", covered ~40% of a tee's length — owner,
+   2026-10-18: "the full boxes are not long enough"), so these are the real
+   body widths x 0.75. */
+const BODY_IN = { closed: 15, tank: 14.5, open: 15, kids: 12, onesie: 7.5 };
 
-const CHEST = { w: 4, h: 4 };
+/* GENEROUS on purpose (owner, 2026-10-18): the boxes are where a customer can
+   put a design, and the canvas is a mockup of the garment, not a print spec.
+   "I'd rather over place the box than not be able to add things on most of
+   the shirt." The full front starts clear of the collar and runs most of the
+   body; a chest logo is big enough to read as one. The first set (12x14 at
+   3.5", 4" chest) read as a diagram: too short, too near the collar, logos
+   too small to place anything in. */
+const CHEST = { w: 5.5, h: 5.5 };
 const SETS = {
   closed: [
-    { key: 'front',      label: 'Full front',  side: 'front', w: 12, h: 14, x: 0,    top: 3.5 },
-    { key: 'left_chest', label: 'Left chest',  side: 'front', ...CHEST,    x: 4.25, cy: 6.5 },
-    { key: 'back',       label: 'Back',        side: 'back',  w: 13, h: 16, x: 0,    top: 3 },
+    { key: 'front',      label: 'Full front',  side: 'front', w: 14, h: 17, x: 0,    top: 4.5 },
+    { key: 'left_chest', label: 'Left chest',  side: 'front', ...CHEST,    x: 4.5,  cy: 6.5 },
+    { key: 'back',       label: 'Back',        side: 'back',  w: 14, h: 18, x: 0,    top: 4 },
   ],
   /* A tank's measured "shoulder" is the armpit — the straps are narrower than
-     the body — so its boxes start ABOVE that line. */
+     the body — so its boxes start near that line. */
   tank: [
-    { key: 'front',      label: 'Full front',  side: 'front', w: 11, h: 13, x: 0,    top: -0.5 },
-    { key: 'left_chest', label: 'Left chest',  side: 'front', ...CHEST,    x: 4,    cy: 2 },
-    { key: 'back',       label: 'Back',        side: 'back',  w: 11, h: 14, x: 0,    top: -1.5 },
+    { key: 'front',      label: 'Full front',  side: 'front', w: 12, h: 16, x: 0,    top: 0.5 },
+    { key: 'left_chest', label: 'Left chest',  side: 'front', w: 5, h: 5,  x: 4,    cy: 3 },
+    { key: 'back',       label: 'Back',        side: 'back',  w: 12, h: 17, x: 0,    top: -0.5 },
   ],
-  /* Clear of the zipper or placket: 4.5" out from the centre line. */
+  /* Clear of the zipper or placket: 4.75" out from the centre line. */
   open: [
-    { key: 'front',       label: 'Left chest',  side: 'front', ...CHEST,   x: 4.5,  cy: 6 },
-    { key: 'right_chest', label: 'Right chest', side: 'front', ...CHEST,   x: -4.5, cy: 6 },
-    { key: 'back',        label: 'Back',        side: 'back',  w: 12, h: 14, x: 0,  top: 3 },
+    { key: 'front',       label: 'Left chest',  side: 'front', ...CHEST,   x: 4.75,  cy: 6.5 },
+    { key: 'right_chest', label: 'Right chest', side: 'front', ...CHEST,   x: -4.75, cy: 6.5 },
+    { key: 'back',        label: 'Back',        side: 'back',  w: 14, h: 17, x: 0,  top: 4 },
   ],
   kids: [
-    { key: 'front', label: 'Front', side: 'front', w: 10, h: 12, x: 0, top: 2.5 },
-    { key: 'back',  label: 'Back',  side: 'back',  w: 10, h: 12, x: 0, top: 2 },
+    { key: 'front', label: 'Front', side: 'front', w: 11, h: 14, x: 0, top: 3.5 },
+    { key: 'back',  label: 'Back',  side: 'back',  w: 11, h: 15, x: 0, top: 3 },
   ],
   onesie: [
-    { key: 'front', label: 'Front', side: 'front', w: 6, h: 6.5, x: 0, top: 1.5 },
-    { key: 'back',  label: 'Back',  side: 'back',  w: 6, h: 6.5, x: 0, top: 1.5 },
+    { key: 'front', label: 'Front', side: 'front', w: 7, h: 8, x: 0, top: 2 },
+    { key: 'back',  label: 'Back',  side: 'back',  w: 7, h: 8, x: 0, top: 2 },
   ],
 };
 
@@ -96,14 +109,19 @@ function boxesFor(set, m, ov = {}) {
     b.cy = Math.min(Math.max(b.cy, y0 + b.h / 2), y1 - b.h / 2);
     return b;
   };
-  if (set === 'cap' || set === 'bag') {
-    for (const side of set === 'cap' ? ['front'] : ['front', 'back']) {
+  if (set === 'cap' || set === 'beanie' || set === 'bag') {
+    for (const side of set === 'bag' ? ['front', 'back'] : ['front']) {
       const mm = m[side]; if (!mm || mm.error) continue;
       const [x0, y0, x1, y1] = mm.bbox, bw = x1 - x0, bh = y1 - y0;
       /* A cap: the crown's front panel, above the brim. A tote: the body
          below the handles, a square of most of its width. */
+      /* Generous, like the garments (owner: "I'd rather these boxes be too big
+         than too small"): a cap gets most of its crown front, a beanie most of
+         its folded cuff. */
       const b = set === 'cap'
-        ? { w: bw * 0.42, h: bh * 0.27, cx: mm.cx, cy: y0 + bh * 0.40 }
+        ? { w: bw * 0.62, h: bh * 0.42, cx: mm.cx, cy: y0 + bh * 0.38 }
+        /* A beanie: across the folded cuff, the bottom quarter of the hat. */
+        : set === 'beanie' ? { w: bw * 0.72, h: bh * 0.26, cx: mm.cx, cy: y0 + bh * 0.83 }
         : (() => { const top = mm.shoulder, body = y1 - top, w = mm.torso * 0.74, h = Math.min(w * 1.05, body * 0.8);
           return { w, h, cx: mm.cx, cy: top + body / 2 }; })();
       /* Units differ from the garment sets below: here dx/dy are FRACTIONS of
@@ -162,4 +180,34 @@ function stagesFor(base, boxes, images, sizes) {
   return st;
 }
 
-module.exports = { placementSet, boxesFor, toEditZone, stagesFor, SETS, BODY_IN, ZIP_FRONT_RE };
+const isPhoto = (s) => /^https:\/\//.test(String((s && s.image) || ''));
+
+/** The stand-in drawing per side: the product's own stage when it is not a
+ *  photo, else the first old colourway still carrying one. After a run the
+ *  product's stages are the DEFAULT colourway's, so its back can be that
+ *  colour's photo; copied onto a colour with no back photo it would show a
+ *  white back on a navy tote (code review, 2026-10-18). */
+function standins(stages, oldVars) {
+  const pool = [stages || {}, ...Object.values((oldVars && oldVars.variations) || {}).map((v) => (v && v.stages) || {})];
+  const out = {};
+  for (const side of ['front', 'back']) {
+    const s = pool.map((st) => st[side]).find((x) => x && !isPhoto(x));
+    if (s) out[side] = s;
+  }
+  return out;
+}
+
+/** A side the photos do not cover keeps its stand-in drawing (`base` is
+ *  standins()) instead of vanishing. S&S has no back photo of most totes, and the
+ *  rewire of 2026-10-18 took the Back off five totes and the EC1000 tee (#177)
+ *  that way: a customer could no longer design on the back. Only front/back
+ *  are kept: they are the sides a photo replaces. */
+function keepUncovered(base, boxes, st) {
+  const covered = new Set(boxes.filter((b) => st[b.key]).map((b) => b.side));
+  for (const side of ['front', 'back']) {
+    if (base[side] && !covered.has(side) && !st[side]) st[side] = JSON.parse(JSON.stringify(base[side]));
+  }
+  return st;
+}
+
+module.exports = { placementSet, boxesFor, toEditZone, stagesFor, keepUncovered, standins, SETS, BODY_IN, ZIP_FRONT_RE };

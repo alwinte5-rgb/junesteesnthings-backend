@@ -42,7 +42,7 @@ const CLASSIFY = [
   ['qzip',    /\b(quarter.?zip|1\/4.?zip|half.?zip)\b/i],
   ['hoodie',  /\b(hoodie|hooded|sweatshirt|crewneck|fleece|pullover)\b/i],
   ['polo',    /\bpolo\b/i],
-  ['woven',   /\b(twill|oxford|broadcloth|flannel|button|dress shirt|work shirt|scrub|utility)\b/i],
+  ['woven',   /\b(twill|oxford|broadcloth|flannel|button|dress shirt|work shirt|scrub|utility|shoreline)\b/i],
   ['onesie',  /\b(bodysuit|onesie|infant)\b/i],
   ['kids',    /\b(youth|toddler|baby)\b/i],
   ['tank',    /\btank\b/i],

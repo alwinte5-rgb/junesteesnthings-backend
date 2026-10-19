@@ -5,6 +5,16 @@ The photo is shot on white. The background has to go, but a plain
 the highlights on every other one. So the background is found by flooding IN
 from the border: only white that is CONNECTED to the edge is background, which
 leaves an interior white panel or a specular highlight alone.
+
+WHITE GARMENTS (2026-10-18). A fixed "238 or brighter is background" cut ate
+white shirts: their fabric is 240-250, touches the backdrop at the outline, and
+the flood ran straight through it — #130's white tee kept 20% of itself, #131's
+4%, and 41 products' White colour lost its outline. S&S's backdrop is one flat
+shade (almost always 255; a few studios shoot on light grey), so background is
+now "within a few steps of the backdrop's own shade", read from the photo's
+border. Fabric shading sits further from it than that. Whatever near-white edge
+survives is invisible: the design canvas behind a photo is white (app.js
+stage_fill).
 """
 import sys
 from collections import deque
@@ -12,13 +22,28 @@ import numpy as np
 from PIL import Image, ImageFilter
 
 
-def cutout(path, out, white=238, feather=1.0, pad=0.02):
+def backdrop_level(mn):
+    """The backdrop's shade: the brightest twentieth of the border's darkest-
+    channel values. Not the median: on a close-up the border is mostly GARMENT,
+    and a white tee at 246 read as the backdrop put the cut at 242 and erased
+    its fabric (code review, 2026-10-18). Any strip of real backdrop on the
+    border wins here."""
+    border = np.concatenate([mn[0, :], mn[-1, :], mn[:, 0], mn[:, -1]])
+    return int(np.percentile(border, 95))
+
+
+def cutout(path, out, tolerance=4, floor=238, feather=1.0, pad=0.02):
     im = Image.open(path).convert('RGB')
     a = np.asarray(im).astype(np.int16)
     h, w, _ = a.shape
 
-    # Near-white AND near-neutral: a pale garment colour is not background.
+    # Near the backdrop's own shade AND near-neutral: a pale garment colour,
+    # and white fabric's shading, are not background.
     mx, mn = a.max(2), a.min(2)
+    # The floor keeps the old 238 cut's reach as the limit: when a close-up's
+    # border is mostly GARMENT, its median is the garment's shade (an Ash tee
+    # near 215), and taking that as the backdrop would erase the garment.
+    white = max(floor, backdrop_level(mn) - tolerance)
     whiteish = (mn >= white) & ((mx - mn) <= 10)
 
     bg = np.zeros((h, w), bool)

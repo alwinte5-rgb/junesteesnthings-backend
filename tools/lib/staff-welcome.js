@@ -91,6 +91,7 @@ function welcomeEmail({ name, role, track, wage, signInUrl, siteUrl, details = {
   ].filter((r) => r && r[1]);
 
   const steps = [
+    'First, read and sign our <b>staff agreement</b>. It opens by itself the first time you sign in, and the workspace opens once it is signed.',
     `Your <b>${esc(track)} training</b> is waiting for you under Training once you sign in. Work through it in order.`,
     'Say hello in <b>Team chat</b>. That\'s where we\'ll talk day to day.',
     d.folder ? `Our shared folder for files and drafts: <a href="${esc(d.folder)}">open the folder</a>.${isApple(d.folder)
