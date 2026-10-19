@@ -2952,7 +2952,7 @@ async function sendNotificationEmail(s, { unverified = false } = {}) {
          If it looks genuine, reply to them directly.</p>`
     : '';
   await sendEmail({
-    to:      NOTIFY_EMAIL,
+    to:      NOTIFY_EMAIL, urgent: true,   // a customer wrote: never held for the daily summary (owner, 2026-10-19)
     subject: `${unverified ? '[Unchecked] ' : ''}New Quote Request — ${s.name}`,
     html: `
       <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
@@ -4446,7 +4446,7 @@ function alertOwnerOfChat(body) {
     ${a.where ? `<p><strong>Location:</strong> ${escEmail(a.where)}</p>` : ''}
     ${a.text ? `<p><strong>Message:</strong><br>${escEmail(a.text)}</p>` : ''}
     <p><a href="https://dashboard.tawk.to/">Open tawk.to to reply</a> — or answer from the tawk app.</p>`;
-  sendEmail({ to: NOTIFY_EMAIL, subject: a.subject, html, replyTo: a.email || undefined })
+  sendEmail({ to: NOTIFY_EMAIL, subject: a.subject, html, replyTo: a.email || undefined, urgent: true })   // a customer wrote: never held
     .catch(err => console.error('chat alert email failed:', err.message));
   sendOwnerSms(a.sms)
     .catch(err => console.error('chat alert sms failed:', err.message));
@@ -4732,7 +4732,7 @@ app.post('/webhooks/twilio/sms', async (req, res) => {
       // A customer replying to an order text is talking to the shop. Without
       // this their reply would land in the Twilio console and nowhere else.
       await sendEmail({
-        to: NOTIFY_EMAIL,
+        to: NOTIFY_EMAIL, urgent: true,   // a customer wrote: never held for the daily summary (owner, 2026-10-19)
         subject: `Text from ${from}: ${said.slice(0, 60)}`,
         html: `<p><b>${escEmail(from)}</b> ${lead.quote ? 'replied by text' : 'texted the shop'}:</p>
           <blockquote style="border-left:3px solid #1848B8;margin:0;padding:6px 12px">${escEmail(said)}</blockquote>
@@ -4865,6 +4865,7 @@ async function keepInboundEmail(m) {
   const who = m.fromName ? `${m.fromName} <${m.from}>` : m.from || 'Someone';
   await sendEmail({
     to: NOTIFY_EMAIL, promo: false, replyTo: m.from || undefined,
+    urgent: true,   // a customer wrote: never held for the daily summary (owner, 2026-10-19)
     subject: `${quote ? `Reply on ${quote}` : 'Email'} from ${m.fromName || m.from}: ${m.subject}`.slice(0, 200),
     html: `<p><b>${escEmail(who)}</b> ${quote ? 'replied about their order' : 'wrote to the shop'}:</p>
       <blockquote style="border-left:3px solid #1848B8;margin:0;padding:6px 12px;white-space:pre-wrap">${escEmail(m.text || '(no text)')}</blockquote>
@@ -5784,7 +5785,7 @@ app.post('/api/embroidery-quote', countFormFailures('embroidery'), orderRateLimi
       : `<tr><td style="padding:8px;font-weight:bold;">File</td><td style="padding:8px;">None uploaded — digitizing needed</td></tr>`;
     try {
     await sendEmail({
-      to: NOTIFY_EMAIL,
+      to: NOTIFY_EMAIL, urgent: true,   // a customer wrote: never held for the daily summary (owner, 2026-10-19)
       replyTo: email || NOTIFY_EMAIL,
       subject: `New EMBROIDERY request — ${name} (${size})`,
       html: `
@@ -5914,7 +5915,7 @@ app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 
     const img = previewUrl ? `<p><img src="${escEmail(previewUrl)}" alt="Design preview" style="max-width:100%;border:1px solid #e3e8f2;border-radius:8px"></p>` : '';
     try {
       await sendEmail({
-        to: NOTIFY_EMAIL,
+        to: NOTIFY_EMAIL, urgent: true,   // a customer wrote: never held for the daily summary (owner, 2026-10-19)
         replyTo: email || NOTIFY_EMAIL,
         subject: `${savedId ? '' : 'NOT SAVED: '}New design from the designer — ${name}${total ? ` ($${total.toFixed(2)})` : ''}`,
         html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
@@ -7069,7 +7070,7 @@ app.post('/q/:code/proof/changes', quoteToolRateLimit, async (req, res) => {
     await pool.query(`INSERT INTO lead_notes (quote_code, kind, body) VALUES ($1, 'note', $2)`,
       [code, `Proof changes requested on the quote page: ${note}`]);
     if (NOTIFY_EMAIL) {
-      sendEmail({ to: NOTIFY_EMAIL, promo: false, subject: `Proof changes requested: ${rows[0].name || code} (${code})`,
+      sendEmail({ to: NOTIFY_EMAIL, promo: false, urgent: true, subject: `Proof changes requested: ${rows[0].name || code} (${code})`,
         html: `<p>Changes requested on the proof for <b>${escEmail(code)}</b>:</p><blockquote>${escEmail(note)}</blockquote>
           <p><a href="${PUBLIC_BASE_URL}/admin/production/${encodeURIComponent(code)}">Open the job</a></p>` })
         .catch((e) => console.error('proof changes notice failed:', e.message));
@@ -18795,7 +18796,7 @@ app.post('/q/:code/changes', orderRateLimit, async (req, res) => {
         quantity can fall in a different band. Open the quote, apply the changes and save.</p>` : '';
 
     sendEmail({
-      to: SHOP_EMAIL,
+      to: SHOP_EMAIL, urgent: true,   // a customer wrote: never held for the daily summary (owner, 2026-10-19)
       replyTo: saved.email || undefined,
       subject: `✏️ Change requested — quote ${saved.code} (${saved.name || saved.phone || 'customer'})`,
       html: `<div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto">

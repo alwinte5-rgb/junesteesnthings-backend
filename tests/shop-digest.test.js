@@ -87,3 +87,12 @@ test('sign-in codes and the email test are never held', () => {
   assert.ok(/sign-in code`, promo: false,\s*urgent: true/.test(src));
   assert.ok(/to:\s+NOTIFY_EMAIL, urgent: true,[^\n]*\n\s+subject: 'Email Test/.test(src));
 });
+
+test('what a customer writes reaches the shop straight away (owner, 2026-10-19)', () => {
+  for (const anchor of ['New Quote Request', 'Text from ${from}', 'Reply on ${quote}', 'New EMBROIDERY request',
+    'New design from the designer', 'Proof changes requested:', 'Change requested — quote', 'subject: a.subject, html, replyTo']) {
+    const i = src.indexOf(anchor);
+    assert.ok(i > -1, anchor);
+    assert.ok(/urgent: true/.test(src.slice(i - 260, i + 120)), anchor);
+  }
+});
