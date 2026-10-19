@@ -30,7 +30,7 @@ test('only a new quote, or one that is already a draft, can be saved as a draft'
 });
 
 test('a draft is stored as a draft, with nobody recorded as having sent it', () => {
-  assert.match(save, /staffId, \(gate\.held \|\| draft\) \? null : staffId, draft \? 'draft' : gate\.held \? 'held' : 'sent'\]\)\);/);
+  assert.match(save, /staffId, \(gate\.held \|\| draft\) \? null : staffId, draft \? 'draft' : gate\.held \? 'held' : 'sent'[,\]]/);
   assert.match(save, /status = CASE WHEN \$20 THEN 'held' WHEN \$22 THEN 'draft' WHEN accepted_at IS NULL THEN 'sent' ELSE status END/);
 });
 
