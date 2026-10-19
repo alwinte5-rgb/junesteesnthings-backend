@@ -24,7 +24,7 @@ const OK_ART = {
   kids:    [/kids_babies|basic_tshirt|onesie/],
   tank:    [/tank/],
   longslv: [/long_sleeve/],
-  tee:     [/basic_tshirt|women_tshirt|premium|v_neck/],
+  tee:     [/basic_tshirt|women_tshirt|cropped_tshirt|premium|v_neck/],
 };
 
 const decodeStages = (b) => { try { return JSON.parse(decodeURIComponent(Buffer.from(String(b || ''), 'base64').toString('utf8'))); }

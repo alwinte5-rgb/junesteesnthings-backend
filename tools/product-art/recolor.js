@@ -90,7 +90,8 @@ med = {p: np.median(im[p][..., :3][im[p][..., 3] > 200], axis=0) for p in im}
 gap = math.dist(med[a], med[b])
 if gap <= float(sys.argv[4]):
     print(0); sys.exit()
-keep = min(im, key=lambda p: math.dist(med[p], sw)); fix = b if keep == a else a
+keep = a if sys.argv[5:] == ['keep-first'] else min(im, key=lambda p: math.dist(med[p], sw))
+fix = b if keep == a else a
 x = im[fix]; m, t = med[fix], med[keep]
 x[..., :3] = np.clip(np.where(m >= 16, x[..., :3] * (t / np.maximum(m, 1)), x[..., :3] + (t - m)), 0, 255)
 Image.fromarray(np.rint(x).astype("uint8")).save(fix)
@@ -140,7 +141,16 @@ function plan(dir) {
   const sides = ['front', 'back'].filter((s) => shot.some((c) => has(c, s)));
   const out = [];
   for (const c of cols) {
-    if (has(c, 'front') || (ONLY && slug(c.name) !== ONLY)) continue;
+    if (ONLY && slug(c.name) !== ONLY) continue;
+    if (has(c, 'front')) {
+      /* Photographed from the front only: the back is made from the nearest
+         colour S&S shot from behind, and matched to this colour's REAL front. */
+      if (!sides.includes('back') || has(c, 'back') || !rgb(c.c1) || !single(c)) continue;
+      const src = shot.filter((x) => single(x) && has(x, 'back'))
+        .sort((a, b) => dist(rgb(a.c1), rgb(c.c1)) - dist(rgb(b.c1), rgb(c.c1)))[0];
+      if (src) out.push({ c, src, sides: ['back'], backOnly: true });
+      continue;
+    }
     const want = rgb(c.c1);
     if (!want) { out.push({ c, skip: 'S&S gives no swatch colour' }); continue; }
     if (!single(c)) { out.push({ c, skip: 'a pattern or two colours, not one fabric colour' }); continue; }
@@ -178,9 +188,13 @@ async function make(dir, key) {
         for (const f of [tmp, got]) if (fs.existsSync(f)) fs.unlinkSync(f);
       }
     }
-    if (rec.sides.front && rec.sides.back) {
+    if (p.backOnly) rec.backOnly = true;
+    const realFront = path.join(dir, sl + '-front.webp');
+    if (rec.sides.back && (rec.sides.front || p.backOnly)) {
       try {
-        const gap = Number(py(MATCH, [path.join(rdir, rec.sides.front), path.join(rdir, rec.sides.back), p.c.c1, String(SIDE_GAP)]));
+        const gap = Number(py(MATCH, p.backOnly
+          ? [realFront, path.join(rdir, rec.sides.back), p.c.c1, String(SIDE_GAP), 'keep-first']
+          : [path.join(rdir, rec.sides.front), path.join(rdir, rec.sides.back), p.c.c1, String(SIDE_GAP)]));
         if (gap) console.log('  ' + p.c.name.padEnd(26) + 'front and back were ' + gap + ' apart — matched');
       } catch (e) { console.log('  ' + p.c.name.padEnd(26) + 'could not match front and back — ' + e.message); }
     }
