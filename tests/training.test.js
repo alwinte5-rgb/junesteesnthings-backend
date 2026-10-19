@@ -110,7 +110,7 @@ test('page tips: a known page only, back only within the site, and never for the
   const fn = src.slice(src.indexOf('function pageTip('), src.indexOf('\n}\n', src.indexOf('function pageTip(')));
   assert.match(fn, /a\.kind !== 'staff' \|\| !a\.inTraining/);
   assert.match(fn, /\$\{withTips\(escEmail\(tip\)\)\}/);
-  assert.match(src, /<main class="adm-page"><div class="wrap">\$\{pageTip\(key\)\}\$\{body\}/);
+  assert.match(src, /<main class="adm-page"><div class="wrap">\$\{sectionTabs\(key\)\}\$\{pageTip\(key\)\}\$\{body\}/);
 });
 
 test('every page tip belongs to a real menu entry', () => {
