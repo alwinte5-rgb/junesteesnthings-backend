@@ -25,6 +25,8 @@
  *    renamed and moved into place; a live product is filed under each leaf it
  *    matches and that leaf's group, and taken OUT of any tree category it no
  *    longer matches, so a re-run after a rename or a rule change converges.
+ *    A switched-off product keeps its filings: no list shows it, and they are
+ *    right again if it comes back.
  *    Sustainable stays as membership (it drives the shop's Organic filter) but
  *    is switched off as a menu category. The reference rows the run replaces
  *    are saved to ~/jtees-backups first.
@@ -139,9 +141,11 @@ else process.stdin.on('end', async () => {
   for (const g of TREE) {
     const gid = ensure(g.slug, g.name, 0, g.order);
     treeIds.set(g.slug, gid);
+    /* In a dry run a new group has no id yet: its leaves are shown as new, unparented. */
     (g.leaves || []).forEach((l, i) => treeIds.set(l.slug, ensure(l.slug, l.name, String(gid).startsWith('<') ? 0 : gid, i + 1)));
     for (const a of g.adopt || []) {
       const c = bySlug.get(a);
+      if (String(gid).startsWith('<')) { console.log('  ' + a + ' moves under ' + g.name + ' once it exists (next --apply)'); continue; }
       if (c && String(c.parent) !== String(gid)) stmts.push('UPDATE lumise_categories SET parent=' + Number(gid) + ', updated=NOW() WHERE id=' + Number(c.id) + ';');
     }
   }
@@ -162,7 +166,6 @@ else process.stdin.on('end', async () => {
 
   let nSus = 0, nType = 0, nOut = 0; const unfiled = [];
   const count = {};
-  const live = new Set(products.map((p) => String(p.id)));
   for (const p of products) {
     if (p.sid && sustainable.has(String(p.sid))) {
       if (add(susId || '<new>', p.id)) { nSus++; console.log('  sustainable  #' + String(p.id).padStart(3) + '  ' + p.name.slice(0, 52)); }
@@ -177,7 +180,6 @@ else process.stdin.on('end', async () => {
       }
     }
   }
-  void live;
 
   console.log('\n  per category (live products):');
   for (const g of TREE.filter((x) => !x.manual)) {
