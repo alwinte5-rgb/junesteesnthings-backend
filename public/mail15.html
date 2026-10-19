@@ -18,33 +18,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
-  <style>
-    *,*::before,*::after{box-sizing:border-box}
-    body{margin:0;font-family:'Inter',system-ui,sans-serif;color:#374151;background:#f7f6f3;line-height:1.6}
-    a{color:#0E78B8}
-    .wrap{max-width:1040px;margin:0 auto;padding:0 20px}
-    .bp-hero{padding:44px 0 10px;text-align:center}
-    .bp-hero h1{font-size:2.3rem;font-weight:900;color:#0D0D12;margin:0 0 10px;letter-spacing:-.5px;line-height:1.15}
-    .bp-hero p{max-width:660px;margin:0 auto;font-size:1.08rem}
-    .bp-code{display:inline-block;margin:18px 0 4px;background:#0D0D12;color:#fff;font-weight:900;font-size:1.6rem;letter-spacing:3px;padding:10px 26px;border-radius:12px}
-    .bp-cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin:22px 0 6px}
-    .bp-btn{display:inline-block;background:#0E78B8;color:#fff;font-weight:800;padding:14px 26px;border-radius:30px;text-decoration:none;font-size:1rem}
-    .bp-btn.alt{background:#fff;color:#0D0D12;border:2px solid #E5E7EB}
-    .bp-small{font-size:.9rem;color:#6B7280}
-    .bp-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;padding:28px 0}
-    .bp-card{background:#fff;border:1px solid #E5E7EB;border-radius:16px;padding:22px}
-    .bp-card h2,.bp-card h3{font-size:1.05rem;font-weight:800;color:#0D0D12;margin:0 0 6px}
-    .bp-card p{margin:0;font-size:.97rem}
-    .bp-big{font-size:1.9rem;font-weight:900;color:#0E78B8;line-height:1;margin-bottom:8px}
-    .bp-steps{background:#fff;border:1px solid #E5E7EB;border-radius:16px;padding:24px 26px;margin:0 0 24px}
-    .bp-steps h2{font-size:1.3rem;font-weight:900;color:#0D0D12;margin:0 0 12px}
-    .bp-steps ol{margin:0;padding-left:22px}
-    .bp-steps li{margin-bottom:8px}
-    .bp-fine{font-size:.88rem;color:#4B5563;padding:0 0 48px}
-    .bp-fine h2{font-size:1rem;color:#0D0D12;margin:0 0 6px}
-    .bp-fine ul{padding-left:20px;margin:0}
-    @media(max-width:860px){.bp-grid{grid-template-columns:minmax(0,1fr)}.bp-hero h1{font-size:1.8rem}}
-  </style>
+  <link rel="stylesheet" href="/assets/css/partners.css?v=2f897451" />
   <script src="/assets/js/analytics.js"></script>
   <link rel="stylesheet" href="/assets/css/site-nav.css?v=9870dae6" />
   <link rel="stylesheet" href="/assets/css/review-strip.css" />
@@ -107,43 +81,55 @@
 <script src="/assets/js/site-nav.js" defer></script>
 <!-- site-header:end -->
 
-<main class="wrap">
+<main>
   <section class="bp-hero">
-    <h1>15% off your first business order</h1>
-    <p>Thanks for scanning! Join our free Business Partners Program and take 15% off your first order of $150 or more: shirts, hoodies, hats, embroidery, signs, banners and more.</p>
-    <div class="bp-code" aria-label="Code MAIL15">MAIL15</div>
-    <div class="bp-cta">
-      <a class="bp-btn" href="https://design.jtees.net/account.php?join=partner&amp;src=mail15">Join free and claim it</a>
-      <a class="bp-btn alt" href="tel:+17739004592">Call or text (773) 900-4592</a>
+    <div class="wrap">
+      <span class="bp-kicker">Thanks for scanning!</span>
+      <h1><span>15% off</span><br>your first business order</h1>
+      <p>Join our free Business Partners Program and take 15% off your first order of $150 or more: shirts, hoodies, hats, embroidery, signs, banners and more.</p>
+      <div class="bp-code" aria-label="Your code: MAIL15">Your code <b>MAIL15</b></div>
+      <p class="bp-code-note">Join and it's applied for you. Nothing to type.</p>
+      <div class="bp-cta">
+        <a class="bp-btn" href="https://design.jtees.net/account.php?join=partner&amp;src=mail15">Join free and claim it</a>
+        <a class="bp-btn alt" href="tel:+17739004592">Call or text (773) 900-4592</a>
+      </div>
+      <p class="bp-small">Businesses of every size are welcome, one-person shops included. No documents needed.</p>
     </div>
-    <p class="bp-small">Businesses of every size are welcome, one-person shops included. No documents needed.</p>
   </section>
 
-  <section class="bp-steps">
-    <h2>Three steps</h2>
-    <ol>
-      <li><b>Join</b> with your email and business name. It takes a minute.</li>
-      <li><b>Order</b> in our <a href="https://design.jtees.net/products.php">Design Studio</a>, or <a href="/contact">ask for a quote</a> and we'll price it for you.</li>
-      <li><b>Enter MAIL15</b> at checkout or on your quote page.</li>
-    </ol>
-  </section>
+  <div class="wrap">
 
-  <section class="bp-grid" aria-label="After your first order">
-    <div class="bp-card"><div class="bp-big">5% off</div><h2>Reorders</h2><p>Use code <b>REORDER5</b> every time you order again.</p></div>
-    <div class="bp-card"><div class="bp-big">60 days</div><h2>Same price</h2><p>Reorder the same job within 60 days of paying and keep your price.</p></div>
-    <div class="bp-card"><div class="bp-big">Team</div><h2>Logins</h2><p>Add the people who order for your business.</p></div>
-  </section>
+    <section class="bp-steps" style="margin-top:36px">
+      <div>
+        <h2>Three steps</h2>
+        <ol>
+          <li><span><b>Join</b> with your email and business name. It takes a minute.</span></li>
+          <li><span><b>Order</b> in our <a href="https://design.jtees.net/products.php">Design Studio</a>, or <a href="/contact">ask for a quote</a> and we'll price it for you.</span></li>
+          <li><span><b>Save 15%.</b> MAIL15 goes on by itself at checkout and on your quote.</span></li>
+        </ol>
+      </div>
+      <a class="bp-btn" href="https://design.jtees.net/account.php?join=partner&amp;src=mail15">Join free</a>
+    </section>
 
-  <section class="bp-fine">
-    <h2>The details</h2>
-    <ul>
-      <li><b>MAIL15:</b> 15% off the items on one order of $150 or more (before tax and delivery). One use per business, and not with another discount on the same order.</li>
-      <li><b>REORDER5:</b> 5% off when you order again after a paid order with us. One code per order.</li>
-      <li><b>60-day price:</b> reorder the same items, in the same quantity range, within 60 days of paying and you keep the price you paid (before any discount). A change of product, color, artwork or quantity range gets a fresh quote.</li>
-      <li>Orders start with a 50% deposit; orders under $100 are paid in full. You approve a proof before anything is printed.</li>
-      <li>Shopping for yourself? Nothing changes. You can still order the way you always have.</li>
-    </ul>
-  </section>
+    <h2 class="bp-h2">After your first order</h2>
+    <section class="bp-perks" aria-label="After your first order">
+      <div class="bp-perk"><div class="bp-big">5% off</div><h3>Every reorder</h3><p>Whenever you order again.</p><span class="bp-auto">Taken off automatically</span></div>
+      <div class="bp-perk"><div class="bp-big">60 days</div><h3>Same price</h3><p>Reorder the same job within 60 days of paying and keep your price.</p></div>
+      <div class="bp-perk"><div class="bp-big">Team</div><h3>Logins and logos on file</h3><p>Add the people who order for you, and upload your logos once.</p></div>
+    </section>
+
+    <section class="bp-fine" style="margin-top:36px">
+      <h2>The details</h2>
+      <ul>
+        <li><b>15% off (MAIL15):</b> the items on one order of $150 or more (before tax and delivery). One use per business, and not with another discount on the same order.</li>
+        <li><b>5% off (REORDER5):</b> when you order again after a paid order with us. One discount per order.</li>
+        <li>Discounts go on when you're signed in to your account, or when we send a quote to an email on your business.</li>
+        <li><b>60-day price:</b> reorder the same items, in the same quantity range, within 60 days of paying and you keep the price you paid (before any discount). A change of product, color, artwork or quantity range gets a fresh quote.</li>
+        <li>Orders start with a 50% deposit; orders under $100 are paid in full. You approve a proof before anything is printed.</li>
+        <li>Shopping for yourself? Nothing changes. You can still order the way you always have.</li>
+      </ul>
+    </section>
+  </div>
 </main>
 
 <!-- site-footer:start — generated by tools/site-nav.js from assets/data/site-nav.json; edit that file, not this block -->

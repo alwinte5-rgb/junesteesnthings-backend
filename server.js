@@ -40,6 +40,9 @@ const LEADMAIL = require('./tools/lib/lead-email');
 const REINTRO = require('./tools/lib/reintro');
 const PARTNERS = require('./tools/lib/partners');
 const PARTNERS_INVITE = require('./tools/lib/partners-invite');
+const PROGRESS = require('./tools/lib/order-progress');
+const BRAND = require('./tools/lib/brand-files');
+const SIZES = require('./tools/lib/size-collect');
 const MKT_CAL = require('./tools/lib/marketing-calendar');
 const FUNNEL = require('./tools/lib/funnel-health');
 const METACAPI = require('./tools/lib/meta-capi');
@@ -587,6 +590,15 @@ async function initDB() {
     'promo_recorded_at TIMESTAMPTZ',
     'promo_attempts INT NOT NULL DEFAULT 0',
     'reorder_of TEXT',
+    /* Automatic partner codes on quotes (applyAutoQuoteCode): when the
+       designer was last asked, and whether the customer took the code off
+       (then it is never put back on its own). */
+    'promo_auto_at TIMESTAMPTZ',
+    'promo_auto_off BOOLEAN NOT NULL DEFAULT FALSE',
+    /* Who approved the proof, as they typed it on the quote page ("Approve
+       this proof"). With proof_ok_at it is the written approval the playbook
+       asks for. NULL when the shop ticked it from a text or call. */
+    'proof_ok_by TEXT',
   ]) {
     await pool.query(`ALTER TABLE quotes ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
@@ -1805,6 +1817,48 @@ async function initStaffTables() {
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
   await pool.query(`CREATE INDEX IF NOT EXISTS quote_revisions_code_idx ON quote_revisions (quote_code, id DESC)`);
+  /* A Business Partner's brand files (tools/lib/brand-files.js): uploaded once
+     on their account, shown on every job for that business. business_id is the
+     designer's jt_businesses.id; the business itself lives there. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS business_files (
+      id           BIGSERIAL PRIMARY KEY,
+      business_id  INTEGER NOT NULL,
+      url          TEXT NOT NULL,
+      name         TEXT,
+      added_by     TEXT,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS business_files_biz ON business_files (business_id, created_at DESC)`);
+  /* The team size link (tools/lib/size-collect.js): one per quote, and the
+     name and size each person on the team typed. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS size_collections (
+      id          BIGSERIAL PRIMARY KEY,
+      quote_code  TEXT NOT NULL UNIQUE,
+      token       TEXT NOT NULL UNIQUE,
+      closed_at   TIMESTAMPTZ,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS size_entries (
+      id             BIGSERIAL PRIMARY KEY,
+      collection_id  BIGINT NOT NULL,
+      name           TEXT NOT NULL,
+      line_index     INTEGER NOT NULL,
+      size           TEXT NOT NULL,
+      qty            INTEGER NOT NULL DEFAULT 1,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS size_entries_coll ON size_entries (collection_id, created_at)`);
+  /* A Business Partner's saved ship-to address, used on their reorders and on
+     any quote of theirs that ships without one. business_id is the designer's. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS business_profiles (
+      business_id  INTEGER PRIMARY KEY,
+      ship_to      JSONB,
+      updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
   await repairSentAsDelivered().catch((e) => console.error('sent-as-delivered repair failed:', e.message));
   /* After the server is listening: it calls Twilio and Cloudinary. */
   setTimeout(() => repairTextPictures().catch((e) => console.error('text picture repair failed:', e.message)), 30 * 1000).unref();
@@ -3695,6 +3749,12 @@ const signatureRateLimit = makeRateLimit(60, 60 * 60 * 1000);
 /* One request per photo, so its own budget: sending a team's faces must not
    use up the order limit that Accept and Pay share. */
 const photoRateLimit     = makeRateLimit(80, 60 * 60 * 1000);
+/* The team size link: a whole team may share one office IP. */
+const sizeRateLimit      = makeRateLimit(60, 60 * 60 * 1000);
+/* The quote page's own tools (approve a proof, ask for proof changes, run the
+   size link): their own budget, so tidying a size list cannot use up the
+   order limit that Accept and Pay share. */
+const quoteToolRateLimit = makeRateLimit(60, 60 * 60 * 1000);
 
 /* One day's distinct rows per kind are capped, so a flood of made-up paths
    cannot grow the table without limit; the count on an existing row still
@@ -6610,12 +6670,12 @@ async function quotePaidBefore(emails) {
 
 /** Ask the designer whether `code` may go on quote `q`. Throws when it cannot
  *  be asked; the caller tells the customer to try again rather than guessing. */
-async function studioPromoCheck(q, code) {
+async function studioPromoCheck(q, code, action = 'check', timeoutMs) {
   const paidBefore = await quotePaidBefore([q.email]);
   const r = await studioPost('jt-promo-check.php', {
-    action: 'check', code, email: String(q.email || ''),
+    action, code, email: String(q.email || ''),
     subtotal: String(quoteTotals(q).subtotal), paid_before: paidBefore ? '1' : '0',
-  });
+  }, timeoutMs);
   if (!r.ok) throw new Error(`designer jt-promo-check.php answered ${r.status}`);
   return r.json();
 }
@@ -6634,6 +6694,307 @@ async function dropQuoteCheckout(code, session) {
   await pool.query('UPDATE quotes SET stripe_session = NULL WHERE code = $1 AND stripe_session = $2', [code, session]).catch(() => {});
   await expireCheckoutSession(session).catch(() => {});
 }
+
+/** Put a checked code on quote `q`, in its ordinary discount fields.
+ *  Returns 'ok' or a PARTNERS.PROMO_MESSAGES key. `auto` marks a code the
+ *  quote took on by itself (a Business Partner's), which says so on the page. */
+async function applyQuoteCode(q, check, auto) {
+  const code = q.code;
+  /* A one-time code is spent when a quote is paid, so until then it could sit
+     on two quotes at once. Kept off a second OPEN quote of the same person or
+     business; a quote cancelled or older than two weeks stops counting. */
+  if (check.one_time) {
+    const { rows: other } = await pool.query(
+      `SELECT 1 FROM quotes WHERE code <> $1 AND promo_code = $2 AND COALESCE(paid_amount, 0) = 0
+          AND cancelled_at IS NULL AND created_at > NOW() - INTERVAL '14 days'
+          AND (lower(trim(email)) = lower(trim($3::text)) OR ($4::int IS NOT NULL AND promo_business_id = $4::int))
+        LIMIT 1`,
+      [code, String(check.code).toUpperCase(), String(q.email || ''),
+       Number.isInteger(check.business_id) ? check.business_id : null]);
+    if (other.length) return 'held';
+  }
+  const base = quoteTotals({ ...q, discount_value: 0 });
+  const d = PARTNERS.discountForCode(check, base.gross);
+  if (auto) d.note = `Business Partner discount (${String(check.code).toUpperCase()})`;
+  const tt = quoteWithDiscount(q, d);
+  /* Guarded on the same conditions the page checked: no money in, and either
+     no discount or one that is itself a code (a code replaces a code). */
+  const { rows: up } = await pool.query(
+    `UPDATE quotes SET discount_kind = $2, discount_value = $3, discount_note = $4,
+            promo_code = $5, promo_business_id = $6,
+            subtotal = $7, tax = $8, total = $9, deposit = $10
+      WHERE code = $1 AND COALESCE(paid_amount, 0) = 0 AND cancelled_at IS NULL
+        AND (promo_code IS NOT NULL OR COALESCE(discount_value, 0) = 0)
+      RETURNING stripe_session`,
+    [code, d.kind, d.value, d.note, String(check.code).toUpperCase(),
+     Number.isInteger(check.business_id) ? check.business_id : null,
+     tt.subtotal, tt.tax, tt.total, tt.deposit]);
+  if (!up.length) return 'notnow';
+  await dropQuoteCheckout(code, up[0].stripe_session);
+  console.log(`quote ${code}: code ${check.code} ${auto ? 'applied automatically' : 'applied'} (${d.kind} ${d.value})`);
+  return 'ok';
+}
+
+/** A Business Partner's quote that ships, with no address yet, takes the
+ *  business's saved one, so the accept form does not ask again. Before
+ *  accepting only; the customer still sees it and can ask for a change. */
+async function fillBusinessShipTo(q) {
+  if (!PARTNERS.on() || q.ship_to || q.accepted_at || q.cancelled_at || !SHIP.quoteShips(q)) return false;
+  try {
+    const biz = await businessForEmail(q.email);
+    const st = biz ? await businessShipTo(biz.id) : null;
+    if (!st) return false;
+    const { rowCount } = await pool.query(
+      'UPDATE quotes SET ship_to = $2 WHERE code = $1 AND ship_to IS NULL AND accepted_at IS NULL', [q.code, JSON.stringify(st)]);
+    return rowCount > 0;
+  } catch (e) {
+    console.error(`saved address for ${q.code} failed:`, e.message);
+    return false;
+  }
+}
+
+/** A Business Partner's quote takes their best code on its own, the first
+ *  time they open it (and again every 10 minutes while it has none, so
+ *  someone who joins after getting the quote sees it on the next visit).
+ *  Never over a discount the shop typed, never after any payment, never once
+ *  the customer has taken a code off. Quiet on failure: the page shows the
+ *  code box as usual. Returns true when the quote changed. */
+async function applyAutoQuoteCode(q) {
+  /* Before the customer accepts and before any card page is open: the total
+     they said yes to, and a payment in progress, never change under them. */
+  if (!PARTNERS.on() || !PARTNERS.canEnterCode(q) || q.promo_code || q.promo_auto_off || q.accepted_at || q.stripe_session
+      || Number(q.discount_value) > 0 || !isValidEmail(String(q.email || ''))) return false;
+  if (q.promo_auto_at && Date.now() - new Date(q.promo_auto_at).getTime() < 10 * 60 * 1000) return false;
+  try {
+    const { rows } = await pool.query(
+      `UPDATE quotes SET promo_auto_at = NOW() WHERE code = $1
+          AND (promo_auto_at IS NULL OR promo_auto_at < NOW() - INTERVAL '10 minutes') RETURNING code`, [q.code]);
+    if (!rows.length) return false;
+    const check = await studioPromoCheck(q, '', 'best', 4000);
+    if (!check || !check.ok) return false;
+    return (await applyQuoteCode(q, check, true)) === 'ok';
+  } catch (e) {
+    console.error(`automatic code for ${q.code} failed:`, e.message);
+    return false;
+  }
+}
+
+/* ── Team size link (tools/lib/size-collect.js) ────────────────────────────
+   The customer makes one link per quote from their quote page (the quote code
+   is the key, as for paying); anyone with the link adds a name and a size.
+   Nothing here changes a price: the totals fill the quote page's size boxes,
+   and the customer sends them as an ordinary change request. */
+async function sizeQuote(code) {
+  if (!QUOTE_CODE_RE.test(code)) return null;
+  const { rows } = await pool.query(`SELECT * FROM quotes WHERE code = $1 AND status NOT IN ('held', 'draft')
+      AND cancelled_at IS NULL`, [code]);
+  return rows[0] || null;
+}
+
+app.post('/q/:code/sizes/start', quoteToolRateLimit, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  try {
+    const q = await sizeQuote(code);
+    if (!q) return res.status(404).send('Not found');
+    if (!q.production_at) {
+      await pool.query(`INSERT INTO size_collections (quote_code, token) VALUES ($1, $2) ON CONFLICT (quote_code) DO NOTHING`,
+        [code, SIZES.newToken()]);
+    }
+  } catch (err) {
+    console.error('size link start failed:', err.message);
+    reportError('size-link', err, `quote ${code}`).catch(() => {});
+  }
+  res.redirect(303, `/q/${code}#sizes`);
+});
+
+app.post('/q/:code/sizes/close', quoteToolRateLimit, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  try {
+    if (await sizeQuote(code)) {
+      /* Said, not toggled: a second press from an old tab must not undo it. */
+      const reopen = String((req.body && req.body.to) || '') === 'open';
+      await pool.query(reopen ? `UPDATE size_collections SET closed_at = NULL WHERE quote_code = $1`
+        : `UPDATE size_collections SET closed_at = COALESCE(closed_at, NOW()) WHERE quote_code = $1`, [code]);
+    }
+  } catch (err) { console.error('size link close failed:', err.message); }
+  res.redirect(303, `/q/${code}#sizes`);
+});
+
+app.post('/q/:code/sizes/remove', quoteToolRateLimit, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  const id = parseInt(req.body && req.body.id, 10);
+  try {
+    if (Number.isInteger(id) && await sizeQuote(code)) {
+      await pool.query(`DELETE FROM size_entries WHERE id = $1
+          AND collection_id = (SELECT id FROM size_collections WHERE quote_code = $2)`, [id, code]);
+    }
+  } catch (err) { console.error('size entry remove failed:', err.message); }
+  res.redirect(303, `/q/${code}#sizes`);
+});
+
+/** The quote and its sized lines behind a size link, or null. */
+async function sizeLink(token) {
+  if (!SIZES.TOKEN_RE.test(token)) return null;
+  const { rows } = await pool.query(
+    `SELECT c.id AS coll_id, c.closed_at, q.* FROM size_collections c JOIN quotes q ON q.code = c.quote_code
+      WHERE c.token = $1 AND q.cancelled_at IS NULL`, [token]);
+  if (!rows.length) return null;
+  let catalog = { products: [], methods: [] };
+  try { catalog = await getCatalog(); } catch { /* the line's own sizes */ }
+  const lines = (rows[0].items || []).map((it, ix) => ({ ix, it, sizes: orderedSizeKeys(it, catalog) }))
+    .filter((l) => l.sizes.length && !l.it.optional);
+  return { q: rows[0], lines };
+}
+
+function sizeLinkPage(link, note) {
+  const q = link.q;
+  const who = String(q.name || '').trim();
+  const open = !link.q.closed_at && !q.production_at;
+  return quotePage('Pick your size', `
+    <div class="card">
+      <h1>Pick your size</h1>
+      <p class="muted" style="margin-top:6px">${who ? escEmail(who) + ' is' : 'Your team is'} ordering from June's Tees &amp; Things.
+        Add your name and size and we will put you on the order.</p>
+      ${note}
+      ${!open ? '<div class="warn" style="margin-top:12px">This size list is closed. Ask the person who sent you the link.</div>' : `
+      <form method="POST" style="margin-top:14px;display:grid;gap:12px" onsubmit="this.querySelector('button[type=submit]').disabled=true">
+        <label>Your name<input name="name" maxlength="60" required autocomplete="name" style="display:block;width:100%;margin-top:4px"></label>
+        <p class="muted" style="margin:0;font-size:14px">Type how many you need of each size. Ordering for your kids too? Add their youth sizes on the same form.</p>
+        ${link.lines.map((l) => {
+          const { own, youth } = SIZES.offeredSizes(l.sizes);
+          const box = (sz, n) => `<label style="display:flex;flex-direction:column;align-items:center;gap:4px;border:1px solid #d5dbe6;border-radius:8px;padding:6px 4px;width:64px;font-weight:700">
+            ${escEmail(sz)}<input type="number" name="q_${l.ix}_${n}" min="0" max="${SIZES.MAX_PER_SIZE}" step="1" inputmode="numeric" placeholder="0" aria-label="How many ${escEmail(sz)}"
+              style="width:48px;text-align:center;font-size:16px;padding:4px"></label>`;
+          const row = (list, from) => `<div style="display:flex;flex-wrap:wrap;gap:8px">${list.map((sz, k) => box(sz, from + k)).join('')}</div>`;
+          return `<fieldset style="border:1px solid #e3e8f2;border-radius:10px;padding:10px 12px">
+          <input type="hidden" name="sizes_${l.ix}" value="${escEmail(SIZES.sizesKey(l.sizes))}">
+          <legend style="font-weight:700;padding:0 4px">${escEmail(l.it.description || 'Item ' + (l.ix + 1))}</legend>
+          ${youth.length ? '<div class="muted" style="font-size:13px;margin:0 0 6px">Adult sizes</div>' : ''}${row(own, 0)}
+          ${youth.length ? `<div class="muted" style="font-size:13px;margin:12px 0 6px">Youth sizes</div>${row(youth, own.length)}` : ''}
+        </fieldset>`;
+        }).join('')}
+        <button type="submit" class="btn">Add me to the order</button>
+      </form>`}
+    </div>`);
+}
+
+app.get('/s/:token', async (req, res) => {
+  try {
+    const link = await sizeLink(String(req.params.token || ''));
+    if (!link || !link.lines.length) return res.status(404).send(quotePage('Not found', '<div class="card"><h1>That size link is not open</h1><p class="muted">Ask the person who sent it for a new one.</p></div>'));
+    res.set('Cache-Control', 'no-store');
+    res.set('Referrer-Policy', 'no-referrer');
+    res.send(sizeLinkPage(link, req.query.added ? '<div class="ok" style="margin-top:12px">Thanks! You are on the list. Someone else can use this link too.</div>' : ''));
+  } catch (err) {
+    console.error('size link page failed:', err.message);
+    res.status(500).send(quotePage('Error', '<div class="card"><p>Something went wrong. Please try again.</p></div>'));
+  }
+});
+
+app.post('/s/:token', sizeRateLimit, async (req, res) => {
+  const token = String(req.params.token || '');
+  try {
+    const link = await sizeLink(token);
+    if (!link || !link.lines.length || link.q.closed_at || link.q.production_at) return res.redirect(303, `/s/${encodeURIComponent(token)}`);
+    const name = SIZES.cleanName(req.body && req.body.name);
+    /* Sizes are looked up from the line's own list by position, never taken as typed. */
+    const picks = SIZES.parsePicks(req.body, link.lines);
+    if (picks.error === 'changed') {
+      return res.status(409).send(sizeLinkPage(link, '<div class="warn" style="margin-top:12px">The sizes for this order just changed. Please type your sizes again.</div>'));
+    }
+    if (name.length < 2 || picks.error === 'none') {
+      return res.status(400).send(sizeLinkPage(link, '<div class="warn" style="margin-top:12px">Please type your name and how many of at least one size.</div>'));
+    }
+    if (picks.error === 'too_many') {
+      return res.status(400).send(sizeLinkPage(link, `<div class="warn" style="margin-top:12px">That is more than ${SIZES.MAX_PER_ANSWER} shirts for one person. Please send the rest to the person who sent you the link.</div>`));
+    }
+    const { rows: [{ n }] } = await pool.query('SELECT COALESCE(SUM(qty), 0)::int AS n FROM size_entries WHERE collection_id = $1', [link.q.coll_id]);
+    if (n + picks.reduce((t, p) => t + p.qty, 0) > SIZES.MAX_ENTRIES) {
+      return res.status(409).send(sizeLinkPage(link, '<div class="warn" style="margin-top:12px">This list is full. Ask the person who sent you the link.</div>'));
+    }
+    /* One statement, so a person's answer lands whole (and shares one created_at). */
+    const vals = []; const args = [link.q.coll_id, name];
+    for (const p of picks) {
+      args.push(p.ix, p.size, p.qty);
+      vals.push(`($1, $2, $${args.length - 2}, $${args.length - 1}, $${args.length})`);
+    }
+    await pool.query(`INSERT INTO size_entries (collection_id, name, line_index, size, qty) VALUES ${vals.join(', ')}`, args);
+    res.redirect(303, `/s/${encodeURIComponent(token)}?added=1`);
+  } catch (err) {
+    console.error('size entry failed:', err.message);
+    reportError('size-link-entry', err, 'size link').catch(() => {});
+    res.redirect(303, `/s/${encodeURIComponent(token)}`);
+  }
+});
+
+/* ── Proof approval from the quote page ────────────────────────────────────
+   The quote code is the key, as it is for paying. Approving needs a typed
+   name: with the time it is the written approval the shop asks for, and it
+   stamps the same proof_ok_at milestone the production board reads. Request
+   changes leaves the note on the job and emails the shop. */
+app.post('/q/:code/proof/approve', quoteToolRateLimit, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.status(404).send('Not found');
+  const back = (k) => res.redirect(303, `/q/${code}?proof=${k}#proofs`);
+  const name = PROGRESS.cleanApprover(req.body && req.body.name);
+  if (name.length < 2) return back('name');
+  try {
+    const proofId = parseInt(req.body && req.body.proof, 10);
+    const { rows: pf } = await pool.query(
+      `SELECT id, sent_at FROM job_proofs WHERE quote_code = $1 AND sent_at IS NOT NULL ORDER BY created_at DESC, id DESC LIMIT 1`, [code]);
+    /* Only the latest sent proof can be approved: a page open on an older one
+       must not approve artwork the shop has since replaced. */
+    if (!pf.length || pf[0].id !== proofId) return res.redirect(303, `/q/${code}#proofs`);
+    const { rows } = await pool.query(
+      /* An approval counts for the proof it was given on: a proof sent after
+         it (a fixed typo) needs approving again. */
+      `UPDATE quotes SET proof_ok_at = NOW(), proof_ok_by = $2
+        WHERE code = $1 AND (proof_ok_at IS NULL OR proof_ok_at < $3) AND cancelled_at IS NULL AND status NOT IN ('held', 'draft')
+        RETURNING code, name, email`, [code, name, pf[0].sent_at]);
+    if (!rows.length) return back('approved');
+    await pool.query(`INSERT INTO lead_notes (quote_code, kind, body) VALUES ($1, 'note', $2)`,
+      [code, `Proof approved on the quote page by "${name}" (proof #${proofId}, from ${clientIp(req) || 'unknown'}).`]).catch(() => {});
+    if (NOTIFY_EMAIL) {
+      sendEmail({ to: NOTIFY_EMAIL, promo: false, subject: `Proof approved: ${rows[0].name || code} (${code})`,
+        html: `<p><b>${escEmail(name)}</b> approved the proof for <b>${escEmail(code)}</b> on the quote page.</p>
+          <p><a href="${PUBLIC_BASE_URL}/admin/production/${encodeURIComponent(code)}">Open the job</a></p>` })
+        .catch((e) => console.error('proof approval notice failed:', e.message));
+    }
+    return back('approved');
+  } catch (err) {
+    console.error('proof approve failed:', err.message);
+    reportError('proof-approve', err, `quote ${code}`).catch(() => {});
+    return res.redirect(303, `/q/${code}#proofs`);
+  }
+});
+
+app.post('/q/:code/proof/changes', quoteToolRateLimit, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.status(404).send('Not found');
+  const back = (k) => res.redirect(303, `/q/${code}?proof=${k}#proofs`);
+  const note = String((req.body && req.body.note) || '').replace(/\s+/g, ' ').trim().slice(0, 1000);
+  if (note.length < 3) return back('note');
+  try {
+    const { rows } = await pool.query(
+      `SELECT name FROM quotes q WHERE code = $1 AND cancelled_at IS NULL
+          AND EXISTS (SELECT 1 FROM job_proofs WHERE quote_code = $1 AND sent_at IS NOT NULL
+                        AND (q.proof_ok_at IS NULL OR sent_at > q.proof_ok_at))`, [code]);
+    if (!rows.length) return res.redirect(303, `/q/${code}#proofs`);
+    await pool.query(`INSERT INTO lead_notes (quote_code, kind, body) VALUES ($1, 'note', $2)`,
+      [code, `Proof changes requested on the quote page: ${note}`]);
+    if (NOTIFY_EMAIL) {
+      sendEmail({ to: NOTIFY_EMAIL, promo: false, subject: `Proof changes requested: ${rows[0].name || code} (${code})`,
+        html: `<p>Changes requested on the proof for <b>${escEmail(code)}</b>:</p><blockquote>${escEmail(note)}</blockquote>
+          <p><a href="${PUBLIC_BASE_URL}/admin/production/${encodeURIComponent(code)}">Open the job</a></p>` })
+        .catch((e) => console.error('proof changes notice failed:', e.message));
+    }
+    return back('changes');
+  } catch (err) {
+    console.error('proof changes failed:', err.message);
+    reportError('proof-changes', err, `quote ${code}`).catch(() => {});
+    return res.redirect(303, `/q/${code}#proofs`);
+  }
+});
 
 app.post('/q/:code/promo', orderRateLimit, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
@@ -6655,6 +7016,8 @@ app.post('/q/:code/promo', orderRateLimit, async (req, res) => {
           RETURNING stripe_session`,
         [code, tt.subtotal, tt.tax, tt.total, tt.deposit]);
       if (up.length) await dropQuoteCheckout(code, up[0].stripe_session);
+      /* Taken off by the customer: never put back on its own. */
+      await pool.query('UPDATE quotes SET promo_auto_off = TRUE WHERE code = $1', [code]).catch(() => {});
       return back('removed');
     }
     if (given.length < 3) return back('invalid');
@@ -6668,37 +7031,8 @@ app.post('/q/:code/promo', orderRateLimit, async (req, res) => {
       return back('generic');
     }
     if (!check || !check.ok) return back(PARTNERS.promoReasonKey(check && check.reason));
-    /* A one-time code is spent when a quote is paid, so until then it could sit
-       on two quotes at once. Kept off a second OPEN quote of the same person or
-       business; a quote cancelled or older than two weeks stops counting. */
-    if (check.one_time) {
-      const { rows: other } = await pool.query(
-        `SELECT 1 FROM quotes WHERE code <> $1 AND promo_code = $2 AND COALESCE(paid_amount, 0) = 0
-            AND cancelled_at IS NULL AND created_at > NOW() - INTERVAL '14 days'
-            AND (lower(trim(email)) = lower(trim($3::text)) OR ($4::int IS NOT NULL AND promo_business_id = $4::int))
-          LIMIT 1`,
-        [code, String(check.code).toUpperCase(), String(q.email || ''),
-         Number.isInteger(check.business_id) ? check.business_id : null]);
-      if (other.length) return back('held');
-    }
-    const base = quoteTotals({ ...q, discount_value: 0 });
-    const d = PARTNERS.discountForCode(check, base.gross);
-    const tt = quoteWithDiscount(q, d);
-    /* Guarded on the same conditions the page checked: no money in, and either
-       no discount or one that is itself a code (a code replaces a code). */
-    const { rows: up } = await pool.query(
-      `UPDATE quotes SET discount_kind = $2, discount_value = $3, discount_note = $4,
-              promo_code = $5, promo_business_id = $6,
-              subtotal = $7, tax = $8, total = $9, deposit = $10
-        WHERE code = $1 AND COALESCE(paid_amount, 0) = 0 AND cancelled_at IS NULL
-          AND (promo_code IS NOT NULL OR COALESCE(discount_value, 0) = 0)
-        RETURNING stripe_session`,
-      [code, d.kind, d.value, d.note, String(check.code).toUpperCase(),
-       Number.isInteger(check.business_id) ? check.business_id : null,
-       tt.subtotal, tt.tax, tt.total, tt.deposit]);
-    if (!up.length) return back('notnow');
-    await dropQuoteCheckout(code, up[0].stripe_session);
-    console.log(`quote ${code}: code ${check.code} applied (${d.kind} ${d.value})`);
+    const out = await applyQuoteCode(q, check, false);
+    if (out !== 'ok') return back(out);
     return back('ok');
   } catch (err) {
     console.error('quote promo failed:', err.message);
@@ -6763,6 +7097,166 @@ async function recordQuotePromos() {
    signed-in customer, sending the emails of everyone on their business (it
    owns the membership). The internal key is the authority; every query is
    limited to those emails. */
+/* ── Brand files (tools/lib/brand-files.js) ─────────────────────────────────
+   Server to server: the designer's account page calls these for a signed-in
+   member of a business, after checking that membership itself (it owns it). */
+const bizId = (v) => { const n = parseInt(v, 10); return Number.isInteger(n) && n > 0 ? n : 0; };
+
+/* ── A business's saved ship-to and certificate ─────────────────────────────
+   The certificate is not copied anywhere: tax_certificates already records the
+   email that sent each one, so the business's is the newest APPROVED, unexpired
+   certificate any of its members sent. Only the address is stored. */
+async function businessCertificate(emails) {
+  const list = partnerEmails(emails);
+  if (!list.length) return null;
+  const { rows } = await pool.query(
+    `SELECT id, kind, number, holder, expires_on FROM tax_certificates
+      WHERE lower(email) = ANY($1::text[]) AND status = 'approved'
+        AND (expires_on IS NULL OR expires_on >= CURRENT_DATE)
+      ORDER BY reviewed_at DESC NULLS LAST, id DESC LIMIT 1`, [list]);
+  return rows[0] || null;
+}
+
+async function businessShipTo(id) {
+  if (!id) return null;
+  const { rows } = await pool.query('SELECT ship_to FROM business_profiles WHERE business_id = $1', [id]);
+  const st = rows[0] && rows[0].ship_to;
+  return st && !SHIP.shipToProblems(SHIP.cleanShipTo(st, st.name)).filter((f) => f !== 'name').length ? st : null;
+}
+
+app.post('/api/biz-profile/get', requireInternalKey, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const id = bizId(req.body && req.body.business_id);
+  if (!id) return res.status(400).json({ error: 'bad input' });
+  try {
+    const [shipTo, cert] = await Promise.all([businessShipTo(id), businessCertificate(req.body.emails)]);
+    res.json({
+      ship_to: shipTo,
+      /* What the account page may show: who it is for and until when, never the file. */
+      certificate: cert ? { kind: cert.kind, holder: cert.holder, expires_on: cert.expires_on,
+        number_end: String(cert.number || '').slice(-4) } : null,
+    });
+  } catch (err) {
+    console.error('biz-profile get failed:', err.message);
+    res.status(500).json({ error: 'failed' });
+  }
+});
+
+app.post('/api/biz-profile/save', requireInternalKey, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const b = req.body || {};
+  const id = bizId(b.business_id);
+  if (!id) return res.status(400).json({ error: 'bad input' });
+  const st = SHIP.cleanShipTo({ name: b.name, street1: b.street1, street2: b.street2, city: b.city, state: b.state, zip: b.zip }, b.name);
+  const problems = st ? SHIP.shipToProblems(st).filter((f) => f !== 'name') : ['address'];
+  if (problems.length) return res.status(400).json({ error: 'Please fill in the street, city, state and ZIP code.' });
+  try {
+    await pool.query(
+      `INSERT INTO business_profiles (business_id, ship_to, updated_at) VALUES ($1, $2, NOW())
+       ON CONFLICT (business_id) DO UPDATE SET ship_to = EXCLUDED.ship_to, updated_at = NOW()`, [id, JSON.stringify(st)]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('biz-profile save failed:', err.message);
+    res.status(500).json({ error: 'failed' });
+  }
+});
+
+app.post('/api/biz-files/sign', requireInternalKey, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  if (!PARTNERS.on()) return res.status(404).json({ error: 'off' });
+  const apiSecret = process.env.CLOUDINARY_API_SECRET || process.env.CLUDINARY_API_SECRET;
+  const cloud = QPHOTOS.cloudName();
+  if (!apiSecret || !cloud || !process.env.CLOUDINARY_API_KEY) return res.status(503).json({ error: 'Uploads are not set up.' });
+  const id = bizId(req.body && req.body.business_id);
+  if (!id) return res.status(400).json({ error: 'bad input' });
+  let n = 0;
+  try {
+    ({ rows: [{ n }] } = await pool.query('SELECT COUNT(*)::int AS n FROM business_files WHERE business_id = $1', [id]));
+  } catch (err) {
+    console.error('biz-files sign count failed:', err.message);
+    return res.status(500).json({ error: 'failed' });
+  }
+  if (n >= BRAND.MAX_PER_BUSINESS) return res.status(409).json({ error: `Your account holds up to ${BRAND.MAX_PER_BUSINESS} files. Remove one to add another.` });
+  const timestamp = Math.round(Date.now() / 1000);
+  const signature = cloudinary.utils.api_sign_request({ folder: BRAND.FOLDER, timestamp }, apiSecret);
+  res.json({ signature, timestamp, folder: BRAND.FOLDER, cloud, apiKey: process.env.CLOUDINARY_API_KEY,
+    accept: BRAND.ACCEPT, maxBytes: BRAND.MAX_FILE_BYTES });
+});
+
+app.post('/api/biz-files/list', requireInternalKey, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const id = bizId(req.body && req.body.business_id);
+  if (!id) return res.status(400).json({ error: 'bad input' });
+  try {
+    const { rows } = await pool.query(
+      'SELECT id, url, name, added_by, created_at FROM business_files WHERE business_id = $1 ORDER BY created_at DESC LIMIT $2',
+      [id, BRAND.MAX_PER_BUSINESS]);
+    const cloud = QPHOTOS.cloudName();
+    res.json({ files: rows.map((r) => ({ ...r, thumb: BRAND.thumbOf(r.url, cloud) })) });
+  } catch (err) {
+    console.error('biz-files list failed:', err.message);
+    res.status(500).json({ error: 'failed' });
+  }
+});
+
+app.post('/api/biz-files/save', requireInternalKey, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const b = req.body || {};
+  const id = bizId(b.business_id);
+  const url = String(b.url || '');
+  if (!id || !BRAND.fileUrlOk(url, QPHOTOS.cloudName())) return res.status(400).json({ error: 'That file could not be added.' });
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO business_files (business_id, url, name, added_by)
+       SELECT $1, $2, $3, $4 WHERE (SELECT COUNT(*) FROM business_files WHERE business_id = $1) < $5
+       RETURNING id`,
+      [id, url, BRAND.cleanName(b.name) || null, String(b.by || '').trim().toLowerCase().slice(0, 190) || null, BRAND.MAX_PER_BUSINESS]);
+    if (!rows.length) return res.status(409).json({ error: `Your account holds up to ${BRAND.MAX_PER_BUSINESS} files. Remove one to add another.` });
+    res.json({ ok: true, id: rows[0].id });
+  } catch (err) {
+    console.error('biz-files save failed:', err.message);
+    res.status(500).json({ error: 'failed' });
+  }
+});
+
+app.post('/api/biz-files/delete', requireInternalKey, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const id = bizId(req.body && req.body.business_id), fid = bizId(req.body && req.body.id);
+  if (!id || !fid) return res.status(400).json({ error: 'bad input' });
+  try {
+    await pool.query('DELETE FROM business_files WHERE id = $1 AND business_id = $2', [fid, id]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('biz-files delete failed:', err.message);
+    res.status(500).json({ error: 'failed' });
+  }
+});
+
+/** The business a quote's customer orders for, from the designer, or null.
+ *  Cached a few minutes: the job page asks on every load. */
+const bizForEmailCache = new Map();
+async function businessForEmail(email) {
+  const e = String(email || '').trim().toLowerCase();
+  if (!PARTNERS.on() || !isValidEmail(e)) return null;
+  const hit = bizForEmailCache.get(e);
+  if (hit && Date.now() - hit.at < (hit.failed ? 60 * 1000 : 5 * 60 * 1000)) return hit.biz;
+  if (bizForEmailCache.size > 2000) bizForEmailCache.clear();
+  try {
+    const r = await studioFetch(`${BIZ_ADMIN()}?for_email=${encodeURIComponent(e)}`, { timeoutMs: 4000 });
+    if (!r.ok) throw new Error(`designer answered ${r.status}`);
+    const d = await r.json();
+    const biz = d && d.business && bizId(d.business.id) ? { id: bizId(d.business.id), name: String(d.business.name || '') } : null;
+    bizForEmailCache.set(e, { at: Date.now(), biz });
+    return biz;
+  } catch (e2) {
+    /* Remembered for a minute, so a designer outage costs one timeout a
+       minute per customer rather than one on every page they open. */
+    console.error('business lookup failed:', e2.message);
+    bizForEmailCache.set(e, { at: Date.now(), biz: null, failed: true });
+    return null;
+  }
+}
+
 app.post('/api/paid-history', requireInternalKey, async (req, res) => {
   try {
     res.set('Cache-Control', 'no-store');
@@ -6848,9 +7342,14 @@ app.post('/api/reorder', requireInternalKey, async (req, res) => {
        when the same person reorders; anyone else on the business is quoted
        with tax, and the shop can apply their certificate if they have one. */
     const sameBuyer = String(o.email || '').trim().toLowerCase() === email;
+    /* The business's saved address when the job had none, and its approved
+       certificate when someone else on the business reorders. */
+    const reorderBiz = bizId(b.business_id);
+    const savedShipTo = !o.ship_to && reorderBiz ? await businessShipTo(reorderBiz).catch(() => null) : null;
+    const bizCert = !sameBuyer && !quoteTaxable(o) ? await businessCertificate(emails).catch(() => null) : null;
     const draft = {
       ...o, items, rush_pct: 0, delivery_fee: 0, discount_kind: 'amt', discount_value: 0, email,
-      ...(sameBuyer ? {} : { taxable: true, tax: 0 }),
+      ...(sameBuyer || bizCert ? {} : { taxable: true, tax: 0 }),
     };
     /* REORDER5, as the designer checked it for this customer and sent with
        the request (jt_biz_reorder_promo). Not asked for again from here: the
@@ -6884,10 +7383,11 @@ app.post('/api/reorder', requireInternalKey, async (req, res) => {
       /* Someone else on the business: their email, not the original buyer's
          name and phone, so texts and the quote reach the person who asked. */
       [code, sameBuyer ? o.name : null, sameBuyer ? o.phone : null, email, JSON.stringify(items), tt.subtotal, tt.tax, tt.total, tt.deposit, note,
-       locked ? 'sent' : 'held', validUntil, disc.kind, disc.value, disc.note, sameBuyer ? quoteTaxable(o) : true,
-       sameBuyer ? o.tax_exempt_ref || null : null, sameBuyer ? o.tax_exempt_reason || null : null,
-       sameBuyer ? o.tax_certificate_id || null : null,
-       o.ship_method || null, o.ship_to ? JSON.stringify(o.ship_to) : null, promo, src]);
+       locked ? 'sent' : 'held', validUntil, disc.kind, disc.value, disc.note, sameBuyer ? quoteTaxable(o) : !bizCert,
+       sameBuyer ? o.tax_exempt_ref || null : bizCert ? bizCert.number : null,
+       sameBuyer ? o.tax_exempt_reason || null : bizCert ? (bizCert.kind === 'resale' ? 'resale' : 'e_number') : null,
+       sameBuyer ? o.tax_certificate_id || null : bizCert ? bizCert.id : null,
+       o.ship_method || null, o.ship_to ? JSON.stringify(o.ship_to) : savedShipTo ? JSON.stringify(savedShipTo) : null, promo, src]);
     if (NOTIFY_EMAIL) {
       sendEmail({
         to: NOTIFY_EMAIL, promo: false,
@@ -14572,7 +15072,15 @@ app.get('/q/:code', async (req, res) => {
       quoteMissBudget.miss(req);
       return friendly('It may have been removed. Text or call and we will resend it.');
     }
-    const q = rows[0];
+    let q = rows[0];
+    /* A Business Partner's code goes on by itself (applyAutoQuoteCode). Not
+       on the shop's own preview: that visit is not the customer's. */
+    const [autoCode, autoAddress] = req.query.staff ? [false, false]
+      : await Promise.all([applyAutoQuoteCode(q), fillBusinessShipTo(q)]);
+    if (autoCode || autoAddress) {
+      const { rows: again } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
+      if (again.length) q = again[0];
+    }
 
     /* STAFF PREVIEW (the owner, 2026-10-08: "I need a way back"). Links from
        the back office add ?staff=1 and open in a new tab. The page then carries
@@ -14683,6 +15191,123 @@ app.get('/q/:code', async (req, res) => {
             <button type="button" data-qp-remove="${escEmail(d.url)}" aria-label="Remove ${escEmail(d.name)}"
                     style="position:absolute;top:-6px;right:-6px;width:24px;height:24px;border-radius:12px;border:0;background:#0B1F4B;color:#fff;font-size:14px;line-height:24px;padding:0;cursor:pointer">&times;</button>
           </div>`;
+    /* The team size link (tools/lib/size-collect.js): open until the job is on
+       the press. Its totals fill the size boxes above (changeform), so a new mix
+       goes to the shop the usual way, as a change request. */
+    const sizeLines = (q.items || []).map((it, ix) => ({ ix, it, sizes: orderedSizeKeys(it, catalog) }))
+      .filter((l) => l.sizes.length && !l.it.optional);
+    const coll = (sizeLines.length && !q.cancelled_at)
+      ? (await pool.query('SELECT * FROM size_collections WHERE quote_code = $1', [q.code]).catch(() => ({ rows: [] }))).rows[0] : null;
+    const collEntries = coll ? (await pool.query(
+      'SELECT id, name, line_index, size, qty, created_at FROM size_entries WHERE collection_id = $1 ORDER BY created_at', [coll.id])
+      .catch(() => ({ rows: [] }))).rows : [];
+    const sizesByLine = {}; sizeLines.forEach((l) => { sizesByLine[l.ix] = l.sizes; });
+    const collTally = SIZES.tally(collEntries, sizesByLine);
+    /* One answer is one INSERT, so its rows share a name and created_at. */
+    const collPeople = new Set(collEntries.map((e) => `${e.name}|${new Date(e.created_at).getTime()}`)).size;
+    const collShirts = collEntries.reduce((t, e) => t + (Number(e.qty) || 1), 0);
+    const canFill = !paid && !q.requested_items && Object.keys(collTally.byLine).length > 0;
+    const sizesCard = (!sizeLines.length || q.cancelled_at || q.production_at) ? '' : !coll ? `
+      <div class="card" id="sizes">
+        <h1 style="font-size:18px">Ordering for a group?</h1>
+        <p class="muted" style="margin:6px 0 12px">Family reunion, team or staff? Get a link to share. Each person types their name and how many of each size, kids' youth sizes too, and the totals fill in here for you.</p>
+        <form method="POST" action="/q/${q.code}/sizes/start" onsubmit="this.querySelector('button').disabled=true">
+          <button type="submit" class="btn-ghost" style="padding:9px 16px">Make a size link</button></form>
+      </div>` : `
+      <div class="card" id="sizes">
+        <h1 style="font-size:18px">Team sizes${coll.closed_at ? ' <span class="muted" style="font-size:13px;font-weight:600">(closed)</span>' : ''}</h1>
+        <p class="muted" style="margin:6px 0 8px">Share this link with your team:</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <input id="size-link" readonly value="${escEmail(PUBLIC_BASE_URL + '/s/' + coll.token)}" style="flex:1;min-width:200px;font-size:14px">
+          <button type="button" class="btn-ghost" style="padding:8px 14px" onclick="var i=document.getElementById('size-link');i.select();try{navigator.clipboard.writeText(i.value).then(function(){},function(){})}catch(e){}this.textContent='Copied'">Copy</button>
+        </div>
+        <p style="margin:12px 0 6px"><b>${collPeople}</b> ${collPeople === 1 ? 'person has' : 'people have'} answered, for <b>${collShirts}</b> ${collShirts === 1 ? 'shirt' : 'shirts'}.</p>
+        ${sizeLines.filter((l) => collTally.byLine[l.ix]).map((l) => `<p style="margin:0 0 4px;font-size:14px">${escEmail(l.it.description || 'Item ' + (l.ix + 1))}: ${
+          Object.entries(collTally.byLine[l.ix]).map(([sz, n]) => `${escEmail(sz)} ${n}`).join(' · ')}</p>`).join('')}
+        ${Object.keys(collTally.youth).length ? `<div class="warn" style="margin:8px 0;font-size:14px">Youth sizes asked for: ${
+          Object.entries(collTally.youth).map(([ix, m]) => `${sizeLines.length > 1 ? escEmail(((q.items || [])[ix] || {}).description || '') + ': ' : ''}${
+            Object.entries(m).map(([sz, n]) => `${escEmail(sz)} ${n}`).join(' · ')}`).join('; ')}.
+          These are not on your quote yet. We will add a youth shirt and send you the new price.</div>` : ''}
+        ${collEntries.length ? `<details style="margin:8px 0"><summary style="cursor:pointer;color:#1848B8;font-weight:600">See who answered</summary>
+          <ul style="margin:8px 0 0;padding-left:18px;font-size:14px">${collEntries.map((e) => {
+            const l = sizeLines.find((x) => x.ix === e.line_index);
+            return `<li>${escEmail(e.name)}: ${escEmail(e.size)}${Number(e.qty) > 1 ? ' &times; ' + Number(e.qty) : ''}${sizeLines.length > 1 && l ? ` <span class="muted">(${escEmail(l.it.description || '')})</span>` : ''}
+              <form method="POST" action="/q/${q.code}/sizes/remove" style="display:inline"><input type="hidden" name="id" value="${e.id}">
+              <button type="submit" style="background:none;border:0;color:#b91c1c;cursor:pointer;font-size:12px">remove</button></form></li>`;
+          }).join('')}</ul></details>` : ''}
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">
+          ${canFill ? `<button type="button" class="btn" style="width:auto;padding:9px 16px" onclick="jtFillSizes()">Use these sizes</button>` : ''}
+          <form method="POST" action="/q/${q.code}/sizes/close" style="margin:0"><input type="hidden" name="to" value="${coll.closed_at ? 'open' : 'closed'}"><button type="submit" class="btn-ghost" style="padding:9px 16px">${coll.closed_at ? 'Reopen the link' : 'Close the link'}</button></form>
+        </div>
+        ${canFill ? `<p class="muted" style="font-size:12.5px;margin:8px 0 0">"Use these sizes" fills the size boxes above. Check them, then press "Send changes" and we will update your price.</p>` : ''}
+        <script>
+        function jtFillSizes() {
+          var t = ${JSON.stringify(collTally.byLine)};
+          Object.keys(t).forEach(function (ix) {
+            document.querySelectorAll('input[name^="sz_' + ix + '_"]').forEach(function (el) {
+              var sz = el.name.slice(('sz_' + ix + '_').length);
+              el.value = t[ix][sz] || 0;
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+            });
+          });
+          var f = document.getElementById('changeform');
+          if (f) f.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        </script>
+      </div>`;
+
+    /* Proofs, for every customer: each proof the shop has SENT them, newest
+       first, with Approve (a typed name, recorded with the time) and Request
+       changes. Drafts the shop has not sent stay off the page. */
+    const sentProofs = q.cancelled_at ? [] : (await pool.query(
+      `SELECT id, url, name, sent_at FROM job_proofs WHERE quote_code = $1 AND sent_at IS NOT NULL
+        ORDER BY created_at DESC, id DESC LIMIT $2`, [q.code, PROOFS.MAX_PER_JOB]).catch(() => ({ rows: [] }))).rows;
+    const proofCloud = QPHOTOS.cloudName();
+    const proofKey = String(req.query.proof || '').replace(/[^a-z]/g, '').slice(0, 12);
+    const proofsCard = !sentProofs.length ? '' : `
+      <div class="card" id="proofs">
+        <h1 style="font-size:18px">Your proof${sentProofs.length > 1 ? 's' : ''}</h1>
+        <p class="muted" style="margin:4px 0 12px">Check spelling, colors and placement. We print exactly what you approve.</p>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px">${sentProofs.map((r, i) =>
+          `<a href="${escEmail(r.url)}" target="_blank" rel="noopener" style="text-decoration:none;color:inherit">
+            <img src="${escEmail(PROOFS.thumbOf(r.url, proofCloud))}" alt="Proof ${sentProofs.length - i}"
+              style="width:100%;aspect-ratio:1;object-fit:contain;border:1px solid #e3e8f2;border-radius:10px;background:#fff">
+            <span class="muted" style="font-size:12.5px">${i === 0 ? 'Latest · ' : ''}sent ${fmtDate(r.sent_at)}</span></a>`).join('')}</div>
+        ${proofKey === 'approved' ? '<p style="margin:12px 0 0;color:#166534;font-weight:600">Thank you! Your approval is recorded and the job moves on.</p>'
+          : proofKey === 'changes' ? '<p style="margin:12px 0 0;color:#166534;font-weight:600">Got it. We will send a new proof.</p>'
+          : proofKey === 'name' ? '<p style="margin:12px 0 0;color:#b91c1c">Please type your name to approve.</p>'
+          : proofKey === 'note' ? '<p style="margin:12px 0 0;color:#b91c1c">Please say what you would like changed.</p>' : ''}
+        ${q.proof_ok_at && new Date(q.proof_ok_at) >= new Date(sentProofs[0].sent_at) ? `<p style="margin:12px 0 0"><b style="color:#166534">Approved</b> ${fmtDate(q.proof_ok_at)}${
+            q.proof_ok_by ? ` by ${escEmail(q.proof_ok_by)}` : ''}.</p>` : `
+        <form method="POST" action="/q/${q.code}/proof/approve" style="margin:14px 0 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center"
+              onsubmit="this.querySelector('button').disabled=true">
+          <label for="proof-name" style="flex-basis:100%;font-weight:700">Approve the latest proof</label>
+          <input id="proof-name" name="name" maxlength="80" autocomplete="name" placeholder="Type your full name" style="flex:1;min-width:180px">
+          <input type="hidden" name="proof" value="${sentProofs[0].id}">
+          <button type="submit" class="btn" style="width:auto;padding:10px 18px">Approve</button>
+        </form>
+        <details style="margin-top:10px"><summary style="cursor:pointer;color:#1848B8;font-weight:600">Request changes</summary>
+          <form method="POST" action="/q/${q.code}/proof/changes" style="margin-top:8px" onsubmit="this.querySelector('button').disabled=true">
+            <textarea name="note" maxlength="1000" rows="3" placeholder="e.g. make the logo bigger, use navy instead of black" style="width:100%"></textarea>
+            <button type="submit" class="btn-ghost" style="margin-top:6px;padding:8px 14px">Send to us</button>
+          </form></details>`}
+      </div>`;
+    /* Where the job is, for every customer once they have said yes: the
+       milestones the production board already stamps (tools/lib/order-progress.js). */
+    const prog = PROGRESS.shown(q) ? PROGRESS.steps(q, { ships: SHIP.quoteShips(q), local: String(q.ship_method || '') === 'local' }) : null;
+    const progressCard = !prog ? '' : `
+      <div class="card" id="progress">
+        <h1 style="font-size:18px">Where your order is</h1>
+        <ol style="list-style:none;margin:12px 0 0;padding:0;display:grid;gap:0">${prog.list.map((st, i) => {
+          const now = i === prog.current;
+          const dot = st.done ? '#1a9c6b' : now ? '#1848B8' : '#d5dbe6';
+          return `<li style="display:grid;grid-template-columns:22px 1fr;gap:10px;align-items:start;padding:6px 0">
+            <span aria-hidden="true" style="width:14px;height:14px;margin-top:4px;border-radius:50%;background:${st.done ? dot : '#fff'};border:3px solid ${dot}"></span>
+            <span style="${st.done ? '' : now ? 'font-weight:700' : 'color:#8a93a5'}">${escEmail(st.label)}${
+              st.done && st.at ? ` <span class="muted" style="font-size:12.5px">· ${fmtDate(st.at)}</span>` : now ? ' <span class="muted" style="font-size:12.5px">· next</span>' : ''}</span></li>`;
+        }).join('')}</ol>
+      </div>`;
+
     /* Business Partners: a code box (MAIL15, REORDER5) while nothing is paid.
        POST /q/:code/promo checks it with the designer and writes it into the
        ordinary discount fields; ?promo= carries back only a known key, never
@@ -14697,7 +15322,10 @@ app.get('/q/:code', async (req, res) => {
       <div class="card" id="promo">
         ${q.promo_code ? `
         <form method="POST" action="/q/${q.code}/promo" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0">
-          <span><b>Code ${escEmail(q.promo_code)}</b> is on this quote.</span>
+          <span style="display:inline-flex;align-items:center;gap:8px;background:#ecfdf3;color:#166534;border-radius:999px;padding:7px 14px;font-weight:700">
+            <span aria-hidden="true">&#10003;</span>${/^Business Partner discount/.test(String(q.discount_note || ''))
+            ? `Business Partner discount${q.discount_kind === 'pct' ? `: ${escEmail(String(Number(q.discount_value)))}% off` : ''}, applied for you`
+            : `Code ${escEmail(q.promo_code)} applied`}</span>
           <input type="hidden" name="remove" value="1">
           <button type="submit" class="btn-ghost" style="padding:6px 12px">Remove</button>
         </form>` : `
@@ -15128,6 +15756,9 @@ app.get('/q/:code', async (req, res) => {
         </div>
       </div>
 
+      ${proofsCard}
+      ${progressCard}
+      ${sizesCard}
       ${promoCard}
 
       ${/* Right under the items, above the contact and payment boxes (the
@@ -22245,6 +22876,8 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
       .catch((e) => { console.error('mailbox card failed:', e.message); return ''; });
     const certificateCard = boards ? await jobCertificateCard(q, req.query) : '';
     const photosCard = jobPhotosCard(q);
+    const brandCard = await jobBrandFilesCard(q).catch((e) => { console.error('brand files card failed:', e.message); return ''; });
+    const teamSizesCard = await jobTeamSizesCard(q, await catalogP, { canEdit: boards }).catch((e) => { console.error('team sizes card failed:', e.message); return ''; });
     const notesCard = await jobNotesCard(q.code);
     const creditCard = !boards ? '' : await jobCreditCard(q).catch((e) => { console.error('credit card failed:', e.message); return ''; });
     const historyCard = !boards ? '' : await jobHistoryCard(q).catch((e) => { console.error('history card failed:', e.message); return ''; });
@@ -22358,6 +22991,8 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
         ${jobCostForm(q, costBook, true)}
       </div>${JOB_COST_SCRIPT}` : ''}
       ${photosCard}
+      ${brandCard}
+      ${teamSizesCard}
       ${certificateCard}
       ${artCard}
       ${teamNotesCard}
@@ -22520,6 +23155,92 @@ function jobScheduleHtml(q, sched, { canSetDate = true } = {}) {
         : paid ? `This job takes ${est.production_days[0]}–${est.production_days[1]} business days: ready about <b>${dayShort(est.ready)}</b> if it starts today.`
         : `The clock starts when the deposit is paid: this job takes ${est.production_days[0]}–${est.production_days[1]} business days from then, and the working date is set on its own.`}${
         canSetDate ? ' Set a date above for the step-by-step dates.' : ''}</div></div>`;
+}
+
+/** The team size link on the job page: the shop can make it here and send it
+ *  to whoever is gathering sizes (a family reunion, a team, a staff order),
+ *  then sees plain totals per item. Who picked what stays on the customer's
+ *  quote page. Nothing when the quote has no sized items and no link. */
+async function jobTeamSizesCard(q, catalog, { canEdit = true } = {}) {
+  const sizedLines = (q.items || []).filter((it) => it && !it.optional && orderedSizeKeys(it, catalog).length);
+  const { rows: [coll] } = await pool.query('SELECT id, token, closed_at FROM size_collections WHERE quote_code = $1', [q.code]);
+  const open = !q.cancelled_at && !q.production_at;
+  if (!coll) {
+    if (!canEdit || !open || !sizedLines.length || ['held', 'draft'].includes(q.status)) return '';
+    return `<div class="card" id="team-sizes"><h2 class="card-title">Team sizes</h2>
+      <p class="muted" style="font-size:13px;margin:0 0 10px">Collecting sizes for a family reunion, team or staff order? Make a link and send it to whoever is gathering them. Each person types their name and how many of each size (youth sizes too); the totals show up here.</p>
+      <form method="POST" action="/admin/production/${q.code}/sizes/start" style="margin:0" onsubmit="this.querySelector('button').disabled=true">
+        <button type="submit" class="btn" style="padding:8px 16px;font-size:14px">Make a size link</button></form></div>`;
+  }
+  const { rows } = await pool.query('SELECT line_index, size, qty FROM size_entries WHERE collection_id = $1', [coll.id]);
+  const lineName = (ix) => ((q.items || [])[ix] || {}).description || `Item ${ix + 1}`;
+  const order = [...SIZES.YOUTH_SIZES, ...SIZE_ORDER];
+  const lines = SIZES.listTotals(rows, (sz) => order.indexOf(sz));
+  const shirts = lines.reduce((t, l) => t + l.total, 0);
+  const link = PUBLIC_BASE_URL + '/s/' + coll.token;
+  return `<div class="card" id="team-sizes"><h2 class="card-title">Team sizes (${shirts} ${shirts === 1 ? 'shirt' : 'shirts'})${coll.closed_at ? ' <span class="muted" style="font-size:13px;font-weight:600">closed</span>' : ''}</h2>
+    ${canEdit ? `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 6px">
+      <input id="team-size-link" readonly value="${escEmail(link)}" style="flex:1;min-width:200px;font-size:14px">
+      <button type="button" class="btn-ghost" style="padding:7px 14px" onclick="var i=document.getElementById('team-size-link');i.select();try{navigator.clipboard.writeText(i.value).then(function(){},function(){})}catch(e){}this.textContent='Copied'">Copy link</button></div>` : ''}
+    ${lines.length ? lines.map((l) => `<div style="margin:8px 0">
+      ${lines.length > 1 || (q.items || []).length > 1 ? `<div style="font-weight:600;font-size:14px">${escEmail(lineName(l.line_index))}</div>` : ''}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">${l.sizes.map(([sz, n]) =>
+        `<span style="border:1px solid #e3e8f2;border-radius:8px;padding:6px 12px;font-size:15px"><b>${escEmail(sz)}</b> ${n}</span>`).join('')}
+        <span class="muted" style="padding:6px 4px;font-size:14px">${l.total} total</span></div>
+      ${l.sizes.some(([sz]) => SIZES.YOUTH_SIZES.includes(sz) && !orderedSizeKeys((q.items || [])[l.line_index], catalog).includes(sz))
+        ? '<div class="muted" style="font-size:12.5px;margin-top:4px">Youth sizes are not on this item: add a youth line to the quote for them.</div>' : ''}</div>`).join('')
+      : '<p class="muted" style="font-size:14px;margin:6px 0">Nobody has picked a size yet.</p>'}
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:6px">
+      ${canEdit && open ? `<form method="POST" action="/admin/production/${q.code}/sizes/close" style="margin:0"><input type="hidden" name="to" value="${coll.closed_at ? 'open' : 'closed'}"><button type="submit" class="btn-ghost" style="padding:7px 14px">${coll.closed_at ? 'Reopen the link' : 'Close the link'}</button></form>` : ''}
+      <span class="muted" style="font-size:12.5px">The customer sees who picked each size on their quote page.</span></div></div>`;
+}
+
+/* The shop's side of the size link: make it (once per quote) and close or
+   reopen it, from the job page. Same table and token as the customer's own
+   button on their quote page. */
+async function jobSizeLinkAction(req, res) {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/production');
+  const actor = currentActor() || OWNER_ACTOR;
+  if (actor.kind === 'staff' && STAFF.levelOf(actor, 'quotes.view') !== 'on') return res.status(403).send('Not allowed');
+  try {
+    const q = await sizeQuote(code);
+    if (q && !q.production_at) {
+      if (req.path.endsWith('/start')) {
+        await pool.query('INSERT INTO size_collections (quote_code, token) VALUES ($1, $2) ON CONFLICT (quote_code) DO NOTHING',
+          [code, SIZES.newToken()]);
+      } else {
+        const reopen = String((req.body && req.body.to) || '') === 'open';
+        await pool.query(reopen ? 'UPDATE size_collections SET closed_at = NULL WHERE quote_code = $1'
+          : 'UPDATE size_collections SET closed_at = COALESCE(closed_at, NOW()) WHERE quote_code = $1', [code]);
+      }
+    }
+  } catch (err) {
+    console.error('job size link failed:', err.message);
+    reportError('size-link', err, `job ${code}`).catch(() => {});
+  }
+  res.redirect(303, `/admin/production/${code}#team-sizes`);
+}
+app.post('/admin/production/:code/sizes/start', requireAdmin, jobSizeLinkAction);
+app.post('/admin/production/:code/sizes/close', requireAdmin, jobSizeLinkAction);
+
+/** The customer's Business Partner brand files, on their job page, so the
+ *  shop never asks for a logo the business already gave. Nothing when the
+ *  customer is not on a business or the designer cannot be asked. */
+async function jobBrandFilesCard(q) {
+  const biz = await businessForEmail(q.email);
+  if (!biz) return '';
+  const { rows } = await pool.query(
+    'SELECT url, name, created_at FROM business_files WHERE business_id = $1 ORDER BY created_at DESC LIMIT $2',
+    [biz.id, BRAND.MAX_PER_BUSINESS]);
+  const cloud = QPHOTOS.cloudName();
+  return `<div class="card" id="brand-files"><h2 class="card-title">Brand files &middot; ${escEmail(biz.name)}</h2>
+    ${rows.length ? `<div style="display:flex;gap:10px;flex-wrap:wrap">${rows.map((r) => `
+      <a href="${escEmail(r.url)}" target="_blank" rel="noopener" style="width:120px;text-decoration:none;color:inherit;font-size:12px">
+        ${BRAND.thumbOf(r.url, cloud) ? `<img src="${escEmail(BRAND.thumbOf(r.url, cloud))}" alt="" style="width:120px;height:120px;object-fit:contain;border:1px solid #e3e8f2;border-radius:8px;background:#fff">`
+          : `<div style="width:120px;height:120px;display:grid;place-items:center;border:1px solid #e3e8f2;border-radius:8px;background:#f7f9fc;font-weight:700">${escEmail(r.url.split('.').pop().toUpperCase())}</div>`}
+        <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escEmail(r.name || 'file')}</div></a>`).join('')}</div>`
+      : '<p class="muted">This Business Partner has not uploaded any brand files yet.</p>'}</div>`;
 }
 
 /* ── Tax exemption on the job page ────────────────────────────────────────────

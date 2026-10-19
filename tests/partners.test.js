@@ -140,3 +140,100 @@ test('the static sitemap never lists /partners itself (it would 404 while the pr
   const xml = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'public', 'sitemap.xml'), 'utf8');
   assert.ok(!/jtees\.net\/(partners|mail15)/.test(xml));
 });
+
+/* ── Conveniences for every customer and for partners ──────────────────── */
+const PROGRESS = require('../tools/lib/order-progress');
+const BRAND = require('../tools/lib/brand-files');
+const SIZES = require('../tools/lib/size-collect');
+
+test('order progress: later milestones imply earlier ones, and the next step is the first not done', () => {
+  const q = { accepted_at: '2026-10-01', paid_amount: 50, production_at: '2026-10-05' };
+  const { list, current } = PROGRESS.steps(q);
+  assert.deepStrictEqual(list.map((s) => s.done), [true, true, true, true, false, false]);
+  assert.strictEqual(list[current].key, 'ready');
+  assert.strictEqual(list[4].label, 'Ready for pickup');
+  assert.strictEqual(PROGRESS.steps(q, { ships: true }).list[4].label, 'Shipped');
+  assert.strictEqual(PROGRESS.steps({ delivered_at: 'x' }).current, 6);
+});
+
+test('order progress shows only once the customer has said yes, never on a cancelled quote', () => {
+  assert.strictEqual(PROGRESS.shown({}), false);
+  assert.strictEqual(PROGRESS.shown({ accepted_at: 'x' }), true);
+  assert.strictEqual(PROGRESS.shown({ paid_amount: 10 }), true);
+  assert.strictEqual(PROGRESS.shown({ accepted_at: 'x', cancelled_at: 'y' }), false);
+});
+
+test('a typed proof approval keeps a real name and nothing else', () => {
+  assert.strictEqual(PROGRESS.cleanApprover("  José  O'Neil-Smith <b>"), "José O'Neil-Smith b");
+  assert.strictEqual(PROGRESS.cleanApprover('<script>'), 'script');
+  assert.strictEqual(PROGRESS.cleanApprover('x'.repeat(200)).length, 80);
+});
+
+test('brand files: only our Cloudinary account, the business folder, and file types the shop takes', () => {
+  const ok = 'https://res.cloudinary.com/jtees/image/upload/v123/business_files/logo_ab12.png';
+  assert.strictEqual(BRAND.fileUrlOk(ok, 'jtees'), true);
+  assert.strictEqual(BRAND.fileUrlOk('https://res.cloudinary.com/jtees/raw/upload/business_files/stitch.dst', 'jtees'), true);
+  assert.strictEqual(BRAND.fileUrlOk(ok, 'other'), false);
+  assert.strictEqual(BRAND.fileUrlOk(ok.replace('business_files', 'quote_photos'), 'jtees'), false);
+  assert.strictEqual(BRAND.fileUrlOk(ok.replace('.png', '.exe'), 'jtees'), false);
+  assert.strictEqual(BRAND.fileUrlOk('https://evil.example/business_files/a.png', 'jtees'), false);
+  assert.strictEqual(BRAND.fileUrlOk('javascript:alert(1)', 'jtees'), false);
+});
+
+test('brand file thumbnails: images and first PDF page, nothing for embroidery files', () => {
+  assert.match(BRAND.thumbOf('https://res.cloudinary.com/jtees/image/upload/business_files/a.pdf', 'jtees'), /pg_1\/business_files\/a\.jpg$/);
+  assert.strictEqual(BRAND.thumbOf('https://res.cloudinary.com/jtees/image/upload/business_files/a.dst', 'jtees'), '');
+  assert.strictEqual(BRAND.cleanName('my "logo"<final>.ai'), 'my logofinal.ai');
+});
+
+test('team size link: unguessable tokens, clean names, and totals only for sizes the line still has', () => {
+  const t = SIZES.newToken();
+  assert.match(t, SIZES.TOKEN_RE);
+  assert.notStrictEqual(SIZES.newToken(), t);
+  assert.strictEqual(SIZES.cleanName(' Ana <img> 2 '), 'Ana img 2');
+  const r = SIZES.tally([
+    { line_index: 0, size: 'L' }, { line_index: 0, size: 'S' }, { line_index: 0, size: 'L' },
+    { line_index: 0, size: '5XL' }, { line_index: 3, size: 'M' },
+  ], { 0: ['S', 'M', 'L'] });
+  assert.deepStrictEqual(r.byLine, { 0: { S: 1, L: 2 } });
+  assert.deepStrictEqual(Object.keys(r.byLine[0]), ['S', 'L']);
+  assert.strictEqual(r.stale, 2);
+});
+
+test('team size link: one person can ask for several sizes, youth sizes too', () => {
+  assert.deepStrictEqual(SIZES.offeredSizes(['S', 'M', 'L', '2XL']).youth, ['YXS', 'YS', 'YM', 'YL', 'YXL']);
+  assert.deepStrictEqual(SIZES.offeredSizes(['OSFA']).youth, []);
+  assert.deepStrictEqual(SIZES.offeredSizes(['YS', 'YM', 'YL']).youth, []);
+  const lines = [{ ix: 0, sizes: ['S', 'M', 'L'] }, { ix: 2, sizes: ['OSFA'] }];
+  const keys = { sizes_0: 'S|M|L|YXS|YS|YM|YL|YXL', sizes_2: 'OSFA' };
+  assert.strictEqual(SIZES.sizesKey(['S', 'M', 'L']), keys.sizes_0);
+  // A page built before the shop added XS must not shift its counts onto the wrong size.
+  assert.deepStrictEqual(SIZES.parsePicks({ ...keys, q_0_1: '1' }, [{ ix: 0, sizes: ['XS', 'S', 'M', 'L'] }, lines[1]]), { error: 'changed' });
+  // q_<line>_<n>: n counts the line's own sizes, then the youth sizes (S M L YXS YS YM ...).
+  assert.deepStrictEqual(SIZES.parsePicks({ ...keys, q_0_2: '1', q_0_5: '2', q_2_0: '1', q_0_0: '0', q_0_1: 'x', q_0_99: '3' }, lines), [
+    { ix: 0, size: 'L', qty: 1 }, { ix: 0, size: 'YM', qty: 2 }, { ix: 2, size: 'OSFA', qty: 1 },
+  ]);
+  assert.deepStrictEqual(SIZES.parsePicks({ ...keys, q_0_0: '999' }, lines), [{ ix: 0, size: 'S', qty: SIZES.MAX_PER_SIZE }]);
+  assert.deepStrictEqual(SIZES.parsePicks(keys, lines), { error: 'none' });
+  assert.deepStrictEqual(SIZES.parsePicks({ ...keys, q_0_0: '20', q_0_1: '20', q_0_2: '1' }, lines), { error: 'too_many' });
+  // Youth sizes the line does not carry are listed apart, never filled into its boxes.
+  const r = SIZES.tally([{ line_index: 0, size: 'L', qty: 1 }, { line_index: 0, size: 'YM', qty: 2 },
+    { line_index: 0, size: 'YS' }, { line_index: 0, size: 'YM' }], { 0: ['S', 'M', 'L'] });
+  assert.deepStrictEqual(r.byLine, { 0: { L: 1 } });
+  assert.deepStrictEqual(r.youth, { 0: { YS: 1, YM: 3 } });
+  assert.deepStrictEqual(Object.keys(r.youth[0]), ['YS', 'YM']);
+  assert.strictEqual(r.stale, 0);
+});
+
+test('team sizes for the shop: plain totals per item in size order, nothing dropped', () => {
+  const order = ['S', 'M', 'L', 'XL'];
+  const out = SIZES.listTotals([
+    { line_index: 1, size: 'M' }, { line_index: 0, size: 'XL' }, { line_index: 0, size: 'S' },
+    { line_index: 0, size: 'XL' }, { line_index: 0, size: 'Youth M' }, { line_index: 0, size: 'S', qty: 2 },
+  ], (s) => order.indexOf(s));
+  assert.deepStrictEqual(out, [
+    { line_index: 0, sizes: [['S', 3], ['XL', 2], ['Youth M', 1]], total: 6 },
+    { line_index: 1, sizes: [['M', 1]], total: 1 },
+  ]);
+  assert.deepStrictEqual(SIZES.listTotals([], () => 0), []);
+});
