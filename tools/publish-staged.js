@@ -69,14 +69,16 @@ const decodePrintings = (v) => {
    style, or a two-tone raglan, would open the designer as a plain shirt
    (owner, 2026-10-19: "this is an ombre shirt not solid green"). Read from the
    name and from every colour's name; "Black/ White" is two colours. */
-const PATTERN_RE = /camo|plaid|buffalo|tie.?dye|dip.?dye|ombr[eé]|colou?rblast|marble|acid|crystal|stripe|gingham|tartan|floral|raglan|\//i;
+const PATTERN_RE = /camo|plaid|buffalo|tie.?dye|dip.?dye|ombr[eé]|colou?rblast|marble|acid|crystal|stripe|gingham|tartan|floral|raglan/i;
+/* In a COLOUR name a slash is two colours; in a style name it is "50/50". */
+const TWO_TONE_RE = /\//;
 function patterned(p) {
   if (PATTERN_RE.test(p.name)) return p.name.match(PATTERN_RE)[0];
   const a = dejson(p.attributes) || {};
   const c = Object.values(a).find((x) => x && x.type === 'product_color');
   let v = c && c.values;
   if (typeof v === 'string') { try { v = JSON.parse(v); } catch { v = null; } }
-  const hit = ((v && v.options) || []).map((o) => String((o && o.title) || '')).filter((t) => PATTERN_RE.test(t));
+  const hit = ((v && v.options) || []).map((o) => String((o && o.title) || '')).filter((t) => PATTERN_RE.test(t) || TWO_TONE_RE.test(t));
   /* One camo colour among nine plain ones is that colour's problem, not the style's. */
   return hit.length * 2 > ((v && v.options) || []).length ? 'colours ' + hit.slice(0, 3).join(', ') : null;
 }

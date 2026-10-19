@@ -89,6 +89,7 @@ function standinStages(p) {
     const again = canvasVerdict({ name: p.name, stages: enjson(stages) });
     if (again.verdict !== 'ok') return { why: 'no drawing of this garment (' + again.verdict + ')' };
   }
+  else if (v.verdict !== 'ok') return { why: 'canvas is ' + v.verdict + ' and already on ' + want };
   const m = {};
   for (const side of ['front', 'back']) if (stages[side] && stages[side].url) m[side] = measure(stages[side].url);
   const boxes = boxesFor(set, m);

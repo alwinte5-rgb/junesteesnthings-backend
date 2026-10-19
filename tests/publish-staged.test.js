@@ -163,3 +163,8 @@ test('--standin refuses a patterned style: a drawing is one plain colour', () =>
   assert.match(notReady({ ...plain, name: 'Shaka Wear SHRAGY Youth Tee', attributes: twoTone }, { standin: true }), /pattern/);
   assert.strictEqual(notReady(plain, { standin: true }), null, 'a plain tee is still fine');
 });
+
+test('a slash in a style name is not a pattern ("50/50")', () => {
+  const plain = { ...tee, variations: '', stages: drawn('basic_tshirt_front', 'basic_tshirt_back') };
+  assert.strictEqual(notReady({ ...plain, name: 'Gildan 8000 50/50 Blend Tee' }, { standin: true }), null);
+});
