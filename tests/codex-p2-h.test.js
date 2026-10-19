@@ -32,7 +32,7 @@ test('#179 a lead email is claimed under a lock before the provider is called, a
   assert.doesNotMatch(r.slice(send), /INSERT INTO lead_notes/, 'no note written after the send');
 });
 test('#179 supplied plain text still carries the footer', () => {
-  assert.match(after('async function sendEmail(', 1200), /text \? `\$\{text\}\\n\\n\$\{htmlToText\(footer\)\}` : htmlToText\(html\)/);
+  assert.match(after('async function sendEmail(', 1600), /text \? `\$\{text\}\\n\\n\$\{htmlToText\(footer\)\}` : htmlToText\(html\)/);
 });
 test('#179 a failed send puts the typed draft back', () => {
   const box = after('function leadEmailBox(l, backField)', 2600);

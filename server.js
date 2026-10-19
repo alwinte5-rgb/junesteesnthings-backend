@@ -60,6 +60,7 @@ const VOICE = require('./tools/lib/voice');
 const TAXCERT = require('./tools/lib/tax-certificates');
 const QPHOTOS = require('./tools/lib/quote-photos');
 const LEADFILES = require('./tools/lib/lead-files');
+const SHOPDIGEST = require('./tools/lib/shop-digest');
 const ZIPSTREAM = require('./tools/lib/zip-stream');
 const { Readable, pipeline } = require('node:stream');
 const REVREPLY = require('./tools/lib/review-replies');
@@ -775,6 +776,27 @@ async function initDB() {
   await pool.query(`ALTER TABLE expenses ADD COLUMN IF NOT EXISTS ext_ref TEXT`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS expenses_extref_uniq
                       ON expenses (ext_ref) WHERE ext_ref IS NOT NULL`);
+
+  /* The shop's own emails, held for one email a day (tools/lib/shop-digest.js),
+     and how many Team chat alert emails each person has had today. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS shop_digest_items (
+      id         SERIAL PRIMARY KEY,
+      to_addr    TEXT NOT NULL,
+      subject    TEXT,
+      html       TEXT,
+      reply_to   TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      sent_at    TIMESTAMPTZ
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS shop_digest_unsent ON shop_digest_items (to_addr) WHERE sent_at IS NULL`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_chat_alert_days (
+      reader TEXT NOT NULL,
+      day    DATE NOT NULL,
+      n      INT NOT NULL DEFAULT 0,
+      PRIMARY KEY (reader, day)
+    )`);
 
   /* Chargebacks, from the day one opens to the day it is decided (see
      reconcileDisputeNow). The ledger only moves when one is lost, so this is
@@ -2595,7 +2617,26 @@ async function withTextsInvite(to, html, now = new Date()) {
 // ─── Brevo email (preferred for customer messages; Resend is the fallback) ───
 // marketing:true adds the unsubscribe headers/footer and honours opt-outs.
 // Order receipts and shipping notices are transactional and stay exempt.
-async function sendEmail({ to, subject, html, replyTo, marketing = false, text, promo = true, attachments = [] }) {
+/* The shop's own inbox gets one email a day (owner, 2026-10-19), sent by
+   sendShopDigest. Files are never held: the summary carries no attachments.
+   True when held; a hold that fails lets the email go now, because a lost
+   alert is worse than an extra email. */
+async function holdForShopDigest({ to, subject, html, replyTo, attachments }) {
+  if (!SHOPDIGEST.on() || (Array.isArray(attachments) && attachments.some((a) => a && a.content))) return false;
+  if (!SHOPDIGEST.isShopAddress(to, [NOTIFY_EMAIL, SHOP_EMAIL])) return false;
+  try {
+    await pool.query(`INSERT INTO shop_digest_items (to_addr, subject, html, reply_to) VALUES ($1, $2, $3, $4)`,
+      [String(to).trim().toLowerCase(), String(subject || '').slice(0, 300), String(html || ''), replyTo ? String(replyTo).slice(0, 200) : null]);
+    console.log(`email held for the daily summary -> ${to}: ${String(subject).slice(0, 60)}`);
+    return true;
+  } catch (e) {
+    console.error('daily summary hold failed, sending now:', e.message);
+    return false;
+  }
+}
+
+async function sendEmail({ to, subject, html, replyTo, marketing = false, text, promo = true, attachments = [], urgent = false }) {
+  if (!urgent && !marketing && await holdForShopDigest({ to, subject, html, replyTo, attachments })) return;
   if (marketing && await isUnsubscribed(to)) {
     console.log(`sendEmail: skipped ${to} (unsubscribed)`);
     return;
@@ -6662,6 +6703,7 @@ app.post('/api/send-login-code', requireInternalKey, capPerRecipient('send-login
     await sendEmail({
       to: email,
       subject: `${code} is your June's Tees sign-in code`, promo: false,
+      urgent: true,   // a 15-minute code: never held for the shop's daily summary
       html: `
         <div style="font-family:sans-serif;max-width:480px;margin:0 auto;text-align:center;">
           <h2 style="color:#1848B8;">Your sign-in code</h2>
@@ -17629,7 +17671,7 @@ async function reportFailedPayout(payout, via = 'webhook') {
   console.log(`Stripe payout FAILED (${via}): ${money(amount)} ${id}${code ? ' ' + code : ''}`);
   try {
     await sendEmail({
-      to: SHOP_EMAIL,
+      to: SHOP_EMAIL, urgent: true,   // money has stopped reaching the bank: not held for the morning
       subject: `⚠️ Stripe payout failed: ${money(amount)} did not reach the bank`,
       html: `<div style="font-family:system-ui,sans-serif;max-width:560px">
         <p>Stripe tried to send <b>${money(amount)}</b> to <b>${escEmail(account)}</b>${due
@@ -30481,6 +30523,8 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
     await step('broken links', brokenLinksCheck);
     await step('error digest', sendErrorDigest);
     await step('supplier sync', runSupplierSync);
+    /* Last, after every email the sweep itself writes, so they arrive inside it. */
+    await step('daily summary', sendShopDigest);
     setTimeout(runSweep, 60 * 60 * 1000);
   };
   setTimeout(runSweep, 60 * 60 * 1000);
@@ -31210,6 +31254,42 @@ app.post('/admin/followups/:id/done', requireAdmin, async (req, res) => {
     return back(res, '/admin/approvals', 'err', 'Could not close it.');
   }
 });
+
+/** The shop's held emails as one email per inbox, from the hourly sweep: the
+ *  first run at or after JT_DIGEST_HOUR (7am) shop time, once a day. Items
+ *  are taken atomically, so two sweeps cannot both send one; a send that
+ *  fails puts them back for the next hour. */
+async function sendShopDigest() {
+  if (!SHOPDIGEST.on()) return '';
+  const day = new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ });
+  const hour = Number(new Date().toLocaleString('en-US', { timeZone: SHOP_TZ, hour: 'numeric', hourCycle: 'h23' }));
+  if (hour < SHOPDIGEST.dueHour()) return '';
+  const { rows: [done] } = await pool.query(
+    `SELECT 1 FROM staff_activity WHERE action = 'daily summary sent' AND subject_id = $1 LIMIT 1`, [day]);
+  if (done) return '';
+  const { rows: inboxes } = await pool.query(`SELECT DISTINCT to_addr FROM shop_digest_items WHERE sent_at IS NULL`);
+  const when = (d) => new Date(d).toLocaleString('en-US', { timeZone: SHOP_TZ, weekday: 'short', hour: 'numeric', minute: '2-digit' });
+  let sent = 0;
+  for (const { to_addr: to } of inboxes) {
+    const { rows: items } = await pool.query(
+      `UPDATE shop_digest_items SET sent_at = NOW() WHERE to_addr = $1 AND sent_at IS NULL
+        RETURNING id, subject, html, reply_to, created_at`, [to]);
+    if (!items.length) continue;
+    items.sort((a, b) => new Date(a.created_at) - new Date(b.created_at) || a.id - b.id);
+    const mail = SHOPDIGEST.build(items, { esc: escEmail, when });
+    try {
+      await sendEmail({ to, urgent: true, promo: false, subject: mail.subject, html: mail.html });
+      sent += items.length;
+    } catch (e) {
+      await pool.query('UPDATE shop_digest_items SET sent_at = NULL WHERE id = ANY($1)', [items.map((i) => i.id)]);
+      throw e;   // the sweep reports it; the items go next hour
+    }
+  }
+  await logActivity(OWNER_ACTOR, 'daily summary sent', { type: 'digest', id: day }, { items: sent });
+  /* Kept a month for looking back, then cleared. */
+  await pool.query(`DELETE FROM shop_digest_items WHERE sent_at < NOW() - INTERVAL '30 days'`).catch(() => {});
+  return sent ? `${sent} item(s) sent` : 'nothing held';
+}
 
 /** The once-a-day watch email, from the hourly sweep: after 7am shop time,
  *  once per day, and only when there is something on the list. */
@@ -36012,37 +36092,58 @@ async function unreadConversations(rd, roster, channels, state, minAge) {
   return due;
 }
 
+/* At most CHAT_ALERTS_PER_DAY emails a person a day (owner, 2026-10-19: "Team
+   chats are limited to 2 per day"), each listing every conversation waiting
+   for them, rather than one email per conversation. Past the limit nothing is
+   claimed, so a conversation still unread tomorrow is in tomorrow's first. */
+const CHAT_ALERTS_PER_DAY = 2;
 async function sendChatAlerts() {
   const [roster, channels] = await Promise.all([staffRoster({ activeOnly: true }), teamChannels()]);
   const { rows: prefs } = await pool.query('SELECT reader, email_alerts FROM team_chat_prefs');
   const off = new Set(prefs.filter((p) => !p.email_alerts).map((p) => p.reader));
   const state = await chatReadState();
+  const day = new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ });
   let sent = 0;
   for (const rd of chatReaders(roster).filter((r) => r.to)) {
     const reader = CHAN.readerKey(rd.actor);
     if (off.has(reader)) continue;
-    const due = await unreadConversations(rd, roster, channels, state, CHAN.ALERT_AFTER_MIN);
-    for (const d of due) {
+    const due = (await unreadConversations(rd, roster, channels, state, CHAN.ALERT_AFTER_MIN)).filter((d) => {
       const st = state.get(`${reader}|${d.convo}`);
-      if (!CHAN.alertDue(d.first, st && st.alerted_id)) continue;
+      return CHAN.alertDue(d.first, st && st.alerted_id);
+    });
+    if (!due.length) continue;
+    /* Today's allowance, taken before anything is claimed or sent. */
+    const { rowCount: allowed } = await pool.query(
+      `INSERT INTO team_chat_alert_days (reader, day, n) VALUES ($1, $2, 1)
+       ON CONFLICT (reader, day) DO UPDATE SET n = team_chat_alert_days.n + 1
+        WHERE team_chat_alert_days.n < $3`, [reader, day, CHAT_ALERTS_PER_DAY]);
+    if (!allowed) continue;
+    const claimed = [];
+    for (const d of due) {
       /* Claimed before sending, so two sweeps cannot both send it. */
       const { rowCount } = await pool.query(
         `INSERT INTO team_chat_reads (reader, convo, alerted_id) VALUES ($1, $2, $3)
          ON CONFLICT (reader, convo) DO UPDATE SET alerted_id = EXCLUDED.alerted_id
           WHERE team_chat_reads.alerted_id < $4`,
         [reader, d.convo, d.last, d.first]);
-      if (!rowCount) continue;
-      const link = `${PUBLIC_BASE_URL}${d.href}`;
-      await sendEmail({
-        to: rd.to,
-        subject: `${d.mail ? 'Mailbox' : 'Team chat'}: ${d.n === 1 ? 'a new message' : `${d.n} new messages`} in ${d.where}`,
-        html: `<p>Hi ${escEmail(rd.name)},</p>
-          <p>You have ${d.n === 1 ? 'a message' : `${d.n} messages`} waiting in ${escEmail(d.where)} on June's Tees ${d.mail ? 'Mailbox' : 'Team chat'}.</p>
-          <p><a href="${escEmail(link)}">Open ${d.mail ? 'the conversation' : 'Team chat'}</a></p>
-          <p style="color:#6b7280;font-size:12px">You get one email per conversation until you read it.
-            Turn these emails off on the Team chat page, under Email alerts.</p>`,
-      }).then(() => { sent++; }).catch((e) => console.error('chat alert email failed:', e.message));
+      if (rowCount) claimed.push(d);
     }
+    if (!claimed.length) {
+      await pool.query(`UPDATE team_chat_alert_days SET n = n - 1 WHERE reader = $1 AND day = $2`, [reader, day]);
+      continue;
+    }
+    const total = claimed.reduce((a, d) => a + d.n, 0);
+    const kind = claimed.every((d) => d.mail) ? 'Mailbox' : 'Team chat';
+    await sendEmail({
+      to: rd.to, urgent: true,   // already capped at two a day: not held for the summary
+      subject: `${kind}: ${total === 1 ? 'a new message' : `${total} new messages`}${claimed.length === 1 ? ` in ${claimed[0].where}` : ` in ${claimed.length} conversations`}`,
+      html: `<p>Hi ${escEmail(rd.name)},</p>
+        <p>You have messages waiting on June's Tees:</p>
+        <ul>${claimed.map((d) => `<li><a href="${escEmail(PUBLIC_BASE_URL + d.href)}">${escEmail(d.where)}</a>: ${
+          d.n === 1 ? 'a message' : `${d.n} messages`}${d.mail ? ' (Mailbox)' : ''}</li>`).join('')}</ul>
+        <p style="color:#6b7280;font-size:12px">You get at most ${CHAT_ALERTS_PER_DAY} of these emails a day.
+          Turn them off on the Team chat page, under Email alerts.</p>`,
+    }).then(() => { sent++; }).catch((e) => console.error('chat alert email failed:', e.message));
   }
   return sent ? `${sent} sent` : '';
 }
@@ -39736,7 +39837,7 @@ async function seedPlaybook() {
 app.get('/admin/api/test-email', requireAdmin, async (_req, res) => {
   try {
     await sendEmail({
-      to:      NOTIFY_EMAIL,
+      to:      NOTIFY_EMAIL, urgent: true,   // a held test would say "sent" and arrive tomorrow
       subject: 'Email Test — June\'s Tees',
       html:    '<p>Email sending is working correctly.</p>',
     });
