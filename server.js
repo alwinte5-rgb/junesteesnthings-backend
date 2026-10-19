@@ -10077,6 +10077,7 @@ const ADMIN_NAV = [
   { key: 'staff',      href: '/admin/staff',         label: 'Staff and permissions', icon: 'key' },
   { key: 'timeclock',  href: '/admin/timeclock', label: 'Hours',      icon: 'clock' },
   { key: 'workschedule', href: '/admin/work-schedule', label: 'Work schedule', icon: 'clock', ownerOnly: true },
+  { key: 'agreement',  href: '/admin/agreement',     label: 'Agreements', icon: 'file',   ownerOnly: true },
 ];
 /* The menu's sections (owner, 2026-10-18: "too many tabs ... most of these can
    become one. I just don't wanna lose them"). Twenty-eight entries became eight
@@ -10094,7 +10095,7 @@ const ADMIN_SECTIONS = [
   { key: 'jobs',      label: 'Jobs',      icon: 'layers', items: ['production', 'orders', 'shipping', 'delivery', 'deliveryset'] },
   { key: 'marketing', label: 'Marketing', icon: 'star',   items: ['reviews', 'discounts', 'partners', 'calendar', 'campaign'] },
   { key: 'money',     label: 'Money',     icon: 'dollar', items: ['money', 'certificates', 'exports', 'pay'] },
-  { key: 'team',      label: 'Team',      icon: 'team',   items: ['team', 'approvals', 'activity', 'timeclock', 'workschedule', 'staff', 'hiring'] },
+  { key: 'team',      label: 'Team',      icon: 'team',   items: ['team', 'approvals', 'activity', 'timeclock', 'workschedule', 'staff', 'agreement', 'hiring'] },
   { key: 'learn',     label: 'Knowledge', icon: 'book',   items: ['playbook', 'resources', 'training', 'paths'] },
 ];
 /* Ordered the way a shop is actually worked, not the way the routes grew: what
@@ -32726,7 +32727,7 @@ app.get('/admin/agreement', requireAdmin, async (req, res) => {
           '<a class="btn btn-ghost" href="/admin/staff">Staff</a>')}
         ${flash(req.query)}
         <div class="card np"><b>Who has signed</b>${list}</div>
-        <div class="card">${AGREEMENT.agreementHtml()}</div>`, 'team'));
+        <div class="card">${AGREEMENT.agreementHtml()}</div>`, 'agreement'));
     }
     const { rows: [mine] } = await pool.query(
       'SELECT * FROM staff_agreements WHERE staff_id = $1 AND version = $2', [actor.id, AGREEMENT.VERSION]);
@@ -32798,7 +32799,7 @@ app.get('/admin/agreement/:id', requireAdmin, async (req, res) => {
       ${pageHeader(`${row.name}'s staff agreement`, 'To keep a PDF, use your browser\'s Print and choose Save as PDF.',
         '<a class="btn btn-ghost" href="/admin/agreement">Everyone</a>')}
       ${row.version === AGREEMENT.VERSION ? '' : `<div class="card warn np">This is the wording of ${escEmail(row.version)}. They have not signed the current wording yet.</div>`}
-      <div class="card">${AGREEMENT.agreementHtml(row.wording)}${agreementSignatureHtml(row, row.email)}</div>`, 'team'));
+      <div class="card">${AGREEMENT.agreementHtml(row.wording)}${agreementSignatureHtml(row, row.email)}</div>`, 'agreement'));
   } catch (err) {
     console.error('signed agreement page failed:', err.message);
     return back(res, '/admin/agreement', 'err', 'That copy could not load. Try again.');
