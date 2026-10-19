@@ -132,3 +132,29 @@ test('a stand-in drawing is allowed only with --standin, and never a generic dra
   assert.deepStrictEqual(auditFaults({ canvas: 'drawing (no real photo)' }, { standin: true }), []);
   assert.deepStrictEqual(auditFaults({ canvas: 'generic drawing for a cropped garment' }, { standin: true }).map(([k]) => k), ['canvas']);
 });
+
+const { compareWithSsa } = require('../tools/catalog-inventory');
+const colourAttr = (...names) => enjson({ C: { id: 'C', type: 'product_color', values: { options: names.map((n) => ({ title: n, value: '#' + n })) } } });
+
+test('an S&S colour with no price is not one the product should have', async () => {
+  const p = { sid: 1, name: 'Gildan 5000 Tee', thumb: '', attributes: colourAttr('Black') };
+  const ssa = async (path) => path.startsWith('styles/') ? [{ styleName: '5000', brandName: 'Gildan', title: 'Tee' }]
+    : [{ colorName: 'Black', sizeName: 'S', customerPrice: 3 }, { colorName: 'Neon', sizeName: 'S', customerPrice: 0 }];
+  assert.strictEqual((await compareWithSsa({}, p, ssa)).colours, 'ok');
+});
+
+test('an S&S audit that fails part-way holds the product back', async () => {
+  const p = { sid: 1, name: 'Gildan 5000 Tee', attributes: '{' };
+  const ssa = async (path) => { if (path.startsWith('styles/')) return [{ styleName: '5000', brandName: 'Gildan', title: 'Tee' }]; throw new Error('boom'); };
+  const r = await compareWithSsa({}, p, ssa);
+  assert.match(r.identity, /^S&S audit incomplete/);
+  assert.deepStrictEqual(auditFaults(r).map(([k]) => k), ['identity', 'colours']);
+});
+
+test('a SubliVie tee wants its sublimation method; another tee does not', () => {
+  const printings = (ids) => encodeURIComponent(JSON.stringify(Object.fromEntries(ids.map((i) => ['_' + i, 'A3']))));
+  const roleIds = Object.fromEntries(require('../tools/lib/garments').decorationsFor('SubliVie 1910 Tee').map((r, i) => [r, i + 1]));
+  const base = Object.values(roleIds);
+  assert.strictEqual(localChecks({ name: 'SubliVie 1910 Tee', printings: printings([...base, 99]) }, { roleIds, subId: 99 }).decoration, 'ok');
+  assert.match(localChecks({ name: 'Gildan 5000 Tee', printings: printings([...base, 99]) }, { roleIds, subId: 99 }).decoration, /extra 99/);
+});

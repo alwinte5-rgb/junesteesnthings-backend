@@ -553,13 +553,15 @@ async function run(env) {
      audit reports on it here (owner, 2026-10-19: keep the audit for future
      products). Report only — the rows are written; fix what it names. A
      staged add is audited when publish-staged.js puts it live. */
-  if (!STAGED) {
+  const sids = styleIds.filter(Number.isFinite);
+  if (!STAGED && sids.length) {
     const ids = mysql(dbUrl, 'SELECT id FROM lumise_products WHERE supplier_style_id IN (' +
-      styleIds.filter(Number.isFinite).join(',') + ") AND supplier='ssa';", { rows: true }).map((r) => String(Number(r.id)));
+      sids.join(',') + ") AND supplier='ssa';", { rows: true }).map((r) => String(Number(r.id)));
     if (ids.length) {
       console.log('\n  audit of the new products:');
-      require('child_process').spawnSync(process.execPath, [require('path').join(__dirname, 'catalog-inventory.js'), ...ids],
+      const au = require('child_process').spawnSync(process.execPath, [require('path').join(__dirname, 'catalog-inventory.js'), ...ids],
         { input: JSON.stringify({ MYSQL_PUBLIC_URL: dbUrl, SSA_ACCOUNT: env.SSA_ACCOUNT, SSA_API_KEY: env.SSA_API_KEY }), stdio: ['pipe', 'inherit', 'inherit'] });
+      if (au.error || au.status !== 0) console.error('\n  products added, but their AUDIT did not run: run tools/catalog-inventory.js ' + ids.join(' '));
     }
   }
   process.exit(apiErrors ? 1 : 0);

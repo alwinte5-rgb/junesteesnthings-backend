@@ -55,7 +55,11 @@ const FIT_WORDS = ['cropped', 'crop', 'oversized', 'boxy', 'muscle', 'pocket', '
 const DRAWN_FIT = /\b(crop(ped)?|oversized|boxy|muscle|pocket|raglan|dip.?dye|tie.?dye|ombr[eé]|colou?rblast|camo)\b/i;
 /* A fabric weight a description states, in oz. */
 const ozOf = (t) => { const m = String(t || '').match(/(\d+(?:\.\d+)?)\s*oz/i); return m ? Number(m[1]) : null; };
-const { costBySize, baseCostOf, readSizes } = require('./lib/ssa-costs');
+const { costBySize, baseCostOf, readSizes, pieceCost } = require('./lib/ssa-costs');
+/* ssa-add-products gives the SubliVie poly tees dye sublimation on top of their
+   garment class's methods, so it is wanted there, not an extra. */
+const SUBLIMATED = /^SubliVie/i;
+const sublimationId = (methods) => { const m = (methods || []).find((x) => /^sublimation/i.test(String(x.title || ''))); return m ? Number(m.id) : null; };
 
 /* Garment words that must survive from S&S's title into the product's name. A
    name can drop the fabric or the fit; it cannot turn an apron into a shirt. */
@@ -124,7 +128,7 @@ function expectedKeys(set) {
 }
 
 /** Every check for one product that needs no network. Exported for tests. */
-function localChecks(p, { roleIds = {}, cats = null, treeSlugs = null } = {}) {
+function localChecks(p, { roleIds = {}, cats = null, treeSlugs = null, subId = null } = {}) {
   const out = {};
   const attrs = dejson(p.attributes) || {};
   const col = Object.values(attrs).find((a) => a && a.type === 'product_color');
@@ -146,7 +150,9 @@ function localChecks(p, { roleIds = {}, cats = null, treeSlugs = null } = {}) {
   const desc = String(p.description || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   out.copy = desc.length < 200 ? 'description ' + desc.length + ' chars' : 'ok';
   const roles = decorationsFor(p.name) || [];
-  const want = roles.map((r) => roleIds[r]).filter(Number.isFinite).sort((a, b) => a - b);
+  const want = roles.map((r) => roleIds[r]).filter(Number.isFinite);
+  if (roles.length && Number.isFinite(subId) && SUBLIMATED.test(p.name) && !want.includes(subId)) want.push(subId);
+  want.sort((a, b) => a - b);
   let have = [];
   try { const o = JSON.parse(decodeURIComponent(String(p.printings || ''))); have = o && typeof o === 'object' ? Object.keys(o).map((k) => Number(String(k).replace(/\D/g, ''))) : []; } catch { /* legacy csv */ }
   have = have.filter(Number.isFinite).sort((a, b) => a - b);
@@ -204,23 +210,31 @@ function localChecks(p, { roleIds = {}, cats = null, treeSlugs = null } = {}) {
  *  Shared with tools/publish-staged.js, so a product is audited the same way
  *  before it goes live as in the whole-catalogue run (owner, 2026-10-19: keep
  *  the audit for future products). */
-async function compareWithSsa(r, p, ssa) {
+async function compareWithSsa(r, p, ssa, { style } = {}) {
+  let done = false;
   try {
-    const st = await ssa('styles/' + Number(p.sid));
+    const st = style || await ssa('styles/' + Number(p.sid));
     const s = Array.isArray(st) ? st[0] : st;
     const name = String(p.name).toUpperCase();
     r.identity = !s ? 'style ' + p.sid + ' not at S&S'
       : !name.includes(String(s.styleName).toUpperCase()) ? 'name lacks style ' + s.styleName
         : !name.includes(String(s.brandName).split(/\s+/)[0].toUpperCase()) ? 'name lacks brand ' + s.brandName : 'ok';
     const prods = await ssa('products/?styleid=' + Number(p.sid)) || [];
-    const ssaCols = new Set(prods.map((x) => x.colorName).filter(Boolean));
+    /* Only colours S&S prices: ssa-add-products skips an unpriced one. */
+    const ssaCols = new Set(prods.filter((x) => x.sizeName && pieceCost(x) > 0).map((x) => x.colorName).filter(Boolean));
     const attrs = dejson(p.attributes) || {};
     const col = Object.values(attrs).find((a) => a && a.type === 'product_color');
     const mine = new Set(((col && col.values && col.values.options) || []).map((o) => o.title));
     const gone = [...mine].filter((c) => !ssaCols.has(c)), added = [...ssaCols].filter((c) => !mine.has(c));
     r.colours = gone.length || added.length ? (gone.length ? '-' + gone.length : '') + (added.length ? ' +' + added.length : '') + ' vs S&S' : 'ok';
     Object.assign(r, ssaChecks(p, s, prods));
-  } catch (e) { r.identity = r.identity || 'S&S unreachable: ' + e.message.slice(0, 40); r.colours = r.colours || '?'; }
+    done = true;
+  } catch (e) {
+    /* A failure part-way must not leave identity 'ok' with naming, weight
+       and upcharges never judged: the publish gate would pass it. */
+    r.identity = 'S&S audit incomplete: ' + String(e.message).slice(0, 40); r.colours = r.colours || '?';
+  }
+  if (!done && r.identity === 'ok') r.identity = 'S&S audit incomplete';
   return r;
 }
 
@@ -243,6 +257,7 @@ async function main(buf) {
 
   const methods = mysql(url, 'SELECT id, title FROM lumise_printings ORDER BY id;', { rows: true });
   const { ids: roleIds } = resolveRoles(methods);
+  const subId = sublimationId(methods);
   let rows = mysql(url, "SELECT id, name, active, IFNULL(supplier,'') supplier, IFNULL(supplier_style_id,0) sid, " +
     "price, IFNULL(supplier_cost,0) cost, attributes, variations, stages, printings, IFNULL(thumbnail_url,'') thumb, " +
     "IFNULL(description,'') description FROM lumise_products " +
@@ -258,7 +273,7 @@ async function main(buf) {
     /* A staged style is filed when it is published (publish-staged.js), so
        only a live product's categories are judged. */
     const staged = p.supplier === 'ssa-staged';
-    const r = { id: Number(p.id), name: p.name, staged, ...localChecks(p, { roleIds, cats: staged ? null : catsBy[p.id] || [], treeSlugs }) };
+    const r = { id: Number(p.id), name: p.name, staged, ...localChecks(p, { roleIds, subId, cats: staged ? null : catsBy[p.id] || [], treeSlugs }) };
     if (!Number(p.sid)) {
       /* Shop-made: nothing to compare with S&S, but it is still judged — the
          owner switched signs off on 2026-10-18 for having no sizes, shape,
@@ -291,4 +306,4 @@ if (require.main === module) {
   process.stdin.on('data', (d) => (buf += d));
   process.stdin.on('end', () => main(buf).catch((e) => { console.error(e.message); process.exit(1); }));
 }
-module.exports = { localChecks, ssaChecks, compareWithSsa, bad, CHECKS, expectedKeys };
+module.exports = { localChecks, ssaChecks, compareWithSsa, bad, CHECKS, sublimationId, expectedKeys };

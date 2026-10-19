@@ -48,7 +48,7 @@
  */
 const { mysql, mysqlUrlFrom, sq, dejson } = require('./lib/db');
 const { photoCoverage, canvasVerdict } = require('./lib/canvas');
-const { localChecks, compareWithSsa, bad } = require('./catalog-inventory');
+const { localChecks, compareWithSsa, bad, sublimationId } = require('./catalog-inventory');
 const { resolveRoles } = require('./lib/garments');
 const { makeClient } = require('./lib/ssa-client');
 const { STAGED_SUPPLIER, parseIds } = require('./lib/ssa-staged');
@@ -164,7 +164,7 @@ async function main() {
      be ready — a jacket held for its canvas does not cost an API call on every
      dry run. Through the shared client (spacing, retries); a style that still
      fails is reported and held back, never fatal to the run. */
-  const fetched = {}, fetchFailed = [];
+  const fetched = {}, fetchedStyle = {}, fetchFailed = [];
   const need = rows.filter((p) => !String(p.description).trim() && Number(p.sid) &&
     !notReady(p, { desc: 'x', standin: STANDIN }));
   if (need.length && acct && key) {
@@ -173,6 +173,7 @@ async function main() {
       try {
         const j = await ssa('styles/' + Number(p.sid));
         fetched[p.id] = htmlToLines(((Array.isArray(j) ? j[0] : j) || {}).description);
+        fetchedStyle[p.id] = j;   // reused by the audit: one styles/ call per product
       } catch (e) { fetchFailed.push('#' + p.id + ' ' + e.message.slice(0, 60)); }
     }
     if (fetchFailed.length) console.log('  S&S descriptions not fetched (held back):\n    ' + fetchFailed.join('\n    ') + '\n');
@@ -187,14 +188,16 @@ async function main() {
     const why = notReady(p, { desc, standin: STANDIN });
     (why ? held : candidates).push({ p, why, desc, fill: !String(p.description).trim() && desc });
   }
-  /* The catalogue audit, on the description each product WILL have. */
+  /* The catalogue audit, on the description each product WILL have (one
+     filled from S&S here agrees with S&S's weight by construction). */
   if (candidates.length) {
-    const { ids: roleIds } = resolveRoles(mysql(url, 'SELECT id, title FROM lumise_printings ORDER BY id;', { rows: true }));
+    const methods = mysql(url, 'SELECT id, title FROM lumise_printings ORDER BY id;', { rows: true });
+    const { ids: roleIds } = resolveRoles(methods), subId = sublimationId(methods);
     const ssa = acct && key ? makeClient(acct, key) : null;
     for (const c of candidates) {
       const p = { ...c.p, description: c.desc };
-      const r = localChecks(p, { roleIds });
-      if (ssa) await compareWithSsa(r, p, ssa);
+      const r = localChecks(p, { roleIds, subId });
+      if (ssa) await compareWithSsa(r, p, ssa, { style: fetchedStyle[c.p.id] });
       else r.identity = 'not audited against S&S (no SSA credentials)';
       const faults = auditFaults(r, { standin: STANDIN });
       if (faults.length) held.push({ ...c, why: 'audit: ' + faults.map(([k, v]) => k + ' ' + v).join(' · ') });
