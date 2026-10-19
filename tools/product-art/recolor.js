@@ -190,7 +190,7 @@ async function main(key) {
 
 if (require.main !== module) { /* required by a test: no run */ }
 else if (!dirs.length) { console.error('usage: recolor.js <productDir>... [--apply]'); process.exit(2); }
-else if (APPLY) main(null);
+else if (APPLY) main(null).catch((e) => { console.error(e.message); process.exit(1); });
 else {
   let buf = '';
   process.stdin.on('data', (d) => (buf += d));
