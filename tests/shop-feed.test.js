@@ -104,29 +104,52 @@ test('every product price passes through for the page cards; only designer produ
 function runPageScript(feed) {
   const vm = require('node:vm');
   const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'public', 'assets', 'js', 'shop-feed.js'), 'utf8');
+  /* Enough of an element for the dots: attributes, classes, closest(), and the
+     events the colour swap listens for (2026-10-19). */
+  const el = (o) => Object.assign(o, {
+    getAttribute(k) { return this[k] === undefined ? null : this[k]; }, setAttribute(k, v) { this[k] = String(v); },
+    removeAttribute(k) { delete this[k]; },
+    classList: { on: new Set(), toggle(c, v) { if (v) this.on.add(c); else this.on.delete(c); } },
+    closest(q) {
+      const is = (n) => (q === 'a.pb-card' ? n.isCard : q === '.pb-dots' ? n.className === 'pb-dots'
+        : q === '.pb-dot[data-photo]' ? n.className === 'pb-dot' && n['data-photo'] != null : false);
+      for (let n = this; n; n = n.parentNode) if (is(n)) return n;
+      return null;
+    },
+  });
   const card = (href, price) => {
-    const img = { src: 'built-in.jpg' }, pr = { textContent: price };
+    const img = el({ src: 'built-in.jpg' }), pr = { textContent: price };
     /* The card body the dots row is inserted into, after the price. */
     const body = { kids: [pr],
       querySelector: (q) => body.kids.find((k) => '.' + k.className === q) || null,
       insertBefore: (n, ref) => { if (ref) body.kids.splice(body.kids.indexOf(ref), 0, n); else body.kids.push(n); n.parentNode = body; },
       removeChild: (n) => { body.kids.splice(body.kids.indexOf(n), 1); } };
     pr.parentNode = body; pr.nextSibling = null;
-    return { href, hidden: false, img, pr, body, querySelector: (q) => (q === '.pb-im img' ? img : q === '.pb-pr' ? pr : null) };
+    const c = el({ href, hidden: false, img, pr, body, isCard: true, querySelector: (q) => (q === '.pb-im img' ? img : q === '.pb-pr' ? pr : null) });
+    body.parentNode = c;
+    return c;
   };
   const cards = [card(D + 'product.php?product_id=21', 'From $1.00 + printing'),
     card(D + 'product.php?product_id=22', 'From $2.00 + printing'),
     card(D + 'product.php?product_id=99', 'From $3.00 + printing'),
     card(D + 'products.php?category_id=52', 'From $4.00 + printing')];
-  const store = { jt_shop_feed4: JSON.stringify({ at: Date.now(), d: feed }) };
+  const store = { jt_shop_feed5: JSON.stringify({ at: Date.now(), d: feed }) };
+  const on = {};
   vm.runInNewContext(src, {
     window: { fetch: () => { throw new Error('should use the cached feed'); } },
     document: { querySelectorAll: () => cards,
-      createElement: () => ({ className: '', style: {}, kids: [], textContent: '', title: '',
-        setAttribute(k, v) { this[k] = v; }, removeAttribute(k) { delete this[k]; }, appendChild(c) { this.kids.push(c); } }) },
+      addEventListener: (type, fn) => { on[type] = fn; },
+      createElement: () => el({ className: '', style: {}, kids: [], textContent: '', title: '',
+        appendChild(c) { this.kids.push(c); c.parentNode = this; },
+        removeChild(c) { this.kids.splice(this.kids.indexOf(c), 1); },
+        get firstChild() { return this.kids[0] || null; },
+        querySelector(q) { return this.kids.find((k) => '.' + k.className === q) || null; },
+        querySelectorAll(q) { return this.kids.filter((k) => '.' + k.className === q); },
+        contains(n) { for (; n; n = n.parentNode) if (n === this) return true; return false; } }) },
     sessionStorage: { getItem: (k) => store[k] || null, setItem() {} },
     JSON, Date,
   });
+  cards.on = on;
   return cards;
 }
 
@@ -181,6 +204,43 @@ test('colours: the browser checks a hex with the same rule as the server', () =>
   const { HEX } = require('../tools/lib/shop-feed');
   const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'public', 'assets', 'js', 'shop-feed.js'), 'utf8');
   assert.ok(src.includes('var HEX = ' + HEX.toString() + ';'));
+});
+
+test('colours: the server keeps a colour\'s photo only from the catalogue\'s two image hosts', () => {
+  const d = cleanShopFeed({ ...good, best: [{ ...good.best[0], colors: [
+    { name: 'A', hex: '#000001', photo: 'https://cdn.ssactivewear.com/Images/ModelColor/1_omf_fm.jpg' },
+    { name: 'B', hex: '#000002', photo: 'https://res.cloudinary.com/x/b-front.webp' },
+    { name: 'C', hex: '#000003', photo: 'https://evil.example/c.jpg' },
+    { name: 'D', hex: '#000004', photo: 'javascript:alert(1)' },
+    { name: 'E', hex: '#000005', photo: 'https://cdn.ssactivewear.com/a"onerror="x.jpg' }] }] });
+  assert.deepStrictEqual(d.best[0].colors.map((c) => c.photo || ''), [
+    'https://cdn.ssactivewear.com/Images/ModelColor/1_omf_fm.jpg', 'https://res.cloudinary.com/x/b-front.webp', '', '', '']);
+});
+
+test('colours: the browser checks a photo with the same rule as the server', () => {
+  const { PHOTO } = require('../tools/lib/shop-feed');
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'public', 'assets', 'js', 'shop-feed.js'), 'utf8');
+  assert.ok(src.includes('var PHOTO = ' + PHOTO.toString() + ';'));
+});
+
+test('colours: pointing at a dot shows its colour on the card, leaving puts it back, a tap keeps it', () => {
+  const P = 'https://cdn.ssactivewear.com/Images/ModelColor/';
+  const c = runPageScript({ categories: [], best: [], products: [{ link: D + 'product.php?product_id=21', image: P + 'base.jpg', from_price: 5,
+    colors: [{ name: 'Red', hex: '#f00', photo: P + 'red.jpg' }, { name: 'Blue', hex: '#00f', photo: P + 'blue.jpg' }], color_count: 2 }] });
+  const row = c[0].body.kids.find((k) => k.className === 'pb-dots');
+  const [red, blue] = row.kids;
+  assert.strictEqual(red['data-photo'], P + 'red.jpg');
+  c.on.mouseover({ target: red });
+  assert.strictEqual(c[0].img.src, P + 'red.jpg', 'pointing shows that colour');
+  c.on.mouseout({ target: red, relatedTarget: null });
+  assert.strictEqual(c[0].img.src, P + 'base.jpg', 'leaving the row puts the photo back');
+  let stopped = false;
+  c.on.click({ target: blue, preventDefault() { stopped = true; }, stopPropagation() {} });
+  assert.ok(stopped, 'a tap on a dot does not open the product');
+  c.on.mouseout({ target: blue, relatedTarget: null });
+  assert.strictEqual(c[0].img.src, P + 'blue.jpg', 'a tapped colour stays');
+  assert.ok(blue.classList.on.has('is-on') && !red.classList.on.has('is-on'), 'the shown colour is marked');
+  c.on.click({ target: c[0].pr, preventDefault() { throw new Error('a click elsewhere on the card must open it'); } });
 });
 
 test('colours: the page draws up to 8 dots after the price, then "+N more"', () => {

@@ -50,6 +50,37 @@
      server (tools/lib/shop-feed.js HEX — a test keeps the two the same); it is
      checked again here because it is written into a style. */
   var HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+  var PHOTO = /^https:\/\/(?:res\.cloudinary\.com|cdn\.ssactivewear\.com)\/[^\s"'<>()\\]{1,300}$/;
+
+  /* A dot shows its colour on the card (owner, 2026-10-19): pointing swaps the
+     card photo, leaving the row puts it back, and a tap (a phone has no hover)
+     keeps that colour instead of opening the product. */
+  function cardImg(d) { var a = d.closest('a.pb-card'); return a && a.querySelector('.pb-im img'); }
+  function mark(row, src) {
+    Array.prototype.forEach.call(row.querySelectorAll('.pb-dot'), function (x) { x.classList.toggle('is-on', !!src && x.getAttribute('data-photo') === src); });
+  }
+  function showDot(d, pin) {
+    var img = cardImg(d); if (!img) return;
+    if (!img.getAttribute('data-orig')) img.setAttribute('data-orig', img.currentSrc || img.src);
+    img.src = d.getAttribute('data-photo');
+    if (pin) img.setAttribute('data-pin', img.src);
+    mark(d.parentNode, img.src);
+  }
+  document.addEventListener('mouseover', function (e) {
+    var d = e.target.closest && e.target.closest('.pb-dot[data-photo]'); if (d) showDot(d, false);
+  });
+  document.addEventListener('mouseout', function (e) {
+    var row = e.target.closest && e.target.closest('.pb-dots');
+    if (!row || (e.relatedTarget && row.contains(e.relatedTarget))) return;
+    var first = row.querySelector('.pb-dot'), img = first && cardImg(first);
+    if (!img || !img.getAttribute('data-orig')) return;
+    img.src = img.getAttribute('data-pin') || img.getAttribute('data-orig');
+    mark(row, img.getAttribute('data-pin'));
+  });
+  document.addEventListener('click', function (e) {
+    var d = e.target.closest && e.target.closest('.pb-dot[data-photo]'); if (!d) return;
+    e.preventDefault(); e.stopPropagation(); showDot(d, true);
+  }, true);
   function dots(after, list, count) {
     if (!after.parentNode) return;
     var row = after.parentNode.querySelector('.pb-dots');
@@ -72,6 +103,8 @@
       d.className = 'pb-dot';
       d.style.background = c.hex;
       d.title = c.name;
+      /* Its colour's photo (checked by the server, again here: it becomes an img src). */
+      if (typeof c.photo === 'string' && PHOTO.test(c.photo)) d.setAttribute('data-photo', c.photo);
       row.appendChild(d);
     });
     if (total > cs.length) {
@@ -85,7 +118,7 @@
   /* The landing pages share /api/shop-feed's per-visitor limit with the quote
      form's token and photo uploads, so one answer is kept per tab for 10
      minutes: browsing twenty service pages asks once, not twenty times. */
-  var KEY = 'jt_shop_feed4', TTL = 10 * 60 * 1000;
+  var KEY = 'jt_shop_feed5', TTL = 10 * 60 * 1000;
   function cached() {
     try {
       var c = JSON.parse(sessionStorage.getItem(KEY) || 'null');
