@@ -28,7 +28,7 @@
  * product that will be quoted wrong.
  */
 
-const { mysql } = require('./lib/db');
+const { mysql, enjson } = require('./lib/db');
 const { sellPrice, sizeUpcharge } = require('./lib/markup');
 const { CORE_SIZES, classify, decorationsFor, OPTIONAL_ROLES, resolveRoles } = require('./lib/garments');
 const { selectWanted, productInsertSql } = require('./lib/ssa-staged');
@@ -244,6 +244,8 @@ const WANTED = [
 /* Streetwear, 2026-10-17: 180 generated rows (see the file's header). Added
    ONLY with --staged — lib/ssa-staged.js selectWanted() refuses otherwise. */
 const STREETWEAR = require('./data/ssa-streetwear-2026-10');
+/* Youth and baby, workwear, core tees and fleece, more streetwear (2026-10-19). */
+const EXPANSION = require('./data/ssa-expansion-2026-10');
 
 /* Sublimation needs a poly garment, so it is added only where the fabric
    supports it rather than offered everywhere and refused later. Matched by
@@ -428,7 +430,7 @@ async function run(env) {
   const subId = subMethod ? Number(subMethod.id) : null;
 
   let list;
-  try { list = selectWanted(WANTED, STREETWEAR, { staged: STAGED, only: ONLY }); }
+  try { list = selectWanted(WANTED, STREETWEAR.concat(EXPANSION), { staged: STAGED, only: ONLY }); }
   catch (e) { console.error(e.message); process.exit(2); }
   const seenIds = new Set();
   console.log((APPLY ? 'APPLYING' : 'DRY RUN') + ' — ' + list.length + ' styles' +
