@@ -3,5 +3,14 @@
   "12404": {"_why": "#325 LAT 3536 — hood photographed up, front and back sit low", "front": {"dy": -3.5}, "left_chest": {"dy": -3.5}, "back": {"dy": -4.5}},
   "17212": {"_why": "#318 Lane Seven LS86000GD — cropped tee, a full-length box reaches the hem", "front": {"scale": 0.75, "dy": -0.5}, "left_chest": {"dy": -0.5}, "back": {"scale": 0.75, "dy": -0.5}},
   "6536": {"_why": "#78 Bella+Canvas 6008 racerback — the racerback straps read as the shoulder on the back photo, so the back box sat at the hem; -14.5 overshot into the straps, -11 starts below the racerback V", "back": {"dy": -11}},
-  "2030": {"_why": "#99 Bella+Canvas 8800 flowy racerback — the flared hem reads as the armpit, so every box sat at the hem; -16 overshot onto the neckline and straps", "front": {"dy": -13.5}, "left_chest": {"dy": -13.5}, "back": {"dy": -14}}
+  "2030": {"_why": "#99 Bella+Canvas 8800 flowy racerback — the flared hem reads as the armpit, so every box sat at the hem; -16 overshot onto the neckline and straps", "front": {"dy": -13.5}, "left_chest": {"dy": -13.5}, "back": {"dy": -14}},
+  "4332": {"_why": "#88 Richardson 112 — box sat high on the crown; lowered toward the brim (owner, 2026-10-18)", "front": {"dy": 0.08}},
+  "10297": {"_why": "#164 Richardson 112RE — same photo as the 112; lowered toward the brim (owner, 2026-10-18)", "front": {"dy": 0.08}},
+  "1652": {"_why": "#155 Valucap 8804H — photographed three-quarter, so the box covered the side panel and mesh; moved onto the front panel", "front": {"dx": -0.17, "dy": 0.03, "scale": 0.72}},
+  "13574": {"_why": "#161 econscious EC7070 — three-quarter photo, box reached the side; moved onto the front panel, clear of the mesh", "front": {"dx": -0.15, "dy": 0.02, "scale": 0.72}},
+  "15046": {"_why": "#162 econscious EC7090 — three-quarter photo; centred on the front panels", "front": {"dx": -0.1, "scale": 0.8}},
+  "14632": {"_why": "#163 econscious EC7000 — three-quarter photo; centred on the front panels", "front": {"dx": -0.13, "scale": 0.8}},
+  "13722": {"_why": "#168 econscious EC7045 — box ran to the hem; centred on the cuff", "front": {"dy": -0.03, "scale": 0.95}},
+  "4336": {"_why": "#154 YP 1500KC — photographed uncuffed, so the cuff rule put the box on the hem; moved to the front", "front": {"dy": -0.25}},
+  "15149": {"_why": "#170 econscious EC8000 — angled photo, box reached the side gusset; centred on the front face", "front": {"dx": -0.07, "scale": 0.95}}
 }
