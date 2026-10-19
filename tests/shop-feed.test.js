@@ -30,7 +30,7 @@ test('a good feed passes through, with http photos upgraded to https', () => {
   const d = cleanShopFeed(good);
   assert.strictEqual(d.categories.length, 2);
   assert.strictEqual(d.categories[1].image, 'https://www.ssactivewear.com/b.jpg');
-  assert.deepStrictEqual(d.best[0], good.best[0]);
+  assert.deepStrictEqual(d.best[0], { ...good.best[0], colors: [], color_count: 0 });
 });
 
 test('a card linking anywhere but the designer is dropped', () => {
@@ -95,8 +95,8 @@ test('every product price passes through for the page cards; only designer produ
     { link: D + 'products.php?category_id=52', from_price: 5 },
   ] });
   assert.deepStrictEqual(d.products, [
-    { link: D + 'product.php?product_id=21', image: 'https://cdn.example/h.jpg', from_price: 20.18 },
-    { link: D + 'product.php?product_id=22', image: '', from_price: null },
+    { link: D + 'product.php?product_id=21', image: 'https://cdn.example/h.jpg', from_price: 20.18, colors: [], color_count: 0 },
+    { link: D + 'product.php?product_id=22', image: '', from_price: null, colors: [], color_count: 0 },
   ]);
   assert.deepStrictEqual(cleanShopFeed(good).products, [], 'an older designer sends none');
 });
@@ -106,16 +106,24 @@ function runPageScript(feed) {
   const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'public', 'assets', 'js', 'shop-feed.js'), 'utf8');
   const card = (href, price) => {
     const img = { src: 'built-in.jpg' }, pr = { textContent: price };
-    return { href, hidden: false, img, pr, querySelector: (q) => (q === '.pb-im img' ? img : q === '.pb-pr' ? pr : null) };
+    /* The card body the dots row is inserted into, after the price. */
+    const body = { kids: [pr],
+      querySelector: (q) => body.kids.find((k) => '.' + k.className === q) || null,
+      insertBefore: (n, ref) => { if (ref) body.kids.splice(body.kids.indexOf(ref), 0, n); else body.kids.push(n); n.parentNode = body; },
+      removeChild: (n) => { body.kids.splice(body.kids.indexOf(n), 1); } };
+    pr.parentNode = body; pr.nextSibling = null;
+    return { href, hidden: false, img, pr, body, querySelector: (q) => (q === '.pb-im img' ? img : q === '.pb-pr' ? pr : null) };
   };
   const cards = [card(D + 'product.php?product_id=21', 'From $1.00 + printing'),
     card(D + 'product.php?product_id=22', 'From $2.00 + printing'),
     card(D + 'product.php?product_id=99', 'From $3.00 + printing'),
     card(D + 'products.php?category_id=52', 'From $4.00 + printing')];
-  const store = { jt_shop_feed3: JSON.stringify({ at: Date.now(), d: feed }) };
+  const store = { jt_shop_feed4: JSON.stringify({ at: Date.now(), d: feed }) };
   vm.runInNewContext(src, {
     window: { fetch: () => { throw new Error('should use the cached feed'); } },
-    document: { querySelectorAll: () => cards },
+    document: { querySelectorAll: () => cards,
+      createElement: () => ({ className: '', style: {}, kids: [], textContent: '', title: '',
+        setAttribute(k, v) { this[k] = v; }, removeAttribute(k) { delete this[k]; }, appendChild(c) { this.kids.push(c); } }) },
     sessionStorage: { getItem: (k) => store[k] || null, setItem() {} },
     JSON, Date,
   });
@@ -151,3 +159,54 @@ test('the list counts as complete only when the designer says so and nothing was
   assert.strictEqual(cleanShopFeed({ ...good, products }).products_complete, false);
   assert.strictEqual(cleanShopFeed({ ...good, products: [], products_complete: true }).products_complete, false);
 });
+
+test('colours: the server keeps a name and a plain hex, nothing else', () => {
+  const d = cleanShopFeed({ ...good,
+    best: [{ ...good.best[0], colors: [{ name: 'Black', hex: '#25282A' }, { name: 'Bad', hex: 'red;background:url(x)' }, { name: '', hex: '#fff' }, 'x'] }],
+    products: [{ link: D + 'product.php?product_id=21', from_price: 5, colors: [{ name: 'Navy', hex: '#041e42' }] }] });
+  assert.deepStrictEqual(d.best[0].colors, [{ name: 'Black', hex: '#25282A' }]);
+  assert.strictEqual(d.best[0].color_count, 1, 'counted after the bad ones are dropped');
+  assert.deepStrictEqual(d.products[0].colors, [{ name: 'Navy', hex: '#041e42' }]);
+  assert.deepStrictEqual(cleanShopFeed(good).best[0].colors, [], 'an older designer sends none');
+});
+
+test('colours: only the 8 a card shows are sent, with the true count; repeats are dropped', () => {
+  const many = Array.from({ length: 115 }, (_, i) => ({ name: 'C' + i, hex: '#' + String(i).padStart(6, '0') }));
+  const d = cleanShopFeed({ ...good, best: [{ ...good.best[0], colors: [{ name: 'Black', hex: '#000000' }, { name: 'black', hex: '#000000' }, ...many] }] });
+  assert.strictEqual(d.best[0].colors.length, 8);
+  assert.strictEqual(d.best[0].color_count, 116, 'Black once (its lowercase repeat dropped), then C0..C114');
+});
+
+test('colours: the browser checks a hex with the same rule as the server', () => {
+  const { HEX } = require('../tools/lib/shop-feed');
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'public', 'assets', 'js', 'shop-feed.js'), 'utf8');
+  assert.ok(src.includes('var HEX = ' + HEX.toString() + ';'));
+});
+
+test('colours: the page draws up to 8 dots after the price, then "+N more"', () => {
+  const ten = ['#000', '#111', '#222', '#333', '#444', '#555', '#666', '#777', '#888', '#999'].map((hex, i) => ({ name: 'C' + i, hex }));
+  const c = runPageScript({ categories: [], best: [], products: [
+    { link: D + 'product.php?product_id=21', from_price: 5, colors: ten.slice(0, 8), color_count: 10 },
+    { link: D + 'product.php?product_id=22', from_price: 5, colors: [{ name: 'Only', hex: '#000' }] },
+    { link: D + 'product.php?product_id=99', from_price: 5, colors: [{ name: 'A', hex: 'url(x)' }, { name: 'B', hex: '#fff' }] },
+  ], products_complete: false });
+  const row = c[0].body.kids[1];
+  assert.strictEqual(row.className, 'pb-dots');
+  assert.strictEqual(row.kids.filter((k) => k.className === 'pb-dot').length, 8);
+  assert.strictEqual(row.kids[0].style.background, '#000');
+  assert.strictEqual(row.kids[0].title, 'C0');
+  assert.strictEqual(row.kids[8].textContent, '+2 more');
+  assert.strictEqual(row['aria-label'], 'Colors: C0, C1, C2, C3, C4, C5, C6, C7 and 2 more', 'names reach a screen reader');
+  assert.strictEqual(c[1].body.kids[1].kids.length, 0, 'one colour: an empty row');
+  assert.strictEqual(c[2].body.kids[1].kids.length, 0, 'a bad hex is dropped here too, leaving one: an empty row');
+});
+
+test('product cards hold an empty colour row from the start, so nothing shifts when the feed lands', () => {
+  const html = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'public', 'index.html'), 'utf8');
+  const cards = html.match(/<a class="pb-card" href="https:\/\/design\.jtees\.net\/product\.php\?product_id=\d+"[\s\S]*?<\/a>/g) || [];
+  assert.ok(cards.length > 0);
+  for (const c of cards) assert.match(c, /<div class="pb-dots" aria-hidden="true"><\/div>/);
+  const cats = html.match(/<a class="pb-card" href="https:\/\/design\.jtees\.net\/products\.php[\s\S]*?<\/a>/g) || [];
+  for (const c of cats) assert.doesNotMatch(c, /pb-dots/, 'a category card has no colours');
+});
+

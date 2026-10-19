@@ -45,7 +45,7 @@ const REVIEWS = path.join(PUBLIC, 'assets', 'data', 'reviews.json');
 // Hash-stamped (tools/lib/css-tag.js), like site-nav.css.
 const BLOCKS_CSS = require('./lib/css-tag').cssTag('/assets/css/page-blocks.css');
 const { assetStamp } = require('./lib/css-tag');
-const FEED_TAG = '<script src="/assets/js/shop-feed.js?v=20261017d" defer></script>';
+const FEED_TAG = '<script src="/assets/js/shop-feed.js?v=20261018a" defer></script>';
 // Any older shop-feed tag is swapped for FEED_TAG, so a script change reaches every page.
 const FEED_ANY = /<script src="\/assets\/js\/shop-feed\.js(?:\?v=[\w.-]+)?" defer><\/script>/;
 const PHONE = { tel: '+17739004592', display: '(773) 900-4592' };
@@ -110,10 +110,16 @@ function heroBlock(data, page) {
 ${e}`;
 }
 
+/* A product card's colour row, empty until assets/js/shop-feed.js fills it
+   from the feed: held at its full height from the start so the card does not
+   grow under a visitor's thumb when the feed lands (code review, 2026-10-18). */
+const PRODUCT_LINK = /\/product\.php\?product_id=\d+$/;
+const DOTS_ROW = '<div class="pb-dots" aria-hidden="true"></div>';
+
 function card(item, from, kind = 'service') {
   return `<a class="pb-card" href="${esc(item.link)}" data-from="${from}" data-card="${kind}">
       <div class="pb-im"><img src="${esc(item.image)}" alt="Custom ${esc(item.name)} by June's Tees" loading="lazy" width="300" height="300" /></div>
-      <div class="pb-bd"><div class="pb-nm">${esc(item.name)}</div><div class="pb-pr">${esc(item.price)}</div><span class="pb-go">Design This &rarr;</span></div>
+      <div class="pb-bd"><div class="pb-nm">${esc(item.name)}</div><div class="pb-pr">${esc(item.price)}</div>${PRODUCT_LINK.test(item.link) ? DOTS_ROW : ''}<span class="pb-go">Design This &rarr;</span></div>
     </a>`;
 }
 
