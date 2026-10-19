@@ -43,7 +43,7 @@ const { sellPrice, sizeUpcharge } = require('./lib/markup');
 const { classify, decorationsFor, resolveRoles } = require('./lib/garments');
 const { placementSet, SETS } = require('./lib/placements');
 const { decodeStages, photoCoverage } = require('./lib/canvas');
-const { costBySize, baseCostOf } = require('./lib/ssa-costs');
+const { costBySize, baseCostOf, readSizes } = require('./lib/ssa-costs');
 
 /* Garment words that must survive from S&S's title into the product's name. A
    name can drop the fabric or the fit; it cannot turn an apron into a shirt. */
@@ -52,16 +52,10 @@ const GARMENT_WORDS = ['apron', 'bib', 'polo', 'hoodie', 'hooded', 'jacket', 've
   'jogger', 'pants', 'shorts', 'sweatpants', 'blanket', 'towel', 'socks', 'scarf', 'gloves', 'bandana', 'cap', 'hat'];
 const words = (t) => new Set(String(t || '').toLowerCase().replace(/[^a-z0-9-]+/g, ' ').split(/\s+/).filter(Boolean));
 
-/** The quantity attribute's parsed values, or null. */
-function sizeValues(attrs) {
-  const q = Object.values(attrs || {}).find((a) => a && a.type === 'quantity');
-  if (!q) return null;
-  let v = q.values;
-  /* Unreadable is its own answer: read as {} it had no sizes to fault and the
-     audit called a corrupt field "ok" (code review, 2026-10-18). */
-  if (typeof v === 'string') { try { v = JSON.parse(v); } catch { return { unreadable: true }; } }
-  return v && typeof v === 'object' ? v : { unreadable: true };
-}
+/** The quantity attribute's parsed values, or null. Unreadable is its own
+ *  answer ({ unreadable: true }): read as {} it had no sizes to fault and the
+ *  audit called a corrupt field "ok" (code review, 2026-10-18). */
+const sizeValues = (attrs) => { const s = readSizes(attrs); return s && s.values; };
 
 /** S&S-side checks for one product, from its style record and product rows.
  *  Exported for tests. */
@@ -75,7 +69,10 @@ function ssaChecks(p, style, prods) {
   else {
     const off = [];
     for (const o of opts) {
-      const t = o.title || o.value; if (!(t in bySize)) continue;
+      const t = o.title || o.value;
+      /* A stored "2X" that S&S calls "2XL" is never repriced by the sync
+         either, so it is a fault, not a pass (code review, 2026-10-18). */
+      if (!(t in bySize)) { if (opts.length > 1) off.push(t + ' not a size at S&S'); continue; }   // one size has no extra charge to get wrong
       const want = sizeUpcharge(bySize[t], base), have = Number(o.price) || 0;
       if (Math.abs(want - have) > 0.05) off.push(t + ' ' + (have ? '+' + have.toFixed(2) : '+0') + ' (S&S: +' + want.toFixed(2) + ')');
     }
@@ -186,7 +183,9 @@ async function main(buf) {
          owner switched signs off on 2026-10-18 for having no sizes, shape,
          mockup or price a shopper can see. */
       r.identity = 'shop-made (no S&S style)'; r.colours = '-';
-      r.shopmade = 'needs sizes, specs, real mockup and a shown price';
+      const lacks = [r.sizes !== 'ok' && 'sizes', r.copy !== 'ok' && 'specs',
+        (!p.thumb || p.thumb === 'NULL') && 'real mockup', !(Number(p.price) > 0) && 'a shown price'].filter(Boolean);
+      r.shopmade = lacks.length ? 'needs ' + lacks.join(', ') : 'ok';
       report.push(r); continue;
     }
     if (ssa) {

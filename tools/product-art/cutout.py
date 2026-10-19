@@ -23,12 +23,16 @@ from PIL import Image, ImageFilter
 
 
 def backdrop_level(mn):
-    """The backdrop's shade: the median darkest-channel value of the border."""
+    """The backdrop's shade: the brightest twentieth of the border's darkest-
+    channel values. Not the median: on a close-up the border is mostly GARMENT,
+    and a white tee at 246 read as the backdrop put the cut at 242 and erased
+    its fabric (code review, 2026-10-18). Any strip of real backdrop on the
+    border wins here."""
     border = np.concatenate([mn[0, :], mn[-1, :], mn[:, 0], mn[:, -1]])
-    return int(np.median(border))
+    return int(np.percentile(border, 95))
 
 
-def cutout(path, out, tolerance=4, floor=234, feather=1.0, pad=0.02):
+def cutout(path, out, tolerance=4, floor=238, feather=1.0, pad=0.02):
     im = Image.open(path).convert('RGB')
     a = np.asarray(im).astype(np.int16)
     h, w, _ = a.shape

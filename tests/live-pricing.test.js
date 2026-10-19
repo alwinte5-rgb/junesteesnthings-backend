@@ -8,9 +8,9 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { pieceCost, costBySize, sizeOptions, SALE_BUFFER_DAYS } = require('../tools/lib/ssa-costs');
+const { pieceCost, costBySize, sizeOptions, jumpHeld, readSizes, SALE_BUFFER_DAYS } = require('../tools/lib/ssa-costs');
 
-const NOW = Date.parse('2026-10-18T12:00:00');
+const NOW = Date.parse('2026-10-18T12:00:00Z');
 const row = (over) => ({ sizeName: 'M', piecePrice: 3.55, customerPrice: 3.18, salePrice: 3.18, ...over });
 
 test('a sale is passed on while it has more than 4 days to run', () => {
@@ -69,8 +69,40 @@ test('one base-cost rule everywhere: cheapest core size, else cheapest size', ()
   assert.match(sync, /const bySize = costBySize\(rows\);/, 'the sync uses the shared median-per-size helper');
 });
 
-test('a return to list price passes the jump guard; only a move off both the old cost and list is held', () => {
+test('the jump guard: a sale ending passes, a glitch with no sale running is held', () => {
+  /* Sale ends: $9 sale back up to $15 list. */
+  assert.strictEqual(jumpHeld(9, 15, 15, 0.4), false);
+  /* No sale, so cost == list: a feed glitch to $1.50 must still be held. */
+  assert.strictEqual(jumpHeld(15, 1.5, 1.5, 0.4), true);
+  /* An upward jump that is not to list is held too. */
+  assert.strictEqual(jumpHeld(10, 20, 15, 0.4), true);
+  assert.strictEqual(jumpHeld(10, 11, 11, 0.4), false, 'small moves pass');
+  assert.strictEqual(jumpHeld(0, 11, 11, 0.4), false, 'no stored cost: nothing to compare');
   const sync = fs.readFileSync(path.join(__dirname, '..', 'tools', 'ssa-sync.js'), 'utf8');
-  assert.match(sync, /move > PRICE_JUMP_GUARD && offList > PRICE_JUMP_GUARD/);
-  assert.match(sync, /listBySize = costBySize\(rows\.map\(\(r\) => \(\{ \.\.\.r, customerPrice: r\.piecePrice, saleExpiration: null \}\)\)\)/);
+  assert.match(sync, /if \(jumpHeld\(was, cost, listCost, PRICE_JUMP_GUARD\)\)/);
+});
+
+test('list costing ignores a running sale', () => {
+  const r = row({ saleExpiration: '2026-10-31T00:00:00' });
+  assert.strictEqual(pieceCost(r, NOW), 3.18);
+  assert.strictEqual(pieceCost(r, NOW, { list: true }), 3.55);
+  assert.deepStrictEqual(costBySize([r], NOW, { list: true }), { M: 3.55 });
+});
+
+test('a sale end with no zone is read as UTC', () => {
+  /* 4 days + 1 hour after NOW in UTC: still on sale wherever the sync runs. */
+  assert.strictEqual(pieceCost(row({ saleExpiration: '2026-10-22T13:00:00' }), NOW), 3.18);
+  assert.strictEqual(pieceCost(row({ saleExpiration: '2026-10-22T11:00:00' }), NOW), 3.55);
+});
+
+test('readSizes: key, string form, and an unreadable field', () => {
+  assert.strictEqual(readSizes({ a: { type: 'color' } }), null);
+  const s = readSizes({ Q: { type: 'quantity', values: '{"multiple_options":[]}' } });
+  assert.deepStrictEqual(s, { key: 'Q', asString: true, values: { multiple_options: [] } });
+  assert.deepStrictEqual(readSizes({ Q: { type: 'quantity', values: '{bad' } }).values, { unreadable: true });
+});
+
+test('the sync writes a size field only if it is unchanged since it was read', () => {
+  const sync = fs.readFileSync(path.join(__dirname, '..', 'tools', 'ssa-sync.js'), 'utf8');
+  assert.match(sync, /'attributes=IF\(attributes=' \+ sq\(p\.attributes\)/);
 });

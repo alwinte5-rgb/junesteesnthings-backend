@@ -37,6 +37,14 @@ test('upcharges must match the S&S cost difference x markup', () => {
   assert.strictEqual(ssaChecks(p(''), { title: 'Tee' }, prods).upcharges, '2XL +0 (S&S: +4.00)');
 });
 
+test('a size S&S does not price under that name is a fault, not a pass', () => {
+  const prods = rows([['S', 10], ['M', 10], ['L', 10], ['XL', 10], ['2XL', 12]]);
+  const p = { name: 'Gildan 5000 Tee', thumb: '', attributes: qty({ type: 'multiple', multiple_options: opts([['S', ''], ['2X', '']]) }) };
+  assert.strictEqual(ssaChecks(p, { title: 'Tee' }, prods).upcharges, '2X not a size at S&S');
+  const one = { name: 'Richardson 112 Cap', thumb: '', attributes: qty({ multiple_options: opts([['One Size', '']]) }) };
+  assert.strictEqual(ssaChecks(one, { title: 'Cap' }, rows([['OSFA', 8]])).upcharges, 'ok');
+});
+
 test('the catalogue photo must be this style\'s own, or the owner\'s listing mockup', () => {
   const prods = rows([['S', 10]]);
   const p = (thumb) => ({ name: 'Next Level NL3200 V-Neck', thumb, attributes: qty({ multiple_options: [] }) });

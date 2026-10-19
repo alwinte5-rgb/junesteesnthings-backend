@@ -32,7 +32,7 @@
    result, which strips leading whitespace from the first column as well as the
    trailing newline. That is the drift lib/db exists to prevent. */
 const { mysql, sq, mysqlUrlFrom, dejson, enjson } = require('./lib/db');
-const { pieceCost, costBySize, baseCostOf, sizeOptions } = require('./lib/ssa-costs');
+const { pieceCost, costBySize, baseCostOf, jumpHeld, readSizes, sizeOptions } = require('./lib/ssa-costs');
 const { sellPrice } = require('./lib/markup');
 const { CORE_SIZES } = require('./lib/garments');
 
@@ -191,7 +191,7 @@ async function sizeCosts(ssa, styleId) {
   }
   const bySize = costBySize(rows);
   if (!Object.keys(bySize).length) return null;
-  const listBySize = costBySize(rows.map((r) => ({ ...r, customerPrice: r.piecePrice, saleExpiration: null })));
+  const listBySize = costBySize(rows, Date.now(), { list: true });
   /* The earliest end date of any core-size sale, for the report. */
   const ends = rows.filter((r) => CORE_SIZES.includes(r.sizeName) && r.saleExpiration)
     .map((r) => String(r.saleExpiration).slice(0, 10)).sort()[0] || null;
@@ -263,6 +263,8 @@ process.stdin.on('end', async () => {
      when a product was added and never again, so 34 products sold 2XL+ under
      cost on 2026-10-18, and 146 lacked the size list entirely. */
   const resized = [];
+  /* A size field whose stored JSON cannot be read: reported, never rewritten. */
+  const unreadable = [];
   /* The shop's own products — no supplier, no S&S style (banners, buttons,
      cutouts, cards). They will never match a style, and reporting them every
      night as NOT ON S&S sent the "needs a look" email daily for nothing: the
@@ -297,12 +299,8 @@ process.stdin.on('end', async () => {
     const price = sellPrice(cost);
     const was = Number(p.cost);
     const move = was > 0 ? Math.abs(cost - was) / was : 0;
-    /* A move TO the list price is S&S's own price, not a glitch: without this
-       a sale deeper than ~29% went in when it started and its end was then
-       blocked as a >40% jump, leaving the product at the sale price for good
-       (code review, 2026-10-18). */
+    /* A sale ending passes the guard; nothing else over it does (lib/ssa-costs). */
     const listCost = money(baseCost(bySize.listBySize));
-    const offList = listCost > 0 ? Math.abs(cost - listCost) / listCost : 1;
 
     /* Every product with live pricing gets its tag and its seen-date, whether or
        not the cost moved — that timestamp is what the staleness rule reads. */
@@ -311,33 +309,33 @@ process.stdin.on('end', async () => {
     const sets = [p.supplier === 'ssa-staged' ? `supplier='ssa-staged'` : `supplier='ssa'`,
       `supplier_style_id=${style.id}`, 'ssa_seen_at=NOW()'];
 
-    if (was > 0 && move > PRICE_JUMP_GUARD && offList > PRICE_JUMP_GUARD) {
+    if (jumpHeld(was, cost, listCost, PRICE_JUMP_GUARD)) {
       suspicious.push({ p, cost, price, move, saleEnds: bySize.saleEnds });
       stmts.push(`UPDATE lumise_products SET ${sets.join(', ')} WHERE id=${p.id};`);
       continue;                                    // tag it, but never reprice it
     }
 
     const attrs = dejson(p.attributes);
-    const qk = attrs && Object.keys(attrs).find((k) => attrs[k] && attrs[k].type === 'quantity');
-    if (qk) {
-      let vals = attrs[qk].values;
-      const asString = typeof vals === 'string';
-      if (asString) { try { vals = JSON.parse(vals); } catch { vals = null; } }
-      if (vals && Array.isArray(vals.multiple_options)) {
-        const next = sizeOptions(vals, bySize.bySize, cost);
-        if (JSON.stringify(next) !== JSON.stringify(vals)) {
-          attrs[qk] = { ...attrs[qk], values: asString ? JSON.stringify(next) : next };
-          sets.push('attributes=' + sq(enjson(attrs)));
-          resized.push({ p, before: vals, after: next });
-        }
+    const sz = readSizes(attrs);
+    if (sz && sz.values.unreadable) unreadable.push(p);
+    else if (sz && Array.isArray(sz.values.multiple_options)) {
+      const vals = sz.values;
+      const next = sizeOptions(vals, bySize.bySize, cost);
+      if (JSON.stringify(next) !== JSON.stringify(vals)) {
+        attrs[sz.key] = { ...attrs[sz.key], values: sz.asString ? JSON.stringify(next) : next };
+        /* Written only if the field is still what this run read: the run
+           takes minutes of S&S calls, and an edit made in admin meanwhile
+           must not be overwritten with this run's older copy. */
+        sets.push('attributes=IF(attributes=' + sq(p.attributes) + ', ' + sq(enjson(attrs)) + ', attributes)');
+        resized.push({ p, before: vals, after: next });
       }
     }
 
     if (Math.abs(cost - was) >= 0.01) {
       repriced.push({ p, cost, price, saleEnds: bySize.saleEnds });
       sets.push(`supplier_cost=${cost}`, `price=${price}`, 'cost_updated=NOW()');
-    } else {
-      unchanged.push(p);
+    } else if (!resized.length || resized[resized.length - 1].p !== p) {
+      unchanged.push(p);                         // a rebuilt size field is not "already correct"
     }
     stmts.push(`UPDATE lumise_products SET ${sets.join(', ')} WHERE id=${p.id};`);
   }
@@ -392,6 +390,11 @@ process.stdin.on('end', async () => {
         '   sells $' + r.price.toFixed(2));
     }
     console.log();
+  }
+  if (unreadable.length) {
+    console.log('SIZE FIELD UNREADABLE (' + unreadable.length + ') — left as it is, fix by hand');
+    for (const p of unreadable) console.log('  #' + String(p.id).padStart(3) + '  ' + p.name);
+    console.log('');
   }
   if (resized.length) {
     console.log('SIZES REBUILT (' + resized.length + ') — size list and extra charges from today\'s cost');
@@ -470,6 +473,7 @@ process.stdin.on('end', async () => {
     require('fs').writeFileSync(JSON_OUT, JSON.stringify({
       repriced: repriced.map((r) => ({ ...row(r.p), newCost: r.cost, newPrice: r.price, saleEnds: r.saleEnds || null })),
       resized: resized.map((r) => ({ ...row(r.p), before: r.before, after: r.after })),
+      unreadable: unreadable.map(row),
       suspicious: suspicious.map((s) => ({ ...row(s.p), newCost: s.cost, newPrice: s.price, move: s.move, saleEnds: s.saleEnds || null })),
     }, null, 1));
   }

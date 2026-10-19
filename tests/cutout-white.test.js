@@ -54,7 +54,7 @@ test('a light grey backdrop is still removed around a dark garment', { skip: !ok
 
 test('a light garment filling the border is not read as the backdrop', { skip: !ok && 'python3 numpy/Pillow missing' }, () => {
   /* Border all garment (Ash, 215): the backdrop guess is 215, but the floor
-     keeps the cut at 234+, so nothing is erased. */
+     keeps the cut at 238+, so nothing is erased. */
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'cut-'));
   const r = py(`
 import numpy as np
@@ -68,4 +68,24 @@ print(int((full[:, :, 3] > 200).mean() * 1000))
 `);
   assert.strictEqual(r.status, 0, r.stderr);
   assert.strictEqual(Number(r.stdout.trim().split('\n').pop()), 1000);
+});
+
+test('a close-up whose border is mostly white fabric keeps the fabric', { skip: !ok && 'python3 numpy/Pillow missing' }, () => {
+  /* Fabric (246) fills the border except one strip of real backdrop (255):
+     read from the median the backdrop was 246 and the cut erased the shirt. */
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'cut-'));
+  const r = py(`
+import numpy as np
+from PIL import Image
+from cutout import cutout
+a = np.full((100, 100, 3), 246, np.uint8); a[:, :12] = 255
+Image.fromarray(a).save('${d}/in.png')
+cutout('${d}/in.png', '${d}/out.png', pad=0, feather=0)
+full = np.asarray(Image.open('${d}/out.png'))
+print(full.shape[1], int((full[:, :, 3] > 200).mean() * 1000))
+`);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const [w, permil] = r.stdout.trim().split('\n').pop().split(' ').map(Number);
+  assert.strictEqual(w, 88, 'only the backdrop strip was cut');
+  assert.strictEqual(permil, 1000);
 });
