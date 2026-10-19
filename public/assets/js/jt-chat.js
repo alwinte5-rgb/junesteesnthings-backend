@@ -154,7 +154,7 @@
 
     var launcher = el('button',
       'position:fixed;bottom:96px;right:18px;z-index:2147482998;border:0;cursor:pointer;' +
-      'background:#1848B8;color:#fff;font-weight:800;font-size:13px;padding:10px 16px;' +
+      'background:#0E78B8;color:#fff;font-weight:800;font-size:13px;padding:10px 16px;' +
       'border-radius:100px;box-shadow:0 8px 24px rgba(15,23,42,.28);' +
       'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;',
       '💬 Chat with us');
@@ -190,7 +190,7 @@
     placeLauncher();
 
     var head = el('div',
-      'background:#1848B8;color:#fff;padding:13px 16px;display:flex;align-items:center;justify-content:space-between;flex:0 0 auto;',
+      'background:#0E78B8;color:#fff;padding:13px 16px;display:flex;align-items:center;justify-content:space-between;flex:0 0 auto;',
       '<div><strong style="font-size:14px;display:block;">June’s Tees — Quick Answers</strong>' +
       '<span style="font-size:11px;opacity:.85;">Instant answers · real people one tap away</span></div>');
     var closeB = el('button',
@@ -209,7 +209,7 @@
       return b;
     }
     function visitorBubble(text) {
-      var b = el('div', 'max-width:86%;margin:0 0 10px auto;background:#1848B8;color:#fff;' +
+      var b = el('div', 'max-width:86%;margin:0 0 10px auto;background:#0E78B8;color:#fff;' +
         'border-radius:14px 14px 4px 14px;padding:10px 13px;font-size:13px;line-height:1.5;');
       b.textContent = text;
       return b;
@@ -218,8 +218,8 @@
     var chipWrap = el('div', 'flex:0 0 auto;max-height:150px;overflow-y:auto;padding:10px 12px 6px;background:#fff;border-top:1px solid #e5e7eb;');
     QA.forEach(function (qa) {
       var chip = el('button',
-        'display:block;width:100%;text-align:left;margin:0 0 6px;padding:8px 12px;border:1px solid #dbe3f8;' +
-        'border-radius:100px;background:#f4f7ff;color:#1848B8;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;');
+        'display:block;width:100%;text-align:left;margin:0 0 6px;padding:8px 12px;border:1px solid #CFE8F6;' +
+        'border-radius:100px;background:#f4f7ff;color:#0E78B8;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;');
       chip.type = 'button';
       chip.textContent = qa[0];
       chip.onclick = function () {
@@ -233,7 +233,7 @@
     panel.appendChild(chipWrap);
 
     var human = el('button',
-      'flex:0 0 auto;margin:8px 12px 12px;padding:11px;border:0;border-radius:100px;background:#1848B8;color:#fff;' +
+      'flex:0 0 auto;margin:8px 12px 12px;padding:11px;border:0;border-radius:100px;background:#0E78B8;color:#fff;' +
       'font-size:13px;font-weight:800;cursor:pointer;font-family:inherit;');
     human.type = 'button';
     human.textContent = 'Chat with a real person 💬';
@@ -248,7 +248,7 @@
     /* The name/email form: a card at the top of the conversation, there from
        the moment the panel opens until the details are given. */
     var form = el('form', 'display:none;flex-direction:column;gap:8px;margin:0 0 12px;padding:12px;background:#fff;' +
-      'border:1px solid #dbe3f8;border-radius:14px;');
+      'border:1px solid #CFE8F6;border-radius:14px;');
     form.setAttribute('novalidate', '');
     var intro = el('div', 'font-size:13px;color:#1f2937;line-height:1.45;');
     intro.textContent = 'Hi! 👋 What’s your name and email? If you step away, we’ll reply by email.';
@@ -262,7 +262,7 @@
     var emailIn = field('email', 'Your email', 'email');
     var err = el('div', 'display:none;font-size:12px;color:#b91c1c;');
     err.setAttribute('role', 'alert');
-    var go = el('button', 'padding:11px;border:0;border-radius:100px;background:#1848B8;color:#fff;font-size:13px;font-weight:800;cursor:pointer;font-family:inherit;');
+    var go = el('button', 'padding:11px;border:0;border-radius:100px;background:#0E78B8;color:#fff;font-size:13px;font-weight:800;cursor:pointer;font-family:inherit;');
     go.type = 'submit';
     go.textContent = 'Start chat 💬';
     [intro, nameIn, emailIn, err, go].forEach(function (n) { form.appendChild(n); });
@@ -297,7 +297,7 @@
           givenHere = false;
           err.textContent = '';
           err.appendChild(document.createTextNode('Live chat could not load right now. Please text or call us at '));
-          var a = el('a', 'color:#1848B8;font-weight:700;');
+          var a = el('a', 'color:#0E78B8;font-weight:700;');
           a.href = 'sms:+17739004592';
           a.textContent = '(773) 900-4592';
           err.appendChild(a);

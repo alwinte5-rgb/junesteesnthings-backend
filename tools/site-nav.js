@@ -137,7 +137,7 @@ ${head}<div class="jtn-sticky">
 ${ticker}
 <div class="jtn" role="banner">
   <div class="jtn-in">
-    <a href="${abs('/')}" class="jtn-logo"><img src="${abs('/assets/images/brand/logo-mark.png')}" alt="June's Tees &amp; Things logo" width="40" height="44" /><span>June's Tees &amp; Things<small>Chicago Custom Printing</small></span></a>
+    <a href="${abs('/')}" class="jtn-logo"><img src="${abs('/assets/images/brand/logo-2026.webp')}" alt="June's Tees &amp; Things, Chicago custom printing" width="382" height="150" /></a>
     <nav class="jtn-menu" aria-label="Main">
       ${desk}
     </nav>
@@ -195,7 +195,7 @@ function renderFooter(nav, site = '') {
   <div class="jtf-in">
     <div class="jtf-brand">
       <div class="jtf-brand-l">
-      <a href="${abs('/')}" class="jtf-logo"><img src="${abs('/assets/images/brand/logo-mark.png')}" alt="" width="40" height="44" loading="lazy" /><span>June's Tees &amp; Things<small>Chicago Custom Printing</small></span></a>
+      <a href="${abs('/')}" class="jtf-logo"><img src="${abs('/assets/images/brand/logo-2026.webp')}" alt="June's Tees &amp; Things" width="382" height="150" loading="lazy" /></a>
       <p>${esc(f.tagline)}</p>
       <p><a class="jtf-texts" href="${esc(abs(f.texts.href))}">${esc(f.texts.label)}</a></p>
       </div>

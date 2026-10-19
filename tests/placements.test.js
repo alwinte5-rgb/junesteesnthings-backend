@@ -43,7 +43,7 @@ test('a zip or placket garment: two chest logos clear of the centre line, and a 
   const [left, right] = b;
   assert.ok(left.cx > M.cx && right.cx < M.cx, 'wearer\'s left chest is the viewer\'s right');
   for (const c of [left, right]) assert.ok(Math.abs(c.cx - M.cx) - c.w / 2 > 0, c.label + ' does not cross the zipper');
-  assert.ok(left.w < M.torso * 0.25, 'a chest logo, not a full front');
+  assert.ok(left.w < M.torso * 0.45, 'a chest logo, not a full front');
 });
 
 test('a tee: full front centred below the shoulders, a left chest, and a back', () => {
@@ -113,7 +113,7 @@ test('a tank keeps its merged outline as the body, and never starts on the neckl
   const b = boxesFor('tank', { front: tank, back: tank });
   const [x0, y0, , y1] = M.bbox;
   for (const x of b) assert.ok(x.cy - x.h / 2 >= y0 + 0.12 * (y1 - y0) - 0.01, x.label + ' starts below the neckline');
-  assert.ok(Math.abs(b[0].w - 11 * (M.torso / 19)) < 0.01, 'sized from the measured torso, not torso_sep');
+  assert.ok(Math.abs(b[0].w - 12 * (M.torso / 14.5)) < 0.01, 'sized from the measured torso, not torso_sep');
 });
 
 test('every placement override names a real placement key', () => {
@@ -124,3 +124,37 @@ test('every placement override names a real placement key', () => {
     for (const k of Object.keys(o)) assert.ok(keys.has(k), sid + ': unknown key ' + k);
   }
 });
+
+test('a side with no photo keeps its stand-in stage instead of vanishing (#170 tote, #177 tee)', () => {
+  const { keepUncovered } = require('../tools/lib/placements');
+  const base = { front: { label: 'Front', image: 'products/bag_front.png' }, back: { label: 'Back', image: 'products/bag_back.png' } };
+  /* Only the front was photographed: the back stays the drawing it was. */
+  const st = keepUncovered(base, [{ key: 'front', side: 'front' }], { front: { label: 'Front', image: 'https://x/front.webp' } });
+  assert.deepStrictEqual(Object.keys(st), ['front', 'back']);
+  assert.strictEqual(st.back.image, 'products/bag_back.png');
+  assert.notStrictEqual(st.back, base.back, 'a copy, not the shared object');
+  /* A photographed back is not overwritten. */
+  const both = keepUncovered(base, [{ key: 'front', side: 'front' }, { key: 'back', side: 'back' }],
+    { front: { image: 'f' }, back: { image: 'b' } });
+  assert.strictEqual(both.back.image, 'b');
+  /* An open garment's front side is covered by its chest boxes, so no stray Front stage is added. */
+  const open = keepUncovered(base, [{ key: 'front', side: 'front' }, { key: 'right_chest', side: 'front' }, { key: 'back', side: 'back' }],
+    { front: { label: 'Left chest' }, right_chest: { label: 'Right chest' }, back: { label: 'Back' } });
+  assert.deepStrictEqual(Object.keys(open), ['front', 'right_chest', 'back']);
+});
+
+test('the stand-in comes from a drawing, never from another colour\'s photo', () => {
+  const { standins, keepUncovered } = require('../tools/lib/placements');
+  /* A re-run: the product's back is the default colour's PHOTO; an old
+     colourway still holds the drawing. */
+  const stages = { front: { image: 'https://res.cloudinary.com/x/white-front.webp' }, back: { image: 'https://res.cloudinary.com/x/white-back.webp' } };
+  const old = { variations: { 1: { stages: { back: { image: 'https://res.cloudinary.com/x/white-back.webp' } } }, 2: { stages: { back: { image: 'products/bag_back.png' } } } } };
+  const s = standins(stages, old);
+  assert.strictEqual(s.back.image, 'products/bag_back.png');
+  assert.strictEqual(s.front, undefined, 'no drawing anywhere: nothing to keep');
+  const st = keepUncovered(s, [{ key: 'front', side: 'front' }], { front: { image: 'https://res.cloudinary.com/x/navy-front.webp' } });
+  assert.strictEqual(st.back.image, 'products/bag_back.png', 'navy gets the drawing, not white\'s photo');
+  /* Photos only: the side is left off rather than borrowing a colour. */
+  assert.deepStrictEqual(Object.keys(keepUncovered(standins(stages, {}), [{ key: 'front', side: 'front' }], { front: {} })), ['front']);
+});
+

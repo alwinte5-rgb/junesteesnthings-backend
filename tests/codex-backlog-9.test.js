@@ -28,7 +28,11 @@ test('#223 new S&S styles: tank art, the price the account pays, filed into cate
   const t = read('tools/ssa-add-products.js');
   assert.match(t, /\['3483',\s+'tank',/);
   assert.match(t, /tank:\s+\{ raws: 'tank_tops'/);
-  assert.match(t, /const pieceCost = \(r\) => Number\(r\.customerPrice \|\| r\.piecePrice/);
+  /* The cost helpers live in tools/lib/ssa-costs.js (shared with the catalogue
+     audit); what matters is that they read what the account PAYS. */
+  assert.match(t, /require\('\.\/lib\/ssa-costs'\)/);
+  const { pieceCost } = require('../tools/lib/ssa-costs');
+  assert.strictEqual(pieceCost({ customerPrice: 14.92, piecePrice: 18.67 }), 14.92);
   assert.ok(!/Number\(r\.piecePrice \|\| r\.casePrice \|\| 0\)/.test(t), 'no reader left on the list price');
   assert.match(t, /categorise-products\.js'\), '--apply'\]/);
 });

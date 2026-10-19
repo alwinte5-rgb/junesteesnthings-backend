@@ -122,7 +122,7 @@ function helloEmail({ first, email }) {
 <tr><td align="center">
 <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;background:#fff;border-radius:14px;
   font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#374151">
-  <tr><td align="center" style="padding:22px 24px 6px"><a href="${SITE}"><img src="${IMG('brand/logo.png')}" alt="June's Tees &amp; Things"
+  <tr><td align="center" style="padding:22px 24px 6px"><a href="${SITE}"><img src="${IMG('brand/logo-2026-900.png')}" alt="June's Tees &amp; Things"
     width="150" style="display:block;width:150px;height:auto;border:0"></a></td></tr>
   <tr><td style="padding:10px 28px 0">
     <h1 style="color:#0B1F4B;font-size:24px;margin:8px 0 6px">Hi${first ? ' ' + esc(first) : ''}, it's June!</h1>

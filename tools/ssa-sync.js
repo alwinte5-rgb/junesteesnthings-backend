@@ -31,11 +31,14 @@
    and they had already drifted: the local row parser called .trim() on the whole
    result, which strips leading whitespace from the first column as well as the
    trailing newline. That is the drift lib/db exists to prevent. */
-const { mysql, sq, mysqlUrlFrom } = require('./lib/db');
+const { mysql, sq, mysqlUrlFrom, dejson, enjson } = require('./lib/db');
+const { pieceCost, costBySize, baseCostOf, jumpHeld, readSizes, sizeOptions } = require('./lib/ssa-costs');
 const { sellPrice } = require('./lib/markup');
 const { CORE_SIZES } = require('./lib/garments');
 
 const APPLY = process.argv.includes('--apply');
+/* --json=<file>: the run's decisions as data, for the owner's review page. */
+const JSON_OUT = (process.argv.find((a) => a.startsWith('--json=')) || '').slice(7);
 
 /* Days a product may go without live S&S pricing before it is deactivated.
    Two weeks covers an ordinary restock; a genuinely dead style never returns. */
@@ -155,52 +158,49 @@ async function sizeCosts(ssa, styleId) {
    * the catalogue sold at about 2.5x cost while the rule says 2x. A full-zip
    * hoodie listed at $37.34 that should be $31.62.
    *
-   * salePrice is deliberately NOT used even when it is lower. A sale ends, and
-   * a price set from one silently loses its margin the day it does.
+   * SALES. customerPrice already IS the sale price while a sale runs (the
+   * 18600 figures above were a sale), and the list price otherwise: this
+   * account has no standing discount (25 live styles checked, 2026-10-18).
+   * The owner wants sales passed on, so they are — except inside the last
+   * SALE_BUFFER_DAYS of a sale, where lib/ssa-costs pieceCost() costs the row
+   * at list, so an order taken at the sale price is not bought after it ends.
    */
-  const pieceCost = (r) => Number(r.customerPrice || r.piecePrice || r.casePrice || 0);
+  /* pieceCost is lib/ssa-costs': what the account pays, sale included unless
+     the sale ends within SALE_BUFFER_DAYS (then list). */
 
   /* COLOURS ARE NOT ALL THE SAME PRICE, and the cheapest is not the typical
    * one. On that same hoodie, White is $14.92 and the other FIFTEEN colours
    * are $15.81 — so pricing the style off its cheapest colour prices 15 of 16
-   * garments off one the customer is not buying.
+   * garments off one the customer is not buying. The MEDIAN colour per size is
+   * the typical garment: lib/ssa-costs costBySize(), shared with
+   * ssa-add-products and the catalogue audit.
    *
-   * The MEDIAN colour is the typical garment. White buyers pay a few cents
-   * over, everyone else is priced off what their own shirt costs, and one
-   * unusually cheap or dear colour cannot drag the whole style.
+   * listBySize is the same at S&S's list price, sale ignored: the jump guard
+   * reads it, so the return to list when a sale ends is not mistaken for a
+   * feed glitch.
    */
-  const median = (xs) => {
-    const a = xs.slice().sort((x, y) => x - y);
-    const m = a.length >> 1;
-    return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
-  };
-
-  const perSize = {};
   let homeQty = 0, farQty = 0;
   for (const r of rows) {
-    const size = r.sizeName;
-    const cost = pieceCost(r);
-    if (!size || !cost) continue;
-    (perSize[size] = perSize[size] || []).push(cost);
     /* Stock is judged on CORE sizes only: a style with nothing but 4XL in
        Illinois is not locally stocked for any order a customer will place. */
-    if (!CORE_SIZES.includes(size)) continue;
+    if (!CORE_SIZES.includes(r.sizeName) || !pieceCost(r)) continue;
     for (const w of r.warehouses || []) {
       if (w.warehouseAbbr === HOME_WAREHOUSE) homeQty += w.qty;
       else if (!NON_STOCK.includes(w.warehouseAbbr)) farQty += w.qty;
     }
   }
-  const bySize = {};
-  for (const [size, costs] of Object.entries(perSize)) bySize[size] = median(costs);
+  const bySize = costBySize(rows);
   if (!Object.keys(bySize).length) return null;
-  return { bySize, homeQty, farQty };
+  const listBySize = costBySize(rows, Date.now(), { list: true });
+  /* The earliest end date of any core-size sale, for the report. */
+  const ends = rows.filter((r) => CORE_SIZES.includes(r.sizeName) && r.saleExpiration)
+    .map((r) => String(r.saleExpiration).slice(0, 10)).sort()[0] || null;
+  return { bySize, listBySize, homeQty, farQty, saleEnds: ends };
 }
 
-/** The base cost the markup applies to: cheapest CORE size, not cheapest size. */
-function baseCost(bySize) {
-  const core = CORE_SIZES.map((s) => bySize[s]).filter((n) => n > 0);
-  return core.length ? Math.min(...core) : Math.min(...Object.values(bySize));
-}
+/* The base cost the markup applies to — cheapest CORE size, else cheapest size —
+   is lib/ssa-costs baseCostOf(), shared with ssa-add-products and the audit. */
+const baseCost = baseCostOf;
 
 /* ── SQL plumbing ────────────────────────────────────────────────────────── */
 
@@ -249,7 +249,7 @@ process.stdin.on('end', async () => {
   const products = mysql(dbUrl,
     "SELECT id, name, IFNULL(supplier,'') supplier, IFNULL(supplier_cost,0) cost, price, " +
     "IFNULL(thumbnail_url,'') thumb, IFNULL(supplier_style_id,0) sid, " +
-    "IFNULL(DATE_FORMAT(ssa_seen_at,'%Y-%m-%d'),'') seen " +
+    "IFNULL(DATE_FORMAT(ssa_seen_at,'%Y-%m-%d'),'') seen, IFNULL(attributes,'') attributes " +
     /* Staged blanks (supplier='ssa-staged', switched off, quote form only) are
        re-costed too: the quote form sells them, and publish-staged.js would
        otherwise put one live at the cost it had the day it was added. */
@@ -259,6 +259,12 @@ process.stdin.on('end', async () => {
 
   const stmts = [];
   const repriced = [], unchanged = [], suspicious = [], missing = [], unresolved = [];
+  /* Size fields rebuilt from today's per-size cost: the upcharges were set once
+     when a product was added and never again, so 34 products sold 2XL+ under
+     cost on 2026-10-18, and 146 lacked the size list entirely. */
+  const resized = [];
+  /* A size field whose stored JSON cannot be read: reported, never rewritten. */
+  const unreadable = [];
   /* The shop's own products — no supplier, no S&S style (banners, buttons,
      cutouts, cards). They will never match a style, and reporting them every
      night as NOT ON S&S sent the "needs a look" email daily for nothing: the
@@ -293,6 +299,8 @@ process.stdin.on('end', async () => {
     const price = sellPrice(cost);
     const was = Number(p.cost);
     const move = was > 0 ? Math.abs(cost - was) / was : 0;
+    /* A sale ending passes the guard; nothing else over it does (lib/ssa-costs). */
+    const listCost = money(baseCost(bySize.listBySize));
 
     /* Every product with live pricing gets its tag and its seen-date, whether or
        not the cost moved — that timestamp is what the staleness rule reads. */
@@ -301,17 +309,33 @@ process.stdin.on('end', async () => {
     const sets = [p.supplier === 'ssa-staged' ? `supplier='ssa-staged'` : `supplier='ssa'`,
       `supplier_style_id=${style.id}`, 'ssa_seen_at=NOW()'];
 
-    if (was > 0 && move > PRICE_JUMP_GUARD) {
-      suspicious.push({ p, cost, price, move });
+    if (jumpHeld(was, cost, listCost, PRICE_JUMP_GUARD)) {
+      suspicious.push({ p, cost, price, move, saleEnds: bySize.saleEnds });
       stmts.push(`UPDATE lumise_products SET ${sets.join(', ')} WHERE id=${p.id};`);
       continue;                                    // tag it, but never reprice it
     }
 
+    const attrs = dejson(p.attributes);
+    const sz = readSizes(attrs);
+    if (sz && sz.values.unreadable) unreadable.push(p);
+    else if (sz && Array.isArray(sz.values.multiple_options)) {
+      const vals = sz.values;
+      const next = sizeOptions(vals, bySize.bySize, cost);
+      if (JSON.stringify(next) !== JSON.stringify(vals)) {
+        attrs[sz.key] = { ...attrs[sz.key], values: sz.asString ? JSON.stringify(next) : next };
+        /* Written only if the field is still what this run read: the run
+           takes minutes of S&S calls, and an edit made in admin meanwhile
+           must not be overwritten with this run's older copy. */
+        sets.push('attributes=IF(attributes=' + sq(p.attributes) + ', ' + sq(enjson(attrs)) + ', attributes)');
+        resized.push({ p, before: vals, after: next });
+      }
+    }
+
     if (Math.abs(cost - was) >= 0.01) {
-      repriced.push({ p, cost, price });
+      repriced.push({ p, cost, price, saleEnds: bySize.saleEnds });
       sets.push(`supplier_cost=${cost}`, `price=${price}`, 'cost_updated=NOW()');
-    } else {
-      unchanged.push(p);
+    } else if (!resized.length || resized[resized.length - 1].p !== p) {
+      unchanged.push(p);                         // a rebuilt size field is not "already correct"
     }
     stmts.push(`UPDATE lumise_products SET ${sets.join(', ')} WHERE id=${p.id};`);
   }
@@ -364,6 +388,21 @@ process.stdin.on('end', async () => {
       console.log('  #' + String(r.p.id).padStart(3) + '  ' + r.p.name.slice(0, 44).padEnd(46) +
         '$' + Number(r.p.cost).toFixed(2) + ' -> $' + r.cost.toFixed(2) +
         '   sells $' + r.price.toFixed(2));
+    }
+    console.log();
+  }
+  if (unreadable.length) {
+    console.log('SIZE FIELD UNREADABLE (' + unreadable.length + ') — left as it is, fix by hand');
+    for (const p of unreadable) console.log('  #' + String(p.id).padStart(3) + '  ' + p.name);
+    console.log('');
+  }
+  if (resized.length) {
+    console.log('SIZES REBUILT (' + resized.length + ') — size list and extra charges from today\'s cost');
+    for (const r of resized) {
+      const fmt = (v) => (v.multiple_options || []).filter((o) => Number(o.price) > 0)
+        .map((o) => (o.title || o.value) + ' +' + Number(o.price).toFixed(2)).join(' ') || 'no extra charges';
+      console.log('  #' + String(r.p.id).padStart(3) + '  ' + r.p.name.slice(0, 44).padEnd(46) +
+        (r.before.type !== 'multiple' && r.after.type === 'multiple' ? '[now a size list] ' : '') + fmt(r.after));
     }
     console.log();
   }
@@ -425,10 +464,19 @@ process.stdin.on('end', async () => {
     console.log();
   }
 
-  console.log(unchanged.length + ' already correct · ' + repriced.length + ' repriced · ' +
+  console.log(unchanged.length + ' already correct · ' + repriced.length + ' repriced · ' + resized.length + ' sizes rebuilt · ' +
     stale.length + ' deactivating · ' + revived.length + ' reactivating');
   console.log('\n' + stmts.length + ' statements' + (APPLY ? ' — APPLYING' : ' — dry run, pass --apply to write'));
 
+  if (JSON_OUT) {
+    const row = (p) => ({ id: Number(p.id), name: p.name, cost: Number(p.cost), price: Number(p.price) });
+    require('fs').writeFileSync(JSON_OUT, JSON.stringify({
+      repriced: repriced.map((r) => ({ ...row(r.p), newCost: r.cost, newPrice: r.price, saleEnds: r.saleEnds || null })),
+      resized: resized.map((r) => ({ ...row(r.p), before: r.before, after: r.after })),
+      unreadable: unreadable.map(row),
+      suspicious: suspicious.map((s) => ({ ...row(s.p), newCost: s.cost, newPrice: s.price, move: s.move, saleEnds: s.saleEnds || null })),
+    }, null, 1));
+  }
   if (!APPLY || !stmts.length) process.exit(0);
   mysql(dbUrl, 'START TRANSACTION;\n' + stmts.join('\n') + '\nCOMMIT;');
   console.log('done.');

@@ -210,5 +210,5 @@ test('the test send is the owner\'s and reaches only the owner', () => {
 
 test('the sign-up page wears the brand', () => {
   const p = src.slice(src.indexOf('const TEXTS_CSS'), src.indexOf('app.get(REINTRO.SIGNUP_PATH'));
-  for (const re of [/#0B1F4B/, /#F0275A/, /Inter/, /\/assets\/images\/brand\/logo\.png/, /products\.php\?category_id=/]) assert.match(p, re);
+  for (const re of [/#0B1F4B/, /#F0275A/, /Inter/, /\/assets\/images\/brand\/logo-2026-900\.png/, /products\.php\?category_id=/]) assert.match(p, re);
 });
