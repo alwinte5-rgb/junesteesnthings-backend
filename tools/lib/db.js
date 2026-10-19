@@ -73,12 +73,18 @@ function urlFromStdinJson(buf) {
   return raw;
 }
 
-/** Run SQL. `rows:true` parses the tab-separated result into objects. */
+/** Run SQL. `rows:true` parses the tab-separated result into objects.
+ *
+ *  The SQL goes in on STDIN, never as `-e <sql>`: an argument is capped (128KB
+ *  per argument on Linux, 1MB for them all on macOS), and the daily sync's
+ *  batch of 260 rebuilt size fields failed with E2BIG before a single statement
+ *  ran (2026-10-18). stdin has no cap. A non-terminal stdin puts the client in
+ *  batch mode, which aborts on the first error exactly as `-e` did. */
 function mysql(url, sql, { rows = false } = {}) {
   const u = new URL(url);
   const args = ['-h', u.hostname, '-P', u.port || '3306',
     '-u', decodeURIComponent(u.username), '--protocol=TCP',
-    '--default-character-set=utf8mb4', '-e', sql,
+    '--default-character-set=utf8mb4',
     u.pathname.replace(/^\//, '') || 'railway'];
   /* Named loudly. A missing client is a deployment problem, and reporting it as
      an exit code sent the last one undiagnosed for a fortnight. */
@@ -89,7 +95,8 @@ function mysql(url, sql, { rows = false } = {}) {
   const r = spawnSync(MYSQL, rows ? ['-B', ...args] : args, {
     env: Object.assign({}, process.env, { MYSQL_PWD: decodeURIComponent(u.password) }),
     encoding: 'utf8',
-    stdio: rows ? ['ignore', 'pipe', 'inherit'] : ['ignore', 'inherit', 'inherit'],
+    input: sql,
+    stdio: rows ? ['pipe', 'pipe', 'inherit'] : ['pipe', 'inherit', 'inherit'],
     /* spawnSync's default is 1MB, and `variations` is MEDIUMTEXT now — one
        product holds 128KB of per-colourway art, so selecting the column across
        the catalogue exceeds it. The failure is ENOBUFS, which names a buffer
