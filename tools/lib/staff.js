@@ -212,6 +212,7 @@ const ROUTES = {
   'GET /admin': 'any',
   'GET /admin/data': 'owner',
   'GET /admin/nav-counts': 'any',
+  'GET /admin/go': 'any',
   'GET /admin/api/test-email': 'owner',
 
   'GET /admin/leads': 'leads.view',
