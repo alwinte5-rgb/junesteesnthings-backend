@@ -11986,6 +11986,13 @@ function productGroupOf(name) {
         });
         return q > 0 ? (r.lineTotal - once) / q : 0;
       }
+      /* "garment $X + printing $Y", plus per-piece extras (handling, ink)
+         when there are any, so the parts add up to the each price shown. */
+      function upParts(r, each){
+        var extra = Math.round((each - r.blank - r.decoration) * 100) / 100;
+        return 'garment ' + m2(r.blank) + ' + printing ' + m2(r.decoration) +
+          (extra > 0.004 ? ' + extras ' + m2(extra) : '');
+      }
       function upTickPlace(L, loc, method, col){
         var row = L.querySelector('.ploc[data-loc="' + loc + '"]');
         if (!row) return false;
@@ -12067,8 +12074,11 @@ function productGroupOf(name) {
               if (c === minQ ? e1 < e0 - 0.01 : e1 <= e0 - Math.max(0.5, e0 * 0.03)) {
                 var qc = c;
                 ideas.push({ key: 'qty' + n, label: 'Item ' + n + ': ' + x.qty + ' to ' + c + ' pieces',
+                  /* Garment and printing named, so the owner sees which one
+                     got cheaper (owner, 2026-10-19). */
                   text: tag + 'at ' + c + ' pieces (' + (c - x.qty) + ' more) the price drops to ' + m2(e1) +
-                    ' each from ' + m2(e0) + ' — ' + m2(rc.lineTotal) + ' for the item, ' + m2(rc.lineTotal - x.lt) + ' more.' +
+                    ' each (' + upParts(rc, e1) + ') from ' + m2(e0) + ' (' + upParts(base, e0) + ') — ' +
+                    m2(rc.lineTotal) + ' for the item, ' + m2(rc.lineTotal - x.lt) + ' more.' +
                     (x.sizeQty ? ' Add the extra sizes on the item to take it.' : ''),
                   apply: x.sizeQty ? null : function(){ x.L.querySelector('.q').value = String(qc); } });
                 break;

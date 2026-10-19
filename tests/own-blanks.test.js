@@ -69,3 +69,12 @@ test('a helper ticking it still needs sign-off: the catalogue figure ignores it'
 test('the upsell offers only a real break: 50 cents or 3% a piece', () => {
   assert.match(src, /e1 <= e0 - Math\.max\(0\.5, e0 \* 0\.03\)/);
 });
+
+test('the upsell names the garment and the printing, and the parts add up', () => {
+  const fn = src.slice(src.indexOf('function upParts('), src.indexOf('function upTickPlace('));
+  const m2 = (n) => '$' + Number(n).toFixed(2);
+  const upParts = vm.runInThisContext('(function(m2){ return ' + fn.trim() + '; })')(m2);
+  assert.strictEqual(upParts({ blank: 31.08, decoration: 26.70 }, 57.78), 'garment $31.08 + printing $26.70');
+  assert.strictEqual(upParts({ blank: 0, decoration: 15.60 }, 17.10), 'garment $0.00 + printing $15.60 + extras $1.50');
+  assert.match(src, /' each \(' \+ upParts\(rc, e1\) \+ '\) from ' \+ m2\(e0\) \+ ' \(' \+ upParts\(base, e0\)/);
+});
